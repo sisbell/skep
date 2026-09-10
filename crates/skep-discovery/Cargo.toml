@@ -15,7 +15,8 @@ readme = "README.md"
 # the output boundary. M8 serializes nothing, so no serde feature is needed.
 im.workspace = true
 # Nat::one()/is_zero() are trait fns the delete-orphan ordinal math keeps in
-# scope.
+# scope, and to_usize the one the image's walk budget reads a span's reach
+# through.
 num-traits.workspace = true
 # M1 — the value calculus: Tumbler order (the cursor cut), validate (the §G
 # Tumbler → Address lift), document_of (home projection), content_subspace
@@ -28,7 +29,8 @@ skep-kernel = { path = "../skep-kernel" }
 # M3 — is_registered_document, the document-existence gate on every V-anchored op.
 skep-namespace = { path = "../skep-namespace" }
 # M5 — resolve (V→I image), project (I→V content), content/link runs and counts
-# (discoverability and the delete-orphan what-if), reading_surface (the one
+# (discoverability, the delete-orphan what-if, and the run count the image's
+# walk budget takes past a deep region), reading_surface (the one
 # head-float pin, which every arrangement read but the delete-orphan preview
 # routes through), and both halves of the ordinal V-span shape (is_ordinal_vspan
 # gates the region, ordinal_vspan builds the preview's spans), so the shape M8

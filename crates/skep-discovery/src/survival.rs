@@ -11,7 +11,7 @@ use skep_arrangement::VPos;
 use skep_kernel::Snapshot;
 
 use crate::helpers::{home_readable, stab_runs};
-use crate::region::content_vspan;
+use crate::region::{content_vspan, MAX_IMAGE_RUNS};
 use crate::types::{OrphanError, OrphanReport};
 use crate::DiscoveryWorld;
 
@@ -62,13 +62,26 @@ fn content_vspan_at(ordinal: &Nat, count: &Nat) -> Span {
 ///   admits, `d` IS its own reading surface, which is why the preview reads
 ///   `d` and does not float.
 ///
-/// The accepted set is M5's DELETE admission minus those two gates. Two
-/// LABELS differ within it, both where M5 would say `NotArranged`
-/// (`p ∉ [1, n_C]`): this reports `OutOfBounds` when `width ≥ 1`, and
-/// `EmptyWidth` when `width = 0`, because the width check runs ahead of the
-/// bounds check here and behind it in M5. A caller relaying a refusal
-/// verbatim relays a different word for the same refusal, never a different
-/// verdict.
+/// And ONE refusal is the preview's own, which DELETE has no word for
+/// because DELETE stabs nothing: `ImageTooLarge`, asked last, when the runs
+/// the two stabs below would join — the deleted range's and the retained,
+/// `d`'s own arrangement split at most twice — are past
+/// [`crate::MAX_IMAGE_RUNS`]. Every stab walks the whole link store testing
+/// each query span against every slot span of every link, so these runs are
+/// the side of that join the preview supplies, held to the number the region
+/// family holds its image to. It is a fact about `d` rather than the range —
+/// a `d` past the budget is refused every preview — and a faulty request
+/// names its own fault first. The runs are resolved before they are counted,
+/// M5 publishing no count, so a refused preview has paid for reading them and
+/// for no stab.
+///
+/// The accepted set is M5's DELETE admission minus those two gates, and minus
+/// every `d` past the run budget. Two LABELS differ within it, both where M5
+/// would say `NotArranged` (`p ∉ [1, n_C]`): this reports `OutOfBounds` when
+/// `width ≥ 1`, and `EmptyWidth` when `width = 0`, because the width check
+/// runs ahead of the bounds check here and behind it in M5. A caller relaying
+/// a refusal verbatim relays a different word for the same refusal, never a
+/// different verdict.
 ///
 /// The report's `orphaned` is in ascending address order — the permanent key
 /// every enumeration here reads out by, inherited from walking the links that
@@ -133,6 +146,11 @@ pub fn delete_orphans_on<W: DiscoveryWorld>(
     let mut retained = w.m5().link_runs(d); // a text delete never touches links
     for span in [prefix, suffix].into_iter().flatten() {
         retained.extend(w.m5().resolve(d, &span));
+    }
+    // The run budget, on the side of the join the preview supplies: the runs
+    // both stabs below take as their query, after every check of the request.
+    if a_del.len() + retained.len() > MAX_IMAGE_RUNS {
+        return Err(OrphanError::ImageTooLarge);
     }
     let touching_deleted = stab_runs(w.links(), &a_del);
     let touching_retained = stab_runs(w.links(), &retained);

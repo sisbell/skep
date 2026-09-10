@@ -529,6 +529,10 @@ impl Lower for OrphanError {
             OrphanError::NotContentSubspace => RejectCode::NotContentSubspace,
             OrphanError::EmptyWidth => RejectCode::EmptyWidth,
             OrphanError::OutOfBounds => RejectCode::OutOfBounds,
+            // The preview's run budget lowers to the leaf the query surface's
+            // (`QueryError::ImageTooLarge` above) does, and carries no site
+            // for the same reason: it names no position in the request.
+            OrphanError::ImageTooLarge => RejectCode::ImageTooLarge,
         };
         (code, None)
     }
@@ -937,5 +941,6 @@ mod tests {
         same_name(OrphanError::NotContentSubspace);
         same_name(OrphanError::EmptyWidth);
         same_name(OrphanError::OutOfBounds);
+        same_name(OrphanError::ImageTooLarge);
     }
 }

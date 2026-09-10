@@ -339,7 +339,10 @@ impl ClassScans {
 ///
 /// NOTHING ELSE IS BOUNDED, and each absence is a fact about the read rather
 /// than a judgement: `image`, `project` and `discoverable_from` walk no link
-/// store, reaching M5 or one lookup, as M8's cost statement records;
+/// store — their work is a walk of one document's run-list, or a join of one
+/// link's coverage against that document's runs, which M8 holds to the
+/// square of [`skep_discovery::MAX_IMAGE_RUNS`], as M8's cost statement
+/// records;
 /// `read_link` and `follow_link` are lookups; the M6 family
 /// (`retrieve_v`, `compare`, `show_deletions`, `find_docs_containing`,
 /// `show_origin`) and the M3 reads touch no link store at all.

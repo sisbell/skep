@@ -9,13 +9,15 @@
 //! The shape a request must have lives here too, as the constructor/gate pair
 //! [`content_vspan`]/`check_region` — the family that judges a region is the
 //! family that publishes how to build one — and so do the family's two
-//! budgets, [`MAX_IMAGE_RUNS`] and [`MAX_ENDSET_SPANS`], each a refusal rather
+//! budgets, [`MAX_IMAGE_RUNS`] (with its square, which holds the run-list
+//! walk a region asks of M5) and [`MAX_ENDSET_SPANS`], each a refusal rather
 //! than a truncation: a truncated answer would silently drop links, which is
 //! the one thing every read here exists to not do.
 
 use std::collections::HashSet;
 
 use im::OrdSet;
+use num_traits::ToPrimitive;
 use skep_address::{content_subspace, Address, Nat, Span};
 use skep_arrangement::{is_ordinal_vspan, ordinal_vspan, reading_surface, Run, VPos};
 use skep_kernel::Snapshot;
@@ -29,9 +31,9 @@ use crate::DiscoveryWorld;
 /// against, and so the ceiling on the multiplier the REQUEST applies to the
 /// world-sized scan behind it.
 ///
-/// ONE constant, held at the three sites that read a document's runs, each
+/// ONE constant, held at the four sites that read a document's runs, each
 /// against the run count that site's OWN work multiplies — so the number is
-/// one and the quantities are three:
+/// one and the quantities are four:
 ///
 /// * [`image_on`] counts the runs the REGION resolves, which is a
 ///   request-shaped multiple of `#runs(d)`, so whether a `d` is refused
@@ -40,15 +42,19 @@ use crate::DiscoveryWorld;
 ///   joins the coverage against the content runs alone;
 /// * [`crate::addressably_discoverable_from_on`] counts
 ///   `#content_runs(d) + #link_runs(d)`, because LP12 ranges over both
-///   subspaces and every one of those extents is tested.
+///   subspaces and every one of those extents is tested;
+/// * [`crate::delete_orphans_on`] counts the runs its two stabs join — the
+///   deleted range's and the retained, `d`'s own arrangement split at most
+///   twice — so it refuses a `d` whatever range the preview is asked about.
 ///
-/// So the three refuse DIFFERENT documents, and the inclusions run only one
+/// So the four refuse DIFFERENT documents, and the inclusions run only one
 /// way: the pointwise pair's counts differ by `d`'s link runs, so a `d`
 /// `project_on` answers about may be one
 /// [`crate::addressably_discoverable_from_on`] refuses, and neither relates
 /// to `image_on`'s verdict, which the caller's region moves. Each site
-/// prices the factor it multiplies; the budget is what a request may
-/// multiply the world's fragmentation by, not a verdict about `d`.
+/// prices the factor it multiplies; what the budget bounds is the multiple
+/// of the world's fragmentation one request may make M8 pay for, never the
+/// fragmentation itself.
 ///
 /// The budget: the runs become one side of a join in every case — lifted into
 /// a query `Endset` for M7's `stab`, which walks the whole store testing
@@ -65,17 +71,41 @@ use crate::DiscoveryWorld;
 /// What it refuses is the shape no wire cap prices: the region×image product,
 /// where each admitted span resolves to the whole of a fragmented document.
 ///
-/// THE GRANULARITY IS A REGION SPAN, as M6's coverage budget's is: the walk
-/// stops at the first span whose image carries the accumulator past the
-/// budget, so an over-budget request stops resolving rather than resolving
-/// whole and then being measured. Within one span it bounds nothing — M5's
-/// `resolve` answers that span whole, at a size that is the DOCUMENT's
-/// fragmentation rather than the request's shape.
+/// Its SQUARE, `2^24`, holds the two joins whose other side no run count
+/// reaches, and M6's COMPARE budget is its argument: an operand budget
+/// squares, and `2^12` a side bounds one query at `2^24` steps, order a
+/// second of one worker.
+///
+/// * The RUN-LIST WALK behind [`image_on`]. M5 reaches a span by walking the
+///   run-list from its first run — in M5's own cost note, resolving the last
+///   position of an `n`-run list costs `n` steps however narrow the answer —
+///   so a region walks up to `|region| × #runs(d)` runs, and a span past the
+///   end of a fragmented document walks every run and returns none. The count
+///   above prices runs RETURNED and never sees that walk; the square prices
+///   it, ahead of the first `resolve`.
+/// * The TOUCH TEST behind the pointwise pair: every span of a link's
+///   coverage against every run, where a link's WHOLE coverage is up to
+///   `MAX_SLOT_SPANS` a slot, so the run count alone admits three times the
+///   square. M5's `project` makes the same join over one slot, and the square
+///   holds it too, rather than leaving it to M7's cap agreeing with this one.
+///
+/// THE GRANULARITY IS A REGION SPAN, as M6's coverage budget's is: the
+/// resolution stops at the first span whose image carries the accumulator
+/// past the budget, so an over-budget request stops resolving rather than
+/// resolving whole and then being measured. Within one span it bounds
+/// nothing — M5's `resolve` answers that span whole, at a size that is the
+/// DOCUMENT's fragmentation rather than the request's shape.
 ///
 /// `#runs(d)` and `|links|` are the WORLD's, and no number here reaches them:
 /// they stay with request rate and concurrency, which are M10's as the
 /// request lifecycle's owner.
 pub const MAX_IMAGE_RUNS: usize = 1 << 12;
+
+/// [`MAX_IMAGE_RUNS`] squared: the most steps one join of a side the request
+/// supplies against a document's runs may take. [`MAX_IMAGE_RUNS`] states the
+/// two joins it holds and the budget behind it; crate-private because it is
+/// that square and nothing of its own.
+pub(crate) const MAX_JOIN_STEPS: usize = MAX_IMAGE_RUNS * MAX_IMAGE_RUNS;
 
 /// The most spans one RETRIEVEENDSETS answer may carry, and so the ceiling on
 /// what the pair set makes M8 hold live and what the presentation sorts.
@@ -138,6 +168,23 @@ fn check_region(region: &[Span]) -> Result<(), QueryError> {
     Ok(())
 }
 
+/// How many runs of a `runs`-run list M5's `resolve` walks past for the spans
+/// of `region`, summed, saturating. It walks each span's list from the first
+/// run and stops at the first run starting at or past the span's reach `e`,
+/// and every run is at least one position wide, so one span passes at most
+/// `min(runs, e − 1)`. A reach whose ordinal cannot be read, or does not fit
+/// a `usize`, prices at `runs` — the most any walk passes, never zero.
+fn run_list_walk(region: &[Span], runs: usize) -> usize {
+    region.iter().fold(0usize, |steps, span| {
+        let passed = span
+            .reach()
+            .get(2)
+            .and_then(|e| e.to_usize())
+            .map_or(runs, |e| e.saturating_sub(1).min(runs));
+        steps.saturating_add(passed)
+    })
+}
+
 /// V→I resolution of `region` through `d`'s READING SURFACE (ASN-0127's
 /// image read there: `W ∩ dom M(reading_surface(d))`, which is `W ∩ dom M(d)`
 /// itself wherever `d` is its own reading surface — unarranged positions
@@ -146,8 +193,9 @@ fn check_region(region: &[Span]) -> Result<(), QueryError> {
 ///
 /// REFUSES, IN THIS ORDER: `DocNotRegistered` — the document-existence gate
 /// is the first act, M5 conflating registered-empty with unallocated — then
-/// the region gate (`BadRegion`), then the budget (`ImageTooLarge`), which
-/// comes third because it is priced on what the region RESOLVES to and so
+/// the region gate (`BadRegion`), then the two budgets (`ImageTooLarge`),
+/// which come third because each is priced on what the region does to `d`'s
+/// reading surface — the walk it asks of M5, the runs it resolves — and so
 /// cannot be asked until both gates have admitted the request. A
 /// registered-but-empty `d` yields a defined `Ok(vec![])`.
 ///
@@ -163,8 +211,20 @@ fn check_region(region: &[Span]) -> Result<(), QueryError> {
 /// address-disjoint partition — don't sum widths for |image|; coalescing
 /// would need the run-level span algebra M8 deliberately avoids).
 ///
-/// Refuses past [`MAX_IMAGE_RUNS`] with `ImageTooLarge`, counted over the
-/// runs RESOLVED rather than the distinct ones kept, because that is the
+/// Refuses with `ImageTooLarge` when the RUN-LIST WALK is past the square of
+/// [`MAX_IMAGE_RUNS`], before the first `resolve`: M5 reaches each span by
+/// walking the surface's content run-list from its first run, so a span
+/// reaching `e` passes at most `min(#runs, e − 1)` runs whatever it returns,
+/// and the sum over the region is what is priced. A region whose reach in
+/// positions is within the square walks within it whatever the document, so
+/// the ordinary request is admitted without the surface's runs being
+/// counted; past that the count is taken — M5 publishes none, so it is the
+/// surface's content runs read whole, the cost [`crate::project_on`] pays on
+/// every call — and the walk is priced in RUNS, so a deep read of a long
+/// document holding few runs is never refused for its depth.
+///
+/// Then refuses past [`MAX_IMAGE_RUNS`] with `ImageTooLarge`, counted over
+/// the runs RESOLVED rather than the distinct ones kept, because that is the
 /// quantity every later step is linear in — and counted AS THE IMAGE IS
 /// PRODUCED, so an over-budget request stops resolving instead of resolving
 /// whole and then being measured. A refusal, never a truncation: a truncated
@@ -187,6 +247,13 @@ pub fn image_on<W: DiscoveryWorld>(
     }
     check_region(region)?;
     let surface = reading_surface(w.m3(), d);
+    // The walk, priced against a run-list of unbounded length first — its
+    // reach in positions — and in the surface's runs only past that.
+    if run_list_walk(region, usize::MAX) > MAX_JOIN_STEPS
+        && run_list_walk(region, w.m5().content_runs(&surface).len()) > MAX_JOIN_STEPS
+    {
+        return Err(QueryError::ImageTooLarge);
+    }
     let mut runs: Vec<Run> = Vec::new();
     let mut seen: HashSet<(Address, Nat)> = HashSet::new(); // internal throwaway
     let mut runs_resolved: usize = 0;

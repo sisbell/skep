@@ -38,9 +38,18 @@ use skep_kernel::Snapshot;
 use skep_links::Endset;
 
 use crate::helpers::home_readable;
-use crate::region::MAX_IMAGE_RUNS;
+use crate::region::{MAX_IMAGE_RUNS, MAX_JOIN_STEPS};
 use crate::types::QueryError;
 use crate::DiscoveryWorld;
+
+/// May a join of `spans` coverage spans against `runs` arrangement runs go
+/// ahead? The pair's one budget rule, held at both reads: the runs at
+/// [`MAX_IMAGE_RUNS`], since they are read whole and joined before any test
+/// answers, and the product — the span tests the join makes — at its square,
+/// since the coverage side is the link's and a run count does not reach it.
+fn join_within_budget(spans: usize, runs: usize) -> bool {
+    runs <= MAX_IMAGE_RUNS && spans.saturating_mul(runs) <= MAX_JOIN_STEPS
+}
 
 /// I→V projection of link `a`'s `slot` into the CONTENT subspace of the
 /// arrangement a reader of `d` sees (ASN-0098 `project`).
@@ -97,16 +106,18 @@ use crate::DiscoveryWorld;
 /// never tests the projection for emptiness.
 ///
 /// COST, IN TWO FACTORS: M5 states the work as `#runs(d) × |coverage|` and
-/// leaves admission control to its caller, which is this function. `|coverage|`
-/// is already held — M7 caps a stored slot at `MAX_SLOT_SPANS` on every
-/// deposit path, so the coverage a link can hand over is bounded before it is
-/// read. `#runs(d)` is not held anywhere upstream, so it is held here, at
-/// [`crate::MAX_IMAGE_RUNS`] (`ImageTooLarge`), counted over the reading
-/// surface's CONTENT runs — the runs M5's `project` actually joins against,
-/// so the factor priced is the factor multiplied. [`crate::MAX_IMAGE_RUNS`]
-/// sets this count beside the other two. The count walks the run set M5
-/// publishes, which is `#content_runs` itself: bounded by the quantity it
-/// prices, and one small allocation where the budget is nowhere near.
+/// leaves admission control to its caller, which is this function, and both
+/// are held here (`ImageTooLarge`). `#runs(d)` is held at
+/// [`crate::MAX_IMAGE_RUNS`], counted over the reading surface's CONTENT
+/// runs — the runs M5's `project` actually joins against, so the factor
+/// priced is the factor multiplied — and the product at that budget's square.
+/// M7 caps a stored slot at `MAX_SLOT_SPANS` on its deposit paths, which
+/// keeps today's product inside the square, but that is M7's number on M7's
+/// write path: the join this function hands M5 is priced where it is
+/// incurred. [`crate::MAX_IMAGE_RUNS`] sets the run count beside the other
+/// three. The count walks the run set M5 publishes, which is `#content_runs`
+/// itself: bounded by the quantity it prices, and one small allocation where
+/// the budget is nowhere near.
 pub fn project_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     a: &Address,
@@ -128,7 +139,7 @@ pub fn project_on<W: DiscoveryWorld>(
     let surface = reading_surface(w.m3(), d); // head-float, on the registered `d`
     // CONTENT runs, because M5's `project` joins the coverage against those
     // alone — the factor priced is the factor multiplied.
-    if w.m5().content_runs(&surface).len() > MAX_IMAGE_RUNS {
+    if !join_within_budget(coverage.len(), w.m5().content_runs(&surface).len()) {
         return Err(QueryError::ImageTooLarge);
     }
     Ok(w.m5().project(&surface, &coverage)) // I→V, content subspace, level-class-safe inside M5
@@ -167,8 +178,10 @@ fn touches(e: &Endset, extents: &[Span]) -> bool {
 /// Tests LP12's characterisation directly per link —
 /// `∃ i : coverage(Σ.L(a).eᵢ) ∩ ran(M(reading_surface(d))) ≠ ∅` over BOTH
 /// subspaces (`content_runs` + `link_runs`) — conjoined with `is_active(a)`;
-/// O(arity × |runs|), never the F-FULL whole-document-stab membership route.
-/// The test iterates the link's full arity, so it carries no arity-3 caveat.
+/// at most `Σᵢ|eᵢ| × |runs|` `classify_spans` calls, each rebuilding both
+/// spans' endpoints, and never the F-FULL whole-document-stab membership
+/// route. The test iterates the link's full arity, so it carries no arity-3
+/// caveat.
 ///
 /// HEAD-FLOAT: LP12 is read at `d`'s reading surface —
 /// `M(reading_surface(d))`, which is `M(d)` itself wherever `d` is its own
@@ -204,14 +217,18 @@ fn touches(e: &Endset, extents: &[Span]) -> bool {
 /// reachable — and never `DocNotRegistered`, which is the distinction the
 /// document gate exists to draw.
 ///
-/// `Err(ImageTooLarge)` when `ran(M(reading_surface(d)))` is past
-/// [`crate::MAX_IMAGE_RUNS`]: the runs are lifted into an I-extent apiece and
-/// every one of them is tested against every span of every slot, so this is
-/// where a document's fragmentation becomes the multiplier M8 itself applies.
-/// Refused BEFORE the lift, so an over-budget `d` costs the count and not the
-/// span set. The count is `#content_runs + #link_runs` of the reading
-/// surface, because LP12 ranges over both subspaces and every extent is
-/// tested. [`crate::MAX_IMAGE_RUNS`] sets this count beside the other two.
+/// `Err(ImageTooLarge)` when the join is past budget: the runs of
+/// `ran(M(reading_surface(d)))` are lifted into an I-extent apiece and every
+/// one of them is tested against every span of every slot, so this is where
+/// a document's fragmentation becomes the multiplier M8 itself applies. Two
+/// factors are held, both BEFORE the lift, so an over-budget `d` costs the
+/// count and not the span set: the run count at [`crate::MAX_IMAGE_RUNS`],
+/// over `#content_runs + #link_runs` of the reading surface because LP12
+/// ranges over both subspaces and every extent is tested; and the product
+/// with the link's WHOLE coverage, `Σᵢ|eᵢ|`, at that budget's square — every
+/// slot may carry M7's `MAX_SLOT_SPANS`, so the run count alone would admit
+/// three times it. [`crate::MAX_IMAGE_RUNS`] sets the run count beside the
+/// other three.
 pub fn addressably_discoverable_from_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     a: &Address,
@@ -231,7 +248,8 @@ pub fn addressably_discoverable_from_on<W: DiscoveryWorld>(
     }
     let surface = reading_surface(w.m3(), d); // head-float, on the registered `d`
     let (content_runs, link_runs) = (w.m5().content_runs(&surface), w.m5().link_runs(&surface));
-    if content_runs.len() + link_runs.len() > MAX_IMAGE_RUNS {
+    let coverage = link.slots().map(Endset::len).sum::<usize>(); // Σᵢ|eᵢ|, the side the link supplies
+    if !join_within_budget(coverage, content_runs.len() + link_runs.len()) {
         return Err(QueryError::ImageTooLarge);
     }
     let extents: Vec<Span> = content_runs

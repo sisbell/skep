@@ -242,10 +242,12 @@ pub enum QueryError {
     /// through that constructor cannot provoke this.
     BadRegion,
     /// The read would join more arrangement I-runs than
-    /// [`crate::MAX_IMAGE_RUNS`] admits. Each of the three reads that hold it
-    /// counts the runs its own work multiplies, which the constant states.
-    /// The runs are the side of a join the request supplies; what they are
-    /// joined against is the world's.
+    /// [`crate::MAX_IMAGE_RUNS`] admits, or make a join its square does not:
+    /// the run-list walk behind the region family, the touch test of a link's
+    /// whole coverage behind the pointwise pair. Each of the three reads that
+    /// hold it counts the runs its own work multiplies, which the constant
+    /// states. The runs are the side of a join the request supplies; what
+    /// they are joined against is the world's.
     ImageTooLarge,
     /// The RETRIEVEENDSETS answer would carry more spans than
     /// [`crate::MAX_ENDSET_SPANS`]. The one budget here priced on what the
@@ -262,7 +264,7 @@ impl fmt::Display for QueryError {
                 "query: the region is not content-subspace ordinal-level depth-2 V-spans"
             }
             QueryError::ImageTooLarge => {
-                "query: the arrangement runs the request would materialize are past the run budget"
+                "query: the arrangement runs the request would materialize or walk are past the run budget"
             }
             QueryError::EndsetsTooLarge => {
                 "query: the endsets touching the region are past the answer's span budget"
@@ -272,15 +274,17 @@ impl fmt::Display for QueryError {
 }
 impl Error for QueryError {}
 
-/// The typed rejection of the `delete_orphans` preview: four verdicts drawn
-/// from the seven of M5's `DeleteError`, at M5's own granularity, so the
-/// refusal is actionable. `OutOfBounds` folds M5's `NotArranged` and
-/// `OutOfBounds` into one (§6 states where the two vocabularies label one
-/// refusal differently). Of the other two, `NotOwner` is absent by decision —
-/// the preview takes no `Caller`, so ownership is not its word to speak — and
-/// `PublishedTarget` is absent and OPEN: a published `d` is one M5 refuses
-/// and the preview answers about, a gap §6 states rather than a rule it
-/// keeps.
+/// The typed rejection of the `delete_orphans` preview: five verdicts, four
+/// drawn from the seven of M5's `DeleteError`, at M5's own granularity, so
+/// the refusal is actionable, and one M8's own. `OutOfBounds` folds M5's
+/// `NotArranged` and `OutOfBounds` into one (§6 states where the two
+/// vocabularies label one refusal differently). Of M5's other two, `NotOwner`
+/// is absent by decision — the preview takes no `Caller`, so ownership is not
+/// its word to speak — and `PublishedTarget` is absent and OPEN: a published
+/// `d` is one M5 refuses and the preview answers about, a gap §6 states
+/// rather than a rule it keeps. `ImageTooLarge` is the one M5 has no word
+/// for, because DELETE stabs nothing: what it prices is the preview's own
+/// work.
 ///
 /// Exhaustively matchable from outside the crate, and promised so, for the
 /// reason [`QueryError`] states.
@@ -299,6 +303,13 @@ pub enum OrphanError {
     /// Out-of-range `(p, width)` — folds M5's `NotArranged` (start outside
     /// the arranged content) and `OutOfBounds` (range overrun).
     OutOfBounds,
+    /// The runs the preview's two stabs would join — the deleted range's and
+    /// the retained, `d`'s own arrangement split at most twice — are past
+    /// [`crate::MAX_IMAGE_RUNS`]: the query surface's run budget
+    /// ([`QueryError::ImageTooLarge`]), held on the preview's own work and
+    /// named as the query surface names it. A fact about `d`, so no range
+    /// asked of it is answered.
+    ImageTooLarge,
 }
 
 impl fmt::Display for OrphanError {
@@ -311,6 +322,9 @@ impl fmt::Display for OrphanError {
             OrphanError::EmptyWidth => "delete-orphans: width must be ≥ 1",
             OrphanError::OutOfBounds => {
                 "delete-orphans: the range is outside the arranged content (p < 1 or p + width > n_C + 1)"
+            }
+            OrphanError::ImageTooLarge => {
+                "delete-orphans: the runs the preview would stab are past the run budget"
             }
         })
     }

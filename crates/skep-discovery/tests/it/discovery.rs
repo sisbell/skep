@@ -1,10 +1,12 @@
 //! M8 contract tests over a real kernel (InMemory), stating what the design
 //! and interface assert: the doc-then-region gate order, checked on every
 //! entry point that inherits it and against every subspace but `s_C`, and
-//! the defined-empty result; image dedup and the region-span-then-V order it
-//! returns in; disjunctive + active-filtered region discovery, and the trunk
-//! head every region read resolves a published document through; the
-//! stateless key-cut windowing — the clamp, and every drained page held to
+//! the defined-empty result; image dedup, the region-span-then-V order it
+//! returns in, and an image whose runs start at two address lengths, which
+//! every read lifting it answers over; disjunctive + active-filtered region
+//! discovery, and the trunk head every region read resolves a published
+//! document through; the stateless key-cut windowing — the clamp, and every
+//! drained page held to
 //! the batch order, `next` and exhaustion a returned window promises — whose
 //! cursor survives its link's orphaning, its retraction, and a state that
 //! never minted it, over the one selection index its three read-outs share;
@@ -19,9 +21,10 @@
 //! the absence rule both apply to a link the home rule refuses; the
 //! delete-orphan preview measured against the DELETE it previews, over that
 //! operation's whole accepted domain, against M5's own admission, and at the
-//! ω and publication gates where the two part, with a registered-but-empty
-//! document refused for range; the flipped lineage probes with the
-//! resident-key gate, `Default` read as `Active` where the two views part,
+//! ω and publication gates and the run budget where the two part, with a
+//! registered-but-empty document refused for range; the flipped lineage
+//! probes with the resident-key gate, `Default` read as `Active` where the
+//! two views part,
 //! the supersession class they restrict to, the claim's own home
 //! attribution, the endpoints it reads out as recorded and the write-surface
 //! fences that read-out rests on; every result-set read dropping exactly the
@@ -31,8 +34,11 @@
 //! budgets, each refused one past its boundary and on every entry point that
 //! inherits it, held at the numbers their docs give them, over the quantities
 //! the run constant is held to and the collapsed answer the span budget
-//! prices; the snapshot twins; and — because this file is a crate of its own
-//! — the promises M8 makes to a consumer rather than to itself: one named
+//! prices, and the run constant's square over the two joins no run count
+//! shows — the run-list walk a region asks of M5 and the touch test of a
+//! link's whole coverage; the snapshot twins; and — because this file is a
+//! crate of its own — the promises M8 makes to a consumer rather than to
+//! itself: one named
 //! world bound, the standard traits its values carry, and rejection enums
 //! that stay exhaustively matchable and name their surface.
 
@@ -55,7 +61,7 @@ use skep_links::{
     enc, EditLinkError, Endset, HasLinks, Link, LinkWriter, MakeLinkError, ShippedType, SlotArg,
     View, MAX_SLOT_SPANS,
 };
-use skep_namespace::PrincipalId;
+use skep_namespace::{Namespace, PrincipalId};
 
 // ───────────────────── §1 — content-region discovery ─────────────────────
 
@@ -275,6 +281,72 @@ fn image_dedups_on_a_runs_whole_identity_not_its_start() {
     );
 }
 
+/// §1 — the query endset every run-anchored read hands M7 is MIXED-LENGTH
+/// wherever `d` transcludes content from a document at another depth: each
+/// run's I-extent starts at its origin's length, and nothing partitions them.
+/// That is sound because the endset's one consumer is M7's `classify_spans`
+/// overlap, which is total across lengths; a level-gated step added to the
+/// lift — normalizing the query, keying a cache on `canonical_key` — would
+/// fault on this image and on no other fixture's, every other document here
+/// minting eight-component content. So each read that lifts the runs is asked
+/// over it: the region family's stab, the pointwise touch test, and the
+/// preview's two stabs.
+#[test]
+fn the_region_family_answers_over_an_image_that_mixes_address_lengths() {
+    let k = kernel();
+    // A sub-account of the fixture's account, and its first document: one
+    // tier deeper than doc1, so the content it mints has NINE components.
+    let ns = Namespace::new(&k);
+    let (sub, _) = ns
+        .delegate(PrincipalId(1), t(&[1, 0, 1, 1]), PrincipalId(2))
+        .expect("the account's owner delegates its first sub-account");
+    let (deep, _) = ns
+        .create_new_document(PrincipalId(2), &sub, Some(false))
+        .expect("the sub-account's owner mints a private document");
+    seed_content(&k, &deep, 1);
+    let deep_ca = a(&[1, 0, 1, 1, 0, 1, 0, 1, 1]);
+    // doc1: its own position at V1, the deeper document's transcluded at V2.
+    seed_content(&k, &doc1(), 1);
+    Vstream::new(&k)
+        .copy(SYS, &doc1(), vp(1, 2), &[spec(&deep, 1, 1, 1)])
+        .expect("copy succeeds");
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let near = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    let far = link(&store, &doc1(), std::slice::from_ref(&deep_ca), &[ca(102)]);
+    let lq = LinkQuery::new(&k);
+    let region = [vspan(1, 1, 2)];
+
+    // The premise: one image, its runs starting at two lengths.
+    let image = lq.image(&doc1(), &region).expect("image");
+    assert_eq!(image, vec![run(&ca(1), 1), run(&deep_ca, 1)]);
+    assert_eq!(
+        image
+            .iter()
+            .map(|r| r.i_start().tumbler().len())
+            .collect::<Vec<_>>(),
+        vec![8, 9]
+    );
+
+    assert_eq!(
+        lq.findlinks_v(&doc1(), &region),
+        Ok(vec![near.clone(), far.clone()])
+    );
+    assert_eq!(lq.count_v(&doc1(), &region), Ok(2));
+    assert_eq!(
+        lq.retrieve_endsets(&doc1(), &region),
+        Ok(vec![(FROM, enc(&[ca(1)])), (FROM, enc([&deep_ca]))])
+    );
+    assert_eq!(lq.addressably_discoverable_from(&far, &doc1()), Ok(true));
+    // The preview stabs the mix twice over: the deleted run is doc1's own, and
+    // the retained side holds the transcluded run beside doc1's link runs.
+    assert_eq!(
+        lq.delete_orphans(&doc1(), &vp(1, 1), &n(1)),
+        Ok(OrphanReport {
+            orphaned: vec![near]
+        })
+    );
+}
+
 /// §1 — the run budget, at its boundary and on every entry point that
 /// inherits `image_on`. The shape it prices is the region×image PRODUCT, not
 /// the region: each span here is well-formed, in-budget for the transport,
@@ -328,6 +400,76 @@ fn the_region_family_refuses_an_image_past_the_run_budget() {
             refusal(&doc1(), &flat),
             None,
             "{name}: the largest flat region the transport admits is admitted"
+        );
+    }
+}
+
+/// §1 — the RUN-LIST WALK, which the run budget cannot see. M5 reaches every
+/// span by walking the surface's run-list from its first run, so a span past
+/// the end of a fragmented document walks every run and returns none, and a
+/// region of such spans resolves no run for the run budget to count. The walk
+/// is held to that budget's square, ahead of the first `resolve`: `MAX` spans
+/// past the end of a document one run over the budget walk `MAX × (MAX + 1)`
+/// runs and are refused on every entry point, while the same region over a
+/// one-run document — the same depth, a different run count — is answered,
+/// because the walk is priced in runs and never in positions. Beside those:
+/// one span that deep over the fragmented document is one walk and answered,
+/// a flat region at its front is the run budget's own case and answered, and
+/// the region gate still speaks first.
+#[test]
+fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1); // one run
+    // doc2 one run past the budget: one COPY placing doc1's position many
+    // times, each placement a width-1 run that abuts nothing.
+    let many = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS + 1];
+    Vstream::new(&k)
+        .copy(SYS, &doc2(), vp(1, 1), &many)
+        .expect("copy succeeds");
+    assert_eq!(
+        k.snapshot().world().m5().content_runs(&doc2()).len(),
+        MAX_IMAGE_RUNS + 1
+    );
+    let lq = LinkQuery::new(&k);
+
+    // Every span one past doc2's arranged end, and past doc1's.
+    let past_the_end = MAX_IMAGE_RUNS as u32 + 2;
+    let deep: Vec<Span> = vec![vspan(1, past_the_end, 1); MAX_IMAGE_RUNS];
+    let deep_then_malformed: Vec<Span> =
+        deep.iter().cloned().chain([vspan(2, 1, 1)]).collect();
+    let flat: Vec<Span> = vec![vspan(1, 1, 1); MAX_IMAGE_RUNS];
+    assert_eq!(
+        lq.image(&doc2(), &deep[..1]),
+        Ok(vec![]),
+        "a span past the end resolves no run, whatever it walks"
+    );
+    assert_eq!(lq.image(&doc1(), &deep), Ok(vec![]));
+
+    for (name, refusal) in &region_entry_points(lq) {
+        assert_eq!(
+            refusal(&doc2(), &deep),
+            Some(QueryError::ImageTooLarge),
+            "{name}: a walk past the square is refused though it resolves nothing"
+        );
+        assert_eq!(
+            refusal(&doc2(), &deep_then_malformed),
+            Some(QueryError::BadRegion),
+            "{name}: the whole region is judged before the walk is priced"
+        );
+        assert_eq!(
+            refusal(&doc1(), &deep),
+            None,
+            "{name}: priced in runs — the same depth over one run is answered"
+        );
+        assert_eq!(
+            refusal(&doc2(), &deep[..1]),
+            None,
+            "{name}: one walk is never refused for its depth"
+        );
+        assert_eq!(
+            refusal(&doc2(), &flat),
+            None,
+            "{name}: a flat region at the front is the run budget's own case"
         );
     }
 }
@@ -418,6 +560,56 @@ fn the_pointwise_family_holds_one_run_constant_over_two_quantities() {
         project_on(&snap, &e1, FROM, &doc2(), &cannot_read_doc1),
         Err(QueryError::NotALink)
     );
+}
+
+/// §5 — the touch test's JOIN, which the run count cannot see:
+/// `addressably_discoverable_from` tests every span of a link's WHOLE
+/// coverage against every run of `d`'s surface, and each of a link's three
+/// slots may carry M7's `MAX_SLOT_SPANS`. So the product is held to the
+/// square of the run budget beside the run count. With `M` the budget, a
+/// link `M + 1` spans wide is answered against `M − 1` runs, where the
+/// product is `M² − 1`, and refused against exactly `M`, which the run count
+/// admits and the product does not; a link `M` spans wide is answered there,
+/// at the square itself. Every one of these links opens its FROM with the one
+/// position each of doc2's runs holds, so an admitted case touches at its
+/// first test and the suite never pays the join it prices.
+#[test]
+fn addressably_discoverable_from_holds_its_join_to_the_square_of_the_run_budget() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let m = MAX_IMAGE_RUNS as u32;
+    // A FROM of `M − 1` spans beside a one-span TO and TYPE: `M + 1` in all.
+    let wider = link(&store, &doc1(), &wide_from(1, m - 1), &[ca(101)]);
+    // A FROM of `M − 2`: `M` in all.
+    let exact = link(&store, &doc1(), &wide_from(0, m - 2), &[ca(101)]);
+    let vs = Vstream::new(&k);
+    let many = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS - 1];
+    vs.copy(SYS, &doc2(), vp(1, 1), &many).expect("copy succeeds");
+    let lq = LinkQuery::new(&k);
+    assert_eq!(
+        k.snapshot().world().m5().link_runs(&doc2()).len(),
+        0,
+        "both links are seated in doc1, so doc2's runs are its content alone"
+    );
+
+    // (M + 1)(M − 1) = M² − 1: inside the square.
+    assert_eq!(lq.addressably_discoverable_from(&wider, &doc2()), Ok(true));
+
+    // One run more. The run count is AT the budget, which admits it; the
+    // product is (M + 1)M, past the square.
+    vs.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, 1)])
+        .expect("copy succeeds");
+    assert_eq!(
+        k.snapshot().world().m5().content_runs(&doc2()).len(),
+        MAX_IMAGE_RUNS
+    );
+    assert_eq!(
+        lq.addressably_discoverable_from(&wider, &doc2()),
+        Err(QueryError::ImageTooLarge)
+    );
+    // M × M: the square itself is admitted.
+    assert_eq!(lq.addressably_discoverable_from(&exact, &doc2()), Ok(true));
 }
 
 /// §5 — the precedence between the two gates, on the call that is faulty in
@@ -1806,8 +1998,11 @@ fn delete_orphans_keeps_a_link_witnessed_in_the_link_subspace_a_text_delete_neve
 /// doc1 and doc2 are private — because a published `d` is the second place
 /// the two sets part: a gap §6 states, pinned by a test of its own rather
 /// than added here, where it would fail the very equality this grid holds.
-/// Verdicts only here: the two vocabularies label one refusal differently by
-/// design, and the example test above is what pins WHICH word.
+/// Its documents are within the run budget too, the third place: a `d` past
+/// it is one DELETE edits and the preview refuses, pinned by its own test as
+/// well. Verdicts only here: the two vocabularies label one refusal
+/// differently by design, and the example test above is what pins WHICH
+/// word.
 #[test]
 fn delete_orphans_refuses_exactly_what_the_delete_refuses() {
     for doc in [doc1(), doc2(), unregistered_doc()] {
@@ -1918,6 +2113,58 @@ fn the_preview_answers_a_published_target_the_delete_refuses() {
         delete_orphans_on(&k.snapshot(), &pdoc(), &vp(1, 3), &n(1), &every_home),
         Err(OrphanError::OutOfBounds)
     );
+}
+
+/// §6 — the one refusal the preview holds and DELETE does not: the run
+/// budget, on the preview's own work. Its two stabs take the deleted range's
+/// runs and the retained as their query — `d`'s own arrangement split at most
+/// twice — and each walks the whole link store testing those spans against
+/// every slot span of every link, where DELETE stabs nothing. At the budget
+/// the preview answers; one run past it, it refuses every range, the whole
+/// document included, while the DELETE it previews still admits the request.
+/// The request's own faults are named first, on a document the budget
+/// refuses.
+#[test]
+fn delete_orphans_refuses_a_document_past_the_run_budget() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let vs = Vstream::new(&k);
+    let many = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS];
+    vs.copy(SYS, &doc2(), vp(1, 1), &many).expect("copy succeeds");
+    let lq = LinkQuery::new(&k);
+
+    // At the budget: one run deleted and every other retained, `MAX` in all.
+    assert!(lq.delete_orphans(&doc2(), &vp(1, 1), &n(1)).is_ok());
+
+    vs.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, 1)])
+        .expect("copy succeeds");
+    assert_eq!(
+        k.snapshot().world().m5().content_runs(&doc2()).len(),
+        MAX_IMAGE_RUNS + 1
+    );
+    let whole = n(MAX_IMAGE_RUNS as u32 + 1);
+    for (p, width) in [(vp(1, 1), n(1)), (vp(1, 2), n(1)), (vp(1, 1), whole)] {
+        assert_eq!(
+            lq.delete_orphans(&doc2(), &p, &width),
+            Err(OrphanError::ImageTooLarge),
+            "the preview of DELETE at {p:?}, width {width}, is refused"
+        );
+    }
+    // Every fault in the request is named ahead of the budget.
+    assert_eq!(
+        lq.delete_orphans(&doc2(), &vp(2, 1), &n(1)),
+        Err(OrphanError::NotContentSubspace)
+    );
+    assert_eq!(
+        lq.delete_orphans(&doc2(), &vp(1, 1), &n(0)),
+        Err(OrphanError::EmptyWidth)
+    );
+    assert_eq!(
+        lq.delete_orphans(&doc2(), &vp(1, 0), &n(1)),
+        Err(OrphanError::OutOfBounds)
+    );
+    // And the DELETE it previews, which stabs nothing, admits the request.
+    assert!(vs.delete(SYS, &doc2(), vp(1, 1), n(1)).is_ok());
 }
 
 // ─────────────── §7 — archival supersession lineage ───────────────
@@ -2630,6 +2877,7 @@ fn every_refusal_is_matchable_without_a_catch_all() {
             OrphanError::NotContentSubspace => "subspace",
             OrphanError::EmptyWidth => "width",
             OrphanError::OutOfBounds => "bounds",
+            OrphanError::ImageTooLarge => "runs",
         }
     }
     assert_eq!(query_word(QueryError::BadRegion), "region");
@@ -2653,6 +2901,7 @@ fn every_refusal_is_matchable_without_a_catch_all() {
         OrphanError::NotContentSubspace,
         OrphanError::EmptyWidth,
         OrphanError::OutOfBounds,
+        OrphanError::ImageTooLarge,
     ] {
         assert!(
             e.to_string().starts_with("delete-orphans: "),

@@ -114,18 +114,17 @@
 //! Two, both in the region file that owns the shape they price, and both
 //! REFUSALS rather than truncations — a short answer silently drops links,
 //! and no caller can tell one from a true answer.
-//! [`MAX_IMAGE_RUNS`] is one constant held at the three reads of a document's
+//! [`MAX_IMAGE_RUNS`] is one constant held at the four reads of a document's
 //! runs, each over the run count its own work multiplies; the constant states
-//! the three counts and how their refusals relate. [`MAX_ENDSET_SPANS`]
-//! bounds what a RETRIEVEENDSETS answer carries, the one quantity here the
-//! store supplies rather than the request.
+//! the four counts and how their refusals relate. Its SQUARE holds the two
+//! joins a run count alone does not price — the run-list walk [`image_on`]
+//! asks of M5, and the touch test of a link's whole coverage behind the
+//! pointwise pair. [`MAX_ENDSET_SPANS`] bounds what a RETRIEVEENDSETS answer
+//! carries, the one quantity here the store supplies rather than the request.
 //!
-//! [`delete_orphans_on`] reads a whole document's runs, resolved and
-//! stabbed, and holds NEITHER budget, so a `d` the reads above refuse is one
-//! the preview still answers about. That is a gap and not a decision:
-//! closing it wants a budget refusal in [`OrphanError`], whose verdicts are
-//! drawn from M5's `DeleteError` — which has no word for a budget, so the
-//! variant would be M8's own coinage in an enum otherwise borrowed.
+//! [`delete_orphans_on`] refuses under a word of its own,
+//! [`OrphanError::ImageTooLarge`]: its other verdicts are drawn from M5's
+//! `DeleteError`, and DELETE, which stabs nothing, has no word for a budget.
 //!
 //! What no number here reaches: `|links|`, `#runs(d)` and any one link's
 //! endset size are the WORLD's, so they stay with request rate and
@@ -140,7 +139,11 @@
 //! prices them from this list, and a change to any line is a change to this
 //! interface.
 //!
-//! * [`image_on`] — no link-store read; one M5 `resolve` per region span.
+//! * [`image_on`] — no link-store read; one M5 `resolve` per region span,
+//!   each a walk of the reading surface's run-list from its first run, the
+//!   region's whole walk held to `MAX_IMAGE_RUNS²` — and, for a region whose
+//!   reach in positions alone passes that, one read of the surface's content
+//!   runs to count them.
 //! * the region family ([`findlinks_v_on`], [`count_v_on`], [`window_v_on`],
 //!   [`retrieve_endsets_on`]) — three `stab`s, one per v1 slot, over the
 //!   image's runs; none when the image is empty. [`retrieve_endsets_on`]
@@ -151,7 +154,8 @@
 //!   the descriptor is unsatisfiable. The home slot is a post-filter and
 //!   narrows nothing M7 walks.
 //! * [`delete_orphans_on`] — six `stab`s: three over the deleted runs, three
-//!   over the retained (none when nothing is retained).
+//!   over the retained (none when nothing is retained), and none at all for a
+//!   `d` past the run budget.
 //! * the lineage pair ([`in_claims_on`], [`out_claims_on`]) — one
 //!   `readlink`, which answers `[]` for a non-link key and stops there;
 //!   otherwise one `match_links` at a one-span query and one `type_slice`,
@@ -159,7 +163,10 @@
 //! * the pointwise pair — no store walk: one `followlink` ([`project_on`]),
 //!   or one `readlink` and one `is_active`
 //!   ([`addressably_discoverable_from_on`]), plus M5's runs of `d`'s reading
-//!   surface.
+//!   surface and ONE JOIN of the link's coverage against them, held to
+//!   `MAX_IMAGE_RUNS²` span tests: M5's `project` of one slot against the
+//!   content runs, or the touch test of every slot's every span against
+//!   every run, each test rebuilding both spans' endpoints.
 //!
 //! A window computes its family's whole candidate set before it cuts,
 //! whatever `n` and wherever the cursor: paging bounds the answer, never the

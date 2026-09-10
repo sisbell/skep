@@ -1,31 +1,40 @@
 //! M8 contract tests over a real kernel (InMemory), stating what the design
 //! and interface assert: the doc-then-region gate order, checked on every
-//! entry point that inherits it, and the defined-empty result; image dedup
-//! and the region-span-then-V order it returns in; disjunctive +
-//! active-filtered region discovery; the stateless key-cut windowing (clamp,
-//! exhaustion, and a cursor surviving its link's orphaning and, apart from
-//! it, its retraction) and the one selection index its three read-outs
-//! share; RETRIEVEENDSETS' identity-withholding whole-endset
-//! pinned-order read-out; the FTT unit/zero/conjunction algebra, the home
-//! address-projection filter and its prefix-coverage reach; the two families'
-//! zeros and their two stabilities; projection, its content-subspace-only
-//! narrowing, addressable discoverability, the precedence that settles their
-//! document argument before their address one, the trunk head both read a
-//! published document through, and the absence rule both apply to a link
-//! the home rule refuses;
-//! the delete-orphan preview measured against the DELETE it previews, over
-//! that operation's whole accepted domain, against M5's own admission, and at
-//! the ω and publication gates where the two part; the flipped lineage probes
-//! with the resident-key gate, the supersession class they restrict to, the
-//! claim's own home attribution, the endpoints it reads out as recorded and
-//! the write-surface fences that read-out rests on; every result-set read
-//! dropping exactly the links homed where its
-//! reader may not read; the two budgets, each refused at its boundary and
-//! on every entry point that inherits it, and the two quantities the run
-//! constant is held over; the snapshot twins; and — because this file is a
-//! crate of its own — the promises M8 makes to a consumer rather than to
-//! itself: one named world bound, the standard traits its values carry, and
-//! rejection enums that stay exhaustively matchable.
+//! entry point that inherits it and against every subspace but `s_C`, and
+//! the defined-empty result; image dedup and the region-span-then-V order it
+//! returns in; disjunctive + active-filtered region discovery, and the trunk
+//! head every region read resolves a published document through; the
+//! stateless key-cut windowing — the clamp, and every drained page held to
+//! the batch order, `next` and exhaustion a returned window promises — whose
+//! cursor survives its link's orphaning, its retraction, and a state that
+//! never minted it, over the one selection index its three read-outs share;
+//! RETRIEVEENDSETS' identity-withholding whole-endset read-out in its total
+//! pinned order; the FTT unit/zero/conjunction algebra over all three link
+//! slots, the home address-projection filter and its prefix-coverage reach;
+//! the two families' zeros and their two stabilities; projection, its
+//! content-subspace-only narrowing, addressable discoverability, the defined
+//! answer both give a registered-but-empty document, the precedence that
+//! settles their document argument before their address one and both ahead
+//! of the budget, the trunk head both read a published document through, and
+//! the absence rule both apply to a link the home rule refuses; the
+//! delete-orphan preview measured against the DELETE it previews, over that
+//! operation's whole accepted domain, against M5's own admission, and at the
+//! ω and publication gates where the two part, with a registered-but-empty
+//! document refused for range; the flipped lineage probes with the
+//! resident-key gate, `Default` read as `Active` where the two views part,
+//! the supersession class they restrict to, the claim's own home
+//! attribution, the endpoints it reads out as recorded and the write-surface
+//! fences that read-out rests on; every result-set read dropping exactly the
+//! links homed where its reader may not read, whichever end of the address
+//! order they sit at — filtered at a link's home and whole at its endsets'
+//! origins, and asked of a claim rather than of its endpoints; the two
+//! budgets, each refused one past its boundary and on every entry point that
+//! inherits it, held at the numbers their docs give them, over the quantities
+//! the run constant is held to and the collapsed answer the span budget
+//! prices; the snapshot twins; and — because this file is a crate of its own
+//! — the promises M8 makes to a consumer rather than to itself: one named
+//! world bound, the standard traits its values carry, and rejection enums
+//! that stay exhaustively matchable and name their surface.
 
 use crate::common;
 
@@ -99,6 +108,30 @@ fn region_family_gates_doc_then_region_then_defines_empty() {
     assert!(lq.count_v(&doc1(), &[built]).is_ok());
     assert_eq!(content_vspan(&vp(2, 1), &n(1)), None);
     assert_eq!(content_vspan(&vp(1, 1), &n(0)), None);
+    // The rule is "the content subspace", not "anything but the link
+    // subspace": over subspaces either side of both numerals, the constructor
+    // builds exactly at `s_C` with a count, and the gate refuses exactly what
+    // it declines — a subspace-0 or subspace-3 span it admitted would resolve
+    // silently to ∅, a different query.
+    for s in 0..=3u32 {
+        for c in 0..=2u32 {
+            let built = content_vspan(&vp(s, 1), &n(c));
+            assert_eq!(
+                built.is_some(),
+                s == 1 && c >= 1,
+                "content_vspan at subspace {s}, count {c}"
+            );
+            if let Some(span) = built {
+                assert!(lq.count_v(&doc1(), &[span]).is_ok());
+            } else if c >= 1 {
+                assert_eq!(
+                    lq.count_v(&doc1(), &[vspan(s, 1, c)]),
+                    Err(QueryError::BadRegion),
+                    "a region in subspace {s} is refused"
+                );
+            }
+        }
+    }
 
     // Registered-but-empty d → a DEFINED empty result, distinct from
     // DocNotRegistered.
@@ -152,11 +185,13 @@ fn every_region_entry_point_answers_both_gates_in_order() {
             Some(QueryError::DocNotRegistered),
             "{name}: an unregistered d is refused"
         );
-        assert_eq!(
-            refusal(&doc1(), &[vspan(2, 1, 1)]),
-            Some(QueryError::BadRegion),
-            "{name}: a non-content-subspace region is refused"
-        );
+        for s in [0, 2, 3] {
+            assert_eq!(
+                refusal(&doc1(), &[vspan(s, 1, 1)]),
+                Some(QueryError::BadRegion),
+                "{name}: a region in subspace {s}, not s_C, is refused"
+            );
+        }
         assert_eq!(
             refusal(&unregistered_doc(), &[vspan(2, 1, 1)]),
             Some(QueryError::DocNotRegistered),
@@ -245,8 +280,16 @@ fn image_dedups_on_a_runs_whole_identity_not_its_start() {
 /// the region: each span here is well-formed, in-budget for the transport,
 /// and resolves to the document's whole arrangement, so a request the wire
 /// admits whole can still name work no wire cap bounds. Counted over runs
-/// RESOLVED, so four runs under 1024 spans is the budget exactly and one more
-/// span is past it.
+/// RESOLVED, so four runs under 1024 spans is the budget exactly, and one
+/// single-run span more is one run past it — the value just above the limit,
+/// where a comparison off by one would still admit.
+///
+/// Two things beside the boundary. The budget is refused THIRD, so an
+/// over-budget region whose malformed span comes last still names the region
+/// gate: the whole region is judged before any span resolves. The constant is
+/// the number its doc gives it, which a symbolic boundary cannot see: the
+/// largest FLAT region the transport admits — one span per wire slot, each
+/// resolving to one run — is admitted unchanged.
 #[test]
 fn the_region_family_refuses_an_image_past_the_run_budget() {
     let k = kernel();
@@ -255,23 +298,36 @@ fn the_region_family_refuses_an_image_past_the_run_budget() {
     }
     let lq = LinkQuery::new(&k);
     // Every span the same: the whole document, resolving to all four runs.
-    let past: Vec<Span> = vec![vspan(1, 1, 4); MAX_IMAGE_RUNS / 4 + 1];
-    let at_budget = &past[..MAX_IMAGE_RUNS / 4];
-    assert_eq!(lq.image(&doc1(), &past[..1]).map(|r| r.len()), Ok(4));
+    let at_budget: Vec<Span> = vec![vspan(1, 1, 4); MAX_IMAGE_RUNS / 4];
+    let past: Vec<Span> = at_budget.iter().cloned().chain([vspan(1, 1, 1)]).collect();
+    let past_then_malformed: Vec<Span> =
+        past.iter().cloned().chain([vspan(2, 1, 1)]).collect();
+    let flat: Vec<Span> = vec![vspan(1, 1, 1); MAX_SLOT_SPANS];
+    assert_eq!(lq.image(&doc1(), &at_budget[..1]).map(|r| r.len()), Ok(4));
     // At the budget the answer is still those four distinct runs — the dedup
     // is not what the budget counts.
-    assert_eq!(lq.image(&doc1(), at_budget).map(|r| r.len()), Ok(4));
+    assert_eq!(lq.image(&doc1(), &at_budget).map(|r| r.len()), Ok(4));
 
     for (name, refusal) in &region_entry_points(lq) {
         assert_eq!(
-            refusal(&doc1(), at_budget),
+            refusal(&doc1(), &at_budget),
             None,
             "{name}: the budget itself is admitted"
         );
         assert_eq!(
             refusal(&doc1(), &past),
             Some(QueryError::ImageTooLarge),
-            "{name}: one span past the budget is refused, not truncated"
+            "{name}: one run past the budget is refused, not truncated"
+        );
+        assert_eq!(
+            refusal(&doc1(), &past_then_malformed),
+            Some(QueryError::BadRegion),
+            "{name}: the whole region is judged before any span resolves"
+        );
+        assert_eq!(
+            refusal(&doc1(), &flat),
+            None,
+            "{name}: the largest flat region the transport admits is admitted"
         );
     }
 }
@@ -283,7 +339,9 @@ fn the_region_family_refuses_an_image_past_the_run_budget() {
 /// what LP12 ranges over. So the two do not refuse the same documents, and
 /// the last case here is the one link that separates them — without it the
 /// fixture seats every link in doc1, leaving doc2's link runs at zero, where
-/// the two quantities coincide and the wrong rule passes.
+/// the two quantities coincide and the wrong rule passes. Once `d` is past
+/// the budget it also shows each read's refusal ORDER, which no in-budget
+/// `d` can: every argument about `a` is refused ahead of the budget.
 #[test]
 fn the_pointwise_family_holds_one_run_constant_over_two_quantities() {
     let k = kernel();
@@ -336,13 +394,30 @@ fn the_pointwise_family_holds_one_run_constant_over_two_quantities() {
         lq.addressably_discoverable_from(&e1, &doc2()),
         Err(QueryError::ImageTooLarge)
     );
-    // The gates above the budget still answer first: an unregistered `d` and
-    // a non-link `a` are not swallowed by it.
+    // The unregistered `d` shows the document gate's own verdict, and no
+    // order: an unregistered document carries no runs, so it has no budget to
+    // be refused ahead of. The order is shown by the arguments about `a`,
+    // asked of a `d` PAST the budget — a non-link, and an `a` absent to the
+    // reader, are each refused ahead of it, on both reads.
     assert_eq!(
         lq.project(&e1, FROM, &unregistered_doc()),
         Err(QueryError::DocNotRegistered)
     );
     assert_eq!(lq.project(&ca(1), FROM, &doc2()), Err(QueryError::NotALink));
+    assert_eq!(
+        lq.addressably_discoverable_from(&ca(1), &doc2()),
+        Err(QueryError::NotALink)
+    );
+    let cannot_read_doc1 = |d: &Address| *d != doc1();
+    let snap = k.snapshot();
+    assert_eq!(
+        addressably_discoverable_from_on(&snap, &e1, &doc2(), &cannot_read_doc1),
+        Ok(false)
+    );
+    assert_eq!(
+        project_on(&snap, &e1, FROM, &doc2(), &cannot_read_doc1),
+        Err(QueryError::NotALink)
+    );
 }
 
 /// §5 — the precedence between the two gates, on the call that is faulty in
@@ -426,6 +501,43 @@ fn findlinks_v_is_disjunctive_and_active_filtered() {
 
 // ───────────────────────── §2 — windowed enumeration ─────────────────────────
 
+/// Drain one window read to exhaustion at batch size `n`, holding EVERY page
+/// to what a returned `Window` promises — `batch` strictly ascending and no
+/// longer than the clamped `n`, `next` its ≺-max or else the cursor
+/// unchanged, `exhausted` iff the batch is short — and answer the
+/// concatenation. A post-filter moved after the slice keeps the concatenation
+/// and breaks a page, so the pages are where it shows. Bounded by `limit`
+/// pages, so a window that never reports exhaustion fails rather than hangs.
+fn drain_window(n: usize, limit: usize, page: impl Fn(Cursor) -> Window) -> Vec<Address> {
+    let clamped = n.max(1);
+    let mut drained = Vec::new();
+    let mut cur: Cursor = None;
+    for _ in 0..limit {
+        let w = page(cur.clone());
+        assert!(
+            w.batch.windows(2).all(|p| p[0] < p[1]),
+            "batch strictly ascending: {w:?}"
+        );
+        assert!(w.batch.len() <= clamped, "at most n = {n} links: {w:?}");
+        assert_eq!(
+            w.exhausted,
+            w.batch.len() < clamped,
+            "exhausted iff short, n = {n}: {w:?}"
+        );
+        assert_eq!(
+            w.next,
+            w.batch.last().cloned().or(cur),
+            "next is the batch's max, else the cursor: {w:?}"
+        );
+        drained.extend(w.batch);
+        if w.exhausted {
+            return drained;
+        }
+        cur = w.next;
+    }
+    panic!("the window never reported exhaustion within {limit} pages at n = {n}");
+}
+
 /// §2 — the key-cut pages, and its cursor survives its link's departure from
 /// the matched set by either of the two roads the corpus keeps apart
 /// (ASN-0132): ORPHANING, where the link loses its content mapping and stays
@@ -495,6 +607,76 @@ fn window_v_pages_by_key_cut_and_survives_orphaning() {
     assert!(w5.exhausted);
 }
 
+/// §2 — W8 on the descriptor family, whose one road out of a set is
+/// retraction (CN-MONO). The departed cursor sits between live links, so a
+/// resume that looked it up and restarted from the top when it was gone would
+/// answer wide.
+#[test]
+fn window_ftt_resumes_past_a_cursor_whose_link_was_retracted() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let lq = LinkQuery::new(&k);
+    for to in [ca(101), ca(102), ca(103)] {
+        link(&store, &doc1(), &[ca(1)], &[to]); // la(1..=3)
+    }
+    // Homed here, so the retraction tuple (homed in doc2) stays out of the set.
+    let homed_here = FourSet {
+        home: SlotSpec::Spans(enc(&[doc1()])),
+        ..FourSet::any()
+    };
+    let w1 = lq.window_ftt(&homed_here, None, 2);
+    assert_eq!(w1.batch, vec![la(1), la(2)]);
+    store.nullify(SYS, &doc2(), &la(2)).expect("nullify succeeds");
+    assert_eq!(
+        lq.findlinks_ftt(&homed_here),
+        vec![la(1), la(3)],
+        "la(2) has left the set"
+    );
+    let w2 = lq.window_ftt(&homed_here, w1.next, 5);
+    assert_eq!(w2.batch, vec![la(3)]);
+    assert!(w2.exhausted);
+}
+
+/// §2 — EVERY `Address` is a legal cursor, including one naming a link the
+/// state being read never minted: a cursor paged off the head and replayed
+/// against an earlier position (`POST /op-at` runs a window frame as of one)
+/// names exactly that. Resume is a cut past it, never a lookup of it, so it
+/// resumes where it would have — and a cursor naming no link at all cuts by
+/// the same order.
+#[test]
+fn a_window_resumes_past_a_cursor_its_state_never_minted() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let first = link(&store, &doc1(), &[ca(1)], &[ca(101)]); // la(1)
+    let theirs = link(&store, &doc2(), &[ca(1)], &[ca(102)]); // la2(1): after every doc1 link
+    let earlier = k.snapshot();
+    let later = link(&store, &doc1(), &[ca(1)], &[ca(103)]); // la(2), minted after `earlier`
+    assert!(
+        earlier.world().links().readlink(&later).is_none(),
+        "the cursor names nothing at `earlier`"
+    );
+    let region = [vspan(1, 1, 1)];
+
+    let head = window_v_on(&k.snapshot(), &doc1(), &region, None, 2, &every_home).expect("window");
+    assert_eq!(head.batch, vec![first, later]);
+    let resumed = window_v_on(&earlier, &doc1(), &region, head.next.clone(), 5, &every_home)
+        .expect("any Address is a legal cursor");
+    assert_eq!(resumed.batch, vec![theirs.clone()]);
+    assert!(resumed.exhausted);
+    assert_eq!(
+        window_ftt_on(&earlier, &FourSet::any(), head.next, 5, &every_home).batch,
+        vec![theirs.clone()]
+    );
+    // A cursor that is no link at all cuts the same way: doc2's own address
+    // sorts after every doc1 link and before every doc2 one.
+    assert_eq!(
+        window_ftt_on(&earlier, &FourSet::any(), Some(doc2()), 5, &every_home).batch,
+        vec![theirs]
+    );
+}
+
 /// §2 — one selection index, read out three ways: `count_v`, `findlinks_v`
 /// and `window_v` at EVERY batch size answer off the same
 /// `findlinks_V ∩ addressable`, so they cannot disagree about which links
@@ -502,7 +684,8 @@ fn window_v_pages_by_key_cut_and_survives_orphaning() {
 /// skipped). The descriptor family states this over five descriptors; the
 /// region family is entitled to the law rather than to one hand-picked
 /// pagination, so this walks five regions × every batch size from the clamp
-/// at 0 through one past the set.
+/// at 0 through one past the set, holding every page to what a returned
+/// window promises.
 #[test]
 fn region_count_enumeration_and_window_read_out_one_selection_index() {
     let k = kernel();
@@ -550,28 +733,12 @@ fn region_count_enumeration_and_window_read_out_one_selection_index() {
 
         // n = 0 is the clamp (W9); n = |enumerated| is the equal case, where
         // the batch exactly drains the set and one further call is owed to
-        // report exhaustion.
+        // report exhaustion. Every clamped batch admits at least one link, so
+        // a drain of `len` links owes at most `len + 1` pages.
         for n in 0..=enumerated.len() + 1 {
-            let mut drained: Vec<Address> = Vec::new();
-            let mut cur = None;
-            // Every clamped batch admits at least one link, so a drain of
-            // `len` links owes at most `len + 1` calls; a budget turns the
-            // silent non-terminating signal an unclamped `n = 0` produces
-            // into a failure rather than a hang.
-            let mut budget = enumerated.len() + 1;
-            loop {
-                let w = lq.window_v(&doc1(), &region, cur, n).expect("window");
-                drained.extend(w.batch.iter().cloned());
-                cur = w.next;
-                if w.exhausted {
-                    break;
-                }
-                budget -= 1;
-                assert!(
-                    budget > 0,
-                    "window_v never reported exhaustion for {region:?} at n = {n}"
-                );
-            }
+            let drained = drain_window(n, enumerated.len() + 1, |cur| {
+                lq.window_v(&doc1(), &region, cur, n).expect("window")
+            });
             assert_eq!(
                 drained, enumerated,
                 "the window drains sel for {region:?} at n = {n}"
@@ -626,22 +793,68 @@ fn retrieve_endsets_withholds_identity_whole_endsets_pinned_order() {
     );
 }
 
+/// §4 — the pinned order is TOTAL: fourteen FROM endsets that tie on every
+/// key but one — eight sharing their one span's start and differing in its
+/// width, six sharing their first span and differing in the second — come
+/// back in one order, twice, whatever order the throwaway hash set held them
+/// in. `enc(&[ca(1)])` and the width-1 run's extent are one span (both are
+/// `ca(1)` to the next position at its length), so the width-1 endset is a
+/// strict prefix of every two-span one, and each of those sorts ahead of
+/// every wider single span.
+#[test]
+fn retrieve_endsets_orders_pairs_that_tie_on_every_key_but_the_last() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 8); // one run: V 1..8 → ca(1..8)
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let lq = LinkQuery::new(&k);
+    for w in 1..=8 {
+        store
+            .makelink(
+                SYS,
+                &doc1(),
+                SlotArg::Resolve(vec![spec(&doc1(), 1, 1, w)]),
+                SlotArg::Addrs(vec![ca(101)]),
+                SlotArg::Addrs(vec![rel()]),
+            )
+            .expect("makelink succeeds");
+    }
+    for j in 3..=8 {
+        link(&store, &doc1(), &[ca(1), ca(j)], &[ca(101)]);
+    }
+    let one = |w: u32| (FROM, Endset::from_spans([run(&ca(1), w).iextent()]));
+    let two = |j: u32| (FROM, enc(&[ca(1), ca(j)]));
+    let expected: Vec<(usize, Endset)> = std::iter::once(one(1))
+        .chain((3..=8).map(two))
+        .chain((2..=8).map(one))
+        .collect();
+    for _ in 0..2 {
+        assert_eq!(
+            lq.retrieve_endsets(&doc1(), &[vspan(1, 1, 1)]),
+            Ok(expected.clone())
+        );
+    }
+}
+
+/// A FROM endset of `spans` addresses touching doc1's position 1: `ca(1)` is
+/// the span a region naming that position touches, and the rest name
+/// unarranged positions of doc1. Endsets collapse by VALUE, so the filler is
+/// keyed on `link`: the same `link` number gives the same endset, distinct
+/// numbers give distinct ones.
+fn wide_from(link: u32, spans: u32) -> Vec<Address> {
+    let mut addrs = vec![ca(1)];
+    addrs.extend((1..spans).map(|j| ca(1000 + link * spans + j)));
+    addrs
+}
+
 /// §4 — the answer's span budget, at its boundary. The amplification it
 /// prices is the one no request-shaped cap reaches: a two-hundred-byte query
 /// naming ONE position, answered with every whole endset touching it, each of
 /// which M7 admits at `MAX_SLOT_SPANS` on deposit. Sixty-four such endsets is
-/// the budget exactly, and the sixty-fifth is refused rather than dropped —
-/// RE-UNIT licenses withholding a link's IDENTITY, never its endset.
+/// the budget exactly, and one span more — a sixty-fifth link naming position
+/// 1 alone — is refused rather than dropped: RE-UNIT licenses withholding a
+/// link's IDENTITY, never its endset.
 #[test]
 fn retrieve_endsets_refuses_an_answer_past_the_span_budget() {
-    /// Endsets are collapsed by VALUE, so each link needs its own filler set
-    /// or the sixty-four would ship as one pair. `ca(1)` is the span that
-    /// touches the region; the rest name unarranged positions of doc1.
-    fn wide_from(link: u32, spans: u32) -> Vec<Address> {
-        let mut addrs = vec![ca(1)];
-        addrs.extend((1..spans).map(|j| ca(1000 + link * spans + j)));
-        addrs
-    }
     const SPANS: u32 = 1024;
     let at_budget = MAX_ENDSET_SPANS / SPANS as usize; // 64 whole endsets
 
@@ -660,8 +873,8 @@ fn retrieve_endsets_refuses_an_answer_past_the_span_budget() {
     assert_eq!(pairs.len(), at_budget);
     assert!(pairs.iter().all(|(i, e)| *i == FROM && e.len() == SPANS as usize));
 
-    // One link more, and the answer is refused rather than shortened.
-    link(&store, &doc1(), &wide_from(at_budget as u32, SPANS), &[ca(101)]);
+    // One span more, and the answer is refused rather than shortened.
+    link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     assert_eq!(
         lq.retrieve_endsets(&doc1(), &region),
         Err(QueryError::EndsetsTooLarge)
@@ -669,6 +882,56 @@ fn retrieve_endsets_refuses_an_answer_past_the_span_budget() {
     // The region family's other read-outs carry no such budget: they enumerate
     // ADDRESSES, whose size is the link count and not the endsets'.
     assert_eq!(lq.count_v(&doc1(), &region), Ok(at_budget + 1));
+}
+
+/// §4 — the span budget prices what the answer CARRIES: links sharing one
+/// wide endset are one pair and one charge. A per-link charge would refuse
+/// this answer, which is a single pair — the collapse RE-UNIT licenses,
+/// refused for being collapsed.
+#[test]
+fn retrieve_endsets_prices_the_collapsed_answer_not_the_links_behind_it() {
+    const SPANS: u32 = 1024;
+    let links = MAX_ENDSET_SPANS / SPANS as usize + 1; // one more than a per-link charge admits
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let lq = LinkQuery::new(&k);
+    let shared = wide_from(0, SPANS);
+    for i in 0..links as u32 {
+        link(&store, &doc1(), &shared, &[ca(101 + i)]);
+    }
+    let region = [vspan(1, 1, 1)];
+    assert_eq!(
+        lq.count_v(&doc1(), &region),
+        Ok(links),
+        "every link touches the region"
+    );
+    assert_eq!(
+        lq.retrieve_endsets(&doc1(), &region),
+        Ok(vec![(FROM, enc(&shared))])
+    );
+}
+
+/// §4 — the answer budget is not M7's slot budget: two links each carrying
+/// the most spans M7 admits in one slot are answered whole. That is the case
+/// the constant's own doc gives for `2^16` over `2^12`, and a symbolic
+/// boundary test cannot see it.
+#[test]
+fn retrieve_endsets_answers_a_region_two_maximal_endsets_touch() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let lq = LinkQuery::new(&k);
+    for i in 0..2 {
+        link(&store, &doc1(), &wide_from(i, MAX_SLOT_SPANS as u32), &[ca(101)]);
+    }
+    let pairs = lq
+        .retrieve_endsets(&doc1(), &[vspan(1, 1, 1)])
+        .expect("inside the answer budget");
+    assert_eq!(pairs.len(), 2);
+    assert!(pairs
+        .iter()
+        .all(|(i, e)| *i == FROM && e.len() == MAX_SLOT_SPANS));
 }
 
 // ─────────────────── §3 — four-set descriptor query ───────────────────
@@ -794,6 +1057,38 @@ fn ftt_hands_the_smallest_constraint_first_without_moving_the_answer() {
     assert_eq!(lq.count_ftt(&wide_from), 1);
 }
 
+/// §3 — Θ constrains like the other link slots: a descriptor naming a type
+/// answers the links carrying it, alone and conjoined. Every other descriptor
+/// here constrains FROM, TO or home, so a constraint list that dropped Θ, or
+/// paired it with the wrong slot numeral, would pass them all.
+#[test]
+fn ftt_the_type_slot_answers_the_links_carrying_the_type() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let lq = LinkQuery::new(&k);
+    let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]); // the suite's relation type
+    let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
+    let (claim, _) = store
+        .assert_sup(SYS, &doc1(), &e1, &e2)
+        .expect("assert_sup succeeds");
+    let sup = enc(&[ra(4)]); // Supersedes, as the fence test reads it off the store
+    let of_type = |ty: Endset| FourSet {
+        ty: SlotSpec::Spans(ty),
+        ..FourSet::any()
+    };
+    assert_eq!(lq.findlinks_ftt(&of_type(rel_ty())), vec![e1.clone(), e2]);
+    assert_eq!(lq.findlinks_ftt(&of_type(sup.clone())), vec![claim.clone()]);
+    assert_eq!(lq.count_ftt(&of_type(sup.clone())), 1);
+    let from_e1 = |ty: Endset| FourSet {
+        from: SlotSpec::Spans(enc([&e1])),
+        ty: SlotSpec::Spans(ty),
+        ..FourSet::any()
+    };
+    assert_eq!(lq.findlinks_ftt(&from_e1(sup)), vec![claim]);
+    assert_eq!(lq.findlinks_ftt(&from_e1(rel_ty())), vec![]);
+}
+
 #[test]
 fn ftt_home_filter_is_an_address_projection_applied_lazily() {
     let k = kernel();
@@ -888,7 +1183,8 @@ fn ftt_home_is_prefix_coverage_not_address_equality() {
 /// The home-constrained descriptors are the load-bearing cases: they are the
 /// only ones where the residence post-filter narrows the candidate set, so a
 /// read-out that evaluated the candidates instead of `sat` would answer wide
-/// here and nowhere else.
+/// here and nowhere else — and a residence post-filter applied after the
+/// window's slice would come back with a short page claiming more to come.
 #[test]
 fn ftt_count_enumeration_and_window_read_out_one_sat() {
     let k = kernel();
@@ -922,22 +1218,20 @@ fn ftt_count_enumeration_and_window_read_out_one_sat() {
         let enumerated = lq.findlinks_ftt(&q);
         assert_eq!(lq.count_ftt(&q), enumerated.len(), "count = |enum| for {q:?}");
 
-        // The same set again, drained one link at a time through the cursor.
-        let mut drained: Vec<_> = Vec::new();
-        let mut cur = None;
-        loop {
-            let w = lq.window_ftt(&q, cur, 1);
-            drained.extend(w.batch.iter().cloned());
-            cur = w.next;
-            if w.exhausted {
-                break;
-            }
+        // The same set again, drained through the cursor at every batch size
+        // from the clamp at 0 through one past the set, every page held to
+        // what a returned window promises.
+        for n in 0..=enumerated.len() + 1 {
+            assert_eq!(
+                drain_window(n, enumerated.len() + 1, |cur| lq.window_ftt(&q, cur, n)),
+                enumerated,
+                "the window drains sat for {q:?} at n = {n}"
+            );
         }
-        assert_eq!(drained, enumerated, "the window drains sat for {q:?}");
     }
 
-    // `n = 0` is clamped to 1 on this family too (W9 totality) — the drain
-    // above never reaches the clamp, since it pages at 1.
+    // `n = 0` is clamped to 1 on this family too (W9 totality): the drains
+    // above visit it, and this pins the one link it answers.
     assert_eq!(lq.window_ftt(&FourSet::any(), None, 0).batch, vec![la(1)]);
 }
 
@@ -1034,6 +1328,12 @@ fn project_is_content_subspace_i_to_v_with_conflated_notalink() {
         lq.project(&e1, FROM, &unregistered_doc()),
         Err(QueryError::DocNotRegistered)
     );
+    // A registered-but-empty d projects ∅, a defined answer — never
+    // DocNotRegistered, which is the distinction the document gate draws.
+    assert!(lq
+        .project(&e1, FROM, &doc2())
+        .expect("registered-empty answers")
+        .is_empty());
 
     // NOT ADDRESSABLE-FILTERED — the one read here that is not narrowed to
     // the active view.
@@ -1194,6 +1494,31 @@ fn the_pointwise_pair_reads_the_trunk_head_the_region_family_resolves() {
     }
 }
 
+/// §1 — HEAD-FLOAT on every region read, not only the two the pointwise law
+/// above composes with: `image_on` states that the whole family inherits its
+/// float, so each of the five is asked. Position 3 exists only in pdoc's trunk
+/// head, so any one read resolving pdoc's own frozen arrangement would answer
+/// empty there.
+#[test]
+fn every_region_read_resolves_a_published_document_through_its_trunk_head() {
+    let k = published_world();
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let head_only = link(&store, &doc1(), &[pca(3)], &[ca(102)]);
+    let lq = LinkQuery::new(&k);
+    let region = [vspan(1, 3, 1)];
+    assert_eq!(lq.image(&pdoc(), &region), Ok(vec![run(&pca(3), 1)]));
+    assert_eq!(lq.findlinks_v(&pdoc(), &region), Ok(vec![head_only.clone()]));
+    assert_eq!(lq.count_v(&pdoc(), &region), Ok(1));
+    assert_eq!(
+        lq.window_v(&pdoc(), &region, None, 5).map(|w| w.batch),
+        Ok(vec![head_only])
+    );
+    assert_eq!(
+        lq.retrieve_endsets(&pdoc(), &region),
+        Ok(vec![(FROM, enc(&[pca(3)]))])
+    );
+}
+
 /// §5 — the pointwise pair apply the ABSENCE RULE: a link homed where the
 /// reader may not read is ABSENT — `project` gives the non-link's
 /// `NotALink`, `addressably_discoverable_from` the retracted link's
@@ -1276,6 +1601,16 @@ fn delete_orphans_mirrors_delete_preconditions() {
     assert_eq!(
         lq.delete_orphans(&unregistered_doc(), &vp(1, 1), &n(1)),
         Err(OrphanError::DocNotRegistered)
+    );
+    // A registered-but-empty d is refused for RANGE, never as unregistered:
+    // n_C = 0 admits no range, and which variant answers says which fault.
+    assert_eq!(
+        lq.delete_orphans(&doc2(), &vp(1, 1), &n(1)),
+        Err(OrphanError::OutOfBounds)
+    );
+    assert_eq!(
+        lq.delete_orphans(&doc2(), &vp(1, 1), &n(0)),
+        Err(OrphanError::EmptyWidth)
     );
     // Check order mirrors §6: subspace, then width, then the folded bounds.
     assert_eq!(
@@ -1459,8 +1794,8 @@ fn delete_orphans_keeps_a_link_witnessed_in_the_link_subspace_a_text_delete_neve
 /// §6 — the preview's ADMISSION equality with M5's DELETE, asked from both
 /// sides over a grid that visits requests nobody chose: an overrun from every
 /// start, the `p + width = n_C + 1` equality, the zero width at an
-/// out-of-range start, the link subspace, an empty document and an
-/// unregistered one. Eight hand-picked points on M8's own error contract
+/// out-of-range start, every subspace but `s_C` on either side of it, an
+/// empty document and an unregistered one. Eight hand-picked points on M8's own error contract
 /// would all still pass if M5's admission moved; this would not.
 ///
 /// The comparison runs as `SYS`, which is exactly the caller class the
@@ -1476,7 +1811,7 @@ fn delete_orphans_keeps_a_link_witnessed_in_the_link_subspace_a_text_delete_neve
 #[test]
 fn delete_orphans_refuses_exactly_what_the_delete_refuses() {
     for doc in [doc1(), doc2(), unregistered_doc()] {
-        for subspace in 1..=2u32 {
+        for subspace in 0..=3u32 {
             for ordinal in 0..=4u32 {
                 for width in 0..=4u32 {
                     // An accepted delete mutates the arrangement, so each
@@ -1609,7 +1944,9 @@ fn lineage_probes_flipped_slots_with_residence_gate() {
     assert_eq!(lq.out_claims(&e2, View::Active), vec![expected.clone()]);
     assert_eq!(lq.in_claims(&e2, View::Active), vec![]);
     assert_eq!(lq.out_claims(&e1, View::Active), vec![]);
-    // Default behaves as Active (M7's §G primitives coerce it).
+    // Default behaves as Active (M7's §G primitives coerce it) — asserted
+    // here while the claim is live, where Audit answers the same; the
+    // assertion that separates them follows the retraction.
     assert_eq!(lq.in_claims(&e1, View::Default), vec![expected]);
 
     // Resident-key gate: a non-link key returns [] — without it, doc1's
@@ -1626,6 +1963,10 @@ fn lineage_probes_flipped_slots_with_residence_gate() {
     assert_eq!(audit.len(), 1);
     assert_eq!(audit[0].claim, claim);
     assert!(!audit[0].active);
+    // After the retraction Active and Audit part — the one state where
+    // "Default reads as Active" can be told from "Default reads as Audit".
+    assert_eq!(lq.in_claims(&e1, View::Default), vec![]);
+    assert_eq!(lq.out_claims(&e2, View::Default), vec![]);
 }
 
 /// §7 — `home` is the CLAIM's own attribution (EL8b), never an endpoint's.
@@ -1706,8 +2047,9 @@ fn a_live_claim_names_a_nullified_endpoint_and_a_nullified_key_still_probes() {
 }
 
 /// §7 — the lineage read-out is in ascending CLAIM-address order, the same
-/// permanent key every enumeration here reads out by: two claims naming one
-/// `old` come back ordered, not in whatever order the index handed them over.
+/// permanent key every enumeration here reads out by, off both probes: two
+/// claims naming one `old`, and two naming one `new`, come back ordered, not
+/// in whatever order the index handed them over.
 #[test]
 fn lineage_reads_out_in_claim_address_order() {
     let k = kernel();
@@ -1726,7 +2068,12 @@ fn lineage_reads_out_in_claim_address_order() {
     let (c2, _) = store
         .assert_sup(SYS, &doc1(), &made[0], &made[2])
         .expect("assert_sup succeeds");
-    assert!(c1 < c2, "later claims mint later addresses");
+    // And a second claim naming made[2] as new, so the TO probe has an order
+    // of its own to read out.
+    let (c3, _) = store
+        .assert_sup(SYS, &doc1(), &made[1], &made[2])
+        .expect("assert_sup succeeds");
+    assert!(c1 < c2 && c2 < c3, "later claims mint later addresses");
 
     let claims: Vec<Address> = lq
         .in_claims(&made[0], View::Active)
@@ -1734,16 +2081,15 @@ fn lineage_reads_out_in_claim_address_order() {
         .map(|c| c.claim)
         .collect();
     assert_eq!(claims, vec![c1.clone(), c2.clone()]);
-    // out() reads the same order off the TO probe — one claim each here, so
-    // the pair is read back through the union of the two probes.
+    // out() reads the same order off the TO probe: made[2] is `new` to two
+    // claims, made[1] to one.
+    let claims_of =
+        |found: Vec<SupClaim>| -> Vec<Address> { found.into_iter().map(|c| c.claim).collect() };
     assert_eq!(
-        lq.out_claims(&made[1], View::Active)[0].claim,
-        c1
+        claims_of(lq.out_claims(&made[2], View::Active)),
+        vec![c2, c3]
     );
-    assert_eq!(
-        lq.out_claims(&made[2], View::Active)[0].claim,
-        c2
-    );
+    assert_eq!(claims_of(lq.out_claims(&made[1], View::Active)), vec![c1]);
 }
 
 /// §7 — the enumeration reads out SUPERSESSION claims alone. M7's probe finds
@@ -1882,33 +2228,25 @@ fn lineage_endpoints_rest_on_a_fence_the_write_surface_keeps() {
 
 // ───────────── the home rule — the reader argument (PUB-6.13) ─────────────
 
-/// Drain a window read to exhaustion ONE link per page, so a dropped link
-/// counted against `n` would show as a page that comes back short, reports
-/// exhaustion, and stops the drain early.
-fn drain_by_ones(page: impl Fn(Cursor) -> Window) -> Vec<Address> {
-    let mut drained = Vec::new();
-    let mut cur = None;
-    for _ in 0..64 {
-        let w = page(cur);
-        drained.extend(w.batch);
-        if w.exhausted {
-            return drained;
-        }
-        cur = w.next;
-    }
-    panic!("the window never reported exhaustion");
-}
-
 /// Every result-set read drops EXACTLY the links homed where the reader may
 /// not read, and counts and pages what survives (PUB-6.13, PUB-6.14,
 /// PUB-6.19) — asked of each read against the same read under a reader
-/// admitting every home, never against a hand-written answer. The reader
-/// here may read everything but doc2, and the fixture homes links in both
-/// documents, every one touching doc1's content, so each read-out has
-/// something to drop and something to keep. The mistake the law exists for
-/// is a site that asks the home rule's question of the LINK instead of its
-/// home: a link address is no draft, so it reads as published and the rule
-/// admits every link — and that one read then keeps doc2's links.
+/// admitting every home, never against a hand-written answer. The fixture
+/// homes links in both documents, every one touching doc1's content, so each
+/// read-out has something to drop and something to keep. The mistake the law
+/// exists for is a site that asks the home rule's question of the LINK
+/// instead of its home: a link address is no draft, so it reads as published
+/// and the rule admits every link — and that one read then keeps doc2's
+/// links.
+///
+/// Two readers, because the windows page in address order and doc1's links
+/// all sort ahead of doc2's. The first may read everything but doc2, so
+/// every link it refuses sorts AFTER every link it keeps. The second may read
+/// everything but doc1, so its refused links sort FIRST. A window that
+/// stopped at the first page the rule emptied would still hand the first
+/// reader every survivor, and loses all of them for the second. Every page is
+/// held to the window's postconditions, so a refused link counted against `n`
+/// (PUB-6.14) shows as a short page claiming more to come.
 #[test]
 fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_read() {
     let k = kernel();
@@ -1943,7 +2281,7 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
     assert_eq!(seen, survivors(all), "findlinks_ftt");
     assert_eq!(count_ftt_on(&snap, &q, &reader), seen.len(), "count_ftt");
     assert_eq!(
-        drain_by_ones(|cur| window_ftt_on(&snap, &q, cur, 1, &reader)),
+        drain_window(1, seen.len() + 1, |cur| window_ftt_on(&snap, &q, cur, 1, &reader)),
         seen,
         "window_ftt"
     );
@@ -1956,11 +2294,39 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
     assert_eq!(seen, survivors(all), "findlinks_v");
     assert_eq!(count_v_on(&snap, &doc1(), &region, &reader), Ok(seen.len()), "count_v");
     assert_eq!(
-        drain_by_ones(|cur| {
+        drain_window(1, seen.len() + 1, |cur| {
             window_v_on(&snap, &doc1(), &region, cur, 1, &reader).expect("window_v")
         }),
         seen,
         "window_v"
+    );
+
+    // The second reader refuses doc1, whose links sort FIRST, so both windows
+    // open on pages the rule empties. (It reads doc1's region though it may
+    // not read doc1: the named document's own readability is the caller's
+    // consult, never M8's.)
+    let cannot_read_doc1 = |d: &Address| *d != doc1();
+    let seen = findlinks_ftt_on(&snap, &q, &cannot_read_doc1);
+    assert_eq!(
+        seen,
+        vec![t0.clone(), t1.clone(), dropped.clone()],
+        "doc2's links survive"
+    );
+    assert_eq!(
+        drain_window(1, seen.len() + 1, |cur| {
+            window_ftt_on(&snap, &q, cur, 1, &cannot_read_doc1)
+        }),
+        seen,
+        "window_ftt, refused links first"
+    );
+    let seen = findlinks_v_on(&snap, &doc1(), &region, &cannot_read_doc1).expect("findlinks_v");
+    assert_eq!(seen, vec![t0.clone(), t1.clone()]);
+    assert_eq!(
+        drain_window(1, seen.len() + 1, |cur| {
+            window_v_on(&snap, &doc1(), &region, cur, 1, &cannot_read_doc1).expect("window_v")
+        }),
+        seen,
+        "window_v, refused links first"
     );
 
     // RETRIEVEENDSETS withholds identity, so what it drops is PAIRS: t0's own
@@ -2006,6 +2372,83 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
             "out_claims({new:?})"
         );
     }
+}
+
+/// §4 — PUB-6.15: filtered at link HOME, UNFILTERED at origin. The home rule
+/// decides which links contribute a pair and never reaches into a surviving
+/// link's endset. The result-set law cannot see this: every link its readers
+/// keep names only addresses under one document, where an endset clipped to
+/// the reader is unchanged. Here a doc1-homed link names doc2's content too.
+#[test]
+fn retrieve_endsets_filters_at_the_links_home_and_ships_its_endset_whole_at_origin() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    link(&store, &doc1(), &[ca(1), ca2(1)], &[ca(101)]); // homed in doc1, naming doc2 too
+    link(&store, &doc2(), &[ca(1)], &[ca(102)]); // homed in doc2
+    let snap = k.snapshot();
+    let region = [vspan(1, 1, 1)];
+    assert_eq!(
+        retrieve_endsets_on(&snap, &doc1(), &region, &every_home),
+        Ok(vec![(FROM, enc(&[ca(1)])), (FROM, enc(&[ca(1), ca2(1)]))])
+    );
+    let cannot_read_doc2 = |d: &Address| *d != doc2();
+    assert_eq!(
+        retrieve_endsets_on(&snap, &doc1(), &region, &cannot_read_doc2),
+        Ok(vec![(FROM, enc(&[ca(1), ca2(1)]))]),
+        "the doc2-homed link's pair goes; the doc1-homed link's endset ships whole"
+    );
+}
+
+/// §7 — the home rule is asked of the CLAIM's own address, and a surviving
+/// claim's endpoints read out as recorded, whatever the reader may read. The
+/// result-set law's claims each share a home with their `new`, so a read that
+/// asked `new`'s home would answer exactly as the right one there; here the
+/// two part. The probe keys are homed where the reader may read, so nothing
+/// here turns on the key's own home.
+#[test]
+fn the_lineage_pair_asks_the_home_rule_of_the_claim_and_reads_its_endpoints_as_recorded() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
+    let theirs = link(&store, &doc2(), &[ca(1)], &[ca(103)]);
+    // Homed in doc1, naming a doc2 link as new …
+    let (kept, _) = store
+        .assert_sup(SYS, &doc1(), &e1, &theirs)
+        .expect("assert_sup succeeds");
+    // … and homed in doc2, naming only doc1 links.
+    let (refused, _) = store
+        .assert_sup(SYS, &doc2(), &e1, &e2)
+        .expect("assert_sup succeeds");
+    let snap = k.snapshot();
+    let claims =
+        |found: Vec<SupClaim>| -> Vec<Address> { found.into_iter().map(|c| c.claim).collect() };
+    assert_eq!(
+        claims(in_claims_on(&snap, &e1, View::Active, &every_home)),
+        vec![kept.clone(), refused.clone()]
+    );
+    assert_eq!(
+        claims(out_claims_on(&snap, &e2, View::Active, &every_home)),
+        vec![refused]
+    );
+
+    let cannot_read_doc2 = |d: &Address| *d != doc2();
+    assert_eq!(
+        in_claims_on(&snap, &e1, View::Active, &cannot_read_doc2),
+        vec![SupClaim {
+            claim: kept,
+            old: e1,
+            new: theirs,
+            home: doc1(),
+            active: true,
+        }]
+    );
+    assert_eq!(
+        out_claims_on(&snap, &e2, View::Active, &cannot_read_doc2),
+        vec![]
+    );
 }
 
 // ───────────────────────── snapshot twins ─────────────────────────
@@ -2192,10 +2635,28 @@ fn every_refusal_is_matchable_without_a_catch_all() {
     assert_eq!(query_word(QueryError::BadRegion), "region");
     assert_eq!(orphan_word(OrphanError::EmptyWidth), "width");
 
-    // `Display` names the surface that refused, so a relayed refusal says
-    // which of the two vocabularies it came from.
-    assert!(QueryError::NotALink.to_string().starts_with("query: "));
-    assert!(OrphanError::DocNotRegistered
-        .to_string()
-        .starts_with("delete-orphans: "));
+    // `Display` names the surface that refused, on EVERY variant, so a
+    // relayed refusal says which of the two vocabularies it came from. The
+    // matches above fail the build when a variant is added; these lists do
+    // not, and are extended beside them by hand.
+    for e in [
+        QueryError::DocNotRegistered,
+        QueryError::NotALink,
+        QueryError::BadRegion,
+        QueryError::ImageTooLarge,
+        QueryError::EndsetsTooLarge,
+    ] {
+        assert!(e.to_string().starts_with("query: "), "{e:?} renders {e}");
+    }
+    for e in [
+        OrphanError::DocNotRegistered,
+        OrphanError::NotContentSubspace,
+        OrphanError::EmptyWidth,
+        OrphanError::OutOfBounds,
+    ] {
+        assert!(
+            e.to_string().starts_with("delete-orphans: "),
+            "{e:?} renders {e}"
+        );
+    }
 }

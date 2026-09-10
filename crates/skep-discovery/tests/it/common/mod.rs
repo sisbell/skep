@@ -189,6 +189,11 @@ pub fn pca(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 3, 0, 1, ordinal])
 }
 
+/// doc2 content element `k`: `[1,0,1,0,2,0,1,k]`.
+pub fn ca2(ordinal: u32) -> Address {
+    a(&[1, 0, 1, 0, 2, 0, 1, ordinal])
+}
+
 /// doc1 link element `k`: `[1,0,1,0,1,0,2,k]`.
 pub fn la(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 1, 0, 2, ordinal])

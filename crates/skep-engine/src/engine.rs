@@ -116,6 +116,16 @@ impl Engine {
     /// instance a consumer reads IS the one the store's fold and write gates
     /// run against, by construction rather than by an agreement anything here
     /// would have to keep.
+    ///
+    /// The kernel this hands [`EngineStores`] satisfies that constructor's
+    /// PRECONDITION under either durability mode, by a different route each
+    /// time. Journalled: M2 seeds whatever base it loads through
+    /// `WorldState::rebuild_derived` before replay, so the root is rebuilt
+    /// whether it came from a checkpoint or from genesis. In-memory: M2
+    /// installs the passed world unrebuilt, and the passed world is
+    /// [`World::genesis`], which carries its own derived hints and says why it
+    /// must. So the mode that skips the rebuild is the mode whose root needs
+    /// none.
     pub fn open(cfg: KernelConfig) -> Result<Engine, EngineError> {
         let kernel = Arc::new(Kernel::open(cfg, World::genesis())?);
         Ok(Engine { stores: EngineStores::new(kernel) })
@@ -203,6 +213,21 @@ impl Engine {
     /// The committed world as of position `at`: [`Kernel::world_at`] over the
     /// assembled world, forwarded verbatim. The contract, the refusal
     /// precedence and the cost are M2's, at that link.
+    ///
+    /// POSTCONDITION, which is the assembler's rather than M2's because it is
+    /// [`World`]'s invariant it discharges: the returned world HAS been
+    /// through `WorldState::rebuild_derived`. M2 seeds every base it selects
+    /// through that call before folding onto it, and the fold is
+    /// [`WorldState::apply`], which carries both derived indexes on their own
+    /// arms. So a reconstruction satisfies the invariant [`World`] states and
+    /// needs no rebuild from its receiver: it may be dumped, checked, served
+    /// at a reader's class, or paired with a kernel at [`EngineStores::new`],
+    /// whose precondition it discharges. That is the one thing a caller must
+    /// know and M2 cannot say, being generic over every `WorldState` and
+    /// knowing nothing of this world's indexes.
+    ///
+    /// [`WorldState::apply`]: skep_kernel::WorldState::apply
+    /// [`WorldState::rebuild_derived`]: skep_kernel::WorldState::rebuild_derived
     pub fn world_at(&self, at: Seq) -> Result<World, HistoryError> {
         self.kernel().world_at(at)
     }

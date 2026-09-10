@@ -298,6 +298,11 @@ pub(super) fn filter_tree(
 /// the hint's stored shape is not widened. A claim's home is
 /// `document_of(claim)`, the same address arithmetic every other hint entry
 /// is judged by.
+///
+/// `type_slice` carries a stated PRECONDITION on its class — address-denoting
+/// or `iextent`-built, else it panics naming it — and this function takes no
+/// class from a caller: the one below is `reserved_type(Supersedes)`, M7's
+/// own endset, which discharges it.
 fn sup_edge_claims(links: &LinkState) -> BTreeMap<Tumbler, BTreeMap<Tumbler, Vec<Address>>> {
     let sup = links.reserved_type(ShippedType::Supersedes);
     let mut by_edge: BTreeMap<Tumbler, BTreeMap<Tumbler, Vec<Address>>> = BTreeMap::new();
@@ -358,6 +363,14 @@ fn sup_edge_claims(links: &LinkState) -> BTreeMap<Tumbler, BTreeMap<Tumbler, Vec
 /// `readlink` per tuple — at filter time, as [`sup_edge_claims`] is. A tuple's
 /// home is `document_of(tuple)`, the same address arithmetic every other hint
 /// entry is judged by.
+///
+/// `ty` carries M7's stated precondition — address-denoting or
+/// `iextent`-built, else `type_slice` panics naming it — and unlike
+/// [`sup_edge_claims`], which reads its own class off the store, this one
+/// takes the class from a caller, so the obligation is the CALLER's and
+/// belongs here where they can read it. [`filter_tree`] discharges it: it
+/// passes `reserved_type` of each row of [`PREDICATE_PROJECTIONS`], and a
+/// reserved endset is M7's own.
 fn member_tuples(links: &LinkState, ty: &Endset, view: View) -> BTreeMap<Tumbler, Vec<Address>> {
     let mut by_member: BTreeMap<Tumbler, Vec<Address>> = BTreeMap::new();
     for tuple in links.type_slice(ty, view) {

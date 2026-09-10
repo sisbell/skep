@@ -613,6 +613,39 @@ fn a_superseding_record_revokes_the_grant_it_names() {
     );
 }
 
+/// …and the REVOCATION test speaks before the `to` slot is read (the fold's
+/// stated precedence): a revoking record whose `to` names TWO addresses still
+/// revokes, though the same `to` on a FRESH grant makes it malformed and
+/// grants to neither — which is
+/// `a_grant_record_with_a_multi_address_slot_grants_nothing` above.
+///
+/// Both wrong readings land here, and the faithfulness check sees neither,
+/// since one classification serves both halves of the discipline. A depositor
+/// who takes the malformed rule to cover every slot believes this revocation
+/// failed and the grantee still reads; the access was in fact withdrawn. A
+/// maintainer who parses `to` ahead of the revocation branch turns the
+/// deposit into a silent no-op and leaves a draft open to a grantee its owner
+/// revoked.
+#[test]
+fn a_revoking_record_revokes_whatever_its_to_slot_holds() {
+    let engine = mem_engine();
+    let b = two_accounts(&engine);
+    let g = grant(&engine, &b.home_a, &b.draft_a, vec![b.acct_b.clone()]);
+    assert!(world(&engine).readable(Some(B), &b.draft_a), "granted");
+
+    // The revoking record: `from` names the grant link, and `to` names two
+    // addresses — the shape that makes a fresh grant malformed.
+    grant_slots(&engine, A, &b.home_a, vec![g], vec![b.acct_b.clone(), b.acct_a.clone()]);
+
+    let w = world(&engine);
+    assert!(
+        !w.readable(Some(B), &b.draft_a),
+        "the `to` slot is unread on the revoking arm: a wide one revokes as any other does"
+    );
+    assert!(w.issuers_for(&b.acct_b).is_empty(), "…and the fold holds no record of the grant");
+    engine.check_hints().expect("the seed classifies it exactly as the fold did");
+}
+
 /// …and revocation reads the grants class of ONE HOME (PUB-5.13): a record
 /// naming an earlier grant's link address from a home of its own is a fresh
 /// grant, never a revocation of what it names. Same home ⟹ same ω owner is

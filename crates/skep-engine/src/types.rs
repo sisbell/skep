@@ -23,6 +23,15 @@
 //! rebuilt pin is nine big-integer allocations, a vector and a T4 walk. The
 //! addresses are compiled format constants, so there is nothing per-call for
 //! them to depend on.
+//!
+//! GUARANTEE the ledger maintains, and the reason a pin is a decision about
+//! ALL of them: the pins are pairwise DISTINCT and pairwise PREFIX-FREE. A
+//! consumer that recognizes a class's subtypes by prefix — the daemon's write
+//! path does, at every pin it refuses a `nullify` at — relies on it, so a pin
+//! sitting under another's prefix makes one class swallow the other and
+//! silently widens or narrows a refusal nobody chose. The tests below hold it
+//! off ONE list of the pins, which is where a ninth joins: nothing else here
+//! can notice a pin that reaches a consumer without joining the guarantee.
 
 use std::sync::LazyLock;
 
@@ -153,21 +162,34 @@ mod tests {
 
     use super::*;
 
-    /// The eight pins are pairwise distinct and — since the write path
-    /// recognizes a class's SUBTYPES by prefix — pairwise prefix-free: a pin
-    /// under another's prefix would make one class swallow the other.
+    /// One pin's READER — the accessor half of a [`PINS`] row, and the word
+    /// the module doc uses for it.
+    type Reader = fn() -> &'static Address;
+
+    /// THE LEDGER as the tests walk it: each pin's reader, with the commons
+    /// ordinal its own doc cites. ONE list, because a pin's obligations are
+    /// the ledger's rather than that pin's — three hand-kept lists would be
+    /// three places to be forgotten, and a pin absent from all of them reaches
+    /// the daemon's refusal set with nothing here failing. So this is the
+    /// single gate a ninth pin passes through, and each test below is one
+    /// question asked of every row.
+    const PINS: [(Reader, u32); 8] = [
+        (t_grant, 90),
+        (t_edition, 14),
+        (t_successor_of, 59),
+        (t_endorse, 42),
+        (t_consumption_marker, 91),
+        (t_journal_designation, 22),
+        (t_rail_record, 60),
+        (t_steward_classification, 61),
+    ];
+
+    /// The ledger's GUARANTEE (the module doc's): the pins are pairwise
+    /// distinct and — since a consumer recognizes a class's SUBTYPES by
+    /// prefix — pairwise prefix-free, so no class swallows another.
     #[test]
     fn the_commons_pins_are_pairwise_prefix_free() {
-        let pins = [
-            t_grant(),
-            t_edition(),
-            t_successor_of(),
-            t_endorse(),
-            t_consumption_marker(),
-            t_journal_designation(),
-            t_rail_record(),
-            t_steward_classification(),
-        ];
+        let pins: Vec<&'static Address> = PINS.into_iter().map(|(read, _)| read()).collect();
         for (i, a) in pins.iter().enumerate() {
             for b in &pins[i + 1..] {
                 assert!(
@@ -182,20 +204,12 @@ mod tests {
 
     /// Every pin sits in the ghost document's subspace 3, where nothing is
     /// ever minted (the credential types' own unreachability argument,
-    /// AUTH-3.70), so no content resolution can ever equal one.
+    /// AUTH-3.70), so no content resolution can ever equal one — and at the
+    /// ordinal its own doc cites, so a silent renumbering fails here.
     #[test]
     fn every_pin_is_a_ghost_subspace_3_element() {
-        for (pin, ordinal) in [
-            (t_grant(), 90u32),
-            (t_edition(), 14),
-            (t_successor_of(), 59),
-            (t_endorse(), 42),
-            (t_consumption_marker(), 91),
-            (t_journal_designation(), 22),
-            (t_rail_record(), 60),
-            (t_steward_classification(), 61),
-        ] {
-            assert_eq!(pin.tumbler().to_string(), format!("1.1.0.1.0.1.0.3.{ordinal}"));
+        for (read, ordinal) in PINS {
+            assert_eq!(read().tumbler().to_string(), format!("1.1.0.1.0.1.0.3.{ordinal}"));
         }
     }
 
@@ -206,20 +220,11 @@ mod tests {
     /// big-integer allocations and a T4 walk for a compiled constant.
     #[test]
     fn every_pin_is_one_held_value_rather_than_a_construction_per_read() {
-        for (first, again) in [
-            (t_grant(), t_grant()),
-            (t_edition(), t_edition()),
-            (t_successor_of(), t_successor_of()),
-            (t_endorse(), t_endorse()),
-            (t_consumption_marker(), t_consumption_marker()),
-            (t_journal_designation(), t_journal_designation()),
-            (t_rail_record(), t_rail_record()),
-            (t_steward_classification(), t_steward_classification()),
-        ] {
+        for (read, _) in PINS {
             assert!(
-                std::ptr::eq(first, again),
+                std::ptr::eq(read(), read()),
                 "{} is rebuilt per read, not held",
-                first.tumbler()
+                read().tumbler()
             );
         }
     }

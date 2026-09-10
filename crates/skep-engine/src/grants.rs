@@ -14,12 +14,22 @@
 //! ## What a grant is
 //!
 //! A grant is an ORDINARY link (deposited through MAKELINK's open surface),
-//! recognized by the fold — never by M7's `TypeRegistry` — as a VALUE:
+//! recognized by the fold — never by M7's `TypeRegistry` — as a VALUE. Each
+//! slot is read for EXACTLY ONE denoted address, or for none where the form
+//! admits none:
 //!
-//! * type slot denotes [`t_grant`] — the GRANTS class (COMMONS DECISION 5);
-//! * `from` slot denotes the CONTENT-PREFIX shared (a document or an account);
-//! * `to` slot denotes the GRANTEE (a principal's account), or is EMPTY for
-//!   the ANY-PRINCIPAL form (PUB-5.8).
+//! * the TYPE slot denotes ONE address, and that address IS [`t_grant`] — the
+//!   GRANTS class (COMMONS DECISION 5) — by equality, never by prefix;
+//! * the `from` slot denotes ONE address, which M1 admits: the CONTENT-PREFIX
+//!   shared (a document or an account);
+//! * the `to` slot is EMPTY for the ANY-PRINCIPAL form (PUB-5.8), or denotes
+//!   ONE address M1 admits: the GRANTEE, a principal's account.
+//!
+//! A slot denoting SEVERAL addresses, or none where one is required, makes the
+//! record MALFORMED, and a malformed record grants to nobody ([`classify`]).
+//! That is the fail-closed direction and it is the whole of what the word
+//! "one" carries above: a fold reaching for a slot's FIRST denoted address
+//! would grant on the strength of records this one refuses.
 //!
 //! ## Admission (I4, PUB-5.19)
 //!
@@ -404,9 +414,13 @@ impl Grants {
 enum Kind {
     /// A fresh grant of `content_prefix` to `grantee` (`None` = ANY-PRINCIPAL).
     Grant { content_prefix: Address, grantee: Option<Address> },
-    /// A revocation naming an EARLIER admitted grant's link address.
+    /// A revocation naming an EARLIER admitted grant's link address. Decided
+    /// off the `from` slot ALONE, so this arm's `to` slot is never read and
+    /// carries no meaning: a revoking record revokes whatever its `to` holds.
     Revoke { old: Address },
-    /// Not a well-formed grant (a malformed slot); the fold ignores it.
+    /// A record that is neither — a `from` denoting no address or one M1
+    /// refuses, or, on the fresh-grant arm, a `to` denoting more than one. The
+    /// fold ignores it, so a malformed grant grants to nobody.
     Ignore,
 }
 
@@ -442,8 +456,21 @@ fn admitted_issuer(namespace: &M3State, drafts: &Drafts, home: &Address) -> Opti
 
 /// Classify one admitted `t_grant` record off its `from` slot: a `from`
 /// naming an earlier admitted grant (same home) is a REVOCATION; otherwise a
-/// fresh grant whose `to` is the grantee (empty ⟹ ANY-PRINCIPAL). A malformed
-/// slot is ignored.
+/// fresh grant whose `to` is the grantee (empty ⟹ ANY-PRINCIPAL).
+///
+/// PRECEDENCE, which is part of the rule rather than an accident of the order
+/// the lines happen to sit in: the REVOCATION test speaks first, and it is
+/// answered before the `to` slot is read at all. So a revoking record's `to`
+/// goes unexamined and cannot make it malformed, whatever it holds — where
+/// the same `to` on a FRESH grant would. Parsing `to` ahead of that test would
+/// turn a revocation into a silent no-op, leaving open what its issuer
+/// revoked.
+///
+/// Every slot this DOES read is read for exactly one denoted address: the
+/// type slot at [`is_grant_typed`] before this is called, `from` always, and
+/// `to` on the fresh-grant arm alone. A slot denoting several, or a `from`
+/// denoting none or one M1 refuses, is [`Kind::Ignore`] — the fail-closed
+/// direction, since a record naming two grantees grants to neither.
 fn classify(prev: &Grants, home: &Address, value: &Link) -> Kind {
     let Some(from) = value.from_slot().single_denoted() else {
         return Kind::Ignore; // `from` must denote exactly one address
@@ -451,7 +478,9 @@ fn classify(prev: &Grants, home: &Address, value: &Link) -> Kind {
     let Ok(from) = validate(from.clone()) else {
         return Kind::Ignore;
     };
-    // A `from` naming an admitted grant of THIS home is a revocation.
+    // A `from` naming an admitted grant of THIS home is a revocation —
+    // answered HERE, ahead of the `to` slot, which the precedence above makes
+    // part of the rule rather than a property of this line's position.
     if prev.records.get(&from).is_some_and(|r| &r.home == home) {
         return Kind::Revoke { old: from };
     }
@@ -552,6 +581,12 @@ pub(crate) fn fold(prev: &Grants, namespace: &M3State, drafts: &Drafts, rec: &Li
 /// asked which read the seed uses; this is it). Within one home, addresses are
 /// ordinal-ordered = deposit-ordered, so a revocation is always processed
 /// after the grant it names, and the seed reproduces the fold.
+///
+/// `type_slice` carries a stated PRECONDITION on its class — address-denoting
+/// or `iextent`-built, else it panics naming it — discharged where the class
+/// is built, on this function's first line: `enc` spans each address's own
+/// subtree, so an `enc` over the validated [`t_grant`] pin denotes exactly
+/// that address, by construction rather than by a check.
 ///
 /// The AUDIT view is REQUIRED, not merely available. Revocation is by
 /// supersession (PUB-5.13) and [`fold`] has no nullification arm, so a grant

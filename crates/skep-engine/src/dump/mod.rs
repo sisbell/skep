@@ -71,12 +71,21 @@ use filter::filter_tree;
 /// `Hash` comes with that equality, for a harness collecting the distinct
 /// dumps across a sweep of crash points.
 ///
+/// What equal dumps CERTIFY is what this format renders: every authoritative
+/// slice, and every hint the hints section reaches. It is not that the worlds
+/// agree — five derived structures sit outside the rendering, two of them the
+/// grant fold's query indexes, which are what the read predicate's third
+/// clause probes. [`crate::Engine::check_hints_of`] names all five and gives
+/// the argument that the two indexes cannot in fact diverge; a harness
+/// treating equal dumps as equal worlds is reading past that argument rather
+/// than resting on it.
+///
 /// The text goes out — through `Display`, `as_str`, `as_bytes`,
 /// `into_string` — and none comes in. A dump exists only because an engine
-/// rendered one, which is what makes byte-equality mean the worlds agree; a
-/// value parsed from arbitrary text would compare equal to a rendering it was
-/// never produced by, and that is the one comparison a harness must not be
-/// able to make.
+/// rendered one, which is what makes byte-equality mean the two RENDERINGS
+/// were produced by this format from a world each; a value parsed from
+/// arbitrary text would compare equal to a rendering it was never produced
+/// by, and that is the one comparison a harness must not be able to make.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct WorldDump(String);
 

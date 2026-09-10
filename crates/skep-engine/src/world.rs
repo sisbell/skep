@@ -44,8 +44,11 @@ use crate::publication::{self, Drafts};
 /// [`World::genesis`] establishes it, each slice arriving from its own
 /// genesis constructor and both indexes empty over an empty docuverse; and
 /// [`WorldState::rebuild_derived`] re-establishes it, which M2 runs over
-/// every base it loads, before replay. The `Deserialize` derived below
-/// establishes nothing — it leaves M7's hints empty, so every typed slice
+/// every base it loads, before replay — at open, and again for every world
+/// [`crate::Engine::world_at`] reconstructs, which is why that method states
+/// the invariant as its own postcondition and why a reconstruction is
+/// servable as it stands. The `Deserialize` derived below establishes
+/// nothing — it leaves M7's hints empty, so every typed slice
 /// reads as absent, nullification is invisible and `Active` equals `Audit`;
 /// it leaves the exception set EMPTY, so every document reads as PUBLISHED
 /// (the fail-open sign PUB-7.5 names, in the one place it is reachable); and

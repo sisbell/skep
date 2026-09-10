@@ -25,11 +25,12 @@
 //!   and the rename would leave the filter silently filtering nothing — which
 //!   is why every path is asserted to name a place in the tree.
 //! * The addresses this module judges are RECOVERED from the text the
-//!   builders wrote — a `Tumbler` deserialize for an authoritative map key, a
-//!   dotted parse for a hint entry — because the tree carries renderings and
-//!   not the values behind them. That re-entry is through the types' own
-//!   doors ([`key_address`], [`dotted_address`]), and what it cannot recover
-//!   it DROPS.
+//!   builders wrote, in the two FORMS the builders write them in — a store's
+//!   own serde form inside an authoritative slice, a dotted string anywhere
+//!   the dump's own builders rendered one — because the tree carries
+//!   renderings and not the values behind them. That re-entry is through the
+//!   types' own doors ([`serde_form_address`], [`dotted_address`]), and what
+//!   it cannot recover it DROPS.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -45,14 +46,15 @@ use super::shipped_label;
 /// addresses, and an entry stays where the class reads the document its
 /// address is homed in.
 ///
-/// The list is the reduction's COVERAGE as well as its content. [`filter_tree`]
-/// touches an entry only where some path below names it, so a family
-/// `super::hints_tree` adds and this list omits is rendered WHOLE to every
-/// class — the guest included. Three hint families are reduced by an arm of
-/// their own rather than here: `types` (per shipped class, per view),
-/// `supersession` (the three-test arm) and `publication.drafts` (a map, keyed
-/// by the draft). `every_hints_family_is_reduced_or_kept_by_name` holds this
-/// list plus those three against the section the builder writes.
+/// The list is the reduction's COMPLETENESS as well as its content — what it
+/// accounts for as well as what it does. [`filter_tree`] touches an entry
+/// only where some path below names it, so a family `super::hints_tree` adds
+/// and this list omits is rendered WHOLE to every class — the guest included.
+/// Three hint families are reduced by an arm of their own rather than here:
+/// `types` (per shipped class, per view), `supersession` (the three-test arm)
+/// and `publication.drafts` (a map, keyed by the draft).
+/// `every_hints_family_is_reduced_or_kept_by_name` holds this list plus those
+/// three against the section the builder writes.
 const REDUCED_BY_HOME: [&str; 7] = [
     "links.audit",
     "links.active",
@@ -112,8 +114,8 @@ const REDUCED_BY_HOME: [&str; 7] = [
 ///   render's own source, through [`sup_edge_claims`].
 ///
 /// An entry NO PATH IN THE BODY NAMES is kept whole at every class. So the
-/// statement above is this reduction's COVERAGE as well as its content, and
-/// the gap it admits is the one nothing else here catches: a section or a
+/// statement above is this reduction's COMPLETENESS as well as its content,
+/// and the gap it admits is the one nothing else here catches: a section or a
 /// hint family added to the tree and left out of it goes to the guest
 /// unreduced, deterministically and with nothing about it looking wrong. The
 /// hint families carry their own list ([`REDUCED_BY_HOME`]) so that the sum
@@ -133,22 +135,25 @@ pub(super) fn filter_tree(
     readable: &dyn Fn(&Address) -> bool,
     links: &LinkState,
 ) -> SerdeTree {
-    let home_readable = |a: &Address| document_of(a).is_none_or(|home| readable(&home));
-    let keep_key = |k: &SerdeTree| key_address(k).is_some_and(|a| home_readable(&a));
-    let keep_dotted = |s: &SerdeTree| dotted_address(s).is_some_and(|a| home_readable(&a));
+    // Every address is judged at its document; an address that HAS no
+    // document — an account, a node — is its own answer.
+    let document_readable = |a: &Address| document_of(a).is_none_or(|doc| readable(&doc));
+    let keep_serde_form =
+        |k: &SerdeTree| serde_form_address(k).is_some_and(|a| document_readable(&a));
+    let keep_dotted = |s: &SerdeTree| dotted_address(s).is_some_and(|a| document_readable(&a));
     // The operative claims by the edge they assert, read once for the whole
     // tree; an edge some readably-homed claim asserts is a readable edge.
     let claims = sup_edge_claims(links);
     let edge_claimed_readably = |old: &Address, new: &Address| {
         claims
             .get(&(old.tumbler().clone(), new.tumbler().clone()))
-            .is_some_and(|asserting| asserting.iter().any(|claim| home_readable(claim)))
+            .is_some_and(|asserting| asserting.iter().any(|claim| document_readable(claim)))
     };
 
-    retain_map(&mut root, &["authoritative", "content", "map"], &keep_key);
-    retain_map(&mut root, &["authoritative", "arrangement", "arrangements"], &keep_key);
-    retain_map(&mut root, &["authoritative", "arrangement", "provenance"], &keep_key);
-    retain_map(&mut root, &["authoritative", "links", "links"], &keep_key);
+    retain_map(&mut root, &["authoritative", "content", "map"], &keep_serde_form);
+    retain_map(&mut root, &["authoritative", "arrangement", "arrangements"], &keep_serde_form);
+    retain_map(&mut root, &["authoritative", "arrangement", "provenance"], &keep_serde_form);
+    retain_map(&mut root, &["authoritative", "links", "links"], &keep_serde_form);
 
     retain_seq(&mut root, &["publication"], &keep_dotted);
 
@@ -164,7 +169,7 @@ pub(super) fn filter_tree(
         edges.retain_mut(|(old, succs)| {
             // The OLD endpoint's home (fail-closed on a key that does not
             // decode, as everywhere here).
-            let Some(old) = dotted_address(old).filter(|a| home_readable(a)) else {
+            let Some(old) = dotted_address(old).filter(|a| document_readable(a)) else {
                 return false;
             };
             match succs {
@@ -174,7 +179,7 @@ pub(super) fn filter_tree(
                     // it is homed readably (PUB-6.22).
                     items.retain(|s| {
                         dotted_address(s).is_some_and(|new| {
-                            home_readable(&new) && edge_claimed_readably(&old, &new)
+                            document_readable(&new) && edge_claimed_readably(&old, &new)
                         })
                     });
                     !items.is_empty() // the walk renders no empty successor list
@@ -264,16 +269,18 @@ fn retain_seq(tree: &mut SerdeTree, path: &[&str], keep: &dyn Fn(&SerdeTree) -> 
     }
 }
 
-/// A tumbler-shaped map key — the authoritative maps' serde form (an
-/// `Address` serializes as its bare tumbler) — as the address it names, back
-/// through the types' own doors (`TreeDe`, then `validate`).
-fn key_address(key: &SerdeTree) -> Option<Address> {
-    let tumbler = Tumbler::deserialize(TreeDe(key)).ok()?;
+/// An address in a STORE's own serde form — a bare tumbler, which is how
+/// `Address` serializes and so how the authoritative maps key themselves —
+/// back through the types' own doors (`TreeDe`, then `validate`). Read off a
+/// map key today, and off whatever node the store wrote it to.
+fn serde_form_address(node: &SerdeTree) -> Option<Address> {
+    let tumbler = Tumbler::deserialize(TreeDe(node)).ok()?;
     validate(tumbler).ok()
 }
 
-/// A dotted-address string — the hints' and the two sections' form — as the
-/// address it names.
+/// A dotted-address string — the form the dump's OWN builders render an
+/// address in, so the hints' entries and the two sections' — as the address
+/// it names. Read off a sequence item and off a map key alike.
 fn dotted_address(item: &SerdeTree) -> Option<Address> {
     let SerdeTree::Str(s) = item else {
         return None;
@@ -324,7 +331,7 @@ mod tests {
         }
     }
 
-    /// [`filter_tree`]'s COVERAGE, held against the sections the builders
+    /// [`filter_tree`]'s COMPLETENESS, held against the sections the builders
     /// write: an entry no path in the filter names is rendered whole at every
     /// class, so a family added to `super::hints_tree` and left off
     /// [`REDUCED_BY_HOME`] is disclosed to the guest. That is the one failure
@@ -460,7 +467,7 @@ mod tests {
             .create_new_document(USER, &acct, None)
             .expect("a later mint, private");
         let caller = Caller::Principal(USER);
-        let class = World::visible_to(caller);
+        let visibility = World::visible_to(caller);
         // Two public links in the home under ghost types of its own
         // never-minted subspace 3 (address-form slots, empty endsets).
         let ghost = |n: u32| {
@@ -471,7 +478,7 @@ mod tests {
         };
         let public_link = |n: u32| {
             engine
-                .linkstore(&class)
+                .linkstore(&visibility)
                 .makelink(
                     caller,
                     &home,
@@ -485,7 +492,7 @@ mod tests {
         let (l1, l2) = (public_link(41), public_link(42));
         // The claim: homed in the DRAFT, over the two public links.
         engine
-            .linkstore(&class)
+            .linkstore(&visibility)
             .assert_sup(caller, &draft, &l1, &l2)
             .expect("a draft-homed supersession claim over public links");
 

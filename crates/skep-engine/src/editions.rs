@@ -55,9 +55,9 @@ impl World {
     /// caller applies the home rule (see the module docs).
     pub fn edition_claims(&self, target: &Address) -> Vec<EditionClaim> {
         let links = &self.links;
-        let class = t_edition();
+        let edition_class = t_edition();
         let to_range = Endset::from_spans([subtree_of(target.tumbler())]);
-        let class_range = Endset::from_spans([subtree_of(class.tumbler())]);
+        let class_range = Endset::from_spans([subtree_of(edition_class.tumbler())]);
         let supersedes = links.reserved_type(ShippedType::Supersedes);
         links
             .match_links(&[(TO, &to_range), (TYPE, &class_range)], View::Audit)
@@ -65,7 +65,7 @@ impl World {
             .filter_map(|claim| {
                 // A `match_links` key is resident by construction.
                 let link = links.readlink(&claim)?;
-                if !admitted(link.type_slot(), class) {
+                if !admitted(link.type_slot(), edition_class) {
                     return None; // overlaps the class range without denoting a member
                 }
                 if !links.succs(supersedes, &claim).is_empty() {
@@ -87,6 +87,8 @@ impl World {
 /// Class ADMISSION by prefix: the type slot denotes addresses (every span
 /// unit-depth, at least one), each under the edition class — `3.14` itself or
 /// a descriptive subtype `3.14.k` (commons-seeding.md's row).
-fn admitted(ty: &Endset, class: &Address) -> bool {
-    ty.is_address_denoting() && !ty.is_empty() && ty.addrs().all(|t| is_prefix(class.tumbler(), t))
+fn admitted(ty: &Endset, edition_class: &Address) -> bool {
+    ty.is_address_denoting()
+        && !ty.is_empty()
+        && ty.addrs().all(|t| is_prefix(edition_class.tumbler(), t))
 }

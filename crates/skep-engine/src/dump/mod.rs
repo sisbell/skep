@@ -254,10 +254,17 @@ fn key(s: impl Into<String>) -> SerdeTree {
     SerdeTree::Str(s.into())
 }
 
+/// A sequence of dotted TUMBLERS, for the one entry whose values are not
+/// addresses: an endset denotes tumblers (`Endset::addrs`), so
+/// [`class_tree`]'s type `key` has none in hand. Everything else the dump
+/// renders as a dotted sequence holds addresses and goes through
+/// [`addr_seq`], which writes the same text — `Address` renders as its own
+/// tumbler — off the validated value rather than off a projection of it.
 fn tum_seq<'a>(it: impl IntoIterator<Item = &'a Tumbler>) -> SerdeTree {
     SerdeTree::Seq(it.into_iter().map(|t| SerdeTree::Str(t.to_string())).collect())
 }
 
+/// A sequence of dotted ADDRESSES.
 fn addr_seq<'a>(addrs: impl IntoIterator<Item = &'a Address>) -> SerdeTree {
     SerdeTree::Seq(addrs.into_iter().map(|a| SerdeTree::Str(a.to_string())).collect())
 }
@@ -285,16 +292,12 @@ fn shipped_label(ty: ShippedType) -> &'static str {
 /// `iextent`-built, else `type_slice` panics naming it — and the one caller
 /// below is inside it: a reserved endset is M7's own.
 fn class_tree(links: &LinkState, ty: &Endset) -> SerdeTree {
+    let audit = links.type_slice(ty, View::Audit);
+    let active = links.type_slice(ty, View::Active);
     SerdeTree::Map(vec![
         (key("key"), tum_seq(ty.addrs())),
-        (
-            key("audit"),
-            tum_seq(links.type_slice(ty, View::Audit).iter().map(Address::tumbler)),
-        ),
-        (
-            key("active"),
-            tum_seq(links.type_slice(ty, View::Active).iter().map(Address::tumbler)),
-        ),
+        (key("audit"), addr_seq(audit.iter())),
+        (key("active"), addr_seq(active.iter())),
     ])
 }
 
@@ -306,8 +309,8 @@ fn hints_tree(world: &World) -> SerdeTree {
     let active = links.match_links(&[], View::Active);
 
     let mut entries: Vec<(SerdeTree, SerdeTree)> = vec![
-        (key("links.audit"), tum_seq(audit.iter().map(Address::tumbler))),
-        (key("links.active"), tum_seq(active.iter().map(Address::tumbler))),
+        (key("links.audit"), addr_seq(audit.iter())),
+        (key("links.active"), addr_seq(active.iter())),
         (key("links.nullified"), addr_seq(audit.iter().filter(|a| links.is_nullified(a)))),
     ];
 
@@ -354,9 +357,11 @@ fn hints_tree(world: &World) -> SerdeTree {
 }
 
 /// The exception set as a map of dotted addresses, draft → owner account.
-/// The one hint that is the assembler's rather than a store's; its seed and
-/// its fold are `crate::publication`'s, and this rendering is what
-/// [`hints_faithful`] compares them through.
+/// The assembler's own derived index rather than a store's — the one the
+/// HINTS section carries; the grant fold is the other, and its home is the
+/// `grants` section ([`grants_tree`]). This index's seed and fold are
+/// `crate::publication`'s, and this rendering is what [`hints_faithful`]
+/// compares them through.
 fn drafts_tree(world: &World) -> SerdeTree {
     SerdeTree::Map(
         world

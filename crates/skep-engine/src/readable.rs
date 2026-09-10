@@ -73,16 +73,19 @@ impl World {
         let Some(id) = principal else {
             return false;
         };
-        let pa = self.namespace.principal_prefix(id).cloned();
+        // The principal's own account — M3's seat for it, which the two
+        // clauses below read differently: as an account to compare against
+        // the owner's, and as the grantee to probe the fold with.
+        let account = self.namespace.principal_prefix(id).cloned();
         // Subtree clause — downward only.
-        if let Some(pa) = &pa {
-            if prefix_contains(&owner, pa) {
+        if let Some(account) = &account {
+            if prefix_contains(&owner, account) {
                 return true;
             }
         }
         // Grant clause — the fold, grantee exact (`None` account ⟹ only the
         // ANY-PRINCIPAL grants can match, which the fold probes regardless).
-        self.grants.grant_exists(&owner, pa.as_ref(), &trunk)
+        self.grants.grant_exists(&owner, account.as_ref(), &trunk)
     }
 
     /// The GUEST predicate (PUB-1.31 with no principal; a grant opens nothing

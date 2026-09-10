@@ -444,3 +444,44 @@ fn the_two_feed_enumerations_read_the_fold_s_live_state() {
     assert!(!w.readable(Some(PrincipalId(9)), &draft_two), "and the predicate agrees");
     assert_eq!(w.issuers_for(&b.acct_b).len(), 1, "B's grants are untouched by it");
 }
+
+/// The fold's query indexes are keyed by a grant's ISSUER, CONTENT-PREFIX and
+/// GRANTEE, and they are SETS: two admitted grants that agree on those three
+/// contribute ONE index entry, and nothing counts how many named it. So where
+/// an issuer grants the same prefix to the same grantee twice and then revokes
+/// ONE of the two, the entry both contributed leaves — while the other record
+/// stays in the operative set the dump's grant section renders.
+///
+/// Pinned here because the fold's own doc states it, and because it is the one
+/// place `readable` and that section disagree: the second grant is rendered
+/// and does not open its draft. Whether the index should carry a count is a
+/// spec question and not this crate's; what this test holds is that the
+/// behaviour cannot change unnoticed.
+#[test]
+fn two_grants_sharing_an_index_entry_are_withdrawn_together() {
+    let engine = mem_engine();
+    let b = two_accounts(&engine);
+    // Two grants, same issuer, same content-prefix, same grantee.
+    let first = grant(&engine, &b.home_a, &b.draft_a, vec![b.acct_b.clone()]);
+    let second = grant(&engine, &b.home_a, &b.draft_a, vec![b.acct_b.clone()]);
+    assert_ne!(first, second, "two deposits, two link addresses");
+    assert!(world(&engine).readable(Some(b.b), &b.draft_a), "granted twice");
+
+    // Revoke the FIRST: a later record naming its link address.
+    grant(&engine, &b.home_a, &first, vec![b.acct_b.clone()]);
+
+    let w = world(&engine);
+    assert!(
+        !w.readable(Some(b.b), &b.draft_a),
+        "the entry both grants contributed left with the one that was revoked"
+    );
+    assert!(w.issuers_for(&b.acct_b).is_empty(), "…and so did the feed's own read of it");
+    // The unrevoked record is still in the operative set: the dump's grant
+    // section names its link address.
+    let text = engine.world_dump().into_string();
+    assert!(
+        text.contains(&format!("{:?}", second.to_string())),
+        "the second grant is still an operative record:\n{text}"
+    );
+    engine.check_hints().expect("the seed reproduces the fold over a shared index entry");
+}

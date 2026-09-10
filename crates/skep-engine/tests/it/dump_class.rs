@@ -215,10 +215,14 @@ fn two_dumps_of_equal_worlds_are_byte_equal_per_class() {
         engine
     };
     let (e1, e2) = (build(), build());
-    for class in [None, Some(A), Some(B), Some(STRANGER)] {
-        let d1 = e1.world_dump_visible_to(class);
-        assert_eq!(d1, e1.world_dump_visible_to(class), "{class:?}: one world, one text");
-        assert_eq!(d1, e2.world_dump_visible_to(class), "{class:?}: equal worlds, equal texts");
+    for principal in [None, Some(A), Some(B), Some(STRANGER)] {
+        let d1 = e1.world_dump_visible_to(principal);
+        assert_eq!(d1, e1.world_dump_visible_to(principal), "{principal:?}: one world, one text");
+        assert_eq!(
+            d1,
+            e2.world_dump_visible_to(principal),
+            "{principal:?}: equal worlds, equal texts"
+        );
     }
 }
 

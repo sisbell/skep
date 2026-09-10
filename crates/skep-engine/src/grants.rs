@@ -62,12 +62,12 @@ impl World {
     /// values, enumerated once per request off one head snapshot by the feed's
     /// universal term (a K-way merge of these prefixes' own position-index
     /// lists, K = this list's length). Revocation is immediate here — a
-    /// superseding record removes its grant from the index at the commit that
-    /// carries it — so a derivation off this read never serves withdrawn
-    /// material (PUB-7.23). Reads the fold's query index, adds no fold state,
-    /// and is `readable`'s own universal probe turned inside out: a document
-    /// is universally granted iff one of its ancestor prefixes is listed here
-    /// with its ω owner among the issuers.
+    /// revoking record withdraws its grant's entry from the index at the
+    /// commit that carries it — so a derivation off this read never serves
+    /// withdrawn material (PUB-7.23). Reads the fold's query index, adds no
+    /// fold state, and is `readable`'s own universal probe turned inside out:
+    /// a document is universally granted iff one of its ancestor prefixes is
+    /// listed here with its ω owner among the issuers.
     pub fn universal_grants(&self) -> Vec<(Address, Vec<Address>)> {
         self.grants.universal()
     }
@@ -91,10 +91,10 @@ impl World {
 // (`1.1.0.1.0.1.0.3.90`, COMMONS DECISION 5): pinned in `types.rs` beside
 // every other commons address the engine and the daemon read as a VALUE.
 
-/// One admitted, unsuperseded grant record — enough to answer queries and to
-/// remove it from the query indexes when a later record supersedes it. The
-/// fields are crate-visible for the world dump's grant section (lane 3.4
-/// §3), which renders the fold's operative set through [`Grants::records`].
+/// One admitted grant record — enough to answer queries and to withdraw its
+/// index entry when a later record revokes it. The fields are crate-visible
+/// for the world dump's grant section (lane 3.4 §3), which renders the fold's
+/// operative set through [`Grants::records`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GrantRecord {
     /// The grant link's home document (the issuer's doc 1).
@@ -107,6 +107,34 @@ pub(crate) struct GrantRecord {
     pub(crate) grantee: Option<Address>,
 }
 
+/// WHICH query index a grant belongs in, and where in it: the `grantee`
+/// selects the index (`None` ⟹ the ANY-PRINCIPAL one), the `content_prefix`
+/// keys it, and the `issuer` is the member its set holds. The three fields
+/// [`Grants::index_add`] and [`Grants::index_remove`] read, named, so that
+/// the two operations and their argument agree about what is being indexed.
+///
+/// A VALUE, and that is the distinction it draws against the record it comes
+/// from. A [`GrantRecord`] has an IDENTITY — the grant link's own address,
+/// which the operative set keys it by — while an index entry is defined
+/// entirely by these three fields: two admitted grants that agree on them are
+/// ONE entry, and the indexes hold no count of how many named it.
+struct GrantIndexEntry<'a> {
+    issuer: &'a Address,
+    content_prefix: &'a Address,
+    grantee: Option<&'a Address>,
+}
+
+impl GrantRecord {
+    /// The query-index entry this record contributes.
+    fn index_entry(&self) -> GrantIndexEntry<'_> {
+        GrantIndexEntry {
+            issuer: &self.issuer,
+            content_prefix: &self.content_prefix,
+            grantee: self.grantee.as_ref(),
+        }
+    }
+}
+
 /// The grant fold: the operative grant set, plus the two query indexes it is
 /// projected into. All `im` persistent structures, so `World::clone` on the
 /// commit path is one more root clone. `#[serde(skip)]` at the World: derived,
@@ -114,7 +142,9 @@ pub(crate) struct GrantRecord {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Grants {
     /// Admitted, unsuperseded grants, keyed by the grant link's OWN address —
-    /// so a superseding record removes exactly the grant it names.
+    /// so a revoking record removes exactly the RECORD it names. What leaves
+    /// the query indexes with that record is its [`GrantIndexEntry`], which
+    /// is a value and which a second record can name too.
     records: HashMap<Address, GrantRecord>,
     /// The PRINCIPAL-EXACT index: grantee account → its granted
     /// content-prefixes → the issuers who granted them.
@@ -130,8 +160,8 @@ pub(crate) struct Grants {
 // `by_grantee` is another one, so the fold's index maintenance is four edits
 // of a single shape — [`Grants::index_add`]'s two arms and
 // [`Grants::index_remove`]'s two — and [`Grants::issuers_for`]'s inversion is
-// a fifth. The decision each of those sites makes is WHICH index a record
-// belongs in; the bookkeeping is here.
+// a fifth. The decision each of those sites makes is WHICH index a
+// [`GrantIndexEntry`] belongs in; the bookkeeping is here.
 
 /// `map[key] ∪= {member}`, adding the key where it is absent.
 fn set_insert<K: Ord + Clone, V: Ord + Clone>(
@@ -243,30 +273,36 @@ impl Grants {
             .collect()
     }
 
-    /// Add an admitted grant to the query index its grantee names: the
-    /// PRINCIPAL-EXACT one keyed by the grantee, or the ANY-PRINCIPAL one.
-    fn index_add(&mut self, rec: &GrantRecord) {
-        match &rec.grantee {
+    /// Add `entry` to the query index its grantee names: the PRINCIPAL-EXACT
+    /// one keyed by the grantee, or the ANY-PRINCIPAL one.
+    fn index_add(&mut self, entry: GrantIndexEntry<'_>) {
+        match entry.grantee {
             Some(g) => {
                 let prefixes = self.by_grantee.get(g).cloned().unwrap_or_default();
-                let prefixes = set_insert(&prefixes, &rec.content_prefix, rec.issuer.clone());
+                let prefixes = set_insert(&prefixes, entry.content_prefix, entry.issuer.clone());
                 self.by_grantee.insert(g.clone(), prefixes);
             }
             None => {
                 self.universal =
-                    set_insert(&self.universal, &rec.content_prefix, rec.issuer.clone());
+                    set_insert(&self.universal, entry.content_prefix, entry.issuer.clone());
             }
         }
     }
 
-    /// Remove a superseded grant from the index it was added to, dropping a
-    /// grantee whose last grant this was — so `by_grantee` holds no empty
-    /// prefix map, as `set_remove` leaves no empty issuer set.
-    fn index_remove(&mut self, rec: &GrantRecord) {
-        match &rec.grantee {
+    /// Withdraw `entry` from the index it was added to, dropping a grantee
+    /// whose last entry this was — so `by_grantee` holds no empty prefix map,
+    /// as `set_remove` leaves no empty issuer set.
+    ///
+    /// The indexes are SETS and hold no count, so an entry is withdrawn by the
+    /// first record that names it: where two admitted grants share an entry —
+    /// one issuer, one content-prefix, one grantee — revoking either withdraws
+    /// the entry both contributed, while the other record stays in the
+    /// operative set the dump's grant section renders.
+    fn index_remove(&mut self, entry: GrantIndexEntry<'_>) {
+        match entry.grantee {
             Some(g) => {
                 if let Some(prefixes) = self.by_grantee.get(g).cloned() {
-                    let prefixes = set_remove(&prefixes, &rec.content_prefix, &rec.issuer);
+                    let prefixes = set_remove(&prefixes, entry.content_prefix, entry.issuer);
                     if prefixes.is_empty() {
                         self.by_grantee.remove(g);
                     } else {
@@ -275,18 +311,25 @@ impl Grants {
                 }
             }
             None => {
-                self.universal = set_remove(&self.universal, &rec.content_prefix, &rec.issuer);
+                self.universal = set_remove(&self.universal, entry.content_prefix, entry.issuer);
             }
         }
     }
 }
 
 /// The classification of one admitted `t_grant` record, off its `from` slot.
+///
+/// The removing arm is [`Kind::Revoke`], and the word is load-bearing: the
+/// act it names reads the GRANTS class alone (a later admitted `t_grant`
+/// record naming an earlier one), while `supersede` in this crate names the
+/// ⟦supersedes⟧ CLASS — the claims `crate::dump`'s filter walks and the fold
+/// must never take an input from. Revocation is by supersession (PUB-5.13),
+/// and that is exactly why the two need two words here.
 enum Kind {
     /// A fresh grant of `content_prefix` to `grantee` (`None` = ANY-PRINCIPAL).
     Grant { content_prefix: Address, grantee: Option<Address> },
     /// A revocation naming an EARLIER admitted grant's link address.
-    Supersede { old: Address },
+    Revoke { old: Address },
     /// Not a well-formed grant (a malformed slot); the fold ignores it.
     Ignore,
 }
@@ -332,7 +375,7 @@ fn classify(prev: &Grants, home: &Address, value: &Link) -> Kind {
     };
     // A `from` naming an admitted grant of THIS home is a revocation.
     if prev.records.get(&from).is_some_and(|r| &r.home == home) {
-        return Kind::Supersede { old: from };
+        return Kind::Revoke { old: from };
     }
     // Otherwise a fresh grant: `to` empty ⟹ ANY-PRINCIPAL, exactly one address
     // ⟹ the grantee, anything else ⟹ malformed.
@@ -367,13 +410,13 @@ fn fold_one(prev: &Grants, m3: &M3State, drafts: &Drafts, addr: &Address, value:
     let mut next = prev.clone();
     match classify(prev, &home, value) {
         Kind::Grant { content_prefix, grantee } => {
-            let record = GrantRecord { home, issuer, content_prefix, grantee };
-            next.index_add(&record);
-            next.records.insert(addr.clone(), record);
+            let grant = GrantRecord { home, issuer, content_prefix, grantee };
+            next.index_add(grant.index_entry());
+            next.records.insert(addr.clone(), grant);
         }
-        Kind::Supersede { old } => {
-            if let Some(record) = next.records.get(&old).cloned() {
-                next.index_remove(&record);
+        Kind::Revoke { old } => {
+            if let Some(grant) = next.records.get(&old).cloned() {
+                next.index_remove(grant.index_entry());
                 next.records.remove(&old);
             }
         }

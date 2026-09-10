@@ -97,6 +97,15 @@ impl World {
     /// fold state, and is `readable`'s own universal probe turned inside out:
     /// a document is universally granted iff one of its ancestor prefixes is
     /// listed here with its ω owner among the issuers.
+    ///
+    /// COST, per call, uncached, and linear in the WHOLE universal index —
+    /// this read takes no argument, so there is nothing in the request to
+    /// read the figure off. One address clone per (prefix, issuer) pair, and
+    /// an address clone is a vector plus an allocation per component. The
+    /// index's size is the DEPOSITORS' choice: every admitted ANY-PRINCIPAL
+    /// grant any account issues adds an entry, so this grows with the store.
+    /// Nothing is memoized, so a caller polling per request re-pays per
+    /// request, and it gates neither admission nor concurrency.
     pub fn universal_grants(&self) -> Vec<UniversalGrant> {
         self.grants.universal()
     }
@@ -111,6 +120,15 @@ impl World {
     /// `grantee` alone, never its subtree (PUB-5.5) — and adds no fold state.
     /// The ANY-PRINCIPAL grants are NOT here; they are
     /// [`World::universal_grants`], the tier's own read.
+    ///
+    /// COST, per call, uncached: one hash probe of the principal-exact index,
+    /// then a walk of THAT grantee's whole row to invert it — one address
+    /// clone per (prefix, issuer) pair on the way in and one on the way out,
+    /// through an ordered map, so a logarithmic factor with them. The row's
+    /// size is neither the caller's choice nor the grantee's: any account may
+    /// grant to any other, so the ISSUERS decide how much work a poll on this
+    /// grantee's behalf does. Nothing is memoized, and it gates neither
+    /// admission nor concurrency.
     pub fn issuers_for(&self, grantee: &Address) -> Vec<IssuerGrant> {
         self.grants.issuers_for(grantee)
     }
@@ -427,9 +445,13 @@ fn fold_one(
     if !is_grant_typed(value, t_grant()) {
         return prev.clone();
     }
-    let Some(home) = document_of(addr) else {
-        return prev.clone();
-    };
+    // A link address is ELEMENT-LEVEL, so it has a home document — M7's own
+    // hint fold asserts exactly this of every stored link key, so a record
+    // that failed it is a store already corrupt. Skipping it instead would
+    // lose a grant or a revocation on one path and not the other, and the two
+    // halves would part at the next restart with nothing looking wrong.
+    let home = document_of(addr)
+        .expect("a link address is element-level, so its home document exists");
     let Some(issuer) = admit(namespace, drafts, &home) else {
         return prev.clone(); // unadmitted: neither grant nor revocation
     };
@@ -472,9 +494,13 @@ pub(crate) fn fold(prev: &Grants, namespace: &M3State, drafts: &Drafts, rec: &Li
     let LinkRec::Deposit { addr, value, .. } = rec else {
         return prev.clone();
     };
-    let Ok(link_addr) = validate(addr.clone()) else {
-        return prev.clone();
-    };
+    // T4 VALIDITY is M7's own totality domain for a staged link address, and
+    // `World::apply` has already run `LinkState::apply_link` over this very
+    // record, whose hint fold asserts it — so by the time this line runs the
+    // question is settled, twice over. Answering it a third time by returning
+    // the previous fold would silently drop a grant the store did accept.
+    let link_addr = validate(addr.clone())
+        .expect("a staged link address is T4-valid (M7's fold asserted it a moment ago)");
     fold_one(prev, namespace, drafts, &link_addr, value)
 }
 
@@ -511,9 +537,15 @@ pub(crate) fn seed(namespace: &M3State, links: &LinkState, drafts: &Drafts) -> G
     let ty = skep_links::enc([t_grant()]);
     let mut grants = Grants::new();
     for addr in links.type_slice(&ty, View::Audit) {
-        let Some(value) = links.readlink(&addr).cloned() else {
-            continue; // type-slice keys are resident by construction
-        };
+        // RESIDENCY is M7's stated postcondition on `type_slice`, and M7
+        // fail-stops on it itself (`LinkState::link_at`). Skipping the entry
+        // instead would drop a grant — or, worse, a REVOCATION — from the
+        // seed alone, so the recovered fold would open at the next restart
+        // what the live fold had closed.
+        let value = links
+            .readlink(&addr)
+            .cloned()
+            .expect("a type_slice key names a resident link (M7's postcondition)");
         grants = fold_one(&grants, namespace, drafts, &addr, &value);
     }
     grants

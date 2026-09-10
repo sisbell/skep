@@ -249,11 +249,14 @@ impl EngineStores {
     /// the passed world unrebuilt, so a `World` that arrived any other way
     /// (deserialized straight from bytes, say — `World: Deserialize` is
     /// forced on it by `WorldState`) is served here with M7's skip-serialized
-    /// HINTS still empty and the exception set EMPTY. Reads then answer with
+    /// HINTS still empty and BOTH of the engine's derived indexes empty.
+    /// Reads then answer with
     /// nullification invisible, `Active` equal to `Audit`, every typed slice
-    /// empty and no supersession edge at all, and EVERY document published —
-    /// the fail-open sign PUB-7.5 names — and nothing about the answers looks
-    /// wrong. (The type
+    /// empty and no supersession edge at all; EVERY document published —
+    /// the fail-open sign PUB-7.5 names; and every grant ungiven, which is
+    /// that sign the other way (PUB-7.68), so the two derived indexes fail in
+    /// OPPOSITE directions over one unrebuilt world and neither looks wrong
+    /// from a single answer. (The type
     /// registry is not in that hazard: it is M7's module constant, so it
     /// answers the same on any world however the world arrived.)
     pub fn new(kernel: Arc<Kernel<World>>) -> EngineStores {

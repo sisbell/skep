@@ -398,8 +398,12 @@ fn publication_tree(world: &World) -> SerdeTree {
 /// `home` (the issuer's doc 1), its `issuer` (ω of the home), the
 /// `content_prefix` it shares and its `grantee` (`none` for the ANY-PRINCIPAL
 /// form, PUB-5.8). DERIVED — the fold's records, the engine keeping no grant
-/// slice — so [`hints_faithful`] covers the grant fold through this section:
-/// a seed that disagreed with the fold moves these bytes. Collected in the
+/// slice — so [`hints_faithful`] covers the grant fold's RECORDS through this
+/// section: a seed that admitted a record the fold did not moves these bytes.
+/// It does not cover the fold's two QUERY INDEXES, which are what
+/// `grant_exists` probes and which nothing here renders —
+/// [`crate::Engine::check_hints_of`] states that gap and why it is not a live
+/// divergence. Collected in the
 /// fold's hash order; `render` sorts. Kept WHOLE by the per-class filter: a
 /// grant is a published document's record, and the addresses it names are
 /// not secret (PUB-1.13).
@@ -560,7 +564,7 @@ impl crate::Engine {
 
     /// Run the hint-faithfulness check against the committed world.
     ///
-    /// What `Ok(())` certifies — and the three hint families it leaves
+    /// What `Ok(())` certifies — and the five derived structures it leaves
     /// uncertified — is [`crate::Engine::check_hints_of`]'s.
     ///
     /// COST: [`crate::Engine::check_hints_of`]'s, over the committed world.
@@ -580,14 +584,31 @@ impl crate::Engine {
     /// document-minting record and the seed over M3's publication map name
     /// the same drafts with the same owners (PUB-7.7's two halves), and for
     /// the grants that the fold over every link deposit and the seed over
-    /// the grants class's type slice admit the same records. It
-    /// certifies nothing of the three families the dump does not reach, and
-    /// each of those drives something a caller can observe — `dedup` drives
-    /// `emit`'s incumbent lookup and with it idempotence; `home_frontier`
-    /// drives the address `next_link_address` mints and the answers
-    /// `age`/`stale` give; the type slice of a class outside the shipped five
-    /// drives every typed read over ordinary content-typed links. A rebuild
-    /// that mis-derived one of those passes here.
+    /// the grants class's type slice admit the same RECORDS. It
+    /// certifies nothing of the FIVE derived structures the dump does not
+    /// reach, and each of those drives something a caller can observe:
+    ///
+    /// * M7's `dedup` drives `emit`'s incumbent lookup and with it
+    ///   idempotence; `home_frontier` drives the address `next_link_address`
+    ///   mints and the answers `age`/`stale` give; the type slice of a class
+    ///   outside the shipped five drives every typed read over ordinary
+    ///   content-typed links.
+    /// * The grant fold's TWO QUERY INDEXES — `by_grantee` and `universal` —
+    ///   drive `grant_exists`, the read predicate's third clause, so a
+    ///   mis-derived one is an authorization answer rather than a stale
+    ///   figure. The dump's grant section renders the fold's RECORDS and
+    ///   neither index, so no comparison here reaches them.
+    ///
+    /// A rebuild that mis-derived any of the five passes here. For the two
+    /// indexes that is a gap in the CERTIFICATE rather than a live
+    /// divergence, and the argument belongs beside the claim: both halves of
+    /// the discipline drive one `grants::fold_one`, so an index is a function
+    /// of the record SEQUENCE alone, and the halves can only order that
+    /// sequence differently across homes. An index entry is withdrawn by the
+    /// first record naming it, so order can matter only where two grants
+    /// SHARE one — which requires a single issuer, and admission ties an
+    /// issuer to a single home, so sharing is always intra-home, where the
+    /// seed's address order IS the fold's deposit order.
     ///
     /// COST, per call, uncached: two [`crate::Engine::dump_of`]s plus a clone
     /// of the world and a whole-links `rebuild_derived` over it — so upwards

@@ -183,7 +183,12 @@ fn a_specific_grant_opens_a_draft_to_its_grantee_alone() {
 }
 
 /// The ANY-PRINCIPAL form (empty `to`, PUB-5.8): readable by every bound
-/// principal, still not by the guest.
+/// principal, still not by the guest — and the tier's membership test is
+/// BEING a principal and nothing more, so an UNSEATED one reads it too. That
+/// last case is what the predicate's grant bullet states and what a reader
+/// would otherwise have to infer from a principal-exact index it never
+/// probes: with no seat there is no account to compare in the subtree clause
+/// and no key to probe in that index, and the universal probe runs anyway.
 #[test]
 fn an_any_principal_grant_opens_a_draft_to_every_principal_but_not_the_guest() {
     let engine = mem_engine();
@@ -191,7 +196,13 @@ fn an_any_principal_grant_opens_a_draft_to_every_principal_but_not_the_guest() {
     grant(&engine, &b.home_a, &b.draft_a, vec![]); // empty `to` ⟹ ANY-PRINCIPAL
     let w = world(&engine);
     assert!(w.readable(Some(B), &b.draft_a), "B, a principal, reads it");
-    assert!(w.readable(Some(PrincipalId(9)), &b.draft_a), "any principal reads it");
+    // Never delegated, so M3 seats it nowhere — the premise of the next line.
+    const UNSEATED: PrincipalId = PrincipalId(9);
+    assert!(
+        w.m3().principal_prefix(UNSEATED).is_none(),
+        "the fixture must leave this principal unseated, or it proves nothing about the tier"
+    );
+    assert!(w.readable(Some(UNSEATED), &b.draft_a), "an unseated principal is still a principal");
     assert!(!w.readable(None, &b.draft_a), "the guest does not — ANY-PRINCIPAL excludes the guest");
 }
 

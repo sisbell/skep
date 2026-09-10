@@ -301,9 +301,14 @@ fn sup_edge_claims(links: &LinkState) -> BTreeMap<Tumbler, BTreeMap<Tumbler, Vec
         if links.is_nullified(&claim) {
             continue; // Df-SUCC: a nullified claim asserts no operative edge
         }
-        let Some(link) = links.readlink(&claim) else {
-            continue; // type-slice keys are resident by construction
-        };
+        // RESIDENCY is M7's stated postcondition on `type_slice`, and M7
+        // fail-stops on it itself (`LinkState::link_at`). Skipping the claim
+        // instead would key fewer edges than the walk renders, which is the
+        // one departure this derivation's standing obligation forbids: under
+        // the total predicate the filter would drop what the walk wrote.
+        let link = links
+            .readlink(&claim)
+            .expect("a type_slice key names a resident link (M7's postcondition)");
         let old_ends: BTreeSet<&Tumbler> = link.from_slot().addrs().collect();
         let new_ends: BTreeSet<&Tumbler> = link.to_slot().addrs().collect();
         for &old in &old_ends {
@@ -352,9 +357,13 @@ fn sup_edge_claims(links: &LinkState) -> BTreeMap<Tumbler, BTreeMap<Tumbler, Vec
 fn member_tuples(links: &LinkState, ty: &Endset, view: View) -> BTreeMap<Tumbler, Vec<Address>> {
     let mut by_member: BTreeMap<Tumbler, Vec<Address>> = BTreeMap::new();
     for tuple in links.type_slice(ty, view) {
-        let Some(link) = links.readlink(&tuple) else {
-            continue; // type-slice keys are resident by construction
-        };
+        // RESIDENCY is M7's stated postcondition on `type_slice`, as at
+        // `sup_edge_claims`, and skipping the tuple would key fewer members
+        // than the walk renders — the departure the standing obligation above
+        // forbids.
+        let link = links
+            .readlink(&tuple)
+            .expect("a type_slice key names a resident link (M7's postcondition)");
         for member in link.from_slot().addrs() {
             by_member.entry(member.clone()).or_default().push(tuple.clone());
         }

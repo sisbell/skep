@@ -32,22 +32,26 @@ use crate::publication::{self, Drafts};
 /// load-bearing: it is the first thing a decoder reads, so a checkpoint
 /// written under any other World layout — the pre-publication-bit layout
 /// above all (PUB-7.8) — is refused at byte 0 by a value comparison, before
-/// any slice's bytes are read as another's. The skip-serialized `drafts` sits
-/// outside the surface: it occupies no bytes.
+/// any slice's bytes are read as another's. The two skip-serialized fields,
+/// `drafts` and `grants`, sit outside the surface: neither occupies a byte.
 ///
 /// INVARIANT — a world's derived state agrees with its authoritative state:
-/// concretely, M7's skip-serialized hints and the engine's own exception set.
-/// TWO construction paths establish it, and the third does not.
+/// concretely, M7's skip-serialized hints and the engine's own two derived
+/// indexes, the exception set and the grant fold. TWO construction paths
+/// establish it, and the third does not.
 /// [`World::genesis`] establishes it, each slice arriving from its own
-/// genesis constructor and the set empty over an empty docuverse; and
+/// genesis constructor and both indexes empty over an empty docuverse; and
 /// [`WorldState::rebuild_derived`] re-establishes it, which M2 runs over
 /// every base it loads, before replay. The `Deserialize` derived below
 /// establishes nothing — it leaves M7's hints empty, so every typed slice
 /// reads as absent, nullification is invisible and `Active` equals `Audit`;
-/// and it leaves the exception set EMPTY, so every document reads as
-/// PUBLISHED — the fail-open sign PUB-7.5 names, in the one place it is
-/// reachable. So a world decoded from bytes is not one until the rebuild has
-/// run over it. That gate cannot be closed here: `WorldState:
+/// it leaves the exception set EMPTY, so every document reads as PUBLISHED
+/// (the fail-open sign PUB-7.5 names, in the one place it is reachable); and
+/// it leaves the grant fold EMPTY, whose sign runs the OTHER way (PUB-7.68),
+/// so every grant reads as ungiven. The two therefore fail in opposite
+/// directions over one unrebuilt world, and no single answer looks wrong. So
+/// a world decoded from bytes is not one until the rebuild has run over it.
+/// That gate cannot be closed here: `WorldState:
 /// DeserializeOwned` forces the impl to exist, and this type is public, so
 /// the only defence is the discipline of the one mode that skips the rebuild
 /// — `Durability::InMemory` installs the passed world as the root exactly as
@@ -59,9 +63,11 @@ use crate::publication::{self, Drafts};
 /// THREE OBLIGATIONS `WorldState` places on this type that M2 cannot check,
 /// each discharged by a fact about the slices rather than about this file.
 /// `Clone` must be cheap, because M2 clones a world per `transact` while
-/// holding the applier lock: all four slices and the exception set are `im`
-/// persistent structures, so the `..self.clone()` in [`WorldState::apply`] is
-/// five root clones. `Drop` must not unwind, because M2 drops the previous
+/// holding the applier lock: every field is `im`-persistent through and
+/// through — the four slices, the exception set and the grant fold's three
+/// structures alike — so the `..self.clone()` in [`WorldState::apply`] copies
+/// a fixed handful of ROOTS and no element of any collection, whatever the
+/// world holds. `Drop` must not unwind, because M2 drops the previous
 /// root inside the atomic install: no type in the world's closure implements
 /// a `Drop` that can panic. And this type's and [`Record`]'s `Deserialize`
 /// must terminate and must not exhaust the stack on any byte string: that
@@ -177,11 +183,32 @@ impl WorldState for World {
     /// The one fold step (M2's `apply` obligation): dispatch each variant
     /// into its store's own pure/total/deterministic fold, replacing exactly
     /// that store's slice (contract §The engine crate assembles). No
-    /// semantics here — the folds own every decision. The one derived index
-    /// the engine itself keeps rides the M3 arm: the exception set is folded
-    /// beside M3's slice from M3's own answers about the record just folded
-    /// (PUB-7.7's fold half — `publication::fold`), so the registration and
-    /// the membership reach a reader in one snapshot.
+    /// semantics here — the folds own every decision.
+    ///
+    /// TWO derived indexes ride these arms, one apiece, each on the arm whose
+    /// records can move it (PUB-7.7's fold half). The EXCEPTION SET rides the
+    /// M3 arm (`publication::fold`), folded beside M3's slice from M3's own
+    /// answers about the record just folded, so the registration and the
+    /// membership reach a reader in one snapshot. The GRANT FOLD rides the
+    /// Links arm (`grants::fold`), from the deposit just folded, so a grant
+    /// and the link carrying it likewise reach a reader together.
+    ///
+    /// NEITHER arm refolds the other's index, and for the grant fold that is
+    /// a PREMISE rather than an omission. Grant admission reads the exception
+    /// set, which the M3 arm moves, so an M3 record could in principle turn
+    /// an unadmitted grant into an admitted one. None can: M3 writes a
+    /// document's publication bit once, at the record that registers it, so
+    /// the set only ever GAINS entries and no later record publishes a home
+    /// that was a draft when its grant landed. That is the same
+    /// time-invariance `grants::seed` rests on and states in full — a publish
+    /// transition would break both halves at once, under-granting live and
+    /// over-granting at the next restart.
+    ///
+    /// Every arm ends `..self.clone()`, which carries each unnamed field
+    /// through unchanged. So a derived index added to [`World`] is folded by
+    /// exactly the arms that name it here, and — because
+    /// [`WorldState::rebuild_derived`] destructures rather than updates — it
+    /// cannot reach a load path unanswered.
     fn apply(&self, r: &Record) -> World {
         match r {
             Record::Namespace(x) => {

@@ -162,21 +162,39 @@ pub(crate) fn seed(namespace: &M3State) -> Drafts {
 /// is seated with a principal in the same transaction (`delegate`), and no
 /// account-tier prefix longer than a document's own account can cover it.
 ///
-/// Fail-stop on a document with no owner: `mint_document` refuses an
-/// unregistered account and every registered account is a principal, so a
-/// registered document ω answers nobody for is a world no M3 op produced —
-/// corruption, answered as M3's own fold answers its structural facts, not a
-/// live error path. The tier assertion is the same statement from the other
-/// side.
+/// TWO facts about the answer are asserted here, in every build, and neither
+/// is decoration: this value is the left operand of [`crate::World::readable`]'s
+/// subtree compare and the issuer the grant fold's coverage clause matches
+/// on, so a wrong one is an authorization answer rather than a wrong log line.
+///
+/// * ITS EXISTENCE, the fail-CLOSED direction. `mint_document` refuses an
+///   unregistered account and every registered account is a principal, so a
+///   registered document ω answers nobody for is a world no M3 op produced —
+///   corruption, answered as M3's own fold answers its structural facts, not
+///   a live error path.
+/// * ITS TIER, the fail-OPEN one, which is why it is checked in release and
+///   not in debug alone. M3's ω keeps the LONGEST covering Node-or-Account
+///   prefix, so a document whose own account were somehow absent from Π
+///   would memoize the NODE above it instead — and a node prefix contains
+///   every account beneath it, so `prefix_contains` would then admit every
+///   principal seated anywhere under that node to the draft. Nothing
+///   downstream can notice: the compare succeeds and the read is granted.
+///
+/// The invariant behind both is M3's, discharged by construction — a
+/// document mints only under a registered account, and `delegate` seats a
+/// principal at every account it registers. So this is the ONE deliberate
+/// discharge point for it, at the boundary where a store fact becomes the
+/// engine's memo, and not a second gate on a caller's obligation.
 fn owner_account_of(namespace: &M3State, doc: &Address) -> Address {
     let owner = namespace
         .effective_owner_prefix(doc)
         .cloned()
         .unwrap_or_else(|| panic!("registered document {doc} has no effective owner"));
-    debug_assert_eq!(
+    assert_eq!(
         owner.level(),
         Level::Account,
-        "a registered document's effective owner is the account it was minted under"
+        "the effective owner of registered document {doc} is not the account it was minted \
+         under: a node-tier memo admits every principal seated under that node to the draft"
     );
     owner
 }
@@ -212,4 +230,120 @@ pub(crate) fn publication_map(namespace: &M3State) -> im::OrdMap<Address, bool> 
         .expect("M3State serializes a `publication` field — the map the exception set indexes");
     im::OrdMap::<Address, bool>::deserialize(TreeDe(publication))
         .expect("M3's publication map re-enters through its own types, from what those types wrote")
+}
+
+#[cfg(test)]
+mod tests {
+    use skep_address::{validate, Nat, Tumbler};
+    use skep_kernel::{CheckpointPolicy, Durability, KernelConfig};
+    use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
+
+    use crate::Engine;
+
+    use super::*;
+
+    const USER: PrincipalId = PrincipalId(7);
+
+    /// M3's slice holding one account under the genesis node and one DRAFT
+    /// document in it, driven through the real drivers, with the two
+    /// addresses. Restated here rather than shared: the integration suite's
+    /// prologue is unreachable from `src/`, and the dump module's own fixture
+    /// is behind the `dump` feature where this module is behind none.
+    fn account_with_a_draft() -> (M3State, Address, Address) {
+        let cfg = KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+        };
+        let engine = Engine::open(cfg).expect("in-memory open cannot fail");
+        let node = validate(Tumbler::new([Nat::from(1u32)]).expect("nonempty"))
+            .expect("the genesis node is T4-valid");
+        let prefix = engine
+            .kernel()
+            .snapshot()
+            .world()
+            .m3()
+            .next_account_prefix(&node)
+            .expect("the genesis node has a delegable next-form prefix");
+        let (acct, _) = engine
+            .namespace()
+            .delegate(BOOTSTRAP_PRINCIPAL, prefix.tumbler().clone(), USER)
+            .expect("delegation of the peeked prefix succeeds");
+        let (doc, _) = engine
+            .namespace()
+            .create_new_document(USER, &acct, Some(false))
+            .expect("an explicit-false mint is a draft");
+        let namespace = engine.kernel().snapshot().world().m3().clone();
+        (namespace, acct, doc)
+    }
+
+    /// The same slice with `acct`'s SEAT struck from Π — the corruption M3's
+    /// own `principals` doc names as a real arrival: "a seat can also arrive
+    /// inside a whole `M3State`, which decodes by bare derive". Built the way
+    /// [`publication_map`] reads, through the slice's serde form and back
+    /// through M3's own door, so nothing here reaches a private layout.
+    fn without_the_account_seat(namespace: &M3State, acct: &Address) -> M3State {
+        let seat = to_tree(acct).to_string();
+        let mut tree = to_tree(namespace);
+        let SerdeTree::Map(fields) = &mut tree else {
+            panic!("M3State serializes as a struct — a map of its fields");
+        };
+        let principals = fields
+            .iter_mut()
+            .find_map(|(name, value)| match name {
+                SerdeTree::Str(s) if s.as_str() == "principals" => Some(value),
+                _ => None,
+            })
+            .expect("M3State serializes a `principals` field — the seat registry ω walks");
+        let SerdeTree::Map(seats) = principals else {
+            panic!("Π serializes as a map of prefix → id");
+        };
+        let before = seats.len();
+        seats.retain(|(prefix, _)| prefix.to_string() != seat);
+        assert_eq!(before - seats.len(), 1, "the account's own seat must have been there to strike");
+        M3State::deserialize(TreeDe(&tree)).expect("M3's own types re-admit what they wrote")
+    }
+
+    /// The seed over a well-formed slice: the draft, memoized against the
+    /// ACCOUNT it was minted under. The premise the refusal below is read
+    /// against — without it, a test that panics proves only that something
+    /// went wrong.
+    #[test]
+    fn the_seed_memoizes_a_draft_s_own_account() {
+        let (namespace, acct, doc) = account_with_a_draft();
+        let drafts = seed(&namespace);
+        assert_eq!(drafts.get(&doc), Some(&acct));
+        assert_eq!(acct.level(), Level::Account);
+        assert!(!is_published(&drafts, &doc));
+    }
+
+    /// The TIER assertion, over the one shape that reaches it: a slice where
+    /// the document's own account has no seat, so ω answers with the longest
+    /// remaining covering one — the genesis NODE above it.
+    ///
+    /// Memoizing that node prefix is the fail-OPEN direction, and nothing
+    /// downstream could notice. [`crate::World::readable`]'s subtree clause is
+    /// a bare `prefix_contains` against this memo, and a node prefix contains
+    /// every account beneath it, so every seated principal in the docuverse
+    /// would read this draft and each read would look like an ordinary pass.
+    /// So the tier is refused here, in every build, rather than asserted in
+    /// debug and trusted in release.
+    #[test]
+    #[should_panic(expected = "is not the account it was minted under")]
+    fn a_node_tier_owner_is_refused_rather_than_memoized() {
+        let (namespace, acct, doc) = account_with_a_draft();
+        let corrupt = without_the_account_seat(&namespace, &acct);
+        // The fixture must still reach the owner lookup: the document is
+        // registered and its bit is still `false`, so `draft_entry` does not
+        // return before it…
+        assert!(corrupt.is_registered_document(&doc), "the mint's registration is untouched");
+        assert!(!corrupt.published(&doc), "the mint's bit is untouched");
+        // …and ω must now answer ABOVE the account tier, or this test would
+        // pass for some other reason.
+        assert_eq!(
+            corrupt.effective_owner_prefix(&doc).map(Address::level),
+            Some(Level::Node),
+            "the struck seat must leave ω answering the node above the account"
+        );
+        let _ = seed(&corrupt);
+    }
 }

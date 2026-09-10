@@ -53,9 +53,19 @@ impl World {
     ///   exception set's MINT-TIME owner (never a nearest-account walk). A
     ///   node-tier principal (principal 0, seated at a node) has a prefix
     ///   shorter than any account, so the compare excludes it; org members are
-    ///   SIBLINGS, so neither reads the other's drafts.
+    ///   SIBLINGS, so neither reads the other's drafts. Both of those hold
+    ///   because the LEFT operand is an ACCOUNT: a node-tier owner would
+    ///   contain every account beneath it and admit each of their principals
+    ///   here. The exception set asserts that tier where it memoizes the
+    ///   owner (`crate::publication`), so this clause is a bare prefix
+    ///   compare rather than a compare plus a tier gate.
     /// * GRANT (PUB-5.8, PUB-5.19) — the grant fold, grantee PRINCIPAL-EXACT,
-    ///   coverage containment ∩ issuer = doc's ω owner.
+    ///   coverage containment ∩ issuer = doc's ω owner. A principal M3 holds
+    ///   no SEAT for is not thereby the guest: the subtree clause has no
+    ///   account to compare and the principal-exact index has no key to
+    ///   probe, so both fall through, but the ANY-PRINCIPAL grants still
+    ///   reach it — being a principal at all is that tier's whole membership
+    ///   test (PUB-5.8), and an unseated one is still not `None`.
     pub fn readable(&self, principal: Option<PrincipalId>, doc: &Address) -> bool {
         let trunk = trunk_of(doc);
         // Published clause — a published document (or member) is readable by
@@ -133,6 +143,17 @@ impl skep_febe::ReadableWorld for World {
     /// [`World::edition_claims`], the engine's composition of M7's audit
     /// reads over the pinned edition class (`crate::editions`); M10 applies
     /// the home rule per row, off its own snapshot.
+    ///
+    /// The `to` test this implementation applies is M7's OVERLAP regime
+    /// against `target`'s subtree, which is WIDER than denotation: a claim
+    /// whose `to` slot is a non-unit span across the subtree denotes no
+    /// address in it and is still a row. That width is the containment the
+    /// lookup is for — it is what makes a document name its versions' claims
+    /// — and it is the same arithmetic at every tier, so a caller sizing this
+    /// answer reads `World::edition_claims`'s cost and not the word
+    /// "denotes". The type slot is the other way: admission there is over
+    /// every DENOTED address, so a slot that merely overlaps the class range
+    /// is refused.
     fn edition_claims(&self, target: &Address) -> Vec<skep_febe::EditionClaim> {
         World::edition_claims(self, target)
     }

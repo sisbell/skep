@@ -53,6 +53,35 @@ use crate::publication::{is_published, Drafts};
 use crate::types::t_grant;
 use crate::world::World;
 
+/// One row of the LIVE ANY-PRINCIPAL set ([`World::universal_grants`]): a
+/// content-prefix, and the issuers who have granted it to every principal.
+///
+/// A named row rather than a pair, because the two grant enumerations are
+/// TRANSPOSES of each other and every half of both is an account or a
+/// document address: `(content_prefix, issuers)` here, `(issuer,
+/// content_prefixes)` in [`IssuerGrant`]. Read one as the other and the types
+/// still agree, so nothing refuses — a lookup keyed by the wrong half finds
+/// nothing, and the term it was for goes unserved with no sign of it. The
+/// field names are what make that mistake fail to compile instead.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UniversalGrant {
+    /// The content-prefix granted (a document or an account address).
+    pub content_prefix: Address,
+    /// The issuers who granted it, in address order.
+    pub issuers: Vec<Address>,
+}
+
+/// One row of the GRANTEE-INDEXED read ([`World::issuers_for`]): an issuer,
+/// and the union of the content-prefixes that issuer has granted the queried
+/// grantee. [`UniversalGrant`] is the transpose, and says why both are named.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IssuerGrant {
+    /// The issuing account — a draft-stream key for the grantee.
+    pub issuer: Address,
+    /// The prefixes that issuer has granted the grantee, in address order.
+    pub content_prefixes: Vec<Address>,
+}
+
 impl World {
     /// THE LIVE ANY-PRINCIPAL SET, enumerable (PUB-7.22; lane 3.6 §3): every
     /// content-prefix currently covered by an admitted, unsuperseded
@@ -68,7 +97,7 @@ impl World {
     /// fold state, and is `readable`'s own universal probe turned inside out:
     /// a document is universally granted iff one of its ancestor prefixes is
     /// listed here with its ω owner among the issuers.
-    pub fn universal_grants(&self) -> Vec<(Address, Vec<Address>)> {
+    pub fn universal_grants(&self) -> Vec<UniversalGrant> {
         self.grants.universal()
     }
 
@@ -82,7 +111,7 @@ impl World {
     /// `grantee` alone, never its subtree (PUB-5.5) — and adds no fold state.
     /// The ANY-PRINCIPAL grants are NOT here; they are
     /// [`World::universal_grants`], the tier's own read.
-    pub fn issuers_for(&self, grantee: &Address) -> Vec<(Address, Vec<Address>)> {
+    pub fn issuers_for(&self, grantee: &Address) -> Vec<IssuerGrant> {
         self.grants.issuers_for(grantee)
     }
 }
@@ -157,39 +186,34 @@ pub(crate) struct Grants {
 // ── the map-of-sets edits both indexes are made of ──
 //
 // `universal` is an `OrdMap<Address, OrdSet<Address>>` and every value of
-// `by_grantee` is another one, so the fold's index maintenance is four edits
-// of a single shape — [`Grants::index_add`]'s two arms and
-// [`Grants::index_remove`]'s two — and [`Grants::issuers_for`]'s inversion is
-// a fifth. The decision each of those sites makes is WHICH index a
-// [`GrantIndexEntry`] belongs in; the bookkeeping is here.
+// `by_grantee` is another one, so the fold's index maintenance is ONE shape
+// throughout: [`Grants::index_add`] and [`Grants::index_remove`] each SELECT
+// the index a [`GrantIndexEntry`] belongs in and hand it here, and
+// [`Grants::issuers_for`]'s inversion builds a third map of that same shape.
+// The decision at those sites is which index; the bookkeeping is here.
 
 /// `map[key] ∪= {member}`, adding the key where it is absent.
-fn set_insert<K: Ord + Clone, V: Ord + Clone>(
-    map: &OrdMap<K, OrdSet<V>>,
-    key: &K,
-    member: V,
-) -> OrdMap<K, OrdSet<V>> {
-    let mut members = map.get(key).cloned().unwrap_or_default();
-    members.insert(member);
-    map.update(key.clone(), members)
+fn set_insert<K: Ord + Clone, V: Ord + Clone>(map: &mut OrdMap<K, OrdSet<V>>, key: &K, member: V) {
+    match map.get_mut(key) {
+        Some(members) => {
+            members.insert(member);
+        }
+        None => {
+            map.insert(key.clone(), OrdSet::unit(member));
+        }
+    }
 }
 
 /// `map[key] −= {member}`, DROPPING the key where its set empties — so no
 /// index ever holds an empty set, and an empty map means "nothing granted"
 /// rather than "nothing granted, or one revocation ago".
-fn set_remove<K: Ord + Clone, V: Ord + Clone>(
-    map: &OrdMap<K, OrdSet<V>>,
-    key: &K,
-    member: &V,
-) -> OrdMap<K, OrdSet<V>> {
-    let Some(members) = map.get(key) else {
-        return map.clone();
+fn set_remove<K: Ord + Clone, V: Ord + Clone>(map: &mut OrdMap<K, OrdSet<V>>, key: &K, member: &V) {
+    let Some(members) = map.get_mut(key) else {
+        return;
     };
-    let members = members.without(member);
+    members.remove(member);
     if members.is_empty() {
-        map.without(key)
-    } else {
-        map.update(key.clone(), members)
+        map.remove(key);
     }
 }
 
@@ -243,13 +267,16 @@ impl Grants {
         false
     }
 
-    /// The ANY-PRINCIPAL index as owned values: `(content prefix, issuers)`
-    /// in the `OrdMap`'s key order — tumbler order — each issuer set in
-    /// address order. [`World::universal_grants`] is the public face.
-    pub(crate) fn universal(&self) -> Vec<(Address, Vec<Address>)> {
+    /// The ANY-PRINCIPAL index as owned rows, in the `OrdMap`'s key order —
+    /// tumbler order — each issuer list in address order.
+    /// [`World::universal_grants`] is the public face.
+    pub(crate) fn universal(&self) -> Vec<UniversalGrant> {
         self.universal
             .iter()
-            .map(|(prefix, issuers)| (prefix.clone(), issuers.iter().cloned().collect()))
+            .map(|(prefix, issuers)| UniversalGrant {
+                content_prefix: prefix.clone(),
+                issuers: issuers.iter().cloned().collect(),
+            })
             .collect()
     }
 
@@ -258,35 +285,32 @@ impl Grants {
     /// the feed wants issuer → the union of that issuer's prefixes (the shape
     /// its per-issuer stream test wants). Both orders are the `OrdMap`s' —
     /// deterministic. [`World::issuers_for`] is the public face.
-    pub(crate) fn issuers_for(&self, grantee: &Address) -> Vec<(Address, Vec<Address>)> {
+    pub(crate) fn issuers_for(&self, grantee: &Address) -> Vec<IssuerGrant> {
         let mut by_issuer: OrdMap<Address, OrdSet<Address>> = OrdMap::new();
         if let Some(prefixes) = self.by_grantee.get(grantee) {
             for (prefix, issuers) in prefixes.iter() {
                 for issuer in issuers.iter() {
-                    by_issuer = set_insert(&by_issuer, issuer, prefix.clone());
+                    set_insert(&mut by_issuer, issuer, prefix.clone());
                 }
             }
         }
         by_issuer
             .iter()
-            .map(|(issuer, covered)| (issuer.clone(), covered.iter().cloned().collect()))
+            .map(|(issuer, covered)| IssuerGrant {
+                issuer: issuer.clone(),
+                content_prefixes: covered.iter().cloned().collect(),
+            })
             .collect()
     }
 
     /// Add `entry` to the query index its grantee names: the PRINCIPAL-EXACT
     /// one keyed by the grantee, or the ANY-PRINCIPAL one.
     fn index_add(&mut self, entry: GrantIndexEntry<'_>) {
-        match entry.grantee {
-            Some(g) => {
-                let prefixes = self.by_grantee.get(g).cloned().unwrap_or_default();
-                let prefixes = set_insert(&prefixes, entry.content_prefix, entry.issuer.clone());
-                self.by_grantee.insert(g.clone(), prefixes);
-            }
-            None => {
-                self.universal =
-                    set_insert(&self.universal, entry.content_prefix, entry.issuer.clone());
-            }
-        }
+        let index = match entry.grantee {
+            Some(g) => self.by_grantee.entry(g.clone()).or_default(),
+            None => &mut self.universal,
+        };
+        set_insert(index, entry.content_prefix, entry.issuer.clone());
     }
 
     /// Withdraw `entry` from the index it was added to, dropping a grantee
@@ -299,20 +323,16 @@ impl Grants {
     /// the entry both contributed, while the other record stays in the
     /// operative set the dump's grant section renders.
     fn index_remove(&mut self, entry: GrantIndexEntry<'_>) {
-        match entry.grantee {
-            Some(g) => {
-                if let Some(prefixes) = self.by_grantee.get(g).cloned() {
-                    let prefixes = set_remove(&prefixes, entry.content_prefix, entry.issuer);
-                    if prefixes.is_empty() {
-                        self.by_grantee.remove(g);
-                    } else {
-                        self.by_grantee.insert(g.clone(), prefixes);
-                    }
-                }
-            }
-            None => {
-                self.universal = set_remove(&self.universal, entry.content_prefix, entry.issuer);
-            }
+        let Some(g) = entry.grantee else {
+            set_remove(&mut self.universal, entry.content_prefix, entry.issuer);
+            return;
+        };
+        let Some(prefixes) = self.by_grantee.get_mut(g) else {
+            return;
+        };
+        set_remove(prefixes, entry.content_prefix, entry.issuer);
+        if prefixes.is_empty() {
+            self.by_grantee.remove(g);
         }
     }
 }
@@ -356,7 +376,7 @@ fn admit(m3: &M3State, drafts: &Drafts, home: &Address) -> Option<Address> {
     // The issuer — ω of the home, an account.
     let issuer = m3.effective_owner_prefix(home)?.clone();
     // The home is the issuer's own doc 1.
-    if first_document_address(&issuer) != Some(home.clone()) {
+    if first_document_address(&issuer).as_ref() != Some(home) {
         return None;
     }
     Some(issuer)
@@ -415,9 +435,11 @@ fn fold_one(prev: &Grants, m3: &M3State, drafts: &Drafts, addr: &Address, value:
             next.records.insert(addr.clone(), grant);
         }
         Kind::Revoke { old } => {
-            if let Some(grant) = next.records.get(&old).cloned() {
+            // The record leaves the operative set and its entry leaves the
+            // index it was added to — one lookup, since the removal hands
+            // the record back.
+            if let Some(grant) = next.records.remove(&old) {
                 next.index_remove(grant.index_entry());
-                next.records.remove(&old);
             }
         }
         Kind::Ignore => {}

@@ -65,8 +65,9 @@ impl World {
         }
         // A REGISTERED private draft from here: the exception set holds its
         // mint-time owner. `None` cannot arise (published above covers the
-        // unregistered case), but is answered fail-closed.
-        let Some(owner) = self.owner_account(&trunk).cloned() else {
+        // unregistered case), but is answered fail-closed. Borrowed, as every
+        // clause below wants it: nothing here outlives the slice it sits in.
+        let Some(owner) = self.owner_account(&trunk) else {
             return false;
         };
         // The guest sees only published documents (no subtree, no grant).
@@ -76,16 +77,16 @@ impl World {
         // The principal's own account — M3's seat for it, which the two
         // clauses below read differently: as an account to compare against
         // the owner's, and as the grantee to probe the fold with.
-        let account = self.namespace.principal_prefix(id).cloned();
+        let account = self.namespace.principal_prefix(id);
         // Subtree clause — downward only.
-        if let Some(account) = &account {
-            if prefix_contains(&owner, account) {
+        if let Some(account) = account {
+            if prefix_contains(owner, account) {
                 return true;
             }
         }
         // Grant clause — the fold, grantee exact (`None` account ⟹ only the
         // ANY-PRINCIPAL grants can match, which the fold probes regardless).
-        self.grants.grant_exists(&owner, account.as_ref(), &trunk)
+        self.grants.grant_exists(owner, account, &trunk)
     }
 
     /// The GUEST predicate (PUB-1.31 with no principal; a grant opens nothing

@@ -92,7 +92,7 @@ use std::path::Path;
 use parking_lot::Mutex;
 use serde_json::Value;
 use skep_address::{is_prefix, parent, Address, Tumbler};
-use skep_engine::{Engine, World};
+use skep_engine::{Engine, IssuerGrant, World};
 use skep_kernel::Seq;
 use skep_namespace::{HasM3, PrincipalId};
 
@@ -150,24 +150,19 @@ pub(crate) struct FeedClass<'a> {
     /// clause, PUB-7.24) — each a draft-stream key. Empty for the guest and
     /// for a node-tier principal.
     subtree: Vec<Address>,
-    /// The grant-selected issuers (`World::issuers_for`, PUB-7.25), each
-    /// `(issuer account, the union of the content prefixes it granted this
-    /// principal)` — the issuer being the draft-stream key this clause
-    /// opens.
-    issuers: Vec<(Address, Vec<Address>)>,
+    /// The grant-selected issuers (`World::issuers_for`, PUB-7.25) — each an
+    /// issuing account with the union of the content prefixes it granted this
+    /// principal, the issuer being the draft-stream key this clause opens.
+    issuers: Vec<IssuerGrant>,
     /// The live ANY-PRINCIPAL prefixes (`World::universal_grants`, PUB-7.22)
     /// — a key range over the position index, never a stream key. Empty for
     /// the guest (grants reach principals alone, PUB-5.109).
     ///
-    /// The PREFIX alone, where the engine's pair carries the issuing
-    /// accounts beside it: this term needs no issuer, because the mask's own
-    /// grant clause admits exactly the entries the issuing owner covers, so
+    /// The PREFIX alone, where the engine's row carries the issuing accounts
+    /// beside it: this term needs no issuer, because the mask's own grant
+    /// clause admits exactly the entries the issuing owner covers, so
     /// [`Inner::visible`] decides every candidate the prefix's index lists
-    /// put forward. Dropping the half nothing reads also parts this field's
-    /// type from [`FeedClass::issuers`]', which is the same pair TRANSPOSED
-    /// — issuer first, prefixes second — so a loop reading one as the other
-    /// stops compiling instead of looking a content prefix up in a map keyed
-    /// by owner account and silently serving no universal term at all.
+    /// put forward.
     universal_prefixes: Vec<Address>,
 }
 
@@ -191,7 +186,7 @@ impl<'a> FeedClass<'a> {
         // The issuing accounts the engine hands back beside each prefix are
         // dropped at this seam, for the reason the field states.
         let universal_prefixes = match principal {
-            Some(_) => world.universal_grants().into_iter().map(|(prefix, _)| prefix).collect(),
+            Some(_) => world.universal_grants().into_iter().map(|g| g.content_prefix).collect(),
             None => Vec::new(),
         };
         FeedClass { world, principal, subtree, issuers, universal_prefixes }
@@ -783,7 +778,7 @@ impl Inner {
                 sources.push(Box::new(at_or_above(stream, start)));
             }
         }
-        for (issuer, prefixes) in &class.issuers {
+        for IssuerGrant { issuer, content_prefixes: prefixes } in &class.issuers {
             let Some(stream) = self.streams.get(issuer) else { continue };
             // A grant at the issuer's account depth or wider IS the stream
             // (PUB-7.25); narrower prefixes take the per-entry containment

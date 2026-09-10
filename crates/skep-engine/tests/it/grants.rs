@@ -10,7 +10,7 @@ use crate::common;
 
 use common::*;
 use skep_arrangement::Caller;
-use skep_engine::{Engine, World};
+use skep_engine::{Engine, IssuerGrant, UniversalGrant, World};
 use skep_links::{HasLinks, ShippedType, SlotArg};
 use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 use tempfile::tempdir;
@@ -352,7 +352,10 @@ fn a_supersession_claim_over_a_grant_revokes_nothing_and_the_seed_agrees() {
     );
     assert_eq!(
         w.issuers_for(&b.acct_b),
-        vec![(b.acct_a.clone(), vec![b.acct_a.clone(), b.draft_a.clone()])],
+        vec![IssuerGrant {
+            issuer: b.acct_a.clone(),
+            content_prefixes: vec![b.acct_a.clone(), b.draft_a.clone()],
+        }],
         "both grants stand: a [K_sup] claim is not the fold's revocation"
     );
     engine.check_hints().expect("the seed, which never sees the claim, reproduces the fold");
@@ -419,7 +422,10 @@ fn the_two_feed_enumerations_read_the_fold_s_live_state() {
     let w = world(&engine);
     assert_eq!(
         w.issuers_for(&b.acct_b),
-        vec![(b.acct_a.clone(), vec![b.acct_a.clone(), b.draft_a.clone()])],
+        vec![IssuerGrant {
+            issuer: b.acct_a.clone(),
+            content_prefixes: vec![b.acct_a.clone(), b.draft_a.clone()],
+        }],
         "B's one issuer is A, with the UNION of A's prefixes to B in address order"
     );
     assert!(
@@ -428,7 +434,10 @@ fn the_two_feed_enumerations_read_the_fold_s_live_state() {
     );
     assert_eq!(
         w.universal_grants(),
-        vec![(draft_two.clone(), vec![b.acct_a.clone()])],
+        vec![UniversalGrant {
+            content_prefix: draft_two.clone(),
+            issuers: vec![b.acct_a.clone()],
+        }],
         "the live any-principal set lists the second draft under its issuer"
     );
     // The enumerations are the predicate turned inside out.

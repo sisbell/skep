@@ -155,7 +155,15 @@ impl<'de> Deserialize<'de> for FormatStamp {
 /// invariant survives assembly). Variant ORDER carries the same bincode
 /// obligation as `World`'s fields: variants encode by index, so a rename is
 /// byte-neutral for replay and a reordering is not.
+///
+/// One variant per STATE-CONTRIBUTING store — M3, M4, M5 and M7 today, with
+/// M6/M8/M9/M10 contributing none — so the set grows with the decomposition,
+/// which is why it is `#[non_exhaustive]`: a store that starts carrying a
+/// slice adds a variant here, and `match` exhaustiveness over a public enum
+/// is a promise the assembler has no reason to make to a caller that only
+/// ever lifts and folds.
 #[derive(Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum Record {
     Namespace(M3Rec),
     Content(ContentWrite),

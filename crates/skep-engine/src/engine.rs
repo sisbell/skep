@@ -34,6 +34,14 @@ pub enum EngineError {
     Open(OpenError),
 }
 
+/// The one lift the assembler makes, so `?` carries M2's refusal out of
+/// [`Engine::open`] rather than a `map_err` at the one construction site.
+impl From<OpenError> for EngineError {
+    fn from(e: OpenError) -> EngineError {
+        EngineError::Open(e)
+    }
+}
+
 impl fmt::Display for EngineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -109,7 +117,7 @@ impl Engine {
     /// run against, by construction rather than by an agreement anything here
     /// would have to keep.
     pub fn open(cfg: KernelConfig) -> Result<Engine, EngineError> {
-        let kernel = Arc::new(Kernel::open(cfg, World::genesis()).map_err(EngineError::Open)?);
+        let kernel = Arc::new(Kernel::open(cfg, World::genesis())?);
         Ok(Engine { stores: EngineStores::new(kernel) })
     }
 
@@ -131,7 +139,13 @@ impl Engine {
     /// It is a process constant and not this handle's state, so every engine
     /// answers with the same instance and a world's own slice answers with it
     /// too; the world dump reads it off the slice for that reason.
-    pub fn registry(&self) -> &Arc<TypeRegistry> {
+    ///
+    /// `'static`, because that is what it is: the borrow outlives this handle,
+    /// and a caller keeping the registry past the engine that named it is
+    /// holding a compiled constant rather than a dangling piece of state. The
+    /// `Arc` stays because M9 takes an owned one — [`Engine::coordinator`]
+    /// clones through here — so the shared ownership is real.
+    pub fn registry(&self) -> &'static Arc<TypeRegistry> {
         skep_links::registry()
     }
 

@@ -49,8 +49,9 @@
 //!   (PUB-7.7), with NO checkpoint slice. It also publishes its two feed
 //!   enumerations ([`World::universal_grants`], [`World::issuers_for`]; lane
 //!   3.6) — the live ANY-PRINCIPAL set and a grantee's issuers with their
-//!   covered prefixes — the key set the daemon's change feed resolves once
-//!   per request (PUB-7.22, PUB-7.28).
+//!   covered prefixes, as [`UniversalGrant`] and [`IssuerGrant`] rows — the
+//!   key set the daemon's change feed resolves once per request (PUB-7.22,
+//!   PUB-7.28).
 //! * **The edition-claim lookup** ([`World::edition_claims`]; the `editions`
 //!   module) — the audit-view `to`-range lookup over the R20 edition-claim
 //!   class (PUB-8.46, lane 3.4, §2), composed from M7's own audit reads over
@@ -85,6 +86,7 @@ mod world;
 pub mod dump;
 
 pub use engine::{Engine, EngineError, EngineStores};
+pub use grants::{IssuerGrant, UniversalGrant};
 pub use world::{Record, World};
 
 // The KERNEL types the engine's own signatures name, re-exported so a binary

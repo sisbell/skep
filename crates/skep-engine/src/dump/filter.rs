@@ -146,7 +146,8 @@ pub(super) fn filter_tree(
     let claims = sup_edge_claims(links);
     let edge_claimed_readably = |old: &Address, new: &Address| {
         claims
-            .get(&(old.tumbler().clone(), new.tumbler().clone()))
+            .get(old.tumbler())
+            .and_then(|by_new| by_new.get(new.tumbler()))
             .is_some_and(|asserting| asserting.iter().any(|claim| document_readable(claim)))
     };
 
@@ -192,9 +193,14 @@ pub(super) fn filter_tree(
     root
 }
 
-/// The OPERATIVE supersession claims, keyed by the edge each asserts —
-/// `(old, new)` as denoted tumblers — for the per-class filter over the
-/// dump's `hints.supersession` section.
+/// The OPERATIVE supersession claims, keyed by the edge each asserts — the
+/// denoted OLD endpoint, then the denoted NEW one — for the per-class filter
+/// over the dump's `hints.supersession` section.
+///
+/// NESTED, as M7's own `sup_fwd` hint is and as the fold that builds it is:
+/// the caller holds the two endpoints separately, and a probe of a map keyed
+/// by a PAIR would have to clone both tumblers to build a key it drops on the
+/// next line — once per successor of every rendered edge.
 ///
 /// M7 publishes the edges (`succs`) and not the claims behind them, so the
 /// derivation is RESTATED here: one edge per DISTINCT denoted `old` × `new`
@@ -214,9 +220,9 @@ pub(super) fn filter_tree(
 /// the hint's stored shape is not widened. A claim's home is
 /// `document_of(claim)`, the same address arithmetic every other hint entry
 /// is judged by.
-fn sup_edge_claims(links: &LinkState) -> BTreeMap<(Tumbler, Tumbler), Vec<Address>> {
+fn sup_edge_claims(links: &LinkState) -> BTreeMap<Tumbler, BTreeMap<Tumbler, Vec<Address>>> {
     let sup = links.reserved_type(ShippedType::Supersedes);
-    let mut by_edge: BTreeMap<(Tumbler, Tumbler), Vec<Address>> = BTreeMap::new();
+    let mut by_edge: BTreeMap<Tumbler, BTreeMap<Tumbler, Vec<Address>>> = BTreeMap::new();
     for claim in links.type_slice(sup, View::Audit) {
         if links.is_nullified(&claim) {
             continue; // Df-SUCC: a nullified claim asserts no operative edge
@@ -226,12 +232,10 @@ fn sup_edge_claims(links: &LinkState) -> BTreeMap<(Tumbler, Tumbler), Vec<Addres
         };
         let olds: BTreeSet<&Tumbler> = link.from_slot().addrs().collect();
         let news: BTreeSet<&Tumbler> = link.to_slot().addrs().collect();
-        for old in &olds {
-            for new in &news {
-                by_edge
-                    .entry(((*old).clone(), (*new).clone()))
-                    .or_default()
-                    .push(claim.clone());
+        for &old in &olds {
+            let by_new = by_edge.entry(old.clone()).or_default();
+            for &new in &news {
+                by_new.entry(new.clone()).or_default().push(claim.clone());
             }
         }
     }

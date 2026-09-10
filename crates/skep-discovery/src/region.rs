@@ -98,10 +98,7 @@ fn run_list_walk(region: &[Span], run_count: usize) -> usize {
 ///
 /// The result is the I-runs of the image, in region-span order and V-order
 /// within each span, deduped on `(i_start, width)` — the pair a `Run`
-/// publishes, and exactly its equality. The key is spelled out because `Run`
-/// is neither `Hash` nor `Ord` (M5's); keying rather than scanning is what
-/// keeps the dedup one probe per resolved run, so the cost is linear in an
-/// image size the caller's region chooses rather than square in it.
+/// publishes, and exactly its equality.
 ///
 /// Exact-`Run` equality is the extent of the set claim: overlapping INPUT
 /// region spans may still yield partially-overlapping runs (not an
@@ -112,13 +109,8 @@ fn run_list_walk(region: &[Span], run_count: usize) -> usize {
 /// [`MAX_IMAGE_RUNS`], before the first `resolve`: M5 reaches each span by
 /// walking the surface's content run-list from its first run, so a span
 /// reaching `e` passes at most `min(#runs, e − 1)` runs whatever it returns,
-/// and the sum over the region is what is priced. A region whose reach in
-/// positions is within the square walks within it whatever the document, so
-/// the ordinary request is admitted without the surface's runs being
-/// counted; past that the count is taken — M5 publishes none, so it is the
-/// surface's content runs read whole, the cost [`crate::project_on`] pays on
-/// every call — and the walk is priced in RUNS, so a deep read of a long
-/// document holding few runs is never refused for its depth.
+/// and the sum over the region is what is priced — in RUNS, so a deep read of
+/// a long document holding few runs is never refused for its depth.
 ///
 /// Then refuses past [`MAX_IMAGE_RUNS`] with `ImageTooLarge`, counted over
 /// the runs RESOLVED rather than the distinct ones kept, because that is the
@@ -145,14 +137,23 @@ pub fn image_on<W: DiscoveryWorld>(
     check_region(region)?;
     let surface = reading_surface(w.m3(), d);
     // The walk, priced against a run-list of unbounded length first — its
-    // reach in positions — and in the surface's runs only past that.
+    // reach in positions — and in the surface's runs only past that. A region
+    // whose reach in positions is within the square walks within it whatever
+    // the document, so the ordinary request is admitted without the surface's
+    // runs being counted; past that the count is taken — M5 publishes none,
+    // so it is the surface's content runs read whole, the cost `project_on`
+    // pays on every call.
     if run_list_walk(region, usize::MAX) > MAX_JOIN_STEPS
         && run_list_walk(region, w.m5().content_runs(&surface).len()) > MAX_JOIN_STEPS
     {
         return Err(QueryError::ImageTooLarge);
     }
     let mut runs: Vec<Run> = Vec::new();
-    let mut seen: HashSet<(Address, Nat)> = HashSet::new(); // internal throwaway
+    // The key is spelled out because `Run` is neither `Hash` nor `Ord` (M5's);
+    // keying rather than scanning is what keeps the dedup one probe per
+    // resolved run, so the cost is linear in an image size the caller's
+    // region chooses rather than square in it.
+    let mut seen: HashSet<(Address, Nat)> = HashSet::new();
     let mut runs_resolved: usize = 0;
     for span in region {
         let span_image = w.m5().resolve(&surface, span);
@@ -283,11 +284,8 @@ pub fn window_v_on<W: DiscoveryWorld>(
 /// surfaces iff `a ∈ stab(i, query, Active)` — so M7's overlap verdict
 /// (ProperOverlap | Containment | Equal, never Adjacent) is the ONLY touch
 /// test and cross-subspace disjointness (RE-NCD) is discharged by M7. Output
-/// order is pinned (slot, then lexicographic span-sequence): deterministic at
-/// a snapshot, no hash-iteration leak; the internal dedup is a throwaway
-/// `std::collections::HashSet`, so no `im` container crosses this seam, and it
-/// is keyed on borrows into the snapshot's store, so a pair is copied once,
-/// when it ships.
+/// order is pinned (slot, then lexicographic span-sequence), and so
+/// deterministic at a snapshot.
 ///
 /// Refuses past [`MAX_ENDSET_SPANS`] with `EndsetsTooLarge`, accumulated over
 /// the spans of the pairs actually KEPT — what the answer carries is what the
@@ -317,12 +315,14 @@ pub fn retrieve_endsets_on<W: DiscoveryWorld>(
     let image = image_on(s, d, region)?; // gate + region-check inside, on THIS snap
     let by_slot = stab_runs_by_slot(w.links(), &image); // KEPT SEPARATE — slot i of a touches iff a ∈ its set
     let sel = union_slots(&by_slot);
-    let mut kept: HashSet<(usize, &Endset)> = HashSet::new(); // dedup by structural Eq, borrowing the store's endsets
+    // Dedup by structural Eq, keyed on borrows into the store's endsets — a
+    // pair is copied once, when it ships.
+    let mut kept: HashSet<(usize, &Endset)> = HashSet::new();
     let mut spans_kept: usize = 0;
     for a in sel.iter() {
-        // The home rule, at the candidate link's identity (§3): a link whose
-        // home is unreadable contributes no pair. Its endset — if it survived —
-        // is unfiltered at origin (PUB-6.15).
+        // The home rule (PUB-6.13), at the candidate link's identity: a link
+        // whose home is unreadable contributes no pair. Its endset — if it
+        // survived — is unfiltered at origin (PUB-6.15).
         if !home_readable(readable, a) {
             continue;
         }

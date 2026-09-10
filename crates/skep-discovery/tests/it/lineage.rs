@@ -5,7 +5,7 @@ use crate::common;
 
 use common::*;
 use skep_address::Address;
-use skep_discovery::{LinkQuery, SupClaim, FROM, TO};
+use skep_discovery::{SupClaim, FROM, TO};
 use skep_kernel::TxnError;
 use skep_links::{
     enc, EditLinkError, HasLinks, Link, LinkWriter, MakeLinkError, ShippedType, SlotArg, View,
@@ -16,7 +16,7 @@ fn lineage_probes_flipped_slots_with_residence_gate() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
     let (claim, _) = store.assert_sup(SYS, &doc1(), &e1, &e2).expect("assert_sup succeeds");
@@ -29,33 +29,33 @@ fn lineage_probes_flipped_slots_with_residence_gate() {
         active: true,
     };
     // Flipped storage: in(y) = old probes FROM; out(x) = new probes TO.
-    assert_eq!(lq.in_claims(&e1, View::Active), vec![expected.clone()]);
-    assert_eq!(lq.out_claims(&e2, View::Active), vec![expected.clone()]);
-    assert_eq!(lq.in_claims(&e2, View::Active), vec![]);
-    assert_eq!(lq.out_claims(&e1, View::Active), vec![]);
+    assert_eq!(reads.in_claims(&e1, View::Active), vec![expected.clone()]);
+    assert_eq!(reads.out_claims(&e2, View::Active), vec![expected.clone()]);
+    assert_eq!(reads.in_claims(&e2, View::Active), vec![]);
+    assert_eq!(reads.out_claims(&e1, View::Active), vec![]);
     // Default behaves as Active (M7's §G primitives coerce it) — asserted
     // here while the claim is live, where Audit answers the same; the
     // assertion that separates them follows the retraction.
-    assert_eq!(lq.in_claims(&e1, View::Default), vec![expected]);
+    assert_eq!(reads.in_claims(&e1, View::Default), vec![expected]);
 
     // Resident-key gate: a non-link key returns [] — without it, doc1's
     // prefix coverage would over-match the claim (whose endpoints live under
     // doc1).
-    assert_eq!(lq.in_claims(&doc1(), View::Active), vec![]);
-    assert_eq!(lq.in_claims(&ca(1), View::Active), vec![]);
+    assert_eq!(reads.in_claims(&doc1(), View::Active), vec![]);
+    assert_eq!(reads.in_claims(&ca(1), View::Active), vec![]);
 
     // Nullifying the claim removes it from the operative graph but keeps it
     // in the audit history, with its own activity disclosed honestly.
     store.nullify(SYS, &doc2(), &claim).expect("nullify succeeds");
-    assert_eq!(lq.in_claims(&e1, View::Active), vec![]);
-    let audit = lq.in_claims(&e1, View::Audit);
+    assert_eq!(reads.in_claims(&e1, View::Active), vec![]);
+    let audit = reads.in_claims(&e1, View::Audit);
     assert_eq!(audit.len(), 1);
     assert_eq!(audit[0].claim, claim);
     assert!(!audit[0].active);
     // After the retraction Active and Audit part — the one state where
     // "Default reads as Active" can be told from "Default reads as Audit".
-    assert_eq!(lq.in_claims(&e1, View::Default), vec![]);
-    assert_eq!(lq.out_claims(&e2, View::Default), vec![]);
+    assert_eq!(reads.in_claims(&e1, View::Default), vec![]);
+    assert_eq!(reads.out_claims(&e2, View::Default), vec![]);
 }
 
 /// §7 — `home` is the CLAIM's own attribution (EL8b), never an endpoint's.
@@ -70,7 +70,7 @@ fn lineage_attributes_a_claim_to_its_own_home_not_its_endpoints() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
     let (claim, _) = store
@@ -79,7 +79,7 @@ fn lineage_attributes_a_claim_to_its_own_home_not_its_endpoints() {
     assert_eq!(claim, la2(1), "the claim is minted in doc2's link chain");
 
     assert_eq!(
-        lq.in_claims(&e1, View::Active),
+        reads.in_claims(&e1, View::Active),
         vec![SupClaim {
             claim,
             old: e1,
@@ -101,7 +101,7 @@ fn a_live_claim_names_a_nullified_endpoint_and_a_nullified_key_still_probes() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
     let (claim, _) = store
@@ -115,7 +115,7 @@ fn a_live_claim_names_a_nullified_endpoint_and_a_nullified_key_still_probes() {
     assert!(snap.world().links().is_active(&claim));
 
     assert_eq!(
-        lq.in_claims(&e1, View::Active),
+        reads.in_claims(&e1, View::Active),
         vec![SupClaim {
             claim: claim.clone(),
             old: e1,
@@ -127,7 +127,7 @@ fn a_live_claim_names_a_nullified_endpoint_and_a_nullified_key_still_probes() {
     // A nullified link is resident, so it is still a legal probe key: the
     // gate asks resident, not active.
     assert_eq!(
-        lq.out_claims(&e2, View::Active)
+        reads.out_claims(&e2, View::Active)
             .into_iter()
             .map(|c| c.claim)
             .collect::<Vec<_>>(),
@@ -144,7 +144,7 @@ fn lineage_reads_out_in_claim_address_order() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     let mut made = Vec::new();
     for to in [ca(101), ca(102), ca(103)] {
         let e = link(&store, &doc1(), &[ca(1)], &[to]);
@@ -164,7 +164,7 @@ fn lineage_reads_out_in_claim_address_order() {
         .expect("assert_sup succeeds");
     assert!(c1 < c2 && c2 < c3, "later claims mint later addresses");
 
-    let claims: Vec<Address> = lq
+    let claims: Vec<Address> = reads
         .in_claims(&made[0], View::Active)
         .into_iter()
         .map(|c| c.claim)
@@ -175,10 +175,10 @@ fn lineage_reads_out_in_claim_address_order() {
     let claims_of =
         |found: Vec<SupClaim>| -> Vec<Address> { found.into_iter().map(|c| c.claim).collect() };
     assert_eq!(
-        claims_of(lq.out_claims(&made[2], View::Active)),
+        claims_of(reads.out_claims(&made[2], View::Active)),
         vec![c2, c3]
     );
-    assert_eq!(claims_of(lq.out_claims(&made[1], View::Active)), vec![c1]);
+    assert_eq!(claims_of(reads.out_claims(&made[1], View::Active)), vec![c1]);
 }
 
 /// §7 — the enumeration reads out SUPERSESSION claims alone. M7's probe finds
@@ -193,7 +193,7 @@ fn lineage_reads_out_supersession_claims_alone_among_the_links_naming_the_key() 
     let k = kernel();
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
     // Of the suite's relation type, and shaped exactly like a claim over e1→e2.
@@ -226,8 +226,8 @@ fn lineage_reads_out_supersession_claims_alone_among_the_links_naming_the_key() 
         home: doc1(),
         active: true,
     }];
-    assert_eq!(lq.in_claims(&e1, View::Active), only_the_claim);
-    assert_eq!(lq.out_claims(&e2, View::Active), only_the_claim);
+    assert_eq!(reads.in_claims(&e1, View::Active), only_the_claim);
+    assert_eq!(reads.out_claims(&e2, View::Active), only_the_claim);
 }
 
 /// §7 — the lineage read-out reports a claim's endpoints with NO per-claim
@@ -302,9 +302,9 @@ fn lineage_endpoints_rest_on_a_fence_the_write_surface_keeps() {
             &doc1(),
         )
         .expect("a schema-conforming successor is admitted");
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     assert_eq!(
-        lq.in_claims(&e1, View::Active),
+        reads.in_claims(&e1, View::Active),
         vec![SupClaim {
             claim: edit.claim,
             old: e1,

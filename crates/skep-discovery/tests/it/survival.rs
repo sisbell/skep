@@ -7,9 +7,7 @@ use crate::common;
 use common::*;
 use skep_address::Address;
 use skep_arrangement::{Caller, DeleteError, HasM5, Vstream};
-use skep_discovery::{
-    delete_orphans_on, FourSet, LinkQuery, OrphanError, OrphanReport, MAX_IMAGE_RUNS,
-};
+use skep_discovery::{delete_orphans_on, FourSet, OrphanError, OrphanReport, MAX_IMAGE_RUNS};
 use skep_kernel::{Kernel, TxnError};
 use skep_links::LinkWriter;
 use skep_namespace::PrincipalId;
@@ -18,51 +16,51 @@ use skep_namespace::PrincipalId;
 fn delete_orphans_mirrors_delete_preconditions() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
 
     assert_eq!(
-        lq.delete_orphans(&unregistered_doc(), &vp(1, 1), &n(1)),
+        reads.delete_orphans(&unregistered_doc(), &vp(1, 1), &n(1)),
         Err(OrphanError::DocNotRegistered)
     );
     // A registered-but-empty d is refused for RANGE, never as unregistered:
     // n_C = 0 admits no range, and which variant answers says which fault.
     assert_eq!(
-        lq.delete_orphans(&doc2(), &vp(1, 1), &n(1)),
+        reads.delete_orphans(&doc2(), &vp(1, 1), &n(1)),
         Err(OrphanError::OutOfBounds)
     );
     assert_eq!(
-        lq.delete_orphans(&doc2(), &vp(1, 1), &n(0)),
+        reads.delete_orphans(&doc2(), &vp(1, 1), &n(0)),
         Err(OrphanError::EmptyWidth)
     );
     // Check order mirrors §6: subspace, then width, then the folded bounds.
     assert_eq!(
-        lq.delete_orphans(&doc1(), &vp(2, 1), &n(0)),
+        reads.delete_orphans(&doc1(), &vp(2, 1), &n(0)),
         Err(OrphanError::NotContentSubspace)
     );
     // Width ahead of bounds: an out-of-range p with width 0 is labelled
     // EmptyWidth here where M5's DELETE, checking bounds first, says
     // NotArranged — the same refusal under a different word (§6).
     assert_eq!(
-        lq.delete_orphans(&doc1(), &vp(1, 0), &n(0)),
+        reads.delete_orphans(&doc1(), &vp(1, 0), &n(0)),
         Err(OrphanError::EmptyWidth)
     );
     assert_eq!(
-        lq.delete_orphans(&doc1(), &vp(1, 0), &n(1)),
+        reads.delete_orphans(&doc1(), &vp(1, 0), &n(1)),
         Err(OrphanError::OutOfBounds)
     );
     // OutOfBounds folds M5's NotArranged (start beyond the arranged run) …
     assert_eq!(
-        lq.delete_orphans(&doc1(), &vp(1, 4), &n(1)),
+        reads.delete_orphans(&doc1(), &vp(1, 4), &n(1)),
         Err(OrphanError::OutOfBounds)
     );
     // … and M5's OutOfBounds (range overrun).
     assert_eq!(
-        lq.delete_orphans(&doc1(), &vp(1, 2), &n(3)),
+        reads.delete_orphans(&doc1(), &vp(1, 2), &n(3)),
         Err(OrphanError::OutOfBounds)
     );
     // Boundary acceptance: the last position, and the whole range.
-    assert!(lq.delete_orphans(&doc1(), &vp(1, 3), &n(1)).is_ok());
-    assert!(lq.delete_orphans(&doc1(), &vp(1, 1), &n(3)).is_ok());
+    assert!(reads.delete_orphans(&doc1(), &vp(1, 3), &n(1)).is_ok());
+    assert!(reads.delete_orphans(&doc1(), &vp(1, 1), &n(3)).is_ok());
 }
 
 #[test]
@@ -70,25 +68,25 @@ fn delete_orphans_reports_active_last_witness_losses() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     // link_a witnesses positions 1 (FROM) and 2 (TO); link_b only 3.
     let _link_a = link(&store, &doc1(), &[ca(1)], &[ca(2)]);
     let link_b = link(&store, &doc1(), &[ca(3)], &[ca(3)]);
 
     // Deleting position 3 drops link_b's last witness in d.
-    let r = lq.delete_orphans(&doc1(), &vp(1, 3), &n(1)).expect("preview");
+    let r = reads.delete_orphans(&doc1(), &vp(1, 3), &n(1)).expect("preview");
     assert_eq!(r.orphaned, vec![la(2)]);
     // Deleting position 1 leaves link_a witnessed at position 2 — no orphan.
-    let r = lq.delete_orphans(&doc1(), &vp(1, 1), &n(1)).expect("preview");
+    let r = reads.delete_orphans(&doc1(), &vp(1, 1), &n(1)).expect("preview");
     assert_eq!(r.orphaned, vec![]);
     // Deleting everything orphans both (no retained content, no link runs).
-    let r = lq.delete_orphans(&doc1(), &vp(1, 1), &n(3)).expect("preview");
+    let r = reads.delete_orphans(&doc1(), &vp(1, 1), &n(3)).expect("preview");
     assert_eq!(r.orphaned, vec![la(1), la(2)]);
 
     // Orphans are reported over the ACTIVE view: a nullified link that loses
     // its last witness is NOT reported (divergence from ASN-0117's D(d,Σ)).
     store.nullify(SYS, &doc2(), &link_b).expect("nullify succeeds");
-    let r = lq.delete_orphans(&doc1(), &vp(1, 3), &n(1)).expect("preview");
+    let r = reads.delete_orphans(&doc1(), &vp(1, 3), &n(1)).expect("preview");
     assert_eq!(r.orphaned, vec![]);
 
     // The preview is a pure what-if — the arrangement is untouched.
@@ -130,18 +128,18 @@ fn delete_orphans_previews_exactly_what_the_delete_drops() {
     for p in 1..=4u32 {
         for width in 1..=(5 - p) {
             let k = survival_world();
-            let lq = LinkQuery::new(&k, &every_home);
+            let reads = Reads(&k);
 
-            let preview = lq
+            let preview = reads
                 .delete_orphans(&doc1(), &vp(1, p), &n(width))
                 .expect("the accepted domain");
             ever_orphaned |= !preview.orphaned.is_empty();
             // What doc1 reaches now, in the ascending address order
             // `orphaned` also carries.
-            let before: Vec<Address> = lq
+            let before: Vec<Address> = reads
                 .findlinks_ftt(&FourSet::any())
                 .into_iter()
-                .filter(|a| lq.addressably_discoverable_from(a, &doc1()) == Ok(true))
+                .filter(|a| reads.addressably_discoverable_from(a, &doc1()) == Ok(true))
                 .collect();
 
             Vstream::new(&k)
@@ -150,7 +148,7 @@ fn delete_orphans_previews_exactly_what_the_delete_drops() {
 
             let dropped: Vec<Address> = before
                 .into_iter()
-                .filter(|a| lq.addressably_discoverable_from(a, &doc1()) == Ok(false))
+                .filter(|a| reads.addressably_discoverable_from(a, &doc1()) == Ok(false))
                 .collect();
             assert_eq!(
                 preview.orphaned, dropped,
@@ -172,19 +170,19 @@ fn delete_orphans_keeps_a_link_witnessed_by_the_retained_prefix() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     link(&store, &doc1(), &[ca(1)], &[ca(3)]);
 
     // Deleting position 3 takes the link's TO witness; its FROM witness is in
     // the retained prefix, so the link keeps its reach.
     assert_eq!(
-        lq.delete_orphans(&doc1(), &vp(1, 3), &n(1)),
+        reads.delete_orphans(&doc1(), &vp(1, 3), &n(1)),
         Ok(OrphanReport { orphaned: vec![] })
     );
     // Deleting everything takes both, so the prefix term cannot be
     // over-retaining either.
     assert_eq!(
-        lq.delete_orphans(&doc1(), &vp(1, 1), &n(3)),
+        reads.delete_orphans(&doc1(), &vp(1, 1), &n(3)),
         Ok(OrphanReport {
             orphaned: vec![la(1)]
         })
@@ -199,14 +197,14 @@ fn delete_orphans_keeps_a_link_witnessed_in_the_link_subspace_a_text_delete_neve
     let k = kernel();
     seed_content(&k, &doc1(), 3);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     let seated = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     link(&store, &doc1(), &[ca(1)], &[seated]);
 
     // Both links reach position 1, and the whole content goes. Only la(2)
     // keeps a witness — la(1), which makelink seated in doc1's link runs.
     assert_eq!(
-        lq.delete_orphans(&doc1(), &vp(1, 1), &n(3)),
+        reads.delete_orphans(&doc1(), &vp(1, 1), &n(3)),
         Ok(OrphanReport {
             orphaned: vec![la(1)]
         })
@@ -337,7 +335,7 @@ fn the_preview_answers_a_published_target_the_delete_refuses() {
     // see: position 3 is arranged in the head, which `image` resolves, and
     // out of bounds for the preview.
     assert_eq!(
-        LinkQuery::new(&k, &every_home).image(&pdoc(), &[vspan(1, 3, 1)]),
+        Reads(&k).image(&pdoc(), &[vspan(1, 3, 1)]),
         Ok(vec![run(&pca(3), 1)])
     );
     assert_eq!(
@@ -362,10 +360,10 @@ fn delete_orphans_refuses_a_document_past_the_run_budget() {
     let vs = Vstream::new(&k);
     let many = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS];
     vs.copy(SYS, &doc2(), vp(1, 1), &many).expect("copy succeeds");
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
 
     // At the budget: one run deleted and every other retained, `MAX` in all.
-    assert!(lq.delete_orphans(&doc2(), &vp(1, 1), &n(1)).is_ok());
+    assert!(reads.delete_orphans(&doc2(), &vp(1, 1), &n(1)).is_ok());
 
     vs.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, 1)])
         .expect("copy succeeds");
@@ -376,22 +374,22 @@ fn delete_orphans_refuses_a_document_past_the_run_budget() {
     let whole = n(MAX_IMAGE_RUNS as u32 + 1);
     for (p, width) in [(vp(1, 1), n(1)), (vp(1, 2), n(1)), (vp(1, 1), whole)] {
         assert_eq!(
-            lq.delete_orphans(&doc2(), &p, &width),
+            reads.delete_orphans(&doc2(), &p, &width),
             Err(OrphanError::ImageTooLarge),
             "the preview of DELETE at {p:?}, width {width}, is refused"
         );
     }
     // Every fault in the request is named ahead of the budget.
     assert_eq!(
-        lq.delete_orphans(&doc2(), &vp(2, 1), &n(1)),
+        reads.delete_orphans(&doc2(), &vp(2, 1), &n(1)),
         Err(OrphanError::NotContentSubspace)
     );
     assert_eq!(
-        lq.delete_orphans(&doc2(), &vp(1, 1), &n(0)),
+        reads.delete_orphans(&doc2(), &vp(1, 1), &n(0)),
         Err(OrphanError::EmptyWidth)
     );
     assert_eq!(
-        lq.delete_orphans(&doc2(), &vp(1, 0), &n(1)),
+        reads.delete_orphans(&doc2(), &vp(1, 0), &n(1)),
         Err(OrphanError::OutOfBounds)
     );
     // And the DELETE it previews, which stabs nothing, admits the request.
@@ -418,16 +416,16 @@ fn the_preview_budget_counts_the_runs_the_range_splits() {
         k.snapshot().world().m5().content_runs(&doc2()).len(),
         MAX_IMAGE_RUNS - 1
     );
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
 
     // Position 2 is the width-3 run's middle: both ends cut it, so `MAX + 1`
     // runs to stab.
     assert_eq!(
-        lq.delete_orphans(&doc2(), &vp(1, 2), &n(1)),
+        reads.delete_orphans(&doc2(), &vp(1, 2), &n(1)),
         Err(OrphanError::ImageTooLarge)
     );
     // Position 1 is its first: one end cuts it, `MAX` runs — the budget itself.
-    assert!(lq.delete_orphans(&doc2(), &vp(1, 1), &n(1)).is_ok());
+    assert!(reads.delete_orphans(&doc2(), &vp(1, 1), &n(1)).is_ok());
     // Position 4 is a whole width-1 run: no end cuts one, `MAX − 1` runs.
-    assert!(lq.delete_orphans(&doc2(), &vp(1, 4), &n(1)).is_ok());
+    assert!(reads.delete_orphans(&doc2(), &vp(1, 4), &n(1)).is_ok());
 }

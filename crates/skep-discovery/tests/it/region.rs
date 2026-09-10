@@ -6,7 +6,7 @@ use crate::common;
 use common::*;
 use skep_address::{Address, Span};
 use skep_arrangement::{HasM5, Vstream};
-use skep_discovery::{content_vspan, LinkQuery, OrphanReport, QueryError, FROM, MAX_IMAGE_RUNS};
+use skep_discovery::{content_vspan, OrphanReport, QueryError, FROM, MAX_IMAGE_RUNS};
 use skep_links::{enc, LinkWriter, SlotArg, MAX_SLOT_SPANS};
 use skep_namespace::{Namespace, PrincipalId};
 
@@ -14,16 +14,16 @@ use skep_namespace::{Namespace, PrincipalId};
 fn region_family_gates_doc_then_region_then_defines_empty() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
 
     // Unregistered d → DocNotRegistered, even with a bad region: the document
     // gate is the first act, the region gate second.
     assert_eq!(
-        lq.image(&unregistered_doc(), &[vspan(2, 1, 1)]),
+        reads.image(&unregistered_doc(), &[vspan(2, 1, 1)]),
         Err(QueryError::DocNotRegistered)
     );
     assert_eq!(
-        lq.retrieve_endsets(&unregistered_doc(), &[vspan(1, 1, 1)]),
+        reads.retrieve_endsets(&unregistered_doc(), &[vspan(1, 1, 1)]),
         Err(QueryError::DocNotRegistered)
     );
 
@@ -31,23 +31,23 @@ fn region_family_gates_doc_then_region_then_defines_empty() {
     // content subspace — never a silently-clipped different query. The
     // link-subspace span is a shape M5 accepts and M8's added clause refuses …
     assert_eq!(
-        lq.findlinks_v(&doc1(), &[vspan(2, 1, 1)]),
+        reads.findlinks_v(&doc1(), &[vspan(2, 1, 1)]),
         Err(QueryError::BadRegion)
     );
     // … while a non-depth-2 span and an action-point-1 width fail the shape
     // itself, exactly as M5's `is_ordinal_vspan` reads them.
     let deep = skep_address::Span::new(t(&[1, 1, 1]), t(&[0, 0, 1])).expect("T12-valid");
     assert!(!skep_arrangement::is_ordinal_vspan(&deep));
-    assert_eq!(lq.count_v(&doc1(), &[deep]), Err(QueryError::BadRegion));
+    assert_eq!(reads.count_v(&doc1(), &[deep]), Err(QueryError::BadRegion));
     let level_uniform = skep_address::Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-valid");
     assert!(!skep_arrangement::is_ordinal_vspan(&level_uniform));
     assert_eq!(
-        lq.count_v(&doc1(), &[level_uniform]),
+        reads.count_v(&doc1(), &[level_uniform]),
         Err(QueryError::BadRegion)
     );
     // One bad span anywhere in the region rejects the whole request.
     assert_eq!(
-        lq.findlinks_v(&doc1(), &[vspan(1, 1, 1), vspan(2, 1, 1)]),
+        reads.findlinks_v(&doc1(), &[vspan(1, 1, 1), vspan(2, 1, 1)]),
         Err(QueryError::BadRegion)
     );
 
@@ -56,7 +56,7 @@ fn region_family_gates_doc_then_region_then_defines_empty() {
     // two requests that would have been BadRegion — a non-s_C subspace and a
     // zero count.
     let built = content_vspan(&vp(1, 1), &n(1)).expect("s_C, count ≥ 1");
-    assert!(lq.count_v(&doc1(), &[built]).is_ok());
+    assert!(reads.count_v(&doc1(), &[built]).is_ok());
     assert_eq!(content_vspan(&vp(2, 1), &n(1)), None);
     assert_eq!(content_vspan(&vp(1, 1), &n(0)), None);
     // The rule is "the content subspace", not "anything but the link
@@ -73,10 +73,10 @@ fn region_family_gates_doc_then_region_then_defines_empty() {
                 "content_vspan at subspace {subspace}, count {count}"
             );
             if let Some(span) = built {
-                assert!(lq.count_v(&doc1(), &[span]).is_ok());
+                assert!(reads.count_v(&doc1(), &[span]).is_ok());
             } else if count >= 1 {
                 assert_eq!(
-                    lq.count_v(&doc1(), &[vspan(subspace, 1, count)]),
+                    reads.count_v(&doc1(), &[vspan(subspace, 1, count)]),
                     Err(QueryError::BadRegion),
                     "a region in subspace {subspace} is refused"
                 );
@@ -86,16 +86,16 @@ fn region_family_gates_doc_then_region_then_defines_empty() {
 
     // Registered-but-empty d → a DEFINED empty result, distinct from
     // DocNotRegistered.
-    assert_eq!(lq.findlinks_v(&doc2(), &[vspan(1, 1, 5)]), Ok(vec![]));
-    assert_eq!(lq.count_v(&doc2(), &[vspan(1, 1, 5)]), Ok(0));
-    let w = lq.window_v(&doc2(), &[vspan(1, 1, 5)], None, 3).expect("window");
+    assert_eq!(reads.findlinks_v(&doc2(), &[vspan(1, 1, 5)]), Ok(vec![]));
+    assert_eq!(reads.count_v(&doc2(), &[vspan(1, 1, 5)]), Ok(0));
+    let w = reads.window_v(&doc2(), &[vspan(1, 1, 5)], None, 3).expect("window");
     assert_eq!(w.batch, vec![]);
     assert_eq!(w.next, None);
     assert!(w.exhausted);
-    assert_eq!(lq.retrieve_endsets(&doc2(), &[vspan(1, 1, 5)]), Ok(vec![]));
+    assert_eq!(reads.retrieve_endsets(&doc2(), &[vspan(1, 1, 5)]), Ok(vec![]));
 
     // An empty region trivially passes the gate and yields the empty image.
-    assert!(lq.image(&doc1(), &[]).expect("empty region is defined").is_empty());
+    assert!(reads.image(&doc1(), &[]).expect("empty region is defined").is_empty());
 }
 
 /// One region-family entry point reduced to the refusal it answers with, so
@@ -104,17 +104,17 @@ type RegionRefusal<'a> = Box<dyn Fn(&Address, &[Span]) -> Option<QueryError> + '
 
 /// The one list every "every region entry point" law reads: the five reads
 /// that inherit `image_on`'s gates and budget, each reduced to its refusal
-/// through a copy of `lq`. A region read added to the family is added here,
+/// through a copy of `reads`. A region read added to the family is added here,
 /// and every such law then covers it.
-fn region_entry_points<'a>(lq: LinkQuery<'a, World>) -> Vec<(&'static str, RegionRefusal<'a>)> {
+fn region_entry_points<'a>(reads: Reads<'a>) -> Vec<(&'static str, RegionRefusal<'a>)> {
     vec![
-        ("image", Box::new(move |d, r| lq.image(d, r).err())),
-        ("findlinks_v", Box::new(move |d, r| lq.findlinks_v(d, r).err())),
-        ("count_v", Box::new(move |d, r| lq.count_v(d, r).err())),
-        ("window_v", Box::new(move |d, r| lq.window_v(d, r, None, 3).err())),
+        ("image", Box::new(move |d, r| reads.image(d, r).err())),
+        ("findlinks_v", Box::new(move |d, r| reads.findlinks_v(d, r).err())),
+        ("count_v", Box::new(move |d, r| reads.count_v(d, r).err())),
+        ("window_v", Box::new(move |d, r| reads.window_v(d, r, None, 3).err())),
         (
             "retrieve_endsets",
-            Box::new(move |d, r| lq.retrieve_endsets(d, r).err()),
+            Box::new(move |d, r| reads.retrieve_endsets(d, r).err()),
         ),
     ]
 }
@@ -128,9 +128,9 @@ fn region_entry_points<'a>(lq: LinkQuery<'a, World>) -> Vec<(&'static str, Regio
 fn every_region_entry_point_answers_both_gates_in_order() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
 
-    for (name, refusal) in &region_entry_points(lq) {
+    for (name, refusal) in &region_entry_points(reads) {
         assert_eq!(
             refusal(&unregistered_doc(), &[vspan(1, 1, 1)]),
             Some(QueryError::DocNotRegistered),
@@ -155,27 +155,27 @@ fn every_region_entry_point_answers_both_gates_in_order() {
 fn image_resolves_dedups_and_clips() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
 
     // Ordinary V→I resolution.
     assert_eq!(
-        lq.image(&doc1(), &[vspan(1, 1, 2)]),
+        reads.image(&doc1(), &[vspan(1, 1, 2)]),
         Ok(vec![run(&ca(1), 2)])
     );
     // Exact-equal repeats are deduped at the boundary (Run: Eq).
     assert_eq!(
-        lq.image(&doc1(), &[vspan(1, 1, 2), vspan(1, 1, 2)]),
+        reads.image(&doc1(), &[vspan(1, 1, 2), vspan(1, 1, 2)]),
         Ok(vec![run(&ca(1), 2)])
     );
     // Overlapping INPUT spans may still yield partially-overlapping runs —
     // the dedup claim is exact-equality only, not an address-disjoint
     // partition.
     assert_eq!(
-        lq.image(&doc1(), &[vspan(1, 1, 2), vspan(1, 2, 2)]),
+        reads.image(&doc1(), &[vspan(1, 1, 2), vspan(1, 2, 2)]),
         Ok(vec![run(&ca(1), 2), run(&ca(2), 2)])
     );
     // Out-of-range tails are the arrangement intersection (W ∩ dom M(d)).
-    assert_eq!(lq.image(&doc1(), &[vspan(1, 2, 99)]), Ok(vec![run(&ca(2), 2)]));
+    assert_eq!(reads.image(&doc1(), &[vspan(1, 2, 99)]), Ok(vec![run(&ca(2), 2)]));
 }
 
 /// §1 — the I-runs come back in REGION-SPAN order, and in V-order within each
@@ -189,16 +189,16 @@ fn image_returns_runs_in_region_span_order_then_v_order() {
     let k = kernel();
     seed_content(&k, &doc1(), 3); // V 1..3 → ca(1..3)
     seed_content(&k, &doc1(), 3); // inserted AT V 1: ca(4..6) take V 1..3, ca(1..3) shift to V 4..6
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
 
     // One span, two runs: V-order within the span.
     assert_eq!(
-        lq.image(&doc1(), &[vspan(1, 1, 6)]),
+        reads.image(&doc1(), &[vspan(1, 1, 6)]),
         Ok(vec![run(&ca(4), 3), run(&ca(1), 3)])
     );
     // Two spans, one run each: the order the caller's region asked in.
     assert_eq!(
-        lq.image(&doc1(), &[vspan(1, 1, 1), vspan(1, 4, 1)]),
+        reads.image(&doc1(), &[vspan(1, 1, 1), vspan(1, 4, 1)]),
         Ok(vec![run(&ca(4), 1), run(&ca(1), 1)])
     );
 }
@@ -213,15 +213,15 @@ fn image_returns_runs_in_region_span_order_then_v_order() {
 fn image_dedups_on_a_runs_whole_identity_not_its_start() {
     let k = kernel();
     seed_content(&k, &doc1(), 3); // V 1..3 → one run at ca(1)
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
 
     assert_eq!(
-        lq.image(&doc1(), &[vspan(1, 1, 1), vspan(1, 1, 2)]),
+        reads.image(&doc1(), &[vspan(1, 1, 1), vspan(1, 1, 2)]),
         Ok(vec![run(&ca(1), 1), run(&ca(1), 2)])
     );
     // The collapse the same key MUST still make: an exact repeat is one run.
     assert_eq!(
-        lq.image(&doc1(), &[vspan(1, 1, 2), vspan(1, 1, 2)]),
+        reads.image(&doc1(), &[vspan(1, 1, 2), vspan(1, 1, 2)]),
         Ok(vec![run(&ca(1), 2)])
     );
 }
@@ -258,11 +258,11 @@ fn the_region_family_answers_over_an_image_that_mixes_address_lengths() {
     let store = LinkWriter::new(&k, &EVERYONE);
     let near = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     let far = link(&store, &doc1(), std::slice::from_ref(&deep_ca), &[ca(102)]);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     let region = [vspan(1, 1, 2)];
 
     // The premise: one image, its runs starting at two lengths.
-    let image = lq.image(&doc1(), &region).expect("image");
+    let image = reads.image(&doc1(), &region).expect("image");
     assert_eq!(image, vec![run(&ca(1), 1), run(&deep_ca, 1)]);
     assert_eq!(
         image
@@ -273,19 +273,19 @@ fn the_region_family_answers_over_an_image_that_mixes_address_lengths() {
     );
 
     assert_eq!(
-        lq.findlinks_v(&doc1(), &region),
+        reads.findlinks_v(&doc1(), &region),
         Ok(vec![near.clone(), far.clone()])
     );
-    assert_eq!(lq.count_v(&doc1(), &region), Ok(2));
+    assert_eq!(reads.count_v(&doc1(), &region), Ok(2));
     assert_eq!(
-        lq.retrieve_endsets(&doc1(), &region),
+        reads.retrieve_endsets(&doc1(), &region),
         Ok(vec![(FROM, enc(&[ca(1)])), (FROM, enc([&deep_ca]))])
     );
-    assert_eq!(lq.addressably_discoverable_from(&far, &doc1()), Ok(true));
+    assert_eq!(reads.addressably_discoverable_from(&far, &doc1()), Ok(true));
     // The preview stabs the mix twice over: the deleted run is doc1's own, and
     // the retained side holds the transcluded run beside doc1's link runs.
     assert_eq!(
-        lq.delete_orphans(&doc1(), &vp(1, 1), &n(1)),
+        reads.delete_orphans(&doc1(), &vp(1, 1), &n(1)),
         Ok(OrphanReport {
             orphaned: vec![near]
         })
@@ -315,19 +315,19 @@ fn the_region_family_refuses_an_image_past_the_run_budget() {
     for _ in 0..4 {
         seed_content(&k, &doc1(), 1); // four separate INSERTs ⇒ four runs
     }
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     // Every span the same: the whole document, resolving to all four runs.
     let at_budget: Vec<Span> = vec![vspan(1, 1, 4); MAX_IMAGE_RUNS / 4];
     let past: Vec<Span> = at_budget.iter().cloned().chain([vspan(1, 1, 1)]).collect();
     let past_then_malformed: Vec<Span> =
         past.iter().cloned().chain([vspan(2, 1, 1)]).collect();
     let flat: Vec<Span> = vec![vspan(1, 1, 1); MAX_SLOT_SPANS];
-    assert_eq!(lq.image(&doc1(), &at_budget[..1]).map(|r| r.len()), Ok(4));
+    assert_eq!(reads.image(&doc1(), &at_budget[..1]).map(|r| r.len()), Ok(4));
     // At the budget the answer is still those four distinct runs — the dedup
     // is not what the budget counts.
-    assert_eq!(lq.image(&doc1(), &at_budget).map(|r| r.len()), Ok(4));
+    assert_eq!(reads.image(&doc1(), &at_budget).map(|r| r.len()), Ok(4));
 
-    for (name, refusal) in &region_entry_points(lq) {
+    for (name, refusal) in &region_entry_points(reads) {
         assert_eq!(
             refusal(&doc1(), &at_budget),
             None,
@@ -379,7 +379,7 @@ fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
         k.snapshot().world().m5().content_runs(&doc2()).len(),
         MAX_IMAGE_RUNS + 1
     );
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
 
     // Every span one past doc2's arranged end, and past doc1's.
     let past_the_end = MAX_IMAGE_RUNS as u32 + 2;
@@ -391,15 +391,15 @@ fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
     // last position and resolves exactly one run, so the run count admits it;
     // the walk — MAX × (MAX + 1) runs — does not.
     let flat_deep: Vec<Span> = vec![vspan(1, MAX_IMAGE_RUNS as u32 + 1, 1); MAX_IMAGE_RUNS];
-    assert_eq!(lq.image(&doc2(), &flat_deep[..1]), Ok(vec![run(&ca(1), 1)]));
+    assert_eq!(reads.image(&doc2(), &flat_deep[..1]), Ok(vec![run(&ca(1), 1)]));
     assert_eq!(
-        lq.image(&doc2(), &deep[..1]),
+        reads.image(&doc2(), &deep[..1]),
         Ok(vec![]),
         "a span past the end resolves no run, whatever it walks"
     );
-    assert_eq!(lq.image(&doc1(), &deep), Ok(vec![]));
+    assert_eq!(reads.image(&doc1(), &deep), Ok(vec![]));
 
-    for (name, refusal) in &region_entry_points(lq) {
+    for (name, refusal) in &region_entry_points(reads) {
         assert_eq!(
             refusal(&doc2(), &deep),
             Some(QueryError::ImageTooLarge),
@@ -438,7 +438,7 @@ fn findlinks_v_is_disjunctive_and_active_filtered() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
 
     // e1 reaches position 1 via FROM (the `link` fixture's FROM is enc({ca1})).
     let e1 = link(&store, &doc1(), &[ca(1)], &[ca(9)]);
@@ -457,18 +457,18 @@ fn findlinks_v_is_disjunctive_and_active_filtered() {
     assert_eq!(m1, la(2));
 
     // Disjunction: any slot reaching the region surfaces the link.
-    assert_eq!(lq.findlinks_v(&doc1(), &[vspan(1, 2, 1)]), Ok(vec![la(2)]));
-    assert_eq!(lq.findlinks_v(&doc1(), &[vspan(1, 3, 1)]), Ok(vec![la(2)]));
+    assert_eq!(reads.findlinks_v(&doc1(), &[vspan(1, 2, 1)]), Ok(vec![la(2)]));
+    assert_eq!(reads.findlinks_v(&doc1(), &[vspan(1, 3, 1)]), Ok(vec![la(2)]));
     // OR across links: position 1 is reached by e1's FROM and m1's TYPE.
     assert_eq!(
-        lq.findlinks_v(&doc1(), &[vspan(1, 1, 1)]),
+        reads.findlinks_v(&doc1(), &[vspan(1, 1, 1)]),
         Ok(vec![la(1), la(2)])
     );
-    assert_eq!(lq.count_v(&doc1(), &[vspan(1, 1, 1)]), Ok(2));
+    assert_eq!(reads.count_v(&doc1(), &[vspan(1, 1, 1)]), Ok(2));
     // Result-as-set: a link touching the region through several slots is
     // found once.
     assert_eq!(
-        lq.findlinks_v(&doc1(), &[vspan(1, 1, 3)]),
+        reads.findlinks_v(&doc1(), &[vspan(1, 1, 3)]),
         Ok(vec![la(1), la(2)])
     );
 
@@ -476,8 +476,8 @@ fn findlinks_v_is_disjunctive_and_active_filtered() {
     // coverage still reaches the region. (Homed in doc2 so the retraction
     // tuple's own enc({doc2}) from-fill stays off doc1's content.)
     store.nullify(SYS, &doc2(), &e1).expect("nullify succeeds");
-    assert_eq!(lq.findlinks_v(&doc1(), &[vspan(1, 1, 1)]), Ok(vec![la(2)]));
-    assert_eq!(lq.count_v(&doc1(), &[vspan(1, 1, 1)]), Ok(1));
+    assert_eq!(reads.findlinks_v(&doc1(), &[vspan(1, 1, 1)]), Ok(vec![la(2)]));
+    assert_eq!(reads.count_v(&doc1(), &[vspan(1, 1, 1)]), Ok(1));
 }
 
 /// §1 — HEAD-FLOAT on every region read, not only the two the pointwise
@@ -490,17 +490,17 @@ fn every_region_read_resolves_a_published_document_through_its_trunk_head() {
     let k = published_world();
     let store = LinkWriter::new(&k, &EVERYONE);
     let head_only = link(&store, &doc1(), &[pca(3)], &[ca(102)]);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     let region = [vspan(1, 3, 1)];
-    assert_eq!(lq.image(&pdoc(), &region), Ok(vec![run(&pca(3), 1)]));
-    assert_eq!(lq.findlinks_v(&pdoc(), &region), Ok(vec![head_only.clone()]));
-    assert_eq!(lq.count_v(&pdoc(), &region), Ok(1));
+    assert_eq!(reads.image(&pdoc(), &region), Ok(vec![run(&pca(3), 1)]));
+    assert_eq!(reads.findlinks_v(&pdoc(), &region), Ok(vec![head_only.clone()]));
+    assert_eq!(reads.count_v(&pdoc(), &region), Ok(1));
     assert_eq!(
-        lq.window_v(&pdoc(), &region, None, 5).map(|w| w.batch),
+        reads.window_v(&pdoc(), &region, None, 5).map(|w| w.batch),
         Ok(vec![head_only])
     );
     assert_eq!(
-        lq.retrieve_endsets(&pdoc(), &region),
+        reads.retrieve_endsets(&pdoc(), &region),
         Ok(vec![(FROM, enc(&[pca(3)]))])
     );
 }

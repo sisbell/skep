@@ -1,6 +1,6 @@
 //! The promises M8 makes to a consumer rather than to itself, checked from
-//! outside the crate: the snapshot twins, one named world bound, the
-//! standard traits its values carry, the handle's bound reader, and
+//! outside the crate: reads that answer off the snapshot they are handed,
+//! one named world bound, the standard traits its values carry, and
 //! rejection enums that stay exhaustively matchable.
 
 use crate::common;
@@ -10,33 +10,30 @@ use std::collections::HashSet;
 use common::*;
 use skep_address::{Address, Span};
 use skep_discovery::{
-    addressably_discoverable_from_on, count_ftt_on, count_v_on, delete_orphans_on,
-    findlinks_ftt_on, findlinks_v_on, in_claims_on, out_claims_on, project_on, retrieve_endsets_on,
-    window_ftt_on, window_v_on, DiscoveryWorld, FourSet, LinkQuery, OrphanError, OrphanReport,
-    QueryError, SlotSpec, SupClaim, Window, FROM,
+    count_ftt_on, count_v_on, window_v_on, DiscoveryWorld, FourSet, OrphanError, OrphanReport,
+    QueryError, SlotSpec, SupClaim, Window,
 };
 use skep_kernel::Snapshot;
-use skep_links::{enc, Endset, LinkWriter, View};
+use skep_links::{enc, Endset, LinkWriter};
 
 #[test]
-fn snapshot_twins_read_one_pinned_state() {
+fn a_read_answers_off_the_snapshot_it_is_handed() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
     link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     let region = [vspan(1, 1, 1)];
 
-    // Pin one snapshot, then write past it: the twins keep answering off the
-    // pinned root (a count and its window off ONE consistent state), while
-    // the handle's fresh snapshot sees the new link.
+    // Pin one snapshot, then write past it: the reads handed the pinned
+    // snapshot keep answering off it (a count and its window off ONE state),
+    // while a read handed a fresh snapshot sees the new link.
     let snap = k.snapshot();
     assert_eq!(count_v_on(&snap, &doc1(), &region, &every_home), Ok(1));
     link(&store, &doc1(), &[ca(1)], &[ca(102)]);
     assert_eq!(count_v_on(&snap, &doc1(), &region, &every_home), Ok(1));
     let w = window_v_on(&snap, &doc1(), &region, None, 10, &every_home).expect("window");
     assert_eq!(w.batch, vec![la(1)]);
-    assert_eq!(lq.count_v(&doc1(), &region), Ok(2));
+    assert_eq!(count_v_on(&k.snapshot(), &doc1(), &region, &every_home), Ok(2));
 }
 
 /// The shape a caller composing two M8 reads has to write: ONE bound naming
@@ -145,137 +142,6 @@ fn the_value_surface_is_hashable_and_keys_by_representation() {
     assert!(reports.insert(OrphanReport {
         orphaned: vec![la(1)]
     }));
-}
-
-/// The handle is a borrow — of the kernel and its reader — and behaves as one:
-/// it prints without asking `W: Debug`, and it copies — a copy binds the same
-/// kernel and reader and snapshots afresh, so it answers what the original
-/// answers. A consumer holding one in a struct of its own derives over it,
-/// which is the wall a missing impl would be.
-#[test]
-fn the_handle_debugs_and_copies_like_the_borrow_it_is() {
-    let k = kernel();
-    seed_content(&k, &doc1(), 1);
-    let store = LinkWriter::new(&k, &EVERYONE);
-    link(&store, &doc1(), &[ca(1)], &[ca(101)]);
-    let lq = LinkQuery::new(&k, &every_home);
-    assert_eq!(format!("{lq:?}"), "LinkQuery { .. }");
-
-    #[derive(Debug, Clone, Copy)]
-    struct Consumer<'k> {
-        links: LinkQuery<'k, World>,
-    }
-    let consumer = Consumer { links: lq }; // lq is Copy — not moved
-    assert!(format!("{consumer:?}").starts_with("Consumer { links: LinkQuery { .. }"));
-    assert_eq!(consumer.links.count_ftt(&FourSet::any()), 1);
-    assert_eq!(lq.count_ftt(&FourSet::any()), 1);
-}
-
-/// The handle answers for the reader it is BOUND to, on every method that
-/// takes one: bound to a reader that may not read doc2, each of the twelve
-/// answers what its `*_on` read answers under that reader off the same state,
-/// and differently from the handle bound to the total predicate — so a method
-/// that swapped the bound reader for a total one would return doc2's links.
-/// The reader it binds is `Sync`, so the handle crosses threads wherever the
-/// kernel does.
-#[test]
-fn the_handle_answers_for_the_reader_it_is_bound_to() {
-    let k = kernel();
-    seed_content(&k, &doc1(), 1);
-    let store = LinkWriter::new(&k, &EVERYONE);
-    let m0 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
-    // Homed in doc2, under a FROM no doc1 link carries, so it is also a pair
-    // of its own to RETRIEVEENDSETS.
-    let t0 = link(&store, &doc2(), &[ca(1), ca(102)], &[ca(103)]);
-    let (claim, _) = store
-        .assert_sup(SYS, &doc2(), &m0, &t0)
-        .expect("assert_sup succeeds");
-    assert_eq!(claim, la2(2), "the claim is homed in doc2 too");
-    let cannot_read_doc2 = |d: &Address| *d != doc2();
-    let bound = LinkQuery::new(&k, &cannot_read_doc2);
-    let total = LinkQuery::new(&k, &every_home);
-    let snap = k.snapshot();
-    let region = [vspan(1, 1, 1)];
-    let q = FourSet::any();
-
-    // The region family.
-    let found = bound.findlinks_v(&doc1(), &region);
-    assert_eq!(
-        found,
-        findlinks_v_on(&snap, &doc1(), &region, &cannot_read_doc2)
-    );
-    assert_ne!(found, total.findlinks_v(&doc1(), &region));
-    let counted = bound.count_v(&doc1(), &region);
-    assert_eq!(
-        counted,
-        count_v_on(&snap, &doc1(), &region, &cannot_read_doc2)
-    );
-    assert_ne!(counted, total.count_v(&doc1(), &region));
-    let page = bound.window_v(&doc1(), &region, None, 5);
-    assert_eq!(
-        page,
-        window_v_on(&snap, &doc1(), &region, None, 5, &cannot_read_doc2)
-    );
-    assert_ne!(page, total.window_v(&doc1(), &region, None, 5));
-    let pairs = bound.retrieve_endsets(&doc1(), &region);
-    assert_eq!(
-        pairs,
-        retrieve_endsets_on(&snap, &doc1(), &region, &cannot_read_doc2)
-    );
-    assert_ne!(pairs, total.retrieve_endsets(&doc1(), &region));
-
-    // The descriptor family.
-    let found = bound.findlinks_ftt(&q);
-    assert_eq!(found, findlinks_ftt_on(&snap, &q, &cannot_read_doc2));
-    assert_ne!(found, total.findlinks_ftt(&q));
-    let counted = bound.count_ftt(&q);
-    assert_eq!(counted, count_ftt_on(&snap, &q, &cannot_read_doc2));
-    assert_ne!(counted, total.count_ftt(&q));
-    let page = bound.window_ftt(&q, None, 5);
-    assert_eq!(page, window_ftt_on(&snap, &q, None, 5, &cannot_read_doc2));
-    assert_ne!(page, total.window_ftt(&q, None, 5));
-
-    // The pointwise pair, asked of the doc2-homed link.
-    let projected = bound.project(&t0, FROM, &doc1());
-    assert_eq!(
-        projected,
-        project_on(&snap, &t0, FROM, &doc1(), &cannot_read_doc2)
-    );
-    assert_ne!(projected, total.project(&t0, FROM, &doc1()));
-    let reached = bound.addressably_discoverable_from(&t0, &doc1());
-    assert_eq!(
-        reached,
-        addressably_discoverable_from_on(&snap, &t0, &doc1(), &cannot_read_doc2)
-    );
-    assert_ne!(reached, total.addressably_discoverable_from(&t0, &doc1()));
-
-    // The preview: both links lose their only witness, and only m0 is
-    // reported to the bound reader.
-    let orphans = bound.delete_orphans(&doc1(), &vp(1, 1), &n(1));
-    assert_eq!(
-        orphans,
-        delete_orphans_on(&snap, &doc1(), &vp(1, 1), &n(1), &cannot_read_doc2)
-    );
-    assert_ne!(orphans, total.delete_orphans(&doc1(), &vp(1, 1), &n(1)));
-
-    // The lineage pair: the claim is homed in doc2.
-    let claims = bound.in_claims(&m0, View::Active);
-    assert_eq!(
-        claims,
-        in_claims_on(&snap, &m0, View::Active, &cannot_read_doc2)
-    );
-    assert_ne!(claims, total.in_claims(&m0, View::Active));
-    let claims = bound.out_claims(&t0, View::Active);
-    assert_eq!(
-        claims,
-        out_claims_on(&snap, &t0, View::Active, &cannot_read_doc2)
-    );
-    assert_ne!(claims, total.out_claims(&t0, View::Active));
-
-    // The bound reader is `Sync`, so the handle crosses threads as the kernel
-    // does; this fails to compile the day it does not.
-    fn crosses_threads<T: Send + Sync>(_: &T) {}
-    crosses_threads(&bound);
 }
 
 /// Both rejection enums are exhaustively matchable from OUTSIDE the crate —

@@ -21,11 +21,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **Reads over a snapshot you hold** — every read is a free `*_on`
   function over an explicit snapshot and the caller's reader
   predicate, so the caller owns the consistency point and can report
-  as-of positions. `LinkQuery` is a convenience that takes a fresh
-  snapshot per call, under the reader it is bound to.
+  as-of positions.
 
-Presents the link store's matcher — never reimplements it; binds one
-snapshot per operation and writes nothing.
+Presents the link store's matcher — never reimplements it; reads one
+snapshot per operation, the one its caller hands it, and writes nothing.
 
 ## License
 

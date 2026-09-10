@@ -6,7 +6,7 @@ use crate::common;
 
 use common::*;
 use skep_arrangement::Vstream;
-use skep_discovery::{FourSet, LinkQuery, SlotSpec};
+use skep_discovery::{FourSet, SlotSpec};
 use skep_links::{enc, Endset, HasLinks, LinkWriter};
 
 #[test]
@@ -14,14 +14,14 @@ fn ftt_the_unit_matches_all_the_zero_annihilates_and_slots_conjoin() {
     let k = kernel();
     seed_content(&k, &doc1(), 2);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     link(&store, &doc1(), &[ca(2)], &[ca(101)]);
     link(&store, &doc2(), &[ca(1)], &[ca(102)]);
 
     // (∗,∗,∗,∗) — the whole addressable slice (FL-WILD), address order.
-    assert_eq!(lq.findlinks_ftt(&FourSet::any()), vec![la(1), la(2), la2(1)]);
-    assert_eq!(lq.count_ftt(&FourSet::any()), 3);
+    assert_eq!(reads.findlinks_ftt(&FourSet::any()), vec![la(1), la(2), la2(1)]);
+    assert_eq!(reads.count_ftt(&FourSet::any()), 3);
 
     // Any constrained-empty slot annihilates (FL-EMP) — both the explicit
     // zero and an empty Spans endset, which never reaches M7.
@@ -29,33 +29,33 @@ fn ftt_the_unit_matches_all_the_zero_annihilates_and_slots_conjoin() {
         to: SlotSpec::Empty,
         ..FourSet::any()
     };
-    assert_eq!(lq.findlinks_ftt(&q), vec![]);
-    assert_eq!(lq.count_ftt(&q), 0);
+    assert_eq!(reads.findlinks_ftt(&q), vec![]);
+    assert_eq!(reads.count_ftt(&q), 0);
     let q = FourSet {
         from: SlotSpec::Spans(Endset::empty()),
         ..FourSet::any()
     };
-    assert_eq!(lq.findlinks_ftt(&q), vec![]);
+    assert_eq!(reads.findlinks_ftt(&q), vec![]);
 
     // One constrained slot.
     let q_from = FourSet {
         from: SlotSpec::Spans(enc(&[ca(1)])),
         ..FourSet::any()
     };
-    assert_eq!(lq.findlinks_ftt(&q_from), vec![la(1), la2(1)]);
+    assert_eq!(reads.findlinks_ftt(&q_from), vec![la(1), la2(1)]);
     // Conjunction across slots (AND-of-ORs, M7's combiner).
     let q_both = FourSet {
         from: SlotSpec::Spans(enc(&[ca(1)])),
         to: SlotSpec::Spans(enc(&[ca(102)])),
         ..FourSet::any()
     };
-    assert_eq!(lq.findlinks_ftt(&q_both), vec![la2(1)]);
-    assert_eq!(lq.count_ftt(&q_both), 1);
+    assert_eq!(reads.findlinks_ftt(&q_both), vec![la2(1)]);
+    assert_eq!(reads.count_ftt(&q_both), 1);
 
     // Retraction shrinks the active slice: a found link stays found ONLY
     // absent retraction (FL-MON's hypothesis).
     store.nullify(SYS, &doc2(), &e1).expect("nullify succeeds");
-    assert_eq!(lq.findlinks_ftt(&q_from), vec![la2(1)]);
+    assert_eq!(reads.findlinks_ftt(&q_from), vec![la2(1)]);
 }
 
 /// §3 — the descriptor answers FL-EMP off its own slots, for all four of
@@ -102,7 +102,7 @@ fn ftt_hands_the_smallest_constraint_first_without_moving_the_answer() {
     let k = kernel();
     seed_content(&k, &doc1(), 2);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     link(&store, &doc1(), &[ca(1)], &[ca(2)]); // la(1): from ca(1), to ca(2)
     link(&store, &doc1(), &[ca(2)], &[ca(1)]); // la(2): the mirror
 
@@ -125,9 +125,9 @@ fn ftt_hands_the_smallest_constraint_first_without_moving_the_answer() {
     // Each descriptor names exactly one of the two links, and they are
     // different links: the endsets stayed with the slots they were written in
     // however the list was ordered on the way to M7.
-    assert_eq!(lq.findlinks_ftt(&wide_from), vec![la(1)]);
-    assert_eq!(lq.findlinks_ftt(&wide_to), vec![la(2)]);
-    assert_eq!(lq.count_ftt(&wide_from), 1);
+    assert_eq!(reads.findlinks_ftt(&wide_from), vec![la(1)]);
+    assert_eq!(reads.findlinks_ftt(&wide_to), vec![la(2)]);
+    assert_eq!(reads.count_ftt(&wide_from), 1);
 }
 
 /// §3 — Θ constrains like the other link slots: a descriptor naming a type
@@ -139,7 +139,7 @@ fn ftt_the_type_slot_answers_the_links_carrying_the_type() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]); // the suite's relation type
     let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
     let (claim, _) = store
@@ -150,16 +150,16 @@ fn ftt_the_type_slot_answers_the_links_carrying_the_type() {
         ty: SlotSpec::Spans(ty),
         ..FourSet::any()
     };
-    assert_eq!(lq.findlinks_ftt(&of_type(rel_ty())), vec![e1.clone(), e2]);
-    assert_eq!(lq.findlinks_ftt(&of_type(sup.clone())), vec![claim.clone()]);
-    assert_eq!(lq.count_ftt(&of_type(sup.clone())), 1);
+    assert_eq!(reads.findlinks_ftt(&of_type(rel_ty())), vec![e1.clone(), e2]);
+    assert_eq!(reads.findlinks_ftt(&of_type(sup.clone())), vec![claim.clone()]);
+    assert_eq!(reads.count_ftt(&of_type(sup.clone())), 1);
     let from_e1 = |ty: Endset| FourSet {
         from: SlotSpec::Spans(enc([&e1])),
         ty: SlotSpec::Spans(ty),
         ..FourSet::any()
     };
-    assert_eq!(lq.findlinks_ftt(&from_e1(sup)), vec![claim]);
-    assert_eq!(lq.findlinks_ftt(&from_e1(rel_ty())), vec![]);
+    assert_eq!(reads.findlinks_ftt(&from_e1(sup)), vec![claim]);
+    assert_eq!(reads.findlinks_ftt(&from_e1(rel_ty())), vec![]);
 }
 
 #[test]
@@ -167,7 +167,7 @@ fn ftt_home_filter_is_an_address_projection_applied_lazily() {
     let k = kernel();
     seed_content(&k, &doc1(), 2);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     link(&store, &doc1(), &[ca(2)], &[ca(101)]);
     link(&store, &doc2(), &[ca(1)], &[ca(102)]);
@@ -178,13 +178,13 @@ fn ftt_home_filter_is_an_address_projection_applied_lazily() {
         home: SlotSpec::Spans(enc(&[doc1()])),
         ..FourSet::any()
     };
-    assert_eq!(lq.findlinks_ftt(&q_home1), vec![la(1), la(2)]);
-    assert_eq!(lq.count_ftt(&q_home1), 2);
+    assert_eq!(reads.findlinks_ftt(&q_home1), vec![la(1), la(2)]);
+    assert_eq!(reads.count_ftt(&q_home1), 2);
     let q_home2 = FourSet {
         home: SlotSpec::Spans(enc(&[doc2()])),
         ..FourSet::any()
     };
-    assert_eq!(lq.findlinks_ftt(&q_home2), vec![la2(1)]);
+    assert_eq!(reads.findlinks_ftt(&q_home2), vec![la2(1)]);
 
     // home composes conjunctively with slot constraints.
     let q_h2_from = FourSet {
@@ -192,7 +192,7 @@ fn ftt_home_filter_is_an_address_projection_applied_lazily() {
         from: SlotSpec::Spans(enc(&[ca(1)])),
         ..FourSet::any()
     };
-    assert_eq!(lq.findlinks_ftt(&q_h2_from), vec![la2(1)]);
+    assert_eq!(reads.findlinks_ftt(&q_h2_from), vec![la2(1)]);
 
     // The home slot's zero admits nothing — FL-EMP for a slot that is never
     // carried into M7's conjunction, so the descriptor answers it alone.
@@ -201,17 +201,17 @@ fn ftt_home_filter_is_an_address_projection_applied_lazily() {
             home: zero,
             ..FourSet::any()
         };
-        assert_eq!(lq.findlinks_ftt(&q), vec![]);
-        assert_eq!(lq.count_ftt(&q), 0);
-        assert_eq!(lq.window_ftt(&q, None, 5).batch, vec![]);
+        assert_eq!(reads.findlinks_ftt(&q), vec![]);
+        assert_eq!(reads.count_ftt(&q), 0);
+        assert_eq!(reads.window_ftt(&q, None, 5).batch, vec![]);
     }
 
     // The home filter is applied lazily during the window walk: pagination
     // over the home-narrowed set with the same cursor mechanism.
-    let w1 = lq.window_ftt(&q_home1, None, 1);
+    let w1 = reads.window_ftt(&q_home1, None, 1);
     assert_eq!(w1.batch, vec![la(1)]);
     assert!(!w1.exhausted);
-    let w2 = lq.window_ftt(&q_home1, w1.next, 5);
+    let w2 = reads.window_ftt(&q_home1, w1.next, 5);
     assert_eq!(w2.batch, vec![la(2)]);
     assert!(w2.exhausted);
 }
@@ -227,7 +227,7 @@ fn ftt_home_is_prefix_coverage_not_address_equality() {
     let k = kernel();
     seed_content(&k, &doc1(), 2);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     link(&store, &doc1(), &[ca(2)], &[ca(101)]);
     link(&store, &doc2(), &[ca(1)], &[ca(102)]);
@@ -237,8 +237,8 @@ fn ftt_home_is_prefix_coverage_not_address_equality() {
         home: SlotSpec::Spans(enc(&[a(&[1, 0, 1])])),
         ..FourSet::any()
     };
-    assert_eq!(lq.findlinks_ftt(&account), vec![la(1), la(2), la2(1)]);
-    assert_eq!(lq.count_ftt(&account), 3);
+    assert_eq!(reads.findlinks_ftt(&account), vec![la(1), la(2), la2(1)]);
+    assert_eq!(reads.count_ftt(&account), 3);
 
     // And the relation has a direction: an address UNDER doc1 is not a prefix
     // of it, so its coverage names no link's home — a satisfiable request
@@ -248,7 +248,7 @@ fn ftt_home_is_prefix_coverage_not_address_equality() {
         ..FourSet::any()
     };
     assert!(!under.is_unsatisfiable(), "the request names something");
-    assert_eq!(lq.findlinks_ftt(&under), vec![]);
+    assert_eq!(reads.findlinks_ftt(&under), vec![]);
 }
 
 /// §3 — CN-ENUM: one `sat` consumed by every read-out, so the count, the
@@ -263,7 +263,7 @@ fn ftt_count_enumeration_and_window_read_out_one_sat() {
     let k = kernel();
     seed_content(&k, &doc1(), 2);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     link(&store, &doc1(), &[ca(2)], &[ca(101)]);
     link(&store, &doc2(), &[ca(1)], &[ca(102)]);
@@ -288,15 +288,15 @@ fn ftt_count_enumeration_and_window_read_out_one_sat() {
             ..FourSet::any()
         },
     ] {
-        let enumerated = lq.findlinks_ftt(&q);
-        assert_eq!(lq.count_ftt(&q), enumerated.len(), "count = |enum| for {q:?}");
+        let enumerated = reads.findlinks_ftt(&q);
+        assert_eq!(reads.count_ftt(&q), enumerated.len(), "count = |enum| for {q:?}");
 
         // The same set again, drained through the cursor at every batch size
         // from the clamp at 0 through one past the set, every page held to
         // what a returned window promises.
         for n in 0..=enumerated.len() + 1 {
             assert_eq!(
-                drain_window(n, enumerated.len() + 1, |cur| lq.window_ftt(&q, cur, n)),
+                drain_window(n, enumerated.len() + 1, |cur| reads.window_ftt(&q, cur, n)),
                 enumerated,
                 "the window drains sat for {q:?} at n = {n}"
             );
@@ -305,7 +305,7 @@ fn ftt_count_enumeration_and_window_read_out_one_sat() {
 
     // `n = 0` is clamped to 1 on this family too (W9 totality): the drains
     // above visit it, and this pins the one link it answers.
-    assert_eq!(lq.window_ftt(&FourSet::any(), None, 0).batch, vec![la(1)]);
+    assert_eq!(reads.window_ftt(&FourSet::any(), None, 0).batch, vec![la(1)]);
 }
 
 /// §3 — the two zeros ASN-0132 keeps apart: `count_v`'s D-ZERO asserts present
@@ -318,25 +318,25 @@ fn the_region_zero_and_the_descriptor_zero_assert_different_things() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     link(&store, &doc2(), &[ca(1)], &[ca(101)]);
 
     // D-ZERO: nothing reaches doc2's region — it arranges nothing.
-    assert_eq!(lq.count_v(&doc2(), &[vspan(1, 1, 5)]), Ok(0));
+    assert_eq!(reads.count_v(&doc2(), &[vspan(1, 1, 5)]), Ok(0));
     // CN-ZERO over the same link: the store's census finds it, unreachable or
     // not (CN-STAB — the descriptor family asks no arrangement question).
     let q_home2 = FourSet {
         home: SlotSpec::Spans(enc(&[doc2()])),
         ..FourSet::any()
     };
-    assert_eq!(lq.count_ftt(&q_home2), 1);
+    assert_eq!(reads.count_ftt(&q_home2), 1);
     // And CN-ZERO proper, over a home no link resides in: a store-wide
     // verdict, not present unreachability.
     let q_home_none = FourSet {
         home: SlotSpec::Spans(enc(&[unregistered_doc()])),
         ..FourSet::any()
     };
-    assert_eq!(lq.count_ftt(&q_home_none), 0);
+    assert_eq!(reads.count_ftt(&q_home_none), 0);
     assert!(!q_home_none.is_unsatisfiable()); // the request names something
 }
 
@@ -351,15 +351,15 @@ fn the_region_census_drops_when_content_leaves_while_the_descriptor_census_holds
     let k = kernel();
     seed_content(&k, &doc1(), 2);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     let region = [vspan(1, 1, 2)];
     let homed_here = FourSet {
         home: SlotSpec::Spans(enc(&[doc1()])),
         ..FourSet::any()
     };
-    assert_eq!(lq.count_v(&doc1(), &region), Ok(1));
-    assert_eq!(lq.count_ftt(&homed_here), 1);
+    assert_eq!(reads.count_v(&doc1(), &region), Ok(1));
+    assert_eq!(reads.count_ftt(&homed_here), 1);
 
     // The link's only witness in doc1 leaves the arrangement. The link is not
     // retracted, and it is still resident.
@@ -368,6 +368,6 @@ fn the_region_census_drops_when_content_leaves_while_the_descriptor_census_holds
         .expect("delete succeeds");
     assert!(k.snapshot().world().links().is_active(&la(1)));
 
-    assert_eq!(lq.count_v(&doc1(), &region), Ok(0)); // present unreachability
-    assert_eq!(lq.count_ftt(&homed_here), 1); // existence, unchanged
+    assert_eq!(reads.count_v(&doc1(), &region), Ok(0)); // present unreachability
+    assert_eq!(reads.count_ftt(&homed_here), 1); // existence, unchanged
 }

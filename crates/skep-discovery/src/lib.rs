@@ -60,12 +60,6 @@
 //! the preview still answers — a gap, stated on the preview, and not a
 //! decision.
 //!
-//! M8 does almost no span algebra — and never the level-gated kind:
-//! coverage-overlap matching goes through M7, I→V through M5, query endsets
-//! through `Run::iextent` + `Endset::from_spans`; the lone pointwise span
-//! comparison is `addressably_discoverable_from`'s level-gate-free
-//! `classify_spans` touch test (§5).
-//!
 //! ## The home rule
 //!
 //! A second narrowing, by READER where the first is by view: THE HOME RULE
@@ -132,13 +126,11 @@
 //!
 //! A HARNESS caller — one answering for no reader class, as the engine's
 //! cross-store lifecycle test and this crate's suite do — passes the TOTAL
-//! predicate, admitting every home, visibly at its call site: to a `*_on`
-//! read, or to [`LinkQuery::new`], which binds the reader its caller names as
-//! M7's `LinkWriter` binds its visibility class. Naming no reader class is
-//! not reading as the guest: a request that carries no principal reads at
-//! the GUEST class (PUB-1.31 with no principal — published documents alone)
-//! and passes that class's predicate, as M10 does for every unbound session.
-//! The total predicate is never a request's.
+//! predicate, admitting every home, and writes it where it reads. Naming no
+//! reader class is not reading as the guest: a request that carries no
+//! principal reads at the GUEST class (PUB-1.31 with no principal —
+//! published documents alone) and passes that class's predicate, as M10 does
+//! for every unbound session. The total predicate is never a request's.
 //!
 //! ## Budgets
 //!
@@ -225,25 +217,22 @@
 //! lock-key space tag; it contributes nothing to the assembled `World` and
 //! names neither `World` nor `Record` — a pure consumer of
 //! [`DiscoveryWorld`], generic over `W` (Engine Composition Contract).
-//! Consumed only by M10, which reaches every read through the pure `*_on`
-//! twins: M10 pins ONE snapshot per request and reports its position as
-//! `as_of`, neither of which the self-snapshotting [`LinkQuery`] handle can
-//! serve, since its snapshot is taken and dropped inside the call, so the
-//! answer could not be labelled with the state it came from. The handle
-//! serves callers reading current state without naming it, under the reader
-//! they bind it to.
+//! Consumed only by M10, which pins ONE snapshot per request, hands it to
+//! every read, and reports its position as `as_of`.
 //!
-//! The twins are free functions over a borrowed `&Snapshot<W>` — the dialect
+//! Every read is a free function over a borrowed `&Snapshot<W>` — the dialect
 //! M1, M4 and M5 use for pure reads over borrowed state, and the one that
-//! keeps the snapshot the caller's to name. Nothing is bound to a snapshot
-//! here, so nothing has a coordinate of its own to disagree with M10's
-//! `as_of`.
+//! keeps the snapshot the caller's to name. M8 takes no snapshot of its own,
+//! so no answer carries a coordinate that could disagree with the caller's,
+//! and two reads handed one snapshot answer about one state — which every
+//! identity stated "under the same `readable`" needs as well. A caller
+//! reading current state hands each read `&kernel.snapshot()`; doing that
+//! twice reads two states.
 
 #![forbid(unsafe_code)]
 
 mod budget;
 mod descriptor;
-mod handle;
 mod home;
 mod lineage;
 mod pointwise;
@@ -254,7 +243,6 @@ mod types;
 
 pub use budget::{MAX_ENDSET_SPANS, MAX_IMAGE_RUNS};
 pub use descriptor::{count_ftt_on, findlinks_ftt_on, window_ftt_on};
-pub use handle::LinkQuery;
 pub use lineage::{in_claims_on, out_claims_on};
 pub use pointwise::{addressably_discoverable_from_on, project_on};
 pub use region::{
@@ -295,9 +283,7 @@ impl<W: WorldState + HasLinks + HasM5 + HasM3> DiscoveryWorld for W {}
 /// swap to the `Rc`-backed `im-rc` would revoke it with nothing here failing
 /// to build. This is where that fails to compile instead.
 ///
-/// [`Cursor`] is an alias for `Option<Address>` — M1's promise, not M8's — and
-/// [`LinkQuery`] is generic over `W` and borrows the kernel and its reader, so
-/// it is neither `'static` nor a concrete witness to assert.
+/// [`Cursor`] is an alias for `Option<Address>` — M1's promise, not M8's.
 const _: fn() = || {
     fn owed<T: Send + Sync + 'static>() {}
     owed::<FourSet>();

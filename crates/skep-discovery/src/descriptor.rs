@@ -132,17 +132,14 @@ pub fn count_ftt_on<W: DiscoveryWorld>(
 /// skipped or duplicated (W4/W5). A caller relaying a cursor from a request
 /// owes it no validation.
 ///
-/// The one place `sat` is spelled apart rather than composed: the window
-/// seeks by key — `range` strictly past the cursor — which the candidate SET
-/// supports and [`satisfying`]'s filtered sequence does not, so it walks
-/// [`candidates`] itself and applies the same residence post-filter LAZILY in
-/// its `keep`. The links this pages over are exactly the ones
-/// [`findlinks_ftt_on`] returns under the same `readable`, given the
-/// predicate's contract the crate header states.
+/// The links this pages over are exactly the ones [`findlinks_ftt_on`]
+/// returns under the same `readable`, given the predicate's contract the
+/// crate header states.
 ///
-/// The home rule (PUB round 2, lane 3.3, §3) joins the residence post-filter
-/// in the lazy `keep`, so a link it refuses is skipped before the window
-/// slice (PUB-6.14), never counted against `n`.
+/// The home rule (PUB round 2, lane 3.3, §3) is applied LAZILY during the
+/// key-cut, beside the residence post-filter and BEFORE the window slice
+/// (PUB-6.14), so a link it refuses is skipped rather than counted against
+/// `n`.
 pub fn window_ftt_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     q: &FourSet,
@@ -150,6 +147,11 @@ pub fn window_ftt_on<W: DiscoveryWorld>(
     n: usize,
     readable: &dyn Fn(&Address) -> bool,
 ) -> Window {
+    // The one place `sat` is spelled apart rather than composed: the window
+    // seeks by key — `range` strictly past the cursor — which the candidate
+    // SET supports and `satisfying`'s filtered sequence does not, so it walks
+    // `candidates` itself and applies the same residence post-filter LAZILY
+    // in its `keep`.
     let cand = candidates(s.world().links(), q);
     window_over(&cand, cur, n, |a| q.at_home(a) && home_readable(readable, a))
 }

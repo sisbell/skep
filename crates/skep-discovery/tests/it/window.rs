@@ -5,7 +5,7 @@ use crate::common;
 
 use common::*;
 use skep_arrangement::Vstream;
-use skep_discovery::{window_ftt_on, window_v_on, FourSet, LinkQuery, SlotSpec};
+use skep_discovery::{window_ftt_on, window_v_on, FourSet, SlotSpec};
 use skep_links::{enc, HasLinks, LinkWriter};
 
 /// §2 — the key-cut pages, and its cursor survives its link's departure from
@@ -21,7 +21,7 @@ fn window_v_pages_by_key_cut_and_survives_orphaning() {
     let k = kernel();
     seed_content(&k, &doc1(), 2); // V 1..2 → ca(1..2)
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     link(&store, &doc1(), &[ca(1)], &[ca(101)]); // la(1): position 1
     link(&store, &doc1(), &[ca(2)], &[ca(102)]); // la(2): position 2 alone
     link(&store, &doc1(), &[ca(1)], &[ca(103)]); // la(3): position 1
@@ -30,23 +30,23 @@ fn window_v_pages_by_key_cut_and_survives_orphaning() {
 
     // Ascending address order; next = ≺-max of the batch; full batch ⇒ not
     // exhausted.
-    let w1 = lq.window_v(&doc1(), &region, None, 2).expect("window");
+    let w1 = reads.window_v(&doc1(), &region, None, 2).expect("window");
     assert_eq!(w1.batch, vec![la(1), la(2)]);
     assert_eq!(w1.next, Some(la(2)));
     assert!(!w1.exhausted);
     // Resume strictly past the cursor; short batch ⇒ exhausted (W9).
-    let w2 = lq.window_v(&doc1(), &region, w1.next, 3).expect("window");
+    let w2 = reads.window_v(&doc1(), &region, w1.next, 3).expect("window");
     assert_eq!(w2.batch, vec![la(3), la(4)]);
     assert_eq!(w2.next, Some(la(4)));
     assert!(w2.exhausted);
     // Past the end: empty batch, cursor unchanged, still exhausted.
-    let w3 = lq.window_v(&doc1(), &region, w2.next, 2).expect("window");
+    let w3 = reads.window_v(&doc1(), &region, w2.next, 2).expect("window");
     assert_eq!(w3.batch, vec![]);
     assert_eq!(w3.next, Some(la(4)));
     assert!(w3.exhausted);
 
     // n = 0 is clamped to 1 (total API) — never a false non-terminal.
-    let w0 = lq.window_v(&doc1(), &region, None, 0).expect("window");
+    let w0 = reads.window_v(&doc1(), &region, None, 0).expect("window");
     assert_eq!(w0.batch, vec![la(1)]);
     assert!(!w0.exhausted);
 
@@ -61,10 +61,10 @@ fn window_v_pages_by_key_cut_and_survives_orphaning() {
         "orphaned, not retracted"
     );
     assert_eq!(
-        lq.findlinks_v(&doc1(), &region),
+        reads.findlinks_v(&doc1(), &region),
         Ok(vec![la(1), la(3), la(4)])
     );
-    let w4 = lq.window_v(&doc1(), &region, Some(la(2)), 5).expect("window");
+    let w4 = reads.window_v(&doc1(), &region, Some(la(2)), 5).expect("window");
     assert_eq!(w4.batch, vec![la(3), la(4)]);
     assert!(w4.exhausted);
 
@@ -72,7 +72,7 @@ fn window_v_pages_by_key_cut_and_survives_orphaning() {
     // the set with its content mapping intact, and the resume past it needs
     // no lookup of it either.
     store.nullify(SYS, &doc2(), &la(3)).expect("nullify succeeds");
-    let w5 = lq.window_v(&doc1(), &region, Some(la(3)), 5).expect("window");
+    let w5 = reads.window_v(&doc1(), &region, Some(la(3)), 5).expect("window");
     assert_eq!(w5.batch, vec![la(4)]);
     assert!(w5.exhausted);
 }
@@ -86,7 +86,7 @@ fn window_ftt_resumes_past_a_cursor_whose_link_was_retracted() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     for to in [ca(101), ca(102), ca(103)] {
         link(&store, &doc1(), &[ca(1)], &[to]); // la(1..=3)
     }
@@ -95,15 +95,15 @@ fn window_ftt_resumes_past_a_cursor_whose_link_was_retracted() {
         home: SlotSpec::Spans(enc(&[doc1()])),
         ..FourSet::any()
     };
-    let w1 = lq.window_ftt(&homed_here, None, 2);
+    let w1 = reads.window_ftt(&homed_here, None, 2);
     assert_eq!(w1.batch, vec![la(1), la(2)]);
     store.nullify(SYS, &doc2(), &la(2)).expect("nullify succeeds");
     assert_eq!(
-        lq.findlinks_ftt(&homed_here),
+        reads.findlinks_ftt(&homed_here),
         vec![la(1), la(3)],
         "la(2) has left the set"
     );
-    let w2 = lq.window_ftt(&homed_here, w1.next, 5);
+    let w2 = reads.window_ftt(&homed_here, w1.next, 5);
     assert_eq!(w2.batch, vec![la(3)]);
     assert!(w2.exhausted);
 }
@@ -158,19 +158,19 @@ fn a_pass_misses_a_link_minted_behind_its_cursor() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     let first = link(&store, &doc1(), &[ca(1)], &[ca(101)]); // la(1)
     let theirs = link(&store, &doc2(), &[ca(1)], &[ca(102)]); // la2(1)
-    let page = lq.window_ftt(&FourSet::any(), None, 2);
+    let page = reads.window_ftt(&FourSet::any(), None, 2);
     assert_eq!(page.batch, vec![first, theirs.clone()]);
     assert!(!page.exhausted);
 
     let behind = link(&store, &doc1(), &[ca(1)], &[ca(103)]); // la(2)
     assert!(behind < theirs, "minted after the page, sorted behind its cursor");
-    let rest = lq.window_ftt(&FourSet::any(), page.next, 2);
+    let rest = reads.window_ftt(&FourSet::any(), page.next, 2);
     assert!(rest.batch.is_empty() && rest.exhausted, "the pass ends: {rest:?}");
     assert!(
-        lq.findlinks_ftt(&FourSet::any()).contains(&behind),
+        reads.findlinks_ftt(&FourSet::any()).contains(&behind),
         "it exists when the pass ends"
     );
 }
@@ -189,7 +189,7 @@ fn region_count_enumeration_and_window_read_out_one_selection_index() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     // Varied slot reach, so the regions below select different subsets …
     for (from, to) in [
         (ca(1), ca(101)),
@@ -207,7 +207,7 @@ fn region_count_enumeration_and_window_read_out_one_selection_index() {
     // The law is not vacuous: the wide region selects all four live links and
     // none of the retracted one.
     assert_eq!(
-        lq.findlinks_v(&doc1(), &[vspan(1, 1, 3)]),
+        reads.findlinks_v(&doc1(), &[vspan(1, 1, 3)]),
         Ok(vec![la(1), la(2), la(3), la(4)])
     );
 
@@ -218,13 +218,13 @@ fn region_count_enumeration_and_window_read_out_one_selection_index() {
         vec![vspan(1, 1, 3)],
         vec![vspan(1, 1, 1), vspan(1, 3, 1)],
     ] {
-        let enumerated = lq.findlinks_v(&doc1(), &region).expect("findlinks_v");
+        let enumerated = reads.findlinks_v(&doc1(), &region).expect("findlinks_v");
         assert!(
             !enumerated.contains(&dead),
             "a nullified link never surfaces: {region:?}"
         );
         assert_eq!(
-            lq.count_v(&doc1(), &region),
+            reads.count_v(&doc1(), &region),
             Ok(enumerated.len()),
             "count = |enum| for {region:?}"
         );
@@ -235,7 +235,7 @@ fn region_count_enumeration_and_window_read_out_one_selection_index() {
         // a drain of `len` links owes at most `len + 1` pages.
         for n in 0..=enumerated.len() + 1 {
             let drained = drain_window(n, enumerated.len() + 1, |cur| {
-                lq.window_v(&doc1(), &region, cur, n).expect("window")
+                reads.window_v(&doc1(), &region, cur, n).expect("window")
             });
             assert_eq!(
                 drained, enumerated,

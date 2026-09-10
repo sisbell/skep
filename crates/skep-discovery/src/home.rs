@@ -14,7 +14,7 @@ pub(crate) fn home_of(a: &Address) -> Address {
     document_of(a).expect("a link address has zeros = 3, so its origin Document exists")
 }
 
-/// THE HOME RULE (§3, PUB-6.13): may the reader read `a`'s home? The home
+/// THE HOME RULE (PUB-6.13): may the reader read `a`'s home? The home
 /// projection composed with the caller's predicate, in one place, because
 /// `readable` answers about a DOCUMENT and every question the rule answers
 /// here is asked about a LINK. Asked directly of the link it would answer

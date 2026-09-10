@@ -97,12 +97,7 @@ fn content_vspan_at(ordinal: &Nat, count: &Nat) -> Span {
 /// `orphaned = findlinks(A_del) ∖ findlinks(retained)` where `retained` =
 /// the prefix + suffix content that survives plus the link runs (a text
 /// delete never touches links) — the last-witness condition with no per-pair
-/// reasoning. Both sides stab the ACTIVE view. The relative complement is
-/// walked from the DELETED side — a link touching what goes is kept unless
-/// the retained side also holds it — NEVER `im`'s `difference`, which is
-/// SYMMETRIC and would fold in the plainly-surviving links, and not `im`'s
-/// `relative_complement`, which walks its argument, the retained side,
-/// through `im`'s copying consuming iterator. The global-ghost determination
+/// reasoning. Both sides stab the ACTIVE view. The global-ghost determination
 /// (LP17 — discoverable from NO document) reaches provenance R and is M6
 /// territory; M8 stops at the per-document set.
 ///
@@ -161,11 +156,17 @@ pub fn delete_orphans_on<W: DiscoveryWorld>(
     }
     let touching_deleted = stab_runs(w.links(), &a_del);
     let touching_retained = stab_runs(w.links(), &retained);
+    // The relative complement is walked from the DELETED side — a link
+    // touching what goes is kept unless the retained side also holds it —
+    // NEVER `im`'s `difference`, which is SYMMETRIC and would fold in the
+    // plainly-surviving links, and not `im`'s `relative_complement`, which
+    // walks its argument, the retained side, through `im`'s copying consuming
+    // iterator.
     Ok(OrphanReport {
         orphaned: touching_deleted
             .iter()
             .filter(|&a| !touching_retained.contains(a)) // the relative complement, from the deleted side
-            .filter(|&a| home_readable(readable, a)) // §3 — drop unreadable-home orphans
+            .filter(|&a| home_readable(readable, a)) // PUB-6.13 — drop unreadable-home orphans
             .cloned()
             .collect(),
     })

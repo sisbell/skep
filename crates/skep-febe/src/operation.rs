@@ -755,13 +755,12 @@ where
     /// remembering to do it.
     ///
     /// With the snapshot in hand the arms reach only the snapshot-based
-    /// surfaces: `Query::new` for M6, and M8's pure `*_on` twins rather than
-    /// the self-snapshotting `LinkQuery` handle (Conflicts resolved #5),
-    /// whose second snapshot would answer from one position while `as_of`
-    /// named another. Reads hold no lock against writers, are zero-step
-    /// (A1), and have no commit-before-ack obligation. No principal, no
-    /// session. Exhaustive over `Op` with the complementary (write) half as
-    /// one explicit rejecting |-list — see `dispatch_write`.
+    /// surfaces: `Query::new` for M6, and M8's `*_on` reads over that same
+    /// snapshot (Conflicts resolved #5), so no answer comes from a position
+    /// other than the one `as_of` names. Reads hold no lock against writers,
+    /// are zero-step (A1), and have no commit-before-ack obligation. No
+    /// principal, no session. Exhaustive over `Op` with the complementary
+    /// (write) half as one explicit rejecting |-list — see `dispatch_write`.
     fn dispatch_read(&self, op: Op, principal: Option<PrincipalId>) -> Result<Response, Rejection> {
         let kind = op.kind();
         let snap = self.stores.kernel().snapshot();
@@ -880,8 +879,8 @@ where
                     .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Addrs { addrs, as_of })
             }
-            // ── link discovery reads (→ M8, §2): always the pure *_on twins
-            //    over M10's one snapshot, never the self-snapshotting handle.
+            // ── link discovery reads (→ M8, §2): M8's *_on reads over M10's
+            //    one snapshot.
             Op::Image { d, region } => {
                 let runs = image_on(&snap, &d, &region).map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Runs { runs, as_of })

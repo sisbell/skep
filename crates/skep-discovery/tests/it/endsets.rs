@@ -4,7 +4,7 @@
 use crate::common;
 
 use common::*;
-use skep_discovery::{LinkQuery, QueryError, FROM, MAX_ENDSET_SPANS, TO, TYPE};
+use skep_discovery::{QueryError, FROM, MAX_ENDSET_SPANS, TO, TYPE};
 use skep_links::{enc, Endset, LinkWriter, SlotArg, MAX_SLOT_SPANS};
 
 #[test]
@@ -12,7 +12,7 @@ fn retrieve_endsets_withholds_identity_and_ships_whole_endsets_in_pinned_order()
     let k = kernel();
     seed_content(&k, &doc1(), 3);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     // Two distinct links with VALUE-IDENTICAL from-endsets (dedup collapse),
     // plus one makelink whose from spans all three positions.
     link(&store, &doc1(), &[ca(1)], &[ca(101)]);
@@ -33,7 +33,7 @@ fn retrieve_endsets_withholds_identity_and_ships_whole_endsets_in_pinned_order()
     // fixtures' enc({ca1}) at position 1, the resolved makelink's TO at 3 and
     // TYPE at 1) are Adjacent to the image — not matches.
     assert_eq!(
-        lq.retrieve_endsets(&doc1(), &[vspan(1, 2, 1)]),
+        reads.retrieve_endsets(&doc1(), &[vspan(1, 2, 1)]),
         Ok(vec![(FROM, whole.clone())])
     );
 
@@ -41,7 +41,7 @@ fn retrieve_endsets_withholds_identity_and_ships_whole_endsets_in_pinned_order()
     // ONE (FROM, enc({ca1})) pair (RE-UNIT) — and the output order is pinned:
     // slot, then lexicographic span-sequence.
     assert_eq!(
-        lq.retrieve_endsets(&doc1(), &[vspan(1, 1, 3)]),
+        reads.retrieve_endsets(&doc1(), &[vspan(1, 1, 3)]),
         Ok(vec![
             (FROM, enc(&[ca(1)])),
             (FROM, whole),
@@ -64,7 +64,7 @@ fn retrieve_endsets_orders_pairs_that_tie_on_every_key_but_the_last() {
     let k = kernel();
     seed_content(&k, &doc1(), 8); // one run: V 1..8 → ca(1..8)
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     for w in 1..=8 {
         store
             .makelink(
@@ -87,7 +87,7 @@ fn retrieve_endsets_orders_pairs_that_tie_on_every_key_but_the_last() {
         .collect();
     for _ in 0..2 {
         assert_eq!(
-            lq.retrieve_endsets(&doc1(), &[vspan(1, 1, 1)]),
+            reads.retrieve_endsets(&doc1(), &[vspan(1, 1, 1)]),
             Ok(expected.clone())
         );
     }
@@ -108,7 +108,7 @@ fn retrieve_endsets_refuses_an_answer_past_the_span_budget() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     let region = [vspan(1, 1, 1)];
     assert!(SPANS as usize <= MAX_SLOT_SPANS, "each slot is in M7's budget");
     for i in 0..at_budget as u32 {
@@ -116,19 +116,19 @@ fn retrieve_endsets_refuses_an_answer_past_the_span_budget() {
     }
 
     // At the budget: one pair per link, each endset WHOLE, none clipped.
-    let pairs = lq.retrieve_endsets(&doc1(), &region).expect("at budget");
+    let pairs = reads.retrieve_endsets(&doc1(), &region).expect("at budget");
     assert_eq!(pairs.len(), at_budget);
     assert!(pairs.iter().all(|(i, e)| *i == FROM && e.len() == SPANS as usize));
 
     // One span more, and the answer is refused rather than shortened.
     link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     assert_eq!(
-        lq.retrieve_endsets(&doc1(), &region),
+        reads.retrieve_endsets(&doc1(), &region),
         Err(QueryError::EndsetsTooLarge)
     );
     // The region family's other read-outs carry no such budget: they enumerate
     // ADDRESSES, whose size is the link count and not the endsets'.
-    assert_eq!(lq.count_v(&doc1(), &region), Ok(at_budget + 1));
+    assert_eq!(reads.count_v(&doc1(), &region), Ok(at_budget + 1));
 }
 
 /// §4 — the span budget prices what the answer CARRIES: links sharing one
@@ -142,19 +142,19 @@ fn retrieve_endsets_prices_the_collapsed_answer_not_the_links_behind_it() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     let shared = wide_from(0, SPANS);
     for i in 0..links as u32 {
         link(&store, &doc1(), &shared, &[ca(101 + i)]);
     }
     let region = [vspan(1, 1, 1)];
     assert_eq!(
-        lq.count_v(&doc1(), &region),
+        reads.count_v(&doc1(), &region),
         Ok(links),
         "every link touches the region"
     );
     assert_eq!(
-        lq.retrieve_endsets(&doc1(), &region),
+        reads.retrieve_endsets(&doc1(), &region),
         Ok(vec![(FROM, enc(&shared))])
     );
 }
@@ -168,11 +168,11 @@ fn retrieve_endsets_answers_a_region_two_maximal_endsets_touch() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let lq = LinkQuery::new(&k, &every_home);
+    let reads = Reads(&k);
     for i in 0..2 {
         link(&store, &doc1(), &wide_from(i, MAX_SLOT_SPANS as u32), &[ca(101)]);
     }
-    let pairs = lq
+    let pairs = reads
         .retrieve_endsets(&doc1(), &[vspan(1, 1, 1)])
         .expect("inside the answer budget");
     assert_eq!(pairs.len(), 2);

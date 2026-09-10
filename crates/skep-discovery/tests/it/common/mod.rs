@@ -1,8 +1,9 @@
 //! Shared test scaffolding: a minimal engine-side world (the composition
 //! contract's assembler role, in miniature) over M3 + M4 + M5 + M7 — exactly
 //! the bound M8 queries under, plus M4 so INSERT can arrange content — its
-//! address/type fixtures, and the window law and wide endset more than one
-//! family reads. Addresses follow M3's minted shapes: account
+//! address/type fixtures, the suite's reads of its current state, and the
+//! window law and wide endset more than one family reads. Addresses follow
+//! M3's minted shapes: account
 //! `[1,0,1]`, documents `[1,0,1,0,d]`, content elements `[doc·0·1·k]`, link
 //! elements `[doc·0·2·k]`; the five reserved type addresses are the compiled
 //! ghost tumblers (`ReservedAddrs::format` — owner ruling, 2026-08-26).
@@ -11,13 +12,18 @@
 
 
 use serde::{Deserialize, Serialize};
-use skep_address::{validate, Address, Nat, Span, Tumbler};
+use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{reading_surface, HasM5, M5Rec, M5State, Run, VPos, VSpec};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
-use skep_discovery::{Cursor, Window};
+use skep_discovery::{
+    addressably_discoverable_from_on, count_ftt_on, count_v_on, delete_orphans_on,
+    findlinks_ftt_on, findlinks_v_on, image_on, in_claims_on, out_claims_on, project_on,
+    retrieve_endsets_on, window_ftt_on, window_v_on, Cursor, FourSet, OrphanError, OrphanReport,
+    QueryError, SupClaim, Window,
+};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, WorldState};
 use skep_links::{
-    enc, Endset, HasLinks, LinkRec, LinkState, LinkWriter, SlotArg,
+    enc, Endset, HasLinks, LinkRec, LinkState, LinkWriter, SlotArg, View,
 };
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 
@@ -375,6 +381,89 @@ pub fn published_world() -> Kernel<World> {
     assert_eq!(head, phead(), "the chain's first member");
     seed_published_content(&k, &pdoc(), 2); // the head's V 3..4, and nowhere else
     k
+}
+
+// ───────────────────────────── the suite's reads ────────────────────────────
+
+/// The suite's reads of the kernel's CURRENT state under the total
+/// predicate: each method takes one fresh snapshot and hands it, with
+/// [`every_home`], to the M8 read of the same name, so two calls read two
+/// states. A harness's convenience — which is why it lives here and M8
+/// publishes none.
+#[derive(Clone, Copy)]
+pub struct Reads<'k>(pub &'k Kernel<World>);
+
+impl Reads<'_> {
+    pub fn image(&self, d: &Address, region: &[Span]) -> Result<Vec<Run>, QueryError> {
+        image_on(&self.0.snapshot(), d, region)
+    }
+
+    pub fn findlinks_v(&self, d: &Address, region: &[Span]) -> Result<Vec<Address>, QueryError> {
+        findlinks_v_on(&self.0.snapshot(), d, region, &every_home)
+    }
+
+    pub fn count_v(&self, d: &Address, region: &[Span]) -> Result<usize, QueryError> {
+        count_v_on(&self.0.snapshot(), d, region, &every_home)
+    }
+
+    pub fn window_v(
+        &self,
+        d: &Address,
+        region: &[Span],
+        cur: Cursor,
+        n: usize,
+    ) -> Result<Window, QueryError> {
+        window_v_on(&self.0.snapshot(), d, region, cur, n, &every_home)
+    }
+
+    pub fn retrieve_endsets(
+        &self,
+        d: &Address,
+        region: &[Span],
+    ) -> Result<Vec<(usize, Endset)>, QueryError> {
+        retrieve_endsets_on(&self.0.snapshot(), d, region, &every_home)
+    }
+
+    pub fn findlinks_ftt(&self, q: &FourSet) -> Vec<Address> {
+        findlinks_ftt_on(&self.0.snapshot(), q, &every_home)
+    }
+
+    pub fn count_ftt(&self, q: &FourSet) -> usize {
+        count_ftt_on(&self.0.snapshot(), q, &every_home)
+    }
+
+    pub fn window_ftt(&self, q: &FourSet, cur: Cursor, n: usize) -> Window {
+        window_ftt_on(&self.0.snapshot(), q, cur, n, &every_home)
+    }
+
+    pub fn project(&self, a: &Address, slot: usize, d: &Address) -> Result<SpanSet, QueryError> {
+        project_on(&self.0.snapshot(), a, slot, d, &every_home)
+    }
+
+    pub fn addressably_discoverable_from(
+        &self,
+        a: &Address,
+        d: &Address,
+    ) -> Result<bool, QueryError> {
+        addressably_discoverable_from_on(&self.0.snapshot(), a, d, &every_home)
+    }
+
+    pub fn delete_orphans(
+        &self,
+        d: &Address,
+        p: &VPos,
+        width: &Nat,
+    ) -> Result<OrphanReport, OrphanError> {
+        delete_orphans_on(&self.0.snapshot(), d, p, width, &every_home)
+    }
+
+    pub fn in_claims(&self, y: &Address, v: View) -> Vec<SupClaim> {
+        in_claims_on(&self.0.snapshot(), y, v, &every_home)
+    }
+
+    pub fn out_claims(&self, x: &Address, v: View) -> Vec<SupClaim> {
+        out_claims_on(&self.0.snapshot(), x, v, &every_home)
+    }
 }
 
 // ───────────────────── the window law and a wide endset ─────────────────────

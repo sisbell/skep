@@ -9,35 +9,28 @@ description = "M8 — Link Query & Discovery: the read-only query/presentation l
 readme = "README.md"
 
 [dependencies]
-# The internal result-set carrier: M7's §G primitives return im::OrdSet<Tumbler>
-# (address order = ASN-0108's permanent enumeration key), and M8 set-operates on
-# it (union / relative_complement / range) before converting to Vec<Address> at
-# the output boundary. M8 serializes nothing, so no serde feature is needed.
+# The result-set carrier: M7's link reads return im::OrdSet<Address> (address
+# order = ASN-0108's permanent enumeration key), which M8 walks, pages, probes
+# and unions as OrdSets, turning them into Vec<Address> only at the output
+# boundary; src/sets.rs states how the sets are walked. M8 serializes nothing,
+# so no serde feature is needed.
 im.workspace = true
 # Nat::one()/is_zero() are trait fns the delete-orphan ordinal math keeps in
 # scope, and to_usize the one the image's walk budget reads a span's reach
 # through.
 num-traits.workspace = true
-# M1 — the value calculus: Tumbler order (the cursor cut), validate (the §G
-# Tumbler → Address lift), document_of (home projection), content_subspace
-# (the s_C numeral, named where T7 is owned), classify_spans (the one pointwise
-# touch test). M8 holds no address algebra of its own.
+# M1 — the value calculus. M8 holds no address algebra of its own.
 skep-address = { path = "../skep-address" }
 # M2 — one snapshot per operation; M8 writes nothing and owns no ordering,
 # durability, or recovery.
 skep-kernel = { path = "../skep-kernel" }
-# M3 — is_registered_document, the document-existence gate on every V-anchored op.
+# M3 — the document-existence gate every read that names a document asks first.
 skep-namespace = { path = "../skep-namespace" }
-# M5 — resolve (V→I image), project (I→V content), content/link runs and counts
-# (discoverability, the delete-orphan what-if, and the run count the image's
-# walk budget takes past a deep region), reading_surface (the one
-# head-float pin, which every arrangement read but the delete-orphan preview
-# routes through), and both halves of the ordinal V-span shape (is_ordinal_vspan
-# gates the region, ordinal_vspan builds the preview's spans), so the shape M8
-# asks with is the shape M5 reads. M8 never reads R.
+# M5 — the arrangement M8 resolves through, counts the runs of, and projects
+# into; the head-float pin; and the ordinal V-span shape the region gate asks
+# with. M8 never reads R.
 skep-arrangement = { path = "../skep-arrangement" }
-# M7 — stab/match_links/type_slice (the matcher M8 presents, never reimplements),
-# readlink/followlink, is_active, reserved_type(Supersedes), enc/Endset.
+# M7 — the link store and the matcher M8 presents and never reimplements.
 skep-links = { path = "../skep-links" }
 
 [dev-dependencies]

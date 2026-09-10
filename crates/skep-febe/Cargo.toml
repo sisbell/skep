@@ -41,8 +41,8 @@ skep-retrieval = { path = "../skep-retrieval" }
 # M7 — the five link writes via the LinkWriter driver; readlink/followlink off a
 # snapshot; Endset/enc/Link/View for argument construction.
 skep-links = { path = "../skep-links" }
-# M8 — the pure *_on twins for every discovery/window/projection/orphan/lineage
-# read, so M10 owns the snapshot and reports as_of (design, Conflicts #5).
+# M8 — the *_on reads, each over the snapshot M10 hands it, so M10 owns the
+# snapshot and reports as_of (design, Conflicts #5).
 skep-discovery = { path = "../skep-discovery" }
 
 [dev-dependencies]

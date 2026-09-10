@@ -26,14 +26,15 @@ use crate::{FROM, TO, TYPE};
 
 /// The slots a v1 link has: every v1 link-creation path deposits an arity-3
 /// link, so a disjunction over these three is exact over ALL slots and a
-/// per-slot read misses nothing (§1). Nothing in M8 can check that — `stab`
+/// per-slot read misses nothing. Nothing in M8 can check that — `stab`
 /// is per-slot and M8 owns no index — so it is stated once, here, and every
 /// slot-indexed read reaches the store through this list.
 pub(crate) const V1_SLOTS: [usize; 3] = [FROM, TO, TYPE];
 
 /// The links whose coverage overlaps `runs`, PAIRED with the slot each set
-/// was stabbed at and kept SEPARATE (slot attribution reads them — §4), so
-/// no consumer re-derives which position means which numeral.
+/// was stabbed at and kept SEPARATE (slot attribution reads them —
+/// [`crate::retrieve_endsets_on`]), so no consumer re-derives which position
+/// means which numeral.
 /// `View::Active` discharges addressability — nullified links never match.
 ///
 /// The lift from arrangement runs to M7's query `Endset` lives here, so every

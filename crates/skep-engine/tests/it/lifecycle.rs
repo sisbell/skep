@@ -11,7 +11,7 @@ use crate::common;
 use common::*;
 use skep_address::Address;
 use skep_content::Val;
-use skep_discovery::LinkQuery;
+use skep_discovery::findlinks_v_on;
 use skep_engine::{Engine, World};
 use skep_links::{HasLinks, SlotArg};
 use skep_retrieval::{Query, Spec};
@@ -82,9 +82,9 @@ fn a_cross_store_lifecycle_survives_a_journal_reopen() {
         assert!(link_seq > insert_seq, "commit order is monotone across stores");
 
         // M8: the link is discoverable from the home document's region…
-        let found_in_home = LinkQuery::new(engine.kernel(), &every_home)
-            .findlinks_v(&doc, &[vspan(1, 1, 3)])
-            .expect("findlinks succeeds");
+        let found_in_home =
+            findlinks_v_on(&engine.kernel().snapshot(), &doc, &[vspan(1, 1, 3)], &every_home)
+                .expect("findlinks succeeds");
         assert!(found_in_home.contains(&link), "the fresh link is discoverable from its home");
 
         // …and M7's raw read returns it verbatim.
@@ -107,9 +107,13 @@ fn a_cross_store_lifecycle_survives_a_journal_reopen() {
 
         // The same I-addresses arranged in the version make the link
         // discoverable from it too — cross-store transclusion discovery.
-        let found_in_version = LinkQuery::new(engine.kernel(), &every_home)
-            .findlinks_v(&version_doc, &[vspan(1, 1, 3)])
-            .expect("findlinks over the version succeeds");
+        let found_in_version = findlinks_v_on(
+            &engine.kernel().snapshot(),
+            &version_doc,
+            &[vspan(1, 1, 3)],
+            &every_home,
+        )
+        .expect("findlinks over the version succeeds");
         assert!(
             found_in_version.contains(&link),
             "the link is discoverable through the transclusion"
@@ -135,8 +139,7 @@ fn a_cross_store_lifecycle_survives_a_journal_reopen() {
         }
         assert!(snap.world().links().readlink(&link).is_some());
 
-        let found_in_home = LinkQuery::new(engine.kernel(), &every_home)
-            .findlinks_v(&doc, &[vspan(1, 1, 3)])
+        let found_in_home = findlinks_v_on(&snap, &doc, &[vspan(1, 1, 3)], &every_home)
             .expect("findlinks after recovery succeeds");
         assert!(found_in_home.contains(&link));
     }

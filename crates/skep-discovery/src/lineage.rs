@@ -116,7 +116,7 @@ fn claims_on<W: DiscoveryWorld>(
 /// no claim's `old`, so `[]` is the answer rather than a refusal — a caller
 /// owes no check that `y` is resident before asking. `v = Active` yields the
 /// operative graph (`succ_o`), `Audit` the full history (`succ_h`);
-/// `Default` behaves as `Active` (M7's §G primitives coerce it).
+/// `Default` behaves as `Active` (M7's reads coerce it).
 ///
 /// The view selects which CLAIMS are disclosed, never which endpoints: each
 /// [`SupClaim`]'s `old`/`new` are the addresses the claim names, read out as

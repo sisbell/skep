@@ -111,13 +111,7 @@ fn join_within_budget(span_count: usize, run_count: usize) -> bool {
 /// [`crate::MAX_IMAGE_RUNS`], counted over the reading surface's CONTENT
 /// runs — the runs M5's `project` actually joins against, so the factor
 /// priced is the factor multiplied — and the product at that budget's square.
-/// M7 caps a stored slot at `MAX_SLOT_SPANS` on its deposit paths, which
-/// keeps today's product inside the square, but that is M7's number on M7's
-/// write path: the join this function hands M5 is priced where it is
-/// incurred. [`crate::MAX_IMAGE_RUNS`] sets the run count beside the other
-/// three. The count walks the run set M5 publishes, which is `#content_runs`
-/// itself: bounded by the quantity it prices, and one small allocation where
-/// the budget is nowhere near.
+/// [`crate::MAX_IMAGE_RUNS`] sets the run count beside the other three.
 pub fn project_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     a: &Address,
@@ -138,7 +132,13 @@ pub fn project_on<W: DiscoveryWorld>(
         .map_err(|_| QueryError::NotALink)?; // Err(Invalid) ⇒ NotALink (a ∉ dom(L) OR slot OOB)
     let surface = reading_surface(w.m3(), d); // head-float, on the registered `d`
     // CONTENT runs, because M5's `project` joins the coverage against those
-    // alone — the factor priced is the factor multiplied.
+    // alone — the factor priced is the factor multiplied. The count walks the
+    // run set M5 publishes, which is `#content_runs` itself: bounded by the
+    // quantity it prices, and one small allocation where the budget is
+    // nowhere near. The product is held here as well: M7 caps a stored slot
+    // at `MAX_SLOT_SPANS` on its deposit paths, which keeps today's product
+    // inside the square, but that is M7's number on M7's write path, and the
+    // join this function hands M5 is priced where it is incurred.
     if !join_within_budget(coverage.len(), w.m5().content_runs(&surface).len()) {
         return Err(QueryError::ImageTooLarge);
     }
@@ -179,9 +179,8 @@ fn touches(e: &Endset, extents: &[Span]) -> bool {
 /// `∃ i : coverage(Σ.L(a).eᵢ) ∩ ran(M(reading_surface(d))) ≠ ∅` over BOTH
 /// subspaces (`content_runs` + `link_runs`) — conjoined with `is_active(a)`;
 /// at most `Σᵢ|eᵢ| × |runs|` `classify_spans` calls, each rebuilding both
-/// spans' endpoints, and never the F-FULL whole-document-stab membership
-/// route. The test iterates the link's full arity, so it carries no arity-3
-/// caveat.
+/// spans' endpoints. The test iterates the link's full arity, so it carries
+/// no arity-3 caveat.
 ///
 /// HEAD-FLOAT: LP12 is read at `d`'s reading surface —
 /// `M(reading_surface(d))`, which is `M(d)` itself wherever `d` is its own
@@ -254,6 +253,8 @@ pub fn addressably_discoverable_from_on<W: DiscoveryWorld>(
     if !join_within_budget(span_count, content_runs.len() + link_runs.len()) {
         return Err(QueryError::ImageTooLarge);
     }
+    // LP12's characterisation tested directly, per link — never the F-FULL
+    // whole-document-stab membership route.
     let extents: Vec<Span> = content_runs
         .into_iter()
         .chain(link_runs)

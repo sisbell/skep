@@ -301,14 +301,14 @@ impl Error for QueryError {}
 /// The typed rejection of the `delete_orphans` preview: five verdicts, four
 /// drawn from the seven of M5's `DeleteError`, at M5's own granularity, so
 /// the refusal is actionable, and one M8's own. `OutOfBounds` folds M5's
-/// `NotArranged` and `OutOfBounds` into one (§6 states where the two
-/// vocabularies label one refusal differently). Of M5's other two, `NotOwner`
-/// is absent by decision — the preview takes no `Caller`, so ownership is not
-/// its word to speak — and `PublishedTarget` is absent and OPEN: a published
-/// `d` is one M5 refuses and the preview answers about, a gap §6 states
-/// rather than a rule it keeps. `ImageTooLarge` is the one M5 has no word
-/// for, because DELETE stabs nothing: what it prices is the preview's own
-/// work.
+/// `NotArranged` and `OutOfBounds` into one ([`crate::delete_orphans_on`]
+/// states where the two vocabularies label one refusal differently). Of M5's
+/// other two, `NotOwner` is absent by decision — the preview takes no
+/// `Caller`, so ownership is not its word to speak — and `PublishedTarget` is
+/// absent and OPEN: a published `d` is one M5 refuses and the preview answers
+/// about, a gap [`crate::delete_orphans_on`] states rather than a rule it
+/// keeps. `ImageTooLarge` is the one M5 has no word for, because DELETE stabs
+/// nothing: what it prices is the preview's own work.
 ///
 /// Exhaustively matchable from outside the crate, and promised so, for the
 /// reason [`QueryError`] states.

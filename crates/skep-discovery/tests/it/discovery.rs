@@ -119,21 +119,21 @@ fn region_family_gates_doc_then_region_then_defines_empty() {
     // builds exactly at `s_C` with a count, and the gate refuses exactly what
     // it declines — a subspace-0 or subspace-3 span it admitted would resolve
     // silently to ∅, a different query.
-    for s in 0..=3u32 {
-        for c in 0..=2u32 {
-            let built = content_vspan(&vp(s, 1), &n(c));
+    for subspace in 0..=3u32 {
+        for count in 0..=2u32 {
+            let built = content_vspan(&vp(subspace, 1), &n(count));
             assert_eq!(
                 built.is_some(),
-                s == 1 && c >= 1,
-                "content_vspan at subspace {s}, count {c}"
+                subspace == 1 && count >= 1,
+                "content_vspan at subspace {subspace}, count {count}"
             );
             if let Some(span) = built {
                 assert!(lq.count_v(&doc1(), &[span]).is_ok());
-            } else if c >= 1 {
+            } else if count >= 1 {
                 assert_eq!(
-                    lq.count_v(&doc1(), &[vspan(s, 1, c)]),
+                    lq.count_v(&doc1(), &[vspan(subspace, 1, count)]),
                     Err(QueryError::BadRegion),
-                    "a region in subspace {s} is refused"
+                    "a region in subspace {subspace} is refused"
                 );
             }
         }
@@ -191,11 +191,11 @@ fn every_region_entry_point_answers_both_gates_in_order() {
             Some(QueryError::DocNotRegistered),
             "{name}: an unregistered d is refused"
         );
-        for s in [0, 2, 3] {
+        for subspace in [0, 2, 3] {
             assert_eq!(
-                refusal(&doc1(), &[vspan(s, 1, 1)]),
+                refusal(&doc1(), &[vspan(subspace, 1, 1)]),
                 Some(QueryError::BadRegion),
-                "{name}: a region in subspace {s}, not s_C, is refused"
+                "{name}: a region in subspace {subspace}, not s_C, is refused"
             );
         }
         assert_eq!(
@@ -485,7 +485,7 @@ fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
 /// the budget it also shows each read's refusal ORDER, which no in-budget
 /// `d` can: every argument about `a` is refused ahead of the budget.
 #[test]
-fn the_pointwise_family_holds_one_run_constant_over_two_quantities() {
+fn the_pointwise_pair_holds_one_run_constant_over_two_quantities() {
     let k = kernel();
     let store = LinkWriter::new(&k, &EVERYONE);
     seed_content(&k, &doc1(), 1);
@@ -616,7 +616,7 @@ fn addressably_discoverable_from_holds_its_join_to_the_square_of_the_run_budget(
 /// BOTH arguments at once. Each read states its refusal order, and only a
 /// doubly-faulty call can tell the stated order from the other one: every
 /// other case in the suite is faulty in `d` alone or in `a` alone, where
-/// either order answers alike. The rule is the family's — every argument
+/// either order answers alike. The rule is the pair's — every argument
 /// about `d` is settled before any argument about `a` — so an unregistered
 /// document with a non-link address names the document.
 #[test]
@@ -651,7 +651,7 @@ fn findlinks_v_is_disjunctive_and_active_filtered() {
     let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
 
-    // e1 reaches position 1 via FROM (emit encodes from = enc({ca1})).
+    // e1 reaches position 1 via FROM (the `link` fixture's FROM is enc({ca1})).
     let e1 = link(&store, &doc1(), &[ca(1)], &[ca(9)]);
     assert_eq!(e1, la(1));
     // m1 reaches position 2 via FROM, 3 via TO, and 1 via TYPE (makelink
@@ -942,7 +942,7 @@ fn region_count_enumeration_and_window_read_out_one_selection_index() {
 // ───────────────────────── §4 — RETRIEVEENDSETS ─────────────────────────
 
 #[test]
-fn retrieve_endsets_withholds_identity_whole_endsets_pinned_order() {
+fn retrieve_endsets_withholds_identity_and_ships_whole_endsets_in_pinned_order() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
     let store = LinkWriter::new(&k, &EVERYONE);
@@ -963,16 +963,16 @@ fn retrieve_endsets_withholds_identity_whole_endsets_pinned_order() {
     let whole = Endset::from_spans([run(&ca(1), 3).iextent()]);
 
     // A query touching only position 2 surfaces the WHOLE stored endset,
-    // never a clip (RE-CLIP/RE-WHOLE); abutting endsets (the emits' enc({ca1})
-    // at position 1, the makelink's TO at 3 and TYPE at 1) are Adjacent to
-    // the image — not matches.
+    // never a clip (RE-CLIP/RE-WHOLE); abutting endsets (the two `link`
+    // fixtures' enc({ca1}) at position 1, the resolved makelink's TO at 3 and
+    // TYPE at 1) are Adjacent to the image — not matches.
     assert_eq!(
         lq.retrieve_endsets(&doc1(), &[vspan(1, 2, 1)]),
         Ok(vec![(FROM, whole.clone())])
     );
 
-    // The wide query: identity withheld — the two emits collapse to ONE
-    // (FROM, enc({ca1})) pair (RE-UNIT) — and the output order is pinned:
+    // The wide query: identity withheld — the two `link` fixtures collapse to
+    // ONE (FROM, enc({ca1})) pair (RE-UNIT) — and the output order is pinned:
     // slot, then lexicographic span-sequence.
     assert_eq!(
         lq.retrieve_endsets(&doc1(), &[vspan(1, 1, 3)]),
@@ -1030,11 +1030,11 @@ fn retrieve_endsets_orders_pairs_that_tie_on_every_key_but_the_last() {
 /// A FROM endset of `spans` addresses touching doc1's position 1: `ca(1)` is
 /// the span a region naming that position touches, and the rest name
 /// unarranged positions of doc1. Endsets collapse by VALUE, so the filler is
-/// keyed on `link`: the same `link` number gives the same endset, distinct
-/// numbers give distinct ones.
-fn wide_from(link: u32, spans: u32) -> Vec<Address> {
+/// keyed: the same `key` gives the same endset, distinct keys give distinct
+/// ones.
+fn wide_from(key: u32, spans: u32) -> Vec<Address> {
     let mut addrs = vec![ca(1)];
-    addrs.extend((1..spans).map(|j| ca(1000 + link * spans + j)));
+    addrs.extend((1..spans).map(|j| ca(1000 + key * spans + j)));
     addrs
 }
 
@@ -1494,7 +1494,7 @@ fn the_region_census_drops_when_content_leaves_while_the_descriptor_census_holds
 // ─────────────── §5 — projection & discoverability ───────────────
 
 #[test]
-fn project_is_content_subspace_i_to_v_with_conflated_notalink() {
+fn project_is_content_subspace_i_to_v_with_conflated_not_a_link() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
     let store = LinkWriter::new(&k, &EVERYONE);
@@ -2512,7 +2512,7 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
     let (dropped, _) = store.assert_sup(SYS, &doc2(), &m0, &t0).expect("assert_sup succeeds");
 
     let snap = k.snapshot();
-    let reader = |d: &Address| *d != doc2();
+    let cannot_read_doc2 = |d: &Address| *d != doc2();
     let survivors = |links: Vec<Address>| -> Vec<Address> {
         links
             .into_iter()
@@ -2524,11 +2524,13 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
     let q = FourSet::any();
     let all = findlinks_ftt_on(&snap, &q, &every_home);
     assert!(all.contains(&t0) && all.contains(&dropped), "doc2's links are in the store");
-    let seen = findlinks_ftt_on(&snap, &q, &reader);
+    let seen = findlinks_ftt_on(&snap, &q, &cannot_read_doc2);
     assert_eq!(seen, survivors(all), "findlinks_ftt");
-    assert_eq!(count_ftt_on(&snap, &q, &reader), seen.len(), "count_ftt");
+    assert_eq!(count_ftt_on(&snap, &q, &cannot_read_doc2), seen.len(), "count_ftt");
     assert_eq!(
-        drain_window(1, seen.len() + 1, |cur| window_ftt_on(&snap, &q, cur, 1, &reader)),
+        drain_window(1, seen.len() + 1, |cur| {
+            window_ftt_on(&snap, &q, cur, 1, &cannot_read_doc2)
+        }),
         seen,
         "window_ftt"
     );
@@ -2537,12 +2539,16 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
     let region = [vspan(1, 1, 3)];
     let all = findlinks_v_on(&snap, &doc1(), &region, &every_home).expect("findlinks_v");
     assert!(all.contains(&t0) && all.contains(&t1), "doc2's links touch the region");
-    let seen = findlinks_v_on(&snap, &doc1(), &region, &reader).expect("findlinks_v");
+    let seen = findlinks_v_on(&snap, &doc1(), &region, &cannot_read_doc2).expect("findlinks_v");
     assert_eq!(seen, survivors(all), "findlinks_v");
-    assert_eq!(count_v_on(&snap, &doc1(), &region, &reader), Ok(seen.len()), "count_v");
+    assert_eq!(
+        count_v_on(&snap, &doc1(), &region, &cannot_read_doc2),
+        Ok(seen.len()),
+        "count_v"
+    );
     assert_eq!(
         drain_window(1, seen.len() + 1, |cur| {
-            window_v_on(&snap, &doc1(), &region, cur, 1, &reader).expect("window_v")
+            window_v_on(&snap, &doc1(), &region, cur, 1, &cannot_read_doc2).expect("window_v")
         }),
         seen,
         "window_v"
@@ -2584,7 +2590,7 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
     assert_eq!(every_pair.len(), 5);
     assert!(every_pair.contains(&(FROM, enc(&[ca(1), ca(102)]))), "t0's own pair");
     assert_eq!(
-        retrieve_endsets_on(&snap, &doc1(), &region, &reader),
+        retrieve_endsets_on(&snap, &doc1(), &region, &cannot_read_doc2),
         Ok(vec![
             (FROM, enc(&[ca(1)])),
             (FROM, enc(&[ca(2)])),
@@ -2601,20 +2607,25 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
         .orphaned;
     assert_eq!(orphaned, vec![m2, t1]);
     assert_eq!(
-        delete_orphans_on(&snap, &doc1(), &vp(1, 3), &n(1), &reader).map(|r| r.orphaned),
+        delete_orphans_on(&snap, &doc1(), &vp(1, 3), &n(1), &cannot_read_doc2)
+            .map(|r| r.orphaned),
         Ok(survivors(orphaned))
     );
 
     // The lineage pair: the doc2-homed claim goes, from both probes.
-    let claims = |found: Vec<SupClaim>| -> Vec<Address> { found.into_iter().map(|c| c.claim).collect() };
-    let all = claims(in_claims_on(&snap, &m0, View::Active, &every_home));
+    let claims_of =
+        |found: Vec<SupClaim>| -> Vec<Address> { found.into_iter().map(|c| c.claim).collect() };
+    let all = claims_of(in_claims_on(&snap, &m0, View::Active, &every_home));
     assert_eq!(all, vec![kept.clone(), dropped.clone()]);
-    assert_eq!(claims(in_claims_on(&snap, &m0, View::Active, &reader)), survivors(all));
+    assert_eq!(
+        claims_of(in_claims_on(&snap, &m0, View::Active, &cannot_read_doc2)),
+        survivors(all)
+    );
     for new in [&m1, &t0] {
-        let all = claims(out_claims_on(&snap, new, View::Active, &every_home));
+        let all = claims_of(out_claims_on(&snap, new, View::Active, &every_home));
         assert_eq!(all.len(), 1, "one claim names {new:?} as new");
         assert_eq!(
-            claims(out_claims_on(&snap, new, View::Active, &reader)),
+            claims_of(out_claims_on(&snap, new, View::Active, &cannot_read_doc2)),
             survivors(all),
             "out_claims({new:?})"
         );
@@ -2670,14 +2681,14 @@ fn the_lineage_pair_asks_the_home_rule_of_the_claim_and_reads_its_endpoints_as_r
         .assert_sup(SYS, &doc2(), &e1, &e2)
         .expect("assert_sup succeeds");
     let snap = k.snapshot();
-    let claims =
+    let claims_of =
         |found: Vec<SupClaim>| -> Vec<Address> { found.into_iter().map(|c| c.claim).collect() };
     assert_eq!(
-        claims(in_claims_on(&snap, &e1, View::Active, &every_home)),
+        claims_of(in_claims_on(&snap, &e1, View::Active, &every_home)),
         vec![kept.clone(), refused.clone()]
     );
     assert_eq!(
-        claims(out_claims_on(&snap, &e2, View::Active, &every_home)),
+        claims_of(out_claims_on(&snap, &e2, View::Active, &every_home)),
         vec![refused]
     );
 

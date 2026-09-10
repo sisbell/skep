@@ -49,8 +49,8 @@ pub(crate) fn stab_runs_by_slot(l: &LinkState, runs: &[Run]) -> [(usize, OrdSet<
     if runs.is_empty() {
         return V1_SLOTS.map(|i| (i, OrdSet::new()));
     }
-    let q = Endset::from_spans(runs.iter().map(Run::iextent)); // coverage(q) = the runs
-    V1_SLOTS.map(|i| (i, l.stab(i, &q, View::Active)))
+    let query = Endset::from_spans(runs.iter().map(Run::iextent)); // coverage(query) = the runs
+    V1_SLOTS.map(|i| (i, l.stab(i, &query, View::Active)))
 }
 
 /// The disjunctive ASN-0127 `findlinks(I)` core: OR across a v1 link's slots

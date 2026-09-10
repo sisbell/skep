@@ -42,13 +42,13 @@ use crate::region::{MAX_IMAGE_RUNS, MAX_JOIN_STEPS};
 use crate::types::QueryError;
 use crate::DiscoveryWorld;
 
-/// May a join of `spans` coverage spans against `runs` arrangement runs go
-/// ahead? The pair's one budget rule, held at both reads: the runs at
+/// May a join of `span_count` coverage spans against `run_count` arrangement
+/// runs go ahead? The pair's one budget rule, held at both reads: the runs at
 /// [`MAX_IMAGE_RUNS`], since they are read whole and joined before any test
 /// answers, and the product — the span tests the join makes — at its square,
 /// since the coverage side is the link's and a run count does not reach it.
-fn join_within_budget(spans: usize, runs: usize) -> bool {
-    runs <= MAX_IMAGE_RUNS && spans.saturating_mul(runs) <= MAX_JOIN_STEPS
+fn join_within_budget(span_count: usize, run_count: usize) -> bool {
+    run_count <= MAX_IMAGE_RUNS && span_count.saturating_mul(run_count) <= MAX_JOIN_STEPS
 }
 
 /// I→V projection of link `a`'s `slot` into the CONTENT subspace of the
@@ -79,7 +79,7 @@ fn join_within_budget(spans: usize, runs: usize) -> bool {
 /// asked of the ARGUMENT `a`, because the answer names no link: a link whose
 /// home `readable` refuses is ABSENT, and answers `Err(NotALink)` — exactly
 /// what an address naming no link gets. The rule runs after the document gate
-/// and AHEAD of the resident-link read. After, so the family's precedence
+/// and AHEAD of the resident-link read. After, so the pair's precedence
 /// holds: an unregistered `d` names the document fault, whatever `a` is.
 /// Ahead, so a refused link and an address naming nothing under the same
 /// unreadable document answer alike, and the answer says nothing about that
@@ -89,7 +89,7 @@ fn join_within_budget(spans: usize, runs: usize) -> bool {
 ///
 /// REFUSES, IN THIS ORDER: `DocNotRegistered` (`d` is not M3-registered);
 /// `NotALink` for an absent `a`, then for an `a` that names no link or a
-/// `slot` out of range; then `ImageTooLarge`. The order is the family's, not
+/// `slot` out of range; then `ImageTooLarge`. The order is the pair's, not
 /// this function's — every argument about `d` is settled before any argument
 /// about `a` — so a call that is faulty in two ways names the document fault.
 /// `NotALink` subsumes BOTH `a ∉ dom(L)` AND an out-of-range `slot` (M7's
@@ -156,10 +156,10 @@ pub fn project_on<W: DiscoveryWorld>(
 /// this is asked once per slot of a link, and a run's extent depends on the
 /// run alone, so the lift belongs where the runs are read.
 fn touches(e: &Endset, extents: &[Span]) -> bool {
-    e.spans().any(|s| {
-        extents.iter().any(|x| {
+    e.spans().any(|span| {
+        extents.iter().any(|extent| {
             matches!(
-                classify_spans(s, x),
+                classify_spans(span, extent),
                 SpanRel::ProperOverlap | SpanRel::Containment | SpanRel::Equal
             )
         })
@@ -248,8 +248,8 @@ pub fn addressably_discoverable_from_on<W: DiscoveryWorld>(
     }
     let surface = reading_surface(w.m3(), d); // head-float, on the registered `d`
     let (content_runs, link_runs) = (w.m5().content_runs(&surface), w.m5().link_runs(&surface));
-    let coverage = link.slots().map(Endset::len).sum::<usize>(); // Σᵢ|eᵢ|, the side the link supplies
-    if !join_within_budget(coverage, content_runs.len() + link_runs.len()) {
+    let span_count = link.slots().map(Endset::len).sum::<usize>(); // Σᵢ|eᵢ|, the side the link supplies
+    if !join_within_budget(span_count, content_runs.len() + link_runs.len()) {
         return Err(QueryError::ImageTooLarge);
     }
     let extents: Vec<Span> = content_runs
@@ -257,5 +257,5 @@ pub fn addressably_discoverable_from_on<W: DiscoveryWorld>(
         .chain(link_runs)
         .map(|r| r.iextent())
         .collect(); // ran(M(reading_surface(d))) as I-extents, BOTH subspaces (LP12)
-    Ok(link.slots().any(|slot| touches(slot, &extents)))
+    Ok(link.slots().any(|e| touches(e, &extents)))
 }

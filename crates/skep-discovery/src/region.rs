@@ -168,19 +168,20 @@ fn check_region(region: &[Span]) -> Result<(), QueryError> {
     Ok(())
 }
 
-/// How many runs of a `runs`-run list M5's `resolve` walks past for the spans
-/// of `region`, summed, saturating. It walks each span's list from the first
-/// run and stops at the first run starting at or past the span's reach `e`,
-/// and every run is at least one position wide, so one span passes at most
-/// `min(runs, e − 1)`. A reach whose ordinal cannot be read, or does not fit
-/// a `usize`, prices at `runs` — the most any walk passes, never zero.
-fn run_list_walk(region: &[Span], runs: usize) -> usize {
+/// How many runs M5's `resolve` walks past for the spans of `region`, over a
+/// run-list `run_count` runs long, summed, saturating. It walks each span's
+/// list from the first run and stops at the first run starting at or past the
+/// span's reach `e`, and every run is at least one position wide, so one span
+/// passes at most `min(run_count, e − 1)`. A reach whose ordinal cannot be
+/// read, or does not fit a `usize`, prices at `run_count` — the most any walk
+/// passes, never zero.
+fn run_list_walk(region: &[Span], run_count: usize) -> usize {
     region.iter().fold(0usize, |steps, span| {
         let passed = span
             .reach()
             .get(2)
             .and_then(|e| e.to_usize())
-            .map_or(runs, |e| e.saturating_sub(1).min(runs));
+            .map_or(run_count, |e| e.saturating_sub(1).min(run_count));
         steps.saturating_add(passed)
     })
 }
@@ -377,7 +378,7 @@ pub fn window_v_on<W: DiscoveryWorld>(
 /// stored value from `readlink`, never clipped (RE-CLIP/RE-WHOLE, preserving
 /// RE-UDIST) — and content-identity (I-address; V-rendering is a lossy layer
 /// above). Slot attribution is read off M7's per-slot stab sets — `(i, eᵢ)`
-/// surfaces iff `a ∈ stab(i, q, Active)` — so M7's overlap verdict
+/// surfaces iff `a ∈ stab(i, query, Active)` — so M7's overlap verdict
 /// (ProperOverlap | Containment | Equal, never Adjacent) is the ONLY touch
 /// test and cross-subspace disjointness (RE-NCD) is discharged by M7. Output
 /// order is pinned (slot, then lexicographic span-sequence): deterministic at
@@ -416,16 +417,16 @@ pub fn retrieve_endsets_on<W: DiscoveryWorld>(
     let sel = union_slots(&by_slot);
     let mut kept: HashSet<(usize, &Endset)> = HashSet::new(); // dedup by structural Eq, borrowing the store's endsets
     let mut spans_kept: usize = 0;
-    for c in sel.iter() {
+    for a in sel.iter() {
         // The home rule, at the candidate link's identity (§3): a link whose
         // home is unreadable contributes no pair. Its endset — if it survived —
         // is unfiltered at origin (PUB-6.15).
-        if !home_readable(readable, c) {
+        if !home_readable(readable, a) {
             continue;
         }
-        let link = w.links().readlink(c).expect("stab keys are resident links");
+        let link = w.links().readlink(a).expect("stab keys are resident links");
         for (i, hits) in &by_slot {
-            if hits.contains(c) {
+            if hits.contains(a) {
                 let e = link
                     .slot(*i)
                     .expect("a link in slot i's stab set has slot i: M7's per-slot overlap is false for an absent slot");

@@ -35,7 +35,7 @@
 //!   That is ASN-0098's `project` unchanged; the addressable-filtered
 //!   question it looks like it answers is
 //!   [`addressably_discoverable_from_on`]'s.
-//! * the lineage family ([`in_claims_on`]/[`out_claims_on`]) takes a `View`,
+//! * the lineage pair ([`in_claims_on`]/[`out_claims_on`]) takes a `View`,
 //!   so the caller chooses: `Active` yields the operative graph, `Audit` the
 //!   full history including nullified claims, each disclosing its own
 //!   activity in [`SupClaim::active`]. Under EVERY view a claim's `old`/`new`

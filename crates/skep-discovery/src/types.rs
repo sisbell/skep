@@ -82,7 +82,7 @@ impl FourSet {
     pub fn is_unsatisfiable(&self) -> bool {
         [&self.home, &self.from, &self.to, &self.ty]
             .into_iter()
-            .any(|s| match s {
+            .any(|spec| match spec {
                 SlotSpec::Any => false,
                 SlotSpec::Empty => true,
                 SlotSpec::Spans(e) => e.is_empty(),

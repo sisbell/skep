@@ -15,5 +15,5 @@ cd "$(dirname "$0")/.."
 # lands in this gate by default — deliberate: an ignore that should not be
 # run at round close must be excluded here, visibly.
 cargo nextest run --workspace --profile full --run-ignored all \
-    -E 'not (package(skepd) & test(=g_disk_exhaustion_stops_acks_before_durability))'
+    -E 'not (package(skepd) & test(=hazard::g_disk_exhaustion_stops_acks_before_durability))'
 exit $?

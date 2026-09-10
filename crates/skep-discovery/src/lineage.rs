@@ -8,7 +8,7 @@ use skep_address::{validate, Address};
 use skep_kernel::Snapshot;
 use skep_links::{enc, Endset, LinkState, ShippedType, View};
 
-use crate::helpers::home_of;
+use crate::helpers::{home_of, home_readable};
 use crate::types::SupClaim;
 use crate::{DiscoveryWorld, FROM, TO};
 
@@ -75,6 +75,14 @@ fn endpoint(e: &Endset, denotes: &'static str) -> Address {
 /// `reserved_type`, which is address-denoting by construction; `match_links`
 /// requires that no constraint carry an empty endset, and `enc([key])` is
 /// one span.
+///
+/// **Walked from the hits, and filtered before it is read out.** The claims
+/// naming `key` at `slot` are walked in address order and the `[K_sup]` slice
+/// — the store's whole supersession class under `v` — is only probed, so the
+/// large side is never the walked one (`im`'s `intersection` walks its
+/// argument through its copying consuming iterator). The home rule is asked of
+/// each claim's own address, and only a claim it admits is read out by
+/// [`claim_at`].
 fn claims_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     slot: usize,
@@ -88,17 +96,15 @@ fn claims_on<W: DiscoveryWorld>(
     }
     let sup = l.reserved_type(ShippedType::Supersedes);
     let named = enc([key]); // bound: M7 borrows a constraint's query
-    let hits = l
-        .match_links(&[(slot, &named)], v) // claims naming `key` at `slot`
-        .intersection(l.type_slice(sup, v)); // restrict to supersession claims (Ŝ^Σ = S^Σ)
+    let hits = l.match_links(&[(slot, &named)], v); // claims naming `key` at `slot`
+    let sup_slice = l.type_slice(sup, v); // the [K_sup] class under `v`
     hits.iter()
+        .filter(|&c| sup_slice.contains(c)) // restrict to supersession claims (Ŝ^Σ = S^Σ)
+        // The result-set filter (PUB round 2, lane 3.3, §3), asked of the
+        // claim's own address before it is read out. The endpoints
+        // (`old`/`new`) stay as recorded: only the CLAIM's home is asked.
+        .filter(|&c| home_readable(readable, c))
         .map(|c| claim_at(l, c))
-        // The result-set filter (PUB round 2, lane 3.3, §3): a claim whose HOME
-        // the reader may not read is dropped. The one site that applies the
-        // home rule without `home_readable`: the projection is already in hand,
-        // `SupClaim::home` being `home(c)` (EL8b). The endpoints (`old`/`new`)
-        // stay as recorded: only the CLAIM's home is asked.
-        .filter(|c| readable(&c.home))
         .collect()
 }
 

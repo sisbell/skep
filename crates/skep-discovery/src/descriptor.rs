@@ -35,17 +35,20 @@ pub(crate) fn candidates(l: &LinkState, q: &FourSet) -> OrdSet<Address> {
 /// `sat(·, q, Σ)` — THE one definition of "matches" for the descriptor
 /// family. ASN-0132's CN-ENUM forces exactly one, consumed by enumeration and
 /// by count alike, so [`findlinks_ftt_on`] and [`count_ftt_on`] are two
-/// read-outs of this one set and cannot disagree about which links match.
+/// read-outs of this one sequence and cannot disagree about which links
+/// match. It is walked by reference, so nothing is copied until a link ships.
 ///
-/// ASN-0121's [`candidates`] narrowed by the residence post-filter
-/// [`FourSet::at_home`] — the home-bound placement M8 chose, since M8 owns no
-/// index dimension keyed on `home(a)` (Conflicts #7: a home-only query
-/// degrades to a full active scan, accepted).
-pub(crate) fn satisfying(l: &LinkState, q: &FourSet) -> OrdSet<Address> {
-    candidates(l, q)
-        .into_iter()
-        .filter(|a| q.at_home(a))
-        .collect()
+/// ASN-0121's [`candidates`] — `cand`, computed for the same `q` — narrowed
+/// by the residence post-filter [`FourSet::at_home`]: the home-bound placement
+/// M8 chose, since M8 owns no index dimension keyed on `home(a)` (Conflicts
+/// #7: a home-only query degrades to a full active scan, accepted). The
+/// post-filter reads the candidates in place, so the survivors are never
+/// gathered into a set of their own.
+pub(crate) fn satisfying<'c>(
+    cand: &'c OrdSet<Address>,
+    q: &'c FourSet,
+) -> impl Iterator<Item = &'c Address> + 'c {
+    cand.iter().filter(move |a| q.at_home(a))
 }
 
 /// FINDLINKS over the four-set descriptor (ASN-0121): the links satisfying
@@ -63,9 +66,10 @@ pub fn findlinks_ftt_on<W: DiscoveryWorld>(
     q: &FourSet,
     readable: &dyn Fn(&Address) -> bool,
 ) -> Vec<Address> {
-    satisfying(s.world().links(), q)
-        .into_iter()
+    let cand = candidates(s.world().links(), q);
+    satisfying(&cand, q)
         .filter(|a| home_readable(readable, a))
+        .cloned()
         .collect()
 }
 
@@ -89,8 +93,8 @@ pub fn count_ftt_on<W: DiscoveryWorld>(
     q: &FourSet,
     readable: &dyn Fn(&Address) -> bool,
 ) -> usize {
-    satisfying(s.world().links(), q)
-        .into_iter()
+    let cand = candidates(s.world().links(), q);
+    satisfying(&cand, q)
         .filter(|a| home_readable(readable, a))
         .count()
 }
@@ -107,10 +111,11 @@ pub fn count_ftt_on<W: DiscoveryWorld>(
 /// skipped or duplicated (W4/W5). A caller relaying a cursor from a request
 /// owes it no validation.
 ///
-/// The one place `sat` is spelled apart rather than composed: the same
-/// candidate conjunction, then the same residence post-filter, but applied
-/// LAZILY during the range walk — so a home-narrow query never materializes
-/// the filtered set. The links this pages over are exactly the ones
+/// The one place `sat` is spelled apart rather than composed: the window
+/// seeks by key — `range` strictly past the cursor — which the candidate SET
+/// supports and [`satisfying`]'s filtered sequence does not, so it walks
+/// [`candidates`] itself and applies the same residence post-filter LAZILY in
+/// its `keep`. The links this pages over are exactly the ones
 /// [`findlinks_ftt_on`] returns under the same `readable`.
 ///
 /// The home rule (PUB round 2, lane 3.3, §3) joins the residence post-filter

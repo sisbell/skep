@@ -155,7 +155,7 @@
 //! * the lineage pair ([`in_claims_on`], [`out_claims_on`]) — one
 //!   `readlink`, which answers `[]` for a non-link key and stops there;
 //!   otherwise one `match_links` at a one-span query and one `type_slice`,
-//!   then one `readlink` and one `is_active` per claim read out.
+//!   then one `readlink` and one `is_active` per claim the home rule admits.
 //! * the pointwise pair — no store walk: one `followlink` ([`project_on`]),
 //!   or one `readlink` and one `is_active`
 //!   ([`addressably_discoverable_from_on`]), plus M5's runs of `d`'s reading

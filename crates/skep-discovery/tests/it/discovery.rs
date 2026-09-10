@@ -16,9 +16,10 @@
 //! the delete-orphan preview measured against the DELETE it previews, over
 //! that operation's whole accepted domain, against M5's own admission, and at
 //! the ω and publication gates where the two part; the flipped lineage probes
-//! with the resident-key gate, the claim's own home attribution, the endpoints
-//! it reads out as recorded and the write-surface fences that read-out rests
-//! on; every result-set read dropping exactly the links homed where its
+//! with the resident-key gate, the supersession class they restrict to, the
+//! claim's own home attribution, the endpoints it reads out as recorded and
+//! the write-surface fences that read-out rests on; every result-set read
+//! dropping exactly the links homed where its
 //! reader may not read; the two budgets, each refused at its boundary and
 //! on every entry point that inherits it, and the two quantities the run
 //! constant is held over; the snapshot twins; and — because this file is a
@@ -1743,6 +1744,55 @@ fn lineage_reads_out_in_claim_address_order() {
         lq.out_claims(&made[2], View::Active)[0].claim,
         c2
     );
+}
+
+/// §7 — the enumeration reads out SUPERSESSION claims alone. M7's probe finds
+/// every link naming the key at the slot, whatever its type, and the
+/// `[K_sup]` class is what narrows it — so an ordinary link naming `e1` at
+/// FROM and `e2` at TO, which both probes reach, must never come back as a
+/// claim. It is the one shape that tells a read restricting to the class from
+/// one reading out every hit: every other lineage fixture's endpoints are
+/// named by supersession claims alone, where the two agree.
+#[test]
+fn lineage_reads_out_supersession_claims_alone_among_the_links_naming_the_key() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let lq = LinkQuery::new(&k);
+    let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
+    // Of the suite's relation type, and shaped exactly like a claim over e1→e2.
+    let ordinary = link(
+        &store,
+        &doc1(),
+        std::slice::from_ref(&e1),
+        std::slice::from_ref(&e2),
+    );
+    let (claim, _) = store
+        .assert_sup(SYS, &doc1(), &e1, &e2)
+        .expect("assert_sup succeeds");
+
+    // The premise: both probes reach the ordinary link as well as the claim,
+    // so the restriction has something to drop.
+    let snap = k.snapshot();
+    let links = snap.world().links();
+    for (slot, key) in [(FROM, &e1), (TO, &e2)] {
+        let probed = links.match_links(&[(slot, &enc([key]))], View::Active);
+        assert!(
+            probed.contains(&ordinary) && probed.contains(&claim),
+            "the probe at slot {slot} reaches both"
+        );
+    }
+
+    let only_the_claim = vec![SupClaim {
+        claim,
+        old: e1.clone(),
+        new: e2.clone(),
+        home: doc1(),
+        active: true,
+    }];
+    assert_eq!(lq.in_claims(&e1, View::Active), only_the_claim);
+    assert_eq!(lq.out_claims(&e2, View::Active), only_the_claim);
 }
 
 /// §7 — the lineage read-out reports a claim's endpoints with NO per-claim

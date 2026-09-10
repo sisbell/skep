@@ -241,10 +241,8 @@ pub fn findlinks_v_on<W: DiscoveryWorld>(
     region: &[Span],
     readable: &dyn Fn(&Address) -> bool,
 ) -> Result<Vec<Address>, QueryError> {
-    Ok(findlinks_v_set_on(s, d, region)?
-        .into_iter()
-        .filter(|a| home_readable(readable, a))
-        .collect())
+    let sel = findlinks_v_set_on(s, d, region)?;
+    Ok(sel.iter().filter(|a| home_readable(readable, a)).cloned().collect())
 }
 
 /// Present-tense census of region-reaching links; the cardinality of
@@ -269,10 +267,8 @@ pub fn count_v_on<W: DiscoveryWorld>(
     region: &[Span],
     readable: &dyn Fn(&Address) -> bool,
 ) -> Result<usize, QueryError> {
-    Ok(findlinks_v_set_on(s, d, region)?
-        .into_iter()
-        .filter(|a| home_readable(readable, a))
-        .count())
+    let sel = findlinks_v_set_on(s, d, region)?;
+    Ok(sel.iter().filter(|a| home_readable(readable, a)).count())
 }
 
 /// Windowed enumeration of the region family (ASN-0108, the
@@ -319,7 +315,9 @@ pub fn window_v_on<W: DiscoveryWorld>(
 /// test and cross-subspace disjointness (RE-NCD) is discharged by M7. Output
 /// order is pinned (slot, then lexicographic span-sequence): deterministic at
 /// a snapshot, no hash-iteration leak; the internal dedup is a throwaway
-/// `std::collections::HashSet`, so no `im` container crosses this seam.
+/// `std::collections::HashSet`, so no `im` container crosses this seam, and it
+/// is keyed on borrows into the snapshot's store, so a pair is copied once,
+/// when it ships.
 ///
 /// Refuses past [`MAX_ENDSET_SPANS`] with `EndsetsTooLarge`, accumulated over
 /// the spans of the pairs actually KEPT — what the answer carries is what the
@@ -349,7 +347,7 @@ pub fn retrieve_endsets_on<W: DiscoveryWorld>(
     let image = image_on(s, d, region)?; // gate + region-check inside, on THIS snap
     let by_slot = stab_runs_by_slot(w.links(), &image); // KEPT SEPARATE — slot i of a touches iff a ∈ its set
     let sel = union_slots(&by_slot);
-    let mut kept: HashSet<(usize, Endset)> = HashSet::new(); // internal throwaway dedup by structural Eq
+    let mut kept: HashSet<(usize, &Endset)> = HashSet::new(); // dedup by structural Eq, borrowing the store's endsets
     let mut spans_kept: usize = 0;
     for c in sel.iter() {
         // The home rule, at the candidate link's identity (§3): a link whose
@@ -364,7 +362,7 @@ pub fn retrieve_endsets_on<W: DiscoveryWorld>(
                 let e = link
                     .slot(*i)
                     .expect("a link in slot i's stab set has slot i: M7's per-slot overlap is false for an absent slot");
-                if kept.insert((*i, e.clone())) {
+                if kept.insert((*i, e)) {
                     // WHOLE endset, no clip
                     spans_kept += e.len();
                     if spans_kept > MAX_ENDSET_SPANS {
@@ -374,13 +372,16 @@ pub fn retrieve_endsets_on<W: DiscoveryWorld>(
             }
         }
     }
-    let mut pairs: Vec<(usize, Endset)> = kept.into_iter().collect();
-    pairs.sort_by(|(i, e), (j, f)| {
+    let mut pairs: Vec<(usize, &Endset)> = kept.into_iter().collect();
+    // Unstable is exact here: the pairs are distinct, and the comparator is
+    // equal only on equal pairs — slot, then each span's `(start, width)`,
+    // which is the whole of `Span`'s equality — so no two elements tie.
+    pairs.sort_unstable_by(|(i, e), (j, f)| {
         i.cmp(j).then_with(|| {
             e.spans()
                 .map(|sp| (sp.start(), sp.width()))
                 .cmp(f.spans().map(|sp| (sp.start(), sp.width())))
         })
     });
-    Ok(pairs)
+    Ok(pairs.into_iter().map(|(i, e)| (i, e.clone())).collect())
 }

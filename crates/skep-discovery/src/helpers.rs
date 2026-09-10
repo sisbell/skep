@@ -3,6 +3,15 @@
 //! attribution and the home rule built on it, and the one windowing
 //! combinator. All pure over borrowed state; nothing here snapshots (callers
 //! thread ONE snapshot per operation).
+//!
+//! Every read walks M7's `OrdSet`s by reference — `iter`, `range`,
+//! `contains` — and clones only the addresses it hands back. `im` 15's
+//! consuming iterator is not a move: it copies every node it passes and clones
+//! every value it yields, so `into_iter` over a set a read only looks at
+//! copies the set; and `im`'s `intersection` and `relative_complement` walk
+//! their ARGUMENT that way, so a large set belongs on the `contains` side of a
+//! filter, never on the walked side. [`union_slots`] is the one consuming set
+//! operation kept, and says why.
 
 use std::ops::Bound::{Excluded, Unbounded};
 
@@ -45,8 +54,16 @@ pub(crate) fn stab_runs_by_slot(l: &LinkState, runs: &[Run]) -> [(usize, OrdSet<
 }
 
 /// The disjunctive ASN-0127 `findlinks(I)` core: OR across a v1 link's slots
-/// (M7 has no slot-collapsed primitive). `im`'s sets are persistent, so
-/// collapsing a borrowed triple costs sharing, not copies.
+/// (M7 has no slot-collapsed primitive).
+///
+/// The one consuming set operation a read keeps, because its answer IS a new
+/// set: `im`'s `union` keeps its larger operand and inserts the smaller into
+/// it, so at every step the larger side is carried over with its untouched
+/// nodes shared, never rebuilt, and only the smaller is walked — through
+/// `im`'s consuming iterator, which clones what it yields — and path-copied
+/// in where it lands. It costs least when one slot dominates; gathering the
+/// union from three borrowed walks instead would copy every member of all
+/// three.
 pub(crate) fn union_slots(by_slot: &[(usize, OrdSet<Address>); 3]) -> OrdSet<Address> {
     by_slot
         .iter()

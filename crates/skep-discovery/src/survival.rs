@@ -71,18 +71,20 @@ fn content_vspan_at(ordinal: &Nat, count: &Nat) -> Span {
 /// verdict.
 ///
 /// The report's `orphaned` is in ascending address order — the permanent key
-/// every enumeration here reads out by, inherited from the `OrdSet` the set
-/// identity below is computed in.
+/// every enumeration here reads out by, inherited from walking the links that
+/// touch the deleted range in that order.
 ///
 /// `orphaned = findlinks(A_del) ∖ findlinks(retained)` where `retained` =
 /// the prefix + suffix content that survives plus the link runs (a text
 /// delete never touches links) — the last-witness condition with no per-pair
 /// reasoning. Both sides stab the ACTIVE view. The relative complement is
-/// `OrdSet::relative_complement` — NEVER `im`'s `difference`, which is
-/// SYMMETRIC difference and would wrongly fold in the plainly-surviving
-/// links. The global-ghost determination (LP17 — discoverable from NO
-/// document) reaches provenance R and is M6 territory; M8 stops at the
-/// per-document set.
+/// walked from the DELETED side — a link touching what goes is kept unless
+/// the retained side also holds it — NEVER `im`'s `difference`, which is
+/// SYMMETRIC and would fold in the plainly-surviving links, and not `im`'s
+/// `relative_complement`, which walks its argument, the retained side,
+/// through `im`'s copying consuming iterator. The global-ghost determination
+/// (LP17 — discoverable from NO document) reaches provenance R and is M6
+/// territory; M8 stops at the per-document set.
 ///
 /// The result-set filter (PUB round 2, lane 3.3, §3): the orphaned set drops
 /// every link whose HOME `readable` refuses, at link identity — a `d`
@@ -104,22 +106,22 @@ pub fn delete_orphans_on<W: DiscoveryWorld>(
     if p.subspace != content_subspace() {
         return Err(OrphanError::NotContentSubspace); // s_C only (mirror M5 DeleteError)
     }
-    let p_ordinal = p.ordinal.clone();
+    let p_ordinal = &p.ordinal;
     let n_c = w.m5().content_count(d);
     if width.is_zero() {
         return Err(OrphanError::EmptyWidth); // mirror M5 EmptyWidth
     }
-    if p_ordinal < Nat::one() || &p_ordinal + width > &n_c + Nat::one() {
+    let suffix_start = p_ordinal + width; // the first position past the deleted range
+    if *p_ordinal < Nat::one() || suffix_start > &n_c + Nat::one() {
         return Err(OrphanError::OutOfBounds); // folds M5's NotArranged + OutOfBounds (width ≥ 1)
     }
 
-    let a_del = w.m5().resolve(d, &content_vspan_at(&p_ordinal, width)); // no clipping now (bounds checked)
-    let prefix = if p_ordinal > Nat::one() {
-        Some(content_vspan_at(&Nat::one(), &(&p_ordinal - Nat::one())))
+    let a_del = w.m5().resolve(d, &content_vspan_at(p_ordinal, width)); // no clipping now (bounds checked)
+    let prefix = if *p_ordinal > Nat::one() {
+        Some(content_vspan_at(&Nat::one(), &(p_ordinal - Nat::one())))
     } else {
         None
     };
-    let suffix_start = &p_ordinal + width;
     let suffix = if suffix_start <= n_c {
         Some(content_vspan_at(
             &suffix_start,
@@ -136,9 +138,10 @@ pub fn delete_orphans_on<W: DiscoveryWorld>(
     let touching_retained = stab_runs(w.links(), &retained);
     Ok(OrphanReport {
         orphaned: touching_deleted
-            .relative_complement(touching_retained)
-            .into_iter()
-            .filter(|a| home_readable(readable, a)) // §3 — drop unreadable-home orphans
+            .iter()
+            .filter(|&a| !touching_retained.contains(a)) // the relative complement, from the deleted side
+            .filter(|&a| home_readable(readable, a)) // §3 — drop unreadable-home orphans
+            .cloned()
             .collect(),
     })
 }

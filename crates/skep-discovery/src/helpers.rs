@@ -1,6 +1,6 @@
 //! §Internal design — the shared free helpers every family composes: the
 //! run-set stab that turns an arrangement image into matched links, the home
-//! attribution and the disclosure test built on it, and the one windowing
+//! attribution and the home rule built on it, and the one windowing
 //! combinator. All pure over borrowed state; nothing here snapshots (callers
 //! thread ONE snapshot per operation).
 
@@ -67,18 +67,18 @@ pub(crate) fn home_of(a: &Address) -> Address {
     document_of(a).expect("a link address has zeros = 3, so its origin Document exists")
 }
 
-/// Is `a` DISCLOSED to the reader — may they read its home (§3, PUB-6.13)?
-/// The home projection composed with the caller's consult, in one place,
-/// because `readable` answers about a DOCUMENT and every disclosure question
+/// THE HOME RULE (§3, PUB-6.13): may the reader read `a`'s home? The home
+/// projection composed with the caller's predicate, in one place, because
+/// `readable` answers about a DOCUMENT and every question the rule answers
 /// here is asked about a LINK. Asked directly of the link it would answer
 /// TRUE: an element address is absent from the publication index exactly as
-/// a published document is, so the mask would open rather than close. That
-/// is why the composition is an element and not an idiom.
+/// a published document is, so the rule would admit every link. That is why
+/// the composition is an element and not an idiom.
 ///
 /// Total on every address, because the pointwise pair asks it of a
 /// caller's `a` before anything establishes that `a` is a link: an address
 /// with no document field — a node or an account — lives under no home and
-/// has nothing to withhold, so it is disclosed and the store's own answer
+/// has nothing to withhold, so the rule admits it and the store's own answer
 /// about it stands. Every link has a home, so on a result set this is
 /// exactly `readable(home(a))`.
 pub(crate) fn home_readable(readable: &dyn Fn(&Address) -> bool, a: &Address) -> bool {
@@ -96,10 +96,11 @@ pub(crate) fn home_readable(readable: &dyn Fn(&Address) -> bool, a: &Address) ->
 ///   `exhausted = (0 < 0) = false` with an empty batch and an unchanged
 ///   cursor — a silent non-terminating signal.
 /// * `keep` is the caller's post-filter over the candidate set — the FTT
-///   residence test, the home consult both families carry, or their
-///   conjunction — applied LAZILY during the range walk, so a masked or
-///   non-residing link is skipped BEFORE the slice and never counted against
-///   `n` (PUB-6.14), and a narrow query never materializes the filtered set.
+///   residence test, the home rule both families carry, or their
+///   conjunction — applied LAZILY during the range walk, so a link the home
+///   rule or the residence test refuses is skipped BEFORE the slice and never
+///   counted against `n` (PUB-6.14), and a narrow query never materializes
+///   the filtered set.
 /// * `exhausted = batch.len() < n` (a short window, zero included, W9);
 ///   `next` = the ≺-max of the batch, else the cursor unchanged.
 pub(crate) fn window_over(

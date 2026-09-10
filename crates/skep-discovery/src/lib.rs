@@ -20,20 +20,21 @@
 //! **addressable-filtered**: every present-state primitive is queried with
 //! `View::Active`, so a result is the selection index ASN-0131 writes
 //! `sel = findlinks ∩ addressable` and a nullified link never surfaces
-//! (Conflicts #8 — a deliberate divergence from the unfiltered foundations of
-//! ASN-0127/0108). `delete_orphans` and
-//! [`addressably_discoverable_from_on`] narrow the same way, the latter
+//! (Conflicts #8 — a deliberate divergence from ASN-0127/0108's
+//! foundations, which no addressability filter narrows). `delete_orphans`
+//! and [`addressably_discoverable_from_on`] narrow the same way, the latter
 //! diverging from ASN-0117/0098 by conjoining `is_active` onto LP12
 //! discoverability.
 //!
 //! Two reads depart from that, and a caller building a live-links view needs
 //! both:
 //!
-//! * [`project_on`] is UNFILTERED — coverage reaches it through M7's
-//!   `followlink`, which takes no `View` and reports what is recorded, so a
-//!   retracted link still projects the V-positions it covers. That is
-//!   ASN-0098's `project` unchanged; the addressable-narrowed question it
-//!   looks like it answers is [`addressably_discoverable_from_on`]'s.
+//! * [`project_on`] is NOT ADDRESSABLE-FILTERED — coverage reaches it
+//!   through M7's `followlink`, which takes no `View` and reports what is
+//!   recorded, so a retracted link still projects the V-positions it covers.
+//!   That is ASN-0098's `project` unchanged; the addressable-filtered
+//!   question it looks like it answers is
+//!   [`addressably_discoverable_from_on`]'s.
 //! * the lineage family ([`in_claims_on`]/[`out_claims_on`]) takes a `View`,
 //!   so the caller chooses: `Active` yields the operative graph, `Audit` the
 //!   full history including nullified claims, each disclosing its own
@@ -47,8 +48,8 @@
 //! (Conflicts #3), so the cursor survives orphaning and M8 pages with no
 //! index of its own.
 //!
-//! Every read of `d`'s arrangement but one reads `d`'s READING SURFACE —
-//! M5's `reading_surface`, the one pin of HEAD-FLOAT (PUB-2.49, PUB-2.50,
+//! Every arrangement read here but one is of `d`'s READING SURFACE — M5's
+//! `reading_surface`, the one pin of HEAD-FLOAT (PUB-2.49, PUB-2.50,
 //! PUB-2.53), which states what each kind of address answers from. The
 //! region family floats through [`image_on`], and the pointwise pair each
 //! through its own read of the runs, so the two agree about which links
@@ -65,40 +66,48 @@
 //! comparison is `addressably_discoverable_from`'s level-gate-free
 //! `classify_spans` touch test (§5).
 //!
-//! ## Disclosure
+//! ## The home rule
 //!
-//! A second narrowing, by READER where the first is by view: a link is
-//! disclosed only if the reader may read its HOME (PUB round 2, lane 3.3;
-//! PUB-6.13). M8 takes the reader as the caller's DOCUMENT predicate,
-//! `readable`, and never sees a principal, a grant or the read predicate's
-//! clauses. It composes that predicate with the home projection in ONE
-//! crate-internal element, because asked of a link instead of its home the
-//! predicate answers true and the mask opens.
+//! A second narrowing, by READER where the first is by view: THE HOME RULE
+//! (PUB round 2, lane 3.3; PUB-6.13) — a link is shown only if the reader
+//! may read its HOME. M8 takes the reader as the caller's DOCUMENT
+//! predicate, `readable`, and never sees a principal, a grant or the read
+//! predicate's clauses. It composes that predicate with the home projection
+//! in ONE crate-internal element, because asked of a link instead of its
+//! home the predicate answers true and the rule admits every link.
 //!
 //! It is orthogonal to `View::Active`, and to the descriptor's own `home`
 //! slot, which is a COVERAGE constraint (CN-STAB) and not an authorization.
-//! It is applied at link IDENTITY: a masked link is DROPPED, never withheld
-//! in place — M6's `retrieve_v_masked` is the other shape, and nothing here
-//! uses it.
+//! It is applied at link IDENTITY, in the two shapes PUB names, by the
+//! twelve reads that take the predicate as their last argument:
 //!
-//! Twelve reads take that predicate as their last argument. A principal-free
-//! caller passes one admitting every home, visibly at its call site, and
-//! [`LinkQuery`], which names no reader, does so in all twelve:
+//! * the RESULT-SET FILTER (PUB-6.13), on the ten RESULT-SET reads —
+//!   `findlinks`, `count` and `window` in both families,
+//!   [`retrieve_endsets_on`], [`delete_orphans_on`] and the lineage pair —
+//!   which drop every result link the rule refuses, and count and page the
+//!   survivors;
+//! * the ABSENCE RULE (PUB-6.6), on the POINTWISE pair's `a` ARGUMENT, since
+//!   neither answer names a link: an `a` the rule refuses is ABSENT, which
+//!   [`project_on`] answers `Err(NotALink)` and
+//!   [`addressably_discoverable_from_on`] `Ok(false)` — after the document
+//!   gate, and ahead of the resident-link read so a refused link and an
+//!   address naming nothing answer alike.
 //!
-//! * the ten RESULT-SET reads — `findlinks`, `count` and `window` in both
-//!   families, [`retrieve_endsets_on`], [`delete_orphans_on`] and the lineage
-//!   pair — drop every result link homed where the reader may not read, and
-//!   count and page the survivors;
-//! * the POINTWISE pair apply it to the `a` ARGUMENT, since neither answer
-//!   names a link: a masked `a` is ABSENT, which [`project_on`] answers
-//!   `Err(NotALink)` and [`addressably_discoverable_from_on`] `Ok(false)` —
-//!   after the document gate, and ahead of the residence read so a masked
-//!   link and an address naming nothing answer alike.
+//! Neither is the PER-RUN MASK (PUB-6.41, M6's `retrieve_v_masked`), which
+//! withholds in place; nothing here applies it. [`image_on`] alone takes no
+//! predicate: its answer names I-runs and no link. The division of labour is
+//! the same everywhere: a NAMED document's own readability is the caller's
+//! consult, before dispatch, and the homes of the links M8 names or is asked
+//! about are M8's.
 //!
-//! [`image_on`] alone carries none: its answer names I-runs and no link. The
-//! division of labour is the same everywhere: a NAMED document's own
-//! readability is the caller's consult, before dispatch, and the homes of
-//! the links M8 names or is asked about are M8's.
+//! A HARNESS caller — one answering for no reader class, as the engine's
+//! cross-store lifecycle test and this crate's suite do — passes the TOTAL
+//! predicate, admitting every home, visibly at its call site, and
+//! [`LinkQuery`], which names no reader class, does so in all twelve. Naming
+//! no reader class is not reading as the guest: a request that carries no
+//! principal reads at the GUEST class (PUB-1.31 with no principal —
+//! published documents alone) and passes that class's predicate, as M10 does
+//! for every unbound session. The total predicate is never a request's.
 //!
 //! ## Budgets
 //!
@@ -135,7 +144,7 @@
 //! * the region family ([`findlinks_v_on`], [`count_v_on`], [`window_v_on`],
 //!   [`retrieve_endsets_on`]) — three `stab`s, one per v1 slot, over the
 //!   image's runs; none when the image is empty. [`retrieve_endsets_on`]
-//!   adds one `readlink` per disclosed candidate.
+//!   adds one `readlink` per candidate the home rule admits.
 //! * the descriptor family ([`findlinks_ftt_on`], [`count_ftt_on`],
 //!   [`window_ftt_on`]) — one `match_links`, the smallest constraint driving
 //!   its scan (the whole active slice when nothing is constrained); none when
@@ -181,11 +190,12 @@
 //! [`DiscoveryWorld`], generic over `W` (Engine Composition Contract).
 //! Consumed only by M10, which reaches every read through the pure `*_on`
 //! twins: M10 pins ONE snapshot per request, reports its position as
-//! `as_of`, and answers for the request's reader — none of which the
+//! `as_of`, and answers at the request's reader class — none of which the
 //! self-snapshotting [`LinkQuery`] handle can serve, since its snapshot is
 //! taken and dropped inside the call, so the answer could not be labelled
-//! with the state it came from, and it names no reader. The handle serves
-//! callers reading current state without naming it, for no reader.
+//! with the state it came from, and it names no reader class. The handle
+//! serves callers reading current state without naming it, under the total
+//! predicate.
 //!
 //! The twins are free functions over a borrowed `&Snapshot<W>` — the dialect
 //! M1, M4 and M5 use for pure reads over borrowed state, and the one that

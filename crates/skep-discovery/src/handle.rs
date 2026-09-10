@@ -29,20 +29,23 @@ use crate::{
 /// the state it read (reporting it as an `as_of`, say) or read two answers off
 /// one state uses the pure `*_on` twins over its own `&Snapshot<W>` instead.
 ///
-/// It also names NO READER: every method whose `*_on` read takes a reader
-/// passes it `every_home`, so every link a query finds is disclosed whatever
-/// its home.
-/// That serves the principal-free callers — the engine's cross-store
-/// lifecycle test, this crate's suite. A caller answering for a reading
-/// principal calls the `*_on` functions with its reader's predicate. The
-/// handle takes none, because its one such caller, M10, must also name the
-/// state it read, which is the one thing this handle cannot do.
+/// It also names NO READER CLASS: every method whose `*_on` read takes a
+/// reader passes it the TOTAL predicate, `every_home`, so every link a query
+/// finds is returned whatever its home. That serves HARNESS callers — the
+/// engine's cross-store lifecycle test, this crate's suite — and never a
+/// request. A caller answering for a reader class — a session principal's,
+/// or the GUEST's, which is what a request without a principal reads as —
+/// calls the `*_on` functions with that class's predicate. The handle takes
+/// none, because its one such caller, M10, must also name the state it read,
+/// which is the one thing this handle cannot do.
 pub struct LinkQuery<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
 }
 
-/// The handle's reader: it names none, so every home is readable and every
-/// link a query finds is disclosed.
+/// The handle's reader: the TOTAL predicate, admitting every home, so every
+/// link a query finds is returned. It is not the GUEST's predicate, which
+/// admits published documents alone — a request without a principal reads at
+/// that class, never at this one.
 fn every_home(_: &Address) -> bool {
     true
 }
@@ -85,7 +88,7 @@ impl<'k, W: DiscoveryWorld> LinkQuery<'k, W> {
     //    disjunctive over slots; every result is the selection index
     //    `findlinks_V ∩ addressable`, so nullified links never appear) ──
 
-    /// The I-runs `region` resolves to through `d`'s live arrangement
+    /// The I-runs `region` resolves to through `d`'s reading surface
     /// (ASN-0127 image). See [`image_on`].
     pub fn image(&self, d: &Address, region: &[Span]) -> Result<Vec<Run>, QueryError> {
         image_on(&self.kernel.snapshot(), d, region)

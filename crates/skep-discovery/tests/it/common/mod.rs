@@ -39,8 +39,11 @@ fn every_document(_: &World, _: &Address) -> bool {
     true
 }
 
-/// The READER that may read every home — what a principal-free read passes
-/// M8, so every link a query finds is disclosed.
+/// The TOTAL predicate, admitting every home — the reader this suite's M8
+/// reads run at, beside [`EVERYONE`] for its writes, so every link a query
+/// finds is returned. It belongs to a harness, never a request: a request
+/// without a principal reads as the GUEST, which admits published documents
+/// alone.
 pub fn every_home(_: &Address) -> bool {
     true
 }

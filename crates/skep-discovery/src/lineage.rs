@@ -58,7 +58,7 @@ fn endpoint(e: &Endset, denotes: &'static str) -> Address {
 /// textual Df-DIR): `FROM = old/superseded`, `TO = new/superseding` — so
 /// `in(y)` (old = y) probes FROM and `out(x)` (new = x) probes TO.
 ///
-/// **The residence gate is what makes the composition compute the right
+/// **The resident-key gate is what makes the composition compute the right
 /// function**, not a guard against misuse. `enc([key])` matches by prefix
 /// COVERAGE, and coverage coincides with denotation only on the `dom(L)`
 /// prefix-antichain (EL4 + R0a): for a non-link `key`, its coverage could
@@ -66,8 +66,8 @@ fn endpoint(e: &Endset, denotes: &'static str) -> Address {
 /// endpoint lies UNDER `key`* rather than *claims whose endpoint IS `key`*.
 /// The gate cuts that off, and `[]` is then the TRUE answer rather than a
 /// fallback — a `[K_sup]` endpoint is `single_denoted` to a resident link
-/// address, so a non-link is no claim's endpoint. Residence, not activity: a
-/// nullified link is resident and remains a legal probe key.
+/// address, so a non-link is no claim's endpoint. Resident, not active: a
+/// nullified link is still resident and remains a legal probe key.
 ///
 /// **Two upstream panicking preconditions are discharged here**, in the one
 /// place they are established: `type_slice` faults on a `ty` that is neither
@@ -84,7 +84,7 @@ fn claims_on<W: DiscoveryWorld>(
 ) -> Vec<SupClaim> {
     let l = s.world().links();
     if l.readlink(key).is_none() {
-        return Vec::new(); // residence gate (EL4 + R0a)
+        return Vec::new(); // resident-key gate (EL4 + R0a)
     }
     let sup = l.reserved_type(ShippedType::Supersedes);
     let named = enc([key]); // bound: M7 borrows a constraint's query
@@ -94,10 +94,10 @@ fn claims_on<W: DiscoveryWorld>(
     hits.iter()
         .map(|c| claim_at(l, c))
         // The result-set filter (PUB round 2, lane 3.3, §3): a claim whose HOME
-        // the reader may not read is dropped. The one disclosure site that asks
-        // the consult directly rather than through `home_readable`: the
-        // projection is already in hand, `SupClaim::home` being `home(c)`
-        // (EL8b). The endpoints (`old`/`new`) stay as recorded, unfiltered.
+        // the reader may not read is dropped. The one site that applies the
+        // home rule without `home_readable`: the projection is already in hand,
+        // `SupClaim::home` being `home(c)` (EL8b). The endpoints (`old`/`new`)
+        // stay as recorded: only the CLAIM's home is asked.
         .filter(|c| readable(&c.home))
         .collect()
 }
@@ -108,9 +108,9 @@ fn claims_on<W: DiscoveryWorld>(
 ///
 /// TOTAL: every `Address` is admitted, and a `y` that is no resident link is
 /// no claim's `old`, so `[]` is the answer rather than a refusal — a caller
-/// owes no residence check before asking. `v = Active` yields the operative
-/// graph (`succ_o`), `Audit` the full history (`succ_h`); `Default` behaves
-/// as `Active` (M7's §G primitives coerce it).
+/// owes no check that `y` is resident before asking. `v = Active` yields the
+/// operative graph (`succ_o`), `Audit` the full history (`succ_h`);
+/// `Default` behaves as `Active` (M7's §G primitives coerce it).
 ///
 /// The view selects which CLAIMS are disclosed, never which endpoints: each
 /// [`SupClaim`]'s `old`/`new` are the addresses the claim names, read out as

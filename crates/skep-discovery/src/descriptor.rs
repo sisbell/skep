@@ -82,8 +82,8 @@ pub fn findlinks_ftt_on<W: DiscoveryWorld>(
 /// [`FourSet::is_unsatisfiable`]: same number, different assertion.
 ///
 /// The cardinality is the FILTERED one (PUB round 2, lane 3.3, §3; PUB-6.19):
-/// of the satisfying links surviving the home consult, by ENUMERATION — the
-/// same set [`findlinks_ftt_on`] returns under the same `readable`.
+/// of the satisfying links the home rule admits, by ENUMERATION — the same
+/// set [`findlinks_ftt_on`] returns under the same `readable`.
 pub fn count_ftt_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     q: &FourSet,
@@ -113,9 +113,9 @@ pub fn count_ftt_on<W: DiscoveryWorld>(
 /// the filtered set. The links this pages over are exactly the ones
 /// [`findlinks_ftt_on`] returns under the same `readable`.
 ///
-/// The home consult (PUB round 2, lane 3.3, §3) joins the residence
-/// post-filter in the lazy `keep`, so a masked link is skipped before the
-/// window slice (PUB-6.14), never counted against `n`.
+/// The home rule (PUB round 2, lane 3.3, §3) joins the residence post-filter
+/// in the lazy `keep`, so a link it refuses is skipped before the window
+/// slice (PUB-6.14), never counted against `n`.
 pub fn window_ftt_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     q: &FourSet,

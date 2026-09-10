@@ -31,10 +31,13 @@ pub enum SlotSpec {
     Spans(Endset),
 }
 
-/// The four-set descriptor `q = (H, F, G, Θ)` (ASN-0121). `home` is matched
-/// against `home(a)` — an M1 `document_of` address projection — NOT a slot
-/// and NOT an arrangement-presence test (ASN-0132 CN-STAB: a reverse-orphaned
-/// link still satisfies a home-bounded query).
+/// The four-set descriptor `q = (H, F, G, Θ)` (ASN-0121). `home` is the HOME
+/// SLOT, which ASN-0132 calls structurally different from the three link
+/// slots: it is matched against `home(a)` — an M1 `document_of` address
+/// projection — so it is NOT a link slot (it never reaches M7's AND-of-ORs;
+/// `FourSet::at_home` answers it) and NOT an arrangement-presence test
+/// (ASN-0132 CN-STAB: a reverse-orphaned link still satisfies a home-bounded
+/// query).
 ///
 /// `Eq`/`Hash` are REPRESENTATIONAL, not semantic: [`SlotSpec::Empty`] and a
 /// `Spans` naming nothing are one query — [`FourSet::is_unsatisfiable`]

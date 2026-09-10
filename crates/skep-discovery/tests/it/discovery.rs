@@ -3,18 +3,20 @@
 //! entry point that inherits it, and the defined-empty result; image dedup
 //! and the region-span-then-V order it returns in; disjunctive +
 //! active-filtered region discovery; the stateless key-cut windowing (clamp,
-//! exhaustion, cursor-survives-orphaning) and the one selection index its
-//! three read-outs share; RETRIEVEENDSETS' identity-withholding whole-endset
+//! exhaustion, and a cursor surviving its link's orphaning and, apart from
+//! it, its retraction) and the one selection index its three read-outs
+//! share; RETRIEVEENDSETS' identity-withholding whole-endset
 //! pinned-order read-out; the FTT unit/zero/conjunction algebra, the home
 //! address-projection filter and its prefix-coverage reach; the two families'
 //! zeros and their two stabilities; projection, its content-subspace-only
 //! narrowing, addressable discoverability, the precedence that settles their
 //! document argument before their address one, the trunk head both read a
-//! published document through, and the absence both read a masked link as;
+//! published document through, and the absence rule both apply to a link
+//! the home rule refuses;
 //! the delete-orphan preview measured against the DELETE it previews, over
 //! that operation's whole accepted domain, against M5's own admission, and at
 //! the ω and publication gates where the two part; the flipped lineage probes
-//! with the residence gate, the claim's own home attribution, the endpoints
+//! with the resident-key gate, the claim's own home attribution, the endpoints
 //! it reads out as recorded and the write-surface fences that read-out rests
 //! on; every result-set read dropping exactly the links homed where its
 //! reader may not read; the two budgets, each refused at its boundary and
@@ -423,16 +425,25 @@ fn findlinks_v_is_disjunctive_and_active_filtered() {
 
 // ───────────────────────── §2 — windowed enumeration ─────────────────────────
 
+/// §2 — the key-cut pages, and its cursor survives its link's departure from
+/// the matched set by either of the two roads the corpus keeps apart
+/// (ASN-0132): ORPHANING, where the link loses its content mapping and stays
+/// active — ASN-0108's view-loss, the case W8 names — and RETRACTION, where
+/// it is nullified. Resume is a cut past the cursor and never a lookup of
+/// it, so neither road can fault it; each departed cursor sits between live
+/// links, so a resume that restarted from the top when its cursor was gone
+/// would answer wide and fail.
 #[test]
 fn window_v_pages_by_key_cut_and_survives_orphaning() {
     let k = kernel();
-    seed_content(&k, &doc1(), 1);
+    seed_content(&k, &doc1(), 2); // V 1..2 → ca(1..2)
     let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
-    for to in [ca(101), ca(102), ca(103)] {
-        link(&store, &doc1(), &[ca(1)], &[to]);
-    }
-    let region = [vspan(1, 1, 1)];
+    link(&store, &doc1(), &[ca(1)], &[ca(101)]); // la(1): position 1
+    link(&store, &doc1(), &[ca(2)], &[ca(102)]); // la(2): position 2 alone
+    link(&store, &doc1(), &[ca(1)], &[ca(103)]); // la(3): position 1
+    link(&store, &doc1(), &[ca(1)], &[ca(104)]); // la(4): position 1
+    let region = [vspan(1, 1, 2)];
 
     // Ascending address order; next = ≺-max of the batch; full batch ⇒ not
     // exhausted.
@@ -441,14 +452,14 @@ fn window_v_pages_by_key_cut_and_survives_orphaning() {
     assert_eq!(w1.next, Some(la(2)));
     assert!(!w1.exhausted);
     // Resume strictly past the cursor; short batch ⇒ exhausted (W9).
-    let w2 = lq.window_v(&doc1(), &region, w1.next, 2).expect("window");
-    assert_eq!(w2.batch, vec![la(3)]);
-    assert_eq!(w2.next, Some(la(3)));
+    let w2 = lq.window_v(&doc1(), &region, w1.next, 3).expect("window");
+    assert_eq!(w2.batch, vec![la(3), la(4)]);
+    assert_eq!(w2.next, Some(la(4)));
     assert!(w2.exhausted);
     // Past the end: empty batch, cursor unchanged, still exhausted.
     let w3 = lq.window_v(&doc1(), &region, w2.next, 2).expect("window");
     assert_eq!(w3.batch, vec![]);
-    assert_eq!(w3.next, Some(la(3)));
+    assert_eq!(w3.next, Some(la(4)));
     assert!(w3.exhausted);
 
     // n = 0 is clamped to 1 (total API) — never a false non-terminal.
@@ -456,12 +467,31 @@ fn window_v_pages_by_key_cut_and_survives_orphaning() {
     assert_eq!(w0.batch, vec![la(1)]);
     assert!(!w0.exhausted);
 
-    // Cursor survives orphaning (W8): la(2) leaves the matched set under
-    // nullification, but the key-cut resume needs no lookup of it.
-    store.nullify(SYS, &doc2(), &la(2)).expect("nullify succeeds");
+    // Cursor survives ORPHANING (W8): la(2)'s only witness in doc1 leaves the
+    // arrangement, so la(2) leaves the matched set by view-loss while it
+    // stays active — and the key-cut resume needs no lookup of it.
+    Vstream::new(&k)
+        .delete(SYS, &doc1(), vp(1, 2), n(1))
+        .expect("delete succeeds");
+    assert!(
+        k.snapshot().world().links().is_active(&la(2)),
+        "orphaned, not retracted"
+    );
+    assert_eq!(
+        lq.findlinks_v(&doc1(), &region),
+        Ok(vec![la(1), la(3), la(4)])
+    );
     let w4 = lq.window_v(&doc1(), &region, Some(la(2)), 5).expect("window");
-    assert_eq!(w4.batch, vec![la(3)]);
+    assert_eq!(w4.batch, vec![la(3), la(4)]);
     assert!(w4.exhausted);
+
+    // And survives RETRACTION, the other road: la(3) is nullified and leaves
+    // the set with its content mapping intact, and the resume past it needs
+    // no lookup of it either.
+    store.nullify(SYS, &doc2(), &la(3)).expect("nullify succeeds");
+    let w5 = lq.window_v(&doc1(), &region, Some(la(3)), 5).expect("window");
+    assert_eq!(w5.batch, vec![la(4)]);
+    assert!(w5.exhausted);
 }
 
 /// §2 — one selection index, read out three ways: `count_v`, `findlinks_v`
@@ -773,8 +803,8 @@ fn ftt_home_filter_is_an_address_projection_applied_lazily() {
     link(&store, &doc1(), &[ca(2)], &[ca(101)]);
     link(&store, &doc2(), &[ca(1)], &[ca(102)]);
 
-    // home is matched against home(a) = document_of — an address projection,
-    // not a slot and not an arrangement test.
+    // The home slot is matched against home(a) = document_of — an address
+    // projection, not a link slot and not an arrangement test.
     let q_home1 = FourSet {
         home: SlotSpec::Spans(enc(&[doc1()])),
         ..FourSet::any()
@@ -1004,7 +1034,8 @@ fn project_is_content_subspace_i_to_v_with_conflated_notalink() {
         Err(QueryError::DocNotRegistered)
     );
 
-    // UNFILTERED — the one read here that is not narrowed to the active view.
+    // NOT ADDRESSABLE-FILTERED — the one read here that is not narrowed to
+    // the active view.
     // Nullifying e1 leaves its projection exactly as it was (followlink
     // reports what is RECORDED), while addressably_discoverable_from, which
     // conjoins is_active, flips: the two answer different questions about one
@@ -1082,8 +1113,8 @@ fn addressably_discoverable_from_is_lp12_and_addressable_over_both_subspaces() {
 
     // LP12 conjoined with addressability: a nullified-but-reachable link is
     // discoverable and not addressable, so it answers Ok(false) — and a
-    // nullified link is still a link (it passes the residence gate rather
-    // than erring NotALink).
+    // nullified link is still a link (it is still resident, so it passes the
+    // resident-link read rather than erring NotALink).
     store.nullify(SYS, &doc2(), &e1).expect("nullify succeeds");
     assert_eq!(lq.addressably_discoverable_from(&e1, &doc1()), Ok(false));
 
@@ -1162,30 +1193,33 @@ fn the_pointwise_pair_reads_the_trunk_head_the_region_family_resolves() {
     }
 }
 
-/// §5 — the pointwise pair reads a link homed where the reader may not read
-/// as ABSENT: `project` gives the non-link's `NotALink`,
-/// `addressably_discoverable_from` the retracted link's `Ok(false)`. The
-/// consult sits where both cards put it: after the document gate, so an
-/// unregistered `d` still names the document fault; and ahead of the
-/// residence read, so a masked link and an address naming nothing under the
-/// same unreadable document answer alike — the reader learns nothing of
-/// that document's link chain. An address with no home is no one's to
-/// withhold, so the store answers for it, masked reader or not.
+/// §5 — the pointwise pair apply the ABSENCE RULE: a link homed where the
+/// reader may not read is ABSENT — `project` gives the non-link's
+/// `NotALink`, `addressably_discoverable_from` the retracted link's
+/// `Ok(false)`. The absence rule sits where both cards put it: after the
+/// document gate, so an unregistered `d` still names the document fault; and
+/// ahead of the resident-link read, so a refused link and an address naming
+/// nothing under the same unreadable document answer alike — the reader
+/// learns nothing of that document's link chain. An address with no home is
+/// no one's to withhold, so the store answers for it, whatever the reader.
 #[test]
-fn the_pointwise_reads_see_a_masked_link_as_absent_after_the_document_and_before_residence() {
+fn the_pointwise_reads_apply_the_absence_rule_after_the_document_and_before_residence() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let masked = link(&store, &doc2(), &[ca(1)], &[ca(101)]);
+    let doc2_link = link(&store, &doc2(), &[ca(1)], &[ca(101)]);
     let nothing = la2(99); // under doc2, naming no link
     let snap = k.snapshot();
-    let masks_doc2 = |d: &Address| *d != doc2();
+    let cannot_read_doc2 = |d: &Address| *d != doc2();
 
     // Admitted, the link answers as a link and the non-link as a non-link …
-    assert!(project_on(&snap, &masked, FROM, &doc1(), &every_home)
+    assert!(project_on(&snap, &doc2_link, FROM, &doc1(), &every_home)
         .expect("project")
         .denotes(&t(&[1, 1])));
-    assert_eq!(addressably_discoverable_from_on(&snap, &masked, &doc1(), &every_home), Ok(true));
+    assert_eq!(
+        addressably_discoverable_from_on(&snap, &doc2_link, &doc1(), &every_home),
+        Ok(true)
+    );
     assert_eq!(
         project_on(&snap, &nothing, FROM, &doc1(), &every_home),
         Err(QueryError::NotALink)
@@ -1194,26 +1228,26 @@ fn the_pointwise_reads_see_a_masked_link_as_absent_after_the_document_and_before
         addressably_discoverable_from_on(&snap, &nothing, &doc1(), &every_home),
         Err(QueryError::NotALink)
     );
-    // … and masked, the two cannot be told apart.
-    for addr in [&masked, &nothing] {
+    // … and refused, the two cannot be told apart.
+    for addr in [&doc2_link, &nothing] {
         assert_eq!(
-            project_on(&snap, addr, FROM, &doc1(), &masks_doc2),
+            project_on(&snap, addr, FROM, &doc1(), &cannot_read_doc2),
             Err(QueryError::NotALink),
             "{addr:?} is absent to project"
         );
         assert_eq!(
-            addressably_discoverable_from_on(&snap, addr, &doc1(), &masks_doc2),
+            addressably_discoverable_from_on(&snap, addr, &doc1(), &cannot_read_doc2),
             Ok(false),
             "{addr:?} is absent, so not discoverable"
         );
     }
     // After the document gate: the document fault still speaks first.
     assert_eq!(
-        project_on(&snap, &masked, FROM, &unregistered_doc(), &masks_doc2),
+        project_on(&snap, &doc2_link, FROM, &unregistered_doc(), &cannot_read_doc2),
         Err(QueryError::DocNotRegistered)
     );
     assert_eq!(
-        addressably_discoverable_from_on(&snap, &masked, &unregistered_doc(), &masks_doc2),
+        addressably_discoverable_from_on(&snap, &doc2_link, &unregistered_doc(), &cannot_read_doc2),
         Err(QueryError::DocNotRegistered)
     );
     // An ACCOUNT address has no home: nothing to withhold, even from a reader
@@ -1577,8 +1611,9 @@ fn lineage_probes_flipped_slots_with_residence_gate() {
     // Default behaves as Active (M7's §G primitives coerce it).
     assert_eq!(lq.in_claims(&e1, View::Default), vec![expected]);
 
-    // Residence gate: a non-link key returns [] — without it, doc1's prefix
-    // coverage would over-match the claim (whose endpoints live under doc1).
+    // Resident-key gate: a non-link key returns [] — without it, doc1's
+    // prefix coverage would over-match the claim (whose endpoints live under
+    // doc1).
     assert_eq!(lq.in_claims(&doc1(), View::Active), vec![]);
     assert_eq!(lq.in_claims(&ca(1), View::Active), vec![]);
 
@@ -1627,7 +1662,7 @@ fn lineage_attributes_a_claim_to_its_own_home_not_its_endpoints() {
 /// §7 — the view filters CLAIMS, never their endpoints: under any view a
 /// claim's `old`/`new` are the addresses it NAMES, read out as recorded, so a
 /// live claim can name a nullified link and `active` stays the claim's own.
-/// And the enumeration's gate is RESIDENCE, not activity — a nullified link
+/// And the enumeration's gate asks RESIDENT, not active — a nullified link
 /// is still resident, so it is still a legal probe key. Every other lineage
 /// case nullifies the claim; neither promise is watched by that.
 #[test]
@@ -1659,7 +1694,7 @@ fn a_live_claim_names_a_nullified_endpoint_and_a_nullified_key_still_probes() {
         }]
     );
     // A nullified link is resident, so it is still a legal probe key: the
-    // gate is residence, not activity.
+    // gate asks resident, not active.
     assert_eq!(
         lq.out_claims(&e2, View::Active)
             .into_iter()
@@ -1795,9 +1830,9 @@ fn lineage_endpoints_rest_on_a_fence_the_write_surface_keeps() {
     );
 }
 
-// ─────────────── disclosure — the reader argument (PUB-6.13) ───────────────
+// ───────────── the home rule — the reader argument (PUB-6.13) ─────────────
 
-/// Drain a window read to exhaustion ONE link per page, so a masked link
+/// Drain a window read to exhaustion ONE link per page, so a dropped link
 /// counted against `n` would show as a page that comes back short, reports
 /// exhaustion, and stops the drain early.
 fn drain_by_ones(page: impl Fn(Cursor) -> Window) -> Vec<Address> {
@@ -1821,9 +1856,9 @@ fn drain_by_ones(page: impl Fn(Cursor) -> Window) -> Vec<Address> {
 /// here may read everything but doc2, and the fixture homes links in both
 /// documents, every one touching doc1's content, so each read-out has
 /// something to drop and something to keep. The mistake the law exists for
-/// is a site that asks the consult about the LINK instead of its home: a link
-/// address is no draft, so it reads as published and the mask opens — and
-/// that one read then keeps doc2's links.
+/// is a site that asks the home rule's question of the LINK instead of its
+/// home: a link address is no draft, so it reads as published and the rule
+/// admits every link — and that one read then keeps doc2's links.
 #[test]
 fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_read() {
     let k = kernel();
@@ -1839,7 +1874,7 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
     let t1 = link(&store, &doc2(), &[ca(3)], &[ca(103)]);
     // One supersession claim homed in each document, both with old = m0.
     let (kept, _) = store.assert_sup(SYS, &doc1(), &m0, &m1).expect("assert_sup succeeds");
-    let (masked, _) = store.assert_sup(SYS, &doc2(), &m0, &t0).expect("assert_sup succeeds");
+    let (dropped, _) = store.assert_sup(SYS, &doc2(), &m0, &t0).expect("assert_sup succeeds");
 
     let snap = k.snapshot();
     let reader = |d: &Address| *d != doc2();
@@ -1853,7 +1888,7 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
     // The descriptor family over the unit descriptor: every link in the store.
     let q = FourSet::any();
     let all = findlinks_ftt_on(&snap, &q, &every_home);
-    assert!(all.contains(&t0) && all.contains(&masked), "doc2's links are in the store");
+    assert!(all.contains(&t0) && all.contains(&dropped), "doc2's links are in the store");
     let seen = findlinks_ftt_on(&snap, &q, &reader);
     assert_eq!(seen, survivors(all), "findlinks_ftt");
     assert_eq!(count_ftt_on(&snap, &q, &reader), seen.len(), "count_ftt");
@@ -1896,7 +1931,7 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
     );
 
     // The delete-orphan preview of position 3: m2 and t1 lose their last
-    // witness, and only m2 is disclosed — the consult reads the orphan set
+    // witness, and only m2 is reported — the home rule reads the orphan set
     // after it is computed, so it never changes which links are orphaned.
     let orphaned = delete_orphans_on(&snap, &doc1(), &vp(1, 3), &n(1), &every_home)
         .expect("preview")
@@ -1910,7 +1945,7 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
     // The lineage pair: the doc2-homed claim goes, from both probes.
     let claims = |found: Vec<SupClaim>| -> Vec<Address> { found.into_iter().map(|c| c.claim).collect() };
     let all = claims(in_claims_on(&snap, &m0, View::Active, &every_home));
-    assert_eq!(all, vec![kept.clone(), masked.clone()]);
+    assert_eq!(all, vec![kept.clone(), dropped.clone()]);
     assert_eq!(claims(in_claims_on(&snap, &m0, View::Active, &reader)), survivors(all));
     for new in [&m1, &t0] {
         let all = claims(out_claims_on(&snap, new, View::Active, &every_home));
@@ -1958,7 +1993,7 @@ fn region_and_home_census<W: DiscoveryWorld>(
     region: &[Span],
 ) -> Result<(usize, usize), QueryError> {
     let reaching = count_v_on(s, d, region, &every_home)?;
-    let resident = count_ftt_on(
+    let homed = count_ftt_on(
         s,
         &FourSet {
             home: SlotSpec::Spans(enc([d])),
@@ -1966,7 +2001,7 @@ fn region_and_home_census<W: DiscoveryWorld>(
         },
         &every_home,
     );
-    Ok((reaching, resident))
+    Ok((reaching, homed))
 }
 
 /// One bound names the world M8 reads under, and `Default` is the wildcard

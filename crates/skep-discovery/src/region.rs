@@ -3,7 +3,8 @@
 //! `count_v`, `window_v`, and RETRIEVEENDSETS. Every result is ASN-0131's
 //! selection index `sel = findlinks_V ∩ addressable`, read out four ways —
 //! nullified links never surface (Conflicts #8, a deliberate divergence from
-//! ASN-0127/0108's unfiltered `findlinks_V`/`Match`).
+//! ASN-0127/0108's `findlinks_V`/`Match`, which no addressability filter
+//! narrows).
 //!
 //! The shape a request must have lives here too, as the constructor/gate pair
 //! [`content_vspan`]/`check_region` — the family that judges a region is the
@@ -137,9 +138,11 @@ fn check_region(region: &[Span]) -> Result<(), QueryError> {
     Ok(())
 }
 
-/// V→I resolution of `region` through `d`'s live arrangement (ASN-0127
-/// image = `W ∩ dom M(d)` — unarranged positions contribute nothing; M5's
-/// `resolve` clips silently, which the up-front gates make harmless).
+/// V→I resolution of `region` through `d`'s READING SURFACE (ASN-0127's
+/// image read there: `W ∩ dom M(reading_surface(d))`, which is `W ∩ dom M(d)`
+/// itself wherever `d` is its own reading surface — unarranged positions
+/// contribute nothing; M5's `resolve` clips silently, which the up-front
+/// gates make harmless).
 ///
 /// REFUSES, IN THIS ORDER: `DocNotRegistered` — the document-existence gate
 /// is the first act, M5 conflating registered-empty with unallocated — then
@@ -171,7 +174,7 @@ fn check_region(region: &[Span]) -> Result<(), QueryError> {
 /// arrangement resolved is `d`'s READING SURFACE — M5's `reading_surface`,
 /// the one pin. The whole region family inherits it through this function:
 /// `findlinks_v`, `count_v`, `window_v` and `retrieve_endsets` float exactly
-/// as `image` does. The registry gate runs on the address named, ahead of the
+/// as `image` does. The document gate runs on the address named, ahead of the
 /// float (PUB-6.37).
 pub fn image_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
@@ -221,8 +224,8 @@ pub(crate) fn findlinks_v_set_on<W: DiscoveryWorld>(
 /// ASCENDING ADDRESS ORDER: ASN-0108's permanent enumeration key, so this
 /// enumerates in the order [`window_v_on`] pages by.
 /// result = `findlinks_V ∩ addressable` (`View::Active`) — nullified links
-/// never surface; diverges from ASN-0127's UNFILTERED `findlinks_V`
-/// (Conflicts #8).
+/// never surface; diverges from ASN-0127's `findlinks_V` over all of
+/// `dom(L)` (Conflicts #8).
 ///
 /// REFUSES what [`image_on`] refuses, in its order: `DocNotRegistered`,
 /// `BadRegion`, `ImageTooLarge`. There is no fourth refusal — a registered
@@ -257,9 +260,9 @@ pub fn findlinks_v_on<W: DiscoveryWorld>(
 /// `Result` to a number would lose.
 ///
 /// The cardinality is the FILTERED one (PUB round 2, lane 3.3, §3;
-/// PUB-6.19): of the links surviving the home consult, by ENUMERATION — the
-/// same set [`findlinks_v_on`] returns under the same `readable`, counted
-/// rather than collected, so the two cannot disagree.
+/// PUB-6.19): of the links the home rule admits, by ENUMERATION — the same
+/// set [`findlinks_v_on`] returns under the same `readable`, counted rather
+/// than collected, so the two cannot disagree.
 pub fn count_v_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
@@ -289,10 +292,10 @@ pub fn count_v_on<W: DiscoveryWorld>(
 /// `BadRegion`, `ImageTooLarge`. A refusal is never reported as an empty
 /// exhausted window.
 ///
-/// The result-set filter (PUB round 2, lane 3.3, §3): the home consult is
+/// The result-set filter (PUB round 2, lane 3.3, §3): the home rule is
 /// applied LAZILY during the key-cut, at link identity and BEFORE the window
-/// slice (PUB-6.14), so a masked link is skipped rather than counted against
-/// `n`.
+/// slice (PUB-6.14), so a link it refuses is skipped rather than counted
+/// against `n`.
 pub fn window_v_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
@@ -334,7 +337,7 @@ pub fn window_v_on<W: DiscoveryWorld>(
 /// The result-set filter (PUB round 2, lane 3.3, §3; PUB-6.15): filtered at
 /// link HOME, UNFILTERED at origin — a link whose home the reader may not
 /// read contributes no pair, but a surviving link's endset is surfaced WHOLE,
-/// its spans never masked by their origin. So the consult is at the
+/// its spans never masked by their origin. So the home rule is asked at the
 /// CANDIDATE link's identity, once, before its slots are read.
 pub fn retrieve_endsets_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
@@ -349,7 +352,7 @@ pub fn retrieve_endsets_on<W: DiscoveryWorld>(
     let mut kept: HashSet<(usize, Endset)> = HashSet::new(); // internal throwaway dedup by structural Eq
     let mut spans_kept: usize = 0;
     for c in sel.iter() {
-        // The home consult, at the candidate link's identity (§3): a link whose
+        // The home rule, at the candidate link's identity (§3): a link whose
         // home is unreadable contributes no pair. Its endset — if it survived —
         // is unfiltered at origin (PUB-6.15).
         if !home_readable(readable, c) {

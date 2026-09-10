@@ -87,8 +87,8 @@ fn content_vspan_at(ordinal: &Nat, count: &Nat) -> Span {
 /// The result-set filter (PUB round 2, lane 3.3, §3): the orphaned set drops
 /// every link whose HOME `readable` refuses, at link identity — a `d`
 /// argument's own readability is the caller's doc-argument consult
-/// (pre-dispatch), not this preview's. The consult runs AFTER the set
-/// identity, so it changes which orphans are disclosed and never which links
+/// (pre-dispatch), not this preview's. The home rule runs AFTER the set
+/// identity, so it changes which orphans are reported and never which links
 /// are orphaned.
 pub fn delete_orphans_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,

@@ -19,12 +19,13 @@
 //! routes the whole region family through as well. So the pair answers about
 //! the arrangement a reader of `d` sees, and agrees with the region family
 //! about which links reach `d`: a link `findlinks_v` finds through `d` is one
-//! `addressably_discoverable_from` calls reachable from it. The registry gate
+//! `addressably_discoverable_from` calls reachable from it. The document gate
 //! runs on the address named, ahead of the float (PUB-6.37).
 //!
-//! Both take the caller's DOCUMENT predicate, asked of `a`'s home: neither
-//! answer names a link, so there is no result set to filter, and a link the
-//! reader may not see is instead ABSENT as an argument (PUB-6.6).
+//! Both take the caller's DOCUMENT predicate and apply the ABSENCE RULE
+//! (PUB-6.6) — the home rule asked of `a`'s home: neither answer names a
+//! link, so there is no result set to filter, and a link the reader may not
+//! see is instead ABSENT as an argument.
 //!
 //! The per-link `classify_spans` touch test here is M8's one
 //! pointwise span comparison — a level-gate-free order relation, total on
@@ -44,14 +45,14 @@ use crate::DiscoveryWorld;
 /// I→V projection of link `a`'s `slot` into the CONTENT subspace of the
 /// arrangement a reader of `d` sees (ASN-0098 `project`).
 ///
-/// UNFILTERED — the one read here that is not narrowed to the active view.
-/// The coverage comes from M7's `followlink`, which takes no `View` and
-/// reports what is recorded, so a NULLIFIED link's slot still projects to the
-/// V-positions it covers. That is ASN-0098's `project`, which knows nothing of
-/// retraction; the addressable-narrowed question — is this link discoverable
-/// AND active? — is [`addressably_discoverable_from_on`], and a caller who
-/// wants "the live links reaching here" asks that or the region family, not
-/// this.
+/// NOT ADDRESSABLE-FILTERED — the one read here that is not narrowed to the
+/// active view. The coverage comes from M7's `followlink`, which takes no
+/// `View` and reports what is recorded, so a NULLIFIED link's slot still
+/// projects to the V-positions it covers. That is ASN-0098's `project`, which
+/// knows nothing of retraction; the addressable-filtered question — is this
+/// link discoverable AND active? — is [`addressably_discoverable_from_on`],
+/// and a caller who wants "the live links reaching here" asks that or the
+/// region family, not this.
 ///
 /// CONTENT-SUBSPACE ONLY — strictly weaker than ASN-0098's subspace-agnostic
 /// `project`: a link reachable solely through `d`'s LINK subspace projects ∅
@@ -65,20 +66,20 @@ use crate::DiscoveryWorld;
 /// the result is in the V-coordinates [`crate::image_on`] resolves for the
 /// same `d`.
 ///
-/// The disclosure consult (PUB round 2, lane 3.3, §2; PUB-6.6) is asked of
-/// the ARGUMENT `a`, because the answer names no link: a link whose home
-/// `readable` refuses is ABSENT, and answers `Err(NotALink)` — exactly what
-/// an address naming no link gets. The consult runs after the document gate
-/// and AHEAD of the residence read. After, so the family's precedence holds:
-/// an unregistered `d` names the document fault, whatever `a` is. Ahead, so a
-/// masked link and an address naming nothing under the same unreadable
-/// document answer alike, and the answer says nothing about that document's
-/// link chain. `d`'s own readability is the caller's doc-argument consult
-/// (pre-dispatch), not this read's; an `a` with no document field has no home
-/// to withhold, and the store answers for it.
+/// The ABSENCE RULE (PUB round 2, lane 3.3, §2; PUB-6.6) — the home rule
+/// asked of the ARGUMENT `a`, because the answer names no link: a link whose
+/// home `readable` refuses is ABSENT, and answers `Err(NotALink)` — exactly
+/// what an address naming no link gets. The rule runs after the document gate
+/// and AHEAD of the resident-link read. After, so the family's precedence
+/// holds: an unregistered `d` names the document fault, whatever `a` is.
+/// Ahead, so a refused link and an address naming nothing under the same
+/// unreadable document answer alike, and the answer says nothing about that
+/// document's link chain. `d`'s own readability is the caller's doc-argument
+/// consult (pre-dispatch), not this read's; an `a` with no document field has
+/// no home to withhold, and the store answers for it.
 ///
 /// REFUSES, IN THIS ORDER: `DocNotRegistered` (`d` is not M3-registered);
-/// `NotALink` for a masked `a`, then for an `a` that names no link or a
+/// `NotALink` for an absent `a`, then for an `a` that names no link or a
 /// `slot` out of range; then `ImageTooLarge`. The order is the family's, not
 /// this function's — every argument about `d` is settled before any argument
 /// about `a` — so a call that is faulty in two ways names the document fault.
@@ -118,7 +119,7 @@ pub fn project_on<W: DiscoveryWorld>(
         return Err(QueryError::DocNotRegistered);
     }
     if !home_readable(readable, a) {
-        return Err(QueryError::NotALink); // absent (PUB-6.6), before residence is read
+        return Err(QueryError::NotALink); // absent (PUB-6.6), ahead of the resident-link read
     }
     let coverage = w
         .links()
@@ -164,51 +165,53 @@ fn touches(e: &Endset, extents: &[Span]) -> bool {
 /// composed with M5's `project`.
 ///
 /// Tests LP12's characterisation directly per link —
-/// `∃ i : coverage(Σ.L(a).eᵢ) ∩ ran(M(d)) ≠ ∅` over BOTH subspaces
-/// (`content_runs` + `link_runs`) — conjoined with `is_active(a)`; O(arity ×
-/// |runs|), never the F-FULL whole-document-stab membership route. The test
-/// iterates the link's full arity, so it carries no arity-3 caveat.
+/// `∃ i : coverage(Σ.L(a).eᵢ) ∩ ran(M(reading_surface(d))) ≠ ∅` over BOTH
+/// subspaces (`content_runs` + `link_runs`) — conjoined with `is_active(a)`;
+/// O(arity × |runs|), never the F-FULL whole-document-stab membership route.
+/// The test iterates the link's full arity, so it carries no arity-3 caveat.
 ///
-/// HEAD-FLOAT: `M(d)` is the arrangement of `d`'s reading surface — the one
-/// the region family resolves for the same `d`, which is what keeps the two
-/// agreeing that a link reaches `d`.
+/// HEAD-FLOAT: LP12 is read at `d`'s reading surface —
+/// `M(reading_surface(d))`, which is `M(d)` itself wherever `d` is its own
+/// reading surface — the arrangement the region family resolves for the same
+/// `d`, which is what keeps the two agreeing that a link reaches `d`.
 ///
-/// The disclosure consult (PUB round 2, lane 3.3, §2; PUB-6.6) is asked of
-/// the ARGUMENT `a`: a link whose home `readable` refuses is ABSENT, and
-/// absent ⟹ not discoverable, so it answers `Ok(false)`. That is the
+/// The ABSENCE RULE (PUB round 2, lane 3.3, §2; PUB-6.6) — the home rule
+/// asked of the ARGUMENT `a`: a link whose home `readable` refuses is ABSENT,
+/// and absent ⟹ not discoverable, so it answers `Ok(false)`. That is the
 /// RETRACTED link's answer, not the `Err(NotALink)` an address naming nothing
 /// gets — so the pair's two absence shapes differ, and [`project_on`] beside
-/// this answers `Err(NotALink)`. Neither shape discloses the masked
-/// document's link chain, because the consult runs AHEAD of the residence
+/// this answers `Err(NotALink)`. Neither shape reveals the unreadable
+/// document's link chain, because the rule runs AHEAD of the resident-link
 /// read: every address under an unreadable document answers `Ok(false)`
-/// here, a masked link and a non-link alike. It runs after the document gate,
-/// so an unregistered `d` names the document fault whatever `a` is; `d`'s own
-/// readability is the caller's doc-argument consult (pre-dispatch); an `a`
-/// with no document field has no home to withhold, and the store answers for
-/// it.
+/// here, a refused link and a non-link alike. It runs after the document
+/// gate, so an unregistered `d` names the document fault whatever `a` is;
+/// `d`'s own readability is the caller's doc-argument consult (pre-dispatch);
+/// an `a` with no document field has no home to withhold, and the store
+/// answers for it.
 ///
 /// REFUSES, IN THIS ORDER: `DocNotRegistered`, then — for an admitted `a`
-/// only — `NotALink`, then `ImageTooLarge`. A masked `a` answers `Ok(false)`
+/// only — `NotALink`, then `ImageTooLarge`. An absent `a` answers `Ok(false)`
 /// between the first and the second, and reaches neither. Every argument
 /// about `d` is settled before any argument about `a`, so an unregistered `d`
 /// with a non-link `a` names the document fault. Given the document gate
 /// passes and `a` is admitted, `Err(NotALink)` iff `a ∉ dom(L)` (aligned with
 /// `project`'s non-link handling).
 ///
-/// A *nullified* link is still a link: it passes the residence gate and
-/// returns `Ok(false)` through the `is_active` conjunct — distinguishing "not
-/// a link" from "a retracted link". A registered-but-empty `d` yields
-/// `Ok(false)` — nothing is reachable — and never `DocNotRegistered`, which
-/// is the distinction the document gate exists to draw.
+/// A *nullified* link is still a link: it is still resident, so the
+/// resident-link read admits it, and it returns `Ok(false)` through the
+/// `is_active` conjunct — distinguishing "not a link" from "a retracted
+/// link". A registered-but-empty `d` yields `Ok(false)` — nothing is
+/// reachable — and never `DocNotRegistered`, which is the distinction the
+/// document gate exists to draw.
 ///
-/// `Err(ImageTooLarge)` when `ran(M(d))` is past [`crate::MAX_IMAGE_RUNS`]:
-/// the runs are lifted into an I-extent apiece and every one of them is
-/// tested against every span of every slot, so this is where a document's
-/// fragmentation becomes the multiplier M8 itself applies. Refused BEFORE the
-/// lift, so an over-budget `d` costs the count and not the span set. The
-/// count is `#content_runs + #link_runs` of the reading surface, because
-/// LP12 ranges over both subspaces and every extent is tested.
-/// [`crate::MAX_IMAGE_RUNS`] sets this count beside the other two.
+/// `Err(ImageTooLarge)` when `ran(M(reading_surface(d)))` is past
+/// [`crate::MAX_IMAGE_RUNS`]: the runs are lifted into an I-extent apiece and
+/// every one of them is tested against every span of every slot, so this is
+/// where a document's fragmentation becomes the multiplier M8 itself applies.
+/// Refused BEFORE the lift, so an over-budget `d` costs the count and not the
+/// span set. The count is `#content_runs + #link_runs` of the reading
+/// surface, because LP12 ranges over both subspaces and every extent is
+/// tested. [`crate::MAX_IMAGE_RUNS`] sets this count beside the other two.
 pub fn addressably_discoverable_from_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     a: &Address,
@@ -220,7 +223,7 @@ pub fn addressably_discoverable_from_on<W: DiscoveryWorld>(
         return Err(QueryError::DocNotRegistered);
     }
     if !home_readable(readable, a) {
-        return Ok(false); // absent ⟹ not discoverable (PUB-6.6), before residence is read
+        return Ok(false); // absent ⟹ not discoverable (PUB-6.6), ahead of the resident-link read
     }
     let link = w.links().readlink(a).ok_or(QueryError::NotALink)?;
     if !w.links().is_active(a) {
@@ -235,6 +238,6 @@ pub fn addressably_discoverable_from_on<W: DiscoveryWorld>(
         .into_iter()
         .chain(link_runs)
         .map(|r| r.iextent())
-        .collect(); // ran(M(d)) as I-extents, BOTH subspaces (LP12)
+        .collect(); // ran(M(reading_surface(d))) as I-extents, BOTH subspaces (LP12)
     Ok(link.slots().any(|slot| touches(slot, &extents)))
 }

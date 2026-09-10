@@ -15,7 +15,7 @@ use skep_arrangement::{reading_surface, HasM5, M5Rec, M5State, Run, VPos, VSpec}
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, WorldState};
 use skep_links::{
-    enc, Endset, HasLinks, LinkRec, LinkState,
+    enc, Endset, HasLinks, LinkRec, LinkState, LinkWriter, SlotArg,
 };
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 
@@ -36,6 +36,12 @@ pub struct World {
 pub static EVERYONE: fn(&World, &Address) -> bool = every_document;
 
 fn every_document(_: &World, _: &Address) -> bool {
+    true
+}
+
+/// The READER that may read every home — what a principal-free read passes
+/// M8, so every link a query finds is disclosed.
+pub fn every_home(_: &Address) -> bool {
     true
 }
 
@@ -229,8 +235,23 @@ pub fn run(start: &Address, width: u32) -> Run {
 /// unregistered NUMBER (a type is a number; the class-keyed reads serve it
 /// verbatim), carried into tuples through MAKELINK's open surface, since the
 /// managed gate admits only the shipped Unary classes in this format.
+pub fn rel() -> Address {
+    ra(10)
+}
+
+/// [`rel`] as the TYPE endset a whole tuple carries.
 pub fn rel_ty() -> Endset {
-    enc(&[ra(10)])
+    enc(&[rel()])
+}
+
+/// Deposit one link of the suite's relation type in `home`, FROM naming
+/// `from` and TO naming `to`, as the automation caller — the fixture nearly
+/// every test here needs — and answer its address.
+pub fn link(store: &LinkWriter<'_, World>, home: &Address, from: &[Address], to: &[Address]) -> Address {
+    store
+        .makelink(SYS, home, SlotArg::Addrs(from.to_vec()), SlotArg::Addrs(to.to_vec()), SlotArg::Addrs(vec![rel()]))
+        .expect("a fixture link of the suite's relation type is admitted")
+        .0
 }
 
 // ─────────────────────────────── world assembly ─────────────────────────────

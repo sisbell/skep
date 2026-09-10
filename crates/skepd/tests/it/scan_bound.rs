@@ -226,8 +226,8 @@ fn every_link_store_walking_read_takes_a_scan_permit() {
         ("count_ftt", count_ftt(&grant_class), true),
         ("count_ftt", count_ftt_slots(ANY, &doc1, ANY, &grant_class), true),
         ("window_ftt", window_ftt(&grant_class), true),
-        // The region family: THREE scans apiece (`stab_runs_by_slot` stabs
-        // `from`, `to` and `ty` separately), at up to `MAX_IMAGE_RUNS` query
+        // The region family: THREE scans apiece (one `stab` per v1 slot, as
+        // M8's cost statement counts them), at up to `MAX_IMAGE_RUNS` query
         // spans per link.
         ("find_links_v", find_links_v(CLAIMANT_DOC1), true),
         ("count_v", count_v(CLAIMANT_DOC1), true),

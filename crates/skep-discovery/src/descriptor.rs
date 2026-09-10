@@ -54,18 +54,11 @@ pub(crate) fn satisfying(l: &LinkState, q: &FourSet) -> OrdSet<Address> {
 /// slot ⇒ `[]` (FL-EMP). Monotone absent retraction (FL-MON): a found link
 /// stays found unless nullified.
 ///
-/// Answers for NO READER: every satisfying link is disclosed, whatever its
-/// home — the route for principal-free callers. A caller answering for a
-/// reading principal asks [`findlinks_ftt_on_where`].
-pub fn findlinks_ftt_on<W: DiscoveryWorld>(s: &Snapshot<W>, q: &FourSet) -> Vec<Address> {
-    findlinks_ftt_on_where(s, q, &|_| true)
-}
-
-/// [`findlinks_ftt_on`] with the result-set filter (PUB round 2, lane 3.3,
-/// §3): every satisfying link whose HOME the reader may not read is dropped at
-/// its identity. The descriptor's own `home` slot is a COVERAGE constraint
-/// (CN-STAB); this consult is the authorization one, orthogonal to it.
-pub fn findlinks_ftt_on_where<W: DiscoveryWorld>(
+/// The result-set filter (PUB round 2, lane 3.3, §3): every satisfying link
+/// whose HOME `readable` refuses is dropped at its identity. The descriptor's
+/// own `home` slot is a COVERAGE constraint (CN-STAB); `readable` is the
+/// authorization one, orthogonal to it.
+pub fn findlinks_ftt_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     q: &FourSet,
     readable: &dyn Fn(&Address) -> bool,
@@ -88,16 +81,10 @@ pub fn findlinks_ftt_on_where<W: DiscoveryWorld>(
 /// is answerable off the descriptor alone through
 /// [`FourSet::is_unsatisfiable`]: same number, different assertion.
 ///
-/// Answers for NO READER, counting every satisfying link whatever its home;
-/// a caller answering for a reading principal asks [`count_ftt_on_where`].
-pub fn count_ftt_on<W: DiscoveryWorld>(s: &Snapshot<W>, q: &FourSet) -> usize {
-    count_ftt_on_where(s, q, &|_| true)
-}
-
-/// [`count_ftt_on`] answering the FILTERED cardinality (PUB round 2, lane 3.3,
-/// §3; PUB-6.19): the count is of the satisfying links surviving the home
-/// consult, by ENUMERATION — the same set [`findlinks_ftt_on_where`] returns.
-pub fn count_ftt_on_where<W: DiscoveryWorld>(
+/// The cardinality is the FILTERED one (PUB round 2, lane 3.3, §3; PUB-6.19):
+/// of the satisfying links surviving the home consult, by ENUMERATION — the
+/// same set [`findlinks_ftt_on`] returns under the same `readable`.
+pub fn count_ftt_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     q: &FourSet,
     readable: &dyn Fn(&Address) -> bool,
@@ -124,24 +111,12 @@ pub fn count_ftt_on_where<W: DiscoveryWorld>(
 /// candidate conjunction, then the same residence post-filter, but applied
 /// LAZILY during the range walk — so a home-narrow query never materializes
 /// the filtered set. The links this pages over are exactly the ones
-/// [`findlinks_ftt_on`] returns.
+/// [`findlinks_ftt_on`] returns under the same `readable`.
 ///
-/// Answers for NO READER, paging every satisfying link whatever its home; a
-/// caller answering for a reading principal asks [`window_ftt_on_where`].
+/// The home consult (PUB round 2, lane 3.3, §3) joins the residence
+/// post-filter in the lazy `keep`, so a masked link is skipped before the
+/// window slice (PUB-6.14), never counted against `n`.
 pub fn window_ftt_on<W: DiscoveryWorld>(
-    s: &Snapshot<W>,
-    q: &FourSet,
-    cur: Cursor,
-    n: usize,
-) -> Window {
-    window_ftt_on_where(s, q, cur, n, &|_| true)
-}
-
-/// [`window_ftt_on`] with the result-set filter (PUB round 2, lane 3.3, §3):
-/// the home consult joins the residence post-filter in the lazy `keep`, so a
-/// masked link is skipped before the window slice (PUB-6.14), never counted
-/// against `n`.
-pub fn window_ftt_on_where<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     q: &FourSet,
     cur: Cursor,

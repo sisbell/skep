@@ -169,12 +169,10 @@ fn check_region(region: &[Span]) -> Result<(), QueryError> {
 ///
 /// HEAD-FLOAT (PUB round 2, lane 3.2; PUB-2.49, PUB-2.50, PUB-2.53): the
 /// arrangement resolved is `d`'s READING SURFACE — M5's `reading_surface`,
-/// the one pin — so a bare PUBLISHED address images its trunk head, a version
-/// address its own member forever, and a memberless or private document its
-/// own arrangement. The whole region family inherits it through this
-/// function: `findlinks_v`, `count_v`, `window_v` and `retrieve_endsets`
-/// float exactly as `image` does. The registry gate runs on the address
-/// named, ahead of the float (PUB-6.37).
+/// the one pin. The whole region family inherits it through this function:
+/// `findlinks_v`, `count_v`, `window_v` and `retrieve_endsets` float exactly
+/// as `image` does. The registry gate runs on the address named, ahead of the
+/// float (PUB-6.37).
 pub fn image_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
@@ -230,23 +228,11 @@ pub(crate) fn findlinks_v_set_on<W: DiscoveryWorld>(
 /// `BadRegion`, `ImageTooLarge`. There is no fourth refusal — a registered
 /// `d` with a well-formed region always answers, ∅ included.
 ///
-/// Answers for NO READER: every touching link is disclosed, whatever its
-/// home — the route for principal-free callers. A caller answering for a
-/// reading principal asks [`findlinks_v_on_where`].
+/// The result-set filter (PUB round 2, lane 3.3, §3; PUB-6.13): every link
+/// whose HOME `readable` refuses is DROPPED, at link IDENTITY, before the
+/// caller sees it. M7's link readers stay principal-free (Conflicts #1); the
+/// filter is M8's, applied over the selection index.
 pub fn findlinks_v_on<W: DiscoveryWorld>(
-    s: &Snapshot<W>,
-    d: &Address,
-    region: &[Span],
-) -> Result<Vec<Address>, QueryError> {
-    findlinks_v_on_where(s, d, region, &|_| true)
-}
-
-/// [`findlinks_v_on`] with the result-set filter (PUB round 2, lane 3.3, §3;
-/// PUB-6.13): every link whose HOME the reading principal may not read is
-/// DROPPED, at link IDENTITY, before the caller sees it. M7's link readers
-/// stay principal-free (Conflicts #1); the filter is M8's, applied over the
-/// selection index.
-pub fn findlinks_v_on_where<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
     region: &[Span],
@@ -270,21 +256,11 @@ pub fn findlinks_v_on_where<W: DiscoveryWorld>(
 /// counting 0, which is precisely the distinction a caller collapsing this
 /// `Result` to a number would lose.
 ///
-/// Answers for NO READER, counting every touching link whatever its home; a
-/// caller answering for a reading principal asks [`count_v_on_where`].
+/// The cardinality is the FILTERED one (PUB round 2, lane 3.3, §3;
+/// PUB-6.19): of the links surviving the home consult, by ENUMERATION — the
+/// same set [`findlinks_v_on`] returns under the same `readable`, counted
+/// rather than collected, so the two cannot disagree.
 pub fn count_v_on<W: DiscoveryWorld>(
-    s: &Snapshot<W>,
-    d: &Address,
-    region: &[Span],
-) -> Result<usize, QueryError> {
-    count_v_on_where(s, d, region, &|_| true)
-}
-
-/// [`count_v_on`] answering the FILTERED cardinality (PUB round 2, lane 3.3,
-/// §3; PUB-6.19): the count is of the links surviving the home consult, by
-/// ENUMERATION — the same set [`findlinks_v_on_where`] returns, counted rather
-/// than collected, so the two cannot disagree.
-pub fn count_v_on_where<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
     region: &[Span],
@@ -313,23 +289,11 @@ pub fn count_v_on_where<W: DiscoveryWorld>(
 /// `BadRegion`, `ImageTooLarge`. A refusal is never reported as an empty
 /// exhausted window.
 ///
-/// Answers for NO READER, paging every touching link whatever its home; a
-/// caller answering for a reading principal asks [`window_v_on_where`].
+/// The result-set filter (PUB round 2, lane 3.3, §3): the home consult is
+/// applied LAZILY during the key-cut, at link identity and BEFORE the window
+/// slice (PUB-6.14), so a masked link is skipped rather than counted against
+/// `n`.
 pub fn window_v_on<W: DiscoveryWorld>(
-    s: &Snapshot<W>,
-    d: &Address,
-    region: &[Span],
-    cur: Cursor,
-    n: usize,
-) -> Result<Window, QueryError> {
-    window_v_on_where(s, d, region, cur, n, &|_| true)
-}
-
-/// [`window_v_on`] with the result-set filter (PUB round 2, lane 3.3, §3):
-/// the home consult is applied LAZILY during the key-cut, at link identity and
-/// BEFORE the window slice (PUB-6.14), so a masked link is skipped rather than
-/// counted against `n`.
-pub fn window_v_on_where<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
     region: &[Span],
@@ -367,24 +331,12 @@ pub fn window_v_on_where<W: DiscoveryWorld>(
 /// `EndsetsTooLarge`, which comes last because it is priced on what the
 /// store hands back and so cannot be known until the image is in hand.
 ///
-/// Answers for NO READER: every touching link contributes its pairs,
-/// whatever its home. A caller answering for a reading principal asks
-/// [`retrieve_endsets_on_where`].
+/// The result-set filter (PUB round 2, lane 3.3, §3; PUB-6.15): filtered at
+/// link HOME, UNFILTERED at origin — a link whose home the reader may not
+/// read contributes no pair, but a surviving link's endset is surfaced WHOLE,
+/// its spans never masked by their origin. So the consult is at the
+/// CANDIDATE link's identity, once, before its slots are read.
 pub fn retrieve_endsets_on<W: DiscoveryWorld>(
-    s: &Snapshot<W>,
-    d: &Address,
-    region: &[Span],
-) -> Result<Vec<(usize, Endset)>, QueryError> {
-    retrieve_endsets_on_where(s, d, region, &|_| true)
-}
-
-/// [`retrieve_endsets_on`] with the result-set filter (PUB round 2, lane 3.3,
-/// §3; PUB-6.15): filtered at link HOME, UNFILTERED at origin — a link whose
-/// home the reader may not read contributes no pair, but a surviving link's
-/// endset is surfaced WHOLE, its spans never masked by their origin. So the
-/// consult is at the CANDIDATE link's identity, once, before its slots are
-/// read.
-pub fn retrieve_endsets_on_where<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
     region: &[Span],

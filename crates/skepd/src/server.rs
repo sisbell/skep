@@ -321,15 +321,16 @@ impl ClassScans {
 ///   CHEAPEST member: a query constraining a second slot is that scan plus
 ///   work, never less;
 /// * the region family (`find_links_v`, `count_v`, `window_v`,
-///   `retrieve_endsets`) — THREE scans, M8's `stab_runs_by_slot` stabbing
-///   `from`, `to` and `ty` separately, each at up to
+///   `retrieve_endsets`) — THREE scans, one `stab` per v1 slot as
+///   [M8's cost statement](skep_discovery#cost) counts them, each at up to
 ///   [`skep_discovery::MAX_IMAGE_RUNS`] query spans per link. That constant
 ///   caps the image and assigns what it cannot reach — "`#runs(d)` and
 ///   `|links|` are the WORLD's … they stay with request rate and
 ///   concurrency, which are M10's" — to this seat;
-/// * `delete_orphans` — SIX, two `stab_runs` over the deleted and the
-///   retained runs, and the dearest read on the surface: it takes no owner
-///   gate by design, so every asker reaches it on any registered document;
+/// * `delete_orphans` — SIX, three `stab`s over the deleted runs and three
+///   over the retained (the same statement), and the dearest read on the
+///   surface: it takes no owner gate by design, so every asker reaches it on
+///   any registered document;
 /// * `in_claims`, `out_claims`, `edition_claims` — ONE each, a `match_links`
 ///   at a single-span query, behind a residence or registration gate. The
 ///   query span count is not the request's, but the STORE walk is the same
@@ -337,8 +338,9 @@ impl ClassScans {
 ///   above.
 ///
 /// NOTHING ELSE IS BOUNDED, and each absence is a fact about the read rather
-/// than a judgement: `image`, `project` and `discoverable_from` reach M5 or
-/// one `readlink`; `read_link` and `follow_link` are lookups; the M6 family
+/// than a judgement: `image`, `project` and `discoverable_from` walk no link
+/// store, reaching M5 or one lookup, as M8's cost statement records;
+/// `read_link` and `follow_link` are lookups; the M6 family
 /// (`retrieve_v`, `compare`, `show_deletions`, `find_docs_containing`,
 /// `show_origin`) and the M3 reads touch no link store at all.
 ///

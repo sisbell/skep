@@ -84,25 +84,13 @@ fn content_vspan_at(ordinal: &Nat, count: &Nat) -> Span {
 /// document) reaches provenance R and is M6 territory; M8 stops at the
 /// per-document set.
 ///
-/// Answers for NO READER: every orphan is reported, whatever its home. A
-/// caller answering for a reading principal asks
-/// [`delete_orphans_on_where`].
+/// The result-set filter (PUB round 2, lane 3.3, §3): the orphaned set drops
+/// every link whose HOME `readable` refuses, at link identity — a `d`
+/// argument's own readability is the caller's doc-argument consult
+/// (pre-dispatch), not this preview's. The consult runs AFTER the set
+/// identity, so it changes which orphans are disclosed and never which links
+/// are orphaned.
 pub fn delete_orphans_on<W: DiscoveryWorld>(
-    s: &Snapshot<W>,
-    d: &Address,
-    p: &VPos,
-    width: &Nat,
-) -> Result<OrphanReport, OrphanError> {
-    delete_orphans_on_where(s, d, p, width, &|_| true)
-}
-
-/// [`delete_orphans_on`] with the result-set filter (PUB round 2, lane 3.3,
-/// §3): the orphaned set drops every link whose HOME the reader may not read,
-/// at link identity — a `d` argument's own readability is the caller's
-/// doc-argument consult (pre-dispatch), not this preview's. The consult runs
-/// AFTER the set identity, so it changes which orphans are disclosed and
-/// never which links are orphaned.
-pub fn delete_orphans_on_where<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
     p: &VPos,

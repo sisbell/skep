@@ -10,14 +10,14 @@
 //! zeros and their two stabilities; projection, its content-subspace-only
 //! narrowing, addressable discoverability, the precedence that settles their
 //! document argument before their address one, the trunk head both read a
-//! published document through, and their reader twins' absence; the
-//! delete-orphan preview measured against the DELETE it previews, over that
-//! operation's whole accepted domain, against M5's own admission, and at the
-//! ω and publication gates where the two part; the flipped lineage probes
+//! published document through, and the absence both read a masked link as;
+//! the delete-orphan preview measured against the DELETE it previews, over
+//! that operation's whole accepted domain, against M5's own admission, and at
+//! the ω and publication gates where the two part; the flipped lineage probes
 //! with the residence gate, the claim's own home attribution, the endpoints
 //! it reads out as recorded and the write-surface fences that read-out rests
-//! on; every result-set reader twin dropping exactly the links homed where
-//! its reader may not read; the two budgets, each refused at its boundary and
+//! on; every result-set read dropping exactly the links homed where its
+//! reader may not read; the two budgets, each refused at its boundary and
 //! on every entry point that inherits it, and the two quantities the run
 //! constant is held over; the snapshot twins; and — because this file is a
 //! crate of its own — the promises M8 makes to a consumer rather than to
@@ -32,14 +32,11 @@ use common::*;
 use skep_address::{document_of, Address, Span};
 use skep_arrangement::{Caller, DeleteError, HasM5, Vstream};
 use skep_discovery::{
-    addressably_discoverable_from_on, addressably_discoverable_from_on_where, content_vspan,
-    count_ftt_on, count_ftt_on_where, count_v_on, count_v_on_where, delete_orphans_on,
-    delete_orphans_on_where, findlinks_ftt_on, findlinks_ftt_on_where, findlinks_v_on,
-    findlinks_v_on_where, in_claims_on, in_claims_on_where, out_claims_on, out_claims_on_where,
-    project_on, project_on_where, retrieve_endsets_on, retrieve_endsets_on_where,
-    window_ftt_on_where, window_v_on, window_v_on_where, Cursor, DiscoveryWorld, FourSet,
-    LinkQuery, OrphanError, OrphanReport, QueryError, SlotSpec, SupClaim, Window, FROM,
-    MAX_ENDSET_SPANS, MAX_IMAGE_RUNS, TO, TYPE,
+    addressably_discoverable_from_on, content_vspan, count_ftt_on, count_v_on, delete_orphans_on,
+    findlinks_ftt_on, findlinks_v_on, in_claims_on, out_claims_on, project_on,
+    retrieve_endsets_on, window_ftt_on, window_v_on, Cursor, DiscoveryWorld, FourSet, LinkQuery,
+    OrphanError, OrphanReport, QueryError, SlotSpec, SupClaim, Window, FROM, MAX_ENDSET_SPANS,
+    MAX_IMAGE_RUNS, TO, TYPE,
 };
 use skep_kernel::{Kernel, Snapshot, TxnError};
 use skep_links::{
@@ -118,6 +115,23 @@ fn region_family_gates_doc_then_region_then_defines_empty() {
 /// the gate rule can be stated once and applied to all five.
 type RegionRefusal<'a> = Box<dyn Fn(&Address, &[Span]) -> Option<QueryError> + 'a>;
 
+/// The one list every "every region entry point" law reads: the five reads
+/// that inherit `image_on`'s gates and budget, each reduced to its refusal
+/// through a copy of `lq`. A region read added to the family is added here,
+/// and every such law then covers it.
+fn region_entry_points<'a>(lq: LinkQuery<'a, World>) -> Vec<(&'static str, RegionRefusal<'a>)> {
+    vec![
+        ("image", Box::new(move |d, r| lq.image(d, r).err())),
+        ("findlinks_v", Box::new(move |d, r| lq.findlinks_v(d, r).err())),
+        ("count_v", Box::new(move |d, r| lq.count_v(d, r).err())),
+        ("window_v", Box::new(move |d, r| lq.window_v(d, r, None, 3).err())),
+        (
+            "retrieve_endsets",
+            Box::new(move |d, r| lq.retrieve_endsets(d, r).err()),
+        ),
+    ]
+}
+
 /// §1 — the gate order `image_on` states is inherited by the four operations
 /// that compose it, so it is checked on all five entry points rather than on
 /// the one whose doc-comment carries the sentence. An entry point that
@@ -129,19 +143,7 @@ fn every_region_entry_point_answers_both_gates_in_order() {
     seed_content(&k, &doc1(), 3);
     let lq = LinkQuery::new(&k);
 
-    // Each entry point reduced to its refusal, so the rule below is stated
-    // once rather than transcribed five times.
-    let entries: Vec<(&str, RegionRefusal<'_>)> = vec![
-        ("image", Box::new(|d, r| lq.image(d, r).err())),
-        ("findlinks_v", Box::new(|d, r| lq.findlinks_v(d, r).err())),
-        ("count_v", Box::new(|d, r| lq.count_v(d, r).err())),
-        ("window_v", Box::new(|d, r| lq.window_v(d, r, None, 3).err())),
-        (
-            "retrieve_endsets",
-            Box::new(|d, r| lq.retrieve_endsets(d, r).err()),
-        ),
-    ];
-    for (name, refusal) in &entries {
+    for (name, refusal) in &region_entry_points(lq) {
         assert_eq!(
             refusal(&unregistered_doc(), &[vspan(1, 1, 1)]),
             Some(QueryError::DocNotRegistered),
@@ -257,17 +259,7 @@ fn the_region_family_refuses_an_image_past_the_run_budget() {
     // is not what the budget counts.
     assert_eq!(lq.image(&doc1(), at_budget).map(|r| r.len()), Ok(4));
 
-    let entries: Vec<(&str, RegionRefusal<'_>)> = vec![
-        ("image", Box::new(|d, r| lq.image(d, r).err())),
-        ("findlinks_v", Box::new(|d, r| lq.findlinks_v(d, r).err())),
-        ("count_v", Box::new(|d, r| lq.count_v(d, r).err())),
-        ("window_v", Box::new(|d, r| lq.window_v(d, r, None, 3).err())),
-        (
-            "retrieve_endsets",
-            Box::new(|d, r| lq.retrieve_endsets(d, r).err()),
-        ),
-    ];
-    for (name, refusal) in &entries {
+    for (name, refusal) in &region_entry_points(lq) {
         assert_eq!(
             refusal(&doc1(), at_budget),
             None,
@@ -294,9 +286,7 @@ fn the_pointwise_family_holds_one_run_constant_over_two_quantities() {
     let k = kernel();
     let store = LinkWriter::new(&k, &EVERYONE);
     seed_content(&k, &doc1(), 1);
-    let (e1, _) = store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     let lq = LinkQuery::new(&k);
 
     // Well under the budget, both answer.
@@ -321,9 +311,7 @@ fn the_pointwise_family_holds_one_run_constant_over_two_quantities() {
     // content runs are untouched, so `project` still answers; the LINK runs
     // put `addressably_discoverable_from` one over, because LP12 ranges over
     // both subspaces and it must price both.
-    store
-        .makelink(SYS, &doc2(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(103)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    link(&store, &doc2(), &[ca(1)], &[ca(103)]);
     let snap = k.snapshot();
     assert_eq!(snap.world().m5().content_runs(&doc2()).len(), MAX_IMAGE_RUNS);
     assert_eq!(snap.world().m5().link_runs(&doc2()).len(), 1);
@@ -394,9 +382,7 @@ fn findlinks_v_is_disjunctive_and_active_filtered() {
     let lq = LinkQuery::new(&k);
 
     // e1 reaches position 1 via FROM (emit encodes from = enc({ca1})).
-    let (e1, _) = store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(9)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    let e1 = link(&store, &doc1(), &[ca(1)], &[ca(9)]);
     assert_eq!(e1, la(1));
     // m1 reaches position 2 via FROM, 3 via TO, and 1 via TYPE (makelink
     // resolves V-specs to content extents).
@@ -444,9 +430,7 @@ fn window_v_pages_by_key_cut_and_survives_orphaning() {
     let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     for to in [ca(101), ca(102), ca(103)] {
-        store
-            .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![to]), SlotArg::Addrs(vec![ra(10)]))
-            .expect("emit succeeds");
+        link(&store, &doc1(), &[ca(1)], &[to]);
     }
     let region = [vspan(1, 1, 1)];
 
@@ -501,15 +485,11 @@ fn region_count_enumeration_and_window_read_out_one_selection_index() {
         (ca(3), ca(101)),
         (ca(1), ca(2)),
     ] {
-        store
-            .makelink(SYS, &doc1(), SlotArg::Addrs(vec![from]), SlotArg::Addrs(vec![to]), SlotArg::Addrs(vec![ra(10)]))
-            .expect("emit succeeds");
+        link(&store, &doc1(), &[from], &[to]);
     }
     // … and one retracted link reaching position 2, which no read-out may
     // surface.
-    let (dead, _) = store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(2)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    let dead = link(&store, &doc1(), &[ca(2)], &[ca(102)]);
     store.nullify(SYS, &doc2(), &dead).expect("nullify succeeds");
 
     // The law is not vacuous: the wide region selects all four live links and
@@ -579,12 +559,8 @@ fn retrieve_endsets_withholds_identity_whole_endsets_pinned_order() {
     let lq = LinkQuery::new(&k);
     // Two distinct links with VALUE-IDENTICAL from-endsets (dedup collapse),
     // plus one makelink whose from spans all three positions.
-    store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
-    store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    link(&store, &doc1(), &[ca(1)], &[ca(102)]);
     store
         .makelink(
             SYS,
@@ -643,20 +619,9 @@ fn retrieve_endsets_refuses_an_answer_past_the_span_budget() {
     let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     let region = [vspan(1, 1, 1)];
-    let deposit = |i: u32| {
-        store
-            .makelink(
-                SYS,
-                &doc1(),
-                SlotArg::Addrs(wide_from(i, SPANS)),
-                SlotArg::Addrs(vec![ca(101)]),
-                SlotArg::Addrs(vec![ra(10)]),
-            )
-            .expect("a slot at MAX_SLOT_SPANS is admitted");
-    };
     assert!(SPANS as usize <= MAX_SLOT_SPANS, "each slot is in M7's budget");
     for i in 0..at_budget as u32 {
-        deposit(i);
+        link(&store, &doc1(), &wide_from(i, SPANS), &[ca(101)]);
     }
 
     // At the budget: one pair per link, each endset WHOLE, none clipped.
@@ -665,7 +630,7 @@ fn retrieve_endsets_refuses_an_answer_past_the_span_budget() {
     assert!(pairs.iter().all(|(i, e)| *i == FROM && e.len() == SPANS as usize));
 
     // One link more, and the answer is refused rather than shortened.
-    deposit(at_budget as u32);
+    link(&store, &doc1(), &wide_from(at_budget as u32, SPANS), &[ca(101)]);
     assert_eq!(
         lq.retrieve_endsets(&doc1(), &region),
         Err(QueryError::EndsetsTooLarge)
@@ -683,15 +648,9 @@ fn ftt_the_unit_matches_all_the_zero_annihilates_and_slots_conjoin() {
     seed_content(&k, &doc1(), 2);
     let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
-    let (e1, _) = store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
-    store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(2)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
-    store
-        .makelink(SYS, &doc2(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    link(&store, &doc1(), &[ca(2)], &[ca(101)]);
+    link(&store, &doc2(), &[ca(1)], &[ca(102)]);
 
     // (∗,∗,∗,∗) — the whole addressable slice (FL-WILD), address order.
     assert_eq!(lq.findlinks_ftt(&FourSet::any()), vec![la(1), la(2), la2(1)]);
@@ -777,12 +736,8 @@ fn ftt_hands_the_smallest_constraint_first_without_moving_the_answer() {
     seed_content(&k, &doc1(), 2);
     let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
-    store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(2)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds"); // la(1): from ca(1), to ca(2)
-    store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(2)]), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds"); // la(2): the mirror
+    link(&store, &doc1(), &[ca(1)], &[ca(2)]); // la(1): from ca(1), to ca(2)
+    link(&store, &doc1(), &[ca(2)], &[ca(1)]); // la(2): the mirror
 
     // A many-span constraint and a one-span one, so the sort actually
     // reorders rather than leaving the list as written.
@@ -814,15 +769,9 @@ fn ftt_home_filter_is_an_address_projection_applied_lazily() {
     seed_content(&k, &doc1(), 2);
     let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
-    store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
-    store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(2)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
-    store
-        .makelink(SYS, &doc2(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    link(&store, &doc1(), &[ca(2)], &[ca(101)]);
+    link(&store, &doc2(), &[ca(1)], &[ca(102)]);
 
     // home is matched against home(a) = document_of — an address projection,
     // not a slot and not an arrangement test.
@@ -880,15 +829,9 @@ fn ftt_home_is_prefix_coverage_not_address_equality() {
     seed_content(&k, &doc1(), 2);
     let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
-    store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
-    store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(2)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
-    store
-        .makelink(SYS, &doc2(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    link(&store, &doc1(), &[ca(2)], &[ca(101)]);
+    link(&store, &doc2(), &[ca(1)], &[ca(102)]);
 
     // The account both documents hang under admits the links homed in each.
     let account = FourSet {
@@ -921,15 +864,9 @@ fn ftt_count_enumeration_and_window_read_out_one_sat() {
     seed_content(&k, &doc1(), 2);
     let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
-    store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
-    store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(2)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
-    store
-        .makelink(SYS, &doc2(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    link(&store, &doc1(), &[ca(2)], &[ca(101)]);
+    link(&store, &doc2(), &[ca(1)], &[ca(102)]);
 
     for q in [
         FourSet::any(),
@@ -984,9 +921,7 @@ fn the_region_zero_and_the_descriptor_zero_assert_different_things() {
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
-    store
-        .makelink(SYS, &doc2(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    link(&store, &doc2(), &[ca(1)], &[ca(101)]);
 
     // D-ZERO: nothing reaches doc2's region — it arranges nothing.
     assert_eq!(lq.count_v(&doc2(), &[vspan(1, 1, 5)]), Ok(0));
@@ -1019,9 +954,7 @@ fn the_region_census_drops_when_content_leaves_while_the_descriptor_census_holds
     seed_content(&k, &doc1(), 2);
     let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
-    store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     let region = [vspan(1, 1, 2)];
     let homed_here = FourSet {
         home: SlotSpec::Spans(enc(&[doc1()])),
@@ -1049,9 +982,7 @@ fn project_is_content_subspace_i_to_v_with_conflated_notalink() {
     seed_content(&k, &doc1(), 3);
     let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
-    let (e1, _) = store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(2)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    let e1 = link(&store, &doc1(), &[ca(2)], &[ca(101)]);
 
     // FROM covers ca(2) ⇒ exactly V-position [s_C, 2] of doc1.
     let proj = lq.project(&e1, FROM, &doc1()).expect("project");
@@ -1099,12 +1030,8 @@ fn project_is_content_subspace_only_where_discoverability_reaches_the_link_subsp
     seed_content(&k, &doc1(), 2);
     let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
-    let (m1, _) = store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
-    let (m2, _) = store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(2)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    let m1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    let m2 = link(&store, &doc1(), &[ca(2)], &[ca(102)]);
     // The claim's F and G cover m1 and m2 — link addresses makelink SEATED in
     // doc1's link runs, and nothing of doc1's content.
     let (claim, _) = store
@@ -1122,9 +1049,7 @@ fn addressably_discoverable_from_is_lp12_and_addressable_over_both_subspaces() {
     seed_content(&k, &doc1(), 2);
     let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
-    let (e1, _) = store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     assert_eq!(lq.addressably_discoverable_from(&e1, &doc1()), Ok(true));
     // Registered-but-empty d: nothing is reachable.
     assert_eq!(lq.addressably_discoverable_from(&e1, &doc2()), Ok(false));
@@ -1201,14 +1126,8 @@ fn published_world() -> Kernel<World> {
 fn the_pointwise_pair_reads_the_trunk_head_the_region_family_resolves() {
     let k = published_world();
     let store = LinkWriter::new(&k, &EVERYONE);
-    let link_from = |from: Address, to: Address| {
-        store
-            .makelink(SYS, &doc1(), SlotArg::Addrs(vec![from]), SlotArg::Addrs(vec![to]), SlotArg::Addrs(vec![ra(10)]))
-            .expect("emit succeeds")
-            .0
-    };
-    let pre_chain = link_from(pca(1), ca(101)); // a position both arrangements hold
-    let head_only = link_from(pca(3), ca(102)); // a position only the head holds
+    let pre_chain = link(&store, &doc1(), &[pca(1)], &[ca(101)]); // a position both arrangements hold
+    let head_only = link(&store, &doc1(), &[pca(3)], &[ca(102)]); // a position only the head holds
     let lq = LinkQuery::new(&k);
 
     // The premise: the head holds four positions, pdoc's own arrangement two.
@@ -1243,8 +1162,8 @@ fn the_pointwise_pair_reads_the_trunk_head_the_region_family_resolves() {
     }
 }
 
-/// §5 — the pointwise pair's reader twins read a link homed where the reader
-/// may not read as ABSENT: `project` gives the non-link's `NotALink`,
+/// §5 — the pointwise pair reads a link homed where the reader may not read
+/// as ABSENT: `project` gives the non-link's `NotALink`,
 /// `addressably_discoverable_from` the retracted link's `Ok(false)`. The
 /// consult sits where both cards put it: after the document gate, so an
 /// unregistered `d` still names the document fault; and ahead of the
@@ -1253,51 +1172,48 @@ fn the_pointwise_pair_reads_the_trunk_head_the_region_family_resolves() {
 /// that document's link chain. An address with no home is no one's to
 /// withhold, so the store answers for it, masked reader or not.
 #[test]
-fn the_pointwise_twins_read_a_masked_link_as_absent_after_the_document_and_before_residence() {
+fn the_pointwise_reads_see_a_masked_link_as_absent_after_the_document_and_before_residence() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let (masked, _) = store
-        .makelink(SYS, &doc2(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    let masked = link(&store, &doc2(), &[ca(1)], &[ca(101)]);
     let nothing = la2(99); // under doc2, naming no link
     let snap = k.snapshot();
-    let everyone = |_: &Address| true;
     let masks_doc2 = |d: &Address| *d != doc2();
 
     // Admitted, the link answers as a link and the non-link as a non-link …
-    assert!(project_on_where(&snap, &masked, FROM, &doc1(), &everyone)
+    assert!(project_on(&snap, &masked, FROM, &doc1(), &every_home)
         .expect("project")
         .denotes(&t(&[1, 1])));
-    assert_eq!(addressably_discoverable_from_on_where(&snap, &masked, &doc1(), &everyone), Ok(true));
+    assert_eq!(addressably_discoverable_from_on(&snap, &masked, &doc1(), &every_home), Ok(true));
     assert_eq!(
-        project_on_where(&snap, &nothing, FROM, &doc1(), &everyone),
+        project_on(&snap, &nothing, FROM, &doc1(), &every_home),
         Err(QueryError::NotALink)
     );
     assert_eq!(
-        addressably_discoverable_from_on_where(&snap, &nothing, &doc1(), &everyone),
+        addressably_discoverable_from_on(&snap, &nothing, &doc1(), &every_home),
         Err(QueryError::NotALink)
     );
     // … and masked, the two cannot be told apart.
     for addr in [&masked, &nothing] {
         assert_eq!(
-            project_on_where(&snap, addr, FROM, &doc1(), &masks_doc2),
+            project_on(&snap, addr, FROM, &doc1(), &masks_doc2),
             Err(QueryError::NotALink),
             "{addr:?} is absent to project"
         );
         assert_eq!(
-            addressably_discoverable_from_on_where(&snap, addr, &doc1(), &masks_doc2),
+            addressably_discoverable_from_on(&snap, addr, &doc1(), &masks_doc2),
             Ok(false),
             "{addr:?} is absent, so not discoverable"
         );
     }
     // After the document gate: the document fault still speaks first.
     assert_eq!(
-        project_on_where(&snap, &masked, FROM, &unregistered_doc(), &masks_doc2),
+        project_on(&snap, &masked, FROM, &unregistered_doc(), &masks_doc2),
         Err(QueryError::DocNotRegistered)
     );
     assert_eq!(
-        addressably_discoverable_from_on_where(&snap, &masked, &unregistered_doc(), &masks_doc2),
+        addressably_discoverable_from_on(&snap, &masked, &unregistered_doc(), &masks_doc2),
         Err(QueryError::DocNotRegistered)
     );
     // An ACCOUNT address has no home: nothing to withhold, even from a reader
@@ -1305,21 +1221,12 @@ fn the_pointwise_twins_read_a_masked_link_as_absent_after_the_document_and_befor
     let account = a(&[1, 0, 1]);
     let no_one = |_: &Address| false;
     assert_eq!(
-        project_on_where(&snap, &account, FROM, &doc1(), &no_one),
+        project_on(&snap, &account, FROM, &doc1(), &no_one),
         Err(QueryError::NotALink)
     );
     assert_eq!(
-        addressably_discoverable_from_on_where(&snap, &account, &doc1(), &no_one),
+        addressably_discoverable_from_on(&snap, &account, &doc1(), &no_one),
         Err(QueryError::NotALink)
-    );
-    // The base reads ARE the twins under a reader admitting every home.
-    assert_eq!(
-        project_on(&snap, &masked, FROM, &doc1()),
-        project_on_where(&snap, &masked, FROM, &doc1(), &everyone)
-    );
-    assert_eq!(
-        addressably_discoverable_from_on(&snap, &masked, &doc1()),
-        addressably_discoverable_from_on_where(&snap, &masked, &doc1(), &everyone)
     );
 }
 
@@ -1373,12 +1280,8 @@ fn delete_orphans_reports_active_last_witness_losses() {
     let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     // link_a witnesses positions 1 (FROM) and 2 (TO); link_b only 3.
-    let (_link_a, _) = store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(2)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
-    let (link_b, _) = store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(3)]), SlotArg::Addrs(vec![ca(3)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    let _link_a = link(&store, &doc1(), &[ca(1)], &[ca(2)]);
+    let link_b = link(&store, &doc1(), &[ca(3)], &[ca(3)]);
 
     // Deleting position 3 drops link_b's last witness in d.
     let r = lq.delete_orphans(&doc1(), &vp(1, 3), &n(1)).expect("preview");
@@ -1411,18 +1314,12 @@ fn survival_world() -> Kernel<World> {
     seed_content(&k, &doc1(), 4); // V 1..4 → ca(1..4)
     {
         let store = LinkWriter::new(&k, &EVERYONE);
-        let make = |from: Address, to: Address| {
-            store
-                .makelink(SYS, &doc1(), SlotArg::Addrs(vec![from]), SlotArg::Addrs(vec![to]), SlotArg::Addrs(vec![ra(10)]))
-                .expect("emit succeeds")
-                .0
-        };
-        make(ca(1), ca(2)); // la(1): positions 1 and 2
-        make(ca(4), ca(4)); // la(2): position 4 alone
-        make(ca(1), ca(4)); // la(3): positions 1 and 4 — witnesses on both sides
-        make(ca(2), la(1)); // la(4): position 2, and doc1's LINK subspace
-        make(ca(101), ca(102)); // la(5): reaches nothing doc1 arranges
-        let dead = make(ca(3), ca(3)); // la(6): position 3 …
+        link(&store, &doc1(), &[ca(1)], &[ca(2)]); // la(1): positions 1 and 2
+        link(&store, &doc1(), &[ca(4)], &[ca(4)]); // la(2): position 4 alone
+        link(&store, &doc1(), &[ca(1)], &[ca(4)]); // la(3): positions 1 and 4 — witnesses on both sides
+        link(&store, &doc1(), &[ca(2)], &[la(1)]); // la(4): position 2, and doc1's LINK subspace
+        link(&store, &doc1(), &[ca(101)], &[ca(102)]); // la(5): reaches nothing doc1 arranges
+        let dead = link(&store, &doc1(), &[ca(3)], &[ca(3)]); // la(6): position 3 …
         store.nullify(SYS, &doc2(), &dead).expect("nullify succeeds"); // … then retracted
     }
     k
@@ -1484,9 +1381,7 @@ fn delete_orphans_keeps_a_link_witnessed_by_the_retained_prefix() {
     seed_content(&k, &doc1(), 3);
     let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
-    store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(3)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    link(&store, &doc1(), &[ca(1)], &[ca(3)]);
 
     // Deleting position 3 takes the link's TO witness; its FROM witness is in
     // the retained prefix, so the link keeps its reach.
@@ -1513,12 +1408,8 @@ fn delete_orphans_keeps_a_link_witnessed_in_the_link_subspace_a_text_delete_neve
     seed_content(&k, &doc1(), 3);
     let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
-    let (seated, _) = store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
-    store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![seated]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    let seated = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    link(&store, &doc1(), &[ca(1)], &[seated]);
 
     // Both links reach position 1, and the whole content goes. Only la(2)
     // keeps a witness — la(1), which makelink seated in doc1's link runs.
@@ -1562,6 +1453,7 @@ fn delete_orphans_refuses_exactly_what_the_delete_refuses() {
                         &doc,
                         &vp(subspace, ordinal),
                         &n(width),
+                        &every_home,
                     );
                     let done = Vstream::new(&k).delete(
                         SYS,
@@ -1599,7 +1491,7 @@ fn the_preview_answers_a_request_the_delete_refuses_for_ownership() {
     let stranger = Caller::Principal(PrincipalId(2));
 
     // The preview accepts, naming the links the delete would drop …
-    assert!(delete_orphans_on(&k.snapshot(), &doc1(), &vp(1, 1), &n(1)).is_ok());
+    assert!(delete_orphans_on(&k.snapshot(), &doc1(), &vp(1, 1), &n(1), &every_home).is_ok());
     // … and the DELETE it previews refuses this caller outright.
     assert!(matches!(
         Vstream::new(&k).delete(stranger, &doc1(), vp(1, 1), n(1)),
@@ -1610,7 +1502,7 @@ fn the_preview_answers_a_request_the_delete_refuses_for_ownership() {
     // caller is refused the same way for a request the preview ALSO refuses,
     // so ownership is orthogonal to admission rather than folded into it.
     assert_eq!(
-        delete_orphans_on(&k.snapshot(), &doc1(), &vp(1, 9), &n(1)),
+        delete_orphans_on(&k.snapshot(), &doc1(), &vp(1, 9), &n(1), &every_home),
         Err(OrphanError::OutOfBounds)
     );
     assert!(matches!(
@@ -1630,13 +1522,11 @@ fn the_preview_answers_a_request_the_delete_refuses_for_ownership() {
 fn the_preview_answers_a_published_target_the_delete_refuses() {
     let k = published_world();
     let store = LinkWriter::new(&k, &EVERYONE);
-    let (witness, _) = store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![pca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    let witness = link(&store, &doc1(), &[pca(1)], &[ca(101)]);
 
     // The preview answers — the witness's one position goes …
     assert_eq!(
-        delete_orphans_on(&k.snapshot(), &pdoc(), &vp(1, 1), &n(1)),
+        delete_orphans_on(&k.snapshot(), &pdoc(), &vp(1, 1), &n(1), &every_home),
         Ok(OrphanReport {
             orphaned: vec![witness]
         })
@@ -1655,7 +1545,7 @@ fn the_preview_answers_a_published_target_the_delete_refuses() {
         Ok(vec![run(&pca(3), 1)])
     );
     assert_eq!(
-        delete_orphans_on(&k.snapshot(), &pdoc(), &vp(1, 3), &n(1)),
+        delete_orphans_on(&k.snapshot(), &pdoc(), &vp(1, 3), &n(1), &every_home),
         Err(OrphanError::OutOfBounds)
     );
 }
@@ -1668,12 +1558,8 @@ fn lineage_probes_flipped_slots_with_residence_gate() {
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
-    let (e1, _) = store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
-    let (e2, _) = store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
     let (claim, _) = store.assert_sup(SYS, &doc1(), &e1, &e2).expect("assert_sup succeeds");
 
     let expected = SupClaim {
@@ -1719,12 +1605,8 @@ fn lineage_attributes_a_claim_to_its_own_home_not_its_endpoints() {
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
-    let (e1, _) = store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
-    let (e2, _) = store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
     let (claim, _) = store
         .assert_sup(SYS, &doc2(), &e1, &e2)
         .expect("assert_sup succeeds");
@@ -1754,12 +1636,8 @@ fn a_live_claim_names_a_nullified_endpoint_and_a_nullified_key_still_probes() {
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
-    let (e1, _) = store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
-    let (e2, _) = store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
     let (claim, _) = store
         .assert_sup(SYS, &doc1(), &e1, &e2)
         .expect("assert_sup succeeds");
@@ -1802,9 +1680,7 @@ fn lineage_reads_out_in_claim_address_order() {
     let lq = LinkQuery::new(&k);
     let mut made = Vec::new();
     for to in [ca(101), ca(102), ca(103)] {
-        let (e, _) = store
-            .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![to]), SlotArg::Addrs(vec![ra(10)]))
-            .expect("emit succeeds");
+        let e = link(&store, &doc1(), &[ca(1)], &[to]);
         made.push(e);
     }
     // Two successors of one superseded link: two claims, both probed by in().
@@ -1851,12 +1727,8 @@ fn lineage_endpoints_rest_on_a_fence_the_write_surface_keeps() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let (e1, _) = store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
-    let (e2, _) = store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
 
     // The reserved Supersedes type, read off the store rather than spelled:
     // the ghost tumbler is the compiled format constant, and the two are
@@ -1923,7 +1795,7 @@ fn lineage_endpoints_rest_on_a_fence_the_write_surface_keeps() {
     );
 }
 
-// ─────────────── disclosure — the reader twins (PUB-6.13) ───────────────
+// ─────────────── disclosure — the reader argument (PUB-6.13) ───────────────
 
 /// Drain a window read to exhaustion ONE link per page, so a masked link
 /// counted against `n` would show as a page that comes back short, reports
@@ -1942,34 +1814,29 @@ fn drain_by_ones(page: impl Fn(Cursor) -> Window) -> Vec<Address> {
     panic!("the window never reported exhaustion");
 }
 
-/// Every result-set reader twin drops EXACTLY the links homed where the
-/// reader may not read, and counts and pages what survives (PUB-6.13,
-/// PUB-6.14, PUB-6.19) — asked of each twin against its own base read, never
-/// against a hand-written answer. The reader here may read everything but
-/// doc2, and the fixture homes links in both documents, every one touching
-/// doc1's content, so each read-out has something to drop and something to
-/// keep. The mistake the law exists for is a site that asks the consult about
-/// the LINK instead of its home: a link address is no draft, so it reads as
-/// published and the mask opens — and that one read then keeps doc2's links.
+/// Every result-set read drops EXACTLY the links homed where the reader may
+/// not read, and counts and pages what survives (PUB-6.13, PUB-6.14,
+/// PUB-6.19) — asked of each read against the same read under a reader
+/// admitting every home, never against a hand-written answer. The reader
+/// here may read everything but doc2, and the fixture homes links in both
+/// documents, every one touching doc1's content, so each read-out has
+/// something to drop and something to keep. The mistake the law exists for
+/// is a site that asks the consult about the LINK instead of its home: a link
+/// address is no draft, so it reads as published and the mask opens — and
+/// that one read then keeps doc2's links.
 #[test]
-fn every_reader_twin_drops_exactly_the_links_homed_where_the_reader_may_not_read() {
+fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_read() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
     let store = LinkWriter::new(&k, &EVERYONE);
-    let make = |home: &Address, from: Vec<Address>, to: Address| {
-        store
-            .makelink(SYS, home, SlotArg::Addrs(from), SlotArg::Addrs(vec![to]), SlotArg::Addrs(vec![ra(10)]))
-            .expect("emit succeeds")
-            .0
-    };
     // doc1's: position 1; positions 2 and 3; position 3 alone.
-    let m0 = make(&doc1(), vec![ca(1)], ca(101));
-    let m1 = make(&doc1(), vec![ca(2)], ca(3));
-    let m2 = make(&doc1(), vec![ca(3)], ca(104));
+    let m0 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    let m1 = link(&store, &doc1(), &[ca(2)], &[ca(3)]);
+    let m2 = link(&store, &doc1(), &[ca(3)], &[ca(104)]);
     // doc2's: position 1 under an endset no doc1 link carries, and position 3
     // alone under the FROM value m2 carries too.
-    let t0 = make(&doc2(), vec![ca(1), ca(102)], ca(105));
-    let t1 = make(&doc2(), vec![ca(3)], ca(103));
+    let t0 = link(&store, &doc2(), &[ca(1), ca(102)], &[ca(105)]);
+    let t1 = link(&store, &doc2(), &[ca(3)], &[ca(103)]);
     // One supersession claim homed in each document, both with old = m0.
     let (kept, _) = store.assert_sup(SYS, &doc1(), &m0, &m1).expect("assert_sup succeeds");
     let (masked, _) = store.assert_sup(SYS, &doc2(), &m0, &t0).expect("assert_sup succeeds");
@@ -1985,27 +1852,27 @@ fn every_reader_twin_drops_exactly_the_links_homed_where_the_reader_may_not_read
 
     // The descriptor family over the unit descriptor: every link in the store.
     let q = FourSet::any();
-    let all = findlinks_ftt_on(&snap, &q);
+    let all = findlinks_ftt_on(&snap, &q, &every_home);
     assert!(all.contains(&t0) && all.contains(&masked), "doc2's links are in the store");
-    let seen = findlinks_ftt_on_where(&snap, &q, &reader);
+    let seen = findlinks_ftt_on(&snap, &q, &reader);
     assert_eq!(seen, survivors(all), "findlinks_ftt");
-    assert_eq!(count_ftt_on_where(&snap, &q, &reader), seen.len(), "count_ftt");
+    assert_eq!(count_ftt_on(&snap, &q, &reader), seen.len(), "count_ftt");
     assert_eq!(
-        drain_by_ones(|cur| window_ftt_on_where(&snap, &q, cur, 1, &reader)),
+        drain_by_ones(|cur| window_ftt_on(&snap, &q, cur, 1, &reader)),
         seen,
         "window_ftt"
     );
 
     // The region family over doc1's whole content.
     let region = [vspan(1, 1, 3)];
-    let all = findlinks_v_on(&snap, &doc1(), &region).expect("findlinks_v");
+    let all = findlinks_v_on(&snap, &doc1(), &region, &every_home).expect("findlinks_v");
     assert!(all.contains(&t0) && all.contains(&t1), "doc2's links touch the region");
-    let seen = findlinks_v_on_where(&snap, &doc1(), &region, &reader).expect("findlinks_v");
+    let seen = findlinks_v_on(&snap, &doc1(), &region, &reader).expect("findlinks_v");
     assert_eq!(seen, survivors(all), "findlinks_v");
-    assert_eq!(count_v_on_where(&snap, &doc1(), &region, &reader), Ok(seen.len()), "count_v");
+    assert_eq!(count_v_on(&snap, &doc1(), &region, &reader), Ok(seen.len()), "count_v");
     assert_eq!(
         drain_by_ones(|cur| {
-            window_v_on_where(&snap, &doc1(), &region, cur, 1, &reader).expect("window_v")
+            window_v_on(&snap, &doc1(), &region, cur, 1, &reader).expect("window_v")
         }),
         seen,
         "window_v"
@@ -2014,11 +1881,12 @@ fn every_reader_twin_drops_exactly_the_links_homed_where_the_reader_may_not_read
     // RETRIEVEENDSETS withholds identity, so what it drops is PAIRS: t0's own
     // pair goes, and the one t1 shares with m2 stays, since m2 still carries
     // it.
-    let every_pair = retrieve_endsets_on(&snap, &doc1(), &region).expect("retrieve_endsets");
+    let every_pair =
+        retrieve_endsets_on(&snap, &doc1(), &region, &every_home).expect("retrieve_endsets");
     assert_eq!(every_pair.len(), 5);
     assert!(every_pair.contains(&(FROM, enc(&[ca(1), ca(102)]))), "t0's own pair");
     assert_eq!(
-        retrieve_endsets_on_where(&snap, &doc1(), &region, &reader),
+        retrieve_endsets_on(&snap, &doc1(), &region, &reader),
         Ok(vec![
             (FROM, enc(&[ca(1)])),
             (FROM, enc(&[ca(2)])),
@@ -2030,25 +1898,25 @@ fn every_reader_twin_drops_exactly_the_links_homed_where_the_reader_may_not_read
     // The delete-orphan preview of position 3: m2 and t1 lose their last
     // witness, and only m2 is disclosed — the consult reads the orphan set
     // after it is computed, so it never changes which links are orphaned.
-    let orphaned = delete_orphans_on(&snap, &doc1(), &vp(1, 3), &n(1))
+    let orphaned = delete_orphans_on(&snap, &doc1(), &vp(1, 3), &n(1), &every_home)
         .expect("preview")
         .orphaned;
     assert_eq!(orphaned, vec![m2, t1]);
     assert_eq!(
-        delete_orphans_on_where(&snap, &doc1(), &vp(1, 3), &n(1), &reader).map(|r| r.orphaned),
+        delete_orphans_on(&snap, &doc1(), &vp(1, 3), &n(1), &reader).map(|r| r.orphaned),
         Ok(survivors(orphaned))
     );
 
     // The lineage pair: the doc2-homed claim goes, from both probes.
     let claims = |found: Vec<SupClaim>| -> Vec<Address> { found.into_iter().map(|c| c.claim).collect() };
-    let all = claims(in_claims_on(&snap, &m0, View::Active));
+    let all = claims(in_claims_on(&snap, &m0, View::Active, &every_home));
     assert_eq!(all, vec![kept.clone(), masked.clone()]);
-    assert_eq!(claims(in_claims_on_where(&snap, &m0, View::Active, &reader)), survivors(all));
+    assert_eq!(claims(in_claims_on(&snap, &m0, View::Active, &reader)), survivors(all));
     for new in [&m1, &t0] {
-        let all = claims(out_claims_on(&snap, new, View::Active));
+        let all = claims(out_claims_on(&snap, new, View::Active, &every_home));
         assert_eq!(all.len(), 1, "one claim names {new:?} as new");
         assert_eq!(
-            claims(out_claims_on_where(&snap, new, View::Active, &reader)),
+            claims(out_claims_on(&snap, new, View::Active, &reader)),
             survivors(all),
             "out_claims({new:?})"
         );
@@ -2063,21 +1931,17 @@ fn snapshot_twins_read_one_pinned_state() {
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
-    store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     let region = [vspan(1, 1, 1)];
 
     // Pin one snapshot, then write past it: the twins keep answering off the
     // pinned root (a count and its window off ONE consistent state), while
     // the handle's fresh snapshot sees the new link.
     let snap = k.snapshot();
-    assert_eq!(count_v_on(&snap, &doc1(), &region), Ok(1));
-    store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
-    assert_eq!(count_v_on(&snap, &doc1(), &region), Ok(1));
-    let w = window_v_on(&snap, &doc1(), &region, None, 10).expect("window");
+    assert_eq!(count_v_on(&snap, &doc1(), &region, &every_home), Ok(1));
+    link(&store, &doc1(), &[ca(1)], &[ca(102)]);
+    assert_eq!(count_v_on(&snap, &doc1(), &region, &every_home), Ok(1));
+    let w = window_v_on(&snap, &doc1(), &region, None, 10, &every_home).expect("window");
     assert_eq!(w.batch, vec![la(1)]);
     assert_eq!(lq.count_v(&doc1(), &region), Ok(2));
 }
@@ -2093,13 +1957,14 @@ fn region_and_home_census<W: DiscoveryWorld>(
     d: &Address,
     region: &[Span],
 ) -> Result<(usize, usize), QueryError> {
-    let reaching = count_v_on(s, d, region)?;
+    let reaching = count_v_on(s, d, region, &every_home)?;
     let resident = count_ftt_on(
         s,
         &FourSet {
             home: SlotSpec::Spans(enc([d])),
             ..Default::default()
         },
+        &every_home,
     );
     Ok((reaching, resident))
 }
@@ -2112,12 +1977,8 @@ fn one_named_bound_and_the_unit_descriptor_serve_a_composing_caller() {
     let k = kernel();
     seed_content(&k, &doc1(), 2);
     let store = LinkWriter::new(&k, &EVERYONE);
-    store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
-    store
-        .makelink(SYS, &doc2(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    link(&store, &doc2(), &[ca(1)], &[ca(102)]);
 
     // Both reads off ONE pinned snapshot, through one bound. The two censuses
     // answer different questions about doc1: BOTH links reach its position 1
@@ -2205,9 +2066,7 @@ fn the_handle_debugs_and_copies_like_the_borrow_it_is() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
-    store
-        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
-        .expect("emit succeeds");
+    link(&store, &doc1(), &[ca(1)], &[ca(101)]);
     let lq = LinkQuery::new(&k);
     assert_eq!(format!("{lq:?}"), "LinkQuery { .. }");
 

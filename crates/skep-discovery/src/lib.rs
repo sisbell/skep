@@ -49,11 +49,10 @@
 //!
 //! Every read of `d`'s arrangement but one reads `d`'s READING SURFACE —
 //! M5's `reading_surface`, the one pin of HEAD-FLOAT (PUB-2.49, PUB-2.50,
-//! PUB-2.53) — so a bare PUBLISHED address answers from its trunk head, a
-//! version address from its own member forever, and a memberless or private
-//! document from itself. The region family floats through [`image_on`], and
-//! the pointwise pair each through its own read of the runs, so the two agree
-//! about which links reach `d`. The one that does not float is
+//! PUB-2.53), which states what each kind of address answers from. The
+//! region family floats through [`image_on`], and the pointwise pair each
+//! through its own read of the runs, so the two agree about which links
+//! reach `d`. The one that does not float is
 //! [`delete_orphans_on`]: it previews DELETE, which edits `d`'s own
 //! arrangement and refuses every published target, so on every `d` DELETE
 //! admits, `d` IS its reading surface. On a published `d` the two part and
@@ -82,18 +81,19 @@
 //! in place — M6's `retrieve_v_masked` is the other shape, and nothing here
 //! uses it.
 //!
-//! Twelve reads carry it, each through a `_where` twin whose base read is
-//! that twin under a predicate admitting every home:
+//! Twelve reads take that predicate as their last argument. A principal-free
+//! caller passes one admitting every home, visibly at its call site, and
+//! [`LinkQuery`], which names no reader, does so in all twelve:
 //!
 //! * the ten RESULT-SET reads — `findlinks`, `count` and `window` in both
 //!   families, [`retrieve_endsets_on`], [`delete_orphans_on`] and the lineage
 //!   pair — drop every result link homed where the reader may not read, and
 //!   count and page the survivors;
 //! * the POINTWISE pair apply it to the `a` ARGUMENT, since neither answer
-//!   names a link: a masked `a` is ABSENT, which [`project_on_where`] answers
-//!   `Err(NotALink)` and [`addressably_discoverable_from_on_where`]
-//!   `Ok(false)` — after the document gate, and ahead of the residence read
-//!   so a masked link and an address naming nothing answer alike.
+//!   names a link: a masked `a` is ABSENT, which [`project_on`] answers
+//!   `Err(NotALink)` and [`addressably_discoverable_from_on`] `Ok(false)` —
+//!   after the document gate, and ahead of the residence read so a masked
+//!   link and an address naming nothing answer alike.
 //!
 //! [`image_on`] alone carries none: its answer names I-runs and no link. The
 //! division of labour is the same everywhere: a NAMED document's own
@@ -105,14 +105,11 @@
 //! Two, both in the region file that owns the shape they price, and both
 //! REFUSALS rather than truncations — a short answer silently drops links,
 //! and no caller can tell one from a true answer.
-//! [`MAX_IMAGE_RUNS`] is ONE constant held at the three sites that read a
-//! document's runs, each against the run count ITS OWN work multiplies:
-//! [`image_on`] the runs the region resolves, [`project_on`] the content
-//! runs M5's join reads, [`addressably_discoverable_from_on`] the content
-//! AND link runs LP12 ranges over. Three quantities, so the three refuse
-//! different documents — see the constant, which states which is which.
-//! [`MAX_ENDSET_SPANS`] bounds what a RETRIEVEENDSETS answer carries, the one
-//! quantity here the store supplies rather than the request.
+//! [`MAX_IMAGE_RUNS`] is one constant held at the three reads of a document's
+//! runs, each over the run count its own work multiplies; the constant states
+//! the three counts and how their refusals relate. [`MAX_ENDSET_SPANS`]
+//! bounds what a RETRIEVEENDSETS answer carries, the one quantity here the
+//! store supplies rather than the request.
 //!
 //! [`delete_orphans_on`] reads a whole document's runs, resolved and
 //! stabbed, and holds NEITHER budget, so a `d` the reads above refuse is one
@@ -125,6 +122,39 @@
 //! endset size are the WORLD's, so they stay with request rate and
 //! concurrency — M10's, as the request lifecycle's owner. These bound what a
 //! request multiplies those quantities by, never the quantities.
+//!
+//! ## Cost
+//!
+//! What each read asks of M7's link store, counted in M7's primitives (M7
+//! states `stab` and `match_links` as scans of the store in v1). A caller
+//! that admission-controls these reads — the daemon's scan pool does —
+//! prices them from this list, and a change to any line is a change to this
+//! interface.
+//!
+//! * [`image_on`] — no link-store read; one M5 `resolve` per region span.
+//! * the region family ([`findlinks_v_on`], [`count_v_on`], [`window_v_on`],
+//!   [`retrieve_endsets_on`]) — three `stab`s, one per v1 slot, over the
+//!   image's runs; none when the image is empty. [`retrieve_endsets_on`]
+//!   adds one `readlink` per disclosed candidate.
+//! * the descriptor family ([`findlinks_ftt_on`], [`count_ftt_on`],
+//!   [`window_ftt_on`]) — one `match_links`, the smallest constraint driving
+//!   its scan (the whole active slice when nothing is constrained); none when
+//!   the descriptor is unsatisfiable. The home slot is a post-filter and
+//!   narrows nothing M7 walks.
+//! * [`delete_orphans_on`] — six `stab`s: three over the deleted runs, three
+//!   over the retained (none when nothing is retained).
+//! * the lineage pair ([`in_claims_on`], [`out_claims_on`]) — one
+//!   `readlink`, which answers `[]` for a non-link key and stops there;
+//!   otherwise one `match_links` at a one-span query and one `type_slice`,
+//!   then one `readlink` and one `is_active` per claim read out.
+//! * the pointwise pair — no store walk: one `followlink` ([`project_on`]),
+//!   or one `readlink` and one `is_active`
+//!   ([`addressably_discoverable_from_on`]), plus M5's runs of `d`'s reading
+//!   surface.
+//!
+//! A window computes its family's whole candidate set before it cuts,
+//! whatever `n` and wherever the cursor: paging bounds the answer, never the
+//! work.
 //!
 //! ## Boundary — deliberately NOT owned here
 //!
@@ -174,22 +204,15 @@ mod region;
 mod survival;
 mod types;
 
-pub use descriptor::{
-    count_ftt_on, count_ftt_on_where, findlinks_ftt_on, findlinks_ftt_on_where, window_ftt_on,
-    window_ftt_on_where,
-};
+pub use descriptor::{count_ftt_on, findlinks_ftt_on, window_ftt_on};
 pub use handle::LinkQuery;
-pub use lineage::{in_claims_on, in_claims_on_where, out_claims_on, out_claims_on_where};
-pub use pointwise::{
-    addressably_discoverable_from_on, addressably_discoverable_from_on_where, project_on,
-    project_on_where,
-};
+pub use lineage::{in_claims_on, out_claims_on};
+pub use pointwise::{addressably_discoverable_from_on, project_on};
 pub use region::{
-    content_vspan, count_v_on, count_v_on_where, findlinks_v_on, findlinks_v_on_where, image_on,
-    retrieve_endsets_on, retrieve_endsets_on_where, window_v_on, window_v_on_where,
+    content_vspan, count_v_on, findlinks_v_on, image_on, retrieve_endsets_on, window_v_on,
     MAX_ENDSET_SPANS, MAX_IMAGE_RUNS,
 };
-pub use survival::{delete_orphans_on, delete_orphans_on_where};
+pub use survival::delete_orphans_on;
 pub use types::{
     Cursor, FourSet, OrphanError, OrphanReport, QueryError, SlotSpec, SupClaim, Window,
 };

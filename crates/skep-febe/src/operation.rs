@@ -14,10 +14,9 @@ use skep_address::{checked_inc, document_of, Address};
 use skep_arrangement::{trunk_of, Caller, M5Rec};
 use skep_content::ContentWrite;
 use skep_discovery::{
-    addressably_discoverable_from_on_where, count_ftt_on_where, count_v_on_where,
-    delete_orphans_on_where, findlinks_ftt_on_where, findlinks_v_on_where, image_on,
-    in_claims_on_where, out_claims_on_where, project_on_where, retrieve_endsets_on_where,
-    window_ftt_on_where, window_v_on_where,
+    addressably_discoverable_from_on, count_ftt_on, count_v_on, delete_orphans_on,
+    findlinks_ftt_on, findlinks_v_on, image_on, in_claims_on, out_claims_on, project_on,
+    retrieve_endsets_on, window_ftt_on, window_v_on,
 };
 use skep_kernel::{Seq, TxnError, WorldState};
 use skep_links::{Invalid, LinkRec};
@@ -891,65 +890,65 @@ where
             // HOME the reader may not read, threaded the predicate. `d` was
             // consulted above; the filter is on the RESULT links' homes.
             Op::FindLinksV { d, region } => {
-                let addrs = findlinks_v_on_where(&snap, &d, &region, &readable)
+                let addrs = findlinks_v_on(&snap, &d, &region, &readable)
                     .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Addrs { addrs, as_of })
             }
             Op::FindLinksFtt { q } => {
-                let addrs = findlinks_ftt_on_where(&snap, &q, &readable); // total
+                let addrs = findlinks_ftt_on(&snap, &q, &readable); // total
                 Ok(Response::Addrs { addrs, as_of })
             }
             Op::CountV { d, region } => {
-                let n = count_v_on_where(&snap, &d, &region, &readable)
+                let n = count_v_on(&snap, &d, &region, &readable)
                     .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Count { n, as_of })
             }
             Op::CountFtt { q } => {
-                let n = count_ftt_on_where(&snap, &q, &readable); // total
+                let n = count_ftt_on(&snap, &q, &readable); // total
                 Ok(Response::Count { n, as_of })
             }
             Op::WindowV { d, region, cur, n } => {
-                let window = window_v_on_where(&snap, &d, &region, cur, n, &readable)
+                let window = window_v_on(&snap, &d, &region, cur, n, &readable)
                     .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Page { window, as_of })
             }
             Op::WindowFtt { q, cur, n } => {
-                let window = window_ftt_on_where(&snap, &q, cur, n, &readable); // total
+                let window = window_ftt_on(&snap, &q, cur, n, &readable); // total
                 Ok(Response::Page { window, as_of })
             }
             Op::RetrieveEndsets { d, region } => {
-                let pairs = retrieve_endsets_on_where(&snap, &d, &region, &readable)
+                let pairs = retrieve_endsets_on(&snap, &d, &region, &readable)
                     .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Endsets { pairs, as_of })
             }
             // `project` and `discoverable_from`: `d` is in the consult above
             // (the dual row, PUB-6.8); the ABSENCE of a link `a` homed in an
             // unreadable document (PUB-6.6) is M8's to answer, through the
-            // predicate — see `project_on_where` and
-            // `addressably_discoverable_from_on_where` for the shape each gives
+            // predicate — see `project_on` and
+            // `addressably_discoverable_from_on` for the shape each gives
             // and where it falls among their refusals. An admitted `project` is
             // UNFILTERED at origin (PUB-6.15).
             Op::Project { a, slot, d } => {
-                let set = project_on_where(&snap, &a, slot, &d, &readable)
+                let set = project_on(&snap, &a, slot, &d, &readable)
                     .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::SpanSet { set, as_of })
             }
             Op::DiscoverableFrom { a, d } => {
-                let val = addressably_discoverable_from_on_where(&snap, &a, &d, &readable)
+                let val = addressably_discoverable_from_on(&snap, &a, &d, &readable)
                     .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Bool { val, as_of })
             }
             Op::DeleteOrphans { d, p, width } => {
-                let report = delete_orphans_on_where(&snap, &d, &p, &width, &readable)
+                let report = delete_orphans_on(&snap, &d, &p, &width, &readable)
                     .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Orphans { report, as_of })
             }
             Op::InClaims { y, view } => {
-                let claims = in_claims_on_where(&snap, &y, view, &readable); // total
+                let claims = in_claims_on(&snap, &y, view, &readable); // total
                 Ok(Response::Claims { claims, as_of })
             }
             Op::OutClaims { x, view } => {
-                let claims = out_claims_on_where(&snap, &x, view, &readable); // total
+                let claims = out_claims_on(&snap, &x, view, &readable); // total
                 Ok(Response::Claims { claims, as_of })
             }
             // ── publication reads (lane 3.4) ──

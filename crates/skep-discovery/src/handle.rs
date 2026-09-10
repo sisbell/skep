@@ -29,16 +29,22 @@ use crate::{
 /// the state it read (reporting it as an `as_of`, say) or read two answers off
 /// one state uses the pure `*_on` twins over its own `&Snapshot<W>` instead.
 ///
-/// It also names NO READER: every method delegates to the base `*_on` read,
-/// so every link a query finds is disclosed whatever its home. That serves
-/// the principal-free callers — the engine's cross-store lifecycle test, this
-/// crate's suite. A caller answering for a reading principal uses the
-/// `*_on_where` twins, which take the reader's document predicate. The
-/// handle offers none of them: the one caller that answers for a reader,
-/// M10, must also name the state it read, which is the one thing this handle
-/// cannot do.
+/// It also names NO READER: every method whose `*_on` read takes a reader
+/// passes it `every_home`, so every link a query finds is disclosed whatever
+/// its home.
+/// That serves the principal-free callers — the engine's cross-store
+/// lifecycle test, this crate's suite. A caller answering for a reading
+/// principal calls the `*_on` functions with its reader's predicate. The
+/// handle takes none, because its one such caller, M10, must also name the
+/// state it read, which is the one thing this handle cannot do.
 pub struct LinkQuery<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
+}
+
+/// The handle's reader: it names none, so every home is readable and every
+/// link a query finds is disclosed.
+fn every_home(_: &Address) -> bool {
+    true
 }
 
 /// The handle prints as itself: `Kernel` is deliberately opaque, and the
@@ -88,13 +94,13 @@ impl<'k, W: DiscoveryWorld> LinkQuery<'k, W> {
     /// The links touching `region` (ASN-0127 findlinks over the image). See
     /// [`findlinks_v_on`].
     pub fn findlinks_v(&self, d: &Address, region: &[Span]) -> Result<Vec<Address>, QueryError> {
-        findlinks_v_on(&self.kernel.snapshot(), d, region)
+        findlinks_v_on(&self.kernel.snapshot(), d, region, &every_home)
     }
 
     /// How many links touch `region` — the present-tense census. See
     /// [`count_v_on`].
     pub fn count_v(&self, d: &Address, region: &[Span]) -> Result<usize, QueryError> {
-        count_v_on(&self.kernel.snapshot(), d, region)
+        count_v_on(&self.kernel.snapshot(), d, region, &every_home)
     }
 
     /// One window of the links touching `region` (ASN-0108). See
@@ -106,7 +112,7 @@ impl<'k, W: DiscoveryWorld> LinkQuery<'k, W> {
         cur: Cursor,
         n: usize,
     ) -> Result<Window, QueryError> {
-        window_v_on(&self.kernel.snapshot(), d, region, cur, n)
+        window_v_on(&self.kernel.snapshot(), d, region, cur, n, &every_home)
     }
 
     /// RETRIEVEENDSETS (ASN-0131): the `(slot, endset)` pairs touching
@@ -116,7 +122,7 @@ impl<'k, W: DiscoveryWorld> LinkQuery<'k, W> {
         d: &Address,
         region: &[Span],
     ) -> Result<Vec<(usize, Endset)>, QueryError> {
-        retrieve_endsets_on(&self.kernel.snapshot(), d, region)
+        retrieve_endsets_on(&self.kernel.snapshot(), d, region, &every_home)
     }
 
     // ── Four-set descriptor query (address-keyed, conjunctive,
@@ -125,18 +131,18 @@ impl<'k, W: DiscoveryWorld> LinkQuery<'k, W> {
     /// FINDLINKS over the four-set descriptor (ASN-0121). See
     /// [`findlinks_ftt_on`].
     pub fn findlinks_ftt(&self, q: &FourSet) -> Vec<Address> {
-        findlinks_ftt_on(&self.kernel.snapshot(), q)
+        findlinks_ftt_on(&self.kernel.snapshot(), q, &every_home)
     }
 
     /// The count operation (ASN-0132). See [`count_ftt_on`].
     pub fn count_ftt(&self, q: &FourSet) -> usize {
-        count_ftt_on(&self.kernel.snapshot(), q)
+        count_ftt_on(&self.kernel.snapshot(), q, &every_home)
     }
 
     /// Windowed enumeration over the descriptor family (ASN-0108, the FTT
     /// Match reading). See [`window_ftt_on`].
     pub fn window_ftt(&self, q: &FourSet, cur: Cursor, n: usize) -> Window {
-        window_ftt_on(&self.kernel.snapshot(), q, cur, n)
+        window_ftt_on(&self.kernel.snapshot(), q, cur, n, &every_home)
     }
 
     // ── Pointwise projection & discoverability (content subspace) ──
@@ -145,7 +151,7 @@ impl<'k, W: DiscoveryWorld> LinkQuery<'k, W> {
     /// project) — the module's one read not narrowed to the active view, so a
     /// retracted link still projects. See [`project_on`].
     pub fn project(&self, a: &Address, slot: usize, d: &Address) -> Result<SpanSet, QueryError> {
-        project_on(&self.kernel.snapshot(), a, slot, d)
+        project_on(&self.kernel.snapshot(), a, slot, d, &every_home)
     }
 
     /// Is link `a` discoverable from `d` (LP12) AND addressable? See
@@ -155,7 +161,7 @@ impl<'k, W: DiscoveryWorld> LinkQuery<'k, W> {
         a: &Address,
         d: &Address,
     ) -> Result<bool, QueryError> {
-        addressably_discoverable_from_on(&self.kernel.snapshot(), a, d)
+        addressably_discoverable_from_on(&self.kernel.snapshot(), a, d, &every_home)
     }
 
     // ── Pre-edit link-survival (read-only; never touches the edit path) ──
@@ -168,7 +174,7 @@ impl<'k, W: DiscoveryWorld> LinkQuery<'k, W> {
         p: &VPos,
         width: &Nat,
     ) -> Result<OrphanReport, OrphanError> {
-        delete_orphans_on(&self.kernel.snapshot(), d, p, width)
+        delete_orphans_on(&self.kernel.snapshot(), d, p, width, &every_home)
     }
 
     // ── Archival supersession/edit lineage (total on every address: a
@@ -177,12 +183,12 @@ impl<'k, W: DiscoveryWorld> LinkQuery<'k, W> {
     /// The supersession claims with `old = y`, under `v` (ASN-0125 EL11b).
     /// See [`in_claims_on`].
     pub fn in_claims(&self, y: &Address, v: View) -> Vec<SupClaim> {
-        in_claims_on(&self.kernel.snapshot(), y, v)
+        in_claims_on(&self.kernel.snapshot(), y, v, &every_home)
     }
 
     /// The supersession claims with `new = x`, under `v` (ASN-0125 EL11b).
     /// See [`out_claims_on`].
     pub fn out_claims(&self, x: &Address, v: View) -> Vec<SupClaim> {
-        out_claims_on(&self.kernel.snapshot(), x, v)
+        out_claims_on(&self.kernel.snapshot(), x, v, &every_home)
     }
 }

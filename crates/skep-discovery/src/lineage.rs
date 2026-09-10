@@ -117,15 +117,9 @@ fn claims_on<W: DiscoveryWorld>(
 /// recorded, so under any view a live claim can name a nullified link. A
 /// caller that needs the endpoints' activity asks M7's `is_active` for them.
 ///
-/// Answers for NO READER: every claim is disclosed, whatever its home. A
-/// caller answering for a reading principal asks [`in_claims_on_where`].
-pub fn in_claims_on<W: DiscoveryWorld>(s: &Snapshot<W>, y: &Address, v: View) -> Vec<SupClaim> {
-    in_claims_on_where(s, y, v, &|_| true)
-}
-
-/// [`in_claims_on`] with the result-set filter (PUB round 2, lane 3.3, §3):
-/// claims homed in a document the reader may not read are dropped.
-pub fn in_claims_on_where<W: DiscoveryWorld>(
+/// The result-set filter (PUB round 2, lane 3.3, §3): claims homed in a
+/// document `readable` refuses are dropped.
+pub fn in_claims_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     y: &Address,
     v: View,
@@ -136,15 +130,8 @@ pub fn in_claims_on_where<W: DiscoveryWorld>(
 
 /// The claims with `new = x` (ASN-0125 EL11b `out(x)`): probes TO under the
 /// flipped convention. Same key, view, order, endpoint-disclosure and reader
-/// contract as [`in_claims_on`]; the filtered route is
-/// [`out_claims_on_where`].
-pub fn out_claims_on<W: DiscoveryWorld>(s: &Snapshot<W>, x: &Address, v: View) -> Vec<SupClaim> {
-    out_claims_on_where(s, x, v, &|_| true)
-}
-
-/// [`out_claims_on`] with the result-set filter (PUB round 2, lane 3.3, §3):
-/// claims homed in a document the reader may not read are dropped.
-pub fn out_claims_on_where<W: DiscoveryWorld>(
+/// contract (PUB round 2, lane 3.3, §3) as [`in_claims_on`].
+pub fn out_claims_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     x: &Address,
     v: View,

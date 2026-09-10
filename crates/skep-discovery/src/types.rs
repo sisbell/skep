@@ -227,19 +227,22 @@ pub enum QueryError {
     /// `d` is not a registered document (M3) — distinct from a
     /// registered-but-empty `d`, which yields a defined empty result.
     DocNotRegistered,
-    /// `a ∉ dom(L)` — or, on `project` only, an out-of-range slot (M7's
-    /// `followlink` conflates the two; the `BadSlot` split is deferred).
+    /// `a ∉ dom(L)`. Two further cases answer the same, both on
+    /// [`crate::project_on`] alone: an out-of-range slot, which M7's
+    /// `followlink` does not tell from a non-link (the `BadSlot` split is
+    /// deferred); and a link homed in a document the reader may not read —
+    /// absent to them (PUB-6.6), so it answers exactly as a non-link does.
     NotALink,
     /// Some span of the region is not the shape [`crate::content_vspan`]
     /// builds — rejected up front so M5's silent clipping never turns the
     /// request into a different query. A caller that builds its region
     /// through that constructor cannot provoke this.
     BadRegion,
-    /// The request names more arrangement I-runs than
-    /// [`crate::MAX_IMAGE_RUNS`]: a region whose image is past the budget, or
-    /// — on the two pointwise reads, where the runs are `ran(M(d))` — a `d`
-    /// whose whole arrangement is. The runs are the side of a join the
-    /// request supplies; what they are joined against is the world's.
+    /// The read would join more arrangement I-runs than
+    /// [`crate::MAX_IMAGE_RUNS`] admits. Each of the three reads that hold it
+    /// counts the runs its own work multiplies, which the constant states.
+    /// The runs are the side of a join the request supplies; what they are
+    /// joined against is the world's.
     ImageTooLarge,
     /// The RETRIEVEENDSETS answer would carry more spans than
     /// [`crate::MAX_ENDSET_SPANS`]. The one budget here priced on what the

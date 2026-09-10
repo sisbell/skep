@@ -10,7 +10,7 @@ use skep_address::Address;
 use skep_kernel::Snapshot;
 use skep_links::{LinkState, View};
 
-use crate::helpers::{home_of, window_over};
+use crate::helpers::{home_readable, window_over};
 use crate::types::{Cursor, FourSet, Window};
 use crate::DiscoveryWorld;
 
@@ -53,6 +53,10 @@ pub(crate) fn satisfying(l: &LinkState, q: &FourSet) -> OrdSet<Address> {
 /// `(∗,∗,∗,∗)` = the whole addressable slice (FL-WILD); any constrained-empty
 /// slot ⇒ `[]` (FL-EMP). Monotone absent retraction (FL-MON): a found link
 /// stays found unless nullified.
+///
+/// Answers for NO READER: every satisfying link is disclosed, whatever its
+/// home — the route for principal-free callers. A caller answering for a
+/// reading principal asks [`findlinks_ftt_on_where`].
 pub fn findlinks_ftt_on<W: DiscoveryWorld>(s: &Snapshot<W>, q: &FourSet) -> Vec<Address> {
     findlinks_ftt_on_where(s, q, &|_| true)
 }
@@ -64,11 +68,11 @@ pub fn findlinks_ftt_on<W: DiscoveryWorld>(s: &Snapshot<W>, q: &FourSet) -> Vec<
 pub fn findlinks_ftt_on_where<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     q: &FourSet,
-    home_readable: &dyn Fn(&Address) -> bool,
+    readable: &dyn Fn(&Address) -> bool,
 ) -> Vec<Address> {
     satisfying(s.world().links(), q)
         .into_iter()
-        .filter(|a| home_readable(&home_of(a)))
+        .filter(|a| home_readable(readable, a))
         .collect()
 }
 
@@ -83,6 +87,9 @@ pub fn findlinks_ftt_on_where<W: DiscoveryWorld>(
 /// that gave up. The third zero, the degenerate request that names nothing,
 /// is answerable off the descriptor alone through
 /// [`FourSet::is_unsatisfiable`]: same number, different assertion.
+///
+/// Answers for NO READER, counting every satisfying link whatever its home;
+/// a caller answering for a reading principal asks [`count_ftt_on_where`].
 pub fn count_ftt_on<W: DiscoveryWorld>(s: &Snapshot<W>, q: &FourSet) -> usize {
     count_ftt_on_where(s, q, &|_| true)
 }
@@ -93,11 +100,11 @@ pub fn count_ftt_on<W: DiscoveryWorld>(s: &Snapshot<W>, q: &FourSet) -> usize {
 pub fn count_ftt_on_where<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     q: &FourSet,
-    home_readable: &dyn Fn(&Address) -> bool,
+    readable: &dyn Fn(&Address) -> bool,
 ) -> usize {
     satisfying(s.world().links(), q)
         .into_iter()
-        .filter(|a| home_readable(&home_of(a)))
+        .filter(|a| home_readable(readable, a))
         .count()
 }
 
@@ -118,6 +125,9 @@ pub fn count_ftt_on_where<W: DiscoveryWorld>(
 /// LAZILY during the range walk — so a home-narrow query never materializes
 /// the filtered set. The links this pages over are exactly the ones
 /// [`findlinks_ftt_on`] returns.
+///
+/// Answers for NO READER, paging every satisfying link whatever its home; a
+/// caller answering for a reading principal asks [`window_ftt_on_where`].
 pub fn window_ftt_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     q: &FourSet,
@@ -136,8 +146,8 @@ pub fn window_ftt_on_where<W: DiscoveryWorld>(
     q: &FourSet,
     cur: Cursor,
     n: usize,
-    home_readable: &dyn Fn(&Address) -> bool,
+    readable: &dyn Fn(&Address) -> bool,
 ) -> Window {
     let cand = candidates(s.world().links(), q);
-    window_over(&cand, cur, n, |a| q.at_home(a) && home_readable(&home_of(a)))
+    window_over(&cand, cur, n, |a| q.at_home(a) && home_readable(readable, a))
 }

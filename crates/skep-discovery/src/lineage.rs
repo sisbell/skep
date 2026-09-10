@@ -80,7 +80,7 @@ fn claims_on<W: DiscoveryWorld>(
     slot: usize,
     key: &Address,
     v: View,
-    home_readable: &dyn Fn(&Address) -> bool,
+    readable: &dyn Fn(&Address) -> bool,
 ) -> Vec<SupClaim> {
     let l = s.world().links();
     if l.readlink(key).is_none() {
@@ -94,9 +94,11 @@ fn claims_on<W: DiscoveryWorld>(
     hits.iter()
         .map(|c| claim_at(l, c))
         // The result-set filter (PUB round 2, lane 3.3, §3): a claim whose HOME
-        // the reader may not read is dropped — `SupClaim::home` is that home
+        // the reader may not read is dropped. The one disclosure site that asks
+        // the consult directly rather than through `home_readable`: the
+        // projection is already in hand, `SupClaim::home` being `home(c)`
         // (EL8b). The endpoints (`old`/`new`) stay as recorded, unfiltered.
-        .filter(|c| home_readable(&c.home))
+        .filter(|c| readable(&c.home))
         .collect()
 }
 
@@ -114,6 +116,9 @@ fn claims_on<W: DiscoveryWorld>(
 /// [`SupClaim`]'s `old`/`new` are the addresses the claim names, read out as
 /// recorded, so under any view a live claim can name a nullified link. A
 /// caller that needs the endpoints' activity asks M7's `is_active` for them.
+///
+/// Answers for NO READER: every claim is disclosed, whatever its home. A
+/// caller answering for a reading principal asks [`in_claims_on_where`].
 pub fn in_claims_on<W: DiscoveryWorld>(s: &Snapshot<W>, y: &Address, v: View) -> Vec<SupClaim> {
     in_claims_on_where(s, y, v, &|_| true)
 }
@@ -124,14 +129,15 @@ pub fn in_claims_on_where<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     y: &Address,
     v: View,
-    home_readable: &dyn Fn(&Address) -> bool,
+    readable: &dyn Fn(&Address) -> bool,
 ) -> Vec<SupClaim> {
-    claims_on(s, FROM, y, v, home_readable)
+    claims_on(s, FROM, y, v, readable)
 }
 
 /// The claims with `new = x` (ASN-0125 EL11b `out(x)`): probes TO under the
-/// flipped convention. Same key, view, order and endpoint-disclosure contract
-/// as [`in_claims_on`].
+/// flipped convention. Same key, view, order, endpoint-disclosure and reader
+/// contract as [`in_claims_on`]; the filtered route is
+/// [`out_claims_on_where`].
 pub fn out_claims_on<W: DiscoveryWorld>(s: &Snapshot<W>, x: &Address, v: View) -> Vec<SupClaim> {
     out_claims_on_where(s, x, v, &|_| true)
 }
@@ -142,7 +148,7 @@ pub fn out_claims_on_where<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     x: &Address,
     v: View,
-    home_readable: &dyn Fn(&Address) -> bool,
+    readable: &dyn Fn(&Address) -> bool,
 ) -> Vec<SupClaim> {
-    claims_on(s, TO, x, v, home_readable)
+    claims_on(s, TO, x, v, readable)
 }

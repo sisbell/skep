@@ -20,7 +20,7 @@ use skep_arrangement::{is_ordinal_vspan, ordinal_vspan, reading_surface, Run, VP
 use skep_kernel::Snapshot;
 use skep_links::Endset;
 
-use crate::helpers::{home_of, stab_runs, stab_runs_by_slot, union_slots, window_over};
+use crate::helpers::{home_readable, stab_runs, stab_runs_by_slot, union_slots, window_over};
 use crate::types::{Cursor, QueryError, Window};
 use crate::DiscoveryWorld;
 
@@ -229,6 +229,10 @@ pub(crate) fn findlinks_v_set_on<W: DiscoveryWorld>(
 /// REFUSES what [`image_on`] refuses, in its order: `DocNotRegistered`,
 /// `BadRegion`, `ImageTooLarge`. There is no fourth refusal — a registered
 /// `d` with a well-formed region always answers, ∅ included.
+///
+/// Answers for NO READER: every touching link is disclosed, whatever its
+/// home — the route for principal-free callers. A caller answering for a
+/// reading principal asks [`findlinks_v_on_where`].
 pub fn findlinks_v_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
@@ -246,11 +250,11 @@ pub fn findlinks_v_on_where<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
     region: &[Span],
-    home_readable: &dyn Fn(&Address) -> bool,
+    readable: &dyn Fn(&Address) -> bool,
 ) -> Result<Vec<Address>, QueryError> {
     Ok(findlinks_v_set_on(s, d, region)?
         .into_iter()
-        .filter(|a| home_readable(&home_of(a)))
+        .filter(|a| home_readable(readable, a))
         .collect())
 }
 
@@ -265,6 +269,9 @@ pub fn findlinks_v_on_where<W: DiscoveryWorld>(
 /// never a stand-in for a refusal: an unregistered `d` errs rather than
 /// counting 0, which is precisely the distinction a caller collapsing this
 /// `Result` to a number would lose.
+///
+/// Answers for NO READER, counting every touching link whatever its home; a
+/// caller answering for a reading principal asks [`count_v_on_where`].
 pub fn count_v_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
@@ -281,11 +288,11 @@ pub fn count_v_on_where<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
     region: &[Span],
-    home_readable: &dyn Fn(&Address) -> bool,
+    readable: &dyn Fn(&Address) -> bool,
 ) -> Result<usize, QueryError> {
     Ok(findlinks_v_set_on(s, d, region)?
         .into_iter()
-        .filter(|a| home_readable(&home_of(a)))
+        .filter(|a| home_readable(readable, a))
         .count())
 }
 
@@ -305,6 +312,9 @@ pub fn count_v_on_where<W: DiscoveryWorld>(
 /// REFUSES what [`image_on`] refuses, in its order: `DocNotRegistered`,
 /// `BadRegion`, `ImageTooLarge`. A refusal is never reported as an empty
 /// exhausted window.
+///
+/// Answers for NO READER, paging every touching link whatever its home; a
+/// caller answering for a reading principal asks [`window_v_on_where`].
 pub fn window_v_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
@@ -325,10 +335,10 @@ pub fn window_v_on_where<W: DiscoveryWorld>(
     region: &[Span],
     cur: Cursor,
     n: usize,
-    home_readable: &dyn Fn(&Address) -> bool,
+    readable: &dyn Fn(&Address) -> bool,
 ) -> Result<Window, QueryError> {
     let sel = findlinks_v_set_on(s, d, region)?; // gate + region-check inside
-    Ok(window_over(&sel, cur, n, |a| home_readable(&home_of(a))))
+    Ok(window_over(&sel, cur, n, |a| home_readable(readable, a)))
 }
 
 /// RETRIEVEENDSETS (ASN-0131): the `(slot, endset)` pairs touching `region`,
@@ -356,6 +366,10 @@ pub fn window_v_on_where<W: DiscoveryWorld>(
 /// `BadRegion`, `ImageTooLarge` — and then this read's own
 /// `EndsetsTooLarge`, which comes last because it is priced on what the
 /// store hands back and so cannot be known until the image is in hand.
+///
+/// Answers for NO READER: every touching link contributes its pairs,
+/// whatever its home. A caller answering for a reading principal asks
+/// [`retrieve_endsets_on_where`].
 pub fn retrieve_endsets_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
@@ -374,7 +388,7 @@ pub fn retrieve_endsets_on_where<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
     region: &[Span],
-    home_readable: &dyn Fn(&Address) -> bool,
+    readable: &dyn Fn(&Address) -> bool,
 ) -> Result<Vec<(usize, Endset)>, QueryError> {
     let w = s.world();
     let image = image_on(s, d, region)?; // gate + region-check inside, on THIS snap
@@ -386,7 +400,7 @@ pub fn retrieve_endsets_on_where<W: DiscoveryWorld>(
         // The home consult, at the candidate link's identity (§3): a link whose
         // home is unreadable contributes no pair. Its endset — if it survived —
         // is unfiltered at origin (PUB-6.15).
-        if !home_readable(&home_of(c)) {
+        if !home_readable(readable, c) {
             continue;
         }
         let link = w.links().readlink(c).expect("stab keys are resident links");

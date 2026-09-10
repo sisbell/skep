@@ -10,7 +10,7 @@ use skep_address::{content_subspace, Address, Nat, Span};
 use skep_arrangement::VPos;
 use skep_kernel::Snapshot;
 
-use crate::helpers::{home_of, stab_runs};
+use crate::helpers::{home_readable, stab_runs};
 use crate::region::content_vspan;
 use crate::types::{OrphanError, OrphanReport};
 use crate::DiscoveryWorld;
@@ -32,27 +32,43 @@ fn content_vspan_at(ordinal: &Nat, count: &Nat) -> Span {
 /// Pre-edit what-if (ASN-0117): the links the proposed DELETE `[p, p+width)`
 /// would drop from `d` — read-only, never the edit path.
 ///
-/// Refuses the requests DELETE refuses on its ADMISSION checks, so the
-/// preview is of the REQUESTED delete and never a silently-clipped different
-/// one: `DocNotRegistered`; non-`s_C` `p` → `NotContentSubspace`; zero
-/// `width` → `EmptyWidth`; and `p < 1 ∨ p + width > n_C + 1` → `OutOfBounds`,
-/// the single check to which M5's `NotArranged` + `OutOfBounds` pair is
-/// jointly equivalent under width ≥ 1.
+/// Refuses the requests DELETE refuses on its checks of the REQUEST — its
+/// target's registration and its range's shape — so the preview is of the
+/// REQUESTED delete and never a silently-clipped different one:
+/// `DocNotRegistered`; non-`s_C` `p` → `NotContentSubspace`; zero `width` →
+/// `EmptyWidth`; and `p < 1 ∨ p + width > n_C + 1` → `OutOfBounds`, the
+/// single check to which M5's `NotArranged` + `OutOfBounds` pair is jointly
+/// equivalent under width ≥ 1.
 ///
-/// The ω GATE IS NOT AMONG THEM, and its absence is the one place the two
-/// accepted sets differ: M5's DELETE refuses a caller who does not own `d`
-/// with `NotOwner`, and this takes no `Caller`, so it answers alike for
-/// every asker. A non-owner previewing a delete they cannot perform gets the
-/// preview. That is not M8's word to withhold — ownership is M5's rule and
-/// the session is M10's — so what this answers is a question about the
-/// REQUEST's shape, never about the asker's standing.
+/// TWO of M5's DELETE refusals have no counterpart here, and they are not
+/// alike:
 ///
-/// The accepted set is M5's DELETE admission minus that gate. Two LABELS
-/// differ within it, both where M5 would say `NotArranged` (`p ∉ [1, n_C]`):
-/// this reports `OutOfBounds` when `width ≥ 1`, and `EmptyWidth` when
-/// `width = 0`, because the width check runs ahead of the bounds check here
-/// and behind it in M5. A caller relaying a refusal verbatim relays a
-/// different word for the same refusal, never a different verdict.
+/// * The ω GATE, by decision. M5 refuses a caller who does not own `d` with
+///   `NotOwner`; this takes no `Caller`, so it answers alike for every asker,
+///   and a non-owner previewing a delete they cannot perform gets the
+///   preview. That is not M8's word to withhold — ownership is M5's rule and
+///   the session is M10's — and it is a fact about the ASKER, where every
+///   check above is a fact about the request.
+/// * The PUBLICATION refusal, as a GAP and not a decision. M5 refuses
+///   `PublishedTarget` (PUB-2.11) on a `d` whose document is published —
+///   after registration, ahead of every shape check this mirrors, and for
+///   `Caller::System` as for a principal — so a published `d` is refused
+///   there and answered here. That is a fact about the request's TARGET,
+///   which the reason given for the ω gate does not reach, and it does worse
+///   than answer for an edit M5 refuses: on a published `d` with a member,
+///   this reads `d`'s own arrangement, frozen at its pre-chain state, while
+///   every reader of `d` answers from its trunk head — so the report
+///   describes positions no reader of `d` sees. On every `d` M5's DELETE
+///   admits, `d` IS its own reading surface, which is why the preview reads
+///   `d` and does not float.
+///
+/// The accepted set is M5's DELETE admission minus those two gates. Two
+/// LABELS differ within it, both where M5 would say `NotArranged`
+/// (`p ∉ [1, n_C]`): this reports `OutOfBounds` when `width ≥ 1`, and
+/// `EmptyWidth` when `width = 0`, because the width check runs ahead of the
+/// bounds check here and behind it in M5. A caller relaying a refusal
+/// verbatim relays a different word for the same refusal, never a different
+/// verdict.
 ///
 /// The report's `orphaned` is in ascending address order — the permanent key
 /// every enumeration here reads out by, inherited from the `OrdSet` the set
@@ -67,6 +83,10 @@ fn content_vspan_at(ordinal: &Nat, count: &Nat) -> Span {
 /// links. The global-ghost determination (LP17 — discoverable from NO
 /// document) reaches provenance R and is M6 territory; M8 stops at the
 /// per-document set.
+///
+/// Answers for NO READER: every orphan is reported, whatever its home. A
+/// caller answering for a reading principal asks
+/// [`delete_orphans_on_where`].
 pub fn delete_orphans_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
@@ -79,13 +99,15 @@ pub fn delete_orphans_on<W: DiscoveryWorld>(
 /// [`delete_orphans_on`] with the result-set filter (PUB round 2, lane 3.3,
 /// §3): the orphaned set drops every link whose HOME the reader may not read,
 /// at link identity — a `d` argument's own readability is the caller's
-/// doc-argument consult (pre-dispatch), not this preview's.
+/// doc-argument consult (pre-dispatch), not this preview's. The consult runs
+/// AFTER the set identity, so it changes which orphans are disclosed and
+/// never which links are orphaned.
 pub fn delete_orphans_on_where<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
     p: &VPos,
     width: &Nat,
-    home_readable: &dyn Fn(&Address) -> bool,
+    readable: &dyn Fn(&Address) -> bool,
 ) -> Result<OrphanReport, OrphanError> {
     let w = s.world();
     if !w.m3().is_registered_document(d) {
@@ -128,7 +150,7 @@ pub fn delete_orphans_on_where<W: DiscoveryWorld>(
         orphaned: touching_deleted
             .relative_complement(touching_retained)
             .into_iter()
-            .filter(|a| home_readable(&home_of(a))) // §3 — drop unreadable-home orphans
+            .filter(|a| home_readable(readable, a)) // §3 — drop unreadable-home orphans
             .collect(),
     })
 }

@@ -14,10 +14,10 @@ use skep_address::{checked_inc, document_of, Address};
 use skep_arrangement::{trunk_of, Caller, M5Rec};
 use skep_content::ContentWrite;
 use skep_discovery::{
-    addressably_discoverable_from_on, count_ftt_on_where, count_v_on_where,
+    addressably_discoverable_from_on_where, count_ftt_on_where, count_v_on_where,
     delete_orphans_on_where, findlinks_ftt_on_where, findlinks_v_on_where, image_on,
-    in_claims_on_where, out_claims_on_where, project_on, retrieve_endsets_on_where,
-    window_ftt_on_where, window_v_on_where, QueryError,
+    in_claims_on_where, out_claims_on_where, project_on_where, retrieve_endsets_on_where,
+    window_ftt_on_where, window_v_on_where,
 };
 use skep_kernel::{Seq, TxnError, WorldState};
 use skep_links::{Invalid, LinkRec};
@@ -922,22 +922,20 @@ where
                     .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Endsets { pairs, as_of })
             }
-            // `project` and `discoverable_from` gate `d` FIRST (the dual row,
-            // PUB-6.8 — `d` is in the consult above), then answer ABSENCE for a
-            // link `a` homed in an unreadable document (PUB-6.6). `project` is
-            // UNFILTERED at origin otherwise (PUB-6.15).
+            // `project` and `discoverable_from`: `d` is in the consult above
+            // (the dual row, PUB-6.8); the ABSENCE of a link `a` homed in an
+            // unreadable document (PUB-6.6) is M8's to answer, through the
+            // predicate — see `project_on_where` and
+            // `addressably_discoverable_from_on_where` for the shape each gives
+            // and where it falls among their refusals. An admitted `project` is
+            // UNFILTERED at origin (PUB-6.15).
             Op::Project { a, slot, d } => {
-                if !home_readable(&a) {
-                    return Err(lower_read(kind, QueryError::NotALink));
-                }
-                let set = project_on(&snap, &a, slot, &d).map_err(|e| lower_read(kind, e))?;
+                let set = project_on_where(&snap, &a, slot, &d, &readable)
+                    .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::SpanSet { set, as_of })
             }
             Op::DiscoverableFrom { a, d } => {
-                if !home_readable(&a) {
-                    return Ok(Response::Bool { val: false, as_of }); // absent ⟹ not discoverable
-                }
-                let val = addressably_discoverable_from_on(&snap, &a, &d)
+                let val = addressably_discoverable_from_on_where(&snap, &a, &d, &readable)
                     .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Bool { val, as_of })
             }

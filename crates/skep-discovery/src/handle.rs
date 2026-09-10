@@ -28,6 +28,15 @@ use crate::{
 /// produced it, and two answers come from two states. A caller that must name
 /// the state it read (reporting it as an `as_of`, say) or read two answers off
 /// one state uses the pure `*_on` twins over its own `&Snapshot<W>` instead.
+///
+/// It also names NO READER: every method delegates to the base `*_on` read,
+/// so every link a query finds is disclosed whatever its home. That serves
+/// the principal-free callers — the engine's cross-store lifecycle test, this
+/// crate's suite. A caller answering for a reading principal uses the
+/// `*_on_where` twins, which take the reader's document predicate. The
+/// handle offers none of them: the one caller that answers for a reader,
+/// M10, must also name the state it read, which is the one thing this handle
+/// cannot do.
 pub struct LinkQuery<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
 }
@@ -133,8 +142,8 @@ impl<'k, W: DiscoveryWorld> LinkQuery<'k, W> {
     // ── Pointwise projection & discoverability (content subspace) ──
 
     /// The V-positions of `d`'s CONTENT that link `a`'s slot covers (ASN-0098
-    /// project) — the module's one UNFILTERED read, so a retracted link still
-    /// projects. See [`project_on`].
+    /// project) — the module's one read not narrowed to the active view, so a
+    /// retracted link still projects. See [`project_on`].
     pub fn project(&self, a: &Address, slot: usize, d: &Address) -> Result<SpanSet, QueryError> {
         project_on(&self.kernel.snapshot(), a, slot, d)
     }

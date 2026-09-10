@@ -8,31 +8,38 @@
 //! pinned-order read-out; the FTT unit/zero/conjunction algebra, the home
 //! address-projection filter and its prefix-coverage reach; the two families'
 //! zeros and their two stabilities; projection, its content-subspace-only
-//! narrowing, addressable discoverability, and the precedence that settles
-//! their document argument before their address one; the delete-orphan
-//! preview measured against the DELETE it previews, over that operation's
-//! whole accepted domain, against M5's own admission, and at the ω gate where
-//! the two part; the flipped lineage probes with the residence gate, the
-//! claim's own home attribution, the endpoints it reads out as recorded and
-//! the write-surface fences that read-out rests on; the two budgets, each
-//! refused at its boundary and on every entry point that inherits it, and the
-//! two quantities the run constant is held over; the snapshot twins; and —
-//! because this file is a crate of its
-//! own — the promises M8 makes to a consumer rather than to itself: one named
-//! world bound, the standard traits its values carry, and rejection enums that
-//! stay exhaustively matchable.
+//! narrowing, addressable discoverability, the precedence that settles their
+//! document argument before their address one, the trunk head both read a
+//! published document through, and their reader twins' absence; the
+//! delete-orphan preview measured against the DELETE it previews, over that
+//! operation's whole accepted domain, against M5's own admission, and at the
+//! ω and publication gates where the two part; the flipped lineage probes
+//! with the residence gate, the claim's own home attribution, the endpoints
+//! it reads out as recorded and the write-surface fences that read-out rests
+//! on; every result-set reader twin dropping exactly the links homed where
+//! its reader may not read; the two budgets, each refused at its boundary and
+//! on every entry point that inherits it, and the two quantities the run
+//! constant is held over; the snapshot twins; and — because this file is a
+//! crate of its own — the promises M8 makes to a consumer rather than to
+//! itself: one named world bound, the standard traits its values carry, and
+//! rejection enums that stay exhaustively matchable.
 
 use crate::common;
 
 use std::collections::HashSet;
 
 use common::*;
-use skep_address::{Address, Span};
+use skep_address::{document_of, Address, Span};
 use skep_arrangement::{Caller, DeleteError, HasM5, Vstream};
 use skep_discovery::{
-    content_vspan, count_ftt_on, count_v_on, delete_orphans_on, window_v_on, DiscoveryWorld,
-    FourSet, LinkQuery, OrphanError, OrphanReport, QueryError, SlotSpec, SupClaim, Window,
-    FROM, MAX_ENDSET_SPANS, MAX_IMAGE_RUNS, TO, TYPE,
+    addressably_discoverable_from_on, addressably_discoverable_from_on_where, content_vspan,
+    count_ftt_on, count_ftt_on_where, count_v_on, count_v_on_where, delete_orphans_on,
+    delete_orphans_on_where, findlinks_ftt_on, findlinks_ftt_on_where, findlinks_v_on,
+    findlinks_v_on_where, in_claims_on, in_claims_on_where, out_claims_on, out_claims_on_where,
+    project_on, project_on_where, retrieve_endsets_on, retrieve_endsets_on_where,
+    window_ftt_on_where, window_v_on, window_v_on_where, Cursor, DiscoveryWorld, FourSet,
+    LinkQuery, OrphanError, OrphanReport, QueryError, SlotSpec, SupClaim, Window, FROM,
+    MAX_ENDSET_SPANS, MAX_IMAGE_RUNS, TO, TYPE,
 };
 use skep_kernel::{Kernel, Snapshot, TxnError};
 use skep_links::{
@@ -1165,6 +1172,157 @@ fn addressably_discoverable_from_is_lp12_and_addressable_over_both_subspaces() {
     );
 }
 
+/// The published fixture, and the one shape where head-float decides an
+/// answer: `pdoc` takes two positions while memberless — they land in its
+/// OWN arrangement — then VERSION mints its head member, which shares that
+/// arrangement, and two more deposits land in the HEAD alone. So pdoc's own
+/// arrangement is frozen at its pre-chain state (`pca(1..=2)`) while every
+/// reader of pdoc answers from the head (`pca(1..=4)`).
+fn published_world() -> Kernel<World> {
+    let k = kernel();
+    seed_published_content(&k, &pdoc(), 2); // memberless: pdoc's own V 1..2
+    let (head, _) = Vstream::new(&k)
+        .version(PrincipalId(1), &pdoc(), None)
+        .expect("the owner versions its published document");
+    assert_eq!(head, phead(), "the chain's first member");
+    seed_published_content(&k, &pdoc(), 2); // the head's V 3..4, and nowhere else
+    k
+}
+
+/// §5 — HEAD-FLOAT on the pointwise pair: a bare PUBLISHED address is read
+/// through its trunk head, the pin the region family resolves through, so
+/// the two families agree about which links reach it — every link
+/// `findlinks_v` finds through `pdoc` is one `addressably_discoverable_from`
+/// calls reachable from `pdoc`, and `project` answers in the head's
+/// positions. Every other fixture in this suite is a private document, where
+/// the float is inert and reading `d`'s own arrangement is reading the right
+/// one; here a link reaching only the head's positions tells them apart.
+#[test]
+fn the_pointwise_pair_reads_the_trunk_head_the_region_family_resolves() {
+    let k = published_world();
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let link_from = |from: Address, to: Address| {
+        store
+            .makelink(SYS, &doc1(), SlotArg::Addrs(vec![from]), SlotArg::Addrs(vec![to]), SlotArg::Addrs(vec![ra(10)]))
+            .expect("emit succeeds")
+            .0
+    };
+    let pre_chain = link_from(pca(1), ca(101)); // a position both arrangements hold
+    let head_only = link_from(pca(3), ca(102)); // a position only the head holds
+    let lq = LinkQuery::new(&k);
+
+    // The premise: the head holds four positions, pdoc's own arrangement two.
+    let snap = k.snapshot();
+    assert_eq!(snap.world().m5().content_count(&phead()), n(4));
+    assert_eq!(snap.world().m5().content_count(&pdoc()), n(2));
+
+    // The law, and it is not vacuous: both links are found through pdoc.
+    let found = lq.findlinks_v(&pdoc(), &[vspan(1, 1, 4)]).expect("findlinks_v");
+    assert_eq!(found, vec![pre_chain, head_only.clone()]);
+    for a in &found {
+        assert_eq!(
+            lq.addressably_discoverable_from(a, &pdoc()),
+            Ok(true),
+            "{a:?} is found through pdoc, so it reaches pdoc"
+        );
+    }
+    // `project` answers in the positions `image` resolves — the head's.
+    assert_eq!(lq.image(&pdoc(), &[vspan(1, 3, 1)]), Ok(vec![run(&pca(3), 1)]));
+    assert!(lq
+        .project(&head_only, FROM, &pdoc())
+        .expect("project")
+        .denotes(&t(&[1, 3])));
+    // And the bare address answers exactly as its head does: the pin, not a
+    // coincidence of this fixture.
+    for a in &found {
+        assert_eq!(
+            lq.addressably_discoverable_from(a, &pdoc()),
+            lq.addressably_discoverable_from(a, &phead())
+        );
+        assert_eq!(lq.project(a, FROM, &pdoc()), lq.project(a, FROM, &phead()));
+    }
+}
+
+/// §5 — the pointwise pair's reader twins read a link homed where the reader
+/// may not read as ABSENT: `project` gives the non-link's `NotALink`,
+/// `addressably_discoverable_from` the retracted link's `Ok(false)`. The
+/// consult sits where both cards put it: after the document gate, so an
+/// unregistered `d` still names the document fault; and ahead of the
+/// residence read, so a masked link and an address naming nothing under the
+/// same unreadable document answer alike — the reader learns nothing of
+/// that document's link chain. An address with no home is no one's to
+/// withhold, so the store answers for it, masked reader or not.
+#[test]
+fn the_pointwise_twins_read_a_masked_link_as_absent_after_the_document_and_before_residence() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let (masked, _) = store
+        .makelink(SYS, &doc2(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+    let nothing = la2(99); // under doc2, naming no link
+    let snap = k.snapshot();
+    let everyone = |_: &Address| true;
+    let masks_doc2 = |d: &Address| *d != doc2();
+
+    // Admitted, the link answers as a link and the non-link as a non-link …
+    assert!(project_on_where(&snap, &masked, FROM, &doc1(), &everyone)
+        .expect("project")
+        .denotes(&t(&[1, 1])));
+    assert_eq!(addressably_discoverable_from_on_where(&snap, &masked, &doc1(), &everyone), Ok(true));
+    assert_eq!(
+        project_on_where(&snap, &nothing, FROM, &doc1(), &everyone),
+        Err(QueryError::NotALink)
+    );
+    assert_eq!(
+        addressably_discoverable_from_on_where(&snap, &nothing, &doc1(), &everyone),
+        Err(QueryError::NotALink)
+    );
+    // … and masked, the two cannot be told apart.
+    for addr in [&masked, &nothing] {
+        assert_eq!(
+            project_on_where(&snap, addr, FROM, &doc1(), &masks_doc2),
+            Err(QueryError::NotALink),
+            "{addr:?} is absent to project"
+        );
+        assert_eq!(
+            addressably_discoverable_from_on_where(&snap, addr, &doc1(), &masks_doc2),
+            Ok(false),
+            "{addr:?} is absent, so not discoverable"
+        );
+    }
+    // After the document gate: the document fault still speaks first.
+    assert_eq!(
+        project_on_where(&snap, &masked, FROM, &unregistered_doc(), &masks_doc2),
+        Err(QueryError::DocNotRegistered)
+    );
+    assert_eq!(
+        addressably_discoverable_from_on_where(&snap, &masked, &unregistered_doc(), &masks_doc2),
+        Err(QueryError::DocNotRegistered)
+    );
+    // An ACCOUNT address has no home: nothing to withhold, even from a reader
+    // who may read nothing, and the store's own answer stands.
+    let account = a(&[1, 0, 1]);
+    let no_one = |_: &Address| false;
+    assert_eq!(
+        project_on_where(&snap, &account, FROM, &doc1(), &no_one),
+        Err(QueryError::NotALink)
+    );
+    assert_eq!(
+        addressably_discoverable_from_on_where(&snap, &account, &doc1(), &no_one),
+        Err(QueryError::NotALink)
+    );
+    // The base reads ARE the twins under a reader admitting every home.
+    assert_eq!(
+        project_on(&snap, &masked, FROM, &doc1()),
+        project_on_where(&snap, &masked, FROM, &doc1(), &everyone)
+    );
+    assert_eq!(
+        addressably_discoverable_from_on(&snap, &masked, &doc1()),
+        addressably_discoverable_from_on_where(&snap, &masked, &doc1(), &everyone)
+    );
+}
+
 // ─────────────────── §6 — pre-edit link-survival ───────────────────
 
 #[test]
@@ -1383,8 +1541,12 @@ fn delete_orphans_keeps_a_link_witnessed_in_the_link_subspace_a_text_delete_neve
 /// equality holds for: `Caller::System` is exempt from M5's ω gate, so
 /// ownership never enters, and admission is all that is left to compare. For
 /// a caller the gate does NOT exempt the two sets differ, which the test
-/// below pins. Verdicts only here: the two vocabularies label one refusal
-/// differently by design, and the example test above is what pins WHICH word.
+/// below pins. And it runs over documents the PUBLICATION gate admits —
+/// doc1 and doc2 are private — because a published `d` is the second place
+/// the two sets part: a gap §6 states, pinned by a test of its own rather
+/// than added here, where it would fail the very equality this grid holds.
+/// Verdicts only here: the two vocabularies label one refusal differently by
+/// design, and the example test above is what pins WHICH word.
 #[test]
 fn delete_orphans_refuses_exactly_what_the_delete_refuses() {
     for doc in [doc1(), doc2(), unregistered_doc()] {
@@ -1418,13 +1580,15 @@ fn delete_orphans_refuses_exactly_what_the_delete_refuses() {
     }
 }
 
-/// §6 — the one check of M5's DELETE the preview does NOT hold: the ω gate.
-/// `delete_orphans_on` takes no `Caller`, so it answers a request DELETE
-/// would refuse the asker — a non-owner previewing a delete they cannot
-/// perform. The grid above cannot see this, because `SYS` is exempt from the
-/// gate by construction, so this is the case that fixes what "the accepted
-/// set is M5's minus the ω gate" means: same document, same request, one
-/// answer and one refusal.
+/// §6 — the first of the two checks of M5's DELETE the preview does NOT
+/// hold, and the one it omits by decision: the ω gate. `delete_orphans_on`
+/// takes no `Caller`, so it answers a request DELETE would refuse the asker —
+/// a non-owner previewing a delete they cannot perform. The grid above
+/// cannot see this, because `SYS` is exempt from the gate by construction,
+/// so this is the case that fixes what the ω half of "the accepted set is
+/// M5's minus two gates" means: same document, same request, one answer and
+/// one refusal. The other half, the publication refusal, is the test after
+/// this one.
 #[test]
 fn the_preview_answers_a_request_the_delete_refuses_for_ownership() {
     let k = kernel();
@@ -1442,9 +1606,9 @@ fn the_preview_answers_a_request_the_delete_refuses_for_ownership() {
         Err(TxnError::Rejected(DeleteError::NotOwner(_)))
     ));
 
-    // The gate is the only divergence: the same caller is refused the same
-    // way for a request the preview ALSO refuses, so ownership is orthogonal
-    // to admission rather than folded into it.
+    // On this private document the gate is the only divergence: the same
+    // caller is refused the same way for a request the preview ALSO refuses,
+    // so ownership is orthogonal to admission rather than folded into it.
     assert_eq!(
         delete_orphans_on(&k.snapshot(), &doc1(), &vp(1, 9), &n(1)),
         Err(OrphanError::OutOfBounds)
@@ -1453,6 +1617,47 @@ fn the_preview_answers_a_request_the_delete_refuses_for_ownership() {
         Vstream::new(&k).delete(stranger, &doc1(), vp(1, 9), n(1)),
         Err(TxnError::Rejected(DeleteError::NotOwner(_)))
     ));
+}
+
+/// §6 — the second check of M5's DELETE the preview does not hold, and the
+/// one §6 states as a GAP rather than a decision: the publication refusal
+/// (PUB-2.11). DELETE refuses every published target — `SYS` included, so
+/// no ownership question enters — while the preview answers; and it answers
+/// about pdoc's OWN arrangement, frozen at its pre-chain state, where every
+/// reader of pdoc sees the trunk head. This pins the divergence the contract
+/// states, so closing the gap is a change this test has to be told about.
+#[test]
+fn the_preview_answers_a_published_target_the_delete_refuses() {
+    let k = published_world();
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let (witness, _) = store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![pca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+
+    // The preview answers — the witness's one position goes …
+    assert_eq!(
+        delete_orphans_on(&k.snapshot(), &pdoc(), &vp(1, 1), &n(1)),
+        Ok(OrphanReport {
+            orphaned: vec![witness]
+        })
+    );
+    // … and the DELETE it previews is refused outright.
+    assert!(matches!(
+        Vstream::new(&k).delete(SYS, &pdoc(), vp(1, 1), n(1)),
+        Err(TxnError::Rejected(DeleteError::PublishedTarget))
+    ));
+
+    // What it judged is pdoc's own two positions, not the four its readers
+    // see: position 3 is arranged in the head, which `image` resolves, and
+    // out of bounds for the preview.
+    assert_eq!(
+        LinkQuery::new(&k).image(&pdoc(), &[vspan(1, 3, 1)]),
+        Ok(vec![run(&pca(3), 1)])
+    );
+    assert_eq!(
+        delete_orphans_on(&k.snapshot(), &pdoc(), &vp(1, 3), &n(1)),
+        Err(OrphanError::OutOfBounds)
+    );
 }
 
 // ─────────────── §7 — archival supersession lineage ───────────────
@@ -1716,6 +1921,138 @@ fn lineage_endpoints_rest_on_a_fence_the_write_surface_keeps() {
             active: true,
         }]
     );
+}
+
+// ─────────────── disclosure — the reader twins (PUB-6.13) ───────────────
+
+/// Drain a window read to exhaustion ONE link per page, so a masked link
+/// counted against `n` would show as a page that comes back short, reports
+/// exhaustion, and stops the drain early.
+fn drain_by_ones(page: impl Fn(Cursor) -> Window) -> Vec<Address> {
+    let mut drained = Vec::new();
+    let mut cur = None;
+    for _ in 0..64 {
+        let w = page(cur);
+        drained.extend(w.batch);
+        if w.exhausted {
+            return drained;
+        }
+        cur = w.next;
+    }
+    panic!("the window never reported exhaustion");
+}
+
+/// Every result-set reader twin drops EXACTLY the links homed where the
+/// reader may not read, and counts and pages what survives (PUB-6.13,
+/// PUB-6.14, PUB-6.19) — asked of each twin against its own base read, never
+/// against a hand-written answer. The reader here may read everything but
+/// doc2, and the fixture homes links in both documents, every one touching
+/// doc1's content, so each read-out has something to drop and something to
+/// keep. The mistake the law exists for is a site that asks the consult about
+/// the LINK instead of its home: a link address is no draft, so it reads as
+/// published and the mask opens — and that one read then keeps doc2's links.
+#[test]
+fn every_reader_twin_drops_exactly_the_links_homed_where_the_reader_may_not_read() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 3);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let make = |home: &Address, from: Vec<Address>, to: Address| {
+        store
+            .makelink(SYS, home, SlotArg::Addrs(from), SlotArg::Addrs(vec![to]), SlotArg::Addrs(vec![ra(10)]))
+            .expect("emit succeeds")
+            .0
+    };
+    // doc1's: position 1; positions 2 and 3; position 3 alone.
+    let m0 = make(&doc1(), vec![ca(1)], ca(101));
+    let m1 = make(&doc1(), vec![ca(2)], ca(3));
+    let m2 = make(&doc1(), vec![ca(3)], ca(104));
+    // doc2's: position 1 under an endset no doc1 link carries, and position 3
+    // alone under the FROM value m2 carries too.
+    let t0 = make(&doc2(), vec![ca(1), ca(102)], ca(105));
+    let t1 = make(&doc2(), vec![ca(3)], ca(103));
+    // One supersession claim homed in each document, both with old = m0.
+    let (kept, _) = store.assert_sup(SYS, &doc1(), &m0, &m1).expect("assert_sup succeeds");
+    let (masked, _) = store.assert_sup(SYS, &doc2(), &m0, &t0).expect("assert_sup succeeds");
+
+    let snap = k.snapshot();
+    let reader = |d: &Address| *d != doc2();
+    let survivors = |links: Vec<Address>| -> Vec<Address> {
+        links
+            .into_iter()
+            .filter(|a| document_of(a) != Some(doc2()))
+            .collect()
+    };
+
+    // The descriptor family over the unit descriptor: every link in the store.
+    let q = FourSet::any();
+    let all = findlinks_ftt_on(&snap, &q);
+    assert!(all.contains(&t0) && all.contains(&masked), "doc2's links are in the store");
+    let seen = findlinks_ftt_on_where(&snap, &q, &reader);
+    assert_eq!(seen, survivors(all), "findlinks_ftt");
+    assert_eq!(count_ftt_on_where(&snap, &q, &reader), seen.len(), "count_ftt");
+    assert_eq!(
+        drain_by_ones(|cur| window_ftt_on_where(&snap, &q, cur, 1, &reader)),
+        seen,
+        "window_ftt"
+    );
+
+    // The region family over doc1's whole content.
+    let region = [vspan(1, 1, 3)];
+    let all = findlinks_v_on(&snap, &doc1(), &region).expect("findlinks_v");
+    assert!(all.contains(&t0) && all.contains(&t1), "doc2's links touch the region");
+    let seen = findlinks_v_on_where(&snap, &doc1(), &region, &reader).expect("findlinks_v");
+    assert_eq!(seen, survivors(all), "findlinks_v");
+    assert_eq!(count_v_on_where(&snap, &doc1(), &region, &reader), Ok(seen.len()), "count_v");
+    assert_eq!(
+        drain_by_ones(|cur| {
+            window_v_on_where(&snap, &doc1(), &region, cur, 1, &reader).expect("window_v")
+        }),
+        seen,
+        "window_v"
+    );
+
+    // RETRIEVEENDSETS withholds identity, so what it drops is PAIRS: t0's own
+    // pair goes, and the one t1 shares with m2 stays, since m2 still carries
+    // it.
+    let every_pair = retrieve_endsets_on(&snap, &doc1(), &region).expect("retrieve_endsets");
+    assert_eq!(every_pair.len(), 5);
+    assert!(every_pair.contains(&(FROM, enc(&[ca(1), ca(102)]))), "t0's own pair");
+    assert_eq!(
+        retrieve_endsets_on_where(&snap, &doc1(), &region, &reader),
+        Ok(vec![
+            (FROM, enc(&[ca(1)])),
+            (FROM, enc(&[ca(2)])),
+            (FROM, enc(&[ca(3)])),
+            (TO, enc(&[ca(3)])),
+        ])
+    );
+
+    // The delete-orphan preview of position 3: m2 and t1 lose their last
+    // witness, and only m2 is disclosed — the consult reads the orphan set
+    // after it is computed, so it never changes which links are orphaned.
+    let orphaned = delete_orphans_on(&snap, &doc1(), &vp(1, 3), &n(1))
+        .expect("preview")
+        .orphaned;
+    assert_eq!(orphaned, vec![m2, t1]);
+    assert_eq!(
+        delete_orphans_on_where(&snap, &doc1(), &vp(1, 3), &n(1), &reader).map(|r| r.orphaned),
+        Ok(survivors(orphaned))
+    );
+
+    // The lineage pair: the doc2-homed claim goes, from both probes.
+    let claims = |found: Vec<SupClaim>| -> Vec<Address> { found.into_iter().map(|c| c.claim).collect() };
+    let all = claims(in_claims_on(&snap, &m0, View::Active));
+    assert_eq!(all, vec![kept.clone(), masked.clone()]);
+    assert_eq!(claims(in_claims_on_where(&snap, &m0, View::Active, &reader)), survivors(all));
+    for new in [&m1, &t0] {
+        let all = claims(out_claims_on(&snap, new, View::Active));
+        assert_eq!(all.len(), 1, "one claim names {new:?} as new");
+        assert_eq!(
+            claims(out_claims_on_where(&snap, new, View::Active, &reader)),
+            survivors(all),
+            "out_claims({new:?})"
+        );
+    }
 }
 
 // ───────────────────────── snapshot twins ─────────────────────────

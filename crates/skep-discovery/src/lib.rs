@@ -47,11 +47,58 @@
 //! (Conflicts #3), so the cursor survives orphaning and M8 pages with no
 //! index of its own.
 //!
+//! Every read of `d`'s arrangement but one reads `d`'s READING SURFACE —
+//! M5's `reading_surface`, the one pin of HEAD-FLOAT (PUB-2.49, PUB-2.50,
+//! PUB-2.53) — so a bare PUBLISHED address answers from its trunk head, a
+//! version address from its own member forever, and a memberless or private
+//! document from itself. The region family floats through [`image_on`], and
+//! the pointwise pair each through its own read of the runs, so the two agree
+//! about which links reach `d`. The one that does not float is
+//! [`delete_orphans_on`]: it previews DELETE, which edits `d`'s own
+//! arrangement and refuses every published target, so on every `d` DELETE
+//! admits, `d` IS its reading surface. On a published `d` the two part and
+//! the preview still answers — a gap, stated on the preview, and not a
+//! decision.
+//!
 //! M8 does almost no span algebra — and never the level-gated kind:
 //! coverage-overlap matching goes through M7, I→V through M5, query endsets
 //! through `Run::iextent` + `Endset::from_spans`; the lone pointwise span
 //! comparison is `addressably_discoverable_from`'s level-gate-free
 //! `classify_spans` touch test (§5).
+//!
+//! ## Disclosure
+//!
+//! A second narrowing, by READER where the first is by view: a link is
+//! disclosed only if the reader may read its HOME (PUB round 2, lane 3.3;
+//! PUB-6.13). M8 takes the reader as the caller's DOCUMENT predicate,
+//! `readable`, and never sees a principal, a grant or the read predicate's
+//! clauses. It composes that predicate with the home projection in ONE
+//! crate-internal element, because asked of a link instead of its home the
+//! predicate answers true and the mask opens.
+//!
+//! It is orthogonal to `View::Active`, and to the descriptor's own `home`
+//! slot, which is a COVERAGE constraint (CN-STAB) and not an authorization.
+//! It is applied at link IDENTITY: a masked link is DROPPED, never withheld
+//! in place — M6's `retrieve_v_masked` is the other shape, and nothing here
+//! uses it.
+//!
+//! Twelve reads carry it, each through a `_where` twin whose base read is
+//! that twin under a predicate admitting every home:
+//!
+//! * the ten RESULT-SET reads — `findlinks`, `count` and `window` in both
+//!   families, [`retrieve_endsets_on`], [`delete_orphans_on`] and the lineage
+//!   pair — drop every result link homed where the reader may not read, and
+//!   count and page the survivors;
+//! * the POINTWISE pair apply it to the `a` ARGUMENT, since neither answer
+//!   names a link: a masked `a` is ABSENT, which [`project_on_where`] answers
+//!   `Err(NotALink)` and [`addressably_discoverable_from_on_where`]
+//!   `Ok(false)` — after the document gate, and ahead of the residence read
+//!   so a masked link and an address naming nothing answer alike.
+//!
+//! [`image_on`] alone carries none: its answer names I-runs and no link. The
+//! division of labour is the same everywhere: a NAMED document's own
+//! readability is the caller's consult, before dispatch, and the homes of
+//! the links M8 names or is asked about are M8's.
 //!
 //! ## Budgets
 //!
@@ -103,11 +150,12 @@
 //! names neither `World` nor `Record` — a pure consumer of
 //! [`DiscoveryWorld`], generic over `W` (Engine Composition Contract).
 //! Consumed only by M10, which reaches every read through the pure `*_on`
-//! twins: M10 pins ONE snapshot per request and reports its position as
-//! `as_of`, which the self-snapshotting [`LinkQuery`] handle cannot serve —
-//! its snapshot is taken and dropped inside the call, so the answer could not
-//! be labelled with the state it came from. The handle serves callers reading
-//! current state without naming it.
+//! twins: M10 pins ONE snapshot per request, reports its position as
+//! `as_of`, and answers for the request's reader — none of which the
+//! self-snapshotting [`LinkQuery`] handle can serve, since its snapshot is
+//! taken and dropped inside the call, so the answer could not be labelled
+//! with the state it came from, and it names no reader. The handle serves
+//! callers reading current state without naming it, for no reader.
 //!
 //! The twins are free functions over a borrowed `&Snapshot<W>` — the dialect
 //! M1, M4 and M5 use for pure reads over borrowed state, and the one that
@@ -132,7 +180,10 @@ pub use descriptor::{
 };
 pub use handle::LinkQuery;
 pub use lineage::{in_claims_on, in_claims_on_where, out_claims_on, out_claims_on_where};
-pub use pointwise::{addressably_discoverable_from_on, project_on};
+pub use pointwise::{
+    addressably_discoverable_from_on, addressably_discoverable_from_on_where, project_on,
+    project_on_where,
+};
 pub use region::{
     content_vspan, count_v_on, count_v_on_where, findlinks_v_on, findlinks_v_on_where, image_on,
     retrieve_endsets_on, retrieve_endsets_on_where, window_v_on, window_v_on_where,

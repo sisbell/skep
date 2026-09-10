@@ -11,7 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
-use skep_arrangement::{HasM5, M5Rec, M5State, Run, VPos, VSpec};
+use skep_arrangement::{reading_surface, HasM5, M5Rec, M5State, Run, VPos, VSpec};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, WorldState};
 use skep_links::{
@@ -150,8 +150,21 @@ pub fn doc2() -> Address {
     a(&[1, 0, 1, 0, 2])
 }
 
+/// The PUBLISHED document: `[1,0,1,0,3]`. Its readers answer from its trunk
+/// head once it has one (head-float, PUB-2.53), and content enters it only as
+/// a declared deposit ([`seed_published_content`]).
+pub fn pdoc() -> Address {
+    a(&[1, 0, 1, 0, 3])
+}
+
+/// `pdoc`'s first trunk member, `[1,0,1,0,3,1]` — its head, once VERSION
+/// mints it.
+pub fn phead() -> Address {
+    a(&[1, 0, 1, 0, 3, 1])
+}
+
 /// An UNREGISTERED document address: `[1,0,1,0,7]` (the account chain's
-/// frontier is 2, so 7 is beyond it).
+/// frontier is 3, so 7 is beyond it).
 pub fn unregistered_doc() -> Address {
     a(&[1, 0, 1, 0, 7])
 }
@@ -159,6 +172,12 @@ pub fn unregistered_doc() -> Address {
 /// doc1 content element `k`: `[1,0,1,0,1,0,1,k]`.
 pub fn ca(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 1, 0, 1, ordinal])
+}
+
+/// pdoc content element `k`: `[1,0,1,0,3,0,1,k]` — minted under pdoc's own
+/// content chain wherever the deposit that minted it was placed.
+pub fn pca(ordinal: u32) -> Address {
+    a(&[1, 0, 1, 0, 3, 0, 1, ordinal])
 }
 
 /// doc1 link element `k`: `[1,0,1,0,1,0,2,k]`.
@@ -216,13 +235,15 @@ pub fn rel_ty() -> Endset {
 
 // ─────────────────────────────── world assembly ─────────────────────────────
 
-/// An M3 slice with a principal-owned account and two registered documents,
-/// built by folding exactly the records M3's own `delegate`/
-/// `create_new_document` would stage. Both documents are PRIVATE drafts —
-/// the discovery fixtures edit them in place, which a published document
-/// refuses (PUB-2.11); the first as an explicit-`false` mint, the state M3
-/// produces below the daemon's first-mint door. An account's `Allocate`
-/// carries no publication state.
+/// An M3 slice with a principal-owned account and three registered
+/// documents, built by folding exactly the records M3's own `delegate`/
+/// `create_new_document` would stage. The first two are PRIVATE drafts — the
+/// discovery fixtures edit them in place, which a published document refuses
+/// (PUB-2.11); the first as an explicit-`false` mint, the state M3 produces
+/// below the daemon's first-mint door. The third, [`pdoc`], is PUBLISHED and
+/// memberless: the one document here whose readers can answer from an
+/// arrangement other than its own. An account's `Allocate` carries no
+/// publication state.
 pub fn seeded_m3() -> M3State {
     M3State::genesis()
         .apply_m3(&M3Rec::Allocate {
@@ -240,6 +261,10 @@ pub fn seeded_m3() -> M3State {
         .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 0, 2]),
             published: false,
+        })
+        .apply_m3(&M3Rec::Allocate {
+            addr: a(&[1, 0, 1, 0, 3]),
+            published: true,
         })
 }
 
@@ -275,4 +300,31 @@ pub fn seed_content(k: &Kernel<World>, doc: &Address, count: u32) {
     skep_arrangement::Vstream::new(k)
         .insert(SYS, doc, vp(1, 1), vals, false)
         .expect("test content INSERT succeeds");
+}
+
+/// Seed `count` one-byte content values into the PUBLISHED `doc`, the one way
+/// content enters a published document (PUB-2.11): a DECLARED deposit
+/// appended at the fresh end of the arrangement its readers answer from —
+/// `doc`'s own while it has no member, its trunk head's once it has one
+/// (PUB-2.66). The atoms are minted under `doc`'s own content chain either
+/// way; only the placement floats.
+pub fn seed_published_content(k: &Kernel<World>, doc: &Address, count: u32) {
+    let fresh = {
+        let snap = k.snapshot();
+        let w = snap.world();
+        w.m5().content_count(&reading_surface(w.m3(), doc)) + n(1)
+    };
+    let vals: Vec<Val> = (0..count).map(|i| Val::new(vec![b'p' + i as u8])).collect();
+    skep_arrangement::Vstream::new(k)
+        .insert(
+            SYS,
+            doc,
+            VPos {
+                subspace: n(1),
+                ordinal: fresh,
+            },
+            vals,
+            true,
+        )
+        .expect("a declared deposit at the fresh end is admitted into a published document");
 }

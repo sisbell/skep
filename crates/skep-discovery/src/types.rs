@@ -267,11 +267,14 @@ impl fmt::Display for QueryError {
 impl Error for QueryError {}
 
 /// The typed rejection of the `delete_orphans` preview: four verdicts drawn
-/// from M5's `DeleteError` at M5's own granularity, so the refusal is
-/// actionable. `OutOfBounds` folds M5's `NotArranged` and `OutOfBounds` into
-/// one (§6 states where the two vocabularies label one refusal differently),
-/// and M5's `NotOwner` has no counterpart here at all — the preview takes no
-/// `Caller`, so ownership is not its word to speak.
+/// from the seven of M5's `DeleteError`, at M5's own granularity, so the
+/// refusal is actionable. `OutOfBounds` folds M5's `NotArranged` and
+/// `OutOfBounds` into one (§6 states where the two vocabularies label one
+/// refusal differently). Of the other two, `NotOwner` is absent by decision —
+/// the preview takes no `Caller`, so ownership is not its word to speak — and
+/// `PublishedTarget` is absent and OPEN: a published `d` is one M5 refuses
+/// and the preview answers about, a gap §6 states rather than a rule it
+/// keeps.
 ///
 /// Exhaustively matchable from outside the crate, and promised so, for the
 /// reason [`QueryError`] states.

@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "M8 — Link Query & Discovery: the read-only query/presentation layer over the link subsystem — content-region discovery, four-set descriptor queries, counting, windowed pagination, projection, RETRIEVEENDSETS, delete-orphan previews, and supersession lineage — composed from M7/M5/M3 over one M2 snapshot, owning no state and no index"
+description = "M8 — Link Query & Discovery: the read-only query/presentation layer over the link subsystem — content-region discovery, four-set descriptor queries, counting, windowed pagination, projection, RETRIEVEENDSETS, delete-orphan previews, and supersession lineage — composed from M7/M5/M3 over one M2 snapshot, with reader twins that drop every link whose home the caller's reader may not read, owning no state and no index"
 readme = "README.md"
 
 [dependencies]
@@ -28,10 +28,11 @@ skep-kernel = { path = "../skep-kernel" }
 # M3 — is_registered_document, the document-existence gate on every V-anchored op.
 skep-namespace = { path = "../skep-namespace" }
 # M5 — resolve (V→I image), project (I→V content), content/link runs and counts
-# (discoverability and the delete-orphan what-if), and both halves of the
-# ordinal V-span shape (is_ordinal_vspan gates the region, ordinal_vspan builds
-# the preview's spans), so the shape M8 asks with is the shape M5 reads. M8
-# never reads R.
+# (discoverability and the delete-orphan what-if), reading_surface (the one
+# head-float pin, which every arrangement read but the delete-orphan preview
+# routes through), and both halves of the ordinal V-span shape (is_ordinal_vspan
+# gates the region, ordinal_vspan builds the preview's spans), so the shape M8
+# asks with is the shape M5 reads. M8 never reads R.
 skep-arrangement = { path = "../skep-arrangement" }
 # M7 — stab/match_links/type_slice (the matcher M8 presents, never reimplements),
 # readlink/followlink, is_active, reserved_type(Supersedes), enc/Endset.

@@ -12,7 +12,7 @@
 use crate::common;
 
 use common::*;
-use skep_address::Address;
+use skep_address::{validate, Address, Nat, Tumbler};
 use skep_arrangement::Caller;
 use skep_content::Val;
 use skep_engine::{Engine, World};
@@ -273,4 +273,48 @@ fn a_historical_world_dumps_at_the_head_s_class() {
     let slice_a = format!("\"publication\": [{}]", both.join(", "));
     let head_a = engine.world_dump_visible_to(Some(A)).into_string();
     assert!(head_a.contains(&slice_a), "A's head slice: both drafts, address order:\n{head_a}");
+}
+
+/// The reach the dump's magnitude cost term rests on: a tumbler component is
+/// a `Nat` with no magnitude bound, and the client — not the store — chooses
+/// it. `makelink` gates neither slot's addresses against M3, so a grant may
+/// name a `content_prefix` that was never minted and whose components are as
+/// large as the depositor cares to make them; the grant fold admits the
+/// record on its HOME alone, and the per-class filter keeps the grants
+/// section WHOLE. So the invented address is rendered dotted, verbatim, to
+/// every class including the guest.
+///
+/// A thirty-digit component, which no machine word holds, is enough to state
+/// that the term is unbounded rather than to measure it.
+#[test]
+fn a_grant_names_an_address_the_client_invented() {
+    let engine = mem_engine();
+    let b = board(&engine);
+
+    // A document-tier address under A's account whose ordinal M3 never
+    // allocated and never could reach.
+    let huge: Nat = "123456789012345678901234567890".parse().expect("a thirty-digit component");
+    let invented: Address = {
+        let comps = b.acct_a.tumbler().iter().cloned().chain([nat(0), huge]);
+        validate(Tumbler::new(comps).expect("nonempty")).expect("a document tier address is T4-valid")
+    };
+    assert!(
+        !engine.kernel().snapshot().world().m3().is_registered_document(&invented),
+        "the point is an address M3 never minted"
+    );
+
+    grant(&engine, &b, &invented, &b.acct_b);
+
+    let guest = engine.world_dump_visible_to(None).into_string();
+    assert!(
+        guest.contains(&quoted(&invented)),
+        "the whole-kept grant section renders the invented address to the guest:\n{guest}"
+    );
+    assert!(
+        guest.contains("123456789012345678901234567890"),
+        "…component and all, at whatever magnitude the depositor chose"
+    );
+    // …and the grant is a real fold record, not a stray line: it opens
+    // nothing, because no document lies under a prefix M3 never allocated.
+    engine.check_hints().expect("the fold and its seed agree about the invented prefix");
 }

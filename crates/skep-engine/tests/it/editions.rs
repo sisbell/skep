@@ -9,11 +9,11 @@
 use crate::common;
 
 use common::*;
-use skep_address::Address;
+use skep_address::{document_of, parent, validate, Address, Nat, Tumbler};
 use skep_arrangement::Caller;
 use skep_engine::{Engine, World};
 use skep_febe::EditionClaim;
-use skep_links::{enc, HasLinks, SlotArg, View};
+use skep_links::{enc, Endset, HasLinks, SlotArg, View};
 use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 
 /// The EDITION class type address (commons-seeding.md row `3.14 | edition`
@@ -105,7 +105,13 @@ fn world(engine: &Engine) -> World {
 }
 
 fn row(claim: &Address, home: &Address, to: &Address, active: bool) -> EditionClaim {
-    EditionClaim { claim: claim.clone(), home: home.clone(), to: enc([to]), active }
+    row_to(claim, home, enc([to]), active)
+}
+
+/// [`row`] where the `to` slot is not one address: the row carries the endset
+/// AS DEPOSITED, so the wide-slot test states its whole expectation.
+fn row_to(claim: &Address, home: &Address, to: Endset, active: bool) -> EditionClaim {
+    EditionClaim { claim: claim.clone(), home: home.clone(), to, active }
 }
 
 /// Two editions claim the target, one through a subtype; the second is then
@@ -228,4 +234,81 @@ fn the_to_range_is_the_target_s_subtree() {
     );
     assert_eq!(w.edition_claims(&b.other), vec![row(&on_other, &b.e1, &b.other, true)]);
     assert!(w.edition_claims(&b.e1).is_empty(), "an edition is claimed by nothing");
+}
+
+/// The COST paragraph's BREADTH term, pinned: the lookup ranges over
+/// `target`'s whole subtree and restricts `target`'s LEVEL nowhere, so a NODE
+/// address — three components, the genesis node — answers with every edition
+/// claim under it, across accounts and documents alike. What bounds this read
+/// is the store's size and not the request's.
+#[test]
+fn the_lookup_ranges_over_whatever_tier_the_caller_names() {
+    let engine = mem_engine();
+    let b = board(&engine);
+    let on_doc = claim(&engine, &b.e1, &b.target, &t_edition());
+    let on_member = claim(&engine, &b.e2, &b.member, &t_edition());
+    let on_other = claim(&engine, &b.e1, &b.other, &t_edition());
+
+    let w = world(&engine);
+    // The account tier: every claim on any document A owns.
+    let account = document_of(&b.target).and_then(|d| parent(&d)).expect("the target's account");
+    // …in LINK-address order, so e1's two claims precede e2's one whatever
+    // the documents they name.
+    assert_eq!(
+        w.edition_claims(&account),
+        vec![
+            row(&on_doc, &b.e1, &b.target, true),
+            row(&on_other, &b.e1, &b.other, true),
+            row(&on_member, &b.e2, &b.member, true),
+        ],
+        "an account address ranges over every document under it"
+    );
+    // …and the NODE tier answers the same set, from an address of three
+    // components that names no document at all.
+    assert_eq!(
+        w.edition_claims(&node1()),
+        w.edition_claims(&account),
+        "the genesis node ranges over every account under it: the whole store"
+    );
+    assert!(document_of(&node1()).is_none(), "the node names no document, and is not refused");
+}
+
+/// …and the ANSWER's size is the DEPOSITOR's, not the request's: a row
+/// matched on one address carries its `to` endset AS DEPOSITED, so a claim
+/// naming the target among many addresses hands the whole slot back to a
+/// caller that asked after one. The cost paragraph's third term.
+#[test]
+fn a_row_carries_the_to_slot_as_deposited_however_wide() {
+    let engine = mem_engine();
+    let b = board(&engine);
+    let caller = Caller::Principal(A);
+    // A `to` slot naming the target and 63 ghost addresses of the edition's
+    // own never-minted subspace 3 — one address of the request, 64 of the
+    // answer.
+    let ghost = |n: u32| {
+        let mut comps: Vec<Nat> = b.e1.tumbler().iter().cloned().collect();
+        comps.extend([Nat::from(0u32), Nat::from(3u32), Nat::from(n)]);
+        validate(Tumbler::new(comps).expect("nonempty")).expect("a subspace-3 element is T4-valid")
+    };
+    let mut to: Vec<Address> = vec![b.target.clone()];
+    to.extend((1..64u32).map(ghost));
+    let (wide, _) = engine
+        .linkstore(&World::visible_to(caller))
+        .makelink(
+            caller,
+            &b.e1,
+            SlotArg::Addrs(vec![b.e1.clone()]),
+            SlotArg::Addrs(to.clone()),
+            SlotArg::Addrs(vec![t_edition()]),
+        )
+        .unwrap_or_else(|_| panic!("a wide-slotted claim deposits through the open surface"));
+
+    let w = world(&engine);
+    let rows = w.edition_claims(&b.target);
+    assert_eq!(rows, vec![row_to(&wide, &b.e1, enc(to.iter()), true)], "{rows:?}");
+    assert_eq!(
+        rows[0].to.len(),
+        64,
+        "the row carries every span deposited, for a request that named one address"
+    );
 }

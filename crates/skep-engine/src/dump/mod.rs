@@ -447,9 +447,38 @@ impl crate::Engine {
     /// COST: [`crate::Engine::dump_of`]'s plus, per filtered entry, one key
     /// decode — a `Tumbler` deserialize off the tree for the authoritative
     /// maps, a dotted parse for the hints and sections — and one predicate
-    /// call; plus, since lane 4.2, one walk of the supersession class (a
-    /// `readlink` and an `is_nullified` per claim) to key each rendered edge
-    /// by the claims asserting it, and one predicate call per such claim.
+    /// call. On top of that, FIVE whole-class walks, because two hint
+    /// families name something other than the link whose deposit put it
+    /// there and the filter must recover that link to judge it:
+    ///
+    /// * ONE over the supersession class, a `readlink` and an `is_nullified`
+    ///   per claim, to key each rendered edge by the claims asserting it; and
+    /// * FOUR over the predicate classes — `pred_def` and `pred_stable`, each
+    ///   under both views — a `readlink` per tuple, to key each rendered
+    ///   member by the tuples asserting it.
+    ///
+    /// Each walk costs one `type_slice` and its per-tuple reads, and adds one
+    /// predicate call per asserting link at the entries it judges. The two
+    /// walks are bounded differently, and by the STORE rather than by the
+    /// request:
+    ///
+    /// * the supersession walk is linear in its class, because that class is
+    ///   CLOSED to the open surfaces — `makelink` and `emit` both refuse it —
+    ///   so every claim in it carries one denoted address a side; while
+    /// * the predicate walks are linear in the SUM OF SUBJECT-SLOT WIDTHS
+    ///   over their classes. `makelink` fences only the retraction and
+    ///   supersession classes, so a predicate-classed link may be deposited
+    ///   through the open surface with a subject slot of up to
+    ///   `skep_links::MAX_SLOT_SPANS` spans, each denoting a member of its
+    ///   own. That is `LinkState::members`' own bound, which this walk
+    ///   mirrors rather than adds to.
+    ///
+    /// The filter additionally PARSES a dotted address per entry it judges,
+    /// which is [`crate::Engine::dump_of`]'s magnitude term run backwards: a
+    /// client-chosen component costs its base conversion on the way out and
+    /// again on the way in, and a section this filter reduces is one whose
+    /// entries it must decode to reduce.
+    ///
     /// Nothing is memoized; admission is the caller's to gate.
     pub fn dump_of_visible(&self, world: &World, readable: &dyn Fn(&Address) -> bool) -> WorldDump {
         dump_visible(world, readable)
@@ -505,7 +534,21 @@ impl crate::Engine {
     /// `Val` transcodes as a sequence of integers and not as a blob
     /// (`a_content_byte_costs_a_whole_tree_node` pins that, because it is the
     /// term that dominates this figure and it is not what the byte payload
-    /// looks like). The hints half adds two whole-store link scans
+    /// looks like).
+    ///
+    /// One term is not a count of anything: a component of a tumbler is a
+    /// `Nat`, an arbitrary-precision integer with no magnitude bound, and
+    /// rendering one DOTTED is a base conversion whose work grows faster than
+    /// the component's digit count. That magnitude is not the store's to
+    /// choose. An address reaches a link slot straight off a client's
+    /// deposit — `makelink` gates neither slot's addresses against M3, so an
+    /// address that was never minted and never will be is stored and later
+    /// rendered — and the sections that carry such addresses dotted include
+    /// the `grants` section, which the per-class filter keeps WHOLE. So every
+    /// class pays this term, the guest included
+    /// (`a_grant_names_an_address_the_client_invented` pins the reach).
+    ///
+    /// The hints half adds two whole-store link scans
     /// (`match_links` under the empty constraint set, each lifting every key
     /// it walks), one `is_nullified` and one `succs` per audit member, and two
     /// typed-slice walks per class. Nothing here is memoized, and peak memory

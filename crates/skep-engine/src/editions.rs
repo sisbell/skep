@@ -53,6 +53,32 @@ impl World {
     /// `OrdSet`), each row its home (the edition), its `to` endset as
     /// deposited and its active-view membership. The class, unfiltered; the
     /// caller applies the home rule (see the module docs).
+    ///
+    /// COST, per call, uncached, in three terms — and the caller chooses the
+    /// first while the STORE chooses the other two, so this figure is not
+    /// read off the request:
+    ///
+    /// * The `to` RANGE is `target`'s whole subtree and `target`'s LEVEL is
+    ///   unrestricted here, so the breadth is the caller's: a version member
+    ///   ranges over itself, a document over its versions, an ACCOUNT over
+    ///   every document under it and a NODE over every account under that —
+    ///   one address of a few components asking after every edition claim in
+    ///   the store. Nothing below narrows by level, because the containment
+    ///   regime that makes a document name its versions' claims is the same
+    ///   arithmetic at every tier.
+    /// * `match_links` under the two constraints, then per HIT one `readlink`,
+    ///   one `admitted` walk, one `succs` over the shipped supersession
+    ///   class and one `document_of`. `admitted` tests EVERY address the
+    ///   type slot denotes and short-circuits only on a non-member, so a slot
+    ///   filled with subtypes of the class runs to completion and keeps its
+    ///   row; its bound is `skep_links::MAX_SLOT_SPANS`, which is a slot's
+    ///   bound and not a request's.
+    /// * A surviving row carries the `to` endset AS DEPOSITED, so the size of
+    ///   the ANSWER is the depositor's choice too — a row matched on one
+    ///   address may carry a slot of `MAX_SLOT_SPANS` spans.
+    ///
+    /// Like every read on this world, it gates neither admission nor
+    /// concurrency, and nothing here is memoized.
     pub fn edition_claims(&self, target: &Address) -> Vec<EditionClaim> {
         let links = &self.links;
         let edition_class = t_edition();

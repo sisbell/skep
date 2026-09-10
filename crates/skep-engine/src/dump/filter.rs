@@ -12,7 +12,7 @@
 //! publication state, grant state and the reader's class.
 //!
 //! What every entry the filter reaches drops and keeps is [`filter_tree`]'s
-//! one statement. Two obligations run underneath it and belong to nothing
+//! one statement. Three obligations run underneath it and belong to nothing
 //! else in the crate:
 //!
 //! * The PATHS this module walks are string keys, and a path's two halves
@@ -31,38 +31,68 @@
 //!   renderings and not the values behind them. That re-entry is through the
 //!   types' own doors ([`serde_form_address`], [`dotted_address`]), and what
 //!   it cannot recover it DROPS.
+//! * Two hint families name something OTHER than the link whose deposit put
+//!   it there — a supersession EDGE, a predicate MEMBER — and a link's home
+//!   is what governs, so this module RE-DERIVES the link from the class it
+//!   was rendered off ([`sup_edge_claims`], [`member_tuples`]). Each is a
+//!   restatement of a rule M7 owns, and the standing obligation on both is to
+//!   stay that restatement: one that keyed fewer entries than the walk
+//!   renders would drop, under the TOTAL predicate, what the walk wrote, and
+//!   the identity that makes a class's dump the walk's own tree would fail.
+//!   That is why each is checked against the walk over a world that has the
+//!   entry, and not only against a class that reads it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
 use skep_address::{document_of, validate, Address, Nat, Tumbler};
-use skep_links::{LinkState, ShippedType, View};
+use skep_links::{Endset, LinkState, ShippedType, View};
 
 use crate::canon::{SerdeTree, TreeDe};
 
 use super::shipped_label;
 
-/// The hint families reduced BY HOME: each is a sequence of dotted link
-/// addresses, and an entry stays where the class reads the document its
-/// address is homed in.
+/// The hint families reduced BY HOME: each is a sequence of dotted LINK
+/// addresses, and an entry stays where the class reads the document its own
+/// address is homed in. That one test is the whole rule here BECAUSE the
+/// entry is the link — the thing whose existence the entry discloses is the
+/// thing being judged.
 ///
 /// The list is the reduction's COMPLETENESS as well as its content — what it
 /// accounts for as well as what it does. [`filter_tree`] touches an entry
 /// only where some path below names it, so a family `super::hints_tree` adds
 /// and this list omits is rendered WHOLE to every class — the guest included.
-/// Three hint families are reduced by an arm of their own rather than here:
-/// `types` (per shipped class, per view), `supersession` (the three-test arm)
-/// and `publication.drafts` (a map, keyed by the draft).
-/// `every_hints_family_is_reduced_or_kept_by_name` holds this list plus those
-/// three against the section the builder writes.
-const REDUCED_BY_HOME: [&str; 7] = [
-    "links.audit",
-    "links.active",
-    "links.nullified",
-    "predicates.defs.audit",
-    "predicates.defs.active",
-    "predicates.stable.audit",
-    "predicates.stable.active",
+/// The other families are reduced by an arm of their own rather than here:
+/// [`REDUCED_BY_TUPLE`]'s four (a member is not a link, so its asserting
+/// tuple is judged too), `types` (per shipped class, per view),
+/// `supersession` (the three-test arm) and `publication.drafts` (a map, keyed
+/// by the draft). `every_hints_family_is_reduced_or_kept_by_name` holds this
+/// list plus those against the section the builder writes.
+const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullified"];
+
+/// The hint families reduced BY THE ASSERTING TUPLE as well as by home: each
+/// is a sequence of dotted MEMBER addresses — the subjects `LinkState::members`
+/// denotes, never the tuples that denote them — so an entry here discloses
+/// TWO things and takes a test apiece.
+///
+/// A member's own document is one of them, judged as everywhere else. The
+/// other is the REGISTRATION: that some `pred_def`/`pred_stable` tuple names
+/// this member is a fact deposited in that tuple's home, and a link's home
+/// governs what a class learns of it (PUB-6.13) exactly as it does for the
+/// supersession claims below. A tuple homed in a private draft over a public
+/// member would otherwise put the draft's content in the guest's dump beside
+/// an EMPTY `types` slice for the same class — the walk's two renderings of
+/// one deposit, disagreeing.
+///
+/// Each row carries the class and the view the builder read the family under,
+/// so the re-derivation ([`member_tuples`]) walks the slice the entries came
+/// from: an audit entry is asserted by an audit-view tuple, an active entry by
+/// an active-view one.
+const REDUCED_BY_TUPLE: [(&str, ShippedType, View); 4] = [
+    ("predicates.defs.audit", ShippedType::PredDef, View::Audit),
+    ("predicates.defs.active", ShippedType::PredDef, View::Active),
+    ("predicates.stable.audit", ShippedType::PredStable, View::Audit),
+    ("predicates.stable.active", ShippedType::PredStable, View::Active),
 ];
 
 /// The per-class post-filter over the dump tree — the ONE statement of what
@@ -97,29 +127,43 @@ const REDUCED_BY_HOME: [&str; 7] = [
 ///   granted one.
 /// * `grants` — KEPT whole: a grant is a published document's record, and the
 ///   addresses it names are not secret (PUB-1.13).
-/// * `hints` — every link address (the audit/active/nullified slices, the
-///   shipped classes' slices, the supersession edges and their successors,
-///   the predicate projections) by its home; the shipped classes' `key`
-///   entries are format constants and stay; `publication.drafts` reduced to
-///   the readable drafts, as the section is. A SUPERSESSION EDGE takes a
-///   third test beside its two endpoints' homes (lane 4.2, F4; PUB-6.13,
-///   PUB-6.22, PUB-6.27): the edge stays only where some operative CLAIM
-///   asserting it — the `[K_sup]` link the walk derived the edge from — is
-///   homed in a document the class reads. A claim is a link and its home
-///   governs, exactly as `in_claims`/`out_claims` filter lineage by the
-///   CLAIM's home: a draft-homed `assert_sup` over two public links is
-///   invisible to a guest there and leaves the guest's dump here. The hint's
-///   rendered shape is unchanged — the edge record still carries no claim
-///   address — so the claims are read at filter time off `links`, the
-///   render's own source, through [`sup_edge_claims`].
+/// * `hints` — every LINK address (the audit/active/nullified slices, the
+///   shipped classes' slices, the supersession edges and their successors) by
+///   its home; the shipped classes' `key` entries are format constants and
+///   stay; `publication.drafts` reduced to the readable drafts, as the
+///   section is. Two families are not link addresses and take a second test
+///   apiece, because the entry and the deposit that put it there are two
+///   things:
+///     * The PREDICATE PROJECTIONS ([`REDUCED_BY_TUPLE`]) are MEMBER
+///       addresses — `LinkState::members` denotes the subjects, not the
+///       tuples — so an entry stays where the class reads the member's own
+///       document AND some `pred_def`/`pred_stable` tuple asserting it, at
+///       that entry's own view, is readably homed. Either test alone leaks
+///       one way: the member's alone puts a draft-homed registration in the
+///       guest's dump, the tuple's alone puts a draft's content position
+///       there.
+///     * A SUPERSESSION EDGE takes a third test beside its two endpoints'
+///       homes (lane 4.2, F4; PUB-6.13, PUB-6.22, PUB-6.27): the edge stays
+///       only where some operative CLAIM asserting it — the `[K_sup]` link
+///       the walk derived the edge from — is homed in a document the class
+///       reads. A claim is a link and its home governs, exactly as
+///       `in_claims`/`out_claims` filter lineage by the CLAIM's home: a
+///       draft-homed `assert_sup` over two public links is invisible to a
+///       guest there and leaves the guest's dump here.
+///
+///   Neither hint's rendered shape is widened — an edge record still carries
+///   no claim address and a projection still carries no tuple address — so
+///   both re-derivations are read at filter time off `links`, the render's own
+///   source, through [`sup_edge_claims`] and [`member_tuples`].
 ///
 /// An entry NO PATH IN THE BODY NAMES is kept whole at every class. So the
 /// statement above is this reduction's COMPLETENESS as well as its content,
 /// and the gap it admits is the one nothing else here catches: a section or a
 /// hint family added to the tree and left out of it goes to the guest
 /// unreduced, deterministically and with nothing about it looking wrong. The
-/// hint families carry their own list ([`REDUCED_BY_HOME`]) so that the sum
-/// can be held against what the builders write.
+/// hint families carry their own lists ([`REDUCED_BY_HOME`],
+/// [`REDUCED_BY_TUPLE`]) so that the sum can be held against what the builders
+/// write.
 ///
 /// A key that fails to decode is DROPPED (fail-closed): every key here was
 /// rendered from an address a moment earlier, so none does, and a filter
@@ -160,6 +204,20 @@ pub(super) fn filter_tree(
 
     for family in REDUCED_BY_HOME {
         retain_seq(&mut root, &["hints", family], &keep_dotted);
+    }
+    for (family, ty, view) in REDUCED_BY_TUPLE {
+        // A MEMBER, judged at its own document and then at the homes of the
+        // tuples asserting it under this entry's own view.
+        let asserted_by = member_tuples(links, links.reserved_type(ty), view);
+        let keep_member = |item: &SerdeTree| {
+            dotted_address(item).is_some_and(|member| {
+                document_readable(&member)
+                    && asserted_by
+                        .get(member.tumbler())
+                        .is_some_and(|tuples| tuples.iter().any(document_readable))
+            })
+        };
+        retain_seq(&mut root, &["hints", family], &keep_member);
     }
     for ty in ShippedType::ALL {
         for view in ["audit", "active"] {
@@ -214,6 +272,22 @@ pub(super) fn filter_tree(
 /// edge is where that agreement is checked, and a change to M7's arm has its
 /// counterpart here.
 ///
+/// Both slots are read through `Endset::addrs` UNGUARDED, which is
+/// `fold_hints`' own reading and must stay it: that iterator already keeps the
+/// unit-depth spans and drops the rest, so an `is_address_denoting` test here
+/// would be strictly stronger than the rule being mirrored and would key
+/// fewer edges than the walk renders.
+///
+/// Nothing in the class can exercise the difference, and the reason is a
+/// CLOSURE rather than a coincidence: `makelink` and `emit` each refuse a
+/// supersedes-classed type slot outright (`MakeLinkError::SupersessionClass`,
+/// `EmitError::SupersessionClass`), so the only deposits into the class are
+/// `assert_sup`'s and `editlink`'s, and both build the value
+/// `Link::triple(enc([old]), enc([new]), …)` — one unit-depth span a side.
+/// That is what makes the cross product below 1 × 1 per claim rather than a
+/// product of two slot widths, and it is what
+/// `the_supersession_class_is_closed_to_the_open_surfaces` pins.
+///
 /// Read through M7's public surface alone — the class's `type_slice` under
 /// the audit view, `is_nullified` and `readlink` per claim — at filter time:
 /// the dump is a whole-world render and this is one more whole-class walk;
@@ -240,6 +314,52 @@ fn sup_edge_claims(links: &LinkState) -> BTreeMap<Tumbler, BTreeMap<Tumbler, Vec
         }
     }
     by_edge
+}
+
+/// The tuples of class `ty` under `view` that ASSERT each member, keyed by the
+/// denoted member — for the per-class filter over the dump's predicate
+/// projections ([`REDUCED_BY_TUPLE`]).
+///
+/// `LinkState::members` publishes the members and not the tuples behind them,
+/// so the derivation is RESTATED here, and the STANDING OBLIGATION is that it
+/// stay `members`' own denotation rule: the union of the F-slot's denoted
+/// addresses over the class's slice under that view. Two departures from that
+/// rule would each break the identity that makes a class's dump the walk's own
+/// tree, by keying fewer members than the walk renders —
+///
+/// * an `is_address_denoting` guard on the F slot, which is STRICTLY STRONGER
+///   than `Endset::addrs`: that iterator already keeps the unit-depth spans
+///   and drops the rest, so a mixed slot denotes under `members` and would
+///   denote nothing here. What makes that a live risk rather than a nicety is
+///   that these classes are NOT closed the way the supersession class is:
+///   `makelink` fences the retraction and supersession classes and no others,
+///   so a predicate-classed link reaches the slice with a CALLER-SHAPED
+///   subject slot — many denoted members, or a shape the managed surface
+///   would never build — and this walk must read it exactly as `members`
+///   does; and
+/// * a view of this function's own choosing. `members` subtracts the filtered
+///   roots under `View::Default` alone, and the builder reads `Audit` and
+///   `Active`, so each row of [`REDUCED_BY_TUPLE`] carries the view its own
+///   entries were rendered under.
+///
+/// The reverse direction is free: keying a member the walk did NOT render
+/// costs a lookup nothing probes.
+///
+/// Read through M7's public surface alone — the class's `type_slice` and
+/// `readlink` per tuple — at filter time, as [`sup_edge_claims`] is. A tuple's
+/// home is `document_of(tuple)`, the same address arithmetic every other hint
+/// entry is judged by.
+fn member_tuples(links: &LinkState, ty: &Endset, view: View) -> BTreeMap<Tumbler, Vec<Address>> {
+    let mut by_member: BTreeMap<Tumbler, Vec<Address>> = BTreeMap::new();
+    for tuple in links.type_slice(ty, view) {
+        let Some(link) = links.readlink(&tuple) else {
+            continue; // type-slice keys are resident by construction
+        };
+        for member in link.from_slot().addrs() {
+            by_member.entry(member.clone()).or_default().push(tuple.clone());
+        }
+    }
+    by_member
 }
 
 /// The entry at `path` — a chain of string keys through nested maps — if the
@@ -297,8 +417,8 @@ fn dotted_address(item: &SerdeTree) -> Option<Address> {
 mod tests {
     use skep_address::validate;
     use skep_arrangement::Caller;
-    use skep_kernel::{CheckpointPolicy, Durability, KernelConfig};
-    use skep_links::SlotArg;
+    use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, TxnError};
+    use skep_links::{EmitError, MakeLinkError, ReservedAddrs, SlotArg};
     use skep_namespace::{HasM3, BOOTSTRAP_PRINCIPAL};
 
     use crate::dump::tests::{addr, populated_world, render_of, USER};
@@ -308,29 +428,77 @@ mod tests {
 
     use super::*;
 
+    /// The SHAPE a reduction expects at its path. [`retain_map`] and
+    /// [`retain_seq`] do nothing where the node is not theirs, so a builder
+    /// that reshaped an entry without renaming it would leave the reduction
+    /// filtering nothing — which is why the shape is asserted and not merely
+    /// the place.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Shape {
+        Map,
+        Seq,
+    }
+
+    /// EVERY path [`filter_tree`] reduces, with the shape its reduction
+    /// expects there — built from the filter's own two family lists and the
+    /// one shipped-class table, so a family added to either is walked by the
+    /// tests below without an edit here.
+    fn reduced_paths() -> Vec<(Vec<String>, Shape)> {
+        let owned = |path: &[&str]| path.iter().map(|c| (*c).to_owned()).collect::<Vec<String>>();
+        let mut paths = vec![
+            (owned(&["authoritative", "content", "map"]), Shape::Map),
+            (owned(&["authoritative", "arrangement", "arrangements"]), Shape::Map),
+            (owned(&["authoritative", "arrangement", "provenance"]), Shape::Map),
+            (owned(&["authoritative", "links", "links"]), Shape::Map),
+            (owned(&["publication"]), Shape::Seq),
+        ];
+        for family in REDUCED_BY_HOME {
+            paths.push((owned(&["hints", family]), Shape::Seq));
+        }
+        for (family, _, _) in REDUCED_BY_TUPLE {
+            paths.push((owned(&["hints", family]), Shape::Seq));
+        }
+        for ty in ShippedType::ALL {
+            for view in ["audit", "active"] {
+                paths.push((owned(&["hints", "types", shipped_label(ty), view]), Shape::Seq));
+            }
+        }
+        paths.push((owned(&["hints", "supersession"]), Shape::Map));
+        paths.push((owned(&["hints", "publication.drafts"]), Shape::Map));
+        paths
+    }
+
+    /// The node at `path`, as a shape and a count.
+    fn shape_and_len(tree: &mut SerdeTree, path: &[&str]) -> (Shape, usize) {
+        match at_path(tree, path) {
+            Some(SerdeTree::Map(entries)) => (Shape::Map, entries.len()),
+            Some(SerdeTree::Seq(items)) => (Shape::Seq, items.len()),
+            other => panic!("{path:?}: expected a map or a sequence, got {other:?}"),
+        }
+    }
+
+    fn borrowed(path: &[String]) -> Vec<&str> {
+        path.iter().map(String::as_str).collect()
+    }
+
     /// The v5 root: the two publication-round sections sit beside the
-    /// authoritative and hints sections, and the filter's paths into the
-    /// authoritative slices name fields that exist — a slice renaming its
-    /// serde field would otherwise leave the filter silently filtering
-    /// nothing, which is the one failure a fail-closed key rule cannot catch.
+    /// authoritative and hints sections, and every path the filter reduces
+    /// names a place in the tree OF THE SHAPE that reduction expects. A slice
+    /// renaming its serde field, or a builder reshaping an entry under an
+    /// unchanged key, would otherwise leave the filter silently filtering
+    /// nothing — which is the one failure a fail-closed key rule cannot catch.
     #[test]
     fn the_v5_root_and_the_filter_s_paths_exist() {
         let (_engine, world) = populated_world();
         let mut tree = dump_tree(&world);
-        for path in [
-            &["authoritative", "namespace"][..],
-            &["authoritative", "content", "map"],
-            &["authoritative", "arrangement", "arrangements"],
-            &["authoritative", "arrangement", "provenance"],
-            &["authoritative", "links", "links"],
-            &["publication"],
-            &["grants"],
-            &["hints", "links.audit"],
-            &["hints", "types", "shipped.supersedes", "audit"],
-            &["hints", "supersession"],
-            &["hints", "predicates.defs.audit"],
-            &["hints", "publication.drafts"],
-        ] {
+        for (path, want) in reduced_paths() {
+            let path = borrowed(&path);
+            let (found, _) = shape_and_len(&mut tree, &path);
+            assert_eq!(found, want, "{path:?}: the reduction's shape is not what the builder wrote");
+        }
+        // …and the two sections kept WHOLE are places in the tree too, so the
+        // statement that names them can be read against something.
+        for path in [&["authoritative", "namespace"][..], &["grants"]] {
             assert!(at_path(&mut tree, path).is_some(), "{path:?} is a place in the v5 tree");
         }
     }
@@ -364,12 +532,14 @@ mod tests {
             }
         };
 
-        // The hints section: the by-home families, plus the three the filter
-        // reduces through an arm of their own.
+        // The hints section: the by-home families, the by-tuple families, and
+        // the three the filter reduces through an arm of their own.
         let named: BTreeSet<String> = REDUCED_BY_HOME
             .iter()
-            .chain(["types", "supersession", "publication.drafts"].iter())
-            .map(|name| (*name).to_owned())
+            .copied()
+            .chain(REDUCED_BY_TUPLE.iter().map(|(family, _, _)| *family))
+            .chain(["types", "supersession", "publication.drafts"])
+            .map(|name| name.to_owned())
             .collect();
         assert_eq!(
             keys_at(&mut tree, &["hints"]),
@@ -438,6 +608,232 @@ mod tests {
             let a = render_of(at_path(&mut full, path).expect("present"));
             let b = render_of(at_path(&mut guest, path).expect("present"));
             assert_eq!(a, b, "{path:?} is kept whole");
+        }
+    }
+
+    /// A world holding an entry in EVERY family the reduction reaches, all of
+    /// it homed in ONE private draft — so a guest is owed nothing of any of
+    /// it, and each path's reduction has something to drop.
+    ///
+    /// Built on [`populated_world`]'s account, draft, content, arrangement and
+    /// link, which cover the authoritative maps and the two publication
+    /// families; this adds the link population the shipped classes and the
+    /// predicate projections need. The links carry ADDRESS-form slots under
+    /// ghost types of the draft's own never-minted subspace 3, so each lands
+    /// in an unregistered coverage class and the shipped slices hold exactly
+    /// the tuples deposited under them.
+    fn every_reduced_family_in_a_draft() -> World {
+        let (engine, world) = populated_world();
+        let draft =
+            world.drafts().next().map(|(doc, _)| doc.clone()).expect("the fixture's one draft");
+        let caller = Caller::Principal(USER);
+        let visibility = World::visible_to(caller);
+        let writer = engine.linkstore(&visibility);
+        // An element of the draft's subspace `s` — never minted, which
+        // neither a slot nor an `emit` member requires.
+        let element = |s: u32, n: u32| {
+            let mut comps: Vec<Nat> = draft.tumbler().iter().cloned().collect();
+            comps.extend([Nat::from(0u32), Nat::from(s), Nat::from(n)]);
+            validate(Tumbler::new(comps).expect("nonempty"))
+                .expect("an element of a document is T4-valid")
+        };
+        let ghost_typed_link = |n: u32| {
+            writer
+                .makelink(
+                    caller,
+                    &draft,
+                    SlotArg::Addrs(Vec::new()),
+                    SlotArg::Addrs(Vec::new()),
+                    SlotArg::Addrs(vec![element(3, n)]),
+                )
+                .expect("a link in the owner's own draft")
+                .0
+        };
+        // Two endpoints for the supersession claim, and one link to retract.
+        let (old, new, doomed) = (ghost_typed_link(41), ghost_typed_link(42), ghost_typed_link(43));
+        writer
+            .assert_sup(caller, &draft, &old, &new)
+            .expect("a supersession claim over two of the draft's links");
+        writer.nullify(caller, &draft, &doomed).expect("the owner retracts its own link");
+        // One managed tuple per remaining shipped class, over members of the
+        // draft — which is what puts the predicate projections in the tree.
+        for ty in [ShippedType::Retired, ShippedType::PredDef, ShippedType::PredStable] {
+            let class = engine.registry().reserved_type(ty).clone();
+            writer
+                .emit(caller, &draft, &class, &element(1, 9), &[])
+                .unwrap_or_else(|_| panic!("a {ty:?} tuple in the owner's own draft"));
+        }
+        engine.kernel().snapshot().world().clone()
+    }
+
+    /// Every path the filter reduces DOES reduce: over a world whose every
+    /// reduced family is populated out of one private draft, the unfiltered
+    /// walk holds an entry at each and a guest's holds none.
+    ///
+    /// The one test that walks the reduction's WHOLE surface rather than a
+    /// hand-picked slice of it, and the only one that can fail on a path
+    /// reducing NOTHING — a family whose arm was never written, a path string
+    /// that no longer names a place, a node reshaped under an unchanged key.
+    /// Its neighbours cannot: the identity tests keep everything by
+    /// construction, and the guest test below fixes on the eight paths its own
+    /// fixture populates.
+    ///
+    /// It cannot fail on an entry judged at the WRONG ADDRESS, and the shape
+    /// of this fixture is why: with every deposit and every member inside one
+    /// draft, each entry's tests agree whatever they are asked about. That
+    /// failure needs an entry whose disclosures STRADDLE the boundary, which
+    /// is `a_guest_s_predicate_projections_hold_neither_a_draft_s_tuple_nor_its_member`'s
+    /// fixture and not this one. Two failures, two tests.
+    #[test]
+    fn every_reduced_path_actually_reduces() {
+        let world = every_reduced_family_in_a_draft();
+        let mut full = dump_tree(&world);
+        let mut guest =
+            filter_tree(dump_tree(&world), &|doc: &Address| world.readable(None, doc), &world.links);
+        for (path, want) in reduced_paths() {
+            let path = borrowed(&path);
+            let (shape, len) = shape_and_len(&mut full, &path);
+            assert_eq!(shape, want, "{path:?}: the reduction's shape is not the builder's");
+            assert!(len > 0, "{path:?}: the fixture must populate every reduced family");
+            assert_eq!(
+                shape_and_len(&mut guest, &path).1,
+                0,
+                "{path:?}: a guest is owed nothing of a draft, and this path reduces nothing"
+            );
+        }
+        // …and the reduction is still the identity under the total predicate
+        // over this much richer world, which is what the two re-derivations'
+        // standing obligations rest on.
+        assert_eq!(dump_visible(&world, &|_: &Address| true), dump(&world));
+    }
+
+    /// The PREDICATE classes are open where the supersession class is closed:
+    /// `makelink` fences the retraction and supersession classes and no
+    /// others, so one caller-shaped deposit puts MANY members in a projection
+    /// — which is the bound `dump_of_visible`'s cost states for these walks,
+    /// and the reason [`member_tuples`] must read a subject slot exactly as
+    /// `LinkState::members` does rather than tighten it.
+    ///
+    /// Every member of the wide tuple is judged by that one tuple's home, so
+    /// all of them leave the guest's dump together.
+    #[test]
+    fn one_open_surface_deposit_puts_many_members_in_a_projection() {
+        let (engine, world) = populated_world();
+        let draft =
+            world.drafts().next().map(|(doc, _)| doc.clone()).expect("the fixture's one draft");
+        let caller = Caller::Principal(USER);
+        let visibility = World::visible_to(caller);
+        let element = |n: u32| {
+            let mut comps: Vec<Nat> = draft.tumbler().iter().cloned().collect();
+            comps.extend([Nat::from(0u32), Nat::from(1u32), Nat::from(n)]);
+            validate(Tumbler::new(comps).expect("nonempty")).expect("T4-valid")
+        };
+        let members: Vec<Address> = (10..26u32).map(element).collect();
+        // ONE link, sixteen denoted members, through the OPEN surface — a
+        // shape `emit`'s `enc({from})` could never build.
+        engine
+            .linkstore(&visibility)
+            .makelink(
+                caller,
+                &draft,
+                SlotArg::Addrs(members.clone()),
+                SlotArg::Addrs(Vec::new()),
+                SlotArg::Addrs(vec![ReservedAddrs::format().pred_def]),
+            )
+            .expect("a predicate-classed link deposits through the open surface");
+
+        let world = engine.kernel().snapshot().world().clone();
+        let mut full = dump_tree(&world);
+        assert_eq!(
+            projection(&mut full, "predicates.defs.audit").len(),
+            members.len(),
+            "one deposit, one member per denoted address — the walks' real bound"
+        );
+        let mut guest =
+            filter_tree(dump_tree(&world), &|doc: &Address| world.readable(None, doc), &world.links);
+        assert!(
+            projection(&mut guest, "predicates.defs.audit").is_empty(),
+            "one tuple's home governs every member it denotes"
+        );
+        // …and the identity holds over the wide slot, which is what a
+        // tightened reading of the subject slot would break.
+        assert_eq!(dump_visible(&world, &|_: &Address| true), dump(&world));
+    }
+
+    /// The CLOSURE [`sup_edge_claims`]' unguarded `Endset::addrs` reading
+    /// rests on, and with it the 1 × 1 cross product the filter's cost is
+    /// stated at: the supersession class admits no deposit from either open
+    /// surface, so every claim in it was built by the managed one with a
+    /// single denoted address a side.
+    ///
+    /// The derivation would still be faithful without this — it mirrors
+    /// `fold_hints`' own unguarded read, so the two agree whatever a slot
+    /// holds — but the COST would not: a surface that admitted a wide-slotted
+    /// supersedes-classed deposit would make the walk below a product of two
+    /// slot widths per claim, paid on every filtered dump.
+    #[test]
+    fn the_supersession_class_is_closed_to_the_open_surfaces() {
+        let (engine, world) = populated_world();
+        let draft =
+            world.drafts().next().map(|(doc, _)| doc.clone()).expect("the fixture's one draft");
+        let caller = Caller::Principal(USER);
+        let visibility = World::visible_to(caller);
+        let writer = engine.linkstore(&visibility);
+        let sup = engine.registry().reserved_type(ShippedType::Supersedes).clone();
+        let sup_addr = ReservedAddrs::format().supersedes;
+
+        // The OPEN surface, with the class in the type slot: refused, so no
+        // caller-shaped slot ever reaches the class.
+        assert!(
+            matches!(
+                writer.makelink(
+                    caller,
+                    &draft,
+                    SlotArg::Addrs(Vec::new()),
+                    SlotArg::Addrs(Vec::new()),
+                    SlotArg::Addrs(vec![sup_addr.clone()]),
+                ),
+                Err(TxnError::Rejected(MakeLinkError::SupersessionClass))
+            ),
+            "makelink must refuse the supersession class"
+        );
+        assert!(
+            matches!(
+                writer.emit(caller, &draft, &sup, &sup_addr, &[]),
+                Err(TxnError::Rejected(EmitError::SupersessionClass))
+            ),
+            "emit must refuse the supersession class"
+        );
+
+        // …so what IS in the class was built by the managed surface: one
+        // denoted address a side, which is the 1 × 1 the derivation walks.
+        let link = |n: u32| {
+            let mut comps: Vec<Nat> = draft.tumbler().iter().cloned().collect();
+            comps.extend([Nat::from(0u32), Nat::from(3u32), Nat::from(n)]);
+            let ty = validate(Tumbler::new(comps).expect("nonempty")).expect("T4-valid");
+            writer
+                .makelink(
+                    caller,
+                    &draft,
+                    SlotArg::Addrs(Vec::new()),
+                    SlotArg::Addrs(Vec::new()),
+                    SlotArg::Addrs(vec![ty]),
+                )
+                .expect("a link in the owner's own draft")
+                .0
+        };
+        let (old, new) = (link(41), link(42));
+        writer.assert_sup(caller, &draft, &old, &new).expect("the managed claim deposits");
+
+        let world = engine.kernel().snapshot().world().clone();
+        let claims = world.links.type_slice(&sup, View::Audit);
+        assert_eq!(claims.len(), 1, "the two refusals left exactly the managed claim");
+        for claim in &claims {
+            let value = world.links.readlink(claim).expect("a slice key is resident");
+            for slot in [value.from_slot(), value.to_slot()] {
+                assert!(slot.is_address_denoting(), "a managed claim's endpoints are addresses");
+                assert_eq!(slot.addrs().count(), 1, "one denoted address a side: the 1 × 1");
+            }
         }
     }
 
@@ -511,6 +907,163 @@ mod tests {
             Some(SerdeTree::Map(entries)) => entries.len(),
             other => panic!("hints.supersession is a map, got {other:?}"),
         }
+    }
+
+    /// The two shapes a PREDICATE PROJECTION can take across the draft
+    /// boundary, in one account, so that each of the entry's two tests has a
+    /// case only it refuses:
+    ///
+    /// * a `pred_stable` tuple homed in the private DRAFT whose member is a
+    ///   position of the PUBLISHED home — the member's own document is
+    ///   readable, so the member-home test admits it and the TUPLE's home is
+    ///   what must refuse it; and
+    /// * one homed in the published HOME whose member is a position of the
+    ///   DRAFT — the tuple is readable, so its home admits it and the
+    ///   MEMBER's own document is what must refuse it.
+    ///
+    /// Returns the world, then the public member and the private one.
+    fn predicate_tuples_across_the_draft_boundary() -> (World, Address, Address) {
+        let cfg = KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+        };
+        let engine = Engine::open(cfg).expect("in-memory open cannot fail");
+        let prefix = engine
+            .kernel()
+            .snapshot()
+            .world()
+            .m3()
+            .next_account_prefix(&addr(&[1]))
+            .expect("the genesis node has a delegable next-form prefix");
+        let (acct, _) = engine
+            .namespace()
+            .delegate(BOOTSTRAP_PRINCIPAL, prefix.tumbler().clone(), USER)
+            .expect("delegation of the peeked prefix succeeds");
+        // The account's FIRST flagless mint is its published home (PUB-8.21);
+        // a later flagless mint is a private draft.
+        let (home, _) =
+            engine.namespace().create_new_document(USER, &acct, None).expect("the home mint");
+        let (draft, _) = engine
+            .namespace()
+            .create_new_document(USER, &acct, None)
+            .expect("a later mint, private");
+        let caller = Caller::Principal(USER);
+        let visibility = World::visible_to(caller);
+        // A content position of a document — never minted, which `emit` does
+        // not require of a member and which keeps the two slices empty.
+        let position = |doc: &Address| {
+            let mut comps: Vec<Nat> = doc.tumbler().iter().cloned().collect();
+            comps.extend([Nat::from(0u32), Nat::from(1u32), Nat::from(1u32)]);
+            validate(Tumbler::new(comps).expect("nonempty"))
+                .expect("a content element of a document is T4-valid")
+        };
+        let (public_member, private_member) = (position(&home), position(&draft));
+        let pred_stable = engine.registry().reserved_type(ShippedType::PredStable).clone();
+        // The draft-homed registration OF the public member…
+        engine
+            .linkstore(&visibility)
+            .emit(caller, &draft, &pred_stable, &public_member, &[])
+            .expect("a draft-homed registration over a public member");
+        // …and the public registration of the draft's own member.
+        engine
+            .linkstore(&visibility)
+            .emit(caller, &home, &pred_stable, &private_member, &[])
+            .expect("a home-homed registration over a draft's member");
+
+        let world = engine.kernel().snapshot().world().clone();
+        assert!(world.readable(None, &home), "the home is published");
+        assert!(!world.readable(None, &draft), "the other document is a draft");
+        (world, public_member, private_member)
+    }
+
+    fn projection(tree: &mut SerdeTree, family: &str) -> Vec<String> {
+        match at_path(tree, &["hints", family]) {
+            Some(SerdeTree::Seq(items)) => items
+                .iter()
+                .map(|item| match item {
+                    SerdeTree::Str(s) => s.clone(),
+                    other => panic!("hints.{family} holds dotted addresses, got {other:?}"),
+                })
+                .collect(),
+            other => panic!("hints.{family} is a sequence, got {other:?}"),
+        }
+    }
+
+    /// A PREDICATE PROJECTION entry is a MEMBER, not a link, so its two
+    /// disclosures take two tests (PUB-6.13) — and each case below is refused
+    /// by one of them alone.
+    ///
+    /// The draft-homed registration of a PUBLIC member is the one a single
+    /// member-home test admits: the guest's `shipped.pred_stable` slice is
+    /// empty, because the tuple is draft-homed, while the projection would
+    /// name the member — the walk's two renderings of one deposit,
+    /// disagreeing, with a draft's content in the guest's dump. The public
+    /// registration of a DRAFT's member is the mirror, and is what a single
+    /// tuple-home test would admit.
+    #[test]
+    fn a_guest_s_predicate_projections_hold_neither_a_draft_s_tuple_nor_its_member() {
+        let (world, public_member, private_member) =
+            predicate_tuples_across_the_draft_boundary();
+        let dotted = |a: &Address| a.to_string();
+
+        let mut full = dump_tree(&world);
+        for family in ["predicates.stable.audit", "predicates.stable.active"] {
+            let members = projection(&mut full, family);
+            assert_eq!(
+                members,
+                vec![dotted(&public_member), dotted(&private_member)],
+                "{family}: the fixture must render both members in address order"
+            );
+        }
+
+        let mut guest =
+            filter_tree(dump_tree(&world), &|doc: &Address| world.readable(None, doc), &world.links);
+        for family in ["predicates.stable.audit", "predicates.stable.active"] {
+            assert!(
+                projection(&mut guest, family).is_empty(),
+                "{family}: a guest reads neither the draft's registration nor its member"
+            );
+        }
+        // …and the two renderings of these deposits agree about each one. The
+        // typed slice holds LINK addresses, so the guest keeps the PUBLIC
+        // registration there and loses the draft-homed one; the projection
+        // then names neither member, because the public tuple's member is the
+        // draft's. A guest reads that a registration exists in the published
+        // home and not what it registers.
+        let slice = |tree: &mut SerdeTree, view: &str| {
+            match at_path(tree, &["hints", "types", "shipped.pred_stable", view]) {
+                Some(SerdeTree::Seq(items)) => items.len(),
+                other => panic!("the shipped.pred_stable {view} slice is a sequence, got {other:?}"),
+            }
+        };
+        for view in ["audit", "active"] {
+            assert_eq!(slice(&mut full, view), 2, "the fixture deposits two registrations");
+            assert_eq!(
+                slice(&mut guest, view),
+                1,
+                "the {view} slice keeps the public registration and drops the draft-homed one"
+            );
+        }
+
+        // The OWNER reads both homes, so both members stay…
+        let mut owner = filter_tree(
+            dump_tree(&world),
+            &|doc: &Address| world.readable(Some(USER), doc),
+            &world.links,
+        );
+        assert_eq!(
+            projection(&mut owner, "predicates.stable.audit"),
+            vec![dotted(&public_member), dotted(&private_member)],
+            "the owner reads both the tuples' homes and the members' documents"
+        );
+        // …and under the TOTAL predicate the filter is the identity, which is
+        // what [`member_tuples`]' obligation rests on: a re-derivation that
+        // keyed fewer members than the walk renders would drop them here.
+        assert_eq!(
+            dump_visible(&world, &|_: &Address| true),
+            dump(&world),
+            "a re-derivation missing a member's tuple would drop the entry here"
+        );
     }
 
     /// Lane 4.2, F4 (register cell I3.a): a supersession CLAIM is a link and

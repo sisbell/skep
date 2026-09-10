@@ -87,6 +87,11 @@ pub mod dump;
 pub use engine::{Engine, EngineError, EngineStores};
 pub use world::{Record, World};
 
-// The foreign types the engine's own signatures name, re-exported so a binary
-// can drive `Engine::open`/`coordinator()` without spelling every store crate.
-pub use skep_kernel::{HistoryError, KernelConfig, OpenError};
+// The KERNEL types the engine's own signatures name, re-exported so a binary
+// can drive `Engine::open`, `coordinator()` and `world_at` — the whole
+// assembly surface — without naming M2 itself. The address and principal
+// vocabulary the read surfaces speak (`Address`, `PrincipalId`, `Caller`)
+// stays the stores' to export: a caller holding an argument for
+// `World::readable` or `Engine::world_dump_visible_to` already built it out
+// of the crate that owns it.
+pub use skep_kernel::{HistoryError, KernelConfig, OpenError, Seq};

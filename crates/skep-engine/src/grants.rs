@@ -49,7 +49,7 @@ use skep_address::{document_of, parent, validate, Address};
 use skep_links::{Link, LinkRec, LinkState, View};
 use skep_namespace::{first_document_address, M3State};
 
-use crate::publication::Drafts;
+use crate::publication::{is_published, Drafts};
 use crate::types::t_grant;
 use crate::world::World;
 
@@ -124,6 +124,45 @@ pub(crate) struct Grants {
     universal: OrdMap<Address, OrdSet<Address>>,
 }
 
+// ── the map-of-sets edits both indexes are made of ──
+//
+// `universal` is an `OrdMap<Address, OrdSet<Address>>` and every value of
+// `by_grantee` is another one, so the fold's index maintenance is four edits
+// of a single shape — [`Grants::index_add`]'s two arms and
+// [`Grants::index_remove`]'s two — and [`Grants::issuers_for`]'s inversion is
+// a fifth. The decision each of those sites makes is WHICH index a record
+// belongs in; the bookkeeping is here.
+
+/// `map[key] ∪= {member}`, adding the key where it is absent.
+fn set_insert<K: Ord + Clone, V: Ord + Clone>(
+    map: &OrdMap<K, OrdSet<V>>,
+    key: &K,
+    member: V,
+) -> OrdMap<K, OrdSet<V>> {
+    let mut members = map.get(key).cloned().unwrap_or_default();
+    members.insert(member);
+    map.update(key.clone(), members)
+}
+
+/// `map[key] −= {member}`, DROPPING the key where its set empties — so no
+/// index ever holds an empty set, and an empty map means "nothing granted"
+/// rather than "nothing granted, or one revocation ago".
+fn set_remove<K: Ord + Clone, V: Ord + Clone>(
+    map: &OrdMap<K, OrdSet<V>>,
+    key: &K,
+    member: &V,
+) -> OrdMap<K, OrdSet<V>> {
+    let Some(members) = map.get(key) else {
+        return map.clone();
+    };
+    let members = members.without(member);
+    if members.is_empty() {
+        map.without(key)
+    } else {
+        map.update(key.clone(), members)
+    }
+}
+
 impl Grants {
     /// An empty fold — genesis, and the decoded-world starting point before
     /// the rebuild runs.
@@ -194,9 +233,7 @@ impl Grants {
         if let Some(prefixes) = self.by_grantee.get(grantee) {
             for (prefix, issuers) in prefixes.iter() {
                 for issuer in issuers.iter() {
-                    let mut covered = by_issuer.get(issuer).cloned().unwrap_or_default();
-                    covered.insert(prefix.clone());
-                    by_issuer.insert(issuer.clone(), covered);
+                    by_issuer = set_insert(&by_issuer, issuer, prefix.clone());
                 }
             }
         }
@@ -206,39 +243,30 @@ impl Grants {
             .collect()
     }
 
-    /// Add an admitted grant to the query indexes.
+    /// Add an admitted grant to the query index its grantee names: the
+    /// PRINCIPAL-EXACT one keyed by the grantee, or the ANY-PRINCIPAL one.
     fn index_add(&mut self, rec: &GrantRecord) {
         match &rec.grantee {
             Some(g) => {
-                let mut prefixes = self.by_grantee.get(g).cloned().unwrap_or_default();
-                let mut issuers =
-                    prefixes.get(&rec.content_prefix).cloned().unwrap_or_default();
-                issuers.insert(rec.issuer.clone());
-                prefixes.insert(rec.content_prefix.clone(), issuers);
+                let prefixes = self.by_grantee.get(g).cloned().unwrap_or_default();
+                let prefixes = set_insert(&prefixes, &rec.content_prefix, rec.issuer.clone());
                 self.by_grantee.insert(g.clone(), prefixes);
             }
             None => {
-                let mut issuers =
-                    self.universal.get(&rec.content_prefix).cloned().unwrap_or_default();
-                issuers.insert(rec.issuer.clone());
-                self.universal.insert(rec.content_prefix.clone(), issuers);
+                self.universal =
+                    set_insert(&self.universal, &rec.content_prefix, rec.issuer.clone());
             }
         }
     }
 
-    /// Remove a superseded grant from the query indexes, dropping empty sets.
+    /// Remove a superseded grant from the index it was added to, dropping a
+    /// grantee whose last grant this was — so `by_grantee` holds no empty
+    /// prefix map, as `set_remove` leaves no empty issuer set.
     fn index_remove(&mut self, rec: &GrantRecord) {
         match &rec.grantee {
             Some(g) => {
-                if let Some(mut prefixes) = self.by_grantee.get(g).cloned() {
-                    if let Some(issuers) = prefixes.get(&rec.content_prefix).cloned() {
-                        let issuers = issuers.without(&rec.issuer);
-                        if issuers.is_empty() {
-                            prefixes.remove(&rec.content_prefix);
-                        } else {
-                            prefixes.insert(rec.content_prefix.clone(), issuers);
-                        }
-                    }
+                if let Some(prefixes) = self.by_grantee.get(g).cloned() {
+                    let prefixes = set_remove(&prefixes, &rec.content_prefix, &rec.issuer);
                     if prefixes.is_empty() {
                         self.by_grantee.remove(g);
                     } else {
@@ -247,14 +275,7 @@ impl Grants {
                 }
             }
             None => {
-                if let Some(issuers) = self.universal.get(&rec.content_prefix).cloned() {
-                    let issuers = issuers.without(&rec.issuer);
-                    if issuers.is_empty() {
-                        self.universal.remove(&rec.content_prefix);
-                    } else {
-                        self.universal.insert(rec.content_prefix.clone(), issuers);
-                    }
-                }
+                self.universal = set_remove(&self.universal, &rec.content_prefix, &rec.issuer);
             }
         }
     }
@@ -284,8 +305,9 @@ fn is_grant_typed(value: &Link, t_grant: &Address) -> bool {
 /// M7's HomeNotRegistered gate). `published(home)` is the exception-set miss —
 /// `home ∉ drafts`.
 fn admit(m3: &M3State, drafts: &Drafts, home: &Address) -> Option<Address> {
-    // Published: an exception-set miss (grants are born published).
-    if drafts.contains_key(home) {
+    // Published: an exception-set miss (grants are born published). The
+    // polarity is `crate::publication`'s to hold, not this module's.
+    if !is_published(drafts, home) {
         return None;
     }
     // The issuer — ω of the home, an account.
@@ -364,6 +386,17 @@ fn fold_one(prev: &Grants, m3: &M3State, drafts: &Drafts, addr: &Address, value:
 /// link store. `rec` is the record just folded; `m3`/`drafts` are the world's
 /// slices as of this commit (a link deposit changes neither, so both are the
 /// authoritative state a query would read).
+///
+/// ONLY A DEPOSIT moves the fold, and that is a premise [`seed`] rests on
+/// rather than a convenience. `LinkRec` is `#[non_exhaustive]`, so the early
+/// return absorbs every variant M7 has not written yet — and the two halves
+/// read a link's slots from different places: this one from the value the
+/// record carries, the seed from `readlink` at the end of history. Those are
+/// the same value because M7's model has no update and no delete: every write
+/// is a deposit of an immutable link at a fresh address, and `editlink`
+/// deposits a successor rather than touching its original. A record that
+/// changed a resident link's slots would split the halves, and it would have
+/// to be answered here.
 pub(crate) fn fold(prev: &Grants, m3: &M3State, drafts: &Drafts, rec: &LinkRec) -> Grants {
     let LinkRec::Deposit { addr, value, .. } = rec else {
         return prev.clone();
@@ -383,6 +416,26 @@ pub(crate) fn fold(prev: &Grants, m3: &M3State, drafts: &Drafts, rec: &LinkRec) 
 /// asked which read the seed uses; this is it). Within one home, addresses are
 /// ordinal-ordered = deposit-ordered, so a revocation is always processed
 /// after the grant it names, and the seed reproduces the fold.
+///
+/// The AUDIT view is REQUIRED, not merely available. Revocation is by
+/// supersession (PUB-5.13) and [`fold`] has no nullification arm, so a grant
+/// whose link a later `nullify` retracted is still in the live fold and still
+/// opens what it granted. An active-view seed would drop exactly those, and
+/// the two halves would part at the next restart.
+///
+/// The halves also read the world at different TIMES: [`fold`] is handed M3
+/// and the exception set as of the deposit's own commit, this walk as of the
+/// end of history. [`admit`]'s three questions answer alike at both, each for
+/// its own reason. The BIT: M3 writes it once, at the record that registers
+/// the document, and the exception set only ever GAINS entries — so a home
+/// published when its grant landed is published still, and a draft-homed one
+/// was unadmitted at both readings. The OWNER: no account-tier prefix longer
+/// than a document's own account can cover it (`crate::publication`'s
+/// `owner_account_of` states M3's half of that), so no later delegation moves
+/// ω of a home. The DOC-1 test is `first_document_address`, a pure function of
+/// the issuer and of no state at all. A store change that made any of the
+/// three time-varying splits the halves, and `Engine::check_hints` is where
+/// that shows.
 pub(crate) fn seed(m3: &M3State, links: &LinkState, drafts: &Drafts) -> Grants {
     let ty = skep_links::enc([t_grant()]);
     let mut grants = Grants::new();

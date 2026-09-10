@@ -15,11 +15,15 @@
 //! one statement. Two obligations run underneath it and belong to nothing
 //! else in the crate:
 //!
-//! * The PATHS this module walks are string keys matched against the
-//!   builders' own section keys, and a builder that renamed a key would leave
-//!   the filter silently filtering nothing — the one failure the fail-closed
-//!   key rule cannot catch, and why every path is asserted to name a place in
-//!   the tree.
+//! * The PATHS this module walks are string keys, and a path's two halves
+//!   have two owners. A LEADING component is the dump's own vocabulary — the
+//!   root sections, the hint family names, [`super::shipped_label`]'s
+//!   strings. A TRAILING component inside an authoritative slice is that
+//!   STORE's own serde field, and a private one: `map` is M4's,
+//!   `arrangements` and `provenance` are M5's, `links` is M7's. So a store
+//!   author renaming a field it never published has no reason to look here,
+//!   and the rename would leave the filter silently filtering nothing — which
+//!   is why every path is asserted to name a place in the tree.
 //! * The addresses this module judges are RECOVERED from the text the
 //!   builders wrote — a `Tumbler` deserialize for an authoritative map key, a
 //!   dotted parse for a hint entry — because the tree carries renderings and
@@ -36,6 +40,28 @@ use skep_links::{LinkState, ShippedType, View};
 use crate::canon::{SerdeTree, TreeDe};
 
 use super::shipped_label;
+
+/// The hint families reduced BY HOME: each is a sequence of dotted link
+/// addresses, and an entry stays where the class reads the document its
+/// address is homed in.
+///
+/// The list is the reduction's COVERAGE as well as its content. [`filter_tree`]
+/// touches an entry only where some path below names it, so a family
+/// `super::hints_tree` adds and this list omits is rendered WHOLE to every
+/// class — the guest included. Three hint families are reduced by an arm of
+/// their own rather than here: `types` (per shipped class, per view),
+/// `supersession` (the three-test arm) and `publication.drafts` (a map, keyed
+/// by the draft). `every_hints_family_is_reduced_or_kept_by_name` holds this
+/// list plus those three against the section the builder writes.
+const REDUCED_BY_HOME: [&str; 7] = [
+    "links.audit",
+    "links.active",
+    "links.nullified",
+    "predicates.defs.audit",
+    "predicates.defs.active",
+    "predicates.stable.audit",
+    "predicates.stable.active",
+];
 
 /// The per-class post-filter over the dump tree — the ONE statement of what
 /// the entries it reaches drop and keep, applied before render so the harness
@@ -85,9 +111,23 @@ use super::shipped_label;
 ///   address — so the claims are read at filter time off `links`, the
 ///   render's own source, through [`sup_edge_claims`].
 ///
+/// An entry NO PATH IN THE BODY NAMES is kept whole at every class. So the
+/// statement above is this reduction's COVERAGE as well as its content, and
+/// the gap it admits is the one nothing else here catches: a section or a
+/// hint family added to the tree and left out of it goes to the guest
+/// unreduced, deterministically and with nothing about it looking wrong. The
+/// hint families carry their own list ([`REDUCED_BY_HOME`]) so that the sum
+/// can be held against what the builders write.
+///
 /// A key that fails to decode is DROPPED (fail-closed): every key here was
 /// rendered from an address a moment earlier, so none does, and a filter
-/// that met one would rather omit a line than judge it readable.
+/// that met one would rather omit a line than judge it readable. The SHAPE
+/// tests run the other way — [`retain_map`] and [`retain_seq`] do nothing
+/// where the node at a path is not the shape they expect, and the
+/// supersession arm keeps a successor list it does not recognize — so a
+/// builder that changed an entry's shape without changing its key leaves the
+/// entry whole rather than empty. Both directions are the same fact about
+/// this module: it reduces what it recognizes and keeps what it does not.
 pub(super) fn filter_tree(
     mut root: SerdeTree,
     readable: &dyn Fn(&Address) -> bool,
@@ -112,15 +152,7 @@ pub(super) fn filter_tree(
 
     retain_seq(&mut root, &["publication"], &keep_dotted);
 
-    for family in [
-        "links.audit",
-        "links.active",
-        "links.nullified",
-        "predicates.defs.audit",
-        "predicates.defs.active",
-        "predicates.stable.audit",
-        "predicates.stable.active",
-    ] {
+    for family in REDUCED_BY_HOME {
         retain_seq(&mut root, &["hints", family], &keep_dotted);
     }
     for ty in ShippedType::ALL {
@@ -290,6 +322,61 @@ mod tests {
         ] {
             assert!(at_path(&mut tree, path).is_some(), "{path:?} is a place in the v5 tree");
         }
+    }
+
+    /// [`filter_tree`]'s COVERAGE, held against the sections the builders
+    /// write: an entry no path in the filter names is rendered whole at every
+    /// class, so a family added to `super::hints_tree` and left off
+    /// [`REDUCED_BY_HOME`] is disclosed to the guest. That is the one failure
+    /// neither the fail-closed key rule nor the path-exists test can catch,
+    /// and no other test here sees it — the identity tests keep everything by
+    /// construction, and the guest tests walk a fixed path list a new family
+    /// is not on.
+    ///
+    /// Asked of GENESIS, because the section keys are FORMAT rather than
+    /// content: both builders push every key whatever the world holds, so an
+    /// empty world carries the whole set and the assertion is over the format
+    /// and not over a fixture.
+    #[test]
+    fn every_hints_family_is_reduced_or_kept_by_name() {
+        let mut tree = dump_tree(&World::genesis());
+        let keys_at = |tree: &mut SerdeTree, path: &[&str]| -> BTreeSet<String> {
+            match at_path(tree, path) {
+                Some(SerdeTree::Map(entries)) => entries
+                    .iter()
+                    .map(|(k, _)| match k {
+                        SerdeTree::Str(s) => s.clone(),
+                        other => panic!("{path:?}: section keys are strings, got {other:?}"),
+                    })
+                    .collect(),
+                other => panic!("{path:?}: expected a map, got {other:?}"),
+            }
+        };
+
+        // The hints section: the by-home families, plus the three the filter
+        // reduces through an arm of their own.
+        let named: BTreeSet<String> = REDUCED_BY_HOME
+            .iter()
+            .chain(["types", "supersession", "publication.drafts"].iter())
+            .map(|name| (*name).to_owned())
+            .collect();
+        assert_eq!(
+            keys_at(&mut tree, &["hints"]),
+            named,
+            "a hints family the filter does not name is rendered whole to every class"
+        );
+
+        // …and the root, where each section has a disposition in the filter's
+        // one statement: two reduced, two kept whole with the reason given.
+        let sections: BTreeSet<String> = ["authoritative", "publication", "grants", "hints"]
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        assert_eq!(
+            keys_at(&mut tree, &[]),
+            sections,
+            "a root section the filter does not name is rendered whole to every class"
+        );
     }
 
     /// Lane 3.4 §4: the per-class filter under the TOTAL predicate is the

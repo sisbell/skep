@@ -1,15 +1,13 @@
 //! Genesis: the initial world seeds each store per its own design, and the
 //! registry built from the compiled format constants (owner ruling,
-//! 2026-08-26 — `GenesisConfig` is retired) reaches every consumer — M7's
-//! slice, the engine handle, and M9's catalog projection — as ONE instance,
-//! not as copies that could drift. The five reserved type addresses are
+//! 2026-08-26 — `GenesisConfig` is retired) is ONE process constant, which
+//! M7's slice and the engine handle each read rather than hold and M9's
+//! catalog projects. The five reserved type addresses are
 //! in-docuverse ghost tumblers, and the property the abolished 9-space
 //! bought by unreachability is re-proven here through the real ops: the
 //! allocator never issues them.
 
 mod common;
-
-use std::sync::Arc;
 
 use common::*;
 use skep_arrangement::HasM5;
@@ -54,29 +52,30 @@ fn two_geneses_are_byte_identical() {
     assert_eq!(a, b, "genesis must be one value, byte for byte");
 }
 
-/// The genesis seam: the registry the engine publishes IS M7's own module
-/// constant — one instance, so the engine and the store cannot disagree by
-/// construction rather than by comparison — and every shipped class is
-/// registered in it.
+/// The genesis seam: ONE registry serves every shipped class. The engine's
+/// accessor and a world's own slice both read `skep_links::registry()`, a
+/// process constant built from the compiled format constants and held by
+/// neither of them — so there is no second instance for a comparison to
+/// catch, and their agreement is definitional rather than checkable.
+///
+/// What remains checkable is COVERAGE: a shipped class the registry does not
+/// register has no `Registration`, and the write gates and folds keyed on its
+/// coverage class would find none. The two reads are named side by side so
+/// that an accessor which stopped forwarding to the constant fails here
+/// rather than at a write gate.
 #[test]
-fn the_engine_publishes_m7_s_own_registry() {
+fn the_one_registry_registers_every_shipped_class() {
     let engine = mem_engine();
     let snap = engine.kernel().snapshot();
     let links = snap.world().links();
 
-    assert!(
-        Arc::ptr_eq(engine.registry(), skep_links::registry()),
-        "the engine must share M7's registry, not rebuild a second one"
-    );
     for ty in SHIPPED {
         let ours = engine.registry().reserved_type(ty);
-        // ...and the slice reads the same shipped endsets the engine does,
-        // because there is one registry rather than two that agree.
-        assert_eq!(ours, links.reserved_type(ty), "shipped class {ty:?}");
         assert!(
             engine.registry().registration(&coverage_class(ours)).is_some(),
             "shipped class {ty:?} must be registered"
         );
+        assert_eq!(ours, links.reserved_type(ty), "shipped class {ty:?}");
     }
 }
 

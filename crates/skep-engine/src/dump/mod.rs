@@ -422,6 +422,13 @@ fn grants_tree(world: &World) -> SerdeTree {
     )
 }
 
+/// The dump surface. Every rendering below is a pure function of the world it
+/// is handed and, where there is one, the class it is filtered at: the type
+/// set is a compiled format constant, so no configuration remains to pair a
+/// world with and nothing of this handle's own state reaches the text. The
+/// receiver is the engine a caller already holds, and the no-argument methods
+/// use it for the one thing it supplies — pinning the committed snapshot the
+/// world is read off.
 impl crate::Engine {
     /// [`crate::Engine::dump_of`] at a READER'S CLASS (PUB round 2, lane 3.4
     /// §4): the same tree, post-filtered by `readable` before render — what
@@ -454,9 +461,7 @@ impl crate::Engine {
         let world = snap.world();
         dump_visible(world, &|doc: &Address| world.readable(principal, doc))
     }
-}
 
-impl crate::Engine {
     /// Dump the currently committed world (one pinned snapshot) —
     /// UNFILTERED, the HARNESS-ONLY walk (lane 3.4 §4): the crash and
     /// conformance harnesses' oracle, never a wire answer. The daemon's
@@ -483,7 +488,14 @@ impl crate::Engine {
     /// slice into an owned value tree before a byte of text is written, and
     /// the render then materializes each map entry's own rendering as an
     /// owned `String` to sort by — so at peak the text exists at least twice
-    /// over. The tree costs a node per serialized ELEMENT, and a content byte
+    /// over. M3's slice is transcoded TWICE: once for the authoritative
+    /// section, and once more by [`publication_tree`], which additionally
+    /// deserializes the publication map back through M1's validating door —
+    /// one address validation per REGISTERED DOCUMENT, published or not. That
+    /// second read is structural rather than incidental: the section must come
+    /// off M3's authoritative map and not off the derived set, which is what
+    /// makes it the authority the hint is checked against.
+    /// The tree costs a node per serialized ELEMENT, and a content byte
     /// is an element: serde has no byte specialization for `[u8]`, so M4's
     /// `Val` transcodes as a sequence of integers and not as a blob
     /// (`a_content_byte_costs_a_whole_tree_node` pins that, because it is the

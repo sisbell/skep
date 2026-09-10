@@ -11,7 +11,7 @@ mod common;
 use common::*;
 use skep_arrangement::Caller;
 use skep_engine::{Engine, World};
-use skep_links::SlotArg;
+use skep_links::{HasLinks, ShippedType, SlotArg};
 use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 use tempfile::tempdir;
 
@@ -291,6 +291,71 @@ fn a_superseding_record_revokes_the_grant_it_names() {
         !world(&engine).readable(Some(b.b), &b.draft_a),
         "the superseding record revoked the grant"
     );
+}
+
+/// RETRACTION IS NOT REVOCATION (PUB-5.13): the fold has no nullification
+/// arm, so a grant whose link a later `nullify` retracted still opens what it
+/// granted, and only a superseding grant record takes it back. That is the
+/// premise the seed's AUDIT view rests on — an active-view walk would drop
+/// exactly this grant, and the recovered fold would differ from the live one
+/// — so the check is the fold's own agreement with its seed, through the
+/// dump's grant section.
+#[test]
+fn a_nullified_grant_still_opens_its_draft_and_the_audit_view_seed_agrees() {
+    let engine = mem_engine();
+    let b = two_accounts(&engine);
+    let g = grant(&engine, &b.home_a, &b.draft_a, vec![b.acct_b.clone()]);
+    assert!(world(&engine).readable(Some(b.b), &b.draft_a), "granted");
+
+    let issuer = Caller::Principal(PrincipalId(1));
+    engine
+        .linkstore(&World::visible_to(issuer))
+        .nullify(issuer, &b.home_a, &g)
+        .unwrap_or_else(|_| panic!("the issuer retracts its own grant link"));
+
+    let w = world(&engine);
+    assert!(w.links().is_nullified(&g), "the fixture must retract the grant link");
+    assert!(
+        w.readable(Some(b.b), &b.draft_a),
+        "a retracted grant link is still an admitted grant — revocation is by supersession"
+    );
+    engine
+        .check_hints()
+        .expect("the audit-view seed reproduces the fold over a nullified grant");
+}
+
+/// A supersession CLAIM over a grant is lineage display, never a fold input:
+/// revocation is a later admitted `t_grant` record naming the earlier one,
+/// and nothing else. It is also where the two halves see different RECORDS —
+/// the fold sees every link deposit, the seed walks the grants class alone —
+/// so a fold that honoured the claim would part from its seed at the next
+/// restart rather than at the deposit.
+#[test]
+fn a_supersession_claim_over_a_grant_revokes_nothing_and_the_seed_agrees() {
+    let engine = mem_engine();
+    let b = two_accounts(&engine);
+    let old = grant(&engine, &b.home_a, &b.draft_a, vec![b.acct_b.clone()]);
+    let new = grant(&engine, &b.home_a, &b.acct_a, vec![b.acct_b.clone()]);
+
+    let issuer = Caller::Principal(PrincipalId(1));
+    engine
+        .linkstore(&World::visible_to(issuer))
+        .assert_sup(issuer, &b.home_a, &old, &new)
+        .unwrap_or_else(|_| panic!("the issuer claims its second grant supersedes its first"));
+
+    let w = world(&engine);
+    let sup = w.links().reserved_type(ShippedType::Supersedes);
+    assert_eq!(
+        w.links().succs(sup, &old),
+        vec![new.clone()],
+        "the fixture must deposit an operative supersession claim over the grant"
+    );
+    assert_eq!(
+        w.issuers_for(&b.acct_b),
+        vec![(b.acct_a.clone(), vec![b.acct_a.clone(), b.draft_a.clone()])],
+        "both grants stand: a [K_sup] claim is not the fold's revocation"
+    );
+    engine.check_hints().expect("the seed, which never sees the claim, reproduces the fold");
 }
 
 /// The fold re-seeds across a restart (PUB-7.7 seed half): a checkpoint holding

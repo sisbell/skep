@@ -59,12 +59,13 @@
 //! through [`published_target`], after [`trunk_of`] has projected a version
 //! member to its document (PUB-2.15). The refusals are enforced here,
 //! whatever runs ahead of the store. The one exemption is the DECLARED deposit
-//! (PUB-9.13's DECLARED horn): `insert` takes a [`Deposit`] declaration, and a
-//! declared insert at fresh positions of a published document is admitted
-//! (PUB-2.59, PUB-2.61); an undeclared append, or a declared one that
-//! touches an arranged position, refuses — the declaration is a claim the
-//! shape must bear out, never a bypass. Link writes are outside the rule
-//! (PUB-2.12): `stage_seat_link` is untouched.
+//! (PUB-9.13's DECLARED horn): an `insert` carrying [`Deposit::Declared`] at
+//! the one position a published chain admits — `n_C + 1` of the arrangement
+//! [`deposit_surface`] names, the head, or the document's own while it has no
+//! member (PUB-2.59, PUB-2.61, PUB-2.66). The declaration is a claim the
+//! shape must bear out, never a bypass; [`Vstream::insert`] states how every
+//! other insert into a published document is refused. Link writes are
+//! outside the rule (PUB-2.12): `stage_seat_link` is untouched.
 //!
 //! ## The publish shot and head-float (PUB round 2, lane 3.2)
 //!

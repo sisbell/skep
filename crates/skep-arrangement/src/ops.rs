@@ -129,8 +129,10 @@ pub enum Deposit {
 /// none in v1 (Open decision #1) and grows with editing, and a spec count is
 /// bounded only by M10's wire list cap. So admission control and concurrency
 /// for a route carrying COPY are the CALLER's, as they are for the reads that
-/// state their own cost, and a route that carries this op owes that number.
-/// The shot's own per-run work is stated on [`Vstream::publish`].
+/// state their own cost, and a route that carries this op owes that number —
+/// per spec, [`content_run_count`](crate::M5State::content_run_count) of its
+/// source, which the arrangement answers without reading a run. The shot's
+/// own per-run work is stated on [`Vstream::publish`].
 pub const MAX_PLACED_RUNS: usize = 1 << 16;
 
 /// M5's transact-driving op handle over M2 (§B): a thin borrow of the
@@ -202,6 +204,14 @@ where
     /// PER VALUE in the order given, `Mint` (the content mint) → `Content`
     /// (the byte write), with the FIRST value to fail deciding.
     ///
+    /// Of those two per-value verdicts, only `Mint` is one an honest request
+    /// can earn: `Mint(MintError::Gate)` is M3's defence against a corrupted
+    /// frontier; `Mint(MintError::HomeNotRegistered)` cannot arrive past the
+    /// gate above and is M3's own boundary discharge; and
+    /// `Content(AlreadyPresent)` cannot occur in production at all — M3 mints
+    /// fresh and M5 writes once, which is the argument `stage_write` itself
+    /// makes for keeping the guard.
+    ///
     /// THE PUBLISHED TARGET, and the deposit that clears it (PUB-2.11,
     /// PUB-2.59, PUB-2.61; PUB-9.13's DECLARED horn, owner-ruled). When the
     /// document `doc` projects to (PUB-2.15) is PUBLISHED, an insert is an
@@ -256,13 +266,6 @@ where
     /// — the document's own I-space for a bare address, one prefix down the
     /// chain (PUB-2.52) — so the start returned is under that chain; only the
     /// placement floats.
-    ///
-    /// Only one of those last two is a verdict an honest request can earn.
-    /// `Mint(MintError::Gate)` is M3's defence against a corrupted frontier;
-    /// `Mint(MintError::HomeNotRegistered)` cannot arrive past the gate above
-    /// and is M3's own boundary discharge; and `Content(AlreadyPresent)`
-    /// cannot occur in production at all — M3 mints fresh and M5 writes once,
-    /// which is the argument `stage_write` itself makes for keeping the guard.
     ///
     /// COST, AND WHO OWNS IT. This op admits any `values` length: there is no
     /// analogue of COPY's [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS) here,
@@ -480,14 +483,17 @@ where
     /// run is accumulated: a ceiling a shot cannot be split to meet, since the
     /// member it produces is born whole. Two terms are set by stored state
     /// rather than by the request's size. The carried-run test sweeps the
-    /// base's runs once per supplied run. The existence check derives and
-    /// probes every address of every supplied run, stopping only at the first
-    /// one M4 does not hold — for a shot that commits, `Σ width` positions —
-    /// so a short run list walks as far as the stored content it names, each
-    /// run paying its whole width even where runs repeat one extent. The wire
-    /// caps the run COUNT and not `Σ width`, and `Σ width` is what the
-    /// existence walk and, over the draft-native runs, the re-insert both grow
-    /// with: it is the number a route that carries this op owes.
+    /// base's runs once per supplied run, so it grows with
+    /// [`content_run_count`](crate::M5State::content_run_count) of the base.
+    /// The existence check derives and probes every address of every supplied
+    /// run, stopping only at the first one M4 does not hold — for a shot that
+    /// commits, `Σ width` positions — so a short run list walks as far as the
+    /// stored content it names, each run paying its whole width even where
+    /// runs repeat one extent. The wire caps the run COUNT and not `Σ width`,
+    /// and `Σ width` is what the existence walk and, over the draft-native
+    /// runs, the re-insert both grow with. Those two — the base's run count,
+    /// which the arrangement answers without reading a run, and `Σ width` —
+    /// are the numbers a route that carries this op owes.
     pub fn publish(
         &self,
         caller: Caller,
@@ -1151,7 +1157,7 @@ where
     /// private working copy of every published document to every principal,
     /// which PUB-2.14 forbids.
     ///
-    /// ALL THREE PRE-TRANSACTION READS ARE OFF A SNAPSHOT, taken before the
+    /// ALL FOUR PRE-TRANSACTION READS ARE OFF A SNAPSHOT, taken before the
     /// applier lock and so possibly stale by the time the transaction runs,
     /// and each is sound for its own reason. The ownership read is stable for
     /// an existing document (per M3), which is what makes the branch and the
@@ -1160,10 +1166,15 @@ where
     /// `is_registered_account(prefix)` — are sound because M3's registrations
     /// are MONOTONE: its record set allocates and registers and never
     /// withdraws, so a `true` here cannot go stale, and a `false` can only be
-    /// a rejection a retry need not repeat. Any future M2 realization that
-    /// widens what may land between a snapshot and its transaction must
-    /// re-examine this, along with [`M5Rec::VersionSnapshot`]'s
-    /// linearization-at-fold, which the same change already obliges.
+    /// a rejection a retry need not repeat. The forker's PREFIX,
+    /// `principal_prefix(principal)` — the cross-owner arm's target account —
+    /// is value-stable across snapshots (M3: prefixes are immutable and
+    /// principals persist), so a `Some` names the same account inside the
+    /// transaction and a `None` is a rejection a retry need not repeat. Any
+    /// future M2 realization that widens what may land between a snapshot and
+    /// its transaction must re-examine this, along with
+    /// [`M5Rec::VersionSnapshot`]'s linearization-at-fold, which the same
+    /// change already obliges.
     ///
     /// UNGATED, deliberately: this op takes no [`Caller`] and applies no ω
     /// check, because forking a document one may not write IS the remedy the
@@ -1234,7 +1245,10 @@ where
     /// expansion from the same two addresses ([`M5Rec::VersionSnapshot`]), so
     /// the bill is charged again at every `Kernel::open`. Admission control
     /// for a route carrying this op is therefore the CALLER's, and a route
-    /// that carries it owes the number.
+    /// that carries it owes the number:
+    /// [`content_run_count`](crate::M5State::content_run_count) of the
+    /// source's [`reading_surface`], which the arrangement answers without
+    /// reading a run.
     pub fn version(
         &self,
         principal: PrincipalId,

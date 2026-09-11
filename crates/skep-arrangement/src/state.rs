@@ -97,12 +97,14 @@ impl DocArrangement {
 ///   locating each run again.
 ///
 /// EVERY READ HERE ANSWERS THE ADDRESS NAMED. `resolve`, `point`, `image`,
-/// `content_runs`, `link_runs`, `content_count`, `link_count`, `project` and
-/// `deletions` never float: asked of a bare published document with members,
-/// they answer its own pre-chain arrangement, which the chain has superseded,
-/// and not the trunk head its readers see. Head-float (PUB-2.49) is a
-/// composition the READER makes — [`reading_surface`](crate::reading_surface)
-/// first, then the read — as M6's and M8's arrangement readers do.
+/// `content_runs`, `link_runs`, `content_count`, `link_count`,
+/// `content_run_count`, `link_run_count`, `project`, `deletions` and
+/// `recorded_span_count` never float: asked of a bare published document
+/// with members, they answer its own pre-chain arrangement, which the chain
+/// has superseded, and its own record, not the trunk head's. Head-float
+/// (PUB-2.49) is a composition the READER makes —
+/// [`reading_surface`](crate::reading_surface) first, then the read — as
+/// M6's and M8's arrangement readers do.
 ///
 /// Both fields key by the document `Address`, which is what every caller
 /// holds and what every insertion site already had. Three consequences, and

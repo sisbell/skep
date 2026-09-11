@@ -37,8 +37,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   account match; `Caller::System` is the in-process automation path,
   exempt from ω alone). A PUBLISHED document refuses every in-place edit
   (`PublishedTarget`, PUB-2.11) except a DECLARED deposit `insert` at
-  a fresh position past its arranged content — the one way content
-  enters an account's born-published home; `version` refuses a
+  `n_C + 1` of the arrangement `deposit_surface` names (the chain's
+  head, or the document's own while it has no member) — the one way
+  content enters an account's born-published home; `version` refuses a
   private owned source (`PrivateSourceVersionless`, PUB-2.9) and an
   explicit-private member of a published one
   (`PrivateVersionOfPublished`, PUB-2.7). Link seating is outside the

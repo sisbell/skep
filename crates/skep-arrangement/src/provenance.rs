@@ -107,6 +107,13 @@ impl Provenance {
             .unwrap_or_else(SpanSet::empty)
     }
 
+    /// `|R↾doc|` — how many spans `doc`'s record holds: one per run it has
+    /// ever placed, whether or not the arrangement still holds it. One map
+    /// lookup, reading no span; absent ⇒ 0.
+    pub(crate) fn recorded_span_count(&self, doc: &Address) -> usize {
+        self.0.get(doc).map_or(0, |spans| spans.len())
+    }
+
     /// Has `doc` a record at all? Distinguishes ABSENT from empty, which the
     /// reads deliberately do not (both answer ⟨⟩) — the empty-source fork's
     /// "no redundant entry" claim is about the map, so the test that pins it

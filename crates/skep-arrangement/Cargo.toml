@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "M5 — Arrangements & Editing (Vstream): the per-document mutable V→I arrangement (POOM) plus the append-only content-provenance relation R; editing/versioning operations, link seating for M7, forward/reverse arrangement reads, and the R read surface"
+description = "M5 — Arrangements & Editing (Vstream): the per-document mutable V→I arrangement (POOM) plus the append-only content-provenance relation R; editing/versioning operations and the publish shot, the version-chain reads (head-float and the deposit surface), link seating for M7, forward/reverse arrangement reads, and the R read surface"
 readme = "README.md"
 
 [dependencies]
@@ -26,12 +26,15 @@ skep-address = { path = "../skep-address" }
 # M2 — every composite rides transact/snapshot; M5 owns no ordering,
 # durability, or recovery.
 skep-kernel = { path = "../skep-kernel" }
-# M3 — registration/ownership reads, the pure mints composed into M5's
-# composites, and the *_lock_key constructors (the workspace's one source of
+# M3 — registration, ownership, publication and version-frontier reads (the
+# last two through chain.rs), the pure mints composed into M5's composites,
+# and the *_lock_key constructors (the workspace's one source of
 # Space::Namespace-tagged key bytes — see the serialization-key note in lib.rs).
 skep-namespace = { path = "../skep-namespace" }
-# M4 — stage_write (the storage half of K.α, composed into INSERT) and
-# contains (COPY's content-side S3★ referential gate). M5 → M4, no back-edge.
+# M4 — stage_write (the storage half of K.α, composed into INSERT and the
+# shot's re-insert through allocate_for_placement), contains (COPY's
+# content-side S3★ gate on run starts) and value_at (the shot's existence
+# check and the bytes it re-inserts). M5 → M4, no back-edge.
 skep-content = { path = "../skep-content" }
 
 [dev-dependencies]

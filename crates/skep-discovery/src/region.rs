@@ -140,11 +140,10 @@ pub fn image_on<W: DiscoveryWorld>(
     // reach in positions — and in the surface's runs only past that. A region
     // whose reach in positions is within the square walks within it whatever
     // the document, so the ordinary request is admitted without the surface's
-    // runs being counted; past that the count is taken — M5 publishes none,
-    // so it is the surface's content runs read whole, the cost `project_on`
-    // pays on every call.
+    // runs being counted; past that the count is taken, off M5's
+    // `content_run_count`, which reads no run.
     if run_list_walk(region, usize::MAX) > MAX_JOIN_STEPS
-        && run_list_walk(region, w.m5().content_runs(&surface).len()) > MAX_JOIN_STEPS
+        && run_list_walk(region, w.m5().content_run_count(&surface)) > MAX_JOIN_STEPS
     {
         return Err(QueryError::ImageTooLarge);
     }

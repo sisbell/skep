@@ -143,17 +143,20 @@ impl M5State {
     }
 
     /// The canonical, V-ordered content run decomposition — maximally merged
-    /// (ASN-0058 M12), the COMPARE surface for M6. Absent doc ⇒ `[]`. The runs
-    /// tile the whole content prefix `[1, n_C]` contiguously (D-SEQ★, stated
-    /// on [`M5State`]), so the first begins at V-ordinal 1 and each next where
-    /// the previous ends.
+    /// (ASN-0058 M12), and so UNIQUE: two content arrangements are the same
+    /// V→I map exactly when their decompositions are equal. Absent doc ⇒ `[]`.
+    /// The runs tile the whole content prefix `[1, n_C]` contiguously (D-SEQ★,
+    /// stated on [`M5State`]), so the first begins at V-ordinal 1 and each
+    /// next where the previous ends.
     pub fn content_runs(&self, doc: &Address) -> Vec<Run> {
         self.content_list(doc).runs()
     }
 
-    /// The canonical, V-ordered link run decomposition. Absent doc ⇒ `[]`; it
-    /// tiles `[1, n_L]` as [`content_runs`](M5State::content_runs) tiles the
-    /// content prefix, D-SEQ★ holding per subspace.
+    /// The canonical, V-ordered link run decomposition — maximally merged, and
+    /// so UNIQUE as [`content_runs`](M5State::content_runs)' is: two link
+    /// arrangements are the same V→I map exactly when their decompositions
+    /// are equal. Absent doc ⇒ `[]`; it tiles `[1, n_L]` as `content_runs`
+    /// tiles the content prefix, D-SEQ★ holding per subspace.
     pub fn link_runs(&self, doc: &Address) -> Vec<Run> {
         self.link_list(doc).runs()
     }
@@ -172,6 +175,34 @@ impl M5State {
     /// this is likewise the largest arranged link ordinal.
     pub fn link_count(&self, doc: &Address) -> Nat {
         self.link_list(doc).total_width()
+    }
+
+    /// `#runs(doc)` in the content subspace — how many runs
+    /// [`content_runs`](M5State::content_runs) would hand back, without handing
+    /// them back. NOT [`content_count`](M5State::content_count), which is the
+    /// positions those runs cover. It is the quantity COPY's resolve walk,
+    /// [`project`](M5State::project)'s join, VERSION's R-append and the shot's
+    /// carried-run sweep are priced in, so a caller that owns admission
+    /// control for one of them reads the number here rather than materializing
+    /// the runs to count them. One map lookup, reading no run; absent doc ⇒ 0.
+    pub fn content_run_count(&self, doc: &Address) -> usize {
+        self.content_list(doc).run_count()
+    }
+
+    /// `#runs(doc)` in the link subspace, as
+    /// [`content_run_count`](M5State::content_run_count) is in the content
+    /// one. One map lookup, reading no run; absent doc ⇒ 0.
+    pub fn link_run_count(&self, doc: &Address) -> usize {
+        self.link_list(doc).run_count()
+    }
+
+    /// `|R↾doc|` — how many spans R records for `doc`: one per run it has ever
+    /// placed, deleted or not (P2). The term that dominates
+    /// [`deletions`](M5State::deletions)' cost, and the one a document's
+    /// current arrangement does not reveal, so a caller pricing SHOWDELETIONS
+    /// reads it here. One map lookup, reading no span; absent doc ⇒ 0.
+    pub fn recorded_span_count(&self, doc: &Address) -> usize {
+        self.provenance.recorded_span_count(doc)
     }
 
     /// Does the content subspace admit `ord` as a PLACEMENT boundary —
@@ -291,7 +322,10 @@ impl M5State {
     /// `MAX_SLOT_SPANS`) and by nothing on M6's, where it is an
     /// [`image`](M5State::image) of a region. Admission control is the
     /// caller's, as it is for
-    /// [`docs_ever_containing`](M5State::docs_ever_containing).
+    /// [`docs_ever_containing`](M5State::docs_ever_containing), and both
+    /// factors are cheap to read before asking:
+    /// [`content_run_count`](M5State::content_run_count) and
+    /// `coverage.len()`.
     pub fn project(&self, doc: &Address, coverage: &SpanSet) -> SpanSet {
         let mut vspans: Vec<Span> = Vec::new();
         // An absent document is a CASE and not a path: its content run-list is
@@ -345,9 +379,10 @@ impl M5State {
     /// and partitioned, and each per-class `difference_sets` normalizes and
     /// SORTS its two operands, so the work is
     /// `Θ(|R↾doc| log |R↾doc|) + Θ(#runs(doc))` and the transient heap is
-    /// several full copies of `R↾doc`. `|R↾doc|` is not bounded here and is
-    /// monotone (P2, R losing no member): it is every span `doc` has ever
-    /// placed, grown by COPY up to
+    /// several full copies of `R↾doc`. `|R↾doc|` —
+    /// [`recorded_span_count`](M5State::recorded_span_count), cheap to read —
+    /// is not bounded here and is monotone (P2, R losing no member): it is
+    /// every span `doc` has ever placed, grown by COPY up to
     /// [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS) per request and by VERSION
     /// without a ceiling ([`Vstream::version`](crate::Vstream::version)), so a
     /// document that has deleted much more than it holds costs far more here
@@ -415,7 +450,10 @@ impl M5State {
     /// decision #3, which belongs here, R's owner) and no admission gate: this
     /// method refuses nothing and bounds nothing, so admission control and
     /// concurrency for the query that composes on it are the CALLER's, and a
-    /// route that carries this read owes that number.
+    /// route that carries this read owes that number. The relation's total
+    /// size has no cheap read: it is
+    /// [`recorded_span_count`](M5State::recorded_span_count) summed over every
+    /// document, which v1 does not keep.
     pub fn docs_ever_containing(&self, coverage: &SpanSet) -> Vec<Address> {
         self.provenance.docs_ever_containing(coverage)
     }
@@ -548,6 +586,43 @@ mod tests {
         assert!(past(5).is_empty(), "an extent at the end carries nothing");
         assert!(past(9).is_empty(), "nor one past it");
         assert_eq!(s.content_runs_past(&doc2(), &n(0)).next(), None, "absent doc");
+    }
+
+    #[test]
+    fn the_counts_a_caller_prices_with_are_the_lengths_of_what_they_count() {
+        // The quantities the cost statements name, each against the thing it
+        // counts: `#runs` per subspace is the length of what `content_runs` /
+        // `link_runs` would hand back — runs, not the positions they cover —
+        // and `|R↾doc|` is the length of the record, one span per placed run,
+        // which a delete leaves standing (P2) and a link seat never adds to
+        // (J-LV).
+        let s = arranged(); // ca(1..3) then vca(1..2): two runs, two placements
+        let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) });
+        let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(2) }); // coalesces
+        assert_eq!(s.content_run_count(&doc1()), s.content_runs(&doc1()).len());
+        assert_eq!(s.content_run_count(&doc1()), 2, "two runs over five positions");
+        assert_eq!(s.link_run_count(&doc1()), s.link_runs(&doc1()).len());
+        assert_eq!(s.link_run_count(&doc1()), 1);
+        assert_eq!(
+            s.recorded_span_count(&doc1()),
+            s.provenance.ever_contained(&doc1()).len()
+        );
+        assert_eq!(s.recorded_span_count(&doc1()), 2, "two placements; the seats record nothing");
+        let s = s.apply_m5(&M5Rec::ContentRemove {
+            doc: doc1(),
+            from: n(1),
+            width: n(5),
+        });
+        assert_eq!(s.content_run_count(&doc1()), 0);
+        assert_eq!(s.link_run_count(&doc1()), 1, "a text delete never touches the links");
+        assert_eq!(s.recorded_span_count(&doc1()), 2, "R keeps what the delete removed");
+        for count in [
+            s.content_run_count(&doc2()),
+            s.link_run_count(&doc2()),
+            s.recorded_span_count(&doc2()),
+        ] {
+            assert_eq!(count, 0, "an absent document");
+        }
     }
 
     #[test]

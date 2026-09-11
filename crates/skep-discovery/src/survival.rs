@@ -78,8 +78,9 @@ fn content_vspan_at(ordinal: &Nat, count: &Nat) -> Span {
 /// past it — at the budget, or one run under — is refused exactly the ranges
 /// that cut that many; and every other `d` is answered for every range. A
 /// faulty request names its own fault first. The runs are resolved before
-/// they are counted, M5 publishing no count, so a refused preview has paid
-/// for reading them and for no stab.
+/// they are counted — the count includes the pieces the range's two ends cut
+/// out of runs, which no count M5 publishes shows — so a refused preview has
+/// paid for reading them and for no stab.
 ///
 /// The accepted set is M5's DELETE admission minus those two gates, and minus
 /// every request whose runs, as its range splits them, are past the run

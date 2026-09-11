@@ -176,6 +176,13 @@ impl RunList {
         self.0.iter().fold(Nat::zero(), |acc, r| acc + &r.width)
     }
 
+    /// `#runs` — how many runs the list holds, the fragmentation every
+    /// `O(#runs)` walk and splice here is priced in. O(1): the backing vector
+    /// knows its own length.
+    pub(crate) fn run_count(&self) -> usize {
+        self.0.len()
+    }
+
     /// Walk runs accumulating widths until the sum reaches `ord`; return the
     /// run index and the 0-based offset within it. `None` when `ord` is 0 or
     /// past the last arranged ordinal (§1 locate).

@@ -1556,6 +1556,11 @@ fn a_shot_appends_the_next_trunk_member_from_the_clients_runs() {
         .expect("the staging copy shares identity");
     vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d"), val(b"e")], Deposit::Undeclared)
         .expect("the stager types");
+    // A home link seated in the base: the shot places content alone, so it
+    // stays the base's (CL-OWN, PUB-2.12) and the member is born with an
+    // empty link subspace.
+    seat_link(&k, &pdoc(), &a(&[1, 0, 1, 0, 3, 0, 2, 1]))
+        .expect("a home link seats into the edition");
     let readable = readable_by(PrincipalId(1));
     let shot = Shot {
         base: Some(base(&pdoc(), 3)),
@@ -1571,6 +1576,8 @@ fn a_shot_appends_the_next_trunk_member_from_the_clients_runs() {
     let m5 = s.world().m5();
     assert!(s.world().m3().published(&member), "born published (PUB-2.5)");
     assert_eq!(m5.content_count(&member), n(5));
+    assert_eq!(m5.link_count(&member), n(0), "the shot places content alone");
+    assert_eq!(m5.link_count(&pdoc()), n(1), "the base keeps its link");
     // The re-inserted text continues the edition's own content chain, so it
     // coalesces with the by-reference run: ONE run under pdoc.
     assert_eq!(

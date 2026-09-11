@@ -37,7 +37,12 @@ use skep_address::{intersect, shift, validate, Address, Nat, Span, Tumbler};
 /// struct literal nor mutate one it holds — including an OWNED `Run` that
 /// `resolve` returns or that a caller clones out of `content_runs` or
 /// `link_runs` — so runs are read-only across every seam (M6/M7/M8 read via
-/// the [`i_start`](Run::i_start)/[`width`](Run::width) accessors).
+/// the [`i_start`](Run::i_start)/[`width`](Run::width) accessors). In-crate,
+/// ONE site mutates a built `Run`: `extend_or_push_run` widens the
+/// accumulator's last run by the width of an I-adjacent one — a positive
+/// width added to a positive width, the start untouched — so both invariants
+/// survive it. A second mutation site joins this sentence or the invariant is
+/// re-examined.
 /// [`Run::new`] is the sole foreign constructor, and it is also the
 /// DESERIALIZATION path: a decoded Run re-enters it through the serde shadow
 /// below, so a journalled [`ContentPlace`](crate::M5Rec::ContentPlace) cannot

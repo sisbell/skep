@@ -14,11 +14,13 @@ use skep_content::ContentError;
 use skep_namespace::MintError;
 
 /// INSERT rejection (ASN-0116; §3). `NotContentSubspace`: `at.subspace ≠
-/// s_C`. `OutOfBounds`: `at.ordinal ∉ [1, n_C + 1]`. (The interface
-/// document's former `BadPosition` was split into these two precise
-/// verdicts, aligned with DELETE's granularity, so M10 gets a
-/// self-describing rejection.) `NotOwner` carries the document that failed
-/// the ω check.
+/// s_C`. `OutOfBounds`: `at.ordinal ∉ [1, n_C + 1]` of the arrangement the
+/// insert lands in — the named document's, or, for a declared deposit into a
+/// published chain with a head, the HEAD's
+/// ([`deposit_surface`](crate::deposit_surface)). (The interface document's
+/// former `BadPosition` was split into these two precise verdicts, aligned
+/// with DELETE's granularity, so M10 gets a self-describing rejection.)
+/// `NotOwner` carries the document that failed the ω check.
 ///
 /// `PublishedTarget` is the version-chain model's in-place advance refusal
 /// (PUB-2.11; owner ruling D2b): the target's DOCUMENT (a version member

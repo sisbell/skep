@@ -482,7 +482,11 @@ where
     /// ordinal 1 journals the whole arrangement — the fold appends every
     /// placed run's I-extent to R (J1★), the by-reference runs as COPY's are and
     /// the fresh ones as INSERT's; an empty placement pushes no record, the
-    /// member then reading as the lazy empty arrangement.
+    /// member then reading as the lazy empty arrangement. The member's LINK
+    /// subspace starts empty either way: the shot places content alone, and a
+    /// link seated in the base stays the base's — a link is arranged only in
+    /// its home document (CL-OWN, PUB-2.12), and the member is a home no link
+    /// has yet.
     ///
     /// Check order (which error wins), PUB-6.36's slots: `DocNotRegistered`
     /// → `NotOwner` (slot 1, the destination's ω — the only question the shot

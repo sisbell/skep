@@ -24,8 +24,10 @@
 
 use std::fmt;
 
-use skep_address::{content_subspace, Address, Span};
-use skep_arrangement::{stage_seat_link, Caller, HasM5, M5Rec, M5State, SeatError, VSpec};
+use skep_address::{Address, Span};
+use skep_arrangement::{
+    as_ordinal_vspan, stage_seat_link, Caller, HasM5, M5Rec, M5State, SeatError, VSpec,
+};
 use skep_kernel::{Kernel, LockKey, Seq, Staging, TxnError, WorldState};
 use skep_namespace::{M3Rec, M3State, MintError};
 
@@ -598,17 +600,13 @@ where
 /// ∧ #width = 2 ∧ width₁ = 0`, the deliberate depth-2 narrowing of ASN-0120's
 /// `#u_j ≥ 2` (Conflicts §12).
 ///
-/// The V-position's subspace is the start's FIRST component, NOT M1's
-/// `Address::subspace()` (which needs zeros = 3 and would reject every depth-2
-/// spec). Every component read is fallible, so a spec of any shape answers
-/// rather than faulting, and the length tests state the depth this narrowing
-/// wants rather than guarding the reads.
+/// The span half is M5's one reading of the shape, `as_ordinal_vspan`, asked
+/// with its content clause — so the narrowing has one spelling, M5's, and
+/// this predicate adds only the registry half. A spec of any shape answers
+/// rather than faulting, the reading being total.
 fn is_wf_content_spec(m3: &M3State, spec: &VSpec) -> bool {
     m3.is_registered_document(&spec.source)
-        && spec.span.start().len() == 2
-        && spec.span.start().get(1) == Some(&content_subspace())
-        && spec.span.width().len() == 2
-        && spec.span.width().get(1).is_some_and(|w| w.bits() == 0)
+        && as_ordinal_vspan(&spec.span).is_some_and(|v| v.is_content())
 }
 
 /// The most spans ONE slot may carry — the budget every caller-shaped slot

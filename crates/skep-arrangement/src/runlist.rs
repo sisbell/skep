@@ -247,29 +247,25 @@ impl RunList {
         self.0.is_empty()
     }
 
-    /// Walk runs accumulating widths until the sum reaches `ord`; return the
-    /// run index and the 0-based offset within it. `None` when `ord` is 0 or
-    /// past the last arranged ordinal (§1 locate).
-    pub(crate) fn locate(&self, ord: &Nat) -> Option<(usize, Nat)> {
+    /// The run holding ordinal `ord`, lent, and the 0-based offset of `ord`
+    /// within it — `None` when `ord` is 0 or past the last arranged ordinal
+    /// (§1 locate). The run itself rather than its index, so a caller holds
+    /// what it asked for and never re-fetches it by a coordinate this walk
+    /// already resolved. Answered off [`iter_runs`](RunList::iter_runs): the
+    /// one prefix-sum walk, which reports each run's V-start.
+    pub(crate) fn locate(&self, ord: &Nat) -> Option<(&Run, Nat)> {
         if ord.is_zero() {
-            return None;
+            return None; // ordinal 0 lies before every run; the offset would underflow
         }
-        let mut before = Nat::zero();
-        for (idx, run) in self.0.iter().enumerate() {
-            let last = &before + &run.width;
-            if *ord <= last {
-                return Some((idx, ord - &before - Nat::one()));
-            }
-            before = last;
-        }
-        None
+        self.iter_runs()
+            .find(|(v_start, run)| *ord < v_start + &run.width)
+            .map(|(v_start, run)| (run, ord - &v_start))
     }
 
     /// `M(d)(p)` for this subspace: the I-address at ordinal `ord`, or `None`
     /// when unarranged (§2 point).
     pub(crate) fn point(&self, ord: &Nat) -> Option<Address> {
-        let (idx, off) = self.locate(ord)?;
-        let run = self.0.get(idx).expect("locate returns an in-range index");
+        let (run, off) = self.locate(ord)?;
         Some(run.addr_at(&off))
     }
 
@@ -317,7 +313,7 @@ impl RunList {
             .iter()
             .filter(|resident| resident.i_start().tumbler().len() == len)
             .filter_map(|resident| run.offsets_covered_by(&resident.iextent()))
-            .map(|range| (range.lo().clone(), range.lo() + &range.width()))
+            .map(|range| (range.lo().clone(), range.hi().clone()))
             .collect();
         covered.sort();
         let mut reached = Nat::zero();
@@ -415,9 +411,12 @@ impl RunList {
         RunList(coalesced(out))
     }
 
-    /// The runs covering ordinals `[lo, hi_excl)`, the boundary runs clipped,
-    /// yielded LAZILY — nothing outside the range is cloned, and a consumer
-    /// that stops early stops the walk with it (`take_while` short-circuits).
+    /// The runs covering ordinals `[lo, hi_excl)` — or `[lo, total]` when no
+    /// bound is given — the boundary runs clipped, yielded LAZILY: nothing
+    /// outside the range is cloned, and a consumer that stops early stops the
+    /// walk with it (`take_while` short-circuits). THE ONE CLIP, which the
+    /// range walk and the suffix walk both ask, so the boundary arithmetic and
+    /// its proof are written once.
     ///
     /// WHAT THIS COSTS, since a resolution's caller is a per-spec loop —
     /// COPY's, M7's slot endsets, M6's RETRIEVEV — and a request's spec count
@@ -429,25 +428,32 @@ impl RunList {
     /// (Open decision #1); what laziness removes is the other term, the
     /// materialization of runs a bounded consumer will never look at.
     ///
-    /// Called with `lo < hi_excl`. Every emitted run then has `width ≥ 1` and
-    /// an element-level start: a run reaching the push has `v_start < hi_excl`
-    /// and `lo < v_reach`, and `v_start < v_reach` because a run's width is at
-    /// least one, so each of `first`'s two candidates falls below each of
-    /// `past`'s and `first < past`; the start is
-    /// [`Run::addr_at`](crate::Run::addr_at) of an offset inside the run. Both
-    /// `Nat` subtractions are therefore over ordered operands and cannot
-    /// underflow.
-    fn slice_runs(&self, lo: Nat, hi_excl: Nat) -> impl Iterator<Item = Run> + '_ {
+    /// Called with `lo < hi_excl` when bounded. Every emitted run then has
+    /// `width ≥ 1` and an element-level start: a run reaching the push has
+    /// `lo < v_reach` and, when bounded, `v_start < hi_excl`; `v_start <
+    /// v_reach` because a run's width is at least one; so `first < past`, and
+    /// the start is [`Run::addr_at`](crate::Run::addr_at) of an offset inside
+    /// the run. Both `Nat` subtractions are therefore over ordered operands
+    /// and cannot underflow. A run the range keeps WHOLE is cloned rather
+    /// than rebuilt: no shift and no validation for a run the clip does not
+    /// touch, which is every interior run of a wide range and every run but
+    /// the first of a suffix.
+    fn slice_runs(&self, lo: Nat, hi_excl: Option<Nat>) -> impl Iterator<Item = Run> + '_ {
         let stop = hi_excl.clone();
         self.iter_runs()
-            .take_while(move |(v_start, _)| *v_start < stop)
+            .take_while(move |(v_start, _)| stop.as_ref().is_none_or(|stop| v_start < stop))
             .filter_map(move |(v_start, run)| {
                 let v_reach = &v_start + &run.width; // the first ordinal past this run
                 if v_reach <= lo {
                     return None;
                 }
                 let first = std::cmp::max(&v_start, &lo); // this run's first kept ordinal
-                let past = std::cmp::min(&v_reach, &hi_excl); // one past its last
+                // One past its last: the bound, or the run's own reach when
+                // the walk has no bound.
+                let past = hi_excl.as_ref().map_or(&v_reach, |hi| std::cmp::min(&v_reach, hi));
+                if first == &v_start && past == &v_reach {
+                    return Some(run.clone()); // kept whole
+                }
                 Some(Run {
                     i_start: run.addr_at(&(first - &v_start)),
                     width: past - first,
@@ -477,7 +483,7 @@ impl RunList {
         (lo < hi_excl)
             .then_some((lo, hi_excl))
             .into_iter()
-            .flat_map(move |(lo, hi_excl)| self.slice_runs(lo, hi_excl))
+            .flat_map(move |(lo, hi_excl)| self.slice_runs(lo, Some(hi_excl)))
     }
 
     /// I-runs covering ordinals `[max(ord, 1), total]` — everything from the
@@ -490,23 +496,10 @@ impl RunList {
     /// would walk the whole list once to learn a bound the walk then never
     /// needs. LAZY as the range walk is, so a consumer with a budget of its
     /// own stops the walk at it; an `ord` past the arranged end yields
-    /// nothing, and so does a list holding nothing.
-    ///
-    /// The `Nat` subtractions are over ordered operands: a run that is clipped
-    /// has `v_start < lo < v_reach`, so `lo − v_start` is an offset inside the
-    /// run and `v_reach − lo` is at least one — a run holding a position.
+    /// nothing, and so does a list holding nothing. The same clip as the
+    /// range walk's, asked without a bound.
     pub(crate) fn iter_resolve_from(&self, ord: &Nat) -> impl Iterator<Item = Run> + '_ {
-        let lo = std::cmp::max(ord.clone(), Nat::one());
-        self.iter_runs().filter_map(move |(v_start, run)| {
-            if v_start >= lo {
-                return Some(run.clone()); // opens at or past the boundary: whole
-            }
-            let v_reach = &v_start + &run.width; // the first ordinal past this run
-            (v_reach > lo).then(|| Run {
-                i_start: run.addr_at(&(&lo - &v_start)),
-                width: v_reach - &lo,
-            })
-        })
+        self.slice_runs(std::cmp::max(ord.clone(), Nat::one()), None)
     }
 
     /// Iterate `(v_start, run)` pairs — the implicit V-start is the running

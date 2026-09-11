@@ -116,7 +116,8 @@ impl TryFrom<RunShadow> for Run {
 /// answer [`Run::offsets_covered_by`] gives, given a name because it is one
 /// thing: the two bounds never travel apart, and the quantity the I→V read
 /// actually wants from them is [`width`](OffsetRange::width), which the range
-/// derives rather than its reader.
+/// derives rather than its reader — and the sweep in `RunList::covers` wants
+/// the bound itself, [`hi`](OffsetRange::hi), so both are answered.
 ///
 /// NONEMPTY IS THE INVARIANT, and it is why `width` is total: `lo < hi`
 /// always, "covers none" being `None` rather than an empty range. The fields
@@ -143,6 +144,13 @@ impl OffsetRange {
     /// first the covering span reaches.
     pub(crate) fn lo(&self) -> &Nat {
         &self.lo
+    }
+
+    /// One past the last covered offset — the range's exclusive end, which a
+    /// sweep over several ranges compares directly rather than rebuilding it
+    /// as `lo + width`.
+    pub(crate) fn hi(&self) -> &Nat {
+        &self.hi
     }
 
     /// HOW MANY of the run's positions the range covers, `hi − lo`. The count
@@ -575,10 +583,14 @@ mod tests {
         );
         // The two quantities the I→V read takes off a range: where it opens,
         // and how many of the run's positions it names — the second derived by
-        // the range, so `project` does not subtract the bounds itself.
+        // the range, so `project` does not subtract the bounds itself. And the
+        // bound the carried-run sweep takes: one past the last, which is where
+        // the width came from, so the two agree by construction.
         let one = r.offsets_covered_by(&inner).expect("the cover is nonempty");
         assert_eq!(one.lo(), &n(1));
         assert_eq!(one.width(), n(1));
+        assert_eq!(one.hi(), &n(2));
+        assert_eq!(one.hi(), &(one.lo() + &one.width()));
         let apart = Run::new(ca(9), n(1)).expect("valid run").iextent();
         assert_eq!(r.offsets_covered_by(&apart), None);
         // Cross-length fallback: doc1's content-base subtree covers every

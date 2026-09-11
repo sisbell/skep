@@ -14,8 +14,8 @@ use std::collections::HashSet;
 
 use im::OrdSet;
 use num_traits::ToPrimitive;
-use skep_address::{content_subspace, Address, Nat, Span};
-use skep_arrangement::{is_ordinal_vspan, ordinal_vspan, reading_surface, Run, VPos};
+use skep_address::{Address, Nat, Span};
+use skep_arrangement::{as_ordinal_vspan, ordinal_vspan, reading_surface, Run, VPos};
 use skep_kernel::Snapshot;
 use skep_links::Endset;
 
@@ -38,16 +38,16 @@ use crate::DiscoveryWorld;
 /// still be refused `ImageTooLarge`. M5's `ordinal_vspan` does the building;
 /// the content-subspace clause is the one M8 adds.
 pub fn content_vspan(at: &VPos, count: &Nat) -> Option<Span> {
-    if at.subspace != content_subspace() {
+    if !at.is_content() {
         return None;
     }
     ordinal_vspan(at, count)
 }
 
 /// Region gate: each span must be an ordinal-level depth-2 V-span — M5's
-/// [`is_ordinal_vspan`], the shape its `resolve` reads — restricted to the
-/// CONTENT subspace, else `BadRegion`. The judging half of the one shape
-/// [`content_vspan`] builds.
+/// `as_ordinal_vspan`, the reading its `resolve` folds on, asked with its
+/// content clause — restricted to the CONTENT subspace, else `BadRegion`.
+/// The judging half of the one shape [`content_vspan`] builds.
 ///
 /// The subspace restriction is M8's one added clause; the shape itself is
 /// asked of M5 rather than re-derived, since a span M5 declines is folded to
@@ -56,8 +56,7 @@ pub fn content_vspan(at: &VPos, count: &Nat) -> Option<Span> {
 /// region trivially passes.
 fn check_region(region: &[Span]) -> Result<(), QueryError> {
     for span in region {
-        let in_content = span.start().get(1) == Some(&content_subspace());
-        if !is_ordinal_vspan(span) || !in_content {
+        if !as_ordinal_vspan(span).is_some_and(|v| v.is_content()) {
             return Err(QueryError::BadRegion);
         }
     }
@@ -67,16 +66,14 @@ fn check_region(region: &[Span]) -> Result<(), QueryError> {
 /// How many runs M5's `resolve` walks past for the spans of `region`, over a
 /// run-list `run_count` runs long, summed, saturating. It walks each span's
 /// list from the first run and stops at the first run starting at or past the
-/// span's reach `e`, and every run is at least one position wide, so one span
-/// passes at most `min(run_count, e − 1)`. A reach whose ordinal cannot be
-/// read, or does not fit a `usize`, prices at `run_count` — the most any walk
-/// passes, never zero.
+/// span's end ordinal `e` — `ordinal + count`, read off M5's reading of the
+/// span — and every run is at least one position wide, so one span passes at
+/// most `min(run_count, e − 1)`. An end ordinal that does not fit a `usize`
+/// prices at `run_count` — the most any walk passes, never zero.
 fn run_list_walk(region: &[Span], run_count: usize) -> usize {
     region.iter().fold(0usize, |steps, span| {
-        let passed = span
-            .reach()
-            .get(2)
-            .and_then(|e| e.to_usize())
+        let passed = as_ordinal_vspan(span)
+            .and_then(|v| (v.ordinal + v.count).to_usize())
             .map_or(run_count, |e| e.saturating_sub(1).min(run_count));
         steps.saturating_add(passed)
     })

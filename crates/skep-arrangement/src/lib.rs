@@ -186,7 +186,7 @@ pub use runlist::Runs;
 pub use seat::{seat_link, stage_seat_link};
 pub use shot::{Base, Shot, ShotRun};
 pub use state::{M5Rec, M5State};
-pub use vspace::{is_ordinal_vspan, ordinal_vspan, VPos, VSpec};
+pub use vspace::{as_ordinal_vspan, is_ordinal_vspan, ordinal_vspan, OrdinalVSpan, VPos, VSpec};
 
 /// The engine's **read accessor** for M5's slice (Engine Composition
 /// Contract): the engine implements this for its concrete world

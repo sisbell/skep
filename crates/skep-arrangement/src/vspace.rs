@@ -1,7 +1,9 @@
 //! §Request-side V-space values — the depth-2 V-position ([`VPos`]), COPY's
 //! source specification ([`VSpec`]), and the ordinal-level depth-2 V-range
-//! stated once from both sides: [`as_ordinal_vspan`] reads one (and
-//! [`is_ordinal_vspan`] is its verdict), [`ordinal_vspan`] builds one.
+//! stated once from both sides: [`as_ordinal_vspan`] reads one into an
+//! [`OrdinalVSpan`] (and [`is_ordinal_vspan`] is its verdict),
+//! [`ordinal_vspan`] builds one. All three are public, so the shape has one
+//! definition across every crate that reads or builds a V-span.
 
 use num_traits::Zero;
 use skep_address::{content_subspace, Address, Nat, Span, Tumbler};
@@ -51,30 +53,38 @@ pub struct VSpec {
 /// The three quantities an ordinal-level depth-2 V-span names, borrowed from
 /// the span [`as_ordinal_vspan`] read them out of. Holding them is what lets
 /// a caller that has already asked whether a span has this shape go on to use
-/// its parts, with no second extraction to justify.
+/// its parts, with no second extraction to justify — and no second
+/// definition of where each part sits in the span, which is what a caller
+/// reading `start.get(1)` or `width.get(2)` for itself would be keeping.
 ///
 /// Named fields, not a tuple: all three are `&Nat`, so a positional
 /// destructuring would put them back within swapping distance of each other.
+/// A VIEW into the span, not a value of its own: three borrows and nothing
+/// owned, so reading a span costs no allocation and the view cannot outlive
+/// what it reads.
 ///
 /// `Copy` because three shared references are, and `Debug`/`Eq` because a
 /// value a test asserts about should print what it read rather than a
 /// boolean — the same baseline the run's `OffsetRange` carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct OrdinalVSpan<'a> {
+pub struct OrdinalVSpan<'a> {
     /// The subspace numeral, `start.get(1)`.
-    pub(crate) subspace: &'a Nat,
+    pub subspace: &'a Nat,
     /// The first named ordinal, `start.get(2)`.
-    pub(crate) ordinal: &'a Nat,
+    pub ordinal: &'a Nat,
     /// How many consecutive positions the span names, `width.get(2)`.
-    pub(crate) count: &'a Nat,
+    pub count: &'a Nat,
 }
 
 impl OrdinalVSpan<'_> {
     /// Does this span lie in the CONTENT subspace s_C? The
     /// [`VPos::is_content`] question asked of a span's borrowed numeral, so
     /// COPY's two subspace gates — the destination's and the source span's —
-    /// read alike rather than one through a predicate and one raw.
-    pub(crate) fn is_content(&self) -> bool {
+    /// read alike rather than one through a predicate and one raw — and so
+    /// the content clause every neighbour adds to the shape (M7's MAKELINK
+    /// specs, M8's regions, M10's successor specs) has one spelling here
+    /// rather than an index read apiece.
+    pub fn is_content(&self) -> bool {
         *self.subspace == content_subspace()
     }
 }
@@ -86,11 +96,19 @@ impl OrdinalVSpan<'_> {
 /// span this refuses to ⟨⟩, and COPY rejects the same span as
 /// [`CopyError::NotOrdinalVSpan`](crate::CopyError::NotOrdinalVSpan).
 ///
-/// The condition is stated in full on [`is_ordinal_vspan`], the published
-/// half. Handing back the parts is what lets both callers read the subspace,
-/// ordinal and count off a span whose shape is already settled, instead of
-/// re-extracting components behind an `.expect` apiece.
-pub(crate) fn as_ordinal_vspan(span: &Span) -> Option<OrdinalVSpan<'_>> {
+/// The condition is stated in full on [`is_ordinal_vspan`], its verdict.
+/// Handing back the parts is what lets a caller read the subspace, ordinal
+/// and count off a span whose shape is already settled, instead of
+/// re-extracting components by index — which is what every neighbour that
+/// judges a CONTENT V-span otherwise does, the content clause being the one
+/// they add: M7's MAKELINK specs, M8's regions and M10's successor specs each
+/// ask [`OrdinalVSpan::is_content`] of this reading, and M8 prices its walk
+/// off `ordinal + count` rather than off the reach.
+/// [`M5State::resolve`](crate::M5State::resolve) and COPY read the parts the
+/// same way. Published for that reason;
+/// [`is_ordinal_vspan`] is the verdict alone, for a caller that gates a span
+/// and hands it on unread.
+pub fn as_ordinal_vspan(span: &Span) -> Option<OrdinalVSpan<'_>> {
     let (start, width) = (span.start(), span.width());
     if start.len() != 2 || width.len() != 2 || !width.get(1).is_some_and(|w| w.is_zero()) {
         return None;
@@ -110,10 +128,12 @@ pub(crate) fn as_ordinal_vspan(span: &Span) -> Option<OrdinalVSpan<'_>> {
 /// each fail it.
 ///
 /// Published so a caller building V-spans from a request can pre-validate and
-/// tell "bad request" from "genuinely empty" before it asks. The published
-/// half is the predicate because that is the whole of the question a caller
-/// asks from outside: whether the request it holds is usable — a verdict, not
-/// a decomposition. What [`ordinal_vspan`] builds, this accepts.
+/// tell "bad request" from "genuinely empty" before it asks. The verdict form
+/// of [`as_ordinal_vspan`]'s reading, for a caller that gates a span and hands
+/// it on unread — M6's SHOWORIGIN_V precondition, and the depth clause of
+/// M6's wider well-formedness gate. A caller that goes on to use the parts
+/// asks the reading, so no neighbour extracts a component by index. What
+/// [`ordinal_vspan`] builds, this accepts.
 pub fn is_ordinal_vspan(span: &Span) -> bool {
     as_ordinal_vspan(span).is_some()
 }

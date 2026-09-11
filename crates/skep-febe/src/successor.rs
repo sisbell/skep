@@ -10,8 +10,8 @@
 //! makes that budget M10's to enforce for this one request, and enforcing it
 //! means counting as the spans are produced.
 
-use skep_address::{content_subspace, Span};
-use skep_arrangement::{M5State, VSpec};
+use skep_address::Span;
+use skep_arrangement::{as_ordinal_vspan, M5State, VSpec};
 use skep_links::{enc, Endset, Link, SlotArg, FROM, MAX_SLOT_SPANS, TO, TYPE};
 use skep_namespace::M3State;
 
@@ -181,18 +181,14 @@ fn slot_too_large(slot: usize) -> Rejection {
 /// ordinal displacement — `#start = 2 ∧ start₁ = s_C ∧ #width = 2 ∧
 /// width₁ = 0`.
 ///
-/// The V-position's subspace is the start's FIRST component, not M1's
-/// `Address::subspace()` (which needs zeros = 3 and would reject every
-/// depth-2 spec). Every component read is fallible, so a span of any shape
-/// answers rather than faulting, which is what `execute`'s Total contract
-/// needs.
+/// The shape is M5's one reading of it, `as_ordinal_vspan`, asked with its
+/// content clause — the same question M7's own spec gate asks — so the
+/// predicate has one spelling, M5's, and this successor cannot admit a span
+/// the MAKELINK it supersedes would refuse. The reading is total, so a span
+/// of any shape answers rather than faulting, which is what `execute`'s
+/// Total contract needs.
 fn is_content_vspan(span: &Span) -> bool {
-    let start = span.start();
-    let width = span.width();
-    start.len() == 2
-        && width.len() == 2
-        && start.get(1) == Some(&content_subspace())
-        && width.get(1).is_some_and(|w| w.bits() == 0) // ordinal-level
+    as_ordinal_vspan(span).is_some_and(|v| v.is_content())
 }
 
 #[cfg(test)]

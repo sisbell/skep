@@ -24,10 +24,10 @@ use std::cell::RefCell;
 use serde::{Deserialize, Serialize};
 use skep_address::{subtree_of, validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{
-    ordinal_vspan, reading_surface, seat_link, stage_seat_link, trunk_head, Base, Caller,
-    CopyError, DeleteError, Deposit, HasM5, InsertError, M5State, PublishError, RearrangeError,
-    Run, RunError, Runs, SeatError, Shot, ShotRun, VPos, VSpec, VersionError, Vstream,
-    MAX_REINSERTED_VALUES,
+    as_ordinal_vspan, is_ordinal_vspan, ordinal_vspan, reading_surface, seat_link,
+    stage_seat_link, trunk_head, Base, Caller, CopyError, DeleteError, Deposit, HasM5,
+    InsertError, M5State, PublishError, RearrangeError, Run, RunError, Runs, SeatError, Shot,
+    ShotRun, VPos, VSpec, VersionError, Vstream, MAX_REINSERTED_VALUES,
 };
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{
@@ -3043,6 +3043,23 @@ fn the_public_values_key_a_hash_set_by_the_equality_they_compare_on() {
         Shot { base: None, draft: None, runs: vec![] },
         Shot { base: Some(base(&pdoc(), 0)), draft: None, runs: vec![] },
     );
+}
+
+#[test]
+fn the_v_span_reading_hands_a_foreign_caller_the_parts_it_would_otherwise_index() {
+    // The reader is public so no neighbour re-extracts a V-span's parts by
+    // position: the three quantities come back named, and the content clause
+    // the neighbours add is answered by the reading itself. The reading is a
+    // VIEW into the span it read, so the span outlives it.
+    let content = vspan(1, 7, 4);
+    let read = as_ordinal_vspan(&content).expect("an ordinal V-span reads");
+    assert_eq!((read.subspace, read.ordinal, read.count), (&n(1), &n(7), &n(4)));
+    assert!(read.is_content());
+    assert!(!as_ordinal_vspan(&vspan(2, 1, 1)).expect("a link V-span reads").is_content());
+    // What the verdict refuses, the reading refuses: one shape, two forms.
+    let action_point_1 = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-legal");
+    assert!(as_ordinal_vspan(&action_point_1).is_none());
+    assert!(!is_ordinal_vspan(&action_point_1));
 }
 
 #[test]

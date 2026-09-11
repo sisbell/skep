@@ -427,14 +427,22 @@ where
     /// moves into the placement record rather than being cloned out of a
     /// borrow.
     ///
-    /// COST, AND WHO OWNS IT: the re-insert pushes `2n + 1` records for `n`
-    /// draft-native values, exactly as INSERT does, plus one placement whose
-    /// run count — the client's runs, coalesced, plus the base's deposit
-    /// runs — is capped at [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS),
-    /// measured as each run is accumulated; a ceiling a shot cannot be split
-    /// to meet, since the member it produces is born whole. The carried-run
-    /// test costs one sweep of the base's runs per supplied run. The wire caps
-    /// the run list; a route that carries this op owes the value count.
+    /// COST, AND WHO OWNS IT. The re-insert pushes a mint and a content write
+    /// per draft-native value — `2n` records for `n` values, INSERT's own
+    /// per-value step — beside the member's mint and one placement, whose run
+    /// count (the client's runs, coalesced, plus the base's deposit runs) is
+    /// capped at [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS), measured as each
+    /// run is accumulated: a ceiling a shot cannot be split to meet, since the
+    /// member it produces is born whole. Two terms are set by stored state
+    /// rather than by the request's size. The carried-run test sweeps the
+    /// base's runs once per supplied run. The existence check derives and
+    /// probes every address of every supplied run, stopping only at the first
+    /// one M4 does not hold — for a shot that commits, `Σ width` positions —
+    /// so a short run list walks as far as the stored content it names, each
+    /// run paying its whole width even where runs repeat one extent. The wire
+    /// caps the run COUNT and not `Σ width`, and `Σ width` is what the
+    /// existence walk and, over the draft-native runs, the re-insert both grow
+    /// with: it is the number a route that carries this op owes.
     pub fn publish(
         &self,
         caller: Caller,
@@ -477,20 +485,28 @@ where
                     return Err(PublishError::SourceNotRegistered);
                 }
             }
-            // Each run's origin document, derived from its own start (address
-            // arithmetic, no read) and required to be the document the
-            // client's stated `origin` projects to — then registered.
-            let mut origin_docs: Vec<Address> = Vec::with_capacity(shot.runs.len());
-            for r in &shot.runs {
-                let origin_doc = run_origin_document(&r.run).ok_or(PublishError::BadRun)?;
-                if origin_doc != trunk_of(&r.origin) {
-                    return Err(PublishError::BadRun);
-                }
-                if !m3.is_registered_document(&origin_doc) {
-                    return Err(PublishError::SourceNotRegistered);
-                }
-                origin_docs.push(origin_doc);
-            }
+            // Each run beside its origin document, derived from the run's own
+            // start (address arithmetic, no read) and required to be the
+            // document the client's stated `origin` projects to — then
+            // registered. From here the two travel as ONE value: the source
+            // gate, the existence check and the placement each walk this one
+            // list, so every question about a run is asked of that run's own
+            // origin document, and no second list has to stay in step with
+            // the runs for the gate to judge the run it is looking at.
+            let supplied: Vec<(Run, Address)> = shot
+                .runs
+                .into_iter()
+                .map(|r| -> Result<(Run, Address), PublishError> {
+                    let origin_doc = run_origin_document(&r.run).ok_or(PublishError::BadRun)?;
+                    if origin_doc != trunk_of(&r.origin) {
+                        return Err(PublishError::BadRun);
+                    }
+                    if !m3.is_registered_document(&origin_doc) {
+                        return Err(PublishError::SourceNotRegistered);
+                    }
+                    Ok((r.run, origin_doc))
+                })
+                .collect::<Result<_, _>>()?;
             // Slot 5: the model's refusal — a private document has no chain
             // to append to (PUB-2.9).
             if !published_target(m3, doc) {
@@ -537,14 +553,14 @@ where
             // it: a carried run marks nothing, so a later run from the same
             // origin that the base does not arrange is still asked about.
             let mut decided: BTreeSet<&Address> = BTreeSet::new();
-            for (r, origin_doc) in shot.runs.iter().zip(&origin_docs) {
+            for (run, origin_doc) in &supplied {
                 if *origin_doc == trunk || decided.contains(origin_doc) {
                     continue;
                 }
                 let carried = shot
                     .base
                     .as_ref()
-                    .is_some_and(|base| m5.arranges_run(&base.member, &r.run));
+                    .is_some_and(|base| m5.arranges_run(&base.member, run));
                 if carried {
                     continue;
                 }
@@ -553,13 +569,18 @@ where
                 }
                 decided.insert(origin_doc);
             }
-            // Existence (S3★): every address a run names holds a value —
-            // the draft-native run's bytes are what is re-inserted, and a
-            // by-reference run is the CLIENT's extent rather than one an
-            // arrangement resolved, so each address is asked, not only the
-            // start.
-            for r in &shot.runs {
-                if !r.run.addrs().all(|a| content.contains(a.tumbler())) {
+            // Existence (S3★): every address a run names holds a value. Each
+            // address is asked, not only the start: a by-reference run is the
+            // CLIENT's extent rather than one an arrangement resolved. And each
+            // is asked through `value_at`, the accessor the re-insert below
+            // reads the draft-native bytes with. COPY places by reference and
+            // reads no value back, so presence is the whole of its question;
+            // the shot does read them, and asking with the read's own accessor
+            // makes the answer found here the answer the re-insert gets — M4's
+            // fold only ever adds (S0), so no write staged in between can take
+            // a value away.
+            for (run, _) in &supplied {
+                if !run.addrs().all(|a| content.value_at(a.tumbler()).is_some()) {
                     return Err(PublishError::DanglingSource);
                 }
             }
@@ -567,19 +588,19 @@ where
             // draft-native ones re-minted as fresh identity under the
             // document's own I-space — then the base's post-render deposits.
             let mut placed: Vec<Run> = Vec::new();
-            for (r, origin_doc) in shot.runs.into_iter().zip(&origin_docs) {
-                if draft_doc.as_ref() == Some(origin_doc) {
-                    for a in r.run.addrs() {
+            for (run, origin_doc) in supplied {
+                if draft_doc.as_ref() == Some(&origin_doc) {
+                    for a in run.addrs() {
                         let val = stg
                             .working()
                             .content()
                             .value_at(a.tumbler())
                             .cloned()
-                            .expect("every address of every run was found present above");
+                            .expect("the existence check found a value at every address of every run, and M4's fold only adds");
                         allocate_for_placement::<_, PublishError>(stg, &trunk, val, &mut placed)?;
                     }
                 } else {
-                    extend_or_push_run(&mut placed, r.run);
+                    extend_or_push_run(&mut placed, run);
                 }
                 if placed.len() > MAX_PLACED_RUNS {
                     return Err(PublishError::TooManyRuns);

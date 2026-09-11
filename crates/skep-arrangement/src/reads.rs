@@ -297,13 +297,12 @@ impl M5State {
     /// Asked of the arrangement, which knows where its content ends, so the
     /// shot names a boundary and derives no count of its own.
     ///
-    /// Answered off the run-list's own clipped resolution: a count of `n_C`
-    /// from any opening ordinal reaches past the arranged end, where the
-    /// resolution clips. Lazy as that resolution is, so a consumer with a
-    /// budget of its own stops the walk at it. Absent doc ⇒ nothing.
+    /// Answered off the run-list's own suffix walk, which names no upper
+    /// bound and sums no total to find one. Lazy as that walk is, so a
+    /// consumer with a budget of its own stops it at the budget. Absent doc
+    /// ⇒ nothing.
     pub(crate) fn content_runs_past(&self, doc: &Address, extent: &Nat) -> impl Iterator<Item = Run> + '_ {
-        let list = self.content_list(doc);
-        list.iter_resolve_range(&(extent + &Nat::one()), &list.total_width())
+        self.content_list(doc).iter_resolve_from(&(extent + &Nat::one()))
     }
 
     /// Is `link` already seated in `doc`'s link subspace (§8, CL-UNIQ)? The

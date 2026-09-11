@@ -926,11 +926,21 @@ where
     ///   origin that is not this document, which CL-OWN forbids and no read
     ///   downstream would report.
     /// * `DanglingSource` is S3★ on the content side, and it is checked on run
-    ///   STARTS alone. Sound for the interior by induction: every address a
-    ///   source arranges was itself admitted through this gate or written by
-    ///   INSERT in the composite that placed it, so a present start implies a
-    ///   present run. The induction is over the ways an address can enter an
-    ///   arrangement — a new one obliges re-examining this check.
+    ///   STARTS alone. Sound for the interior by induction over the ways an
+    ///   address enters a content arrangement, each of which either admits a
+    ///   present address or inherits one: a run this gate admits was arranged
+    ///   in its source, whose interior is present by the same induction;
+    ///   INSERT and the shot's re-insert write every address they place, in
+    ///   the composite that places it (`allocate_for_placement`, J0); the
+    ///   shot's by-reference runs are probed at EVERY address before placement
+    ///   (they were not resolved from any arrangement), and its carried tail is
+    ///   read off the base's own arrangement, already inside the induction;
+    ///   VERSION shares an arrangement already inside it. Outside the induction
+    ///   is a record staged past the ops or decoded from a corrupt store —
+    ///   [`M5Rec`]'s seals and
+    ///   [`M5State::apply_m5`](crate::M5State::apply_m5)'s input class say
+    ///   how, and that is M2's integrity, not this gate's. A new way in joins
+    ///   this list, or this gate is re-examined.
     pub fn copy(
         &self,
         caller: Caller,

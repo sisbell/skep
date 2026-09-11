@@ -321,9 +321,7 @@ impl M5State {
                 if content.is_empty() {
                     self.clone()
                 } else {
-                    let provenance = self
-                        .provenance
-                        .append(new, content.iter_runs().map(|(_, run)| run));
+                    let provenance = self.provenance.append(new, content.iter());
                     let arr = DocArrangement {
                         content,
                         link: RunList::default(),

@@ -480,6 +480,35 @@ impl RunList {
             .flat_map(move |(lo, hi_excl)| self.slice_runs(lo, hi_excl))
     }
 
+    /// I-runs covering ordinals `[max(ord, 1), total]` — everything from the
+    /// boundary before `ord` to the arranged end, V-ordered, the boundary run
+    /// clipped as [`iter_resolve_range`](RunList::iter_resolve_range) clips it
+    /// and every later run yielded whole. The SUFFIX twin of that range walk,
+    /// for a caller that means "everything past a boundary": the list ends
+    /// where its runs end, so no upper bound is named and no total is summed
+    /// to find one — asking the range walk for `total_width()` positions
+    /// would walk the whole list once to learn a bound the walk then never
+    /// needs. LAZY as the range walk is, so a consumer with a budget of its
+    /// own stops the walk at it; an `ord` past the arranged end yields
+    /// nothing, and so does a list holding nothing.
+    ///
+    /// The `Nat` subtractions are over ordered operands: a run that is clipped
+    /// has `v_start < lo < v_reach`, so `lo − v_start` is an offset inside the
+    /// run and `v_reach − lo` is at least one — a run holding a position.
+    pub(crate) fn iter_resolve_from(&self, ord: &Nat) -> impl Iterator<Item = Run> + '_ {
+        let lo = std::cmp::max(ord.clone(), Nat::one());
+        self.iter_runs().filter_map(move |(v_start, run)| {
+            if v_start >= lo {
+                return Some(run.clone()); // opens at or past the boundary: whole
+            }
+            let v_reach = &v_start + &run.width; // the first ordinal past this run
+            (v_reach > lo).then(|| Run {
+                i_start: run.addr_at(&(&lo - &v_start)),
+                width: v_reach - &lo,
+            })
+        })
+    }
+
     /// Iterate `(v_start, run)` pairs — the implicit V-start is the running
     /// prefix sum + 1 (§1 iter_runs).
     pub(crate) fn iter_runs(&self) -> impl Iterator<Item = (Nat, &Run)> + '_ {
@@ -990,5 +1019,50 @@ mod tests {
         // would otherwise clip to a width the subtraction underflows on.
         assert!(frag.iter_resolve_range(&n(3), &n(0)).next().is_none());
         assert!(frag.iter_resolve_range(&n(0), &n(0)).next().is_none());
+    }
+
+    #[test]
+    fn the_suffix_walk_yields_what_the_range_walk_yields_past_the_end() {
+        // §1: the suffix walk is the range walk asked for more positions than
+        // the list holds — one past the total, so the range reaches the end
+        // from ordinal 0 as well, where the clamp opens it at 1 — reached
+        // without summing that total, and lazy the same way: stopping yields
+        // exactly the prefix of the whole answer. Asked from before the list,
+        // at 1, inside a run, at a seam, at the last position, at the end and
+        // past it.
+        let frag = list(vec![
+            run(&ca(1), 2),
+            run(&vca(1), 1),
+            run(&ca(5), 2),
+            run(&vca(5), 1),
+        ]);
+        let past_the_end = frag.total_width() + Nat::one();
+        for ord in [0u32, 1, 2, 3, 5, 6, 7, 99] {
+            let whole: Vec<Run> = frag.iter_resolve_from(&n(ord)).collect();
+            assert_eq!(
+                whole,
+                frag.iter_resolve_range(&n(ord), &past_the_end).collect::<Vec<_>>(),
+                "from {ord}: the range walk, reaching past the end"
+            );
+            for take in 0..=whole.len() {
+                assert_eq!(
+                    frag.iter_resolve_from(&n(ord)).take(take).collect::<Vec<_>>(),
+                    whole[..take],
+                    "from {ord}: stopped after {take}"
+                );
+            }
+        }
+        // The two ends, and the boundary run's clip: from the first position
+        // the whole list, run for run; from inside the first run its tail and
+        // everything after; from the last position that position alone; past
+        // the end nothing, as from an empty list.
+        assert_eq!(frag.iter_resolve_from(&n(1)).collect::<Vec<_>>(), frag.runs());
+        assert_eq!(
+            frag.iter_resolve_from(&n(2)).collect::<Vec<_>>(),
+            vec![run(&ca(2), 1), run(&vca(1), 1), run(&ca(5), 2), run(&vca(5), 1)]
+        );
+        assert_eq!(frag.iter_resolve_from(&n(6)).collect::<Vec<_>>(), vec![run(&vca(5), 1)]);
+        assert!(frag.iter_resolve_from(&n(7)).next().is_none());
+        assert!(RunList::default().iter_resolve_from(&n(1)).next().is_none());
     }
 }

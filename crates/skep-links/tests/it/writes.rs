@@ -1168,7 +1168,10 @@ fn makelink_resolves_deposits_and_seats() {
         assert_eq!(link.type_slot(), &Endset::from_spans([iext(3, 4)]));
         // Seated at home (K.μ⁺_L; J-LV: no provenance) — unlike Emit_K.
         assert_eq!(snap.world().m5().link_count(&doc1()), n(1));
-        assert_eq!(snap.world().m5().link_runs(&doc1())[0].i_start(), &l1);
+        assert_eq!(
+            snap.world().m5().link_runs(&doc1()).next().expect("a seated link run").i_start(),
+            &l1
+        );
         // FOLLOWLINK: coverage-exact slot read; arity bound; ⊥ for absence.
         assert_eq!(links.followlink(&l1, 3), Ok(SpanSet::singleton(iext(3, 4))));
         assert!(links.followlink(&l1, 4).is_err());

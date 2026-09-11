@@ -1,7 +1,6 @@
 //! §A / §3–§8 folds — M5's `WorldState` slice ([`M5State`]), its sole journal
 //! delta ([`M5Rec`]), and the pure fold ([`M5State::apply_m5`]).
 
-use num_traits::Zero;
 use serde::{Deserialize, Serialize};
 use skep_address::{content_subspace, link_subspace, Address, Nat};
 
@@ -274,8 +273,8 @@ impl M5State {
             // that document for good, CL-UNIQ being I-extent membership.
             M5Rec::LinkSeat { doc, link } => M5State {
                 arrangements: match Run::new(link.clone(), Nat::from(1u32)) {
-                    Some(seated) => self.arrangements_with_link(doc, |l| l.append(seated)),
-                    None => self.arrangements.clone(),
+                    Ok(seated) => self.arrangements_with_link(doc, |l| l.append(seated)),
+                    Err(_) => self.arrangements.clone(),
                 },
                 provenance: self.provenance.clone(),
             },
@@ -313,7 +312,7 @@ impl M5State {
                     .get(source)
                     .map(|arr| arr.content.clone())
                     .unwrap_or_default();
-                if content.total_width().is_zero() {
+                if content.is_empty() {
                     self.clone()
                 } else {
                     let provenance = self
@@ -344,6 +343,8 @@ impl M5State {
 
 #[cfg(test)]
 mod tests {
+    use num_traits::Zero;
+
     use super::*;
     use crate::testutil::{a, ca, doc1, doc2, la, n, run, vca, vdoc};
     use crate::vspace::VPos;
@@ -363,7 +364,7 @@ mod tests {
         let s0 = M5State::genesis();
         let s1 = place(&s0, &doc1(), 1, vec![run(&ca(1), 3)]);
         assert_eq!(s1.content_count(&doc1()), n(3));
-        assert_eq!(s1.content_runs(&doc1()), vec![run(&ca(1), 3)]);
+        assert_eq!(s1.content_runs(&doc1()).cloned().collect::<Vec<_>>(), vec![run(&ca(1), 3)]);
         // ever_contained ∖ image is empty right after a place…
         assert!(s1.deletions(&doc1()).is_empty());
         // …and the R side is visible through docs_ever_containing.
@@ -384,7 +385,10 @@ mod tests {
             width: n(2),
         });
         assert_eq!(s.content_count(&doc1()), n(3));
-        assert_eq!(s.content_runs(&doc1()), vec![run(&ca(1), 1), run(&ca(4), 2)]);
+        assert_eq!(
+            s.content_runs(&doc1()).cloned().collect::<Vec<_>>(),
+            vec![run(&ca(1), 1), run(&ca(4), 2)]
+        );
         // The deleted iextent [ca(2), ca(4)) is ever-contained minus image.
         let d = s.deletions(&doc1());
         let spans: Vec<_> = d.iter().cloned().collect();
@@ -405,7 +409,7 @@ mod tests {
         let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) });
         let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(2) });
         assert_eq!(s.link_count(&doc1()), n(2));
-        assert_eq!(s.link_runs(&doc1()), vec![run(&la(1), 2)]);
+        assert_eq!(s.link_runs(&doc1()).cloned().collect::<Vec<_>>(), vec![run(&la(1), 2)]);
         assert_eq!(s.content_count(&doc1()), n(0));
         // J-LV: no provenance from link seating.
         let cov = skep_address::SpanSet::singleton(run(&la(1), 2).iextent());
@@ -434,14 +438,18 @@ mod tests {
                 link: link.clone(),
             });
             assert_eq!(out.link_count(&doc1()), n(0), "{link:?} is no run start");
-            assert!(out.link_runs(&doc1()).is_empty(), "{link:?}");
+            assert_eq!(out.link_runs(&doc1()).len(), 0, "{link:?}");
             // And the subspace is still seatable afterwards, which is what
             // dropping buys and placing would have cost permanently.
             let after = out.apply_m5(&M5Rec::LinkSeat {
                 doc: doc1(),
                 link: la(1),
             });
-            assert_eq!(after.link_runs(&doc1()), vec![run(&la(1), 1)], "{link:?}");
+            assert_eq!(
+                after.link_runs(&doc1()).cloned().collect::<Vec<_>>(),
+                vec![run(&la(1), 1)],
+                "{link:?}"
+            );
             assert!(after.seats_link(&doc1(), &la(1)), "{link:?}");
         }
         // A well-formed seat still lands, so the assertions above are not
@@ -450,7 +458,7 @@ mod tests {
             doc: doc1(),
             link: la(1),
         });
-        assert_eq!(ok.link_runs(&doc1()), vec![run(&la(1), 1)]);
+        assert_eq!(ok.link_runs(&doc1()).cloned().collect::<Vec<_>>(), vec![run(&la(1), 1)]);
     }
 
     #[test]
@@ -465,12 +473,18 @@ mod tests {
             new: vdoc(),
         });
         assert_eq!(s.content_count(&vdoc()), n(4));
-        assert_eq!(s.content_runs(&vdoc()), s.content_runs(&doc1()));
+        assert_eq!(
+            s.content_runs(&vdoc()).collect::<Vec<_>>(),
+            s.content_runs(&doc1()).collect::<Vec<_>>()
+        );
         // Fork provenance recorded (a candidate for the shared region).
         let cov = skep_address::SpanSet::singleton(run(&ca(1), 2).iextent());
         assert_eq!(s.docs_ever_containing(&cov), vec![doc1(), vdoc()]);
         // Source untouched (V3).
-        assert_eq!(s.content_runs(&doc1()), vec![run(&ca(1), 2), run(&ca(1), 2)]);
+        assert_eq!(
+            s.content_runs(&doc1()).cloned().collect::<Vec<_>>(),
+            vec![run(&ca(1), 2), run(&ca(1), 2)]
+        );
     }
 
     #[test]
@@ -497,7 +511,10 @@ mod tests {
             };
             let record_bytes = bincode::serialize(&rec).expect("the record encodes").len();
             let forked = s.apply_m5(&rec);
-            assert_eq!(forked.content_runs(&vdoc()), s.content_runs(&doc1()));
+            assert_eq!(
+                forked.content_runs(&vdoc()).collect::<Vec<_>>(),
+                s.content_runs(&doc1()).collect::<Vec<_>>()
+            );
             (
                 s.content_runs(&doc1()).len(),
                 record_bytes,
@@ -542,10 +559,13 @@ mod tests {
             new: vdoc(),
         });
         // The content map is shared…
-        assert_eq!(s.content_runs(&vdoc()), s.content_runs(&doc1()));
+        assert_eq!(
+            s.content_runs(&vdoc()).collect::<Vec<_>>(),
+            s.content_runs(&doc1()).collect::<Vec<_>>()
+        );
         // …and the link subspace is not.
         assert_eq!(s.link_count(&vdoc()), n(0));
-        assert!(s.link_runs(&vdoc()).is_empty());
+        assert_eq!(s.link_runs(&vdoc()).len(), 0);
         // Both subspaces of the source are untouched (V3).
         assert_eq!(s.link_count(&doc1()), n(2));
         assert_eq!(s.content_count(&doc1()), n(2));
@@ -572,10 +592,13 @@ mod tests {
             width: n(1),
         });
         assert_eq!(s.content_count(&doc1()), n(2));
-        assert_eq!(s.content_runs(&doc1()), vec![run(&ca(2), 1), run(&ca(5), 1)]);
+        assert_eq!(
+            s.content_runs(&doc1()).cloned().collect::<Vec<_>>(),
+            vec![run(&ca(2), 1), run(&ca(5), 1)]
+        );
         // The fork still reads as doc1 did at the fork point.
         assert_eq!(s.content_count(&vdoc()), n(2));
-        assert_eq!(s.content_runs(&vdoc()), vec![run(&ca(1), 2)]);
+        assert_eq!(s.content_runs(&vdoc()).cloned().collect::<Vec<_>>(), vec![run(&ca(1), 2)]);
         // And the fork's R records the fork-point placement and nothing the
         // source placed afterwards.
         let later = skep_address::SpanSet::singleton(run(&ca(5), 1).iextent());
@@ -600,11 +623,7 @@ mod tests {
             new: vdoc(),
         });
         for doc in [doc1(), vdoc()] {
-            let arranged: Vec<Address> = s
-                .content_runs(&doc)
-                .into_iter()
-                .flat_map(Run::into_addrs)
-                .collect();
+            let arranged: Vec<Address> = s.content_runs(&doc).flat_map(Run::addrs).collect();
             assert_eq!(
                 arranged.len(),
                 5,

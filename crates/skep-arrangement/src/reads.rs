@@ -23,7 +23,7 @@ use num_traits::One;
 use skep_address::{content_subspace, difference_sets, union, Address, Nat, Span, SpanSet};
 
 use crate::run::Run;
-use crate::runlist::RunList;
+use crate::runlist::{RunList, Runs};
 use crate::state::{DocArrangement, M5State};
 use crate::vspace::{as_ordinal_vspan, ordinal_vspan, VPos};
 
@@ -109,10 +109,10 @@ impl M5State {
             .and_then(|vspan| {
                 self.arrangement_of(doc)
                     .list(vspan.subspace)
-                    .map(|list| (list, vspan.ordinal.clone(), vspan.count.clone()))
+                    .map(|list| list.iter_resolve_range(vspan.ordinal, vspan.count))
             })
             .into_iter()
-            .flat_map(|(list, ordinal, count)| list.iter_resolve_range(&ordinal, &count))
+            .flatten()
     }
 
     /// `M(d)(p)` (§2): the I-address at V-position `p`, or `None` when
@@ -139,26 +139,34 @@ impl M5State {
     /// stated on [`Run::iextent`], which every aggregator of run I-extents
     /// reaches, whether or not it comes through here).
     pub fn image(&self, doc: &Address, span: &Span) -> SpanSet {
-        self.resolve(doc, span).into_iter().map(|r| r.iextent()).collect()
+        self.iter_resolve(doc, span).map(|r| r.iextent()).collect()
     }
 
     /// The canonical, V-ordered content run decomposition — maximally merged
     /// (ASN-0058 M12), and so UNIQUE: two content arrangements are the same
-    /// V→I map exactly when their decompositions are equal. Absent doc ⇒ `[]`.
-    /// The runs tile the whole content prefix `[1, n_C]` contiguously (D-SEQ★,
-    /// stated on [`M5State`]), so the first begins at V-ordinal 1 and each
-    /// next where the previous ends.
-    pub fn content_runs(&self, doc: &Address) -> Vec<Run> {
-        self.content_list(doc).runs()
+    /// V→I map exactly when their decompositions are equal. Absent doc ⇒
+    /// yields nothing. The runs tile the whole content prefix `[1, n_C]`
+    /// contiguously (D-SEQ★, stated on [`M5State`]), so the first begins at
+    /// V-ordinal 1 and each next where the previous ends.
+    ///
+    /// LENT, not cloned: the runs are stored whole, so this hands out a borrow
+    /// of each. A caller that keeps runs `.cloned()` the ones it keeps; two
+    /// decompositions compare with `Iterator::eq` without collecting either;
+    /// and `.len()` is the number
+    /// [`content_run_count`](M5State::content_run_count) answers.
+    pub fn content_runs(&self, doc: &Address) -> Runs<'_> {
+        self.content_list(doc).iter()
     }
 
     /// The canonical, V-ordered link run decomposition — maximally merged, and
     /// so UNIQUE as [`content_runs`](M5State::content_runs)' is: two link
     /// arrangements are the same V→I map exactly when their decompositions
-    /// are equal. Absent doc ⇒ `[]`; it tiles `[1, n_L]` as `content_runs`
-    /// tiles the content prefix, D-SEQ★ holding per subspace.
-    pub fn link_runs(&self, doc: &Address) -> Vec<Run> {
-        self.link_list(doc).runs()
+    /// are equal. Absent doc ⇒ yields nothing; it tiles `[1, n_L]` as
+    /// `content_runs` tiles the content prefix, D-SEQ★ holding per subspace.
+    /// Lent as `content_runs`' runs are, and its `.len()` is
+    /// [`link_run_count`](M5State::link_run_count).
+    pub fn link_runs(&self, doc: &Address) -> Runs<'_> {
+        self.link_list(doc).iter()
     }
 
     /// `n_C(d)` — the arranged content width. Absent doc ⇒ 0. Under D-SEQ★
@@ -213,6 +221,15 @@ impl M5State {
     /// each op reports for a refusal stays with that op's error type.
     pub(crate) fn admits_content_boundary(&self, doc: &Address, ord: &Nat) -> bool {
         *ord >= Nat::one() && *ord <= &self.content_count(doc) + &Nat::one()
+    }
+
+    /// Does `doc` arrange no content — `n_C = 0`? Asked of the run-list's
+    /// emptiness, O(1), rather than of [`content_count`](M5State::content_count),
+    /// which sums every run's width to learn the same bit. COPY's
+    /// `EmptySource` and REARRANGE's `EmptyContentSubspace` ask it. Absent
+    /// doc ⇒ `true`.
+    pub(crate) fn content_is_empty(&self, doc: &Address) -> bool {
+        self.content_list(doc).is_empty()
     }
 
     /// Does `doc` ARRANGE content ordinal `ord` — is it a position holding an
@@ -394,10 +411,12 @@ impl M5State {
     /// naming two documents is not a small request whatever its size.
     pub fn deletions(&self, doc: &Address) -> SpanSet {
         let image = self.content_image(doc).by_level_class();
+        // A class the current image does not reach subtracts nothing.
+        let absent = SpanSet::empty();
         let mut out = SpanSet::empty();
         for (len, ever) in self.provenance.ever_contained(doc).by_level_class() {
-            let here = image.get(&len).cloned().unwrap_or_else(SpanSet::empty);
-            let deleted = difference_sets(&ever, &here).expect(
+            let here = image.get(&len).unwrap_or(&absent);
+            let deleted = difference_sets(&ever, here).expect(
                 "per-class operands share one length class, and every span of \
                  either is a run I-extent hence level-uniform — the gate passes",
             );
@@ -609,12 +628,16 @@ mod tests {
             s.provenance.ever_contained(&doc1()).len()
         );
         assert_eq!(s.recorded_span_count(&doc1()), 2, "two placements; the seats record nothing");
+        // Emptiness is the count's zero, asked of the list rather than summed:
+        // a document arranging content is not empty, whatever its links.
+        assert!(!s.content_is_empty(&doc1()));
         let s = s.apply_m5(&M5Rec::ContentRemove {
             doc: doc1(),
             from: n(1),
             width: n(5),
         });
         assert_eq!(s.content_run_count(&doc1()), 0);
+        assert!(s.content_is_empty(&doc1()), "every position removed, the links kept");
         assert_eq!(s.link_run_count(&doc1()), 1, "a text delete never touches the links");
         assert_eq!(s.recorded_span_count(&doc1()), 2, "R keeps what the delete removed");
         for count in [
@@ -623,6 +646,41 @@ mod tests {
             s.recorded_span_count(&doc2()),
         ] {
             assert_eq!(count, 0, "an absent document");
+        }
+        assert!(s.content_is_empty(&doc2()), "an absent document");
+    }
+
+    #[test]
+    fn the_runs_are_lent_in_v_order_with_their_length_and_reverse_walk() {
+        // §2: `content_runs`/`link_runs` lend the stored runs, and the loan
+        // forwards what the walk knows — the exact length, which is `#runs`,
+        // the reverse walk, and fusing. A hand-written wrapper can drop a
+        // forwarded capability without any signature changing, so each is
+        // asked of it here.
+        let s = arranged(); // ca(1..3) then vca(1..2)
+        let (first, second) = (run(&ca(1), 3), run(&vca(1), 2));
+        assert_eq!(s.content_runs(&doc1()).collect::<Vec<_>>(), vec![&first, &second]);
+        let mut lent = s.content_runs(&doc1());
+        assert_eq!(lent.len(), s.content_run_count(&doc1()));
+        assert_eq!(lent.len(), 2);
+        assert_eq!(lent.next(), Some(&first));
+        assert_eq!((lent.len(), lent.size_hint()), (1, (1, Some(1))), "the length tracks the walk");
+        assert_eq!(lent.next_back(), Some(&second), "the reverse walk meets the forward one");
+        assert_eq!(lent.len(), 0);
+        assert_eq!(lent.next(), None);
+        assert_eq!(lent.next(), None, "exhausted stays exhausted");
+        assert_eq!(
+            s.content_runs(&doc1()).rev().collect::<Vec<_>>(),
+            vec![&second, &first]
+        );
+        // The link subspace lends its own list, by the same walk.
+        let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) });
+        assert_eq!(s.link_runs(&doc1()).collect::<Vec<_>>(), vec![&run(&la(1), 1)]);
+        assert_eq!(s.link_runs(&doc1()).len(), s.link_run_count(&doc1()));
+        // An absent document lends nothing, in either subspace.
+        for mut none in [s.content_runs(&doc2()), s.link_runs(&doc2())] {
+            assert_eq!(none.len(), 0);
+            assert_eq!(none.next(), None);
         }
     }
 
@@ -654,7 +712,7 @@ mod tests {
         ] {
             assert!(count >= n(2), "the fixture arranges both subspaces");
             assert_eq!(
-                runs.iter().fold(n(0), |acc, r| acc + r.width()),
+                runs.fold(n(0), |acc, r| acc + r.width()),
                 count,
                 "subspace {subspace}: the count is the run widths' sum"
             );

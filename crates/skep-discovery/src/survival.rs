@@ -146,7 +146,9 @@ pub fn delete_orphans_on<W: DiscoveryWorld>(
     } else {
         None
     };
-    let mut retained = w.m5().link_runs(d); // a text delete never touches links
+    // Every link run is retained — a text delete never touches links — and
+    // cloned out of M5's loan, since the surviving content runs join it below.
+    let mut retained: Vec<_> = w.m5().link_runs(d).cloned().collect();
     for span in [prefix, suffix].into_iter().flatten() {
         retained.extend(w.m5().resolve(d, &span));
     }

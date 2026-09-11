@@ -939,8 +939,9 @@ fn p_shot_run(v: &Value) -> PResult<ShotRun> {
     let origin = field(m, "origin", p_addr)?;
     let i_start = field(m, "i_start", p_addr)?;
     let width = field(m, "width", p_nat)?;
-    let run = Run::new(i_start, width)
-        .ok_or_else(|| PErr("a run is a full element position and a width ≥ 1".into()))?;
+    // M5's verdict is a whole message already — the clause broken, under the
+    // run's own prefix ("run: …") — so the codec adds no frame of its own.
+    let run = Run::new(i_start, width).map_err(|e| PErr(e.to_string()))?;
     Ok(ShotRun { origin, run })
 }
 

@@ -162,9 +162,9 @@ pub use skep_address::{
     T12Clause, Tumbler,
 };
 // M5, the publish shot's three request values included: `Op::Publish` is
-// unbuildable without them, and `Run::new` is the one constructor of the
-// runs a shot carries.
-pub use skep_arrangement::{Base, Run, Shot, ShotRun, VPos, VSpec};
+// unbuildable without them, and `Run::new`/`RunError` is the one constructor
+// of the runs a shot carries.
+pub use skep_arrangement::{Base, Run, RunError, Shot, ShotRun, VPos, VSpec};
 pub use skep_content::Val; // M4
 // M8, `SlotSpec` included: every field of a `FourSet` is one, so the three
 // descriptor ops are unbuildable without it.

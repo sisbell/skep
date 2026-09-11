@@ -100,12 +100,11 @@ fn ext_span(s: Subspace, n: &Nat) -> Span {
 /// back a `Vec` would make the peak live heap of a two-document combine the
 /// size of both documents, from a request naming two addresses and nothing
 /// else; streaming makes it the size of the part the caller's filter keeps.
-/// Each run's positions are enumerated by the run that owns them, exactly as
-/// [`Query::retrieve_v`] does — `Run::into_addrs`, the owned form, because
-/// this iterator consumes the run-list and each run outlives only its own
-/// walk.
-fn current_content(m5: &M5State, d: &Address) -> impl Iterator<Item = Address> {
-    m5.content_runs(d).into_iter().flat_map(Run::into_addrs)
+/// Each run's positions are enumerated by the run that owns them —
+/// `Run::addrs`, over M5's lent run-list, so no run is cloned to be walked and
+/// the stream holds one cursor into the snapshot's arrangement.
+fn current_content<'a>(m5: &'a M5State, d: &Address) -> impl Iterator<Item = Address> + 'a {
+    m5.content_runs(d).flat_map(Run::addrs)
 }
 
 /// A stream of addresses as the deduplicated, T1-SORTED set it denotes. Both
@@ -164,7 +163,7 @@ fn debug_assert_sequential_positions(m5: &M5State, doc: &Address) {
             ),
             (Subspace::Link, m5.link_count(doc), m5.link_runs(doc)),
         ] {
-            let width_sum = runs.iter().fold(Nat::zero(), |acc, r| acc + r.width());
+            let width_sum = runs.fold(Nat::zero(), |acc, r| acc + r.width());
             debug_assert!(
                 width_sum == count,
                 "D-SEQ★: a subspace's run widths must sum to its count"

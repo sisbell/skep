@@ -132,13 +132,13 @@ pub fn project_on<W: DiscoveryWorld>(
         .map_err(|_| QueryError::NotALink)?; // Err(Invalid) ⇒ NotALink (a ∉ dom(L) OR slot OOB)
     let surface = reading_surface(w.m3(), d); // head-float, on the registered `d`
     // CONTENT runs, because M5's `project` joins the coverage against those
-    // alone — the factor priced is the factor multiplied. The count walks the
-    // run set M5 publishes, which is `#content_runs` itself: bounded by the
-    // quantity it prices, and one small allocation where the budget is
-    // nowhere near. The product is held here as well: M7 caps a stored slot
-    // at `MAX_SLOT_SPANS` on its deposit paths, which keeps today's product
-    // inside the square, but that is M7's number on M7's write path, and the
-    // join this function hands M5 is priced where it is incurred.
+    // alone — the factor priced is the factor multiplied. The count is
+    // `content_runs(..).len()`, which M5 answers from its list's own length —
+    // no run is read or cloned. The product is held here as well: M7 caps a
+    // stored slot at `MAX_SLOT_SPANS` on its deposit paths, which keeps
+    // today's product inside the square, but that is M7's number on M7's
+    // write path, and the join this function hands M5 is priced where it is
+    // incurred.
     if !join_within_budget(coverage.len(), w.m5().content_runs(&surface).len()) {
         return Err(QueryError::ImageTooLarge);
     }
@@ -256,7 +256,6 @@ pub fn addressably_discoverable_from_on<W: DiscoveryWorld>(
     // LP12's characterisation tested directly, per link — never the F-FULL
     // whole-document-stab membership route.
     let extents: Vec<Span> = content_runs
-        .into_iter()
         .chain(link_runs)
         .map(|r| r.iextent())
         .collect(); // ran(M(reading_surface(d))) as I-extents, BOTH subspaces (LP12)

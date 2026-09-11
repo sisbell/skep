@@ -299,11 +299,14 @@ where
         // chain's frontier to find where it lands — the head's
         // (`head_lock_key`), so the landing decided inside cannot move under
         // it. Both are arithmetic on the request.
-        let declared = deposit == Deposit::Declared;
         let mut keys = vec![M3State::content_lock_key(doc)];
-        if declared {
-            keys.push(head_lock_key(doc));
-        }
+        let declared = match deposit {
+            Deposit::Undeclared => false,
+            Deposit::Declared => {
+                keys.push(head_lock_key(doc));
+                true
+            }
+        };
         self.kernel.transact(&keys, |stg| {
             gate_write(
                 stg.working().m3(),
@@ -564,12 +567,12 @@ where
             // judged against the head every floating reader answers from,
             // read before the member is minted.
             let head = trunk_head(m3, doc);
-            let anchor: Address = match &shot.base {
+            let anchor: &Address = match &shot.base {
                 None => {
                     if head.is_some() {
                         return Err(PublishError::BaseSuperseded);
                     }
-                    trunk.clone()
+                    &trunk
                 }
                 Some(base) => {
                     if base.member == trunk {
@@ -587,9 +590,9 @@ where
                     // base that is still the head ⇒ the trunk's next member;
                     // else the base's daughter.
                     if base.member == trunk || head.as_ref() == Some(&base.member) {
-                        trunk.clone()
+                        &trunk
                     } else {
-                        base.member.clone()
+                        &base.member
                     }
                 }
             };
@@ -668,7 +671,7 @@ where
             }
             // The member: born published (PUB-2.5, PUB-2.10), under the
             // anchor decided above.
-            let (member, m3rec) = stg.working().m3().mint_version(&anchor, true)?;
+            let (member, m3rec) = stg.working().m3().mint_version(anchor, true)?;
             stg.push(m3rec.into());
             if !placed.is_empty() {
                 stg.push(
@@ -888,7 +891,7 @@ where
                     if !vspan.is_content() {
                         return Err(CopyError::SourceNotContentSubspace);
                     }
-                    if world.m5().content_count(&spec.source).is_zero() {
+                    if world.m5().content_is_empty(&spec.source) {
                         return Err(CopyError::EmptySource);
                     }
                     // Resolved BEFORE staging ⇒ a self-copy sees the pre-edit
@@ -1059,9 +1062,12 @@ where
                 if published_target(stg.working().m3(), doc) {
                     return Err(RearrangeError::PublishedTarget);
                 }
-                if cuts.len() != 3 && cuts.len() != 4 {
-                    return Err(RearrangeError::BadCutCount);
-                }
+                // Three cuts or four (R-PRE), binding the first and the last:
+                // the two the bounds check below asks the arrangement about.
+                let (first, last) = match cuts {
+                    [first, _, last] | [first, _, _, last] => (first, last),
+                    _ => return Err(RearrangeError::BadCutCount),
+                };
                 // Ascent is judged on the ordinals alone, not on `VPos`'s own
                 // order: a cut's subspace is the NEXT verdict's subject, and
                 // comparing whole positions would answer a stray subspace here
@@ -1076,12 +1082,12 @@ where
                 // Strict ascent is established above, so asking the
                 // arrangement about the first and last cut settles CS5 for
                 // every cut between them.
-                if !m5.admits_content_boundary(doc, &cuts[0].ordinal)
-                    || !m5.admits_content_boundary(doc, &cuts[cuts.len() - 1].ordinal)
+                if !m5.admits_content_boundary(doc, &first.ordinal)
+                    || !m5.admits_content_boundary(doc, &last.ordinal)
                 {
                     return Err(RearrangeError::OutOfBounds);
                 }
-                if m5.content_count(doc).is_zero() {
+                if m5.content_is_empty(doc) {
                     return Err(RearrangeError::EmptyContentSubspace);
                 }
                 let cut_ordinals: Vec<Nat> = cuts.iter().map(|c| c.ordinal.clone()).collect();
@@ -1294,19 +1300,19 @@ where
             // read on the DOCUMENT a version member projects to (PUB-2.15).
             let source_published = published_target(m3, source);
             let fork_published = published.unwrap_or(source_published);
-            // PUB-6.36 slot 5, the own-source arm alone (PUB-2.14): private
-            // documents are versionless (PUB-2.9), and a published one
-            // admits no private member (PUB-2.7).
-            if matches!(&branch, Branch::Owned) {
-                if !source_published {
-                    return Err(VersionError::PrivateSourceVersionless);
-                }
-                if !fork_published {
-                    return Err(VersionError::PrivateVersionOfPublished);
-                }
-            }
             let (v, m3rec) = match &branch {
-                Branch::Owned => m3.mint_version(source, fork_published),
+                // PUB-6.36 slot 5, the own-source arm alone (PUB-2.14):
+                // private documents are versionless (PUB-2.9), and a
+                // published one admits no private member (PUB-2.7).
+                Branch::Owned => {
+                    if !source_published {
+                        return Err(VersionError::PrivateSourceVersionless);
+                    }
+                    if !fork_published {
+                        return Err(VersionError::PrivateVersionOfPublished);
+                    }
+                    m3.mint_version(source, fork_published)
+                }
                 Branch::CrossOwner(prefix) => m3.mint_document(prefix, fork_published),
             }?;
             // The arrangement shared is the source's reading surface — its
@@ -1916,7 +1922,7 @@ mod tests {
             .publish(p1, &pdoc(), shot_off_the_head(1, vec![]), &anyone)
             .expect("a tail of exactly the budget is carried");
         assert_eq!(
-            k.snapshot().world().m5().content_runs(&member),
+            k.snapshot().world().m5().content_runs(&member).cloned().collect::<Vec<_>>(),
             head_runs[1..].to_vec()
         );
     }

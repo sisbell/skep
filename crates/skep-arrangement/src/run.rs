@@ -9,6 +9,9 @@
 //! crate-private, the first two carrying a `k ≤ width` precondition nothing
 //! can report and the third an operand the level-class discipline governs.
 
+use std::error::Error;
+use std::fmt;
+
 use num_traits::{One, Zero};
 use serde::{Deserialize, Serialize};
 use skep_address::{intersect, shift, validate, Address, Nat, Span, Tumbler};
@@ -30,26 +33,26 @@ use skep_address::{intersect, shift, validate, Address, Nat, Span, Tumbler};
 /// this crate minted.
 ///
 /// Fields are CRATE-PRIVATE: a foreign crate can neither build a `Run` by
-/// struct literal nor mutate one it holds — including an OWNED `Run` returned
-/// by `resolve`/`content_runs`/`link_runs` — so runs are read-only across
-/// every seam (M6/M7/M8 read via the [`i_start`](Run::i_start)/
-/// [`width`](Run::width) accessors). [`Run::new`] is the sole foreign
-/// constructor, and it is also the DESERIALIZATION path: a decoded Run
-/// re-enters it through the serde shadow below, so a journalled
-/// [`ContentPlace`](crate::M5Rec::ContentPlace) cannot carry a Run the
-/// constructor would refuse, and a journalled
+/// struct literal nor mutate one it holds — including an OWNED `Run` that
+/// `resolve` returns or that a caller clones out of `content_runs` or
+/// `link_runs` — so runs are read-only across every seam (M6/M7/M8 read via
+/// the [`i_start`](Run::i_start)/[`width`](Run::width) accessors).
+/// [`Run::new`] is the sole foreign constructor, and it is also the
+/// DESERIALIZATION path: a decoded Run re-enters it through the serde shadow
+/// below, so a journalled [`ContentPlace`](crate::M5Rec::ContentPlace) cannot
+/// carry a Run the constructor would refuse, and a journalled
 /// [`LinkSeat`](crate::M5Rec::LinkSeat) — which carries a bare `Address` and
 /// so re-enters T4 alone — is minted through it by the fold. That is what
-/// justifies the `.expect`s in the
-/// run's own position arithmetic — they rest on the type, not on M2's
-/// checkpoint integrity.
+/// justifies the `.expect`s in the run's own position arithmetic — they rest
+/// on the type, not on M2's checkpoint integrity.
 ///
 /// `Hash` agrees with `Eq`: a run IS its start and its width, so a set or map
 /// keyed on runs keys on exactly that pair, and no caller spells a proxy key
 /// that could drop half of it. There is no `Ord`. A run's place in an
 /// arrangement is its V-order, which the value does not carry; an I-order
 /// derived from the fields would let `runs.sort()` compile on the V-ordered
-/// sequences `resolve` and `content_runs` return, and scramble them.
+/// sequences `resolve` returns and `content_runs` lends, once collected, and
+/// scramble them.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "RunShadow")]
 pub struct Run {
@@ -57,12 +60,38 @@ pub struct Run {
     pub(crate) width: Nat,
 }
 
+/// Why [`Run::new`] refused — the standing invariant broken, one variant per
+/// clause, checked in declaration order, so a zero-width run with a bad start
+/// answers `ZeroWidth` (as M1's `T12Clause` and `ElemError` name theirs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RunError {
+    /// `width == 0`: a run holds at least one position.
+    ZeroWidth,
+    /// `i_start` is not a full element position `doc·0·subspace·ordinal` — an
+    /// element field of exactly two components, the shape the run's ordinal
+    /// arithmetic stands on.
+    NotAnElementPosition,
+}
+
+impl fmt::Display for RunError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            RunError::ZeroWidth => "run: width must be ≥ 1",
+            RunError::NotAnElementPosition => {
+                "run: i_start is not a full element position (doc·0·subspace·ordinal)"
+            }
+        })
+    }
+}
+impl Error for RunError {}
+
 /// The deserialization mint path (the serde `try_from` shadow, as M1's
 /// `Address`/`Span`/`Tumbler` each carry one): decoded field-by-field, then
 /// re-entered through [`Run::new`], so a `width = 0` or a start that is not a
 /// full element position in a journal or a checkpoint is a decode failure M2
-/// reports as corruption rather than a value that panics [`Run::iextent`] on
-/// the next fold to touch it.
+/// reports as corruption — naming the clause, the constructor's own
+/// [`RunError`] being the failure — rather than a value that panics
+/// [`Run::iextent`] on the next fold to touch it.
 ///
 /// It reads exactly what a `Run` writes: the same two fields in the same
 /// order, and `Serialize` is derived on `Run` itself, so the shadow costs the
@@ -74,10 +103,9 @@ struct RunShadow {
 }
 
 impl TryFrom<RunShadow> for Run {
-    type Error = &'static str;
-    fn try_from(s: RunShadow) -> Result<Run, &'static str> {
+    type Error = RunError;
+    fn try_from(s: RunShadow) -> Result<Run, RunError> {
         Run::new(s.i_start, s.width)
-            .ok_or("run: width ≥ 1 and a full element-position i_start (doc·0·subspace·ordinal)")
     }
 }
 
@@ -140,35 +168,39 @@ impl Run {
         a.element_field().is_some_and(|e| e.len() == 2)
     }
 
-    /// Checked constructor — the ONE door: `None` iff `width == 0` OR
-    /// `i_start` is not a full element position `doc·0·subspace·ordinal`.
-    /// Every Run that is not built by M5's own emission sites walks through
-    /// here, an external producer and a decoded journal or checkpoint alike —
-    /// the serde `try_from` shadow routes deserialization into this function.
+    /// Checked constructor — the ONE door, refusing with the clause broken:
+    /// [`RunError::ZeroWidth`] when `width == 0`, else
+    /// [`RunError::NotAnElementPosition`] when `i_start` is not a full element
+    /// position `doc·0·subspace·ordinal`. Every Run that is not built by M5's
+    /// own emission sites walks through here, an external producer and a
+    /// decoded journal or checkpoint alike — the serde `try_from` shadow
+    /// routes deserialization into this function.
     ///
     /// M5's own sites divide in two. The PROPAGATING ones — run-list
-    /// split/coalesce, `resolve`, `content_runs`/`link_runs`, the content
-    /// placing fold — build Runs by the in-crate struct literal from a start
-    /// that is already one: a start reaching them is a minted element address
-    /// or an in-crate ordinal shift of one, and such a shift preserves the
-    /// element field's length. The two ORIGINATING ones establish it instead,
-    /// and each does so at its own door: `allocate_for_placement` — INSERT's
-    /// per-value step, which the publish shot's re-insert shares — places
-    /// what `M3State::mint_content` returns, which is `doc·0·s_C·ordinal` by
-    /// construction, and the `LinkSeat` fold seats an address that arrives in
-    /// a record, so it calls THIS function — `stage_seat_link` checks the
-    /// shape on the live path, but a replayed record's `Address` re-enters
-    /// only M1's `validate`, and T4-validity does not imply a full element
-    /// position.
+    /// split/coalesce, `resolve`, the content placing fold — build Runs by the
+    /// in-crate struct literal from a start that is already one: a start
+    /// reaching them is a minted element address or an in-crate ordinal shift
+    /// of one, and such a shift preserves the element field's length. The two
+    /// ORIGINATING ones establish it instead, and each does so at its own
+    /// door: `allocate_for_placement` — INSERT's per-value step, which the
+    /// publish shot's re-insert shares — places what `M3State::mint_content`
+    /// returns, which is `doc·0·s_C·ordinal` by construction, and the
+    /// `LinkSeat` fold seats an address that arrives in a record, so it calls
+    /// THIS function — `stage_seat_link` checks the shape on the live path,
+    /// but a replayed record's `Address` re-enters only M1's `validate`, and
+    /// T4-validity does not imply a full element position.
     ///
     /// Field privacy then closes the mutate-after-obtain path: a foreign
     /// holder cannot later set `width = 0` or swap `i_start` on any Run it
     /// obtained, owned or borrowed.
-    pub fn new(i_start: Address, width: Nat) -> Option<Run> {
-        if width.is_zero() || !Run::admits_start(&i_start) {
-            return None;
+    pub fn new(i_start: Address, width: Nat) -> Result<Run, RunError> {
+        if width.is_zero() {
+            return Err(RunError::ZeroWidth);
         }
-        Some(Run { i_start, width })
+        if !Run::admits_start(&i_start) {
+            return Err(RunError::NotAnElementPosition);
+        }
+        Ok(Run { i_start, width })
     }
 
     /// Read accessor — with [`width`](Run::width), the only foreign field
@@ -271,10 +303,10 @@ impl Run {
 
     /// The run's addresses, TAKING THE RUN — the same sequence
     /// [`addrs`](Run::addrs) yields, for a caller that owns the run rather
-    /// than keeping it. That is the commoner shape at M5's seams: `resolve`,
-    /// `content_runs` and `link_runs` all hand back `Vec<Run>`, so a consumer
-    /// flat-mapping runs to addresses holds each run only for as long as it
-    /// walks it, and the borrowing form cannot outlive the vector it consumes.
+    /// than keeping it. That is the shape `resolve` hands back — `Vec<Run>`,
+    /// runs it clipped and so owns — and a consumer flat-mapping those runs to
+    /// addresses holds each run only for as long as it walks it, where the
+    /// borrowing form cannot outlive the vector it consumes.
     ///
     /// The two share a body rather than one calling the other: expressing this
     /// through `addrs` would need the run alive beside the iterator, and
@@ -395,22 +427,26 @@ mod tests {
 
     #[test]
     fn new_rejects_width_zero_and_starts_that_are_not_full_element_positions() {
-        // Interface: None ⇔ width == 0 ∨ the element field is not exactly
-        // [subspace, ordinal].
-        assert!(Run::new(ca(1), n(0)).is_none());
-        assert!(Run::new(a(&[1, 0, 1, 0, 1]), n(1)).is_none()); // Document, zeros = 2
-        assert!(Run::new(a(&[1, 0, 1]), n(1)).is_none()); // Account, zeros = 1
+        // Interface: Err ⇔ width == 0 ∨ the element field is not exactly
+        // [subspace, ordinal], and the verdict names the clause broken.
+        let bad_start = Err(RunError::NotAnElementPosition);
+        assert_eq!(Run::new(ca(1), n(0)), Err(RunError::ZeroWidth));
+        assert_eq!(Run::new(a(&[1, 0, 1, 0, 1]), n(1)), bad_start); // Document, zeros = 2
+        assert_eq!(Run::new(a(&[1, 0, 1]), n(1)), bad_start); // Account, zeros = 1
         // The starts element level alone would have admitted. A SUBSPACE BASE
         // `doc·0·s`: T4-valid, zeros = 3, `subspace()` answers — and its last
         // component is the subspace id, so `tumbler_at(1)` would advance
         // content → link (M1's TA7a) and `iextent` would cover the whole
         // subspace rather than one position.
         assert_eq!(a(&[1, 0, 1, 0, 1, 0, 1]).level(), skep_address::Level::Element);
-        assert!(Run::new(a(&[1, 0, 1, 0, 1, 0, 1]), n(1)).is_none()); // content base
-        assert!(Run::new(a(&[1, 0, 1, 0, 1, 0, 2]), n(1)).is_none()); // link base
+        assert_eq!(Run::new(a(&[1, 0, 1, 0, 1, 0, 1]), n(1)), bad_start); // content base
+        assert_eq!(Run::new(a(&[1, 0, 1, 0, 1, 0, 2]), n(1)), bad_start); // link base
         // And a field T7 leaves open to further subdivision, whose last
         // component is not an ordinal either.
-        assert!(Run::new(a(&[1, 0, 1, 0, 1, 0, 1, 2, 3]), n(1)).is_none());
+        assert_eq!(Run::new(a(&[1, 0, 1, 0, 1, 0, 1, 2, 3]), n(1)), bad_start);
+        // Both clauses broken: the width is asked first, as the variants are
+        // declared, so the verdict does not depend on which bad start it is.
+        assert_eq!(Run::new(a(&[1, 0, 1, 0, 1]), n(0)), Err(RunError::ZeroWidth));
         let r = Run::new(ca(3), n(2)).expect("a full element position with width ≥ 1 is admitted");
         assert_eq!(r.i_start(), &ca(3));
         assert_eq!(r.width(), &n(2));
@@ -493,7 +529,7 @@ mod tests {
 
     #[test]
     fn taking_the_run_yields_the_same_sequence_as_borrowing_it() {
-        // §A: the owned form is the shape M5's own seams hand back — a
+        // §A: the owned form is the shape `resolve` hands back — a
         // `Vec<Run>` flat-mapped to addresses — and it must denote exactly
         // what the borrowing form does, since the two carry the same body for
         // the reason stated on `into_addrs` rather than one calling the other.
@@ -657,15 +693,20 @@ mod tests {
             width: n(0),
         })
         .expect("the shadow encodes");
-        assert!(bincode::deserialize::<Run>(&zero).is_err(), "width 0 is not a run");
+        let refused = bincode::deserialize::<Run>(&zero).expect_err("width 0 is not a run");
+        // The corruption report names the clause the bytes broke: the
+        // decoder's message is the constructor's own verdict.
+        assert!(refused.to_string().contains(&RunError::ZeroWidth.to_string()), "{refused}");
         let document = bincode::serialize(&Wire {
             i_start: a(&[1, 0, 1, 0, 1]),
             width: n(1),
         })
         .expect("the shadow encodes");
+        let refused = bincode::deserialize::<Run>(&document)
+            .expect_err("a document-level start is not a run start");
         assert!(
-            bincode::deserialize::<Run>(&document).is_err(),
-            "a document-level start is not a run start"
+            refused.to_string().contains(&RunError::NotAnElementPosition.to_string()),
+            "{refused}"
         );
         let base = bincode::serialize(&Wire {
             i_start: a(&[1, 0, 1, 0, 1, 0, 2]),

@@ -7,7 +7,7 @@ use std::path::Path;
 
 use serde_json::Value;
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
-use skep_arrangement::{Base, Run, Shot, ShotRun, VPos, VSpec};
+use skep_arrangement::{Base, Run, RunError, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{FourSet, OrphanReport, SlotSpec, SupClaim, Window};
 use skep_febe::{
@@ -369,7 +369,7 @@ fn every_op_round_trips_canonically() {
 /// all (wire v7.3): `base` without `base_extent` and `base_extent` without
 /// `base` are both parse faults, and a run that is no run — a zero width, a
 /// start that is not a full element position — is refused at the door
-/// through M5's own `Run::new`, never coerced.
+/// through M5's own `Run::new`, never coerced, and told which it is.
 #[test]
 fn a_shot_base_travels_with_its_extent_and_a_run_is_a_run() {
     let codec = JsonCodec;
@@ -402,6 +402,13 @@ fn a_shot_base_travels_with_its_extent_and_a_run_is_a_run() {
     ] {
         assert!(codec.parse(&run(bad)).is_err(), "{bad} is no run");
     }
+    // The refusal names the clause the run broke — M5's own verdict — so a
+    // zero width and a start that is not an element position read apart.
+    let refusal = |body: &str| codec.parse(&run(body)).err().expect("no run").to_string();
+    let zero = refusal(r#"{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"0"}"#);
+    assert!(zero.contains(&RunError::ZeroWidth.to_string()), "{zero}");
+    let document = refusal(r#"{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1","width":"1"}"#);
+    assert!(document.contains(&RunError::NotAnElementPosition.to_string()), "{document}");
 }
 
 /// The idempotency id rides the frame and survives the round trip.

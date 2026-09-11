@@ -26,7 +26,7 @@ use skep_address::{subtree_of, validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{
     ordinal_vspan, reading_surface, seat_link, stage_seat_link, trunk_head, Base, Caller,
     CopyError, DeleteError, Deposit, HasM5, InsertError, M5State, PublishError, RearrangeError,
-    Run, SeatError, Shot, ShotRun, VPos, VSpec, VersionError, Vstream,
+    Run, RunError, Runs, SeatError, Shot, ShotRun, VPos, VSpec, VersionError, Vstream,
 };
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{
@@ -355,7 +355,7 @@ fn readable_by(p: PrincipalId) -> impl Fn(&World, &Address) -> bool {
 /// The addresses a document's content runs start at, in V-order — what "no
 /// address of the draft" is asserted over.
 fn run_starts(m5: &M5State, doc: &Address) -> Vec<Address> {
-    m5.content_runs(doc).iter().map(|r| r.i_start().clone()).collect()
+    m5.content_runs(doc).map(|r| r.i_start().clone()).collect()
 }
 
 /// A consult that reads `allowed` alone — the world it is handed plays no
@@ -388,7 +388,7 @@ fn insert_mints_writes_places_and_returns_the_run_start() {
     let m5 = s.world().m5();
     assert_eq!(m5.content_count(&doc1()), n(3));
     // Held-lock mints are contiguous ⇒ exactly ONE placed run.
-    let runs = m5.content_runs(&doc1());
+    let runs: Vec<&Run> = m5.content_runs(&doc1()).collect();
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].i_start(), &ca(1));
     assert_eq!(runs[0].width(), &n(3));
@@ -488,7 +488,7 @@ fn copy_transcludes_by_reference_and_records_provenance() {
     assert_eq!(s.world().content().len(), stored_before); // nothing minted/written
     let m5 = s.world().m5();
     assert_eq!(m5.content_count(&doc2()), n(2));
-    let runs = m5.content_runs(&doc2());
+    let runs: Vec<&Run> = m5.content_runs(&doc2()).collect();
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].i_start(), &ca(1)); // doc1's address, carried verbatim (S7)
     assert_eq!(read_v(&s, &doc2(), 2), b"b".to_vec());
@@ -842,8 +842,12 @@ fn owned_version_shares_the_map_and_diverges_copy_on_write() {
     {
         let s = k.snapshot();
         let m5 = s.world().m5();
-        assert_eq!(m5.content_runs(&fork), m5.content_runs(&pdoc()));
-        let cov = SpanSet::singleton(m5.content_runs(&pdoc())[0].iextent());
+        assert_eq!(
+            m5.content_runs(&fork).collect::<Vec<_>>(),
+            m5.content_runs(&pdoc()).collect::<Vec<_>>()
+        );
+        let first = m5.content_runs(&pdoc()).next().expect("pdoc arranges a run");
+        let cov = SpanSet::singleton(first.iextent());
         assert_eq!(m5.docs_ever_containing(&cov), vec![pdoc(), vdoc()]);
         // V2: the snapshot is of the CONTENT subspace. The source's seated
         // link stays the source's — carried over it would sit in the fork
@@ -880,7 +884,10 @@ fn cross_owner_version_mints_under_the_forkers_account() {
     assert_eq!(fork, a(&[1, 0, 2, 0, 1]));
     let s = k.snapshot();
     let m5 = s.world().m5();
-    assert_eq!(m5.content_runs(&fork), m5.content_runs(&doc1()));
+    assert_eq!(
+        m5.content_runs(&fork).collect::<Vec<_>>(),
+        m5.content_runs(&doc1()).collect::<Vec<_>>()
+    );
     // The copy inherits the draft's private bit (PUB-8.17).
     assert!(!s.world().m3().published(&fork));
 }
@@ -918,8 +925,8 @@ fn a_parent_accounts_principal_versions_its_sub_accounts_document_across_ownersh
     );
     assert!(!m3.published(&fork), "inheriting the private source's bit");
     assert_eq!(
-        s.world().m5().content_runs(&fork),
-        s.world().m5().content_runs(&subdoc)
+        s.world().m5().content_runs(&fork).collect::<Vec<_>>(),
+        s.world().m5().content_runs(&subdoc).collect::<Vec<_>>()
     );
     // The sub-account's own principal is on the owned arm, and its private
     // draft is versionless, as any owner's is.
@@ -943,7 +950,7 @@ fn version_of_an_empty_source_has_a_zero_content_footprint() {
     let s = k.snapshot();
     assert!(s.world().m3().is_registered_document(&fork));
     assert_eq!(s.world().m5().content_count(&fork), n(0));
-    assert!(s.world().m5().content_runs(&fork).is_empty());
+    assert_eq!(s.world().m5().content_runs(&fork).len(), 0);
 }
 
 #[test]
@@ -1080,8 +1087,14 @@ fn the_cross_owner_arm_is_refused_by_neither_version_chain_rule() {
     // source's chain: the source's own chain is still empty.
     assert!(!m3.is_registered_document(&vdoc()));
     let m5 = s.world().m5();
-    assert_eq!(m5.content_runs(&private_copy), m5.content_runs(&pdoc()));
-    assert_eq!(m5.content_runs(&of_draft), m5.content_runs(&doc1()));
+    assert_eq!(
+        m5.content_runs(&private_copy).collect::<Vec<_>>(),
+        m5.content_runs(&pdoc()).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        m5.content_runs(&of_draft).collect::<Vec<_>>(),
+        m5.content_runs(&doc1()).collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -1426,7 +1439,10 @@ fn a_shot_appends_the_next_trunk_member_from_the_clients_runs() {
     assert_eq!(m5.content_count(&member), n(5));
     // The re-minted text continues the edition's own content chain, so it
     // coalesces with the by-reference run: ONE run under pdoc.
-    assert_eq!(m5.content_runs(&member), vec![Run::new(pca(1), n(5)).expect("a run")]);
+    assert_eq!(
+        m5.content_runs(&member).cloned().collect::<Vec<_>>(),
+        vec![Run::new(pca(1), n(5)).expect("a run")]
+    );
     assert_eq!(read_v(&s, &member, 4), b"d".to_vec());
     assert_eq!(read_v(&s, &member, 5), b"e".to_vec());
     assert!(
@@ -2228,7 +2244,10 @@ fn a_declared_deposit_into_a_published_chain_lands_in_the_head_member_alone() {
         let s = k.snapshot();
         let m5 = s.world().m5();
         assert_eq!(m5.content_count(&member2), n(5));
-        assert_eq!(m5.content_runs(&member2), m5.content_runs(&member1));
+        assert_eq!(
+            m5.content_runs(&member2).collect::<Vec<_>>(),
+            m5.content_runs(&member1).collect::<Vec<_>>()
+        );
         assert_eq!(reading_surface(s.world().m3(), &pdoc()), member2);
     }
     // Named by the PINNED member1: the deposit lands in the head member2,
@@ -2269,8 +2288,8 @@ fn a_version_of_a_pinned_member_forks_the_member_not_the_head() {
     let s = k.snapshot();
     let m5 = s.world().m5();
     assert_eq!(
-        m5.content_runs(&daughter),
-        m5.content_runs(&member1),
+        m5.content_runs(&daughter).collect::<Vec<_>>(),
+        m5.content_runs(&member1).collect::<Vec<_>>(),
         "the member it names, not the head"
     );
 }
@@ -2519,7 +2538,7 @@ fn seating_appends_a_home_link_refuses_a_reseat_and_never_touches_r() {
         let m5 = s.world().m5();
         assert_eq!(m5.link_count(&doc1()), n(2));
         // Sequential link allocations coalesce to one maximally-merged run.
-        let runs = m5.link_runs(&doc1());
+        let runs: Vec<&Run> = m5.link_runs(&doc1()).collect();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].i_start(), &link1);
         assert_eq!(m5.point(&doc1(), &vp(2, 2)), Some(link2.clone()));
@@ -2616,7 +2635,7 @@ fn mixed_length_transclusion_flows_through_the_level_class_discipline() {
         let s = k.snapshot();
         let m5 = s.world().m5();
         assert_eq!(m5.content_count(&doc2()), n(4));
-        let runs = m5.content_runs(&doc2());
+        let runs: Vec<&Run> = m5.content_runs(&doc2()).collect();
         assert_eq!(runs.len(), 2); // cross-length runs never coalesce
         assert_eq!(runs[0].i_start(), &pca(1));
         assert_eq!(runs[1].i_start(), &vca(1));
@@ -2658,8 +2677,8 @@ fn reads_fold_an_absent_document_to_empty_results() {
     let m5 = s.world().m5();
     assert!(m5.resolve(&doc2(), &vspan(1, 1, 1)).is_empty());
     assert_eq!(m5.point(&doc2(), &vp(1, 1)), None);
-    assert!(m5.content_runs(&doc2()).is_empty());
-    assert!(m5.link_runs(&doc2()).is_empty());
+    assert_eq!(m5.content_runs(&doc2()).len(), 0);
+    assert_eq!(m5.link_runs(&doc2()).len(), 0);
     assert_eq!(m5.content_count(&doc2()), n(0));
     assert_eq!(m5.link_count(&doc2()), n(0));
     assert!(m5.deletions(&doc2()).is_empty());
@@ -2696,6 +2715,7 @@ fn the_public_values_key_a_hash_set_by_the_equality_they_compare_on() {
     let run = |start: &Address, width: u32| Run::new(start.clone(), n(width)).expect("a run");
     // Two runs sharing a start are two runs: a run is its start AND width.
     one_and_another(run(&ca(1), 2), run(&ca(1), 3));
+    one_and_another(RunError::ZeroWidth, RunError::NotAnElementPosition);
     one_and_another(vp(1, 2), vp(2, 1));
     one_and_another(
         VSpec { source: doc1(), span: vspan(1, 1, 2) },
@@ -2709,6 +2729,37 @@ fn the_public_values_key_a_hash_set_by_the_equality_they_compare_on() {
         Shot { base: None, draft: None, runs: vec![] },
         Shot { base: Some(base(&pdoc(), 0)), draft: None, runs: vec![] },
     );
+}
+
+#[test]
+fn the_run_reads_lend_a_walk_that_knows_its_length_and_both_ends() {
+    // `content_runs`/`link_runs` lend the stored runs as `Runs`, whose
+    // backing is hidden and to which a foreign crate can add no trait — so
+    // what the loan promises is witnessed from one: a nameable type, the
+    // exact length, the reverse walk and fusing, `Debug`, and `Send + Sync`,
+    // which the type has because of what it borrows and which a caller
+    // handing a walk to another thread depends on without any signature
+    // saying so.
+    fn lends<'a, I>(walk: I) -> usize
+    where
+        I: ExactSizeIterator<Item = &'a Run>
+            + DoubleEndedIterator
+            + std::iter::FusedIterator
+            + std::fmt::Debug
+            + Send
+            + Sync,
+    {
+        walk.len()
+    }
+    let k = mem_kernel();
+    insert_abc(&k);
+    seat_link(&k, &doc1(), &a(&[1, 0, 1, 0, 1, 0, 2, 1])).expect("seat commits");
+    let s = k.snapshot();
+    let m5 = s.world().m5();
+    let content: Runs<'_> = m5.content_runs(&doc1());
+    assert_eq!(format!("{content:?}"), "Runs { .. }", "the cursor, not the runs");
+    assert_eq!(lends(content), m5.content_run_count(&doc1()));
+    assert_eq!(lends(m5.link_runs(&doc1())), m5.link_run_count(&doc1()));
 }
 
 // ---- M2-driven recovery: checkpoint load + tail replay ----

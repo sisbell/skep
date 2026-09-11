@@ -15,6 +15,8 @@
 //! with transclusions/edit-sessions, not characters. The width-measured tree
 //! and `im::OrdMap<ordinal, Run>` alternatives are profiling-gated.
 
+use std::fmt;
+
 use num_traits::{One, Zero};
 use serde::{Deserialize, Serialize};
 use skep_address::{Address, Nat, SpanSet};
@@ -180,6 +182,52 @@ impl From<RunListShadow> for RunList {
     }
 }
 
+/// Borrowed runs of one subspace's run-list, in V-order — what
+/// [`M5State::content_runs`](crate::M5State::content_runs) and
+/// [`link_runs`](crate::M5State::link_runs) lend. Opaque, as M1's `Spans` is,
+/// so the `im::Vector` backing (Open decision #1) stays this module's own.
+///
+/// Opacity hides the container, never the walk's capabilities, which are
+/// forwarded below: the exact length is `#runs`, answered without reading a
+/// run, and the reverse walk and the fused guarantee come with it. `Clone` is
+/// withheld for the reason M1 states on `Spans`: `im`'s vector iterator is not
+/// cloneable, so a caller wanting two cursors asks the arrangement for two.
+#[must_use = "iterators are lazy and do nothing unless consumed"]
+pub struct Runs<'a>(<&'a im::Vector<Run> as IntoIterator>::IntoIter);
+
+impl<'a> Iterator for Runs<'a> {
+    type Item = &'a Run;
+    fn next(&mut self) -> Option<&'a Run> {
+        self.0.next()
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl<'a> DoubleEndedIterator for Runs<'a> {
+    fn next_back(&mut self) -> Option<&'a Run> {
+        self.0.next_back()
+    }
+}
+
+impl ExactSizeIterator for Runs<'_> {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl std::iter::FusedIterator for Runs<'_> {}
+
+/// The cursor, not the runs: the backing's iterator is neither `Clone` nor
+/// `Debug`, so there is no way to show what is left without spending it, and
+/// the arrangement it was lent from is `Debug` already.
+impl fmt::Debug for Runs<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Runs").finish_non_exhaustive()
+    }
+}
+
 impl RunList {
     /// `n(d)` for this subspace — the total arranged width.
     pub(crate) fn total_width(&self) -> Nat {
@@ -191,6 +239,12 @@ impl RunList {
     /// knows its own length.
     pub(crate) fn run_count(&self) -> usize {
         self.0.len()
+    }
+
+    /// No runs — and so no positions, every run having `width ≥ 1`. O(1),
+    /// where `total_width().is_zero()` sums every width to learn the same bit.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 
     /// Walk runs accumulating widths until the sum reaches `ord`; return the
@@ -422,9 +476,17 @@ impl RunList {
         })
     }
 
-    /// The canonical, V-ordered run decomposition (maximally merged — M12).
-    /// The runs alone; [`iter_runs`](RunList::iter_runs) is the form that
-    /// also reports each run's implicit V-start.
+    /// The canonical, V-ordered run decomposition (maximally merged — M12),
+    /// LENT: the runs alone, borrowed from the list rather than cloned out of
+    /// it. [`iter_runs`](RunList::iter_runs) is the form that also reports
+    /// each run's implicit V-start.
+    pub(crate) fn iter(&self) -> Runs<'_> {
+        Runs(self.0.iter())
+    }
+
+    /// The same decomposition collected, for this module's tests to compare
+    /// against a literal sequence.
+    #[cfg(test)]
     pub(crate) fn runs(&self) -> Vec<Run> {
         self.0.iter().cloned().collect()
     }

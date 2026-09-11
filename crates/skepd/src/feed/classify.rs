@@ -166,8 +166,8 @@ pub(crate) fn derived_docs(before: &World, after: &World) -> Vec<Address> {
             if before.owner_account(doc).is_none() {
                 continue; // minted by this commit — named by witness 1
             }
-            if before.m5().content_runs(doc) != after.m5().content_runs(doc)
-                || before.m5().link_runs(doc) != after.m5().link_runs(doc)
+            if before.m5().content_runs(doc).ne(after.m5().content_runs(doc))
+                || before.m5().link_runs(doc).ne(after.m5().link_runs(doc))
             {
                 docs.insert(doc.clone());
             }

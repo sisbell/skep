@@ -161,7 +161,8 @@ pub use error::{
     CopyError, DeleteError, InsertError, PublishError, RearrangeError, SeatError, VersionError,
 };
 pub use ops::{Deposit, Vstream, MAX_PLACED_RUNS};
-pub use run::Run;
+pub use run::{Run, RunError};
+pub use runlist::Runs;
 pub use seat::{seat_link, stage_seat_link};
 pub use shot::{Base, Shot, ShotRun};
 pub use state::{M5Rec, M5State};

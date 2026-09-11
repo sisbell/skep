@@ -1867,7 +1867,7 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
     assert_eq!(
         asked.borrow().as_slice(),
         &[doc2(), subdoc.clone()],
-        "the document's own space is not consulted; each origin once, in run order"
+        "the document's own space is not consulted, and the unreadable origin is refused before its dangling run is probed"
     );
     // (3) readable origins are placed; and an origin the BASE already
     //     arranges is NOT consulted again on the next shot.
@@ -1933,6 +1933,94 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
         PublishError::BaseExtentTooLarge
     ));
     assert!(asked.borrow().is_empty(), "no consult before the base's shape is settled");
+}
+
+#[test]
+fn the_consult_is_asked_once_per_origin_in_run_order_and_stops_at_the_first_refusal() {
+    // PUB-6.23 as `publish` states it: `readable` is asked PER DISTINCT
+    // ORIGIN DOCUMENT, in RUN order, the FIRST refusal answering — and never
+    // about the document's own I-space, whichever chain address names the
+    // shot (PUB-2.15). Each clause is given an input on which its negation
+    // answers differently: two origins listed against their address order,
+    // both refused; one origin windowed three times around another; and a
+    // shot named by a member whose runs are the edition's own.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k);
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w"), val(b"x")], Deposit::Undeclared).expect("doc2");
+    let sub = Caller::Principal(PrincipalId(3));
+    let subdoc = a(&[1, 0, 1, 1, 0, 1]);
+    vs.insert(sub, &subdoc, vp(1, 1), vec![val(b"s")], Deposit::Undeclared).expect("subdoc");
+    let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    let sca = a(&[1, 0, 1, 1, 0, 1, 0, 1, 1]);
+    assert!(doc2() < subdoc, "the address order the run orders below reverse");
+    let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
+    // Run order, and the stop: subdoc is listed first and both are refused,
+    // so subdoc speaks and doc2 is never asked about.
+    let refusing = recording_consult(&asked, vec![]);
+    let before = k.current_seq();
+    assert!(matches!(
+        rejected(vs.publish(
+            P1,
+            &pdoc(),
+            Shot {
+                base: None,
+                draft: None,
+                runs: vec![
+                    shot_run(&pdoc(), &pca(1), 3),
+                    shot_run(&subdoc, &sca, 1),
+                    shot_run(&doc2(), &w, 1),
+                ],
+            },
+            &refusing
+        )),
+        PublishError::Withheld(d) if d == subdoc
+    ));
+    assert_eq!(
+        asked.borrow().as_slice(),
+        std::slice::from_ref(&subdoc),
+        "the first listed origin refuses; the one behind it is never asked"
+    );
+    assert_eq!(k.current_seq(), before, "the refusal commits nothing");
+    // Once per origin: doc2 windowed three times around subdoc, all
+    // admitted, and each origin asked about once, in the order first listed.
+    asked.borrow_mut().clear();
+    let admitting = recording_consult(&asked, vec![doc2(), subdoc.clone()]);
+    let (member1, _) = vs
+        .publish(
+            P1,
+            &pdoc(),
+            Shot {
+                base: None,
+                draft: None,
+                runs: vec![
+                    shot_run(&doc2(), &w, 1),
+                    shot_run(&doc2(), &w, 2),
+                    shot_run(&subdoc, &sca, 1),
+                    shot_run(&doc2(), &w, 1),
+                ],
+            },
+            &admitting,
+        )
+        .expect("every window admitted");
+    assert_eq!(asked.borrow().as_slice(), &[doc2(), subdoc.clone()], "each origin once, in run order");
+    assert_eq!(member1, vdoc());
+    assert_eq!(k.snapshot().world().m5().content_count(&member1), n(5));
+    // The document's own I-space, named by the member: the edition's three
+    // positions, which member1 does not arrange and so cannot carry, are
+    // placed with the consult never asked — "own" is the trunk's, not the
+    // named address's.
+    asked.borrow_mut().clear();
+    let (member2, _) = vs
+        .publish(
+            P1,
+            &member1,
+            Shot { base: Some(base(&member1, 5)), draft: None, runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
+            &refusing,
+        )
+        .expect("the edition's own I-space takes no consult, whichever member names the shot");
+    assert!(asked.borrow().is_empty(), "nothing was asked");
+    assert_eq!(member2, a(&[1, 0, 1, 0, 3, 2]));
+    assert_eq!(k.snapshot().world().m5().content_count(&member2), n(3));
 }
 
 #[test]
@@ -2007,6 +2095,74 @@ fn carried_ness_is_judged_per_supplied_run_over_its_whole_i_extent() {
             &refusing,
         )
         .expect("a run carried whole takes no consult");
+    assert!(asked.borrow().is_empty(), "nothing was asked");
+    assert_eq!(k.snapshot().world().m5().content_count(&member2), n(5));
+}
+
+#[test]
+fn a_run_bridging_a_gap_in_what_the_base_arranges_is_not_carried() {
+    // PUB-6.24: a supplied run is carried when the base arranges EVERY one
+    // of its addresses. The head here windows doc2's w and y and never x, so
+    // a run over w..y — opening on an address the base holds and ending on
+    // one it holds — is not carried, and the gate is asked. A carried test
+    // that judged a run by where it opens and where it reaches would let a
+    // shooter who has lost the right to read doc2 window x, the one address
+    // the base never answered for, with the consult never asked.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k);
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w"), val(b"x"), val(b"y")], Deposit::Undeclared)
+        .expect("doc2 holds w, x, y");
+    let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    let y = a(&[1, 0, 1, 0, 2, 0, 1, 3]);
+    let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
+    let admitting = recording_consult(&asked, vec![doc2()]);
+    let (member1, _) = vs
+        .publish(
+            P1,
+            &pdoc(),
+            Shot {
+                base: Some(base(&pdoc(), 3)),
+                draft: None,
+                runs: vec![
+                    shot_run(&pdoc(), &pca(1), 3),
+                    shot_run(&doc2(), &w, 1),
+                    shot_run(&doc2(), &y, 1),
+                ],
+            },
+            &admitting,
+        )
+        .expect("the head windows w and y, never x");
+    assert_eq!(k.snapshot().world().m5().content_count(&member1), n(5));
+    let refusing = recording_consult(&asked, vec![]);
+    let staged = |runs: Vec<ShotRun>| Shot { base: Some(base(&member1, 5)), draft: None, runs };
+    let before = k.current_seq();
+    asked.borrow_mut().clear();
+    assert!(matches!(
+        rejected(vs.publish(
+            P1,
+            &pdoc(),
+            staged(vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 3)]),
+            &refusing
+        )),
+        PublishError::Withheld(d) if d == doc2()
+    ));
+    assert_eq!(asked.borrow().as_slice(), &[doc2()], "the bridging run is asked about, and refused");
+    assert_eq!(k.current_seq(), before, "the refusal commits nothing");
+    // The control: the base's own two windows, re-supplied as it arranges
+    // them, are carried, and the same consult is never asked.
+    asked.borrow_mut().clear();
+    let (member2, _) = vs
+        .publish(
+            P1,
+            &pdoc(),
+            staged(vec![
+                shot_run(&pdoc(), &pca(1), 3),
+                shot_run(&doc2(), &w, 1),
+                shot_run(&doc2(), &y, 1),
+            ]),
+            &refusing,
+        )
+        .expect("runs carried whole take no consult");
     assert!(asked.borrow().is_empty(), "nothing was asked");
     assert_eq!(k.snapshot().world().m5().content_count(&member2), n(5));
 }
@@ -2353,6 +2509,16 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
     ));
     assert!(matches!(
         rejected(vs.publish(P1, &pdoc(), plain(vec![shot_run(&doc1(), &a(&[1, 0, 1, 0, 1, 0, 2, 1]), 1)]), &readable)),
+        PublishError::BadRun
+    ));
+    // One run defective twice: its stated origin names no document AND does
+    // not project to the document its start settles. The stated origin is
+    // COMPARED, never read — `BadRun` is address arithmetic on the request
+    // alone — and the registration read is of the DERIVED origin document,
+    // doc1, which is registered. Reading the stated origin's registration
+    // first would answer `SourceNotRegistered`.
+    assert!(matches!(
+        rejected(vs.publish(P1, &pdoc(), plain(vec![shot_run(&unregistered_doc, &ca(1), 1)]), &readable)),
         PublishError::BadRun
     ));
     // The runs are walked in order, each settled as its origin document is

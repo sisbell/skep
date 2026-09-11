@@ -721,6 +721,32 @@ mod tests {
     }
 
     #[test]
+    fn a_run_is_covered_exactly_when_every_one_of_its_addresses_is_held() {
+        // §8/PUB-6.24: `covers` is `holds` asked of a whole I-extent, and the
+        // oracle is `holds` itself, address by address — a law over runs the
+        // list did not choose. The residents leave gaps a probe can straddle at
+        // its opening, in its interior and at its tail, hold one address twice,
+        // hold one of another length, and are listed so that a probe's offset
+        // ranges arrive OUT of the order they open in — so the sweep's sort, its
+        // interior refusal and its final bound are each visited.
+        let l = list(vec![run(&ca(6), 2), run(&vca(1), 1), run(&ca(3), 1), run(&ca(2), 2)]);
+        // held: ca2 ca3 ca6 ca7 (ca3 twice), vca1
+        let mut carried = 0usize;
+        let mut checked = 0usize;
+        for start in (1..=8u32).map(ca).chain((1..=2u32).map(vca)) {
+            for width in 1..=6u32 {
+                let probe = run(&start, width);
+                let held = probe.addrs().all(|address| l.holds(&address));
+                assert_eq!(l.covers(&probe), held, "{start:?} × {width}");
+                carried += usize::from(held);
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 60, "every start and width the residents can be probed with");
+        assert_eq!(carried, 7, "the seven runs lying whole within what is held");
+    }
+
+    #[test]
     fn a_run_of_another_endpoint_length_is_covered_by_no_resident_whatever_its_width() {
         // PUB-6.24: `covers` skips a resident of another endpoint length
         // rather than searching it, which is sound only because such a

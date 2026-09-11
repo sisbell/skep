@@ -484,6 +484,8 @@ impl M5State {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
     use crate::state::M5Rec;
     use crate::testutil::{a, ca, doc1, doc2, la, n, run, t, vca, vp, vspan};
@@ -880,6 +882,50 @@ mod tests {
     }
 
     #[test]
+    fn project_answers_exactly_the_positions_whose_address_the_coverage_contains() {
+        // ASN-0119 RA7c as a law: for every coverage span in a generated family
+        // and every V-ordinal, the footprint holds [s_C, k] exactly when the span
+        // contains M(d)(k) — the oracle being `point` and `Span::contains`, which
+        // know nothing of blocks or offsets — and it is normalized. The
+        // arrangement is fragmented, mixed in length and holds two addresses
+        // twice, and the family's spans open and close on every block seam and
+        // inside every block, through both of the run's branches.
+        let s = place(&arranged(), &doc1(), 6, vec![run(&ca(2), 2)]); // ca1 ca2 ca3 vca1 vca2 ca2 ca3
+        let mut family: Vec<Span> = Vec::new();
+        for lo in 1..=4u32 {
+            for hi in lo + 1..=5 {
+                family.push(
+                    Span::from_endpoints(ca(lo).tumbler().clone(), ca(hi).tumbler()).expect("lo < hi"),
+                );
+            }
+        }
+        for lo in 1..=2u32 {
+            for hi in lo + 1..=3 {
+                family.push(
+                    Span::from_endpoints(vca(lo).tumbler().clone(), vca(hi).tumbler()).expect("lo < hi"),
+                );
+            }
+        }
+        for k in 1..=4u32 {
+            family.push(Span::new(ca(k).tumbler().clone(), t(&[1])).expect("T12: action point 1 ≤ 8"));
+        }
+        family.push(subtree_of(&t(&[1, 0, 1, 0, 1, 0, 1])));
+        family.push(subtree_of(&t(&[1, 0, 1, 0, 1, 1])));
+        assert_eq!(family.len(), 19);
+        for cover in &family {
+            let footprint = s.project(&doc1(), &SpanSet::singleton(cover.clone()));
+            assert!(footprint.is_empty() || footprint.is_normalized(), "{cover:?}");
+            for k in 0..=8u32 {
+                let expected = s
+                    .point(&doc1(), &vp(1, k))
+                    .is_some_and(|address| cover.contains(address.tumbler()));
+                assert_eq!(footprint.denotes(&t(&[1, k])), expected, "{cover:?} at ordinal {k}");
+            }
+            assert!(!footprint.denotes(&t(&[2, 1])), "{cover:?}: the footprint is the content subspace's");
+        }
+    }
+
+    #[test]
     fn an_address_the_document_still_arranges_elsewhere_is_not_deleted() {
         // §9: SHOWDELETIONS is ASN-0075's DELETED(a, d) ≡ (a, d) ∈ R ∧
         // a ∉ ran(M(d)) — a SET difference. A document that transcludes its
@@ -913,6 +959,61 @@ mod tests {
         assert_eq!(spans.len(), 1, "b's last occurrence is gone, and now b is deleted");
         assert_eq!(spans[0].start(), ca(2).tumbler());
         assert_eq!(spans[0].reach(), *ca(3).tumbler());
+    }
+
+    #[test]
+    fn deletions_is_ever_contained_minus_the_image_over_every_two_placement_history() {
+        // §9 / ASN-0075: DELETED(a, d) ≡ (a, d) ∈ R ∧ a ∉ ran(M(d)) — a law over
+        // histories, asserted address by address against an oracle built from
+        // `Run::addrs` and plain sets. The histories are every ordered pair of
+        // placements from a menu — one origin twice, two lengths, an overlapping
+        // pair — the second placed at every boundary of the first (so a foreign
+        // run can split one origin's R span into two image runs), the state
+        // before any removal, then every contained removal. R holding
+        // overlapping spans, an image split across a seam, and a class the image
+        // no longer reaches are all visited by inputs no one chose.
+        let menu = [(ca(1), 2u32), (ca(2), 2), (ca(3), 1), (vca(1), 2)];
+        let alphabet: Vec<Address> = (1..=5).map(ca).chain((1..=3).map(vca)).collect();
+        let check = |s: &M5State, ever: &BTreeSet<Address>, label: &str| {
+            let image: BTreeSet<Address> = s.content_runs(&doc1()).flat_map(Run::addrs).collect();
+            let deleted = s.deletions(&doc1());
+            for address in &alphabet {
+                assert_eq!(
+                    deleted.denotes(address.tumbler()),
+                    ever.contains(address) && !image.contains(address),
+                    "{label}: {address:?}"
+                );
+            }
+        };
+        let mut checked = 0usize;
+        for (first, w1) in &menu {
+            for (second, w2) in &menu {
+                let ever: BTreeSet<Address> = run(first, *w1)
+                    .into_addrs()
+                    .chain(run(second, *w2).into_addrs())
+                    .collect();
+                let n_c = w1 + w2;
+                for at in 1..=w1 + 1 {
+                    let placed = place(&M5State::genesis(), &doc1(), 1, vec![run(first, *w1)]);
+                    let placed = place(&placed, &doc1(), at, vec![run(second, *w2)]);
+                    let label = format!("{first:?}×{w1}, then {second:?}×{w2} at {at}");
+                    check(&placed, &ever, &label);
+                    for from in 1..=n_c {
+                        for width in 1..=n_c + 1 - from {
+                            let removed = placed.apply_m5(&M5Rec::ContentRemove {
+                                doc: doc1(),
+                                from: n(from),
+                                width: n(width),
+                            });
+                            check(&removed, &ever, &format!("{label}, remove [{from}, {})", from + width));
+                            checked += 1;
+                        }
+                    }
+                }
+            }
+        }
+        // 9 width-2 pairs × 3 boundaries × 10 removals, 3 × 3 × 6, 3 × 2 × 6, 1 × 2 × 3.
+        assert_eq!(checked, 366, "every contained removal of every history");
     }
 
     #[test]

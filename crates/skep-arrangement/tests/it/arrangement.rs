@@ -245,8 +245,8 @@ fn genesis() -> World {
 /// they are exactly what tells a projected read (PUB-2.15) from a read of the
 /// member's own bit.
 fn genesis_with_members() -> World {
-    let base = genesis();
-    let m3 = base
+    let world = genesis();
+    let m3 = world
         .m3
         .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 0, 1, 1]),
@@ -256,7 +256,7 @@ fn genesis_with_members() -> World {
             addr: a(&[1, 0, 1, 0, 3, 1]),
             published: false,
         });
-    World { m3, ..base }
+    World { m3, ..world }
 }
 
 fn mem_kernel() -> Kernel<World> {
@@ -445,9 +445,9 @@ fn insert_rejects_in_documented_order_and_commits_nothing() {
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     let before = k.current_seq();
-    let un = a(&[1, 0, 1, 0, 9]); // never registered
+    let unregistered_doc = a(&[1, 0, 1, 0, 9]); // never registered
     assert!(matches!(
-        rejected(vs.insert(P1, &un, vp(2, 0), vec![], Deposit::Undeclared)),
+        rejected(vs.insert(P1, &unregistered_doc, vp(2, 0), vec![], Deposit::Undeclared)),
         InsertError::DocNotRegistered
     ));
     assert!(matches!(
@@ -533,10 +533,10 @@ fn self_copy_resolves_against_the_pre_edit_arrangement_preserving_multiplicity()
 fn copy_rejects_each_documented_guard() {
     let k = mem_kernel();
     let vs = insert_abc(&k);
-    let un = a(&[1, 0, 1, 0, 9]);
+    let unregistered_doc = a(&[1, 0, 1, 0, 9]);
     // Destination checks first (as INSERT, minus EmptyContent).
     assert!(matches!(
-        rejected(vs.copy(P1, &un, vp(1, 1), &[])),
+        rejected(vs.copy(P1, &unregistered_doc, vp(1, 1), &[])),
         CopyError::DocNotRegistered
     ));
     assert!(matches!(
@@ -562,27 +562,27 @@ fn copy_rejects_each_documented_guard() {
         CopyError::OutOfBounds
     ));
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(un.clone(), vspan(1, 1, 1))])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(unregistered_doc.clone(), vspan(1, 1, 1))])),
         CopyError::SourceNotRegistered
     ));
     // Destination before spec: a link-subspace destination beside a spec
     // whose source is unregistered. "Destination first, then per spec" is
     // the documented order; the other reading gives SourceNotRegistered.
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(2, 1), &[spec(un.clone(), vspan(1, 1, 1))])),
+        rejected(vs.copy(P1, &doc2(), vp(2, 1), &[spec(unregistered_doc.clone(), vspan(1, 1, 1))])),
         CopyError::NotContentSubspace
     ));
     // …the destination's bounds included: a position past doc2's only
     // admissible boundary beside the same unregistered source.
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(1, 2), &[spec(un.clone(), vspan(1, 1, 1))])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 2), &[spec(unregistered_doc.clone(), vspan(1, 1, 1))])),
         CopyError::OutOfBounds
     ));
-    // NotOrdinalVSpan: a T12-legal but level-uniform [m, n] width is action-point-1 —
+    // NotOrdinalVSpan: a T12-legal [m, n] width with m > 0 is action-point-1 —
     // not an ordinal-level depth-2 V-span (Conflicts #7's precise verdict).
-    let lu = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-legal");
+    let action_point_1 = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-legal");
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), lu)])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), action_point_1)])),
         CopyError::NotOrdinalVSpan
     ));
     // NotOrdinalVSpan also on a T12-legal span whose WIDTH is deeper than two: its
@@ -607,16 +607,16 @@ fn copy_rejects_each_documented_guard() {
     // Which of the per-spec verdicts wins, in each documented pair.
     // Registration before shape: the source names no document AND the span
     // is mis-shaped. Shape first would answer NotOrdinalVSpan.
-    let lu_un = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-legal");
+    let action_point_1 = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-legal");
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(un.clone(), lu_un)])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(unregistered_doc.clone(), action_point_1)])),
         CopyError::SourceNotRegistered
     ));
     // Shape before residence: this span is BOTH mis-shaped (action-point-1)
     // and in the link subspace, and the shape check runs first.
-    let lu_link = Span::new(t(&[2, 1]), t(&[1, 0])).expect("T12-legal");
+    let action_point_1_in_link = Span::new(t(&[2, 1]), t(&[1, 0])).expect("T12-legal");
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), lu_link)])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), action_point_1_in_link)])),
         CopyError::NotOrdinalVSpan
     ));
     // Residence before emptiness: doc2 is content-empty AND asked for in the
@@ -627,9 +627,9 @@ fn copy_rejects_each_documented_guard() {
     ));
     // Shape before emptiness: doc2 is BOTH content-empty and asked for with
     // a mis-shaped span.
-    let lu2 = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-legal");
+    let action_point_1 = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-legal");
     assert!(matches!(
-        rejected(vs.copy(P1, &doc1(), vp(1, 1), &[spec(doc2(), lu2)])),
+        rejected(vs.copy(P1, &doc1(), vp(1, 1), &[spec(doc2(), action_point_1)])),
         CopyError::NotOrdinalVSpan
     ));
     // WHICH SPEC speaks when two are defective: the list is walked, and the
@@ -638,13 +638,13 @@ fn copy_rejects_each_documented_guard() {
     // the first spec's verdict. Read the other way — guards outermost, specs
     // within — `SourceNotRegistered` would win, since it precedes
     // `NotOrdinalVSpan` in the per-spec order.
-    let lu3 = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-legal");
+    let action_point_1 = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-legal");
     assert!(matches!(
         rejected(vs.copy(
             P1,
             &doc2(),
             vp(1, 1),
-            &[spec(doc1(), lu3), spec(un.clone(), vspan(1, 1, 1))]
+            &[spec(doc1(), action_point_1), spec(unregistered_doc.clone(), vspan(1, 1, 1))]
         )),
         CopyError::NotOrdinalVSpan
     ));
@@ -711,9 +711,9 @@ fn delete_contracts_the_arrangement_and_touches_neither_content_nor_r() {
 fn delete_rejects_in_documented_order() {
     let k = mem_kernel();
     let vs = insert_abc(&k);
-    let un = a(&[1, 0, 1, 0, 9]);
+    let unregistered_doc = a(&[1, 0, 1, 0, 9]);
     assert!(matches!(
-        rejected(vs.delete(P1, &un, vp(1, 1), n(1))),
+        rejected(vs.delete(P1, &unregistered_doc, vp(1, 1), n(1))),
         DeleteError::DocNotRegistered
     ));
     assert!(matches!(
@@ -804,9 +804,9 @@ fn rearrange_swap_exchanges_the_outer_regions_around_the_middle() {
 fn rearrange_rejects_in_documented_order() {
     let k = mem_kernel();
     let vs = insert_abc(&k);
-    let un = a(&[1, 0, 1, 0, 9]);
+    let unregistered_doc = a(&[1, 0, 1, 0, 9]);
     assert!(matches!(
-        rejected(vs.rearrange(P1, &un, &[vp(1, 1), vp(1, 2), vp(1, 3)])),
+        rejected(vs.rearrange(P1, &unregistered_doc, &[vp(1, 1), vp(1, 2), vp(1, 3)])),
         RearrangeError::DocNotRegistered
     ));
     assert!(matches!(
@@ -1032,9 +1032,9 @@ fn version_of_an_empty_source_has_a_zero_content_footprint() {
 fn version_rejects_unregistered_unknown_and_node_tier_callers() {
     let k = mem_kernel();
     let vs = insert_abc(&k);
-    let un = a(&[1, 0, 1, 0, 9]);
+    let unregistered_doc = a(&[1, 0, 1, 0, 9]);
     assert!(matches!(
-        rejected(vs.version(PrincipalId(1), &un, None)),
+        rejected(vs.version(PrincipalId(1), &unregistered_doc, None)),
         VersionError::SourceNotRegistered
     ));
     assert!(matches!(
@@ -1053,7 +1053,7 @@ fn version_rejects_unregistered_unknown_and_node_tier_callers() {
     // caller here is a principal the registry does not know, and the verdict
     // is still about the source.
     assert!(matches!(
-        rejected(vs.version(PrincipalId(99), &un, None)),
+        rejected(vs.version(PrincipalId(99), &unregistered_doc, None)),
         VersionError::SourceNotRegistered
     ));
 }
@@ -1515,10 +1515,10 @@ fn a_shot_appends_the_next_trunk_member_from_the_clients_runs() {
         runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &ca(1), 2)],
     };
     let before = k.current_seq();
-    let (member, at) = vs.publish(P1, &pdoc(), shot, &readable).expect("the shot commits");
+    let (member, seq) = vs.publish(P1, &pdoc(), shot, &readable).expect("the shot commits");
     assert_eq!(member, vdoc(), "the chain's first member");
-    assert_eq!(at, k.current_seq(), "one commit");
-    assert!(at > before);
+    assert_eq!(seq, k.current_seq(), "one commit");
+    assert!(seq > before);
     let s = k.snapshot();
     let m5 = s.world().m5();
     assert!(s.world().m3().published(&member), "born published (PUB-2.5)");
@@ -2191,7 +2191,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
     let readable = readable_by(PrincipalId(1));
     let before = k.current_seq();
     let plain = |runs: Vec<ShotRun>| Shot { base: None, draft: None, runs };
-    let un = a(&[1, 0, 1, 0, 9]);
+    let unregistered_doc = a(&[1, 0, 1, 0, 9]);
     // A private document has no chain (PUB-2.9).
     assert!(matches!(
         rejected(vs.publish(P1, &doc1(), plain(vec![shot_run(&doc1(), &ca(1), 1)]), &readable)),
@@ -2219,7 +2219,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
         rejected(vs.publish(
             P1,
             &doc1(),
-            Shot { base: Some(base(&un, 1)), draft: None, runs: vec![] },
+            Shot { base: Some(base(&unregistered_doc, 1)), draft: None, runs: vec![] },
             &readable
         )),
         PublishError::SourceNotRegistered
@@ -2231,20 +2231,25 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
     // Registration ahead of everything (PUB-6.37): the document, then the
     // base, then an origin.
     assert!(matches!(
-        rejected(vs.publish(P1, &un, plain(vec![]), &readable)),
+        rejected(vs.publish(P1, &unregistered_doc, plain(vec![]), &readable)),
         PublishError::DocNotRegistered
     ));
     assert!(matches!(
         rejected(vs.publish(
             P1,
             &pdoc(),
-            Shot { base: Some(base(&un, 1)), draft: None, runs: vec![] },
+            Shot { base: Some(base(&unregistered_doc, 1)), draft: None, runs: vec![] },
             &readable
         )),
         PublishError::SourceNotRegistered
     ));
     assert!(matches!(
-        rejected(vs.publish(P1, &pdoc(), plain(vec![shot_run(&un, &a(&[1, 0, 1, 0, 9, 0, 1, 1]), 1)]), &readable)),
+        rejected(vs.publish(
+            P1,
+            &pdoc(),
+            plain(vec![shot_run(&unregistered_doc, &a(&[1, 0, 1, 0, 9, 0, 1, 1]), 1)]),
+            &readable
+        )),
         PublishError::SourceNotRegistered
     ));
     // ω stands ahead of registration: a stranger naming a base that names no
@@ -2254,7 +2259,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
         rejected(vs.publish(
             Caller::Principal(PrincipalId(2)),
             &pdoc(),
-            Shot { base: Some(base(&un, 1)), draft: None, runs: vec![] },
+            Shot { base: Some(base(&unregistered_doc, 1)), draft: None, runs: vec![] },
             &readable
         )),
         PublishError::NotOwner(d) if d == pdoc()
@@ -2266,7 +2271,11 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
         rejected(vs.publish(
             P1,
             &pdoc(),
-            Shot { base: Some(base(&un, 1)), draft: None, runs: vec![shot_run(&doc2(), &ca(1), 1)] },
+            Shot {
+                base: Some(base(&unregistered_doc, 1)),
+                draft: None,
+                runs: vec![shot_run(&doc2(), &ca(1), 1)],
+            },
             &readable
         )),
         PublishError::SourceNotRegistered
@@ -2278,7 +2287,11 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
         rejected(vs.publish(
             P1,
             &pdoc(),
-            Shot { base: None, draft: Some(un.clone()), runs: vec![shot_run(&doc2(), &ca(1), 1)] },
+            Shot {
+                base: None,
+                draft: Some(unregistered_doc.clone()),
+                runs: vec![shot_run(&doc2(), &ca(1), 1)],
+            },
             &readable
         )),
         PublishError::SourceNotRegistered
@@ -2303,7 +2316,10 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
         rejected(vs.publish(
             P1,
             &pdoc(),
-            plain(vec![shot_run(&doc2(), &ca(1), 1), shot_run(&un, &a(&[1, 0, 1, 0, 9, 0, 1, 1]), 1)]),
+            plain(vec![
+                shot_run(&doc2(), &ca(1), 1),
+                shot_run(&unregistered_doc, &a(&[1, 0, 1, 0, 9, 0, 1, 1]), 1),
+            ]),
             &readable
         )),
         PublishError::BadRun
@@ -2635,24 +2651,24 @@ fn an_unregistered_document_never_yields_an_ownership_verdict() {
     // leaving both orders agreeing on DocNotRegistered.
     let k = mem_kernel();
     let vs = insert_abc(&k);
-    let un = a(&[1, 0, 1, 0, 9]);
+    let unregistered_doc = a(&[1, 0, 1, 0, 9]);
     let p2 = Caller::Principal(PrincipalId(2));
     assert!(matches!(
-        rejected(vs.insert(p2, &un, vp(1, 1), vec![val(b"x")], Deposit::Undeclared)),
+        rejected(vs.insert(p2, &unregistered_doc, vp(1, 1), vec![val(b"x")], Deposit::Undeclared)),
         InsertError::DocNotRegistered
     ));
     assert!(matches!(
-        rejected(vs.delete(p2, &un, vp(1, 1), n(1))),
+        rejected(vs.delete(p2, &unregistered_doc, vp(1, 1), n(1))),
         DeleteError::DocNotRegistered
     ));
     assert!(matches!(
-        rejected(vs.rearrange(p2, &un, &[vp(1, 1), vp(1, 2), vp(1, 3)])),
+        rejected(vs.rearrange(p2, &unregistered_doc, &[vp(1, 1), vp(1, 2), vp(1, 3)])),
         RearrangeError::DocNotRegistered
     ));
     assert!(matches!(
         rejected(vs.copy(
             p2,
-            &un,
+            &unregistered_doc,
             vp(1, 1),
             &[VSpec {
                 source: doc1(),
@@ -2662,11 +2678,11 @@ fn an_unregistered_document_never_yields_an_ownership_verdict() {
         CopyError::DocNotRegistered
     ));
     // The shot opens at the same door: its slot 1 answers registration
-    // before ω, and the other order would answer `NotOwner(un)`.
+    // before ω, and the other order would answer `NotOwner(unregistered_doc)`.
     assert!(matches!(
         rejected(vs.publish(
             p2,
-            &un,
+            &unregistered_doc,
             Shot { base: None, draft: None, runs: vec![] },
             &readable_by(PrincipalId(2))
         )),
@@ -2818,7 +2834,7 @@ fn seating_appends_a_home_link_refuses_a_reseat_and_never_touches_r() {
 // ---- §D/§E composed queries ----
 
 #[test]
-fn finddocscontaining_composes_candidates_with_the_project_filter() {
+fn find_docs_containing_composes_candidates_with_the_project_filter() {
     // §9: docs_ever_containing is the historical superset (P2 keeps the
     // deleter as a candidate); project is the current-containment filter —
     // both off ONE snapshot.
@@ -2892,7 +2908,7 @@ fn mixed_length_transclusion_flows_through_the_level_class_discipline() {
         assert_eq!(runs[1].i_start(), &vca(1));
         // image hands back the RAW mixed-length cover.
         let cov = m5.image(&doc2(), &vspan(1, 1, 4));
-        let lens: Vec<usize> = cov.iter().map(|s| s.start().len()).collect();
+        let lens: Vec<usize> = cov.iter().map(|span| span.start().len()).collect();
         assert_eq!(lens, vec![8, 9]);
         // project is fault-free under a cross-length prefix cover: pdoc's
         // content-base subtree picks out only the length-8 positions.
@@ -2907,7 +2923,7 @@ fn mixed_length_transclusion_flows_through_the_level_class_discipline() {
     vs.delete(P1, &doc2(), vp(1, 1), n(4)).expect("delete commits");
     let s = k.snapshot();
     let d = s.world().m5().deletions(&doc2());
-    let mut lens: Vec<usize> = d.iter().map(|s| s.start().len()).collect();
+    let mut lens: Vec<usize> = d.iter().map(|span| span.start().len()).collect();
     lens.sort_unstable();
     assert_eq!(lens, vec![8, 9]);
 }

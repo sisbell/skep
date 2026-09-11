@@ -1367,7 +1367,7 @@ where
             // read on the DOCUMENT a version member projects to (PUB-2.15).
             let source_published = published_target(m3, source);
             let fork_published = published.unwrap_or(source_published);
-            let (v, m3rec) = match &branch {
+            let (fork, m3rec) = match &branch {
                 // PUB-6.36 slot 5, the own-source arm alone (PUB-2.14):
                 // private documents are versionless (PUB-2.9), and a
                 // published one admits no private member (PUB-2.7).
@@ -1390,11 +1390,11 @@ where
             stg.push(
                 M5Rec::VersionSnapshot {
                     source: surface,
-                    new: v.clone(),
+                    new: fork.clone(),
                 }
                 .into(),
             );
-            Ok(v)
+            Ok(fork)
         })
     }
 }
@@ -2053,7 +2053,7 @@ mod tests {
     }
 
     #[test]
-    fn the_shot_refuses_a_re_insert_past_the_value_budget_before_probing_an_address() {
+    fn the_shot_refuses_a_reinsert_past_the_value_budget_before_probing_an_address() {
         // MAX_REINSERTED_VALUES binds how many values one SHOT re-mints from
         // its draft, and the count is request arithmetic — the draft-native
         // runs' widths, summed — answered before any address is probed.

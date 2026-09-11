@@ -415,8 +415,8 @@ impl M5State {
         let absent = SpanSet::empty();
         let mut out = SpanSet::empty();
         for (len, ever) in self.provenance.ever_contained(doc).by_level_class() {
-            let here = image.get(&len).unwrap_or(&absent);
-            let deleted = difference_sets(&ever, here).expect(
+            let now = image.get(&len).unwrap_or(&absent);
+            let deleted = difference_sets(&ever, now).expect(
                 "per-class operands share one length class, and every span of \
                  either is a run I-extent hence level-uniform — the gate passes",
             );
@@ -501,14 +501,14 @@ mod tests {
     }
 
     #[test]
-    fn resolve_guard_is_complete_and_defensive() {
+    fn resolve_folds_every_malformed_request_to_nothing() {
         // §2: every malformed request folds to ⟨⟩ — never a fault.
         let s = arranged();
         // The usable form resolves.
         assert_eq!(s.resolve(&doc1(), &vspan(1, 1, 3)), vec![run(&ca(1), 3)]);
         // #start ≠ 2 (both < 2 and > 2).
-        let short = Span::new(t(&[5]), t(&[1])).expect("T12");
-        assert!(s.resolve(&doc1(), &short).is_empty());
+        let shallow = Span::new(t(&[5]), t(&[1])).expect("T12");
+        assert!(s.resolve(&doc1(), &shallow).is_empty());
         let deep = Span::new(t(&[1, 1, 1]), t(&[0, 0, 1])).expect("T12");
         assert!(s.resolve(&doc1(), &deep).is_empty());
         // #width ≠ 2 alone: T12 admits this span (action point 2 ≤ #start 2),
@@ -518,8 +518,8 @@ mod tests {
         let deep_width = Span::new(t(&[1, 1]), t(&[0, 5, 0])).expect("T12: action point 2 ≤ #start");
         assert!(s.resolve(&doc1(), &deep_width).is_empty());
         // Non-ordinal width [m, n] with m > 0 (action-point-1).
-        let lu = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12");
-        assert!(s.resolve(&doc1(), &lu).is_empty());
+        let action_point_1 = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12");
+        assert!(s.resolve(&doc1(), &action_point_1).is_empty());
         // Unknown subspace selects no run-list.
         let odd = Span::new(t(&[3, 1]), t(&[0, 1])).expect("T12");
         assert!(s.resolve(&doc1(), &odd).is_empty());

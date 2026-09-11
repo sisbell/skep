@@ -386,18 +386,18 @@ impl Run {
     pub(crate) fn offsets_covered_by(&self, span: &Span) -> Option<OffsetRange> {
         let addr_len = self.i_start.tumbler().len();
         if span.is_level_uniform() && span.start().len() == addr_len {
-            let sub = intersect(&self.iextent(), span)
+            let intersection = intersect(&self.iextent(), span)
                 .expect("both operands level-uniform at one length — gate passes")?;
             let ordinal_of = |t: &Tumbler| {
                 t.get(addr_len)
                     .expect("run I-extent endpoints have #t == addr_len")
                     .clone()
             };
-            let base = ordinal_of(self.i_start.tumbler());
-            let reach = sub.reach();
+            let start_ordinal = ordinal_of(self.i_start.tumbler());
+            let reach = intersection.reach();
             Some(OffsetRange {
-                lo: ordinal_of(sub.start()) - &base,
-                hi: ordinal_of(&reach) - &base,
+                lo: ordinal_of(intersection.start()) - &start_ordinal,
+                hi: ordinal_of(&reach) - &start_ordinal,
             })
         } else {
             let k_lo = self.lower_bound(span.start());

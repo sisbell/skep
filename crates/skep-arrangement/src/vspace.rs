@@ -247,7 +247,7 @@ mod tests {
         let deep_width = Span::new(t(&[1, 1]), t(&[0, 5, 0])).expect("T12: action point 2 ≤ #start");
         assert!(!is_ordinal_vspan(&deep_width));
         // A level-uniform [m, n] width with m > 0 is action-point-1.
-        let level_uniform = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12");
-        assert!(!is_ordinal_vspan(&level_uniform));
+        let action_point_1 = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12");
+        assert!(!is_ordinal_vspan(&action_point_1));
     }
 }

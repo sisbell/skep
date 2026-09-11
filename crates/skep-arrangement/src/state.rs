@@ -715,7 +715,7 @@ mod tests {
         // PANIC, and this fold runs on the replay path: the failure would be
         // an abort inside `Kernel::open` rather than a rejected request.
         let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 5)]);
-        let at = |k: &Nat| VPos {
+        let content_at = |k: &Nat| VPos {
             subspace: content_subspace(),
             ordinal: k.clone(),
         };
@@ -792,10 +792,10 @@ mod tests {
             // It answered — and what it answered is still an arrangement:
             // D-SEQ★ holds, the count being the largest arranged ordinal.
             let n_c = out.content_count(&doc1());
-            assert_eq!(out.point(&doc1(), &at(&n(0))), None, "{r:?}");
-            assert_eq!(out.point(&doc1(), &at(&(&n_c + &n(1)))), None, "{r:?}");
+            assert_eq!(out.point(&doc1(), &content_at(&n(0))), None, "{r:?}");
+            assert_eq!(out.point(&doc1(), &content_at(&(&n_c + &n(1)))), None, "{r:?}");
             if !n_c.is_zero() {
-                assert!(out.point(&doc1(), &at(&n_c)).is_some(), "{r:?}");
+                assert!(out.point(&doc1(), &content_at(&n_c)).is_some(), "{r:?}");
             }
         }
     }

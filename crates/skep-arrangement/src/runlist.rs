@@ -117,8 +117,8 @@ fn split_runs<'a>(mut runs: impl Iterator<Item = &'a Run>, ord: &Nat) -> (Vec<Ru
             right.extend(runs.cloned());
             return (left, right);
         }
-        let end = &before + &run.width; // this run's last ordinal
-        if *ord <= end {
+        let last = &before + &run.width; // this run's last ordinal
+        if *ord <= last {
             // Interior: keep `ord − start` elements on the left
             // (1 ≤ kept ≤ width − 1 here).
             let kept = ord - &start;
@@ -135,7 +135,7 @@ fn split_runs<'a>(mut runs: impl Iterator<Item = &'a Run>, ord: &Nat) -> (Vec<Ru
             return (left, right);
         }
         left.push(run.clone());
-        before = end;
+        before = last;
     }
     (left, Vec::new()) // ord ≥ total + 1: the append boundary
 }
@@ -256,11 +256,11 @@ impl RunList {
         }
         let mut before = Nat::zero();
         for (idx, run) in self.0.iter().enumerate() {
-            let end = &before + &run.width;
-            if *ord <= end {
+            let last = &before + &run.width;
+            if *ord <= last {
                 return Some((idx, ord - &before - Nat::one()));
             }
-            before = end;
+            before = last;
         }
         None
     }
@@ -431,7 +431,7 @@ impl RunList {
     ///
     /// Called with `lo < hi_excl`. Every emitted run then has `width ≥ 1` and
     /// an element-level start: a run reaching the push has `v_start < hi_excl`
-    /// and `lo < v_end`, and `v_start < v_end` because a run's width is at
+    /// and `lo < v_reach`, and `v_start < v_reach` because a run's width is at
     /// least one, so each of `first`'s two candidates falls below each of
     /// `past`'s and `first < past`; the start is
     /// [`Run::addr_at`](crate::Run::addr_at) of an offset inside the run. Both
@@ -442,12 +442,12 @@ impl RunList {
         self.iter_runs()
             .take_while(move |(v_start, _)| *v_start < stop)
             .filter_map(move |(v_start, run)| {
-                let v_end = &v_start + &run.width; // the first ordinal past this run
-                if v_end <= lo {
+                let v_reach = &v_start + &run.width; // the first ordinal past this run
+                if v_reach <= lo {
                     return None;
                 }
                 let first = std::cmp::max(&v_start, &lo); // this run's first kept ordinal
-                let past = std::cmp::min(&v_end, &hi_excl); // one past its last
+                let past = std::cmp::min(&v_reach, &hi_excl); // one past its last
                 Some(Run {
                     i_start: run.addr_at(&(first - &v_start)),
                     width: past - first,
@@ -888,29 +888,39 @@ mod tests {
             (1..=5).map(|i| l.point(&n(i)).expect("arranged")).collect()
         };
         let mut checked = 0usize;
-        for a in 1..=6usize {
-            for b in a + 1..=6 {
-                for c in b + 1..=6 {
+        for c0 in 1..=6usize {
+            for c1 in c0 + 1..=6 {
+                for c2 in c1 + 1..=6 {
                     // Pivot: [c₀, c₁) and [c₁, c₂) exchange in place.
-                    let want = [&base[..a - 1], &base[b - 1..c - 1], &base[a - 1..b - 1], &base[c - 1..]]
-                        .concat();
-                    let out = l.reorder(&[n(a as u32), n(b as u32), n(c as u32)]);
-                    assert_eq!(read(&out), want, "pivot at {a}, {b}, {c}");
-                    assert_eq!(out.total_width(), n(5), "pivot at {a}, {b}, {c} permutes");
+                    let want = [
+                        &base[..c0 - 1],
+                        &base[c1 - 1..c2 - 1],
+                        &base[c0 - 1..c1 - 1],
+                        &base[c2 - 1..],
+                    ]
+                    .concat();
+                    let out = l.reorder(&[n(c0 as u32), n(c1 as u32), n(c2 as u32)]);
+                    assert_eq!(read(&out), want, "pivot at {c0}, {c1}, {c2}");
+                    assert_eq!(out.total_width(), n(5), "pivot at {c0}, {c1}, {c2} permutes");
                     checked += 1;
-                    for d in c + 1..=6 {
+                    for c3 in c2 + 1..=6 {
                         // Swap: the outer regions exchange, the middle stays.
                         let want = [
-                            &base[..a - 1],
-                            &base[c - 1..d - 1],
-                            &base[b - 1..c - 1],
-                            &base[a - 1..b - 1],
-                            &base[d - 1..],
+                            &base[..c0 - 1],
+                            &base[c2 - 1..c3 - 1],
+                            &base[c1 - 1..c2 - 1],
+                            &base[c0 - 1..c1 - 1],
+                            &base[c3 - 1..],
                         ]
                         .concat();
-                        let out = l.reorder(&[n(a as u32), n(b as u32), n(c as u32), n(d as u32)]);
-                        assert_eq!(read(&out), want, "swap at {a}, {b}, {c}, {d}");
-                        assert_eq!(out.total_width(), n(5), "swap at {a}, {b}, {c}, {d} permutes");
+                        let out =
+                            l.reorder(&[n(c0 as u32), n(c1 as u32), n(c2 as u32), n(c3 as u32)]);
+                        assert_eq!(read(&out), want, "swap at {c0}, {c1}, {c2}, {c3}");
+                        assert_eq!(
+                            out.total_width(),
+                            n(5),
+                            "swap at {c0}, {c1}, {c2}, {c3} permutes"
+                        );
                         checked += 1;
                     }
                 }

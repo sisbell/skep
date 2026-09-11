@@ -18,22 +18,25 @@ use crate::run::Run;
 /// confirmed, one I-run at a time, in arrangement order.
 ///
 /// `origin` is the DOCUMENT the run windows — the document its I-addresses
-/// were minted under, a version member projecting to its document
-/// (PUB-2.15). It is what the source gate is asked about (PUB-6.23) and
-/// what decides the run's family in the member (PUB-2.40): the shot
-/// document's own I-space stays by reference, the staging draft's is
-/// re-inserted as fresh identity, any other document's stays a window. The
-/// composite CHECKS it against the run's start — a run whose stated origin
-/// is not the document that minted its addresses is refused `BadRun`
-/// (`PublishError`) — so the field is the client's statement of intent, and
-/// a mistaken one is told rather than silently re-derived.
+/// were minted under, as the client states it. Its projection to the trunk
+/// (PUB-2.15), the run's ORIGIN DOCUMENT, is what the source gate is asked
+/// about (PUB-6.23) and what decides the run's family in the member
+/// (PUB-2.40): the shot document's own I-space stays by reference, the
+/// staging draft's is re-inserted as fresh identity, any other document's
+/// stays a window. The composite CHECKS the statement against the run's
+/// start — a run whose stated origin does not project to the origin document
+/// its start settles is refused `BadRun` (`PublishError`) — so the field is
+/// the client's statement of intent, and a mistaken one is told rather than
+/// silently re-derived.
 ///
 /// `run` is the I-run: a content element start and a width ≥ 1, built
 /// through [`Run::new`], the one foreign constructor — so a shot cannot name
 /// a zero-width run or a start that is not a full element position.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShotRun {
-    /// The document the run windows (its origin, PUB-2.15-projected).
+    /// The document the run windows, as the client states it — a member or
+    /// the document it projects to; the composite compares it projected
+    /// (PUB-2.15).
     pub origin: Address,
     /// The I-run itself.
     pub run: Run,
@@ -41,7 +44,7 @@ pub struct ShotRun {
 
 /// The base a staged draft was taken from (PUB-2.37): the MEMBER the
 /// stager's `copy` named as its source — the trunk head for the ordinary
-/// shot, an older member for the daughter shot — or the document itself
+/// shot, a pinned member for the daughter shot — or the document itself
 /// while it has no member yet (a published document between its birth and
 /// its first shot, PUB-2.66's memberless reading), together with how many of
 /// its content positions the copy TOOK.

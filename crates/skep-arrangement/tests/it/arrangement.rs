@@ -1436,7 +1436,7 @@ fn a_window_stays_a_window_and_a_daughter_lands_under_its_base() {
         assert_eq!(read_v(&s, member, 4), b"w".to_vec());
     }
     // The bare address floats to the trunk head; the daughter is reached by
-    // its own address alone; every member pins.
+    // its own address alone; every version address answers itself.
     assert_eq!(reading_surface(s.world().m3(), &pdoc()), m2);
     assert_eq!(trunk_head(s.world().m3(), &daughter), Some(m2.clone()));
     assert_eq!(reading_surface(s.world().m3(), &daughter), daughter);
@@ -1624,7 +1624,7 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
         PublishError::DanglingSource
     ));
     // (5) the base's shape speaks ahead of the gate: an extent past what the
-    //     older member m1 holds, beside a run m1 does not carry onto an
+    //     pinned member m1 holds, beside a run m1 does not carry onto an
     //     origin the consult would refuse. The run is not carried, so the
     //     gate would ask about it — and it is never asked.
     asked.borrow_mut().clear();
@@ -1895,7 +1895,7 @@ fn a_shot_refused_at_its_last_check_leaves_no_member_no_mint_and_no_placement() 
 
 #[test]
 fn a_deposit_into_a_published_chain_lands_in_the_head_member_alone() {
-    // PUB-2.65/2.66 (lane 3.2's pin): once a head exists, a declared deposit
+    // PUB-2.65/2.66 (lane 3.2's ruling): once a head exists, a declared deposit
     // appends to the HEAD member's arrangement — named by the bare address,
     // by the head, or by a pinned member — and to nothing else; the atom's
     // identity is minted under the chain of the address named; and the

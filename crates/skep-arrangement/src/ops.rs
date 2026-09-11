@@ -17,11 +17,11 @@
 //! in-txn ω gate — on the address the caller NAMES: the four edits and the
 //! shot (COPY: its destination only; VERSION is ungated, non-owner
 //! versioning being denial-as-fork, O10). The address named is not always
-//! the arrangement written. A DEPOSIT into a published chain that has a head
-//! lands on that head ([`deposit_surface`]) rather than in the named
-//! address's arrangement, and a shot writes only the member it mints; both
-//! are members of the named document's chain, minted under it, so the owner
-//! the gate checked is theirs too.
+//! the arrangement written. A DECLARED DEPOSIT into a published chain that
+//! has a head lands on that head ([`deposit_surface`]) rather than in the
+//! named address's arrangement, and a shot writes only the member it mints;
+//! both are members of the named document's chain, minted under it, so the
+//! owner the gate checked is theirs too.
 //!
 //! Publication (PUB round 2, lane 3.1; owner ruling D2b): the version-chain
 //! model's refusals, each stated with its op's check order, are evaluated
@@ -151,8 +151,8 @@ where
     /// THE PUBLISHED TARGET, and the deposit that clears it (PUB-2.11,
     /// PUB-2.59, PUB-2.61; PUB-9.13's DECLARED horn, owner-ruled). When the
     /// document `doc` projects to (PUB-2.15) is PUBLISHED, an insert is an
-    /// in-place advance of the reading surface and refuses `PublishedTarget`
-    /// — UNLESS `deposit` is set AND the insert is deposit-SHAPED: `at` names
+    /// in-place edit (PUB-2.11's in-place advance) and refuses
+    /// `PublishedTarget` — UNLESS `deposit` is set AND the insert is deposit-SHAPED: `at` names
     /// a fresh content position past the arranged extent, so the placement
     /// appends and disturbs no arrangement. The declaration is a claim the
     /// shape must bear out, never a bypass: a declared insert at an arranged
@@ -187,7 +187,7 @@ where
     /// insert.
     ///
     /// WHICH ARRANGEMENT THE DEPOSIT LANDS IN (PUB-2.65, PUB-2.66; lane 3.2's
-    /// pin): the HEAD member's, ALONE — the version-chain reads' own answer
+    /// ruling): the HEAD member's, ALONE — the version-chain reads' own answer
     /// ([`deposit_surface`]), which is the trunk head once the chain has one
     /// ([`trunk_head`]), whichever address of the chain the caller named: the
     /// bare document, the head itself, or a pinned member, which never grows.
@@ -261,16 +261,16 @@ where
             // at a FRESH position (PUB-2.59, PUB-9.13) of the arrangement the
             // deposit lands in: the HEAD member's, or the document's own
             // while it has none (PUB-2.66).
-            let target = {
+            let surface = {
                 let world = stg.working();
                 let m3 = world.m3();
-                let target = deposit_surface(m3, doc);
+                let surface = deposit_surface(m3, doc);
                 if published_target(m3, doc)
-                    && !(deposit && world.m5().names_fresh_content_position(&target, &at))
+                    && !(deposit && world.m5().names_fresh_content_position(&surface, &at))
                 {
                     return Err(InsertError::PublishedTarget);
                 }
-                target
+                surface
             };
             if values.is_empty() {
                 return Err(InsertError::EmptyContent);
@@ -278,7 +278,7 @@ where
             if !at.is_content() {
                 return Err(InsertError::NotContentSubspace);
             }
-            if !stg.working().m5().admits_content_boundary(&target, &at.ordinal) {
+            if !stg.working().m5().admits_content_boundary(&surface, &at.ordinal) {
                 return Err(InsertError::OutOfBounds);
             }
             let mut runs: Vec<Run> = Vec::new();
@@ -295,7 +295,7 @@ where
                 .clone();
             stg.push(
                 M5Rec::ContentPlace {
-                    doc: target,
+                    doc: surface,
                     at: at.ordinal,
                     runs,
                 }
@@ -328,9 +328,9 @@ where
     /// name the member it was staged from (`BaseSuperseded`).
     ///
     /// THE MEMBER'S ARRANGEMENT (PUB-2.40, PUB-2.41, PUB-2.42): each supplied
-    /// run by its ORIGIN — the document that minted its addresses, which
-    /// the run's own start settles (`document_of`, projected to the trunk,
-    /// PUB-2.15) and the client's stated `origin` must agree with. The
+    /// run by its ORIGIN DOCUMENT — the trunk (PUB-2.15) of the document that
+    /// minted its addresses, which the run's own start settles (`document_of`
+    /// then `trunk_of`) and the client's stated `origin` must project to. The
     /// document's OWN I-space (its own chain or any member's) is placed by
     /// reference; the STAGING DRAFT's is RE-INSERTED as fresh identity under
     /// the document's own I-space, each value through INSERT's own
@@ -347,46 +347,47 @@ where
     /// what the stager un-arranged and nothing else. One `ContentPlace` at
     /// ordinal 1 journals the whole arrangement — the fold appends every
     /// placed run's extent to R (J1★), the by-reference runs as COPY's are and
-    /// the fresh ones as INSERT's; an empty placement stages no record, the
+    /// the fresh ones as INSERT's; an empty placement pushes no record, the
     /// member then reading as the lazy empty arrangement.
     ///
     /// Check order (which error wins), PUB-6.36's slots: `DocNotRegistered`
     /// → `NotOwner` (slot 1, the destination's ω) → registration (slot 3):
     /// `SourceNotRegistered` for the base, then the draft, then each run's
-    /// origin in run order, each run's SHAPE (`BadRun`) settled as its origin
-    /// is derived → `PrivateSourceVersionless` (slot 5: a private document
-    /// has no chain, PUB-2.9's `true` face) → the base's shape:
-    /// `BaseNotInChain` → `BaseSuperseded` → `BaseExtentTooLarge` → the
-    /// SOURCE GATE (slot 6, PUB-6.23; PUB-8.1's second constraint):
-    /// `readable` consulted PER DISTINCT ORIGIN, in run order, skipping the
-    /// document's own I-space and every run the base already arranges
-    /// (PUB-6.24's carried cell), the FIRST unreadable origin answering
-    /// `Withheld(origin)` — BEFORE any existence answer, so a run onto an
-    /// unreadable origin is refused whether or not its addresses exist →
-    /// existence, `DanglingSource` on the first run any of whose addresses
-    /// M4 does not hold → `TooManyRuns` as the placement is accumulated →
-    /// `Mint` / `Content` from the mints and writes.
+    /// origin document in run order, each run's SHAPE (`BadRun`) settled as
+    /// its origin document is derived → `PrivateSourceVersionless` (slot 5: a
+    /// private document has no chain, PUB-2.9's `true` face) → the base's
+    /// shape: `BaseNotInChain` → `BaseSuperseded` → `BaseExtentTooLarge` →
+    /// the SOURCE GATE (slot 6, PUB-6.23; PUB-8.1's second constraint):
+    /// `readable` consulted PER DISTINCT ORIGIN DOCUMENT, in run order,
+    /// skipping the document's own I-space and every run the base already
+    /// arranges (PUB-6.24's carried cell), the FIRST unreadable origin
+    /// document answering `Withheld` with it — BEFORE any existence answer,
+    /// so a run onto an unreadable origin is refused whether or not its
+    /// addresses exist → existence, `DanglingSource` on the first run any of
+    /// whose addresses M4 does not hold → `TooManyRuns` as the placement is
+    /// accumulated → `Mint` / `Content` from the mints and writes.
     ///
-    /// `readable(world, origin)` answers whether the shooter may read
-    /// `origin`; `true` admits it. M5 hands it the TRANSACTION's working
-    /// world — the world in which `publish` has just found `origin`
-    /// registered — and asks only about an origin's DOCUMENT (PUB-2.15), once
-    /// per distinct origin that is neither the document's own nor carried by
-    /// the base, in run order. Because it is never asked of a world that has
-    /// not registered what it is asked about, a predicate that is fail-open on
-    /// an unregistered address (PUB-7.5) cannot decide the gate.
+    /// `readable(world, origin_doc)` answers whether the shooter may read
+    /// `origin_doc`; `true` admits it. M5 hands it the TRANSACTION's working
+    /// world — the world in which `publish` has just found `origin_doc`
+    /// registered — and asks only about an ORIGIN DOCUMENT (PUB-2.15): once
+    /// per distinct origin document, in run order, skipping the document's
+    /// own and every run the base already arranges. Because it is never asked
+    /// of a world that has not registered what it is asked about, a predicate
+    /// that is fail-open on an unregistered address (PUB-7.5) cannot decide
+    /// the gate.
     ///
-    /// LOCKS: `version_lock_key(doc)` (the trunk's frontier),
-    /// `content_lock_key(doc)` (the fresh-identity mints), and the base's
-    /// own version key when the base is a member — the daughter chain's
-    /// frontier, taken since which chain the member joins is decided inside.
-    /// Every origin is read off the composite's consistent base; no origin is
-    /// locked (a window is a reference).
+    /// LOCKS: `version_lock_key(trunk_of(doc))` (the trunk's frontier),
+    /// `content_lock_key(trunk_of(doc))` (the fresh-identity mints), and the
+    /// base's own version key when the base is a member — the daughter
+    /// chain's frontier, taken since which chain the member joins is decided
+    /// inside. Every origin is read off the transaction's working world; no
+    /// origin is locked (a window is a reference).
     ///
     /// A member address given as `doc` is projected to its document first:
     /// the shot is the document's, whichever member names it.
     ///
-    /// COST, AND WHO OWNS IT: the re-insert stages `2n + 1` records for `n`
+    /// COST, AND WHO OWNS IT: the re-insert pushes `2n + 1` records for `n`
     /// draft-native values, exactly as INSERT does, plus one placement whose
     /// run count — the client's runs, coalesced, plus the base's deposit
     /// runs — is capped at [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS),
@@ -423,32 +424,32 @@ where
             let world = stg.working();
             let (m3, m5, content) = (world.m3(), world.m5(), world.content());
             // Slot 3: registration — the base, the draft, every origin
-            // (PUB-6.37: an unregistered argument answers registration and
-            // nothing later).
+            // document (PUB-6.37: an unregistered argument answers
+            // registration and nothing later).
             if let Some(base) = &shot.base {
                 if !m3.is_registered_document(&base.member) {
                     return Err(PublishError::SourceNotRegistered);
                 }
             }
-            let draft: Option<Address> = shot.draft.as_ref().map(trunk_of);
-            if let Some(d) = &draft {
+            let draft_doc: Option<Address> = shot.draft.as_ref().map(trunk_of);
+            if let Some(d) = &draft_doc {
                 if !m3.is_registered_document(d) {
                     return Err(PublishError::SourceNotRegistered);
                 }
             }
-            // Each run's origin, derived from its own start (address
-            // arithmetic, no read) and required to agree with the client's
-            // statement — then registered.
-            let mut origins: Vec<Address> = Vec::with_capacity(shot.runs.len());
+            // Each run's origin document, derived from its own start (address
+            // arithmetic, no read) and required to be the document the
+            // client's stated `origin` projects to — then registered.
+            let mut origin_docs: Vec<Address> = Vec::with_capacity(shot.runs.len());
             for r in &shot.runs {
-                let origin = run_origin(&r.run).ok_or(PublishError::BadRun)?;
-                if origin != trunk_of(&r.origin) {
+                let origin_doc = run_origin_document(&r.run).ok_or(PublishError::BadRun)?;
+                if origin_doc != trunk_of(&r.origin) {
                     return Err(PublishError::BadRun);
                 }
-                if !m3.is_registered_document(&origin) {
+                if !m3.is_registered_document(&origin_doc) {
                     return Err(PublishError::SourceNotRegistered);
                 }
-                origins.push(origin);
+                origin_docs.push(origin_doc);
             }
             // Slot 5: the model's refusal — a private document has no chain
             // to append to (PUB-2.9).
@@ -477,10 +478,10 @@ where
                     if base.extent > m5.content_count(&base.member) {
                         return Err(PublishError::BaseExtentTooLarge);
                     }
-                    // The head/older distinction is the commit's own
-                    // (PUB-2.39): the memberless document, or a base that is
-                    // still the head ⇒ the trunk's next member; else the
-                    // base's daughter.
+                    // The head/pinned distinction is the commit's own
+                    // (PUB-2.39's head/older): the memberless document, or a
+                    // base that is still the head ⇒ the trunk's next member;
+                    // else the base's daughter.
                     if base.member == trunk || head.as_ref() == Some(&base.member) {
                         trunk.clone()
                     } else {
@@ -488,13 +489,13 @@ where
                     }
                 }
             };
-            // Slot 6: the source gate, per distinct origin, in run order —
-            // the document's own I-space needs no consult, a run the base
-            // already arranges takes none (PUB-6.24), and the FIRST
-            // unreadable origin speaks before any existence answer.
+            // Slot 6: the source gate, per distinct origin document, in run
+            // order — the document's own I-space needs no consult, a run the
+            // base already arranges takes none (PUB-6.24), and the FIRST
+            // unreadable origin document speaks before any existence answer.
             let mut decided: Vec<Address> = Vec::new();
-            for (r, origin) in shot.runs.iter().zip(&origins) {
-                if *origin == trunk || decided.contains(origin) {
+            for (r, origin_doc) in shot.runs.iter().zip(&origin_docs) {
+                if *origin_doc == trunk || decided.contains(origin_doc) {
                     continue;
                 }
                 let carried = shot
@@ -504,10 +505,10 @@ where
                 if carried {
                     continue;
                 }
-                if !readable(world, origin) {
-                    return Err(PublishError::Withheld(origin.clone()));
+                if !readable(world, origin_doc) {
+                    return Err(PublishError::Withheld(origin_doc.clone()));
                 }
-                decided.push(origin.clone());
+                decided.push(origin_doc.clone());
             }
             // Existence (S3★): every address a run names holds a value —
             // the draft-native run's bytes are what is re-inserted, and a
@@ -523,8 +524,8 @@ where
             // draft-native ones re-minted as fresh identity under the
             // document's own I-space — then the base's post-render deposits.
             let mut placed: Vec<Run> = Vec::new();
-            for (r, origin) in shot.runs.iter().zip(&origins) {
-                if draft.as_ref() == Some(origin) {
+            for (r, origin_doc) in shot.runs.iter().zip(&origin_docs) {
+                if draft_doc.as_ref() == Some(origin_doc) {
                     for a in r.run.addrs() {
                         let val = stg
                             .working()
@@ -572,12 +573,13 @@ where
     }
 }
 
-/// The DOCUMENT a supplied run's addresses were minted under — `document_of`
-/// of its start, projected to the trunk (PUB-2.15) — provided the start is a
-/// CONTENT element; `None` for a link element or an address with no
-/// document. Pure address arithmetic: it is what a shot's stated `origin`
-/// must agree with, and it reads nothing.
-fn run_origin(run: &Run) -> Option<Address> {
+/// A supplied run's ORIGIN DOCUMENT — the trunk (PUB-2.15) of the document
+/// its addresses were minted under, `document_of` of its start and then
+/// `trunk_of` — provided the start is a CONTENT element; `None` for a link
+/// element or an address with no document. What the source gate asks about
+/// and `Withheld` names (PUB-8.4's `site.addr`), and what a shot's stated
+/// `origin` must project to. Pure address arithmetic: it reads nothing.
+fn run_origin_document(run: &Run) -> Option<Address> {
     if run.i_start().subspace() != Some(&content_subspace()) {
         return None;
     }
@@ -631,8 +633,8 @@ where
     W::Record: From<M5Rec>,                     // stages only M5Rec (no mint, no byte write)
 {
     /// COPY (ASN-0118; §5): transclude existing content by reference —
-    /// resolve `specs` against source arrangements off the composite's
-    /// consistent base, splice into doc's content subspace at `at`, record
+    /// resolve `specs` against source arrangements off the transaction's
+    /// working state, splice into doc's content subspace at `at`, record
     /// provenance for the placed runs. Allocates NO content (CP1/CP2); the
     /// resolved addresses stay valid forever by content immutability (S0),
     /// so no source lock is needed.
@@ -645,9 +647,9 @@ where
     /// `DocNotRegistered` → `NotOwner` (the ω gate on the DESTINATION only;
     /// source spans stay unrestricted, transclusion of anyone's content being
     /// the point of the medium) → `PublishedTarget` (PUB-2.11 on the
-    /// DESTINATION's document, PUB-2.15 projected; copy-into is the reading
-    /// surface's own mutation class and carries no deposit exemption — the
-    /// sources, published or private, are never what this refuses on) →
+    /// DESTINATION's document, PUB-2.15 projected; copy-into is an in-place
+    /// edit and carries no deposit exemption — the sources, published or
+    /// private, are never what this refuses on) →
     /// `NotContentSubspace` → `OutOfBounds`. Then, per spec:
     /// `SourceNotRegistered`
     /// → `NotOrdinalVSpan` (the span fails
@@ -788,8 +790,8 @@ where
     ///
     /// Check order (which error wins): `DocNotRegistered` → `NotOwner` (the ω
     /// gate) → `PublishedTarget` (PUB-2.11 on the document `doc` projects
-    /// to, PUB-2.15 — a delete is the reading surface's own mutation and has
-    /// no deposit form) → `NotContentSubspace` → `NotArranged`
+    /// to, PUB-2.15 — a delete is an in-place edit and has no deposit form)
+    /// → `NotContentSubspace` → `NotArranged`
     /// (`p.ordinal ∉ [1, n_C]`) → `OutOfBounds` (`ordinal + width − 1 > n_C`)
     /// → `EmptyWidth` (`width = 0`).
     ///
@@ -871,8 +873,8 @@ where
     ///
     /// Check order (which error wins, per R-PRE): `DocNotRegistered` →
     /// `NotOwner` (the ω gate) → `PublishedTarget` (PUB-2.11 on the document
-    /// `doc` projects to, PUB-2.15; a re-arrangement is the reading surface's
-    /// own mutation and has no deposit form) → `BadCutCount` (3|4) →
+    /// `doc` projects to, PUB-2.15; a re-arrangement is an in-place edit and
+    /// has no deposit form) → `BadCutCount` (3|4) →
     /// `NotAscending` (strict) → `NotContentSubspace` (every cut) →
     /// `OutOfBounds` (CS5 lower bound `1 ≤ ord(c₀)` and upper bound
     /// `ord(c_last) ≤ n_C + 1`) → `EmptyContentSubspace` (R-PRE(ii);

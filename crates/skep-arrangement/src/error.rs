@@ -59,7 +59,7 @@ pub enum InsertError {
 /// one statement rather than two that must be edited in step.
 ///
 /// `PublishedTarget` is PUB-2.11's refusal on the DESTINATION (copy-into is
-/// the reading surface's own mutation class); the sources stay unrestricted.
+/// an in-place edit); the sources stay unrestricted.
 /// Same face as [`InsertError::PublishedTarget`]; no deposit exemption —
 /// only a declared `insert` rides it (PUB-2.59).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -158,12 +158,13 @@ pub enum VersionError {
 ///
 /// * `DocNotRegistered` / `NotOwner(doc)` — the destination's registration
 ///   and ω; the payload names the failing document.
-/// * `SourceNotRegistered` — the base, the draft, or a run's origin is not
-///   a registered document.
+/// * `SourceNotRegistered` — the base, the draft, or a run's origin document
+///   is not a registered document.
 /// * `BadRun` — a supplied run is not a content run of its stated origin:
-///   its start is not a content element, or the document that minted it is
-///   not the `origin` the client named. Address arithmetic on the request
-///   alone; it discloses nothing about what exists.
+///   its start is not a content element, or its ORIGIN DOCUMENT — the trunk
+///   (PUB-2.15) of the document that minted it — is not the document the
+///   client's `origin` projects to. Address arithmetic on the request alone;
+///   it discloses nothing about what exists.
 /// * `BaseNotInChain` — `base` names a document that is neither `doc` nor a
 ///   member of `doc`'s chain (PUB-2.37: a shot lands under its own base).
 /// * `BaseSuperseded` — the base is absent, or is `doc` itself, while `doc`
@@ -180,12 +181,12 @@ pub enum VersionError {
 ///   publishing means minting a separate edition: select what to publish
 ///   and it is minted published-born, your draft re-windowing it; private
 ///   documents are versionless."
-/// * `Withheld(origin)` — the source gate (PUB-6.23, PUB-8.1's second
-///   constraint) refused a run: the payload is the origin DOCUMENT
+/// * `Withheld(origin_doc)` — the source gate (PUB-6.23, PUB-8.1's second
+///   constraint) refused a run: the payload is the ORIGIN DOCUMENT
 ///   (PUB-8.4's `site.addr`) of the FIRST supplied run, in run order, that
 ///   the base does not already arrange — carried-ness is judged run by run
-///   (PUB-6.24), not origin by origin — whose origin is not the shot's own
-///   document and which the shooter may not read.
+///   (PUB-6.24), not per origin document — whose origin document is not the
+///   shot's own document and which the shooter may not read.
 /// * `DanglingSource` — an I-address a run names has no stored value
 ///   (S3★): a by-reference run whose extent M4 does not hold whole, or a
 ///   draft-native run whose bytes are not all there to re-insert.

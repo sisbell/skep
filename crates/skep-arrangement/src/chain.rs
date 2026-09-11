@@ -4,15 +4,23 @@
 //! chain ([`trunk_head`], PUB-2.53), and whether that document is PUBLISHED
 //! ([`published_target`], PUB-2.11) — and, from those three, which
 //! arrangement a READER of an address answers from ([`reading_surface`]) and
-//! which one a DEPOSIT naming it lands in ([`deposit_surface`]). Pure over
-//! M1's address arithmetic and M3's slice: no arrangement is read here, and
-//! every chain read the write surface makes asks this file rather than
-//! spelling the read itself.
+//! which one a DECLARED DEPOSIT naming it lands in ([`deposit_surface`]).
+//! Pure over M1's address arithmetic and M3's slice: no arrangement is read
+//! here, and every chain read the write surface makes asks this file rather
+//! than spelling the read itself.
 //!
 //! The two surfaces are two answers because they differ at exactly one kind
-//! of address, a PINNED member: a reader of a member answers that member,
-//! forever (PUB-2.50), while a deposit naming it lands on the chain's head
-//! (PUB-2.66), a pinned member's arrangement never growing.
+//! of address, a PINNED member — any member other than the trunk head
+//! (PUB-2.66's pinned older member; the records' "older", PUB-2.39). Every
+//! version address answers its own member forever (PUB-2.50), the head's
+//! included; but a declared deposit naming any member lands on the head, so
+//! a pinned member's arrangement never grows, and the head's grows until a
+//! later trunk member becomes the head.
+//!
+//! A LINK deposit — M7's writes into a document's link subspace, gated by
+//! the same [`Caller`](crate::Caller) — is outside the version-chain rule
+//! (PUB-2.12): it seats into the address it names, and neither surface
+//! answers for it.
 //!
 //! CONTRACT, for every read here that consults M3 — the address asked about
 //! is a REGISTERED document or a member of one (PUB-6.37): M3's publication
@@ -55,11 +63,11 @@ pub fn trunk_of(a: &Address) -> Address {
 /// PUB-2.53 — the TRUNK HEAD of the document `doc` belongs to: the latest
 /// member of the top-level version sequence `D.1, D.2, …` anchored at
 /// `trunk_of(doc)`, or `None` while that document has no member. THE ONE
-/// pin of "the latest version" (PUB-2.49): a daughter chain — `D.2.1, D.2.2,
-/// …`, anchored at a member — floats nothing and is never answered here,
-/// whichever member `doc` names. M3's `latest_version` is the chain read;
-/// the projection to the trunk is [`trunk_of`], so a member, a daughter and
-/// the bare document all ask about one chain. The head a shot judges its
+/// definition of "the latest version" (PUB-2.49): a daughter chain —
+/// `D.2.1, D.2.2, …`, anchored at a member — floats nothing and is never
+/// answered here, whichever member `doc` names. M3's `latest_version` is the
+/// chain read; the projection to the trunk is [`trunk_of`], so a member, a
+/// daughter and the bare document all ask about one chain. The head a shot judges its
 /// base against (PUB-2.39) is this one, which is the head every reader
 /// floats to.
 ///
@@ -100,13 +108,14 @@ pub fn published_target(m3: &M3State, doc: &Address) -> bool {
 
 /// HEAD-FLOAT — the arrangement a READER of `doc` answers from (PUB-2.49,
 /// PUB-2.50, PUB-2.53, PUB-2.66): the ONE place the reader's resolve is
-/// pinned, so every reader routes through it rather than deciding for itself.
+/// decided, so every reader routes through it rather than resolving for
+/// itself.
 ///
-/// * A VERSION address answers ITSELF, forever (PUB-2.50): a member pins.
+/// * A VERSION address answers ITSELF, forever (PUB-2.50).
 /// * A BARE document address that is PUBLISHED answers its TRUNK HEAD
 ///   (PUB-2.53) — and, while it has no member yet, its OWN arrangement: a
 ///   published document between its birth and its first shot serves what it
-///   holds, its deposits landing there until a head member exists
+///   holds, its declared deposits landing there until a head member exists
 ///   (PUB-2.66's memberless reading).
 /// * A PRIVATE document answers itself: head-float is INERT there. A
 ///   private document is versionless (PUB-2.9) and so has no member to
@@ -142,15 +151,16 @@ pub fn reading_surface(m3: &M3State, doc: &Address) -> Address {
 ///   reading).
 ///
 /// It differs from [`reading_surface`] at exactly a PINNED member: a reader
-/// of the member answers the member (PUB-2.50), a deposit naming it lands on
-/// the head. Only the PLACEMENT floats — the atom's identity is minted under
-/// the address the caller named, which is `insert`'s business, not this
-/// read's. Asked before the chain moves, as [`trunk_head`] states; CONTRACT
-/// as [`published_target`] states.
+/// of the member answers the member (PUB-2.50), a declared deposit naming it
+/// lands on the head. Only the PLACEMENT floats — the atom's identity is
+/// minted under the address the caller named, which is `insert`'s business,
+/// not this read's. Asked before the chain moves, as [`trunk_head`] states;
+/// CONTRACT as [`published_target`] states.
 ///
-/// A caller building a deposit asks this for the arrangement whose `n_C + 1`
-/// is the one position a published document admits
-/// ([`Vstream::insert`](crate::Vstream::insert)).
+/// A caller building a declared deposit asks this for the arrangement whose
+/// `n_C + 1` is the one position a published document admits
+/// ([`Vstream::insert`](crate::Vstream::insert)). Content only: a link
+/// deposit seats into the address it names (PUB-2.12).
 pub fn deposit_surface(m3: &M3State, doc: &Address) -> Address {
     if !published_target(m3, doc) {
         return doc.clone();
@@ -185,10 +195,11 @@ mod tests {
             .apply_m3(&M3Rec::Allocate { addr: daughter.clone(), published: true });
         assert_eq!(trunk_head(&m3, &pdoc()), Some(m2.clone()));
         assert_eq!(reading_surface(&m3, &pdoc()), m2, "the bare address floats to the head");
-        // Every member pins, the head included — and asked about the trunk
-        // head, a member and a daughter both name the one trunk.
+        // Every version address answers itself, the head included — and
+        // asked about the trunk head, a member and a daughter both name the
+        // one trunk.
         for member in [&m1, &m2, &daughter] {
-            assert_eq!(reading_surface(&m3, member), *member, "a version address pins");
+            assert_eq!(reading_surface(&m3, member), *member, "a version address answers itself");
             assert_eq!(trunk_head(&m3, member), Some(m2.clone()), "one trunk, whoever asks");
         }
         // Inert on a private document, even one a fixture stamped a member
@@ -201,11 +212,11 @@ mod tests {
         assert_eq!(reading_surface(&stamped, &doc1()), doc1(), "a private document never floats");
     }
 
-    /// PUB-2.65/2.66 — where a deposit lands, over every case it decides: a
-    /// memberless edition takes its own deposits; once the chain has a head,
-    /// every address of the chain lands there — the bare document, the head
-    /// itself and a pinned member alike — and a private document takes its
-    /// own inserts whatever a fixture stamped under it.
+    /// PUB-2.65/2.66 — where a declared deposit lands, over every case it
+    /// decides: a memberless edition takes its own deposits; once the chain
+    /// has a head, every address of the chain lands there — the bare
+    /// document, the head itself and a pinned member alike — and a private
+    /// document takes its own inserts whatever a fixture stamped under it.
     #[test]
     fn a_deposit_lands_on_the_head_whichever_chain_address_it_names() {
         let m3 = seeded_m3();
@@ -217,7 +228,11 @@ mod tests {
             .apply_m3(&M3Rec::Allocate { addr: m1.clone(), published: true })
             .apply_m3(&M3Rec::Allocate { addr: m2.clone(), published: true });
         for named in [&edition, &m1, &m2] {
-            assert_eq!(deposit_surface(&m3, named), m2, "{named:?}: a deposit lands on the head");
+            assert_eq!(
+                deposit_surface(&m3, named),
+                m2,
+                "{named:?}: a declared deposit lands on the head"
+            );
         }
         // The one address the two surfaces answer differently: a pinned
         // member, which its readers answer forever and which never grows.

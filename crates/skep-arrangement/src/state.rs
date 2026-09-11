@@ -166,7 +166,13 @@ pub enum M5Rec {
     /// MAKELINK seating (no R — J-LV).
     #[non_exhaustive]
     LinkSeat { doc: Address, link: Address },
-    /// CREATENEWVERSION (share + R-append). LINEARIZATION-AT-FOLD: the fold
+    /// CREATENEWVERSION (share + R-append). `new` receives `source`'s content
+    /// run-list, and `source` names the arrangement shared: for a record
+    /// [`Vstream::version`](crate::Vstream::version) stages, the READING
+    /// SURFACE ([`reading_surface`](crate::reading_surface)) of the address it
+    /// was asked about — that address itself unless it is a bare published
+    /// document with members, whose trunk head it then names.
+    /// LINEARIZATION-AT-FOLD: the fold
     /// reads `source`'s then-current arrangement at THIS record's
     /// commit/replay slot — the record's effect is defined against the state
     /// at its commit position, not a pre-staged value. Exact under v1's

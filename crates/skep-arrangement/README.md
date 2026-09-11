@@ -12,8 +12,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   spans keep their origin identity), delete, rearrange; each a
   kernel transaction composing namespace mints and content writes.
 - **Versioning** — VERSION forks a document: the fork's arrangement
-  starts as a snapshot of the source's content map, the source
-  untouched, and the two diverge copy-on-write. An owned fork's
+  starts as a snapshot of the content map the source's readers answer
+  from (a bare published source's head), the source untouched, and the
+  two diverge copy-on-write. An owned fork's
   ancestry is carried by the identity itself, readable by truncation;
   a cross-owner fork's identity is severed from the source's, and what
   records the relationship is provenance.
@@ -21,8 +22,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   published document's version chain, born published, in ONE commit,
   from CLIENT-SUPPLIED I-address runs and never from any draft's
   arrangement at commit: the document's own runs stay by reference,
-  the staging draft's are re-minted as fresh identity under the
-  document's own I-space, and any other document's stay windows
+  the staging draft's — a document outside the chain — are re-minted
+  as fresh identity under the document's own I-space, and any other
+  document's stay windows
   behind a per-origin source gate (`Withheld`); the base's post-render
   deposits are carried after them. The trunk advances while the base
   is still its head; otherwise the shot lands as the base's daughter,

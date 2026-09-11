@@ -160,8 +160,8 @@ pub enum VersionError {
 ///
 /// * `DocNotRegistered` / `NotOwner(doc)` — the destination's registration
 ///   and ω; the payload names the failing document.
-/// * `SourceNotRegistered` — the base, the draft, or a run's origin document
-///   is not a registered document.
+/// * `SourceNotRegistered` — the base, the document the draft projects to
+///   (PUB-2.15), or a run's origin document is not a registered document.
 /// * `BadRun` — a supplied run is not a content run of its stated origin:
 ///   its start is not a content element, or its ORIGIN DOCUMENT — the trunk
 ///   (PUB-2.15) of the document that minted it — is not the document the

@@ -61,8 +61,10 @@ pub struct Run {
 }
 
 /// Why [`Run::new`] refused — the standing invariant broken, one variant per
-/// clause, checked in declaration order, so a zero-width run with a bad start
-/// answers `ZeroWidth` (as M1's `T12Clause` and `ElemError` name theirs).
+/// clause, as M1's `T12Clause` and `ElemError` name theirs. Which answers when
+/// both clauses are broken is [`Run::new`]'s to state, and it does
+/// (`ZeroWidth`); declaration order carries no contract, as in every error
+/// type of this crate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RunError {
     /// `width == 0`: a run holds at least one position.
@@ -169,7 +171,7 @@ impl Run {
     }
 
     /// Checked constructor — the ONE door, refusing with the clause broken:
-    /// [`RunError::ZeroWidth`] when `width == 0`, else
+    /// [`RunError::ZeroWidth`] when `width == 0`, whatever the start, else
     /// [`RunError::NotAnElementPosition`] when `i_start` is not a full element
     /// position `doc·0·subspace·ordinal`. Every Run that is not built by M5's
     /// own emission sites walks through here, an external producer and a
@@ -454,8 +456,8 @@ mod tests {
         // And a field T7 leaves open to further subdivision, whose last
         // component is not an ordinal either.
         assert_eq!(Run::new(a(&[1, 0, 1, 0, 1, 0, 1, 2, 3]), n(1)), bad_start);
-        // Both clauses broken: the width is asked first, as the variants are
-        // declared, so the verdict does not depend on which bad start it is.
+        // Both clauses broken: the width is asked first, as `Run::new` states,
+        // so the verdict does not depend on which bad start it is.
         assert_eq!(Run::new(a(&[1, 0, 1, 0, 1]), n(0)), Err(RunError::ZeroWidth));
         let r = Run::new(ca(3), n(2)).expect("a full element position with width ≥ 1 is admitted");
         assert_eq!(r.i_start(), &ca(3));

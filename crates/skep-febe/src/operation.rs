@@ -411,8 +411,9 @@ where
     /// upstream: this call unwinds if a store panics beneath it, so totality
     /// rests equally on M5's, M6's, M7's and M8's read and write paths not
     /// panicking on honest input. What panic sites they hold guard their own
-    /// internal invariants, so no honest request reaches one — and none of
-    /// their contracts states the obligation, which is why it is written here.
+    /// internal invariants, so no honest request reaches one. M5 states that
+    /// obligation in its own contract (skep-arrangement, §Failure channels),
+    /// and it is written here for the rest.
     ///
     /// Reentrant & `Sync` — the transport may call it concurrently for
     /// pipelined requests (§8), and that concurrency is the caller's to use.

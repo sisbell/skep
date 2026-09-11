@@ -23,6 +23,25 @@
 //! R pair — P2) but, like the POOM, is recovered by replay. v1 has no
 //! skip-serialized hints, so [`M5State::rebuild_derived`] is the identity.
 //!
+//! ## Failure channels
+//!
+//! Every refusal an operation's contract anticipates arrives as a VALUE:
+//! `TxnError::Rejected(E)` carrying the op's own verdict, in the order that op
+//! states, or one of M2's own `TxnError` variants (`OverBudget`,
+//! `Unencodable`, `Durability`, `Poisoned`), whose effects M2 states. No
+//! public item panics on an input its contract admits, whatever the wire can
+//! spell: each `.expect` here guards an internal invariant and states its
+//! proof beside it, every read is total, [`M5State::apply_m5`] answers a
+//! record outside its input class without panicking, and the decode doors
+//! refuse (`Run`, R) or repair (the run-list) a malformed value rather than
+//! admit one a later read would panic on. The panics a caller can provoke are
+//! its own broken preconditions, both M2's: calling a transacting entry point
+//! here (a [`Vstream`] op, `seat_link`) from inside a `transact` closure on
+//! the same kernel, or handing [`Vstream::publish`] a `readable` that calls
+//! `transact` — M2's reentrancy panic, which names the obligation. A
+//! `readable` that panics on its own account is the caller's panic, which M2
+//! propagates with nothing of the shot surviving.
+//!
 //! ## Boundary — deliberately NOT owned here
 //!
 //! * content bytes (M4) and address minting (M3) — M5 *orchestrates* both at
@@ -76,8 +95,9 @@
 //! commit) — born published, in ONE commit, from CLIENT-SUPPLIED I-address
 //! runs ([`Shot`], PUB-8.1) and never from any draft's arrangement. The
 //! document's own runs stay by reference, the staging draft's are re-minted
-//! as fresh identity under the document's own I-space, and any other
-//! document's stay windows behind the source gate (PUB-2.40, PUB-6.23);
+//! as fresh identity under the document's own I-space (the draft lying
+//! outside the chain, as [`Shot`] requires), and any other document's stay
+//! windows behind the source gate (PUB-2.40, PUB-6.23);
 //! the base's post-render deposits are carried after them (PUB-2.42,
 //! PUB-2.45). The BIRTH VERSION is the same composite with the base absent
 //! (PUB-2.34), and so with no tail to carry.

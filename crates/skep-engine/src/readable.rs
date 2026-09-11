@@ -74,16 +74,16 @@ impl World {
     /// * The PROJECTION runs ahead of every clause, so `doc` pays it before
     ///   anything here can refuse it — an address M3 never registered
     ///   included, which the published clause then answers `true` two lines
-    ///   later. `trunk_of` peels one component per iteration and each peel
-    ///   COPIES the whole remaining address, M1's `parent` rebuilding its
-    ///   prefix and re-walking T4 to mint it, so the work is the argument's
-    ///   own document-field length TIMES its component count. A component is
-    ///   a `Nat` besides, so a copy is an allocation apiece rather than a
-    ///   word. Nothing in this crate bounds either count: `Address` carries
-    ///   no depth limit, and this predicate is answered once per doc-argument
-    ///   of every read a front door admits, so what bounds the term in the
-    ///   live system is the CALLER's — the daemon's wire cap on a tumbler's
-    ///   components, whose budget is written where that number is.
+    ///   later. `trunk_of` cuts a version member back to its trunk in one
+    ///   truncation (M5), copying the kept prefix once and validating it
+    ///   once, so the work is linear in the argument's component count. A
+    ///   component is a `Nat` besides, so a copy is an allocation apiece
+    ///   rather than a word. Nothing in this crate bounds that count:
+    ///   `Address` carries no depth limit, and this predicate is answered
+    ///   once per doc-argument of every read a front door admits, so what
+    ///   bounds the term in the live system is the CALLER's — the daemon's
+    ///   wire cap on a tumbler's components, whose budget is written where
+    ///   that number is.
     /// * The GRANT clause then walks the projected document's ancestors,
     ///   `parent` again per level, with one probe of the principal-exact
     ///   index and one of the ANY-PRINCIPAL index at each. That walk is over

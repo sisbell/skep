@@ -2,16 +2,19 @@
 //! `transact` per operation, every mutation under an M3 lock key for the
 //! touched document's allocation domain (§Serialization key).
 //!
-//! A REJECTION LEAVES NO STATE CHANGE, and that is M2's guarantee rather than
-//! an ordering these ops keep: `transact` returns `TxnError::Rejected(E)`
-//! straight out of the closure phase, discarding the staging, drawing no
-//! `Seq` and appending nothing. Four of the six ops do reject before staging
-//! anything; INSERT and the publish shot cannot, since each stages a mint and
-//! a content write per fresh value as it goes ([`allocate_for_placement`],
-//! J0's one step) and may reject after them — on a later value, and for the
-//! shot on its run budget or its own version mint as well.
-//! M10 surfaces the rejection as a typed one and acknowledges only after
-//! commit.
+//! A REJECTION LEAVES NO STATE CHANGE. For a refusal answered inside a
+//! transaction that is M2's guarantee rather than an ordering these ops keep:
+//! `transact` returns `TxnError::Rejected(E)` straight out of the closure
+//! phase, discarding the staging, drawing no `Seq` and appending nothing.
+//! Four of the six ops do reject before staging anything; INSERT and the
+//! publish shot cannot, since each stages a mint and a content write per
+//! fresh value as it goes ([`allocate_for_placement`], J0's one step) and may
+//! reject after them — on a later value, and for the shot on its run budget
+//! or its own version mint as well. VERSION's three pre-transaction refusals
+//! (`SourceNotRegistered`, `NotAPrincipal`, `NodeTierCrossOwner`) are
+//! answered off an M2 snapshot before any transaction opens, and so reach M2
+//! not at all. M10 surfaces the rejection as a typed one and acknowledges
+//! only after commit.
 //!
 //! Ownership: five ops take a [`Caller`] and open with [`gate_write`] — the
 //! in-txn ω gate — on the address the caller NAMES: the four edits and the
@@ -175,7 +178,12 @@ pub const MAX_PLACED_RUNS: usize = 1 << 16;
 /// positions pass it reaches publication across successive shots instead:
 /// what one shot re-mints joins the document's own I-space, which the next
 /// shot places by reference, so each shot re-mints only what is still the
-/// draft's.
+/// draft's. Each of those shots is a member in its own right: born
+/// published, the head its readers float to until the next lands, answering
+/// its own address forever — so this remedy publishes every interim
+/// arrangement as a version of the edition. It is also the only remedy for a
+/// shot M2 refuses `OverBudget`: for an act that cannot be split, M2's "split
+/// the transaction" means this and nothing else.
 pub const MAX_REINSERTED_VALUES: usize = 1 << 17;
 
 /// M5's transact-driving op handle over M2 (§B): a thin borrow of the
@@ -247,13 +255,15 @@ where
     /// PER VALUE in the order given, `Mint` (the content mint) → `Content`
     /// (the byte write), with the FIRST value to fail deciding.
     ///
-    /// Of those two per-value verdicts, only `Mint` is one an honest request
-    /// can earn: `Mint(MintError::Gate)` is M3's defence against a corrupted
-    /// frontier; `Mint(MintError::HomeNotRegistered)` cannot arrive past the
-    /// gate above and is M3's own boundary discharge; and
+    /// Neither per-value verdict is one an honest request can earn on a
+    /// correct store: `Mint(MintError::HomeNotRegistered)` cannot arrive past
+    /// the gate above and is M3's own boundary discharge;
+    /// `Mint(MintError::Gate)` is M3's defence against a corrupted frontier,
+    /// which M3 states never fires on a live path; and
     /// `Content(AlreadyPresent)` cannot occur in production at all — M3 mints
     /// fresh and M5 writes once, which is the argument `stage_write` itself
-    /// makes for keeping the guard.
+    /// makes for keeping the guard. All three are defensive, as the shot's and
+    /// VERSION's mints are.
     ///
     /// THE PUBLISHED TARGET, and the deposit that clears it (PUB-2.11,
     /// PUB-2.59, PUB-2.61; PUB-9.13's DECLARED horn, owner-ruled). When the
@@ -444,7 +454,10 @@ where
     /// allocation step (`allocate_for_placement`), the bytes read at the
     /// draft's addresses — a byte read, never an arrangement read — so the
     /// committed member references no address of the draft; any OTHER
-    /// document's stays a window, answering its origin. The runs are placed
+    /// document's stays a window, answering its origin. The three families are
+    /// disjoint under [`Shot`](crate::Shot)'s REQUIRES on `draft`; a draft
+    /// inside `doc`'s chain moves the document's own runs into the draft's
+    /// family, as `Shot` states. The runs are placed
     /// in the order given, then the BASE'S POST-RENDER DEPOSITS after them: a
     /// published member changes only by exempt deposits appended at fresh
     /// positions (PUB-2.43 — the append-only edition this surface keeps, as
@@ -463,8 +476,9 @@ where
     /// Check order (which error wins), PUB-6.36's slots: `DocNotRegistered`
     /// → `NotOwner` (slot 1, the destination's ω — the only question the shot
     /// asks of its caller, and one [`Caller::System`] passes) → registration
-    /// (slot 3): `SourceNotRegistered` for the base, then the draft, then each
-    /// run's origin document in run order, each run's SHAPE (`BadRun`)
+    /// (slot 3): `SourceNotRegistered` for the base, then the document the
+    /// draft projects to (PUB-2.15), then each run's origin document in run
+    /// order, each run's SHAPE (`BadRun`)
     /// settled as its origin document is derived → `PrivateSourceVersionless`
     /// (slot 5: a private document has no chain, PUB-2.9's `true` face) → the
     /// base's shape: `BaseNotInChain` → `BaseSuperseded` →
@@ -572,9 +586,9 @@ where
             )?;
             let world = stg.working();
             let (m3, m5, content) = (world.m3(), world.m5(), world.content());
-            // Slot 3: registration — the base, the draft, every origin
-            // document (PUB-6.37: an unregistered argument answers
-            // registration and nothing later).
+            // Slot 3: registration — the base, the document the draft
+            // projects to, every origin document (PUB-6.37: an unregistered
+            // argument answers registration and nothing later).
             if let Some(base) = &shot.base {
                 if !m3.is_registered_document(&base.member) {
                     return Err(PublishError::SourceNotRegistered);
@@ -1177,9 +1191,11 @@ where
     W::Record: From<M5Rec> + From<M3Rec>, // stages M3Rec + M5Rec
 {
     /// CREATENEWVERSION (ASN-0123; §7): fork — mint a new identity (M3),
-    /// install its content arrangement as a snapshot of `source`'s content
-    /// subspace (the multiplicity-preserving V→I map share, V2), record
-    /// provenance. Returns the new document address and the commit `Seq`.
+    /// install its content arrangement as a snapshot of the content subspace
+    /// of `source`'s READING SURFACE (the arrangement `source`'s readers
+    /// answer from, below) — the multiplicity-preserving V→I map share, V2 —
+    /// and record provenance. Returns the new document address and the commit
+    /// `Seq`.
     ///
     /// Whether `principal` owns `source` is asked of M3's authorization
     /// predicate — `is_effective_owner`, the ω rule every write gate asks
@@ -1283,12 +1299,6 @@ where
     /// established above and M3's registrations are monotone, which leaves
     /// only M3's frontier gate.
     ///
-    /// EMPTY SOURCE: a source whose content subspace is empty yields a fork
-    /// that is registered and ABSENT from the arrangement map — the lazy
-    /// absent-⇒-empty convention, with no redundant entry and no provenance
-    /// (ASN-0123 V1). Every read answers for it as it does for any document
-    /// M5 has not yet touched.
-    ///
     /// WHICH ARRANGEMENT IS SNAPSHOTTED (lane 3.2's head-float): the source's
     /// READING SURFACE ([`reading_surface`]) — a bare published source with
     /// members forks its trunk HEAD's arrangement, the one its readers answer
@@ -1302,13 +1312,23 @@ where
     /// the fork's own mint is staged, as [`trunk_head`] requires: after it, an
     /// owned fork would be the head it asks about.
     ///
+    /// EMPTY SURFACE: when the arrangement snapshotted arranges no content,
+    /// the fork is registered and ABSENT from the arrangement map — the lazy
+    /// absent-⇒-empty convention, with no redundant entry and no provenance
+    /// (ASN-0123 V1) — and every read answers for it as for any document M5
+    /// has not yet touched. The emptiness is the SURFACE's, not the address
+    /// named's: a bare published source whose own pre-chain arrangement is
+    /// empty forks its head's content, and one whose head is empty forks
+    /// nothing, whatever its pre-chain arrangement holds.
+    ///
     /// COST, AND WHO OWNS IT. One request names one address, and the record
-    /// it stages names two; what the fold then does is share the source's
-    /// run-list (O(1), structural) and append `#runs(source)` freshly-built
-    /// spans to R, permanently, R losing no member ever (P2). So the work and
-    /// the state a request commands are set by the SOURCE's fragmentation and
-    /// not by the request, and `#runs(source)` is itself grown by editing —
-    /// a self-COPY doubles it, within `MAX_PLACED_RUNS` per request.
+    /// it stages names two; what the fold then does is share the surface's
+    /// run-list (O(1), structural) and append `#runs(reading_surface(source))`
+    /// freshly-built spans to R, permanently, R losing no member ever (P2). So
+    /// the work and the state a request commands are set by the SURFACE's
+    /// fragmentation and not by the request, and that count is itself grown
+    /// by editing — a self-COPY of a draft doubles it, within
+    /// `MAX_PLACED_RUNS` per request.
     ///
     /// M5 CAPS NONE OF IT, and no cap upstream reaches it: M2's
     /// `MAX_TXN_BYTES` prices the staged record, which is two addresses;

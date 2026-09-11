@@ -1029,6 +1029,53 @@ fn version_of_an_empty_source_has_a_zero_content_footprint() {
 }
 
 #[test]
+fn a_fork_is_as_empty_as_the_reading_surface_it_snapshots_not_the_address_named() {
+    // ASN-0123 V1 under head-float: the fork is empty exactly when the
+    // arrangement it snapshots — its source's READING SURFACE — is, whatever
+    // the address named arranges. A bare edition whose own pre-chain
+    // arrangement is empty forks its head's content (the state COPY, reading
+    // the address named, refuses as `EmptySource`); one whose head is empty
+    // forks nothing, however much its pre-chain arrangement holds.
+    let k = mem_kernel();
+    let vs = Vstream::new(&k);
+    let (member1, _) = vs
+        .version(PrincipalId(1), &pdoc(), None)
+        .expect("an empty-source member");
+    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"z")], Deposit::Declared)
+        .expect("lands in the head member1");
+    let (member2, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("forks the head");
+    assert_eq!(member2, a(&[1, 0, 1, 0, 3, 2]));
+    {
+        let s = k.snapshot();
+        let m5 = s.world().m5();
+        assert_eq!(m5.content_count(&pdoc()), n(0), "the address named arranges nothing");
+        assert_eq!(m5.content_count(&member2), n(1), "the fork holds its surface's one position");
+        assert_eq!(
+            m5.content_runs(&member2).collect::<Vec<_>>(),
+            m5.content_runs(&member1).collect::<Vec<_>>()
+        );
+    }
+    // The converse: content in the pre-chain arrangement, an empty head.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k); // pdoc: a b c, memberless
+    let (head, _) = vs
+        .publish(
+            P1,
+            &pdoc(),
+            Shot { base: None, draft: None, runs: vec![] },
+            &readable_by(PrincipalId(1)),
+        )
+        .expect("an empty birth member");
+    let (fork, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("forks the empty head");
+    let s = k.snapshot();
+    let m5 = s.world().m5();
+    assert_eq!(m5.content_count(&pdoc()), n(3), "the address named arranges three positions");
+    assert_eq!(m5.content_count(&head), n(0));
+    assert_eq!(m5.content_count(&fork), n(0), "the fork is as empty as the head it snapshots");
+    assert_eq!(m5.recorded_span_count(&fork), 0, "and R records nothing for it");
+}
+
+#[test]
 fn version_rejects_unregistered_unknown_and_node_tier_callers() {
     let k = mem_kernel();
     let vs = insert_abc(&k);

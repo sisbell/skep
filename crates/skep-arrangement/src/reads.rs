@@ -4,7 +4,7 @@
 //!
 //! **Level-class discipline** (§2): a SpanSet aggregated across runs — a
 //! region image, an endset's coverage, the internal `content_image`, a
-//! document's `ever_contained` record — is in general MIXED-LENGTH
+//! document's `ever_contained` cover (R↾doc) — is in general MIXED-LENGTH
 //! (transclusion mixes origin lengths), and M1's length-gated set ops fault
 //! `LevelMismatch` on mixed operands. Where geometry is needed, M5 partitions
 //! each operand into level-classes by endpoint length
@@ -12,7 +12,7 @@
 //! the per-class results; where overlap/membership suffices it uses the total
 //! `classify_spans`/`contains`. The discipline is ENCAPSULATED behind the
 //! query methods ([`M5State::project`], [`M5State::deletions`]) and OWED by
-//! whoever aggregates run extents themselves — [`M5State::image`]'s raw
+//! whoever aggregates run I-extents themselves — [`M5State::image`]'s raw
 //! cover, and the runs [`M5State::resolve`] hands back for a caller to lift.
 //! Both routes reach [`Run::iextent`], where the obligation is stated
 //! (Conflicts #8).
@@ -85,8 +85,8 @@ impl M5State {
     /// well-formedness, `#start ≥ 2`), leaving depth compatibility to this
     /// defensive fold.
     ///
-    /// MIXED-LENGTH HAZARD for whoever aggregates the returned runs' extents:
-    /// see [`Run::iextent`].
+    /// MIXED-LENGTH HAZARD for whoever aggregates the returned runs'
+    /// I-extents: see [`Run::iextent`].
     pub fn resolve(&self, doc: &Address, span: &Span) -> Vec<Run> {
         self.iter_resolve(doc, span).collect()
     }
@@ -136,7 +136,7 @@ impl M5State {
     /// re-derive it. `union` (concatenation) only ⇒ total, never faults, NOT
     /// normalized; possibly mixed-length when `span` covers transcluded runs,
     /// so it is consumed under the level-class discipline (the hazard is
-    /// stated on [`Run::iextent`], which every aggregator of run extents
+    /// stated on [`Run::iextent`], which every aggregator of run I-extents
     /// reaches, whether or not it comes through here).
     pub fn image(&self, doc: &Address, span: &Span) -> SpanSet {
         self.resolve(doc, span).into_iter().map(|r| r.iextent()).collect()
@@ -263,7 +263,7 @@ impl M5State {
 
     /// Does `doc`'s CONTENT arrangement hold every address of `run` — the
     /// membership question of [`seats_link`](M5State::seats_link) asked of a
-    /// content EXTENT? The publish shot's carried-run test (PUB-6.24,
+    /// run's whole I-extent? The publish shot's carried-run test (PUB-6.24,
     /// PUB-8.1): a supplied run the base already arranges takes no source
     /// gate, the base having answered for those addresses when it was
     /// published. Absent doc ⇒ nothing is carried.
@@ -399,7 +399,7 @@ impl M5State {
             let here = image.get(&len).cloned().unwrap_or_else(SpanSet::empty);
             let deleted = difference_sets(&ever, &here).expect(
                 "per-class operands share one length class, and every span of \
-                 either is a run extent hence level-uniform — the gate passes",
+                 either is a run I-extent hence level-uniform — the gate passes",
             );
             out = union(&out, &deleted);
         }
@@ -431,8 +431,9 @@ impl M5State {
     /// `ghosts`, documents that held queried material at some past boundary
     /// and hold none of it now. A caller wanting present containment
     /// discharges BOTH at once with `project(d, coverage) ≠ ⟨⟩` off the same
-    /// snapshot, which answers from the live arrangement and so admits neither
-    /// a ghost nor a merely adjacent candidate (M6's FINDDOCSCONTAINING).
+    /// M2 snapshot, which answers from the live arrangement and so admits
+    /// neither a ghost nor a merely adjacent candidate (M6's
+    /// FINDDOCSCONTAINING).
     ///
     /// A SUPERSET with no false negatives: a document genuinely holding an
     /// address of `coverage` placed a span that overlaps it in the tumbler
@@ -593,7 +594,7 @@ mod tests {
         // The quantities the cost statements name, each against the thing it
         // counts: `#runs` per subspace is the length of what `content_runs` /
         // `link_runs` would hand back — runs, not the positions they cover —
-        // and `|R↾doc|` is the length of the record, one span per placed run,
+        // and `|R↾doc|` is how many spans R↾doc holds, one per placed run,
         // which a delete leaves standing (P2) and a link seat never adds to
         // (J-LV).
         let s = arranged(); // ca(1..3) then vca(1..2): two runs, two placements
@@ -726,7 +727,7 @@ mod tests {
     #[test]
     fn project_maps_i_coverage_back_to_v_spans_in_both_branches() {
         let s = arranged();
-        // Level-uniform, same-length branch: one element's extent.
+        // Level-uniform, same-length branch: one element's I-extent.
         let one = SpanSet::singleton(run(&ca(2), 1).iextent());
         let got = s.project(&doc1(), &one);
         let spans: Vec<Span> = got.iter().cloned().collect();

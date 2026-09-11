@@ -107,19 +107,20 @@
 //! `link_lock_key(doc)` — so a document's arrangement edits and their
 //! R-appends are co-serialized under that one key.
 //!
-//! A published chain's FRONTIER and the arrangement at its HEAD (the
-//! document's own while it has no member) serialize under the trunk's
-//! `version_lock_key`. Every transaction that moves either holds it — a
-//! declared deposit, which writes the head and reads the frontier to find it
-//! (PUB-2.66), and the shot, which advances the frontier and carries its
-//! base's tail into the member it mints — and so does `version`, whose
-//! snapshot takes its source's reading surface off that frontier. Each holds
-//! the key by arithmetic on its own request, never by a read of the world.
-//! The SHOT also takes its document's `content_lock_key` for the
-//! fresh-identity mints and, for a base that is a member, that member's
-//! `version_lock_key`, the daughter chain's frontier; it writes only the
-//! arrangement of the member it mints, which no other transaction can name
-//! until this one commits.
+//! A published chain's FRONTIER and the arrangement its declared deposits
+//! land in — the HEAD member's, or the document's own while it has no member
+//! ([`deposit_surface`]) — serialize under the trunk's `version_lock_key`.
+//! Every transaction that advances the one or lands content in the other
+//! holds it — a declared deposit, which lands in that arrangement and reads
+//! the frontier to find it (PUB-2.66), and the shot, which advances the
+//! frontier and carries its base's tail into the member it mints — and so
+//! does `version`, whose snapshot takes its source's reading surface off that
+//! frontier. Each holds the key by arithmetic on its own request, never by a
+//! read of the world. The SHOT also takes its document's `content_lock_key`
+//! for the fresh-identity mints and, for a base that is a member, that
+//! member's `version_lock_key`, the daughter chain's frontier; it writes only
+//! the arrangement of the member it mints, which no other transaction can
+//! name until this one commits.
 //!
 //! ## Composition
 //!

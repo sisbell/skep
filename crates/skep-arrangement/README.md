@@ -5,7 +5,7 @@ skep documents editable over immutable content.
 
 Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substrate in the Project Xanadu lineage.
 
-- **The Vstream** — per-document run lists mapping virtual positions
+- **The V-stream** — per-document run lists mapping virtual positions
   (what a reader sees) onto immutable content addresses (what is
   stored); every edit is a new arrangement, never a byte change.
 - **Editing composites** — insert, copy (transclusion — the copied

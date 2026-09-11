@@ -370,9 +370,9 @@ where
     ///
     /// DESTINATION (PUB-2.37, PUB-2.39, PUB-2.55): the next member of the
     /// chain anchored at the base, decided AT COMMIT — the trunk's next
-    /// member (`mint_version(doc)`, `D.4`) when the base is still the trunk
-    /// head ([`trunk_head`], the head every floating reader answers from,
-    /// read before the member is minted), the base's own DAUGHTER
+    /// member (`mint_version(trunk_of(doc))`, `D.4`) when the base is still
+    /// the trunk head ([`trunk_head`], the head every floating reader answers
+    /// from, read before the member is minted), the base's own DAUGHTER
     /// (`mint_version(base)`, `D.3.1`) when it is not. Two shots racing off
     /// one head both commit, the first on the trunk and the second as the
     /// head's daughter (PUB-2.44); nothing is positionally applied to an
@@ -410,7 +410,7 @@ where
     /// unchanged (PUB-2.45, PUB-2.67). What the shot un-arranges is what the
     /// stager un-arranged and nothing else. One `ContentPlace` at
     /// ordinal 1 journals the whole arrangement — the fold appends every
-    /// placed run's extent to R (J1★), the by-reference runs as COPY's are and
+    /// placed run's I-extent to R (J1★), the by-reference runs as COPY's are and
     /// the fresh ones as INSERT's; an empty placement pushes no record, the
     /// member then reading as the lazy empty arrangement.
     ///
@@ -451,7 +451,7 @@ where
     /// REQUIRES of `readable`, two clauses the composite cannot check. It
     /// answers off the world it is HANDED: the guarantee above holds only for
     /// a predicate that reads that world, and one that answers from a world
-    /// captured before this transaction — a snapshot, or a consult that
+    /// captured before this transaction — an M2 snapshot, or a consult that
     /// ignores its argument — may be asked about an origin its world never
     /// registered, where a fail-open predicate admits it. And it runs inside
     /// this op's transaction, under M2's applier lock, so it inherits
@@ -489,7 +489,7 @@ where
     /// run, stopping only at the first one M4 does not hold — for a shot that
     /// commits, `Σ width` positions — so a short run list walks as far as the
     /// stored content it names, each run paying its whole width even where
-    /// runs repeat one extent. The wire caps the run COUNT and not `Σ width`,
+    /// runs repeat one I-extent. The wire caps the run COUNT and not `Σ width`,
     /// and `Σ width` is what the existence walk and, over the draft-native
     /// runs, the re-insert both grow with. Those two — the base's run count,
     /// which the arrangement answers without reading a run, and `Σ width` —
@@ -619,7 +619,7 @@ where
             }
             // Existence (S3★): every address a run names holds a value. Each
             // address is asked, not only the start: a by-reference run is the
-            // CLIENT's extent rather than one an arrangement resolved. And each
+            // CLIENT's I-extent rather than one an arrangement resolved. And each
             // is asked through `value_at`, the accessor the re-insert below
             // reads the draft-native bytes with. COPY places by reference and
             // reads no value back, so presence is the whole of its question;
@@ -739,22 +739,25 @@ where
     Ok(())
 }
 
-/// The key a published chain's HEAD serializes under: which member heads it
-/// (the frontier [`trunk_head`] reads and a trunk member's mint advances) and
-/// what that head's arrangement holds (where every declared deposit into the
-/// chain lands — the document's own while it has no member). No key of M5's
-/// own: the trunk's `version_lock_key`, taken by arithmetic on the address
-/// named, so a transaction holds it before it knows where the head is.
+/// The key a published chain's HEAD serializes under, guarding two things:
+/// which member heads the chain (the frontier [`trunk_head`] reads and a
+/// trunk member's mint advances), and the arrangement every declared deposit
+/// into the chain lands in ([`deposit_surface`] — the head member's, or the
+/// document's own while the chain has no member and so no head). No key of
+/// M5's own: the trunk's `version_lock_key`, taken by arithmetic on the
+/// address named, so a transaction holds it before it knows where the head
+/// is.
 ///
-/// Every transaction that moves the head holds it — a declared deposit, which
-/// writes the head's arrangement and reads the frontier to find it; the shot,
-/// which advances the frontier and carries its base's tail; an owned
-/// `version` of the trunk, which advances the frontier — and so does every
-/// `version`, whose snapshot takes its source's reading surface off that
-/// frontier. An operation that moves a published chain's head, or reads its
-/// frontier to find it, joins this list. COPY is not on it: its source spans
-/// are read at the address named, so it never asks the frontier where the
-/// head is.
+/// Every transaction that ADVANCES that frontier or LANDS content in that
+/// arrangement holds it — a declared deposit, which lands there and reads the
+/// frontier to find where; the shot and an owned `version` of the trunk,
+/// which advance the frontier (the shot carrying its base's tail as it does)
+/// — and so does every `version`, whose snapshot takes its source's reading
+/// surface off that frontier. An operation that advances a published chain's
+/// frontier, lands content in the arrangement its declared deposits land in,
+/// or reads the frontier to find the head, joins this list. COPY is not on
+/// it: its source spans are read at the address named, so it never asks the
+/// frontier where the head is.
 fn head_lock_key(doc: &Address) -> LockKey {
     M3State::version_lock_key(&trunk_of(doc))
 }
@@ -1108,9 +1111,9 @@ where
     /// Whether `principal` owns `source` is asked of M3's authorization
     /// predicate — `is_effective_owner`, the ω rule every write gate asks
     /// through [`Caller::is_owner`], so ownership has one spelling here just
-    /// as the P-tier rule below does — off a snapshot (stable for an existing
-    /// document, per M3), to choose branch + lock key: an owned fork mints
-    /// `mint_version(source, bit)` under `version_lock_key(source)`
+    /// as the P-tier rule below does — off an M2 snapshot (stable for an
+    /// existing document, per M3), to choose branch + lock key: an owned fork
+    /// mints `mint_version(source, bit)` under `version_lock_key(source)`
     /// (serializing forks of that source); a cross-owner fork requires the
     /// forker's prefix to be a registered ACCOUNT — M3's
     /// `is_registered_account`, which is the predicate `mint_document` itself
@@ -1157,7 +1160,7 @@ where
     /// private working copy of every published document to every principal,
     /// which PUB-2.14 forbids.
     ///
-    /// ALL FOUR PRE-TRANSACTION READS ARE OFF A SNAPSHOT, taken before the
+    /// ALL FOUR PRE-TRANSACTION READS ARE OFF AN M2 SNAPSHOT, taken before the
     /// applier lock and so possibly stale by the time the transaction runs,
     /// and each is sound for its own reason. The ownership read is stable for
     /// an existing document (per M3), which is what makes the branch and the
@@ -1168,11 +1171,11 @@ where
     /// withdraws, so a `true` here cannot go stale, and a `false` can only be
     /// a rejection a retry need not repeat. The forker's PREFIX,
     /// `principal_prefix(principal)` — the cross-owner arm's target account —
-    /// is value-stable across snapshots (M3: prefixes are immutable and
+    /// is value-stable across M2 snapshots (M3: prefixes are immutable and
     /// principals persist), so a `Some` names the same account inside the
     /// transaction and a `None` is a rejection a retry need not repeat. Any
-    /// future M2 realization that widens what may land between a snapshot and
-    /// its transaction must re-examine this, along with
+    /// future M2 realization that widens what may land between an M2 snapshot
+    /// and its transaction must re-examine this, along with
     /// [`M5Rec::VersionSnapshot`]'s linearization-at-fold, which the same
     /// change already obliges.
     ///
@@ -1193,7 +1196,7 @@ where
     /// directly owes its own.
     ///
     /// Check order (which error wins): `SourceNotRegistered` first — off the
-    /// pre-transaction snapshot, so a fork aimed at an address naming no
+    /// pre-transaction M2 snapshot, so a fork aimed at an address naming no
     /// document discloses nothing about who owns it or whether it is
     /// published. Then the branch decides the rest. An OWNED fork:
     /// `PrivateSourceVersionless` → `PrivateVersionOfPublished` (both inside
@@ -1201,7 +1204,7 @@ where
     /// cannot both hold — the first needs the source's document private, the
     /// second published — so their order between themselves decides nothing.
     /// A CROSS-OWNER fork: `NotAPrincipal` (the id names no registered
-    /// principal) → `NodeTierCrossOwner` (both off the snapshot) → `Mint`,
+    /// principal) → `NodeTierCrossOwner` (both off that M2 snapshot) → `Mint`,
     /// neither refusal reading on that arm (PUB-2.14). `Mint` is defensive on
     /// both arms: the source's registration and the forker's account-hood are
     /// established above and M3's registrations are monotone, which leaves
@@ -1220,9 +1223,11 @@ where
     /// superseded and which a trunk member built from it would have the bare
     /// address float back to. A version address forks its own member
     /// (PUB-2.50); a private or memberless source forks itself. The record's
-    /// `source` is that surface, read off the working state before the new
-    /// member's own mint is staged, as [`trunk_head`] requires — after it,
-    /// an owned fork would be the head it asks about.
+    /// `source` is that surface, read off the working state — never off the
+    /// M2 snapshot the four reads above take, since a shot or an owned fork of
+    /// the trunk can advance the frontier between the two — and read before
+    /// the fork's own mint is staged, as [`trunk_head`] requires: after it, an
+    /// owned fork would be the head it asks about.
     ///
     /// COST, AND WHO OWNS IT. One request names one address, and the record
     /// it stages names two; what the fold then does is share the source's
@@ -1306,7 +1311,7 @@ where
             }?;
             // The arrangement shared is the source's reading surface — its
             // trunk head when it has one (head-float, PUB-2.49) — asked of
-            // the working state before this member's mint is staged below.
+            // the working state before the fork's mint is staged below.
             let surface = reading_surface(m3, source);
             stg.push(m3rec.into());
             stg.push(
@@ -1920,7 +1925,7 @@ mod tests {
     fn an_empty_shot_mints_its_member_and_leaves_the_arrangement_slice_as_it_found_it() {
         // An empty placement pushes no record. The member's mint is M3's
         // record; with nothing to place, M5's slice comes out exactly as it
-        // went in — no arrangement entry and no R record for the member, which
+        // went in — no arrangement entry and nothing in R for the member, which
         // reads as the lazy empty arrangement, as an empty fork's does.
         let p1 = Caller::Principal(PrincipalId(1));
         let k = shot_kernel(vec![], &[]);

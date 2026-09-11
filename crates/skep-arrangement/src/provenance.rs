@@ -76,16 +76,16 @@ impl TryFrom<ProvenanceShadow> for Provenance {
 }
 
 impl Provenance {
-    /// Append the I-extents of `runs` to `doc`'s record (persistent — the
-    /// receiver is untouched). Called from the placing folds, co-located with
-    /// the arrangement update they pair with, so one new state carries both
-    /// halves of J1★. The ONLY mutator, and it only ever lengthens a
-    /// document's sequence.
+    /// Append the I-extents of `runs` to R↾doc (persistent — the receiver is
+    /// untouched). Called from the placing folds, co-located with the
+    /// arrangement update they pair with, so one new state carries both halves
+    /// of J1★. The ONLY mutator, and it only ever lengthens a document's
+    /// sequence.
     ///
     /// Takes the runs rather than their spans: the lift is the one this type
     /// admits, so performing it here makes the span-shape invariant above
     /// true at the mutator instead of owed by each caller.
-    #[must_use = "append returns the extended record; R is persistent and the receiver is untouched"]
+    #[must_use = "append returns the extended relation; R is persistent and the receiver is untouched"]
     pub(crate) fn append<'r>(
         &self,
         doc: &Address,
@@ -107,17 +107,17 @@ impl Provenance {
             .unwrap_or_else(SpanSet::empty)
     }
 
-    /// `|R↾doc|` — how many spans `doc`'s record holds: one per run it has
-    /// ever placed, whether or not the arrangement still holds it. One map
-    /// lookup, reading no span; absent ⇒ 0.
+    /// `|R↾doc|` — how many spans R↾doc holds: one per run `doc` has ever
+    /// placed, whether or not the arrangement still holds it. One map lookup,
+    /// reading no span; absent ⇒ 0.
     pub(crate) fn recorded_span_count(&self, doc: &Address) -> usize {
         self.0.get(doc).map_or(0, |spans| spans.len())
     }
 
-    /// Has `doc` a record at all? Distinguishes ABSENT from empty, which the
-    /// reads deliberately do not (both answer ⟨⟩) — the empty-source fork's
-    /// "no redundant entry" claim is about the map, so the test that pins it
-    /// needs a way to ask.
+    /// Has `doc` any entry in R at all? Distinguishes ABSENT from empty, which
+    /// the reads deliberately do not (both answer ⟨⟩) — the empty-source
+    /// fork's "no redundant entry" claim is about the map, so the test that
+    /// pins it needs a way to ask.
     #[cfg(test)]
     pub(crate) fn is_recorded(&self, doc: &Address) -> bool {
         self.0.contains_key(doc)
@@ -170,11 +170,11 @@ mod tests {
         let p = p.append(&doc1(), [&second]);
         assert!(p.is_recorded(&doc1()));
         assert_eq!(p.ever_contained(&doc1()).len(), 2);
-        // The recorded spans are the runs' own extents — the shape the reads
+        // The recorded spans are the runs' own I-extents — the shape the reads
         // rest on, established by the mutator rather than by these callers.
         let recorded: Vec<_> = p.ever_contained(&doc1()).iter().cloned().collect();
         assert_eq!(recorded, vec![first.iextent(), second.iextent()]);
-        // A different document keeps its own record; the historical read walks
+        // A different document keeps its own R↾doc; the historical read walks
         // both in Tumbler order.
         let p = p.append(&doc2(), [&other]);
         let cov = SpanSet::singleton(other.iextent());
@@ -185,7 +185,7 @@ mod tests {
     }
 
     #[test]
-    fn decoding_a_record_re_establishes_the_span_shape_the_reads_rest_on() {
+    fn decoding_the_relation_re_establishes_the_span_shape_the_reads_rest_on() {
         // §9: the SPAN SHAPE clause is what makes `M5State::deletions`'
         // per-class `difference_sets` infallible — M1's set ops gate on
         // level-uniformity as well as on length — so the decode path holds it
@@ -210,17 +210,17 @@ mod tests {
         assert!(!skew.is_level_uniform());
         assert!(
             bincode::deserialize::<Provenance>(&wire(vec![skew])).is_err(),
-            "a span no run extent could produce is not a provenance record"
+            "a span no run I-extent could produce is not provenance"
         );
-        // A well-formed record decodes to itself, and its bytes are exactly
+        // A well-formed relation decodes to itself, and its bytes are exactly
         // what the shadow's shape writes — the door is a check on the decode
         // path and not a second encoding.
         let placed = run(&ca(1), 2);
         let good = Provenance::default().append(&doc1(), [&placed]);
-        let bytes = bincode::serialize(&good).expect("the record encodes");
+        let bytes = bincode::serialize(&good).expect("the relation encodes");
         assert_eq!(bytes, wire(vec![placed.iextent()]));
         assert_eq!(
-            bincode::deserialize::<Provenance>(&bytes).expect("a run extent decodes"),
+            bincode::deserialize::<Provenance>(&bytes).expect("a run I-extent decodes"),
             good
         );
     }

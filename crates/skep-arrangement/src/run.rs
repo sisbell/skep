@@ -249,7 +249,7 @@ impl Run {
     /// The run's addresses — offsets `[0, width)`, in I-order, which is also
     /// V-order (a run occupies consecutive V-ordinals). The sequence a run
     /// denotes, asked of the run, so a consumer that needs the positions
-    /// rather than the extent does not count them itself. For a caller
+    /// rather than the I-extent does not count them itself. For a caller
     /// holding the run BY VALUE, [`into_addrs`](Run::into_addrs).
     ///
     /// Yields OWNED addresses because a run stores none: it stores a start and
@@ -304,15 +304,20 @@ impl Run {
     /// advance (`start < reach`, TS4) and the shift is length-preserving
     /// (`#start = #reach`), so `from_endpoints` cannot fault.
     ///
-    /// MIXED-LENGTH HAZARD: iextents of runs from different origin documents
-    /// have different endpoint lengths, so any SpanSet aggregating them is
-    /// outside the domain of M1's length-gated set ops — `intersect`,
-    /// `difference_sets`, `normalize` and `canonical_key` each fault
-    /// `LevelMismatch` on mixed operands. A consumer that aggregates iextents
-    /// (M7's slot endsets, M6's region images) must partition by endpoint
-    /// length, operate within each class, and combine the per-class results:
-    /// in particular a coverage-class dedup key is ONE `canonical_key` PER
-    /// level class, never one over the raw aggregate.
+    /// MIXED-LENGTH HAZARD: iextents of runs whose origin documents sit at
+    /// different DEPTHS (a trunk and one of its members, or documents of
+    /// accounts at different depths) have different endpoint lengths, so any
+    /// SpanSet aggregating them is outside the domain of M1's length-gated set
+    /// ops — `intersect`, `difference_sets`, `normalize` and `canonical_key`
+    /// each fault `LevelMismatch` on mixed operands. A consumer that
+    /// aggregates iextents (M7's slot endsets, M6's region images) must
+    /// partition by endpoint length, operate within each class, and combine
+    /// the per-class results: in particular a coverage-class dedup key is ONE
+    /// `canonical_key` PER level class, never one over the raw aggregate. A
+    /// level class is set by an origin's depth, not by which document it is:
+    /// two sibling documents are two origins in one class, so partitioning by
+    /// length is not partitioning by origin, and one class can hold many
+    /// origins.
     pub fn iextent(&self) -> Span {
         Span::from_endpoints(self.i_start.tumbler().clone(), &self.reach())
             .expect("width ≥ 1 ⇒ start < reach ∧ #start = #reach ⇒ from_endpoints cannot fault")
@@ -324,7 +329,7 @@ impl Run {
     ///
     /// Two branches, one answer. A span that is level-uniform at the run's own
     /// endpoint length is intersected with M1 (`intersect`, both operands
-    /// inside one level class); the intersection lies within the run's extent,
+    /// inside one level class); the intersection lies within the run's I-extent,
     /// so both endpoints share the run's prefix and the offsets are
     /// last-component differences. Any other span — a different length, or the
     /// same length but non-uniform, either of which `intersect` would fault on
@@ -343,7 +348,7 @@ impl Run {
                 .expect("both operands level-uniform at one length — gate passes")?;
             let ordinal_of = |t: &Tumbler| {
                 t.get(addr_len)
-                    .expect("run extent endpoints have #t == addr_len")
+                    .expect("run I-extent endpoints have #t == addr_len")
                     .clone()
             };
             let base = ordinal_of(self.i_start.tumbler());
@@ -412,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn iextent_is_the_half_open_ordinal_shift_extent() {
+    fn iextent_is_the_half_open_ordinal_shift_span() {
         // §2: [i_start, shift(i_start, width)) — level-uniform, element-level.
         let r = Run::new(ca(2), n(3)).expect("valid run");
         let s = r.iextent();
@@ -435,7 +440,7 @@ mod tests {
         assert_eq!(r.addr_at(&n(2)), ca(4));
         assert_eq!(r.reach(), *ca(5).tumbler());
         assert_eq!(r.reach(), r.tumbler_at(&n(3)));
-        // And it is the extent's own upper endpoint, which is what makes the
+        // And it is the I-extent's own upper endpoint, which is what makes the
         // lift the run's two endpoints and nothing derived twice.
         assert_eq!(r.iextent().reach(), r.reach());
     }

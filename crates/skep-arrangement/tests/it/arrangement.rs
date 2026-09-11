@@ -1438,11 +1438,11 @@ fn a_shot_appends_the_next_trunk_member_from_the_clients_runs() {
     // The fresh identities are R-recorded for the member (J1★), as COPY's
     // by-reference placements are — read the way FINDDOCSCONTAINING reads R
     // (§9): `docs_ever_containing` is the overlap SUPERSET, and it admits an
-    // ADJACENT record — the edition's and the draft's `[pca1, pca4)` touches
-    // the fresh `[pca4, pca6)` — so the member is asserted a candidate rather
-    // than the only one, and the present-containment narrowing `project`
-    // picks it out alone: neither the edition's pre-chain arrangement nor the
-    // draft arranges a fresh address.
+    // ADJACENT recorded span — the edition's and the draft's `[pca1, pca4)`
+    // touches the fresh `[pca4, pca6)` — so the member is asserted a
+    // candidate rather than the only one, and the present-containment
+    // narrowing `project` picks it out alone: neither the edition's pre-chain
+    // arrangement nor the draft arranges a fresh address.
     let fresh = SpanSet::singleton(Run::new(pca(4), n(2)).expect("a run").iextent());
     let candidates = m5.docs_ever_containing(&fresh);
     assert!(candidates.contains(&member), "the member placed the fresh run: {candidates:?}");
@@ -1747,11 +1747,11 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
 }
 
 #[test]
-fn carried_ness_is_judged_per_supplied_run_over_its_whole_extent() {
+fn carried_ness_is_judged_per_supplied_run_over_its_whole_i_extent() {
     // PUB-6.24's carried cell: a supplied run the base already arranges takes
     // no consult, and "already arranges" is a claim about EVERY address of
     // ONE run. Per run: a carried run decides nothing about its origin, so a
-    // later run from the same origin is still asked about. Per extent: a run
+    // later run from the same origin is still asked about. Per I-extent: a run
     // that opens on what the base holds and reaches past it is not carried.
     // Read either more loosely and a shot windows addresses of an origin its
     // shooter may not read without the gate ever being asked.
@@ -1777,7 +1777,7 @@ fn carried_ness_is_judged_per_supplied_run_over_its_whole_extent() {
     let (y, _) = vs
         .insert(P1, &doc2(), vp(1, 3), vec![val(b"y")], Deposit::Undeclared)
         .expect("doc2 grows y");
-    assert_eq!(y, a(&[1, 0, 1, 0, 2, 0, 1, 3]), "y continues w..x's extent");
+    assert_eq!(y, a(&[1, 0, 1, 0, 2, 0, 1, 3]), "y continues w..x's I-extent");
     let refusing = recording_consult(&asked, vec![]);
     let shot_off_member1 = |runs: Vec<ShotRun>| Shot { base: Some(base(&member1, 5)), draft: None, runs };
     let before = k.current_seq();
@@ -1794,7 +1794,7 @@ fn carried_ness_is_judged_per_supplied_run_over_its_whole_extent() {
         PublishError::Withheld(d) if d == doc2()
     ));
     assert_eq!(asked.borrow().as_slice(), &[doc2()], "asked once, about the run member1 does not carry");
-    // Per extent: ONE run opening on w, x — which member1 arranges — and
+    // Per I-extent: ONE run opening on w, x — which member1 arranges — and
     // reaching y, which it does not. Judged on its start it would be carried.
     asked.borrow_mut().clear();
     assert!(matches!(
@@ -2540,7 +2540,7 @@ fn seating_appends_a_home_link_refuses_a_reseat_and_never_touches_r() {
     // Link writes are OUTSIDE the version-chain rule (PUB-2.12): a home link
     // seats into the PUBLISHED edition exactly as into a draft.
     let (seated, _) = seat_link(&k, &pdoc(), &a(&[1, 0, 1, 0, 3, 0, 2, 1]))
-        .expect("seating into a published home is not an in-place edit");
+        .expect("seating into a published document is not an in-place edit");
     assert_eq!(seated, a(&[1, 0, 1, 0, 3, 0, 2, 1]));
     assert_eq!(k.snapshot().world().m5().link_count(&pdoc()), n(1));
 }

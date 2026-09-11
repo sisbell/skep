@@ -42,7 +42,7 @@ use crate::HasM5;
 ///   returned record — `stg.working().m5()` — and
 /// * that transaction must hold `M3State::link_lock_key(doc)`. `CL-UNIQ` is
 ///   decided against the state this reads, so a caller that decides it
-///   against some other state has not decided it: read off a snapshot and
+///   against some other state has not decided it: read off an M2 snapshot and
 ///   stage afterwards, and a link already seated between the two is seated a
 ///   second time at `n_L(d) + 1`, which no read reports and no operation
 ///   undoes.

@@ -34,20 +34,21 @@ impl DocArrangement {
     }
 }
 
-/// Authoritative folded state: the per-document POOM, and the `Provenance`
-/// record co-located beside it (ASN-0075). The arrangement is authoritative
-/// MUTABLE state recovered by replay — NOT a recomputable hint (ASN-0047 P3);
-/// provenance is the append-only history housed next to it, and it is a type
-/// of its own whose surface offers no removal, so the permanence R promises
-/// holds by construction. `arrangements` is sparse: an absent doc ⇒ empty
-/// arrangement (the eager-lazy split with M3). v1 has no derived-hint fields
-/// ⇒ [`rebuild_derived`](M5State::rebuild_derived) is the identity.
+/// Authoritative folded state: the per-document POOM, and the provenance
+/// relation R (`Provenance`) co-located beside it (ASN-0075). The arrangement
+/// is authoritative MUTABLE state recovered by replay — NOT a recomputable
+/// hint (ASN-0047 P3); provenance is the append-only history housed next to
+/// it, and it is a type of its own whose surface offers no removal, so the
+/// permanence R promises holds by construction. `arrangements` is sparse: an
+/// absent doc ⇒ empty arrangement (the eager-lazy split with M3). v1 has no
+/// derived-hint fields ⇒ [`rebuild_derived`](M5State::rebuild_derived) is
+/// the identity.
 ///
 /// CLASS INVARIANTS, relating the two fields. The reads state what they
 /// answer; these are what makes those answers mean it.
 ///
 /// * **R is append-only.** Structural: `Provenance` offers `append` and
-///   reads, and no removal, so no fold arm can shorten a document's record
+///   reads, and no removal, so no fold arm can shorten any document's R↾doc
 ///   however the variant set grows (ASN-0047 P2).
 /// * **P4★ — present containment is recorded.** For every `doc`, the current
 ///   content image `⋃ r.iextent()` over `content_runs(doc)` is contained in
@@ -65,7 +66,7 @@ impl DocArrangement {
 ///   and no door re-establishes their relation — unlike R's span shape and
 ///   the run-list's maximal merge, whose serde doors do — because
 ///   containment costs a per-class set difference over every document's
-///   record at every load. A decoded state violating it faults nothing: it
+///   R↾doc at every load. A decoded state violating it faults nothing: it
 ///   answers `docs_ever_containing` with false negatives at once, and
 ///   `deletions` omits whatever unrecorded address the next delete removes.
 /// * **D-SEQ★ — each subspace's arranged positions are the dense prefix.**
@@ -101,7 +102,7 @@ impl DocArrangement {
 /// `content_run_count`, `link_run_count`, `project`, `deletions` and
 /// `recorded_span_count` never float: asked of a bare published document
 /// with members, they answer its own pre-chain arrangement, which the chain
-/// has superseded, and its own record, not the trunk head's. Head-float
+/// has superseded, and its own R↾doc, not the trunk head's. Head-float
 /// (PUB-2.49) is a composition the READER makes —
 /// [`reading_surface`](crate::reading_surface) first, then the read — as
 /// M6's and M8's arrangement readers do.
@@ -268,7 +269,7 @@ impl M5State {
             // not imply a full element position. An address the door refuses
             // is a NO-OP here. The fold is infallible and runs inside
             // `Kernel::open`, so panicking is not the alternative; and placing
-            // it is worse than dropping it, a link run whose extent covered a
+            // it is worse than dropping it, a link run whose I-extent covered a
             // whole document or a whole subspace refusing every later link of
             // that document for good, CL-UNIQ being I-extent membership.
             M5Rec::LinkSeat { doc, link } => M5State {
@@ -631,8 +632,8 @@ mod tests {
         // about never LOSING a pair, and J-LV uncouples link placement from R
         // altogether. No public read can witness this: R's denotation is the
         // set-union of its pairs, so a redundant append answers every query
-        // identically and shows up only as unbounded growth. The record has
-        // to be compared directly.
+        // identically and shows up only as unbounded growth. R itself has to
+        // be compared directly.
         let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 4)]);
         let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) });
         for r in [

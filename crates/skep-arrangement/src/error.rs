@@ -190,7 +190,7 @@ pub enum VersionError {
 ///   (PUB-6.24), not per origin document — whose origin document is not the
 ///   shot's own document and which the shooter may not read.
 /// * `DanglingSource` — an I-address a run names has no stored value
-///   (S3★): a by-reference run whose extent M4 does not hold whole, or a
+///   (S3★): a by-reference run whose I-extent M4 does not hold whole, or a
 ///   draft-native run whose bytes are not all there to re-insert.
 /// * `TooManyRuns` — the member's placement exceeds
 ///   [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS), the budget COPY and the

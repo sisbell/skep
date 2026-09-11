@@ -32,10 +32,15 @@ use crate::run::Run;
 /// asked about is already V-adjacent (§1 — the same representation choice
 /// that makes D-SEQ★/D-CTG★/D-MIN★ hold). I-adjacency is therefore all that
 /// remains to test — and it is also the SAFE half: `a₂ = a₁ + w₁` implies
-/// same origin (M16a) and excludes shared-I-extent (M14a), and it is
-/// vacuously false across origin-lengths (the reach is length-preserving), so
-/// cross-length runs never merge — never across an origin seam (M16), never
-/// collapsing a transclusion (M14). **Never coalesce on value** (S4).
+/// same origin (M16a — the reach changes only the last component, so the two
+/// starts share every component before it, their document prefix included)
+/// and excludes shared-I-extent (M14a), so no run merges across an origin
+/// seam (M16), whatever the two origins' depths, and none collapses a
+/// transclusion (M14). Across level classes the test is vacuously false as
+/// well — the reach is length-preserving — but that is a consequence of the
+/// prefix rule, not the reason for it: two sibling documents share a length
+/// and are kept apart by their prefixes alone. **Never coalesce on value**
+/// (S4).
 ///
 /// Asked of the left run rather than computed here: the ordinal advance and
 /// its TA7a safety argument belong to [`Run`], which states them once.
@@ -50,9 +55,14 @@ pub(crate) fn i_adjacent(left: &Run, right_start: &Address) -> bool {
 /// I-adjacent to the open run opens a new one, rather than widening a run
 /// over the addresses between them.
 ///
-/// Cross-origin runs are cross-length, fail the I-adjacency test, and never
-/// coalesce — preserving the origin multiset (ASN-0118 CP11) and
-/// transclusion independence (CP4/M14).
+/// Runs of two different origins never coalesce, whatever their depths. The
+/// reach moves only a run's last component, so a run is I-adjacent only to
+/// one that shares every other component with it — the same document's same
+/// subspace (ASN-0058 M16a: element addresses extend the document prefix).
+/// Two sibling documents are two origins in ONE level class, and it is that
+/// prefix test, not a difference in length, that keeps their runs apart, as
+/// it keeps a trunk's runs apart from its member's. That preserves the origin
+/// multiset (ASN-0118 CP11) and transclusion independence (CP4/M14).
 pub(crate) fn extend_or_push_run(runs: &mut Vec<Run>, run: Run) {
     if let Some(last) = runs.last_mut() {
         if i_adjacent(last, &run.i_start) {
@@ -213,7 +223,7 @@ impl RunList {
     /// (§8)? The I-side twin of [`locate`](RunList::locate)/
     /// [`point`](RunList::point), which answer the same membership question
     /// from the V-side: an address INTERIOR to a coalesced run counts, runs
-    /// being contiguous extents rather than enumerated addresses. CL-UNIQ asks
+    /// being contiguous I-extents rather than enumerated addresses. CL-UNIQ asks
     /// this of a document's link list.
     pub(crate) fn holds(&self, a: &Address) -> bool {
         self.0.iter().any(|r| r.iextent().contains(a.tumbler()))
@@ -221,13 +231,13 @@ impl RunList {
 
     /// Does this list hold EVERY address of `run` — is the run's whole
     /// I-extent arranged here, as one resident run or split across several?
-    /// [`holds`](RunList::holds) asked of an extent rather than a point: the
+    /// [`holds`](RunList::holds) asked of an I-extent rather than a point: the
     /// carried-run test of the publish shot (PUB-6.24, PUB-8.1) — a supplied
     /// run the base already arranges takes no source gate.
     ///
     /// Answered per resident run by the run's own offset arithmetic
     /// ([`Run::offsets_covered_by`](crate::Run::offsets_covered_by) — which of
-    /// `run`'s offsets each resident extent covers) and then by one sweep over
+    /// `run`'s offsets each resident I-extent covers) and then by one sweep over
     /// the covered ranges, so the cost is `O(#runs log #runs)` and never
     /// `width × #runs`. A resident run of another origin length covers
     /// nothing, by the level-class discipline that method applies.
@@ -430,7 +440,7 @@ impl RunList {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::{ca, n, run, vca};
+    use crate::testutil::{a, ca, n, run, vca};
 
     fn list(runs: Vec<Run>) -> RunList {
         RunList(runs.into_iter().collect())
@@ -483,14 +493,14 @@ mod tests {
     }
 
     #[test]
-    fn covers_asks_membership_of_a_whole_extent() {
-        // §8/PUB-6.24: an extent is carried when every one of its addresses
+    fn covers_asks_membership_of_a_whole_i_extent() {
+        // §8/PUB-6.24: an I-extent is carried when every one of its addresses
         // is arranged — as one run, or split across several by a foreign run
         // between them — and not when any address is missing, whatever the
         // rest.
         let l = list(vec![run(&ca(1), 2), run(&vca(5), 1), run(&ca(3), 2)]); // ca1..4, split
         assert!(l.covers(&run(&ca(1), 4)), "split across two residents, still whole");
-        assert!(l.covers(&run(&ca(2), 2)), "an interior extent");
+        assert!(l.covers(&run(&ca(2), 2)), "an interior I-extent");
         assert!(l.covers(&run(&vca(5), 1)));
         assert!(!l.covers(&run(&ca(4), 2)), "ca(5) is arranged nowhere");
         assert!(!l.covers(&run(&ca(9), 1)));
@@ -590,6 +600,24 @@ mod tests {
         let l = list(vec![run(&ca(1), 1)]);
         let out = l.splice_in(&n(2), &[run(&vca(1), 1)]); // vca is length 9, ca length 8
         assert_eq!(out.runs().len(), 2);
+    }
+
+    #[test]
+    fn two_origins_at_one_depth_never_coalesce_even_where_ordinals_line_up() {
+        // §1/M16a: origins are kept apart by PREFIX, not by length. doc1's run
+        // reaches ordinal 3 and doc2's element 3 opens at ordinal 3 — one
+        // length, one level class, one ordinal — and they are still two
+        // origins: widening doc1's run over it would place doc1's own ca(3),
+        // which is not the address the second run names.
+        let doc2_third = a(&[1, 0, 1, 0, 2, 0, 1, 3]);
+        assert_eq!(doc2_third.tumbler().len(), ca(1).tumbler().len());
+        let l = list(vec![run(&ca(1), 2)]);
+        let out = l.splice_in(&n(3), &[run(&doc2_third, 1)]);
+        assert_eq!(out.runs(), vec![run(&ca(1), 2), run(&doc2_third, 1)]);
+        // The placing ops' accumulator answers the same.
+        let mut placed = vec![run(&ca(1), 2)];
+        extend_or_push_run(&mut placed, run(&doc2_third, 1));
+        assert_eq!(placed, vec![run(&ca(1), 2), run(&doc2_third, 1)]);
     }
 
     #[test]

@@ -61,7 +61,7 @@ pub fn trunk_of(a: &Address) -> Address {
 }
 
 /// PUB-2.53 — the TRUNK HEAD of the document `doc` belongs to: the latest
-/// member of the top-level version sequence `D.1, D.2, …` anchored at
+/// member of the trunk's own version chain `D.1, D.2, …` anchored at
 /// `trunk_of(doc)`, or `None` while that document has no member. THE ONE
 /// definition of "the latest version" (PUB-2.49): a daughter chain —
 /// `D.2.1, D.2.2, …`, anchored at a member — floats nothing and is never
@@ -107,11 +107,12 @@ pub fn published_target(m3: &M3State, doc: &Address) -> bool {
 }
 
 /// HEAD-FLOAT — the arrangement a READER of `doc` answers from (PUB-2.49,
-/// PUB-2.50, PUB-2.53, PUB-2.66): the ONE place the reader's resolve is
-/// decided, so every reader that floats routes through it rather than
-/// resolving for itself. The readers that do not float — M5's own reads on
-/// [`M5State`](crate::M5State), and COPY's source spans — answer the address
-/// named.
+/// PUB-2.50, PUB-2.53, PUB-2.66): the ONE place the float is decided. A
+/// reader that floats asks it which arrangement to read, then reads that
+/// arrangement with reads that answer whatever address they are handed; this
+/// read resolves nothing itself. The readers that do not float — M5's own
+/// reads on [`M5State`](crate::M5State), [`resolve`](crate::M5State::resolve)
+/// among them, and COPY's source spans — answer the address named.
 ///
 /// * A VERSION address answers ITSELF, forever (PUB-2.50).
 /// * A BARE document address that is PUBLISHED answers its TRUNK HEAD
@@ -176,11 +177,11 @@ mod tests {
     use crate::testutil::{a, doc1, pdoc, seeded_m3};
     use skep_namespace::M3Rec;
 
-    /// PUB-2.49/2.50/2.53/2.66 — the one reader's resolve, over every case
-    /// it decides: a private document answers itself whether or not a member
-    /// exists under it; a published document answers itself while
-    /// memberless, its trunk head once one exists, and a version address
-    /// answers itself forever — a daughter never floating anything.
+    /// PUB-2.49/2.50/2.53/2.66 — the float, over every case it decides: a
+    /// private document answers itself whether or not a member exists under
+    /// it; a published document answers itself while memberless, its trunk
+    /// head once one exists, and a version address answers itself forever —
+    /// a daughter never floating anything.
     #[test]
     fn a_bare_published_address_floats_to_its_trunk_head_and_nothing_else_moves() {
         let m3 = seeded_m3();

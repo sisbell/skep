@@ -40,10 +40,12 @@
 //!   the one function `readable(doc, principal) = published(doc) ∨ subtree ∨
 //!   grant_exists` (PUB-1.31, lane 3.3, §1), composing the exception set's
 //!   clause, M3's ω memo and the grant fold's probe. Every read surface —
-//!   M6's deliveries and doc-argument consults, M8's result-set filters, the
-//!   publish source gate — answers through this one predicate, threaded down
-//!   as an opaque `Fn(&Address) -> bool` (PUB-6.39), and every write is gated
-//!   at the class [`World::visible_to`] maps its caller to (PUB-6.25).
+//!   M6's deliveries and doc-argument consults, M8's result-set filters —
+//!   answers through this one predicate, threaded down as an opaque
+//!   `Fn(&Address) -> bool` (PUB-6.39); a write evaluates it over its own
+//!   transaction's working world — the publish shot's source gate on each
+//!   origin, and every link write at the class [`World::visible_to`] maps its
+//!   caller to (PUB-6.25).
 //! * **The grant fold** (the `grants` module) — the second derived index the
 //!   predicate rests on: a fold over the LINK slice keyed grantee ×
 //!   content-prefix, seeded at load and folded on every link deposit

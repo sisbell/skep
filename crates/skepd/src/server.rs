@@ -1028,13 +1028,14 @@ impl Daemon {
         // ONE snapshot it pins per request, so every named argument, every
         // per-run mask and the result-set filter of one request stand on one
         // committed state, the state its `as_of` names; and the publish
-        // shot's source gate (PUB-6.23, PUB-8.1) reads the same predicate off
-        // the snapshot pinned for the whole shot. A consult closed over a
-        // per-call snapshot of the live kernel — lane 3.2's shape — would
-        // judge one request's arguments against different heads. The one
-        // front door that DOES take a consult is history's (`history.rs`): a
-        // read as of N answers the N-world's content through the HEAD's sets
-        // (PUB-6.48), which no world of its own can supply.
+        // shot's source gate (PUB-6.23, PUB-8.1) reads the same predicate
+        // over the working world of the shot's own transaction, which M5
+        // hands it. A consult closed over a per-call snapshot of the live
+        // kernel — lane 3.2's shape — would judge one request's arguments
+        // against different heads. The one front door that DOES take a
+        // consult is history's (`history.rs`): a read as of N answers the
+        // N-world's content through the HEAD's sets (PUB-6.48), which no
+        // world of its own can supply.
         let febe = Operation::new(Box::new(engine.stores()));
         let guest = open_guest_session(&febe);
         let auth = {

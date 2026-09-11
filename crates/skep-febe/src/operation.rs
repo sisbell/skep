@@ -41,9 +41,11 @@ use crate::{FebeWorld, Stores};
 /// second constraint), always on a DOCUMENT known registered (PUB-6.37).
 ///
 /// Absent ([`Operation::new`] alone), M10 answers the world's own
-/// [`ReadableWorld::readable`] off the ONE snapshot it pins per request, which
-/// is the live daemon's case: the answer and the `as_of` it is stamped with
-/// stand on one committed state. Supplied ([`Operation::with_consult`]), it
+/// [`ReadableWorld::readable`], which is the live daemon's case: a read arm
+/// off the ONE snapshot it pins per request, so the answer and the `as_of` it
+/// is stamped with stand on one committed state, and the publish composite's
+/// source gate over the working world of the shot's own transaction, which M5
+/// hands it. Supplied ([`Operation::with_consult`]), it
 /// OVERRIDES the world the predicate is evaluated over — what a HISTORICAL
 /// read needs: `/op-at N` answers the N-world's content through the HEAD's
 /// exception set and grant set (PUB-6.48), so the daemon's throwaway front
@@ -75,8 +77,9 @@ pub struct Operation<W: WorldState> {
     /// `TxnError::Poisoned` in [`Operation::map_txn`] (§5/§9).
     poisoned: AtomicBool,
     /// The supplied read predicate ([`Consult`]), or none — in which case
-    /// every read arm and the publish arm answer the world's own predicate
-    /// off the one snapshot the request pins.
+    /// every read arm answers the world's own predicate off the one snapshot
+    /// the request pins, and the publish arm over the working world M5 hands
+    /// its source gate.
     consult: Option<Box<Consult>>,
 }
 
@@ -185,9 +188,10 @@ where
     /// Supply the read predicate ([`Consult`]) this front door answers
     /// through instead of its own world's — the transport's HEAD predicate
     /// for a historical read (PUB-6.48), closed over one head snapshot per
-    /// request (PUB-6.39). Without it every read arm and the publish shot's
-    /// source gate answer [`ReadableWorld::readable`] off the one snapshot
-    /// the request pins, which is what a live front door wants.
+    /// request (PUB-6.39). Without it every read arm answers
+    /// [`ReadableWorld::readable`] off the one snapshot the request pins, and
+    /// the publish shot's source gate over the working world of its own
+    /// transaction, which is what a live front door wants.
     ///
     /// [`ReadableWorld::readable`]: crate::ReadableWorld::readable
     pub fn with_consult(mut self, consult: Box<Consult>) -> Self {
@@ -197,10 +201,11 @@ where
 
     /// `readable(doc, principal)` for this front door: the supplied
     /// [`Consult`] where one was given, else the world's own
-    /// [`ReadableWorld::readable`] off `world` — the snapshot the calling arm
-    /// pinned. `None` is the guest. Every consult of the predicate, read
-    /// path and publish shot alike, goes through here, so a front door
-    /// answers ONE predicate.
+    /// [`ReadableWorld::readable`] off `world` — the snapshot a read arm
+    /// pinned, or the working world a store hands the predicate of a write.
+    /// `None` is the guest. Every consult of the predicate, read path and
+    /// publish shot alike, goes through here, so a front door answers ONE
+    /// predicate.
     ///
     /// [`ReadableWorld::readable`]: crate::ReadableWorld::readable
     fn readable(&self, world: &W, principal: Option<PrincipalId>, doc: &Address) -> bool {
@@ -631,13 +636,15 @@ where
             }
             // The SHOT (PUB-2.33, PUB-8.1): M5's composite decides the
             // destination, places the runs by origin and runs the source
-            // gate; what M10 adds is the consult it hands down — the
-            // daemon's, or today's publication read off ONE snapshot pinned
-            // here for the whole shot, so every origin is judged against one
-            // committed state. The ack is the member's address (PUB-2.37).
+            // gate; what M10 adds is the predicate it hands down, which M5
+            // evaluates over the shot's own working world — the world in which
+            // it has just found each origin registered (PUB-6.37) — as M7
+            // evaluates a link write's visibility class (PUB-6.25). The ack is
+            // the member's address (PUB-2.37).
             Op::Publish { doc, shot } => {
                 let principal = Some(wc.principal);
-                let readable = |origin: &Address| self.readable(snap.world(), principal, origin);
+                let readable =
+                    |world: &W, origin: &Address| self.readable(world, principal, origin);
                 let (addr, at) = self
                     .stores
                     .vstream()

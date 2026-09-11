@@ -46,14 +46,13 @@
 //! ownership check — the in-place advance refusal `PublishedTarget` on
 //! `insert`/`copy`/`delete`/`rearrange` (PUB-2.11), the private-member
 //! refusal `PrivateVersionOfPublished` and the versionless sibling
-//! `PrivateSourceVersionless` on `version` (PUB-2.7, PUB-2.9) — all three in
-//! ONE slot, after registration and ω and before each op's own shape checks
-//! (PUB-6.36 slot 5), reading M3's publication bit on REGISTERED addresses
-//! alone (PUB-6.37) through [`published_target`], after [`trunk_of`] has
-//! projected a version member to its document (PUB-2.15). The refusals are
-//! enforced here; M10's write door pre-evaluates the in-place one on a
-//! `copy`'s destination, ahead of its source consult, and the store's own
-//! refusal stands behind it. The one exemption is the DECLARED deposit
+//! `PrivateSourceVersionless` on `version` (PUB-2.7, PUB-2.9) — each
+//! evaluated inside its op's own transaction, off the working state (PUB-6.36
+//! slot 5 — where it falls in each op's check order is stated on that op),
+//! reading M3's publication bit on REGISTERED addresses alone (PUB-6.37)
+//! through [`published_target`], after [`trunk_of`] has projected a version
+//! member to its document (PUB-2.15). The refusals are enforced here,
+//! whatever runs ahead of the store. The one exemption is the DECLARED deposit
 //! (PUB-9.13's DECLARED horn): `insert` takes a `deposit` declaration, and a
 //! declared insert at fresh positions of a published document is admitted
 //! (PUB-2.59, PUB-2.61); an undeclared append, or a declared one that
@@ -85,9 +84,9 @@
 //!
 //! Those reads — which document a member belongs to ([`trunk_of`]), which
 //! member heads its chain ([`trunk_head`]), whether that document is
-//! published ([`published_target`]), and the two surfaces built on them —
-//! are the version-chain model's own card, kept in one file; every chain
-//! read the write surface makes asks them.
+//! published ([`published_target`]), and the two surfaces built on them
+//! ([`reading_surface`], [`deposit_surface`]) — are the version-chain
+//! model's own card, kept in one file.
 //!
 //! ## Serialization key
 //!
@@ -96,14 +95,21 @@
 //! domain — content edits under `M3State::content_lock_key(doc)`, VERSION
 //! under `version_lock_key`/`document_lock_key`, link seating under M7's held
 //! `link_lock_key(doc)` — so a document's arrangement edits and their
-//! R-appends are co-serialized under that one key. A DECLARED deposit that
-//! lands on a chain's head rather than the address it names takes the
-//! head's `content_lock_key` as well (PUB-2.66). The SHOT takes its
-//! document's `version_lock_key` and `content_lock_key` — the trunk's
-//! frontier and the fresh-identity mints — and, for a base that is a
-//! member, that member's `version_lock_key`, the daughter chain's frontier;
-//! it writes only the arrangement of the member it mints, which no other
-//! transaction can name until this one commits.
+//! R-appends are co-serialized under that one key.
+//!
+//! A published chain's FRONTIER and the arrangement at its HEAD (the
+//! document's own while it has no member) serialize under the trunk's
+//! `version_lock_key`. Every transaction that moves either holds it — a
+//! declared deposit, which writes the head and reads the frontier to find it
+//! (PUB-2.66), and the shot, which advances the frontier and carries its
+//! base's tail into the member it mints — and so does `version`, whose
+//! snapshot takes its source's reading surface off that frontier. Each holds
+//! the key by arithmetic on its own request, never by a read of the world.
+//! The SHOT also takes its document's `content_lock_key` for the
+//! fresh-identity mints and, for a base that is a member, that member's
+//! `version_lock_key`, the daughter chain's frontier; it writes only the
+//! arrangement of the member it mints, which no other transaction can name
+//! until this one commits.
 //!
 //! ## Composition
 //!
@@ -138,7 +144,7 @@ mod vspace;
 pub(crate) mod testutil;
 
 pub use auth::Caller;
-pub use chain::{published_target, reading_surface, trunk_head, trunk_of};
+pub use chain::{deposit_surface, published_target, reading_surface, trunk_head, trunk_of};
 pub use error::{
     CopyError, DeleteError, InsertError, PublishError, RearrangeError, SeatError, VersionError,
 };

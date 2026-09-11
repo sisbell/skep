@@ -340,13 +340,12 @@ fn base(member: &Address, extent: u32) -> Base {
     }
 }
 
-/// Today's consult, as the daemon supplies it: a published origin is readable
-/// to everyone, a private one to its owner. Read off the kernel's head — the
-/// composite runs it inside its own transaction, and a snapshot is a read.
-fn readable_by(kernel: &Kernel<World>, p: PrincipalId) -> impl Fn(&Address) -> bool + '_ {
-    move |origin: &Address| {
-        let s = kernel.snapshot();
-        let m3 = s.world().m3();
+/// A consult over the world it is handed: a published origin is readable to
+/// everyone, a private one to its owner `p`. It reads that world and nothing
+/// else — `publish` hands it the working world of the shot's own transaction.
+fn readable_by(p: PrincipalId) -> impl Fn(&World, &Address) -> bool {
+    move |world: &World, origin: &Address| {
+        let m3 = world.m3();
         m3.published(&skep_arrangement::trunk_of(origin)) || m3.is_effective_owner(p, origin)
     }
 }
@@ -357,14 +356,14 @@ fn run_starts(m5: &M5State, doc: &Address) -> Vec<Address> {
     m5.content_runs(doc).iter().map(|r| r.i_start().clone()).collect()
 }
 
-/// A consult that reads `allowed` alone and records every origin it is
-/// asked about, in order — what "each origin once, in run order, and never
-/// before ω" is asserted over.
+/// A consult that reads `allowed` alone — the world it is handed plays no
+/// part — and records every origin it is asked about, in order: what "each
+/// origin once, in run order, and never before ω" is asserted over.
 fn consult_reading<'a>(
     asked: &'a RefCell<Vec<Address>>,
     allowed: Vec<Address>,
-) -> impl Fn(&Address) -> bool + 'a {
-    move |origin: &Address| {
+) -> impl Fn(&World, &Address) -> bool + 'a {
+    move |_world: &World, origin: &Address| {
         asked.borrow_mut().push(origin.clone());
         allowed.contains(origin)
     }
@@ -1347,7 +1346,7 @@ fn a_shot_appends_the_next_trunk_member_from_the_clients_runs() {
         .expect("the staging copy shares identity");
     vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d"), val(b"e")], false)
         .expect("the stager types");
-    let readable = readable_by(&k, PrincipalId(1));
+    let readable = readable_by(PrincipalId(1));
     let shot = Shot {
         base: Some(base(&pdoc(), 3)),
         draft: Some(doc1()),
@@ -1404,7 +1403,7 @@ fn a_window_stays_a_window_and_a_daughter_lands_under_its_base() {
     // the trunk alone (PUB-2.53).
     let k = mem_kernel();
     let vs = deposit_abc(&k);
-    let readable = readable_by(&k, PrincipalId(1));
+    let readable = readable_by(PrincipalId(1));
     let (m1, _) = vs
         .publish(
             P1,
@@ -1458,7 +1457,7 @@ fn a_deposit_in_the_staging_interval_is_carried_by_the_shot() {
     // the deposit the render post-dates — no positional apply, nothing lost.
     let k = mem_kernel();
     let vs = deposit_abc(&k);
-    let readable = readable_by(&k, PrincipalId(1));
+    let readable = readable_by(PrincipalId(1));
     let (m1, _) = vs
         .publish(
             P1,
@@ -1643,6 +1642,63 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
 }
 
 #[test]
+fn the_source_gate_is_asked_about_the_world_it_found_the_origin_registered_in() {
+    // PUB-6.37 on the shot's source gate: `publish` finds each origin
+    // registered in its transaction's WORKING world and then asks the
+    // predicate about it, so that is the world the predicate is handed. A
+    // predicate answering from a world taken earlier is asked about an
+    // address that world never registered — and the engine's read predicate
+    // is fail-open there (PUB-7.5), so a draft minted in between would pass
+    // the gate that exists to keep it private. The draft here is minted in
+    // between.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k);
+    let earlier = k.snapshot();
+    let sub = PrincipalId(3);
+    let (draft, _) = Namespace::new(&k)
+        .create_new_document(sub, &a(&[1, 0, 1, 1]), Some(false))
+        .expect("the sub-account mints a second private draft");
+    let (atom, _) = vs
+        .insert(Caller::Principal(sub), &draft, vp(1, 1), vec![val(b"s")], false)
+        .expect("the draft holds a byte");
+    assert!(
+        !earlier.world().m3().is_registered_document(&draft),
+        "the earlier world never registered the draft"
+    );
+    // The engine's predicate in miniature: fail-open on an address the world
+    // has not registered, else published or owned by P1. Asked of the
+    // earlier world, it would admit the draft.
+    let fail_open = |world: &World, origin: &Address| {
+        let m3 = world.m3();
+        !m3.is_registered_document(origin)
+            || m3.published(&skep_arrangement::trunk_of(origin))
+            || m3.is_effective_owner(PrincipalId(1), origin)
+    };
+    assert!(fail_open(earlier.world(), &draft), "the earlier world's answer admits the draft");
+    // Each question is recorded with whether the world it arrived with
+    // registers what it asks about.
+    let asked: RefCell<Vec<bool>> = RefCell::new(Vec::new());
+    let consult = |world: &World, origin: &Address| {
+        asked.borrow_mut().push(world.m3().is_registered_document(origin));
+        fail_open(world, origin)
+    };
+    assert!(matches!(
+        rejected(vs.publish(
+            P1,
+            &pdoc(),
+            &Shot { base: None, draft: None, runs: vec![shot_run(&draft, &atom, 1)] },
+            &consult
+        )),
+        PublishError::Withheld(d) if d == draft
+    ));
+    assert_eq!(
+        asked.borrow().as_slice(),
+        &[true],
+        "asked once, of a world that registers the origin it is asked about"
+    );
+}
+
+#[test]
 fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing() {
     // PUB-2.9's `true` face on the shot, the base's three shape refusals, a
     // run that is no content run of its stated origin, an unregistered
@@ -1650,7 +1706,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
     let k = mem_kernel();
     let vs = deposit_abc(&k);
     insert_abc(&k);
-    let readable = readable_by(&k, PrincipalId(1));
+    let readable = readable_by(PrincipalId(1));
     let before = k.current_seq();
     let plain = |runs: Vec<ShotRun>| Shot { base: None, draft: None, runs };
     // A private document has no chain (PUB-2.9).
@@ -1742,6 +1798,46 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
 }
 
 #[test]
+fn a_stated_origin_or_draft_that_is_no_document_is_refused_not_projected() {
+    // `bad_run` and `source_not_registered` on the shot's two named
+    // documents (PUB-2.15, PUB-6.37): a run's `origin` and the shot's `draft`
+    // name DOCUMENTS — a member projecting to its document — and an element
+    // of the right document is not one. The trunk projection answers an
+    // element with itself, so an element stated as an origin never matches
+    // the document its run's start settles, and an element named as the
+    // draft is no registered document — whichever chain member minted it.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k);
+    let readable = readable_by(PrincipalId(1));
+    let (m1, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the first member");
+    let (member_atom, _) = vs
+        .insert(P1, &m1, vp(1, 4), vec![val(b"z")], true)
+        .expect("a deposit named by the member, minted under its chain");
+    assert_eq!(member_atom, vca(1));
+    let shoot = |runs: Vec<ShotRun>, draft: Option<Address>| {
+        vs.publish(P1, &pdoc(), &Shot { base: Some(base(&m1, 4)), draft, runs }, &readable)
+    };
+    let before = k.current_seq();
+    // An element minted under the trunk, and one minted under a member.
+    for element in [pca(1), vca(1)] {
+        assert!(
+            matches!(rejected(shoot(vec![shot_run(&element, &element, 1)], None)), PublishError::BadRun),
+            "{element:?} stated as its own run's origin"
+        );
+        assert!(
+            matches!(rejected(shoot(vec![], Some(element.clone()))), PublishError::SourceNotRegistered),
+            "{element:?} named as the draft"
+        );
+    }
+    assert_eq!(k.current_seq(), before, "every refusal is a clean no-op");
+    // Stated as the documents they are — the trunk, and the member that
+    // projects to it — the same runs commit.
+    let (m2, _) = shoot(vec![shot_run(&pdoc(), &pca(1), 1), shot_run(&m1, &vca(1), 1)], None)
+        .expect("each run's origin is the document that minted it");
+    assert_eq!(k.snapshot().world().m5().content_count(&m2), n(2));
+}
+
+#[test]
 fn a_shot_refused_at_its_last_check_leaves_no_member_no_mint_and_no_placement() {
     // PUB-2.33's ONE COMMIT, from the refusal side. The composite's mints
     // and writes are staged inside the one closure whose rejection M2
@@ -1754,7 +1850,7 @@ fn a_shot_refused_at_its_last_check_leaves_no_member_no_mint_and_no_placement() 
     let k = mem_kernel();
     let vs = deposit_abc(&k);
     insert_abc(&k);
-    let readable = readable_by(&k, PrincipalId(1));
+    let readable = readable_by(PrincipalId(1));
     let before = k.current_seq();
     assert!(matches!(
         rejected(vs.publish(
@@ -2245,7 +2341,7 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
             .expect("post-fork source deposit commits");
         // The shot: the edition's four positions by reference and doc1's
         // surviving `c` re-minted as fresh identity — the member holds five.
-        let readable = readable_by(&k, PrincipalId(1));
+        let readable = readable_by(PrincipalId(1));
         let (member, _) = vs
             .publish(
                 P1,

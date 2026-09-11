@@ -16,32 +16,34 @@
 //!
 //! CONTRACT, for every read here that consults M3 — the address asked about
 //! is a REGISTERED document or a member of one (PUB-6.37): M3's publication
-//! and frontier reads are answered for registered addresses alone. The write
-//! surface discharges it at [`gate_write`](crate::auth::gate_write) for the
-//! four edits and the shot, and by asking `is_registered_document` first for
-//! `insert`'s lock keys and for `version`'s source.
+//! and frontier reads are answered for registered addresses alone.
 
-use skep_address::{parent, Address};
+use skep_address::{parent, Address, Level};
 use skep_namespace::M3State;
 
-/// PUB-2.15 — the DOCUMENT a version member projects to: the version
-/// components stripped off the document field, one M1 `parent` peel at a
-/// time, so `A·0·d·v·w` answers `A·0·d` and a document answers itself. Pure
-/// address arithmetic (PUB-2.16 — "the M1 step on the nested form"), no
-/// read; total on every address (a field of one component peels nothing),
-/// and terminating because each peel shortens the field by one.
+/// PUB-2.15 — the TRUNK DOCUMENT of a document: its version components
+/// stripped off the document field, one M1 `parent` peel at a time, so a
+/// member `A·0·d·v·w` answers `A·0·d` and a document answers itself. Pure
+/// address arithmetic (PUB-2.16 — "the M1 step on the nested form"), no read,
+/// and terminating because each peel shortens the document field by one.
 ///
-/// THE ONE PROJECTION HELPER. The write-path refusals here and the daemon's
-/// publish gate both project through it, the daemon importing it from this
-/// crate, so the two cannot drift apart — the drift the routed item
-/// (PUB-8.2) exists to close. M1's `document_of` is NOT this projection: it
-/// answers the FULL document field, version components included, so a member
-/// answers itself there.
+/// AN ADDRESS THAT IS NOT A DOCUMENT ANSWERS ITSELF — an element, whichever
+/// member minted it, and an account alike: there is no document to project.
+/// So the projection never turns a non-document into a document: a check
+/// made on its answer — does it name a registered document? is it the
+/// document that minted these addresses? — refuses an address of the wrong
+/// tier rather than answering for the document it lies in. A caller holding
+/// an element and wanting that element's trunk asks M1's `document_of`
+/// first: `document_of` then `trunk_of` is the composition.
 ///
-/// Every publication read of the write surface goes through it, by way of
-/// [`published_target`] — so a version member is refused, or admitted, as
-/// its DOCUMENT is, whatever its own journaled bit says.
+/// PUB-8.2's one spelling of the projection: a gate ahead of the store
+/// imports it rather than restating it. M1's `document_of` is NOT this
+/// projection: it answers the FULL document field, version components
+/// included, so a member answers itself there.
 pub fn trunk_of(a: &Address) -> Address {
+    if a.level() != Level::Document {
+        return a.clone();
+    }
     let mut trunk = a.clone();
     while trunk.document_field().is_some_and(|field| field.len() > 1) {
         trunk = parent(&trunk)
@@ -75,28 +77,23 @@ pub fn trunk_head(m3: &M3State, doc: &Address) -> Option<Address> {
     m3.latest_version(&trunk_of(doc))
 }
 
-/// PUB-2.11's input, and the ONE publication read of the version-chain
-/// model: is the DOCUMENT `doc` projects to (PUB-2.15) published — a target
-/// the in-place advance refusal applies to? M3's one publication bit
-/// ([`M3State::published`], the record its minting `Allocate` journaled),
-/// read after [`trunk_of`] — never the member's own bit, which PUB-8.17's
-/// inheritance makes agree with its document's today and which the
-/// projection keeps from ever deciding a refusal.
+/// PUB-2.11's input, and M5's one publication read: is the DOCUMENT `doc`
+/// projects to (PUB-2.15) published — a target the in-place advance refusal
+/// applies to? M3's one publication bit ([`M3State::published`], the record
+/// its minting `Allocate` journaled), read after [`trunk_of`] — never the
+/// member's own bit, which PUB-8.17's inheritance makes agree with its
+/// document's today and which the projection keeps from ever deciding a
+/// refusal.
 ///
-/// Every publication read the write surface makes is this one: the four
-/// in-place refusals (PUB-2.11), `version`'s two on its source (PUB-2.7,
-/// PUB-2.9), the shot's on its document (PUB-2.9), and the float in
-/// [`reading_surface`] and in a deposit's landing. It is public so that a
-/// door ahead of the store, pre-evaluating the refusal, can ask the rule the
-/// store enforces rather than restate it.
+/// Every publication read M5 makes is this one. It is public so that a door
+/// ahead of the store, pre-evaluating the refusal, can ask the rule the store
+/// enforces rather than restate it.
 ///
 /// CONTRACT — `doc` is a REGISTERED document or a member of one (PUB-6.37):
 /// the read is answered for registered addresses alone. A member's trunk is
 /// registered whenever the member is (a member is minted under a registered
 /// source, recursively), so the projected read is inside M3's contract too.
-/// Inside this crate the edits and the shot discharge it at their ω gate,
-/// and `insert`'s lock keys and `version` by asking `is_registered_document`
-/// first; a caller outside owes the same question ahead of this one.
+/// A caller asks `is_registered_document` first.
 pub fn published_target(m3: &M3State, doc: &Address) -> bool {
     m3.published(&trunk_of(doc))
 }
@@ -113,11 +110,9 @@ pub fn published_target(m3: &M3State, doc: &Address) -> bool {
 ///   (PUB-2.66's memberless reading).
 /// * A PRIVATE document answers itself: head-float is INERT there. A
 ///   private document is versionless (PUB-2.9) and so has no member to
-///   float to; and a member a pre-model fixture stamped under a private
-///   document (`genesis_with_members` in this crate's tests) is not a
-///   reading surface — the float keys on the document's publication bit
-///   ([`published_target`]), which is what keeps the conformance corpus's
-///   private documents answering their own arrangements.
+///   float to, and the float keys on the document's publication bit
+///   ([`published_target`]), so a private document answers its own
+///   arrangement even over a member a pre-model state holds under it.
 ///
 /// Pure over M3's slice: one projection, one publication read, one frontier
 /// read, asked before the chain moves as [`trunk_head`] states. CONTRACT —
@@ -152,7 +147,11 @@ pub fn reading_surface(m3: &M3State, doc: &Address) -> Address {
 /// the address the caller named, which is `insert`'s business, not this
 /// read's. Asked before the chain moves, as [`trunk_head`] states; CONTRACT
 /// as [`published_target`] states.
-pub(crate) fn deposit_surface(m3: &M3State, doc: &Address) -> Address {
+///
+/// A caller building a deposit asks this for the arrangement whose `n_C + 1`
+/// is the one position a published document admits
+/// ([`Vstream::insert`](crate::Vstream::insert)).
+pub fn deposit_surface(m3: &M3State, doc: &Address) -> Address {
     if !published_target(m3, doc) {
         return doc.clone();
     }
@@ -255,8 +254,14 @@ mod tests {
     /// PUB-2.15's projection is address arithmetic and total: a version
     /// member answers its document, a document answers itself, a member of
     /// a member peels to the same document — and off the document tier the
-    /// arithmetic changes nothing (an account has no document field; an
-    /// element's field is its document's own).
+    /// arithmetic changes nothing, an account and an element each answering
+    /// itself. The element case is why the projection asks the tier before
+    /// it peels: an element MINTED UNDER A MEMBER carries the member's
+    /// two-component document field, so peeling it would strip the element's
+    /// own components and then the version — answering a document for that
+    /// element and the element itself for its sibling under the trunk.
+    /// `document_of` first is how a caller asks for an element's trunk, and
+    /// it answers the same document for both.
     #[test]
     fn a_version_member_projects_to_its_document() {
         let doc = a(&[1, 0, 1, 0, 1]);
@@ -266,6 +271,12 @@ mod tests {
         let acct = a(&[1, 0, 1]);
         assert_eq!(trunk_of(&acct), acct);
         let element = a(&[1, 0, 1, 0, 1, 0, 1, 1]);
-        assert_eq!(trunk_of(&element), element);
+        assert_eq!(trunk_of(&element), element, "an element of the trunk");
+        let member_element = a(&[1, 0, 1, 0, 1, 1, 0, 1, 1]);
+        assert_eq!(trunk_of(&member_element), member_element, "an element of a member");
+        for e in [&element, &member_element] {
+            let document = skep_address::document_of(e).expect("an element lies in a document");
+            assert_eq!(trunk_of(&document), doc, "{e:?}: its document's trunk");
+        }
     }
 }

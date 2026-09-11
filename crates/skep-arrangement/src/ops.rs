@@ -23,29 +23,12 @@
 //! are members of the named document's chain, minted under it, so the owner
 //! the gate checked is theirs too.
 //!
-//! Publication (PUB round 2, lane 3.1; owner ruling D2b): directly after
-//! that gate, in the SAME transact and reading the working state's
-//! publication bit on the registered address the gate just established
-//! (PUB-6.37), each of the four edits refuses `PublishedTarget` when the
-//! target's DOCUMENT is published ([`published_target`], PUB-2.11; a version
-//! member projects to its document first, [`trunk_of`], PUB-2.15) —
-//! `insert` alone admitting a DECLARED deposit at a fresh position
-//! (PUB-2.59, PUB-9.13) — and `version` refuses `PrivateSourceVersionless` /
-//! `PrivateVersionOfPublished` on the own-source arm (PUB-2.9, PUB-2.7).
-//! That is PUB-6.36's slot 5, and the store is where it is ENFORCED: every
-//! refusal above is evaluated here, at the transact, whatever ran ahead of
-//! it. Ahead of it run the daemon's publish-class gate (slot 4,
-//! pre-dispatch) and, for one cell, M10's write door, which pre-evaluates
-//! the in-place refusal on a `copy`'s destination before its source consult
-//! so that slot 5 speaks before slot 6; the store's own refusal stands
-//! behind it unchanged. [`published_target`] is public so that such a door
-//! can ask the rule the store enforces rather than restate it.
-//!
-//! Every chain read these ops make — the publication bit, the head, the
-//! reading surface a fork snapshots, the surface a deposit lands in — is
-//! asked of the version-chain reads ([`trunk_of`], [`trunk_head`],
-//! [`published_target`], [`reading_surface`], [`deposit_surface`]) rather
-//! than spelled here.
+//! Publication (PUB round 2, lane 3.1; owner ruling D2b): the version-chain
+//! model's refusals, each stated with its op's check order, are evaluated
+//! inside that op's own transaction on an address its own check has already
+//! found registered (PUB-6.37), and are enforced here whatever runs ahead of
+//! the store. Their one reading of the publication bit is
+//! [`published_target`], whose own card says why it is public.
 //!
 //! WHICH ERROR WINS when several conditions fail at once is stated on each op
 //! below, and this is the only statement of it: the error types name verdicts,
@@ -60,7 +43,7 @@ use std::fmt;
 use num_traits::{One, Zero};
 use skep_address::{content_subspace, document_of, Address, Nat};
 use skep_content::{stage_write, ContentError, ContentWrite, HasContent, Val};
-use skep_kernel::{Kernel, LockKey, Seq, Staging, TxnError, WorldState};
+use skep_kernel::{Kernel, Seq, Staging, TxnError, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State, MintError, PrincipalId};
 
 use crate::auth::{gate_write, Caller};
@@ -153,7 +136,8 @@ where
     /// INSERT (ASN-0116; §3): mint n fresh content addresses (M3), write
     /// their bytes (M4), splice the run at `at` (content subspace), record
     /// provenance — one M2 composite under
-    /// `M3State::content_lock_key(doc)`. Returns the inserted run's START
+    /// `M3State::content_lock_key(doc)` and, for a declared deposit, its
+    /// document's `version_lock_key`. Returns the inserted run's START
     /// address (the predicate-def identity for M9) and the commit `Seq`.
     ///
     /// Check order (which error wins): `DocNotRegistered` → `NotOwner` (the
@@ -181,6 +165,16 @@ where
     /// `Caller::System` is NOT exempt (PUB-6.28): a rule fire never advances
     /// a published arrangement in place.
     ///
+    /// So a published document admits exactly ONE insert: a declared deposit
+    /// at `[s_C, n_C + 1]` of the arrangement it lands in — the one position
+    /// both fresh and inside the append boundary. A caller builds that
+    /// position by asking [`deposit_surface`] for the arrangement and
+    /// [`content_count`](crate::M5State::content_count) of it for `n_C`. A
+    /// position read before another deposit landed there is no longer fresh,
+    /// and the deposit carrying it is refused `PublishedTarget` like any
+    /// in-place edit — the remedy being a fresh position, not the draft the
+    /// refusal's face proposes.
+    ///
     /// AN ACCOUNT'S HOME IS SUCH A TARGET. The flagless first mint into an
     /// empty account is born published — M3's own create path resolves that
     /// bit (PUB-8.21), not a flag the caller sent — so content enters doc 1
@@ -194,7 +188,7 @@ where
     ///
     /// WHICH ARRANGEMENT THE DEPOSIT LANDS IN (PUB-2.65, PUB-2.66; lane 3.2's
     /// pin): the HEAD member's, ALONE — the version-chain reads' own answer
-    /// (`deposit_surface`), which is the trunk head once the chain has one
+    /// ([`deposit_surface`]), which is the trunk head once the chain has one
     /// ([`trunk_head`]), whichever address of the chain the caller named: the
     /// bare document, the head itself, or a pinned member, which never grows.
     /// It differs from the [`reading_surface`] at exactly that pinned member,
@@ -243,25 +237,17 @@ where
         values: Vec<Val>,
         deposit: bool,
     ) -> Result<(Address, Seq), TxnError<InsertError>> {
-        // The mint chain's key, and — for a deposit that lands somewhere
-        // other than the address named — the content key of the arrangement
-        // it lands in (`deposit_surface`, PUB-2.66). Read off a snapshot:
-        // exact under v1's single applier, where no shot can advance the head
-        // between this read and the transaction; a future M2 realization that
-        // lets disjoint-key commits land in that window re-examines this with
-        // `VersionSnapshot`'s linearization note.
-        let keys: Vec<LockKey> = {
-            let snap = self.kernel.snapshot();
-            let m3 = snap.world().m3();
-            let mut keys = vec![M3State::content_lock_key(doc)];
-            if deposit && m3.is_registered_document(doc) {
-                let surface = deposit_surface(m3, doc);
-                if surface != *doc {
-                    keys.push(M3State::content_lock_key(&surface));
-                }
-            }
-            keys
-        };
+        // The mint chain's key, and — for a declared deposit — the key of the
+        // chain frontier it reads to find where it lands on a published
+        // document (`deposit_surface` → `trunk_head`). Every transaction that
+        // advances that frontier, or writes the arrangement a published
+        // chain's deposits land in, holds the same key, so the landing decided
+        // inside cannot move under it. Both keys are arithmetic on the
+        // request; neither is read from the world.
+        let mut keys = vec![M3State::content_lock_key(doc)];
+        if deposit {
+            keys.push(M3State::version_lock_key(&trunk_of(doc)));
+        }
         self.kernel.transact(&keys, |stg| {
             gate_write(
                 stg.working().m3(),
@@ -381,12 +367,14 @@ where
     /// M4 does not hold → `TooManyRuns` as the placement is accumulated →
     /// `Mint` / `Content` from the mints and writes.
     ///
-    /// `readable` is the DAEMON's predicate (the pack's `Fn(&Address) ->
-    /// bool` shape): today the publication read — a published origin is
-    /// readable to everyone, a private one to its owner — and lane 3.3
-    /// widens what the daemon passes without touching this composite. It is
-    /// asked about an origin's DOCUMENT (PUB-2.15), only after that document
-    /// is known registered (PUB-6.37).
+    /// `readable(world, origin)` answers whether the shooter may read
+    /// `origin`; `true` admits it. M5 hands it the TRANSACTION's working
+    /// world — the world in which `publish` has just found `origin`
+    /// registered — and asks only about an origin's DOCUMENT (PUB-2.15), once
+    /// per distinct origin that is neither the document's own nor carried by
+    /// the base, in run order. Because it is never asked of a world that has
+    /// not registered what it is asked about, a predicate that is fail-open on
+    /// an unregistered address (PUB-7.5) cannot decide the gate.
     ///
     /// LOCKS: `version_lock_key(doc)` (the trunk's frontier),
     /// `content_lock_key(doc)` (the fresh-identity mints), and the base's
@@ -411,7 +399,7 @@ where
         caller: Caller,
         doc: &Address,
         shot: &Shot,
-        readable: &dyn Fn(&Address) -> bool,
+        readable: &dyn Fn(&W, &Address) -> bool,
     ) -> Result<(Address, Seq), TxnError<PublishError>> {
         let trunk = trunk_of(doc);
         let mut keys = vec![
@@ -516,7 +504,7 @@ where
                 if carried {
                     continue;
                 }
-                if !readable(origin) {
+                if !readable(world, origin) {
                     return Err(PublishError::Withheld(origin.clone()));
                 }
                 decided.push(origin.clone());
@@ -965,8 +953,12 @@ where
     /// gates on, so the P-tier rule has one spelling and asking it here
     /// surfaces `NodeTierCrossOwner` BEFORE any mint rather than obliquely as
     /// `Mint(NotAnAccount)` — and mints `mint_document(prefix, bit)` under
-    /// `document_lock_key(prefix)`. Source untouched (V3); the fork diverges
-    /// copy-on-write (V11).
+    /// `document_lock_key(prefix)`. Either branch also holds the source's
+    /// TRUNK `version_lock_key`: the fork snapshots its source's reading
+    /// surface (below), and a published chain's frontier and head
+    /// arrangement serialize under that key (§Serialization key). On the
+    /// owned arm of a trunk the two keys are one, which M2 normalizes.
+    /// Source untouched (V3); the fork diverges copy-on-write (V11).
     ///
     /// THE PUBLICATION BIT (PUB round 1): the new document's RESOLVED
     /// publication state, which THIS composite resolves off its own working
@@ -1097,7 +1089,8 @@ where
                 (M3State::document_lock_key(&prefix), Branch::Cross(prefix))
             }
         };
-        self.kernel.transact(&[key], |stg| {
+        let keys = [key, M3State::version_lock_key(&trunk_of(source))];
+        self.kernel.transact(&keys, |stg| {
             let m3 = stg.working().m3();
             // PUB-8.16/8.17: resolve the three-valued flag off this
             // composite's OWN working state — `Some(b)` ⇒ `b`, ABSENT ⇒

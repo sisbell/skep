@@ -1709,6 +1709,26 @@ mod tests {
             )
             .expect("a span inside the budget commits");
         assert_eq!(k.snapshot().world().m5().content_count(&doc2()), n(4));
+        // The equal case: a span naming exactly the budget's runs is placed
+        // whole — the cap refuses what is past it and nothing at it — and it
+        // counts what THIS copy places, not what the destination holds:
+        // doc2's four runs stay beside the budget's own, none of them
+        // I-adjacent to the placement's first (`shift(ca(8), 1) ≠ ca(2)`).
+        Vstream::new(&k)
+            .copy(
+                p1,
+                &doc2(),
+                vp(1, 5),
+                &[VSpec {
+                    source: doc1(),
+                    span: vspan(1, 1, MAX_PLACED_RUNS as u32),
+                }],
+            )
+            .expect("a placement of exactly the budget commits");
+        assert_eq!(
+            k.snapshot().world().m5().content_run_count(&doc2()),
+            4 + MAX_PLACED_RUNS
+        );
     }
 
     #[test]
@@ -2003,13 +2023,33 @@ mod tests {
     fn copy_into_a_published_destination_refuses_before_reading_its_sources() {
         // PUB-2.11 on COPY's destination, in the content-store world: the
         // refusal fires ahead of every per-spec check, so a spec that would
-        // otherwise be refused for its own reasons never speaks.
+        // otherwise be refused for its own reasons never speaks. Nothing is
+        // stored here, so the spec below names a run whose start is absent —
+        // `DanglingSource` wherever the spec is read, as the draft beside the
+        // edition shows.
         let p1 = Caller::Principal(PrincipalId(1));
-        let k = gate_kernel(&[1, 2, 3]);
+        let k = gate_kernel(&[]);
+        let vs = Vstream::new(&k);
+        let dangling = [VSpec {
+            source: doc1(),
+            span: vspan(1, 1, 2),
+        }];
         assert!(matches!(
-            rejected(Vstream::new(&k).copy(p1, &pdoc(), vp(2, 99), &[])),
+            rejected(vs.copy(p1, &pdoc(), vp(1, 1), &dangling)),
+            CopyError::PublishedTarget
+        ));
+        // Ahead of the destination's own shape checks as well: a
+        // link-subspace position past every boundary.
+        assert!(matches!(
+            rejected(vs.copy(p1, &pdoc(), vp(2, 99), &[])),
             CopyError::PublishedTarget
         ));
         assert_eq!(k.snapshot().world().m5().content_count(&pdoc()), n(0));
+        // The control: into the draft, the same spec is read — and refused
+        // for what it is.
+        assert!(matches!(
+            rejected(vs.copy(p1, &doc2(), vp(1, 1), &dangling)),
+            CopyError::DanglingSource
+        ));
     }
 }

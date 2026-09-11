@@ -433,8 +433,14 @@ fn insert_appends_coalesce_and_interior_inserts_shift_the_suffix() {
 
 #[test]
 fn insert_rejects_in_documented_order_and_commits_nothing() {
-    // §3 check order: DocNotRegistered → EmptyContent → NotContentSubspace →
-    // OutOfBounds; every rejection is a clean no-op.
+    // §3's shape half: DocNotRegistered → EmptyContent → NotContentSubspace →
+    // OutOfBounds, each case also defective in the verdicts after it, and
+    // every rejection a clean no-op. The NotOwner and PublishedTarget slots
+    // between the first two are pinned with ownership and publication
+    // (`an_unregistered_document_never_yields_an_ownership_verdict`,
+    // `edit_ops_reject_a_sibling_principal_and_commit_nothing`,
+    // `ownership_stands_ahead_of_the_published_target_refusal`,
+    // `in_place_edits_refuse_a_published_target_and_commit_nothing`).
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     let before = k.current_seq();
@@ -547,6 +553,13 @@ fn copy_rejects_each_documented_guard() {
         CopyError::NotContentSubspace
     ));
     let spec = |source: Address, span: Span| VSpec { source, span };
+    // Below the first boundary as well as past the last: ordinal 0 is no
+    // placement position, whatever the spec. Admitted, the splice would
+    // clamp it to 1 and place at the front.
+    assert!(matches!(
+        rejected(vs.copy(P1, &doc2(), vp(1, 0), &[spec(doc1(), vspan(1, 1, 1))])),
+        CopyError::OutOfBounds
+    ));
     assert!(matches!(
         rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(un.clone(), vspan(1, 1, 1))])),
         CopyError::SourceNotRegistered
@@ -557,6 +570,12 @@ fn copy_rejects_each_documented_guard() {
     assert!(matches!(
         rejected(vs.copy(P1, &doc2(), vp(2, 1), &[spec(un.clone(), vspan(1, 1, 1))])),
         CopyError::NotContentSubspace
+    ));
+    // …the destination's bounds included: a position past doc2's only
+    // admissible boundary beside the same unregistered source.
+    assert!(matches!(
+        rejected(vs.copy(P1, &doc2(), vp(1, 2), &[spec(un.clone(), vspan(1, 1, 1))])),
+        CopyError::OutOfBounds
     ));
     // NotOrdinalVSpan: a T12-legal but level-uniform [m, n] width is action-point-1 —
     // not an ordinal-level depth-2 V-span (Conflicts #7's precise verdict).
@@ -585,6 +604,13 @@ fn copy_rejects_each_documented_guard() {
         CopyError::EmptySource
     ));
     // Which of the per-spec verdicts wins, in each documented pair.
+    // Registration before shape: the source names no document AND the span
+    // is mis-shaped. Shape first would answer NotOrdinalVSpan.
+    let lu_un = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-legal");
+    assert!(matches!(
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(un.clone(), lu_un)])),
+        CopyError::SourceNotRegistered
+    ));
     // Shape before residence: this span is BOTH mis-shaped (action-point-1)
     // and in the link subspace, and the shape check runs first.
     let lu_link = Span::new(t(&[2, 1]), t(&[1, 0])).expect("T12-legal");
@@ -697,6 +723,13 @@ fn delete_rejects_in_documented_order() {
         rejected(vs.delete(P1, &doc1(), vp(1, 4), n(1))),
         DeleteError::NotArranged
     ));
+    // Ordinal 0 is arranged nowhere, and it is the case the arranged check
+    // exists for: containment alone admits it (0 + 1 ≤ n_C + 1), and the
+    // fold would then remove position 1.
+    assert!(matches!(
+        rejected(vs.delete(P1, &doc1(), vp(1, 0), n(1))),
+        DeleteError::NotArranged
+    ));
     assert!(matches!(
         rejected(vs.delete(P1, &doc1(), vp(1, 2), n(3))),
         DeleteError::OutOfBounds
@@ -792,6 +825,13 @@ fn rearrange_rejects_in_documented_order() {
         rejected(vs.rearrange(P1, &doc1(), &[vp(1, 1), vp(1, 2), vp(1, 5)])),
         RearrangeError::OutOfBounds
     ));
+    // …and the lower bound, which the upper bound's check cannot stand in
+    // for: a first cut at ordinal 0, the rest ascending and in bounds.
+    // Admitted, the fold's clamp would read it as 1 and exchange a with b c.
+    assert!(matches!(
+        rejected(vs.rearrange(P1, &doc1(), &[vp(1, 0), vp(1, 2), vp(1, 4)])),
+        RearrangeError::OutOfBounds
+    ));
     // Which wins, in each documented pair. Count before ascent: two cuts,
     // descending.
     assert!(matches!(
@@ -820,6 +860,40 @@ fn rearrange_rejects_in_documented_order() {
         rejected(vs.rearrange(P1, &doc2(), &[vp(1, 1), vp(1, 2), vp(1, 3)])),
         RearrangeError::OutOfBounds
     ));
+}
+
+#[test]
+fn rearrange_admits_three_or_four_cuts_and_refuses_every_other_count() {
+    // R-PRE: exactly three cuts or four. Each count is asked of a cut vector
+    // that passes every OTHER guard — strictly ascending content-subspace
+    // cuts inside [1, n_C + 1] — so BadCutCount is the only verdict it can
+    // earn. The count is M5's alone to judge: the wire reads `cuts` as a
+    // plain list under its generic cap, and the fold tiles any vector it is
+    // handed, so a count admitted here commits a permutation R-PRE does not
+    // define.
+    let k = mem_kernel();
+    let vs = Vstream::new(&k);
+    vs.insert(
+        P1,
+        &doc1(),
+        vp(1, 1),
+        vec![val(b"a"), val(b"b"), val(b"c"), val(b"d"), val(b"e")],
+        Deposit::Undeclared,
+    )
+    .expect("insert commits"); // n_C = 5: boundaries 1..=6 are admissible
+    let cuts: Vec<VPos> = (1..=6).map(|o| vp(1, o)).collect();
+    let before = k.current_seq();
+    for count in [0usize, 1, 2, 5, 6] {
+        match vs.rearrange(P1, &doc1(), &cuts[..count]) {
+            Err(TxnError::Rejected(RearrangeError::BadCutCount)) => {}
+            other => panic!("{count} cuts: expected BadCutCount, got {other:?}"),
+        }
+    }
+    assert_eq!(k.current_seq(), before, "no refused count commits");
+    for count in [3usize, 4] {
+        vs.rearrange(P1, &doc1(), &cuts[..count])
+            .unwrap_or_else(|e| panic!("{count} cuts: expected a commit, got {e:?}"));
+    }
 }
 
 // ---- §B VERSION ----
@@ -1127,9 +1201,10 @@ fn version_judges_a_member_source_as_its_document() {
 fn in_place_edits_refuse_a_published_target_and_commit_nothing() {
     // PUB-2.11: insert, copy-into, delete and re-arrange on a PUBLISHED
     // target refuse `PublishedTarget` — after registration and ω, BEFORE
-    // every shape check (each frame below is ALSO mis-shaped, and the
-    // publication verdict is the one that speaks) — and commit nothing. The
-    // same four on the private draft are admitted as before.
+    // every shape check (each op is also asked in a frame that is
+    // mis-shaped, and the publication verdict is the one that speaks) — and
+    // commit nothing. The same four on the private draft are admitted as
+    // before.
     let k = mem_kernel();
     let vs = deposit_abc(&k);
     let before = k.current_seq();
@@ -1177,14 +1252,24 @@ fn in_place_edits_refuse_a_published_target_and_commit_nothing() {
         RearrangeError::PublishedTarget
     ));
     // `Caller::System` is not exempt (PUB-6.28): a fire never advances a
-    // published arrangement in place.
+    // published arrangement in place, by any of the four. Each frame below
+    // would otherwise be admitted or answer for its own shape — the copy's
+    // empty spec list with EmptyResult, the rest by committing.
     assert!(matches!(
         rejected(vs.insert(Caller::System, &pdoc(), vp(1, 4), vec![val(b"s")], Deposit::Undeclared)),
         InsertError::PublishedTarget
     ));
     assert!(matches!(
+        rejected(vs.copy(Caller::System, &pdoc(), vp(1, 4), &[])),
+        CopyError::PublishedTarget
+    ));
+    assert!(matches!(
         rejected(vs.delete(Caller::System, &pdoc(), vp(1, 1), n(1))),
         DeleteError::PublishedTarget
+    ));
+    assert!(matches!(
+        rejected(vs.rearrange(Caller::System, &pdoc(), &[vp(1, 1), vp(1, 2), vp(1, 3)])),
+        RearrangeError::PublishedTarget
     ));
     assert_eq!(k.current_seq(), before, "every refusal is a clean no-op");
     let s = k.snapshot();
@@ -1471,6 +1556,45 @@ fn a_shot_appends_the_next_trunk_member_from_the_clients_runs() {
     assert_eq!(reading_surface(s.world().m3(), &pdoc()), member);
     assert_eq!(m5.content_count(&pdoc()), n(3));
     assert_eq!(m5.content_count(&doc1()), n(5));
+}
+
+#[test]
+fn a_shot_places_the_runs_the_client_rendered_not_what_the_draft_holds_at_commit() {
+    // PUB-8.1: the member's arrangement comes from the CLIENT-SUPPLIED runs
+    // "and from nothing any draft holds at commit" — draft-native bytes are
+    // read at the draft's addresses, "a byte read, never an arrangement
+    // read". So a draft edited between the render and the shot changes
+    // nothing the shot places: the client rendered `a b c`, the stager then
+    // un-arranged `b`, and the member is still born `a b c`, `b` re-minted
+    // from the bytes the permascroll keeps (P0). Judged against what the
+    // draft arranges at commit — for existence or for the re-insert — the
+    // shot would be refused `DanglingSource`, or born `a c`.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k); // pdoc: a b c, memberless
+    insert_abc(&k); // the draft doc1: a b c at ca(1..3)
+    vs.delete(P1, &doc1(), vp(1, 2), n(1))
+        .expect("the stager un-arranges b after the render");
+    let (member, _) = vs
+        .publish(
+            P1,
+            &pdoc(),
+            Shot {
+                base: Some(base(&pdoc(), 3)),
+                draft: Some(doc1()),
+                runs: vec![shot_run(&doc1(), &ca(1), 3)],
+            },
+            &readable_by(PrincipalId(1)),
+        )
+        .expect("the shot places what the client rendered");
+    let s = k.snapshot();
+    let got: Vec<Vec<u8>> = (1..=3).map(|i| read_v(&s, &member, i)).collect();
+    assert_eq!(got, vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
+    assert_eq!(s.world().m5().content_count(&member), n(3));
+    assert_eq!(
+        s.world().m5().content_count(&doc1()),
+        n(2),
+        "the draft stays as its stager left it"
+    );
 }
 
 #[test]
@@ -2043,6 +2167,18 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
         )),
         PublishError::SourceNotRegistered
     ));
+    // The draft's registration before any run's shape, likewise: the draft
+    // names no document AND the run is mis-stated. The runs first would
+    // answer `BadRun`.
+    assert!(matches!(
+        rejected(vs.publish(
+            P1,
+            &pdoc(),
+            Shot { base: None, draft: Some(un.clone()), runs: vec![shot_run(&doc2(), &ca(1), 1)] },
+            &readable
+        )),
+        PublishError::SourceNotRegistered
+    ));
     // A run whose stated origin is not the document that minted it, and a
     // run whose start is a LINK element: neither is a content run of its
     // origin — refused on the request's own arithmetic.
@@ -2421,6 +2557,17 @@ fn an_unregistered_document_never_yields_an_ownership_verdict() {
         )),
         CopyError::DocNotRegistered
     ));
+    // The shot opens at the same door: its slot 1 answers registration
+    // before ω, and the other order would answer `NotOwner(un)`.
+    assert!(matches!(
+        rejected(vs.publish(
+            p2,
+            &un,
+            Shot { base: None, draft: None, runs: vec![] },
+            &readable_by(PrincipalId(2))
+        )),
+        PublishError::DocNotRegistered
+    ));
 }
 
 #[test]
@@ -2769,8 +2916,9 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
     // §10: M5 owns no recovery machinery — M2 loads the checkpoint
     // (deserializing the slice) and replays the tail through apply → apply_m5.
     // The draft's insert and the edition's deposit ride the checkpoint path;
-    // the delete, the seat, the fork, the post-fork source deposit and the
-    // shot ride the replay path; the recovered slice is byte-identical.
+    // the delete, the rearrangement, the seat, the fork, the post-fork source
+    // deposit and the shot ride the replay path — every `M5Rec` variant among
+    // them; the recovered slice is byte-identical.
     //
     // The fork is the CROSS-OWNER one (principal 2's copy of the edition):
     // an owned fork would be the edition's first member, and the deposit
@@ -2790,6 +2938,10 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
             .expect("deposit commits");
         k.checkpoint().expect("checkpoint");
         vs.delete(P1, &doc1(), vp(1, 2), n(1)).expect("delete commits");
+        vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"x"), val(b"y"), val(b"z")], Deposit::Undeclared)
+            .expect("the second draft takes three values");
+        vs.rearrange(P1, &doc2(), &[vp(1, 1), vp(1, 2), vp(1, 4)])
+            .expect("rearrange commits"); // pivot: x | y z → y z x
         seat_link(&k, &pdoc(), &link1).expect("seat commits");
         let (minted, _) = vs.version(PrincipalId(2), &pdoc(), None).expect("fork commits");
         assert_eq!(minted, fork);
@@ -2830,6 +2982,12 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
     let spans: Vec<Span> = d.iter().cloned().collect();
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].start(), ca(2).tumbler());
+    let got: Vec<Vec<u8>> = (1..=3).map(|i| read_v(&s, &doc2(), i)).collect();
+    assert_eq!(
+        got,
+        vec![b"y".to_vec(), b"z".to_vec(), b"x".to_vec()],
+        "the rearrangement replayed"
+    );
     assert_eq!(m5.content_count(&pdoc()), n(4));
     assert_eq!(m5.link_count(&pdoc()), n(1));
     // The fork replayed at ITS slot: it holds what pdoc held at the fork

@@ -857,6 +857,62 @@ mod tests {
     }
 
     #[test]
+    fn project_reports_every_position_an_address_occupies() {
+        // ASN-0119 RA7c: the footprint is EVERY V-position whose I-address
+        // falls in the coverage. A document that transcludes its own text
+        // holds those addresses twice, and both occurrences are its
+        // footprint. An I→V lookup answering one position per address — Open
+        // decision #2's inverse hint, built as a map — keeps the first and
+        // loses the second.
+        let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 3)]);
+        let s = place(&s, &doc1(), 4, vec![run(&ca(1), 3)]); // a b c a b c
+        let b = SpanSet::singleton(run(&ca(2), 1).iextent());
+        let spans: Vec<Span> = s.project(&doc1(), &b).iter().cloned().collect();
+        assert_eq!(spans.len(), 2, "b at positions 2 and 5");
+        assert_eq!(spans[0].start(), &t(&[1, 2]));
+        assert_eq!(spans[1].start(), &t(&[1, 5]));
+        for span in &spans {
+            assert_eq!(span.width(), &t(&[0, 1]));
+        }
+    }
+
+    #[test]
+    fn an_address_the_document_still_arranges_elsewhere_is_not_deleted() {
+        // §9: SHOWDELETIONS is ASN-0075's DELETED(a, d) ≡ (a, d) ∈ R ∧
+        // a ∉ ran(M(d)) — a SET difference. A document that transcludes its
+        // own text holds those addresses twice, so removing one occurrence
+        // deletes nothing; only the last occurrence's removal makes a
+        // deletion. R recording the span twice changes no answer either: it
+        // is read as the set-union of its pairs (P2; Open decision #9's
+        // premise). A deleted set kept by recording what each ContentRemove
+        // took out — the obvious index for this read's cost (Open decision
+        // #3) — would report `b` after the first removal.
+        let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 3)]);
+        let s = place(&s, &doc1(), 4, vec![run(&ca(1), 3)]); // a b c a b c
+        let one_b = s.apply_m5(&M5Rec::ContentRemove {
+            doc: doc1(),
+            from: n(2),
+            width: n(1),
+        });
+        assert!(one_b.deletions(&doc1()).is_empty(), "the other b is still arranged");
+        let one_copy = s.apply_m5(&M5Rec::ContentRemove {
+            doc: doc1(),
+            from: n(4),
+            width: n(3),
+        });
+        assert!(one_copy.deletions(&doc1()).is_empty(), "a, b and c are each still arranged");
+        let last_b = one_copy.apply_m5(&M5Rec::ContentRemove {
+            doc: doc1(),
+            from: n(2),
+            width: n(1),
+        });
+        let spans: Vec<Span> = last_b.deletions(&doc1()).iter().cloned().collect();
+        assert_eq!(spans.len(), 1, "b's last occurrence is gone, and now b is deleted");
+        assert_eq!(spans[0].start(), ca(2).tumbler());
+        assert_eq!(spans[0].reach(), *ca(3).tumbler());
+    }
+
+    #[test]
     fn deletions_subtracts_within_each_level_class() {
         // §9: iextent covers mix origin-lengths under transclusion; the
         // difference runs within each endpoint-length class and unions the

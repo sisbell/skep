@@ -218,8 +218,10 @@ mod tests {
     /// PUB-2.65/2.66 — where a declared deposit lands, over every case it
     /// decides: a memberless edition takes its own deposits; once the chain
     /// has a head, every address of the chain lands there — the bare
-    /// document, the head itself and a pinned member alike — and a private
-    /// document takes its own inserts whatever a fixture stamped under it.
+    /// document, the head itself, a pinned member and a daughter alike — and a
+    /// private document takes its own inserts whatever a fixture stamped under
+    /// it. The daughter is also what makes the pinned member a real case: it
+    /// gives member1 a chain of its own, whose latest is not the trunk's head.
     #[test]
     fn a_declared_deposit_lands_on_the_head_whichever_chain_address_it_names() {
         let m3 = seeded_m3();
@@ -227,10 +229,13 @@ mod tests {
         assert_eq!(deposit_surface(&m3, &edition), edition, "memberless: its own arrangement");
         let member1 = a(&[1, 0, 1, 0, 3, 1]);
         let member2 = a(&[1, 0, 1, 0, 3, 2]);
+        let daughter = a(&[1, 0, 1, 0, 3, 1, 1]);
         let m3 = m3
             .apply_m3(&M3Rec::Allocate { addr: member1.clone(), published: true })
-            .apply_m3(&M3Rec::Allocate { addr: member2.clone(), published: true });
-        for named in [&edition, &member1, &member2] {
+            .apply_m3(&M3Rec::Allocate { addr: member2.clone(), published: true })
+            .apply_m3(&M3Rec::Allocate { addr: daughter.clone(), published: true });
+        assert_eq!(m3.latest_version(&member1), Some(daughter.clone()), "member1's own chain");
+        for named in [&edition, &member1, &member2, &daughter] {
             assert_eq!(
                 deposit_surface(&m3, named),
                 member2,

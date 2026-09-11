@@ -830,21 +830,45 @@ mod tests {
 
     #[test]
     fn m5rec_survives_a_bincode_round_trip() {
-        // §A: M5Rec is THE journaled delta; the replayed record folds to the
-        // same effect.
-        let rec = M5Rec::ContentPlace {
-            doc: doc1(),
-            at: n(1),
-            runs: vec![run(&ca(1), 2), run(&vca(1), 1)],
-        };
-        let bytes = bincode::serialize(&rec).expect("record serializes");
-        let back: M5Rec = bincode::deserialize(&bytes).expect("record deserializes");
-        assert_eq!(back, rec); // the same record, not merely one folding alike
-        let s1 = M5State::genesis().apply_m5(&rec);
-        let s2 = M5State::genesis().apply_m5(&back);
-        assert_eq!(
-            bincode::serialize(&s1).expect("serializes"),
-            bincode::serialize(&s2).expect("serializes")
-        );
+        // §A: M5Rec is THE journaled delta, and every variant of it rides
+        // replay — so each one comes back as the same record, and the
+        // replayed record folds to the same effect. Folded off a base that
+        // arranges doc1, so that no arm answers by leaving the state alone.
+        let base = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 5)]);
+        for rec in [
+            M5Rec::ContentPlace {
+                doc: doc1(),
+                at: n(1),
+                runs: vec![run(&ca(1), 2), run(&vca(1), 1)],
+            },
+            M5Rec::ContentRemove {
+                doc: doc1(),
+                from: n(2),
+                width: n(2),
+            },
+            M5Rec::ContentReorder {
+                doc: doc1(),
+                cut_ordinals: vec![n(1), n(2), n(4), n(6)],
+            },
+            M5Rec::LinkSeat {
+                doc: doc1(),
+                link: la(1),
+            },
+            M5Rec::VersionSnapshot {
+                source: doc1(),
+                new: vdoc(),
+            },
+        ] {
+            let bytes = bincode::serialize(&rec).expect("record serializes");
+            let back: M5Rec = bincode::deserialize(&bytes).expect("record deserializes");
+            assert_eq!(back, rec, "the same record, not merely one folding alike");
+            let folded = base.apply_m5(&rec);
+            assert_ne!(folded, base, "{rec:?} changes the base it folds onto");
+            assert_eq!(
+                bincode::serialize(&folded).expect("serializes"),
+                bincode::serialize(&base.apply_m5(&back)).expect("serializes"),
+                "{rec:?}"
+            );
+        }
     }
 }

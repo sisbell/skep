@@ -515,6 +515,43 @@ mod tests {
         l.iter_resolve_range(&n(ord), &n(count)).collect()
     }
 
+    /// How many runs the unique maximally-merged decomposition of `addrs`
+    /// has (ASN-0058 M12), computed from the addresses alone: a run continues
+    /// exactly where the next address repeats every component of the one
+    /// before but the last and advances that one by one. Independent of
+    /// `RunList`, so an assertion against it cannot inherit the list's own
+    /// merge.
+    fn canonical_run_count(addrs: &[Address]) -> usize {
+        let continues = |prev: &Address, next: &Address| {
+            let p: Vec<&Nat> = prev.tumbler().iter().collect();
+            let q: Vec<&Nat> = next.tumbler().iter().collect();
+            p.len() == q.len()
+                && p[..p.len() - 1] == q[..q.len() - 1]
+                && *q[q.len() - 1] == p[p.len() - 1] + &n(1)
+        };
+        let breaks = addrs.windows(2).filter(|w| !continues(&w[0], &w[1])).count();
+        if addrs.is_empty() {
+            0
+        } else {
+            breaks + 1
+        }
+    }
+
+    /// `l` denotes exactly `want`, position by position and nothing past it,
+    /// in the maximally-merged decomposition of `want`.
+    fn assert_denotes(l: &RunList, want: &[Address], label: &str) {
+        for (i, addr) in want.iter().enumerate() {
+            let ord = i as u32 + 1;
+            assert_eq!(l.point(&n(ord)).as_ref(), Some(addr), "{label}: position {ord}");
+        }
+        assert_eq!(
+            l.point(&n(want.len() as u32 + 1)),
+            None,
+            "{label}: nothing past the end"
+        );
+        assert_eq!(l.runs().len(), canonical_run_count(want), "{label}: maximally merged");
+    }
+
     #[test]
     fn splice_at_the_append_boundary_concatenates_and_coalesces_iff_i_adjacent() {
         // §1: ord = total + 1 is the single accepted ord > total; I-adjacent
@@ -653,6 +690,59 @@ mod tests {
         let out2 = l2.remove_range(&n(2), &n(2));
         assert_eq!(out2.runs(), vec![run(&ca(1), 1), run(&ca(4), 2)]);
         assert_eq!(out2.total_width(), n(3));
+    }
+
+    #[test]
+    fn splice_in_inserts_before_every_boundary_and_merges_whichever_seams_it_closes() {
+        // §1/M12: a law over boundaries, exhausted — the placed run goes in
+        // before `ord`, and the list left is the maximally-merged
+        // decomposition of the result. The fixture has gaps a placed run can
+        // close from either side: ca(2) at 2 closes BOTH seams, ca(4) at 4
+        // closes the RIGHT one — the seam no splice example above visits,
+        // those that merge at all merging the placement into what lies before
+        // it. The expectation is a plain address vector.
+        let gaps = [ca(1), ca(3), vca(1), ca(5)];
+        let l = list(gaps.iter().map(|start| run(start, 1)).collect());
+        for placed in [ca(2), ca(4), ca(6), vca(2), vca(9)] {
+            for ord in 1..=gaps.len() as u32 + 1 {
+                let mut want = gaps.to_vec();
+                want.insert(ord as usize - 1, placed.clone());
+                assert_denotes(
+                    &l.splice_in(&n(ord), &[run(&placed, 1)]),
+                    &want,
+                    &format!("{placed:?} at {ord}"),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn remove_range_drops_every_range_and_merges_the_seam_it_closes() {
+        // §1/ASN-0117 P2/M12: a law over every admissible (from, width) of a
+        // fragmented, mixed-length fixture whose foreign run separates two
+        // runs of one origin, so the removals that take it out rejoin them.
+        let woven = [ca(1), ca(2), vca(1), ca(3), ca(4), vca(5)];
+        let l = list(vec![
+            run(&ca(1), 2),
+            run(&vca(1), 1),
+            run(&ca(3), 2),
+            run(&vca(5), 1),
+        ]);
+        let n_c = woven.len() as u32;
+        let mut checked = 0usize;
+        for from in 1..=n_c {
+            for width in 1..=n_c + 1 - from {
+                let mut want = woven.to_vec();
+                want.drain(from as usize - 1..(from + width) as usize - 1);
+                assert_denotes(
+                    &l.remove_range(&n(from), &n(width)),
+                    &want,
+                    &format!("[{from}, {})", from + width),
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 21, "every contained range at n_C = 6");
     }
 
     #[test]

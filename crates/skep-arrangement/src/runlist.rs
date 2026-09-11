@@ -289,18 +289,33 @@ impl RunList {
     /// carried-run test of the publish shot (PUB-6.24, PUB-8.1) — a supplied
     /// run the base already arranges takes no source gate.
     ///
-    /// Answered per resident run by the run's own offset arithmetic
+    /// Answered per resident run of `run`'s own endpoint length by the run's
+    /// own offset arithmetic
     /// ([`Run::offsets_covered_by`](crate::Run::offsets_covered_by) — which of
-    /// `run`'s offsets each resident I-extent covers) and then by one sweep over
-    /// the covered ranges, so the cost is `O(#runs log #runs)` and never
-    /// `width × #runs`. A resident run of another origin length covers
-    /// nothing, by the level-class discipline that method applies.
+    /// `run`'s offsets that resident's I-extent covers) and then by one sweep
+    /// over the covered ranges, so the cost is `O(#runs log #runs)`: a
+    /// resident of another endpoint length costs one length comparison, and
+    /// each of the run's own length one intersection — never a search over
+    /// the run's width, which on the shot's path is the client's.
+    ///
+    /// A resident of ANOTHER endpoint length is skipped, not searched, and
+    /// skipping it changes no answer: it holds no address of `run`. Both are
+    /// full element positions ([`Run::admits_start`](crate::Run::admits_start)).
+    /// The shorter of two such addresses lies outside the longer's I-extent —
+    /// it is compared inside the longer's leading components, where both ends
+    /// of that extent agree, so it falls below both or above both. And a
+    /// longer address inside a shorter run's I-extent would follow that run's
+    /// subspace component with two components or more — an element field of
+    /// three or more, which no `Run` admits.
+    ///
     /// Transclusion multiplicity is harmless: an address this list arranges
     /// twice covers its offset twice, and a sweep over a union counts once.
     pub(crate) fn covers(&self, run: &Run) -> bool {
+        let len = run.i_start().tumbler().len();
         let mut covered: Vec<(Nat, Nat)> = self
             .0
             .iter()
+            .filter(|resident| resident.i_start().tumbler().len() == len)
             .filter_map(|resident| run.offsets_covered_by(&resident.iextent()))
             .map(|range| (range.lo().clone(), range.lo() + &range.width()))
             .collect();
@@ -610,6 +625,50 @@ mod tests {
         let twice = list(vec![run(&ca(1), 2), run(&vca(5), 1), run(&ca(1), 2)]);
         assert!(twice.covers(&run(&ca(1), 2)));
         assert!(!twice.covers(&run(&ca(1), 3)));
+    }
+
+    #[test]
+    fn a_run_of_another_endpoint_length_is_covered_by_no_resident_whatever_its_width() {
+        // PUB-6.24: `covers` skips a resident of another endpoint length
+        // rather than searching it, which is sound only because such a
+        // resident holds no address of the run, whatever the two widths. The
+        // law is asked of the search itself — starts and residents of lengths
+        // 8 and 9 under three origins, each the shorter in turn. Then the one
+        // shape a longer address inside a shorter I-extent must take is shown
+        // to be no run start. Then `covers` answers a run of the wire's widest
+        // width — one the search would walk for tens of thousands of bigint
+        // steps per resident — off the residents of its own length. Corpus
+        // seed for the fuzzing tier, against a fragmented list.
+        let other = a(&[1, 0, 1, 1, 0, 1, 0, 1, 1]); // length 9, another account's document
+        let residents = vec![run(&ca(1), 3), run(&vca(1), 2), run(&other, 2)];
+        let starts = [ca(1), ca(4), vca(1), vca(3), other.clone()];
+        for resident in &residents {
+            for start in &starts {
+                if start.tumbler().len() == resident.i_start().tumbler().len() {
+                    continue;
+                }
+                for width in 1..=4u32 {
+                    assert_eq!(
+                        run(start, width).offsets_covered_by(&resident.iextent()),
+                        None,
+                        "{start:?} × {width} against {resident:?}"
+                    );
+                }
+            }
+        }
+        // A longer address CAN lie inside a shorter run's I-extent in the
+        // tumbler order — by following its subspace component with two more —
+        // and that is exactly the element field no run admits.
+        let inside = a(&[1, 0, 1, 0, 1, 0, 1, 2, 5]);
+        assert!(run(&ca(1), 3).iextent().contains(inside.tumbler()));
+        assert_eq!(Run::new(inside, n(1)), Err(crate::RunError::NotAnElementPosition));
+        // The widest run the wire can name: a width of 4096 decimal digits.
+        let widest = Nat::from(10u32).pow(4096) - Nat::one();
+        let l = list(residents);
+        for start in [ca(1), vca(1)] {
+            let wide = Run::new(start.clone(), widest.clone()).expect("a full element position");
+            assert!(!l.covers(&wide), "{start:?}: its own length's residents hold only a prefix of it");
+        }
     }
 
     #[test]

@@ -26,14 +26,20 @@
 //! is a REGISTERED document or a member of one (PUB-6.37): M3's publication
 //! and frontier reads are answered for registered addresses alone.
 
-use skep_address::{parent, Address, Level};
+use skep_address::{validate, Address, Level, Tumbler};
 use skep_namespace::M3State;
 
 /// PUB-2.15 — the TRUNK DOCUMENT of a document: its version components
-/// stripped off the document field, one M1 `parent` peel at a time, so a
-/// member `A·0·d·v·w` answers `A·0·d` and a document answers itself. Pure
-/// address arithmetic (PUB-2.16 — "the M1 step on the nested form"), no read,
-/// and terminating because each peel shortens the document field by one.
+/// stripped off the document field, so a member `A·0·d·v·w` answers `A·0·d`
+/// and a document answers itself. Pure address arithmetic, no read: the
+/// answer PUB-2.16's "M1 step on the nested form" (`parent`) reaches when
+/// taken once per version component, reached here in ONE truncation. A
+/// document's field ends its address, and its version components are every
+/// component of that field after the first, so they are cut off together —
+/// one pass over the address however deep the chain. The depth is a
+/// request's to choose, and M1's step re-derives and re-validates the whole
+/// remaining prefix each time it is taken, so taking it once per component
+/// would make the projection quadratic in that depth.
 ///
 /// AN ADDRESS THAT IS NOT A DOCUMENT ANSWERS ITSELF — an element, whichever
 /// member minted it, and an account alike: there is no document to project.
@@ -49,15 +55,20 @@ use skep_namespace::M3State;
 /// projection: it answers the FULL document field, version components
 /// included, so a member answers itself there.
 pub fn trunk_of(a: &Address) -> Address {
-    if a.level() != Level::Document {
+    // A Document's field is its address's last and is nonempty — T4 admits no
+    // trailing zero — so its version components number `field.len() - 1` and
+    // occupy that many components at the address's end.
+    let versions = match (a.level(), a.document_field()) {
+        (Level::Document, Some(field)) => field.len() - 1,
+        _ => return a.clone(),
+    };
+    if versions == 0 {
         return a.clone();
     }
-    let mut trunk = a.clone();
-    while trunk.document_field().is_some_and(|field| field.len() > 1) {
-        trunk = parent(&trunk)
-            .expect("a document field of two or more components peels to one shorter");
-    }
-    trunk
+    let kept = a.tumbler().len() - versions;
+    let trunk = Tumbler::new(a.tumbler().iter().take(kept).cloned())
+        .expect("a document keeps its node, account and first document component");
+    validate(trunk).expect("a document cut back to its first document component is T4-valid")
 }
 
 /// PUB-2.53 — the TRUNK HEAD of the document `doc` belongs to: the latest
@@ -276,15 +287,16 @@ mod tests {
 
     /// PUB-2.15's projection is address arithmetic and total: a version
     /// member answers its document, a document answers itself, a member of
-    /// a member peels to the same document — and off the document tier the
+    /// a member answers the same document — and off the document tier the
     /// arithmetic changes nothing, an account and an element each answering
     /// itself. The element case is why the projection asks the tier before
-    /// it peels: an element MINTED UNDER A MEMBER carries the member's
-    /// two-component document field, so peeling it would strip the element's
-    /// own components and then the version — answering a document for that
-    /// element and the element itself for its sibling under the trunk.
-    /// `document_of` first is how a caller asks for an element's trunk, and
-    /// it answers the same document for both.
+    /// it cuts: only a document's field ends its address. An element MINTED
+    /// UNDER A MEMBER carries the member's two-component document field and
+    /// then its own element field, so cutting that document field's version
+    /// component off the address's end would take the element's ordinal
+    /// instead — answering a subspace base, neither the element nor a
+    /// document. `document_of` first is how a caller asks for an element's
+    /// trunk, and it answers the same document for both.
     #[test]
     fn a_version_member_projects_to_its_document() {
         let doc = a(&[1, 0, 1, 0, 1]);
@@ -301,5 +313,40 @@ mod tests {
             let document = skep_address::document_of(e).expect("an element lies in a document");
             assert_eq!(trunk_of(&document), doc, "{e:?}: its document's trunk");
         }
+    }
+
+    /// PUB-2.15/2.16 — the trunk is the answer M1's `parent` step reaches
+    /// taken once per version component, at every depth the wire admits: a
+    /// document field of 1, 2, 3, 64 and 249 components under account
+    /// `[1,0,1]`, the last making an element of it 256 components long — the
+    /// wire's deepest address. The oracle peels; the projection cuts once,
+    /// which is what keeps a request naming a deep member from buying a cost
+    /// quadratic in the depth it chose, and it must agree with the peel at
+    /// every depth. An element minted under the deepest member still answers
+    /// itself.
+    #[test]
+    fn the_trunk_is_one_truncation_at_every_depth_the_wire_admits() {
+        let peeled = |member: &Address| {
+            let mut trunk = member.clone();
+            while trunk.document_field().is_some_and(|field| field.len() > 1) {
+                trunk = skep_address::parent(&trunk).expect("a member peels to its document");
+            }
+            trunk
+        };
+        let doc = a(&[1, 0, 1, 0, 1]);
+        let mut deepest = 0;
+        for depth in [1usize, 2, 3, 64, 249] {
+            let mut comps = vec![1u32, 0, 1, 0];
+            comps.resize(4 + depth, 1);
+            let member = a(&comps);
+            assert_eq!(member.document_field().map(|field| field.len()), Some(depth));
+            assert_eq!(trunk_of(&member), doc, "a document field of {depth}");
+            assert_eq!(trunk_of(&member), peeled(&member), "the M1 step, once per component, at {depth}");
+            comps.extend([0, 1, 1]);
+            let element = a(&comps);
+            assert_eq!(trunk_of(&element), element, "an element of a member {depth} deep");
+            deepest = element.tumbler().len();
+        }
+        assert_eq!(deepest, 256, "the deepest element is the wire's deepest address");
     }
 }

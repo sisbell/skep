@@ -369,6 +369,16 @@ impl Run {
     /// contiguous and a span is order-convex, so the covered subset is one
     /// contiguous offset range. TOTAL either way.
     ///
+    /// The boundary search costs `2⌈log₂(width + 1)⌉` steps over THIS run's
+    /// own width, each a `Nat` halving and an ordinal shift at that width's
+    /// magnitude. That is bounded by stored state when `self` is a resident
+    /// run — [`project`](crate::M5State::project) asks each of a document's
+    /// runs about a caller's coverage — and it is why
+    /// [`RunList::covers`](crate::runlist::RunList::covers), whose `self` is a
+    /// client's run and whose spans are resident runs' I-extents, sends no
+    /// span down it: between two runs, the only spans this branch would be
+    /// asked about are of another endpoint length, which cover nothing.
+    ///
     /// THE SOLE PRODUCER of an `OffsetRange`, which is what makes that type's
     /// nonemptiness structural: an intersection satisfies `start < reach`
     /// (TS4), and the search branch tests `k_lo < k_hi` before answering at

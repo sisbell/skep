@@ -135,6 +135,49 @@ pub enum Deposit {
 /// own per-run work is stated on [`Vstream::publish`].
 pub const MAX_PLACED_RUNS: usize = 1 << 16;
 
+/// The most values one publish shot may RE-INSERT — the fresh identities it
+/// mints for its draft-native runs (PUB-2.40), each through J0's one step —
+/// and so the ceiling on what one shot makes M5 stage before M2 has priced
+/// any of it.
+///
+/// WHY A COUNT OF ITS OWN. M2 judges a transaction's size only once the
+/// closure has returned, and until then every staged value is live heap: a
+/// mint record and a content write, each carrying an address, and the
+/// working world's new content entry. How many values a shot re-inserts is
+/// its draft-native runs' widths summed, and that sum is the REQUEST's to
+/// choose — a run may name any stored I-extent of the draft, as often as the
+/// wire's run list allows — while [`MAX_PLACED_RUNS`] does not see it, the
+/// fresh addresses being I-adjacent and so coalescing into one run. Without
+/// this count a request of a kilobyte stages the draft's stored content as
+/// many times over as its run list repeats it, before any refusal can arrive.
+/// The count is request arithmetic, taken before any address is probed, so
+/// it bounds the existence walk over the draft-native runs as well.
+///
+/// The budget: a re-inserted value stages two records, and M2 charges each
+/// its encoded bytes plus forty of framing — about 290 journal bytes for a
+/// one-byte value at the shallowest content address, so M2's `MAX_TXN_BYTES`
+/// (64 MiB) carries some 230,000 of them and no more. `2^17` is the largest
+/// power of two inside that ceiling, so a re-insert at the cap is a
+/// transaction M2 accepts (`the_reinsert_budget_is_a_transaction_m2_accepts`
+/// measures it against M2's own accounting), and the live heap one shot
+/// commands stays on the order of the budget M2 already prices, as
+/// [`MAX_PLACED_RUNS`] keeps it for a placement's runs. That heap is the
+/// count's alone — a re-inserted value's bytes are shared with the stored
+/// value they are read from, never copied — but the journal is not: a longer
+/// value, or a deeper document's addresses, makes every record longer, so
+/// there the ceiling holds fewer values and a re-insert under the cap can
+/// still meet M2's own refusal. The cap bounds the staging a shot commands;
+/// it does not promise that every staging under it commits.
+///
+/// A shot cannot be split to meet it, any more than it can
+/// [`MAX_PLACED_RUNS`]: the member it produces is born whole, and a retry of
+/// the same shot is refused the same way. An arrangement whose draft-native
+/// positions pass it reaches publication across successive shots instead:
+/// what one shot re-mints joins the document's own I-space, which the next
+/// shot places by reference, so each shot re-mints only what is still the
+/// draft's.
+pub const MAX_REINSERTED_VALUES: usize = 1 << 17;
+
 /// M5's transact-driving op handle over M2 (§B): a thin borrow of the
 /// engine's kernel. The pure reads live on [`M5State`](crate::M5State)
 /// (reached through [`HasM5`]); this type owns only the six editing/
@@ -432,14 +475,16 @@ where
     /// arranges (PUB-6.24's carried cell), the FIRST unreadable origin
     /// document answering `Withheld` with it — BEFORE any existence answer,
     /// so a run onto an unreadable origin is refused whether or not its
-    /// addresses exist → existence, `DanglingSource` on the first run any of
-    /// whose addresses M4 does not hold → then the placement, RUN BY RUN in
-    /// the order given: a draft-native run's values `Mint` → `Content`
-    /// apiece, and after each run `TooManyRuns` once the accumulator passes
-    /// the budget; then `TooManyRuns` as the base's tail is carried; last the
-    /// member's own `Mint`. The mints and writes are defensive (M3's frontier
-    /// gate, M4's write-once guard), so on a correct store no honest request
-    /// sees them contend with `TooManyRuns`.
+    /// addresses exist → `TooManyValues` (the draft-native runs' widths
+    /// summed against [`MAX_REINSERTED_VALUES`] — request arithmetic, so it
+    /// answers before any address is probed) → existence, `DanglingSource` on
+    /// the first run any of whose addresses M4 does not hold → then the
+    /// placement, RUN BY RUN in the order given: a draft-native run's values
+    /// `Mint` → `Content` apiece, and after each run `TooManyRuns` once the
+    /// accumulator passes the budget; then `TooManyRuns` as the base's tail is
+    /// carried; last the member's own `Mint`. The mints and writes are
+    /// defensive (M3's frontier gate, M4's write-once guard), so on a correct
+    /// store no honest request sees them contend with `TooManyRuns`.
     ///
     /// `readable(world, origin_doc)` answers whether the shooter may read
     /// `origin_doc`; `true` admits it. M5 hands it the TRANSACTION's working
@@ -480,22 +525,27 @@ where
     ///
     /// COST, AND WHO OWNS IT. The re-insert pushes a mint and a content write
     /// per draft-native value — `2n` records for `n` values, INSERT's own
-    /// per-value step — beside the member's mint and one placement, whose run
-    /// count (the client's runs, coalesced, plus the base's deposit runs) is
-    /// capped at [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS), measured as each
-    /// run is accumulated: a ceiling a shot cannot be split to meet, since the
-    /// member it produces is born whole. Two terms are set by stored state
+    /// per-value step — and `n` is capped at [`MAX_REINSERTED_VALUES`],
+    /// counted off the request before any address is probed. Beside them sit
+    /// the member's mint and one placement, whose run count (the client's
+    /// runs, coalesced, plus the base's deposit runs) is capped at
+    /// [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS), measured as each run is
+    /// accumulated. Both are ceilings a shot cannot be split to meet, since
+    /// the member it produces is born whole. Two terms are set by stored state
     /// rather than by the request's size. The carried-run test sweeps the
-    /// base's runs once per supplied run, so it grows with
+    /// base's runs once per supplied run — a length comparison per resident,
+    /// and an intersection per resident of the supplied run's own length,
+    /// whatever the run's width — so it grows with
     /// [`content_run_count`](crate::M5State::content_run_count) of the base.
     /// The existence check derives and probes every address of every supplied
-    /// run, stopping only at the first one M4 does not hold — for a shot that
-    /// commits, `Σ width` positions — so a short run list walks as far as the
+    /// run, stopping only at the first one M4 does not hold. Over the
+    /// draft-native runs that walk is bounded by the re-insert's cap; over the
+    /// BY-REFERENCE runs it is their `Σ width` — for a shot that commits,
+    /// every position they name — so a short run list walks as far as the
     /// stored content it names, each run paying its whole width even where
-    /// runs repeat one I-extent. The wire caps the run COUNT and not `Σ width`,
-    /// and `Σ width` is what the existence walk and, over the draft-native
-    /// runs, the re-insert both grow with. Those two — the base's run count,
-    /// which the arrangement answers without reading a run, and `Σ width` —
+    /// runs repeat one I-extent. The wire caps the run COUNT and not
+    /// `Σ width`. Those two — the base's run count, which the arrangement
+    /// answers without reading a run, and the by-reference runs' `Σ width` —
     /// are the numbers a route that carries this op owes.
     pub fn publish(
         &self,
@@ -536,6 +586,11 @@ where
                     return Err(PublishError::SourceNotRegistered);
                 }
             }
+            // Which runs are the STAGING DRAFT's, re-minted as fresh identity
+            // rather than placed by reference (PUB-2.40): one spelling, asked
+            // by the re-insert's count and by the placement alike, so the
+            // count bounds exactly the runs the placement re-mints.
+            let draft_native = |origin_doc: &Address| draft_doc.as_ref() == Some(origin_doc);
             // Each run beside its origin document, derived from the run's own
             // start (address arithmetic, no read) and required to be the
             // document the client's stated `origin` projects to — then
@@ -620,6 +675,18 @@ where
                 }
                 admitted.insert(origin_doc);
             }
+            // The re-insert's size, before any address is probed: every
+            // address of every draft-native run is re-minted below, two staged
+            // records apiece, and nothing M2 measures stops the staging before
+            // it is whole. Request arithmetic, so it discloses nothing — and
+            // asked here, it bounds the existence walk over those runs too.
+            let reinserted = supplied
+                .iter()
+                .filter(|(_, origin_doc)| draft_native(origin_doc))
+                .fold(Nat::zero(), |sum, (run, _)| sum + run.width());
+            if reinserted > Nat::from(MAX_REINSERTED_VALUES) {
+                return Err(PublishError::TooManyValues);
+            }
             // Existence (S3★): every address a run names holds a value. Each
             // address is asked, not only the start: a by-reference run is the
             // CLIENT's I-extent rather than one an arrangement resolved. And each
@@ -640,7 +707,7 @@ where
             // document's own I-space — then the base's post-render deposits.
             let mut placed: Vec<Run> = Vec::new();
             for (run, origin_doc) in supplied {
-                if draft_doc.as_ref() == Some(&origin_doc) {
+                if draft_native(&origin_doc) {
                     for a in run.addrs() {
                         let value = stg
                             .working()
@@ -1344,9 +1411,10 @@ mod tests {
     //! written by INSERT in the same composite. And J0's allocation step,
     //! driven directly in a world of M3 and M4 alone, which is all it reads.
     //! And the publish shot's placement claims — its run budget at both sites,
-    //! and its empty member — in a world whose three slices are seeded apart,
-    //! so a head can arrange more runs than a test could build by
-    //! transactions.
+    //! its re-insert budget, and its empty member — in a world whose three
+    //! slices are seeded apart, so a head can arrange more runs than a test
+    //! could build by transactions, and a draft can name values that were
+    //! never stored.
 
     use serde::{Deserialize, Serialize};
     use skep_content::ContentStore;
@@ -1755,6 +1823,43 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_reinsert_budget_is_a_transaction_m2_accepts() {
+        // MAX_REINSERTED_VALUES has an argument behind it as MAX_PLACED_RUNS
+        // does, and the argument is M2's accounting — two records a value,
+        // each charged its encoded bytes and its framing — so it is measured
+        // against that accounting and not against a restatement of it. A
+        // re-insert of exactly the budget, one byte a value at the shallowest
+        // content address, staged through J0's own step — the one the shot's
+        // re-insert calls — in one transaction, commits: the cap refuses no
+        // shot M2 could have accepted at that depth, which is what keeps it a
+        // bound on the staging rather than a second, tighter journal budget.
+        let cfg = KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+        };
+        let k = Kernel::open(
+            cfg,
+            AllocWorld {
+                m3: seeded_m3(),
+                content: ContentStore::default(),
+            },
+        )
+        .expect("in-memory open");
+        let (runs, _) = k
+            .transact(&[M3State::content_lock_key(&doc1())], |stg| {
+                let mut runs: Vec<Run> = Vec::new();
+                for _ in 0..MAX_REINSERTED_VALUES {
+                    allocate_for_placement::<_, InsertError>(stg, &doc1(), Val::new(&b"x"[..]), &mut runs)?;
+                }
+                Ok::<_, InsertError>(runs)
+            })
+            .expect("a re-insert of exactly the budget is a transaction M2 accepts");
+        // One run: the fresh addresses are I-adjacent, which is why the run
+        // budget alone could never have seen this many values.
+        assert_eq!(runs, vec![run(&ca(1), MAX_REINSERTED_VALUES as u32)]);
+    }
+
     /// A world carrying all three slices the SHOT touches — M3 (its member's
     /// mint), M4 (the existence check and the re-insert's writes) and M5 (the
     /// base's tail and the member's placement) — seeded APART, as `GateWorld`'s
@@ -1945,6 +2050,76 @@ mod tests {
             k.snapshot().world().m5().content_runs(&member).cloned().collect::<Vec<_>>(),
             head_runs[1..].to_vec()
         );
+    }
+
+    #[test]
+    fn the_shot_refuses_a_re_insert_past_the_value_budget_before_probing_an_address() {
+        // MAX_REINSERTED_VALUES binds how many values one SHOT re-mints from
+        // its draft, and the count is request arithmetic — the draft-native
+        // runs' widths, summed — answered before any address is probed.
+        // Nothing of doc1 is stored in this world, so every probe of the
+        // draft answers `DanglingSource`: a shot refused `TooManyValues` here
+        // was refused without one. What is bounded is the SUM, so two runs
+        // over one I-extent, each inside the budget, are refused together; a
+        // by-reference run is placed as one run and never re-minted, so its
+        // width is not counted; and the source gate still speaks first.
+        let p1 = Caller::Principal(PrincipalId(1));
+        let k = shot_kernel(vec![], &[]);
+        let vs = Vstream::new(&k);
+        let anyone = |_: &ShotWorld, _: &Address| true;
+        let no_one = |_: &ShotWorld, _: &Address| false;
+        let shot_from = |runs: Vec<ShotRun>| Shot {
+            base: Some(Base {
+                member: pdoc_member(),
+                extent: n(0),
+            }),
+            draft: Some(doc1()),
+            runs,
+        };
+        let from_the_draft = |widths: &[usize]| {
+            shot_from(
+                widths
+                    .iter()
+                    .map(|&w| ShotRun {
+                        origin: doc1(),
+                        run: run(&ca(1), w as u32),
+                    })
+                    .collect(),
+            )
+        };
+        let before = k.current_seq();
+        assert!(matches!(
+            rejected(vs.publish(p1, &pdoc(), from_the_draft(&[MAX_REINSERTED_VALUES + 1]), &anyone)),
+            PublishError::TooManyValues
+        ));
+        let half = MAX_REINSERTED_VALUES / 2 + 1;
+        assert!(matches!(
+            rejected(vs.publish(p1, &pdoc(), from_the_draft(&[half, half]), &anyone)),
+            PublishError::TooManyValues
+        ));
+        // Exactly the budget passes the count, and its first probe finds the
+        // draft's first address holding nothing.
+        assert!(matches!(
+            rejected(vs.publish(p1, &pdoc(), from_the_draft(&[MAX_REINSERTED_VALUES]), &anyone)),
+            PublishError::DanglingSource
+        ));
+        // A run of the edition's own I-space past the budget, beside the same
+        // draft: not a re-insert, so it is refused for what it names.
+        let own = ShotRun {
+            origin: pdoc(),
+            run: run(&pca(1), MAX_REINSERTED_VALUES as u32 + 1),
+        };
+        assert!(matches!(
+            rejected(vs.publish(p1, &pdoc(), shot_from(vec![own]), &anyone)),
+            PublishError::DanglingSource
+        ));
+        // A draft its shooter may not read is withheld, however much of it
+        // the shot names.
+        assert!(matches!(
+            rejected(vs.publish(p1, &pdoc(), from_the_draft(&[MAX_REINSERTED_VALUES + 1]), &no_one)),
+            PublishError::Withheld(d) if d == doc1()
+        ));
+        assert_eq!(k.current_seq(), before, "every refusal commits nothing");
     }
 
     #[test]

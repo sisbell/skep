@@ -274,6 +274,7 @@ impl Lower for PublishError {
             ),
             PublishError::DanglingSource => (RejectCode::DanglingSource, None),
             PublishError::TooManyRuns => (RejectCode::TooManyRuns, None),
+            PublishError::TooManyValues => (RejectCode::TooManyValues, None),
             PublishError::Mint(m) => m.lower(),
             PublishError::Content(c) => c.lower(),
         }
@@ -857,6 +858,7 @@ mod tests {
         same_name(PublishError::Withheld(doc()));
         same_name(PublishError::DanglingSource);
         same_name(PublishError::TooManyRuns);
+        same_name(PublishError::TooManyValues);
 
         // ── M7 (links) ──
         same_name(MakeLinkError::HomeNotRegistered);

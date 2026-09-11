@@ -160,7 +160,7 @@ pub use chain::{deposit_surface, published_target, reading_surface, trunk_head, 
 pub use error::{
     CopyError, DeleteError, InsertError, PublishError, RearrangeError, SeatError, VersionError,
 };
-pub use ops::{Deposit, Vstream, MAX_PLACED_RUNS};
+pub use ops::{Deposit, Vstream, MAX_PLACED_RUNS, MAX_REINSERTED_VALUES};
 pub use run::{Run, RunError};
 pub use runlist::Runs;
 pub use seat::{seat_link, stage_seat_link};

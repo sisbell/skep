@@ -195,6 +195,13 @@ pub enum VersionError {
 /// * `TooManyRuns` — the member's placement exceeds
 ///   [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS), the budget COPY and the
 ///   shot share; a shot cannot be split to meet it.
+/// * `TooManyValues` — the draft-native runs' widths, summed, exceed
+///   [`MAX_REINSERTED_VALUES`](crate::MAX_REINSERTED_VALUES): each such value
+///   is re-minted as fresh identity, two staged records apiece. Arithmetic on
+///   the request alone, it discloses nothing about what exists; a shot cannot
+///   be split to meet it. Its own verdict and not `TooManyRuns`'s, since the
+///   values re-mint I-adjacent and coalesce: a shot refused here may place a
+///   single run.
 /// * `Mint` / `Content` — the identity mint, a content mint, or a content
 ///   write refused (M3/M4's own boundary refusals; defensive).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -210,6 +217,7 @@ pub enum PublishError {
     Withheld(Address),
     DanglingSource,
     TooManyRuns,
+    TooManyValues,
     Mint(MintError),
     Content(ContentError),
 }
@@ -299,6 +307,9 @@ impl fmt::Display for PublishError {
             PublishError::TooManyRuns => {
                 f.write_str("publish: the placement exceeds the per-transaction run budget")
             }
+            PublishError::TooManyValues => f.write_str(
+                "publish: the values the shot re-inserts from its draft exceed the per-transaction value budget",
+            ),
             // This layer only — the inner message is the `source`.
             PublishError::Mint(_) => f.write_str("publish: an identity or content mint failed"),
             PublishError::Content(_) => f.write_str("publish: a content write was rejected"),

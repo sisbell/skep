@@ -1975,6 +1975,9 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::NotOrdinalVSpan => "not_ordinal_vspan",
         RejectCode::DanglingSource => "dangling_source",
         RejectCode::TooManyRuns => "too_many_runs",
+        // The publish shot's re-insert budget (M5's `MAX_REINSERTED_VALUES`),
+        // beside the run budget it is not.
+        RejectCode::TooManyValues => "too_many_values",
         RejectCode::EmptyResult => "empty_result",
         RejectCode::NotArranged => "not_arranged",
         RejectCode::OutOfBounds => "out_of_bounds",

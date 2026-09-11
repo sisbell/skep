@@ -153,6 +153,14 @@ pub enum RejectCode {
     NotOrdinalVSpan,
     DanglingSource,
     TooManyRuns,
+    /// The publish shot's re-insert budget: the draft-native runs' widths,
+    /// summed, exceed M5's `MAX_REINSERTED_VALUES` (arithmetic on the
+    /// request; discloses nothing about what exists). Its own leaf rather
+    /// than a ride on `TooManyRuns`: the values re-mint I-adjacent and
+    /// coalesce, so a shot refused here may place a single run. Permanent by
+    /// the catch-all, for `TooManyRuns`'s reason: a shot cannot be split to
+    /// meet it.
+    TooManyValues,
     EmptyResult,
     NotArranged,
     OutOfBounds,
@@ -599,6 +607,7 @@ mod tests {
             | RejectCode::NotOrdinalVSpan
             | RejectCode::DanglingSource
             | RejectCode::TooManyRuns
+            | RejectCode::TooManyValues
             | RejectCode::EmptyResult
             | RejectCode::NotArranged
             | RejectCode::OutOfBounds
@@ -649,7 +658,7 @@ mod tests {
     /// Every code, in declaration order — the domain the policy is total
     /// over. A newly added code lands here and in
     /// [`documented_disposition`].
-    const ALL_CODES: [RejectCode; 77] = [
+    const ALL_CODES: [RejectCode; 78] = [
         RejectCode::Unauthenticated,
         RejectCode::Malformed,
         RejectCode::Durability,
@@ -684,6 +693,7 @@ mod tests {
         RejectCode::NotOrdinalVSpan,
         RejectCode::DanglingSource,
         RejectCode::TooManyRuns,
+        RejectCode::TooManyValues,
         RejectCode::EmptyResult,
         RejectCode::NotArranged,
         RejectCode::OutOfBounds,

@@ -27,6 +27,7 @@ use skep_arrangement::{
     ordinal_vspan, reading_surface, seat_link, stage_seat_link, trunk_head, Base, Caller,
     CopyError, DeleteError, Deposit, HasM5, InsertError, M5State, PublishError, RearrangeError,
     Run, RunError, Runs, SeatError, Shot, ShotRun, VPos, VSpec, VersionError, Vstream,
+    MAX_REINSERTED_VALUES,
 };
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{
@@ -1963,6 +1964,54 @@ fn carried_ness_is_judged_per_supplied_run_over_its_whole_i_extent() {
 }
 
 #[test]
+fn the_carried_test_answers_a_run_of_the_wires_largest_width_without_searching_it() {
+    // PUB-6.24's carried test, asked of a run as wide as the wire can name —
+    // a width of 4096 decimal digits — whose endpoint length is not the
+    // base's: its start lies under a member of doc2, one component deeper
+    // than the head's one run, which is of the edition's own I-space. A
+    // resident of another length holds no address of the run, so the test
+    // skips it by length rather than binary-searching the client's width — a
+    // search a fragmented head would pay once per resident, under the applier
+    // lock, ahead of any existence answer. Not carried, the run is asked
+    // about; then its first address holds no value. What a regression costs
+    // here is time, which this suite does not measure: a corpus seed for the
+    // fuzzing tier, with a wall-clock budget, against a fragmented head.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k);
+    let (member1, _) = vs
+        .publish(
+            P1,
+            &pdoc(),
+            Shot { base: Some(base(&pdoc(), 3)), draft: None, runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
+            &readable_by(PrincipalId(1)),
+        )
+        .expect("the head arranges the edition's three positions");
+    let widest = Nat::from(10u32).pow(4096) - n(1);
+    let never_minted = a(&[1, 0, 1, 0, 2, 1, 0, 1, 1]); // doc2's member's first element
+    let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
+    let admitting = recording_consult(&asked, vec![doc2()]);
+    let before = k.current_seq();
+    assert!(matches!(
+        rejected(vs.publish(
+            P1,
+            &pdoc(),
+            Shot {
+                base: Some(base(&member1, 3)),
+                draft: None,
+                runs: vec![ShotRun {
+                    origin: doc2(),
+                    run: Run::new(never_minted, widest).expect("a content run"),
+                }],
+            },
+            &admitting
+        )),
+        PublishError::DanglingSource
+    ));
+    assert_eq!(asked.borrow().as_slice(), &[doc2()], "not carried, so asked about");
+    assert_eq!(k.current_seq(), before, "the refusal commits nothing");
+}
+
+#[test]
 fn a_supplied_run_is_dangling_when_any_address_lacks_a_value_not_only_its_start() {
     // S3★ on the shot, which asks EVERY address of a supplied run where
     // COPY's gate asks only the start: a client's run was not resolved from
@@ -2014,6 +2063,61 @@ fn a_supplied_run_is_dangling_when_any_address_lacks_a_value_not_only_its_start(
     let s = k.snapshot();
     assert_eq!(s.world().m5().content_count(&member1), n(4));
     assert_eq!(read_v(&s, &member1, 4), b"c".to_vec(), "the draft's c, re-minted");
+}
+
+#[test]
+fn a_shot_rendering_its_drafts_content_past_the_value_budget_is_refused_before_it_stages() {
+    // The re-insert's size is the draft-native positions a shot renders, and
+    // a small request can render a draft's stored content many times over:
+    // here 4096 runs, each naming the same forty stored values — 163,840
+    // re-mints, a mint and a content write apiece, commanded by a request of
+    // a few hundred kilobytes, where M2 prices a transaction only once its
+    // closure has staged all of it. The count refuses it as request
+    // arithmetic, before any address is probed: nothing commits and no
+    // member is minted. Rendered once, the same draft is re-minted whole, the
+    // fresh identities continuing the edition's own content chain from where
+    // the deposits left it — so the refused shot minted nothing that survived
+    // it. Corpus seed for the hazard tier: widen the draft and the repeats,
+    // and the refusal stays this cheap.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k); // pdoc: pca(1..3), memberless
+    let forty: Vec<Val> = (0..40u8).map(|b| val(&[b'a' + b % 26])).collect();
+    vs.insert(P1, &doc1(), vp(1, 1), forty, Deposit::Undeclared)
+        .expect("the draft holds forty values");
+    let repeats = 4096;
+    assert!(repeats * 40 > MAX_REINSERTED_VALUES, "the fixture renders past the budget");
+    let readable = readable_by(PrincipalId(1));
+    let rendered = |runs: Vec<ShotRun>| Shot {
+        base: Some(base(&pdoc(), 3)),
+        draft: Some(doc1()),
+        runs,
+    };
+    let before = k.current_seq();
+    assert!(matches!(
+        rejected(vs.publish(
+            P1,
+            &pdoc(),
+            rendered((0..repeats).map(|_| shot_run(&doc1(), &ca(1), 40)).collect()),
+            &readable
+        )),
+        PublishError::TooManyValues
+    ));
+    assert_eq!(k.current_seq(), before, "the refusal commits nothing");
+    assert!(!k.snapshot().world().m3().is_registered_document(&vdoc()), "no member");
+    // The control: the draft rendered once, after the edition's own three.
+    let (member1, _) = vs
+        .publish(
+            P1,
+            &pdoc(),
+            rendered(vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &ca(1), 40)]),
+            &readable,
+        )
+        .expect("a re-insert inside the budget commits");
+    assert_eq!(
+        k.snapshot().world().m5().content_runs(&member1).cloned().collect::<Vec<_>>(),
+        vec![Run::new(pca(1), n(43)).expect("a content run")],
+        "pca(4..43) fresh, one run with the edition's own three"
+    );
 }
 
 #[test]

@@ -762,14 +762,14 @@ fn documented_reject_codes() -> Vec<String> {
     out
 }
 
-/// The full `RejectCode` wire-name table — all 77 codes, pinned.
+/// The full `RejectCode` wire-name table — all 78 codes, pinned.
 /// `code_name` is exhaustive over the enum, so the compiler forces a new
 /// variant to be NAMED; this forces the name to be the one wire.md
 /// publishes, and the harvest above forces the table to hold every code
 /// the document lists save the one the daemon originates itself.
 #[test]
 fn reject_code_names_are_pinned() {
-    let table: [(RejectCode, &str); 77] = [
+    let table: [(RejectCode, &str); 78] = [
         (RejectCode::Unauthenticated, "unauthenticated"),
         (RejectCode::Malformed, "malformed"),
         (RejectCode::Durability, "durability"),
@@ -804,6 +804,7 @@ fn reject_code_names_are_pinned() {
         (RejectCode::NotOrdinalVSpan, "not_ordinal_vspan"),
         (RejectCode::DanglingSource, "dangling_source"),
         (RejectCode::TooManyRuns, "too_many_runs"),
+        (RejectCode::TooManyValues, "too_many_values"),
         (RejectCode::EmptyResult, "empty_result"),
         (RejectCode::NotArranged, "not_arranged"),
         (RejectCode::OutOfBounds, "out_of_bounds"),
@@ -881,11 +882,10 @@ fn reject_code_names_are_pinned() {
     // whether it names a code, not to widen the list to quiet it.
     const NOT_TABLE_ROWS: [&str; 3] = ["credential_refused", "detail", "permanent"];
     // Every other code the document lists must be pinned here. The reverse
-    // is deliberately NOT asserted: `slot_too_large`, `too_many_runs` and
-    // M6's three budget refusals (`too_many_blocks`, `too_many_pairs`,
-    // `too_much_coverage`) are names `code_name` can emit that wire.md v6.1
-    // assigns no code to — a guarantee question, not a table error (see the
-    // boundary note).
+    // is deliberately NOT asserted: a name `code_name` can emit before
+    // wire.md tables it — `too_many_values`, M5's publish re-insert budget,
+    // is one today — is a documentation debt for the document's owner, not a
+    // table error.
     let documented = documented_reject_codes();
     let pinned: std::collections::HashSet<&str> = table.iter().map(|&(_, n)| n).collect();
     for name in &documented {

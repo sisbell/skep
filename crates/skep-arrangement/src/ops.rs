@@ -549,12 +549,12 @@ where
             // order — the document's own I-space needs no consult, a run the
             // base already arranges takes none (PUB-6.24), and the FIRST
             // unreadable origin document speaks before any existence answer.
-            // An origin document is DECIDED only once the consult has admitted
-            // it: a carried run marks nothing, so a later run from the same
-            // origin that the base does not arrange is still asked about.
-            let mut decided: BTreeSet<&Address> = BTreeSet::new();
+            // An origin document joins `admitted` only once the consult admits
+            // it: a carried run adds nothing to it, so a later run from the
+            // same origin that the base does not arrange is still asked about.
+            let mut admitted: BTreeSet<&Address> = BTreeSet::new();
             for (run, origin_doc) in &supplied {
-                if *origin_doc == trunk || decided.contains(origin_doc) {
+                if *origin_doc == trunk || admitted.contains(origin_doc) {
                     continue;
                 }
                 let carried = shot
@@ -567,7 +567,7 @@ where
                 if !readable(world, origin_doc) {
                     return Err(PublishError::Withheld(origin_doc.clone()));
                 }
-                decided.insert(origin_doc);
+                admitted.insert(origin_doc);
             }
             // Existence (S3★): every address a run names holds a value. Each
             // address is asked, not only the start: a by-reference run is the
@@ -591,13 +591,13 @@ where
             for (run, origin_doc) in supplied {
                 if draft_doc.as_ref() == Some(&origin_doc) {
                     for a in run.addrs() {
-                        let val = stg
+                        let value = stg
                             .working()
                             .content()
                             .value_at(a.tumbler())
                             .cloned()
                             .expect("the existence check found a value at every address of every run, and M4's fold only adds");
-                        allocate_for_placement::<_, PublishError>(stg, &trunk, val, &mut placed)?;
+                        allocate_for_placement::<_, PublishError>(stg, &trunk, value, &mut placed)?;
                     }
                 } else {
                     extend_or_push_run(&mut placed, run);
@@ -1138,7 +1138,7 @@ where
     ) -> Result<(Address, Seq), TxnError<VersionError>> {
         enum Branch {
             Owned,
-            Cross(Address),
+            CrossOwner(Address),
         }
         let snap = self.kernel.snapshot();
         let m3 = snap.world().m3();
@@ -1156,7 +1156,7 @@ where
                 if !m3.is_registered_account(&prefix) {
                     return Err(TxnError::Rejected(VersionError::NodeTierCrossOwner));
                 }
-                (M3State::document_lock_key(&prefix), Branch::Cross(prefix))
+                (M3State::document_lock_key(&prefix), Branch::CrossOwner(prefix))
             }
         };
         let keys = [key, M3State::version_lock_key(&trunk_of(source))];
@@ -1170,7 +1170,7 @@ where
             // inherit read is inside `published_target`'s contract; it is
             // read on the DOCUMENT a version member projects to (PUB-2.15).
             let source_published = published_target(m3, source);
-            let resolved = published.unwrap_or(source_published);
+            let fork_published = published.unwrap_or(source_published);
             // PUB-6.36 slot 5, the own-source arm alone (PUB-2.14): private
             // documents are versionless (PUB-2.9), and a published one
             // admits no private member (PUB-2.7).
@@ -1178,13 +1178,13 @@ where
                 if !source_published {
                     return Err(VersionError::PrivateSourceVersionless);
                 }
-                if !resolved {
+                if !fork_published {
                     return Err(VersionError::PrivateVersionOfPublished);
                 }
             }
             let (v, m3rec) = match &branch {
-                Branch::Owned => m3.mint_version(source, resolved),
-                Branch::Cross(prefix) => m3.mint_document(prefix, resolved),
+                Branch::Owned => m3.mint_version(source, fork_published),
+                Branch::CrossOwner(prefix) => m3.mint_document(prefix, fork_published),
             }?;
             // The arrangement shared is the source's reading surface — its
             // trunk head when it has one (head-float, PUB-2.49) — asked of

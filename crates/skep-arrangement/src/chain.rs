@@ -77,7 +77,7 @@ pub fn trunk_of(a: &Address) -> Address {
 /// `mint_version`: once that record is staged, a trunk member it mints is
 /// the head, and the answer would name the member still being built. Both
 /// composites ask first, and the suite pins `version`'s order by forking one
-/// chain twice (`a_deposit_into_a_published_chain_lands_in_the_head_member_alone`).
+/// chain twice (`a_declared_deposit_into_a_published_chain_lands_in_the_head_member_alone`).
 ///
 /// CONTRACT — `doc` is a registered document or a member of one (PUB-6.37),
 /// as [`published_target`] states.
@@ -186,21 +186,21 @@ mod tests {
         assert_eq!(trunk_head(&m3, &pdoc()), None);
         assert_eq!(reading_surface(&m3, &pdoc()), pdoc());
         // The chain grows two trunk members and a daughter of the first.
-        let m1 = a(&[1, 0, 1, 0, 3, 1]);
-        let m2 = a(&[1, 0, 1, 0, 3, 2]);
+        let member1 = a(&[1, 0, 1, 0, 3, 1]);
+        let member2 = a(&[1, 0, 1, 0, 3, 2]);
         let daughter = a(&[1, 0, 1, 0, 3, 1, 1]);
         let m3 = m3
-            .apply_m3(&M3Rec::Allocate { addr: m1.clone(), published: true })
-            .apply_m3(&M3Rec::Allocate { addr: m2.clone(), published: true })
+            .apply_m3(&M3Rec::Allocate { addr: member1.clone(), published: true })
+            .apply_m3(&M3Rec::Allocate { addr: member2.clone(), published: true })
             .apply_m3(&M3Rec::Allocate { addr: daughter.clone(), published: true });
-        assert_eq!(trunk_head(&m3, &pdoc()), Some(m2.clone()));
-        assert_eq!(reading_surface(&m3, &pdoc()), m2, "the bare address floats to the head");
+        assert_eq!(trunk_head(&m3, &pdoc()), Some(member2.clone()));
+        assert_eq!(reading_surface(&m3, &pdoc()), member2, "the bare address floats to the head");
         // Every version address answers itself, the head included — and
         // asked about the trunk head, a member and a daughter both name the
         // one trunk.
-        for member in [&m1, &m2, &daughter] {
+        for member in [&member1, &member2, &daughter] {
             assert_eq!(reading_surface(&m3, member), *member, "a version address answers itself");
-            assert_eq!(trunk_head(&m3, member), Some(m2.clone()), "one trunk, whoever asks");
+            assert_eq!(trunk_head(&m3, member), Some(member2.clone()), "one trunk, whoever asks");
         }
         // Inert on a private document, even one a fixture stamped a member
         // under: the float keys on the publication bit.
@@ -218,26 +218,26 @@ mod tests {
     /// document, the head itself and a pinned member alike — and a private
     /// document takes its own inserts whatever a fixture stamped under it.
     #[test]
-    fn a_deposit_lands_on_the_head_whichever_chain_address_it_names() {
+    fn a_declared_deposit_lands_on_the_head_whichever_chain_address_it_names() {
         let m3 = seeded_m3();
         let edition = pdoc();
         assert_eq!(deposit_surface(&m3, &edition), edition, "memberless: its own arrangement");
-        let m1 = a(&[1, 0, 1, 0, 3, 1]);
-        let m2 = a(&[1, 0, 1, 0, 3, 2]);
+        let member1 = a(&[1, 0, 1, 0, 3, 1]);
+        let member2 = a(&[1, 0, 1, 0, 3, 2]);
         let m3 = m3
-            .apply_m3(&M3Rec::Allocate { addr: m1.clone(), published: true })
-            .apply_m3(&M3Rec::Allocate { addr: m2.clone(), published: true });
-        for named in [&edition, &m1, &m2] {
+            .apply_m3(&M3Rec::Allocate { addr: member1.clone(), published: true })
+            .apply_m3(&M3Rec::Allocate { addr: member2.clone(), published: true });
+        for named in [&edition, &member1, &member2] {
             assert_eq!(
                 deposit_surface(&m3, named),
-                m2,
+                member2,
                 "{named:?}: a declared deposit lands on the head"
             );
         }
         // The one address the two surfaces answer differently: a pinned
         // member, which its readers answer forever and which never grows.
-        assert_eq!(reading_surface(&m3, &m1), m1);
-        assert_ne!(deposit_surface(&m3, &m1), reading_surface(&m3, &m1));
+        assert_eq!(reading_surface(&m3, &member1), member1);
+        assert_ne!(deposit_surface(&m3, &member1), reading_surface(&m3, &member1));
         // A private document's declaration is inert: the insert edits the
         // arrangement named, even with a member stamped under it.
         let stamped = m3.apply_m3(&M3Rec::Allocate {

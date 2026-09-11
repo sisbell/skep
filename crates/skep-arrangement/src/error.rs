@@ -468,7 +468,7 @@ impl Error for SeatError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::t;
+    use crate::testutil::{doc1, t};
 
     #[test]
     fn wrapping_errors_name_their_own_layer_and_delegate_the_cause() {
@@ -538,14 +538,8 @@ mod tests {
                 .to_string(),
             refusal.to_string()
         );
-        assert!(PublishError::Withheld(t_doc()).source().is_none());
+        assert!(PublishError::Withheld(doc1()).source().is_none());
         assert!(PublishError::BaseSuperseded.source().is_none());
-    }
-
-    /// The one document a shot's payload-carrying verdicts name in these
-    /// tests.
-    fn t_doc() -> Address {
-        skep_address::validate(t(&[1, 0, 1, 0, 1])).expect("T4-valid")
     }
 
     #[test]

@@ -47,6 +47,11 @@ pub(crate) fn ca(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 1, 0, 1, ordinal])
 }
 
+/// pdoc content element `k` (length 8): `[1,0,1,0,3,0,1,k]`.
+pub(crate) fn pca(ordinal: u32) -> Address {
+    a(&[1, 0, 1, 0, 3, 0, 1, ordinal])
+}
+
 /// doc1 link element `k` (length 8): `[1,0,1,0,1,0,2,k]`.
 pub(crate) fn la(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 1, 0, 2, ordinal])

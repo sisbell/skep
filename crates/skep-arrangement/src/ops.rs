@@ -1193,6 +1193,10 @@ mod tests {
     //! state no engine reaches, every arranged address there having been
     //! written by INSERT in the same composite. And J0's allocation step,
     //! driven directly in a world of M3 and M4 alone, which is all it reads.
+    //! And the publish shot's placement claims — its run budget at both sites,
+    //! and its empty member — in a world whose three slices are seeded apart,
+    //! so a head can arrange more runs than a test could build by
+    //! transactions.
 
     use serde::{Deserialize, Serialize};
     use skep_content::ContentStore;
@@ -1200,8 +1204,9 @@ mod tests {
     use skep_namespace::M3State;
 
     use super::*;
+    use crate::shot::{Base, ShotRun};
     use crate::state::M5State;
-    use crate::testutil::{a, ca, doc1, doc2, n, pdoc, run, seeded_m3, vp, vspan};
+    use crate::testutil::{a, ca, doc1, doc2, n, pca, pdoc, run, seeded_m3, vp, vspan};
 
     /// Unwrap an op's typed rejection (`TxnError::Rejected(E)` — surfaced
     /// verbatim, per M2's transact contract).
@@ -1578,6 +1583,216 @@ mod tests {
             "a full placement encodes to ~{full} bytes, past M2's {}",
             skep_kernel::MAX_TXN_BYTES
         );
+    }
+
+    /// A world carrying all three slices the SHOT touches — M3 (its member's
+    /// mint), M4 (the existence check and the re-insert's writes) and M5 (the
+    /// base's tail and the member's placement) — seeded APART, as `GateWorld`'s
+    /// two are. The shot is the one op whose records span all three.
+    #[derive(Clone, Serialize, Deserialize)]
+    struct ShotWorld {
+        m3: M3State,
+        content: ContentStore,
+        m5: M5State,
+    }
+
+    #[derive(Clone, Serialize, Deserialize)]
+    enum ShotRec {
+        M3(M3Rec),
+        Content(ContentWrite),
+        M5(M5Rec),
+    }
+
+    impl From<M3Rec> for ShotRec {
+        fn from(r: M3Rec) -> ShotRec {
+            ShotRec::M3(r)
+        }
+    }
+    impl From<ContentWrite> for ShotRec {
+        fn from(r: ContentWrite) -> ShotRec {
+            ShotRec::Content(r)
+        }
+    }
+    impl From<M5Rec> for ShotRec {
+        fn from(r: M5Rec) -> ShotRec {
+            ShotRec::M5(r)
+        }
+    }
+
+    impl WorldState for ShotWorld {
+        type Record = ShotRec;
+        fn apply(&self, r: &ShotRec) -> ShotWorld {
+            match r {
+                ShotRec::M3(x) => ShotWorld {
+                    m3: self.m3.apply_m3(x),
+                    content: self.content.clone(),
+                    m5: self.m5.clone(),
+                },
+                ShotRec::Content(x) => ShotWorld {
+                    m3: self.m3.clone(),
+                    content: self.content.apply_write(x),
+                    m5: self.m5.clone(),
+                },
+                ShotRec::M5(x) => ShotWorld {
+                    m3: self.m3.clone(),
+                    content: self.content.clone(),
+                    m5: self.m5.apply_m5(x),
+                },
+            }
+        }
+    }
+    impl HasM3 for ShotWorld {
+        fn m3(&self) -> &M3State {
+            &self.m3
+        }
+    }
+    impl HasContent for ShotWorld {
+        fn content(&self) -> &ContentStore {
+            &self.content
+        }
+    }
+    impl HasM5 for ShotWorld {
+        fn m5(&self) -> &M5State {
+            &self.m5
+        }
+    }
+
+    /// pdoc's first member, the head of its chain in `shot_kernel`'s world.
+    fn pdoc_member() -> Address {
+        a(&[1, 0, 1, 0, 3, 1])
+    }
+
+    /// pdoc with `pdoc_member()` heading its chain and arranging
+    /// `member_runs` — nothing placed at all when they are empty, as no op
+    /// stages an empty placement — and pdoc's content elements stored at the
+    /// ordinals in `present`.
+    fn shot_kernel(member_runs: Vec<Run>, present: &[u32]) -> Kernel<ShotWorld> {
+        let m3 = seeded_m3().apply_m3(&M3Rec::Allocate {
+            addr: pdoc_member(),
+            published: true,
+        });
+        let m5 = if member_runs.is_empty() {
+            M5State::genesis()
+        } else {
+            M5State::genesis().apply_m5(&M5Rec::ContentPlace {
+                doc: pdoc_member(),
+                at: n(1),
+                runs: member_runs,
+            })
+        };
+        let mut content = ContentStore::default();
+        for &k in present {
+            let cw = stage_write(&content, &pca(k), Val::new(&b"x"[..]))
+                .expect("each seeded address is written once");
+            content = content.apply_write(&cw);
+        }
+        let cfg = KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+        };
+        Kernel::open(cfg, ShotWorld { m3, content, m5 }).expect("in-memory open")
+    }
+
+    /// A shot staged off `pdoc_member()`, its copy having taken `extent` of
+    /// the head, supplying `runs` and naming no draft.
+    fn shot_off_the_head(extent: u32, runs: Vec<ShotRun>) -> Shot {
+        Shot {
+            base: Some(Base {
+                member: pdoc_member(),
+                extent: n(extent),
+            }),
+            draft: None,
+            runs,
+        }
+    }
+
+    #[test]
+    fn the_shot_refuses_a_client_arrangement_past_the_run_budget_and_places_one_at_it() {
+        // MAX_PLACED_RUNS binds what one SHOT places, and a shot cannot be
+        // split to meet it. Width-1 runs of the edition's own I-space at even
+        // ordinals: none is I-adjacent to the one before it
+        // (`shift(pca(2k), 1) = pca(2k + 1)`), so each pushes. Own I-space
+        // takes no consult — and this consult admits everything — so the
+        // source gate plays no part.
+        let p1 = Caller::Principal(PrincipalId(1));
+        let ordinals: Vec<u32> = (1..=MAX_PLACED_RUNS as u32 + 1).map(|o| 2 * o).collect();
+        let k = shot_kernel(vec![], &ordinals);
+        let runs = |count: usize| -> Vec<ShotRun> {
+            ordinals[..count]
+                .iter()
+                .map(|&o| ShotRun {
+                    origin: pdoc(),
+                    run: run(&pca(o), 1),
+                })
+                .collect()
+        };
+        let anyone = |_: &ShotWorld, _: &Address| true;
+        let before = k.current_seq();
+        assert!(matches!(
+            rejected(Vstream::new(&k).publish(
+                p1,
+                &pdoc(),
+                shot_off_the_head(0, runs(MAX_PLACED_RUNS + 1)),
+                &anyone
+            )),
+            PublishError::TooManyRuns
+        ));
+        assert_eq!(k.current_seq(), before, "the refusal commits nothing");
+        // The equal case: a member of exactly the budget is placed, whole.
+        let (member, _) = Vstream::new(&k)
+            .publish(p1, &pdoc(), shot_off_the_head(0, runs(MAX_PLACED_RUNS)), &anyone)
+            .expect("a placement at the budget commits");
+        assert_eq!(
+            k.snapshot().world().m5().content_runs(&member).len(),
+            MAX_PLACED_RUNS
+        );
+    }
+
+    #[test]
+    fn the_shot_refuses_a_carried_tail_past_the_run_budget() {
+        // The base's post-render deposits count against the same budget,
+        // measured as each is carried: a head arranging MAX_PLACED_RUNS + 1
+        // non-adjacent runs cannot be shot from extent 0, though the client
+        // supplies nothing. The head's bytes are stored as well, so the
+        // budget is the only thing this world could refuse the shot for.
+        let p1 = Caller::Principal(PrincipalId(1));
+        let ordinals: Vec<u32> = (1..=MAX_PLACED_RUNS as u32 + 1).map(|o| 2 * o).collect();
+        let head_runs: Vec<Run> = ordinals.iter().map(|&o| run(&pca(o), 1)).collect();
+        let k = shot_kernel(head_runs.clone(), &ordinals);
+        let anyone = |_: &ShotWorld, _: &Address| true;
+        let before = k.current_seq();
+        assert!(matches!(
+            rejected(Vstream::new(&k).publish(p1, &pdoc(), shot_off_the_head(0, vec![]), &anyone)),
+            PublishError::TooManyRuns
+        ));
+        assert_eq!(k.current_seq(), before, "the refusal commits nothing");
+        // The equal case: from extent 1 the tail is exactly the budget, and it
+        // is carried whole, in order.
+        let (member, _) = Vstream::new(&k)
+            .publish(p1, &pdoc(), shot_off_the_head(1, vec![]), &anyone)
+            .expect("a tail of exactly the budget is carried");
+        assert_eq!(
+            k.snapshot().world().m5().content_runs(&member),
+            head_runs[1..].to_vec()
+        );
+    }
+
+    #[test]
+    fn an_empty_shot_mints_its_member_and_leaves_the_arrangement_slice_as_it_found_it() {
+        // An empty placement pushes no record. The member's mint is M3's
+        // record; with nothing to place, M5's slice comes out exactly as it
+        // went in — no arrangement entry and no R record for the member, which
+        // reads as the lazy empty arrangement, as an empty fork's does.
+        let p1 = Caller::Principal(PrincipalId(1));
+        let k = shot_kernel(vec![], &[]);
+        let untouched = k.snapshot().world().m5().clone();
+        let anyone = |_: &ShotWorld, _: &Address| true;
+        let (member, _) = Vstream::new(&k)
+            .publish(p1, &pdoc(), shot_off_the_head(0, vec![]), &anyone)
+            .expect("an empty shot commits");
+        let s = k.snapshot();
+        assert!(s.world().m3().is_registered_document(&member), "the member is minted");
+        assert_eq!(*s.world().m5(), untouched, "and nothing is placed for it");
     }
 
     #[test]

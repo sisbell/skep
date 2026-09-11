@@ -1159,13 +1159,30 @@ fn ownership_stands_ahead_of_the_published_target_refusal() {
     let k = mem_kernel();
     let vs = deposit_abc(&k);
     let p2 = Caller::Principal(PrincipalId(2));
+    // Each of the four edits, a stranger's, on the published edition: both
+    // refusals apply to every one of them, and ω is the one that speaks.
     assert!(matches!(
-        rejected(vs.insert(p2, &pdoc(), vp(1, 4), vec![val(b"x")], Deposit::Declared)),
+        rejected(vs.insert(p2, &pdoc(), vp(1, 4), vec![val(b"x")], Deposit::Undeclared)),
         InsertError::NotOwner(d) if d == pdoc()
+    ));
+    assert!(matches!(
+        rejected(vs.copy(p2, &pdoc(), vp(1, 4), &[])),
+        CopyError::NotOwner(d) if d == pdoc()
     ));
     assert!(matches!(
         rejected(vs.delete(p2, &pdoc(), vp(1, 1), n(1))),
         DeleteError::NotOwner(d) if d == pdoc()
+    ));
+    assert!(matches!(
+        rejected(vs.rearrange(p2, &pdoc(), &[vp(1, 1), vp(1, 2), vp(1, 3)])),
+        RearrangeError::NotOwner(d) if d == pdoc()
+    ));
+    // A declaration clears the publication refusal and nothing else: the
+    // stranger's DECLARED deposit at the edition's fresh position — the one
+    // insert publication admits — still meets ω.
+    assert!(matches!(
+        rejected(vs.insert(p2, &pdoc(), vp(1, 4), vec![val(b"x")], Deposit::Declared)),
+        InsertError::NotOwner(d) if d == pdoc()
     ));
     let never_minted_member = a(&[1, 0, 1, 0, 3, 7]);
     assert!(matches!(
@@ -1497,7 +1514,7 @@ fn a_deposit_in_the_staging_interval_is_carried_by_the_shot() {
     assert_eq!(got, vec![b"a".to_vec(), b"c".to_vec(), b"z".to_vec()], "the delta, then the deposit");
     assert_eq!(s.world().m5().content_count(&m2), n(3));
     // A pinned base never grows, so a daughter shot with the full extent
-    // carries nothing extra; an extent past the base's count is refused.
+    // carries nothing extra; an extent one past the base's count is refused.
     let daughter_shot = Shot {
         base: Some(base(&m1, 4)),
         draft: None,
@@ -1510,7 +1527,7 @@ fn a_deposit_in_the_staging_interval_is_carried_by_the_shot() {
         rejected(vs.publish(
             P1,
             &pdoc(),
-            Shot { base: Some(base(&m1, 9)), draft: None, runs: vec![] },
+            Shot { base: Some(base(&m1, 5)), draft: None, runs: vec![] },
             &readable
         )),
         PublishError::BaseExtentTooLarge
@@ -1641,34 +1658,136 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
         PublishError::BaseExtentTooLarge
     ));
     assert!(asked.borrow().is_empty(), "no consult before the base's shape is settled");
-    // (6) carried-ness is judged run by run, never per origin document: a run
-    //     the base arranges decides nothing about its origin, so a LATER run
-    //     from the same origin that the base does not arrange is still asked
-    //     about — and here refused. doc2 grows a byte the head m2 does not
-    //     arrange, listed behind a doc2 window m2 does carry.
+}
+
+#[test]
+fn carried_ness_is_judged_per_supplied_run_over_its_whole_extent() {
+    // PUB-6.24's carried cell: a supplied run the base already arranges takes
+    // no consult, and "already arranges" is a claim about EVERY address of
+    // ONE run. Per run: a carried run decides nothing about its origin, so a
+    // later run from the same origin is still asked about. Per extent: a run
+    // that opens on what the base holds and reaches past it is not carried.
+    // Read either more loosely and a shot windows addresses of an origin its
+    // shooter may not read without the gate ever being asked.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k);
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w"), val(b"x")], Deposit::Undeclared)
+        .expect("doc2 holds w, x");
+    let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
+    let admitting = consult_reading(&asked, vec![doc2()]);
+    let (m1, _) = vs
+        .publish(
+            P1,
+            &pdoc(),
+            Shot {
+                base: Some(base(&pdoc(), 3)),
+                draft: None,
+                runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 2)],
+            },
+            &admitting,
+        )
+        .expect("the head windows w..x");
     let (y, _) = vs
         .insert(P1, &doc2(), vp(1, 3), vec![val(b"y")], Deposit::Undeclared)
-        .expect("doc2 grows a byte m2 does not arrange");
+        .expect("doc2 grows y");
+    assert_eq!(y, a(&[1, 0, 1, 0, 2, 0, 1, 3]), "y continues w..x's extent");
+    let refusing = consult_reading(&asked, vec![]);
+    let off_m1 = |runs: Vec<ShotRun>| Shot { base: Some(base(&m1, 5)), draft: None, runs };
+    let before = k.current_seq();
+    // Per run: the carried w marks nothing about doc2, so the later y is asked
+    // about — and refused.
     asked.borrow_mut().clear();
-    let refusing_doc2 = consult_reading(&asked, vec![subdoc.clone()]);
     assert!(matches!(
         rejected(vs.publish(
             P1,
             &pdoc(),
-            Shot {
-                base: Some(base(&m2, 6)),
-                draft: None,
-                runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 1), shot_run(&doc2(), &y, 1)],
-            },
-            &refusing_doc2
+            off_m1(vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 1), shot_run(&doc2(), &y, 1)]),
+            &refusing
         )),
         PublishError::Withheld(d) if d == doc2()
     ));
-    assert_eq!(
-        asked.borrow().as_slice(),
-        &[doc2()],
-        "asked once, about the run the base does not carry"
-    );
+    assert_eq!(asked.borrow().as_slice(), &[doc2()], "asked once, about the run m1 does not carry");
+    // Per extent: ONE run opening on w, x — which m1 arranges — and reaching
+    // y, which it does not. Judged on its start it would be carried.
+    asked.borrow_mut().clear();
+    assert!(matches!(
+        rejected(vs.publish(
+            P1,
+            &pdoc(),
+            off_m1(vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 3)]),
+            &refusing
+        )),
+        PublishError::Withheld(d) if d == doc2()
+    ));
+    assert_eq!(asked.borrow().as_slice(), &[doc2()], "a run carried only in part is asked about");
+    assert_eq!(k.current_seq(), before, "both refusals commit nothing");
+    // The control: the same run one position narrower is carried whole.
+    asked.borrow_mut().clear();
+    let (m2, _) = vs
+        .publish(
+            P1,
+            &pdoc(),
+            off_m1(vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 2)]),
+            &refusing,
+        )
+        .expect("a run carried whole takes no consult");
+    assert!(asked.borrow().is_empty(), "nothing was asked");
+    assert_eq!(k.snapshot().world().m5().content_count(&m2), n(5));
+}
+
+#[test]
+fn a_supplied_run_is_dangling_when_any_address_lacks_a_value_not_only_its_start() {
+    // S3★ on the shot, which asks EVERY address of a supplied run where
+    // COPY's gate asks only the start: a client's run was not resolved from
+    // an arrangement, so no induction over what arrangements admit covers its
+    // interior. Each run below opens on stored values and reaches one
+    // position past them.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k); // pdoc: pca(1..3)
+    insert_abc(&k); // doc1: ca(1..3)
+    let readable = readable_by(PrincipalId(1));
+    let before = k.current_seq();
+    // By reference: pca(2) and pca(3) are stored, pca(4) is not.
+    assert!(matches!(
+        rejected(vs.publish(
+            P1,
+            &pdoc(),
+            Shot { base: Some(base(&pdoc(), 3)), draft: None, runs: vec![shot_run(&pdoc(), &pca(2), 3)] },
+            &readable
+        )),
+        PublishError::DanglingSource
+    ));
+    // Draft-native: ca(2) and ca(3) are stored, ca(4) is not. The re-insert
+    // reads every value it re-mints, so a start-only check would send it to
+    // an address with nothing there.
+    assert!(matches!(
+        rejected(vs.publish(
+            P1,
+            &pdoc(),
+            Shot { base: Some(base(&pdoc(), 3)), draft: Some(doc1()), runs: vec![shot_run(&doc1(), &ca(2), 3)] },
+            &readable
+        )),
+        PublishError::DanglingSource
+    ));
+    assert_eq!(k.current_seq(), before, "both refusals commit nothing");
+    assert!(!k.snapshot().world().m3().is_registered_document(&vdoc()), "no member");
+    // The control: both runs one position shorter commit.
+    let (m1, _) = vs
+        .publish(
+            P1,
+            &pdoc(),
+            Shot {
+                base: Some(base(&pdoc(), 3)),
+                draft: Some(doc1()),
+                runs: vec![shot_run(&pdoc(), &pca(2), 2), shot_run(&doc1(), &ca(2), 2)],
+            },
+            &readable,
+        )
+        .expect("every address present");
+    let s = k.snapshot();
+    assert_eq!(s.world().m5().content_count(&m1), n(4));
+    assert_eq!(read_v(&s, &m1, 4), b"c".to_vec(), "the draft's c, re-minted");
 }
 
 #[test]
@@ -1732,13 +1851,17 @@ fn the_source_gate_is_asked_about_the_world_it_found_the_origin_registered_in() 
 fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing() {
     // PUB-2.9's `true` face on the shot, the base's three shape refusals, a
     // run that is no content run of its stated origin, an unregistered
-    // origin — each a clean no-op, and each behind registration and ω.
+    // origin — each a clean no-op, and each behind registration and ω. Where
+    // a request below is defective twice over, it is `publish`'s stated order
+    // that picks the verdict, and the comment names what the other order
+    // would answer.
     let k = mem_kernel();
     let vs = deposit_abc(&k);
     insert_abc(&k);
     let readable = readable_by(PrincipalId(1));
     let before = k.current_seq();
     let plain = |runs: Vec<ShotRun>| Shot { base: None, draft: None, runs };
+    let un = a(&[1, 0, 1, 0, 9]);
     // A private document has no chain (PUB-2.9).
     assert!(matches!(
         rejected(vs.publish(P1, &doc1(), plain(vec![shot_run(&doc1(), &ca(1), 1)]), &readable)),
@@ -1757,9 +1880,26 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
         )),
         PublishError::PrivateSourceVersionless
     ));
+    // …and registration and each run's shape speak ahead of it (PUB-6.37):
+    // doc1 is private AND its base names no document, then private AND its
+    // run is mis-stated. Read with the publication refusal first — where the
+    // four edits put it, straight after the gate — both would answer
+    // `PrivateSourceVersionless`.
+    assert!(matches!(
+        rejected(vs.publish(
+            P1,
+            &doc1(),
+            Shot { base: Some(base(&un, 1)), draft: None, runs: vec![] },
+            &readable
+        )),
+        PublishError::SourceNotRegistered
+    ));
+    assert!(matches!(
+        rejected(vs.publish(P1, &doc1(), plain(vec![shot_run(&doc2(), &ca(1), 1)]), &readable)),
+        PublishError::BadRun
+    ));
     // Registration ahead of everything (PUB-6.37): the document, then the
     // base, then an origin.
-    let un = a(&[1, 0, 1, 0, 9]);
     assert!(matches!(
         rejected(vs.publish(P1, &un, plain(vec![]), &readable)),
         PublishError::DocNotRegistered
@@ -1777,6 +1917,30 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
         rejected(vs.publish(P1, &pdoc(), plain(vec![shot_run(&un, &a(&[1, 0, 1, 0, 9, 0, 1, 1]), 1)]), &readable)),
         PublishError::SourceNotRegistered
     ));
+    // ω stands ahead of registration: a stranger naming a base that names no
+    // document learns about ownership. Registration first would answer
+    // `SourceNotRegistered`.
+    assert!(matches!(
+        rejected(vs.publish(
+            Caller::Principal(PrincipalId(2)),
+            &pdoc(),
+            Shot { base: Some(base(&un, 1)), draft: None, runs: vec![] },
+            &readable
+        )),
+        PublishError::NotOwner(d) if d == pdoc()
+    ));
+    // The base's registration before any run's shape: the base names no
+    // document AND the run is mis-stated. The runs first would answer
+    // `BadRun`.
+    assert!(matches!(
+        rejected(vs.publish(
+            P1,
+            &pdoc(),
+            Shot { base: Some(base(&un, 1)), draft: None, runs: vec![shot_run(&doc2(), &ca(1), 1)] },
+            &readable
+        )),
+        PublishError::SourceNotRegistered
+    ));
     // A run whose stated origin is not the document that minted it, and a
     // run whose start is a LINK element: neither is a content run of its
     // origin — refused on the request's own arithmetic.
@@ -1788,19 +1952,37 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
         rejected(vs.publish(P1, &pdoc(), plain(vec![shot_run(&doc1(), &a(&[1, 0, 1, 0, 1, 0, 2, 1]), 1)]), &readable)),
         PublishError::BadRun
     ));
-    // The base: another document is not in the chain.
+    // The runs are walked in order, each settled as its origin document is
+    // derived: a mis-stated run listed ahead of a run onto an unregistered
+    // origin answers for itself. Registration asked of every run before any
+    // run's shape, or the runs walked from the back, would answer
+    // `SourceNotRegistered`.
     assert!(matches!(
         rejected(vs.publish(
             P1,
             &pdoc(),
-            Shot { base: Some(base(&doc1(), 1)), draft: None, runs: vec![] },
+            plain(vec![shot_run(&doc2(), &ca(1), 1), shot_run(&un, &a(&[1, 0, 1, 0, 9, 0, 1, 1]), 1)]),
+            &readable
+        )),
+        PublishError::BadRun
+    ));
+    // The base: another document is not in the chain — and that speaks
+    // ahead of the extent, 99 being past anything doc1 holds. The extent
+    // first would answer `BaseExtentTooLarge`.
+    assert!(matches!(
+        rejected(vs.publish(
+            P1,
+            &pdoc(),
+            Shot { base: Some(base(&doc1(), 99)), draft: None, runs: vec![] },
             &readable
         )),
         PublishError::BaseNotInChain
     ));
     assert_eq!(k.current_seq(), before, "every refusal is a clean no-op");
     // Once a member exists, the birth shape and the memberless base are both
-    // superseded (PUB-2.34, PUB-2.66) — the member must be named.
+    // superseded (PUB-2.34, PUB-2.66) — the member must be named. The
+    // superseded base speaks ahead of its extent, 99 being past anything the
+    // edition holds.
     let (m1, _) = vs.publish(P1, &pdoc(), plain(vec![shot_run(&pdoc(), &pca(1), 3)]), &readable).expect("birth");
     let after = k.current_seq();
     assert!(matches!(
@@ -1811,7 +1993,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
         rejected(vs.publish(
             P1,
             &pdoc(),
-            Shot { base: Some(base(&pdoc(), 3)), draft: None, runs: vec![] },
+            Shot { base: Some(base(&pdoc(), 99)), draft: None, runs: vec![] },
             &readable
         )),
         PublishError::BaseSuperseded
@@ -1974,6 +2156,37 @@ fn a_deposit_into_a_published_chain_lands_in_the_head_member_alone() {
     // The in-place refusal still holds on every address of the chain.
     assert!(matches!(rejected(vs.delete(P1, &pdoc(), vp(1, 1), n(1))), DeleteError::PublishedTarget));
     assert!(matches!(rejected(vs.delete(P1, &m2, vp(1, 1), n(1))), DeleteError::PublishedTarget));
+}
+
+#[test]
+fn a_version_of_a_pinned_member_forks_the_member_not_the_head() {
+    // PUB-2.50 on `version`'s snapshot: a version address answers its own
+    // member forever, so a fork of a PINNED member shares that member's
+    // arrangement — never the head's, where a declared deposit naming the
+    // member lands. This is the one address at which the reading surface and
+    // the deposit surface differ, and the fork takes the reader's.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k);
+    let (m1, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the first member");
+    vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], Deposit::Declared)
+        .expect("lands in the head m1");
+    let (m2, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the second member");
+    vs.insert(P1, &pdoc(), vp(1, 5), vec![val(b"y")], Deposit::Declared)
+        .expect("lands in the head m2");
+    {
+        let s = k.snapshot();
+        assert_eq!(s.world().m5().content_count(&m1), n(4), "m1 is pinned at four");
+        assert_eq!(s.world().m5().content_count(&m2), n(5), "the head grew to five");
+    }
+    let (daughter, _) = vs.version(PrincipalId(1), &m1, None).expect("a pinned member's daughter");
+    assert_eq!(daughter, a(&[1, 0, 1, 0, 3, 1, 1]));
+    let s = k.snapshot();
+    let m5 = s.world().m5();
+    assert_eq!(
+        m5.content_runs(&daughter),
+        m5.content_runs(&m1),
+        "the member it names, not the head"
+    );
 }
 
 // ---- §B ownership gate (as amended 2026-08-16) ----

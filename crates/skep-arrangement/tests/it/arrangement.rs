@@ -3094,6 +3094,20 @@ fn the_run_reads_lend_a_walk_that_knows_its_length_and_both_ends() {
     assert_eq!(lends(m5.link_runs(&doc1())), m5.link_run_count(&doc1()));
 }
 
+#[test]
+fn the_op_handle_copies_as_the_reference_it_is() {
+    // One kernel borrow: a foreign caller holding the handle may hold it
+    // twice without asking the kernel again, and the promise is a trait
+    // only this crate can supply. Using `vs` after it has been copied out
+    // is the compile-time proof; the insert makes the test earn its name.
+    fn copies<T: Copy>(_: T) {}
+    let k = mem_kernel();
+    let vs = Vstream::new(&k);
+    copies(vs);
+    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a")], Deposit::Undeclared)
+        .expect("the handle is still usable after being copied out");
+}
+
 // ---- M2-driven recovery: checkpoint load + tail replay ----
 
 #[test]

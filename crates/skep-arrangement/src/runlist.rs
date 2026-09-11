@@ -365,11 +365,13 @@ impl RunList {
 
     /// Splice `new_runs` in at `ord` (§1): split, insert, concat, coalesce.
     /// The suffix's implicit positions are now `+Σ width(new_runs)` — the
-    /// uniform forward shift, for free.
+    /// uniform forward shift, for free. Takes the runs by value, as
+    /// `Vec::extend` does: the placing fold hands over clones of the record it
+    /// borrows, and [`append`](RunList::append) hands over the one run it owns.
     #[must_use = "splice_in returns the new run-list; it does not modify the receiver"]
-    pub(crate) fn splice_in(&self, ord: &Nat, new_runs: &[Run]) -> RunList {
+    pub(crate) fn splice_in(&self, ord: &Nat, new_runs: impl IntoIterator<Item = Run>) -> RunList {
         let (mut acc, right) = self.split_at(ord);
-        acc.extend(new_runs.iter().cloned());
+        acc.extend(new_runs);
         acc.extend(right);
         RunList(coalesced(acc))
     }
@@ -382,7 +384,7 @@ impl RunList {
     /// Coalesces with the last run when I-adjacent, as any splice does.
     #[must_use = "append returns the new run-list; it does not modify the receiver"]
     pub(crate) fn append(&self, run: Run) -> RunList {
-        self.splice_in(&(self.total_width() + Nat::one()), &[run])
+        self.splice_in(&(self.total_width() + Nat::one()), [run])
     }
 
     /// Remove ordinals `[from, from + width)` and close the gap (§1): split at
@@ -629,9 +631,9 @@ mod tests {
         // §1: ord = total + 1 is the single accepted ord > total; I-adjacent
         // appends merge (M12), non-adjacent stay separate.
         let l = list(vec![run(&ca(1), 3)]);
-        let merged = l.splice_in(&n(4), &[run(&ca(4), 2)]); // shift(ca(1),3) = ca(4): adjacent
+        let merged = l.splice_in(&n(4), [run(&ca(4), 2)]); // shift(ca(1),3) = ca(4): adjacent
         assert_eq!(merged.runs(), vec![run(&ca(1), 5)]);
-        let apart = l.splice_in(&n(4), &[run(&ca(9), 1)]); // not adjacent
+        let apart = l.splice_in(&n(4), [run(&ca(9), 1)]); // not adjacent
         assert_eq!(apart.runs(), vec![run(&ca(1), 3), run(&ca(9), 1)]);
         assert_eq!(apart.total_width(), n(4));
     }
@@ -815,7 +817,7 @@ mod tests {
         // §1: Run(a, w) → Run(a, c), Run(a ⊕ c, w − c); suffix positions move
         // +Σ width for free.
         let l = list(vec![run(&ca(1), 4)]);
-        let spliced = l.splice_in(&n(3), &[run(&ca(9), 1)]);
+        let spliced = l.splice_in(&n(3), [run(&ca(9), 1)]);
         assert_eq!(
             spliced.runs(),
             vec![run(&ca(1), 2), run(&ca(9), 1), run(&ca(3), 2)]
@@ -858,7 +860,7 @@ mod tests {
                 let mut want = gaps.to_vec();
                 want.insert(ord as usize - 1, placed.clone());
                 assert_denotes(
-                    &l.splice_in(&n(ord), &[run(&placed, 1)]),
+                    &l.splice_in(&n(ord), [run(&placed, 1)]),
                     &want,
                     &format!("{placed:?} at {ord}"),
                 );
@@ -900,7 +902,7 @@ mod tests {
         // §1: the I-adjacency guard is vacuously false across origin lengths
         // (shift preserves length) — a transclusion seam survives (M14/M16).
         let l = list(vec![run(&ca(1), 1)]);
-        let out = l.splice_in(&n(2), &[run(&vca(1), 1)]); // vca is length 9, ca length 8
+        let out = l.splice_in(&n(2), [run(&vca(1), 1)]); // vca is length 9, ca length 8
         assert_eq!(out.runs().len(), 2);
     }
 
@@ -914,7 +916,7 @@ mod tests {
         let doc2_third = a(&[1, 0, 1, 0, 2, 0, 1, 3]);
         assert_eq!(doc2_third.tumbler().len(), ca(1).tumbler().len());
         let l = list(vec![run(&ca(1), 2)]);
-        let out = l.splice_in(&n(3), &[run(&doc2_third, 1)]);
+        let out = l.splice_in(&n(3), [run(&doc2_third, 1)]);
         assert_eq!(out.runs(), vec![run(&ca(1), 2), run(&doc2_third, 1)]);
         // The placing ops' accumulator answers the same.
         let mut placed = vec![run(&ca(1), 2)];

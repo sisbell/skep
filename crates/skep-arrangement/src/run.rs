@@ -9,6 +9,7 @@
 //! crate-private, the first two carrying a `k ≤ width` precondition nothing
 //! can report and the third an operand the level-class discipline governs.
 
+use std::borrow::Borrow;
 use std::error::Error;
 use std::fmt;
 
@@ -161,6 +162,23 @@ impl OffsetRange {
     }
 }
 
+/// The walk both address iterators share — offsets `[0, width)`, in I-order,
+/// which is V-order — over a run held by reference or by value: `Borrow<Run>`
+/// admits both, so one body serves the borrowing form ([`Run::addrs`]) and
+/// the taking form ([`Run::into_addrs`]), and neither clones the run to reach
+/// it.
+fn addrs_of<R: Borrow<Run>>(run: R) -> impl Iterator<Item = Address> {
+    let mut k = Nat::zero();
+    std::iter::from_fn(move || {
+        let run = run.borrow();
+        (k < run.width).then(|| {
+            let a = run.addr_at(&k);
+            k = &k + &Nat::one();
+            a
+        })
+    })
+}
+
 impl Run {
     /// May `a` start a run — is it a FULL ELEMENT POSITION
     /// `doc·0·subspace·ordinal`? The one definition of what the position
@@ -301,14 +319,7 @@ impl Run {
     /// an `ExactSizeIterator`: `width` is a `Nat`, so a `len() -> usize` would
     /// be a lie at the top of its range.
     pub fn addrs(&self) -> impl Iterator<Item = Address> + '_ {
-        let mut k = Nat::zero();
-        std::iter::from_fn(move || {
-            (k < self.width).then(|| {
-                let a = self.addr_at(&k);
-                k = &k + &Nat::one();
-                a
-            })
-        })
+        addrs_of(self)
     }
 
     /// The run's addresses, TAKING THE RUN — the same sequence
@@ -318,20 +329,12 @@ impl Run {
     /// addresses holds each run only for as long as it walks it, where the
     /// borrowing form cannot outlive the vector it consumes.
     ///
-    /// The two share a body rather than one calling the other: expressing this
-    /// through `addrs` would need the run alive beside the iterator, and
-    /// expressing `addrs` through this one would clone a run its caller has
-    /// already borrowed. Owned items and no `ExactSizeIterator`, for the
+    /// The two are one body, `addrs_of`, generic over `Borrow<Run>` —
+    /// instantiated with `Run` here and `&Run` there — so neither form clones
+    /// the run to walk it. Owned items and no `ExactSizeIterator`, for the
     /// reasons stated on [`addrs`](Run::addrs).
     pub fn into_addrs(self) -> impl Iterator<Item = Address> {
-        let mut k = Nat::zero();
-        std::iter::from_fn(move || {
-            (k < self.width).then(|| {
-                let a = self.addr_at(&k);
-                k = &k + &Nat::one();
-                a
-            })
-        })
+        addrs_of(self)
     }
 
     /// The ONE admissible Run→Span lift: the level-uniform, element-level
@@ -398,16 +401,20 @@ impl Run {
         if span.is_level_uniform() && span.start().len() == addr_len {
             let intersection = intersect(&self.iextent(), span)
                 .expect("both operands level-uniform at one length — gate passes")?;
-            let ordinal_of = |t: &Tumbler| {
+            // The last component of an endpoint of this run's own length — its
+            // ordinal. A nested fn rather than a closure so it hands back the
+            // borrow `get` already made: a closure's elided lifetimes do not
+            // tie its return to its argument, and a clone would be the price
+            // of that.
+            fn ordinal_of(t: &Tumbler, addr_len: usize) -> &Nat {
                 t.get(addr_len)
                     .expect("run I-extent endpoints have #t == addr_len")
-                    .clone()
-            };
-            let start_ordinal = ordinal_of(self.i_start.tumbler());
+            }
+            let start_ordinal = ordinal_of(self.i_start.tumbler(), addr_len);
             let reach = intersection.reach();
             Some(OffsetRange {
-                lo: ordinal_of(intersection.start()) - &start_ordinal,
-                hi: ordinal_of(&reach) - &start_ordinal,
+                lo: ordinal_of(intersection.start(), addr_len) - start_ordinal,
+                hi: ordinal_of(&reach, addr_len) - start_ordinal,
             })
         } else {
             let k_lo = self.lower_bound(span.start());

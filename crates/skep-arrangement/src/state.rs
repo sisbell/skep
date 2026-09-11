@@ -245,7 +245,8 @@ impl M5State {
             // root install, so a reader never observes M-updated-without-R
             // (J1★ ⇒ P4★/P4a; with INSERT's composite, J0 ⇒ P7a).
             M5Rec::ContentPlace { doc, at, runs } => M5State {
-                arrangements: self.arrangements_with_content(doc, |c| c.splice_in(at, runs)),
+                arrangements: self
+                    .arrangements_with_content(doc, |c| c.splice_in(at, runs.iter().cloned())),
                 provenance: self.provenance.append(doc, runs),
             },
             // §4 fold: split at `from` and `from + width`, drop the middle,

@@ -234,6 +234,17 @@ impl<W: WorldState> fmt::Debug for Vstream<'_, W> {
     }
 }
 
+/// One kernel borrow, so a copy of the handle is a copy of a reference.
+/// Written out, as `Debug` is: the derives would bound the impls on
+/// `W: Clone` / `W: Copy`, and no `WorldState` is `Copy` — the choice M6's
+/// `Query` makes for the same reason.
+impl<W: WorldState> Clone for Vstream<'_, W> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<W: WorldState> Copy for Vstream<'_, W> {}
+
 impl<W> Vstream<'_, W>
 where
     W: WorldState + HasM5 + HasM3 + HasContent, // reads M3 (registration, mints) + M4 (writes, and the shot's byte reads) + M5

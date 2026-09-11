@@ -102,10 +102,10 @@ pub enum DeleteError {
 /// published (`PublishedTarget` — PUB-2.11's refusal, the face of
 /// [`InsertError::PublishedTarget`]), 3 or 4 cuts, strictly ascending, all
 /// subspace s_C, CS5 lower bound `1 ≤ ord(c₀)` and upper bound
-/// `ord(c_last) ≤ n_C + 1` (both `OutOfBounds`), content subspace non-empty
-/// (R-PRE(ii); with ascending in-bounds cuts an empty subspace always trips
-/// `OutOfBounds` first, so `EmptyContentSubspace` is defensive completeness
-/// against the cited R-PRE rather than a reachable verdict).
+/// `ord(c_last) ≤ n_C + 1` (both `OutOfBounds`), and content subspace
+/// non-empty (`EmptyContentSubspace`, R-PRE(ii)). Whether that last verdict
+/// can be reached past the ones before it is
+/// [`Vstream::rearrange`](crate::Vstream::rearrange)'s to say.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RearrangeError {
     DocNotRegistered,

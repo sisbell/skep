@@ -37,17 +37,19 @@ impl M5State {
     /// (the eager-lazy split with M3, stated on [`M5State`]) applied ONCE, so
     /// no read decides for itself what an absent document answers and the
     /// eleventh read inherits the convention rather than restating it. Every
-    /// read in this file reaches its run-lists through here or through the
-    /// two narrowings below, which leaves `arrangements` touched directly only
-    /// by the folds that own it.
-    fn arrangement_of(&self, doc: &Address) -> &DocArrangement {
+    /// read of the map — the folds' included, which clone what they will
+    /// update and, for a fork, read its source through
+    /// [`content_list`](M5State::content_list) — comes through here, which
+    /// leaves `arrangements` touched directly only by the writes that own it:
+    /// the folds' `update`, and the no-op arm that hands the map back whole.
+    pub(crate) fn arrangement_of(&self, doc: &Address) -> &DocArrangement {
         self.arrangements
             .get(doc)
             .unwrap_or_else(|| &*EMPTY_ARRANGEMENT)
     }
 
     /// `doc`'s content run-list — empty for an absent document.
-    fn content_list(&self, doc: &Address) -> &RunList {
+    pub(crate) fn content_list(&self, doc: &Address) -> &RunList {
         &self.arrangement_of(doc).content
     }
 

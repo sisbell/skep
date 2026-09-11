@@ -192,17 +192,18 @@ impl M5State {
     }
 
     /// The arrangements map with `doc`'s content run-list replaced by `f` of
-    /// the current one — an absent doc reading as the empty arrangement, per
-    /// the lazy convention. Stating the read-modify-write once leaves each
-    /// editing fold arm showing only what distinguishes it: which run-list
-    /// operation it performs, and what it does to R.
+    /// the current one — an absent doc reading as the empty arrangement,
+    /// asked of [`arrangement_of`](M5State::arrangement_of) as every read
+    /// asks it. Stating the read-modify-write once leaves each editing fold
+    /// arm showing only what distinguishes it: which run-list operation it
+    /// performs, and what it does to R.
     #[must_use = "returns the updated arrangements map; it does not modify the receiver"]
     fn arrangements_with_content(
         &self,
         doc: &Address,
         f: impl FnOnce(&RunList) -> RunList,
     ) -> im::OrdMap<Address, DocArrangement> {
-        let mut arr = self.arrangements.get(doc).cloned().unwrap_or_default();
+        let mut arr = self.arrangement_of(doc).clone();
         arr.content = f(&arr.content);
         self.arrangements.update(doc.clone(), arr)
     }
@@ -215,7 +216,7 @@ impl M5State {
         doc: &Address,
         f: impl FnOnce(&RunList) -> RunList,
     ) -> im::OrdMap<Address, DocArrangement> {
-        let mut arr = self.arrangements.get(doc).cloned().unwrap_or_default();
+        let mut arr = self.arrangement_of(doc).clone();
         arr.link = f(&arr.link);
         self.arrangements.update(doc.clone(), arr)
     }
@@ -314,11 +315,7 @@ impl M5State {
             // migration beside the M2-concurrency one stated on the variant.
             // `Vstream::version` states who owns the bound meanwhile.
             M5Rec::VersionSnapshot { source, new } => {
-                let content = self
-                    .arrangements
-                    .get(source)
-                    .map(|arr| arr.content.clone())
-                    .unwrap_or_default();
+                let content = self.content_list(source).clone();
                 if content.is_empty() {
                     self.clone()
                 } else {

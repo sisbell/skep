@@ -103,40 +103,38 @@ fn coalesced(runs: Vec<Run>) -> im::Vector<Run> {
 /// Over an ITERATOR, not a `RunList`: the ops that split twice (contract,
 /// clip, transpose) split a `Vec<Run>` the first split produced, and a
 /// splitter that demanded a `RunList` would make each of them rebuild one.
-fn split_runs<'a>(mut runs: impl Iterator<Item = &'a Run>, ord: &Nat) -> (Vec<Run>, Vec<Run>) {
-    let one = Nat::one();
-    if *ord <= one {
+/// The V-positions it judges each run at are the blocks' ([`blocks_of`]), so
+/// it sums no width for itself.
+fn split_runs<'a>(runs: impl Iterator<Item = &'a Run>, ord: &Nat) -> (Vec<Run>, Vec<Run>) {
+    if *ord <= Nat::one() {
         return (Vec::new(), runs.cloned().collect());
     }
     let mut left: Vec<Run> = Vec::new();
-    let mut before = Nat::zero();
-    while let Some(run) = runs.next() {
-        let start = &before + &one; // this run's first ordinal
-        if *ord == start {
-            // Boundary before this run.
-            let mut right: Vec<Run> = vec![run.clone()];
-            right.extend(runs.cloned());
+    let mut blocks = blocks_of(runs);
+    while let Some(block) = blocks.next() {
+        if *ord == block.v_start {
+            // Boundary before this block.
+            let mut right: Vec<Run> = vec![block.run.clone()];
+            right.extend(blocks.map(|b| b.run.clone()));
             return (left, right);
         }
-        let last = &before + &run.width; // this run's last ordinal
-        if *ord <= last {
-            // Interior: keep `ord − start` elements on the left
+        if *ord < block.v_reach() {
+            // Interior: keep `ord − v_start` elements on the left
             // (1 ≤ kept ≤ width − 1 here).
-            let kept = ord - &start;
+            let kept = ord - &block.v_start;
             let right_first = Run {
-                i_start: run.addr_at(&kept),
-                width: &run.width - &kept,
+                i_start: block.run.addr_at(&kept),
+                width: &block.run.width - &kept,
             };
             left.push(Run {
-                i_start: run.i_start.clone(),
+                i_start: block.run.i_start.clone(),
                 width: kept,
             });
             let mut right: Vec<Run> = vec![right_first];
-            right.extend(runs.cloned());
+            right.extend(blocks.map(|b| b.run.clone()));
             return (left, right);
         }
-        left.push(run.clone());
-        before = last;
+        left.push(block.run.clone());
     }
     (left, Vec::new()) // ord ≥ total + 1: the append boundary
 }
@@ -251,10 +249,28 @@ pub(crate) struct Block<'a> {
 
 impl Block<'_> {
     /// The first V-ordinal past the block — `v_start + width`, the V-side
-    /// twin of [`Run::reach`]; what `locate`'s bound and the clip both ask.
+    /// twin of [`Run::reach`]; what `locate`'s bound, the clip and the
+    /// splitter's interior test each ask.
     pub(crate) fn v_reach(&self) -> Nat {
         &self.v_start + &self.run.width
     }
+}
+
+/// The MAPPING BLOCKS of a run sequence held any way — each run at the
+/// running prefix sum + 1 — so the list's own runs and a `Vec<Run>` a split
+/// produced walk alike. THE ONE prefix-sum walk: [`RunList::iter_blocks`] is
+/// this over the list, and [`split_runs`] asks it rather than summing widths
+/// for itself.
+fn blocks_of<'a>(runs: impl Iterator<Item = &'a Run>) -> impl Iterator<Item = Block<'a>> {
+    let mut v_start = Nat::one();
+    runs.map(move |run| {
+        let block = Block {
+            v_start: v_start.clone(),
+            run,
+        };
+        v_start = &v_start + &run.width;
+        block
+    })
 }
 
 impl RunList {
@@ -534,20 +550,12 @@ impl RunList {
         self.clipped_runs(std::cmp::max(ord.clone(), Nat::one()), None)
     }
 
-    /// The MAPPING BLOCKS (§1's `iter_runs`), in V-order: each stored run at
-    /// its implicit V-start, the running prefix sum + 1. THE ONE prefix-sum
-    /// walk, which `locate`, the clip and `project` each ask rather than
-    /// summing widths for themselves.
+    /// The MAPPING BLOCKS (§1's `iter_runs`), in V-order — [`blocks_of`]
+    /// over the list's own runs, each stored run at its implicit V-start —
+    /// which `locate`, the clip and `project` each ask rather than summing
+    /// widths for themselves.
     pub(crate) fn iter_blocks(&self) -> impl Iterator<Item = Block<'_>> + '_ {
-        let mut v_start = Nat::one();
-        self.0.iter().map(move |run| {
-            let block = Block {
-                v_start: v_start.clone(),
-                run,
-            };
-            v_start = &v_start + &run.width;
-            block
-        })
+        blocks_of(self.0.iter())
     }
 
     /// The canonical, V-ordered run decomposition (maximally merged — M12),

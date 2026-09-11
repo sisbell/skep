@@ -1155,10 +1155,14 @@ where
     /// has no deposit form) → `BadCutCount` (3|4) →
     /// `NotAscending` (strict) → `NotContentSubspace` (every cut) →
     /// `OutOfBounds` (CS5 lower bound `1 ≤ ord(c₀)` and upper bound
-    /// `ord(c_last) ≤ n_C + 1`) → `EmptyContentSubspace` (R-PRE(ii);
-    /// defensive after the bounds — see [`RearrangeError`]). Strict ascent
-    /// already forces every region width ≥ 1, so no per-region emptiness
-    /// check is reachable.
+    /// `ord(c_last) ≤ n_C + 1`) → `EmptyContentSubspace` (R-PRE(ii)). That
+    /// last verdict is defensive completeness, not a reachable one: an empty
+    /// subspace admits ordinal 1 alone, and three or four strictly ascending
+    /// cuts from `1 ≤ ord(c₀)` put the last cut past it, so the bounds check
+    /// answers `OutOfBounds` first — which is why the two checks may not be
+    /// transposed (`rearrange_rejects_in_documented_order` pins it on an
+    /// empty draft). Strict ascent already forces every region width ≥ 1, so
+    /// no per-region emptiness check is reachable either.
     pub fn rearrange(
         &self,
         caller: Caller,

@@ -36,6 +36,12 @@
 //!   arrangement stays implicit/empty until M5 first touches it;
 //! * content/link *queries* (M6/M8) — M5 exposes the read primitives;
 //!   RETRIEVEV/SHOWDELETIONS/FINDDOCSCONTAINING are M6's compositions;
+//! * read permission — M5 knows no principal's read rights: `copy` and
+//!   `version` read any registered source and owe their source gate
+//!   (PUB-6.23) to the caller, M10's pre-dispatch consult on the wire route;
+//!   `publish` alone takes the gate's predicate as an argument — the caller's
+//!   `readable`, which the composite asks per origin document inside its
+//!   transaction (PUB-8.1);
 //! * ordering, durability, recovery (M2) — M5 stages [`M5Rec`]s through
 //!   `transact` and is recovered by checkpoint-load + replay.
 //!
@@ -73,14 +79,17 @@
 //! document's stay windows behind the source gate (PUB-2.40, PUB-6.23);
 //! the base's post-render deposits are carried after them (PUB-2.42,
 //! PUB-2.45). The BIRTH VERSION is the same composite with the base absent
-//! (PUB-2.34).
+//! (PUB-2.34), and so with no tail to carry.
 //!
-//! Readers of a BARE published address answer its TRUNK HEAD
-//! ([`reading_surface`], PUB-2.49/2.53), a version address its own member
-//! forever (PUB-2.50), and a memberless or private document its own
-//! arrangement; a DECLARED deposit into a published chain appends to the
-//! HEAD member's arrangement alone (PUB-2.66), whichever address of the
-//! chain the deposit names.
+//! The readers that FLOAT — M6's and M8's arrangement readers, and
+//! `version`'s snapshot, each composing [`reading_surface`] first — answer a
+//! BARE published address from its TRUNK HEAD (PUB-2.49/2.53), a version
+//! address from its own member forever (PUB-2.50), and a memberless or
+//! private document from its own arrangement. M5's own reads ([`M5State`])
+//! answer the address named, and so do COPY's source spans (wire.md pins
+//! that seam). A DECLARED deposit into a published chain appends to the HEAD
+//! member's arrangement alone (PUB-2.66), whichever address of the chain the
+//! deposit names.
 //!
 //! Those reads — which document a member belongs to ([`trunk_of`]), which
 //! member heads its chain ([`trunk_head`]), whether that document is
@@ -117,9 +126,10 @@
 //! `World`/`Record`: the engine implements [`HasM5`] for its
 //! `W: WorldState` (the read accessor), lifts M5's delta via
 //! `impl From<M5Rec> for W::Record` (the write-side mirror), and dispatches
-//! its `Record::M5` variant into the fold [`M5State::apply_m5`] — moving the
-//! whole record, never destructuring it (the `#[non_exhaustive]` variants
-//! forbid foreign destructuring-construction anyway). Write-driving ops are
+//! the variant that carries it (the engine's `Record::Arrangement`) into the
+//! fold [`M5State::apply_m5`] — moving the whole record, never destructuring
+//! it (the `#[non_exhaustive]` variants forbid foreign
+//! destructuring-construction anyway). Write-driving ops are
 //! generic over `W` with **per-op trait bounds** (each impl block names
 //! exactly the slices its ops read and the records they stage), so a minimal
 //! test world can drive `delete`/`rearrange` with `HasM5 + HasM3` and

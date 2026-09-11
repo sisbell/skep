@@ -29,9 +29,13 @@ use skep_namespace::{M3State, PrincipalId};
 ///
 /// `System` is exempt from ω and from NOTHING ELSE: the version-chain
 /// model's in-place refusal (PUB-2.11) reads the same for it — a rule fire
-/// never crosses the draft boundary and never advances a published
-/// arrangement in place (PUB-6.28), so an automation write into a published
-/// target is refused exactly as a principal's is.
+/// never advances a published arrangement in place (PUB-6.28), so an
+/// automation write into a published target is refused exactly as a
+/// principal's is. PUB-6.28's other clause — a rule fire never crosses the
+/// draft boundary — is NOT kept here:
+/// [`Vstream::publish`](crate::Vstream::publish) asks its caller nothing
+/// beyond `gate_write`, which `System` passes, so the clause holds for the
+/// shot only because M9 composes `insert` alone.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Caller {
     /// A session-attributed principal — ω-checked against each written
@@ -51,6 +55,10 @@ impl Caller {
     /// equivalent to prefix equality, and no registered owning prefix is
     /// not-owner, never a pass). One spelling of the rule, in the module
     /// that owns the registry it reads.
+    ///
+    /// `System` answers `true` — it is exempt from ω, as the type states — so
+    /// what this decides is whether the caller passes the ω gate, which is
+    /// the question every caller asks it.
     pub fn is_owner(&self, m3: &M3State, doc: &Address) -> bool {
         match self {
             Caller::System => true,

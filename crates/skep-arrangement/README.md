@@ -27,8 +27,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   deposits are carried after them. The trunk advances while the base
   is still its head; otherwise the shot lands as the base's daughter,
   so two shots off one head both commit. A bare published address
-  reads as its trunk head, a version address as itself forever, and a
-  declared deposit into a chain lands in the head member alone.
+  reads as its trunk head wherever a reader floats — the query layers'
+  arrangement reads and `version`'s snapshot — while `copy`'s sources
+  and the arrangement's own reads take the address named; a version
+  address reads as itself forever, and a declared deposit into a chain
+  lands in the head member alone.
 - **Write-surface gates** — the four edit ops and `publish` take a
   `Caller` and admit only the document's effective owner (ω, exact
   account match; `Caller::System` is the in-process automation path,

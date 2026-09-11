@@ -138,6 +138,26 @@ pub const MAX_PLACED_RUNS: usize = 1 << 16;
 /// (reached through [`HasM5`]); this type owns only the six editing/
 /// versioning operations — INSERT, DELETE, COPY, REARRANGE, VERSION and the
 /// publish SHOT — that M10 (and, for `insert`, M9) dispatches.
+///
+/// THE EDITION IS APPEND-ONLY (PUB-2.43) — the invariant the shot's carried
+/// tail rests on ([`Vstream::publish`]), kept by this surface and by no fold.
+/// A document's publication bit is fixed at its mint (M3), and every content
+/// arrangement of a published document's chain starts as the transaction
+/// that mints its document or member leaves it — empty from M3's create
+/// path, a shot's placement, a version's snapshot — and afterwards changes
+/// only by a DECLARED deposit at `n_C + 1` of the arrangement
+/// [`deposit_surface`] names. So at any moment exactly one arrangement per
+/// published chain can grow — the trunk head, or the document's own while it
+/// has no member — and no position of any is removed, moved, or inserted
+/// before. Its gates: `insert`'s published-target refusal, cleared at that
+/// one position alone; the same refusal on `copy`, `delete` and `rearrange`;
+/// `publish` and `version` writing only the arrangement of the document or
+/// member they mint; and the `LinkSeat` fold touching the link run-list
+/// alone. An operation that writes a content arrangement joins this list or
+/// breaks the shot. [`M5State::apply_m5`](crate::M5State::apply_m5) does not
+/// check it, so a record staged past these ops ([`M5Rec`]'s seals say how)
+/// can break it, and a replayed journal holds it as far as M2's integrity
+/// does.
 pub struct Vstream<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
 }
@@ -350,17 +370,22 @@ where
     /// DESTINATION (PUB-2.37, PUB-2.39, PUB-2.55): the next member of the
     /// chain anchored at the base, decided AT COMMIT — the trunk's next
     /// member (`mint_version(doc)`, `D.4`) when the base is still the trunk
-    /// head ([`trunk_head`], the head every reader floats to, read before
-    /// the member is minted), the base's own DAUGHTER (`mint_version(base)`,
-    /// `D.3.1`) when it is not. Two shots racing off one head both commit,
-    /// the first on the trunk and the second as the head's daughter
-    /// (PUB-2.44); nothing is positionally applied to an advanced head and
-    /// nothing is refused for want of a base (PUB-2.38). A memberless
-    /// document is its own base — the chain's first member is `D.1` either
-    /// way — and the base absent is that same birth shape (PUB-2.34),
-    /// admitted only while the chain is empty: once a member exists the
-    /// document's own pre-chain arrangement is no base, and the shot must
-    /// name the member it was staged from (`BaseSuperseded`).
+    /// head ([`trunk_head`], the head every floating reader answers from,
+    /// read before the member is minted), the base's own DAUGHTER
+    /// (`mint_version(base)`, `D.3.1`) when it is not. Two shots racing off
+    /// one head both commit, the first on the trunk and the second as the
+    /// head's daughter (PUB-2.44); nothing is positionally applied to an
+    /// advanced head and nothing is refused for want of a base (PUB-2.38). A
+    /// memberless document is its own base, and the base absent is the birth
+    /// version (PUB-2.34): the chain's first member, `D.1`, either way,
+    /// admitted only while the chain is empty — once a member exists the
+    /// document's own pre-chain arrangement is no base, and the shot must name
+    /// the member it was staged from (`BaseSuperseded`). The two are ONE
+    /// DESTINATION and not one arrangement: with no base there is no extent
+    /// and so no carried tail, and a deposit that landed in the memberless
+    /// document after the render stays in the pre-chain arrangement the member
+    /// supersedes. A client wanting the deposit cell honored at birth names the
+    /// document itself as its base, with the extent its render took.
     ///
     /// THE MEMBER'S ARRANGEMENT (PUB-2.40, PUB-2.41, PUB-2.42): each supplied
     /// run by its ORIGIN DOCUMENT — the trunk (PUB-2.15) of the document that
@@ -375,32 +400,42 @@ where
     /// document's stays a window, answering its origin. The runs are placed
     /// in the order given, then the BASE'S POST-RENDER DEPOSITS after them: a
     /// published member changes only by exempt deposits appended at fresh
-    /// positions (PUB-2.43), so its positions past `base.extent` — the extent
-    /// the staged copy took — are exactly the deposits the render post-dates,
-    /// asked of the base's arrangement, which knows its own extent, and
-    /// carried unchanged (PUB-2.45, PUB-2.67). What the shot un-arranges is
-    /// what the stager un-arranged and nothing else. One `ContentPlace` at
+    /// positions (PUB-2.43 — the append-only edition this surface keeps, as
+    /// [`Vstream`] states), so its positions past `base.extent` — the extent
+    /// the staged copy took, which the client states and M5 refutes only when
+    /// it exceeds the base's count ([`Base`](crate::Base) states the
+    /// obligation) — are exactly the deposits the render post-dates, asked of
+    /// the base's arrangement, which knows its own extent, and carried
+    /// unchanged (PUB-2.45, PUB-2.67). What the shot un-arranges is what the
+    /// stager un-arranged and nothing else. One `ContentPlace` at
     /// ordinal 1 journals the whole arrangement — the fold appends every
     /// placed run's extent to R (J1★), the by-reference runs as COPY's are and
     /// the fresh ones as INSERT's; an empty placement pushes no record, the
     /// member then reading as the lazy empty arrangement.
     ///
     /// Check order (which error wins), PUB-6.36's slots: `DocNotRegistered`
-    /// → `NotOwner` (slot 1, the destination's ω) → registration (slot 3):
-    /// `SourceNotRegistered` for the base, then the draft, then each run's
-    /// origin document in run order, each run's SHAPE (`BadRun`) settled as
-    /// its origin document is derived → `PrivateSourceVersionless` (slot 5: a
-    /// private document has no chain, PUB-2.9's `true` face) → the base's
-    /// shape: `BaseNotInChain` → `BaseSuperseded` → `BaseExtentTooLarge` →
-    /// the SOURCE GATE (slot 6, PUB-6.23; PUB-8.1's second constraint):
+    /// → `NotOwner` (slot 1, the destination's ω — the only question the shot
+    /// asks of its caller, and one [`Caller::System`] passes) → registration
+    /// (slot 3): `SourceNotRegistered` for the base, then the draft, then each
+    /// run's origin document in run order, each run's SHAPE (`BadRun`)
+    /// settled as its origin document is derived → `PrivateSourceVersionless`
+    /// (slot 5: a private document has no chain, PUB-2.9's `true` face) → the
+    /// base's shape: `BaseNotInChain` → `BaseSuperseded` →
+    /// `BaseExtentTooLarge` → the SOURCE GATE (slot 6, PUB-6.23; PUB-8.1's
+    /// second constraint):
     /// `readable` consulted PER DISTINCT ORIGIN DOCUMENT, in run order,
     /// skipping the document's own I-space and every run the base already
     /// arranges (PUB-6.24's carried cell), the FIRST unreadable origin
     /// document answering `Withheld` with it — BEFORE any existence answer,
     /// so a run onto an unreadable origin is refused whether or not its
     /// addresses exist → existence, `DanglingSource` on the first run any of
-    /// whose addresses M4 does not hold → `TooManyRuns` as the placement is
-    /// accumulated → `Mint` / `Content` from the mints and writes.
+    /// whose addresses M4 does not hold → then the placement, RUN BY RUN in
+    /// the order given: a draft-native run's values `Mint` → `Content`
+    /// apiece, and after each run `TooManyRuns` once the accumulator passes
+    /// the budget; then `TooManyRuns` as the base's tail is carried; last the
+    /// member's own `Mint`. The mints and writes are defensive (M3's frontier
+    /// gate, M4's write-once guard), so on a correct store no honest request
+    /// sees them contend with `TooManyRuns`.
     ///
     /// `readable(world, origin_doc)` answers whether the shooter may read
     /// `origin_doc`; `true` admits it. M5 hands it the TRANSACTION's working
@@ -409,8 +444,19 @@ where
     /// per distinct origin document, in run order, skipping the document's
     /// own and every run the base already arranges. Because it is never asked
     /// of a world that has not registered what it is asked about, a predicate
-    /// that is fail-open on an unregistered address (PUB-7.5) cannot decide
-    /// the gate.
+    /// that is fail-open on an unregistered address (PUB-7.5), and that reads
+    /// the world it is handed, cannot decide the gate.
+    ///
+    /// REQUIRES of `readable`, two clauses the composite cannot check. It
+    /// answers off the world it is HANDED: the guarantee above holds only for
+    /// a predicate that reads that world, and one that answers from a world
+    /// captured before this transaction — a snapshot, or a consult that
+    /// ignores its argument — may be asked about an origin its world never
+    /// registered, where a fail-open predicate admits it. And it runs inside
+    /// this op's transaction, under M2's applier lock, so it inherits
+    /// `transact`'s precondition: it must not call `transact` on this kernel
+    /// (M2 answers that nested write with its reentrancy panic, the caller's
+    /// bug), and every other writer waits while it answers.
     ///
     /// LOCKS: `version_lock_key(trunk_of(doc))` (the trunk's frontier),
     /// `content_lock_key(trunk_of(doc))` (the fresh-identity mints), and the
@@ -513,8 +559,8 @@ where
                 return Err(PublishError::PrivateSourceVersionless);
             }
             // The base's shape, and the anchor the member is minted under —
-            // judged against the head every reader floats to, read before the
-            // member is minted.
+            // judged against the head every floating reader answers from,
+            // read before the member is minted.
             let head = trunk_head(m3, doc);
             let anchor: Address = match &shot.base {
                 None => {
@@ -703,17 +749,38 @@ where
     /// resolved addresses stay valid forever by content immutability (S0),
     /// so no source lock is needed.
     ///
+    /// SOURCES ARE READ AS NAMED — no head-float (wire.md pins this seam): a
+    /// spec naming a bare published document with members resolves against
+    /// that document's own pre-chain arrangement, which the chain has
+    /// superseded, never against the trunk head its readers answer from;
+    /// `EmptySource` and the clipping are judged against that same
+    /// arrangement. A caller wanting what a reader of the bare address sees
+    /// names the head — [`trunk_head`], or [`reading_surface`] of the address
+    /// — as a stager's copy names the member it stages from (PUB-2.27).
+    /// Contrast [`version`](Vstream::version), which snapshots the reading
+    /// surface.
+    ///
+    /// REQUIRES — the caller has established that the principal it writes
+    /// for may read every `specs[].source` (PUB-6.23's source gate). M5 knows
+    /// no principal's read rights and takes no consult for COPY, so nothing
+    /// here checks it: a caller that skips it transcludes a document its
+    /// principal may not read into one that principal owns, and the
+    /// destination's ω — the only question COPY asks of its caller — admits
+    /// the write. On the wire route M10's pre-dispatch consult discharges it;
+    /// a caller driving COPY directly owes its own.
+    ///
     /// `specs` is borrowed: COPY reads each spec's source and span and keeps
     /// neither, so a caller that holds its spec list behind a reference is not
     /// made to clone it.
     ///
     /// Check order (which error wins). Destination first, as INSERT:
     /// `DocNotRegistered` → `NotOwner` (the ω gate on the DESTINATION only;
-    /// source spans stay unrestricted, transclusion of anyone's content being
-    /// the point of the medium) → `PublishedTarget` (PUB-2.11 on the
-    /// DESTINATION's document, PUB-2.15 projected; copy-into is an in-place
-    /// edit and carries no deposit exemption — the sources, published or
-    /// private, are never what this refuses on) →
+    /// source spans are unrestricted BY OWNERSHIP, transclusion of another's
+    /// content being the point of the medium, and are not judged for
+    /// READABILITY here — the REQUIRES above) → `PublishedTarget` (PUB-2.11
+    /// on the DESTINATION's document, PUB-2.15 projected; copy-into is an
+    /// in-place edit and carries no deposit exemption — the sources,
+    /// published or private, are never what this refuses on) →
     /// `NotContentSubspace` → `OutOfBounds`. Then, per spec:
     /// `SourceNotRegistered`
     /// → `NotOrdinalVSpan` (the span fails
@@ -924,7 +991,9 @@ where
     /// and `β`'s where `α`'s stood. With FOUR, the outer regions
     /// `α = [c₀, c₁)` and `β = [c₂, c₃)` exchange around `μ = [c₁, c₂)`, which
     /// keeps its positions. Everything outside `[ord(c₀), ord(c_last))` is
-    /// untouched, and the result is a permutation of the same run multiset:
+    /// untouched, and the result is a permutation of the same POSITIONS — the
+    /// same multiset of I-addresses, re-decomposed maximally, so an exchange
+    /// that rejoins two runs of one origin leaves fewer runs than it found:
     /// `content_count` is unchanged, no I-address enters or leaves the
     /// arrangement, and `deletions` therefore reports exactly what it did
     /// before (RA1/RA6).
@@ -1082,14 +1151,32 @@ where
     /// check, because forking a document one may not write IS the remedy the
     /// medium offers for that denial (denial-as-fork, ASN-0042 O10). What
     /// bounds a cross-owner fork is the forker's own tier, not the source's
-    /// ownership. `principal` is the forker's identity, not an authorization.
+    /// ownership — nor the source's readability, which this op cannot judge.
+    /// `principal` is the forker's identity, not an authorization.
     ///
-    /// Check order (which error wins): `SourceNotRegistered` first, so a fork
-    /// aimed at an address naming no document discloses nothing about who owns
-    /// it. Then the branch decides the rest — an OWNED fork has no further
-    /// rejection of its own and can fail only at the mint (`Mint`); a
-    /// CROSS-OWNER fork is `NotAPrincipal` (the id names no registered
-    /// principal) → `NodeTierCrossOwner` → `Mint`.
+    /// REQUIRES — the caller has established that `principal` may read
+    /// `source` (PUB-6.23's source gate). M5 knows no principal's read rights
+    /// and takes no consult for VERSION, so nothing here checks it: a caller
+    /// that skips it lets the cross-owner arm fork a document its principal
+    /// may not read into that principal's own account, where the read
+    /// predicate's subtree clause makes the copy readable. On the wire route
+    /// M10's pre-dispatch consult discharges it; a caller driving VERSION
+    /// directly owes its own.
+    ///
+    /// Check order (which error wins): `SourceNotRegistered` first — off the
+    /// pre-transaction snapshot, so a fork aimed at an address naming no
+    /// document discloses nothing about who owns it or whether it is
+    /// published. Then the branch decides the rest. An OWNED fork:
+    /// `PrivateSourceVersionless` → `PrivateVersionOfPublished` (both inside
+    /// the transaction, off its working state) → `Mint`; the two refusals
+    /// cannot both hold — the first needs the source's document private, the
+    /// second published — so their order between themselves decides nothing.
+    /// A CROSS-OWNER fork: `NotAPrincipal` (the id names no registered
+    /// principal) → `NodeTierCrossOwner` (both off the snapshot) → `Mint`,
+    /// neither refusal reading on that arm (PUB-2.14). `Mint` is defensive on
+    /// both arms: the source's registration and the forker's account-hood are
+    /// established above and M3's registrations are monotone, which leaves
+    /// only M3's frontier gate.
     ///
     /// EMPTY SOURCE: a source whose content subspace is empty yields a fork
     /// that is registered and ABSENT from the arrangement map — the lazy

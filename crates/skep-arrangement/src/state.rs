@@ -57,10 +57,17 @@ impl DocArrangement {
 ///   appends exactly the iextents of the run-list it installs. Preserved by
 ///   the other three: [`ContentRemove`](M5Rec::ContentRemove) only contracts
 ///   the image, [`ContentReorder`](M5Rec::ContentReorder) permutes the same
-///   run multiset, and [`LinkSeat`](M5Rec::LinkSeat) touches the link
+///   arranged addresses, and [`LinkSeat`](M5Rec::LinkSeat) touches the link
 ///   run-list, which is no part of the content image. Splitting and
 ///   coalescing move the boundaries between runs and not the addresses they
-///   cover, so the image is stable under both.
+///   cover, so the image is stable under both. On the DECODE path P4★ is
+///   M2's integrity, not the type's: a checkpoint carries both fields whole
+///   and no door re-establishes their relation — unlike R's span shape and
+///   the run-list's maximal merge, whose serde doors do — because
+///   containment costs a per-class set difference over every document's
+///   record at every load. A decoded state violating it faults nothing: it
+///   answers `docs_ever_containing` with false negatives at once, and
+///   `deletions` omits whatever unrecorded address the next delete removes.
 /// * **D-SEQ★ — each subspace's arranged positions are the dense prefix.**
 ///   For every `doc` and each subspace `s`, the positions the arrangement
 ///   binds are exactly `{[s, k] : 1 ≤ k ≤ n_s}` — anchored at ordinal 1, no
@@ -89,10 +96,18 @@ impl DocArrangement {
 ///   so a caller that needs their V-starts accumulates widths instead of
 ///   locating each run again.
 ///
-/// Both key by the document `Address`, which is what every caller holds and
-/// what every insertion site already had. Three consequences, and the key
-/// form was chosen for the third: an `Address` orders by its tumbler (M1's
-/// `Ord` delegates), so the map's iteration order — and with it the
+/// EVERY READ HERE ANSWERS THE ADDRESS NAMED. `resolve`, `point`, `image`,
+/// `content_runs`, `link_runs`, `content_count`, `link_count`, `project` and
+/// `deletions` never float: asked of a bare published document with members,
+/// they answer its own pre-chain arrangement, which the chain has superseded,
+/// and not the trunk head its readers see. Head-float (PUB-2.49) is a
+/// composition the READER makes — [`reading_surface`](crate::reading_surface)
+/// first, then the read — as M6's and M8's arrangement readers do.
+///
+/// Both fields key by the document `Address`, which is what every caller
+/// holds and what every insertion site already had. Three consequences, and
+/// the key form was chosen for the third: an `Address` orders by its tumbler
+/// (M1's `Ord` delegates), so the map's iteration order — and with it the
 /// determinism of [`docs_ever_containing`](M5State::docs_ever_containing) and
 /// the class order of [`deletions`](M5State::deletions) — is the tumbler
 /// order; an `Address` serializes AS its bare tumbler, so the checkpoint
@@ -117,8 +132,14 @@ pub struct M5State {
 /// TWO SEALS, governing two different things. Each VARIANT is
 /// `#[non_exhaustive]`, so no foreign crate can build an `M5Rec` by struct
 /// literal — `stage_seat_link` and the op bodies (all in M5's crate) are the
-/// only constructors, and the M/R-coupling cannot be bypassed. The TYPE is
-/// `#[non_exhaustive]` too, because the variant set may grow (the
+/// only constructors a foreign crate can NAME. They are not the only ones it
+/// can REACH: `M5Rec` derives `Deserialize`, as M2's journal requires, so a
+/// foreign crate can decode any record and stage it, bypassing every op's
+/// checks. What such a record cannot bypass is what it carries or the fold
+/// does — each `Run` it names re-enters `Run`'s own door, the `LinkSeat`
+/// fold mints through that door, and the fold keeps the M/R coupling — and
+/// it is outside the input class [`apply_m5`](M5State::apply_m5) names. The
+/// TYPE is `#[non_exhaustive]` too, because the variant set may grow (the
 /// explicit-runs form of `VersionSnapshot`, Open decision #4, is one such
 /// record): a foreign `match` must carry a `_` arm, and gains one variant
 /// rather than a broken build when the set does grow. Neither seal touches
@@ -192,16 +213,18 @@ impl M5State {
     }
 
     /// The pure/deterministic M2 fold (§3–§8 folds; M2's `apply` obligation),
-    /// dispatched by the engine's `World::apply` from its `Record::M5`
-    /// variant — on live commit and on replay alike.
+    /// dispatched by the engine's `World::apply` from the variant that
+    /// carries `M5Rec` (the engine's `Record::Arrangement`) — on live commit
+    /// and on replay alike.
     ///
     /// TOTALITY DOMAIN (§10): total over minted-or-validly-recovered records
-    /// — an `M5Rec` reaches this fold only via validated staging (every op
-    /// validates its preconditions before `stg.push`) or trusted recovery
-    /// (M2 journal/checkpoint integrity). An out-of-contract record (a
+    /// — an `M5Rec` an op staged after validating its preconditions (every
+    /// op validates before `stg.push`), or one M2 recovered with its
+    /// journal/checkpoint integrity. An out-of-contract record (a
     /// `ContentPlace.at` past the append boundary, a `ContentRemove`
-    /// overrunning the run-list, a cut vector violating R-PRE) can arise only
-    /// from corruption, is outside the input class, and is not re-validated
+    /// overrunning the run-list, a cut vector violating R-PRE) arises only
+    /// from corruption or from a record staged past the ops ([`M5Rec`]'s
+    /// seals say how), is outside the input class, and is not re-validated
     /// here; the run-list clamps keep the fold panic-free regardless.
     /// Determinism for `VersionSnapshot` holds because records replay in
     /// journal order, so `source`'s arrangement is reconstructed to its

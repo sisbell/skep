@@ -49,10 +49,12 @@ use crate::HasM5;
 /// * THE CALLER OWES THE OWNERSHIP GATE. This step applies none: it does not
 ///   ask whether `doc` is a registered document, nor whether the writing
 ///   caller is its effective owner, and a record it returns writes a link
-///   V-position into `doc` regardless. Before composing it, establish both —
-///   the registration-then-ω gate the edit ops open with (`auth::gate_write`,
-///   and [`Caller::is_owner`](crate::Caller::is_owner) for the ω half). CL-OWN
-///   narrows what a defective caller can reach, `doc` having to be
+///   V-position into `doc` regardless. Before composing it, establish both,
+///   in the order the edit ops' gate fixes —
+///   `M3State::is_registered_document(doc)`, then
+///   [`Caller::is_owner`](crate::Caller::is_owner) — so an unregistered `doc`
+///   never yields an ownership verdict (M7's `home_gate` keeps that order).
+///   CL-OWN narrows what a defective caller can reach, `doc` having to be
 ///   `origin(link)`, but a link address in any document's link subspace is a
 ///   tumbler anyone can spell.
 ///

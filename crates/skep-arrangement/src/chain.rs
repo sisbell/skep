@@ -68,8 +68,8 @@ pub fn trunk_of(a: &Address) -> Address {
 /// answered here, whichever member `doc` names. M3's `latest_version` is the
 /// chain read; the projection to the trunk is [`trunk_of`], so a member, a
 /// daughter and the bare document all ask about one chain. The head a shot judges its
-/// base against (PUB-2.39) is this one, which is the head every reader
-/// floats to.
+/// base against (PUB-2.39) is this one, which is the head every floating
+/// reader answers from.
 ///
 /// ASKED BEFORE THE CHAIN MOVES. A composite that extends a chain —
 /// `version`'s owned arm, the publish shot — asks this, and the two surfaces
@@ -108,8 +108,10 @@ pub fn published_target(m3: &M3State, doc: &Address) -> bool {
 
 /// HEAD-FLOAT — the arrangement a READER of `doc` answers from (PUB-2.49,
 /// PUB-2.50, PUB-2.53, PUB-2.66): the ONE place the reader's resolve is
-/// decided, so every reader routes through it rather than resolving for
-/// itself.
+/// decided, so every reader that floats routes through it rather than
+/// resolving for itself. The readers that do not float — M5's own reads on
+/// [`M5State`](crate::M5State), and COPY's source spans — answer the address
+/// named.
 ///
 /// * A VERSION address answers ITSELF, forever (PUB-2.50).
 /// * A BARE document address that is PUBLISHED answers its TRUNK HEAD

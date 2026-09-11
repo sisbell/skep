@@ -59,9 +59,11 @@ pub enum InsertError {
 /// one statement rather than two that must be edited in step.
 ///
 /// `PublishedTarget` is PUB-2.11's refusal on the DESTINATION (copy-into is
-/// an in-place edit); the sources stay unrestricted.
-/// Same face as [`InsertError::PublishedTarget`]; no deposit exemption —
-/// only a declared `insert` rides it (PUB-2.59).
+/// an in-place edit); the sources are not gated here — by ownership or by
+/// publication — and their readability is the caller's
+/// ([`Vstream::copy`](crate::Vstream::copy)). Same face as
+/// [`InsertError::PublishedTarget`]; no deposit exemption — only a declared
+/// `insert` rides it (PUB-2.59).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CopyError {
     DocNotRegistered,

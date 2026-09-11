@@ -152,8 +152,9 @@ impl Run {
     /// that is already one: a start reaching them is a minted element address
     /// or an in-crate ordinal shift of one, and such a shift preserves the
     /// element field's length. The two ORIGINATING ones establish it instead,
-    /// and each does so at its own door: `insert` places what
-    /// `M3State::mint_content` returns, which is `doc·0·s_C·ordinal` by
+    /// and each does so at its own door: `allocate_for_placement` — INSERT's
+    /// per-value step, which the publish shot's re-insert shares — places
+    /// what `M3State::mint_content` returns, which is `doc·0·s_C·ordinal` by
     /// construction, and the `LinkSeat` fold seats an address that arrives in
     /// a record, so it calls THIS function — `stage_seat_link` checks the
     /// shape on the live path, but a replayed record's `Address` re-enters

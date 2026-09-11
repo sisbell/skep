@@ -1540,6 +1540,43 @@ fn a_declared_deposit_in_the_staging_interval_is_carried_by_the_shot() {
 }
 
 #[test]
+fn a_birth_shot_carries_no_tail_and_a_memberless_base_carries_its_deposits() {
+    // PUB-2.34 against PUB-2.42/2.66: the base absent and the base naming the
+    // memberless document itself are ONE destination — the chain's first
+    // member — and not one arrangement. A deposit lands in the memberless
+    // edition after the client's render took its three positions. A birth
+    // shot naming the document as its base carries it; one with no base has
+    // no extent and so no tail, and leaves the deposit in the pre-chain
+    // arrangement the member supersedes, where no reader of the bare address
+    // sees it.
+    let birth = |base_named: Option<Base>| {
+        let k = mem_kernel();
+        let vs = deposit_abc(&k); // pdoc: a b c, memberless
+        vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], Deposit::Declared)
+            .expect("a deposit into the memberless edition, after the render");
+        let (member, _) = vs
+            .publish(
+                P1,
+                &pdoc(),
+                Shot { base: base_named, draft: None, runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
+                &readable_by(PrincipalId(1)),
+            )
+            .expect("the birth shot commits");
+        assert_eq!(member, vdoc(), "the chain's first member, either way");
+        let s = k.snapshot();
+        assert_eq!(reading_surface(s.world().m3(), &pdoc()), member, "readers float to it");
+        assert_eq!(
+            s.world().m5().content_count(&pdoc()),
+            n(4),
+            "the pre-chain arrangement keeps the deposit either way"
+        );
+        s.world().m5().content_count(&member)
+    };
+    assert_eq!(birth(Some(base(&pdoc(), 3))), n(4), "the memberless base carries the deposit");
+    assert_eq!(birth(None), n(3), "the birth shape carries no tail");
+}
+
+#[test]
 fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
     // PUB-8.1's second constraint, PUB-6.36's order, PUB-6.24's carried cell:
     // the consult is asked per DISTINCT origin, in run order, of exactly the
@@ -2194,6 +2231,50 @@ fn a_version_of_a_pinned_member_forks_the_member_not_the_head() {
     );
 }
 
+#[test]
+fn copy_reads_a_published_source_at_the_address_named_not_at_its_head() {
+    // wire.md's head-float section pins COPY's source spans UNFLOATED, the
+    // other side of the seam `version`'s snapshot sits on: a spec naming a
+    // bare published document with members resolves against the document's
+    // own pre-chain arrangement, never the trunk head its readers answer from.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k); // pdoc: a b c
+    let (member1, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the first member");
+    vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], Deposit::Declared)
+        .expect("lands in the head member1"); // member1: a b c z; pdoc: a b c
+    assert_eq!(reading_surface(k.snapshot().world().m3(), &pdoc()), member1);
+    // Named by the bare address: the pre-chain arrangement's three positions,
+    // the span's fourth clipped away — not the head's four.
+    vs.copy(P1, &doc1(), vp(1, 1), &[VSpec { source: pdoc(), span: vspan(1, 1, 4) }])
+        .expect("a copy naming the bare address commits");
+    assert_eq!(k.snapshot().world().m5().content_count(&doc1()), n(3));
+    // Named by the head: its four.
+    vs.copy(P1, &doc2(), vp(1, 1), &[VSpec { source: member1, span: vspan(1, 1, 4) }])
+        .expect("a copy naming the head commits");
+    assert_eq!(k.snapshot().world().m5().content_count(&doc2()), n(4));
+}
+
+#[test]
+fn copy_refuses_as_empty_a_bare_edition_whose_content_lives_in_its_head() {
+    // The seam's sharpest edge, and the reason a caller names the head: every
+    // reader of the bare address answers the head's one position, while COPY,
+    // naming that address, is told its source is empty.
+    let k = mem_kernel();
+    let vs = Vstream::new(&k);
+    let (head, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("an empty-source member");
+    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"z")], Deposit::Declared)
+        .expect("lands in the head");
+    let s = k.snapshot();
+    assert_eq!(s.world().m5().content_count(&head), n(1));
+    assert_eq!(reading_surface(s.world().m3(), &pdoc()), head, "readers answer the head");
+    let before = k.current_seq();
+    assert!(matches!(
+        rejected(vs.copy(P1, &doc1(), vp(1, 1), &[VSpec { source: pdoc(), span: vspan(1, 1, 1) }])),
+        CopyError::EmptySource
+    ));
+    assert_eq!(k.current_seq(), before, "the refusal commits nothing");
+}
+
 // ---- §B ownership gate (as amended 2026-08-16) ----
 
 #[test]
@@ -2335,9 +2416,13 @@ fn ownership_is_exact_in_both_directions() {
 
 #[test]
 fn copy_reads_foreign_sources_into_an_owned_destination() {
-    // Transclusion stays unrestricted: only the DESTINATION is ω-gated.
-    // Principal 2 forks the empty doc2 into its own account (denial-as-fork,
-    // O10), then transcludes P1's doc1 content into it.
+    // Transclusion is unrestricted by ownership: only the DESTINATION is
+    // ω-gated. Principal 2 forks P1's empty doc2 into its own account
+    // (denial-as-fork, O10), then transcludes P1's doc1 content into it —
+    // and both are P1's PRIVATE drafts. M5 admits both because readability
+    // is the caller's gate (PUB-6.23), which this suite, driving M5
+    // directly, does not run; on the wire M10's pre-dispatch consult would
+    // refuse both as `withheld`.
     let k = mem_kernel();
     let vs = insert_abc(&k);
     let p2 = Caller::Principal(PrincipalId(2));

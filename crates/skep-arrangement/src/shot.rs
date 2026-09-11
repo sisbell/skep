@@ -57,6 +57,13 @@ pub struct ShotRun {
 /// (PUB-2.45). A pinned base never grows, so for a daughter shot the extent
 /// equals the base's current count and nothing is appended. An extent past
 /// the base's current count is a request defect (`BaseExtentTooLarge`).
+///
+/// REQUIRES — `extent` is EXACTLY the count of `member`'s leading positions
+/// the staged copy took: the client's statement about its own render, which
+/// M5 cannot see. M5 refutes only an extent past the base's current count;
+/// an understated one carries positions the client's runs already hold a
+/// second time, and an overstated one within the count drops the deposits
+/// that lie between — both silently.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Base {
     /// The member (or memberless document) the draft was copied from.
@@ -75,7 +82,8 @@ pub struct Base {
 /// own I-space (PUB-2.40, PUB-2.41); absent, no run is draft-native and every
 /// run is placed by reference. `runs` is the WHOLE arrangement the client
 /// rendered (PUB-2.33 as amended); the composite appends the base's
-/// post-render deposits after it (PUB-2.42, PUB-2.45).
+/// post-render deposits after it (PUB-2.42, PUB-2.45) — with a base; absent,
+/// nothing is appended.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Shot {
     /// The member the draft was staged from, with the extent the copy took;

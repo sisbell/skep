@@ -37,10 +37,11 @@ impl VPos {
     }
 }
 
-/// One source-span for COPY (ASN-0118): transclude `span` of `source`'s
-/// arrangement. The span must satisfy [`is_ordinal_vspan`] and lie in the
-/// content subspace (`NotOrdinalVSpan`/`SourceNotContentSubspace` otherwise —
-/// Conflicts #7).
+/// One source-span for COPY (ASN-0118): transclude `span` of `source`'s OWN
+/// arrangement — the address named, never its reading surface
+/// ([`Vstream::copy`](crate::Vstream::copy)). The span must satisfy
+/// [`is_ordinal_vspan`] and lie in the content subspace
+/// (`NotOrdinalVSpan`/`SourceNotContentSubspace` otherwise — Conflicts #7).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct VSpec {
     pub source: Address,

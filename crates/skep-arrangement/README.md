@@ -22,7 +22,7 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   published document's version chain, born published, in ONE commit,
   from CLIENT-SUPPLIED I-address runs and never from any draft's
   arrangement at commit: the document's own runs stay by reference,
-  the staging draft's — a document outside the chain — are re-minted
+  the staging draft's — a document outside the chain — are re-inserted
   as fresh identity under the document's own I-space, and any other
   document's stay windows
   behind a per-origin source gate (`Withheld`); the base's post-render

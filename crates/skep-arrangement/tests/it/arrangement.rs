@@ -1402,7 +1402,8 @@ fn a_declared_deposit_at_a_fresh_position_clears_the_refusal() {
     // PUB-2.59 / PUB-2.61 / PUB-2.63 / PUB-9.13 (DECLARED): the deposit's
     // untyped first `insert` carries a declaration, and a DECLARED insert at
     // FRESH positions of a published head is admitted — appending, disturbing
-    // no arrangement. The declaration is a claim the shape must bear out.
+    // no arrangement. The declaration exempts nothing by itself: the shape
+    // must bear it out.
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     let (start, _) = vs
@@ -1570,7 +1571,7 @@ fn a_shot_appends_the_next_trunk_member_from_the_clients_runs() {
     let m5 = s.world().m5();
     assert!(s.world().m3().published(&member), "born published (PUB-2.5)");
     assert_eq!(m5.content_count(&member), n(5));
-    // The re-minted text continues the edition's own content chain, so it
+    // The re-inserted text continues the edition's own content chain, so it
     // coalesces with the by-reference run: ONE run under pdoc.
     assert_eq!(
         m5.content_runs(&member).cloned().collect::<Vec<_>>(),
@@ -1613,7 +1614,7 @@ fn a_shot_places_the_runs_the_client_rendered_not_what_the_draft_holds_at_commit
     // read at the draft's addresses, "a byte read, never an arrangement
     // read". So a draft edited between the render and the shot changes
     // nothing the shot places: the client rendered `a b c`, the stager then
-    // un-arranged `b`, and the member is still born `a b c`, `b` re-minted
+    // un-arranged `b`, and the member is still born `a b c`, `b` re-inserted
     // from the bytes the permascroll keeps (P0). Judged against what the
     // draft arranges at commit — for existence or for the re-insert — the
     // shot would be refused `DanglingSource`, or born `a c`.
@@ -1727,10 +1728,10 @@ fn a_declared_deposit_in_the_staging_interval_is_carried_by_the_shot() {
         .expect("staged");
     vs.delete(P1, &doc1(), vp(1, 2), n(1)).expect("the stager un-arranges b");
     // The interval's deposit: into the BARE address, landing in the head.
-    let (atom, _) = vs
+    let (start, _) = vs
         .insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], Deposit::Declared)
         .expect("a deposit at the head's fresh position");
-    assert_eq!(atom, pca(4), "minted under the document's own chain");
+    assert_eq!(start, pca(4), "minted under the document's own chain");
     assert_eq!(k.snapshot().world().m5().content_count(&member1), n(4), "it landed in the HEAD (PUB-2.66)");
     assert_eq!(k.snapshot().world().m5().content_count(&pdoc()), n(3), "not in the pre-chain arrangement");
     // The shot: the client's rendering (a, c) with the extent its copy took.
@@ -2081,7 +2082,7 @@ fn a_supplied_run_is_dangling_when_any_address_lacks_a_value_not_only_its_start(
         PublishError::DanglingSource
     ));
     // Draft-native: ca(2) and ca(3) are stored, ca(4) is not. The re-insert
-    // reads every value it re-mints, so a start-only check would send it to
+    // reads every value it re-inserts, so a start-only check would send it to
     // an address with nothing there.
     assert!(matches!(
         rejected(vs.publish(
@@ -2109,7 +2110,7 @@ fn a_supplied_run_is_dangling_when_any_address_lacks_a_value_not_only_its_start(
         .expect("every address present");
     let s = k.snapshot();
     assert_eq!(s.world().m5().content_count(&member1), n(4));
-    assert_eq!(read_v(&s, &member1, 4), b"c".to_vec(), "the draft's c, re-minted");
+    assert_eq!(read_v(&s, &member1, 4), b"c".to_vec(), "the draft's c, re-inserted");
 }
 
 #[test]
@@ -2117,11 +2118,11 @@ fn a_shot_rendering_its_drafts_content_past_the_value_budget_is_refused_before_i
     // The re-insert's size is the draft-native positions a shot renders, and
     // a small request can render a draft's stored content many times over:
     // here 4096 runs, each naming the same forty stored values — 163,840
-    // re-mints, a mint and a content write apiece, commanded by a request of
+    // re-inserts, a mint and a content write apiece, commanded by a request of
     // a few hundred kilobytes, where M2 prices a transaction only once its
     // closure has staged all of it. The count refuses it as request
     // arithmetic, before any address is probed: nothing commits and no
-    // member is minted. Rendered once, the same draft is re-minted whole, the
+    // member is minted. Rendered once, the same draft is re-inserted whole, the
     // fresh identities continuing the edition's own content chain from where
     // the deposits left it — so the refused shot minted nothing that survived
     // it. Corpus seed for the hazard tier: widen the draft and the repeats,
@@ -2184,7 +2185,7 @@ fn the_source_gate_is_asked_about_the_world_it_found_the_origin_registered_in() 
     let (draft, _) = Namespace::new(&k)
         .create_new_document(sub, &a(&[1, 0, 1, 1]), Some(false))
         .expect("the sub-account mints a second private draft");
-    let (atom, _) = vs
+    let (start, _) = vs
         .insert(Caller::Principal(sub), &draft, vp(1, 1), vec![val(b"s")], Deposit::Undeclared)
         .expect("the draft holds a byte");
     assert!(
@@ -2212,7 +2213,7 @@ fn the_source_gate_is_asked_about_the_world_it_found_the_origin_registered_in() 
         rejected(vs.publish(
             P1,
             &pdoc(),
-            Shot { base: None, draft: None, runs: vec![shot_run(&draft, &atom, 1)] },
+            Shot { base: None, draft: None, runs: vec![shot_run(&draft, &start, 1)] },
             &consult
         )),
         PublishError::Withheld(d) if d == draft
@@ -2427,10 +2428,10 @@ fn a_stated_origin_or_draft_that_is_no_document_is_refused_not_projected() {
     let vs = deposit_abc(&k);
     let readable = readable_by(PrincipalId(1));
     let (member1, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the first member");
-    let (member_atom, _) = vs
+    let (member_start, _) = vs
         .insert(P1, &member1, vp(1, 4), vec![val(b"z")], Deposit::Declared)
         .expect("a deposit named by the member, minted under its chain");
-    assert_eq!(member_atom, vca(1));
+    assert_eq!(member_start, vca(1));
     let shoot = |runs: Vec<ShotRun>, draft: Option<Address>| {
         vs.publish(P1, &pdoc(), Shot { base: Some(base(&member1, 4)), draft, runs }, &readable)
     };
@@ -2462,7 +2463,7 @@ fn a_shot_refused_at_its_last_check_leaves_no_member_no_mint_and_no_placement() 
     // between them and the commit — so the residue claim is witnessed at
     // the one seam the kernel has: a shot refused at its LAST check (the
     // dangling run, listed behind the draft-native run it would have
-    // re-minted) leaves the head, the chain, the content chain and the
+    // re-inserted) leaves the head, the chain, the content chain and the
     // arrangement exactly as they were.
     let k = mem_kernel();
     let vs = deposit_abc(&k);
@@ -2491,8 +2492,8 @@ fn a_shot_refused_at_its_last_check_leaves_no_member_no_mint_and_no_placement() 
     assert!(!s.world().m3().is_registered_document(&vdoc()), "no member");
     assert_eq!(trunk_head(s.world().m3(), &pdoc()), None);
     // The content chain did not move: the next deposit lands at ordinal 4.
-    let (atom, _) = vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], Deposit::Declared).expect("deposit");
-    assert_eq!(atom, pca(4), "no content mint was committed by the refused shot");
+    let (start, _) = vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], Deposit::Declared).expect("deposit");
+    assert_eq!(start, pca(4), "no content mint was committed by the refused shot");
     // And the ordinary shot still lands, so the refusal above is about the
     // dangling run and not about the surface being closed.
     let (member1, _) = vs
@@ -2523,8 +2524,8 @@ fn a_declared_deposit_into_a_published_chain_lands_in_the_head_member_alone() {
     let (member1, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the first member");
     assert_eq!(member1, vdoc());
     // Named by the bare address: minted under pdoc's chain, placed in member1.
-    let (atom, _) = vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], Deposit::Declared).expect("deposit");
-    assert_eq!(atom, pca(4));
+    let (bare_start, _) = vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], Deposit::Declared).expect("deposit");
+    assert_eq!(bare_start, pca(4));
     {
         let s = k.snapshot();
         let m5 = s.world().m5();
@@ -2534,8 +2535,8 @@ fn a_declared_deposit_into_a_published_chain_lands_in_the_head_member_alone() {
     }
     // Named by the head itself: minted under the member's chain, placed in
     // it; judged fresh against the head's extent.
-    let (atom2, _) = vs.insert(P1, &member1, vp(1, 5), vec![val(b"y")], Deposit::Declared).expect("deposit");
-    assert_eq!(atom2, vca(1));
+    let (head_start, _) = vs.insert(P1, &member1, vp(1, 5), vec![val(b"y")], Deposit::Declared).expect("deposit");
+    assert_eq!(head_start, vca(1));
     assert!(matches!(
         rejected(vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"q")], Deposit::Declared)),
         InsertError::PublishedTarget
@@ -3135,7 +3136,7 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
         vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"d")], Deposit::Declared)
             .expect("post-fork source deposit commits");
         // The shot: the edition's four positions by reference and doc1's
-        // surviving `c` re-minted as fresh identity — the member holds five.
+        // surviving `c` re-inserted as fresh identity — the member holds five.
         let readable = readable_by(PrincipalId(1));
         let (member, _) = vs
             .publish(

@@ -21,7 +21,7 @@ use num_traits::{One, Zero};
 use serde::{Deserialize, Serialize};
 use skep_address::{Address, Nat, SpanSet};
 
-use crate::run::Run;
+use crate::run::{OffsetRange, Run};
 
 /// I-adjacency (ASN-0058): the right run starts exactly where the left run
 /// [`reaches`](Run::reach), so their I-extents abut with no address between.
@@ -31,8 +31,9 @@ use crate::run::Run;
 /// (`v₂ = v₁ + w₁`) and I-adjacent — and the first conjunct is discharged by
 /// the representation: consecutive entries of an implicit-position run-list
 /// occupy consecutive V-ordinals, so every neighbouring pair this guard is
-/// asked about is already V-adjacent (§1 — the same representation choice
-/// that makes D-SEQ★/D-CTG★/D-MIN★ hold). I-adjacency is therefore all that
+/// asked about is already V-adjacent (`b₁.v_reach() == b₂.v_start`, in
+/// [`Block`]'s terms; §1 — the same representation choice that makes
+/// D-SEQ★/D-CTG★/D-MIN★ hold). I-adjacency is therefore all that
 /// remains to test — and it is also the SAFE half: `a₂ = a₁ + w₁` implies
 /// same origin (M16a — the reach changes only the last component, so the two
 /// starts share every component before it, their document prefix included)
@@ -228,6 +229,34 @@ impl fmt::Debug for Runs<'_> {
     }
 }
 
+/// A MAPPING BLOCK (ASN-0058): one stored run at the V-position the list
+/// gives it — the atomic unit of V→I correspondence, `(v, a, w)`. The list
+/// stores the run `(a, w)` alone; the V-start is the prefix sum of the widths
+/// before it (§1), so a block is a VIEW the walk builds and never a stored
+/// value — which is what keeps D-SEQ★/D-CTG★/D-MIN★ free. ASN-0058's merge
+/// condition is stated on blocks — V-adjacent, `b₁.v_reach() == b₂.v_start`,
+/// and I-adjacent — and the walk hands back consecutive blocks, which is how
+/// [`i_adjacent`] discharges the first conjunct by construction.
+///
+/// M6's COMPARE builds the same value at its side of the seam — the run as
+/// M5 handed it over, plus where its first position sits in V-space — under
+/// the same corpus name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Block<'a> {
+    /// The block's first V-ordinal — the prefix sum + 1.
+    pub(crate) v_start: Nat,
+    /// The stored run: its I-start and width.
+    pub(crate) run: &'a Run,
+}
+
+impl Block<'_> {
+    /// The first V-ordinal past the block — `v_start + width`, the V-side
+    /// twin of [`Run::reach`]; what `locate`'s bound and the clip both ask.
+    pub(crate) fn v_reach(&self) -> Nat {
+        &self.v_start + &self.run.width
+    }
+}
+
 impl RunList {
     /// `n(d)` for this subspace — the total arranged width.
     pub(crate) fn total_width(&self) -> Nat {
@@ -251,15 +280,15 @@ impl RunList {
     /// within it — `None` when `ord` is 0 or past the last arranged ordinal
     /// (§1 locate). The run itself rather than its index, so a caller holds
     /// what it asked for and never re-fetches it by a coordinate this walk
-    /// already resolved. Answered off [`iter_runs`](RunList::iter_runs): the
-    /// one prefix-sum walk, which reports each run's V-start.
+    /// already resolved. Answered off [`iter_blocks`](RunList::iter_blocks):
+    /// the one prefix-sum walk, which hands each run back at its V-start.
     pub(crate) fn locate(&self, ord: &Nat) -> Option<(&Run, Nat)> {
         if ord.is_zero() {
             return None; // ordinal 0 lies before every run; the offset would underflow
         }
-        self.iter_runs()
-            .find(|(v_start, run)| *ord < v_start + &run.width)
-            .map(|(v_start, run)| (run, ord - &v_start))
+        self.iter_blocks()
+            .find(|block| *ord < block.v_reach())
+            .map(|block| (block.run, ord - &block.v_start))
     }
 
     /// `M(d)(p)` for this subspace: the I-address at ordinal `ord`, or `None`
@@ -308,21 +337,22 @@ impl RunList {
     /// twice covers its offset twice, and a sweep over a union counts once.
     pub(crate) fn covers(&self, run: &Run) -> bool {
         let len = run.i_start().tumbler().len();
-        let mut covered: Vec<(Nat, Nat)> = self
+        let mut covered: Vec<OffsetRange> = self
             .0
             .iter()
             .filter(|resident| resident.i_start().tumbler().len() == len)
             .filter_map(|resident| run.offsets_covered_by(&resident.iextent()))
-            .map(|range| (range.lo().clone(), range.hi().clone()))
             .collect();
-        covered.sort();
+        // Swept in the order the ranges OPEN: a gap is a range opening past
+        // what the ranges before it reached.
+        covered.sort_by(|a, b| a.lo().cmp(b.lo()));
         let mut reached = Nat::zero();
-        for (lo, hi) in covered {
-            if lo > reached {
+        for range in &covered {
+            if *range.lo() > reached {
                 return false;
             }
-            if hi > reached {
-                reached = hi;
+            if *range.hi() > reached {
+                reached = range.hi().clone();
             }
         }
         reached >= *run.width()
@@ -438,24 +468,24 @@ impl RunList {
     /// than rebuilt: no shift and no validation for a run the clip does not
     /// touch, which is every interior run of a wide range and every run but
     /// the first of a suffix.
-    fn slice_runs(&self, lo: Nat, hi_excl: Option<Nat>) -> impl Iterator<Item = Run> + '_ {
+    fn clipped_runs(&self, lo: Nat, hi_excl: Option<Nat>) -> impl Iterator<Item = Run> + '_ {
         let stop = hi_excl.clone();
-        self.iter_runs()
-            .take_while(move |(v_start, _)| stop.as_ref().is_none_or(|stop| v_start < stop))
-            .filter_map(move |(v_start, run)| {
-                let v_reach = &v_start + &run.width; // the first ordinal past this run
+        self.iter_blocks()
+            .take_while(move |block| stop.as_ref().is_none_or(|stop| &block.v_start < stop))
+            .filter_map(move |block| {
+                let v_reach = block.v_reach(); // the first ordinal past this block
                 if v_reach <= lo {
                     return None;
                 }
-                let first = std::cmp::max(&v_start, &lo); // this run's first kept ordinal
-                // One past its last: the bound, or the run's own reach when
+                let first = std::cmp::max(&block.v_start, &lo); // this block's first kept ordinal
+                // One past its last: the bound, or the block's own reach when
                 // the walk has no bound.
                 let past = hi_excl.as_ref().map_or(&v_reach, |hi| std::cmp::min(&v_reach, hi));
-                if first == &v_start && past == &v_reach {
-                    return Some(run.clone()); // kept whole
+                if first == &block.v_start && past == &v_reach {
+                    return Some(block.run.clone()); // kept whole
                 }
                 Some(Run {
-                    i_start: run.addr_at(&(first - &v_start)),
+                    i_start: block.run.addr_at(&(first - &block.v_start)),
                     width: past - first,
                 })
             })
@@ -483,7 +513,7 @@ impl RunList {
         (lo < hi_excl)
             .then_some((lo, hi_excl))
             .into_iter()
-            .flat_map(move |(lo, hi_excl)| self.slice_runs(lo, Some(hi_excl)))
+            .flat_map(move |(lo, hi_excl)| self.clipped_runs(lo, Some(hi_excl)))
     }
 
     /// I-runs covering ordinals `[max(ord, 1), total]` — everything from the
@@ -499,24 +529,29 @@ impl RunList {
     /// nothing, and so does a list holding nothing. The same clip as the
     /// range walk's, asked without a bound.
     pub(crate) fn iter_resolve_from(&self, ord: &Nat) -> impl Iterator<Item = Run> + '_ {
-        self.slice_runs(std::cmp::max(ord.clone(), Nat::one()), None)
+        self.clipped_runs(std::cmp::max(ord.clone(), Nat::one()), None)
     }
 
-    /// Iterate `(v_start, run)` pairs — the implicit V-start is the running
-    /// prefix sum + 1 (§1 iter_runs).
-    pub(crate) fn iter_runs(&self) -> impl Iterator<Item = (Nat, &Run)> + '_ {
+    /// The MAPPING BLOCKS (§1's `iter_runs`), in V-order: each stored run at
+    /// its implicit V-start, the running prefix sum + 1. THE ONE prefix-sum
+    /// walk, which `locate`, the clip and `project` each ask rather than
+    /// summing widths for themselves.
+    pub(crate) fn iter_blocks(&self) -> impl Iterator<Item = Block<'_>> + '_ {
         let mut v_start = Nat::one();
         self.0.iter().map(move |run| {
-            let start = v_start.clone();
+            let block = Block {
+                v_start: v_start.clone(),
+                run,
+            };
             v_start = &v_start + &run.width;
-            (start, run)
+            block
         })
     }
 
     /// The canonical, V-ordered run decomposition (maximally merged — M12),
     /// LENT: the runs alone, borrowed from the list rather than cloned out of
-    /// it. [`iter_runs`](RunList::iter_runs) is the form that also reports
-    /// each run's implicit V-start.
+    /// it. [`iter_blocks`](RunList::iter_blocks) is the form that also
+    /// reports each run's implicit V-start — the blocks.
     pub(crate) fn iter(&self) -> Runs<'_> {
         Runs(self.0.iter())
     }
@@ -599,6 +634,40 @@ mod tests {
         let apart = l.splice_in(&n(4), &[run(&ca(9), 1)]); // not adjacent
         assert_eq!(apart.runs(), vec![run(&ca(1), 3), run(&ca(9), 1)]);
         assert_eq!(apart.total_width(), n(4));
+    }
+
+    #[test]
+    fn the_blocks_are_the_stored_runs_at_v_positions_that_tile_from_one() {
+        // §1/ASN-0058: a mapping block is a stored run at the V-position the
+        // list gives it, and the list gives positions by prefix sum — so the
+        // first block opens at ordinal 1, each block reaches exactly where the
+        // next opens (the V-adjacent conjunct of the merge condition, held by
+        // construction), and the last reaches the boundary past the total.
+        // `locate` is the same walk asked about one ordinal, so every ordinal
+        // a block covers locates to that block's run at that offset.
+        let frag = list(vec![run(&ca(1), 2), run(&vca(1), 1), run(&ca(5), 2)]);
+        let blocks: Vec<Block<'_>> = frag.iter_blocks().collect();
+        assert_eq!(blocks.len(), frag.run_count());
+        assert_eq!(blocks[0].v_start, n(1), "the first block opens at ordinal 1");
+        for pair in blocks.windows(2) {
+            assert_eq!(pair[0].v_reach(), pair[1].v_start, "consecutive blocks are V-adjacent");
+        }
+        let last = blocks.last().expect("the fixture holds three runs");
+        assert_eq!(last.v_reach(), frag.total_width() + n(1));
+        for block in &blocks {
+            let mut k = n(0);
+            while k < block.run.width {
+                assert_eq!(
+                    frag.locate(&(&block.v_start + &k)),
+                    Some((block.run, k.clone())),
+                    "{block:?} at offset {k}"
+                );
+                k = &k + &n(1);
+            }
+        }
+        // The runs are the list's own, lent: what `iter` hands back, in order.
+        assert!(blocks.iter().map(|b| b.run).eq(frag.iter()));
+        assert_eq!(RunList::default().iter_blocks().count(), 0, "an empty list has no block");
     }
 
     #[test]

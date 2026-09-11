@@ -156,7 +156,7 @@ pub enum RejectCode {
     /// The publish shot's re-insert budget: the draft-native runs' widths,
     /// summed, exceed M5's `MAX_REINSERTED_VALUES` (arithmetic on the
     /// request; discloses nothing about what exists). Its own leaf rather
-    /// than a ride on `TooManyRuns`: the values re-mint I-adjacent and
+    /// than a ride on `TooManyRuns`: the re-inserted values are I-adjacent and
     /// coalesce, so a shot refused here may place a single run. Permanent by
     /// the catch-all, for `TooManyRuns`'s reason: a shot cannot be split to
     /// meet it.

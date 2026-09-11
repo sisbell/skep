@@ -197,11 +197,11 @@ pub enum VersionError {
 ///   shot share; a shot cannot be split to meet it.
 /// * `TooManyValues` — the draft-native runs' widths, summed, exceed
 ///   [`MAX_REINSERTED_VALUES`](crate::MAX_REINSERTED_VALUES): each such value
-///   is re-minted as fresh identity, two staged records apiece. Arithmetic on
-///   the request alone, it discloses nothing about what exists; a shot cannot
-///   be split to meet it. Its own verdict and not `TooManyRuns`'s, since the
-///   values re-mint I-adjacent and coalesce: a shot refused here may place a
-///   single run.
+///   is re-inserted as fresh identity, two staged records apiece. Arithmetic
+///   on the request alone, it discloses nothing about what exists; a shot
+///   cannot be split to meet it. Its own verdict and not `TooManyRuns`'s,
+///   since the re-inserted values are I-adjacent and coalesce: a shot refused
+///   here may place a single run.
 /// * `Mint` / `Content` — the identity mint, a content mint, or a content
 ///   write refused (M3/M4's own boundary refusals; defensive).
 #[derive(Clone, Debug, PartialEq, Eq)]

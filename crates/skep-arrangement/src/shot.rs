@@ -96,7 +96,7 @@ pub struct Base {
 /// any other member of its chain. The composite does not check this. It takes
 /// the statement at its word, and the statement decides each run's family. A
 /// `draft` inside the chain makes the document's OWN runs draft-native: they
-/// are re-minted as fresh identity and counted against
+/// are re-inserted as fresh identity and counted against
 /// [`MAX_REINSERTED_VALUES`](crate::MAX_REINSERTED_VALUES), where they would
 /// otherwise be placed by reference. The member then holds, at those
 /// positions, fresh addresses that no earlier member of the chain arranges,

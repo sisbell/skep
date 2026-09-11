@@ -81,9 +81,10 @@
 //! (PUB-9.13's DECLARED horn): an `insert` carrying [`Deposit::Declared`] at
 //! the one position a published chain admits — `n_C + 1` of the arrangement
 //! [`deposit_surface`] names, the head, or the document's own while it has no
-//! member (PUB-2.59, PUB-2.61, PUB-2.66). The declaration is a claim the
-//! shape must bear out, never a bypass; [`Vstream::insert`] states how every
-//! other insert into a published document is refused. Link writes are
+//! member (PUB-2.59, PUB-2.61, PUB-2.66). The declaration exempts nothing by
+//! itself — the shape must bear it out — and is never a bypass;
+//! [`Vstream::insert`] states how every other insert into a published
+//! document is refused. Link writes are
 //! outside the rule (PUB-2.12): `stage_seat_link` is untouched.
 //!
 //! ## The publish shot and head-float (PUB round 2, lane 3.2)
@@ -94,7 +95,7 @@
 //! the base's daughter when it is not (PUB-2.37, PUB-2.39, decided at
 //! commit) — born published, in ONE commit, from CLIENT-SUPPLIED I-address
 //! runs ([`Shot`], PUB-8.1) and never from any draft's arrangement. The
-//! document's own runs stay by reference, the staging draft's are re-minted
+//! document's own runs stay by reference, the staging draft's are re-inserted
 //! as fresh identity under the document's own I-space (the draft lying
 //! outside the chain, as [`Shot`] requires), and any other document's stay
 //! windows behind the source gate (PUB-2.40, PUB-6.23);

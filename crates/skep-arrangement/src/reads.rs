@@ -260,10 +260,13 @@ impl M5State {
 
     /// Does `doc`'s arranged content CONTAIN the whole range `[from, from +
     /// width)` — `from + width ≤ n_C + 1`, subtraction-free (§4)? The
-    /// containment half of DELETE's admission, stated where `n_C` lives.
-    /// PRESENT containment, as the corpus uses the word; the historical
-    /// question belongs to
-    /// [`docs_ever_containing`](M5State::docs_ever_containing).
+    /// containment half of DELETE's admission (ASN-0117: "containment within
+    /// the document's current arranged extent"), stated where `n_C` lives.
+    /// "Contain" here is the V-SIDE word: a range of V-ordinals lying inside
+    /// the arranged prefix `[1, n_C]`. It is not the corpus's I-side
+    /// containment — a document holding an I-address in its image (FD-FIND)
+    /// — whose present tense is [`project`](M5State::project) and whose
+    /// history is [`docs_ever_containing`](M5State::docs_ever_containing).
     ///
     /// REQUIRES `from ≥ 1`, and this is the UPPER BOUND ALONE. Arranged
     /// content is `[1, n_C]`, so containment of `[from, from + width)` is
@@ -324,14 +327,14 @@ impl M5State {
     /// is fault-free for any coverage, including cross-length prefix/subtree
     /// spans.
     ///
-    /// Per content run × coverage span: the run reports which of its offsets
-    /// the span covers (the run owns both the same-level-class intersection
-    /// and the cross-class boundary search that decide it),
-    /// and this method turns that offset range into a V-range by adding the
-    /// run's implicit V-start to where the range opens — the
-    /// range answering for how many positions it covers, so no reader
-    /// subtracts its bounds. Scan of the forward content map (Open decision
-    /// #2 v1 default), so the cost is `#runs(doc) × |coverage|` — the
+    /// Per content block × coverage span: the block's run reports which of
+    /// its offsets the span covers (the run owns both the same-level-class
+    /// intersection and the cross-class boundary search that decide it), and
+    /// this method turns that offset range into a V-range by adding the
+    /// block's V-start to where the range opens — the range answering for how
+    /// many positions it covers, so no reader subtracts its bounds. Scan of
+    /// the forward content map (Open decision #2 v1 default), so the cost is
+    /// `#runs(doc) × |coverage|` — the
     /// product of two quantities this method does not bound. `#runs(doc)`
     /// grows with `doc`'s own edit and transclusion history; `|coverage|` is
     /// bounded on M7's and M8's route (an endset is capped at deposit,
@@ -345,15 +348,15 @@ impl M5State {
     pub fn project(&self, doc: &Address, coverage: &SpanSet) -> SpanSet {
         let mut vspans: Vec<Span> = Vec::new();
         // An absent document is a CASE and not a path: its content run-list is
-        // the empty one, which iterates no runs and answers ⟨⟩.
-        for (v_start, run) in self.content_list(doc).iter_runs() {
+        // the empty one, which iterates no blocks and answers ⟨⟩.
+        for block in self.content_list(doc).iter_blocks() {
             for cover in coverage.iter() {
-                let Some(covered) = run.offsets_covered_by(cover) else {
+                let Some(covered) = block.run.offsets_covered_by(cover) else {
                     continue;
                 };
                 let at = VPos {
                     subspace: content_subspace(),
-                    ordinal: &v_start + covered.lo(),
+                    ordinal: &block.v_start + covered.lo(),
                 };
                 vspans.push(
                     ordinal_vspan(&at, &covered.width())
@@ -372,7 +375,8 @@ impl M5State {
     /// The current content-image cover (M5-INTERNAL — the SHOWDELETIONS
     /// operand consumed only by `deletions`, §2/§9): `⋃ r.iextent()` over the
     /// content runs. Union (concatenation) only; possibly mixed-length across
-    /// transcluded origins — never blindly normalized, never a seam.
+    /// transcluded origins — never blindly normalized, and it never crosses a
+    /// module seam.
     fn content_image(&self, doc: &Address) -> SpanSet {
         self.content_list(doc).image()
     }

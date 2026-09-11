@@ -63,21 +63,21 @@ use crate::vspace::{as_ordinal_vspan, VPos, VSpec};
 use crate::HasM5;
 
 /// The deposit DECLARATION an INSERT carries or omits (PUB-9.13's DECLARED
-/// horn; PUB-2.59, PUB-2.61): the one claim on M5's write surface that clears
-/// the in-place refusal on a published document, and only for an insert at a
-/// fresh content position ([`Vstream::insert`] states the shape). Into a
-/// private document it is inert. Content only — a link deposit is outside the
-/// rule (PUB-2.12).
+/// horn; PUB-2.59, PUB-2.61): the one declaration M5's write surface takes,
+/// and the one thing that clears the in-place refusal on a published
+/// document — and only for an insert at a fresh content position
+/// ([`Vstream::insert`] states the shape). Into a private document it is
+/// inert. Content only — a link deposit is outside the rule (PUB-2.12).
 ///
-/// A type and not a flag because the claim is read where it is made, and the
-/// two ways of making it wrongly are not alike. An insert that should have
-/// been declared is refused `PublishedTarget`, loudly. A declaration on an
-/// ordinary edit is admitted at a fresh position of a published document —
+/// A type and not a flag because the declaration is read where it is made,
+/// and the two ways of making it wrongly are not alike. An insert that should
+/// have been declared is refused `PublishedTarget`, loudly. A declaration on
+/// an ordinary edit is admitted at a fresh position of a published document —
 /// the write the refusal exists to stop, placed wherever [`deposit_surface`]
 /// points — and nothing reports it; on the [`Caller::System`] path no ω check
-/// stands between the claim and the arrangement either. For the same reason
-/// there is no `From<bool>`: a boolean becomes this value with both arms
-/// written out, where a reader sees which one is claimed.
+/// stands between the declaration and the arrangement either. For the same
+/// reason there is no `From<bool>`: a boolean becomes this value with both
+/// arms written out, where a reader sees which one is declared.
 ///
 /// Two variants because the corpus has two — an insert is declared or it is
 /// not — so a match on it is exhaustive, and a third variant would change the
@@ -176,8 +176,8 @@ pub const MAX_PLACED_RUNS: usize = 1 << 16;
 /// [`MAX_PLACED_RUNS`]: the member it produces is born whole, and a retry of
 /// the same shot is refused the same way. An arrangement whose draft-native
 /// positions pass it reaches publication across successive shots instead:
-/// what one shot re-mints joins the document's own I-space, which the next
-/// shot places by reference, so each shot re-mints only what is still the
+/// what one shot re-inserts joins the document's own I-space, which the next
+/// shot places by reference, so each shot re-inserts only what is still the
 /// draft's. Each of those shots is a member in its own right: born
 /// published, the head its readers float to until the next lands, answering
 /// its own address forever — so this remedy publishes every interim
@@ -272,11 +272,11 @@ where
     /// `PublishedTarget` — UNLESS `deposit` is [`Deposit::Declared`] AND the
     /// insert is deposit-SHAPED: `at` names a fresh content position past the
     /// arranged extent, so the placement appends and disturbs no arrangement.
-    /// The declaration is a claim the shape must bear out, never a bypass: a
-    /// declared insert at an arranged position refuses with the same code, and
-    /// an UNDECLARED append refuses too (the cost RES-209 item 5 named,
-    /// closed). Into a PRIVATE document
-    /// the declaration is inert — every insert is admitted there as before.
+    /// The declaration exempts nothing by itself — the shape must bear it out
+    /// — and is never a bypass: a declared insert at an arranged position
+    /// refuses with the same code, and an UNDECLARED append refuses too (the
+    /// cost RES-209 item 5 named, closed). Into a PRIVATE document the
+    /// declaration is inert — every insert is admitted there as before.
     /// A declared deposit whose fresh position lies past the append boundary
     /// clears this refusal and meets `OutOfBounds` below, so it is told its
     /// position is bad rather than that its target is published.
@@ -600,23 +600,20 @@ where
                     return Err(PublishError::SourceNotRegistered);
                 }
             }
-            // Which runs are the STAGING DRAFT's, re-minted as fresh identity
-            // rather than placed by reference (PUB-2.40): one spelling, asked
-            // by the re-insert's count and by the placement alike, so the
-            // count bounds exactly the runs the placement re-mints.
+            // Which runs are the STAGING DRAFT's, re-inserted as fresh
+            // identity rather than placed by reference (PUB-2.40): one
+            // spelling, asked by the re-insert's count and by the placement
+            // alike, so the count bounds exactly the runs the placement
+            // re-inserts.
             let draft_native = |origin_doc: &Address| draft_doc.as_ref() == Some(origin_doc);
-            // Each run beside its origin document, derived from the run's own
-            // start (address arithmetic, no read) and required to be the
-            // document the client's stated `origin` projects to — then
-            // registered. From here the two travel as ONE value: the source
-            // gate, the existence check and the placement each walk this one
-            // list, so every question about a run is asked of that run's own
-            // origin document, and no second list has to stay in step with
-            // the runs for the gate to judge the run it is looking at.
-            let supplied: Vec<(Run, Address)> = shot
+            // Each run settled beside its origin document (`SettledRun`):
+            // derived from the run's own start, required to be the document
+            // the client's stated `origin` projects to, then registered — the
+            // first defective run in order deciding.
+            let supplied: Vec<SettledRun> = shot
                 .runs
                 .into_iter()
-                .map(|r| -> Result<(Run, Address), PublishError> {
+                .map(|r| -> Result<SettledRun, PublishError> {
                     let origin_doc = run_origin_document(&r.run).ok_or(PublishError::BadRun)?;
                     if origin_doc != trunk_of(&r.origin) {
                         return Err(PublishError::BadRun);
@@ -624,7 +621,7 @@ where
                     if !m3.is_registered_document(&origin_doc) {
                         return Err(PublishError::SourceNotRegistered);
                     }
-                    Ok((r.run, origin_doc))
+                    Ok(SettledRun { run: r.run, origin_doc })
                 })
                 .collect::<Result<_, _>>()?;
             // Slot 5: the model's refusal — a private document has no chain
@@ -673,7 +670,7 @@ where
             // it: a carried run adds nothing to it, so a later run from the
             // same origin that the base does not arrange is still asked about.
             let mut admitted: BTreeSet<&Address> = BTreeSet::new();
-            for (run, origin_doc) in &supplied {
+            for SettledRun { run, origin_doc } in &supplied {
                 if *origin_doc == trunk || admitted.contains(origin_doc) {
                     continue;
                 }
@@ -690,14 +687,14 @@ where
                 admitted.insert(origin_doc);
             }
             // The re-insert's size, before any address is probed: every
-            // address of every draft-native run is re-minted below, two staged
-            // records apiece, and nothing M2 measures stops the staging before
-            // it is whole. Request arithmetic, so it discloses nothing — and
-            // asked here, it bounds the existence walk over those runs too.
+            // address of every draft-native run is re-inserted below, two
+            // staged records apiece, and nothing M2 measures stops the staging
+            // before it is whole. Request arithmetic, so it discloses nothing —
+            // and asked here, it bounds the existence walk over those runs too.
             let reinserted = supplied
                 .iter()
-                .filter(|(_, origin_doc)| draft_native(origin_doc))
-                .fold(Nat::zero(), |sum, (run, _)| sum + run.width());
+                .filter(|settled| draft_native(&settled.origin_doc))
+                .fold(Nat::zero(), |sum, settled| sum + settled.run.width());
             if reinserted > Nat::from(MAX_REINSERTED_VALUES) {
                 return Err(PublishError::TooManyValues);
             }
@@ -711,16 +708,16 @@ where
             // makes the answer found here the answer the re-insert gets — M4's
             // fold only ever adds (S0), so no write staged in between can take
             // a value away.
-            for (run, _) in &supplied {
+            for SettledRun { run, .. } in &supplied {
                 if !run.addrs().all(|a| content.value_at(a.tumbler()).is_some()) {
                     return Err(PublishError::DanglingSource);
                 }
             }
             // The member's arrangement: the client's runs in order — the
-            // draft-native ones re-minted as fresh identity under the
+            // draft-native ones re-inserted as fresh identity under the
             // document's own I-space — then the base's post-render deposits.
             let mut placed: Vec<Run> = Vec::new();
-            for (run, origin_doc) in supplied {
+            for SettledRun { run, origin_doc } in supplied {
                 if draft_native(&origin_doc) {
                     for a in run.addrs() {
                         let value = stg
@@ -780,6 +777,19 @@ fn run_origin_document(run: &Run) -> Option<Address> {
         return None;
     }
     document_of(run.i_start()).map(|d| trunk_of(&d))
+}
+
+/// A supplied run beside the ORIGIN DOCUMENT its own start settles
+/// ([`run_origin_document`]), checked against the client's stated `origin`
+/// and found registered: the ONE value the shot's source gate, existence
+/// check and placement each walk, so every question about a run is asked of
+/// that run's own origin document and no second list has to stay in step
+/// with the runs for the gate to judge the run it is looking at.
+/// [`ShotRun`](crate::ShotRun) is the client's statement; this is the
+/// statement checked.
+struct SettledRun {
+    run: Run,
+    origin_doc: Address,
 }
 
 /// J0 at the composite boundary (content-allocation ⇒ placement): mint one
@@ -2084,15 +2094,16 @@ mod tests {
 
     #[test]
     fn the_shot_refuses_a_reinsert_past_the_value_budget_before_probing_an_address() {
-        // MAX_REINSERTED_VALUES binds how many values one SHOT re-mints from
-        // its draft, and the count is request arithmetic — the draft-native
-        // runs' widths, summed — answered before any address is probed.
-        // Nothing of doc1 is stored in this world, so every probe of the
-        // draft answers `DanglingSource`: a shot refused `TooManyValues` here
-        // was refused without one. What is bounded is the SUM, so two runs
-        // over one I-extent, each inside the budget, are refused together; a
-        // by-reference run is placed as one run and never re-minted, so its
-        // width is not counted; and the source gate still speaks first.
+        // MAX_REINSERTED_VALUES binds how many values one SHOT re-inserts
+        // from its draft, and the count is request arithmetic — the
+        // draft-native runs' widths, summed — answered before any address is
+        // probed. Nothing of doc1 is stored in this world, so every probe of
+        // the draft answers `DanglingSource`: a shot refused `TooManyValues`
+        // here was refused without one. What is bounded is the SUM, so two
+        // runs over one I-extent, each inside the budget, are refused
+        // together; a by-reference run is placed as one run and never
+        // re-inserted, so its width is not counted; and the source gate still
+        // speaks first.
         let p1 = Caller::Principal(PrincipalId(1));
         let k = shot_kernel(vec![], &[]);
         let vs = Vstream::new(&k);

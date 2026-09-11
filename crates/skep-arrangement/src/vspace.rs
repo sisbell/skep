@@ -8,8 +8,8 @@
 use num_traits::Zero;
 use skep_address::{content_subspace, Address, Nat, Span, Tumbler};
 
-/// A depth-2 V-position `[subspace, ordinal]` (m = 2 — ASN-0036 S8-depth;
-/// structurally depth-2, so "depth" needs no separate check).
+/// A depth-2 V-position `[subspace, ordinal]` (m = 2 — ASN-0036 S8-depth,
+/// ASN-0084 scope; structurally depth-2, so "depth" needs no separate check).
 ///
 /// Ordered as the depth-2 tumbler `[subspace, ordinal]` it denotes (T1):
 /// subspace first, then ordinal. The derive compares fields in declaration

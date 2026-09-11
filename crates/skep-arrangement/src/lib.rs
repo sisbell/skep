@@ -199,10 +199,3 @@ pub trait HasM5 {
     /// M5's slice of the world state.
     fn m5(&self) -> &M5State;
 }
-
-// Subspace convention (ASN-0047): V-positions are depth-2 tumblers
-// [subspace, ordinal] (m = 2, ASN-0036 S8-depth / ASN-0084 scope), and the
-// two subspace numerals themselves are M1's — T7 is M1's axiom, so M5 routes
-// content from link through `skep_address::content_subspace` /
-// `link_subspace` rather than restating the values it compares M3's minted
-// element field `[s_C|s_L, k]` against.

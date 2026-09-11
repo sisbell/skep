@@ -383,17 +383,26 @@ where
             // published-target refusal — cleared only by a DECLARED deposit
             // at a FRESH position (PUB-2.59, PUB-9.13) of the arrangement the
             // deposit lands in: the HEAD member's, or the document's own
-            // while it has none (PUB-2.66).
+            // while it has none (PUB-2.66). Which arrangement the insert
+            // lands in is decided with the refusal, one case at a time.
             let surface = {
                 let world = stg.working();
                 let m3 = world.m3();
-                let surface = deposit_surface(m3, doc);
-                if published_target(m3, doc)
-                    && !(declared && world.m5().names_fresh_content_position(&surface, &at))
-                {
+                if !published_target(m3, doc) {
+                    // Private: the declaration is inert, and the insert edits
+                    // the arrangement named.
+                    doc.clone()
+                } else if declared {
+                    // The chain's frontier, read under the head key pushed
+                    // above — the one insert a published document admits.
+                    let surface = deposit_surface(m3, doc);
+                    if !world.m5().names_fresh_content_position(&surface, &at) {
+                        return Err(InsertError::PublishedTarget);
+                    }
+                    surface
+                } else {
                     return Err(InsertError::PublishedTarget);
                 }
-                surface
             };
             if values.is_empty() {
                 return Err(InsertError::EmptyContent);
@@ -1397,23 +1406,29 @@ where
             Owned,
             CrossOwner(Address),
         }
-        let snap = self.kernel.snapshot();
-        let snapshot_m3 = snap.world().m3();
-        if !snapshot_m3.is_registered_document(source) {
-            return Err(TxnError::Rejected(VersionError::SourceNotRegistered));
-        }
-        let (key, branch) = if snapshot_m3.is_effective_owner(principal, source) {
-            (M3State::version_lock_key(source), Branch::Owned)
-        } else {
-            // Cross-owner fork.
-            let prefix = snapshot_m3
-                .principal_prefix(principal)
-                .cloned()
-                .ok_or_else(|| TxnError::Rejected(VersionError::NotAPrincipal))?;
-            if !snapshot_m3.is_registered_account(&prefix) {
-                return Err(TxnError::Rejected(VersionError::NodeTierCrossOwner));
+        // The four pre-transaction reads, and nothing else, come off the M2
+        // snapshot: it lives in this block alone, which yields the key and
+        // the branch and ends before the transaction opens, so no read inside
+        // the transaction can be taken off it.
+        let (key, branch) = {
+            let snap = self.kernel.snapshot();
+            let snapshot_m3 = snap.world().m3();
+            if !snapshot_m3.is_registered_document(source) {
+                return Err(TxnError::Rejected(VersionError::SourceNotRegistered));
             }
-            (M3State::document_lock_key(&prefix), Branch::CrossOwner(prefix))
+            if snapshot_m3.is_effective_owner(principal, source) {
+                (M3State::version_lock_key(source), Branch::Owned)
+            } else {
+                // Cross-owner fork.
+                let prefix = snapshot_m3
+                    .principal_prefix(principal)
+                    .cloned()
+                    .ok_or_else(|| TxnError::Rejected(VersionError::NotAPrincipal))?;
+                if !snapshot_m3.is_registered_account(&prefix) {
+                    return Err(TxnError::Rejected(VersionError::NodeTierCrossOwner));
+                }
+                (M3State::document_lock_key(&prefix), Branch::CrossOwner(prefix))
+            }
         };
         let keys = [key, head_lock_key(source)];
         self.kernel.transact(&keys, |stg| {

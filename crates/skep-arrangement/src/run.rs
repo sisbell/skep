@@ -593,11 +593,11 @@ mod tests {
         // the range, so `project` does not subtract the bounds itself. And the
         // bound the carried-run sweep takes: one past the last, which is where
         // the width came from, so the two agree by construction.
-        let one = r.offsets_covered_by(&inner).expect("the cover is nonempty");
-        assert_eq!(one.lo(), &n(1));
-        assert_eq!(one.width(), n(1));
-        assert_eq!(one.hi(), &n(2));
-        assert_eq!(one.hi(), &(one.lo() + &one.width()));
+        let range = r.offsets_covered_by(&inner).expect("the cover is nonempty");
+        assert_eq!(range.lo(), &n(1));
+        assert_eq!(range.width(), n(1));
+        assert_eq!(range.hi(), &n(2));
+        assert_eq!(range.hi(), &(range.lo() + &range.width()));
         let apart = Run::new(ca(9), n(1)).expect("valid run").iextent();
         assert_eq!(r.offsets_covered_by(&apart), None);
         // Cross-length fallback: doc1's content-base subtree covers every

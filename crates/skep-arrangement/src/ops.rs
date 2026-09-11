@@ -624,15 +624,16 @@ where
             let supplied: Vec<SettledRun> = shot
                 .runs
                 .into_iter()
-                .map(|r| -> Result<SettledRun, PublishError> {
-                    let origin_doc = run_origin_document(&r.run).ok_or(PublishError::BadRun)?;
-                    if origin_doc != trunk_of(&r.origin) {
+                .map(|stated| -> Result<SettledRun, PublishError> {
+                    let origin_doc =
+                        run_origin_document(&stated.run).ok_or(PublishError::BadRun)?;
+                    if origin_doc != trunk_of(&stated.origin) {
                         return Err(PublishError::BadRun);
                     }
                     if !m3.is_registered_document(&origin_doc) {
                         return Err(PublishError::SourceNotRegistered);
                     }
-                    Ok(SettledRun { run: r.run, origin_doc })
+                    Ok(SettledRun { run: stated.run, origin_doc })
                 })
                 .collect::<Result<_, _>>()?;
             // Slot 5: the model's refusal — a private document has no chain
@@ -1389,19 +1390,19 @@ where
             CrossOwner(Address),
         }
         let snap = self.kernel.snapshot();
-        let m3 = snap.world().m3();
-        if !m3.is_registered_document(source) {
+        let snapshot_m3 = snap.world().m3();
+        if !snapshot_m3.is_registered_document(source) {
             return Err(TxnError::Rejected(VersionError::SourceNotRegistered));
         }
-        let (key, branch) = if m3.is_effective_owner(principal, source) {
+        let (key, branch) = if snapshot_m3.is_effective_owner(principal, source) {
             (M3State::version_lock_key(source), Branch::Owned)
         } else {
             // Cross-owner fork.
-            let prefix = m3
+            let prefix = snapshot_m3
                 .principal_prefix(principal)
                 .cloned()
                 .ok_or_else(|| TxnError::Rejected(VersionError::NotAPrincipal))?;
-            if !m3.is_registered_account(&prefix) {
+            if !snapshot_m3.is_registered_account(&prefix) {
                 return Err(TxnError::Rejected(VersionError::NodeTierCrossOwner));
             }
             (M3State::document_lock_key(&prefix), Branch::CrossOwner(prefix))

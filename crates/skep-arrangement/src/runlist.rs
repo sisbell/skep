@@ -424,13 +424,13 @@ impl RunList {
     /// something the replay path must tile rather than stop on.
     #[must_use = "reorder returns the new run-list; it does not modify the receiver"]
     pub(crate) fn reorder(&self, cut_ordinals: &[Nat]) -> RunList {
-        let Some((last, interior)) = cut_ordinals.split_last() else {
+        let Some((last, remaining)) = cut_ordinals.split_last() else {
             return self.clone();
         };
         // Descending splits on the prefix keep absolute coordinates.
         let (mut prefix, ext_right) = self.split_at(last);
-        let mut regions: Vec<Vec<Run>> = Vec::with_capacity(interior.len());
-        for cut in interior.iter().rev() {
+        let mut regions: Vec<Vec<Run>> = Vec::with_capacity(remaining.len());
+        for cut in remaining.iter().rev() {
             let (left, region) = split_runs(prefix.iter(), cut);
             regions.push(region);
             prefix = left;

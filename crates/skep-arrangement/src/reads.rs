@@ -683,9 +683,9 @@ mod tests {
         assert_eq!(s.link_runs(&doc1()).collect::<Vec<_>>(), vec![&run(&la(1), 1)]);
         assert_eq!(s.link_runs(&doc1()).len(), s.link_run_count(&doc1()));
         // An absent document lends nothing, in either subspace.
-        for mut none in [s.content_runs(&doc2()), s.link_runs(&doc2())] {
-            assert_eq!(none.len(), 0);
-            assert_eq!(none.next(), None);
+        for mut empty in [s.content_runs(&doc2()), s.link_runs(&doc2())] {
+            assert_eq!(empty.len(), 0);
+            assert_eq!(empty.next(), None);
         }
     }
 
@@ -811,9 +811,9 @@ mod tests {
         // length-8 run and reaches past every address either run holds, so
         // it takes that run's last position and all of the transcluded one:
         // ordinals 3, 4, 5, coalesced into one span.
-        let cross = Span::new(ca(3).tumbler().clone(), t(&[1])).expect("T12: action point 1 ≤ 8");
-        assert!(!cross.is_level_uniform());
-        let got = s.project(&doc1(), &SpanSet::singleton(cross));
+        let skew = Span::new(ca(3).tumbler().clone(), t(&[1])).expect("T12: action point 1 ≤ 8");
+        assert!(!skew.is_level_uniform());
+        let got = s.project(&doc1(), &SpanSet::singleton(skew));
         let spans: Vec<Span> = got.iter().cloned().collect();
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].start(), &t(&[1, 3]));

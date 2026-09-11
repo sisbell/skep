@@ -641,10 +641,10 @@ mod tests {
             });
             assert_eq!(gone.content_count(&doc), n(0));
             let deleted = gone.deletions(&doc);
-            for a in arranged {
+            for address in arranged {
                 assert!(
-                    deleted.denotes(a.tumbler()),
-                    "{a:?} was arranged in {doc:?}; P4★ says R recorded it"
+                    deleted.denotes(address.tumbler()),
+                    "{address:?} was arranged in {doc:?}; P4★ says R recorded it"
                 );
             }
         }

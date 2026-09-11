@@ -1830,13 +1830,13 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
     let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
     // (1) not_owner first: principal 2 shooting P1's edition, with a run
     //     onto an origin it may not read — the consult is never asked.
-    let consult = recording_consult(&asked, vec![]);
+    let refusing = recording_consult(&asked, vec![]);
     assert!(matches!(
         rejected(vs.publish(
             Caller::Principal(PrincipalId(2)),
             &pdoc(),
             Shot { base: None, draft: None, runs: vec![shot_run(&subdoc, &sca, 1)] },
-            &consult
+            &refusing
         )),
         PublishError::NotOwner(d) if d == pdoc()
     ));
@@ -1845,7 +1845,7 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
     //     run onto an unreadable origin answers withheld, never dangling —
     //     even listed behind a readable window.
     let dangling = a(&[1, 0, 1, 1, 0, 1, 0, 1, 9]);
-    let consult = recording_consult(&asked, vec![doc2()]);
+    let refusing_subdoc = recording_consult(&asked, vec![doc2()]);
     assert!(matches!(
         rejected(vs.publish(
             P1,
@@ -1860,7 +1860,7 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
                     shot_run(&doc2(), &w, 1),
                 ],
             },
-            &consult
+            &refusing_subdoc
         )),
         PublishError::Withheld(d) if d == subdoc
     ));
@@ -1872,7 +1872,7 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
     // (3) readable origins are placed; and an origin the BASE already
     //     arranges is NOT consulted again on the next shot.
     asked.borrow_mut().clear();
-    let consult = recording_consult(&asked, vec![doc2(), subdoc.clone()]);
+    let admitting = recording_consult(&asked, vec![doc2(), subdoc.clone()]);
     let (member1, _) = vs
         .publish(
             P1,
@@ -1882,7 +1882,7 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
                 draft: None,
                 runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 2), shot_run(&subdoc, &sca, 1)],
             },
-            &consult,
+            &admitting,
         )
         .expect("readable windows are placed");
     assert_eq!(asked.borrow().as_slice(), &[doc2(), subdoc.clone()]);
@@ -1891,7 +1891,7 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
     // The next shot re-supplies the doc2 window and the subdoc run exactly
     // as member1 arranges them: both are CARRIED (PUB-6.24), and a consult
     // that would now refuse doc2 is never asked.
-    let consult = recording_consult(&asked, vec![subdoc.clone()]);
+    let refusing_doc2 = recording_consult(&asked, vec![subdoc.clone()]);
     let (member2, _) = vs
         .publish(
             P1,
@@ -1901,7 +1901,7 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
                 draft: None,
                 runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 2), shot_run(&subdoc, &sca, 1)],
             },
-            &consult,
+            &refusing_doc2,
         )
         .expect("carried runs need no consult");
     assert_eq!(asked.borrow().as_slice(), &[] as &[Address], "every run was carried by the base");
@@ -1913,7 +1913,7 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
             P1,
             &pdoc(),
             Shot { base: Some(base(&member2, 6)), draft: None, runs: vec![shot_run(&pdoc(), &pca(9), 1)] },
-            &consult
+            &refusing_doc2
         )),
         PublishError::DanglingSource
     ));
@@ -1922,7 +1922,6 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
     //     origin the consult would refuse. The run is not carried, so the
     //     gate would ask about it — and it is never asked.
     asked.borrow_mut().clear();
-    let refusing = recording_consult(&asked, vec![]);
     assert!(matches!(
         rejected(vs.publish(
             P1,
@@ -3126,8 +3125,8 @@ fn mixed_length_transclusion_flows_through_the_level_class_discipline() {
         assert_eq!(lens, vec![8, 9]);
         // project is fault-free under a cross-length prefix cover: pdoc's
         // content-base subtree picks out only the length-8 positions.
-        let base = SpanSet::singleton(subtree_of(&t(&[1, 0, 1, 0, 3, 0, 1])));
-        let got = m5.project(&doc2(), &base);
+        let content_base = SpanSet::singleton(subtree_of(&t(&[1, 0, 1, 0, 3, 0, 1])));
+        let got = m5.project(&doc2(), &content_base);
         let spans: Vec<Span> = got.iter().cloned().collect();
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].start(), &t(&[1, 1]));

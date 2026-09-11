@@ -8,7 +8,13 @@ use skep_address::{content_subspace, Address, Nat, Span, Tumbler};
 
 /// A depth-2 V-position `[subspace, ordinal]` (m = 2 — ASN-0036 S8-depth;
 /// structurally depth-2, so "depth" needs no separate check).
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// Ordered as the depth-2 tumbler `[subspace, ordinal]` it denotes (T1):
+/// subspace first, then ordinal. The derive compares fields in declaration
+/// order, so the declaration order IS the ordering — pinned against
+/// `Tumbler`'s own order (`a_v_position_orders_as_its_tumbler`), which is
+/// what a reordering of the fields would break.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VPos {
     /// s_C = 1 (content) or s_L = 2 (link), per ASN-0047.
     pub subspace: Nat,
@@ -35,7 +41,7 @@ impl VPos {
 /// arrangement. The span must satisfy [`is_ordinal_vspan`] and lie in the
 /// content subspace (`NotOrdinalVSpan`/`SourceNotContentSubspace` otherwise —
 /// Conflicts #7).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct VSpec {
     pub source: Address,
     pub span: Span,
@@ -180,6 +186,25 @@ mod tests {
             ordinal_vspan(&vp(1, 2), &n(1)),
             ordinal_vspan(&vp(2, 1), &n(1))
         );
+    }
+
+    #[test]
+    fn a_v_position_orders_as_its_tumbler() {
+        // T1: a V-position orders as the depth-2 tumbler `[subspace, ordinal]`
+        // it denotes, so every pair compares as `Tumbler`'s own order says.
+        // `(1, 10)` against `(2, 1)` pins subspace-major order — a field
+        // reordering would put the larger ordinal first — and `(1, 2)`
+        // against `(1, 10)` pins that ordinals compare as numbers.
+        let positions = [(1u32, 1u32), (1, 2), (1, 10), (2, 1), (2, 3)];
+        for &(sa, oa) in &positions {
+            for &(sb, ob) in &positions {
+                assert_eq!(
+                    vp(sa, oa).cmp(&vp(sb, ob)),
+                    t(&[sa, oa]).cmp(&t(&[sb, ob])),
+                    "[{sa}, {oa}] against [{sb}, {ob}]"
+                );
+            }
+        }
     }
 
     #[test]

@@ -43,7 +43,14 @@ use skep_address::{intersect, shift, validate, Address, Nat, Span, Tumbler};
 /// justifies the `.expect`s in the
 /// run's own position arithmetic — they rest on the type, not on M2's
 /// checkpoint integrity.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Hash` agrees with `Eq`: a run IS its start and its width, so a set or map
+/// keyed on runs keys on exactly that pair, and no caller spells a proxy key
+/// that could drop half of it. There is no `Ord`. A run's place in an
+/// arrangement is its V-order, which the value does not carry; an I-order
+/// derived from the fields would let `runs.sort()` compile on the V-ordered
+/// sequences `resolve` and `content_runs` return, and scramble them.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "RunShadow")]
 pub struct Run {
     pub(crate) i_start: Address,
@@ -373,6 +380,8 @@ impl Run {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use skep_address::subtree_of;
 
     use super::*;
@@ -428,6 +437,24 @@ mod tests {
         // And it is the extent's own upper endpoint, which is what makes the
         // lift the run's two endpoints and nothing derived twice.
         assert_eq!(r.iextent().reach(), r.reach());
+    }
+
+    #[test]
+    fn a_run_hashes_on_its_start_and_width() {
+        // §A: a run's identity is its start AND its width, and a set keyed on
+        // runs keys on both — two runs sharing a start and differing in width
+        // are two runs, and an exact repeat is one. The distinction a key that
+        // dropped the width would lose is held where the identity lives.
+        let runs: HashSet<Run> = [
+            Run::new(ca(1), n(1)).expect("valid run"),
+            Run::new(ca(1), n(2)).expect("valid run"),
+            Run::new(ca(1), n(2)).expect("valid run"),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(runs.len(), 2);
+        assert!(runs.contains(&Run::new(ca(1), n(1)).expect("valid run")));
+        assert!(runs.contains(&Run::new(ca(1), n(2)).expect("valid run")));
     }
 
     #[test]

@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Tumbler};
-use skep_arrangement::{HasM5, M5Rec, M5State, VPos, Vstream};
+use skep_arrangement::{Deposit, HasM5, M5Rec, M5State, VPos, Vstream};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_coordination::Coordinator;
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, WorldState};
@@ -283,7 +283,7 @@ pub fn insert_raw(k: &Arc<Kernel<World>>, doc: &Address, bytes: Vec<u8>) -> Addr
     let n_c = snap.world().m5().content_count(doc);
     let at = VPos { subspace: n(1), ordinal: n_c + n(1) };
     let (start, _) = Vstream::new(k.as_ref())
-        .insert(skep_links::Caller::System, doc, at, vec![Val::new(bytes)], false)
+        .insert(skep_links::Caller::System, doc, at, vec![Val::new(bytes)], Deposit::Undeclared)
         .expect("test content INSERT succeeds");
     start
 }

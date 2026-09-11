@@ -10,7 +10,7 @@ use crate::common;
 
 use common::*;
 use skep_address::{document_of, parent, Address};
-use skep_arrangement::Caller;
+use skep_arrangement::{Caller, Deposit};
 use skep_content::Val;
 use skep_engine::{Engine, World};
 use skep_febe::EditionClaim;
@@ -270,7 +270,7 @@ fn a_to_slot_that_denotes_nothing_under_the_target_is_still_a_row() {
             &b.other_target,
             vp(1, 1),
             vec![Val::new(vec![b'a']), Val::new(vec![b'b'])],
-            true,
+            Deposit::Declared,
         )
         .unwrap_or_else(|_| panic!("a declared deposit at fresh positions (PUB-2.59)"));
     let (ranged, _) = engine

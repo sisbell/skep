@@ -8,7 +8,7 @@ use std::slice;
 use std::sync::Arc;
 
 use skep_address::{Address, Nat};
-use skep_arrangement::{HasM5, M5Rec, VPos};
+use skep_arrangement::{Deposit, HasM5, M5Rec, VPos};
 use skep_content::{ContentWrite, HasContent, Val};
 use skep_kernel::{Seq, Snapshot, WorldState};
 use skep_links::{Caller, HasLinks, LinkRec, Pattern, ShippedType, Tip, View};
@@ -73,7 +73,8 @@ where
         // `System` is not exempt from the in-place refusal (PUB-6.28): a def
         // into a PUBLISHED document surfaces as
         // `Insert(Rejected(PublishedTarget))`.
-        let (start, _insert_seq) = vs.insert(Caller::System, d, at, vec![Val::new(blob)], false)?;
+        let (start, _insert_seq) =
+            vs.insert(Caller::System, d, at, vec![Val::new(blob)], Deposit::Undeclared)?;
         let (_pdef_tuple, seq) = self.register_pred(d, &start)?;
         Ok((start, seq))
     }

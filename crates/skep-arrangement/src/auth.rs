@@ -32,7 +32,7 @@ use skep_namespace::{M3State, PrincipalId};
 /// never crosses the draft boundary and never advances a published
 /// arrangement in place (PUB-6.28), so an automation write into a published
 /// target is refused exactly as a principal's is.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Caller {
     /// A session-attributed principal — ω-checked against each written
     /// document.

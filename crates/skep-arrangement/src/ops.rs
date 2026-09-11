@@ -38,6 +38,7 @@
 //! read and the records they stage, so a minimal test world can drive
 //! `delete`/`rearrange` with `HasM5 + HasM3` and `From<M5Rec>` alone.
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 use num_traits::{One, Zero};
@@ -57,6 +58,38 @@ use crate::shot::Shot;
 use crate::state::M5Rec;
 use crate::vspace::{as_ordinal_vspan, VPos, VSpec};
 use crate::HasM5;
+
+/// The deposit DECLARATION an INSERT carries or omits (PUB-9.13's DECLARED
+/// horn; PUB-2.59, PUB-2.61): the one claim on M5's write surface that clears
+/// the in-place refusal on a published document, and only for an insert at a
+/// fresh content position ([`Vstream::insert`] states the shape). Into a
+/// private document it is inert. Content only — a link deposit is outside the
+/// rule (PUB-2.12).
+///
+/// A type and not a flag because the claim is read where it is made, and the
+/// two ways of making it wrongly are not alike. An insert that should have
+/// been declared is refused `PublishedTarget`, loudly. A declaration on an
+/// ordinary edit is admitted at a fresh position of a published document —
+/// the write the refusal exists to stop, placed wherever [`deposit_surface`]
+/// points — and nothing reports it; on the [`Caller::System`] path no ω check
+/// stands between the claim and the arrangement either. For the same reason
+/// there is no `From<bool>`: a boolean becomes this value with both arms
+/// written out, where a reader sees which one is claimed.
+///
+/// Two variants because the corpus has two — an insert is declared or it is
+/// not — so a match on it is exhaustive, and a third variant would change the
+/// exemption itself. `Default` is `Undeclared`: the wire reads an absent,
+/// `null` or `false` field as no declaration.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Deposit {
+    /// No declaration: an ordinary edit — and, on a published document, an
+    /// in-place edit, refused.
+    #[default]
+    Undeclared,
+    /// The deposit declaration: admitted on a published document at a fresh
+    /// content position of the arrangement the deposit lands in.
+    Declared,
+}
 
 /// The most runs one COPY, or one publish shot, may place — and so the
 /// ceiling on what one request can make M5 hold live while it decides
@@ -152,12 +185,13 @@ where
     /// PUB-2.59, PUB-2.61; PUB-9.13's DECLARED horn, owner-ruled). When the
     /// document `doc` projects to (PUB-2.15) is PUBLISHED, an insert is an
     /// in-place edit (PUB-2.11's in-place advance) and refuses
-    /// `PublishedTarget` — UNLESS `deposit` is set AND the insert is deposit-SHAPED: `at` names
-    /// a fresh content position past the arranged extent, so the placement
-    /// appends and disturbs no arrangement. The declaration is a claim the
-    /// shape must bear out, never a bypass: a declared insert at an arranged
-    /// position refuses with the same code, and an UNDECLARED append refuses
-    /// too (the cost RES-209 item 5 named, closed). Into a PRIVATE document
+    /// `PublishedTarget` — UNLESS `deposit` is [`Deposit::Declared`] AND the
+    /// insert is deposit-SHAPED: `at` names a fresh content position past the
+    /// arranged extent, so the placement appends and disturbs no arrangement.
+    /// The declaration is a claim the shape must bear out, never a bypass: a
+    /// declared insert at an arranged position refuses with the same code, and
+    /// an UNDECLARED append refuses too (the cost RES-209 item 5 named,
+    /// closed). Into a PRIVATE document
     /// the declaration is inert — every insert is admitted there as before.
     /// A declared deposit whose fresh position lies past the append boundary
     /// clears this refusal and meets `OutOfBounds` below, so it is told its
@@ -235,7 +269,7 @@ where
         doc: &Address,
         at: VPos,
         values: Vec<Val>,
-        deposit: bool,
+        deposit: Deposit,
     ) -> Result<(Address, Seq), TxnError<InsertError>> {
         // The mint chain's key, and — for a declared deposit — the key of the
         // chain frontier it reads to find where it lands on a published
@@ -244,8 +278,9 @@ where
         // chain's deposits land in, holds the same key, so the landing decided
         // inside cannot move under it. Both keys are arithmetic on the
         // request; neither is read from the world.
+        let declared = deposit == Deposit::Declared;
         let mut keys = vec![M3State::content_lock_key(doc)];
-        if deposit {
+        if declared {
             keys.push(M3State::version_lock_key(&trunk_of(doc)));
         }
         self.kernel.transact(&keys, |stg| {
@@ -266,7 +301,7 @@ where
                 let m3 = world.m3();
                 let surface = deposit_surface(m3, doc);
                 if published_target(m3, doc)
-                    && !(deposit && world.m5().names_fresh_content_position(&surface, &at))
+                    && !(declared && world.m5().names_fresh_content_position(&surface, &at))
                 {
                     return Err(InsertError::PublishedTarget);
                 }
@@ -387,6 +422,11 @@ where
     /// A member address given as `doc` is projected to its document first:
     /// the shot is the document's, whichever member names it.
     ///
+    /// `shot` is taken by value because the composite keeps it: the member's
+    /// arrangement is built from the shot's runs, and each by-reference run
+    /// moves into the placement record rather than being cloned out of a
+    /// borrow.
+    ///
     /// COST, AND WHO OWNS IT: the re-insert pushes `2n + 1` records for `n`
     /// draft-native values, exactly as INSERT does, plus one placement whose
     /// run count — the client's runs, coalesced, plus the base's deposit
@@ -399,7 +439,7 @@ where
         &self,
         caller: Caller,
         doc: &Address,
-        shot: &Shot,
+        shot: Shot,
         readable: &dyn Fn(&W, &Address) -> bool,
     ) -> Result<(Address, Seq), TxnError<PublishError>> {
         let trunk = trunk_of(doc);
@@ -493,7 +533,10 @@ where
             // order — the document's own I-space needs no consult, a run the
             // base already arranges takes none (PUB-6.24), and the FIRST
             // unreadable origin document speaks before any existence answer.
-            let mut decided: Vec<Address> = Vec::new();
+            // An origin document is DECIDED only once the consult has admitted
+            // it: a carried run marks nothing, so a later run from the same
+            // origin that the base does not arrange is still asked about.
+            let mut decided: BTreeSet<&Address> = BTreeSet::new();
             for (r, origin_doc) in shot.runs.iter().zip(&origin_docs) {
                 if *origin_doc == trunk || decided.contains(origin_doc) {
                     continue;
@@ -508,7 +551,7 @@ where
                 if !readable(world, origin_doc) {
                     return Err(PublishError::Withheld(origin_doc.clone()));
                 }
-                decided.push(origin_doc.clone());
+                decided.insert(origin_doc);
             }
             // Existence (S3★): every address a run names holds a value —
             // the draft-native run's bytes are what is re-inserted, and a
@@ -524,7 +567,7 @@ where
             // draft-native ones re-minted as fresh identity under the
             // document's own I-space — then the base's post-render deposits.
             let mut placed: Vec<Run> = Vec::new();
-            for (r, origin_doc) in shot.runs.iter().zip(&origin_docs) {
+            for (r, origin_doc) in shot.runs.into_iter().zip(&origin_docs) {
                 if draft_doc.as_ref() == Some(origin_doc) {
                     for a in r.run.addrs() {
                         let val = stg
@@ -536,7 +579,7 @@ where
                         allocate_for_placement::<_, PublishError>(stg, &trunk, val, &mut placed)?;
                     }
                 } else {
-                    extend_or_push_run(&mut placed, r.run.clone());
+                    extend_or_push_run(&mut placed, r.run);
                 }
                 if placed.len() > MAX_PLACED_RUNS {
                     return Err(PublishError::TooManyRuns);
@@ -904,6 +947,10 @@ where
                 if cuts.len() != 3 && cuts.len() != 4 {
                     return Err(RearrangeError::BadCutCount);
                 }
+                // Ascent is judged on the ordinals alone, not on `VPos`'s own
+                // order: a cut's subspace is the NEXT verdict's subject, and
+                // comparing whole positions would answer a stray subspace here
+                // as `NotAscending`.
                 if !cuts.windows(2).all(|w| w[0].ordinal < w[1].ordinal) {
                     return Err(RearrangeError::NotAscending);
                 }
@@ -1211,6 +1258,14 @@ mod tests {
         // reason the impl is written out rather than derived.
         let k = mini_kernel();
         assert_eq!(format!("{:?}", Vstream::new(&k)), "Vstream");
+    }
+
+    #[test]
+    fn the_absent_declaration_is_the_default() {
+        // The wire reads an absent, `null` or `false` `deposit` field as no
+        // declaration, so the value a caller gets without saying anything is
+        // the one that clears no refusal — never the exemption.
+        assert_eq!(Deposit::default(), Deposit::Undeclared);
     }
 
     /// A world carrying a content store beside the arrangement — the one

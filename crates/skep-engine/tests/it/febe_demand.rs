@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use common::*;
 use skep_address::Address;
+use skep_arrangement::Deposit;
 use skep_content::Val;
 use skep_engine::{Engine, EngineStores};
 use skep_febe::{Disposition, Op, Operation, RejectCode, Request, Response};
@@ -201,13 +202,13 @@ fn engine_stores_serves_a_kernel_rooted_at_a_reconstructed_world() {
     let (_acct, doc) = setup_doc(&engine);
     engine
         .vstream()
-        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'x'])], false)
+        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'x'])], Deposit::Undeclared)
         .expect("insert succeeds");
 
     let past = engine.kernel().current_seq();
     engine
         .vstream()
-        .insert(OWNER, &doc, vp(1, 2), vec![Val::new(vec![b'y'])], false)
+        .insert(OWNER, &doc, vp(1, 2), vec![Val::new(vec![b'y'])], Deposit::Undeclared)
         .expect("insert succeeds");
 
     let world = engine.world_at(past).expect("a committed boundary answers");

@@ -149,11 +149,11 @@ pub fn image_on<W: DiscoveryWorld>(
         return Err(QueryError::ImageTooLarge);
     }
     let mut runs: Vec<Run> = Vec::new();
-    // The key is spelled out because `Run` is neither `Hash` nor `Ord` (M5's);
-    // keying rather than scanning is what keeps the dedup one probe per
-    // resolved run, so the cost is linear in an image size the caller's
-    // region chooses rather than square in it.
-    let mut seen: HashSet<(Address, Nat)> = HashSet::new();
+    // Keyed on the run itself — its start AND its width, which is what `Run`'s
+    // `Eq` and `Hash` compare — and keying rather than scanning is what keeps
+    // the dedup one probe per resolved run, so the cost is linear in an image
+    // size the caller's region chooses rather than square in it.
+    let mut seen: HashSet<Run> = HashSet::new();
     let mut runs_resolved: usize = 0;
     for span in region {
         let span_image = w.m5().resolve(&surface, span);
@@ -163,7 +163,7 @@ pub fn image_on<W: DiscoveryWorld>(
             return Err(QueryError::ImageTooLarge);
         }
         for r in span_image {
-            if seen.insert((r.i_start().clone(), r.width().clone())) {
+            if seen.insert(r.clone()) {
                 runs.push(r);
             }
         }

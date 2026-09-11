@@ -27,7 +27,7 @@ use std::thread;
 use std::time::Duration;
 
 use skep_address::{validate, Address, Nat, Span, Tumbler};
-use skep_arrangement::{Caller, VPos, VSpec};
+use skep_arrangement::{Caller, Deposit, VPos, VSpec};
 use skep_content::Val;
 use skep_engine::dump::WorldDump;
 use skep_engine::{Engine, EngineError, World};
@@ -320,12 +320,12 @@ impl Fixture {
         // 4–5: content (multi-value insert = a multi-record composite).
         engine
             .vstream()
-            .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'a']), Val::new(vec![b'b'])], false)
+            .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'a']), Val::new(vec![b'b'])], Deposit::Undeclared)
             .expect("insert ab");
         capture(&engine, &mut boundaries);
         engine
             .vstream()
-            .insert(OWNER, &doc, vp(1, 3), vec![Val::new(vec![b'c'])], false)
+            .insert(OWNER, &doc, vp(1, 3), vec![Val::new(vec![b'c'])], Deposit::Undeclared)
             .expect("insert c");
         capture(&engine, &mut boundaries);
 

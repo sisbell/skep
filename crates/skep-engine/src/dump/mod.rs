@@ -739,7 +739,7 @@ impl crate::Engine {
 #[cfg(test)]
 mod tests {
     use skep_address::{validate, Nat, Span};
-    use skep_arrangement::{Caller, VPos, VSpec};
+    use skep_arrangement::{Caller, Deposit, VPos, VSpec};
     use skep_content::Val;
     use skep_kernel::{CheckpointPolicy, Durability, KernelConfig};
     use skep_links::SlotArg;
@@ -810,7 +810,7 @@ mod tests {
                 &doc,
                 VPos { subspace: Nat::from(1u32), ordinal: Nat::from(1u32) },
                 vec![Val::new(vec![b'a']), Val::new(vec![b'b'])],
-                false,
+                Deposit::Undeclared,
             )
             .expect("insert succeeds");
         engine

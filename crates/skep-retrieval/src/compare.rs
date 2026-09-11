@@ -454,24 +454,15 @@ fn deterministic_presentation(mut pairs: Vec<CorrPair>) -> Vec<CorrPair> {
     fold_adjacent(pairs)
 }
 
-/// The four components X12 R3's presentation is keyed on, borrowed. The
-/// documents order by their own `Ord`, which IS the T1 tumbler order; each
-/// foot orders as the pair its layout denotes ([`foot_key`]). Nesting rather
-/// than flattening to six, so the key has the four components the card
-/// describes.
-fn corr_key(c: &CorrPair) -> (&Address, (&Nat, &Nat), &Address, (&Nat, &Nat)) {
-    (&c.d1, foot_key(&c.u1), &c.d2, foot_key(&c.u2))
-}
-
-/// A foot's position as the `[subspace, ordinal]` pair its layout denotes —
-/// the writing direction of the layout [`span_vpos`] reads, in the order a
-/// comparison consumes. `VPos` carries no order of its own, so the ordering is
-/// stated here; it is `Tumbler`'s own slice-lexicographic order on the two
-/// components, which is what that layout means.
+/// The four components X12 R3's presentation is keyed on, borrowed, each
+/// ordering by its own type: the documents by `Address`'s `Ord`, which IS the
+/// T1 tumbler order, and each foot by `VPos`'s, which is the order of the
+/// `[subspace, ordinal]` tumbler its layout denotes — the writing direction
+/// of the layout [`span_vpos`] reads.
 ///
 /// [`span_vpos`]: crate::vspan::span_vpos
-fn foot_key(v: &VPos) -> (&Nat, &Nat) {
-    (&v.subspace, &v.ordinal)
+fn corr_key(c: &CorrPair) -> (&Address, &VPos, &Address, &VPos) {
+    (&c.d1, &c.u1, &c.d2, &c.u2)
 }
 
 /// Adjacent-pair folding is OPTIONAL — X12 R4 (maximal pairs) is NOT

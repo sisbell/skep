@@ -13,7 +13,9 @@
 //! This file compiles as a FOREIGN crate, so it also witnesses the sealing
 //! claims: `M5Rec` cannot be built here, `Run` fields cannot be reached or
 //! mutated (accessors only), and everything below drives the system through
-//! `Vstream`/`stage_seat_link`/`seat_link` alone.
+//! `Vstream`/`stage_seat_link`/`seat_link` alone. It witnesses the other half
+//! of the surface too — the standard traits the public values carry, which a
+//! foreign crate could not add for itself.
 
 use std::path::Path;
 
@@ -23,8 +25,8 @@ use serde::{Deserialize, Serialize};
 use skep_address::{subtree_of, validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{
     ordinal_vspan, reading_surface, seat_link, stage_seat_link, trunk_head, Base, Caller,
-    CopyError, DeleteError, HasM5, InsertError, M5State, PublishError, RearrangeError, Run,
-    SeatError, Shot, ShotRun, VPos, VSpec, VersionError, Vstream,
+    CopyError, DeleteError, Deposit, HasM5, InsertError, M5State, PublishError, RearrangeError,
+    Run, SeatError, Shot, ShotRun, VPos, VSpec, VersionError, Vstream,
 };
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{
@@ -309,7 +311,7 @@ fn read_v(s: &Snapshot<World>, doc: &Address, ord: u32) -> Vec<u8> {
 /// and hand back the `Vstream` the caller goes on to drive.
 fn insert_abc(kernel: &Kernel<World>) -> Vstream<'_, World> {
     let vs = Vstream::new(kernel);
-    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], false)
+    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], Deposit::Undeclared)
         .expect("insert commits");
     vs
 }
@@ -319,7 +321,7 @@ fn insert_abc(kernel: &Kernel<World>) -> Vstream<'_, World> {
 /// at its fresh positions (PUB-2.59, PUB-9.13).
 fn deposit_abc(kernel: &Kernel<World>) -> Vstream<'_, World> {
     let vs = Vstream::new(kernel);
-    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], true)
+    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], Deposit::Declared)
         .expect("a declared deposit at the edition's fresh positions commits");
     vs
 }
@@ -378,7 +380,7 @@ fn insert_mints_writes_places_and_returns_the_run_start() {
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     let (start, seq) = vs
-        .insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], false)
+        .insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], Deposit::Undeclared)
         .expect("insert commits");
     assert_eq!(start, ca(1));
     assert_eq!(k.current_seq(), seq);
@@ -407,7 +409,7 @@ fn insert_appends_coalesce_and_interior_inserts_shift_the_suffix() {
     let vs = insert_abc(&k);
     // Tail append continues the frontier ⇒ I-adjacent ⇒ still one run (M12).
     let (start, _) = vs
-        .insert(P1, &doc1(), vp(1, 4), vec![val(b"d")], false)
+        .insert(P1, &doc1(), vp(1, 4), vec![val(b"d")], Deposit::Undeclared)
         .expect("append commits");
     assert_eq!(start, ca(4));
     {
@@ -416,7 +418,7 @@ fn insert_appends_coalesce_and_interior_inserts_shift_the_suffix() {
     }
     // Interior insert splits the run; the suffix shifts for free (§1).
     let (start, _) = vs
-        .insert(P1, &doc1(), vp(1, 2), vec![val(b"x")], false)
+        .insert(P1, &doc1(), vp(1, 2), vec![val(b"x")], Deposit::Undeclared)
         .expect("interior insert commits");
     assert_eq!(start, ca(5));
     let s = k.snapshot();
@@ -438,24 +440,24 @@ fn insert_rejects_in_documented_order_and_commits_nothing() {
     let before = k.current_seq();
     let un = a(&[1, 0, 1, 0, 9]); // never registered
     assert!(matches!(
-        rejected(vs.insert(P1, &un, vp(2, 0), vec![], false)),
+        rejected(vs.insert(P1, &un, vp(2, 0), vec![], Deposit::Undeclared)),
         InsertError::DocNotRegistered
     ));
     assert!(matches!(
-        rejected(vs.insert(P1, &doc1(), vp(2, 0), vec![], false)),
+        rejected(vs.insert(P1, &doc1(), vp(2, 0), vec![], Deposit::Undeclared)),
         InsertError::EmptyContent
     ));
     assert!(matches!(
-        rejected(vs.insert(P1, &doc1(), vp(2, 99), vec![val(b"x")], false)),
+        rejected(vs.insert(P1, &doc1(), vp(2, 99), vec![val(b"x")], Deposit::Undeclared)),
         InsertError::NotContentSubspace
     ));
     assert!(matches!(
-        rejected(vs.insert(P1, &doc1(), vp(1, 0), vec![val(b"x")], false)),
+        rejected(vs.insert(P1, &doc1(), vp(1, 0), vec![val(b"x")], Deposit::Undeclared)),
         InsertError::OutOfBounds
     ));
     // n_C = 0: the only valid insertion ordinal is 1 (FirstInsertionPosition).
     assert!(matches!(
-        rejected(vs.insert(P1, &doc1(), vp(1, 2), vec![val(b"x")], false)),
+        rejected(vs.insert(P1, &doc1(), vp(1, 2), vec![val(b"x")], Deposit::Undeclared)),
         InsertError::OutOfBounds
     ));
     assert_eq!(k.current_seq(), before);
@@ -652,7 +654,7 @@ fn delete_contracts_the_arrangement_and_touches_neither_content_nor_r() {
         &doc1(),
         vp(1, 1),
         vec![val(b"a"), val(b"b"), val(b"c"), val(b"d"), val(b"e")],
-        false,
+        Deposit::Undeclared,
     )
     .expect("insert commits");
     vs.delete(P1, &doc1(), vp(1, 2), n(2)).expect("delete commits");
@@ -731,7 +733,7 @@ fn rearrange_pivot_exchanges_the_two_adjacent_regions() {
         &doc1(),
         vp(1, 1),
         vec![val(b"a"), val(b"b"), val(b"c"), val(b"d"), val(b"e")],
-        false,
+        Deposit::Undeclared,
     )
     .expect("insert commits");
     vs.rearrange(P1, &doc1(), &[vp(1, 2), vp(1, 4), vp(1, 6)])
@@ -754,7 +756,7 @@ fn rearrange_swap_exchanges_the_outer_regions_around_the_middle() {
         &doc1(),
         vp(1, 1),
         vec![val(b"a"), val(b"b"), val(b"c"), val(b"d"), val(b"e")],
-        false,
+        Deposit::Undeclared,
     )
     .expect("insert commits");
     vs.rearrange(P1, &doc1(), &[vp(1, 1), vp(1, 2), vp(1, 3), vp(1, 4)])
@@ -854,7 +856,7 @@ fn owned_version_shares_the_map_and_diverges_copy_on_write() {
     // Deposit into the fork: its content chain mints LENGTH-9 elements; the
     // source is untouched.
     let (start, _) = vs
-        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], true)
+        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], Deposit::Declared)
         .expect("a declared deposit at the fork's fresh position commits");
     assert_eq!(start, vca(1));
     let s = k.snapshot();
@@ -1077,12 +1079,12 @@ fn in_place_edits_refuse_a_published_target_and_commit_nothing() {
     // An undeclared append at the edition's fresh position IS an in-place
     // edit (RES-209 item 5's cost, closed by the DECLARED horn).
     assert!(matches!(
-        rejected(vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"x")], false)),
+        rejected(vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"x")], Deposit::Undeclared)),
         InsertError::PublishedTarget
     ));
     // Ahead of the shape checks: empty values in the link subspace.
     assert!(matches!(
-        rejected(vs.insert(P1, &pdoc(), vp(2, 0), vec![], false)),
+        rejected(vs.insert(P1, &pdoc(), vp(2, 0), vec![], Deposit::Undeclared)),
         InsertError::PublishedTarget
     ));
     assert!(matches!(
@@ -1120,7 +1122,7 @@ fn in_place_edits_refuse_a_published_target_and_commit_nothing() {
     // `Caller::System` is not exempt (PUB-6.28): a fire never advances a
     // published arrangement in place.
     assert!(matches!(
-        rejected(vs.insert(Caller::System, &pdoc(), vp(1, 4), vec![val(b"s")], false)),
+        rejected(vs.insert(Caller::System, &pdoc(), vp(1, 4), vec![val(b"s")], Deposit::Undeclared)),
         InsertError::PublishedTarget
     ));
     assert!(matches!(
@@ -1158,7 +1160,7 @@ fn ownership_stands_ahead_of_the_published_target_refusal() {
     let vs = deposit_abc(&k);
     let p2 = Caller::Principal(PrincipalId(2));
     assert!(matches!(
-        rejected(vs.insert(p2, &pdoc(), vp(1, 4), vec![val(b"x")], true)),
+        rejected(vs.insert(p2, &pdoc(), vp(1, 4), vec![val(b"x")], Deposit::Declared)),
         InsertError::NotOwner(d) if d == pdoc()
     ));
     assert!(matches!(
@@ -1167,7 +1169,7 @@ fn ownership_stands_ahead_of_the_published_target_refusal() {
     ));
     let never_minted_member = a(&[1, 0, 1, 0, 3, 7]);
     assert!(matches!(
-        rejected(vs.insert(P1, &never_minted_member, vp(1, 1), vec![val(b"x")], false)),
+        rejected(vs.insert(P1, &never_minted_member, vp(1, 1), vec![val(b"x")], Deposit::Undeclared)),
         InsertError::DocNotRegistered
     ));
     assert!(matches!(
@@ -1197,46 +1199,46 @@ fn a_declared_deposit_at_a_fresh_position_clears_the_refusal() {
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     let (start, _) = vs
-        .insert(P1, &pdoc(), vp(1, 1), vec![val(b"atom")], true)
+        .insert(P1, &pdoc(), vp(1, 1), vec![val(b"atom")], Deposit::Declared)
         .expect("the first deposit lands at the empty edition's fresh position 1");
     assert_eq!(start, pca(1));
-    vs.insert(P1, &pdoc(), vp(1, 2), vec![val(b"x"), val(b"y")], true)
+    vs.insert(P1, &pdoc(), vp(1, 2), vec![val(b"x"), val(b"y")], Deposit::Declared)
         .expect("a later deposit appends past the arranged extent");
     assert_eq!(k.snapshot().world().m5().content_count(&pdoc()), n(3));
     // Declared, but touching an ARRANGED position: refused with PUB-2.11's
     // code — never a bypass.
     let before = k.current_seq();
     assert!(matches!(
-        rejected(vs.insert(P1, &pdoc(), vp(1, 2), vec![val(b"z")], true)),
+        rejected(vs.insert(P1, &pdoc(), vp(1, 2), vec![val(b"z")], Deposit::Declared)),
         InsertError::PublishedTarget
     ));
     assert!(matches!(
-        rejected(vs.insert(P1, &pdoc(), vp(1, 3), vec![val(b"z")], true)),
+        rejected(vs.insert(P1, &pdoc(), vp(1, 3), vec![val(b"z")], Deposit::Declared)),
         InsertError::PublishedTarget
     ));
     // Declared in the LINK subspace: not a deposit shape at all.
     assert!(matches!(
-        rejected(vs.insert(P1, &pdoc(), vp(2, 4), vec![val(b"z")], true)),
+        rejected(vs.insert(P1, &pdoc(), vp(2, 4), vec![val(b"z")], Deposit::Declared)),
         InsertError::PublishedTarget
     ));
     // Declared past the append boundary: fresh, so the refusal is cleared
     // and the op's own shape check answers.
     assert!(matches!(
-        rejected(vs.insert(P1, &pdoc(), vp(1, 9), vec![val(b"z")], true)),
+        rejected(vs.insert(P1, &pdoc(), vp(1, 9), vec![val(b"z")], Deposit::Declared)),
         InsertError::OutOfBounds
     ));
     // Declared with nothing to deposit: the shape check after the refusal.
     assert!(matches!(
-        rejected(vs.insert(P1, &pdoc(), vp(1, 4), vec![], true)),
+        rejected(vs.insert(P1, &pdoc(), vp(1, 4), vec![], Deposit::Declared)),
         InsertError::EmptyContent
     ));
     assert_eq!(k.current_seq(), before);
     // Into a PRIVATE document the flag is inert: declared or not, fresh or
     // interior, the insert is an ordinary draft edit.
     insert_abc(&k);
-    vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d")], true)
+    vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d")], Deposit::Declared)
         .expect("a declared append into a draft commits");
-    vs.insert(P1, &doc1(), vp(1, 2), vec![val(b"i")], true)
+    vs.insert(P1, &doc1(), vp(1, 2), vec![val(b"i")], Deposit::Declared)
         .expect("a declared interior insert into a draft commits — the flag is inert there");
     assert_eq!(k.snapshot().world().m5().content_count(&doc1()), n(5));
 }
@@ -1252,7 +1254,7 @@ fn a_version_member_target_is_judged_as_its_document() {
     let member_of_edition = a(&[1, 0, 1, 0, 3, 1]);
     let member_of_draft = a(&[1, 0, 1, 0, 1, 1]);
     assert!(matches!(
-        rejected(vs.insert(P1, &member_of_edition, vp(1, 1), vec![val(b"x")], false)),
+        rejected(vs.insert(P1, &member_of_edition, vp(1, 1), vec![val(b"x")], Deposit::Undeclared)),
         InsertError::PublishedTarget
     ));
     assert!(matches!(
@@ -1269,11 +1271,11 @@ fn a_version_member_target_is_judged_as_its_document() {
     ));
     // A declared deposit into the member of the edition is admitted (it is
     // the head's exempt act) — the member's own bit decides nothing either way.
-    vs.insert(P1, &member_of_edition, vp(1, 1), vec![val(b"atom")], true)
+    vs.insert(P1, &member_of_edition, vp(1, 1), vec![val(b"atom")], Deposit::Declared)
         .expect("a declared deposit into a published document's member commits");
     // The private document's member takes every edit.
     let (start, _) = vs
-        .insert(P1, &member_of_draft, vp(1, 1), vec![val(b"a"), val(b"b")], false)
+        .insert(P1, &member_of_draft, vp(1, 1), vec![val(b"a"), val(b"b")], Deposit::Undeclared)
         .expect("a private document's member is edited in place");
     assert_eq!(start, a(&[1, 0, 1, 0, 1, 1, 0, 1, 1]));
     vs.delete(P1, &member_of_draft, vp(1, 1), n(1))
@@ -1307,12 +1309,12 @@ fn an_accounts_home_is_a_published_target_from_its_flagless_first_mint() {
     );
     let before = k.current_seq();
     assert!(matches!(
-        rejected(vs.insert(p2, &home, vp(1, 1), vec![val(b"hi")], false)),
+        rejected(vs.insert(p2, &home, vp(1, 1), vec![val(b"hi")], Deposit::Undeclared)),
         InsertError::PublishedTarget
     ));
     assert_eq!(k.current_seq(), before, "the refusal commits nothing");
     let (start, _) = vs
-        .insert(p2, &home, vp(1, 1), vec![val(b"hi")], true)
+        .insert(p2, &home, vp(1, 1), vec![val(b"hi")], Deposit::Declared)
         .expect("a declared deposit at the home's fresh position commits");
     assert_eq!(start, a(&[1, 0, 2, 0, 1, 0, 1, 1]));
     assert_eq!(k.snapshot().world().m5().content_count(&home), n(1));
@@ -1326,7 +1328,7 @@ fn an_accounts_home_is_a_published_target_from_its_flagless_first_mint() {
         !k.snapshot().world().m3().published(&draft),
         "a later flagless mint is private by default (PUB-1.1)"
     );
-    vs.insert(p2, &draft, vp(1, 1), vec![val(b"hi")], false)
+    vs.insert(p2, &draft, vp(1, 1), vec![val(b"hi")], Deposit::Undeclared)
         .expect("an undeclared insert into the account's draft commits");
 }
 
@@ -1344,7 +1346,7 @@ fn a_shot_appends_the_next_trunk_member_from_the_clients_runs() {
     let vs = deposit_abc(&k);
     vs.copy(P1, &doc1(), vp(1, 1), &[VSpec { source: pdoc(), span: vspan(1, 1, 3) }])
         .expect("the staging copy shares identity");
-    vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d"), val(b"e")], false)
+    vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d"), val(b"e")], Deposit::Undeclared)
         .expect("the stager types");
     let readable = readable_by(PrincipalId(1));
     let shot = Shot {
@@ -1353,7 +1355,7 @@ fn a_shot_appends_the_next_trunk_member_from_the_clients_runs() {
         runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &ca(1), 2)],
     };
     let before = k.current_seq();
-    let (member, at) = vs.publish(P1, &pdoc(), &shot, &readable).expect("the shot commits");
+    let (member, at) = vs.publish(P1, &pdoc(), shot, &readable).expect("the shot commits");
     assert_eq!(member, vdoc(), "the chain's first member");
     assert_eq!(at, k.current_seq(), "one commit");
     assert!(at > before);
@@ -1408,13 +1410,13 @@ fn a_window_stays_a_window_and_a_daughter_lands_under_its_base() {
         .publish(
             P1,
             &pdoc(),
-            &Shot { base: Some(base(&pdoc(), 3)), draft: None, runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
+            Shot { base: Some(base(&pdoc(), 3)), draft: None, runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
             &readable,
         )
         .expect("the first member");
     assert_eq!(m1, vdoc());
     // The window's origin: doc2, P1's own private draft (readable to P1).
-    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w")], false).expect("doc2 holds a byte");
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w")], Deposit::Undeclared).expect("doc2 holds a byte");
     let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
     let staged = |member: &Address| Shot {
         base: Some(base(member, 3)),
@@ -1422,11 +1424,11 @@ fn a_window_stays_a_window_and_a_daughter_lands_under_its_base() {
         runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 1)],
     };
     // Shot A off the head m1 → the trunk's next member.
-    let (m2, _) = vs.publish(P1, &pdoc(), &staged(&m1), &readable).expect("A commits");
+    let (m2, _) = vs.publish(P1, &pdoc(), staged(&m1), &readable).expect("A commits");
     assert_eq!(m2, a(&[1, 0, 1, 0, 3, 2]));
     // Shot B, ALSO staged off m1, after A landed → m1's daughter, and no
     // refusal (PUB-2.38: the gesture never fails for want of a base).
-    let (daughter, _) = vs.publish(P1, &pdoc(), &staged(&m1), &readable).expect("B commits");
+    let (daughter, _) = vs.publish(P1, &pdoc(), staged(&m1), &readable).expect("B commits");
     assert_eq!(daughter, a(&[1, 0, 1, 0, 3, 1, 1]), "the nested form (PUB-2.55)");
     let s = k.snapshot();
     let m5 = s.world().m5();
@@ -1442,10 +1444,10 @@ fn a_window_stays_a_window_and_a_daughter_lands_under_its_base() {
     assert_eq!(reading_surface(s.world().m3(), &daughter), daughter);
     assert_eq!(reading_surface(s.world().m3(), &m1), m1);
     // And a member is itself a base: a shot off the daughter nests again.
-    let (grand, _) = vs.publish(P1, &pdoc(), &staged(&daughter), &readable).expect("nests again");
+    let (grand, _) = vs.publish(P1, &pdoc(), staged(&daughter), &readable).expect("nests again");
     assert_eq!(grand, a(&[1, 0, 1, 0, 3, 1, 1, 1]));
     // A shot may name a member as `doc`: it is the document's shot.
-    let (m3_, _) = vs.publish(P1, &m2, &staged(&m2), &readable).expect("named by a member");
+    let (m3_, _) = vs.publish(P1, &m2, staged(&m2), &readable).expect("named by a member");
     assert_eq!(m3_, a(&[1, 0, 1, 0, 3, 3]));
 }
 
@@ -1462,7 +1464,7 @@ fn a_deposit_in_the_staging_interval_is_carried_by_the_shot() {
         .publish(
             P1,
             &pdoc(),
-            &Shot { base: Some(base(&pdoc(), 3)), draft: None, runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
+            Shot { base: Some(base(&pdoc(), 3)), draft: None, runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
             &readable,
         )
         .expect("the head");
@@ -1472,7 +1474,7 @@ fn a_deposit_in_the_staging_interval_is_carried_by_the_shot() {
     vs.delete(P1, &doc1(), vp(1, 2), n(1)).expect("the stager un-arranges b");
     // The interval's deposit: into the BARE address, landing in the head.
     let (atom, _) = vs
-        .insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], true)
+        .insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], Deposit::Declared)
         .expect("a deposit at the head's fresh position");
     assert_eq!(atom, pca(4), "minted under the document's own chain");
     assert_eq!(k.snapshot().world().m5().content_count(&m1), n(4), "it landed in the HEAD (PUB-2.66)");
@@ -1482,7 +1484,7 @@ fn a_deposit_in_the_staging_interval_is_carried_by_the_shot() {
         .publish(
             P1,
             &pdoc(),
-            &Shot {
+            Shot {
                 base: Some(base(&m1, 3)),
                 draft: None,
                 runs: vec![shot_run(&pdoc(), &pca(1), 1), shot_run(&pdoc(), &pca(3), 1)],
@@ -1501,14 +1503,14 @@ fn a_deposit_in_the_staging_interval_is_carried_by_the_shot() {
         draft: None,
         runs: vec![shot_run(&pdoc(), &pca(1), 4)],
     };
-    let (d, _) = vs.publish(P1, &pdoc(), &daughter_shot, &readable).expect("a daughter");
+    let (d, _) = vs.publish(P1, &pdoc(), daughter_shot, &readable).expect("a daughter");
     assert_eq!(d, a(&[1, 0, 1, 0, 3, 1, 1]));
     assert_eq!(k.snapshot().world().m5().content_count(&d), n(4));
     assert!(matches!(
         rejected(vs.publish(
             P1,
             &pdoc(),
-            &Shot { base: Some(base(&m1, 9)), draft: None, runs: vec![] },
+            Shot { base: Some(base(&m1, 9)), draft: None, runs: vec![] },
             &readable
         )),
         PublishError::BaseExtentTooLarge
@@ -1526,10 +1528,10 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
     let vs = deposit_abc(&k);
     // Two foreign private documents: doc2 (P1's draft) and the sub-account's
     // document, owned by principal 3.
-    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w"), val(b"x")], false).expect("doc2");
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w"), val(b"x")], Deposit::Undeclared).expect("doc2");
     let sub = Caller::Principal(PrincipalId(3));
     let subdoc = a(&[1, 0, 1, 1, 0, 1]);
-    vs.insert(sub, &subdoc, vp(1, 1), vec![val(b"s")], false).expect("subdoc");
+    vs.insert(sub, &subdoc, vp(1, 1), vec![val(b"s")], Deposit::Undeclared).expect("subdoc");
     let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
     let sca = a(&[1, 0, 1, 1, 0, 1, 0, 1, 1]);
     // A counting consult that reads only what it is handed.
@@ -1541,7 +1543,7 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
         rejected(vs.publish(
             Caller::Principal(PrincipalId(2)),
             &pdoc(),
-            &Shot { base: None, draft: None, runs: vec![shot_run(&subdoc, &sca, 1)] },
+            Shot { base: None, draft: None, runs: vec![shot_run(&subdoc, &sca, 1)] },
             &consult
         )),
         PublishError::NotOwner(d) if d == pdoc()
@@ -1556,7 +1558,7 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
         rejected(vs.publish(
             P1,
             &pdoc(),
-            &Shot {
+            Shot {
                 base: None,
                 draft: None,
                 runs: vec![
@@ -1583,7 +1585,7 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
         .publish(
             P1,
             &pdoc(),
-            &Shot {
+            Shot {
                 base: None,
                 draft: None,
                 runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 2), shot_run(&subdoc, &sca, 1)],
@@ -1602,7 +1604,7 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
         .publish(
             P1,
             &pdoc(),
-            &Shot {
+            Shot {
                 base: Some(base(&m1, 6)),
                 draft: None,
                 runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 2), shot_run(&subdoc, &sca, 1)],
@@ -1618,7 +1620,7 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
         rejected(vs.publish(
             P1,
             &pdoc(),
-            &Shot { base: Some(base(&m2, 6)), draft: None, runs: vec![shot_run(&pdoc(), &pca(9), 1)] },
+            Shot { base: Some(base(&m2, 6)), draft: None, runs: vec![shot_run(&pdoc(), &pca(9), 1)] },
             &consult
         )),
         PublishError::DanglingSource
@@ -1633,12 +1635,40 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
         rejected(vs.publish(
             P1,
             &pdoc(),
-            &Shot { base: Some(base(&m1, 99)), draft: None, runs: vec![shot_run(&subdoc, &dangling, 1)] },
+            Shot { base: Some(base(&m1, 99)), draft: None, runs: vec![shot_run(&subdoc, &dangling, 1)] },
             &refusing
         )),
         PublishError::BaseExtentTooLarge
     ));
     assert!(asked.borrow().is_empty(), "no consult before the base's shape is settled");
+    // (6) carried-ness is judged run by run, never per origin document: a run
+    //     the base arranges decides nothing about its origin, so a LATER run
+    //     from the same origin that the base does not arrange is still asked
+    //     about — and here refused. doc2 grows a byte the head m2 does not
+    //     arrange, listed behind a doc2 window m2 does carry.
+    let (y, _) = vs
+        .insert(P1, &doc2(), vp(1, 3), vec![val(b"y")], Deposit::Undeclared)
+        .expect("doc2 grows a byte m2 does not arrange");
+    asked.borrow_mut().clear();
+    let refusing_doc2 = consult_reading(&asked, vec![subdoc.clone()]);
+    assert!(matches!(
+        rejected(vs.publish(
+            P1,
+            &pdoc(),
+            Shot {
+                base: Some(base(&m2, 6)),
+                draft: None,
+                runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 1), shot_run(&doc2(), &y, 1)],
+            },
+            &refusing_doc2
+        )),
+        PublishError::Withheld(d) if d == doc2()
+    ));
+    assert_eq!(
+        asked.borrow().as_slice(),
+        &[doc2()],
+        "asked once, about the run the base does not carry"
+    );
 }
 
 #[test]
@@ -1659,7 +1689,7 @@ fn the_source_gate_is_asked_about_the_world_it_found_the_origin_registered_in() 
         .create_new_document(sub, &a(&[1, 0, 1, 1]), Some(false))
         .expect("the sub-account mints a second private draft");
     let (atom, _) = vs
-        .insert(Caller::Principal(sub), &draft, vp(1, 1), vec![val(b"s")], false)
+        .insert(Caller::Principal(sub), &draft, vp(1, 1), vec![val(b"s")], Deposit::Undeclared)
         .expect("the draft holds a byte");
     assert!(
         !earlier.world().m3().is_registered_document(&draft),
@@ -1686,7 +1716,7 @@ fn the_source_gate_is_asked_about_the_world_it_found_the_origin_registered_in() 
         rejected(vs.publish(
             P1,
             &pdoc(),
-            &Shot { base: None, draft: None, runs: vec![shot_run(&draft, &atom, 1)] },
+            Shot { base: None, draft: None, runs: vec![shot_run(&draft, &atom, 1)] },
             &consult
         )),
         PublishError::Withheld(d) if d == draft
@@ -1711,7 +1741,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
     let plain = |runs: Vec<ShotRun>| Shot { base: None, draft: None, runs };
     // A private document has no chain (PUB-2.9).
     assert!(matches!(
-        rejected(vs.publish(P1, &doc1(), &plain(vec![shot_run(&doc1(), &ca(1), 1)]), &readable)),
+        rejected(vs.publish(P1, &doc1(), plain(vec![shot_run(&doc1(), &ca(1), 1)]), &readable)),
         PublishError::PrivateSourceVersionless
     ));
     // …and that refusal speaks ahead of the base's shape: doc1 is private
@@ -1722,7 +1752,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
         rejected(vs.publish(
             P1,
             &doc1(),
-            &Shot { base: Some(base(&pdoc(), 1)), draft: None, runs: vec![] },
+            Shot { base: Some(base(&pdoc(), 1)), draft: None, runs: vec![] },
             &readable
         )),
         PublishError::PrivateSourceVersionless
@@ -1731,31 +1761,31 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
     // base, then an origin.
     let un = a(&[1, 0, 1, 0, 9]);
     assert!(matches!(
-        rejected(vs.publish(P1, &un, &plain(vec![]), &readable)),
+        rejected(vs.publish(P1, &un, plain(vec![]), &readable)),
         PublishError::DocNotRegistered
     ));
     assert!(matches!(
         rejected(vs.publish(
             P1,
             &pdoc(),
-            &Shot { base: Some(base(&un, 1)), draft: None, runs: vec![] },
+            Shot { base: Some(base(&un, 1)), draft: None, runs: vec![] },
             &readable
         )),
         PublishError::SourceNotRegistered
     ));
     assert!(matches!(
-        rejected(vs.publish(P1, &pdoc(), &plain(vec![shot_run(&un, &a(&[1, 0, 1, 0, 9, 0, 1, 1]), 1)]), &readable)),
+        rejected(vs.publish(P1, &pdoc(), plain(vec![shot_run(&un, &a(&[1, 0, 1, 0, 9, 0, 1, 1]), 1)]), &readable)),
         PublishError::SourceNotRegistered
     ));
     // A run whose stated origin is not the document that minted it, and a
     // run whose start is a LINK element: neither is a content run of its
     // origin — refused on the request's own arithmetic.
     assert!(matches!(
-        rejected(vs.publish(P1, &pdoc(), &plain(vec![shot_run(&doc2(), &ca(1), 1)]), &readable)),
+        rejected(vs.publish(P1, &pdoc(), plain(vec![shot_run(&doc2(), &ca(1), 1)]), &readable)),
         PublishError::BadRun
     ));
     assert!(matches!(
-        rejected(vs.publish(P1, &pdoc(), &plain(vec![shot_run(&doc1(), &a(&[1, 0, 1, 0, 1, 0, 2, 1]), 1)]), &readable)),
+        rejected(vs.publish(P1, &pdoc(), plain(vec![shot_run(&doc1(), &a(&[1, 0, 1, 0, 1, 0, 2, 1]), 1)]), &readable)),
         PublishError::BadRun
     ));
     // The base: another document is not in the chain.
@@ -1763,7 +1793,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
         rejected(vs.publish(
             P1,
             &pdoc(),
-            &Shot { base: Some(base(&doc1(), 1)), draft: None, runs: vec![] },
+            Shot { base: Some(base(&doc1(), 1)), draft: None, runs: vec![] },
             &readable
         )),
         PublishError::BaseNotInChain
@@ -1771,17 +1801,17 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
     assert_eq!(k.current_seq(), before, "every refusal is a clean no-op");
     // Once a member exists, the birth shape and the memberless base are both
     // superseded (PUB-2.34, PUB-2.66) — the member must be named.
-    let (m1, _) = vs.publish(P1, &pdoc(), &plain(vec![shot_run(&pdoc(), &pca(1), 3)]), &readable).expect("birth");
+    let (m1, _) = vs.publish(P1, &pdoc(), plain(vec![shot_run(&pdoc(), &pca(1), 3)]), &readable).expect("birth");
     let after = k.current_seq();
     assert!(matches!(
-        rejected(vs.publish(P1, &pdoc(), &plain(vec![]), &readable)),
+        rejected(vs.publish(P1, &pdoc(), plain(vec![]), &readable)),
         PublishError::BaseSuperseded
     ));
     assert!(matches!(
         rejected(vs.publish(
             P1,
             &pdoc(),
-            &Shot { base: Some(base(&pdoc(), 3)), draft: None, runs: vec![] },
+            Shot { base: Some(base(&pdoc(), 3)), draft: None, runs: vec![] },
             &readable
         )),
         PublishError::BaseSuperseded
@@ -1791,7 +1821,7 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
     // Named, the member is a base — and a shot with no runs lands an EMPTY
     // member, read as the lazy empty arrangement.
     let (m2, _) = vs
-        .publish(P1, &pdoc(), &Shot { base: Some(base(&m1, 3)), draft: None, runs: vec![] }, &readable)
+        .publish(P1, &pdoc(), Shot { base: Some(base(&m1, 3)), draft: None, runs: vec![] }, &readable)
         .expect("an empty member");
     assert_eq!(k.snapshot().world().m5().content_count(&m2), n(0));
     assert_eq!(reading_surface(k.snapshot().world().m3(), &pdoc()), m2);
@@ -1811,11 +1841,11 @@ fn a_stated_origin_or_draft_that_is_no_document_is_refused_not_projected() {
     let readable = readable_by(PrincipalId(1));
     let (m1, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the first member");
     let (member_atom, _) = vs
-        .insert(P1, &m1, vp(1, 4), vec![val(b"z")], true)
+        .insert(P1, &m1, vp(1, 4), vec![val(b"z")], Deposit::Declared)
         .expect("a deposit named by the member, minted under its chain");
     assert_eq!(member_atom, vca(1));
     let shoot = |runs: Vec<ShotRun>, draft: Option<Address>| {
-        vs.publish(P1, &pdoc(), &Shot { base: Some(base(&m1, 4)), draft, runs }, &readable)
+        vs.publish(P1, &pdoc(), Shot { base: Some(base(&m1, 4)), draft, runs }, &readable)
     };
     let before = k.current_seq();
     // An element minted under the trunk, and one minted under a member.
@@ -1856,7 +1886,7 @@ fn a_shot_refused_at_its_last_check_leaves_no_member_no_mint_and_no_placement() 
         rejected(vs.publish(
             P1,
             &pdoc(),
-            &Shot {
+            Shot {
                 base: Some(base(&pdoc(), 3)),
                 draft: Some(doc1()),
                 runs: vec![
@@ -1874,7 +1904,7 @@ fn a_shot_refused_at_its_last_check_leaves_no_member_no_mint_and_no_placement() 
     assert!(!s.world().m3().is_registered_document(&vdoc()), "no member");
     assert_eq!(trunk_head(s.world().m3(), &pdoc()), None);
     // The content chain did not move: the next deposit lands at ordinal 4.
-    let (atom, _) = vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], true).expect("deposit");
+    let (atom, _) = vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], Deposit::Declared).expect("deposit");
     assert_eq!(atom, pca(4), "no content mint was committed by the refused shot");
     // And the ordinary shot still lands, so the refusal above is about the
     // dangling run and not about the surface being closed.
@@ -1882,7 +1912,7 @@ fn a_shot_refused_at_its_last_check_leaves_no_member_no_mint_and_no_placement() 
         .publish(
             P1,
             &pdoc(),
-            &Shot {
+            Shot {
                 base: Some(base(&pdoc(), 4)),
                 draft: Some(doc1()),
                 runs: vec![shot_run(&pdoc(), &pca(1), 4), shot_run(&doc1(), &ca(1), 3)],
@@ -1906,7 +1936,7 @@ fn a_deposit_into_a_published_chain_lands_in_the_head_member_alone() {
     let (m1, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the first member");
     assert_eq!(m1, vdoc());
     // Named by the bare address: minted under pdoc's chain, placed in m1.
-    let (atom, _) = vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], true).expect("deposit");
+    let (atom, _) = vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], Deposit::Declared).expect("deposit");
     assert_eq!(atom, pca(4));
     {
         let s = k.snapshot();
@@ -1917,10 +1947,10 @@ fn a_deposit_into_a_published_chain_lands_in_the_head_member_alone() {
     }
     // Named by the head itself: minted under the member's chain, placed in
     // it; judged fresh against the head's extent.
-    let (atom2, _) = vs.insert(P1, &m1, vp(1, 5), vec![val(b"y")], true).expect("deposit");
+    let (atom2, _) = vs.insert(P1, &m1, vp(1, 5), vec![val(b"y")], Deposit::Declared).expect("deposit");
     assert_eq!(atom2, vca(1));
     assert!(matches!(
-        rejected(vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"q")], true)),
+        rejected(vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"q")], Deposit::Declared)),
         InsertError::PublishedTarget
     ), "ordinal 4 is arranged in the head: not a deposit shape");
     // A second member: `version` shares the HEAD's arrangement (five
@@ -1935,7 +1965,7 @@ fn a_deposit_into_a_published_chain_lands_in_the_head_member_alone() {
     }
     // Named by the PINNED member m1: the deposit lands in the head m2, and
     // m1 never grows (PUB-2.66).
-    vs.insert(P1, &m1, vp(1, 6), vec![val(b"x")], true).expect("deposit named by a pinned member");
+    vs.insert(P1, &m1, vp(1, 6), vec![val(b"x")], Deposit::Declared).expect("deposit named by a pinned member");
     let s = k.snapshot();
     let m5 = s.world().m5();
     assert_eq!(m5.content_count(&m1), n(5), "a pinned member's arrangement never grows");
@@ -1959,7 +1989,7 @@ fn edit_ops_reject_a_sibling_principal_and_commit_nothing() {
     let p2 = Caller::Principal(PrincipalId(2));
     let before = k.current_seq();
     assert!(matches!(
-        rejected(vs.insert(p2, &doc1(), vp(1, 4), vec![val(b"x")], false)),
+        rejected(vs.insert(p2, &doc1(), vp(1, 4), vec![val(b"x")], Deposit::Undeclared)),
         InsertError::NotOwner(d) if d == doc1()
     ));
     assert!(matches!(
@@ -1985,7 +2015,7 @@ fn edit_ops_reject_a_sibling_principal_and_commit_nothing() {
     // The ω gate precedes every shape check INSERT makes: an empty value
     // list from a non-owner is refused as NotOwner, not as EmptyContent.
     assert!(matches!(
-        rejected(vs.insert(p2, &doc1(), vp(1, 1), vec![], false)),
+        rejected(vs.insert(p2, &doc1(), vp(1, 1), vec![], Deposit::Undeclared)),
         InsertError::NotOwner(d) if d == doc1()
     ));
     assert_eq!(k.current_seq(), before, "ownership rejections leave no state change");
@@ -2006,7 +2036,7 @@ fn an_unregistered_document_never_yields_an_ownership_verdict() {
     let un = a(&[1, 0, 1, 0, 9]);
     let p2 = Caller::Principal(PrincipalId(2));
     assert!(matches!(
-        rejected(vs.insert(p2, &un, vp(1, 1), vec![val(b"x")], false)),
+        rejected(vs.insert(p2, &un, vp(1, 1), vec![val(b"x")], Deposit::Undeclared)),
         InsertError::DocNotRegistered
     ));
     assert!(matches!(
@@ -2041,7 +2071,7 @@ fn the_system_caller_bypasses_the_owner_check_but_not_registration() {
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     let (start, _) = vs
-        .insert(Caller::System, &doc1(), vp(1, 1), vec![val(b"s")], false)
+        .insert(Caller::System, &doc1(), vp(1, 1), vec![val(b"s")], Deposit::Undeclared)
         .expect("the automation path writes without a principal");
     assert_eq!(start, ca(1));
     assert_eq!(
@@ -2051,11 +2081,11 @@ fn the_system_caller_bypasses_the_owner_check_but_not_registration() {
     // And into a document owned by a different principal — the exemption is
     // not "System happens to own this one".
     let subdoc = a(&[1, 0, 1, 1, 0, 1]);
-    vs.insert(Caller::System, &subdoc, vp(1, 1), vec![val(b"s")], false)
+    vs.insert(Caller::System, &subdoc, vp(1, 1), vec![val(b"s")], Deposit::Undeclared)
         .expect("no document's ω restricts the automation path");
     // Registration is not waived.
     assert!(matches!(
-        rejected(vs.insert(Caller::System, &a(&[1, 0, 1, 0, 9]), vp(1, 1), vec![val(b"x")], false)),
+        rejected(vs.insert(Caller::System, &a(&[1, 0, 1, 0, 9]), vp(1, 1), vec![val(b"x")], Deposit::Undeclared)),
         InsertError::DocNotRegistered
     ));
 }
@@ -2072,16 +2102,16 @@ fn ownership_is_exact_in_both_directions() {
     let subdoc = a(&[1, 0, 1, 1, 0, 1]);
     // Sub-delegated child vs the parent's doc.
     assert!(matches!(
-        rejected(vs.insert(sub, &doc1(), vp(1, 4), vec![val(b"x")], false)),
+        rejected(vs.insert(sub, &doc1(), vp(1, 4), vec![val(b"x")], Deposit::Undeclared)),
         InsertError::NotOwner(_)
     ));
     // Parent vs the child's doc.
     assert!(matches!(
-        rejected(vs.insert(P1, &subdoc, vp(1, 1), vec![val(b"x")], false)),
+        rejected(vs.insert(P1, &subdoc, vp(1, 1), vec![val(b"x")], Deposit::Undeclared)),
         InsertError::NotOwner(_)
     ));
     // The sub-account's own principal edits its own doc.
-    vs.insert(sub, &subdoc, vp(1, 1), vec![val(b"s")], false)
+    vs.insert(sub, &subdoc, vp(1, 1), vec![val(b"s")], Deposit::Undeclared)
         .expect("sub-owner insert commits");
 }
 
@@ -2217,7 +2247,7 @@ fn mixed_length_transclusion_flows_through_the_level_class_discipline() {
     let k = mem_kernel();
     let vs = deposit_abc(&k);
     let (fork, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("fork commits");
-    vs.insert(P1, &fork, vp(1, 4), vec![val(b"y"), val(b"z")], true)
+    vs.insert(P1, &fork, vp(1, 4), vec![val(b"y"), val(b"z")], Deposit::Declared)
         .expect("a deposit at the fork's fresh positions commits"); // mints vca(1..2), length 9
     vs.copy(
         P1,
@@ -2303,6 +2333,37 @@ fn reads_fold_an_absent_document_to_empty_results() {
     assert_eq!(m5.link_count(&doc1()), n(1));
 }
 
+// ---- the public values' standard traits ----
+
+#[test]
+fn the_public_values_key_a_hash_set_by_the_equality_they_compare_on() {
+    // A foreign crate cannot add `Hash` to M5's types (the orphan rule), so
+    // the promise is witnessed from one: each public value keys a set, and a
+    // repeat collapses there exactly as `==` says it should — the agreement
+    // between `Hash` and `Eq` every set and map rests on.
+    fn one_and_another<T: std::hash::Hash + Eq + Clone + std::fmt::Debug>(one: T, another: T) {
+        assert_ne!(one, another);
+        let set: std::collections::HashSet<T> = [one.clone(), another, one].into_iter().collect();
+        assert_eq!(set.len(), 2, "{set:?}");
+    }
+    let run = |start: &Address, width: u32| Run::new(start.clone(), n(width)).expect("a run");
+    // Two runs sharing a start are two runs: a run is its start AND width.
+    one_and_another(run(&ca(1), 2), run(&ca(1), 3));
+    one_and_another(vp(1, 2), vp(2, 1));
+    one_and_another(
+        VSpec { source: doc1(), span: vspan(1, 1, 2) },
+        VSpec { source: doc2(), span: vspan(1, 1, 2) },
+    );
+    one_and_another(P1, Caller::System);
+    one_and_another(Deposit::Declared, Deposit::Undeclared);
+    one_and_another(shot_run(&pdoc(), &pca(1), 1), shot_run(&pdoc(), &pca(1), 2));
+    one_and_another(base(&pdoc(), 1), base(&pdoc(), 2));
+    one_and_another(
+        Shot { base: None, draft: None, runs: vec![] },
+        Shot { base: Some(base(&pdoc(), 0)), draft: None, runs: vec![] },
+    );
+}
+
 // ---- M2-driven recovery: checkpoint load + tail replay ----
 
 #[test]
@@ -2325,9 +2386,9 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
     {
         let k = Kernel::<World>::open(cfg_fsync(dir.path()), genesis()).expect("open");
         let vs = Vstream::new(&k);
-        vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], false)
+        vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], Deposit::Undeclared)
             .expect("insert commits");
-        vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], true)
+        vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], Deposit::Declared)
             .expect("deposit commits");
         k.checkpoint().expect("checkpoint");
         vs.delete(P1, &doc1(), vp(1, 2), n(1)).expect("delete commits");
@@ -2337,7 +2398,7 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
         // A source deposit AFTER the fork: on replay the VersionSnapshot must
         // fold at its own journal slot and read pdoc as it was there, not as
         // the source ends up.
-        vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"d")], true)
+        vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"d")], Deposit::Declared)
             .expect("post-fork source deposit commits");
         // The shot: the edition's four positions by reference and doc1's
         // surviving `c` re-minted as fresh identity — the member holds five.
@@ -2346,7 +2407,7 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
             .publish(
                 P1,
                 &pdoc(),
-                &Shot {
+                Shot {
                     base: Some(base(&pdoc(), 4)),
                     draft: Some(doc1()),
                     runs: vec![shot_run(&pdoc(), &pca(1), 4), shot_run(&doc1(), &ca(3), 1)],
@@ -2389,6 +2450,6 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
     assert_eq!(reading_surface(s.world().m3(), &pdoc()), vdoc());
     // The recovered arrangement still drives edits.
     let vs = Vstream::new(&k);
-    vs.insert(P1, &doc1(), vp(1, 3), vec![val(b"e")], false)
+    vs.insert(P1, &doc1(), vp(1, 3), vec![val(b"e")], Deposit::Undeclared)
         .expect("post-recovery insert commits");
 }

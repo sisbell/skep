@@ -10,7 +10,7 @@
 use crate::common;
 
 use common::*;
-use skep_arrangement::HasM5;
+use skep_arrangement::{Deposit, HasM5};
 use skep_content::{HasContent, Val};
 use skep_engine::World;
 use skep_links::{coverage_class, HasLinks, ReservedAddrs, ShippedType, View};
@@ -177,7 +177,13 @@ fn no_reserved_address_is_ever_minted_and_the_ceremony_is_not_renumbered() {
     // (PUB-2.59, PUB-2.63).
     let (start, _) = engine
         .vstream()
-        .insert(OWNER, &doc1, vp(1, 1), vec![Val::new(vec![b'a']), Val::new(vec![b'b'])], true)
+        .insert(
+            OWNER,
+            &doc1,
+            vp(1, 1),
+            vec![Val::new(vec![b'a']), Val::new(vec![b'b'])],
+            Deposit::Declared,
+        )
         .expect("insert into the ghost doc succeeds");
     assert_eq!(
         start,

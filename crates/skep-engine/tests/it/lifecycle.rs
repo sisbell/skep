@@ -10,6 +10,7 @@ use crate::common;
 
 use common::*;
 use skep_address::Address;
+use skep_arrangement::Deposit;
 use skep_content::Val;
 use skep_discovery::findlinks_v_on;
 use skep_engine::{Engine, World};
@@ -51,7 +52,7 @@ fn a_cross_store_lifecycle_survives_a_journal_reopen() {
                 &doc,
                 vp(1, 1),
                 vec![Val::new(vec![b'x']), Val::new(vec![b'y']), Val::new(vec![b'z'])],
-                true,
+                Deposit::Declared,
             )
             .expect("insert succeeds");
 

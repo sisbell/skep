@@ -42,7 +42,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
-use skep_arrangement::{seat_link, Caller, HasM5, M5State, VPos, VSpec, Vstream};
+use skep_arrangement::{seat_link, Caller, Deposit, HasM5, M5State, VPos, VSpec, Vstream};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
@@ -298,7 +298,7 @@ fn mem_kernel() -> Kernel<World> {
 /// doc1 arranged with content a, b, c (ca1..ca3).
 fn insert3(k: &Kernel<World>) -> Vstream<'_, World> {
     let vs = Vstream::new(k);
-    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], false)
+    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], Deposit::Undeclared)
         .expect("insert commits");
     vs
 }
@@ -308,7 +308,7 @@ fn insert3(k: &Kernel<World>) -> Vstream<'_, World> {
 /// (PUB-2.59, PUB-9.13).
 fn deposit3(k: &Kernel<World>) -> Vstream<'_, World> {
     let vs = Vstream::new(k);
-    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], true)
+    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], Deposit::Declared)
         .expect("deposit commits");
     vs
 }
@@ -319,7 +319,7 @@ fn deposit3(k: &Kernel<World>) -> Vstream<'_, World> {
 /// per-run claim in this module is about.
 fn three_runs(k: &Kernel<World>) -> Vstream<'_, World> {
     let vs = insert3(k);
-    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"x")], false)
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"x")], Deposit::Undeclared)
         .expect("insert commits");
     vs.copy(
         P1,
@@ -369,7 +369,7 @@ fn fanout_doc2(k: &Kernel<World>) -> Vstream<'_, World> {
         }],
     )
     .expect("copy commits");
-    vs.insert(P1, &doc2(), vp(1, 3), vec![val(b"a")], false)
+    vs.insert(P1, &doc2(), vp(1, 3), vec![val(b"a")], Deposit::Undeclared)
         .expect("insert commits");
     vs
 }
@@ -444,7 +444,7 @@ fn a_query_answers_from_its_pinned_snapshot_after_later_commits() {
     let vs = insert3(&k);
     let s = k.snapshot();
     let q = Query::new(&s);
-    vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d")], false)
+    vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d")], Deposit::Undeclared)
         .expect("insert commits");
     assert_ne!(
         k.current_seq(),
@@ -672,7 +672,7 @@ fn retrieve_v_delivers_exactly_the_spans_intersection_with_the_bound_prefix() {
     // landing exactly on the end) are visited too.
     let k = mem_kernel();
     let vs = insert3(&k);
-    vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d")], false)
+    vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d")], Deposit::Undeclared)
         .expect("insert commits");
     let s = k.snapshot();
     let q = Query::new(&s);
@@ -1024,7 +1024,7 @@ fn show_origin_v_projects_an_origin_at_whatever_depth_its_document_sits() {
     let (fork, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("fork commits");
     assert_eq!(fork, vdoc()); // one component deeper than its source…
     let (start, _) = vs
-        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], true)
+        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], Deposit::Declared)
         .expect("fork deposit commits");
     assert_eq!(start, vca(1)); // …and its own chain one component longer
     let s = k.snapshot();
@@ -2011,7 +2011,7 @@ fn find_docs_containing_filters_to_present_tense_containers() {
     let (fork, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("fork commits");
     assert_eq!(fork, vdoc()); // shares pdoc's three
     let (start, _) = vs
-        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], true)
+        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], Deposit::Declared)
         .expect("fork deposit commits");
     assert_eq!(start, vca(1)); // the fork's chain mints LENGTH-9 elements
     vs.copy(

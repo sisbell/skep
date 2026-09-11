@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // `m3()`/`m5()`/`links()` methods the read arms call, so no accessor trait
 // is imported here by name.
 use skep_address::{checked_inc, document_of, Address};
-use skep_arrangement::{trunk_of, Caller, M5Rec};
+use skep_arrangement::{trunk_of, Caller, Deposit, M5Rec};
 use skep_content::ContentWrite;
 use skep_discovery::{
     addressably_discoverable_from_on, count_ftt_on, count_v_on, delete_orphans_on,
@@ -592,6 +592,10 @@ where
             //    session caller — the ownership ruling, 2026-08-16; the
             //    version-chain refusals in-store too, D2b) ──
             Op::Insert { doc, at, values, deposit } => {
+                // The wire's declaration becomes M5's value here, both arms
+                // spelled: the exemption is claimed only by a `true` the
+                // client sent (PUB-9.13).
+                let deposit = if deposit { Deposit::Declared } else { Deposit::Undeclared };
                 let (start, committed_at) = self
                     .stores
                     .vstream()
@@ -648,7 +652,7 @@ where
                 let (addr, at) = self
                     .stores
                     .vstream()
-                    .publish(wc.caller(), &doc, &shot, &readable)
+                    .publish(wc.caller(), &doc, shot, &readable)
                     .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }

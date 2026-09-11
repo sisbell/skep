@@ -11,7 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
-use skep_arrangement::{HasM5, M5Rec, M5State, VPos, VSpec};
+use skep_arrangement::{Deposit, HasM5, M5Rec, M5State, VPos, VSpec};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, WorldState};
 use skep_links::{enc, Caller, Endset, HasLinks, LinkRec, LinkState, ReservedAddrs};
@@ -324,7 +324,7 @@ pub fn kernel() -> Kernel<World> {
 pub fn seed_content(k: &Kernel<World>, doc: &Address, count: u32) {
     let vals: Vec<Val> = (0..count).map(|i| Val::new(vec![b'a' + i as u8])).collect();
     skep_arrangement::Vstream::new(k)
-        .insert(Caller::System, doc, vp(1, 1), vals, false)
+        .insert(Caller::System, doc, vp(1, 1), vals, Deposit::Undeclared)
         .expect("test content INSERT succeeds");
 }
 
@@ -343,7 +343,7 @@ pub fn fragment_content(k: &Kernel<World>, doc: &Address, runs: u32) {
                 doc,
                 vp(1, 1),
                 vec![Val::new(vec![b'a' + (i % 26) as u8])],
-                false,
+                Deposit::Undeclared,
             )
             .expect("test content INSERT succeeds");
     }

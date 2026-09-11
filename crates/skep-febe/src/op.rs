@@ -121,7 +121,8 @@ pub enum Op {
     /// past the arranged extent — where an undeclared one, or a declared one
     /// touching an arranged position, refuses `published_target` (PUB-2.11).
     /// Absent on the wire is `false`; into a draft the flag is inert. M10
-    /// passes it through verbatim, deciding nothing.
+    /// hands it to M5 as M5's `Deposit` — `true` as `Declared`, `false` as
+    /// `Undeclared` — deciding nothing.
     Insert { doc: Address, at: VPos, values: Vec<Val>, deposit: bool },
     /// DELETE (ASN-0117).
     Delete { doc: Address, p: VPos, width: Nat },

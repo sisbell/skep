@@ -53,7 +53,7 @@
 //! through [`published_target`], after [`trunk_of`] has projected a version
 //! member to its document (PUB-2.15). The refusals are enforced here,
 //! whatever runs ahead of the store. The one exemption is the DECLARED deposit
-//! (PUB-9.13's DECLARED horn): `insert` takes a `deposit` declaration, and a
+//! (PUB-9.13's DECLARED horn): `insert` takes a [`Deposit`] declaration, and a
 //! declared insert at fresh positions of a published document is admitted
 //! (PUB-2.59, PUB-2.61); an undeclared append, or a declared one that
 //! touches an arranged position, refuses — the declaration is a claim the
@@ -148,7 +148,7 @@ pub use chain::{deposit_surface, published_target, reading_surface, trunk_head, 
 pub use error::{
     CopyError, DeleteError, InsertError, PublishError, RearrangeError, SeatError, VersionError,
 };
-pub use ops::{Vstream, MAX_PLACED_RUNS};
+pub use ops::{Deposit, Vstream, MAX_PLACED_RUNS};
 pub use run::Run;
 pub use seat::{seat_link, stage_seat_link};
 pub use shot::{Base, Shot, ShotRun};

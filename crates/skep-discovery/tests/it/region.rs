@@ -203,12 +203,11 @@ fn image_returns_runs_in_region_span_order_then_v_order() {
     );
 }
 
-/// §1 — the dedup keys on `(i_start, width)`, which is exactly `Run`'s
-/// equality and not one component of it. Two runs sharing a start and
+/// §1 — the dedup keys on the whole run, `(i_start, width)`, which is exactly
+/// `Run`'s equality and not one component of it. Two runs sharing a start and
 /// differing in width are two runs, and a key that dropped the width would
-/// collapse them — the one mistake the spelled-out key can make, since `Run`
-/// itself carries no `Hash`. `resolve` clips to the span asked for, so two
-/// nested region spans over one arranged run produce exactly that pair.
+/// collapse them. `resolve` clips to the span asked for, so two nested region
+/// spans over one arranged run produce exactly that pair.
 #[test]
 fn image_dedups_on_a_runs_whole_identity_not_its_start() {
     let k = kernel();

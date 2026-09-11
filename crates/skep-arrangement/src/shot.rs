@@ -32,7 +32,7 @@ use crate::run::Run;
 /// `run` is the I-run: a content element start and a width ≥ 1, built
 /// through [`Run::new`], the one foreign constructor — so a shot cannot name
 /// a zero-width run or a start that is not a full element position.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ShotRun {
     /// The document the run windows, as the client states it — a member or
     /// the document it projects to; the composite compares it projected
@@ -57,7 +57,7 @@ pub struct ShotRun {
 /// (PUB-2.45). A pinned base never grows, so for a daughter shot the extent
 /// equals the base's current count and nothing is appended. An extent past
 /// the base's current count is a request defect (`BaseExtentTooLarge`).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Base {
     /// The member (or memberless document) the draft was copied from.
     pub member: Address,
@@ -76,7 +76,7 @@ pub struct Base {
 /// run is placed by reference. `runs` is the WHOLE arrangement the client
 /// rendered (PUB-2.33 as amended); the composite appends the base's
 /// post-render deposits after it (PUB-2.42, PUB-2.45).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Shot {
     /// The member the draft was staged from, with the extent the copy took;
     /// absent for the birth version.

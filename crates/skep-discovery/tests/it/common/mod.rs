@@ -13,7 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
-use skep_arrangement::{reading_surface, HasM5, M5Rec, M5State, Run, VPos, VSpec};
+use skep_arrangement::{reading_surface, Deposit, HasM5, M5Rec, M5State, Run, VPos, VSpec};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_discovery::{
     addressably_discoverable_from_on, count_ftt_on, count_v_on, delete_orphans_on,
@@ -335,7 +335,7 @@ pub const SYS: skep_arrangement::Caller = skep_arrangement::Caller::System;
 pub fn seed_content(k: &Kernel<World>, doc: &Address, count: u32) {
     let vals: Vec<Val> = (0..count).map(|i| Val::new(vec![b'a' + i as u8])).collect();
     skep_arrangement::Vstream::new(k)
-        .insert(SYS, doc, vp(1, 1), vals, false)
+        .insert(SYS, doc, vp(1, 1), vals, Deposit::Undeclared)
         .expect("test content INSERT succeeds");
 }
 
@@ -361,7 +361,7 @@ pub fn seed_published_content(k: &Kernel<World>, doc: &Address, count: u32) {
                 ordinal: fresh,
             },
             vals,
-            true,
+            Deposit::Declared,
         )
         .expect("a declared deposit at the fresh end is admitted into a published document");
 }

@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use common::*;
 use skep_address::{validate, Address, Tumbler};
-use skep_arrangement::VersionError;
+use skep_arrangement::{Deposit, VersionError};
 use skep_content::Val;
 use skep_engine::{Engine, EngineError, OpenError, World};
 use skep_kernel::TxnError;
@@ -347,7 +347,13 @@ fn an_undecodable_checkpoint_with_no_older_start_point_refuses_to_open() {
         // closes the first.
         engine
             .vstream()
-            .insert(OWNER, &docs.drafts[0], vp(1, 1), vec![Val::new(vec![b'x'; (1 << 20) + (1 << 16)])], false)
+            .insert(
+                OWNER,
+                &docs.drafts[0],
+                vp(1, 1),
+                vec![Val::new(vec![b'x'; (1 << 20) + (1 << 16)])],
+                Deposit::Undeclared,
+            )
             .expect("a large insert commits");
         engine.namespace().create_new_document(USER, &docs.acct, None).expect("the rotating commit");
         // The checkpoint at head reclaims the closed first segment below it.

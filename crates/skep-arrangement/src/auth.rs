@@ -1,11 +1,12 @@
 //! The write-surface ownership gate (as amended 2026-08-16, ownership
-//! ruling): ONE caller identity type and ONE predicate, shared by M5's edit
-//! ops and (by re-export) M7's link-deposit ops, so "who may write into this
-//! document's space" has a single definition everywhere — and the one front
-//! door that asks it, [`gate_write`], registration first.
+//! ruling): ONE caller identity type and ONE ownership predicate, shared by
+//! M5's write surface and (by re-export) M7's link-deposit ops, so the ω half
+//! of "who may write into this document's space" has one definition
+//! everywhere — and M5's front door, [`gate_write`], which asks registration
+//! first and that predicate second.
 //!
-//! The predicate is M3's ω ([`M3State::effective_owner`] — the longest
-//! registered account/node-tier prefix), compared by principal id: the
+//! The predicate is M3's [`M3State::is_effective_owner`] — ω, the longest
+//! registered account/node-tier prefix, compared by principal id: the
 //! caller's account must be EXACTLY the document's account. Exactness is
 //! load-bearing in both directions (ASN-0042 exclusive delegation, O2/O3/O8
 //! — the deliberate fix of green's `tumbleraccounteq`): a parent account

@@ -226,9 +226,12 @@ pub enum SeatError {
     AlreadySeated,
 }
 
-// `?`-desugaring conversions the in-closure mint/write calls depend on
-// (INSERT: `mint_content(doc)?`, `stage_write(…)?`; VERSION:
-// `mint_version`/`mint_document … ?`).
+// `?`-desugaring conversions the in-closure mint/write calls depend on:
+// `allocate_for_placement`'s `mint_content(home)?` and `stage_write(…)?` —
+// the step INSERT and the shot share, whose bound
+// (`E: From<MintError> + From<ContentError>`) these impls discharge — the
+// shot's own `mint_version(…)?`, and VERSION's
+// `mint_version`/`mint_document … ?`.
 
 impl From<MintError> for InsertError {
     fn from(e: MintError) -> Self {

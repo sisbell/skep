@@ -44,7 +44,7 @@ use std::fmt;
 use num_traits::{One, Zero};
 use skep_address::{content_subspace, document_of, Address, Nat};
 use skep_content::{stage_write, ContentError, ContentWrite, HasContent, Val};
-use skep_kernel::{Kernel, Seq, Staging, TxnError, WorldState};
+use skep_kernel::{Kernel, LockKey, Seq, Staging, TxnError, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State, MintError, PrincipalId};
 
 use crate::auth::{gate_write, Caller};
@@ -183,15 +183,16 @@ impl<W: WorldState> fmt::Debug for Vstream<'_, W> {
 
 impl<W> Vstream<'_, W>
 where
-    W: WorldState + HasM5 + HasM3 + HasContent, // reads M3 (registration, mints) + M4 (write) + M5
+    W: WorldState + HasM5 + HasM3 + HasContent, // reads M3 (registration, mints) + M4 (writes, and the shot's byte reads) + M5
     W::Record: From<M5Rec> + From<M3Rec> + From<ContentWrite>, // stages M3Rec + ContentWrite + M5Rec
 {
     /// INSERT (ASN-0116; §3): mint n fresh content addresses (M3), write
     /// their bytes (M4), splice the run at `at` (content subspace), record
     /// provenance — one M2 composite under
-    /// `M3State::content_lock_key(doc)` and, for a declared deposit, its
-    /// document's `version_lock_key`. Returns the inserted run's START
-    /// address (the predicate-def identity for M9) and the commit `Seq`.
+    /// `M3State::content_lock_key(doc)` and, for a declared deposit, the
+    /// chain's head key (`head_lock_key`: the trunk's `version_lock_key`).
+    /// Returns the inserted run's START address (the predicate-def identity
+    /// for M9) and the commit `Seq`.
     ///
     /// Check order (which error wins): `DocNotRegistered` → `NotOwner` (the
     /// in-txn ω gate) → `PublishedTarget` (below) → `EmptyContent` →
@@ -291,17 +292,14 @@ where
         values: Vec<Val>,
         deposit: Deposit,
     ) -> Result<(Address, Seq), TxnError<InsertError>> {
-        // The mint chain's key, and — for a declared deposit — the key of the
-        // chain frontier it reads to find where it lands on a published
-        // document (`deposit_surface` → `trunk_head`). Every transaction that
-        // advances that frontier, or writes the arrangement a published
-        // chain's deposits land in, holds the same key, so the landing decided
-        // inside cannot move under it. Both keys are arithmetic on the
-        // request; neither is read from the world.
+        // The mint chain's key, and — for a declared deposit, which reads the
+        // chain's frontier to find where it lands — the head's
+        // (`head_lock_key`), so the landing decided inside cannot move under
+        // it. Both are arithmetic on the request.
         let declared = deposit == Deposit::Declared;
         let mut keys = vec![M3State::content_lock_key(doc)];
         if declared {
-            keys.push(M3State::version_lock_key(&trunk_of(doc)));
+            keys.push(head_lock_key(doc));
         }
         self.kernel.transact(&keys, |stg| {
             gate_write(
@@ -458,12 +456,13 @@ where
     /// (M2 answers that nested write with its reentrancy panic, the caller's
     /// bug), and every other writer waits while it answers.
     ///
-    /// LOCKS: `version_lock_key(trunk_of(doc))` (the trunk's frontier),
-    /// `content_lock_key(trunk_of(doc))` (the fresh-identity mints), and the
-    /// base's own version key when the base is a member — the daughter
-    /// chain's frontier, taken since which chain the member joins is decided
-    /// inside. Every origin is read off the transaction's working world; no
-    /// origin is locked (a window is a reference).
+    /// LOCKS: the chain's head key (`head_lock_key(doc)`, the trunk's
+    /// `version_lock_key`), `content_lock_key(trunk_of(doc))` (the
+    /// fresh-identity mints), and the base's own version key when the base is
+    /// a member — the daughter chain's frontier, taken since which chain the
+    /// member joins is decided inside. Every origin is read off the
+    /// transaction's working world; no origin is locked (a window is a
+    /// reference).
     ///
     /// A member address given as `doc` is projected to its document first:
     /// the shot is the document's, whichever member names it.
@@ -497,10 +496,7 @@ where
         readable: &dyn Fn(&W, &Address) -> bool,
     ) -> Result<(Address, Seq), TxnError<PublishError>> {
         let trunk = trunk_of(doc);
-        let mut keys = vec![
-            M3State::version_lock_key(&trunk),
-            M3State::content_lock_key(&trunk),
-        ];
+        let mut keys = vec![head_lock_key(doc), M3State::content_lock_key(&trunk)];
         if let Some(base) = &shot.base {
             if base.member != trunk {
                 keys.push(M3State::version_lock_key(&base.member));
@@ -735,6 +731,26 @@ where
         },
     );
     Ok(())
+}
+
+/// The key a published chain's HEAD serializes under: which member heads it
+/// (the frontier [`trunk_head`] reads and a trunk member's mint advances) and
+/// what that head's arrangement holds (where every declared deposit into the
+/// chain lands — the document's own while it has no member). No key of M5's
+/// own: the trunk's `version_lock_key`, taken by arithmetic on the address
+/// named, so a transaction holds it before it knows where the head is.
+///
+/// Every transaction that moves the head holds it — a declared deposit, which
+/// writes the head's arrangement and reads the frontier to find it; the shot,
+/// which advances the frontier and carries its base's tail; an owned
+/// `version` of the trunk, which advances the frontier — and so does every
+/// `version`, whose snapshot takes its source's reading surface off that
+/// frontier. An operation that moves a published chain's head, or reads its
+/// frontier to find it, joins this list. COPY is not on it: its source spans
+/// are read at the address named, so it never asks the frontier where the
+/// head is.
+fn head_lock_key(doc: &Address) -> LockKey {
+    M3State::version_lock_key(&trunk_of(doc))
 }
 
 impl<W> Vstream<'_, W>
@@ -1083,8 +1099,11 @@ where
     /// subspace (the multiplicity-preserving V→I map share, V2), record
     /// provenance. Returns the new document address and the commit `Seq`.
     ///
-    /// `ω(source)` is pre-read off a snapshot (stable for an existing
-    /// document, per M3) to choose branch + lock key: an owned fork mints
+    /// Whether `principal` owns `source` is asked of M3's authorization
+    /// predicate — `is_effective_owner`, the ω rule every write gate asks
+    /// through [`Caller::is_owner`], so ownership has one spelling here just
+    /// as the P-tier rule below does — off a snapshot (stable for an existing
+    /// document, per M3), to choose branch + lock key: an owned fork mints
     /// `mint_version(source, bit)` under `version_lock_key(source)`
     /// (serializing forks of that source); a cross-owner fork requires the
     /// forker's prefix to be a registered ACCOUNT — M3's
@@ -1093,11 +1112,10 @@ where
     /// surfaces `NodeTierCrossOwner` BEFORE any mint rather than obliquely as
     /// `Mint(NotAnAccount)` — and mints `mint_document(prefix, bit)` under
     /// `document_lock_key(prefix)`. Either branch also holds the source's
-    /// TRUNK `version_lock_key`: the fork snapshots its source's reading
-    /// surface (below), and a published chain's frontier and head
-    /// arrangement serialize under that key (§Serialization key). On the
-    /// owned arm of a trunk the two keys are one, which M2 normalizes.
-    /// Source untouched (V3); the fork diverges copy-on-write (V11).
+    /// head key (`head_lock_key`, the trunk's `version_lock_key`), since the
+    /// fork snapshots its source's reading surface (below). On the owned arm
+    /// of a trunk the two keys are one, which M2 normalizes. Source untouched
+    /// (V3); the fork diverges copy-on-write (V11).
     ///
     /// THE PUBLICATION BIT (PUB round 1): the new document's RESOLVED
     /// publication state, which THIS composite resolves off its own working
@@ -1135,8 +1153,8 @@ where
     ///
     /// ALL THREE PRE-TRANSACTION READS ARE OFF A SNAPSHOT, taken before the
     /// applier lock and so possibly stale by the time the transaction runs,
-    /// and each is sound for its own reason. `ω(source)` is stable for an
-    /// existing document (per M3), which is what makes the branch and the
+    /// and each is sound for its own reason. The ownership read is stable for
+    /// an existing document (per M3), which is what makes the branch and the
     /// lock key safe to choose before the transaction opens. The two
     /// REGISTRATION reads — `is_registered_document(source)` and
     /// `is_registered_account(prefix)` — are sound because M3's registrations
@@ -1232,21 +1250,20 @@ where
         if !m3.is_registered_document(source) {
             return Err(TxnError::Rejected(VersionError::SourceNotRegistered));
         }
-        let (key, branch) = match m3.effective_owner(source) {
-            Some(p) if p == principal => (M3State::version_lock_key(source), Branch::Owned),
-            _ => {
-                // Cross-owner fork.
-                let prefix = m3
-                    .principal_prefix(principal)
-                    .cloned()
-                    .ok_or_else(|| TxnError::Rejected(VersionError::NotAPrincipal))?;
-                if !m3.is_registered_account(&prefix) {
-                    return Err(TxnError::Rejected(VersionError::NodeTierCrossOwner));
-                }
-                (M3State::document_lock_key(&prefix), Branch::CrossOwner(prefix))
+        let (key, branch) = if m3.is_effective_owner(principal, source) {
+            (M3State::version_lock_key(source), Branch::Owned)
+        } else {
+            // Cross-owner fork.
+            let prefix = m3
+                .principal_prefix(principal)
+                .cloned()
+                .ok_or_else(|| TxnError::Rejected(VersionError::NotAPrincipal))?;
+            if !m3.is_registered_account(&prefix) {
+                return Err(TxnError::Rejected(VersionError::NodeTierCrossOwner));
             }
+            (M3State::document_lock_key(&prefix), Branch::CrossOwner(prefix))
         };
-        let keys = [key, M3State::version_lock_key(&trunk_of(source))];
+        let keys = [key, head_lock_key(source)];
         self.kernel.transact(&keys, |stg| {
             let m3 = stg.working().m3();
             // PUB-8.16/8.17: resolve the three-valued flag off this

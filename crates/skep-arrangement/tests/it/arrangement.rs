@@ -886,6 +886,50 @@ fn cross_owner_version_mints_under_the_forkers_account() {
 }
 
 #[test]
+fn a_parent_accounts_principal_versions_its_sub_accounts_document_across_ownership() {
+    // ω is EXACT on `version`'s arm as on the write gates (ASN-0042
+    // O2/O3/O8): the parent account [1,0,1] contains the sub-account's
+    // document by prefix, but its principal is not that document's effective
+    // owner, so its fork takes the CROSS-OWNER arm — a fresh document in its
+    // own account, inheriting the source's private bit — and never the owned
+    // arm, where a private source is refused `PrivateSourceVersionless`. Read
+    // by containment, the arm would give that refusal. (M5 knows no read
+    // rights, and this suite drives M5 directly: the source gate M10 runs
+    // ahead of the store plays no part here.)
+    let k = mem_kernel();
+    let vs = Vstream::new(&k);
+    let subdoc = a(&[1, 0, 1, 1, 0, 1]);
+    vs.insert(
+        Caller::Principal(PrincipalId(3)),
+        &subdoc,
+        vp(1, 1),
+        vec![val(b"s")],
+        Deposit::Undeclared,
+    )
+    .expect("the sub-account's principal edits its own draft");
+    let (fork, _) = vs
+        .version(PrincipalId(1), &subdoc, None)
+        .expect("the parent's principal forks across ownership");
+    let s = k.snapshot();
+    let m3 = s.world().m3();
+    assert!(
+        m3.is_effective_owner(PrincipalId(1), &fork),
+        "minted in the forker's own account"
+    );
+    assert!(!m3.published(&fork), "inheriting the private source's bit");
+    assert_eq!(
+        s.world().m5().content_runs(&fork),
+        s.world().m5().content_runs(&subdoc)
+    );
+    // The sub-account's own principal is on the owned arm, and its private
+    // draft is versionless, as any owner's is.
+    assert!(matches!(
+        rejected(vs.version(PrincipalId(3), &subdoc, None)),
+        VersionError::PrivateSourceVersionless
+    ));
+}
+
+#[test]
 fn version_of_an_empty_source_has_a_zero_content_footprint() {
     // ASN-0123 V1: n = 0 — the fork exists (registered) with an empty
     // arrangement and no provenance. The empty source is the published

@@ -1624,6 +1624,22 @@ fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
         )),
         PublishError::DanglingSource
     ));
+    // (5) the base's shape speaks ahead of the gate: an extent past what the
+    //     older member m1 holds, beside a run m1 does not carry onto an
+    //     origin the consult would refuse. The run is not carried, so the
+    //     gate would ask about it — and it is never asked.
+    asked.borrow_mut().clear();
+    let refusing = consult_reading(&asked, vec![]);
+    assert!(matches!(
+        rejected(vs.publish(
+            P1,
+            &pdoc(),
+            &Shot { base: Some(base(&m1, 99)), draft: None, runs: vec![shot_run(&subdoc, &dangling, 1)] },
+            &refusing
+        )),
+        PublishError::BaseExtentTooLarge
+    ));
+    assert!(asked.borrow().is_empty(), "no consult before the base's shape is settled");
 }
 
 #[test]
@@ -1640,6 +1656,19 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
     // A private document has no chain (PUB-2.9).
     assert!(matches!(
         rejected(vs.publish(P1, &doc1(), &plain(vec![shot_run(&doc1(), &ca(1), 1)]), &readable)),
+        PublishError::PrivateSourceVersionless
+    ));
+    // …and that refusal speaks ahead of the base's shape: doc1 is private
+    // AND the base names the edition, which is no member of doc1's chain.
+    // Read the other way round — the base's shape first — the answer would
+    // be `BaseNotInChain`.
+    assert!(matches!(
+        rejected(vs.publish(
+            P1,
+            &doc1(),
+            &Shot { base: Some(base(&pdoc(), 1)), draft: None, runs: vec![] },
+            &readable
+        )),
         PublishError::PrivateSourceVersionless
     ));
     // Registration ahead of everything (PUB-6.37): the document, then the

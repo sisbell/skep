@@ -240,6 +240,24 @@ impl M5State {
         self.content_list(doc).covers(run)
     }
 
+    /// The content runs of `doc` PAST ordinal `extent` — positions
+    /// `[extent + 1, n_C]`, V-ordered, the boundary run clipped, and nothing
+    /// at all when `extent ≥ n_C`. The publish shot's carried tail (PUB-2.42,
+    /// PUB-2.45): a published member changes only by deposits appended at
+    /// fresh positions (PUB-2.43), so its positions past the extent a staged
+    /// copy took are exactly the deposits that copy's render post-dates.
+    /// Asked of the arrangement, which knows where its content ends, so the
+    /// shot names a boundary and derives no count of its own.
+    ///
+    /// Answered off the run-list's own clipped resolution: a count of `n_C`
+    /// from any opening ordinal reaches past the arranged end, where the
+    /// resolution clips. Lazy as that resolution is, so a consumer with a
+    /// budget of its own stops the walk at it. Absent doc ⇒ nothing.
+    pub(crate) fn content_runs_past(&self, doc: &Address, extent: &Nat) -> impl Iterator<Item = Run> + '_ {
+        let list = self.content_list(doc);
+        list.iter_resolve_range(&(extent + &Nat::one()), &list.total_width())
+    }
+
     /// Is `link` already seated in `doc`'s link subspace (§8, CL-UNIQ)? The
     /// link run-list's own membership answer, so a link INTERIOR to a
     /// coalesced link run counts as seated. Absent doc ⇒ not seated.
@@ -513,6 +531,23 @@ mod tests {
         assert!(s.seats_link(&doc1(), &la(2)));
         assert!(!s.seats_link(&doc1(), &la(3)));
         assert!(!s.seats_link(&doc2(), &la(1)));
+    }
+
+    #[test]
+    fn the_runs_past_an_extent_are_the_arrangements_own_tail() {
+        // PUB-2.42/2.45: the shot carries a base's positions past the extent
+        // its staged copy took, and the arrangement answers which runs those
+        // are — from any extent, across a transclusion seam, the boundary run
+        // clipped, and nothing once the extent reaches the end.
+        let s = arranged(); // ca(1..3) then vca(1..2): n_C = 5
+        let past = |extent: u32| s.content_runs_past(&doc1(), &n(extent)).collect::<Vec<_>>();
+        assert_eq!(past(0), vec![run(&ca(1), 3), run(&vca(1), 2)]);
+        assert_eq!(past(2), vec![run(&ca(3), 1), run(&vca(1), 2)]);
+        assert_eq!(past(3), vec![run(&vca(1), 2)]);
+        assert_eq!(past(4), vec![run(&vca(2), 1)]);
+        assert!(past(5).is_empty(), "an extent at the end carries nothing");
+        assert!(past(9).is_empty(), "nor one past it");
+        assert_eq!(s.content_runs_past(&doc2(), &n(0)).next(), None, "absent doc");
     }
 
     #[test]

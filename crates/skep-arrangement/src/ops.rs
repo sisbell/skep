@@ -5,29 +5,47 @@
 //! A REJECTION LEAVES NO STATE CHANGE, and that is M2's guarantee rather than
 //! an ordering these ops keep: `transact` returns `TxnError::Rejected(E)`
 //! straight out of the closure phase, discarding the staging, drawing no
-//! `Seq` and appending nothing. Four of the five ops do reject before staging
-//! anything; INSERT cannot, since its per-value mint and content write are
-//! staged as they are made and either may reject on a later value.
+//! `Seq` and appending nothing. Four of the six ops do reject before staging
+//! anything; INSERT and the publish shot cannot, since each stages a mint and
+//! a content write per fresh value as it goes ([`allocate_for_placement`],
+//! J0's one step) and may reject after them — on a later value, and for the
+//! shot on its run budget or its own version mint as well.
 //! M10 surfaces the rejection as a typed one and acknowledges only after
 //! commit.
 //!
-//! Ownership: the four edit ops take a [`Caller`] and open with
-//! [`gate_write`] — the in-txn ω gate — on the document whose arrangement
-//! they write (COPY: destination only; VERSION is ungated, non-owner
-//! versioning being denial-as-fork, O10).
+//! Ownership: five ops take a [`Caller`] and open with [`gate_write`] — the
+//! in-txn ω gate — on the address the caller NAMES: the four edits and the
+//! shot (COPY: its destination only; VERSION is ungated, non-owner
+//! versioning being denial-as-fork, O10). The address named is not always
+//! the arrangement written. A DEPOSIT into a published chain that has a head
+//! lands on that head ([`deposit_surface`]) rather than in the named
+//! address's arrangement, and a shot writes only the member it mints; both
+//! are members of the named document's chain, minted under it, so the owner
+//! the gate checked is theirs too.
 //!
 //! Publication (PUB round 2, lane 3.1; owner ruling D2b): directly after
 //! that gate, in the SAME transact and reading the working state's
 //! publication bit on the registered address the gate just established
 //! (PUB-6.37), each of the four edits refuses `PublishedTarget` when the
-//! target's DOCUMENT is published (PUB-2.11; a version member projects to
-//! its document first, [`trunk_of`], PUB-2.15) — `insert` alone admitting a
-//! DECLARED deposit at a fresh position (PUB-2.59, PUB-9.13) — and `version`
-//! refuses `PrivateSourceVersionless` / `PrivateVersionOfPublished` on the
-//! own-source arm (PUB-2.9, PUB-2.7). That is PUB-6.36's slot 5, evaluated
-//! here and nowhere else; the daemon's publish-class gate (slot 4) has
-//! already run pre-dispatch, and the daemon maps these errors to wire codes
-//! without a gate of its own.
+//! target's DOCUMENT is published ([`published_target`], PUB-2.11; a version
+//! member projects to its document first, [`trunk_of`], PUB-2.15) —
+//! `insert` alone admitting a DECLARED deposit at a fresh position
+//! (PUB-2.59, PUB-9.13) — and `version` refuses `PrivateSourceVersionless` /
+//! `PrivateVersionOfPublished` on the own-source arm (PUB-2.9, PUB-2.7).
+//! That is PUB-6.36's slot 5, and the store is where it is ENFORCED: every
+//! refusal above is evaluated here, at the transact, whatever ran ahead of
+//! it. Ahead of it run the daemon's publish-class gate (slot 4,
+//! pre-dispatch) and, for one cell, M10's write door, which pre-evaluates
+//! the in-place refusal on a `copy`'s destination before its source consult
+//! so that slot 5 speaks before slot 6; the store's own refusal stands
+//! behind it unchanged. [`published_target`] is public so that such a door
+//! can ask the rule the store enforces rather than restate it.
+//!
+//! Every chain read these ops make — the publication bit, the head, the
+//! reading surface a fork snapshots, the surface a deposit lands in — is
+//! asked of the version-chain reads ([`trunk_of`], [`trunk_head`],
+//! [`published_target`], [`reading_surface`], [`deposit_surface`]) rather
+//! than spelled here.
 //!
 //! WHICH ERROR WINS when several conditions fail at once is stated on each op
 //! below, and this is the only statement of it: the error types name verdicts,
@@ -41,11 +59,12 @@ use std::fmt;
 
 use num_traits::{One, Zero};
 use skep_address::{content_subspace, document_of, Address, Nat};
-use skep_content::{stage_write, ContentWrite, HasContent, Val};
-use skep_kernel::{Kernel, LockKey, Seq, TxnError, WorldState};
-use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
+use skep_content::{stage_write, ContentError, ContentWrite, HasContent, Val};
+use skep_kernel::{Kernel, LockKey, Seq, Staging, TxnError, WorldState};
+use skep_namespace::{HasM3, M3Rec, M3State, MintError, PrincipalId};
 
-use crate::auth::{gate_write, published_target, reading_surface, trunk_head, trunk_of, Caller};
+use crate::auth::{gate_write, Caller};
+use crate::chain::{deposit_surface, published_target, reading_surface, trunk_head, trunk_of};
 use crate::error::{
     CopyError, DeleteError, InsertError, PublishError, RearrangeError, VersionError,
 };
@@ -53,44 +72,56 @@ use crate::run::Run;
 use crate::runlist::extend_or_push_run;
 use crate::shot::Shot;
 use crate::state::M5Rec;
-use crate::vspace::{as_ordinal_vspan, ordinal_vspan, VPos, VSpec};
+use crate::vspace::{as_ordinal_vspan, VPos, VSpec};
 use crate::HasM5;
 
-/// The most runs one COPY may place, and so the ceiling on what one request
-/// can make M5 hold live while it decides whether to place anything at all.
+/// The most runs one COPY, or one publish shot, may place — and so the
+/// ceiling on what one request can make M5 hold live while it decides
+/// whether to place anything at all.
 ///
 /// The budget: a `Run` journals as an element `Address` and a width, about a
 /// hundred bytes as bincode writes them, so M2's `MAX_TXN_BYTES` (64 MiB)
 /// admits on the order of half a million of them and no more — past that the
 /// transaction cannot commit whatever M5 does, and the work of building it
 /// is spent for a refusal. `2^16` sits an order inside that ceiling, which
-/// keeps the LIVE heap one COPY commands to the same order as the
+/// keeps the LIVE heap one placing request commands to the same order as the
 /// transaction budget M2 already prices rather than several times it. The
 /// arithmetic is checked against the real encoding rather than restated here
 /// (`the_placement_budget_stays_inside_the_transaction_budget`).
 ///
-/// IT BINDS WHAT ONE COPY PLACES AND HOLDS LIVE, and that is the whole of
-/// what it binds. A copy needing more runs than this is split by the caller,
-/// exactly as an over-budget transaction already is. Because the accumulator
-/// is filled from a LAZY resolution, the cap also stops the walk: an
-/// over-budget spec is refused at the cap rather than resolved in full and
-/// measured afterwards.
+/// IT BINDS WHAT ONE COPY OR ONE SHOT PLACES AND HOLDS LIVE, and that is the
+/// whole of what it binds. Both accumulators are measured as each run is
+/// accumulated, and what feeds them is pulled a run at a time — COPY's LAZY
+/// resolution of each spec, the shot's walk of its base's carried tail — so
+/// the cap also stops the walk: an over-budget request is refused at the cap
+/// rather than built in full and measured afterwards.
+///
+/// THE REMEDY DIFFERS BETWEEN THE TWO. A copy needing more runs than this is
+/// split by the caller, exactly as an over-budget transaction already is. A
+/// shot CANNOT be split: the member it produces is born whole, from the
+/// whole arrangement the client rendered plus the base's carried deposits.
+/// For a shot the refusal is therefore a ceiling on the run count of the
+/// member one shot produces — the client's runs as the accumulator coalesces
+/// them, plus the base's deposit runs — and a retry of the same arrangement
+/// is refused the same way.
 ///
 /// WHAT IT DOES NOT BIND is the WORK of resolving, which is a separate
-/// quantity with a separate owner. Each spec costs a prefix-sum walk of its
-/// source's run-list to reach the span — `Θ(#runs(source))` for a span near
-/// the end, however narrow the answer — and a request multiplies that by its
-/// spec count. Neither factor has a ceiling here: `#runs(source)` has none in
-/// v1 (Open decision #1) and grows with editing, and a spec count is bounded
-/// only by M10's wire list cap. So admission control and concurrency for a
-/// route carrying COPY are the CALLER's, as they are for the reads that state
-/// their own cost, and a route that carries this op owes that number.
+/// quantity with a separate owner. Each COPY spec costs a prefix-sum walk of
+/// its source's run-list to reach the span — `Θ(#runs(source))` for a span
+/// near the end, however narrow the answer — and a request multiplies that
+/// by its spec count. Neither factor has a ceiling here: `#runs(source)` has
+/// none in v1 (Open decision #1) and grows with editing, and a spec count is
+/// bounded only by M10's wire list cap. So admission control and concurrency
+/// for a route carrying COPY are the CALLER's, as they are for the reads that
+/// state their own cost, and a route that carries this op owes that number.
+/// The shot's own per-run work is stated on [`Vstream::publish`].
 pub const MAX_PLACED_RUNS: usize = 1 << 16;
 
 /// M5's transact-driving op handle over M2 (§B): a thin borrow of the
 /// engine's kernel. The pure reads live on [`M5State`](crate::M5State)
-/// (reached through [`HasM5`]); this type owns only the five editing/
-/// versioning operations M10 (and, for `insert`, M9) dispatches.
+/// (reached through [`HasM5`]); this type owns only the six editing/
+/// versioning operations — INSERT, DELETE, COPY, REARRANGE, VERSION and the
+/// publish SHOT — that M10 (and, for `insert`, M9) dispatches.
 pub struct Vstream<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
 }
@@ -162,18 +193,20 @@ where
     /// insert.
     ///
     /// WHICH ARRANGEMENT THE DEPOSIT LANDS IN (PUB-2.65, PUB-2.66; lane 3.2's
-    /// pin): the HEAD member's, ALONE. A published document's reading surface
-    /// is its trunk head once it has one ([`trunk_head`]), and a deposit
-    /// appends to that arrangement whichever address of the chain the caller
-    /// named — the bare document, the head itself, or a pinned member, which
-    /// never grows. `at` is therefore judged fresh against the HEAD's extent,
-    /// and the placement record names the head. While the document has no
-    /// member the deposit lands in its own arrangement, which is what its
-    /// readers answer from until a head exists (PUB-2.66's memberless
-    /// reading). The atom's IDENTITY is minted under the content chain of the
-    /// address the caller NAMED (`mint_content(doc)`) — the document's own
-    /// I-space for a bare address, one prefix down the chain (PUB-2.52) —
-    /// so the start returned is under that chain; only the placement floats.
+    /// pin): the HEAD member's, ALONE — the version-chain reads' own answer
+    /// (`deposit_surface`), which is the trunk head once the chain has one
+    /// ([`trunk_head`]), whichever address of the chain the caller named: the
+    /// bare document, the head itself, or a pinned member, which never grows.
+    /// It differs from the [`reading_surface`] at exactly that pinned member,
+    /// whose readers answer the member itself. `at` is therefore judged fresh
+    /// against the HEAD's extent, and the placement record names the head.
+    /// While the document has no member the deposit lands in its own
+    /// arrangement, which is what its readers answer from until a head exists
+    /// (PUB-2.66's memberless reading). The atom's IDENTITY is minted under
+    /// the content chain of the address the caller NAMED (`mint_content(doc)`)
+    /// — the document's own I-space for a bare address, one prefix down the
+    /// chain (PUB-2.52) — so the start returned is under that chain; only the
+    /// placement floats.
     ///
     /// Only one of those last two is a verdict an honest request can earn.
     /// `Mint(MintError::Gate)` is M3's defence against a corrupted frontier;
@@ -196,14 +229,12 @@ where
     /// a route that carries this op without one owes the number.
     ///
     /// J0/J1★ by construction: mint + write + place + provenance ride one
-    /// transaction; successive `mint_content` calls read `stg.working()`, so
-    /// under the held lock they advance the same frontier → contiguous
-    /// I-adjacent addresses → the placement accumulator coalesces them into
-    /// exactly ONE placed run, whose start is the first address minted.
-    /// The accumulator is asked rather than assumed: were the frontier ever
-    /// to hand back a non-adjacent address, the placement would be a correct
-    /// multi-run one, never a single run widened over addresses M3 never
-    /// allocated and M4 never wrote.
+    /// transaction, each value through `allocate_for_placement` — J0's one
+    /// step, shared with the shot's re-insert, whose own doc states why the
+    /// placement it accumulates is never widened over addresses nobody
+    /// allocated. INSERT's values are minted one after another under the held
+    /// content key, so they are I-adjacent and INSERT places exactly ONE run,
+    /// whose start is the first address minted.
     pub fn insert(
         &self,
         caller: Caller,
@@ -212,22 +243,21 @@ where
         values: Vec<Val>,
         deposit: bool,
     ) -> Result<(Address, Seq), TxnError<InsertError>> {
-        // The mint chain's key, and — for a deposit into a chain with a head
-        // — the head's content key too, since that is the arrangement the
-        // placement lands in (PUB-2.66). Read off a snapshot: exact under v1's
-        // single applier, where no shot can advance the head between this read
-        // and the transaction; a future M2 realization that lets disjoint-key
-        // commits land in that window re-examines this with
+        // The mint chain's key, and — for a deposit that lands somewhere
+        // other than the address named — the content key of the arrangement
+        // it lands in (`deposit_surface`, PUB-2.66). Read off a snapshot:
+        // exact under v1's single applier, where no shot can advance the head
+        // between this read and the transaction; a future M2 realization that
+        // lets disjoint-key commits land in that window re-examines this with
         // `VersionSnapshot`'s linearization note.
         let keys: Vec<LockKey> = {
             let snap = self.kernel.snapshot();
             let m3 = snap.world().m3();
             let mut keys = vec![M3State::content_lock_key(doc)];
-            if deposit && m3.is_registered_document(doc) && published_target(m3, doc) {
-                if let Some(head) = trunk_head(m3, doc) {
-                    if head != *doc {
-                        keys.push(M3State::content_lock_key(&head));
-                    }
+            if deposit && m3.is_registered_document(doc) {
+                let surface = deposit_surface(m3, doc);
+                if surface != *doc {
+                    keys.push(M3State::content_lock_key(&surface));
                 }
             }
             keys
@@ -246,19 +276,15 @@ where
             // deposit lands in: the HEAD member's, or the document's own
             // while it has none (PUB-2.66).
             let target = {
-                let m3 = stg.working().m3();
-                if published_target(m3, doc) {
-                    if !deposit {
-                        return Err(InsertError::PublishedTarget);
-                    }
-                    let head = trunk_head(m3, doc).unwrap_or_else(|| trunk_of(doc));
-                    if !stg.working().m5().names_fresh_content_position(&head, &at) {
-                        return Err(InsertError::PublishedTarget);
-                    }
-                    head
-                } else {
-                    doc.clone()
+                let world = stg.working();
+                let m3 = world.m3();
+                let target = deposit_surface(m3, doc);
+                if published_target(m3, doc)
+                    && !(deposit && world.m5().names_fresh_content_position(&target, &at))
+                {
+                    return Err(InsertError::PublishedTarget);
                 }
+                target
             };
             if values.is_empty() {
                 return Err(InsertError::EmptyContent);
@@ -271,17 +297,7 @@ where
             }
             let mut runs: Vec<Run> = Vec::new();
             for value in values {
-                let (addr, m3rec) = stg.working().m3().mint_content(doc)?;
-                stg.push(m3rec.into());
-                let write = stage_write(stg.working().content(), &addr, value)?;
-                stg.push(write.into());
-                extend_or_push_run(
-                    &mut runs,
-                    Run {
-                        i_start: addr,
-                        width: Nat::one(),
-                    },
-                );
+                allocate_for_placement::<_, InsertError>(stg, doc, value, &mut runs)?;
             }
             // The placement's start is the FIRST address minted: the
             // accumulator only ever widens a run rightwards or opens a new
@@ -313,16 +329,17 @@ where
     /// DESTINATION (PUB-2.37, PUB-2.39, PUB-2.55): the next member of the
     /// chain anchored at the base, decided AT COMMIT — the trunk's next
     /// member (`mint_version(doc)`, `D.4`) when the base is still the trunk
-    /// head, the base's own DAUGHTER (`mint_version(base)`, `D.3.1`) when it
-    /// is not. Two shots racing off one head both commit, the first on the
-    /// trunk and the second as the head's daughter (PUB-2.44); nothing is
-    /// positionally applied to an advanced head and nothing is refused for
-    /// want of a base (PUB-2.38). A memberless document is its own base — the
-    /// chain's first member is `D.1` either way — and the base absent is that
-    /// same birth shape (PUB-2.34), admitted only while the chain is empty:
-    /// once a member exists the document's own pre-chain arrangement is no
-    /// base, and the shot must name the member it was staged from
-    /// (`BaseSuperseded`).
+    /// head ([`trunk_head`], the head every reader floats to, read before
+    /// the member is minted), the base's own DAUGHTER (`mint_version(base)`,
+    /// `D.3.1`) when it is not. Two shots racing off one head both commit,
+    /// the first on the trunk and the second as the head's daughter
+    /// (PUB-2.44); nothing is positionally applied to an advanced head and
+    /// nothing is refused for want of a base (PUB-2.38). A memberless
+    /// document is its own base — the chain's first member is `D.1` either
+    /// way — and the base absent is that same birth shape (PUB-2.34),
+    /// admitted only while the chain is empty: once a member exists the
+    /// document's own pre-chain arrangement is no base, and the shot must
+    /// name the member it was staged from (`BaseSuperseded`).
     ///
     /// THE MEMBER'S ARRANGEMENT (PUB-2.40, PUB-2.41, PUB-2.42): each supplied
     /// run by its ORIGIN — the document that minted its addresses, which
@@ -330,21 +347,22 @@ where
     /// PUB-2.15) and the client's stated `origin` must agree with. The
     /// document's OWN I-space (its own chain or any member's) is placed by
     /// reference; the STAGING DRAFT's is RE-INSERTED as fresh identity under
-    /// the document's own I-space, one `mint_content(doc)` and one content
-    /// write per value, the bytes read at the draft's addresses — a byte
-    /// read, never an arrangement read — so the committed member references
-    /// no address of the draft; any OTHER document's stays a window,
-    /// answering its origin. The runs are placed in the order given, then
-    /// the BASE'S POST-RENDER DEPOSITS after them: a published member changes
-    /// only by exempt deposits appended at fresh positions (PUB-2.43), so its
-    /// positions past `base.extent` — the extent the staged copy took — are
-    /// exactly the deposits the render post-dates, carried unchanged
-    /// (PUB-2.45, PUB-2.67). What the shot un-arranges is what the stager
-    /// un-arranged and nothing else. One `ContentPlace` at ordinal 1 journals
-    /// the whole arrangement — the fold appends every placed run's extent to
-    /// R (J1★), the by-reference runs as COPY's are and the fresh ones as
-    /// INSERT's; an empty placement stages no record, the member then reading
-    /// as the lazy empty arrangement.
+    /// the document's own I-space, each value through INSERT's own
+    /// allocation step (`allocate_for_placement`), the bytes read at the
+    /// draft's addresses — a byte read, never an arrangement read — so the
+    /// committed member references no address of the draft; any OTHER
+    /// document's stays a window, answering its origin. The runs are placed
+    /// in the order given, then the BASE'S POST-RENDER DEPOSITS after them: a
+    /// published member changes only by exempt deposits appended at fresh
+    /// positions (PUB-2.43), so its positions past `base.extent` — the extent
+    /// the staged copy took — are exactly the deposits the render post-dates,
+    /// asked of the base's arrangement, which knows its own extent, and
+    /// carried unchanged (PUB-2.45, PUB-2.67). What the shot un-arranges is
+    /// what the stager un-arranged and nothing else. One `ContentPlace` at
+    /// ordinal 1 journals the whole arrangement — the fold appends every
+    /// placed run's extent to R (J1★), the by-reference runs as COPY's are and
+    /// the fresh ones as INSERT's; an empty placement stages no record, the
+    /// member then reading as the lazy empty arrangement.
     ///
     /// Check order (which error wins), PUB-6.36's slots: `DocNotRegistered`
     /// → `NotOwner` (slot 1, the destination's ω) → registration (slot 3):
@@ -383,10 +401,11 @@ where
     /// COST, AND WHO OWNS IT: the re-insert stages `2n + 1` records for `n`
     /// draft-native values, exactly as INSERT does, plus one placement whose
     /// run count — the client's runs, coalesced, plus the base's deposit
-    /// runs — is capped at [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS); the
-    /// carried-run test costs one sweep of the base's runs per supplied run.
-    /// The wire caps the run list; a route that carries this op owes the
-    /// value count.
+    /// runs — is capped at [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS),
+    /// measured as each run is accumulated; a ceiling a shot cannot be split
+    /// to meet, since the member it produces is born whole. The carried-run
+    /// test costs one sweep of the base's runs per supplied run. The wire caps
+    /// the run list; a route that carries this op owes the value count.
     pub fn publish(
         &self,
         caller: Caller,
@@ -445,11 +464,13 @@ where
             }
             // Slot 5: the model's refusal — a private document has no chain
             // to append to (PUB-2.9).
-            if !m3.published(&trunk) {
+            if !published_target(m3, doc) {
                 return Err(PublishError::PrivateSourceVersionless);
             }
-            // The base's shape, and the anchor the member is minted under.
-            let head = m3.latest_version(&trunk);
+            // The base's shape, and the anchor the member is minted under —
+            // judged against the head every reader floats to, read before the
+            // member is minted.
+            let head = trunk_head(m3, doc);
             let anchor: Address = match &shot.base {
                 None => {
                     if head.is_some() {
@@ -523,17 +544,7 @@ where
                             .value_at(a.tumbler())
                             .cloned()
                             .expect("every address of every run was found present above");
-                        let (addr, m3rec) = stg.working().m3().mint_content(&trunk)?;
-                        stg.push(m3rec.into());
-                        let write = stage_write(stg.working().content(), &addr, val)?;
-                        stg.push(write.into());
-                        extend_or_push_run(
-                            &mut placed,
-                            Run {
-                                i_start: addr,
-                                width: Nat::one(),
-                            },
-                        );
+                        allocate_for_placement::<_, PublishError>(stg, &trunk, val, &mut placed)?;
                     }
                 } else {
                     extend_or_push_run(&mut placed, r.run.clone());
@@ -542,20 +553,13 @@ where
                     return Err(PublishError::TooManyRuns);
                 }
             }
+            // The base's positions past the extent its staged copy took are
+            // the deposits the render post-dates (PUB-2.43, PUB-2.45) — asked
+            // of the arrangement, which knows its own extent, and measured as
+            // each is accumulated, the walk stopping at the cap.
             if let Some(base) = &shot.base {
-                let m5 = stg.working().m5();
-                let count = m5.content_count(&base.member);
-                if base.extent < count {
-                    let from = VPos {
-                        subspace: content_subspace(),
-                        ordinal: &base.extent + &Nat::one(),
-                    };
-                    let deposits = &count - &base.extent;
-                    let span = ordinal_vspan(&from, &deposits)
-                        .expect("extent < count ⇒ at least one deposited position");
-                    for run in m5.resolve(&base.member, &span) {
-                        extend_or_push_run(&mut placed, run);
-                    }
+                for run in stg.working().m5().content_runs_past(&base.member, &base.extent) {
+                    extend_or_push_run(&mut placed, run);
                     if placed.len() > MAX_PLACED_RUNS {
                         return Err(PublishError::TooManyRuns);
                     }
@@ -590,6 +594,47 @@ fn run_origin(run: &Run) -> Option<Address> {
         return None;
     }
     document_of(run.i_start()).map(|d| trunk_of(&d))
+}
+
+/// J0 at the composite boundary (content-allocation ⇒ placement): mint one
+/// fresh content address under `home`'s I-space (M3), write `value` there
+/// (M4), stage both records, and accumulate the address into the placement
+/// `runs`. The ONE step INSERT and the publish shot's re-insert share, so
+/// the coupling has one enforcement site: what is allocated here rides the
+/// transaction the caller's placement record rides, and so cannot commit
+/// unplaced. The mint precedes the write, which is the `Mint` → `Content`
+/// order each of the two ops states for a value.
+///
+/// Successive calls read `stg.working()`, and under the content key both
+/// callers hold for `home` (`M3State::content_lock_key`) they advance ONE
+/// frontier and hand back I-adjacent addresses, which the accumulator
+/// coalesces. The accumulator is ASKED rather than assumed: were the
+/// frontier ever to hand back a non-adjacent address — a batched or striped
+/// allocator in M3 — the placement would be a correct multi-run one, never a
+/// single run widened over addresses M3 never allocated and M4 never wrote.
+fn allocate_for_placement<W, E>(
+    stg: &mut Staging<W>,
+    home: &Address,
+    value: Val,
+    runs: &mut Vec<Run>,
+) -> Result<(), E>
+where
+    W: WorldState + HasM3 + HasContent,
+    W::Record: From<M3Rec> + From<ContentWrite>,
+    E: From<MintError> + From<ContentError>,
+{
+    let (addr, m3rec) = stg.working().m3().mint_content(home)?;
+    stg.push(m3rec.into());
+    let write = stage_write(stg.working().content(), &addr, value)?;
+    stg.push(write.into());
+    extend_or_push_run(
+        runs,
+        Run {
+            i_start: addr,
+            width: Nat::one(),
+        },
+    );
+    Ok(())
 }
 
 impl<W> Vstream<'_, W>
@@ -931,7 +976,8 @@ where
     /// on BOTH branches — a cross-owner fork into an EMPTY account inherits
     /// too, never the create path's born-published rule (lane 0's rider: the
     /// copy inherits; M3 applies no default). The source's state is read on
-    /// the DOCUMENT a version member projects to (PUB-2.15, [`trunk_of`]).
+    /// the DOCUMENT a version member projects to ([`published_target`],
+    /// PUB-2.15).
     ///
     /// THE TWO REFUSALS OF THE VERSION-CHAIN MODEL (PUB round 2, lane 3.1;
     /// owner ruling D2b), both EXACT OF THE OWN-SOURCE ARM (PUB-2.14) and
@@ -995,8 +1041,10 @@ where
     /// from (PUB-2.49), never its own pre-chain arrangement, which a shot has
     /// superseded and which a trunk member built from it would have the bare
     /// address float back to. A version address forks its own member
-    /// (PUB-2.50); a private or memberless source forks itself, as before.
-    /// The record's `source` is that surface.
+    /// (PUB-2.50); a private or memberless source forks itself. The record's
+    /// `source` is that surface, read off the working state before the new
+    /// member's own mint is staged, as [`trunk_head`] requires — after it,
+    /// an owned fork would be the head it asks about.
     ///
     /// COST, AND WHO OWNS IT. One request names one address, and the record
     /// it stages names two; what the fold then does is share the source's
@@ -1056,9 +1104,9 @@ where
             // INHERIT `published(d_src)` — and pass the RESOLVED bit down as
             // the bit the record journals (PUB-7.10, PUB-8.18). `source` is a
             // registered document (the monotone pre-read above), so the
-            // inherit read is inside `published`'s contract; it is read on
-            // the DOCUMENT a version member projects to (PUB-2.15).
-            let source_published = m3.published(&trunk_of(source));
+            // inherit read is inside `published_target`'s contract; it is
+            // read on the DOCUMENT a version member projects to (PUB-2.15).
+            let source_published = published_target(m3, source);
             let resolved = published.unwrap_or(source_published);
             // PUB-6.36 slot 5, the own-source arm alone (PUB-2.14): private
             // documents are versionless (PUB-2.9), and a published one
@@ -1076,7 +1124,8 @@ where
                 Branch::Cross(prefix) => m3.mint_document(prefix, resolved),
             }?;
             // The arrangement shared is the source's reading surface — its
-            // trunk head when it has one (head-float, PUB-2.49).
+            // trunk head when it has one (head-float, PUB-2.49) — asked of
+            // the working state before this member's mint is staged below.
             let surface = reading_surface(m3, source);
             stg.push(m3rec.into());
             stg.push(
@@ -1100,7 +1149,8 @@ mod tests {
     //! And COPY's content-side referential gate (S3★), which needs a world
     //! whose arrangement and content store can be seeded INDEPENDENTLY — a
     //! state no engine reaches, every arranged address there having been
-    //! written by INSERT in the same composite.
+    //! written by INSERT in the same composite. And J0's allocation step,
+    //! driven directly in a world of M3 and M4 alone, which is all it reads.
 
     use serde::{Deserialize, Serialize};
     use skep_content::ContentStore;
@@ -1109,7 +1159,7 @@ mod tests {
 
     use super::*;
     use crate::state::M5State;
-    use crate::testutil::{ca, doc1, doc2, n, pdoc, run, seeded_m3, vp, vspan};
+    use crate::testutil::{a, ca, doc1, doc2, n, pdoc, run, seeded_m3, vp, vspan};
 
     /// Unwrap an op's typed rejection (`TxnError::Rejected(E)` — surfaced
     /// verbatim, per M2's transact contract).
@@ -1238,6 +1288,103 @@ mod tests {
             },
         )
         .expect("in-memory open")
+    }
+
+    /// The two slices J0's allocation step touches — M3's frontier and M4's
+    /// store — with a record for each, and nothing else: no arrangement, no
+    /// `M5Rec`. So the step's bounds are witnessed as `MiniWorld` witnesses
+    /// the per-op ones: it needs M3 and M4 and stages their records alone.
+    #[derive(Clone, Serialize, Deserialize)]
+    struct AllocWorld {
+        m3: M3State,
+        content: ContentStore,
+    }
+
+    #[derive(Clone, Serialize, Deserialize)]
+    enum AllocRec {
+        M3(M3Rec),
+        Content(ContentWrite),
+    }
+
+    impl From<M3Rec> for AllocRec {
+        fn from(r: M3Rec) -> AllocRec {
+            AllocRec::M3(r)
+        }
+    }
+    impl From<ContentWrite> for AllocRec {
+        fn from(r: ContentWrite) -> AllocRec {
+            AllocRec::Content(r)
+        }
+    }
+
+    impl WorldState for AllocWorld {
+        type Record = AllocRec;
+        fn apply(&self, r: &AllocRec) -> AllocWorld {
+            match r {
+                AllocRec::M3(x) => AllocWorld {
+                    m3: self.m3.apply_m3(x),
+                    content: self.content.clone(),
+                },
+                AllocRec::Content(x) => AllocWorld {
+                    m3: self.m3.clone(),
+                    content: self.content.apply_write(x),
+                },
+            }
+        }
+    }
+    impl HasM3 for AllocWorld {
+        fn m3(&self) -> &M3State {
+            &self.m3
+        }
+    }
+    impl HasContent for AllocWorld {
+        fn content(&self) -> &ContentStore {
+            &self.content
+        }
+    }
+
+    #[test]
+    fn the_allocation_step_mints_writes_and_accumulates_through_the_merge_condition() {
+        // J0's one enforcement site, which INSERT and the shot's re-insert
+        // both call: each call mints under the home it is given, writes the
+        // value there, and accumulates the address through the element that
+        // owns the merge condition — so consecutive mints under one home
+        // coalesce into one run, and a mint under another home, whose address
+        // is not I-adjacent, opens a run of its own rather than widening the
+        // first over addresses nobody allocated.
+        let cfg = KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+        };
+        let k = Kernel::open(
+            cfg,
+            AllocWorld {
+                m3: seeded_m3(),
+                content: ContentStore::default(),
+            },
+        )
+        .expect("in-memory open");
+        let keys = [M3State::content_lock_key(&doc1()), M3State::content_lock_key(&doc2())];
+        let (runs, _) = k
+            .transact(&keys, |stg| {
+                let mut runs: Vec<Run> = Vec::new();
+                for (home, byte) in [(doc1(), b"a"), (doc1(), b"b"), (doc2(), b"c")] {
+                    allocate_for_placement::<_, InsertError>(stg, &home, Val::new(&byte[..]), &mut runs)?;
+                }
+                Ok::<_, InsertError>(runs)
+            })
+            .expect("the allocations commit");
+        let doc2_first = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+        assert_eq!(runs, vec![run(&ca(1), 2), run(&doc2_first, 1)]);
+        // Each address holds the value written at it, and each mint advanced
+        // its home's frontier: the next mint under doc1 is ca(3).
+        let s = k.snapshot();
+        let content = s.world().content();
+        for (addr, byte) in [(ca(1), b"a"), (ca(2), b"b"), (doc2_first, b"c")] {
+            assert_eq!(content.value_at(addr.tumbler()).map(Val::as_bytes), Some(&byte[..]));
+        }
+        let (next, _) = s.world().m3().mint_content(&doc1()).expect("doc1 is registered");
+        assert_eq!(next, ca(3));
     }
 
     #[test]

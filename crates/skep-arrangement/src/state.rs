@@ -127,8 +127,8 @@ pub struct M5State {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum M5Rec {
-    /// INSERT/COPY: splice `runs` at content ordinal `at` + R-append each
-    /// placed run's iextent (J1★).
+    /// INSERT, COPY and the publish shot: splice `runs` at content ordinal
+    /// `at` + R-append each placed run's iextent (J1★).
     #[non_exhaustive]
     ContentPlace { doc: Address, at: Nat, runs: Vec<Run> },
     /// DELETE: contract + reseat (no C, no R — ASN-0117 P0/P2).

@@ -5,15 +5,15 @@
 //! content-provenance relation R**, and it is the *only* place in the system
 //! where destructive change lives (ASN-0047 P3). It provides the
 //! editing/versioning operations (INSERT [ASN-0116], DELETE [ASN-0117], COPY
-//! [ASN-0118], REARRANGE [ASN-0119/0084], CREATENEWVERSION [ASN-0123]), a
-//! semantics-blind link-seating step for M7 (CL-OWN/CL-UNIQ), forward V→I
-//! resolution and reverse I→V projection for readers, and the R read surface
-//! for provenance queries. Every mutation funnels through one M2 composite,
-//! where the J-couplings (J0: content-allocation ⇒ placement; J1★: placement ⇒
-//! provenance; J-LV: link placements uncoupled from R) are enforced and each
-//! content placement's R-append is co-located with its M-edit, so a reader
-//! sees one consistent `(M, R)` root (ASN-0075 atomic root-swap by
-//! co-location).
+//! [ASN-0118], REARRANGE [ASN-0119/0084], CREATENEWVERSION [ASN-0123], and
+//! the publish SHOT [PUB-2.33]), a semantics-blind link-seating step for M7
+//! (CL-OWN/CL-UNIQ), forward V→I resolution and reverse I→V projection for
+//! readers, and the R read surface for provenance queries. Every mutation
+//! funnels through one M2 composite, where the J-couplings (J0:
+//! content-allocation ⇒ placement; J1★: placement ⇒ provenance; J-LV: link
+//! placements uncoupled from R) are enforced and each content placement's
+//! R-append is co-located with its M-edit, so a reader sees one consistent
+//! `(M, R)` root (ASN-0075 atomic root-swap by co-location).
 //!
 //! The POOM is **authoritative mutable state, not a hint** (ASN-0047 P3): it
 //! is the only component that loses information (`ContentRemove`,
@@ -49,9 +49,11 @@
 //! `PrivateSourceVersionless` on `version` (PUB-2.7, PUB-2.9) — all three in
 //! ONE slot, after registration and ω and before each op's own shape checks
 //! (PUB-6.36 slot 5), reading M3's publication bit on REGISTERED addresses
-//! alone (PUB-6.37) after projecting a version member to its document
-//! ([`trunk_of`], PUB-2.15). The daemon maps them to wire codes and adds no
-//! gate logic of its own. The one exemption is the DECLARED deposit
+//! alone (PUB-6.37) through [`published_target`], after [`trunk_of`] has
+//! projected a version member to its document (PUB-2.15). The refusals are
+//! enforced here; M10's write door pre-evaluates the in-place one on a
+//! `copy`'s destination, ahead of its source consult, and the store's own
+//! refusal stands behind it. The one exemption is the DECLARED deposit
 //! (PUB-9.13's DECLARED horn): `insert` takes a `deposit` declaration, and a
 //! declared insert at fresh positions of a published document is admitted
 //! (PUB-2.59, PUB-2.61); an undeclared append, or a declared one that
@@ -81,6 +83,12 @@
 //! HEAD member's arrangement alone (PUB-2.66), whichever address of the
 //! chain the deposit names.
 //!
+//! Those reads — which document a member belongs to ([`trunk_of`]), which
+//! member heads its chain ([`trunk_head`]), whether that document is
+//! published ([`published_target`]), and the two surfaces built on them —
+//! are the version-chain model's own card, kept in one file; every chain
+//! read the write surface makes asks them.
+//!
 //! ## Serialization key
 //!
 //! M5 contributes **no `Space` lock-key tag of its own**: every M5 mutation
@@ -88,7 +96,14 @@
 //! domain — content edits under `M3State::content_lock_key(doc)`, VERSION
 //! under `version_lock_key`/`document_lock_key`, link seating under M7's held
 //! `link_lock_key(doc)` — so a document's arrangement edits and their
-//! R-appends are co-serialized under that one key.
+//! R-appends are co-serialized under that one key. A DECLARED deposit that
+//! lands on a chain's head rather than the address it names takes the
+//! head's `content_lock_key` as well (PUB-2.66). The SHOT takes its
+//! document's `version_lock_key` and `content_lock_key` — the trunk's
+//! frontier and the fresh-identity mints — and, for a base that is a
+//! member, that member's `version_lock_key`, the daughter chain's frontier;
+//! it writes only the arrangement of the member it mints, which no other
+//! transaction can name until this one commits.
 //!
 //! ## Composition
 //!
@@ -107,6 +122,7 @@
 #![forbid(unsafe_code)]
 
 mod auth;
+mod chain;
 mod error;
 mod ops;
 mod provenance;
@@ -121,7 +137,8 @@ mod vspace;
 #[cfg(test)]
 pub(crate) mod testutil;
 
-pub use auth::{reading_surface, trunk_head, trunk_of, Caller};
+pub use auth::Caller;
+pub use chain::{published_target, reading_surface, trunk_head, trunk_of};
 pub use error::{
     CopyError, DeleteError, InsertError, PublishError, RearrangeError, SeatError, VersionError,
 };

@@ -29,10 +29,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   so two shots off one head both commit. A bare published address
   reads as its trunk head, a version address as itself forever, and a
   declared deposit into a chain lands in the head member alone.
-- **Write-surface gates** — the four edit ops take a `Caller` and
-  admit only the document's effective owner (ω, exact account match;
-  `Caller::System` is the in-process automation path, exempt from ω
-  alone). A PUBLISHED document refuses every in-place edit
+- **Write-surface gates** — the four edit ops and `publish` take a
+  `Caller` and admit only the document's effective owner (ω, exact
+  account match; `Caller::System` is the in-process automation path,
+  exempt from ω alone). A PUBLISHED document refuses every in-place edit
   (`PublishedTarget`, PUB-2.11) except a DECLARED deposit `insert` at
   a fresh position past its arranged content — the one way content
   enters an account's born-published home; `version` refuses a

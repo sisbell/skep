@@ -153,14 +153,13 @@ pub enum VersionError {
 }
 
 /// PUBLISH rejection (PUB-2.33, PUB-8.1; PUB round 2, lane 3.2) — the shot's
-/// verdicts, in the slot order PUB-6.36 pins (stated in full on
-/// [`Vstream::publish`](crate::Vstream::publish)):
+/// verdicts; which one wins when several apply is stated on
+/// [`Vstream::publish`](crate::Vstream::publish) and only there.
 ///
 /// * `DocNotRegistered` / `NotOwner(doc)` — the destination's registration
-///   and ω (slot 1; the payload names the failing document).
+///   and ω; the payload names the failing document.
 /// * `SourceNotRegistered` — the base, the draft, or a run's origin is not
-///   a registered document (slot 3, PUB-6.37: registration answers ahead of
-///   any publication or existence verdict).
+///   a registered document.
 /// * `BadRun` — a supplied run is not a content run of its stated origin:
 ///   its start is not a content element, or the document that minted it is
 ///   not the `origin` the client named. Address arithmetic on the request
@@ -182,17 +181,17 @@ pub enum VersionError {
 ///   and it is minted published-born, your draft re-windowing it; private
 ///   documents are versionless."
 /// * `Withheld(origin)` — the source gate (PUB-6.23, PUB-8.1's second
-///   constraint): the FIRST supplied run whose origin the base does not
-///   already arrange and the shooter may not read, in run order; the
-///   payload is that origin's DOCUMENT (PUB-8.4's `site.addr`). Answered
-///   BEFORE any existence, extent or emptiness answer (PUB-6.2), so a run
-///   onto a non-existent address in an unreadable origin answers this and
-///   never `DanglingSource`.
+///   constraint) refused a run: the payload is the origin DOCUMENT
+///   (PUB-8.4's `site.addr`) of the FIRST supplied run, in run order, that
+///   the base does not already arrange — carried-ness is judged run by run
+///   (PUB-6.24), not origin by origin — whose origin is not the shot's own
+///   document and which the shooter may not read.
 /// * `DanglingSource` — an I-address a run names has no stored value
 ///   (S3★): a by-reference run whose extent M4 does not hold whole, or a
 ///   draft-native run whose bytes are not all there to re-insert.
 /// * `TooManyRuns` — the member's placement exceeds
-///   [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS), COPY's own budget.
+///   [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS), the budget COPY and the
+///   shot share; a shot cannot be split to meet it.
 /// * `Mint` / `Content` — the identity mint, a content mint, or a content
 ///   write refused (M3/M4's own boundary refusals; defensive).
 #[derive(Clone, Debug, PartialEq, Eq)]

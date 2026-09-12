@@ -1,10 +1,13 @@
 //! §Internal design — how M6 reads one request V-span: which subspace its
-//! start names, and whether its shape is well-formed.
+//! start names, and whether its shape is well-formed. The two-subspace
+//! vocabulary a classification lands in ([`Subspace`]) answers for M1's
+//! numeral and for M5's reads of that subspace alike, so no site pairs a
+//! subspace with a numeral, a count or a run-list by hand.
 
 use std::sync::LazyLock;
 
-use skep_address::{action_point, content_subspace, link_subspace, zeros, Nat, Span};
-use skep_arrangement::VPos;
+use skep_address::{action_point, content_subspace, link_subspace, zeros, Address, Nat, Span};
+use skep_arrangement::{M5State, Runs};
 
 use crate::error::SpanFault;
 
@@ -54,6 +57,30 @@ impl Subspace {
             Subspace::Link => &S_L,
         }
     }
+
+    /// `n_S(doc)` — M5's arranged width of this subspace of `doc`. Routed
+    /// here so a subspace asks for ITS OWN count: no caller pairs a variant
+    /// with an accessor by hand, which closes at the pairing the swap
+    /// `ext_span`'s typed argument closes at the call — a subspace handed
+    /// another's count builds a well-formed extent of the wrong width, or
+    /// reports a subspace empty that is not.
+    pub(crate) fn count(self, m5: &M5State, doc: &Address) -> Nat {
+        match self {
+            Subspace::Content => m5.content_count(doc),
+            Subspace::Link => m5.link_count(doc),
+        }
+    }
+
+    /// This subspace's canonical, V-ordered run decomposition of `doc` — the
+    /// runs whose widths sum to [`Subspace::count`] — selected the way the
+    /// count is, so the two reads of one subspace cannot be paired with
+    /// different subspaces.
+    pub(crate) fn runs<'a>(self, m5: &'a M5State, doc: &Address) -> Runs<'a> {
+        match self {
+            Subspace::Content => m5.content_runs(doc),
+            Subspace::Link => m5.link_runs(doc),
+        }
+    }
 }
 
 /// Classify a start subspace numeral (see [`Subspace`]).
@@ -82,23 +109,6 @@ pub(crate) fn span_subspace(span: &Span) -> Option<Subspace> {
             .get(1)
             .expect("a nonempty start has a position 1"),
     )
-}
-
-/// The V-position a span's start names — its first two components read as the
-/// `[subspace, ordinal]` layout of a depth-2 V-position (ASN-0036 S8-depth),
-/// which is where M6 states that layout and [`Subspace`] states half of it.
-///
-/// `None` iff the start carries fewer than two components, which
-/// [`gate_vspan`]'s `#start ≥ 2` has already excluded for every gated span —
-/// so a caller downstream of the gate is reading the total form of a settled
-/// fact, not handling a case that arises. A deeper start reads its first two
-/// components like any other: whether the position it names is one the
-/// arrangement binds is M5's question, asked by `resolve`.
-pub(crate) fn span_vpos(span: &Span) -> Option<VPos> {
-    Some(VPos {
-        subspace: span.start().get(1)?.clone(),
-        ordinal: span.start().get(2)?.clone(),
-    })
 }
 
 /// The SPAN half of ASN-0115's V-spec well-formedness: zero-free,
@@ -211,10 +221,11 @@ mod tests {
 
     #[test]
     fn a_gated_span_has_m5s_shape_exactly_when_its_start_is_depth_2() {
-        // What lets SHOWORIGIN_V put WF_V(v) to M5's `is_ordinal_vspan`
-        // instead of measuring the start itself: after this gate, DEPTH is the
-        // only clause of M5's shape still open. Level-uniformity ties #width
-        // to #start and ordinal-level puts the width's one nonzero component
+        // What lets SHOWORIGIN_V and COMPARE put WF_V(v) to M5's own span
+        // reader (`as_ordinal_vspan`, whose verdict this is) instead of
+        // measuring the start themselves: after this gate, DEPTH is the only
+        // clause of M5's shape still open. Level-uniformity ties #width to
+        // #start and ordinal-level puts the width's one nonzero component
         // last, so a gated depth-2 span IS `[s, o] × [0, n≥1]`, and every
         // deeper gated span fails M5's shape on depth alone.
         for (start, width) in [
@@ -234,35 +245,6 @@ mod tests {
             assert!(gate_vspan(&s).is_ok(), "deeper spans are WELL-FORMED");
             assert!(!is_ordinal_vspan(&s), "…and M5 declines them, on depth");
         }
-    }
-
-    #[test]
-    fn span_vpos_reads_the_two_components_a_gated_start_carries() {
-        // The depth-2 layout is read HERE and written back by COMPARE's sort
-        // key, so the two directions name each other rather than each
-        // extracting components on their own.
-        assert_eq!(
-            span_vpos(&span(&[1, 7], &[0, 3])),
-            Some(VPos {
-                subspace: Nat::from(1u32),
-                ordinal: Nat::from(7u32),
-            })
-        );
-        // A deeper start reads its FIRST TWO components like any other — what
-        // the position it names resolves to is M5's question.
-        assert_eq!(
-            span_vpos(&span(&[2, 4, 9], &[0, 0, 1])),
-            Some(VPos {
-                subspace: Nat::from(2u32),
-                ordinal: Nat::from(4u32),
-            })
-        );
-        // The one `None`, and the gate has already refused it
-        // (`StartTooShallow`), which is why its callers may treat the read as
-        // total.
-        let shallow = span(&[5], &[1]);
-        assert_eq!(span_vpos(&shallow), None);
-        assert_eq!(gate_vspan(&shallow), Err(SpanFault::StartTooShallow));
     }
 
     #[test]

@@ -1172,10 +1172,11 @@ fn show_origin_v_projects_an_origin_at_whatever_depth_its_document_sits() {
 
 #[test]
 fn show_origin_v_admits_the_exact_extent_and_rejects_one_position_past_it() {
-    // ASN-0077 WF_V(vi): the test is `resolved < ordinal(width)`, so a span
-    // covering the bound prefix EXACTLY is admissible and one position more
-    // is rejected — never clamped to the surviving sub-span (O13). The equal
-    // case and the overrun-by-one are the two sides of that inequality.
+    // ASN-0077 WF_V(vi): the test is `resolved < count` — the count the span
+    // names — so a span covering the bound prefix EXACTLY is admissible and
+    // one position more is rejected — never clamped to the surviving sub-span
+    // (O13). The equal case and the overrun-by-one are the two sides of that
+    // inequality.
     let k = mem_kernel();
     insert3(&k);
     let s = k.snapshot();

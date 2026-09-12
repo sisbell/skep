@@ -18,13 +18,13 @@ use std::cmp;
 
 use num_traits::CheckedSub;
 use skep_address::{ordinal, Address, Nat, Tumbler};
-use skep_arrangement::{reading_surface, M5State, Run, VPos};
+use skep_arrangement::{as_ordinal_vspan, reading_surface, M5State, Run, VPos};
 
 use skep_namespace::M3State;
 
 use crate::error::{CompareError, Operand};
 use crate::types::{CompareReport, CorrPair, RegionSpec};
-use crate::vspan::{gate_vspan, span_subspace, span_vpos, Subspace};
+use crate::vspan::{gate_vspan, span_subspace, Subspace};
 use crate::{Query, RetrievalWorld};
 
 /// The most blocks one COMPARE operand may resolve to, and so the ceiling on
@@ -55,7 +55,8 @@ pub const MAX_COMPARE_OPERAND_BLOCKS: usize = 1 << 12;
 ///
 /// It is not a ceiling on the whole query's heap, and neither budget is: one
 /// span over a fragmented document materializes that document's entire
-/// resolution before a block is counted (see [`resolve_blocks`]).
+/// resolution before a block is counted (the caveat is stated where the
+/// blocks are built).
 ///
 /// [`MAX_COMPARE_OPERAND_BLOCKS`] cannot stand in for it: two operands at that
 /// budget whose spans all name ONE shared position report the SQUARE of it in
@@ -70,26 +71,25 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// pair, slot 1 ⇐ ρ₁ and slot 2 ⇐ ρ₂.
     ///
     /// A spec-set denotes its region `R_Σ(ρᵢ)` — each span clipped against the
-    /// document's current content arrangement — and that region is what
-    /// [`resolve_blocks`] hands back as the block list `p`/`q`. Every reported
-    /// pair is confined to those two regions (X12 R1), and a span that clips
-    /// to nothing contributes to neither.
+    /// document's current content arrangement — and that region is what the
+    /// join runs over. Every reported pair is confined to those two regions
+    /// (X12 R1), and a span that clips to nothing contributes to neither.
     ///
     /// Each region resolves through its document's READING SURFACE (crate
-    /// doc, *Which arrangement an operation answers from*), asked by
-    /// [`resolve_blocks`] at the point it resolves; the gate runs on the
-    /// address named, and the feet still NAME the document the caller asked
-    /// about while the positions they carry are the surface's.
+    /// doc, *Which arrangement an operation answers from*), asked as each
+    /// region resolves; the gate runs on the address named, and the feet
+    /// still NAME the document the caller asked about while the positions
+    /// they carry are the surface's.
     ///
-    /// Gate, per operand ([`gate_spec_set`]): each spec's doc registered, each
-    /// span content-subspace-started (`NotContentSubspace`) and well-formed
+    /// Gate, per operand: each spec's doc registered, each span
+    /// content-subspace-started (`NotContentSubspace`) and well-formed
     /// (`MalformedSpan`), every span fault located by an unambiguous
     /// `(operand, region, span-index)`. A well-formed depth-incompatible span
-    /// passes and
-    /// contributes nothing to its region (consulting-state — success, X12);
-    /// overlapping/repeated windows within one operand are redundant, not
-    /// wrong (⟦Γ⟧ is a set-union; duplicates collapse denotationally and the
-    /// stable sort keeps the listed order deterministic).
+    /// passes and contributes nothing to its region (consulting-state —
+    /// success, X12); overlapping/repeated windows within one operand are
+    /// redundant, not wrong (⟦Γ⟧ is a set-union; duplicates collapse
+    /// denotationally and the stable sort keeps the listed order
+    /// deterministic).
     ///
     /// WHICH REFUSAL SPEAKS. The gate walks ρ₁'s regions and their spans in
     /// submitted order, then ρ₂'s, and reports the FIRST fault whatever its
@@ -285,22 +285,21 @@ impl<'a> Block<'a> {
 ///
 /// REQUIRES GATED SPECS: every span content-subspace-started and
 /// `gate_vspan`-clean, which [`Query::compare`]'s gate establishes before it
-/// calls. Three clauses of that gate ride here. The ZERO-FREE start puts
-/// `ordinal ≥ 1` at every span, so the cursor M6 opens at `span.start()`'s
+/// calls. Two clauses of that gate ride here. The ZERO-FREE start puts
+/// `ordinal ≥ 1` at every span, so the cursor M6 opens at the span's own
 /// ordinal IS `resolve`'s `max(ordinal, 1)` and M6 carries no clamp of its own
 /// — relax zero-freedom and every foot of every correspondence from an
 /// ordinal-0 span is off by one, with the assertion below the only thing that
-/// would say so, and only in debug. `#start ≥ 2` puts both components at every
-/// start, which is the condition [`span_vpos`] hands back `None` on and
-/// therefore the one the let-else stands in for. And the CONTENT-subspace
-/// start is ASN-0122's own restriction on
-/// what a spec-set may name — the regions this builds are content regions
-/// because the gate admits nothing else.
+/// would say so, and only in debug. And the CONTENT-subspace start is
+/// ASN-0122's own restriction on what a spec-set may name — the regions this
+/// builds are content regions because the gate admits nothing else.
 ///
-/// A depth-incompatible (`#start ≥ 3`) span reads its cursor here like any
-/// other and still contributes no blocks — `resolve`'s own shape reader
-/// refuses it and hands back no runs, so the span contributes nothing to the
-/// region.
+/// The cursor is opened from M5's own reading of the span — the shape
+/// `resolve` folds every span through — so the let-else below is LIVE rather
+/// than the total form of a settled fact: a well-formed but depth-incompatible
+/// (`#start ≥ 3`) span is exactly the one M5's reader declines, and it opens
+/// no cursor, asks nothing, and contributes no blocks — the same answer
+/// `resolve` gives the same span, which is no runs.
 ///
 /// The blocks borrow the REGIONS, not `m3` or `m5`: each carries a reference
 /// to the document of the spec that named it, so the lifetime is written out
@@ -324,8 +323,15 @@ fn resolve_blocks<'a>(
     for r in regions {
         let surface = reading_surface(m3, &r.doc);
         for span in &r.spans {
-            let Some(mut cursor) = span_vpos(span) else {
+            // M5's own shape reader: a span it declines (well-formed but
+            // depth-incompatible) contributes no blocks, as `resolve` would
+            // have contributed no runs for it.
+            let Some(shape) = as_ordinal_vspan(span) else {
                 continue;
+            };
+            let mut cursor = VPos {
+                subspace: shape.subspace.clone(),
+                ordinal: shape.ordinal.clone(),
             };
             for run in m5.resolve(&surface, span) {
                 if out.len() >= MAX_COMPARE_OPERAND_BLOCKS {
@@ -461,10 +467,8 @@ fn deterministic_presentation(mut pairs: Vec<CorrPair>) -> Vec<CorrPair> {
 /// The four components X12 R3's presentation is keyed on, borrowed, each
 /// ordering by its own type: the documents by `Address`'s `Ord`, which IS the
 /// T1 tumbler order, and each foot by `VPos`'s, which is the order of the
-/// `[subspace, ordinal]` tumbler its layout denotes — the writing direction
-/// of the layout [`span_vpos`] reads.
-///
-/// [`span_vpos`]: crate::vspan::span_vpos
+/// depth-2 tumbler `[subspace, ordinal]` it denotes, stated on `VPos`'s own
+/// card.
 fn corr_key(c: &CorrPair) -> (&Address, &VPos, &Address, &VPos) {
     (&c.d1, &c.u1, &c.d2, &c.u2)
 }

@@ -6,41 +6,38 @@
 //! arrangement an operation answers from*, and each card here says which.
 
 use num_traits::{One, Zero};
-use skep_address::{document_of, ordinal, Address, Nat, Span, SpanSet};
-use skep_arrangement::{is_ordinal_vspan, ordinal_vspan, reading_surface, M5State, Run, VPos};
+use skep_address::{document_of, Address, Nat, Span, SpanSet};
+use skep_arrangement::{as_ordinal_vspan, ordinal_vspan, reading_surface, M5State, Run, VPos};
 use skep_content::HasContent;
 
 use crate::error::{DeletionsError, ExtentError, FindError, OriginError, RetrieveError};
 use crate::types::{Deletions, Delivery, DeliveryItem, RegionSpec, Spec};
 use crate::vspan::{gate_vspan, span_subspace, Subspace};
-use crate::{Query, RetrievalWorld};
+use crate::{Query, RetrievalWorld, MAX_COMPARE_OPERAND_BLOCKS};
 
 /// The most I-coverage spans one FINDDOCSCONTAINING request may resolve to,
 /// and so the ceiling on the multiplier the REQUEST applies to the two
 /// world-sized scans behind it.
 ///
-/// The budget: `docs_ever_containing` joins this coverage against the whole of
-/// R, and `project` runs it against each candidate's runs, so the coverage is
-/// one side of a join exactly as a COMPARE operand is — and `2^12` is this
-/// module's existing answer for how large one side of a join may be. It is
-/// also M10's per-array wire cap, so a FLAT region set of 4096 single-run
-/// spans — the largest flat span list the transport admits for one region — is
-/// admitted unchanged.
-///
-/// What it refuses is the two shapes no wire cap prices, the same two
-/// [`MAX_COMPARE_OPERAND_BLOCKS`] names: the NESTED region×span product, whose
-/// cost model M10's codec leaves to M6, and the multi-run expansion, where one
-/// span over a fragmented document resolves to many coverage spans from a
-/// single wire element.
+/// ONE join-side budget, not a second. `docs_ever_containing` joins this
+/// coverage against the whole of R, and `project` runs it against each
+/// candidate's runs, so the coverage is one side of a join exactly as a
+/// COMPARE operand is — and it takes that operand's budget BY DEFINITION,
+/// priced on [`MAX_COMPARE_OPERAND_BLOCKS`]'s card along with the wire-cap
+/// coincidence (a FLAT region set of 4096 single-run spans, the largest flat
+/// span list the transport admits for one region, is admitted unchanged) and
+/// the two shapes no wire cap prices: the NESTED region×span product, whose
+/// cost model M10's codec leaves to M6, and the multi-run expansion, where
+/// one span over a fragmented document resolves to many coverage spans from
+/// a single wire element. Pricing the two apart is a deliberate edit of this
+/// line, never a drift between two literals.
 ///
 /// WHAT IT DOES NOT BOUND, and neither could any number here: `|R|` and
 /// `#runs(d)` are the WORLD's, not the request's, so they stay with rate and
 /// concurrency — M10's, exactly as [`Query::show_deletions`]' `|R↾d|` term
 /// already is. This bounds the coverage the request materializes, and the
 /// factor the request multiplies those scans by; it does not bound the scans.
-///
-/// [`MAX_COMPARE_OPERAND_BLOCKS`]: crate::MAX_COMPARE_OPERAND_BLOCKS
-pub const MAX_FIND_COVERAGE_SPANS: usize = 1 << 12;
+pub const MAX_FIND_COVERAGE_SPANS: usize = MAX_COMPARE_OPERAND_BLOCKS;
 
 /// `ext(d, S) = ([S, 1], [0, n_S])` — the per-subspace exact extent span
 /// (ASN-0113 W2/W4: a count fixes an extent under sequential positions). The
@@ -93,6 +90,11 @@ fn ext_span(s: Subspace, n: &Nat) -> Span {
 /// Each run's positions are enumerated by the run that owns them —
 /// `Run::addrs`, over M5's lent run-list, so no run is cloned to be walked and
 /// the stream holds one cursor into the snapshot's arrangement.
+///
+/// Enumerating the content runs alone therefore loses nothing AND needs no
+/// filter behind it: `DELETED(a, d)` requires `(a, d) ∈ R`, and R is appended
+/// only where content is placed — seating a link records nothing in it — so a
+/// link position enumerated here could only be filtered away again.
 fn current_content<'a>(m5: &'a M5State, d: &Address) -> impl Iterator<Item = Address> + 'a {
     m5.content_runs(d).flat_map(Run::addrs)
 }
@@ -155,14 +157,10 @@ fn sorted_addr_set(it: impl IntoIterator<Item = Address>) -> Vec<Address> {
 /// read the counts directly.
 fn debug_assert_sequential_positions(m5: &M5State, doc: &Address) {
     if cfg!(debug_assertions) {
-        for (sub, count, runs) in [
-            (
-                Subspace::Content,
-                m5.content_count(doc),
-                m5.content_runs(doc),
-            ),
-            (Subspace::Link, m5.link_count(doc), m5.link_runs(doc)),
-        ] {
+        for sub in [Subspace::Content, Subspace::Link] {
+            // Each subspace asks M5 for its OWN count and runs, so the two
+            // reads compared below cannot be paired across subspaces.
+            let (count, runs) = (sub.count(m5, doc), sub.runs(m5, doc));
             let width_sum = runs.fold(Nat::zero(), |acc, r| acc + r.width());
             debug_assert!(
                 width_sum == count,
@@ -235,14 +233,16 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
 
     /// RETRIEVEV with the source consult (PUB round 2, lane 3.3, §2/§4): the
     /// same delivery, but each RUN is tested per PUB-6.41 against its origin
-    /// DOCUMENT ([`run_origin`]) through `readable`, and a masked run — its
-    /// origin unreadable to the reading principal, OR unregistered — is
-    /// emitted as [`DeliveryItem::Withheld`] AT ITS OWN POSITION rather than
-    /// delivered (PUB-6.58: one item per run, never coalesced). The NAMED
-    /// document's own readability is the caller's doc-argument consult
-    /// (PUB-6.12), run pre-dispatch; this masks only the ORIGINS its runs
-    /// window. M6 decides no readability here — it applies the predicate M10
-    /// threads in, at the run, which is the granularity the delivery has.
+    /// DOCUMENT (M1's `document_of` of the run's I-start, which block
+    /// uniformity makes the origin of every position in it) through
+    /// `readable`, and a masked run — its origin unreadable to the reading
+    /// principal, OR unregistered — is emitted as [`DeliveryItem::Withheld`]
+    /// AT ITS OWN POSITION rather than delivered (PUB-6.58: one item per run,
+    /// never coalesced). The NAMED document's own readability is the caller's
+    /// doc-argument consult (PUB-6.12), run pre-dispatch; this masks only the
+    /// ORIGINS its runs window. M6 decides no readability here — it applies
+    /// the predicate M10 threads in, at the run, which is the granularity the
+    /// delivery has.
     pub fn retrieve_v_masked(
         &self,
         specs: &[Spec],
@@ -341,24 +341,25 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// `n_C` and `n_L` alone, and a document's fragmentation is M5's
     /// `content_runs`, which is not part of M6's surface.
     ///
-    /// σ_d IS the hull of the per-subspace extents, so it is taken from
-    /// [`Query::doc_vspanset`] rather than derived a second time: the registry
-    /// gate, the D-SEQ★ trust and the count-read all happen once, in one
-    /// place. Those extents are W13-normalized, so the FIRST member's start is
-    /// the anchor `[s, 1]` of the lowest occupied subspace and the LAST
-    /// member's reach is one ordinal step past the highest occupied position.
-    ///
-    /// `from_endpoints` is INFALLIBLE on that pair: both endpoints are depth-2
-    /// (no `LevelMismatch`) and `min.start ≤ max.start < max.reach` (no
-    /// `NotIncreasing`); the stored width `reach ⊖ min` round-trips exactly —
-    /// `divergence(min, reach) ≤ #min` discharges D1, INCLUDING the
-    /// cross-subspace box — so the singleton is faithfully ASN-0112's
-    /// `σ_d = (origin_d, extent_d)`.
+    /// σ_d IS the hull of the per-subspace extents [`Query::doc_vspanset`]
+    /// reports: the first member's start to the last member's reach.
     pub fn doc_vspan(&self, doc: &Address) -> Result<SpanSet, ExtentError> {
+        // Taken from `doc_vspanset` rather than derived a second time, so the
+        // registry gate, the D-SEQ★ trust and the count-read all happen once,
+        // in one place. Those extents are W13-normalized, so the FIRST
+        // member's start is the anchor `[s, 1]` of the lowest occupied
+        // subspace and the LAST member's reach is one ordinal step past the
+        // highest occupied position.
         let extents = self.doc_vspanset(doc)?;
         let (Some(min), Some(max)) = (extents.iter().next(), extents.iter().last()) else {
             return Ok(SpanSet::empty()); // registered-empty ⇒ ⟨⟩
         };
+        // `from_endpoints` is INFALLIBLE on that pair: both endpoints are
+        // depth-2 (no `LevelMismatch`) and `min.start ≤ max.start < max.reach`
+        // (no `NotIncreasing`); the stored width `reach ⊖ min` round-trips
+        // exactly — `divergence(min, reach) ≤ #min` discharges D1, INCLUDING
+        // the cross-subspace box — so the singleton is faithfully ASN-0112's
+        // `σ_d = (origin_d, extent_d)`.
         Ok(SpanSet::singleton(
             Span::from_endpoints(min.start().clone(), &max.reach())
                 .expect("min.start < max.reach at one depth-2 length"),
@@ -375,17 +376,11 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// address whose own arrangement is empty reports `⟨⟩` only while it has
     /// no head. The registry gate runs on the address named.
     ///
-    /// The count-read core of both extent queries. M5's O(1)
-    /// `content_count`/`link_count` ARE the extents, because each subspace's
-    /// occupied V-positions form the dense, origin-anchored run `[S, 1..n_S]`
-    /// (D-SEQ★ — the sequential-position occupancy ASN-0113 W4 forces; M5's
-    /// write-path property, trusted here and tripwired in debug). Each
-    /// subspace travels with its OWN count in one pair, and reaches
-    /// [`ext_span`] classified rather than as a numeral, so the two can be
-    /// crossed neither by the pairing nor by the call; the occupied ones are
-    /// `collect`ed through M1's `FromIterator<Span>` — which collects AS
-    /// GIVEN, preserving the already-disjoint, content-before-link normal form
-    /// (asserted in debug); no invented M1 constructor.
+    /// The count-read core of both extent queries: exact because each
+    /// subspace's occupied V-positions form the dense, origin-anchored run
+    /// `[S, 1..n_S]` (D-SEQ★ — the sequential-position occupancy ASN-0113 W4
+    /// forces; M5's write-path property, trusted here and tripwired in
+    /// debug), so M5's O(1) counts ARE the extents.
     pub fn doc_vspanset(&self, doc: &Address) -> Result<SpanSet, ExtentError> {
         let w = self.0.world();
         let (m3, m5) = (w.m3(), w.m5());
@@ -395,11 +390,18 @@ impl<W: RetrievalWorld> Query<'_, W> {
         // Gated on the address named; the surface answers.
         let surface = reading_surface(m3, doc);
         debug_assert_sequential_positions(m5, &surface);
-        let (nc, nl) = (m5.content_count(&surface), m5.link_count(&surface));
-        let extents: SpanSet = [(Subspace::Content, &nc), (Subspace::Link, &nl)]
+        // Each subspace asks M5 for its OWN count and reaches `ext_span`
+        // classified rather than as a numeral, so no site pairs a subspace
+        // with another's count by hand and `ext_span(count, subspace)` does
+        // not compile. The occupied ones are `collect`ed through M1's
+        // `FromIterator<Span>`, which collects AS GIVEN — preserving the
+        // already-disjoint, content-before-link normal form asserted below;
+        // no invented M1 constructor.
+        let extents: SpanSet = [Subspace::Content, Subspace::Link]
             .into_iter()
+            .map(|s| (s, s.count(m5, &surface)))
             .filter(|(_, n)| !n.is_zero())
-            .map(|(s, n)| ext_span(s, n))
+            .map(|(s, n)| ext_span(s, &n))
             .collect();
         debug_assert!(
             extents.is_normalized(),
@@ -409,9 +411,9 @@ impl<W: RetrievalWorld> Query<'_, W> {
     }
 
     /// SHOWORIGIN over a V-span (ASN-0077, V-arity) — block-decompose, then
-    /// project ONE origin per run ([`run_origin`], through M1's
-    /// `document_of`): block uniformity (O2) means all addresses in one run
-    /// share an origin, so this is O(runs), not O(positions). Returns
+    /// project ONE origin per run (M1's `document_of` of each run's I-start):
+    /// block uniformity (O2) means all addresses in one run share an origin,
+    /// so this is O(runs), not O(positions). Returns
     /// deduplicated origin documents in tumbler order; for the link subspace
     /// the origin is the home document (CL-OWN) — handled uniformly, no
     /// special case. The I-arity is de-scoped (see the crate docs); only this
@@ -433,15 +435,12 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// registered (WF_V i), a malformed span (ii/iv), a foreign subspace
     /// (`NoSuchSubspace`) or empty real subspace (`EmptySubspace`, iii), a
     /// depth-incompatible `#start ≥ 3` span (`DepthIncompatible`, WF_V v —
-    /// decided by M5's `is_ordinal_vspan`, the recognizer its `resolve` folds
-    /// every span through, so the span this refuses and the span `resolve`
-    /// would silently empty are one span; kept distinct from the range case so
-    /// a client can tell "wrong depth" from "unbound positions"), and a
-    /// depth-2 span overrunning
-    /// the bound prefix (`RangeNotPresent`, WF_V vi — the depth-agnostic
-    /// `resolved_width < ordinal(width)` test). So a malformed span in a
-    /// foreign subspace is `MalformedSpan`, and a deep span over an empty
-    /// subspace is `EmptySubspace`.
+    /// kept distinct from the range case so a client can tell "wrong depth"
+    /// from "unbound positions"), and a depth-2 span overrunning the bound
+    /// prefix (`RangeNotPresent`, WF_V vi — fewer positions resolve than the
+    /// span names). So a malformed span in a foreign subspace is
+    /// `MalformedSpan`, and a deep span over an empty subspace is
+    /// `EmptySubspace`.
     pub fn show_origin_v(&self, doc: &Address, span: &Span) -> Result<Vec<Address>, OriginError> {
         let w = self.0.world();
         let (m3, m5) = (w.m3(), w.m5());
@@ -452,36 +451,32 @@ impl<W: RetrievalWorld> Query<'_, W> {
         // Gated on the address named; every arrangement read below is the
         // surface's.
         let surface = reading_surface(m3, doc);
-        // The start's subspace, at any depth.
-        let n_s = match span_subspace(span) {
-            Some(Subspace::Content) => m5.content_count(&surface),
-            Some(Subspace::Link) => m5.link_count(&surface),
-            // Foreign subspace ∉ {s_C, s_L}: distinct from a real-but-empty
-            // subspace.
-            None => return Err(OriginError::NoSuchSubspace),
+        // The start's subspace, at any depth. Foreign (∉ {s_C, s_L}) is
+        // distinct from real-but-empty.
+        let Some(sub) = span_subspace(span) else {
+            return Err(OriginError::NoSuchSubspace);
         };
-        if n_s.is_zero() {
+        if sub.count(m5, &surface).is_zero() {
             return Err(OriginError::EmptySubspace); // (iii)
         }
-        if !is_ordinal_vspan(span) {
-            // (v): depth must equal the subspace common depth m_S ≡ 2, asked
-            // as "the shape `resolve` serves" — so this refusal and
-            // `resolve`'s silent ⟨⟩ can never name different spans. After
-            // `gate_vspan` the only clause of M5's shape still open IS the
-            // depth one: level-uniformity ties `#width` to `#start`, and
-            // ordinal-level puts the width's only nonzero component last, so
-            // `#start == 2` gives `width = [0, n≥1]` and every other gated
-            // span fails on depth alone.
+        // (v): depth must equal the subspace common depth m_S ≡ 2, asked as
+        // "the shape `resolve` serves" — M5's own reader, so this refusal and
+        // `resolve`'s silent ⟨⟩ can never name different spans. After
+        // `gate_vspan` the only clause of M5's shape still open IS the depth
+        // one: level-uniformity ties `#width` to `#start`, and ordinal-level
+        // puts the width's only nonzero component last, so `#start == 2`
+        // gives `width = [0, n≥1]` and every other gated span fails on depth
+        // alone.
+        let Some(shape) = as_ordinal_vspan(span) else {
             return Err(OriginError::DepthIncompatible);
-        }
+        };
         // Span now depth-2 (≥ 3 rejected above); resolve may still be partial
         // if the span overruns the bound prefix.
         let runs = m5.resolve(&surface, span);
         let resolved_width = runs.iter().fold(Nat::zero(), |acc, r| acc + r.width());
-        // The nominal count is read via ordinal(width) — the last component,
-        // which level-uniformity ties to #start — keeping the overrun test
-        // depth-agnostic, not a hard-coded get(2).
-        if &resolved_width < ordinal(span.width()) {
+        // The nominal count is the reading's own `count` — the same part
+        // `resolve` read — so the overrun test extracts nothing by index.
+        if &resolved_width < shape.count {
             return Err(OriginError::RangeNotPresent); // (vi): reject, never clamp (O13)
         }
         Ok(sorted_addr_set(runs.iter().map(run_origin)))
@@ -490,15 +485,8 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// SHOWDELETIONS (ASN-0075) — gate, then membership-test the
     /// cross-document combine IN M6 from M5's per-document primitives:
     /// `DeletedFromAWithB = { a : CURRENT(a, d_b) ∧ DELETED(a, d_a) }` and its
-    /// symmetric twin. CURRENT(·, d) is enumerated by [`current_content`],
-    /// which asks each content run for its addresses exactly as RETRIEVEV
-    /// does; DELETED(·, d) is tested by membership in M5's per-document
-    /// deleted cover (`deletions(d).denotes(a)`) — exact *unconditionally* by
-    /// `difference_sets`' denotational contract
-    /// (`⟦deletions(d)⟧ = {x : DELETED(x, d)}` whatever the cover's internal
-    /// span packing), so there are no false positives. Never opens M4; both
-    /// halves read off the one bound snapshot (single consistent `(M, R)` —
-    /// no torn-read phantom deletion).
+    /// symmetric twin. Never opens M4; both halves read off the one bound
+    /// snapshot (single consistent `(M, R)` — no torn-read phantom deletion).
     ///
     /// Reads the arrangement and the provenance record of each address as
     /// NAMED, and does not float (crate doc, *Which arrangement an operation
@@ -521,12 +509,6 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// The operation's domain is what confines it, not this implementation's
     /// choice of walk.
     ///
-    /// What the implementation gets from that: enumerating the content runs
-    /// alone loses nothing AND needs no filter behind it. `DELETED(a, d)`
-    /// requires `(a, d) ∈ R`, and R is appended only where content is placed —
-    /// seating a link records nothing in it — so a link position enumerated
-    /// here could only be filtered away again.
-    ///
     /// TIME IS UNBOUNDED AND M6 DOES NOT BOUND IT — and unlike RETRIEVEV's,
     /// it is not bounded by the answer either. No span narrows the request, so
     /// both documents are enumerated WHOLE: the work is
@@ -544,11 +526,11 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// and a request-size cap is no help here, this request being two
     /// addresses whatever the documents behind them hold.
     ///
-    /// MEMORY IS THE ANSWER'S. [`current_content`] streams, so what is held
-    /// live is the deduped halves and one address at a time, not a
-    /// materialized copy of either document's position list. The worst case
-    /// is therefore the honest one: two documents where each has deleted what
-    /// the other still holds, whose answer genuinely is that many addresses.
+    /// MEMORY IS THE ANSWER'S. The enumeration streams, so what is held live
+    /// is the deduped halves and one address at a time, not a materialized
+    /// copy of either document's position list. The worst case is therefore
+    /// the honest one: two documents where each has deleted what the other
+    /// still holds, whose answer genuinely is that many addresses.
     pub fn show_deletions(
         &self,
         d_a: &Address,
@@ -564,6 +546,13 @@ impl<W: RetrievalWorld> Query<'_, W> {
         let del_a = m5.deletions(d_a); // { a : DELETED(a, d_a) } as a per-level-class cover
         let del_b = m5.deletions(d_b); // { a : DELETED(a, d_b) }
         // CURRENT in the one document ∧ DELETED from the other, both ways.
+        // CURRENT(·, d) is enumerated by `current_content`, which asks each
+        // content run for its addresses exactly as RETRIEVEV does; DELETED(·, d)
+        // is tested by membership in M5's per-document deleted cover
+        // (`deletions(d).denotes(a)`) — exact UNCONDITIONALLY by
+        // `difference_sets`' denotational contract
+        // (`⟦deletions(d)⟧ = {x : DELETED(x, d)}` whatever the cover's internal
+        // span packing), so there are no false positives.
         let deleted_from_a_with_b =
             sorted_addr_set(current_content(m5, d_b).filter(|a| del_a.denotes(a.tumbler())));
         let deleted_from_b_with_a =
@@ -574,24 +563,11 @@ impl<W: RetrievalWorld> Query<'_, W> {
         })
     }
 
-    /// FINDDOCSCONTAINING (ASN-0124 `finddocs`) — resolve, then a
-    /// present-tense filter over M5's historical superset: phase 1 unions each
-    /// region span's `image` (raw, possibly mixed-length — M5's
-    /// `docs_ever_containing`/`project` apply the level-class discipline
-    /// INTERNALLY, so M6 passes the raw union straight through and owns no
-    /// level-class discipline anywhere); phase 2 narrows the tumbler-ordered
-    /// candidate superset with `project(d, coverage)` non-emptiness — the
-    /// present-tense soundness filter (FD-SOUND), which is what separates this
-    /// live answer from M5's `docs_ever_containing`. TWO narrowings separate
-    /// that superset from the live answer, and this filter discharges both at
-    /// once — from order-overlap to genuine ever-containment, M5's test
-    /// admitting the merely ADJACENT candidates whose recorded spans touch the
-    /// coverage without sharing a position, so the superset is coarser even
-    /// than FD-HIST's `finddocs_R`; and from ever to now, dropping FD-GHOST's
-    /// `ghosts` (`finddocs_R ∖ finddocs`), the documents that held the queried
-    /// material at some past boundary and hold none of it now. Returns bare
-    /// deduplicated identities, tumbler-ordered — no positions, no counts
-    /// (FD codomain; present-tense CONTAINERS, distinct from SHOWORIGIN's
+    /// FINDDOCSCONTAINING (ASN-0124 `finddocs`) — the documents that CURRENTLY
+    /// hold some I-address the regions resolve to: sound (FD-SOUND — a present
+    /// witness, never a historical one) and complete (FD-COMPLETE), as bare
+    /// deduplicated identities in tumbler order — no positions, no counts (FD
+    /// codomain; present-tense CONTAINERS, distinct from SHOWORIGIN's
     /// allocators).
     ///
     /// Reads the arrangement of each region's address as NAMED, and does not
@@ -615,11 +591,6 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// is taken, so a rejected request costs `O(spans)` and nothing upstream,
     /// `(region, index)` promises that every region and span before the named
     /// one is clean, and a SHAPE fault always outranks the size refusal below.
-    ///
-    /// Emptiness is tested with M1's `SpanSet::is_empty` — denotationally
-    /// exact because no algebra result carries a zero-width member (zero
-    /// members ⇔ empty denotation), the predicate the design's M1-seam ask
-    /// named (landed in the built M1).
     ///
     /// COST, IN THREE FACTORS OF WHICH ONE IS THE REQUEST'S. The work is
     /// `|candidates| · #runs(d) · |coverage|`: the coverage is the union of
@@ -690,14 +661,17 @@ impl<W: RetrievalWorld> Query<'_, W> {
                 })?;
             }
         }
-        // Phase 1: resolve to content I-coverage. Raw mixed-length coverage,
-        // and the union of the region images IS their concatenation, so the
-        // images are gathered in submitted order and the coverage is built
-        // from them once. Gathering rather than re-unioning is what keeps the
-        // walk LINEAR in the coverage: `union` answers with a fresh set, so an
-        // accumulator threaded through it copies the coverage built so far at
-        // every span, and the budget below would then bound a quantity that
-        // costs its own square to produce.
+        // Phase 1: resolve to content I-coverage — the union of every region
+        // span's `image`, raw and possibly mixed-length: M5's
+        // `docs_ever_containing`/`project` apply the level-class discipline
+        // INTERNALLY, so the raw union passes straight through and M6 owns no
+        // level-class discipline anywhere. The union of the images IS their
+        // concatenation, so they are gathered in submitted order and the
+        // coverage is built from them once. Gathering rather than re-unioning
+        // is what keeps the walk LINEAR in the coverage: `union` answers with
+        // a fresh set, so an accumulator threaded through it copies the
+        // coverage built so far at every span, and the budget below would
+        // then bound a quantity that costs its own square to produce.
         let mut coverage_spans: Vec<Span> = Vec::new();
         for r in regions {
             for span in &r.spans {
@@ -713,13 +687,24 @@ impl<W: RetrievalWorld> Query<'_, W> {
         let coverage: SpanSet = coverage_spans.into_iter().collect(); // collect AS GIVEN
         // Phase 2: the historical superset (tumbler-ordered, level-classes
         // handled inside M5), narrowed by the present-tense filter — one
-        // `project` per candidate.
+        // `project` per candidate, non-empty iff the candidate holds some
+        // covered address NOW. TWO narrowings separate that superset from the
+        // live answer, and the filter discharges both at once — from
+        // order-overlap to genuine ever-containment, M5's test admitting the
+        // merely ADJACENT candidates whose recorded spans touch the coverage
+        // without sharing a position, so the superset is coarser even than
+        // FD-HIST's `finddocs_R`; and from ever to now, dropping FD-GHOST's
+        // `ghosts` (`finddocs_R ∖ finddocs`), the documents that held the
+        // queried material at some past boundary and hold none of it now.
         let candidates = m5.docs_ever_containing(&coverage);
         Ok(candidates
             .into_iter()
             // FD-SOUND — the present-tense containment filter — AND the
             // container consult (lane 3.3, §3): a container the reader may not
             // read is dropped at its identity, before it reaches the answer.
+            // Emptiness is M1's `SpanSet::is_empty`, denotationally exact
+            // because no algebra result carries a zero-width member (zero
+            // members ⇔ empty denotation).
             .filter(|d| readable(d) && !m5.project(d, &coverage).is_empty())
             .collect())
     }

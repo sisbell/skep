@@ -36,8 +36,9 @@ skep-content = { path = "../skep-content" }
 # answer for whatever address they are handed; Run, which answers for its own
 # positions; and VPos (re-exported through M6's surface). Both halves of the
 # ordinal-vspan shape come from here too — ordinal_vspan builds the extents M6
-# reports and is_ordinal_vspan judges the spans M6 is asked about — so the
-# extent and the refusal are two readings of one definition.
+# reports, and as_ordinal_vspan reads the spans M6 is asked about, refusing
+# the depth-incompatible ones and handing over the parts of the rest — so the
+# extent, the refusal and the parts are three readings of one definition.
 skep-arrangement = { path = "../skep-arrangement" }
 
 [dev-dependencies]

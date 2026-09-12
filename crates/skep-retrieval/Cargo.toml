@@ -18,7 +18,7 @@ serde.workspace = true
 # is_level_uniform/ordinal), span/span-set synthesis and membership, and the
 # Address/Tumbler orders the answer presentation sorts by.
 skep-address = { path = "../skep-address" }
-# M2 — the pinned Snapshot every query binds, and its Seq. M6 never writes:
+# M2 — the Snapshot every query pins, and its Seq. M6 never writes:
 # no transact, no Kernel handle, no LockKey.
 skep-kernel = { path = "../skep-kernel" }
 # M3 — is_registered_document, the universal registry gate (registered-empty

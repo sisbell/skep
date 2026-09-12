@@ -1,12 +1,12 @@
 //! §D COMPARE / SHOWRELATIONOF2VERSIONS (ASN-0122) — an interval equi-join on
 //! I-address, complete under fan-out. The contract is a relational join keyed
 //! on **address equality, never value** — so COMPARE never opens M4. Three
-//! phases: resolve each spec-set to the blocks of its region, interval-join on
-//! the I-axis with cross-product on overlap (X12 R2 completeness; the
-//! cross-product is `corr`'s own comprehension over `P × Q`), sort into one
-//! deterministic presentation (X12 R3; R4's canonical maximal form NOT
-//! required — v1 ships the finer-than-maximal per-overlap report, fully
-//! conforming under R1–R3).
+//! phases: resolve each spec-set to the blocks of its operand region,
+//! interval-join on the I-axis with cross-product on overlap (X12 R2
+//! completeness; the cross-product is `corr`'s own comprehension over
+//! `P × Q`), sort into one deterministic presentation (X12 R3; R4's canonical
+//! maximal form NOT required — v1 ships the finer-than-maximal per-overlap
+//! report, fully conforming under R1–R3).
 //!
 //! COMPARE is the one M6 operation whose cost is SUPERLINEAR in its request —
 //! `|P|·|Q|` over two block lists a caller sizes independently — so it is the
@@ -70,10 +70,13 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// fan-out (X12 R2), in one deterministic presentation (X12 R3); in each
     /// pair, slot 1 ⇐ ρ₁ and slot 2 ⇐ ρ₂.
     ///
-    /// A spec-set denotes its region `R_Σ(ρᵢ)` — each span clipped against the
-    /// document's current content arrangement — and that region is what the
-    /// join runs over. Every reported pair is confined to those two regions
-    /// (X12 R1), and a span that clips to nothing contributes to neither.
+    /// A spec-set denotes its OPERAND REGION `R_Σ(ρᵢ)` — each span clipped
+    /// against the document's current content arrangement — and that region
+    /// is what the join runs over. Every reported pair is confined to the two
+    /// operand regions `R_Σ(ρ₁) × R_Σ(ρ₂)` (X12 R1), and a span that clips to
+    /// nothing contributes to neither. (Each `RegionSpec` is itself a region
+    /// in ASN-0124's sense — the element a fault coordinate counts; see its
+    /// card for the two words.)
     ///
     /// Each region resolves through its document's READING SURFACE (crate
     /// doc, *Which arrangement an operation answers from*), asked as each
@@ -81,14 +84,14 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// still NAME the document the caller asked about while the positions
     /// they carry are the surface's.
     ///
-    /// Gate, per operand: each spec's doc registered, each span
+    /// Gate, per operand: each region's doc registered, each span
     /// content-subspace-started (`NotContentSubspace`) and well-formed
     /// (`MalformedSpan`), every span fault located by an unambiguous
     /// `(operand, region, span-index)`. A well-formed depth-incompatible span
-    /// passes and contributes nothing to its region (consulting-state —
-    /// success, X12); overlapping/repeated windows within one operand are
-    /// redundant, not wrong (⟦Γ⟧ is a set-union; duplicates collapse
-    /// denotationally and the stable sort keeps the listed order
+    /// passes and contributes nothing to its operand's region
+    /// (consulting-state — success, X12); overlapping/repeated windows within
+    /// one operand are redundant, not wrong (⟦Γ⟧ is a set-union; duplicates
+    /// collapse denotationally and the stable sort keeps the listed order
     /// deterministic).
     ///
     /// WHICH REFUSAL SPEAKS. The gate walks ρ₁'s regions and their spans in
@@ -100,7 +103,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// found well-formed.
     ///
     /// COST, AND THE TWO BUDGETS THAT BOUND IT. The join is `|P|·|Q|`
-    /// candidate tests over the two regions' blocks, and BOTH factors are the
+    /// candidate tests over the two operands' blocks, and BOTH factors are the
     /// request's: a region names a span list and a spec-set names a region
     /// list, so their product is the caller's to choose and squares in it. So
     /// each operand is capped at [`MAX_COMPARE_OPERAND_BLOCKS`] blocks
@@ -183,7 +186,7 @@ fn gate_spec_set(
 
 /// Transient per-query working row for COMPARE: built by [`resolve_blocks`],
 /// consumed by [`overlap_pair`]/[`interval_join`]; dropped at return. One
-/// block per resolved I-run of one spec's span — the run as M5 handed it
+/// block per resolved I-run of one region's span — the run as M5 handed it
 /// over, plus where the block's first position sits in its document's V-space
 /// and one I-step past its last position.
 ///
@@ -191,8 +194,8 @@ fn gate_spec_set(
 /// every block built from it, so the row borrows what it only reads and owns
 /// only what it computed. The join builds one block per resolved run BEFORE it
 /// emits anything, so an owned document here would be one `Address` clone per
-/// block — paid in full by a query whose two regions share nothing and report
-/// no pairs at all.
+/// block — paid in full by a query whose two operand regions share nothing
+/// and report no pairs at all.
 #[derive(Debug)]
 struct Block<'a> {
     doc: &'a Address,
@@ -255,12 +258,13 @@ impl<'a> Block<'a> {
     }
 }
 
-/// The region a spec-set denotes, as blocks: resolve every spec's span to its
-/// I-run blocks, reconstructing each run's V-start by accumulation. `None`
-/// when the operand would resolve to MORE THAN [`MAX_COMPARE_OPERAND_BLOCKS`]
-/// blocks — a block list of exactly the budget is answered, and the block past
-/// it refused AS THE BLOCKS ARE PRODUCED, so an over-budget operand stops
-/// resolving rather than resolving whole and then being measured.
+/// The operand region a spec-set denotes, as blocks: resolve every region's
+/// spans to their I-run blocks, reconstructing each run's V-start by
+/// accumulation. `None` when the operand would resolve to MORE THAN
+/// [`MAX_COMPARE_OPERAND_BLOCKS`] blocks — a block list of exactly the budget
+/// is answered, and the block past it refused AS THE BLOCKS ARE PRODUCED, so
+/// an over-budget operand stops resolving rather than resolving whole and
+/// then being measured.
 ///
 /// THE BUDGET'S GRANULARITY IS A SPAN. The walk stops at the first span whose
 /// runs carry the accumulator past the budget, so what the budget bounds is
@@ -291,8 +295,9 @@ impl<'a> Block<'a> {
 /// — relax zero-freedom and every foot of every correspondence from an
 /// ordinal-0 span is off by one, with the assertion below the only thing that
 /// would say so, and only in debug. And the CONTENT-subspace start is
-/// ASN-0122's own restriction on what a spec-set may name — the regions this
-/// builds are content regions because the gate admits nothing else.
+/// ASN-0122's own restriction on what a spec-set may name — the operand
+/// region this builds is a content region because the gate admits nothing
+/// else.
 ///
 /// The cursor is opened from M5's own reading of the span — the shape
 /// `resolve` folds every span through — so the let-else below is LIVE rather
@@ -302,7 +307,7 @@ impl<'a> Block<'a> {
 /// `resolve` gives the same span, which is no runs.
 ///
 /// The blocks borrow the REGIONS, not `m3` or `m5`: each carries a reference
-/// to the document of the spec that named it, so the lifetime is written out
+/// to the document of the region that named it, so the lifetime is written out
 /// rather than elided — three input lifetimes and no `&self` leave nothing for
 /// elision to pick.
 ///
@@ -454,11 +459,14 @@ fn interval_join(p: &[Block<'_>], q: &[Block<'_>]) -> Option<Vec<CorrPair>> {
 /// [`fold_adjacent`]).
 ///
 /// THE SECOND FOOT IS IN THE KEY BECAUSE OF FAN-OUT, which is X11's own
-/// strictness clause: two pairs sharing both starts would share their first
-/// element and coincide, and sharing ONLY the first start "happens exactly
-/// under fan-out" — where several chains land on one first foot — so the
-/// second key is what separates them. A presentation keyed on the first foot
-/// alone would leave a fanned-out report's order undetermined.
+/// strictness clause — stated there of MAXIMAL pairs: two maximal pairs
+/// sharing both starts would share their first element and coincide, and
+/// sharing ONLY the first start "happens exactly under fan-out", where several
+/// of X11's succ-chains (here, several pairs) land on one first foot — so the
+/// second key is what separates them. This finer report CAN repeat a whole
+/// key (two nested windows do), which is what the stable sort above answers
+/// for; and a presentation keyed on the first foot alone would leave a
+/// fanned-out report's order undetermined either way.
 fn deterministic_presentation(mut pairs: Vec<CorrPair>) -> Vec<CorrPair> {
     pairs.sort_by(|a, b| corr_key(a).cmp(&corr_key(b)));
     fold_adjacent(pairs)
@@ -477,12 +485,15 @@ fn corr_key(c: &CorrPair) -> (&Address, &VPos, &Address, &VPos) {
 /// required, and a per-overlap, finer-than-maximal report already satisfies
 /// R1–R3. v1 ships the IDENTITY (no fold); the reference is therefore
 /// complete, not an unimplemented stub. A builder wanting the X11 maximal
-/// form merges feet-successor-adjacent pairs here (pair₂'s two feet are the
-/// unit-successors of pair₁'s last positions AND their I-addresses are
-/// consecutive) into one wider pair — a pure presentation post-pass that
-/// never changes ⟦Γ⟧. Implementing that merge is exactly what would make the
-/// output X11's `CANON`, and only then would *canonical* be the right word
-/// for this step.
+/// form merges SUCCESSOR-ADJACENT pairs here — pair₂'s two starts are the
+/// unit-successors of pair₁'s two last positions, `u₂ = u₁ + n₁` on each
+/// foot — into one wider pair. That is X11's whole condition: `succ` steps
+/// both FEET by one V-position and asks only that the stepped element be in
+/// the relation; it says nothing about the shared I-addresses, which X10(c)
+/// lets be any sequence, so two abutting pairs merge whether or not their
+/// I-runs are consecutive. A pure presentation post-pass that never changes
+/// ⟦Γ⟧. Implementing that merge is exactly what would make the output X11's
+/// `CANON`, and only then would *canonical* be the right word for this step.
 ///
 /// Landing that merge would leave every report EQUIVALENT to today's and
 /// UNEQUAL to it — which is exactly what R4 licenses, conformance being

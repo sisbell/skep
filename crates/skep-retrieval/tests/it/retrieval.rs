@@ -11,7 +11,7 @@
 //! extent synthesis from counts (D-SEQ★) and what the two extent queries
 //! therefore do and do not answer (V9: the box is fixed under a content edit
 //! the extents follow); origin projection at whatever depth a document sits
-//! (a fork's own content, against its source's), and its reject-never-clamp
+//! (a fork's own content, against its source's), and its reject-never-clip
 //! admissibility with the exact-extent boundary (WF_V/O13); the
 //! cross-document SHOWDELETIONS combine (D-IDENT, and M6's T1 presentation
 //! of each set);
@@ -912,7 +912,7 @@ fn the_request_gate_checks_the_registry_before_the_spans_of_its_own_region() {
 fn doc_vspan_is_the_bounding_hull_of_the_per_subspace_extents() {
     // ASN-0112: σ_d — the whole-document bounding span, a bounding box
     // bridging the inter-subspace void once links exist (D-SEQ★ makes the
-    // counts the extents; the anchor is the subspace origin, never negative).
+    // counts the extents; the anchor is `[S, 1]`, never negative).
     let k = mem_kernel();
     insert3(&k);
     {
@@ -1172,11 +1172,11 @@ fn show_origin_v_projects_an_origin_at_whatever_depth_its_document_sits() {
 
 #[test]
 fn show_origin_v_admits_the_exact_extent_and_rejects_one_position_past_it() {
-    // ASN-0077 WF_V(vi): the test is `resolved < count` — the count the span
-    // names — so a span covering the bound prefix EXACTLY is admissible and
-    // one position more is rejected — never clamped to the surviving sub-span
-    // (O13). The equal case and the overrun-by-one are the two sides of that
-    // inequality.
+    // ASN-0077 WF_V(vi): the test is `resolved < count` — the span's nominal
+    // extent (ASN-0115), the count it names — so a span covering the bound
+    // prefix EXACTLY is admissible and one position more is rejected — never
+    // clipped to the surviving sub-span as RETRIEVEV's R6 would (O13). The
+    // equal case and the overrun-by-one are the two sides of that inequality.
     let k = mem_kernel();
     insert3(&k);
     let s = k.snapshot();
@@ -1201,7 +1201,7 @@ fn show_origin_v_admits_the_exact_extent_and_rejects_one_position_past_it() {
 
 #[test]
 fn show_origin_v_rejects_each_inadmissible_case_distinctly() {
-    // ASN-0077 WF_V(i–vi)/O13 — reject, never clamp; the checks run in the
+    // ASN-0077 WF_V(i–vi)/O13 — reject, never clip; the checks run in the
     // documented order: registered → well-formed → subspace → empty →
     // depth → range.
     let k = mem_kernel();
@@ -1261,7 +1261,7 @@ fn show_origin_v_rejects_each_inadmissible_case_distinctly() {
         OriginError::DepthIncompatible
     ));
     // (vi) a depth-2 span overrunning the bound prefix — partial resolution
-    // is REJECTED, never clamped to the surviving sub-span (O13).
+    // is REJECTED, never clipped to the surviving sub-span (O13).
     assert!(matches!(
         err_of(q.show_origin_v(&doc1(), &vspan(1, 2, 5))),
         OriginError::RangeNotPresent
@@ -1485,7 +1485,7 @@ fn compare_reports_address_equal_correspondences_with_per_block_feet() {
 #[test]
 fn compare_reports_the_full_width_of_each_overlap() {
     // ASN-0122 X10: a correspondence carries the WIDTH of the shared run, and
-    // the width is the NARROWER operand's — the half-open clamp
+    // the width is the NARROWER operand's — the half-open clip
     // `hi = min(p_reach, q_reach)`, exercised from each side in turn.
     let k = mem_kernel();
     let vs = insert3(&k);
@@ -1518,8 +1518,8 @@ fn compare_reports_the_full_width_of_each_overlap() {
 fn compare_takes_each_blocks_v_start_from_the_span_that_named_it() {
     // ASN-0122 X12 R1 soundness rests on the V-RECONSTRUCTION LEMMA: a
     // content span's FIRST bound V-position is `span.start()`, so a block's
-    // V-cursor begins there and not at the subspace origin. A window opened
-    // MID-document is the only input that can tell the two apart.
+    // V-cursor begins there and not at the subspace anchor `[S, 1]`. A window
+    // opened MID-document is the only input that can tell the two apart.
     let k = mem_kernel();
     let vs = insert3(&k);
     vs.copy(
@@ -1573,8 +1573,9 @@ fn compare_presents_pairs_in_lexicographic_d1_u1_d2_u2_order() {
 #[test]
 fn compare_orders_pairs_that_share_a_first_foot_by_their_second() {
     // ASN-0122 X12 R3, on the half of the key X11's strictness clause exists
-    // for: under FAN-OUT several chains land on ONE first foot, so pairs that
-    // share `(d1, u1)` are separated only by `(d2, u2)` — a presentation keyed
+    // for: under FAN-OUT several pairs — X11's succ-chains, not the I-chains
+    // the fixtures name — land on ONE first foot, so pairs that share
+    // `(d1, u1)` are separated only by `(d2, u2)` — a presentation keyed
     // on the first foot alone would leave a fanned-out report's order
     // undetermined. Every pair below shares its first foot, so nothing but the
     // TAIL can explain the order.

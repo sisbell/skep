@@ -21,9 +21,10 @@
 //! out of it: a REGISTERED-but-empty document is an ordinary success that
 //! contributes the operation's empty form (`⟨⟩`, an empty delivery, an empty
 //! half), while a NOT-REGISTERED one is that operation's typed
-//! `*NotRegistered` failure (W-pre 0112/0113). Registered is the word
-//! throughout, and it is narrower than M3's `is_allocated`, which is true of
-//! account and element addresses no operation here will accept as a document.
+//! `*NotRegistered` failure (ASN-0113's W-pre; ASN-0112's precondition, the
+//! `dom(M)` of V0). Registered is the word throughout, and it is narrower
+//! than M3's `is_allocated`, which is true of account and element addresses
+//! no operation here will accept as a document.
 //! Which of the two a given document is belongs to M3; which of the two
 //! answers M6 gives back is M6's own, and it is the first thing each of the
 //! seven operations decides.
@@ -163,14 +164,14 @@ impl<W: WorldState + HasM3 + HasM5> RetrievalWorld for W {}
 /// The caller (M10) takes the snapshot (`Kernel::snapshot()`) and constructs
 /// the handle over it. The obligation is on the SNAPSHOT, not the handle: take
 /// **one `Kernel::snapshot()` per logical query** and route every read of that
-/// query through handles bound to it, so all of them observe one consistent
+/// query through handles built on it, so all of them observe one consistent
 /// `(M, R)` root — the discharge of M2's clause 6 and the single-Σ requirement
 /// of ASN-0075/0122/0124. Reads never commit and have no
 /// commit-before-acknowledge obligation.
 pub struct Query<'s, W: RetrievalWorld>(&'s Snapshot<W>);
 
 impl<'s, W: RetrievalWorld> Query<'s, W> {
-    /// Bind one pinned snapshot. No precondition: any `&Snapshot<W>` is
+    /// Pin one snapshot. No precondition: any `&Snapshot<W>` is
     /// admissible, and the single-Σ obligation is the caller's over the
     /// snapshot it takes (see the type's card), not over how many handles it
     /// builds on one.

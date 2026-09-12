@@ -17,7 +17,7 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   content region; extents and counts.
 
 Read-only by construction: no transaction, no lock, no write path —
-every query binds one immutable snapshot.
+every query pins one immutable snapshot.
 
 ## License
 

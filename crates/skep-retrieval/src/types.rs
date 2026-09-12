@@ -58,10 +58,15 @@ pub struct Spec {
 /// why it is multi-span: a single span's convex denotation cannot name
 /// scattered fragments exactly). Both take `&[RegionSpec]`.
 ///
-/// It SPECIFIES part of a region; it is not one. The region `R_Σ(ρ)` is what
-/// the spec-set denotes once each span is clipped against the document's
-/// current arrangement — the thing COMPARE's report is confined to (X12 R1),
-/// and the thing an empty resolution yields none of.
+/// "Region" is two corpus words, and this type sits under both. ASN-0124 FD-Q
+/// calls the pair `(d_j, W_j)` itself a document-scoped V-REGION, so the
+/// `region` a fault coordinate carries, and "region j" wherever this crate
+/// walks a request, count these elements. ASN-0122's REGION `R_Σ(ρ)` is the
+/// instance set a whole spec-set denotes once each span is clipped against
+/// its document's current arrangement — the union of its elements' clipped
+/// parts, the thing COMPARE's report is confined to (X12 R1), and the thing
+/// an empty resolution yields none of. This crate names that one only as the
+/// OPERAND's region, or by its symbol.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct RegionSpec {
     pub doc: Address,
@@ -182,9 +187,10 @@ pub struct Deletions {
 }
 
 /// One COMPARE correspondence (ASN-0122): the two feet resolve to one shared
-/// I-address run of `width` positions — slot 1 drawn from operand ρ₁, slot 2
-/// from ρ₂ (X12). NOT `Serialize` (derive policy above): it carries M5's
-/// `VPos`, which is not, so M10 marshals this field-by-field.
+/// I-address SEQUENCE of `width` positions (X10(c); in this per-overlap
+/// report, always one I-run) — slot 1 drawn from operand ρ₁, slot 2 from ρ₂
+/// (X12). NOT `Serialize` (derive policy above): it carries M5's `VPos`,
+/// which is not, so M10 marshals this field-by-field.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CorrPair {
     pub d1: Address,
@@ -203,7 +209,8 @@ pub struct CorrPair {
 /// whose denotation `⟦Γ⟧` is the correspondence relation, complete and sound
 /// (X12 R1–R2) in one deterministic presentation (R3; finer-than-maximal —
 /// R4's canonical form is not required). NOT `Serialize` — see [`CorrPair`].
-/// `Default` is the empty report two regions that share no address yield.
+/// `Default` is the empty report two operands whose regions share no address
+/// yield.
 ///
 /// `PartialEq` IS EQUALITY OF THE LISTING, which is strictly finer than X12's
 /// report *equivalence* (`⟦Γ₁⟧ = ⟦Γ₂⟧`). Conformance is denotational and
@@ -227,7 +234,7 @@ impl CompareReport {
         self.0.len()
     }
 
-    /// Whether the two regions share no address at all.
+    /// Whether the two operands' regions share no address at all.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }

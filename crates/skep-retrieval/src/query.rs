@@ -1,6 +1,6 @@
 //! §§A–C, D (SHOWDELETIONS), E — six of the seven operations (COMPARE lives
 //! in `compare`). Every operation begins by reading its slices off the single
-//! bound snapshot, runs its gate (typed rejection), then composes upstream
+//! pinned snapshot, runs its gate (typed rejection), then composes upstream
 //! primitives. Which arrangement it then reads — the named address's reading
 //! surface, or the named address's own — is the crate doc's *Which
 //! arrangement an operation answers from*, and each card here says which.
@@ -41,9 +41,10 @@ pub const MAX_FIND_COVERAGE_SPANS: usize = MAX_COMPARE_OPERAND_BLOCKS;
 
 /// `ext(d, S) = ([S, 1], [0, n_S])` — the per-subspace exact extent span
 /// (ASN-0113 W2/W4: a count fixes an extent under sequential positions). The
-/// anchor is written ONCE, here, as the subspace origin `[S, 1]` — never
-/// absorbed into a confluent summary, which is how the negative-origin hazard
-/// (0112 OQ5) is designed out.
+/// anchor `[S, 1]` — ASN-0113's `start_S` — is written ONCE, here, never
+/// absorbed into a confluent summary, which is how the hazard ASN-0112 OQ5
+/// records against its bounding-span start `origin_d` (a POSITION, not
+/// ASN-0077's origin) is designed out.
 ///
 /// Built with M5's `ordinal_vspan`, so the extent M6 REPORTS is the shape M5's
 /// `resolve` READS: the constructor and the recognizer every request span is
@@ -146,10 +147,10 @@ fn sorted_addr_set(it: impl IntoIterator<Item = Address>) -> Vec<Address> {
 /// in debug).
 ///
 /// D-SEQ★ (PerSubspaceSequentialPositions, ASN-0047) is the invariant the
-/// counts stand on: an occupied subspace's V-positions are exactly the dense,
-/// origin-anchored prefix `V_S(d) = {[S, k] : 1 ≤ k ≤ n_S}` — which is what
-/// ASN-0113 W4 forces, and which ASN-0047 derives from contiguity D-CTG★ plus
-/// minimum-position D-MIN★. Its two ingredients are what the two assertions
+/// counts stand on: an occupied subspace's V-positions are exactly the dense
+/// prefix anchored at `[S, 1]`, `V_S(d) = {[S, k] : 1 ≤ k ≤ n_S}` — which is
+/// what ASN-0113 W4 forces, and which ASN-0047 derives from contiguity D-CTG★
+/// plus minimum-position D-MIN★. Its two ingredients are what the two assertions
 /// check: each subspace's run widths sum to its count (density — a hole would
 /// make the count over-report the extent), and an occupied subspace anchors
 /// at ordinal 1 (D-MIN★ itself; ASN-0112 V8 origin permanence, append-only
@@ -377,10 +378,10 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// no head. The registry gate runs on the address named.
     ///
     /// The count-read core of both extent queries: exact because each
-    /// subspace's occupied V-positions form the dense, origin-anchored run
-    /// `[S, 1..n_S]` (D-SEQ★ — the sequential-position occupancy ASN-0113 W4
-    /// forces; M5's write-path property, trusted here and tripwired in
-    /// debug), so M5's O(1) counts ARE the extents.
+    /// subspace's occupied V-positions form the dense run anchored at
+    /// `[S, 1]`, `[S, 1..n_S]` (D-SEQ★ — the sequential-position occupancy
+    /// ASN-0113 W4 forces; M5's write-path property, trusted here and
+    /// tripwired in debug), so M5's O(1) counts ARE the extents.
     pub fn doc_vspanset(&self, doc: &Address) -> Result<SpanSet, ExtentError> {
         let w = self.0.world();
         let (m3, m5) = (w.m3(), w.m5());
@@ -429,11 +430,12 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// least one run is projected and `Ok(vec![])` is not an answer this
     /// operation gives.
     ///
-    /// Inadmissible (Err) — reject, never silently clamp (O13), and the
-    /// listing below IS the precedence: the checks run in this order and the
-    /// FIRST condition that holds is the one reported. A document that is not
-    /// registered (WF_V i), a malformed span (ii/iv), a foreign subspace
-    /// (`NoSuchSubspace`) or empty real subspace (`EmptySubspace`, iii), a
+    /// Inadmissible (Err) — reject, never clip to the surviving sub-span as
+    /// RETRIEVEV's R6 would (O13), and the listing below IS the precedence:
+    /// the checks run in this order and the FIRST condition that holds is the
+    /// one reported. A document that is not registered (WF_V i), a malformed
+    /// span (ii/iv), a foreign subspace (`NoSuchSubspace`) or empty real
+    /// subspace (`EmptySubspace`, iii), a
     /// depth-incompatible `#start ≥ 3` span (`DepthIncompatible`, WF_V v —
     /// kept distinct from the range case so a client can tell "wrong depth"
     /// from "unbound positions"), and a depth-2 span overrunning the bound
@@ -474,10 +476,13 @@ impl<W: RetrievalWorld> Query<'_, W> {
         // if the span overruns the bound prefix.
         let runs = m5.resolve(&surface, span);
         let resolved_width = runs.iter().fold(Nat::zero(), |acc, r| acc + r.width());
-        // The nominal count is the reading's own `count` — the same part
-        // `resolve` read — so the overrun test extracts nothing by index.
+        // `shape.count` is the span's NOMINAL EXTENT — ASN-0115's name for the
+        // width's deepest component, the count the span names — read off M5's
+        // reading rather than by index, the same part `resolve` read;
+        // `resolved_width` is `|act|`, and (vi) is the corpus's nominal-extent
+        // attainment failing: `|act| < ℓ_{#ℓ}`.
         if &resolved_width < shape.count {
-            return Err(OriginError::RangeNotPresent); // (vi): reject, never clamp (O13)
+            return Err(OriginError::RangeNotPresent); // (vi): reject, never clip (O13)
         }
         Ok(sorted_addr_set(runs.iter().map(run_origin)))
     }
@@ -485,7 +490,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// SHOWDELETIONS (ASN-0075) — gate, then membership-test the
     /// cross-document combine IN M6 from M5's per-document primitives:
     /// `DeletedFromAWithB = { a : CURRENT(a, d_b) ∧ DELETED(a, d_a) }` and its
-    /// symmetric twin. Never opens M4; both halves read off the one bound
+    /// symmetric twin. Never opens M4; both halves read off the one pinned
     /// snapshot (single consistent `(M, R)` — no torn-read phantom deletion).
     ///
     /// Reads the arrangement and the provenance record of each address as

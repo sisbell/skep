@@ -132,15 +132,16 @@ pub enum RetrieveError {
     MalformedSpec { index: usize, fault: SpanFault },
 }
 
-/// RETRIEVEDOCVSPAN / RETRIEVEDOCVSPANSET rejection (ASN-0112/0113 W-pre):
-/// the document is not registered. Payload-free per the interface (the
-/// document is the request's one argument).
+/// RETRIEVEDOCVSPAN / RETRIEVEDOCVSPANSET rejection (ASN-0113 W-pre; ASN-0112's
+/// precondition, the `dom(M)` of V0): the document is not registered.
+/// Payload-free per the interface (the document is the request's one
+/// argument).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum ExtentError {
     DocNotRegistered,
 }
 
-/// SHOWORIGIN_V rejection (ASN-0077 WF_V/O13) — reject, never clamp; each
+/// SHOWORIGIN_V rejection (ASN-0077 WF_V/O13) — reject, never clip; each
 /// inadmissibility carries its own variant so M10/clients can localize the
 /// cause ("wrong-depth span" is never conflated with "unbound positions").
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -294,7 +295,7 @@ impl fmt::Display for OriginError {
                 "show_origin_v: span depth must equal the subspace common depth (#start = 2)",
             ),
             OriginError::RangeNotPresent => f.write_str(
-                "show_origin_v: the span names positions not all currently bound (never clamped)",
+                "show_origin_v: the span names positions not all currently bound (never clipped)",
             ),
         }
     }
@@ -344,7 +345,7 @@ impl fmt::Display for CompareError {
             CompareError::TooManyPairs => write!(
                 f,
                 "compare: the report passes {} correspondences (MAX_COMPARE_PAIRS); \
-                 narrow the two regions",
+                 narrow the two operands",
                 crate::MAX_COMPARE_PAIRS
             ),
         }

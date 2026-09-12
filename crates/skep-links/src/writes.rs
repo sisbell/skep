@@ -644,10 +644,19 @@ pub const MAX_SLOT_SPANS: usize = 4096;
 /// carries more than [`MAX_SLOT_SPANS`] spans, in either form. `Resolve`: ρ
 /// as content I-extents — readable, level-uniform spans (ML1
 /// coverage-exactness by construction: the runs trace exactly allocated
-/// content, cross-origin runs arrive un-coalesced), counted as they are
-/// produced, so an over-budget slot stops accumulating instead of being built
-/// and then measured. `Addrs`: the canonical name encoding, deposited
-/// unresolved, one span per name, counted before the encoding is built.
+/// content, cross-origin runs arrive un-coalesced), counted as each is kept,
+/// so the SLOT stops accumulating at the budget. The count does not bound
+/// the run vector M5's `resolve` collects per spec: that is built whole
+/// before the first span is kept, sized by the SOURCE document's
+/// fragmentation inside the spec's span, and is the residual
+/// [`MAX_SLOT_SPANS`]'s budget names. It is not bounded here because it
+/// cannot be: M5 publishes only the collected form, so the walk cannot be
+/// stopped at a count, and no pre-check stands in for one — a source's run
+/// count and a span's width each bound the resolution only loosely, and a
+/// refusal on either would turn away a narrow span over a fragmented
+/// document, or a wide one over contiguous content, for runs it never
+/// yields. `Addrs`: the canonical name encoding, deposited unresolved, one
+/// span per name, counted before the encoding is built.
 fn slot_endset(m5: &M5State, arg: &SlotArg) -> Option<Endset> {
     match arg {
         SlotArg::Resolve(specs) => {

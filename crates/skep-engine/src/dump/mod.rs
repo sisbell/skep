@@ -14,8 +14,9 @@
 //! their one declaration order.
 //!
 //! A slice reaches the authoritative section through its SERDE CHECKPOINT
-//! FORM rather than through an enumeration: M3 and M4 publish none, and M5's
-//! and M7's go the same way so that one seam serves all four. It is the
+//! FORM rather than through an enumeration: M4 publishes none and M3's
+//! covers its publication record alone, and M5's and M7's go the same way so
+//! that one seam serves all four. It is the
 //! bytes-level seam M2's checkpoints already depend on, down to serde's
 //! human-readable flag, which the transcode answers the way bincode does — so
 //! a branching `Serialize` impl renders the branch the journal stores, and a
@@ -481,32 +482,37 @@ fn drafts_tree(world: &World) -> SerdeTree {
 
 /// The PUBLICATION section: M3's AUTHORITATIVE publication slice reduced to
 /// its DRAFT entries — the documents whose minting record journaled
-/// `published: false` — as dotted addresses in address order. Off the same
-/// read of M3's serde form the exception set's seed uses
-/// (`crate::publication::publication_map`); the hints' `publication.drafts`
-/// is the FOLD's copy, and [`hints_faithful`] compares that copy against the
-/// seed. A SEQUENCE — `render` sorts maps alone — in the `OrdMap`'s own
-/// address order, which is the order the filter preserves.
+/// `published: false` — as dotted addresses in address order. Off M3's own
+/// enumeration of that record, `M3State::documents`, the walk the exception
+/// set's seed makes; the hints' `publication.drafts` is the FOLD's copy, and
+/// [`hints_faithful`] compares that copy against the seed. A SEQUENCE —
+/// `render` sorts maps alone — in the record's own address order, which is
+/// the order the filter preserves.
 ///
-/// One read, TWO RULES over it, and the two agree on an invariant of M3's
+/// One walk, TWO RULES over it, and the two agree on an invariant of M3's
 /// rather than on a shared test. This section keeps an entry whose stored
-/// value is `false`. The seed discards the values and asks M3 itself, per
-/// KEY, whether the address is a registered document and what its bit is —
-/// which is what keeps the load path's fail-stop off an unregistered address.
-/// The rules coincide because M3 writes the publication entry and the
+/// bit is `false`. The seed discards the bits and asks M3 itself, per
+/// ADDRESS, whether it is a registered document and what its bit is — which
+/// is what keeps the load path's fail-stop off an unregistered address. The
+/// rules coincide because M3 writes the publication entry and the
 /// registration in one fold step, and only for a document-tier mint, so the
-/// map's keys ARE the registered documents. A store that registered a
+/// record's entries ARE the registered documents. A store that registered a
 /// document without an entry, or wrote an entry for anything else, would
 /// separate them.
 ///
-/// This section is a PROJECTION of the map, not the only rendering of it: the
-/// same authoritative map travels whole inside `authoritative.namespace`, as
-/// one of M3's four serde fields. So the per-class filter's reduction of this
-/// section reduces THIS SECTION, and a class that cannot open a draft still
-/// reads its bit there.
+/// This section is a PROJECTION of the record, not the only rendering of it:
+/// the same authoritative map travels whole inside `authoritative.namespace`,
+/// as one of M3's four serde fields. So the per-class filter's reduction of
+/// this section reduces THIS SECTION, and a class that cannot open a draft
+/// still reads its bit there.
 fn publication_tree(world: &World) -> SerdeTree {
-    let map = crate::publication::publication_map(&world.namespace);
-    addr_seq(map.iter().filter(|(_, published)| !**published).map(|(doc, _)| doc))
+    addr_seq(
+        world
+            .namespace
+            .documents()
+            .filter(|(_, published)| !published)
+            .map(|(doc, _)| doc),
+    )
 }
 
 /// The GRANT section: the grant fold's OPERATIVE set — every admitted,
@@ -642,13 +648,13 @@ impl crate::Engine {
     /// slice into an owned value tree before a byte of text is written, and
     /// the render then materializes each map entry's own rendering as an
     /// owned `String` to sort by — so at peak the text exists at least twice
-    /// over. M3's slice is transcoded TWICE: once for the authoritative
-    /// section, and once more by [`publication_tree`], which additionally
-    /// deserializes the publication map back through M1's validating door —
-    /// one address validation per REGISTERED DOCUMENT, published or not. That
-    /// second read is structural rather than incidental: the section must come
-    /// off M3's authoritative map and not off the derived set, which is what
-    /// makes it the authority the hint is checked against.
+    /// over. M3's publication record is read TWICE: once inside the
+    /// authoritative transcode, and once more by [`publication_tree`], which
+    /// walks it through M3's own enumeration — one entry per REGISTERED
+    /// DOCUMENT, published or not, and no re-validation. That second read is
+    /// structural rather than incidental: the section must come off M3's
+    /// authoritative record and not off the derived set, which is what makes
+    /// it the authority the hint is checked against.
     /// The tree costs a node per serialized ELEMENT, and a content byte
     /// is an element: serde has no byte specialization for `[u8]`, so M4's
     /// `Val` transcodes as a sequence of integers and not as a blob

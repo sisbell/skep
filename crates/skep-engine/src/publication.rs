@@ -25,23 +25,17 @@
 //! the standing subtraction candidate PUB-7.69 records is noted in the round's
 //! report).
 //!
-//! SEED COST, per load and per `Engine::world_at` reconstruction: one
-//! canonical transcode of M3's WHOLE slice — a tree node per serialized
-//! element of the frontier map, the node set, the principal registry and the
-//! publication map — then, per KEY of that map, M3's own registration and bit
-//! lookups, and one ω resolution per draft. M3 publishes no enumeration over
-//! its publication map, and this crate may not add one, so the map is read
-//! through the slice's own serde form (`crate::canon`) — the same seam the
-//! world dump already reads M3 through, and one whose coupling is to a field
-//! NAME and the map's own types rather than to any private layout. A
-//! `publication` enumeration on M3 would replace the whole transcode with one
-//! walk; that is a store-side change and is reported.
+//! SEED COST, per load and per `Engine::world_at` reconstruction: one walk of
+//! M3's publication record — `M3State::documents`, the store's own
+//! enumeration of its registered documents — then, per document, M3's own
+//! registration and bit lookups, and one ω resolution per draft. The walk
+//! yields the bit beside each address and the seed does not read it: the bit
+//! comes back through M3's `published`, which is what makes the seed and the
+//! fold one rule (`draft_entry`).
 
-use serde::Deserialize;
 use skep_address::{Address, Level};
 use skep_namespace::{M3Rec, M3State};
 
-use crate::canon::{to_tree, SerdeTree, TreeDe};
 use crate::world::World;
 
 /// The exception set's type: draft document → its owner account (PUB-7.5).
@@ -128,14 +122,14 @@ pub(crate) fn is_published(drafts: &Drafts, doc: &Address) -> bool {
 /// never registered.
 ///
 /// Both halves of the hint discipline are this one call — [`fold`] asks it of
-/// the address a record just minted, [`seed`] of every key of M3's
-/// publication map — so the two agree because they are ONE rule rather than
-/// two that happen to match. Both read M3 through M3's own accessors:
-/// `is_registered_document`, and `published` for the bit. The map
-/// [`publication_map`] transcodes is the ENUMERATION M3 does not publish,
-/// never a second reading of the bit — which is why the seed asks its KEYS
-/// rather than trusting its values, and why the registration test guards the
-/// load path exactly as it guards the commit path. That guard is what keeps
+/// the address a record just minted, [`seed`] of every document
+/// `M3State::documents` enumerates — so the two agree because they are ONE
+/// rule rather than two that happen to match. Both read M3 through M3's own
+/// accessors: `is_registered_document`, and `published` for the bit.
+/// `M3State::documents` is the ENUMERATION, never a second reading of the bit
+/// — which is why the seed asks its ADDRESSES rather than trusting the bit it
+/// yields beside them, and why the registration test guards the load path
+/// exactly as it guards the commit path. That guard is what keeps
 /// [`owner_account_of`]'s fail-stop off an unregistered address, on the one
 /// path whose input was just deserialized.
 fn draft_entry(namespace: &M3State, doc: &Address) -> Option<(Address, Address)> {
@@ -167,21 +161,25 @@ pub(crate) fn fold(prev: &Drafts, namespace: &M3State, rec: &M3Rec) -> Drafts {
 }
 
 /// The SEED half (PUB-7.7): the set a from-scratch walk of M3's publication
-/// map yields — [`draft_entry`] asked of every key. Runs at load, before
-/// replay, and never on a live commit; the fold carries the set forward
-/// across everything above the base. The two halves agree because they are
-/// one rule under two enumerations, and `Engine::check_hints` is the standing
-/// check that the enumerations reach the same documents.
+/// record yields — [`draft_entry`] asked of every document
+/// `M3State::documents` enumerates. Runs at load, before replay, and never on
+/// a live commit; the fold carries the set forward across everything above
+/// the base. The two halves agree because they are one rule under two
+/// enumerations, and `Engine::check_hints` is the standing check that the
+/// enumerations reach the same documents.
 ///
-/// The KEYS alone are the enumeration, and that is complete for the same
-/// reason the fold's is: M3 writes a publication entry and the registration
-/// in one fold step, and only for a document-tier mint, so the map's keys are
-/// exactly the registered documents and no draft can sit outside them. The
-/// values are not read here — the bit comes back through M3's own
-/// `published`, which is what makes this walk and the fold ONE rule rather
-/// than two that happen to agree.
+/// The ADDRESSES alone are the enumeration, and that is complete for the
+/// same reason the fold's is: M3 writes a publication entry and the
+/// registration in one fold step, and only for a document-tier mint, so the
+/// record's entries are exactly the registered documents and no draft can
+/// sit outside them. The bit the walk yields beside each address is not read
+/// here — it comes back through M3's own `published`, which is what makes
+/// this walk and the fold ONE rule rather than two that happen to agree.
 pub(crate) fn seed(namespace: &M3State) -> Drafts {
-    publication_map(namespace).keys().filter_map(|doc| draft_entry(namespace, doc)).collect()
+    namespace
+        .documents()
+        .filter_map(|(doc, _)| draft_entry(namespace, doc))
+        .collect()
 }
 
 /// The owner account of a registered document — M3's ω, which for a
@@ -226,45 +224,14 @@ fn owner_account_of(namespace: &M3State, doc: &Address) -> Address {
     owner
 }
 
-/// M3's publication map, read through the slice's own serde form: transcode
-/// the slice, take the `publication` field by NAME, and let the map re-enter
-/// through its own types' doors (`Address` through M1's validating
-/// deserialize). Both `expect`s name facts about THIS workspace's M3 — the
-/// field exists under that name (lane 2.1's), and what its own `Serialize`
-/// wrote its own `Deserialize` admits — and a change to either lands here,
-/// at load, loudly.
-///
-/// The name is the coupling, and it is a PRIVATE one: `publication` is M3's
-/// own struct field and no accessor publishes it, so a store author renaming
-/// a field they never exported has no compiler edge to this call. The
-/// `expect` is what stands in for one, which is why it fires at load rather
-/// than resolving to an empty map.
-///
-/// Crate-visible for the world dump's PUBLICATION section (lane 3.4 §3),
-/// which renders the AUTHORITATIVE slice this seed reads — the same read, so
-/// the section and the seed cannot disagree about what M3 holds.
-pub(crate) fn publication_map(namespace: &M3State) -> im::OrdMap<Address, bool> {
-    let tree = to_tree(namespace);
-    let SerdeTree::Map(fields) = &tree else {
-        panic!("M3State serializes as a struct — a map of its fields");
-    };
-    let publication = fields
-        .iter()
-        .find_map(|(name, value)| match name {
-            SerdeTree::Str(s) if s.as_str() == "publication" => Some(value),
-            _ => None,
-        })
-        .expect("M3State serializes a `publication` field — the map the exception set indexes");
-    im::OrdMap::<Address, bool>::deserialize(TreeDe(publication))
-        .expect("M3's publication map re-enters through its own types, from what those types wrote")
-}
-
 #[cfg(test)]
 mod tests {
+    use serde::Deserialize;
     use skep_address::{validate, Nat, Tumbler};
     use skep_kernel::{CheckpointPolicy, Durability, KernelConfig};
     use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 
+    use crate::canon::{to_tree, SerdeTree, TreeDe};
     use crate::Engine;
 
     use super::*;
@@ -305,9 +272,9 @@ mod tests {
 
     /// The same slice with `acct`'s SEAT struck from Π — the corruption M3's
     /// own `principals` doc names as a real arrival: "a seat can also arrive
-    /// inside a whole `M3State`, which decodes by bare derive". Built the way
-    /// [`publication_map`] reads, through the slice's serde form and back
-    /// through M3's own door, so nothing here reaches a private layout.
+    /// inside a whole `M3State`, which decodes by bare derive". Built through
+    /// the slice's serde form (`crate::canon`) and back through M3's own
+    /// door, so nothing here reaches a private layout.
     fn without_the_account_seat(namespace: &M3State, acct: &Address) -> M3State {
         let seat = to_tree(acct).to_string();
         let mut tree = to_tree(namespace);

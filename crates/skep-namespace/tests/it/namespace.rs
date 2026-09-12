@@ -2180,6 +2180,13 @@ fn only_a_document_allocate_writes_the_publication_map() {
     });
     assert!(s.is_registered_document(&a(&[1, 0, 1, 0, 1, 1])));
     assert!(!s.published(&a(&[1, 0, 1, 0, 1, 1])));
+    // The enumeration is the registered documents and nothing else — the
+    // account and the element are absent — in address order.
+    let (doc, version) = (a(&[1, 0, 1, 0, 1]), a(&[1, 0, 1, 0, 1, 1]));
+    assert_eq!(
+        s.documents().collect::<Vec<_>>(),
+        vec![(&doc, true), (&version, false)]
+    );
 }
 
 /// PUB-1.9/PUB-1.68, and PUB-7.7's fold half: no public function changes a

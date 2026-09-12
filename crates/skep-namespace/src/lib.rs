@@ -53,9 +53,10 @@
 //!   the next-form peek [`M3State::next_account_prefix`], the version
 //!   chain's latest member [`M3State::latest_version`], and the emptiness
 //!   of an account's document chain [`M3State::has_documents`] — and the
-//!   publication read [`M3State::published`] — the engine's ONE definition
-//!   of a document's publication state, the bit its own allocation record
-//!   journaled \[PUB-7.8, PUB-7.10; owner ruling D1\] — plus three
+//!   publication read [`M3State::published`] and its enumeration
+//!   [`M3State::documents`] — the engine's ONE definition of a document's
+//!   publication state, the bit its own allocation record journaled
+//!   \[PUB-7.8, PUB-7.10; owner ruling D1\] — plus three
 //!   registry-free address answers: [`prefix_contains`], which answers
 //!   where an address SITS and never who may write it, and the two slots a
 //!   chain opens at, [`first_document_address`] for an account's document

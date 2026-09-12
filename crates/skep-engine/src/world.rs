@@ -295,7 +295,7 @@ impl WorldState for World {
     /// before any rebuild, and M2's fallback chain does get its turn.
     ///
     /// COST is the two seeds', each stated at its own: `publication::seed`'s
-    /// is a whole transcode of M3's slice and a pair of M3 reads per
+    /// is a walk of M3's publication record and a pair of M3 reads per
     /// registered document, `grants::seed`'s is a walk of the whole grants
     /// class. Both are the STORE's size rather than a caller's, and both are
     /// what M2's `Kernel::world_at` means where its own cost names this

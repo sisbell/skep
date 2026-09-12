@@ -89,8 +89,9 @@ pub(crate) struct NsKey {
 /// build a fresh key from a `*_ns` constructor, and loaded keys are only ever
 /// hashed for lookup. So this door is defence for the first frontier-
 /// enumerating or re-keying reader to appear, and that reader is why it is
-/// here: M3 publishes no enumeration API, which is why the engine's
-/// observation surface reads this slice through its serde bytes instead.
+/// here: M3 publishes no enumeration over its frontier map, which is why the
+/// engine's observation surface reads this slice through its serde bytes
+/// instead.
 #[derive(Deserialize)]
 struct NsKeyShadow {
     parent: Tumbler,
@@ -407,7 +408,8 @@ pub struct M3State {
     /// ordinary serde field, restored from the checkpoint and advanced by
     /// replay, never `#[serde(skip)]` — and the exception set (lane 2.2) is a
     /// derived membership index OVER it (PUB-7.5, PUB-7.7), answerable off
-    /// this record at the one-lookup cost [`M3State::published`] pays.
+    /// this record at the one-lookup cost [`M3State::published`] pays, and
+    /// seeded by one walk of it, [`M3State::documents`].
     ///
     /// Declared LAST, and that is load-bearing: bincode encodes a struct as
     /// its fields in declaration order with no names, so a pre-publication
@@ -421,9 +423,9 @@ pub struct M3State {
     /// either way — O(log |documents|) tumbler compares here — and what the
     /// ordered map buys is a checkpoint encoding and an iteration order that
     /// are functions of the contents: two boards with one history checkpoint
-    /// this field to one byte string, and the seed lane 2.2 folds over it
-    /// walks documents in address order. `nodes` and `principals` already pay
-    /// that price for the same reason.
+    /// this field to one byte string, and [`M3State::documents`], the walk
+    /// the exception set's seed makes, yields them in address order. `nodes`
+    /// and `principals` already pay that price for the same reason.
     publication: im::OrdMap<Address, bool>,
 }
 
@@ -776,11 +778,11 @@ fn nth_in(key: &NsKey, n: &Nat) -> Result<Address, GateViolation> {
 /// Registry-free, like [`prefix_contains`]: it names the SLOT and claims
 /// nothing about what is in it — which is why it is spelled differently from
 /// the corpus's "doc 1", a phrase that names the document. Whether the
-/// account HAS any documents is [`M3State::has_documents`], which reads this
-/// slot against the registry; the slot itself is public for the other
-/// question asked of that chain from outside M3 — is `d` the account's first
-/// document — which is otherwise answerable only by rebuilding the chain's
-/// anchor and opening ordinal, and those are M3's alone.
+/// account HAS any documents is [`M3State::has_documents`], which reads the
+/// chain's frontier; the slot itself is public for the other question asked
+/// of that chain from outside M3 — is `d` the account's first document —
+/// which is otherwise answerable only by rebuilding the chain's anchor and
+/// opening ordinal, and those are M3's alone.
 pub fn first_document_address(account: &Address) -> Option<Address> {
     (account.level() == Level::Account).then(|| {
         first_in(&document_ns(account))
@@ -1161,6 +1163,17 @@ impl M3State {
 // ---------------------------------------------------------------------------
 
 impl M3State {
+    /// The mint behind the five mints: the next address on the chain `key`
+    /// names and the ONE [`M3Rec`] that realizes it, stamped `published` — a
+    /// caller's RESOLVED bit on a document chain, [`NO_PUBLICATION_STATE`] on
+    /// every other. The address and its record leave together, which is what
+    /// makes the key a mint reads and the key its record advances one key
+    /// (§A); each public mint is this behind its own structural gate.
+    fn mint_on(&self, key: &NsKey, published: bool) -> Result<(Address, M3Rec), GateViolation> {
+        let addr = self.next_in(key)?;
+        Ok((addr.clone(), M3Rec::Allocate { addr, published }))
+    }
+
     /// Next content address under `home`: namespace `(b_C(home), 1)`, element
     /// field `[s_C, m+1]` (§3). [M5: INSERT] Reads the caller's WORKING state
     /// (successive mints in one composite each see the prior mint); checks
@@ -1170,14 +1183,8 @@ impl M3State {
         if !self.is_registered_document(home) {
             return Err(MintError::HomeNotRegistered); // P6/C2
         }
-        let a = self.next_in(&content_ns(home)).map_err(MintError::Gate)?;
-        Ok((
-            a.clone(),
-            M3Rec::Allocate {
-                addr: a,
-                published: NO_PUBLICATION_STATE,
-            },
-        ))
+        self.mint_on(&content_ns(home), NO_PUBLICATION_STATE)
+            .map_err(MintError::Gate)
     }
 
     /// Next link address under `home`: namespace `(b_L(home), 1)`, element
@@ -1187,14 +1194,8 @@ impl M3State {
         if !self.is_registered_document(home) {
             return Err(MintError::HomeNotRegistered); // L1a
         }
-        let a = self.next_in(&link_ns(home)).map_err(MintError::Gate)?;
-        Ok((
-            a.clone(),
-            M3Rec::Allocate {
-                addr: a,
-                published: NO_PUBLICATION_STATE,
-            },
-        ))
+        self.mint_on(&link_ns(home), NO_PUBLICATION_STATE)
+            .map_err(MintError::Gate)
     }
 
     /// Next version identity: namespace `(source, 1)` — the version chain,
@@ -1210,8 +1211,8 @@ impl M3State {
     /// mint applies no default of its own — a version of a private source
     /// passed `true` is born published and passed `false` private, the
     /// composite's choice both times. The write-path refusals that bound
-    /// that choice (PUB-2.7, PUB-2.9) are the daemon's routed item
-    /// (PUB-8.2), not this mint's.
+    /// that choice (PUB-2.7, PUB-2.9) are applied ahead of this mint by the
+    /// composite that resolves the flag (owner ruling D2b), not by this mint.
     pub fn mint_version(
         &self,
         source: &Address,
@@ -1221,8 +1222,8 @@ impl M3State {
             // V-WF: registered Document (covers unregistered AND non-document).
             return Err(MintError::SourceNotRegistered);
         }
-        let a = self.next_in(&version_ns(source)).map_err(MintError::Gate)?;
-        Ok((a.clone(), M3Rec::Allocate { addr: a, published }))
+        self.mint_on(&version_ns(source), published)
+            .map_err(MintError::Gate)
     }
 
     /// Next document identity under an account: namespace `(account, 2)`.
@@ -1236,10 +1237,10 @@ impl M3State {
     /// particular the empty-account rule (PUB-8.21: a flagless FIRST mint is
     /// born published) belongs to the CREATE path and lives in
     /// [`crate::Namespace::create_new_document`], which resolves it before
-    /// calling here; a cross-owner `version` into an empty account passes the
-    /// bit its composite inherited from the SOURCE (PUB-8.17), and a `false`
-    /// there mints private. Whether that first mint is REFUSED (PUB-8.20) is
-    /// the daemon's door, not M3's (owner ruling D2c).
+    /// calling here; a cross-owner `version` into an empty account passes
+    /// whatever bit its composite resolved (PUB-8.17), and a `false` there
+    /// mints private. Whether that first mint is REFUSED (PUB-8.20) is the
+    /// daemon's door, not M3's (owner ruling D2c).
     pub fn mint_document(
         &self,
         account: &Address,
@@ -1249,10 +1250,8 @@ impl M3State {
             // P8/CND.pre (covers unregistered AND non-account).
             return Err(MintError::NotAnAccount);
         }
-        let a = self
-            .next_in(&document_ns(account))
-            .map_err(MintError::Gate)?;
-        Ok((a.clone(), M3Rec::Allocate { addr: a, published }))
+        self.mint_on(&document_ns(account), published)
+            .map_err(MintError::Gate)
     }
 
     /// Next account identity under `parent`: namespace `(parent, 2)` under a
@@ -1271,16 +1270,10 @@ impl M3State {
         if !matches!(self.entity_level(parent)?, Level::Node | Level::Account) {
             return None;
         }
-        let a = self
-            .next_in(&account_ns(parent))
-            .expect("a registered node/account anchor with g ≤ 2 passes TA5a");
-        Some((
-            a.clone(),
-            M3Rec::Allocate {
-                addr: a,
-                published: NO_PUBLICATION_STATE,
-            },
-        ))
+        Some(
+            self.mint_on(&account_ns(parent), NO_PUBLICATION_STATE)
+                .expect("a registered node/account anchor with g ≤ 2 passes TA5a"),
+        )
     }
 }
 
@@ -1367,16 +1360,23 @@ impl M3State {
 
     /// Has `account` any documents — is its `(account, 2)` chain non-empty?
     /// AUTH-3.68's `has_documents(account)`, and the premise of the create
-    /// path's empty-account rule (PUB-8.21). The slot the chain opens at,
-    /// [`first_document_address`], holds a registered document — exact
-    /// because the chain is contiguous from 1 (B1): the first slot is
-    /// registered iff any is. `false` off the account tier, where no
-    /// document chain is anchored, and for an unregistered account, whose
-    /// chain is empty. Asked by [`crate::Namespace::create_new_document`]
-    /// under the held document-chain key and by the daemon's mint doors off
-    /// a snapshot; answered here so that neither reassembles it.
+    /// path's empty-account rule (PUB-8.21). The chain's frontier IS its
+    /// count (B1), so the chain is non-empty iff that frontier exists — one
+    /// lookup on the key [`M3State::mint_document`] reads; a zero count,
+    /// representable only off a corrupted checkpoint, is an empty chain, as
+    /// [`M3State::latest_version`] reads it. `false` off the account tier,
+    /// where no document chain is anchored — the tier gate is what makes the
+    /// key the DOCUMENT chain's, since `(N, 2)` under a node is the account
+    /// chain — and for an unregistered account, whose chain is empty. Asked
+    /// by [`crate::Namespace::create_new_document`] under the held
+    /// document-chain key and by the daemon's mint doors off a snapshot;
+    /// answered here so that neither reassembles it.
     pub fn has_documents(&self, account: &Address) -> bool {
-        first_document_address(account).is_some_and(|first| self.is_registered_document(&first))
+        account.level() == Level::Account
+            && self
+                .frontiers
+                .get(&document_ns(account))
+                .is_some_and(|m| !m.is_zero())
     }
 
     /// The LATEST member of `source`'s version chain `(source, 1)` — `c_m`
@@ -1434,6 +1434,28 @@ impl M3State {
     /// there is no publish op, in either direction (PUB-1.9, PUB-1.68).
     pub fn published(&self, doc: &Address) -> bool {
         self.publication.get(doc).copied().unwrap_or(false)
+    }
+
+    /// Every registered DOCUMENT with its publication bit, in address order —
+    /// the ENUMERATION of the record [`M3State::published`] reads one entry
+    /// of. One entry per registered document, versions included, on any slice
+    /// M3's own fold produced: the record that registers a document carries
+    /// its bit and [`M3State::apply_m3`] writes both in one step, and nothing
+    /// else writes here. A checkpoint is bytes, so a reader that must not
+    /// fail-stop on a corrupted one re-asks
+    /// [`M3State::is_registered_document`] per entry, as the engine's seed
+    /// does. The order is the `OrdMap`'s — a function of the contents, so two
+    /// boards with one history enumerate alike.
+    ///
+    /// Published for the reader that cannot ask per address: a derived index
+    /// over the bit (the exception set, lane 2.2 — PUB-7.7's seed half) and a
+    /// rendering of the record. Both would otherwise rebuild this walk from
+    /// the slice's serde form by a private field name, which no compiler edge
+    /// protects.
+    pub fn documents(&self) -> impl Iterator<Item = (&Address, bool)> + '_ {
+        self.publication
+            .iter()
+            .map(|(doc, published)| (doc, *published))
     }
 
     /// ω's resolution step: the Π entry whose prefix is the LONGEST covering

@@ -75,6 +75,10 @@
 
 #![forbid(unsafe_code)]
 
+// The canonicalizing transcode is the dump's, and its way back is how the
+// engine's own tests build the shapes a checkpoint can carry and no op can
+// produce — so it is compiled for either and for nothing else.
+#[cfg(any(feature = "dump", test))]
 mod canon;
 mod editions;
 mod engine;

@@ -19,18 +19,19 @@
 //! `Deserializer`, so a value collected off one type's `Serialize` re-enters
 //! through a (possibly different) type's `Deserialize` — the types' own doors,
 //! with their own validation, and no byte format in between. That is how the
-//! engine reads a store slice it has no enumeration API for
-//! (`crate::publication::seed` walks M3's publication map this way): the
-//! coupling is to the serde data model and a field NAME, never to a private
-//! layout or to any library's on-the-wire encoding.
+//! dump's per-class filter reads an address back out of a rendered slice, and
+//! how a test corrupts a store slice it has no mutating API for (the
+//! exception set's suite strikes a seat from M3's Π this way): the coupling
+//! is to the serde data model and a field NAME, never to a private layout or
+//! to any library's on-the-wire encoding.
 //!
-//! That way back is why this module is compiled whatever the `dump` feature
-//! says: the exception set's seed reads a store slice through it at every
-//! load, dump or no dump. The deterministic TEXT is compiled unconditionally
-//! too — it is [`SerdeTree`]'s `Display`, and the sort rule that makes it a
-//! comparable rendering is stated there. What the feature gates is
-//! [`render`], the three-line adapter that appends that text to a caller's
-//! buffer, because the dump module holds its only callers.
+//! The dump module holds every production caller of this one, which is why
+//! the crate compiles it with the `dump` feature — and for its own tests,
+//! whatever the feature says, because the way back is how those tests reach
+//! the shapes a checkpoint can carry and no op can produce. The deterministic
+//! TEXT is [`SerdeTree`]'s `Display`, and the sort rule that makes it a
+//! comparable rendering is stated there; [`render`], the three-line adapter
+//! that appends that text to a caller's buffer, is the dump's alone.
 
 use std::fmt;
 
@@ -92,10 +93,9 @@ pub(crate) enum SerdeTree {
 /// `num-bigint`, serde's `rc` impls) and every serde shadow is spelled
 /// `into`, which cannot fail, rather than `try_into`. A slice that adds a
 /// fallible `serialize_with`, or writes a shadow `try_into` on the serialize
-/// side, is what makes this reachable — and it lands in the world dump AND at
-/// every load, since the exception set is seeded through this transcode.
-/// Fail-stop is right for an oracle and for a seed alike; the point is that
-/// the change which breaks it should land beside this sentence.
+/// side, is what makes this reachable — and it lands in the world dump, the
+/// oracle every harness compares. Fail-stop is right for an oracle; the point
+/// is that the change which breaks it should land beside this sentence.
 pub(crate) fn to_tree<T: Serialize + ?Sized>(v: &T) -> SerdeTree {
     v.serialize(TreeSer).expect("canonical transcode is total over the world's serde forms")
 }

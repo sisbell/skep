@@ -211,6 +211,48 @@ fn editlink_s_acks_land_in_the_caller_s_homes_whatever_the_class() {
     }
 }
 
+/// The `Visibility` contract's second half is a CONDITION and not an
+/// obligation, and this is the whole of the difference: a predicate blind to
+/// the home the caller writes to costs `nullify` a FRESH retraction tuple
+/// where a hit would have been zero-step, and costs its postcondition nothing
+/// — the target is tombstoned either way. Every `[R]` incumbent of one
+/// identity is homed in the retraction's own `home`, so blinding the class
+/// to that one document is exactly what hides them all.
+#[test]
+fn a_predicate_blind_to_the_caller_s_own_home_costs_nullify_a_fresh_retraction_never_its_postcondition(
+) {
+    let k = kernel();
+    let hide_doc1 = |_: &World, home: &Address| *home != doc1();
+    let all = writer(&k);
+    let blind = writer_at(&k, &hide_doc1);
+    let (target, _) = all.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("target");
+
+    // The control: at a class that reads doc1, the second retraction is a
+    // zero-step hit on the first.
+    let (r1, _) = all.nullify(P1, &doc1(), &target).expect("retract");
+    let before = k.current_seq();
+    let (hit, seq) = all.nullify(P1, &doc1(), &target).expect("hit within the class");
+    assert_eq!(hit, r1);
+    assert_eq!(seq, before);
+    assert_eq!(k.current_seq(), before, "zero-step: nothing committed");
+
+    // Blind to doc1 — the home every [R] incumbent of this identity sits in —
+    // the same retraction mints fresh: correct, and not zero-step.
+    let (r2, seq) = blind
+        .nullify(P1, &doc1(), &target)
+        .expect("fresh beside a hidden incumbent");
+    assert_ne!(r2, r1);
+    assert!(seq > before, "a fresh retraction commits");
+    let snap = k.snapshot();
+    let links = snap.world().links();
+    assert!(
+        links.is_nullified(&target),
+        "the postcondition never rested on the predicate"
+    );
+    assert!(!links.is_active(&target));
+    assert!(links.is_active(&r1) && links.is_active(&r2), "both retractions stand");
+}
+
 #[test]
 fn emit_deposits_verbatim_reads_back_and_never_seats() {
     let k = kernel();

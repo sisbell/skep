@@ -50,6 +50,26 @@ use crate::LinkWorld;
 /// and no publication state; it applies the closure at link-HOME identity to
 /// decide which incumbents a value-keyed gate may SEE.
 ///
+/// CALLER'S OBLIGATION: the closure is a PURE, DETERMINISTIC function of
+/// `(world, doc)` — the same answer for the same pair, no interior state.
+/// The published determinism of the value-keyed gates rests on it and on
+/// nothing else: [`emit`](LinkWriter::emit)'s "deterministic given the
+/// class" and [`assert_sup`](LinkWriter::assert_sup)'s earliest-readable
+/// incumbent are the T1-least of the incumbent set THIS predicate admits, so
+/// a stateful predicate makes two value-identical writes disagree, silently.
+/// `Fn` does not forbid interior mutability, and no check in this crate can
+/// stand in for the obligation — it is the caller's, stated here and
+/// enforced nowhere.
+///
+/// A second property is a CONDITION, not an obligation: a read predicate
+/// admits the homes its caller ω-owns (an owner reads its own documents),
+/// and that is the step `emit_core`'s claim that `nullify`'s dedup is
+/// vacuous borrows. A predicate blind to the home the caller writes to —
+/// the GUEST class over a private draft — costs `nullify` a fresh
+/// retraction tuple where a hit would have been zero-step, and costs its
+/// postcondition nothing: the target is tombstoned either way. The engine's
+/// predicates are pure, and a principal's class admits its own homes.
+///
 /// The world handed in is the TRANSACTION's working world (`stg.working()`),
 /// never a snapshot pinned before the transaction: the incumbent set is the
 /// staged world's, and so is each home's publication state. The one
@@ -79,7 +99,8 @@ pub type Visibility<'a, W> = dyn Fn(&W, &Address) -> bool + Send + Sync + 'a;
 ///
 /// A `LinkWriter` with NO visibility class does not exist: every
 /// construction names the class its writes run at ([`LinkWriter::new`]), and
-/// the value-keyed gates read the store through it ([`emit_core`]).
+/// the value-keyed gates read the store through it, at the one choke point
+/// every deposit passes (`emit_core`).
 pub struct LinkWriter<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
     visibility: &'k Visibility<'k, W>,
@@ -487,9 +508,12 @@ impl From<HomeFault> for EditLinkError {
 /// each sees, or does not see, the other's deposit per its own class.
 ///
 /// The filter reaches every caller of this gate uniformly. For `nullify`
-/// (`Gate::Retraction`) it is vacuous by construction: a retraction tuple's
-/// I0 carries its own home in F, its sole writer deposits it into that home,
-/// and the caller ω-owns that home. For `editlink`'s claim it is vacuous too
+/// (`Gate::Retraction`) it is vacuous under every read predicate: a
+/// retraction tuple's I0 carries its own home in F, its sole writer deposits
+/// it into that home, the caller ω-owns that home, and an owner reads its
+/// own documents — the condition [`Visibility`] states, and the one whose
+/// absence costs `nullify` a fresh retraction tuple rather than its
+/// postcondition. For `editlink`'s claim it is vacuous under ANY predicate
 /// (PUB-6.27): the claim's I0 carries a successor minted in this same
 /// transaction, so the lookup is a guaranteed miss and no incumbent — of
 /// any class — can exist for it. Neither op threads a filter of its own.
@@ -856,8 +880,12 @@ where
 
     /// Nullify_Binary (ASN-0128): the SOLE retraction path — an `[R]` tuple
     /// with canonical from-fill `enc({home})` and unit-depth to-span
-    /// `enc({target})`, idem⊤ (re-retracting the same target from the same
-    /// home dedups). P-tgt is a REJECTING precondition against the txn base:
+    /// `enc({target})`, idem⊤ WITHIN THE CALLER'S VISIBILITY CLASS
+    /// (PUB-6.25): re-retracting the same target from the same home dedups
+    /// at every class that reads `home`, which a read predicate's does
+    /// ([`Visibility`]); a class blind to `home` mints a fresh retraction
+    /// beside the hidden one, and the postcondition below holds either way.
+    /// P-tgt is a REJECTING precondition against the txn base:
     /// `target` is a resident link OR the address this call's own retraction
     /// tuple would occupy (`a_emit`) — the address the slice reports
     /// `mint_link(home)` would mint next, an O(1) read equal to that mint by

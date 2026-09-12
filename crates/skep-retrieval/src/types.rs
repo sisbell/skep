@@ -51,7 +51,7 @@ pub struct Spec {
     pub span: Span,
 }
 
-/// One document + a finite set of V-spans — one member of the spec-set the
+/// One document + a finite set of V-spans — one `(d, S)` of the spec-set the
 /// two SET-shaped operations take: COMPARE (content only; the `(dᵢ, Sᵢ)` of
 /// ASN-0122's spec-set `ρ`) and FINDDOCSCONTAINING (the `(d_j, W_j)` of
 /// ASN-0124's **vspec-set** `Q`, whose `W_j` is a **V-region** — FD-CONVEX is
@@ -61,12 +61,12 @@ pub struct Spec {
 /// "Region" is two corpus words, and this type sits under both. ASN-0124 FD-Q
 /// calls the pair `(d_j, W_j)` itself a document-scoped V-REGION, so the
 /// `region` a fault coordinate carries, and "region j" wherever this crate
-/// walks a request, count these elements. ASN-0122's REGION `R_Σ(ρ)` is the
-/// instance set a whole spec-set denotes once each span is clipped against
-/// its document's current arrangement — the union of its elements' clipped
-/// parts, the thing COMPARE's report is confined to (X12 R1), and the thing
-/// an empty resolution yields none of. This crate names that one only as the
-/// OPERAND's region, or by its symbol.
+/// walks a request, count the `RegionSpec`s themselves. ASN-0122's REGION
+/// `R_Σ(ρ)` is the instance set a whole spec-set denotes once each span is
+/// clipped against its document's current arrangement — the union of its
+/// regions' clipped parts, the thing COMPARE's report is confined to (X12 R1),
+/// and the thing an empty resolution yields none of. This crate names that one
+/// only as the OPERAND's region, or by its symbol.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct RegionSpec {
     pub doc: Address,
@@ -78,7 +78,7 @@ pub struct RegionSpec {
 /// a byte copy); a link position delivers the address-as-reference and never
 /// reads M4.
 ///
-/// The WITHHELD arm (PUB round 2, lane 3.3, §4; PUB-6.41) is the one shape
+/// The WITHHELD arm (PUB round 2, lane 3.3, §4; PUB-6.41) is the one item
 /// that stands for a RUN rather than a position: a run the reading principal
 /// may not read is emitted AT ITS OWN POSITION rather than dropped — one item
 /// per masked RUN, carrying the origin DOCUMENT and the run's width. It MUST

@@ -16,8 +16,8 @@ use crate::vspan::{gate_vspan, Subspace};
 use crate::{Query, RetrievalWorld, MAX_COMPARE_OPERAND_BLOCKS};
 
 /// The most I-coverage spans one FINDDOCSCONTAINING request may resolve to,
-/// and the most spans it may resolve — one budget on the request's
-/// resolution, counted on the spans walked and on the coverage they produce
+/// and the most spans it may hand to M5 — one budget on the request's
+/// resolution, counted on the spans handed and on the coverage they produce
 /// — and so the ceiling on the multiplier the REQUEST applies to the two
 /// world-sized scans behind it.
 ///
@@ -40,12 +40,12 @@ pub const MAX_FIND_COVERAGE_SPANS: usize = MAX_COMPARE_OPERAND_BLOCKS;
 
 /// `ext(d, S) = ([S, 1], [0, n_S])` — the per-subspace exact extent span
 /// (ASN-0113 W2/W4: a count fixes an extent under sequential positions), or
-/// `None` for an unoccupied subspace (`n_S = 0`), which has no extent — the
-/// member [`Query::doc_vspanset`] omits, and `⟨⟩` when both are. The anchor
-/// `[S, 1]` — ASN-0113's `start_S` — is written ONCE, here, never absorbed
-/// into a confluent summary, which is how the hazard ASN-0112 OQ5 records
-/// against its bounding-span start `origin_d` (a POSITION, not ASN-0077's
-/// origin) is designed out.
+/// `None` for an unoccupied subspace (`n_S = 0`), which has no extent — so
+/// nothing in [`Query::doc_vspanset`]'s answer, which is `⟨⟩` when both
+/// subspaces are unoccupied. The anchor `[S, 1]` — ASN-0113's `start_S` — is
+/// written ONCE, here, never absorbed into a confluent summary, which is how
+/// the hazard ASN-0112 OQ5 records against its bounding-span start `origin_d`
+/// (a POSITION, not ASN-0077's origin) is designed out.
 ///
 /// Built with M5's `ordinal_vspan`, so the extent M6 REPORTS is the shape M5's
 /// `resolve` READS: the constructor and the recognizer every request span is
@@ -134,8 +134,8 @@ fn run_origin(run: &Run) -> Address {
 ///
 /// Used for origin DOCUMENTS (SHOWORIGIN_V) and content I-ADDRESSES
 /// (SHOWDELETIONS) alike — both are `Address`, so one neutral helper serves
-/// either (the name says "addr", not "doc", because at the SHOWDELETIONS site
-/// the deduped elements are content addresses, not documents).
+/// either (the name says "addr", not "doc", because what the SHOWDELETIONS
+/// site dedups is content addresses, not documents).
 fn sorted_addr_set(it: impl IntoIterator<Item = Address>) -> Vec<Address> {
     let mut out: Vec<Address> = it.into_iter().collect();
     out.sort_unstable(); // T1 order; the dedup below makes stability unobservable
@@ -361,20 +361,20 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// WHAT THE BOX CANNOT SHOW (V9). Being a function of the two EXTREMES
     /// alone, the cross-subspace box is fixed at `[[s_C, 1], [s_L, n_L + 1])`
     /// under any content edit that leaves `n_C ≥ 1`, while
-    /// [`Query::doc_vspanset`]'s content member moves with `n_C` — so a caller
+    /// [`Query::doc_vspanset`]'s content extent moves with `n_C` — so a caller
     /// that must observe a CONTENT-COUNT change asks for the extents, not the
     /// box. Neither reports run structure: under D-SEQ★ both are functions of
     /// `n_C` and `n_L` alone, and a document's fragmentation is M5's
     /// `content_runs`, which is not part of M6's surface.
     ///
     /// σ_d IS the hull of the per-subspace extents [`Query::doc_vspanset`]
-    /// reports: the first member's start to the last member's reach.
+    /// reports: the first extent's start to the last extent's reach.
     pub fn doc_vspan(&self, doc: &Address) -> Result<SpanSet, ExtentError> {
         // Taken from `doc_vspanset` rather than derived a second time, so the
         // registry gate, the D-SEQ★ trust and the count-read all happen once,
         // in one place. Those extents are W13-normalized, so the FIRST
-        // member's start is the anchor `[s, 1]` of the lowest occupied
-        // subspace and the LAST member's reach is one ordinal step past the
+        // extent's start is the anchor `[s, 1]` of the lowest occupied
+        // subspace and the LAST extent's reach is one ordinal step past the
         // highest occupied position.
         let extents = self.doc_vspanset(doc)?;
         let (Some(first), Some(last)) = (extents.iter().next(), extents.iter().last()) else {
@@ -392,9 +392,10 @@ impl<W: RetrievalWorld> Query<'_, W> {
         ))
     }
 
-    /// RETRIEVEDOCVSPANSET (ASN-0113) — per-subspace exact extents: ≤2
-    /// members (content, then link), already W13-normalized; `⟨⟩` for a
-    /// registered-empty document; a document that is not registered ⇒ Err.
+    /// RETRIEVEDOCVSPANSET (ASN-0113) — the per-subspace exact extents, one
+    /// per occupied subspace (content, then link), already W13-normalized;
+    /// `⟨⟩` for a registered-empty document; a document that is not registered
+    /// ⇒ Err.
     ///
     /// The extents are the READING SURFACE's (crate doc, *Which arrangement an
     /// operation answers from*): a bare published address with a head reports
@@ -560,8 +561,8 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// `n_C(d_a)·|deletions(d_b)| + n_C(d_b)·|deletions(d_a)|` for the
     /// membership pass, all paid in full even when the two share nothing and
     /// both halves come back empty. THE FIRST TERM USUALLY DOMINATES, and it
-    /// is the one a document's current size does not reveal: R never loses a
-    /// member, so a document that has deleted far more than it holds carries a
+    /// is the one a document's current size does not reveal: R never shrinks,
+    /// so a document that has deleted far more than it holds carries a
     /// record far larger than its arrangement. M6 owns no admission control
     /// and no refusal for any of it: capping request rate and concurrency for
     /// a route carrying this read is M10's, as the request lifecycle's owner —
@@ -632,7 +633,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// span gate. It also completes over the WHOLE request before any `image`
     /// is taken, so a rejected request costs `O(spans)` and nothing upstream,
     /// `(region, index)` promises that every region and span before the named
-    /// one is clean, and a SHAPE fault always outranks the size refusal below.
+    /// one is clean, and a gate fault always outranks the budget refusal below.
     ///
     /// COST, IN THREE FACTORS OF WHICH ONE IS THE REQUEST'S. The work is
     /// `|spans| · #runs(doc) + |candidates| · #runs(d) · |coverage|`: the
@@ -721,17 +722,17 @@ impl<W: RetrievalWorld> Query<'_, W> {
         // coverage built so far at every span, and the budget below would
         // then bound a quantity that costs its own square to produce.
         let mut coverage_spans: Vec<Span> = Vec::new();
-        let mut spans_resolved = 0usize;
+        let mut spans_handed = 0usize;
         for r in regions {
             for span in &r.spans {
                 // The span count, taken as the span is handed and before its
                 // walk; MAX_COMPARE_OPERAND_BLOCKS's card says why spans are
                 // counted beside the coverage, and why a span M5 folds to
                 // nothing at once counts all the same.
-                if spans_resolved >= MAX_FIND_COVERAGE_SPANS {
+                if spans_handed >= MAX_FIND_COVERAGE_SPANS {
                     return Err(FindError::TooMuchCoverage); // refused before the walk
                 }
-                spans_resolved += 1;
+                spans_handed += 1;
                 coverage_spans.extend(m5.image(&r.doc, span));
                 // The coverage budget, refused AS THE COVERAGE IS PRODUCED —
                 // `>` and not `==`, because one span's image adds many
@@ -765,8 +766,8 @@ impl<W: RetrievalWorld> Query<'_, W> {
             // placements in registered documents alone — so nothing is
             // re-checked here.
             // Emptiness is M1's `SpanSet::is_empty`, denotationally exact
-            // because no algebra result carries a zero-width member (zero
-            // members ⇔ empty denotation).
+            // because no algebra result carries a zero-width span (zero spans
+            // ⇔ empty denotation).
             .filter(|d| readable(d) && !m5.project(d, &coverage).is_empty())
             .collect())
     }

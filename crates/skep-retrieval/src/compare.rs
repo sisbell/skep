@@ -28,9 +28,9 @@ use crate::vspan::{gate_vspan, Subspace};
 use crate::{Query, RetrievalWorld};
 
 /// The most blocks one COMPARE operand may resolve to, and the most spans it
-/// may resolve — ONE budget on an operand's resolution, counted twice, on the
-/// spans walked and on the blocks built — and so the ceiling on the join's
-/// two factors and on the walks that produce them.
+/// may hand to M5 — ONE budget on an operand's resolution, counted twice, on
+/// the spans handed and on the blocks built — and so the ceiling on the join's
+/// two factors and on the resolution walks behind them.
 ///
 /// The budget: the join is `|P|·|Q|` candidate tests, so an operand budget
 /// SQUARES — `2^12` bounds one query at `2^24` ≈ 1.7×10⁷ tests, each two
@@ -47,8 +47,8 @@ use crate::{Query, RetrievalWorld};
 /// yields none — so a block count alone would admit any number of
 /// empty-resolving spans and the walks with them, from a request the body cap
 /// alone sizes. The multi-run expansion, where one span over a fragmented
-/// document resolves to many blocks from a single wire element, is refused by
-/// the BLOCK count, which a span count cannot see.
+/// document resolves to many blocks from a single span on the wire, is refused
+/// by the BLOCK count, which a span count cannot see.
 ///
 /// COUNTED ON THE SPANS HANDED TO M5, not on the walks M5 performs: a span
 /// M5's reader declines at once (wrong depth, foreign subspace) is counted
@@ -81,8 +81,8 @@ pub const MAX_COMPARE_OPERAND_BLOCKS: usize = 1 << 12;
 /// [`MAX_COMPARE_OPERAND_BLOCKS`]'s card).
 ///
 /// [`MAX_COMPARE_OPERAND_BLOCKS`] cannot stand in for it: two operands at that
-/// budget whose spans all name ONE shared position report the SQUARE of it in
-/// pairs, so fan-out is bounded only by counting the pairs themselves.
+/// budget whose spans all resolve to ONE shared I-address report the SQUARE of
+/// it in pairs, so fan-out is bounded only by counting the pairs themselves.
 pub const MAX_COMPARE_PAIRS: usize = 1 << 16;
 
 impl<W: RetrievalWorld> Query<'_, W> {
@@ -97,8 +97,8 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// is what the join runs over. Every reported pair is confined to the two
     /// operand regions `R_Σ(ρ₁) × R_Σ(ρ₂)` (X12 R1), and a span that clips to
     /// nothing contributes to neither. (Each `RegionSpec` is itself a region
-    /// in ASN-0124's sense — the element a fault coordinate counts; see its
-    /// card for the two words.)
+    /// in ASN-0124's sense — what a fault coordinate's `region` counts; see
+    /// its card for the two words.)
     ///
     /// Each region resolves through its document's READING SURFACE (crate
     /// doc, *Which arrangement an operation answers from*), asked as each
@@ -134,7 +134,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// request's: a region names a span list and a spec-set names a region
     /// list, so their product is the caller's to choose and squares in it. So
     /// each operand is capped at [`MAX_COMPARE_OPERAND_BLOCKS`] — on the spans
-    /// it resolves, each one `Θ(#runs(doc))` walk whatever it yields, and on
+    /// it hands to M5, each one `Θ(#runs(doc))` walk whatever it yields, and on
     /// the blocks it resolves to (`TooManyBlocks`, refused AS THE OPERAND
     /// RESOLVES and before the join runs, ρ₁ resolved first) — and the report
     /// at [`MAX_COMPARE_PAIRS`] correspondences (`TooManyPairs`, refused AS THE
@@ -176,10 +176,10 @@ impl<W: RetrievalWorld> Query<'_, W> {
 ///
 /// Walks the regions and their spans in SUBMITTED ORDER and returns at the
 /// first fault whatever its kind, which is what makes the triple locate
-/// anything: it names a position everything before which is clean. Per span
+/// anything: it names a span before which everything listed is clean. Per span
 /// the residence check runs BEFORE [`gate_vspan`] — a link-started span that
 /// is also malformed reports `NotContentSubspace` — because a request naming
-/// the wrong subspace is a different request, not a misshapen one.
+/// the wrong subspace is a different request, not a malformed one.
 ///
 /// Content residence is COMPARE's own clause (ASN-0122 spec-sets are
 /// content-subspace), rejected loudly rather than resolved to nothing: a span
@@ -291,10 +291,10 @@ impl<'a> Block<'a> {
 /// spans to their I-run blocks, reconstructing each run's V-start by
 /// accumulation. `None` when the operand's resolution would pass
 /// [`MAX_COMPARE_OPERAND_BLOCKS`] on EITHER of its two counts — MORE spans
-/// walked, or MORE blocks built, than the budget. Exactly the budget of either
-/// is answered; the span past it is refused BEFORE ITS WALK and the block past
-/// it AS THE BLOCKS ARE PRODUCED, so an over-budget operand stops resolving
-/// rather than resolving whole and then being measured.
+/// handed to M5, or MORE blocks built, than the budget. Exactly the budget of
+/// either is answered; the span past it is refused BEFORE ITS WALK and the
+/// block past it AS THE BLOCKS ARE PRODUCED, so an over-budget operand stops
+/// resolving rather than resolving whole and then being measured.
 ///
 /// Both counts are [`MAX_COMPARE_OPERAND_BLOCKS`]'s, whose card says why
 /// there are two, what each refuses, and what neither bounds within one
@@ -352,17 +352,17 @@ fn resolve_blocks<'a>(
     regions: &'a [RegionSpec],
 ) -> Option<Vec<Block<'a>>> {
     let mut out = Vec::new();
-    let mut spans_resolved = 0usize;
+    let mut spans_handed = 0usize;
     for r in regions {
         let surface = reading_surface(m3, &r.doc);
         for span in &r.spans {
             // The span count, taken as the span is handed and before its
             // walk; MAX_COMPARE_OPERAND_BLOCKS's card says why spans are
             // counted beside blocks.
-            if spans_resolved >= MAX_COMPARE_OPERAND_BLOCKS {
+            if spans_handed >= MAX_COMPARE_OPERAND_BLOCKS {
                 return None; // the operand's budget, refused before the walk
             }
-            spans_resolved += 1;
+            spans_handed += 1;
             // M5's own shape reader: a span it declines (well-formed but
             // depth-incompatible) contributes no blocks, as `resolve` would
             // have contributed no runs for it.

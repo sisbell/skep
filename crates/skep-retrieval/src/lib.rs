@@ -80,8 +80,8 @@
 //! report. FINDDOCSCONTAINING's request is the multiplier on two world-sized
 //! scans, and the request-to-coverage step EXPANDS: a region set nests two
 //! wire caps whose product only a body cap bounds, and one span over a
-//! fragmented document resolves to many coverage spans from a single wire
-//! element — so it carries [`MAX_FIND_COVERAGE_SPANS`]. Each operand-side
+//! fragmented document resolves to many coverage spans from a single span on
+//! the wire — so it carries [`MAX_FIND_COVERAGE_SPANS`]. Each operand-side
 //! budget is counted twice, on the spans handed to M5 and on what they
 //! produce; [`MAX_COMPARE_OPERAND_BLOCKS`]'s card says why.
 //!

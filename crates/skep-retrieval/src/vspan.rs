@@ -1,5 +1,5 @@
 //! §Internal design — how M6 reads one request V-span: which subspace its
-//! start names, and whether its shape is well-formed. The two-subspace
+//! start names, and whether it is well-formed. The two-subspace
 //! vocabulary a classification lands in ([`Subspace`]) reads itself off a
 //! span's start or a numeral, writes its own numeral (M1's), and asks M5 for
 //! its count and runs — so no site re-derives which subspace a start names,
@@ -30,8 +30,8 @@ static S_C: LazyLock<Nat> = LazyLock::new(content_subspace);
 static S_L: LazyLock<Nat> = LazyLock::new(link_subspace);
 
 /// One of a document's two subspaces (T7; ASN-0047) — the vocabulary every
-/// site that must tell content from link matches on, and the one element
-/// that answers for every direction of it. It reads itself off a numeral
+/// site that must tell content from link matches on, and the one type that
+/// answers for every direction of it. It reads itself off a numeral
 /// ([`Subspace::of_numeral`]) or off a request span's start
 /// ([`Subspace::of_span`]), writes the numeral M1 names it by
 /// ([`Subspace::numeral`]), and asks M5 for its own count and runs

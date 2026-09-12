@@ -846,7 +846,7 @@ fn the_request_gate_reports_the_first_fault_in_request_order() {
     // The gate walks the request IN ORDER and the FIRST fault wins, whatever
     // its kind — which is what makes `index` / `(region, index)` /
     // `(operand, region, index)` localization mean anything. Within ONE spec
-    // the registry check precedes the span gate; ACROSS specs, position
+    // the registry check precedes the span gate; ACROSS specs, request order
     // decides. Each request below carries two faults of DIFFERENT kinds, so
     // only the ordering can explain which is reported.
     let k = mem_kernel();
@@ -911,7 +911,7 @@ fn the_request_gate_checks_the_registry_before_the_spans_of_its_own_region() {
     // and `MalformedSpan`, and `FindError`'s outranks `MalformedSpan`. Each
     // request below is faulty two ways in the SAME region, so only the
     // within-region order can explain the verdict; every other gate test puts
-    // its two faults in different regions, where position decides instead.
+    // its two faults in different regions, where request order decides instead.
     // (RETRIEVEV's spec-level twin is pinned in
     // `retrieve_v_rejects_the_whole_request_on_any_malformed_spec`.)
     let k = mem_kernel();
@@ -994,8 +994,9 @@ fn doc_vspan_is_the_bounding_hull_of_the_per_subspace_extents() {
 
 #[test]
 fn doc_vspanset_reports_per_subspace_exact_extents_prenormalized() {
-    // ASN-0113 W2/W4/W13: ≤2 members, content before link, exact
-    // ext(d,S) = ([S,1],[0,n_S]), already normal; ⟨⟩ for registered-empty;
+    // ASN-0113 W2/W4/W13: one extent per occupied subspace, content before
+    // link, exact ext(d,S) = ([S,1],[0,n_S]), already normal; ⟨⟩ for
+    // registered-empty;
     // not registered ⇒ Err (both extent ops).
     let k = mem_kernel();
     insert3(&k);
@@ -1030,7 +1031,7 @@ fn doc_vspanset_reports_per_subspace_exact_extents_prenormalized() {
 fn a_content_edit_under_links_moves_the_extent_and_not_the_bounding_box() {
     // ASN-0112 V9, which is the whole of the routing `doc_vspan` states: the
     // cross-subspace box is a function of the two EXTREMES, so a content edit
-    // keeping n_C ≥ 1 leaves it fixed while `doc_vspanset`'s content member
+    // keeping n_C ≥ 1 leaves it fixed while `doc_vspanset`'s content extent
     // moves with n_C. A caller that must observe a content-count change asks
     // for the extents; asking for the box would tell it nothing happened.
     let k = mem_kernel();
@@ -1049,7 +1050,7 @@ fn a_content_edit_under_links_moves_the_extent_and_not_the_bounding_box() {
     );
     assert_eq!(ok_of(q_before.doc_vspan(&doc1())), box_);
     assert_eq!(ok_of(q_after.doc_vspan(&doc1())), box_);
-    // The extents are not: the content member follows n_C.
+    // The extents are not: the content extent follows n_C.
     let extents = |q: &Query<'_, World>| {
         ok_of(q.doc_vspanset(&doc1()))
             .iter()
@@ -1618,7 +1619,8 @@ fn show_deletions_orders_a_multi_address_half_by_tumbler_not_by_arrangement() {
         ok_of(q.show_deletions(&doc1(), &doc2())),
         Deletions {
             // Enumerated from doc2 as [ca2, ca1] and returned SORTED; ca3 is
-            // deleted from doc1 but not current in doc2, so it is no member.
+            // deleted from doc1 but not current in doc2, so it is not in the
+            // half.
             deleted_from_a_with_b: vec![ca(1), ca(2)],
             deleted_from_b_with_a: vec![],
         }
@@ -1628,7 +1630,7 @@ fn show_deletions_orders_a_multi_address_half_by_tumbler_not_by_arrangement() {
 #[test]
 fn show_deletions_names_the_first_unregistered_document() {
     // §Errors: both documents must be registered and `d_a` is checked FIRST,
-    // so the rejection names the argument POSITION, not whichever address
+    // so the rejection follows the ARGUMENT ORDER, not whichever address
     // happens to be looked at first.
     let k = mem_kernel();
     insert3(&k);
@@ -1649,7 +1651,7 @@ fn show_deletions_enumerates_the_address_named_and_does_not_float() {
     // Crate doc, *Which arrangement an operation answers from*: SHOWDELETIONS
     // reads the arrangement of the address NAMED. CURRENT(·, pdoc) is pdoc's
     // own, not its head's — so an address the head holds and pdoc does not is
-    // no member of either half under pdoc's name, and is under the head's.
+    // in neither half under pdoc's name, and is in one under the head's.
     let k = mem_kernel();
     let vs = deposit3(&k); // pdoc = [pca1, pca2, pca3]
     let (fork, _) = vs
@@ -2426,8 +2428,8 @@ fn compare_refuses_an_operand_past_its_block_budget() {
 fn compare_refuses_an_operand_whose_blocks_outnumber_the_budget_though_its_spans_do_not() {
     // The budget's own card: beyond M10's per-array wire cap it refuses "the
     // multi-run expansion, where one span over a fragmented document resolves
-    // to many blocks from a single wire element", and the BLOCK count is what
-    // refuses it. doc2 resolves to THREE runs, so the two operands below are
+    // to many blocks from a single span on the wire", and the BLOCK count is
+    // what refuses it. doc2 resolves to THREE runs, so the two operands below are
     // `MAX/3` and `MAX/3 + 1` SPANS — both under the budget's own span count
     // and under any wire cap — and `MAX - (MAX mod 3)` and three more BLOCKS,
     // which is the only unit that explains one being answered and the other
@@ -2542,7 +2544,7 @@ fn compare_refuses_a_fanout_past_its_pair_budget() {
 #[test]
 fn compare_gates_both_operands_whole_before_either_budget_can_refuse() {
     // §COMPARE, which refusal speaks: both operands are gated in FULL before
-    // either is resolved, so a SHAPE fault always outranks a SIZE refusal. An
+    // either is resolved, so a GATE fault always outranks a BUDGET refusal. An
     // over-budget ρ₁ beside a malformed ρ₂ span reports the span — telling a
     // client that ρ₂ was examined too, which is the promise `TooManyBlocks`
     // rests on.
@@ -2775,7 +2777,7 @@ fn find_docs_containing_refuses_a_request_whose_coverage_outnumbers_the_budget_t
 ) {
     // The budget's own card: beyond M10's per-array wire cap it refuses "the
     // multi-run expansion, where one span over a fragmented document resolves
-    // to many coverage spans from a single wire element", and the COVERAGE
+    // to many coverage spans from a single span on the wire", and the COVERAGE
     // count is what refuses it. doc2 resolves to THREE runs, so the two
     // requests below are `MAX/3` and `MAX/3 + 1` SPANS — both under the
     // budget's own span count and under any wire cap — and `MAX - (MAX mod 3)`
@@ -2853,7 +2855,7 @@ fn find_docs_containing_refuses_a_request_whose_spans_outnumber_the_budget_thoug
 #[test]
 fn find_docs_containing_gates_the_whole_request_before_its_budget_can_refuse() {
     // §Errors, the budget clause: TooMuchCoverage fires only after the gate
-    // has completed over the WHOLE request, so a shape fault outranks it
+    // has completed over the WHOLE request, so a gate fault outranks it
     // wherever it sits — here in a second region behind a first that alone
     // passes the budget. COMPARE's twin is pinned; this is
     // FINDDOCSCONTAINING's.

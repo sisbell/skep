@@ -4,24 +4,24 @@
 //! WHICH REFUSAL SPEAKS, in three clauses a caller may rely on.
 //!
 //! ONE PASS, REQUEST ORDER. Each gate walks the request as submitted and
-//! reports the FIRST fault it reaches, whatever its kind — a fault at an
-//! earlier position outranks any fault at a later one, which is what makes
+//! reports the FIRST fault it reaches, whatever its kind — a fault earlier in
+//! the request outranks any fault later in it, which is what makes
 //! `index` / `(region, index)` / `(operand, region, index)` locate anything:
-//! the payload names a position the caller can trust everything before to be
-//! clean of.
+//! the payload names a spec, or a region and a span, before which everything
+//! is clean.
 //!
-//! WITHIN ONE POSITION — one spec, or one region and one of its spans — the
-//! checks run in variant declaration order: registry, then (COMPARE) content
-//! residence, then the span gate. [`OriginError`] is the whole-enum case, its
-//! operation naming one document and one span, so its six variants read WF_V's
-//! conjuncts i, ii/iv, iii, v, vi in sequence with no positional clause to
-//! compose against.
+//! WITHIN ONE SPEC, OR ONE REGION AND ONE OF ITS SPANS, the checks run in
+//! variant declaration order: registry, then (COMPARE) content residence, then
+//! the span gate. [`OriginError`] is the whole-enum case, its operation naming
+//! one document and one span, so its six variants read WF_V's conjuncts i,
+//! ii/iv, iii, v, vi in sequence with no request-order clause to compose
+//! against.
 //!
-//! THE BUDGET REFUSALS ARE LOCATED AT NO POSITION. `TooManyBlocks`,
-//! `TooManyPairs` and `TooMuchCoverage` can fire only after their operation's
-//! gate has completed over the WHOLE request, so a shape fault always outranks
-//! a size refusal — which is also their declaration order, the budget variants
-//! being declared last.
+//! THE BUDGET REFUSALS CARRY NO COORDINATE. `TooManyBlocks`, `TooManyPairs`
+//! and `TooMuchCoverage` can fire only after their operation's gate has
+//! completed over the WHOLE request, so a gate fault always outranks a budget
+//! refusal — which is also their declaration order, the budget variants being
+//! declared last.
 //!
 //! The first two clauses compose, and the composition is what a caller reads
 //! precedence by: a request whose FIRST spec has a malformed span and whose
@@ -55,12 +55,12 @@
 //! request — and the interface is the verbatim binding.
 //!
 //! WHERE THE DOCUMENT SITS. A registry rejection carries no index, and the
-//! first clause above is what locates it: the offending position is the FIRST
-//! spec or region, in request order and ρ₁ before ρ₂, naming the carried
-//! document. Everything before it is span-clean too, since a span fault there
-//! would have spoken instead. So the payload localizes exactly as an `index`
-//! does, and the before-is-clean promise is one a caller can act on rather
-//! than only read.
+//! first clause above is what locates it: the offending spec or region is the
+//! FIRST, in request order and ρ₁ before ρ₂, naming the carried document.
+//! Everything before it is span-clean too, since a span fault there would have
+//! spoken instead. So the payload localizes exactly as an `index` does, and
+//! the before-is-clean promise is one a caller can act on rather than only
+//! read.
 //!
 //! All six carry the workspace's shape for a typed rejection —
 //! `Debug + Display + std::error::Error`, each a LEAF with no `source()`,
@@ -177,8 +177,8 @@ pub enum DeletionsError {
 /// content-subspace residence check runs BEFORE the well-formedness gate.
 ///
 /// The last two are the budget refusals COMPARE's superlinear join needs, and
-/// are the only rejections here that name no defect in the request's SHAPE —
-/// only its size. Both name the budget they passed, so a client learns which
+/// are the only rejections here that name nothing the gate faults — only the
+/// request's size. Both name the budget they passed, so a client learns which
 /// dimension to narrow.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum CompareError {
@@ -203,8 +203,8 @@ pub enum CompareError {
     /// [`MAX_COMPARE_OPERAND_BLOCKS`]: crate::MAX_COMPARE_OPERAND_BLOCKS
     TooManyBlocks { operand: Operand },
     /// The join runs to more than [`MAX_COMPARE_PAIRS`] correspondences. The
-    /// block budget cannot see this one: two small operands naming the same
-    /// position fan out to their product.
+    /// block budget cannot see this one: two small operands resolving to the
+    /// same I-address fan out to their product.
     ///
     /// [`MAX_COMPARE_PAIRS`]: crate::MAX_COMPARE_PAIRS
     TooManyPairs,
@@ -215,8 +215,8 @@ pub enum CompareError {
 /// rejection, never a silent under-resolution that drops containers
 /// (FD-COMPLETE).
 ///
-/// The last is the budget refusal, and the only rejection here that names no
-/// defect in the request's SHAPE — only its size. It names the budget it
+/// The last is the budget refusal, and the only rejection here that names
+/// nothing the gate faults — only the request's size. It names the budget it
 /// passed, so a client learns what to narrow.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum FindError {

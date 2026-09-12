@@ -1,8 +1,9 @@
 //! §Internal design — how M6 reads one request V-span: which subspace its
 //! start names, and whether its shape is well-formed. The two-subspace
-//! vocabulary a classification lands in ([`Subspace`]) answers for M1's
-//! numeral and for M5's reads of that subspace alike, so no site pairs a
-//! subspace with a numeral, a count or a run-list by hand.
+//! vocabulary a classification lands in ([`Subspace`]) reads itself off a
+//! span's start or a numeral, writes its own numeral (M1's), and asks M5 for
+//! its count and runs — so no site re-derives which subspace a start names,
+//! and none pairs a subspace with a numeral, a count or a run-list by hand.
 
 use std::sync::LazyLock;
 
@@ -14,9 +15,9 @@ use crate::error::SpanFault;
 // Content (s_C) / link (s_L) subspace numerals. M1 owns T7 and names them
 // ([`content_subspace`]/[`link_subspace`]); M6 memoizes what M1 names, because
 // `Nat = BigUint` cannot be `const` and a bare call would re-allocate a fresh
-// `BigUint` on every reference. [`subspace_of`] only COMPARES against them —
-// by reference, with no allocation — while the O(1)-per-query construction
-// sites clone through [`Subspace::numeral`].
+// `BigUint` on every reference. [`Subspace::of_numeral`] only COMPARES against
+// them — by reference, with no allocation — while the O(1)-per-query
+// construction sites clone through [`Subspace::numeral`].
 //
 // Private, which is the point of [`Subspace`] carrying both directions: no
 // file but this one names a raw subspace numeral, so a numeral cannot be
@@ -28,11 +29,16 @@ static S_C: LazyLock<Nat> = LazyLock::new(content_subspace);
 /// `s_L` = M1's link-subspace numeral (ASN-0047; T7 convention).
 static S_L: LazyLock<Nat> = LazyLock::new(link_subspace);
 
-/// Which of a document's two subspaces (T7; ASN-0047) a numeral names, or
-/// `None` for a foreign one. `Nat` cannot appear in a pattern, so this is the
-/// ONE place the two comparisons are written: every site that must tell
-/// content from link matches on the answer instead of re-deriving the chain
-/// and carrying its own fall-through.
+/// One of a document's two subspaces (T7; ASN-0047) — the vocabulary every
+/// site that must tell content from link matches on, and the one element
+/// that answers for every direction of it. It reads itself off a numeral
+/// ([`Subspace::of_numeral`]) or off a request span's start
+/// ([`Subspace::of_span`]), writes the numeral M1 names it by
+/// ([`Subspace::numeral`]), and asks M5 for its own count and runs
+/// ([`Subspace::count`], [`Subspace::runs`]). A site therefore matches on
+/// the classification instead of re-deriving the comparison chain and
+/// carrying its own fall-through, and never pairs a subspace with a numeral,
+/// a count or a run-list by hand.
 ///
 /// `pub(crate)`, because M1 owns T7 and a second published subspace
 /// vocabulary is exactly what memoizing M1's numerals avoids.
@@ -43,11 +49,45 @@ pub(crate) enum Subspace {
 }
 
 impl Subspace {
+    /// Which subspace a numeral names, or `None` for a foreign one — the
+    /// reading direction of [`Subspace::numeral`], which writes one. `Nat`
+    /// cannot appear in a pattern, so this is the ONE place the two
+    /// comparisons are written, by reference against the memoized statics
+    /// with no allocation; every site that must tell content from link
+    /// matches on the answer instead.
+    fn of_numeral(s: &Nat) -> Option<Subspace> {
+        if *s == *S_C {
+            Some(Subspace::Content)
+        } else if *s == *S_L {
+            Some(Subspace::Link)
+        } else {
+            None
+        }
+    }
+
+    /// The subspace a V-span's start names — position 1 of the start, read
+    /// through [`Subspace::of_numeral`].
+    ///
+    /// TOTAL: `Tumbler` indexing is 1-based over a nonempty carrier, so every
+    /// span has a position 1 whatever its depth, gated or not. `None`
+    /// therefore means the numeral there is neither `s_C` nor `s_L`, NEVER
+    /// that the start is too shallow to name one — which is why COMPARE may
+    /// ask this BEFORE [`gate_vspan`] and still get an unambiguous answer, and
+    /// why a one-component start reports a foreign subspace rather than
+    /// falling through some depth-shaped hole.
+    pub(crate) fn of_span(span: &Span) -> Option<Subspace> {
+        Subspace::of_numeral(
+            span.start()
+                .get(1)
+                .expect("a nonempty start has a position 1"),
+        )
+    }
+
     /// The numeral M1 names this subspace by (T7) — the writing direction of
-    /// [`subspace_of`], which reads one. The two sit together for the reason
-    /// M5 keeps `ordinal_vspan` beside `is_ordinal_vspan`: a classification
-    /// and the value it stands for are one definition read two ways, and they
-    /// cannot come apart if neither is spelled anywhere else.
+    /// [`Subspace::of_numeral`], which reads one. The two sit together for the
+    /// reason M5 keeps `ordinal_vspan` beside `is_ordinal_vspan`: a
+    /// classification and the value it stands for are one definition read two
+    /// ways, and they cannot come apart if neither is spelled anywhere else.
     ///
     /// Borrowed from the memoized static, so a caller that must own one
     /// clones at the O(1)-per-query site rather than on every comparison.
@@ -81,34 +121,6 @@ impl Subspace {
             Subspace::Link => m5.link_runs(doc),
         }
     }
-}
-
-/// Classify a start subspace numeral (see [`Subspace`]).
-fn subspace_of(s: &Nat) -> Option<Subspace> {
-    if *s == *S_C {
-        Some(Subspace::Content)
-    } else if *s == *S_L {
-        Some(Subspace::Link)
-    } else {
-        None
-    }
-}
-
-/// The subspace a V-span's start names — position 1 of the start, classified.
-///
-/// TOTAL: `Tumbler` indexing is 1-based over a nonempty carrier, so every span
-/// has a position 1 whatever its depth, gated or not. `None` therefore means
-/// the numeral there is neither `s_C` nor `s_L`, NEVER that the start is too
-/// shallow to name one — which is why COMPARE may ask this BEFORE
-/// [`gate_vspan`] and still get an unambiguous answer, and why a one-component
-/// start reports a foreign subspace rather than falling through some
-/// depth-shaped hole.
-pub(crate) fn span_subspace(span: &Span) -> Option<Subspace> {
-    subspace_of(
-        span.start()
-            .get(1)
-            .expect("a nonempty start has a position 1"),
-    )
 }
 
 /// The SPAN half of ASN-0115's V-spec well-formedness: zero-free,
@@ -166,21 +178,24 @@ mod tests {
         assert_eq!(*Subspace::Content.numeral(), content_subspace());
         assert_eq!(*Subspace::Link.numeral(), link_subspace());
         // Writing a subspace and reading it back is the identity, which is
-        // what makes `numeral` and `subspace_of` one definition rather than
+        // what makes `numeral` and `of_numeral` one definition rather than
         // two that happen to agree.
         for s in [Subspace::Content, Subspace::Link] {
-            assert_eq!(subspace_of(s.numeral()), Some(s));
+            assert_eq!(Subspace::of_numeral(s.numeral()), Some(s));
         }
     }
 
     #[test]
-    fn subspace_of_classifies_the_two_real_subspaces_and_refuses_the_rest() {
+    fn of_numeral_classifies_the_two_real_subspaces_and_refuses_the_rest() {
         // The one place content-from-link is decided: every operation matches
         // on this answer rather than re-deriving the comparison chain.
-        assert_eq!(subspace_of(&content_subspace()), Some(Subspace::Content));
-        assert_eq!(subspace_of(&link_subspace()), Some(Subspace::Link));
-        assert_eq!(subspace_of(&Nat::from(3u32)), None);
-        assert_eq!(subspace_of(&Nat::zero()), None);
+        assert_eq!(
+            Subspace::of_numeral(&content_subspace()),
+            Some(Subspace::Content)
+        );
+        assert_eq!(Subspace::of_numeral(&link_subspace()), Some(Subspace::Link));
+        assert_eq!(Subspace::of_numeral(&Nat::from(3u32)), None);
+        assert_eq!(Subspace::of_numeral(&Nat::zero()), None);
     }
 
     #[test]
@@ -248,25 +263,31 @@ mod tests {
     }
 
     #[test]
-    fn span_subspace_is_total_over_every_span_including_the_shallowest() {
+    fn of_span_is_total_over_every_span_including_the_shallowest() {
         // Position 1 of a start exists at EVERY depth — `Tumbler` indexing is
         // 1-based over a nonempty carrier — so this answers for a span the
         // gate would reject and for one it would not, alike. A `None` here
         // means "foreign numeral", never "too shallow to have one", which is
         // what lets COMPARE ask it before gating.
         assert_eq!(
-            span_subspace(&span(&[1, 1], &[0, 3])),
+            Subspace::of_span(&span(&[1, 1], &[0, 3])),
             Some(Subspace::Content)
         );
-        assert_eq!(span_subspace(&span(&[2, 1], &[0, 1])), Some(Subspace::Link));
         assert_eq!(
-            span_subspace(&span(&[1, 1, 1], &[0, 0, 1])),
+            Subspace::of_span(&span(&[2, 1], &[0, 1])),
+            Some(Subspace::Link)
+        );
+        assert_eq!(
+            Subspace::of_span(&span(&[1, 1, 1], &[0, 0, 1])),
             Some(Subspace::Content)
         );
-        assert_eq!(span_subspace(&span(&[3, 1], &[0, 1])), None);
+        assert_eq!(Subspace::of_span(&span(&[3, 1], &[0, 1])), None);
         // Depth 1: too shallow for the gate (`StartTooShallow`), and still an
         // unambiguous subspace reading.
-        assert_eq!(span_subspace(&span(&[1], &[1])), Some(Subspace::Content));
-        assert_eq!(span_subspace(&span(&[5], &[1])), None);
+        assert_eq!(
+            Subspace::of_span(&span(&[1], &[1])),
+            Some(Subspace::Content)
+        );
+        assert_eq!(Subspace::of_span(&span(&[5], &[1])), None);
     }
 }

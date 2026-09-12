@@ -146,8 +146,11 @@ pub use error::{
 pub use query::MAX_FIND_COVERAGE_SPANS;
 pub use types::{CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, RegionSpec, Spec};
 
-/// `CorrPair`/`CompareReport` carry M5's `VPos`; re-exported so M10's
-/// marshaler names it through M6, not by reaching into M5's crate.
+/// `CorrPair`/`CompareReport` carry M5's `VPos`; re-exported so the type a
+/// report's feet carry is nameable from M6's own surface without a
+/// dependency on M5. M10 has that dependency for its own reasons — its
+/// arrangement requests take a `VPos` — and names the type there, as this
+/// crate's suite does; this stands for the consumer that does not.
 pub use skep_arrangement::VPos;
 
 use skep_arrangement::HasM5;

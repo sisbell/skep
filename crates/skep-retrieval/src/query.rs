@@ -12,7 +12,7 @@ use skep_content::HasContent;
 
 use crate::error::{DeletionsError, ExtentError, FindError, OriginError, RetrieveError};
 use crate::types::{Deletions, Delivery, DeliveryItem, RegionSpec, Spec};
-use crate::vspan::{gate_vspan, span_subspace, Subspace};
+use crate::vspan::{gate_vspan, Subspace};
 use crate::{Query, RetrievalWorld, MAX_COMPARE_OPERAND_BLOCKS};
 
 /// The most I-coverage spans one FINDDOCSCONTAINING request may resolve to,
@@ -292,7 +292,7 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
             // ONCE per spec, because the answer is constant over the spec's
             // positions. Gated on the address named above; the surface
             // answers.
-            let sub = span_subspace(&spec.span);
+            let sub = Subspace::of_span(&spec.span);
             let surface = reading_surface(m3, &spec.doc);
             for run in m5.resolve(&surface, &spec.span) {
                 // The per-run source consult (PUB-6.41): the run's origin
@@ -493,7 +493,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
         let surface = reading_surface(m3, doc);
         // The start's subspace, at any depth. Foreign (∉ {s_C, s_L}) is
         // distinct from real-but-empty.
-        let Some(sub) = span_subspace(span) else {
+        let Some(sub) = Subspace::of_span(span) else {
             return Err(OriginError::NoSuchSubspace);
         };
         if sub.count(m5, &surface).is_zero() {

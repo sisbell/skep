@@ -24,7 +24,7 @@ use skep_namespace::M3State;
 
 use crate::error::{CompareError, Operand};
 use crate::types::{CompareReport, CorrPair, RegionSpec};
-use crate::vspan::{gate_vspan, span_subspace, Subspace};
+use crate::vspan::{gate_vspan, Subspace};
 use crate::{Query, RetrievalWorld};
 
 /// The most blocks one COMPARE operand may resolve to, and the most spans it
@@ -181,7 +181,7 @@ fn gate_spec_set(
             return Err(CompareError::DocNotRegistered(r.doc.clone()));
         }
         for (index, span) in r.spans.iter().enumerate() {
-            if span_subspace(span) != Some(Subspace::Content) {
+            if Subspace::of_span(span) != Some(Subspace::Content) {
                 return Err(CompareError::NotContentSubspace {
                     operand,
                     region,

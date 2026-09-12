@@ -208,9 +208,15 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
     /// precondition); gaps / depth-incompatible (`#start ≥ 3`) / foreign or
     /// empty subspaces degrade to silent empty contributions, never an error
     /// (R6 — M5's defensive `resolve` returns fewer-or-zero runs). Empty
-    /// spec-set ⇒ `Ok(empty)`. Delivery is one item per active V-position
-    /// (R3 exactness, R8 no-dedup), per-spec concatenation in submitted
-    /// order (R5), ascending-V within, no merge, no global sort.
+    /// spec-set ⇒ `Ok(empty)`. Delivery is one item per active V-position of
+    /// every DELIVERED run (R3 exactness, R8 no-dedup) — and one
+    /// [`DeliveryItem::Withheld`] per run whose origin is not a registered
+    /// document, occupying that run's `width` positions (PUB-1.57): the one
+    /// masking the identity predicate leaves, since the predicate is
+    /// contracted to registered documents (PUB-6.37) and RES-162's unheld
+    /// origin — a mirror that never held the draft a published window names —
+    /// is a run this form can meet. Per-spec concatenation in submitted order
+    /// (R5), ascending-V within, no merge, no global sort.
     ///
     /// WHICH REFUSAL SPEAKS. The gate walks the spec-set in SUBMITTED ORDER
     /// and reports the FIRST faulty spec, whatever the kind of its fault;
@@ -230,8 +236,9 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
     /// specifies. The only cap that closes it is a spec-count or response-size
     /// cap on the route, which is M10's as the request lifecycle's owner.
     pub fn retrieve_v(&self, specs: &[Spec]) -> Result<Delivery, RetrieveError> {
-        // The UNFILTERED delivery — every origin readable. The daemon's read
-        // surface calls [`Query::retrieve_v_masked`] with its per-request
+        // The masked form under the all-true predicate: its only `Withheld`
+        // items are unregistered-origin runs (PUB-6.37; RES-162). The daemon's
+        // read surface calls [`Query::retrieve_v_masked`] with its per-request
         // predicate; this delegate serves the principal-free callers (the
         // engine's own lifecycle read, the suites) unchanged.
         self.retrieve_v_masked(specs, &|_| true)
@@ -249,6 +256,19 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
     /// ORIGINS its runs window. M6 decides no readability here — it applies
     /// the predicate M10 threads in, at the run, which is the granularity the
     /// delivery has.
+    ///
+    /// THE PREDICATE'S OWN PRECONDITION IS DISCHARGED HERE. `readable` is
+    /// contracted to REGISTERED documents (PUB-6.37, the rule
+    /// `reading_surface` is under too), and the gate established that of the
+    /// documents NAMED, not of the origins their runs window; so each origin
+    /// is checked against the registry before the predicate is asked, and one
+    /// that is not a registered document — reachable as RES-162's unheld
+    /// origin, the mirror that never held the draft a published window names
+    /// — takes the withheld arm directly, the predicate unconsulted. The
+    /// predicate is consulted only after the gate has passed the whole
+    /// request (a rejected request consults it of nothing), once per resolved
+    /// run with a registered origin, of the origin document alone — which may
+    /// be a version address — and never of the document named.
     pub fn retrieve_v_masked(
         &self,
         specs: &[Spec],
@@ -276,10 +296,14 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
             let surface = reading_surface(m3, &spec.doc);
             for run in m5.resolve(&surface, &spec.span) {
                 // The per-run source consult (PUB-6.41): the run's origin
-                // DOCUMENT, tested BEFORE the run is expanded. An unregistered
-                // origin, or one the reading principal may not read, masks the
-                // WHOLE run as one withheld item at its own position — never
-                // coalesced with a neighbour (PUB-6.58).
+                // DOCUMENT, tested BEFORE the run is expanded. The registry
+                // check first is the predicate's precondition (PUB-6.37:
+                // registered documents only), M6's to discharge at this site
+                // because the gate saw the named document and not the origin;
+                // an unregistered origin (RES-162) is withheld without the
+                // predicate being asked. Either way the WHOLE run is masked as
+                // one withheld item at its own position — never coalesced with
+                // a neighbour (PUB-6.58).
                 let origin = run_origin(&run);
                 if !m3.is_registered_document(&origin) || !readable(&origin) {
                     out.push(DeliveryItem::Withheld { origin, width: run.width().clone() });
@@ -382,6 +406,11 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// address whose own arrangement is empty reports `⟨⟩` only while it has
     /// no head. The registry gate runs on the address named.
     ///
+    /// No predicate is threaded and none belongs: the extents COUNT the
+    /// positions a masked-origin run occupies and are never shrunk to the
+    /// deliverable ones (PUB-6.15, PUB-6.41); [`Query::doc_vspan`] inherits
+    /// this as the hull.
+    ///
     /// The count-read core of both extent queries: exact because each
     /// subspace's occupied V-positions form the dense run anchored at
     /// `[S, 1]`, `[S, 1..n_S]` (D-SEQ★ — the sequential-position occupancy
@@ -429,6 +458,10 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// operation answers from*): the gate and the span checks below run on
     /// the address named, and the surface's runs are the ones whose origins
     /// are reported.
+    ///
+    /// UNFILTERED (PUB-6.15): the origins come back whole for a readable
+    /// argument, an unreadable origin's identity included; no predicate is
+    /// threaded, the argument's consult being M10's pre-dispatch.
     ///
     /// A success is never empty: an admissible request has an occupied
     /// subspace (`n_s ≥ 1`), a depth-2 span, and a fully resolved width, so at
@@ -510,6 +543,10 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// ordering M6's own presentation, which D-ORD licenses (T1-orderability
     /// is a property of the addresses) and does not require (the operation
     /// transports no ordering of its own).
+    ///
+    /// Whole for two readable arguments (PUB-6.15): no predicate; each half is
+    /// the addresses themselves whatever their origins' readability, the two
+    /// arguments' consult being M10's pre-dispatch.
     ///
     /// BOTH HALVES ARE CONTENT I-ADDRESSES BY DEFINITION (D-SUBSP): ASN-0075
     /// classifies `(a, d)` with `a ∈ dom(C)`, so `CURRENT` and `DELETED` are
@@ -656,6 +693,16 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// caller's doc-argument consult (pre-dispatch), not filtered here. M6
     /// decides no readability here — it applies the predicate M10 threads in,
     /// at the container, which is the granularity the answer has.
+    ///
+    /// The predicate's registered-only precondition (PUB-6.37) holds at this
+    /// door BY CONSTRUCTION — every candidate is a document R records a
+    /// placement in, and R is appended only by M5's write path on a
+    /// registered target — so no registry check precedes the predicate here,
+    /// where RETRIEVEV's masked form needs one, and adding one would be a
+    /// second check of a discharged obligation. The predicate is asked of
+    /// each candidate FIRST, before `project` is paid (PUB-6.17), and only
+    /// after the gate and both counts of the coverage budget have passed the
+    /// whole request.
     pub fn find_docs_containing_filtered(
         &self,
         regions: &[RegionSpec],
@@ -731,6 +778,11 @@ impl<W: RetrievalWorld> Query<'_, W> {
             // FD-SOUND — the present-tense containment filter — AND the
             // container consult (lane 3.3, §3): a container the reader may not
             // read is dropped at its identity, before it reaches the answer.
+            // The predicate goes first (PUB-6.17): the cheap test ahead of the
+            // one that materializes a footprint. Its registered-only
+            // precondition (PUB-6.37) holds by construction — R records
+            // placements in registered documents alone — so nothing is
+            // re-checked here.
             // Emptiness is M1's `SpanSet::is_empty`, denotationally exact
             // because no algebra result carries a zero-width member (zero
             // members ⇔ empty denotation).

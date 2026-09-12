@@ -86,8 +86,10 @@ pub struct RegionSpec {
 /// not, are two items, never one of the summed width. The consult is per-run
 /// against the run's ORIGIN document (M1's `document_of` of the run's
 /// I-start, which block uniformity makes the origin of every position in it);
-/// an unregistered origin takes this arm directly. The extent forms
-/// (`doc_vspan`/`doc_vspanset`) are EXCLUDED — they deliver no positions.
+/// an unregistered origin — RES-162's unheld origin — takes this arm
+/// directly, the predicate being contracted to registered documents
+/// (PUB-6.37). The extent forms (`doc_vspan`/`doc_vspanset`) are EXCLUDED —
+/// they deliver no positions.
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub enum DeliveryItem {
     Content(Val),
@@ -117,8 +119,9 @@ impl fmt::Debug for DeliveryItem {
 
 /// RETRIEVEV's result: per-spec concatenation in submitted order,
 /// ascending-V within each spec, no merge, no dedup, no global sort
-/// (ASN-0115 R3/R5/R8). `Default` is the empty delivery, which is the exact
-/// answer to an empty spec-set.
+/// (ASN-0115 R3/R5/R8); one item per delivered position and one per withheld
+/// run, as [`Delivery::len`] counts. `Default` is the empty delivery, which
+/// is the exact answer to an empty spec-set.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Delivery(pub Vec<DeliveryItem>);
 

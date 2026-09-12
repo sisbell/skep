@@ -115,8 +115,14 @@
 //!   [`Query::retrieve_v_masked`] (per run, against the run's origin, withheld
 //!   at the run's own position) and [`Query::find_docs_containing_filtered`]
 //!   (per container, at its identity, dropped). The named documents' own
-//!   readability is M10's pre-dispatch consult. SHOWORIGIN reports origin
-//!   *documents*, not owners;
+//!   readability is M10's pre-dispatch consult. The other five take no
+//!   predicate and answer WHOLE for readable arguments (PUB-6.15) — the
+//!   extents COUNT the positions a masked-origin run occupies and are never
+//!   shrunk to the deliverable ones (PUB-6.41); SHOWORIGIN's origins,
+//!   SHOWDELETIONS' halves and COMPARE's feet come back whole, material
+//!   originating in an unreadable document INCLUDED — by the specification's
+//!   decision, not by omission. SHOWORIGIN reports origin *documents*, not
+//!   owners;
 //! * link-side discovery (M8); the request lifecycle, dispatch, and
 //!   marshaling (M10);
 //! * any write path — M6 exposes no `transact`/`Kernel` and has no

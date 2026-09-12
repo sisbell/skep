@@ -92,6 +92,11 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// still NAME the document the caller asked about while the positions
     /// they carry are the surface's.
     ///
+    /// Whole for two readable arguments (PUB-6.15): correspondences whose
+    /// shared content originates in an unreadable document are INCLUDED; no
+    /// predicate is threaded, the two spec-sets' documents being M10's
+    /// pre-dispatch consult.
+    ///
     /// Gate, per operand: each region's doc registered, each span
     /// content-subspace-started (`NotContentSubspace`) and well-formed
     /// (`MalformedSpan`), every span fault located by an unambiguous

@@ -56,7 +56,7 @@ use skep_arrangement::{Base, Run, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{FourSet, SlotSpec, SupClaim, Window};
 use skep_febe::{
-    disposition_of, Codec, Disposition, EditionClaim, FaultSite, Op, OpKind, ParseError,
+    disposition_of, Codec, Deposit, Disposition, EditionClaim, FaultSite, Op, OpKind, ParseError,
     RejectCode, Rejection, ReqId, Request, Response, SlotArg, SuccessorSpec, MAX_REQ_ID_BYTES,
 };
 use skep_identity::KeySet;
@@ -713,15 +713,18 @@ impl Fields {
     }
 
     /// `insert`'s DEPOSIT DECLARATION (PUB-9.13's DECLARED horn, owner ruling
-    /// 2026-09-05; PUB-2.63): absent and explicit `null` alike read `false` —
-    /// an ordinary edit — and only a literal `true` declares. Any other value
-    /// is a parse fault, never coerced.
-    fn deposit(&mut self) -> PResult<bool> {
+    /// 2026-09-05; PUB-2.63): absent and explicit `null` alike read
+    /// `Undeclared` — an ordinary edit — and only a literal `true` declares.
+    /// Any other value is a parse fault, never coerced. Both arms are written
+    /// out, which is where M5 asks a reader to see which one is declared.
+    fn deposit(&mut self) -> PResult<Deposit> {
         match self.take_opt("deposit") {
-            None => Ok(false),
-            Some(v) => v
-                .as_bool()
-                .ok_or_else(|| PErr("field 'deposit': expected true or false".into())),
+            None => Ok(Deposit::Undeclared),
+            Some(v) => match v.as_bool() {
+                Some(true) => Ok(Deposit::Declared),
+                Some(false) => Ok(Deposit::Undeclared),
+                None => Err(PErr("field 'deposit': expected true or false".into())),
+            },
         }
     }
 
@@ -1208,10 +1211,11 @@ fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         Op::Insert { doc, at, values, deposit } => {
             let mut pairs = vec![("doc", j_addr(doc)), ("at", j_vpos(at)), ("values", j_values(values))];
             // Canonical: the declaration rides only when made — absent IS
-            // `false` on the wire, so a `false` marshals to no field and
-            // `parse ∘ marshal` is a fixpoint.
-            if *deposit {
-                pairs.push(("deposit", Value::Bool(true)));
+            // `Undeclared` on the wire, so an undeclared insert marshals to no
+            // field and `parse ∘ marshal` is a fixpoint.
+            match deposit {
+                Deposit::Declared => pairs.push(("deposit", Value::Bool(true))),
+                Deposit::Undeclared => {}
             }
             (op_name(OpKind::Insert), pairs)
         }

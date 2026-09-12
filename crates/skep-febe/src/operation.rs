@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // `m3()`/`m5()`/`links()` methods the read arms call, so no accessor trait
 // is imported here by name.
 use skep_address::{checked_inc, document_of, Address};
-use skep_arrangement::{published_target, trunk_head, trunk_of, Caller, Deposit, M5Rec};
+use skep_arrangement::{published_target, trunk_head, trunk_of, Caller, M5Rec};
 use skep_content::ContentWrite;
 use skep_discovery::{
     addressably_discoverable_from_on, count_ftt_on, count_v_on, delete_orphans_on,
@@ -25,7 +25,7 @@ use skep_retrieval::Query;
 
 use crate::idem::IdemCache;
 use crate::lower::{lower_read, lower_txn, Lower};
-use crate::op::{Op, OpKind, Request};
+use crate::op::{Op, OpKind, Request, WriteConsult};
 use crate::reject::{reject, rejection, FaultSite, RejectCode, Rejection};
 use crate::response::Response;
 use crate::session::{SessionId, Sessions};
@@ -33,7 +33,7 @@ use crate::successor::successor_link;
 use crate::{FebeWorld, Stores};
 
 /// THE read predicate, as the transport may SUPPLY it (PUB-1.31; PUB-6.39's
-/// one-per-request shape; PUB round 2, lane 3.3 — the `Consult` widened from
+/// one-per-request shape; PUB round 2, lane 3.3 — the predicate widened from
 /// the publish shot's source gate to the whole read surface): may `principal`
 /// (`None` = the GUEST) read the document `doc`? Consulted by every read arm
 /// — the doc-argument consult, the per-run withheld arm, the result-set
@@ -45,16 +45,22 @@ use crate::{FebeWorld, Stores};
 /// off the ONE snapshot it pins per request, so the answer and the `as_of` it
 /// is stamped with stand on one committed state, and the publish composite's
 /// source gate over the working world of the shot's own transaction, which M5
-/// hands it. Supplied ([`Operation::with_consult`]), it
+/// hands it. Supplied ([`Operation::with_read_predicate`]), it
 /// OVERRIDES the world the predicate is evaluated over — what a HISTORICAL
 /// read needs: `/op-at N` answers the N-world's content through the HEAD's
 /// exception set and grant set (PUB-6.48), so the daemon's throwaway front
-/// door over the reconstructed world consults a predicate closed over one
-/// head snapshot. `Send + Sync + 'static`, since the front door is shared
+/// door over the reconstructed world answers through a predicate closed over
+/// one head snapshot. `Send + Sync + 'static`, since the front door is shared
 /// across a transport's worker pool.
 ///
+/// This is the PREDICATE a door consults, never the act of consulting it:
+/// [`Operation::consult_read`] and [`Operation::consult_write`] are the two
+/// consults, in the corpus's sense, and both answer through this.
+///
 /// [`ReadableWorld::readable`]: crate::ReadableWorld::readable
-pub type Consult = dyn Fn(Option<PrincipalId>, &Address) -> bool + Send + Sync;
+/// [`Operation::consult_read`]: crate::Operation
+/// [`Operation::consult_write`]: crate::Operation
+pub type ReadPredicate = dyn Fn(Option<PrincipalId>, &Address) -> bool + Send + Sync;
 
 /// M10's front-door handle (§Public interface). Owns **no** authoritative
 /// substrate state and **no** `im` structure — its fields are the ephemeral
@@ -76,11 +82,11 @@ pub struct Operation<W: WorldState> {
     /// Hint: recomputable by attempting `transact`; latched by the first
     /// `TxnError::Poisoned` in [`Operation::map_txn`] (§5/§9).
     poisoned: AtomicBool,
-    /// The supplied read predicate ([`Consult`]), or none — in which case
-    /// every read arm answers the world's own predicate off the one snapshot
-    /// the request pins, and the publish arm over the working world M5 hands
-    /// its source gate.
-    consult: Option<Box<Consult>>,
+    /// The supplied [`ReadPredicate`], or none — in which case every read arm
+    /// answers the world's own predicate off the one snapshot the request
+    /// pins, and the publish arm over the working world M5 hands its source
+    /// gate.
+    read_predicate: Option<Box<ReadPredicate>>,
 }
 
 /// The proven-bound write context (§1). Step (b) resolves the principal
@@ -161,26 +167,31 @@ where
             sessions: Sessions::new(),
             idem: IdemCache::new(),
             poisoned: AtomicBool::new(false),
-            consult: None,
+            read_predicate: None,
         }
     }
 
-    /// Supply the read predicate ([`Consult`]) this front door answers
-    /// through instead of its own world's — the transport's HEAD predicate
-    /// for a historical read (PUB-6.48), closed over one head snapshot per
-    /// request (PUB-6.39). Without it every read arm answers
-    /// [`ReadableWorld::readable`] off the one snapshot the request pins, and
-    /// the publish shot's source gate over the working world of its own
-    /// transaction, which is what a live front door wants.
+    /// Supply the [`ReadPredicate`] this front door answers through instead of
+    /// its own world's — the transport's HEAD predicate for a historical read
+    /// (PUB-6.48), closed over one head snapshot per request (PUB-6.39).
+    /// Without it every read arm answers [`ReadableWorld::readable`] off the
+    /// one snapshot the request pins, and the publish shot's source gate over
+    /// the working world of its own transaction, which is what a live front
+    /// door wants.
+    ///
+    /// It is the WHOLE predicate that is supplied, not merely what the two
+    /// consults ask: the same value answers every result-set filter, every
+    /// per-run mask, the link-address absence rule, and the visibility class
+    /// lent to M5 and M7 on a write.
     ///
     /// [`ReadableWorld::readable`]: crate::ReadableWorld::readable
-    pub fn with_consult(mut self, consult: Box<Consult>) -> Self {
-        self.consult = Some(consult);
+    pub fn with_read_predicate(mut self, predicate: Box<ReadPredicate>) -> Self {
+        self.read_predicate = Some(predicate);
         self
     }
 
     /// `readable(doc, principal)` for this front door: the supplied
-    /// [`Consult`] where one was given, else the world's own
+    /// [`ReadPredicate`] where one was given, else the world's own
     /// [`ReadableWorld::readable`] off `world` — the snapshot a read arm
     /// pinned, or the working world a store hands the predicate of a write.
     /// `None` is the guest. Every consult of the predicate, read path and
@@ -189,8 +200,8 @@ where
     ///
     /// [`ReadableWorld::readable`]: crate::ReadableWorld::readable
     fn readable(&self, world: &W, principal: Option<PrincipalId>, doc: &Address) -> bool {
-        match &self.consult {
-            Some(consult) => consult(principal, doc),
+        match &self.read_predicate {
+            Some(predicate) => predicate(principal, doc),
             None => world.readable(principal, doc),
         }
     }
@@ -205,10 +216,10 @@ where
     /// write transaction, over the WORKING world it hands the closure —
     /// never over the snapshot a read pins. Where this front door carries a
     /// supplied
-    /// [`Consult`] (the historical door), that is what answers here too — one
-    /// front door, one predicate — and the world M7 hands in is then not
-    /// consulted, the head snapshot the `Consult` closed over being the world
-    /// it reads; such a door dispatches no write today, and the case is the
+    /// [`ReadPredicate`] (the historical door), that is what answers here too
+    /// — one front door, one predicate — and the world M7 hands in is then not
+    /// read, the head snapshot the predicate closed over being the world it
+    /// reads; such a door dispatches no write today, and the case is the
     /// round's escalated one.
     fn visible_to(
         &self,
@@ -324,7 +335,7 @@ where
     /// slot-5 nullify-class refusals govern it (lane 3.5).
     fn consult_write(&self, wc: &WriteCtx, op: &Op, world: &W) -> Result<(), Rejection> {
         let kind = op.kind();
-        let Some(destinations) = op.consulted_destinations() else {
+        let WriteConsult::AfterOwnershipOf(destinations) = op.write_consult() else {
             return Ok(()); // no source and no link-address argument (see the table)
         };
         // Slot 1 ahead of slot 6: defer to the store wherever the
@@ -633,11 +644,10 @@ where
             // ── arrangement writes (→ M5; ω-gated in-store under the
             //    session caller — the ownership ruling, 2026-08-16; the
             //    version-chain refusals in-store too, D2b) ──
+            // The DEPOSIT DECLARATION rides the op as M5's own value
+            // (PUB-9.13), so the exemption is claimed only by the
+            // `Deposit::Declared` the client sent and M10 converts nothing.
             Op::Insert { doc, at, values, deposit } => {
-                // The wire's declaration becomes M5's value here, both arms
-                // spelled: the exemption is claimed only by a `true` the
-                // client sent (PUB-9.13).
-                let deposit = if deposit { Deposit::Declared } else { Deposit::Undeclared };
                 let (start, committed_at) = self
                     .stores
                     .vstream()
@@ -822,8 +832,8 @@ where
         let as_of = snap.seq();
         let world = snap.world();
         // THE read predicate for this request (PUB-6.39), built ONCE off THIS
-        // read snapshot — or off the supplied `Consult`, which a historical
-        // front door closes over one HEAD snapshot (PUB-6.48) — so the answer
+        // read snapshot — or off the supplied `ReadPredicate`, which a
+        // historical front door closes over one HEAD snapshot (PUB-6.48) — so the answer
         // and the `as_of` it is stamped with stand on one committed state. An
         // opaque `Fn(&Address) -> bool` threaded down: M6/M8 filter and mask
         // through it and never see the principal (the STRUCK second form).
@@ -1082,7 +1092,7 @@ mod tests {
 
     use serde::{Deserialize, Serialize};
     use skep_address::{validate, Address, Nat, Tumbler};
-    use skep_arrangement::{HasM5, InsertError, M5Rec, M5State, VPos};
+    use skep_arrangement::{Deposit, HasM5, InsertError, M5Rec, M5State, VPos};
     use skep_content::{ContentStore, ContentWrite, HasContent, Val};
     use skep_kernel::{
         CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, TxnError, WorldState,
@@ -1235,7 +1245,7 @@ mod tests {
             doc: addr(&[1, 0, 1, 0, 1]),
             at: VPos { subspace: Nat::from(1u32), ordinal: Nat::from(1u32) },
             values: vec![Val::new(vec![1u8])],
-            deposit: false,
+            deposit: Deposit::Undeclared,
         }
     }
 

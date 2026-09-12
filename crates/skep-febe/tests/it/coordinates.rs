@@ -10,7 +10,9 @@ use crate::common;
 use common::*;
 use skep_content::Val;
 use skep_discovery::{FourSet, SlotSpec};
-use skep_febe::{Base, Op, OpKind, Response, Run, Shot, ShotRun, SlotArg, SuccessorSpec, FROM};
+use skep_febe::{
+    Base, Deposit, Op, OpKind, Response, Run, Shot, ShotRun, SlotArg, SuccessorSpec, FROM,
+};
 use skep_kernel::Seq;
 use skep_links::{enc, View};
 use skep_namespace::PrincipalId;
@@ -68,7 +70,7 @@ fn every_write_acks_at_the_coordinate_it_committed() {
             doc: d.clone(),
             at: vp(1, 1),
             values: vec![Val::new(vec![b'a']), Val::new(vec![b'b']), Val::new(vec![b'c'])],
-            deposit: false,
+            deposit: Deposit::Undeclared,
         },
     );
     committed(&fx, OpKind::Insert, &r, &mut seen);

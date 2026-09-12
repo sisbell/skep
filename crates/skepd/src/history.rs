@@ -248,8 +248,8 @@ impl Drop for Permit<'_> {
 ///
 /// THE TWO-WORLD SHAPE (PUB-6.48, PUB-6.61): the CONTENT answered is the
 /// N-world's, the PREDICATE it is answered through is the HEAD's. The
-/// throwaway front door is given M10's `Consult` closed over `head` — the
-/// world of the one snapshot the route took at admission — so `readable()`
+/// throwaway front door is given M10's `ReadPredicate` closed over `head` —
+/// the world of the one snapshot the route took at admission — so `readable()`
 /// is evaluated against the head's exception set and grant set for every
 /// per-run mask and every result-set filter of this read, and a grant
 /// committed after `at` satisfies a read at `at`. Left to its own world, the
@@ -284,7 +284,7 @@ fn execute_read_on(
     };
     let kernel =
         Kernel::open(cfg, world).expect("in-memory open runs no recovery and cannot fail");
-    let febe = Operation::new(Box::new(EngineStores::new(Arc::new(kernel)))).with_consult(
+    let febe = Operation::new(Box::new(EngineStores::new(Arc::new(kernel)))).with_read_predicate(
         Box::new(move |p: Option<PrincipalId>, doc: &Address| head.readable(p, doc)),
     );
     let session = match principal {

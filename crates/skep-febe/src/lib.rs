@@ -142,7 +142,7 @@ mod successor;
 
 pub use codec::{Codec, ParseError};
 pub use op::{Op, OpKind, ReqId, Request, SuccessorSpec, MAX_REQ_ID_BYTES};
-pub use operation::{Consult, Operation};
+pub use operation::{Operation, ReadPredicate};
 // `disposition_of` and `Rejection::classified` are public for the reason the
 // disposition is documented as recomputable: a transport that raises one of
 // M10's own codes on its own channel asks the table — or builds the whole
@@ -177,8 +177,9 @@ pub use skep_address::{
 };
 // M5, the publish shot's three request values included: `Op::Publish` is
 // unbuildable without them, and `Run::new`/`RunError` is the one constructor
-// of the runs a shot carries.
-pub use skep_arrangement::{Base, Run, RunError, Shot, ShotRun, VPos, VSpec};
+// of the runs a shot carries. `Deposit` is the two-state DEPOSIT DECLARATION
+// `Op::Insert` carries, so an insert is unbuildable without it.
+pub use skep_arrangement::{Base, Deposit, Run, RunError, Shot, ShotRun, VPos, VSpec};
 pub use skep_content::Val; // M4
 // M8, `SlotSpec` included: every field of a `FourSet` is one, so the three
 // descriptor ops are unbuildable without it.
@@ -219,7 +220,8 @@ use skep_namespace::{HasM3, Namespace};
 ///
 /// `principal` is `None` for the GUEST (published alone). Implemented by the
 /// engine's `World` (the exception set beside the grant fold); the daemon's
-/// source-gate [`Consult`] is the same predicate reached the write path's way.
+/// source-gate [`ReadPredicate`] is the same predicate reached the write
+/// path's way.
 /// The STRUCK second form — handing readers the principal's account and grant
 /// set — is deliberately absent: what threads down is this opaque `bool`, never
 /// the sets behind it.
@@ -395,7 +397,13 @@ mod tests {
         // group is a compile error rather than a dependency an external
         // caller silently acquires.
         let ops: Vec<Op> = vec![
-            Op::Insert { doc: doc.clone(), at: at.clone(), values: vec![Val::new(vec![1u8])], deposit: false }, // M4
+            // M4 (`Val`), M5 (`VPos`, `Deposit`)
+            Op::Insert {
+                doc: doc.clone(),
+                at: at.clone(),
+                values: vec![Val::new(vec![1u8])],
+                deposit: Deposit::Undeclared,
+            },
             Op::Copy { doc: doc.clone(), at, specs: vec![vspec.clone()] },                      // M5
             Op::RetrieveV { specs: vec![Spec { doc: doc.clone(), span: span.clone() }] },       // M6
             Op::Compare {

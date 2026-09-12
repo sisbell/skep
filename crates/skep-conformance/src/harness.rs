@@ -13,7 +13,7 @@ use skep_address::{Address, Nat, Span};
 use skep_arrangement::{Run, VPos, VSpec};
 use skep_content::Val;
 use skep_engine::{Engine, World};
-use skep_febe::{Op, Operation, Request, Response, SessionId};
+use skep_febe::{Deposit, Op, Operation, Request, Response, SessionId};
 use skep_kernel::{CheckpointPolicy, Durability, KernelConfig};
 use skep_links::{Endset, SlotArg};
 use skep_namespace::PrincipalId;
@@ -195,7 +195,7 @@ impl Rig {
             doc: tdoc.clone(),
             at: VPos { subspace: Nat::from(1u64), ordinal: Nat::from(1u64) },
             values: vals,
-            deposit: false,
+            deposit: Deposit::Undeclared,
         }) {
             Response::AckAddr { .. } => {}
             other => return Err(format!("types-doc insert failed: {}", brief(&other))),

@@ -12,7 +12,7 @@ use crate::common;
 use common::*;
 use skep_address::Address;
 use skep_content::Val;
-use skep_febe::Op;
+use skep_febe::{Deposit, Op};
 use skep_kernel::Seq;
 
 const WRITERS: u8 = 8;
@@ -43,7 +43,7 @@ fn concurrent_writes_each_get_their_own_linearization_point() {
                             doc,
                             at: vp(1, 1),
                             values: vec![Val::new(vec![b'a' + i])],
-                            deposit: false,
+                            deposit: Deposit::Undeclared,
                         },
                     ))
                 })

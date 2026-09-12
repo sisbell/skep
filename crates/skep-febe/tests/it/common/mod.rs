@@ -15,7 +15,7 @@ use skep_arrangement::{HasM5, M5Rec, M5State, Run, VPos, VSpec};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_febe::{
-    EditionClaim, Op, Operation, Rejection, ReqId, Request, Response, SessionId, Stores,
+    Deposit, EditionClaim, Op, Operation, Rejection, ReqId, Request, Response, SessionId, Stores,
 };
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, WorldState};
 use skep_links::{
@@ -82,7 +82,7 @@ impl skep_febe::ReadableWorld for World {
     // Masking (published ∨ subtree ∨ grant) is the engine's predicate; this
     // miniature world carries no exception set or grant fold, and these suites
     // (lifecycle, coordinates, concurrency) are orthogonal to it — so every
-    // read is admitted. `source_gate.rs` supplies its own `Consult` instead,
+    // read is admitted. `source_gate.rs` supplies its own `ReadPredicate`,
     // which is what a private draft looks like at this seam.
     fn readable(&self, _principal: Option<PrincipalId>, _doc: &Address) -> bool {
         true
@@ -491,7 +491,7 @@ pub fn insert3(fx: &Fixture, doc: &Address) -> (Address, Seq) {
             doc: doc.clone(),
             at: vp(1, 1),
             values: vec![Val::new(vec![b'a']), Val::new(vec![b'b']), Val::new(vec![b'c'])],
-            deposit: false,
+            deposit: Deposit::Undeclared,
         },
     ))
 }
@@ -507,7 +507,7 @@ pub fn deposit3(fx: &Fixture, doc: &Address) -> (Address, Seq) {
             doc: doc.clone(),
             at: vp(1, 1),
             values: vec![Val::new(vec![b'a']), Val::new(vec![b'b']), Val::new(vec![b'c'])],
-            deposit: true,
+            deposit: Deposit::Declared,
         },
     ))
 }

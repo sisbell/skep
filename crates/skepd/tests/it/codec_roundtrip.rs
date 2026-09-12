@@ -11,8 +11,8 @@ use skep_arrangement::{Base, Run, RunError, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{FourSet, OrphanReport, SlotSpec, SupClaim, Window};
 use skep_febe::{
-    Codec, Disposition, EditionClaim, FaultSite, Op, OpKind, ParseError, RejectCode, Rejection,
-    ReqId, Request, Response, SlotArg, SuccessorSpec,
+    Codec, Deposit, Disposition, EditionClaim, FaultSite, Op, OpKind, ParseError, RejectCode,
+    Rejection, ReqId, Request, Response, SlotArg, SuccessorSpec,
 };
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link, View, MAX_SLOT_SPANS};
@@ -128,7 +128,7 @@ fn all_requests() -> Vec<Request> {
                     Val::new(vec![0xffu8]),
                     Val::new(vec![0u8, 255]),
                 ],
-                deposit: false,
+                deposit: Deposit::Undeclared,
             },
         ),
         // The deposit declaration (PUB-9.13, DECLARED): rides only when made.
@@ -138,7 +138,7 @@ fn all_requests() -> Vec<Request> {
                 doc: d1(),
                 at: vp(1, 2),
                 values: vec![Val::new(b"record".to_vec())],
-                deposit: true,
+                deposit: Deposit::Declared,
             },
         ),
         rq(None, Op::Delete { doc: d1(), p: vp(1, 3), width: n(2) }),
@@ -435,14 +435,25 @@ fn the_deposit_declaration_reads_absent_null_true_and_false() {
         )
         .into_bytes()
     };
-    let declared = |req: &Request| match &req.op {
+    let deposit_of = |req: &Request| match &req.op {
         Op::Insert { deposit, .. } => *deposit,
         _ => panic!("insert expected"),
     };
-    assert!(!declared(&parse_ok(&codec, &frame(""))), "absent is no declaration");
-    assert!(!declared(&parse_ok(&codec, &frame(r#","deposit":null"#))), "null is absence");
-    assert!(!declared(&parse_ok(&codec, &frame(r#","deposit":false"#))));
-    assert!(declared(&parse_ok(&codec, &frame(r#","deposit":true"#))));
+    let absent = deposit_of(&parse_ok(&codec, &frame("")));
+    assert_eq!(absent, Deposit::Undeclared, "absent is no declaration");
+    assert_eq!(
+        deposit_of(&parse_ok(&codec, &frame(r#","deposit":null"#))),
+        Deposit::Undeclared,
+        "null is absence"
+    );
+    assert_eq!(
+        deposit_of(&parse_ok(&codec, &frame(r#","deposit":false"#))),
+        Deposit::Undeclared
+    );
+    assert_eq!(
+        deposit_of(&parse_ok(&codec, &frame(r#","deposit":true"#))),
+        Deposit::Declared
+    );
     for bad in [r#","deposit":1"#, r#","deposit":"true""#, r#","deposit":[]"#] {
         assert!(codec.parse(&frame(bad)).is_err(), "{bad} is not a declaration, and is never coerced");
     }

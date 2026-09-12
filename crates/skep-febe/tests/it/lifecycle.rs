@@ -11,7 +11,7 @@ use common::*;
 use skep_address::{elem_addr, ElemPos, SpanSet};
 use skep_discovery::{FourSet, SlotSpec};
 use skep_febe::{
-    Disposition, Op, OpKind, RejectCode, SlotArg, SuccessorSpec, FROM, MAX_REQ_ID_BYTES,
+    Deposit, Disposition, Op, OpKind, RejectCode, SlotArg, SuccessorSpec, FROM, MAX_REQ_ID_BYTES,
 };
 use skep_links::{enc, View, MAX_SLOT_SPANS};
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
@@ -194,7 +194,7 @@ fn the_version_chain_refusals_surface_as_their_own_permanent_codes() {
         doc: e.clone(),
         at: vp(1, 4),
         values: vec![skep_content::Val::new(vec![b'x'])],
-        deposit: false,
+        deposit: Deposit::Undeclared,
     };
     let refusals = vec![
         (OpKind::Insert, ex(&fx.febe, fx.user, undeclared)),
@@ -245,7 +245,7 @@ fn the_version_chain_refusals_surface_as_their_own_permanent_codes() {
             doc: e.clone(),
             at: vp(1, 4),
             values: vec![skep_content::Val::new(vec![b'r'])],
-            deposit: true,
+            deposit: Deposit::Declared,
         },
     ));
     let rej = rejected(ex(
@@ -255,7 +255,7 @@ fn the_version_chain_refusals_surface_as_their_own_permanent_codes() {
             doc: e.clone(),
             at: vp(1, 2),
             values: vec![skep_content::Val::new(vec![b'r'])],
-            deposit: true,
+            deposit: Deposit::Declared,
         },
     ));
     assert_eq!(rej.code, RejectCode::PublishedTarget);
@@ -274,7 +274,7 @@ fn idempotent_retry() {
         doc: d.clone(),
         at: vp(1, 1),
         values: vec![skep_content::Val::new(vec![b'x'])],
-        deposit: false,
+        deposit: Deposit::Undeclared,
     };
 
     let (addr1, at1) = ack_addr(ex_id(&fx.febe, fx.user, b"ins-1", ins()));
@@ -329,7 +329,7 @@ fn an_oversized_request_id_is_answered_and_its_retry_re_executes() {
         doc: d.clone(),
         at: vp(1, 1),
         values: vec![skep_content::Val::new(vec![b'y'])],
-        deposit: false,
+        deposit: Deposit::Undeclared,
     };
 
     let over = vec![b'k'; MAX_REQ_ID_BYTES + 1];
@@ -798,7 +798,7 @@ fn rejection_surface() {
             doc: d.clone(),
             at: vp(1, 1),
             values: vec![skep_content::Val::new(vec![1u8])],
-            deposit: false,
+            deposit: Deposit::Undeclared,
         },
     ));
     assert_eq!(rej.op, OpKind::Insert);

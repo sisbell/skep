@@ -69,7 +69,7 @@ fn engine_world_satisfies_the_febe_demand() {
                 doc: doc.clone(),
                 at: vp(1, 1),
                 values: vec![Val::new(vec![b'w'])],
-                deposit: false,
+                deposit: Deposit::Undeclared,
             },
         },
     ));
@@ -138,7 +138,7 @@ fn m10_s_read_surface_answers_through_the_engine_s_predicate() {
                 doc: draft.clone(),
                 at: vp(1, 1),
                 values: vec![Val::new(vec![b'w'])],
-                deposit: false,
+                deposit: Deposit::Undeclared,
             },
         },
     ));

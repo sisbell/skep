@@ -97,6 +97,46 @@ fn the_publication_reads_answer_the_metadata_a_client_admits_an_edition_by() {
     }
 }
 
+/// PUB-8.16 / PUB-8.21: the three-valued flag rides through UNRESOLVED — M10
+/// decides nothing about it, and M3's create path resolves the absent arm. A
+/// fresh account's FIRST flagless mint is born PUBLISHED and the next is
+/// private, which an M10 that collapsed absent to the wire default could not
+/// produce. FORK reduces to a create in the caller's OWN account and resolves
+/// the same flag at the same path.
+#[test]
+fn the_absent_publication_flag_reaches_the_store_unresolved() {
+    let fx = setup();
+    let published_of = |doc: skep_address::Address| {
+        doc_metadata(ex(&fx.febe, fx.user, Op::DocMetadata { doc })).1
+    };
+    let flagless = || Op::CreateNewDocument { account: fx.account.clone(), published: None };
+
+    let (first, _) = ack_addr(ex(&fx.febe, fx.user, flagless()));
+    assert!(
+        published_of(first),
+        "the account's first flagless mint is born published (PUB-8.21)"
+    );
+    let (second, _) = ack_addr(ex(&fx.febe, fx.user, flagless()));
+    assert!(!published_of(second), "every later flagless mint is private (PUB-1.1)");
+
+    // A principal whose account is empty forks that account's published home.
+    let (prefix, _) = maybe_addr(ex(&fx.febe, fx.boot, Op::NextAccountPrefix { parent: node1() }));
+    ack_addr(ex(
+        &fx.febe,
+        fx.boot,
+        Op::Delegate {
+            new_prefix: prefix.expect("a second delegable prefix").tumbler().clone(),
+            new_id: PrincipalId(21),
+        },
+    ));
+    let fresh = fx.febe.open_session(PrincipalId(21));
+    let (home, _) = ack_addr(ex(&fx.febe, fresh, Op::Fork { published: None }));
+    assert!(
+        doc_metadata(ex(&fx.febe, fresh, Op::DocMetadata { doc: home })).1,
+        "a fork into an empty account mints that account's published home"
+    );
+}
+
 /// Bootstrap provisioning and the two namespace-structure reads (§2/§6):
 /// NextAccountPrefix feeds Delegate; PrincipalPrefix resolves any principal's
 /// public prefix (None = absent); RegisterNode runs under the bootstrap

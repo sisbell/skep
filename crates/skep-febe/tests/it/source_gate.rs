@@ -1,68 +1,29 @@
 //! THE WRITE SIDE'S CONSULT at M10's door (PUB round 2, lane 3.3c; PUB-6.23,
-//! PUB-6.24, PUB-6.6, PUB-6.36, PUB-6.38), pinned at the engine-free seam.
+//! PUB-6.24, PUB-6.6, PUB-6.36, PUB-6.38), pinned at the engine-free seam
+//! `common`'s readability fixture gives it.
 //!
-//! The front door answers ONE predicate, so a supplied `ReadPredicate` under
-//! which a document is unreadable to everyone but its owner is what a private
-//! draft looks like to this suite — the miniature world carries no exception
-//! set or grant fold, and the engine's own predicate is the daemon suites' to
-//! exercise (`skepd/tests/source_gate.rs`). What is pinned HERE is the door's
-//! own contract, independent of how the predicate is derived: which arguments
-//! it consults, in what order, what it answers, and — load-bearing — that it
-//! stands BEHIND the destination's ownership and never speaks ahead of the
-//! store's `not_owner`.
+//! What is pinned HERE is the door's own contract, independent of how the
+//! predicate is derived: which arguments it consults, in what order, what it
+//! answers, and — load-bearing — that it stands BEHIND the destination's own
+//! gate and never speaks ahead of the store's `published_target` or
+//! `not_owner`. Beside it, the ONE source gate the door is silent for: the
+//! publish shot's, which runs on nothing but the visibility class M10 lends
+//! M5.
 //!
-//! Three words, three concepts, each the corpus's: a DOCUMENT is unreadable
-//! (PUB-6.1), a REQUEST is refused, an ANSWER is withheld.
+//! The read path's use of the same predicate is `read_door.rs`.
 
 use crate::common;
 
-use std::sync::{Arc, Mutex};
-
 use common::*;
 use skep_address::{elem_addr, Address, ElemPos};
-use skep_febe::{Deposit, Disposition, Op, OpKind, RejectCode, SlotArg, SuccessorSpec};
-use skep_namespace::PrincipalId;
-
-/// A second principal, delegated under the genesis node beside [`USER`]:
-/// the NON-ENTITLED stranger of every cell below.
-const OTHER: PrincipalId = PrincipalId(8);
-
-/// The documents that are UNREADABLE under the supplied predicate to every
-/// principal but [`USER`] — a draft of USER's, as far as the door can tell.
-/// Readability is relational, so this is not a property the documents carry:
-/// the same document is readable to USER and unreadable to the stranger,
-/// which is the whole of what the fixture arranges. Shared with the predicate
-/// closure and filled once the documents exist.
-type Unreadable = Arc<Mutex<Vec<Address>>>;
-
-/// The standard fixture under a predicate that admits USER everywhere and
-/// leaves `unreadable` unreadable to every other principal — the shape the
-/// engine's own predicate takes on a private draft (the owner reads by the
-/// subtree clause, a stranger does not).
-fn setup_with_unreadable() -> (Fixture, Unreadable) {
-    let unreadable: Unreadable = Arc::new(Mutex::new(Vec::new()));
-    let predicate = {
-        let unreadable = Arc::clone(&unreadable);
-        move |principal: Option<PrincipalId>, doc: &Address| {
-            principal == Some(USER) || !unreadable.lock().expect("no poisoning").contains(doc)
-        }
-    };
-    let febe = operation().with_read_predicate(predicate);
-    let boot = febe.bootstrap_session();
-    let (prefix, _) = maybe_addr(ex(&febe, boot, Op::NextAccountPrefix { parent: node1() }));
-    let prefix = prefix.expect("the genesis node has a delegable next-form prefix");
-    let (account, _) = ack_addr(ex(
-        &febe,
-        boot,
-        Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: USER },
-    ));
-    let user = febe.open_session(USER);
-    (Fixture { febe, boot, user, account }, unreadable)
-}
+use skep_febe::{
+    Deposit, Disposition, Op, OpKind, PrincipalId, RejectCode, Run, SessionId, Shot, ShotRun,
+    SlotArg, SuccessorSpec,
+};
 
 /// The stranger's own account and session, plus one private document of its
 /// own — the destination every cross-owner write below lands in.
-fn stranger(fx: &Fixture) -> (skep_febe::SessionId, Address) {
+fn stranger(fx: &Fixture) -> (SessionId, Address) {
     let (prefix, _) = maybe_addr(ex(&fx.febe, fx.boot, Op::NextAccountPrefix { parent: node1() }));
     let prefix = prefix.expect("a second delegable prefix");
     let (account, _) = ack_addr(ex(
@@ -79,21 +40,25 @@ fn stranger(fx: &Fixture) -> (skep_febe::SessionId, Address) {
     (session, own)
 }
 
+/// The account of a delegated principal, read back through the surface.
+fn account_of(fx: &Fixture, session: SessionId, id: PrincipalId) -> Address {
+    maybe_addr(ex(&fx.febe, session, Op::PrincipalPrefix { id }))
+        .0
+        .expect("a delegated principal has an account")
+}
+
+/// A PUBLISHED edition in the stranger's own account — a destination the
+/// caller OWNS, which the two cells that turn on the destination's own
+/// publication state both need.
+fn stranger_edition(fx: &Fixture, session: SessionId) -> Address {
+    let account = account_of(fx, session, OTHER);
+    ack_addr(ex(&fx.febe, session, Op::CreateNewDocument { account, published: Some(true) })).0
+}
+
 /// A ghost name in `doc`'s never-occupied subspace 3 — an address-form type.
 fn ghost_type(doc: &Address, ordinal: u32) -> Address {
     elem_addr(ElemPos { doc: doc.clone(), subspace: nat(3), ordinal: nat(ordinal) })
         .unwrap_or_else(|_| panic!("valid element position"))
-}
-
-/// PUB-8.4/8.5 at the door: `withheld`, `reorder`, `site.addr` the document,
-/// no `detail`.
-fn assert_withheld(r: skep_febe::Response, kind: OpKind, doc: &Address) {
-    let rej = rejected(r);
-    assert_eq!(rej.op, kind);
-    assert_eq!(rej.code, RejectCode::Withheld, "{rej}");
-    assert_eq!(rej.disposition, Disposition::Reorder);
-    assert_eq!(rej.site.expect("the withheld document rides the site").addr.as_ref(), Some(doc));
-    assert!(rej.detail.is_none(), "PUB-8.5: no detail on this code, ever");
 }
 
 /// PUB-6.23 / PUB-6.4: a `copy` whose source the caller may not read is
@@ -418,4 +383,110 @@ fn a_link_homed_in_an_unreadable_document_answers_absence_to_a_write() {
         },
     ));
     ack_addr(ex(&fx.febe, fx.user, Op::AssertSup { home: d.clone(), old: unreadable_l1, new: unreadable_l2 }));
+}
+
+/// PUB-6.36 slot 5 ahead of slot 6: the ONE cell where both apply — a source
+/// the caller may not read, copied into a PUBLISHED destination the caller
+/// OWNS — answers `published_target`, never `withheld`, and answers it
+/// byte-identically to the store's own refusal (same code, disposition, no
+/// site, no detail). Both neighbouring cells are unchanged, which is what
+/// makes this a statement about ORDER rather than about either refusal.
+#[test]
+fn an_in_place_edit_of_a_published_destination_outranks_the_source_consult() {
+    let (fx, unreadable) = setup_with_unreadable();
+    let d = create_doc(&fx);
+    insert3(&fx, &d);
+    unreadable.lock().expect("no poisoning").push(d.clone());
+    let (other, own) = stranger(&fx);
+    let published = stranger_edition(&fx, other);
+
+    let before = fx.febe.log_position();
+    let rej = rejected(ex(
+        &fx.febe,
+        other,
+        Op::Copy { doc: published.clone(), at: vp(1, 1), specs: vec![vspec(&d, 1, 1)] },
+    ));
+    assert_eq!(rej.op, OpKind::Copy);
+    assert_eq!(rej.code, RejectCode::PublishedTarget, "slot 5 speaks before slot 6: {rej}");
+    assert_eq!(rej.disposition, Disposition::Permanent);
+    assert!(rej.site.is_none() && rej.detail.is_none(), "byte-identical to the store's refusal");
+    assert_eq!(fx.febe.log_position(), before, "a refused copy commits nothing");
+
+    // A DRAFT destination still meets the source consult…
+    assert_withheld(
+        ex(&fx.febe, other, Op::Copy { doc: own, at: vp(1, 1), specs: vec![vspec(&d, 1, 1)] }),
+        OpKind::Copy,
+        &d,
+    );
+    // …and a READABLE source into the same published destination still meets
+    // `published_target`, one layer later and in the same bytes.
+    let open = create_doc(&fx);
+    insert3(&fx, &open);
+    let rej = rejected(ex(
+        &fx.febe,
+        other,
+        Op::Copy { doc: published, at: vp(1, 1), specs: vec![vspec(&open, 1, 1)] },
+    ));
+    assert_eq!(rej.code, RejectCode::PublishedTarget);
+    assert!(rej.site.is_none() && rej.detail.is_none());
+}
+
+/// PUB-6.38, the deferral's OTHER half: the destination's own gate is
+/// registration AND ownership, and both stand ahead of the consult. A copy
+/// into an unregistered address in the caller's OWN account — one ω names the
+/// caller for, by the longest-prefix rule — answers the store's
+/// `doc_not_registered`, never a withheld.
+#[test]
+fn an_unregistered_destination_also_stands_ahead_of_the_consult() {
+    let (fx, unreadable) = setup_with_unreadable();
+    let d = create_doc(&fx);
+    insert3(&fx, &d);
+    unreadable.lock().expect("no poisoning").push(d.clone());
+    let (other, _own) = stranger(&fx);
+    let ghost = ghost_doc(&account_of(&fx, other, OTHER), 77);
+
+    let rej = rejected(ex(
+        &fx.febe,
+        other,
+        Op::Copy { doc: ghost, at: vp(1, 1), specs: vec![vspec(&d, 1, 1)] },
+    ));
+    assert_eq!(rej.op, OpKind::Copy);
+    assert_eq!(rej.code, RejectCode::DocNotRegistered, "registration stands ahead: {rej}");
+}
+
+/// PUB-6.23 / PUB-8.1, the SHOT's source gate: the door is SILENT here
+/// (`publish` is `NotTaken`), so the only thing that can refuse a run
+/// windowing an unreadable origin is the VISIBILITY CLASS M10 lends M5 —
+/// `visible_to`, the same value the five link writes lend M7, which M5
+/// evaluates per ORIGIN over the shot's own working world. A shot supplying
+/// such a run is WITHHELD naming that origin; the owner's identical shot
+/// lands, so the class is the SESSION's and not a constant.
+#[test]
+fn a_shot_windowing_an_unreadable_origin_is_withheld_naming_it() {
+    let (fx, unreadable) = setup_with_unreadable();
+    let e = create_edition(&fx);
+    let (e_start, _) = deposit3(&fx, &e);
+    unreadable.lock().expect("no poisoning").push(e.clone());
+    let (other, _own) = stranger(&fx);
+    let theirs = stranger_edition(&fx, other);
+
+    // No base: neither edition has a chain member yet, so the shot appends
+    // the trunk's first (PUB-2.39's memberless arm).
+    let shot = || Shot {
+        base: None,
+        draft: None,
+        runs: vec![ShotRun {
+            origin: e.clone(),
+            run: Run::new(e_start.clone(), nat(3)).expect("a content run"),
+        }],
+    };
+    let before = fx.febe.log_position();
+    assert_withheld(
+        ex(&fx.febe, other, Op::Publish { doc: theirs, shot: shot() }),
+        OpKind::Publish,
+        &e,
+    );
+    assert_eq!(fx.febe.log_position(), before, "a withheld shot commits nothing");
+
+    ack_addr(ex(&fx.febe, fx.user, Op::Publish { doc: e.clone(), shot: shot() }));
 }

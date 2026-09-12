@@ -5,7 +5,8 @@
 //! surface itself (bootstrap → delegate → create → …), exercising the real
 //! request lifecycle end-to-end.
 
-use std::sync::Arc;
+use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
@@ -13,8 +14,8 @@ use skep_arrangement::{HasM5, M5Rec, M5State, Run, VPos, VSpec};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_febe::{
-    BirthVersion, Deposit, EditionClaim, Op, Operation, Rejection, ReqId, Request, Response,
-    SessionId, Stores,
+    BirthVersion, Deposit, Disposition, EditionClaim, Op, OpKind, Operation, RejectCode, Rejection,
+    ReqId, Request, Response, SessionId, Stores,
 };
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, WorldState};
 use skep_links::{enc, Endset, HasLinks, Invalid, Link, LinkRec, LinkState};
@@ -77,20 +78,37 @@ impl HasLinks for World {
 }
 impl skep_febe::ReadableWorld for World {
     // Masking (published ∨ subtree ∨ grant) is the engine's predicate; this
-    // miniature world carries no exception set or grant fold, and these suites
-    // (lifecycle, coordinates, concurrency) are orthogonal to it — so every
-    // read is admitted. `source_gate.rs` supplies its own `ReadPredicate`,
-    // which is what a private draft looks like at this seam.
+    // miniature world carries no exception set or grant fold, and the suites
+    // built on [`setup`] (lifecycle, coordinates, concurrency) are orthogonal
+    // to it — so every read is admitted. A suite that is ABOUT the door takes
+    // [`setup_with_unreadable`], which supplies its own `ReadPredicate`.
     fn readable(&self, _principal: Option<PrincipalId>, _doc: &Address) -> bool {
         true
     }
 }
+thread_local! {
+    /// The rows this world's [`skep_febe::PublicationWorld`] answers with, for
+    /// ANY target. The CLASS is the engine's composition — its pinned type
+    /// address lives there, beside the grant type — so this miniature world
+    /// carries none of its own and answers the empty class unless a test
+    /// seeds it through [`seed_edition_claims`].
+    ///
+    /// Cleared by [`operation`], which every fixture below goes through, so
+    /// the table a test sees is its own whether the harness gives each test a
+    /// thread, a process, or neither: no test depends on the order the suite
+    /// runs in.
+    static EDITION_CLAIMS: RefCell<Vec<EditionClaim>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Seed the rows `Op::EditionClaims` is answered with, UNFILTERED — M10's own
+/// home rule (PUB-6.13) is what a test using this is about.
+pub fn seed_edition_claims(rows: Vec<EditionClaim>) {
+    EDITION_CLAIMS.with(|c| *c.borrow_mut() = rows);
+}
+
 impl skep_febe::PublicationWorld for World {
-    // The edition-claim class is the engine's composition (its pinned type
-    // address lives there, beside the grant type); this miniature world
-    // carries none, so the audit-view lookup answers the empty class.
     fn edition_claims(&self, _target: &Address) -> Vec<EditionClaim> {
-        Vec::new()
+        EDITION_CLAIMS.with(|c| c.borrow().clone())
     }
 }
 impl From<M3Rec> for Record {
@@ -164,6 +182,14 @@ pub fn vspec(doc: &Address, ord: u32, width: u32) -> VSpec {
     VSpec { source: doc.clone(), span: vspan(1, ord, width) }
 }
 
+/// A document-tier address under `account` that no mint ever produced — the
+/// account's document chain at an ordinal its frontier has not reached.
+pub fn ghost_doc(account: &Address, ordinal: u32) -> Address {
+    let comps = account.tumbler().iter().cloned().chain([nat(0), nat(ordinal)]);
+    validate(Tumbler::new(comps).expect("nonempty"))
+        .unwrap_or_else(|_| panic!("a document under a T4-valid account is T4-valid"))
+}
+
 // ─────────────────────────────── world assembly ─────────────────────────────
 
 pub fn genesis_world() -> World {
@@ -196,6 +222,7 @@ impl Stores<World> for KernelStores {
 }
 
 pub fn operation() -> Operation<World> {
+    seed_edition_claims(Vec::new()); // the empty class, until a test seeds it
     Operation::new(Box::new(KernelStores { kernel: kernel() }))
 }
 
@@ -502,4 +529,66 @@ pub fn deposit3(fx: &Fixture, doc: &Address) -> (Address, Seq) {
             deposit: Deposit::Declared,
         },
     ))
+}
+
+// ───────────────── the readability fixture (the door's two sides) ───────────
+//
+// The front door answers ONE predicate, so a supplied `ReadPredicate` under
+// which a document is unreadable to everyone but its owner is what a private
+// draft looks like to this suite — the miniature world carries no exception
+// set or grant fold, and the engine's own predicate is the daemon suites' to
+// exercise (`skepd/tests/source_gate.rs`). What the suites built on this
+// fixture pin is the DOOR's own contract, independent of how the predicate is
+// derived.
+//
+// Three words, three concepts, each the corpus's: a DOCUMENT is unreadable
+// (PUB-6.1), a REQUEST is refused, an ANSWER is withheld.
+
+/// A second principal, delegated under the genesis node beside [`USER`]:
+/// the NON-ENTITLED stranger of every cell below.
+pub const OTHER: PrincipalId = PrincipalId(8);
+
+/// The documents that are UNREADABLE under the supplied predicate to every
+/// principal but [`USER`] — a draft of USER's, as far as the door can tell.
+/// Readability is relational, so this is not a property the documents carry:
+/// the same document is readable to USER and unreadable to the stranger,
+/// which is the whole of what the fixture arranges. Shared with the predicate
+/// closure and filled once the documents exist.
+pub type Unreadable = Arc<Mutex<Vec<Address>>>;
+
+/// The standard fixture under a predicate that admits USER everywhere and
+/// leaves `unreadable` unreadable to every other principal — the shape the
+/// engine's own predicate takes on a private draft (the owner reads by the
+/// subtree clause, a stranger does not), and the GUEST's too, since a session
+/// resolving to no principal is not `Some(USER)` either.
+pub fn setup_with_unreadable() -> (Fixture, Unreadable) {
+    let unreadable: Unreadable = Arc::new(Mutex::new(Vec::new()));
+    let predicate = {
+        let unreadable = Arc::clone(&unreadable);
+        move |principal: Option<PrincipalId>, doc: &Address| {
+            principal == Some(USER) || !unreadable.lock().expect("no poisoning").contains(doc)
+        }
+    };
+    let febe = operation().with_read_predicate(predicate);
+    let boot = febe.bootstrap_session();
+    let (prefix, _) = maybe_addr(ex(&febe, boot, Op::NextAccountPrefix { parent: node1() }));
+    let prefix = prefix.expect("the genesis node has a delegable next-form prefix");
+    let (account, _) = ack_addr(ex(
+        &febe,
+        boot,
+        Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: USER },
+    ));
+    let user = febe.open_session(USER);
+    (Fixture { febe, boot, user, account }, unreadable)
+}
+
+/// PUB-8.4/8.5 at the door: `withheld`, `reorder`, `site.addr` the document,
+/// no `detail`.
+pub fn assert_withheld(r: Response, kind: OpKind, doc: &Address) {
+    let rej = rejected(r);
+    assert_eq!(rej.op, kind);
+    assert_eq!(rej.code, RejectCode::Withheld, "{rej}");
+    assert_eq!(rej.disposition, Disposition::Reorder);
+    assert_eq!(rej.site.expect("the withheld document rides the site").addr.as_ref(), Some(doc));
+    assert!(rej.detail.is_none(), "PUB-8.5: no detail on this code, ever");
 }

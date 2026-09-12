@@ -25,17 +25,11 @@ use crate::{Query, RetrievalWorld, MAX_COMPARE_OPERAND_BLOCKS};
 /// coverage against the whole of R, and `project` runs it against each
 /// candidate's runs, so the coverage is one side of a join exactly as a
 /// COMPARE operand is — and it takes that operand's budget BY DEFINITION,
-/// counted the same two ways and priced on [`MAX_COMPARE_OPERAND_BLOCKS`]'s
-/// card along with the wire-cap coincidence (a FLAT region set of 4096
-/// single-run spans, the largest flat span list the transport admits for one
-/// region, is admitted unchanged) and the two shapes no wire cap prices: the
-/// NESTED region×span product, whose cost model M10's codec leaves to M6 and
-/// which the SPAN count refuses — every span is one `image` walk,
-/// `Θ(#runs(doc))` whether or not it yields coverage — and the multi-run
-/// expansion, where one span over a fragmented document resolves to many
-/// coverage spans from a single wire element, which the COVERAGE count
-/// refuses. Pricing the two apart is a deliberate edit of this line, never a
-/// drift between two literals.
+/// counted the same two ways (the spans handed to M5's `image`, and the
+/// coverage they produce) and priced on [`MAX_COMPARE_OPERAND_BLOCKS`]'s
+/// card, which also says why the count is two, what each count refuses, and
+/// what neither bounds within one span. Pricing the two apart is a
+/// deliberate edit of this line, never a drift between two literals.
 ///
 /// WHAT IT DOES NOT BOUND, and neither could any number here: `|R|` and
 /// `#runs(d)` are the WORLD's, not the request's, so they stay with rate and
@@ -45,23 +39,26 @@ use crate::{Query, RetrievalWorld, MAX_COMPARE_OPERAND_BLOCKS};
 pub const MAX_FIND_COVERAGE_SPANS: usize = MAX_COMPARE_OPERAND_BLOCKS;
 
 /// `ext(d, S) = ([S, 1], [0, n_S])` — the per-subspace exact extent span
-/// (ASN-0113 W2/W4: a count fixes an extent under sequential positions). The
-/// anchor `[S, 1]` — ASN-0113's `start_S` — is written ONCE, here, never
-/// absorbed into a confluent summary, which is how the hazard ASN-0112 OQ5
-/// records against its bounding-span start `origin_d` (a POSITION, not
-/// ASN-0077's origin) is designed out.
+/// (ASN-0113 W2/W4: a count fixes an extent under sequential positions), or
+/// `None` for an unoccupied subspace (`n_S = 0`), which has no extent — the
+/// member [`Query::doc_vspanset`] omits, and `⟨⟩` when both are. The anchor
+/// `[S, 1]` — ASN-0113's `start_S` — is written ONCE, here, never absorbed
+/// into a confluent summary, which is how the hazard ASN-0112 OQ5 records
+/// against its bounding-span start `origin_d` (a POSITION, not ASN-0077's
+/// origin) is designed out.
 ///
 /// Built with M5's `ordinal_vspan`, so the extent M6 REPORTS is the shape M5's
 /// `resolve` READS: the constructor and the recognizer every request span is
-/// folded through are the two halves of one definition and cannot come apart.
-/// `None` iff `n_S == 0`, which its one call site has already excluded.
+/// folded through are the two halves of one definition and cannot come apart
+/// — and the unoccupied case is that constructor's own `None`, not a
+/// precondition this function asks its caller to keep.
 ///
 /// The subspace arrives CLASSIFIED rather than as a numeral, so the two
 /// arguments have different types and `ext_span(count, subspace)` fails to
 /// compile — the hazard M5 designs out of `ordinal_vspan` by taking a `VPos`,
 /// since a swap here builds a well-formed span naming a subspace that selects
 /// nothing and reports as emptiness far downstream.
-fn ext_span(s: Subspace, n: &Nat) -> Span {
+fn ext_span(s: Subspace, n: &Nat) -> Option<Span> {
     ordinal_vspan(
         &VPos {
             subspace: s.numeral().clone(),
@@ -69,7 +66,6 @@ fn ext_span(s: Subspace, n: &Nat) -> Span {
         },
         n,
     )
-    .expect("n_S ≥ 1 ⇒ a nonempty extent")
 }
 
 /// The enumeration of `CURRENT(·, d)` (ASN-0075's predicate; ASN-0124 calls
@@ -425,18 +421,17 @@ impl<W: RetrievalWorld> Query<'_, W> {
         // Gated on the address named; the surface answers.
         let surface = reading_surface(m3, doc);
         debug_assert_sequential_positions(m5, &surface);
-        // Each subspace asks M5 for its OWN count and reaches `ext_span`
-        // classified rather than as a numeral, so no site pairs a subspace
-        // with another's count by hand and `ext_span(count, subspace)` does
-        // not compile. The occupied ones are `collect`ed through M1's
-        // `FromIterator<Span>`, which collects AS GIVEN — preserving the
-        // already-disjoint, content-before-link normal form asserted below;
-        // no invented M1 constructor.
+        // Each subspace asks M5 for its OWN count inside the one closure that
+        // hands it to `ext_span` classified rather than as a numeral — so no
+        // site pairs a subspace with another's count by hand,
+        // `ext_span(count, subspace)` does not compile, and an unoccupied
+        // subspace is `ext_span`'s own `None`. The occupied ones are
+        // `collect`ed through M1's `FromIterator<Span>`, which collects AS
+        // GIVEN — preserving the already-disjoint, content-before-link normal
+        // form asserted below; no invented M1 constructor.
         let extents: SpanSet = [Subspace::Content, Subspace::Link]
             .into_iter()
-            .map(|s| (s, s.count(m5, &surface)))
-            .filter(|(_, n)| !n.is_zero())
-            .map(|(s, n)| ext_span(s, &n))
+            .filter_map(|s| ext_span(s, &s.count(m5, &surface)))
             .collect();
         debug_assert!(
             extents.is_normalized(),
@@ -657,23 +652,13 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// at [`MAX_FIND_COVERAGE_SPANS`] (`TooMuchCoverage`, refused AS THE
     /// REQUEST RESOLVES — the span past the budget before its walk, the
     /// coverage past it as it is produced — so an over-budget request stops
-    /// resolving rather than resolving whole and then being measured). Both
-    /// counts are needed: a span opening past the arranged extent walks the
-    /// whole list and yields no coverage, so a coverage count alone would
-    /// admit any number of such spans and their walks with them. That is a
-    /// REFUSAL, never a truncation: a request past the budget gets a typed
-    /// rejection and no answer, so FD-COMPLETE holds verbatim for every request
-    /// this operation answers — a truncated coverage would silently drop
-    /// containers, which is the hazard the operation names. A caller wanting
-    /// more splits the request.
-    ///
-    /// THE COVERAGE COUNT'S GRANULARITY IS A SPAN, as COMPARE's block count's
-    /// is: the walk stops at the first span whose image carries the
-    /// accumulator past the budget, so what that count bounds is the coverage
-    /// the request materializes and the factor it multiplies the two scans by.
-    /// Within one span it bounds nothing — `image` resolves that span whole,
-    /// at a size that is the DOCUMENT's fragmentation rather than the
-    /// request's shape, and M5 keeps the lazy form crate-private.
+    /// resolving rather than resolving whole and then being measured; why
+    /// both are counted, and what neither count bounds within one span, are
+    /// on the budget's card). That is a REFUSAL, never a truncation: a
+    /// request past the budget gets a typed rejection and no answer, so
+    /// FD-COMPLETE holds verbatim for every request this operation answers —
+    /// a truncated coverage would silently drop containers, which is the
+    /// hazard the operation names. A caller wanting more splits the request.
     ///
     /// `|R|` and `#runs(d)` are the WORLD's and no number here reaches them:
     /// they stay with request rate and concurrency, which are M10's as the
@@ -739,14 +724,10 @@ impl<W: RetrievalWorld> Query<'_, W> {
         let mut spans_resolved = 0usize;
         for r in regions {
             for span in &r.spans {
-                // Every span handed to M5 is one `image`, a Θ(#runs(doc))
-                // walk whether or not it yields coverage — a span past the
-                // arranged extent walks the whole list and yields nothing,
-                // which the coverage count below would never see — so the
-                // spans resolved are counted against the budget beside the
-                // coverage. A span M5 folds to nothing at once (wrong depth,
-                // foreign subspace) is counted all the same: the count is an
-                // upper bound on the walks, and M5's fold stays unstated here.
+                // The span count, taken as the span is handed and before its
+                // walk; MAX_COMPARE_OPERAND_BLOCKS's card says why spans are
+                // counted beside the coverage, and why a span M5 folds to
+                // nothing at once counts all the same.
                 if spans_resolved >= MAX_FIND_COVERAGE_SPANS {
                     return Err(FindError::TooMuchCoverage); // refused before the walk
                 }

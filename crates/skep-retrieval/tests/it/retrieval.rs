@@ -1,42 +1,10 @@
-//! Integration tests for M6's public surface. Each test states a claim the
-//! design/interface actually makes (§-references inline): the registry gate
-//! every operation opens with, in the form M6 owns it — `is_registered_document`
-//! and never M3's wider `is_allocated`; which error wins when several
-//! conditions fail at once, the FIRST fault in request order across a request
-//! and the registry before the spans within one region; the silent-empty
-//! degradations RETRIEVEV's R6 mandates and
-//! the delivery law they are instances of (the span's intersection with the
-//! bound prefix, over the whole grid of starts and widths); delivery
-//! order/multiplicity across every block a span resolves to (R3/R5/R8);
-//! extent synthesis from counts (D-SEQ★) and what the two extent queries
-//! therefore do and do not answer (V9: the box is fixed under a content edit
-//! the extents follow); origin projection at whatever depth a document sits
-//! (a fork's own content, against its source's), and its reject-never-clip
-//! admissibility with the exact-extent boundary (WF_V/O13); the
-//! cross-document SHOWDELETIONS combine (D-IDENT, and M6's T1 presentation
-//! of each set), with DELETED read in the present tense;
-//! COMPARE's address-equal join — per-block feet, overlap widths, the clip
-//! against each document's bound prefix, fan-out completeness, internal
-//! sharing between windows of one document (X8), region confinement, the
-//! four-component presentation head and the tail that alone orders a
-//! fan-out, the whole relation against an independent per-position oracle
-//! over every window of two documents, and the two budgets that refuse
-//! (never truncate) a request whose `|P|·|Q|` outruns them — the operand's
-//! counted on the spans it hands M5 and on the blocks they build, each at
-//! its exact boundary, naming which operand, behind a gate that runs over
-//! both operands whole; FINDDOCSCONTAINING's present-tense filter (FD-SOUND)
-//! over the union of every region span's coverage, behind a gate that
-//! completes before its budget — counted the same two ways — can refuse;
-//! which arrangement each operation answers from
-//! (head-float: a bare published address answers its trunk head under its
-//! own name across the five operations that float — registered-empty being
-//! the HEAD's verdict there — a pinned member answers itself after the head
-//! moves on, and the two that do not float keep answering the address
-//! named); the two predicate doors M10 calls (a run withheld at its own
-//! position against its ORIGIN — a link run against its home — a container
-//! dropped at its identity — M6 applying a readability it never decides);
-//! that a query answers from the snapshot it pinned and never mutates; and
-//! the derive policy M10 marshals against.
+//! Integration tests for M6's public surface, sectioned per operation (§A–E)
+//! with the request gate, head-float, the predicate doors and snapshot pinning
+//! beside the operations they exercise, and the derive policy last. Each test
+//! states ONE claim the design/interface makes (§-references inline), in a
+//! name that reads as the claim, so a failure names the broken promise; the
+//! section headers and the names are the table of contents, and nothing here
+//! restates them.
 //!
 //! This file compiles as a FOREIGN crate, so it also witnesses the derive
 //! policy's consequences: every result and every error M6 hands back renders,

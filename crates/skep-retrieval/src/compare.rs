@@ -27,8 +27,10 @@ use crate::types::{CompareReport, CorrPair, RegionSpec};
 use crate::vspan::{gate_vspan, span_subspace, Subspace};
 use crate::{Query, RetrievalWorld};
 
-/// The most blocks one COMPARE operand may resolve to, and so the ceiling on
-/// the join's two factors.
+/// The most blocks one COMPARE operand may resolve to, and the most spans it
+/// may resolve — ONE budget on an operand's resolution, counted twice, on the
+/// spans walked and on the blocks built — and so the ceiling on the join's
+/// two factors and on the walks that produce them.
 ///
 /// The budget: the join is `|P|·|Q|` candidate tests, so an operand budget
 /// SQUARES — `2^12` bounds one query at `2^24` ≈ 1.7×10⁷ tests, each two
@@ -37,10 +39,16 @@ use crate::{Query, RetrievalWorld};
 /// that is a FLAT list of 4096 single-run spans — the largest flat span list
 /// the transport admits — is admitted here unchanged.
 ///
-/// What it refuses is the two shapes no wire cap prices: the NESTED
-/// region×span product, whose region-set cost model the transport leaves to
-/// M6, and the multi-run expansion, where one span over a fragmented document
-/// resolves to many blocks from a single wire element.
+/// What it refuses is the two shapes no wire cap prices, and the two counts
+/// are what refuse them. The NESTED region×span product, whose region-set
+/// cost model the transport leaves to M6, is refused by the SPAN count: every
+/// span costs one `resolve` walk, `Θ(#runs(doc))` whether or not it yields a
+/// block — a span opening past the arranged extent is walked to the end and
+/// yields none — so a block count alone would admit any number of
+/// empty-resolving spans and the walks with them, from a request the body cap
+/// alone sizes. The multi-run expansion, where one span over a fragmented
+/// document resolves to many blocks from a single wire element, is refused by
+/// the BLOCK count, which a span count cannot see.
 pub const MAX_COMPARE_OPERAND_BLOCKS: usize = 1 << 12;
 
 /// The most correspondences one COMPARE may report, and so the ceiling on what
@@ -106,11 +114,13 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// candidate tests over the two operands' blocks, and BOTH factors are the
     /// request's: a region names a span list and a spec-set names a region
     /// list, so their product is the caller's to choose and squares in it. So
-    /// each operand is capped at [`MAX_COMPARE_OPERAND_BLOCKS`] blocks
-    /// (`TooManyBlocks`, refused BEFORE the join runs, ρ₁ resolved first) and
-    /// the report at [`MAX_COMPARE_PAIRS`] correspondences (`TooManyPairs`,
-    /// refused AS THE PAIRS ARE PRODUCED, so an over-budget fan-out stops
-    /// accumulating rather than being built and then measured).
+    /// each operand is capped at [`MAX_COMPARE_OPERAND_BLOCKS`] — on the spans
+    /// it resolves, each one `Θ(#runs(doc))` walk whatever it yields, and on
+    /// the blocks it resolves to (`TooManyBlocks`, refused AS THE OPERAND
+    /// RESOLVES and before the join runs, ρ₁ resolved first) — and the report
+    /// at [`MAX_COMPARE_PAIRS`] correspondences (`TooManyPairs`, refused AS THE
+    /// PAIRS ARE PRODUCED, so an over-budget fan-out stops accumulating rather
+    /// than being built and then measured).
     ///
     /// Both are REFUSALS, never truncations: a request past either gets a
     /// typed rejection and no report, so X12 R1–R2 hold verbatim for every
@@ -260,20 +270,34 @@ impl<'a> Block<'a> {
 
 /// The operand region a spec-set denotes, as blocks: resolve every region's
 /// spans to their I-run blocks, reconstructing each run's V-start by
-/// accumulation. `None` when the operand would resolve to MORE THAN
-/// [`MAX_COMPARE_OPERAND_BLOCKS`] blocks — a block list of exactly the budget
-/// is answered, and the block past it refused AS THE BLOCKS ARE PRODUCED, so
-/// an over-budget operand stops resolving rather than resolving whole and
-/// then being measured.
+/// accumulation. `None` when the operand's resolution would pass
+/// [`MAX_COMPARE_OPERAND_BLOCKS`] on EITHER of its two counts — MORE spans
+/// walked, or MORE blocks built, than the budget. Exactly the budget of either
+/// is answered; the span past it is refused BEFORE ITS WALK and the block past
+/// it AS THE BLOCKS ARE PRODUCED, so an over-budget operand stops resolving
+/// rather than resolving whole and then being measured.
 ///
-/// THE BUDGET'S GRANULARITY IS A SPAN. The walk stops at the first span whose
-/// runs carry the accumulator past the budget, so what the budget bounds is
-/// the block LIST — the join's factor, which is what it is priced on. Within
-/// one span it bounds nothing: `resolve` hands back the whole of that span's
-/// resolution, whose size is the DOCUMENT's fragmentation rather than the
-/// request's shape, and M5 keeps the lazy form crate-private. So one span over
-/// a heavily fragmented document builds every run of its resolution before the
-/// count is consulted, and that transient is sized by neither budget here.
+/// TWO COUNTS, because one `resolve` costs its walk whatever it yields.
+/// `resolve` is `Θ(#runs(doc))`: its prefix-sum walk must reach the span's
+/// ordinal, and a span opening past the arranged extent walks the whole list
+/// to learn that it binds nothing. So a block count alone bounds the walks of
+/// the spans that yield blocks and no others — an operand of empty-resolving
+/// spans, sized by the request body and by nothing upstream, would walk once
+/// per span with the block count never moving. The span count is what refuses
+/// it, and it counts the spans HANDED to M5: a span M5's reader declines (the
+/// let-else below) walks nothing and is counted all the same, so the count is
+/// an upper bound on the walks — refusing more and never less — and M5's fold
+/// conditions stay unstated here.
+///
+/// THE BLOCK COUNT'S GRANULARITY IS A SPAN. The walk stops at the first span
+/// whose runs carry the accumulator past the budget, so what that count
+/// bounds is the block LIST — the join's factor, which is what it is priced
+/// on. Within one span it bounds nothing: `resolve` hands back the whole of
+/// that span's resolution, whose size is the DOCUMENT's fragmentation rather
+/// than the request's shape, and M5 keeps the lazy form crate-private. So one
+/// span over a heavily fragmented document builds every run of its resolution
+/// before the count is consulted, and that transient is sized by neither
+/// budget here.
 ///
 /// V-RECONSTRUCTION (load-bearing for X12-R1 soundness): `resolve` PROMISES
 /// that its runs tile V contiguously from the first run's `max(ordinal, 1)`,
@@ -325,9 +349,19 @@ fn resolve_blocks<'a>(
     regions: &'a [RegionSpec],
 ) -> Option<Vec<Block<'a>>> {
     let mut out = Vec::new();
+    let mut resolved = 0usize;
     for r in regions {
         let surface = reading_surface(m3, &r.doc);
         for span in &r.spans {
+            // Every span handed to M5 is one `resolve`, a Θ(#runs(doc)) walk
+            // whether or not it yields a block — a span past the arranged
+            // extent walks the whole list and yields nothing, which the block
+            // count below would never see — so the spans resolved are counted
+            // against the budget beside the blocks.
+            if resolved >= MAX_COMPARE_OPERAND_BLOCKS {
+                return None; // the operand's budget, refused before the walk
+            }
+            resolved += 1;
             // M5's own shape reader: a span it declines (well-formed but
             // depth-incompatible) contributes no blocks, as `resolve` would
             // have contributed no runs for it.

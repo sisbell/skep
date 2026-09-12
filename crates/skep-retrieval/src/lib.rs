@@ -81,7 +81,12 @@
 //! scans, and the request-to-coverage step EXPANDS: a region set nests two
 //! wire caps whose product only a body cap bounds, and one span over a
 //! fragmented document resolves to many coverage spans from a single wire
-//! element — so it carries [`MAX_FIND_COVERAGE_SPANS`].
+//! element — so it carries [`MAX_FIND_COVERAGE_SPANS`]. Each of those two
+//! operand-side budgets is counted twice: on the spans handed to M5 — one
+//! `Θ(#runs)` walk apiece, a span past the arranged extent walking the whole
+//! list to yield nothing — and on what the walks produce, since a count of
+//! the product alone would admit any number of empty-resolving spans and
+//! their walks with them.
 //!
 //! All three are published, so a caller sizes a request against the number
 //! rather than transcribing it, and all three are refusals rather than

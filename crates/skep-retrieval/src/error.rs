@@ -194,9 +194,11 @@ pub enum CompareError {
         index: usize,
         fault: SpanFault,
     },
-    /// The operand resolves to more than [`MAX_COMPARE_OPERAND_BLOCKS`]
-    /// blocks. The join is `|P|·|Q|`, so a per-operand budget is what bounds
-    /// it; refused before the join runs, with ρ₁ resolved first.
+    /// The operand's resolution passes [`MAX_COMPARE_OPERAND_BLOCKS`] on
+    /// either of its two counts: more spans handed to M5 — one walk apiece,
+    /// whatever it yields — or more blocks built, than the budget. The join is
+    /// `|P|·|Q|`, so a per-operand budget is what bounds it; refused as the
+    /// operand resolves and before the join runs, with ρ₁ resolved first.
     ///
     /// [`MAX_COMPARE_OPERAND_BLOCKS`]: crate::MAX_COMPARE_OPERAND_BLOCKS
     TooManyBlocks { operand: Operand },
@@ -224,10 +226,12 @@ pub enum FindError {
         index: usize,
         fault: SpanFault,
     },
-    /// The request resolves to more than [`MAX_FIND_COVERAGE_SPANS`] coverage
-    /// spans — the one factor of this operation's cost that the request owns,
-    /// and the multiplier it applies to two world-sized scans. Refused BEFORE
-    /// the candidate scan runs; a refusal, never a truncation, so FD-COMPLETE
+    /// The request's resolution passes [`MAX_FIND_COVERAGE_SPANS`] on either
+    /// of its two counts: more spans handed to M5 — one walk apiece, whatever
+    /// it yields — or more coverage spans produced, than the budget. That is
+    /// the one factor of this operation's cost that the request owns, and the
+    /// multiplier it applies to two world-sized scans. Refused BEFORE the
+    /// candidate scan runs; a refusal, never a truncation, so FD-COMPLETE
     /// holds verbatim for every request answered.
     ///
     /// [`MAX_FIND_COVERAGE_SPANS`]: crate::MAX_FIND_COVERAGE_SPANS
@@ -342,8 +346,9 @@ impl fmt::Display for CompareError {
             ),
             CompareError::TooManyBlocks { operand } => write!(
                 f,
-                "compare: {operand} resolves past the {}-block operand budget \
+                "compare: {operand} resolves past the operand budget of {} spans or {} blocks \
                  (MAX_COMPARE_OPERAND_BLOCKS); narrow its spans or split the request",
+                crate::MAX_COMPARE_OPERAND_BLOCKS,
                 crate::MAX_COMPARE_OPERAND_BLOCKS
             ),
             CompareError::TooManyPairs => write!(
@@ -373,8 +378,10 @@ impl fmt::Display for FindError {
             ),
             FindError::TooMuchCoverage => write!(
                 f,
-                "find_docs_containing: the request resolves past the {}-span coverage budget \
-                 (MAX_FIND_COVERAGE_SPANS); narrow its spans or split the request",
+                "find_docs_containing: the request resolves past the coverage budget of {} spans \
+                 or {} coverage spans (MAX_FIND_COVERAGE_SPANS); narrow its spans or split the \
+                 request",
+                crate::MAX_FIND_COVERAGE_SPANS,
                 crate::MAX_FIND_COVERAGE_SPANS
             ),
         }

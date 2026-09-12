@@ -16,21 +16,26 @@ use crate::vspan::{gate_vspan, span_subspace, Subspace};
 use crate::{Query, RetrievalWorld, MAX_COMPARE_OPERAND_BLOCKS};
 
 /// The most I-coverage spans one FINDDOCSCONTAINING request may resolve to,
-/// and so the ceiling on the multiplier the REQUEST applies to the two
+/// and the most spans it may resolve — one budget on the request's
+/// resolution, counted on the spans walked and on the coverage they produce
+/// — and so the ceiling on the multiplier the REQUEST applies to the two
 /// world-sized scans behind it.
 ///
 /// ONE join-side budget, not a second. `docs_ever_containing` joins this
 /// coverage against the whole of R, and `project` runs it against each
 /// candidate's runs, so the coverage is one side of a join exactly as a
 /// COMPARE operand is — and it takes that operand's budget BY DEFINITION,
-/// priced on [`MAX_COMPARE_OPERAND_BLOCKS`]'s card along with the wire-cap
-/// coincidence (a FLAT region set of 4096 single-run spans, the largest flat
-/// span list the transport admits for one region, is admitted unchanged) and
-/// the two shapes no wire cap prices: the NESTED region×span product, whose
-/// cost model M10's codec leaves to M6, and the multi-run expansion, where
-/// one span over a fragmented document resolves to many coverage spans from
-/// a single wire element. Pricing the two apart is a deliberate edit of this
-/// line, never a drift between two literals.
+/// counted the same two ways and priced on [`MAX_COMPARE_OPERAND_BLOCKS`]'s
+/// card along with the wire-cap coincidence (a FLAT region set of 4096
+/// single-run spans, the largest flat span list the transport admits for one
+/// region, is admitted unchanged) and the two shapes no wire cap prices: the
+/// NESTED region×span product, whose cost model M10's codec leaves to M6 and
+/// which the SPAN count refuses — every span is one `image` walk,
+/// `Θ(#runs(doc))` whether or not it yields coverage — and the multi-run
+/// expansion, where one span over a fragmented document resolves to many
+/// coverage spans from a single wire element, which the COVERAGE count
+/// refuses. Pricing the two apart is a deliberate edit of this line, never a
+/// drift between two literals.
 ///
 /// WHAT IT DOES NOT BOUND, and neither could any number here: `|R|` and
 /// `#runs(d)` are the WORLD's, not the request's, so they stay with rate and
@@ -598,34 +603,40 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// one is clean, and a SHAPE fault always outranks the size refusal below.
     ///
     /// COST, IN THREE FACTORS OF WHICH ONE IS THE REQUEST'S. The work is
-    /// `|candidates| · #runs(d) · |coverage|`: the coverage is the union of
-    /// the region images; the candidate scan runs that coverage against the
-    /// whole of M5's R⁻¹ index; and the filter is one `project` per candidate,
-    /// each itself `#runs(d) · |coverage|` in the CANDIDATE's own
-    /// fragmentation — a factor the request never names and M6 never sees.
-    /// Each `project` is a cost in HEAP as well as in steps: it materializes
-    /// and sorts one span per overlapping (run, cover) pair before M6 reads
-    /// one bit off it, so the peak transient of the filter is that product in
-    /// live heap and the operation asks for a whole footprint where it needs
-    /// only its non-emptiness.
+    /// `|spans| · #runs(doc) + |candidates| · #runs(d) · |coverage|`: the
+    /// coverage is the union of the region images, one `image` walk per span,
+    /// each `Θ(#runs(doc))` whether or not it yields coverage; the candidate
+    /// scan runs that coverage against the whole of M5's R⁻¹ index; and the
+    /// filter is one `project` per candidate, each itself
+    /// `#runs(d) · |coverage|` in the CANDIDATE's own fragmentation — a factor
+    /// the request never names and M6 never sees. Each `project` is a cost in
+    /// HEAP as well as in steps: it materializes and sorts one span per
+    /// overlapping (run, cover) pair before M6 reads one bit off it, so the
+    /// peak transient of the filter is that product in live heap and the
+    /// operation asks for a whole footprint where it needs only its
+    /// non-emptiness.
     ///
-    /// Only `|coverage|` is the request's, and it is capped at
-    /// [`MAX_FIND_COVERAGE_SPANS`] (`TooMuchCoverage`, refused AS THE COVERAGE
-    /// IS PRODUCED, so an over-budget request stops resolving rather than
-    /// resolving whole and then being measured). That is a REFUSAL, never a
-    /// truncation: a request past the budget gets a typed rejection and no
-    /// answer, so FD-COMPLETE holds verbatim for every request this operation
-    /// answers — a truncated coverage would silently drop containers, which is
-    /// the hazard the operation names. A caller wanting more splits the
-    /// request.
+    /// Only `|spans|` and `|coverage|` are the request's, and both are capped
+    /// at [`MAX_FIND_COVERAGE_SPANS`] (`TooMuchCoverage`, refused AS THE
+    /// REQUEST RESOLVES — the span past the budget before its walk, the
+    /// coverage past it as it is produced — so an over-budget request stops
+    /// resolving rather than resolving whole and then being measured). Both
+    /// counts are needed: a span opening past the arranged extent walks the
+    /// whole list and yields no coverage, so a coverage count alone would
+    /// admit any number of such spans and their walks with them. That is a
+    /// REFUSAL, never a truncation: a request past the budget gets a typed
+    /// rejection and no answer, so FD-COMPLETE holds verbatim for every request
+    /// this operation answers — a truncated coverage would silently drop
+    /// containers, which is the hazard the operation names. A caller wanting
+    /// more splits the request.
     ///
-    /// THE BUDGET'S GRANULARITY IS A SPAN, as COMPARE's operand budget's is:
-    /// the walk stops at the first span whose image carries the accumulator
-    /// past the budget, so what the budget bounds is the coverage the request
-    /// materializes and the factor it multiplies the two scans by. Within one
-    /// span it bounds nothing — `image` resolves that span whole, at a size
-    /// that is the DOCUMENT's fragmentation rather than the request's shape,
-    /// and M5 keeps the lazy form crate-private.
+    /// THE COVERAGE COUNT'S GRANULARITY IS A SPAN, as COMPARE's block count's
+    /// is: the walk stops at the first span whose image carries the
+    /// accumulator past the budget, so what that count bounds is the coverage
+    /// the request materializes and the factor it multiplies the two scans by.
+    /// Within one span it bounds nothing — `image` resolves that span whole,
+    /// at a size that is the DOCUMENT's fragmentation rather than the
+    /// request's shape, and M5 keeps the lazy form crate-private.
     ///
     /// `|R|` and `#runs(d)` are the WORLD's and no number here reaches them:
     /// they stay with request rate and concurrency, which are M10's as the
@@ -678,8 +689,21 @@ impl<W: RetrievalWorld> Query<'_, W> {
         // coverage built so far at every span, and the budget below would
         // then bound a quantity that costs its own square to produce.
         let mut coverage_spans: Vec<Span> = Vec::new();
+        let mut resolved = 0usize;
         for r in regions {
             for span in &r.spans {
+                // Every span handed to M5 is one `image`, a Θ(#runs(doc))
+                // walk whether or not it yields coverage — a span past the
+                // arranged extent walks the whole list and yields nothing,
+                // which the coverage count below would never see — so the
+                // spans resolved are counted against the budget beside the
+                // coverage. A span M5 folds to nothing at once (wrong depth,
+                // foreign subspace) is counted all the same: the count is an
+                // upper bound on the walks, and M5's fold stays unstated here.
+                if resolved >= MAX_FIND_COVERAGE_SPANS {
+                    return Err(FindError::TooMuchCoverage); // refused before the walk
+                }
+                resolved += 1;
                 coverage_spans.extend(m5.image(&r.doc, span));
                 // The coverage budget, refused AS THE COVERAGE IS PRODUCED —
                 // `>` and not `==`, because one span's image adds many

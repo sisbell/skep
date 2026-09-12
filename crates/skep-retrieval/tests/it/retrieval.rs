@@ -21,12 +21,13 @@
 //! four-component presentation head and the tail that alone orders a
 //! fan-out, the whole relation against an independent per-position oracle
 //! over every window of two documents, and the two budgets that refuse
-//! (never truncate) a request whose `|P|·|Q|` outruns them — counted in
-//! blocks rather than spans, at their exact boundaries, naming which
-//! operand, behind a gate that runs over both operands whole;
-//! FINDDOCSCONTAINING's present-tense filter (FD-SOUND) over the union of
-//! every region span's coverage, behind a gate that completes before its
-//! budget can refuse; which arrangement each operation answers from
+//! (never truncate) a request whose `|P|·|Q|` outruns them — the operand's
+//! counted on the spans it hands M5 and on the blocks they build, each at
+//! its exact boundary, naming which operand, behind a gate that runs over
+//! both operands whole; FINDDOCSCONTAINING's present-tense filter (FD-SOUND)
+//! over the union of every region span's coverage, behind a gate that
+//! completes before its budget — counted the same two ways — can refuse;
+//! which arrangement each operation answers from
 //! (head-float: a bare published address answers its trunk head under its
 //! own name across the five operations that float — registered-empty being
 //! the HEAD's verdict there — a pinned member answers itself after the head
@@ -2454,14 +2455,16 @@ fn compare_refuses_an_operand_past_its_block_budget() {
 }
 
 #[test]
-fn compare_counts_blocks_and_not_spans_against_the_operand_budget() {
+fn compare_refuses_an_operand_whose_blocks_outnumber_the_budget_though_its_spans_do_not() {
     // The budget's own card: beyond M10's per-array wire cap it refuses "the
     // multi-run expansion, where one span over a fragmented document resolves
-    // to many blocks from a single wire element". doc2 resolves to THREE runs,
-    // so the two operands below are `MAX/3` and `MAX/3 + 1` SPANS — both far
-    // under any span cap — and `MAX - (MAX mod 3)` and three more BLOCKS,
+    // to many blocks from a single wire element", and the BLOCK count is what
+    // refuses it. doc2 resolves to THREE runs, so the two operands below are
+    // `MAX/3` and `MAX/3 + 1` SPANS — both under the budget's own span count
+    // and under any wire cap — and `MAX - (MAX mod 3)` and three more BLOCKS,
     // which is the only unit that explains one being answered and the other
-    // refused.
+    // refused. (The span count's own boundary is pinned by
+    // `compare_refuses_an_operand_whose_spans_outnumber_the_budget_though_they_resolve_to_nothing`.)
     let k = mem_kernel();
     three_runs(&k); // doc2 = [doc2_ca1][ca1, ca2][ca1] — three runs
     let s = k.snapshot();
@@ -2475,6 +2478,63 @@ fn compare_counts_blocks_and_not_spans_against_the_operand_budget() {
     assert_eq!(ok_of(q.compare(&side(under), &one)).len(), 2 * under);
     assert_eq!(
         err_of(q.compare(&side(under + 1), &one)),
+        CompareError::TooManyBlocks {
+            operand: Operand::First
+        }
+    );
+}
+
+#[test]
+fn compare_refuses_an_operand_whose_spans_outnumber_the_budget_though_they_resolve_to_nothing() {
+    // The budget's other count. Every span handed to M5 is one Θ(#runs(doc))
+    // walk whether or not it yields a block — a span opening past the arranged
+    // extent walks the whole list and yields none — so a block count alone
+    // would admit any number of empty-resolving spans and their walks with
+    // them, from a nested region×span request the body cap alone sizes. The
+    // SPAN count refuses it, before either operand resolves past the budget,
+    // naming the operand.
+    let k = mem_kernel();
+    insert3(&k); // doc1 holds three positions
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let past_end = || vspan(1, 1000, 1);
+    // The premise: a past-end span resolves to NO run, so the block count
+    // never moves and only the span count can explain a refusal below.
+    assert!(
+        s.world().m5().resolve(&doc1(), &past_end()).is_empty(),
+        "the premise: a span past the arranged extent resolves to nothing"
+    );
+    let one = || vec![region_spec(doc1(), vec![vspan(1, 1, 1)])];
+    let over = vec![region_spec(
+        doc1(),
+        vec![past_end(); MAX_COMPARE_OPERAND_BLOCKS + 1],
+    )];
+    assert_eq!(
+        err_of(q.compare(&over, &one())),
+        CompareError::TooManyBlocks {
+            operand: Operand::First
+        }
+    );
+    assert_eq!(
+        err_of(q.compare(&one(), &over)),
+        CompareError::TooManyBlocks {
+            operand: Operand::Second
+        }
+    );
+    // At the budget the same shape still answers — emptily, every span
+    // resolving to nothing — so the walks are done, and bounded at the budget.
+    let at = vec![region_spec(
+        doc1(),
+        vec![past_end(); MAX_COMPARE_OPERAND_BLOCKS],
+    )];
+    assert!(ok_of(q.compare(&at, &one())).is_empty());
+    // The NESTED region×span product past the budget — one span per region,
+    // a region list no per-array wire cap prices — is refused the same way.
+    let nested: Vec<RegionSpec> = (0..=MAX_COMPARE_OPERAND_BLOCKS)
+        .map(|_| region_spec(doc1(), vec![past_end()]))
+        .collect();
+    assert_eq!(
+        err_of(q.compare(&nested, &one())),
         CompareError::TooManyBlocks {
             operand: Operand::First
         }
@@ -2743,14 +2803,17 @@ fn find_docs_containing_refuses_a_request_past_its_coverage_budget() {
 }
 
 #[test]
-fn find_docs_containing_counts_coverage_spans_and_not_request_spans() {
+fn find_docs_containing_refuses_a_request_whose_coverage_outnumbers_the_budget_though_its_spans_do_not(
+) {
     // The budget's own card: beyond M10's per-array wire cap it refuses "the
     // multi-run expansion, where one span over a fragmented document resolves
-    // to many coverage spans from a single wire element". doc2 resolves to
-    // THREE runs, so the two requests below are `MAX/3` and `MAX/3 + 1` SPANS
-    // — both far under any wire cap — and `MAX - (MAX mod 3)` and three more
-    // COVERAGE spans, which is the only unit that explains one being answered
-    // and the other refused.
+    // to many coverage spans from a single wire element", and the COVERAGE
+    // count is what refuses it. doc2 resolves to THREE runs, so the two
+    // requests below are `MAX/3` and `MAX/3 + 1` SPANS — both under the
+    // budget's own span count and under any wire cap — and `MAX - (MAX mod 3)`
+    // and three more COVERAGE spans, which is the only unit that explains one
+    // being answered and the other refused. (The span count's own boundary is
+    // pinned by the test that follows.)
     let k = mem_kernel();
     three_runs(&k); // doc2 = [doc2_ca1][ca1, ca2][ca1] — three runs
     let s = k.snapshot();
@@ -2765,6 +2828,56 @@ fn find_docs_containing_counts_coverage_spans_and_not_request_spans() {
     );
     assert_eq!(
         err_of(q.find_docs_containing(&request(under + 1))),
+        FindError::TooMuchCoverage
+    );
+}
+
+#[test]
+fn find_docs_containing_refuses_a_request_whose_spans_outnumber_the_budget_though_they_resolve_to_nothing(
+) {
+    // The budget's other count. Every span handed to M5 is one Θ(#runs(doc))
+    // `image` walk whether or not it yields coverage — a span opening past the
+    // arranged extent walks the whole list and yields none — so a coverage
+    // count alone would admit any number of empty-resolving spans and their
+    // walks with them, from a nested region×span request the body cap alone
+    // sizes. The SPAN count refuses it, before phase 1 resolves past the
+    // budget.
+    let k = mem_kernel();
+    insert3(&k); // doc1 holds three positions
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let past_end = || vspan(1, 1000, 1);
+    // The premise: a past-end span images to NO coverage, so the coverage
+    // count never moves and only the span count can explain a refusal below.
+    assert!(
+        s.world().m5().image(&doc1(), &past_end()).is_empty(),
+        "the premise: a span past the arranged extent images to nothing"
+    );
+    let over = vec![region_spec(
+        doc1(),
+        vec![past_end(); MAX_FIND_COVERAGE_SPANS + 1],
+    )];
+    assert_eq!(
+        err_of(q.find_docs_containing(&over)),
+        FindError::TooMuchCoverage
+    );
+    // At the budget the same shape still answers — emptily, every span
+    // imaging to nothing — so the walks are done, and bounded at the budget.
+    let at = vec![region_spec(
+        doc1(),
+        vec![past_end(); MAX_FIND_COVERAGE_SPANS],
+    )];
+    assert_eq!(
+        ok_of(q.find_docs_containing(&at)),
+        Vec::<Address>::new()
+    );
+    // The NESTED region×span product past the budget — one span per region,
+    // a region list no per-array wire cap prices — is refused the same way.
+    let nested: Vec<RegionSpec> = (0..=MAX_FIND_COVERAGE_SPANS)
+        .map(|_| region_spec(doc1(), vec![past_end()]))
+        .collect();
+    assert_eq!(
+        err_of(q.find_docs_containing(&nested)),
         FindError::TooMuchCoverage
     );
 }

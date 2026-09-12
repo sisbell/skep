@@ -17,12 +17,15 @@
 //! the composition contract prescribes; all state is arranged through M5's
 //! real `Vstream` ops (M5Rec is sealed to foreign crates).
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
-use skep_arrangement::{seat_link, Caller, Deposit, HasM5, M5State, VPos, VSpec, Vstream};
+use skep_arrangement::{
+    is_ordinal_vspan, seat_link, Caller, Deposit, HasM5, M5State, VPos, VSpec, Vstream,
+};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
@@ -751,6 +754,71 @@ fn retrieve_v_masked_withholds_a_link_run_against_its_home_document() {
 }
 
 #[test]
+fn retrieve_v_masked_consults_its_predicate_after_the_gate_and_once_per_run_of_the_origin() {
+    // `retrieve_v_masked`'s card, the clauses M10 relies on about WHEN and OF
+    // WHAT its predicate is asked: only after the gate has passed the WHOLE
+    // request (a rejected request consults it of nothing), and then once per
+    // resolved run, in delivery order, of the run's origin — three consults
+    // for four positions, and a run cut by the window still one.
+    let k = mem_kernel();
+    three_runs(&k); // doc2 = [x][ca1, ca2][ca1]: origins doc2, doc1, doc1
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
+    let recording = |d: &Address| {
+        asked.borrow_mut().push(d.clone());
+        true
+    };
+    // Rejected on its SECOND spec: the first, which would resolve to three
+    // runs, is not resolved and its origins are not consulted.
+    let _ = err_of(q.retrieve_v_masked(
+        &[
+            spec(doc2(), vspan(1, 1, 4)),
+            spec(unregistered(), vspan(1, 1, 1)),
+        ],
+        &recording,
+    ));
+    assert!(
+        asked.borrow().is_empty(),
+        "a rejected request consults the predicate of nothing"
+    );
+    // Answered whole: once per run, in run order, of each run's origin.
+    let _ = ok_of(q.retrieve_v_masked(&[spec(doc2(), vspan(1, 1, 4))], &recording));
+    assert_eq!(*asked.borrow(), vec![doc2(), doc1(), doc1()]);
+    // A window cutting a run consults it once; a second spec of the same
+    // origin consults again — per run, never memoized per origin.
+    asked.borrow_mut().clear();
+    let _ = ok_of(q.retrieve_v_masked(
+        &[spec(doc2(), vspan(1, 3, 1)), spec(doc1(), vspan(1, 1, 3))],
+        &recording,
+    ));
+    assert_eq!(*asked.borrow(), vec![doc1(), doc1()]);
+}
+
+#[test]
+fn retrieve_v_masked_consults_its_predicate_of_the_origin_and_never_of_the_document_named() {
+    // The same card: the predicate is asked of ORIGIN documents alone — which
+    // may be a version address — and never of the document named. Named
+    // pdoc, the head's one link run is delivered, and its home, the fork, is
+    // the one document asked about; pdoc is asked about nowhere.
+    let k = mem_kernel();
+    let vs = deposit3(&k);
+    let (fork, _) = vs
+        .version(PrincipalId(1), &pdoc(), None)
+        .expect("fork commits");
+    seat_link(&k, &fork, &vla(1)).expect("seat commits");
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
+    let recording = |d: &Address| {
+        asked.borrow_mut().push(d.clone());
+        true
+    };
+    let _ = ok_of(q.retrieve_v_masked(&[spec(pdoc(), vspan(2, 1, 1))], &recording));
+    assert_eq!(*asked.borrow(), vec![vdoc()]);
+}
+
+#[test]
 fn retrieve_v_delivers_exactly_the_spans_intersection_with_the_bound_prefix() {
     // ASN-0115 R3 + R6 as the LAW they are: for every well-formed
     // ordinal-level span, the delivery is the document's V-sequence clipped
@@ -1268,6 +1336,21 @@ fn a_pinned_member_answers_its_own_arrangement_after_the_head_moves_on() {
     assert_eq!(
         err_of(q.show_origin_v(&first, &vspan(1, 1, 4))),
         OriginError::RangeNotPresent
+    );
+    // COMPARE, the fifth floating operation, at the same address: the pinned
+    // member's region resolves ITS three positions, so against the head's
+    // four there is one pair (the shared prefix) and not two — a compare that
+    // asked M5's deposit surface would resolve `first` as the head and report
+    // the head's fourth run against itself as well.
+    let rep = ok_of(q.compare(
+        &[region_spec(first.clone(), vec![vspan(1, 1, 4)])],
+        &[region_spec(second.clone(), vec![vspan(1, 1, 4)])],
+    ));
+    assert_eq!(rep.len(), 1);
+    let pair = &rep.as_slice()[0];
+    assert_eq!(
+        (pair.d1.clone(), pair.d2.clone(), pair.width.clone()),
+        (first.clone(), second.clone(), n(3))
     );
 }
 
@@ -2455,6 +2538,20 @@ fn compare_refuses_an_operand_whose_blocks_outnumber_the_budget_though_its_spans
             operand: Operand::First
         }
     );
+    // Which operand speaks when ρ₁ is over on BLOCKS and ρ₂ over on SPANS:
+    // ρ₁ resolves first and is refused as it resolves, before ρ₂'s spans are
+    // counted — the one request that tells "resolve ρ₁ whole, then ρ₂" from
+    // "count every span first, then resolve".
+    let over_on_spans = vec![region_spec(
+        doc1(),
+        vec![vspan(1, 1000, 1); MAX_COMPARE_OPERAND_BLOCKS + 1],
+    )];
+    assert_eq!(
+        err_of(q.compare(&side(under + 1), &over_on_spans)),
+        CompareError::TooManyBlocks {
+            operand: Operand::First
+        }
+    );
 }
 
 #[test]
@@ -2512,6 +2609,29 @@ fn compare_refuses_an_operand_whose_spans_outnumber_the_budget_though_they_resol
             operand: Operand::First
         }
     );
+    // A span M5's READER declines — well-formed, content-started, depth 3 —
+    // is never handed to `resolve` and is counted all the same: the count is
+    // of spans handed to M5, an upper bound on its walks, so M5's fold
+    // conditions are restated nowhere here.
+    assert!(
+        !is_ordinal_vspan(&deep_span(1)),
+        "the premise: M5's reader declines a depth-3 span"
+    );
+    let declined = vec![region_spec(
+        doc1(),
+        vec![deep_span(1); MAX_COMPARE_OPERAND_BLOCKS + 1],
+    )];
+    assert_eq!(
+        err_of(q.compare(&declined, &one())),
+        CompareError::TooManyBlocks {
+            operand: Operand::First
+        }
+    );
+    let declined_at = vec![region_spec(
+        doc1(),
+        vec![deep_span(1); MAX_COMPARE_OPERAND_BLOCKS],
+    )];
+    assert!(ok_of(q.compare(&declined_at, &one())).is_empty());
 }
 
 #[test]
@@ -2711,6 +2831,50 @@ fn find_docs_containing_filtered_drops_a_container_at_its_identity() {
 }
 
 #[test]
+fn find_docs_containing_filtered_consults_its_predicate_of_every_candidate_ahead_of_project() {
+    // `find_docs_containing_filtered`'s card (PUB-6.17): the predicate is
+    // asked of each CANDIDATE — M5's historical superset, ghosts included —
+    // FIRST, before `project` is paid, and only after the gate has passed the
+    // whole request. A ghost is therefore consulted and then dropped; a
+    // filter that paid `project` first would never ask about it.
+    let k = mem_kernel();
+    let vs = three_runs(&k); // doc2 = [x][ca1, ca2][ca1]; doc1 = [ca1, ca2, ca3]
+    vs.delete(P1, &doc1(), vp(1, 1), n(3))
+        .expect("delete commits"); // doc1 holds nothing now: a GHOST for ca1
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
+    let recording = |d: &Address| {
+        asked.borrow_mut().push(d.clone());
+        true
+    };
+    // Rejected on its second region: consulted of nothing.
+    let _ = err_of(q.find_docs_containing_filtered(
+        &[
+            region_spec(doc2(), vec![vspan(1, 2, 1)]),
+            region_spec(unregistered(), vec![]),
+        ],
+        &recording,
+    ));
+    assert!(
+        asked.borrow().is_empty(),
+        "a rejected request consults the predicate of nothing"
+    );
+    // Answered: the ghost doc1 is consulted as a candidate and dropped by
+    // `project`; the answer names doc2 alone.
+    assert_eq!(
+        ok_of(q.find_docs_containing_filtered(
+            &[region_spec(doc2(), vec![vspan(1, 2, 1)])],
+            &recording
+        )),
+        vec![doc2()]
+    );
+    let mut consulted = asked.borrow().clone();
+    consulted.sort(); // the candidate ORDER is M5's promise; the SET is this claim's
+    assert_eq!(consulted, vec![doc1(), doc2()]);
+}
+
+#[test]
 fn find_docs_containing_rejects_unregistered_and_malformed_regions() {
     // ASN-0124 FD-COMPLETE: a malformed span is a typed rejection with
     // (region, index) attribution — never a silent under-resolution; a
@@ -2747,6 +2911,15 @@ fn find_docs_containing_rejects_unregistered_and_malformed_regions() {
     assert_eq!(
         ok_of(q.find_docs_containing(&[region_spec(doc2(), vec![vspan(1, 1, 1)])])),
         Vec::<Address>::new()
+    );
+    // A region with NO spans still names its document, and the registry gate
+    // runs on it: nothing to resolve is not nothing to check.
+    assert_eq!(
+        err_of(q.find_docs_containing(&[
+            region_spec(doc1(), vec![vspan(1, 1, 1)]),
+            region_spec(unregistered(), vec![]),
+        ])),
+        FindError::DocNotRegistered(unregistered())
     );
 }
 
@@ -2853,6 +3026,28 @@ fn find_docs_containing_refuses_a_request_whose_spans_outnumber_the_budget_thoug
         err_of(q.find_docs_containing(&nested)),
         FindError::TooMuchCoverage
     );
+    // A span M5 folds to nothing at once — a well-formed depth-3 span, or a
+    // foreign-subspace one, both of which pass this gate — is handed to
+    // `image` and counted all the same.
+    for folded in [deep_span(1), vspan(3, 1, 1)] {
+        assert!(
+            s.world().m5().image(&doc1(), &folded).is_empty(),
+            "the premise: M5 folds it to nothing"
+        );
+        let over = vec![region_spec(
+            doc1(),
+            vec![folded.clone(); MAX_FIND_COVERAGE_SPANS + 1],
+        )];
+        assert_eq!(
+            err_of(q.find_docs_containing(&over)),
+            FindError::TooMuchCoverage
+        );
+        let at = vec![region_spec(doc1(), vec![folded; MAX_FIND_COVERAGE_SPANS])];
+        assert_eq!(
+            ok_of(q.find_docs_containing(&at)),
+            Vec::<Address>::new()
+        );
+    }
 }
 
 #[test]

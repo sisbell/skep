@@ -271,7 +271,11 @@ impl Error for RetrieveError {}
 
 impl fmt::Display for ExtentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("doc_vspan/doc_vspanset: doc is not a registered document")
+        f.write_str(match self {
+            ExtentError::DocNotRegistered => {
+                "doc_vspan/doc_vspanset: doc is not a registered document"
+            }
+        })
     }
 }
 impl Error for ExtentError {}

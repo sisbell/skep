@@ -162,7 +162,7 @@ fn debug_assert_sequential_positions(m5: &M5State, doc: &Address) {
             // Each subspace asks M5 for its OWN count and runs, so the two
             // reads compared below cannot be paired across subspaces.
             let (count, runs) = (sub.count(m5, doc), sub.runs(m5, doc));
-            let width_sum = runs.fold(Nat::zero(), |acc, r| acc + r.width());
+            let width_sum: Nat = runs.map(Run::width).sum();
             debug_assert!(
                 width_sum == count,
                 "D-SEQ★: a subspace's run widths must sum to its count"
@@ -475,7 +475,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
         // Span now depth-2 (≥ 3 rejected above); resolve may still be partial
         // if the span overruns the bound prefix.
         let runs = m5.resolve(&surface, span);
-        let resolved_width = runs.iter().fold(Nat::zero(), |acc, r| acc + r.width());
+        let resolved_width: Nat = runs.iter().map(Run::width).sum();
         // `shape.count` is the span's NOMINAL EXTENT — ASN-0115's name for the
         // width's deepest component, the count the span names — read off M5's
         // reading rather than by index, the same part `resolve` read;

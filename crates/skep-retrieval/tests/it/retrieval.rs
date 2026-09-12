@@ -1460,8 +1460,8 @@ fn compare_reports_address_equal_correspondences_with_per_block_feet() {
         &[region_spec(doc1(), vec![vspan(1, 1, 3)])],
         &[region_spec(doc2(), vec![vspan(1, 1, 1)])],
     ));
-    assert_eq!(rep.0.len(), 1);
-    let p = &rep.0[0];
+    assert_eq!(rep.len(), 1);
+    let p = &rep.as_slice()[0];
     assert_eq!(p.d1, doc1());
     assert_eq!(p.u1.subspace, n(1));
     assert_eq!(p.u1.ordinal, n(2)); // ca2 is offset 1 within doc1's block
@@ -1474,8 +1474,8 @@ fn compare_reports_address_equal_correspondences_with_per_block_feet() {
         &[region_spec(doc2(), vec![vspan(1, 1, 1)])],
         &[region_spec(doc1(), vec![vspan(1, 1, 3)])],
     ));
-    assert_eq!(rep.0.len(), 1);
-    let p = &rep.0[0];
+    assert_eq!(rep.len(), 1);
+    let p = &rep.as_slice()[0];
     assert_eq!(p.d1, doc2());
     assert_eq!(p.u1.ordinal, n(1));
     assert_eq!(p.d2, doc1());
@@ -2396,8 +2396,8 @@ fn results_and_errors_marshal_through_serialize_per_the_derive_policy() {
         &[region_spec(doc1(), vec![vspan(1, 1, 3)])],
         &[region_spec(doc2(), vec![vspan(1, 1, 2)])],
     ));
-    assert_eq!(rep.0.len(), 1);
-    let p = &rep.0[0];
+    assert_eq!(rep.len(), 1);
+    let p = &rep.as_slice()[0];
     assert!(!bincode::serialize(&p.d1).expect("Address serializes").is_empty());
     assert!(!bincode::serialize(&p.u1.subspace).expect("Nat serializes").is_empty());
     assert!(!bincode::serialize(&p.u1.ordinal).expect("Nat serializes").is_empty());

@@ -53,6 +53,20 @@ use crate::{FebeWorld, Stores};
 /// one head snapshot. `Send + Sync + 'static`, since the front door is shared
 /// across a transport's worker pool.
 ///
+/// WHERE IT IS EVALUATED, and what that position costs the supplier. On a
+/// READ it answers off the snapshot the request pinned, and the caller waits
+/// alone. On a WRITE it is lent to the store as the caller's VISIBILITY CLASS
+/// ([`Operation::visible_to`]) and evaluated INSIDE that store's transaction
+/// — M5's publish source gate, M7's value-keyed gates on the five link writes
+/// — under M2's applier lock. So it inherits `transact`'s precondition, which
+/// M5 states for the parameter M10 fills here and which M10 can no more check
+/// than M5 can: it MUST NOT call `transact` on that kernel (M2 answers a
+/// nested write with its reentrancy panic, the supplier's bug), and every
+/// other writer in the engine waits while it answers. A predicate that
+/// resolves its grants by asking the engine is the shape that trips both; one
+/// closed over a snapshot it already holds, as the daemon's historical door
+/// is, trips neither.
+///
 /// This is the PREDICATE a door consults, never the act of consulting it:
 /// [`Operation::consult_read`] and [`Operation::consult_write`] are the two
 /// consults, in the corpus's sense, and both answer through this.
@@ -60,6 +74,7 @@ use crate::{FebeWorld, Stores};
 /// [`ReadableWorld::readable`]: crate::ReadableWorld::readable
 /// [`Operation::consult_read`]: crate::Operation
 /// [`Operation::consult_write`]: crate::Operation
+/// [`Operation::visible_to`]: crate::Operation
 pub type ReadPredicate = dyn Fn(Option<PrincipalId>, &Address) -> bool + Send + Sync;
 
 /// M10's front-door handle (§Public interface). Owns **no** authoritative
@@ -184,7 +199,11 @@ where
     /// It is the WHOLE predicate that is supplied, not merely what the two
     /// consults ask: the same value answers every result-set filter, every
     /// per-run mask, the link-address absence rule, and the visibility class
-    /// lent to M5 and M7 on a write.
+    /// lent to M5 and M7 on a write. That last position carries the one
+    /// precondition M10 cannot check for the supplier: lent as a visibility
+    /// class, the predicate is evaluated inside the store's write transaction
+    /// under M2's applier lock, so it must not call `transact` on that kernel,
+    /// and its cost is paid by every waiting writer ([`ReadPredicate`]).
     ///
     /// Takes the closure and boxes it here, since the box is this door's
     /// storage rather than the caller's concern — [`ReadPredicate`] names the
@@ -343,6 +362,29 @@ where
     /// and the store's own residence check precedes its slot checks.
     /// `nullify.target` takes no rule here — PUB-6.9's ω-first order and the
     /// slot-5 nullify-class refusals govern it (lane 3.5).
+    ///
+    /// STALENESS, since `world` is a PRIOR snapshot and not the base the write
+    /// commits on. For four of the five source-reading writes — `copy`,
+    /// `version`, `make_link`, `edit_link` — this door is the SOLE enforcement
+    /// of PUB-6.23: their stores carry no `withheld` verdict, so what is decided
+    /// here is what is enforced, and it is decided at this snapshot rather
+    /// than at the operation's linearization point. Most of what the door
+    /// reads survives that gap because its state is MONOTONE, and can
+    /// therefore only produce a false REFUSAL and never a wrong admission: the
+    /// registry only grows (every `M3Rec` variant is an insert), publication
+    /// never transitions (PUB-1.9), so `published_target` cannot go stale at
+    /// all, and ω is stable because a fresh delegation cannot reassign an
+    /// allocated prefix. A GRANT is the clause that is not monotone — it is
+    /// revocable — so a source readable here may be unreadable when the write
+    /// commits, and the gap is REQUEST-SIZED: the consult itself, up to three
+    /// full slots of specs, and for `edit_link` the whole successor build
+    /// besides. What bounds the consequence is not this door: the arrangement
+    /// a late `copy` or `version` produces reads back masked per run by origin
+    /// (PUB-6.41), and the I-extents a late `make_link` deposits are not
+    /// secret (PUB-6.24). Closing the gap means the shape `publish` already
+    /// has — the visibility class evaluated inside the store's own transaction
+    /// (`Vstream::publish`) — which is those four stores' signatures to
+    /// change, not this door's.
     fn consult_write(&self, wc: &WriteCtx, op: &Op, world: &W) -> Result<(), Rejection> {
         let kind = op.kind();
         let WriteConsult::AfterOwnershipOf(destinations) = op.write_consult() else {
@@ -500,12 +542,17 @@ where
     ///   presented. A transport discharges this in [`Codec::parse`], where
     ///   the obligation is stated in full; a caller that assembles an [`Op`]
     ///   and calls HERE has no parser in between and owns the whole of it.
-    ///   Two reads are why it is worth owning: [`Op::Compare`] joins its two
-    ///   operand sets pairwise, and [`Op::RetrieveV`] concatenates per spec
-    ///   without dedup, so one whole-document spec repeated n times delivers
-    ///   n copies of the document. Nothing on this path enforces either — the
-    ///   one list M10 measures is the EDITLINK successor slot it builds for
-    ///   itself, against M7's per-slot budget.
+    ///   Three operations are why it is worth owning: [`Op::Compare`] joins
+    ///   its two operand sets pairwise, [`Op::RetrieveV`] concatenates per
+    ///   spec without dedup, so one whole-document spec repeated n times
+    ///   delivers n copies of the document, and [`Op::Publish`] probes every
+    ///   address of every by-reference run — a cost set by the STORED content
+    ///   those runs name rather than by the request's size, and spent inside
+    ///   the write transaction under M2's applier lock, so where the two reads
+    ///   burn one caller's core the shot stalls every writer in the engine.
+    ///   Nothing on this path enforces any of the three — the one list M10
+    ///   measures is the EDITLINK successor slot it builds for itself, against
+    ///   M7's per-slot budget.
     ///
     /// [`Codec::parse`]: crate::Codec::parse
     ///

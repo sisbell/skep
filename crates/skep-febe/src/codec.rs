@@ -28,13 +28,30 @@ pub trait Codec {
     ///
     /// **The implementer owes the request's SIZE.** M10 measures no field of
     /// the [`Op`] it is handed: `values`, `specs`, `cuts`, `regions`,
-    /// `rho1`/`rho2`, `to`, `n` and every tumbler's components and magnitudes
-    /// reach the owning store as presented. The one list M10 measures is the
-    /// EDITLINK successor slot it builds for itself, against M7's per-slot
-    /// budget; nothing it RECEIVES is measured. So this parser is the only
-    /// bound on how large a request may be, and a costed frame — a maximal
-    /// COMPARE, an `insert` whose values outrun the transaction budget —
-    /// reaches the store exactly as it arrives.
+    /// `rho1`/`rho2`, `to`, `n`, the shot's `runs` — each run's `origin`,
+    /// `i_start` and `width` — and its `base`'s `extent`, and every tumbler's
+    /// components and magnitudes reach the owning store as presented. The one
+    /// list M10 measures is the EDITLINK successor slot it builds for itself,
+    /// against M7's per-slot budget; nothing it RECEIVES is measured. So this
+    /// parser is the only bound on how large a request may be, and a costed
+    /// frame — a maximal COMPARE, an `insert` whose values outrun the
+    /// transaction budget — reaches the store exactly as it arrives.
+    ///
+    /// AND FOR ONE OPERATION, BOUNDING THE REQUEST'S SIZE DOES NOT BOUND ITS
+    /// WORK. [`Op::Publish`]'s existence check derives and probes EVERY
+    /// address of EVERY by-reference run, stopping only at the first one M4
+    /// does not hold, so the quantity is `Σ min(width, the contiguous stored
+    /// content under that run's origin)`. A per-array cap on `runs` is a
+    /// MULTIPLIER on that sum rather than a bound on it, and a per-tumbler
+    /// digit cap bounds how many digits a `width` is written with, not how far
+    /// it walks — one run of eighteen digits outruns any content a store will
+    /// ever hold. M5 prices the walk and names this layer as the owner of the
+    /// number: `Vstream::publish`'s COST paragraph ends by calling the
+    /// by-reference runs' `Σ width` one of "the numbers a route that carries
+    /// this op owes". It is spent INSIDE the write transaction, under M2's
+    /// applier lock, so it is paid by every other writer in the engine and not
+    /// by the caller alone. A parser that means to bound it caps that sum
+    /// here; nothing downstream of this door does.
     ///
     /// Shape is not the implementer's: `Address`, `Span` and `Tumbler`
     /// validate in their own constructors (and re-enter them on deserialize),
@@ -52,6 +69,7 @@ pub trait Codec {
     /// frame budget owes its own.
     ///
     /// [`Op`]: crate::Op
+    /// [`Op::Publish`]: crate::Op::Publish
     /// [`MAX_REQ_ID_BYTES`]: crate::MAX_REQ_ID_BYTES
     fn parse(&self, frame: &[u8]) -> Result<Request, ParseError>;
     /// Typed response → wire bytes. Total by signature: there is no failure

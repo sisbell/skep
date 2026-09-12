@@ -167,7 +167,16 @@ pub enum Op {
     /// supplies ([`Operation::with_read_predicate`]); M10 hands the shot
     /// through verbatim and names no policy of its own.
     ///
+    /// SIZE is the caller's here as everywhere ([`Codec::parse`]), and for
+    /// this op the request's size is not its cost: M5's existence check probes
+    /// every address of every BY-REFERENCE run, so the work is `Σ width` over
+    /// them, capped by neither of M5's two budgets — `TooManyValues` sums the
+    /// DRAFT-NATIVE widths, `TooManyRuns` counts placed runs — nor by any
+    /// field M10 measures, and it is spent inside the write transaction under
+    /// M2's applier lock.
+    ///
     /// [`Operation::with_read_predicate`]: crate::Operation::with_read_predicate
+    /// [`Codec::parse`]: crate::Codec::parse
     Publish { doc: Address, shot: Shot },
     // ── link writes (→ M7) ──
     /// MAKELINK (ASN-0120, as amended 2026-08-16): open link from three

@@ -30,7 +30,7 @@ pub const P2: Caller = Caller::Principal(PrincipalId(2));
 /// — M3's bit is folded engine-side — so it is the honest class for a suite
 /// whose verdicts never turn on what a caller may read; a test about the
 /// class-filtered lookup builds a narrower one of its own.
-pub static EVERYONE: fn(&World, &Address) -> bool = every_document;
+pub static ALL_VISIBLE: fn(&World, &Address) -> bool = every_document;
 
 fn every_document(_: &World, _: &Address) -> bool {
     true

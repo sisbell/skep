@@ -183,13 +183,13 @@ impl LinkState {
     /// or `iextent`-built — [`coverage_class`] classifies it, so a
     /// hand-built non-level-uniform `ty` panics naming that precondition
     /// (§Core data model totality).
-    pub fn observe(&self, ty: &Endset, pat: Pattern<'_>, view: View) -> Vec<Tuple> {
+    pub fn observe(&self, ty: &Endset, pattern: Pattern<'_>, view: View) -> Vec<Tuple> {
         let class = coverage_class(ty);
         let mut out = Vec::new();
         for t in self.type_slice_class(&class, view) {
             let link = self.link_at(t);
-            let f_ok = pat.from.iter().all(|probe| link.from_slot().covers(probe));
-            let g_ok = pat.to.iter().all(|probe| link.to_slot().covers(probe));
+            let f_ok = pattern.from.iter().all(|probe| link.from_slot().covers(probe));
+            let g_ok = pattern.to.iter().all(|probe| link.to_slot().covers(probe));
             if f_ok && g_ok {
                 out.push(Tuple {
                     addr: lift(t),

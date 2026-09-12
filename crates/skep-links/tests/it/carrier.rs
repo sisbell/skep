@@ -25,8 +25,8 @@ use skep_links::{
     ShippedType, FROM, TO, TYPE,
 };
 
-fn span(from: &skep_address::Address, to: &skep_address::Address) -> Span {
-    Span::from_endpoints(from.tumbler().clone(), to.tumbler())
+fn span(lo: &skep_address::Address, hi: &skep_address::Address) -> Span {
+    Span::from_endpoints(lo.tumbler().clone(), hi.tumbler())
         .expect("test spans are well-formed")
 }
 
@@ -512,10 +512,10 @@ fn coverage_class_addrs_is_i0a_stated_as_its_definition() {
             x.iter().map(|addr| addr.tumbler().clone()).collect();
         let want: im::OrdSet<skep_address::Tumbler> = denoted
             .iter()
-            .filter(|p| {
+            .filter(|t| {
                 !denoted
                     .iter()
-                    .any(|y| y != *p && skep_address::is_prefix(y, p))
+                    .any(|y| y != *t && skep_address::is_prefix(y, t))
             })
             .cloned()
             .collect();

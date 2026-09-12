@@ -477,10 +477,10 @@ mod tests {
     /// is stated without a second copy of the list to fall out of step.
     #[test]
     fn a_walk_over_all_reaches_every_shipped_class_once() {
-        let registry = TypeRegistry::build();
+        let built = TypeRegistry::build();
         let classes: HashSet<&CoverageClass> = ShippedType::ALL
             .iter()
-            .map(|&ty| registry.shipped_class(ty))
+            .map(|&ty| built.shipped_class(ty))
             .collect();
         assert_eq!(
             classes.len(),
@@ -491,14 +491,14 @@ mod tests {
 
     #[test]
     fn the_class_a_shipped_type_reports_is_the_class_of_the_endset_it_reports() {
-        let registry = TypeRegistry::build();
+        let built = TypeRegistry::build();
         for ty in ShippedType::ALL {
             assert_eq!(
-                *registry.shipped_class(ty),
-                coverage_class(registry.reserved_type(ty))
+                *built.shipped_class(ty),
+                coverage_class(built.reserved_type(ty))
             );
             // ...and each is registered under exactly that class.
-            assert!(registry.registration(registry.shipped_class(ty)).is_some());
+            assert!(built.registration(built.shipped_class(ty)).is_some());
         }
     }
 
@@ -525,23 +525,23 @@ mod tests {
     /// class carries, and treats an unregistered class as declaring nothing.
     #[test]
     fn declares_reads_the_shipped_declarations_and_nothing_else() {
-        let registry = TypeRegistry::build();
-        let retired = registry.shipped_class(ShippedType::Retired);
-        let supersedes = registry.shipped_class(ShippedType::Supersedes);
-        assert!(registry.declares(retired, Behavior::ReadFilter));
-        assert!(registry.declares(supersedes, Behavior::Walk));
-        assert!(!registry.declares(retired, Behavior::Walk));
+        let built = TypeRegistry::build();
+        let retired = built.shipped_class(ShippedType::Retired);
+        let supersedes = built.shipped_class(ShippedType::Supersedes);
+        assert!(built.declares(retired, Behavior::ReadFilter));
+        assert!(built.declares(supersedes, Behavior::Walk));
+        assert!(!built.declares(retired, Behavior::Walk));
         // No shipped class declares BH3 or BH4 in this format, which is why
         // `targets_keyed`'s join covers nothing and `stale` refuses every ty.
         for ty in ShippedType::ALL {
-            let class = registry.shipped_class(ty);
-            assert!(!registry.declares(class, Behavior::Age), "{ty:?} is idem⊤");
-            assert!(!registry.declares(class, Behavior::ReverseLookup), "{ty:?}");
+            let class = built.shipped_class(ty);
+            assert!(!built.declares(class, Behavior::Age), "{ty:?} is idem⊤");
+            assert!(!built.declares(class, Behavior::ReverseLookup), "{ty:?}");
         }
         // An unregistered class declares nothing rather than faulting.
         let unregistered = coverage_class(&enc([&ra(9)]));
-        assert!(registry.registration(&unregistered).is_none());
-        assert!(!registry.declares(&unregistered, Behavior::ReadFilter));
+        assert!(built.registration(&unregistered).is_none());
+        assert!(!built.declares(&unregistered, Behavior::ReadFilter));
     }
 
     /// The five format constants are the ghost tumblers the ruling pins, in

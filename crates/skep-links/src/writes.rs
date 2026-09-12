@@ -574,7 +574,9 @@ where
                 let world = stg.working();
                 if let Some(incumbent) = world
                     .links()
-                    .active_incumbent(&DedupKey::of(&value), |home| visibility(world, home))
+                    .active_incumbent(&DedupKey::of(&value), |candidate_home| {
+                        visibility(world, candidate_home)
+                    })
                 {
                     return Ok(Deposited::Incumbent(incumbent)); // zero-step
                 }
@@ -1014,7 +1016,7 @@ where
         &self,
         caller: Caller,
         original: &Address,
-        successor: Link,
+        successor_value: Link,
         d_s: &Address,
         d_a: &Address,
     ) -> Result<(Edit, Seq), TxnError<EditLinkError>> {
@@ -1055,7 +1057,7 @@ where
                 // the count is the SOURCE document's fragmentation rather
                 // than the request's size, which is the same expansion
                 // MAKELINK's `Resolve` slots are bounded against.
-                if successor.slots().any(|e| e.len() > MAX_SLOT_SPANS) {
+                if successor_value.slots().any(|e| e.len() > MAX_SLOT_SPANS) {
                     return Err(EditLinkError::SlotTooLarge);
                 }
                 // Level-uniformity is required of EVERY slot, not just the
@@ -1070,19 +1072,19 @@ where
                 // check, and `⟨⟩` classifies as the empty denoted antichain —
                 // neither shipped class — so it passes the DC guard untouched
                 // and comes back from the gate as `IllFormedSuccessor`.
-                let well_formed =
-                    successor.arity() == 3 && successor.slots().all(Endset::is_level_uniform);
+                let well_formed = successor_value.arity() == 3
+                    && successor_value.slots().all(Endset::is_level_uniform);
                 if !well_formed {
                     return Err(EditLinkError::IllFormedSuccessor);
                 }
                 // DC guard — total: every slot was just checked
                 // level-uniform.
-                let successor_class = coverage_class(successor.type_slot());
+                let successor_class = coverage_class(successor_value.type_slot());
                 if successor_class == *r_class {
                     return Err(EditLinkError::DcViolation);
                 }
                 if successor_class == *sup_class
-                    && !base.links().conforms_to_sup_schema(&successor)
+                    && !base.links().conforms_to_sup_schema(&successor_value)
                 {
                     return Err(EditLinkError::DcViolation);
                 }
@@ -1091,7 +1093,8 @@ where
             // and the claim's own I0 carries `successor`, minted a line above
             // in this same transaction, so no incumbent of that class exists.
             let successor =
-                emit_core(stg, self.visibility, caller, d_s, successor, Gate::Open)?.minted();
+                emit_core(stg, self.visibility, caller, d_s, successor_value, Gate::Open)?
+                    .minted();
             let claim_value = Link::triple(enc([original]), enc([&successor]), sup);
             let claim =
                 emit_core(stg, self.visibility, caller, d_a, claim_value, Gate::Managed)?.minted();

@@ -33,7 +33,10 @@ pub enum Stability {
 
 /// Read slices: per-type {active, audit} (an active read implies `L_R` —
 /// retractions shrink it), the whole-audit flag (`L_dom`), the residence
-/// domain (`is_doc`), and the BH4 home-frontier flag.
+/// domain (`is_doc`), the BH4 home-frontier flag, and the cross-type
+/// `targets_keyed` join. Read through the accessors below; a caller that
+/// wants to know what a term reads gets exactly the slices the analysis
+/// recorded.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Footprint {
     pub(crate) audit: HashSet<CoverageClass>,
@@ -45,6 +48,37 @@ pub struct Footprint {
 }
 
 impl Footprint {
+    /// The classes whose AUDIT slice (`L_K`) the term reads.
+    pub fn audit_classes(&self) -> impl Iterator<Item = &CoverageClass> + '_ {
+        self.audit.iter()
+    }
+
+    /// The classes whose ACTIVE slice the term reads (each ⊆ `L_K ∪ L_R`, so
+    /// any retraction can shrink it — `ActiveExceptions::retraction_shrinks`).
+    pub fn active_classes(&self) -> impl Iterator<Item = &CoverageClass> + '_ {
+        self.active.iter()
+    }
+
+    /// The term reads the whole typed-relation audit sublayer (`L_dom`).
+    pub fn reads_all_audit(&self) -> bool {
+        self.all_audit
+    }
+
+    /// The term reads the residence domain (`is_doc`).
+    pub fn reads_residence(&self) -> bool {
+        self.residence
+    }
+
+    /// The term reads BH4's home-wide frontier (`age`/`stale`).
+    pub fn reads_home_frontier(&self) -> bool {
+        self.home_frontier
+    }
+
+    /// The term reads the cross-type `targets_keyed` join.
+    pub fn reads_targets_keyed(&self) -> bool {
+        self.targets_keyed
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.audit.is_empty()
             && self.active.is_empty()
@@ -285,7 +319,7 @@ fn analyze_atom(catalog: &TypeCatalog, view: View, widen: bool, a: &Atom) -> Ana
         Atom::TargetsKeyed(e) => {
             let ae = a1(e);
             let mut fp = ae.fp;
-            for c in catalog.bh3() {
+            for (c, _) in catalog.bh3() {
                 fp.active.insert(c.clone());
             }
             fp.targets_keyed = true;
@@ -432,7 +466,10 @@ pub(crate) fn analyze_dom(catalog: &TypeCatalog, view: View, widen: bool, d: &Do
 
 /// The syntactic scan: no view-parameterized constituent (`is_K`/`members`/
 /// `targets_of`/`M_K`) and no UV-rewritten collection atom (`succs`/`chain`/
-/// `sources_to`/`stale`). The same answer at every view.
+/// `sources_to`/`stale`). The same answer at every view. Precondition as
+/// `analyze_term`'s: ref-free input — a referent's body is the one part a
+/// `Ref` node's own spelling cannot vouch for, so the scan runs over the
+/// flat expansion, never around a `Ref`.
 pub(crate) fn view_independent(t: &Term) -> bool {
     match t {
         Term::Var(_) | Term::Lit(_) => true,
@@ -474,7 +511,9 @@ pub(crate) fn view_independent(t: &Term) -> bool {
         }
         Term::Count(d) | Term::MaxT1(d) | Term::MinT1(d) | Term::Reflect(d) => dom_view_independent(d),
         Term::BigUnion { dom, body, .. } => dom_view_independent(dom) && view_independent(body),
-        Term::Ref { args, .. } => args.iter().all(|a| view_independent(a)),
+        Term::Ref { .. } => unreachable!(
+            "classification precondition: ref-free input (classify inline triggers or a flattened expand)"
+        ),
     }
 }
 

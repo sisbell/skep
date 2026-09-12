@@ -19,7 +19,8 @@ use skep_coordination::{
 };
 use skep_kernel::TxnError;
 use skep_links::{
-    enc, Behavior, Caller, EmitError, HasLinks, NullifyError, ShippedType, Tip, View,
+    coverage_class, enc, Behavior, Caller, EmitError, HasLinks, NullifyError, ShippedType, Tip,
+    View,
 };
 use skep_arrangement::HasM5;
 
@@ -381,6 +382,27 @@ fn classify_stability_lattice_and_view_scan() {
     let act = tc(exists(2, Dom::ActiveSlice(conc(&pred_def_ty())), tru()));
     assert!(c.classify(&act, View::Active).active_exceptions.retraction_shrinks);
     assert!(!c.classify(&ex, View::Audit).active_exceptions.retraction_shrinks);
+
+    // The footprint, read back: the slices each spelling reads and nothing
+    // else — L_K in the audit set, A_K in the active set, an audit is_K at
+    // the marker class in the audit set, L_dom the whole audit sublayer,
+    // is_doc the residence domain.
+    let pdef_class = coverage_class(&pred_def_ty());
+    let marker_class = coverage_class(&marker_ty());
+    let fp_ex = c.classify(&ex, View::Audit).footprint;
+    assert!(fp_ex.audit_classes().any(|k| *k == pdef_class));
+    assert_eq!(fp_ex.active_classes().count(), 0);
+    assert!(!fp_ex.reads_all_audit() && !fp_ex.reads_residence());
+    assert!(!fp_ex.reads_home_frontier() && !fp_ex.reads_targets_keyed());
+    let fp_act = c.classify(&act, View::Active).footprint;
+    assert!(fp_act.active_classes().any(|k| *k == pdef_class));
+    assert_eq!(fp_act.audit_classes().count(), 0);
+    let fp_isk = c.classify(&isk, View::Audit).footprint;
+    assert!(fp_isk.audit_classes().any(|k| *k == marker_class));
+    let ldom = tc(exists(2, Dom::LinkDom, tru()));
+    assert!(c.classify(&ldom, View::Audit).footprint.reads_all_audit());
+    let isdoc = tc1(Term::Atom(Atom::IsDoc(at(var(1)))));
+    assert!(c.classify(&isdoc, View::Audit).footprint.reads_residence());
 }
 
 // ───────────────────────── definitions lifecycle ─────────────────────────
@@ -521,14 +543,20 @@ fn supersede_gates_lineage_and_fence_drift() {
         c.supersede(&doc1(), &ca(50), c.type_check(vec![], tru()).expect("term")),
         Err(DefineError::OldStartNotEverRegistered(_))
     ));
-    let tup_term = c.type_check_trigger(vec![(v(1), Sort::Tup)], tru()).expect("trigger term");
-    assert!(matches!(c.supersede(&doc1(), &ca(50), tup_term), Err(DefineError::TupParameter(_))));
 
     let (p_start, _) = c
         .define_predicate(&doc1(), c.type_check(vec![], tru()).expect("closed True"))
         .expect("define P");
     let s = k.snapshot();
     assert!(matches!(c.current_version(&p_start, &s), Tip::Sink(x) if x == p_start));
+
+    // The Codom-only rule is the define path's one door: a Tup-parameter
+    // successor is refused before any insert — content count unchanged, no
+    // orphan successor, no lineage claim.
+    let tup_term = c.type_check_trigger(vec![(v(1), Sort::Tup)], tru()).expect("trigger term");
+    let n0 = k.snapshot().world().m5().content_count(&doc1());
+    assert!(matches!(c.supersede(&doc1(), &p_start, tup_term), Err(DefineError::TupParameter(_))));
+    assert_eq!(k.snapshot().world().m5().content_count(&doc1()), n0);
 
     // DRIFT TRIPWIRE (report: "supersede vs M7's SupersessionClass fence"):
     // the emit route the M9 design resolves to (Conflicts §4) is fenced by
@@ -588,6 +616,25 @@ fn certify_stable_cvalid_legs() {
     );
     let (sw, _) = c.define_predicate(&doc1(), tw).expect("define widened");
     c.certify_stable(&doc1(), &sw).expect("ST⁺ certifies the bound-ℕ-parameter threshold");
+
+    // ST⁺ is not compositional over references: (ii) and (iii) are decided
+    // over the FLAT expansion, so a def that is nothing but a reference
+    // answers as its referent does — stable through s0, view-dependent
+    // through sv, unstable through sn — with the referent's parameter bound
+    // by the expansion (the widened sw, applied to a literal, certifies).
+    let define_ref = |target: &skep_address::Address, args: Vec<Term>| {
+        let args = args.into_iter().map(at).collect();
+        let tt = c.type_check(vec![], Term::Ref { addr: target.clone(), args }).expect("ref term");
+        c.define_predicate(&doc1(), tt).expect("define ref")
+    };
+    let (r0, _) = define_ref(&s0, vec![]);
+    c.certify_stable(&doc1(), &r0).expect("a reference to a stable def is stable");
+    let (rv, _) = define_ref(&sv, vec![]);
+    assert!(matches!(c.certify_stable(&doc1(), &rv), Err(CertifyError::ViewDependent)));
+    let (rn, _) = define_ref(&sn, vec![]);
+    assert!(matches!(c.certify_stable(&doc1(), &rn), Err(CertifyError::NotStable)));
+    let (rw, _) = define_ref(&sw, vec![lit_nat(3)]);
+    c.certify_stable(&doc1(), &rw).expect("the expansion binds the referent's threshold parameter");
 
     // (0)/(ii) ordering: a retracted def is NotActive.
     c.retract_pred(&doc1(), &s0).expect("retract");

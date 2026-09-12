@@ -17,10 +17,11 @@ use skep_content::{ContentWrite, HasContent};
 
 use crate::ast::{Atom, Term, TypeRef, VarId};
 use crate::check::{Checker, Ctx, TypedDom, TypedTerm};
-use crate::coordinator::{CheckedRule, CheckedTrigger, Coordinator, DefStatus};
+use crate::coordinator::{CheckedRule, CheckedTrigger, Coordinator};
 use crate::dynamics::{analyze_dom, analyze_term, Footprint};
 use crate::error::{FireError, RuleError};
 use crate::eval::{enum_dom, eval_term, truthy, Elem};
+use crate::memo::DefStatus;
 use crate::rule::{
     Enabled, FireAction, FireOutcome, Rule, RuleCertification, RuleId, ScopeBody, StepOutcome,
     TriggerRef,
@@ -64,17 +65,10 @@ where
     pub fn certify_rule(&self, rule: &Rule) -> Result<RuleCertification, RuleError> {
         let (dom, trigger) = self.validate_rule(rule)?;
         // Leg (a): trigger ∈ SF at the declared view.
-        let (param, flat_owned): (VarId, Option<Term>) = match &trigger {
-            CheckedTrigger::Inline { param, term } => (param.clone(), Some(term.evaluable.as_ref().clone())),
-            CheckedTrigger::Def { addr } => {
-                let entry = match self.def_status(addr) {
-                    DefStatus::Defined(e) => e,
-                    _ => return Err(RuleError::DefTriggerUnregistered(addr.clone())),
-                };
-                (entry.sig.params[0].0.clone(), Some(self.flatten_entry(&entry)))
-            }
-        };
-        let flat = flat_owned.expect("both arms fill the flat trigger");
+        let (param, flat) = self.trigger_flat(&trigger).ok_or_else(|| match &trigger {
+            CheckedTrigger::Def { addr } => RuleError::DefTriggerUnregistered(addr.clone()),
+            CheckedTrigger::Inline { .. } => unreachable!("an Inline trigger always flattens"),
+        })?;
         let a = analyze_term(&self.catalog, rule.view, false, &flat);
         let sf = a.sf;
         // Leg (b): the Marker pattern — the emitted tuple's slot-coverage is
@@ -92,6 +86,25 @@ where
             Ok(RuleCertification::CertifiedTerminating)
         } else {
             Ok(RuleCertification::Uncertified { sf, marker, grow_only })
+        }
+    }
+
+    /// A checked trigger as the static analyses read it: its parameter and
+    /// its ref-free term — an `Inline` trigger's evaluable projection, a
+    /// `Def` trigger's flat expansion. `None` iff a `Def` trigger's start no
+    /// longer has a defined signature (its content poisoned since
+    /// registration — a PR-DISC breach; the caller names the consequence).
+    fn trigger_flat(&self, trigger: &CheckedTrigger) -> Option<(VarId, Term)> {
+        match trigger {
+            CheckedTrigger::Inline { param, term } => {
+                Some((param.clone(), term.evaluable.as_ref().clone()))
+            }
+            CheckedTrigger::Def { addr } => match self.def_status(addr) {
+                DefStatus::Defined(e) => {
+                    Some((e.sig.params[0].0.clone(), self.flatten_entry(&e)))
+                }
+                _ => None,
+            },
         }
     }
 
@@ -343,6 +356,12 @@ where
     /// `Err(DraftBoundary(doc))` (the action's home or the argument's
     /// document unreadable at guest class) → `Err(HomeNotRegistered)` →
     /// `Err(Emit | Nullify)`.
+    ///
+    /// PRECONDITION: `e.rule` is a `RuleId` this `Coordinator` registered —
+    /// an `Enabled` comes from this coordinator's own `next_enabled`, or is
+    /// aimed by hand at a known rule; an unregistered id is a precondition
+    /// violation and PANICS, like `decide` (`fire_count`, a monitor, answers
+    /// 0 for the same id — a count, not a fire).
     pub fn fire(&self, e: &Enabled) -> Result<FireOutcome, FireError> {
         let rule = self
             .rules
@@ -397,7 +416,7 @@ where
         // The writer at GUEST class (lane 3.3b, PUB-6.28): the fire's
         // idempotency lookup sees only guest-readable incumbents, so a fire
         // commits byte-identically to a world with no drafts.
-        let ls = (self.mk_link_store)(self.kernel.as_ref(), &*self.guest);
+        let ls = self.link_writer();
         // Rule fires run as `Caller::System` (the ownership ruling's
         // automation path, 2026-08-16): M9 ⟂ M10 — a fire carries no wire
         // principal, and its authority is the operator's certified rule set,
@@ -532,21 +551,16 @@ where
         if n == 0 {
             return Vec::new();
         }
-        // Trigger footprints at each rule's declared view.
+        // Trigger footprints at each rule's declared view (a Def trigger
+        // whose start has been poisoned since registration reads nothing —
+        // an empty footprint, so it is armed by no one).
         let fps: Vec<Footprint> = self
             .rules
             .iter()
-            .map(|r| match &r.trigger {
-                CheckedTrigger::Inline { term, .. } => {
-                    analyze_term(&self.catalog, r.view, false, term.evaluable.as_ref()).fp
-                }
-                CheckedTrigger::Def { addr } => match self.def_status(addr) {
-                    DefStatus::Defined(e) => {
-                        let flat = self.flatten_entry(&e);
-                        analyze_term(&self.catalog, r.view, false, &flat).fp
-                    }
-                    _ => Footprint::default(),
-                },
+            .map(|r| {
+                self.trigger_flat(&r.trigger)
+                    .map(|(_, flat)| analyze_term(&self.catalog, r.view, false, &flat).fp)
+                    .unwrap_or_default()
             })
             .collect();
         let emitted: Vec<_> = self

@@ -21,12 +21,13 @@ pub const EXPANSION_NAME_BASE: u32 = 1 << 31;
 
 /// A PL variable name.
 ///
-/// The reservation is structural, not merely intended: [`VarId::new`] — the
-/// sole public constructor — rejects the reserved range, expansion names are
-/// minted only by the crate-private flattening counter (§Internal 4), and the
-/// def codec rejects a reserved-range `VarId` in a decoded body
-/// (`ParseFailed`), so PR-ENC's body-binder-disjointness holds by
-/// construction.
+/// The reservation is structural, not merely intended: the type has exactly
+/// two constructors, one per side of the watershed — [`VarId::new`], the
+/// sole public one, rejects the reserved range; [`VarId::expansion`], the
+/// crate-private one, inhabits nothing else and is what the flattener's
+/// counter mints through (§Internal 4) — and the def codec rejects a
+/// reserved-range `VarId` in a decoded body (`ParseFailed`), so PR-ENC's
+/// body-binder-disjointness holds by construction.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VarId(pub(crate) u32);
 
@@ -39,6 +40,18 @@ impl VarId {
         } else {
             Some(VarId(v))
         }
+    }
+
+    /// The `n`-th reserved expansion name, `EXPANSION_NAME_BASE + n` — the
+    /// one mint site for the flat reference expansion's fresh names
+    /// (PR3/PR3a). Panics only on supply exhaustion (2³¹ names in one
+    /// expansion).
+    pub(crate) fn expansion(n: u32) -> VarId {
+        VarId(
+            EXPANSION_NAME_BASE
+                .checked_add(n)
+                .expect("expansion-name supply exhausted"),
+        )
     }
 }
 

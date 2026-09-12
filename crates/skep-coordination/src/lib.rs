@@ -37,7 +37,8 @@
 //! * ordering/durability/recovery — M2;
 //! * byte content, arrangement, link values, address minting, registry
 //!   mutation — M4/M5/M7/M3 (M9 builds **no second `TypeRegistry`**: it
-//!   projects the ONE engine-built instance, validate-once-or-fail);
+//!   projects the ONE engine-built instance into its frozen catalog at
+//!   construction and consults nothing else for type knowledge after);
 //! * ownership consultation — residence reduces to
 //!   `is_registered_document`;
 //! * the activation binding (who may register rules), bounded-input
@@ -67,6 +68,8 @@ mod dynamics;
 mod engine;
 mod error;
 mod eval;
+mod expand;
+mod memo;
 mod rule;
 mod value;
 

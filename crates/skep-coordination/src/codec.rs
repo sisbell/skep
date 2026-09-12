@@ -724,11 +724,11 @@ mod tests {
     }
 
     /// A reserved-range `VarId` in stored content is not a valid parse
-    /// (PR-ENC's reserved supply): craft it via the crate-internal
-    /// constructor path.
+    /// (PR-ENC's reserved supply): the first expansion name, minted through
+    /// the crate-private constructor, must not survive a round trip.
     #[test]
     fn decode_rejects_reserved_range_varid() {
-        let reserved = VarId(EXPANSION_NAME_BASE);
+        let reserved = VarId::expansion(0);
         let body = Term::Var(reserved);
         let bytes = encode(&[], &body).expect("encode does not police body vars");
         assert_eq!(decode(&bytes), Err(Malformed));

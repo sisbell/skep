@@ -27,24 +27,28 @@
 //! delegator's, applied here.
 
 use std::slice;
+use std::sync::Arc;
 
 use im::OrdSet;
 use skep_address::{document_of, is_prefix, validate, Address, Nat, Tumbler};
 use skep_links::{
-    coverage_class, registry, Behavior, CoverageClass, Endset, LinkState, NotBh4, Pattern, Shape,
-    ShippedType, Tip, Tuple, View, Visibility,
+    CoverageClass, Endset, LinkState, NotBh4, Pattern, Tip, Tuple, View, Visibility,
 };
 use skep_namespace::M3State;
 
 use crate::ast::{Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId};
 use crate::catalog::TypeCatalog;
+use crate::memo::DefEntry;
 use crate::value::{Env, Value};
 
-/// Referent supplier for `evaluate_def`'s DAG-recursive driver — `eval`'s
-/// walk plus the one `Ref` arm (§Internal 4/Conflicts §5). `None` for the
-/// public `eval`/`decide`, whose ref-free precondition makes the arm a panic.
+/// Referent supplier for the DAG-recursive drivers over ref-bearing bodies —
+/// `evaluate_def`'s denotation (`eval`'s walk plus the one `Ref` arm,
+/// §Internal 4/Conflicts §5) and the flat expansion `certify_stable` runs.
+/// `None` for the public `eval`/`decide`, whose ref-free precondition makes
+/// the arm a panic. A `Some` is the memo's own `Arc` — the signature and the
+/// expanded body of a defined referent, never a copy.
 pub(crate) trait DefSource {
-    fn resolve_def(&self, addr: &Address) -> Option<(Vec<(VarId, crate::value::Sort)>, crate::ast::ArcTerm)>;
+    fn resolve_def(&self, addr: &Address) -> Option<Arc<DefEntry>>;
 }
 
 /// THE TRIGGER'S LOOK AT GUEST CLASS (PUB round 2, lane 4.1): M7's read
@@ -88,9 +92,10 @@ pub(crate) trait DefSource {
 /// `members`, `targets_of` (D1/D3 over the visible slice); the BH2 walk
 /// family `succs`/`chain`/`tip`/`is_in_chain` (rebuilt over the VISIBLE
 /// active `[K_sup]` claims, so a draft-homed claim moves no walk); the BH3
-/// family `sources_to`/`target_of`/`targets_keyed`; and BH4's `age`/`stale`
-/// (dormant in this format, filtered the same way). Signatures mirror M7's so
-/// the evaluator's call sites read as before.
+/// pair `sources_to`/`target_of` (the `targets_keyed` join is `EvalCtx`'s,
+/// over the catalog's BH3 classes, each answered by `target_of` here); and
+/// BH4's `age`/`stale` (dormant in this format, filtered the same way).
+/// Signatures mirror M7's so the evaluator's call sites read as before.
 pub(crate) struct GuestLinks<'a, W> {
     world: &'a W,
     state: &'a LinkState,
@@ -138,13 +143,13 @@ impl<'a, W> GuestLinks<'a, W> {
     }
 
     /// D1 over the visible slice: `⋃ F.addrs()`, deduplicated, Tumbler order
-    /// — M7's own equation, at `Active` or `Audit`. `Default` reads as
-    /// `Active`: the UV rewrite is `EvalCtx`'s own per-type filter, which
-    /// reads the active set and subtracts through this view's `is_k`, so no
-    /// caller here ever asks this read for M7's aggregate subtraction.
+    /// — M7's own equation, a SLICE read at `Active` or `Audit` (the UV
+    /// rewrite is `EvalCtx`'s own per-type filter over the active read, so
+    /// `Default` names no slice here and, as at M7's `observe`, reads as
+    /// `Active`).
     pub(crate) fn members(&self, ty: &Endset, view: View) -> Vec<Address> {
         let mut out: OrdSet<Tumbler> = OrdSet::new();
-        for t in self.observe(ty, Pattern::default(), default_to_active(view)) {
+        for t in self.observe(ty, Pattern::default(), view) {
             for m in t.from.addrs() {
                 out.insert(m.clone());
             }
@@ -154,14 +159,10 @@ impl<'a, W> GuestLinks<'a, W> {
 
     /// D3 over the visible slice: `⋃ G.addrs()` of the tuples whose F COVERS
     /// `x`, deduplicated, Tumbler order (M7's own coverage regime for this
-    /// read). `Default` reads as `Active`, as for `members`.
+    /// read) — a slice read at `Active` or `Audit`, as `members`.
     pub(crate) fn targets_of(&self, ty: &Endset, x: &Address, view: View) -> Vec<Address> {
         let mut out: OrdSet<Tumbler> = OrdSet::new();
-        for t in self.observe(
-            ty,
-            Pattern { from: slice::from_ref(x.tumbler()), to: &[] },
-            default_to_active(view),
-        ) {
+        for t in self.observe(ty, Pattern { from: slice::from_ref(x.tumbler()), to: &[] }, view) {
             for g in t.to.addrs() {
                 out.insert(g.clone());
             }
@@ -170,13 +171,11 @@ impl<'a, W> GuestLinks<'a, W> {
     }
 
     // ───────────── BH2 — the walk over the VISIBLE operative claims ─────────────
-
-    /// M7's v1 walk-serving scope, restated: the walk family serves the
-    /// shipped `Supersedes` class and no other (the type checker admits BH2
-    /// atoms only there — `UnservedWalkClass` otherwise).
-    fn serves_walk(ty: &Endset) -> bool {
-        coverage_class(ty) == coverage_class(registry().reserved_type(ShippedType::Supersedes))
-    }
+    //
+    // Served for whatever class the caller names: the type checker admits
+    // the walk atoms only at the shipped `Supersedes` key (`UnservedWalkClass`
+    // otherwise — M7 v1's serving scope), so the class question is decided
+    // once, at check time, and never re-asked here.
 
     /// The visible OPERATIVE claim set: the active `[K_sup]` tuples of
     /// readable homes. Edges run `old → new` by DENOTATION on both slots,
@@ -220,33 +219,21 @@ impl<'a, W> GuestLinks<'a, W> {
         }
     }
 
-    /// BH2 forward step over the visible operative claims (Tumbler order);
-    /// empty outside the served class.
+    /// BH2 forward step over the visible operative claims (Tumbler order).
     pub(crate) fn succs(&self, ty: &Endset, x: &Address) -> Vec<Address> {
-        if !Self::serves_walk(ty) {
-            return Vec::new();
-        }
         let claims = self.visible_claims(ty);
         Self::succs_operative(&claims, x.tumbler()).iter().map(lift).collect()
     }
 
-    /// BH2 chain over the visible operative claims; empty outside the served
-    /// class.
+    /// BH2 chain over the visible operative claims.
     pub(crate) fn chain(&self, ty: &Endset, x: &Address) -> Vec<Address> {
-        if !Self::serves_walk(ty) {
-            return Vec::new();
-        }
         let claims = self.visible_claims(ty);
         Self::walk_sup(&claims, x.tumbler()).0.iter().map(lift).collect()
     }
 
     /// BH2 head over the visible operative claims: `Sink(head)` at a
-    /// successor-free node, `Indeterminate` at a branch or cycle — and
-    /// outside the served class (no positive head is fabricated).
+    /// successor-free node, `Indeterminate` at a branch or cycle.
     pub(crate) fn tip(&self, ty: &Endset, x: &Address) -> Tip {
-        if !Self::serves_walk(ty) {
-            return Tip::Indeterminate;
-        }
         let claims = self.visible_claims(ty);
         match Self::walk_sup(&claims, x.tumbler()).1 {
             Some(sink) => Tip::Sink(lift(&sink)),
@@ -294,27 +281,6 @@ impl<'a, W> GuestLinks<'a, W> {
         survivor.to.single_denoted().map(lift)
     }
 
-    /// BH3 join: `target_of` across every BH3-registered Binary class of the
-    /// format's registry (none in this format — `targets_keyed` is out of the
-    /// vocabulary, and the type checker says so), keyed by coverage class.
-    pub(crate) fn targets_keyed(&self, source: &Address) -> im::HashMap<CoverageClass, Address> {
-        let reg = registry();
-        let mut out = im::HashMap::new();
-        for shipped in ShippedType::ALL {
-            let ty = reg.reserved_type(shipped);
-            let class = coverage_class(ty);
-            let bh3 = reg.registration(&class).is_some_and(|r| {
-                r.shape == Shape::Binary && r.behaviors.contains(&Behavior::ReverseLookup)
-            });
-            if bh3 {
-                if let Some(target) = self.target_of(ty, source) {
-                    out.insert(class, target);
-                }
-            }
-        }
-        out
-    }
-
     // ────────────────────────── BH4 — over the visible slice ──────────────────────────
 
     /// BH4 age: M7's own for a link of a readable home, ⊥ otherwise (a
@@ -331,15 +297,6 @@ impl<'a, W> GuestLinks<'a, W> {
     pub(crate) fn stale(&self, ty: &Endset, horizon: u64) -> Result<Vec<Address>, NotBh4> {
         let stale = self.state.stale(ty, horizon)?;
         Ok(stale.into_iter().filter(|a| self.home_readable(a)).collect())
-    }
-}
-
-/// `Default → Active` for the view's slice reads (`Default` is the UV
-/// rewrite's, which `EvalCtx` performs itself).
-fn default_to_active(view: View) -> View {
-    match view {
-        View::Default => View::Active,
-        other => other,
     }
 }
 
@@ -438,28 +395,20 @@ impl<'a, W> EvalCtx<'a, W> {
             .any(|(j_class, j_endset)| j_class != k_class && self.links.is_k(j_endset, x))
     }
 
-    /// `members(K, v)` (D1 / V-AUD / UV): active from the view's `members`;
-    /// audit REBUILT from `observe(K, ⟨⟩, Audit)` per V-AUD's own equations
-    /// (⋃ F.addrs()); default = active minus the other-BH1-filtered elements.
-    /// Every read is the guest-class view's (lane 4.1), so a draft-homed
-    /// tuple contributes no member at any view.
+    /// `members(K, v)` (D1 / V-AUD / UV): active and audit are the view's
+    /// slice read at that view (⋃ F.addrs() over `observe(K, ⟨⟩, v)` —
+    /// V-AUD's own equation is D1's over the audit slice); default = active
+    /// minus the other-BH1-filtered elements. Every read is the guest-class
+    /// view's (lane 4.1), so a draft-homed tuple contributes no member at
+    /// any view.
     fn members_at(&self, k: &TypeKey, view: View) -> OrdSet<Tumbler> {
         match view {
-            View::Active => self
+            View::Active | View::Audit => self
                 .links
-                .members(&k.0, View::Active)
+                .members(&k.0, view)
                 .into_iter()
                 .map(|a| a.tumbler().clone())
                 .collect(),
-            View::Audit => {
-                let mut out = OrdSet::new();
-                for t in self.links.observe(&k.0, Pattern::default(), View::Audit) {
-                    for a in t.from.addrs() {
-                        out.insert(a.clone());
-                    }
-                }
-                out
-            }
             View::Default => {
                 let k_class = self.class_of(k).clone();
                 self.members_at(k, View::Active)
@@ -526,6 +475,21 @@ impl<'a, W> EvalCtx<'a, W> {
         }
         let k_class = self.class_of(k).clone();
         set.into_iter().filter(|e| !self.filtered_other(&k_class, e)).collect()
+    }
+
+    /// BH3 join: `target_of` across the catalog's BH3-attached Binary
+    /// classes — the same list the footprint analysis charges the atom with
+    /// (none in this format; the type checker keeps the atom out of the
+    /// vocabulary while that holds) — keyed by coverage class, each answered
+    /// over the visible slice.
+    fn targets_keyed_at(&self, source: &Address) -> im::HashMap<CoverageClass, Address> {
+        let mut out = im::HashMap::new();
+        for (class, endset) in self.catalog.bh3() {
+            if let Some(target) = self.links.target_of(endset, source) {
+                out.insert(class.clone(), target);
+            }
+        }
+        out
     }
 }
 
@@ -622,15 +586,15 @@ pub(crate) fn eval_term<W>(cx: &EvalCtx<'_, W>, env: &Env, view: View, t: &Term)
                      ref-bearing terms evaluate only through evaluate_def"
                 );
             };
-            let (params, body) = defs
+            let referent = defs
                 .resolve_def(addr)
                 .expect("WT-ref: every referent of a checked body has a defined signature");
             let mut inner = Env::empty();
-            for ((v, _), arg) in params.iter().zip(args.iter()) {
+            for ((v, _), arg) in referent.sig.params.iter().zip(args.iter()) {
                 let val = eval_term(cx, env, view, arg);
                 inner = inner.bind(v.clone(), val);
             }
-            eval_term(cx, &inner, view, &body)
+            eval_term(cx, &inner, view, &referent.expanded)
         }
     }
 }
@@ -711,7 +675,7 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, view: View, a: &Atom) -> Value {
         }
         Atom::TargetsKeyed(e) => {
             let x = as_addr(eval_term(cx, env, view, e));
-            Value::Map(cx.links.targets_keyed(&x))
+            Value::Map(cx.targets_keyed_at(&x))
         }
         // BH4 totalization (ASN-0129): age(a) = ⊥ exactly when `a` is not
         // the address of an ACTIVE K-tuple — a tuple-identity test, not

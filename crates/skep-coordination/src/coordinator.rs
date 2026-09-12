@@ -4,50 +4,27 @@
 //! evaluator; everything it holds is a recomputable hint or an in-memory
 //! working set (§Core data model).
 
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
-use skep_address::{Address, Tumbler};
+use skep_address::Address;
 use skep_arrangement::{HasM5, M5Rec, Vstream};
 use skep_content::{ContentWrite, HasContent};
 use skep_kernel::{Kernel, Snapshot, WorldState};
 use skep_links::{
-    Endset, HasLinks, LinkRec, LinkWriter, Pattern, ShippedType,
-    TypeRegistry, View, Visibility,
+    Endset, HasLinks, LinkRec, LinkWriter, ShippedType, TypeRegistry, View, Visibility,
 };
 use skep_namespace::{HasM3, M3Rec};
 
 use crate::ast::{Term, VarId};
 use crate::catalog::TypeCatalog;
 use crate::check::{Checker, Ctx, TypedTerm};
-use crate::codec;
+use crate::defs::parse_def;
 use crate::dynamics::{classify_term, Dynamics};
 use crate::error::TypeError;
 use crate::eval::{eval_term, DefSource, EvalCtx, GuestLinks};
+use crate::memo::{Breach, DefEntry, DefMemo, DefStatus};
 use crate::rule::RuleId;
 use crate::value::{Env, Signature, Sort, Value};
-
-/// A derived, immutable-once-defined def hint: the checked signature and the
-/// `Reg`-expanded evaluable body (§Core data model, DefMemo).
-pub(crate) struct DefEntry {
-    pub(crate) sig: Signature,
-    pub(crate) expanded: crate::ast::ArcTerm,
-}
-
-/// A memo cell: `Defined` and `Poisoned` are both PERMANENT (content
-/// immutable, ever-registration monotone; freeze-on-breach for the poison —
-/// §Internal 4). A never-registered start is never cached.
-pub(crate) enum MemoEntry {
-    Defined(Arc<DefEntry>),
-    Poisoned,
-}
-
-/// A def-status answer, distinguishing CVALID (0)'s two `None` causes.
-pub(crate) enum DefStatus {
-    Defined(Arc<DefEntry>),
-    Poisoned,
-    Unregistered,
-}
 
 /// One registered rule in the working set (§Internal 5): the checked
 /// `TypedDom`, the validated trigger, the declared view, the action.
@@ -68,32 +45,28 @@ pub(crate) enum CheckedTrigger {
 /// registered def's reference DAG is acyclic (PR2 — refs name strictly-earlier
 /// defs), so this trips only on a PR-DISC-breach cycle, where returning
 /// "no signature yet" makes the outer derivation fail WT and freeze the start
-/// poisoned (§Internal 4).
+/// poisoned (§Internal 4). The depth is a property of the derivation CHAIN
+/// and travels with it: each derivation resolves its referents one level
+/// deeper than itself.
 const MAX_SIG_DEPTH: u32 = 512;
-
-std::thread_local! {
-    static SIG_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-}
 
 /// M9's one public handle: PL (group A), predicate definitions (group B), and
 /// the reactive rule engine (group C). Owns no authoritative state — the
-/// `DefMemo` is an interior-mutable recomputable hint (a `RwLock`, never a
-/// `RefCell`: the `&self` signature/define paths of a shared `Coordinator`
-/// need `Sync`); the rule registry and rotation cursor are the `&mut self`
-/// working set.
+/// `DefMemo` is an interior-mutable recomputable hint; the rule registry
+/// and rotation cursor are the `&mut self` working set.
 #[allow(clippy::type_complexity)] // the factory fields carry the interface's types verbatim
 pub struct Coordinator<W: WorldState> {
     pub(crate) kernel: Arc<Kernel<W>>,
     pub(crate) catalog: TypeCatalog,
-    pub(crate) memo: RwLock<HashMap<Tumbler, MemoEntry>>,
+    pub(crate) memo: DefMemo,
     pub(crate) rules: Vec<CheckedRule>,
     pub(crate) next_rule: u64,
     pub(crate) cursor: usize,
     pub(crate) mk_vstream: Box<dyn for<'k> Fn(&'k Kernel<W>) -> Vstream<'k, W> + Send + Sync>,
     /// The M7 write-handle factory: a writer over the kernel AT A VISIBILITY
-    /// CLASS (lane 3.3b) — every construction M9 makes hands it `guest`, so
-    /// the value-keyed gates of every fire and every def write run at guest
-    /// class.
+    /// CLASS (lane 3.3b). Called only by [`Coordinator::link_writer`], which
+    /// hands it `guest`, so the value-keyed gates of every fire and every
+    /// def write run at guest class.
     pub(crate) mk_link_store: Box<
         dyn for<'k> Fn(&'k Kernel<W>, &'k Visibility<'k, W>) -> LinkWriter<'k, W> + Send + Sync,
     >,
@@ -153,7 +126,7 @@ where
         Coordinator {
             kernel,
             catalog,
-            memo: RwLock::new(HashMap::new()),
+            memo: DefMemo::new(),
             rules: Vec::new(),
             next_rule: 1,
             cursor: 0,
@@ -165,8 +138,9 @@ where
 
     /// M9's own cached catalog accessor (no snapshot) — the `&Endset` every
     /// `emit(d, reserved_type(…), …)` / PL `TypeKey` construction reads.
-    /// Distinct from M7's snapshot-bound `LinkState::reserved_type`;
-    /// coverage-equal to it by the construction-time validation.
+    /// Distinct from M7's snapshot-bound `LinkState::reserved_type`, and
+    /// byte-identical to it: the catalog is a projection of the same
+    /// registry.
     pub fn reserved_type(&self, t: ShippedType) -> &Endset {
         self.catalog.reserved(t)
     }
@@ -186,6 +160,16 @@ where
             m3: w.m3(),
             defs,
         }
+    }
+
+    /// The M7 write handle, AT GUEST CLASS (lane 3.3b, PUB-6.28) — the write
+    /// side's twin of [`Coordinator::eval_ctx`], and the ONE construction
+    /// site: every `emit`/`nullify` M9 makes (`register_pred`, `supersede`,
+    /// `certify_stable`, `retract_pred`, and a rule's fire) goes through a
+    /// writer built here, so M7's idempotency and dedup lookups see only
+    /// guest-readable incumbents and no write can be built class-free.
+    pub(crate) fn link_writer(&self) -> LinkWriter<'_, W> {
+        (self.mk_link_store)(self.kernel.as_ref(), &*self.guest)
     }
 
     // ──────────────────── A. The predicate language ────────────────────
@@ -287,100 +271,93 @@ where
 
     // ───────────────── internal: the DefMemo (§Internal 4) ─────────────────
 
-    /// Memo-or-derive: `Some`-or-permanent-poisoned only; a never-registered
-    /// start is never cached (a later registration must surface). The
-    /// miss-path pins its OWN snapshot to check ever-registration
-    /// (`is_K(pdef, start)@audit` through the one `observe`-honors-`Audit`
-    /// seam), then derives from immutable content, recursing through referent
-    /// signatures (well-founded by PR2). Concurrent fills race only to write
-    /// the same value.
-    pub(crate) fn def_status(&self, start: &Address) -> DefStatus {
-        {
-            let memo = self.memo.read().expect("DefMemo lock");
-            if let Some(e) = memo.get(start.tumbler()) {
-                return match e {
-                    MemoEntry::Defined(d) => DefStatus::Defined(Arc::clone(d)),
-                    MemoEntry::Poisoned => DefStatus::Poisoned,
-                };
-            }
-        }
-
-        let depth = SIG_DEPTH.with(|d| {
-            let v = d.get();
-            d.set(v + 1);
-            v
-        });
-        let status = if depth >= MAX_SIG_DEPTH {
-            // Breach-only cycle bound: answer "no signature" without
-            // memoizing; the outer derivation fails WT and freezes poisoned.
-            DefStatus::Unregistered
-        } else {
-            self.derive_def(start)
-        };
-        SIG_DEPTH.with(|d| d.set(d.get() - 1));
-        status
+    /// WT + WT-ref over a parsed signed term, into the memo's entry shape:
+    /// referents resolve through the signature memo at derivation depth
+    /// `depth` (a chain that runs past `MAX_SIG_DEPTH` is a PR-DISC-breach
+    /// cycle and reads as "no signature", failing WT here).
+    pub(crate) fn check_def(
+        &self,
+        params: Vec<(VarId, Sort)>,
+        body: Term,
+        depth: u32,
+    ) -> Result<DefEntry, TypeError> {
+        let resolve = |a: &Address| self.signature_at(a, depth);
+        let checker = Checker { catalog: &self.catalog, resolve: &resolve };
+        let ctx: Ctx = params.iter().cloned().collect();
+        let checked = checker.check_term(&ctx, &body)?;
+        Ok(DefEntry { sig: Signature { params, result: checked.sort }, expanded: checked.term })
     }
 
-    fn derive_def(&self, start: &Address) -> DefStatus {
+    /// Memo-or-derive at the top of a derivation chain.
+    pub(crate) fn def_status(&self, start: &Address) -> DefStatus {
+        self.def_status_at(start, 0)
+    }
+
+    /// Memo-or-derive as the `depth`-th nested derivation: a memo hit answers
+    /// at any depth; past the breach-only bound the answer is "no signature"
+    /// (never memoized — the outer derivation freezes poisoned, not this
+    /// one); otherwise derive from immutable content.
+    fn def_status_at(&self, start: &Address, depth: u32) -> DefStatus {
+        if let Some(hit) = self.memo.get(start) {
+            return hit;
+        }
+        if depth >= MAX_SIG_DEPTH {
+            return DefStatus::Unregistered;
+        }
+        self.derive_def(start, depth)
+    }
+
+    /// The miss path: pin its OWN snapshot to check ever-registration (a
+    /// never-registered start is never cached — a later registration must
+    /// surface), then derive from immutable content, recursing through
+    /// referent signatures one level deeper (well-founded by PR2). An
+    /// ever-registered start whose content fails the parse or WT fills the
+    /// memo poisoned — freeze-on-breach (PR-DISC, §Internal 4).
+    fn derive_def(&self, start: &Address, depth: u32) -> DefStatus {
         let snap = self.kernel.snapshot();
         let w = snap.world();
-        let pdef = self.catalog.reserved(ShippedType::PredDef);
-        let ever = !w
-            .links()
-            .observe(
-                pdef,
-                Pattern { from: std::slice::from_ref(start.tumbler()), to: &[] },
-                View::Audit,
-            )
-            .is_empty();
-        if !ever {
-            return DefStatus::Unregistered; // transient — never memoized
+        if !self.ever_registered(w, start) {
+            return DefStatus::Unregistered;
         }
-        let derived: Result<DefEntry, ()> = (|| {
-            let val = w.content().value_at(start.tumbler()).ok_or(())?;
-            let (params, body) = codec::decode(val.as_bytes()).map_err(|_| ())?;
-            let resolve = |a: &Address| self.signature(a);
-            let checker = Checker { catalog: &self.catalog, resolve: &resolve };
-            let ctx: Ctx = params.iter().cloned().collect();
-            let checked = checker.check_term(&ctx, &body).map_err(|_| ())?;
-            Ok(DefEntry {
-                sig: Signature { params, result: checked.sort },
-                expanded: checked.term,
-            })
-        })();
-        let mut memo = self.memo.write().expect("DefMemo lock");
-        let entry = memo.entry(start.tumbler().clone()).or_insert_with(|| match derived {
-            Ok(e) => MemoEntry::Defined(Arc::new(e)),
-            // Ever-registered but unparseable/ill-typed: the permanent
-            // poisoned entry — freeze-on-breach (PR-DISC, §Internal 4).
-            Err(()) => MemoEntry::Poisoned,
-        });
-        match entry {
-            MemoEntry::Defined(d) => DefStatus::Defined(Arc::clone(d)),
-            MemoEntry::Poisoned => DefStatus::Poisoned,
+        let verdict = parse_def(w, start)
+            .map_err(|_| Breach)
+            .and_then(|(params, body)| self.check_def(params, body, depth + 1).map_err(|_| Breach));
+        self.memo.fill(start, verdict)
+    }
+
+    /// `(Γ_D, C_D)` at derivation depth `depth` — the resolver the checker
+    /// consults for a `Ref`.
+    fn signature_at(&self, start: &Address, depth: u32) -> Option<Signature> {
+        match self.def_status_at(start, depth) {
+            DefStatus::Defined(e) => Some(e.sig.clone()),
+            _ => None,
         }
     }
 
-    /// Memoize a freshly-derived entry from the `register_pred` validation
-    /// path (immutable-once-defined; racing fills write the same value).
-    pub(crate) fn memo_defined(&self, start: &Address, entry: DefEntry) {
-        let mut memo = self.memo.write().expect("DefMemo lock");
-        memo.entry(start.tumbler().clone())
-            .or_insert_with(|| MemoEntry::Defined(Arc::new(entry)));
+    /// `(Γ_D, C_D)` — defined-signature starts only; answered from the
+    /// immutable DefMemo. A `Some` is permanent and cacheable forever
+    /// (content immutable, ever-registration monotone); a never-registered
+    /// `None` is transient and never memoized; an ever-registered-but-
+    /// undisciplined start answers `None` via a PERMANENT poisoned entry
+    /// (freeze-on-breach, §Internal 4). No snapshot parameter — the miss
+    /// path pins its own.
+    pub fn signature(&self, start: &Address) -> Option<Signature> {
+        self.signature_at(start, 0)
     }
 }
 
-/// `evaluate_def`'s DAG-recursive driver resolves referents here — the
-/// content-read pass stays distinct from the structural denotation, so the
-/// denotation remains reference-free (Conflicts §5).
+/// The referent supplier for the DAG-recursive drivers (`evaluate_def`'s
+/// denotation, the flat expansion) — the content-read pass stays distinct
+/// from the structural denotation, so the denotation remains
+/// reference-free (Conflicts §5).
 impl<W> DefSource for Coordinator<W>
 where
     W: WorldState + HasLinks + HasM3 + HasContent + HasM5,
     W::Record: From<LinkRec> + From<M5Rec> + From<M3Rec> + From<ContentWrite>,
 {
-    fn resolve_def(&self, addr: &Address) -> Option<(Vec<(VarId, Sort)>, crate::ast::ArcTerm)> {
+    fn resolve_def(&self, addr: &Address) -> Option<Arc<DefEntry>> {
         match self.def_status(addr) {
-            DefStatus::Defined(e) => Some((e.sig.params.clone(), e.expanded.clone())),
+            DefStatus::Defined(e) => Some(e),
             _ => None,
         }
     }

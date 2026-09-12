@@ -32,7 +32,7 @@ fn at_of(kind: OpKind, r: &Response) -> Seq {
 /// to. Exact, and safe to state exactly — M2 mints one `Seq` per record and
 /// returns the last of the range, which is the installed root's coordinate,
 /// and a zero-step transaction returns the base seq, which is that same head.
-fn committed(fx: &Fixture, kind: OpKind, r: &Response, seen: &mut Vec<OpKind>) {
+fn assert_committed(fx: &Fixture, kind: OpKind, r: &Response, seen: &mut Vec<OpKind>) {
     assert_eq!(
         at_of(kind, r),
         fx.febe.log_position(),
@@ -60,7 +60,7 @@ fn every_write_acks_at_the_coordinate_it_committed() {
         fx.user,
         Op::CreateNewDocument { account: fx.account.clone(), published: Some(false) },
     );
-    committed(&fx, OpKind::CreateNewDocument, &r, &mut seen);
+    assert_committed(&fx, OpKind::CreateNewDocument, &r, &mut seen);
     let (d, _) = ack_addr(r);
 
     let r = ex(
@@ -73,17 +73,17 @@ fn every_write_acks_at_the_coordinate_it_committed() {
             deposit: Deposit::Undeclared,
         },
     );
-    committed(&fx, OpKind::Insert, &r, &mut seen);
+    assert_committed(&fx, OpKind::Insert, &r, &mut seen);
 
     let r = ex(&fx.febe, fx.user, Op::Fork { published: None });
-    committed(&fx, OpKind::Fork, &r, &mut seen);
+    assert_committed(&fx, OpKind::Fork, &r, &mut seen);
     let (f, _) = ack_addr(r);
 
     // A version needs a PUBLISHED owned source (PUB-2.9): the edition.
     let e = create_edition(&fx);
     let (e_start, _) = deposit3(&fx, &e);
     let r = ex(&fx.febe, fx.user, Op::Version { d_src: e.clone(), published: None });
-    committed(&fx, OpKind::Version, &r, &mut seen);
+    assert_committed(&fx, OpKind::Version, &r, &mut seen);
     let (member, _) = ack_addr(r);
 
     // The shot (lane 3.2): the next member off the head just minted, the
@@ -97,20 +97,20 @@ fn every_write_acks_at_the_coordinate_it_committed() {
         }],
     };
     let r = ex(&fx.febe, fx.user, Op::Publish { doc: e, shot });
-    committed(&fx, OpKind::Publish, &r, &mut seen);
+    assert_committed(&fx, OpKind::Publish, &r, &mut seen);
 
     let r = ex(&fx.febe, fx.user, Op::Copy { doc: f, at: vp(1, 1), specs: vec![vspec(&d, 1, 1)] });
-    committed(&fx, OpKind::Copy, &r, &mut seen);
+    assert_committed(&fx, OpKind::Copy, &r, &mut seen);
 
     let r = ex(&fx.febe, fx.user, Op::Delete { doc: d.clone(), p: vp(1, 3), width: nat(1) });
-    committed(&fx, OpKind::Delete, &r, &mut seen);
+    assert_committed(&fx, OpKind::Delete, &r, &mut seen);
 
     let r = ex(
         &fx.febe,
         fx.user,
         Op::Rearrange { doc: d.clone(), cuts: vec![vp(1, 1), vp(1, 2), vp(1, 3)] },
     );
-    committed(&fx, OpKind::Rearrange, &r, &mut seen);
+    assert_committed(&fx, OpKind::Rearrange, &r, &mut seen);
 
     // ── the link family, on a document whose three ordinals are intact ──
     let home = create_doc(&fx);
@@ -123,7 +123,7 @@ fn every_write_acks_at_the_coordinate_it_committed() {
     };
 
     let r = ex(&fx.febe, fx.user, mk());
-    committed(&fx, OpKind::MakeLink, &r, &mut seen);
+    assert_committed(&fx, OpKind::MakeLink, &r, &mut seen);
     let (l1, _) = ack_addr(r);
     let (l2, _) = ack_addr(ex(&fx.febe, fx.user, mk()));
 
@@ -141,21 +141,21 @@ fn every_write_acks_at_the_coordinate_it_committed() {
             d_a: home.clone(),
         },
     );
-    committed(&fx, OpKind::EditLink, &r, &mut seen);
+    assert_committed(&fx, OpKind::EditLink, &r, &mut seen);
 
     let r =
         ex(&fx.febe, fx.user, Op::AssertSup { home: home.clone(), old: l1, new: l2.clone() });
-    committed(&fx, OpKind::AssertSup, &r, &mut seen);
+    assert_committed(&fx, OpKind::AssertSup, &r, &mut seen);
 
     let r = ex(
         &fx.febe,
         fx.user,
         Op::Emit { home: home.clone(), ty: pred_def_ty(), from: home_start, to: vec![] },
     );
-    committed(&fx, OpKind::Emit, &r, &mut seen);
+    assert_committed(&fx, OpKind::Emit, &r, &mut seen);
 
     let r = ex(&fx.febe, fx.user, Op::Nullify { home, target: l2 });
-    committed(&fx, OpKind::Nullify, &r, &mut seen);
+    assert_committed(&fx, OpKind::Nullify, &r, &mut seen);
 
     // ── provisioning, under the bootstrap session ──
     let (prefix, _) = maybe_addr(ex(&fx.febe, fx.boot, Op::NextAccountPrefix { parent: node1() }));
@@ -165,10 +165,10 @@ fn every_write_acks_at_the_coordinate_it_committed() {
         fx.boot,
         Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: PrincipalId(11) },
     );
-    committed(&fx, OpKind::Delegate, &r, &mut seen);
+    assert_committed(&fx, OpKind::Delegate, &r, &mut seen);
 
     let r = ex(&fx.febe, fx.boot, Op::RegisterNode { addr: tum(&[1, 4]) });
-    committed(&fx, OpKind::RegisterNode, &r, &mut seen);
+    assert_committed(&fx, OpKind::RegisterNode, &r, &mut seen);
 
     assert_eq!(seen.len(), 15, "the write half of the partition is 15 operations: {seen:?}");
 }

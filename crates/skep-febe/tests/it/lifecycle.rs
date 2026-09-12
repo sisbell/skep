@@ -903,21 +903,21 @@ fn rejection_surface() {
 
     // M6's DocNotRegistered carries the offending document into the site;
     // ambiguous registration codes are hinted Reorder (§5).
-    let ghost_doc = addr(&[1, 0, 1, 0, 77]);
+    let ghost = addr(&[1, 0, 1, 0, 77]);
     let rej = rejected(ex(
         &fx.febe,
         fx.user,
-        Op::RetrieveV { specs: vec![Spec { doc: ghost_doc.clone(), span: vspan(1, 1, 1) }] },
+        Op::RetrieveV { specs: vec![Spec { doc: ghost.clone(), span: vspan(1, 1, 1) }] },
     ));
     assert_eq!(rej.code, RejectCode::DocNotRegistered);
     assert_eq!(rej.disposition, Disposition::Reorder);
-    assert_eq!(rej.site.expect("M6 localizes").addr, Some(ghost_doc.clone()));
+    assert_eq!(rej.site.expect("M6 localizes").addr, Some(ghost.clone()));
 
     // M5's same-named code is fieldless — site None (§5).
     let rej = rejected(ex(
         &fx.febe,
         fx.user,
-        Op::Delete { doc: ghost_doc, p: vp(1, 1), width: nat(1) },
+        Op::Delete { doc: ghost, p: vp(1, 1), width: nat(1) },
     ));
     assert_eq!(rej.code, RejectCode::DocNotRegistered);
     assert_eq!(rej.disposition, Disposition::Reorder);

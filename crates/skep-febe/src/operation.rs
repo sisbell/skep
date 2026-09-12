@@ -405,8 +405,8 @@ where
         // one cell where both apply answers `published_target`, never
         // `withheld`. `copy` is the only member of the class that is also
         // consulted; the others never reach here (`in_place_destination`).
-        if let Some(dest) = op.in_place_destination() {
-            if published_target(m3, dest) {
+        if let Some(in_place) = op.in_place_destination() {
+            if published_target(m3, in_place) {
                 return Err(rejection(kind, RejectCode::PublishedTarget));
             }
         }
@@ -1081,15 +1081,15 @@ where
                 if !m3.is_registered_document(&doc) {
                     return Err(rejection(kind, RejectCode::DocNotRegistered));
                 }
-                let document = trunk_of(&doc);
+                let trunk = trunk_of(&doc);
                 let published = published_target(m3, &doc);
-                let owner = m3.effective_owner_prefix(&document).cloned();
+                let owner = m3.effective_owner_prefix(&trunk).cloned();
                 let birth = trunk_head(m3, &doc).map(|_| {
-                    let addr = birth_member(&document);
+                    let addr = birth_member(&trunk);
                     let extent = world.m5().content_count(&addr);
                     BirthVersion { addr, extent }
                 });
-                Ok(Response::DocMetadata { doc: document, published, owner, birth, as_of })
+                Ok(Response::DocMetadata { doc: trunk, published, owner, birth, as_of })
             }
             // The audit-view edition-claim lookup (PUB-8.46): the world
             // answers the CLASS over `target`'s subtree — admitted,

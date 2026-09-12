@@ -67,7 +67,7 @@ struct IdemKey {
 /// [`IdemCache::get`] miss on a `ReqId` reused across op-kinds, so a
 /// wrong-shaped ack is never served.
 #[derive(Clone)]
-struct Cached {
+struct TaggedAck {
     kind: OpKind,
     ack: CommittedAck,
 }
@@ -80,7 +80,7 @@ struct Cached {
 /// Non-poisoning lock (§7): a panic while the cache is held must not break
 /// `execute`'s Total contract.
 pub(crate) struct IdemCache {
-    entries: Mutex<LruCache<IdemKey, Cached>>,
+    entries: Mutex<LruCache<IdemKey, TaggedAck>>,
 }
 
 impl IdemCache {
@@ -104,7 +104,7 @@ impl IdemCache {
         if id.0.len() > MAX_REQ_ID_BYTES {
             return;
         }
-        self.entries.lock().put(IdemKey { session, id }, Cached { kind, ack });
+        self.entries.lock().put(IdemKey { session, id }, TaggedAck { kind, ack });
     }
 
     /// The memoized acknowledgment this session committed under `id` for

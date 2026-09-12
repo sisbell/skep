@@ -572,7 +572,10 @@ impl Op {
     /// about the request, and a transport that wants to know which documents
     /// a write will read before it dispatches it reads the same list.
     pub fn source_arguments(&self) -> Vec<&Address> {
-        fn resolve_sources<'a>(slot: &'a SlotArg, out: &mut Vec<&'a Address>) {
+        /// Append a RESOLVE-form slot's source documents to `out`. Reads no
+        /// arrangement: a `Resolve` slot NAMES its sources, and resolving
+        /// them is M5's act, on the far side of the consult this list feeds.
+        fn push_resolve_sources<'a>(slot: &'a SlotArg, out: &mut Vec<&'a Address>) {
             if let SlotArg::Resolve(specs) = slot {
                 out.extend(specs.iter().map(|s| &s.source));
             }
@@ -582,9 +585,9 @@ impl Op {
             Op::Version { d_src, .. } => vec![d_src],
             Op::MakeLink { from, to, ty, .. } => {
                 let mut out = Vec::new();
-                resolve_sources(from, &mut out);
-                resolve_sources(to, &mut out);
-                resolve_sources(ty, &mut out);
+                push_resolve_sources(from, &mut out);
+                push_resolve_sources(to, &mut out);
+                push_resolve_sources(ty, &mut out);
                 out
             }
             // The successor's `from`/`to` are content-resolved by their type
@@ -592,7 +595,7 @@ impl Op {
             Op::EditLink { successor, .. } => {
                 let mut out: Vec<&Address> =
                     successor.from.iter().chain(&successor.to).map(|s| &s.source).collect();
-                resolve_sources(&successor.ty, &mut out);
+                push_resolve_sources(&successor.ty, &mut out);
                 out
             }
             // No source to consult (see above); written out rather than
@@ -938,27 +941,31 @@ pub(crate) mod tests {
     /// every write does.
     #[test]
     fn doc_arguments_run_in_declaration_order() {
-        let a = addr(&[1, 0, 1, 0, 1]);
-        let b = addr(&[1, 0, 1, 0, 2]);
-        let c = addr(&[1, 0, 1, 0, 3]);
-        let op = Op::ShowDeletions { d_a: a.clone(), d_b: b.clone() };
-        assert_eq!(op.doc_arguments(), vec![&a, &b]);
+        let d1 = addr(&[1, 0, 1, 0, 1]);
+        let d2 = addr(&[1, 0, 1, 0, 2]);
+        let d3 = addr(&[1, 0, 1, 0, 3]);
+        let op = Op::ShowDeletions { d_a: d1.clone(), d_b: d2.clone() };
+        assert_eq!(op.doc_arguments(), vec![&d1, &d2]);
         let op = Op::Compare {
-            rho1: vec![RegionSpec { doc: b.clone(), spans: vec![sp()] }],
+            rho1: vec![RegionSpec { doc: d2.clone(), spans: vec![sp()] }],
             rho2: vec![
-                RegionSpec { doc: c.clone(), spans: vec![] },
-                RegionSpec { doc: a.clone(), spans: vec![] },
+                RegionSpec { doc: d3.clone(), spans: vec![] },
+                RegionSpec { doc: d1.clone(), spans: vec![] },
             ],
         };
-        assert_eq!(op.doc_arguments(), vec![&b, &c, &a]);
-        let op = Op::Project { a: a.clone(), slot: 1, d: c.clone() };
-        assert_eq!(op.doc_arguments(), vec![&c], "the dual row consults `d`, never the link");
+        assert_eq!(op.doc_arguments(), vec![&d2, &d3, &d1]);
+        let op = Op::Project { a: d1.clone(), slot: 1, d: d3.clone() };
+        assert_eq!(op.doc_arguments(), vec![&d3], "the dual row consults `d`, never the link");
         // Lane 3.4: the two publication reads each consult their one named
         // document — the H1 row's "target unreadable ⟹ withheld".
-        let op = Op::DocMetadata { doc: b.clone() };
-        assert_eq!(op.doc_arguments(), vec![&b]);
-        let op = Op::EditionClaims { target: c.clone() };
-        assert_eq!(op.doc_arguments(), vec![&c], "the target is a named document, not a probe key");
+        let op = Op::DocMetadata { doc: d2.clone() };
+        assert_eq!(op.doc_arguments(), vec![&d2]);
+        let op = Op::EditionClaims { target: d3.clone() };
+        assert_eq!(
+            op.doc_arguments(),
+            vec![&d3],
+            "the target is a named document, not a probe key"
+        );
         for (op, is_read) in all_ops() {
             let named = !op.doc_arguments().is_empty();
             let expects_consult = is_read
@@ -987,37 +994,41 @@ pub(crate) mod tests {
     /// write and every read answer the empty one.
     #[test]
     fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
-        let a = addr(&[1, 0, 1, 0, 1]);
-        let b = addr(&[1, 0, 1, 0, 2]);
-        let c = addr(&[1, 0, 1, 0, 3]);
+        let d1 = addr(&[1, 0, 1, 0, 1]);
+        let d2 = addr(&[1, 0, 1, 0, 2]);
+        let d3 = addr(&[1, 0, 1, 0, 3]);
         let spec = |d: &Address| VSpec { source: d.clone(), span: sp() };
 
-        let op = Op::Copy { doc: a.clone(), at: vpos(), specs: vec![spec(&b), spec(&c)] };
-        assert_eq!(op.source_arguments(), vec![&b, &c], "copy: each spec's source, by index");
-        let op = Op::Version { d_src: b.clone(), published: None };
-        assert_eq!(op.source_arguments(), vec![&b]);
+        let op = Op::Copy { doc: d1.clone(), at: vpos(), specs: vec![spec(&d2), spec(&d3)] };
+        assert_eq!(op.source_arguments(), vec![&d2, &d3], "copy: each spec's source, by index");
+        let op = Op::Version { d_src: d2.clone(), published: None };
+        assert_eq!(op.source_arguments(), vec![&d2]);
         let op = Op::MakeLink {
-            home: a.clone(),
-            from: SlotArg::Resolve(vec![spec(&c)]),
-            to: SlotArg::Addrs(vec![b.clone()]),
-            ty: SlotArg::Resolve(vec![spec(&b), spec(&a)]),
+            home: d1.clone(),
+            from: SlotArg::Resolve(vec![spec(&d3)]),
+            to: SlotArg::Addrs(vec![d2.clone()]),
+            ty: SlotArg::Resolve(vec![spec(&d2), spec(&d1)]),
         };
         assert_eq!(
             op.source_arguments(),
-            vec![&c, &b, &a],
+            vec![&d3, &d2, &d1],
             "make_link: from, then ty — the address-form `to` names no source"
         );
         let op = Op::EditLink {
-            original: a.clone(),
+            original: d1.clone(),
             successor: SuccessorSpec {
-                from: vec![spec(&c)],
-                to: vec![spec(&b)],
-                ty: SlotArg::Addrs(vec![a.clone()]),
+                from: vec![spec(&d3)],
+                to: vec![spec(&d2)],
+                ty: SlotArg::Addrs(vec![d1.clone()]),
             },
-            d_s: a.clone(),
-            d_a: a.clone(),
+            d_s: d1.clone(),
+            d_a: d1.clone(),
         };
-        assert_eq!(op.source_arguments(), vec![&c, &b], "edit_link: the successor's slots in order");
+        assert_eq!(
+            op.source_arguments(),
+            vec![&d3, &d2],
+            "edit_link: the successor's slots in order"
+        );
 
         for (op, is_read) in all_ops() {
             let reads_a_source = !op.source_arguments().is_empty();
@@ -1070,17 +1081,21 @@ pub(crate) mod tests {
         }
         // Consulted with destinations: the documents the store's own
         // `not_owner` is judged on, which is what the door defers to.
-        let a = addr(&[1, 0, 1, 0, 1]);
-        let b = addr(&[1, 0, 1, 0, 2]);
+        let d1 = addr(&[1, 0, 1, 0, 1]);
+        let d2 = addr(&[1, 0, 1, 0, 2]);
         let edit = Op::EditLink {
-            original: a.clone(),
-            successor: SuccessorSpec { from: vec![], to: vec![], ty: SlotArg::Addrs(vec![a.clone()]) },
-            d_s: a.clone(),
-            d_a: b.clone(),
+            original: d1.clone(),
+            successor: SuccessorSpec {
+                from: vec![],
+                to: vec![],
+                ty: SlotArg::Addrs(vec![d1.clone()]),
+            },
+            d_s: d1.clone(),
+            d_a: d2.clone(),
         };
         assert_eq!(
             edit.write_consult(),
-            WriteConsult::AfterOwnershipOf(vec![&a, &b]),
+            WriteConsult::AfterOwnershipOf(vec![&d1, &d2]),
             "both written homes"
         );
         // NotTaken: a write with nothing to consult — no source, no

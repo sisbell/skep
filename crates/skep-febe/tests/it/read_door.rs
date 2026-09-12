@@ -26,18 +26,19 @@ use skep_febe::{
     SlotSpec, Span, SpanSet, Spec, Tumbler, View, FROM, TO,
 };
 
-/// One link over `over`'s content, homed in `home` — the shape both the
-/// absence rule and the result-set filter turn on, since the endsets decide
-/// which region index it stabs and the HOME decides who may see it.
-fn link_over(fx: &Fixture, home: &Address, over: &Address) -> Address {
+/// One link whose endsets cover `covered`'s content, homed in `home` — the
+/// shape both the absence rule and the result-set filter turn on, since the
+/// coverage decides which region index it stabs and the HOME decides who may
+/// see it.
+fn link_over(fx: &Fixture, home: &Address, covered: &Address) -> Address {
     ack_addr(ex(
         &fx.febe,
         fx.user,
         Op::MakeLink {
             home: home.clone(),
-            from: SlotArg::Resolve(vec![vspec(over, 1, 1)]), // populated
-            to: SlotArg::Addrs(vec![]),                      // ⟨⟩
-            ty: SlotArg::Resolve(vec![vspec(over, 3, 1)]),
+            from: SlotArg::Resolve(vec![vspec(covered, 1, 1)]), // populated
+            to: SlotArg::Addrs(vec![]),                         // ⟨⟩
+            ty: SlotArg::Resolve(vec![vspec(covered, 3, 1)]),
         },
     ))
     .0
@@ -53,59 +54,59 @@ fn link_over(fx: &Fixture, home: &Address, over: &Address) -> Address {
 #[test]
 fn a_read_is_withheld_naming_its_first_unreadable_document() {
     let (fx, unreadable) = setup_with_unreadable();
-    let a = create_doc(&fx);
-    insert3(&fx, &a);
-    let b = create_doc(&fx);
-    insert3(&fx, &b);
-    unreadable.lock().expect("no poisoning").extend([a.clone(), b.clone()]);
+    let d1 = create_doc(&fx);
+    insert3(&fx, &d1);
+    let d2 = create_doc(&fx);
+    insert3(&fx, &d2);
+    unreadable.lock().expect("no poisoning").extend([d1.clone(), d2.clone()]);
     let other = fx.febe.open_session(OTHER);
-    let sp1 = || vspan(1, 1, 1);
+    let first_span = || vspan(1, 1, 1);
 
     // (op, the document the answer must name)
     let cases: Vec<(Op, &Address)> = vec![
-        (Op::RetrieveDocVSpan { doc: a.clone() }, &a),
-        (Op::RetrieveDocVSpanSet { doc: a.clone() }, &a),
-        (Op::ShowOrigin { doc: a.clone(), span: sp1() }, &a),
+        (Op::RetrieveDocVSpan { doc: d1.clone() }, &d1),
+        (Op::RetrieveDocVSpanSet { doc: d1.clone() }, &d1),
+        (Op::ShowOrigin { doc: d1.clone(), span: first_span() }, &d1),
         // Two named documents: the first DECLARED one speaks, either way round.
-        (Op::ShowDeletions { d_a: a.clone(), d_b: b.clone() }, &a),
-        (Op::ShowDeletions { d_a: b.clone(), d_b: a.clone() }, &b),
+        (Op::ShowDeletions { d_a: d1.clone(), d_b: d2.clone() }, &d1),
+        (Op::ShowDeletions { d_a: d2.clone(), d_b: d1.clone() }, &d2),
         // Across an op's lists: rho1's regions before rho2's.
         (
             Op::Compare {
-                rho1: vec![RegionSpec { doc: b.clone(), spans: vec![sp1()] }],
-                rho2: vec![RegionSpec { doc: a.clone(), spans: vec![sp1()] }],
+                rho1: vec![RegionSpec { doc: d2.clone(), spans: vec![first_span()] }],
+                rho2: vec![RegionSpec { doc: d1.clone(), spans: vec![first_span()] }],
             },
-            &b,
+            &d2,
         ),
         // Within a list, by index.
         (
             Op::RetrieveV {
                 specs: vec![
-                    Spec { doc: b.clone(), span: sp1() },
-                    Spec { doc: a.clone(), span: sp1() },
+                    Spec { doc: d2.clone(), span: first_span() },
+                    Spec { doc: d1.clone(), span: first_span() },
                 ],
             },
-            &b,
+            &d2,
         ),
         (
             Op::FindDocsContaining {
                 regions: vec![
-                    RegionSpec { doc: b.clone(), spans: vec![sp1()] },
-                    RegionSpec { doc: a.clone(), spans: vec![sp1()] },
+                    RegionSpec { doc: d2.clone(), spans: vec![first_span()] },
+                    RegionSpec { doc: d1.clone(), spans: vec![first_span()] },
                 ],
             },
-            &b,
+            &d2,
         ),
         // The region family's `d`.
-        (Op::Image { d: a.clone(), region: vec![sp1()] }, &a),
-        (Op::FindLinksV { d: a.clone(), region: vec![sp1()] }, &a),
-        (Op::CountV { d: a.clone(), region: vec![sp1()] }, &a),
-        (Op::WindowV { d: a.clone(), region: vec![sp1()], cur: None, n: 1 }, &a),
-        (Op::RetrieveEndsets { d: a.clone(), region: vec![sp1()] }, &a),
-        (Op::DeleteOrphans { d: a.clone(), p: vp(1, 1), width: nat(1) }, &a),
+        (Op::Image { d: d1.clone(), region: vec![first_span()] }, &d1),
+        (Op::FindLinksV { d: d1.clone(), region: vec![first_span()] }, &d1),
+        (Op::CountV { d: d1.clone(), region: vec![first_span()] }, &d1),
+        (Op::WindowV { d: d1.clone(), region: vec![first_span()], cur: None, n: 1 }, &d1),
+        (Op::RetrieveEndsets { d: d1.clone(), region: vec![first_span()] }, &d1),
+        (Op::DeleteOrphans { d: d1.clone(), p: vp(1, 1), width: nat(1) }, &d1),
         // The two publication reads: the H1 row (PUB-8.12, PUB-8.46).
-        (Op::DocMetadata { doc: a.clone() }, &a),
-        (Op::EditionClaims { target: b.clone() }, &b),
+        (Op::DocMetadata { doc: d1.clone() }, &d1),
+        (Op::EditionClaims { target: d2.clone() }, &d2),
     ];
     for (op, named) in cases {
         let kind = op.kind();
@@ -113,7 +114,7 @@ fn a_read_is_withheld_naming_its_first_unreadable_document() {
     }
 
     // The consult is per principal: the owner reads its own documents.
-    let (set, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpan { doc: a }));
+    let (set, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpan { doc: d1 }));
     assert_ne!(set, SpanSet::empty());
 }
 

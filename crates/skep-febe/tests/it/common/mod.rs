@@ -153,18 +153,18 @@ pub fn node1() -> Address {
 
 /// Reserved type address `k` — ghost tumbler `[1,1,0,1,0,1,0,1,k]` (the
 /// compiled format constants for k = 1..=5).
-pub fn ra(k: u32) -> Address {
+pub fn reserved_type_addr(k: u32) -> Address {
     addr(&[1, 1, 0, 1, 0, 1, 0, 1, k])
 }
 
 /// The shipped Supersedes class as an address-denoting type endset.
 pub fn supersedes_ty() -> Endset {
-    enc(&[ra(4)])
+    enc(&[reserved_type_addr(4)])
 }
 
 /// The shipped PredDef class (Unary, idem⊤) — the one emitable shipped type.
 pub fn pred_def_ty() -> Endset {
-    enc(&[ra(1)])
+    enc(&[reserved_type_addr(1)])
 }
 
 pub fn vp(subspace: u32, ordinal: u32) -> VPos {

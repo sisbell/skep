@@ -17,28 +17,32 @@ use skep_namespace::{HasM3, M3Rec};
 
 use crate::ast::{Term, VarId};
 use crate::catalog::TypeCatalog;
-use crate::check::{Checker, Ctx, TypedTerm};
+use crate::check::{Checker, Ctx, TriggerTerm, TypedTerm};
 use crate::defs::parse_def;
 use crate::dynamics::{classify_term, Dynamics};
 use crate::error::TypeError;
-use crate::eval::{eval_term, DefSource, EvalCtx, GuestLinks};
-use crate::memo::{Breach, DefEntry, DefMemo, DefStatus};
+use crate::eval::{eval_term, DefSource, EvalCtx};
+use crate::guest::GuestLinks;
+use crate::memo::{Breach, DefMemo, DefStatus};
 use crate::rule::RuleId;
-use crate::value::{Env, Signature, Sort, Value};
+use crate::value::{value_sort, Env, Signature, Sort, Value};
 
 /// One registered rule in the working set (§Internal 5): the checked
-/// `TypedDom`, the validated trigger, the declared view, the action.
+/// `TypedDom`, the checked trigger, the declared view, the action.
 pub(crate) struct CheckedRule {
     pub(crate) id: RuleId,
     pub(crate) dom: crate::check::TypedDom,
-    pub(crate) trigger: CheckedTrigger,
+    /// The checked trigger: a one-parameter Bool `TypedTerm` — an `Inline`
+    /// trigger's own, or the memo entry of a `Def` trigger's def, captured
+    /// at registration. The body is immutable content, so the trigger reads
+    /// only the snapshot it is evaluated on: no ordering between that
+    /// snapshot and the def's registration is required, and a later
+    /// retraction of the def changes nothing. Ref-bearing iff it came from a
+    /// def; evaluation resolves referents through the memo, the static
+    /// analyses through the flat expansion.
+    pub(crate) trigger: Arc<TypedTerm>,
     pub(crate) view: View,
     pub(crate) action: crate::rule::FireAction,
-}
-
-pub(crate) enum CheckedTrigger {
-    Inline { param: VarId, term: TypedTerm },
-    Def { addr: Address },
 }
 
 /// Breach-only recursion bound on the signature derivation: a legitimately
@@ -94,11 +98,12 @@ where
     /// engine-built `Arc<TypeRegistry>` (NEVER rebuilt here — Conflicts §7),
     /// which M9 projects its static `TypeCatalog` from and then need not
     /// retain; and two op-handle factories minting a borrow-scoped
-    /// `Vstream`/`LinkWriter` off `&Kernel<W>` per call (the engine — the one
-    /// crate that can name those constructors — supplies them; HRTB because
-    /// each handle borrows the kernel). The `LinkWriter` factory takes the
-    /// VISIBILITY class beside the kernel (lane 3.3b): M9 lends it `guest`
-    /// at every construction, a borrow of the one closure it holds.
+    /// `Vstream`/`LinkWriter` off `&Kernel<W>` per call (driver construction
+    /// is the engine's by the composition contract, so M9 names neither
+    /// `Vstream::new` nor `LinkWriter::new`; HRTB because each handle
+    /// borrows the kernel). The `LinkWriter` factory takes the VISIBILITY
+    /// class beside the kernel (lane 3.3b): M9 lends it `guest` at every
+    /// construction, a borrow of the one closure it holds.
     ///
     /// Infallible: the registry's population is the compiled shipped five
     /// (owner ruling, 2026-08-26), so the projection is a pure read of the
@@ -145,19 +150,26 @@ where
         self.catalog.reserved(t)
     }
 
-    /// One verdict's read context over the world `w` of a pinned snapshot:
-    /// the catalog, M3, and M7 THROUGH THE GUEST-CLASS VIEW (`GuestLinks`,
-    /// PUB round 2, lane 4.1 — every tuple homed where the injected `guest`
-    /// predicate answers `false` is dropped from every read). The ONE
-    /// construction site in the crate: `eval`/`decide`, the rule engine's
-    /// domain enumeration, trigger evaluation and scope test, the fire's own
-    /// re-check, and `evaluate_def`'s denotation all build their context
-    /// here, so no evaluator ever reads the link store class-free.
-    pub(crate) fn eval_ctx<'a>(&'a self, w: &'a W, defs: Option<&'a dyn DefSource>) -> EvalCtx<'a, W> {
+    /// One verdict's read context over the world `w` of a pinned snapshot,
+    /// at the term view `view`: the catalog, M3, and M7 THROUGH THE
+    /// GUEST-CLASS VIEW (`GuestLinks`, PUB round 2, lane 4.1 — every tuple
+    /// homed where the injected `guest` predicate answers `false` is dropped
+    /// from every read). The ONE construction site in the crate:
+    /// `eval`/`decide`, the rule engine's domain enumeration, trigger
+    /// evaluation and scope test, the fire's own re-check, and
+    /// `evaluate_def`'s denotation all build their context here, so no
+    /// evaluator ever reads the link store class-free.
+    pub(crate) fn eval_ctx<'a>(
+        &'a self,
+        w: &'a W,
+        view: View,
+        defs: Option<&'a dyn DefSource>,
+    ) -> EvalCtx<'a, W> {
         EvalCtx {
             catalog: &self.catalog,
             links: GuestLinks::new(w, w.links(), &*self.guest),
             m3: w.m3(),
+            view,
             defs,
         }
     }
@@ -178,37 +190,48 @@ where
     /// ASN-0129 WT is a Γ-parameterized CHECKING judgment; empty for a closed
     /// term), expand `Reg`-quantifiers to concrete-class instances (V-IDX),
     /// and reject ill-typed / dangling-reference / unregistered-type /
-    /// unbound-variable / non-Codomain-parameter terms. This is the DEF-PATH
-    /// check: a `Tup`-sorted Γ_D parameter is `TupParameter` — a stored def
-    /// binds values, never a tuple (ASN-0130 SignedTerm); a rule trigger uses
-    /// [`Coordinator::type_check_trigger`]. Every `Concrete` `TypeKey` must
-    /// be a canonical catalog endset (the probe is `Endset`-equality, not
-    /// coverage). Reads no structural state for a ref-free body; consults the
-    /// immutable signature memo for any `Ref`. Once `Ok`, valid at every
-    /// reachable state (WT).
+    /// unbound-variable / non-Codomain-parameter terms. Γ_D is Codom-only: a
+    /// `Tup`-sorted parameter is `TupParameter` — a stored def binds values,
+    /// never a tuple (ASN-0130 SignedTerm) — and the one PL term that binds a
+    /// tuple, a rule trigger, is checked by [`Coordinator::type_check_trigger`]
+    /// into a type of its own. Every `Concrete` `TypeKey` must be a canonical
+    /// catalog endset (the probe is `Endset`-equality, not coverage). Reads
+    /// no structural state for a ref-free body; consults the immutable
+    /// signature memo for any `Ref`. Once `Ok`, valid at every reachable
+    /// state (WT).
     pub fn type_check(&self, params: Vec<(VarId, Sort)>, body: Term) -> Result<TypedTerm, TypeError> {
         if let Some((v, _)) = params.iter().find(|(_, s)| *s == Sort::Tup) {
             return Err(TypeError::TupParameter(v.clone()));
         }
-        self.check_under(params, body)
+        self.check_under(params, body, 0)
     }
 
-    /// As [`Coordinator::type_check`], but for a RULE TRIGGER — the only PL
-    /// term that may bind a tuple: admits a SINGLE `Tup`-sorted parameter (a
-    /// tuple-domained rule fires by binding a `Value::Tuple`, ASN-0133 ρ_R);
-    /// every other parameter stays Codom-only. One-parameter-Bool is still a
-    /// `register_rule` check, not enforced here.
-    pub fn type_check_trigger(&self, params: Vec<(VarId, Sort)>, body: Term) -> Result<TypedTerm, TypeError> {
-        let mut tups = params.iter().filter(|(_, s)| *s == Sort::Tup);
-        let _first = tups.next();
-        if let Some((v, _)) = tups.next() {
-            return Err(TypeError::TupParameter(v.clone()));
+    /// Type-check a RULE TRIGGER: `body` under the one parameter `param` (any
+    /// sort, `Tup` included — a tuple-domained rule fires by binding a
+    /// `Value::Tuple`, ASN-0133 ρ_R), Bool codomain (`SortMismatch`
+    /// otherwise). The domain↔parameter sort reconciliation and the ref-free
+    /// requirement are `register_rule`'s.
+    pub fn type_check_trigger(&self, param: (VarId, Sort), body: Term) -> Result<TriggerTerm, TypeError> {
+        let t = self.check_under(vec![param], body, 0)?;
+        if t.result != Sort::Bool {
+            return Err(TypeError::SortMismatch { expected: Sort::Bool, found: t.result });
         }
-        self.check_under(params, body)
+        Ok(TriggerTerm(t))
     }
 
-    fn check_under(&self, params: Vec<(VarId, Sort)>, body: Term) -> Result<TypedTerm, TypeError> {
-        let resolve = |a: &Address| self.signature(a);
+    /// The ONE checker invocation: WT + WT-ref over `body` under Γ_D
+    /// `params`, into the checked-term shape. Referents resolve through the
+    /// signature memo at derivation depth `depth` — 0 at the top of a chain
+    /// (the public checks, `register_pred`), one deeper per nested
+    /// derivation (a chain that runs past `MAX_SIG_DEPTH` is a PR-DISC-breach
+    /// cycle and reads as "no signature", failing WT here).
+    pub(crate) fn check_under(
+        &self,
+        params: Vec<(VarId, Sort)>,
+        body: Term,
+        depth: u32,
+    ) -> Result<TypedTerm, TypeError> {
+        let resolve = |a: &Address| self.signature_at(a, depth);
         let checker = Checker { catalog: &self.catalog, resolve: &resolve };
         let ctx: Ctx = params.iter().cloned().collect();
         let checked = checker.check_term(&ctx, &body)?;
@@ -222,26 +245,33 @@ where
     }
 
     /// Pure, total, terminating denotation at one view against one committed
-    /// snapshot. PRECONDITION: `t.is_ref_free()` — a surviving `Ref` node is
-    /// a precondition violation (PANICS, like `decide` on a non-Bool
-    /// codomain); ref-bearing terms evaluate only through `evaluate_def`,
-    /// keeping this denotation content-free. INFALLIBLE on a ref-free
-    /// `TypedTerm`; reads ONLY M7 + M3, all off `snap` (PC4 / ASN-0134
-    /// clause 6) — M7 through the GUEST-CLASS view (lane 4.1, PUB-6.28): a
-    /// tuple homed in a document the injected `guest` predicate refuses is
-    /// invisible to the verdict, exactly as it is to a fire's gates. The
-    /// verdict is "as of `snap.seq()`" (M2 V1 retrospective).
+    /// snapshot. PRECONDITIONS, both asserted at the door: `t.is_ref_free()`
+    /// — a surviving `Ref` node is a precondition violation (PANICS, like
+    /// `decide` on a non-Bool codomain); ref-bearing terms evaluate only
+    /// through `evaluate_def`, keeping this denotation content-free — and
+    /// `env` binds every Γ_D parameter at its sort. INFALLIBLE past the door;
+    /// reads ONLY M7 + M3, all off `snap` (PC4 / ASN-0134 clause 6) — M7
+    /// through the GUEST-CLASS view (lane 4.1, PUB-6.28): a tuple homed in a
+    /// document the injected `guest` predicate refuses is invisible to the
+    /// verdict, exactly as it is to a fire's gates. The verdict is "as of
+    /// `snap.seq()`" (M2 V1 retrospective).
     pub fn eval(&self, t: &TypedTerm, env: &Env, view: View, snap: &Snapshot<W>) -> Value {
         assert!(
             t.is_ref_free(),
             "eval precondition violated: ref-bearing TypedTerm — route through evaluate_def"
         );
-        let cx = self.eval_ctx(snap.world(), None);
-        eval_term(&cx, env, view, t.evaluable.as_ref())
+        for (v, s) in &t.gamma {
+            assert!(
+                env.get(v).is_some_and(|val| value_sort(val) == *s),
+                "eval precondition violated: Γ_D parameter {v:?} unbound or mis-sorted in env (expected {s:?})"
+            );
+        }
+        let cx = self.eval_ctx(snap.world(), view, None);
+        eval_term(&cx, env, t.evaluable.as_ref())
     }
 
     /// Convenience for Bool-codomain terms; panics if the codomain is not
-    /// Bool or `t` is ref-bearing.
+    /// Bool, or on either of `eval`'s preconditions.
     pub fn decide(&self, t: &TypedTerm, env: &Env, view: View, snap: &Snapshot<W>) -> bool {
         assert!(
             t.result_sort() == Sort::Bool,
@@ -259,7 +289,8 @@ where
     /// binds the view-parameterized constituents to it); `view_independent`
     /// alone is view-agnostic (the PR-VIEW scan). Sound-but-incomplete; never
     /// over-certifies. Reads no state. PRECONDITION: ref-free (panics
-    /// otherwise — callers classify inline triggers or a flattened expand).
+    /// otherwise); a stored def is certified through `certify_stable` and a
+    /// trigger linted through `certify_rule`, each over its flat expansion.
     pub fn classify(&self, t: &TypedTerm, view: View) -> Dynamics {
         assert!(
             t.is_ref_free(),
@@ -270,23 +301,6 @@ where
     }
 
     // ───────────────── internal: the DefMemo (§Internal 4) ─────────────────
-
-    /// WT + WT-ref over a parsed signed term, into the memo's entry shape:
-    /// referents resolve through the signature memo at derivation depth
-    /// `depth` (a chain that runs past `MAX_SIG_DEPTH` is a PR-DISC-breach
-    /// cycle and reads as "no signature", failing WT here).
-    pub(crate) fn check_def(
-        &self,
-        params: Vec<(VarId, Sort)>,
-        body: Term,
-        depth: u32,
-    ) -> Result<DefEntry, TypeError> {
-        let resolve = |a: &Address| self.signature_at(a, depth);
-        let checker = Checker { catalog: &self.catalog, resolve: &resolve };
-        let ctx: Ctx = params.iter().cloned().collect();
-        let checked = checker.check_term(&ctx, &body)?;
-        Ok(DefEntry { sig: Signature { params, result: checked.sort }, expanded: checked.term })
-    }
 
     /// Memo-or-derive at the top of a derivation chain.
     pub(crate) fn def_status(&self, start: &Address) -> DefStatus {
@@ -321,7 +335,7 @@ where
         }
         let verdict = parse_def(w, start)
             .map_err(|_| Breach)
-            .and_then(|(params, body)| self.check_def(params, body, depth + 1).map_err(|_| Breach));
+            .and_then(|(params, body)| self.check_under(params, body, depth + 1).map_err(|_| Breach));
         self.memo.fill(start, verdict)
     }
 
@@ -329,7 +343,7 @@ where
     /// consults for a `Ref`.
     fn signature_at(&self, start: &Address, depth: u32) -> Option<Signature> {
         match self.def_status_at(start, depth) {
-            DefStatus::Defined(e) => Some(e.sig.clone()),
+            DefStatus::Defined(e) => Some(e.signature()),
             _ => None,
         }
     }
@@ -346,16 +360,16 @@ where
     }
 }
 
-/// The referent supplier for the DAG-recursive drivers (`evaluate_def`'s
-/// denotation, the flat expansion) — the content-read pass stays distinct
-/// from the structural denotation, so the denotation remains
-/// reference-free (Conflicts §5).
+/// The referent supplier for the DAG-recursive drivers (a def's denotation,
+/// the flat expansion) — the content-read pass stays distinct from the
+/// structural denotation, so the denotation remains reference-free
+/// (Conflicts §5).
 impl<W> DefSource for Coordinator<W>
 where
     W: WorldState + HasLinks + HasM3 + HasContent + HasM5,
     W::Record: From<LinkRec> + From<M5Rec> + From<M3Rec> + From<ContentWrite>,
 {
-    fn resolve_def(&self, addr: &Address) -> Option<Arc<DefEntry>> {
+    fn resolve_def(&self, addr: &Address) -> Option<Arc<TypedTerm>> {
         match self.def_status(addr) {
             DefStatus::Defined(e) => Some(e),
             _ => None,

@@ -1,12 +1,16 @@
 //! §Core data model — the PL AST: a finite, acyclic, tagged-union tree in two
 //! mutually-recursive families ([`Term`]/[`Dom`]), reified (not
 //! closure-encoded) so the three syntax-directed analyses — type-check,
-//! footprint, stability — can read structure. Subterms are `Arc`-shared.
+//! footprint, stability — can read structure. Subterms are `Arc`-shared. The
+//! tree's child structure is stated once, in `walk.rs`; a structural pass
+//! implements `Rewrite` or `Visit` there rather than matching every former.
 
 use std::sync::Arc;
 
 use skep_address::{Address, Nat};
 use skep_links::Endset;
+
+use crate::walk::{visit_term, Visit};
 
 /// `Arc`-shared term node.
 pub type ArcTerm = Arc<Term>;
@@ -24,12 +28,13 @@ pub const EXPANSION_NAME_BASE: u32 = 1 << 31;
 /// The reservation is structural, not merely intended: the type has exactly
 /// two constructors, one per side of the watershed — [`VarId::new`], the
 /// sole public one, rejects the reserved range; [`VarId::expansion`], the
-/// crate-private one, inhabits nothing else and is what the flattener's
-/// counter mints through (§Internal 4) — and the def codec rejects a
-/// reserved-range `VarId` in a decoded body (`ParseFailed`), so PR-ENC's
-/// body-binder-disjointness holds by construction.
+/// crate-private one, inhabits nothing else and is what the flat expansion's
+/// fresh-name supply mints through (§Internal 4). The def codec decodes a
+/// name through `new`, so a reserved-range name in stored content is a
+/// parse failure and PR-ENC's body-binder disjointness holds by
+/// construction.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct VarId(pub(crate) u32);
+pub struct VarId(u32);
 
 impl VarId {
     /// The sole public constructor — the reservation's enforcement point:
@@ -52,6 +57,12 @@ impl VarId {
                 .checked_add(n)
                 .expect("expansion-name supply exhausted"),
         )
+    }
+
+    /// The name's numeral — what the def codec writes; it reads one back
+    /// through [`VarId::new`].
+    pub(crate) fn index(&self) -> u32 {
+        self.0
     }
 }
 
@@ -124,7 +135,10 @@ pub enum Atom {
     IsK(TypeRef, ArcTerm),
     /// Core — `M_K`'s dedicated view-parameterized term twin.
     Members(TypeRef),
-    /// Core (view-parameterized).
+    /// Core (view-parameterized). The source is matched by COVERAGE of F at
+    /// `Active`/`Default` (M7's D3) and by DENOTATION — `x ∈ F.addrs()`
+    /// (V-AUD) — at `Audit`: a probe strictly under a denoted address has
+    /// targets at `Active` and none at `Audit`.
     TargetsOf(TypeRef, ArcTerm),
     /// BH1.
     IsFiltered(TypeRef, ArcTerm),
@@ -220,198 +234,144 @@ pub enum Prim {
 
 // ───────────────────────── structural helpers ─────────────────────────
 
-/// Substitute `TypeRef::ClassVar(cvar) → TypeRef::Concrete(key)` throughout
-/// `t`, stopping at an inner `Reg` binder that rebinds `cvar` (shadowing) —
-/// the V-IDX expansion step (§Internal 1).
-pub(crate) fn subst_classvar_term(t: &Term, cvar: &VarId, key: &TypeKey) -> Term {
-    let s = |x: &ArcTerm| -> ArcTerm { Arc::new(subst_classvar_term(x, cvar, key)) };
-    let sd = |d: &ArcDom| -> ArcDom { Arc::new(subst_classvar_dom(d, cvar, key)) };
-    let str_ = |tr: &TypeRef| subst_typeref(tr, cvar, key);
-    match t {
-        Term::Var(v) => Term::Var(v.clone()),
-        Term::Lit(l) => Term::Lit(l.clone()),
-        Term::Atom(a) => Term::Atom(match a {
-            Atom::IsK(tr, e) => Atom::IsK(str_(tr), s(e)),
-            Atom::Members(tr) => Atom::Members(str_(tr)),
-            Atom::TargetsOf(tr, e) => Atom::TargetsOf(str_(tr), s(e)),
-            Atom::IsFiltered(tr, e) => Atom::IsFiltered(str_(tr), s(e)),
-            Atom::Succs(tr, e) => Atom::Succs(str_(tr), s(e)),
-            Atom::Chain(tr, e) => Atom::Chain(str_(tr), s(e)),
-            Atom::Tip(tr, e) => Atom::Tip(str_(tr), s(e)),
-            Atom::IsInChain(tr, a1, a2) => Atom::IsInChain(str_(tr), s(a1), s(a2)),
-            Atom::SourcesTo(tr, e) => Atom::SourcesTo(str_(tr), s(e)),
-            Atom::TargetOf(tr, e) => Atom::TargetOf(str_(tr), s(e)),
-            Atom::TargetsKeyed(e) => Atom::TargetsKeyed(s(e)),
-            Atom::Age(tr, e) => Atom::Age(str_(tr), s(e)),
-            Atom::Stale(tr, e) => Atom::Stale(str_(tr), s(e)),
-            Atom::IsDoc(e) => Atom::IsDoc(s(e)),
-            Atom::TupAddr(v) => Atom::TupAddr(v.clone()),
-            Atom::TupAddrsF(v) => Atom::TupAddrsF(v.clone()),
-            Atom::TupAddrsG(v) => Atom::TupAddrsG(v.clone()),
-            Atom::InCoverageF(e, v) => Atom::InCoverageF(s(e), v.clone()),
-            Atom::InCoverageG(e, v) => Atom::InCoverageG(s(e), v.clone()),
-        }),
-        Term::Prim(p) => Term::Prim(match p {
-            Prim::AddrEq(a, b) => Prim::AddrEq(s(a), s(b)),
-            Prim::Prefix(a, b) => Prim::Prefix(s(a), s(b)),
-            Prim::T1Lt(a, b) => Prim::T1Lt(s(a), s(b)),
-            Prim::SetMem(a, b) => Prim::SetMem(s(a), s(b)),
-            Prim::SetEq(a, b) => Prim::SetEq(s(a), s(b)),
-            Prim::IsEmpty(a) => Prim::IsEmpty(s(a)),
-            Prim::Elems(a) => Prim::Elems(s(a)),
-            Prim::NatEq(a, b) => Prim::NatEq(s(a), s(b)),
-            Prim::NatLe(a, b) => Prim::NatLe(s(a), s(b)),
-            Prim::NatAdd(a, b) => Prim::NatAdd(s(a), s(b)),
-            Prim::MapGet(m, tr) => Prim::MapGet(s(m), str_(tr)),
-            Prim::Def(a) => Prim::Def(s(a)),
-        }),
-        Term::And(a, b) => Term::And(s(a), s(b)),
-        Term::Or(a, b) => Term::Or(s(a), s(b)),
-        Term::Not(a) => Term::Not(s(a)),
-        Term::Implies(a, b) => Term::Implies(s(a), s(b)),
-        Term::Iff(a, b) => Term::Iff(s(a), s(b)),
-        Term::Forall { var, dom, body } => {
-            // An inner Reg binder rebinding cvar shadows the outer one.
-            if matches!(dom.as_ref(), Dom::Reg) && var == cvar {
-                Term::Forall { var: var.clone(), dom: dom.clone(), body: body.clone() }
-            } else {
-                Term::Forall { var: var.clone(), dom: sd(dom), body: s(body) }
-            }
-        }
-        Term::Exists { var, dom, body } => {
-            if matches!(dom.as_ref(), Dom::Reg) && var == cvar {
-                Term::Exists { var: var.clone(), dom: dom.clone(), body: body.clone() }
-            } else {
-                Term::Exists { var: var.clone(), dom: sd(dom), body: s(body) }
-            }
-        }
-        Term::Let { var, bound, body } => Term::Let { var: var.clone(), bound: s(bound), body: s(body) },
-        Term::IfSome { opt, var, then_, else_ } => Term::IfSome {
-            opt: s(opt),
-            var: var.clone(),
-            then_: s(then_),
-            else_: s(else_),
-        },
-        Term::Count(d) => Term::Count(sd(d)),
-        Term::MaxT1(d) => Term::MaxT1(sd(d)),
-        Term::MinT1(d) => Term::MinT1(sd(d)),
-        Term::BigUnion { dom, var, body } => {
-            Term::BigUnion { dom: sd(dom), var: var.clone(), body: s(body) }
-        }
-        Term::Reflect(d) => Term::Reflect(sd(d)),
-        Term::Ref { addr, args } => Term::Ref { addr: addr.clone(), args: args.iter().map(s).collect() },
-    }
-}
-
-fn subst_classvar_dom(d: &Dom, cvar: &VarId, key: &TypeKey) -> Dom {
-    let s = |x: &ArcTerm| -> ArcTerm { Arc::new(subst_classvar_term(x, cvar, key)) };
-    let str_ = |tr: &TypeRef| subst_typeref(tr, cvar, key);
-    match d {
-        Dom::MembersDom(tr) => Dom::MembersDom(str_(tr)),
-        Dom::ActiveSlice(tr) => Dom::ActiveSlice(str_(tr)),
-        Dom::AuditSlice(tr) => Dom::AuditSlice(str_(tr)),
-        Dom::LinkDom => Dom::LinkDom,
-        Dom::Reg => Dom::Reg,
-        Dom::Filter { dom, var, pred } => Dom::Filter {
-            dom: Arc::new(subst_classvar_dom(dom, cvar, key)),
-            var: var.clone(),
-            pred: s(pred),
-        },
-        Dom::SetTerm(t) => Dom::SetTerm(s(t)),
-    }
-}
-
-fn subst_typeref(tr: &TypeRef, cvar: &VarId, key: &TypeKey) -> TypeRef {
-    match tr {
-        TypeRef::ClassVar(v) if v == cvar => TypeRef::Concrete(key.clone()),
-        other => other.clone(),
-    }
-}
-
 /// Collect every `Ref` address in `t` (recursively, including inside domain
-/// bodies) — the direct referents `register_pred`'s (iii)/(iv) checks range
-/// over (§Internal 4).
+/// bodies), in pre-order — the direct referents `register_pred`'s (iii)/(iv)
+/// checks range over (§Internal 4).
 pub(crate) fn collect_ref_addrs(t: &Term, out: &mut Vec<Address>) {
-    match t {
-        Term::Var(_) | Term::Lit(_) => {}
-        Term::Atom(a) => match a {
-            Atom::IsK(_, e)
-            | Atom::TargetsOf(_, e)
-            | Atom::IsFiltered(_, e)
-            | Atom::Succs(_, e)
-            | Atom::Chain(_, e)
-            | Atom::Tip(_, e)
-            | Atom::SourcesTo(_, e)
-            | Atom::TargetOf(_, e)
-            | Atom::TargetsKeyed(e)
-            | Atom::Age(_, e)
-            | Atom::Stale(_, e)
-            | Atom::IsDoc(e)
-            | Atom::InCoverageF(e, _)
-            | Atom::InCoverageG(e, _) => collect_ref_addrs(e, out),
-            Atom::IsInChain(_, a1, a2) => {
-                collect_ref_addrs(a1, out);
-                collect_ref_addrs(a2, out);
+    struct RefAddrs<'a>(&'a mut Vec<Address>);
+    impl Visit for RefAddrs<'_> {
+        fn term(&mut self, t: &Term) {
+            if let Term::Ref { addr, .. } = t {
+                self.0.push(addr.clone());
             }
-            Atom::Members(_) | Atom::TupAddr(_) | Atom::TupAddrsF(_) | Atom::TupAddrsG(_) => {}
-        },
-        Term::Prim(p) => match p {
-            Prim::AddrEq(a, b)
-            | Prim::Prefix(a, b)
-            | Prim::T1Lt(a, b)
-            | Prim::SetMem(a, b)
-            | Prim::SetEq(a, b)
-            | Prim::NatEq(a, b)
-            | Prim::NatLe(a, b)
-            | Prim::NatAdd(a, b) => {
-                collect_ref_addrs(a, out);
-                collect_ref_addrs(b, out);
-            }
-            Prim::IsEmpty(a) | Prim::Elems(a) | Prim::Def(a) | Prim::MapGet(a, _) => {
-                collect_ref_addrs(a, out)
-            }
-        },
-        Term::And(a, b) | Term::Or(a, b) | Term::Implies(a, b) | Term::Iff(a, b) => {
-            collect_ref_addrs(a, out);
-            collect_ref_addrs(b, out);
-        }
-        Term::Not(a) => collect_ref_addrs(a, out),
-        Term::Forall { dom, body, .. } | Term::Exists { dom, body, .. } => {
-            collect_ref_addrs_dom(dom, out);
-            collect_ref_addrs(body, out);
-        }
-        Term::Let { bound, body, .. } => {
-            collect_ref_addrs(bound, out);
-            collect_ref_addrs(body, out);
-        }
-        Term::IfSome { opt, then_, else_, .. } => {
-            collect_ref_addrs(opt, out);
-            collect_ref_addrs(then_, out);
-            collect_ref_addrs(else_, out);
-        }
-        Term::Count(d) | Term::MaxT1(d) | Term::MinT1(d) | Term::Reflect(d) => {
-            collect_ref_addrs_dom(d, out)
-        }
-        Term::BigUnion { dom, body, .. } => {
-            collect_ref_addrs_dom(dom, out);
-            collect_ref_addrs(body, out);
-        }
-        Term::Ref { addr, args } => {
-            out.push(addr.clone());
-            for a in args {
-                collect_ref_addrs(a, out);
-            }
+            visit_term(self, t);
         }
     }
+    RefAddrs(out).term(t);
 }
 
-pub(crate) fn collect_ref_addrs_dom(d: &Dom, out: &mut Vec<Address>) {
-    match d {
-        Dom::MembersDom(_) | Dom::ActiveSlice(_) | Dom::AuditSlice(_) | Dom::LinkDom | Dom::Reg => {}
-        Dom::Filter { dom, pred, .. } => {
-            collect_ref_addrs_dom(dom, out);
-            collect_ref_addrs(pred, out);
-        }
-        Dom::SetTerm(t) => collect_ref_addrs(t, out),
+/// A body spelling every former, atom, prim, domain, literal and type
+/// position, with every encodable sort in Γ_D — the input the codec's round
+/// trip and the walks' agreement are checked on. It need not type-check: the
+/// codec and the walks are structural.
+#[cfg(test)]
+pub(crate) mod fixture {
+    use std::sync::Arc;
+
+    use skep_address::{validate, Address, Nat, Tumbler};
+    use skep_links::enc;
+
+    use super::*;
+    use crate::value::Sort;
+
+    fn v(x: u32) -> VarId {
+        VarId::new(x).expect("test var below the watershed")
+    }
+
+    fn ad(comps: &[u32]) -> Address {
+        validate(Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty"))
+            .expect("T4-valid")
+    }
+
+    fn a(t: Term) -> ArcTerm {
+        Arc::new(t)
+    }
+
+    fn d(x: Dom) -> ArcDom {
+        Arc::new(x)
+    }
+
+    pub(crate) fn every_former() -> (Vec<(VarId, Sort)>, Term) {
+        let k = TypeRef::Concrete(TypeKey(enc(&[ad(&[1, 1, 0, 1, 0, 1, 0, 1, 1])])));
+        let c = TypeRef::ClassVar(v(9));
+        let x = || Term::Var(v(1));
+        let y = || Term::Var(v(2));
+        let lits = [
+            Lit::True,
+            Lit::False,
+            Lit::Nat(Nat::from(7u32)),
+            Lit::Addr(ad(&[1, 0, 1, 0, 1, 0, 1, 3])),
+            Lit::BotAddr,
+            Lit::BotNat,
+        ]
+        .into_iter()
+        .map(Term::Lit);
+        let atoms = [
+            Atom::IsK(k.clone(), a(x())),
+            Atom::Members(c.clone()),
+            Atom::TargetsOf(k.clone(), a(x())),
+            Atom::IsFiltered(k.clone(), a(x())),
+            Atom::Succs(k.clone(), a(x())),
+            Atom::Chain(k.clone(), a(x())),
+            Atom::Tip(k.clone(), a(x())),
+            Atom::IsInChain(k.clone(), a(x()), a(y())),
+            Atom::SourcesTo(k.clone(), a(x())),
+            Atom::TargetOf(k.clone(), a(x())),
+            Atom::TargetsKeyed(a(x())),
+            Atom::Age(k.clone(), a(x())),
+            Atom::Stale(k.clone(), a(x())),
+            Atom::IsDoc(a(x())),
+            Atom::TupAddr(v(3)),
+            Atom::TupAddrsF(v(3)),
+            Atom::TupAddrsG(v(3)),
+            Atom::InCoverageF(a(x()), v(3)),
+            Atom::InCoverageG(a(x()), v(3)),
+        ]
+        .into_iter()
+        .map(Term::Atom);
+        let prims = [
+            Prim::AddrEq(a(x()), a(y())),
+            Prim::Prefix(a(x()), a(y())),
+            Prim::T1Lt(a(x()), a(y())),
+            Prim::SetMem(a(x()), a(y())),
+            Prim::SetEq(a(x()), a(y())),
+            Prim::IsEmpty(a(x())),
+            Prim::Elems(a(x())),
+            Prim::NatEq(a(x()), a(y())),
+            Prim::NatLe(a(x()), a(y())),
+            Prim::NatAdd(a(x()), a(y())),
+            Prim::MapGet(a(x()), c.clone()),
+            Prim::Def(a(x())),
+        ]
+        .into_iter()
+        .map(Term::Prim);
+        let formers = [
+            Term::Or(a(x()), a(y())),
+            Term::Not(a(x())),
+            Term::Implies(a(x()), a(y())),
+            Term::Iff(a(x()), a(y())),
+            Term::Forall { var: v(5), dom: d(Dom::MembersDom(k.clone())), body: a(x()) },
+            Term::Exists { var: v(5), dom: d(Dom::ActiveSlice(k.clone())), body: a(x()) },
+            Term::Let { var: v(6), bound: a(x()), body: a(y()) },
+            Term::IfSome { opt: a(x()), var: v(7), then_: a(y()), else_: a(x()) },
+            Term::Count(d(Dom::AuditSlice(c))),
+            Term::MaxT1(d(Dom::LinkDom)),
+            Term::MinT1(d(Dom::Reg)),
+            Term::BigUnion {
+                dom: d(Dom::Filter { dom: d(Dom::LinkDom), var: v(4), pred: a(x()) }),
+                var: v(8),
+                body: a(y()),
+            },
+            Term::Reflect(d(Dom::SetTerm(a(x())))),
+            Term::Ref { addr: ad(&[1, 0, 1, 0, 1, 0, 1, 4]), args: vec![a(x()), a(y())] },
+        ];
+        // `And` is the spine, so it is spelled by the fold itself.
+        let body = lits
+            .chain(atoms)
+            .chain(prims)
+            .chain(formers)
+            .reduce(|l, r| Term::And(a(l), a(r)))
+            .expect("nonempty");
+        let params = vec![
+            (v(1), Sort::Bool),
+            (v(2), Sort::Addr),
+            (v(3), Sort::AddrSet),
+            (v(4), Sort::OptAddr),
+            (v(5), Sort::AddrSeq),
+            (v(6), Sort::Map),
+            (v(7), Sort::Nat),
+            (v(8), Sort::OptNat),
+        ];
+        (params, body)
     }
 }

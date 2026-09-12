@@ -43,7 +43,7 @@ use skep_links::{Caller, HasLinks, ShippedType, View};
 fn always(coord: &Coordinator<World>) -> TriggerRef {
     let x = VarId::new(1).expect("a test variable below the watershed");
     TriggerRef::Inline(
-        coord.type_check_trigger(vec![(x, Sort::Addr)], Term::Lit(Lit::True))
+        coord.type_check_trigger((x, Sort::Addr), Term::Lit(Lit::True))
             .expect("an always-true trigger type-checks"),
     )
 }
@@ -334,7 +334,7 @@ fn a_fire_commits_byte_identically_to_a_world_with_no_drafts() {
         let mut coord = engine.coordinator();
         let trigger = TriggerRef::Inline(
             coord.type_check_trigger(
-                vec![(x.clone(), Sort::Addr)],
+                (x.clone(), Sort::Addr),
                 Term::Not(Arc::new(Term::Atom(Atom::IsK(
                     TypeRef::Concrete(TypeKey(retired.clone())),
                     Arc::new(Term::Var(x.clone())),
@@ -455,7 +455,7 @@ fn domain_enumeration_excludes_the_draft_tuple_and_keeps_a_retracted_one() {
     let names = |coord: &Coordinator<World>, a: &Address| -> TriggerRef {
         TriggerRef::Inline(
             coord.type_check_trigger(
-                vec![(t.clone(), Sort::Tup)],
+                (t.clone(), Sort::Tup),
                 Term::Prim(Prim::AddrEq(
                     Arc::new(Term::Atom(Atom::TupAddr(t.clone()))),
                     Arc::new(Term::Lit(Lit::Addr(a.clone()))),
@@ -491,8 +491,8 @@ fn domain_enumeration_excludes_the_draft_tuple_and_keeps_a_retracted_one() {
 }
 
 /// A DEF trigger reads the same filtered store as an inline one: the def's
-/// denotation runs through `evaluate_def`'s own context, which is the same
-/// guest-class view. The def is stored in the owner's draft (a def cannot be
+/// checked body, captured at registration, is evaluated through the same
+/// guest-class context. The def is stored in the owner's draft (a def cannot be
 /// defined into a published document) and its REGISTRATION is class-free —
 /// it is the def's LOOK that is at guest class: a `retired` marker homed in
 /// the draft is invisible to `T(x) = is_K(retired, x)` whether `T` is the
@@ -524,7 +524,7 @@ fn a_def_trigger_sees_the_same_filtered_store_as_an_inline_one() {
     let (start, _) =
         coord.define_predicate(&draft, checked).expect("a def is defined into a draft");
     let inline = TriggerRef::Inline(
-        coord.type_check_trigger(vec![(x, Sort::Addr)], body).expect("the same body as a trigger"),
+        coord.type_check_trigger((x, Sort::Addr), body).expect("the same body as a trigger"),
     );
     let mk = |trigger: TriggerRef| Rule {
         domain: Dom::MembersDom(TypeRef::Concrete(TypeKey(pred_stable.clone()))),
@@ -537,7 +537,6 @@ fn a_def_trigger_sees_the_same_filtered_store_as_an_inline_one() {
         .expect("a Def trigger over an ever-registered Boolean def registers");
     let inline_rule = coord.register_rule(mk(inline)).expect("a well-formed rule registers");
 
-    // Pinned after the def's registration commit (the freshness precondition).
     let snap = engine.kernel().snapshot();
     assert!(
         snap.world().links().is_k(&retired, member.tumbler()),

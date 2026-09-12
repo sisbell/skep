@@ -102,9 +102,7 @@ fn decide_now(k: &Arc<skep_kernel::Kernel<World>>, c: &Coordinator<World>, view:
 }
 
 fn always_addr(c: &Coordinator<World>) -> TriggerRef {
-    TriggerRef::Inline(
-        c.type_check_trigger(vec![(v(1), Sort::Addr)], tru()).expect("always-true trigger"),
-    )
+    TriggerRef::Inline(c.type_check_trigger((v(1), Sort::Addr), tru()).expect("always-true trigger"))
 }
 
 fn marker_action() -> FireAction {
@@ -154,19 +152,19 @@ fn type_check_gamma_and_catalog_guards() {
 
     // A free Var outside Γ_D.
     assert!(matches!(c.type_check(vec![], var(3)), Err(TypeError::UnboundVariable(_))));
-    // Def path rejects a Tup parameter; the trigger path admits exactly one.
+    // The def path rejects a Tup parameter; the trigger path — its own
+    // type, one parameter by signature — admits it, and requires Bool.
     assert!(matches!(
         c.type_check(vec![(v(1), Sort::Tup)], tru()),
         Err(TypeError::TupParameter(_))
     ));
-    let one_tup = c.type_check_trigger(
-        vec![(v(1), Sort::Tup)],
-        Term::Atom(Atom::InCoverageF(at(lit_addr(&ca(1))), v(1))),
-    );
-    assert!(one_tup.is_ok());
+    let one_tup = c
+        .type_check_trigger((v(1), Sort::Tup), Term::Atom(Atom::InCoverageF(at(lit_addr(&ca(1))), v(1))))
+        .expect("a one-Tup-parameter Bool trigger");
+    assert_eq!(one_tup.param(), &(v(1), Sort::Tup));
     assert!(matches!(
-        c.type_check_trigger(vec![(v(1), Sort::Tup), (v(2), Sort::Tup)], tru()),
-        Err(TypeError::TupParameter(x)) if x == v(2)
+        c.type_check_trigger((v(1), Sort::Addr), lit_nat(1)),
+        Err(TypeError::SortMismatch { expected: Sort::Bool, found: Sort::Nat })
     ));
     // Sort synthesis.
     assert!(matches!(
@@ -324,6 +322,19 @@ fn decide_panics_on_non_bool_codomain() {
     let t = c.type_check(vec![], lit_nat(1)).expect("Nat-codomain term");
     let s = k.snapshot();
     let _ = c.decide(&t, &Env::empty(), View::Active, &s);
+}
+
+/// `eval`'s door: an `Env` that leaves a Γ_D parameter unbound (or binds it
+/// at the wrong sort) is a precondition violation named at the door, not a
+/// failure somewhere inside the walk.
+#[test]
+#[should_panic(expected = "eval precondition")]
+fn eval_panics_on_unbound_parameter() {
+    let k = kernel();
+    let c = coord(&k);
+    let t = c.type_check(vec![(v(1), Sort::Addr)], tru()).expect("one-param term");
+    let s = k.snapshot();
+    let _ = c.eval(&t, &Env::empty().bind(v(1), Value::Nat(n(1))), View::Active, &s);
 }
 
 #[test]
@@ -500,17 +511,14 @@ fn def_references_endorsement_and_no_cascade() {
     assert_eq!(c.evaluate_def(&q_start, &[], View::Active, &s2), Ok(Value::Bool(true)));
 }
 
-/// The up-front Tup rejection (no orphan content), and register_pred's
-/// parse-level gates.
+/// register_pred's parse-level gates. (A tuple-binding def is not a
+/// rejection here but a type error: `define_predicate` takes a `TypedTerm`,
+/// and `type_check_trigger` — the one way to bind a `Tup` — yields a
+/// `TriggerTerm`, so no such def can be spelled.)
 #[test]
 fn define_and_register_rejections() {
     let k = kernel();
     let c = coord(&k);
-
-    let tup_term = c.type_check_trigger(vec![(v(1), Sort::Tup)], tru()).expect("trigger term");
-    let n0 = k.snapshot().world().m5().content_count(&doc1());
-    assert!(matches!(c.define_predicate(&doc1(), tup_term), Err(DefineError::TupParameter(_))));
-    assert_eq!(k.snapshot().world().m5().content_count(&doc1()), n0); // before any insert
 
     // An undisciplined deposit (garbage bytes) is a clean ParseFailed.
     let g = insert_raw(&k, &doc2(), vec![0xff, 0x01, 0x02]);
@@ -549,14 +557,6 @@ fn supersede_gates_lineage_and_fence_drift() {
         .expect("define P");
     let s = k.snapshot();
     assert!(matches!(c.current_version(&p_start, &s), Tip::Sink(x) if x == p_start));
-
-    // The Codom-only rule is the define path's one door: a Tup-parameter
-    // successor is refused before any insert — content count unchanged, no
-    // orphan successor, no lineage claim.
-    let tup_term = c.type_check_trigger(vec![(v(1), Sort::Tup)], tru()).expect("trigger term");
-    let n0 = k.snapshot().world().m5().content_count(&doc1());
-    assert!(matches!(c.supersede(&doc1(), &p_start, tup_term), Err(DefineError::TupParameter(_))));
-    assert_eq!(k.snapshot().world().m5().content_count(&doc1()), n0);
 
     // DRIFT TRIPWIRE (report: "supersede vs M7's SupersessionClass fence"):
     // the emit route the M9 design resolves to (Conflicts §4) is fenced by
@@ -705,22 +705,25 @@ fn register_rule_validation_gates() {
         )),
         Err(RuleError::DomainTriggerSortMismatch { expected: Sort::Tup, found: Sort::Addr })
     ));
-    // Trigger codomain and arity.
-    let nat_trig = c.type_check_trigger(vec![(v(1), Sort::Addr)], lit_nat(1)).expect("Nat trigger");
+    // A Def trigger's codomain and arity (an Inline trigger is one-parameter
+    // Bool by its type — `type_check_trigger` refuses a non-Bool body).
+    let (nat_def, _) = c
+        .define_predicate(&doc1(), c.type_check(vec![(v(1), Sort::Addr)], lit_nat(1)).expect("Nat def"))
+        .expect("define a Nat-codomain def");
     assert!(matches!(
-        c.register_rule(mk(Dom::MembersDom(conc(&pred_stable_ty())), TriggerRef::Inline(nat_trig), marker_action())),
+        c.register_rule(mk(Dom::MembersDom(conc(&pred_stable_ty())), TriggerRef::Def(nat_def), marker_action())),
         Err(RuleError::TriggerNotBoolean)
     ));
-    let two_param = c
-        .type_check_trigger(vec![(v(1), Sort::Addr), (v(2), Sort::Addr)], tru())
-        .expect("two-param term");
+    let (closed_def, _) = c
+        .define_predicate(&doc1(), c.type_check(vec![], tru()).expect("closed def"))
+        .expect("define a closed def");
     assert!(matches!(
-        c.register_rule(mk(Dom::MembersDom(conc(&pred_stable_ty())), TriggerRef::Inline(two_param), marker_action())),
+        c.register_rule(mk(Dom::MembersDom(conc(&pred_stable_ty())), TriggerRef::Def(closed_def), marker_action())),
         Err(RuleError::BadTriggerArity)
     ));
     // A ref-bearing Inline trigger.
     let ref_trig = c
-        .type_check_trigger(vec![(v(1), Sort::Addr)], Term::Ref { addr: p_start.clone(), args: vec![at(var(1))] })
+        .type_check_trigger((v(1), Sort::Addr), Term::Ref { addr: p_start.clone(), args: vec![at(var(1))] })
         .expect("ref-bearing trigger term");
     assert!(matches!(
         c.register_rule(mk(Dom::MembersDom(conc(&pred_stable_ty())), TriggerRef::Inline(ref_trig), marker_action())),
@@ -776,7 +779,7 @@ fn marker_rule_certifies_fires_and_quiesces() {
     ls.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("rel 2");
 
     let trig = TriggerRef::Inline(
-        c.type_check_trigger(vec![(v(1), Sort::Addr)], not(is_k_t(&marker_ty(), var(1))))
+        c.type_check_trigger((v(1), Sort::Addr), not(is_k_t(&marker_ty(), var(1))))
             .expect("¬is_K(marker, x) @ audit"),
     );
     let rule = Rule {
@@ -823,6 +826,46 @@ fn marker_rule_certifies_fires_and_quiesces() {
 
     // The rule reads the class it emits: a self-loop in the armer graph —
     // the static warning (harmless here: the rule is SF).
+    assert_eq!(c.armer_cycles(), vec![vec![id]]);
+}
+
+/// A `Def` trigger is the def's checked body, captured at registration: it
+/// reads only the snapshot it is evaluated on — one pinned BEFORE the def
+/// was defined serves the detector and the peek, as one pinned after does —
+/// and the def's later retraction changes nothing: the rule keeps firing,
+/// and the lint still reads the trigger's flat expansion.
+#[test]
+fn a_def_trigger_reads_only_the_snapshot_it_is_evaluated_on() {
+    let k = kernel();
+    let mut c = coord(&k);
+    links(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
+    let before = k.snapshot();
+
+    // T(x) := ¬is_K(marker, x), stored as a def AFTER `before` was pinned.
+    let t = c
+        .type_check(vec![(v(1), Sort::Addr)], not(is_k_t(&marker_ty(), var(1))))
+        .expect("T type-checks");
+    let (start, _) = c.define_predicate(&doc1(), t).expect("define T");
+    let rule = Rule {
+        domain: Dom::MembersDom(conc(&pred_stable_ty())),
+        trigger: TriggerRef::Def(start.clone()),
+        view: View::Audit,
+        action: marker_action(),
+    };
+    assert_eq!(c.certify_rule(&rule).expect("well-formed"), RuleCertification::CertifiedTerminating);
+    let id = c.register_rule(rule).expect("register");
+
+    // The snapshot predating the def's registration answers, and agrees
+    // with a fresh one.
+    assert!(!c.quiescent(&before));
+    assert_eq!(c.next_enabled(&before), Some(Enabled { rule: id, arg: Value::Addr(ca(1)) }));
+    assert!(!c.quiescent(&k.snapshot()));
+
+    // Retract the def: the rule's trigger is its own copy.
+    c.retract_pred(&doc1(), &start).expect("retract T");
+    assert!(!c.is_active_pred(&start, &k.snapshot()));
+    assert!(matches!(c.step(&k.snapshot()), StepOutcome::Fired { arg, .. } if arg == ca(1)));
+    assert!(matches!(c.step(&k.snapshot()), StepOutcome::Quiescent));
     assert_eq!(c.armer_cycles(), vec![vec![id]]);
 }
 
@@ -957,7 +1000,7 @@ fn the_trigger_s_look_is_filtered_at_guest_class() {
     let (draft_marker, _) =
         links(&k).emit(Caller::System, &doc2(), &marker_ty(), &ca(1), &[]).expect("marker in doc2");
     let trig = TriggerRef::Inline(
-        c.type_check_trigger(vec![(v(1), Sort::Addr)], not(is_k_t(&marker_ty(), var(1))))
+        c.type_check_trigger((v(1), Sort::Addr), not(is_k_t(&marker_ty(), var(1))))
             .expect("trigger"),
     );
     c.register_rule(Rule {
@@ -1016,7 +1059,7 @@ fn nullify_rules_uncertified_fire_and_failed_surface() {
     let m1 = deposit_rel(&k, 2, &ca(1), &ca(2)); // a pred_stable-classed tuple
 
     let trig = TriggerRef::Inline(
-        c.type_check_trigger(vec![(v(1), Sort::Tup)], tru()).expect("Tup trigger"),
+        c.type_check_trigger((v(1), Sort::Tup), tru()).expect("Tup trigger"),
     );
     let rule = Rule {
         domain: Dom::ActiveSlice(conc(&pred_stable_ty())),
@@ -1046,7 +1089,7 @@ fn nullify_rules_uncertified_fire_and_failed_surface() {
     let mut c2 = coord(&k2);
     deposit_rel(&k2, 2, &ca(1), &ca(2));
     let trig2 = TriggerRef::Inline(
-        c2.type_check_trigger(vec![(v(1), Sort::Addr)], tru()).expect("Addr trigger"),
+        c2.type_check_trigger((v(1), Sort::Addr), tru()).expect("Addr trigger"),
     );
     let bad = Rule {
         domain: Dom::MembersDom(conc(&pred_stable_ty())),
@@ -1077,7 +1120,7 @@ fn quiescent_scoped_exact_then_over_approximates() {
     ls.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("rel 2");
 
     let trig = TriggerRef::Inline(
-        c.type_check_trigger(vec![(v(1), Sort::Addr)], not(is_k_t(&marker_ty(), var(1))))
+        c.type_check_trigger((v(1), Sort::Addr), not(is_k_t(&marker_ty(), var(1))))
             .expect("trigger"),
     );
     let id = c
@@ -1108,7 +1151,7 @@ fn quiescent_scoped_exact_then_over_approximates() {
     // reported, never false quiescence.
     deposit_rel(&k, 1, &ca(5), &ca(6)); // a pred_def-classed tuple
     let trig_t = TriggerRef::Inline(
-        c.type_check_trigger(vec![(v(2), Sort::Tup)], tru()).expect("Tup trigger"),
+        c.type_check_trigger((v(2), Sort::Tup), tru()).expect("Tup trigger"),
     );
     c.register_rule(Rule {
         domain: Dom::ActiveSlice(conc(&pred_def_ty())),

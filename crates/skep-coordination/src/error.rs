@@ -19,8 +19,9 @@ pub enum TypeError {
     UnboundVariable(VarId),
     /// A `TypeRef::ClassVar` under no enclosing `Reg` binder (V-IDX).
     UnboundClassVar(VarId),
-    /// A DEF-PATH Γ_D parameter sorted `Tup` — excluded from Codom (ASN-0130
-    /// SignedTerm); the trigger path (`type_check_trigger`) admits one.
+    /// A `type_check` Γ_D parameter sorted `Tup` — excluded from Codom
+    /// (ASN-0130 SignedTerm); a rule trigger, the one term that binds a
+    /// tuple, is checked by `type_check_trigger` into a `TriggerTerm`.
     TupParameter(VarId),
     SortMismatch { expected: Sort, found: Sort },
     /// An atom needs a behavior the (concrete) type's registration lacks.
@@ -45,13 +46,11 @@ pub enum TypeError {
     RegInstanceIllTyped(Box<TypeError>),
 }
 
-/// `define_predicate`/`supersede` rejection.
+/// `define_predicate`/`supersede` rejection. A tuple-binding term has no
+/// variant here: stored-def parameters are Codom-only (ASN-0130 SignedTerm)
+/// by the `TypedTerm` type, which no `Tup`-binding term inhabits.
 #[derive(Debug)]
 pub enum DefineError {
-    /// A `Tup`-sorted Γ_D parameter — rejected UP FRONT, before any insert
-    /// (no orphan content); stored-def params are Codom-only (ASN-0130
-    /// SignedTerm). Checked by `define_predicate` AND `supersede`.
-    TupParameter(VarId),
     /// `supersede` only: `old_start` is not an ever-registered def — gated UP
     /// FRONT, before any transaction (a typo'd non-def address must not seed
     /// a `supersedes` lineage; PR4 presupposes the superseded address IS a
@@ -140,12 +139,14 @@ pub enum RuleError {
     /// Trigger param sort ≠ domain element sort — the reconciliation the two
     /// independent type-checks omit.
     DomainTriggerSortMismatch { expected: Sort, found: Sort },
-    /// Trigger codomain ≠ Bool.
+    /// A `Def` trigger whose def's codomain ≠ Bool (a `TriggerTerm` is Bool
+    /// by type).
     TriggerNotBoolean,
     /// `TriggerRef::Def` addr has no defined signature (never-registered or
     /// undisciplined).
     DefTriggerUnregistered(Address),
-    /// Trigger not single-parameter.
+    /// A `Def` trigger whose def is not single-parameter (a `TriggerTerm`
+    /// binds exactly one by type).
     BadTriggerArity,
     /// `Marker.ty` not a cataloged Unary type.
     BadMarkerType(TypeKey),

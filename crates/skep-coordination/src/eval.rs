@@ -1,9 +1,9 @@
-//! §Internal 2 — the pure evaluator: a syntax-directed tree-walk threading
-//! `(env, view, snap)`, reading ONLY M7 (`links()`) and M3 (`m3()`) — never
-//! content or arrangement (PC4, structural-reads-only as a wiring
-//! discipline). Every constituent read of one verdict comes off the single
-//! pinned `Snapshot` the caller supplied (ASN-0134 clause 6, by
-//! construction).
+//! §Internal 2 — the pure evaluator: a syntax-directed tree-walk over one
+//! verdict's fixed context `(catalog, links, m3, view)` and its environment,
+//! reading ONLY M7 (`links()`) and M3 (`m3()`) — never content or arrangement
+//! (PC4, structural-reads-only as a wiring discipline). Every constituent
+//! read of one verdict comes off the single pinned `Snapshot` the caller
+//! supplied (ASN-0134 clause 6, by construction).
 //!
 //! The one audit seam: every audit read — `is_K@audit`, the audit core-atom
 //! rebuilds (`members`/`targets_of`/`M_K`@audit, per V-AUD's own equations
@@ -18,294 +18,45 @@
 //! post-filter their returned collections; `tip`/`is_in_chain` walk
 //! unfiltered.
 //!
-//! THE LOOK AT GUEST CLASS (PUB round 2, lane 4.1): every M7 read the
-//! evaluator makes goes through [`GuestLinks`] — M7's read surface filtered
-//! at link HOME by the coordinator's injected guest predicate — so a tuple
-//! homed in a private draft can neither satisfy a rule's trigger nor seed its
-//! domain, and a public fire never testifies to a draft's contents
-//! (PUB-6.28). M7's `LinkState` reads stay class-free; the filter is the
-//! delegator's, applied here.
+//! Every M7 read the evaluator makes goes through [`GuestLinks`] — M7's read
+//! surface filtered at link HOME by the coordinator's injected guest
+//! predicate (`guest.rs` states the doctrine) — so a tuple homed in a private
+//! draft can neither satisfy a rule's trigger nor seed its domain, and a
+//! public fire never testifies to a draft's contents (PUB-6.28).
 
 use std::slice;
 use std::sync::Arc;
 
 use im::OrdSet;
-use skep_address::{document_of, is_prefix, validate, Address, Nat, Tumbler};
-use skep_links::{
-    CoverageClass, Endset, LinkState, NotBh4, Pattern, Tip, Tuple, View, Visibility,
-};
+use skep_address::{is_prefix, validate, Address, Nat, Tumbler};
+use skep_links::{CoverageClass, Pattern, Tip, Tuple, View};
 use skep_namespace::M3State;
 
 use crate::ast::{Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId};
 use crate::catalog::TypeCatalog;
-use crate::memo::DefEntry;
+use crate::check::TypedTerm;
+use crate::guest::GuestLinks;
 use crate::value::{Env, Value};
 
 /// Referent supplier for the DAG-recursive drivers over ref-bearing bodies —
-/// `evaluate_def`'s denotation (`eval`'s walk plus the one `Ref` arm,
-/// §Internal 4/Conflicts §5) and the flat expansion `certify_stable` runs.
-/// `None` for the public `eval`/`decide`, whose ref-free precondition makes
-/// the arm a panic. A `Some` is the memo's own `Arc` — the signature and the
-/// expanded body of a defined referent, never a copy.
+/// the denotation of a stored def (`eval_term`'s walk plus the one `Ref`
+/// arm, §Internal 4/Conflicts §5) and the flat expansion the static analyses
+/// run over. `None` for the public `eval`/`decide`, whose ref-free
+/// precondition makes the arm a panic. A `Some` is the memo's own `Arc` —
+/// the checked term of a defined referent, never a copy.
 pub(crate) trait DefSource {
-    fn resolve_def(&self, addr: &Address) -> Option<Arc<DefEntry>>;
-}
-
-/// THE TRIGGER'S LOOK AT GUEST CLASS (PUB round 2, lane 4.1): M7's read
-/// surface as the evaluator sees it — one filtered view over `&LinkState`
-/// that DROPS every tuple whose HOME document the coordinator's injected
-/// guest predicate refuses. Every read the evaluator makes of the store goes
-/// through this view, and through nothing else: `EvalCtx.links` IS this
-/// view in every construction (`eval`/`decide`, the rule engine's domain
-/// enumeration and trigger evaluation, the fire's own re-check, the
-/// def-path denotation), so no draft-homed tuple can satisfy a rule's
-/// trigger, seed its domain, or move a PL verdict.
-///
-/// WHY BY HOME (PUB-1.26, PUB-1.31, PUB-6.13): a link carries no publication
-/// flag of its own — its publishedness is its HOME's — so a tuple is visible
-/// at guest class iff `readable_guest(document_of(t.addr))`, its home
-/// document being published. That is the same test M7's own value-keyed
-/// gates apply at link-home identity (lane 3.3b) and the result-set row
-/// applies to every link (PUB-6.13). The VIEW (`Active`/`Audit`) is
-/// ORTHOGONAL to the class: an `AuditSlice` domain still shows the retracted
-/// tuples of READABLE homes, and never a draft's tuples.
-///
-/// WHY HERE (PUB-6.28; the owner's placement ruling of 2026-09-06 — the
-/// class is threaded from the caller): "a fire's verdict never turns on a
-/// document rule 4 hides, and a fire commits byte-identically to a world
-/// with no drafts". The verdict is the trigger's as much as the write's, so
-/// the class lane 3.3 pinned on the action's home (`FireError::DraftBoundary`)
-/// and lane 3.3b on the writer's gates is applied to the LOOK too — in M9,
-/// the delegator that holds `guest`. M7 is told nothing.
-///
-/// COST (PUB-7.15's shape): one `document_of` (M1 arithmetic, no read) and
-/// one predicate call per candidate tuple of the unfiltered read — a rule's
-/// domain over a class of N tuples costs N home tests, proportional to the
-/// unfiltered candidate set, as the read-side filters are. No per-home memo
-/// is kept: the context is borrow-scoped to one verdict, the predicate the
-/// engine injects is an exception-set membership miss (one hash), and the
-/// evaluator carries no interior mutability.
-///
-/// THE READS, each answered over the visible slice exactly as M7's own
-/// answers it over the whole: `is_k` and `observe` (the two reads the delta
-/// names) and, listed as the delta asks, the rest the evaluator makes —
-/// `members`, `targets_of` (D1/D3 over the visible slice); the BH2 walk
-/// family `succs`/`chain`/`tip`/`is_in_chain` (rebuilt over the VISIBLE
-/// active `[K_sup]` claims, so a draft-homed claim moves no walk); the BH3
-/// pair `sources_to`/`target_of` (the `targets_keyed` join is `EvalCtx`'s,
-/// over the catalog's BH3 classes, each answered by `target_of` here); and
-/// BH4's `age`/`stale` (dormant in this format, filtered the same way).
-/// Signatures mirror M7's so the evaluator's call sites read as before.
-pub(crate) struct GuestLinks<'a, W> {
-    world: &'a W,
-    state: &'a LinkState,
-    guest: &'a Visibility<'a, W>,
-}
-
-impl<'a, W> GuestLinks<'a, W> {
-    /// Over the world `w` of one pinned snapshot: its link slice, and the
-    /// guest-class predicate the coordinator lends (a borrow of the one
-    /// closure it holds — the same one every `LinkWriter` it builds runs at).
-    pub(crate) fn new(world: &'a W, state: &'a LinkState, guest: &'a Visibility<'a, W>) -> GuestLinks<'a, W> {
-        GuestLinks { world, state, guest }
-    }
-
-    /// The class test, at link-HOME identity — as M7's dedup gate applies it:
-    /// `document_of(link)` is address arithmetic (no read), then the
-    /// predicate on that home. A stored link key is element-level, so its
-    /// home exists; an address with no document is answered `false`
-    /// (fail-closed).
-    fn home_readable(&self, link: &Address) -> bool {
-        document_of(link).is_some_and(|home| (self.guest)(self.world, &home))
-    }
-
-    fn admits(&self, t: &Tuple) -> bool {
-        self.home_readable(&t.addr)
-    }
-
-    /// M7's `observe` with the tuples of unreadable homes dropped — the ONE
-    /// filtering primitive every other read here is built on (so the class
-    /// test has one statement).
-    pub(crate) fn observe(&self, ty: &Endset, pat: Pattern<'_>, view: View) -> Vec<Tuple> {
-        let mut out = self.state.observe(ty, pat, view);
-        out.retain(|t| self.admits(t));
-        out
-    }
-
-    /// D2 over the visible active slice: some visible active type-`ty`
-    /// tuple's F COVERS the probe. M7's own `is_k` does not expose the
-    /// witnessing tuple, so the answer is the home-filtered `observe` at the
-    /// same coverage pattern — the two are one predicate on the whole slice.
-    pub(crate) fn is_k(&self, ty: &Endset, probe: &Tumbler) -> bool {
-        !self
-            .observe(ty, Pattern { from: slice::from_ref(probe), to: &[] }, View::Active)
-            .is_empty()
-    }
-
-    /// D1 over the visible slice: `⋃ F.addrs()`, deduplicated, Tumbler order
-    /// — M7's own equation, a SLICE read at `Active` or `Audit` (the UV
-    /// rewrite is `EvalCtx`'s own per-type filter over the active read, so
-    /// `Default` names no slice here and, as at M7's `observe`, reads as
-    /// `Active`).
-    pub(crate) fn members(&self, ty: &Endset, view: View) -> Vec<Address> {
-        let mut out: OrdSet<Tumbler> = OrdSet::new();
-        for t in self.observe(ty, Pattern::default(), view) {
-            for m in t.from.addrs() {
-                out.insert(m.clone());
-            }
-        }
-        out.iter().map(lift).collect()
-    }
-
-    /// D3 over the visible slice: `⋃ G.addrs()` of the tuples whose F COVERS
-    /// `x`, deduplicated, Tumbler order (M7's own coverage regime for this
-    /// read) — a slice read at `Active` or `Audit`, as `members`.
-    pub(crate) fn targets_of(&self, ty: &Endset, x: &Address, view: View) -> Vec<Address> {
-        let mut out: OrdSet<Tumbler> = OrdSet::new();
-        for t in self.observe(ty, Pattern { from: slice::from_ref(x.tumbler()), to: &[] }, view) {
-            for g in t.to.addrs() {
-                out.insert(g.clone());
-            }
-        }
-        out.iter().map(lift).collect()
-    }
-
-    // ───────────── BH2 — the walk over the VISIBLE operative claims ─────────────
-    //
-    // Served for whatever class the caller names: the type checker admits
-    // the walk atoms only at the shipped `Supersedes` key (`UnservedWalkClass`
-    // otherwise — M7 v1's serving scope), so the class question is decided
-    // once, at check time, and never re-asked here.
-
-    /// The visible OPERATIVE claim set: the active `[K_sup]` tuples of
-    /// readable homes. Edges run `old → new` by DENOTATION on both slots,
-    /// exactly as M7's `sup_fwd` fold keys them; a claim is operative iff
-    /// unnullified (Df-SUCC), which the active view gives.
-    fn visible_claims(&self, ty: &Endset) -> Vec<Tuple> {
-        self.observe(ty, Pattern::default(), View::Active)
-    }
-
-    /// `succ_o(x)` over the visible claims — deduplicated over `new`.
-    fn succs_operative(claims: &[Tuple], x: &Tumbler) -> OrdSet<Tumbler> {
-        claims
-            .iter()
-            .filter(|t| t.from.addrs().any(|old| old == x))
-            .flat_map(|t| t.to.addrs().cloned())
-            .collect()
-    }
-
-    /// The visited-set-bounded forward walk (M7's own halting rule): the
-    /// traversed path from `x` (inclusive) and `Some(sink)` iff halted at a
-    /// successor-free node — a branch or a cycle yields `None`.
-    fn walk_sup(claims: &[Tuple], x: &Tumbler) -> (Vec<Tumbler>, Option<Tumbler>) {
-        let mut path = vec![x.clone()];
-        let mut visited = OrdSet::unit(x.clone());
-        let mut node = x.clone();
-        loop {
-            let succs = Self::succs_operative(claims, &node);
-            match succs.len() {
-                0 => return (path, Some(node)),
-                1 => {
-                    let next = succs.iter().next().expect("len == 1").clone();
-                    if visited.contains(&next) {
-                        return (path, None); // cycle
-                    }
-                    visited.insert(next.clone());
-                    path.push(next.clone());
-                    node = next;
-                }
-                _ => return (path, None), // branch
-            }
-        }
-    }
-
-    /// BH2 forward step over the visible operative claims (Tumbler order).
-    pub(crate) fn succs(&self, ty: &Endset, x: &Address) -> Vec<Address> {
-        let claims = self.visible_claims(ty);
-        Self::succs_operative(&claims, x.tumbler()).iter().map(lift).collect()
-    }
-
-    /// BH2 chain over the visible operative claims.
-    pub(crate) fn chain(&self, ty: &Endset, x: &Address) -> Vec<Address> {
-        let claims = self.visible_claims(ty);
-        Self::walk_sup(&claims, x.tumbler()).0.iter().map(lift).collect()
-    }
-
-    /// BH2 head over the visible operative claims: `Sink(head)` at a
-    /// successor-free node, `Indeterminate` at a branch or cycle.
-    pub(crate) fn tip(&self, ty: &Endset, x: &Address) -> Tip {
-        let claims = self.visible_claims(ty);
-        match Self::walk_sup(&claims, x.tumbler()).1 {
-            Some(sink) => Tip::Sink(lift(&sink)),
-            None => Tip::Indeterminate,
-        }
-    }
-
-    /// BH2 chain membership: `target ∈ chain(ty, addr)` — walk-result
-    /// membership, never a coverage test.
-    pub(crate) fn is_in_chain(&self, ty: &Endset, addr: &Address, target: &Address) -> bool {
-        self.chain(ty, addr).contains(target)
-    }
-
-    // ────────────────────────── BH3 — over the visible slice ──────────────────────────
-
-    /// BH3 reverse: the F-denoted sources of the visible active type-`ty`
-    /// tuples whose G COVERS `target`, deduplicated, Tumbler order.
-    pub(crate) fn sources_to(&self, ty: &Endset, target: &Address) -> Vec<Address> {
-        let mut out: OrdSet<Tumbler> = OrdSet::new();
-        for t in self.observe(
-            ty,
-            Pattern { from: &[], to: slice::from_ref(target.tumbler()) },
-            View::Active,
-        ) {
-            for f in t.from.addrs() {
-                out.insert(f.clone());
-            }
-        }
-        out.iter().map(lift).collect()
-    }
-
-    /// BH3 forward: ⊥ unless EXACTLY ONE visible active type-`ty` tuple
-    /// denotes `source` in F with a single-address-denoting G.
-    pub(crate) fn target_of(&self, ty: &Endset, source: &Address) -> Option<Address> {
-        let mut survivor: Option<Tuple> = None;
-        for t in self.observe(ty, Pattern::default(), View::Active) {
-            if t.from.addrs().any(|f| f == source.tumbler()) {
-                if survivor.is_some() {
-                    return None; // several visible active matches ⇒ ⊥
-                }
-                survivor = Some(t);
-            }
-        }
-        let survivor = survivor?;
-        survivor.to.single_denoted().map(lift)
-    }
-
-    // ────────────────────────── BH4 — over the visible slice ──────────────────────────
-
-    /// BH4 age: M7's own for a link of a readable home, ⊥ otherwise (a
-    /// draft-homed tuple has no age at guest class, as it has no residence).
-    pub(crate) fn age(&self, a: &Address) -> Option<u64> {
-        if !self.home_readable(a) {
-            return None;
-        }
-        self.state.age(a)
-    }
-
-    /// BH4 stale set: M7's own (its `NotBh4` fence included), with the
-    /// tuples of unreadable homes dropped; ascending address order kept.
-    pub(crate) fn stale(&self, ty: &Endset, horizon: u64) -> Result<Vec<Address>, NotBh4> {
-        let stale = self.state.stale(ty, horizon)?;
-        Ok(stale.into_iter().filter(|a| self.home_readable(a)).collect())
-    }
+    fn resolve_def(&self, addr: &Address) -> Option<Arc<TypedTerm>>;
 }
 
 /// One verdict's read context — all slices off one pinned snapshot, M7's
-/// through the guest-class view (built only by `Coordinator::eval_ctx`).
+/// through the guest-class view, at ONE term view (PC3: the view is fixed
+/// for the life of a verdict, so it is context, not an argument). Built only
+/// by `Coordinator::eval_ctx`.
 pub(crate) struct EvalCtx<'a, W> {
     pub(crate) catalog: &'a TypeCatalog,
     pub(crate) links: GuestLinks<'a, W>,
     pub(crate) m3: &'a M3State,
+    pub(crate) view: View,
     pub(crate) defs: Option<&'a dyn DefSource>,
 }
 
@@ -398,9 +149,10 @@ impl<'a, W> EvalCtx<'a, W> {
     /// `members(K, v)` (D1 / V-AUD / UV): active and audit are the view's
     /// slice read at that view (⋃ F.addrs() over `observe(K, ⟨⟩, v)` —
     /// V-AUD's own equation is D1's over the audit slice); default = active
-    /// minus the other-BH1-filtered elements. Every read is the guest-class
-    /// view's (lane 4.1), so a draft-homed tuple contributes no member at
-    /// any view.
+    /// minus the other-BH1-filtered elements. The `view` is explicit here
+    /// because the `Default` arm re-enters at `Active`. Every read is the
+    /// guest-class view's (lane 4.1), so a draft-homed tuple contributes no
+    /// member at any view.
     fn members_at(&self, k: &TypeKey, view: View) -> OrdSet<Tumbler> {
         match view {
             View::Active | View::Audit => self
@@ -469,8 +221,8 @@ impl<'a, W> EvalCtx<'a, W> {
 
     /// Drop other-BH1-filtered elements from a returned collection — the UV
     /// rewrite for the non-core collections in a `default` term.
-    fn uv_drop(&self, k: &TypeKey, view: View, set: OrdSet<Tumbler>) -> OrdSet<Tumbler> {
-        if view != View::Default {
+    fn uv_drop(&self, k: &TypeKey, set: OrdSet<Tumbler>) -> OrdSet<Tumbler> {
+        if self.view != View::Default {
             return set;
         }
         let k_class = self.class_of(k).clone();
@@ -493,10 +245,11 @@ impl<'a, W> EvalCtx<'a, W> {
     }
 }
 
-/// The denotation. Pure, total, terminating; panics only on precondition
-/// violations (a `Ref` with no `DefSource`, a `ClassVar`, an ill-sorted
-/// runtime value — all unreachable on checked input).
-pub(crate) fn eval_term<W>(cx: &EvalCtx<'_, W>, env: &Env, view: View, t: &Term) -> Value {
+/// The denotation at the context's view. Pure, total, terminating; panics
+/// only on precondition violations (a `Ref` with no `DefSource`, a
+/// `ClassVar`, an ill-sorted runtime value — all unreachable on checked
+/// input).
+pub(crate) fn eval_term<W>(cx: &EvalCtx<'_, W>, env: &Env, t: &Term) -> Value {
     match t {
         Term::Var(v) => env
             .get(v)
@@ -510,51 +263,49 @@ pub(crate) fn eval_term<W>(cx: &EvalCtx<'_, W>, env: &Env, view: View, t: &Term)
             Lit::BotAddr => Value::OptAddr(None),
             Lit::BotNat => Value::OptNat(None),
         },
-        Term::Atom(a) => eval_atom(cx, env, view, a),
-        Term::Prim(p) => eval_prim(cx, env, view, p),
-        Term::And(a, b) => {
-            Value::Bool(truthy(eval_term(cx, env, view, a)) && truthy(eval_term(cx, env, view, b)))
-        }
-        Term::Or(a, b) => {
-            Value::Bool(truthy(eval_term(cx, env, view, a)) || truthy(eval_term(cx, env, view, b)))
-        }
-        Term::Not(a) => Value::Bool(!truthy(eval_term(cx, env, view, a))),
+        Term::Atom(a) => eval_atom(cx, env, a),
+        Term::Prim(p) => eval_prim(cx, env, p),
+        Term::And(a, b) => Value::Bool(truthy(eval_term(cx, env, a)) && truthy(eval_term(cx, env, b))),
+        Term::Or(a, b) => Value::Bool(truthy(eval_term(cx, env, a)) || truthy(eval_term(cx, env, b))),
+        Term::Not(a) => Value::Bool(!truthy(eval_term(cx, env, a))),
         Term::Implies(a, b) => {
-            Value::Bool(!truthy(eval_term(cx, env, view, a)) || truthy(eval_term(cx, env, view, b)))
+            Value::Bool(!truthy(eval_term(cx, env, a)) || truthy(eval_term(cx, env, b)))
         }
-        Term::Iff(a, b) => {
-            Value::Bool(truthy(eval_term(cx, env, view, a)) == truthy(eval_term(cx, env, view, b)))
-        }
+        Term::Iff(a, b) => Value::Bool(truthy(eval_term(cx, env, a)) == truthy(eval_term(cx, env, b))),
         // Short-circuit: ∀ stops at the first counterexample, ∃ at the first
         // witness (over the materialized slice — §Internal 2 tradeoff).
-        Term::Forall { var, dom, body } => Value::Bool(enum_dom(cx, env, view, dom).into_iter().all(|e| {
-            truthy(eval_term(cx, &env.bind(var.clone(), e.value()), view, body))
-        })),
-        Term::Exists { var, dom, body } => Value::Bool(enum_dom(cx, env, view, dom).into_iter().any(|e| {
-            truthy(eval_term(cx, &env.bind(var.clone(), e.value()), view, body))
-        })),
+        Term::Forall { var, dom, body } => Value::Bool(
+            enum_dom(cx, env, dom)
+                .into_iter()
+                .all(|e| truthy(eval_term(cx, &env.bind(var.clone(), e.value()), body))),
+        ),
+        Term::Exists { var, dom, body } => Value::Bool(
+            enum_dom(cx, env, dom)
+                .into_iter()
+                .any(|e| truthy(eval_term(cx, &env.bind(var.clone(), e.value()), body))),
+        ),
         Term::Let { var, bound, body } => {
-            let b = eval_term(cx, env, view, bound);
-            eval_term(cx, &env.bind(var.clone(), b), view, body)
+            let b = eval_term(cx, env, bound);
+            eval_term(cx, &env.bind(var.clone(), b), body)
         }
-        Term::IfSome { opt, var, then_, else_ } => match eval_term(cx, env, view, opt) {
-            Value::OptAddr(Some(a)) => eval_term(cx, &env.bind(var.clone(), Value::Addr(a)), view, then_),
-            Value::OptNat(Some(n)) => eval_term(cx, &env.bind(var.clone(), Value::Nat(n)), view, then_),
-            Value::OptAddr(None) | Value::OptNat(None) => eval_term(cx, env, view, else_),
+        Term::IfSome { opt, var, then_, else_ } => match eval_term(cx, env, opt) {
+            Value::OptAddr(Some(a)) => eval_term(cx, &env.bind(var.clone(), Value::Addr(a)), then_),
+            Value::OptNat(Some(n)) => eval_term(cx, &env.bind(var.clone(), Value::Nat(n)), then_),
+            Value::OptAddr(None) | Value::OptNat(None) => eval_term(cx, env, else_),
             other => unreachable!("IfSome guard checked at an Opt sort, held {other:?}"),
         },
         // Set-semantics counting (PC2a): enum_dom deduplicates address
         // domains; tuple slices are distinct by address.
-        Term::Count(d) => Value::Nat(Nat::from(enum_dom(cx, env, view, d).len() as u64)),
+        Term::Count(d) => Value::Nat(Nat::from(enum_dom(cx, env, d).len() as u64)),
         Term::MaxT1(d) => {
-            let best = enum_dom(cx, env, view, d)
+            let best = enum_dom(cx, env, d)
                 .into_iter()
                 .map(|e| e.key_addr())
                 .max_by(|a, b| a.tumbler().cmp(b.tumbler()));
             Value::OptAddr(best)
         }
         Term::MinT1(d) => {
-            let best = enum_dom(cx, env, view, d)
+            let best = enum_dom(cx, env, d)
                 .into_iter()
                 .map(|e| e.key_addr())
                 .min_by(|a, b| a.tumbler().cmp(b.tumbler()));
@@ -562,8 +313,8 @@ pub(crate) fn eval_term<W>(cx: &EvalCtx<'_, W>, env: &Env, view: View, t: &Term)
         }
         Term::BigUnion { dom, var, body } => {
             let mut out: OrdSet<Tumbler> = OrdSet::new();
-            for e in enum_dom(cx, env, view, dom) {
-                let s = as_set(eval_term(cx, &env.bind(var.clone(), e.value()), view, body));
+            for e in enum_dom(cx, env, dom) {
+                let s = as_set(eval_term(cx, &env.bind(var.clone(), e.value()), body));
                 for t in s.iter() {
                     out.insert(t.clone());
                 }
@@ -574,7 +325,7 @@ pub(crate) fn eval_term<W>(cx: &EvalCtx<'_, W>, env: &Env, view: View, t: &Term)
         // denotation at this snapshot.
         Term::Reflect(d) => {
             let mut out: OrdSet<Tumbler> = OrdSet::new();
-            for e in enum_dom(cx, env, view, d) {
+            for e in enum_dom(cx, env, d) {
                 out.insert(e.key_addr().tumbler().clone());
             }
             Value::AddrSet(out)
@@ -590,16 +341,16 @@ pub(crate) fn eval_term<W>(cx: &EvalCtx<'_, W>, env: &Env, view: View, t: &Term)
                 .resolve_def(addr)
                 .expect("WT-ref: every referent of a checked body has a defined signature");
             let mut inner = Env::empty();
-            for ((v, _), arg) in referent.sig.params.iter().zip(args.iter()) {
-                let val = eval_term(cx, env, view, arg);
+            for ((v, _), arg) in referent.gamma.iter().zip(args.iter()) {
+                let val = eval_term(cx, env, arg);
                 inner = inner.bind(v.clone(), val);
             }
-            eval_term(cx, &inner, view, &referent.expanded)
+            eval_term(cx, &inner, &referent.evaluable)
         }
     }
 }
 
-fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, view: View, a: &Atom) -> Value {
+fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
     let tup = |v: &VarId| -> Tuple {
         match env.get(v) {
             Some(Value::Tuple(t)) => t.clone(),
@@ -609,32 +360,32 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, view: View, a: &Atom) -> Value {
     match a {
         Atom::IsK(tr, e) => {
             let k = concrete(tr);
-            let x = as_addr(eval_term(cx, env, view, e));
-            Value::Bool(cx.is_k_at(k, &x, view))
+            let x = as_addr(eval_term(cx, env, e));
+            Value::Bool(cx.is_k_at(k, &x, cx.view))
         }
-        Atom::Members(tr) => Value::AddrSet(cx.members_at(concrete(tr), view)),
+        Atom::Members(tr) => Value::AddrSet(cx.members_at(concrete(tr), cx.view)),
         Atom::TargetsOf(tr, e) => {
-            let x = as_addr(eval_term(cx, env, view, e));
-            Value::AddrSet(cx.targets_of_at(concrete(tr), &x, view))
+            let x = as_addr(eval_term(cx, env, e));
+            Value::AddrSet(cx.targets_of_at(concrete(tr), &x, cx.view))
         }
         // BH1: is_filtered_J ≡ is_k(J, ·) — D2, J's own active membership.
         Atom::IsFiltered(tr, e) => {
             let k = concrete(tr);
-            let x = as_addr(eval_term(cx, env, view, e));
+            let x = as_addr(eval_term(cx, env, e));
             Value::Bool(cx.links.is_k(&k.0, x.tumbler()))
         }
         Atom::Succs(tr, e) => {
             let k = concrete(tr);
-            let x = as_addr(eval_term(cx, env, view, e));
+            let x = as_addr(eval_term(cx, env, e));
             let set: OrdSet<Tumbler> =
                 cx.links.succs(&k.0, &x).into_iter().map(|a| a.tumbler().clone()).collect();
-            Value::AddrSet(cx.uv_drop(k, view, set))
+            Value::AddrSet(cx.uv_drop(k, set))
         }
         Atom::Chain(tr, e) => {
             let k = concrete(tr);
-            let x = as_addr(eval_term(cx, env, view, e));
+            let x = as_addr(eval_term(cx, env, e));
             let chain = cx.links.chain(&k.0, &x);
-            let seq: im::Vector<Address> = if view == View::Default {
+            let seq: im::Vector<Address> = if cx.view == View::Default {
                 let k_class = cx.class_of(k).clone();
                 chain
                     .into_iter()
@@ -649,7 +400,7 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, view: View, a: &Atom) -> Value {
         // active walk.
         Atom::Tip(tr, e) => {
             let k = concrete(tr);
-            let x = as_addr(eval_term(cx, env, view, e));
+            let x = as_addr(eval_term(cx, env, e));
             Value::OptAddr(match cx.links.tip(&k.0, &x) {
                 Tip::Sink(a) => Some(a),
                 Tip::Indeterminate => None,
@@ -657,24 +408,24 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, view: View, a: &Atom) -> Value {
         }
         Atom::IsInChain(tr, e1, e2) => {
             let k = concrete(tr);
-            let x = as_addr(eval_term(cx, env, view, e1));
-            let y = as_addr(eval_term(cx, env, view, e2));
+            let x = as_addr(eval_term(cx, env, e1));
+            let y = as_addr(eval_term(cx, env, e2));
             Value::Bool(cx.links.is_in_chain(&k.0, &x, &y))
         }
         Atom::SourcesTo(tr, e) => {
             let k = concrete(tr);
-            let x = as_addr(eval_term(cx, env, view, e));
+            let x = as_addr(eval_term(cx, env, e));
             let set: OrdSet<Tumbler> =
                 cx.links.sources_to(&k.0, &x).into_iter().map(|a| a.tumbler().clone()).collect();
-            Value::AddrSet(cx.uv_drop(k, view, set))
+            Value::AddrSet(cx.uv_drop(k, set))
         }
         Atom::TargetOf(tr, e) => {
             let k = concrete(tr);
-            let x = as_addr(eval_term(cx, env, view, e));
+            let x = as_addr(eval_term(cx, env, e));
             Value::OptAddr(cx.links.target_of(&k.0, &x))
         }
         Atom::TargetsKeyed(e) => {
-            let x = as_addr(eval_term(cx, env, view, e));
+            let x = as_addr(eval_term(cx, env, e));
             Value::Map(cx.targets_keyed_at(&x))
         }
         // BH4 totalization (ASN-0129): age(a) = ⊥ exactly when `a` is not
@@ -682,7 +433,7 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, view: View, a: &Atom) -> Value {
         // is_k's coverage-of-F membership.
         Atom::Age(tr, e) => {
             let k = concrete(tr);
-            let a = as_addr(eval_term(cx, env, view, e));
+            let a = as_addr(eval_term(cx, env, e));
             let active_k_tuple = cx
                 .links
                 .observe(&k.0, Pattern::default(), View::Active)
@@ -699,54 +450,48 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, view: View, a: &Atom) -> Value {
         // non-stale) — never a wrapping truncation.
         Atom::Stale(tr, e) => {
             let k = concrete(tr);
-            let h = as_nat(eval_term(cx, env, view, e));
+            let h = as_nat(eval_term(cx, env, e));
             let h64 = u64::try_from(&h).unwrap_or(u64::MAX);
             let stale = cx
                 .links
                 .stale(&k.0, h64)
                 .expect("type-check admits Stale only at a BH4-registered class");
             let set: OrdSet<Tumbler> = stale.into_iter().map(|a| a.tumbler().clone()).collect();
-            Value::AddrSet(cx.uv_drop(k, view, set))
+            Value::AddrSet(cx.uv_drop(k, set))
         }
         // V-DOC — M3 residence (a registered-but-arrangementless doc is a
         // valid residence; the eager/lazy split).
         Atom::IsDoc(e) => {
-            let d = as_addr(eval_term(cx, env, view, e));
+            let d = as_addr(eval_term(cx, env, e));
             Value::Bool(cx.m3.is_registered_document(&d))
         }
         Atom::TupAddr(v) => Value::Addr(tup(v).addr),
-        Atom::TupAddrsF(v) => {
-            Value::AddrSet(tup(v).from.addrs().cloned().collect())
-        }
+        Atom::TupAddrsF(v) => Value::AddrSet(tup(v).from.addrs().cloned().collect()),
         Atom::TupAddrsG(v) => Value::AddrSet(tup(v).to.addrs().cloned().collect()),
         Atom::InCoverageF(e, v) => {
-            let x = as_addr(eval_term(cx, env, view, e));
+            let x = as_addr(eval_term(cx, env, e));
             Value::Bool(tup(v).from.covers(x.tumbler()))
         }
         Atom::InCoverageG(e, v) => {
-            let x = as_addr(eval_term(cx, env, view, e));
+            let x = as_addr(eval_term(cx, env, e));
             Value::Bool(tup(v).to.covers(x.tumbler()))
         }
     }
 }
 
-fn eval_prim<W>(cx: &EvalCtx<'_, W>, env: &Env, view: View, p: &Prim) -> Value {
-    let ev = |t: &Term| eval_term(cx, env, view, t);
+fn eval_prim<W>(cx: &EvalCtx<'_, W>, env: &Env, p: &Prim) -> Value {
+    let ev = |t: &Term| eval_term(cx, env, t);
     match p {
         Prim::AddrEq(a, b) => Value::Bool(as_addr(ev(a)) == as_addr(ev(b))),
         Prim::Prefix(a, b) => {
             Value::Bool(is_prefix(as_addr(ev(a)).tumbler(), as_addr(ev(b)).tumbler()))
         }
         Prim::T1Lt(a, b) => Value::Bool(as_addr(ev(a)).tumbler() < as_addr(ev(b)).tumbler()),
-        Prim::SetMem(x, s) => {
-            Value::Bool(as_set(ev(s)).contains(as_addr(ev(x)).tumbler()))
-        }
+        Prim::SetMem(x, s) => Value::Bool(as_set(ev(s)).contains(as_addr(ev(x)).tumbler())),
         Prim::SetEq(a, b) => Value::Bool(as_set(ev(a)) == as_set(ev(b))),
         Prim::IsEmpty(s) => Value::Bool(as_set(ev(s)).is_empty()),
         Prim::Elems(q) => match ev(q) {
-            Value::AddrSeq(seq) => {
-                Value::AddrSet(seq.iter().map(|a| a.tumbler().clone()).collect())
-            }
+            Value::AddrSeq(seq) => Value::AddrSet(seq.iter().map(|a| a.tumbler().clone()).collect()),
             other => unreachable!("Elems checked at AddrSeq, held {other:?}"),
         },
         Prim::NatEq(a, b) => Value::Bool(as_nat(ev(a)) == as_nat(ev(b))),
@@ -771,14 +516,14 @@ fn eval_prim<W>(cx: &EvalCtx<'_, W>, env: &Env, view: View, p: &Prim) -> Value {
     }
 }
 
-/// `[D]_snap` — finite by QD-fin. Address domains deduplicate (set
-/// semantics); tuple slices are distinct by address. `Filter` composes over
-/// the materialized base (§Internal 2).
-pub(crate) fn enum_dom<W>(cx: &EvalCtx<'_, W>, env: &Env, view: View, d: &Dom) -> Vec<Elem> {
+/// `[D]_snap` at the context's view — finite by QD-fin. Address domains
+/// deduplicate (set semantics); tuple slices are distinct by address.
+/// `Filter` composes over the materialized base (§Internal 2).
+pub(crate) fn enum_dom<W>(cx: &EvalCtx<'_, W>, env: &Env, d: &Dom) -> Vec<Elem> {
     match d {
         // M_K at the TERM view (view-parameterized domain).
         Dom::MembersDom(tr) => cx
-            .members_at(concrete(tr), view)
+            .members_at(concrete(tr), cx.view)
             .iter()
             .map(|t| Elem::Addr(lift(t)))
             .collect(),
@@ -807,12 +552,12 @@ pub(crate) fn enum_dom<W>(cx: &EvalCtx<'_, W>, env: &Env, view: View, d: &Dom) -
             out.iter().map(|t| Elem::Addr(lift(t))).collect()
         }
         Dom::Reg => unreachable!("no Reg domain survives type_check's expansion/folding"),
-        Dom::Filter { dom, var, pred } => enum_dom(cx, env, view, dom)
+        Dom::Filter { dom, var, pred } => enum_dom(cx, env, dom)
             .into_iter()
-            .filter(|e| truthy(eval_term(cx, &env.bind(var.clone(), e.value()), view, pred)))
+            .filter(|e| truthy(eval_term(cx, &env.bind(var.clone(), e.value()), pred)))
             .collect(),
         Dom::SetTerm(t) => {
-            let s = as_set(eval_term(cx, env, view, t));
+            let s = as_set(eval_term(cx, env, t));
             s.iter().map(|t| Elem::Addr(lift(t))).collect()
         }
     }

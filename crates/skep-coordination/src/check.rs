@@ -10,19 +10,29 @@ use std::sync::Arc;
 use skep_address::Address;
 use skep_links::Behavior;
 
-use crate::ast::{subst_classvar_term, ArcDom, ArcTerm, Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId};
+use crate::ast::{ArcDom, ArcTerm, Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId};
 use crate::catalog::{CatalogEntry, TypeCatalog};
 use crate::error::TypeError;
 use crate::value::{Signature, Sort};
+use crate::walk::{rewrite_term, Rewrite};
 use skep_address::Nat;
 
-/// The post-type-check form. Carries Γ_D (read back via [`TypedTerm::params`]
-/// / [`TypedTerm::result_sort`]), the ref-free flag, the original
-/// pre-`Reg`-expansion syntactic body ([`TypedTerm::source_body`] — the
-/// compact canonical form `define_predicate` encodes, §Internal 4), and the
-/// expanded evaluable projection (every `TypeRef` `Concrete`, no surviving
-/// `Reg` quantifier). Deliberately carries NO view (PR-VIEW): the view is an
-/// evaluation/classification parameter, never a term annotation.
+/// The post-type-check form — the ONE checked-term shape in the crate: what
+/// `type_check` hands back, what a stored def's memo entry holds, what a
+/// rule's trigger is captured as. Carries Γ_D (read back via
+/// [`TypedTerm::params`] / [`TypedTerm::result_sort`]), the ref-free flag,
+/// the original pre-`Reg`-expansion syntactic body
+/// ([`TypedTerm::source_body`] — the compact canonical form
+/// `define_predicate` encodes, §Internal 4), and the expanded evaluable
+/// projection (every `TypeRef` `Concrete`, no surviving `Reg` quantifier).
+/// Deliberately carries NO view (PR-VIEW): the view is an evaluation/
+/// classification parameter, never a term annotation.
+///
+/// Every `TypedTerm` a caller can hold came through `type_check`, whose Γ_D
+/// is Codom-only (ASN-0130 SignedTerm): the type has no other public
+/// constructor, and a [`TriggerTerm`] — the one checked term that may bind a
+/// tuple — does not yield one. That is what lets `define_predicate` take a
+/// `TypedTerm` and store it without a tuple check of its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedTerm {
     pub(crate) gamma: Vec<(VarId, Sort)>,
@@ -53,6 +63,73 @@ impl TypedTerm {
     /// `ClassVar` refs intact) — distinct from the expanded evaluable tree.
     pub fn source_body(&self) -> &Term {
         &self.source
+    }
+
+    /// `(Γ_D, C_D)` — the term's signature (PR-SIG).
+    pub(crate) fn signature(&self) -> Signature {
+        Signature { params: self.gamma.clone(), result: self.result }
+    }
+}
+
+/// A rule trigger, checked by `Coordinator::type_check_trigger`: a
+/// ONE-parameter Bool term whose parameter may be `Tup`-sorted — the only PL
+/// term that binds a tuple (ASN-0133 ρ_R). A type of its own so the def path
+/// cannot receive it: `define_predicate` takes a `TypedTerm`, and this type
+/// yields none (its accessors are the trigger's parameter, its ref-freeness
+/// and its source body; the checked term beneath is the rule engine's).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TriggerTerm(pub(crate) TypedTerm);
+
+impl TriggerTerm {
+    /// The one parameter — `register_rule` reconciles its sort with the
+    /// domain's element sort.
+    pub fn param(&self) -> &(VarId, Sort) {
+        &self.0.gamma[0]
+    }
+
+    /// False iff any `Ref` node survives — `register_rule` requires it true
+    /// of an `Inline` trigger.
+    pub fn is_ref_free(&self) -> bool {
+        self.0.ref_free
+    }
+
+    /// The original pre-`Reg`-expansion syntactic body.
+    pub fn source_body(&self) -> &Term {
+        &self.0.source
+    }
+
+    /// The checked term beneath — the shape the rule engine captures.
+    pub(crate) fn as_typed(&self) -> &TypedTerm {
+        &self.0
+    }
+}
+
+/// The V-IDX expansion step (§Internal 1): `TypeRef::ClassVar(cvar) →
+/// TypeRef::Concrete(key)` throughout a body, stopping at an inner `Reg`
+/// binder that rebinds `cvar` (shadowing).
+struct SubstClassVar<'a> {
+    cvar: &'a VarId,
+    key: &'a TypeKey,
+}
+
+impl Rewrite for SubstClassVar<'_> {
+    fn typeref(&mut self, tr: &TypeRef) -> TypeRef {
+        match tr {
+            TypeRef::ClassVar(v) if v == self.cvar => TypeRef::Concrete(self.key.clone()),
+            other => other.clone(),
+        }
+    }
+
+    fn term(&mut self, t: &Term) -> Term {
+        match t {
+            // An inner Reg binder rebinding cvar shadows the outer one.
+            Term::Forall { var, dom, .. } | Term::Exists { var, dom, .. }
+                if matches!(dom.as_ref(), Dom::Reg) && var == self.cvar =>
+            {
+                t.clone()
+            }
+            _ => rewrite_term(self, t),
+        }
     }
 }
 
@@ -310,7 +387,7 @@ impl<'a> Checker<'a> {
     fn expand_reg(&self, ctx: &Ctx, cvar: &VarId, body: &Term, conj: bool) -> Result<Checked, TypeError> {
         let mut acc: Option<(ArcTerm, bool)> = None;
         for key in self.catalog.classes() {
-            let inst = subst_classvar_term(body, cvar, key);
+            let inst = SubstClassVar { cvar, key }.term(body);
             let c = self
                 .check_term(ctx, &inst)
                 .and_then(|c| {

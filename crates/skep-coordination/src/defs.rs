@@ -17,11 +17,11 @@ use crate::ast::{collect_ref_addrs, Term, VarId};
 use crate::check::TypedTerm;
 use crate::codec;
 use crate::coordinator::Coordinator;
-use crate::dynamics::{analyze_term, view_independent};
+use crate::dynamics::{view_independent, Analyzer};
 use crate::error::{CertifyError, DefineError, EvalError, RegisterError, RetractError};
 use crate::eval::eval_term;
 use crate::expand::Flattener;
-use crate::memo::{DefEntry, DefStatus};
+use crate::memo::DefStatus;
 use crate::value::{value_sort, Env, Sort, Value};
 
 /// Why a stored def could not be read back as a signed term: no `Val` at the
@@ -71,28 +71,21 @@ where
     /// validate + register the `pdef`. Returns the def IDENTITY (content
     /// start address) and the `pdef` EMIT's commit `Seq` — NOT the insert's.
     ///
-    /// Rejects a `Tup`-sorted Γ_D parameter UP FRONT, before any insert
-    /// (`DefineError::TupParameter` — stored-def params are Codom-only,
-    /// ASN-0130 SignedTerm). Under concurrency: a concurrent INSERT lands the
-    /// def mid-document (harmless — identity is the returned start); a
-    /// concurrent DELETE yields a retryable `Insert(Rejected(OutOfBounds))` —
-    /// benign, recompute and re-insert (item 6; the design's `BadPosition`,
-    /// split by the as-built M5); a `register_pred`-stage failure leaves
-    /// harmless orphan content a later `register_pred(d, start)` adopts.
+    /// The stored-def parameters are Codom-only (ASN-0130 SignedTerm), and
+    /// that is the `TypedTerm` type's guarantee, not a check made here: every
+    /// `TypedTerm` came through `type_check`, and a trigger — the one checked
+    /// term that binds a tuple — is a `TriggerTerm`, which this signature
+    /// cannot receive. The codec's own `Tup` refusal (it has no tag for the
+    /// sort) is therefore unreachable from this path. Under concurrency: a
+    /// concurrent INSERT lands the def mid-document (harmless — identity is
+    /// the returned start); a concurrent DELETE yields a retryable
+    /// `Insert(Rejected(OutOfBounds))` — benign, recompute and re-insert
+    /// (item 6; the design's `BadPosition`, split by the as-built M5); a
+    /// `register_pred`-stage failure leaves harmless orphan content a later
+    /// `register_pred(d, start)` adopts.
     pub fn define_predicate(&self, d: &Address, term: TypedTerm) -> Result<(Address, Seq), DefineError> {
-        self.define_core(d, &term)
-    }
-
-    /// The shared define-style path (`define_predicate` + `supersede`'s
-    /// successor registration) — and the ONE write-path check of the
-    /// Codom-only rule: a `TypedTerm` carries no def-vs-trigger provenance,
-    /// so a `Tup`-sorted Γ_D parameter is refused here, before any insert
-    /// (the codec's own `Tup` refusal is the backstop, not a second door).
-    fn define_core(&self, d: &Address, term: &TypedTerm) -> Result<(Address, Seq), DefineError> {
-        if let Some((v, _)) = term.params().iter().find(|(_, s)| *s == Sort::Tup) {
-            return Err(DefineError::TupParameter(v.clone()));
-        }
-        let blob = codec::encode(term.params(), term.source_body()).map_err(DefineError::TupParameter)?;
+        let blob = codec::encode(term.params(), term.source_body())
+            .expect("type_check admits no Tup parameter, and TypedTerm has no other public constructor");
         // Insert position off a snapshot read; M5's insert re-validates
         // against committed state (benign TOCTOU — item 6).
         let n_c = self.kernel.snapshot().world().m5().content_count(d);
@@ -135,7 +128,7 @@ where
         // calls pin their own snapshots — sound: the σ ever-gate ran first,
         // ever-registration is monotone, signature facts are
         // content-intrinsic).
-        let entry = self.check_def(params, body, 0).map_err(RegisterError::IllTyped)?;
+        let entry = self.check_under(params, body, 0).map_err(RegisterError::IllTyped)?;
         // (iv) endorsement: every referent ACTIVELY registered at σ.
         let pdef = self.catalog.reserved(ShippedType::PredDef);
         if let Some(r) = refs.iter().find(|r| !w.links().is_k(pdef, r.tumbler())) {
@@ -183,18 +176,18 @@ where
             // cannot happen (ever-registration is monotone); defensive.
             DefStatus::Unregistered => return Err(EvalError::NotEverRegistered),
         };
-        if args.len() != entry.sig.params.len() {
+        if args.len() != entry.gamma.len() {
             return Err(EvalError::ArgArityMismatch);
         }
         let mut env = Env::empty();
-        for (arg, (v, s)) in args.iter().zip(entry.sig.params.iter()) {
+        for (arg, (v, s)) in args.iter().zip(entry.gamma.iter()) {
             if value_sort(arg) != *s {
                 return Err(EvalError::ArgSortMismatch);
             }
             env = env.bind(v.clone(), arg.clone());
         }
-        let cx = self.eval_ctx(snap.world(), Some(self));
-        Ok(eval_term(&cx, &env, view, entry.expanded.as_ref()))
+        let cx = self.eval_ctx(snap.world(), view, Some(self));
+        Ok(eval_term(&cx, &env, entry.evaluable.as_ref()))
     }
 
     /// `is_K(pdef, start)@active`.
@@ -209,13 +202,13 @@ where
         self.ever_registered(snap.world(), start)
     }
 
-    /// Register `new_term` (define-style — the Codom-only rule is
-    /// `define_core`'s door) and record old→new via the shipped `supersedes`
-    /// class with CONTENT-ADDRESS endpoints — `emit`, NOT M7::assert_sup
-    /// (which requires resident links; def starts are content addresses —
-    /// Conflicts §4). Gates `old_start` UP FRONT, before any transaction: it
-    /// must be EVER-registered (superseding a retracted def is legitimate
-    /// lineage — PR4) — else `OldStartNotEverRegistered`.
+    /// Register `new_term` (through `define_predicate`) and record old→new
+    /// via the shipped `supersedes` class with CONTENT-ADDRESS endpoints —
+    /// `emit`, NOT M7::assert_sup (which requires resident links; def starts
+    /// are content addresses — Conflicts §4). Gates `old_start` UP FRONT,
+    /// before any transaction: it must be EVER-registered (superseding a
+    /// retracted def is legitimate lineage — PR4) — else
+    /// `OldStartNotEverRegistered`.
     ///
     /// THREE non-atomic transactions, NO idempotency key — a lost-ack retry
     /// re-inserts a fresh successor and branches the lineage
@@ -233,7 +226,7 @@ where
         if !self.is_ever_pred(old_start, &snap) {
             return Err(DefineError::OldStartNotEverRegistered(old_start.clone()));
         }
-        let (new_start, _pdef_seq) = self.define_core(d, &new_term)?;
+        let (new_start, _pdef_seq) = self.define_predicate(d, new_term)?;
         let sup = self.catalog.reserved(ShippedType::Supersedes);
         let (_claim, seq) =
             self.link_writer().emit(Caller::System, d, sup, old_start, slice::from_ref(&new_start))?;
@@ -263,7 +256,7 @@ where
             DefStatus::Poisoned => return Err(CertifyError::UndisciplinedDef),
             DefStatus::Unregistered => return Err(CertifyError::NotEverRegistered),
         };
-        if entry.sig.result != Sort::Bool {
+        if entry.result != Sort::Bool {
             return Err(CertifyError::NotBoolean);
         }
         if !self.is_active_pred(start, &snap) {
@@ -275,7 +268,7 @@ where
         }
         // Γ_D parameters read as bound constants (free Vars have empty
         // footprint); ⊤-stability is the `st` leg.
-        let a = analyze_term(&self.catalog, View::Audit, true, &flat);
+        let a = Analyzer { catalog: &self.catalog, view: View::Audit, widen: true }.term(&flat);
         if !a.st {
             return Err(CertifyError::NotStable);
         }
@@ -319,10 +312,10 @@ where
         Ok((r, seq))
     }
 
-    /// The flat `expand(start)` of a defined entry — one `Flattener` per
-    /// top-level expansion, so the fresh-name sequence is deterministic in
-    /// the content alone (PR3).
-    pub(crate) fn flatten_entry(&self, entry: &DefEntry) -> Term {
-        Flattener::new(self).flatten(entry.expanded.as_ref())
+    /// The flat `expand(start)` of a checked (memo-held) def — one
+    /// `Flattener` per top-level expansion, so the fresh-name sequence is
+    /// deterministic in the content alone (PR3).
+    pub(crate) fn flatten_entry(&self, entry: &TypedTerm) -> Term {
+        Flattener::new(self).flatten(entry.evaluable.as_ref())
     }
 }

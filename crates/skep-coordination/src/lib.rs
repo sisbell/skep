@@ -69,14 +69,16 @@ mod engine;
 mod error;
 mod eval;
 mod expand;
+mod guest;
 mod memo;
 mod rule;
 mod value;
+mod walk;
 
 pub use ast::{
     ArcDom, ArcTerm, Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId, EXPANSION_NAME_BASE,
 };
-pub use check::TypedTerm;
+pub use check::{TriggerTerm, TypedTerm};
 pub use coordinator::Coordinator;
 pub use dynamics::{ActiveExceptions, Dynamics, Footprint, Stability};
 pub use error::{

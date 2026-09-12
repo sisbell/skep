@@ -6,7 +6,7 @@ use skep_kernel::Seq;
 use skep_links::View;
 
 use crate::ast::{Dom, TypeKey};
-use crate::check::TypedTerm;
+use crate::check::TriggerTerm;
 use crate::error::FireError;
 use crate::value::Value;
 
@@ -26,10 +26,11 @@ pub struct Rule {
 pub enum TriggerRef {
     /// Built via `type_check_trigger` (may bind one `Tup`); MUST be ref-free
     /// (`register_rule` rejects otherwise — `RuleError::RefBearingInlineTrigger`).
-    Inline(TypedTerm),
-    /// pdef-backed; evaluated via `evaluate_def`, so ref-bearing bodies
-    /// survive de-registration (eval keys on ever-registration). A `Def`
-    /// signature is Codom-only — it cannot serve a `Tup` domain.
+    Inline(TriggerTerm),
+    /// pdef-backed: the def's checked body is captured at `register_rule`,
+    /// so the rule survives the def's later retraction and reads only the
+    /// snapshot it is evaluated on. A `Def` signature is Codom-only — it
+    /// cannot serve a `Tup` domain.
     Def(Address),
 }
 

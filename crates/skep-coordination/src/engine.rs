@@ -5,6 +5,7 @@
 //! and the static armer-cycle warning.
 
 use std::slice;
+use std::sync::Arc;
 
 use skep_address::{document_of, Address};
 use skep_kernel::{Snapshot, TxnError, WorldState};
@@ -17,8 +18,8 @@ use skep_content::{ContentWrite, HasContent};
 
 use crate::ast::{Atom, Term, TypeRef, VarId};
 use crate::check::{Checker, Ctx, TypedDom, TypedTerm};
-use crate::coordinator::{CheckedRule, CheckedTrigger, Coordinator};
-use crate::dynamics::{analyze_dom, analyze_term, Footprint};
+use crate::coordinator::{CheckedRule, Coordinator};
+use crate::dynamics::{Analyzer, Footprint};
 use crate::error::{FireError, RuleError};
 use crate::eval::{enum_dom, eval_term, truthy, Elem};
 use crate::memo::DefStatus;
@@ -38,13 +39,14 @@ where
     /// Validate the rule and add it to the working set (each failure a typed
     /// [`RuleError`], never a late eval-time panic): the domain is checked
     /// AND normalized through the same WT-domain + `Reg`-expansion pass as
-    /// `type_check` and stored as a checked `TypedDom`; the trigger is a
-    /// one-parameter Bool predicate whose parameter sort equals the domain
-    /// element sort (a `Tup` domain requires an `Inline` trigger — a `Def`
-    /// signature is Codom-only); a Marker action's `ty` is a cataloged idem⊤
-    /// Unary type that is not a PredLayer class (PR-DISC's in-module guard).
-    /// Enforces WELL-FORMEDNESS only, not termination — apply your own
-    /// uncertified-rule policy via [`Coordinator::certify_rule`].
+    /// `type_check` and stored as a checked `TypedDom`; the trigger's
+    /// parameter sort must equal the domain element sort (a `Tup` domain
+    /// requires an `Inline` trigger — a `Def` signature is Codom-only) and a
+    /// `Def` trigger's def must be a one-parameter Bool def; a Marker
+    /// action's `ty` is a cataloged idem⊤ Unary type that is not a PredLayer
+    /// class (PR-DISC's in-module guard). Enforces WELL-FORMEDNESS only, not
+    /// termination — apply your own uncertified-rule policy via
+    /// [`Coordinator::certify_rule`].
     pub fn register_rule(&mut self, rule: Rule) -> Result<RuleId, RuleError> {
         let (dom, trigger) = self.validate_rule(&rule)?;
         let id = RuleId(self.next_rule);
@@ -65,23 +67,20 @@ where
     pub fn certify_rule(&self, rule: &Rule) -> Result<RuleCertification, RuleError> {
         let (dom, trigger) = self.validate_rule(rule)?;
         // Leg (a): trigger ∈ SF at the declared view.
-        let (param, flat) = self.trigger_flat(&trigger).ok_or_else(|| match &trigger {
-            CheckedTrigger::Def { addr } => RuleError::DefTriggerUnregistered(addr.clone()),
-            CheckedTrigger::Inline { .. } => unreachable!("an Inline trigger always flattens"),
-        })?;
-        let a = analyze_term(&self.catalog, rule.view, false, &flat);
-        let sf = a.sf;
+        let flat = self.trigger_flat(&trigger);
+        let analyzer = Analyzer { catalog: &self.catalog, view: rule.view, widen: false };
+        let sf = analyzer.term(&flat).sf;
         // Leg (b): the Marker pattern — the emitted tuple's slot-coverage is
         // exactly the witness the trigger's negated existential quantifies
         // over (canonical: trigger ¬is_K(a) @ audit ⟺ Marker{_, K}).
         let marker = match &rule.action {
             FireAction::Marker { ty, .. } => {
-                rule.view == View::Audit && self.marker_pattern(&flat, &param, ty)
+                rule.view == View::Audit && self.marker_pattern(&flat, &trigger.gamma[0].0, ty)
             }
             FireAction::Nullify { .. } => false,
         };
         // Leg (c): grow-only domain.
-        let (_, grow_only) = analyze_dom(&self.catalog, rule.view, false, dom.dom.as_ref());
+        let (_, grow_only) = analyzer.dom(dom.dom.as_ref());
         if sf && marker && grow_only {
             Ok(RuleCertification::CertifiedTerminating)
         } else {
@@ -89,22 +88,14 @@ where
         }
     }
 
-    /// A checked trigger as the static analyses read it: its parameter and
-    /// its ref-free term — an `Inline` trigger's evaluable projection, a
-    /// `Def` trigger's flat expansion. `None` iff a `Def` trigger's start no
-    /// longer has a defined signature (its content poisoned since
-    /// registration — a PR-DISC breach; the caller names the consequence).
-    fn trigger_flat(&self, trigger: &CheckedTrigger) -> Option<(VarId, Term)> {
-        match trigger {
-            CheckedTrigger::Inline { param, term } => {
-                Some((param.clone(), term.evaluable.as_ref().clone()))
-            }
-            CheckedTrigger::Def { addr } => match self.def_status(addr) {
-                DefStatus::Defined(e) => {
-                    Some((e.sig.params[0].0.clone(), self.flatten_entry(&e)))
-                }
-                _ => None,
-            },
+    /// A checked trigger as the static analyses read it: its ref-free term —
+    /// an `Inline` trigger's evaluable projection as it is, a `Def`
+    /// trigger's flat expansion.
+    fn trigger_flat(&self, trigger: &TypedTerm) -> Term {
+        if trigger.is_ref_free() {
+            trigger.evaluable.as_ref().clone()
+        } else {
+            self.flatten_entry(trigger)
         }
     }
 
@@ -128,7 +119,7 @@ where
 
     /// The one shared validation path (§Internal 5): domain → `TypedDom`,
     /// trigger checks, domain↔trigger sort reconciliation, Marker guards.
-    fn validate_rule(&self, rule: &Rule) -> Result<(TypedDom, CheckedTrigger), RuleError> {
+    fn validate_rule(&self, rule: &Rule) -> Result<(TypedDom, Arc<TypedTerm>), RuleError> {
         // Domain: checked + Reg-expanded (a body-level Reg is legitimate PL;
         // a BARE Reg fails the sort check), closed (binds only its own
         // variables).
@@ -141,41 +132,36 @@ where
             return Err(RuleError::RefBearingDomain);
         }
         let elem = cd.elem;
-        // Trigger: one-parameter Bool, sort-matched to the element sort.
+        // Trigger: one-parameter Bool (a `TriggerTerm` is that by type; a
+        // def is checked here), sort-matched to the element sort.
         let trigger = match &rule.trigger {
             TriggerRef::Inline(t) => {
                 if !t.is_ref_free() {
                     return Err(RuleError::RefBearingInlineTrigger);
                 }
-                if t.params().len() != 1 {
-                    return Err(RuleError::BadTriggerArity);
+                let (_, s) = t.param();
+                if *s != elem {
+                    return Err(RuleError::DomainTriggerSortMismatch { expected: elem, found: *s });
                 }
-                if t.result_sort() != Sort::Bool {
-                    return Err(RuleError::TriggerNotBoolean);
-                }
-                let (v, s) = t.params()[0].clone();
-                if s != elem {
-                    return Err(RuleError::DomainTriggerSortMismatch { expected: elem, found: s });
-                }
-                CheckedTrigger::Inline { param: v, term: t.clone() }
+                Arc::new(t.as_typed().clone())
             }
             TriggerRef::Def(addr) => {
-                let sig = self
-                    .signature(addr)
-                    .ok_or_else(|| RuleError::DefTriggerUnregistered(addr.clone()))?;
-                if sig.params.len() != 1 {
+                let DefStatus::Defined(def) = self.def_status(addr) else {
+                    return Err(RuleError::DefTriggerUnregistered(addr.clone()));
+                };
+                if def.gamma.len() != 1 {
                     return Err(RuleError::BadTriggerArity);
                 }
-                if sig.result != Sort::Bool {
+                if def.result != Sort::Bool {
                     return Err(RuleError::TriggerNotBoolean);
                 }
-                let s = sig.params[0].1;
+                let s = def.gamma[0].1;
                 if s != elem {
                     // A Def signature is Codom-only, so a Tup domain lands
                     // here — the remediation is an Inline trigger.
                     return Err(RuleError::DomainTriggerSortMismatch { expected: elem, found: s });
                 }
-                CheckedTrigger::Def { addr: addr.clone() }
+                def
             }
         };
         // Marker shape: cataloged Unary (BadMarkerType), idem⊤
@@ -210,38 +196,21 @@ where
     /// EMPTY visible domain and reports as a rule with no matching tuple
     /// does today (`next_enabled` → `None`, `step` → `Quiescent`).
     fn enum_rule_dom(&self, rule: &CheckedRule, snap: &Snapshot<W>) -> Vec<Elem> {
-        let cx = self.eval_ctx(snap.world(), None);
-        enum_dom(&cx, &Env::empty(), rule.view, rule.dom.dom.as_ref())
+        let cx = self.eval_ctx(snap.world(), rule.view, None);
+        enum_dom(&cx, &Env::empty(), rule.dom.dom.as_ref())
     }
 
     /// `T_ρ(x, snap)` at the rule's view, read THROUGH THE GUEST-CLASS VIEW
-    /// (lane 4.1, PUB-6.28) — an `Inline` trigger through `eval_ctx`, a `Def`
-    /// trigger through `evaluate_def`'s own context, the same view — so a
-    /// draft-homed tuple satisfies no trigger's pattern and a fire's verdict
-    /// never turns on a document rule 4 hides. SNAPSHOT-FRESHNESS
-    /// PRECONDITION for `Def` triggers (§Public interface C): a caller
-    /// snapshot predating the trigger def's registration commit makes
-    /// `evaluate_def` err inside a bool-returning method — a precondition
-    /// violation, panics like `decide`. (`fire` pins its own fresh snapshot
-    /// and is exempt.)
+    /// (lane 4.1, PUB-6.28) — the captured trigger body with its one
+    /// parameter bound to `elem`, referents (a `Def` trigger's) resolved
+    /// through the memo — so a draft-homed tuple satisfies no trigger's
+    /// pattern and a fire's verdict never turns on a document rule 4 hides.
+    /// Reads nothing but `snap`: the body is immutable content captured at
+    /// registration, so any snapshot serves.
     fn trigger_true(&self, rule: &CheckedRule, elem: &Elem, snap: &Snapshot<W>) -> bool {
-        match &rule.trigger {
-            CheckedTrigger::Inline { param, term } => {
-                let cx = self.eval_ctx(snap.world(), None);
-                let env = Env::empty().bind(param.clone(), elem.value());
-                truthy(eval_term(&cx, &env, rule.view, term.evaluable.as_ref()))
-            }
-            CheckedTrigger::Def { addr } => {
-                match self.evaluate_def(addr, &[elem.value()], rule.view, snap) {
-                    Ok(Value::Bool(b)) => b,
-                    Ok(other) => unreachable!("validated Boolean Def trigger denoted {other:?}"),
-                    Err(e) => panic!(
-                        "rule-engine snapshot-freshness precondition violated (Def trigger {addr:?}): \
-                         the snapshot must not predate the trigger def's registration commit — {e:?}"
-                    ),
-                }
-            }
-        }
+        let cx = self.eval_ctx(snap.world(), rule.view, Some(self));
+        let env = Env::empty().bind(rule.trigger.gamma[0].0.clone(), elem.value());
+        truthy(eval_term(&cx, &env, rule.trigger.evaluable.as_ref()))
     }
 
     fn first_enabled(&self, rule: &CheckedRule, snap: &Snapshot<W>) -> Option<Elem> {
@@ -278,14 +247,14 @@ where
              one-Addr-parameter Bool TypedTerm"
         );
         let scope_param = scope.params()[0].0.clone();
-        let cx = self.eval_ctx(snap.world(), None);
         // OPEN DECISION: the design leaves the scope predicate's evaluation
         // view unstated (the canonical scopes are state-free address tests);
         // Active — the current structural state — is taken as the
         // conservative default.
+        let cx = self.eval_ctx(snap.world(), View::Active, None);
         let s_of = |y: &Address| -> bool {
             let env = Env::empty().bind(scope_param.clone(), Value::Addr(y.clone()));
-            truthy(eval_term(&cx, &env, View::Active, scope.evaluable.as_ref()))
+            truthy(eval_term(&cx, &env, scope.evaluable.as_ref()))
         };
         for rule in &self.rules {
             let compatible = match body {
@@ -457,8 +426,7 @@ where
     /// reach/hold quiescence for an all-SF, grow-only, bounded-input registry
     /// (Q5a/Q6). A fire error surfaces as `Failed` (never swallowed) and the
     /// cursor rotates PAST the failing occurrence, so it cannot starve the
-    /// rest of the agenda (§7). Snapshot-freshness precondition as
-    /// `quiescent`.
+    /// rest of the agenda (§7).
     pub fn step(&mut self, snap: &Snapshot<W>) -> StepOutcome {
         let n = self.rules.len();
         if n == 0 {
@@ -551,16 +519,14 @@ where
         if n == 0 {
             return Vec::new();
         }
-        // Trigger footprints at each rule's declared view (a Def trigger
-        // whose start has been poisoned since registration reads nothing —
-        // an empty footprint, so it is armed by no one).
+        // Trigger footprints at each rule's declared view.
         let fps: Vec<Footprint> = self
             .rules
             .iter()
             .map(|r| {
-                self.trigger_flat(&r.trigger)
-                    .map(|(_, flat)| analyze_term(&self.catalog, r.view, false, &flat).fp)
-                    .unwrap_or_default()
+                Analyzer { catalog: &self.catalog, view: r.view, widen: false }
+                    .term(&self.trigger_flat(&r.trigger))
+                    .fp
             })
             .collect();
         let emitted: Vec<_> = self

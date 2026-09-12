@@ -9,21 +9,15 @@ use std::sync::{Arc, RwLock};
 
 use skep_address::{Address, Tumbler};
 
-use crate::ast::ArcTerm;
-use crate::value::Signature;
-
-/// A derived, immutable-once-defined def hint: the checked signature and the
-/// `Reg`-expanded evaluable body.
-pub(crate) struct DefEntry {
-    pub(crate) sig: Signature,
-    pub(crate) expanded: ArcTerm,
-}
+use crate::check::TypedTerm;
 
 /// A def-status answer, distinguishing CVALID (0)'s two `None` causes:
 /// `Poisoned` (ever-registered, content undisciplined — PR-DISC breach) and
-/// `Unregistered` (never registered at the answering snapshot).
+/// `Unregistered` (never registered at the answering snapshot). A `Defined`
+/// answer is the memo's own `Arc` of the def's checked term — its signature
+/// (`params`/`result_sort`) and its `Reg`-expanded evaluable body.
 pub(crate) enum DefStatus {
-    Defined(Arc<DefEntry>),
+    Defined(Arc<TypedTerm>),
     Poisoned,
     Unregistered,
 }
@@ -32,7 +26,7 @@ pub(crate) enum DefStatus {
 /// ever-registration is monotone, so a `Defined` entry can never be
 /// contradicted, and a `Poisoned` one is freeze-on-breach (§Internal 4).
 enum MemoEntry {
-    Defined(Arc<DefEntry>),
+    Defined(Arc<TypedTerm>),
     Poisoned,
 }
 
@@ -66,10 +60,10 @@ impl DefMemo {
 
     /// Record a verdict for an ever-registered start — first fill wins — and
     /// answer with whatever the memo now holds for it.
-    pub(crate) fn fill(&self, start: &Address, verdict: Result<DefEntry, Breach>) -> DefStatus {
+    pub(crate) fn fill(&self, start: &Address, verdict: Result<TypedTerm, Breach>) -> DefStatus {
         let mut memo = self.0.write().expect("DefMemo lock");
         let entry = memo.entry(start.tumbler().clone()).or_insert_with(|| match verdict {
-            Ok(e) => MemoEntry::Defined(Arc::new(e)),
+            Ok(t) => MemoEntry::Defined(Arc::new(t)),
             Err(Breach) => MemoEntry::Poisoned,
         });
         match entry {

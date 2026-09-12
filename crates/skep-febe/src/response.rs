@@ -12,23 +12,29 @@ use skep_retrieval::{CompareReport, Deletions, Delivery};
 use crate::reject::Rejection;
 
 /// One row of the audit-view edition-claim lookup (PUB-8.46, PUB round 2,
-/// lane 3.4 §2): a link of the edition-claim class whose `to` slot denotes
-/// the target document, ADMITTED to the class and UNSUPERSEDED, with its
-/// retraction stated rather than hidden — the client's PUB-3.19 admission
-/// test runs over the `home` this row carries (one `doc_metadata` read of it),
-/// and nowhere in the engine.
+/// lane 3.4 §2): a link of the edition-claim class whose `to` slot OVERLAPS
+/// the target's subtree, UNSUPERSEDED, with its retraction stated rather
+/// than hidden — the client's PUB-3.19 admission test runs over the `home`
+/// this row carries (one `doc_metadata` read of it), and nowhere in the
+/// engine.
+///
+/// Overlap is WIDER than denotation, so a row is no promise that `to` names
+/// the target: asking about a document yields the claims on it AND on its
+/// versions, and a `to` slot spanning the subtree may denote no address in
+/// it at all. `to` is the endset AS DEPOSITED, which is what lets a client
+/// tell those cases apart for itself.
 ///
 /// `active` is M7's active-view membership: `false` names a claim the home
 /// has nullified (retracted), which the audit view still lists (PUB-8.46,
-/// PUB-6.32). `to` is the claim's `to` endset as deposited, so a client can
-/// tell a whole-document claim from one denoting a version of it.
+/// PUB-6.32).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EditionClaim {
     /// The claim link's address.
     pub claim: Address,
     /// The link's home document — the EDITION.
     pub home: Address,
-    /// The `to` endset, denoting the target.
+    /// The `to` endset AS DEPOSITED: it overlaps the target's subtree and
+    /// need not denote the target.
     pub to: Endset,
     /// `true` unless the home has nullified the claim (the retraction).
     pub active: bool,

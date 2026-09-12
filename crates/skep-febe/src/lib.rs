@@ -228,6 +228,19 @@ use skep_namespace::{HasM3, Namespace};
 pub trait ReadableWorld {
     /// `readable(doc, principal)` — the one predicate every read surface
     /// answers through. `None` ⟹ the guest (published documents only).
+    ///
+    /// TOTAL, over addresses of any tier and whether or not the store has
+    /// registered them: M10's doc-argument consult walks a request's NAMED
+    /// documents before any registration check, and the link-address rule
+    /// asks about a home DERIVED by address arithmetic (PUB-6.38), which no
+    /// store need have registered. An UNREGISTERED address must answer
+    /// READABLE — PUB-7.5's fail-open sign, the exception set holding the
+    /// unpublished side so a membership miss is the published fast path — so
+    /// that each read arm's own `*NotRegistered` speaks and a WITHHELD answer
+    /// is only ever a registered private document (PUB-6.12). A predicate
+    /// that refuses defensively for an address it cannot resolve inverts
+    /// that guarantee and tells a prober that a nonexistent address
+    /// exists-but-is-hidden.
     fn readable(&self, principal: Option<PrincipalId>, doc: &Address) -> bool;
 }
 
@@ -235,21 +248,40 @@ pub trait ReadableWorld {
 /// round 2, lane 3.4 §2): a class whose membership is decided by a pinned
 /// type address, which is the engine's knowledge and not this module's. Its
 /// own seam, beside [`ReadableWorld`] rather than inside it, because the two
-/// answer unrelated questions — one is a predicate consulted by all
-/// forty-one operations, this is a class lookup consulted by one — and each
-/// should be nameable by a consumer that wants only it.
+/// answer unrelated questions — one is a predicate consulted by the whole
+/// operation surface, this is a class lookup consulted by one operation —
+/// and each should be nameable by a consumer that wants only it.
 pub trait PublicationWorld {
     /// The audit-view edition-claim lookup (PUB-8.46; PUB round 2, lane 3.4
-    /// §2): every link of the edition-claim class whose `to` slot denotes
-    /// `target`, ADMITTED to the class (type slot address-denoting, every
-    /// denoted address under the pinned edition type by prefix) and
-    /// UNSUPERSEDED (no operative ⟦supersedes⟧ successor, PUB-6.32),
-    /// WHETHER OR NOT RETRACTED, in link-address order. UNFILTERED by
-    /// principal: M10 applies the home rule (PUB-6.13) per row off the same
-    /// snapshot, so the world answers the class and the front door the class
-    /// the caller reads. The engine composes M7's own audit reads for it
-    /// (`match_links`, `succs`, `is_active`) and names no type-vocabulary
-    /// semantics of its own beyond the pinned address.
+    /// §2): every link of the edition-claim class whose `to` slot OVERLAPS
+    /// `target`'s subtree, UNSUPERSEDED (no operative ⟦supersedes⟧
+    /// successor, PUB-6.32), WHETHER OR NOT RETRACTED, in link-address
+    /// order.
+    ///
+    /// THE TWO SLOTS ARE JUDGED BY DIFFERENT REGIMES, which is why one word
+    /// cannot serve for both. The `to` slot matches by OVERLAP against the
+    /// subtree, which is WIDER than denotation: asking about a document
+    /// yields the claims on it AND on its versions, and a `to` slot spanning
+    /// the subtree without denoting an address in it is still a row. That
+    /// width is the containment the lookup is for. Class MEMBERSHIP is the
+    /// other way, by DENOTATION: the type slot is address-denoting and every
+    /// address it denotes lies under the pinned edition type by prefix, so a
+    /// slot that merely overlaps the class range is no member. A caller
+    /// sizing this answer therefore reads the overlap and not a denotation
+    /// count.
+    ///
+    /// PRECONDITION: `target` is a REGISTERED DOCUMENT. M10 checks it and
+    /// answers `DocNotRegistered` otherwise, so an implementer may assume
+    /// document tier — and needs to, since the `to` range is `target`'s whole
+    /// subtree and nothing narrows it by level: an account-tier target would
+    /// range over every document under it, and a node-tier one over the
+    /// store.
+    ///
+    /// UNFILTERED by principal: M10 applies the home rule (PUB-6.13) per row
+    /// off the same snapshot, so the world answers the class and the front
+    /// door the class the caller reads. The engine composes M7's own audit
+    /// reads for it (`match_links`, `succs`, `is_active`) and names no
+    /// type-vocabulary semantics of its own beyond the pinned address.
     fn edition_claims(&self, target: &Address) -> Vec<EditionClaim>;
 }
 

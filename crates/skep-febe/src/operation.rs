@@ -38,7 +38,22 @@ use crate::{FebeWorld, Stores};
 /// (`None` = the GUEST) read the document `doc`? Consulted by every read arm
 /// — the doc-argument consult, the per-run withheld arm, the result-set
 /// filter — and by the publish composite's source gate (PUB-6.23, PUB-8.1's
-/// second constraint), always on a DOCUMENT known registered (PUB-6.37).
+/// second constraint).
+///
+/// OBLIGATIONS ON THE ANSWER. It is asked about addresses of any tier,
+/// REGISTERED OR NOT: the doc-argument consult walks the request's NAMED
+/// documents before any registration check, and the link-address rule asks
+/// it of a home DERIVED by address arithmetic (PUB-6.38), which no store
+/// need have registered. So it must be TOTAL, and it must answer READABLE
+/// for an address the store has not registered — PUB-7.5's fail-open sign,
+/// the exception set holding the unpublished side so a membership miss is
+/// the published fast path. That is what leaves each arm's own
+/// `*NotRegistered` to speak, and what makes a WITHHELD answer only ever a
+/// REGISTERED PRIVATE document (PUB-6.12). A predicate that refuses
+/// defensively for an address it cannot resolve inverts that guarantee and
+/// tells a prober that a nonexistent address exists-but-is-hidden. M6's
+/// per-run arm and M5's publish gate check registration before asking, as
+/// their own behaviour and not as a guarantee from here.
 ///
 /// Absent ([`Operation::new`] alone), M10 answers the world's own
 /// [`ReadableWorld::readable`], which is the live daemon's case: a read arm
@@ -199,11 +214,17 @@ where
     /// It is the WHOLE predicate that is supplied, not merely what the two
     /// consults ask: the same value answers every result-set filter, every
     /// per-run mask, the link-address absence rule, and the visibility class
-    /// lent to M5 and M7 on a write. That last position carries the one
-    /// precondition M10 cannot check for the supplier: lent as a visibility
-    /// class, the predicate is evaluated inside the store's write transaction
-    /// under M2's applier lock, so it must not call `transact` on that kernel,
-    /// and its cost is paid by every waiting writer ([`ReadPredicate`]).
+    /// lent to M5 and M7 on a write.
+    ///
+    /// TWO OBLIGATIONS ride with it that M10 cannot check for the supplier,
+    /// both stated in full on [`ReadPredicate`]. Lent as a visibility class,
+    /// the predicate is evaluated inside the store's write transaction under
+    /// M2's applier lock, so it must not call `transact` on that kernel, and
+    /// its cost is paid by every waiting writer. And it is asked about
+    /// addresses of any tier, registered or not, so it must be total and must
+    /// answer READABLE for an address the store has not registered: refusing
+    /// there turns each arm's own `*NotRegistered` into a `withheld` and
+    /// tells a prober that a nonexistent address is merely hidden.
     ///
     /// Takes the closure and boxes it here, since the box is this door's
     /// storage rather than the caller's concern — [`ReadPredicate`] names the
@@ -1092,12 +1113,19 @@ where
                 Ok(Response::DocMetadata { doc: trunk, published, owner, birth, as_of })
             }
             // The audit-view edition-claim lookup (PUB-8.46): the world
-            // answers the CLASS over `target`'s subtree — admitted,
+            // answers the CLASS whose `to` overlaps `target`'s subtree —
             // unsuperseded, retracted-or-not — and this door keeps each row
             // whose HOME the caller reads (PUB-6.13, the result-set rule),
             // off the one predicate above. A draft edition's claim is thereby
             // invisible to a stranger and listed for its owner; the client's
             // own PUB-3.19 admission test runs over the home this row names.
+            // The registration check is M10's OWN refusal, not a store's —
+            // this read composes a world capability rather than calling one
+            // store operation — and it is what BOUNDS the seam: the world
+            // narrows its `to` range by no level, so an account-tier target
+            // would ask after every document under it and a node-tier one
+            // after the store. Requiring document tier is what confines the
+            // lookup to one document's claims.
             Op::EditionClaims { target } => {
                 if !world.m3().is_registered_document(&target) {
                     return Err(rejection(kind, RejectCode::DocNotRegistered));

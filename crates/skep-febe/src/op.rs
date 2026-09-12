@@ -239,15 +239,25 @@ pub enum Op {
     /// Archival supersession lineage: claims with `new = x`.
     OutClaims { x: Address, view: View },
     // ── publication reads (→ the world's composition of M7, lane 3.4) ──
-    /// The audit-view edition-claim lookup (PUB-8.46): every ADMITTED,
-    /// UNSUPERSEDED claim of the edition-claim class whose `to` slot denotes
-    /// `target` — the whole document or a version of it — WHETHER OR NOT
-    /// RETRACTED, each with its home (the edition) and its retraction stated.
-    /// `target` is a DOC-ARGUMENT (unreadable ⟹ `withheld`); each row is
-    /// then kept only where the caller can read its HOME (PUB-6.13), so a
-    /// draft edition's claim is invisible to a stranger. The client's
-    /// PUB-3.19 admission test over each home is its own, through
-    /// [`Op::DocMetadata`].
+    /// The audit-view edition-claim lookup (PUB-8.46): every UNSUPERSEDED
+    /// claim of the edition-claim class whose `to` slot OVERLAPS `target`'s
+    /// subtree, WHETHER OR NOT RETRACTED, each with its home (the edition)
+    /// and its retraction stated. Overlap is WIDER than denotation, and that
+    /// width is the containment the lookup is for: asking about a document
+    /// yields the claims on it AND on its versions, and a `to` slot spanning
+    /// the subtree without denoting an address in it is still a row. Class
+    /// MEMBERSHIP is the other way — by DENOTATION over the type slot — so
+    /// the two slots are read by different regimes.
+    ///
+    /// `target` is a DOC-ARGUMENT (unreadable ⟹ `withheld`) and must be a
+    /// REGISTERED DOCUMENT: unregistered, or any other tier, ⟹
+    /// `DocNotRegistered` — M10's own refusal, since this read composes a
+    /// world capability rather than calling one store operation, and the
+    /// check is what confines the lookup to one document's claims. Each
+    /// surviving row is then kept only where the caller can read its HOME
+    /// (PUB-6.13), so a draft edition's claim is invisible to a stranger.
+    /// The client's PUB-3.19 admission test over each home is its own,
+    /// through [`Op::DocMetadata`].
     EditionClaims { target: Address },
 }
 

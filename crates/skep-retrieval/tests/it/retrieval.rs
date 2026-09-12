@@ -1004,14 +1004,14 @@ fn doc_vspan_is_the_bounding_hull_of_the_per_subspace_extents() {
     // σ_d IS the hull of the per-subspace extents — the same first start and
     // the same last reach, never a second derivation that could disagree.
     let extents = ok_of(q.doc_vspanset(&doc1()));
-    let (lo, hi) = (
+    let (first, last) = (
         extents.iter().next().expect("occupied ⇒ a first extent"),
         extents.iter().last().expect("occupied ⇒ a last extent"),
     );
     assert_eq!(
         got,
         SpanSet::singleton(
-            Span::from_endpoints(lo.start().clone(), &hi.reach()).expect("well-formed")
+            Span::from_endpoints(first.start().clone(), &last.reach()).expect("well-formed")
         )
     );
     // Link-only document: the anchor moves to [2,1].
@@ -1752,25 +1752,25 @@ fn compare_reports_address_equal_correspondences_with_per_block_feet() {
         &[region_spec(doc2(), vec![vspan(1, 1, 1)])],
     ));
     assert_eq!(rep.len(), 1);
-    let p = &rep.as_slice()[0];
-    assert_eq!(p.d1, doc1());
-    assert_eq!(p.u1.subspace, n(1));
-    assert_eq!(p.u1.ordinal, n(2)); // ca2 is offset 1 within doc1's block
-    assert_eq!(p.d2, doc2());
-    assert_eq!(p.u2.subspace, n(1));
-    assert_eq!(p.u2.ordinal, n(1)); // ca2 is offset 0 within doc2's block
-    assert_eq!(p.width, n(1));
+    let pair = &rep.as_slice()[0];
+    assert_eq!(pair.d1, doc1());
+    assert_eq!(pair.u1.subspace, n(1));
+    assert_eq!(pair.u1.ordinal, n(2)); // ca2 is offset 1 within doc1's block
+    assert_eq!(pair.d2, doc2());
+    assert_eq!(pair.u2.subspace, n(1));
+    assert_eq!(pair.u2.ordinal, n(1)); // ca2 is offset 0 within doc2's block
+    assert_eq!(pair.width, n(1));
     // Swapped operands swap the slots.
     let rep = ok_of(q.compare(
         &[region_spec(doc2(), vec![vspan(1, 1, 1)])],
         &[region_spec(doc1(), vec![vspan(1, 1, 3)])],
     ));
     assert_eq!(rep.len(), 1);
-    let p = &rep.as_slice()[0];
-    assert_eq!(p.d1, doc2());
-    assert_eq!(p.u1.ordinal, n(1));
-    assert_eq!(p.d2, doc1());
-    assert_eq!(p.u2.ordinal, n(2));
+    let pair = &rep.as_slice()[0];
+    assert_eq!(pair.d1, doc2());
+    assert_eq!(pair.u1.ordinal, n(1));
+    assert_eq!(pair.d2, doc1());
+    assert_eq!(pair.u2.ordinal, n(2));
 }
 
 #[test]
@@ -1798,10 +1798,10 @@ fn compare_reports_the_full_width_of_each_overlap() {
             &[region_spec(doc2(), vec![vspan(1, 1, w2)])],
         ));
         assert_eq!(rep.len(), 1, "one overlap for widths ({w1}, {w2})");
-        let p = &rep.as_slice()[0];
-        assert_eq!(p.width, n(want), "width of the ({w1}, {w2}) overlap");
-        assert_eq!(p.u1.ordinal, n(1));
-        assert_eq!(p.u2.ordinal, n(1));
+        let pair = &rep.as_slice()[0];
+        assert_eq!(pair.width, n(want), "width of the ({w1}, {w2}) overlap");
+        assert_eq!(pair.u1.ordinal, n(1));
+        assert_eq!(pair.u2.ordinal, n(1));
     }
 }
 
@@ -1830,10 +1830,10 @@ fn compare_takes_each_blocks_v_start_from_the_span_that_named_it() {
         &[region_spec(doc2(), vec![vspan(1, 1, 1)])],
     ));
     assert_eq!(rep.len(), 1);
-    let p = &rep.as_slice()[0];
-    assert_eq!(p.u1.ordinal, n(3)); // ca3 IS doc1's THIRD position, not its first
-    assert_eq!(p.u2.ordinal, n(1));
-    assert_eq!(p.width, n(1));
+    let pair = &rep.as_slice()[0];
+    assert_eq!(pair.u1.ordinal, n(3)); // ca3 IS doc1's THIRD position, not its first
+    assert_eq!(pair.u2.ordinal, n(1));
+    assert_eq!(pair.width, n(1));
 }
 
 #[test]
@@ -1969,9 +1969,9 @@ fn compare_clips_an_overrunning_window_to_its_documents_bound_prefix() {
         &[region_spec(doc2(), vec![vspan(1, 1, 3)])],
     ));
     assert_eq!(rep.len(), 1);
-    let p = &rep.as_slice()[0];
+    let pair = &rep.as_slice()[0];
     assert_eq!(
-        (p.u1.ordinal.clone(), p.u2.ordinal.clone(), p.width.clone()),
+        (pair.u1.ordinal.clone(), pair.u2.ordinal.clone(), pair.width.clone()),
         (n(2), n(2), n(2))
     );
     // A window opening past the prefix clips to nothing — a success, not a
@@ -2272,9 +2272,9 @@ fn compare_reports_exactly_the_address_equal_position_pairs() {
     // and clips, one past the prefix that clips to nothing, and a document
     // against itself, where X8's diagonal is forced and, doc2 holding ca1
     // twice, is not the whole answer.
-    let windows = |positions: u32| -> Vec<Span> {
-        (1..=positions + 1)
-            .flat_map(|start| (1..=positions + 1).map(move |width| vspan(1, start, width)))
+    let windows = |position_count: u32| -> Vec<Span> {
+        (1..=position_count + 1)
+            .flat_map(|start| (1..=position_count + 1).map(move |width| vspan(1, start, width)))
             .collect()
     };
     let docs = [(doc1(), windows(3)), (doc2(), windows(4))];
@@ -2717,23 +2717,23 @@ fn find_docs_containing_filtered_drops_a_container_at_its_identity() {
     three_runs(&k);
     let s = k.snapshot();
     let q = Query::new(&s);
-    let region = || vec![region_spec(doc2(), vec![vspan(1, 2, 1)])]; // ca1: held by both
+    let request = || vec![region_spec(doc2(), vec![vspan(1, 2, 1)])]; // ca1: held by both
     assert_eq!(
-        ok_of(q.find_docs_containing(&region())),
+        ok_of(q.find_docs_containing(&request())),
         vec![doc1(), doc2()]
     );
     assert_eq!(
-        ok_of(q.find_docs_containing_filtered(&region(), &|d| *d != doc1())),
+        ok_of(q.find_docs_containing_filtered(&request(), &|d| *d != doc1())),
         vec![doc2()]
     );
     assert_eq!(
-        ok_of(q.find_docs_containing_filtered(&region(), &|d| *d != doc2())),
+        ok_of(q.find_docs_containing_filtered(&request(), &|d| *d != doc2())),
         vec![doc1()]
     );
     // The identity predicate IS the unfiltered door.
     assert_eq!(
-        ok_of(q.find_docs_containing_filtered(&region(), &|_| true)),
-        ok_of(q.find_docs_containing(&region()))
+        ok_of(q.find_docs_containing_filtered(&request(), &|_| true)),
+        ok_of(q.find_docs_containing(&request()))
     );
 }
 
@@ -2940,8 +2940,8 @@ fn results_and_errors_marshal_through_serialize_per_the_derive_policy() {
     assert!(!bincode::serialize(&delivery).expect("Delivery serializes").is_empty());
     let extent = ok_of(q.doc_vspan(&doc1()));
     assert!(!bincode::serialize(&extent).expect("SpanSet serializes").is_empty());
-    let dels = ok_of(q.show_deletions(&doc1(), &doc2()));
-    assert!(!bincode::serialize(&dels).expect("Deletions serializes").is_empty());
+    let deletions = ok_of(q.show_deletions(&doc1(), &doc2()));
+    assert!(!bincode::serialize(&deletions).expect("Deletions serializes").is_empty());
     let e = err_of(q.retrieve_v(&[spec(unregistered(), vspan(1, 1, 1))]));
     assert!(!bincode::serialize(&e).expect("RetrieveError serializes").is_empty());
     assert!(!bincode::serialize(&SpanFault::NotOrdinalLevel)
@@ -2954,8 +2954,8 @@ fn results_and_errors_marshal_through_serialize_per_the_derive_policy() {
     assert!(!bincode::serialize(&spec(doc1(), vspan(1, 1, 1)))
         .expect("Spec serializes")
         .is_empty());
-    let rspec = region_spec(doc1(), vec![vspan(1, 1, 1)]);
-    assert!(!bincode::serialize(&rspec)
+    let region = region_spec(doc1(), vec![vspan(1, 1, 1)]);
+    assert!(!bincode::serialize(&region)
         .expect("RegionSpec serializes")
         .is_empty());
     // CorrPair: field-by-field marshaling (no whole-value Serialize).
@@ -2964,19 +2964,19 @@ fn results_and_errors_marshal_through_serialize_per_the_derive_policy() {
         &[region_spec(doc2(), vec![vspan(1, 1, 2)])],
     ));
     assert_eq!(rep.len(), 1);
-    let p = &rep.as_slice()[0];
-    assert!(!bincode::serialize(&p.d1).expect("Address serializes").is_empty());
-    assert!(!bincode::serialize(&p.u1.subspace).expect("Nat serializes").is_empty());
-    assert!(!bincode::serialize(&p.u1.ordinal).expect("Nat serializes").is_empty());
-    assert!(!bincode::serialize(&p.d2).expect("Address serializes").is_empty());
-    assert!(!bincode::serialize(&p.width).expect("Nat serializes").is_empty());
+    let pair = &rep.as_slice()[0];
+    assert!(!bincode::serialize(&pair.d1).expect("Address serializes").is_empty());
+    assert!(!bincode::serialize(&pair.u1.subspace).expect("Nat serializes").is_empty());
+    assert!(!bincode::serialize(&pair.u1.ordinal).expect("Nat serializes").is_empty());
+    assert!(!bincode::serialize(&pair.d2).expect("Address serializes").is_empty());
+    assert!(!bincode::serialize(&pair.width).expect("Nat serializes").is_empty());
     // Withholding Serialize is not withholding everything else: a consumer
     // can clone a report, compare two of them, and print one in a failure
     // message. `assert_eq!` on M6's results and errors compiles from a
     // foreign crate, the delivery path included.
     assert_eq!(rep.clone(), rep);
     assert_eq!(
-        dels,
+        deletions,
         Deletions {
             deleted_from_a_with_b: vec![],
             deleted_from_b_with_a: vec![]
@@ -3154,11 +3154,11 @@ fn the_answer_collections_behave_like_std_collections() {
     assert_eq!(round, rep);
     assert!(CompareReport::default().is_empty());
     // A report of two documents that share no address IS the default.
-    let none = ok_of(q.compare(
+    let empty = ok_of(q.compare(
         &[region_spec(doc1(), vec![vspan(1, 1, 3)])],
         &[region_spec(doc1(), vec![])],
     ));
-    assert_eq!(none, CompareReport::default());
+    assert_eq!(empty, CompareReport::default());
 }
 
 #[test]

@@ -357,18 +357,18 @@ impl<W: RetrievalWorld> Query<'_, W> {
         // subspace and the LAST member's reach is one ordinal step past the
         // highest occupied position.
         let extents = self.doc_vspanset(doc)?;
-        let (Some(min), Some(max)) = (extents.iter().next(), extents.iter().last()) else {
+        let (Some(first), Some(last)) = (extents.iter().next(), extents.iter().last()) else {
             return Ok(SpanSet::empty()); // registered-empty ⇒ ⟨⟩
         };
         // `from_endpoints` is INFALLIBLE on that pair: both endpoints are
-        // depth-2 (no `LevelMismatch`) and `min.start ≤ max.start < max.reach`
-        // (no `NotIncreasing`); the stored width `reach ⊖ min` round-trips
-        // exactly — `divergence(min, reach) ≤ #min` discharges D1, INCLUDING
-        // the cross-subspace box — so the singleton is faithfully ASN-0112's
-        // `σ_d = (origin_d, extent_d)`.
+        // depth-2 (no `LevelMismatch`) and `first.start ≤ last.start <
+        // last.reach` (no `NotIncreasing`); the stored width `reach ⊖ start`
+        // round-trips exactly — `divergence(start, reach) ≤ #start` discharges
+        // D1, INCLUDING the cross-subspace box — so the singleton is faithfully
+        // ASN-0112's `σ_d = (origin_d, extent_d)`.
         Ok(SpanSet::singleton(
-            Span::from_endpoints(min.start().clone(), &max.reach())
-                .expect("min.start < max.reach at one depth-2 length"),
+            Span::from_endpoints(first.start().clone(), &last.reach())
+                .expect("first.start < last.reach at one depth-2 length"),
         ))
     }
 
@@ -689,7 +689,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
         // coverage built so far at every span, and the budget below would
         // then bound a quantity that costs its own square to produce.
         let mut coverage_spans: Vec<Span> = Vec::new();
-        let mut resolved = 0usize;
+        let mut spans_resolved = 0usize;
         for r in regions {
             for span in &r.spans {
                 // Every span handed to M5 is one `image`, a Θ(#runs(doc))
@@ -700,10 +700,10 @@ impl<W: RetrievalWorld> Query<'_, W> {
                 // coverage. A span M5 folds to nothing at once (wrong depth,
                 // foreign subspace) is counted all the same: the count is an
                 // upper bound on the walks, and M5's fold stays unstated here.
-                if resolved >= MAX_FIND_COVERAGE_SPANS {
+                if spans_resolved >= MAX_FIND_COVERAGE_SPANS {
                     return Err(FindError::TooMuchCoverage); // refused before the walk
                 }
-                resolved += 1;
+                spans_resolved += 1;
                 coverage_spans.extend(m5.image(&r.doc, span));
                 // The coverage budget, refused AS THE COVERAGE IS PRODUCED —
                 // `>` and not `==`, because one span's image adds many

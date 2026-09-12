@@ -349,7 +349,7 @@ fn resolve_blocks<'a>(
     regions: &'a [RegionSpec],
 ) -> Option<Vec<Block<'a>>> {
     let mut out = Vec::new();
-    let mut resolved = 0usize;
+    let mut spans_resolved = 0usize;
     for r in regions {
         let surface = reading_surface(m3, &r.doc);
         for span in &r.spans {
@@ -358,10 +358,10 @@ fn resolve_blocks<'a>(
             // extent walks the whole list and yields nothing, which the block
             // count below would never see — so the spans resolved are counted
             // against the budget beside the blocks.
-            if resolved >= MAX_COMPARE_OPERAND_BLOCKS {
+            if spans_resolved >= MAX_COMPARE_OPERAND_BLOCKS {
                 return None; // the operand's budget, refused before the walk
             }
-            resolved += 1;
+            spans_resolved += 1;
             // M5's own shape reader: a span it declines (well-formed but
             // depth-incompatible) contributes no blocks, as `resolve` would
             // have contributed no runs for it.
@@ -613,9 +613,10 @@ mod tests {
         let qb = block(&d2, 1, ca(4), 1);
         assert!(overlap_pair(&pb, &qb).is_none());
         // Different chains have disjoint I-intervals — the guard rejects
-        // BEFORE any ordinal arithmetic runs (co-chain precondition).
-        let da1 = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
-        let qb = block(&d2, 1, da1, 2);
+        // BEFORE any ordinal arithmetic runs (co-chain precondition). doc2's
+        // own content element 1 is on a chain doc1's `ca` never touches.
+        let doc2_ca1 = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+        let qb = block(&d2, 1, doc2_ca1, 2);
         assert!(overlap_pair(&pb, &qb).is_none());
     }
 

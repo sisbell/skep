@@ -1,7 +1,7 @@
 //! # skep-febe — M10: Operation Surface (FEBE Command Layer)
 //!
-//! The engine's **front door**: each external FEBE request becomes exactly one
-//! call on the owning store/query module, gated on commit (ASN-0134 A7),
+//! The engine's **front door**: each external FEBE request is dispatched to
+//! the store/query module that owns it, gated on commit (ASN-0134 A7),
 //! stamped with its linearization coordinate (`committed_at` on every write
 //! that commits, `as_of` on every read that answers — A1/A2/V1), and every
 //! failure that reaches it surfaces as a *typed, classified, never-silent*
@@ -17,10 +17,17 @@
 //! principal a session speaks for (§6). Everything else it holds is a **hint**
 //! that may be lost with no loss of correctness — the best-effort retry memo
 //! (§7) and the poison latch (§9). It is, concretely, a lifecycle wrapper +
-//! dispatch table + client-model adapter:
-//! the design resolves that no v1 operation needs cross-family composite
-//! orchestration (Conflicts resolved #1), so that capability is latent with
-//! zero occupants.
+//! dispatch table + readability door + client-model adapter. The door is the
+//! largest of the four: ONE read predicate per request, the two consults it
+//! drives — the read side's doc-argument consult and the write side's source
+//! consult — the visibility
+//! class it lends to a store for one write, and the link-address absence
+//! rule. Cross-family COMPOSITE orchestration — a write spanning store
+//! families committed as one M2 transaction — is latent with zero occupants:
+//! the design resolves that no v1 operation needs one (Conflicts resolved
+//! #1). A cross-family READ needs no transaction and is answered off the one
+//! snapshot the read dispatch pins; two are ([`Op::DocMetadata`],
+//! [`Op::EditionClaims`]), and each says at its arm what it assembles.
 //!
 //! Spec traceability: each public item's doc-comment cites the labels it
 //! realizes (ASN-0134 A1/A2/A5/A7/V1/V2/G0, and §§ of the M10 design), so a
@@ -95,8 +102,10 @@
 //!   its original is still in flight finding no entry and executing;
 //! * the fine-grained ownership check `ω` — the owning store's, passed through
 //!   verbatim (§6); M10 pre-checks only "is there a principal at all", and
-//!   only on the write path, a read being served against any `SessionId` and
-//!   reaching its store with no principal ([`Operation::execute`]). The one
+//!   only on the write path. A read is served against any `SessionId`, its
+//!   principal resolved for the read PREDICATE rather than to gate it, so
+//!   reads are masked (by M6 and M8, through that predicate) and never
+//!   refused for authority ([`Operation::execute`]). The one
 //!   place M10 ASKS ω without wording it is the write door's source consult
 //!   (lane 3.3c, PUB-6.36/6.38): it defers to the store wherever the
 //!   destination's own ownership gate would refuse, through the store's own

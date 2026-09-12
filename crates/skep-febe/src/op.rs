@@ -664,6 +664,76 @@ impl Op {
             | Op::EditionClaims { .. } => None,
         }
     }
+
+    /// The destination whose arrangement this write EDITS IN PLACE, if it is
+    /// one of that class (PUB-2.11): `insert`, `delete`, `copy`-into and
+    /// `rearrange`, the four writes that advance an existing document's
+    /// arrangement. `None` for everything else, and each exclusion is the
+    /// rule's own: the link writes are outside it (PUB-2.12), `version` and
+    /// `create`/`fork` MINT a document rather than advancing one,
+    /// `publish` appends a chain member whose destination M5's composite
+    /// decides (PUB-2.39), and no read edits anything. EXHAUSTIVE with no
+    /// `_` arm: a new `Op` decides its row here.
+    ///
+    /// This names the CLASS; what restricts the door's pre-evaluation to
+    /// `copy` is the ORDER in which the door asks. [`Operation::consult_write`]
+    /// asks only after the deferral, so only CONSULTED writes reach it —
+    /// `insert`, `delete` and `rearrange` read no source, answer `None` from
+    /// [`Op::consulted_destinations`], and meet the store's own
+    /// `published_target` unchanged, one layer later. The two lists are
+    /// therefore read together, and the pairing is pinned in this module's
+    /// tests rather than left to agree by hand.
+    ///
+    /// `pub(crate)` for [`Op::consulted_destinations`]'s reason: nothing
+    /// outside M10 re-runs the door's pre-evaluation, which exists to order
+    /// one refusal ahead of another inside this surface.
+    ///
+    /// [`Operation::consult_write`]: crate::Operation
+    pub(crate) fn in_place_destination(&self) -> Option<&Address> {
+        match self {
+            Op::Insert { doc, .. }
+            | Op::Delete { doc, .. }
+            | Op::Copy { doc, .. }
+            | Op::Rearrange { doc, .. } => Some(doc),
+            Op::CreateNewDocument { .. }
+            | Op::Delegate { .. }
+            | Op::RegisterNode { .. }
+            | Op::Fork { .. }
+            | Op::Version { .. }
+            | Op::Publish { .. }
+            | Op::MakeLink { .. }
+            | Op::Emit { .. }
+            | Op::Nullify { .. }
+            | Op::AssertSup { .. }
+            | Op::EditLink { .. }
+            | Op::NextAccountPrefix { .. }
+            | Op::PrincipalPrefix { .. }
+            | Op::ReadLink { .. }
+            | Op::FollowLink { .. }
+            | Op::RetrieveV { .. }
+            | Op::RetrieveDocVSpan { .. }
+            | Op::RetrieveDocVSpanSet { .. }
+            | Op::ShowOrigin { .. }
+            | Op::ShowDeletions { .. }
+            | Op::Compare { .. }
+            | Op::FindDocsContaining { .. }
+            | Op::Image { .. }
+            | Op::FindLinksV { .. }
+            | Op::FindLinksFtt { .. }
+            | Op::CountV { .. }
+            | Op::CountFtt { .. }
+            | Op::WindowV { .. }
+            | Op::WindowFtt { .. }
+            | Op::RetrieveEndsets { .. }
+            | Op::Project { .. }
+            | Op::DiscoverableFrom { .. }
+            | Op::DeleteOrphans { .. }
+            | Op::InClaims { .. }
+            | Op::OutClaims { .. }
+            | Op::DocMetadata { .. }
+            | Op::EditionClaims { .. } => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -747,7 +817,13 @@ pub(crate) mod tests {
             (Op::RetrieveDocVSpanSet { doc: doc() }, true),
             (Op::ShowOrigin { doc: doc(), span: sp() }, true),
             (Op::ShowDeletions { d_a: doc(), d_b: doc() }, true),
-            (Op::Compare { rho1: vec![], rho2: vec![] }, true),
+            (
+                Op::Compare {
+                    rho1: vec![RegionSpec { doc: doc(), spans: vec![sp()] }],
+                    rho2: vec![],
+                },
+                true,
+            ),
             (Op::FindDocsContaining { regions: vec![RegionSpec { doc: doc(), spans: vec![sp()] }] }, true),
             (Op::Image { d: doc(), region: vec![sp()] }, true),
             (Op::FindLinksV { d: doc(), region: vec![sp()] }, true),
@@ -844,7 +920,6 @@ pub(crate) mod tests {
                         | Op::WindowFtt { .. }
                         | Op::InClaims { .. }
                         | Op::OutClaims { .. }
-                        | Op::Compare { .. }
                 );
             assert_eq!(named, expects_consult, "{:?}: the doc-argument row", op.kind());
         }
@@ -953,5 +1028,51 @@ pub(crate) mod tests {
         let insert =
             Op::Insert { doc: doc(), at: vpos(), values: vec![Val::new(vec![1u8])], deposit: false };
         assert!(insert.consulted_destinations().is_none());
+    }
+
+    /// PUB-2.11 / PUB-6.36 slot 5, at the OTHER pairing the door depends on
+    /// (`Operation::consult_write`). `in_place_destination` names the class
+    /// — the four writes that advance an existing document's arrangement —
+    /// and the door's ORDER is what narrows the pre-evaluation to `copy`:
+    /// the check runs past the deferral, so only a CONSULTED member reaches
+    /// it, and the three that are not consulted meet the store's own
+    /// `published_target` unchanged. Both halves are stated here, because a
+    /// member that quietly stopped being consulted, or a consulted write that
+    /// quietly left the class, would reorder a refusal with nothing to say so.
+    #[test]
+    fn the_in_place_class_is_the_four_arrangement_edits_and_only_copy_is_consulted() {
+        for (op, is_read) in all_ops() {
+            let in_place = op.in_place_destination().is_some();
+            let expects = !is_read
+                && matches!(
+                    op,
+                    Op::Insert { .. } | Op::Delete { .. } | Op::Copy { .. } | Op::Rearrange { .. }
+                );
+            assert_eq!(in_place, expects, "{:?}: the in-place arrangement-edit row", op.kind());
+            assert!(
+                !in_place || !is_read,
+                "{:?} is a read: no read edits an arrangement",
+                op.kind()
+            );
+            // The door's reach: a member the deferral admits is one whose
+            // refusal the door orders ahead of the source consult.
+            let pre_evaluated = in_place && op.consulted_destinations().is_some();
+            assert_eq!(
+                pre_evaluated,
+                matches!(op, Op::Copy { .. }),
+                "{:?}: `copy` is the one member the door's pre-evaluation reaches",
+                op.kind()
+            );
+        }
+
+        // The destination named is the document EDITED, not a source read.
+        let d = addr(&[1, 0, 1, 0, 1]);
+        let src = addr(&[1, 0, 1, 0, 2]);
+        let copy = Op::Copy {
+            doc: d.clone(),
+            at: vpos(),
+            specs: vec![VSpec { source: src, span: sp() }],
+        };
+        assert_eq!(copy.in_place_destination(), Some(&d));
     }
 }

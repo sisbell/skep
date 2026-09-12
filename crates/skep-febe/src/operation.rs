@@ -112,6 +112,33 @@ fn home_readable(a: &Address, readable: &impl Fn(&Address) -> bool) -> bool {
     document_of(a).is_none_or(|home| readable(&home))
 }
 
+/// `D.1` — the opening address of a document's VERSION CHAIN, which the
+/// doc-metadata read reports as the birth version (PUB-8.12).
+///
+/// A RECONSTRUCTION, and named so the copy is visible. M3 holds the version
+/// chain's anchor (the document itself) and its opening ordinal (`k = 1`,
+/// its generator's), and M3's own [`first_document_address`] — the published
+/// equivalent for the sibling account→document chain — states the rule this
+/// stands against: those two are answerable from outside M3 only by
+/// rebuilding them, "which are M3's alone". M3 publishes no such read for the
+/// version chain, so this is the rebuild, and it will not follow M3 if that
+/// encoding moves. It would fail SILENTLY if it did: `checked_inc` answers a
+/// well-formed address for any anchor, whose `content_count` is then `0`, so
+/// a wrong `D.1` reaches a client as `birth_extent: Some(0)` and its PUB-3.19
+/// edition test images over an empty base. The remedy is a
+/// `first_version_address` in M3 beside its sibling, at which point this
+/// function is deleted.
+///
+/// The `expect` discharges T4 VALIDITY and nothing more, soundly: M1's
+/// `inc_preserves_t4` is unconditionally true at `k = 1`, so the gate cannot
+/// trip whatever address is handed in. It is not evidence that `k = 1` is the
+/// birth ordinal — that is the claim above, which no check here can hold.
+///
+/// [`first_document_address`]: skep_namespace::first_document_address
+fn birth_member(document: &Address) -> Address {
+    checked_inc(document, 1).expect("k = 1 passes the TA5a gate on every address")
+}
+
 impl<W> Operation<W>
 where
     W: FebeWorld,
@@ -263,14 +290,10 @@ where
     /// read, copied into a PUBLISHED destination the caller owns — answered
     /// `withheld` where PUB-6.36 has slot 5 speak first. The door now
     /// PRE-EVALUATES the in-place advance refusal itself, between the
-    /// deferral and the consult, for the in-place ARRANGEMENT-edit class
-    /// PUB-2.11 governs among the consulted ops — `copy`, the one write here
-    /// whose destination is an existing document's arrangement (the link
-    /// writes are outside the rule, PUB-2.12; `version` is a mint, and
-    /// `insert`/`delete`/`rearrange` read no source and take no consult) —
-    /// by ASKING M5's own rule, [`published_target`], on a destination the
-    /// deferral has just found registered (PUB-6.37): M5 publishes that read
-    /// so a door pre-evaluating the refusal runs the predicate the store
+    /// deferral and the consult, over the class [`Op::in_place_destination`]
+    /// names, by ASKING M5's own rule, [`published_target`], on a destination
+    /// the deferral has just found registered (PUB-6.37): M5 publishes that
+    /// read so a door pre-evaluating the refusal runs the predicate the store
     /// enforces instead of restating it, and only the ORDERING is M10's. So
     /// the answer is `published_target` byte-identically to the store's (same
     /// code, disposition, no site, no detail), and it stays so through any
@@ -312,14 +335,15 @@ where
             return Ok(());
         }
         // Slot 5 ahead of slot 6 (lane 4.2, F3): the model's in-place advance
-        // refusal on a `copy`'s destination — PUB-2.11, asked of M5's one
+        // refusal on this write's destination — PUB-2.11, asked of M5's one
         // publication read on a destination the deferral has just found
         // registered (PUB-6.37), so the door runs the rule the store enforces
         // rather than a copy of it — BEFORE any source is consulted, so the
         // one cell where both apply answers `published_target`, never
-        // `withheld`.
-        if let Op::Copy { doc, .. } = op {
-            if published_target(m3, doc) {
+        // `withheld`. `copy` is the only member of the class that is also
+        // consulted; the others never reach here (`in_place_destination`).
+        if let Some(dest) = op.in_place_destination() {
+            if published_target(m3, dest) {
                 return Err(rejection(kind, RejectCode::PublishedTarget));
             }
         }
@@ -375,10 +399,12 @@ where
     /// returns the id resolves to no principal for the rest of the uptime and
     /// no write on it can ever be authorized again.
     ///
-    /// WRITES are the whole of what this retires. Reads take no session gate
+    /// WRITES are the whole of what this REFUSES. Reads take no session gate
     /// ([`Operation::execute`]), so the retired id still reaches every read
-    /// arm and is answered — a transport whose logout must stop reads holds
-    /// that policy itself.
+    /// arm and is answered — as the GUEST, since it now resolves to no
+    /// principal and `None` is the guest predicate. Logout therefore NARROWS
+    /// the read surface to the published documents rather than closing it; a
+    /// transport whose logout must REFUSE reads holds that policy itself.
     ///
     /// The sweep is not atomic against a request already in flight. An
     /// `execute` past its step-(a) lookup may deposit its ack after the sweep
@@ -423,12 +449,25 @@ where
     /// the retry memo is read at step (a) and written at step (d), with the
     /// whole dispatch in between, so both miss and both execute (§7).
     ///
-    /// AUTHORIZATION is the write path's. `session` is consulted at step (b)
-    /// and nowhere else: every read is dispatched against any `SessionId` —
-    /// bound, retired by [`Operation::close_session`], or never opened — and
-    /// reaches its store carrying no principal, since no read arm passes one.
-    /// A transport that requires read authorization owns the whole of it, no
-    /// module below this one performing any.
+    /// AUTHORIZATION: `session` is consulted on BOTH paths, for two different
+    /// purposes, and the difference is the one a transport author needs.
+    ///
+    /// * On the WRITE path, at step (b), it resolves a PROVEN-bound principal,
+    ///   and its absence REFUSES: an unbound session is answered
+    ///   `Unauthenticated` and no store is reached. That is a gate.
+    /// * On the READ path it resolves an `Option<PrincipalId>` for the read
+    ///   predicate this surface answers, which MASKS and never refuses.
+    ///   Every read is therefore served against any `SessionId` — bound,
+    ///   retired by [`Operation::close_session`], or never opened — and an
+    ///   id that resolves to no principal is answered as the GUEST, whose
+    ///   predicate admits the published documents alone. That is a mask.
+    ///
+    /// So reads are masked, not gated, and the masking is M6's and M8's,
+    /// driven by the one predicate this surface answers (PUB-6.39). A
+    /// transport that adds its own read gate is adding a SECOND predicate to
+    /// a surface that answers one, and two predicates that disagree about a
+    /// private draft is the failure [`Operation::readable`] is a chokepoint
+    /// to prevent.
     ///
     /// Two caller preconditions, neither of which this module can check for
     /// itself:
@@ -771,9 +810,12 @@ where
     /// surfaces: `Query::new` for M6, and M8's `*_on` reads over that same
     /// snapshot (Conflicts resolved #5), so no answer comes from a position
     /// other than the one `as_of` names. Reads hold no lock against writers,
-    /// are zero-step (A1), and have no commit-before-ack obligation. No
-    /// principal, no session. Exhaustive over `Op` with the complementary
-    /// (write) half as one explicit rejecting |-list — see `dispatch_write`.
+    /// are zero-step (A1), and have no commit-before-ack obligation. No arm
+    /// takes a session gate; every arm answers THROUGH the per-request read
+    /// predicate this function builds once off `principal`, which masks and
+    /// never refuses (`None` is the guest). Exhaustive over `Op` with the
+    /// complementary (write) half as one explicit rejecting |-list — see
+    /// `dispatch_write`.
     fn dispatch_read(&self, op: Op, principal: Option<PrincipalId>) -> Result<Response, Rejection> {
         let kind = op.kind();
         let snap = self.stores.kernel().snapshot();
@@ -800,8 +842,9 @@ where
                 Ok(Response::MaybeAddr { addr, as_of })
             }
             // Takes an explicit wire id, not the session's bound principal —
-            // deliberate (§2): a prefix is public, immutable registry data,
-            // and the read path is principal-free by construction.
+            // deliberate (§2): a prefix is public, immutable registry data, so
+            // the answer is the same for every caller and the wire id is what
+            // is being asked ABOUT.
             Op::PrincipalPrefix { id } => {
                 let addr = snap.world().m3().principal_prefix(id).cloned();
                 Ok(Response::MaybeAddr { addr, as_of })
@@ -960,11 +1003,13 @@ where
             // is M3's ω, carried rather than recomputed by the client (`Some`
             // on every registered document — ω is total over the registered
             // space — the `Option` standing only so the shape never invents
-            // one). The birth version is `D.1` while the chain has a member,
-            // and its extent is that member's arranged content count, which a
-            // version never changes (PUB-2.50) — the base extent PUB-3.19's
-            // edition test images over. No arrangement is read for a
-            // document with no member: the field is absent, not zero.
+            // one). The birth version is `birth_member` — which owns both the
+            // statement of what `D.1` is and the caveat that it is a copy of
+            // M3's encoding — reported while the chain has a member, with its
+            // extent that member's arranged content count, which a version
+            // never changes (PUB-2.50): the base extent PUB-3.19's edition
+            // test images over. No arrangement is read for a document with no
+            // member: the field is absent, not zero.
             Op::DocMetadata { doc } => {
                 let m3 = world.m3();
                 if !m3.is_registered_document(&doc) {
@@ -973,9 +1018,7 @@ where
                 let document = trunk_of(&doc);
                 let published = published_target(m3, &doc);
                 let owner = m3.effective_owner_prefix(&document).cloned();
-                let birth = trunk_head(m3, &doc).map(|_| {
-                    checked_inc(&document, 1).expect("k = 1 passes the TA5a gate on every address")
-                });
+                let birth = trunk_head(m3, &doc).map(|_| birth_member(&document));
                 let birth_extent = birth.as_ref().map(|b| world.m5().content_count(b));
                 Ok(Response::DocMetadata { doc: document, published, owner, birth, birth_extent, as_of })
             }
@@ -1260,11 +1303,11 @@ mod tests {
     }
 
     /// §1/§2, the complement of the gate above: a read tolerates an unbound
-    /// session — no principal, no session. Every read arm is driven through
-    /// `execute` on an id that was never opened; each may reject for its own
-    /// reasons against a genesis world, but never for authentication. Driving
-    /// all 26 also exercises `execute`'s Total contract on the read half: an
-    /// arm that panics fails here.
+    /// session — it is ANSWERED, as the guest. Every read arm is driven
+    /// through `execute` on an id that was never opened; each may reject for
+    /// its own reasons against a genesis world, but never for authentication.
+    /// Driving all 26 also exercises `execute`'s Total contract on the read
+    /// half: an arm that panics fails here.
     #[test]
     fn no_read_is_ever_rejected_for_an_unbound_session() {
         let febe = operation();

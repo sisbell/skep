@@ -34,6 +34,22 @@ pub struct EditionClaim {
     pub active: bool,
 }
 
+/// A document's birth version — the opening member `D.1` of its version
+/// chain, with the extent PUB-3.19's edition test images over (PUB-8.12).
+///
+/// One value rather than two fields, because the two are one fact: a document
+/// whose chain has no member has neither, and a document with one has both.
+/// `extent` is that member's arranged content count, which a version never
+/// changes (PUB-2.50), so it is the base extent a client measures an edition
+/// against.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BirthVersion {
+    /// The chain's opening member, `D.1`.
+    pub addr: Address,
+    /// That member's arranged content count.
+    pub extent: Nat,
+}
+
 /// The marshaled response. Every variant but [`Response::Rejected`] carries
 /// one coordinate — `at` on the three acknowledging shapes, `as_of` on every
 /// read answer — and what a client does with the pair is [the two
@@ -45,16 +61,28 @@ pub struct EditionClaim {
 ///
 /// [`Operation::log_position`]: crate::Operation::log_position
 ///
-/// `Response` deliberately derives **no** `Clone` (§7): the idempotency cache
-/// stores the small [`CommittedAck`] a committed write yields, never a whole
-/// `Response`, so no transitively heavy `Clone` bound is forced onto M6's/M7's
-/// payload types.
+/// `Debug + PartialEq + Eq`, because the caller who holds one cannot supply
+/// them (both trait and type are foreign to it) and every use of an answer
+/// wants them: a transport logging what it is about to marshal, a test
+/// asserting the shape an operation produced, a harness diagnosing the shape
+/// it did not expect. Every payload carries all three, M6's [`DeliveryItem`]
+/// by a hand-written `Debug` that reports its value's byte length and never
+/// its bytes.
+///
+/// [`DeliveryItem`]: skep_retrieval::DeliveryItem
+///
+/// Not `Clone`, and not for a bound's sake — every payload clones. Nothing
+/// needs to duplicate an answer: the one thing that outlives its request is
+/// the small [`CommittedAck`] a committed write yields, which the retry memo
+/// holds in place of the whole `Response` (§7). Not `Hash`, which M1's
+/// `Address` does not carry.
 ///
 /// `#[must_use]` on the type rather than on `execute`, so it holds for every
 /// producer: a `Response` that is built and dropped is a request that was
 /// executed — possibly committed — and never answered, which is exactly the
 /// silence the never-silent contract forbids.
 #[must_use]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Response {
     /// delete/copy/rearrange — committed at `at` (A7).
     Ack { at: Seq },
@@ -101,15 +129,13 @@ pub enum Response {
     /// state); `owner` is M3's effective owner account, CARRIED rather than
     /// recomputed client-side because ω is the store's word (`None` is
     /// unreachable for a registered document and stands only so the shape
-    /// never invents an account); `birth` is the chain's first member `D.1`
-    /// when the document has one, with `birth_extent` its content count —
-    /// the base extent PUB-3.19's edition test images over.
+    /// never invents an account); `birth` is the [`BirthVersion`] of a
+    /// document whose chain has a member, absent for one with none.
     DocMetadata {
         doc: Address,
         published: bool,
         owner: Option<Address>,
-        birth: Option<Address>,
-        birth_extent: Option<Nat>,
+        birth: Option<BirthVersion>,
         as_of: Seq,
     },
     /// edition_claims (PUB-8.46): the audit-view lookup of the edition-claim

@@ -284,9 +284,8 @@ fn execute_read_on(
     };
     let kernel =
         Kernel::open(cfg, world).expect("in-memory open runs no recovery and cannot fail");
-    let febe = Operation::new(Box::new(EngineStores::new(Arc::new(kernel)))).with_read_predicate(
-        Box::new(move |p: Option<PrincipalId>, doc: &Address| head.readable(p, doc)),
-    );
+    let febe = Operation::new(Box::new(EngineStores::new(Arc::new(kernel))))
+        .with_read_predicate(move |p: Option<PrincipalId>, doc: &Address| head.readable(p, doc));
     let session = match principal {
         Some(p) => febe.open_session(p),
         None => open_guest_session(&febe),

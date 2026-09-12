@@ -27,7 +27,7 @@ use crate::idem::IdemCache;
 use crate::lower::{lower_read, lower_txn, Lower};
 use crate::op::{Op, OpKind, Request, WriteConsult};
 use crate::reject::{reject, rejection, FaultSite, RejectCode, Rejection};
-use crate::response::Response;
+use crate::response::{BirthVersion, Response};
 use crate::session::{SessionId, Sessions};
 use crate::successor::successor_link;
 use crate::{FebeWorld, Stores};
@@ -128,10 +128,12 @@ fn home_readable(a: &Address, readable: &impl Fn(&Address) -> bool) -> bool {
 /// stands against: those two are answerable from outside M3 only by
 /// rebuilding them, "which are M3's alone". M3 publishes no such read for the
 /// version chain, so this is the rebuild, and it will not follow M3 if that
-/// encoding moves. It would fail SILENTLY if it did: `checked_inc` answers a
-/// well-formed address for any anchor, whose `content_count` is then `0`, so
-/// a wrong `D.1` reaches a client as `birth_extent: Some(0)` and its PUB-3.19
-/// edition test images over an empty base. The remedy is a
+/// encoding moves. Nothing in the ANSWER would report it: `checked_inc` gives
+/// a well-formed address for any anchor, whose `content_count` is then `0`,
+/// so a wrong `D.1` reaches a client as a birth version of extent zero and
+/// its PUB-3.19 edition test images over an empty base. What catches it is
+/// the suite, which pins the reported address against the one `version`
+/// actually mints rather than against this arithmetic. The remedy is a
 /// `first_version_address` in M3 beside its sibling, at which point this
 /// function is deleted.
 ///
@@ -184,9 +186,17 @@ where
     /// per-run mask, the link-address absence rule, and the visibility class
     /// lent to M5 and M7 on a write.
     ///
+    /// Takes the closure and boxes it here, since the box is this door's
+    /// storage rather than the caller's concern — [`ReadPredicate`] names the
+    /// shape the bound spells out, and an already-boxed predicate satisfies
+    /// that bound too.
+    ///
     /// [`ReadableWorld::readable`]: crate::ReadableWorld::readable
-    pub fn with_read_predicate(mut self, predicate: Box<ReadPredicate>) -> Self {
-        self.read_predicate = Some(predicate);
+    pub fn with_read_predicate<F>(mut self, predicate: F) -> Self
+    where
+        F: Fn(Option<PrincipalId>, &Address) -> bool + Send + Sync + 'static,
+    {
+        self.read_predicate = Some(Box::new(predicate));
         self
     }
 
@@ -1015,11 +1025,10 @@ where
             // space — the `Option` standing only so the shape never invents
             // one). The birth version is `birth_member` — which owns both the
             // statement of what `D.1` is and the caveat that it is a copy of
-            // M3's encoding — reported while the chain has a member, with its
-            // extent that member's arranged content count, which a version
-            // never changes (PUB-2.50): the base extent PUB-3.19's edition
-            // test images over. No arrangement is read for a document with no
-            // member: the field is absent, not zero.
+            // M3's encoding — reported while the chain has a member, and it
+            // is one `BirthVersion` because address and extent are one fact:
+            // no arrangement is read for a document with no member, so the
+            // field is absent rather than zero.
             Op::DocMetadata { doc } => {
                 let m3 = world.m3();
                 if !m3.is_registered_document(&doc) {
@@ -1028,9 +1037,12 @@ where
                 let document = trunk_of(&doc);
                 let published = published_target(m3, &doc);
                 let owner = m3.effective_owner_prefix(&document).cloned();
-                let birth = trunk_head(m3, &doc).map(|_| birth_member(&document));
-                let birth_extent = birth.as_ref().map(|b| world.m5().content_count(b));
-                Ok(Response::DocMetadata { doc: document, published, owner, birth, birth_extent, as_of })
+                let birth = trunk_head(m3, &doc).map(|_| {
+                    let addr = birth_member(&document);
+                    let extent = world.m5().content_count(&addr);
+                    BirthVersion { addr, extent }
+                });
+                Ok(Response::DocMetadata { doc: document, published, owner, birth, as_of })
             }
             // The audit-view edition-claim lookup (PUB-8.46): the world
             // answers the CLASS over `target`'s subtree — admitted,
@@ -1097,7 +1109,7 @@ mod tests {
     use skep_kernel::{
         CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, TxnError, WorldState,
     };
-    use skep_links::{HasLinks, LinkRec, LinkState, LinkWriter, Visibility};
+    use skep_links::{HasLinks, LinkRec, LinkState};
     use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 
     use super::*;
@@ -1224,15 +1236,11 @@ mod tests {
         kernel: Arc<Kernel<World>>,
     }
 
+    /// The whole of what an implementer owes: one kernel, answered the same
+    /// way every time. All three drivers follow from it.
     impl crate::Stores<World> for KernelStores {
         fn kernel(&self) -> &Kernel<World> {
             &self.kernel
-        }
-        fn linkstore<'a>(
-            &'a self,
-            visibility: &'a Visibility<'a, World>,
-        ) -> LinkWriter<'a, World> {
-            LinkWriter::new(&self.kernel, visibility)
         }
     }
 

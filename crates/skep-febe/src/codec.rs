@@ -69,8 +69,14 @@ pub trait Codec {
 /// A std error like every other failure in this workspace, so the transport
 /// author writing the one required [`Codec`] impl can `unwrap`, `expect`,
 /// `?` it into a boxed error, and log it with `{}` — the ordinary handling
-/// of a parse failure, none of which is available to a bare struct.
-#[derive(Debug)]
+/// of a parse failure, none of which is available to a bare struct. A value
+/// besides, with the workspace's value derives: [`Rejection::unparseable`]
+/// consumes one, so a transport that also logs its failure needs to keep a
+/// copy, and a codec test comparing an observed failure against an expected
+/// one needs to compare them.
+///
+/// [`Rejection::unparseable`]: crate::Rejection::unparseable
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError {
     /// Optional human-readable cause for the `Unparseable` rejection.
     pub detail: Option<String>,

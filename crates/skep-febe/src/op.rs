@@ -13,6 +13,11 @@ use skep_retrieval::{RegionSpec, Spec};
 /// One parsed FEBE request: an optional idempotency key plus the operation.
 /// `id` is used ONLY to key the retry memo (§1(a)/§7); it is never echoed on
 /// the response path (§8).
+///
+/// A value, with [`Op`]'s derives and for [`Op`]'s reason: `execute` consumes
+/// a request, so a transport that records, reorders or reissues what it
+/// dispatched keeps a clone of one.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Request {
     /// The client's idempotency key (optional): a token the CLIENT chooses,
     /// unique only within its own session.
@@ -58,6 +63,22 @@ pub const MAX_REQ_ID_BYTES: usize = 256;
 
 /// The parsed request — one variant per FEBE operation (args in M1/M5/M7/M8
 /// types; the principal comes from the session, never the wire).
+///
+/// A value, because [`Operation::execute`] consumes one: a transport that
+/// wants to hold what it dispatched — to log it, to buffer it for reorder, to
+/// reissue it under [`Request::id`] — keeps a clone, and one that classifies a
+/// request through [`Op::is_read`] before dispatching it can then still
+/// dispatch it. Comparison for the same callers: a harness pins the request it
+/// built against the one a parser produced.
+///
+/// [`Operation::execute`]: crate::Operation::execute
+///
+/// NOT `Debug`, on one leaf: M4's `Val`, which withholds it so that content
+/// bytes never render into a log. NOT `Hash`, on that leaf and M1's `Address`.
+/// Deliberately not `#[non_exhaustive]` either: a consumer's exhaustive match
+/// over this enum is what forces a new operation to be given a wire name and a
+/// marshaling, where a `_` arm would silently drop it.
+#[derive(Clone, PartialEq, Eq)]
 pub enum Op {
     // ── namespace writes (→ M3) ──
     /// CREATENEWDOCUMENT (ASN-0103): baptize a fresh empty document.
@@ -241,6 +262,7 @@ pub enum Op {
 /// [`FROM`]: crate::FROM
 /// [`TO`]: crate::TO
 /// [`TYPE`]: crate::TYPE
+#[derive(Clone, PartialEq, Eq)]
 pub struct SuccessorSpec {
     pub from: Vec<VSpec>,
     pub to: Vec<VSpec>,

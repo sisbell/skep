@@ -289,16 +289,13 @@ impl EngineStores {
     }
 }
 
+/// The one kernel every driver M10 acquires is built over — which is the
+/// whole of what the trait asks of an implementer, the three drivers
+/// (including M7's writer at the class M10 hands in per write, lane 3.3b)
+/// following from it.
 impl Stores<World> for EngineStores {
     fn kernel(&self) -> &Kernel<World> {
         &self.kernel
-    }
-
-    /// M7's writer at the class M10 hands in — the session principal's read
-    /// predicate, closed by M10 per write (lane 3.3b) and applied by M7 to
-    /// the transaction's working world.
-    fn linkstore<'a>(&'a self, visibility: &'a Visibility<'a, World>) -> LinkWriter<'a, World> {
-        LinkWriter::new(&self.kernel, visibility)
     }
 }
 

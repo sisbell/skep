@@ -41,6 +41,62 @@ fn linked_doc(fx: &Fixture) -> (skep_address::Address, skep_address::Address) {
     (d, l)
 }
 
+/// The two publication reads (PUB-8.12, PUB-8.46), payload and all.
+///
+/// The birth version is ONE value, and both halves of it are load-bearing.
+/// Its address is a RECONSTRUCTION of M3's version-chain encoding, which
+/// fails SILENTLY if that encoding moves — a wrong `D.1` is a well-formed
+/// address whose content count is `0` — so the answer is checked against the
+/// address `Op::Version` actually minted, and its extent against the content
+/// that version shares. A document whose chain has no member reports no
+/// birth at all: absent, never zero, which is why the two travel together.
+#[test]
+fn the_publication_reads_answer_the_metadata_a_client_admits_an_edition_by() {
+    let fx = setup();
+
+    // A draft with no chain member: private, owned, and unborn.
+    let d = create_doc(&fx);
+    let (doc, published, owner, birth) = doc_metadata(ex(&fx.febe, fx.user, Op::DocMetadata { doc: d.clone() }));
+    assert_eq!(doc, d);
+    assert!(!published, "an explicit-`false` mint is a draft");
+    assert_eq!(owner.expect("ω is total over the registered space"), fx.account);
+    assert!(birth.is_none(), "no member, so no extent is read: absent, not zero");
+
+    // A published edition with three deposited positions, versioned once.
+    let e = create_edition(&fx);
+    deposit3(&fx, &e);
+    let (member, _) = ack_addr(ex(&fx.febe, fx.user, Op::Version { d_src: e.clone(), published: None }));
+
+    let (doc, published, _, birth) = doc_metadata(ex(&fx.febe, fx.user, Op::DocMetadata { doc: e.clone() }));
+    assert_eq!(doc, e);
+    assert!(published);
+    let birth = birth.expect("a document whose chain has a member reports its birth version");
+    assert_eq!(
+        birth.addr, member,
+        "the reported `D.1` is the address the first `version` minted — the one check that \
+         catches a reconstruction which has fallen out of step with M3's encoding"
+    );
+    assert_eq!(birth.extent, nat(3), "the base extent PUB-3.19's edition test images over");
+
+    // A VERSION MEMBER answers its DOCUMENT's state (PUB-2.15), birth included.
+    let (doc, published, _, birth) =
+        doc_metadata(ex(&fx.febe, fx.user, Op::DocMetadata { doc: member.clone() }));
+    assert_eq!(doc, e, "the argument projects to its trunk document");
+    assert!(published);
+    assert_eq!(birth.expect("the document's own birth").addr, member);
+
+    // The audit-view lookup answers the class its world composes — this
+    // miniature world carries no edition type, so the class is empty — and
+    // both reads refuse an unregistered argument rather than inventing one.
+    assert!(edition_claims(ex(&fx.febe, fx.user, Op::EditionClaims { target: e })).is_empty());
+    let ghost = addr(&[1, 0, 1, 0, 91]);
+    for op in [Op::DocMetadata { doc: ghost.clone() }, Op::EditionClaims { target: ghost }] {
+        let kind = op.kind();
+        let rej = rejected(ex(&fx.febe, fx.user, op));
+        assert_eq!(rej.code, RejectCode::DocNotRegistered, "{kind:?}");
+    }
+}
+
 /// Bootstrap provisioning and the two namespace-structure reads (§2/§6):
 /// NextAccountPrefix feeds Delegate; PrincipalPrefix resolves any principal's
 /// public prefix (None = absent); RegisterNode runs under the bootstrap

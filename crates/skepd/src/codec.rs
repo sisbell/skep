@@ -1432,16 +1432,17 @@ fn j_response(r: &Response) -> Value {
         // its publication bit, its owner account, and its birth version with
         // that version's base extent. `owner` is a payload option — null
         // stands only so the shape never invents an account; a registered
-        // document always carries one — and `birth`/`birth_extent` travel
-        // TOGETHER, both null while the document has no member yet.
-        Response::DocMetadata { doc, published, owner, birth, birth_extent, as_of } => (
+        // document always carries one. `birth` and `birth_extent` are two
+        // wire keys over ONE optional value, so they are null together while
+        // the document has no member yet and carried together once it has.
+        Response::DocMetadata { doc, published, owner, birth, as_of } => (
             "doc_metadata",
             vec![
                 ("doc", j_addr(doc)),
                 ("published", Value::Bool(*published)),
                 ("owner", owner.as_ref().map(j_addr).unwrap_or(Value::Null)),
-                ("birth", birth.as_ref().map(j_addr).unwrap_or(Value::Null)),
-                ("birth_extent", birth_extent.as_ref().map(j_nat).unwrap_or(Value::Null)),
+                ("birth", birth.as_ref().map(|b| j_addr(&b.addr)).unwrap_or(Value::Null)),
+                ("birth_extent", birth.as_ref().map(|b| j_nat(&b.extent)).unwrap_or(Value::Null)),
                 ("as_of", j_seq(*as_of)),
             ],
         ),

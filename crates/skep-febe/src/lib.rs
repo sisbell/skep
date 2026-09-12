@@ -150,7 +150,7 @@ pub use operation::{Operation, ReadPredicate};
 // transcribing the row, so the two cannot come to advise the same code
 // differently.
 pub use reject::{disposition_of, Disposition, FaultSite, RejectCode, Rejection};
-pub use response::{EditionClaim, Response};
+pub use response::{BirthVersion, EditionClaim, Response};
 pub use session::SessionId;
 
 // Every upstream type or constructor named on the request/response path, plus
@@ -284,39 +284,36 @@ impl<
 /// a driver per-op. Reads, snapshots, `current_seq`, and the latent composite
 /// go through [`Stores::kernel`].
 ///
-/// An implementer supplies the kernel and one method. The M3 and M5 drivers
-/// follow from the kernel — `Namespace::new` and `Vstream::new` are bound by
-/// `W: WorldState` alone, exactly this trait's bound, and each handle holds
-/// nothing but the borrow — so they are given here rather than transcribed
-/// into every impl. [`Stores::linkstore`] is asked of the implementer
-/// instead: M7's handle takes, beside the borrow, the VISIBILITY class of the
-/// caller whose write it serves (PUB round 2, lane 3.3b) — which M10 closes
-/// per write over the session's principal and hands in — so what the
-/// implementer writes is still one line, and where the trait's own default
-/// would sit is the engine's decision rather than M10's.
+/// **An implementer supplies the kernel, and nothing else.** All three
+/// drivers follow from it: `Namespace::new`, `Vstream::new` and
+/// `LinkWriter::new` are each bound by `W: WorldState` alone — exactly this
+/// trait's bound — and each handle holds the borrows it is handed and no
+/// state, M7's taking the caller's VISIBILITY class beside the kernel, which
+/// is already this method's parameter. So all three are given here rather
+/// than transcribed identically into every impl.
 ///
-/// PRECONDITION on the implementer: **every accessor names ONE kernel.**
-/// [`Stores::kernel`] answers with the same `Kernel<W>` on every call, and
-/// [`Stores::linkstore`] is built over that kernel. The signature does not
-/// force it — `kernel()` is consulted afresh per request, so an impl that
-/// opened a kernel per call would compile — and every coordinate M10 reports
-/// rests on it: `Operation::log_position` and every read's `as_of` come from
-/// `kernel()`, while the link writes commit through `linkstore()`. Two kernels
-/// leave those coordinates describing different logs, each store still
-/// committing before it acknowledges and the reported positions no longer
-/// meaning what this module promises. The two provided bodies satisfy it by
-/// construction; `linkstore` is the one an implementer writes, which is where
-/// the obligation lands.
+/// PRECONDITION on the implementer: **[`Stores::kernel`] answers with the
+/// same `Kernel<W>` on every call.** The signature does not force it — it is
+/// consulted afresh per request, so an impl that opened a kernel per call
+/// would compile — and every coordinate M10 reports rests on it:
+/// `Operation::log_position` and every read's `as_of` come from `kernel()`,
+/// while the link writes commit through `linkstore()`. Two kernels leave
+/// those coordinates describing different logs, each store still committing
+/// before it acknowledges and the reported positions no longer meaning what
+/// this module promises. That every driver is built over the ONE kernel
+/// `kernel()` names is not an obligation but a fact of the three provided
+/// bodies, which is why the whole precondition falls on the single method an
+/// implementer writes.
 ///
 /// The design flagged the engine-facing store-driver constructors as a
 /// required upstream interface amendment (Conflicts resolved #6); the as-built
 /// crates already publish them — `Namespace::new(&Kernel<W>)`,
 /// `Vstream::new(&Kernel<W>)`, and `LinkWriter::new(&Kernel<W>,
-/// &Visibility<W>)`. The binary — which holds the recovered kernel from M2
-/// recovery — builds a `Stores` impl over them; M10 takes it INJECTED for
-/// decoupling/testability (an in-memory-kernel-backed `Stores` exercises the
-/// whole lifecycle with no disk/recovery), not because the constructors are
-/// unreachable.
+/// &Visibility<W>)` — which is what lets the three bodies live here. What the
+/// binary supplies is the kernel it recovered through M2; M10 takes that
+/// INJECTED for decoupling/testability (an in-memory-kernel-backed `Stores`
+/// exercises the whole lifecycle with no disk/recovery), not because the
+/// constructors are unreachable.
 pub trait Stores<W: WorldState>: Send + Sync {
     /// M2 — reads/snapshots/`current_seq`/the latent composite `transact`.
     fn kernel(&self) -> &Kernel<W>;
@@ -334,7 +331,9 @@ pub trait Stores<W: WorldState>: Send + Sync {
     /// — and M7 applies it INSIDE the write transaction, to the working
     /// world, at link-home identity, so its idempotency and dedup lookups see
     /// only the incumbents this principal could read.
-    fn linkstore<'a>(&'a self, visibility: &'a Visibility<'a, W>) -> LinkWriter<'a, W>;
+    fn linkstore<'a>(&'a self, visibility: &'a Visibility<'a, W>) -> LinkWriter<'a, W> {
+        LinkWriter::new(self.kernel(), visibility)
+    }
 }
 
 #[cfg(test)]

@@ -43,9 +43,9 @@ fn setup_with_unreadable() -> (Fixture, Unreadable) {
     let unreadable: Unreadable = Arc::new(Mutex::new(Vec::new()));
     let predicate = {
         let unreadable = Arc::clone(&unreadable);
-        Box::new(move |principal: Option<PrincipalId>, doc: &Address| {
+        move |principal: Option<PrincipalId>, doc: &Address| {
             principal == Some(USER) || !unreadable.lock().expect("no poisoning").contains(doc)
-        })
+        }
     };
     let febe = operation().with_read_predicate(predicate);
     let boot = febe.bootstrap_session();

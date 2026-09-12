@@ -11,8 +11,8 @@ use skep_arrangement::{Base, Run, RunError, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{FourSet, OrphanReport, SlotSpec, SupClaim, Window};
 use skep_febe::{
-    Codec, Deposit, Disposition, EditionClaim, FaultSite, Op, OpKind, ParseError, RejectCode,
-    Rejection, ReqId, Request, Response, SlotArg, SuccessorSpec,
+    BirthVersion, Codec, Deposit, Disposition, EditionClaim, FaultSite, Op, OpKind, ParseError,
+    RejectCode, Rejection, ReqId, Request, Response, SlotArg, SuccessorSpec,
 };
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link, View, MAX_SLOT_SPANS};
@@ -651,8 +651,7 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 doc: d1(),
                 published: true,
                 owner: Some(a(&[1, 0, 1])),
-                birth: Some(a(&[1, 0, 1, 0, 1, 1])),
-                birth_extent: Some(n(5)),
+                birth: Some(BirthVersion { addr: a(&[1, 0, 1, 0, 1, 1]), extent: n(5) }),
                 as_of: Seq(9),
             },
         ),
@@ -663,7 +662,6 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 published: false,
                 owner: Some(a(&[1, 0, 1])),
                 birth: None,
-                birth_extent: None,
                 as_of: Seq(9),
             },
         ),

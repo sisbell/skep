@@ -5,8 +5,6 @@
 //! surface itself (bootstrap → delegate → create → …), exercising the real
 //! request lifecycle end-to-end.
 
-#![allow(dead_code)] // each integration test binary uses a subset
-
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -15,12 +13,11 @@ use skep_arrangement::{HasM5, M5Rec, M5State, Run, VPos, VSpec};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_febe::{
-    Deposit, EditionClaim, Op, Operation, Rejection, ReqId, Request, Response, SessionId, Stores,
+    BirthVersion, Deposit, EditionClaim, Op, Operation, Rejection, ReqId, Request, Response,
+    SessionId, Stores,
 };
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, WorldState};
-use skep_links::{
-    enc, Endset, HasLinks, Invalid, Link, LinkRec, LinkState, LinkWriter, Visibility,
-};
+use skep_links::{enc, Endset, HasLinks, Invalid, Link, LinkRec, LinkState};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 use skep_retrieval::{CompareReport, Deletions, Delivery};
 
@@ -196,11 +193,6 @@ impl Stores<World> for KernelStores {
     fn kernel(&self) -> &Kernel<World> {
         &self.kernel
     }
-    /// The writer at the class M10 hands in — the session principal's, which
-    /// this world's `ReadableWorld` answers `true` for everywhere.
-    fn linkstore<'a>(&'a self, visibility: &'a Visibility<'a, World>) -> LinkWriter<'a, World> {
-        LinkWriter::new(&self.kernel, visibility)
-    }
 }
 
 pub fn operation() -> Operation<World> {
@@ -227,7 +219,7 @@ pub fn ex_id(febe: &Operation<World>, session: SessionId, id: &[u8], op: Op) -> 
 pub fn rejected(r: Response) -> Rejection {
     match r {
         Response::Rejected(rej) => rej,
-        _ => panic!("expected Rejected, got a success response"),
+        other => panic!("expected Rejected, got {other:?}"),
     }
 }
 
@@ -269,7 +261,7 @@ pub fn ack(r: Response) -> Seq {
     match r {
         Response::Ack { at } => at,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
-        _ => panic!("expected Ack"),
+        other => panic!("expected Ack, got {other:?}"),
     }
 }
 
@@ -277,7 +269,7 @@ pub fn ack_addr(r: Response) -> (Address, Seq) {
     match r {
         Response::AckAddr { addr, at } => (addr, at),
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
-        _ => panic!("expected AckAddr"),
+        other => panic!("expected AckAddr, got {other:?}"),
     }
 }
 
@@ -285,7 +277,7 @@ pub fn ack_edit(r: Response) -> (Address, Address, Seq) {
     match r {
         Response::AckEdit { successor, claim, at } => (successor, claim, at),
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
-        _ => panic!("expected AckEdit"),
+        other => panic!("expected AckEdit, got {other:?}"),
     }
 }
 
@@ -293,7 +285,7 @@ pub fn maybe_addr(r: Response) -> (Option<Address>, Seq) {
     match r {
         Response::MaybeAddr { addr, as_of } => (addr, as_of),
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
-        _ => panic!("expected MaybeAddr"),
+        other => panic!("expected MaybeAddr, got {other:?}"),
     }
 }
 
@@ -301,7 +293,7 @@ pub fn delivery(r: Response) -> (Delivery, Seq) {
     match r {
         Response::Delivery { items, as_of } => (items, as_of),
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
-        _ => panic!("expected Delivery"),
+        other => panic!("expected Delivery, got {other:?}"),
     }
 }
 
@@ -309,7 +301,7 @@ pub fn spanset(r: Response) -> (SpanSet, Seq) {
     match r {
         Response::SpanSet { set, as_of } => (set, as_of),
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
-        _ => panic!("expected SpanSet"),
+        other => panic!("expected SpanSet, got {other:?}"),
     }
 }
 
@@ -317,7 +309,7 @@ pub fn addrs(r: Response) -> Vec<Address> {
     match r {
         Response::Addrs { addrs, .. } => addrs,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
-        _ => panic!("expected Addrs"),
+        other => panic!("expected Addrs, got {other:?}"),
     }
 }
 
@@ -325,7 +317,7 @@ pub fn count(r: Response) -> usize {
     match r {
         Response::Count { n, .. } => n,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
-        _ => panic!("expected Count"),
+        other => panic!("expected Count, got {other:?}"),
     }
 }
 
@@ -333,7 +325,7 @@ pub fn page(r: Response) -> Window {
     match r {
         Response::Page { window, .. } => window,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
-        _ => panic!("expected Page"),
+        other => panic!("expected Page, got {other:?}"),
     }
 }
 
@@ -341,7 +333,7 @@ pub fn endsets(r: Response) -> Vec<(usize, Endset)> {
     match r {
         Response::Endsets { pairs, .. } => pairs,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
-        _ => panic!("expected Endsets"),
+        other => panic!("expected Endsets, got {other:?}"),
     }
 }
 
@@ -349,7 +341,7 @@ pub fn runs(r: Response) -> Vec<Run> {
     match r {
         Response::Runs { runs, .. } => runs,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
-        _ => panic!("expected Runs"),
+        other => panic!("expected Runs, got {other:?}"),
     }
 }
 
@@ -357,7 +349,7 @@ pub fn bool_val(r: Response) -> bool {
     match r {
         Response::Bool { val, .. } => val,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
-        _ => panic!("expected Bool"),
+        other => panic!("expected Bool, got {other:?}"),
     }
 }
 
@@ -365,7 +357,7 @@ pub fn link_value(r: Response) -> Option<Link> {
     match r {
         Response::LinkValue { link, .. } => link,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
-        _ => panic!("expected LinkValue"),
+        other => panic!("expected LinkValue, got {other:?}"),
     }
 }
 
@@ -373,7 +365,7 @@ pub fn follow(r: Response) -> Result<SpanSet, Invalid> {
     match r {
         Response::Follow { result, .. } => result,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
-        _ => panic!("expected Follow"),
+        other => panic!("expected Follow, got {other:?}"),
     }
 }
 
@@ -381,7 +373,7 @@ pub fn deletions(r: Response) -> Deletions {
     match r {
         Response::Deletions { rep, .. } => rep,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
-        _ => panic!("expected Deletions"),
+        other => panic!("expected Deletions, got {other:?}"),
     }
 }
 
@@ -389,7 +381,7 @@ pub fn compare(r: Response) -> CompareReport {
     match r {
         Response::Compare { rep, .. } => rep,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
-        _ => panic!("expected Compare"),
+        other => panic!("expected Compare, got {other:?}"),
     }
 }
 
@@ -397,7 +389,7 @@ pub fn orphans(r: Response) -> OrphanReport {
     match r {
         Response::Orphans { report, .. } => report,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
-        _ => panic!("expected Orphans"),
+        other => panic!("expected Orphans, got {other:?}"),
     }
 }
 
@@ -405,18 +397,18 @@ pub fn claims(r: Response) -> Vec<SupClaim> {
     match r {
         Response::Claims { claims, .. } => claims,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
-        _ => panic!("expected Claims"),
+        other => panic!("expected Claims, got {other:?}"),
     }
 }
 
-/// The doc-metadata answer as `(doc, published, owner, birth, birth_extent)`.
-pub fn doc_metadata(r: Response) -> (Address, bool, Option<Address>, Option<Address>, Option<Nat>) {
+/// The doc-metadata answer as `(doc, published, owner, birth)`.
+pub fn doc_metadata(r: Response) -> (Address, bool, Option<Address>, Option<BirthVersion>) {
     match r {
-        Response::DocMetadata { doc, published, owner, birth, birth_extent, .. } => {
-            (doc, published, owner, birth, birth_extent)
+        Response::DocMetadata { doc, published, owner, birth, .. } => {
+            (doc, published, owner, birth)
         }
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
-        _ => panic!("expected DocMetadata"),
+        other => panic!("expected DocMetadata, got {other:?}"),
     }
 }
 
@@ -424,7 +416,7 @@ pub fn edition_claims(r: Response) -> Vec<EditionClaim> {
     match r {
         Response::EditionClaims { claims, .. } => claims,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
-        _ => panic!("expected EditionClaims"),
+        other => panic!("expected EditionClaims, got {other:?}"),
     }
 }
 

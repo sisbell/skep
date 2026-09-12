@@ -16,8 +16,8 @@ use skep_arrangement::{Run, VPos};
 use skep_content::Val;
 use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_febe::{
-    Codec, Disposition, EditionClaim, FaultSite, OpKind, ParseError, RejectCode, Rejection,
-    Response,
+    BirthVersion, Codec, Disposition, EditionClaim, FaultSite, OpKind, ParseError, RejectCode,
+    Rejection, Response,
 };
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link};
@@ -274,8 +274,7 @@ fn fixture(name: &str) -> Response {
             doc: a(&[1, 0, 1, 0, 1]),
             published: true,
             owner: Some(a(&[1, 0, 1])),
-            birth: Some(a(&[1, 0, 1, 0, 1, 1])),
-            birth_extent: Some(n(5)),
+            birth: Some(BirthVersion { addr: a(&[1, 0, 1, 0, 1, 1]), extent: n(5) }),
             as_of: Seq(9),
         },
         // A private draft with no chain member yet: birth/birth_extent null.
@@ -284,7 +283,6 @@ fn fixture(name: &str) -> Response {
             published: false,
             owner: Some(a(&[1, 0, 1])),
             birth: None,
-            birth_extent: None,
             as_of: Seq(9),
         },
         "edition_claims" => Response::EditionClaims {

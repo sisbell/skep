@@ -488,7 +488,10 @@ fn mint_preconditions_reject_structurally() {
         m3.mint_document(&unregistered_acct, false).unwrap_err(),
         MintError::NotAnAccount
     );
-    assert_eq!(m3.mint_document(&doc, false).unwrap_err(), MintError::NotAnAccount);
+    assert_eq!(
+        m3.mint_document(&doc, false).unwrap_err(),
+        MintError::NotAnAccount
+    );
     assert_eq!(
         m3.mint_document(&node, false).unwrap_err(),
         MintError::NotAnAccount
@@ -1541,12 +1544,18 @@ fn fork_mints_in_the_callers_own_account() {
     let (d4, _) = ns.fork(ID1, Some(true)).expect("an explicit-true fork");
     let (d5, _) = ns.fork(ID1, Some(false)).expect("an explicit-false fork");
     let m3 = k.snapshot().world().m3().clone();
-    assert!(!m3.published(&d3), "a flagless non-first fork is private (PUB-1.1)");
+    assert!(
+        !m3.published(&d3),
+        "a flagless non-first fork is private (PUB-1.1)"
+    );
     assert!(m3.published(&d4));
     assert!(!m3.published(&d5));
 
     // Unknown id: typed NotOwner (an unregistered caller owns nothing).
-    assert_eq!(rejected(ns.fork(UNKNOWN_ID, None)), CreateDocumentError::NotOwner);
+    assert_eq!(
+        rejected(ns.fork(UNKNOWN_ID, None)),
+        CreateDocumentError::NotOwner
+    );
     // Node-tier caller (π₀ at [1]): the node-tier O10 case is DROPPED —
     // typed Mint(NotAnAccount), never a silent skip (Conflicts §6).
     assert_eq!(
@@ -1718,7 +1727,10 @@ fn pre_work_rejections_open_no_transaction() {
             NodeError::NotNode
         );
         assert_eq!(rejected(ns.register_node(t(&too_deep))), NodeError::TooDeep);
-        assert_eq!(rejected(ns.fork(UNKNOWN_ID, None)), CreateDocumentError::NotOwner);
+        assert_eq!(
+            rejected(ns.fork(UNKNOWN_ID, None)),
+            CreateDocumentError::NotOwner
+        );
         Ok(())
     })
     .expect("the outer transaction is a zero-step commit");
@@ -2010,12 +2022,17 @@ fn a_flagless_first_create_is_born_published() {
 
     let (d1, published) = create_and_read(&ns, &k, ID1, &acct, None);
     assert_eq!(d1, slot);
-    assert!(published, "the flagless first mint is doc 1, born published");
+    assert!(
+        published,
+        "the flagless first mint is doc 1, born published"
+    );
 
     // The record half, pure, on the empty slice: the op resolved `true` and
     // the mint stamps exactly what it is handed, so the Allocate that
     // registered doc 1 carries `true` — whole value…
-    let (addr, rec) = empty.mint_document(&acct, true).expect("the empty account mints");
+    let (addr, rec) = empty
+        .mint_document(&acct, true)
+        .expect("the empty account mints");
     assert_eq!(addr, slot);
     assert_eq!(
         rec,
@@ -2047,7 +2064,10 @@ fn an_explicit_first_create_flag_is_honored_as_sent_and_never_refused_here() {
 
     let (acct1_d1, published) = create_and_read(&ns, &k, ID1, &acct1, Some(false));
     assert_eq!(acct1_d1, first_document_address(&acct1).expect("slot"));
-    assert!(!published, "an explicit false mints private — no refusal, no override");
+    assert!(
+        !published,
+        "an explicit false mints private — no refusal, no override"
+    );
     assert!(k.snapshot().world().m3().is_registered_document(&acct1_d1));
 
     let (acct2_d1, published) = create_and_read(&ns, &k, ID2, &acct2, Some(true));
@@ -2107,8 +2127,14 @@ fn mint_version_stamps_exactly_the_bit_passed() {
     let m3 = k.snapshot().world().m3().clone();
     assert!(m3.is_registered_document(&v1) && m3.is_registered_document(&v2));
     assert!(!m3.published(&v1), "passed false, reads false");
-    assert!(m3.published(&v2), "passed true, reads true — the composite's choice");
-    assert!(!m3.published(&src), "the source's own bit is not the version's");
+    assert!(
+        m3.published(&v2),
+        "passed true, reads true — the composite's choice"
+    );
+    assert!(
+        !m3.published(&src),
+        "the source's own bit is not the version's"
+    );
 
     // The record carries the bit verbatim, whole value, in both directions.
     for bit in [false, true] {
@@ -2192,6 +2218,11 @@ fn only_a_document_allocate_writes_the_publication_map() {
         s.documents().collect::<Vec<_>>(),
         vec![(&doc, true), (&version, false)]
     );
+    // The walk is exact-size and double-ended, as a map walk is in std: the
+    // count is answered without walking, and the newest document is the
+    // first from the back.
+    assert_eq!(s.documents().len(), 2);
+    assert_eq!(s.documents().next_back(), Some((&version, false)));
 }
 
 /// PUB-1.9/PUB-1.68, and PUB-7.7's fold half: no public function changes a
@@ -2231,7 +2262,8 @@ fn the_bit_is_immutable_and_recovers_by_checkpoint_and_replay() {
             (v_published, true),
             (forked, false),
         ];
-        let bits = |m3: &M3State| -> Vec<bool> { expected.iter().map(|(d, _)| m3.published(d)).collect() };
+        let bits =
+            |m3: &M3State| -> Vec<bool> { expected.iter().map(|(d, _)| m3.published(d)).collect() };
         let after_mints = bits(k.snapshot().world().m3());
         assert_eq!(
             after_mints,
@@ -2242,7 +2274,8 @@ fn the_bit_is_immutable_and_recovers_by_checkpoint_and_replay() {
         // is the home the content and link mints take — the document an
         // element is minted under — and its bit stands through both.
         ns.register_node(t(&[1, 7])).expect("register node");
-        ns.delegate(ID1, t(&[1, 0, 1, 1]), ID2).expect("sub-delegate");
+        ns.delegate(ID1, t(&[1, 0, 1, 1]), ID2)
+            .expect("sub-delegate");
         let d1 = &expected[0].0;
         commit_mint(&k, M3State::content_lock_key(d1), |m3| m3.mint_content(d1));
         commit_mint(&k, M3State::link_lock_key(d1), |m3| m3.mint_link(d1));

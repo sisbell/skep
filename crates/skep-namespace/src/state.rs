@@ -1409,11 +1409,8 @@ impl M3State {
             return None;
         }
         let key = version_ns(source);
-        let m = self.frontiers.get(&key)?;
-        if m.is_zero() {
-            return None;
-        }
-        nth_in(&key, m).ok()
+        let m = self.frontiers.get(&key).filter(|m| !m.is_zero())?;
+        Some(nth_in(&key, m).expect("k = 1 passes TA5a on every anchor"))
     }
 
     /// `published(doc)` — THE engine's one definition of a document's
@@ -1451,14 +1448,19 @@ impl M3State {
     /// that must not fail-stop on a corrupted one re-asks
     /// [`M3State::is_registered_document`] per entry, as the engine's seed
     /// does. The order is the `OrdMap`'s — a function of the contents, so two
-    /// boards with one history enumerate alike.
+    /// boards with one history enumerate alike. Double-ended and exact-size,
+    /// as a map walk is in std — `.rev()` and `.len()` are the hidden type's
+    /// own, promised rather than hidden, so the newest document and the
+    /// document count each cost one call and no walk.
     ///
     /// Published for the reader that cannot ask per address: a derived index
     /// over the bit (the engine's exception set, PUB-7.5 — PUB-7.7's seed
     /// half) and a rendering of the map. Both would otherwise rebuild this
     /// walk from the slice's serde form by a private field name, which no
     /// compiler edge protects.
-    pub fn documents(&self) -> impl Iterator<Item = (&Address, bool)> + '_ {
+    pub fn documents(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = (&Address, bool)> + ExactSizeIterator + '_ {
         self.publication
             .iter()
             .map(|(doc, published)| (doc, *published))

@@ -73,15 +73,16 @@ pub struct RegionSpec {
 /// a byte copy); a link position delivers the address-as-reference and never
 /// reads M4.
 ///
-/// The WITHHELD arm (PUB round 2, lane 3.3, §4; PUB-6.41) is the seventh
-/// delivery shape: a RUN the reading principal may not read is emitted AT ITS
-/// OWN POSITION rather than dropped — one item per masked RUN, carrying the
-/// origin DOCUMENT and the run's width. It MUST NOT coalesce (PUB-6.58): two
-/// non-contiguous masked runs, one origin or not, are two items, never one of
-/// the summed width. The consult is per-run against the run's ORIGIN document
-/// (M5's `document_of` of the run's start); an unregistered origin takes this
-/// arm directly. The extent forms (`doc_vspan`/`doc_vspanset`) are EXCLUDED —
-/// they deliver no positions.
+/// The WITHHELD arm (PUB round 2, lane 3.3, §4; PUB-6.41) is the one shape
+/// that stands for a RUN rather than a position: a run the reading principal
+/// may not read is emitted AT ITS OWN POSITION rather than dropped — one item
+/// per masked RUN, carrying the origin DOCUMENT and the run's width. It MUST
+/// NOT coalesce (PUB-6.58): two non-contiguous masked runs, one origin or
+/// not, are two items, never one of the summed width. The consult is per-run
+/// against the run's ORIGIN document (M1's `document_of` of the run's
+/// I-start, which block uniformity makes the origin of every position in it);
+/// an unregistered origin takes this arm directly. The extent forms
+/// (`doc_vspan`/`doc_vspanset`) are EXCLUDED — they deliver no positions.
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub enum DeliveryItem {
     Content(Val),
@@ -122,7 +123,9 @@ impl Delivery {
         &self.0
     }
 
-    /// How many items were delivered — one per active V-position (R3).
+    /// How many items were delivered — one per active V-position of each
+    /// delivered run (R3), and one per withheld run, however many positions
+    /// it spans.
     pub fn len(&self) -> usize {
         self.0.len()
     }

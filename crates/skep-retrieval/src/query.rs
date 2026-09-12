@@ -1,19 +1,9 @@
 //! §§A–C, D (SHOWDELETIONS), E — six of the seven operations (COMPARE lives
 //! in `compare`). Every operation begins by reading its slices off the single
 //! bound snapshot, runs its gate (typed rejection), then composes upstream
-//! primitives.
-//!
-//! HEAD-FLOAT (PUB round 2, lane 3.2; PUB-2.49, PUB-2.50, PUB-2.53): the
-//! arrangement readers of a document answer from is M5's `reading_surface` —
-//! a bare PUBLISHED address answers its trunk head, a version address its own
-//! member forever, a memberless or private document its own arrangement. The
-//! three arrangement-resolving readers here (RETRIEVEV, the two extent
-//! queries, SHOWORIGIN) and COMPARE route through it; the resolve is pinned in
-//! ONE place and decided nowhere in this crate. The registry gate runs on the
-//! address the caller NAMED, ahead of the float (PUB-6.37), and the answer is
-//! reported under that name. SHOWDELETIONS and FINDDOCSCONTAINING read R and
-//! the arrangement of the address named and do not float — recorded in the
-//! lane's report as the seam this file leaves.
+//! primitives. Which arrangement it then reads — the named address's reading
+//! surface, or the named address's own — is the crate doc's *Which
+//! arrangement an operation answers from*, and each card here says which.
 
 use num_traits::{One, Zero};
 use skep_address::{document_of, ordinal, Address, Nat, Span, SpanSet};
@@ -107,6 +97,16 @@ fn current_content<'a>(m5: &'a M5State, d: &Address) -> impl Iterator<Item = Add
     m5.content_runs(d).flat_map(Run::addrs)
 }
 
+/// The ORIGIN of a run — the document that allocated its I-start, which by
+/// block uniformity (ASN-0077 O2) is the origin of every position in it, so
+/// one projection answers for the whole run. Asked of M1's `document_of`; the
+/// `expect` is the one place M6 states that an element-level I-address has a
+/// Document prefix. A link run's origin is its home document (CL-OWN), with
+/// no special case.
+fn run_origin(run: &Run) -> Address {
+    document_of(run.i_start()).expect("an element-level I-address has a Document prefix")
+}
+
 /// A stream of addresses as the deduplicated, T1-SORTED set it denotes. Both
 /// the dedup and the sort are published guarantees, not conveniences:
 /// [`Query::show_origin_v`] answers "deduplicated origin documents in tumbler
@@ -195,6 +195,11 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
     /// (M5), then fetch values (M4, content) or pass the address through
     /// (links — never reads M4).
     ///
+    /// The arrangement resolved is each named document's READING SURFACE
+    /// (crate doc, *Which arrangement an operation answers from*): the gate
+    /// runs on the address named, the surface answers, and the delivery is
+    /// reported under the name given.
+    ///
     /// Rejects the WHOLE request on any malformed spec (well-formedness
     /// precondition); gaps / depth-incompatible (`#start ≥ 3`) / foreign or
     /// empty subspaces degrade to silent empty contributions, never an error
@@ -230,13 +235,14 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
 
     /// RETRIEVEV with the source consult (PUB round 2, lane 3.3, §2/§4): the
     /// same delivery, but each RUN is tested per PUB-6.41 against its origin
-    /// DOCUMENT through `readable`, and a masked run — its origin unreadable to
-    /// the reading principal, OR unregistered — is emitted as the seventh
-    /// shape [`DeliveryItem::Withheld`] AT ITS OWN POSITION rather than
+    /// DOCUMENT ([`run_origin`]) through `readable`, and a masked run — its
+    /// origin unreadable to the reading principal, OR unregistered — is
+    /// emitted as [`DeliveryItem::Withheld`] AT ITS OWN POSITION rather than
     /// delivered (PUB-6.58: one item per run, never coalesced). The NAMED
     /// document's own readability is the caller's doc-argument consult
     /// (PUB-6.12), run pre-dispatch; this masks only the ORIGINS its runs
-    /// window.
+    /// window. M6 decides no readability here — it applies the predicate M10
+    /// threads in, at the run, which is the granularity the delivery has.
     pub fn retrieve_v_masked(
         &self,
         specs: &[Spec],
@@ -258,9 +264,8 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
         for spec in specs {
             // Concatenate per spec, IN ORDER (R5) — no global sort. Classify
             // ONCE per spec, because the answer is constant over the spec's
-            // positions. The arrangement resolved is the document's reading
-            // surface (head-float, PUB-2.49): the named address gated
-            // registration above, the surface answers.
+            // positions. Gated on the address named above; the surface
+            // answers.
             let sub = span_subspace(&spec.span);
             let surface = reading_surface(m3, &spec.doc);
             for run in m5.resolve(&surface, &spec.span) {
@@ -269,8 +274,7 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
                 // origin, or one the reading principal may not read, masks the
                 // WHOLE run as one withheld item at its own position — never
                 // coalesced with a neighbour (PUB-6.58).
-                let origin = document_of(run.i_start())
-                    .expect("an element-level I-address has a Document prefix");
+                let origin = run_origin(&run);
                 if !m3.is_registered_document(&origin) || !readable(&origin) {
                     out.push(DeliveryItem::Withheld { origin, width: run.width().clone() });
                     continue;
@@ -323,6 +327,11 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// that is not registered ⇒ Err. Across subspaces it is a bounding box
     /// bridging the inter-subspace void.
     ///
+    /// Answers from `doc`'s READING SURFACE (crate doc, *Which arrangement an
+    /// operation answers from*), because it is the hull of
+    /// [`Query::doc_vspanset`]'s answer and that is the arrangement the
+    /// extents are read from; the gate runs on the address named.
+    ///
     /// WHAT THE BOX CANNOT SHOW (V9). Being a function of the two EXTREMES
     /// alone, the cross-subspace box is fixed at `[[s_C, 1], [s_L, n_L + 1])`
     /// under any content edit that leaves `n_C ≥ 1`, while
@@ -360,6 +369,12 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// members (content, then link), already W13-normalized; `⟨⟩` for a
     /// registered-empty document; a document that is not registered ⇒ Err.
     ///
+    /// The extents are the READING SURFACE's (crate doc, *Which arrangement an
+    /// operation answers from*): a bare published address with a head reports
+    /// the head's counts, a version address its own member's, and a published
+    /// address whose own arrangement is empty reports `⟨⟩` only while it has
+    /// no head. The registry gate runs on the address named.
+    ///
     /// The count-read core of both extent queries. M5's O(1)
     /// `content_count`/`link_count` ARE the extents, because each subspace's
     /// occupied V-positions form the dense, origin-anchored run `[S, 1..n_S]`
@@ -377,9 +392,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
         if !m3.is_registered_document(doc) {
             return Err(ExtentError::DocNotRegistered); // not registered ⇒ fail
         }
-        // The extents are the reading surface's (head-float, PUB-2.49): a
-        // bare published address reports its trunk head's counts, a version
-        // address its own member's.
+        // Gated on the address named; the surface answers.
         let surface = reading_surface(m3, doc);
         debug_assert_sequential_positions(m5, &surface);
         let (nc, nl) = (m5.content_count(&surface), m5.link_count(&surface));
@@ -396,12 +409,18 @@ impl<W: RetrievalWorld> Query<'_, W> {
     }
 
     /// SHOWORIGIN over a V-span (ASN-0077, V-arity) — block-decompose, then
-    /// project ONE origin per run (`document_of`, M1): block uniformity (O2)
-    /// means all addresses in one run share an origin, so this is O(runs),
-    /// not O(positions). Returns deduplicated origin documents in tumbler
-    /// order; for the link subspace `document_of(link)` is the home document
-    /// (CL-OWN) — handled uniformly, no special case. The I-arity is
-    /// de-scoped (see the crate docs); only this V-arity exists.
+    /// project ONE origin per run ([`run_origin`], through M1's
+    /// `document_of`): block uniformity (O2) means all addresses in one run
+    /// share an origin, so this is O(runs), not O(positions). Returns
+    /// deduplicated origin documents in tumbler order; for the link subspace
+    /// the origin is the home document (CL-OWN) — handled uniformly, no
+    /// special case. The I-arity is de-scoped (see the crate docs); only this
+    /// V-arity exists.
+    ///
+    /// Projects over `doc`'s READING SURFACE (crate doc, *Which arrangement an
+    /// operation answers from*): the gate and the span checks below run on
+    /// the address named, and the surface's runs are the ones whose origins
+    /// are reported.
     ///
     /// A success is never empty: an admissible request has an occupied
     /// subspace (`n_s ≥ 1`), a depth-2 span, and a fully resolved width, so at
@@ -430,14 +449,13 @@ impl<W: RetrievalWorld> Query<'_, W> {
             return Err(OriginError::DocNotRegistered); // WF_V (i)
         }
         gate_vspan(span).map_err(OriginError::MalformedSpan)?; // (ii)/(iv)
-        // Every arrangement read below is the reading surface's (head-float,
-        // PUB-2.49); the gate above ran on the address named.
+        // Gated on the address named; every arrangement read below is the
+        // surface's.
         let surface = reading_surface(m3, doc);
-        let doc = &surface;
         // The start's subspace, at any depth.
         let n_s = match span_subspace(span) {
-            Some(Subspace::Content) => m5.content_count(doc),
-            Some(Subspace::Link) => m5.link_count(doc),
+            Some(Subspace::Content) => m5.content_count(&surface),
+            Some(Subspace::Link) => m5.link_count(&surface),
             // Foreign subspace ∉ {s_C, s_L}: distinct from a real-but-empty
             // subspace.
             None => return Err(OriginError::NoSuchSubspace),
@@ -458,7 +476,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
         }
         // Span now depth-2 (≥ 3 rejected above); resolve may still be partial
         // if the span overruns the bound prefix.
-        let runs = m5.resolve(doc, span);
+        let runs = m5.resolve(&surface, span);
         let resolved_width = runs.iter().fold(Nat::zero(), |acc, r| acc + r.width());
         // The nominal count is read via ordinal(width) — the last component,
         // which level-uniformity ties to #start — keeping the overrun test
@@ -466,9 +484,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
         if &resolved_width < ordinal(span.width()) {
             return Err(OriginError::RangeNotPresent); // (vi): reject, never clamp (O13)
         }
-        Ok(sorted_addr_set(runs.iter().map(|r| {
-            document_of(r.i_start()).expect("an element-level I-address has a Document prefix")
-        })))
+        Ok(sorted_addr_set(runs.iter().map(run_origin)))
     }
 
     /// SHOWDELETIONS (ASN-0075) — gate, then membership-test the
@@ -483,6 +499,11 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// span packing), so there are no false positives. Never opens M4; both
     /// halves read off the one bound snapshot (single consistent `(M, R)` —
     /// no torn-read phantom deletion).
+    ///
+    /// Reads the arrangement and the provenance record of each address as
+    /// NAMED, and does not float (crate doc, *Which arrangement an operation
+    /// answers from*): `CURRENT` is enumerated from, and `DELETED` tested
+    /// against, the two addresses given.
     ///
     /// Both documents must be registered (Err otherwise; `d_a` checked
     /// first); registered-empty is fine and yields empty halves. Each half is
@@ -573,6 +594,11 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// (FD codomain; present-tense CONTAINERS, distinct from SHOWORIGIN's
     /// allocators).
     ///
+    /// Reads the arrangement of each region's address as NAMED, and does not
+    /// float (crate doc, *Which arrangement an operation answers from*): the
+    /// coverage is the named address's own image, and a candidate is tested
+    /// at its own identity.
+    ///
     /// Every named document must be registered and every region span
     /// well-formed (Err otherwise — a malformed span would silently
     /// UNDER-resolve and drop containers, violating FD-COMPLETE); the gate
@@ -640,7 +666,9 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// principal may not read. The filter is at container IDENTITY — a
     /// candidate document `readable` answers false for is dropped, exactly as a
     /// result-set link's unreadable home is. The region-spec DOCUMENTS are the
-    /// caller's doc-argument consult (pre-dispatch), not filtered here.
+    /// caller's doc-argument consult (pre-dispatch), not filtered here. M6
+    /// decides no readability here — it applies the predicate M10 threads in,
+    /// at the container, which is the granularity the answer has.
     pub fn find_docs_containing_filtered(
         &self,
         regions: &[RegionSpec],

@@ -23,8 +23,14 @@
 //! rather than spans, at their exact boundaries, naming which operand, behind
 //! a gate that runs over both operands whole;
 //! FINDDOCSCONTAINING's present-tense filter (FD-SOUND) over the union of
-//! every region span's coverage; that a query answers from the snapshot it
-//! pinned and never mutates; and the derive policy M10 marshals against.
+//! every region span's coverage; which arrangement each operation answers
+//! from (head-float: a bare published address answers its trunk head under
+//! its own name across the five operations that float, and the two that do
+//! not keep answering the address named); the two predicate doors M10 calls
+//! (a run withheld at its own position against its ORIGIN, a container
+//! dropped at its identity — M6 applying a readability it never decides);
+//! that a query answers from the snapshot it pinned and never mutates; and
+//! the derive policy M10 marshals against.
 //!
 //! This file compiles as a FOREIGN crate, so it also witnesses the derive
 //! policy's consequences: every result and every error M6 hands back renders,
@@ -663,6 +669,53 @@ fn retrieve_v_delivers_content_a_source_document_has_deleted() {
 }
 
 #[test]
+fn retrieve_v_masked_withholds_each_unreadable_run_at_its_own_position() {
+    // PUB-6.41/6.58, the door M10 calls: a run whose ORIGIN the reader may
+    // not read is one `Withheld` item at the run's own position, carrying the
+    // origin and the run's width — and two masked runs sharing an origin are
+    // two items, never one of the summed width. M6 decides nothing about who
+    // may read: it applies the predicate it is handed, per run.
+    let k = mem_kernel();
+    three_runs(&k); // doc2 = [x][ca1, ca2][ca1]: origins doc2, doc1, doc1
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let not_doc1 = |d: &Address| *d != doc1();
+    assert_eq!(
+        ok_of(q.retrieve_v_masked(&[spec(doc2(), vspan(1, 1, 4))], &not_doc1)),
+        Delivery(vec![
+            DeliveryItem::Content(val(b"x")),
+            DeliveryItem::Withheld {
+                origin: doc1(),
+                width: n(2)
+            },
+            DeliveryItem::Withheld {
+                origin: doc1(),
+                width: n(1)
+            },
+        ])
+    );
+    // The consult is on the run's ORIGIN, not the document named: masking
+    // doc2 withholds its own run and delivers the transcluded ones.
+    assert_eq!(
+        ok_of(q.retrieve_v_masked(&[spec(doc2(), vspan(1, 1, 4))], &|d| *d != doc2())),
+        Delivery(vec![
+            DeliveryItem::Withheld {
+                origin: doc2(),
+                width: n(1)
+            },
+            DeliveryItem::Content(val(b"a")),
+            DeliveryItem::Content(val(b"b")),
+            DeliveryItem::Content(val(b"a")),
+        ])
+    );
+    // The identity predicate IS the unmasked door.
+    assert_eq!(
+        ok_of(q.retrieve_v_masked(&[spec(doc2(), vspan(1, 1, 4))], &|_| true)),
+        ok_of(q.retrieve_v(&[spec(doc2(), vspan(1, 1, 4))]))
+    );
+}
+
+#[test]
 fn retrieve_v_delivers_exactly_the_spans_intersection_with_the_bound_prefix() {
     // ASN-0115 R3 + R6 as the LAW they are: for every well-formed
     // ordinal-level span, the delivery is the document's V-sequence clipped
@@ -976,6 +1029,81 @@ fn a_content_edit_under_links_moves_the_extent_and_not_the_bounding_box() {
     assert_eq!(
         extents(&q_after),
         Span::new(t(&[1, 1]), t(&[0, 2])).expect("T12")
+    );
+}
+
+#[test]
+fn a_published_address_answers_from_its_trunk_head_once_it_has_one() {
+    // Head-float (PUB-2.49/2.53), the policy the crate doc states under
+    // *Which arrangement an operation answers from*: a bare PUBLISHED address
+    // is gated and reported under its own name and answers its trunk head's
+    // arrangement — its own while memberless. Every floating operation moves
+    // when the head does; the head, a version address, answers itself; and
+    // the two that do not float keep answering the address named.
+    let k = mem_kernel();
+    let vs = deposit3(&k); // pdoc = [a, b, c], memberless
+    {
+        let s = k.snapshot();
+        let q = Query::new(&s);
+        // Memberless: its own arrangement.
+        assert_eq!(
+            ok_of(q.doc_vspanset(&pdoc())),
+            SpanSet::singleton(vspan(1, 1, 3))
+        );
+    }
+    let (fork, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("fork commits");
+    assert_eq!(fork, vdoc()); // the trunk's first member, and so its head
+    vs.insert(P1, &fork, vp(1, 4), vec![val(b"z")], Deposit::Declared)
+        .expect("fork deposit commits"); // head = [a, b, c, z]
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    // The extents: pdoc named, the head answers — four positions, not three.
+    assert_eq!(
+        ok_of(q.doc_vspanset(&pdoc())),
+        SpanSet::singleton(vspan(1, 1, 4))
+    );
+    assert_eq!(
+        ok_of(q.doc_vspan(&pdoc())),
+        SpanSet::singleton(vspan(1, 1, 4))
+    );
+    // The delivery: the head's fourth byte, delivered under pdoc's name.
+    assert_eq!(
+        ok_of(q.retrieve_v(&[spec(pdoc(), vspan(1, 1, 4))])),
+        Delivery(vec![
+            DeliveryItem::Content(val(b"a")),
+            DeliveryItem::Content(val(b"b")),
+            DeliveryItem::Content(val(b"c")),
+            DeliveryItem::Content(val(b"z")),
+        ])
+    );
+    // The origins: the head's fourth run was allocated by the fork.
+    assert_eq!(
+        ok_of(q.show_origin_v(&pdoc(), &vspan(1, 1, 4))),
+        vec![pdoc(), vdoc()]
+    );
+    // COMPARE: both regions resolve against the one head arrangement, and the
+    // feet still NAME the addresses asked about — pdoc on one side, the fork
+    // on the other — at positions that agree.
+    let rep = ok_of(q.compare(
+        &[region_spec(pdoc(), vec![vspan(1, 1, 4)])],
+        &[region_spec(fork.clone(), vec![vspan(1, 1, 4)])],
+    ));
+    assert_eq!(rep.len(), 2, "one pair per run of the shared arrangement");
+    assert!(rep
+        .iter()
+        .all(|c| c.d1 == pdoc() && c.d2 == fork && c.u1 == c.u2));
+    // The head answers itself, so the two names read one arrangement.
+    assert_eq!(ok_of(q.doc_vspanset(&fork)), ok_of(q.doc_vspanset(&pdoc())));
+    // FINDDOCSCONTAINING does not float: pdoc's OWN arrangement has no fourth
+    // position, so a region naming it covers nothing — where the head's would
+    // have named the fork. This is the seam the crate doc records.
+    assert_eq!(
+        ok_of(q.find_docs_containing(&[region_spec(pdoc(), vec![vspan(1, 4, 1)])])),
+        Vec::<Address>::new()
+    );
+    assert_eq!(
+        ok_of(q.find_docs_containing(&[region_spec(fork, vec![vspan(1, 4, 1)])])),
+        vec![vdoc()]
     );
 }
 
@@ -2092,6 +2220,36 @@ fn find_docs_containing_unions_every_span_of_a_region() {
     );
     // An empty request names no coverage and finds nothing.
     assert_eq!(ok_of(q.find_docs_containing(&[])), Vec::<Address>::new());
+}
+
+#[test]
+fn find_docs_containing_filtered_drops_a_container_at_its_identity() {
+    // PUB-6.13/6.19, the door M10 calls: a CONTAINER the reader may not read
+    // is dropped at its identity, and the answer is otherwise the unfiltered
+    // one. M6 decides nothing about who may read: it applies the predicate it
+    // is handed, per container.
+    let k = mem_kernel();
+    three_runs(&k);
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let region = || vec![region_spec(doc2(), vec![vspan(1, 2, 1)])]; // ca1: held by both
+    assert_eq!(
+        ok_of(q.find_docs_containing(&region())),
+        vec![doc1(), doc2()]
+    );
+    assert_eq!(
+        ok_of(q.find_docs_containing_filtered(&region(), &|d| *d != doc1())),
+        vec![doc2()]
+    );
+    assert_eq!(
+        ok_of(q.find_docs_containing_filtered(&region(), &|d| *d != doc2())),
+        vec![doc1()]
+    );
+    // The identity predicate IS the unfiltered door.
+    assert_eq!(
+        ok_of(q.find_docs_containing_filtered(&region(), &|_| true)),
+        ok_of(q.find_docs_containing(&region()))
+    );
 }
 
 #[test]

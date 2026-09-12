@@ -75,6 +75,12 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// pair is confined to those two regions (X12 R1), and a span that clips
     /// to nothing contributes to neither.
     ///
+    /// Each region resolves through its document's READING SURFACE (crate
+    /// doc, *Which arrangement an operation answers from*), asked by
+    /// [`resolve_blocks`] at the point it resolves; the gate runs on the
+    /// address named, and the feet still NAME the document the caller asked
+    /// about while the positions they carry are the surface's.
+    ///
     /// Gate, per operand ([`gate_spec_set`]): each spec's doc registered, each
     /// span content-subspace-started (`NotContentSubspace`) and well-formed
     /// (`MalformedSpan`), every span fault located by an unambiguous
@@ -117,18 +123,12 @@ impl<W: RetrievalWorld> Query<'_, W> {
         // BOTH operands whole, before either resolves.
         gate_spec_set(m3, Operand::First, rho1)?;
         gate_spec_set(m3, Operand::Second, rho2)?;
-        // Each region resolves through its document's READING SURFACE
-        // (head-float, PUB-2.49): a bare published address compares its trunk
-        // head's arrangement, a version address its own member's. The feet
-        // still name the document the caller asked about.
-        let surfaces1: Vec<Address> = rho1.iter().map(|r| reading_surface(m3, &r.doc)).collect();
-        let surfaces2: Vec<Address> = rho2.iter().map(|r| reading_surface(m3, &r.doc)).collect();
-        // p = R_Σ(ρ₁), q = R_Σ(ρ₂), as blocks — reads ONLY M5, each operand
-        // within its own block budget.
-        let p = resolve_blocks(m5, rho1, &surfaces1).ok_or(CompareError::TooManyBlocks {
+        // p = R_Σ(ρ₁), q = R_Σ(ρ₂), as blocks — each region against its
+        // reading surface, each operand within its own block budget.
+        let p = resolve_blocks(m3, m5, rho1).ok_or(CompareError::TooManyBlocks {
             operand: Operand::First,
         })?;
-        let q = resolve_blocks(m5, rho2, &surfaces2).ok_or(CompareError::TooManyBlocks {
+        let q = resolve_blocks(m3, m5, rho2).ok_or(CompareError::TooManyBlocks {
             operand: Operand::Second,
         })?;
         // Cross-product per overlap (`corr` is a comprehension over `P × Q`),
@@ -302,33 +302,37 @@ impl<'a> Block<'a> {
 /// refuses it and hands back no runs, so the span contributes nothing to the
 /// region.
 ///
-/// The blocks borrow the REGIONS, not `m5`: each carries a reference to the
-/// document of the spec that named it, so the lifetime is written out rather
-/// than elided — two input lifetimes and no `&self` leave nothing for elision
-/// to pick.
+/// The blocks borrow the REGIONS, not `m3` or `m5`: each carries a reference
+/// to the document of the spec that named it, so the lifetime is written out
+/// rather than elided — three input lifetimes and no `&self` leave nothing for
+/// elision to pick.
 ///
-/// `surfaces` is the reading surface of each region's document, one per
-/// region in order (head-float, PUB-2.49): the arrangement RESOLVED is the
-/// surface's, while the block's document — the foot a correspondence reports
-/// — stays the one the region NAMED.
+/// EACH REGION'S READING SURFACE IS ASKED HERE, of M3, at the point it is
+/// consumed (crate doc, *Which arrangement an operation answers from*): the
+/// arrangement RESOLVED is the surface's, while the block's document — the
+/// foot a correspondence reports — stays the one the region NAMED. The two
+/// are bound by the region they both come from, so a region can be paired
+/// with no arrangement but its own: a block whose `doc` is one document and
+/// whose runs are another's — feet naming one document with positions from
+/// another, the X12 R1 failure — is not a thing this walk can build.
 fn resolve_blocks<'a>(
+    m3: &M3State,
     m5: &M5State,
     regions: &'a [RegionSpec],
-    surfaces: &[Address],
 ) -> Option<Vec<Block<'a>>> {
-    debug_assert_eq!(regions.len(), surfaces.len(), "one reading surface per region");
     let mut out = Vec::new();
-    for (r, surface) in regions.iter().zip(surfaces) {
+    for r in regions {
+        let surface = reading_surface(m3, &r.doc);
         for span in &r.spans {
             let Some(mut cursor) = span_vpos(span) else {
                 continue;
             };
-            for run in m5.resolve(surface, span) {
+            for run in m5.resolve(&surface, span) {
                 if out.len() >= MAX_COMPARE_OPERAND_BLOCKS {
                     return None; // the operand's budget, refused as produced
                 }
                 debug_assert!(
-                    m5.point(surface, &cursor).as_ref() == Some(run.i_start()),
+                    m5.point(&surface, &cursor).as_ref() == Some(run.i_start()),
                     "D-SEQ★: each content run must begin at the V-cursor (gap-free tiling)"
                 );
                 // Accumulate the V offset by run width (no V-gaps in content).

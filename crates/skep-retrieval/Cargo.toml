@@ -22,18 +22,22 @@ skep-address = { path = "../skep-address" }
 # no transact, no Kernel handle, no LockKey.
 skep-kernel = { path = "../skep-kernel" }
 # M3 — is_registered_document, the universal registry gate (registered-empty
-# vs not registered is M6's owned distinction).
+# vs not registered is M6's owned distinction); also the slice M5's
+# reading_surface reads its publication bit and version frontier from, so M3
+# is consulted for the float as well as for the gate ahead of it.
 skep-namespace = { path = "../skep-namespace" }
 # M4 — value_at, plus Val as DeliveryItem's leaf. `HasContent` is the bound of
 # RETRIEVEV's own impl block and of nothing else, so M4 is reachable from
 # exactly one operation and unspellable in the other six.
 skep-content = { path = "../skep-content" }
-# M5 — the workhorse: resolve/point/counts/runs/image/project/
-# docs_ever_containing/deletions; Run, which answers for its own positions; and
-# VPos (re-exported through M6's surface). Both halves of the ordinal-vspan
-# shape come from here too — ordinal_vspan builds the extents M6 reports and
-# is_ordinal_vspan judges the spans M6 is asked about — so the extent and the
-# refusal are two readings of one definition.
+# M5 — the workhorse: reading_surface, the one function that decides WHICH
+# arrangement a floating reader answers from (head-float); then resolve/point/
+# counts/runs/image/project/docs_ever_containing/deletions, the reads that
+# answer for whatever address they are handed; Run, which answers for its own
+# positions; and VPos (re-exported through M6's surface). Both halves of the
+# ordinal-vspan shape come from here too — ordinal_vspan builds the extents M6
+# reports and is_ordinal_vspan judges the spans M6 is asked about — so the
+# extent and the refusal are two readings of one definition.
 skep-arrangement = { path = "../skep-arrangement" }
 
 [dev-dependencies]

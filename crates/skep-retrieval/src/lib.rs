@@ -28,6 +28,27 @@
 //! answers M6 gives back is M6's own, and it is the first thing each of the
 //! seven operations decides.
 //!
+//! ## Which arrangement an operation answers from
+//!
+//! An operation gates on the address the caller NAMED, and only then asks
+//! which arrangement to read: M5's `reading_surface` of that address
+//! (head-float — PUB-2.49, PUB-2.50, PUB-2.53). A version address answers
+//! its own member, forever; a bare PUBLISHED address answers its trunk head,
+//! and its own arrangement while it has no member yet; a private document
+//! answers its own. The gate is what discharges `reading_surface`'s stated
+//! contract (PUB-6.37: it is asked of registered documents alone), and the
+//! answer is reported under the name the caller gave. The float is decided
+//! in M5, in that one function; M6 re-derives nothing about trunks, heads or
+//! publication — it asks, and reads the arrangement it is told.
+//!
+//! Five operations float: RETRIEVEV, both extent queries, SHOWORIGIN, and
+//! COMPARE, whose feet still NAME the address asked about while the positions
+//! they carry are the surface's. Two do not: SHOWDELETIONS and
+//! FINDDOCSCONTAINING read R and the arrangement of the address named. So a
+//! bare published address with a head answers RETRIEVEV from the head and
+//! FINDDOCSCONTAINING from itself — the seam the PUB lane's report records,
+//! and one each card states on its own side.
+//!
 //! ## No state, no fold
 //!
 //! M6 owns **no authoritative and no derived-authoritative state**: no
@@ -83,8 +104,13 @@
 //! * the R relation and its reverse index `docs_ever_containing` (M5 —
 //!   co-located with R's authoritative state); content bytes (M4);
 //!   arrangements (M5);
-//! * authorization / owner resolution (`effective_owner`) — M10's; SHOWORIGIN
-//!   reports origin *documents*, not owners;
+//! * authorization / owner resolution (`effective_owner`) — M10's. M6
+//!   DECIDES no readability and APPLIES one: the predicate M10 threads into
+//!   [`Query::retrieve_v_masked`] (per run, against the run's origin, withheld
+//!   at the run's own position) and [`Query::find_docs_containing_filtered`]
+//!   (per container, at its identity, dropped). The named documents' own
+//!   readability is M10's pre-dispatch consult. SHOWORIGIN reports origin
+//!   *documents*, not owners;
 //! * link-side discovery (M8); the request lifecycle, dispatch, and
 //!   marshaling (M10);
 //! * any write path — M6 exposes no `transact`/`Kernel` and has no

@@ -12,9 +12,9 @@ use std::sync::Arc;
 
 use common::*;
 use skep_coordination::{
-    Atom, CertifyError, Coordinator, DefineError, Dom, Enabled, Env, EvalError, FireAction,
-    FireError, FireOutcome, Lit, Prim, RegisterError, RetractError, Rule, RuleCertification,
-    RuleError, ScopeBody, Sort, StepOutcome, Term, TriggerRef, TypeError, TypeKey, TypeRef,
+    Atom, CertifyError, Coordinator, DefineError, Dom, Env, EvalError, FireAction, FireError,
+    FireOutcome, Lit, Occurrence, Prim, RegisterError, RetractError, Rule, RuleCertification,
+    RuleError, ScopeBody, Sort, StepOutcome, Term, Trigger, TypeError, TypeKey, TypeRef,
     TypedTerm, Value, VarId, EXPANSION_NAME_BASE,
 };
 use skep_kernel::TxnError;
@@ -101,8 +101,8 @@ fn decide_now(k: &Arc<skep_kernel::Kernel<World>>, c: &Coordinator<World>, view:
     c.decide(&tt, &Env::empty(), view, &s)
 }
 
-fn always_addr(c: &Coordinator<World>) -> TriggerRef {
-    TriggerRef::Inline(c.type_check_trigger((v(1), Sort::Addr), tru()).expect("always-true trigger"))
+fn always_addr(c: &Coordinator<World>) -> Trigger {
+    Trigger::Inline(c.type_check_trigger((v(1), Sort::Addr), tru()).expect("always-true trigger"))
 }
 
 fn marker_action() -> FireAction {
@@ -656,7 +656,7 @@ fn register_rule_validation_gates() {
         .expect("P");
     let (p_start, _) = c.define_predicate(&doc1(), p).expect("define P");
 
-    let mk = |domain: Dom, trigger: TriggerRef, action: FireAction| Rule {
+    let mk = |domain: Dom, trigger: Trigger, action: FireAction| Rule {
         domain,
         trigger,
         view: View::Active,
@@ -700,7 +700,7 @@ fn register_rule_validation_gates() {
     assert!(matches!(
         c.register_rule(mk(
             Dom::ActiveSlice(conc(&pred_stable_ty())),
-            TriggerRef::Def(p_start.clone()),
+            Trigger::Def(p_start.clone()),
             marker_action()
         )),
         Err(RuleError::DomainTriggerSortMismatch { expected: Sort::Tup, found: Sort::Addr })
@@ -711,14 +711,14 @@ fn register_rule_validation_gates() {
         .define_predicate(&doc1(), c.type_check(vec![(v(1), Sort::Addr)], lit_nat(1)).expect("Nat def"))
         .expect("define a Nat-codomain def");
     assert!(matches!(
-        c.register_rule(mk(Dom::MembersDom(conc(&pred_stable_ty())), TriggerRef::Def(nat_def), marker_action())),
+        c.register_rule(mk(Dom::MembersDom(conc(&pred_stable_ty())), Trigger::Def(nat_def), marker_action())),
         Err(RuleError::TriggerNotBoolean)
     ));
     let (closed_def, _) = c
         .define_predicate(&doc1(), c.type_check(vec![], tru()).expect("closed def"))
         .expect("define a closed def");
     assert!(matches!(
-        c.register_rule(mk(Dom::MembersDom(conc(&pred_stable_ty())), TriggerRef::Def(closed_def), marker_action())),
+        c.register_rule(mk(Dom::MembersDom(conc(&pred_stable_ty())), Trigger::Def(closed_def), marker_action())),
         Err(RuleError::BadTriggerArity)
     ));
     // A ref-bearing Inline trigger.
@@ -726,13 +726,13 @@ fn register_rule_validation_gates() {
         .type_check_trigger((v(1), Sort::Addr), Term::Ref { addr: p_start.clone(), args: vec![at(var(1))] })
         .expect("ref-bearing trigger term");
     assert!(matches!(
-        c.register_rule(mk(Dom::MembersDom(conc(&pred_stable_ty())), TriggerRef::Inline(ref_trig), marker_action())),
+        c.register_rule(mk(Dom::MembersDom(conc(&pred_stable_ty())), Trigger::Inline(ref_trig), marker_action())),
         Err(RuleError::RefBearingInlineTrigger)
     ));
     // A Def trigger with no defined signature.
     assert!(matches!(
-        c.register_rule(mk(Dom::MembersDom(conc(&pred_stable_ty())), TriggerRef::Def(ca(77)), marker_action())),
-        Err(RuleError::DefTriggerUnregistered(_))
+        c.register_rule(mk(Dom::MembersDom(conc(&pred_stable_ty())), Trigger::Def(ca(77)), marker_action())),
+        Err(RuleError::DanglingDefTrigger(_))
     ));
     // Marker.ty guards: cataloged Unary and non-PredLayer. A Binary shipped
     // class and an uncataloged number both land BadMarkerType; the PredLayer
@@ -778,7 +778,7 @@ fn marker_rule_certifies_fires_and_quiesces() {
     ls.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel 1");
     ls.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("rel 2");
 
-    let trig = TriggerRef::Inline(
+    let trig = Trigger::Inline(
         c.type_check_trigger((v(1), Sort::Addr), not(is_k_t(&marker_ty(), var(1))))
             .expect("¬is_K(marker, x) @ audit"),
     );
@@ -815,7 +815,7 @@ fn marker_rule_certifies_fires_and_quiesces() {
     // re-aimed fire is a falsified-in-place NoOp (Q1) — and the effects are
     // real M7 deposits.
     assert!(matches!(
-        c.fire(&Enabled { rule: id, arg: Value::Addr(ca(1)) }).expect("fire"),
+        c.fire(&Occurrence { rule: id, arg: Value::Addr(ca(1)) }).expect("fire"),
         FireOutcome::NoOp
     ));
     assert!(k.snapshot().world().links().is_k(&marker_ty(), ca(1).tumbler()));
@@ -848,7 +848,7 @@ fn a_def_trigger_reads_only_the_snapshot_it_is_evaluated_on() {
     let (start, _) = c.define_predicate(&doc1(), t).expect("define T");
     let rule = Rule {
         domain: Dom::MembersDom(conc(&pred_stable_ty())),
-        trigger: TriggerRef::Def(start.clone()),
+        trigger: Trigger::Def(start.clone()),
         view: View::Audit,
         action: marker_action(),
     };
@@ -858,7 +858,7 @@ fn a_def_trigger_reads_only_the_snapshot_it_is_evaluated_on() {
     // The snapshot predating the def's registration answers, and agrees
     // with a fresh one.
     assert!(!c.quiescent(&before));
-    assert_eq!(c.next_enabled(&before), Some(Enabled { rule: id, arg: Value::Addr(ca(1)) }));
+    assert_eq!(c.next_enabled(&before), Some(Occurrence { rule: id, arg: Value::Addr(ca(1)) }));
     assert!(!c.quiescent(&k.snapshot()));
 
     // Retract the def: the rule's trigger is its own copy.
@@ -984,7 +984,7 @@ fn the_trigger_s_look_is_filtered_at_guest_class() {
     assert!(c.next_enabled(&s).is_none());
     assert!(matches!(c.step(&s), StepOutcome::Quiescent));
     assert!(matches!(
-        c.fire(&Enabled { rule: id, arg: Value::Addr(ca(1)) }).expect("out of domain is a NoOp"),
+        c.fire(&Occurrence { rule: id, arg: Value::Addr(ca(1)) }).expect("out of domain is a NoOp"),
         FireOutcome::NoOp
     ));
     assert!(!k.snapshot().world().links().is_k(&marker_ty(), ca(1).tumbler()), "nothing deposited");
@@ -999,7 +999,7 @@ fn the_trigger_s_look_is_filtered_at_guest_class() {
     links(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel in doc1");
     let (draft_marker, _) =
         links(&k).emit(Caller::System, &doc2(), &marker_ty(), &ca(1), &[]).expect("marker in doc2");
-    let trig = TriggerRef::Inline(
+    let trig = Trigger::Inline(
         c.type_check_trigger((v(1), Sort::Addr), not(is_k_t(&marker_ty(), var(1))))
             .expect("trigger"),
     );
@@ -1058,7 +1058,7 @@ fn nullify_rules_uncertified_fire_and_failed_surface() {
     let mut c = coord(&k);
     let m1 = deposit_rel(&k, 2, &ca(1), &ca(2)); // a pred_stable-classed tuple
 
-    let trig = TriggerRef::Inline(
+    let trig = Trigger::Inline(
         c.type_check_trigger((v(1), Sort::Tup), tru()).expect("Tup trigger"),
     );
     let rule = Rule {
@@ -1088,7 +1088,7 @@ fn nullify_rules_uncertified_fire_and_failed_surface() {
     let k2 = kernel();
     let mut c2 = coord(&k2);
     deposit_rel(&k2, 2, &ca(1), &ca(2));
-    let trig2 = TriggerRef::Inline(
+    let trig2 = Trigger::Inline(
         c2.type_check_trigger((v(1), Sort::Addr), tru()).expect("Addr trigger"),
     );
     let bad = Rule {
@@ -1119,7 +1119,7 @@ fn quiescent_scoped_exact_then_over_approximates() {
     ls.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel 1");
     ls.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("rel 2");
 
-    let trig = TriggerRef::Inline(
+    let trig = Trigger::Inline(
         c.type_check_trigger((v(1), Sort::Addr), not(is_k_t(&marker_ty(), var(1))))
             .expect("trigger"),
     );
@@ -1138,7 +1138,7 @@ fn quiescent_scoped_exact_then_over_approximates() {
     assert!(!c.quiescent_scoped(&scope, ScopeBody::PerAddress, &k.snapshot()));
 
     // Discharge the in-scope work only: scoped-quiescent, globally not.
-    match c.fire(&Enabled { rule: id, arg: Value::Addr(ca(1)) }).expect("fire ca1") {
+    match c.fire(&Occurrence { rule: id, arg: Value::Addr(ca(1)) }).expect("fire ca1") {
         FireOutcome::Fired { .. } => {}
         other => panic!("expected Fired, got {other:?}"),
     }
@@ -1150,7 +1150,7 @@ fn quiescent_scoped_exact_then_over_approximates() {
     // its enabled occurrence keeps the scoped verdict false — more work
     // reported, never false quiescence.
     deposit_rel(&k, 1, &ca(5), &ca(6)); // a pred_def-classed tuple
-    let trig_t = TriggerRef::Inline(
+    let trig_t = Trigger::Inline(
         c.type_check_trigger((v(2), Sort::Tup), tru()).expect("Tup trigger"),
     );
     c.register_rule(Rule {

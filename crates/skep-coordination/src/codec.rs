@@ -16,7 +16,7 @@ use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_links::Endset;
 
 use crate::ast::{Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId};
-use crate::value::Sort;
+use crate::value::{SignedTerm, Sort};
 
 /// Decode failure — surfaced as `RegisterError::ParseFailed` (and, for an
 /// ever-registered start, the permanent poisoned memo entry).
@@ -133,17 +133,17 @@ mod tag {
 /// Encode the signed term. `Err(v)` names a `Tup`-sorted parameter (the codec
 /// refusal — unreachable from `define_predicate`, whose `TypedTerm` is
 /// Codom-only by type; the codec keeps its own invariant regardless).
-pub(crate) fn encode(params: &[(VarId, Sort)], body: &Term) -> Result<Vec<u8>, VarId> {
+pub(crate) fn encode(t: &SignedTerm) -> Result<Vec<u8>, VarId> {
     let mut payload = Vec::new();
-    w_varint(&mut payload, params.len() as u64);
-    for (v, s) in params {
+    w_varint(&mut payload, t.params.len() as u64);
+    for (v, s) in &t.params {
         if *s == Sort::Tup {
             return Err(v.clone());
         }
         w_varid(&mut payload, v);
         payload.push(sort_tag(*s));
     }
-    w_term(&mut payload, body);
+    w_term(&mut payload, &t.body);
     let mut out = Vec::with_capacity(payload.len() + 10);
     w_varint(&mut out, payload.len() as u64);
     out.extend_from_slice(&payload);
@@ -501,10 +501,10 @@ fn w_prim2(b: &mut Vec<u8>, t: u8, x: &Term, y: &Term) {
 
 // ─────────────────────────────── decoding ───────────────────────────────
 
-/// Decode a stored def `Val`'s bytes: envelope length must match exactly and
-/// the payload must be fully consumed ("the run is exactly what the parse
-/// consumed").
-pub(crate) fn decode(bytes: &[u8]) -> Result<(Vec<(VarId, Sort)>, Term), Malformed> {
+/// Decode a stored def `Val`'s bytes to the signed term: envelope length must
+/// match exactly and the payload must be fully consumed ("the run is exactly
+/// what the parse consumed").
+pub(crate) fn decode(bytes: &[u8]) -> Result<SignedTerm, Malformed> {
     let mut r = Rd { b: bytes, i: 0 };
     let len = r.varint()? as usize;
     if bytes.len() - r.i != len {
@@ -524,7 +524,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<(Vec<(VarId, Sort)>, Term), Malform
     if r.i != bytes.len() {
         return Err(Malformed);
     }
-    Ok((params, body))
+    Ok(SignedTerm { params, body })
 }
 
 struct Rd<'a> {
@@ -818,11 +818,9 @@ mod tests {
                 }),
             )),
         };
-        let params = vec![(v(7), Sort::Addr), (v(8), Sort::Nat)];
-        let bytes = encode(&params, &body).expect("Codom-only params encode");
-        let (p2, b2) = decode(&bytes).expect("round trip parses");
-        assert_eq!(p2, params);
-        assert_eq!(b2, body);
+        let signed = SignedTerm { params: vec![(v(7), Sort::Addr), (v(8), Sort::Nat)], body };
+        let bytes = encode(&signed).expect("Codom-only params encode");
+        assert_eq!(decode(&bytes), Ok(signed));
     }
 
     /// decode ∘ encode = id over EVERY former, atom, prim, domain, literal
@@ -830,17 +828,17 @@ mod tests {
     /// halves read differently, anywhere in the table, fails here.
     #[test]
     fn roundtrip_every_former() {
-        let (params, body) = every_former();
-        let bytes = encode(&params, &body).expect("Codom-only params encode");
-        assert_eq!(decode(&bytes), Ok((params, body)));
+        let signed = every_former();
+        let bytes = encode(&signed).expect("Codom-only params encode");
+        assert_eq!(decode(&bytes), Ok(signed));
     }
 
     /// The codec refuses `Sort::Tup` in a parameter context (Codom-only at
     /// encode time — ASN-0130 SignedTerm).
     #[test]
     fn encode_refuses_tup_param() {
-        let params = vec![(v(1), Sort::Tup)];
-        assert_eq!(encode(&params, &Term::Lit(Lit::True)), Err(v(1)));
+        let signed = SignedTerm { params: vec![(v(1), Sort::Tup)], body: Term::Lit(Lit::True) };
+        assert_eq!(encode(&signed), Err(v(1)));
     }
 
     /// A reserved-range `VarId` in stored content is not a valid parse
@@ -848,16 +846,16 @@ mod tests {
     /// the crate-private constructor, must not survive a round trip.
     #[test]
     fn decode_rejects_reserved_range_varid() {
-        let reserved = VarId::expansion(0);
-        let body = Term::Var(reserved);
-        let bytes = encode(&[], &body).expect("encode does not police body vars");
+        let signed = SignedTerm { params: vec![], body: Term::Var(VarId::expansion(0)) };
+        let bytes = encode(&signed).expect("encode does not police body vars");
         assert_eq!(decode(&bytes), Err(Malformed));
     }
 
     /// Trailing bytes are a parse failure ("fully consumed").
     #[test]
     fn decode_rejects_trailing_bytes() {
-        let mut bytes = encode(&[], &Term::Lit(Lit::True)).expect("encodes");
+        let signed = SignedTerm { params: vec![], body: Term::Lit(Lit::True) };
+        let mut bytes = encode(&signed).expect("encodes");
         bytes.push(0);
         assert_eq!(decode(&bytes), Err(Malformed));
     }

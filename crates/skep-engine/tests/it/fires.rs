@@ -33,16 +33,16 @@ use std::sync::Arc;
 use common::*;
 use skep_address::{document_of, Address, Nat};
 use skep_coordination::{
-    Atom, Coordinator, Dom, Enabled, Env, FireAction, FireError, FireOutcome, Lit, Prim, Rule,
-    Sort, StepOutcome, Term, TriggerRef, TypeKey, TypeRef, Value, VarId,
+    Atom, Coordinator, Dom, Env, FireAction, FireError, FireOutcome, Lit, Occurrence, Prim, Rule,
+    Sort, StepOutcome, Term, Trigger, TypeKey, TypeRef, Value, VarId,
 };
 use skep_engine::{Engine, World};
 use skep_links::{Caller, HasLinks, ShippedType, View};
 
 /// An always-true one-Addr-parameter trigger.
-fn always(coord: &Coordinator<World>) -> TriggerRef {
+fn always(coord: &Coordinator<World>) -> Trigger {
     let x = VarId::new(1).expect("a test variable below the watershed");
-    TriggerRef::Inline(
+    Trigger::Inline(
         coord.type_check_trigger((x, Sort::Addr), Term::Lit(Lit::True))
             .expect("an always-true trigger type-checks"),
     )
@@ -287,7 +287,7 @@ fn a_rule_whose_only_matching_tuple_is_draft_homed_does_not_fire() {
         other => panic!("expected Quiescent (an empty visible domain), got {other:?}"),
     }
     assert_eq!(
-        coord.fire(&Enabled { rule: id, arg: Value::Addr(member.clone()) })
+        coord.fire(&Occurrence { rule: id, arg: Value::Addr(member.clone()) })
             .expect("a fire out of the visible domain is a NoOp, not an error"),
         FireOutcome::NoOp,
         "out of the visible domain: the removed discharge, never a draft-boundary refusal"
@@ -332,7 +332,7 @@ fn a_fire_commits_byte_identically_to_a_world_with_no_drafts() {
                 .expect("the draft's own relation on another member");
         }
         let mut coord = engine.coordinator();
-        let trigger = TriggerRef::Inline(
+        let trigger = Trigger::Inline(
             coord.type_check_trigger(
                 (x.clone(), Sort::Addr),
                 Term::Not(Arc::new(Term::Atom(Atom::IsK(
@@ -452,8 +452,8 @@ fn domain_enumeration_excludes_the_draft_tuple_and_keeps_a_retracted_one() {
     // The rule engine's own enumeration: a Tup-domained rule whose trigger
     // names the draft's tuple peeks nothing; one naming the retracted tuple
     // of the published home peeks it.
-    let names = |coord: &Coordinator<World>, a: &Address| -> TriggerRef {
-        TriggerRef::Inline(
+    let names = |coord: &Coordinator<World>, a: &Address| -> Trigger {
+        Trigger::Inline(
             coord.type_check_trigger(
                 (t.clone(), Sort::Tup),
                 Term::Prim(Prim::AddrEq(
@@ -523,17 +523,17 @@ fn a_def_trigger_sees_the_same_filtered_store_as_an_inline_one() {
         coord.type_check(vec![(x.clone(), Sort::Addr)], body.clone()).expect("T type-checks");
     let (start, _) =
         coord.define_predicate(&draft, checked).expect("a def is defined into a draft");
-    let inline = TriggerRef::Inline(
+    let inline = Trigger::Inline(
         coord.type_check_trigger((x, Sort::Addr), body).expect("the same body as a trigger"),
     );
-    let mk = |trigger: TriggerRef| Rule {
+    let mk = |trigger: Trigger| Rule {
         domain: Dom::MembersDom(TypeRef::Concrete(TypeKey(pred_stable.clone()))),
         trigger,
         view: View::Audit,
         action: FireAction::Marker { home: home.clone(), ty: TypeKey(retired.clone()) },
     };
     let def_rule = coord
-        .register_rule(mk(TriggerRef::Def(start.clone())))
+        .register_rule(mk(Trigger::Def(start.clone())))
         .expect("a Def trigger over an ever-registered Boolean def registers");
     let inline_rule = coord.register_rule(mk(inline)).expect("a well-formed rule registers");
 
@@ -551,7 +551,7 @@ fn a_def_trigger_sees_the_same_filtered_store_as_an_inline_one() {
     assert!(coord.quiescent(&snap));
     for id in [def_rule, inline_rule] {
         assert_eq!(
-            coord.fire(&Enabled { rule: id, arg: Value::Addr(member.clone()) })
+            coord.fire(&Occurrence { rule: id, arg: Value::Addr(member.clone()) })
                 .expect("a falsified fire is a NoOp"),
             FireOutcome::NoOp,
             "the member is in the visible domain; the trigger, Def or Inline, reads no draft-homed marker"

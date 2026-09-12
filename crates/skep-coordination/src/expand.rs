@@ -1,9 +1,10 @@
-//! §Internal 4 (PR3/PR3a) — the flat reference expansion: the one
+//! §Internal 4 (PR3/PR3a) — the expander: `expand(start)`, the one
 //! syntax-directed transform that removes `Ref` nodes from a checked def
-//! body, for the analyses that are not compositional over references
-//! (ST⁺ certification, the rule lint's trigger leg, the armer graph).
-//! Evaluation never uses it — a def's denotation is DAG-recursive (Conflicts
-//! §5); the static analyses alone need the materialized flat term.
+//! body, yielding its flat reference expansion for the analyses that are not
+//! compositional over references (ST⁺ certification, the rule lint's trigger
+//! leg, the armer graph). Evaluation never uses it — a def's denotation is
+//! DAG-recursive (Conflicts §5); the static analyses alone need the
+//! materialized flat term.
 //!
 //! Reference nodes are processed bottom-up (arguments before the node).
 //! Fresh names are drawn from the reserved `VarId ≥ EXPANSION_NAME_BASE`
@@ -32,26 +33,28 @@ impl Supply {
     }
 }
 
-/// One expansion's state: the referent supplier and the fresh-name supply.
-/// Build one per top-level expansion (`certify_stable`'s and the rule
-/// engine's each start at zero — PR3's determinism is per expansion).
-pub(crate) struct Flattener<'a> {
+/// The expander (ASN-0130): one expansion's state — the referent supplier
+/// and the fresh-name supply. Build one per top-level expansion
+/// (`certify_stable`'s and the rule engine's each start at zero — PR3's
+/// determinism is per expansion).
+pub(crate) struct Expander<'a> {
     defs: &'a dyn DefSource,
     supply: Supply,
 }
 
-impl<'a> Flattener<'a> {
-    pub(crate) fn new(defs: &'a dyn DefSource) -> Flattener<'a> {
-        Flattener { defs, supply: Supply(0) }
+impl<'a> Expander<'a> {
+    pub(crate) fn new(defs: &'a dyn DefSource) -> Expander<'a> {
+        Expander { defs, supply: Supply(0) }
     }
 
-    /// The flat expansion of a checked (every `Ref` resolvable) body.
-    pub(crate) fn flatten(&mut self, t: &Term) -> Term {
+    /// `expand` — the flat reference expansion of a checked (every `Ref`
+    /// resolvable) body.
+    pub(crate) fn expand(&mut self, t: &Term) -> Term {
         self.term(t)
     }
 }
 
-impl Rewrite for Flattener<'_> {
+impl Rewrite for Expander<'_> {
     /// The one node the expansion acts on; every other former falls through.
     fn term(&mut self, t: &Term) -> Term {
         let Term::Ref { addr, args } = t else {
@@ -65,12 +68,12 @@ impl Rewrite for Flattener<'_> {
             .unwrap_or_else(|| unreachable!("WT-ref: a checked body's referent has a defined signature"));
         // The node: fresh names for the referent's parameters first, in
         // signature order …
-        let fresh: Vec<VarId> = referent.gamma.iter().map(|_| self.supply.fresh()).collect();
-        // … then its (recursively flattened) body's binders, depth-first
+        let fresh: Vec<VarId> = referent.params().iter().map(|_| self.supply.fresh()).collect();
+        // … then its (recursively expanded) body's binders, depth-first
         // left-to-right.
         let inner_flat = self.term(&referent.evaluable);
         let mut map: im::HashMap<VarId, VarId> = im::HashMap::new();
-        for ((p, _), fr) in referent.gamma.iter().zip(fresh.iter()) {
+        for ((p, _), fr) in referent.params().iter().zip(fresh.iter()) {
             map.insert(p.clone(), fr.clone());
         }
         let mut out = Rename { supply: &mut self.supply, map }.term(&inner_flat);
@@ -137,7 +140,7 @@ impl Rewrite for Rename<'_> {
                 let (var, body) = self.under(var, body);
                 Term::BigUnion { dom, var, body }
             }
-            Term::Ref { .. } => unreachable!("rename runs on flattened (ref-free) bodies"),
+            Term::Ref { .. } => unreachable!("rename runs on flat (ref-free) referent bodies"),
             _ => rewrite_term(self, t),
         }
     }
@@ -163,7 +166,7 @@ mod tests {
     use super::*;
     use crate::ast::Prim;
     use crate::check::TypedTerm;
-    use crate::value::Sort;
+    use crate::value::{SignedTerm, Sort};
 
     /// A referent table standing in for the memo.
     struct Stub(HashMap<Tumbler, Arc<TypedTerm>>);
@@ -194,7 +197,7 @@ mod tests {
     /// expansion captures nothing. Deterministic: a second expansion is
     /// equal.
     #[test]
-    fn flattens_a_reference_with_fresh_disjoint_names() {
+    fn expands_a_reference_with_fresh_disjoint_names() {
         let p = ad(&[1, 0, 1, 0, 1, 0, 1, 1]);
         // P(x) := ∃ y ∈ L_dom :: y = x — the binder `y` is v(2), as the
         // host's is.
@@ -204,9 +207,8 @@ mod tests {
             body: Arc::new(addr_eq(Term::Var(v(2)), Term::Var(v(1)))),
         };
         let referent = TypedTerm {
-            gamma: vec![(v(1), Sort::Addr)],
+            signed: SignedTerm { params: vec![(v(1), Sort::Addr)], body: body.clone() },
             result: Sort::Bool,
-            source: body.clone(),
             evaluable: Arc::new(body),
             ref_free: true,
         };
@@ -233,7 +235,7 @@ mod tests {
                 }),
             }),
         };
-        assert_eq!(Flattener::new(&stub).flatten(&host), expected);
-        assert_eq!(Flattener::new(&stub).flatten(&host), expected, "deterministic per expansion");
+        assert_eq!(Expander::new(&stub).expand(&host), expected);
+        assert_eq!(Expander::new(&stub).expand(&host), expected, "deterministic per expansion");
     }
 }

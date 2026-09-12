@@ -13,13 +13,15 @@ use crate::check::TypedTerm;
 
 /// A def-status answer, distinguishing CVALID (0)'s two `None` causes:
 /// `Poisoned` (ever-registered, content undisciplined — PR-DISC breach) and
-/// `Unregistered` (never registered at the answering snapshot). A `Defined`
-/// answer is the memo's own `Arc` of the def's checked term — its signature
-/// (`params`/`result_sort`) and its `Reg`-expanded evaluable body.
+/// `NeverRegistered` (never registered at the answering snapshot — the one
+/// status a later registration can change, and so the one never memoized).
+/// A `Defined` answer is the memo's own `Arc` of the def's checked term —
+/// its signature (`params`/`result_sort`) and its `Reg`-expanded evaluable
+/// body.
 pub(crate) enum DefStatus {
     Defined(Arc<TypedTerm>),
     Poisoned,
-    Unregistered,
+    NeverRegistered,
 }
 
 /// A cached verdict. Both variants are PERMANENT: content is immutable and

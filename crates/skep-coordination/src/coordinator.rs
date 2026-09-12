@@ -25,7 +25,7 @@ use crate::eval::{eval_term, DefSource, EvalCtx};
 use crate::guest::GuestLinks;
 use crate::memo::{Breach, DefMemo, DefStatus};
 use crate::rule::RuleId;
-use crate::value::{value_sort, Env, Signature, Sort, Value};
+use crate::value::{value_sort, Env, Signature, SignedTerm, Sort, Value};
 
 /// One registered rule in the working set (§Internal 5): the checked
 /// `TypedDom`, the checked trigger, the declared view, the action.
@@ -67,11 +67,11 @@ pub struct Coordinator<W: WorldState> {
     pub(crate) next_rule: u64,
     pub(crate) cursor: usize,
     pub(crate) mk_vstream: Box<dyn for<'k> Fn(&'k Kernel<W>) -> Vstream<'k, W> + Send + Sync>,
-    /// The M7 write-handle factory: a writer over the kernel AT A VISIBILITY
+    /// The M7 `LinkWriter` factory: a writer over the kernel AT A VISIBILITY
     /// CLASS (lane 3.3b). Called only by [`Coordinator::link_writer`], which
     /// hands it `guest`, so the value-keyed gates of every fire and every
     /// def write run at guest class.
-    pub(crate) mk_link_store: Box<
+    pub(crate) mk_link_writer: Box<
         dyn for<'k> Fn(&'k Kernel<W>, &'k Visibility<'k, W>) -> LinkWriter<'k, W> + Send + Sync,
     >,
     /// The GUEST-class read predicate over a document address (PUB round 2,
@@ -82,7 +82,7 @@ pub struct Coordinator<W: WorldState> {
     /// crosses the draft boundary in either direction (a marker on a draft's
     /// content, or a deposit into a draft home). And every `LinkWriter` M9
     /// builds is built AT this class (lane 3.3b, PUB-6.28): the same closure
-    /// is lent to `mk_link_store`, so M7's idempotency and dedup lookups see
+    /// is lent to `mk_link_writer`, so M7's idempotency and dedup lookups see
     /// only guest-readable incumbents and a fire commits byte-identically to
     /// a world with no drafts. M9 holds no publication state of its own —
     /// the predicate is injected like the factories.
@@ -120,7 +120,7 @@ where
         kernel: Arc<Kernel<W>>,
         registry: Arc<TypeRegistry>,
         mk_vstream: Box<dyn for<'k> Fn(&'k Kernel<W>) -> Vstream<'k, W> + Send + Sync>,
-        mk_link_store: Box<
+        mk_link_writer: Box<
             dyn for<'k> Fn(&'k Kernel<W>, &'k Visibility<'k, W>) -> LinkWriter<'k, W>
                 + Send
                 + Sync,
@@ -136,7 +136,7 @@ where
             next_rule: 1,
             cursor: 0,
             mk_vstream,
-            mk_link_store,
+            mk_link_writer,
             guest,
         }
     }
@@ -181,7 +181,7 @@ where
     /// writer built here, so M7's idempotency and dedup lookups see only
     /// guest-readable incumbents and no write can be built class-free.
     pub(crate) fn link_writer(&self) -> LinkWriter<'_, W> {
-        (self.mk_link_store)(self.kernel.as_ref(), &*self.guest)
+        (self.mk_link_writer)(self.kernel.as_ref(), &*self.guest)
     }
 
     // ──────────────────── A. The predicate language ────────────────────
@@ -203,7 +203,7 @@ where
         if let Some((v, _)) = params.iter().find(|(_, s)| *s == Sort::Tup) {
             return Err(TypeError::TupParameter(v.clone()));
         }
-        self.check_under(params, body, 0)
+        self.check_under(SignedTerm { params, body }, 0)
     }
 
     /// Type-check a RULE TRIGGER: `body` under the one parameter `param` (any
@@ -212,33 +212,27 @@ where
     /// otherwise). The domain↔parameter sort reconciliation and the ref-free
     /// requirement are `register_rule`'s.
     pub fn type_check_trigger(&self, param: (VarId, Sort), body: Term) -> Result<TriggerTerm, TypeError> {
-        let t = self.check_under(vec![param], body, 0)?;
+        let t = self.check_under(SignedTerm { params: vec![param], body }, 0)?;
         if t.result != Sort::Bool {
             return Err(TypeError::SortMismatch { expected: Sort::Bool, found: t.result });
         }
         Ok(TriggerTerm(t))
     }
 
-    /// The ONE checker invocation: WT + WT-ref over `body` under Γ_D
-    /// `params`, into the checked-term shape. Referents resolve through the
-    /// signature memo at derivation depth `depth` — 0 at the top of a chain
-    /// (the public checks, `register_pred`), one deeper per nested
+    /// The ONE checker invocation: WT + WT-ref over the signed term — its
+    /// body under its Γ_D — into the checked-term shape. Referents resolve
+    /// through the signature memo at derivation depth `depth` — 0 at the top
+    /// of a chain (the public checks, `register_pred`), one deeper per nested
     /// derivation (a chain that runs past `MAX_SIG_DEPTH` is a PR-DISC-breach
     /// cycle and reads as "no signature", failing WT here).
-    pub(crate) fn check_under(
-        &self,
-        params: Vec<(VarId, Sort)>,
-        body: Term,
-        depth: u32,
-    ) -> Result<TypedTerm, TypeError> {
+    pub(crate) fn check_under(&self, signed: SignedTerm, depth: u32) -> Result<TypedTerm, TypeError> {
         let resolve = |a: &Address| self.signature_at(a, depth);
         let checker = Checker { catalog: &self.catalog, resolve: &resolve };
-        let ctx: Ctx = params.iter().cloned().collect();
-        let checked = checker.check_term(&ctx, &body)?;
+        let ctx: Ctx = signed.params.iter().cloned().collect();
+        let checked = checker.check_term(&ctx, &signed.body)?;
         Ok(TypedTerm {
-            gamma: params,
+            signed,
             result: checked.sort,
-            source: body,
             evaluable: checked.term,
             ref_free: checked.ref_free,
         })
@@ -260,7 +254,7 @@ where
             t.is_ref_free(),
             "eval precondition violated: ref-bearing TypedTerm — route through evaluate_def"
         );
-        for (v, s) in &t.gamma {
+        for (v, s) in t.params() {
             assert!(
                 env.get(v).is_some_and(|val| value_sort(val) == *s),
                 "eval precondition violated: Γ_D parameter {v:?} unbound or mis-sorted in env (expected {s:?})"
@@ -295,7 +289,7 @@ where
         assert!(
             t.is_ref_free(),
             "classify precondition violated: ref-bearing TypedTerm — certify via certify_stable, \
-             which flattens the reference expansion"
+             which classifies the flat reference expansion"
         );
         classify_term(&self.catalog, view, t.evaluable.as_ref())
     }
@@ -308,15 +302,16 @@ where
     }
 
     /// Memo-or-derive as the `depth`-th nested derivation: a memo hit answers
-    /// at any depth; past the breach-only bound the answer is "no signature"
-    /// (never memoized — the outer derivation freezes poisoned, not this
-    /// one); otherwise derive from immutable content.
+    /// at any depth; past the breach-only bound — reachable only inside a
+    /// PR-DISC-breach cycle — the answer is undisciplined, never memoized
+    /// (the outer derivation freezes its own start poisoned, not this one);
+    /// otherwise derive from immutable content.
     fn def_status_at(&self, start: &Address, depth: u32) -> DefStatus {
         if let Some(hit) = self.memo.get(start) {
             return hit;
         }
         if depth >= MAX_SIG_DEPTH {
-            return DefStatus::Unregistered;
+            return DefStatus::Poisoned;
         }
         self.derive_def(start, depth)
     }
@@ -331,11 +326,11 @@ where
         let snap = self.kernel.snapshot();
         let w = snap.world();
         if !self.ever_registered(w, start) {
-            return DefStatus::Unregistered;
+            return DefStatus::NeverRegistered;
         }
         let verdict = parse_def(w, start)
             .map_err(|_| Breach)
-            .and_then(|(params, body)| self.check_under(params, body, depth + 1).map_err(|_| Breach));
+            .and_then(|signed| self.check_under(signed, depth + 1).map_err(|_| Breach));
         self.memo.fill(start, verdict)
     }
 

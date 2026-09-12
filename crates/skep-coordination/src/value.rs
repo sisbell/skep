@@ -4,7 +4,7 @@ use im::{HashMap, OrdSet, Vector};
 use skep_address::{Address, Nat, Tumbler};
 use skep_links::{CoverageClass, Tuple};
 
-use crate::ast::VarId;
+use crate::ast::{Term, VarId};
 
 /// COD ∪ {Tup} (ASN-0129 WT). `Tup` is bindable only by a rule trigger's one
 /// parameter (`type_check_trigger`) and by quantifier binders over `A_K`/`L_K`
@@ -52,6 +52,17 @@ pub(crate) fn value_sort(v: &Value) -> Sort {
         Value::OptNat(_) => Sort::OptNat,
         Value::Tuple(_) => Sort::Tup,
     }
+}
+
+/// The signed term `(Γ_D, body)` (ASN-0130 SignedTerm): a PL body with its
+/// recorded parameter context — what `define_predicate` encodes, the def
+/// codec parses, and `parse_def` recovers from a run. Unchecked: WT over it
+/// is `Coordinator::check_under`'s, whose result carries it as
+/// `TypedTerm::signed`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SignedTerm {
+    pub(crate) params: Vec<(VarId, Sort)>,
+    pub(crate) body: Term,
 }
 
 /// `(Γ_D, C_D)` — a stored def's checked signature (PR-SIG). Each param sort

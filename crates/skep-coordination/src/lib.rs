@@ -47,7 +47,7 @@
 //!
 //! ## Standing assembly obligations (not dischargeable here)
 //!
-//! * the injected `mk_vstream`/`mk_link_store` factories presuppose the
+//! * the injected `mk_vstream`/`mk_link_writer` factories presuppose the
 //!   engine can construct a `Vstream` from `&Kernel<W>` and a `LinkWriter`
 //!   from `&Kernel<W>` plus a visibility class — the injected `guest`
 //!   predicate, lent at every construction (lane 3.3b);
@@ -86,7 +86,7 @@ pub use error::{
     RuleError, TypeError,
 };
 pub use rule::{
-    Enabled, FireAction, FireOutcome, Rule, RuleCertification, RuleId, ScopeBody, StepOutcome,
-    TriggerRef,
+    FireAction, FireOutcome, Occurrence, Rule, RuleCertification, RuleId, ScopeBody, StepOutcome,
+    Trigger,
 };
 pub use value::{Env, Signature, Sort, Value};

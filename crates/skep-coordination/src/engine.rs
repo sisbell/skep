@@ -24,8 +24,8 @@ use crate::error::{FireError, RuleError};
 use crate::eval::{enum_dom, eval_term, truthy, Elem};
 use crate::memo::DefStatus;
 use crate::rule::{
-    Enabled, FireAction, FireOutcome, Rule, RuleCertification, RuleId, ScopeBody, StepOutcome,
-    TriggerRef,
+    FireAction, FireOutcome, Occurrence, Rule, RuleCertification, RuleId, ScopeBody, StepOutcome,
+    Trigger,
 };
 use crate::value::{Env, Sort, Value};
 
@@ -67,7 +67,7 @@ where
     pub fn certify_rule(&self, rule: &Rule) -> Result<RuleCertification, RuleError> {
         let (dom, trigger) = self.validate_rule(rule)?;
         // Leg (a): trigger ∈ SF at the declared view.
-        let flat = self.trigger_flat(&trigger);
+        let flat = self.trigger_expansion(&trigger);
         let analyzer = Analyzer { catalog: &self.catalog, view: rule.view, widen: false };
         let sf = analyzer.term(&flat).sf;
         // Leg (b): the Marker pattern — the emitted tuple's slot-coverage is
@@ -75,12 +75,12 @@ where
         // over (canonical: trigger ¬is_K(a) @ audit ⟺ Marker{_, K}).
         let marker = match &rule.action {
             FireAction::Marker { ty, .. } => {
-                rule.view == View::Audit && self.marker_pattern(&flat, &trigger.gamma[0].0, ty)
+                rule.view == View::Audit && self.marker_pattern(&flat, &trigger.params()[0].0, ty)
             }
             FireAction::Nullify { .. } => false,
         };
         // Leg (c): grow-only domain.
-        let (_, grow_only) = analyzer.dom(dom.dom.as_ref());
+        let grow_only = analyzer.dom(dom.dom.as_ref()).grow;
         if sf && marker && grow_only {
             Ok(RuleCertification::CertifiedTerminating)
         } else {
@@ -88,14 +88,14 @@ where
         }
     }
 
-    /// A checked trigger as the static analyses read it: its ref-free term —
-    /// an `Inline` trigger's evaluable projection as it is, a `Def`
-    /// trigger's flat expansion.
-    fn trigger_flat(&self, trigger: &TypedTerm) -> Term {
+    /// A checked trigger as the static analyses read it: its flat, ref-free
+    /// expansion — an `Inline` trigger's evaluable projection is already
+    /// one; a `Def` trigger's is `expand_def`'s.
+    fn trigger_expansion(&self, trigger: &TypedTerm) -> Term {
         if trigger.is_ref_free() {
             trigger.evaluable.as_ref().clone()
         } else {
-            self.flatten_entry(trigger)
+            self.expand_def(trigger)
         }
     }
 
@@ -135,7 +135,7 @@ where
         // Trigger: one-parameter Bool (a `TriggerTerm` is that by type; a
         // def is checked here), sort-matched to the element sort.
         let trigger = match &rule.trigger {
-            TriggerRef::Inline(t) => {
+            Trigger::Inline(t) => {
                 if !t.is_ref_free() {
                     return Err(RuleError::RefBearingInlineTrigger);
                 }
@@ -145,17 +145,17 @@ where
                 }
                 Arc::new(t.as_typed().clone())
             }
-            TriggerRef::Def(addr) => {
+            Trigger::Def(addr) => {
                 let DefStatus::Defined(def) = self.def_status(addr) else {
-                    return Err(RuleError::DefTriggerUnregistered(addr.clone()));
+                    return Err(RuleError::DanglingDefTrigger(addr.clone()));
                 };
-                if def.gamma.len() != 1 {
+                if def.params().len() != 1 {
                     return Err(RuleError::BadTriggerArity);
                 }
                 if def.result != Sort::Bool {
                     return Err(RuleError::TriggerNotBoolean);
                 }
-                let s = def.gamma[0].1;
+                let s = def.params()[0].1;
                 if s != elem {
                     // A Def signature is Codom-only, so a Tup domain lands
                     // here — the remediation is an Inline trigger.
@@ -209,7 +209,7 @@ where
     /// registration, so any snapshot serves.
     fn trigger_true(&self, rule: &CheckedRule, elem: &Elem, snap: &Snapshot<W>) -> bool {
         let cx = self.eval_ctx(snap.world(), rule.view, Some(self));
-        let env = Env::empty().bind(rule.trigger.gamma[0].0.clone(), elem.value());
+        let env = Env::empty().bind(rule.trigger.params()[0].0.clone(), elem.value());
         truthy(eval_term(&cx, &env, rule.trigger.evaluable.as_ref()))
     }
 
@@ -291,13 +291,14 @@ where
 
     // ───────────────────────────── the scheduler ─────────────────────────────
 
-    /// PEEK an enabled `(ρ, x)` — a pure candidate query in registration
-    /// order; it cannot advance the rotation cursor, so it is not itself
-    /// "fair" (weak fairness is a property of the `&mut self` `step` loop).
-    pub fn next_enabled(&self, snap: &Snapshot<W>) -> Option<Enabled> {
-        self.rules
-            .iter()
-            .find_map(|r| self.first_enabled(r, snap).map(|e| Enabled { rule: r.id, arg: e.value() }))
+    /// PEEK an enabled occurrence `(ρ, x)` at `snap` — a pure candidate query
+    /// in registration order; it cannot advance the rotation cursor, so it is
+    /// not itself "fair" (weak fairness is a property of the `&mut self`
+    /// `step` loop).
+    pub fn next_enabled(&self, snap: &Snapshot<W>) -> Option<Occurrence> {
+        self.rules.iter().find_map(|r| {
+            self.first_enabled(r, snap).map(|e| Occurrence { rule: r.id, arg: e.value() })
+        })
     }
 
     /// The fire executor: pin a fresh snapshot; re-check `x ∈ [D_ρ]` (out ⇒
@@ -327,11 +328,11 @@ where
     /// `Err(Emit | Nullify)`.
     ///
     /// PRECONDITION: `e.rule` is a `RuleId` this `Coordinator` registered —
-    /// an `Enabled` comes from this coordinator's own `next_enabled`, or is
-    /// aimed by hand at a known rule; an unregistered id is a precondition
+    /// an `Occurrence` comes from this coordinator's own `next_enabled`, or
+    /// is aimed by hand at a known rule; an unregistered id is a precondition
     /// violation and PANICS, like `decide` (`fire_count`, a monitor, answers
     /// 0 for the same id — a count, not a fire).
-    pub fn fire(&self, e: &Enabled) -> Result<FireOutcome, FireError> {
+    pub fn fire(&self, e: &Occurrence) -> Result<FireOutcome, FireError> {
         let rule = self
             .rules
             .iter()
@@ -443,8 +444,8 @@ where
             };
             self.cursor = (idx + 1) % n; // rotate past, success or failure
             let arg = elem.key_addr();
-            let enabled = Enabled { rule: id, arg: elem.value() };
-            return match self.fire(&enabled) {
+            let occurrence = Occurrence { rule: id, arg: elem.value() };
+            return match self.fire(&occurrence) {
                 Ok(FireOutcome::Fired { effect, seq }) => {
                     StepOutcome::Fired { rule: id, arg, effect, seq }
                 }
@@ -525,7 +526,7 @@ where
             .iter()
             .map(|r| {
                 Analyzer { catalog: &self.catalog, view: r.view, widen: false }
-                    .term(&self.trigger_flat(&r.trigger))
+                    .term(&self.trigger_expansion(&r.trigger))
                     .fp
             })
             .collect();

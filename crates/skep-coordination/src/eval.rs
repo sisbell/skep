@@ -341,7 +341,7 @@ pub(crate) fn eval_term<W>(cx: &EvalCtx<'_, W>, env: &Env, t: &Term) -> Value {
                 .resolve_def(addr)
                 .expect("WT-ref: every referent of a checked body has a defined signature");
             let mut inner = Env::empty();
-            for ((v, _), arg) in referent.gamma.iter().zip(args.iter()) {
+            for ((v, _), arg) in referent.params().iter().zip(args.iter()) {
                 let val = eval_term(cx, env, arg);
                 inner = inner.bind(v.clone(), val);
             }
@@ -551,7 +551,7 @@ pub(crate) fn enum_dom<W>(cx: &EvalCtx<'_, W>, env: &Env, d: &Dom) -> Vec<Elem> 
             }
             out.iter().map(|t| Elem::Addr(lift(t))).collect()
         }
-        Dom::Reg => unreachable!("no Reg domain survives type_check's expansion/folding"),
+        Dom::Reg => unreachable!("no Reg domain survives type_check's Reg-expansion/folding"),
         Dom::Filter { dom, var, pred } => enum_dom(cx, env, dom)
             .into_iter()
             .filter(|e| truthy(eval_term(cx, &env.bind(var.clone(), e.value()), pred)))

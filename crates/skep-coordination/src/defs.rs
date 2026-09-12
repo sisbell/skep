@@ -13,16 +13,16 @@ use skep_kernel::{Seq, Snapshot, WorldState};
 use skep_links::{Caller, HasLinks, LinkRec, Pattern, ShippedType, Tip, View};
 use skep_namespace::{HasM3, M3Rec};
 
-use crate::ast::{collect_ref_addrs, Term, VarId};
+use crate::ast::{collect_ref_addrs, Term};
 use crate::check::TypedTerm;
 use crate::codec;
 use crate::coordinator::Coordinator;
 use crate::dynamics::{view_independent, Analyzer};
 use crate::error::{CertifyError, DefineError, EvalError, RegisterError, RetractError};
 use crate::eval::eval_term;
-use crate::expand::Flattener;
+use crate::expand::Expander;
 use crate::memo::DefStatus;
-use crate::value::{value_sort, Env, Sort, Value};
+use crate::value::{value_sort, Env, SignedTerm, Sort, Value};
 
 /// Why a stored def could not be read back as a signed term: no `Val` at the
 /// start, or bytes the PR-ENC codec rejects.
@@ -35,10 +35,7 @@ pub(crate) enum ParseFail {
 /// content read M9 makes (M4 `value_at`), off the world of a pinned
 /// snapshot. The parse consumes exactly the run (the codec's envelope
 /// check), so a resident, well-formed def is exactly what was encoded.
-pub(crate) fn parse_def<W: HasContent>(
-    w: &W,
-    start: &Address,
-) -> Result<(Vec<(VarId, Sort)>, Term), ParseFail> {
+pub(crate) fn parse_def<W: HasContent>(w: &W, start: &Address) -> Result<SignedTerm, ParseFail> {
     let val = w.content().value_at(start.tumbler()).ok_or(ParseFail::NotResident)?;
     codec::decode(val.as_bytes()).map_err(|_| ParseFail::Malformed)
 }
@@ -84,7 +81,7 @@ where
     /// `register_pred`-stage failure leaves harmless orphan content a later
     /// `register_pred(d, start)` adopts.
     pub fn define_predicate(&self, d: &Address, term: TypedTerm) -> Result<(Address, Seq), DefineError> {
-        let blob = codec::encode(term.params(), term.source_body())
+        let blob = codec::encode(&term.signed)
             .expect("type_check admits no Tup parameter, and TypedTerm has no other public constructor");
         // Insert position off a snapshot read; M5's insert re-validates
         // against committed state (benign TOCTOU — item 6).
@@ -114,13 +111,13 @@ where
         let snap = self.kernel.snapshot();
         let w = snap.world();
         // (0/i/ii) one Val, residence + extent + fully consumed.
-        let (params, body) = parse_def(w, start).map_err(|e| match e {
+        let signed = parse_def(w, start).map_err(|e| match e {
             ParseFail::NotResident => RegisterError::NotResident,
             ParseFail::Malformed => RegisterError::ParseFailed,
         })?;
         // (iii) every referent ever-registered at σ.
         let mut refs = Vec::new();
-        collect_ref_addrs(&body, &mut refs);
+        collect_ref_addrs(&signed.body, &mut refs);
         if let Some(r) = refs.iter().find(|r| !self.ever_registered(w, r)) {
             return Err(RegisterError::ReferentNotEverRegistered(r.clone()));
         }
@@ -128,7 +125,7 @@ where
         // calls pin their own snapshots — sound: the σ ever-gate ran first,
         // ever-registration is monotone, signature facts are
         // content-intrinsic).
-        let entry = self.check_under(params, body, 0).map_err(RegisterError::IllTyped)?;
+        let entry = self.check_under(signed, 0).map_err(RegisterError::IllTyped)?;
         // (iv) endorsement: every referent ACTIVELY registered at σ.
         let pdef = self.catalog.reserved(ShippedType::PredDef);
         if let Some(r) = refs.iter().find(|r| !w.links().is_k(pdef, r.tumbler())) {
@@ -174,13 +171,13 @@ where
             DefStatus::Poisoned => return Err(EvalError::UndisciplinedDef),
             // Ever at the caller's snap but not at the memo's own fresh pin
             // cannot happen (ever-registration is monotone); defensive.
-            DefStatus::Unregistered => return Err(EvalError::NotEverRegistered),
+            DefStatus::NeverRegistered => return Err(EvalError::NotEverRegistered),
         };
-        if args.len() != entry.gamma.len() {
+        if args.len() != entry.params().len() {
             return Err(EvalError::ArgArityMismatch);
         }
         let mut env = Env::empty();
-        for (arg, (v, s)) in args.iter().zip(entry.gamma.iter()) {
+        for (arg, (v, s)) in args.iter().zip(entry.params().iter()) {
             if value_sort(arg) != *s {
                 return Err(EvalError::ArgSortMismatch);
             }
@@ -254,7 +251,7 @@ where
         let entry = match self.def_status(start) {
             DefStatus::Defined(e) => e,
             DefStatus::Poisoned => return Err(CertifyError::UndisciplinedDef),
-            DefStatus::Unregistered => return Err(CertifyError::NotEverRegistered),
+            DefStatus::NeverRegistered => return Err(CertifyError::NotEverRegistered),
         };
         if entry.result != Sort::Bool {
             return Err(CertifyError::NotBoolean);
@@ -262,7 +259,7 @@ where
         if !self.is_active_pred(start, &snap) {
             return Err(CertifyError::NotActive);
         }
-        let flat = self.flatten_entry(&entry);
+        let flat = self.expand_def(&entry);
         if !view_independent(&flat) {
             return Err(CertifyError::ViewDependent);
         }
@@ -312,10 +309,10 @@ where
         Ok((r, seq))
     }
 
-    /// The flat `expand(start)` of a checked (memo-held) def — one
-    /// `Flattener` per top-level expansion, so the fresh-name sequence is
+    /// The flat `expand(start)` of a checked def, given its memo entry — one
+    /// `Expander` per top-level expansion, so the fresh-name sequence is
     /// deterministic in the content alone (PR3).
-    pub(crate) fn flatten_entry(&self, entry: &TypedTerm) -> Term {
-        Flattener::new(self).flatten(entry.evaluable.as_ref())
+    pub(crate) fn expand_def(&self, entry: &TypedTerm) -> Term {
+        Expander::new(self).expand(entry.evaluable.as_ref())
     }
 }

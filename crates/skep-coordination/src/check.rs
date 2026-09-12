@@ -13,20 +13,21 @@ use skep_links::Behavior;
 use crate::ast::{ArcDom, ArcTerm, Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId};
 use crate::catalog::{CatalogEntry, TypeCatalog};
 use crate::error::TypeError;
-use crate::value::{Signature, Sort};
+use crate::value::{Signature, SignedTerm, Sort};
 use crate::walk::{rewrite_term, Rewrite};
 use skep_address::Nat;
 
 /// The post-type-check form — the ONE checked-term shape in the crate: what
 /// `type_check` hands back, what a stored def's memo entry holds, what a
-/// rule's trigger is captured as. Carries Γ_D (read back via
-/// [`TypedTerm::params`] / [`TypedTerm::result_sort`]), the ref-free flag,
-/// the original pre-`Reg`-expansion syntactic body
-/// ([`TypedTerm::source_body`] — the compact canonical form
-/// `define_predicate` encodes, §Internal 4), and the expanded evaluable
-/// projection (every `TypeRef` `Concrete`, no surviving `Reg` quantifier).
-/// Deliberately carries NO view (PR-VIEW): the view is an evaluation/
-/// classification parameter, never a term annotation.
+/// rule's trigger is captured as. Carries the signed term — Γ_D and the
+/// compact pre-`Reg`-expansion body, read back via [`TypedTerm::params`] /
+/// [`TypedTerm::source_body`], the form `define_predicate` encodes
+/// (§Internal 4) — the synthesized codomain ([`TypedTerm::result_sort`]),
+/// the ref-free flag, and the Reg-expanded evaluable projection (every
+/// `TypeRef` `Concrete`, no surviving `Reg` quantifier — `Ref` nodes may
+/// remain: see [`TypedTerm::is_ref_free`]). Deliberately carries NO view
+/// (PR-VIEW): the view is an evaluation/classification parameter, never a
+/// term annotation.
 ///
 /// Every `TypedTerm` a caller can hold came through `type_check`, whose Γ_D
 /// is Codom-only (ASN-0130 SignedTerm): the type has no other public
@@ -35,9 +36,8 @@ use skep_address::Nat;
 /// `TypedTerm` and store it without a tuple check of its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedTerm {
-    pub(crate) gamma: Vec<(VarId, Sort)>,
+    pub(crate) signed: SignedTerm,
     pub(crate) result: Sort,
-    pub(crate) source: Term,
     pub(crate) evaluable: ArcTerm,
     pub(crate) ref_free: bool,
 }
@@ -45,7 +45,7 @@ pub struct TypedTerm {
 impl TypedTerm {
     /// Γ_D — the ordered free-parameter context this term was checked under.
     pub fn params(&self) -> &[(VarId, Sort)] {
-        &self.gamma
+        &self.signed.params
     }
 
     /// C_D — the synthesized codomain sort.
@@ -60,14 +60,15 @@ impl TypedTerm {
     }
 
     /// The original pre-`Reg`-expansion syntactic body (`Reg`-quantifiers and
-    /// `ClassVar` refs intact) — distinct from the expanded evaluable tree.
+    /// `ClassVar` refs intact) — distinct from the Reg-expanded evaluable
+    /// tree.
     pub fn source_body(&self) -> &Term {
-        &self.source
+        &self.signed.body
     }
 
     /// `(Γ_D, C_D)` — the term's signature (PR-SIG).
     pub(crate) fn signature(&self) -> Signature {
-        Signature { params: self.gamma.clone(), result: self.result }
+        Signature { params: self.signed.params.clone(), result: self.result }
     }
 }
 
@@ -84,7 +85,7 @@ impl TriggerTerm {
     /// The one parameter — `register_rule` reconciles its sort with the
     /// domain's element sort.
     pub fn param(&self) -> &(VarId, Sort) {
-        &self.0.gamma[0]
+        &self.0.params()[0]
     }
 
     /// False iff any `Ref` node survives — `register_rule` requires it true
@@ -95,7 +96,7 @@ impl TriggerTerm {
 
     /// The original pre-`Reg`-expansion syntactic body.
     pub fn source_body(&self) -> &Term {
-        &self.0.source
+        self.0.source_body()
     }
 
     /// The checked term beneath — the shape the rule engine captures.

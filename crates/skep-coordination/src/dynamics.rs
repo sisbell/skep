@@ -127,6 +127,14 @@ pub(crate) struct Analysis {
     pub(crate) grow: bool,
 }
 
+/// A domain's analysis: its footprint and its membership in PD0's grow-only
+/// closure — the two facts the quantifier, fold and `Filter` rules read of a
+/// domain, and the certification lint's leg (c).
+pub(crate) struct DomAnalysis {
+    pub(crate) fp: Footprint,
+    pub(crate) grow: bool,
+}
+
 fn constant(fp: Footprint) -> Analysis {
     let c = fp.is_empty();
     Analysis { fp, st: c, sf: c, grow: c }
@@ -156,7 +164,7 @@ fn effective_collection_view(view: View) -> View {
 fn key(tr: &TypeRef) -> &TypeKey {
     match tr {
         TypeRef::Concrete(k) => k,
-        TypeRef::ClassVar(_) => unreachable!("post-expansion trees hold only Concrete TypeRefs"),
+        TypeRef::ClassVar(_) => unreachable!("post-Reg-expansion trees hold only Concrete TypeRefs"),
     }
 }
 
@@ -236,12 +244,12 @@ impl Analyzer<'_> {
             // step-constant D strengthens both directions; a grow-only D gives
             // ∃/ST (a witness persists) and ∀/SF (a counterexample persists).
             Term::Forall { dom, body, .. } | Term::Exists { dom, body, .. } => {
-                let (dfp, dgrow) = self.dom(dom);
+                let ad = self.dom(dom);
                 let ab = self.term(body);
-                let step_const = dfp.is_empty();
+                let step_const = ad.fp.is_empty();
                 let (st, sf) = if step_const {
                     (ab.st, ab.sf)
-                } else if dgrow {
+                } else if ad.grow {
                     match t {
                         Term::Forall { .. } => (false, ab.sf),
                         _ => (ab.st, false),
@@ -249,7 +257,7 @@ impl Analyzer<'_> {
                 } else {
                     (false, false)
                 };
-                let fp = dfp.union(&ab.fp);
+                let fp = ad.fp.union(&ab.fp);
                 Analysis { st, sf, grow: fp.is_empty(), fp }
             }
             Term::Let { bound, body, .. } => {
@@ -279,27 +287,24 @@ impl Analyzer<'_> {
                     fp,
                 }
             }
-            Term::Count(d) | Term::MaxT1(d) | Term::MinT1(d) => {
-                let (dfp, _) = self.dom(d);
-                constant(dfp)
-            }
+            Term::Count(d) | Term::MaxT1(d) | Term::MinT1(d) => constant(self.dom(d).fp),
             // ⋃(D, f) with D grow-only and f step-constant per binding is
             // grow-only (the derived closure form).
             Term::BigUnion { dom, body, .. } => {
-                let (dfp, dgrow) = self.dom(dom);
+                let ad = self.dom(dom);
                 let ab = self.term(body);
-                let fp = dfp.union(&ab.fp);
-                let grow = fp.is_empty() || (dgrow && ab.fp.is_empty());
+                let fp = ad.fp.union(&ab.fp);
+                let grow = fp.is_empty() || (ad.grow && ab.fp.is_empty());
                 Analysis { st: fp.is_empty(), sf: fp.is_empty(), grow, fp }
             }
             // Reflect(D)'s footprint is D's; its value grows iff D does.
             Term::Reflect(d) => {
-                let (dfp, dgrow) = self.dom(d);
-                let empty = dfp.is_empty();
-                Analysis { grow: empty || dgrow, st: empty, sf: empty, fp: dfp }
+                let ad = self.dom(d);
+                let empty = ad.fp.is_empty();
+                Analysis { grow: empty || ad.grow, st: empty, sf: empty, fp: ad.fp }
             }
             Term::Ref { .. } => unreachable!(
-                "classification precondition: ref-free input (an inline trigger's projection or a flattened expand)"
+                "classification precondition: ref-free input (an inline trigger's projection or a flat expansion)"
             ),
         }
     }
@@ -416,14 +421,12 @@ impl Analyzer<'_> {
                 let mut sf = false;
                 if let Term::Count(d) = &**x {
                     if threshold_ok(y, self.widen) {
-                        let (_, g) = self.dom(d);
-                        sf |= g; // count(D) ≤ c: upper bound, false-stable
+                        sf |= self.dom(d).grow; // count(D) ≤ c: upper bound, false-stable
                     }
                 }
                 if let Term::Count(d) = &**y {
                     if threshold_ok(x, self.widen) {
-                        let (_, g) = self.dom(d);
-                        st |= g; // c ≤ count(D): lower bound, true-stable
+                        st |= self.dom(d).grow; // c ≤ count(D): lower bound, true-stable
                     }
                 }
                 let fp = ax.fp.union(&ay.fp);
@@ -445,33 +448,34 @@ impl Analyzer<'_> {
         }
     }
 
-    /// Domain analysis: (footprint, grow-only). The grow-only closure (PD0):
-    /// `L_K`; `L_dom`; `M_K` in an audit-view term; `Filter{D, P}` with D
-    /// grow-only and P ∈ ST per binding; a step-constant domain; `SetTerm` of
-    /// a grow-only set-valued term.
-    pub(crate) fn dom(&self, d: &Dom) -> (Footprint, bool) {
+    /// Domain analysis: the footprint and grow-only membership. The grow-only
+    /// closure (PD0): `L_K`; `L_dom`; `M_K` in an audit-view term;
+    /// `Filter{D, P}` with D grow-only and P ∈ ST per binding; a
+    /// step-constant domain; `SetTerm` of a grow-only set-valued term.
+    pub(crate) fn dom(&self, d: &Dom) -> DomAnalysis {
         match d {
-            Dom::MembersDom(tr) => {
-                let fp = self.slice_fp(key(tr), self.view);
-                (fp, self.view == View::Audit)
+            Dom::MembersDom(tr) => DomAnalysis {
+                fp: self.slice_fp(key(tr), self.view),
+                grow: self.view == View::Audit,
+            },
+            Dom::ActiveSlice(tr) => {
+                DomAnalysis { fp: self.slice_fp(key(tr), View::Active), grow: false }
             }
-            Dom::ActiveSlice(tr) => (self.slice_fp(key(tr), View::Active), false),
-            Dom::AuditSlice(tr) => (self.slice_fp(key(tr), View::Audit), true),
+            Dom::AuditSlice(tr) => DomAnalysis { fp: self.slice_fp(key(tr), View::Audit), grow: true },
             Dom::LinkDom => {
-                let fp = Footprint { all_audit: true, ..Footprint::default() };
-                (fp, true)
+                DomAnalysis { fp: Footprint { all_audit: true, ..Footprint::default() }, grow: true }
             }
-            Dom::Reg => unreachable!("no Reg domain survives type_check's expansion/folding"),
+            Dom::Reg => unreachable!("no Reg domain survives type_check's Reg-expansion/folding"),
             Dom::Filter { dom, pred, .. } => {
-                let (dfp, dgrow) = self.dom(dom);
+                let ad = self.dom(dom);
                 let ap = self.term(pred);
-                let grow = (dgrow && ap.st) || (dfp.is_empty() && ap.fp.is_empty());
-                (dfp.union(&ap.fp), grow)
+                let grow = (ad.grow && ap.st) || (ad.fp.is_empty() && ap.fp.is_empty());
+                DomAnalysis { fp: ad.fp.union(&ap.fp), grow }
             }
             Dom::SetTerm(t) => {
                 let at = self.term(t);
                 let grow = at.grow || at.fp.is_empty();
-                (at.fp, grow)
+                DomAnalysis { fp: at.fp, grow }
             }
         }
     }
@@ -505,7 +509,7 @@ pub(crate) fn view_independent(t: &Term) -> bool {
                     | Atom::Stale(..),
                 ) => self.ok = false,
                 Term::Ref { .. } => unreachable!(
-                    "classification precondition: ref-free input (an inline trigger's projection or a flattened expand)"
+                    "classification precondition: ref-free input (an inline trigger's projection or a flat expansion)"
                 ),
                 _ => visit_term(self, t),
             }

@@ -250,7 +250,7 @@ pub(crate) fn collect_ref_addrs(t: &Term, out: &mut Vec<Address>) {
     RefAddrs(out).term(t);
 }
 
-/// A body spelling every former, atom, prim, domain, literal and type
+/// A signed term spelling every former, atom, prim, domain, literal and type
 /// position, with every encodable sort in Γ_D — the input the codec's round
 /// trip and the walks' agreement are checked on. It need not type-check: the
 /// codec and the walks are structural.
@@ -262,7 +262,7 @@ pub(crate) mod fixture {
     use skep_links::enc;
 
     use super::*;
-    use crate::value::Sort;
+    use crate::value::{SignedTerm, Sort};
 
     fn v(x: u32) -> VarId {
         VarId::new(x).expect("test var below the watershed")
@@ -281,7 +281,7 @@ pub(crate) mod fixture {
         Arc::new(x)
     }
 
-    pub(crate) fn every_former() -> (Vec<(VarId, Sort)>, Term) {
+    pub(crate) fn every_former() -> SignedTerm {
         let k = TypeRef::Concrete(TypeKey(enc(&[ad(&[1, 1, 0, 1, 0, 1, 0, 1, 1])])));
         let c = TypeRef::ClassVar(v(9));
         let x = || Term::Var(v(1));
@@ -372,6 +372,6 @@ pub(crate) mod fixture {
             (v(7), Sort::Nat),
             (v(8), Sort::OptNat),
         ];
-        (params, body)
+        SignedTerm { params, body }
     }
 }

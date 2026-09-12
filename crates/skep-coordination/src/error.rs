@@ -142,9 +142,10 @@ pub enum RuleError {
     /// A `Def` trigger whose def's codomain ≠ Bool (a `TriggerTerm` is Bool
     /// by type).
     TriggerNotBoolean,
-    /// `TriggerRef::Def` addr has no defined signature (never-registered or
-    /// undisciplined).
-    DefTriggerUnregistered(Address),
+    /// `Trigger::Def` names an address with no defined signature —
+    /// never-registered, or ever-registered-but-undisciplined (§Internal 4):
+    /// the rule-level twin of `TypeError::DanglingReference`.
+    DanglingDefTrigger(Address),
     /// A `Def` trigger whose def is not single-parameter (a `TriggerTerm`
     /// binds exactly one by type).
     BadTriggerArity,

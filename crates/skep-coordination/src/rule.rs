@@ -16,14 +16,16 @@ use crate::value::Value;
 #[derive(Debug, Clone)]
 pub struct Rule {
     pub domain: Dom,
-    pub trigger: TriggerRef,
+    pub trigger: Trigger,
     pub view: View,
     pub action: FireAction,
 }
 
-/// The trigger: a one-parameter Bool predicate over the domain element sort.
+/// The rule's trigger `T_ρ` — a one-parameter Bool predicate over the domain
+/// element sort — as the submission gives it: inline, as a checked
+/// `TriggerTerm`, or by the content start of a stored def.
 #[derive(Debug, Clone)]
-pub enum TriggerRef {
+pub enum Trigger {
     /// Built via `type_check_trigger` (may bind one `Tup`); MUST be ref-free
     /// (`register_rule` rejects otherwise — `RuleError::RefBearingInlineTrigger`).
     Inline(TriggerTerm),
@@ -68,12 +70,14 @@ pub enum ScopeBody {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RuleId(pub(crate) u64);
 
-/// A peeked enabled occurrence `(ρ, x)`; `arg` is `Value::Addr` for an
-/// `Addr`-domain rule, `Value::Tuple` for a `Tup`-domain rule (the trigger/
-/// atom dispatch consumes the whole tuple; only the bookkeeping projects to
-/// the address).
+/// An occurrence `(ρ, x)`: a rule and a candidate argument. Enabled only
+/// relative to a snapshot — `next_enabled` peeks one that is; `fire`
+/// re-checks on its own pin and answers `NoOp` if it no longer is. `arg` is
+/// `Value::Addr` for an `Addr`-domain rule, `Value::Tuple` for a `Tup`-domain
+/// rule (the trigger/atom dispatch consumes the whole tuple; only the
+/// bookkeeping projects to the address).
 #[derive(Debug, Clone, PartialEq)]
-pub struct Enabled {
+pub struct Occurrence {
     pub rule: RuleId,
     pub arg: Value,
 }

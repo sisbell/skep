@@ -257,7 +257,7 @@ mod tests {
                 visit_term(self, t)
             }
         }
-        let (_, body) = every_former();
+        let body = every_former().body;
         let mut id = Identity(0);
         assert_eq!(id.term(&body), body);
         let mut count = Count(0);

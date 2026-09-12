@@ -585,6 +585,85 @@ impl Op {
             | Op::EditionClaims { .. } => Vec::new(),
         }
     }
+
+    /// The WRITE DESTINATIONS whose ownership stands AHEAD of the door's
+    /// consult (PUB-6.36 slot 1, PUB-6.38 — see [`Operation::consult_write`]):
+    /// `Some` for exactly the writes the consult reaches — a source-reading
+    /// write or one validating a link by address — listing the documents the
+    /// store's own `not_owner` is judged on; `Some(empty)` for `version`,
+    /// whose mint lands in the caller's own account and which no destination
+    /// gate precedes (MINT-FIRST is the daemon's, slot 2); `None` for a write
+    /// with nothing to consult and for every read. `nullify` is `None` on
+    /// purpose: its target takes PUB-6.9's ω-first order and the slot-5
+    /// nullify-class refusals (lane 3.5), not this consult. `emit`'s endpoints
+    /// are address-form (PUB-6.11) and `publish`'s source gate is the
+    /// composite's own, threaded per origin (PUB-8.1). EXHAUSTIVE with no `_`
+    /// arm: a new `Op` decides its row here.
+    ///
+    /// THE ENCODING IS LOUD, because the two answers differ in what they let
+    /// the door do and both compile: `None` means the door consults NOTHING
+    /// for this op and returns before [`Op::source_arguments`] is read;
+    /// `Some(empty)` means the op IS consulted and the deferral has no
+    /// destination to defer on. So a write that reads a source must never
+    /// answer `None` — that pairing would hand the source to the store with
+    /// no readability gate, PUB-6.23 silently unapplied — and the two lists
+    /// are pinned against each other over the whole `Op` domain in this
+    /// module's tests rather than left to agree by hand.
+    ///
+    /// `pub(crate)`, where its two siblings are public, and deliberately: a
+    /// historical door re-runs [`Op::doc_arguments`] over the head (PUB-6.49)
+    /// and a transport may read [`Op::source_arguments`] before dispatch, but
+    /// nothing outside M10 re-runs the DEFERRAL, which exists to decide when
+    /// M10's own door stays silent so the store speaks first. Publishing it
+    /// would invite a transport to rebuild the slot-1-before-slot-6 ordering
+    /// M10 holds.
+    ///
+    /// [`Operation::consult_write`]: crate::Operation
+    pub(crate) fn consulted_destinations(&self) -> Option<Vec<&Address>> {
+        match self {
+            Op::Copy { doc, .. } => Some(vec![doc]),
+            Op::Version { .. } => Some(Vec::new()),
+            Op::MakeLink { home, .. } => Some(vec![home]),
+            Op::AssertSup { home, .. } => Some(vec![home]),
+            Op::EditLink { d_s, d_a, .. } => Some(vec![d_s, d_a]),
+            Op::CreateNewDocument { .. }
+            | Op::Delegate { .. }
+            | Op::RegisterNode { .. }
+            | Op::Fork { .. }
+            | Op::Insert { .. }
+            | Op::Delete { .. }
+            | Op::Rearrange { .. }
+            | Op::Publish { .. }
+            | Op::Emit { .. }
+            | Op::Nullify { .. }
+            | Op::NextAccountPrefix { .. }
+            | Op::PrincipalPrefix { .. }
+            | Op::ReadLink { .. }
+            | Op::FollowLink { .. }
+            | Op::RetrieveV { .. }
+            | Op::RetrieveDocVSpan { .. }
+            | Op::RetrieveDocVSpanSet { .. }
+            | Op::ShowOrigin { .. }
+            | Op::ShowDeletions { .. }
+            | Op::Compare { .. }
+            | Op::FindDocsContaining { .. }
+            | Op::Image { .. }
+            | Op::FindLinksV { .. }
+            | Op::FindLinksFtt { .. }
+            | Op::CountV { .. }
+            | Op::CountFtt { .. }
+            | Op::WindowV { .. }
+            | Op::WindowFtt { .. }
+            | Op::RetrieveEndsets { .. }
+            | Op::Project { .. }
+            | Op::DiscoverableFrom { .. }
+            | Op::DeleteOrphans { .. }
+            | Op::InClaims { .. }
+            | Op::OutClaims { .. }
+            | Op::DocMetadata { .. }
+            | Op::EditionClaims { .. } => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -821,5 +900,58 @@ pub(crate) mod tests {
                 );
             assert_eq!(reads_a_source, expects, "{:?}: the source-reading-writes row", op.kind());
         }
+    }
+
+    /// PUB-6.23 at the pairing of the two lists, which is where it can
+    /// silently fail. The door reads `consulted_destinations` FIRST and
+    /// returns on `None` without ever reading `source_arguments`, so the two
+    /// are jointly load-bearing: a write that declares a source and answers
+    /// `None` hands that source to its store with no readability gate, and
+    /// both matches being exhaustive means the compiler forces two
+    /// independent decisions and accepts the wrong pairing. The law is that
+    /// pairing — a declared source implies a consult — plus the two arms of
+    /// the `Option`'s own encoding, which differ in what they let the door do
+    /// and are likewise both well-typed.
+    #[test]
+    fn a_write_that_reads_a_source_is_always_consulted() {
+        for (op, is_read) in all_ops() {
+            let declares_a_source = !op.source_arguments().is_empty();
+            let consulted = op.consulted_destinations().is_some();
+            assert!(
+                !declares_a_source || consulted,
+                "{:?} declares a source and answers `None`: its sources reach the store ungated",
+                op.kind()
+            );
+            assert!(
+                !is_read || !consulted,
+                "{:?} is a read: the write door's consult is not its",
+                op.kind()
+            );
+        }
+
+        // `Some(empty)`: consulted, with no destination to defer on — the
+        // mint lands in the caller's own account (MINT-FIRST is the daemon's).
+        let version = Op::Version { d_src: doc(), published: None };
+        assert_eq!(
+            version.consulted_destinations().expect("version is consulted").len(),
+            0,
+            "an empty destination list is not the same answer as `None`"
+        );
+        // `Some(non-empty)`: the documents the store's own `not_owner` is
+        // judged on, which is what the door defers to.
+        let a = addr(&[1, 0, 1, 0, 1]);
+        let b = addr(&[1, 0, 1, 0, 2]);
+        let edit = Op::EditLink {
+            original: a.clone(),
+            successor: SuccessorSpec { from: vec![], to: vec![], ty: SlotArg::Addrs(vec![a.clone()]) },
+            d_s: a.clone(),
+            d_a: b.clone(),
+        };
+        assert_eq!(edit.consulted_destinations(), Some(vec![&a, &b]), "both written homes");
+        // `None`: a write with nothing to consult — no source, no
+        // link-address argument.
+        let insert =
+            Op::Insert { doc: doc(), at: vpos(), values: vec![Val::new(vec![1u8])], deposit: false };
+        assert!(insert.consulted_destinations().is_none());
     }
 }

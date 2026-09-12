@@ -251,7 +251,7 @@ fn the_to_range_is_the_target_s_subtree() {
 /// address-form slots, where the two readings agree on every row.
 ///
 /// The distinction is the containment the lookup exists for, and it is what
-/// M10's `ReadableWorld::edition_claims` describes the other way round. A
+/// M10's `PublicationWorld::edition_claims` describes the other way round. A
 /// narrowing of this side to match that text drops a whole class of claim
 /// from every reader's answer, and this is the row that would go with it.
 #[test]

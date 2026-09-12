@@ -19,9 +19,9 @@
 //! a closure and names no principal.
 //!
 //! The `skep_febe::ReadableWorld` impl below is the seam M10's generic front
-//! door reaches all of this through: M10 names no `World`, so it asks the
-//! trait, off its own read snapshot, and applies the home rule (PUB-6.13) per
-//! result row itself. The inherent methods are the real ones.
+//! door reaches the predicate through: M10 names no `World`, so it asks the
+//! trait, off its own read snapshot, and closes the answer over a caller
+//! itself. The inherent methods are the real ones.
 
 use skep_address::Address;
 use skep_arrangement::{trunk_of, Caller};
@@ -164,25 +164,5 @@ impl World {
 impl skep_febe::ReadableWorld for World {
     fn readable(&self, principal: Option<PrincipalId>, doc: &Address) -> bool {
         World::readable(self, principal, doc)
-    }
-
-    /// The audit-view edition-claim lookup (PUB-8.46; lane 3.4, §2) —
-    /// [`World::edition_claims`], the engine's composition of M7's audit
-    /// reads over the pinned edition class (`crate::editions`); M10 applies
-    /// the home rule per row, off its own snapshot.
-    ///
-    /// The `to` test this implementation applies is M7's OVERLAP regime
-    /// against `target`'s subtree, which is WIDER than denotation: a claim
-    /// whose `to` slot is a non-unit span across the subtree denotes no
-    /// address in it and is still a row. That width is the containment the
-    /// lookup is for — it is what makes a document name its versions' claims
-    /// — and it is the same arithmetic at every tier, so a caller sizing this
-    /// answer reads `World::edition_claims`'s cost and not the word
-    /// "denotes". The type slot is the other way: class MEMBERSHIP there is
-    /// over every DENOTED address, so a slot that merely overlaps the class
-    /// range is refused. Membership is the whole of what a row is tested for
-    /// — no home, issuer or publication test runs on this side of the seam.
-    fn edition_claims(&self, target: &Address) -> Vec<skep_febe::EditionClaim> {
-        World::edition_claims(self, target)
     }
 }

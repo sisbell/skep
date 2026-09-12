@@ -346,8 +346,10 @@ impl HasLinks for World {
     }
 }
 
-// M10's `ReadableWorld` — the read predicate as a capability — is implemented
-// beside the predicate itself, in `crate::readable`.
+// M10's two publication seams are implemented beside the compositions they
+// answer: `ReadableWorld` — the read predicate as a capability — in
+// `crate::readable`, and `PublicationWorld` — the edition-claim lookup — in
+// `crate::editions`.
 
 // The record lifts — the write-side mirror of the accessors: stores return
 // their OWN record type and the caller lifts with `.into()` (contract hard

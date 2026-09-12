@@ -108,7 +108,12 @@
 //! `World`/`Record`, reaches upstream state only through the accessor traits
 //! ([`FebeWorld`] names all four) via one pinned snapshot per read, and
 //! acquires the three transact-driving store drivers per-op from the injected
-//! [`Stores`] factory. The `M10 → M4` edge names four types and calls no M4
+//! [`Stores`] factory. Two capabilities of that world are M10's own seams,
+//! and are two because they answer unrelated questions: [`ReadableWorld`],
+//! the read predicate every operation consults, and [`PublicationWorld`],
+//! the edition-claim class lookup one read asks.
+//!
+//! The `M10 → M4` edge names four types and calls no M4
 //! function (design, Conflicts resolved #4): `HasContent` is a [`FebeWorld`]
 //! supertrait and `ContentWrite` the record lift `Vstream::insert`'s bound
 //! requires, `Val` rides in `Op::Insert`'s payload, and `ContentError` is
@@ -213,7 +218,16 @@ pub trait ReadableWorld {
     /// `readable(doc, principal)` — the one predicate every read surface
     /// answers through. `None` ⟹ the guest (published documents only).
     fn readable(&self, principal: Option<PrincipalId>, doc: &Address) -> bool;
+}
 
+/// The publication VOCABULARY as a capability of the world M10 reads (PUB
+/// round 2, lane 3.4 §2): a class whose membership is decided by a pinned
+/// type address, which is the engine's knowledge and not this module's. Its
+/// own seam, beside [`ReadableWorld`] rather than inside it, because the two
+/// answer unrelated questions — one is a predicate consulted by all
+/// forty-one operations, this is a class lookup consulted by one — and each
+/// should be nameable by a consumer that wants only it.
+pub trait PublicationWorld {
     /// The audit-view edition-claim lookup (PUB-8.46; PUB round 2, lane 3.4
     /// §2): every link of the edition-claim class whose `to` slot denotes
     /// `target`, ADMITTED to the class (type slot address-denoting, every
@@ -231,18 +245,27 @@ pub trait ReadableWorld {
 /// The world the front door dispatches over: M2's fold contract plus every
 /// upstream accessor, since M10 reaches all four store slices — the widest
 /// bound set in the engine, and M10's own slice count is zero (Engine
-/// Composition Contract — no state, no record variant, no fold). The read
-/// predicate ([`ReadableWorld`]) joins the set for lane 3.3: every read builds
-/// its per-request `Fn(&Address) -> bool` off it.
+/// Composition Contract — no state, no record variant, no fold). The two
+/// publication seams join the set for PUB round 2: [`ReadableWorld`], off
+/// which every read builds its per-request `Fn(&Address) -> bool` (lane
+/// 3.3), and [`PublicationWorld`], which the edition-claim lookup asks
+/// (lane 3.4).
 ///
 /// Named for the reason M6 names `RetrievalWorld` and M7 `LinkWorld`: one word for
 /// the seam, so a consumer generic over the same world writes one bound
-/// rather than five. Blanket-implemented, so an engine that implements the
+/// rather than six. Blanket-implemented, so an engine that implements the
 /// accessors gets this for free; the record lift each write path needs
 /// (`W::Record: From<M3Rec>` and its three siblings) stays on the impl that
 /// requires it.
-pub trait FebeWorld: WorldState + HasM3 + HasM5 + HasLinks + HasContent + ReadableWorld {}
-impl<W: WorldState + HasM3 + HasM5 + HasLinks + HasContent + ReadableWorld> FebeWorld for W {}
+pub trait FebeWorld:
+    WorldState + HasM3 + HasM5 + HasLinks + HasContent + ReadableWorld + PublicationWorld
+{
+}
+impl<
+        W: WorldState + HasM3 + HasM5 + HasLinks + HasContent + ReadableWorld + PublicationWorld,
+    > FebeWorld for W
+{
+}
 
 /// The injected acquisition path for the three transact-driving store-driver
 /// handles (§Public interface). The binary/engine builds the one production

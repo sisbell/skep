@@ -1,6 +1,6 @@
 //! The audit-view EDITION-CLAIM lookup (PUB-8.46; PUB round 2, lane 3.4 §2)
 //! — the engine's composition of M7's audit reads over the R20 edition-claim
-//! class, answering M10's `ReadableWorld::edition_claims`.
+//! class, answering M10's `PublicationWorld::edition_claims`.
 //!
 //! An edition claim is an ORDINARY link (deposited through MAKELINK's open
 //! surface, address-form slots) whose type slot denotes the edition class —
@@ -138,6 +138,28 @@ impl World {
                 })
             })
             .collect()
+    }
+}
+
+/// The lookup as M10's capability (lane 3.4, §2): M10 is generic over its
+/// world and names no `World`, so it asks this seam — [`World::edition_claims`]
+/// above, the inherent method being the real one — and applies the home rule
+/// (PUB-6.13) per row, off its own snapshot.
+///
+/// The `to` test this implementation applies is M7's OVERLAP regime against
+/// `target`'s subtree, which is WIDER than denotation: a claim whose `to`
+/// slot is a non-unit span across the subtree denotes no address in it and is
+/// still a row. That width is the containment the lookup is for — it is what
+/// makes a document name its versions' claims — and it is the same arithmetic
+/// at every tier, so a caller sizing this answer reads
+/// [`World::edition_claims`]'s cost and not the word "denotes". The type slot
+/// is the other way: class MEMBERSHIP there is over every DENOTED address, so
+/// a slot that merely overlaps the class range is refused. Membership is the
+/// whole of what a row is tested for — no home, issuer or publication test
+/// runs on this side of the seam.
+impl skep_febe::PublicationWorld for World {
+    fn edition_claims(&self, target: &Address) -> Vec<EditionClaim> {
+        World::edition_claims(self, target)
     }
 }
 

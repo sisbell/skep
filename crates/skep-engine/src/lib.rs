@@ -59,7 +59,7 @@
 //!   module) — the audit-view `to`-range lookup over the R20 edition-claim
 //!   class (PUB-8.46, lane 3.4, §2), composed from M7's own audit reads over
 //!   a type address pinned beside the grants class; M10's
-//!   `ReadableWorld::edition_claims` reaches it and applies the home rule.
+//!   `PublicationWorld::edition_claims` reaches it and applies the home rule.
 //! * **The commons type pins** (the public [`types`] module) — every commons
 //!   type address the engine or the daemon keys on as a VALUE, in one ledger:
 //!   the grant and edition classes the two indexes above read, and the

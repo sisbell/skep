@@ -82,10 +82,13 @@ impl skep_febe::ReadableWorld for World {
     // Masking (published ∨ subtree ∨ grant) is the engine's predicate; this
     // miniature world carries no exception set or grant fold, and these suites
     // (lifecycle, coordinates, concurrency) are orthogonal to it — so every
-    // read is admitted.
+    // read is admitted. `source_gate.rs` supplies its own `Consult` instead,
+    // which is what a private draft looks like at this seam.
     fn readable(&self, _principal: Option<PrincipalId>, _doc: &Address) -> bool {
         true
     }
+}
+impl skep_febe::PublicationWorld for World {
     // The edition-claim class is the engine's composition (its pinned type
     // address lives there, beside the grant type); this miniature world
     // carries none, so the audit-view lookup answers the empty class.

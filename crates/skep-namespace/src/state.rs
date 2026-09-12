@@ -298,12 +298,12 @@ impl TryFrom<M3RecShadow> for M3Rec {
 ///
 /// Authoritative vs hint: `frontiers`/`nodes`/`principals`/`publication` are
 /// authoritative (the compressed allocation journal, and the per-document
-/// publication record beside it). The delegation forest, any
+/// publication map beside it). The delegation forest, any
 /// `address → owner` ω-cache, any `id → prefix` reverse index, and the
 /// exception set over `publication` are *hints* — recomputable from the
 /// authoritative fields alone — and are deliberately NOT stored here (Open
-/// build decisions: defaults taken; the exception set is lane 2.2's derived
-/// membership index).
+/// build decisions: defaults taken; the exception set is the engine's derived
+/// membership index, PUB-7.5).
 ///
 /// The `Serialize` impl targets bincode-class formats, M2's checkpoint
 /// encoding: `frontiers` is keyed by a struct, which formats requiring string
@@ -317,8 +317,9 @@ impl TryFrom<M3RecShadow> for M3Rec {
 /// mis-reading one field as another.
 ///
 /// Equality is structural, and it is the meaning of the type: two slices are
-/// equal iff their four registries hold the same entries, whatever order a
-/// process's hash seed iterates them in. So a slice recovered from a
+/// equal iff their three registries and the publication map hold the same
+/// entries, whatever order a process's hash seed iterates them in. So a
+/// slice recovered from a
 /// checkpoint is comparable to the one it was taken from — the whole claim
 /// recovery makes — without going through a rendering. There is no
 /// [`Default`]: [`M3State::genesis`] is not an empty value (it seeds `[1]`
@@ -396,20 +397,22 @@ pub struct M3State {
     /// the id).
     principals: im::OrdMap<Address, PrincipalId>,
 
-    /// The publication state of every registered DOCUMENT — the engine's ONE
-    /// definition of `published(doc)` (owner ruling D1, 2026-09-05; PUB-1.68:
-    /// the substrate knows one bit per document, and PUB-1.70: never a
-    /// second). Keyed by document address, versions included (a version is a
-    /// registered Document); the value is the RESOLVED bit its minting
-    /// `Allocate` journaled (PUB-7.10), folded by [`M3State::apply_m3`] and
-    /// written by nothing else: there is no publish op and no transition
-    /// (PUB-1.9, PUB-1.11), so an entry is written once, at mint, and stands
-    /// forever. AUTHORITATIVE working state like its three siblings — an
-    /// ordinary serde field, restored from the checkpoint and advanced by
-    /// replay, never `#[serde(skip)]` — and the exception set (lane 2.2) is a
-    /// derived membership index OVER it (PUB-7.5, PUB-7.7), answerable off
-    /// this record at the one-lookup cost [`M3State::published`] pays, and
-    /// seeded by one walk of it, [`M3State::documents`].
+    /// The publication map: the publication state of every registered
+    /// DOCUMENT — what PUB §5.5 calls M3's document records, and the engine's
+    /// ONE definition of `published(doc)` (owner ruling D1, 2026-09-05;
+    /// PUB-1.68: the substrate knows one bit per document, and PUB-1.70:
+    /// never a second). Keyed by document address, versions included (a
+    /// version is a registered Document); the value is the RESOLVED bit its
+    /// minting `Allocate` journaled (PUB-7.10), folded by
+    /// [`M3State::apply_m3`] and written by nothing else: there is no publish
+    /// op and no transition (PUB-1.9, PUB-1.11), so an entry is written once,
+    /// at mint, and stands forever. AUTHORITATIVE working state like its
+    /// three siblings — an ordinary serde field, restored from the checkpoint
+    /// and advanced by replay, never `#[serde(skip)]` — and the engine's
+    /// exception set (PUB-7.5) is a derived membership index OVER it
+    /// (PUB-7.7), answerable off this map at the one-lookup cost
+    /// [`M3State::published`] pays, and seeded by one walk of it,
+    /// [`M3State::documents`].
     ///
     /// Declared LAST, and that is load-bearing: bincode encodes a struct as
     /// its fields in declaration order with no names, so a pre-publication
@@ -770,10 +773,12 @@ fn nth_in(key: &NsKey, n: &Nat) -> Result<Address, GateViolation> {
 
 /// The address an account's FIRST document occupies — `c₁` of the
 /// `(account, 2)` chain, `A·0·1` (§1), which AUTH names an account's **doc 1**
-/// (AUTH-2.126: the doc-1 form is `A·0·1`). `None` unless `account` is
-/// account-tier, because no other tier anchors a document chain: a node's
-/// `(N, 2)` chain is the ACCOUNT chain, and a document's next field is its
-/// content base.
+/// (AUTH-2.126: the doc-1 form is `A·0·1`) and PUB names the account's
+/// **home** (PUB-1.17: born published by default) — a word this module keeps
+/// for the document an element is minted under, so here it says doc 1. `None`
+/// unless `account` is account-tier, because no other tier anchors a document
+/// chain: a node's `(N, 2)` chain is the ACCOUNT chain, and a document's next
+/// field is its content base.
 ///
 /// Registry-free, like [`prefix_contains`]: it names the SLOT and claims
 /// nothing about what is in it — which is why it is spelled differently from
@@ -904,9 +909,10 @@ impl M3State {
     /// producer, which builds the variant directly.
     ///
     /// `Allocate`'s publication bit is folded for a DOCUMENT-tier address and
-    /// read for no other (PUB-7.7's fold half, at M3's own record: the map
-    /// and the registration reach a reader in the ONE commit that carries
-    /// the record, never a later step). Within the totality domain the write
+    /// read for no other (PUB-7.7's fold half, at M3's own allocation record:
+    /// the publication map and the registration reach a reader in the ONE
+    /// commit that carries that record, never a later step). Within the
+    /// totality domain the write
     /// is never an overwrite — an address is allocated once, and a re-staged
     /// `Allocate` trips the contiguity check first — so the bit a document
     /// was minted with is the bit that stands (PUB-1.9).
@@ -1414,8 +1420,8 @@ impl M3State {
     /// publication state (owner ruling D1; PUB-1.68, PUB-7.8): the bit its
     /// minting `Allocate` journaled, read off the publication map at one
     /// point lookup — the record-lookup cost the PUB pack names for a build
-    /// answering off M3's document records (§5.5), and the record the derived
-    /// exception set (lane 2.2) is a membership index over. A version
+    /// answering off M3's document records (§5.5), and the map the engine's
+    /// derived exception set (PUB-7.5) is a membership index over. A version
     /// address answers its OWN member's bit; projecting a member to its
     /// document ahead of a gate (PUB-2.15) is the caller's address
     /// arithmetic, not this read's.
@@ -1424,11 +1430,11 @@ impl M3State {
     /// [`M3State::is_registered_document`] first (PUB-6.37: registration
     /// precedes publication, and an unregistered address is answered by the
     /// registration check and by nothing here). Every registered document has
-    /// an entry, because the record that registers it carries the bit and the
-    /// fold writes both in one step; an unregistered address has no record,
-    /// so what this function returns for one is no answer at all — it is
-    /// `false`, the fail-private direction (PUB-1.1), and a caller that reads
-    /// it has skipped the gate.
+    /// an entry, because the allocation record that registers it carries the
+    /// bit and the fold writes both in one step; an unregistered address has
+    /// no allocation record, so what this function returns for one is no
+    /// answer at all — it is `false`, the fail-private direction (PUB-1.1),
+    /// and a caller that reads it has skipped the gate.
     ///
     /// IMMUTABLE: no M3 function changes a document's bit after its mint —
     /// there is no publish op, in either direction (PUB-1.9, PUB-1.68).
@@ -1437,21 +1443,21 @@ impl M3State {
     }
 
     /// Every registered DOCUMENT with its publication bit, in address order —
-    /// the ENUMERATION of the record [`M3State::published`] reads one entry
-    /// of. One entry per registered document, versions included, on any slice
-    /// M3's own fold produced: the record that registers a document carries
-    /// its bit and [`M3State::apply_m3`] writes both in one step, and nothing
-    /// else writes here. A checkpoint is bytes, so a reader that must not
-    /// fail-stop on a corrupted one re-asks
+    /// the ENUMERATION of the publication map [`M3State::published`] reads
+    /// one entry of. One entry per registered document, versions included, on
+    /// any slice M3's own fold produced: the allocation record that registers
+    /// a document carries its bit and [`M3State::apply_m3`] writes both in one
+    /// step, and nothing else writes here. A checkpoint is bytes, so a reader
+    /// that must not fail-stop on a corrupted one re-asks
     /// [`M3State::is_registered_document`] per entry, as the engine's seed
     /// does. The order is the `OrdMap`'s — a function of the contents, so two
     /// boards with one history enumerate alike.
     ///
     /// Published for the reader that cannot ask per address: a derived index
-    /// over the bit (the exception set, lane 2.2 — PUB-7.7's seed half) and a
-    /// rendering of the record. Both would otherwise rebuild this walk from
-    /// the slice's serde form by a private field name, which no compiler edge
-    /// protects.
+    /// over the bit (the engine's exception set, PUB-7.5 — PUB-7.7's seed
+    /// half) and a rendering of the map. Both would otherwise rebuild this
+    /// walk from the slice's serde form by a private field name, which no
+    /// compiler edge protects.
     pub fn documents(&self) -> impl Iterator<Item = (&Address, bool)> + '_ {
         self.publication
             .iter()

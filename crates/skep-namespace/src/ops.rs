@@ -64,7 +64,7 @@ where
     ///
     /// | the account has documents | flag          | the bit journaled |
     /// |---------------------------|---------------|-------------------|
-    /// | no                        | absent        | `true` — the home is born published (PUB-1.17) |
+    /// | no                        | absent        | `true` — doc 1, PUB's *home*, is born published (PUB-1.17) |
     /// | no                        | `Some(true)`  | `true` |
     /// | no                        | `Some(false)` | `false` — minted PRIVATE, not refused here |
     /// | yes                       | any           | `flag.unwrap_or(false)` — private by default (PUB-1.1) |
@@ -72,9 +72,9 @@ where
     /// The explicit-`false` FIRST mint is refused at the DAEMON's door
     /// (PUB-8.20; owner ruling D2c), not in this transaction — here it mints
     /// private, and no `MintError`/`CreateDocumentError` variant names it
-    /// (the one departure from PUB-8.19's letter, recorded in the round's
-    /// report). "Has documents" is [`M3State::has_documents`], M3's own read
-    /// of the account's document chain.
+    /// (the one departure from PUB-8.19's letter). "Has documents" is
+    /// [`M3State::has_documents`], M3's own read of the account's document
+    /// chain.
     pub fn create_new_document(
         &self,
         caller: PrincipalId,
@@ -335,7 +335,7 @@ where
     /// [`Namespace::create_new_document`], which resolves it exactly as it
     /// resolves its own (PUB-8.21, owner ruling 2026-09-05 — one rule, one
     /// place): an empty account with an absent flag is the born-published
-    /// home, and otherwise the bit is the flag's value or PRIVATE. The home
+    /// doc 1, and otherwise the bit is the flag's value or PRIVATE. The doc-1
     /// case is the one the daemon's mint-first door refuses before this op is
     /// reached (PUB-1.18, PUB-8.22), and the explicit-`false` first mint is
     /// the daemon's door too (PUB-8.20); here both mint what the rule says.

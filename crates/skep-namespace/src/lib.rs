@@ -21,6 +21,15 @@
 //! below, which [`M3State::is_allocated`] answers false for, on every board,
 //! forever.
 //!
+//! Two senses of **home**, kept apart the same way: an element's *home* is
+//! the document it is minted under — [`M3State::mint_content`]`(home)`,
+//! [`M3State::mint_link`]`(home)`, [`MintError::HomeNotRegistered`]
+//! (P6/C2/L1a) — while PUB's *home* is an account's FIRST document, AUTH's
+//! doc 1, born published by default (PUB-1.17). This module says **doc 1**
+//! for the second and `home` only for the first: [`first_document_address`]
+//! names the slot doc 1 occupies, and [`M3State::has_documents`] whether it
+//! is occupied.
+//!
 //! Four surfaces (§Public interface):
 //!
 //! * **Frontier allocation** (§A) — pure, composable mints
@@ -101,9 +110,9 @@
 //! * a publish op — none exists, in either direction: a document's
 //!   publication state is fixed at its mint and journaled on its own
 //!   allocation record, and no M3 function changes it (PUB-1.9, PUB-1.68).
-//!   The three-valued wire flag, the first-mint refusal at the daemon's door
-//!   (PUB-8.20) and the exception set derived over the bit are the daemon's
-//!   and the later PUB lanes' (owner rulings D1/D2).
+//!   The three-valued wire flag and the first-mint refusal at the daemon's
+//!   door (PUB-8.20) are the daemon's, and the exception set derived over the
+//!   bit (PUB-7.5) is the engine's (owner rulings D1/D2).
 //!
 //! ## Composition
 //!

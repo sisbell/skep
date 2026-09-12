@@ -17,7 +17,7 @@
 //! the composition contract prescribes; all state is arranged through M5's
 //! real `Vstream` ops (M5Rec is sealed to foreign crates).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -974,7 +974,10 @@ fn doc_vspan_is_the_bounding_hull_of_the_per_subspace_extents() {
     let extents = ok_of(q.doc_vspanset(&doc1()));
     let (first, last) = (
         extents.iter().next().expect("occupied ⇒ a first extent"),
-        extents.iter().last().expect("occupied ⇒ a last extent"),
+        extents
+            .iter()
+            .next_back()
+            .expect("occupied ⇒ a last extent"),
     );
     assert_eq!(
         got,
@@ -2887,8 +2890,9 @@ fn find_docs_containing_gates_the_whole_request_before_its_budget_can_refuse() {
 
 #[test]
 fn results_and_errors_marshal_through_serialize_per_the_derive_policy() {
-    // §Public interface derive policy: results/errors are Serialize (M10
-    // marshals them; bincode is M2's actual wire format); CorrPair/
+    // §Public interface derive policy: results/errors are Serialize (the
+    // derive policy's marshaling affordance; bincode is M2's actual wire
+    // format, and the shipped codec marshals by hand); CorrPair/
     // CompareReport are not — they carry M5's VPos — and marshal
     // FIELD-BY-FIELD, every leaf serializing individually, VPos's Nat fields
     // included.
@@ -3077,6 +3081,22 @@ fn the_fault_vocabularies_key_a_map_a_consumer_could_not_key_itself() {
     }
     assert_eq!(counts[&(Operand::First, SpanFault::NotOrdinalLevel)], 2);
     assert_eq!(counts.len(), 3, "the three distinct sites key apart");
+}
+
+#[test]
+fn a_request_keys_a_set_as_its_m5_twin_does() {
+    // §Public interface derive policy: `Spec` and `RegionSpec` carry `Hash`
+    // for the reason the fault vocabularies do — a consumer keying by one
+    // cannot supply the impl — and because M5's `VSpec`, the same shape one
+    // seam over, already does. Collapsing COMPARE's redundant repeated
+    // windows before sending is the consumer.
+    let mut regions: HashSet<RegionSpec> = HashSet::new();
+    regions.insert(region_spec(doc1(), vec![vspan(1, 1, 1)]));
+    regions.insert(region_spec(doc1(), vec![vspan(1, 1, 1)])); // the repeat collapses
+    regions.insert(region_spec(doc2(), vec![vspan(1, 1, 1)]));
+    assert_eq!(regions.len(), 2);
+    let specs: HashSet<Spec> = HashSet::from([spec(doc1(), vspan(1, 1, 1))]);
+    assert!(specs.contains(&spec(doc1(), vspan(1, 1, 1))));
 }
 
 #[test]

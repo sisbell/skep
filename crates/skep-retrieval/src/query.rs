@@ -377,7 +377,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
         // subspace and the LAST extent's reach is one ordinal step past the
         // highest occupied position.
         let extents = self.doc_vspanset(doc)?;
-        let (Some(first), Some(last)) = (extents.iter().next(), extents.iter().last()) else {
+        let (Some(first), Some(last)) = (extents.iter().next(), extents.iter().next_back()) else {
             return Ok(SpanSet::empty()); // registered-empty ⇒ ⟨⟩
         };
         // `from_endpoints` is INFALLIBLE on that pair: both endpoints are

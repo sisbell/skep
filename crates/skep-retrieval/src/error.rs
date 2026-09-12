@@ -42,11 +42,15 @@
 //! impl (both the trait and the type are foreign to it), and M10's `FaultSite`
 //! embeds both, so withholding `Hash` here is what would decide whether that
 //! type can have it. Not `Ord`, and the asymmetry is deliberate:
-//! [`SpanFault`]'s declaration order carries no meaning (the decision order is
-//! stated on the type itself), and a derived `Ord` would give reordering the
-//! variants an observable effect. Not `Hash` on the six either — no consumer
-//! keys by a rejection, and M10 converts each to its own `Rejection` at the
-//! seam.
+//! [`SpanFault`]'s declaration order carries no meaning for the ladder (the
+//! decision order is stated on the type itself), and a derived `Ord` would
+//! publish the declaration order as a comparison. What DOES pin the declared
+//! list is the derived `Serialize`: serde's derived form names each variant
+//! and bincode numbers them by position, so reordering the variants is
+//! observable to a serde consumer — a promise the derive makes whether or not
+//! one exists, and none ships (the marshaling clause below). Not `Hash` on
+//! the six either — no consumer keys by a rejection, and M10 converts each to
+//! its own `Rejection` at the seam.
 //!
 //! `DocNotRegistered` carries the offending document wherever
 //! the interface declares a payload (RETRIEVEV/SHOWDELETIONS/COMPARE/
@@ -66,10 +70,13 @@
 //! `Debug + Display + std::error::Error`, each a LEAF with no `source()`,
 //! because no M6 variant wraps another error — so a caller boxes one, `?`s it
 //! into a `Box<dyn Error>` or an `anyhow` chain, and reads its message like
-//! any other error in the system. That is independent of `Serialize`, which
-//! is how M10 marshals them; `Display` carries the human-readable message,
-//! naming the offending document in M1's dotted-decimal form wherever the
-//! variant carries one.
+//! any other error in the system. That is independent of `Serialize`, the
+//! marshaling affordance the derive policy gives every value whose leaves
+//! carry it — exercised by this crate's marshal test with bincode, M2's wire
+//! format; the shipped codec (skepd's `JsonCodec`, the workspace's one
+//! `impl Codec`) names each variant by hand and consults no serde impl;
+//! `Display` carries the human-readable message, naming the offending
+//! document in M1's dotted-decimal form wherever the variant carries one.
 //!
 //! [`SpanFault`] and [`Operand`] deliberately stop at `Debug + Display`: they
 //! are payload INSIDE those six and are never the `E` of a public `Result`,
@@ -96,8 +103,9 @@ use skep_address::Address;
 /// each report as the only defect.
 ///
 /// That is the DECISION order and deliberately NOT the declaration order
-/// below, which carries no meaning — the reason `Ord` is withheld, so that
-/// reordering the variants can have no observable effect. The ladder is
+/// below, which carries no meaning for the ladder — the reason `Ord` is
+/// withheld, so that no comparison publishes it. The declared list is pinned
+/// only by the derived `Serialize` (the module doc says how). The ladder is
 /// enforced in one place, `gate_vspan`, where it is tested.
 ///
 /// [`NotLevelUniform`]: SpanFault::NotLevelUniform

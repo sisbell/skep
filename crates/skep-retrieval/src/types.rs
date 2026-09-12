@@ -3,8 +3,15 @@
 //!
 //! Every M6-owned request/result type here is a plain all-`pub`-field value
 //! carrying **`Clone + Debug + PartialEq + Eq`**, plus `Serialize` wherever
-//! its leaves carry it. Two departures from the plain derive, each for a
-//! reason its own leaf gives:
+//! its leaves carry it. The two REQUEST types add `Hash`, as M5's `VSpec` —
+//! the same shape one seam over — does, and for the reason the fault
+//! vocabularies give: a consumer keying by a request cannot supply the impl
+//! (both the trait and the type are foreign to it), and a caller collapsing
+//! COMPARE's redundant repeated windows before sending is one. The result
+//! types do not: no consumer keys by an answer, and [`DeliveryItem`] could
+//! not follow (M4's `Val` has no `Hash`), so deriving on some answers and not
+//! others would read as accident. Two departures from the plain derive, each
+//! for a reason its own leaf gives:
 //!
 //! * [`DeliveryItem`]'s `Debug` is hand-written, because M4's `Val` has none
 //!   — blobs never render into logs, which is M4's decision. M6 is in the
@@ -45,7 +52,7 @@ use skep_content::Val;
 /// (`#start == 2`) is consulting-state, not well-formedness, so a deeper
 /// start is an admissible spec that resolves to ⟨⟩. The SET-shaped
 /// operations (COMPARE, FINDDOCSCONTAINING) use [`RegionSpec`] instead.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 pub struct Spec {
     pub doc: Address,
     pub span: Span,
@@ -67,7 +74,7 @@ pub struct Spec {
 /// regions' clipped parts, the thing COMPARE's report is confined to (X12 R1),
 /// and the thing an empty resolution yields none of. This crate names that one
 /// only as the OPERAND's region, or by its symbol.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 pub struct RegionSpec {
     pub doc: Address,
     pub spans: Vec<Span>,

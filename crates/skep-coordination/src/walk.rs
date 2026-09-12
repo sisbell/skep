@@ -38,7 +38,7 @@ pub(crate) trait Rewrite {
     /// A variable USE — a `Var` node or a V-TUP atom's tuple variable —
     /// never a binder.
     fn var_use(&mut self, v: &VarId) -> VarId {
-        v.clone()
+        *v
     }
 }
 
@@ -96,17 +96,17 @@ pub(crate) fn rewrite_term<R: Rewrite + ?Sized>(r: &mut R, t: &Term) -> Term {
         Term::Implies(x, y) => Term::Implies(arc(r, x), arc(r, y)),
         Term::Iff(x, y) => Term::Iff(arc(r, x), arc(r, y)),
         Term::Forall { var, dom, body } => {
-            Term::Forall { var: var.clone(), dom: arcd(r, dom), body: arc(r, body) }
+            Term::Forall { var: *var, dom: arcd(r, dom), body: arc(r, body) }
         }
         Term::Exists { var, dom, body } => {
-            Term::Exists { var: var.clone(), dom: arcd(r, dom), body: arc(r, body) }
+            Term::Exists { var: *var, dom: arcd(r, dom), body: arc(r, body) }
         }
         Term::Let { var, bound, body } => {
-            Term::Let { var: var.clone(), bound: arc(r, bound), body: arc(r, body) }
+            Term::Let { var: *var, bound: arc(r, bound), body: arc(r, body) }
         }
         Term::IfSome { opt, var, then_, else_ } => Term::IfSome {
             opt: arc(r, opt),
-            var: var.clone(),
+            var: *var,
             then_: arc(r, then_),
             else_: arc(r, else_),
         },
@@ -114,7 +114,7 @@ pub(crate) fn rewrite_term<R: Rewrite + ?Sized>(r: &mut R, t: &Term) -> Term {
         Term::MaxT1(d) => Term::MaxT1(arcd(r, d)),
         Term::MinT1(d) => Term::MinT1(arcd(r, d)),
         Term::BigUnion { dom, var, body } => {
-            Term::BigUnion { dom: arcd(r, dom), var: var.clone(), body: arc(r, body) }
+            Term::BigUnion { dom: arcd(r, dom), var: *var, body: arc(r, body) }
         }
         Term::Reflect(d) => Term::Reflect(arcd(r, d)),
         Term::Ref { addr, args } => {
@@ -132,7 +132,7 @@ pub(crate) fn rewrite_dom<R: Rewrite + ?Sized>(r: &mut R, d: &Dom) -> Dom {
         Dom::LinkDom => Dom::LinkDom,
         Dom::Reg => Dom::Reg,
         Dom::Filter { dom, var, pred } => {
-            Dom::Filter { dom: arcd(r, dom), var: var.clone(), pred: arc(r, pred) }
+            Dom::Filter { dom: arcd(r, dom), var: *var, pred: arc(r, pred) }
         }
         Dom::SetTerm(t) => Dom::SetTerm(arc(r, t)),
     }

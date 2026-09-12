@@ -76,7 +76,10 @@ pub struct Signature {
 }
 
 /// Eval environment: free-param + quantifier/Let-bound `VarId → Value`.
-/// Functional (persistent) update — `bind` returns a new `Env`.
+/// Functional (persistent) update — `bind` returns a new `Env`. A collection
+/// of bindings: built from an iterator of `(VarId, Value)` pairs (a def's
+/// Γ_D zipped with its arguments) and extended by one; a later binding of a
+/// name shadows an earlier one, as `bind` does.
 #[derive(Debug, Clone, Default)]
 pub struct Env(HashMap<VarId, Value>);
 
@@ -91,5 +94,17 @@ impl Env {
 
     pub fn get(&self, v: &VarId) -> Option<&Value> {
         self.0.get(v)
+    }
+}
+
+impl FromIterator<(VarId, Value)> for Env {
+    fn from_iter<I: IntoIterator<Item = (VarId, Value)>>(iter: I) -> Env {
+        Env(iter.into_iter().collect())
+    }
+}
+
+impl Extend<(VarId, Value)> for Env {
+    fn extend<I: IntoIterator<Item = (VarId, Value)>>(&mut self, iter: I) {
+        self.0.extend(iter)
     }
 }

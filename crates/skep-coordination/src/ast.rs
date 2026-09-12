@@ -33,7 +33,7 @@ pub const EXPANSION_NAME_BASE: u32 = 1 << 31;
 /// name through `new`, so a reserved-range name in stored content is a
 /// parse failure and PR-ENC's body-binder disjointness holds by
 /// construction.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VarId(u32);
 
 impl VarId {
@@ -234,12 +234,12 @@ pub enum Prim {
 
 // ───────────────────────── structural helpers ─────────────────────────
 
-/// Collect every `Ref` address in `t` (recursively, including inside domain
-/// bodies), in pre-order — the direct referents `register_pred`'s (iii)/(iv)
-/// checks range over (§Internal 4).
-pub(crate) fn collect_ref_addrs(t: &Term, out: &mut Vec<Address>) {
-    struct RefAddrs<'a>(&'a mut Vec<Address>);
-    impl Visit for RefAddrs<'_> {
+/// Every `Ref` address in `t` (recursively, including inside domain bodies),
+/// in pre-order — the direct referents `register_pred`'s (iii)/(iv) checks
+/// range over (§Internal 4).
+pub(crate) fn ref_addrs(t: &Term) -> Vec<Address> {
+    struct RefAddrs(Vec<Address>);
+    impl Visit for RefAddrs {
         fn term(&mut self, t: &Term) {
             if let Term::Ref { addr, .. } = t {
                 self.0.push(addr.clone());
@@ -247,7 +247,9 @@ pub(crate) fn collect_ref_addrs(t: &Term, out: &mut Vec<Address>) {
             visit_term(self, t);
         }
     }
-    RefAddrs(out).term(t);
+    let mut refs = RefAddrs(Vec::new());
+    refs.term(t);
+    refs.0
 }
 
 /// A signed term spelling every former, atom, prim, domain, literal and type

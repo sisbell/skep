@@ -243,11 +243,11 @@ pub fn coord(k: &Arc<Kernel<World>>) -> Coordinator<World> {
     coord_with_guest(k, Box::new(|_: &World, _: &Address| true))
 }
 
-/// [`coord`] under a caller-chosen guest-class predicate (lane 3.3 §5).
-#[allow(clippy::type_complexity)]
+/// [`coord`] under a caller-chosen guest-class predicate (lane 3.3 §5), in
+/// M7's own `Visibility` shape.
 pub fn coord_with_guest(
     k: &Arc<Kernel<World>>,
-    guest: Box<dyn Fn(&World, &Address) -> bool + Send + Sync>,
+    guest: Box<Visibility<'static, World>>,
 ) -> Coordinator<World> {
     Coordinator::new(Arc::clone(k), registry(), Box::new(mk_vs), Box::new(mk_ls), guest)
 }

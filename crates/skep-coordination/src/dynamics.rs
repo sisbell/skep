@@ -244,15 +244,17 @@ impl Analyzer<'_> {
             // step-constant D strengthens both directions; a grow-only D gives
             // ∃/ST (a witness persists) and ∀/SF (a counterexample persists).
             Term::Forall { dom, body, .. } | Term::Exists { dom, body, .. } => {
+                let universal = matches!(t, Term::Forall { .. });
                 let ad = self.dom(dom);
                 let ab = self.term(body);
                 let step_const = ad.fp.is_empty();
                 let (st, sf) = if step_const {
                     (ab.st, ab.sf)
                 } else if ad.grow {
-                    match t {
-                        Term::Forall { .. } => (false, ab.sf),
-                        _ => (ab.st, false),
+                    if universal {
+                        (false, ab.sf)
+                    } else {
+                        (ab.st, false)
                     }
                 } else {
                     (false, false)

@@ -72,10 +72,8 @@ impl Rewrite for Expander<'_> {
         // … then its (recursively expanded) body's binders, depth-first
         // left-to-right.
         let inner_flat = self.term(&referent.evaluable);
-        let mut map: im::HashMap<VarId, VarId> = im::HashMap::new();
-        for ((p, _), fr) in referent.params().iter().zip(fresh.iter()) {
-            map.insert(p.clone(), fr.clone());
-        }
+        let map: im::HashMap<VarId, VarId> =
+            referent.params().iter().map(|(p, _)| *p).zip(fresh.iter().copied()).collect();
         let mut out = Rename { supply: &mut self.supply, map }.term(&inner_flat);
         for (fr, arg) in fresh.into_iter().zip(flat_args).rev() {
             out = Term::Let { var: fr, bound: Arc::new(arg), body: Arc::new(out) };
@@ -95,9 +93,9 @@ struct Rename<'a> {
 impl Rename<'_> {
     /// Rewrite `body` in the scope of the binder `var`: mint its fresh name,
     /// extend the map for the in-scope child, restore for whatever follows.
-    fn under(&mut self, var: &VarId, body: &Term) -> (VarId, ArcTerm) {
+    fn under(&mut self, var: VarId, body: &Term) -> (VarId, ArcTerm) {
         let fresh = self.supply.fresh();
-        let inner = self.map.update(var.clone(), fresh.clone());
+        let inner = self.map.update(var, fresh);
         let outer = std::mem::replace(&mut self.map, inner);
         let renamed = Arc::new(self.term(body));
         self.map = outer;
@@ -107,7 +105,7 @@ impl Rename<'_> {
 
 impl Rewrite for Rename<'_> {
     fn var_use(&mut self, v: &VarId) -> VarId {
-        self.map.get(v).cloned().unwrap_or_else(|| v.clone())
+        self.map.get(v).copied().unwrap_or(*v)
     }
 
     /// The binding formers: out-of-scope children first, under the current
@@ -116,28 +114,28 @@ impl Rewrite for Rename<'_> {
         match t {
             Term::Forall { var, dom, body } => {
                 let dom = Arc::new(self.dom(dom));
-                let (var, body) = self.under(var, body);
+                let (var, body) = self.under(*var, body);
                 Term::Forall { var, dom, body }
             }
             Term::Exists { var, dom, body } => {
                 let dom = Arc::new(self.dom(dom));
-                let (var, body) = self.under(var, body);
+                let (var, body) = self.under(*var, body);
                 Term::Exists { var, dom, body }
             }
             Term::Let { var, bound, body } => {
                 let bound = Arc::new(self.term(bound));
-                let (var, body) = self.under(var, body);
+                let (var, body) = self.under(*var, body);
                 Term::Let { var, bound, body }
             }
             Term::IfSome { opt, var, then_, else_ } => {
                 let opt = Arc::new(self.term(opt));
-                let (var, then_) = self.under(var, then_);
+                let (var, then_) = self.under(*var, then_);
                 let else_ = Arc::new(self.term(else_));
                 Term::IfSome { opt, var, then_, else_ }
             }
             Term::BigUnion { dom, var, body } => {
                 let dom = Arc::new(self.dom(dom));
-                let (var, body) = self.under(var, body);
+                let (var, body) = self.under(*var, body);
                 Term::BigUnion { dom, var, body }
             }
             Term::Ref { .. } => unreachable!("rename runs on flat (ref-free) referent bodies"),
@@ -149,7 +147,7 @@ impl Rewrite for Rename<'_> {
         match d {
             Dom::Filter { dom, var, pred } => {
                 let dom = Arc::new(self.dom(dom));
-                let (var, pred) = self.under(var, pred);
+                let (var, pred) = self.under(*var, pred);
                 Dom::Filter { dom, var, pred }
             }
             _ => rewrite_dom(self, d),
@@ -226,10 +224,10 @@ mod tests {
             var: v(2),
             dom: Arc::new(Dom::LinkDom),
             body: Arc::new(Term::Let {
-                var: x0.clone(),
+                var: x0,
                 bound: Arc::new(Term::Var(v(2))),
                 body: Arc::new(Term::Exists {
-                    var: x1.clone(),
+                    var: x1,
                     dom: Arc::new(Dom::LinkDom),
                     body: Arc::new(addr_eq(Term::Var(x1), Term::Var(x0))),
                 }),

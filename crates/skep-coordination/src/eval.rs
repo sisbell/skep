@@ -36,6 +36,7 @@ use crate::ast::{Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId};
 use crate::catalog::TypeCatalog;
 use crate::check::TypedTerm;
 use crate::guest::GuestLinks;
+use crate::rule::Arg;
 use crate::value::{Env, Value};
 
 /// Referent supplier for the DAG-recursive drivers over ref-bearing bodies —
@@ -58,31 +59,6 @@ pub(crate) struct EvalCtx<'a, W> {
     pub(crate) m3: &'a M3State,
     pub(crate) view: View,
     pub(crate) defs: Option<&'a dyn DefSource>,
-}
-
-/// A domain element: an address, or a whole tuple (`A_K`/`L_K`) — the
-/// trigger/atom dispatch consumes the tuple; bookkeeping projects to
-/// `t.addr` (R1 AddressInjectivity).
-#[derive(Debug, Clone)]
-pub(crate) enum Elem {
-    Addr(Address),
-    Tup(Tuple),
-}
-
-impl Elem {
-    pub(crate) fn value(&self) -> Value {
-        match self {
-            Elem::Addr(a) => Value::Addr(a.clone()),
-            Elem::Tup(t) => Value::Tuple(t.clone()),
-        }
-    }
-
-    pub(crate) fn key_addr(&self) -> Address {
-        match self {
-            Elem::Addr(a) => a.clone(),
-            Elem::Tup(t) => t.addr.clone(),
-        }
-    }
 }
 
 /// Set-element lift (Tumbler → Address) at the binding sites — M1 `validate`,
@@ -116,6 +92,15 @@ fn as_nat(v: Value) -> Nat {
     match v {
         Value::Nat(n) => n,
         other => unreachable!("well-typed Nat position held {other:?}"),
+    }
+}
+
+/// A V-TUP variable's tuple, borrowed from the environment — the checker
+/// bound it at `Tup`, so the binding is a tuple.
+fn tuple_var<'e>(env: &'e Env, v: &VarId) -> &'e Tuple {
+    match env.get(v) {
+        Some(Value::Tuple(t)) => t,
+        other => unreachable!("checked Tup var {v:?} bound to a tuple, held {other:?}"),
     }
 }
 
@@ -277,26 +262,26 @@ pub(crate) fn eval_term<W>(cx: &EvalCtx<'_, W>, env: &Env, t: &Term) -> Value {
         Term::Forall { var, dom, body } => Value::Bool(
             enum_dom(cx, env, dom)
                 .into_iter()
-                .all(|e| truthy(eval_term(cx, &env.bind(var.clone(), e.value()), body))),
+                .all(|e| truthy(eval_term(cx, &env.bind(*var, Value::from(e)), body))),
         ),
         Term::Exists { var, dom, body } => Value::Bool(
             enum_dom(cx, env, dom)
                 .into_iter()
-                .any(|e| truthy(eval_term(cx, &env.bind(var.clone(), e.value()), body))),
+                .any(|e| truthy(eval_term(cx, &env.bind(*var, Value::from(e)), body))),
         ),
         Term::Let { var, bound, body } => {
             let b = eval_term(cx, env, bound);
-            eval_term(cx, &env.bind(var.clone(), b), body)
+            eval_term(cx, &env.bind(*var, b), body)
         }
         Term::IfSome { opt, var, then_, else_ } => match eval_term(cx, env, opt) {
-            Value::OptAddr(Some(a)) => eval_term(cx, &env.bind(var.clone(), Value::Addr(a)), then_),
-            Value::OptNat(Some(n)) => eval_term(cx, &env.bind(var.clone(), Value::Nat(n)), then_),
+            Value::OptAddr(Some(a)) => eval_term(cx, &env.bind(*var, Value::Addr(a)), then_),
+            Value::OptNat(Some(n)) => eval_term(cx, &env.bind(*var, Value::Nat(n)), then_),
             Value::OptAddr(None) | Value::OptNat(None) => eval_term(cx, env, else_),
             other => unreachable!("IfSome guard checked at an Opt sort, held {other:?}"),
         },
         // Set-semantics counting (PC2a): enum_dom deduplicates address
         // domains; tuple slices are distinct by address.
-        Term::Count(d) => Value::Nat(Nat::from(enum_dom(cx, env, d).len() as u64)),
+        Term::Count(d) => Value::Nat(Nat::from(enum_dom(cx, env, d).len())),
         Term::MaxT1(d) => {
             let best = enum_dom(cx, env, d)
                 .into_iter()
@@ -314,7 +299,7 @@ pub(crate) fn eval_term<W>(cx: &EvalCtx<'_, W>, env: &Env, t: &Term) -> Value {
         Term::BigUnion { dom, var, body } => {
             let mut out: OrdSet<Tumbler> = OrdSet::new();
             for e in enum_dom(cx, env, dom) {
-                let s = as_set(eval_term(cx, &env.bind(var.clone(), e.value()), body));
+                let s = as_set(eval_term(cx, &env.bind(*var, Value::from(e)), body));
                 for t in s.iter() {
                     out.insert(t.clone());
                 }
@@ -340,23 +325,18 @@ pub(crate) fn eval_term<W>(cx: &EvalCtx<'_, W>, env: &Env, t: &Term) -> Value {
             let referent = defs
                 .resolve_def(addr)
                 .expect("WT-ref: every referent of a checked body has a defined signature");
-            let mut inner = Env::empty();
-            for ((v, _), arg) in referent.params().iter().zip(args.iter()) {
-                let val = eval_term(cx, env, arg);
-                inner = inner.bind(v.clone(), val);
-            }
+            let inner: Env = referent
+                .params()
+                .iter()
+                .map(|(v, _)| *v)
+                .zip(args.iter().map(|arg| eval_term(cx, env, arg)))
+                .collect();
             eval_term(cx, &inner, &referent.evaluable)
         }
     }
 }
 
 fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
-    let tup = |v: &VarId| -> Tuple {
-        match env.get(v) {
-            Some(Value::Tuple(t)) => t.clone(),
-            other => unreachable!("checked Tup var {v:?} bound to a tuple, held {other:?}"),
-        }
-    };
     match a {
         Atom::IsK(tr, e) => {
             let k = concrete(tr);
@@ -465,16 +445,16 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
             let d = as_addr(eval_term(cx, env, e));
             Value::Bool(cx.m3.is_registered_document(&d))
         }
-        Atom::TupAddr(v) => Value::Addr(tup(v).addr),
-        Atom::TupAddrsF(v) => Value::AddrSet(tup(v).from.addrs().cloned().collect()),
-        Atom::TupAddrsG(v) => Value::AddrSet(tup(v).to.addrs().cloned().collect()),
+        Atom::TupAddr(v) => Value::Addr(tuple_var(env, v).addr.clone()),
+        Atom::TupAddrsF(v) => Value::AddrSet(tuple_var(env, v).from.addrs().cloned().collect()),
+        Atom::TupAddrsG(v) => Value::AddrSet(tuple_var(env, v).to.addrs().cloned().collect()),
         Atom::InCoverageF(e, v) => {
             let x = as_addr(eval_term(cx, env, e));
-            Value::Bool(tup(v).from.covers(x.tumbler()))
+            Value::Bool(tuple_var(env, v).from.covers(x.tumbler()))
         }
         Atom::InCoverageG(e, v) => {
             let x = as_addr(eval_term(cx, env, e));
-            Value::Bool(tup(v).to.covers(x.tumbler()))
+            Value::Bool(tuple_var(env, v).to.covers(x.tumbler()))
         }
     }
 }
@@ -518,26 +498,28 @@ fn eval_prim<W>(cx: &EvalCtx<'_, W>, env: &Env, p: &Prim) -> Value {
 
 /// `[D]_snap` at the context's view — finite by QD-fin. Address domains
 /// deduplicate (set semantics); tuple slices are distinct by address.
-/// `Filter` composes over the materialized base (§Internal 2).
-pub(crate) fn enum_dom<W>(cx: &EvalCtx<'_, W>, env: &Env, d: &Dom) -> Vec<Elem> {
+/// `Filter` composes over the materialized base (§Internal 2). Each element
+/// is an [`Arg`] — the shape a rule binds, and the one a quantifier binds
+/// through `Value::from`.
+pub(crate) fn enum_dom<W>(cx: &EvalCtx<'_, W>, env: &Env, d: &Dom) -> Vec<Arg> {
     match d {
         // M_K at the TERM view (view-parameterized domain).
         Dom::MembersDom(tr) => cx
             .members_at(concrete(tr), cx.view)
             .iter()
-            .map(|t| Elem::Addr(lift(t)))
+            .map(|t| Arg::Addr(lift(t)))
             .collect(),
         Dom::ActiveSlice(tr) => cx
             .links
             .observe(&concrete(tr).0, Pattern::default(), View::Active)
             .into_iter()
-            .map(Elem::Tup)
+            .map(Arg::Tuple)
             .collect(),
         Dom::AuditSlice(tr) => cx
             .links
             .observe(&concrete(tr).0, Pattern::default(), View::Audit)
             .into_iter()
-            .map(Elem::Tup)
+            .map(Arg::Tuple)
             .collect(),
         // L_dom = ⋃_{K∈catalog} observe(K, ⟨⟩, Audit) ↦ t.addr — the
         // typed-relation sublayer only (open MAKELINK links excluded); never
@@ -549,16 +531,16 @@ pub(crate) fn enum_dom<W>(cx: &EvalCtx<'_, W>, env: &Env, d: &Dom) -> Vec<Elem> 
                     out.insert(t.addr.tumbler().clone());
                 }
             }
-            out.iter().map(|t| Elem::Addr(lift(t))).collect()
+            out.iter().map(|t| Arg::Addr(lift(t))).collect()
         }
         Dom::Reg => unreachable!("no Reg domain survives type_check's Reg-expansion/folding"),
         Dom::Filter { dom, var, pred } => enum_dom(cx, env, dom)
             .into_iter()
-            .filter(|e| truthy(eval_term(cx, &env.bind(var.clone(), e.value()), pred)))
+            .filter(|e| truthy(eval_term(cx, &env.bind(*var, Value::from(e.clone())), pred)))
             .collect(),
         Dom::SetTerm(t) => {
             let s = as_set(eval_term(cx, env, t));
-            s.iter().map(|t| Elem::Addr(lift(t))).collect()
+            s.iter().map(|t| Arg::Addr(lift(t))).collect()
         }
     }
 }

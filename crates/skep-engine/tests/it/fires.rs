@@ -33,8 +33,8 @@ use std::sync::Arc;
 use common::*;
 use skep_address::{document_of, Address, Nat};
 use skep_coordination::{
-    Atom, Coordinator, Dom, Env, FireAction, FireError, FireOutcome, Lit, Occurrence, Prim, Rule,
-    Sort, StepOutcome, Term, Trigger, TypeKey, TypeRef, Value, VarId,
+    Arg, Atom, Coordinator, Dom, Env, FireAction, FireError, FireOutcome, Lit, Occurrence, Prim,
+    Rule, Sort, StepOutcome, Term, Trigger, TypeKey, TypeRef, Value, VarId,
 };
 use skep_engine::{Engine, World};
 use skep_links::{Caller, HasLinks, ShippedType, View};
@@ -287,7 +287,7 @@ fn a_rule_whose_only_matching_tuple_is_draft_homed_does_not_fire() {
         other => panic!("expected Quiescent (an empty visible domain), got {other:?}"),
     }
     assert_eq!(
-        coord.fire(&Occurrence { rule: id, arg: Value::Addr(member.clone()) })
+        coord.fire(&Occurrence { rule: id, arg: Arg::Addr(member.clone()) })
             .expect("a fire out of the visible domain is a NoOp, not an error"),
         FireOutcome::NoOp,
         "out of the visible domain: the removed discharge, never a draft-boundary refusal"
@@ -334,10 +334,10 @@ fn a_fire_commits_byte_identically_to_a_world_with_no_drafts() {
         let mut coord = engine.coordinator();
         let trigger = Trigger::Inline(
             coord.type_check_trigger(
-                (x.clone(), Sort::Addr),
+                (x, Sort::Addr),
                 Term::Not(Arc::new(Term::Atom(Atom::IsK(
                     TypeRef::Concrete(TypeKey(retired.clone())),
-                    Arc::new(Term::Var(x.clone())),
+                    Arc::new(Term::Var(x)),
                 )))),
             )
             .expect("¬is_K(retired, x) type-checks"),
@@ -419,9 +419,9 @@ fn domain_enumeration_excludes_the_draft_tuple_and_keeps_a_retracted_one() {
     // ∃ t ∈ D :: addr(t) = a — over a tuple domain through the V-TUP
     // projection, over L_dom (an address domain) by the bound address.
     let holds = |coord: &Coordinator<World>, dom: Dom, a: &Address, tuple_dom: bool| -> bool {
-        let lhs = if tuple_dom { Term::Atom(Atom::TupAddr(t.clone())) } else { Term::Var(t.clone()) };
+        let lhs = if tuple_dom { Term::Atom(Atom::TupAddr(t)) } else { Term::Var(t) };
         let body = Term::Prim(Prim::AddrEq(Arc::new(lhs), Arc::new(Term::Lit(Lit::Addr(a.clone())))));
-        let term = Term::Exists { var: t.clone(), dom: Arc::new(dom), body: Arc::new(body) };
+        let term = Term::Exists { var: t, dom: Arc::new(dom), body: Arc::new(body) };
         let tt = coord.type_check(vec![], term).expect("a closed Bool term type-checks");
         coord.decide(&tt, &Env::empty(), View::Audit, &snap)
     };
@@ -455,9 +455,9 @@ fn domain_enumeration_excludes_the_draft_tuple_and_keeps_a_retracted_one() {
     let names = |coord: &Coordinator<World>, a: &Address| -> Trigger {
         Trigger::Inline(
             coord.type_check_trigger(
-                (t.clone(), Sort::Tup),
+                (t, Sort::Tup),
                 Term::Prim(Prim::AddrEq(
-                    Arc::new(Term::Atom(Atom::TupAddr(t.clone()))),
+                    Arc::new(Term::Atom(Atom::TupAddr(t))),
                     Arc::new(Term::Lit(Lit::Addr(a.clone()))),
                 )),
             )
@@ -485,7 +485,7 @@ fn domain_enumeration_excludes_the_draft_tuple_and_keeps_a_retracted_one() {
         coord.next_enabled(&snap).expect("the retracted tuple of the published home is enabled");
     assert_eq!(e.rule, p2_rule, "the draft's tuple enabled nothing: the first enabled occurrence is the second rule's");
     match e.arg {
-        Value::Tuple(tuple) => assert_eq!(tuple.addr, p2),
+        Arg::Tuple(tuple) => assert_eq!(tuple.addr, p2),
         other => panic!("a Tup-domained rule binds a tuple, got {other:?}"),
     }
 }
@@ -515,14 +515,14 @@ fn a_def_trigger_sees_the_same_filtered_store_as_an_inline_one() {
     let x = VarId::new(1).expect("a test variable below the watershed");
     let body = Term::Atom(Atom::IsK(
         TypeRef::Concrete(TypeKey(retired.clone())),
-        Arc::new(Term::Var(x.clone())),
+        Arc::new(Term::Var(x)),
     ));
     // T(x) = is_K(retired, x), defined into the draft and registered there
     // (class-free — a pdef tuple in a draft home is still ever-registered).
     let checked =
-        coord.type_check(vec![(x.clone(), Sort::Addr)], body.clone()).expect("T type-checks");
+        coord.type_check(vec![(x, Sort::Addr)], body.clone()).expect("T type-checks");
     let (start, _) =
-        coord.define_predicate(&draft, checked).expect("a def is defined into a draft");
+        coord.define_predicate(&draft, &checked).expect("a def is defined into a draft");
     let inline = Trigger::Inline(
         coord.type_check_trigger((x, Sort::Addr), body).expect("the same body as a trigger"),
     );
@@ -551,7 +551,7 @@ fn a_def_trigger_sees_the_same_filtered_store_as_an_inline_one() {
     assert!(coord.quiescent(&snap));
     for id in [def_rule, inline_rule] {
         assert_eq!(
-            coord.fire(&Occurrence { rule: id, arg: Value::Addr(member.clone()) })
+            coord.fire(&Occurrence { rule: id, arg: Arg::Addr(member.clone()) })
                 .expect("a falsified fire is a NoOp"),
             FireOutcome::NoOp,
             "the member is in the visible domain; the trigger, Def or Inline, reads no draft-homed marker"
@@ -571,6 +571,6 @@ fn a_def_trigger_sees_the_same_filtered_store_as_an_inline_one() {
     );
     let e = coord.next_enabled(&snap).expect("the public marker enables both rules");
     assert_eq!(e.rule, def_rule);
-    assert_eq!(e.arg, Value::Addr(member));
+    assert_eq!(e.arg, Arg::Addr(member));
     assert!(!coord.quiescent(&snap));
 }

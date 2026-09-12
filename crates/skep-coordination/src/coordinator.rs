@@ -4,16 +4,13 @@
 //! evaluator; everything it holds is a recomputable hint or an in-memory
 //! working set (§Core data model).
 
+use std::fmt;
 use std::sync::Arc;
 
 use skep_address::Address;
-use skep_arrangement::{HasM5, M5Rec, Vstream};
-use skep_content::{ContentWrite, HasContent};
+use skep_arrangement::Vstream;
 use skep_kernel::{Kernel, Snapshot, WorldState};
-use skep_links::{
-    Endset, HasLinks, LinkRec, LinkWriter, ShippedType, TypeRegistry, View, Visibility,
-};
-use skep_namespace::{HasM3, M3Rec};
+use skep_links::{Endset, LinkWriter, ShippedType, TypeRegistry, View, Visibility};
 
 use crate::ast::{Term, VarId};
 use crate::catalog::TypeCatalog;
@@ -26,9 +23,25 @@ use crate::guest::GuestLinks;
 use crate::memo::{Breach, DefMemo, DefStatus};
 use crate::rule::RuleId;
 use crate::value::{value_sort, Env, Signature, SignedTerm, Sort, Value};
+use crate::CoordinationWorld;
+
+/// The M5 `Vstream` factory the engine injects: a borrow-scoped op handle
+/// minted off `&Kernel<W>` per call (driver construction is the engine's by
+/// the composition contract, so M9 names `Vstream::new` nowhere; HRTB
+/// because the handle borrows the kernel).
+pub type VstreamFactory<W> = Box<dyn for<'k> Fn(&'k Kernel<W>) -> Vstream<'k, W> + Send + Sync>;
+
+/// The M7 `LinkWriter` factory the engine injects: a writer over the kernel
+/// AT A VISIBILITY CLASS (lane 3.3b). Called only by
+/// [`Coordinator::link_writer`], which hands it the coordinator's `guest`
+/// predicate, so the value-keyed gates of every fire and every def write run
+/// at guest class.
+pub type LinkWriterFactory<W> =
+    Box<dyn for<'k> Fn(&'k Kernel<W>, &'k Visibility<'k, W>) -> LinkWriter<'k, W> + Send + Sync>;
 
 /// One registered rule in the working set (§Internal 5): the checked
 /// `TypedDom`, the checked trigger, the declared view, the action.
+#[derive(Debug, Clone)]
 pub(crate) struct CheckedRule {
     pub(crate) id: RuleId,
     pub(crate) dom: crate::check::TypedDom,
@@ -58,7 +71,6 @@ const MAX_SIG_DEPTH: u32 = 512;
 /// the reactive rule engine (group C). Owns no authoritative state — the
 /// `DefMemo` is an interior-mutable recomputable hint; the rule registry
 /// and rotation cursor are the `&mut self` working set.
-#[allow(clippy::type_complexity)] // the factory fields carry the interface's types verbatim
 pub struct Coordinator<W: WorldState> {
     pub(crate) kernel: Arc<Kernel<W>>,
     pub(crate) catalog: TypeCatalog,
@@ -66,44 +78,45 @@ pub struct Coordinator<W: WorldState> {
     pub(crate) rules: Vec<CheckedRule>,
     pub(crate) next_rule: u64,
     pub(crate) cursor: usize,
-    pub(crate) mk_vstream: Box<dyn for<'k> Fn(&'k Kernel<W>) -> Vstream<'k, W> + Send + Sync>,
-    /// The M7 `LinkWriter` factory: a writer over the kernel AT A VISIBILITY
-    /// CLASS (lane 3.3b). Called only by [`Coordinator::link_writer`], which
-    /// hands it `guest`, so the value-keyed gates of every fire and every
-    /// def write run at guest class.
-    pub(crate) mk_link_writer: Box<
-        dyn for<'k> Fn(&'k Kernel<W>, &'k Visibility<'k, W>) -> LinkWriter<'k, W> + Send + Sync,
-    >,
+    pub(crate) mk_vstream: VstreamFactory<W>,
+    pub(crate) mk_link_writer: LinkWriterFactory<W>,
     /// The GUEST-class read predicate over a document address (PUB round 2,
-    /// lane 3.3, §5): `true` iff the document is readable at guest class —
-    /// the engine supplies `published(doc)`. A fire consults it, off the
-    /// fire's own pinned snapshot, on the action's HOME and on the bound
-    /// argument's document before any deposit, so a rule's effect never
-    /// crosses the draft boundary in either direction (a marker on a draft's
-    /// content, or a deposit into a draft home). And every `LinkWriter` M9
-    /// builds is built AT this class (lane 3.3b, PUB-6.28): the same closure
-    /// is lent to `mk_link_writer`, so M7's idempotency and dedup lookups see
-    /// only guest-readable incumbents and a fire commits byte-identically to
-    /// a world with no drafts. M9 holds no publication state of its own —
-    /// the predicate is injected like the factories.
-    pub(crate) guest: Box<dyn Fn(&W, &Address) -> bool + Send + Sync>,
+    /// lane 3.3, §5), in M7's own `Visibility` shape: `true` iff the
+    /// document is readable at guest class — the engine supplies
+    /// `published(doc)`. A fire consults it, off the fire's own pinned
+    /// snapshot, on the action's HOME and on the bound argument's document
+    /// before any deposit, so a rule's effect never crosses the draft
+    /// boundary in either direction (a marker on a draft's content, or a
+    /// deposit into a draft home). And every `LinkWriter` M9 builds is built
+    /// AT this class (lane 3.3b, PUB-6.28): the same closure is lent to
+    /// `mk_link_writer`, so M7's idempotency and dedup lookups see only
+    /// guest-readable incumbents and a fire commits byte-identically to a
+    /// world with no drafts. M9 holds no publication state of its own — the
+    /// predicate is injected like the factories.
+    pub(crate) guest: Box<Visibility<'static, W>>,
 }
 
-impl<W> Coordinator<W>
-where
-    W: WorldState + HasLinks + HasM3 + HasContent + HasM5,
-    W::Record: From<LinkRec> + From<M5Rec> + From<M3Rec> + From<ContentWrite>,
-{
+/// The working set is what a driver reads back — the registered rule ids
+/// and the rotation cursor. The kernel, the catalog projection, the memo and
+/// the injected factories are elided (`finish_non_exhaustive`).
+impl<W: WorldState> fmt::Debug for Coordinator<W> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Coordinator")
+            .field("rules", &self.rules.iter().map(|r| r.id).collect::<Vec<_>>())
+            .field("next_rule", &self.next_rule)
+            .field("cursor", &self.cursor)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<W: CoordinationWorld> Coordinator<W> {
     /// Engine-assembled construction. Receives the shared kernel; the ONE
     /// engine-built `Arc<TypeRegistry>` (NEVER rebuilt here — Conflicts §7),
     /// which M9 projects its static `TypeCatalog` from and then need not
-    /// retain; and two op-handle factories minting a borrow-scoped
-    /// `Vstream`/`LinkWriter` off `&Kernel<W>` per call (driver construction
-    /// is the engine's by the composition contract, so M9 names neither
-    /// `Vstream::new` nor `LinkWriter::new`; HRTB because each handle
-    /// borrows the kernel). The `LinkWriter` factory takes the VISIBILITY
-    /// class beside the kernel (lane 3.3b): M9 lends it `guest` at every
-    /// construction, a borrow of the one closure it holds.
+    /// retain; and the two op-handle factories, [`VstreamFactory`] and
+    /// [`LinkWriterFactory`] (the latter takes the VISIBILITY class beside
+    /// the kernel — lane 3.3b: M9 lends it `guest` at every construction, a
+    /// borrow of the one closure it holds).
     ///
     /// Infallible: the registry's population is the compiled shipped five
     /// (owner ruling, 2026-08-26), so the projection is a pure read of the
@@ -115,17 +128,12 @@ where
     /// an action whose home or bound argument's document it answers `false`
     /// for (`FireError::DraftBoundary`), and every write M9 makes runs its
     /// value-keyed gates at this class (PUB-6.28).
-    #[allow(clippy::type_complexity)] // the factory types are the interface's, verbatim
     pub fn new(
         kernel: Arc<Kernel<W>>,
         registry: Arc<TypeRegistry>,
-        mk_vstream: Box<dyn for<'k> Fn(&'k Kernel<W>) -> Vstream<'k, W> + Send + Sync>,
-        mk_link_writer: Box<
-            dyn for<'k> Fn(&'k Kernel<W>, &'k Visibility<'k, W>) -> LinkWriter<'k, W>
-                + Send
-                + Sync,
-        >,
-        guest: Box<dyn Fn(&W, &Address) -> bool + Send + Sync>,
+        mk_vstream: VstreamFactory<W>,
+        mk_link_writer: LinkWriterFactory<W>,
+        guest: Box<Visibility<'static, W>>,
     ) -> Coordinator<W> {
         let catalog = TypeCatalog::project(&registry);
         Coordinator {
@@ -201,7 +209,7 @@ where
     /// state (WT).
     pub fn type_check(&self, params: Vec<(VarId, Sort)>, body: Term) -> Result<TypedTerm, TypeError> {
         if let Some((v, _)) = params.iter().find(|(_, s)| *s == Sort::Tup) {
-            return Err(TypeError::TupParameter(v.clone()));
+            return Err(TypeError::TupParameter(*v));
         }
         self.check_under(SignedTerm { params, body }, 0)
     }
@@ -216,7 +224,7 @@ where
         if t.result != Sort::Bool {
             return Err(TypeError::SortMismatch { expected: Sort::Bool, found: t.result });
         }
-        Ok(TriggerTerm(t))
+        Ok(TriggerTerm(Arc::new(t)))
     }
 
     /// The ONE checker invocation: WT + WT-ref over the signed term — its
@@ -228,7 +236,7 @@ where
     pub(crate) fn check_under(&self, signed: SignedTerm, depth: u32) -> Result<TypedTerm, TypeError> {
         let resolve = |a: &Address| self.signature_at(a, depth);
         let checker = Checker { catalog: &self.catalog, resolve: &resolve };
-        let ctx: Ctx = signed.params.iter().cloned().collect();
+        let ctx: Ctx = signed.params.iter().copied().collect();
         let checked = checker.check_term(&ctx, &signed.body)?;
         Ok(TypedTerm {
             signed,
@@ -359,11 +367,7 @@ where
 /// the flat expansion) — the content-read pass stays distinct from the
 /// structural denotation, so the denotation remains reference-free
 /// (Conflicts §5).
-impl<W> DefSource for Coordinator<W>
-where
-    W: WorldState + HasLinks + HasM3 + HasContent + HasM5,
-    W::Record: From<LinkRec> + From<M5Rec> + From<M3Rec> + From<ContentWrite>,
-{
+impl<W: CoordinationWorld> DefSource for Coordinator<W> {
     fn resolve_def(&self, addr: &Address) -> Option<Arc<TypedTerm>> {
         match self.def_status(addr) {
             DefStatus::Defined(e) => Some(e),

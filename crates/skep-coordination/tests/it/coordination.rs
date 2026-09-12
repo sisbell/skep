@@ -12,15 +12,15 @@ use std::sync::Arc;
 
 use common::*;
 use skep_coordination::{
-    Atom, CertifyError, Coordinator, DefineError, Dom, Env, EvalError, FireAction, FireError,
-    FireOutcome, Lit, Occurrence, Prim, RegisterError, RetractError, Rule, RuleCertification,
-    RuleError, ScopeBody, Sort, StepOutcome, Term, Trigger, TypeError, TypeKey, TypeRef,
-    TypedTerm, Value, VarId, EXPANSION_NAME_BASE,
+    Arg, Atom, CertifyError, Coordinator, DefineError, Dom, Env, EvalError, FireAction,
+    FireError, FireOutcome, Lit, Occurrence, Prim, RegisterError, RetractError, Rule,
+    RuleCertification, RuleError, ScopeBody, Sort, StepOutcome, Term, Trigger, TypeError,
+    TypeKey, TypeRef, TypedTerm, Value, VarId, EXPANSION_NAME_BASE,
 };
 use skep_kernel::TxnError;
 use skep_links::{
     coverage_class, enc, Behavior, Caller, EmitError, HasLinks, NullifyError, ShippedType, Tip,
-    View,
+    View, Visibility,
 };
 use skep_arrangement::HasM5;
 
@@ -129,7 +129,9 @@ fn catalog_projects_and_serves_reserved_endsets() {
 
 /// The reserved expansion-name range is structurally uninhabitable by caller
 /// names (`VarId::new` is the sole public constructor); `Env` binds
-/// functionally.
+/// functionally, and is a collection of bindings — built from an iterator,
+/// extended, a later binding of a name shadowing an earlier one as `bind`
+/// does.
 #[test]
 fn varid_reservation_and_env_binding() {
     assert!(VarId::new(EXPANSION_NAME_BASE).is_none());
@@ -139,6 +141,69 @@ fn varid_reservation_and_env_binding() {
     assert_eq!(bound.get(&v(1)), Some(&Value::Bool(true)));
     assert_eq!(bound.get(&v(2)), None);
     assert_eq!(base.get(&v(1)), None); // functional update
+
+    let mut collected: Env =
+        [(v(1), Value::Bool(false)), (v(2), Value::Nat(n(2))), (v(1), Value::Bool(true))]
+            .into_iter()
+            .collect();
+    assert_eq!(collected.get(&v(1)), Some(&Value::Bool(true)));
+    assert_eq!(collected.get(&v(2)), Some(&Value::Nat(n(2))));
+    collected.extend([(v(2), Value::Nat(n(3)))]);
+    assert_eq!(collected.get(&v(2)), Some(&Value::Nat(n(3))));
+}
+
+/// A `Coordinator` over the assembled world crosses threads: a driver that
+/// shares one behind an `Arc` or moves it onto a worker depends on the
+/// promise, and nothing in the handle's signature states it — the boxed
+/// factories, the memo's lock and the catalog all have to keep it. And it
+/// renders: a struct holding one derives `Debug`, and the rendering is the
+/// working set — the registered rule ids and the rotation cursor.
+#[test]
+fn a_coordinator_is_send_sync_and_debug() {
+    fn owed<T: Send + Sync + std::fmt::Debug>() {}
+    owed::<Coordinator<World>>();
+    let k = kernel();
+    let mut c = coord(&k);
+    let id = c
+        .register_rule(Rule {
+            domain: Dom::MembersDom(conc(&pred_stable_ty())),
+            trigger: always_addr(&c),
+            view: View::Audit,
+            action: marker_action(),
+        })
+        .expect("register");
+    let rendered = format!("{c:?}");
+    assert!(rendered.starts_with("Coordinator {"), "{rendered}");
+    assert!(rendered.contains(&format!("rules: [{id:?}]")), "{rendered}");
+    assert!(rendered.contains("cursor: 0"), "{rendered}");
+}
+
+/// Every rejection displays, and chains to its cause through
+/// `std::error::Error::source` — so a caller boxing one as
+/// `Box<dyn Error + Send + Sync>` reads M9's condition and walks back to the
+/// upstream refusal beneath it.
+#[test]
+fn rejections_display_and_chain_to_their_cause() {
+    use std::error::Error;
+    let k = kernel();
+    let c = coord(&k);
+
+    // A parse-level rejection, boxed in the crossing form.
+    let g = insert_raw(&k, &doc2(), vec![0xff, 0x01, 0x02]);
+    let err = c.register_pred(&doc1(), &g).expect_err("garbage bytes are not a def");
+    let boxed: Box<dyn Error + Send + Sync> = Box::new(err);
+    assert!(boxed.to_string().starts_with("register_pred:"));
+    assert!(boxed.source().is_none(), "a leaf rejection has no cause");
+
+    // A wrapped one chains: DefineError → RegisterError → TypeError.
+    let ill = TypeError::UnboundVariable(v(9));
+    let define = DefineError::Register(RegisterError::IllTyped(ill.clone()));
+    assert_eq!(define.to_string(), format!("define_predicate: register_pred: the def is ill-typed: {ill}"));
+    let cause = define.source().expect("Register carries its RegisterError");
+    assert_eq!(cause.to_string(), format!("register_pred: the def is ill-typed: {ill}"));
+    let root = cause.source().expect("IllTyped carries its TypeError");
+    assert_eq!(root.to_string(), ill.to_string());
+    assert!(root.source().is_none());
 }
 
 // ─────────────────────────────── typing ───────────────────────────────
@@ -343,7 +408,7 @@ fn eval_panics_on_ref_bearing_term() {
     let k = kernel();
     let c = coord(&k);
     let (p, _) = c
-        .define_predicate(&doc1(), c.type_check(vec![], tru()).expect("closed True"))
+        .define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("closed True"))
         .expect("define");
     let t = c.type_check(vec![], Term::Ref { addr: p, args: vec![] }).expect("ref-bearing checks");
     assert!(!t.is_ref_free());
@@ -427,7 +492,7 @@ fn def_lifecycle_register_evaluate_retract() {
     let c = coord(&k);
 
     let (start, _seq) = c
-        .define_predicate(&doc1(), c.type_check(vec![], tru()).expect("closed True"))
+        .define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("closed True"))
         .expect("define");
     assert_eq!(start, ca(1)); // first content mint under doc1
 
@@ -448,7 +513,7 @@ fn def_lifecycle_register_evaluate_retract() {
     let tt1 = c
         .type_check(vec![(v(1), Sort::Addr)], addr_eq(var(1), lit_addr(&ca(1))))
         .expect("param def");
-    let (pd, _) = c.define_predicate(&doc1(), tt1).expect("define param def");
+    let (pd, _) = c.define_predicate(&doc1(), &tt1).expect("define param def");
     let s2 = k.snapshot();
     assert_eq!(c.evaluate_def(&pd, &[Value::Addr(ca(1))], View::Active, &s2), Ok(Value::Bool(true)));
     assert_eq!(c.evaluate_def(&pd, &[Value::Addr(ca(2))], View::Active, &s2), Ok(Value::Bool(false)));
@@ -486,13 +551,13 @@ fn def_references_endorsement_and_no_cascade() {
     let p = c
         .type_check(vec![(v(1), Sort::Addr)], addr_eq(var(1), lit_addr(&ca(1))))
         .expect("P");
-    let (p_start, _) = c.define_predicate(&doc1(), p).expect("define P");
+    let (p_start, _) = c.define_predicate(&doc1(), &p).expect("define P");
 
     let q = c
         .type_check(vec![], Term::Ref { addr: p_start.clone(), args: vec![at(lit_addr(&ca(1)))] })
         .expect("Q references P");
     assert!(!q.is_ref_free());
-    let (q_start, _) = c.define_predicate(&doc1(), q).expect("define Q");
+    let (q_start, _) = c.define_predicate(&doc1(), &q).expect("define Q");
     let s = k.snapshot();
     assert_eq!(c.evaluate_def(&q_start, &[], View::Active, &s), Ok(Value::Bool(true)));
     assert_eq!(c.signature(&q_start).expect("Q has a signature").result, Sort::Bool);
@@ -502,7 +567,7 @@ fn def_references_endorsement_and_no_cascade() {
     let r = c
         .type_check(vec![], Term::Ref { addr: p_start.clone(), args: vec![at(lit_addr(&ca(2)))] })
         .expect("type_check keys on ever-registration, so a retracted referent still checks");
-    match c.define_predicate(&doc1(), r) {
+    match c.define_predicate(&doc1(), &r) {
         Err(DefineError::Register(RegisterError::ReferentNotActive(x))) => assert_eq!(x, p_start),
         other => panic!("expected ReferentNotActive, got {other:?}"),
     }
@@ -529,7 +594,7 @@ fn define_and_register_rejections() {
 
     // P0: the home must be a registered document.
     let (start, _) = c
-        .define_predicate(&doc2(), c.type_check(vec![], tru()).expect("closed True"))
+        .define_predicate(&doc2(), &c.type_check(vec![], tru()).expect("closed True"))
         .expect("define at doc2");
     let unregistered_doc = a(&[1, 0, 1, 0, 7]);
     assert!(matches!(
@@ -548,12 +613,12 @@ fn supersede_gates_lineage_and_fence_drift() {
     let c = coord(&k);
 
     assert!(matches!(
-        c.supersede(&doc1(), &ca(50), c.type_check(vec![], tru()).expect("term")),
+        c.supersede(&doc1(), &ca(50), &c.type_check(vec![], tru()).expect("term")),
         Err(DefineError::OldStartNotEverRegistered(_))
     ));
 
     let (p_start, _) = c
-        .define_predicate(&doc1(), c.type_check(vec![], tru()).expect("closed True"))
+        .define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("closed True"))
         .expect("define P");
     let s = k.snapshot();
     assert!(matches!(c.current_version(&p_start, &s), Tip::Sink(x) if x == p_start));
@@ -565,7 +630,7 @@ fn supersede_gates_lineage_and_fence_drift() {
     // committed, exactly the documented non-atomicity. When M7 lifts the
     // fence for content-endpoint def lineage, this match arm flips.
     let before = k.snapshot().world().m5().content_count(&doc1());
-    match c.supersede(&doc1(), &p_start, c.type_check(vec![], Term::Lit(Lit::False)).expect("term")) {
+    match c.supersede(&doc1(), &p_start, &c.type_check(vec![], Term::Lit(Lit::False)).expect("term")) {
         Err(DefineError::Supersede(TxnError::Rejected(EmitError::SupersessionClass))) => {}
         other => panic!("fence drift resolved? got {other:?}"),
     }
@@ -583,7 +648,7 @@ fn certify_stable_cvalid_legs() {
     let c = coord(&k);
     let define = |t: Term| {
         let tt = c.type_check(vec![], t).expect("def term");
-        c.define_predicate(&doc1(), tt).expect("define")
+        c.define_predicate(&doc1(), &tt).expect("define")
     };
 
     assert!(matches!(c.certify_stable(&doc1(), &ca(40)), Err(CertifyError::NotEverRegistered)));
@@ -614,7 +679,7 @@ fn certify_stable_cvalid_legs() {
         c.classify(&tw, View::Audit).stability,
         skep_coordination::Stability::Neither
     );
-    let (sw, _) = c.define_predicate(&doc1(), tw).expect("define widened");
+    let (sw, _) = c.define_predicate(&doc1(), &tw).expect("define widened");
     c.certify_stable(&doc1(), &sw).expect("ST⁺ certifies the bound-ℕ-parameter threshold");
 
     // ST⁺ is not compositional over references: (ii) and (iii) are decided
@@ -625,7 +690,7 @@ fn certify_stable_cvalid_legs() {
     let define_ref = |target: &skep_address::Address, args: Vec<Term>| {
         let args = args.into_iter().map(at).collect();
         let tt = c.type_check(vec![], Term::Ref { addr: target.clone(), args }).expect("ref term");
-        c.define_predicate(&doc1(), tt).expect("define ref")
+        c.define_predicate(&doc1(), &tt).expect("define ref")
     };
     let (r0, _) = define_ref(&s0, vec![]);
     c.certify_stable(&doc1(), &r0).expect("a reference to a stable def is stable");
@@ -654,7 +719,7 @@ fn register_rule_validation_gates() {
     let p = c
         .type_check(vec![(v(1), Sort::Addr)], addr_eq(var(1), lit_addr(&ca(1))))
         .expect("P");
-    let (p_start, _) = c.define_predicate(&doc1(), p).expect("define P");
+    let (p_start, _) = c.define_predicate(&doc1(), &p).expect("define P");
 
     let mk = |domain: Dom, trigger: Trigger, action: FireAction| Rule {
         domain,
@@ -708,14 +773,14 @@ fn register_rule_validation_gates() {
     // A Def trigger's codomain and arity (an Inline trigger is one-parameter
     // Bool by its type — `type_check_trigger` refuses a non-Bool body).
     let (nat_def, _) = c
-        .define_predicate(&doc1(), c.type_check(vec![(v(1), Sort::Addr)], lit_nat(1)).expect("Nat def"))
+        .define_predicate(&doc1(), &c.type_check(vec![(v(1), Sort::Addr)], lit_nat(1)).expect("Nat def"))
         .expect("define a Nat-codomain def");
     assert!(matches!(
         c.register_rule(mk(Dom::MembersDom(conc(&pred_stable_ty())), Trigger::Def(nat_def), marker_action())),
         Err(RuleError::TriggerNotBoolean)
     ));
     let (closed_def, _) = c
-        .define_predicate(&doc1(), c.type_check(vec![], tru()).expect("closed def"))
+        .define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("closed def"))
         .expect("define a closed def");
     assert!(matches!(
         c.register_rule(mk(Dom::MembersDom(conc(&pred_stable_ty())), Trigger::Def(closed_def), marker_action())),
@@ -795,7 +860,7 @@ fn marker_rule_certifies_fires_and_quiesces() {
     assert!(!c.quiescent(&s));
     let e = c.next_enabled(&s).expect("an enabled occurrence");
     assert_eq!(e.rule, id);
-    assert_eq!(e.arg, Value::Addr(ca(1))); // members in tumbler order
+    assert_eq!(e.arg, Arg::Addr(ca(1))); // members in tumbler order
 
     match c.step(&k.snapshot()) {
         StepOutcome::Fired { rule, arg, .. } => {
@@ -815,7 +880,7 @@ fn marker_rule_certifies_fires_and_quiesces() {
     // re-aimed fire is a falsified-in-place NoOp (Q1) — and the effects are
     // real M7 deposits.
     assert!(matches!(
-        c.fire(&Occurrence { rule: id, arg: Value::Addr(ca(1)) }).expect("fire"),
+        c.fire(&Occurrence { rule: id, arg: Arg::Addr(ca(1)) }).expect("fire"),
         FireOutcome::NoOp
     ));
     assert!(k.snapshot().world().links().is_k(&marker_ty(), ca(1).tumbler()));
@@ -845,7 +910,7 @@ fn a_def_trigger_reads_only_the_snapshot_it_is_evaluated_on() {
     let t = c
         .type_check(vec![(v(1), Sort::Addr)], not(is_k_t(&marker_ty(), var(1))))
         .expect("T type-checks");
-    let (start, _) = c.define_predicate(&doc1(), t).expect("define T");
+    let (start, _) = c.define_predicate(&doc1(), &t).expect("define T");
     let rule = Rule {
         domain: Dom::MembersDom(conc(&pred_stable_ty())),
         trigger: Trigger::Def(start.clone()),
@@ -858,7 +923,7 @@ fn a_def_trigger_reads_only_the_snapshot_it_is_evaluated_on() {
     // The snapshot predating the def's registration answers, and agrees
     // with a fresh one.
     assert!(!c.quiescent(&before));
-    assert_eq!(c.next_enabled(&before), Some(Occurrence { rule: id, arg: Value::Addr(ca(1)) }));
+    assert_eq!(c.next_enabled(&before), Some(Occurrence { rule: id, arg: Arg::Addr(ca(1)) }));
     assert!(!c.quiescent(&k.snapshot()));
 
     // Retract the def: the rule's trigger is its own copy.
@@ -877,7 +942,7 @@ fn a_def_trigger_reads_only_the_snapshot_it_is_evaluated_on() {
 #[test]
 fn a_fire_stops_at_the_draft_boundary_before_any_deposit() {
     // doc2 is the "draft": unreadable at guest class under this predicate.
-    let refuse_doc2 = || -> Box<dyn Fn(&World, &skep_address::Address) -> bool + Send + Sync> {
+    let refuse_doc2 = || -> Box<Visibility<'static, World>> {
         Box::new(|_: &World, d: &skep_address::Address| *d != doc2())
     };
 
@@ -952,7 +1017,7 @@ fn a_fire_stops_at_the_draft_boundary_before_any_deposit() {
 /// the filter is the identity — every other test here stands as written.)
 #[test]
 fn the_trigger_s_look_is_filtered_at_guest_class() {
-    let refuse_doc2 = || -> Box<dyn Fn(&World, &skep_address::Address) -> bool + Send + Sync> {
+    let refuse_doc2 = || -> Box<Visibility<'static, World>> {
         Box::new(|_: &World, d: &skep_address::Address| *d != doc2())
     };
 
@@ -984,7 +1049,7 @@ fn the_trigger_s_look_is_filtered_at_guest_class() {
     assert!(c.next_enabled(&s).is_none());
     assert!(matches!(c.step(&s), StepOutcome::Quiescent));
     assert!(matches!(
-        c.fire(&Occurrence { rule: id, arg: Value::Addr(ca(1)) }).expect("out of domain is a NoOp"),
+        c.fire(&Occurrence { rule: id, arg: Arg::Addr(ca(1)) }).expect("out of domain is a NoOp"),
         FireOutcome::NoOp
     ));
     assert!(!k.snapshot().world().links().is_k(&marker_ty(), ca(1).tumbler()), "nothing deposited");
@@ -1138,7 +1203,7 @@ fn quiescent_scoped_exact_then_over_approximates() {
     assert!(!c.quiescent_scoped(&scope, ScopeBody::PerAddress, &k.snapshot()));
 
     // Discharge the in-scope work only: scoped-quiescent, globally not.
-    match c.fire(&Occurrence { rule: id, arg: Value::Addr(ca(1)) }).expect("fire ca1") {
+    match c.fire(&Occurrence { rule: id, arg: Arg::Addr(ca(1)) }).expect("fire ca1") {
         FireOutcome::Fired { .. } => {}
         other => panic!("expected Fired, got {other:?}"),
     }

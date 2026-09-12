@@ -138,7 +138,7 @@ pub(crate) fn encode(t: &SignedTerm) -> Result<Vec<u8>, VarId> {
     w_varint(&mut payload, t.params.len() as u64);
     for (v, s) in &t.params {
         if *s == Sort::Tup {
-            return Err(v.clone());
+            return Err(*v);
         }
         w_varid(&mut payload, v);
         payload.push(sort_tag(*s));
@@ -503,14 +503,17 @@ fn w_prim2(b: &mut Vec<u8>, t: u8, x: &Term, y: &Term) {
 
 /// Decode a stored def `Val`'s bytes to the signed term: envelope length must
 /// match exactly and the payload must be fully consumed ("the run is exactly
-/// what the parse consumed").
+/// what the parse consumed"). Total over every byte string: a length prefix
+/// the input cannot satisfy — however large — is `Malformed`, never a panic,
+/// so an undisciplined run reaches `register_pred`'s `ParseFailed` and the
+/// memo's freeze-on-breach.
 pub(crate) fn decode(bytes: &[u8]) -> Result<SignedTerm, Malformed> {
     let mut r = Rd { b: bytes, i: 0 };
-    let len = r.varint()? as usize;
-    if bytes.len() - r.i != len {
+    let len = r.len()?;
+    if bytes.get(r.i..).map(<[u8]>::len) != Some(len) {
         return Err(Malformed);
     }
-    let n_params = r.varint()? as usize;
+    let n_params = r.len()?;
     if n_params > len {
         return Err(Malformed); // cheap bound against absurd counts
     }
@@ -537,6 +540,13 @@ impl<'a> Rd<'a> {
         let x = *self.b.get(self.i).ok_or(Malformed)?;
         self.i += 1;
         Ok(x)
+    }
+
+    /// A length or count prefix, as a `usize`: a varint the target cannot
+    /// index by is `Malformed` (never a lossy `as`), so one byte string has
+    /// at most one parse on every target width.
+    fn len(&mut self) -> Result<usize, Malformed> {
+        usize::try_from(self.varint()?).map_err(|_| Malformed)
     }
 
     /// Minimal-form LEB128 (a non-minimal encoding is rejected, so decode is
@@ -588,11 +598,8 @@ impl<'a> Rd<'a> {
     }
 
     fn nat(&mut self) -> Result<Nat, Malformed> {
-        let len = self.varint()? as usize;
-        if self.i + len > self.b.len() {
-            return Err(Malformed);
-        }
-        let bytes = &self.b[self.i..self.i + len];
+        let len = self.len()?;
+        let bytes = self.b.get(self.i..).and_then(|rest| rest.get(..len)).ok_or(Malformed)?;
         self.i += len;
         if bytes.is_empty() || (bytes.len() > 1 && bytes[0] == 0) {
             return Err(Malformed); // canonical big-endian only
@@ -601,7 +608,7 @@ impl<'a> Rd<'a> {
     }
 
     fn tumbler(&mut self) -> Result<Tumbler, Malformed> {
-        let n = self.varint()? as usize;
+        let n = self.len()?;
         if n == 0 || n > self.b.len() {
             return Err(Malformed);
         }
@@ -623,7 +630,7 @@ impl<'a> Rd<'a> {
     }
 
     fn endset(&mut self) -> Result<Endset, Malformed> {
-        let n = self.varint()? as usize;
+        let n = self.len()?;
         if n > self.b.len() {
             return Err(Malformed);
         }
@@ -683,7 +690,7 @@ impl<'a> Rd<'a> {
             REFLECT => Term::Reflect(self.arc_dom(d)?),
             REF => {
                 let addr = self.addr()?;
-                let n = self.varint()? as usize;
+                let n = self.len()?;
                 if n > self.b.len() {
                     return Err(Malformed);
                 }
@@ -857,6 +864,18 @@ mod tests {
         let signed = SignedTerm { params: vec![], body: Term::Lit(Lit::True) };
         let mut bytes = encode(&signed).expect("encodes");
         bytes.push(0);
+        assert_eq!(decode(&bytes), Err(Malformed));
+    }
+
+    /// A length prefix no input can satisfy is `Malformed`, never a panic:
+    /// a closed `Lit::Nat` whose byte-length varint reads `u64::MAX` — a
+    /// well-formed 13-byte envelope (`0` params, `LIT`, `NAT`, the nine
+    /// `0xff` limbs and the final `0x01`) around one hostile length.
+    #[test]
+    fn decode_rejects_absurd_length_prefix() {
+        let mut bytes = vec![13, 0, tag::term::LIT, tag::lit::NAT];
+        bytes.extend([0xff; 9]);
+        bytes.push(0x01);
         assert_eq!(decode(&bytes), Err(Malformed));
     }
 }

@@ -7,13 +7,12 @@
 use std::slice;
 
 use skep_address::{content_subspace, Address, Nat};
-use skep_arrangement::{Deposit, HasM5, M5Rec, VPos};
-use skep_content::{ContentWrite, HasContent, Val};
-use skep_kernel::{Seq, Snapshot, WorldState};
-use skep_links::{Caller, HasLinks, LinkRec, Pattern, ShippedType, Tip, View};
-use skep_namespace::{HasM3, M3Rec};
+use skep_arrangement::{Deposit, VPos};
+use skep_content::{HasContent, Val};
+use skep_kernel::{Seq, Snapshot};
+use skep_links::{Caller, Pattern, ShippedType, Tip, View};
 
-use crate::ast::{collect_ref_addrs, Term};
+use crate::ast::{ref_addrs, Term};
 use crate::check::TypedTerm;
 use crate::codec;
 use crate::coordinator::Coordinator;
@@ -23,9 +22,11 @@ use crate::eval::eval_term;
 use crate::expand::Expander;
 use crate::memo::DefStatus;
 use crate::value::{value_sort, Env, SignedTerm, Sort, Value};
+use crate::CoordinationWorld;
 
 /// Why a stored def could not be read back as a signed term: no `Val` at the
 /// start, or bytes the PR-ENC codec rejects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ParseFail {
     NotResident,
     Malformed,
@@ -40,11 +41,7 @@ pub(crate) fn parse_def<W: HasContent>(w: &W, start: &Address) -> Result<SignedT
     codec::decode(val.as_bytes()).map_err(|_| ParseFail::Malformed)
 }
 
-impl<W> Coordinator<W>
-where
-    W: WorldState + HasLinks + HasM3 + HasContent + HasM5,
-    W::Record: From<LinkRec> + From<M5Rec> + From<M3Rec> + From<ContentWrite>,
-{
+impl<W: CoordinationWorld> Coordinator<W> {
     /// `is_K(pdef, start)@audit` off the world `w` of a pinned snapshot —
     /// through the one `observe`-honors-`Audit` seam, and CLASS-FREE by
     /// design: a def's registration is not a trigger read, so the guest-class
@@ -79,8 +76,11 @@ where
     /// `Insert(Rejected(OutOfBounds))` — benign, recompute and re-insert
     /// (item 6; the design's `BadPosition`, split by the as-built M5); a
     /// `register_pred`-stage failure leaves harmless orphan content a later
-    /// `register_pred(d, start)` adopts.
-    pub fn define_predicate(&self, d: &Address, term: TypedTerm) -> Result<(Address, Seq), DefineError> {
+    /// `register_pred(d, start)` adopts. Borrows the term: the stored def is
+    /// re-derived from its own bytes by `register_pred`, so nothing of the
+    /// caller's value is kept, and the caller goes on evaluating or
+    /// classifying it.
+    pub fn define_predicate(&self, d: &Address, term: &TypedTerm) -> Result<(Address, Seq), DefineError> {
         let blob = codec::encode(&term.signed)
             .expect("type_check admits no Tup parameter, and TypedTerm has no other public constructor");
         // Insert position off a snapshot read; M5's insert re-validates
@@ -116,8 +116,7 @@ where
             ParseFail::Malformed => RegisterError::ParseFailed,
         })?;
         // (iii) every referent ever-registered at σ.
-        let mut refs = Vec::new();
-        collect_ref_addrs(&signed.body, &mut refs);
+        let refs = ref_addrs(&signed.body);
         if let Some(r) = refs.iter().find(|r| !self.ever_registered(w, r)) {
             return Err(RegisterError::ReferentNotEverRegistered(r.clone()));
         }
@@ -173,16 +172,14 @@ where
             // cannot happen (ever-registration is monotone); defensive.
             DefStatus::NeverRegistered => return Err(EvalError::NotEverRegistered),
         };
-        if args.len() != entry.params().len() {
+        let params = entry.params();
+        if args.len() != params.len() {
             return Err(EvalError::ArgArityMismatch);
         }
-        let mut env = Env::empty();
-        for (arg, (v, s)) in args.iter().zip(entry.params().iter()) {
-            if value_sort(arg) != *s {
-                return Err(EvalError::ArgSortMismatch);
-            }
-            env = env.bind(v.clone(), arg.clone());
+        if args.iter().zip(params).any(|(arg, (_, s))| value_sort(arg) != *s) {
+            return Err(EvalError::ArgSortMismatch);
         }
+        let env: Env = params.iter().map(|(v, _)| *v).zip(args.iter().cloned()).collect();
         let cx = self.eval_ctx(snap.world(), view, Some(self));
         Ok(eval_term(&cx, &env, entry.evaluable.as_ref()))
     }
@@ -217,7 +214,7 @@ where
         &self,
         d: &Address,
         old_start: &Address,
-        new_term: TypedTerm,
+        new_term: &TypedTerm,
     ) -> Result<(Address, Seq), DefineError> {
         let snap = self.kernel.snapshot();
         if !self.is_ever_pred(old_start, &snap) {

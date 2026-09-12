@@ -75,18 +75,93 @@ mod rule;
 mod value;
 mod walk;
 
+use skep_arrangement::{HasM5, M5Rec};
+use skep_content::{ContentWrite, HasContent};
+use skep_kernel::WorldState;
+use skep_links::{HasLinks, LinkRec};
+use skep_namespace::{HasM3, M3Rec};
+
 pub use ast::{
     ArcDom, ArcTerm, Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId, EXPANSION_NAME_BASE,
 };
 pub use check::{TriggerTerm, TypedTerm};
-pub use coordinator::Coordinator;
+pub use coordinator::{Coordinator, LinkWriterFactory, VstreamFactory};
 pub use dynamics::{ActiveExceptions, Dynamics, Footprint, Stability};
 pub use error::{
     CertifyError, DefineError, EvalError, FireError, RegisterError, RetractError,
     RuleError, TypeError,
 };
 pub use rule::{
-    FireAction, FireOutcome, Occurrence, Rule, RuleCertification, RuleId, ScopeBody, StepOutcome,
-    Trigger,
+    Arg, FireAction, FireOutcome, Occurrence, Rule, RuleCertification, RuleId, ScopeBody,
+    StepOutcome, Trigger,
 };
 pub use value::{Env, Signature, Sort, Value};
+
+// Foreign types in this surface, re-exported so a caller names everything a
+// `Coordinator` signature carries from one crate: M1's address and numeral,
+// M2's snapshot/position/transaction refusal, M5's insert refusal, and M7's
+// view, walk head, shipped types, endset, coverage class, tuple, behavior,
+// write refusals and visibility class. The assembly-time types (`Kernel`,
+// `TypeRegistry`, `Vstream`, `LinkWriter`) stay the assembler's — it owns
+// those crates already.
+pub use skep_address::{Address, Nat};
+pub use skep_arrangement::InsertError;
+pub use skep_kernel::{Seq, Snapshot, TxnError};
+pub use skep_links::{
+    Behavior, CoverageClass, EmitError, Endset, NullifyError, ShippedType, Tip, Tuple, View,
+    Visibility,
+};
+
+/// The world M9 is assembled over: every store it reads (M3, M4, M5, M7)
+/// and every record it lifts through their ops (M9 drives no `transact`
+/// itself — a def write rides M5's placement composite, every `pdef`/
+/// `pd_stable`/fire deposit M7's gated `emit`/`nullify`). One name for the
+/// bound set every `Coordinator` impl block states; a blanket impl, so any
+/// world with the four stores and the four lifts is one.
+pub trait CoordinationWorld:
+    WorldState<Record: From<LinkRec> + From<M5Rec> + From<M3Rec> + From<ContentWrite>>
+    + HasLinks
+    + HasM3
+    + HasContent
+    + HasM5
+{
+}
+
+impl<W> CoordinationWorld for W where
+    W: WorldState<Record: From<LinkRec> + From<M5Rec> + From<M3Rec> + From<ContentWrite>>
+        + HasLinks
+        + HasM3
+        + HasContent
+        + HasM5
+{
+}
+
+/// What this crate promises without saying, pinned so a private change
+/// cannot revoke it silently: every value a driver carries out of a verdict
+/// or a step — and every rejection, in its `Box<dyn Error + Send + Sync>`
+/// crossing form — is `Send + Sync + 'static`. `Value`/`Env` keep the
+/// promise through `im`'s `Arc`-backed collections, which this crate's
+/// manifest names; a swap to the `Rc`-backed `im-rc` would revoke it with
+/// nothing else failing to build. `Coordinator<W>` itself is pinned over a
+/// concrete world in the suite, being generic here.
+const _: fn() = || {
+    fn owed<T: Send + Sync + 'static>() {}
+    fn owed_error<T: std::error::Error + Send + Sync + 'static>() {}
+    owed::<TypedTerm>();
+    owed::<TriggerTerm>();
+    owed::<Value>();
+    owed::<Env>();
+    owed::<Dynamics>();
+    owed::<Occurrence>();
+    owed::<Rule>();
+    owed::<FireOutcome>();
+    owed::<StepOutcome>();
+    owed_error::<TypeError>();
+    owed_error::<DefineError>();
+    owed_error::<RegisterError>();
+    owed_error::<EvalError>();
+    owed_error::<CertifyError>();
+    owed_error::<RetractError>();
+    owed_error::<FireError>();
+    owed_error::<RuleError>();
+};

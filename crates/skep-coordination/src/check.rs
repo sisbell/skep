@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use skep_address::Address;
+use skep_address::{Address, Nat};
 use skep_links::Behavior;
 
 use crate::ast::{ArcDom, ArcTerm, Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId};
@@ -15,7 +15,6 @@ use crate::catalog::{CatalogEntry, TypeCatalog};
 use crate::error::TypeError;
 use crate::value::{Signature, SignedTerm, Sort};
 use crate::walk::{rewrite_term, Rewrite};
-use skep_address::Nat;
 
 /// The post-type-check form — the ONE checked-term shape in the crate: what
 /// `type_check` hands back, what a stored def's memo entry holds, what a
@@ -78,8 +77,10 @@ impl TypedTerm {
 /// cannot receive it: `define_predicate` takes a `TypedTerm`, and this type
 /// yields none (its accessors are the trigger's parameter, its ref-freeness
 /// and its source body; the checked term beneath is the rule engine's).
+/// Holds the checked term shared, so a registration captures it without a
+/// copy.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TriggerTerm(pub(crate) TypedTerm);
+pub struct TriggerTerm(pub(crate) Arc<TypedTerm>);
 
 impl TriggerTerm {
     /// The one parameter — `register_rule` reconciles its sort with the
@@ -99,8 +100,9 @@ impl TriggerTerm {
         self.0.source_body()
     }
 
-    /// The checked term beneath — the shape the rule engine captures.
-    pub(crate) fn as_typed(&self) -> &TypedTerm {
+    /// The checked term beneath, shared — the shape the rule engine
+    /// captures at registration.
+    pub(crate) fn checked(&self) -> &Arc<TypedTerm> {
         &self.0
     }
 }
@@ -109,14 +111,14 @@ impl TriggerTerm {
 /// TypeRef::Concrete(key)` throughout a body, stopping at an inner `Reg`
 /// binder that rebinds `cvar` (shadowing).
 struct SubstClassVar<'a> {
-    cvar: &'a VarId,
+    cvar: VarId,
     key: &'a TypeKey,
 }
 
 impl Rewrite for SubstClassVar<'_> {
     fn typeref(&mut self, tr: &TypeRef) -> TypeRef {
         match tr {
-            TypeRef::ClassVar(v) if v == self.cvar => TypeRef::Concrete(self.key.clone()),
+            TypeRef::ClassVar(v) if *v == self.cvar => TypeRef::Concrete(self.key.clone()),
             other => other.clone(),
         }
     }
@@ -125,7 +127,7 @@ impl Rewrite for SubstClassVar<'_> {
         match t {
             // An inner Reg binder rebinding cvar shadows the outer one.
             Term::Forall { var, dom, .. } | Term::Exists { var, dom, .. }
-                if matches!(dom.as_ref(), Dom::Reg) && var == self.cvar =>
+                if matches!(dom.as_ref(), Dom::Reg) && *var == self.cvar =>
             {
                 t.clone()
             }
@@ -146,12 +148,14 @@ pub(crate) struct TypedDom {
 
 pub(crate) type Ctx = im::HashMap<VarId, Sort>;
 
+#[derive(Debug, Clone)]
 pub(crate) struct Checked {
     pub(crate) term: ArcTerm,
     pub(crate) sort: Sort,
     pub(crate) ref_free: bool,
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct CheckedDom {
     pub(crate) dom: ArcDom,
     pub(crate) elem: Sort,
@@ -182,7 +186,7 @@ impl<'a> Checker<'a> {
     /// byte-different misses).
     fn typeref(&self, tr: &TypeRef) -> Result<(TypeKey, &CatalogEntry), TypeError> {
         match tr {
-            TypeRef::ClassVar(v) => Err(TypeError::UnboundClassVar(v.clone())),
+            TypeRef::ClassVar(v) => Err(TypeError::UnboundClassVar(*v)),
             TypeRef::Concrete(k) => match self.catalog.get(k) {
                 Some(e) => Ok((k.clone(), e)),
                 None => Err(TypeError::UnregisteredType(k.clone())),
@@ -215,11 +219,48 @@ impl<'a> Checker<'a> {
         Ok((c.term, c.ref_free))
     }
 
+    /// A Bool connective: both children at Bool, the node rebuilt through
+    /// its constructor.
+    fn bool2(
+        &self,
+        ctx: &Ctx,
+        a: &ArcTerm,
+        b: &ArcTerm,
+        mk: fn(ArcTerm, ArcTerm) -> Term,
+    ) -> Result<Checked, TypeError> {
+        let (ea, ra) = self.sub(ctx, a, Sort::Bool)?;
+        let (eb, rb) = self.sub(ctx, b, Sort::Bool)?;
+        Ok(Checked { term: Arc::new(mk(ea, eb)), sort: Sort::Bool, ref_free: ra && rb })
+    }
+
+    /// A quantifier's checked parts: the domain, and the Bool body under the
+    /// binder at the domain's element sort. The `Reg` case is `expand_reg`'s.
+    fn quantified(
+        &self,
+        ctx: &Ctx,
+        var: VarId,
+        dom: &ArcDom,
+        body: &ArcTerm,
+    ) -> Result<(CheckedDom, ArcTerm, bool), TypeError> {
+        let d = self.check_dom(ctx, dom)?;
+        let ctx2 = ctx.update(var, d.elem);
+        let c = self.check_term(&ctx2, body)?;
+        want(Sort::Bool, c.sort)?;
+        Ok((d, c.term, c.ref_free))
+    }
+
+    /// A T1 order-extremum over an address-valued domain (PC2a).
+    fn extremum(&self, ctx: &Ctx, d: &ArcDom, mk: fn(ArcDom) -> Term) -> Result<Checked, TypeError> {
+        let cd = self.check_dom(ctx, d)?;
+        want(Sort::Addr, cd.elem)?;
+        Ok(Checked { term: Arc::new(mk(cd.dom)), sort: Sort::OptAddr, ref_free: cd.ref_free })
+    }
+
     pub(crate) fn check_term(&self, ctx: &Ctx, t: &Term) -> Result<Checked, TypeError> {
         match t {
             Term::Var(v) => match ctx.get(v) {
-                Some(s) => Ok(Checked { term: Arc::new(Term::Var(v.clone())), sort: *s, ref_free: true }),
-                None => Err(TypeError::UnboundVariable(v.clone())),
+                Some(s) => Ok(Checked { term: Arc::new(Term::Var(*v)), sort: *s, ref_free: true }),
+                None => Err(TypeError::UnboundVariable(*v)),
             },
             Term::Lit(l) => {
                 let sort = match l {
@@ -233,48 +274,36 @@ impl<'a> Checker<'a> {
             }
             Term::Atom(a) => self.check_atom(ctx, a),
             Term::Prim(p) => self.check_prim(ctx, p),
-            Term::And(a, b) | Term::Or(a, b) | Term::Implies(a, b) | Term::Iff(a, b) => {
-                let (ea, ra) = self.sub(ctx, a, Sort::Bool)?;
-                let (eb, rb) = self.sub(ctx, b, Sort::Bool)?;
-                let term = match t {
-                    Term::And(..) => Term::And(ea, eb),
-                    Term::Or(..) => Term::Or(ea, eb),
-                    Term::Implies(..) => Term::Implies(ea, eb),
-                    _ => Term::Iff(ea, eb),
-                };
-                Ok(Checked { term: Arc::new(term), sort: Sort::Bool, ref_free: ra && rb })
-            }
+            Term::And(a, b) => self.bool2(ctx, a, b, Term::And),
+            Term::Or(a, b) => self.bool2(ctx, a, b, Term::Or),
+            Term::Implies(a, b) => self.bool2(ctx, a, b, Term::Implies),
+            Term::Iff(a, b) => self.bool2(ctx, a, b, Term::Iff),
             Term::Not(a) => {
                 let (ea, ra) = self.sub(ctx, a, Sort::Bool)?;
                 Ok(Checked { term: Arc::new(Term::Not(ea)), sort: Sort::Bool, ref_free: ra })
             }
             Term::Forall { var, dom, body } if matches!(dom.as_ref(), Dom::Reg) => {
-                self.expand_reg(ctx, var, body, true)
+                self.expand_reg(ctx, *var, body, Term::And)
             }
             Term::Exists { var, dom, body } if matches!(dom.as_ref(), Dom::Reg) => {
-                self.expand_reg(ctx, var, body, false)
+                self.expand_reg(ctx, *var, body, Term::Or)
             }
-            Term::Forall { var, dom, body } | Term::Exists { var, dom, body } => {
-                let d = self.check_dom(ctx, dom)?;
-                let ctx2 = ctx.update(var.clone(), d.elem);
-                let (eb, rb) = {
-                    let c = self.check_term(&ctx2, body)?;
-                    want(Sort::Bool, c.sort)?;
-                    (c.term, c.ref_free)
-                };
-                let term = if matches!(t, Term::Forall { .. }) {
-                    Term::Forall { var: var.clone(), dom: d.dom, body: eb }
-                } else {
-                    Term::Exists { var: var.clone(), dom: d.dom, body: eb }
-                };
+            Term::Forall { var, dom, body } => {
+                let (d, body, rb) = self.quantified(ctx, *var, dom, body)?;
+                let term = Term::Forall { var: *var, dom: d.dom, body };
+                Ok(Checked { term: Arc::new(term), sort: Sort::Bool, ref_free: d.ref_free && rb })
+            }
+            Term::Exists { var, dom, body } => {
+                let (d, body, rb) = self.quantified(ctx, *var, dom, body)?;
+                let term = Term::Exists { var: *var, dom: d.dom, body };
                 Ok(Checked { term: Arc::new(term), sort: Sort::Bool, ref_free: d.ref_free && rb })
             }
             Term::Let { var, bound, body } => {
                 let cb = self.check_term(ctx, bound)?;
-                let ctx2 = ctx.update(var.clone(), cb.sort);
+                let ctx2 = ctx.update(*var, cb.sort);
                 let cy = self.check_term(&ctx2, body)?;
                 Ok(Checked {
-                    term: Arc::new(Term::Let { var: var.clone(), bound: cb.term, body: cy.term }),
+                    term: Arc::new(Term::Let { var: *var, bound: cb.term, body: cy.term }),
                     sort: cy.sort,
                     ref_free: cb.ref_free && cy.ref_free,
                 })
@@ -288,14 +317,14 @@ impl<'a> Checker<'a> {
                     Sort::OptNat => Sort::Nat,
                     other => return Err(TypeError::SortMismatch { expected: Sort::OptAddr, found: other }),
                 };
-                let ctx2 = ctx.update(var.clone(), narrowed);
+                let ctx2 = ctx.update(*var, narrowed);
                 let ct = self.check_term(&ctx2, then_)?;
                 let ce = self.check_term(ctx, else_)?;
                 want(ct.sort, ce.sort)?;
                 Ok(Checked {
                     term: Arc::new(Term::IfSome {
                         opt: co.term,
-                        var: var.clone(),
+                        var: *var,
                         then_: ct.term,
                         else_: ce.term,
                     }),
@@ -307,7 +336,7 @@ impl<'a> Checker<'a> {
                 // count(Reg) folds to a Lit — the registered-class count,
                 // constant by R1/C0 (V-IDX).
                 Dom::Reg => Ok(Checked {
-                    term: Arc::new(Term::Lit(Lit::Nat(Nat::from(self.catalog.classes().len() as u64)))),
+                    term: Arc::new(Term::Lit(Lit::Nat(Nat::from(self.catalog.classes().len())))),
                     sort: Sort::Nat,
                     ref_free: true,
                 }),
@@ -316,23 +345,19 @@ impl<'a> Checker<'a> {
                     Ok(Checked { term: Arc::new(Term::Count(cd.dom)), sort: Sort::Nat, ref_free: cd.ref_free })
                 }
             },
-            Term::MaxT1(d) | Term::MinT1(d) => {
-                let cd = self.check_dom(ctx, d)?;
-                want(Sort::Addr, cd.elem)?;
-                let term = if matches!(t, Term::MaxT1(_)) { Term::MaxT1(cd.dom) } else { Term::MinT1(cd.dom) };
-                Ok(Checked { term: Arc::new(term), sort: Sort::OptAddr, ref_free: cd.ref_free })
-            }
+            Term::MaxT1(d) => self.extremum(ctx, d, Term::MaxT1),
+            Term::MinT1(d) => self.extremum(ctx, d, Term::MinT1),
             Term::BigUnion { dom, var, body } => {
                 // PC2a excludes Reg from ⋃; Addr and Tup element sorts bind.
                 let cd = self.check_dom(ctx, dom)?;
-                let ctx2 = ctx.update(var.clone(), cd.elem);
+                let ctx2 = ctx.update(*var, cd.elem);
                 let (eb, rb) = {
                     let c = self.check_term(&ctx2, body)?;
                     want(Sort::AddrSet, c.sort)?;
                     (c.term, c.ref_free)
                 };
                 Ok(Checked {
-                    term: Arc::new(Term::BigUnion { dom: cd.dom, var: var.clone(), body: eb }),
+                    term: Arc::new(Term::BigUnion { dom: cd.dom, var: *var, body: eb }),
                     sort: Sort::AddrSet,
                     ref_free: cd.ref_free && rb,
                 })
@@ -384,8 +409,15 @@ impl<'a> Checker<'a> {
     /// V-IDX `Reg` expansion: instantiate `body` once per registered class,
     /// substituting `ClassVar(cvar) → Concrete(class)`, check EACH instance
     /// (an ill-typed one rejects the whole term — `RegInstanceIllTyped`), and
-    /// emit the And/Or of the instances as the evaluable projection.
-    fn expand_reg(&self, ctx: &Ctx, cvar: &VarId, body: &Term, conj: bool) -> Result<Checked, TypeError> {
+    /// join the instances through `join` (`And` for ∀, `Or` for ∃) as the
+    /// evaluable projection.
+    fn expand_reg(
+        &self,
+        ctx: &Ctx,
+        cvar: VarId,
+        body: &Term,
+        join: fn(ArcTerm, ArcTerm) -> Term,
+    ) -> Result<Checked, TypeError> {
         let mut acc: Option<(ArcTerm, bool)> = None;
         for key in self.catalog.classes() {
             let inst = SubstClassVar { cvar, key }.term(body);
@@ -398,10 +430,7 @@ impl<'a> Checker<'a> {
                 .map_err(|e| TypeError::RegInstanceIllTyped(Box::new(e)))?;
             acc = Some(match acc {
                 None => (c.term, c.ref_free),
-                Some((prev, rf)) => {
-                    let joined = if conj { Term::And(prev, c.term) } else { Term::Or(prev, c.term) };
-                    (Arc::new(joined), rf && c.ref_free)
-                }
+                Some((prev, rf)) => (Arc::new(join(prev, c.term)), rf && c.ref_free),
             });
         }
         let (term, ref_free) = acc.expect("the catalog holds the five shipped classes at minimum");
@@ -410,11 +439,11 @@ impl<'a> Checker<'a> {
 
     fn check_atom(&self, ctx: &Ctx, a: &Atom) -> Result<Checked, TypeError> {
         // A V-TUP variable must be a Tup-sorted binding in scope.
-        let tup_var = |v: &VarId| -> Result<VarId, TypeError> {
-            match ctx.get(v) {
-                Some(Sort::Tup) => Ok(v.clone()),
+        let tup_var = |v: VarId| -> Result<VarId, TypeError> {
+            match ctx.get(&v) {
+                Some(Sort::Tup) => Ok(v),
                 Some(s) => Err(TypeError::SortMismatch { expected: Sort::Tup, found: *s }),
-                None => Err(TypeError::UnboundVariable(v.clone())),
+                None => Err(TypeError::UnboundVariable(v)),
             }
         };
         let (atom, sort, ref_free) = match a {
@@ -496,68 +525,80 @@ impl<'a> Checker<'a> {
                 let (ee, rf) = self.sub(ctx, e, Sort::Addr)?;
                 (Atom::IsDoc(ee), Sort::Bool, rf)
             }
-            Atom::TupAddr(v) => (Atom::TupAddr(tup_var(v)?), Sort::Addr, true),
-            Atom::TupAddrsF(v) => (Atom::TupAddrsF(tup_var(v)?), Sort::AddrSet, true),
-            Atom::TupAddrsG(v) => (Atom::TupAddrsG(tup_var(v)?), Sort::AddrSet, true),
+            Atom::TupAddr(v) => (Atom::TupAddr(tup_var(*v)?), Sort::Addr, true),
+            Atom::TupAddrsF(v) => (Atom::TupAddrsF(tup_var(*v)?), Sort::AddrSet, true),
+            Atom::TupAddrsG(v) => (Atom::TupAddrsG(tup_var(*v)?), Sort::AddrSet, true),
             Atom::InCoverageF(e, v) => {
                 let (ee, rf) = self.sub(ctx, e, Sort::Addr)?;
-                (Atom::InCoverageF(ee, tup_var(v)?), Sort::Bool, rf)
+                (Atom::InCoverageF(ee, tup_var(*v)?), Sort::Bool, rf)
             }
             Atom::InCoverageG(e, v) => {
                 let (ee, rf) = self.sub(ctx, e, Sort::Addr)?;
-                (Atom::InCoverageG(ee, tup_var(v)?), Sort::Bool, rf)
+                (Atom::InCoverageG(ee, tup_var(*v)?), Sort::Bool, rf)
             }
         };
         Ok(Checked { term: Arc::new(Term::Atom(atom)), sort, ref_free })
     }
 
+    /// A binary prim over two children of one sort, synthesizing `sort`, the
+    /// node rebuilt through its constructor.
+    fn prim2(
+        &self,
+        ctx: &Ctx,
+        x: &ArcTerm,
+        y: &ArcTerm,
+        operand: Sort,
+        sort: Sort,
+        mk: fn(ArcTerm, ArcTerm) -> Prim,
+    ) -> Result<Checked, TypeError> {
+        let (ex, rx) = self.sub(ctx, x, operand)?;
+        let (ey, ry) = self.sub(ctx, y, operand)?;
+        Ok(Checked { term: Arc::new(Term::Prim(mk(ex, ey))), sort, ref_free: rx && ry })
+    }
+
+    /// A unary prim over one child at `operand`, synthesizing `sort`.
+    fn prim1(
+        &self,
+        ctx: &Ctx,
+        x: &ArcTerm,
+        operand: Sort,
+        sort: Sort,
+        mk: fn(ArcTerm) -> Prim,
+    ) -> Result<Checked, TypeError> {
+        let (ex, rx) = self.sub(ctx, x, operand)?;
+        Ok(Checked { term: Arc::new(Term::Prim(mk(ex))), sort, ref_free: rx })
+    }
+
     fn check_prim(&self, ctx: &Ctx, p: &Prim) -> Result<Checked, TypeError> {
-        let (prim, sort, ref_free) = match p {
-            Prim::AddrEq(a, b) | Prim::Prefix(a, b) | Prim::T1Lt(a, b) => {
-                let (ea, ra) = self.sub(ctx, a, Sort::Addr)?;
-                let (eb, rb) = self.sub(ctx, b, Sort::Addr)?;
-                let prim = match p {
-                    Prim::AddrEq(..) => Prim::AddrEq(ea, eb),
-                    Prim::Prefix(..) => Prim::Prefix(ea, eb),
-                    _ => Prim::T1Lt(ea, eb),
-                };
-                (prim, Sort::Bool, ra && rb)
-            }
+        match p {
+            Prim::AddrEq(a, b) => self.prim2(ctx, a, b, Sort::Addr, Sort::Bool, Prim::AddrEq),
+            Prim::Prefix(a, b) => self.prim2(ctx, a, b, Sort::Addr, Sort::Bool, Prim::Prefix),
+            Prim::T1Lt(a, b) => self.prim2(ctx, a, b, Sort::Addr, Sort::Bool, Prim::T1Lt),
+            Prim::SetEq(a, b) => self.prim2(ctx, a, b, Sort::AddrSet, Sort::Bool, Prim::SetEq),
+            Prim::NatEq(a, b) => self.prim2(ctx, a, b, Sort::Nat, Sort::Bool, Prim::NatEq),
+            Prim::NatLe(a, b) => self.prim2(ctx, a, b, Sort::Nat, Sort::Bool, Prim::NatLe),
+            Prim::NatAdd(a, b) => self.prim2(ctx, a, b, Sort::Nat, Sort::Nat, Prim::NatAdd),
+            Prim::IsEmpty(s) => self.prim1(ctx, s, Sort::AddrSet, Sort::Bool, Prim::IsEmpty),
+            Prim::Elems(q) => self.prim1(ctx, q, Sort::AddrSeq, Sort::AddrSet, Prim::Elems),
             Prim::SetMem(x, s) => {
                 let (ex, rx) = self.sub(ctx, x, Sort::Addr)?;
                 let (es, rs) = self.sub(ctx, s, Sort::AddrSet)?;
-                (Prim::SetMem(ex, es), Sort::Bool, rx && rs)
-            }
-            Prim::SetEq(a, b) => {
-                let (ea, ra) = self.sub(ctx, a, Sort::AddrSet)?;
-                let (eb, rb) = self.sub(ctx, b, Sort::AddrSet)?;
-                (Prim::SetEq(ea, eb), Sort::Bool, ra && rb)
-            }
-            Prim::IsEmpty(s) => {
-                let (es, rs) = self.sub(ctx, s, Sort::AddrSet)?;
-                (Prim::IsEmpty(es), Sort::Bool, rs)
-            }
-            Prim::Elems(q) => {
-                let (eq_, rq) = self.sub(ctx, q, Sort::AddrSeq)?;
-                (Prim::Elems(eq_), Sort::AddrSet, rq)
-            }
-            Prim::NatEq(a, b) | Prim::NatLe(a, b) => {
-                let (ea, ra) = self.sub(ctx, a, Sort::Nat)?;
-                let (eb, rb) = self.sub(ctx, b, Sort::Nat)?;
-                let prim = if matches!(p, Prim::NatEq(..)) { Prim::NatEq(ea, eb) } else { Prim::NatLe(ea, eb) };
-                (prim, Sort::Bool, ra && rb)
-            }
-            Prim::NatAdd(a, b) => {
-                let (ea, ra) = self.sub(ctx, a, Sort::Nat)?;
-                let (eb, rb) = self.sub(ctx, b, Sort::Nat)?;
-                (Prim::NatAdd(ea, eb), Sort::Nat, ra && rb)
+                Ok(Checked {
+                    term: Arc::new(Term::Prim(Prim::SetMem(ex, es))),
+                    sort: Sort::Bool,
+                    ref_free: rx && rs,
+                })
             }
             Prim::MapGet(m, tr) => {
                 // V-PRIM admits ·[K] per registered class — cataloged-only,
                 // no behavior requirement; a non-BH3/absent key denotes ⊥.
                 let (k, _) = self.typeref(tr)?;
                 let (em, rm) = self.sub(ctx, m, Sort::Map)?;
-                (Prim::MapGet(em, TypeRef::Concrete(k)), Sort::OptAddr, rm)
+                Ok(Checked {
+                    term: Arc::new(Term::Prim(Prim::MapGet(em, TypeRef::Concrete(k)))),
+                    sort: Sort::OptAddr,
+                    ref_free: rm,
+                })
             }
             Prim::Def(x) => {
                 let c = self.check_term(ctx, x)?;
@@ -565,10 +606,13 @@ impl<'a> Checker<'a> {
                     Sort::OptAddr | Sort::OptNat => {}
                     other => return Err(TypeError::SortMismatch { expected: Sort::OptAddr, found: other }),
                 }
-                (Prim::Def(c.term), Sort::Bool, c.ref_free)
+                Ok(Checked {
+                    term: Arc::new(Term::Prim(Prim::Def(c.term))),
+                    sort: Sort::Bool,
+                    ref_free: c.ref_free,
+                })
             }
-        };
-        Ok(Checked { term: Arc::new(Term::Prim(prim)), sort, ref_free })
+        }
     }
 
     /// The WT domain judgment `⊢ D dom(s)`, `s ∈ {Addr, Tup}`. A `Reg` in a
@@ -606,11 +650,11 @@ impl<'a> Checker<'a> {
             Dom::Reg => Err(TypeError::SortMismatch { expected: Sort::Addr, found: Sort::Tup }),
             Dom::Filter { dom, var, pred } => {
                 let base = self.check_dom(ctx, dom)?;
-                let ctx2 = ctx.update(var.clone(), base.elem);
+                let ctx2 = ctx.update(*var, base.elem);
                 let c = self.check_term(&ctx2, pred)?;
                 want(Sort::Bool, c.sort)?;
                 Ok(CheckedDom {
-                    dom: Arc::new(Dom::Filter { dom: base.dom, var: var.clone(), pred: c.term }),
+                    dom: Arc::new(Dom::Filter { dom: base.dom, var: *var, pred: c.term }),
                     elem: base.elem,
                     ref_free: base.ref_free && c.ref_free,
                 })

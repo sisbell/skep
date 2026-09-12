@@ -8,32 +8,24 @@ use std::slice;
 use std::sync::Arc;
 
 use skep_address::{document_of, Address};
-use skep_kernel::{Snapshot, TxnError, WorldState};
-use skep_links::{
-    Caller, EmitError, Endset, HasLinks, LinkRec, NullifyError, Pattern, Shape, ShippedType, View,
-};
-use skep_namespace::{HasM3, M3Rec};
-use skep_arrangement::{HasM5, M5Rec};
-use skep_content::{ContentWrite, HasContent};
+use skep_kernel::{Seq, Snapshot, TxnError};
+use skep_links::{Caller, EmitError, Endset, NullifyError, Pattern, Shape, ShippedType, View};
 
 use crate::ast::{Atom, Term, TypeRef, VarId};
 use crate::check::{Checker, Ctx, TypedDom, TypedTerm};
 use crate::coordinator::{CheckedRule, Coordinator};
 use crate::dynamics::{Analyzer, Footprint};
 use crate::error::{FireError, RuleError};
-use crate::eval::{enum_dom, eval_term, truthy, Elem};
+use crate::eval::{enum_dom, eval_term, truthy};
 use crate::memo::DefStatus;
 use crate::rule::{
-    FireAction, FireOutcome, Occurrence, Rule, RuleCertification, RuleId, ScopeBody, StepOutcome,
-    Trigger,
+    Arg, FireAction, FireOutcome, Occurrence, Rule, RuleCertification, RuleId, ScopeBody,
+    StepOutcome, Trigger,
 };
 use crate::value::{Env, Sort, Value};
+use crate::CoordinationWorld;
 
-impl<W> Coordinator<W>
-where
-    W: WorldState + HasLinks + HasM3 + HasContent + HasM5,
-    W::Record: From<LinkRec> + From<M5Rec> + From<M3Rec> + From<ContentWrite>,
-{
+impl<W: CoordinationWorld> Coordinator<W> {
     // ─────────────────── registration & the shared validation ───────────────────
 
     /// Validate the rule and add it to the working set (each failure a typed
@@ -75,7 +67,7 @@ where
         // over (canonical: trigger ¬is_K(a) @ audit ⟺ Marker{_, K}).
         let marker = match &rule.action {
             FireAction::Marker { ty, .. } => {
-                rule.view == View::Audit && self.marker_pattern(&flat, &trigger.params()[0].0, ty)
+                rule.view == View::Audit && self.marker_pattern(&flat, trigger.params()[0].0, ty)
             }
             FireAction::Nullify { .. } => false,
         };
@@ -102,13 +94,13 @@ where
     /// The canonical certified-Marker witness match: `¬ is_K(x)` with `x`
     /// the trigger's parameter and `K` coverage-equal to `Marker.ty` (§8
     /// leg b — sound-but-incomplete, by spelling).
-    fn marker_pattern(&self, flat: &Term, param: &VarId, ty: &crate::ast::TypeKey) -> bool {
+    fn marker_pattern(&self, flat: &Term, param: VarId, ty: &crate::ast::TypeKey) -> bool {
         let Term::Not(inner) = flat else { return false };
         let Term::Atom(Atom::IsK(TypeRef::Concrete(k), arg)) = inner.as_ref() else {
             return false;
         };
         let Term::Var(v) = arg.as_ref() else { return false };
-        if v != param {
+        if *v != param {
             return false;
         }
         match (self.catalog.get(k), self.catalog.get(ty)) {
@@ -143,7 +135,7 @@ where
                 if *s != elem {
                     return Err(RuleError::DomainTriggerSortMismatch { expected: elem, found: *s });
                 }
-                Arc::new(t.as_typed().clone())
+                Arc::clone(t.checked())
             }
             Trigger::Def(addr) => {
                 let DefStatus::Defined(def) = self.def_status(addr) else {
@@ -195,7 +187,7 @@ where
     /// domain — a rule whose only matching tuples are draft-homed has an
     /// EMPTY visible domain and reports as a rule with no matching tuple
     /// does today (`next_enabled` → `None`, `step` → `Quiescent`).
-    fn enum_rule_dom(&self, rule: &CheckedRule, snap: &Snapshot<W>) -> Vec<Elem> {
+    fn enum_rule_dom(&self, rule: &CheckedRule, snap: &Snapshot<W>) -> Vec<Arg> {
         let cx = self.eval_ctx(snap.world(), rule.view, None);
         enum_dom(&cx, &Env::empty(), rule.dom.dom.as_ref())
     }
@@ -207,13 +199,13 @@ where
     /// pattern and a fire's verdict never turns on a document rule 4 hides.
     /// Reads nothing but `snap`: the body is immutable content captured at
     /// registration, so any snapshot serves.
-    fn trigger_true(&self, rule: &CheckedRule, elem: &Elem, snap: &Snapshot<W>) -> bool {
+    fn trigger_true(&self, rule: &CheckedRule, arg: &Arg, snap: &Snapshot<W>) -> bool {
         let cx = self.eval_ctx(snap.world(), rule.view, Some(self));
-        let env = Env::empty().bind(rule.trigger.params()[0].0.clone(), elem.value());
+        let env = Env::empty().bind(rule.trigger.params()[0].0, Value::from(arg.clone()));
         truthy(eval_term(&cx, &env, rule.trigger.evaluable.as_ref()))
     }
 
-    fn first_enabled(&self, rule: &CheckedRule, snap: &Snapshot<W>) -> Option<Elem> {
+    fn first_enabled(&self, rule: &CheckedRule, snap: &Snapshot<W>) -> Option<Arg> {
         self.enum_rule_dom(rule, snap)
             .into_iter()
             .find(|e| self.trigger_true(rule, e, snap))
@@ -246,14 +238,14 @@ where
             "quiescent_scoped precondition violated (Q7): scope must be a ref-free \
              one-Addr-parameter Bool TypedTerm"
         );
-        let scope_param = scope.params()[0].0.clone();
+        let scope_param = scope.params()[0].0;
         // OPEN DECISION: the design leaves the scope predicate's evaluation
         // view unstated (the canonical scopes are state-free address tests);
         // Active — the current structural state — is taken as the
         // conservative default.
         let cx = self.eval_ctx(snap.world(), View::Active, None);
         let s_of = |y: &Address| -> bool {
-            let env = Env::empty().bind(scope_param.clone(), Value::Addr(y.clone()));
+            let env = Env::empty().bind(scope_param, Value::Addr(y.clone()));
             truthy(eval_term(&cx, &env, scope.evaluable.as_ref()))
         };
         for rule in &self.rules {
@@ -267,12 +259,12 @@ where
                 if compatible {
                     // β_ρ^S(x): the four canonical S-positive bodies (Q9).
                     let in_scope = match (&body, &e) {
-                        (ScopeBody::PerAddress, Elem::Addr(a)) => s_of(a),
-                        (ScopeBody::PerEmitter, Elem::Tup(t)) => s_of(&t.addr),
-                        (ScopeBody::PerTarget, Elem::Tup(t)) => {
+                        (ScopeBody::PerAddress, Arg::Addr(a)) => s_of(a),
+                        (ScopeBody::PerEmitter, Arg::Tuple(t)) => s_of(&t.addr),
+                        (ScopeBody::PerTarget, Arg::Tuple(t)) => {
                             t.to.addrs().any(|y| s_of(&crate::eval::lift(y)))
                         }
-                        (ScopeBody::PerSource, Elem::Tup(t)) => {
+                        (ScopeBody::PerSource, Arg::Tuple(t)) => {
                             t.from.addrs().any(|y| s_of(&crate::eval::lift(y)))
                         }
                         _ => true,
@@ -297,7 +289,7 @@ where
     /// `step` loop).
     pub fn next_enabled(&self, snap: &Snapshot<W>) -> Option<Occurrence> {
         self.rules.iter().find_map(|r| {
-            self.first_enabled(r, snap).map(|e| Occurrence { rule: r.id, arg: e.value() })
+            self.first_enabled(r, snap).map(|arg| Occurrence { rule: r.id, arg })
         })
     }
 
@@ -339,25 +331,24 @@ where
             .find(|r| r.id == e.rule)
             .expect("fire precondition: the RuleId is registered with this Coordinator");
         let snap = self.kernel.snapshot();
-        let elem = {
+        let arg = {
             let elems = self.enum_rule_dom(rule, &snap);
             match &e.arg {
-                Value::Addr(a) => elems.into_iter().find(|x| matches!(x, Elem::Addr(b) if b == a)),
+                Arg::Addr(a) => elems.into_iter().find(|x| matches!(x, Arg::Addr(b) if b == a)),
                 // Tuple membership keys on the tuple's address (R1
                 // AddressInjectivity: an address hit is a value hit).
-                Value::Tuple(t) => {
-                    elems.into_iter().find(|x| matches!(x, Elem::Tup(u) if u.addr == t.addr))
+                Arg::Tuple(t) => {
+                    elems.into_iter().find(|x| matches!(x, Arg::Tuple(u) if u.addr == t.addr))
                 }
-                _ => None,
             }
         };
-        let Some(elem) = elem else {
+        let Some(arg) = arg else {
             return Ok(FireOutcome::NoOp);
         };
-        if !self.trigger_true(rule, &elem, &snap) {
+        if !self.trigger_true(rule, &arg, &snap) {
             return Ok(FireOutcome::NoOp);
         }
-        let a = elem.key_addr();
+        let a = arg.key_addr();
         // THE GUEST-CLASS FILTER (PUB round 2, lane 3.3, §5): a fire runs at
         // pinned GUEST class — its home and the bound argument's document
         // must both be readable at guest class off the fire's own snapshot,
@@ -413,7 +404,7 @@ where
     /// fresh deposit's address is newly minted and absent from it. Safe
     /// direction under concurrency: at worst a gap-deposited witness is
     /// miscounted as a real fire — the monitor is only a backstop.
-    fn fired_or_deduped(&self, snap: &Snapshot<W>, effect: Address, seq: skep_kernel::Seq) -> FireOutcome {
+    fn fired_or_deduped(&self, snap: &Snapshot<W>, effect: Address, seq: Seq) -> FireOutcome {
         if snap.world().links().readlink(&effect).is_some() {
             FireOutcome::Deduped { effect, seq }
         } else {
@@ -435,7 +426,7 @@ where
         }
         for i in 0..n {
             let idx = (self.cursor + i) % n;
-            let (id, elem) = {
+            let (id, enabled) = {
                 let rule = &self.rules[idx];
                 match self.first_enabled(rule, snap) {
                     Some(e) => (rule.id, e),
@@ -443,8 +434,8 @@ where
                 }
             };
             self.cursor = (idx + 1) % n; // rotate past, success or failure
-            let arg = elem.key_addr();
-            let occurrence = Occurrence { rule: id, arg: elem.value() };
+            let arg = enabled.key_addr();
+            let occurrence = Occurrence { rule: id, arg: enabled };
             return match self.fire(&occurrence) {
                 Ok(FireOutcome::Fired { effect, seq }) => {
                     StepOutcome::Fired { rule: id, arg, effect, seq }
@@ -578,8 +569,9 @@ fn tarjan_nontrivial_sccs(edges: &[Vec<usize>]) -> Vec<Vec<usize>> {
         s.next += 1;
         s.stack.push(v);
         s.on_stack[v] = true;
-        let succ = s.edges[v].clone();
-        for w in succ {
+        // `edges` is a shared slice, so walking it borrows nothing of `s`.
+        let edges = s.edges;
+        for &w in &edges[v] {
             match s.index[w] {
                 None => {
                     visit(s, w);

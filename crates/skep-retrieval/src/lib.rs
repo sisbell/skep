@@ -29,6 +29,13 @@
 //! answers M6 gives back is M6's own, and it is the first thing each of the
 //! seven operations decides.
 //!
+//! SHOWORIGIN is the one exception, and it is the specification's: an
+//! occupied subspace is WF_V(iii)'s own precondition, so the V-arity has no
+//! empty form to contribute and answers a registered-empty document with
+//! `EmptySubspace` — an inadmissible request, never an empty success. The
+//! other six contribute `⟨⟩`, an empty delivery, empty halves, an empty
+//! report or `[]`.
+//!
 //! ## Which arrangement an operation answers from
 //!
 //! An operation gates on the address the caller NAMED, and only then asks

@@ -133,7 +133,8 @@ impl fmt::Debug for DeliveryItem {
 pub struct Delivery(pub Vec<DeliveryItem>);
 
 impl Delivery {
-    /// The delivered items, in delivery order.
+    /// The delivery's items — delivered and withheld alike — in delivery
+    /// order.
     pub fn as_slice(&self) -> &[DeliveryItem] {
         &self.0
     }
@@ -145,8 +146,10 @@ impl Delivery {
         self.0.len()
     }
 
-    /// Whether nothing was delivered: an empty spec-set, or one whose spans
-    /// all resolved empty (R6).
+    /// Whether the delivery carries no item at all: an empty spec-set, or one
+    /// whose spans all resolved empty (R6). NOT "nothing was delivered": a
+    /// delivery whose every run is masked delivers nothing and is not empty,
+    /// carrying one [`DeliveryItem::Withheld`] per masked run.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }

@@ -314,17 +314,26 @@ impl<'a> Block<'a> {
 /// mid-document V-gap slip past a first-run check and silently mis-set a later
 /// block's `v_start`.
 ///
-/// REQUIRES GATED SPECS: every span content-subspace-started and
-/// `gate_vspan`-clean, which [`Query::compare`]'s gate establishes before it
-/// calls. Two clauses of that gate ride here. The ZERO-FREE start puts
-/// `ordinal ≥ 1` at every span, so the cursor M6 opens at the span's own
-/// ordinal IS `resolve`'s `max(ordinal, 1)` and M6 carries no clamp of its own
-/// — relax zero-freedom and every foot of every correspondence from an
-/// ordinal-0 span is off by one, with the assertion below the only thing that
-/// would say so, and only in debug. And the CONTENT-subspace start is
-/// ASN-0122's own restriction on what a spec-set may name — the operand
-/// region this builds is a content region because the gate admits nothing
-/// else.
+/// REQUIRES A GATED SPEC-SET: every region's document REGISTERED, and every
+/// span content-subspace-started and `gate_vspan`-clean — which
+/// [`Query::compare`]'s gate establishes before it calls. THREE clauses of
+/// that gate ride here.
+///
+/// The REGISTRY clause rides furthest: the crate's other three
+/// `reading_surface` calls gate and float in one body, while this one floats
+/// where [`Query::compare`] gated. `reading_surface` is contracted to
+/// registered documents (PUB-6.37) and is TOTAL rather than panicking, so an
+/// ungated region would not stop here — it would resolve against its own
+/// arrangement and answer.
+///
+/// The ZERO-FREE start puts `ordinal ≥ 1` at every span, so the cursor M6
+/// opens at the span's own ordinal IS `resolve`'s `max(ordinal, 1)` and M6
+/// carries no clamp of its own — relax zero-freedom and every foot of every
+/// correspondence from an ordinal-0 span is off by one, with the assertion
+/// below the only thing that would say so, and only in debug. And the
+/// CONTENT-subspace start is ASN-0122's own restriction on what a spec-set
+/// may name — the operand region this builds is a content region because the
+/// gate admits nothing else.
 ///
 /// The cursor is opened from M5's own reading of the span — the shape
 /// `resolve` folds every span through — so the let-else below is LIVE rather

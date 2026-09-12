@@ -462,7 +462,9 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// A success is never empty: an admissible request has an occupied
     /// subspace (`n_s ≥ 1`), a depth-2 span, and a fully resolved width, so at
     /// least one run is projected and `Ok(vec![])` is not an answer this
-    /// operation gives.
+    /// operation gives. So a registered-empty document has no empty form
+    /// here: it is `EmptySubspace`, the one exception to the crate doc's
+    /// registered-empty rule.
     ///
     /// Inadmissible (Err) — reject, never clip to the surviving sub-span as
     /// RETRIEVEV's R6 would (O13), and the listing below IS the precedence:

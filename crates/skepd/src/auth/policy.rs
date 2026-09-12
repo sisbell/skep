@@ -450,20 +450,10 @@ pub(crate) fn nullify_refusal(
 
 // ── mint_home_refusal — the MINT class (AUTH-3.10–3.14) ──────────────────
 
-/// AUTH-3.68's `has_documents(account)`, built over M3's PUBLIC read
-/// surface: the account's document chain is empty iff the slot it opens at
-/// — `first_document_address(A)` — holds no registered document. Exact
-/// because that chain is contiguous from its first ordinal, which is M3's
-/// own guarantee and M3's own arithmetic. A subject that anchors no
-/// document chain answers `None` there, hence `false` here.
-pub(crate) fn has_documents(world: &World, account: &Address) -> bool {
-    first_document_address(account)
-        .is_some_and(|first| world.m3().is_registered_document(&first))
-}
-
 /// `Some(MintHomeFirst)` iff `op` is a document-minting op OTHER than
-/// `create_new_document` and the subject account's chain is empty. The
-/// subject is `principal_prefix(p)` THEN an account-hood test — never
+/// `create_new_document` and the subject account's chain is empty — AUTH-3.68's
+/// `has_documents(account)`, which is M3's own read of its document chain.
+/// The subject is `principal_prefix(p)` THEN an account-hood test — never
 /// `key_subject` (AUTH-3.11); a subject that is not an account answers
 /// `None` and no arm fires. Reads the op's KIND and the PRINCIPAL and
 /// nothing else — never a fork/version source (AUTH-3.13).
@@ -483,7 +473,7 @@ pub(crate) fn mint_home_refusal(
     if !world.m3().is_registered_account(subject) {
         return None;
     }
-    if has_documents(world, subject) {
+    if world.m3().has_documents(subject) {
         None
     } else {
         Some(CredentialRefusal::MintHomeFirst)
@@ -527,7 +517,7 @@ pub(crate) fn first_mint_private_refusal(
     let Op::CreateNewDocument { account, published: Some(false) } = op else {
         return None;
     };
-    if world.m3().is_effective_owner(principal, account) && !has_documents(world, account) {
+    if world.m3().is_effective_owner(principal, account) && !world.m3().has_documents(account) {
         Some(CredentialRefusal::MintHomePublic)
     } else {
         None
@@ -673,7 +663,9 @@ fn publish_gate(
         // the content-empty mechanical home (PUB-6.43's enumerated
         // exemption), so it answers `None` here (accepted).
         Op::CreateNewDocument { account, published: Some(true) } => {
-            if world.m3().is_effective_owner(principal, account) && has_documents(world, account) {
+            if world.m3().is_effective_owner(principal, account)
+                && world.m3().has_documents(account)
+            {
                 Some(CredentialRefusal::SignedSessionRequired)
             } else {
                 None
@@ -801,7 +793,7 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
         // The ceremony's home mint (flagged or not); an explicit `false`
         // first mint is refused by the door in the mint slot, ahead of this
         // gate, so it never reaches admission.
-        Op::CreateNewDocument { account, .. } => !has_documents(world, account),
+        Op::CreateNewDocument { account, .. } => !world.m3().has_documents(account),
         Op::Insert { doc, .. } => world
             .m3()
             .principal_prefix(principal)

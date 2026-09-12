@@ -49,14 +49,17 @@
 //!   predicate [`M3State::is_effective_owner`] beside the two projections of
 //!   the owner it names ([`M3State::effective_owner`] for the id,
 //!   [`M3State::effective_owner_prefix`] for the address it is seated at)
-//!   \[ASN-0042 O1–O9\], id→prefix resolution, the next-form peek
-//!   [`M3State::next_account_prefix`], and the publication read
-//!   [`M3State::published`] — the engine's ONE definition of a document's
-//!   publication state, the bit its own allocation record journaled
-//!   \[PUB-7.8, PUB-7.10; owner ruling D1\] — plus two registry-free address
-//!   answers: [`prefix_contains`], which answers where an address SITS and
-//!   never who may write it, and [`first_document_address`], the slot an
-//!   account's document chain opens at.
+//!   \[ASN-0042 O1–O9\], id→prefix resolution, the three chain-end reads —
+//!   the next-form peek [`M3State::next_account_prefix`], the version
+//!   chain's latest member [`M3State::latest_version`], and the emptiness
+//!   of an account's document chain [`M3State::has_documents`] — and the
+//!   publication read [`M3State::published`] — the engine's ONE definition
+//!   of a document's publication state, the bit its own allocation record
+//!   journaled \[PUB-7.8, PUB-7.10; owner ruling D1\] — plus three
+//!   registry-free address answers: [`prefix_contains`], which answers
+//!   where an address SITS and never who may write it, and the two slots a
+//!   chain opens at, [`first_document_address`] for an account's document
+//!   chain and [`first_version_address`] for a document's version chain.
 //! * **The ghost region** (owner ruling, 2026-08-26) — the first
 //!   [`GHOST_POSITIONS`] content positions of [`ghost_home_doc`], spelled by
 //!   [`ghost_position`]: five ghost tumblers that are compiled format
@@ -121,8 +124,8 @@ mod state;
 pub use error::{CreateDocumentError, DelegateError, MintError, NodeError};
 pub use ops::Namespace;
 pub use state::{
-    first_document_address, ghost_home_doc, ghost_position, prefix_contains, M3Rec, M3State,
-    PrincipalId, BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS, MAX_NODE_COMPONENTS,
+    first_document_address, first_version_address, ghost_home_doc, ghost_position, prefix_contains,
+    M3Rec, M3State, PrincipalId, BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS, MAX_NODE_COMPONENTS,
     MAX_PRINCIPAL_COMPONENTS,
 };
 

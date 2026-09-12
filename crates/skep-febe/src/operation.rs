@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // `FebeWorld` names the accessor bound set, and its supertraits carry the
 // `m3()`/`m5()`/`links()` methods the read arms call, so no accessor trait
 // is imported here by name.
-use skep_address::{checked_inc, document_of, Address};
+use skep_address::{document_of, Address};
 use skep_arrangement::{published_target, trunk_head, trunk_of, Caller, M5Rec};
 use skep_content::ContentWrite;
 use skep_discovery::{
@@ -20,7 +20,7 @@ use skep_discovery::{
 };
 use skep_kernel::{Seq, TxnError, WorldState};
 use skep_links::{Invalid, LinkRec};
-use skep_namespace::{M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL};
+use skep_namespace::{first_version_address, M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL};
 use skep_retrieval::Query;
 
 use crate::idem::IdemCache;
@@ -146,35 +146,6 @@ impl WriteCtx {
 /// arithmetic, so this reads nothing (PUB-6.38).
 fn home_readable(a: &Address, readable: &impl Fn(&Address) -> bool) -> bool {
     document_of(a).is_none_or(|home| readable(&home))
-}
-
-/// `D.1` — the opening address of a document's VERSION CHAIN, which the
-/// doc-metadata read reports as the birth version (PUB-8.12).
-///
-/// A RECONSTRUCTION, and named so the copy is visible. M3 holds the version
-/// chain's anchor (the document itself) and its opening ordinal (`k = 1`,
-/// its generator's), and M3's own [`first_document_address`] — the published
-/// equivalent for the sibling account→document chain — states the rule this
-/// stands against: those two are answerable from outside M3 only by
-/// rebuilding them, "which are M3's alone". M3 publishes no such read for the
-/// version chain, so this is the rebuild, and it will not follow M3 if that
-/// encoding moves. Nothing in the ANSWER would report it: `checked_inc` gives
-/// a well-formed address for any anchor, whose `content_count` is then `0`,
-/// so a wrong `D.1` reaches a client as a birth version of extent zero and
-/// its PUB-3.19 edition test images over an empty base. What catches it is
-/// the suite, which pins the reported address against the one `version`
-/// actually mints rather than against this arithmetic. The remedy is a
-/// `first_version_address` in M3 beside its sibling, at which point this
-/// function is deleted.
-///
-/// The `expect` discharges T4 VALIDITY and nothing more, soundly: M1's
-/// `inc_preserves_t4` is unconditionally true at `k = 1`, so the gate cannot
-/// trip whatever address is handed in. It is not evidence that `k = 1` is the
-/// birth ordinal — that is the claim above, which no check here can hold.
-///
-/// [`first_document_address`]: skep_namespace::first_document_address
-fn birth_member(document: &Address) -> Address {
-    checked_inc(document, 1).expect("k = 1 passes the TA5a gate on every address")
 }
 
 impl<W> Operation<W>
@@ -1091,11 +1062,12 @@ where
             // is M3's ω, carried rather than recomputed by the client (`Some`
             // on every registered document — ω is total over the registered
             // space — the `Option` standing only so the shape never invents
-            // one). The birth version is `birth_member` — which owns both the
-            // statement of what `D.1` is and the caveat that it is a copy of
-            // M3's encoding — reported while the chain has a member, and it
-            // is one `BirthVersion` because address and extent are one fact:
-            // no arrangement is read for a document with no member, so the
+            // one). The birth version is M3's `first_version_address` of the
+            // trunk — the slot its version chain opens at, asked of the
+            // allocator that owns the chain's anchor and opening ordinal —
+            // reported while the chain has a member, and it is one
+            // `BirthVersion` because address and extent are one fact: no
+            // arrangement is read for a document with no member, so the
             // field is absent rather than zero.
             Op::DocMetadata { doc } => {
                 let m3 = world.m3();
@@ -1106,7 +1078,9 @@ where
                 let published = published_target(m3, &doc);
                 let owner = m3.effective_owner_prefix(&trunk).cloned();
                 let birth = trunk_head(m3, &doc).map(|_| {
-                    let addr = birth_member(&trunk);
+                    let addr = first_version_address(&trunk).expect(
+                        "`doc` is a registered document (gated above) and `trunk_of` keeps the document tier",
+                    );
                     let extent = world.m5().content_count(&addr);
                     BirthVersion { addr, extent }
                 });

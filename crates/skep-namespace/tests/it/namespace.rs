@@ -16,9 +16,10 @@ use skep_kernel::{
     WorldState,
 };
 use skep_namespace::{
-    first_document_address, ghost_home_doc, ghost_position, prefix_contains, CreateDocumentError,
-    DelegateError, HasM3, M3Rec, M3State, MintError, Namespace, NodeError, PrincipalId,
-    BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS, MAX_NODE_COMPONENTS, MAX_PRINCIPAL_COMPONENTS,
+    first_document_address, first_version_address, ghost_home_doc, ghost_position, prefix_contains,
+    CreateDocumentError, DelegateError, HasM3, M3Rec, M3State, MintError, Namespace, NodeError,
+    PrincipalId, BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS, MAX_NODE_COMPONENTS,
+    MAX_PRINCIPAL_COMPONENTS,
 };
 use tempfile::tempdir;
 
@@ -268,22 +269,31 @@ fn every_chain_survives_the_round_trip_from_mint_to_allocated() {
     // fatal error — without any mint or query saying so.
     let (k, acct, doc) = kernel_with_account_and_doc();
 
-    // Version chain (d, 1) — ASN-0123's separate chain.
+    // Version chain (d, 1) — ASN-0123's separate chain. Its two ends are
+    // M3's to name: the slot it opens at is nameable before anything
+    // occupies it, and its latest member is `None` while it has none.
+    let slot = first_version_address(&doc).expect("a document anchors a version chain");
+    assert_eq!(slot, a(&[1, 0, 1, 0, 1, 1]));
+    assert!(k.snapshot().world().m3().latest_version(&doc).is_none());
     let v1 = commit_mint(&k, M3State::version_lock_key(&doc), |m3| {
         m3.mint_version(&doc, false)
     });
-    assert_eq!(v1, a(&[1, 0, 1, 0, 1, 1]));
+    assert_eq!(v1, slot);
     let m3 = k.snapshot().world().m3().clone();
     assert!(m3.is_allocated(&v1));
+    assert_eq!(m3.latest_version(&doc), Some(v1.clone()));
     // A version IS a registered Document — the M5 CREATENEWVERSION seam.
     assert!(m3.is_registered_document(&v1));
     assert_eq!(m3.entity_level(&v1), Some(Level::Document));
-    // The frontier advanced, so the chain does not re-mint v1.
+    // The frontier advanced, so the chain does not re-mint v1, and the
+    // latest member moves with it.
     let v2 = commit_mint(&k, M3State::version_lock_key(&doc), |m3| {
         m3.mint_version(&doc, false)
     });
     assert_eq!(v2, a(&[1, 0, 1, 0, 1, 2]));
-    assert!(k.snapshot().world().m3().is_allocated(&v2));
+    let m3 = k.snapshot().world().m3().clone();
+    assert!(m3.is_allocated(&v2));
+    assert_eq!(m3.latest_version(&doc), Some(v2.clone()));
 
     // Link chain (b_L(d), 1) — allocated, and NEVER an entity.
     let l1 = commit_mint(&k, M3State::link_lock_key(&doc), |m3| m3.mint_link(&doc));
@@ -295,7 +305,8 @@ fn every_chain_survives_the_round_trip_from_mint_to_allocated() {
     assert_eq!(m3.entity_level(&l1), None);
 
     // A version is a usable home in its own right: it carries content and
-    // versions of its own, on chains anchored at IT.
+    // versions of its own, on chains anchored at IT — and that daughter
+    // chain has its own two ends, which move nothing on the trunk.
     let c = commit_mint(&k, M3State::content_lock_key(&v1), |m3| {
         m3.mint_content(&v1)
     });
@@ -304,8 +315,22 @@ fn every_chain_survives_the_round_trip_from_mint_to_allocated() {
         m3.mint_version(&v1, false)
     });
     assert_eq!(vv, a(&[1, 0, 1, 0, 1, 1, 1]));
+    assert_eq!(
+        vv,
+        first_version_address(&v1).expect("a member anchors a chain of its own")
+    );
     let m3 = k.snapshot().world().m3().clone();
     assert!(m3.is_allocated(&c) && m3.is_allocated(&vv));
+    assert_eq!(m3.latest_version(&v1), Some(vv.clone()));
+    assert_eq!(m3.latest_version(&doc), Some(v2.clone()));
+
+    // Only a document anchors a version chain: the `(A, 1)` key under an
+    // account is the SUB-ACCOUNT chain, and a node or an element anchors
+    // no version chain at all — so neither end answers off the tier.
+    for off_tier in [&acct, &a(&[1]), &c] {
+        assert!(first_version_address(off_tier).is_none(), "{off_tier:?}");
+        assert!(m3.latest_version(off_tier).is_none(), "{off_tier:?}");
+    }
 
     // Through all of it the document chain (A, 2) stood still — the ASN-0123
     // separation, now checked across real folds rather than one snapshot.
@@ -1136,6 +1161,10 @@ fn delegate_mints_the_account_and_registers_its_principal_atomically() {
     assert_eq!(m3.effective_owner(&sub_acct), Some(ID2));
     // ω still refines by longest match beside the sub-account.
     assert_eq!(m3.effective_owner(&a(&[1, 0, 1, 2])), Some(ID1));
+    // The `(A, 1)` chain under an account is the sub-account chain, not a
+    // version chain: the version read answers nothing there, however many
+    // sub-accounts the chain holds.
+    assert_eq!(m3.latest_version(&acct), None);
 
     // next_account_prefix: None unless the parent is a REGISTERED node or
     // account.
@@ -1446,13 +1475,17 @@ fn the_first_document_address_is_the_slot_the_document_chain_opens_at() {
         .expect("delegate");
     let slot = first_document_address(&acct).expect("an account anchors a document chain");
     assert_eq!(slot, a(&[1, 0, 1, 0, 1]));
-    assert!(!k.snapshot().world().m3().is_allocated(&slot)); // the slot, not a claim
+    let empty = k.snapshot().world().m3().clone();
+    assert!(!empty.is_allocated(&slot)); // the slot, not a claim
+    assert!(!empty.has_documents(&acct)); // …and the chain it opens is empty
     let (d1, _) = ns.create_new_document(ID1, &acct, None).expect("create 1");
     assert_eq!(d1, slot);
-    // …and the prescribed pairing answers "has this account any documents?"
-    // in both directions: the slot was unallocated above, and is a registered
-    // document now.
-    assert!(k.snapshot().world().m3().is_registered_document(&slot));
+    // "Has this account any documents?" is the slot read against the
+    // registry, and it answers in both directions: the slot was unallocated
+    // above, and is a registered document now.
+    let m3 = k.snapshot().world().m3().clone();
+    assert!(m3.is_registered_document(&slot));
+    assert!(m3.has_documents(&acct));
     let (d2, _) = ns.create_new_document(ID1, &acct, None).expect("create 2");
     assert_ne!(d2, slot);
     // The ghost home document is that rule applied to the registry node's
@@ -1461,10 +1494,15 @@ fn the_first_document_address_is_the_slot_the_document_chain_opens_at() {
         first_document_address(&a(&[1, 1, 0, 1])),
         Some(ghost_home_doc())
     );
-    // Only an account anchors a document chain.
-    assert!(first_document_address(&a(&[1])).is_none());
-    assert!(first_document_address(&d1).is_none());
-    assert!(first_document_address(&a(&[1, 0, 1, 0, 1, 0, 1, 1])).is_none());
+    // Only an account anchors a document chain, so off the account tier
+    // there is no slot and no documents; an unregistered account's chain is
+    // empty too.
+    let m3 = k.snapshot().world().m3().clone();
+    for no_chain in [&a(&[1]), &d1, &a(&[1, 0, 1, 0, 1, 0, 1, 1])] {
+        assert!(first_document_address(no_chain).is_none(), "{no_chain:?}");
+        assert!(!m3.has_documents(no_chain), "{no_chain:?}");
+    }
+    assert!(!m3.has_documents(&a(&[1, 0, 9])));
 }
 
 // ---- §B fork ----

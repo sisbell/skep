@@ -730,21 +730,40 @@ fn account_ns(parent: &Address) -> NsKey {
 
 /// `c₁` of the chain `key` names — `inc(anchor, g)`, the address its FIRST
 /// member occupies, allocated or not. THE one spelling of a chain's opening
-/// address: [`M3State::next_in`] shifts it to `c_{m+1}`, and
-/// [`first_document_address`] publishes it for the one chain a caller
-/// outside M3 has to name.
+/// address: [`nth_in`] advances it to any later member, and
+/// [`first_document_address`] and [`first_version_address`] publish it for
+/// the two chains a caller outside M3 has to name.
 ///
 /// PRECONDITION — the anchor precondition [`M3State::next_in`] states, and
-/// which the five mints discharge by their own gates;
-/// [`first_document_address`] discharges it by cloning its anchor from an
-/// [`Address`]. The [`Generator::NextField`]/Element half is not a panic
-/// here either: `checked_inc` refuses `k = 2` at that tier and this answers
+/// which the five mints discharge by their own gates; the two published
+/// slots discharge it by cloning their anchor from an [`Address`]. The
+/// [`Generator::NextField`]/Element half is not a panic here either:
+/// `checked_inc` refuses `k = 2` at that tier and this answers
 /// [`GateViolation`].
 fn first_in(key: &NsKey) -> Result<Address, GateViolation> {
     let anchor = validate(key.parent.clone()).expect(
         "first_in precondition: a T4-valid anchor — the caller's gate, or NsKeyShadow, established it",
     );
     checked_inc(&anchor, key.g.inc_k())
+}
+
+/// `cₙ` of the chain `key` names, for `n ≥ 1`: [`first_in`] with its
+/// trailing ordinal advanced by `n − 1` — THE one spelling of a chain member
+/// by ordinal, which [`M3State::next_in`] asks for at `m + 1` and
+/// [`M3State::latest_version`] at `m`. M1's `shift` is ordinal-only and
+/// SAFE here: `c₁` is a FULL address carrying its ordinal in the last
+/// position, never a bare `doc·0·subspace` base (the TA7a hazard); and it
+/// is total at 0, so `n = 1` is `c₁` itself with no branch. Re-`validate`
+/// is total, since `cₙ` differs from the gated `c₁` only in a positive
+/// ordinal.
+///
+/// PRECONDITION `n ≥ 1` — a chain opens at ordinal 1. Both callers
+/// discharge it (`next_in` passes `m + 1`; `latest_version` answers `None`
+/// at `m = 0`), and `Nat`'s subtraction panics on underflow if one does not.
+fn nth_in(key: &NsKey, n: &Nat) -> Result<Address, GateViolation> {
+    let c1 = first_in(key)?;
+    Ok(validate(shift(c1.tumbler(), &(n - &Nat::from(1u32))))
+        .expect("differs from gated c1 only in a positive ordinal"))
 }
 
 /// The address an account's FIRST document occupies — `c₁` of the
@@ -756,17 +775,36 @@ fn first_in(key: &NsKey) -> Result<Address, GateViolation> {
 ///
 /// Registry-free, like [`prefix_contains`]: it names the SLOT and claims
 /// nothing about what is in it — which is why it is spelled differently from
-/// the corpus's "doc 1", a phrase that names the document. Pair it with
-/// [`M3State::is_registered_document`] for "has this account any documents?",
-/// which is exact because the chain is contiguous from 1 (B1). It is public
-/// because the two questions asked about that chain from outside M3 — is it
-/// empty, and is `d` its first member — are otherwise answerable only by
-/// rebuilding the chain's anchor and opening ordinal, which are M3's alone.
+/// the corpus's "doc 1", a phrase that names the document. Whether the
+/// account HAS any documents is [`M3State::has_documents`], which reads this
+/// slot against the registry; the slot itself is public for the other
+/// question asked of that chain from outside M3 — is `d` the account's first
+/// document — which is otherwise answerable only by rebuilding the chain's
+/// anchor and opening ordinal, and those are M3's alone.
 pub fn first_document_address(account: &Address) -> Option<Address> {
     (account.level() == Level::Account).then(|| {
         first_in(&document_ns(account))
             .expect("an Account anchor is not Element-level, so TA5a admits k = 2")
     })
+}
+
+/// The address a document's FIRST version occupies — `c₁` of the
+/// `(source, 1)` version chain, `D·1` (§1; ASN-0123 VD), which the
+/// doc-metadata read reports as a document's birth version (PUB-8.12).
+/// `None` unless `source` is document-tier, because no other tier anchors a
+/// version chain: the same key under an account is the SUB-ACCOUNT chain
+/// (Conflicts §8), and a node's or an element's `(a, 1)` chain is minted by
+/// nothing.
+///
+/// Registry-free, like [`first_document_address`], and its twin on the
+/// version chain: it names the SLOT and claims nothing about what is in it
+/// — [`M3State::latest_version`] is the chain's other end, the latest member
+/// that IS registered. Public for the reason its sibling is: the slot is
+/// otherwise answerable only by rebuilding the chain's anchor and opening
+/// ordinal, which are M3's alone.
+pub fn first_version_address(source: &Address) -> Option<Address> {
+    (source.level() == Level::Document)
+        .then(|| first_in(&version_ns(source)).expect("k = 1 passes TA5a on every anchor"))
 }
 
 // The three key domains M3 serializes on — namespace frontiers, THE principal
@@ -966,13 +1004,14 @@ impl M3State {
 
     /// `next(B, p, g)` in closed form (§1): the chain `S(p, g)` is
     /// `cₙ = p ++ [0]^(g−1) ++ [n]`, so the next address is
-    /// `c_{m+1}` — read the count, advance the trailing ordinal, where `m` is
-    /// the [`M3State::effective_frontier`] (the stored count, floored past
-    /// the ghost region for the one namespace that holds it) and `c₁` is
-    /// [`first_in`]. Pure function of `frontiers` (B2 determinism — the
-    /// natural property-test oracle). M1's `checked_inc` is the TA5a gate ⇒
-    /// B6(ii)/(iii); routing every first emission through it is the
-    /// defensive guard (it can only fire on a corrupted frontier).
+    /// `c_{m+1}` — read the count, advance the trailing ordinal — which is
+    /// [`nth_in`] at `m + 1`, where `m` is the
+    /// [`M3State::effective_frontier`] (the stored count, floored past the
+    /// ghost region for the one namespace that holds it). Pure function of
+    /// `frontiers` (B2 determinism — the natural property-test oracle). M1's
+    /// `checked_inc` is the TA5a gate ⇒ B6(ii)/(iii); routing every emission
+    /// through it, via [`first_in`], is the defensive guard (it can only
+    /// fire on a corrupted frontier).
     ///
     /// PRECONDITION — `key.parent` is T4-valid, and under
     /// [`Generator::NextField`] it is not Element-level (M1's TA5a admits
@@ -994,20 +1033,7 @@ impl M3State {
     /// costs nothing, because a lock key is never dereferenced — what those
     /// two owe is [`ns_lock_key`]'s injectivity, which holds for any anchor.
     pub(crate) fn next_in(&self, key: &NsKey) -> Result<Address, GateViolation> {
-        let m = self.effective_frontier(key);
-        let c1 = first_in(key)?; // c1 = inc(parent, g), trailing ordinal 1
-        Ok(if m.is_zero() {
-            c1 // first emission
-        } else {
-            // c_{m+1} = c1 with its trailing ordinal 1 → m+1. M1's `shift`
-            // (ordinal-only, n = m ≥ 1) does exactly this and is SAFE here:
-            // c1 is a FULL address carrying its ordinal in the last position,
-            // not a bare doc·0·subspace base (the TA7a hazard). Re-`validate`
-            // is total — c_{m+1} is the same namespace as the gated c1,
-            // differing only in a positive ordinal.
-            validate(shift(c1.tumbler(), &m))
-                .expect("differs from gated c1 only in a positive ordinal")
-        })
+        nth_in(key, &(self.effective_frontier(key) + 1u32))
     }
 
     /// Content-chain `LockKey`: `(b_C(home), 1)` (§1/§3). Pairs with
@@ -1339,35 +1365,49 @@ impl M3State {
         self.entity_level(a) == Some(Level::Account)
     }
 
+    /// Has `account` any documents — is its `(account, 2)` chain non-empty?
+    /// AUTH-3.68's `has_documents(account)`, and the premise of the create
+    /// path's empty-account rule (PUB-8.21). The slot the chain opens at,
+    /// [`first_document_address`], holds a registered document — exact
+    /// because the chain is contiguous from 1 (B1): the first slot is
+    /// registered iff any is. `false` off the account tier, where no
+    /// document chain is anchored, and for an unregistered account, whose
+    /// chain is empty. Asked by [`crate::Namespace::create_new_document`]
+    /// under the held document-chain key and by the daemon's mint doors off
+    /// a snapshot; answered here so that neither reassembles it.
+    pub fn has_documents(&self, account: &Address) -> bool {
+        first_document_address(account).is_some_and(|first| self.is_registered_document(&first))
+    }
+
     /// The LATEST member of `source`'s version chain `(source, 1)` — `c_m`
-    /// for the chain's frontier `m` — or `None` when the chain holds no
-    /// member yet. [M5: the trunk head a bare document address floats to,
+    /// for the chain's frontier `m`, spelled by the one chain-member helper
+    /// (`nth_in`) at `m` — or `None` when the chain holds no member yet.
+    /// [M5: the trunk head a bare document address floats to,
     /// PUB-2.49/PUB-2.53, and the head/older distinction the publish shot
     /// decides at commit, PUB-2.39] A pure frontier read off any snapshot:
     /// the chain is contiguous from 1 (B1) and never loses a member (B0), so
-    /// the answer is exactly `c₁` shifted by `m − 1`, and a `Some` never
-    /// regresses across snapshots — a later read answers the same member or
-    /// a later one.
+    /// a `Some` never regresses across snapshots — a later read answers the
+    /// same member or a later one. The chain's other end, the slot it opens
+    /// at, is [`first_version_address`].
     ///
-    /// CONTRACT — `source` is a registered DOCUMENT, a trunk or a member:
-    /// its `(source, 1)` chain is the version chain, and its members are
-    /// documents this read can name. The same key anchored at an ACCOUNT is
-    /// the sub-account chain (Conflicts §8), so asked of an account this
-    /// answers its latest sub-account; every caller gates on
-    /// [`M3State::is_registered_document`] first, as the readers that float
-    /// do (PUB-6.37's polarity: registration precedes every chain read).
+    /// Total. `None` off the document tier, because no other tier anchors a
+    /// version chain — the same key under an account is the sub-account chain
+    /// (Conflicts §8), whose members are not versions of anything — and for
+    /// a document-tier address whose chain has no member, registered or not.
+    /// PUB-6.37's polarity — registration precedes every chain read — stays
+    /// the caller's for the reason it is on [`M3State::published`]: an
+    /// unregistered address is answered by the registration check, and a
+    /// `None` here says only that the chain is empty.
     pub fn latest_version(&self, source: &Address) -> Option<Address> {
+        if source.level() != Level::Document {
+            return None;
+        }
         let key = version_ns(source);
         let m = self.frontiers.get(&key)?;
         if m.is_zero() {
             return None;
         }
-        let c1 = first_in(&key).ok()?;
-        let last = m - &Nat::from(1u32);
-        Some(
-            validate(shift(c1.tumbler(), &last))
-                .expect("differs from gated c1 only in a non-negative ordinal step"),
-        )
+        nth_in(&key, m).ok()
     }
 
     /// `published(doc)` — THE engine's one definition of a document's

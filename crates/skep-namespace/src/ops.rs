@@ -13,8 +13,8 @@ use skep_kernel::{Kernel, Seq, TxnError, WorldState};
 use crate::error::{CreateDocumentError, DelegateError, NodeError};
 use crate::state::bootstrap_root;
 use crate::{
-    first_document_address, prefix_contains, HasM3, M3Rec, M3State, PrincipalId,
-    MAX_NODE_COMPONENTS, MAX_PRINCIPAL_COMPONENTS,
+    prefix_contains, HasM3, M3Rec, M3State, PrincipalId, MAX_NODE_COMPONENTS,
+    MAX_PRINCIPAL_COMPONENTS,
 };
 
 /// M3's transact-driving op handle over M2 (§B): a thin borrow of the
@@ -73,10 +73,8 @@ where
     /// (PUB-8.20; owner ruling D2c), not in this transaction — here it mints
     /// private, and no `MintError`/`CreateDocumentError` variant names it
     /// (the one departure from PUB-8.19's letter, recorded in the round's
-    /// report). "Has documents" is the published pairing —
-    /// [`first_document_address`] holds a registered document — exact because
-    /// the chain is contiguous from 1 (B1). The engine's only caller passes
-    /// `None` until the wire carries the flag (lane 2.3).
+    /// report). "Has documents" is [`M3State::has_documents`], M3's own read
+    /// of the account's document chain.
     pub fn create_new_document(
         &self,
         caller: PrincipalId,
@@ -95,9 +93,7 @@ where
             // PUB-8.21, off WORKING state under the held chain key: the
             // flagless FIRST mint is born published; every other flagless
             // mint is private (PUB-1.1); an explicit flag is honored as sent.
-            let has_documents = first_document_address(account)
-                .is_some_and(|first| m3.is_registered_document(&first));
-            let published = published.unwrap_or(!has_documents);
+            let published = published.unwrap_or(!m3.has_documents(account));
             let (addr, rec) = m3.mint_document(account, published)?;
             stg.push(rec.into());
             Ok(addr)

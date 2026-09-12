@@ -619,6 +619,26 @@ mod tests {
         let doc2_ca1 = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
         let qb = block(&d2, 1, doc2_ca1, 2);
         assert!(overlap_pair(&pb, &qb).is_none());
+        // A MIXED-LENGTH pair — an 8-component base-chain start against a
+        // 9-component fork-chain start — is the one that would underflow
+        // `ordinal_gap` if it reached it: `ordinal` reads the last component
+        // of each, and two lengths share no chain. It never reaches it. A
+        // 9-component tumbler nested inside an 8-component run's half-open
+        // interval would agree with the run on its first seven components
+        // and so carry a THREE-component element field, which `Run::new`
+        // (element field exactly two) refuses — so a valid 9-component start
+        // diverges from an 8-component chain at or before the document
+        // separator, the two intervals sit in strict tumbler order, and the
+        // guard rejects the pair before any ordinal arithmetic. That is what
+        // keeps `ordinal_gap` total AND the join address-exact: addresses of
+        // different lengths are never equal, so a cross-length pair would be
+        // a false correspondence (X12 R1). A document transcluding from both
+        // a base chain and a fork chain hands `interval_join` exactly this
+        // pair, from the wire.
+        let vca1 = a(&[1, 0, 1, 0, 3, 1, 0, 1, 1]); // a fork's length-9 content element
+        let nine = block(&d2, 1, vca1, 3);
+        assert!(overlap_pair(&pb, &nine).is_none());
+        assert!(overlap_pair(&nine, &pb).is_none());
     }
 
     #[test]

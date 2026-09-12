@@ -2126,6 +2126,79 @@ fn compare_joins_on_address_equality_never_on_value() {
 }
 
 #[test]
+fn compare_joins_blocks_of_different_address_lengths_without_pairing_across_them() {
+    // ASN-0122 X1/X2 at the one input that can break the join two ways at
+    // once: a document transcluding from an 8-component base chain AND a
+    // 9-component fork chain resolves to blocks whose I-starts have different
+    // lengths, and the exhaustive join tests every mixed-length pair. Such a
+    // pair shares no chain, so the ordinal arithmetic behind a foot is
+    // undefined on it — the overlap guard must reject it BEFORE that
+    // arithmetic runs — and addresses of different lengths are never equal,
+    // so a reported pair would be a false correspondence. Compared against
+    // itself, the document reports its two same-length diagonal pairs and
+    // nothing across the lengths. A corpus seed for the fuzz tier: no other
+    // COMPARE fixture in this suite mixes address lengths.
+    let k = mem_kernel();
+    let vs = insert3(&k); // doc1 = [ca1, ca2, ca3]
+    deposit3(&k); // pdoc = [pca1, pca2, pca3]
+    let (fork, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("fork commits");
+    let (start, _) = vs
+        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], Deposit::Declared)
+        .expect("fork deposit commits");
+    assert_eq!(start, vca(1)); // the fork's chain mints LENGTH-9 elements
+    vs.copy(
+        P1,
+        &doc2(),
+        vp(1, 1),
+        &[
+            VSpec {
+                source: doc1(),
+                span: vspan(1, 1, 1),
+            },
+            VSpec {
+                source: fork,
+                span: vspan(1, 4, 1),
+            },
+        ],
+    )
+    .expect("mixed copy commits"); // doc2 = [ca1][vca1]: an 8-component run, then a 9-component one
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    // The fixture's premise: the two positions hold addresses of different
+    // lengths, on chains that never meet.
+    assert_eq!(s.world().m5().point(&doc2(), &vp(1, 1)), Some(ca(1)));
+    assert_eq!(s.world().m5().point(&doc2(), &vp(1, 2)), Some(vca(1)));
+    assert_ne!(ca(1).tumbler().len(), vca(1).tumbler().len());
+    let rep = ok_of(q.compare(
+        &[region_spec(doc2(), vec![vspan(1, 1, 2)])],
+        &[region_spec(doc2(), vec![vspan(1, 1, 2)])],
+    ));
+    let feet: Vec<(Nat, Nat, Nat)> = rep
+        .iter()
+        .map(|c| (c.u1.ordinal.clone(), c.u2.ordinal.clone(), c.width.clone()))
+        .collect();
+    assert_eq!(feet, vec![(n(1), n(1), n(1)), (n(2), n(2), n(1))]);
+    // The same two blocks against the base and the fork by name: each
+    // length meets only its own chain.
+    assert_eq!(
+        ok_of(q.compare(
+            &[region_spec(doc2(), vec![vspan(1, 1, 2)])],
+            &[region_spec(doc1(), vec![vspan(1, 1, 3)])],
+        ))
+        .len(),
+        1
+    );
+    assert_eq!(
+        ok_of(q.compare(
+            &[region_spec(doc2(), vec![vspan(1, 1, 2)])],
+            &[region_spec(vdoc(), vec![vspan(1, 1, 4)])],
+        ))
+        .len(),
+        1
+    );
+}
+
+#[test]
 fn compare_lists_a_repeated_window_of_one_operand_twice() {
     // ASN-0122: ⟦Γ⟧ is a set-union, so a repeated window within one operand
     // is redundant rather than wrong — it double-covers, and the report lists

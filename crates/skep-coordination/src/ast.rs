@@ -292,6 +292,9 @@ pub(crate) mod fixture {
             Lit::True,
             Lit::False,
             Lit::Nat(Nat::from(7u32)),
+            // A natural past one byte: the codec's length-prefixed
+            // big-endian limbs, not a single-byte special case.
+            Lit::Nat(Nat::from(1u64 << 40)),
             Lit::Addr(ad(&[1, 0, 1, 0, 1, 0, 1, 3])),
             Lit::BotAddr,
             Lit::BotNat,

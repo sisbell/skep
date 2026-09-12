@@ -23,9 +23,18 @@ use crate::value::{SignedTerm, Sort};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Malformed;
 
-/// Decode nesting cap — a defensive bound on hand-forged input; hand-authored
-/// compact bodies sit far below it.
-const MAX_DEPTH: u32 = 1024;
+/// Decode nesting cap — the defensive bound on hand-forged input, and the ONE
+/// bound on the depth of a stored body: every walk over a decoded body — the
+/// checker, the evaluator, the analyzer, the expander, and this decoder —
+/// recurses once per former on the caller's thread, and none is bounded
+/// otherwise. The value sits where all of them fit a default 2 MiB thread
+/// with margin in a debug build (the checker, the heaviest, overflows one
+/// near 200 levels there; a release build carries several times that), and
+/// far above any hand-authored compact body. The suite's
+/// `a_hand_forged_body_at_the_decode_cap_survives_every_walk` runs each walk
+/// at exactly this depth on a default thread, so a cap raised past the
+/// budget, or a walk grown past it, aborts there rather than in a daemon.
+const MAX_DEPTH: u32 = 128;
 
 /// The tag table — the ONE statement of the format's discriminants, read by
 /// the encoder and the decoder alike. Each family numbers its own
@@ -877,5 +886,50 @@ mod tests {
         bytes.extend([0xff; 9]);
         bytes.push(0x01);
         assert_eq!(decode(&bytes), Err(Malformed));
+    }
+
+    /// The format is one artifact — the closed `True` is exactly these four
+    /// bytes, `¬True` these five, `Nat(5)` these six — and every departure
+    /// from the canonical spelling is `Malformed`: a non-minimal varint at
+    /// either length position, a natural with a leading zero or with no
+    /// bytes, an unknown tag in either family, an envelope the input cannot
+    /// fill. So no two byte strings decode to one term.
+    #[test]
+    fn decode_rejects_every_non_canonical_spelling() {
+        let closed_true = SignedTerm { params: vec![], body: Term::Lit(Lit::True) };
+        assert_eq!(encode(&closed_true).expect("encodes"), vec![3, 0, 2, 1]);
+        let not_true = SignedTerm { params: vec![], body: Term::Not(Arc::new(Term::Lit(Lit::True))) };
+        assert_eq!(encode(&not_true).expect("encodes"), vec![4, 0, 7, 2, 1]);
+        let five = SignedTerm { params: vec![], body: Term::Lit(Lit::Nat(Nat::from(5u32))) };
+        assert_eq!(decode(&[5, 0, 2, 3, 1, 5]), Ok(five));
+        let malformed: [&[u8]; 7] = [
+            &[4, 0x80, 0x00, 2, 1],    // a non-minimal parameter count
+            &[0x83, 0x00, 0, 2, 1],    // a non-minimal envelope length
+            &[6, 0, 2, 3, 2, 0x00, 5], // a natural with a leading zero
+            &[4, 0, 2, 3, 0],          // a natural with no bytes
+            &[2, 0, 99],               // an unknown term tag
+            &[5, 1, 1, 9, 2, 1],       // an unknown sort tag
+            &[9, 0, 2, 1],             // an envelope the input cannot fill
+        ];
+        for bytes in malformed {
+            assert_eq!(decode(bytes), Err(Malformed), "{bytes:?}");
+        }
+    }
+
+    /// The nesting cap at its boundary: a body `MAX_DEPTH` formers deep
+    /// decodes, one deeper is `Malformed`.
+    #[test]
+    fn decode_caps_nesting_at_max_depth() {
+        let nested = |n: usize| {
+            let mut t = Term::Lit(Lit::True);
+            for _ in 0..n {
+                t = Term::Not(Arc::new(t));
+            }
+            SignedTerm { params: vec![], body: t }
+        };
+        let at_cap = nested(MAX_DEPTH as usize);
+        assert_eq!(decode(&encode(&at_cap).expect("encodes")), Ok(at_cap));
+        let past = nested(MAX_DEPTH as usize + 1);
+        assert_eq!(decode(&encode(&past).expect("encodes")), Err(Malformed));
     }
 }

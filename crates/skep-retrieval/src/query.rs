@@ -586,8 +586,8 @@ impl<W: RetrievalWorld> Query<'_, W> {
                 return Err(DeletionsError::DocNotRegistered(d.clone()));
             }
         }
-        let del_a = m5.deletions(d_a); // { a : DELETED(a, d_a) } as a per-level-class cover
-        let del_b = m5.deletions(d_b); // { a : DELETED(a, d_b) }
+        let deletions_a = m5.deletions(d_a); // { a : DELETED(a, d_a) } as a per-level-class cover
+        let deletions_b = m5.deletions(d_b); // { a : DELETED(a, d_b) }
         // CURRENT in the one document ∧ DELETED from the other, both ways.
         // CURRENT(·, d) is enumerated by `current_content`, which asks each
         // content run for its addresses exactly as RETRIEVEV does; DELETED(·, d)
@@ -597,9 +597,9 @@ impl<W: RetrievalWorld> Query<'_, W> {
         // (`⟦deletions(d)⟧ = {x : DELETED(x, d)}` whatever the cover's internal
         // span packing), so there are no false positives.
         let deleted_from_a_with_b =
-            sorted_addr_set(current_content(m5, d_b).filter(|a| del_a.denotes(a.tumbler())));
+            sorted_addr_set(current_content(m5, d_b).filter(|a| deletions_a.denotes(a.tumbler())));
         let deleted_from_b_with_a =
-            sorted_addr_set(current_content(m5, d_a).filter(|a| del_b.denotes(a.tumbler())));
+            sorted_addr_set(current_content(m5, d_a).filter(|a| deletions_b.denotes(a.tumbler())));
         Ok(Deletions {
             deleted_from_a_with_b,
             deleted_from_b_with_a,

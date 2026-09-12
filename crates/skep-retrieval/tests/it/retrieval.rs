@@ -754,7 +754,7 @@ fn retrieve_v_masked_withholds_a_link_run_against_its_home_document() {
 }
 
 #[test]
-fn retrieve_v_masked_consults_its_predicate_after_the_gate_and_once_per_run_of_the_origin() {
+fn retrieve_v_masked_consults_its_predicate_after_the_gate_and_once_per_resolved_run() {
     // `retrieve_v_masked`'s card, the clauses M10 relies on about WHEN and OF
     // WHAT its predicate is asked: only after the gate has passed the WHOLE
     // request (a rejected request consults it of nothing), and then once per
@@ -2173,11 +2173,14 @@ fn compare_joins_blocks_of_different_address_lengths_without_pairing_across_them
         &[region_spec(doc2(), vec![vspan(1, 1, 2)])],
         &[region_spec(doc2(), vec![vspan(1, 1, 2)])],
     ));
-    let feet: Vec<(Nat, Nat, Nat)> = rep
+    let feet_and_widths: Vec<(Nat, Nat, Nat)> = rep
         .iter()
         .map(|c| (c.u1.ordinal.clone(), c.u2.ordinal.clone(), c.width.clone()))
         .collect();
-    assert_eq!(feet, vec![(n(1), n(1), n(1)), (n(2), n(2), n(1))]);
+    assert_eq!(
+        feet_and_widths,
+        vec![(n(1), n(1), n(1)), (n(2), n(2), n(1))]
+    );
     // The same two blocks against the base and the fork by name: each
     // length meets only its own chain.
     assert_eq!(
@@ -2527,7 +2530,7 @@ fn compare_rejects_with_operand_region_index_attribution() {
 }
 
 #[test]
-fn compare_refuses_an_operand_past_its_block_budget() {
+fn compare_refuses_an_operand_past_its_budget() {
     // The join is |P|·|Q| and BOTH factors are the request's: a region names
     // a span list and a spec-set names a region list, each capped separately
     // upstream, so their product is capped by nothing upstream. Each operand
@@ -2690,12 +2693,12 @@ fn compare_refuses_an_operand_whose_spans_outnumber_the_budget_though_they_resol
         !is_ordinal_vspan(&deep_span(1)),
         "the premise: M5's reader declines a depth-3 span"
     );
-    let declined = vec![region_spec(
+    let declined_over = vec![region_spec(
         doc1(),
         vec![deep_span(1); MAX_COMPARE_OPERAND_BLOCKS + 1],
     )];
     assert_eq!(
-        err_of(q.compare(&declined, &one())),
+        err_of(q.compare(&declined_over, &one())),
         CompareError::TooManyBlocks {
             operand: Operand::First
         }
@@ -2997,7 +3000,7 @@ fn find_docs_containing_rejects_unregistered_and_malformed_regions() {
 }
 
 #[test]
-fn find_docs_containing_refuses_a_request_past_its_coverage_budget() {
+fn find_docs_containing_refuses_a_request_past_its_budget() {
     // The coverage is one side of a join against the WHOLE of R, and it is the
     // request's only factor in it — capped by nothing upstream, since a region
     // set nests two wire caps whose product only a body cap bounds. The

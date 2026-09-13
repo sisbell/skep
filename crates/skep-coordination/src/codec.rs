@@ -38,6 +38,15 @@ use crate::value::{SignedTerm, Sort};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Malformed;
 
+/// Encode failure: the named parameter is `Tup`-sorted, and Γ_D is Codom-only
+/// at encode time as at registration — the sort has no tag in this format at
+/// all. Unreachable from `define_predicate`, whose `TypedTerm` is Codom-only
+/// by type; the codec keeps its own invariant regardless. Named for the
+/// refusal rather than for `TypeError::TupParameter`, the checker's rejection
+/// of the same shape at a different door.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct UnencodableTup(pub(crate) VarId);
+
 /// The tag table — the ONE statement of the format's discriminants, read by
 /// the encoder and the decoder alike. Each family numbers its own
 /// constructors from 1 in declaration order; a term tag and an atom tag may
@@ -141,15 +150,13 @@ mod tag {
 
 // ─────────────────────────────── encoding ───────────────────────────────
 
-/// Encode the signed term. `Err(v)` names a `Tup`-sorted parameter (the codec
-/// refusal — unreachable from `define_predicate`, whose `TypedTerm` is
-/// Codom-only by type; the codec keeps its own invariant regardless).
-pub(crate) fn encode(t: &SignedTerm) -> Result<Vec<u8>, VarId> {
+/// Encode the signed term, or refuse its Γ_D as [`UnencodableTup`].
+pub(crate) fn encode(t: &SignedTerm) -> Result<Vec<u8>, UnencodableTup> {
     let mut payload = Vec::new();
     w_varint(&mut payload, t.params.len() as u64);
     for (v, s) in &t.params {
         if *s == Sort::Tup {
-            return Err(*v);
+            return Err(UnencodableTup(*v));
         }
         w_varid(&mut payload, v);
         payload.push(sort_tag(*s));
@@ -890,7 +897,7 @@ mod tests {
     #[test]
     fn encode_refuses_tup_param() {
         let signed = SignedTerm { params: vec![(v(1), Sort::Tup)], body: Term::Lit(Lit::True) };
-        assert_eq!(encode(&signed), Err(v(1)));
+        assert_eq!(encode(&signed), Err(UnencodableTup(v(1))));
     }
 
     /// A reserved-range `VarId` in stored content is not a valid parse

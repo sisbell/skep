@@ -85,8 +85,8 @@ impl FireAction {
 
 /// `quiescent_scoped`'s per-rule restriction form (Q7). All four use the
 /// scope predicate `S` only positively, so Q9's global⟹scope inference holds
-/// by construction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// by construction. Deliberately NOT `Ord`: the four bodies have no order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ScopeBody {
     PerEmitter,
     PerTarget,
@@ -94,8 +94,12 @@ pub enum ScopeBody {
     PerAddress,
 }
 
-/// A registered rule's handle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// A registered rule's handle. Ordered by registration: the registry is
+/// append-only and mints each id from a counter it only increments, so `<`
+/// is "registered earlier" — which is what makes `armer_cycles`' stated
+/// ordering checkable, and what lets a driver key a `BTreeMap` of per-rule
+/// state in registration order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuleId(pub(crate) u64);
 
 /// A rule domain that passed `check_dom` — the `Dom` analogue of
@@ -207,7 +211,7 @@ pub enum StepOutcome {
 /// domain (+ bounded input, a workload hypothesis) ⇒ terminating under weak
 /// fairness (Q5a/Q6); otherwise the failed legs are named. Sound but
 /// incomplete — never over-certifies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuleCertification {
     CertifiedTerminating,
     Uncertified { sf: bool, marker: bool, grow_only: bool },

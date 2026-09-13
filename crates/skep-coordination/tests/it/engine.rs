@@ -181,6 +181,50 @@ fn a_fire_action_reports_the_home_it_writes_into() {
     assert_eq!(FireAction::Nullify { home: doc2() }.home(), &doc2());
 }
 
+/// `Arg::key_addr` bridges the peek to the monitor: `next_enabled` hands back
+/// a bound argument of either shape, and `fire_count` keys on an address —
+/// the tuple's `t.addr` (R1), never a slot endpoint. A driver outside the
+/// crate reaches the engine's own key through this accessor rather than
+/// re-deriving the projection by matching the shapes.
+#[test]
+fn a_peeked_occurrence_yields_the_key_the_monitor_counts_by() {
+    // A `Tup` domain: the key is the tuple's own address, not its F endpoint.
+    let k = kernel();
+    let mut c = coord(&k);
+    let l1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
+    let tup = c
+        .register_rule(Rule {
+            domain: Dom::ActiveSlice(conc(&pred_stable_ty())),
+            trigger: always_tup(&c),
+            view: View::Active,
+            action: FireAction::Nullify { home: doc1() },
+        })
+        .expect("register");
+    let peeked = c.next_enabled(&k.snapshot()).expect("enabled");
+    assert!(matches!(peeked.arg, Arg::Tuple(_)), "a Tup domain binds a tuple");
+    assert_ne!(peeked.arg, Arg::Addr(l1.clone()), "the key is not the element");
+    assert_eq!(peeked.arg.key_addr(), &l1);
+    assert!(matches!(c.step(&k.snapshot()), StepOutcome::Fired { .. }));
+    assert_eq!(c.fire_count(tup, peeked.arg.key_addr()), 1);
+
+    // An `Addr` domain: the key is the address itself.
+    let k = kernel();
+    let mut c = coord(&k);
+    link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
+    let addr = c
+        .register_rule(Rule {
+            domain: Dom::MembersDom(conc(&pred_stable_ty())),
+            trigger: not_marked(&c),
+            view: View::Audit,
+            action: marker_action(),
+        })
+        .expect("register");
+    let peeked = c.next_enabled(&k.snapshot()).expect("enabled");
+    assert_eq!(peeked.arg.key_addr(), &ca(1));
+    assert!(matches!(c.step(&k.snapshot()), StepOutcome::Fired { .. }));
+    assert_eq!(c.fire_count(addr, peeked.arg.key_addr()), 1);
+}
+
 /// The lint's three legs, each failed alone: every leg is relative to the
 /// declared view; the Marker witness must be the marker's own class AND the
 /// trigger's parameter; a `Filter` by an SF predicate leaves the grow-only
@@ -1056,4 +1100,10 @@ fn armer_cycles_follow_the_edge_rule() {
         .register_rule(rule(&c, is_k(&pred_stable_ty(), var(1)), View::Active, marker_action()))
         .expect("B");
     assert_eq!(c.armer_cycles(), vec![vec![a_id, b_id]]);
+    // The stated ordering, checked as a property rather than by transcribing
+    // the ids: a `RuleId` orders by registration, so each component ascends.
+    assert!(a_id < b_id, "a RuleId orders by registration");
+    for scc in c.armer_cycles() {
+        assert!(scc.windows(2).all(|w| w[0] < w[1]), "each component ascends by RuleId");
+    }
 }

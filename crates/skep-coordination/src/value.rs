@@ -109,14 +109,15 @@ pub enum Arg {
 }
 
 impl Arg {
-    /// The rule engine's bookkeeping key for a bound argument of EITHER
-    /// shape: the address itself, or the tuple's `t.addr` (R1
-    /// AddressInjectivity, so an address hit is a value hit) — what a
-    /// `StepOutcome` reports and the divergence monitor attributes by.
-    pub(crate) fn key_addr(&self) -> Address {
+    /// The bookkeeping key for a bound argument of EITHER shape: the address
+    /// itself, or the tuple's `t.addr` (R1 AddressInjectivity, so an address
+    /// hit is a value hit) — what a `StepOutcome` reports and what
+    /// `fire_count` keys on, so a driver holding a peeked `Occurrence`
+    /// reaches the same key the engine would rather than re-deriving it.
+    pub fn key_addr(&self) -> &Address {
         match self {
-            Arg::Addr(a) => a.clone(),
-            Arg::Tuple(t) => t.addr.clone(),
+            Arg::Addr(a) => a,
+            Arg::Tuple(t) => &t.addr,
         }
     }
 
@@ -161,7 +162,7 @@ pub(crate) struct SignedTerm {
 /// ∈ COD: a stored def's parameters are bound by `evaluate_def` to values,
 /// never a tuple (the `Tup` latitude lives only in the rule-trigger path,
 /// whose result a `Signature` never describes).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Signature {
     pub params: Vec<(VarId, Sort)>,
     pub result: Sort,
@@ -171,8 +172,10 @@ pub struct Signature {
 /// Functional (persistent) update — `bind` returns a new `Env`. A collection
 /// of bindings: built from an iterator of `(VarId, Value)` pairs (a def's
 /// Γ_D zipped with its arguments) and extended by one; a later binding of a
-/// name shadows an earlier one, as `bind` does.
-#[derive(Debug, Clone, Default)]
+/// name shadows an earlier one, as `bind` does. Two environments are equal
+/// when they bind the same names to the same values, so one built
+/// positionally and one built by `bind` can be compared.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Env(HashMap<VarId, Value>);
 
 impl Env {

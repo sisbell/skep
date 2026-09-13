@@ -405,7 +405,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // PUB-6.28's three REGISTRATION conditions remain not built.
         {
             let w = snap.world();
-            let arg_doc = document_of(&a).unwrap_or_else(|| a.clone());
+            let arg_doc = document_of(a).unwrap_or_else(|| a.clone());
             for d in [rule.action.home(), &arg_doc] {
                 if !(self.guest)(w, d) {
                     return Err(FireError::DraftBoundary(d.clone()));
@@ -424,10 +424,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // statement over whatever was deposited.
         let deposited = match &rule.action {
             FireAction::Marker { home, ty } => {
-                writer.emit(Caller::System, home, &ty.0, &a, &[]).map_err(emit_refusal)
+                writer.emit(Caller::System, home, &ty.0, a, &[]).map_err(emit_refusal)
             }
             FireAction::Nullify { home } => {
-                writer.nullify(Caller::System, home, &a).map_err(nullify_refusal)
+                writer.nullify(Caller::System, home, a).map_err(nullify_refusal)
             }
         };
         deposited.map(|(effect, seq)| self.fired_or_deduped(&snap, effect, seq))
@@ -470,8 +470,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 }
             };
             self.cursor = (idx + 1) % n; // rotate past, success or failure
-            // The outcome reports the bookkeeping KEY, not the bound value.
-            let a = arg.key_addr();
+            // The outcome reports the bookkeeping KEY, not the bound value —
+            // owned here, the argument itself moving into the occurrence.
+            let a = arg.key_addr().clone();
             let occurrence = Occurrence { rule: id, arg };
             return match self.fire(&occurrence) {
                 Ok(FireOutcome::Fired { effect, seq }) => {
@@ -513,10 +514,12 @@ impl<W: CoordinationWorld> Coordinator<W> {
         };
         let snap = self.kernel.snapshot();
         let links = snap.world().links();
-        let exact = |e: &Endset, a: &Address| -> bool {
-            let mut it = e.addrs();
-            it.next() == Some(a.tumbler()) && it.next().is_none()
-        };
+        // "This slot denotes `a` and nothing else" — M7's own test, the one
+        // `GuestLinks::target_of` applies, so the attribution key's exactness
+        // is asked the same way everywhere. It reads the slot as a SET, so a
+        // slot spelling `a` twice still keys on `{a}`: the recompute
+        // over-counts, as its contract above says, and never under-counts.
+        let exact = |e: &Endset, a: &Address| -> bool { e.single_denoted() == Some(a.tumbler()) };
         let homed = |link: &Address, home: &Address| -> bool {
             document_of(link).is_some_and(|o| o == *home)
         };

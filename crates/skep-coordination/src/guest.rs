@@ -267,11 +267,14 @@ impl<'a, W> GuestLinks<'a, W> {
         let mut visited = OrdSet::unit(x.clone());
         let mut node = x.clone();
         loop {
-            let succs = Self::succs_operative(fwd, &node);
-            match succs.len() {
-                0 => return Walk { path, sink: Some(node) },
-                1 => {
-                    let next = succs.iter().next().expect("len == 1").clone();
+            // "Exactly one successor" as the two `next`s that decide it, in
+            // `target_of`'s shape — so the sole successor is taken from the
+            // iterator that found it rather than fetched again behind a
+            // length test.
+            let mut succs = Self::succs_operative(fwd, &node).into_iter();
+            match (succs.next(), succs.next()) {
+                (None, _) => return Walk { path, sink: Some(node) },
+                (Some(next), None) => {
                     if visited.contains(&next) {
                         return Walk { path, sink: None }; // cycle
                     }

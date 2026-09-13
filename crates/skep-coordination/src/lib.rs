@@ -172,7 +172,9 @@ const _: fn() = || {
     owed::<TypedTerm>();
     owed::<TriggerTerm>();
     owed::<Value>();
+    owed::<Arg>();
     owed::<Env>();
+    owed::<Signature>();
     owed::<Dynamics>();
     owed::<Occurrence>();
     owed::<Rule>();

@@ -10,8 +10,9 @@ use crate::terms::*;
 
 use skep_address::Address;
 use skep_coordination::{
-    Atom, Coordinator, DefineError, Dom, Env, Lit, Nat, RegisterError, Rule, Sort, Stability,
-    Term, TypeError, TypeKey, TypeRef, Value, VarId, View, EXPANSION_NAME_BASE,
+    Atom, Coordinator, DefineError, Dom, Env, Lit, Nat, RegisterError, Rule, RuleCertification,
+    ScopeBody, Sort, Stability, Term, TypeError, TypeKey, TypeRef, Value, VarId, View,
+    EXPANSION_NAME_BASE,
 };
 use skep_links::{coverage_class, enc, Behavior, Caller, Endset, HasLinks, ShippedType, Tip};
 
@@ -178,6 +179,70 @@ fn a_value_is_buildable_and_self_describing_through_this_crate_s_own_paths() {
     let (start, _) = c.define_predicate(&doc1(), &tt).expect("define");
     let s = k.snapshot();
     assert_eq!(c.evaluate_def(&start, &[set], View::Active, &s), Ok(Value::Bool(true)));
+}
+
+/// The public types carry the traits a caller cannot add for itself: an `Env`
+/// compares, so one built positionally and one built by `bind` can be checked
+/// against each other; a `Signature`, a `Stability`, an `ActiveExceptions`, a
+/// `ScopeBody` and a `RuleCertification` all hash, so a driver can group defs
+/// by signature, tally checked terms by stability, or key a per-body policy
+/// table.
+#[test]
+fn the_public_types_compare_and_hash_as_a_caller_needs() {
+    use std::collections::{HashMap, HashSet};
+
+    let k = kernel();
+    let c = coord(&k);
+
+    // `Env`: the two ways of building one agree, and a different binding does
+    // not — so the equality is the bindings' and not a blanket true.
+    let positional: Env =
+        [(v(1), Value::Nat(n(1))), (v(2), Value::Bool(true))].into_iter().collect();
+    let bound = Env::empty().bind(v(1), Value::Nat(n(1))).bind(v(2), Value::Bool(true));
+    assert_eq!(positional, bound);
+    assert_ne!(positional, Env::empty().bind(v(1), Value::Nat(n(1))));
+    assert_ne!(positional, bound.bind(v(2), Value::Bool(false)));
+
+    // `Signature`: defs grouped by their calling convention — two DISTINCT
+    // defs sharing a Γ_D and a codomain land in one bucket (the hash is the
+    // signature's value, not the def's identity), and a different Γ_D does
+    // not, its names being part of it as `evaluate_def`'s binding needs.
+    let sig_of = |params: Vec<(VarId, Sort)>, body: Term| {
+        let tt = c.type_check(params, body).expect("checks");
+        let (start, _) = c.define_predicate(&doc1(), &tt).expect("define");
+        c.signature(&start).expect("defined")
+    };
+    let one_addr = sig_of(vec![(v(1), Sort::Addr)], tru());
+    let by_signature: HashSet<_> = [
+        one_addr.clone(),
+        sig_of(vec![(v(1), Sort::Addr)], fls()),
+        sig_of(vec![(v(3), Sort::Addr)], tru()),
+        sig_of(vec![(v(1), Sort::Nat)], tru()),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(by_signature.len(), 3, "the two defs sharing a Γ_D share a bucket");
+    assert!(by_signature.contains(&one_addr));
+
+    // `Stability` and `ActiveExceptions`: a tally over classified terms.
+    let audit = |t: Term| c.classify(&c.type_check(vec![], t).expect("checks"), View::Audit);
+    let stable = audit(exists(1, Dom::AuditSlice(conc(&pred_def_ty())), tru()));
+    let mut tally: HashMap<Stability, u32> = HashMap::new();
+    for d in [&stable, &audit(not(exists(1, Dom::AuditSlice(conc(&pred_def_ty())), tru())))] {
+        *tally.entry(d.stability).or_default() += 1;
+    }
+    assert_eq!(tally.get(&Stability::StOnly), Some(&1));
+    assert_eq!(tally.get(&Stability::SfOnly), Some(&1));
+    assert!(HashSet::from([stable.active_exceptions]).contains(&stable.active_exceptions));
+
+    // `ScopeBody` and `RuleCertification`: policy tables keyed by each.
+    let policy = HashMap::from([(ScopeBody::PerAddress, 1u32), (ScopeBody::PerEmitter, 2)]);
+    assert_eq!(policy.get(&ScopeBody::PerAddress), Some(&1));
+    assert!(HashSet::from([
+        RuleCertification::CertifiedTerminating,
+        RuleCertification::Uncertified { sf: true, marker: false, grow_only: true },
+    ])
+    .contains(&RuleCertification::CertifiedTerminating));
 }
 
 // ─────────────────────────────── typing ───────────────────────────────

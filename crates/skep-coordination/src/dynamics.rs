@@ -29,8 +29,10 @@ pub struct Dynamics {
     pub view_independent: bool,
 }
 
-/// The 4-point lattice: ST∩SF / ST / SF / neither (PD0).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The 4-point lattice: ST∩SF / ST / SF / neither (PD0). Deliberately NOT
+/// `Ord`: `StOnly` and `SfOnly` are incomparable, so a derived total order
+/// would compile, read meaningful, and contradict PD0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Stability {
     StSf,
     StOnly,
@@ -163,7 +165,7 @@ impl Emission {
 /// The three active-view exceptions, emitted explicitly ("name them or be
 /// surprised"). `#[non_exhaustive]` for [`Dynamics`]'s reason: emitted, never
 /// constructed by a caller, and a fourth exception named is an addition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct ActiveExceptions {
     /// (i) any R-deposit can shrink an active slice.
@@ -242,12 +244,12 @@ impl<'a> Analyzer<'a> {
     /// it. Which slice a term's VIEW reads is [`Slice::of`]'s statement, made
     /// once per arm below.
     fn slice_fp(&self, k: &TypeKey, slice: Slice) -> Footprint {
-        let class = self.catalog.class_of(k).clone();
         let mut fp = Footprint::default();
-        match slice {
-            Slice::Audit => fp.audit.insert(class),
-            Slice::Active => fp.active.insert(class),
+        let read = match slice {
+            Slice::Audit => &mut fp.audit,
+            Slice::Active => &mut fp.active,
         };
+        read.insert(self.catalog.class_of(k).clone());
         fp
     }
 

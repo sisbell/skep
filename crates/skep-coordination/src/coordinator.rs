@@ -178,13 +178,17 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// catalog endset (the probe is `Endset`-equality, not coverage). The
     /// check is also the term's resource door: a body nested past the
     /// crate's one nesting cap, counted through its references, is
-    /// `TooDeep`, and one whose `Reg`-expansion outgrows the node budget is
-    /// `TooLarge` — each refused at the bound, not after it. Reads no
+    /// `TooDeep`, and one whose `Reg`-expansion outgrows the node budget —
+    /// counted per node AND per unit of payload, so a large literal under a
+    /// `Reg` quantifier is charged for every instance it multiplies into — is
+    /// `TooLarge`; each refused at the bound, not after it. Reads no
     /// structural state for a ref-free body; consults the immutable def memo
     /// for any `Ref`. Once `Ok`, valid at every reachable state (WT).
     ///
     /// WHICH REJECTION SPEAKS, when several hold: `TupParameter` (over Γ_D)
-    /// first, then `DuplicateParameter` (a Γ_D name bound twice), then the
+    /// first, then `TooLarge` for a Γ_D longer than the budget (charged
+    /// before anything is sized by its length), then `DuplicateParameter` (a
+    /// Γ_D name bound twice), then the
     /// first rejection the checker meets in a pre-order walk of the body —
     /// a node's type position and behavior guard before its children;
     /// children left to right, a binder's domain or bound term before its

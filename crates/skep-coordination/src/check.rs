@@ -21,7 +21,7 @@ use skep_address::{Address, Nat};
 use skep_links::Behavior;
 
 use crate::ast::{
-    ArcDom, ArcTerm, Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId, DERIVATION_COST,
+    weight, ArcDom, ArcTerm, Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId, DERIVATION_COST,
     MAX_DEPTH, MAX_TERM_NODES,
 };
 use crate::catalog::TypeCatalog;
@@ -127,11 +127,12 @@ impl TriggerTerm {
     }
 }
 
-/// One node's charge against [`MAX_TERM_NODES`]: `false` once the budget is
-/// spent. Shared by every walk the checker runs — its own and the `Reg`
-/// substitution's — so their work is one sum.
-fn tick(nodes: &Cell<usize>) -> bool {
-    let n = nodes.get().saturating_add(1);
+/// A charge of `weight` units against [`MAX_TERM_NODES`] — a node and the
+/// payload it carries ([`weight`]) — `false` once the budget is spent. Shared
+/// by every walk the checker runs — its own and the `Reg` substitution's — so
+/// their work is one sum.
+fn tick(nodes: &Cell<usize>, weight: usize) -> bool {
+    let n = nodes.get().saturating_add(weight);
     nodes.set(n);
     n <= MAX_TERM_NODES
 }
@@ -139,9 +140,10 @@ fn tick(nodes: &Cell<usize>) -> bool {
 /// The V-IDX expansion step (§Internal 1): `TypeRef::ClassVar(cvar) →
 /// TypeRef::Concrete(key)` throughout a body, stopping at an inner `Reg`
 /// binder that rebinds `cvar` (shadowing). Charges the checker's node budget
-/// per node it visits — an `Arc`-shared body is a tree to a rewrite — and
-/// past the budget builds nothing more, leaving `exhausted` for the caller
-/// to refuse on.
+/// per node it visits AND per unit of payload that node carries — an
+/// `Arc`-shared body is a tree to a rewrite, and a literal's tumbler is
+/// copied whole into every instance — and past the budget builds nothing
+/// more, leaving `exhausted` for the caller to refuse on.
 struct SubstClassVar<'a> {
     cvar: VarId,
     key: &'a TypeKey,
@@ -158,7 +160,7 @@ impl Rewrite for SubstClassVar<'_> {
     }
 
     fn term(&mut self, t: &Term) -> Term {
-        if !tick(self.nodes) {
+        if !tick(self.nodes, weight(t)) {
             self.exhausted = true;
             return Term::Lit(Lit::True);
         }
@@ -279,14 +281,20 @@ impl<'a> Checker<'a> {
     /// The whole judgment over a signed term — its body under its Γ_D — into
     /// the checked-term shape, the body's root at nesting level `depth`.
     ///
-    /// Γ_D binds each name once (`DuplicateParameter` otherwise), so that an
-    /// `Env` can bind every parameter at its sort; then WT + WT-ref over the
-    /// body, referents resolved at the levels the `Ref` arm charges them.
+    /// Γ_D is charged against the node budget first, so a context longer than
+    /// the budget is `TooLarge` before anything is sized by its length (the
+    /// duplicate-name set, the typing context); then Γ_D binds each name once
+    /// (`DuplicateParameter` otherwise), so that an `Env` can bind every
+    /// parameter at its sort; then WT + WT-ref over the body, referents
+    /// resolved at the levels the `Ref` arm charges them.
     /// [`TypedTerm::reach`] is the pass's high-water mark RELATIVE to this
     /// root — the same quantity [`Checker::check_term`]'s `Ref` arm adds to
     /// its own level when it charges a reference to this term, so the two
     /// halves of the depth accounting are stated together.
     pub(crate) fn check_signed(self, signed: SignedTerm, depth: u32) -> Result<TypedTerm, TypeError> {
+        if !tick(&self.nodes, signed.params.len()) {
+            return Err(TypeError::TooLarge);
+        }
         let mut seen: HashSet<VarId> = HashSet::with_capacity(signed.params.len());
         if let Some((v, _)) = signed.params.iter().find(|(v, _)| !seen.insert(*v)) {
             return Err(TypeError::DuplicateParameter(*v));
@@ -303,13 +311,14 @@ impl<'a> Checker<'a> {
     }
 
     /// The two doors at every node — nesting past `MAX_DEPTH` and the node
-    /// budget — and, once both pass, the ONE place a level is recorded
-    /// against the pass's high-water mark.
-    fn enter(&self, depth: u32) -> Result<(), TypeError> {
+    /// budget, charged `weight` units for the node and the payload it carries
+    /// — and, once both pass, the ONE place a level is recorded against the
+    /// pass's high-water mark.
+    fn enter(&self, weight: usize, depth: u32) -> Result<(), TypeError> {
         if depth > MAX_DEPTH {
             return Err(TypeError::TooDeep);
         }
-        if !tick(&self.nodes) {
+        if !tick(&self.nodes, weight) {
             return Err(TypeError::TooLarge);
         }
         self.deepest.set(self.deepest.get().max(depth));
@@ -415,7 +424,7 @@ impl<'a> Checker<'a> {
     /// derived through a `Ref` starts at the `Ref`'s level plus
     /// `DERIVATION_COST`).
     pub(crate) fn check_term(&self, ctx: &Ctx, t: &Term, depth: u32) -> Result<Checked, TypeError> {
-        self.enter(depth)?;
+        self.enter(weight(t), depth)?;
         let d = depth + 1;
         match t {
             Term::Var(v) => match ctx.get(v) {
@@ -853,7 +862,9 @@ impl<'a> Checker<'a> {
     /// `SortMismatch{expected: Addr, found: Tup}` (the vocabulary has no
     /// class sort to name).
     pub(crate) fn check_dom(&self, ctx: &Ctx, dm: &Dom, depth: u32) -> Result<CheckedDom, TypeError> {
-        self.enter(depth)?;
+        // A domain former carries no unbounded payload of its own: its type
+        // position is a cataloged endset (`guarded`), its children are terms.
+        self.enter(1, depth)?;
         let d = depth + 1;
         let leaf = |dom: Dom, elem: Sort| CheckedDom { dom: Arc::new(dom), elem, ref_free: true };
         match dm {

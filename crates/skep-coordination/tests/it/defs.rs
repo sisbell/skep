@@ -12,7 +12,7 @@ use skep_address::{document_of, Address};
 use skep_arrangement::{HasM5, InsertError};
 use skep_content::HasContent;
 use skep_coordination::{
-    CertifyError, Coordinator, DefineError, Dom, EvalError, Lit, RegisterError, RetractError,
+    CertifyError, Coordinator, DefineError, Dom, EvalError, Lit, Nat, RegisterError, RetractError,
     Rule, Sort, Stability, Term, Trigger, TypeError, Value, View, RuleError,
 };
 use skep_kernel::TxnError;
@@ -275,20 +275,25 @@ fn register_pred_refuses_stored_content_that_parses_but_fails_wt() {
     assert!(c.signature(&forged).is_none(), "orphan content, never registered");
 }
 
-/// PR-ENC's envelope around a payload: the minimal varint length, then the
-/// bytes.
-fn envelope(payload: Vec<u8>) -> Vec<u8> {
+/// PR-ENC's minimal-form LEB128, the one length/count encoding the format
+/// uses.
+fn varint(mut x: u64) -> Vec<u8> {
     let mut out = Vec::new();
-    let mut len = payload.len() as u64;
     loop {
-        let limb = (len & 0x7f) as u8;
-        len >>= 7;
-        if len == 0 {
+        let limb = (x & 0x7f) as u8;
+        x >>= 7;
+        if x == 0 {
             out.push(limb);
-            break;
+            return out;
         }
         out.push(limb | 0x80);
     }
+}
+
+/// PR-ENC's envelope around a payload: the minimal varint length, then the
+/// bytes.
+fn envelope(payload: Vec<u8>) -> Vec<u8> {
+    let mut out = varint(payload.len() as u64);
     out.extend(payload);
     out
 }
@@ -412,6 +417,32 @@ fn register_pred_refuses_a_stored_reg_expansion_past_the_node_budget() {
     assert!(c.signature(&forged).is_none(), "orphan content, never registered");
 }
 
+/// The stored-bytes path charges a literal's payload too, so the budget
+/// bounds what a run of hostile bytes can command rather than what it spells:
+/// ONE `Reg` quantifier over a 64 KB natural — nine formers, and a `Val` the
+/// decoder accepts — instantiates that natural once per cataloged class, and
+/// is `IllTyped(TooLarge)` at the budget. The bytes are a corpus seed for a
+/// def-codec fuzz target.
+#[test]
+fn register_pred_refuses_a_stored_literal_that_multiplies_past_the_node_budget() {
+    let k = kernel();
+    let c = coord(&k);
+    let limbs = 1u64 << 13; // 8192 limbs — a fraction of the budget on its own
+    let mut payload = vec![0u8]; // no parameters
+    payload.extend([10u8, 1, 5]); // FORALL, the binder, REG
+    payload.extend([4u8, 8]); // PRIM, NAT_EQ
+    payload.extend([2u8, 3]); // LIT, NAT
+    payload.extend(varint(limbs * 8));
+    payload.extend(std::iter::repeat_n(1u8, (limbs * 8) as usize));
+    payload.extend([2u8, 3, 1, 1]); // LIT, NAT, one byte, the numeral 1
+    let forged = insert_raw(&k, &doc1(), envelope(payload));
+    assert!(matches!(
+        c.register_pred(&doc1(), &forged),
+        Err(RegisterError::IllTyped(TypeError::TooLarge))
+    ));
+    assert!(c.signature(&forged).is_none(), "orphan content, never registered");
+}
+
 /// A reference chain is bounded at registration, not discovered at a cold
 /// derivation: `P₀(x) := ⊤`, `Pᵢ(x) := Pᵢ₋₁(x)` registers while its reach —
 /// three levels per link: the reference's derivation and its one argument —
@@ -487,6 +518,40 @@ fn certify_stable_refuses_an_expansion_past_the_node_budget() {
     };
     assert!(matches!(c.certify_rule(&rule), Err(RuleError::TriggerExpansionTooLarge)));
     assert!(matches!(c.register_rule(rule), Err(RuleError::TriggerExpansionTooLarge)));
+}
+
+/// The expansion budget is charged in payload too, because PR3's fresh-name
+/// discipline forbids sharing: a referent holding an 8 KB natural is copied
+/// WHOLE into every unfolding, so a doubling chain over it multiplies bytes
+/// where the node count says it multiplies leaves. One level of doubling
+/// certifies; five is `ExpansionTooLarge`, though every def in the chain is a
+/// handful of formers and registers.
+#[test]
+fn certify_stable_charges_a_referent_s_payload_against_the_expansion_budget() {
+    let k = kernel();
+    let c = coord(&k);
+    let big = || Term::Lit(Lit::Nat(Nat::from_bytes_be(&vec![1u8; 1 << 13]))); // 2¹⁰ limbs
+    let (mut p, _) = c
+        .define_predicate(
+            &doc1(),
+            &c.type_check(vec![(v(1), Sort::Addr)], nat_eq(big(), big())).expect("P₀"),
+        )
+        .expect("define P₀");
+    let mut p1 = None;
+    for i in 1..=5 {
+        let twice = and(
+            Term::Ref { addr: p.clone(), args: vec![at(var(1))] },
+            Term::Ref { addr: p.clone(), args: vec![at(var(1))] },
+        );
+        let tt = c.type_check(vec![(v(1), Sort::Addr)], twice).expect("Pᵢ");
+        p = c.define_predicate(&doc1(), &tt).expect("define Pᵢ").0;
+        if i == 1 {
+            p1 = Some(p.clone());
+        }
+    }
+    let p1 = p1.expect("P₁ was defined");
+    c.certify_stable(&doc1(), &p1).expect("two copies of the referent fit the budget");
+    assert!(matches!(c.certify_stable(&doc1(), &p), Err(CertifyError::ExpansionTooLarge)));
 }
 
 /// `evaluate_def`'s argument door on a set: an `AddrSet` holding a tumbler

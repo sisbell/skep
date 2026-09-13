@@ -5,10 +5,11 @@
 //! tree's child structure is stated once, in `walk.rs`; a structural pass
 //! implements `Rewrite` or `Visit` there rather than matching every former.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 
-use skep_address::{Address, Nat};
+use skep_address::{Address, Nat, Tumbler};
 use skep_links::Endset;
 
 use crate::walk::{visit_term, Visit};
@@ -53,18 +54,41 @@ pub(crate) const MAX_DEPTH: u32 = 128;
 /// aborts there.
 pub(crate) const DERIVATION_COST: u32 = 2;
 
-/// The ONE budget on the SIZE of a PL tree, in nodes: what the def decoder
-/// builds from one run, what the checker traverses and builds (`Reg`
-/// expansion instantiates a body once per cataloged class, so nested `Reg`
-/// quantifiers multiply — six over a leaf fit, seven do not — and a
-/// `Arc`-shared input is charged per traversal, as a tree), and what the
-/// expander traverses and builds for one flat reference expansion. A node is
-/// ~100 bytes behind its `Arc`, so the budget is ~6 MiB — held per memo
-/// entry and per captured rule trigger for the life of the process, and
-/// transiently per expansion — against hand-authored predicates of tens to
-/// hundreds of nodes. Past it: `Malformed` at the decoder,
-/// `TypeError::TooLarge` at the checker, `ExpansionTooLarge` at the expander.
+/// The ONE budget on the SIZE of a PL tree, counted in NODES AND IN THE
+/// PAYLOAD UNITS A NODE CARRIES ([`weight`]), so what it bounds is the tree's
+/// bytes and not merely its node count: what the def decoder builds from one
+/// run, what the checker traverses and builds (`Reg` expansion instantiates a
+/// body once per cataloged class, so nested `Reg` quantifiers multiply — six
+/// over a bare leaf fit, seven do not — and a `Arc`-shared input is charged
+/// per traversal, as a tree), and what the expander traverses and builds for
+/// one flat reference expansion. A node is ~100 bytes behind its `Arc` and a
+/// payload unit 24–56, so the budget is ~6 MiB of nodes plus ~4 MiB of
+/// payload — held per memo entry and per captured rule trigger for the life
+/// of the process, and transiently per expansion — against hand-authored
+/// predicates of tens to hundreds of nodes. Past it: `Malformed` at the
+/// decoder, `TypeError::TooLarge` at the checker, `ExpansionTooLarge` at the
+/// expander.
 pub(crate) const MAX_TERM_NODES: usize = 1 << 16;
+
+/// A node's charge against [`MAX_TERM_NODES`]: one unit for the node itself,
+/// plus one for each unit of PAYLOAD it carries that no gate bounds — a
+/// `Lit::Addr`'s tumbler components, a `Lit::Nat`'s 64-bit limbs, a `Ref`'s
+/// address components. Measured, each of those is 24–56 bytes against a bare
+/// node's ~100, so the units are comparable; each is also COPIED WHOLE by
+/// every pass that rebuilds the tree, and that is the reason for the charge:
+/// `Reg` expansion instantiates a body once per cataloged class and a
+/// reference expansion once per reference, so a payload charged as one node
+/// would multiply by 5^d resp. 2^d while the node count did not. A type
+/// position's endset is deliberately NOT charged — `Checker::guarded` refuses
+/// a non-cataloged key at the first instance, so it is copied once and dies.
+pub(crate) fn weight(t: &Term) -> usize {
+    1 + match t {
+        Term::Lit(Lit::Addr(a)) => a.tumbler().len(),
+        Term::Lit(Lit::Nat(n)) => usize::try_from(n.bits().div_ceil(64)).unwrap_or(usize::MAX),
+        Term::Ref { addr, .. } => addr.tumbler().len(),
+        _ => 0,
+    }
+}
 
 /// A PL variable name.
 ///
@@ -313,22 +337,32 @@ pub enum Prim {
 
 // ───────────────────────── structural helpers ─────────────────────────
 
-/// Every `Ref` address in `t` (recursively, including inside domain bodies),
-/// in pre-order — the direct referents `register_pred`'s (iii)/(iv) checks
-/// range over (§Internal 4).
+/// The DISTINCT `Ref` addresses in `t` (recursively, including inside domain
+/// bodies), in first-occurrence pre-order — the direct referents
+/// `register_pred`'s (iii)/(iv) checks range over (§Internal 4).
+///
+/// Distinct, because each of those checks is an M7 slice scan and the node
+/// budget admits a body spelling tens of thousands of `Ref` nodes at ONE
+/// address; first-occurrence order, because the gates name the referent they
+/// refuse on and the design's walk order reaches it first.
 pub(crate) fn ref_addrs(t: &Term) -> Vec<Address> {
-    struct RefAddrs(Vec<Address>);
+    struct RefAddrs {
+        out: Vec<Address>,
+        seen: HashSet<Tumbler>,
+    }
     impl Visit for RefAddrs {
         fn term(&mut self, t: &Term) {
             if let Term::Ref { addr, .. } = t {
-                self.0.push(addr.clone());
+                if self.seen.insert(addr.tumbler().clone()) {
+                    self.out.push(addr.clone());
+                }
             }
             visit_term(self, t);
         }
     }
-    let mut refs = RefAddrs(Vec::new());
+    let mut refs = RefAddrs { out: Vec::new(), seen: HashSet::new() };
     refs.term(t);
-    refs.0
+    refs.out
 }
 
 /// A signed term spelling every former, atom, prim, domain, literal and type
@@ -457,5 +491,44 @@ pub(crate) mod fixture {
             (v(8), Sort::OptNat),
         ];
         SignedTerm { params, body }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use skep_address::{validate, Tumbler};
+
+    use super::*;
+
+    fn a(comps: &[u32]) -> Address {
+        validate(Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty"))
+            .expect("T4-valid")
+    }
+
+    /// [`ref_addrs`] answers each referent ONCE, in first-occurrence order:
+    /// `register_pred` runs an M7 slice scan per answer, and the node budget
+    /// admits a body spelling tens of thousands of `Ref` nodes at one
+    /// address; the order is what lets its gates name the referent the
+    /// design's walk order reaches first.
+    #[test]
+    fn ref_addrs_answers_each_referent_once_in_first_occurrence_order() {
+        let (p, q) = (a(&[1, 0, 1, 0, 1, 0, 1, 1]), a(&[1, 0, 1, 0, 1, 0, 1, 2]));
+        let at = |t: Term| Arc::new(t);
+        let r = |x: &Address| Term::Ref { addr: x.clone(), args: vec![] };
+        // q first, then p, then q again — inside a domain body, so the walk's
+        // reach over `Dom` is covered too.
+        let body = Term::And(
+            at(r(&q)),
+            at(Term::Exists {
+                var: VarId::new(1).expect("below the watershed"),
+                dom: Arc::new(Dom::Filter {
+                    dom: Arc::new(Dom::LinkDom),
+                    var: VarId::new(2).expect("below the watershed"),
+                    pred: at(r(&p)),
+                }),
+                body: at(r(&q)),
+            }),
+        );
+        assert_eq!(ref_addrs(&body), vec![q, p]);
     }
 }

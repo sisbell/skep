@@ -19,12 +19,14 @@
 //! a referent used twice is expanded twice, and a reference DAG unfolds
 //! exponentially in its depth. The expansion is therefore budgeted, in
 //! [`MAX_TERM_NODES`] — every node either walk visits or builds is charged,
-//! and past the budget neither walk descends further: the result is
-//! [`ExpansionTooLarge`], never a tree the analyses would then traverse.
+//! with the payload it carries ([`weight`]), since a literal's tumbler is
+//! copied whole into every unfolding — and past the budget neither walk
+//! descends further: the result is [`ExpansionTooLarge`], never a tree the
+//! analyses would then traverse.
 
 use std::sync::Arc;
 
-use crate::ast::{ArcTerm, Dom, Lit, Term, VarId, MAX_TERM_NODES};
+use crate::ast::{weight, ArcTerm, Dom, Lit, Term, VarId, MAX_TERM_NODES};
 use crate::eval::DefSource;
 use crate::walk::{rewrite_dom, rewrite_term, Rewrite};
 
@@ -50,9 +52,10 @@ impl Budget {
         v
     }
 
-    /// One node's charge: `false` once the budget is spent, and thereafter.
-    fn tick(&mut self) -> bool {
-        self.nodes = self.nodes.saturating_add(1);
+    /// A charge of `weight` units — a node and the payload it carries
+    /// ([`weight`]): `false` once the budget is spent, and thereafter.
+    fn tick(&mut self, weight: usize) -> bool {
+        self.nodes = self.nodes.saturating_add(weight);
         if self.nodes > MAX_TERM_NODES {
             self.exhausted = true;
         }
@@ -90,7 +93,7 @@ impl Rewrite for Expander<'_> {
     /// The one node the expansion acts on; every other former falls through.
     /// Past the budget: a stub, and no descent.
     fn term(&mut self, t: &Term) -> Term {
-        if !self.budget.tick() {
+        if !self.budget.tick(weight(t)) {
             return Term::Lit(Lit::True);
         }
         let Term::Ref { addr, args } = t else {
@@ -118,7 +121,7 @@ impl Rewrite for Expander<'_> {
     }
 
     fn dom(&mut self, d: &Dom) -> Dom {
-        if !self.budget.tick() {
+        if !self.budget.tick(1) {
             return Dom::LinkDom;
         }
         rewrite_dom(self, d)
@@ -128,7 +131,7 @@ impl Rewrite for Expander<'_> {
 /// The α-renaming of an already-flat (ref-free) referent body: `map` on free
 /// occurrences, and a fresh reserved name for every internal binder,
 /// depth-first left-to-right (PR3's binding-site renaming). Charges the
-/// expansion's budget per node, as the expander does.
+/// expansion's budget per node and per unit of payload, as the expander does.
 struct Rename<'a> {
     budget: &'a mut Budget,
     map: im::HashMap<VarId, VarId>,
@@ -156,7 +159,7 @@ impl Rewrite for Rename<'_> {
     /// map; then the binder, freshly named, over its in-scope child. Past
     /// the budget: a stub, and no descent.
     fn term(&mut self, t: &Term) -> Term {
-        if !self.budget.tick() {
+        if !self.budget.tick(weight(t)) {
             return Term::Lit(Lit::True);
         }
         match t {
@@ -192,7 +195,7 @@ impl Rewrite for Rename<'_> {
     }
 
     fn dom(&mut self, d: &Dom) -> Dom {
-        if !self.budget.tick() {
+        if !self.budget.tick(1) {
             return Dom::LinkDom;
         }
         match d {

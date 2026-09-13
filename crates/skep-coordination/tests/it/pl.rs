@@ -10,8 +10,8 @@ use crate::terms::*;
 
 use skep_address::Address;
 use skep_coordination::{
-    Atom, Coordinator, DefineError, Dom, Env, RegisterError, Rule, Sort, Stability, Term,
-    TypeError, TypeKey, TypeRef, Value, VarId, View, EXPANSION_NAME_BASE,
+    Atom, Coordinator, DefineError, Dom, Env, Lit, Nat, RegisterError, Rule, Sort, Stability,
+    Term, TypeError, TypeKey, TypeRef, Value, VarId, View, EXPANSION_NAME_BASE,
 };
 use skep_links::{coverage_class, enc, Behavior, Caller, Endset, HasLinks, ShippedType, Tip};
 
@@ -389,6 +389,25 @@ fn type_check_refuses_an_expansion_past_the_node_budget() {
         shared = at(Term::And(shared.clone(), shared));
     }
     assert!(matches!(c.type_check(vec![], Term::And(shared.clone(), shared)), Err(TypeError::TooLarge)));
+}
+
+/// The budget bounds the tree's BYTES, not merely its node count: a `Reg`
+/// quantifier instantiates its body once per cataloged class, so a literal
+/// charged as one node would multiply by five per level while the node count
+/// did not. One 128 KB natural checks on its own; under a single `Reg`
+/// quantifier — nine nodes in all — the substitution spends the budget
+/// instead.
+#[test]
+fn type_check_charges_a_literal_s_payload_against_the_node_budget() {
+    let k = kernel();
+    let c = coord(&k);
+    let big = || Term::Lit(Lit::Nat(Nat::from_bytes_be(&vec![1u8; 1 << 17]))); // 2¹⁴ limbs
+    c.type_check(vec![], nat_eq(big(), lit_nat(1)))
+        .expect("one large literal is within the budget");
+    assert!(matches!(
+        c.type_check(vec![], forall(10, Dom::Reg, nat_eq(big(), lit_nat(1)))),
+        Err(TypeError::TooLarge)
+    ));
 }
 
 /// The nesting cap is the checker's as it is the decoder's: `¬¹²⁸ ⊤`

@@ -68,9 +68,12 @@ pub enum TypeError {
     /// complete at the level the `Ref` sits at, the referent left unjudged.
     /// A def at the cap admits no reference to it.
     TooDeep,
-    /// The term, after `Reg`-expansion, exceeds `MAX_TERM_NODES` nodes —
-    /// counted per node the checker visits or builds, so nested `Reg`
-    /// quantifiers and an `Arc`-shared body are charged for what they
+    /// The term, after `Reg`-expansion, exceeds the `MAX_TERM_NODES` budget —
+    /// counted per node the checker visits or builds AND per unit of payload
+    /// that node carries (a literal's tumbler components, a `Nat`'s limbs, a
+    /// `Ref`'s address, a Γ_D parameter), so the budget bounds the tree's
+    /// bytes rather than its node count alone: nested `Reg` quantifiers, an
+    /// `Arc`-shared body and a large literal are each charged for what they
     /// produce, and the check stops at the budget.
     TooLarge,
 }
@@ -116,7 +119,8 @@ impl fmt::Display for TypeError {
                 "type_check: the term nests past MAX_DEPTH (counted through references)",
             ),
             TypeError::TooLarge => f.write_str(
-                "type_check: the term exceeds MAX_TERM_NODES nodes after Reg-expansion",
+                "type_check: the term exceeds the MAX_TERM_NODES budget after Reg-expansion \
+                 (nodes and the payload they carry)",
             ),
         }
     }
@@ -261,10 +265,11 @@ pub enum CertifyError {
     UndisciplinedDef,
     NotBoolean,
     NotActive,
-    /// The def's flat reference expansion exceeds `MAX_TERM_NODES` nodes —
-    /// a reference DAG whose unfolding into the tree ST⁺ classifies is past
-    /// the budget (each `Ref` re-expands its referent under fresh names,
-    /// PR3, so a def referenced twice per level unfolds exponentially).
+    /// The def's flat reference expansion exceeds the `MAX_TERM_NODES`
+    /// budget — a reference DAG whose unfolding into the tree ST⁺ classifies
+    /// is past it in nodes or in the payload they carry (each `Ref`
+    /// re-expands its referent under fresh names, PR3, copying its literals
+    /// whole, so a def referenced twice per level unfolds exponentially).
     /// Asked before view-independence: the expansion is what both legs read.
     ExpansionTooLarge,
     ViewDependent,
@@ -284,7 +289,8 @@ impl fmt::Display for CertifyError {
             CertifyError::NotBoolean => f.write_str("certify_stable: the def's codomain is not Bool"),
             CertifyError::NotActive => f.write_str("certify_stable: the def is not actively registered"),
             CertifyError::ExpansionTooLarge => f.write_str(
-                "certify_stable: the def's flat reference expansion exceeds MAX_TERM_NODES nodes",
+                "certify_stable: the def's flat reference expansion exceeds the MAX_TERM_NODES \
+                 budget (nodes and the payload they carry)",
             ),
             CertifyError::ViewDependent => {
                 f.write_str("certify_stable: the def's expansion is view-dependent (PR-VIEW)")
@@ -406,8 +412,9 @@ pub enum RuleError {
     /// A `Def` trigger whose def is not single-parameter (a `TriggerTerm`
     /// binds exactly one by type).
     BadTriggerArity,
-    /// A `Def` trigger whose def's flat reference expansion exceeds
-    /// `MAX_TERM_NODES` nodes — the tree the lint and the armer graph read.
+    /// A `Def` trigger whose def's flat reference expansion exceeds the
+    /// `MAX_TERM_NODES` budget, in nodes or in the payload they carry — the
+    /// tree the lint and the armer graph read.
     /// Refused at registration, so every registered trigger expands within
     /// the budget and the static analyses over the working set stay
     /// infallible (an `Inline` trigger is ref-free: its projection is its
@@ -448,7 +455,8 @@ impl fmt::Display for RuleError {
                 f.write_str("register_rule: the Def trigger's def does not bind exactly one parameter")
             }
             RuleError::TriggerExpansionTooLarge => f.write_str(
-                "register_rule: the Def trigger's flat reference expansion exceeds MAX_TERM_NODES nodes",
+                "register_rule: the Def trigger's flat reference expansion exceeds the \
+                 MAX_TERM_NODES budget (nodes and the payload they carry)",
             ),
             RuleError::BadMarkerType(ty) => {
                 write!(f, "register_rule: Marker type {ty} is not a cataloged Unary class")

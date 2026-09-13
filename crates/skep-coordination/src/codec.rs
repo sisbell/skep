@@ -14,10 +14,15 @@
 //!
 //! The decoder is the first of the crate's resource doors for a stored body:
 //! it refuses one nested past [`MAX_DEPTH`] and one that would build more
-//! than [`MAX_TERM_NODES`] nodes — a run at the daemon's request-body cap
+//! than [`MAX_TERM_NODES`] units — a run at the daemon's request-body cap
 //! would otherwise decode to a hundred times its bytes before the checker
 //! could refuse it — so what reaches the checker is already within the
-//! budgets the checker enforces for supplied terms.
+//! budgets the checker enforces for supplied terms. The budget counts
+//! FORMERS AND PAYLOAD alike ([`Rd::charge`]): every count the input chooses
+//! — parameters, tumbler components, endset spans, `Nat` limbs, `Ref`
+//! arguments — is charged against it BEFORE it is used to size an
+//! allocation, so an untrusted count can size nothing past the budget's
+//! remainder, and a decoded tree's payload is bounded like its node count.
 
 use std::sync::Arc;
 
@@ -511,7 +516,12 @@ fn w_prim2(b: &mut Vec<u8>, tag: u8, x: &Term, y: &Term) {
 /// what the parse consumed"). Total over every byte string: a length prefix
 /// the input cannot satisfy — however large — is `Malformed`, never a panic,
 /// so an undisciplined run reaches `register_pred`'s `ParseFailed` and the
-/// memo's freeze-on-breach.
+/// memo's freeze-on-breach. Bounded, too: every count the input chooses is
+/// charged against the `MAX_TERM_NODES` budget before it sizes anything
+/// ([`Rd::charge`]), so the decode of B hostile bytes commits O(budget)
+/// memory, not O(B) times a per-item width, and Γ_D's length is bounded by
+/// the budget — which is what bounds the checker's context and duplicate-name
+/// set in turn.
 pub(crate) fn decode(bytes: &[u8]) -> Result<SignedTerm, Malformed> {
     let mut r = Rd { b: bytes, pos: 0, nodes: 0 };
     let len = r.len()?;
@@ -522,6 +532,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<SignedTerm, Malformed> {
     if n_params > len {
         return Err(Malformed); // cheap bound against absurd counts
     }
+    r.charge(n_params)?;
     let mut params = Vec::with_capacity(n_params);
     for _ in 0..n_params {
         let v = r.varid()?;
@@ -539,8 +550,8 @@ struct Rd<'a> {
     b: &'a [u8],
     /// The read cursor: the offset of the next unread byte of `b`.
     pos: usize,
-    /// Nodes built so far — the term and domain formers — against
-    /// `MAX_TERM_NODES`.
+    /// Units built so far — the term and domain formers, and the payload
+    /// they carry — against `MAX_TERM_NODES`.
     nodes: usize,
 }
 
@@ -551,18 +562,30 @@ impl<'a> Rd<'a> {
         Ok(x)
     }
 
+    /// Charge `k` payload units — Γ_D parameters, tumbler components, endset
+    /// spans, `Nat` limbs, `Ref` arguments — against the same
+    /// `MAX_TERM_NODES` budget [`Rd::enter`] charges formers against
+    /// (`ast::weight` states the unit and why a payload is charged like a
+    /// node). Called BEFORE a count is used to size an allocation, so an
+    /// untrusted count can size nothing past the budget: a
+    /// `Vec::with_capacity` below is bounded by the budget's remainder, not
+    /// by the input's length.
+    fn charge(&mut self, k: usize) -> Result<(), Malformed> {
+        self.nodes = self.nodes.saturating_add(k);
+        if self.nodes > MAX_TERM_NODES {
+            return Err(Malformed);
+        }
+        Ok(())
+    }
+
     /// The two doors at every former: nesting past `MAX_DEPTH`, and the
-    /// node budget — refused before the former is read, so nothing past the
+    /// budget — refused before the former is read, so nothing past the
     /// budget is built.
     fn enter(&mut self, depth: u32) -> Result<(), Malformed> {
         if depth > MAX_DEPTH {
             return Err(Malformed);
         }
-        self.nodes = self.nodes.saturating_add(1);
-        if self.nodes > MAX_TERM_NODES {
-            return Err(Malformed);
-        }
-        Ok(())
+        self.charge(1)
     }
 
     /// A length or count prefix, as a `usize`: a varint the target cannot
@@ -622,6 +645,7 @@ impl<'a> Rd<'a> {
 
     fn nat(&mut self) -> Result<Nat, Malformed> {
         let len = self.len()?;
+        self.charge(len.div_ceil(8))?; // the limbs `from_bytes_be` will allocate
         let bytes = self.b.get(self.pos..).and_then(|rest| rest.get(..len)).ok_or(Malformed)?;
         self.pos += len;
         if bytes.is_empty() || (bytes.len() > 1 && bytes[0] == 0) {
@@ -635,6 +659,7 @@ impl<'a> Rd<'a> {
         if n == 0 || n > self.b.len() {
             return Err(Malformed);
         }
+        self.charge(n)?;
         let mut comps = Vec::with_capacity(n);
         for _ in 0..n {
             comps.push(self.nat()?);
@@ -657,6 +682,7 @@ impl<'a> Rd<'a> {
         if n > self.b.len() {
             return Err(Malformed);
         }
+        self.charge(n)?;
         let mut spans = Vec::with_capacity(n);
         for _ in 0..n {
             spans.push(self.span()?);
@@ -715,6 +741,7 @@ impl<'a> Rd<'a> {
                 if n > self.b.len() {
                     return Err(Malformed);
                 }
+                self.charge(n)?;
                 let mut args = Vec::with_capacity(n);
                 for _ in 0..n {
                     args.push(self.arc_term(d)?);
@@ -958,5 +985,40 @@ mod tests {
         assert_eq!(decode(&encode(&within).expect("encodes")), Ok(within));
         let past = balanced(1 << 16);
         assert_eq!(decode(&encode(&past).expect("encodes")), Err(Malformed));
+    }
+
+    /// The budget counts the PAYLOAD a node carries, not the node alone: a
+    /// closed `Lit::Nat` is two formers whatever its magnitude, and one of
+    /// 2¹⁶ limbs is `Malformed` while one of 2¹⁴ limbs decodes — so the
+    /// natural's limbs are refused at the budget rather than allocated first.
+    #[test]
+    fn decode_charges_a_literal_s_payload_against_the_node_budget() {
+        let nat = |limbs: usize| SignedTerm {
+            params: vec![],
+            body: Term::Lit(Lit::Nat(Nat::from_bytes_be(&vec![1u8; limbs * 8]))),
+        };
+        let within = nat(1 << 14);
+        assert_eq!(decode(&encode(&within).expect("encodes")), Ok(within));
+        assert_eq!(decode(&encode(&nat(1 << 16)).expect("encodes")), Err(Malformed));
+    }
+
+    /// A count the input chooses — here an endset's span count, at four bytes
+    /// of input per ~48 bytes of `Span` — is charged against the budget
+    /// BEFORE it sizes anything, so it can size nothing past the budget's
+    /// remainder: a hundred spans decode, four thousand are `Malformed`.
+    #[test]
+    fn decode_charges_an_endset_s_spans_against_the_node_budget() {
+        let members = |spans: u32| {
+            let e = Endset::from_spans((0..spans).flat_map(|i| {
+                skep_links::enc(&[a(&[1, 1, 0, 1, 0, 1, 0, 1, i + 1])]).spans().cloned().collect::<Vec<_>>()
+            }));
+            SignedTerm {
+                params: vec![],
+                body: Term::Atom(Atom::Members(TypeRef::Concrete(TypeKey(e)))),
+            }
+        };
+        let within = members(100);
+        assert_eq!(decode(&encode(&within).expect("encodes")), Ok(within));
+        assert_eq!(decode(&encode(&members(4000)).expect("encodes")), Err(Malformed));
     }
 }

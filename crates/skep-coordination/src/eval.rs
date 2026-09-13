@@ -29,7 +29,7 @@
 use std::sync::Arc;
 
 use im::OrdSet;
-use skep_address::{is_prefix, validate, Address, Nat, Tumbler};
+use skep_address::{is_prefix, Address, Nat, Tumbler};
 use skep_links::{CoverageClass, Pattern, Tip, Tuple, View};
 use skep_namespace::M3State;
 
@@ -37,8 +37,7 @@ use crate::ast::{Atom, Dom, Lit, Prim, Term, TypeKey, VarId};
 use crate::catalog::TypeCatalog;
 use crate::check::TypedTerm;
 use crate::guest::{GuestLinks, Slice};
-use crate::rule::Arg;
-use crate::value::{Env, Value};
+use crate::value::{lift, Arg, Env, Value};
 
 /// Referent supplier for the DAG-recursive drivers over ref-bearing bodies —
 /// the denotation of a stored def (`eval_term`'s walk plus the one `Ref`
@@ -60,18 +59,6 @@ pub(crate) struct EvalCtx<'a, W> {
     pub(crate) m3: &'a M3State,
     pub(crate) view: View,
     pub(crate) defs: Option<&'a dyn DefSource>,
-}
-
-/// Set-element lift (Tumbler → Address) at the binding sites — M1 `validate`,
-/// infallible on what reaches it (§Internal 2). Every tumbler lifted here
-/// is one of two things: the start of a unit-depth span in a stored slot
-/// endset — `Endset::addrs()` yields no other, and M7's slot doors admit a
-/// start only as an `Address` (`SlotArg::Addrs`, `emit`'s and `assert_sup`'s
-/// endpoints) or as a `Run::i_start`, an `Address` by type — or an element
-/// of a `Value::AddrSet`, which the evaluator builds from those and the two
-/// caller-facing doors (`evaluate_def`, `eval`) check element by element.
-pub(crate) fn lift(t: &Tumbler) -> Address {
-    validate(t.clone()).expect("PL set elements are store-minted, T4-valid addresses")
 }
 
 pub(crate) fn as_bool(v: Value) -> bool {
@@ -396,21 +383,16 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
             Value::Map(cx.targets_keyed(&x))
         }
         // BH4 totalization (ASN-0129): age(a) = ⊥ exactly when `a` is not
-        // the address of an ACTIVE K-tuple — a tuple-identity test, not
-        // is_k's coverage-of-F membership.
+        // the address of an ACTIVE K-tuple — `GuestLinks::is_active_tuple`,
+        // a tuple-identity test, not is_k's coverage-of-F membership.
         Atom::Age(tr, e) => {
             let k = tr.key();
             let x = as_addr(eval_term(cx, env, e));
-            let is_active_k_tuple = cx
+            let age = cx
                 .links
-                .observe(&k.0, Pattern::default(), Slice::Active)
-                .iter()
-                .any(|t| t.addr == x);
-            let age = if is_active_k_tuple {
-                cx.links.age(&x).map(Nat::from)
-            } else {
-                None
-            };
+                .is_active_tuple(&k.0, &x)
+                .then(|| cx.links.age(&x).map(Nat::from))
+                .flatten();
             Value::OptNat(age)
         }
         // Saturating Nat→u64 at the seam: a horizon ≥ 2^64 ⇒ stale = ∅ (all

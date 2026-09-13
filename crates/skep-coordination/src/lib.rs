@@ -71,6 +71,7 @@
 #![forbid(unsafe_code)]
 
 mod ast;
+mod budget;
 mod catalog;
 mod check;
 mod codec;
@@ -104,10 +105,10 @@ pub use error::{
     RuleError, TypeError,
 };
 pub use rule::{
-    Arg, FireAction, FireOutcome, Occurrence, Rule, RuleCertification, RuleId, ScopeBody,
-    StepOutcome, Trigger,
+    FireAction, FireOutcome, Occurrence, Rule, RuleCertification, RuleId, ScopeBody, StepOutcome,
+    Trigger,
 };
-pub use value::{Env, Signature, Sort, Value};
+pub use value::{Arg, Env, Signature, Sort, Value};
 
 // Foreign types in this surface, re-exported so a caller names everything a
 // `Coordinator` signature carries — and every payload a `Value` it builds

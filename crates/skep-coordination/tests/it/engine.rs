@@ -169,6 +169,18 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
     ));
 }
 
+/// `FireAction::home` answers the one fact both variants share — the document
+/// a fire of the action writes into, which the draft-boundary filter, M7's
+/// H-HOME gate and the divergence monitor's key each read. The enum being
+/// `#[non_exhaustive]`, this accessor is the only way a driver outside the
+/// crate can learn it: a caller cannot match the variants exhaustively.
+#[test]
+fn a_fire_action_reports_the_home_it_writes_into() {
+    let marker = FireAction::Marker { home: doc1(), ty: key(&marker_ty()) };
+    assert_eq!(marker.home(), &doc1());
+    assert_eq!(FireAction::Nullify { home: doc2() }.home(), &doc2());
+}
+
 /// The lint's three legs, each failed alone: every leg is relative to the
 /// declared view; the Marker witness must be the marker's own class AND the
 /// trigger's parameter; a `Filter` by an SF predicate leaves the grow-only
@@ -797,13 +809,18 @@ fn a_nullify_rule_is_uncertified_fires_once_and_surfaces_bad_target_as_failed() 
         RuleCertification::Uncertified { sf: true, marker: false, grow_only: false }
     );
     let id = c.register_rule(rule).expect("register");
+    // The tuple's OWN address, aimed as an `Addr` at a tuple domain: a domain
+    // yields one shape, so a probe of the other is out of it by construction
+    // — never matched by projecting the tuple to `t.addr`, which is the
+    // bookkeeping key and not the element.
     assert!(
         matches!(
-            c.fire(&Occurrence { rule: id, arg: Arg::Addr(ca(1)) }).expect("fire"),
+            c.fire(&Occurrence { rule: id, arg: Arg::Addr(m1.clone()) }).expect("fire"),
             FireOutcome::NoOp
         ),
         "an argument of a shape this domain never yields is out of it by construction"
     );
+    assert!(!k.snapshot().world().links().is_nullified(&m1), "nothing fired");
     match c.step(&k.snapshot()) {
         StepOutcome::Fired { rule, arg, .. } => {
             assert_eq!(rule, id);

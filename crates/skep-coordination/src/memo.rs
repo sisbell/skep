@@ -39,19 +39,23 @@ enum MemoEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Breach;
 
-/// The memo. THE POLICY, in one place: a start is cached only once it is
-/// ever-registered (a never-registered start must surface a later
-/// registration, so it is never cached); a verdict is filled only on the
-/// content's own account — `Coordinator::derive_def` fills nothing for a
-/// derivation that could not complete at the level it was asked at, that
-/// being the asking term's refusal, not the content's; the first fill wins
-/// and every later fill of the same start is a no-op (racing fills derive
-/// the same verdict from the same immutable content, so first-wins loses
-/// nothing); nothing is ever evicted or overwritten. A `RwLock`, never a
-/// `RefCell`: the `&self` signature/define paths of a shared `Coordinator`
-/// need `Sync`. A poisoned lock is read through: the one write under it is
-/// an `or_insert_with` of a fully built entry, so a panic mid-write leaves
-/// nothing torn to guard.
+/// The memo. THE POLICY, in two halves. THIS TYPE OWNS PERMANENCE: the first
+/// fill of a start wins and every later fill of it is a no-op (racing fills
+/// derive the same verdict from the same immutable content, so first-wins
+/// loses nothing), nothing is ever evicted or overwritten, and both verdicts
+/// are therefore permanent — content is immutable and ever-registration
+/// monotone, so a `Defined` entry can never be contradicted and a `Poisoned`
+/// one is freeze-on-breach. ADMISSION is `Coordinator::derive_def`'s, and
+/// cannot be this type's: only a start that is ever-registered AT A PINNED
+/// SNAPSHOT is offered (a never-registered start must surface a later
+/// registration), and only a verdict about the CONTENT is filled — a
+/// derivation that could not complete at the level it was asked at fills
+/// nothing, that being the asking term's refusal, not the content's.
+///
+/// A `RwLock`, never a `RefCell`: the `&self` signature/define paths of a
+/// shared `Coordinator` need `Sync`. A poisoned lock is read through: the one
+/// write under it is an `or_insert_with` of a fully built entry, so a panic
+/// mid-write leaves nothing torn to guard.
 #[derive(Debug)]
 pub(crate) struct DefMemo(RwLock<HashMap<Tumbler, MemoEntry>>);
 

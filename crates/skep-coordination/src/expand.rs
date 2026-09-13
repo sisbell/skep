@@ -26,7 +26,8 @@
 
 use std::sync::Arc;
 
-use crate::ast::{weight, ArcTerm, Dom, Lit, Term, VarId, MAX_TERM_NODES};
+use crate::ast::{ArcTerm, Dom, Lit, Term, VarId};
+use crate::budget::{weight, MAX_TERM_NODES};
 use crate::eval::DefSource;
 use crate::walk::{rewrite_dom, rewrite_term, Rewrite};
 

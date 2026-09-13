@@ -29,7 +29,8 @@ use std::sync::Arc;
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_links::Endset;
 
-use crate::ast::{Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId, MAX_DEPTH, MAX_TERM_NODES};
+use crate::ast::{Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId};
+use crate::budget::{MAX_DEPTH, MAX_TERM_NODES};
 use crate::value::{SignedTerm, Sort};
 
 /// Decode failure — surfaced as `RegisterError::ParseFailed` (and, for an
@@ -565,7 +566,7 @@ impl<'a> Rd<'a> {
     /// Charge `weight` payload units — Γ_D parameters, tumbler components,
     /// endset spans, `Nat` limbs, `Ref` arguments — against the same
     /// `MAX_TERM_NODES` budget [`Rd::enter`] charges formers against
-    /// (`ast::weight` states the unit and why a payload is charged like a
+    /// (`budget::weight` states the unit and why a payload is charged like a
     /// node). Called BEFORE a count is used to size an allocation, so an
     /// untrusted count can size nothing past the budget: a
     /// `Vec::with_capacity` below is bounded by the budget's remainder, not

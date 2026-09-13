@@ -20,10 +20,8 @@ use std::sync::Arc;
 use skep_address::{Address, Nat};
 use skep_links::Behavior;
 
-use crate::ast::{
-    weight, ArcDom, ArcTerm, Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId, DERIVATION_COST,
-    MAX_DEPTH, MAX_TERM_NODES,
-};
+use crate::ast::{ArcDom, ArcTerm, Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId};
+use crate::budget::{weight, DERIVATION_COST, MAX_DEPTH, MAX_TERM_NODES};
 use crate::catalog::TypeCatalog;
 use crate::error::TypeError;
 use crate::value::{Signature, SignedTerm, Sort};
@@ -352,7 +350,7 @@ impl<'a> Checker<'a> {
             // serve is `UnservedWalkClass`.
             Guard::Walk => {
                 declares(Behavior::Walk)?;
-                if *k != self.catalog.supersedes_key {
+                if k != self.catalog.supersedes_key() {
                     return Err(TypeError::UnservedWalkClass(k.clone()));
                 }
             }

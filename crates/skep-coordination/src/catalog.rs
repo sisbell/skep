@@ -47,10 +47,13 @@ pub(crate) struct TypeCatalog {
     /// `targets_keyed`'s footprint and its join (BH3). Empty in this format:
     /// no shipped registration declares it.
     reverse_lookup: Vec<(CoverageClass, Endset)>,
-    pub(crate) retraction_class: CoverageClass,
-    pub(crate) supersedes_key: TypeKey,
-    pub(crate) pred_def_class: CoverageClass,
-    pub(crate) pred_stable_class: CoverageClass,
+    /// The `[R]` class, the shipped `Supersedes` key, and the two PredLayer
+    /// classes — each answered by an accessor below, so a collaborator asks
+    /// the catalog the question rather than performing the comparison itself.
+    retraction_class: CoverageClass,
+    supersedes_key: TypeKey,
+    pred_def_class: CoverageClass,
+    pred_stable_class: CoverageClass,
 }
 
 /// The `shipped` array's index for a shipped type — used by the projection
@@ -186,5 +189,26 @@ impl TypeCatalog {
     /// is out of the vocabulary on every board.
     pub(crate) fn has_reverse_lookup_class(&self) -> bool {
         !self.reverse_lookup.is_empty()
+    }
+
+    /// Is this one of the two classes PR-DISC reserves for the predicate
+    /// layer (`pdef`, `pd_stable`)? A rule's Marker action may emit into
+    /// neither — `register_rule`'s `PredLayerMarkerType`, the in-module half
+    /// of the discipline `lib.rs` states. Takes the class the caller already
+    /// holds, so the answer costs no second probe.
+    pub(crate) fn is_pred_layer(&self, class: &CoverageClass) -> bool {
+        *class == self.pred_def_class || *class == self.pred_stable_class
+    }
+
+    /// The `[R]` class every Nullify fire deposits into — §8's retraction
+    /// emission, which arms any active-reading trigger.
+    pub(crate) fn retraction_class(&self) -> &CoverageClass {
+        &self.retraction_class
+    }
+
+    /// The shipped `Supersedes` key — the one class M7 v1 serves the BH2 walk
+    /// at, so the one key `Guard::Walk` admits (Conflicts §8).
+    pub(crate) fn supersedes_key(&self) -> &TypeKey {
+        &self.supersedes_key
     }
 }

@@ -98,17 +98,22 @@ impl Footprint {
         !self.active.is_empty()
     }
 
-    /// A deposit in `class` can change what a term with this footprint reads
-    /// — the armer graph's edge rule (§8), asked of the footprint because it
-    /// is a property of the slices read: the class's own audit or active
-    /// slice, the whole audit sublayer, or BH4's home-wide frontier, which
-    /// ANY same-home deposit moves. The retraction case is the caller's —
-    /// only it knows which class an action emits.
-    pub(crate) fn armed_by(&self, class: &CoverageClass) -> bool {
+    /// THE ARMER GRAPH'S EDGE RULE (§8), whole: `emission` can change what a
+    /// term with this footprint reads — because it lands in a class whose
+    /// audit or active slice the term reads, because the term reads the whole
+    /// audit sublayer, because the term reads BH4's home-wide frontier (which
+    /// ANY same-home deposit moves), or because it is a RETRACTION and the
+    /// term reads some active slice (every active slice shrinks under one).
+    /// Asked of the footprint, which alone knows what a term reads, over an
+    /// [`Emission`], which the rule engine builds because it alone knows what
+    /// an action deposits.
+    pub(crate) fn armed_by(&self, emission: &Emission) -> bool {
+        let class = emission.class();
         self.all_audit
             || self.audit.contains(class)
             || self.active.contains(class)
             || self.home_frontier
+            || (matches!(emission, Emission::Retraction(_)) && self.retraction_shrinks())
     }
 
     /// The term reads nothing, so its value cannot change across a state step
@@ -131,6 +136,27 @@ impl Footprint {
         self.home_frontier |= other.home_frontier;
         self.targets_keyed |= other.targets_keyed;
         self
+    }
+}
+
+/// What a fire deposits, as the armer graph reads it (§8): the coverage class
+/// of the tuple the action emits, and whether that emission is a RETRACTION —
+/// which arms any active-reading trigger besides its own class, retractions
+/// shrinking every active slice. Built by the rule engine, which alone knows
+/// what an action emits; read by [`Footprint::armed_by`], which alone knows
+/// what a term reads.
+#[derive(Debug, Clone)]
+pub(crate) enum Emission {
+    Marker(CoverageClass),
+    Retraction(CoverageClass),
+}
+
+impl Emission {
+    /// The class the deposited tuple lands in, whichever kind it is.
+    fn class(&self) -> &CoverageClass {
+        match self {
+            Emission::Marker(c) | Emission::Retraction(c) => c,
+        }
     }
 }
 

@@ -1,7 +1,7 @@
 //! §Core data model — values, sorts, signatures, the eval environment.
 
 use im::{HashMap, OrdSet, Vector};
-use skep_address::{is_t4_valid, Address, Nat, Tumbler};
+use skep_address::{is_t4_valid, validate, Address, Nat, Tumbler};
 use skep_links::{CoverageClass, Tuple};
 
 use crate::ast::{Term, VarId};
@@ -67,13 +67,79 @@ impl Value {
     }
 
     /// The ℘_fin(T) invariant a caller-built value must meet: an `AddrSet`'s
-    /// every element is a T4-valid address (the evaluator lifts each one to
-    /// an `Address` at its binding sites, infallibly). True of every other
-    /// shape — their address positions are `Address`-typed already.
+    /// every element is a T4-valid address. True of every other shape — their
+    /// address positions are `Address`-typed already. This is the DOOR's half
+    /// of the invariant ([`lift`] is the binding site's): `eval`'s
+    /// precondition and `evaluate_def`'s argument check ask it of every value
+    /// a caller supplies, so `lift` is infallible on what passed here.
     pub(crate) fn holds_addresses(&self) -> bool {
         match self {
             Value::AddrSet(s) => s.iter().all(is_t4_valid),
             _ => true,
+        }
+    }
+}
+
+/// Set-element lift (Tumbler → Address) at the binding sites — M1 `validate`,
+/// infallible on what reaches it (§Internal 2), and the BINDING SITE's half of
+/// the ℘_fin(T) invariant [`Value::holds_addresses`] checks at the doors.
+/// Every tumbler lifted here is one of two things: the start of a unit-depth
+/// span in a stored slot endset — `Endset::addrs()` yields no other, and M7's
+/// slot doors admit a start only as an `Address` (`SlotArg::Addrs`, `emit`'s
+/// and `assert_sup`'s endpoints) or as a `Run::i_start`, an `Address` by type
+/// — or an element of a `Value::AddrSet`, which the evaluator builds from
+/// those and the two caller-facing doors (`evaluate_def`, `eval`) check
+/// element by element.
+pub(crate) fn lift(t: &Tumbler) -> Address {
+    validate(t.clone()).expect("PL set elements are store-minted, T4-valid addresses")
+}
+
+/// A PL DOMAIN ELEMENT — what `[D]_snap` yields (QD, §Internal 2): an address,
+/// from an address-valued domain (`M_K`, `L_dom`, a reflected set term), or a
+/// whole tuple, from a tuple-valued slice (`A_K`, `L_K`). The two element
+/// sorts the WT domain judgment admits — `dom(Addr)` and `dom(Tup)` — are this
+/// type's two shapes, so a quantifier, a fold and a rule each bind exactly
+/// what a domain can yield. A rule's bound argument is one of these
+/// (`Occurrence.arg`), projected to an address for bookkeeping
+/// ([`Arg::key_addr`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Arg {
+    Addr(Address),
+    Tuple(Tuple),
+}
+
+impl Arg {
+    /// The rule engine's bookkeeping key for a bound argument of EITHER
+    /// shape: the address itself, or the tuple's `t.addr` (R1
+    /// AddressInjectivity, so an address hit is a value hit) — what a
+    /// `StepOutcome` reports and the divergence monitor attributes by.
+    pub(crate) fn key_addr(&self) -> Address {
+        match self {
+            Arg::Addr(a) => a.clone(),
+            Arg::Tuple(t) => t.addr.clone(),
+        }
+    }
+
+    /// Are these the same domain element? Addresses by address; tuples by
+    /// `t.addr` (R1 AddressInjectivity — an address hit is a value hit);
+    /// NEVER across shapes, a domain yielding one shape only, so a probe of
+    /// the other is out of that domain by construction — which is why `fire`
+    /// answers `NoOp` for it rather than refusing.
+    pub(crate) fn same_element(&self, other: &Arg) -> bool {
+        match (self, other) {
+            (Arg::Addr(a), Arg::Addr(b)) => a == b,
+            (Arg::Tuple(t), Arg::Tuple(u)) => t.addr == u.addr,
+            _ => false,
+        }
+    }
+}
+
+/// The value a trigger's one parameter, or a quantifier's binder, binds to.
+impl From<Arg> for Value {
+    fn from(a: Arg) -> Value {
+        match a {
+            Arg::Addr(a) => Value::Addr(a),
+            Arg::Tuple(t) => Value::Tuple(t),
         }
     }
 }

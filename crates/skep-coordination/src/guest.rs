@@ -42,9 +42,11 @@
 //! active `[K_sup]` claims, so a draft-homed claim moves no walk); the BH3
 //! pair `sources_to`/`target_of` (the `targets_keyed` join is `EvalCtx`'s,
 //! over the catalog's `ReverseLookup` classes, each answered by `target_of`
-//! here); and BH4's `age`/`stale` (dormant in this format, filtered the same
-//! way). Signatures mirror M7's so the evaluator's call sites read as before,
-//! save that each names the stored [`Slice`] it reads rather than a term view.
+//! here); and BH4's `is_active_tuple`/`age`/`stale` (dormant in this format,
+//! filtered the same way). Signatures mirror M7's so the evaluator's call
+//! sites read as before, save that each names the stored [`Slice`] it reads
+//! rather than a term view, and that `is_active_tuple` — BH4's totalization
+//! premise — is PL's composition of `observe`, M7 offering no such read.
 
 use std::collections::BTreeMap;
 use std::slice::from_ref;
@@ -53,7 +55,7 @@ use im::OrdSet;
 use skep_address::{document_of, Address, Tumbler};
 use skep_links::{Endset, HasLinks, LinkState, NotBh4, Pattern, Tip, Tuple, View, Visibility};
 
-use crate::eval::lift;
+use crate::value::lift;
 
 /// Which STORED SLICE a read touches: the active tuples, or the whole audit
 /// record. `A_K` and `L_K` — PL's two tuple domains — are its two values, and
@@ -305,6 +307,17 @@ impl<'a, W> GuestLinks<'a, W> {
     }
 
     // ────────────────────────── BH4 — over the visible slice ──────────────────────────
+
+    /// Is `a` the address of a VISIBLE ACTIVE type-`ty` tuple? A tuple-IDENTITY
+    /// test, not [`GuestLinks::is_k`]'s coverage-of-F membership — the two
+    /// reads differ, and BH4's totalization keys on this one ([`GuestLinks::age`]
+    /// is untyped, M7's being untyped, so the type-indexing is PL's and the
+    /// read is answered here with the rest).
+    pub(crate) fn is_active_tuple(&self, ty: &Endset, a: &Address) -> bool {
+        self.observe(ty, Pattern::default(), Slice::Active)
+            .iter()
+            .any(|t| t.addr == *a)
+    }
 
     /// BH4 age: M7's own for a link of a readable home, ⊥ otherwise (a
     /// draft-homed tuple has no age at guest class, as it has no residence).

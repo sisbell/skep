@@ -1,18 +1,20 @@
 //! §Internal 5 — the reactive-rule datatypes: the raw [`Rule`] submission,
 //! trigger/action forms, the checked shapes the working set holds
-//! ([`CheckedRule`], [`TypedDom`]), the occurrence and its argument, and the
-//! fire/step outcome types.
+//! ([`CheckedRule`], [`TypedDom`]), the occurrence, and the fire/step outcome
+//! types. A rule's bound argument is a PL domain element, so it is
+//! [`crate::value::Arg`] — `Occurrence` names it, this module does not
+//! declare it.
 
 use std::sync::Arc;
 
 use skep_address::Address;
 use skep_kernel::Seq;
-use skep_links::{Tuple, View};
+use skep_links::View;
 
 use crate::ast::{ArcDom, Dom, TypeKey};
 use crate::check::{TriggerTerm, TypedTerm};
 use crate::error::FireError;
-use crate::value::Value;
+use crate::value::Arg;
 
 /// One trigger→action rule. `domain` is the RAW submission — `register_rule`
 /// checks + `Reg`-expands it into the internal checked `TypedDom` the working
@@ -67,6 +69,19 @@ pub enum FireAction {
     Nullify { home: Address },
 }
 
+impl FireAction {
+    /// The document a fire of this action writes into — the one fact both
+    /// variants share: checked against the guest class before any deposit
+    /// (`FireError::DraftBoundary`), checked by M7 as the write's home
+    /// (H-HOME → `FireError::HomeNotRegistered`), and the home half of the
+    /// divergence monitor's attribution key (§8).
+    pub fn home(&self) -> &Address {
+        match self {
+            FireAction::Marker { home, .. } | FireAction::Nullify { home } => home,
+        }
+    }
+}
+
 /// `quiescent_scoped`'s per-rule restriction form (Q7). All four use the
 /// scope predicate `S` only positively, so Q9's global⟹scope inference holds
 /// by construction.
@@ -114,40 +129,6 @@ pub(crate) struct CheckedRule {
     pub(crate) trigger: Arc<TypedTerm>,
     pub(crate) view: View,
     pub(crate) action: FireAction,
-}
-
-/// A rule's bound argument — a domain element: an address (an `Addr`-domain
-/// rule, `M_K`/`L_dom`/a set term) or a whole tuple (a `Tup`-domain rule,
-/// `A_K`/`L_K`). The two shapes a rule can bind are the two this type has:
-/// the trigger/atom dispatch consumes the whole value; bookkeeping projects
-/// to the address (`t.addr` for a tuple — R1 AddressInjectivity).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Arg {
-    Addr(Address),
-    Tuple(Tuple),
-}
-
-impl Arg {
-    /// The rule engine's bookkeeping key for a bound argument of EITHER
-    /// shape: the address itself, or the tuple's `t.addr` (R1
-    /// AddressInjectivity, so an address hit is a value hit) — what a
-    /// `StepOutcome` reports and the divergence monitor attributes by.
-    pub(crate) fn key_addr(&self) -> Address {
-        match self {
-            Arg::Addr(a) => a.clone(),
-            Arg::Tuple(t) => t.addr.clone(),
-        }
-    }
-}
-
-/// The value a trigger's one parameter binds to.
-impl From<Arg> for Value {
-    fn from(a: Arg) -> Value {
-        match a {
-            Arg::Addr(a) => Value::Addr(a),
-            Arg::Tuple(t) => Value::Tuple(t),
-        }
-    }
 }
 
 /// An occurrence `(ρ, x)`: a rule and a candidate argument. Enabled only

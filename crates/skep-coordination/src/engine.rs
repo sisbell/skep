@@ -14,15 +14,15 @@ use skep_links::{Caller, EmitError, Endset, NullifyError, Pattern, Shape, Shippe
 use crate::ast::Term;
 use crate::check::{Checker, Ctx, TypedTerm};
 use crate::coordinator::Coordinator;
-use crate::dynamics::{negated_membership, Analyzer, Footprint};
+use crate::dynamics::{negated_membership, Analyzer, Emission, Footprint};
 use crate::error::{FireError, RuleError};
-use crate::eval::{as_bool, enum_dom, eval_term, lift};
+use crate::eval::{as_bool, enum_dom, eval_term};
 use crate::memo::DefStatus;
 use crate::rule::{
-    Arg, CheckedRule, FireAction, FireOutcome, Occurrence, Rule, RuleCertification, RuleId,
-    ScopeBody, StepOutcome, Trigger, TypedDom,
+    CheckedRule, FireAction, FireOutcome, Occurrence, Rule, RuleCertification, RuleId, ScopeBody,
+    StepOutcome, Trigger, TypedDom,
 };
-use crate::value::{Env, Sort, Value};
+use crate::value::{lift, Arg, Env, Sort, Value};
 use crate::CoordinationWorld;
 
 impl<W: CoordinationWorld> Coordinator<W> {
@@ -191,8 +191,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
             if !entry.registration.idem {
                 return Err(RuleError::NonIdemMarkerType(ty.clone()));
             }
-            if entry.class == self.catalog.pred_def_class || entry.class == self.catalog.pred_stable_class
-            {
+            if self.catalog.is_pred_layer(&entry.class) {
                 return Err(RuleError::PredLayerMarkerType(ty.clone()));
             }
         }
@@ -347,18 +346,15 @@ impl<W: CoordinationWorld> Coordinator<W> {
             .find(|r| r.id == occurrence.rule)
             .expect("fire precondition: the RuleId is registered with this Coordinator");
         let snap = self.kernel.snapshot();
-        let arg = {
-            let elems = self.enum_rule_dom(rule, &snap);
-            match &occurrence.arg {
-                Arg::Addr(a) => elems.into_iter().find(|x| matches!(x, Arg::Addr(b) if b == a)),
-                // Tuple membership keys on the tuple's address (R1
-                // AddressInjectivity: an address hit is a value hit).
-                Arg::Tuple(t) => {
-                    elems.into_iter().find(|x| matches!(x, Arg::Tuple(u) if u.addr == t.addr))
-                }
-            }
-        };
-        let Some(arg) = arg else {
+        // Membership is the domain element's own identity rule
+        // (`Arg::same_element`), and what it finds is the STORE's element —
+        // never the caller's — so the trigger and the action see what the
+        // domain yielded.
+        let found = self
+            .enum_rule_dom(rule, &snap)
+            .into_iter()
+            .find(|elem| elem.same_element(&occurrence.arg));
+        let Some(arg) = found else {
             return Ok(FireOutcome::NoOp);
         };
         if !self.trigger_true(rule, &arg, &snap) {
@@ -380,11 +376,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // PUB-6.28's three REGISTRATION conditions remain not built.
         {
             let w = snap.world();
-            let home = match &rule.action {
-                FireAction::Marker { home, .. } | FireAction::Nullify { home } => home,
-            };
             let arg_doc = document_of(&a).unwrap_or_else(|| a.clone());
-            for d in [home, &arg_doc] {
+            for d in [rule.action.home(), &arg_doc] {
                 if !(self.guest)(w, d) {
                     return Err(FireError::DraftBoundary(d.clone()));
                 }
@@ -553,23 +546,22 @@ impl<W: CoordinationWorld> Coordinator<W> {
                     .fp
             })
             .collect();
-        let emitted: Vec<_> = self
+        // What each rule's fire deposits — the engine's knowledge, since only
+        // it knows what an action emits; the edge rule itself is
+        // `Footprint::armed_by`'s, which alone knows what a term reads.
+        let emitted: Vec<Emission> = self
             .rules
             .iter()
             .map(|r| match &r.action {
-                FireAction::Marker { ty, .. } => self.catalog.class_of(ty).clone(),
-                FireAction::Nullify { .. } => self.catalog.retraction_class.clone(),
+                FireAction::Marker { ty, .. } => Emission::Marker(self.catalog.class_of(ty).clone()),
+                FireAction::Nullify { .. } => {
+                    Emission::Retraction(self.catalog.retraction_class().clone())
+                }
             })
             .collect();
-        let arms = |i: usize, j: usize| -> bool {
-            let (fp, emitted) = (&fps[j], &emitted[i]);
-            // The footprint answers for its own slices; the retraction edge is
-            // this loop's, since only it knows which class an action emits.
-            fp.armed_by(emitted)
-                || (*emitted == self.catalog.retraction_class && fp.retraction_shrinks())
-        };
-        let edges: Vec<Vec<usize>> =
-            (0..n).map(|i| (0..n).filter(|&j| arms(i, j)).collect()).collect();
+        let edges: Vec<Vec<usize>> = (0..n)
+            .map(|i| (0..n).filter(|&j| fps[j].armed_by(&emitted[i])).collect())
+            .collect();
         tarjan_nontrivial_sccs(&edges)
             .into_iter()
             .map(|scc| scc.into_iter().map(|i| self.rules[i].id).collect())

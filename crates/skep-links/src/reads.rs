@@ -721,8 +721,8 @@ impl LinkState {
     /// domain once instead of re-walking the slice — and re-deriving each
     /// root's span — per result element.
     fn retired_roots(&self) -> impl Iterator<Item = &Tumbler> + '_ {
-        let retired = registry().shipped_class(ShippedType::Retired);
-        self.typed_links(retired, View::Active)
+        let retired_class = registry().shipped_class(ShippedType::Retired);
+        self.typed_links(retired_class, View::Active)
             .flat_map(|(_, link)| link.from_slot().addrs())
     }
 
@@ -825,8 +825,8 @@ impl LinkState {
     fn out_claims(&self, vertices: OrdSet<Tumbler>) -> Vec<(Tumbler, Vec<Address>)> {
         let mut out: Vec<(Tumbler, Vec<Address>)> =
             vertices.into_iter().map(|t| (t, Vec::new())).collect();
-        let sup = registry().shipped_class(ShippedType::Supersedes);
-        for (claim, link) in self.typed_links(sup, View::Active) {
+        let sup_class = registry().shipped_class(ShippedType::Supersedes);
+        for (claim, link) in self.typed_links(sup_class, View::Active) {
             for g in link.to_slot().addrs() {
                 if let Ok(i) = out.binary_search_by(|(t, _)| t.cmp(g)) {
                     out[i].1.push(lift(claim));

@@ -294,8 +294,8 @@ struct LinkShadow {
 /// checkpoint can smuggle in a link below the L3 arity floor.
 impl TryFrom<LinkShadow> for Link {
     type Error = &'static str;
-    fn try_from(s: LinkShadow) -> Result<Link, &'static str> {
-        Link::new(s.slots).ok_or("link value has arity < 3 (the L3 capacity floor)")
+    fn try_from(shadow: LinkShadow) -> Result<Link, &'static str> {
+        Link::new(shadow.slots).ok_or("link value has arity < 3 (the L3 capacity floor)")
     }
 }
 

@@ -179,18 +179,18 @@ pub fn doc2() -> Address {
 }
 
 /// doc1 content element `k`: `[1,0,1,0,1,0,1,k]`.
-pub fn ca(ordinal: u32) -> Address {
-    a(&[1, 0, 1, 0, 1, 0, 1, ordinal])
+pub fn ca(k: u32) -> Address {
+    a(&[1, 0, 1, 0, 1, 0, 1, k])
 }
 
 /// doc1 link element `k`: `[1,0,1,0,1,0,2,k]`.
-pub fn la(ordinal: u32) -> Address {
-    a(&[1, 0, 1, 0, 1, 0, 2, ordinal])
+pub fn la(k: u32) -> Address {
+    a(&[1, 0, 1, 0, 1, 0, 2, k])
 }
 
 /// doc2 link element `k`: `[1,0,1,0,2,0,2,k]`.
-pub fn la2(ordinal: u32) -> Address {
-    a(&[1, 0, 1, 0, 2, 0, 2, ordinal])
+pub fn la2(k: u32) -> Address {
+    a(&[1, 0, 1, 0, 2, 0, 2, k])
 }
 
 /// Reserved type address `k` — ghost tumbler `[1,1,0,1,0,1,0,1,k]`, content

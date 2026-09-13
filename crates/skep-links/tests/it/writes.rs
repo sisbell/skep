@@ -252,9 +252,9 @@ fn emit_deposits_verbatim_reads_back_and_never_seats() {
     // Emit_K does NOT seat (MAKELINK alone seats).
     assert_eq!(snap.world().m5().link_count(&doc1()), n(0));
     // Observe: the empty pattern is no constraint; exact ⊆-coverage match.
-    let all = links.observe(&pred_def_ty(), Pattern::default(), View::Active);
-    assert_eq!(all.len(), 1);
-    assert_eq!(all[0].addr, a1);
+    let tuples = links.observe(&pred_def_ty(), Pattern::default(), View::Active);
+    assert_eq!(tuples.len(), 1);
+    assert_eq!(tuples[0].addr, a1);
     // An unmatched F-probe finds nothing.
     assert!(links
         .observe(
@@ -497,17 +497,17 @@ fn an_idem_top_duplicate_returns_the_incumbent_and_a_nullified_one_resurrects() 
     // discipline is the managed surface's whole deposit behavior.
     let (a1, s1) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("first emit");
     assert_eq!(k.current_seq(), s1);
-    let (a1b, s1b) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("dedup hit");
-    assert_eq!(a1b, a1);
-    assert_eq!(s1b, s1);
+    let (hit, seq) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("dedup hit");
+    assert_eq!(hit, a1);
+    assert_eq!(seq, s1);
     assert_eq!(k.current_seq(), s1); // zero-step: nothing committed
     // The open surface is the fresh-always contrast (ML0): the identical
     // deposit lands at a new address every time, dedup lock and check alike
     // absent.
-    let open = || open_deposit(&w, &[ca(1)], &[ca(2)], &[unregistered_ta(1)]);
-    let m1 = open();
-    let m2 = open();
-    assert_ne!(m1, m2);
+    let deposit = || open_deposit(&w, &[ca(1)], &[ca(2)], &[unregistered_ta(1)]);
+    let first = deposit();
+    let second = deposit();
+    assert_ne!(first, second);
     // Resurrection (I2): dedup reads the ACTIVE view — a nullified incumbent
     // is invisible, so re-emitting lands at a fresh address; audit keeps both.
     w.nullify(P1, &doc1(), &a1).expect("nullify the idem⊤ tuple");
@@ -642,20 +642,20 @@ fn nullify_tombstones_its_target_and_accepts_its_own_fresh_address() {
         Err(TxnError::Rejected(NullifyError::HomeNotRegistered))
     ));
     // Happy path: the [R] tuple nullifies exactly the target root.
-    let (m1, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("emit");
-    let (r1, _) = w.nullify(P1, &doc1(), &m1).expect("nullify");
+    let (target, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("emit");
+    let (r1, _) = w.nullify(P1, &doc1(), &target).expect("nullify");
     {
         let snap = k.snapshot();
         let links = snap.world().links();
-        assert!(links.is_nullified(&m1));
-        assert!(!links.is_active(&m1));
+        assert!(links.is_nullified(&target));
+        assert!(!links.is_active(&target));
         assert!(links.is_active(&r1)); // the retraction tuple itself is active
         // Active slices exclude the nullified tuple; audit keeps it (R3).
-        assert!(!links.type_slice(&pred_def_ty(), View::Active).contains(&m1));
-        assert!(links.type_slice(&pred_def_ty(), View::Audit).contains(&m1));
+        assert!(!links.type_slice(&pred_def_ty(), View::Active).contains(&target));
+        assert!(links.type_slice(&pred_def_ty(), View::Audit).contains(&target));
     }
     // idem⊤: re-retracting the same target from the same home dedups.
-    let (r2, _) = w.nullify(P1, &doc1(), &m1).expect("re-nullify dedups");
+    let (r2, _) = w.nullify(P1, &doc1(), &target).expect("re-nullify dedups");
     assert_eq!(r2, r1);
     // Born-nullified self-target: the target may be the address this call's
     // own retraction tuple would occupy (P-tgt's second disjunct) — doc2's
@@ -668,7 +668,7 @@ fn nullify_tombstones_its_target_and_accepts_its_own_fresh_address() {
     }
     // The predicted address tracks the home's own link count, so the second
     // disjunct names a moving address, not a fixed one: doc1 holds two links
-    // (m1, r1 — the dedup hit staged nothing), so its next mint is exactly
+    // (target, r1 — the dedup hit staged nothing), so its next mint is exactly
     // la(3); la(4) is neither resident nor `a_emit`.
     assert!(matches!(
         w.nullify(P1, &doc1(), &la(4)),
@@ -711,17 +711,17 @@ fn nullify_from_a_second_home_deposits_a_distinct_retraction() {
     // (old, new) from another home dedups to the first claim.
     let k = kernel();
     let w = writer(&k);
-    let (m1, _) = w
+    let (target, _) = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("target");
-    let (r1, _) = w.nullify(P1, &doc1(), &m1).expect("retract from doc1");
-    let (r2, _) = w.nullify(P1, &doc2(), &m1).expect("retract from doc2");
+    let (r1, _) = w.nullify(P1, &doc1(), &target).expect("retract from doc1");
+    let (r2, _) = w.nullify(P1, &doc2(), &target).expect("retract from doc2");
     assert_ne!(r1, r2, "a second home's retraction is its own tuple");
     assert_eq!(r2, la2(1)); // doc2's own link chain
     let snap = k.snapshot();
     let links = snap.world().links();
     assert!(links.is_active(&r1) && links.is_active(&r2));
-    assert!(links.is_nullified(&m1)); // one target, monotone
+    assert!(links.is_nullified(&target)); // one target, monotone
 }
 
 #[test]
@@ -733,10 +733,10 @@ fn nullifying_a_retraction_restores_nothing() {
     // (is_filtered_reads_the_active_retired_slice), nullifying is not.
     let k = kernel();
     let w = writer(&k);
-    let (m1, _) = w
+    let (target, _) = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("target");
-    let (r1, _) = w.nullify(P1, &doc1(), &m1).expect("retract it");
+    let (r1, _) = w.nullify(P1, &doc1(), &target).expect("retract it");
     let (r2, _) = w
         .nullify(P1, &doc1(), &r1)
         .expect("retract the retraction — an ordinary resident, owned target");
@@ -745,16 +745,16 @@ fn nullifying_a_retraction_restores_nothing() {
     let links = snap.world().links();
     assert!(links.is_nullified(&r1), "the retraction is itself retracted");
     assert!(
-        links.is_nullified(&m1),
+        links.is_nullified(&target),
         "and its target stays nullified — the set is monotone"
     );
-    assert!(!links.type_slice(&pred_def_ty(), View::Active).contains(&m1));
+    assert!(!links.type_slice(&pred_def_ty(), View::Active).contains(&target));
     // The replay half: the fold re-derives the tombstone from a nullified
     // [R] link, so recovery restores nothing either.
     let bytes = bincode::serialize(snap.world()).expect("world serializes");
     let recovered: World = bincode::deserialize(&bytes).expect("world deserializes");
     let recovered = skep_kernel::WorldState::rebuild_derived(recovered);
-    assert!(recovered.links().is_nullified(&m1));
+    assert!(recovered.links().is_nullified(&target));
     assert!(recovered.links().is_nullified(&r1));
 }
 
@@ -1209,29 +1209,29 @@ fn nullify_requires_owning_home_and_target_and_still_filters_the_active_view() {
     // audit view retains everything.
     let k = kernel();
     let w = writer(&k);
-    let (m1, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("P1's tuple");
+    let (target, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("P1's tuple");
     // Foreign target, owned home: NotOwner carrying the target link.
     assert!(matches!(
-        w.nullify(P2, &sib_doc(), &m1),
-        Err(TxnError::Rejected(NullifyError::NotOwner(d))) if d == m1
+        w.nullify(P2, &sib_doc(), &target),
+        Err(TxnError::Rejected(NullifyError::NotOwner(d))) if d == target
     ));
     // Foreign home is rejected first, naming the home.
     assert!(matches!(
-        w.nullify(P2, &doc1(), &m1),
+        w.nullify(P2, &doc1(), &target),
         Err(TxnError::Rejected(NullifyError::NotOwner(d))) if d == doc1()
     ));
     {
         let snap = k.snapshot();
-        assert!(snap.world().links().is_active(&m1), "no foreign retraction landed");
+        assert!(snap.world().links().is_active(&target), "no foreign retraction landed");
     }
     // The owner's own retraction: active view filtered, audit retains.
-    w.nullify(P1, &doc1(), &m1).expect("owner retraction");
+    w.nullify(P1, &doc1(), &target).expect("owner retraction");
     let snap = k.snapshot();
     let links = snap.world().links();
-    assert!(links.is_nullified(&m1));
-    assert!(links.readlink(&m1).is_some());
-    assert!(links.type_slice(&pred_def_ty(), View::Audit).contains(&m1));
-    assert!(!links.type_slice(&pred_def_ty(), View::Active).contains(&m1));
+    assert!(links.is_nullified(&target));
+    assert!(links.readlink(&target).is_some());
+    assert!(links.type_slice(&pred_def_ty(), View::Audit).contains(&target));
+    assert!(!links.type_slice(&pred_def_ty(), View::Active).contains(&target));
 }
 
 #[test]
@@ -1735,8 +1735,8 @@ fn checkpoint_roundtrip_then_rebuild_derived_restores_every_hint() {
     let w = writer(&k);
     let sup = supersedes_ty();
     let (a1, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("idem⊤");
-    let (m1, _) = w.emit(P1, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("m1");
-    let (m2, _) = w.emit(P1, &doc1(), &pred_stable_ty(), &ca(4), &[]).expect("m2");
+    let (x, _) = w.emit(P1, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("x");
+    let (y, _) = w.emit(P1, &doc1(), &pred_stable_ty(), &ca(4), &[]).expect("y");
     let (_unregistered, _) = w
         .makelink(
             P1,
@@ -1746,8 +1746,8 @@ fn checkpoint_roundtrip_then_rebuild_derived_restores_every_hint() {
             SlotArg::Addrs(vec![unregistered_ta(11)]),
         )
         .expect("an unregistered-class deposit, so its slice is rebuilt too");
-    let (c, _) = w.assert_sup(P1, &doc1(), &m1, &m2).expect("claim");
-    w.nullify(P1, &doc1(), &m1).expect("nullify m1");
+    let (c, _) = w.assert_sup(P1, &doc1(), &x, &y).expect("claim");
+    w.nullify(P1, &doc1(), &x).expect("nullify the claim's old endpoint");
 
     // The checkpoint wire format: serialize the world, deserialize (skip
     // fields default), rebuild_derived BEFORE any read/replay.
@@ -1758,11 +1758,11 @@ fn checkpoint_roundtrip_then_rebuild_derived_restores_every_hint() {
 
     let live = snap.world().links();
     let back = recovered.links();
-    for addr in [&a1, &m1, &m2, &c] {
+    for addr in [&a1, &x, &y, &c] {
         assert_eq!(live.readlink(addr), back.readlink(addr));
     }
-    assert!(back.is_nullified(&m1));
-    assert_eq!(back.succs(&sup, &m1), vec![m2.clone()]); // sup_fwd rebuilt
+    assert!(back.is_nullified(&x));
+    assert_eq!(back.succs(&sup, &x), vec![y.clone()]); // sup_fwd rebuilt
     assert_eq!(
         live.type_slice(&pred_def_ty(), View::Audit),
         back.type_slice(&pred_def_ty(), View::Audit)

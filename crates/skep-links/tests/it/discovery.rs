@@ -162,9 +162,9 @@ fn match_links_narrows_to_the_same_set_its_conjuncts_intersect() {
     // vacuous: the three-slot AND admits l1 and l4 only, and Active drops
     // the nullified link from the one-slot answer.
     let every: Vec<(usize, &Endset)> = pool.iter().map(|(slot, query)| (*slot, query)).collect();
-    let all = links.match_links(&every, View::Audit);
-    assert!(all.contains(&l1) && all.contains(&l4));
-    assert!(!all.contains(&l2) && !all.contains(&l3));
+    let matched = links.match_links(&every, View::Audit);
+    assert!(matched.contains(&l1) && matched.contains(&l4));
+    assert!(!matched.contains(&l2) && !matched.contains(&l3));
     let to_query = enc(&[ca(2)]);
     let to_only = [(TO, &to_query)];
     assert!(links.match_links(&to_only, View::Audit).contains(&l3));

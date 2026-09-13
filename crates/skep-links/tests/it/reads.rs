@@ -151,9 +151,9 @@ fn the_class_keyed_reads_serve_an_unregistered_type_verbatim() {
     let l1 = open_deposit(&w, &[ca(1)], &[ca(2)], &[unregistered_ta(1)]);
     let snap = k.snapshot();
     let links = snap.world().links();
-    let one = links.observe(&rel, Pattern::default(), View::Active);
-    assert_eq!(one.len(), 1);
-    assert_eq!(one[0].addr, l1);
+    let tuples = links.observe(&rel, Pattern::default(), View::Active);
+    assert_eq!(tuples.len(), 1);
+    assert_eq!(tuples[0].addr, l1);
     assert_eq!(
         links
             .observe(
@@ -578,16 +578,16 @@ fn targets_keyed_joins_only_the_reverse_lookup_classes() {
     // home in F, so a join that read shape alone would reach it here.
     let k = kernel();
     let w = writer(&k);
-    let (m1, _) = w
+    let (target, _) = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
-        .expect("m1");
-    w.nullify(P1, &doc1(), &m1).expect("retract it from doc1");
+        .expect("target");
+    w.nullify(P1, &doc1(), &target).expect("retract it from doc1");
     let snap = k.snapshot();
     let links = snap.world().links();
     // The control: that class DOES answer target_of for doc1, so its absence
     // from the join is the behavior scope and not an empty class.
     let retraction = retraction_ty();
-    assert_eq!(links.target_of(&retraction, &doc1()), Some(m1));
+    assert_eq!(links.target_of(&retraction, &doc1()), Some(target));
     assert!(links.targets_keyed(&doc1()).is_empty());
 }
 
@@ -608,7 +608,7 @@ fn age_answers_ungated_and_the_staleness_family_refuses_every_class() {
     let (a1, _) = w.emit(P1, &doc2(), &pred_def_ty(), &ca(1), &[]).expect("a1");
     let (a2, _) = w.emit(P1, &doc2(), &pred_def_ty(), &ca(2), &[]).expect("a2");
     let (a3, _) = w.emit(P1, &doc2(), &pred_stable_ty(), &ca(3), &[]).expect("a3");
-    let (m1, _) = w
+    let (newest, _) = w
         .makelink(
             P1,
             &doc2(),
@@ -624,7 +624,7 @@ fn age_answers_ungated_and_the_staleness_family_refuses_every_class() {
         assert_eq!(links.age(&a1), Some(3));
         assert_eq!(links.age(&a2), Some(2));
         assert_eq!(links.age(&a3), Some(1));
-        assert_eq!(links.age(&m1), Some(0));
+        assert_eq!(links.age(&newest), Some(0));
         assert_eq!(links.age(&ca(1)), None); // non-resident ⇒ None
         // stale refuses EVERY class: the registered idem⊤ five and an
         // unregistered number alike — an empty stale set is never conflated

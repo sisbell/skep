@@ -53,8 +53,8 @@ fn assert_sup_claims_dedup_across_homes_and_a_retracted_claim_leaves_the_walk() 
     }
     // Dedup excludes home: the same (old, new) from ANOTHER home hits the
     // first claim (Conflicts §9).
-    let (c1b, _) = w.assert_sup(P1, &doc2(), &x, &y).expect("cross-home duplicate");
-    assert_eq!(c1b, c1);
+    let (hit, _) = w.assert_sup(P1, &doc2(), &x, &y).expect("cross-home duplicate");
+    assert_eq!(hit, c1);
     // Retraction stability: nullifying the claim removes the operative edge;
     // x becomes its own sink.
     w.nullify(P1, &doc1(), &c1).expect("retract claim");

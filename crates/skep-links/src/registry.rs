@@ -345,7 +345,7 @@ impl TypeRegistry {
             idem: true,
             behaviors,
         };
-        let shipped: [(&Shipped, Registration); 5] = [
+        let shipped_table: [(&Shipped, Registration); 5] = [
             (&retired, unary_top(BTreeSet::from([Behavior::ReadFilter]))),
             (
                 &supersedes,
@@ -369,14 +369,14 @@ impl TypeRegistry {
         ];
 
         let mut registrations: im::HashMap<CoverageClass, Registration> = im::HashMap::new();
-        for (ty, reg) in shipped {
+        for (shipped, reg) in shipped_table {
             // The C0 key-uniqueness half of the startup assertion: five
             // distinct constants classify to five distinct classes.
             assert!(
-                !registrations.contains_key(&ty.class),
+                !registrations.contains_key(&shipped.class),
                 "the five reserved format constants must be pairwise class-distinct (C0)"
             );
-            registrations.insert(ty.class.clone(), reg);
+            registrations.insert(shipped.class.clone(), reg);
         }
 
         TypeRegistry {
@@ -576,11 +576,11 @@ mod tests {
     #[test]
     fn declares_reads_the_shipped_declarations_and_nothing_else() {
         let built = TypeRegistry::build();
-        let retired = built.shipped_class(ShippedType::Retired);
-        let supersedes = built.shipped_class(ShippedType::Supersedes);
-        assert!(built.declares(retired, Behavior::ReadFilter));
-        assert!(built.declares(supersedes, Behavior::Walk));
-        assert!(!built.declares(retired, Behavior::Walk));
+        let retired_class = built.shipped_class(ShippedType::Retired);
+        let supersedes_class = built.shipped_class(ShippedType::Supersedes);
+        assert!(built.declares(retired_class, Behavior::ReadFilter));
+        assert!(built.declares(supersedes_class, Behavior::Walk));
+        assert!(!built.declares(retired_class, Behavior::Walk));
         // No shipped class declares BH3 or BH4 in this format, which is why
         // `targets_keyed`'s join covers nothing and `stale` refuses every ty.
         for ty in ShippedType::ALL {

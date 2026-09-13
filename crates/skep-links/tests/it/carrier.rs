@@ -83,8 +83,8 @@ fn endset_reads_back_verbatim_and_enc_round_trips() {
     let s1 = iext(1, 3);
     let s2 = iext(5, 6);
     let e = Endset::from_spans([s1.clone(), s2.clone()]);
-    let read: Vec<&Span> = e.spans().collect();
-    assert_eq!(read, vec![&s1, &s2]);
+    let spans: Vec<&Span> = e.spans().collect();
+    assert_eq!(spans, vec![&s1, &s2]);
     // covers is the half-open coverage projection.
     assert!(e.covers(ca(1).tumbler()));
     assert!(e.covers(ca(2).tumbler()));

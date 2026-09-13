@@ -14,7 +14,9 @@ use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{Deposit, HasM5, M5Rec, M5State, VPos, VSpec};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, WorldState};
-use skep_links::{enc, Caller, Endset, HasLinks, LinkRec, LinkState, ReservedAddrs};
+use skep_links::{
+    enc, Caller, Endset, HasLinks, LinkRec, LinkState, LinkWriter, ReservedAddrs, Visibility,
+};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 
 /// The seeded owner of doc1/doc2 — every pre-ruling op runs under it, so
@@ -34,6 +36,23 @@ pub static ALL_VISIBLE: fn(&World, &Address) -> bool = every_document;
 
 fn every_document(_: &World, _: &Address) -> bool {
     true
+}
+
+/// The suite's writer: every test that takes one runs at the ALL-VISIBLE
+/// class — the one predicate supplied once for the whole suite (lane 3.3b's
+/// repair line). No verdict at this class depends on a hit against an
+/// incumbent the caller cannot read; the tests that exercise the
+/// class-filtered lookup build their own classes ([`writer_at`]).
+pub fn writer(k: &Kernel<World>) -> LinkWriter<'_, World> {
+    writer_at(k, &ALL_VISIBLE)
+}
+
+/// A writer at a caller-chosen visibility class.
+pub fn writer_at<'k>(
+    k: &'k Kernel<World>,
+    visibility: &'k Visibility<'k, World>,
+) -> LinkWriter<'k, World> {
+    LinkWriter::new(k, visibility)
 }
 
 // ───────────────────────── the assembled test world ─────────────────────────

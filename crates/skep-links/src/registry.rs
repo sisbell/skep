@@ -86,8 +86,9 @@ pub enum Behavior {
     Walk,
     /// BH3 — ASN-0128's `TypedReverseLookup` (⇒ Binary). CONFERS `sources_to`,
     /// `target_of`, `targets_keyed`. Of those, `targets_keyed` alone consults
-    /// the declaration (through `reverse_lookup_classes`); `sources_to` and
-    /// `target_of` answer for any registered class, declared or not. No
+    /// the declaration (through [`TypeRegistry::reverse_lookup_classes`],
+    /// which M9's catalog also reads for the join's footprint); `sources_to`
+    /// and `target_of` answer for any registered class, declared or not. No
     /// shipped class declares it, so in this format `targets_keyed`'s join
     /// covers no class.
     ReverseLookup,
@@ -364,9 +365,11 @@ impl TypeRegistry {
     /// The public class → registration lookup: `Some(reg)` for a registered
     /// class, `None` for an unregistered one. [`CoverageClass`] is opaque and
     /// [`coverage_class`] is its only constructor, so every argument is some
-    /// endset's actual class and `None` means unregistered — a caller holding
-    /// an `Endset` classifies it first (M9 projects the shipped registrations
-    /// this way; M7's own gates and reads go through the same lookup).
+    /// endset's actual class and `None` means unregistered. M7's own gates and
+    /// reads go through this lookup; a caller holding a shipped type asks
+    /// [`TypeRegistry::shipped_class`] for the key rather than classifying the
+    /// endset it reports, and a caller holding some other `Endset` classifies
+    /// it first.
     pub fn registration(&self, class: &CoverageClass) -> Option<&Registration> {
         self.registrations.get(class)
     }
@@ -377,8 +380,9 @@ impl TypeRegistry {
     /// declares nothing. Which registrations answer to a behavior is this
     /// registry's own knowledge, so the one gate that reads a declaration back
     /// (`stale`'s BH4 fence) asks rather than destructuring a `Registration`
-    /// at the read surface.
-    pub(crate) fn declares(&self, class: &CoverageClass, behavior: Behavior) -> bool {
+    /// at the read surface — and M9's catalog reads its BH1 footprint through
+    /// it rather than through the field.
+    pub fn declares(&self, class: &CoverageClass, behavior: Behavior) -> bool {
         self.registration(class)
             .is_some_and(|reg| reg.behaviors.contains(&behavior))
     }
@@ -388,8 +392,10 @@ impl TypeRegistry {
     /// registry's own knowledge, so the predicate reads here, where the
     /// shipped table above is in view. No shipped registration declares BH3,
     /// so over this format's fixed population the iterator is empty — kept as
-    /// the one statement of the rule, not specialized to the population.
-    pub(crate) fn reverse_lookup_classes(&self) -> impl Iterator<Item = &CoverageClass> + '_ {
+    /// the one statement of the rule, not specialized to the population — and
+    /// M9's catalog reads `targets_keyed`'s footprint from it, so the join and
+    /// the analysis of what it reads cannot come apart.
+    pub fn reverse_lookup_classes(&self) -> impl Iterator<Item = &CoverageClass> + '_ {
         self.registrations
             .iter()
             .filter(|(_, reg)| {
@@ -410,8 +416,10 @@ impl TypeRegistry {
 
     /// The coverage class of a shipped type — the recognition key the write
     /// gates, the hint fold and the read surface all compare against, fixed
-    /// at build alongside the endset it classifies.
-    pub(crate) fn shipped_class(&self, ty: ShippedType) -> &CoverageClass {
+    /// at build alongside the endset it classifies — and the class M9's
+    /// catalog carries for each shipped type, read from the pairing rather
+    /// than re-derived from [`TypeRegistry::reserved_type`]'s answer.
+    pub fn shipped_class(&self, ty: ShippedType) -> &CoverageClass {
         &self.shipped(ty).class
     }
 

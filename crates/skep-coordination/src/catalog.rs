@@ -2,21 +2,20 @@
 //! engine-built `TypeRegistry` (M9 never rebuilds it — Conflicts §7), keyed by
 //! the verbatim type-key endset so a lookup both authorizes a `TypeKey` and
 //! yields its PRECOMPUTED `CoverageClass` — M9 never calls M7's
-//! `coverage_class` on unvalidated input, and nothing in M9 consults the
-//! registry after construction: every "which classes, with what behaviors"
-//! question the checker, the evaluator and the analyses ask is answered
-//! here. A cached copy of genesis-immutable data (R1): it never goes stale.
-//! The registry's population is the compiled shipped five (owner ruling,
-//! 2026-08-26 — the app-decl seam is deleted), so the projection reads
-//! everything from the registry itself and there is no twice-passed
-//! configuration left to drift.
+//! `coverage_class` at all: each shipped class is read from the registry's
+//! own endset/class pairing, and nothing in M9 consults the registry after
+//! construction: every "which classes, with what behaviors" question the
+//! checker, the evaluator and the analyses ask is answered here. A cached
+//! copy of genesis-immutable data (R1): it never goes stale. The registry's
+//! population is the compiled shipped five (owner ruling, 2026-08-26 — the
+//! app-decl seam is deleted), so the projection reads everything from the
+//! registry itself — the classes, and the two behavior rules it publishes as
+//! `declares` and `reverse_lookup_classes` — and there is no twice-passed
+//! configuration and no restated rule left to drift.
 
 use std::collections::HashMap;
 
-use skep_links::{
-    coverage_class, Behavior, CoverageClass, Endset, Registration, Shape, ShippedType,
-    TypeRegistry,
-};
+use skep_links::{Behavior, CoverageClass, Endset, Registration, ShippedType, TypeRegistry};
 
 use crate::ast::TypeKey;
 
@@ -67,10 +66,13 @@ fn slot(t: ShippedType) -> usize {
 impl TypeCatalog {
     /// The projection, a pure read of the injected registry: each shipped
     /// class's endset, class and registration, walking `ShippedType::ALL`
-    /// (the one enumeration of the five, in declaration order). Infallible:
-    /// the five values are compiled into the registry itself, so there is
-    /// no second copy to disagree, and genesis seeds every shipped class,
-    /// so the registration lookups cannot miss (the `expect` states that).
+    /// (the one enumeration of the five, in declaration order). The class is
+    /// the registry's own `shipped_class` — the half of its endset/class
+    /// pairing fixed at build — never a classification of the endset made
+    /// here. Infallible: the five values are compiled into the registry
+    /// itself, so there is no second copy to disagree, and the registry
+    /// registers every shipped class, so the lookups cannot miss (the
+    /// `expect` states that).
     pub(crate) fn project(registry: &TypeRegistry) -> TypeCatalog {
         let mut entries: HashMap<TypeKey, CatalogEntry> = HashMap::new();
         let mut order: Vec<TypeKey> = Vec::new();
@@ -78,24 +80,27 @@ impl TypeCatalog {
 
         for t in ShippedType::ALL {
             let endset = registry.reserved_type(t).clone();
-            let class = coverage_class(&endset);
+            let class = registry.shipped_class(t).clone();
             let reg = registry
                 .registration(&class)
-                .expect("genesis seeds every shipped class (TypeRegistry::build)");
+                .expect("the registry registers every shipped class (TypeRegistry::build)");
             let key = TypeKey(endset.clone());
             shipped[slot(t)] = endset;
             order.push(key.clone());
             entries.insert(key, CatalogEntry { class, reg: reg.clone() });
         }
 
+        // The two behavior footprints are the registry's own rules, asked of
+        // it rather than restated over the cached registrations: the BH1 set
+        // is what `declares` answers, and the BH3 set is exactly the classes
+        // `targets_keyed` joins over — so the join and the footprint analysis
+        // of what it reads cannot come apart.
         let bh1 = order
             .iter()
             .filter_map(|k| {
                 let entry = &entries[k];
-                entry
-                    .reg
-                    .behaviors
-                    .contains(&Behavior::ReadFilter)
+                registry
+                    .declares(&entry.class, Behavior::ReadFilter)
                     .then(|| (entry.class.clone(), k.0.clone()))
             })
             .collect();
@@ -103,16 +108,16 @@ impl TypeCatalog {
             .iter()
             .filter_map(|k| {
                 let entry = &entries[k];
-                (entry.reg.shape == Shape::Binary
-                    && entry.reg.behaviors.contains(&Behavior::ReverseLookup))
+                registry
+                    .reverse_lookup_classes()
+                    .any(|class| *class == entry.class)
                     .then(|| (entry.class.clone(), k.0.clone()))
             })
             .collect();
 
-        // The named classes read back from the entries — the precomputed
-        // class, never a second classification.
-        let class_at =
-            |t: ShippedType| entries[&TypeKey(shipped[slot(t)].clone())].class.clone();
+        // The named classes are the registry's own pairing, the same value
+        // each entry above carries — never a second classification.
+        let class_at = |t: ShippedType| registry.shipped_class(t).clone();
         TypeCatalog {
             retraction_class: class_at(ShippedType::Retraction),
             supersedes_key: TypeKey(shipped[slot(ShippedType::Supersedes)].clone()),

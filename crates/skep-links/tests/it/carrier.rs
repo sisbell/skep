@@ -262,6 +262,61 @@ fn shipped_types_carry_their_pinned_registrations() {
 }
 
 #[test]
+fn the_registry_publishes_each_shipped_class_and_its_two_behavior_rules() {
+    // A consumer holding a shipped type asks the registry for its CLASS
+    // rather than classifying the endset it reports, and asks it which
+    // classes declare a behavior rather than restating the rule over the
+    // registrations it hands back — which is how M9's catalog reads it. The
+    // pairing is a fact the registry built, and the two rules are its own, so
+    // what is pinned here is that the published answers agree with the
+    // derivation a consumer would otherwise have made and can never drift
+    // from it.
+    let reg = skep_links::registry();
+    for ty in ShippedType::ALL {
+        let class = reg.shipped_class(ty);
+        // The pairing: the published class IS the reported endset classified.
+        assert_eq!(*class, coverage_class(reg.reserved_type(ty)), "{ty:?}");
+        // ...and it is the key the registration lookup answers for.
+        let registration = reg
+            .registration(class)
+            .unwrap_or_else(|| panic!("{ty:?}'s published class is registered"));
+        // `declares` agrees with the registration it hands back, behavior by
+        // behavior — the rule stated once, not a second reading of the field.
+        for behavior in [
+            Behavior::ReadFilter,
+            Behavior::Walk,
+            Behavior::ReverseLookup,
+            Behavior::Age,
+        ] {
+            assert_eq!(
+                reg.declares(class, behavior),
+                registration.behaviors.contains(&behavior),
+                "{ty:?} declares {behavior:?}"
+            );
+        }
+    }
+    // The BH3 join's classes are exactly the registered Binary classes
+    // declaring ReverseLookup — compared as sets, the registry's walk being
+    // unordered — and over this format's population that is no class at all.
+    let joined: std::collections::HashSet<&CoverageClass> = reg.reverse_lookup_classes().collect();
+    let derived: std::collections::HashSet<&CoverageClass> = ShippedType::ALL
+        .iter()
+        .map(|&ty| reg.shipped_class(ty))
+        .filter(|class| {
+            let registration = reg.registration(class).expect("every shipped class is registered");
+            registration.shape == Shape::Binary
+                && registration.behaviors.contains(&Behavior::ReverseLookup)
+        })
+        .collect();
+    assert_eq!(joined, derived);
+    assert!(joined.is_empty(), "no shipped class declares BH3");
+    // An unregistered class declares nothing, rather than faulting.
+    let unregistered = coverage_class(&unregistered_ty(9));
+    assert!(reg.registration(&unregistered).is_none());
+    assert!(!reg.declares(&unregistered, Behavior::ReadFilter));
+}
+
+#[test]
 fn is_address_denoting_answers_the_question_the_module_asks_its_callers() {
     // The published admission rule the managed surface refuses on: a caller
     // can ask it of an endset of its own making instead of learning the

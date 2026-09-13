@@ -105,13 +105,35 @@ fn endset_reads_back_verbatim_and_enc_round_trips() {
     assert_eq!(nested.len(), 2);
     assert!(nested.spans().any(|s| s.contains(ca(2).tumbler()) && s.start() == doc1().tumbler()));
     // A non-unit span contributes nothing to addrs(); a unit span does.
-    let mixed = Endset::from_spans(
-        [iext(1, 3)]
-            .into_iter()
-            .chain(enc(&[ca(9)]).spans().cloned()),
-    );
+    let mixed = Endset::from_spans([iext(1, 3)].into_iter().chain(enc(&[ca(9)])));
     let addrs: Vec<_> = mixed.addrs().cloned().collect();
     assert_eq!(addrs, vec![ca(9).tumbler().clone()]);
+}
+
+#[test]
+fn an_endset_iterates_borrowed_and_consumes_owned() {
+    // An endset is a span COLLECTION, so it walks both ways. The borrowing
+    // form IS `spans()`, so a `for` loop and the projection cannot disagree,
+    // and the forwarded capabilities answer without collecting first.
+    let spans = [iext(1, 3), iext(5, 6)];
+    let e = Endset::from_spans(spans.iter().cloned());
+    assert_eq!(
+        (&e).into_iter().collect::<Vec<&Span>>(),
+        e.spans().collect::<Vec<&Span>>()
+    );
+    assert_eq!(e.spans().len(), 2, "the exact length, without a walk");
+    assert_eq!(e.spans().next_back(), Some(&spans[1]), "and the reverse walk");
+    for (got, want) in (&e).into_iter().zip(&spans) {
+        assert_eq!(got, want);
+    }
+
+    // The owning form: the constructor accepts its own type, so a re-collection
+    // moves the spans out rather than cloning each one, and the round trip is
+    // the identity — verbatim, in order, nothing coalesced.
+    assert_eq!(Endset::from_spans(e.clone()), e);
+    let drained: Vec<Span> = e.clone().into_iter().collect();
+    assert_eq!(drained, spans.to_vec());
+    assert_eq!(e.into_iter().len(), 2);
 }
 
 #[test]
@@ -380,11 +402,7 @@ fn single_denoted_is_stricter_than_the_first_denoted_address() {
     // rather than skipped — the endset below denotes ca(9) to `addrs`, and
     // this test is unit-depth-ALL, so it answers ⊥.
     assert_eq!(Endset::empty().single_denoted(), None);
-    let mixed = Endset::from_spans(
-        [iext(1, 3)]
-            .into_iter()
-            .chain(enc(&[ca(9)]).spans().cloned()),
-    );
+    let mixed = Endset::from_spans([iext(1, 3)].into_iter().chain(enc(&[ca(9)])));
     assert_eq!(mixed.addrs().next(), Some(ca(9).tumbler()));
     assert_eq!(mixed.single_denoted(), None);
 }

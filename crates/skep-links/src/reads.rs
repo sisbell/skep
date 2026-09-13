@@ -507,10 +507,13 @@ impl LinkState {
         let mut reach: OrdSet<Tumbler> = OrdSet::unit(y.tumbler().clone());
         let mut stack = vec![y.tumbler().clone()];
         while let Some(x) = stack.pop() {
-            for succ in self.succs_operative(&x).iter() {
-                if !reach.contains(succ) {
+            // The successor set is built fresh for this call, so it is
+            // CONSUMED: a newly-reached node moves onto the stack rather than
+            // being cloned out of a set about to be dropped.
+            for succ in self.succs_operative(&x) {
+                if !reach.contains(&succ) {
                     reach.insert(succ.clone());
-                    stack.push(succ.clone());
+                    stack.push(succ);
                 }
             }
         }
@@ -824,7 +827,9 @@ impl LinkState {
             match succs.len() {
                 0 => return (path, Some(node)),
                 1 => {
-                    let next = succs.iter().next().expect("len == 1").clone();
+                    // Consumed, as in `current`: the set is this call's own,
+                    // so the sole successor MOVES out of it.
+                    let next = succs.into_iter().next().expect("len == 1");
                     if visited.contains(&next) {
                         return (path, None); // cycle
                     }

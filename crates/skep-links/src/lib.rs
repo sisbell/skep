@@ -68,7 +68,7 @@ mod registry;
 mod state;
 mod writes;
 
-pub use endset::{coverage_class, enc, CoverageClass, Endset, Link};
+pub use endset::{coverage_class, enc, CoverageClass, Endset, IntoSpans, Link, Spans};
 // The ONE caller-identity type of the write-surface ownership gate
 // (as amended 2026-08-16) — defined beside M5's edit ops, re-exported here
 // because M7's five deposit ops take it too.

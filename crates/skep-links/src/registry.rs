@@ -274,9 +274,24 @@ impl Shipped {
 /// the identity as `Arc::ptr_eq`. Every holder shares the one instance
 /// through the `Arc` [`registry`] hands out or a borrow of it.
 ///
-/// ```compile_fail
-/// // A second registry cannot be made by copying the one.
-/// let second: skep_links::TypeRegistry = (**skep_links::registry()).clone();
+/// A PAIR, and both halves are load-bearing. The second says a copy cannot
+/// be made — the `Clone` bound is unsatisfiable, so a registry equal by value
+/// and distinct by identity is unconstructible as well as unbuildable. The
+/// first is what keeps that a statement about `Clone`: a bare `compile_fail`
+/// is satisfied by ANY compile error, so were the surrounding code to stop
+/// compiling for some unrelated reason — a renamed accessor, a changed
+/// return type — the refusal below would keep passing and pin nothing. The
+/// twin exercises everything but the bound, so such a break turns THIS half
+/// red and localizes itself. (The `E0277` code is checked on nightly only,
+/// which is why the twin rather than the annotation carries the weight.)
+///
+/// ```
+/// fn needs_debug<T: std::fmt::Debug>(_: &T) {}
+/// needs_debug(&**skep_links::registry());
+/// ```
+/// ```compile_fail,E0277
+/// fn needs_clone<T: Clone>(_: &T) {}
+/// needs_clone(&**skep_links::registry());
 /// ```
 #[derive(Debug)]
 pub struct TypeRegistry {

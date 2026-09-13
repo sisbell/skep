@@ -3,6 +3,8 @@
 //! canonical address-set encoding [`enc`], and the one pure coverage
 //! classifier [`coverage_class`] with its [`CoverageClass`] key.
 
+use std::fmt;
+
 use im::{OrdMap, OrdSet, Vector};
 use serde::{Deserialize, Serialize};
 use skep_address::{
@@ -26,9 +28,17 @@ use skep_address::{
 /// that means a type (a registration, a type index, a catalog key) may key on
 /// them.
 ///
-/// A span collection: `Default` is `⟨⟩` and `FromIterator<Span>` is the same
+/// A span collection: `Default` is `⟨⟩`, `FromIterator<Span>` is the same
 /// verbatim construction [`Endset::from_spans`] performs, so a span pipeline
-/// `.collect()`s here.
+/// `.collect()`s here, and `IntoIterator` walks the decomposition in both
+/// forms — borrowed ([`Spans`], what [`Endset::spans`] lends) and owned
+/// ([`IntoSpans`], the spans moved out of an endset the caller is finished
+/// with, so `Endset::from_spans(e)` costs no `Tumbler` copies).
+///
+/// `Extend` is the one collection trait deliberately absent: it is a
+/// `&mut self` mutator, and an endset is VERBATIM AT REST (ML2/RL1) — the
+/// decomposition a write deposited is the decomposition a read gets back.
+/// Growing one means building the new sequence and constructing from it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Endset(Vector<Span>);
 
@@ -55,9 +65,9 @@ impl Endset {
 
     /// The readable decomposition (L5 reads an endset by membership, not
     /// position — this iterator is a representation view, not a positional
-    /// contract).
-    pub fn spans(&self) -> impl Iterator<Item = &Span> {
-        self.0.iter()
+    /// contract). The same walk `&Endset` yields.
+    pub fn spans(&self) -> Spans<'_> {
+        Spans(self.0.iter())
     }
 
     /// The number of spans in the stored SEQUENCE — what the managed
@@ -142,6 +152,109 @@ impl Endset {
     /// partition of a content extent.
     pub(crate) fn to_spanset(&self) -> SpanSet {
         self.0.iter().cloned().collect()
+    }
+}
+
+/// The borrowed component spans of an [`Endset`], in stored order — what
+/// [`Endset::spans`] lends and what `&Endset` yields. Opaque, so the storage
+/// decision stays M7's: the sequence is what a caller walks, and the
+/// container it is walked out of is the endset's own business.
+///
+/// Opacity hides the *container*, never the walk's capabilities: the reverse
+/// walk, the exact length and the fused guarantee are forwarded below, so a
+/// reader of a slot need not collect it to size it or to read it from the
+/// end. `Clone` is the one capability that does not reach the caller —
+/// `im`'s vector iterator is not cloneable — so a caller that needs two
+/// independent cursors takes them from the endset, which is.
+#[must_use = "iterators are lazy and do nothing unless consumed"]
+pub struct Spans<'a>(<&'a Vector<Span> as IntoIterator>::IntoIter);
+
+impl<'a> Iterator for Spans<'a> {
+    type Item = &'a Span;
+    fn next(&mut self) -> Option<&'a Span> {
+        self.0.next()
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl<'a> DoubleEndedIterator for Spans<'a> {
+    fn next_back(&mut self) -> Option<&'a Span> {
+        self.0.next_back()
+    }
+}
+
+impl ExactSizeIterator for Spans<'_> {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl std::iter::FusedIterator for Spans<'_> {}
+
+/// The cursor, not the spans: the backing's iterator is neither `Clone` nor
+/// `Debug`, so there is no way to show what is left without consuming it, and
+/// the endset it came from is `Debug` already.
+impl fmt::Debug for Spans<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Spans").finish_non_exhaustive()
+    }
+}
+
+impl<'a> IntoIterator for &'a Endset {
+    type Item = &'a Span;
+    type IntoIter = Spans<'a>;
+    fn into_iter(self) -> Spans<'a> {
+        self.spans()
+    }
+}
+
+/// The owned component spans of an [`Endset`], in stored order — the
+/// decomposition moved out of an endset the caller is finished with, so a
+/// re-collection need not clone each one: `Endset::from_spans(e)` and
+/// `enc(x).into_iter()` cost no `Tumbler` copies. Carries the same reverse
+/// walk, exact length and fused guarantee as [`Spans`], and withholds `Clone`
+/// for the same reason: the backing's consuming iterator is not cloneable.
+#[must_use = "iterators are lazy and do nothing unless consumed"]
+pub struct IntoSpans(<Vector<Span> as IntoIterator>::IntoIter);
+
+impl Iterator for IntoSpans {
+    type Item = Span;
+    fn next(&mut self) -> Option<Span> {
+        self.0.next()
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl DoubleEndedIterator for IntoSpans {
+    fn next_back(&mut self) -> Option<Span> {
+        self.0.next_back()
+    }
+}
+
+impl ExactSizeIterator for IntoSpans {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl std::iter::FusedIterator for IntoSpans {}
+
+/// The cursor, not the spans — as for [`Spans`].
+impl fmt::Debug for IntoSpans {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IntoSpans").finish_non_exhaustive()
+    }
+}
+
+impl IntoIterator for Endset {
+    type Item = Span;
+    type IntoIter = IntoSpans;
+    fn into_iter(self) -> IntoSpans {
+        IntoSpans(self.0.into_iter())
     }
 }
 

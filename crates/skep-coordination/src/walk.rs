@@ -42,11 +42,11 @@ pub(crate) trait Rewrite {
     }
 }
 
-fn arc<R: Rewrite + ?Sized>(r: &mut R, t: &ArcTerm) -> ArcTerm {
+fn arc_term<R: Rewrite + ?Sized>(r: &mut R, t: &ArcTerm) -> ArcTerm {
     Arc::new(r.term(t))
 }
 
-fn arcd<R: Rewrite + ?Sized>(r: &mut R, d: &ArcDom) -> ArcDom {
+fn arc_dom<R: Rewrite + ?Sized>(r: &mut R, d: &ArcDom) -> ArcDom {
     Arc::new(r.dom(d))
 }
 
@@ -56,69 +56,69 @@ pub(crate) fn rewrite_term<R: Rewrite + ?Sized>(r: &mut R, t: &Term) -> Term {
         Term::Var(v) => Term::Var(r.var_use(*v)),
         Term::Lit(l) => Term::Lit(l.clone()),
         Term::Atom(a) => Term::Atom(match a {
-            Atom::IsK(tr, e) => Atom::IsK(r.typeref(tr), arc(r, e)),
+            Atom::IsK(tr, e) => Atom::IsK(r.typeref(tr), arc_term(r, e)),
             Atom::Members(tr) => Atom::Members(r.typeref(tr)),
-            Atom::TargetsOf(tr, e) => Atom::TargetsOf(r.typeref(tr), arc(r, e)),
-            Atom::IsFiltered(tr, e) => Atom::IsFiltered(r.typeref(tr), arc(r, e)),
-            Atom::Succs(tr, e) => Atom::Succs(r.typeref(tr), arc(r, e)),
-            Atom::Chain(tr, e) => Atom::Chain(r.typeref(tr), arc(r, e)),
-            Atom::Tip(tr, e) => Atom::Tip(r.typeref(tr), arc(r, e)),
-            Atom::IsInChain(tr, x, y) => Atom::IsInChain(r.typeref(tr), arc(r, x), arc(r, y)),
-            Atom::SourcesTo(tr, e) => Atom::SourcesTo(r.typeref(tr), arc(r, e)),
-            Atom::TargetOf(tr, e) => Atom::TargetOf(r.typeref(tr), arc(r, e)),
-            Atom::TargetsKeyed(e) => Atom::TargetsKeyed(arc(r, e)),
-            Atom::Age(tr, e) => Atom::Age(r.typeref(tr), arc(r, e)),
-            Atom::Stale(tr, e) => Atom::Stale(r.typeref(tr), arc(r, e)),
-            Atom::IsDoc(e) => Atom::IsDoc(arc(r, e)),
+            Atom::TargetsOf(tr, e) => Atom::TargetsOf(r.typeref(tr), arc_term(r, e)),
+            Atom::IsFiltered(tr, e) => Atom::IsFiltered(r.typeref(tr), arc_term(r, e)),
+            Atom::Succs(tr, e) => Atom::Succs(r.typeref(tr), arc_term(r, e)),
+            Atom::Chain(tr, e) => Atom::Chain(r.typeref(tr), arc_term(r, e)),
+            Atom::Tip(tr, e) => Atom::Tip(r.typeref(tr), arc_term(r, e)),
+            Atom::IsInChain(tr, x, y) => Atom::IsInChain(r.typeref(tr), arc_term(r, x), arc_term(r, y)),
+            Atom::SourcesTo(tr, e) => Atom::SourcesTo(r.typeref(tr), arc_term(r, e)),
+            Atom::TargetOf(tr, e) => Atom::TargetOf(r.typeref(tr), arc_term(r, e)),
+            Atom::TargetsKeyed(e) => Atom::TargetsKeyed(arc_term(r, e)),
+            Atom::Age(tr, e) => Atom::Age(r.typeref(tr), arc_term(r, e)),
+            Atom::Stale(tr, e) => Atom::Stale(r.typeref(tr), arc_term(r, e)),
+            Atom::IsDoc(e) => Atom::IsDoc(arc_term(r, e)),
             Atom::TupAddr(v) => Atom::TupAddr(r.var_use(*v)),
             Atom::TupAddrsF(v) => Atom::TupAddrsF(r.var_use(*v)),
             Atom::TupAddrsG(v) => Atom::TupAddrsG(r.var_use(*v)),
-            Atom::InCoverageF(e, v) => Atom::InCoverageF(arc(r, e), r.var_use(*v)),
-            Atom::InCoverageG(e, v) => Atom::InCoverageG(arc(r, e), r.var_use(*v)),
+            Atom::InCoverageF(e, v) => Atom::InCoverageF(arc_term(r, e), r.var_use(*v)),
+            Atom::InCoverageG(e, v) => Atom::InCoverageG(arc_term(r, e), r.var_use(*v)),
         }),
         Term::Prim(p) => Term::Prim(match p {
-            Prim::AddrEq(x, y) => Prim::AddrEq(arc(r, x), arc(r, y)),
-            Prim::Prefix(x, y) => Prim::Prefix(arc(r, x), arc(r, y)),
-            Prim::T1Lt(x, y) => Prim::T1Lt(arc(r, x), arc(r, y)),
-            Prim::SetMem(x, y) => Prim::SetMem(arc(r, x), arc(r, y)),
-            Prim::SetEq(x, y) => Prim::SetEq(arc(r, x), arc(r, y)),
-            Prim::IsEmpty(x) => Prim::IsEmpty(arc(r, x)),
-            Prim::Elems(x) => Prim::Elems(arc(r, x)),
-            Prim::NatEq(x, y) => Prim::NatEq(arc(r, x), arc(r, y)),
-            Prim::NatLe(x, y) => Prim::NatLe(arc(r, x), arc(r, y)),
-            Prim::NatAdd(x, y) => Prim::NatAdd(arc(r, x), arc(r, y)),
-            Prim::MapGet(m, tr) => Prim::MapGet(arc(r, m), r.typeref(tr)),
-            Prim::Def(x) => Prim::Def(arc(r, x)),
+            Prim::AddrEq(x, y) => Prim::AddrEq(arc_term(r, x), arc_term(r, y)),
+            Prim::Prefix(x, y) => Prim::Prefix(arc_term(r, x), arc_term(r, y)),
+            Prim::T1Lt(x, y) => Prim::T1Lt(arc_term(r, x), arc_term(r, y)),
+            Prim::SetMem(x, y) => Prim::SetMem(arc_term(r, x), arc_term(r, y)),
+            Prim::SetEq(x, y) => Prim::SetEq(arc_term(r, x), arc_term(r, y)),
+            Prim::IsEmpty(x) => Prim::IsEmpty(arc_term(r, x)),
+            Prim::Elems(x) => Prim::Elems(arc_term(r, x)),
+            Prim::NatEq(x, y) => Prim::NatEq(arc_term(r, x), arc_term(r, y)),
+            Prim::NatLe(x, y) => Prim::NatLe(arc_term(r, x), arc_term(r, y)),
+            Prim::NatAdd(x, y) => Prim::NatAdd(arc_term(r, x), arc_term(r, y)),
+            Prim::MapGet(m, tr) => Prim::MapGet(arc_term(r, m), r.typeref(tr)),
+            Prim::Def(x) => Prim::Def(arc_term(r, x)),
         }),
-        Term::And(x, y) => Term::And(arc(r, x), arc(r, y)),
-        Term::Or(x, y) => Term::Or(arc(r, x), arc(r, y)),
-        Term::Not(x) => Term::Not(arc(r, x)),
-        Term::Implies(x, y) => Term::Implies(arc(r, x), arc(r, y)),
-        Term::Iff(x, y) => Term::Iff(arc(r, x), arc(r, y)),
+        Term::And(x, y) => Term::And(arc_term(r, x), arc_term(r, y)),
+        Term::Or(x, y) => Term::Or(arc_term(r, x), arc_term(r, y)),
+        Term::Not(x) => Term::Not(arc_term(r, x)),
+        Term::Implies(x, y) => Term::Implies(arc_term(r, x), arc_term(r, y)),
+        Term::Iff(x, y) => Term::Iff(arc_term(r, x), arc_term(r, y)),
         Term::Forall { var, dom, body } => {
-            Term::Forall { var: *var, dom: arcd(r, dom), body: arc(r, body) }
+            Term::Forall { var: *var, dom: arc_dom(r, dom), body: arc_term(r, body) }
         }
         Term::Exists { var, dom, body } => {
-            Term::Exists { var: *var, dom: arcd(r, dom), body: arc(r, body) }
+            Term::Exists { var: *var, dom: arc_dom(r, dom), body: arc_term(r, body) }
         }
         Term::Let { var, bound, body } => {
-            Term::Let { var: *var, bound: arc(r, bound), body: arc(r, body) }
+            Term::Let { var: *var, bound: arc_term(r, bound), body: arc_term(r, body) }
         }
         Term::IfSome { opt, var, then_, else_ } => Term::IfSome {
-            opt: arc(r, opt),
+            opt: arc_term(r, opt),
             var: *var,
-            then_: arc(r, then_),
-            else_: arc(r, else_),
+            then_: arc_term(r, then_),
+            else_: arc_term(r, else_),
         },
-        Term::Count(d) => Term::Count(arcd(r, d)),
-        Term::MaxT1(d) => Term::MaxT1(arcd(r, d)),
-        Term::MinT1(d) => Term::MinT1(arcd(r, d)),
+        Term::Count(d) => Term::Count(arc_dom(r, d)),
+        Term::MaxT1(d) => Term::MaxT1(arc_dom(r, d)),
+        Term::MinT1(d) => Term::MinT1(arc_dom(r, d)),
         Term::BigUnion { dom, var, body } => {
-            Term::BigUnion { dom: arcd(r, dom), var: *var, body: arc(r, body) }
+            Term::BigUnion { dom: arc_dom(r, dom), var: *var, body: arc_term(r, body) }
         }
-        Term::Reflect(d) => Term::Reflect(arcd(r, d)),
+        Term::Reflect(d) => Term::Reflect(arc_dom(r, d)),
         Term::Ref { addr, args } => {
-            Term::Ref { addr: addr.clone(), args: args.iter().map(|a| arc(r, a)).collect() }
+            Term::Ref { addr: addr.clone(), args: args.iter().map(|a| arc_term(r, a)).collect() }
         }
     }
 }
@@ -132,9 +132,9 @@ pub(crate) fn rewrite_dom<R: Rewrite + ?Sized>(r: &mut R, d: &Dom) -> Dom {
         Dom::LinkDom => Dom::LinkDom,
         Dom::Reg => Dom::Reg,
         Dom::Filter { dom, var, pred } => {
-            Dom::Filter { dom: arcd(r, dom), var: *var, pred: arc(r, pred) }
+            Dom::Filter { dom: arc_dom(r, dom), var: *var, pred: arc_term(r, pred) }
         }
-        Dom::SetTerm(t) => Dom::SetTerm(arc(r, t)),
+        Dom::SetTerm(t) => Dom::SetTerm(arc_term(r, t)),
     }
 }
 

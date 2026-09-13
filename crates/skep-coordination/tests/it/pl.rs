@@ -663,20 +663,20 @@ fn an_audit_reading_keeps_what_a_retraction_removes_from_the_active_one() {
     deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
     link_writer(&k).nullify(Caller::System, &doc1(), &t1).expect("retract the ca1 tuple");
     let ps = pred_stable_ty();
-    let at = |view: View, t: Term| decide_now(&k, &c, view, t);
+    let decide_at = |view: View, t: Term| decide_now(&k, &c, view, t);
 
     // members / M_K
-    assert!(at(View::Audit, set_mem(lit_addr(&ca(1)), members(&ps))));
-    assert!(!at(View::Active, set_mem(lit_addr(&ca(1)), members(&ps))));
-    assert!(at(View::Audit, nat_eq(count(Dom::MembersDom(conc(&ps))), lit_nat(2))));
-    assert!(at(View::Active, nat_eq(count(Dom::MembersDom(conc(&ps))), lit_nat(1))));
+    assert!(decide_at(View::Audit, set_mem(lit_addr(&ca(1)), members(&ps))));
+    assert!(!decide_at(View::Active, set_mem(lit_addr(&ca(1)), members(&ps))));
+    assert!(decide_at(View::Audit, nat_eq(count(Dom::MembersDom(conc(&ps))), lit_nat(2))));
+    assert!(decide_at(View::Active, nat_eq(count(Dom::MembersDom(conc(&ps))), lit_nat(1))));
     // targets_of
     let tof = || targets_of(&ps, lit_addr(&ca(1)));
-    assert!(at(View::Audit, set_mem(lit_addr(&ca(2)), tof())));
-    assert!(!at(View::Active, set_mem(lit_addr(&ca(2)), tof())));
+    assert!(decide_at(View::Audit, set_mem(lit_addr(&ca(2)), tof())));
+    assert!(!decide_at(View::Active, set_mem(lit_addr(&ca(2)), tof())));
     // A_K and L_K name their own slice at every term view.
-    assert!(at(View::Audit, nat_eq(count(Dom::ActiveSlice(conc(&ps))), lit_nat(1))));
-    assert!(at(View::Active, nat_eq(count(Dom::AuditSlice(conc(&ps))), lit_nat(2))));
+    assert!(decide_at(View::Audit, nat_eq(count(Dom::ActiveSlice(conc(&ps))), lit_nat(1))));
+    assert!(decide_at(View::Active, nat_eq(count(Dom::AuditSlice(conc(&ps))), lit_nat(2))));
 }
 
 /// BH2 over a linear lineage: `succs` is the one forward step, `chain` the
@@ -961,9 +961,9 @@ fn a_verdict_is_as_of_its_snapshot() {
     let s0 = k.snapshot();
     link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
     let s1 = k.snapshot();
-    let t = c.type_check(vec![], is_k(&pred_stable_ty(), lit_addr(&ca(1)))).expect("checks");
-    assert!(!c.decide(&t, &Env::empty(), View::Active, &s0));
-    assert!(c.decide(&t, &Env::empty(), View::Active, &s1));
+    let tt = c.type_check(vec![], is_k(&pred_stable_ty(), lit_addr(&ca(1)))).expect("checks");
+    assert!(!c.decide(&tt, &Env::empty(), View::Active, &s0));
+    assert!(c.decide(&tt, &Env::empty(), View::Active, &s1));
     assert!(s0.seq() < s1.seq());
 }
 
@@ -972,9 +972,9 @@ fn a_verdict_is_as_of_its_snapshot() {
 fn decide_panics_on_non_bool_codomain() {
     let k = kernel();
     let c = coord(&k);
-    let t = c.type_check(vec![], lit_nat(1)).expect("Nat-codomain term");
+    let tt = c.type_check(vec![], lit_nat(1)).expect("Nat-codomain term");
     let s = k.snapshot();
-    let _ = c.decide(&t, &Env::empty(), View::Active, &s);
+    let _ = c.decide(&tt, &Env::empty(), View::Active, &s);
 }
 
 /// `eval`'s door: an `Env` that binds a Γ_D parameter at the wrong sort is
@@ -985,9 +985,9 @@ fn decide_panics_on_non_bool_codomain() {
 fn eval_panics_on_a_mis_sorted_parameter() {
     let k = kernel();
     let c = coord(&k);
-    let t = c.type_check(vec![(v(1), Sort::Addr)], tru()).expect("one-param term");
+    let tt = c.type_check(vec![(v(1), Sort::Addr)], tru()).expect("one-param term");
     let s = k.snapshot();
-    let _ = c.eval(&t, &Env::empty().bind(v(1), Value::Nat(n(1))), View::Active, &s);
+    let _ = c.eval(&tt, &Env::empty().bind(v(1), Value::Nat(n(1))), View::Active, &s);
 }
 
 /// `eval`'s door, the other half: an `Env` that leaves a Γ_D parameter
@@ -997,9 +997,9 @@ fn eval_panics_on_a_mis_sorted_parameter() {
 fn eval_panics_on_an_unbound_parameter() {
     let k = kernel();
     let c = coord(&k);
-    let t = c.type_check(vec![(v(1), Sort::Addr)], tru()).expect("one-param term");
+    let tt = c.type_check(vec![(v(1), Sort::Addr)], tru()).expect("one-param term");
     let s = k.snapshot();
-    let _ = c.eval(&t, &Env::empty(), View::Active, &s);
+    let _ = c.eval(&tt, &Env::empty(), View::Active, &s);
 }
 
 /// `eval`'s door, the set half: an `AddrSet` argument holding a tumbler
@@ -1010,10 +1010,10 @@ fn eval_panics_on_an_unbound_parameter() {
 fn eval_panics_on_a_set_holding_a_non_address() {
     let k = kernel();
     let c = coord(&k);
-    let t = c.type_check(vec![(v(1), Sort::AddrSet)], tru()).expect("one-set-param term");
+    let tt = c.type_check(vec![(v(1), Sort::AddrSet)], tru()).expect("one-set-param term");
     let s = k.snapshot();
-    let bad = Value::AddrSet(im::OrdSet::unit(crate::common::t(&[1, 0, 0, 1])));
-    let _ = c.eval(&t, &Env::empty().bind(v(1), bad), View::Active, &s);
+    let bad = Value::AddrSet(im::OrdSet::unit(t(&[1, 0, 0, 1])));
+    let _ = c.eval(&tt, &Env::empty().bind(v(1), bad), View::Active, &s);
 }
 
 #[test]
@@ -1024,10 +1024,10 @@ fn eval_panics_on_a_ref_bearing_term() {
     let (p, _) = c
         .define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("closed True"))
         .expect("define");
-    let t = c.type_check(vec![], Term::Ref { addr: p, args: vec![] }).expect("ref-bearing checks");
-    assert!(!t.is_ref_free());
+    let tt = c.type_check(vec![], Term::Ref { addr: p, args: vec![] }).expect("ref-bearing checks");
+    assert!(!tt.is_ref_free());
     let s = k.snapshot();
-    let _ = c.eval(&t, &Env::empty(), View::Active, &s);
+    let _ = c.eval(&tt, &Env::empty(), View::Active, &s);
 }
 
 // ─────────────────────────────── dynamics ───────────────────────────────
@@ -1259,6 +1259,6 @@ fn classify_panics_on_a_ref_bearing_term() {
     let (p, _) = c
         .define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("closed True"))
         .expect("define");
-    let t = c.type_check(vec![], Term::Ref { addr: p, args: vec![] }).expect("ref-bearing checks");
-    let _ = c.classify(&t, View::Active);
+    let tt = c.type_check(vec![], Term::Ref { addr: p, args: vec![] }).expect("ref-bearing checks");
+    let _ = c.classify(&tt, View::Active);
 }

@@ -524,11 +524,11 @@ fn w_prim2(b: &mut Vec<u8>, tag: u8, x: &Term, y: &Term) {
 /// set in turn.
 pub(crate) fn decode(bytes: &[u8]) -> Result<SignedTerm, Malformed> {
     let mut r = Rd { b: bytes, pos: 0, nodes: 0 };
-    let len = r.len()?;
+    let len = r.len_prefix()?;
     if bytes.get(r.pos..).map(<[u8]>::len) != Some(len) {
         return Err(Malformed);
     }
-    let n_params = r.len()?;
+    let n_params = r.len_prefix()?;
     if n_params > len {
         return Err(Malformed); // cheap bound against absurd counts
     }
@@ -562,16 +562,16 @@ impl<'a> Rd<'a> {
         Ok(x)
     }
 
-    /// Charge `k` payload units — Γ_D parameters, tumbler components, endset
-    /// spans, `Nat` limbs, `Ref` arguments — against the same
+    /// Charge `weight` payload units — Γ_D parameters, tumbler components,
+    /// endset spans, `Nat` limbs, `Ref` arguments — against the same
     /// `MAX_TERM_NODES` budget [`Rd::enter`] charges formers against
     /// (`ast::weight` states the unit and why a payload is charged like a
     /// node). Called BEFORE a count is used to size an allocation, so an
     /// untrusted count can size nothing past the budget: a
     /// `Vec::with_capacity` below is bounded by the budget's remainder, not
     /// by the input's length.
-    fn charge(&mut self, k: usize) -> Result<(), Malformed> {
-        self.nodes = self.nodes.saturating_add(k);
+    fn charge(&mut self, weight: usize) -> Result<(), Malformed> {
+        self.nodes = self.nodes.saturating_add(weight);
         if self.nodes > MAX_TERM_NODES {
             return Err(Malformed);
         }
@@ -588,10 +588,12 @@ impl<'a> Rd<'a> {
         self.charge(1)
     }
 
-    /// A length or count prefix, as a `usize`: a varint the target cannot
-    /// index by is `Malformed` (never a lossy `as`), so one byte string has
-    /// at most one parse on every target width.
-    fn len(&mut self) -> Result<usize, Malformed> {
+    /// A length or count prefix READ FROM THE STREAM, as a `usize`: a varint
+    /// the target cannot index by is `Malformed` (never a lossy `as`), so one
+    /// byte string has at most one parse on every target width. Distinct from
+    /// `self.b.len()`, the bytes in hand, which the bound checks below compare
+    /// against.
+    fn len_prefix(&mut self) -> Result<usize, Malformed> {
         usize::try_from(self.varint()?).map_err(|_| Malformed)
     }
 
@@ -644,7 +646,7 @@ impl<'a> Rd<'a> {
     }
 
     fn nat(&mut self) -> Result<Nat, Malformed> {
-        let len = self.len()?;
+        let len = self.len_prefix()?;
         self.charge(len.div_ceil(8))?; // the limbs `from_bytes_be` will allocate
         let bytes = self.b.get(self.pos..).and_then(|rest| rest.get(..len)).ok_or(Malformed)?;
         self.pos += len;
@@ -655,7 +657,7 @@ impl<'a> Rd<'a> {
     }
 
     fn tumbler(&mut self) -> Result<Tumbler, Malformed> {
-        let n = self.len()?;
+        let n = self.len_prefix()?;
         if n == 0 || n > self.b.len() {
             return Err(Malformed);
         }
@@ -678,7 +680,7 @@ impl<'a> Rd<'a> {
     }
 
     fn endset(&mut self) -> Result<Endset, Malformed> {
-        let n = self.len()?;
+        let n = self.len_prefix()?;
         if n > self.b.len() {
             return Err(Malformed);
         }
@@ -737,7 +739,7 @@ impl<'a> Rd<'a> {
             REFLECT => Term::Reflect(self.arc_dom(d)?),
             REF => {
                 let addr = self.addr()?;
-                let n = self.len()?;
+                let n = self.len_prefix()?;
                 if n > self.b.len() {
                     return Err(Malformed);
                 }

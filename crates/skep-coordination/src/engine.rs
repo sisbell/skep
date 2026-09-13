@@ -171,10 +171,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
             let Some(entry) = self.catalog.get(ty) else {
                 return Err(RuleError::BadMarkerType(ty.clone()));
             };
-            if entry.reg.shape != Shape::Unary {
+            if entry.registration.shape != Shape::Unary {
                 return Err(RuleError::BadMarkerType(ty.clone()));
             }
-            if !entry.reg.idem {
+            if !entry.registration.idem {
                 return Err(RuleError::NonIdemMarkerType(ty.clone()));
             }
             if entry.class == self.catalog.pred_def_class || entry.class == self.catalog.pred_stable_class
@@ -215,7 +215,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     fn first_enabled(&self, rule: &CheckedRule, snap: &Snapshot<W>) -> Option<Arg> {
         self.enum_rule_dom(rule, snap)
             .into_iter()
-            .find(|e| self.trigger_true(rule, e, snap))
+            .find(|arg| self.trigger_true(rule, arg, snap))
     }
 
     // ───────────────────────────── quiescence ─────────────────────────────
@@ -259,11 +259,11 @@ impl<W: CoordinationWorld> Coordinator<W> {
             as_bool(eval_term(&cx, &env, scope.evaluable.as_ref()))
         };
         for rule in &self.rules {
-            for e in self.enum_rule_dom(rule, snap) {
-                if in_scope(body, &e, &s_of) == Some(false) {
+            for arg in self.enum_rule_dom(rule, snap) {
+                if in_scope(body, &arg, &s_of) == Some(false) {
                     continue;
                 }
-                if self.trigger_true(rule, &e, snap) {
+                if self.trigger_true(rule, &arg, snap) {
                     return false;
                 }
             }
@@ -427,25 +427,26 @@ impl<W: CoordinationWorld> Coordinator<W> {
         }
         for i in 0..n {
             let idx = (self.cursor + i) % n;
-            let (id, enabled) = {
+            let (id, arg) = {
                 let rule = &self.rules[idx];
                 match self.first_enabled(rule, snap) {
-                    Some(e) => (rule.id, e),
+                    Some(arg) => (rule.id, arg),
                     None => continue,
                 }
             };
             self.cursor = (idx + 1) % n; // rotate past, success or failure
-            let arg = enabled.key_addr();
-            let occurrence = Occurrence { rule: id, arg: enabled };
+            // The outcome reports the bookkeeping KEY, not the bound value.
+            let a = arg.key_addr();
+            let occurrence = Occurrence { rule: id, arg };
             return match self.fire(&occurrence) {
                 Ok(FireOutcome::Fired { effect, seq }) => {
-                    StepOutcome::Fired { rule: id, arg, effect, seq }
+                    StepOutcome::Fired { rule: id, arg: a, effect, seq }
                 }
                 Ok(FireOutcome::Deduped { effect, seq }) => {
-                    StepOutcome::Deduped { rule: id, arg, effect, seq }
+                    StepOutcome::Deduped { rule: id, arg: a, effect, seq }
                 }
                 Ok(FireOutcome::NoOp) => StepOutcome::NoOp,
-                Err(err) => StepOutcome::Failed { rule: id, arg, err },
+                Err(err) => StepOutcome::Failed { rule: id, arg: a, err },
             };
         }
         StepOutcome::Quiescent

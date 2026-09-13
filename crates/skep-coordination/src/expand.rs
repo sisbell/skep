@@ -54,7 +54,7 @@ impl Budget {
 
     /// A charge of `weight` units — a node and the payload it carries
     /// ([`weight`]): `false` once the budget is spent, and thereafter.
-    fn tick(&mut self, weight: usize) -> bool {
+    fn charge(&mut self, weight: usize) -> bool {
         self.nodes = self.nodes.saturating_add(weight);
         if self.nodes > MAX_TERM_NODES {
             self.exhausted = true;
@@ -93,7 +93,7 @@ impl Rewrite for Expander<'_> {
     /// The one node the expansion acts on; every other former falls through.
     /// Past the budget: a stub, and no descent.
     fn term(&mut self, t: &Term) -> Term {
-        if !self.budget.tick(weight(t)) {
+        if !self.budget.charge(weight(t)) {
             return Term::Lit(Lit::True);
         }
         let Term::Ref { addr, args } = t else {
@@ -107,21 +107,21 @@ impl Rewrite for Expander<'_> {
             .unwrap_or_else(|| unreachable!("WT-ref: a checked body's referent has a defined signature"));
         // The node: fresh names for the referent's parameters first, in
         // signature order …
-        let fresh: Vec<VarId> = referent.params().iter().map(|_| self.budget.fresh()).collect();
+        let fresh_names: Vec<VarId> = referent.params().iter().map(|_| self.budget.fresh()).collect();
         // … then its (recursively expanded) body's binders, depth-first
         // left-to-right.
         let inner_flat = self.term(&referent.evaluable);
         let map: im::HashMap<VarId, VarId> =
-            referent.params().iter().map(|(p, _)| *p).zip(fresh.iter().copied()).collect();
+            referent.params().iter().map(|(p, _)| *p).zip(fresh_names.iter().copied()).collect();
         let mut out = Rename { budget: &mut self.budget, map }.term(&inner_flat);
-        for (fr, arg) in fresh.into_iter().zip(flat_args).rev() {
-            out = Term::Let { var: fr, bound: Arc::new(arg), body: Arc::new(out) };
+        for (fresh, arg) in fresh_names.into_iter().zip(flat_args).rev() {
+            out = Term::Let { var: fresh, bound: Arc::new(arg), body: Arc::new(out) };
         }
         out
     }
 
     fn dom(&mut self, d: &Dom) -> Dom {
-        if !self.budget.tick(1) {
+        if !self.budget.charge(1) {
             return Dom::LinkDom;
         }
         rewrite_dom(self, d)
@@ -159,7 +159,7 @@ impl Rewrite for Rename<'_> {
     /// map; then the binder, freshly named, over its in-scope child. Past
     /// the budget: a stub, and no descent.
     fn term(&mut self, t: &Term) -> Term {
-        if !self.budget.tick(weight(t)) {
+        if !self.budget.charge(weight(t)) {
             return Term::Lit(Lit::True);
         }
         match t {
@@ -195,7 +195,7 @@ impl Rewrite for Rename<'_> {
     }
 
     fn dom(&mut self, d: &Dom) -> Dom {
-        if !self.budget.tick(1) {
+        if !self.budget.charge(1) {
             return Dom::LinkDom;
         }
         match d {

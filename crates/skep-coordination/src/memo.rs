@@ -65,7 +65,7 @@ impl DefMemo {
     pub(crate) fn get(&self, start: &Address) -> Option<DefStatus> {
         let memo = self.0.read().unwrap_or_else(PoisonError::into_inner);
         memo.get(start.tumbler()).map(|e| match e {
-            MemoEntry::Defined(d) => DefStatus::Defined(Arc::clone(d)),
+            MemoEntry::Defined(term) => DefStatus::Defined(Arc::clone(term)),
             MemoEntry::Poisoned => DefStatus::Poisoned,
         })
     }
@@ -79,7 +79,7 @@ impl DefMemo {
             Err(Breach) => MemoEntry::Poisoned,
         });
         match entry {
-            MemoEntry::Defined(d) => DefStatus::Defined(Arc::clone(d)),
+            MemoEntry::Defined(term) => DefStatus::Defined(Arc::clone(term)),
             MemoEntry::Poisoned => DefStatus::Poisoned,
         }
     }

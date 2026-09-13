@@ -210,7 +210,7 @@ impl<'a, W> GuestLinks<'a, W> {
     /// `old → new` by DENOTATION on both slots, exactly as M7's `sup_fwd`
     /// fold keys them; a claim is operative iff unnullified (Df-SUCC), which
     /// the active slice gives. One pass over the claims per walk.
-    fn visible_forward(&self, ty: &Endset) -> ForwardClaims {
+    fn forward_claims(&self, ty: &Endset) -> ForwardClaims {
         let mut fwd = ForwardClaims::new();
         for t in self.observe(ty, Pattern::default(), Slice::Active) {
             for old in t.from.addrs() {
@@ -253,20 +253,20 @@ impl<'a, W> GuestLinks<'a, W> {
 
     /// BH2 forward step over the visible operative claims (Tumbler order).
     pub(crate) fn succs(&self, ty: &Endset, x: &Address) -> Vec<Address> {
-        let fwd = self.visible_forward(ty);
+        let fwd = self.forward_claims(ty);
         Self::succs_operative(&fwd, x.tumbler()).iter().map(lift).collect()
     }
 
     /// BH2 chain over the visible operative claims.
     pub(crate) fn chain(&self, ty: &Endset, x: &Address) -> Vec<Address> {
-        let fwd = self.visible_forward(ty);
+        let fwd = self.forward_claims(ty);
         Self::walk_sup(&fwd, x.tumbler()).path.iter().map(lift).collect()
     }
 
     /// BH2 head over the visible operative claims: `Sink(head)` at a
     /// successor-free node, `Indeterminate` at a branch or cycle.
     pub(crate) fn tip(&self, ty: &Endset, x: &Address) -> Tip {
-        let fwd = self.visible_forward(ty);
+        let fwd = self.forward_claims(ty);
         match Self::walk_sup(&fwd, x.tumbler()).sink {
             Some(sink) => Tip::Sink(lift(&sink)),
             None => Tip::Indeterminate,

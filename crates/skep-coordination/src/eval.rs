@@ -290,8 +290,8 @@ pub(crate) fn eval_term<W>(cx: &EvalCtx<'_, W>, env: &Env, t: &Term) -> Value {
             let mut out: OrdSet<Tumbler> = OrdSet::new();
             for e in enum_dom(cx, env, dom) {
                 let s = as_set(eval_term(cx, &env.bind(*var, Value::from(e)), body));
-                for t in s.iter() {
-                    out.insert(t.clone());
+                for elem in s.iter() {
+                    out.insert(elem.clone());
                 }
             }
             Value::AddrSet(out)
@@ -400,14 +400,14 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
         // is_k's coverage-of-F membership.
         Atom::Age(tr, e) => {
             let k = tr.key();
-            let a = as_addr(eval_term(cx, env, e));
-            let active_k_tuple = cx
+            let x = as_addr(eval_term(cx, env, e));
+            let is_active_k_tuple = cx
                 .links
                 .observe(&k.0, Pattern::default(), Slice::Active)
                 .iter()
-                .any(|t| t.addr == a);
-            let age = if active_k_tuple {
-                cx.links.age(&a).map(Nat::from)
+                .any(|t| t.addr == x);
+            let age = if is_active_k_tuple {
+                cx.links.age(&x).map(Nat::from)
             } else {
                 None
             };
@@ -491,11 +491,9 @@ fn eval_prim<W>(cx: &EvalCtx<'_, W>, env: &Env, p: &Prim) -> Value {
 pub(crate) fn enum_dom<W>(cx: &EvalCtx<'_, W>, env: &Env, d: &Dom) -> Vec<Arg> {
     match d {
         // M_K at the TERM view (view-parameterized domain).
-        Dom::MembersDom(tr) => cx
-            .members_at(tr.key(), cx.view)
-            .iter()
-            .map(|t| Arg::Addr(lift(t)))
-            .collect(),
+        Dom::MembersDom(tr) => {
+            cx.members_at(tr.key(), cx.view).iter().map(lift).map(Arg::Addr).collect()
+        }
         Dom::ActiveSlice(tr) => cx
             .links
             .observe(&tr.key().0, Pattern::default(), Slice::Active)
@@ -518,7 +516,7 @@ pub(crate) fn enum_dom<W>(cx: &EvalCtx<'_, W>, env: &Env, d: &Dom) -> Vec<Arg> {
                     out.insert(t.addr.tumbler().clone());
                 }
             }
-            out.iter().map(|t| Arg::Addr(lift(t))).collect()
+            out.iter().map(lift).map(Arg::Addr).collect()
         }
         Dom::Reg => unreachable!("no Reg domain survives type_check's Reg-expansion/folding"),
         Dom::Filter { dom, var, pred } => enum_dom(cx, env, dom)
@@ -527,7 +525,7 @@ pub(crate) fn enum_dom<W>(cx: &EvalCtx<'_, W>, env: &Env, d: &Dom) -> Vec<Arg> {
             .collect(),
         Dom::SetTerm(t) => {
             let s = as_set(eval_term(cx, env, t));
-            s.iter().map(|t| Arg::Addr(lift(t))).collect()
+            s.iter().map(lift).map(Arg::Addr).collect()
         }
     }
 }

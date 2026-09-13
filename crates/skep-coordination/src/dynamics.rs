@@ -439,22 +439,22 @@ impl<'a> Analyzer<'a> {
             // Grow-only membership at a step-constant probe is ST.
             Prim::SetMem(x, s) => {
                 let ax = self.term(x);
-                let as_ = self.term(s);
-                let st_grow = ax.fp.is_step_constant() && as_.grow_only;
-                let fp = ax.fp.union(&as_.fp);
+                let aset = self.term(s);
+                let st_grow = ax.fp.is_step_constant() && aset.grow_only;
+                let fp = ax.fp.union(&aset.fp);
                 let step_const = fp.is_step_constant();
                 Analysis { st: step_const || st_grow, sf: step_const, grow_only: step_const, fp }
             }
             // Emptiness of a grow-only set is SF.
             Prim::IsEmpty(s) => {
-                let as_ = self.term(s);
-                let sf_grow = as_.grow_only;
-                let step_const = as_.fp.is_step_constant();
+                let aset = self.term(s);
+                let sf_grow = aset.grow_only;
+                let step_const = aset.fp.is_step_constant();
                 Analysis {
                     st: step_const,
                     sf: step_const || sf_grow,
                     grow_only: step_const,
-                    fp: as_.fp,
+                    fp: aset.fp,
                 }
             }
             // count(D) ≤ c ∈ SF and count(D) ≥ c ∈ ST over a grow-only D, with a

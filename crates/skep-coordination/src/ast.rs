@@ -397,8 +397,8 @@ pub(crate) mod fixture {
     }
 
     pub(crate) fn every_former() -> SignedTerm {
-        let k = TypeRef::Concrete(TypeKey(enc(&[a(&[1, 1, 0, 1, 0, 1, 0, 1, 1])])));
-        let c = TypeRef::ClassVar(v(9));
+        let concrete = TypeRef::Concrete(TypeKey(enc(&[a(&[1, 1, 0, 1, 0, 1, 0, 1, 1])])));
+        let class_var = TypeRef::ClassVar(v(9));
         let x = || Term::Var(v(1));
         let y = || Term::Var(v(2));
         let lits = [
@@ -415,19 +415,19 @@ pub(crate) mod fixture {
         .into_iter()
         .map(Term::Lit);
         let atoms = [
-            Atom::IsK(k.clone(), at(x())),
-            Atom::Members(c.clone()),
-            Atom::TargetsOf(k.clone(), at(x())),
-            Atom::IsFiltered(k.clone(), at(x())),
-            Atom::Succs(k.clone(), at(x())),
-            Atom::Chain(k.clone(), at(x())),
-            Atom::Tip(k.clone(), at(x())),
-            Atom::IsInChain(k.clone(), at(x()), at(y())),
-            Atom::SourcesTo(k.clone(), at(x())),
-            Atom::TargetOf(k.clone(), at(x())),
+            Atom::IsK(concrete.clone(), at(x())),
+            Atom::Members(class_var.clone()),
+            Atom::TargetsOf(concrete.clone(), at(x())),
+            Atom::IsFiltered(concrete.clone(), at(x())),
+            Atom::Succs(concrete.clone(), at(x())),
+            Atom::Chain(concrete.clone(), at(x())),
+            Atom::Tip(concrete.clone(), at(x())),
+            Atom::IsInChain(concrete.clone(), at(x()), at(y())),
+            Atom::SourcesTo(concrete.clone(), at(x())),
+            Atom::TargetOf(concrete.clone(), at(x())),
             Atom::TargetsKeyed(at(x())),
-            Atom::Age(k.clone(), at(x())),
-            Atom::Stale(k.clone(), at(x())),
+            Atom::Age(concrete.clone(), at(x())),
+            Atom::Stale(concrete.clone(), at(x())),
             Atom::IsDoc(at(x())),
             Atom::TupAddr(v(3)),
             Atom::TupAddrsF(v(3)),
@@ -448,7 +448,7 @@ pub(crate) mod fixture {
             Prim::NatEq(at(x()), at(y())),
             Prim::NatLe(at(x()), at(y())),
             Prim::NatAdd(at(x()), at(y())),
-            Prim::MapGet(at(x()), c.clone()),
+            Prim::MapGet(at(x()), class_var.clone()),
             Prim::Def(at(x())),
         ]
         .into_iter()
@@ -458,11 +458,11 @@ pub(crate) mod fixture {
             Term::Not(at(x())),
             Term::Implies(at(x()), at(y())),
             Term::Iff(at(x()), at(y())),
-            Term::Forall { var: v(5), dom: ad(Dom::MembersDom(k.clone())), body: at(x()) },
-            Term::Exists { var: v(5), dom: ad(Dom::ActiveSlice(k.clone())), body: at(x()) },
+            Term::Forall { var: v(5), dom: ad(Dom::MembersDom(concrete.clone())), body: at(x()) },
+            Term::Exists { var: v(5), dom: ad(Dom::ActiveSlice(concrete.clone())), body: at(x()) },
             Term::Let { var: v(6), bound: at(x()), body: at(y()) },
             Term::IfSome { opt: at(x()), var: v(7), then_: at(y()), else_: at(x()) },
-            Term::Count(ad(Dom::AuditSlice(c))),
+            Term::Count(ad(Dom::AuditSlice(class_var))),
             Term::MaxT1(ad(Dom::LinkDom)),
             Term::MinT1(ad(Dom::Reg)),
             Term::BigUnion {

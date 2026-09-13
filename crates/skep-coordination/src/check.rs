@@ -131,7 +131,7 @@ impl TriggerTerm {
 /// payload it carries ([`weight`]) — `false` once the budget is spent. Shared
 /// by every walk the checker runs — its own and the `Reg` substitution's — so
 /// their work is one sum.
-fn tick(nodes: &Cell<usize>, weight: usize) -> bool {
+fn charge(nodes: &Cell<usize>, weight: usize) -> bool {
     let n = nodes.get().saturating_add(weight);
     nodes.set(n);
     n <= MAX_TERM_NODES
@@ -160,7 +160,7 @@ impl Rewrite for SubstClassVar<'_> {
     }
 
     fn term(&mut self, t: &Term) -> Term {
-        if !tick(self.nodes, weight(t)) {
+        if !charge(self.nodes, weight(t)) {
             self.exhausted = true;
             return Term::Lit(Lit::True);
         }
@@ -292,7 +292,7 @@ impl<'a> Checker<'a> {
     /// its own level when it charges a reference to this term, so the two
     /// halves of the depth accounting are stated together.
     pub(crate) fn check_signed(self, signed: SignedTerm, depth: u32) -> Result<TypedTerm, TypeError> {
-        if !tick(&self.nodes, signed.params.len()) {
+        if !charge(&self.nodes, signed.params.len()) {
             return Err(TypeError::TooLarge);
         }
         let mut seen: HashSet<VarId> = HashSet::with_capacity(signed.params.len());
@@ -318,7 +318,7 @@ impl<'a> Checker<'a> {
         if depth > MAX_DEPTH {
             return Err(TypeError::TooDeep);
         }
-        if !tick(&self.nodes, weight) {
+        if !charge(&self.nodes, weight) {
             return Err(TypeError::TooLarge);
         }
         self.deepest.set(self.deepest.get().max(depth));
@@ -338,7 +338,7 @@ impl<'a> Checker<'a> {
         };
         let entry = self.catalog.get(k).ok_or_else(|| TypeError::UnregisteredType(k.clone()))?;
         let declares = |needs: Behavior| -> Result<(), TypeError> {
-            if entry.reg.behaviors.contains(&needs) {
+            if entry.registration.behaviors.contains(&needs) {
                 Ok(())
             } else {
                 Err(TypeError::BehaviorMissing { ty: k.clone(), needs })
@@ -577,8 +577,8 @@ impl<'a> Checker<'a> {
                 })?;
                 let params = referent.params();
                 let mut e_args: Vec<ArcTerm> = Vec::with_capacity(args.len());
-                for (i, a) in args.iter().enumerate() {
-                    let c = self.check_term(ctx, a, d)?;
+                for (i, arg) in args.iter().enumerate() {
+                    let c = self.check_term(ctx, arg, d)?;
                     match params.get(i) {
                         Some((_, s)) => want(*s, c.sort)?,
                         None => {

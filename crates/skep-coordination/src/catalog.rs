@@ -24,7 +24,7 @@ use crate::ast::TypeKey;
 #[derive(Debug, Clone)]
 pub(crate) struct CatalogEntry {
     pub(crate) class: CoverageClass,
-    pub(crate) reg: Registration,
+    pub(crate) registration: Registration,
 }
 
 /// The frozen catalog. `order` fixes the deterministic `Reg`-expansion class
@@ -85,13 +85,14 @@ impl TypeCatalog {
         for t in ShippedType::ALL {
             let endset = registry.reserved_type(t).clone();
             let class = registry.shipped_class(t).clone();
-            let reg = registry
+            let registration = registry
                 .registration(&class)
-                .expect("the registry registers every shipped class (TypeRegistry::build)");
+                .expect("the registry registers every shipped class (TypeRegistry::build)")
+                .clone();
             let key = TypeKey(endset.clone());
             shipped[slot(t)] = endset;
             order.push(key.clone());
-            entries.insert(key, CatalogEntry { class, reg: reg.clone() });
+            entries.insert(key, CatalogEntry { class, registration });
         }
 
         // The two behavior footprints are the registry's own rules, asked of

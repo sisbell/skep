@@ -103,7 +103,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // against committed state (benign TOCTOU — item 6).
         let n_c = self.kernel.snapshot().world().m5().content_count(d);
         let at = VPos { subspace: content_subspace(), ordinal: n_c + Nat::from(1u32) };
-        let vs = (self.mk_vstream)(self.kernel.as_ref());
+        let vstream = (self.mk_vstream)(self.kernel.as_ref());
         // M9's writes run as `Caller::System` (the ownership ruling's
         // automation path, 2026-08-16): the coordination layer holds no wire
         // principal — M9 ⟂ M10 by architecture. A def write is no deposit
@@ -112,7 +112,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // into a PUBLISHED document surfaces as
         // `Insert(Rejected(PublishedTarget))`.
         let (start, _insert_seq) =
-            vs.insert(Caller::System, d, at, vec![Val::new(bytes)], Deposit::Undeclared)?;
+            vstream.insert(Caller::System, d, at, vec![Val::new(bytes)], Deposit::Undeclared)?;
         let (_pdef_tuple, seq) = self.register_pred(d, &start)?;
         Ok((start, seq))
     }
@@ -145,8 +145,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
         })?;
         // (iii) every referent ever-registered at σ.
         let refs = ref_addrs(&signed.body);
-        if let Some(r) = refs.iter().find(|r| !self.ever_registered(w, r)) {
-            return Err(RegisterError::ReferentNotEverRegistered(r.clone()));
+        if let Some(referent) = refs.iter().find(|referent| !self.ever_registered(w, referent)) {
+            return Err(RegisterError::ReferentNotEverRegistered(referent.clone()));
         }
         // (iii) WT + WT-ref. Sigs via the resolver (memo-missing signature
         // calls pin their own snapshots — sound: the σ ever-gate ran first,
@@ -155,8 +155,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
         let entry = self.check_signed(signed, 0).map_err(RegisterError::IllTyped)?;
         // (iv) endorsement: every referent ACTIVELY registered at σ.
         let pdef = self.catalog.reserved_type(ShippedType::PredDef);
-        if let Some(r) = refs.iter().find(|r| !w.links().is_k(pdef, r.tumbler())) {
-            return Err(RegisterError::ReferentNotActive(r.clone()));
+        if let Some(referent) =
+            refs.iter().find(|referent| !w.links().is_k(pdef, referent.tumbler()))
+        {
+            return Err(RegisterError::ReferentNotActive(referent.clone()));
         }
         // (P0) home residence.
         if !w.m3().is_registered_document(d) {
@@ -357,8 +359,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 .addr
                 .clone()
         };
-        let (r, seq) = self.link_writer().nullify(Caller::System, d, &target)?;
-        Ok((r, seq))
+        let (retraction, seq) = self.link_writer().nullify(Caller::System, d, &target)?;
+        Ok((retraction, seq))
     }
 
     /// The flat `expand(start)` of a checked def, given its memo entry — one

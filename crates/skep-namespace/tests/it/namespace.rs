@@ -129,7 +129,9 @@ fn commit_mint(
 const ID1: PrincipalId = PrincipalId(1);
 const ID2: PrincipalId = PrincipalId(2);
 /// An id no principal in any fixture carries — the caller every op must
-/// refuse, and the ω no address resolves to.
+/// refuse, the ω no address resolves to, and the fresh `new_id` for a
+/// delegation that must fail on a gate ahead of `DuplicateId`, where all that
+/// matters is that the id is unseated.
 const UNKNOWN_ID: PrincipalId = PrincipalId(99);
 
 /// The standard fixture: genesis, then `delegate [1,0,1] → ID1`, then a
@@ -308,27 +310,27 @@ fn every_chain_survives_the_round_trip_from_mint_to_allocated() {
     // A version is a usable home in its own right: it carries content and
     // versions of its own, on chains anchored at IT — and that daughter
     // chain has its own two ends, which move nothing on the trunk.
-    let c = commit_mint(&k, M3State::content_lock_key(&v1), |m3| {
+    let daughter_content = commit_mint(&k, M3State::content_lock_key(&v1), |m3| {
         m3.mint_content(&v1)
     });
-    assert_eq!(c, a(&[1, 0, 1, 0, 1, 1, 0, 1, 1]));
-    let vv = commit_mint(&k, M3State::version_lock_key(&v1), |m3| {
+    assert_eq!(daughter_content, a(&[1, 0, 1, 0, 1, 1, 0, 1, 1]));
+    let daughter_version = commit_mint(&k, M3State::version_lock_key(&v1), |m3| {
         m3.mint_version(&v1, false)
     });
-    assert_eq!(vv, a(&[1, 0, 1, 0, 1, 1, 1]));
+    assert_eq!(daughter_version, a(&[1, 0, 1, 0, 1, 1, 1]));
     assert_eq!(
-        vv,
+        daughter_version,
         first_version_address(&v1).expect("a member anchors a chain of its own")
     );
     let m3 = k.snapshot().world().m3().clone();
-    assert!(m3.is_allocated(&c) && m3.is_allocated(&vv));
-    assert_eq!(m3.latest_version(&v1), Some(vv.clone()));
+    assert!(m3.is_allocated(&daughter_content) && m3.is_allocated(&daughter_version));
+    assert_eq!(m3.latest_version(&v1), Some(daughter_version.clone()));
     assert_eq!(m3.latest_version(&doc), Some(v2.clone()));
 
     // Only a document anchors a version chain: the `(A, 1)` key under an
     // account is the SUB-ACCOUNT chain, and a node or an element anchors
     // no version chain at all — so neither end answers off the tier.
-    for off_tier in [&acct, &a(&[1]), &c] {
+    for off_tier in [&acct, &a(&[1]), &daughter_content] {
         assert!(first_version_address(off_tier).is_none(), "{off_tier:?}");
         assert!(m3.latest_version(off_tier).is_none(), "{off_tier:?}");
     }
@@ -1154,12 +1156,12 @@ fn delegate_mints_the_account_and_registers_its_principal_atomically() {
 
     // Sub-account delegation on the account's own (A, 1) chain — the sixth
     // chain family (Conflicts §8).
-    let sub = m3.next_account_prefix(&acct).expect("account peek");
-    assert_eq!(sub, a(&[1, 0, 1, 1]));
+    let sub_peek = m3.next_account_prefix(&acct).expect("account peek");
+    assert_eq!(sub_peek, a(&[1, 0, 1, 1]));
     let (sub_acct, _) = ns
-        .delegate(ID1, sub.tumbler().clone(), ID2)
+        .delegate(ID1, sub_peek.tumbler().clone(), ID2)
         .expect("sub-delegate");
-    assert_eq!(sub_acct, sub);
+    assert_eq!(sub_acct, sub_peek);
     let snap = k.snapshot();
     let m3 = snap.world().m3();
     assert_eq!(m3.effective_owner(&sub_acct), Some(ID2));
@@ -1321,13 +1323,13 @@ fn delegate_rejection_order_is_pinned() {
     let flanked_k = mem_kernel(seeded);
     let flanked_ns = Namespace::new(&flanked_k);
     assert_eq!(
-        rejected(flanked_ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1, 1]), PrincipalId(7))),
+        rejected(flanked_ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1, 1]), UNKNOWN_ID)),
         DelegateError::NotAuthorized
     );
     // …while ω itself reaches (iv) — so delegation can never seat a
     // principal ABOVE an existing one (top-down nesting, O15 iv).
     assert_eq!(
-        rejected(flanked_ns.delegate(ID1, t(&[1, 0, 1, 1]), PrincipalId(7))),
+        rejected(flanked_ns.delegate(ID1, t(&[1, 0, 1, 1]), UNKNOWN_ID)),
         DelegateError::NotTopDown
     );
     // DuplicateId: a reused id rejects even though [1,0,3] is fresh AND not
@@ -1407,7 +1409,7 @@ fn delegate_rejection_order_is_pinned() {
     let nested_k = mem_kernel(seeded);
     let nested_ns = Namespace::new(&nested_k);
     assert_eq!(
-        rejected(nested_ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), PrincipalId(7))),
+        rejected(nested_ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), UNKNOWN_ID)),
         DelegateError::NotTopDown
     );
 }
@@ -1423,11 +1425,11 @@ fn create_new_document_authorizes_by_omega() {
         .expect("delegate");
 
     // Ordinary: the effective owner baptizes documents in chain order.
-    let (d1, s1) = ns.create_new_document(ID1, &acct, None).expect("create 1");
-    let (d2, s2) = ns.create_new_document(ID1, &acct, None).expect("create 2");
+    let (d1, seq1) = ns.create_new_document(ID1, &acct, None).expect("create 1");
+    let (d2, seq2) = ns.create_new_document(ID1, &acct, None).expect("create 2");
     assert_eq!(d1, a(&[1, 0, 1, 0, 1]));
     assert_eq!(d2, a(&[1, 0, 1, 0, 2]));
-    assert!(s2 > s1);
+    assert!(seq2 > seq1);
     assert!(k.snapshot().world().m3().is_registered_document(&d1));
 
     // The ownership-divergence trap (O5): π₀'s prefix CONTAINS the account,
@@ -1479,9 +1481,9 @@ fn the_first_document_address_is_the_slot_the_document_chain_opens_at() {
         .expect("delegate");
     let slot = first_document_address(&acct).expect("an account anchors a document chain");
     assert_eq!(slot, a(&[1, 0, 1, 0, 1]));
-    let empty = k.snapshot().world().m3().clone();
-    assert!(!empty.is_allocated(&slot)); // the slot, not a claim
-    assert!(!empty.has_documents(&acct)); // …and the chain it opens is empty
+    let before_create = k.snapshot().world().m3().clone();
+    assert!(!before_create.is_allocated(&slot)); // the slot, not a claim
+    assert!(!before_create.has_documents(&acct)); // …and the chain it opens is empty
     let (d1, _) = ns.create_new_document(ID1, &acct, None).expect("create 1");
     assert_eq!(d1, slot);
     // "Has this account any documents?" is the slot read against the
@@ -1983,8 +1985,8 @@ fn durable_kernel_recovers_the_whole_slice_by_checkpoint_and_replay() {
     assert_eq!(d2, a(&[1, 0, 1, 0, 2]));
 }
 
-// ---- the publication bit (PUB round 1, delta 1 — owner rulings D1/D2,
-//      2026-09-05; PUB-7.8, PUB-7.10, PUB-8.18, PUB-8.21) ----
+// ---- the publication bit (owner rulings D1/D2, 2026-09-05; PUB-7.8,
+//      PUB-7.10, PUB-8.18, PUB-8.21) ----
 
 /// Create a document through the op and read its bit back off the committed
 /// slice — the observable of the CREATE path's resolution, since the bit the
@@ -2017,8 +2019,8 @@ fn a_flagless_first_create_is_born_published() {
         .expect("delegate");
     // The account is empty: the slot its chain opens at holds nothing.
     let slot = first_document_address(&acct).expect("an account anchors a document chain");
-    let empty = k.snapshot().world().m3().clone();
-    assert!(!empty.is_registered_document(&slot));
+    let before_create = k.snapshot().world().m3().clone();
+    assert!(!before_create.is_registered_document(&slot));
 
     let (d1, published) = create_and_read(&ns, &k, ID1, &acct, None);
     assert_eq!(d1, slot);
@@ -2027,10 +2029,10 @@ fn a_flagless_first_create_is_born_published() {
         "the flagless first mint is doc 1, born published"
     );
 
-    // The record half, pure, on the empty slice: the op resolved `true` and
-    // the mint stamps exactly what it is handed, so the Allocate that
+    // The record half, pure, on the pre-create slice: the op resolved `true`
+    // and the mint stamps exactly what it is handed, so the Allocate that
     // registered doc 1 carries `true` — whole value…
-    let (addr, rec) = empty
+    let (addr, rec) = before_create
         .mint_document(&acct, true)
         .expect("the empty account mints");
     assert_eq!(addr, slot);
@@ -2043,8 +2045,8 @@ fn a_flagless_first_create_is_born_published() {
     );
     // …and folding that one record is the whole of what the op committed:
     // the map is written by the fold, in the same step as the registration.
-    assert_eq!(empty.apply_m3(&rec), *k.snapshot().world().m3());
-    assert!(empty.apply_m3(&rec).published(&slot));
+    assert_eq!(before_create.apply_m3(&rec), *k.snapshot().world().m3());
+    assert!(before_create.apply_m3(&rec).published(&slot));
 }
 
 /// PUB-8.21's other arm at the engine: an EXPLICIT `false` first mint is NOT

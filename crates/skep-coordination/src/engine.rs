@@ -16,7 +16,7 @@ use crate::check::{Checker, Ctx, TypedTerm};
 use crate::coordinator::Coordinator;
 use crate::dynamics::{negated_membership, Analyzer, Footprint};
 use crate::error::{FireError, RuleError};
-use crate::eval::{as_bool, enum_dom, eval_term};
+use crate::eval::{as_bool, enum_dom, eval_term, lift};
 use crate::memo::DefStatus;
 use crate::rule::{
     Arg, CheckedRule, FireAction, FireOutcome, Occurrence, Rule, RuleCertification, RuleId,
@@ -88,7 +88,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
             FireAction::Nullify { .. } => false,
         };
         // Leg (c): grow-only domain.
-        let grow_only = analyzer.dom(dom.dom.as_ref()).grow;
+        let grow_only = analyzer.dom(dom.as_dom()).grow;
         if sf && marker && grow_only {
             Ok(RuleCertification::CertifiedTerminating)
         } else {
@@ -182,7 +182,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 return Err(RuleError::PredLayerMarkerType(ty.clone()));
             }
         }
-        Ok((TypedDom { dom: cd.dom, elem }, trigger))
+        Ok((TypedDom(cd.dom), trigger))
     }
 
     // ─────────────────────── enumeration & triggers ───────────────────────
@@ -196,7 +196,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// does today (`next_enabled` → `None`, `step` → `Quiescent`).
     fn enum_rule_dom(&self, rule: &CheckedRule, snap: &Snapshot<W>) -> Vec<Arg> {
         let cx = self.eval_ctx(snap.world(), rule.view, None);
-        enum_dom(&cx, &Env::empty(), rule.dom.dom.as_ref())
+        enum_dom(&cx, &Env::empty(), rule.dom.as_dom())
     }
 
     /// `T_ρ(x, snap)` at the rule's view, read THROUGH THE GUEST-CLASS VIEW
@@ -223,9 +223,12 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// Q0: `⋀_{ρ∈R} ∀ x∈[D_ρ] :: ¬T_ρ(x)` at ONE pinned snapshot,
     /// short-circuiting on the first enabled occurrence; each conjunct at its
     /// rule's declared view (the heterogeneous-registry detector — no
-    /// single-view rewrite needed, one `Snapshot` giving the soundness).
+    /// single-view rewrite needed, one `Snapshot` giving the soundness). Q0
+    /// IS "no rule has an enabled occurrence at `snap`", which is
+    /// [`Coordinator::next_enabled`]'s question, so the two answer from one
+    /// traversal and cannot come apart.
     pub fn quiescent(&self, snap: &Snapshot<W>) -> bool {
-        self.rules.iter().all(|r| self.first_enabled(r, snap).is_none())
+        self.next_enabled(snap).is_none()
     }
 
     /// Q7 scoped quiescence. `scope`: a one-`Addr`-parameter Bool ref-free
@@ -256,29 +259,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
             as_bool(eval_term(&cx, &env, scope.evaluable.as_ref()))
         };
         for rule in &self.rules {
-            let compatible = match body {
-                ScopeBody::PerAddress => rule.dom.elem == Sort::Addr,
-                ScopeBody::PerEmitter | ScopeBody::PerTarget | ScopeBody::PerSource => {
-                    rule.dom.elem == Sort::Tup
-                }
-            };
             for e in self.enum_rule_dom(rule, snap) {
-                if compatible {
-                    // β_ρ^S(x): the four canonical S-positive bodies (Q9).
-                    let in_scope = match (&body, &e) {
-                        (ScopeBody::PerAddress, Arg::Addr(a)) => s_of(a),
-                        (ScopeBody::PerEmitter, Arg::Tuple(t)) => s_of(&t.addr),
-                        (ScopeBody::PerTarget, Arg::Tuple(t)) => {
-                            t.to.addrs().any(|y| s_of(&crate::eval::lift(y)))
-                        }
-                        (ScopeBody::PerSource, Arg::Tuple(t)) => {
-                            t.from.addrs().any(|y| s_of(&crate::eval::lift(y)))
-                        }
-                        _ => true,
-                    };
-                    if !in_scope {
-                        continue;
-                    }
+                if in_scope(body, &e, &s_of) == Some(false) {
+                    continue;
                 }
                 if self.trigger_true(rule, &e, snap) {
                     return false;
@@ -570,6 +553,22 @@ impl<W: CoordinationWorld> Coordinator<W> {
             .into_iter()
             .map(|scc| scc.into_iter().map(|i| self.rules[i].id).collect())
             .collect()
+    }
+}
+
+/// β_ρ^S(x) — the four canonical S-positive bodies (Q9): whether the bound
+/// argument is in scope, or `None` when the body and the argument's shape
+/// disagree (`PerAddress` goes with an address element, the three tuple
+/// bodies with a tuple element). A `None` leaves the rule UNSCOPED — its
+/// full `[D_ρ]` — a safe over-approximation of remaining work, never false
+/// quiescence.
+fn in_scope(body: ScopeBody, arg: &Arg, s_of: &dyn Fn(&Address) -> bool) -> Option<bool> {
+    match (body, arg) {
+        (ScopeBody::PerAddress, Arg::Addr(a)) => Some(s_of(a)),
+        (ScopeBody::PerEmitter, Arg::Tuple(t)) => Some(s_of(&t.addr)),
+        (ScopeBody::PerTarget, Arg::Tuple(t)) => Some(t.to.addrs().any(|y| s_of(&lift(y)))),
+        (ScopeBody::PerSource, Arg::Tuple(t)) => Some(t.from.addrs().any(|y| s_of(&lift(y)))),
+        _ => None,
     }
 }
 

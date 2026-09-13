@@ -108,32 +108,41 @@ impl<'a, W> GuestLinks<'a, W> {
             .is_empty()
     }
 
-    /// D1 over the visible slice: `⋃ F.addrs()`, deduplicated, Tumbler order
-    /// — M7's own equation, a SLICE read at `Active` or `Audit` (the UV
-    /// rewrite is `EvalCtx`'s own per-type filter over the active read, so
-    /// `Default` names no slice here and, as at M7's `observe`, reads as
-    /// `Active`).
-    pub(crate) fn members(&self, ty: &Endset, view: View) -> Vec<Address> {
+    /// The deduplicated denotation of one slot over the visible tuples
+    /// matching `pat` at `view`: `⋃ slot(t).addrs()`, in Tumbler order — the
+    /// shape M7's own equations for D1, D3 and BH3's reverse take, answered
+    /// over the VISIBLE slice, so each of those is one line and checkable
+    /// against M7's.
+    fn denoted(
+        &self,
+        ty: &Endset,
+        pat: Pattern<'_>,
+        view: View,
+        slot: fn(&Tuple) -> &Endset,
+    ) -> Vec<Address> {
         let mut out: OrdSet<Tumbler> = OrdSet::new();
-        for t in self.observe(ty, Pattern::default(), view) {
-            for m in t.from.addrs() {
-                out.insert(m.clone());
+        for t in self.observe(ty, pat, view) {
+            for a in slot(&t).addrs() {
+                out.insert(a.clone());
             }
         }
         out.iter().map(lift).collect()
     }
 
+    /// D1 over the visible slice: `⋃ F.addrs()` — M7's own equation, a SLICE
+    /// read at `Active` or `Audit` (the UV rewrite is `EvalCtx`'s own
+    /// per-type filter over the active read, so `Default` names no slice
+    /// here and, as at M7's `observe`, reads as `Active`).
+    pub(crate) fn members(&self, ty: &Endset, view: View) -> Vec<Address> {
+        self.denoted(ty, Pattern::default(), view, |t| &t.from)
+    }
+
     /// D3 over the visible slice: `⋃ G.addrs()` of the tuples whose F COVERS
-    /// `x`, deduplicated, Tumbler order (M7's own coverage regime for this
-    /// read) — a slice read at `Active` or `Audit`, as `members`.
+    /// `x` (M7's own coverage regime for this read) — a slice read at
+    /// `Active` or `Audit`, as `members`.
     pub(crate) fn targets_of(&self, ty: &Endset, x: &Address, view: View) -> Vec<Address> {
-        let mut out: OrdSet<Tumbler> = OrdSet::new();
-        for t in self.observe(ty, Pattern { from: slice::from_ref(x.tumbler()), to: &[] }, view) {
-            for g in t.to.addrs() {
-                out.insert(g.clone());
-            }
-        }
-        out.iter().map(lift).collect()
+        let pat = Pattern { from: slice::from_ref(x.tumbler()), to: &[] };
+        self.denoted(ty, pat, view, |t| &t.to)
     }
 
     // ───────────── BH2 — the walk over the VISIBLE operative claims ─────────────
@@ -222,19 +231,10 @@ impl<'a, W> GuestLinks<'a, W> {
     // ────────────────────────── BH3 — over the visible slice ──────────────────────────
 
     /// BH3 reverse: the F-denoted sources of the visible active type-`ty`
-    /// tuples whose G COVERS `target`, deduplicated, Tumbler order.
+    /// tuples whose G COVERS `target`.
     pub(crate) fn sources_to(&self, ty: &Endset, target: &Address) -> Vec<Address> {
-        let mut out: OrdSet<Tumbler> = OrdSet::new();
-        for t in self.observe(
-            ty,
-            Pattern { from: &[], to: slice::from_ref(target.tumbler()) },
-            View::Active,
-        ) {
-            for f in t.from.addrs() {
-                out.insert(f.clone());
-            }
-        }
-        out.iter().map(lift).collect()
+        let pat = Pattern { from: &[], to: slice::from_ref(target.tumbler()) };
+        self.denoted(ty, pat, View::Active, |t| &t.from)
     }
 
     /// BH3 forward: ⊥ unless EXACTLY ONE visible active type-`ty` tuple

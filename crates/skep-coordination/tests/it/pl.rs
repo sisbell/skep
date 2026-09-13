@@ -938,6 +938,43 @@ fn the_pd0_rules_hold_over_a_generated_family() {
     assert!(!c.classify(&isk, View::Active).footprint.active_classes().any(|x| *x == retired));
 }
 
+/// A `default`-view term charges the BH1 filter slices for exactly the reads
+/// the evaluator UV-rewrites, and for no others: `chain` and `succs` — the
+/// collections the rewrite post-filters — carry Retired's slice beside their
+/// own class, while `tip` and `is_in_chain`, the verdict/traversal atoms at
+/// the SAME class and the same view, carry only their own; the core
+/// `members`/`targets_of` and an `M_K` domain carry it, the two tuple slices
+/// do not. At `Active` no read carries it, the rewrite not running.
+#[test]
+fn the_default_view_charges_bh1_slices_for_exactly_the_uv_rewritten_reads() {
+    let k = kernel();
+    let c = coord(&k);
+    let sup = c.reserved_type(ShippedType::Supersedes).clone();
+    let retired = coverage_class(&retired_ty());
+    let charges = |t: &Term, view: View| {
+        let tt = c.type_check(vec![], t.clone()).expect("test term type-checks");
+        c.classify(&tt, view).footprint.active_classes().any(|x| *x == retired)
+    };
+    for t in [
+        members(&pred_def_ty()),
+        targets_of(&pred_def_ty(), lit_addr(&ca(1))),
+        chain(&sup, lit_addr(&ca(1))),
+        succs(&sup, lit_addr(&ca(1))),
+        count(Dom::MembersDom(conc(&pred_def_ty()))),
+    ] {
+        assert!(charges(&t, View::Default), "UV-rewritten at Default: {t:?}");
+        assert!(!charges(&t, View::Active), "no rewrite at Active: {t:?}");
+    }
+    for t in [
+        tip(&sup, lit_addr(&ca(1))),
+        is_in_chain(&sup, lit_addr(&ca(1)), lit_addr(&ca(2))),
+        count(Dom::ActiveSlice(conc(&pred_def_ty()))),
+        count(Dom::AuditSlice(conc(&pred_def_ty()))),
+    ] {
+        assert!(!charges(&t, View::Default), "never UV-rewritten: {t:?}");
+    }
+}
+
 /// The analyzer reads each `Count`'s domain once per threshold: a
 /// threshold nested inside its own domain's filter forty levels deep —
 /// `count(Filter{L_K, t, count(Filter{L_K, t, …}) ≤ 1}) ≤ 1` — is linear

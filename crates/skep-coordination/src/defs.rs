@@ -30,7 +30,7 @@ use crate::ast::{ref_addrs, Term};
 use crate::check::TypedTerm;
 use crate::codec;
 use crate::coordinator::Coordinator;
-use crate::dynamics::{view_independent, Analyzer};
+use crate::dynamics::{st_plus, view_independent};
 use crate::error::{CertifyError, DefineError, EvalError, RegisterError, RetractError};
 use crate::eval::eval_term;
 use crate::expand::{Expander, ExpansionTooLarge};
@@ -308,11 +308,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         if !view_independent(&flat) {
             return Err(CertifyError::ViewDependent);
         }
-        // Γ_D parameters read as bound constants (free Vars have empty
-        // footprint); ⊤-stability is the `st` leg.
-        let analysis =
-            Analyzer { catalog: &self.catalog, view: View::Audit, widen: true }.term(&flat);
-        if !analysis.st {
+        if !st_plus(&self.catalog, &flat) {
             return Err(CertifyError::NotStable);
         }
         let (tuple, seq) = self.link_writer().emit(

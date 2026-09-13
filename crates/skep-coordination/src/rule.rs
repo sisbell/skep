@@ -12,7 +12,7 @@ use skep_links::{Tuple, View};
 use crate::ast::{ArcDom, Dom, TypeKey};
 use crate::check::{TriggerTerm, TypedTerm};
 use crate::error::FireError;
-use crate::value::{Sort, Value};
+use crate::value::Value;
 
 /// One trigger→action rule. `domain` is the RAW submission — `register_rule`
 /// checks + `Reg`-expands it into the internal checked `TypedDom` the working
@@ -80,13 +80,19 @@ pub enum ScopeBody {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RuleId(pub(crate) u64);
 
-/// The checked rule-domain carrier — the `Dom` analogue of `TypedTerm`'s
-/// evaluable projection (every `TypeRef` `Concrete`, no surviving `Reg`
-/// binder, element sort recorded).
+/// A rule domain that passed `check_dom` — the `Dom` analogue of
+/// `TypedTerm`'s evaluable projection: every `TypeRef` `Concrete`, no
+/// surviving `Reg` binder. A [`Rule`]'s own `domain` is the raw submission;
+/// only this shape is ever enumerated, and only `register_rule` can build
+/// one, so the working set holds no unchecked domain.
 #[derive(Debug, Clone)]
-pub(crate) struct TypedDom {
-    pub(crate) dom: ArcDom,
-    pub(crate) elem: Sort,
+pub(crate) struct TypedDom(pub(crate) ArcDom);
+
+impl TypedDom {
+    /// The checked domain, for enumeration (`enum_dom`) and analysis.
+    pub(crate) fn as_dom(&self) -> &Dom {
+        &self.0
+    }
 }
 
 /// One registered rule in the working set: the checked domain, the checked

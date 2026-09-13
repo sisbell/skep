@@ -24,7 +24,7 @@ use crate::ast::{
     ArcDom, ArcTerm, Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId, DERIVATION_COST,
     MAX_DEPTH, MAX_TERM_NODES,
 };
-use crate::catalog::{CatalogEntry, TypeCatalog};
+use crate::catalog::TypeCatalog;
 use crate::error::TypeError;
 use crate::value::{Signature, SignedTerm, Sort};
 use crate::walk::{rewrite_term, Rewrite};
@@ -176,15 +176,14 @@ impl Rewrite for SubstClassVar<'_> {
 
 pub(crate) type Ctx = im::HashMap<VarId, Sort>;
 
-/// A checked term: its evaluable projection, sort, ref-freeness, and the
-/// deepest level (absolute — counted from the check's starting depth) any
-/// walk over the projection reaches, references' reaches included.
+/// A checked term: its evaluable projection, sort and ref-freeness. How deep
+/// the pass went is the pass's own record ([`Checker::deepest`]), not a
+/// per-node field.
 #[derive(Debug, Clone)]
 pub(crate) struct Checked {
     pub(crate) term: ArcTerm,
     pub(crate) sort: Sort,
     pub(crate) ref_free: bool,
-    pub(crate) deepest: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -192,7 +191,6 @@ pub(crate) struct CheckedDom {
     pub(crate) dom: ArcDom,
     pub(crate) elem: Sort,
     pub(crate) ref_free: bool,
-    pub(crate) deepest: u32,
 }
 
 fn want(expected: Sort, found: Sort) -> Result<(), TypeError> {
@@ -221,6 +219,19 @@ pub(crate) enum Unresolved {
 /// refusals.
 pub(crate) type Resolver<'a> = dyn Fn(&Address, u32) -> Result<Arc<TypedTerm>, Unresolved> + 'a;
 
+/// What a type position must satisfy beyond being cataloged (V-STAT).
+enum Guard {
+    /// Cataloged only, no behavior requirement — the core atoms, `·[K]`, the
+    /// slice domains.
+    Cataloged,
+    /// The class's registration must declare this behavior.
+    Needs(Behavior),
+    /// BH2's v1 narrowing (Conflicts §8): the `Walk` behavior AND the shipped
+    /// `Supersedes` key — M7 v1 serves the walk only there, so admitting any
+    /// other Walk class would silently denote ∅/\[\].
+    Walk,
+}
+
 /// The checking pass. `resolve` is the referent resolver WT-ref consults —
 /// the only external consultation (it reads the immutable def memo, so even
 /// ref-bearing type-checking is "decided once") — asked at the depth the
@@ -228,16 +239,20 @@ pub(crate) type Resolver<'a> = dyn Fn(&Address, u32) -> Result<Arc<TypedTerm>, U
 /// exactly the levels the `Ref` node was charged for, and answering
 /// [`Unresolved::TooDeep`] when the referent cannot be derived there.
 /// `nodes` is the node budget, one sum across the pass and its `Reg`
-/// substitutions.
+/// substitutions; `deepest` is the pass's high-water mark, so how deep the
+/// judgment went is recorded once per level entered rather than recombined
+/// at every node. One judgment per `Checker`: [`Checker::check_signed`]
+/// consumes it, so a second judgment cannot inherit the first's mark.
 pub(crate) struct Checker<'a> {
     catalog: &'a TypeCatalog,
     resolve: &'a Resolver<'a>,
     nodes: Cell<usize>,
+    deepest: Cell<u32>,
 }
 
 impl<'a> Checker<'a> {
     pub(crate) fn new(catalog: &'a TypeCatalog, resolve: &'a Resolver<'a>) -> Checker<'a> {
-        Checker { catalog, resolve, nodes: Cell::new(0) }
+        Checker { catalog, resolve, nodes: Cell::new(0), deepest: Cell::new(0) }
     }
 
     /// The whole judgment over a signed term — its body under its Γ_D — into
@@ -246,15 +261,11 @@ impl<'a> Checker<'a> {
     /// Γ_D binds each name once (`DuplicateParameter` otherwise), so that an
     /// `Env` can bind every parameter at its sort; then WT + WT-ref over the
     /// body, referents resolved at the levels the `Ref` arm charges them.
-    /// [`TypedTerm::reach`] is the deepest level this pass reached RELATIVE
-    /// to this root — the same quantity [`Checker::check_term`]'s `Ref` arm
-    /// adds to its own level when it charges a reference to this term, so
-    /// the two halves of the depth accounting are stated together.
-    pub(crate) fn check_signed(
-        &self,
-        signed: SignedTerm,
-        depth: u32,
-    ) -> Result<TypedTerm, TypeError> {
+    /// [`TypedTerm::reach`] is the pass's high-water mark RELATIVE to this
+    /// root — the same quantity [`Checker::check_term`]'s `Ref` arm adds to
+    /// its own level when it charges a reference to this term, so the two
+    /// halves of the depth accounting are stated together.
+    pub(crate) fn check_signed(self, signed: SignedTerm, depth: u32) -> Result<TypedTerm, TypeError> {
         let mut seen: HashSet<VarId> = HashSet::with_capacity(signed.params.len());
         if let Some((v, _)) = signed.params.iter().find(|(v, _)| !seen.insert(*v)) {
             return Err(TypeError::DuplicateParameter(*v));
@@ -266,12 +277,13 @@ impl<'a> Checker<'a> {
             result: checked.sort,
             evaluable: checked.term,
             ref_free: checked.ref_free,
-            reach: checked.deepest.saturating_sub(depth),
+            reach: self.deepest.get().saturating_sub(depth),
         })
     }
 
-    /// The two doors at every node: nesting past `MAX_DEPTH` and the node
-    /// budget.
+    /// The two doors at every node — nesting past `MAX_DEPTH` and the node
+    /// budget — and, once both pass, the ONE place a level is recorded
+    /// against the pass's high-water mark.
     fn enter(&self, depth: u32) -> Result<(), TypeError> {
         if depth > MAX_DEPTH {
             return Err(TypeError::TooDeep);
@@ -279,41 +291,36 @@ impl<'a> Checker<'a> {
         if !tick(&self.nodes) {
             return Err(TypeError::TooLarge);
         }
+        self.deepest.set(self.deepest.get().max(depth));
         Ok(())
     }
 
-    /// Resolve a type position: a surviving `ClassVar` (no enclosing `Reg`
-    /// binder substituted it) is `UnboundClassVar`; a `Concrete` key is
-    /// probed by `Endset`-equality — absent ⇒ `UnregisteredType` (which also
-    /// rules out non-address-denoting keys and coverage-equal-but-
-    /// byte-different misses).
-    fn typeref(&self, tr: &TypeRef) -> Result<(TypeKey, &CatalogEntry), TypeError> {
-        match tr {
-            TypeRef::ClassVar(v) => Err(TypeError::UnboundClassVar(*v)),
-            TypeRef::Concrete(k) => match self.catalog.get(k) {
-                Some(e) => Ok((k.clone(), e)),
-                None => Err(TypeError::UnregisteredType(k.clone())),
-            },
+    /// The cataloged key of a type position, its `guard` met (V-STAT). A
+    /// surviving `ClassVar` is `UnboundClassVar` (no enclosing `Reg` binder
+    /// substituted it); a `Concrete` key absent from the catalog is
+    /// `UnregisteredType` — the probe being `Endset`-equality, that subsumes
+    /// non-address-denoting keys and coverage-equal-but-byte-different
+    /// misses.
+    fn guarded(&self, tr: &TypeRef, guard: Guard) -> Result<TypeKey, TypeError> {
+        let k = match tr {
+            TypeRef::ClassVar(v) => return Err(TypeError::UnboundClassVar(*v)),
+            TypeRef::Concrete(k) => k,
+        };
+        let entry = self.catalog.get(k).ok_or_else(|| TypeError::UnregisteredType(k.clone()))?;
+        let (needs, narrowed) = match guard {
+            Guard::Cataloged => (None, false),
+            Guard::Needs(b) => (Some(b), false),
+            Guard::Walk => (Some(Behavior::Walk), true),
+        };
+        if let Some(needs) = needs {
+            if !entry.reg.behaviors.contains(&needs) {
+                return Err(TypeError::BehaviorMissing { ty: k.clone(), needs });
+            }
         }
-    }
-
-    fn need(&self, k: &TypeKey, e: &CatalogEntry, b: Behavior) -> Result<(), TypeError> {
-        if e.reg.behaviors.contains(&b) {
-            Ok(())
-        } else {
-            Err(TypeError::BehaviorMissing { ty: k.clone(), needs: b })
+        if narrowed && *k != self.catalog.supersedes_key {
+            return Err(TypeError::UnservedWalkClass(k.clone()));
         }
-    }
-
-    /// BH2 v1 narrowing (Conflicts §8): Walk atoms admitted only at the
-    /// shipped `Supersedes` key — M7 v1 serves the walk only there.
-    fn bh2(&self, tr: &TypeRef) -> Result<TypeKey, TypeError> {
-        let (k, entry) = self.typeref(tr)?;
-        self.need(&k, entry, Behavior::Walk)?;
-        if k != self.catalog.supersedes_key {
-            return Err(TypeError::UnservedWalkClass(k));
-        }
-        Ok(k)
+        Ok(k.clone())
     }
 
     /// A child at `depth`, required at `expected`.
@@ -339,7 +346,6 @@ impl<'a> Checker<'a> {
             term: Arc::new(mk(ca.term, cb.term)),
             sort: Sort::Bool,
             ref_free: ca.ref_free && cb.ref_free,
-            deepest: ca.deepest.max(cb.deepest),
         })
     }
 
@@ -369,17 +375,12 @@ impl<'a> Checker<'a> {
     ) -> Result<Checked, TypeError> {
         let cd = self.check_dom(ctx, dm, depth)?;
         want(Sort::Addr, cd.elem)?;
-        Ok(Checked {
-            term: Arc::new(mk(cd.dom)),
-            sort: Sort::OptAddr,
-            ref_free: cd.ref_free,
-            deepest: cd.deepest,
-        })
+        Ok(Checked { term: Arc::new(mk(cd.dom)), sort: Sort::OptAddr, ref_free: cd.ref_free })
     }
 
-    /// A leaf: no children, its own level.
-    fn leaf(term: Term, sort: Sort, depth: u32) -> Checked {
-        Checked { term: Arc::new(term), sort, ref_free: true, deepest: depth }
+    /// A leaf: no children.
+    fn leaf(term: Term, sort: Sort) -> Checked {
+        Checked { term: Arc::new(term), sort, ref_free: true }
     }
 
     /// WT over `t` at nesting level `depth` (0 at a term's root; a def
@@ -390,7 +391,7 @@ impl<'a> Checker<'a> {
         let d = depth + 1;
         match t {
             Term::Var(v) => match ctx.get(v) {
-                Some(s) => Ok(Self::leaf(Term::Var(*v), *s, depth)),
+                Some(s) => Ok(Self::leaf(Term::Var(*v), *s)),
                 None => Err(TypeError::UnboundVariable(*v)),
             },
             Term::Lit(l) => {
@@ -401,7 +402,7 @@ impl<'a> Checker<'a> {
                     Lit::BotAddr => Sort::OptAddr,
                     Lit::BotNat => Sort::OptNat,
                 };
-                Ok(Self::leaf(Term::Lit(l.clone()), sort, depth))
+                Ok(Self::leaf(Term::Lit(l.clone()), sort))
             }
             Term::Atom(a) => self.check_atom(ctx, a, depth),
             Term::Prim(p) => self.check_prim(ctx, p, depth),
@@ -415,7 +416,6 @@ impl<'a> Checker<'a> {
                     term: Arc::new(Term::Not(ca.term)),
                     sort: Sort::Bool,
                     ref_free: ca.ref_free,
-                    deepest: ca.deepest,
                 })
             }
             Term::Forall { var, dom, body } if matches!(dom.as_ref(), Dom::Reg) => {
@@ -430,7 +430,6 @@ impl<'a> Checker<'a> {
                     term: Arc::new(Term::Forall { var: *var, dom: cd.dom, body: cb.term }),
                     sort: Sort::Bool,
                     ref_free: cd.ref_free && cb.ref_free,
-                    deepest: cd.deepest.max(cb.deepest),
                 })
             }
             Term::Exists { var, dom, body } => {
@@ -439,7 +438,6 @@ impl<'a> Checker<'a> {
                     term: Arc::new(Term::Exists { var: *var, dom: cd.dom, body: cb.term }),
                     sort: Sort::Bool,
                     ref_free: cd.ref_free && cb.ref_free,
-                    deepest: cd.deepest.max(cb.deepest),
                 })
             }
             Term::Let { var, bound, body } => {
@@ -450,7 +448,6 @@ impl<'a> Checker<'a> {
                     term: Arc::new(Term::Let { var: *var, bound: cbound.term, body: cbody.term }),
                     sort: cbody.sort,
                     ref_free: cbound.ref_free && cbody.ref_free,
-                    deepest: cbound.deepest.max(cbody.deepest),
                 })
             }
             Term::IfSome { opt, var, then_, else_ } => {
@@ -475,7 +472,6 @@ impl<'a> Checker<'a> {
                     }),
                     sort: ct.sort,
                     ref_free: co.ref_free && ct.ref_free && ce.ref_free,
-                    deepest: co.deepest.max(ct.deepest).max(ce.deepest),
                 })
             }
             Term::Count(dm) => match dm.as_ref() {
@@ -484,7 +480,6 @@ impl<'a> Checker<'a> {
                 Dom::Reg => Ok(Self::leaf(
                     Term::Lit(Lit::Nat(Nat::from(self.catalog.classes().len()))),
                     Sort::Nat,
-                    depth,
                 )),
                 _ => {
                     let cd = self.check_dom(ctx, dm, d)?;
@@ -492,7 +487,6 @@ impl<'a> Checker<'a> {
                         term: Arc::new(Term::Count(cd.dom)),
                         sort: Sort::Nat,
                         ref_free: cd.ref_free,
-                        deepest: cd.deepest,
                     })
                 }
             },
@@ -507,7 +501,6 @@ impl<'a> Checker<'a> {
                     term: Arc::new(Term::BigUnion { dom: cd.dom, var: *var, body: cb.term }),
                     sort: Sort::AddrSet,
                     ref_free: cd.ref_free && cb.ref_free,
-                    deepest: cd.deepest.max(cb.deepest),
                 })
             }
             Term::Reflect(dm) => {
@@ -520,7 +513,6 @@ impl<'a> Checker<'a> {
                     term: Arc::new(Term::Reflect(cd.dom)),
                     sort: Sort::AddrSet,
                     ref_free: cd.ref_free,
-                    deepest: cd.deepest,
                 })
             }
             Term::Ref { addr, args } => {
@@ -548,7 +540,6 @@ impl<'a> Checker<'a> {
                 })?;
                 let params = referent.params();
                 let mut e_args: Vec<ArcTerm> = Vec::with_capacity(args.len());
-                let mut deepest = depth;
                 for (i, a) in args.iter().enumerate() {
                     let c = self.check_term(ctx, a, d)?;
                     match params.get(i) {
@@ -560,7 +551,6 @@ impl<'a> Checker<'a> {
                             })
                         }
                     }
-                    deepest = deepest.max(c.deepest);
                     e_args.push(c.term);
                 }
                 if args.len() < params.len() {
@@ -577,11 +567,13 @@ impl<'a> Checker<'a> {
                 if reach > MAX_DEPTH {
                     return Err(TypeError::TooDeep);
                 }
+                // The levels a walk through this node reaches are the
+                // referent's, which no `enter` on this pass records.
+                self.deepest.set(self.deepest.get().max(reach));
                 Ok(Checked {
                     term: Arc::new(Term::Ref { addr: addr.clone(), args: e_args }),
                     sort: referent.result,
                     ref_free: false,
-                    deepest: deepest.max(reach),
                 })
             }
         }
@@ -631,7 +623,6 @@ impl<'a> Checker<'a> {
                     term: Arc::new(join(prev.term, c.term)),
                     sort: Sort::Bool,
                     ref_free: prev.ref_free && c.ref_free,
-                    deepest: prev.deepest.max(c.deepest),
                 },
             });
         }
@@ -650,64 +641,60 @@ impl<'a> Checker<'a> {
         };
         // A one-argument atom at a type position: the argument at `sort`.
         let arg = |e: &ArcTerm, sort: Sort| self.sub(ctx, e, sort, d);
-        let (atom, sort, ref_free, deepest) = match a {
+        let (atom, sort, ref_free) = match a {
             Atom::IsK(tr, e) => {
-                let (k, _) = self.typeref(tr)?;
+                let k = self.guarded(tr, Guard::Cataloged)?;
                 let c = arg(e, Sort::Addr)?;
-                (Atom::IsK(TypeRef::Concrete(k), c.term), Sort::Bool, c.ref_free, c.deepest)
+                (Atom::IsK(TypeRef::Concrete(k), c.term), Sort::Bool, c.ref_free)
             }
             Atom::Members(tr) => {
-                let (k, _) = self.typeref(tr)?;
-                (Atom::Members(TypeRef::Concrete(k)), Sort::AddrSet, true, depth)
+                let k = self.guarded(tr, Guard::Cataloged)?;
+                (Atom::Members(TypeRef::Concrete(k)), Sort::AddrSet, true)
             }
             Atom::TargetsOf(tr, e) => {
-                let (k, _) = self.typeref(tr)?;
+                let k = self.guarded(tr, Guard::Cataloged)?;
                 let c = arg(e, Sort::Addr)?;
-                (Atom::TargetsOf(TypeRef::Concrete(k), c.term), Sort::AddrSet, c.ref_free, c.deepest)
+                (Atom::TargetsOf(TypeRef::Concrete(k), c.term), Sort::AddrSet, c.ref_free)
             }
             Atom::IsFiltered(tr, e) => {
-                let (k, entry) = self.typeref(tr)?;
-                self.need(&k, entry, Behavior::ReadFilter)?;
+                let k = self.guarded(tr, Guard::Needs(Behavior::ReadFilter))?;
                 let c = arg(e, Sort::Addr)?;
-                (Atom::IsFiltered(TypeRef::Concrete(k), c.term), Sort::Bool, c.ref_free, c.deepest)
+                (Atom::IsFiltered(TypeRef::Concrete(k), c.term), Sort::Bool, c.ref_free)
             }
             Atom::Succs(tr, e) => {
-                let k = self.bh2(tr)?;
+                let k = self.guarded(tr, Guard::Walk)?;
                 let c = arg(e, Sort::Addr)?;
-                (Atom::Succs(TypeRef::Concrete(k), c.term), Sort::AddrSet, c.ref_free, c.deepest)
+                (Atom::Succs(TypeRef::Concrete(k), c.term), Sort::AddrSet, c.ref_free)
             }
             Atom::Chain(tr, e) => {
-                let k = self.bh2(tr)?;
+                let k = self.guarded(tr, Guard::Walk)?;
                 let c = arg(e, Sort::Addr)?;
-                (Atom::Chain(TypeRef::Concrete(k), c.term), Sort::AddrSeq, c.ref_free, c.deepest)
+                (Atom::Chain(TypeRef::Concrete(k), c.term), Sort::AddrSeq, c.ref_free)
             }
             Atom::Tip(tr, e) => {
-                let k = self.bh2(tr)?;
+                let k = self.guarded(tr, Guard::Walk)?;
                 let c = arg(e, Sort::Addr)?;
-                (Atom::Tip(TypeRef::Concrete(k), c.term), Sort::OptAddr, c.ref_free, c.deepest)
+                (Atom::Tip(TypeRef::Concrete(k), c.term), Sort::OptAddr, c.ref_free)
             }
             Atom::IsInChain(tr, e1, e2) => {
-                let k = self.bh2(tr)?;
+                let k = self.guarded(tr, Guard::Walk)?;
                 let c1 = arg(e1, Sort::Addr)?;
                 let c2 = arg(e2, Sort::Addr)?;
                 (
                     Atom::IsInChain(TypeRef::Concrete(k), c1.term, c2.term),
                     Sort::Bool,
                     c1.ref_free && c2.ref_free,
-                    c1.deepest.max(c2.deepest),
                 )
             }
             Atom::SourcesTo(tr, e) => {
-                let (k, entry) = self.typeref(tr)?;
-                self.need(&k, entry, Behavior::ReverseLookup)?;
+                let k = self.guarded(tr, Guard::Needs(Behavior::ReverseLookup))?;
                 let c = arg(e, Sort::Addr)?;
-                (Atom::SourcesTo(TypeRef::Concrete(k), c.term), Sort::AddrSet, c.ref_free, c.deepest)
+                (Atom::SourcesTo(TypeRef::Concrete(k), c.term), Sort::AddrSet, c.ref_free)
             }
             Atom::TargetOf(tr, e) => {
-                let (k, entry) = self.typeref(tr)?;
-                self.need(&k, entry, Behavior::ReverseLookup)?;
+                let k = self.guarded(tr, Guard::Needs(Behavior::ReverseLookup))?;
                 let c = arg(e, Sort::Addr)?;
-                (Atom::TargetOf(TypeRef::Concrete(k), c.term), Sort::OptAddr, c.ref_free, c.deepest)
+                (Atom::TargetOf(TypeRef::Concrete(k), c.term), Sort::OptAddr, c.ref_free)
             }
             Atom::TargetsKeyed(e) => {
                 // V-atom: in the vocabulary iff some cataloged class attaches
@@ -716,37 +703,35 @@ impl<'a> Checker<'a> {
                     return Err(TypeError::NoReverseLookupClass);
                 }
                 let c = arg(e, Sort::Addr)?;
-                (Atom::TargetsKeyed(c.term), Sort::Map, c.ref_free, c.deepest)
+                (Atom::TargetsKeyed(c.term), Sort::Map, c.ref_free)
             }
             Atom::Age(tr, e) => {
-                let (k, entry) = self.typeref(tr)?;
-                self.need(&k, entry, Behavior::Age)?;
+                let k = self.guarded(tr, Guard::Needs(Behavior::Age))?;
                 let c = arg(e, Sort::Addr)?;
-                (Atom::Age(TypeRef::Concrete(k), c.term), Sort::OptNat, c.ref_free, c.deepest)
+                (Atom::Age(TypeRef::Concrete(k), c.term), Sort::OptNat, c.ref_free)
             }
             Atom::Stale(tr, e) => {
-                let (k, entry) = self.typeref(tr)?;
-                self.need(&k, entry, Behavior::Age)?;
+                let k = self.guarded(tr, Guard::Needs(Behavior::Age))?;
                 let c = arg(e, Sort::Nat)?;
-                (Atom::Stale(TypeRef::Concrete(k), c.term), Sort::AddrSet, c.ref_free, c.deepest)
+                (Atom::Stale(TypeRef::Concrete(k), c.term), Sort::AddrSet, c.ref_free)
             }
             Atom::IsDoc(e) => {
                 let c = arg(e, Sort::Addr)?;
-                (Atom::IsDoc(c.term), Sort::Bool, c.ref_free, c.deepest)
+                (Atom::IsDoc(c.term), Sort::Bool, c.ref_free)
             }
-            Atom::TupAddr(v) => (Atom::TupAddr(tup_var(*v)?), Sort::Addr, true, depth),
-            Atom::TupAddrsF(v) => (Atom::TupAddrsF(tup_var(*v)?), Sort::AddrSet, true, depth),
-            Atom::TupAddrsG(v) => (Atom::TupAddrsG(tup_var(*v)?), Sort::AddrSet, true, depth),
+            Atom::TupAddr(v) => (Atom::TupAddr(tup_var(*v)?), Sort::Addr, true),
+            Atom::TupAddrsF(v) => (Atom::TupAddrsF(tup_var(*v)?), Sort::AddrSet, true),
+            Atom::TupAddrsG(v) => (Atom::TupAddrsG(tup_var(*v)?), Sort::AddrSet, true),
             Atom::InCoverageF(e, v) => {
                 let c = arg(e, Sort::Addr)?;
-                (Atom::InCoverageF(c.term, tup_var(*v)?), Sort::Bool, c.ref_free, c.deepest)
+                (Atom::InCoverageF(c.term, tup_var(*v)?), Sort::Bool, c.ref_free)
             }
             Atom::InCoverageG(e, v) => {
                 let c = arg(e, Sort::Addr)?;
-                (Atom::InCoverageG(c.term, tup_var(*v)?), Sort::Bool, c.ref_free, c.deepest)
+                (Atom::InCoverageG(c.term, tup_var(*v)?), Sort::Bool, c.ref_free)
             }
         };
-        Ok(Checked { term: Arc::new(Term::Atom(atom)), sort, ref_free, deepest })
+        Ok(Checked { term: Arc::new(Term::Atom(atom)), sort, ref_free })
     }
 
     /// A binary prim over two children of one sort, `(operand, result)` in
@@ -767,7 +752,6 @@ impl<'a> Checker<'a> {
             term: Arc::new(Term::Prim(mk(cx.term, cy.term))),
             sort,
             ref_free: cx.ref_free && cy.ref_free,
-            deepest: cx.deepest.max(cy.deepest),
         })
     }
 
@@ -782,12 +766,7 @@ impl<'a> Checker<'a> {
     ) -> Result<Checked, TypeError> {
         let (operand, sort) = sorts;
         let cx = self.sub(ctx, x, operand, depth)?;
-        Ok(Checked {
-            term: Arc::new(Term::Prim(mk(cx.term))),
-            sort,
-            ref_free: cx.ref_free,
-            deepest: cx.deepest,
-        })
+        Ok(Checked { term: Arc::new(Term::Prim(mk(cx.term))), sort, ref_free: cx.ref_free })
     }
 
     fn check_prim(&self, ctx: &Ctx, p: &Prim, depth: u32) -> Result<Checked, TypeError> {
@@ -809,19 +788,17 @@ impl<'a> Checker<'a> {
                     term: Arc::new(Term::Prim(Prim::SetMem(cx.term, cs.term))),
                     sort: Sort::Bool,
                     ref_free: cx.ref_free && cs.ref_free,
-                    deepest: cx.deepest.max(cs.deepest),
                 })
             }
             Prim::MapGet(m, tr) => {
                 // V-PRIM admits ·[K] per registered class — cataloged-only,
                 // no behavior requirement; a non-BH3/absent key denotes ⊥.
-                let (k, _) = self.typeref(tr)?;
+                let k = self.guarded(tr, Guard::Cataloged)?;
                 let cm = self.sub(ctx, m, Sort::Map, d)?;
                 Ok(Checked {
                     term: Arc::new(Term::Prim(Prim::MapGet(cm.term, TypeRef::Concrete(k)))),
                     sort: Sort::OptAddr,
                     ref_free: cm.ref_free,
-                    deepest: cm.deepest,
                 })
             }
             Prim::Def(x) => {
@@ -834,7 +811,6 @@ impl<'a> Checker<'a> {
                     term: Arc::new(Term::Prim(Prim::Def(c.term))),
                     sort: Sort::Bool,
                     ref_free: c.ref_free,
-                    deepest: c.deepest,
                 })
             }
         }
@@ -849,23 +825,18 @@ impl<'a> Checker<'a> {
     pub(crate) fn check_dom(&self, ctx: &Ctx, dm: &Dom, depth: u32) -> Result<CheckedDom, TypeError> {
         self.enter(depth)?;
         let d = depth + 1;
-        let leaf = |dom: Dom, elem: Sort| CheckedDom {
-            dom: Arc::new(dom),
-            elem,
-            ref_free: true,
-            deepest: depth,
-        };
+        let leaf = |dom: Dom, elem: Sort| CheckedDom { dom: Arc::new(dom), elem, ref_free: true };
         match dm {
             Dom::MembersDom(tr) => {
-                let (k, _) = self.typeref(tr)?;
+                let k = self.guarded(tr, Guard::Cataloged)?;
                 Ok(leaf(Dom::MembersDom(TypeRef::Concrete(k)), Sort::Addr))
             }
             Dom::ActiveSlice(tr) => {
-                let (k, _) = self.typeref(tr)?;
+                let k = self.guarded(tr, Guard::Cataloged)?;
                 Ok(leaf(Dom::ActiveSlice(TypeRef::Concrete(k)), Sort::Tup))
             }
             Dom::AuditSlice(tr) => {
-                let (k, _) = self.typeref(tr)?;
+                let k = self.guarded(tr, Guard::Cataloged)?;
                 Ok(leaf(Dom::AuditSlice(TypeRef::Concrete(k)), Sort::Tup))
             }
             Dom::LinkDom => Ok(leaf(Dom::LinkDom, Sort::Addr)),
@@ -878,7 +849,6 @@ impl<'a> Checker<'a> {
                     dom: Arc::new(Dom::Filter { dom: base.dom, var: *var, pred: c.term }),
                     elem: base.elem,
                     ref_free: base.ref_free && c.ref_free,
-                    deepest: base.deepest.max(c.deepest),
                 })
             }
             Dom::SetTerm(t) => {
@@ -887,7 +857,6 @@ impl<'a> Checker<'a> {
                     dom: Arc::new(Dom::SetTerm(c.term)),
                     elem: Sort::Addr,
                     ref_free: c.ref_free,
-                    deepest: c.deepest,
                 })
             }
         }

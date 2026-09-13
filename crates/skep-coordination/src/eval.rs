@@ -125,8 +125,10 @@ fn tuple_var<'e>(env: &'e Env, v: &VarId) -> &'e Tuple {
 impl<'a, W> EvalCtx<'a, W> {
     /// UV `K_queried` self-exclusion: `∃ J ∈ Φ, J ≠ K :: is_k(J, x)` — the
     /// per-type BH1 filter (D2), fixed active, never M7's aggregate
-    /// `is_filtered`.
-    fn filtered_other(&self, k_class: &CoverageClass, x: &Tumbler) -> bool {
+    /// `is_filtered`. Takes the queried KEY, so the class lookup a UV rewrite
+    /// needs is made here rather than at each of its four sites.
+    fn filtered_other(&self, k: &TypeKey, x: &Tumbler) -> bool {
+        let k_class = self.catalog.class_of(k);
         self.catalog.bh1().iter().any(|(j_class, j_endset)| {
             j_class != k_class && self.links.is_k(j_endset, x, View::Active)
         })
@@ -147,13 +149,11 @@ impl<'a, W> EvalCtx<'a, W> {
                 .into_iter()
                 .map(|a| a.tumbler().clone())
                 .collect(),
-            View::Default => {
-                let k_class = self.catalog.class_of(k).clone();
-                self.members_at(k, View::Active)
-                    .into_iter()
-                    .filter(|x| !self.filtered_other(&k_class, x))
-                    .collect()
-            }
+            View::Default => self
+                .members_at(k, View::Active)
+                .into_iter()
+                .filter(|x| !self.filtered_other(k, x))
+                .collect(),
         }
     }
 
@@ -178,13 +178,11 @@ impl<'a, W> EvalCtx<'a, W> {
                 }
                 out
             }
-            View::Default => {
-                let k_class = self.catalog.class_of(k).clone();
-                self.targets_of_at(k, x, View::Active)
-                    .into_iter()
-                    .filter(|g| !self.filtered_other(&k_class, g))
-                    .collect()
-            }
+            View::Default => self
+                .targets_of_at(k, x, View::Active)
+                .into_iter()
+                .filter(|g| !self.filtered_other(k, g))
+                .collect(),
         }
     }
 
@@ -205,8 +203,7 @@ impl<'a, W> EvalCtx<'a, W> {
         if self.view != View::Default {
             return set;
         }
-        let k_class = self.catalog.class_of(k).clone();
-        set.into_iter().filter(|e| !self.filtered_other(&k_class, e)).collect()
+        set.into_iter().filter(|e| !self.filtered_other(k, e)).collect()
     }
 
     /// BH3 join: `target_of` across the catalog's BH3-attached Binary
@@ -362,11 +359,7 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
             let x = as_addr(eval_term(cx, env, e));
             let chain = cx.links.chain(&k.0, &x);
             let seq: im::Vector<Address> = if cx.view == View::Default {
-                let k_class = cx.catalog.class_of(k).clone();
-                chain
-                    .into_iter()
-                    .filter(|a| !cx.filtered_other(&k_class, a.tumbler()))
-                    .collect()
+                chain.into_iter().filter(|a| !cx.filtered_other(k, a.tumbler())).collect()
             } else {
                 chain.into_iter().collect()
             };

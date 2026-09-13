@@ -166,24 +166,15 @@ fn reads(fp: Footprint) -> Analysis {
     Analysis { fp, st: false, sf: false, grow: false }
 }
 
-/// A stability-threshold term: an ℕ literal, widened (ST⁺, `certify_stable`
-/// only) to a bound ℕ parameter — the one PD0 widening (§Internal 3).
+/// A stability-threshold term: an ℕ literal, widened (ST⁺ — set only by
+/// [`st_plus`]) to a bound ℕ parameter — the one PD0 widening (§Internal 3).
 fn threshold_ok(t: &Term, widen: bool) -> bool {
     matches!(t, Term::Lit(Lit::Nat(_))) || (widen && matches!(t, Term::Var(_)))
 }
 
-/// A default-view term's non-core collections additionally read the BH1
-/// filter slices (the UV drop); active/audit read their named slice.
-fn effective_collection_view(view: View) -> View {
-    match view {
-        View::Default => View::Default,
-        _ => View::Active,
-    }
-}
-
 /// One classification's fixed context: the catalog, the term view (PC3 —
 /// binds the view-parameterized constituents), and the ST⁺ threshold
-/// widening (certification only). The fused FP + PD0 pass runs over it.
+/// widening (set only by [`st_plus`]). The fused FP + PD0 pass runs over it.
 /// Precondition on every input: ref-free, every `TypeRef` concrete (the
 /// evaluable projection / a flat expansion).
 pub(crate) struct Analyzer<'a> {
@@ -193,25 +184,28 @@ pub(crate) struct Analyzer<'a> {
 }
 
 impl Analyzer<'_> {
-    /// Slice footprint of a typed read at a view: audit reads `L_K`; active
-    /// (and default) reads the active slice (⊆ `L_K ∪ L_R`); default
-    /// additionally reads each BH1 type's active filter slice (the UV
-    /// rewrite's footprint).
+    /// The slice a read of class `k` at `view` touches: audit reads `L_K`;
+    /// active and default read the active slice (⊆ `L_K ∪ L_R`, so any
+    /// retraction can shrink it).
     fn slice_fp(&self, k: &TypeKey, view: View) -> Footprint {
         let class = self.catalog.class_of(k).clone();
         let mut fp = Footprint::default();
         match view {
-            View::Audit => {
-                fp.audit.insert(class);
-            }
-            View::Active => {
-                fp.active.insert(class);
-            }
-            View::Default => {
-                fp.active.insert(class);
-                for (j, _) in self.catalog.bh1() {
-                    fp.active.insert(j.clone());
-                }
+            View::Audit => fp.audit.insert(class),
+            View::Active | View::Default => fp.active.insert(class),
+        };
+        fp
+    }
+
+    /// The BH1 filter slices a `default`-view term's UV rewrite consults per
+    /// element (`EvalCtx::filtered_other`, fixed active); empty at `active`
+    /// and `audit`, where no rewrite runs. Unioned into exactly the reads the
+    /// evaluator UV-rewrites, so which those are is one token per arm.
+    fn bh1_fp(&self) -> Footprint {
+        let mut fp = Footprint::default();
+        if self.view == View::Default {
+            for (j, _) in self.catalog.bh1() {
+                fp.active.insert(j.clone());
             }
         }
         fp
@@ -324,32 +318,39 @@ impl Analyzer<'_> {
         match a {
             // Audit is_K at a step-constant argument is ST (audit membership is
             // monotone); a state-reading argument lands in Neither.
+            //
+            // `is_K` is a verdict atom: UV never rewrites it (`EvalCtx::is_k_at`
+            // reads the active slice at `default`), so the BH1 charge here is
+            // deliberately CONSERVATIVE — the footprint is read only as a
+            // superset (`armed_by`, step-constancy), and the armer graph's
+            // Default self-loop case is pinned on it.
             Atom::IsK(tr, e) => {
                 let ae = self.term(e);
                 let st = view == View::Audit && ae.fp.is_empty();
-                let fp = ae.fp.union(&self.slice_fp(tr.key(), view));
+                let fp = ae.fp.union(&self.slice_fp(tr.key(), view)).union(&self.bh1_fp());
                 Analysis { st, sf: false, grow: false, fp }
             }
             // M_K in an audit-view term is a grow-only set value (V-AUD).
             Atom::Members(tr) => {
-                let fp = self.slice_fp(tr.key(), view);
+                let fp = self.slice_fp(tr.key(), view).union(&self.bh1_fp());
                 Analysis { grow: view == View::Audit, st: false, sf: false, fp }
             }
             Atom::TargetsOf(tr, e) => {
                 let ae = self.term(e);
                 let grow = view == View::Audit && ae.fp.is_empty();
-                let fp = ae.fp.union(&self.slice_fp(tr.key(), view));
+                let fp = ae.fp.union(&self.slice_fp(tr.key(), view)).union(&self.bh1_fp());
                 Analysis { grow, st: false, sf: false, fp }
             }
             Atom::IsFiltered(tr, e) => {
                 let ae = self.term(e);
                 reads(ae.fp.union(&self.slice_fp(tr.key(), View::Active)))
             }
-            // BH2/BH3 collections: active-slice reads — Neither; at a default
-            // term the UV drop additionally reads the BH1 filter slices.
+            // BH2/BH3 collections: fixed-active reads — Neither — and the
+            // evaluator UV-rewrites them, so a default term's footprint carries
+            // the BH1 slices too.
             Atom::Succs(tr, e) | Atom::Chain(tr, e) | Atom::SourcesTo(tr, e) => {
                 let ae = self.term(e);
-                reads(ae.fp.union(&self.slice_fp(tr.key(), effective_collection_view(view))))
+                reads(ae.fp.union(&self.slice_fp(tr.key(), View::Active)).union(&self.bh1_fp()))
             }
             // Verdict/traversal atoms (tip/is_in_chain) and the single-target
             // projection are never UV-rewritten: fixed active.
@@ -371,8 +372,9 @@ impl Analyzer<'_> {
                 fp.targets_keyed = true;
                 reads(fp)
             }
-            // BH4: fixed active + the home-wide frontier; a default-term `stale`
-            // collection additionally UV-drops (BH1 slices in its footprint).
+            // BH4: fixed active + the home-wide frontier. `age` is a
+            // projection the evaluator never UV-rewrites; the `stale`
+            // collection it does.
             Atom::Age(tr, e) => {
                 let ae = self.term(e);
                 let mut fp = ae.fp.union(&self.slice_fp(tr.key(), View::Active));
@@ -381,7 +383,8 @@ impl Analyzer<'_> {
             }
             Atom::Stale(tr, e) => {
                 let ae = self.term(e);
-                let mut fp = ae.fp.union(&self.slice_fp(tr.key(), effective_collection_view(view)));
+                let mut fp =
+                    ae.fp.union(&self.slice_fp(tr.key(), View::Active)).union(&self.bh1_fp());
                 fp.home_frontier = true;
                 reads(fp)
             }
@@ -467,7 +470,7 @@ impl Analyzer<'_> {
     pub(crate) fn dom(&self, d: &Dom) -> DomAnalysis {
         match d {
             Dom::MembersDom(tr) => DomAnalysis {
-                fp: self.slice_fp(tr.key(), self.view),
+                fp: self.slice_fp(tr.key(), self.view).union(&self.bh1_fp()),
                 grow: self.view == View::Audit,
             },
             Dom::ActiveSlice(tr) => {
@@ -540,6 +543,20 @@ pub(crate) fn view_independent(t: &Term) -> bool {
     let mut scan = ViewScan { ok: true };
     scan.term(t);
     scan.ok
+}
+
+// ───────────────────────────── ST⁺ ─────────────────────────────
+
+/// ST⁺ — the certification-strength ⊤-stability judgment (§Internal 3): PD0
+/// over a FLAT reference expansion (ST⁺ is not compositional over
+/// references), with the aggregate threshold widened to a bound ℕ parameter
+/// — the one PD0 widening, and the reason it is not `classify`'s. Judged at
+/// a fixed view: `certify_stable` admits only view-independent expansions,
+/// so the classification is view-invariant. Γ_D parameters read as bound
+/// constants (a free `Var` has an empty footprint). Precondition as the
+/// `Analyzer`'s: ref-free input.
+pub(crate) fn st_plus(catalog: &TypeCatalog, t: &Term) -> bool {
+    Analyzer { catalog, view: View::Audit, widen: true }.term(t).st
 }
 
 // ───────────────────── the certified-Marker spelling ─────────────────────

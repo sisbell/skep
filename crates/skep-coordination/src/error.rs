@@ -94,14 +94,14 @@ impl fmt::Display for TypeError {
                 write!(f, "type_check: expected sort {expected:?}, found {found:?}")
             }
             TypeError::BehaviorMissing { ty, needs } => {
-                write!(f, "type_check: type {ty:?} does not declare behavior {needs:?}")
+                write!(f, "type_check: type {ty} does not declare behavior {needs:?}")
             }
             TypeError::UnservedWalkClass(ty) => write!(
                 f,
-                "type_check: BH2 walk atoms are served only at the shipped Supersedes class, not {ty:?}"
+                "type_check: BH2 walk atoms are served only at the shipped Supersedes class, not {ty}"
             ),
             TypeError::UnregisteredType(ty) => {
-                write!(f, "type_check: type key {ty:?} is not a cataloged class")
+                write!(f, "type_check: type key {ty} is not a cataloged class")
             }
             TypeError::NoReverseLookupClass => f.write_str(
                 "type_check: targets_keyed is outside the vocabulary — no cataloged class attaches BH3",
@@ -451,14 +451,14 @@ impl fmt::Display for RuleError {
                 "register_rule: the Def trigger's flat reference expansion exceeds MAX_TERM_NODES nodes",
             ),
             RuleError::BadMarkerType(ty) => {
-                write!(f, "register_rule: Marker type {ty:?} is not a cataloged Unary class")
+                write!(f, "register_rule: Marker type {ty} is not a cataloged Unary class")
             }
             RuleError::NonIdemMarkerType(ty) => {
-                write!(f, "register_rule: Marker type {ty:?} is not idempotent (idem⊤ required)")
+                write!(f, "register_rule: Marker type {ty} is not idempotent (idem⊤ required)")
             }
             RuleError::PredLayerMarkerType(ty) => write!(
                 f,
-                "register_rule: Marker type {ty:?} is a PredLayer class (pdef/pd_stable), reserved by PR-DISC"
+                "register_rule: Marker type {ty} is a PredLayer class (pdef/pd_stable), reserved by PR-DISC"
             ),
         }
     }

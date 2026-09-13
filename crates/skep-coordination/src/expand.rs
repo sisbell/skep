@@ -148,8 +148,8 @@ impl Rename<'_> {
 }
 
 impl Rewrite for Rename<'_> {
-    fn var_use(&mut self, v: &VarId) -> VarId {
-        self.map.get(v).copied().unwrap_or(*v)
+    fn var_use(&mut self, v: VarId) -> VarId {
+        self.map.get(&v).copied().unwrap_or(v)
     }
 
     /// The binding formers: out-of-scope children first, under the current

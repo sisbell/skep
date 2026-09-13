@@ -35,7 +35,7 @@ use crate::error::{CertifyError, DefineError, EvalError, RegisterError, RetractE
 use crate::eval::eval_term;
 use crate::expand::{Expander, ExpansionTooLarge};
 use crate::memo::DefStatus;
-use crate::value::{holds_addresses, value_sort, Env, SignedTerm, Sort, Value};
+use crate::value::{Env, SignedTerm, Sort, Value};
 use crate::CoordinationWorld;
 
 /// Why a stored def could not be read back as a signed term: no `Val` at the
@@ -211,7 +211,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         if args
             .iter()
             .zip(params)
-            .any(|(arg, (_, s))| value_sort(arg) != *s || !holds_addresses(arg))
+            .any(|(arg, (_, s))| arg.sort() != *s || !arg.holds_addresses())
         {
             return Err(EvalError::ArgSortMismatch);
         }

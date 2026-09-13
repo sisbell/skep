@@ -22,7 +22,7 @@ use crate::eval::{eval_term, DefSource, EvalCtx};
 use crate::guest::GuestLinks;
 use crate::memo::{Breach, DefMemo, DefStatus};
 use crate::rule::CheckedRule;
-use crate::value::{holds_addresses, value_sort, Env, Signature, SignedTerm, Sort, Value};
+use crate::value::{Env, Signature, SignedTerm, Sort, Value};
 use crate::CoordinationWorld;
 
 /// The M5 `Vstream` factory the engine injects: a borrow-scoped op handle
@@ -147,7 +147,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     ) -> EvalCtx<'a, W> {
         EvalCtx {
             catalog: &self.catalog,
-            links: GuestLinks::new(w, w.links(), &*self.guest),
+            links: GuestLinks::new(w, &*self.guest),
             m3: w.m3(),
             view,
             defs,
@@ -251,11 +251,11 @@ impl<W: CoordinationWorld> Coordinator<W> {
         for (v, s) in t.params() {
             let bound = env.get(v);
             assert!(
-                bound.is_some_and(|val| value_sort(val) == *s),
+                bound.is_some_and(|val| val.sort() == *s),
                 "eval precondition violated: Γ_D parameter {v:?} unbound or mis-sorted in env (expected {s:?})"
             );
             assert!(
-                bound.is_some_and(holds_addresses),
+                bound.is_some_and(Value::holds_addresses),
                 "eval precondition violated: AddrSet parameter {v:?} holds a tumbler that is not a T4-valid address"
             );
         }

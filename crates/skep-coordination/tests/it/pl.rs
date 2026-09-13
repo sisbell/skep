@@ -112,6 +112,74 @@ fn rejections_display_and_chain_to_their_cause() {
     assert!(root.source().is_none());
 }
 
+/// A rejection naming a type key reads as the addresses the key denotes, not
+/// as a dump of its spans — the rejection a caller building a `TypeKey` by
+/// hand meets most. An endset denoting no address (no span of it unit-depth)
+/// has no addresses to name, and says so.
+#[test]
+fn a_rejection_names_a_type_key_by_the_addresses_it_denotes() {
+    use skep_address::{Span, Tumbler};
+
+    let k = kernel();
+    let c = coord(&k);
+    let miss = c
+        .type_check(vec![], members(&uncataloged_ty(20)))
+        .expect_err("ra(20) is not a cataloged class");
+    let rendered = miss.to_string();
+    assert!(rendered.contains(&format!("{{{}}}", ra(20))), "{rendered}");
+    assert!(!rendered.contains("Span") && !rendered.contains("Tumbler"), "{rendered}");
+
+    // A span two element-positions wide is level-uniform and not unit-depth,
+    // so it denotes nothing: the key names a span count instead.
+    let start: Tumbler = t(&[1, 0, 1, 0, 1]);
+    let wide = Span::new(start, t(&[0, 0, 0, 0, 2])).expect("T12-valid");
+    let key = TypeKey(Endset::from_spans([wide]));
+    assert!(!key.0.is_address_denoting());
+    assert_eq!(key.to_string(), "<1 non-denoting span(s)>");
+}
+
+/// A caller builds a `Value` from this crate alone: every payload a variant
+/// names — M1's tumbler and numeral, `im`'s persistent collections, M7's
+/// coverage class — is reachable through `skep_coordination`'s own paths,
+/// with no second manifest to version-match. And a value answers its own
+/// sort, which is what `eval`'s door and `evaluate_def`'s argument check
+/// compare against Γ_D.
+#[test]
+fn a_value_is_buildable_and_self_describing_through_this_crate_s_own_paths() {
+    use skep_coordination::im::{HashMap as ImMap, OrdSet, Vector};
+    use skep_coordination::{Address, CoverageClass, Nat as ReNat, Tumbler as ReTumbler};
+
+    let addr: Address = ca(1);
+    let tumbler: ReTumbler = addr.tumbler().clone();
+    let set = Value::AddrSet(OrdSet::unit(tumbler));
+    let shapes = [
+        (Value::Bool(true), Sort::Bool),
+        (Value::Addr(addr.clone()), Sort::Addr),
+        (set.clone(), Sort::AddrSet),
+        (Value::OptAddr(None), Sort::OptAddr),
+        (Value::AddrSeq(Vector::unit(addr.clone())), Sort::AddrSeq),
+        (Value::Map(ImMap::<CoverageClass, Address>::new()), Sort::Map),
+        (Value::Nat(ReNat::from(7u32)), Sort::Nat),
+        (Value::OptNat(Some(ReNat::from(7u32))), Sort::OptNat),
+    ];
+    for (val, sort) in &shapes {
+        assert_eq!(val.sort(), *sort, "{val:?}");
+    }
+
+    // The re-exported `OrdSet<Tumbler>` IS the type the doors accept.
+    let k = kernel();
+    let c = coord(&k);
+    let tt = c
+        .type_check(
+            vec![(v(1), Sort::AddrSet)],
+            nat_eq(count(Dom::SetTerm(at(var(1)))), lit_nat(1)),
+        )
+        .expect("|s| = 1");
+    let (start, _) = c.define_predicate(&doc1(), &tt).expect("define");
+    let s = k.snapshot();
+    assert_eq!(c.evaluate_def(&start, &[set], View::Active, &s), Ok(Value::Bool(true)));
+}
+
 // ─────────────────────────────── typing ───────────────────────────────
 
 /// Γ_D is part of the checking judgment: unbound vars, the def-path/

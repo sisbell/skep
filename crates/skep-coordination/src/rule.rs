@@ -169,7 +169,9 @@ pub struct Occurrence {
 /// Deliberately exhaustive (no `#[non_exhaustive]`): the three outcomes are
 /// closed by the quiescence theory — a fire either commits, is absorbed, or
 /// finds nothing to do — and a driver's exhaustive match is what keeps its
-/// accounting complete.
+/// accounting complete. `#[must_use]` on the type, for the same accounting:
+/// a dropped outcome is a fire whose effect nothing recorded.
+#[must_use]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FireOutcome {
     NoOp,
@@ -189,7 +191,10 @@ pub enum FireOutcome {
 ///
 /// Deliberately exhaustive, as `FireOutcome` is: a step fires, dedups, fails,
 /// finds its pick a no-op, or finds nothing enabled — the scheduler's whole
-/// case split, which a driver's exhaustive match should carry.
+/// case split, which a driver's exhaustive match should carry. `#[must_use]`
+/// on the type: a step's outcome is the driver's only record of what the fire
+/// did, and a `Failed` dropped as a statement takes its `FireError` with it.
+#[must_use]
 #[derive(Debug)]
 pub enum StepOutcome {
     Fired { rule: RuleId, arg: Address, effect: Address, seq: Seq },

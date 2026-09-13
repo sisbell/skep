@@ -37,8 +37,8 @@ pub(crate) trait Rewrite {
 
     /// A variable USE — a `Var` node or a V-TUP atom's tuple variable —
     /// never a binder.
-    fn var_use(&mut self, v: &VarId) -> VarId {
-        *v
+    fn var_use(&mut self, v: VarId) -> VarId {
+        v
     }
 }
 
@@ -53,7 +53,7 @@ fn arcd<R: Rewrite + ?Sized>(r: &mut R, d: &ArcDom) -> ArcDom {
 /// The default term rewrite: every child through `r`, the node rebuilt.
 pub(crate) fn rewrite_term<R: Rewrite + ?Sized>(r: &mut R, t: &Term) -> Term {
     match t {
-        Term::Var(v) => Term::Var(r.var_use(v)),
+        Term::Var(v) => Term::Var(r.var_use(*v)),
         Term::Lit(l) => Term::Lit(l.clone()),
         Term::Atom(a) => Term::Atom(match a {
             Atom::IsK(tr, e) => Atom::IsK(r.typeref(tr), arc(r, e)),
@@ -70,11 +70,11 @@ pub(crate) fn rewrite_term<R: Rewrite + ?Sized>(r: &mut R, t: &Term) -> Term {
             Atom::Age(tr, e) => Atom::Age(r.typeref(tr), arc(r, e)),
             Atom::Stale(tr, e) => Atom::Stale(r.typeref(tr), arc(r, e)),
             Atom::IsDoc(e) => Atom::IsDoc(arc(r, e)),
-            Atom::TupAddr(v) => Atom::TupAddr(r.var_use(v)),
-            Atom::TupAddrsF(v) => Atom::TupAddrsF(r.var_use(v)),
-            Atom::TupAddrsG(v) => Atom::TupAddrsG(r.var_use(v)),
-            Atom::InCoverageF(e, v) => Atom::InCoverageF(arc(r, e), r.var_use(v)),
-            Atom::InCoverageG(e, v) => Atom::InCoverageG(arc(r, e), r.var_use(v)),
+            Atom::TupAddr(v) => Atom::TupAddr(r.var_use(*v)),
+            Atom::TupAddrsF(v) => Atom::TupAddrsF(r.var_use(*v)),
+            Atom::TupAddrsG(v) => Atom::TupAddrsG(r.var_use(*v)),
+            Atom::InCoverageF(e, v) => Atom::InCoverageF(arc(r, e), r.var_use(*v)),
+            Atom::InCoverageG(e, v) => Atom::InCoverageG(arc(r, e), r.var_use(*v)),
         }),
         Term::Prim(p) => Term::Prim(match p {
             Prim::AddrEq(x, y) => Prim::AddrEq(arc(r, x), arc(r, y)),

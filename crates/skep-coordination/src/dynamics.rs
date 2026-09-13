@@ -16,7 +16,12 @@ use crate::walk::{visit_dom, visit_term, Visit};
 /// `classify`'s output — all static, sound-but-incomplete. `footprint`/
 /// `stability`/`active_exceptions` are RELATIVE TO `classify`'s view argument
 /// (PC3); `view_independent` alone is view-agnostic (the PR-VIEW scan).
+///
+/// `#[non_exhaustive]`: emitted, never constructed by a caller — the analyses
+/// are a vocabulary that grows (as `CertifyError`'s static refusals do), and
+/// a further report should be an addition rather than a broken build.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Dynamics {
     pub footprint: Footprint,
     pub stability: Stability,
@@ -114,12 +119,8 @@ impl Footprint {
     }
 
     fn union(mut self, other: &Footprint) -> Footprint {
-        for c in other.audit.iter() {
-            self.audit.insert(c.clone());
-        }
-        for c in other.active.iter() {
-            self.active.insert(c.clone());
-        }
+        self.audit.extend(other.audit.iter().cloned());
+        self.active.extend(other.active.iter().cloned());
         self.all_audit |= other.all_audit;
         self.residence |= other.residence;
         self.home_frontier |= other.home_frontier;
@@ -129,8 +130,10 @@ impl Footprint {
 }
 
 /// The three active-view exceptions, emitted explicitly ("name them or be
-/// surprised").
+/// surprised"). `#[non_exhaustive]` for [`Dynamics`]'s reason: emitted, never
+/// constructed by a caller, and a fourth exception named is an addition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ActiveExceptions {
     /// (i) any R-deposit can shrink an active slice.
     pub retraction_shrinks: bool,
@@ -144,6 +147,7 @@ pub struct ActiveExceptions {
 /// for set-valued nodes — membership in PD0's grow-only closure. PD0's other
 /// closure property, step-constancy, is the footprint's own
 /// ([`Footprint::is_step_constant`]) rather than a field here.
+#[derive(Debug, Clone)]
 pub(crate) struct Analysis {
     pub(crate) fp: Footprint,
     pub(crate) st: bool,
@@ -154,6 +158,7 @@ pub(crate) struct Analysis {
 /// A domain's analysis: its footprint and its membership in PD0's grow-only
 /// closure — the two facts the quantifier, fold and `Filter` rules read of a
 /// domain, and the certification lint's leg (c).
+#[derive(Debug, Clone)]
 pub(crate) struct DomAnalysis {
     pub(crate) fp: Footprint,
     pub(crate) grow_only: bool,
@@ -172,24 +177,35 @@ fn reads(fp: Footprint) -> Analysis {
     Analysis { fp, st: false, sf: false, grow_only: false }
 }
 
-/// A stability-threshold term: an ℕ literal, widened (ST⁺ — set only by
-/// [`st_plus`]) to a bound ℕ parameter — the one PD0 widening (§Internal 3).
-fn threshold_ok(t: &Term, widen: bool) -> bool {
-    matches!(t, Term::Lit(Lit::Nat(_))) || (widen && matches!(t, Term::Var(_)))
-}
-
 /// One classification's fixed context: the catalog, the term view (PC3 —
 /// binds the view-parameterized constituents), and the ST⁺ threshold
-/// widening (set only by [`st_plus`]). The fused FP + PD0 pass runs over it.
-/// Precondition on every input: ref-free, every `TypeRef` concrete (the
-/// evaluable projection / a flat expansion).
+/// widening. The fused FP + PD0 pass runs over it. Precondition on every
+/// input: ref-free, every `TypeRef` concrete (the evaluable projection / a
+/// flat expansion).
+///
+/// The fields are private and [`Analyzer::new`] leaves `widen` false, so
+/// [`st_plus`] — the one judgment PD0's widening belongs to — is the only
+/// site that can set it, and no analysis outside this module can certify at
+/// a strength `classify` would refuse.
 pub(crate) struct Analyzer<'a> {
-    pub(crate) catalog: &'a TypeCatalog,
-    pub(crate) view: View,
-    pub(crate) widen: bool,
+    catalog: &'a TypeCatalog,
+    view: View,
+    widen: bool,
 }
 
-impl Analyzer<'_> {
+impl<'a> Analyzer<'a> {
+    /// The classification analyzer at `view`: PD0 without the ST⁺ threshold
+    /// widening, which only [`st_plus`] applies.
+    pub(crate) fn new(catalog: &'a TypeCatalog, view: View) -> Analyzer<'a> {
+        Analyzer { catalog, view, widen: false }
+    }
+
+    /// A stability-threshold term: an ℕ literal, widened under ST⁺ to a bound
+    /// ℕ parameter — the one PD0 widening (§Internal 3).
+    fn threshold_ok(&self, t: &Term) -> bool {
+        matches!(t, Term::Lit(Lit::Nat(_))) || (self.widen && matches!(t, Term::Var(_)))
+    }
+
     /// The stored slice a read of class `k` touches: the audit slice is
     /// `L_K`; the active slice is ⊆ `L_K ∪ L_R`, so any retraction can shrink
     /// it. Which slice a term's VIEW reads is [`Slice::of`]'s statement, made
@@ -453,7 +469,7 @@ impl Analyzer<'_> {
                     match t {
                         Term::Count(d) => {
                             let ad = self.dom(d);
-                            let bound = threshold_ok(other, self.widen) && ad.grow_only;
+                            let bound = self.threshold_ok(other) && ad.grow_only;
                             (step_constant(ad.fp), bound)
                         }
                         _ => (self.term(t), false),
@@ -600,7 +616,7 @@ pub(crate) fn negated_membership(t: &Term, param: VarId) -> Option<&TypeKey> {
 
 /// Assemble a `Dynamics` from one analysis pass at `view`.
 pub(crate) fn classify_term(catalog: &TypeCatalog, view: View, t: &Term) -> Dynamics {
-    let analysis = Analyzer { catalog, view, widen: false }.term(t);
+    let analysis = Analyzer::new(catalog, view).term(t);
     let stability = match (analysis.st, analysis.sf) {
         (true, true) => Stability::StSf,
         (true, false) => Stability::StOnly,

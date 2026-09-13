@@ -232,6 +232,27 @@ enum Guard {
     Walk,
 }
 
+/// A prim's typing rule: every operand at `operand`, the node at `result`.
+/// Named per V-PRIM family below, so a call site cannot transpose the two —
+/// as an unnamed `(Sort, Sort)` it could, and a transposition retypes the
+/// operator with nothing to object.
+#[derive(Clone, Copy)]
+struct PrimRule {
+    operand: Sort,
+    result: Sort,
+}
+
+/// `= ≼ T1` — an address comparison.
+const ADDR_PRED: PrimRule = PrimRule { operand: Sort::Addr, result: Sort::Bool };
+/// `= ∅` and set `=` — a ℘_fin(T) test.
+const SET_PRED: PrimRule = PrimRule { operand: Sort::AddrSet, result: Sort::Bool };
+/// ℕ `=` and `≤`.
+const NAT_PRED: PrimRule = PrimRule { operand: Sort::Nat, result: Sort::Bool };
+/// ℕ `+`.
+const NAT_OP: PrimRule = PrimRule { operand: Sort::Nat, result: Sort::Nat };
+/// `elems` — Seq_fin(T) → ℘_fin(T).
+const SEQ_ELEMS: PrimRule = PrimRule { operand: Sort::AddrSeq, result: Sort::AddrSet };
+
 /// The checking pass. `resolve` is the referent resolver WT-ref consults —
 /// the only external consultation (it reads the immutable def memo, so even
 /// ref-bearing type-checking is "decided once") — asked at the depth the
@@ -307,18 +328,25 @@ impl<'a> Checker<'a> {
             TypeRef::Concrete(k) => k,
         };
         let entry = self.catalog.get(k).ok_or_else(|| TypeError::UnregisteredType(k.clone()))?;
-        let (needs, narrowed) = match guard {
-            Guard::Cataloged => (None, false),
-            Guard::Needs(b) => (Some(b), false),
-            Guard::Walk => (Some(Behavior::Walk), true),
-        };
-        if let Some(needs) = needs {
-            if !entry.reg.behaviors.contains(&needs) {
-                return Err(TypeError::BehaviorMissing { ty: k.clone(), needs });
+        let declares = |needs: Behavior| -> Result<(), TypeError> {
+            if entry.reg.behaviors.contains(&needs) {
+                Ok(())
+            } else {
+                Err(TypeError::BehaviorMissing { ty: k.clone(), needs })
             }
-        }
-        if narrowed && *k != self.catalog.supersedes_key {
-            return Err(TypeError::UnservedWalkClass(k.clone()));
+        };
+        match guard {
+            Guard::Cataloged => {}
+            Guard::Needs(b) => declares(b)?,
+            // The behavior speaks before the serving narrowing: a class with
+            // no `Walk` is `BehaviorMissing`, a Walk class M7 v1 does not
+            // serve is `UnservedWalkClass`.
+            Guard::Walk => {
+                declares(Behavior::Walk)?;
+                if *k != self.catalog.supersedes_key {
+                    return Err(TypeError::UnservedWalkClass(k.clone()));
+                }
+            }
         }
         Ok(k.clone())
     }
@@ -734,53 +762,55 @@ impl<'a> Checker<'a> {
         Ok(Checked { term: Arc::new(Term::Atom(atom)), sort, ref_free })
     }
 
-    /// A binary prim over two children of one sort, `(operand, result)` in
-    /// `sorts`, the node rebuilt through its constructor.
+    /// A binary prim over two children of one sort, the node rebuilt through
+    /// its constructor.
     fn prim2(
         &self,
         ctx: &Ctx,
         x: &ArcTerm,
         y: &ArcTerm,
         depth: u32,
-        sorts: (Sort, Sort),
+        rule: PrimRule,
         mk: fn(ArcTerm, ArcTerm) -> Prim,
     ) -> Result<Checked, TypeError> {
-        let (operand, sort) = sorts;
-        let cx = self.sub(ctx, x, operand, depth)?;
-        let cy = self.sub(ctx, y, operand, depth)?;
+        let cx = self.sub(ctx, x, rule.operand, depth)?;
+        let cy = self.sub(ctx, y, rule.operand, depth)?;
         Ok(Checked {
             term: Arc::new(Term::Prim(mk(cx.term, cy.term))),
-            sort,
+            sort: rule.result,
             ref_free: cx.ref_free && cy.ref_free,
         })
     }
 
-    /// A unary prim over one child, `(operand, result)` in `sorts`.
+    /// A unary prim over one child.
     fn prim1(
         &self,
         ctx: &Ctx,
         x: &ArcTerm,
         depth: u32,
-        sorts: (Sort, Sort),
+        rule: PrimRule,
         mk: fn(ArcTerm) -> Prim,
     ) -> Result<Checked, TypeError> {
-        let (operand, sort) = sorts;
-        let cx = self.sub(ctx, x, operand, depth)?;
-        Ok(Checked { term: Arc::new(Term::Prim(mk(cx.term))), sort, ref_free: cx.ref_free })
+        let cx = self.sub(ctx, x, rule.operand, depth)?;
+        Ok(Checked {
+            term: Arc::new(Term::Prim(mk(cx.term))),
+            sort: rule.result,
+            ref_free: cx.ref_free,
+        })
     }
 
     fn check_prim(&self, ctx: &Ctx, p: &Prim, depth: u32) -> Result<Checked, TypeError> {
         let d = depth + 1;
         match p {
-            Prim::AddrEq(a, b) => self.prim2(ctx, a, b, d, (Sort::Addr, Sort::Bool), Prim::AddrEq),
-            Prim::Prefix(a, b) => self.prim2(ctx, a, b, d, (Sort::Addr, Sort::Bool), Prim::Prefix),
-            Prim::T1Lt(a, b) => self.prim2(ctx, a, b, d, (Sort::Addr, Sort::Bool), Prim::T1Lt),
-            Prim::SetEq(a, b) => self.prim2(ctx, a, b, d, (Sort::AddrSet, Sort::Bool), Prim::SetEq),
-            Prim::NatEq(a, b) => self.prim2(ctx, a, b, d, (Sort::Nat, Sort::Bool), Prim::NatEq),
-            Prim::NatLe(a, b) => self.prim2(ctx, a, b, d, (Sort::Nat, Sort::Bool), Prim::NatLe),
-            Prim::NatAdd(a, b) => self.prim2(ctx, a, b, d, (Sort::Nat, Sort::Nat), Prim::NatAdd),
-            Prim::IsEmpty(s) => self.prim1(ctx, s, d, (Sort::AddrSet, Sort::Bool), Prim::IsEmpty),
-            Prim::Elems(q) => self.prim1(ctx, q, d, (Sort::AddrSeq, Sort::AddrSet), Prim::Elems),
+            Prim::AddrEq(a, b) => self.prim2(ctx, a, b, d, ADDR_PRED, Prim::AddrEq),
+            Prim::Prefix(a, b) => self.prim2(ctx, a, b, d, ADDR_PRED, Prim::Prefix),
+            Prim::T1Lt(a, b) => self.prim2(ctx, a, b, d, ADDR_PRED, Prim::T1Lt),
+            Prim::SetEq(a, b) => self.prim2(ctx, a, b, d, SET_PRED, Prim::SetEq),
+            Prim::NatEq(a, b) => self.prim2(ctx, a, b, d, NAT_PRED, Prim::NatEq),
+            Prim::NatLe(a, b) => self.prim2(ctx, a, b, d, NAT_PRED, Prim::NatLe),
+            Prim::NatAdd(a, b) => self.prim2(ctx, a, b, d, NAT_OP, Prim::NatAdd),
+            Prim::IsEmpty(s) => self.prim1(ctx, s, d, SET_PRED, Prim::IsEmpty),
+            Prim::Elems(q) => self.prim1(ctx, q, d, SEQ_ELEMS, Prim::Elems),
             Prim::SetMem(x, s) => {
                 let cx = self.sub(ctx, x, Sort::Addr, d)?;
                 let cs = self.sub(ctx, s, Sort::AddrSet, d)?;

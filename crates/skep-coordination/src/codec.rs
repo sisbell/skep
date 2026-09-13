@@ -19,6 +19,8 @@
 //! could refuse it — so what reaches the checker is already within the
 //! budgets the checker enforces for supplied terms.
 
+use std::sync::Arc;
+
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_links::Endset;
 
@@ -723,12 +725,12 @@ impl<'a> Rd<'a> {
         })
     }
 
-    fn arc_term(&mut self, depth: u32) -> Result<std::sync::Arc<Term>, Malformed> {
-        Ok(std::sync::Arc::new(self.term(depth)?))
+    fn arc_term(&mut self, depth: u32) -> Result<Arc<Term>, Malformed> {
+        Ok(Arc::new(self.term(depth)?))
     }
 
-    fn arc_dom(&mut self, depth: u32) -> Result<std::sync::Arc<Dom>, Malformed> {
-        Ok(std::sync::Arc::new(self.dom(depth)?))
+    fn arc_dom(&mut self, depth: u32) -> Result<Arc<Dom>, Malformed> {
+        Ok(Arc::new(self.dom(depth)?))
     }
 
     fn atom(&mut self, d: u32) -> Result<Atom, Malformed> {

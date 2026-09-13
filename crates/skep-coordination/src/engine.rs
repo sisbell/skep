@@ -71,7 +71,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         let (dom, trigger) = self.validate_rule(rule)?;
         // Leg (a): trigger ∈ SF at the declared view.
         let flat = self.trigger_expansion(&trigger);
-        let analyzer = Analyzer { catalog: &self.catalog, view: rule.view, widen: false };
+        let analyzer = Analyzer::new(&self.catalog, rule.view);
         let sf = analyzer.term(&flat).sf;
         // Leg (b): the Marker pattern — the emitted tuple's slot-coverage is
         // exactly the witness the trigger's negated membership names
@@ -527,7 +527,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
             .rules
             .iter()
             .map(|r| {
-                Analyzer { catalog: &self.catalog, view: r.view, widen: false }
+                Analyzer::new(&self.catalog, r.view)
                     .term(&self.trigger_expansion(&r.trigger))
                     .fp
             })

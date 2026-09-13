@@ -51,7 +51,7 @@ use std::slice::from_ref;
 
 use im::OrdSet;
 use skep_address::{document_of, Address, Tumbler};
-use skep_links::{Endset, LinkState, NotBh4, Pattern, Tip, Tuple, View, Visibility};
+use skep_links::{Endset, HasLinks, LinkState, NotBh4, Pattern, Tip, Tuple, View, Visibility};
 
 use crate::eval::lift;
 
@@ -101,6 +101,15 @@ impl From<Slice> for View {
 /// costs C map probes, not C scans of the claim set.
 type ForwardClaims = BTreeMap<Tumbler, OrdSet<Tumbler>>;
 
+/// One forward walk's result over the visible operative claims.
+struct Walk {
+    /// The traversed path from the starting node, inclusive of it.
+    path: Vec<Tumbler>,
+    /// The successor-free node the walk halted at — `None` at a branch or a
+    /// cycle, where the head is indeterminate.
+    sink: Option<Tumbler>,
+}
+
 /// M7's read surface at guest class, over the world of one pinned snapshot.
 pub(crate) struct GuestLinks<'a, W> {
     world: &'a W,
@@ -109,11 +118,17 @@ pub(crate) struct GuestLinks<'a, W> {
 }
 
 impl<'a, W> GuestLinks<'a, W> {
-    /// Over the world `w` of one pinned snapshot: its link slice, and the
-    /// guest-class predicate the coordinator lends (a borrow of the one
-    /// closure it holds — the same one every `LinkWriter` it builds runs at).
-    pub(crate) fn new(world: &'a W, state: &'a LinkState, guest: &'a Visibility<'a, W>) -> GuestLinks<'a, W> {
-        GuestLinks { world, state, guest }
+    /// Over the world of one pinned snapshot and the guest-class predicate
+    /// the coordinator lends (a borrow of the one closure it holds — the same
+    /// one every `LinkWriter` it builds runs at). The link slice is taken
+    /// FROM that world, so the tuples read and the homes they are filtered by
+    /// cannot come from two worlds; the bound sits here alone, the reads
+    /// below staying unbounded in `W`.
+    pub(crate) fn new(world: &'a W, guest: &'a Visibility<'a, W>) -> GuestLinks<'a, W>
+    where
+        W: HasLinks,
+    {
+        GuestLinks { world, state: world.links(), guest }
     }
 
     /// The guest-class test, at link-HOME identity — as M7's dedup gate
@@ -213,27 +228,25 @@ impl<'a, W> GuestLinks<'a, W> {
         fwd.get(x).cloned().unwrap_or_default()
     }
 
-    /// The visited-set-bounded forward walk (M7's own halting rule): the
-    /// traversed path from `x` (inclusive) and `Some(sink)` iff halted at a
-    /// successor-free node — a branch or a cycle yields `None`.
-    fn walk_sup(fwd: &ForwardClaims, x: &Tumbler) -> (Vec<Tumbler>, Option<Tumbler>) {
+    /// The visited-set-bounded forward walk (M7's own halting rule).
+    fn walk_sup(fwd: &ForwardClaims, x: &Tumbler) -> Walk {
         let mut path = vec![x.clone()];
         let mut visited = OrdSet::unit(x.clone());
         let mut node = x.clone();
         loop {
             let succs = Self::succs_operative(fwd, &node);
             match succs.len() {
-                0 => return (path, Some(node)),
+                0 => return Walk { path, sink: Some(node) },
                 1 => {
                     let next = succs.iter().next().expect("len == 1").clone();
                     if visited.contains(&next) {
-                        return (path, None); // cycle
+                        return Walk { path, sink: None }; // cycle
                     }
                     visited.insert(next.clone());
                     path.push(next.clone());
                     node = next;
                 }
-                _ => return (path, None), // branch
+                _ => return Walk { path, sink: None }, // branch
             }
         }
     }
@@ -247,14 +260,14 @@ impl<'a, W> GuestLinks<'a, W> {
     /// BH2 chain over the visible operative claims.
     pub(crate) fn chain(&self, ty: &Endset, x: &Address) -> Vec<Address> {
         let fwd = self.visible_forward(ty);
-        Self::walk_sup(&fwd, x.tumbler()).0.iter().map(lift).collect()
+        Self::walk_sup(&fwd, x.tumbler()).path.iter().map(lift).collect()
     }
 
     /// BH2 head over the visible operative claims: `Sink(head)` at a
     /// successor-free node, `Indeterminate` at a branch or cycle.
     pub(crate) fn tip(&self, ty: &Endset, x: &Address) -> Tip {
         let fwd = self.visible_forward(ty);
-        match Self::walk_sup(&fwd, x.tumbler()).1 {
+        match Self::walk_sup(&fwd, x.tumbler()).sink {
             Some(sink) => Tip::Sink(lift(&sink)),
             None => Tip::Indeterminate,
         }

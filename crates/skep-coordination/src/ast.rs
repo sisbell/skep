@@ -5,6 +5,7 @@
 //! tree's child structure is stated once, in `walk.rs`; a structural pass
 //! implements `Rewrite` or `Visit` there rather than matching every former.
 
+use std::fmt;
 use std::sync::Arc;
 
 use skep_address::{Address, Nat};
@@ -118,6 +119,26 @@ impl VarId {
 /// misses as `UnregisteredType`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeKey(pub Endset);
+
+/// A type key as the addresses it denotes — `{a}` for the one-address keys
+/// the catalog holds — falling back to the span count for an endset that
+/// denotes no address, which is exactly what a key built by hand and refused
+/// as `UnregisteredType` may be. So a rejection naming a key reads.
+impl fmt::Display for TypeKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if !self.0.is_address_denoting() {
+            return write!(f, "<{} non-denoting span(s)>", self.0.len());
+        }
+        f.write_str("{")?;
+        for (i, a) in self.0.addrs().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "{a}")?;
+        }
+        f.write_str("}")
+    }
+}
 
 /// A type position: a concrete cataloged type OR a class variable bound by an
 /// enclosing `Reg` quantifier (V-IDX). `Reg`-expansion substitutes

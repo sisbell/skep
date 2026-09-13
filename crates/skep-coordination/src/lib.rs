@@ -99,19 +99,28 @@ pub use rule::{
 pub use value::{Env, Signature, Sort, Value};
 
 // Foreign types in this surface, re-exported so a caller names everything a
-// `Coordinator` signature carries from one crate: M1's address and numeral,
-// M2's snapshot/position/transaction refusal, M5's insert refusal, and M7's
-// view, walk head, shipped types, endset, coverage class, tuple, behavior,
-// write refusals and visibility class. The assembly-time types (`Kernel`,
+// `Coordinator` signature carries — and every payload a `Value` it builds
+// carries — from one crate: M1's address, tumbler and numeral, M2's
+// snapshot/position/transaction refusal, M5's insert refusal, and M7's view,
+// walk head, shipped types, endset, coverage class, tuple, behavior, write
+// refusals and visibility class. The assembly-time types (`Kernel`,
 // `TypeRegistry`, `Vstream`, `LinkWriter`) stay the assembler's — it owns
 // those crates already.
-pub use skep_address::{Address, Nat};
+pub use skep_address::{Address, Nat, Tumbler};
 pub use skep_arrangement::InsertError;
 pub use skep_kernel::{Seq, Snapshot, TxnError};
 pub use skep_links::{
     Behavior, CoverageClass, EmitError, Endset, NullifyError, ShippedType, Tip, Tuple, View,
     Visibility,
 };
+
+/// `im`'s persistent collections are [`Value`]'s payload types, so this is a
+/// PUBLIC dependency: the exact version the crate was built against is
+/// nameable here — `skep_coordination::im::OrdSet` — rather than matched by
+/// luck at a caller's own manifest, where a version skew would spell itself
+/// `expected OrdSet<Tumbler>, found OrdSet<Tumbler>`. The `const _` below
+/// pins what the choice of `im` (over the `Rc`-backed `im-rc`) promises.
+pub use im;
 
 /// The world M9 is assembled over: every store it reads (M3, M4, M5, M7)
 /// and every record it lifts through their ops (M9 drives no `transact`

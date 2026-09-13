@@ -35,8 +35,10 @@ pub(crate) struct TypeCatalog {
     entries: HashMap<TypeKey, CatalogEntry>,
     order: Vec<TypeKey>,
     /// Shipped endsets, one per `ShippedType`, at the index [`slot`] assigns
-    /// — the one function that both places and fetches.
-    shipped: [Endset; 5],
+    /// — the one function that both places and fetches. Its length is the
+    /// population's own count, so a shipped type added upstream widens the
+    /// array with it rather than leaving [`slot`]'s new index out of bounds.
+    shipped: [Endset; ShippedType::ALL.len()],
     /// Φ — the cataloged classes declaring `ReadFilter` (class, verbatim key
     /// endset), for the UV default-view per-type filter
     /// (`is_k(J, ·) ≡ is_filtered_J`, D2 — BH1).
@@ -77,7 +79,8 @@ impl TypeCatalog {
     pub(crate) fn project(registry: &TypeRegistry) -> TypeCatalog {
         let mut entries: HashMap<TypeKey, CatalogEntry> = HashMap::new();
         let mut order: Vec<TypeKey> = Vec::new();
-        let mut shipped: [Endset; 5] = std::array::from_fn(|_| Endset::empty());
+        let mut shipped: [Endset; ShippedType::ALL.len()] =
+            std::array::from_fn(|_| Endset::empty());
 
         for t in ShippedType::ALL {
             let endset = registry.reserved_type(t).clone();

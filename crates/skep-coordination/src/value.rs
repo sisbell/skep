@@ -28,8 +28,12 @@ pub enum Sort {
 /// `AddrSet` IS a T4-valid address: the evaluator builds its sets from
 /// store-minted addresses only, and the two doors that take a caller's
 /// value — `evaluate_def`'s argument check and `eval`'s precondition —
-/// refuse a set holding anything else ([`holds_addresses`]). `Tuple` binds a
-/// `Tup` var.
+/// refuse a set holding anything else. `Tuple` binds a `Tup` var.
+///
+/// The payload types are M1's `Tumbler`/`Address`/`Nat`, M7's
+/// `CoverageClass`/`Tuple` and `im`'s persistent collections — each
+/// re-exported from this crate's root, so a caller builds a `Value` without
+/// naming a second manifest.
 #[allow(clippy::large_enum_variant)] // the interface declares these shapes verbatim
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
@@ -44,29 +48,33 @@ pub enum Value {
     Tuple(Tuple),
 }
 
-/// The ℘_fin(T) invariant a caller-built value must meet: an `AddrSet`'s
-/// every element is a T4-valid address (the evaluator lifts each one to an
-/// `Address` at its binding sites, infallibly). True of every other shape —
-/// their address positions are `Address`-typed already.
-pub(crate) fn holds_addresses(v: &Value) -> bool {
-    match v {
-        Value::AddrSet(s) => s.iter().all(is_t4_valid),
-        _ => true,
+impl Value {
+    /// The sort this value inhabits — what `eval`'s door and
+    /// `evaluate_def`'s positional argument check compare against Γ_D, so a
+    /// caller can ask the same question of its own values before it calls.
+    pub fn sort(&self) -> Sort {
+        match self {
+            Value::Bool(_) => Sort::Bool,
+            Value::Addr(_) => Sort::Addr,
+            Value::AddrSet(_) => Sort::AddrSet,
+            Value::OptAddr(_) => Sort::OptAddr,
+            Value::AddrSeq(_) => Sort::AddrSeq,
+            Value::Map(_) => Sort::Map,
+            Value::Nat(_) => Sort::Nat,
+            Value::OptNat(_) => Sort::OptNat,
+            Value::Tuple(_) => Sort::Tup,
+        }
     }
-}
 
-/// The sort a value inhabits — evaluate_def's positional arg check reads this.
-pub(crate) fn value_sort(v: &Value) -> Sort {
-    match v {
-        Value::Bool(_) => Sort::Bool,
-        Value::Addr(_) => Sort::Addr,
-        Value::AddrSet(_) => Sort::AddrSet,
-        Value::OptAddr(_) => Sort::OptAddr,
-        Value::AddrSeq(_) => Sort::AddrSeq,
-        Value::Map(_) => Sort::Map,
-        Value::Nat(_) => Sort::Nat,
-        Value::OptNat(_) => Sort::OptNat,
-        Value::Tuple(_) => Sort::Tup,
+    /// The ℘_fin(T) invariant a caller-built value must meet: an `AddrSet`'s
+    /// every element is a T4-valid address (the evaluator lifts each one to
+    /// an `Address` at its binding sites, infallibly). True of every other
+    /// shape — their address positions are `Address`-typed already.
+    pub(crate) fn holds_addresses(&self) -> bool {
+        match self {
+            Value::AddrSet(s) => s.iter().all(is_t4_valid),
+            _ => true,
+        }
     }
 }
 
@@ -106,6 +114,7 @@ impl Env {
         Env(HashMap::new())
     }
 
+    #[must_use = "bind returns the extended environment; Env is persistent and the receiver is untouched"]
     pub fn bind(&self, v: VarId, val: Value) -> Env {
         Env(self.0.update(v, val))
     }

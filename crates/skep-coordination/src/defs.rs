@@ -19,9 +19,9 @@ use crate::coordinator::Coordinator;
 use crate::dynamics::{view_independent, Analyzer};
 use crate::error::{CertifyError, DefineError, EvalError, RegisterError, RetractError};
 use crate::eval::eval_term;
-use crate::expand::Expander;
+use crate::expand::{Expander, ExpansionTooLarge};
 use crate::memo::DefStatus;
-use crate::value::{value_sort, Env, SignedTerm, Sort, Value};
+use crate::value::{holds_addresses, value_sort, Env, SignedTerm, Sort, Value};
 use crate::CoordinationWorld;
 
 /// Why a stored def could not be read back as a signed term: no `Val` at the
@@ -149,12 +149,14 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// active) against the caller's `snap` — else `NotEverRegistered`; an
     /// ever-registered start whose immutable content fails the PR-ENC
     /// parse/WT (a PR-DISC breach) is `UndisciplinedDef`. `args` bind
-    /// positionally to Γ_D (= `signature(start).params`). Pure pin to `snap`;
-    /// the denotation is DAG-recursive (`eval`'s walk + the one `Ref` arm),
-    /// never a materialized flat term (Conflicts §5). The denotation reads
-    /// M7 through the GUEST-CLASS view (lane 4.1) — the same view an `Inline`
-    /// trigger reads — while the ever-registration probe stays class-free
-    /// (`ever_registered`).
+    /// positionally to Γ_D (= `signature(start).params`), each at its sort —
+    /// an `AddrSet` holding a tumbler that is no T4-valid address is no
+    /// ℘_fin(T) value, and is `ArgSortMismatch` like any other mis-sorted
+    /// argument. Pure pin to `snap`; the denotation is DAG-recursive
+    /// (`eval`'s walk + the one `Ref` arm), never a materialized flat term
+    /// (Conflicts §5). The denotation reads M7 through the GUEST-CLASS view
+    /// (lane 4.1) — the same view an `Inline` trigger reads — while the
+    /// ever-registration probe stays class-free (`ever_registered`).
     pub fn evaluate_def(
         &self,
         start: &Address,
@@ -176,7 +178,11 @@ impl<W: CoordinationWorld> Coordinator<W> {
         if args.len() != params.len() {
             return Err(EvalError::ArgArityMismatch);
         }
-        if args.iter().zip(params).any(|(arg, (_, s))| value_sort(arg) != *s) {
+        if args
+            .iter()
+            .zip(params)
+            .any(|(arg, (_, s))| value_sort(arg) != *s || !holds_addresses(arg))
+        {
             return Err(EvalError::ArgSortMismatch);
         }
         let env: Env = params.iter().map(|(v, _)| *v).zip(args.iter().cloned()).collect();
@@ -238,11 +244,12 @@ impl<W: CoordinationWorld> Coordinator<W> {
     }
 
     /// CVALID(0..iii): defined signature (its two `None` causes surfaced
-    /// distinctly), Boolean sort, actively registered, view-independent
-    /// expansion, ST⁺ — then emit `pd_stable`. ST⁺ runs PD0 over the FLAT
-    /// reference expansion (ST⁺ is not compositional — §Internal 3), with the
-    /// aggregate threshold widened to a bound ℕ parameter, at a fixed view
-    /// (view-independence makes the classification view-invariant).
+    /// distinctly), Boolean sort, actively registered, an expansion within
+    /// the node budget, view-independent expansion, ST⁺ — then emit
+    /// `pd_stable`. ST⁺ runs PD0 over the FLAT reference expansion (ST⁺ is
+    /// not compositional — §Internal 3), with the aggregate threshold widened
+    /// to a bound ℕ parameter, at a fixed view (view-independence makes the
+    /// classification view-invariant).
     pub fn certify_stable(&self, d: &Address, start: &Address) -> Result<(Address, Seq), CertifyError> {
         let snap = self.kernel.snapshot();
         let entry = match self.def_status(start) {
@@ -256,7 +263,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         if !self.is_active_pred(start, &snap) {
             return Err(CertifyError::NotActive);
         }
-        let flat = self.expand_def(&entry);
+        let flat = self.expand_def(&entry).map_err(|_| CertifyError::ExpansionTooLarge)?;
         if !view_independent(&flat) {
             return Err(CertifyError::ViewDependent);
         }
@@ -308,8 +315,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
 
     /// The flat `expand(start)` of a checked def, given its memo entry — one
     /// `Expander` per top-level expansion, so the fresh-name sequence is
-    /// deterministic in the content alone (PR3).
-    pub(crate) fn expand_def(&self, entry: &TypedTerm) -> Term {
+    /// deterministic in the content alone (PR3) — or `ExpansionTooLarge`
+    /// when the reference DAG's unfolding outgrows the node budget.
+    pub(crate) fn expand_def(&self, entry: &TypedTerm) -> Result<Term, ExpansionTooLarge> {
         Expander::new(self).expand(entry.evaluable.as_ref())
     }
 }

@@ -11,30 +11,24 @@
 //! (`≥ EXPANSION_NAME_BASE`) in stored content is malformed and stored defs
 //! cannot smuggle expansion names. Varints are minimal-form-checked on
 //! decode, so decode is a function with ≤ 1 valid parse per byte string.
+//!
+//! The decoder is the first of the crate's resource doors for a stored body:
+//! it refuses one nested past [`MAX_DEPTH`] and one that would build more
+//! than [`MAX_TERM_NODES`] nodes — a run at the daemon's request-body cap
+//! would otherwise decode to a hundred times its bytes before the checker
+//! could refuse it — so what reaches the checker is already within the
+//! budgets the checker enforces for supplied terms.
 
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_links::Endset;
 
-use crate::ast::{Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId};
+use crate::ast::{Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId, MAX_DEPTH, MAX_TERM_NODES};
 use crate::value::{SignedTerm, Sort};
 
 /// Decode failure — surfaced as `RegisterError::ParseFailed` (and, for an
 /// ever-registered start, the permanent poisoned memo entry).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Malformed;
-
-/// Decode nesting cap — the defensive bound on hand-forged input, and the ONE
-/// bound on the depth of a stored body: every walk over a decoded body — the
-/// checker, the evaluator, the analyzer, the expander, and this decoder —
-/// recurses once per former on the caller's thread, and none is bounded
-/// otherwise. The value sits where all of them fit a default 2 MiB thread
-/// with margin in a debug build (the checker, the heaviest, overflows one
-/// near 200 levels there; a release build carries several times that), and
-/// far above any hand-authored compact body. The suite's
-/// `a_hand_forged_body_at_the_decode_cap_survives_every_walk` runs each walk
-/// at exactly this depth on a default thread, so a cap raised past the
-/// budget, or a walk grown past it, aborts there rather than in a daemon.
-const MAX_DEPTH: u32 = 128;
 
 /// The tag table — the ONE statement of the format's discriminants, read by
 /// the encoder and the decoder alike. Each family numbers its own
@@ -517,7 +511,7 @@ fn w_prim2(b: &mut Vec<u8>, t: u8, x: &Term, y: &Term) {
 /// so an undisciplined run reaches `register_pred`'s `ParseFailed` and the
 /// memo's freeze-on-breach.
 pub(crate) fn decode(bytes: &[u8]) -> Result<SignedTerm, Malformed> {
-    let mut r = Rd { b: bytes, i: 0 };
+    let mut r = Rd { b: bytes, i: 0, nodes: 0 };
     let len = r.len()?;
     if bytes.get(r.i..).map(<[u8]>::len) != Some(len) {
         return Err(Malformed);
@@ -542,6 +536,9 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<SignedTerm, Malformed> {
 struct Rd<'a> {
     b: &'a [u8],
     i: usize,
+    /// Nodes built so far — the term and domain formers — against
+    /// `MAX_TERM_NODES`.
+    nodes: usize,
 }
 
 impl<'a> Rd<'a> {
@@ -549,6 +546,20 @@ impl<'a> Rd<'a> {
         let x = *self.b.get(self.i).ok_or(Malformed)?;
         self.i += 1;
         Ok(x)
+    }
+
+    /// The two doors at every former: nesting past `MAX_DEPTH`, and the
+    /// node budget — refused before the former is read, so nothing past the
+    /// budget is built.
+    fn enter(&mut self, depth: u32) -> Result<(), Malformed> {
+        if depth > MAX_DEPTH {
+            return Err(Malformed);
+        }
+        self.nodes = self.nodes.saturating_add(1);
+        if self.nodes > MAX_TERM_NODES {
+            return Err(Malformed);
+        }
+        Ok(())
     }
 
     /// A length or count prefix, as a `usize`: a varint the target cannot
@@ -661,9 +672,7 @@ impl<'a> Rd<'a> {
 
     fn term(&mut self, depth: u32) -> Result<Term, Malformed> {
         use tag::term::*;
-        if depth > MAX_DEPTH {
-            return Err(Malformed);
-        }
+        self.enter(depth)?;
         let d = depth + 1;
         Ok(match self.u8()? {
             VAR => Term::Var(self.varid()?),
@@ -749,9 +758,7 @@ impl<'a> Rd<'a> {
 
     fn dom(&mut self, depth: u32) -> Result<Dom, Malformed> {
         use tag::dom::*;
-        if depth > MAX_DEPTH {
-            return Err(Malformed);
-        }
+        self.enter(depth)?;
         let d = depth + 1;
         Ok(match self.u8()? {
             MEMBERS_DOM => Dom::MembersDom(self.typeref()?),
@@ -930,6 +937,26 @@ mod tests {
         let at_cap = nested(MAX_DEPTH as usize);
         assert_eq!(decode(&encode(&at_cap).expect("encodes")), Ok(at_cap));
         let past = nested(MAX_DEPTH as usize + 1);
+        assert_eq!(decode(&encode(&past).expect("encodes")), Err(Malformed));
+    }
+
+    /// The node budget at its boundary, on a body that is shallow and wide:
+    /// a balanced `And` tree of 2¹⁵ leaves (2¹⁶ − 1 nodes, 16 formers deep)
+    /// decodes, and one of 2¹⁶ leaves (2¹⁷ − 1 nodes) is `Malformed` — a
+    /// well-formed run three times the budget in bytes, refused at the
+    /// budget rather than built to its end.
+    #[test]
+    fn decode_caps_nodes_at_max_term_nodes() {
+        let balanced = |leaves: u32| {
+            let mut t = Term::Lit(Lit::True);
+            for _ in 0..leaves.trailing_zeros() {
+                t = Term::And(Arc::new(t.clone()), Arc::new(t));
+            }
+            SignedTerm { params: vec![], body: t }
+        };
+        let within = balanced(1 << 15);
+        assert_eq!(decode(&encode(&within).expect("encodes")), Ok(within));
+        let past = balanced(1 << 16);
         assert_eq!(decode(&encode(&past).expect("encodes")), Err(Malformed));
     }
 }

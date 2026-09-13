@@ -12,7 +12,7 @@ use skep_arrangement::Vstream;
 use skep_kernel::{Kernel, Snapshot, WorldState};
 use skep_links::{Endset, LinkWriter, ShippedType, TypeRegistry, View, Visibility};
 
-use crate::ast::{Term, VarId};
+use crate::ast::{Term, VarId, MAX_DEPTH};
 use crate::catalog::TypeCatalog;
 use crate::check::{Checker, Ctx, TriggerTerm, TypedTerm};
 use crate::defs::parse_def;
@@ -22,7 +22,7 @@ use crate::eval::{eval_term, DefSource, EvalCtx};
 use crate::guest::GuestLinks;
 use crate::memo::{Breach, DefMemo, DefStatus};
 use crate::rule::RuleId;
-use crate::value::{value_sort, Env, Signature, SignedTerm, Sort, Value};
+use crate::value::{holds_addresses, value_sort, Env, Signature, SignedTerm, Sort, Value};
 use crate::CoordinationWorld;
 
 /// The M5 `Vstream` factory the engine injects: a borrow-scoped op handle
@@ -57,15 +57,6 @@ pub(crate) struct CheckedRule {
     pub(crate) view: View,
     pub(crate) action: crate::rule::FireAction,
 }
-
-/// Breach-only recursion bound on the signature derivation: a legitimately
-/// registered def's reference DAG is acyclic (PR2 — refs name strictly-earlier
-/// defs), so this trips only on a PR-DISC-breach cycle, where returning
-/// "no signature yet" makes the outer derivation fail WT and freeze the start
-/// poisoned (§Internal 4). The depth is a property of the derivation CHAIN
-/// and travels with it: each derivation resolves its referents one level
-/// deeper than itself.
-const MAX_SIG_DEPTH: u32 = 512;
 
 /// M9's one public handle: PL (group A), predicate definitions (group B), and
 /// the reactive rule engine (group C). Owns no authoritative state — the
@@ -203,10 +194,13 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// never a tuple (ASN-0130 SignedTerm) — and the one PL term that binds a
     /// tuple, a rule trigger, is checked by [`Coordinator::type_check_trigger`]
     /// into a type of its own. Every `Concrete` `TypeKey` must be a canonical
-    /// catalog endset (the probe is `Endset`-equality, not coverage). Reads
-    /// no structural state for a ref-free body; consults the immutable
-    /// signature memo for any `Ref`. Once `Ok`, valid at every reachable
-    /// state (WT).
+    /// catalog endset (the probe is `Endset`-equality, not coverage). The
+    /// check is also the term's resource door: a body nested past the
+    /// crate's one nesting cap, counted through its references, is
+    /// `TooDeep`, and one whose `Reg`-expansion outgrows the node budget is
+    /// `TooLarge` — each refused at the bound, not after it. Reads no
+    /// structural state for a ref-free body; consults the immutable def memo
+    /// for any `Ref`. Once `Ok`, valid at every reachable state (WT).
     pub fn type_check(&self, params: Vec<(VarId, Sort)>, body: Term) -> Result<TypedTerm, TypeError> {
         if let Some((v, _)) = params.iter().find(|(_, s)| *s == Sort::Tup) {
             return Err(TypeError::TupParameter(*v));
@@ -228,34 +222,41 @@ impl<W: CoordinationWorld> Coordinator<W> {
     }
 
     /// The ONE checker invocation: WT + WT-ref over the signed term — its
-    /// body under its Γ_D — into the checked-term shape. Referents resolve
-    /// through the signature memo at derivation depth `depth` — 0 at the top
-    /// of a chain (the public checks, `register_pred`), one deeper per nested
-    /// derivation (a chain that runs past `MAX_SIG_DEPTH` is a PR-DISC-breach
-    /// cycle and reads as "no signature", failing WT here).
+    /// body under its Γ_D — into the checked-term shape, the body's root at
+    /// nesting level `depth`: 0 at the top of a chain (the public checks,
+    /// `register_pred`, a cold `signature`), and for a def derived through a
+    /// `Ref` the level the checker charged that `Ref` for its referent, so
+    /// the chain's total nesting is bounded by `MAX_DEPTH` however deep the
+    /// derivation runs. Referents resolve through the def memo at the level
+    /// the checker asks for them (a chain that runs past the bound is a
+    /// PR-DISC-breach cycle — every legitimate chain was bounded at
+    /// registration — and reads as "no signature", failing WT here).
     pub(crate) fn check_under(&self, signed: SignedTerm, depth: u32) -> Result<TypedTerm, TypeError> {
-        let resolve = |a: &Address| self.signature_at(a, depth);
-        let checker = Checker { catalog: &self.catalog, resolve: &resolve };
+        let resolve = |a: &Address, d: u32| self.def_at(a, d);
+        let checker = Checker::new(&self.catalog, &resolve);
         let ctx: Ctx = signed.params.iter().copied().collect();
-        let checked = checker.check_term(&ctx, &signed.body)?;
+        let checked = checker.check_term(&ctx, &signed.body, depth)?;
         Ok(TypedTerm {
             signed,
             result: checked.sort,
             evaluable: checked.term,
             ref_free: checked.ref_free,
+            chain_depth: checked.deepest.saturating_sub(depth),
         })
     }
 
     /// Pure, total, terminating denotation at one view against one committed
-    /// snapshot. PRECONDITIONS, both asserted at the door: `t.is_ref_free()`
+    /// snapshot. PRECONDITIONS, all asserted at the door: `t.is_ref_free()`
     /// — a surviving `Ref` node is a precondition violation (PANICS, like
     /// `decide` on a non-Bool codomain); ref-bearing terms evaluate only
     /// through `evaluate_def`, keeping this denotation content-free — and
-    /// `env` binds every Γ_D parameter at its sort. INFALLIBLE past the door;
-    /// reads ONLY M7 + M3, all off `snap` (PC4 / ASN-0134 clause 6) — M7
-    /// through the GUEST-CLASS view (lane 4.1, PUB-6.28): a tuple homed in a
-    /// document the injected `guest` predicate refuses is invisible to the
-    /// verdict, exactly as it is to a fire's gates. The verdict is "as of
+    /// `env` binds every Γ_D parameter at its sort, an `AddrSet` holding
+    /// T4-valid addresses only (the evaluator lifts each set element to an
+    /// `Address` at its binding sites). INFALLIBLE past the door; reads ONLY
+    /// M7 + M3, all off `snap` (PC4 / ASN-0134 clause 6) — M7 through the
+    /// GUEST-CLASS view (lane 4.1, PUB-6.28): a tuple homed in a document
+    /// the injected `guest` predicate refuses is invisible to the verdict,
+    /// exactly as it is to a fire's gates. The verdict is "as of
     /// `snap.seq()`" (M2 V1 retrospective).
     pub fn eval(&self, t: &TypedTerm, env: &Env, view: View, snap: &Snapshot<W>) -> Value {
         assert!(
@@ -263,9 +264,14 @@ impl<W: CoordinationWorld> Coordinator<W> {
             "eval precondition violated: ref-bearing TypedTerm — route through evaluate_def"
         );
         for (v, s) in t.params() {
+            let bound = env.get(v);
             assert!(
-                env.get(v).is_some_and(|val| value_sort(val) == *s),
+                bound.is_some_and(|val| value_sort(val) == *s),
                 "eval precondition violated: Γ_D parameter {v:?} unbound or mis-sorted in env (expected {s:?})"
+            );
+            assert!(
+                bound.is_some_and(holds_addresses),
+                "eval precondition violated: AddrSet parameter {v:?} holds a tumbler that is not a T4-valid address"
             );
         }
         let cx = self.eval_ctx(snap.world(), view, None);
@@ -309,16 +315,18 @@ impl<W: CoordinationWorld> Coordinator<W> {
         self.def_status_at(start, 0)
     }
 
-    /// Memo-or-derive as the `depth`-th nested derivation: a memo hit answers
-    /// at any depth; past the breach-only bound — reachable only inside a
-    /// PR-DISC-breach cycle — the answer is undisciplined, never memoized
-    /// (the outer derivation freezes its own start poisoned, not this one);
-    /// otherwise derive from immutable content.
+    /// Memo-or-derive with the derivation's root at nesting level `depth`:
+    /// a memo hit answers at any level; past `MAX_DEPTH` — reachable only
+    /// inside a PR-DISC-breach cycle, since every legitimate chain was
+    /// bounded at registration through `TypedTerm::chain_depth` — the answer
+    /// is undisciplined, never memoized (the outer derivation freezes its own
+    /// start poisoned, not this one); otherwise derive from immutable
+    /// content.
     fn def_status_at(&self, start: &Address, depth: u32) -> DefStatus {
         if let Some(hit) = self.memo.get(start) {
             return hit;
         }
-        if depth >= MAX_SIG_DEPTH {
+        if depth > MAX_DEPTH {
             return DefStatus::Poisoned;
         }
         self.derive_def(start, depth)
@@ -326,8 +334,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
 
     /// The miss path: pin its OWN snapshot to check ever-registration (a
     /// never-registered start is never cached — a later registration must
-    /// surface), then derive from immutable content, recursing through
-    /// referent signatures one level deeper (well-founded by PR2). An
+    /// surface), then derive from immutable content with the body's root at
+    /// `depth`, recursing through referents at the levels the checker
+    /// charges them (well-founded by PR2, bounded by `MAX_DEPTH`). An
     /// ever-registered start whose content fails the parse or WT fills the
     /// memo poisoned — freeze-on-breach (PR-DISC, §Internal 4).
     fn derive_def(&self, start: &Address, depth: u32) -> DefStatus {
@@ -338,15 +347,16 @@ impl<W: CoordinationWorld> Coordinator<W> {
         }
         let verdict = parse_def(w, start)
             .map_err(|_| Breach)
-            .and_then(|signed| self.check_under(signed, depth + 1).map_err(|_| Breach));
+            .and_then(|signed| self.check_under(signed, depth).map_err(|_| Breach));
         self.memo.fill(start, verdict)
     }
 
-    /// `(Γ_D, C_D)` at derivation depth `depth` — the resolver the checker
-    /// consults for a `Ref`.
-    fn signature_at(&self, start: &Address, depth: u32) -> Option<Signature> {
+    /// The defined referent at `start`, its derivation (if the memo misses)
+    /// rooted at nesting level `depth` — the resolver the checker consults
+    /// for a `Ref`, which asks at the level it charged the reference for.
+    pub(crate) fn def_at(&self, start: &Address, depth: u32) -> Option<Arc<TypedTerm>> {
         match self.def_status_at(start, depth) {
-            DefStatus::Defined(e) => Some(e.signature()),
+            DefStatus::Defined(e) => Some(e),
             _ => None,
         }
     }
@@ -359,7 +369,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// (freeze-on-breach, §Internal 4). No snapshot parameter — the miss
     /// path pins its own.
     pub fn signature(&self, start: &Address) -> Option<Signature> {
-        self.signature_at(start, 0)
+        self.def_at(start, 0).map(|e| e.signature())
     }
 }
 

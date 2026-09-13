@@ -62,7 +62,13 @@ pub(crate) struct EvalCtx<'a, W> {
 }
 
 /// Set-element lift (Tumbler → Address) at the binding sites — M1 `validate`,
-/// infallible on store-minted addresses (§Internal 2).
+/// infallible on what reaches it (§Internal 2). Every tumbler lifted here
+/// is one of two things: the start of a unit-depth span in a stored slot
+/// endset — `Endset::addrs()` yields no other, and M7's slot doors admit a
+/// start only as an `Address` (`SlotArg::Addrs`, `emit`'s and `assert_sup`'s
+/// endpoints) or as a `Run::i_start`, an `Address` by type — or an element
+/// of a `Value::AddrSet`, which the evaluator builds from those and the two
+/// caller-facing doors (`evaluate_def`, `eval`) check element by element.
 pub(crate) fn lift(t: &Tumbler) -> Address {
     validate(t.clone()).expect("PL set elements are store-minted, T4-valid addresses")
 }

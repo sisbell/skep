@@ -243,6 +243,42 @@ fn type_check_edges() {
     ));
 }
 
+/// The node budget: `Reg`-expansion instantiates a body once per cataloged
+/// class, so nested `Reg` quantifiers multiply — six over a leaf fit, seven
+/// do not (`TooLarge`, before the seventh level's 78 125 instances exist) —
+/// and an `Arc`-shared body is charged per traversal, as the tree it
+/// unfolds to: forty levels of `And(a, a)` are forty-one nodes to build and
+/// 2⁴¹ to check, refused at the budget rather than after it.
+#[test]
+fn type_check_refuses_an_expansion_past_the_node_budget() {
+    let k = kernel();
+    let c = coord(&k);
+    let nested_reg = |levels: u32| {
+        (0..levels).rev().fold(tru(), |body, i| forall(10 + i, Dom::Reg, body))
+    };
+    c.type_check(vec![], nested_reg(6)).expect("six nested Reg quantifiers fit the budget");
+    assert!(matches!(c.type_check(vec![], nested_reg(7)), Err(TypeError::TooLarge)));
+    let mut shared = at(tru());
+    for _ in 0..40 {
+        shared = at(Term::And(shared.clone(), shared));
+    }
+    assert!(matches!(c.type_check(vec![], Term::And(shared.clone(), shared)), Err(TypeError::TooLarge)));
+}
+
+/// The nesting cap is the checker's as it is the decoder's: `¬¹²⁸ ⊤`
+/// checks and `¬¹²⁹ ⊤` is `TooDeep` — at the cap, before recursing further,
+/// so a term nested thousands deep is refused on this default thread rather
+/// than walked to its end.
+#[test]
+fn type_check_refuses_a_term_nested_past_the_cap() {
+    let k = kernel();
+    let c = coord(&k);
+    let nested = |n: usize| (0..n).fold(tru(), |t, _| not(t));
+    c.type_check(vec![], nested(128)).expect("a term at the cap checks");
+    assert!(matches!(c.type_check(vec![], nested(129)), Err(TypeError::TooDeep)));
+    assert!(matches!(c.type_check(vec![], nested(2048)), Err(TypeError::TooDeep)));
+}
+
 /// V-IDX: `count(Reg)` folds to the (constant) registered-class count;
 /// Reg-quantifiers expand per class; an instance-wise ill-typed body rejects
 /// whole.
@@ -706,6 +742,20 @@ fn eval_panics_on_an_unbound_parameter() {
     let _ = c.eval(&t, &Env::empty(), View::Active, &s);
 }
 
+/// `eval`'s door, the set half: an `AddrSet` argument holding a tumbler
+/// that is no T4-valid address (adjacent separators) is no ℘_fin(T) value,
+/// and is named at the door — never lifted inside the walk.
+#[test]
+#[should_panic(expected = "eval precondition")]
+fn eval_panics_on_a_set_holding_a_non_address() {
+    let k = kernel();
+    let c = coord(&k);
+    let t = c.type_check(vec![(v(1), Sort::AddrSet)], tru()).expect("one-set-param term");
+    let s = k.snapshot();
+    let bad = Value::AddrSet(im::OrdSet::unit(crate::common::t(&[1, 0, 0, 1])));
+    let _ = c.eval(&t, &Env::empty().bind(v(1), bad), View::Active, &s);
+}
+
 #[test]
 #[should_panic(expected = "eval precondition")]
 fn eval_panics_on_ref_bearing_term() {
@@ -872,6 +922,28 @@ fn pd0_rules_over_a_generated_family() {
     let retired = coverage_class(&marker_ty());
     assert!(c.classify(&isk, View::Default).footprint.active_classes().any(|x| *x == retired));
     assert!(!c.classify(&isk, View::Active).footprint.active_classes().any(|x| *x == retired));
+}
+
+/// The analyzer reads each `Count`'s domain once per threshold: a
+/// threshold nested inside its own domain's filter forty levels deep —
+/// `count(Filter{L_K, t, count(Filter{L_K, t, …}) ≤ 1}) ≤ 1` — is linear
+/// work, and this gate completing is the pin (doubling per level is 2⁴⁰
+/// domain analyses, which never returns). By PD0 the innermost upper bound
+/// over `L_K` is SF, and a `Filter` by an SF predicate leaves the grow-only
+/// closure, so every level above it is Neither.
+#[test]
+fn classify_analyzes_each_domain_once() {
+    let k = kernel();
+    let c = coord(&k);
+    let l_k = || Dom::AuditSlice(conc(&pred_def_ty()));
+    let innermost = nat_le(count(l_k()), lit_nat(1));
+    let nested = |levels: u32| {
+        (0..levels).fold(innermost.clone(), |t, _| nat_le(count(filter(l_k(), 2, t)), lit_nat(1)))
+    };
+    let t0 = c.type_check(vec![], nested(0)).expect("checks");
+    assert_eq!(c.classify(&t0, View::Audit).stability, Stability::SfOnly);
+    let t40 = c.type_check(vec![], nested(40)).expect("checks");
+    assert_eq!(c.classify(&t40, View::Audit).stability, Stability::Neither);
 }
 
 #[test]

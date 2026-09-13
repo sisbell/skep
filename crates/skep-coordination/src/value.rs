@@ -1,7 +1,7 @@
 //! §Core data model — values, sorts, signatures, the eval environment.
 
 use im::{HashMap, OrdSet, Vector};
-use skep_address::{Address, Nat, Tumbler};
+use skep_address::{is_t4_valid, Address, Nat, Tumbler};
 use skep_links::{CoverageClass, Tuple};
 
 use crate::ast::{Term, VarId};
@@ -24,7 +24,12 @@ pub enum Sort {
 
 /// Denoted values. Set values hold raw `Tumbler`s (cheap union for ⋃-folds,
 /// dedup = set semantics for `count`); the lift to M1's `Address` happens at
-/// the binding sites via `validate` (§Internal 2). `Tuple` binds a `Tup` var.
+/// the binding sites via `validate` (§Internal 2), so every element of an
+/// `AddrSet` IS a T4-valid address: the evaluator builds its sets from
+/// store-minted addresses only, and the two doors that take a caller's
+/// value — `evaluate_def`'s argument check and `eval`'s precondition —
+/// refuse a set holding anything else ([`holds_addresses`]). `Tuple` binds a
+/// `Tup` var.
 #[allow(clippy::large_enum_variant)] // the interface declares these shapes verbatim
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
@@ -37,6 +42,17 @@ pub enum Value {
     Nat(Nat),
     OptNat(Option<Nat>),
     Tuple(Tuple),
+}
+
+/// The ℘_fin(T) invariant a caller-built value must meet: an `AddrSet`'s
+/// every element is a T4-valid address (the evaluator lifts each one to an
+/// `Address` at its binding sites, infallibly). True of every other shape —
+/// their address positions are `Address`-typed already.
+pub(crate) fn holds_addresses(v: &Value) -> bool {
+    match v {
+        Value::AddrSet(s) => s.iter().all(is_t4_valid),
+        _ => true,
+    }
 }
 
 /// The sort a value inhabits — evaluate_def's positional arg check reads this.

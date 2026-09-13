@@ -23,6 +23,49 @@ pub type ArcDom = Arc<Dom>;
 /// body binder may inhabit it.
 pub const EXPANSION_NAME_BASE: u32 = 1 << 31;
 
+/// The ONE bound on the nesting of a PL tree, counted THROUGH references:
+/// every walk over a term — the def decoder, the checker, the evaluator, the
+/// expander, the analyzer — recurses once per former on the caller's thread,
+/// and none is bounded otherwise. The decoder refuses a stored body nested
+/// past it (`Malformed`); the checker refuses any term, stored or supplied,
+/// whose evaluable projection — `Reg`-expansion joins and reference reaches
+/// included — would carry a walk past it (`TypeError::TooDeep`), and records
+/// each checked term's reach as `TypedTerm::chain_depth`, so a reference
+/// chain is bounded at registration rather than discovered at a cold
+/// derivation. The value sits where all of the walks fit a default 2 MiB
+/// thread with margin in a debug build (the checker, the heaviest, overflows
+/// one near 200 levels there; a release build carries several times that),
+/// and far above any hand-authored body. The suite runs each walk at exactly
+/// this depth on a default thread
+/// (`a_hand_forged_body_at_the_decode_cap_survives_every_walk`,
+/// `a_reference_chain_at_the_cap_derives_cold_and_one_deeper_is_refused`),
+/// so a cap raised past the budget, or a walk grown past it, aborts there
+/// rather than in a daemon.
+pub(crate) const MAX_DEPTH: u32 = 128;
+
+/// The levels a reference costs beyond its own node, in [`MAX_DEPTH`]'s
+/// units: the frames between a `Ref` node's check and its referent's — the
+/// resolver, the memo probe, the derivation — and the evaluator's and
+/// expander's re-entry at the referent. Each argument is charged one more on
+/// top of this (the flat expansion's `Let` per argument). Set against the
+/// same measurement as [`MAX_DEPTH`]: the chain test derives a chain
+/// registered to the cap cold, on a default thread, so a cost set too low
+/// aborts there.
+pub(crate) const DERIVATION_COST: u32 = 2;
+
+/// The ONE budget on the SIZE of a PL tree, in nodes: what the def decoder
+/// builds from one run, what the checker traverses and builds (`Reg`
+/// expansion instantiates a body once per cataloged class, so nested `Reg`
+/// quantifiers multiply — six over a leaf fit, seven do not — and a
+/// `Arc`-shared input is charged per traversal, as a tree), and what the
+/// expander traverses and builds for one flat reference expansion. A node is
+/// ~100 bytes behind its `Arc`, so the budget is ~6 MiB — held per memo
+/// entry and per captured rule trigger for the life of the process, and
+/// transiently per expansion — against hand-authored predicates of tens to
+/// hundreds of nodes. Past it: `Malformed` at the decoder,
+/// `TypeError::TooLarge` at the checker, `ExpansionTooLarge` at the expander.
+pub(crate) const MAX_TERM_NODES: usize = 1 << 16;
+
 /// A PL variable name.
 ///
 /// The reservation is structural, not merely intended: the type has exactly

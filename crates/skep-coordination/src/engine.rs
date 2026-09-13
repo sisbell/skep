@@ -82,12 +82,17 @@ impl<W: CoordinationWorld> Coordinator<W> {
 
     /// A checked trigger as the static analyses read it: its flat, ref-free
     /// expansion — an `Inline` trigger's evaluable projection is already
-    /// one; a `Def` trigger's is `expand_def`'s.
+    /// one; a `Def` trigger's is `expand_def`'s, which `validate_rule` ran
+    /// against the same immutable referents and the same node budget before
+    /// the trigger was captured, so it cannot exceed it here.
     fn trigger_expansion(&self, trigger: &TypedTerm) -> Term {
         if trigger.is_ref_free() {
             trigger.evaluable.as_ref().clone()
         } else {
-            self.expand_def(trigger)
+            self.expand_def(trigger).expect(
+                "a validated Def trigger expands within MAX_TERM_NODES — validate_rule checked it \
+                 against the same immutable referents",
+            )
         }
     }
 
@@ -115,10 +120,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // Domain: checked + Reg-expanded (a body-level Reg is legitimate PL;
         // a BARE Reg fails the sort check), closed (binds only its own
         // variables).
-        let resolve = |a: &Address| self.signature(a);
-        let checker = Checker { catalog: &self.catalog, resolve: &resolve };
+        let resolve = |a: &Address, d: u32| self.def_at(a, d);
+        let checker = Checker::new(&self.catalog, &resolve);
         let cd = checker
-            .check_dom(&Ctx::new(), &rule.domain)
+            .check_dom(&Ctx::new(), &rule.domain, 0)
             .map_err(RuleError::IllFormedDomain)?;
         if !cd.ref_free {
             return Err(RuleError::RefBearingDomain);
@@ -153,6 +158,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
                     // here — the remediation is an Inline trigger.
                     return Err(RuleError::DomainTriggerSortMismatch { expected: elem, found: s });
                 }
+                // The expansion door: the flat tree the lint and the armer
+                // graph read must fit the node budget, decided here — over
+                // immutable referents, so decided once — and never again.
+                self.expand_def(&def).map_err(|_| RuleError::TriggerExpansionTooLarge)?;
                 def
             }
         };

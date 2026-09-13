@@ -14,49 +14,85 @@
 //! deterministic and its names are disjoint from every host binder by
 //! construction. A reference node is realized as `Let`-bindings of its
 //! (expanded) arguments over the α-renamed referent body.
+//!
+//! The flat tree is a TREE: PR3's fresh-name discipline forbids sharing, so
+//! a referent used twice is expanded twice, and a reference DAG unfolds
+//! exponentially in its depth. The expansion is therefore budgeted, in
+//! [`MAX_TERM_NODES`] — every node either walk visits or builds is charged,
+//! and past the budget neither walk descends further: the result is
+//! [`ExpansionTooLarge`], never a tree the analyses would then traverse.
 
 use std::sync::Arc;
 
-use crate::ast::{ArcTerm, Dom, Term, VarId};
+use crate::ast::{ArcTerm, Dom, Lit, Term, VarId, MAX_TERM_NODES};
 use crate::eval::DefSource;
 use crate::walk::{rewrite_dom, rewrite_term, Rewrite};
 
-/// One expansion's fresh-name counter — the ONE mint site for reserved
-/// names, so an expansion's name sequence is a function of its content.
-struct Supply(u32);
+/// The expansion outgrew [`MAX_TERM_NODES`]: the reference DAG's unfolding
+/// is past the tree the analyses are budgeted to read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ExpansionTooLarge;
 
-impl Supply {
+/// One expansion's state: the fresh-name counter — the ONE mint site for
+/// reserved names, so an expansion's name sequence is a function of its
+/// content — and the node budget, one sum across the expander's walk and
+/// the renamer's, sticky once spent.
+struct Budget {
+    next: u32,
+    nodes: usize,
+    exhausted: bool,
+}
+
+impl Budget {
     fn fresh(&mut self) -> VarId {
-        let v = VarId::expansion(self.0);
-        self.0 += 1;
+        let v = VarId::expansion(self.next);
+        self.next += 1;
         v
+    }
+
+    /// One node's charge: `false` once the budget is spent, and thereafter.
+    fn tick(&mut self) -> bool {
+        self.nodes = self.nodes.saturating_add(1);
+        if self.nodes > MAX_TERM_NODES {
+            self.exhausted = true;
+        }
+        !self.exhausted
     }
 }
 
 /// The expander (ASN-0130): one expansion's state — the referent supplier
-/// and the fresh-name supply. Build one per top-level expansion
-/// (`certify_stable`'s and the rule engine's each start at zero — PR3's
-/// determinism is per expansion).
+/// and the budget. Build one per top-level expansion (`certify_stable`'s
+/// and the rule engine's each start at zero — PR3's determinism is per
+/// expansion).
 pub(crate) struct Expander<'a> {
     defs: &'a dyn DefSource,
-    supply: Supply,
+    budget: Budget,
 }
 
 impl<'a> Expander<'a> {
     pub(crate) fn new(defs: &'a dyn DefSource) -> Expander<'a> {
-        Expander { defs, supply: Supply(0) }
+        Expander { defs, budget: Budget { next: 0, nodes: 0, exhausted: false } }
     }
 
     /// `expand` — the flat reference expansion of a checked (every `Ref`
-    /// resolvable) body.
-    pub(crate) fn expand(&mut self, t: &Term) -> Term {
-        self.term(t)
+    /// resolvable) body, or `ExpansionTooLarge` once the budget is spent.
+    pub(crate) fn expand(&mut self, t: &Term) -> Result<Term, ExpansionTooLarge> {
+        let out = self.term(t);
+        if self.budget.exhausted {
+            Err(ExpansionTooLarge)
+        } else {
+            Ok(out)
+        }
     }
 }
 
 impl Rewrite for Expander<'_> {
     /// The one node the expansion acts on; every other former falls through.
+    /// Past the budget: a stub, and no descent.
     fn term(&mut self, t: &Term) -> Term {
+        if !self.budget.tick() {
+            return Term::Lit(Lit::True);
+        }
         let Term::Ref { addr, args } = t else {
             return rewrite_term(self, t);
         };
@@ -68,25 +104,33 @@ impl Rewrite for Expander<'_> {
             .unwrap_or_else(|| unreachable!("WT-ref: a checked body's referent has a defined signature"));
         // The node: fresh names for the referent's parameters first, in
         // signature order …
-        let fresh: Vec<VarId> = referent.params().iter().map(|_| self.supply.fresh()).collect();
+        let fresh: Vec<VarId> = referent.params().iter().map(|_| self.budget.fresh()).collect();
         // … then its (recursively expanded) body's binders, depth-first
         // left-to-right.
         let inner_flat = self.term(&referent.evaluable);
         let map: im::HashMap<VarId, VarId> =
             referent.params().iter().map(|(p, _)| *p).zip(fresh.iter().copied()).collect();
-        let mut out = Rename { supply: &mut self.supply, map }.term(&inner_flat);
+        let mut out = Rename { budget: &mut self.budget, map }.term(&inner_flat);
         for (fr, arg) in fresh.into_iter().zip(flat_args).rev() {
             out = Term::Let { var: fr, bound: Arc::new(arg), body: Arc::new(out) };
         }
         out
     }
+
+    fn dom(&mut self, d: &Dom) -> Dom {
+        if !self.budget.tick() {
+            return Dom::LinkDom;
+        }
+        rewrite_dom(self, d)
+    }
 }
 
 /// The α-renaming of an already-flat (ref-free) referent body: `map` on free
 /// occurrences, and a fresh reserved name for every internal binder,
-/// depth-first left-to-right (PR3's binding-site renaming).
+/// depth-first left-to-right (PR3's binding-site renaming). Charges the
+/// expansion's budget per node, as the expander does.
 struct Rename<'a> {
-    supply: &'a mut Supply,
+    budget: &'a mut Budget,
     map: im::HashMap<VarId, VarId>,
 }
 
@@ -94,7 +138,7 @@ impl Rename<'_> {
     /// Rewrite `body` in the scope of the binder `var`: mint its fresh name,
     /// extend the map for the in-scope child, restore for whatever follows.
     fn under(&mut self, var: VarId, body: &Term) -> (VarId, ArcTerm) {
-        let fresh = self.supply.fresh();
+        let fresh = self.budget.fresh();
         let inner = self.map.update(var, fresh);
         let outer = std::mem::replace(&mut self.map, inner);
         let renamed = Arc::new(self.term(body));
@@ -109,8 +153,12 @@ impl Rewrite for Rename<'_> {
     }
 
     /// The binding formers: out-of-scope children first, under the current
-    /// map; then the binder, freshly named, over its in-scope child.
+    /// map; then the binder, freshly named, over its in-scope child. Past
+    /// the budget: a stub, and no descent.
     fn term(&mut self, t: &Term) -> Term {
+        if !self.budget.tick() {
+            return Term::Lit(Lit::True);
+        }
         match t {
             Term::Forall { var, dom, body } => {
                 let dom = Arc::new(self.dom(dom));
@@ -144,6 +192,9 @@ impl Rewrite for Rename<'_> {
     }
 
     fn dom(&mut self, d: &Dom) -> Dom {
+        if !self.budget.tick() {
+            return Dom::LinkDom;
+        }
         match d {
             Dom::Filter { dom, var, pred } => {
                 let dom = Arc::new(self.dom(dom));
@@ -209,6 +260,7 @@ mod tests {
             result: Sort::Bool,
             evaluable: Arc::new(body),
             ref_free: true,
+            chain_depth: 2,
         };
         let stub = Stub(HashMap::from([(p.tumbler().clone(), Arc::new(referent))]));
         // Host: ∃ y ∈ L_dom :: P(y).
@@ -233,7 +285,7 @@ mod tests {
                 }),
             }),
         };
-        assert_eq!(Expander::new(&stub).expand(&host), expected);
-        assert_eq!(Expander::new(&stub).expand(&host), expected, "deterministic per expansion");
+        assert_eq!(Expander::new(&stub).expand(&host), Ok(expected.clone()));
+        assert_eq!(Expander::new(&stub).expand(&host), Ok(expected), "deterministic per expansion");
     }
 }

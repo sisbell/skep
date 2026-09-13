@@ -57,6 +57,17 @@ pub enum TypeError {
     DanglingReference(Address),
     /// A `Reg`-quantified body has an ill-typed concrete instance (V-IDX).
     RegInstanceIllTyped(Box<TypeError>),
+    /// The term nests past `MAX_DEPTH`, counted through references: its
+    /// evaluable projection (`Reg`-expansion joins included), or the reach of
+    /// a `Ref` — the referent's own recorded depth plus the derivation and
+    /// the arguments — would carry a walk deeper than the one bound every
+    /// walk is set against. A def at the cap admits no reference to it.
+    TooDeep,
+    /// The term, after `Reg`-expansion, exceeds `MAX_TERM_NODES` nodes —
+    /// counted per node the checker visits or builds, so nested `Reg`
+    /// quantifiers and an `Arc`-shared body are charged for what they
+    /// produce, and the check stops at the budget.
+    TooLarge,
 }
 
 impl fmt::Display for TypeError {
@@ -93,6 +104,12 @@ impl fmt::Display for TypeError {
             TypeError::RegInstanceIllTyped(e) => {
                 write!(f, "type_check: a Reg-quantified instance is ill-typed: {e}")
             }
+            TypeError::TooDeep => f.write_str(
+                "type_check: the term nests past MAX_DEPTH (counted through references)",
+            ),
+            TypeError::TooLarge => f.write_str(
+                "type_check: the term exceeds MAX_TERM_NODES nodes after Reg-expansion",
+            ),
         }
     }
 }
@@ -197,6 +214,10 @@ pub enum EvalError {
     /// parse/WT — reachable only under a PR-DISC breach (§Internal 4).
     UndisciplinedDef,
     ArgArityMismatch,
+    /// An argument's sort differs from Γ_D's — or an `AddrSet` argument
+    /// holds a tumbler that is not a T4-valid address, which is no ℘_fin(T)
+    /// value at all (the evaluator lifts every set element to an `Address`
+    /// at its binding sites).
     ArgSortMismatch,
 }
 
@@ -216,7 +237,13 @@ impl fmt::Display for EvalError {
 impl Error for EvalError {}
 
 /// `certify_stable` rejection (CVALID 0..iii).
+///
+/// `#[non_exhaustive]`: the static refusals a certification makes before its
+/// deposit — over the flat expansion, which no bound but this crate's own
+/// governs — are a vocabulary that grows with the analyses; a consumer's
+/// catch-all should absorb a new one rather than break.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum CertifyError {
     NotEverRegistered,
     /// Ever-registered start with NO defined signature — the permanent
@@ -226,6 +253,12 @@ pub enum CertifyError {
     UndisciplinedDef,
     NotBoolean,
     NotActive,
+    /// The def's flat reference expansion exceeds `MAX_TERM_NODES` nodes —
+    /// a reference DAG whose unfolding into the tree ST⁺ classifies is past
+    /// the budget (each `Ref` re-expands its referent under fresh names,
+    /// PR3, so a def referenced twice per level unfolds exponentially).
+    /// Asked before view-independence: the expansion is what both legs read.
+    ExpansionTooLarge,
     ViewDependent,
     NotStable,
     Emit(TxnError<EmitError>),
@@ -242,6 +275,9 @@ impl fmt::Display for CertifyError {
             }
             CertifyError::NotBoolean => f.write_str("certify_stable: the def's codomain is not Bool"),
             CertifyError::NotActive => f.write_str("certify_stable: the def is not actively registered"),
+            CertifyError::ExpansionTooLarge => f.write_str(
+                "certify_stable: the def's flat reference expansion exceeds MAX_TERM_NODES nodes",
+            ),
             CertifyError::ViewDependent => {
                 f.write_str("certify_stable: the def's expansion is view-dependent (PR-VIEW)")
             }
@@ -362,6 +398,13 @@ pub enum RuleError {
     /// A `Def` trigger whose def is not single-parameter (a `TriggerTerm`
     /// binds exactly one by type).
     BadTriggerArity,
+    /// A `Def` trigger whose def's flat reference expansion exceeds
+    /// `MAX_TERM_NODES` nodes — the tree the lint and the armer graph read.
+    /// Refused at registration, so every registered trigger expands within
+    /// the budget and the static analyses over the working set stay
+    /// infallible (an `Inline` trigger is ref-free: its projection is its
+    /// own expansion).
+    TriggerExpansionTooLarge,
     /// `Marker.ty` not a cataloged Unary type.
     BadMarkerType(TypeKey),
     /// `Marker.ty` cataloged Unary but idem = ⊥ — the fire executor's gap
@@ -396,6 +439,9 @@ impl fmt::Display for RuleError {
             RuleError::BadTriggerArity => {
                 f.write_str("register_rule: the Def trigger's def does not bind exactly one parameter")
             }
+            RuleError::TriggerExpansionTooLarge => f.write_str(
+                "register_rule: the Def trigger's flat reference expansion exceeds MAX_TERM_NODES nodes",
+            ),
             RuleError::BadMarkerType(ty) => {
                 write!(f, "register_rule: Marker type {ty:?} is not a cataloged Unary class")
             }

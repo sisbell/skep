@@ -233,48 +233,202 @@ fn register_pred_refuses_stored_content_that_parses_but_fails_wt() {
     assert!(c.signature(&g).is_none(), "orphan content, never registered");
 }
 
-/// The decode cap defends: a hand-forged body one former past it is
-/// `ParseFailed`, and one exactly at it registers and then survives every
-/// walk a stored body drives — the parse and check of a fresh memo, the
-/// evaluation, the certification's expansion and analysis, and the expansion
-/// through a reference — on this default test thread, whose stack is the
-/// budget the cap is set against. (The bytes are PR-ENC's: `¬` is one tag
-/// per level over the closed `True`, which the codec's own suite pins.)
+/// PR-ENC's envelope around a payload: the minimal varint length, then the
+/// bytes.
+fn envelope(payload: Vec<u8>) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut len = payload.len() as u64;
+    loop {
+        let limb = (len & 0x7f) as u8;
+        len >>= 7;
+        if len == 0 {
+            out.push(limb);
+            break;
+        }
+        out.push(limb | 0x80);
+    }
+    out.extend(payload);
+    out
+}
+
+/// A hand-forged closed body `¬^depth ⊤` in PR-ENC (`¬` is one tag per
+/// level over the closed `True`, which the codec's own suite pins).
+fn forged_negations(depth: usize) -> Vec<u8> {
+    let mut payload = vec![0u8]; // no parameters
+    payload.extend(std::iter::repeat_n(7u8, depth)); // NOT, per level
+    payload.extend([2u8, 1]); // LIT, TRUE
+    envelope(payload)
+}
+
+/// The nesting cap defends, and is counted through references: a
+/// hand-forged body one former past it is `ParseFailed`, and one exactly at
+/// it registers and then survives every walk a stored body drives — the
+/// parse and check of a fresh memo, the evaluation, the certification's
+/// expansion and analysis — on this default test thread, whose stack is the
+/// budget the cap is set against. A body at the cap has no room for a
+/// reference to it (`TooDeep`: the reference would derive it deeper than the
+/// cap admits); the deepest body a reference can reach is the cap less the
+/// derivation's own levels, and every walk THROUGH a reference to it — a
+/// cold derivation, the evaluation, the expansion — survives too.
 #[test]
 fn a_hand_forged_body_at_the_decode_cap_survives_every_walk() {
     const CAP: usize = 128;
-    let forged = |depth: usize| -> Vec<u8> {
-        let mut payload = vec![0u8]; // no parameters
-        payload.extend(std::iter::repeat_n(7u8, depth)); // NOT, per level
-        payload.extend([2u8, 1]); // LIT, TRUE
-        let mut out = Vec::new();
-        let mut len = payload.len() as u64;
-        loop {
-            let limb = (len & 0x7f) as u8;
-            len >>= 7;
-            if len == 0 {
-                out.push(limb);
-                break;
-            }
-            out.push(limb | 0x80);
-        }
-        out.extend(payload);
-        out
-    };
+    const DERIVATION: usize = 2;
     let k = kernel();
     let c = coord(&k);
-    let past = insert_raw(&k, &doc1(), forged(CAP + 1));
+    let past = insert_raw(&k, &doc1(), forged_negations(CAP + 1));
     assert!(matches!(c.register_pred(&doc1(), &past), Err(RegisterError::ParseFailed)));
-    let start = insert_raw(&k, &doc1(), forged(CAP));
+    let start = insert_raw(&k, &doc1(), forged_negations(CAP));
     c.register_pred(&doc1(), &start).expect("a body at the cap registers");
 
     // A fresh memo: parse + check + evaluate. `¬^128 True` is `True`.
     let fresh = coord(&k);
     assert_eq!(fresh.evaluate_def(&start, &[], View::Active, &k.snapshot()), Ok(Value::Bool(true)));
     fresh.certify_stable(&doc1(), &start).expect("expand + analyze at the cap");
-    let through = fresh.type_check(vec![], Term::Ref { addr: start, args: vec![] }).expect("a reference to it");
+    assert!(matches!(
+        fresh.type_check(vec![], Term::Ref { addr: start.clone(), args: vec![] }),
+        Err(TypeError::TooDeep)
+    ));
+
+    // The deepest referenceable body, and the walks through a reference.
+    let reachable = insert_raw(&k, &doc1(), forged_negations(CAP - DERIVATION));
+    fresh.register_pred(&doc1(), &reachable).expect("a body the derivation's levels below the cap");
+    let through = fresh
+        .type_check(vec![], Term::Ref { addr: reachable.clone(), args: vec![] })
+        .expect("a reference to it");
     let (r, _) = fresh.define_predicate(&doc1(), &through).expect("define the reference");
     fresh.certify_stable(&doc1(), &r).expect("expand through the reference at the cap");
+    let one_deeper = insert_raw(&k, &doc1(), forged_negations(CAP - DERIVATION + 1));
+    fresh.register_pred(&doc1(), &one_deeper).expect("registers on its own");
+    assert!(matches!(
+        fresh.type_check(vec![], Term::Ref { addr: one_deeper, args: vec![] }),
+        Err(TypeError::TooDeep)
+    ));
+    let cold = coord(&k);
+    assert_eq!(cold.evaluate_def(&r, &[], View::Active, &k.snapshot()), Ok(Value::Bool(true)));
+    assert_eq!(cold.signature(&r).map(|s| s.result), Some(Sort::Bool));
+}
+
+/// The node budget on the stored-bytes path: ten nested `Reg` quantifiers
+/// over a leaf — thirty-three bytes of PR-ENC — would instantiate 5¹⁰
+/// bodies, and are `IllTyped(TooLarge)` at the budget instead. The bytes
+/// are a corpus seed for a def-codec fuzz target.
+#[test]
+fn register_pred_refuses_a_stored_reg_expansion_past_the_node_budget() {
+    let k = kernel();
+    let c = coord(&k);
+    let mut payload = vec![0u8]; // no parameters
+    for var in 1..=10u8 {
+        payload.extend([10u8, var, 5]); // FORALL, the binder, REG
+    }
+    payload.extend([2u8, 1]); // LIT, TRUE
+    let g = insert_raw(&k, &doc1(), envelope(payload));
+    assert!(matches!(
+        c.register_pred(&doc1(), &g),
+        Err(RegisterError::IllTyped(TypeError::TooLarge))
+    ));
+    assert!(c.signature(&g).is_none(), "orphan content, never registered");
+}
+
+/// A reference chain is bounded at registration, not discovered at a cold
+/// derivation: `P₀(x) := ⊤`, `Pᵢ(x) := Pᵢ₋₁(x)` registers while its reach —
+/// three levels per link: the reference's derivation and its one argument —
+/// fits the cap, and the first link past it is `IllTyped(TooDeep)`. The
+/// chain at the cap then derives COLD on a fresh coordinator — every link
+/// parsed and checked one derivation inside the last — evaluates through
+/// every link, and expands and analyzes through every link, on this
+/// default thread: this test is the measurement the derivation's level
+/// cost is set against.
+#[test]
+fn a_reference_chain_at_the_cap_derives_cold_and_one_deeper_is_refused() {
+    let k = kernel();
+    let c = coord(&k);
+    let (mut top, _) = c
+        .define_predicate(&doc1(), &c.type_check(vec![(v(1), Sort::Addr)], tru()).expect("P₀"))
+        .expect("define P₀");
+    let mut links = 0u32;
+    loop {
+        let next = Term::Ref { addr: top.clone(), args: vec![at(var(1))] };
+        match c.type_check(vec![(v(1), Sort::Addr)], next) {
+            Ok(tt) => {
+                top = c.define_predicate(&doc1(), &tt).expect("define the next link").0;
+                links += 1;
+            }
+            Err(TypeError::TooDeep) => break,
+            Err(other) => panic!("expected TooDeep at the cap, got {other:?}"),
+        }
+    }
+    assert_eq!(links, 42, "three levels per link, over a cap of 128");
+
+    let fresh = coord(&k);
+    assert_eq!(fresh.signature(&top).map(|s| s.result), Some(Sort::Bool));
+    assert_eq!(
+        fresh.evaluate_def(&top, &[Value::Addr(ca(1))], View::Active, &k.snapshot()),
+        Ok(Value::Bool(true))
+    );
+    fresh.certify_stable(&doc1(), &top).expect("expand and analyze through every link");
+}
+
+/// The expansion budget: `Pᵢ(x) := Pᵢ₋₁(x) ∧ Pᵢ₋₁(x)` is a few nodes per
+/// def and registers at every level (its reach grows four per level), while
+/// its flat expansion doubles per level — `P₈` certifies, `P₁₆` is
+/// `ExpansionTooLarge` before its 2¹⁶ copies of `P₀` exist, and a `Def`
+/// trigger over it is refused at the door `certify_rule` and `armer_cycles`
+/// stand behind.
+#[test]
+fn certify_stable_refuses_an_expansion_past_the_node_budget() {
+    let k = kernel();
+    let mut c = coord(&k);
+    let (mut p, _) = c
+        .define_predicate(&doc1(), &c.type_check(vec![(v(1), Sort::Addr)], tru()).expect("P₀"))
+        .expect("define P₀");
+    let mut p8 = None;
+    for i in 1..=16 {
+        let twice = and(
+            Term::Ref { addr: p.clone(), args: vec![at(var(1))] },
+            Term::Ref { addr: p.clone(), args: vec![at(var(1))] },
+        );
+        let tt = c.type_check(vec![(v(1), Sort::Addr)], twice).expect("Pᵢ");
+        p = c.define_predicate(&doc1(), &tt).expect("define Pᵢ").0;
+        if i == 8 {
+            p8 = Some(p.clone());
+        }
+    }
+    let p8 = p8.expect("P₈ was defined");
+    c.certify_stable(&doc1(), &p8).expect("P₈'s expansion fits the budget");
+    assert!(matches!(c.certify_stable(&doc1(), &p), Err(CertifyError::ExpansionTooLarge)));
+    let rule = Rule {
+        domain: Dom::MembersDom(conc(&pred_stable_ty())),
+        trigger: Trigger::Def(p.clone()),
+        view: View::Audit,
+        action: marker_action(),
+    };
+    assert!(matches!(c.certify_rule(&rule), Err(RuleError::TriggerExpansionTooLarge)));
+    assert!(matches!(c.register_rule(rule), Err(RuleError::TriggerExpansionTooLarge)));
+}
+
+/// `evaluate_def`'s argument door on a set: an `AddrSet` holding a tumbler
+/// that is no T4-valid address (adjacent separators) is `ArgSortMismatch`,
+/// where one holding an address is bound and counted.
+#[test]
+fn evaluate_def_refuses_a_set_argument_holding_a_non_address() {
+    let k = kernel();
+    let c = coord(&k);
+    let (p, _) = c
+        .define_predicate(
+            &doc1(),
+            &c.type_check(
+                vec![(v(1), Sort::AddrSet)],
+                nat_eq(count(Dom::SetTerm(at(var(1)))), lit_nat(1)),
+            )
+            .expect("|s| = 1"),
+        )
+        .expect("define");
+    let s = k.snapshot();
+    let bad = Value::AddrSet(im::OrdSet::unit(t(&[1, 0, 0, 1])));
+    assert_eq!(c.evaluate_def(&p, &[bad], View::Active, &s), Err(EvalError::ArgSortMismatch));
+    let good = Value::AddrSet(im::OrdSet::unit(ca(1).tumbler().clone()));
+    assert_eq!(c.evaluate_def(&p, &[good], View::Active, &s), Ok(Value::Bool(true)));
 }
 
 /// PR-DISC's freeze-on-breach: a `pdef` on content that is no def —

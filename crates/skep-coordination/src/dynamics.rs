@@ -415,22 +415,24 @@ impl Analyzer<'_> {
             }
             // count(D) ≤ c ∈ SF and count(D) ≥ c ∈ ST over a grow-only D, with a
             // literal threshold (ST⁺ widens to a bound ℕ parameter);
-            // count(D) = c is unclassified — Neither (PD0).
+            // count(D) = c is unclassified — Neither (PD0). Each side's
+            // `Count` domain is analyzed exactly once here — its own analysis
+            // is `constant(dom.fp)`, and the grow-only fact rides along — so
+            // a threshold nested inside its own domain's filter costs linear
+            // work, not a doubling per level.
             Prim::NatLe(x, y) => {
-                let ax = self.term(x);
-                let ay = self.term(y);
-                let mut st = false;
-                let mut sf = false;
-                if let Term::Count(d) = &**x {
-                    if threshold_ok(y, self.widen) {
-                        sf |= self.dom(d).grow; // count(D) ≤ c: upper bound, false-stable
+                let side = |t: &Term, other: &Term| -> (Analysis, bool) {
+                    match t {
+                        Term::Count(d) => {
+                            let ad = self.dom(d);
+                            let bound = threshold_ok(other, self.widen) && ad.grow;
+                            (constant(ad.fp), bound)
+                        }
+                        _ => (self.term(t), false),
                     }
-                }
-                if let Term::Count(d) = &**y {
-                    if threshold_ok(x, self.widen) {
-                        st |= self.dom(d).grow; // c ≤ count(D): lower bound, true-stable
-                    }
-                }
+                };
+                let (ax, sf) = side(x, y); // count(D) ≤ c: upper bound, false-stable
+                let (ay, st) = side(y, x); // c ≤ count(D): lower bound, true-stable
                 let fp = ax.fp.union(&ay.fp);
                 let empty = fp.is_empty();
                 Analysis { st: st || empty, sf: sf || empty, grow: empty, fp }

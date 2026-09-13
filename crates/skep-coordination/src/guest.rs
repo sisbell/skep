@@ -45,6 +45,7 @@
 //! BH4's `age`/`stale` (dormant in this format, filtered the same way).
 //! Signatures mirror M7's so the evaluator's call sites read as before.
 
+use std::collections::BTreeMap;
 use std::slice;
 
 use im::OrdSet;
@@ -52,6 +53,11 @@ use skep_address::{document_of, Address, Tumbler};
 use skep_links::{Endset, LinkState, NotBh4, Pattern, Tip, Tuple, View, Visibility};
 
 use crate::eval::lift;
+
+/// The visible operative claims as a forward map, `old → {new}` by
+/// denotation — built once per walk, so a walk of C steps over C claims
+/// costs C map probes, not C scans of the claim set.
+type Forward = BTreeMap<Tumbler, OrdSet<Tumbler>>;
 
 /// M7's read surface at guest class, over the world of one pinned snapshot.
 pub(crate) struct GuestLinks<'a, W> {
@@ -135,32 +141,38 @@ impl<'a, W> GuestLinks<'a, W> {
     // otherwise — M7 v1's serving scope), so the class question is decided
     // once, at check time, and never re-asked here.
 
-    /// The visible OPERATIVE claim set: the active `[K_sup]` tuples of
-    /// readable homes. Edges run `old → new` by DENOTATION on both slots,
-    /// exactly as M7's `sup_fwd` fold keys them; a claim is operative iff
-    /// unnullified (Df-SUCC), which the active view gives.
-    fn visible_claims(&self, ty: &Endset) -> Vec<Tuple> {
-        self.observe(ty, Pattern::default(), View::Active)
+    /// The visible OPERATIVE claim set, indexed forward: the active
+    /// `[K_sup]` tuples of readable homes, as `old → {new}`. Edges run
+    /// `old → new` by DENOTATION on both slots, exactly as M7's `sup_fwd`
+    /// fold keys them; a claim is operative iff unnullified (Df-SUCC), which
+    /// the active view gives. One pass over the claims per walk.
+    fn visible_forward(&self, ty: &Endset) -> Forward {
+        let mut fwd = Forward::new();
+        for t in self.observe(ty, Pattern::default(), View::Active) {
+            for old in t.from.addrs() {
+                let succs = fwd.entry(old.clone()).or_default();
+                for new in t.to.addrs() {
+                    succs.insert(new.clone());
+                }
+            }
+        }
+        fwd
     }
 
     /// `succ_o(x)` over the visible claims — deduplicated over `new`.
-    fn succs_operative(claims: &[Tuple], x: &Tumbler) -> OrdSet<Tumbler> {
-        claims
-            .iter()
-            .filter(|t| t.from.addrs().any(|old| old == x))
-            .flat_map(|t| t.to.addrs().cloned())
-            .collect()
+    fn succs_operative(fwd: &Forward, x: &Tumbler) -> OrdSet<Tumbler> {
+        fwd.get(x).cloned().unwrap_or_default()
     }
 
     /// The visited-set-bounded forward walk (M7's own halting rule): the
     /// traversed path from `x` (inclusive) and `Some(sink)` iff halted at a
     /// successor-free node — a branch or a cycle yields `None`.
-    fn walk_sup(claims: &[Tuple], x: &Tumbler) -> (Vec<Tumbler>, Option<Tumbler>) {
+    fn walk_sup(fwd: &Forward, x: &Tumbler) -> (Vec<Tumbler>, Option<Tumbler>) {
         let mut path = vec![x.clone()];
         let mut visited = OrdSet::unit(x.clone());
         let mut node = x.clone();
         loop {
-            let succs = Self::succs_operative(claims, &node);
+            let succs = Self::succs_operative(fwd, &node);
             match succs.len() {
                 0 => return (path, Some(node)),
                 1 => {
@@ -179,21 +191,21 @@ impl<'a, W> GuestLinks<'a, W> {
 
     /// BH2 forward step over the visible operative claims (Tumbler order).
     pub(crate) fn succs(&self, ty: &Endset, x: &Address) -> Vec<Address> {
-        let claims = self.visible_claims(ty);
-        Self::succs_operative(&claims, x.tumbler()).iter().map(lift).collect()
+        let fwd = self.visible_forward(ty);
+        Self::succs_operative(&fwd, x.tumbler()).iter().map(lift).collect()
     }
 
     /// BH2 chain over the visible operative claims.
     pub(crate) fn chain(&self, ty: &Endset, x: &Address) -> Vec<Address> {
-        let claims = self.visible_claims(ty);
-        Self::walk_sup(&claims, x.tumbler()).0.iter().map(lift).collect()
+        let fwd = self.visible_forward(ty);
+        Self::walk_sup(&fwd, x.tumbler()).0.iter().map(lift).collect()
     }
 
     /// BH2 head over the visible operative claims: `Sink(head)` at a
     /// successor-free node, `Indeterminate` at a branch or cycle.
     pub(crate) fn tip(&self, ty: &Endset, x: &Address) -> Tip {
-        let claims = self.visible_claims(ty);
-        match Self::walk_sup(&claims, x.tumbler()).1 {
+        let fwd = self.visible_forward(ty);
+        match Self::walk_sup(&fwd, x.tumbler()).1 {
             Some(sink) => Tip::Sink(lift(&sink)),
             None => Tip::Indeterminate,
         }

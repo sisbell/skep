@@ -15,7 +15,7 @@ use skep_coordination::{
     TypeKey, TypeRef, TypedTerm, View,
 };
 use skep_kernel::TxnError;
-use skep_links::{enc, Caller, HasLinks, NullifyError, ShippedType, Visibility};
+use skep_links::{enc, Caller, HasLinks, NullifyError, ShippedType, SlotArg, Tuple, Visibility};
 
 // ───────────────────────────── registration ─────────────────────────────
 
@@ -225,6 +225,39 @@ fn a_peeked_occurrence_yields_the_key_the_monitor_counts_by() {
     assert_eq!(c.fire_count(addr, peeked.arg.key_addr()), 1);
 }
 
+/// A fire's trigger and action see the STORE's domain element, never the
+/// caller's: an `Occurrence` is caller-built and carries a whole `Tuple`, so
+/// `fire` looks its argument up by identity (`t.addr`) and then uses what the
+/// domain yielded. A forgery carrying a live address and invented slots must
+/// not drive the verdict.
+#[test]
+fn a_fire_binds_the_store_s_element_not_the_caller_s() {
+    let k = kernel();
+    let mut c = coord(&k);
+    let l1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
+    let trig = Trigger::Inline(
+        c.type_check_trigger((v(1), Sort::Tup), in_coverage_f(lit_addr(&ca(1)), 1))
+            .expect("a trigger that reads the tuple's F"),
+    );
+    let id = c
+        .register_rule(Rule {
+            domain: Dom::ActiveSlice(conc(&pred_stable_ty())),
+            trigger: trig,
+            view: View::Active,
+            action: marker_action(),
+        })
+        .expect("register");
+    let forged = Arg::Tuple(Tuple { addr: l1.clone(), from: enc(&[ca(9)]), to: enc(&[ca(9)]) });
+    assert!(
+        matches!(
+            c.fire(&Occurrence { rule: id, arg: forged }).expect("fire"),
+            FireOutcome::Fired { .. }
+        ),
+        "the trigger read the store's F, not the forgery's"
+    );
+    assert!(k.snapshot().world().links().is_k(&marker_ty(), l1.tumbler()));
+}
+
 /// The lint's three legs, each failed alone: every leg is relative to the
 /// declared view; the Marker witness must be the marker's own class AND the
 /// trigger's parameter; a `Filter` by an SF predicate leaves the grow-only
@@ -289,8 +322,8 @@ fn marker_rule_certifies_fires_and_quiesces() {
     let k = kernel();
     let mut c = coord(&k);
     let writer = link_writer(&k);
-    writer.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel 1");
-    writer.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("rel 2");
+    writer.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("rel 1");
+    writer.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel 2");
 
     let trig = Trigger::Inline(
         c.type_check_trigger((v(1), Sort::Addr), not(is_k(&marker_ty(), var(1))))
@@ -309,7 +342,7 @@ fn marker_rule_certifies_fires_and_quiesces() {
     assert!(!c.quiescent(&s));
     let e = c.next_enabled(&s).expect("an enabled occurrence");
     assert_eq!(e.rule, id);
-    assert_eq!(e.arg, Arg::Addr(ca(1))); // members in tumbler order
+    assert_eq!(e.arg, Arg::Addr(ca(1))); // members in TUMBLER order — ca3 was deposited first
 
     match c.step(&k.snapshot()) {
         StepOutcome::Fired { rule, arg, .. } => {
@@ -987,6 +1020,46 @@ fn the_tuple_scope_bodies_read_emitter_source_and_target() {
     }
 }
 
+/// Q9's `PerTarget` and `PerSource` read their slot with `any`: a tuple with
+/// two targets is in scope when EITHER is. An `all` would scope the rule's
+/// work out and report a quiescence that is not there, which Q7 promises
+/// never happens.
+#[test]
+fn a_multi_address_slot_is_in_scope_when_any_of_its_addresses_is() {
+    let k = kernel();
+    let mut c = coord(&k);
+    link_writer(&k)
+        .makelink(
+            Caller::System,
+            &doc1(),
+            SlotArg::Addrs(vec![ca(1), ca(3)]),
+            SlotArg::Addrs(vec![ca(2), ca(4)]),
+            SlotArg::Addrs(vec![ra(PRED_STABLE)]),
+        )
+        .expect("a tuple with two sources and two targets");
+    c.register_rule(Rule {
+        domain: Dom::ActiveSlice(conc(&pred_stable_ty())),
+        trigger: always_tup(&c),
+        view: View::Active,
+        action: FireAction::Nullify { home: doc1() },
+    })
+    .expect("register");
+    let s = k.snapshot();
+    let scope = |x: &Address| {
+        c.type_check(vec![(v(9), Sort::Addr)], addr_eq(var(9), lit_addr(x))).expect("scope")
+    };
+    for (x, body) in [
+        (ca(2), ScopeBody::PerTarget),
+        (ca(4), ScopeBody::PerTarget),
+        (ca(1), ScopeBody::PerSource),
+        (ca(3), ScopeBody::PerSource),
+    ] {
+        assert!(!c.quiescent_scoped(&scope(&x), body, &s), "{x} under {body:?}");
+    }
+    assert!(c.quiescent_scoped(&scope(&ca(9)), ScopeBody::PerTarget, &s));
+    assert!(c.quiescent_scoped(&scope(&ca(9)), ScopeBody::PerSource, &s));
+}
+
 #[test]
 #[should_panic(expected = "quiescent_scoped precondition")]
 fn quiescent_scoped_panics_on_a_nat_parameter_scope() {
@@ -1056,6 +1129,41 @@ fn fire_count_keys_on_exact_coverage_and_home() {
     assert!(matches!(c.step(&k.snapshot()), StepOutcome::Fired { .. }));
     writer.emit(Caller::System, &doc1(), &marker_ty(), &doc1(), &[]).expect("a marker covering ca1 without naming it");
     assert_eq!(c.fire_count(id, &ca(1)), 1);
+}
+
+/// `fire_count` is RECOMPUTED from M7's journal-recovered slices at every ask
+/// — M9 owns no authoritative state — not tallied as fires happen: a handle
+/// that fired nothing reports the same count for the same rule, and a
+/// non-rule writer at the same attribution key `(ty, home, F = {x})` is
+/// counted too, which is the documented OVER-count behind "flags
+/// misbehaviour, does not certify it". An in-memory tally produces neither
+/// number.
+#[test]
+fn fire_counts_are_recomputed_from_the_store_not_tallied_in_memory() {
+    let k = kernel();
+    let mut c = coord(&k);
+    link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
+    let rule = Rule {
+        domain: Dom::MembersDom(conc(&pred_stable_ty())),
+        trigger: not_marked(&c),
+        view: View::Audit,
+        action: marker_action(),
+    };
+    let id = c.register_rule(rule.clone()).expect("register");
+    assert!(matches!(c.step(&k.snapshot()), StepOutcome::Fired { .. }));
+    assert_eq!(c.fire_count(id, &ca(1)), 1);
+
+    // A handle that fired nothing recomputes the same count from the store.
+    let mut fresh = coord(&k);
+    let id2 = fresh.register_rule(rule).expect("the same rule, a new handle");
+    assert_eq!(fresh.fire_count(id2, &ca(1)), 1);
+
+    // A non-rule writer at the same (type, home, exact F) — the Marker class
+    // IS the Retired class here — collides with the key, and the recompute
+    // says so where a tally would still say one.
+    deposit_rel(&k, RETIRED, &ca(1), &ca(2));
+    assert_eq!(c.fire_count(id, &ca(1)), 2);
+    assert_eq!(fresh.fire_count(id2, &ca(1)), 2);
 }
 
 /// The armer graph's edge rule: an empty footprint is armed by nothing;

@@ -396,7 +396,9 @@ pub(crate) mod fixture {
             Term::Forall { var: v(5), dom: ad(Dom::MembersDom(concrete.clone())), body: at(x()) },
             Term::Exists { var: v(5), dom: ad(Dom::ActiveSlice(concrete.clone())), body: at(x()) },
             Term::Let { var: v(6), bound: at(x()), body: at(y()) },
-            Term::IfSome { opt: at(x()), var: v(7), then_: at(y()), else_: at(x()) },
+            // Every sibling position holds a DISTINCT subterm, so a walk or a
+            // codec half that transposes two of them cannot round-trip.
+            Term::IfSome { opt: at(x()), var: v(7), then_: at(y()), else_: at(Term::Lit(Lit::False)) },
             Term::Count(ad(Dom::AuditSlice(class_var))),
             Term::MaxT1(ad(Dom::LinkDom)),
             Term::MinT1(ad(Dom::Reg)),

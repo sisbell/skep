@@ -117,6 +117,17 @@ fn endorsement_gates_a_new_reference_and_retraction_never_cascades() {
     assert_eq!(c.evaluate_def(&q_start, &[], View::Active, &s), Ok(Value::Bool(true)));
     assert_eq!(c.signature(&q_start).expect("Q has a signature").result, Sort::Bool);
 
+    // The argument reaches the referent and the referent's verdict comes back:
+    // the same reference at a different argument denotes false.
+    let q_false = c
+        .type_check(vec![], Term::Ref { addr: p_start.clone(), args: vec![at(lit_addr(&ca(2)))] })
+        .expect("Q' references P at ca2");
+    let (q_false_start, _) = c.define_predicate(&doc1(), &q_false).expect("define Q'");
+    assert_eq!(
+        c.evaluate_def(&q_false_start, &[], View::Active, &k.snapshot()),
+        Ok(Value::Bool(false))
+    );
+
     // Endorsement gates NEW registration…
     c.retract_pred(&doc1(), &p_start).expect("retract P");
     let r = c
@@ -593,6 +604,29 @@ fn certify_stable_charges_a_referent_s_payload_against_the_expansion_budget() {
     assert!(matches!(c.certify_stable(&doc1(), &p), Err(CertifyError::ExpansionTooLarge)));
 }
 
+/// `evaluate_def`'s `view` is the term view the denotation reads at: a stored
+/// def over a view-parameterized atom answers differently at `active` and
+/// `audit` once its witness is retracted — the same split `eval` makes, and
+/// the parameter is the caller's.
+#[test]
+fn a_stored_def_denotes_at_the_view_the_caller_names() {
+    let k = kernel();
+    let c = coord(&k);
+    let (t1, _) = link_writer(&k)
+        .emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(5), &[])
+        .expect("a witness for ca5");
+    let tt = c
+        .type_check(vec![(v(1), Sort::Addr)], is_k(&pred_stable_ty(), var(1)))
+        .expect("P(x) := is_K(pred_stable, x)");
+    let (p, _) = c.define_predicate(&doc1(), &tt).expect("define");
+    let at_view = |view: View| c.evaluate_def(&p, &[Value::Addr(ca(5))], view, &k.snapshot());
+    assert_eq!(at_view(View::Active), Ok(Value::Bool(true)));
+    assert_eq!(at_view(View::Audit), Ok(Value::Bool(true)));
+    link_writer(&k).nullify(Caller::System, &doc1(), &t1).expect("retract the witness");
+    assert_eq!(at_view(View::Active), Ok(Value::Bool(false)));
+    assert_eq!(at_view(View::Audit), Ok(Value::Bool(true)), "audit keeps the record");
+}
+
 /// `evaluate_def`'s argument door on a set: an `AddrSet` holding a tumbler
 /// that is no T4-valid address (adjacent separators) is `ArgSortMismatch`,
 /// where one holding an address is bound and counted.
@@ -860,6 +894,7 @@ fn certify_stable_refuses_each_cvalid_leg_in_order_and_certifies_through_referen
     // A ⊤-stable, view-independent Boolean def certifies and deposits; a
     // re-certification answers the incumbent and commits nothing.
     let (s0, _) = define(exists(1, Dom::AuditSlice(conc(&pred_def_ty())), tru()));
+    assert!(!c.is_certified_stable(&s0, &k.snapshot()), "uncertified until it is certified");
     let (cert, _) = c.certify_stable(&doc1(), &s0).expect("certify");
     assert!(c.is_certified_stable(&s0, &k.snapshot()));
     let before = k.current_seq();
@@ -877,6 +912,7 @@ fn certify_stable_refuses_each_cvalid_leg_in_order_and_certifies_through_referen
     // (iii) ST⁺: an SF-only spelling is not ⊤-stable.
     let (sn, _) = define(not(exists(1, Dom::AuditSlice(conc(&pred_def_ty())), tru())));
     assert!(matches!(c.certify_stable(&doc1(), &sn), Err(CertifyError::NotStable)));
+    assert!(!c.is_certified_stable(&sn, &k.snapshot()), "a refused certification deposits nothing");
 
     // The ST⁺ widening: `count(L_K) ≥ x` with x a bound ℕ parameter
     // certifies (a literal-only PD0 would refuse) — while plain classify
@@ -916,6 +952,13 @@ fn certify_stable_refuses_each_cvalid_leg_in_order_and_certifies_through_referen
     let (w2, _) = c.define_predicate(&doc1(), &w2).expect("define W2");
     let (rw2, _) = define_ref(&w2, vec![lit_nat(3)]);
     c.certify_stable(&doc1(), &rw2).expect("the threshold threads through two expansion levels");
+
+    // The order is forced where two legs fail: view-dependence speaks before
+    // ST⁺, and the sort check before the activity check.
+    let (svn, _) = define(not(exists(1, Dom::MembersDom(conc(&pred_def_ty())), tru())));
+    assert!(matches!(c.certify_stable(&doc1(), &svn), Err(CertifyError::ViewDependent)));
+    c.retract_pred(&doc1(), &sa).expect("retract the non-Boolean def");
+    assert!(matches!(c.certify_stable(&doc1(), &sa), Err(CertifyError::NotBoolean)));
 
     // (0)/(ii) ordering: a retracted def is NotActive — and retraction does
     // not cascade to the certificate, which is about the immutable content.

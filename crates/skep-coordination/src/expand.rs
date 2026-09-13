@@ -280,4 +280,86 @@ mod tests {
         assert_eq!(Expander::new(&stub).expand(&host), Ok(expected.clone()));
         assert_eq!(Expander::new(&stub).expand(&host), Ok(expected), "deterministic per expansion");
     }
+
+    /// PR3's renaming over EVERY binding position — the four binding term
+    /// formers and `Dom::Filter` — in one expansion: the referent's
+    /// parameters take the first fresh names in signature order, its binders
+    /// follow depth-first left to right, and each binder's IN-SCOPE child
+    /// alone sees the extended map, so an `IfSome`'s else-branch still reads
+    /// the enclosing `Let`'s name. The host's arguments are left as they
+    /// stand, though they are spelled with the referent's own parameter
+    /// names, so the `Let` chain binds the fresh names and captures nothing.
+    #[test]
+    fn every_binding_position_takes_a_fresh_name_in_its_own_scope() {
+        let p = a(&[1, 0, 1, 0, 1, 0, 1, 1]);
+        // P(x, o) := let z = x in ⋃(y ∈ {w ∈ L_dom | w = z}, if some z = o
+        // then z else z) — the inner `z` shadows the outer only in `then_`.
+        let body = Term::Let {
+            var: v(3),
+            bound: Arc::new(Term::Var(v(1))),
+            body: Arc::new(Term::BigUnion {
+                dom: Arc::new(Dom::Filter {
+                    dom: Arc::new(Dom::LinkDom),
+                    var: v(4),
+                    pred: Arc::new(addr_eq(Term::Var(v(4)), Term::Var(v(3)))),
+                }),
+                var: v(5),
+                body: Arc::new(Term::IfSome {
+                    opt: Arc::new(Term::Var(v(2))),
+                    var: v(3),
+                    then_: Arc::new(Term::Var(v(3))),
+                    else_: Arc::new(Term::Var(v(3))),
+                }),
+            }),
+        };
+        let referent = TypedTerm {
+            signed: SignedTerm {
+                params: vec![(v(1), Sort::Addr), (v(2), Sort::OptAddr)],
+                body: body.clone(),
+            },
+            result: Sort::AddrSet,
+            evaluable: Arc::new(body),
+            ref_free: true,
+            reach: 5,
+        };
+        let stub = Stub(HashMap::from([(p.tumbler().clone(), Arc::new(referent))]));
+        // The host spells its arguments with the referent's OWN parameter
+        // names, which the expansion must not touch.
+        let host = Term::Ref {
+            addr: p.clone(),
+            args: vec![Arc::new(Term::Var(v(1))), Arc::new(Term::Var(v(2)))],
+        };
+
+        let x = |n: u32| VarId::expansion(n);
+        let (x0, x1) = (x(0), x(1)); // P's two parameters, in signature order
+        let (x2, x3, x4, x5) = (x(2), x(3), x(4), x(5)); // Let, Filter, ⋃, IfSome
+        let expected = Term::Let {
+            var: x0,
+            bound: Arc::new(Term::Var(v(1))),
+            body: Arc::new(Term::Let {
+                var: x1,
+                bound: Arc::new(Term::Var(v(2))),
+                body: Arc::new(Term::Let {
+                    var: x2,
+                    bound: Arc::new(Term::Var(x0)),
+                    body: Arc::new(Term::BigUnion {
+                        dom: Arc::new(Dom::Filter {
+                            dom: Arc::new(Dom::LinkDom),
+                            var: x3,
+                            pred: Arc::new(addr_eq(Term::Var(x3), Term::Var(x2))),
+                        }),
+                        var: x4,
+                        body: Arc::new(Term::IfSome {
+                            opt: Arc::new(Term::Var(x1)),
+                            var: x5,
+                            then_: Arc::new(Term::Var(x5)),
+                            // The else-branch is OUTSIDE the guard's binder.
+                            else_: Arc::new(Term::Var(x2)),
+                        }),
+                    }),
+                }),
+            }),
+        };
+        assert_eq!(Expander::new(&stub).expand(&host), Ok(expected));
+    }
 }

@@ -927,6 +927,30 @@ fn domains_have_set_semantics_and_binders_bind_the_element() {
     )));
 }
 
+/// PC1's two quantifiers denote `all` and `any`: over ONE domain and ONE body
+/// that some elements satisfy and others do not, `∀` is false while `∃` is
+/// true — so neither is a constant and `∀` is not `∃`. The empty domain is the
+/// other edge: `∀` is vacuously true there and `∃` false.
+#[test]
+fn the_quantifiers_denote_all_and_any() {
+    let k = kernel();
+    let c = coord(&k);
+    deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
+    deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
+    let slice = || Dom::ActiveSlice(conc(&pred_stable_ty()));
+    let d = |t: Term| decide_now(&k, &c, View::Active, t);
+    // ca1 is the F of one tuple of two.
+    assert!(d(exists(2, slice(), in_coverage_f(lit_addr(&ca(1)), 2))));
+    assert!(!d(forall(2, slice(), in_coverage_f(lit_addr(&ca(1)), 2))));
+    // A body no element satisfies, and one every element satisfies.
+    assert!(!d(exists(2, slice(), in_coverage_f(lit_addr(&ca(9)), 2))));
+    assert!(d(forall(2, slice(), not(in_coverage_f(lit_addr(&ca(9)), 2)))));
+    // The empty domain: ∀ vacuous, ∃ false.
+    let empty = || Dom::MembersDom(conc(&marker_ty()));
+    assert!(d(forall(2, empty(), fls())));
+    assert!(!d(exists(2, empty(), tru())));
+}
+
 /// `L_dom` is the typed-relation sublayer and nothing else: a link deposited
 /// through the open surface in an UNCATALOGED type is outside PL's universe —
 /// it seeds no domain element and enters no reflection — while the cataloged
@@ -1015,6 +1039,36 @@ fn prims_answer_their_equal_cases_and_the_connectives_their_tables() {
     for x in [false, true] {
         assert_eq!(d(not(b(x))), !x, "not {x}");
     }
+}
+
+/// Every V-PRIM Boolean denotes a FUNCTION, not a constant: the two equalities
+/// answer false at some input and definedness answers true at some input.
+/// Without this the suite's count assertions — all of them `nat_eq` — hold
+/// under an always-true `NatEq`, and PC2a's set semantics, the UV
+/// member-count rewrite, `count(Reg)` and `L_dom`'s population go dark.
+#[test]
+fn every_boolean_prim_answers_both_ways() {
+    let k = kernel();
+    let c = coord(&k);
+    deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
+    deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
+    let ps = pred_stable_ty();
+    let d = |t: Term| decide_now(&k, &c, View::Active, t);
+    let sources = || members(&ps); // {ca1, ca3}
+    let targets = || big_union(Dom::ActiveSlice(conc(&ps)), 2, tup_addrs_g(2)); // {ca2, ca4}
+
+    // ℕ `=` — the suite's count instrument.
+    assert!(d(nat_eq(lit_nat(2), lit_nat(2))));
+    assert!(!d(nat_eq(lit_nat(2), lit_nat(3))));
+    assert!(!d(nat_eq(count(Dom::MembersDom(conc(&ps))), lit_nat(3))));
+    // ℘_fin(T) `=` — two sets of the SAME size and different elements, so a
+    // cardinality-only equality is caught as well as a constant one.
+    assert!(d(set_eq(sources(), sources())));
+    assert!(!d(set_eq(sources(), targets())));
+    assert!(!d(set_eq(sources(), members(&marker_ty()))));
+    // Definedness, true at a defined optional.
+    assert!(d(def(Term::MinT1(ad(Dom::MembersDom(conc(&ps)))))));
+    assert!(!d(def(bot_addr())));
 }
 
 /// A verdict is "as of `snap.seq()`" (M2 V1 retrospective): the same term
@@ -1161,6 +1215,44 @@ fn classify_places_a_spelling_on_the_lattice_relative_to_its_view() {
     assert!(c.classify(&ldom, View::Audit).footprint.reads_all_audit());
     let isdoc = tc1(is_doc(var(1)));
     assert!(c.classify(&isdoc, View::Audit).footprint.reads_residence());
+}
+
+/// PR-VIEW's scan refuses EXACTLY the view-parameterized constituents and the
+/// UV-rewritten collection atoms — the gate `certify_stable` stands behind, so
+/// a form dropped from it certifies a def whose ⊤-stability holds at one view
+/// and not another, and a form wrongly added to it refuses a legitimate def.
+#[test]
+fn view_independence_refuses_every_view_parameterized_and_uv_rewritten_form() {
+    let k = kernel();
+    let c = coord(&k);
+    let sup = c.reserved_type(ShippedType::Supersedes).clone();
+    let ps = pred_stable_ty();
+    let independent = |t: Term| {
+        let tt = c.type_check(vec![], t).expect("test term type-checks");
+        c.classify(&tt, View::Audit).view_independent
+    };
+    // `sources_to`/`stale` are out of the vocabulary in this format.
+    for t in [
+        is_k(&ps, lit_addr(&ca(1))),
+        members(&ps),
+        targets_of(&ps, lit_addr(&ca(1))),
+        succs(&sup, lit_addr(&ca(1))),
+        chain(&sup, lit_addr(&ca(1))),
+        count(Dom::MembersDom(conc(&ps))),
+    ] {
+        assert!(!independent(t.clone()), "view-dependent: {t:?}");
+    }
+    for t in [
+        is_filtered(&retired_ty(), lit_addr(&ca(1))),
+        tip(&sup, lit_addr(&ca(1))),
+        is_in_chain(&sup, lit_addr(&ca(1)), lit_addr(&ca(2))),
+        is_doc(lit_addr(&doc1())),
+        count(Dom::ActiveSlice(conc(&ps))),
+        count(Dom::AuditSlice(conc(&ps))),
+        count(Dom::LinkDom),
+    ] {
+        assert!(independent(t.clone()), "view-independent: {t:?}");
+    }
 }
 
 /// PD0's rules over a generated family: four atoms, one per lattice point,

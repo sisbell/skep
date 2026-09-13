@@ -70,15 +70,17 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// `TypedTerm` came through `type_check`, and a trigger — the one checked
     /// term that binds a tuple — is a `TriggerTerm`, which this signature
     /// cannot receive. The codec's own `Tup` refusal (it has no tag for the
-    /// sort) is therefore unreachable from this path. Under concurrency: a
-    /// concurrent INSERT lands the def mid-document (harmless — identity is
-    /// the returned start); a concurrent DELETE yields a retryable
-    /// `Insert(Rejected(OutOfBounds))` — benign, recompute and re-insert
-    /// (item 6; the design's `BadPosition`, split by the as-built M5); a
-    /// `register_pred`-stage failure leaves harmless orphan content a later
-    /// `register_pred(d, start)` adopts. Borrows the term: the stored def is
-    /// re-derived from its own bytes by `register_pred`, so nothing of the
-    /// caller's value is kept, and the caller goes on evaluating or
+    /// sort) is therefore unreachable from this path. `d` must be a
+    /// registered document: an unregistered one is M5's door,
+    /// `Insert(Rejected(DocNotRegistered))`, before any content lands. Under
+    /// concurrency: a concurrent INSERT lands the def mid-document (harmless
+    /// — identity is the returned start); a concurrent DELETE yields a
+    /// retryable `Insert(Rejected(OutOfBounds))` — benign, recompute and
+    /// re-insert (item 6; the design's `BadPosition`, split by the as-built
+    /// M5); a `register_pred`-stage failure leaves harmless orphan content a
+    /// later `register_pred(d, start)` adopts. Borrows the term: the stored
+    /// def is re-derived from its own bytes by `register_pred`, so nothing of
+    /// the caller's value is kept, and the caller goes on evaluating or
     /// classifying it.
     pub fn define_predicate(&self, d: &Address, term: &TypedTerm) -> Result<(Address, Seq), DefineError> {
         let bytes = codec::encode(&term.signed)
@@ -101,12 +103,24 @@ impl<W: CoordinationWorld> Coordinator<W> {
         Ok((start, seq))
     }
 
-    /// Validate (parse → Γ_D + body, WT + WT-ref, ever-registration of refs,
-    /// endorsement, home-residence) the run already at `start` against ONE
-    /// pinned snapshot σ, then emit the `pdef` tuple via M7 (a second
-    /// transaction — sound because evaluation keys on ever-registration,
-    /// never endorsement currency; §Internal 4 two-transaction soundness).
-    /// Gate-first; idem⊤ dedup at M7 gives ≤1 active `pdef` per start (PR0).
+    /// Validate the run already at `start` against ONE pinned snapshot σ,
+    /// then emit the `pdef` tuple via M7 (a second transaction — sound
+    /// because evaluation keys on ever-registration, never endorsement
+    /// currency; §Internal 4 two-transaction soundness). Gate-first, and the
+    /// gates speak in this order: no content `Val` at `start`
+    /// (`NotResident`); bytes the PR-ENC codec refuses (`ParseFailed`); a
+    /// referent not ever-registered at σ (`ReferentNotEverRegistered`, ahead
+    /// of WT-ref, so a stored reference to nothing is a gate refusal, not a
+    /// dangling type error); WT + WT-ref over the signed term (`IllTyped`);
+    /// a referent ever- but not actively registered at σ
+    /// (`ReferentNotActive` — endorsement); `d` not a registered document
+    /// (`HomeNotRegistered`, P0); M7's own refusal of the emit (`Emit`).
+    ///
+    /// RETURNS `(tuple, seq)`: the active `pdef` tuple's address — the
+    /// fresh deposit's, or on an idem⊤ dedup hit the incumbent's, with M7's
+    /// base `Seq` and nothing committed — so ≤1 active `pdef` per start
+    /// within the guest class (PR0). POSTCONDITION: the memo holds `start`
+    /// defined, so `signature(start)` answers.
     pub fn register_pred(&self, d: &Address, start: &Address) -> Result<(Address, Seq), RegisterError> {
         let snap = self.kernel.snapshot();
         let w = snap.world();
@@ -145,18 +159,20 @@ impl<W: CoordinationWorld> Coordinator<W> {
         Ok((tuple, seq))
     }
 
-    /// resolve + expand + denote. PRECONDITION: `start` EVER-registered (not
-    /// active) against the caller's `snap` — else `NotEverRegistered`; an
-    /// ever-registered start whose immutable content fails the PR-ENC
-    /// parse/WT (a PR-DISC breach) is `UndisciplinedDef`. `args` bind
-    /// positionally to Γ_D (= `signature(start).params`), each at its sort —
-    /// an `AddrSet` holding a tumbler that is no T4-valid address is no
-    /// ℘_fin(T) value, and is `ArgSortMismatch` like any other mis-sorted
-    /// argument. Pure pin to `snap`; the denotation is DAG-recursive
-    /// (`eval`'s walk + the one `Ref` arm), never a materialized flat term
-    /// (Conflicts §5). The denotation reads M7 through the GUEST-CLASS view
-    /// (lane 4.1) — the same view an `Inline` trigger reads — while the
-    /// ever-registration probe stays class-free (`ever_registered`).
+    /// resolve + expand + denote. Refuses, in this order: a start not
+    /// EVER-registered (active or not) at the caller's `snap`
+    /// (`NotEverRegistered`); an ever-registered start whose immutable
+    /// content fails the PR-ENC parse/WT — a PR-DISC breach
+    /// (`UndisciplinedDef`); an argument count differing from Γ_D's
+    /// (`ArgArityMismatch`); an argument at the wrong sort, or an `AddrSet`
+    /// holding a tumbler that is no T4-valid address and so no ℘_fin(T)
+    /// value (`ArgSortMismatch`). `args` bind positionally to Γ_D
+    /// (= `signature(start).params`). Pure pin to `snap`; the denotation is
+    /// DAG-recursive (`eval`'s walk + the one `Ref` arm), never a
+    /// materialized flat term (Conflicts §5). The denotation reads M7
+    /// through the GUEST-CLASS view (lane 4.1) — the same view an `Inline`
+    /// trigger reads — while the ever-registration probe stays class-free
+    /// (`ever_registered`).
     pub fn evaluate_def(
         &self,
         start: &Address,
@@ -243,13 +259,22 @@ impl<W: CoordinationWorld> Coordinator<W> {
             .tip(self.catalog.reserved(ShippedType::Supersedes), start)
     }
 
-    /// CVALID(0..iii): defined signature (its two `None` causes surfaced
-    /// distinctly), Boolean sort, actively registered, an expansion within
-    /// the node budget, view-independent expansion, ST⁺ — then emit
-    /// `pd_stable`. ST⁺ runs PD0 over the FLAT reference expansion (ST⁺ is
-    /// not compositional — §Internal 3), with the aggregate threshold widened
-    /// to a bound ℕ parameter, at a fixed view (view-independence makes the
-    /// classification view-invariant).
+    /// CVALID(0..iii), the refusals speaking in this order: defined signature
+    /// (its two `None` causes surfaced distinctly — `NotEverRegistered`,
+    /// `UndisciplinedDef`), Boolean sort (`NotBoolean`), actively registered
+    /// (`NotActive`), an expansion within the node budget
+    /// (`ExpansionTooLarge`), view-independent expansion (`ViewDependent`),
+    /// ST⁺ (`NotStable`) — then emit `pd_stable` at `d`, which must be a
+    /// registered document: after every static leg, an unregistered `d` is
+    /// M7's door, `Emit(Rejected(HomeNotRegistered))`. ST⁺ runs PD0 over the
+    /// FLAT reference expansion (ST⁺ is not compositional — §Internal 3),
+    /// with the aggregate threshold widened to a bound ℕ parameter, at a
+    /// fixed view (view-independence makes the classification
+    /// view-invariant).
+    ///
+    /// RETURNS `(tuple, seq)`: the active `pd_stable` tuple's address — the
+    /// fresh deposit's, or on re-certification the incumbent's, with M7's
+    /// base `Seq` and nothing committed.
     pub fn certify_stable(&self, d: &Address, start: &Address) -> Result<(Address, Seq), CertifyError> {
         let snap = self.kernel.snapshot();
         let entry = match self.def_status(start) {
@@ -291,10 +316,20 @@ impl<W: CoordinationWorld> Coordinator<W> {
             .is_k(self.catalog.reserved(ShippedType::PredStable), start.tumbler())
     }
 
-    /// De-register: M7::nullify on the active `pdef` tuple, found via
-    /// `.first().ok_or(NotActive)` (never `[0]` — item 8). Content untouched;
-    /// audit retains it; re-registration after nullify deposits afresh (the
-    /// idem class is empty again). Does NOT cascade to referents.
+    /// De-register: M7::nullify, from the retracting home `d`, on ONE active
+    /// `pdef` tuple at `start` — the first M7 lists, found via
+    /// `.first().ok_or(NotActive)` (never `[0]` — item 8). One tuple per
+    /// call: beside a second active `pdef` at the same start (a twin homed
+    /// where the guest class could not see it when the first was minted),
+    /// `is_active_pred` stays true until each is retracted. `d` must be a
+    /// registered document — `Nullify(Rejected(HomeNotRegistered))`
+    /// otherwise, after the `NotActive` probe. Content untouched; audit
+    /// retains it; re-registration after nullify deposits afresh (the idem
+    /// class is empty again). Does NOT cascade to referents.
+    ///
+    /// RETURNS `(retraction, seq)`: the address of the `[R]` tuple itself —
+    /// never the `pdef`'s — or, on a dedup hit, the incumbent retraction's,
+    /// with M7's base `Seq`.
     pub fn retract_pred(&self, d: &Address, start: &Address) -> Result<(Address, Seq), RetractError> {
         let target = {
             let snap = self.kernel.snapshot();

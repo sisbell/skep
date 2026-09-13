@@ -23,10 +23,11 @@
 //! **M9 owns no authoritative state.** PL reads M7/M3 off one pinned M2
 //! `Snapshot` per verdict; defs persist as M4 content plus M7 tuples; rule
 //! *effects* are durable in M7's journal; everything M9 holds — the `DefMemo`
-//! of immutable-once-defined signatures, the rule working set, the fire
-//! counters — is a recomputable hint or an in-memory working set, rebuilt by
-//! replay/re-query/re-registration. No journal, no `apply`, no slice, no
-//! record variant.
+//! of immutable-once-defined signatures, the rule working set — is a
+//! recomputable hint or an in-memory working set, rebuilt by
+//! replay/re-query/re-registration, and the fire counts it reports are
+//! recomputed from M7's journal-recovered slices at every ask. No journal, no
+//! `apply`, no slice, no record variant.
 //!
 //! ## Boundary — deliberately NOT owned here
 //!

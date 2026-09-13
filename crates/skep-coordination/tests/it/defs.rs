@@ -309,6 +309,46 @@ fn a_hand_forged_body_at_the_decode_cap_survives_every_walk() {
     assert_eq!(cold.signature(&r).map(|s| s.result), Some(Sort::Bool));
 }
 
+/// A refused reference judges the referring term, never its referent: on a
+/// coordinator whose first contact with a registered def is a `Ref` too deep
+/// to reach it, the term is `TooDeep` — as on a warm memo — and the def stays
+/// defined: its signature answers, it evaluates, and a reference one level
+/// shallower checks on that same coordinator. Through two levels likewise: a
+/// registered consumer of the def, reached by a `Ref` too deep for its own
+/// reach, leaves both itself and the def defined.
+#[test]
+fn a_refused_reference_leaves_its_referent_defined_on_a_cold_memo() {
+    let k = kernel();
+    let c = coord(&k);
+    // P := ¬¹⁰⁰ ⊤, reach 100; Q := P, reach 102 (the derivation's two levels).
+    let p = insert_raw(&k, &doc1(), forged_negations(100));
+    c.register_pred(&doc1(), &p).expect("¬¹⁰⁰ ⊤ registers");
+    let (q, _) = c
+        .define_predicate(&doc1(), &c.type_check(vec![], Term::Ref { addr: p.clone(), args: vec![] }).expect("Q := P"))
+        .expect("define Q");
+    let under = |start: &Address, negations: usize| {
+        (0..negations).fold(Term::Ref { addr: start.clone(), args: vec![] }, |t, _| not(t))
+    };
+
+    // The reference sits at level 27, the derivation starts at 29, and P's
+    // literal would land at 129. Still cold afterwards, the reference one
+    // level shallower derives P at 28 — the cap exactly — and P is defined.
+    let cold = coord(&k);
+    assert!(matches!(cold.type_check(vec![], under(&p, 27)), Err(TypeError::TooDeep)));
+    cold.type_check(vec![], under(&p, 26)).expect("26 + 2 + 100 = 128: at the cap");
+    assert_eq!(cold.signature(&p).map(|s| s.result), Some(Sort::Bool));
+    assert_eq!(cold.evaluate_def(&p, &[], View::Active, &k.snapshot()), Ok(Value::Bool(true)));
+    assert!(matches!(c.type_check(vec![], under(&p, 27)), Err(TypeError::TooDeep)), "the warm memo agrees");
+
+    // Two levels: Q at 25 asks for P at 29 through Q's own derivation at 27.
+    let cold = coord(&k);
+    assert!(matches!(cold.type_check(vec![], under(&q, 25)), Err(TypeError::TooDeep)));
+    cold.type_check(vec![], under(&q, 24)).expect("24 + 2 + 102 = 128: at the cap");
+    assert_eq!(cold.signature(&q).map(|s| s.result), Some(Sort::Bool));
+    assert_eq!(cold.signature(&p).map(|s| s.result), Some(Sort::Bool));
+    assert_eq!(cold.evaluate_def(&q, &[], View::Active, &k.snapshot()), Ok(Value::Bool(true)));
+}
+
 /// The node budget on the stored-bytes path: ten nested `Reg` quantifiers
 /// over a leaf — thirty-three bytes of PR-ENC — would instantiate 5¹⁰
 /// bodies, and are `IllTyped(TooLarge)` at the budget instead. The bytes

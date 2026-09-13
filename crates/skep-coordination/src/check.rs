@@ -212,23 +212,40 @@ fn want(expected: Sort, found: Sort) -> Result<(), TypeError> {
     }
 }
 
+/// The resolver's two refusals, each the `Ref` arm's own rejection:
+/// `Dangling` — the address has no defined signature (never registered, or
+/// ever-registered-but-undisciplined), WT-ref's domain failure; `TooDeep` —
+/// the referent's derivation could not complete at the level it was asked
+/// at, a verdict about the ASKING term's nesting and never about the
+/// referent, which the resolver leaves unjudged (and unmemoized).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Unresolved {
+    Dangling,
+    TooDeep,
+}
+
+/// The referent resolver WT-ref consults (the signature resolver, PR-SIG):
+/// the defined referent at an address, its derivation — if the memo misses
+/// — rooted at the level asked for, or one of the two [`Unresolved`]
+/// refusals.
+pub(crate) type Resolver<'a> = dyn Fn(&Address, u32) -> Result<Arc<TypedTerm>, Unresolved> + 'a;
+
 /// The checking pass. `resolve` is the referent resolver WT-ref consults —
 /// the only external consultation (it reads the immutable def memo, so even
 /// ref-bearing type-checking is "decided once") — asked at the depth the
 /// referent's own check would start at, so a cold derivation reaches
-/// exactly the levels the `Ref` node was charged for. `nodes` is the node
-/// budget, one sum across the pass and its `Reg` substitutions.
+/// exactly the levels the `Ref` node was charged for, and answering
+/// [`Unresolved::TooDeep`] when the referent cannot be derived there.
+/// `nodes` is the node budget, one sum across the pass and its `Reg`
+/// substitutions.
 pub(crate) struct Checker<'a> {
     catalog: &'a TypeCatalog,
-    resolve: &'a dyn Fn(&Address, u32) -> Option<Arc<TypedTerm>>,
+    resolve: &'a Resolver<'a>,
     nodes: Cell<usize>,
 }
 
 impl<'a> Checker<'a> {
-    pub(crate) fn new(
-        catalog: &'a TypeCatalog,
-        resolve: &'a dyn Fn(&Address, u32) -> Option<Arc<TypedTerm>>,
-    ) -> Checker<'a> {
+    pub(crate) fn new(catalog: &'a TypeCatalog, resolve: &'a Resolver<'a>) -> Checker<'a> {
         Checker { catalog, resolve, nodes: Cell::new(0) }
     }
 
@@ -500,9 +517,14 @@ impl<'a> Checker<'a> {
                 // so the levels a cold derivation through this node reaches
                 // are exactly the reach charged below: this node's, the
                 // derivation's, one per argument (the expansion's `Let`
-                // chain), and the referent's own.
-                let referent = (self.resolve)(addr, depth + DERIVATION_COST)
-                    .ok_or_else(|| TypeError::DanglingReference(addr.clone()))?;
+                // chain), and the referent's own. A derivation that cannot
+                // complete at that level is THIS node's TooDeep — the same
+                // answer the reach check below gives on a memo hit — and
+                // says nothing about the referent.
+                let referent = (self.resolve)(addr, depth + DERIVATION_COST).map_err(|u| match u {
+                    Unresolved::Dangling => TypeError::DanglingReference(addr.clone()),
+                    Unresolved::TooDeep => TypeError::TooDeep,
+                })?;
                 let params = referent.params();
                 let mut e_args: Vec<ArcTerm> = Vec::with_capacity(args.len());
                 let mut deepest = depth;

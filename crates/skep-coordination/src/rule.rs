@@ -141,8 +141,11 @@ pub enum FireOutcome {
 /// (the deposited resp. incumbent tuple's address) through, so a driver can
 /// reconcile the divergence monitor against the journal without re-deriving
 /// the deposited tuple's address. A fire error surfaces as `Failed` — never a
-/// silent swallow — with rotate-past rotation (§7): nothing committed, the
-/// occurrence stays enabled; deregister/repair is the caller's.
+/// silent swallow — with rotate-past rotation (§7): nothing committed; the
+/// rule stays registered — the working set offers no de-registration — and
+/// its occurrence enabled, re-attempted when the rotation returns to it;
+/// repair (registering the home, publishing the document) is the caller's,
+/// and a rule that cannot be repaired is shed only with its coordinator.
 ///
 /// Deliberately exhaustive, as `FireOutcome` is: a step fires, dedups, fails,
 /// finds its pick a no-op, or finds nothing enabled — the scheduler's whole

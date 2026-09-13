@@ -36,6 +36,9 @@ pub enum TypeError {
     /// (ASN-0130 SignedTerm); a rule trigger, the one term that binds a
     /// tuple, is checked by `type_check_trigger` into a `TriggerTerm`.
     TupParameter(VarId),
+    /// A Γ_D name bound twice — a context binds each name once, so that an
+    /// `Env` can bind every parameter at its sort. Carries the repeated name.
+    DuplicateParameter(VarId),
     SortMismatch { expected: Sort, found: Sort },
     /// An atom needs a behavior the (concrete) type's registration lacks.
     BehaviorMissing { ty: TypeKey, needs: Behavior },
@@ -61,7 +64,9 @@ pub enum TypeError {
     /// evaluable projection (`Reg`-expansion joins included), or the reach of
     /// a `Ref` — the referent's own recorded depth plus the derivation and
     /// the arguments — would carry a walk deeper than the one bound every
-    /// walk is set against. A def at the cap admits no reference to it.
+    /// walk is set against; or a `Ref` whose referent's derivation cannot
+    /// complete at the level the `Ref` sits at, the referent left unjudged.
+    /// A def at the cap admits no reference to it.
     TooDeep,
     /// The term, after `Reg`-expansion, exceeds `MAX_TERM_NODES` nodes —
     /// counted per node the checker visits or builds, so nested `Reg`
@@ -82,6 +87,9 @@ impl fmt::Display for TypeError {
                 "type_check: parameter {v:?} is Tup-sorted — a stored def's Γ_D is Codom-only \
                  (a tuple-binding term is a rule trigger; use type_check_trigger)"
             ),
+            TypeError::DuplicateParameter(v) => {
+                write!(f, "type_check: parameter {v:?} is bound twice in Γ_D")
+            }
             TypeError::SortMismatch { expected, found } => {
                 write!(f, "type_check: expected sort {expected:?}, found {found:?}")
             }

@@ -123,6 +123,17 @@ fn type_check_refuses_at_each_gamma_and_catalog_gate() {
 
     // A free Var outside Γ_D.
     assert!(matches!(c.type_check(vec![], var(3)), Err(TypeError::UnboundVariable(_))));
+    // Γ_D binds each name once: a repeated name is refused before the body
+    // is walked (the body here is unbound on its own), and after the Tup
+    // gate.
+    assert!(matches!(
+        c.type_check(vec![(v(1), Sort::Addr), (v(1), Sort::Nat)], var(3)),
+        Err(TypeError::DuplicateParameter(x)) if x == v(1)
+    ));
+    assert!(matches!(
+        c.type_check(vec![(v(1), Sort::Addr), (v(1), Sort::Tup)], tru()),
+        Err(TypeError::TupParameter(_))
+    ));
     // The def path rejects a Tup parameter; the trigger path — its own
     // type, one parameter by signature — admits it, and requires Bool.
     assert!(matches!(

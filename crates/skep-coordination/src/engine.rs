@@ -39,6 +39,16 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// class (PR-DISC's in-module guard). Enforces WELL-FORMEDNESS only, not
     /// termination — apply your own uncertified-rule policy via
     /// [`Coordinator::certify_rule`].
+    ///
+    /// WHICH REJECTION SPEAKS, when several hold — the domain, then the
+    /// trigger, then the action: `IllFormedDomain` (in `type_check`'s walk
+    /// order), `RefBearingDomain`; for an `Inline` trigger
+    /// `RefBearingInlineTrigger`, `DomainTriggerSortMismatch`; for a `Def`
+    /// trigger `DanglingDefTrigger`, `BadTriggerArity`, `TriggerNotBoolean`,
+    /// `DomainTriggerSortMismatch`, `TriggerExpansionTooLarge`; for a Marker
+    /// action `BadMarkerType`, `NonIdemMarkerType`, `PredLayerMarkerType`.
+    /// The same order in [`Coordinator::certify_rule`], which runs the same
+    /// validation.
     pub fn register_rule(&mut self, rule: Rule) -> Result<RuleId, RuleError> {
         let (dom, trigger) = self.validate_rule(&rule)?;
         let id = RuleId(self.next_rule_id);
@@ -51,7 +61,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// submission and RE-RUNS `register_rule`'s normalization internally (the
     /// one shared validation path), then lints the CHECKED artifacts; a
     /// malformed rule returns the same typed [`RuleError`] `register_rule`
-    /// would. Callable pre-registration. `CertifiedTerminating` = SF trigger
+    /// would, in the same order of precedence. Callable pre-registration;
+    /// a query — registers nothing. `CertifiedTerminating` = SF trigger
     /// (classified at the rule's declared view; a `Def` trigger over its
     /// flat, ref-free expansion) + Marker witness-coverage match + grow-only
     /// domain, under weak fairness + bounded input; a `Nullify` rule always
@@ -293,10 +304,13 @@ impl<W: CoordinationWorld> Coordinator<W> {
 
     // ───────────────────────────── the scheduler ─────────────────────────────
 
-    /// PEEK an enabled occurrence `(ρ, x)` at `snap` — a pure candidate query
-    /// in registration order; it cannot advance the rotation cursor, so it is
-    /// not itself "fair" (weak fairness is a property of the `&mut self`
-    /// `step` loop).
+    /// PEEK an enabled occurrence `(ρ, x)` at `snap` — a pure candidate query:
+    /// the first rule in registration order with an enabled argument, and
+    /// that rule's first enabled argument in its domain's enumeration order
+    /// (Tumbler order for an address domain, M7's `observe` order for a
+    /// tuple slice). It cannot advance the rotation cursor, so it is not
+    /// itself "fair" (weak fairness is a property of the `&mut self` `step`
+    /// loop).
     pub fn next_enabled(&self, snap: &Snapshot<W>) -> Option<Occurrence> {
         self.rules.iter().find_map(|r| {
             self.first_enabled(r, snap).map(|arg| Occurrence { rule: r.id, arg })
@@ -305,7 +319,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
 
     /// The fire executor: pin a fresh snapshot; re-check `x ∈ [D_ρ]` (out ⇒
     /// `NoOp` — ASN-0133's fire relation is defined only on domain members;
-    /// the fairness "removed" discharge); evaluate the trigger (false ⇒
+    /// the fairness "removed" discharge — an `arg` of the other shape than
+    /// the rule's domain yields is out of it by construction, and answers
+    /// `NoOp` like any other non-member); evaluate the trigger (false ⇒
     /// `NoOp` — Q1 falsified-in-place); then run the action through M7's
     /// gated write path — ONE emit/nullify per fire, one M2 transaction
     /// (H-ATOM/H-FIN), home checked by M7 (H-HOME → `HomeNotRegistered`,
@@ -429,9 +445,12 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// policy is handed upward, ASN-0133). Owns the round-robin rotation over
     /// rules — weak fairness is a property of this loop, sufficient to
     /// reach/hold quiescence for an all-SF, grow-only, bounded-input registry
-    /// (Q5a/Q6). A fire error surfaces as `Failed` (never swallowed) and the
-    /// cursor rotates PAST the failing occurrence, so it cannot starve the
-    /// rest of the agenda (§7).
+    /// (Q5a/Q6). Peeks at `snap`; the fire pins its own, so an occurrence
+    /// enabled at `snap` and falsified since is `NoOp`, and `Quiescent`
+    /// means no rule has an enabled occurrence at `snap`. A fire error
+    /// surfaces as `Failed` (never swallowed) and the cursor rotates PAST
+    /// the failing occurrence, so it cannot starve the rest of the agenda
+    /// (§7).
     pub fn step(&mut self, snap: &Snapshot<W>) -> StepOutcome {
         let n = self.rules.len();
         if n == 0 {
@@ -473,7 +492,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// under-counts a genuine rule fire): count > 1 flags misbehavior for
     /// investigation — it does not certify it, and must never drive an
     /// automated kill. For a `Tup`-domain rule the key is the bound tuple's
-    /// `t.addr`. An unregistered `RuleId` counts 0.
+    /// `t.addr`. An unregistered `RuleId` counts 0. The count is as of a
+    /// snapshot pinned at the call — the one read in this group that takes
+    /// no caller's snapshot.
     pub fn fire_count(&self, rule: RuleId, x: &Address) -> u64 {
         let Some(r) = self.rules.iter().find(|r| r.id == rule) else {
             return 0;
@@ -518,7 +539,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// trigger — retraction shrinks active slices; a home-frontier footprint
     /// is armed by any deposit). Returns the non-trivial strongly-connected
     /// components (a cycle of non-SF rules is a divergence risk; SF immunity
-    /// breaks the cycle).
+    /// breaks the cycle), each ascending by `RuleId`, the components ordered
+    /// by their least member.
     pub fn armer_cycles(&self) -> Vec<Vec<RuleId>> {
         let n = self.rules.len();
         if n == 0 {

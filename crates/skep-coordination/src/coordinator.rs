@@ -4,6 +4,7 @@
 //! evaluator; everything it holds is a recomputable hint or an in-memory
 //! working set (§Core data model).
 
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 
@@ -12,9 +13,9 @@ use skep_arrangement::Vstream;
 use skep_kernel::{Kernel, Snapshot, WorldState};
 use skep_links::{Endset, LinkWriter, ShippedType, TypeRegistry, View, Visibility};
 
-use crate::ast::{Term, VarId, MAX_DEPTH};
+use crate::ast::{Term, VarId};
 use crate::catalog::TypeCatalog;
-use crate::check::{Checker, Ctx, TriggerTerm, TypedTerm};
+use crate::check::{Checker, Ctx, TriggerTerm, TypedTerm, Unresolved};
 use crate::defs::parse_def;
 use crate::dynamics::{classify_term, Dynamics};
 use crate::error::TypeError;
@@ -201,6 +202,17 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// `TooLarge` — each refused at the bound, not after it. Reads no
     /// structural state for a ref-free body; consults the immutable def memo
     /// for any `Ref`. Once `Ok`, valid at every reachable state (WT).
+    ///
+    /// WHICH REJECTION SPEAKS, when several hold: `TupParameter` (over Γ_D)
+    /// first, then `DuplicateParameter` (a Γ_D name bound twice), then the
+    /// first rejection the checker meets in a pre-order walk of the body —
+    /// a node's type position and behavior guard before its children;
+    /// children left to right, a binder's domain or bound term before its
+    /// body; a `Ref`'s referent before its arguments, each argument checked
+    /// before it is matched against its formal, so an arity mismatch (a
+    /// `SortMismatch`) speaks at the first unmatched position; a `Reg`
+    /// quantifier's instances in catalog order — with `TooDeep`/`TooLarge`
+    /// at the node where the budget is spent.
     pub fn type_check(&self, params: Vec<(VarId, Sort)>, body: Term) -> Result<TypedTerm, TypeError> {
         if let Some((v, _)) = params.iter().find(|(_, s)| *s == Sort::Tup) {
             return Err(TypeError::TupParameter(*v));
@@ -212,7 +224,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// sort, `Tup` included — a tuple-domained rule fires by binding a
     /// `Value::Tuple`, ASN-0133 ρ_R), Bool codomain (`SortMismatch`
     /// otherwise). The domain↔parameter sort reconciliation and the ref-free
-    /// requirement are `register_rule`'s.
+    /// requirement are `register_rule`'s. Which rejection speaks: the
+    /// checker's, in [`Coordinator::type_check`]'s walk order, before the
+    /// Bool requirement.
     pub fn type_check_trigger(&self, param: (VarId, Sort), body: Term) -> Result<TriggerTerm, TypeError> {
         let t = self.check_signed(SignedTerm { params: vec![param], body }, 0)?;
         if t.result != Sort::Bool {
@@ -227,11 +241,18 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// `register_pred`, a cold `signature`), and for a def derived through a
     /// `Ref` the level the checker charged that `Ref` for its referent, so
     /// the chain's total nesting is bounded by `MAX_DEPTH` however deep the
-    /// derivation runs. Referents resolve through the def memo at the level
-    /// the checker asks for them (a chain that runs past the bound is a
-    /// PR-DISC-breach cycle — every legitimate chain was bounded at
-    /// registration — and reads as "no signature", failing WT here).
+    /// derivation runs. Γ_D binds each name once (`DuplicateParameter`
+    /// otherwise — the one gate, so a stored def with a repeated name is a
+    /// breach and a supplied one a rejection). Referents resolve through the
+    /// def memo at the level the checker asks for them: a referent with no
+    /// defined signature is `DanglingReference`, and one whose derivation
+    /// cannot complete at that level is `TooDeep` here, with the referent
+    /// left unjudged.
     pub(crate) fn check_signed(&self, signed: SignedTerm, depth: u32) -> Result<TypedTerm, TypeError> {
+        let mut seen: HashSet<VarId> = HashSet::with_capacity(signed.params.len());
+        if let Some((v, _)) = signed.params.iter().find(|(v, _)| !seen.insert(*v)) {
+            return Err(TypeError::DuplicateParameter(*v));
+        }
         let resolve = |a: &Address, d: u32| self.resolve_def_at(a, d);
         let checker = Checker::new(&self.catalog, &resolve);
         let ctx: Ctx = signed.params.iter().copied().collect();
@@ -310,24 +331,25 @@ impl<W: CoordinationWorld> Coordinator<W> {
 
     // ───────────────── internal: the DefMemo (§Internal 4) ─────────────────
 
-    /// Memo-or-derive at the top of a derivation chain.
+    /// Memo-or-derive at the top of a derivation chain — a status about the
+    /// content alone: every start answers at level 0, where `register_pred`
+    /// checked it (a nesting refusal there is the content's own, a breach).
     pub(crate) fn def_status(&self, start: &Address) -> DefStatus {
-        self.def_status_at(start, 0)
+        self.def_status_at(start, 0).unwrap_or_else(|DerivedTooDeep| {
+            unreachable!(
+                "a derivation rooted at level 0 completes or poisons: derive_def freezes a \
+                 nesting refusal there as the content's own breach"
+            )
+        })
     }
 
     /// Memo-or-derive with the derivation's root at nesting level `depth`:
-    /// a memo hit answers at any level; past `MAX_DEPTH` — reachable only
-    /// inside a PR-DISC-breach cycle, since every legitimate chain was
-    /// bounded at registration through `TypedTerm::reach` — the answer
-    /// is undisciplined, never memoized (the outer derivation freezes its own
-    /// start poisoned, not this one); otherwise derive from immutable
-    /// content.
-    fn def_status_at(&self, start: &Address, depth: u32) -> DefStatus {
+    /// a memo hit answers at any level; a miss derives from immutable
+    /// content at `depth`, and a derivation that cannot complete there is
+    /// [`DerivedTooDeep`] — the asking term's refusal, filling nothing.
+    fn def_status_at(&self, start: &Address, depth: u32) -> Result<DefStatus, DerivedTooDeep> {
         if let Some(hit) = self.memo.get(start) {
-            return hit;
-        }
-        if depth > MAX_DEPTH {
-            return DefStatus::Poisoned;
+            return Ok(hit);
         }
         self.derive_def(start, depth)
     }
@@ -336,28 +358,49 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// never-registered start is never cached — a later registration must
     /// surface), then derive from immutable content with the body's root at
     /// `depth`, recursing through referents at the levels the checker
-    /// charges them (well-founded by PR2, bounded by `MAX_DEPTH`). An
-    /// ever-registered start whose content fails the parse or WT fills the
-    /// memo poisoned — freeze-on-breach (PR-DISC, §Internal 4).
-    fn derive_def(&self, start: &Address, depth: u32) -> DefStatus {
+    /// charges them (well-founded by PR2; a breach cycle strictly deepens
+    /// each round until the checker's nesting door refuses it).
+    ///
+    /// What is memoized is the CONTENT's verdict and nothing else: an
+    /// ever-registered start whose content fails the parse, or fails WT on
+    /// its own account, fills the memo poisoned — freeze-on-breach (PR-DISC,
+    /// §Internal 4). A nesting refusal ABOVE level 0 is not the content's:
+    /// every registered def was checked at level 0 and fits there, and every
+    /// registered consumer's `Ref` charge (`TypedTerm::reach`) guarantees
+    /// its referents fit where a cold derivation starts them — so a
+    /// `TooDeep` at `depth > 0` is the referring term's, answered as
+    /// [`DerivedTooDeep`] with the memo untouched, and the same term
+    /// answers `TooDeep` on a warm memo and a cold one alike. At level 0 a
+    /// `TooDeep` can only be a breach (content registered past the gate),
+    /// and freezes.
+    fn derive_def(&self, start: &Address, depth: u32) -> Result<DefStatus, DerivedTooDeep> {
         let snap = self.kernel.snapshot();
         let w = snap.world();
         if !self.ever_registered(w, start) {
-            return DefStatus::NeverRegistered;
+            return Ok(DefStatus::NeverRegistered);
         }
-        let verdict = parse_def(w, start)
-            .map_err(|_| Breach)
-            .and_then(|signed| self.check_signed(signed, depth).map_err(|_| Breach));
-        self.memo.fill(start, verdict)
+        let verdict = match parse_def(w, start) {
+            Err(_) => Err(Breach),
+            Ok(signed) => match self.check_signed(signed, depth) {
+                Ok(entry) => Ok(entry),
+                Err(TypeError::TooDeep) if depth > 0 => return Err(DerivedTooDeep),
+                Err(_) => Err(Breach),
+            },
+        };
+        Ok(self.memo.fill(start, verdict))
     }
 
     /// The defined referent at `start`, its derivation (if the memo misses)
     /// rooted at nesting level `depth` — the resolver the checker consults
     /// for a `Ref`, which asks at the level it charged the reference for.
-    pub(crate) fn resolve_def_at(&self, start: &Address, depth: u32) -> Option<Arc<TypedTerm>> {
+    /// No defined signature (never registered, or poisoned) is
+    /// `Unresolved::Dangling`; a derivation that cannot complete at `depth`
+    /// is `Unresolved::TooDeep`, the referent unjudged.
+    pub(crate) fn resolve_def_at(&self, start: &Address, depth: u32) -> Result<Arc<TypedTerm>, Unresolved> {
         match self.def_status_at(start, depth) {
-            DefStatus::Defined(e) => Some(e),
-            _ => None,
+            Ok(DefStatus::Defined(e)) => Ok(e),
+            Ok(DefStatus::Poisoned | DefStatus::NeverRegistered) => Err(Unresolved::Dangling),
+            Err(DerivedTooDeep) => Err(Unresolved::TooDeep),
         }
     }
 
@@ -367,18 +410,27 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// `None` is transient and never memoized; an ever-registered-but-
     /// undisciplined start answers `None` via a PERMANENT poisoned entry
     /// (freeze-on-breach, §Internal 4). No snapshot parameter — the miss
-    /// path pins its own.
+    /// path pins its own. A query: the memo it may fill answers every later
+    /// probe as this one was answered.
     pub fn signature(&self, start: &Address) -> Option<Signature> {
-        self.resolve_def_at(start, 0).map(|e| e.signature())
+        self.resolve_def_at(start, 0).ok().map(|e| e.signature())
     }
 }
+
+/// A derivation asked for at a level where it cannot complete: the
+/// referring term is too deep. A verdict about the asking depth, never
+/// about the content — so never memoized. Unreachable at level 0, where
+/// `derive_def` freezes a nesting refusal as the content's breach.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DerivedTooDeep;
 
 /// The referent supplier for the DAG-recursive drivers (a def's denotation,
 /// the flat expansion) — the content-read pass stays distinct from the
 /// structural denotation, so the denotation remains reference-free
-/// (Conflicts §5).
+/// (Conflicts §5). Asked at level 0, so the one refusal is "no defined
+/// signature".
 impl<W: CoordinationWorld> DefSource for Coordinator<W> {
     fn resolve_def(&self, addr: &Address) -> Option<Arc<TypedTerm>> {
-        self.resolve_def_at(addr, 0)
+        self.resolve_def_at(addr, 0).ok()
     }
 }

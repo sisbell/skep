@@ -74,7 +74,9 @@ pub(crate) fn value_sort(v: &Value) -> Sort {
 /// recorded parameter context — what `define_predicate` encodes, the def
 /// codec parses, and `parse_def` recovers from a run. Unchecked: WT over it
 /// is `Coordinator::check_signed`'s, whose result carries it as
-/// `TypedTerm::signed`.
+/// `TypedTerm::signed`; that check is where Γ_D's names are required
+/// distinct (`DuplicateParameter`), so a checked term's context binds each
+/// name once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SignedTerm {
     pub(crate) params: Vec<(VarId, Sort)>,

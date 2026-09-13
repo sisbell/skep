@@ -14,7 +14,7 @@ use skep_links::{Caller, EmitError, Endset, NullifyError, Pattern, Shape, Shippe
 use crate::ast::Term;
 use crate::check::{Checker, Ctx, TypedTerm};
 use crate::coordinator::Coordinator;
-use crate::dynamics::{negated_membership, Analyzer, Emission, Footprint};
+use crate::dynamics::{negated_membership, Analyzer, Emission};
 use crate::error::{FireError, RuleError};
 use crate::eval::{as_bool, enum_dom, eval_term};
 use crate::memo::DefStatus;
@@ -24,6 +24,18 @@ use crate::rule::{
 };
 use crate::value::{lift, Arg, Env, Sort, Value};
 use crate::CoordinationWorld;
+
+/// What `validate_rule` decides once, for both of its callers: the checked
+/// domain, the captured trigger, and the trigger's FLAT ref-free expansion —
+/// the tree the termination lint and the armer graph read. The expansion is
+/// built where the node budget admits it
+/// (`RuleError::TriggerExpansionTooLarge`) and handed on, so no later pass
+/// re-derives it or has to argue that it fits.
+struct Validated {
+    dom: TypedDom,
+    trigger: Arc<TypedTerm>,
+    flat: Term,
+}
 
 impl<W: CoordinationWorld> Coordinator<W> {
     // ─────────────────── registration & the shared validation ───────────────────
@@ -56,10 +68,22 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// The same order in [`Coordinator::certify_rule`], which runs the same
     /// validation.
     pub fn register_rule(&mut self, rule: Rule) -> Result<RuleId, RuleError> {
-        let (dom, trigger) = self.validate_rule(&rule)?;
+        let Validated { dom, trigger, flat } = self.validate_rule(&rule)?;
+        // The trigger's footprint at the declared view, from the same flat
+        // expansion the budget just admitted: recorded on the rule, so §8's
+        // armer graph reads it rather than re-deriving it per call
+        // (`CheckedRule::footprint` states why that costs no authority).
+        let footprint = Analyzer::new(&self.catalog, rule.view).term(&flat).fp;
         let id = RuleId(self.next_rule_id);
         self.next_rule_id += 1;
-        self.rules.push(CheckedRule { id, dom, trigger, view: rule.view, action: rule.action });
+        self.rules.push(CheckedRule {
+            id,
+            dom,
+            trigger,
+            view: rule.view,
+            action: rule.action,
+            footprint,
+        });
         Ok(id)
     }
 
@@ -82,9 +106,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// spells; a `Nullify` rule fails it BY ACTION, whatever the trigger's
     /// stability (`Uncertified`, divergence-monitored).
     pub fn certify_rule(&self, rule: &Rule) -> Result<RuleCertification, RuleError> {
-        let (dom, trigger) = self.validate_rule(rule)?;
+        let Validated { dom, trigger, flat } = self.validate_rule(rule)?;
         // Leg (a): trigger ∈ SF at the declared view.
-        let flat = self.trigger_expansion(&trigger);
         let analyzer = Analyzer::new(&self.catalog, rule.view);
         let sf = analyzer.term(&flat).sf;
         // Leg (b): the Marker pattern — the emitted tuple's slot-coverage is
@@ -110,25 +133,11 @@ impl<W: CoordinationWorld> Coordinator<W> {
         }
     }
 
-    /// A checked trigger as the static analyses read it: its flat, ref-free
-    /// expansion — an `Inline` trigger's evaluable projection is already
-    /// one; a `Def` trigger's is `expand_def`'s, which `validate_rule` ran
-    /// against the same immutable referents and the same node budget before
-    /// the trigger was captured, so it cannot exceed it here.
-    fn trigger_expansion(&self, trigger: &TypedTerm) -> Term {
-        if trigger.is_ref_free() {
-            trigger.evaluable.as_ref().clone()
-        } else {
-            self.expand_def(trigger).expect(
-                "a validated Def trigger expands within MAX_TERM_NODES — validate_rule checked it \
-                 against the same immutable referents",
-            )
-        }
-    }
-
     /// The one shared validation path (§Internal 5): domain → `TypedDom`,
-    /// trigger checks, domain↔trigger sort reconciliation, Marker guards.
-    fn validate_rule(&self, rule: &Rule) -> Result<(TypedDom, Arc<TypedTerm>), RuleError> {
+    /// trigger checks, domain↔trigger sort reconciliation, Marker guards —
+    /// and the trigger's flat expansion, built here where the budget admits
+    /// it and handed on in [`Validated`].
+    fn validate_rule(&self, rule: &Rule) -> Result<Validated, RuleError> {
         // Domain: checked + Reg-expanded (a body-level Reg is legitimate PL;
         // a BARE Reg fails the sort check), closed (binds only its own
         // variables).
@@ -142,8 +151,11 @@ impl<W: CoordinationWorld> Coordinator<W> {
         }
         let elem = cd.elem;
         // Trigger: one-parameter Bool (a `TriggerTerm` is that by type; a
-        // def is checked here), sort-matched to the element sort.
-        let trigger = match &rule.trigger {
+        // def is checked here), sort-matched to the element sort — and its
+        // FLAT ref-free expansion, which an `Inline` trigger's evaluable
+        // projection already is (a shallow node copy: the children are
+        // `Arc`s).
+        let (trigger, flat) = match &rule.trigger {
             Trigger::Inline(t) => {
                 if !t.is_ref_free() {
                     return Err(RuleError::RefBearingInlineTrigger);
@@ -152,7 +164,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 if *s != elem {
                     return Err(RuleError::DomainTriggerSortMismatch { expected: elem, found: *s });
                 }
-                Arc::clone(t.checked())
+                let checked = Arc::clone(t.checked());
+                let flat = checked.evaluable.as_ref().clone();
+                (checked, flat)
             }
             Trigger::Def(addr) => {
                 let DefStatus::Defined(def) = self.def_status(addr) else {
@@ -172,9 +186,11 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 }
                 // The expansion door: the flat tree the lint and the armer
                 // graph read must fit the node budget, decided here — over
-                // immutable referents, so decided once — and never again.
-                self.expand_def(&def).map_err(|_| RuleError::TriggerExpansionTooLarge)?;
-                def
+                // immutable referents, so decided once — and the tree itself
+                // handed on, so no later pass re-derives it or has to argue
+                // that it fits.
+                let flat = self.expand_def(&def).map_err(|_| RuleError::TriggerExpansionTooLarge)?;
+                (def, flat)
             }
         };
         // Marker shape: cataloged Unary (BadMarkerType), idem⊤
@@ -195,7 +211,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 return Err(RuleError::PredLayerMarkerType(ty.clone()));
             }
         }
-        Ok((TypedDom(cd.dom), trigger))
+        Ok(Validated { dom: TypedDom(cd.dom), trigger, flat })
     }
 
     // ─────────────────────── enumeration & triggers ───────────────────────
@@ -225,10 +241,21 @@ impl<W: CoordinationWorld> Coordinator<W> {
         as_bool(eval_term(&cx, &env, rule.trigger.evaluable.as_ref()))
     }
 
-    fn first_enabled(&self, rule: &CheckedRule, snap: &Snapshot<W>) -> Option<Arg> {
+    /// The rule's first ENABLED occurrence at `snap` among the arguments
+    /// `keep` admits: `[D_ρ]` in enumeration order, the first whose trigger
+    /// holds — the ONE statement of "enabled" (ASN-0133), so `step`,
+    /// `next_enabled`/`quiescent` and `quiescent_scoped` cannot come apart on
+    /// it. `keep` is asked first, so an argument it rejects costs no trigger
+    /// evaluation.
+    fn first_enabled(
+        &self,
+        rule: &CheckedRule,
+        snap: &Snapshot<W>,
+        keep: impl Fn(&Arg) -> bool,
+    ) -> Option<Arg> {
         self.enum_rule_dom(rule, snap)
             .into_iter()
-            .find(|arg| self.trigger_true(rule, arg, snap))
+            .find(|arg| keep(arg) && self.trigger_true(rule, arg, snap))
     }
 
     // ───────────────────────────── quiescence ─────────────────────────────
@@ -260,6 +287,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// conservative default taken here: a caller supplying a state-READING
     /// scope observes that choice, and a later settlement would change this
     /// verdict for such a scope.
+    ///
+    /// Enabledness is [`Coordinator::first_enabled`]'s, as Q0's is, with the
+    /// scope test as its argument filter — so a scoped verdict cannot come
+    /// apart from an unscoped one on what "enabled" means.
     pub fn quiescent_scoped(&self, scope: &TypedTerm, body: ScopeBody, snap: &Snapshot<W>) -> bool {
         assert!(
             scope.is_ref_free()
@@ -277,17 +308,11 @@ impl<W: CoordinationWorld> Coordinator<W> {
             let env = Env::empty().bind(scope_param, Value::Addr(y.clone()));
             as_bool(eval_term(&cx, &env, scope.evaluable.as_ref()))
         };
-        for rule in &self.rules {
-            for arg in self.enum_rule_dom(rule, snap) {
-                if in_scope(body, &arg, &s_of) == Some(false) {
-                    continue;
-                }
-                if self.trigger_true(rule, &arg, snap) {
-                    return false;
-                }
-            }
-        }
-        true
+        let scoped = |arg: &Arg| in_scope(body, arg, &s_of) != Some(false);
+        !self
+            .rules
+            .iter()
+            .any(|rule| self.first_enabled(rule, snap, scoped).is_some())
     }
 
     // ───────────────────────────── the scheduler ─────────────────────────────
@@ -301,7 +326,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// loop).
     pub fn next_enabled(&self, snap: &Snapshot<W>) -> Option<Occurrence> {
         self.rules.iter().find_map(|r| {
-            self.first_enabled(r, snap).map(|arg| Occurrence { rule: r.id, arg })
+            self.first_enabled(r, snap, |_| true).map(|arg| Occurrence { rule: r.id, arg })
         })
     }
 
@@ -390,25 +415,18 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // Rule fires run as `Caller::System` (the ownership ruling's
         // automation path, 2026-08-16): M9 ⟂ M10 — a fire carries no wire
         // principal, and its authority is the operator's certified rule set,
-        // not a session.
-        match &rule.action {
+        // not a session. The two actions differ in the write and in M7's
+        // error vocabulary, and in nothing else: the gap accounting is one
+        // statement over whatever was deposited.
+        let deposited = match &rule.action {
             FireAction::Marker { home, ty } => {
-                match writer.emit(Caller::System, home, &ty.0, &a, &[]) {
-                    Ok((effect, seq)) => Ok(self.fired_or_deduped(&snap, effect, seq)),
-                    Err(TxnError::Rejected(EmitError::HomeNotRegistered)) => {
-                        Err(FireError::HomeNotRegistered)
-                    }
-                    Err(err) => Err(FireError::Emit(err)),
-                }
+                writer.emit(Caller::System, home, &ty.0, &a, &[]).map_err(emit_refusal)
             }
-            FireAction::Nullify { home } => match writer.nullify(Caller::System, home, &a) {
-                Ok((effect, seq)) => Ok(self.fired_or_deduped(&snap, effect, seq)),
-                Err(TxnError::Rejected(NullifyError::HomeNotRegistered)) => {
-                    Err(FireError::HomeNotRegistered)
-                }
-                Err(err) => Err(FireError::Nullify(err)),
-            },
-        }
+            FireAction::Nullify { home } => {
+                writer.nullify(Caller::System, home, &a).map_err(nullify_refusal)
+            }
+        };
+        deposited.map(|(effect, seq)| self.fired_or_deduped(&snap, effect, seq))
     }
 
     /// A returned incumbent was already resident at the fire snapshot; a
@@ -442,7 +460,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
             let idx = (self.cursor + i) % n;
             let (id, arg) = {
                 let rule = &self.rules[idx];
-                match self.first_enabled(rule, snap) {
+                match self.first_enabled(rule, snap, |_| true) {
                     Some(arg) => (rule.id, arg),
                     None => continue,
                 }
@@ -527,28 +545,20 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// `ρ → ρ'` when ρ's emitted class lies in `footprint(T_ρ')` (a Nullify
     /// emission is `[R]`-classed and additionally arms any active-reading
     /// trigger — retraction shrinks active slices; a home-frontier footprint
-    /// is armed by any deposit). Returns the non-trivial strongly-connected
-    /// components (a cycle of non-SF rules is a divergence risk; SF immunity
-    /// breaks the cycle), each ascending by `RuleId`, the components ordered
-    /// by their least member.
+    /// is armed by any deposit). Reads each trigger's footprint as recorded at
+    /// registration, from the flat expansion admitted there. Returns the
+    /// non-trivial strongly-connected components (a cycle of non-SF rules is a
+    /// divergence risk; SF immunity breaks the cycle), each ascending by
+    /// `RuleId`, the components ordered by their least member.
     pub fn armer_cycles(&self) -> Vec<Vec<RuleId>> {
         let n = self.rules.len();
         if n == 0 {
             return Vec::new();
         }
-        // Trigger footprints at each rule's declared view.
-        let fps: Vec<Footprint> = self
-            .rules
-            .iter()
-            .map(|r| {
-                Analyzer::new(&self.catalog, r.view)
-                    .term(&self.trigger_expansion(&r.trigger))
-                    .fp
-            })
-            .collect();
         // What each rule's fire deposits — the engine's knowledge, since only
         // it knows what an action emits; the edge rule itself is
-        // `Footprint::armed_by`'s, which alone knows what a term reads.
+        // `Footprint::armed_by`'s, which alone knows what a term reads, over
+        // the footprint recorded at registration.
         let emitted: Vec<Emission> = self
             .rules
             .iter()
@@ -560,12 +570,35 @@ impl<W: CoordinationWorld> Coordinator<W> {
             })
             .collect();
         let edges: Vec<Vec<usize>> = (0..n)
-            .map(|i| (0..n).filter(|&j| fps[j].armed_by(&emitted[i])).collect())
+            .map(|i| {
+                (0..n)
+                    .filter(|&j| self.rules[j].footprint.armed_by(&emitted[i]))
+                    .collect()
+            })
             .collect();
         tarjan_nontrivial_sccs(&edges)
             .into_iter()
             .map(|scc| scc.into_iter().map(|i| self.rules[i].id).collect())
             .collect()
+    }
+}
+
+/// M7's refusal of a Marker fire's emit, in the fire's own vocabulary: H-HOME
+/// hoisted to [`FireError::HomeNotRegistered`] — never a silent skip — and
+/// every other rejection carried whole.
+fn emit_refusal(err: TxnError<EmitError>) -> FireError {
+    match err {
+        TxnError::Rejected(EmitError::HomeNotRegistered) => FireError::HomeNotRegistered,
+        other => FireError::Emit(other),
+    }
+}
+
+/// M7's refusal of a Nullify fire, in the fire's own vocabulary — H-HOME
+/// hoisted as [`emit_refusal`] hoists it.
+fn nullify_refusal(err: TxnError<NullifyError>) -> FireError {
+    match err {
+        TxnError::Rejected(NullifyError::HomeNotRegistered) => FireError::HomeNotRegistered,
+        other => FireError::Nullify(other),
     }
 }
 

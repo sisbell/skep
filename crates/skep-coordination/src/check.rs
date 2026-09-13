@@ -8,10 +8,10 @@
 //! The pass is also the crate's two resource doors for a term, stored or
 //! supplied: it refuses a tree that nests past [`MAX_DEPTH`] — counting the
 //! evaluable projection it builds (`Reg`-expansion joins included) and the
-//! reach of every reference through its referent — and one that grows past
-//! [`MAX_TERM_NODES`], counting every node it visits or builds, so nested
-//! `Reg` quantifiers and an `Arc`-shared body are charged for what they
-//! produce and the check stops at the budget rather than after it.
+//! reach of every reference through its referent — and one that spends the
+//! node [`Budget`], counting every node it visits or builds, so nested `Reg`
+//! quantifiers and an `Arc`-shared body are charged for what they produce and
+//! the check stops at the budget rather than after it.
 
 use std::cell::Cell;
 use std::collections::HashSet;
@@ -21,7 +21,7 @@ use skep_address::{Address, Nat};
 use skep_links::Behavior;
 
 use crate::ast::{ArcDom, ArcTerm, Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId};
-use crate::budget::{weight, DERIVATION_COST, MAX_DEPTH, MAX_TERM_NODES};
+use crate::budget::{weight, Budget, DERIVATION_COST, MAX_DEPTH};
 use crate::catalog::TypeCatalog;
 use crate::error::TypeError;
 use crate::value::{Signature, SignedTerm, Sort};
@@ -125,28 +125,17 @@ impl TriggerTerm {
     }
 }
 
-/// A charge of `weight` units against [`MAX_TERM_NODES`] — a node and the
-/// payload it carries ([`weight`]) — `false` once the budget is spent. Shared
-/// by every walk the checker runs — its own and the `Reg` substitution's — so
-/// their work is one sum.
-fn charge(nodes: &Cell<usize>, weight: usize) -> bool {
-    let n = nodes.get().saturating_add(weight);
-    nodes.set(n);
-    n <= MAX_TERM_NODES
-}
-
 /// The V-IDX expansion step (§Internal 1): `TypeRef::ClassVar(cvar) →
 /// TypeRef::Concrete(key)` throughout a body, stopping at an inner `Reg`
 /// binder that rebinds `cvar` (shadowing). Charges the checker's node budget
 /// per node it visits AND per unit of payload that node carries — an
 /// `Arc`-shared body is a tree to a rewrite, and a literal's tumbler is
 /// copied whole into every instance — and past the budget builds nothing
-/// more, leaving `exhausted` for the caller to refuse on.
+/// more, leaving the spent budget for the caller to refuse on.
 struct SubstClassVar<'a> {
     cvar: VarId,
     key: &'a TypeKey,
-    nodes: &'a Cell<usize>,
-    exhausted: bool,
+    nodes: &'a Budget,
 }
 
 impl Rewrite for SubstClassVar<'_> {
@@ -158,8 +147,7 @@ impl Rewrite for SubstClassVar<'_> {
     }
 
     fn term(&mut self, t: &Term) -> Term {
-        if !charge(self.nodes, weight(t)) {
-            self.exhausted = true;
+        if !self.nodes.charge(weight(t)) {
             return Term::Lit(Lit::True);
         }
         match t {
@@ -267,13 +255,13 @@ const SEQ_ELEMS: PrimRule = PrimRule { operand: Sort::AddrSeq, result: Sort::Add
 pub(crate) struct Checker<'a> {
     catalog: &'a TypeCatalog,
     resolve: &'a Resolver<'a>,
-    nodes: Cell<usize>,
+    nodes: Budget,
     deepest: Cell<u32>,
 }
 
 impl<'a> Checker<'a> {
     pub(crate) fn new(catalog: &'a TypeCatalog, resolve: &'a Resolver<'a>) -> Checker<'a> {
-        Checker { catalog, resolve, nodes: Cell::new(0), deepest: Cell::new(0) }
+        Checker { catalog, resolve, nodes: Budget::default(), deepest: Cell::new(0) }
     }
 
     /// The whole judgment over a signed term — its body under its Γ_D — into
@@ -290,7 +278,7 @@ impl<'a> Checker<'a> {
     /// its own level when it charges a reference to this term, so the two
     /// halves of the depth accounting are stated together.
     pub(crate) fn check_signed(self, signed: SignedTerm, depth: u32) -> Result<TypedTerm, TypeError> {
-        if !charge(&self.nodes, signed.params.len()) {
+        if !self.nodes.charge(signed.params.len()) {
             return Err(TypeError::TooLarge);
         }
         let mut seen: HashSet<VarId> = HashSet::with_capacity(signed.params.len());
@@ -316,7 +304,7 @@ impl<'a> Checker<'a> {
         if depth > MAX_DEPTH {
             return Err(TypeError::TooDeep);
         }
-        if !charge(&self.nodes, weight) {
+        if !self.nodes.charge(weight) {
             return Err(TypeError::TooLarge);
         }
         self.deepest.set(self.deepest.get().max(depth));
@@ -636,9 +624,8 @@ impl<'a> Checker<'a> {
         let inst_depth = depth.saturating_add(joins);
         let mut acc: Option<Checked> = None;
         for key in classes {
-            let mut subst = SubstClassVar { cvar, key, nodes: &self.nodes, exhausted: false };
-            let inst = subst.term(body);
-            if subst.exhausted {
+            let inst = SubstClassVar { cvar, key, nodes: &self.nodes }.term(body);
+            if self.nodes.spent() {
                 return Err(TypeError::TooLarge);
             }
             let c = self

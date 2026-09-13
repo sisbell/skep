@@ -37,7 +37,9 @@
 //! THE READS, each answered over the visible slice exactly as M7's own
 //! answers it over the whole: `is_k` and `observe` (the two reads the delta
 //! names) and, listed as the delta asks, the rest the evaluator makes —
-//! `members`, `targets_of` (D1/D3 over the visible slice); the BH2 walk
+//! `members`, `targets_of` and `targets_of_denoting` (D1/D3 over the visible
+//! slice, the last in V-AUD's exact-denotation regime, which is the one read
+//! where a PL view changes which tuples match); the BH2 walk
 //! family `succs`/`chain`/`tip`/`is_in_chain` (rebuilt over the VISIBLE
 //! active `[K_sup]` claims, so a draft-homed claim moves no walk); the BH3
 //! pair `sources_to`/`target_of` (the `targets_keyed` join is `EvalCtx`'s,
@@ -77,7 +79,7 @@ pub(crate) enum Slice {
 impl Slice {
     /// The slice a term at `view` reads: `audit` reads the whole record;
     /// `active` and `default` both read the active tuples — they differ only
-    /// by the UV rewrite applied OVER them (`EvalCtx::filtered_other`), never
+    /// by the UV rewrite applied OVER them (`EvalCtx::uv_keeps`), never
     /// by which slice is read. Deliberately not a `From`: the step is lossy,
     /// and naming it is what keeps the two concepts apart.
     pub(crate) fn of(view: View) -> Slice {
@@ -167,11 +169,22 @@ impl<'a, W> GuestLinks<'a, W> {
             .is_empty()
     }
 
-    /// The deduplicated denotation of one slot over the visible tuples of
-    /// `slice` matching `pat`: `⋃ slot(t).addrs()`, in Tumbler order — the
-    /// shape M7's own equations for D1, D3 and BH3's reverse take, answered
-    /// over the VISIBLE slice, so each of those is one line and checkable
-    /// against M7's.
+    /// The deduplicated denotation of one slot over `tuples`: `⋃
+    /// slot(t).addrs()`, in Tumbler order — the shape M7's own equations for
+    /// D1, D3, V-AUD's D3 and BH3's reverse all take, so each of those is one
+    /// line over its own tuple source and checkable against M7's.
+    fn denote_slot(tuples: Vec<Tuple>, slot: fn(&Tuple) -> &Endset) -> Vec<Address> {
+        let mut out: OrdSet<Tumbler> = OrdSet::new();
+        for t in tuples {
+            for a in slot(&t).addrs() {
+                out.insert(a.clone());
+            }
+        }
+        out.iter().map(lift).collect()
+    }
+
+    /// [`GuestLinks::denote_slot`] over the visible tuples of `slice` matching
+    /// `pat` — the COVERAGE-matched reads.
     fn denoted(
         &self,
         ty: &Endset,
@@ -179,13 +192,19 @@ impl<'a, W> GuestLinks<'a, W> {
         slice: Slice,
         slot: fn(&Tuple) -> &Endset,
     ) -> Vec<Address> {
-        let mut out: OrdSet<Tumbler> = OrdSet::new();
-        for t in self.observe(ty, pat, slice) {
-            for a in slot(&t).addrs() {
-                out.insert(a.clone());
-            }
-        }
-        out.iter().map(lift).collect()
+        Self::denote_slot(self.observe(ty, pat, slice), slot)
+    }
+
+    /// The visible `slice` tuples whose F DENOTES `x` — `x ∈ F.addrs()`,
+    /// V-AUD's exact regime, which M7's `Pattern` cannot express (it matches F
+    /// by COVERAGE). Denotation implies coverage — a denoted address is the
+    /// start of a unit-depth span, which covers it — so the coverage pattern
+    /// is a sound PRE-FILTER: the scan runs over the covering tuples, not over
+    /// the whole slice.
+    fn denoting(&self, ty: &Endset, x: &Address, slice: Slice) -> Vec<Tuple> {
+        let mut out = self.observe(ty, Pattern { from: from_ref(x.tumbler()), to: &[] }, slice);
+        out.retain(|t| t.from.addrs().any(|f| f == x.tumbler()));
+        out
     }
 
     /// D1 over the visible slice: `⋃ F.addrs()` — M7's own equation.
@@ -198,6 +217,14 @@ impl<'a, W> GuestLinks<'a, W> {
     pub(crate) fn targets_of(&self, ty: &Endset, x: &Address, slice: Slice) -> Vec<Address> {
         let pat = Pattern { from: from_ref(x.tumbler()), to: &[] };
         self.denoted(ty, pat, slice, |t| &t.to)
+    }
+
+    /// V-AUD's audit form of D3 over the visible audit slice: `⋃ G.addrs()` of
+    /// the tuples whose F DENOTES `x`, where [`GuestLinks::targets_of`] takes
+    /// those whose F COVERS it — the one place a PL view changes WHICH TUPLES
+    /// MATCH and not merely which slice is read.
+    pub(crate) fn targets_of_denoting(&self, ty: &Endset, x: &Address) -> Vec<Address> {
+        Self::denote_slot(self.denoting(ty, x, Slice::Audit), |t| &t.to)
     }
 
     // ───────────── BH2 — the walk over the VISIBLE operative claims ─────────────
@@ -293,17 +320,11 @@ impl<'a, W> GuestLinks<'a, W> {
     /// BH3 forward: ⊥ unless EXACTLY ONE visible active type-`ty` tuple
     /// denotes `source` in F with a single-address-denoting G.
     pub(crate) fn target_of(&self, ty: &Endset, source: &Address) -> Option<Address> {
-        let mut survivor: Option<Tuple> = None;
-        for t in self.observe(ty, Pattern::default(), Slice::Active) {
-            if t.from.addrs().any(|f| f == source.tumbler()) {
-                if survivor.is_some() {
-                    return None; // several visible active matches ⇒ ⊥
-                }
-                survivor = Some(t);
-            }
+        let mut matches = self.denoting(ty, source, Slice::Active).into_iter();
+        match (matches.next(), matches.next()) {
+            (Some(t), None) => t.to.single_denoted().map(lift),
+            _ => None, // no visible active match, or several ⇒ ⊥
         }
-        let survivor = survivor?;
-        survivor.to.single_denoted().map(lift)
     }
 
     // ────────────────────────── BH4 — over the visible slice ──────────────────────────

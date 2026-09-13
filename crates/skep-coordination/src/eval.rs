@@ -123,72 +123,56 @@ impl<'a, W> EvalCtx<'a, W> {
         })
     }
 
-    /// `members(K, v)` (D1 / V-AUD / UV): active and audit read the view's own
-    /// slice (⋃ F.addrs() over `observe(K, ⟨⟩, ·)` — V-AUD's own equation is
-    /// D1's over the audit slice); default = active minus the
-    /// other-BH1-filtered elements. The `view` is explicit here because the
-    /// `Default` arm re-enters at `Active`. Every read is the guest-class
+    /// The UV default-view rewrite as ONE predicate: at `default` an element
+    /// of a read of class `k` is kept unless some OTHER BH1 class filters it;
+    /// at `active` and `audit` no rewrite runs and every element is kept.
+    /// Every view-parameterized read and every UV-rewritten collection asks
+    /// this and nothing else — the verdict atoms (`is_K`, `tip`,
+    /// `is_in_chain`, `target_of`, `age`) never ask it (UV).
+    fn uv_keeps(&self, k: &TypeKey, e: &Tumbler) -> bool {
+        self.view != View::Default || !self.filtered_other(k, e)
+    }
+
+    /// `members(K)` at the CONTEXT's view (D1 / V-AUD / UV): the view's own
+    /// slice — `Slice::of` folds `default` onto the active tuples — with the
+    /// UV rewrite over it, which `uv_drop` applies at `default` and nowhere
+    /// else. `⋃ F.addrs()` over that slice is D1's equation, and V-AUD's is
+    /// the same one over the audit slice. Every read is the guest-class
     /// view's (lane 4.1), so a draft-homed tuple contributes no member at any
-    /// view.
-    fn members_at(&self, k: &TypeKey, view: View) -> OrdSet<Tumbler> {
-        match view {
-            View::Active | View::Audit => self
-                .links
-                .members(&k.0, Slice::of(view))
-                .into_iter()
-                .map(|a| a.tumbler().clone())
-                .collect(),
-            View::Default => self
-                .members_at(k, View::Active)
-                .into_iter()
-                .filter(|x| !self.filtered_other(k, x))
-                .collect(),
-        }
+    /// view. (`_at` = "at this context's view", against
+    /// `GuestLinks::members`, which takes a `Slice`.)
+    fn members_at(&self, k: &TypeKey) -> OrdSet<Tumbler> {
+        let read = self.links.members(&k.0, Slice::of(self.view));
+        self.uv_drop(k, read.into_iter().map(|a| a.tumbler().clone()).collect())
     }
 
-    /// `targets_of(K, x, v)` (D3 / V-AUD / UV) — audit membership by
-    /// `x ∈ F.addrs()` (the AM exact denotation).
-    fn targets_of_at(&self, k: &TypeKey, x: &Address, view: View) -> OrdSet<Tumbler> {
-        match view {
-            View::Active => self
-                .links
-                .targets_of(&k.0, x, Slice::Active)
-                .into_iter()
-                .map(|a| a.tumbler().clone())
-                .collect(),
-            View::Audit => {
-                let mut out = OrdSet::new();
-                for t in self.links.observe(&k.0, Pattern::default(), Slice::Audit) {
-                    if t.from.addrs().any(|a| a == x.tumbler()) {
-                        for g in t.to.addrs() {
-                            out.insert(g.clone());
-                        }
-                    }
-                }
-                out
-            }
-            View::Default => self
-                .targets_of_at(k, x, View::Active)
-                .into_iter()
-                .filter(|g| !self.filtered_other(k, g))
-                .collect(),
-        }
+    /// `targets_of(K, x)` at the CONTEXT's view (D3 / V-AUD / UV), then the
+    /// UV rewrite. The views differ in WHICH TUPLES MATCH, not merely which
+    /// slice is read: `active`/`default` take the tuples whose F COVERS `x`
+    /// (M7's own regime for this read), `audit` those whose F DENOTES it
+    /// (V-AUD's exact membership, `GuestLinks::targets_of_denoting`).
+    fn targets_of_at(&self, k: &TypeKey, x: &Address) -> OrdSet<Tumbler> {
+        let read = match self.view {
+            View::Audit => self.links.targets_of_denoting(&k.0, x),
+            View::Active | View::Default => self.links.targets_of(&k.0, x, Slice::Active),
+        };
+        self.uv_drop(k, read.into_iter().map(|a| a.tumbler().clone()).collect())
     }
 
-    /// `is_K(x)` per view — a verdict atom, so a `default` term reads it at
-    /// the ACTIVE slice, never UV-filtered (UV). Both slices are the
-    /// guest-class view's, so a draft-homed tuple witnesses nothing.
-    fn is_k_at(&self, k: &TypeKey, x: &Address, view: View) -> bool {
-        self.links.is_k(&k.0, x.tumbler(), Slice::of(view))
+    /// `is_K(x)` at the CONTEXT's view — a verdict atom, so a `default` term
+    /// reads it at the ACTIVE slice, never UV-filtered (UV). Both slices are
+    /// the guest-class view's, so a draft-homed tuple witnesses nothing.
+    fn is_k_at(&self, k: &TypeKey, x: &Address) -> bool {
+        self.links.is_k(&k.0, x.tumbler(), Slice::of(self.view))
     }
 
-    /// Drop other-BH1-filtered elements from a returned collection — the UV
-    /// rewrite for the non-core collections in a `default` term.
+    /// The UV rewrite over a whole returned collection. An unrewritten set is
+    /// handed back rather than rebuilt, so `active` and `audit` pay nothing.
     fn uv_drop(&self, k: &TypeKey, set: OrdSet<Tumbler>) -> OrdSet<Tumbler> {
         if self.view != View::Default {
             return set;
         }
-        set.into_iter().filter(|e| !self.filtered_other(k, e)).collect()
+        set.into_iter().filter(|e| self.uv_keeps(k, e)).collect()
     }
 
     /// BH3 join: `target_of` across the catalog's `ReverseLookup` classes —
@@ -318,12 +302,12 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
         Atom::IsK(tr, e) => {
             let k = tr.key();
             let x = as_addr(eval_term(cx, env, e));
-            Value::Bool(cx.is_k_at(k, &x, cx.view))
+            Value::Bool(cx.is_k_at(k, &x))
         }
-        Atom::Members(tr) => Value::AddrSet(cx.members_at(tr.key(), cx.view)),
+        Atom::Members(tr) => Value::AddrSet(cx.members_at(tr.key())),
         Atom::TargetsOf(tr, e) => {
             let x = as_addr(eval_term(cx, env, e));
-            Value::AddrSet(cx.targets_of_at(tr.key(), &x, cx.view))
+            Value::AddrSet(cx.targets_of_at(tr.key(), &x))
         }
         // BH1: is_filtered_J ≡ is_k(J, ·) — D2, J's own active membership,
         // fixed active at every term view.
@@ -343,11 +327,8 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
             let k = tr.key();
             let x = as_addr(eval_term(cx, env, e));
             let chain = cx.links.chain(&k.0, &x);
-            let seq: im::Vector<Address> = if cx.view == View::Default {
-                chain.into_iter().filter(|a| !cx.filtered_other(k, a.tumbler())).collect()
-            } else {
-                chain.into_iter().collect()
-            };
+            let seq: im::Vector<Address> =
+                chain.into_iter().filter(|a| cx.uv_keeps(k, a.tumbler())).collect();
             Value::AddrSeq(seq)
         }
         // Verdict/traversal atoms are never UV-rewritten (UV): unfiltered
@@ -474,7 +455,7 @@ pub(crate) fn enum_dom<W>(cx: &EvalCtx<'_, W>, env: &Env, d: &Dom) -> Vec<Arg> {
     match d {
         // M_K at the TERM view (view-parameterized domain).
         Dom::MembersDom(tr) => {
-            cx.members_at(tr.key(), cx.view).iter().map(lift).map(Arg::Addr).collect()
+            cx.members_at(tr.key()).iter().map(lift).map(Arg::Addr).collect()
         }
         Dom::ActiveSlice(tr) => cx
             .links

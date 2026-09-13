@@ -1,16 +1,19 @@
 //! §Internal 1/4 — the resource budget: what an untrusted PL term may command
 //! of the process, and how each walk charges against it. Two numbers bound a
 //! term — [`MAX_DEPTH`] its nesting, [`MAX_TERM_NODES`] its size — one prices
-//! a reference ([`DERIVATION_COST`]) and one prices a node ([`weight`]); three
-//! doors enforce them, the def decoder's, the checker's and the expander's,
-//! differing only in the refusal each answers with (`Malformed`,
-//! `TypeError::{TooDeep, TooLarge}`, `ExpansionTooLarge`).
+//! a reference ([`DERIVATION_COST`]), one prices a node ([`weight`]), and one
+//! counter spends the second ([`Budget`]); three doors enforce them, the def
+//! decoder's, the checker's and the expander's, differing only in the refusal
+//! each answers with (`Malformed`, `TypeError::{TooDeep, TooLarge}`,
+//! `ExpansionTooLarge`).
 //!
 //! Every walk over a term recurses once per former on the caller's thread and
 //! none is bounded otherwise, so the caps are set against a MEASURED stack and
 //! a MEASURED node size rather than chosen, and the suite drives each walk at
 //! its boundary on a default thread — a cap raised past the budget, or a walk
 //! grown past it, aborts there rather than in a daemon.
+
+use std::cell::Cell;
 
 use crate::ast::{Lit, Term};
 
@@ -76,5 +79,37 @@ pub(crate) fn weight(t: &Term) -> usize {
         Term::Lit(Lit::Nat(n)) => usize::try_from(n.bits().div_ceil(64)).unwrap_or(usize::MAX),
         Term::Ref { addr, .. } => addr.tumbler().len(),
         _ => 0,
+    }
+}
+
+/// ONE walk's spend against [`MAX_TERM_NODES`] — the counter the def decoder,
+/// the checker (together with its `Reg` substitution) and the expander each
+/// charge [`weight`] units to. The arithmetic lives here and nowhere else: a
+/// second copy of "saturating add, compare to the cap" could drift into a
+/// plain `+`, and a wrapped counter bounds nothing while the cap it reads
+/// still looks right.
+///
+/// A `Cell`, so a pass whose walk takes `&self` (the checker's) and a
+/// sub-walk sharing the same counter (its `Reg` substitution's) need no
+/// threaded `&mut`.
+#[derive(Debug, Default)]
+pub(crate) struct Budget(Cell<usize>);
+
+impl Budget {
+    /// Charge `weight` units — a node and the payload it carries. `false`
+    /// once the budget is spent AND EVERY TIME AFTER: the count only grows
+    /// and saturates, which is why no walk needs an `exhausted` flag beside
+    /// its counter.
+    pub(crate) fn charge(&self, weight: usize) -> bool {
+        let n = self.0.get().saturating_add(weight);
+        self.0.set(n);
+        n <= MAX_TERM_NODES
+    }
+
+    /// Is the budget spent? For the walks that cannot refuse at the node
+    /// where it happens — a `Rewrite` returns a `Term`, not a `Result` — and
+    /// so must ask afterwards.
+    pub(crate) fn spent(&self) -> bool {
+        self.0.get() > MAX_TERM_NODES
     }
 }

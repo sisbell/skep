@@ -14,8 +14,8 @@
 //!
 //! The decoder is the first of the crate's resource doors for a stored body:
 //! it refuses one nested past [`MAX_DEPTH`] and one that would build more
-//! than [`MAX_TERM_NODES`] units — a run at the daemon's request-body cap
-//! would otherwise decode to a hundred times its bytes before the checker
+//! units than the node [`Budget`] admits — a run at the daemon's request-body
+//! cap would otherwise decode to a hundred times its bytes before the checker
 //! could refuse it — so what reaches the checker is already within the
 //! budgets the checker enforces for supplied terms. The budget counts
 //! FORMERS AND PAYLOAD alike ([`Rd::charge`]): every count the input chooses
@@ -30,7 +30,7 @@ use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_links::Endset;
 
 use crate::ast::{Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId};
-use crate::budget::{MAX_DEPTH, MAX_TERM_NODES};
+use crate::budget::{Budget, MAX_DEPTH};
 use crate::value::{SignedTerm, Sort};
 
 /// Decode failure — surfaced as `RegisterError::ParseFailed` (and, for an
@@ -524,7 +524,7 @@ fn w_prim2(b: &mut Vec<u8>, tag: u8, x: &Term, y: &Term) {
 /// the budget — which is what bounds the checker's context and duplicate-name
 /// set in turn.
 pub(crate) fn decode(bytes: &[u8]) -> Result<SignedTerm, Malformed> {
-    let mut r = Rd { b: bytes, pos: 0, nodes: 0 };
+    let mut r = Rd { b: bytes, pos: 0, nodes: Budget::default() };
     let len = r.len_prefix()?;
     if bytes.get(r.pos..).map(<[u8]>::len) != Some(len) {
         return Err(Malformed);
@@ -551,9 +551,9 @@ struct Rd<'a> {
     b: &'a [u8],
     /// The read cursor: the offset of the next unread byte of `b`.
     pos: usize,
-    /// Units built so far — the term and domain formers, and the payload
-    /// they carry — against `MAX_TERM_NODES`.
-    nodes: usize,
+    /// What this decode has spent — the term and domain formers, and the
+    /// payload they carry.
+    nodes: Budget,
 }
 
 impl<'a> Rd<'a> {
@@ -565,18 +565,17 @@ impl<'a> Rd<'a> {
 
     /// Charge `weight` payload units — Γ_D parameters, tumbler components,
     /// endset spans, `Nat` limbs, `Ref` arguments — against the same
-    /// `MAX_TERM_NODES` budget [`Rd::enter`] charges formers against
-    /// (`budget::weight` states the unit and why a payload is charged like a
-    /// node). Called BEFORE a count is used to size an allocation, so an
-    /// untrusted count can size nothing past the budget: a
-    /// `Vec::with_capacity` below is bounded by the budget's remainder, not
-    /// by the input's length.
+    /// [`Budget`] [`Rd::enter`] charges formers against (`budget::weight`
+    /// states the unit and why a payload is charged like a node). Called
+    /// BEFORE a count is used to size an allocation, so an untrusted count
+    /// can size nothing past the budget: a `Vec::with_capacity` below is
+    /// bounded by the budget's remainder, not by the input's length.
     fn charge(&mut self, weight: usize) -> Result<(), Malformed> {
-        self.nodes = self.nodes.saturating_add(weight);
-        if self.nodes > MAX_TERM_NODES {
-            return Err(Malformed);
+        if self.nodes.charge(weight) {
+            Ok(())
+        } else {
+            Err(Malformed)
         }
-        Ok(())
     }
 
     /// The two doors at every former: nesting past `MAX_DEPTH`, and the

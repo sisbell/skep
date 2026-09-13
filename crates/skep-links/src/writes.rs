@@ -195,10 +195,25 @@ where
 /// `editlink`'s claim, whose check is a guaranteed miss. Costs `emit` a
 /// second classification of its `ty` — one ascending pass over a type
 /// slot's denoted addresses, on a path that already pays one.
+///
+/// The I0 lock format serializes DENOTED classes only, so taking a section
+/// carries a second precondition beside the registered-idem⊤ one: ALL THREE
+/// slots address-denoting. The registration test does not imply it — it reads
+/// the type slot alone, and a registered idem⊤ class holds extent-classed F
+/// and G whenever the open surface deposits into it — so the full condition
+/// is asserted here, at the decision, naming the format constraint that
+/// requires it. Every op that takes a section meets it by construction: `emit`
+/// validates `ty` and builds F and G through `enc`, and `nullify` and
+/// `assert_sup` build all three that way.
 fn deposit_lock_set(value: &Link, home: &Address) -> Vec<LockKey> {
     let mut keys: Vec<LockKey> = Vec::with_capacity(2);
     let class = coverage_class(value.type_slot());
     if registry().is_idempotent(&class) {
+        assert!(
+            value.slots().all(Endset::is_address_denoting),
+            "an I0 lock section serializes denoted classes only: a section may be taken \
+             only for a value whose every slot is address-denoting (§3)"
+        );
         keys.push(DedupKey::of(value).lock_key());
     }
     keys.push(M3State::link_lock_key(home));
@@ -679,33 +694,86 @@ fn is_wf_content_spec(m3: &M3State, spec: &VSpec) -> bool {
 /// the order of the request body a caller is allowed to send in the first
 /// place. MAKELINK's three slots are additionally built and held under M2's
 /// applier lock; `emit` builds its value before the transact, and an
-/// `editlink` successor is built entirely by its caller. It is not a bound on
-/// `resolve`'s own per-spec run vector, which is M5's allocation and one
-/// source document's fragmentation.
+/// `editlink` successor is built entirely by its caller.
+///
+/// It bounds a slot's RESULT and nothing else. The WORK a `Resolve` slot
+/// commands is bounded by its companion [`MAX_SLOT_RESOLVE_STEPS`], because
+/// the result cannot bound it: a spec aimed past its source's arranged end
+/// keeps no span and walks the whole run list. And M10 additionally reuses
+/// this number as its wire list cap (`MAX_WIRE_LIST = MAX_SLOT_SPANS`), which
+/// makes it the bound on a QUERY endset's span count too — a use this
+/// argument does not cover: a query's cost is
+/// `|links| × |query spans| × |slot spans|` ([`crate::LinkState::stab`]), and
+/// this constant bounds two of those three factors while the store size,
+/// which no caller chooses, is the third.
 pub const MAX_SLOT_SPANS: usize = 4096;
 
+/// The most run-list steps ONE `Resolve` slot's specs may command — the
+/// companion of [`MAX_SLOT_SPANS`], which bounds a slot's RESULT where this
+/// bounds its WORK.
+///
+/// The two are independent because the result does not bound the work. M5
+/// states the cost at its one clip: resolving a span is
+/// `Θ(#runs left of its opening ordinal)` — one `Nat` addition and one
+/// comparison per run the prefix-sum walk passes over — so resolving the LAST
+/// position of an n-run list costs n steps however narrow the answer, and a
+/// spec opening PAST the arranged end keeps nothing at all while walking all
+/// of it. A slot of such specs is therefore unbounded in work at zero span
+/// count, and every step of it runs inside MAKELINK's transact, under M2's
+/// applier lock, where it stalls every writer in the engine rather than only
+/// the caller.
+///
+/// The charge is the SOURCE's whole run count
+/// ([`M5State::content_run_count`], one map lookup reading no run), which is
+/// the worst case rather than the actual steps: the runs left of an ordinal
+/// are not derivable from the ordinal, run widths being arbitrary, and M5
+/// publishes only the collecting `resolve`, so the walk cannot report what it
+/// spent. That makes the bound conservative in the one direction that is
+/// safe — a narrow early span over a hugely fragmented source is refused for
+/// work it would not have done.
+///
+/// `64 × MAX_SLOT_SPANS` steps: the product admits the wire's 4096 specs over
+/// a 64-run source, 64 specs over a 4096-run one, or one spec over a
+/// 262,144-run one. At order 50 ns per `Nat` add-and-compare that is ~13 ms
+/// of applier-lock hold per slot and ~40 ms across a three-slot MAKELINK —
+/// the same order as the span budget's own ~2 MB-a-slot ceiling. What an
+/// operator prices it against is its own documents' fragmentation, which is
+/// what the charge reads, and its tolerance for holding the write path.
+pub const MAX_SLOT_RESOLVE_STEPS: usize = 64 * MAX_SLOT_SPANS;
+
 /// One MAKELINK slot's endset, read off the txn base — `None` iff the slot
-/// carries more than [`MAX_SLOT_SPANS`] spans, in either form. `Resolve`: ρ
-/// as content I-extents — readable, level-uniform spans (ML1
+/// is over either per-slot budget: more than [`MAX_SLOT_SPANS`] spans in
+/// whichever form built it, or, for a `Resolve` slot, specs commanding more
+/// than [`MAX_SLOT_RESOLVE_STEPS`] run-list steps.
+///
+/// `Resolve`: ρ as content I-extents — readable, level-uniform spans (ML1
 /// coverage-exactness by construction: the runs trace exactly allocated
-/// content, cross-origin runs arrive un-coalesced), counted as each is kept,
-/// so the SLOT stops accumulating at the budget. The count does not bound
-/// the run vector M5's `resolve` collects per spec: that is built whole
-/// before the first span is kept, sized by the SOURCE document's
-/// fragmentation inside the spec's span, and is the residual
-/// [`MAX_SLOT_SPANS`]'s budget names. It is not bounded here because it
-/// cannot be: M5 publishes only the collected form, so the walk cannot be
-/// stopped at a count, and no pre-check stands in for one — a source's run
-/// count and a span's width each bound the resolution only loosely, and a
-/// refusal on either would turn away a narrow span over a fragmented
-/// document, or a wide one over contiguous content, for runs it never
-/// yields. `Addrs`: the canonical name encoding, deposited unresolved, one
-/// span per name, counted before the encoding is built.
+/// content, cross-origin runs arrive un-coalesced). Both budgets are charged
+/// as the slot is built, and each stops it: the spans as they are kept, and
+/// the work BEFORE each resolve, so a refusal precedes the walk it refuses
+/// rather than following it. The two are independent because a spec that
+/// keeps nothing still walks its whole source (see
+/// [`MAX_SLOT_RESOLVE_STEPS`]); the span count alone would see such a slot as
+/// empty.
+///
+/// `Addrs`: the canonical name encoding, deposited unresolved, one span per
+/// name, counted before the encoding is built and commanding no walk.
 fn slot_endset(m5: &M5State, arg: &SlotArg) -> Option<Endset> {
     match arg {
         SlotArg::Resolve(specs) => {
             let mut spans: Vec<Span> = Vec::new();
+            let mut steps: usize = 0;
             for spec in specs {
+                // The WORK charge, ahead of the work. `content_run_count` is
+                // M5's O(1) accessor, published for a caller that owns
+                // admission control over one of these walks (COPY prices
+                // `MAX_PLACED_RUNS` against it), and the content subspace is
+                // the right list to ask: `is_wf_content_spec` ran over every
+                // slot's specs before the first endset was built.
+                steps = steps.saturating_add(m5.content_run_count(&spec.source));
+                if steps > MAX_SLOT_RESOLVE_STEPS {
+                    return None;
+                }
                 for run in m5.resolve(&spec.source, &spec.span) {
                     if spans.len() == MAX_SLOT_SPANS {
                         return None;
@@ -748,7 +816,12 @@ where
     /// (`SlotTooLarge`): a spec's expansion is the source document's
     /// fragmentation rather than the request's size, and a name's span costs
     /// order half a kilobyte live against ~19 wire bytes, so neither form's
-    /// live cost is bounded by the request body that carried it.
+    /// live cost is bounded by the request body that carried it. Every
+    /// `Resolve` slot is additionally bounded at [`MAX_SLOT_RESOLVE_STEPS`]
+    /// run-list steps (`SlotTooLarge` again): the resolution's WORK is not
+    /// its result, a spec aimed past its source's arranged end keeping no
+    /// span and walking all of it — and every step runs inside this
+    /// transact, under the applier lock the whole engine writes through.
     ///
     /// The two SOLE-WRITER fences apply here as they do on the managed
     /// surface: a resolved type slot in the `[R]` class

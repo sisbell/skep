@@ -44,11 +44,26 @@ impl DedupKey {
     }
 }
 
+/// One class as the lock's payload: the ≼-minimal denoted antichain, length-
+/// prefixed. The format serializes DENOTED CLASSES ONLY, and an extent class
+/// reaching it FAIL-STOPS rather than being skipped — a skipped slot would
+/// collapse two distinct I0 identities onto one section, silently voiding the
+/// check-and-deposit serialization (I1a/I4) the section exists to provide.
+///
+/// What keeps an extent class out is the construction of the three ops that
+/// take a section — `emit`, `nullify` and `assert_sup` build F and G through
+/// `enc` and validate `ty` address-denoting — asserted at
+/// `deposit_lock_set`, which is where the decision to take one is made. It is
+/// NOT the registered-idem⊤ test beside that assertion, which reads the type
+/// slot alone: the open surface does deposit extent-classed F and G into
+/// registered idem⊤ classes, and the hint fold keys those values as it keys
+/// any other, so extent-classed dedup keys are live in the hint map. They
+/// take no lock section, MAKELINK facing no dedup check at all (§3).
 fn push_class(buf: &mut Vec<u8>, class: &CoverageClass) {
     let Some(denoted) = class.denoted() else {
         unreachable!(
-            "no extent class is ever serialized into a LockKey: every idem⊤ dedup key is \
-             validated address-denoting before the lock is built (§Core data model)"
+            "the I0 lock format serializes denoted classes only; an extent-classed slot is \
+             refused at the section decision, never skipped here (§3)"
         )
     };
     buf.extend_from_slice(&(denoted.len() as u64).to_be_bytes());
@@ -64,10 +79,10 @@ fn push_class(buf: &mut Vec<u8>, class: &CoverageClass) {
 
 #[cfg(test)]
 mod tests {
-    use skep_address::{validate, Address, Nat, Tumbler};
+    use skep_address::{validate, Address, Nat, Span, Tumbler};
 
     use super::*;
-    use crate::endset::enc;
+    use crate::endset::{enc, Endset};
 
     fn addr(comps: &[u32]) -> Address {
         validate(Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty"))
@@ -105,5 +120,29 @@ mod tests {
         // bag: swapping F and G is a different section.
         let swapped = link([&a, &b], [&a], [&ty]);
         assert_ne!(DedupKey::of(&ab).lock_key(), DedupKey::of(&swapped).lock_key());
+    }
+
+    /// The I0 lock format serializes denoted classes only, and an extent class
+    /// reaching it FAIL-STOPS. The tempting repair — skipping such a slot, or
+    /// dropping the section — is what this refuses: an extent-classed key is
+    /// a live entry in the dedup HINT map (the open surface deposits
+    /// extent-classed F and G into registered idem⊤ classes), so a skip would
+    /// collapse two distinct I0 identities onto one section and silently void
+    /// the check-and-deposit serialization the section exists to provide.
+    #[test]
+    #[should_panic(expected = "denoted classes only")]
+    fn a_lock_key_over_an_extent_classed_slot_fail_stops() {
+        let ty = addr(&[1, 1, 0, 1, 0, 1, 0, 1, 1]); // pred_def — registered idem⊤
+        let extent = Endset::from_spans([Span::from_endpoints(
+            addr(&[1, 0, 1, 0, 1, 0, 1, 1]).tumbler().clone(),
+            addr(&[1, 0, 1, 0, 1, 0, 1, 4]).tumbler(),
+        )
+        .expect("a content extent")]);
+        let value = Link::triple(extent, Endset::empty(), enc([&ty]));
+        assert!(
+            DedupKey::of(&value).from.denoted().is_none(),
+            "the F slot really is extent-classed, so the key reaches the format constraint"
+        );
+        let _ = DedupKey::of(&value).lock_key();
     }
 }

@@ -82,7 +82,9 @@ pub use registry::{
     registry, Behavior, Registration, ReservedAddrs, Shape, ShippedType, TypeRegistry,
 };
 pub use state::{LinkRec, LinkState};
-pub use writes::{Edit, LinkWriter, SlotArg, Visibility, MAX_SLOT_SPANS};
+pub use writes::{
+    Edit, LinkWriter, SlotArg, Visibility, MAX_SLOT_RESOLVE_STEPS, MAX_SLOT_SPANS,
+};
 
 /// The auto traits M7's slice promises without saying. `WorldState` is
 /// `Send + Sync + 'static`, so the engine's `impl WorldState for World` owes

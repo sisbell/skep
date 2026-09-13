@@ -10,7 +10,8 @@
 //! gate with the ω-on-the-home-and-nothing-else capability `assert_sup` and
 //! `editlink` publish, the `[R]` and `[K_sup]` sole-writer fences on BOTH
 //! surfaces, the per-slot span budget at its exact boundary on every op and
-//! slot form that carries one, the rejection family's `Display`/`source`
+//! slot form that carries one beside the resolve-work budget that bounds what
+//! the span count cannot, the rejection family's `Display`/`source`
 //! chaining, and the checkpoint-roundtrip + rebuild_derived discipline over
 //! the hints the writes maintain. The supersession ops' graph, the typed
 //! reads and the §G primitives each have a module of their own.
@@ -1453,6 +1454,57 @@ fn a_resolve_slot_past_the_span_budget_is_refused() {
         SlotArg::Addrs(vec![unregistered_ta(10)]),
     )
     .expect("sixteen names is well inside the budget");
+}
+
+#[test]
+fn a_resolve_slot_is_refused_on_the_work_it_commands_not_only_the_spans_it_keeps() {
+    // The span budget counts what a slot KEEPS, and the work is not the
+    // result: a spec opening PAST a fragmented source's last arranged ordinal
+    // keeps nothing and walks the whole run list to find that out (M5 states
+    // the cost at its one clip — `Θ(#runs left of the opening ordinal)`). So a
+    // slot of such specs is unbounded in work at ZERO span count, and every
+    // step of it runs inside the transact under M2's applier lock, where it
+    // stalls every writer in the engine rather than only the caller.
+    let k = kernel();
+    let runs = 64u32;
+    fragment_content(&k, &doc1(), runs); // 64 runs, none I-contiguous
+    let w = writer(&k);
+    // Opens at ordinal 1000 over a 64-position document: binds nothing, walks
+    // all 64. The budget is charged per slot, so the spec count that crosses
+    // it is `MAX_SLOT_RESOLVE_STEPS / runs` plus one.
+    let past_the_end = || spec(&doc1(), 1, 1_000, 1);
+    let charges = skep_links::MAX_SLOT_RESOLVE_STEPS / runs as usize;
+
+    let before = k.current_seq();
+    assert!(matches!(
+        w.makelink(
+            P1,
+            &doc1(),
+            SlotArg::Resolve(vec![past_the_end(); charges + 1]),
+            SlotArg::Addrs(vec![]),
+            SlotArg::Addrs(vec![unregistered_ta(10)])
+        ),
+        Err(TxnError::Rejected(MakeLinkError::SlotTooLarge))
+    ));
+    assert_eq!(k.current_seq(), before, "the refusal is pre-deposit");
+
+    // The control, one charge short: admitted, and the slot it builds is
+    // EMPTY — so the refusal above is the work budget and not the span
+    // budget, which sees both calls as a slot of no spans at all.
+    let (l, _) = w
+        .makelink(
+            P1,
+            &doc1(),
+            SlotArg::Resolve(vec![past_the_end(); charges]),
+            SlotArg::Addrs(vec![]),
+            SlotArg::Addrs(vec![unregistered_ta(10)]),
+        )
+        .expect("one charge short is admitted");
+    let snap = k.snapshot();
+    assert!(
+        snap.world().links().readlink(&l).expect("resident").from_slot().is_empty(),
+        "the admitted slot kept nothing, which is what the span budget would have seen"
+    );
 }
 
 #[test]

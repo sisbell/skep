@@ -44,12 +44,20 @@ pub enum MakeLinkError {
     /// s_C ∧ #width = 2 ∧ width₁ = 0`) — the deliberate depth-2 narrowing of
     /// ASN-0120's `#u_j ≥ 2` (Conflicts §12). `Addrs` slots have no wf step.
     IllFormedSpec,
-    /// A slot carries more than [`crate::MAX_SLOT_SPANS`] spans, in whichever
-    /// form built it: a `Resolve` slot resolved past the budget, or an
-    /// `Addrs` list naming more addresses than it. The bound is on the SLOT,
-    /// because both forms amplify — a spec's expansion is the SOURCE
-    /// document's fragmentation rather than the request's size, and a name's
-    /// span costs order half a kilobyte live against ~19 wire bytes.
+    /// A slot is over one of the two per-slot budgets. Either it carries more
+    /// than [`crate::MAX_SLOT_SPANS`] spans, in whichever form built it — a
+    /// `Resolve` slot resolved past the budget, or an `Addrs` list naming
+    /// more addresses than it — or, for a `Resolve` slot, its specs command
+    /// more than [`crate::MAX_SLOT_RESOLVE_STEPS`] run-list steps.
+    ///
+    /// The bound is on the SLOT, because every form amplifies. A spec's
+    /// expansion is the SOURCE document's fragmentation rather than the
+    /// request's size; a name's span costs order half a kilobyte live against
+    /// ~19 wire bytes; and a spec's WORK is its source's run count whatever
+    /// it keeps, so a slot of specs aimed past an arranged end is unbounded
+    /// in work at zero span count. One rejection for both, because both are
+    /// the same answer to the caller — this slot asks for more than a slot
+    /// may have — and the two are told apart by the `Display` text.
     SlotTooLarge,
     /// The type slot is empty as given (ML6 — `e₃ ≠ ∅`): the `Resolve`
     /// spec-set resolved to `⟨⟩`, or the `Addrs` name list was empty.
@@ -240,8 +248,9 @@ impl fmt::Display for MakeLinkError {
             ),
             MakeLinkError::SlotTooLarge => write!(
                 f,
-                "makelink: a slot carries more than {} spans",
-                crate::MAX_SLOT_SPANS
+                "makelink: a slot carries more than {} spans, or its specs command more than {} resolve steps",
+                crate::MAX_SLOT_SPANS,
+                crate::MAX_SLOT_RESOLVE_STEPS
             ),
             MakeLinkError::EmptyTypeResolution => {
                 f.write_str("makelink: the type slot is empty as given (ML6)")

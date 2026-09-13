@@ -549,10 +549,23 @@ impl LinkState {
     /// (overlap = `ProperOverlap | Containment | Equal` — NOT `Adjacent`).
     /// `query` is M7's READABLE `Endset` (M8 builds it via `enc`/
     /// `Endset::from_spans`). `view ∈ {Audit, Active}` only (`Default` reads
-    /// as `Active`). v1 bootstrap: a brute scan of `links` reading each
-    /// endset's spans — trivially correct, O(n); the deferred interval index
-    /// swaps in behind the same signature and overlap predicate (Open build
-    /// decisions).
+    /// as `Active`).
+    ///
+    /// WHAT THIS COSTS, because the query family reaches the wire and no
+    /// budget refuses one: the v1 bootstrap is a brute scan of `links`
+    /// reading each endset's spans — trivially correct, and
+    /// `Θ(|links| × |query spans| × |slot spans|)`. The store walk is linear,
+    /// and each link is tested by a DOUBLE disjunction
+    /// ([`Endset::covers`]' structural cousin — some query span overlapping
+    /// some slot span), so the CALLER's query span count and the STORED
+    /// slot's multiply the store size. Two of those three factors are bounded
+    /// at [`MAX_SLOT_SPANS`](crate::MAX_SLOT_SPANS) — the stored slot by this
+    /// module's deposit budget, the query by M10 reusing the same number as
+    /// its wire list cap — and the third, the store size, is bounded by
+    /// nothing and chosen by no caller. The deferred interval index swaps in
+    /// behind the same signature and overlap predicate (Open build
+    /// decisions); its absence is load-bearing rather than a performance
+    /// matter.
     ///
     /// Every returned address is a KEY of `links`, so [`LinkState::readlink`]
     /// on it is `Some`; the set is in M1's address order (T1), which is the
@@ -576,6 +589,14 @@ impl LinkState {
     /// its own conjuncts — and a caller's constraint count multiplies the
     /// surviving set instead of the whole store, which matters because the
     /// query is caller-supplied and the constraint count with it.
+    ///
+    /// It carries [`stab`](LinkState::stab)'s cost, and the UNCONSTRAINED
+    /// branch carries a second: with no constraint to narrow it, every active
+    /// link is lifted into the returned set, one `Tumbler` clone apiece,
+    /// before any caller-side filter or window applies. That branch is
+    /// reachable from a descriptor naming only non-slot fields — `home` is
+    /// not a link slot — so a request that constrains nothing this module can
+    /// index still materializes an address per link in the store.
     ///
     /// Each query is BORROWED, as [`stab`](LinkState::stab) borrows its own:
     /// a constraint is read and dropped, never kept, so a caller assembling

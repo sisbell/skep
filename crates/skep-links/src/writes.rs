@@ -686,9 +686,10 @@ fn is_wf_content_spec(m3: &M3State, spec: &VSpec) -> bool {
 /// order half a kilobyte live — so a slot bounded only by the request body
 /// would name hundreds of thousands of spans.
 ///
-/// The budget is per-slot live memory and per-slot permanent store.
-/// `MAX_TXN_BYTES` bounds neither: it is charged against the ENCODED
-/// transaction after the closure returns, and the encoded form of a span is a
+/// The budget is the per-slot STORED endset's live memory and permanent store
+/// — the spans a slot KEEPS. `MAX_TXN_BYTES` bounds neither: it is charged
+/// against the ENCODED transaction after the closure returns, and the encoded
+/// form of a span is a
 /// small fraction of the live one. At order half a kilobyte per element-level
 /// span this bound is ~2 MB a slot and ~6 MB across a three-slot MAKELINK:
 /// the order of the request body a caller is allowed to send in the first
@@ -699,8 +700,10 @@ fn is_wf_content_spec(m3: &M3State, spec: &VSpec) -> bool {
 /// It bounds a slot's RESULT and nothing else. The WORK a `Resolve` slot
 /// commands is bounded by its companion [`MAX_SLOT_RESOLVE_STEPS`], because
 /// the result cannot bound it: a spec aimed past its source's arranged end
-/// keeps no span and walks the whole run list. And M10 additionally reuses
-/// this number as its wire list cap (`MAX_WIRE_LIST = MAX_SLOT_SPANS`), which
+/// keeps no span and walks the whole run list — and so is the TRANSIENT that
+/// work materializes, which is a slot's real live peak and an order above the
+/// stored figure above. And M10 additionally reuses this number as its wire
+/// list cap (`MAX_WIRE_LIST = MAX_SLOT_SPANS`), which
 /// makes it the bound on a QUERY endset's span count too — a use this
 /// argument does not cover: a query's cost is
 /// `|links| × |query spans| × |slot spans|` ([`crate::LinkState::stab`]), and
@@ -732,13 +735,24 @@ pub const MAX_SLOT_SPANS: usize = 4096;
 /// safe — a narrow early span over a hugely fragmented source is refused for
 /// work it would not have done.
 ///
+/// It bounds a TRANSIENT as well as a duration, and the transient is the
+/// larger figure. M5's `resolve` collects before it returns, so one spec's run
+/// vector is materialized whole before the span budget above sees a single
+/// span — and a spec cannot yield more runs than the steps it was charged, so
+/// this constant caps that vector at `MAX_SLOT_RESOLVE_STEPS` runs. At order
+/// 300 bytes a `Run` (an `Address`'s tumbler plus a width `Nat`) that is
+/// ~75 MB of live peak, an order above the stored endset's own ~2 MB —
+/// dropped when the spec's loop ends, and one spec at a time, so it is a peak
+/// and not a sum. Bounding it at the span budget instead would need M5's lazy
+/// `iter_resolve`, which is crate-private to M5.
+///
 /// `64 × MAX_SLOT_SPANS` steps: the product admits the wire's 4096 specs over
 /// a 64-run source, 64 specs over a 4096-run one, or one spec over a
 /// 262,144-run one. At order 50 ns per `Nat` add-and-compare that is ~13 ms
-/// of applier-lock hold per slot and ~40 ms across a three-slot MAKELINK —
-/// the same order as the span budget's own ~2 MB-a-slot ceiling. What an
-/// operator prices it against is its own documents' fragmentation, which is
-/// what the charge reads, and its tolerance for holding the write path.
+/// of applier-lock hold per slot and ~40 ms across a three-slot MAKELINK.
+/// What an operator prices that against is its own documents' fragmentation,
+/// which is what the charge reads, its tolerance for holding the write path,
+/// and the live peak above, which this same number sets.
 pub const MAX_SLOT_RESOLVE_STEPS: usize = 64 * MAX_SLOT_SPANS;
 
 /// One MAKELINK slot's endset, read off the txn base — `None` iff the slot
@@ -1243,6 +1257,19 @@ where
     /// no rollback) — a re-run with the same `d_retr` is safe
     /// (already-nullified targets from this `d_retr` dedup; the recomputed
     /// stale set excludes them).
+    ///
+    /// `ty` PRECONDITION, inherited from [`stale`](crate::LinkState::stale),
+    /// which builds the batch: address-denoting (a registered or reserved
+    /// type) or `iextent`-built. That read classifies `ty` BEFORE the BH4
+    /// lookup, so a hand-built non-level-uniform `ty` panics naming the
+    /// precondition (§Core data model totality) rather than arriving as
+    /// `NotBh4`. The refusal above is the verdict for an IN-CONTRACT `ty` that
+    /// is simply not a BH4 type; it is not the answer to a malformed one, and
+    /// the typed rejection exists precisely so that sentence is never said
+    /// about something else. This is the ONE write op that carries the
+    /// obligation as a panic: `emit`, the other write taking a caller-built
+    /// `ty` endset, converts the same obligation into a typed rejection
+    /// (`NonAddressDenotingType`, ahead of any class computation) and says so.
     ///
     /// COMPLETABLE ONLY BY AN OWNER OF EVERY STALE TUPLE. The batch comes
     /// from `stale`, which reads the WHOLE active type-`ty` slice — across

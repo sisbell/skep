@@ -677,3 +677,20 @@ fn stale_panics_on_an_off_contract_ty_rather_than_reaching_its_typed_refusal() {
     ]);
     let _ = snap.world().links().stale(&skew, 0);
 }
+
+#[test]
+#[should_panic(expected = "level-uniform")]
+fn retract_stale_panics_on_an_off_contract_ty_rather_than_rejecting_not_bh4() {
+    // The batch op inherits `stale`'s `ty` precondition through the snapshot
+    // read that builds its batch, and its own pre-transact verdict is
+    // `NotBh4` — so a malformed `ty` must abort here too rather than be
+    // answered "this type does not do staleness". The tempting hardening is a
+    // level-uniformity guard in front of the `stale` call, which would say
+    // exactly that about an endset that is not a type at all.
+    let k = kernel();
+    let w = writer(&k);
+    let skew = Endset::from_spans([
+        skep_address::Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12 admits this span")
+    ]);
+    let _ = w.retract_stale(P1, &doc2(), &skew, 0);
+}

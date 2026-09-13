@@ -1,9 +1,10 @@
 //! The §G discovery primitives and FOLLOWLINK over a real kernel (InMemory):
 //! `stab` and `match_links` admitting each of the three overlap relations
-//! against the one they refuse, the AND-combiner's agreement with its own
-//! conjuncts over every subset of a constraint pool in both views, the three
-//! primitives' `Default → Active` coercion, `stab`'s empty-query floor and
-//! its absent-slot rule, and the verbatim order FOLLOWLINK folds.
+//! against the one they refuse, the per-span disjunction on both sides of that
+//! test, the AND-combiner's agreement with its own conjuncts over every subset
+//! of a constraint pool in both views, the three primitives' `Default → Active`
+//! coercion, `stab`'s empty-query floor and its absent-slot rule, and the
+//! verbatim order FOLLOWLINK folds.
 
 use crate::common;
 
@@ -66,6 +67,56 @@ fn stab_and_match_links_match_overlap_but_never_adjacency() {
     assert!(!links.stab(FROM, &enc(&[ca(1)]), View::Active).contains(&l));
     assert!(links.stab(FROM, &enc(&[ca(1)]), View::Audit).contains(&l));
     assert!(!links.match_links(&[], View::Active).contains(&l));
+}
+
+#[test]
+fn the_overlap_test_is_a_disjunction_on_both_sides() {
+    // Overlap is "SOME span of the query overlaps SOME span of the slot" — two
+    // disjunctions, and every other §G query in the suite is exactly one span,
+    // which makes the query side indistinguishable from a conjunction. Neither
+    // side is degenerate in production: M8 lifts a fragmented region's I-runs
+    // into a multi-span query `Endset` for `stab`, and a MAKELINK slot carries
+    // one span per fragment.
+    let k = kernel();
+    let w = writer(&k);
+    // A two-span slot, with a gap between the spans so every pair below is
+    // plainly Separated rather than Adjacent (which the overlap test refuses
+    // for its own reasons, tested next door).
+    let l = open_deposit(&w, &[ca(1), ca(5)], &[], &[unregistered_ta(10)]);
+    let snap = k.snapshot();
+    let links = snap.world().links();
+
+    // SLOT side: each span matches on its own — the second as surely as the
+    // first, which a first-span-only read would miss.
+    assert!(links.stab(FROM, &enc(&[ca(1)]), View::Audit).contains(&l));
+    assert!(
+        links.stab(FROM, &enc(&[ca(5)]), View::Audit).contains(&l),
+        "the slot's SECOND span matches too"
+    );
+    assert!(
+        !links.stab(FROM, &enc(&[ca(3)]), View::Audit).contains(&l),
+        "and an address between the two spans matches neither"
+    );
+
+    // QUERY side: one span of the query suffices — a conjunction here would
+    // empty every fragmented-region query M8 builds.
+    assert!(
+        links.stab(FROM, &enc(&[ca(3), ca(5)]), View::Audit).contains(&l),
+        "one span of a two-span query suffices"
+    );
+    assert!(
+        !links.stab(FROM, &enc(&[ca(3), ca(8)]), View::Audit).contains(&l),
+        "and no span of it matching is a miss"
+    );
+
+    // The AND-combiner's NARROWING branch reads the same predicate, so the
+    // multi-span query must survive it as the second constraint — the branch
+    // `stab` never exercises.
+    let ty_query = unregistered_ty(10);
+    let from_query = enc(&[ca(3), ca(5)]);
+    assert!(links
+        .match_links(&[(TYPE, &ty_query), (FROM, &from_query)], View::Audit)
+        .contains(&l));
 }
 
 #[test]

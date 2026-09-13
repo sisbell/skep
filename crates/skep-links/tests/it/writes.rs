@@ -794,6 +794,10 @@ fn makelink_resolves_deposits_and_seats() {
         assert_eq!(links.followlink(&l1, 3), Ok(SpanSet::singleton(iext(3, 4))));
         assert!(links.followlink(&l1, 4).is_err());
         assert!(links.followlink(&la(9), 1).is_err());
+        // READLINK's own ⊥: total, `None` on absence — the branch an
+        // unauthenticated wire `read_link` on a ghost address takes, and the
+        // one the infallible `link_at` twin would turn into a panic.
+        assert!(links.readlink(&la(9)).is_none());
     }
 
     // ML0: distinct links always — no dedup on the open surface.

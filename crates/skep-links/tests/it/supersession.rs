@@ -1,6 +1,7 @@
 //! The `[K_sup]` op pair and the reads over the graph they build (ASN-0125),
 //! over a real kernel (InMemory): `assert_sup`'s schema preconditions and its
-//! home-excluded dedup, the BH2 walk at each of its three halts, the endpoint
+//! home-excluded dedup, the BH2 walk at each of its three halts and its abort
+//! on an off-contract `ty`, the endpoint
 //! retraction that leaves an edge operative against the claim retraction that
 //! removes it, `editlink`'s atomic composite, its two distinct homes and
 //! their canonical lock order, its hoisted home check and its DC guard clause
@@ -108,6 +109,21 @@ fn the_walk_halts_indeterminate_on_a_supersession_cycle() {
     assert_eq!(links.tip(&sup, &x), Tip::Indeterminate, "a cycle claims no head");
     assert_eq!(links.chain(&sup, &y), vec![y.clone(), x.clone()]);
     assert_eq!(links.tip(&sup, &y), Tip::Indeterminate);
+}
+
+#[test]
+#[should_panic(expected = "level-uniform")]
+fn the_walk_scope_test_panics_on_an_off_contract_ty_rather_than_reading_as_out_of_scope() {
+    // `succs`/`chain`/`tip` share one classification site, and their contract
+    // names the wrong answer as well as the right one: the out-of-scope reply
+    // is the empty vec, so a guard added to "avoid the panic" would answer a
+    // caller error with a truthful-looking claim about the store.
+    let k = kernel();
+    let snap = k.snapshot();
+    let skew = Endset::from_spans([
+        skep_address::Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12 admits this span")
+    ]);
+    let _ = snap.world().links().succs(&skew, &la(1));
 }
 
 #[test]

@@ -133,7 +133,12 @@ fn an_endset_iterates_borrowed_and_consumes_owned() {
     assert_eq!(Endset::from_spans(e.clone()), e);
     let drained: Vec<Span> = e.clone().into_iter().collect();
     assert_eq!(drained, spans.to_vec());
-    assert_eq!(e.into_iter().len(), 2);
+    assert_eq!(e.clone().into_iter().len(), 2);
+    assert_eq!(
+        e.into_iter().next_back(),
+        Some(spans[1].clone()),
+        "the owning form carries the same reverse walk"
+    );
 }
 
 #[test]

@@ -6,8 +6,9 @@
 //! rewriting `Default` views only and subtracting under every active retired
 //! root — the enumeration reads at the cardinality their loops need, the BH3
 //! endpoint pair in its two matching regimes beside the join that covers
-//! nothing, and BH4's ungated `age` beside the staleness family that refuses
-//! every class.
+//! nothing, the residence and activity clauses every active-view read is held
+//! to, and BH4's ungated `age` beside the staleness family that refuses every
+//! class and aborts on an off-contract `ty`.
 //!
 //! The registry's population is the compiled shipped five (owner ruling,
 //! 2026-08-26 — the app-decl seam is deleted): arbitrary type NUMBERS are
@@ -20,7 +21,9 @@ use crate::common;
 
 use common::*;
 use skep_kernel::TxnError;
-use skep_links::{enc, HasLinks, NotBh4, Pattern, RetractStaleError, SlotArg, Tuple, View};
+use skep_links::{
+    enc, Endset, HasLinks, NotBh4, Pattern, RetractStaleError, SlotArg, Tuple, View,
+};
 
 #[test]
 fn view_defaults_to_the_default_view() {
@@ -464,6 +467,110 @@ fn bh3_endpoint_reads_are_exact_over_the_active_typed_slice_and_the_join_covers_
 }
 
 #[test]
+fn a_nullified_tuple_leaves_every_active_typed_read() {
+    // `nullify`'s postcondition — "gone from every View::Active slice … while
+    // readlink and the Audit view keep it (R3)" — read back through the whole
+    // §F surface. `observe` and `type_slice` are pinned elsewhere; these five
+    // are not, and three of them (`is_k`, `sources_to`, `target_of`) hardcode
+    // `View::Active`, so the constant can be flipped with nothing failing.
+    let k = kernel();
+    let w = writer(&k);
+    let rel = unregistered_ty(11);
+    let l = open_deposit(&w, &[ca(1)], &[ca(2)], &[unregistered_ta(11)]);
+    {
+        // The control: while it is active, every one of the five sees it.
+        let snap = k.snapshot();
+        let links = snap.world().links();
+        assert!(links.is_k(&rel, ca(1).tumbler()));
+        assert_eq!(links.members(&rel, View::Active), vec![ca(1)]);
+        assert_eq!(links.targets_of(&rel, &ca(1), View::Active), vec![ca(2)]);
+        assert_eq!(links.sources_to(&rel, &ca(2)), vec![ca(1)]);
+        assert_eq!(links.target_of(&rel, &ca(1)), Some(ca(2)));
+    }
+    w.nullify(P1, &doc1(), &l).expect("retract the tuple");
+    let snap = k.snapshot();
+    let links = snap.world().links();
+    assert!(!links.is_k(&rel, ca(1).tumbler()), "D2 reads the active slice");
+    assert!(
+        links.members(&rel, View::Active).is_empty(),
+        "D1 reads the active slice"
+    );
+    assert!(
+        links.targets_of(&rel, &ca(1), View::Active).is_empty(),
+        "D3 reads the active slice"
+    );
+    assert!(
+        links.sources_to(&rel, &ca(2)).is_empty(),
+        "BH3 reverse reads the active slice"
+    );
+    assert_eq!(
+        links.target_of(&rel, &ca(1)),
+        None,
+        "BH3 forward reads the active slice"
+    );
+
+    // The audit half of the same postcondition — and `age`, whose `None` means
+    // NON-RESIDENCE and nothing else, so a nullified resident still answers.
+    assert!(links.readlink(&l).is_some(), "permanence: the value is kept");
+    assert_eq!(links.observe(&rel, Pattern::default(), View::Audit).len(), 1);
+    assert!(
+        links.age(&l).is_some(),
+        "age is residence-based, never activity-based"
+    );
+}
+
+#[test]
+fn target_of_recovers_determinacy_when_a_competing_tuple_is_retracted() {
+    // "EXACTLY ONE ACTIVE type-ty tuple": restricting to the active slice is
+    // what makes the count exact, and this is the direction where an Audit
+    // reading is permanently wrong — two tuples make the projection ⊥, and
+    // retracting one must make it determinate again rather than leaving it ⊥
+    // for the life of the store.
+    let k = kernel();
+    let w = writer(&k);
+    let rel = unregistered_ty(13);
+    let first = open_deposit(&w, &[ca(1)], &[ca(2)], &[unregistered_ta(13)]);
+    open_deposit(&w, &[ca(1)], &[ca(3)], &[unregistered_ta(13)]);
+    {
+        let snap = k.snapshot();
+        assert_eq!(
+            snap.world().links().target_of(&rel, &ca(1)),
+            None,
+            "two active matches ⇒ ⊥"
+        );
+    }
+    w.nullify(P1, &doc1(), &first).expect("retract one of the two");
+    let snap = k.snapshot();
+    assert_eq!(
+        snap.world().links().target_of(&rel, &ca(1)),
+        Some(ca(3)),
+        "one active match remains, so the projection is determinate again"
+    );
+}
+
+#[test]
+fn is_active_requires_residence_so_a_ghost_is_never_live() {
+    // `is_active` is resident AND not nullified, and residence is the clause
+    // no other call reaches — every other `is_active` in the suite is on a
+    // resident address. A ghost is reachable through `current`, which echoes
+    // the caller's own argument as its own sink (EL14), so a reader narrowing
+    // on `CurrentMember.active` is exactly who a missing residence clause
+    // would mislead.
+    let k = kernel();
+    let snap = k.snapshot();
+    let links = snap.world().links();
+    assert!(!links.is_active(&la(90)), "not resident, so not active");
+    assert!(
+        !links.is_nullified(&la(90)),
+        "and not nullified either — the two clauses are independent"
+    );
+    let cur = links.current(&la(90));
+    assert_eq!(cur.len(), 1, "the walk discloses its own argument as its sink");
+    assert_eq!(cur[0].member, la(90));
+    assert!(!cur[0].active, "and discloses it as inactive");
+}
+
+#[test]
 fn targets_keyed_joins_only_the_reverse_lookup_classes() {
     // The join covers registered Binary classes DECLARING ReverseLookup — a
     // fact about registrations, so the registry names them. The shipped
@@ -554,4 +661,19 @@ fn age_answers_ungated_and_the_staleness_family_refuses_every_class() {
     let snap = k.snapshot();
     let links = snap.world().links();
     assert!(!links.is_nullified(&a1), "no batch ever fires");
+}
+
+#[test]
+#[should_panic(expected = "level-uniform")]
+fn stale_panics_on_an_off_contract_ty_rather_than_reaching_its_typed_refusal() {
+    // `stale` classifies BEFORE the BH4 lookup, so a malformed `ty` is a
+    // caller error and not a freshness answer: `NotBh4` means "this type does
+    // not do staleness", and the typed rejection exists precisely so that
+    // sentence is never said about something else.
+    let k = kernel();
+    let snap = k.snapshot();
+    let skew = Endset::from_spans([
+        skep_address::Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12 admits this span")
+    ]);
+    let _ = snap.world().links().stale(&skew, 0);
 }

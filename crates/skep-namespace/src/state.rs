@@ -195,8 +195,10 @@ pub enum M3Rec {
     /// replay reconstructs the world that committed and not a re-derivation
     /// from the op's arguments — and [`M3State::apply_m3`] folds it into the
     /// publication map for a Document-tier `addr` (a version is a document
-    /// too). IMMUTABLE after mint: no record and no op changes it, and there
-    /// is no publish op in either direction (PUB-1.9, PUB-1.68). Outside the
+    /// too). IMMUTABLE after mint: no op changes it, there is no publish op in
+    /// either direction (PUB-1.9, PUB-1.68), and no LATER record changes it
+    /// either — the fold writes the entry only where none is held, so a second
+    /// `Allocate` naming a registered document leaves its bit alone. Outside the
     /// document tier — an account, a content or link element — publication is
     /// not a property of the address at all (PUB-1.68: one bit per DOCUMENT);
     /// those mints stamp `NO_PUBLICATION_STATE` (`false`) and the fold does
@@ -420,6 +422,22 @@ pub struct M3State {
     /// where this one should begin — the decode FAILURE PUB-7.8 demands,
     /// never a default and never everything-published. Inserted anywhere
     /// earlier, the same checkpoint would read a sibling's bytes as this map.
+    ///
+    /// THE BUDGET, in the form [`MAX_NODE_COMPONENTS`] and
+    /// [`MAX_PRINCIPAL_COMPONENTS`] state theirs: this is the first structure
+    /// in M3 whose entry count tracks DOCUMENTS rather than namespaces. An
+    /// entry is a full [`Address`] key, permanent (B0 — there is no deletion),
+    /// ordered, and re-serialized into every checkpoint thereafter. Against
+    /// the ω-gated request that buys it the charge is about one to one; against
+    /// the ACCOUNT address a caller supplies — the document address is minted,
+    /// not sent — it is the same ~32-bytes-per-component charge the node cap
+    /// prices, and about a third of what a WRITTEN document already pays in
+    /// frontier keys, since its content, link and version chains open one
+    /// full-tumbler key each. So a reader sizing a checkpoint from `frontiers`'
+    /// compressed count adds one entry per document, and an EMPTY document,
+    /// free before this map existed, is no longer free. No cap: the count is
+    /// the docuverse's, and bounding it would bound the product rather than
+    /// refuse a resource.
     ///
     /// OPEN DECISION (collection shape — the delta names none): an `OrdMap`
     /// rather than the frontier map's `HashMap`. The read is a point lookup
@@ -911,11 +929,15 @@ impl M3State {
     /// `Allocate`'s publication bit is folded for a DOCUMENT-tier address and
     /// read for no other (PUB-7.7's fold half, at M3's own allocation record:
     /// the publication map and the registration reach a reader in the ONE
-    /// commit that carries that record, never a later step). Within the
-    /// totality domain the write
-    /// is never an overwrite — an address is allocated once, and a re-staged
-    /// `Allocate` trips the contiguity check first — so the bit a document
-    /// was minted with is the bit that stands (PUB-1.9).
+    /// commit that carries that record, never a later step). The write is
+    /// INSERT-IF-ABSENT, so the bit a document was minted with is the bit that
+    /// stands (PUB-1.9) on EVERY build, and not merely inside the totality
+    /// domain: the contiguity check is a `debug_assert` and cannot be what
+    /// holds an immutability a second record would otherwise overwrite in
+    /// release. Registration-membership is the one per-arm fact no door can
+    /// carry — "this address is already registered" is a claim about the
+    /// registry, which a decoder holding one frame cannot settle — so it is
+    /// answered here, at one lookup, rather than refused at decode.
     ///
     /// `RegisterNode`'s admission conditions — node level, the
     /// [`MAX_NODE_COMPONENTS`] cap, and bootstrap lineage — belong to
@@ -972,7 +994,18 @@ impl M3State {
                 // the registration, so no reader's snapshot holds the one
                 // without the other (PUB-7.7). On any other tier the field is
                 // `NO_PUBLICATION_STATE`, an absence, and is not read.
-                if addr.level() == Level::Document {
+                //
+                // WRITTEN ONCE, and by this `get` rather than by the contiguity
+                // check above: that check is a `debug_assert` and is absent in
+                // release, so a second `Allocate` naming a registered document
+                // would otherwise REPLACE its bit — a publication transition,
+                // which PUB-1.9 says does not exist and which no record door
+                // can refuse (whether an address is already registered is a
+                // claim about the registry, not a per-record fact). Inside the
+                // totality domain the entry is absent and this is the plain
+                // insert; outside it, the bit a document was minted with is
+                // the bit that stands.
+                if addr.level() == Level::Document && s.publication.get(addr).is_none() {
                     s.publication.insert(addr.clone(), *published);
                 }
             }
@@ -1455,6 +1488,20 @@ impl M3State {
     /// and `.len()` are the hidden type's own, promised rather than hidden, so
     /// that end and the document count each cost one call and no walk.
     ///
+    /// The fold-produced scope is load-bearing in one direction only. A
+    /// checkpoint or a journal outside [`M3State::apply_m3`]'s totality domain
+    /// can hold a registered document with NO entry — a jumped `Allocate`
+    /// registers the ordinals it skipped — and that direction has no remedy
+    /// here: the claim relates the frontier map to this one, which no
+    /// per-entry door can settle, and checking it at load would mean expanding
+    /// every document chain to its members, the Θ(documents) cost B1's
+    /// compression exists to avoid. What a reader owes is the POLARITY.
+    /// [`M3State::published`] answers `false` for a missing entry, which is
+    /// fail-private; an index that stores the UNPUBLISHED side and answers by
+    /// membership MISS inverts that, so a document this walk omits reads
+    /// PUBLISHED there. A derived index built by ADDITION over this walk
+    /// inherits the open direction and should say so where it is built.
+    ///
     /// Published for the reader that cannot ask per address: a derived index
     /// over the bit (the engine's exception set, PUB-7.5 — PUB-7.7's seed
     /// half) and a rendering of the map. Both would otherwise rebuild this
@@ -1503,7 +1550,11 @@ impl M3State {
     /// `Σ_{p ∈ Π} |p|` component comparisons and no allocation: to enlarge it
     /// an attacker must first commit durable, ω-gated, next-form-gated
     /// delegations, one journal record per principal. So a deep probe costs no
-    /// more than a shallow one, and neither costs O(#allocated).
+    /// more than a shallow one, and neither costs O(#allocated). The shape is
+    /// per CALL, though, so a caller that takes one ω per entry of a walk pays
+    /// the PRODUCT — a seed over [`M3State::documents`] costs Θ(entries · |Π|)
+    /// at every load — and the `principals` range-walk upgrade is where that
+    /// lands.
     ///
     /// The tier filter is O1a, and it is a refusal rather than an
     /// optimisation. O1a is a producer invariant (genesis plus `delegate`'s
@@ -2043,6 +2094,44 @@ mod tests {
             a(&[1, 0, 1, 0, 1, 1])
         );
         assert!(!s.is_allocated(&a(&[1, 0, 1, 0, 1, 1])));
+    }
+
+    /// PUB-1.9: a document's bit is written ONCE. A second `Allocate` naming a
+    /// registered document is outside [`M3State::apply_m3`]'s totality domain
+    /// and the contiguity `debug_assert` is what refuses it — but that assert
+    /// is absent in RELEASE, and no record door can carry the fact (whether an
+    /// address is already registered is a claim about the registry, which a
+    /// decoder holding one frame cannot settle). So the insert itself is
+    /// write-once, and this is the shape that reaches it in a debug run: a
+    /// stored ZERO makes the re-staged record CONTIGUOUS, so the assert passes
+    /// and the publication insert is reached on both build profiles.
+    #[test]
+    fn a_replayed_allocate_never_moves_a_documents_bit() {
+        let acct = a(&[1, 0, 1]);
+        let doc = a(&[1, 0, 1, 0, 1]);
+        let minted = M3State::genesis()
+            .apply_m3(&M3Rec::Allocate {
+                addr: acct.clone(),
+                published: false,
+            })
+            .apply_m3(&M3Rec::Allocate {
+                addr: doc.clone(),
+                published: false,
+            });
+        assert!(!minted.published(&doc), "minted private");
+
+        let mut regressed = minted.clone();
+        regressed.frontiers.insert(document_ns(&acct), Nat::zero());
+        let replayed = regressed.apply_m3(&M3Rec::Allocate {
+            addr: doc.clone(),
+            published: true,
+        });
+
+        assert!(replayed.is_registered_document(&doc));
+        assert!(
+            !replayed.published(&doc),
+            "a second Allocate flipped a private document public: the bit is written once (PUB-1.9)"
+        );
     }
 
     /// [`M3State::latest_version`] reads the CHAIN and not the registry: it

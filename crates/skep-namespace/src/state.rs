@@ -1051,8 +1051,9 @@ impl M3State {
     /// ghost region for the one namespace that holds it). Pure function of
     /// `frontiers` (B2 determinism — the natural property-test oracle). M1's
     /// `checked_inc` is the TA5a gate ⇒ B6(ii)/(iii); routing every emission
-    /// through it, via [`first_in`], is the defensive guard (it can only
-    /// fire on a corrupted frontier).
+    /// through it, via [`first_in`], is the defensive guard: it cannot fire on
+    /// a live path, nor on any frontier COUNT, since `first_in` sees only the
+    /// anchor — only on a key whose anchor the pairing below refuses.
     ///
     /// PRECONDITION — `key.parent` is T4-valid, and under
     /// [`Generator::NextField`] it is not Element-level (M1's TA5a admits
@@ -1199,6 +1200,11 @@ impl M3State {
 // cannot see it — the second `Allocate` is legitimately `m + 1`. So "an
 // address is never reused" is M3's to keep GIVEN the caller's half; unmet,
 // nothing in the system says so.
+//
+// So a mint is also the chain's PEEK: called without staging it answers the
+// next address and moves nothing, which is what `next_account_prefix`
+// publishes for the account chain and what the determinism assertions here
+// ask of the other four.
 // ---------------------------------------------------------------------------
 
 impl M3State {
@@ -1216,7 +1222,7 @@ impl M3State {
     /// Next content address under `home`: namespace `(b_C(home), 1)`, element
     /// field `[s_C, m+1]` (§3). [M5: INSERT] Reads the caller's WORKING state
     /// (successive mints in one composite each see the prior mint); checks
-    /// only the structural precondition P6/C2; the caller holds
+    /// only the structural precondition P6/C2; to realize it, the caller holds
     /// [`M3State::content_lock_key`] and stages the returned [`M3Rec`].
     pub fn mint_content(&self, home: &Address) -> Result<(Address, M3Rec), MintError> {
         if !self.is_registered_document(home) {
@@ -1227,7 +1233,7 @@ impl M3State {
     }
 
     /// Next link address under `home`: namespace `(b_L(home), 1)`, element
-    /// field `[s_L, m+1]` (§3). [M7: MAKELINK] The caller holds
+    /// field `[s_L, m+1]` (§3). [M7: MAKELINK] To realize it, the caller holds
     /// [`M3State::link_lock_key`]`(home)` and stages the returned [`M3Rec`].
     pub fn mint_link(&self, home: &Address) -> Result<(Address, M3Rec), MintError> {
         if !self.is_registered_document(home) {
@@ -1239,7 +1245,7 @@ impl M3State {
 
     /// Next version identity: namespace `(source, 1)` — the version chain,
     /// kept SEPARATE from the document chain (ASN-0123). [M5: owned
-    /// CREATENEWVERSION] The caller holds
+    /// CREATENEWVERSION] To realize it, the caller holds
     /// [`M3State::version_lock_key`]`(source)` and stages the returned
     /// [`M3Rec`].
     ///
@@ -1266,9 +1272,9 @@ impl M3State {
     }
 
     /// Next document identity under an account: namespace `(account, 2)`.
-    /// [CREATENEWDOCUMENT; cross-owner VERSION; fork] The caller holds
-    /// [`M3State::document_lock_key`]`(account)` and stages the returned
-    /// [`M3Rec`].
+    /// [CREATENEWDOCUMENT; cross-owner VERSION; fork] To realize it, the
+    /// caller holds [`M3State::document_lock_key`]`(account)` and stages the
+    /// returned [`M3Rec`].
     ///
     /// `published` is the RESOLVED bit the document is born with, stamped on
     /// the `Allocate` exactly as passed (PUB-8.18) — never the caller's
@@ -1303,8 +1309,10 @@ impl M3State {
     /// `MintError` leaf would put a permanently dead arm in M5's, M7's and
     /// M10's vocabularies for a mint none of them can reach.
     ///
-    /// The caller holds [`M3State::account_lock_key`]`(parent)` and stages
-    /// the returned [`M3Rec`].
+    /// To realize it, the caller holds
+    /// [`M3State::account_lock_key`]`(parent)` and stages the returned
+    /// [`M3Rec`]; [`M3State::next_account_prefix`] is this without the record,
+    /// which is the peek.
     pub(crate) fn mint_account(&self, parent: &Address) -> Option<(Address, M3Rec)> {
         if !matches!(self.entity_level(parent)?, Level::Node | Level::Account) {
             return None;
@@ -1459,12 +1467,21 @@ impl M3State {
     /// CONTRACT — `doc` is a REGISTERED document: callers gate on
     /// [`M3State::is_registered_document`] first (PUB-6.37: registration
     /// precedes publication, and an unregistered address is answered by the
-    /// registration check and by nothing here). Every registered document has
-    /// an entry, because the allocation record that registers it carries the
-    /// bit and the fold writes both in one step; an unregistered address has
-    /// no allocation record, so what this function returns for one is no
-    /// answer at all — it is `false`, the fail-private direction (PUB-1.1),
-    /// and a caller that reads it has skipped the gate.
+    /// registration check and by nothing here). On any slice M3's own fold
+    /// produced, every registered document has an entry, because the
+    /// allocation record that registers it carries the bit and the fold writes
+    /// both in one step.
+    ///
+    /// `false` FOR A MISSING ENTRY is the fail-private direction (PUB-1.1),
+    /// and it answers two different absences. An unregistered address has no
+    /// allocation record, so what this returns for one is no answer at all —
+    /// a caller that reads it has skipped the gate. A REGISTERED document with
+    /// NO entry is the other, and it is not a caller's bug: it is reachable
+    /// outside [`M3State::apply_m3`]'s totality domain — a jumped `Allocate`
+    /// registers the ordinals it skipped — and is the case
+    /// [`M3State::documents`] states has no remedy here. This read answers it
+    /// PRIVATE. A derived index that stores the UNPUBLISHED side and answers
+    /// by membership MISS inverts that, and should say so where it is built.
     ///
     /// IMMUTABLE: no M3 function changes a document's bit after its mint —
     /// there is no publish op, in either direction (PUB-1.9, PUB-1.68).

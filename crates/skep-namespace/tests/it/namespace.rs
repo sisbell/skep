@@ -1486,9 +1486,10 @@ fn the_first_document_address_is_the_slot_the_document_chain_opens_at() {
     assert!(!before_create.has_documents(&acct)); // …and the chain it opens is empty
     let (d1, _) = ns.create_new_document(ID1, &acct, None).expect("create 1");
     assert_eq!(d1, slot);
-    // "Has this account any documents?" is the slot read against the
-    // registry, and it answers in both directions: the slot was unallocated
-    // above, and is a registered document now.
+    // The slot against the registry, and the chain against its frontier —
+    // two reads, one question, answered in both directions: the slot was
+    // unallocated above and is a registered document now, and the chain that
+    // was empty holds one.
     let m3 = k.snapshot().world().m3().clone();
     assert!(m3.is_registered_document(&slot));
     assert!(m3.has_documents(&acct));

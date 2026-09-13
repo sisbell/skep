@@ -15,8 +15,11 @@ use skep_address::GateViolation;
 /// `mint_content`/`mint_link` ⇒ `HomeNotRegistered`, `mint_version` ⇒
 /// `SourceNotRegistered`, `mint_document` ⇒ `NotAnAccount`. Those
 /// preconditions are the only active gates (§4); `Gate` is the M1 inc-gate
-/// (B6/TA5a) routed defensively — it fires only on a corrupted frontier, never
-/// on a live path.
+/// (B6/TA5a) routed defensively: no live path reaches it, and a corrupted
+/// frontier COUNT cannot either, since the gate sees only the chain's anchor.
+/// What can is a corrupted frontier KEY — a next-field generator over an
+/// Element-level anchor — which is the soft failure `NsKeyShadow` names as its
+/// reason for not carrying that half of `next_in`'s precondition.
 ///
 /// The fifth mint, the account chain's, is crate-private and answers `Option`
 /// rather than adding a leaf here: `delegate` is its only caller and already
@@ -32,7 +35,8 @@ pub enum MintError {
     /// `mint_document`: target is not a registered Account (P8/CND.pre) —
     /// covers both unregistered AND non-account.
     NotAnAccount,
-    /// M1's TA5a inc gate refused (B6) — defensive: corrupted frontier state.
+    /// M1's TA5a inc gate refused (B6) — defensive: a corrupted frontier KEY,
+    /// never a count and never a live path.
     Gate(GateViolation),
 }
 

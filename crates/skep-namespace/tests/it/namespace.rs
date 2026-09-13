@@ -2219,10 +2219,57 @@ fn only_a_document_allocate_writes_the_publication_map() {
         vec![(&doc, true), (&version, false)]
     );
     // The walk is exact-size and double-ended, as a map walk is in std: the
-    // count is answered without walking, and the newest document is the
-    // first from the back.
+    // count is answered without walking, and the back of the walk is the
+    // ADDRESS-greatest entry — which is also the newest here only because
+    // these two were minted in ascending address order
+    // (`the_publication_walk_is_in_address_order_not_mint_order` is the shape
+    // that tells the two apart).
     assert_eq!(s.documents().len(), 2);
     assert_eq!(s.documents().next_back(), Some((&version, false)));
+}
+
+/// The walk is in ADDRESS order, which is not mint order: a version of doc 1
+/// sorts BETWEEN doc 1 and doc 2, whichever was minted first. The two agree on
+/// every other fixture in this file — each mints one chain in ascending
+/// ordinals — so this is the shape that tells them apart, and it is the shape
+/// the engine's dump renders (two boards with one history must render one byte
+/// string). It also fixes what `.next_back()` gives: the ADDRESS-greatest
+/// entry, which is NOT the newest document.
+#[test]
+fn the_publication_walk_is_in_address_order_not_mint_order() {
+    let (d1, d2, v1) = (
+        a(&[1, 0, 1, 0, 1]),
+        a(&[1, 0, 1, 0, 2]),
+        a(&[1, 0, 1, 0, 1, 1]),
+    );
+    // Empty, one, many — the walk's three sizes, in mint order d1, d2, v1.
+    let s = M3State::genesis();
+    assert_eq!(s.documents().len(), 0);
+    let s = s.apply_m3(&alloc(&[1, 0, 1])).apply_m3(&M3Rec::Allocate {
+        addr: d1.clone(),
+        published: true,
+    });
+    assert_eq!(s.documents().collect::<Vec<_>>(), vec![(&d1, true)]);
+    let s = s
+        .apply_m3(&M3Rec::Allocate {
+            addr: d2.clone(),
+            published: false,
+        })
+        .apply_m3(&M3Rec::Allocate {
+            addr: v1.clone(),
+            published: true,
+        });
+
+    // Address order — d1, then d1's version, then d2 — not the mint order
+    // d1, d2, v1.
+    assert_eq!(
+        s.documents().collect::<Vec<_>>(),
+        vec![(&d1, true), (&v1, true), (&d2, false)]
+    );
+    assert_eq!(s.documents().len(), 3);
+    // So the back of the walk is the address-greatest entry and not the
+    // newest: v1 was minted last, and d2 is what `.next_back()` answers.
+    assert_eq!(s.documents().next_back(), Some((&d2, false)));
 }
 
 /// PUB-1.9/PUB-1.68, and PUB-7.7's fold half: no public function changes a

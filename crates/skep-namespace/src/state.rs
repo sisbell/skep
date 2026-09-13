@@ -1448,10 +1448,12 @@ impl M3State {
     /// that must not fail-stop on a corrupted one re-asks
     /// [`M3State::is_registered_document`] per entry, as the engine's seed
     /// does. The order is the `OrdMap`'s — a function of the contents, so two
-    /// boards with one history enumerate alike. Double-ended and exact-size,
-    /// as a map walk is in std — `.rev()` and `.len()` are the hidden type's
-    /// own, promised rather than hidden, so the newest document and the
-    /// document count each cost one call and no walk.
+    /// boards with one history enumerate alike, and the walk's back end is the
+    /// address-greatest entry, which address order does not make the newest: a
+    /// version of doc 1 sorts BETWEEN doc 1 and doc 2, whichever was minted
+    /// first. Double-ended and exact-size, as a map walk is in std — `.rev()`
+    /// and `.len()` are the hidden type's own, promised rather than hidden, so
+    /// that end and the document count each cost one call and no walk.
     ///
     /// Published for the reader that cannot ask per address: a derived index
     /// over the bit (the engine's exception set, PUB-7.5 — PUB-7.7's seed
@@ -1987,6 +1989,82 @@ mod tests {
                 "ghost {ordinal} became a member"
             );
         }
+    }
+
+    /// §1: a stored ZERO is an empty chain at both frontier-end reads — the
+    /// reading [`M3State::has_documents`] and [`M3State::latest_version`] each
+    /// state, and which neither can reach through M3's own ops, since
+    /// [`M3State::apply_m3`] inserts only `effective_frontier + 1` and genesis
+    /// seeds none. A checkpoint is bytes and [`NsKeyShadow`] screens the KEY,
+    /// not the count, so this is the shape those two guards exist for; it is
+    /// built by hand for the reason the ghost test above is.
+    ///
+    /// The guards fail in opposite ways. Without [`M3State::latest_version`]'s,
+    /// [`nth_in`] computes `0 − 1` on a `Nat` and the read PANICS — on the
+    /// path M5's trunk head and every daemon read of that document take.
+    /// Without [`M3State::has_documents`]', an empty account reads as
+    /// non-empty and the create path mints its doc 1 PRIVATE against PUB-8.21.
+    #[test]
+    fn a_zero_frontier_is_an_empty_chain_at_both_reads() {
+        let acct = a(&[1, 0, 1]);
+        let doc = a(&[1, 0, 1, 0, 1]);
+        let mut s = M3State::genesis()
+            .apply_m3(&M3Rec::Allocate {
+                addr: acct.clone(),
+                published: false,
+            })
+            .apply_m3(&M3Rec::Allocate {
+                addr: doc.clone(),
+                published: true,
+            });
+        // The ordinary readings first, so a guard that answers `false`/`None`
+        // unconditionally is not what turns this test green.
+        assert!(s.has_documents(&acct));
+        assert_eq!(s.latest_version(&doc), None); // the key is ABSENT, not zero
+
+        // Now write both chains down as EMPTY — a stored zero.
+        s.frontiers.insert(document_ns(&acct), Nat::zero());
+        s.frontiers.insert(version_ns(&doc), Nat::zero());
+
+        assert!(
+            !s.has_documents(&acct),
+            "a zero count read as a document: PUB-8.21 would mint doc 1 private"
+        );
+        assert_eq!(
+            s.latest_version(&doc),
+            None,
+            "a zero count read as a member"
+        );
+        // …and a written-down empty chain mints and enumerates exactly like
+        // one that was never written down: c₁ is still next, and no member.
+        assert_eq!(
+            s.next_in(&version_ns(&doc))
+                .expect("k = 1 passes TA5a on every anchor"),
+            a(&[1, 0, 1, 0, 1, 1])
+        );
+        assert!(!s.is_allocated(&a(&[1, 0, 1, 0, 1, 1])));
+    }
+
+    /// [`M3State::latest_version`] reads the CHAIN and not the registry: it
+    /// answers for a document-tier address "registered or not", and PUB-6.37's
+    /// gate stays the caller's ([`M3State::is_registered_document`]), exactly
+    /// as it does on [`M3State::published`]. The discriminating shape is a
+    /// version chain holding a member under a document that was never minted;
+    /// every other fixture in the crate hands this read a registered document,
+    /// so a registration gate added here would pass them all.
+    #[test]
+    fn latest_version_reads_the_chain_not_the_registry() {
+        let orphan = a(&[1, 0, 1, 0, 9]);
+        let member = a(&[1, 0, 1, 0, 9, 1]);
+        let s = M3State::genesis().apply_m3(&M3Rec::Allocate {
+            addr: member.clone(),
+            published: false,
+        });
+        assert!(
+            !s.is_registered_document(&orphan),
+            "the source was never minted"
+        );
+        assert_eq!(s.latest_version(&orphan), Some(member));
     }
 
     /// §6 (iv): the single probe answers "does a registered principal sit

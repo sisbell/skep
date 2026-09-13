@@ -13,7 +13,7 @@ use skep_coordination::{
     Atom, Coordinator, DefineError, Dom, Env, RegisterError, Rule, Sort, Stability, Term,
     TypeError, TypeKey, TypeRef, Value, VarId, View, EXPANSION_NAME_BASE,
 };
-use skep_links::{coverage_class, enc, Behavior, Caller, Endset, ShippedType, Tip};
+use skep_links::{coverage_class, enc, Behavior, Caller, Endset, HasLinks, ShippedType, Tip};
 
 // ───────────────────────────── construction ─────────────────────────────
 
@@ -322,6 +322,53 @@ fn type_check_refuses_each_documented_edge_by_name() {
     ));
 }
 
+/// WHICH rejection speaks when several hold: a node's type position and its
+/// behavior guard before its children; children left to right; a binder's
+/// domain before its body; a `Ref`'s referent before its arguments, and each
+/// argument on its own account before it is matched against its formal.
+#[test]
+fn type_check_reports_the_first_rejection_in_its_stated_walk_order() {
+    let k = kernel();
+    let c = coord(&k);
+    let mismatch = |expected: Sort, found: Sort| Some(TypeError::SortMismatch { expected, found });
+    // Ill-typed on its own account, whatever formal it is matched against.
+    let bad_arg = || and(tru(), lit_nat(1));
+
+    // The type position and its guard, before the children.
+    assert!(matches!(
+        c.type_check(vec![], is_k(&uncataloged_ty(20), lit_nat(1))),
+        Err(TypeError::UnregisteredType(_))
+    ));
+    assert!(matches!(
+        c.type_check(vec![], succs(&retired_ty(), lit_nat(1))),
+        Err(TypeError::BehaviorMissing { needs: Behavior::Walk, .. })
+    ));
+    // Children left to right.
+    assert_eq!(
+        c.type_check(vec![], and(lit_nat(1), lit_addr(&ca(1)))).err(),
+        mismatch(Sort::Bool, Sort::Nat)
+    );
+    // A binder's domain before its body.
+    assert!(matches!(
+        c.type_check(vec![], exists(2, Dom::MembersDom(conc(&uncataloged_ty(20))), lit_nat(1))),
+        Err(TypeError::UnregisteredType(_))
+    ));
+    // A `Ref`'s referent before its arguments …
+    assert!(matches!(
+        c.type_check(vec![], Term::Ref { addr: ca(9), args: vec![at(bad_arg())] }),
+        Err(TypeError::DanglingReference(_))
+    ));
+    // … and an argument's own ill-typedness before its match to the formal,
+    // which would report `{expected: Addr, found: Bool}`.
+    let (p, _) = c
+        .define_predicate(&doc1(), &c.type_check(vec![(v(1), Sort::Addr)], tru()).expect("P(x)"))
+        .expect("define P");
+    assert_eq!(
+        c.type_check(vec![], Term::Ref { addr: p, args: vec![at(bad_arg())] }).err(),
+        mismatch(Sort::Bool, Sort::Nat)
+    );
+}
+
 /// The node budget: `Reg`-expansion instantiates a body once per cataloged
 /// class, so nested `Reg` quantifiers multiply — six over a leaf fit, seven
 /// do not (`TooLarge`, before the seventh level's 78 125 instances exist) —
@@ -347,7 +394,10 @@ fn type_check_refuses_an_expansion_past_the_node_budget() {
 /// The nesting cap is the checker's as it is the decoder's: `¬¹²⁸ ⊤`
 /// checks and `¬¹²⁹ ⊤` is `TooDeep` — at the cap, before recursing further,
 /// so a term nested thousands deep is refused on this default thread rather
-/// than walked to its end.
+/// than walked to its end. A `Reg` quantifier's instances sit under the join
+/// chain the expansion builds — one level per cataloged class past the first
+/// — so the deepest instance, not the quantifier's own node, is what the cap
+/// charges.
 #[test]
 fn type_check_refuses_a_term_nested_past_the_cap() {
     let k = kernel();
@@ -356,6 +406,12 @@ fn type_check_refuses_a_term_nested_past_the_cap() {
     c.type_check(vec![], nested(128)).expect("a term at the cap checks");
     assert!(matches!(c.type_check(vec![], nested(129)), Err(TypeError::TooDeep)));
     assert!(matches!(c.type_check(vec![], nested(2048)), Err(TypeError::TooDeep)));
+
+    // Five shipped classes ⇒ a four-connective join, so a `Reg` quantifier at
+    // level n has its instances at n + 4.
+    let reg_at = |n: usize| (0..n).fold(forall(10, Dom::Reg, tru()), |t, _| not(t));
+    c.type_check(vec![], reg_at(124)).expect("124 + 4 joins = 128: at the cap");
+    assert!(matches!(c.type_check(vec![], reg_at(125)), Err(TypeError::TooDeep)));
 }
 
 /// V-IDX: `count(Reg)` folds to the (constant) registered-class count;
@@ -423,6 +479,27 @@ fn an_inner_reg_binder_shadows_the_outer() {
     let s = k.snapshot();
     assert!(!c.decide(&shadowed, &env, View::Active, &s));
     assert!(c.decide(&distinct, &env, View::Active, &s));
+}
+
+/// A checked term keeps its SOURCE body — `Reg` quantifiers and class
+/// variables intact — beside the Reg-expanded projection the evaluator
+/// walks; that compact form is what `define_predicate` stores, and its Γ_D
+/// is the ordered context the check was made under. A trigger reports the
+/// same three of itself.
+#[test]
+fn a_checked_term_reports_its_source_body_and_its_ordered_context() {
+    let k = kernel();
+    let c = coord(&k);
+    let body = || exists(7, Dom::Reg, Term::Atom(Atom::IsK(TypeRef::ClassVar(v(7)), at(var(1)))));
+    let tt = c.type_check(vec![(v(1), Sort::Addr)], body()).expect("Reg-quantified");
+    assert_eq!(tt.source_body(), &body(), "the pre-Reg-expansion body, verbatim");
+    assert_eq!(tt.params(), &[(v(1), Sort::Addr)]);
+    assert_eq!(tt.result_sort(), Sort::Bool);
+    assert!(tt.is_ref_free());
+    let trig = c.type_check_trigger((v(1), Sort::Addr), body()).expect("trigger");
+    assert_eq!(trig.param(), &(v(1), Sort::Addr));
+    assert_eq!(trig.source_body(), &body());
+    assert!(trig.is_ref_free());
 }
 
 /// The catalog probe is `Endset`-equality, not coverage: a key spelling the
@@ -553,6 +630,36 @@ fn targets_of_matches_the_source_by_coverage_at_active_and_by_denotation_at_audi
     }
 }
 
+/// The audit slice is the whole record: after a retraction, the retired
+/// tuple's F members and G targets persist in an `audit` reading and vanish
+/// from an `active` one. Asserted of each read in ABSOLUTE terms — the
+/// term/domain law above holds even when both of its sides read the wrong
+/// slice. The two tuple domains are fixed slices, whatever the term view
+/// says.
+#[test]
+fn an_audit_reading_keeps_what_a_retraction_removes_from_the_active_one() {
+    let k = kernel();
+    let c = coord(&k);
+    let t1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
+    deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
+    link_writer(&k).nullify(Caller::System, &doc1(), &t1).expect("retract the ca1 tuple");
+    let ps = pred_stable_ty();
+    let at = |view: View, t: Term| decide_now(&k, &c, view, t);
+
+    // members / M_K
+    assert!(at(View::Audit, set_mem(lit_addr(&ca(1)), members(&ps))));
+    assert!(!at(View::Active, set_mem(lit_addr(&ca(1)), members(&ps))));
+    assert!(at(View::Audit, nat_eq(count(Dom::MembersDom(conc(&ps))), lit_nat(2))));
+    assert!(at(View::Active, nat_eq(count(Dom::MembersDom(conc(&ps))), lit_nat(1))));
+    // targets_of
+    let tof = || targets_of(&ps, lit_addr(&ca(1)));
+    assert!(at(View::Audit, set_mem(lit_addr(&ca(2)), tof())));
+    assert!(!at(View::Active, set_mem(lit_addr(&ca(2)), tof())));
+    // A_K and L_K name their own slice at every term view.
+    assert!(at(View::Audit, nat_eq(count(Dom::ActiveSlice(conc(&ps))), lit_nat(1))));
+    assert!(at(View::Active, nat_eq(count(Dom::AuditSlice(conc(&ps))), lit_nat(2))));
+}
+
 /// BH2 over a linear lineage: `succs` is the one forward step, `chain` the
 /// inclusive path from its start, `tip` the successor-free head — a sink's
 /// head is itself — and `is_in_chain` is membership in the walk from its
@@ -617,6 +724,30 @@ fn bh2_tip_is_indeterminate_at_a_branch_and_a_cycle() {
     assert!(d(is_in_chain(&sup, lit_addr(&l4), lit_addr(&l5))));
     assert!(d(is_in_chain(&sup, lit_addr(&l5), lit_addr(&l4))));
     assert_eq!(c.current_version(&l4, &k.snapshot()), Tip::Indeterminate);
+}
+
+/// A claim is operative iff unnullified (Df-SUCC): the walk reads the ACTIVE
+/// claims, so retracting the CLAIM — not its endpoints — removes the edge and
+/// the head falls back to the node itself.
+#[test]
+fn a_nullified_claim_is_not_operative_so_the_walk_does_not_follow_it() {
+    let k = kernel();
+    let c = coord(&k);
+    let sup = c.reserved_type(ShippedType::Supersedes).clone();
+    let l1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
+    let l2 = deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
+    let writer = link_writer(&k);
+    let (claim, _) = writer.assert_sup(Caller::System, &doc1(), &l1, &l2).expect("l1 → l2");
+    assert!(decide_now(&k, &c, View::Active, tip_is(&sup, &l1, &l2)));
+    assert_eq!(c.current_version(&l1, &k.snapshot()), Tip::Sink(l2.clone()));
+
+    writer.nullify(Caller::System, &doc1(), &claim).expect("retract the claim");
+    let d = |t: Term| decide_now(&k, &c, View::Active, t);
+    assert!(d(is_empty(succs(&sup, lit_addr(&l1)))));
+    assert!(d(tip_is(&sup, &l1, &l1)), "the head falls back to l1 itself");
+    assert!(d(nat_eq(count_set(elems(chain(&sup, lit_addr(&l1)))), lit_nat(1))));
+    assert!(!d(is_in_chain(&sup, lit_addr(&l1), lit_addr(&l2))));
+    assert_eq!(c.current_version(&l1, &k.snapshot()), Tip::Sink(l1));
 }
 
 /// UV over the BH2 family: a `default`-view term's `chain`/`succs` drop the
@@ -710,6 +841,38 @@ fn domains_have_set_semantics_and_binders_bind_the_element() {
         members(&ps),
         and(set_mem(lit_addr(&ca(1)), var(3)), not(set_mem(lit_addr(&ca(2)), var(3))))
     )));
+}
+
+/// `L_dom` is the typed-relation sublayer and nothing else: a link deposited
+/// through the open surface in an UNCATALOGED type is outside PL's universe —
+/// it seeds no domain element and enters no reflection — while the cataloged
+/// links do, at every term view (the domain is fixed-audit), and stay once
+/// retracted, the `[R]` tuple joining them as a cataloged link of its own.
+#[test]
+fn link_dom_holds_the_cataloged_links_only_and_reads_the_audit_slice() {
+    let k = kernel();
+    let c = coord(&k);
+    let l1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
+    let l2 = deposit_rel(&k, PRED_DEF, &ca(3), &ca(4));
+    let open = deposit_rel(&k, 20, &ca(5), &ca(6)); // an uncataloged type number
+    assert!(
+        k.snapshot().world().links().readlink(&open).is_some(),
+        "M7's store holds the open link — it is PL's universe that must not"
+    );
+    let in_ldom = |view: View, x: &Address| {
+        decide_now(&k, &c, view, set_mem(lit_addr(x), reflect(Dom::LinkDom)))
+    };
+    for view in [View::Active, View::Audit, View::Default] {
+        assert!(in_ldom(view, &l1), "{view:?}");
+        assert!(in_ldom(view, &l2), "{view:?}");
+        assert!(!in_ldom(view, &open), "an open link is outside PL's universe at {view:?}");
+    }
+    assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::LinkDom), lit_nat(2))));
+
+    // The sublayer is the AUDIT record: a retracted cataloged link stays.
+    link_writer(&k).nullify(Caller::System, &doc1(), &l1).expect("retract l1");
+    assert!(in_ldom(View::Active, &l1));
+    assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::LinkDom), lit_nat(3))));
 }
 
 /// The T1 extrema over an address domain — max and min, ⊥ on an empty one
@@ -960,6 +1123,10 @@ fn the_pd0_rules_hold_over_a_generated_family() {
     // Quantifiers: ∀ over a grow-only domain is SF; over an active slice, neither.
     assert_eq!(stab(forall(2, Dom::AuditSlice(pd()), tru()), View::Audit), Stability::SfOnly);
     assert_eq!(stab(forall(2, Dom::ActiveSlice(pd()), tru()), View::Audit), Stability::Neither);
+    // `L_dom` is grow-only — an audit union — and names no view, so ∃ over it
+    // is ST at every one.
+    assert_eq!(stab(exists(2, Dom::LinkDom, tru()), View::Audit), Stability::StOnly);
+    assert_eq!(stab(exists(2, Dom::LinkDom, tru()), View::Active), Stability::StOnly);
     // Let: a state-reading bound term is Neither; a constant one is transparent.
     assert_eq!(stab(let_(3, ex.clone(), tru()), View::Audit), Stability::Neither);
     assert_eq!(stab(let_(3, lit_nat(1), ex.clone()), View::Audit), Stability::StOnly);

@@ -278,11 +278,12 @@ pub fn coord_with_guest(
     )
 }
 
-/// A TO-bearing tuple in a CATALOGED class (`ty` a reserved-type ordinal,
-/// [`PRED_DEF`]..), deposited through the open surface (the managed gate
-/// admits only Unary tuples in this format, and the open surface is
-/// shape-blind) — the M9 domain/eval tests' way of putting a relation with a
-/// G slot into a class the catalog speaks about.
+/// A TO-bearing tuple typed by reserved-type ordinal `ty`, deposited through
+/// the open surface (the managed gate admits only Unary tuples in this
+/// format, and the open surface is shape-blind) — the M9 domain/eval tests'
+/// way of putting a relation with a G slot into a class the catalog speaks
+/// about ([`PRED_DEF`]..). The open surface takes no type-registration gate,
+/// so an UNCATALOGED ordinal deposits an open link, outside PL's universe.
 pub fn deposit_rel(k: &Arc<Kernel<World>>, ty: u32, from: &Address, to: &Address) -> Address {
     LinkWriter::new(k.as_ref(), &EVERYONE)
         .makelink(

@@ -8,15 +8,15 @@
 use crate::common::*;
 use crate::terms::*;
 
-use skep_address::Address;
-use skep_arrangement::HasM5;
+use skep_address::{document_of, Address};
+use skep_arrangement::{HasM5, InsertError};
 use skep_content::HasContent;
 use skep_coordination::{
     CertifyError, Coordinator, DefineError, Dom, EvalError, Lit, RegisterError, RetractError,
     Rule, Sort, Stability, Term, Trigger, TypeError, Value, View, RuleError,
 };
 use skep_kernel::TxnError;
-use skep_links::{Caller, EmitError, Tip};
+use skep_links::{Caller, EmitError, NullifyError, Tip};
 
 // ───────────────────────── definitions lifecycle ─────────────────────────
 
@@ -41,10 +41,14 @@ fn a_def_registers_evaluates_retracts_and_re_registers_afresh() {
     assert_eq!(sig.result, Sort::Bool);
     assert_eq!(c.evaluate_def(&start, &[], View::Active, &s), Ok(Value::Bool(true)));
 
-    // ≤1 active pdef per start: a re-register dedups to the incumbent tuple.
+    // ≤1 active pdef per start: a re-register dedups to the incumbent tuple,
+    // and a dedup hit commits nothing — M7 answers the incumbent with its
+    // base `Seq`.
+    let before = k.current_seq();
     let (p1, _) = c.register_pred(&doc1(), &start).expect("re-register (dedup)");
     let (p2, _) = c.register_pred(&doc1(), &start).expect("re-register (dedup)");
     assert_eq!(p1, p2);
+    assert_eq!(k.current_seq(), before, "a dedup hit commits nothing");
 
     // A parameterized def: positional Γ_D binding with arity/sort guards.
     let tt1 = c
@@ -151,6 +155,44 @@ fn register_pred_refuses_garbage_bytes_an_empty_start_and_an_unregistered_home()
     assert!(matches!(
         c.register_pred(&unregistered_doc, &start),
         Err(RegisterError::HomeNotRegistered)
+    ));
+}
+
+/// The home requirement on the three other def writes is the STORE's door,
+/// and it speaks after M9's own gates: M5 refuses `define_predicate` with
+/// nothing committed; `certify_stable` reaches M7 only after every static
+/// leg; `retract_pred` only after the `NotActive` probe.
+#[test]
+fn an_unregistered_home_is_refused_by_the_store_after_m9_s_own_gates() {
+    let k = kernel();
+    let c = coord(&k);
+    let unregistered = a(&[1, 0, 1, 0, 7]);
+    let term = c.type_check(vec![], tru()).expect("closed True");
+
+    let before = k.current_seq();
+    assert!(matches!(
+        c.define_predicate(&unregistered, &term),
+        Err(DefineError::Insert(TxnError::Rejected(InsertError::DocNotRegistered)))
+    ));
+    assert_eq!(k.current_seq(), before, "nothing committed");
+
+    let (start, _) = c.define_predicate(&doc1(), &term).expect("define");
+    let (nat_def, _) = c
+        .define_predicate(&doc1(), &c.type_check(vec![], lit_nat(1)).expect("ℕ def"))
+        .expect("define");
+    // A static leg speaks first…
+    assert!(matches!(c.certify_stable(&unregistered, &nat_def), Err(CertifyError::NotBoolean)));
+    // …then M7's door.
+    assert!(matches!(
+        c.certify_stable(&unregistered, &start),
+        Err(CertifyError::Emit(TxnError::Rejected(EmitError::HomeNotRegistered)))
+    ));
+    // The probe speaks first…
+    assert!(matches!(c.retract_pred(&unregistered, &ca(99)), Err(RetractError::NotActive)));
+    // …then M7's door.
+    assert!(matches!(
+        c.retract_pred(&unregistered, &start),
+        Err(RetractError::Nullify(TxnError::Rejected(NullifyError::HomeNotRegistered)))
     ));
 }
 
@@ -570,6 +612,94 @@ fn def_probes_are_class_free_while_the_evaluator_s_look_is_not() {
     }
 }
 
+/// ≤1 active `pdef` per start (PR0) holds WITHIN the guest class the writer
+/// runs at (lane 3.3b): a pdef homed where the guest predicate refuses is
+/// invisible to M7's idempotency lookup, so a second registration mints a
+/// fresh tuple beside it — and `is_active_pred`, which reads class-free,
+/// stays true until each of the two is retracted, one per call.
+#[test]
+fn a_pdef_hidden_from_the_guest_class_does_not_absorb_a_second_registration() {
+    let k = kernel();
+    let c = coord_with_guest(&k, Box::new(|_: &World, d: &Address| *d != doc2()));
+    let term = c.type_check(vec![], tru()).expect("closed True");
+    let (start, _) = c.define_predicate(&doc2(), &term).expect("define into the draft");
+
+    let (fresh, _) = c.register_pred(&doc1(), &start).expect("register again, visibly");
+    assert_eq!(
+        document_of(&fresh),
+        Some(doc1()),
+        "a fresh deposit — the draft's incumbent is invisible to the dedup"
+    );
+    let (again, _) = c.register_pred(&doc1(), &start).expect("now it dedups");
+    assert_eq!(again, fresh, "the VISIBLE incumbent absorbs the third");
+
+    assert!(c.is_active_pred(&start, &k.snapshot()));
+    c.retract_pred(&doc1(), &start).expect("one active pdef retracted");
+    assert!(c.is_active_pred(&start, &k.snapshot()), "the twin is still active");
+    c.retract_pred(&doc1(), &start).expect("the twin retracted");
+    assert!(!c.is_active_pred(&start, &k.snapshot()));
+
+    // The control: where the guest class hides nothing, the doc2 incumbent is
+    // visible to the lookup and absorbs the second registration — one active
+    // pdef per start, and one retraction clears it.
+    let k = kernel();
+    let c = coord(&k);
+    let term = c.type_check(vec![], tru()).expect("closed True");
+    let (start, _) = c.define_predicate(&doc2(), &term).expect("define");
+    let (hit, _) = c.register_pred(&doc1(), &start).expect("register again");
+    assert_eq!(document_of(&hit), Some(doc2()), "the incumbent, wherever it is homed");
+    c.retract_pred(&doc1(), &start).expect("the one pdef retracted");
+    assert!(!c.is_active_pred(&start, &k.snapshot()));
+}
+
+/// A def's Γ_D is an ORDERED context: it survives the codec round trip, a
+/// cold coordinator reports it in order, and `evaluate_def` binds
+/// positionally — so two same-sorted parameters are not interchangeable.
+#[test]
+fn a_def_s_parameters_are_ordered_and_arguments_bind_positionally() {
+    let k = kernel();
+    let c = coord(&k);
+    let tt = c
+        .type_check(
+            vec![(v(1), Sort::Addr), (v(2), Sort::Addr)],
+            and(addr_eq(var(1), lit_addr(&ca(1))), addr_eq(var(2), lit_addr(&ca(2)))),
+        )
+        .expect("P(x, y) := x = ca1 ∧ y = ca2");
+    let (start, _) = c.define_predicate(&doc1(), &tt).expect("define");
+    let cold = coord(&k); // re-derives Γ_D from the stored bytes
+    assert_eq!(
+        cold.signature(&start).expect("defined").params,
+        vec![(v(1), Sort::Addr), (v(2), Sort::Addr)]
+    );
+    let s = k.snapshot();
+    let ordered = [Value::Addr(ca(1)), Value::Addr(ca(2))];
+    let swapped = [Value::Addr(ca(2)), Value::Addr(ca(1))];
+    assert_eq!(cold.evaluate_def(&start, &ordered, View::Active, &s), Ok(Value::Bool(true)));
+    assert_eq!(cold.evaluate_def(&start, &swapped, View::Active, &s), Ok(Value::Bool(false)));
+}
+
+/// PC2's binder guard narrows `ℕ∪{⊥} → ℕ` in the then-branch — the one
+/// optional-narrowing branch reachable in this format, an `OptNat` parameter
+/// being its only source.
+#[test]
+fn an_opt_nat_argument_narrows_through_the_binder_guard() {
+    let k = kernel();
+    let c = coord(&k);
+    let tt = c
+        .type_check(
+            vec![(v(1), Sort::OptNat)],
+            if_some(var(1), 2, nat_le(var(2), lit_nat(3)), fls()),
+        )
+        .expect("P(o) := if some n = o then n ≤ 3 else ⊥");
+    let (start, _) = c.define_predicate(&doc1(), &tt).expect("define");
+    let s = k.snapshot();
+    let at_arg = |val: Value| c.evaluate_def(&start, &[val], View::Active, &s);
+    assert_eq!(at_arg(Value::OptNat(Some(n(2)))), Ok(Value::Bool(true)));
+    assert_eq!(at_arg(Value::OptNat(Some(n(5)))), Ok(Value::Bool(false)));
+    assert_eq!(at_arg(Value::OptNat(None)), Ok(Value::Bool(false)));
+    assert_eq!(at_arg(Value::Nat(n(2))), Err(EvalError::ArgSortMismatch));
+}
+
 /// supersede's up-front gates, `current_version` over the shipped class, and
 /// the M7 supersession-fence drift tripwire (see the report: as-built M7
 /// rejects a raw `[K_sup]`-typed `emit`, so the design's def-lineage claim
@@ -623,10 +753,14 @@ fn certify_stable_refuses_each_cvalid_leg_in_order_and_certifies_through_referen
 
     assert!(matches!(c.certify_stable(&doc1(), &ca(40)), Err(CertifyError::NotEverRegistered)));
 
-    // A ⊤-stable, view-independent Boolean def certifies and deposits.
+    // A ⊤-stable, view-independent Boolean def certifies and deposits; a
+    // re-certification answers the incumbent and commits nothing.
     let (s0, _) = define(exists(1, Dom::AuditSlice(conc(&pred_def_ty())), tru()));
-    c.certify_stable(&doc1(), &s0).expect("certify");
+    let (cert, _) = c.certify_stable(&doc1(), &s0).expect("certify");
     assert!(c.is_certified_stable(&s0, &k.snapshot()));
+    let before = k.current_seq();
+    assert_eq!(c.certify_stable(&doc1(), &s0).expect("re-certify").0, cert);
+    assert_eq!(k.current_seq(), before, "re-certification dedups and commits nothing");
 
     // (i) Boolean sort.
     let (sa, _) = define(Term::Lit(Lit::BotAddr));

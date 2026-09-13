@@ -152,6 +152,21 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
             "{reserved:?}"
         );
     }
+    // The gates speak in order — the domain, then the trigger, then the
+    // action — so a rule failing two reports the earlier.
+    let bad_marker = || FireAction::Marker { home: doc1(), ty: key(&uncataloged_ty(20)) };
+    assert!(matches!(
+        c.register_rule(mk(Dom::Reg, always_addr(&c), bad_marker())),
+        Err(RuleError::IllFormedDomain(_))
+    ));
+    assert!(matches!(
+        c.register_rule(mk(
+            Dom::ActiveSlice(conc(&pred_stable_ty())),
+            always_addr(&c),
+            bad_marker()
+        )),
+        Err(RuleError::DomainTriggerSortMismatch { .. })
+    ));
 }
 
 /// The lint's three legs, each failed alone: every leg is relative to the
@@ -632,6 +647,27 @@ fn a_fire_stops_at_the_draft_boundary_before_any_deposit() {
     c.register_rule(rule).expect("register");
     assert!(matches!(c.step(&k.snapshot()), StepOutcome::Fired { .. }));
     assert!(k.snapshot().world().links().is_k(&marker_ty(), ca(1).tumbler()));
+
+    // (5) The membership re-check speaks BEFORE the boundary: an argument out
+    // of the VISIBLE domain is a `NoOp` even when the action's home is the
+    // draft — the trigger never reaches the action, so nothing is refused.
+    let k = kernel();
+    let mut c = coord_with_guest(&k, refuse_doc2());
+    link_writer(&k)
+        .emit(Caller::System, &doc2(), &pred_stable_ty(), &ca(1), &[])
+        .expect("the only witnessing tuple is draft-homed");
+    let id = c
+        .register_rule(Rule {
+            domain: Dom::MembersDom(conc(&pred_stable_ty())),
+            trigger: always_addr(&c),
+            view: View::Audit,
+            action: FireAction::Marker { home: doc2(), ty: key(&marker_ty()) },
+        })
+        .expect("register");
+    assert!(matches!(
+        c.fire(&Occurrence { rule: id, arg: Arg::Addr(ca(1)) }).expect("fire"),
+        FireOutcome::NoOp
+    ));
 }
 
 /// THE LOOK AT GUEST CLASS (lane 4.1, PUB-6.28): under a guest predicate that
@@ -761,6 +797,13 @@ fn a_nullify_rule_is_uncertified_fires_once_and_surfaces_bad_target_as_failed() 
         RuleCertification::Uncertified { sf: true, marker: false, grow_only: false }
     );
     let id = c.register_rule(rule).expect("register");
+    assert!(
+        matches!(
+            c.fire(&Occurrence { rule: id, arg: Arg::Addr(ca(1)) }).expect("fire"),
+            FireOutcome::NoOp
+        ),
+        "an argument of a shape this domain never yields is out of it by construction"
+    );
     match c.step(&k.snapshot()) {
         StepOutcome::Fired { rule, arg, .. } => {
             assert_eq!(rule, id);

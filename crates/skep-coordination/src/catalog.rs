@@ -34,10 +34,11 @@ pub(crate) struct CatalogEntry {
 pub(crate) struct TypeCatalog {
     entries: HashMap<TypeKey, CatalogEntry>,
     order: Vec<TypeKey>,
-    /// Shipped endsets, one per `ShippedType`, at the index [`slot`] assigns
-    /// — the one function that both places and fetches. Its length is the
-    /// population's own count, so a shipped type added upstream widens the
-    /// array with it rather than leaving [`slot`]'s new index out of bounds.
+    /// Shipped endsets, one per `ShippedType`, at the index
+    /// [`shipped_index`] assigns — the one function that both places and
+    /// fetches. Its length is the population's own count, so a shipped type
+    /// added upstream widens the array with it rather than leaving
+    /// [`shipped_index`]'s new index out of bounds.
     shipped: [Endset; ShippedType::ALL.len()],
     /// Φ — the cataloged classes declaring `ReadFilter` (class, verbatim key
     /// endset), for the UV default-view per-type filter
@@ -58,8 +59,10 @@ pub(crate) struct TypeCatalog {
 
 /// The `shipped` array's index for a shipped type — used by the projection
 /// to place and by [`TypeCatalog::reserved_type`] to fetch, so the array is
-/// positionally right by construction.
-fn slot(t: ShippedType) -> usize {
+/// positionally right by construction. Named for the array it indexes, not
+/// `slot`, which throughout the workspace is a link's F/G/TYPE endset
+/// position (M7's `SlotArg`, `followlink(a, slot)`) and is `usize` too.
+fn shipped_index(t: ShippedType) -> usize {
     match t {
         ShippedType::Retired => 0,
         ShippedType::Supersedes => 1,
@@ -93,7 +96,7 @@ impl TypeCatalog {
                 .expect("the registry registers every shipped class (TypeRegistry::build)")
                 .clone();
             let key = TypeKey(endset.clone());
-            shipped[slot(t)] = endset;
+            shipped[shipped_index(t)] = endset;
             order.push(key.clone());
             entries.insert(key, CatalogEntry { class, registration });
         }
@@ -129,7 +132,7 @@ impl TypeCatalog {
         let class_at = |t: ShippedType| registry.shipped_class(t).clone();
         TypeCatalog {
             retraction_class: class_at(ShippedType::Retraction),
-            supersedes_key: TypeKey(shipped[slot(ShippedType::Supersedes)].clone()),
+            supersedes_key: TypeKey(shipped[shipped_index(ShippedType::Supersedes)].clone()),
             pred_def_class: class_at(ShippedType::PredDef),
             pred_stable_class: class_at(ShippedType::PredStable),
             shipped,
@@ -162,7 +165,7 @@ impl TypeCatalog {
     /// M9's own cached accessor over the shipped endsets (no snapshot) —
     /// distinct from M7's snapshot-bound `LinkState::reserved_type`.
     pub(crate) fn reserved_type(&self, t: ShippedType) -> &Endset {
-        &self.shipped[slot(t)]
+        &self.shipped[shipped_index(t)]
     }
 
     /// The finite, fixed class list `Reg`-expansion instantiates over

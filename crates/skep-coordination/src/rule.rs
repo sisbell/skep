@@ -114,7 +114,9 @@ impl TypedDom {
 }
 
 /// One registered rule in the working set: the checked domain, the checked
-/// trigger, the declared view, the action, and the trigger's footprint.
+/// trigger, the declared view, the action, and the trigger's footprint —
+/// `footprint(T_ρ)`, the reads §8's armer graph asks about, never the rule's
+/// writes.
 #[derive(Debug, Clone)]
 pub(crate) struct CheckedRule {
     pub(crate) id: RuleId,
@@ -130,14 +132,16 @@ pub(crate) struct CheckedRule {
     pub(crate) trigger: Arc<TypedTerm>,
     pub(crate) view: View,
     pub(crate) action: FireAction,
-    /// FP over the trigger, at the rule's DECLARED view, computed once at
-    /// registration from the same flat ref-free expansion the node budget
-    /// admitted there (`RuleError::TriggerExpansionTooLarge`). A pure
-    /// function of immutable inputs — the captured trigger's content, the
-    /// frozen catalog, the declared view — so recording it costs nothing in
-    /// authority, and the armer graph reads §8's edge rule off it rather than
-    /// re-expanding every trigger on every call.
-    pub(crate) footprint: Footprint,
+    /// FP over the TRIGGER — `footprint(T_ρ)`, the subject §8's edge rule
+    /// names — at the rule's DECLARED view, computed once at registration
+    /// from the same flat ref-free expansion the node budget admitted there
+    /// (`RuleError::TriggerExpansionTooLarge`). What the rule WRITES is the
+    /// action's, carried separately as an [`crate::dynamics::Emission`]. A
+    /// pure function of immutable inputs — the captured trigger's content,
+    /// the frozen catalog, the declared view — so recording it costs nothing
+    /// in authority, and the armer graph reads §8's edge rule off it rather
+    /// than re-expanding every trigger on every call.
+    pub(crate) trigger_footprint: Footprint,
 }
 
 /// An occurrence `(ρ, x)`: a rule and a candidate argument. Enabled only

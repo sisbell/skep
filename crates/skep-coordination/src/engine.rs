@@ -4,7 +4,7 @@
 //! the SF+Marker+grow-only lint, the journal-recomputed divergence backstop,
 //! and the static armer-cycle warning.
 
-use std::slice;
+use std::slice::from_ref;
 use std::sync::Arc;
 
 use skep_address::{document_of, Address};
@@ -34,7 +34,7 @@ use crate::CoordinationWorld;
 struct Validated {
     dom: TypedDom,
     trigger: Arc<TypedTerm>,
-    flat: Term,
+    flat_expansion: Term,
 }
 
 impl<W: CoordinationWorld> Coordinator<W> {
@@ -68,12 +68,13 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// The same order in [`Coordinator::certify_rule`], which runs the same
     /// validation.
     pub fn register_rule(&mut self, rule: Rule) -> Result<RuleId, RuleError> {
-        let Validated { dom, trigger, flat } = self.validate_rule(&rule)?;
-        // The trigger's footprint at the declared view, from the same flat
-        // expansion the budget just admitted: recorded on the rule, so §8's
-        // armer graph reads it rather than re-deriving it per call
-        // (`CheckedRule::footprint` states why that costs no authority).
-        let footprint = Analyzer::new(&self.catalog, rule.view).term(&flat).fp;
+        let Validated { dom, trigger, flat_expansion } = self.validate_rule(&rule)?;
+        // `footprint(T_ρ)` at the declared view, from the same flat expansion
+        // the budget just admitted: recorded on the rule, so §8's armer graph
+        // reads it rather than re-deriving it per call
+        // (`CheckedRule::trigger_footprint` states why that costs no
+        // authority).
+        let trigger_footprint = Analyzer::new(&self.catalog, rule.view).term(&flat_expansion).fp;
         let id = RuleId(self.next_rule_id);
         self.next_rule_id += 1;
         self.rules.push(CheckedRule {
@@ -82,7 +83,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
             trigger,
             view: rule.view,
             action: rule.action,
-            footprint,
+            trigger_footprint,
         });
         Ok(id)
     }
@@ -106,10 +107,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// spells; a `Nullify` rule fails it BY ACTION, whatever the trigger's
     /// stability (`Uncertified`, divergence-monitored).
     pub fn certify_rule(&self, rule: &Rule) -> Result<RuleCertification, RuleError> {
-        let Validated { dom, trigger, flat } = self.validate_rule(rule)?;
+        let Validated { dom, trigger, flat_expansion } = self.validate_rule(rule)?;
         // Leg (a): trigger ∈ SF at the declared view.
         let analyzer = Analyzer::new(&self.catalog, rule.view);
-        let sf = analyzer.term(&flat).sf;
+        let sf = analyzer.term(&flat_expansion).sf;
         // Leg (b): the Marker pattern — the emitted tuple's slot-coverage is
         // exactly the witness the trigger's negated membership names
         // (canonical: trigger ¬is_K(a) @ audit ⟺ Marker{_, K}). The spelling
@@ -117,8 +118,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // engine's, which alone knows what the action emits.
         let marker = match &rule.action {
             FireAction::Marker { ty, .. } => {
+                let param = trigger.params()[0].0;
                 rule.view == View::Audit
-                    && negated_membership(&flat, trigger.params()[0].0).is_some_and(|witness| {
+                    && negated_membership(&flat_expansion, param).is_some_and(|witness| {
                         self.catalog.class_of(witness) == self.catalog.class_of(ty)
                     })
             }
@@ -155,7 +157,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // FLAT ref-free expansion, which an `Inline` trigger's evaluable
         // projection already is (a shallow node copy: the children are
         // `Arc`s).
-        let (trigger, flat) = match &rule.trigger {
+        let (trigger, flat_expansion) = match &rule.trigger {
             Trigger::Inline(t) => {
                 if !t.is_ref_free() {
                     return Err(RuleError::RefBearingInlineTrigger);
@@ -165,8 +167,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
                     return Err(RuleError::DomainTriggerSortMismatch { expected: elem, found: *s });
                 }
                 let checked = Arc::clone(t.checked());
-                let flat = checked.evaluable.as_ref().clone();
-                (checked, flat)
+                let flat_expansion = checked.evaluable.as_ref().clone();
+                (checked, flat_expansion)
             }
             Trigger::Def(addr) => {
                 let DefStatus::Defined(def) = self.def_status(addr) else {
@@ -189,8 +191,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 // immutable referents, so decided once — and the tree itself
                 // handed on, so no later pass re-derives it or has to argue
                 // that it fits.
-                let flat = self.expand_def(&def).map_err(|_| RuleError::TriggerExpansionTooLarge)?;
-                (def, flat)
+                let flat_expansion = self
+                    .expand_def(&def)
+                    .map_err(|_| RuleError::TriggerExpansionTooLarge)?;
+                (def, flat_expansion)
             }
         };
         // Marker shape: cataloged Unary (BadMarkerType), idem⊤
@@ -211,7 +215,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 return Err(RuleError::PredLayerMarkerType(ty.clone()));
             }
         }
-        Ok(Validated { dom: TypedDom(cd.dom), trigger, flat })
+        Ok(Validated { dom: TypedDom(cd.dom), trigger, flat_expansion })
     }
 
     // ─────────────────────── enumeration & triggers ───────────────────────
@@ -520,7 +524,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
             FireAction::Marker { home, ty } => links
                 .observe(
                     &ty.0,
-                    Pattern { from: slice::from_ref(x.tumbler()), to: &[] },
+                    Pattern { from: from_ref(x.tumbler()), to: &[] },
                     View::Audit,
                 )
                 .iter()
@@ -530,8 +534,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 .observe(
                     self.catalog.reserved_type(ShippedType::Retraction),
                     Pattern {
-                        from: slice::from_ref(home.tumbler()),
-                        to: slice::from_ref(x.tumbler()),
+                        from: from_ref(home.tumbler()),
+                        to: from_ref(x.tumbler()),
                     },
                     View::Audit,
                 )
@@ -572,7 +576,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         let edges: Vec<Vec<usize>> = (0..n)
             .map(|i| {
                 (0..n)
-                    .filter(|&j| self.rules[j].footprint.armed_by(&emitted[i]))
+                    .filter(|&j| self.rules[j].trigger_footprint.armed_by(&emitted[i]))
                     .collect()
             })
             .collect();

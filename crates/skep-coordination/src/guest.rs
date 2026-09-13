@@ -197,11 +197,15 @@ impl<'a, W> GuestLinks<'a, W> {
 
     /// The visible `slice` tuples whose F DENOTES `x` — `x ∈ F.addrs()`,
     /// V-AUD's exact regime, which M7's `Pattern` cannot express (it matches F
-    /// by COVERAGE). Denotation implies coverage — a denoted address is the
-    /// start of a unit-depth span, which covers it — so the coverage pattern
-    /// is a sound PRE-FILTER: the scan runs over the covering tuples, not over
-    /// the whole slice.
-    fn denoting(&self, ty: &Endset, x: &Address, slice: Slice) -> Vec<Tuple> {
+    /// by COVERAGE). A MATCHING REGIME on the source, yielding tuples, where
+    /// [`GuestLinks::denote_slot`] and [`GuestLinks::denoted`] are the
+    /// denotation fold over one slot, yielding addresses.
+    ///
+    /// Denotation implies coverage — a denoted address is the start of a
+    /// unit-depth span, which covers it — so the coverage pattern is a sound
+    /// PRE-FILTER: the scan runs over the covering tuples, not over the whole
+    /// slice.
+    fn tuples_denoting(&self, ty: &Endset, x: &Address, slice: Slice) -> Vec<Tuple> {
         let mut out = self.observe(ty, Pattern { from: from_ref(x.tumbler()), to: &[] }, slice);
         out.retain(|t| t.from.addrs().any(|f| f == x.tumbler()));
         out
@@ -224,7 +228,7 @@ impl<'a, W> GuestLinks<'a, W> {
     /// those whose F COVERS it — the one place a PL view changes WHICH TUPLES
     /// MATCH and not merely which slice is read.
     pub(crate) fn targets_of_denoting(&self, ty: &Endset, x: &Address) -> Vec<Address> {
-        Self::denote_slot(self.denoting(ty, x, Slice::Audit), |t| &t.to)
+        Self::denote_slot(self.tuples_denoting(ty, x, Slice::Audit), |t| &t.to)
     }
 
     // ───────────── BH2 — the walk over the VISIBLE operative claims ─────────────
@@ -320,7 +324,7 @@ impl<'a, W> GuestLinks<'a, W> {
     /// BH3 forward: ⊥ unless EXACTLY ONE visible active type-`ty` tuple
     /// denotes `source` in F with a single-address-denoting G.
     pub(crate) fn target_of(&self, ty: &Endset, source: &Address) -> Option<Address> {
-        let mut matches = self.denoting(ty, source, Slice::Active).into_iter();
+        let mut matches = self.tuples_denoting(ty, source, Slice::Active).into_iter();
         match (matches.next(), matches.next()) {
             (Some(t), None) => t.to.single_denoted().map(lift),
             _ => None, // no visible active match, or several ⇒ ⊥

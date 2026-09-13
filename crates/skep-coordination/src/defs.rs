@@ -18,7 +18,7 @@
 //! Every read inside a VERDICT — this module's `evaluate_def` included —
 //! goes through `Coordinator::eval_ctx`'s guest-class view.
 
-use std::slice;
+use std::slice::from_ref;
 
 use skep_address::{content_subspace, Address, Nat};
 use skep_arrangement::{Deposit, VPos};
@@ -67,7 +67,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         !w.links()
             .observe(
                 self.catalog.reserved_type(ShippedType::PredDef),
-                Pattern { from: slice::from_ref(start.tumbler()), to: &[] },
+                Pattern { from: from_ref(start.tumbler()), to: &[] },
                 View::Audit,
             )
             .is_empty()
@@ -277,7 +277,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         let sup = self.catalog.reserved_type(ShippedType::Supersedes);
         let (_claim, seq) = self
             .link_writer()
-            .emit(Caller::System, d, sup, old_start, slice::from_ref(&new_start))
+            .emit(Caller::System, d, sup, old_start, from_ref(&new_start))
             .map_err(DefineError::Supersede)?;
         Ok((new_start, seq))
     }
@@ -322,11 +322,12 @@ impl<W: CoordinationWorld> Coordinator<W> {
         if !self.is_active_pred(start, &snap) {
             return Err(CertifyError::NotActive);
         }
-        let flat = self.expand_def(&entry).map_err(|_| CertifyError::ExpansionTooLarge)?;
-        if !view_independent(&flat) {
+        let flat_expansion =
+            self.expand_def(&entry).map_err(|_| CertifyError::ExpansionTooLarge)?;
+        if !view_independent(&flat_expansion) {
             return Err(CertifyError::ViewDependent);
         }
-        if !st_plus(&self.catalog, &flat) {
+        if !st_plus(&self.catalog, &flat_expansion) {
             return Err(CertifyError::NotStable);
         }
         let (tuple, seq) = self.link_writer().emit(
@@ -370,7 +371,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 .links()
                 .observe(
                     self.catalog.reserved_type(ShippedType::PredDef),
-                    Pattern { from: slice::from_ref(start.tumbler()), to: &[] },
+                    Pattern { from: from_ref(start.tumbler()), to: &[] },
                     View::Active,
                 )
                 .first()

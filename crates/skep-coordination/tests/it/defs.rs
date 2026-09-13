@@ -196,6 +196,45 @@ fn an_unregistered_home_is_refused_by_the_store_after_m9_s_own_gates() {
     ));
 }
 
+/// A def's home is a DRAFT: `define_predicate`'s insert is `Undeclared`, and
+/// M5 admits an undeclared insert into a published TARGET at no position, so
+/// a published `d` is refused at the store's door with nothing committed —
+/// `Caller::System` is exempt from ω and from nothing else. `supersede`
+/// writes its successor through `define_predicate`, and inherits it. The LINK
+/// deposits do not: a `pdef` emit and its retraction are outside the
+/// version-chain rule, and land in the published document.
+#[test]
+fn define_predicate_refuses_a_published_home_while_the_link_writes_land_there() {
+    let k = kernel();
+    let c = coord(&k);
+    let term = c.type_check(vec![], tru()).expect("closed True");
+
+    let before = k.current_seq();
+    assert!(matches!(
+        c.define_predicate(&published_doc(), &term),
+        Err(DefineError::Insert(TxnError::Rejected(InsertError::PublishedTarget)))
+    ));
+    assert_eq!(k.current_seq(), before, "nothing committed");
+
+    // A draft home takes the same term …
+    let (start, _) = c.define_predicate(&doc1(), &term).expect("define into a draft");
+    // … and `supersede` carries the requirement through its successor's insert.
+    assert!(matches!(
+        c.supersede(&published_doc(), &start, &term),
+        Err(DefineError::Insert(TxnError::Rejected(InsertError::PublishedTarget)))
+    ));
+
+    // The link path is outside the rule: a def whose content lives in a draft
+    // registers — and de-registers — homed in the published document.
+    let drafted = insert_raw(&k, &doc1(), forged_negations(1));
+    let (tuple, _) = c
+        .register_pred(&published_doc(), &drafted)
+        .expect("a pdef emit is a link deposit, outside the version-chain rule");
+    assert_eq!(document_of(&tuple), Some(published_doc()));
+    let (retraction, _) = c.retract_pred(&published_doc(), &drafted).expect("nullify likewise");
+    assert_eq!(document_of(&retraction), Some(published_doc()));
+}
+
 /// register_pred's gate order at a stored reference: the referent's
 /// ever-registration is asked BEFORE WT-ref, so a stored body naming an
 /// address nothing was ever registered at is `ReferentNotEverRegistered`,
@@ -878,7 +917,10 @@ fn certify_stable_refuses_each_cvalid_leg_in_order_and_certifies_through_referen
     let (rw2, _) = define_ref(&w2, vec![lit_nat(3)]);
     c.certify_stable(&doc1(), &rw2).expect("the threshold threads through two expansion levels");
 
-    // (0)/(ii) ordering: a retracted def is NotActive.
+    // (0)/(ii) ordering: a retracted def is NotActive — and retraction does
+    // not cascade to the certificate, which is about the immutable content.
     c.retract_pred(&doc1(), &s0).expect("retract");
     assert!(matches!(c.certify_stable(&doc1(), &s0), Err(CertifyError::NotActive)));
+    assert!(c.is_certified_stable(&s0, &k.snapshot()));
+    assert!(!c.is_active_pred(&s0, &k.snapshot()));
 }

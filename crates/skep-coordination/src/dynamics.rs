@@ -41,9 +41,14 @@ pub enum Stability {
 /// Read slices: per-type {active, audit} (an active read implies `L_R` —
 /// retractions shrink it), the whole-audit flag (`L_dom`), the residence
 /// domain (`is_doc`), the BH4 home-frontier flag, and the cross-type
-/// `targets_keyed` join. Read through the accessors below; a caller that
-/// wants to know what a term reads gets exactly the slices the analysis
-/// recorded.
+/// `targets_keyed` join. Read through the accessors below.
+///
+/// A SOUND OVER-APPROXIMATION: every slice the term may read is recorded,
+/// and a recorded slice need not be read. One imprecision is deliberate —
+/// `is_K` at the `default` view charges Φ's active slices, though UV never
+/// rewrites a verdict atom — because every reader takes the footprint as a
+/// superset. So a caller may use it to decide what MIGHT change a verdict,
+/// never to assert that a dependency exists.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Footprint {
     pub(crate) audit: HashSet<CoverageClass>,

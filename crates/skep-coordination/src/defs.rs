@@ -84,10 +84,22 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// `TypedTerm` came through `type_check`, and a trigger — the one checked
     /// term that binds a tuple — is a `TriggerTerm`, which this signature
     /// cannot receive. The codec's own `Tup` refusal (it has no tag for the
-    /// sort) is therefore unreachable from this path. `d` must be a
-    /// registered document: an unregistered one is M5's door,
-    /// `Insert(Rejected(DocNotRegistered))`, before any content lands. Under
-    /// concurrency: a concurrent INSERT lands the def mid-document (harmless
+    /// sort) is therefore unreachable from this path.
+    ///
+    /// `d` must be a registered document that is NOT a published TARGET (M5's
+    /// `published_target`: the publication bit of `trunk_of(d)` — `d` with its
+    /// version components stripped, so a chain's every member answers its
+    /// trunk's bit). An unregistered `d` is M5's door,
+    /// `Insert(Rejected(DocNotRegistered))`, before any content lands; a
+    /// published target is `Insert(Rejected(PublishedTarget))` at the same
+    /// door and for EVERY position, this insert being `Deposit::Undeclared` —
+    /// M5 admits into a published target only a declared deposit at a fresh
+    /// append position, and `Caller::System` is exempt from ω and from
+    /// nothing else (PUB-6.28). A def's home is therefore a draft: a caller
+    /// that means to publish the document holding its predicates defines into
+    /// it first.
+    ///
+    /// Under concurrency: a concurrent INSERT lands the def mid-document (harmless
     /// — identity is the returned start); a concurrent DELETE yields a
     /// retryable `Insert(Rejected(OutOfBounds))` — benign, recompute and
     /// re-insert (item 6; the design's `BadPosition`, split by the as-built
@@ -106,11 +118,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
         let vstream = (self.mk_vstream)(self.kernel.as_ref());
         // M9's writes run as `Caller::System` (the ownership ruling's
         // automation path, 2026-08-16): the coordination layer holds no wire
-        // principal — M9 ⟂ M10 by architecture. A def write is no deposit
-        // (the declaration is a credential-class client's, PUB-2.59), and
-        // `System` is not exempt from the in-place refusal (PUB-6.28): a def
-        // into a PUBLISHED document surfaces as
-        // `Insert(Rejected(PublishedTarget))`.
+        // principal — M9 ⟂ M10 by architecture. A def write is no deposit:
+        // the declaration is a credential-class client's (PUB-2.59), so this
+        // insert is `Undeclared` — the door the published-target requirement
+        // above is stated against.
         let (start, _insert_seq) =
             vstream.insert(Caller::System, d, at, vec![Val::new(bytes)], Deposit::Undeclared)?;
         let (_pdef_tuple, seq) = self.register_pred(d, &start)?;
@@ -202,8 +213,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
         let entry = match self.def_status(start) {
             DefStatus::Defined(e) => e,
             DefStatus::Poisoned => return Err(EvalError::UndisciplinedDef),
-            // Ever at the caller's snap but not at the memo's own fresh pin
-            // cannot happen (ever-registration is monotone); defensive.
+            // Unreachable: ever at the caller's snap and not at the memo's
+            // own fresh pin cannot happen, ever-registration being monotone.
+            // Answered rather than asserted, so the query stays total.
             DefStatus::NeverRegistered => return Err(EvalError::NotEverRegistered),
         };
         let params = entry.params();
@@ -240,7 +252,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// are content addresses — Conflicts §4). Gates `old_start` UP FRONT,
     /// before any transaction: it must be EVER-registered (superseding a
     /// retracted def is legitimate lineage — PR4) — else
-    /// `OldStartNotEverRegistered`.
+    /// `OldStartNotEverRegistered`. The successor's content is written
+    /// through `define_predicate`, so `d` carries that operation's
+    /// requirement — a registered document that is not a published target —
+    /// and both of its refusals arrive here as `DefineError::Insert`.
     ///
     /// THREE non-atomic transactions, NO idempotency key — a lost-ack retry
     /// re-inserts a fresh successor and branches the lineage
@@ -268,9 +283,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
     }
 
     /// The lineage head: `tip(reserved_type(Supersedes), start)` —
-    /// `Sink(head)` for a linear lineage, `Indeterminate` at a branch/cycle.
-    /// The reference DAG is acyclic by registration order, so no cycle check
-    /// is added here (PR4).
+    /// `Sink(head)` for a linear lineage, `Indeterminate` at a branch or a
+    /// cycle. The `supersedes` lineage is not constrained to be acyclic (it
+    /// is a claim graph, not PR4's reference DAG): the walk halts on its own
+    /// visited set, and `Indeterminate` is the contract for both shapes.
     pub fn current_version(&self, start: &Address, snap: &Snapshot<W>) -> Tip {
         snap.world()
             .links()
@@ -339,7 +355,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// registered document — `Nullify(Rejected(HomeNotRegistered))`
     /// otherwise, after the `NotActive` probe. Content untouched; audit
     /// retains it; re-registration after nullify deposits afresh (the idem
-    /// class is empty again). Does NOT cascade to referents.
+    /// class is empty again). Does NOT cascade: not to referents, and not to
+    /// the `pd_stable` certificate — `is_certified_stable` stays true for a
+    /// retracted def (the certificate is about the immutable content), while
+    /// `certify_stable` on that def now refuses `NotActive`.
     ///
     /// RETURNS `(retraction, seq)`: the address of the `[R]` tuple itself —
     /// never the `pdef`'s — or, on a dedup hit, the incumbent retraction's,

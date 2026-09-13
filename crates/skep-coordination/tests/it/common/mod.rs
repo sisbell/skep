@@ -122,6 +122,16 @@ pub fn doc2() -> Address {
     a(&[1, 0, 1, 0, 2])
 }
 
+/// Document 3: `[1,0,1,0,3]` — the one PUBLISHED document. Publication is
+/// resolved at the mint and immutable afterwards (there is no publish op), so
+/// a published document is a `published: true` `Allocate` and nothing else.
+/// `define_predicate`'s undeclared insert is refused here at M5's door, while
+/// every `emit`/`nullify` M9 makes is a link deposit, outside the
+/// version-chain rule, and lands.
+pub fn published_doc() -> Address {
+    a(&[1, 0, 1, 0, 3])
+}
+
 /// doc1 content element `ordinal`.
 pub fn ca(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 1, 0, 1, ordinal])
@@ -188,19 +198,21 @@ pub fn uncataloged_ty(ordinal: u32) -> Endset {
 
 // ─────────────────────────────── world assembly ─────────────────────────────
 
-/// An M3 slice with a principal-owned account and two registered documents,
-/// built by folding exactly the records M3's own ops would stage. Both are
-/// PRIVATE drafts: M9's def writes and the fixtures' seeding are in-place
-/// inserts, which a published document refuses (PUB-2.11, `Caller::System`
-/// included, PUB-6.28) — the first as an explicit-`false` mint, the state M3
-/// produces below the daemon's first-mint door. An account's `Allocate`
-/// carries no publication state.
+/// An M3 slice with a principal-owned account and three registered documents,
+/// built by folding exactly the records M3's own ops would stage. [`doc1`] and
+/// [`doc2`] are PRIVATE drafts: M9's def writes and the fixtures' seeding are
+/// in-place inserts, which a published document refuses (PUB-2.11,
+/// `Caller::System` included, PUB-6.28) — each an explicit-`false` mint, the
+/// state M3 produces below the daemon's first-mint door. [`published_doc`] is
+/// the published one, for the refusal itself. An account's `Allocate` carries
+/// no publication state.
 pub fn seeded_m3() -> M3State {
     M3State::genesis()
         .apply_m3(&M3Rec::Allocate { addr: a(&[1, 0, 1]), published: false })
         .apply_m3(&M3Rec::RegisterPrincipal { prefix: a(&[1, 0, 1]), id: PrincipalId(1) })
         .apply_m3(&M3Rec::Allocate { addr: a(&[1, 0, 1, 0, 1]), published: false })
         .apply_m3(&M3Rec::Allocate { addr: a(&[1, 0, 1, 0, 2]), published: false })
+        .apply_m3(&M3Rec::Allocate { addr: a(&[1, 0, 1, 0, 3]), published: true })
 }
 
 pub fn genesis_world() -> World {

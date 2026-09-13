@@ -40,6 +40,12 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// termination — apply your own uncertified-rule policy via
     /// [`Coordinator::certify_rule`].
     ///
+    /// POSTCONDITION: the rule is in the working set for the life of this
+    /// `Coordinator` — the registry is APPEND-ONLY (nothing de-registers, and
+    /// a `RuleId` is never reused), so every later `quiescent`,
+    /// `next_enabled`, `step`, `fire`, `fire_count` and `armer_cycles`
+    /// includes it, and a rule is shed only with its coordinator.
+    ///
     /// WHICH REJECTION SPEAKS, when several hold — the domain, then the
     /// trigger, then the action: `IllFormedDomain` (in `type_check`'s walk
     /// order), `RefBearingDomain`; for an `Inline` trigger
@@ -62,11 +68,19 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// one shared validation path), then lints the CHECKED artifacts; a
     /// malformed rule returns the same typed [`RuleError`] `register_rule`
     /// would, in the same order of precedence. Callable pre-registration;
-    /// a query — registers nothing. `CertifiedTerminating` = SF trigger
-    /// (classified at the rule's declared view; a `Def` trigger over its
-    /// flat, ref-free expansion) + Marker witness-coverage match + grow-only
-    /// domain, under weak fairness + bounded input; a `Nullify` rule always
-    /// fails the marker leg (`Uncertified`, divergence-monitored).
+    /// a query — registers nothing. `CertifiedTerminating` = all three legs,
+    /// under weak fairness + bounded input: (a) the trigger is SF, classified
+    /// at the rule's DECLARED view (a `Def` trigger over its flat, ref-free
+    /// expansion); (b) the Marker witness-coverage match — the declared view
+    /// is `audit` AND the trigger's body is the canonical negated membership
+    /// `¬ is_K(x)` at the trigger's own parameter, naming a class
+    /// coverage-equal to `Marker.ty`; (c) the domain is grow-only.
+    ///
+    /// Leg (b) is recognized BY SPELLING (`dynamics::negated_membership`), so
+    /// an equivalent trigger written otherwise is simply not certified, and a
+    /// rule declared at `active` or `default` fails the leg whatever it
+    /// spells; a `Nullify` rule fails it BY ACTION, whatever the trigger's
+    /// stability (`Uncertified`, divergence-monitored).
     pub fn certify_rule(&self, rule: &Rule) -> Result<RuleCertification, RuleError> {
         let (dom, trigger) = self.validate_rule(rule)?;
         // Leg (a): trigger ∈ SF at the declared view.
@@ -239,6 +253,14 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// full `[D_ρ]`) — a strict safe-direction over-approximation of
     /// remaining work, never false quiescence. Exact per-rule scoping is
     /// deferred (Open).
+    ///
+    /// `scope` is evaluated at `View::Active` against `snap`, each rule's
+    /// domain at its own declared view. The scope's view is an OPEN decision
+    /// — the design leaves it unstated, the canonical scopes being state-free
+    /// address tests — and `active`, the current structural state, is the
+    /// conservative default taken here: a caller supplying a state-READING
+    /// scope observes that choice, and a later settlement would change this
+    /// verdict for such a scope.
     pub fn quiescent_scoped(&self, scope: &TypedTerm, body: ScopeBody, snap: &Snapshot<W>) -> bool {
         assert!(
             scope.is_ref_free()
@@ -249,10 +271,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
              one-Addr-parameter Bool TypedTerm"
         );
         let scope_param = scope.params()[0].0;
-        // OPEN DECISION: the design leaves the scope predicate's evaluation
-        // view unstated (the canonical scopes are state-free address tests);
-        // Active — the current structural state — is taken as the
-        // conservative default.
+        // The OPEN scope-view decision the doc states: `active`, the current
+        // structural state, as the conservative default.
         let cx = self.eval_ctx(snap.world(), View::Active, None);
         let s_of = |y: &Address| -> bool {
             let env = Env::empty().bind(scope_param, Value::Addr(y.clone()));

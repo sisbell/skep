@@ -29,6 +29,13 @@
 //! recomputed from M7's journal-recovered slices at every ask. No journal, no
 //! `apply`, no slice, no record variant.
 //!
+//! Several QUERIES may fill that memo on a miss — `signature`, a `type_check`
+//! over a `Ref`, `evaluate_def`, `certify_stable`, a rule validation over a
+//! `Def` trigger. Each stays a query: an entry is derived from the def's
+//! immutable content plus M7's monotone audit slice, the first fill wins and
+//! nothing is ever evicted, so the answer does not turn on whether the memo
+//! was warm — a caller may ask twice and be answered the same.
+//!
 //! ## Boundary — deliberately NOT owned here
 //!
 //! * the content-region/arrangement query algebra — M8 (hard lateral
@@ -51,7 +58,11 @@
 //! * the injected `mk_vstream`/`mk_link_writer` factories presuppose the
 //!   engine can construct a `Vstream` from `&Kernel<W>` and a `LinkWriter`
 //!   from `&Kernel<W>` plus a visibility class — the injected `guest`
-//!   predicate, lent at every construction (lane 3.3b);
+//!   predicate, lent at every construction (lane 3.3b) — and each must build
+//!   over EXACTLY the kernel (and, for the writer, the visibility class) it
+//!   is handed, never a captured one, with `guest` a pure function of the
+//!   world it is passed: the one-pinned-snapshot verdict and the
+//!   byte-identical commit rest on both, and neither is checkable here;
 //! * **PR-DISC**: no holder of M7's `emit` other than M9's
 //!   `register_pred`/`certify_stable` may route a typed emit whose `ty` is
 //!   `pdef`/`pd_stable` (M7's gate rejects only R-class; M9's own

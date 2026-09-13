@@ -100,6 +100,18 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// an action whose home or bound argument's document it answers `false`
     /// for (`FireError::DraftBoundary`), and every write M9 makes runs its
     /// value-keyed gates at this class (PUB-6.28).
+    ///
+    /// OBLIGATIONS ON THE THREE INJECTED VALUES, owed by the assembler and
+    /// uncheckable here: each factory must build its handle over EXACTLY the
+    /// arguments it is handed — `mk_vstream` over the `&Kernel<W>` given,
+    /// `mk_link_writer` over that kernel AND that `&Visibility` — never over
+    /// a captured one; and `guest` must be a pure function of `(world, doc)`,
+    /// reading nothing outside the world it is passed. M9's
+    /// one-pinned-snapshot verdicts and lane 3.3b's byte-identical commit
+    /// rest on both: a predicate consulting state outside its world would
+    /// give one verdict two visibility answers for one document, and a
+    /// factory capturing its own kernel or its own class would type-check and
+    /// void the guarantee in silence.
     pub fn new(
         kernel: Arc<Kernel<W>>,
         registry: Arc<TypeRegistry>,
@@ -182,8 +194,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// counted per node AND per unit of payload, so a large literal under a
     /// `Reg` quantifier is charged for every instance it multiplies into — is
     /// `TooLarge`; each refused at the bound, not after it. Reads no
-    /// structural state for a ref-free body; consults the immutable def memo
-    /// for any `Ref`. Once `Ok`, valid at every reachable state (WT).
+    /// structural state for a ref-free body; consults the def memo for any
+    /// `Ref`, and on a MISS derives the referent from its immutable content,
+    /// pinning its own snapshot — the answer is the same either way. Once
+    /// `Ok`, valid at every reachable state (WT).
     ///
     /// WHICH REJECTION SPEAKS, when several hold: `TupParameter` (over Γ_D)
     /// first, then `TooLarge` for a Γ_D longer than the budget (charged

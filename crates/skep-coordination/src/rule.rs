@@ -55,10 +55,12 @@ pub enum FireAction {
     /// `ty` must be a cataloged idem⊤ Unary type that is NOT a PredLayer
     /// class (`register_rule` rejects otherwise — PR-DISC).
     Marker { home: Address, ty: TypeKey },
-    /// Single retraction: `nullify(home, a)` on the bound argument. NOT
-    /// SF-certifiable (active-state trigger) — always `Uncertified`, admitted
-    /// under the uncertified-rule policy with the divergence monitor as
-    /// backstop. Documented contract: the domain must yield RESIDENT LINKS
+    /// Single retraction: `nullify(home, a)` on the bound argument. NEVER
+    /// certifiable: `certify_rule`'s Marker leg is false BY ACTION, whatever
+    /// the trigger's stability (a ⊤ trigger is SF and the rule is still
+    /// `Uncertified`) — admitted under the uncertified-rule policy with the
+    /// divergence monitor as backstop. Documented contract: the domain must
+    /// yield RESIDENT LINKS
     /// (tuple-domained, or `Addr`-over-`L_dom`); an `Addr`-over-`M_K` domain
     /// passes `register_rule` but every fire then trips
     /// `FireError::Nullify(Rejected(BadTarget))`.
@@ -182,7 +184,10 @@ pub enum FireOutcome {
 /// One `step`'s outcome. `Fired`/`Deduped` carry `FireOutcome`'s `effect`
 /// (the deposited resp. incumbent tuple's address) through, so a driver can
 /// reconcile the divergence monitor against the journal without re-deriving
-/// the deposited tuple's address. A fire error surfaces as `Failed` — never a
+/// the deposited tuple's address. `arg` is the bookkeeping KEY, never the
+/// bound value: the bound address for an `Addr`-domain rule, a bound tuple's
+/// `t.addr` for a `Tup`-domain one — which is what `fire_count(rule, &arg)`
+/// keys on. A fire error surfaces as `Failed` — never a
 /// silent swallow — with rotate-past rotation (§7): nothing committed; the
 /// rule stays registered — the working set offers no de-registration — and
 /// its occurrence enabled, re-attempted when the rotation returns to it;

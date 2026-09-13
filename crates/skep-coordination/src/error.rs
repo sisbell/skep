@@ -397,7 +397,9 @@ pub enum RuleError {
     /// escape for domains; inline the helper.
     RefBearingDomain,
     /// `rule.domain` fails the WT-domain + `Reg`-expansion pass (incl. a bare
-    /// `Reg` domain — the sort check).
+    /// `Reg` domain — the sort check). Carries that pass's own resource
+    /// refusals too, `TooDeep` and `TooLarge`: the domain is checked under a
+    /// fresh budget of its own, never the submitting term's.
     IllFormedDomain(TypeError),
     /// Trigger param sort ≠ domain element sort — the reconciliation the two
     /// independent type-checks omit.

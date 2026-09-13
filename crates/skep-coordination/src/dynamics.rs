@@ -10,6 +10,7 @@ use skep_links::{CoverageClass, View};
 
 use crate::ast::{Atom, Dom, Lit, Prim, Term, TypeKey, VarId};
 use crate::catalog::TypeCatalog;
+use crate::guest::Slice;
 use crate::walk::{visit_dom, visit_term, Visit};
 
 /// `classify`'s output — all static, sound-but-incomplete. `footprint`/
@@ -100,7 +101,10 @@ impl Footprint {
             || self.home_frontier
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    /// The term reads nothing, so its value cannot change across a state step
+    /// — PD0's STEP-CONSTANT proviso ("a literal or an already-bound
+    /// address"), transcribed structurally.
+    pub(crate) fn is_step_constant(&self) -> bool {
         self.audit.is_empty()
             && self.active.is_empty()
             && !self.all_audit
@@ -137,14 +141,14 @@ pub struct ActiveExceptions {
 }
 
 /// Per-node analysis: footprint, ⊤-stability (st), ⊥-stability (sf), and —
-/// for set-valued nodes — membership in the grow-only closure. Step-constant
-/// = empty footprint (PD0's "literal or already-bound address" proviso,
-/// transcribed structurally).
+/// for set-valued nodes — membership in PD0's grow-only closure. PD0's other
+/// closure property, step-constancy, is the footprint's own
+/// ([`Footprint::is_step_constant`]) rather than a field here.
 pub(crate) struct Analysis {
     pub(crate) fp: Footprint,
     pub(crate) st: bool,
     pub(crate) sf: bool,
-    pub(crate) grow: bool,
+    pub(crate) grow_only: bool,
 }
 
 /// A domain's analysis: its footprint and its membership in PD0's grow-only
@@ -152,18 +156,20 @@ pub(crate) struct Analysis {
 /// domain, and the certification lint's leg (c).
 pub(crate) struct DomAnalysis {
     pub(crate) fp: Footprint,
-    pub(crate) grow: bool,
+    pub(crate) grow_only: bool,
 }
 
-fn constant(fp: Footprint) -> Analysis {
-    let c = fp.is_empty();
-    Analysis { fp, st: c, sf: c, grow: c }
+/// A node whose value is fixed by its footprint: step-constant ⇒ ST∩SF and
+/// grow-only vacuously; reading state ⇒ Neither and outside the closure.
+fn step_constant(fp: Footprint) -> Analysis {
+    let c = fp.is_step_constant();
+    Analysis { fp, st: c, sf: c, grow_only: c }
 }
 
 /// A state read whose value is free to change across steps: Neither, and
 /// outside the grow-only closure.
 fn reads(fp: Footprint) -> Analysis {
-    Analysis { fp, st: false, sf: false, grow: false }
+    Analysis { fp, st: false, sf: false, grow_only: false }
 }
 
 /// A stability-threshold term: an ℕ literal, widened (ST⁺ — set only by
@@ -184,15 +190,16 @@ pub(crate) struct Analyzer<'a> {
 }
 
 impl Analyzer<'_> {
-    /// The slice a read of class `k` at `view` touches: audit reads `L_K`;
-    /// active and default read the active slice (⊆ `L_K ∪ L_R`, so any
-    /// retraction can shrink it).
-    fn slice_fp(&self, k: &TypeKey, view: View) -> Footprint {
+    /// The stored slice a read of class `k` touches: the audit slice is
+    /// `L_K`; the active slice is ⊆ `L_K ∪ L_R`, so any retraction can shrink
+    /// it. Which slice a term's VIEW reads is [`Slice::of`]'s statement, made
+    /// once per arm below.
+    fn slice_fp(&self, k: &TypeKey, slice: Slice) -> Footprint {
         let class = self.catalog.class_of(k).clone();
         let mut fp = Footprint::default();
-        match view {
-            View::Audit => fp.audit.insert(class),
-            View::Active | View::Default => fp.active.insert(class),
+        match slice {
+            Slice::Audit => fp.audit.insert(class),
+            Slice::Active => fp.active.insert(class),
         };
         fp
     }
@@ -201,10 +208,10 @@ impl Analyzer<'_> {
     /// element (`EvalCtx::filtered_other`, fixed active); empty at `active`
     /// and `audit`, where no rewrite runs. Unioned into exactly the reads the
     /// evaluator UV-rewrites, so which those are is one token per arm.
-    fn bh1_fp(&self) -> Footprint {
+    fn read_filter_fp(&self) -> Footprint {
         let mut fp = Footprint::default();
         if self.view == View::Default {
-            for (j, _) in self.catalog.bh1() {
+            for (j, _) in self.catalog.read_filter_classes() {
                 fp.active.insert(j.clone());
             }
         }
@@ -215,32 +222,32 @@ impl Analyzer<'_> {
     pub(crate) fn term(&self, t: &Term) -> Analysis {
         match t {
             // Γ-/binder-bound vars and literals: empty footprint ⇒ ST∩SF.
-            Term::Var(_) | Term::Lit(_) => constant(Footprint::default()),
+            Term::Var(_) | Term::Lit(_) => step_constant(Footprint::default()),
             Term::Atom(a) => self.atom(a),
             Term::Prim(p) => self.prim(p),
             Term::And(x, y) | Term::Or(x, y) => {
                 let ax = self.term(x);
                 let ay = self.term(y);
                 let fp = ax.fp.union(&ay.fp);
-                Analysis { st: ax.st && ay.st, sf: ax.sf && ay.sf, grow: fp.is_empty(), fp }
+                Analysis { st: ax.st && ay.st, sf: ax.sf && ay.sf, grow_only: fp.is_step_constant(), fp }
             }
             Term::Not(x) => {
                 let ax = self.term(x);
-                Analysis { st: ax.sf, sf: ax.st, grow: ax.fp.is_empty(), fp: ax.fp }
+                Analysis { st: ax.sf, sf: ax.st, grow_only: ax.fp.is_step_constant(), fp: ax.fp }
             }
             // ⇒ combines SF⇒ST (PD0).
             Term::Implies(x, y) => {
                 let ax = self.term(x);
                 let ay = self.term(y);
                 let fp = ax.fp.union(&ay.fp);
-                Analysis { st: ax.sf && ay.st, sf: ax.st && ay.sf, grow: fp.is_empty(), fp }
+                Analysis { st: ax.sf && ay.st, sf: ax.st && ay.sf, grow_only: fp.is_step_constant(), fp }
             }
             Term::Iff(x, y) => {
                 let ax = self.term(x);
                 let ay = self.term(y);
                 let fp = ax.fp.union(&ay.fp);
                 let both = ax.st && ax.sf && ay.st && ay.sf;
-                Analysis { st: both, sf: both, grow: fp.is_empty(), fp }
+                Analysis { st: both, sf: both, grow_only: fp.is_step_constant(), fp }
             }
             // Quantifiers per grow-only / step-constant domain (PD0): a
             // step-constant D strengthens both directions; a grow-only D gives
@@ -249,10 +256,10 @@ impl Analyzer<'_> {
                 let universal = matches!(t, Term::Forall { .. });
                 let ad = self.dom(dom);
                 let ab = self.term(body);
-                let step_const = ad.fp.is_empty();
+                let step_const = ad.fp.is_step_constant();
                 let (st, sf) = if step_const {
                     (ab.st, ab.sf)
-                } else if ad.grow {
+                } else if ad.grow_only {
                     if universal {
                         (false, ab.sf)
                     } else {
@@ -262,17 +269,17 @@ impl Analyzer<'_> {
                     (false, false)
                 };
                 let fp = ad.fp.union(&ab.fp);
-                Analysis { st, sf, grow: fp.is_empty(), fp }
+                Analysis { st, sf, grow_only: fp.is_step_constant(), fp }
             }
             Term::Let { bound, body, .. } => {
                 let ab = self.term(bound);
                 let ay = self.term(body);
-                let bound_const = ab.fp.is_empty();
+                let bound_const = ab.fp.is_step_constant();
                 let fp = ab.fp.union(&ay.fp);
                 Analysis {
                     st: bound_const && ay.st,
                     sf: bound_const && ay.sf,
-                    grow: bound_const && ay.grow,
+                    grow_only: bound_const && ay.grow_only,
                     fp,
                 }
             }
@@ -282,30 +289,35 @@ impl Analyzer<'_> {
                 let ao = self.term(opt);
                 let at = self.term(then_);
                 let ae = self.term(else_);
-                let guard_const = ao.fp.is_empty();
+                let guard_const = ao.fp.is_step_constant();
                 let fp = ao.fp.union(&at.fp).union(&ae.fp);
                 Analysis {
                     st: guard_const && at.st && ae.st,
                     sf: guard_const && at.sf && ae.sf,
-                    grow: fp.is_empty(),
+                    grow_only: fp.is_step_constant(),
                     fp,
                 }
             }
-            Term::Count(d) | Term::MaxT1(d) | Term::MinT1(d) => constant(self.dom(d).fp),
+            Term::Count(d) | Term::MaxT1(d) | Term::MinT1(d) => step_constant(self.dom(d).fp),
             // ⋃(D, f) with D grow-only and f step-constant per binding is
             // grow-only (the derived closure form).
             Term::BigUnion { dom, body, .. } => {
                 let ad = self.dom(dom);
                 let ab = self.term(body);
                 let fp = ad.fp.union(&ab.fp);
-                let grow = fp.is_empty() || (ad.grow && ab.fp.is_empty());
-                Analysis { st: fp.is_empty(), sf: fp.is_empty(), grow, fp }
+                let grow_only = fp.is_step_constant() || (ad.grow_only && ab.fp.is_step_constant());
+                Analysis { st: fp.is_step_constant(), sf: fp.is_step_constant(), grow_only, fp }
             }
             // Reflect(D)'s footprint is D's; its value grows iff D does.
             Term::Reflect(d) => {
                 let ad = self.dom(d);
-                let empty = ad.fp.is_empty();
-                Analysis { grow: empty || ad.grow, st: empty, sf: empty, fp: ad.fp }
+                let step_const = ad.fp.is_step_constant();
+                Analysis {
+                    grow_only: step_const || ad.grow_only,
+                    st: step_const,
+                    sf: step_const,
+                    fp: ad.fp,
+                }
             }
             Term::Ref { .. } => unreachable!(
                 "classification precondition: ref-free input (an inline trigger's projection or a flat expansion)"
@@ -326,47 +338,47 @@ impl Analyzer<'_> {
             // Default self-loop case is pinned on it.
             Atom::IsK(tr, e) => {
                 let ae = self.term(e);
-                let st = view == View::Audit && ae.fp.is_empty();
-                let fp = ae.fp.union(&self.slice_fp(tr.key(), view)).union(&self.bh1_fp());
-                Analysis { st, sf: false, grow: false, fp }
+                let st = view == View::Audit && ae.fp.is_step_constant();
+                let fp = ae.fp.union(&self.slice_fp(tr.key(), Slice::of(view))).union(&self.read_filter_fp());
+                Analysis { st, sf: false, grow_only: false, fp }
             }
             // M_K in an audit-view term is a grow-only set value (V-AUD).
             Atom::Members(tr) => {
-                let fp = self.slice_fp(tr.key(), view).union(&self.bh1_fp());
-                Analysis { grow: view == View::Audit, st: false, sf: false, fp }
+                let fp = self.slice_fp(tr.key(), Slice::of(view)).union(&self.read_filter_fp());
+                Analysis { grow_only: view == View::Audit, st: false, sf: false, fp }
             }
             Atom::TargetsOf(tr, e) => {
                 let ae = self.term(e);
-                let grow = view == View::Audit && ae.fp.is_empty();
-                let fp = ae.fp.union(&self.slice_fp(tr.key(), view)).union(&self.bh1_fp());
-                Analysis { grow, st: false, sf: false, fp }
+                let grow_only = view == View::Audit && ae.fp.is_step_constant();
+                let fp = ae.fp.union(&self.slice_fp(tr.key(), Slice::of(view))).union(&self.read_filter_fp());
+                Analysis { grow_only, st: false, sf: false, fp }
             }
             Atom::IsFiltered(tr, e) => {
                 let ae = self.term(e);
-                reads(ae.fp.union(&self.slice_fp(tr.key(), View::Active)))
+                reads(ae.fp.union(&self.slice_fp(tr.key(), Slice::Active)))
             }
             // BH2/BH3 collections: fixed-active reads — Neither — and the
             // evaluator UV-rewrites them, so a default term's footprint carries
             // the BH1 slices too.
             Atom::Succs(tr, e) | Atom::Chain(tr, e) | Atom::SourcesTo(tr, e) => {
                 let ae = self.term(e);
-                reads(ae.fp.union(&self.slice_fp(tr.key(), View::Active)).union(&self.bh1_fp()))
+                reads(ae.fp.union(&self.slice_fp(tr.key(), Slice::Active)).union(&self.read_filter_fp()))
             }
             // Verdict/traversal atoms (tip/is_in_chain) and the single-target
             // projection are never UV-rewritten: fixed active.
             Atom::Tip(tr, e) | Atom::TargetOf(tr, e) => {
                 let ae = self.term(e);
-                reads(ae.fp.union(&self.slice_fp(tr.key(), View::Active)))
+                reads(ae.fp.union(&self.slice_fp(tr.key(), Slice::Active)))
             }
             Atom::IsInChain(tr, x, y) => {
                 let ax = self.term(x);
                 let ay = self.term(y);
-                reads(ax.fp.union(&ay.fp).union(&self.slice_fp(tr.key(), View::Active)))
+                reads(ax.fp.union(&ay.fp).union(&self.slice_fp(tr.key(), Slice::Active)))
             }
             Atom::TargetsKeyed(e) => {
                 let ae = self.term(e);
                 let mut fp = ae.fp;
-                for (c, _) in self.catalog.bh3() {
+                for (c, _) in self.catalog.reverse_lookup_classes() {
                     fp.active.insert(c.clone());
                 }
                 fp.targets_keyed = true;
@@ -377,14 +389,14 @@ impl Analyzer<'_> {
             // collection it does.
             Atom::Age(tr, e) => {
                 let ae = self.term(e);
-                let mut fp = ae.fp.union(&self.slice_fp(tr.key(), View::Active));
+                let mut fp = ae.fp.union(&self.slice_fp(tr.key(), Slice::Active));
                 fp.home_frontier = true;
                 reads(fp)
             }
             Atom::Stale(tr, e) => {
                 let ae = self.term(e);
                 let mut fp =
-                    ae.fp.union(&self.slice_fp(tr.key(), View::Active)).union(&self.bh1_fp());
+                    ae.fp.union(&self.slice_fp(tr.key(), Slice::Active)).union(&self.read_filter_fp());
                 fp.home_frontier = true;
                 reads(fp)
             }
@@ -392,16 +404,16 @@ impl Analyzer<'_> {
             // permanent).
             Atom::IsDoc(e) => {
                 let ae = self.term(e);
-                let st = ae.fp.is_empty();
+                let st = ae.fp.is_step_constant();
                 let mut fp = ae.fp;
                 fp.residence = true;
-                Analysis { st, sf: false, grow: false, fp }
+                Analysis { st, sf: false, grow_only: false, fp }
             }
             // V-TUP: state-independent.
-            Atom::TupAddr(_) | Atom::TupAddrsF(_) | Atom::TupAddrsG(_) => constant(Footprint::default()),
+            Atom::TupAddr(_) | Atom::TupAddrsF(_) | Atom::TupAddrsG(_) => step_constant(Footprint::default()),
             Atom::InCoverageF(e, _) | Atom::InCoverageG(e, _) => {
                 let ae = self.term(e);
-                constant(ae.fp)
+                step_constant(ae.fp)
             }
         }
     }
@@ -412,23 +424,28 @@ impl Analyzer<'_> {
             Prim::SetMem(x, s) => {
                 let ax = self.term(x);
                 let as_ = self.term(s);
-                let st_grow = ax.fp.is_empty() && as_.grow;
+                let st_grow = ax.fp.is_step_constant() && as_.grow_only;
                 let fp = ax.fp.union(&as_.fp);
-                let empty = fp.is_empty();
-                Analysis { st: empty || st_grow, sf: empty, grow: empty, fp }
+                let step_const = fp.is_step_constant();
+                Analysis { st: step_const || st_grow, sf: step_const, grow_only: step_const, fp }
             }
             // Emptiness of a grow-only set is SF.
             Prim::IsEmpty(s) => {
                 let as_ = self.term(s);
-                let sf_grow = as_.grow;
-                let empty = as_.fp.is_empty();
-                Analysis { st: empty, sf: empty || sf_grow, grow: empty, fp: as_.fp }
+                let sf_grow = as_.grow_only;
+                let step_const = as_.fp.is_step_constant();
+                Analysis {
+                    st: step_const,
+                    sf: step_const || sf_grow,
+                    grow_only: step_const,
+                    fp: as_.fp,
+                }
             }
             // count(D) ≤ c ∈ SF and count(D) ≥ c ∈ ST over a grow-only D, with a
             // literal threshold (ST⁺ widens to a bound ℕ parameter);
             // count(D) = c is unclassified — Neither (PD0). Each side's
             // `Count` domain is analyzed exactly once here — its own analysis
-            // is `constant(dom.fp)`, and the grow-only fact rides along — so
+            // is `step_constant(dom.fp)`, and the grow-only fact rides along — so
             // a threshold nested inside its own domain's filter costs linear
             // work, not a doubling per level.
             Prim::NatLe(x, y) => {
@@ -436,8 +453,8 @@ impl Analyzer<'_> {
                     match t {
                         Term::Count(d) => {
                             let ad = self.dom(d);
-                            let bound = threshold_ok(other, self.widen) && ad.grow;
-                            (constant(ad.fp), bound)
+                            let bound = threshold_ok(other, self.widen) && ad.grow_only;
+                            (step_constant(ad.fp), bound)
                         }
                         _ => (self.term(t), false),
                     }
@@ -445,8 +462,8 @@ impl Analyzer<'_> {
                 let (ax, sf) = side(x, y); // count(D) ≤ c: upper bound, false-stable
                 let (ay, st) = side(y, x); // c ≤ count(D): lower bound, true-stable
                 let fp = ax.fp.union(&ay.fp);
-                let empty = fp.is_empty();
-                Analysis { st: st || empty, sf: sf || empty, grow: empty, fp }
+                let step_const = fp.is_step_constant();
+                Analysis { st: st || step_const, sf: sf || step_const, grow_only: step_const, fp }
             }
             Prim::AddrEq(x, y)
             | Prim::Prefix(x, y)
@@ -456,10 +473,10 @@ impl Analyzer<'_> {
             | Prim::NatAdd(x, y) => {
                 let ax = self.term(x);
                 let ay = self.term(y);
-                constant(ax.fp.union(&ay.fp))
+                step_constant(ax.fp.union(&ay.fp))
             }
-            Prim::Elems(x) | Prim::Def(x) => constant(self.term(x).fp),
-            Prim::MapGet(m, _) => constant(self.term(m).fp),
+            Prim::Elems(x) | Prim::Def(x) => step_constant(self.term(x).fp),
+            Prim::MapGet(m, _) => step_constant(self.term(m).fp),
         }
     }
 
@@ -470,27 +487,27 @@ impl Analyzer<'_> {
     pub(crate) fn dom(&self, d: &Dom) -> DomAnalysis {
         match d {
             Dom::MembersDom(tr) => DomAnalysis {
-                fp: self.slice_fp(tr.key(), self.view).union(&self.bh1_fp()),
-                grow: self.view == View::Audit,
+                fp: self.slice_fp(tr.key(), Slice::of(self.view)).union(&self.read_filter_fp()),
+                grow_only: self.view == View::Audit,
             },
             Dom::ActiveSlice(tr) => {
-                DomAnalysis { fp: self.slice_fp(tr.key(), View::Active), grow: false }
+                DomAnalysis { fp: self.slice_fp(tr.key(), Slice::Active), grow_only: false }
             }
-            Dom::AuditSlice(tr) => DomAnalysis { fp: self.slice_fp(tr.key(), View::Audit), grow: true },
+            Dom::AuditSlice(tr) => DomAnalysis { fp: self.slice_fp(tr.key(), Slice::Audit), grow_only: true },
             Dom::LinkDom => {
-                DomAnalysis { fp: Footprint { all_audit: true, ..Footprint::default() }, grow: true }
+                DomAnalysis { fp: Footprint { all_audit: true, ..Footprint::default() }, grow_only: true }
             }
             Dom::Reg => unreachable!("no Reg domain survives type_check's Reg-expansion/folding"),
             Dom::Filter { dom, pred, .. } => {
                 let ad = self.dom(dom);
                 let ap = self.term(pred);
-                let grow = (ad.grow && ap.st) || (ad.fp.is_empty() && ap.fp.is_empty());
-                DomAnalysis { fp: ad.fp.union(&ap.fp), grow }
+                let grow_only = (ad.grow_only && ap.st) || (ad.fp.is_step_constant() && ap.fp.is_step_constant());
+                DomAnalysis { fp: ad.fp.union(&ap.fp), grow_only }
             }
             Dom::SetTerm(t) => {
                 let at = self.term(t);
-                let grow = at.grow || at.fp.is_empty();
-                DomAnalysis { fp: at.fp, grow }
+                let grow_only = at.grow_only || at.fp.is_step_constant();
+                DomAnalysis { fp: at.fp, grow_only }
             }
         }
     }

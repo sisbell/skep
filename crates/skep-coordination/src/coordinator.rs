@@ -127,7 +127,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// byte-identical to it: the catalog is a projection of the same
     /// registry.
     pub fn reserved_type(&self, t: ShippedType) -> &Endset {
-        self.catalog.reserved(t)
+        self.catalog.reserved_type(t)
     }
 
     /// One verdict's read context over the world `w` of a pinned snapshot,

@@ -697,9 +697,9 @@ impl<'a> Checker<'a> {
                 (Atom::TargetOf(TypeRef::Concrete(k), c.term), Sort::OptAddr, c.ref_free)
             }
             Atom::TargetsKeyed(e) => {
-                // V-atom: in the vocabulary iff some cataloged class attaches
-                // BH3.
-                if !self.catalog.has_bh3() {
+                // V-atom: in the vocabulary iff some cataloged class declares
+                // `ReverseLookup` (BH3).
+                if !self.catalog.has_reverse_lookup_class() {
                     return Err(TypeError::NoReverseLookupClass);
                 }
                 let c = arg(e, Sort::Addr)?;

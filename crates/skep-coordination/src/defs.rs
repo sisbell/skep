@@ -66,7 +66,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     pub(crate) fn ever_registered(&self, w: &W, start: &Address) -> bool {
         !w.links()
             .observe(
-                self.catalog.reserved(ShippedType::PredDef),
+                self.catalog.reserved_type(ShippedType::PredDef),
                 Pattern { from: slice::from_ref(start.tumbler()), to: &[] },
                 View::Audit,
             )
@@ -154,7 +154,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // content-intrinsic).
         let entry = self.check_signed(signed, 0).map_err(RegisterError::IllTyped)?;
         // (iv) endorsement: every referent ACTIVELY registered at σ.
-        let pdef = self.catalog.reserved(ShippedType::PredDef);
+        let pdef = self.catalog.reserved_type(ShippedType::PredDef);
         if let Some(r) = refs.iter().find(|r| !w.links().is_k(pdef, r.tumbler())) {
             return Err(RegisterError::ReferentNotActive(r.clone()));
         }
@@ -224,7 +224,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     pub fn is_active_pred(&self, start: &Address, snap: &Snapshot<W>) -> bool {
         snap.world()
             .links()
-            .is_k(self.catalog.reserved(ShippedType::PredDef), start.tumbler())
+            .is_k(self.catalog.reserved_type(ShippedType::PredDef), start.tumbler())
     }
 
     /// `is_K(pdef, start)@audit` — through the one observe-honors-Audit seam.
@@ -257,7 +257,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
             return Err(DefineError::OldStartNotEverRegistered(old_start.clone()));
         }
         let (new_start, _pdef_seq) = self.define_predicate(d, new_term)?;
-        let sup = self.catalog.reserved(ShippedType::Supersedes);
+        let sup = self.catalog.reserved_type(ShippedType::Supersedes);
         let (_claim, seq) = self
             .link_writer()
             .emit(Caller::System, d, sup, old_start, slice::from_ref(&new_start))
@@ -272,7 +272,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     pub fn current_version(&self, start: &Address, snap: &Snapshot<W>) -> Tip {
         snap.world()
             .links()
-            .tip(self.catalog.reserved(ShippedType::Supersedes), start)
+            .tip(self.catalog.reserved_type(ShippedType::Supersedes), start)
     }
 
     /// CVALID(0..iii), the refusals speaking in this order: defined signature
@@ -314,7 +314,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         let (tuple, seq) = self.link_writer().emit(
             Caller::System,
             d,
-            self.catalog.reserved(ShippedType::PredStable),
+            self.catalog.reserved_type(ShippedType::PredStable),
             start,
             &[],
         )?;
@@ -325,7 +325,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     pub fn is_certified_stable(&self, start: &Address, snap: &Snapshot<W>) -> bool {
         snap.world()
             .links()
-            .is_k(self.catalog.reserved(ShippedType::PredStable), start.tumbler())
+            .is_k(self.catalog.reserved_type(ShippedType::PredStable), start.tumbler())
     }
 
     /// De-register: M7::nullify, from the retracting home `d`, on ONE active
@@ -348,7 +348,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
             snap.world()
                 .links()
                 .observe(
-                    self.catalog.reserved(ShippedType::PredDef),
+                    self.catalog.reserved_type(ShippedType::PredDef),
                     Pattern { from: slice::from_ref(start.tumbler()), to: &[] },
                     View::Active,
                 )

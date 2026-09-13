@@ -88,7 +88,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
             FireAction::Nullify { .. } => false,
         };
         // Leg (c): grow-only domain.
-        let grow_only = analyzer.dom(dom.as_dom()).grow;
+        let grow_only = analyzer.dom(dom.as_dom()).grow_only;
         if sf && marker && grow_only {
             Ok(RuleCertification::CertifiedTerminating)
         } else {
@@ -496,7 +496,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 .count() as u64,
             FireAction::Nullify { home } => links
                 .observe(
-                    self.catalog.reserved(ShippedType::Retraction),
+                    self.catalog.reserved_type(ShippedType::Retraction),
                     Pattern {
                         from: slice::from_ref(home.tumbler()),
                         to: slice::from_ref(x.tumbler()),

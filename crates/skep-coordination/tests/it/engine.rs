@@ -637,7 +637,7 @@ fn a_fire_stops_at_the_draft_boundary_before_any_deposit() {
 /// THE LOOK AT GUEST CLASS (lane 4.1, PUB-6.28): under a guest predicate that
 /// refuses doc2, a tuple homed in doc2 is invisible to every read the
 /// evaluator makes — it seeds no domain, satisfies no trigger, and moves no
-/// PL verdict — while the same tuple homed in doc1 does all three. The view
+/// PL verdict — while the same tuple homed in doc1 does all three. The slice
 /// stays orthogonal to the class: an `AuditSlice` domain keeps a retracted
 /// tuple of the readable doc1. (Under the suite's all-true guest, `coord`'s,
 /// the filter is the identity — every other test here stands as written.)
@@ -714,7 +714,7 @@ fn the_trigger_s_look_is_filtered_at_guest_class() {
         "the public marker now falsifies the trigger"
     );
 
-    // (3) The view is orthogonal to the class: a retracted tuple of doc1
+    // (3) The slice is orthogonal to the class: a retracted tuple of doc1
     // stays in L_K (audit), doc2's never enters.
     let k = kernel();
     let c = coord_with_guest(&k, refuse_doc2());

@@ -37,13 +37,14 @@ pub(crate) struct TypeCatalog {
     /// Shipped endsets, one per `ShippedType`, at the index [`slot`] assigns
     /// — the one function that both places and fetches.
     shipped: [Endset; 5],
-    /// Φ — the cataloged BH1 classes (class, verbatim key endset), for the UV
-    /// default-view per-type filter (`is_k(J, ·) ≡ is_filtered_J`, D2).
-    bh1: Vec<(CoverageClass, Endset)>,
-    /// The BH3-attached Binary classes (class, verbatim key endset) —
-    /// `targets_keyed`'s footprint and its join. Empty in this format: no
-    /// shipped registration declares ReverseLookup.
-    bh3: Vec<(CoverageClass, Endset)>,
+    /// Φ — the cataloged classes declaring `ReadFilter` (class, verbatim key
+    /// endset), for the UV default-view per-type filter
+    /// (`is_k(J, ·) ≡ is_filtered_J`, D2 — BH1).
+    read_filter: Vec<(CoverageClass, Endset)>,
+    /// The classes declaring `ReverseLookup` (class, verbatim key endset) —
+    /// `targets_keyed`'s footprint and its join (BH3). Empty in this format:
+    /// no shipped registration declares it.
+    reverse_lookup: Vec<(CoverageClass, Endset)>,
     pub(crate) retraction_class: CoverageClass,
     pub(crate) supersedes_key: TypeKey,
     pub(crate) pred_def_class: CoverageClass,
@@ -51,7 +52,7 @@ pub(crate) struct TypeCatalog {
 }
 
 /// The `shipped` array's index for a shipped type — used by the projection
-/// to place and by [`TypeCatalog::reserved`] to fetch, so the array is
+/// to place and by [`TypeCatalog::reserved_type`] to fetch, so the array is
 /// positionally right by construction.
 fn slot(t: ShippedType) -> usize {
     match t {
@@ -91,11 +92,12 @@ impl TypeCatalog {
         }
 
         // The two behavior footprints are the registry's own rules, asked of
-        // it rather than restated over the cached registrations: the BH1 set
-        // is what `declares` answers, and the BH3 set is exactly the classes
-        // `targets_keyed` joins over — so the join and the footprint analysis
-        // of what it reads cannot come apart.
-        let bh1 = order
+        // it rather than restated over the cached registrations: the
+        // `ReadFilter` set is what `declares` answers, and the
+        // `ReverseLookup` set is exactly the classes `targets_keyed` joins
+        // over — so the join and the footprint analysis of what it reads
+        // cannot come apart.
+        let read_filter = order
             .iter()
             .filter_map(|k| {
                 let entry = &entries[k];
@@ -104,7 +106,7 @@ impl TypeCatalog {
                     .then(|| (entry.class.clone(), k.0.clone()))
             })
             .collect();
-        let bh3 = order
+        let reverse_lookup = order
             .iter()
             .filter_map(|k| {
                 let entry = &entries[k];
@@ -126,8 +128,8 @@ impl TypeCatalog {
             shipped,
             entries,
             order,
-            bh1,
-            bh3,
+            read_filter,
+            reverse_lookup,
         }
     }
 
@@ -152,7 +154,7 @@ impl TypeCatalog {
 
     /// M9's own cached accessor over the shipped endsets (no snapshot) —
     /// distinct from M7's snapshot-bound `LinkState::reserved_type`.
-    pub(crate) fn reserved(&self, t: ShippedType) -> &Endset {
+    pub(crate) fn reserved_type(&self, t: ShippedType) -> &Endset {
         &self.shipped[slot(t)]
     }
 
@@ -162,21 +164,23 @@ impl TypeCatalog {
         &self.order
     }
 
-    /// Φ — the cataloged BH1 set, for the UV `K_queried` self-exclusion.
-    pub(crate) fn bh1(&self) -> &[(CoverageClass, Endset)] {
-        &self.bh1
+    /// Φ — the cataloged `ReadFilter` classes (BH1), for the UV `K_queried`
+    /// self-exclusion.
+    pub(crate) fn read_filter_classes(&self) -> &[(CoverageClass, Endset)] {
+        &self.read_filter
     }
 
-    /// The BH3-attached Binary classes — the classes `targets_keyed` joins
-    /// over, and its footprint.
-    pub(crate) fn bh3(&self) -> &[(CoverageClass, Endset)] {
-        &self.bh3
+    /// The cataloged `ReverseLookup` classes (BH3) — the classes
+    /// `targets_keyed` joins over, and its footprint. The projection of the
+    /// registry's own `reverse_lookup_classes`, and named for it.
+    pub(crate) fn reverse_lookup_classes(&self) -> &[(CoverageClass, Endset)] {
+        &self.reverse_lookup
     }
 
     /// V-atom: `targets_keyed` is in the vocabulary iff some cataloged class
-    /// attaches BH3 — none does in this format, so the atom is out of the
-    /// vocabulary on every board.
-    pub(crate) fn has_bh3(&self) -> bool {
-        !self.bh3.is_empty()
+    /// declares `ReverseLookup` (BH3) — none does in this format, so the atom
+    /// is out of the vocabulary on every board.
+    pub(crate) fn has_reverse_lookup_class(&self) -> bool {
+        !self.reverse_lookup.is_empty()
     }
 }

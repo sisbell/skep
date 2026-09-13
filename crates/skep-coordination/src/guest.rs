@@ -14,7 +14,7 @@
 //! at guest class iff `readable_guest(document_of(t.addr))`, its home
 //! document being published. That is the same test M7's own value-keyed
 //! gates apply at link-home identity (lane 3.3b) and the result-set row
-//! applies to every link (PUB-6.13). The VIEW (`Active`/`Audit`) is
+//! applies to every link (PUB-6.13). The SLICE (`Active`/`Audit`) is
 //! ORTHOGONAL to the class: an `AuditSlice` domain still shows the retracted
 //! tuples of READABLE homes, and never a draft's tuples.
 //!
@@ -28,9 +28,9 @@
 //!
 //! COST (PUB-7.15's shape): one `document_of` (M1 arithmetic, no read) and
 //! one predicate call per candidate tuple of the unfiltered read — a rule's
-//! domain over a class of N tuples costs N home tests, proportional to the
-//! unfiltered candidate set, as the read-side filters are. No per-home memo
-//! is kept: the context is borrow-scoped to one verdict, the predicate the
+//! domain over a type slice of N tuples costs N home tests, proportional to
+//! the unfiltered candidate set, as the read-side filters are. No per-home
+//! memo is kept: the context is borrow-scoped to one verdict, the predicate the
 //! engine injects is an exception-set membership miss (one hash), and the
 //! evaluator carries no interior mutability.
 //!
@@ -41,12 +41,13 @@
 //! family `succs`/`chain`/`tip`/`is_in_chain` (rebuilt over the VISIBLE
 //! active `[K_sup]` claims, so a draft-homed claim moves no walk); the BH3
 //! pair `sources_to`/`target_of` (the `targets_keyed` join is `EvalCtx`'s,
-//! over the catalog's BH3 classes, each answered by `target_of` here); and
-//! BH4's `age`/`stale` (dormant in this format, filtered the same way).
-//! Signatures mirror M7's so the evaluator's call sites read as before.
+//! over the catalog's `ReverseLookup` classes, each answered by `target_of`
+//! here); and BH4's `age`/`stale` (dormant in this format, filtered the same
+//! way). Signatures mirror M7's so the evaluator's call sites read as before,
+//! save that each names the stored [`Slice`] it reads rather than a term view.
 
 use std::collections::BTreeMap;
-use std::slice;
+use std::slice::from_ref;
 
 use im::OrdSet;
 use skep_address::{document_of, Address, Tumbler};
@@ -54,10 +55,51 @@ use skep_links::{Endset, LinkState, NotBh4, Pattern, Tip, Tuple, View, Visibilit
 
 use crate::eval::lift;
 
+/// Which STORED SLICE a read touches: the active tuples, or the whole audit
+/// record. `A_K` and `L_K` — PL's two tuple domains — are its two values, and
+/// `Observe_K`'s two selectable slices (§Internal 2).
+///
+/// DISTINCT from a term's [`View`] (PC3), an evaluation parameter with three
+/// values: `default` names no slice — it is the active slice plus M9's UV
+/// rewrite over it (`EvalCtx`). [`Slice::of`] is the one statement of that
+/// relation. At a DIRECT `LinkState` read — the class-free def probes
+/// (`defs.rs`) and the divergence monitor (`engine.rs`) — M9 speaks M7's
+/// `View`; inside this read surface, where a term view also circulates, the
+/// slice has its own name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Slice {
+    Active,
+    Audit,
+}
+
+impl Slice {
+    /// The slice a term at `view` reads: `audit` reads the whole record;
+    /// `active` and `default` both read the active tuples — they differ only
+    /// by the UV rewrite applied OVER them (`EvalCtx::filtered_other`), never
+    /// by which slice is read. Deliberately not a `From`: the step is lossy,
+    /// and naming it is what keeps the two concepts apart.
+    pub(crate) fn of(view: View) -> Slice {
+        match view {
+            View::Audit => Slice::Audit,
+            View::Active | View::Default => Slice::Active,
+        }
+    }
+}
+
+/// Widening is total — the one conversion, made where M9 calls M7.
+impl From<Slice> for View {
+    fn from(s: Slice) -> View {
+        match s {
+            Slice::Active => View::Active,
+            Slice::Audit => View::Audit,
+        }
+    }
+}
+
 /// The visible operative claims as a forward map, `old → {new}` by
 /// denotation — built once per walk, so a walk of C steps over C claims
 /// costs C map probes, not C scans of the claim set.
-type Forward = BTreeMap<Tumbler, OrdSet<Tumbler>>;
+type ForwardClaims = BTreeMap<Tumbler, OrdSet<Tumbler>>;
 
 /// M7's read surface at guest class, over the world of one pinned snapshot.
 pub(crate) struct GuestLinks<'a, W> {
@@ -74,9 +116,9 @@ impl<'a, W> GuestLinks<'a, W> {
         GuestLinks { world, state, guest }
     }
 
-    /// The class test, at link-HOME identity — as M7's dedup gate applies it:
-    /// `document_of(link)` is address arithmetic (no read), then the
-    /// predicate on that home. A stored link key is element-level, so its
+    /// The guest-class test, at link-HOME identity — as M7's dedup gate
+    /// applies it: `document_of(link)` is address arithmetic (no read), then
+    /// the predicate on that home. A stored link key is element-level, so its
     /// home exists; an address with no document is answered `false`
     /// (fail-closed).
     fn home_readable(&self, link: &Address) -> bool {
@@ -87,11 +129,12 @@ impl<'a, W> GuestLinks<'a, W> {
         self.home_readable(&t.addr)
     }
 
-    /// M7's `observe` with the tuples of unreadable homes dropped — the ONE
-    /// filtering primitive every other read here is built on (so the class
-    /// test has one statement).
-    pub(crate) fn observe(&self, ty: &Endset, pat: Pattern<'_>, view: View) -> Vec<Tuple> {
-        let mut out = self.state.observe(ty, pat, view);
+    /// M7's `observe` over one stored slice, with the tuples of unreadable
+    /// homes dropped — the ONE filtering primitive every other read here is
+    /// built on (so the guest-class test has one statement), and the ONE
+    /// place a slice widens to the `View` M7 names it by.
+    pub(crate) fn observe(&self, ty: &Endset, pat: Pattern<'_>, slice: Slice) -> Vec<Tuple> {
+        let mut out = self.state.observe(ty, pat, slice.into());
         out.retain(|t| self.admits(t));
         out
     }
@@ -99,17 +142,16 @@ impl<'a, W> GuestLinks<'a, W> {
     /// D2 over the visible slice: some visible type-`ty` tuple's F COVERS the
     /// probe. M7's own `is_k` does not expose the witnessing tuple, so the
     /// answer is the home-filtered `observe` at the same coverage pattern —
-    /// the two are one predicate on the whole slice. A slice read at `Active`
-    /// or `Audit`, as `members` and `targets_of` are; the UV rewrite over the
+    /// the two are one predicate on the whole slice. The UV rewrite over the
     /// active read is `EvalCtx`'s own.
-    pub(crate) fn is_k(&self, ty: &Endset, probe: &Tumbler, view: View) -> bool {
+    pub(crate) fn is_k(&self, ty: &Endset, probe: &Tumbler, slice: Slice) -> bool {
         !self
-            .observe(ty, Pattern { from: slice::from_ref(probe), to: &[] }, view)
+            .observe(ty, Pattern { from: from_ref(probe), to: &[] }, slice)
             .is_empty()
     }
 
-    /// The deduplicated denotation of one slot over the visible tuples
-    /// matching `pat` at `view`: `⋃ slot(t).addrs()`, in Tumbler order — the
+    /// The deduplicated denotation of one slot over the visible tuples of
+    /// `slice` matching `pat`: `⋃ slot(t).addrs()`, in Tumbler order — the
     /// shape M7's own equations for D1, D3 and BH3's reverse take, answered
     /// over the VISIBLE slice, so each of those is one line and checkable
     /// against M7's.
@@ -117,11 +159,11 @@ impl<'a, W> GuestLinks<'a, W> {
         &self,
         ty: &Endset,
         pat: Pattern<'_>,
-        view: View,
+        slice: Slice,
         slot: fn(&Tuple) -> &Endset,
     ) -> Vec<Address> {
         let mut out: OrdSet<Tumbler> = OrdSet::new();
-        for t in self.observe(ty, pat, view) {
+        for t in self.observe(ty, pat, slice) {
             for a in slot(&t).addrs() {
                 out.insert(a.clone());
             }
@@ -129,37 +171,33 @@ impl<'a, W> GuestLinks<'a, W> {
         out.iter().map(lift).collect()
     }
 
-    /// D1 over the visible slice: `⋃ F.addrs()` — M7's own equation, a SLICE
-    /// read at `Active` or `Audit` (the UV rewrite is `EvalCtx`'s own
-    /// per-type filter over the active read, so `Default` names no slice
-    /// here and, as at M7's `observe`, reads as `Active`).
-    pub(crate) fn members(&self, ty: &Endset, view: View) -> Vec<Address> {
-        self.denoted(ty, Pattern::default(), view, |t| &t.from)
+    /// D1 over the visible slice: `⋃ F.addrs()` — M7's own equation.
+    pub(crate) fn members(&self, ty: &Endset, slice: Slice) -> Vec<Address> {
+        self.denoted(ty, Pattern::default(), slice, |t| &t.from)
     }
 
     /// D3 over the visible slice: `⋃ G.addrs()` of the tuples whose F COVERS
-    /// `x` (M7's own coverage regime for this read) — a slice read at
-    /// `Active` or `Audit`, as `members`.
-    pub(crate) fn targets_of(&self, ty: &Endset, x: &Address, view: View) -> Vec<Address> {
-        let pat = Pattern { from: slice::from_ref(x.tumbler()), to: &[] };
-        self.denoted(ty, pat, view, |t| &t.to)
+    /// `x` (M7's own coverage regime for this read).
+    pub(crate) fn targets_of(&self, ty: &Endset, x: &Address, slice: Slice) -> Vec<Address> {
+        let pat = Pattern { from: from_ref(x.tumbler()), to: &[] };
+        self.denoted(ty, pat, slice, |t| &t.to)
     }
 
     // ───────────── BH2 — the walk over the VISIBLE operative claims ─────────────
     //
-    // Served for whatever class the caller names: the type checker admits
+    // Served for whatever LINK TYPE the caller names: the type checker admits
     // the walk atoms only at the shipped `Supersedes` key (`UnservedWalkClass`
-    // otherwise — M7 v1's serving scope), so the class question is decided
-    // once, at check time, and never re-asked here.
+    // otherwise — M7 v1's serving scope), so that question is decided once,
+    // at check time, and never re-asked here.
 
     /// The visible OPERATIVE claim set, indexed forward: the active
     /// `[K_sup]` tuples of readable homes, as `old → {new}`. Edges run
     /// `old → new` by DENOTATION on both slots, exactly as M7's `sup_fwd`
     /// fold keys them; a claim is operative iff unnullified (Df-SUCC), which
-    /// the active view gives. One pass over the claims per walk.
-    fn visible_forward(&self, ty: &Endset) -> Forward {
-        let mut fwd = Forward::new();
-        for t in self.observe(ty, Pattern::default(), View::Active) {
+    /// the active slice gives. One pass over the claims per walk.
+    fn visible_forward(&self, ty: &Endset) -> ForwardClaims {
+        let mut fwd = ForwardClaims::new();
+        for t in self.observe(ty, Pattern::default(), Slice::Active) {
             for old in t.from.addrs() {
                 let succs = fwd.entry(old.clone()).or_default();
                 for new in t.to.addrs() {
@@ -171,14 +209,14 @@ impl<'a, W> GuestLinks<'a, W> {
     }
 
     /// `succ_o(x)` over the visible claims — deduplicated over `new`.
-    fn succs_operative(fwd: &Forward, x: &Tumbler) -> OrdSet<Tumbler> {
+    fn succs_operative(fwd: &ForwardClaims, x: &Tumbler) -> OrdSet<Tumbler> {
         fwd.get(x).cloned().unwrap_or_default()
     }
 
     /// The visited-set-bounded forward walk (M7's own halting rule): the
     /// traversed path from `x` (inclusive) and `Some(sink)` iff halted at a
     /// successor-free node — a branch or a cycle yields `None`.
-    fn walk_sup(fwd: &Forward, x: &Tumbler) -> (Vec<Tumbler>, Option<Tumbler>) {
+    fn walk_sup(fwd: &ForwardClaims, x: &Tumbler) -> (Vec<Tumbler>, Option<Tumbler>) {
         let mut path = vec![x.clone()];
         let mut visited = OrdSet::unit(x.clone());
         let mut node = x.clone();
@@ -233,15 +271,15 @@ impl<'a, W> GuestLinks<'a, W> {
     /// BH3 reverse: the F-denoted sources of the visible active type-`ty`
     /// tuples whose G COVERS `target`.
     pub(crate) fn sources_to(&self, ty: &Endset, target: &Address) -> Vec<Address> {
-        let pat = Pattern { from: &[], to: slice::from_ref(target.tumbler()) };
-        self.denoted(ty, pat, View::Active, |t| &t.from)
+        let pat = Pattern { from: &[], to: from_ref(target.tumbler()) };
+        self.denoted(ty, pat, Slice::Active, |t| &t.from)
     }
 
     /// BH3 forward: ⊥ unless EXACTLY ONE visible active type-`ty` tuple
     /// denotes `source` in F with a single-address-denoting G.
     pub(crate) fn target_of(&self, ty: &Endset, source: &Address) -> Option<Address> {
         let mut survivor: Option<Tuple> = None;
-        for t in self.observe(ty, Pattern::default(), View::Active) {
+        for t in self.observe(ty, Pattern::default(), Slice::Active) {
             if t.from.addrs().any(|f| f == source.tumbler()) {
                 if survivor.is_some() {
                     return None; // several visible active matches ⇒ ⊥

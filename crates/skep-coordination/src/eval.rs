@@ -7,9 +7,11 @@
 //!
 //! The one audit seam: every audit read — `is_K@audit`, the audit core-atom
 //! rebuilds (`members`/`targets_of`/`M_K`@audit, per V-AUD's own equations
-//! over `observe(K, ⟨⟩, Audit)`), `L_K`, `L_dom`, and ever-registration —
-//! passes `View::Audit` to `observe` and relies on M7 returning the audit
-//! slice for it; no second audit-honoring method is assumed anywhere.
+//! over `observe(K, ⟨⟩, Audit)`), `L_K` and `L_dom` — names `Slice::Audit`
+//! and relies on `observe` returning that stored slice for it; no second
+//! audit-honoring method is assumed anywhere. Which slice a term's VIEW
+//! reads is `Slice::of`'s one statement (`guest.rs`): the two concepts are
+//! distinct, and `default` names no slice at all.
 //!
 //! The UV default-view rewrite is M9's (Conflicts §3): `members`/`targets_of`
 //! at `default` drop elements filtered by the BH1 types OTHER than
@@ -34,7 +36,7 @@ use skep_namespace::M3State;
 use crate::ast::{Atom, Dom, Lit, Prim, Term, TypeKey, VarId};
 use crate::catalog::TypeCatalog;
 use crate::check::TypedTerm;
-use crate::guest::GuestLinks;
+use crate::guest::{GuestLinks, Slice};
 use crate::rule::Arg;
 use crate::value::{Env, Value};
 
@@ -129,23 +131,23 @@ impl<'a, W> EvalCtx<'a, W> {
     /// needs is made here rather than at each of its four sites.
     fn filtered_other(&self, k: &TypeKey, x: &Tumbler) -> bool {
         let k_class = self.catalog.class_of(k);
-        self.catalog.bh1().iter().any(|(j_class, j_endset)| {
-            j_class != k_class && self.links.is_k(j_endset, x, View::Active)
+        self.catalog.read_filter_classes().iter().any(|(j_class, j_endset)| {
+            j_class != k_class && self.links.is_k(j_endset, x, Slice::Active)
         })
     }
 
-    /// `members(K, v)` (D1 / V-AUD / UV): active and audit are the view's
-    /// slice read at that view (⋃ F.addrs() over `observe(K, ⟨⟩, v)` —
-    /// V-AUD's own equation is D1's over the audit slice); default = active
-    /// minus the other-BH1-filtered elements. The `view` is explicit here
-    /// because the `Default` arm re-enters at `Active`. Every read is the
-    /// guest-class view's (lane 4.1), so a draft-homed tuple contributes no
-    /// member at any view.
+    /// `members(K, v)` (D1 / V-AUD / UV): active and audit read the view's own
+    /// slice (⋃ F.addrs() over `observe(K, ⟨⟩, ·)` — V-AUD's own equation is
+    /// D1's over the audit slice); default = active minus the
+    /// other-BH1-filtered elements. The `view` is explicit here because the
+    /// `Default` arm re-enters at `Active`. Every read is the guest-class
+    /// view's (lane 4.1), so a draft-homed tuple contributes no member at any
+    /// view.
     fn members_at(&self, k: &TypeKey, view: View) -> OrdSet<Tumbler> {
         match view {
             View::Active | View::Audit => self
                 .links
-                .members(&k.0, view)
+                .members(&k.0, Slice::of(view))
                 .into_iter()
                 .map(|a| a.tumbler().clone())
                 .collect(),
@@ -163,13 +165,13 @@ impl<'a, W> EvalCtx<'a, W> {
         match view {
             View::Active => self
                 .links
-                .targets_of(&k.0, x, View::Active)
+                .targets_of(&k.0, x, Slice::Active)
                 .into_iter()
                 .map(|a| a.tumbler().clone())
                 .collect(),
             View::Audit => {
                 let mut out = OrdSet::new();
-                for t in self.links.observe(&k.0, Pattern::default(), View::Audit) {
+                for t in self.links.observe(&k.0, Pattern::default(), Slice::Audit) {
                     if t.from.addrs().any(|a| a == x.tumbler()) {
                         for g in t.to.addrs() {
                             out.insert(g.clone());
@@ -190,11 +192,7 @@ impl<'a, W> EvalCtx<'a, W> {
     /// the ACTIVE slice, never UV-filtered (UV). Both slices are the
     /// guest-class view's, so a draft-homed tuple witnesses nothing.
     fn is_k_at(&self, k: &TypeKey, x: &Address, view: View) -> bool {
-        let slice = match view {
-            View::Audit => View::Audit,
-            View::Active | View::Default => View::Active,
-        };
-        self.links.is_k(&k.0, x.tumbler(), slice)
+        self.links.is_k(&k.0, x.tumbler(), Slice::of(view))
     }
 
     /// Drop other-BH1-filtered elements from a returned collection — the UV
@@ -206,14 +204,14 @@ impl<'a, W> EvalCtx<'a, W> {
         set.into_iter().filter(|e| !self.filtered_other(k, e)).collect()
     }
 
-    /// BH3 join: `target_of` across the catalog's BH3-attached Binary
-    /// classes — the same list the footprint analysis charges the atom with
-    /// (none in this format; the type checker keeps the atom out of the
-    /// vocabulary while that holds) — keyed by coverage class, each answered
-    /// over the visible slice.
+    /// BH3 join: `target_of` across the catalog's `ReverseLookup` classes —
+    /// the same list the footprint analysis charges the atom with (none in
+    /// this format; the type checker keeps the atom out of the vocabulary
+    /// while that holds) — keyed by coverage class, each answered over the
+    /// visible slice.
     fn targets_keyed(&self, source: &Address) -> im::HashMap<CoverageClass, Address> {
         let mut out = im::HashMap::new();
-        for (class, endset) in self.catalog.bh3() {
+        for (class, endset) in self.catalog.reverse_lookup_classes() {
             if let Some(target) = self.links.target_of(endset, source) {
                 out.insert(class.clone(), target);
             }
@@ -345,7 +343,7 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
         Atom::IsFiltered(tr, e) => {
             let k = tr.key();
             let x = as_addr(eval_term(cx, env, e));
-            Value::Bool(cx.links.is_k(&k.0, x.tumbler(), View::Active))
+            Value::Bool(cx.links.is_k(&k.0, x.tumbler(), Slice::Active))
         }
         Atom::Succs(tr, e) => {
             let k = tr.key();
@@ -405,7 +403,7 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
             let a = as_addr(eval_term(cx, env, e));
             let active_k_tuple = cx
                 .links
-                .observe(&k.0, Pattern::default(), View::Active)
+                .observe(&k.0, Pattern::default(), Slice::Active)
                 .iter()
                 .any(|t| t.addr == a);
             let age = if active_k_tuple {
@@ -500,13 +498,13 @@ pub(crate) fn enum_dom<W>(cx: &EvalCtx<'_, W>, env: &Env, d: &Dom) -> Vec<Arg> {
             .collect(),
         Dom::ActiveSlice(tr) => cx
             .links
-            .observe(&tr.key().0, Pattern::default(), View::Active)
+            .observe(&tr.key().0, Pattern::default(), Slice::Active)
             .into_iter()
             .map(Arg::Tuple)
             .collect(),
         Dom::AuditSlice(tr) => cx
             .links
-            .observe(&tr.key().0, Pattern::default(), View::Audit)
+            .observe(&tr.key().0, Pattern::default(), Slice::Audit)
             .into_iter()
             .map(Arg::Tuple)
             .collect(),
@@ -516,7 +514,7 @@ pub(crate) fn enum_dom<W>(cx: &EvalCtx<'_, W>, env: &Env, d: &Dom) -> Vec<Arg> {
         Dom::LinkDom => {
             let mut out: OrdSet<Tumbler> = OrdSet::new();
             for k in cx.catalog.classes() {
-                for t in cx.links.observe(&k.0, Pattern::default(), View::Audit) {
+                for t in cx.links.observe(&k.0, Pattern::default(), Slice::Audit) {
                     out.insert(t.addr.tumbler().clone());
                 }
             }

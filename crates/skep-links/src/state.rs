@@ -369,8 +369,11 @@ fn fold_hints(hints: &Hints, addr: &Tumbler, value: &Link) -> Hints {
         }
     }
 
-    // dedup — registered idem⊤ classes only (§1); an unregistered or idem⊥
-    // class skips the key entirely (no dedup check ever reads it). Keyed by
+    // dedup — registered idem⊤ classes only (§1), by the registry's one
+    // statement of that predicate, which is also what decides whether a
+    // deposit takes M2's I0 section — so what the fold indexes and what the
+    // lock serializes cannot come apart. An unregistered or idem⊥ class
+    // skips the key entirely (no dedup check ever reads it). Keyed by
     // CLASS, never by the surface a deposit arrived through, so a MAKELINK
     // deposit whose resolved type class is a registered idem⊤ one is indexed
     // here too (possibly with extent-classed from/to). No such key ever
@@ -378,7 +381,7 @@ fn fold_hints(hints: &Hints, addr: &Tumbler, value: &Link) -> Hints {
     // — but the key IS a live entry: an `emit` whose whole I0 triple matches
     // it hits that link as the incumbent, having applied to it none of the
     // managed surface's shape or dedup discipline.
-    if registry.registration(&class).is_some_and(|r| r.idem) {
+    if registry.is_idempotent(&class) {
         out.dedup
             .entry(DedupKey::of(value))
             .or_default()

@@ -212,7 +212,7 @@ impl ShippedType {
 /// recognizes it by. One constructor, so "the class is that type's own endset
 /// classified" holds by construction rather than by two five-arm matches a
 /// reader has to cross-check against each other.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct Shipped {
     endset: Endset,
     class: CoverageClass,
@@ -266,7 +266,19 @@ impl Shipped {
 /// outside this crate, so every `TypeRegistry` a caller can hold is
 /// [`registry`] — a FACT the startup assertion established rather than a
 /// value anyone can state.
-#[derive(Debug, Clone)]
+///
+/// An ENTITY, defined by that identity and not by its contents: the type is
+/// deliberately not `Clone`, because a copy would be a second registry equal
+/// by value and distinct by identity — the very thing the crate-internal
+/// constructor exists to make unconstructible — and the workspace asserts
+/// the identity as `Arc::ptr_eq`. Every holder shares the one instance
+/// through the `Arc` [`registry`] hands out or a borrow of it.
+///
+/// ```compile_fail
+/// // A second registry cannot be made by copying the one.
+/// let second: skep_links::TypeRegistry = (**skep_links::registry()).clone();
+/// ```
+#[derive(Debug)]
 pub struct TypeRegistry {
     registrations: im::HashMap<CoverageClass, Registration>,
     retired: Shipped,
@@ -385,6 +397,21 @@ impl TypeRegistry {
     pub fn declares(&self, class: &CoverageClass, behavior: Behavior) -> bool {
         self.registration(class)
             .is_some_and(|reg| reg.behaviors.contains(&behavior))
+    }
+
+    /// Whether a class is REGISTERED and idem⊤ — a class whose managed
+    /// deposits de-duplicate (ASN-0128 I1); an unregistered class is not
+    /// idempotent. Which classes de-duplicate is this registry's own
+    /// knowledge, as which declare a behavior is, so it is decided here
+    /// beside [`TypeRegistry::declares`]. The one statement of the predicate
+    /// the two derived decisions apply — whether a deposit takes M2's I0
+    /// section, and whether the hint fold indexes it under its dedup key —
+    /// so the section M2 serializes and the key the fold indexes agree by
+    /// one name. The in-transaction check reads the same flag off the
+    /// `Registration` it already holds for the shape, which is the third
+    /// spelling this one is the source of.
+    pub(crate) fn is_idempotent(&self, class: &CoverageClass) -> bool {
+        self.registration(class).is_some_and(|reg| reg.idem)
     }
 
     /// The classes the BH3 join covers: registered `Binary` classes declaring
@@ -550,6 +577,27 @@ mod tests {
         let unregistered = coverage_class(&enc([&ra(9)]));
         assert!(built.registration(&unregistered).is_none());
         assert!(!built.declares(&unregistered, Behavior::ReadFilter));
+    }
+
+    /// `is_idempotent` is the one statement of "a registered idem⊤ class" —
+    /// the predicate that decides both whether a deposit takes M2's I0
+    /// section and whether the hint fold keys it — so it must agree with the
+    /// registration it summarizes on every shipped class, and refuse an
+    /// unregistered one rather than fault.
+    #[test]
+    fn is_idempotent_is_the_registration_s_idem_flag_and_refuses_an_unregistered_class() {
+        let built = TypeRegistry::build();
+        for ty in ShippedType::ALL {
+            let class = built.shipped_class(ty);
+            let registration = built.registration(class).expect("every shipped class is registered");
+            assert_eq!(built.is_idempotent(class), registration.idem, "{ty:?}");
+            // ...and in this format that flag is ⊤ on all five, which is why
+            // every managed deposit takes a section.
+            assert!(built.is_idempotent(class), "{ty:?} is idem⊤");
+        }
+        let unregistered = coverage_class(&enc([&ra(9)]));
+        assert!(built.registration(&unregistered).is_none());
+        assert!(!built.is_idempotent(&unregistered), "unregistered ⇒ not idempotent");
     }
 
     /// The five format constants are the ghost tumblers the ruling pins, in

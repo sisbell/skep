@@ -30,9 +30,9 @@ pub const P2: Caller = Caller::Principal(PrincipalId(2));
 
 /// The ALL-VISIBLE class: the visibility predicate that admits every
 /// document (lane 3.3b). This miniature world carries no publication state
-/// — M3's bit is folded engine-side — so it is the honest class for a suite
-/// whose verdicts never turn on what a caller may read; a test about the
-/// class-filtered lookup builds a narrower one of its own.
+/// — M3's bit is folded engine-side — so it is the honest visibility class
+/// for a suite whose verdicts never turn on what a caller may read; a test
+/// about the visibility-filtered lookup builds a narrower one of its own.
 pub static ALL_VISIBLE: fn(&World, &Address) -> bool = every_document;
 
 fn every_document(_: &World, _: &Address) -> bool {
@@ -41,9 +41,10 @@ fn every_document(_: &World, _: &Address) -> bool {
 
 /// The suite's writer: every test that takes one runs at the ALL-VISIBLE
 /// class — the one predicate supplied once for the whole suite (lane 3.3b's
-/// repair line). No verdict at this class depends on a hit against an
-/// incumbent the caller cannot read; the tests that exercise the
-/// class-filtered lookup build their own classes ([`writer_at`]).
+/// repair line). No verdict at this visibility class depends on a hit
+/// against an incumbent the caller cannot read; the tests that exercise the
+/// visibility-filtered lookup build their own visibility classes
+/// ([`writer_at`]).
 pub fn writer(k: &Kernel<World>) -> LinkWriter<'_, World> {
     writer_at(k, &ALL_VISIBLE)
 }

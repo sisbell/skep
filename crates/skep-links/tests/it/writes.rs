@@ -40,8 +40,8 @@ use skep_links::{
 /// write transaction. An incumbent homed in a document the caller cannot read
 /// is invisible — the emit mints fresh beside it, and value-identical tuples
 /// coexist across the boundary; a hit is the EARLIEST incumbent the caller's
-/// class can read, never merely the earliest; and the answer is deterministic
-/// given the class.
+/// visibility class can read, never merely the earliest; and the answer is
+/// deterministic given the visibility class.
 #[test]
 fn a_dedup_hit_is_the_earliest_incumbent_the_caller_can_read() {
     let k = kernel();
@@ -55,8 +55,9 @@ fn a_dedup_hit_is_the_earliest_incumbent_the_caller_can_read() {
     let (first, _) = all.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("incumbent");
     assert_eq!(first, la(1));
 
-    // A class blind to doc1 mints the same value afresh, in its own home —
-    // the ack never names an address inside a home the caller cannot read.
+    // A visibility class blind to doc1 mints the same value afresh, in its
+    // own home — the ack never names an address inside a home the caller
+    // cannot read.
     let before = k.current_seq();
     let (second, seq) = no_doc1
         .emit(P1, &doc2(), &pred_def_ty(), &ca(1), &[])
@@ -65,8 +66,8 @@ fn a_dedup_hit_is_the_earliest_incumbent_the_caller_can_read() {
     assert!(seq > before, "a fresh deposit commits");
     {
         // Both stand ACTIVE: value-identical tuples coexist across the
-        // visibility boundary, and the class-keyed reads — which take no
-        // class — see one member.
+        // visibility boundary, and the coverage-class-keyed reads — which
+        // take no visibility class — see one member.
         let snap = k.snapshot();
         let links = snap.world().links();
         assert!(links.is_active(&first) && links.is_active(&second));
@@ -80,19 +81,21 @@ fn a_dedup_hit_is_the_earliest_incumbent_the_caller_can_read() {
     assert_eq!(hit, first);
     assert_eq!(seq, before);
     assert_eq!(k.current_seq(), before, "zero-step: nothing committed");
-    // … the class blind to doc1 acks doc2's, the earliest it can read …
+    // … the visibility class blind to doc1 acks doc2's, the earliest it can
+    // read …
     let (hit, seq) = no_doc1
         .emit(P1, &doc2(), &pred_def_ty(), &ca(1), &[])
-        .expect("a hit within the class");
+        .expect("a hit within the visibility class");
     assert_eq!(hit, second);
     assert_eq!(seq, before);
     assert_eq!(k.current_seq(), before, "still zero-step");
-    // … and, asked again, answers the same — deterministic given the class.
+    // … and, asked again, answers the same — deterministic given the
+    // visibility class.
     let (again, _) = no_doc1.emit(P1, &doc2(), &pred_def_ty(), &ca(1), &[]).expect("hit again");
     assert_eq!(again, second);
 
-    // A class blind to both of P1's homes mints a THIRD, in the sibling's own
-    // home …
+    // A visibility class blind to both of P1's homes mints a THIRD, in the
+    // sibling's own home …
     let (third, _) = no_p1_docs
         .emit(P2, &sib_doc(), &pred_def_ty(), &ca(1), &[])
         .expect("fresh in the sibling's home");
@@ -111,8 +114,9 @@ fn a_dedup_hit_is_the_earliest_incumbent_the_caller_can_read() {
 /// PUB-6.25 at `assert_sup`: its cross-home dedup — the same `(old, new)`
 /// from another home hits the first claim — holds WITHIN a visibility class
 /// only. Blind to the first claim's home, a caller mints a claim of its own;
-/// each class then acks the earliest claim it can read; and the supersession
-/// walk, which takes no class, reads the two claims as one edge.
+/// each visibility class then acks the earliest claim it can read; and the
+/// supersession walk, which takes no visibility class, reads the two claims
+/// as one edge.
 #[test]
 fn assert_sup_dedups_only_within_the_caller_s_visibility_class() {
     let k = kernel();
@@ -135,16 +139,19 @@ fn assert_sup_dedups_only_within_the_caller_s_visibility_class() {
     assert_eq!(document_of(&c2), Some(doc2()));
     assert!(seq > before, "a fresh claim commits");
 
-    // Each class acks the earliest claim it can read.
+    // Each visibility class acks the earliest claim it can read.
     let before = k.current_seq();
-    let (hit, _) = no_doc1.assert_sup(P1, &doc2(), &x, &y).expect("hit within the class");
+    let (hit, _) = no_doc1
+        .assert_sup(P1, &doc2(), &x, &y)
+        .expect("hit within the visibility class");
     assert_eq!(hit, c2);
     let (hit, _) = all.assert_sup(P1, &doc2(), &x, &y).expect("hit at the all-visible class");
     assert_eq!(hit, c1);
     assert_eq!(k.current_seq(), before, "both hits are zero-step");
 
-    // The supersession graph is the world's, not a class's: two claims, one
-    // operative edge, and retracting one leaves the other's edge standing.
+    // The supersession graph is the world's, not a visibility class's: two
+    // claims, one operative edge, and retracting one leaves the other's edge
+    // standing.
     let snap = k.snapshot();
     assert_eq!(snap.world().links().succs(&sup, &x), vec![y.clone()]);
     all.nullify(P1, &doc1(), &c1).expect("retract the first claim");
@@ -153,13 +160,13 @@ fn assert_sup_dedups_only_within_the_caller_s_visibility_class() {
     assert_eq!(snap.world().links().tip(&sup, &x), Tip::Sink(y));
 }
 
-/// PUB-6.27: `editlink`'s claim meets no incumbent whatever the class — its
-/// I0 carries a successor minted in the same transaction — so both of its
-/// acks land in the homes the caller named, never in another home's link
-/// subspace, even beside a standing claim over the same original that the
-/// caller cannot read.
+/// PUB-6.27: `editlink`'s claim meets no incumbent whatever the visibility
+/// class — its I0 carries a successor minted in the same transaction — so
+/// both of its acks land in the homes the caller named, never in another
+/// home's link subspace, even beside a standing claim over the same original
+/// that the caller cannot read.
 #[test]
-fn editlink_s_acks_land_in_the_caller_s_homes_whatever_the_class() {
+fn editlink_s_acks_land_in_the_caller_s_homes_whatever_the_visibility_class() {
     let k = kernel();
     let hide_doc1 = |_: &World, home: &Address| *home != doc1();
     let all = writer(&k);
@@ -172,7 +179,7 @@ fn editlink_s_acks_land_in_the_caller_s_homes_whatever_the_class() {
     for w in [&all, &no_doc1] {
         let (edit, _) = w
             .editlink(P1, &x, successor_value.clone(), &doc2(), &doc2())
-            .expect("an edit from doc2, at either class");
+            .expect("an edit from doc2, at either visibility class");
         assert_eq!(document_of(&edit.successor), Some(doc2()));
         assert_eq!(document_of(&edit.claim), Some(doc2()));
     }
@@ -183,8 +190,8 @@ fn editlink_s_acks_land_in_the_caller_s_homes_whatever_the_class() {
 /// the home the caller writes to costs `nullify` a FRESH retraction tuple
 /// where a hit would have been zero-step, and costs its postcondition nothing
 /// — the target is tombstoned either way. Every `[R]` incumbent of one
-/// identity is homed in the retraction's own `home`, so blinding the class
-/// to that one document is exactly what hides them all.
+/// identity is homed in the retraction's own `home`, so blinding the
+/// visibility class to that one document is exactly what hides them all.
 #[test]
 fn a_predicate_blind_to_the_caller_s_own_home_costs_nullify_a_fresh_retraction_never_its_postcondition(
 ) {
@@ -194,11 +201,13 @@ fn a_predicate_blind_to_the_caller_s_own_home_costs_nullify_a_fresh_retraction_n
     let blind = writer_at(&k, &hide_doc1);
     let (target, _) = all.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("target");
 
-    // The control: at a class that reads doc1, the second retraction is a
-    // zero-step hit on the first.
+    // The control: at a visibility class that reads doc1, the second
+    // retraction is a zero-step hit on the first.
     let (r1, _) = all.nullify(P1, &doc1(), &target).expect("retract");
     let before = k.current_seq();
-    let (hit, seq) = all.nullify(P1, &doc1(), &target).expect("hit within the class");
+    let (hit, seq) = all
+        .nullify(P1, &doc1(), &target)
+        .expect("hit within the visibility class");
     assert_eq!(hit, r1);
     assert_eq!(seq, before);
     assert_eq!(k.current_seq(), before, "zero-step: nothing committed");

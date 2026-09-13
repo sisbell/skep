@@ -94,6 +94,16 @@ fn endset_reads_back_verbatim_and_enc_round_trips() {
     let x = [ca(2), ca(7)];
     let got: Vec<_> = enc(&x).addrs().cloned().collect();
     assert_eq!(got, vec![ca(2).tumbler().clone(), ca(7).tumbler().clone()]);
+    // enc is a SEQUENCE map, not a set: a repeated address is a repeated span
+    // (the count the managed shape gate sees), and a nested pair stays
+    // nested — "canonical" in AD's sense is the standard encoding of a name,
+    // never M1's normalized form.
+    let twice = enc(&[ca(2), ca(2)]);
+    assert_eq!(twice.len(), 2);
+    assert_eq!(twice.addrs().count(), 2);
+    let nested = enc(&[doc1(), ca(2)]);
+    assert_eq!(nested.len(), 2);
+    assert!(nested.spans().any(|s| s.contains(ca(2).tumbler()) && s.start() == doc1().tumbler()));
     // A non-unit span contributes nothing to addrs(); a unit span does.
     let mixed = Endset::from_spans(
         [iext(1, 3)]

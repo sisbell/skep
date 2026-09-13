@@ -54,8 +54,9 @@ use crate::LinkWorld;
 /// `(world, doc)` — the same answer for the same pair, no interior state.
 /// The published determinism of the value-keyed gates rests on it and on
 /// nothing else: [`emit`](LinkWriter::emit)'s "deterministic given the
-/// class" and [`assert_sup`](LinkWriter::assert_sup)'s earliest-readable
-/// incumbent are the T1-least of the incumbent set THIS predicate admits, so
+/// visibility class" and [`assert_sup`](LinkWriter::assert_sup)'s
+/// earliest-readable incumbent are the T1-least of the incumbent set THIS
+/// predicate admits, so
 /// a stateful predicate makes two value-identical writes disagree, silently.
 /// `Fn` does not forbid interior mutability, and no check in this crate can
 /// stand in for the obligation — it is the caller's, stated here and
@@ -68,7 +69,8 @@ use crate::LinkWorld;
 /// the GUEST class over a private draft — costs `nullify` a fresh
 /// retraction tuple where a hit would have been zero-step, and costs its
 /// postcondition nothing: the target is tombstoned either way. The engine's
-/// predicates are pure, and a principal's class admits its own homes.
+/// predicates are pure, and a principal's visibility class admits its own
+/// homes.
 ///
 /// The world handed in is the TRANSACTION's working world (`stg.working()`),
 /// never a snapshot pinned before the transaction: the incumbent set is the
@@ -98,7 +100,8 @@ pub type Visibility<'a, W> = dyn Fn(&W, &Address) -> bool + Send + Sync + 'a;
 /// naming its reader, are the query half.
 ///
 /// A `LinkWriter` with NO visibility class does not exist: every
-/// construction names the class its writes run at ([`LinkWriter::new`]), and
+/// construction names the visibility class its writes run at
+/// ([`LinkWriter::new`]), and
 /// the value-keyed gates read the store through it, at the one choke point
 /// every deposit passes (`emit_core`).
 pub struct LinkWriter<'k, W: WorldState> {
@@ -162,17 +165,19 @@ where
     /// else — no snapshot, no state — exactly as `Namespace::new` and
     /// `Vstream::new` hold theirs (§C), plus the caller's [`Visibility`]
     /// class, which is a REQUIRED constructor parameter rather than a
-    /// builder step so that a writer whose gates run at no stated class
-    /// cannot be built at all (lane 3.3b §2).
+    /// builder step so that a writer whose gates run at no stated
+    /// visibility class cannot be built at all (lane 3.3b §2).
     pub fn new(kernel: &'k Kernel<W>, visibility: &'k Visibility<'k, W>) -> LinkWriter<'k, W> {
         LinkWriter { kernel, visibility }
     }
 }
 
 /// The WHOLE M2 lock set a deposit needs: the I0 section iff the value's
-/// class is a REGISTERED idem⊤ one — the same predicate [`emit_core`]
-/// evaluates on `reg.idem`, so the section is taken exactly when the check
-/// reads one — then the home's alloc key, always. A caller hands the
+/// class is a REGISTERED idem⊤ one — the registry's `is_idempotent`, the
+/// one statement of that predicate, which the hint fold applies to decide
+/// what it indexes and `emit_core` reads as the `idem` flag of the
+/// registration it already holds, so the section is taken exactly when the
+/// check reads one — then the home's alloc key, always. A caller hands the
 /// result to `transact` entire and adds nothing.
 ///
 /// One derivation of the dedup DECISION, beside [`DedupKey::of`]'s one
@@ -193,7 +198,7 @@ where
 fn deposit_lock_set(value: &Link, home: &Address) -> Vec<LockKey> {
     let mut keys: Vec<LockKey> = Vec::with_capacity(2);
     let class = coverage_class(value.type_slot());
-    if registry().registration(&class).is_some_and(|r| r.idem) {
+    if registry().is_idempotent(&class) {
         keys.push(DedupKey::of(value).lock_key());
     }
     keys.push(M3State::link_lock_key(home));
@@ -508,17 +513,18 @@ fn lift_nullify(e: TxnError<NullifyError>) -> TxnError<RetractStaleError> {
 ///
 /// THE DEDUP CHECK RUNS AT THE CALLER'S VISIBILITY CLASS (lane 3.3b;
 /// PUB-6.25): the one question this gate asks of the world — the active
-/// incumbent of the value's I0 class — is answered over the class FILTERED
-/// by `visibility` at link-HOME identity, against the WORKING world. An
-/// incumbent homed in a document the caller cannot read is invisible here,
-/// and the write proceeds exactly as in a world without it: a fresh mint,
-/// never an ack naming an address inside a draft's link subspace. The
-/// consequences are pinned (PUB-6.26): value-identical tuples MAY coexist
-/// across the visibility boundary, and a hit is the EARLIEST incumbent the
-/// caller's class can read. The dedup LOCK is unchanged — the I0 section
-/// serializes same-class deposits whatever class their callers read at — so
-/// two callers of different classes racing on one value are serialized and
-/// each sees, or does not see, the other's deposit per its own class.
+/// incumbent of the value's I0 class — is answered over that I0 class
+/// FILTERED by `visibility` at link-HOME identity, against the WORKING
+/// world. An incumbent homed in a document the caller cannot read is
+/// invisible here, and the write proceeds exactly as in a world without it:
+/// a fresh mint, never an ack naming an address inside a draft's link
+/// subspace. The consequences are pinned (PUB-6.26): value-identical tuples
+/// MAY coexist across the visibility boundary, and a hit is the EARLIEST
+/// incumbent the caller's visibility class can read. The dedup LOCK is
+/// unchanged — the I0 section serializes same-I0-class deposits whatever
+/// visibility class their callers read at — so two callers of different
+/// visibility classes racing on one value are serialized and each sees, or
+/// does not see, the other's deposit per its own visibility class.
 ///
 /// The filter reaches every caller of this gate uniformly. For `nullify`
 /// (`Gate::Retraction`) it is vacuous under every read predicate: a
@@ -528,8 +534,9 @@ fn lift_nullify(e: TxnError<NullifyError>) -> TxnError<RetractStaleError> {
 /// absence costs `nullify` a fresh retraction tuple rather than its
 /// postcondition. For `editlink`'s claim it is vacuous under ANY predicate
 /// (PUB-6.27): the claim's I0 carries a successor minted in this same
-/// transaction, so the lookup is a guaranteed miss and no incumbent — of
-/// any class — can exist for it. Neither op threads a filter of its own.
+/// transaction, so the lookup is a guaranteed miss and no incumbent — at
+/// any visibility class — can exist for it. Neither op threads a filter of
+/// its own.
 ///
 /// The hoisted home check (Conflicts §8, a deliberate divergence from
 /// ASN-0128 I1's miss-only read) runs ahead of EVERY gate/dedup
@@ -596,6 +603,9 @@ where
             if !sh_conf(reg.shape, &value) {
                 return Err(EmitCoreError::ShapeViolation); // (ii)
             }
+            // `is_idempotent`, read as the flag of the registration already in
+            // hand: the same predicate that took the I0 section before the
+            // transact and that keys the hint fold after it.
             if reg.idem {
                 // The one question this gate asks of the WORLD rather than of
                 // the format: the three reads above are the module's compiled
@@ -826,8 +836,9 @@ where
     ///
     /// WHAT A HIT RETURNS: the T1-LEAST ACTIVE tuple of the I0 class THE
     /// CALLER CAN READ — the earliest incumbent homed in a document its
-    /// [`Visibility`] class admits (PUB-6.26; deterministic given the class)
-    /// — which is the class's incumbent and not a tuple this call admitted.
+    /// [`Visibility`] class admits (PUB-6.26; deterministic given the
+    /// visibility class) — which is the I0 class's incumbent and not a tuple
+    /// this call admitted.
     /// An incumbent homed in a document the caller cannot read is invisible,
     /// and the emit mints fresh beside it: value-identical tuples MAY coexist
     /// across the visibility boundary. The gate
@@ -890,9 +901,10 @@ where
     /// with canonical from-fill `enc({home})` and unit-depth to-span
     /// `enc({target})`, idem⊤ WITHIN THE CALLER'S VISIBILITY CLASS
     /// (PUB-6.25): re-retracting the same target from the same home dedups
-    /// at every class that reads `home`, which a read predicate's does
-    /// ([`Visibility`]); a class blind to `home` mints a fresh retraction
-    /// beside the hidden one, and the postcondition below holds either way.
+    /// at every visibility class that reads `home`, which a read predicate's
+    /// does ([`Visibility`]); a visibility class blind to `home` mints a
+    /// fresh retraction beside the hidden one, and the postcondition below
+    /// holds either way.
     /// P-tgt is a REJECTING precondition against the txn base:
     /// `target` is a resident link OR the address this call's own retraction
     /// tuple would occupy (`a_emit`) — the address the slice reports
@@ -1127,7 +1139,8 @@ where
             }
             // Both `minted`: this op reports each address as one it deposited,
             // and the claim's own I0 carries `successor`, minted a line above
-            // in this same transaction, so no incumbent of that class exists.
+            // in this same transaction, so no incumbent of that I0 class
+            // exists at any visibility class.
             let successor =
                 emit_core(stg, self.visibility, caller, d_s, successor_value, Gate::Open)?
                     .minted();

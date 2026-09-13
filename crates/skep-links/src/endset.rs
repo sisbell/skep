@@ -46,8 +46,9 @@ impl Endset {
     }
 
     /// Verbatim construction — the spans are stored exactly as given, never
-    /// canonicalized at rest (ML2/RL1). MAKELINK and M10 content successors
-    /// build here.
+    /// normalized at rest (ML2/RL1): M1's canonical form is a query-time key
+    /// ([`coverage_class`]), never the stored shape. MAKELINK and M10 content
+    /// successors build here.
     pub fn from_spans(spans: impl IntoIterator<Item = Span>) -> Endset {
         Endset(spans.into_iter().collect())
     }
@@ -251,10 +252,15 @@ impl Link {
 }
 
 /// Canonical address-set encoding (AD): one unit-depth span per address —
-/// `{subtree_of(x) : x ∈ X}` — exactly what the managed surface
-/// (Emit_K/Nullify/assert_sup/claims) emits, with `enc(X).addrs() = X`.
-/// Takes anything that yields addresses by reference, so a slice, a `Vec` and
-/// a one-address array `[addr]` all read the same at the call.
+/// `⟨subtree_of(x) : x ∈ X⟩`, in `X`'s order and one span per element, a
+/// sequence map rather than a set, so a repeated address is a repeated span
+/// (which is what the managed shape gate counts) — exactly what the managed
+/// surface (Emit_K/Nullify/assert_sup/claims) emits, with
+/// `enc(X).addrs() = X`. "Canonical" in AD's sense — the standard encoding
+/// of a name — and not in M1's: the spans are never normalized, so
+/// `enc([doc, elem])` keeps a span inside another. Takes anything that
+/// yields addresses by reference, so a slice, a `Vec` and a one-address
+/// array `[addr]` all read the same at the call.
 pub fn enc<'a>(addrs: impl IntoIterator<Item = &'a Address>) -> Endset {
     Endset::from_spans(addrs.into_iter().map(|a| subtree_of(a.tumbler())))
 }

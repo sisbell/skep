@@ -24,7 +24,6 @@
 //! draft can neither satisfy a rule's trigger nor seed its domain, and a
 //! public fire never testifies to a draft's contents (PUB-6.28).
 
-use std::slice;
 use std::sync::Arc;
 
 use im::OrdSet;
@@ -32,7 +31,7 @@ use skep_address::{is_prefix, validate, Address, Nat, Tumbler};
 use skep_links::{CoverageClass, Pattern, Tip, Tuple, View};
 use skep_namespace::M3State;
 
-use crate::ast::{Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId};
+use crate::ast::{Atom, Dom, Lit, Prim, Term, TypeKey, VarId};
 use crate::catalog::TypeCatalog;
 use crate::check::TypedTerm;
 use crate::guest::GuestLinks;
@@ -101,6 +100,19 @@ fn as_nat(v: Value) -> Nat {
     }
 }
 
+/// The address element of an ADDRESS-VALUED domain — the three formers that
+/// fold one (`MaxT1`, `MinT1`, `Reflect`) require `dom(Addr)` at the checker
+/// (`want(Sort::Addr, cd.elem)`), so a tuple here is a checked-input
+/// violation, as an ill-sorted `Value` is above.
+fn addr_elem(e: Arg) -> Address {
+    match e {
+        Arg::Addr(a) => a,
+        Arg::Tuple(t) => {
+            unreachable!("an address-valued domain yielded the tuple {:?}", t.addr)
+        }
+    }
+}
+
 /// A V-TUP variable's tuple, borrowed from the environment — the checker
 /// bound it at `Tup`, so the binding is a tuple.
 fn tuple_var<'e>(env: &'e Env, v: &VarId) -> &'e Tuple {
@@ -110,31 +122,14 @@ fn tuple_var<'e>(env: &'e Env, v: &VarId) -> &'e Tuple {
     }
 }
 
-fn key(tr: &TypeRef) -> &TypeKey {
-    match tr {
-        TypeRef::Concrete(k) => k,
-        TypeRef::ClassVar(v) => {
-            unreachable!("post-Reg-expansion invariant: the evaluator never sees ClassVar({v:?})")
-        }
-    }
-}
-
 impl<'a, W> EvalCtx<'a, W> {
-    fn class_of(&self, k: &TypeKey) -> &CoverageClass {
-        &self
-            .catalog
-            .get(k)
-            .expect("checked Concrete TypeKeys are cataloged")
-            .class
-    }
-
     /// UV `K_queried` self-exclusion: `∃ J ∈ Φ, J ≠ K :: is_k(J, x)` — the
-    /// per-type BH1 filter (D2), never M7's aggregate `is_filtered`.
+    /// per-type BH1 filter (D2), fixed active, never M7's aggregate
+    /// `is_filtered`.
     fn filtered_other(&self, k_class: &CoverageClass, x: &Tumbler) -> bool {
-        self.catalog
-            .bh1()
-            .iter()
-            .any(|(j_class, j_endset)| j_class != k_class && self.links.is_k(j_endset, x))
+        self.catalog.bh1().iter().any(|(j_class, j_endset)| {
+            j_class != k_class && self.links.is_k(j_endset, x, View::Active)
+        })
     }
 
     /// `members(K, v)` (D1 / V-AUD / UV): active and audit are the view's
@@ -153,7 +148,7 @@ impl<'a, W> EvalCtx<'a, W> {
                 .map(|a| a.tumbler().clone())
                 .collect(),
             View::Default => {
-                let k_class = self.class_of(k).clone();
+                let k_class = self.catalog.class_of(k).clone();
                 self.members_at(k, View::Active)
                     .into_iter()
                     .filter(|x| !self.filtered_other(&k_class, x))
@@ -184,7 +179,7 @@ impl<'a, W> EvalCtx<'a, W> {
                 out
             }
             View::Default => {
-                let k_class = self.class_of(k).clone();
+                let k_class = self.catalog.class_of(k).clone();
                 self.targets_of_at(k, x, View::Active)
                     .into_iter()
                     .filter(|g| !self.filtered_other(&k_class, g))
@@ -193,21 +188,15 @@ impl<'a, W> EvalCtx<'a, W> {
         }
     }
 
-    /// `is_K(x)` per view — audit through the ONE `observe`-honors-`Audit`
-    /// seam; active/default via `is_k` (never UV-filtered — UV); both the
+    /// `is_K(x)` per view — a verdict atom, so a `default` term reads it at
+    /// the ACTIVE slice, never UV-filtered (UV). Both slices are the
     /// guest-class view's, so a draft-homed tuple witnesses nothing.
     fn is_k_at(&self, k: &TypeKey, x: &Address, view: View) -> bool {
-        match view {
-            View::Audit => !self
-                .links
-                .observe(
-                    &k.0,
-                    Pattern { from: slice::from_ref(x.tumbler()), to: &[] },
-                    View::Audit,
-                )
-                .is_empty(),
-            View::Active | View::Default => self.links.is_k(&k.0, x.tumbler()),
-        }
+        let slice = match view {
+            View::Audit => View::Audit,
+            View::Active | View::Default => View::Active,
+        };
+        self.links.is_k(&k.0, x.tumbler(), slice)
     }
 
     /// Drop other-BH1-filtered elements from a returned collection — the UV
@@ -216,7 +205,7 @@ impl<'a, W> EvalCtx<'a, W> {
         if self.view != View::Default {
             return set;
         }
-        let k_class = self.class_of(k).clone();
+        let k_class = self.catalog.class_of(k).clone();
         set.into_iter().filter(|e| !self.filtered_other(&k_class, e)).collect()
     }
 
@@ -291,14 +280,14 @@ pub(crate) fn eval_term<W>(cx: &EvalCtx<'_, W>, env: &Env, t: &Term) -> Value {
         Term::MaxT1(d) => {
             let best = enum_dom(cx, env, d)
                 .into_iter()
-                .map(|e| e.key_addr())
+                .map(addr_elem)
                 .max_by(|a, b| a.tumbler().cmp(b.tumbler()));
             Value::OptAddr(best)
         }
         Term::MinT1(d) => {
             let best = enum_dom(cx, env, d)
                 .into_iter()
-                .map(|e| e.key_addr())
+                .map(addr_elem)
                 .min_by(|a, b| a.tumbler().cmp(b.tumbler()));
             Value::OptAddr(best)
         }
@@ -317,7 +306,7 @@ pub(crate) fn eval_term<W>(cx: &EvalCtx<'_, W>, env: &Env, t: &Term) -> Value {
         Term::Reflect(d) => {
             let mut out: OrdSet<Tumbler> = OrdSet::new();
             for e in enum_dom(cx, env, d) {
-                out.insert(e.key_addr().tumbler().clone());
+                out.insert(addr_elem(e).tumbler().clone());
             }
             Value::AddrSet(out)
         }
@@ -345,34 +334,35 @@ pub(crate) fn eval_term<W>(cx: &EvalCtx<'_, W>, env: &Env, t: &Term) -> Value {
 fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
     match a {
         Atom::IsK(tr, e) => {
-            let k = key(tr);
+            let k = tr.key();
             let x = as_addr(eval_term(cx, env, e));
             Value::Bool(cx.is_k_at(k, &x, cx.view))
         }
-        Atom::Members(tr) => Value::AddrSet(cx.members_at(key(tr), cx.view)),
+        Atom::Members(tr) => Value::AddrSet(cx.members_at(tr.key(), cx.view)),
         Atom::TargetsOf(tr, e) => {
             let x = as_addr(eval_term(cx, env, e));
-            Value::AddrSet(cx.targets_of_at(key(tr), &x, cx.view))
+            Value::AddrSet(cx.targets_of_at(tr.key(), &x, cx.view))
         }
-        // BH1: is_filtered_J ≡ is_k(J, ·) — D2, J's own active membership.
+        // BH1: is_filtered_J ≡ is_k(J, ·) — D2, J's own active membership,
+        // fixed active at every term view.
         Atom::IsFiltered(tr, e) => {
-            let k = key(tr);
+            let k = tr.key();
             let x = as_addr(eval_term(cx, env, e));
-            Value::Bool(cx.links.is_k(&k.0, x.tumbler()))
+            Value::Bool(cx.links.is_k(&k.0, x.tumbler(), View::Active))
         }
         Atom::Succs(tr, e) => {
-            let k = key(tr);
+            let k = tr.key();
             let x = as_addr(eval_term(cx, env, e));
             let set: OrdSet<Tumbler> =
                 cx.links.succs(&k.0, &x).into_iter().map(|a| a.tumbler().clone()).collect();
             Value::AddrSet(cx.uv_drop(k, set))
         }
         Atom::Chain(tr, e) => {
-            let k = key(tr);
+            let k = tr.key();
             let x = as_addr(eval_term(cx, env, e));
             let chain = cx.links.chain(&k.0, &x);
             let seq: im::Vector<Address> = if cx.view == View::Default {
-                let k_class = cx.class_of(k).clone();
+                let k_class = cx.catalog.class_of(k).clone();
                 chain
                     .into_iter()
                     .filter(|a| !cx.filtered_other(&k_class, a.tumbler()))
@@ -385,7 +375,7 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
         // Verdict/traversal atoms are never UV-rewritten (UV): unfiltered
         // active walk.
         Atom::Tip(tr, e) => {
-            let k = key(tr);
+            let k = tr.key();
             let x = as_addr(eval_term(cx, env, e));
             Value::OptAddr(match cx.links.tip(&k.0, &x) {
                 Tip::Sink(a) => Some(a),
@@ -393,20 +383,20 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
             })
         }
         Atom::IsInChain(tr, e1, e2) => {
-            let k = key(tr);
+            let k = tr.key();
             let x = as_addr(eval_term(cx, env, e1));
             let y = as_addr(eval_term(cx, env, e2));
             Value::Bool(cx.links.is_in_chain(&k.0, &x, &y))
         }
         Atom::SourcesTo(tr, e) => {
-            let k = key(tr);
+            let k = tr.key();
             let x = as_addr(eval_term(cx, env, e));
             let set: OrdSet<Tumbler> =
                 cx.links.sources_to(&k.0, &x).into_iter().map(|a| a.tumbler().clone()).collect();
             Value::AddrSet(cx.uv_drop(k, set))
         }
         Atom::TargetOf(tr, e) => {
-            let k = key(tr);
+            let k = tr.key();
             let x = as_addr(eval_term(cx, env, e));
             Value::OptAddr(cx.links.target_of(&k.0, &x))
         }
@@ -418,7 +408,7 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
         // the address of an ACTIVE K-tuple — a tuple-identity test, not
         // is_k's coverage-of-F membership.
         Atom::Age(tr, e) => {
-            let k = key(tr);
+            let k = tr.key();
             let a = as_addr(eval_term(cx, env, e));
             let active_k_tuple = cx
                 .links
@@ -435,7 +425,7 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
         // Saturating Nat→u64 at the seam: a horizon ≥ 2^64 ⇒ stale = ∅ (all
         // non-stale) — never a wrapping truncation.
         Atom::Stale(tr, e) => {
-            let k = key(tr);
+            let k = tr.key();
             let h = as_nat(eval_term(cx, env, e));
             let h64 = u64::try_from(&h).unwrap_or(u64::MAX);
             let stale = cx
@@ -487,8 +477,8 @@ fn eval_prim<W>(cx: &EvalCtx<'_, W>, env: &Env, p: &Prim) -> Value {
         // coverage_class on user input); an absent key — non-BH3 K included —
         // denotes ⊥.
         Prim::MapGet(m, tr) => {
-            let k = key(tr);
-            let class = cx.class_of(k);
+            let k = tr.key();
+            let class = cx.catalog.class_of(k);
             match ev(m) {
                 Value::Map(map) => Value::OptAddr(map.get(class).cloned()),
                 other => unreachable!("MapGet checked at Map, held {other:?}"),
@@ -511,19 +501,19 @@ pub(crate) fn enum_dom<W>(cx: &EvalCtx<'_, W>, env: &Env, d: &Dom) -> Vec<Arg> {
     match d {
         // M_K at the TERM view (view-parameterized domain).
         Dom::MembersDom(tr) => cx
-            .members_at(key(tr), cx.view)
+            .members_at(tr.key(), cx.view)
             .iter()
             .map(|t| Arg::Addr(lift(t)))
             .collect(),
         Dom::ActiveSlice(tr) => cx
             .links
-            .observe(&key(tr).0, Pattern::default(), View::Active)
+            .observe(&tr.key().0, Pattern::default(), View::Active)
             .into_iter()
             .map(Arg::Tuple)
             .collect(),
         Dom::AuditSlice(tr) => cx
             .links
-            .observe(&key(tr).0, Pattern::default(), View::Audit)
+            .observe(&tr.key().0, Pattern::default(), View::Audit)
             .into_iter()
             .map(Arg::Tuple)
             .collect(),

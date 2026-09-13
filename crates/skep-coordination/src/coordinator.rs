@@ -4,7 +4,6 @@
 //! evaluator; everything it holds is a recomputable hint or an in-memory
 //! working set (§Core data model).
 
-use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 
@@ -15,14 +14,14 @@ use skep_links::{Endset, LinkWriter, ShippedType, TypeRegistry, View, Visibility
 
 use crate::ast::{Term, VarId};
 use crate::catalog::TypeCatalog;
-use crate::check::{Checker, Ctx, TriggerTerm, TypedTerm, Unresolved};
+use crate::check::{Checker, TriggerTerm, TypedTerm, Unresolved};
 use crate::defs::parse_def;
 use crate::dynamics::{classify_term, Dynamics};
 use crate::error::TypeError;
 use crate::eval::{eval_term, DefSource, EvalCtx};
 use crate::guest::GuestLinks;
 use crate::memo::{Breach, DefMemo, DefStatus};
-use crate::rule::RuleId;
+use crate::rule::CheckedRule;
 use crate::value::{holds_addresses, value_sort, Env, Signature, SignedTerm, Sort, Value};
 use crate::CoordinationWorld;
 
@@ -39,25 +38,6 @@ pub type VstreamFactory<W> = Box<dyn for<'k> Fn(&'k Kernel<W>) -> Vstream<'k, W>
 /// at guest class.
 pub type LinkWriterFactory<W> =
     Box<dyn for<'k> Fn(&'k Kernel<W>, &'k Visibility<'k, W>) -> LinkWriter<'k, W> + Send + Sync>;
-
-/// One registered rule in the working set (§Internal 5): the checked
-/// `TypedDom`, the checked trigger, the declared view, the action.
-#[derive(Debug, Clone)]
-pub(crate) struct CheckedRule {
-    pub(crate) id: RuleId,
-    pub(crate) dom: crate::check::TypedDom,
-    /// The checked trigger: a one-parameter Bool `TypedTerm` — an `Inline`
-    /// trigger's own, or the memo entry of a `Def` trigger's def, captured
-    /// at registration. The body is immutable content, so the trigger reads
-    /// only the snapshot it is evaluated on: no ordering between that
-    /// snapshot and the def's registration is required, and a later
-    /// retraction of the def changes nothing. Ref-bearing iff it came from a
-    /// def; evaluation resolves referents through the memo, the static
-    /// analyses through the flat expansion.
-    pub(crate) trigger: Arc<TypedTerm>,
-    pub(crate) view: View,
-    pub(crate) action: crate::rule::FireAction,
-}
 
 /// M9's one public handle: PL (group A), predicate definitions (group B), and
 /// the reactive rule engine (group C). Owns no authoritative state — the
@@ -235,35 +215,19 @@ impl<W: CoordinationWorld> Coordinator<W> {
         Ok(TriggerTerm(Arc::new(t)))
     }
 
-    /// The ONE checker invocation: WT + WT-ref over the signed term — its
-    /// body under its Γ_D — into the checked-term shape, the body's root at
-    /// nesting level `depth`: 0 at the top of a chain (the public checks,
-    /// `register_pred`, a cold `signature`), and for a def derived through a
-    /// `Ref` the level the checker charged that `Ref` for its referent, so
-    /// the chain's total nesting is bounded by `MAX_DEPTH` however deep the
-    /// derivation runs. Γ_D binds each name once (`DuplicateParameter`
-    /// otherwise — the one gate, so a stored def with a repeated name is a
-    /// breach and a supplied one a rejection). Referents resolve through the
-    /// def memo at the level the checker asks for them: a referent with no
-    /// defined signature is `DanglingReference`, and one whose derivation
-    /// cannot complete at that level is `TooDeep` here, with the referent
-    /// left unjudged.
+    /// The ONE checker invocation: the catalog and the def resolver handed to
+    /// a fresh [`Checker`], whose judgment runs from nesting level `depth` —
+    /// 0 at the top of a chain (the public checks, `register_pred`, a cold
+    /// `signature`), and for a def derived through a `Ref` the level the
+    /// checker charged that `Ref` for its referent, so the chain's total
+    /// nesting is bounded by `MAX_DEPTH` however deep the derivation runs.
+    /// Referents resolve through the def memo at the level the checker asks
+    /// for them: a referent with no defined signature is `DanglingReference`,
+    /// and one whose derivation cannot complete at that level is `TooDeep`,
+    /// with the referent left unjudged.
     pub(crate) fn check_signed(&self, signed: SignedTerm, depth: u32) -> Result<TypedTerm, TypeError> {
-        let mut seen: HashSet<VarId> = HashSet::with_capacity(signed.params.len());
-        if let Some((v, _)) = signed.params.iter().find(|(v, _)| !seen.insert(*v)) {
-            return Err(TypeError::DuplicateParameter(*v));
-        }
         let resolve = |a: &Address, d: u32| self.resolve_def_at(a, d);
-        let checker = Checker::new(&self.catalog, &resolve);
-        let ctx: Ctx = signed.params.iter().copied().collect();
-        let checked = checker.check_term(&ctx, &signed.body, depth)?;
-        Ok(TypedTerm {
-            signed,
-            result: checked.sort,
-            evaluable: checked.term,
-            ref_free: checked.ref_free,
-            reach: checked.deepest.saturating_sub(depth),
-        })
+        Checker::new(&self.catalog, &resolve).check_signed(signed, depth)
     }
 
     /// Pure, total, terminating denotation at one view against one committed

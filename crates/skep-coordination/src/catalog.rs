@@ -137,6 +137,19 @@ impl TypeCatalog {
         self.entries.get(k)
     }
 
+    /// The precomputed class of an AUTHORIZED key — the one question every
+    /// walk over a checked tree, and the rule engine over a validated Marker
+    /// type, asks of the catalog. Total on such a key: it was admitted by
+    /// [`TypeCatalog::get`] against this same projection, which is frozen at
+    /// construction (R1), so the probe that authorized it cannot since have
+    /// gone stale.
+    pub(crate) fn class_of(&self, k: &TypeKey) -> &CoverageClass {
+        &self
+            .get(k)
+            .expect("an authorized TypeKey is cataloged")
+            .class
+    }
+
     /// M9's own cached accessor over the shipped endsets (no snapshot) —
     /// distinct from M7's snapshot-bound `LinkState::reserved_type`.
     pub(crate) fn reserved(&self, t: ShippedType) -> &Endset {

@@ -1,15 +1,18 @@
 //! §Internal 5 — the reactive-rule datatypes: the raw [`Rule`] submission,
-//! trigger/action forms, the occurrence and its argument, and the fire/step
-//! outcome types.
+//! trigger/action forms, the checked shapes the working set holds
+//! ([`CheckedRule`], [`TypedDom`]), the occurrence and its argument, and the
+//! fire/step outcome types.
+
+use std::sync::Arc;
 
 use skep_address::Address;
 use skep_kernel::Seq;
 use skep_links::{Tuple, View};
 
-use crate::ast::{Dom, TypeKey};
-use crate::check::TriggerTerm;
+use crate::ast::{ArcDom, Dom, TypeKey};
+use crate::check::{TriggerTerm, TypedTerm};
 use crate::error::FireError;
-use crate::value::Value;
+use crate::value::{Sort, Value};
 
 /// One trigger→action rule. `domain` is the RAW submission — `register_rule`
 /// checks + `Reg`-expands it into the internal checked `TypedDom` the working
@@ -77,6 +80,34 @@ pub enum ScopeBody {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RuleId(pub(crate) u64);
 
+/// The checked rule-domain carrier — the `Dom` analogue of `TypedTerm`'s
+/// evaluable projection (every `TypeRef` `Concrete`, no surviving `Reg`
+/// binder, element sort recorded).
+#[derive(Debug, Clone)]
+pub(crate) struct TypedDom {
+    pub(crate) dom: ArcDom,
+    pub(crate) elem: Sort,
+}
+
+/// One registered rule in the working set: the checked domain, the checked
+/// trigger, the declared view, the action.
+#[derive(Debug, Clone)]
+pub(crate) struct CheckedRule {
+    pub(crate) id: RuleId,
+    pub(crate) dom: TypedDom,
+    /// The checked trigger: a one-parameter Bool `TypedTerm` — an `Inline`
+    /// trigger's own, or the memo entry of a `Def` trigger's def, captured
+    /// at registration. The body is immutable content, so the trigger reads
+    /// only the snapshot it is evaluated on: no ordering between that
+    /// snapshot and the def's registration is required, and a later
+    /// retraction of the def changes nothing. Ref-bearing iff it came from a
+    /// def; evaluation resolves referents through the memo, the static
+    /// analyses through the flat expansion.
+    pub(crate) trigger: Arc<TypedTerm>,
+    pub(crate) view: View,
+    pub(crate) action: FireAction,
+}
+
 /// A rule's bound argument — a domain element: an address (an `Addr`-domain
 /// rule, `M_K`/`L_dom`/a set term) or a whole tuple (a `Tup`-domain rule,
 /// `A_K`/`L_K`). The two shapes a rule can bind are the two this type has:
@@ -89,7 +120,10 @@ pub enum Arg {
 }
 
 impl Arg {
-    /// The bookkeeping key: the address itself, or the tuple's `t.addr`.
+    /// The rule engine's bookkeeping key for a bound argument of EITHER
+    /// shape: the address itself, or the tuple's `t.addr` (R1
+    /// AddressInjectivity, so an address hit is a value hit) — what a
+    /// `StepOutcome` reports and the divergence monitor attributes by.
     pub(crate) fn key_addr(&self) -> Address {
         match self {
             Arg::Addr(a) => a.clone(),

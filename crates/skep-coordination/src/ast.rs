@@ -129,6 +129,22 @@ pub enum TypeRef {
     ClassVar(VarId),
 }
 
+impl TypeRef {
+    /// The concrete key — the post-`Reg`-expansion invariant, stated once for
+    /// every walk over a checked tree (the evaluator, the analyses): the
+    /// checker substitutes `ClassVar → Concrete` at each enclosing `Reg`
+    /// binder and refuses any survivor as `UnboundClassVar`, so a checked
+    /// term's type positions are all `Concrete`.
+    pub(crate) fn key(&self) -> &TypeKey {
+        match self {
+            TypeRef::Concrete(k) => k,
+            TypeRef::ClassVar(v) => unreachable!(
+                "post-Reg-expansion trees hold only Concrete TypeRefs, found ClassVar({v:?})"
+            ),
+        }
+    }
+}
+
 /// PL term formers (ASN-0129 PC0–PC2a, QD-refl; ASN-0130 `Ref`).
 #[allow(clippy::large_enum_variant)] // the interface declares these shapes verbatim
 #[derive(Debug, Clone, PartialEq, Eq)]

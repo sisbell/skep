@@ -1,8 +1,22 @@
 //! §B / §Internal 4 — predicate definitions as content (self-hosting
-//! persistence): store + register (gate-first, idem dedup at M7), resolution/
-//! signature/expansion hints, versioning over the shipped `supersedes` class,
-//! ST⁺ certification, and de-registration. M9 drives no `transact` — every
-//! write rides M5's placement composite or M7's gated `emit`/`nullify`.
+//! persistence): store + register (gate-first, idem dedup at M7), the
+//! registration probes, a stored def's denotation, versioning over the
+//! shipped `supersedes` class, ST⁺ certification over the flat expansion,
+//! and de-registration. Resolution and the signature memo are the handle's
+//! own (`coordinator.rs`, beside the `DefMemo` they answer from). M9 drives
+//! no `transact` — every write rides M5's placement composite or M7's gated
+//! `emit`/`nullify`.
+//!
+//! THE DEF LAYER READS CLASS-FREE, where the evaluator does not (lane 4.1):
+//! a def's registration is not a trigger read, so `ever_registered`,
+//! `is_active_pred`, `is_certified_stable`, `current_version` and
+//! `retract_pred`'s target probe all read M7's `LinkState` directly, and a
+//! def registered into a draft home is ever-registered as it was — signed,
+//! resolvable and evaluable — while the guest-class view the evaluator looks
+//! through hides its `pdef` tuple from `is_K`. The only other class-free
+//! read in the crate is the divergence monitor's (`engine.rs::fire_count`).
+//! Every read inside a VERDICT — this module's `evaluate_def` included —
+//! goes through `Coordinator::eval_ctx`'s guest-class view.
 
 use std::slice;
 
@@ -244,8 +258,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
         }
         let (new_start, _pdef_seq) = self.define_predicate(d, new_term)?;
         let sup = self.catalog.reserved(ShippedType::Supersedes);
-        let (_claim, seq) =
-            self.link_writer().emit(Caller::System, d, sup, old_start, slice::from_ref(&new_start))?;
+        let (_claim, seq) = self
+            .link_writer()
+            .emit(Caller::System, d, sup, old_start, slice::from_ref(&new_start))
+            .map_err(DefineError::Supersede)?;
         Ok((new_start, seq))
     }
 

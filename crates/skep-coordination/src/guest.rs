@@ -96,13 +96,15 @@ impl<'a, W> GuestLinks<'a, W> {
         out
     }
 
-    /// D2 over the visible active slice: some visible active type-`ty`
-    /// tuple's F COVERS the probe. M7's own `is_k` does not expose the
-    /// witnessing tuple, so the answer is the home-filtered `observe` at the
-    /// same coverage pattern — the two are one predicate on the whole slice.
-    pub(crate) fn is_k(&self, ty: &Endset, probe: &Tumbler) -> bool {
+    /// D2 over the visible slice: some visible type-`ty` tuple's F COVERS the
+    /// probe. M7's own `is_k` does not expose the witnessing tuple, so the
+    /// answer is the home-filtered `observe` at the same coverage pattern —
+    /// the two are one predicate on the whole slice. A slice read at `Active`
+    /// or `Audit`, as `members` and `targets_of` are; the UV rewrite over the
+    /// active read is `EvalCtx`'s own.
+    pub(crate) fn is_k(&self, ty: &Endset, probe: &Tumbler, view: View) -> bool {
         !self
-            .observe(ty, Pattern { from: slice::from_ref(probe), to: &[] }, View::Active)
+            .observe(ty, Pattern { from: slice::from_ref(probe), to: &[] }, view)
             .is_empty()
     }
 

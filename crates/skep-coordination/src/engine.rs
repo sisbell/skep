@@ -11,16 +11,16 @@ use skep_address::{document_of, Address};
 use skep_kernel::{Seq, Snapshot, TxnError};
 use skep_links::{Caller, EmitError, Endset, NullifyError, Pattern, Shape, ShippedType, View};
 
-use crate::ast::{Atom, Term, TypeRef, VarId};
-use crate::check::{Checker, Ctx, TypedDom, TypedTerm};
-use crate::coordinator::{CheckedRule, Coordinator};
-use crate::dynamics::{Analyzer, Footprint};
+use crate::ast::Term;
+use crate::check::{Checker, Ctx, TypedTerm};
+use crate::coordinator::Coordinator;
+use crate::dynamics::{negated_membership, Analyzer, Footprint};
 use crate::error::{FireError, RuleError};
 use crate::eval::{as_bool, enum_dom, eval_term};
 use crate::memo::DefStatus;
 use crate::rule::{
-    Arg, FireAction, FireOutcome, Occurrence, Rule, RuleCertification, RuleId, ScopeBody,
-    StepOutcome, Trigger,
+    Arg, CheckedRule, FireAction, FireOutcome, Occurrence, Rule, RuleCertification, RuleId,
+    ScopeBody, StepOutcome, Trigger, TypedDom,
 };
 use crate::value::{Env, Sort, Value};
 use crate::CoordinationWorld;
@@ -74,12 +74,16 @@ impl<W: CoordinationWorld> Coordinator<W> {
         let analyzer = Analyzer { catalog: &self.catalog, view: rule.view, widen: false };
         let sf = analyzer.term(&flat).sf;
         // Leg (b): the Marker pattern — the emitted tuple's slot-coverage is
-        // exactly the witness the trigger's negated existential quantifies
-        // over (canonical: trigger ¬is_K(a) @ audit ⟺ Marker{_, K}).
+        // exactly the witness the trigger's negated membership names
+        // (canonical: trigger ¬is_K(a) @ audit ⟺ Marker{_, K}). The spelling
+        // is the analyzer's to recognize; the class comparison is this
+        // engine's, which alone knows what the action emits.
         let marker = match &rule.action {
             FireAction::Marker { ty, .. } => {
                 rule.view == View::Audit
-                    && self.marker_matches_witness(&flat, trigger.params()[0].0, ty)
+                    && negated_membership(&flat, trigger.params()[0].0).is_some_and(|witness| {
+                        self.catalog.class_of(witness) == self.catalog.class_of(ty)
+                    })
             }
             FireAction::Nullify { .. } => false,
         };
@@ -105,24 +109,6 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 "a validated Def trigger expands within MAX_TERM_NODES — validate_rule checked it \
                  against the same immutable referents",
             )
-        }
-    }
-
-    /// The canonical certified-Marker witness match: `¬ is_K(x)` with `x`
-    /// the trigger's parameter and `K` coverage-equal to `Marker.ty` (§8
-    /// leg b — sound-but-incomplete, by spelling).
-    fn marker_matches_witness(&self, flat: &Term, param: VarId, ty: &crate::ast::TypeKey) -> bool {
-        let Term::Not(inner) = flat else { return false };
-        let Term::Atom(Atom::IsK(TypeRef::Concrete(k), arg)) = inner.as_ref() else {
-            return false;
-        };
-        let Term::Var(v) = arg.as_ref() else { return false };
-        if *v != param {
-            return false;
-        }
-        match (self.catalog.get(k), self.catalog.get(ty)) {
-            (Some(a), Some(b)) => a.class == b.class,
-            _ => false,
         }
     }
 
@@ -495,6 +481,13 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// `t.addr`. An unregistered `RuleId` counts 0. The count is as of a
     /// snapshot pinned at the call — the one read in this group that takes
     /// no caller's snapshot.
+    ///
+    /// Reads `LinkState` CLASS-FREE, where every verdict reads through the
+    /// guest-class view: the attribution key pins the home to the rule's own
+    /// action home, and a fire into a home the guest class hides deposits
+    /// nothing (`FireError::DraftBoundary`), so no count this recompute can
+    /// produce would differ under the filtered view — while an operator
+    /// looking for a runaway wants every tuple the journal recovered.
     pub fn fire_count(&self, rule: RuleId, x: &Address) -> u64 {
         let Some(r) = self.rules.iter().find(|r| r.id == rule) else {
             return 0;
@@ -560,23 +553,16 @@ impl<W: CoordinationWorld> Coordinator<W> {
             .rules
             .iter()
             .map(|r| match &r.action {
-                FireAction::Marker { ty, .. } => self
-                    .catalog
-                    .get(ty)
-                    .expect("registered Marker types are cataloged")
-                    .class
-                    .clone(),
+                FireAction::Marker { ty, .. } => self.catalog.class_of(ty).clone(),
                 FireAction::Nullify { .. } => self.catalog.retraction_class.clone(),
             })
             .collect();
         let arms = |i: usize, j: usize| -> bool {
-            let fp = &fps[j];
-            let e = &emitted[i];
-            fp.all_audit
-                || fp.audit.contains(e)
-                || fp.active.contains(e)
-                || fp.home_frontier
-                || (*e == self.catalog.retraction_class && !fp.active.is_empty())
+            let (fp, emitted) = (&fps[j], &emitted[i]);
+            // The footprint answers for its own slices; the retraction edge is
+            // this loop's, since only it knows which class an action emits.
+            fp.armed_by(emitted)
+                || (*emitted == self.catalog.retraction_class && fp.retraction_shrinks())
         };
         let edges: Vec<Vec<usize>> =
             (0..n).map(|i| (0..n).filter(|&j| arms(i, j)).collect()).collect();

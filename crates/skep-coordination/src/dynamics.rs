@@ -8,7 +8,7 @@
 use im::HashSet;
 use skep_links::{CoverageClass, View};
 
-use crate::ast::{Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef};
+use crate::ast::{Atom, Dom, Lit, Prim, Term, TypeKey, VarId};
 use crate::catalog::TypeCatalog;
 use crate::walk::{visit_dom, visit_term, Visit};
 
@@ -78,6 +78,26 @@ impl Footprint {
     /// The term reads the cross-type `targets_keyed` join.
     pub fn reads_targets_keyed(&self) -> bool {
         self.targets_keyed
+    }
+
+    /// Any active slice is read, so any R-deposit can shrink what the term
+    /// reads (the first active-view exception, and the armer graph's
+    /// retraction edge).
+    pub fn retraction_shrinks(&self) -> bool {
+        !self.active.is_empty()
+    }
+
+    /// A deposit in `class` can change what a term with this footprint reads
+    /// — the armer graph's edge rule (§8), asked of the footprint because it
+    /// is a property of the slices read: the class's own audit or active
+    /// slice, the whole audit sublayer, or BH4's home-wide frontier, which
+    /// ANY same-home deposit moves. The retraction case is the caller's —
+    /// only it knows which class an action emits.
+    pub(crate) fn armed_by(&self, class: &CoverageClass) -> bool {
+        self.all_audit
+            || self.audit.contains(class)
+            || self.active.contains(class)
+            || self.home_frontier
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -161,13 +181,6 @@ fn effective_collection_view(view: View) -> View {
     }
 }
 
-fn key(tr: &TypeRef) -> &TypeKey {
-    match tr {
-        TypeRef::Concrete(k) => k,
-        TypeRef::ClassVar(_) => unreachable!("post-Reg-expansion trees hold only Concrete TypeRefs"),
-    }
-}
-
 /// One classification's fixed context: the catalog, the term view (PC3 —
 /// binds the view-parameterized constituents), and the ST⁺ threshold
 /// widening (certification only). The fused FP + PD0 pass runs over it.
@@ -185,12 +198,7 @@ impl Analyzer<'_> {
     /// additionally reads each BH1 type's active filter slice (the UV
     /// rewrite's footprint).
     fn slice_fp(&self, k: &TypeKey, view: View) -> Footprint {
-        let class = self
-            .catalog
-            .get(k)
-            .expect("checked Concrete TypeKeys are cataloged")
-            .class
-            .clone();
+        let class = self.catalog.class_of(k).clone();
         let mut fp = Footprint::default();
         match view {
             View::Audit => {
@@ -319,40 +327,40 @@ impl Analyzer<'_> {
             Atom::IsK(tr, e) => {
                 let ae = self.term(e);
                 let st = view == View::Audit && ae.fp.is_empty();
-                let fp = ae.fp.union(&self.slice_fp(key(tr), view));
+                let fp = ae.fp.union(&self.slice_fp(tr.key(), view));
                 Analysis { st, sf: false, grow: false, fp }
             }
             // M_K in an audit-view term is a grow-only set value (V-AUD).
             Atom::Members(tr) => {
-                let fp = self.slice_fp(key(tr), view);
+                let fp = self.slice_fp(tr.key(), view);
                 Analysis { grow: view == View::Audit, st: false, sf: false, fp }
             }
             Atom::TargetsOf(tr, e) => {
                 let ae = self.term(e);
                 let grow = view == View::Audit && ae.fp.is_empty();
-                let fp = ae.fp.union(&self.slice_fp(key(tr), view));
+                let fp = ae.fp.union(&self.slice_fp(tr.key(), view));
                 Analysis { grow, st: false, sf: false, fp }
             }
             Atom::IsFiltered(tr, e) => {
                 let ae = self.term(e);
-                reads(ae.fp.union(&self.slice_fp(key(tr), View::Active)))
+                reads(ae.fp.union(&self.slice_fp(tr.key(), View::Active)))
             }
             // BH2/BH3 collections: active-slice reads — Neither; at a default
             // term the UV drop additionally reads the BH1 filter slices.
             Atom::Succs(tr, e) | Atom::Chain(tr, e) | Atom::SourcesTo(tr, e) => {
                 let ae = self.term(e);
-                reads(ae.fp.union(&self.slice_fp(key(tr), effective_collection_view(view))))
+                reads(ae.fp.union(&self.slice_fp(tr.key(), effective_collection_view(view))))
             }
             // Verdict/traversal atoms (tip/is_in_chain) and the single-target
             // projection are never UV-rewritten: fixed active.
             Atom::Tip(tr, e) | Atom::TargetOf(tr, e) => {
                 let ae = self.term(e);
-                reads(ae.fp.union(&self.slice_fp(key(tr), View::Active)))
+                reads(ae.fp.union(&self.slice_fp(tr.key(), View::Active)))
             }
             Atom::IsInChain(tr, x, y) => {
                 let ax = self.term(x);
                 let ay = self.term(y);
-                reads(ax.fp.union(&ay.fp).union(&self.slice_fp(key(tr), View::Active)))
+                reads(ax.fp.union(&ay.fp).union(&self.slice_fp(tr.key(), View::Active)))
             }
             Atom::TargetsKeyed(e) => {
                 let ae = self.term(e);
@@ -367,13 +375,13 @@ impl Analyzer<'_> {
             // collection additionally UV-drops (BH1 slices in its footprint).
             Atom::Age(tr, e) => {
                 let ae = self.term(e);
-                let mut fp = ae.fp.union(&self.slice_fp(key(tr), View::Active));
+                let mut fp = ae.fp.union(&self.slice_fp(tr.key(), View::Active));
                 fp.home_frontier = true;
                 reads(fp)
             }
             Atom::Stale(tr, e) => {
                 let ae = self.term(e);
-                let mut fp = ae.fp.union(&self.slice_fp(key(tr), effective_collection_view(view)));
+                let mut fp = ae.fp.union(&self.slice_fp(tr.key(), effective_collection_view(view)));
                 fp.home_frontier = true;
                 reads(fp)
             }
@@ -459,13 +467,13 @@ impl Analyzer<'_> {
     pub(crate) fn dom(&self, d: &Dom) -> DomAnalysis {
         match d {
             Dom::MembersDom(tr) => DomAnalysis {
-                fp: self.slice_fp(key(tr), self.view),
+                fp: self.slice_fp(tr.key(), self.view),
                 grow: self.view == View::Audit,
             },
             Dom::ActiveSlice(tr) => {
-                DomAnalysis { fp: self.slice_fp(key(tr), View::Active), grow: false }
+                DomAnalysis { fp: self.slice_fp(tr.key(), View::Active), grow: false }
             }
-            Dom::AuditSlice(tr) => DomAnalysis { fp: self.slice_fp(key(tr), View::Audit), grow: true },
+            Dom::AuditSlice(tr) => DomAnalysis { fp: self.slice_fp(tr.key(), View::Audit), grow: true },
             Dom::LinkDom => {
                 DomAnalysis { fp: Footprint { all_audit: true, ..Footprint::default() }, grow: true }
             }
@@ -534,6 +542,28 @@ pub(crate) fn view_independent(t: &Term) -> bool {
     scan.ok
 }
 
+// ───────────────────── the certified-Marker spelling ─────────────────────
+
+/// The negated membership a certifiable Marker rule's trigger is spelled as:
+/// `¬ is_K(x)` at `param`, yielding K — the witness the rule engine matches
+/// its emitted class against (§8 leg b). `None` for every other spelling:
+/// sound but incomplete, as the rest of this module is, and by spelling, so
+/// an equivalent trigger written otherwise is simply not certified.
+/// Precondition as the `Analyzer`'s: ref-free input.
+pub(crate) fn negated_membership(t: &Term, param: VarId) -> Option<&TypeKey> {
+    let Term::Not(inner) = t else { return None };
+    match inner.as_ref() {
+        Term::Atom(Atom::IsK(tr, arg)) => match arg.as_ref() {
+            Term::Var(v) if *v == param => Some(tr.key()),
+            _ => None,
+        },
+        Term::Ref { .. } => unreachable!(
+            "classification precondition: ref-free input (an inline trigger's projection or a flat expansion)"
+        ),
+        _ => None,
+    }
+}
+
 /// Assemble a `Dynamics` from one analysis pass at `view`.
 pub(crate) fn classify_term(catalog: &TypeCatalog, view: View, t: &Term) -> Dynamics {
     let analysis = Analyzer { catalog, view, widen: false }.term(t);
@@ -545,9 +575,9 @@ pub(crate) fn classify_term(catalog: &TypeCatalog, view: View, t: &Term) -> Dyna
     };
     Dynamics {
         active_exceptions: ActiveExceptions {
-            retraction_shrinks: !analysis.fp.active.is_empty(),
-            bh4_home_frontier: analysis.fp.home_frontier,
-            targets_keyed_cross_type: analysis.fp.targets_keyed,
+            retraction_shrinks: analysis.fp.retraction_shrinks(),
+            bh4_home_frontier: analysis.fp.reads_home_frontier(),
+            targets_keyed_cross_type: analysis.fp.reads_targets_keyed(),
         },
         stability,
         view_independent: view_independent(t),

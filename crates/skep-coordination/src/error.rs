@@ -487,13 +487,6 @@ impl From<RegisterError> for DefineError {
     }
 }
 
-/// `supersede`'s `supersedes`-emit (the third transaction).
-impl From<TxnError<EmitError>> for DefineError {
-    fn from(e: TxnError<EmitError>) -> Self {
-        DefineError::Supersede(e)
-    }
-}
-
 impl From<TxnError<EmitError>> for RegisterError {
     fn from(e: TxnError<EmitError>) -> Self {
         RegisterError::Emit(e)

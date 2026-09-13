@@ -14,6 +14,7 @@
 //! produce and the check stops at the budget rather than after it.
 
 use std::cell::Cell;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use skep_address::{Address, Nat};
@@ -173,16 +174,6 @@ impl Rewrite for SubstClassVar<'_> {
     }
 }
 
-/// The internal checked rule-domain carrier — the `Dom` analogue of
-/// `TypedTerm`'s evaluable projection (every `TypeRef` `Concrete`, no
-/// surviving `Reg` binder, element sort recorded). Internal to the working
-/// set (§Internal 5).
-#[derive(Debug, Clone)]
-pub(crate) struct TypedDom {
-    pub(crate) dom: ArcDom,
-    pub(crate) elem: Sort,
-}
-
 pub(crate) type Ctx = im::HashMap<VarId, Sort>;
 
 /// A checked term: its evaluable projection, sort, ref-freeness, and the
@@ -247,6 +238,36 @@ pub(crate) struct Checker<'a> {
 impl<'a> Checker<'a> {
     pub(crate) fn new(catalog: &'a TypeCatalog, resolve: &'a Resolver<'a>) -> Checker<'a> {
         Checker { catalog, resolve, nodes: Cell::new(0) }
+    }
+
+    /// The whole judgment over a signed term — its body under its Γ_D — into
+    /// the checked-term shape, the body's root at nesting level `depth`.
+    ///
+    /// Γ_D binds each name once (`DuplicateParameter` otherwise), so that an
+    /// `Env` can bind every parameter at its sort; then WT + WT-ref over the
+    /// body, referents resolved at the levels the `Ref` arm charges them.
+    /// [`TypedTerm::reach`] is the deepest level this pass reached RELATIVE
+    /// to this root — the same quantity [`Checker::check_term`]'s `Ref` arm
+    /// adds to its own level when it charges a reference to this term, so
+    /// the two halves of the depth accounting are stated together.
+    pub(crate) fn check_signed(
+        &self,
+        signed: SignedTerm,
+        depth: u32,
+    ) -> Result<TypedTerm, TypeError> {
+        let mut seen: HashSet<VarId> = HashSet::with_capacity(signed.params.len());
+        if let Some((v, _)) = signed.params.iter().find(|(v, _)| !seen.insert(*v)) {
+            return Err(TypeError::DuplicateParameter(*v));
+        }
+        let ctx: Ctx = signed.params.iter().copied().collect();
+        let checked = self.check_term(&ctx, &signed.body, depth)?;
+        Ok(TypedTerm {
+            signed,
+            result: checked.sort,
+            evaluable: checked.term,
+            ref_free: checked.ref_free,
+            reach: checked.deepest.saturating_sub(depth),
+        })
     }
 
     /// The two doors at every node: nesting past `MAX_DEPTH` and the node

@@ -817,10 +817,14 @@ fn classify_places_a_spelling_on_the_lattice_relative_to_its_view() {
     assert!(!c.classify(&isk, View::Audit).view_independent);
     assert!(c.classify(&ex, View::Audit).view_independent);
 
-    // The named exception: an active-slice read can shrink under retraction.
+    // The named exception: an active-slice read can shrink under retraction —
+    // a property of the footprint, so the flag and the footprint's own
+    // accessor are one answer.
     let act = tc(exists(2, Dom::ActiveSlice(conc(&pred_def_ty())), tru()));
     assert!(c.classify(&act, View::Active).active_exceptions.retraction_shrinks);
+    assert!(c.classify(&act, View::Active).footprint.retraction_shrinks());
     assert!(!c.classify(&ex, View::Audit).active_exceptions.retraction_shrinks);
+    assert!(!c.classify(&ex, View::Audit).footprint.retraction_shrinks());
 
     // The footprint, read back: the slices each spelling reads and nothing
     // else — L_K in the audit set, A_K in the active set, an audit is_K at

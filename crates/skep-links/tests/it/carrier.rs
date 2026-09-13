@@ -25,11 +25,6 @@ use skep_links::{
     ShippedType, FROM, TO, TYPE,
 };
 
-fn span(lo: &skep_address::Address, hi: &skep_address::Address) -> Span {
-    Span::from_endpoints(lo.tumbler().clone(), hi.tumbler())
-        .expect("test spans are well-formed")
-}
-
 #[test]
 fn link_enforces_only_the_arity_floor_with_one_based_slots() {
     // Link::new: None ⇔ arity < 3 (the type floor; e₃ ≠ ∅ is a write-boundary
@@ -85,8 +80,8 @@ fn endset_reads_back_verbatim_and_enc_round_trips() {
     assert!(Endset::empty().is_empty());
     assert_eq!(Endset::empty().len(), 0);
     // from_spans is verbatim: decomposition and order preserved.
-    let s1 = span(&ca(1), &ca(3));
-    let s2 = span(&ca(5), &ca(6));
+    let s1 = iext(1, 3);
+    let s2 = iext(5, 6);
     let e = Endset::from_spans([s1.clone(), s2.clone()]);
     let read: Vec<&Span> = e.spans().collect();
     assert_eq!(read, vec![&s1, &s2]);
@@ -101,7 +96,7 @@ fn endset_reads_back_verbatim_and_enc_round_trips() {
     assert_eq!(got, vec![ca(2).tumbler().clone(), ca(7).tumbler().clone()]);
     // A non-unit span contributes nothing to addrs(); a unit span does.
     let mixed = Endset::from_spans(
-        [span(&ca(1), &ca(3))]
+        [iext(1, 3)]
             .into_iter()
             .chain(enc(&[ca(9)]).spans().cloned()),
     );
@@ -144,8 +139,8 @@ fn coverage_class_addrs_is_the_minimal_antichain() {
 fn coverage_class_extents_is_canonical_per_length_and_variant_distinct() {
     // Same coverage, different decompositions (both containing a non-unit
     // span): one extent class (canonical form merges the adjacent split).
-    let whole = Endset::from_spans([span(&ca(1), &ca(4))]);
-    let split = Endset::from_spans([span(&ca(1), &ca(3)), span(&ca(3), &ca(4))]);
+    let whole = Endset::from_spans([iext(1, 4)]);
+    let split = Endset::from_spans([iext(1, 3), iext(3, 4)]);
     assert_ne!(whole, split); // structural
     assert_eq!(coverage_class(&whole), coverage_class(&split));
     // An all-unit decomposition of the SAME coverage lands in the denoted
@@ -158,7 +153,7 @@ fn coverage_class_extents_is_canonical_per_length_and_variant_distinct() {
     assert!(coverage_class(&whole).denoted().is_none());
     // A width-1 iextent IS the unit span: single content addresses land in
     // the exact denoted path.
-    let one = Endset::from_spans([span(&ca(3), &ca(4))]);
+    let one = Endset::from_spans([iext(3, 4)]);
     assert_eq!(coverage_class(&one), coverage_class(&enc(&[ca(3)])));
 }
 
@@ -323,7 +318,7 @@ fn is_address_denoting_answers_the_question_the_module_asks_its_callers() {
     // answer from a rejection (`NonAddressDenotingType` at `emit`).
     assert!(Endset::empty().is_address_denoting()); // vacuous on ⟨⟩
     assert!(enc(&[ca(1), ra(1)]).is_address_denoting());
-    assert!(!Endset::from_spans([span(&ca(1), &ca(3))]).is_address_denoting());
+    assert!(!Endset::from_spans([iext(1, 3)]).is_address_denoting());
     let skew = Endset::from_spans([Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12-valid")]);
     assert!(!skew.is_address_denoting());
 }
@@ -335,7 +330,7 @@ fn is_level_uniform_is_coverage_class_s_precondition_and_denotation_is_stronger(
     // spans is NOT address-denoting, IS level-uniform, and classifies without
     // panicking — so is_address_denoting over-refuses as a discharge test and
     // is_level_uniform is the one that matches the precondition exactly.
-    let extent = Endset::from_spans([span(&ca(1), &ca(3))]);
+    let extent = Endset::from_spans([iext(1, 3)]);
     assert!(!extent.is_address_denoting());
     assert!(extent.is_level_uniform());
     assert!(
@@ -376,7 +371,7 @@ fn single_denoted_is_stricter_than_the_first_denoted_address() {
     // this test is unit-depth-ALL, so it answers ⊥.
     assert_eq!(Endset::empty().single_denoted(), None);
     let mixed = Endset::from_spans(
-        [span(&ca(1), &ca(3))]
+        [iext(1, 3)]
             .into_iter()
             .chain(enc(&[ca(9)]).spans().cloned()),
     );
@@ -416,9 +411,9 @@ fn coverage_class_is_invariant_under_span_permutation() {
     ];
     let units = [ca(1), ca(2), ca(3)];
     let extents = [
-        span(&ca(1), &ca(3)),
-        span(&ca(5), &ca(7)),
-        span(&ca(9), &ca(11)),
+        iext(1, 3),
+        iext(5, 7),
+        iext(9, 11),
     ];
     let unit_class = coverage_class(&enc(&units));
     let extent_class = coverage_class(&Endset::from_spans(extents.iter().cloned()));
@@ -481,7 +476,7 @@ fn slots_walks_the_whole_value_in_positional_order() {
 #[test]
 fn carrier_types_survive_the_journal_wire_format() {
     // bincode is M2's actual wire format.
-    let e = Endset::from_spans([span(&ca(1), &ca(3)), span(&ca(4), &ca(5))]);
+    let e = Endset::from_spans([iext(1, 3), iext(4, 5)]);
     let bytes = bincode::serialize(&e).expect("endset serializes");
     let back: Endset = bincode::deserialize(&bytes).expect("endset deserializes");
     assert_eq!(back, e); // structural round trip, decomposition preserved
@@ -514,7 +509,7 @@ fn endset_collects_from_a_span_pipeline_and_the_format_constants_compare_by_valu
     // Default is ⟨⟩, and collecting a span pipeline is the same verbatim
     // construction from_spans performs.
     assert_eq!(Endset::default(), Endset::empty());
-    let spans = [span(&ca(1), &ca(3)), span(&ca(5), &ca(6))];
+    let spans = [iext(1, 3), iext(5, 6)];
     let collected: Endset = spans.iter().cloned().collect();
     assert_eq!(collected, Endset::from_spans(spans.iter().cloned()));
 
@@ -595,7 +590,7 @@ fn coverage_class_partitions_a_mixed_length_endset_by_start_length() {
     // level-uniformity per span, not a shared length), so classifying it must
     // answer rather than abort.
     let shallow = vspan(1, 1, 2); // #start = 2 — level-uniform, not unit-depth
-    let deep = span(&ca(1), &ca(3)); // #start = 8
+    let deep = iext(1, 3); // #start = 8
     let mixed = Endset::from_spans([shallow.clone(), deep.clone()]);
     assert!(mixed.is_level_uniform(), "every span, on its own");
     assert!(!mixed.is_address_denoting());

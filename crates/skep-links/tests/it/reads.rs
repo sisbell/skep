@@ -39,14 +39,7 @@ fn observe_coerces_default_to_active_and_never_filters() {
     let w = writer(&k);
     let retired = retired_ty();
     let rel = unregistered_ty(1);
-    w.makelink(
-        P1,
-        &doc1(),
-        SlotArg::Addrs(vec![ca(1)]),
-        SlotArg::Addrs(vec![ca(2)]),
-        SlotArg::Addrs(vec![unregistered_ta(1)]),
-    )
-    .expect("relation");
+    open_deposit(&w, &[ca(1)], &[ca(2)], &[unregistered_ta(1)]);
     w.emit(P1, &doc1(), &retired, &ca(1), &[])
         .expect("retire ca1");
     let snap = k.snapshot();
@@ -72,15 +65,8 @@ fn observe_returns_every_match_in_ascending_tuple_address_order() {
         |tuples: Vec<Tuple>| tuples.into_iter().map(|tuple| tuple.addr).collect::<Vec<_>>();
     let rel = unregistered_ty(11);
     let deposit = |from: u32, to: &[u32]| {
-        w.makelink(
-            P1,
-            &doc1(),
-            SlotArg::Addrs(vec![ca(from)]),
-            SlotArg::Addrs(to.iter().map(|&i| ca(i)).collect()),
-            SlotArg::Addrs(vec![unregistered_ta(11)]),
-        )
-        .expect("open deposit")
-        .0
+        let to: Vec<_> = to.iter().map(|&i| ca(i)).collect();
+        open_deposit(&w, &[ca(from)], &to, &[unregistered_ta(11)])
     };
     let a1 = deposit(1, &[2, 3]);
     let a2 = deposit(4, &[2]);
@@ -130,15 +116,8 @@ fn an_observed_tuple_carries_the_link_s_own_f_and_g_in_those_roles() {
     // what makes an exchange fail on arity as well as on content.
     let k = kernel();
     let w = writer(&k);
-    let (a1, _) = w
-        .makelink(
-            P1,
-            &doc1(),
-            SlotArg::Addrs(vec![ca(1)]),
-            SlotArg::Addrs(vec![ca(2), ca(3)]),
-            SlotArg::Addrs(vec![unregistered_ta(11)]),
-        )
-        .expect("the open surface admits |G| = 2");
+    // The open surface admits |G| = 2.
+    let a1 = open_deposit(&w, &[ca(1)], &[ca(2), ca(3)], &[unregistered_ta(11)]);
     let snap = k.snapshot();
     let links = snap.world().links();
     let tuples = links.observe(&unregistered_ty(11), Pattern::default(), View::Active);
@@ -165,15 +144,8 @@ fn the_class_keyed_reads_serve_an_unregistered_type_verbatim() {
     let k = kernel();
     let w = writer(&k);
     let rel = unregistered_ty(1);
-    let (l1, _) = w
-        .makelink(
-            P1,
-            &doc1(),
-            SlotArg::Addrs(vec![ca(1)]),
-            SlotArg::Addrs(vec![ca(2)]),
-            SlotArg::Addrs(vec![unregistered_ta(1)]),
-        )
-        .expect("the open surface admits an unregistered type");
+    // The open surface admits an unregistered type.
+    let l1 = open_deposit(&w, &[ca(1)], &[ca(2)], &[unregistered_ta(1)]);
     let snap = k.snapshot();
     let links = snap.world().links();
     let one = links.observe(&rel, Pattern::default(), View::Active);
@@ -221,14 +193,7 @@ fn is_filtered_reads_the_active_retired_slice() {
     let w = writer(&k);
     let retired = retired_ty();
     let rel = unregistered_ty(1);
-    w.makelink(
-        P1,
-        &doc1(),
-        SlotArg::Addrs(vec![ca(1)]),
-        SlotArg::Addrs(vec![ca(2)]),
-        SlotArg::Addrs(vec![unregistered_ta(1)]),
-    )
-    .expect("relation");
+    open_deposit(&w, &[ca(1)], &[ca(2)], &[unregistered_ta(1)]);
     let (retirement, _) = w
         .emit(P1, &doc1(), &retired, &ca(1), &[])
         .expect("retire ca1");
@@ -255,14 +220,7 @@ fn retired_filter_rewrites_default_views_only() {
     let w = writer(&k);
     let retired = retired_ty();
     let rel = unregistered_ty(1);
-    w.makelink(
-        P1,
-        &doc1(),
-        SlotArg::Addrs(vec![ca(1)]),
-        SlotArg::Addrs(vec![ca(2)]),
-        SlotArg::Addrs(vec![unregistered_ta(1)]),
-    )
-    .expect("relation");
+    open_deposit(&w, &[ca(1)], &[ca(2)], &[unregistered_ta(1)]);
     {
         let snap = k.snapshot();
         assert!(!snap.world().links().is_filtered(ca(1).tumbler()));
@@ -294,14 +252,7 @@ fn default_view_subtracts_a_filtered_target() {
     let w = writer(&k);
     let retired = retired_ty();
     let rel = unregistered_ty(1);
-    w.makelink(
-        P1,
-        &doc1(),
-        SlotArg::Addrs(vec![ca(1)]),
-        SlotArg::Addrs(vec![ca(2)]),
-        SlotArg::Addrs(vec![unregistered_ta(1)]),
-    )
-    .expect("relation");
+    open_deposit(&w, &[ca(1)], &[ca(2)], &[unregistered_ta(1)]);
     w.emit(P1, &doc1(), &retired, &ca(2), &[])
         .expect("retire the target");
     let snap = k.snapshot();
@@ -323,14 +274,7 @@ fn the_default_view_subtracts_under_every_active_retired_root() {
     let retired = retired_ty();
     let rel = unregistered_ty(11);
     for (source, target) in [(ca(1), ca(5)), (ca(2), ca(6)), (ca(3), ca(7))] {
-        w.makelink(
-            P1,
-            &doc1(),
-            SlotArg::Addrs(vec![source]),
-            SlotArg::Addrs(vec![target]),
-            SlotArg::Addrs(vec![unregistered_ta(11)]),
-        )
-        .expect("relation");
+        open_deposit(&w, &[source], &[target], &[unregistered_ta(11)]);
     }
     for root in [ca(2), ca(3), ca(7)] {
         w.emit(P1, &doc1(), &retired, &root, &[])
@@ -370,15 +314,8 @@ fn targets_of_collects_every_target_of_every_matching_tuple() {
     let w = writer(&k);
     let rel = unregistered_ty(11);
     let deposit = |from: u32, to: &[u32]| {
-        w.makelink(
-            P1,
-            &doc1(),
-            SlotArg::Addrs(vec![ca(from)]),
-            SlotArg::Addrs(to.iter().map(|&i| ca(i)).collect()),
-            SlotArg::Addrs(vec![unregistered_ta(11)]),
-        )
-        .expect("open deposit")
-        .0
+        let to: Vec<_> = to.iter().map(|&i| ca(i)).collect();
+        open_deposit(&w, &[ca(from)], &to, &[unregistered_ta(11)])
     };
     deposit(1, &[2, 3]);
     deposit(1, &[3, 5]);
@@ -404,17 +341,8 @@ fn sources_to_collects_every_source_deduplicated() {
     let w = writer(&k);
     let rel = unregistered_ty(13);
     let other = unregistered_ty(11);
-    let deposit = |from: u32, ty: u32| {
-        w.makelink(
-            P1,
-            &doc1(),
-            SlotArg::Addrs(vec![ca(from)]),
-            SlotArg::Addrs(vec![ca(9)]),
-            SlotArg::Addrs(vec![unregistered_ta(ty)]),
-        )
-        .expect("open deposit")
-        .0
-    };
+    let deposit =
+        |from: u32, ty: u32| open_deposit(&w, &[ca(from)], &[ca(9)], &[unregistered_ta(ty)]);
     deposit(1, 13);
     deposit(4, 13);
     deposit(1, 13); // a third tuple repeating the first source
@@ -511,17 +439,8 @@ fn bh3_endpoint_reads_are_exact_over_the_active_typed_slice_and_the_join_covers_
     let w = writer(&k);
     let rel = unregistered_ty(13);
     let other = unregistered_ty(14);
-    let deposit = |to: u32, ty: u32| {
-        w.makelink(
-            P1,
-            &doc1(),
-            SlotArg::Addrs(vec![ca(1)]),
-            SlotArg::Addrs(vec![ca(to)]),
-            SlotArg::Addrs(vec![unregistered_ta(ty)]),
-        )
-        .expect("open deposit")
-        .0
-    };
+    let deposit =
+        |to: u32, ty: u32| open_deposit(&w, &[ca(1)], &[ca(to)], &[unregistered_ta(ty)]);
     deposit(2, 13);
     // A same-source tuple of ANOTHER type must not disturb the typed reads.
     deposit(3, 14);

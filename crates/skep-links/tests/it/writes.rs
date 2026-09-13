@@ -273,9 +273,7 @@ fn emit_names_a_distinct_rejection_for_each_gate_it_fails() {
     let retraction = retraction_ty();
 
     // Pre-transact: non-address-denoting ty (before any class computation).
-    let wide = skep_address::Span::from_endpoints(ca(1).tumbler().clone(), ca(3).tumbler())
-        .expect("well-formed span");
-    let content_extent = Endset::from_spans([wide]);
+    let content_extent = Endset::from_spans([iext(1, 3)]);
     assert!(matches!(
         w.emit(P1, &doc1(), &content_extent, &ca(1), &[ca(2)]),
         Err(TxnError::Rejected(EmitError::NonAddressDenotingType))
@@ -457,10 +455,8 @@ fn pre_transact_fences_outrank_the_home_and_owner_checks() {
     let w = writer(&k);
     let sup = supersedes_ty();
     let ghost_home = a(&[1, 0, 1, 0, 7]);
-    let wide = skep_address::Span::from_endpoints(ca(1).tumbler().clone(), ca(3).tumbler())
-        .expect("well-formed span");
     assert!(matches!(
-        w.emit(P2, &ghost_home, &Endset::from_spans([wide]), &ca(1), &[ca(2)]),
+        w.emit(P2, &ghost_home, &Endset::from_spans([iext(1, 3)]), &ca(1), &[ca(2)]),
         Err(TxnError::Rejected(EmitError::NonAddressDenotingType))
     ));
     assert!(matches!(
@@ -498,17 +494,7 @@ fn an_idem_top_duplicate_returns_the_incumbent_and_a_nullified_one_resurrects() 
     // The open surface is the fresh-always contrast (ML0): the identical
     // deposit lands at a new address every time, dedup lock and check alike
     // absent.
-    let open = || {
-        w.makelink(
-            P1,
-            &doc1(),
-            SlotArg::Addrs(vec![ca(1)]),
-            SlotArg::Addrs(vec![ca(2)]),
-            SlotArg::Addrs(vec![unregistered_ta(1)]),
-        )
-        .expect("open deposit")
-        .0
-    };
+    let open = || open_deposit(&w, &[ca(1)], &[ca(2)], &[unregistered_ta(1)]);
     let m1 = open();
     let m2 = open();
     assert_ne!(m1, m2);
@@ -534,17 +520,9 @@ fn a_dedup_hit_returns_the_t1_least_active_tuple_of_the_class() {
     // multiplicity to be visible at all.
     let k = kernel();
     let w = writer(&k);
-    let deposit = || {
-        w.makelink(
-            P1,
-            &doc1(),
-            SlotArg::Addrs(vec![ca(1)]),
-            SlotArg::Addrs(vec![]),
-            SlotArg::Addrs(vec![ra(1)]), // pred_def — registered Unary, idem⊤
-        )
-        .expect("the open surface runs no dedup check")
-        .0
-    };
+    // Typed pred_def — registered Unary, idem⊤ — through the open surface,
+    // which runs no dedup check.
+    let deposit = || open_deposit(&w, &[ca(1)], &[], &[ra(1)]);
     let first = deposit();
     let second = deposit(); // ML0: distinct links always
     assert!(first < second, "T1 order follows the mint order on one chain");
@@ -612,16 +590,9 @@ fn an_emit_hit_may_return_a_link_its_own_shape_gate_would_have_refused() {
     let w = writer(&k);
     // enc([ca1, ca1]) denotes {ca1}, so this F shares an I0 class with
     // emit's own enc({ca1}) — while storing two spans, where Unary's shape
-    // gate forces one.
-    let (l, _) = w
-        .makelink(
-            P1,
-            &doc1(),
-            SlotArg::Addrs(vec![ca(1), ca(1)]),
-            SlotArg::Addrs(vec![]),
-            SlotArg::Addrs(vec![ra(1)]), // pred_def — registered Unary, idem⊤
-        )
-        .expect("the open surface has no shape gate");
+    // gate forces one; the open surface has no shape gate. Typed pred_def —
+    // registered Unary, idem⊤.
+    let l = open_deposit(&w, &[ca(1), ca(1)], &[], &[ra(1)]);
     let before = k.current_seq();
     let (hit, seq) = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
@@ -801,10 +772,6 @@ fn makelink_resolves_deposits_and_seats() {
         let link = links.readlink(&l1).expect("resident");
         // ML1 coverage-exactness: the recorded endsets are exactly the
         // resolved I-extents.
-        let iext = |lo: u32, hi: u32| {
-            skep_address::Span::from_endpoints(ca(lo).tumbler().clone(), ca(hi).tumbler())
-                .expect("well-formed")
-        };
         assert_eq!(link.from_slot(), &Endset::from_spans([iext(1, 2)]));
         assert_eq!(link.to_slot(), &Endset::from_spans([iext(2, 3)]));
         assert_eq!(link.type_slot(), &Endset::from_spans([iext(3, 4)]));
@@ -1064,10 +1031,6 @@ fn a_resolve_slot_concatenates_every_spec_in_argument_order() {
             SlotArg::Addrs(vec![unregistered_ta(10)]),
         )
         .expect("makelink");
-    let iext = |lo: u32, hi: u32| {
-        skep_address::Span::from_endpoints(ca(lo).tumbler().clone(), ca(hi).tumbler())
-            .expect("well-formed")
-    };
     let snap = k.snapshot();
     let links = snap.world().links();
     assert_eq!(

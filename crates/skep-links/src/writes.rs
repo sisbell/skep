@@ -272,147 +272,11 @@ pub struct Edit {
     pub claim: Address,
 }
 
-/// `emit_core`'s internal error; each public op maps it through the `From`
-/// impls below (§2 error mapping). `HomeNotRegistered` originates at the
-/// hoisted home check alone — the hoist makes `home` known-registered before
-/// the mint, so `mint_link`'s own `HomeNotRegistered` branch is unreachable
-/// and every other `MintError` rides `Mint`. `NotOwner` is the ω backstop
-/// (as amended 2026-08-16): every deposit passes this one choke point, so
-/// no caller path can reach the mint without the ownership check having
-/// run — the per-op hoists exist only to pin each op's error ORDER.
-#[derive(Debug)]
-enum EmitCoreError {
-    HomeNotRegistered,
-    NotOwner(Address),
-    NotRegistered,
-    ShapeViolation,
-    RetractionClass,
-    EmptyType,
-    Mint(MintError),
-}
-
-impl From<MintError> for EmitCoreError {
-    fn from(e: MintError) -> Self {
-        EmitCoreError::Mint(e)
-    }
-}
-
-// §2 error mapping. Every impl enumerates all seven variants: the dead ones
-// are the paths the design proves cannot fire under that op's gate
-// discipline, and naming them is what makes a new `EmitCoreError` variant a
-// compile error at all five sites instead of a panic at one.
-
-impl From<EmitCoreError> for MakeLinkError {
-    // Open: only EmptyType/HomeNotRegistered/NotOwner/Mint reachable, and
-    // EmptyType is ML6 arriving from the gate that owns it.
-    fn from(e: EmitCoreError) -> Self {
-        match e {
-            EmitCoreError::EmptyType => MakeLinkError::EmptyTypeResolution,
-            EmitCoreError::HomeNotRegistered => MakeLinkError::HomeNotRegistered,
-            EmitCoreError::NotOwner(a) => MakeLinkError::NotOwner(a),
-            EmitCoreError::Mint(m) => MakeLinkError::Mint(m),
-            EmitCoreError::NotRegistered
-            | EmitCoreError::ShapeViolation
-            | EmitCoreError::RetractionClass => {
-                unreachable!("Open gate raises no Managed/Retraction rejection")
-            }
-        }
-    }
-}
-
-impl From<SeatError> for MakeLinkError {
-    fn from(e: SeatError) -> Self {
-        MakeLinkError::Seat(e)
-    }
-}
-
-impl From<EmitCoreError> for EmitError {
-    // Managed: EmptyType unreachable (e₃ = ty is non-empty by T_admissible —
-    // an empty ty lands NotRegistered at the gate instead).
-    fn from(e: EmitCoreError) -> Self {
-        match e {
-            EmitCoreError::HomeNotRegistered => EmitError::HomeNotRegistered,
-            EmitCoreError::NotOwner(a) => EmitError::NotOwner(a),
-            EmitCoreError::NotRegistered => EmitError::NotRegistered,
-            EmitCoreError::ShapeViolation => EmitError::ShapeViolation,
-            EmitCoreError::RetractionClass => EmitError::RetractionClass,
-            EmitCoreError::Mint(m) => EmitError::Mint(m),
-            EmitCoreError::EmptyType => unreachable!("managed e₃ = ty ∈ T_admissible"),
-        }
-    }
-}
-
-impl From<EmitCoreError> for NullifyError {
-    // Retraction: the shared discipline's verdicts are all dead here — the
-    // `[R]` class is shipped-registered (never NotRegistered) and Binary
-    // against a tuple nullify builds at |F| = |G| = 1 (never ShapeViolation),
-    // and K ≁ R refuses `[R]` under Managed alone. P-tgt is nullify's own.
-    fn from(e: EmitCoreError) -> Self {
-        match e {
-            EmitCoreError::HomeNotRegistered => NullifyError::HomeNotRegistered,
-            EmitCoreError::NotOwner(a) => NullifyError::NotOwner(a),
-            EmitCoreError::Mint(m) => NullifyError::Mint(m),
-            EmitCoreError::NotRegistered
-            | EmitCoreError::ShapeViolation
-            | EmitCoreError::RetractionClass
-            | EmitCoreError::EmptyType => {
-                unreachable!("[R] is shipped-registered Binary and admitted under Retraction")
-            }
-        }
-    }
-}
-
-impl From<EmitCoreError> for AssertSupError {
-    // Managed/K_sup: the registry-fixed class makes the gate variants
-    // unreachable.
-    fn from(e: EmitCoreError) -> Self {
-        match e {
-            EmitCoreError::HomeNotRegistered => AssertSupError::HomeNotRegistered,
-            EmitCoreError::NotOwner(a) => AssertSupError::NotOwner(a),
-            EmitCoreError::Mint(m) => AssertSupError::Mint(m),
-            EmitCoreError::NotRegistered
-            | EmitCoreError::ShapeViolation
-            | EmitCoreError::RetractionClass
-            | EmitCoreError::EmptyType => unreachable!(
-                "K_sup registry-fixed Binary/idem⊤; endpoints/irreflexivity pre-checked in assert_sup"
-            ),
-        }
-    }
-}
-
-impl From<EmitCoreError> for EditLinkError {
-    // successor (Open): EmptyType → IllFormedSuccessor, the empty-type-slot
-    // cause arriving from the gate that owns it; claim (Managed/K_sup).
-    fn from(e: EmitCoreError) -> Self {
-        match e {
-            EmitCoreError::EmptyType => EditLinkError::IllFormedSuccessor,
-            EmitCoreError::HomeNotRegistered => EditLinkError::HomeNotRegistered,
-            EmitCoreError::NotOwner(a) => EditLinkError::NotOwner(a),
-            EmitCoreError::Mint(m) => EditLinkError::Mint(m),
-            EmitCoreError::NotRegistered
-            | EmitCoreError::ShapeViolation
-            | EmitCoreError::RetractionClass => {
-                unreachable!("editlink pre-checks DC/arity/residence; K_sup claim registry-fixed")
-            }
-        }
-    }
-}
-
-/// §7 error mapping: lift a constituent `nullify` transact error into the
-/// batch op's space — a typed rejection rides `RetractStaleError::Nullify`;
-/// kernel-level failures pass through unchanged.
-fn lift_nullify(e: TxnError<NullifyError>) -> TxnError<RetractStaleError> {
-    match e {
-        TxnError::Rejected(n) => TxnError::Rejected(n.into()),
-        TxnError::Durability(io) => TxnError::Durability(io),
-        TxnError::Unencodable(io) => TxnError::Unencodable(io),
-        TxnError::OverBudget { bytes } => TxnError::OverBudget { bytes },
-        TxnError::Poisoned => TxnError::Poisoned,
-    }
-}
-
 /// The doorkeeper's verdict on a deposit's home documents, in the vocabulary
-/// every op translates from (the `From` impls below).
+/// every op translates from (the `From` impls below) — and the one
+/// [`EmitCoreError`] carries as its own, so the choke point's verdict on a
+/// home IS the hoist's, translated once.
+#[derive(Debug)]
 enum HomeFault {
     NotRegistered,
     NotOwner(Address),
@@ -425,17 +289,16 @@ enum HomeFault {
 /// pins. The payload names the home that failed ownership; M10 threads it
 /// into the rejection's fault site.
 ///
-/// This is the hoist that pins each op's error ORDER ahead of its own
-/// verdicts. The gate that actually admits a deposit is [`emit_core`], which
-/// asks the same two questions of every value that reaches the mint.
-///
-/// The two ask them of DIFFERENT states — every caller here reads the txn
-/// BASE, `emit_core` reads the WORKING world — and cannot disagree: the only
-/// records a composite stages between them are M3 element allocations and
-/// link deposits, and neither changes a document's registration or its
-/// effective owner. `editlink` is where the gap is real (its second
-/// `emit_core` runs after the first has staged both), which is why the
-/// agreement is an argument rather than an observation.
+/// Asked of every deposit by the gate that admits it, [`emit_core`], of the
+/// WORKING world — so no caller path reaches the mint ungated — and asked
+/// EARLIER, of the txn BASE, by each op that has in-transaction verdicts of
+/// its own to order behind them (`emit` has none, and asks only through the
+/// gate). The two askings cannot disagree: the only records a composite
+/// stages between them are M3 element allocations and link deposits, and
+/// neither changes a document's registration or its effective owner.
+/// `editlink` is where the gap is real (its second `emit_core` runs after
+/// the first has staged both), which is why the agreement is an argument
+/// rather than an observation.
 fn home_gate(m3: &M3State, caller: Caller, homes: &[&Address]) -> Result<(), HomeFault> {
     for &home in homes {
         if !m3.is_registered_document(home) {
@@ -455,6 +318,15 @@ impl From<HomeFault> for MakeLinkError {
         match e {
             HomeFault::NotRegistered => MakeLinkError::HomeNotRegistered,
             HomeFault::NotOwner(a) => MakeLinkError::NotOwner(a),
+        }
+    }
+}
+
+impl From<HomeFault> for EmitError {
+    fn from(e: HomeFault) -> Self {
+        match e {
+            HomeFault::NotRegistered => EmitError::HomeNotRegistered,
+            HomeFault::NotOwner(a) => EmitError::NotOwner(a),
         }
     }
 }
@@ -483,6 +355,147 @@ impl From<HomeFault> for EditLinkError {
             HomeFault::NotRegistered => EditLinkError::HomeNotRegistered,
             HomeFault::NotOwner(a) => EditLinkError::NotOwner(a),
         }
+    }
+}
+
+/// `emit_core`'s internal error; each public op maps it through the `From`
+/// impls below (§2 error mapping). `Home` carries the doorkeeper's verdict,
+/// asked of the WORKING world through [`home_gate`] — the same two questions
+/// an op's hoist asks of the base — so `mint_link`'s own `HomeNotRegistered`
+/// branch is unreachable and every other `MintError` rides `Mint`. It is the
+/// ω backstop (as amended 2026-08-16): every deposit passes this one choke
+/// point, so no caller path can reach the mint without the ownership check
+/// having run — the per-op hoists exist only to pin each op's error ORDER.
+#[derive(Debug)]
+enum EmitCoreError {
+    Home(HomeFault),
+    NotRegistered,
+    ShapeViolation,
+    RetractionClass,
+    EmptyType,
+    Mint(MintError),
+}
+
+impl From<HomeFault> for EmitCoreError {
+    fn from(e: HomeFault) -> Self {
+        EmitCoreError::Home(e)
+    }
+}
+
+impl From<MintError> for EmitCoreError {
+    fn from(e: MintError) -> Self {
+        EmitCoreError::Mint(e)
+    }
+}
+
+// §2 error mapping. Every impl enumerates all six variants: the dead ones
+// are the paths the design proves cannot fire under that op's gate
+// discipline, and naming them is what makes a new `EmitCoreError` variant a
+// compile error at all five sites instead of a panic at one. `Home` is
+// translated by the doorkeeper's own `From` impls above, so the verdict on a
+// home is spelled once per op whichever check — hoist or backstop — raised it.
+
+impl From<EmitCoreError> for MakeLinkError {
+    // Open: only EmptyType/Home/Mint reachable, and EmptyType is ML6 arriving
+    // from the gate that owns it.
+    fn from(e: EmitCoreError) -> Self {
+        match e {
+            EmitCoreError::EmptyType => MakeLinkError::EmptyTypeResolution,
+            EmitCoreError::Home(f) => f.into(),
+            EmitCoreError::Mint(m) => MakeLinkError::Mint(m),
+            EmitCoreError::NotRegistered
+            | EmitCoreError::ShapeViolation
+            | EmitCoreError::RetractionClass => {
+                unreachable!("Open gate raises no Managed/Retraction rejection")
+            }
+        }
+    }
+}
+
+impl From<SeatError> for MakeLinkError {
+    fn from(e: SeatError) -> Self {
+        MakeLinkError::Seat(e)
+    }
+}
+
+impl From<EmitCoreError> for EmitError {
+    // Managed: EmptyType unreachable (e₃ = ty is non-empty by T_admissible —
+    // an empty ty lands NotRegistered at the gate instead).
+    fn from(e: EmitCoreError) -> Self {
+        match e {
+            EmitCoreError::Home(f) => f.into(),
+            EmitCoreError::NotRegistered => EmitError::NotRegistered,
+            EmitCoreError::ShapeViolation => EmitError::ShapeViolation,
+            EmitCoreError::RetractionClass => EmitError::RetractionClass,
+            EmitCoreError::Mint(m) => EmitError::Mint(m),
+            EmitCoreError::EmptyType => unreachable!("managed e₃ = ty ∈ T_admissible"),
+        }
+    }
+}
+
+impl From<EmitCoreError> for NullifyError {
+    // Retraction: the shared discipline's verdicts are all dead here — the
+    // `[R]` class is shipped-registered (never NotRegistered) and Binary
+    // against a tuple nullify builds at |F| = |G| = 1 (never ShapeViolation),
+    // and K ≁ R refuses `[R]` under Managed alone. P-tgt is nullify's own.
+    fn from(e: EmitCoreError) -> Self {
+        match e {
+            EmitCoreError::Home(f) => f.into(),
+            EmitCoreError::Mint(m) => NullifyError::Mint(m),
+            EmitCoreError::NotRegistered
+            | EmitCoreError::ShapeViolation
+            | EmitCoreError::RetractionClass
+            | EmitCoreError::EmptyType => {
+                unreachable!("[R] is shipped-registered Binary and admitted under Retraction")
+            }
+        }
+    }
+}
+
+impl From<EmitCoreError> for AssertSupError {
+    // Managed/K_sup: the registry-fixed class makes the gate variants
+    // unreachable.
+    fn from(e: EmitCoreError) -> Self {
+        match e {
+            EmitCoreError::Home(f) => f.into(),
+            EmitCoreError::Mint(m) => AssertSupError::Mint(m),
+            EmitCoreError::NotRegistered
+            | EmitCoreError::ShapeViolation
+            | EmitCoreError::RetractionClass
+            | EmitCoreError::EmptyType => unreachable!(
+                "K_sup registry-fixed Binary/idem⊤; endpoints/irreflexivity pre-checked in assert_sup"
+            ),
+        }
+    }
+}
+
+impl From<EmitCoreError> for EditLinkError {
+    // successor (Open): EmptyType → IllFormedSuccessor, the empty-type-slot
+    // cause arriving from the gate that owns it; claim (Managed/K_sup).
+    fn from(e: EmitCoreError) -> Self {
+        match e {
+            EmitCoreError::EmptyType => EditLinkError::IllFormedSuccessor,
+            EmitCoreError::Home(f) => f.into(),
+            EmitCoreError::Mint(m) => EditLinkError::Mint(m),
+            EmitCoreError::NotRegistered
+            | EmitCoreError::ShapeViolation
+            | EmitCoreError::RetractionClass => {
+                unreachable!("editlink pre-checks DC/arity/residence; K_sup claim registry-fixed")
+            }
+        }
+    }
+}
+
+/// §7 error mapping: lift a constituent `nullify` transact error into the
+/// batch op's space — a typed rejection rides `RetractStaleError::Nullify`;
+/// kernel-level failures pass through unchanged.
+fn lift_nullify(e: TxnError<NullifyError>) -> TxnError<RetractStaleError> {
+    match e {
+        TxnError::Rejected(n) => TxnError::Rejected(n.into()),
+        TxnError::Durability(io) => TxnError::Durability(io),
+        TxnError::Unencodable(io) => TxnError::Unencodable(io),
+        TxnError::OverBudget { bytes } => TxnError::OverBudget { bytes },
+        TxnError::Poisoned => TxnError::Poisoned,
     }
 }
 
@@ -527,12 +540,12 @@ impl From<HomeFault> for EditLinkError {
 /// hit AND miss, and because every deposit passes THIS choke point, no
 /// caller can reach the mint ungated.
 ///
-/// Both questions are asked of the WORKING world, where the per-op hoist
-/// asked them of the txn base. The two verdicts agree because the only
-/// records a composite stages in between are M3 element allocations and link
-/// deposits, neither of which touches document registration or ω — so the
-/// hoist pins the error order without the backstop being able to contradict
-/// it.
+/// Both questions are asked through [`home_gate`] — the one statement of
+/// them — of the WORKING world, where the per-op hoist asked them of the txn
+/// base. The two verdicts agree because the only records a composite stages
+/// in between are M3 element allocations and link deposits, neither of which
+/// touches document registration or ω — so the hoist pins the error order
+/// without the backstop being able to contradict it.
 ///
 /// RETURN CONTRACT: [`Deposited`], which distinguishes a freshly minted
 /// address (two records staged) from an idem⊤ INCUMBENT (nothing staged). A
@@ -555,12 +568,7 @@ where
     // trips — but it guarantees type_slices, the FROM/TO/TYPE slots the
     // discovery primitives index, and ASN-0086's |Σ.L| = 3 hold locally.
     assert_eq!(value.arity(), 3, "emit_core: the store holds only arity-3 links");
-    if !stg.working().m3().is_registered_document(home) {
-        return Err(EmitCoreError::HomeNotRegistered);
-    }
-    if !caller.is_owner(stg.working().m3(), home) {
-        return Err(EmitCoreError::NotOwner(home.clone()));
-    }
+    home_gate(stg.working().m3(), caller, &[home])?; // P0 then ω, of the working world
     match gate {
         Gate::Open => {
             if value.type_slot().is_empty() {

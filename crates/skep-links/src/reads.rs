@@ -186,8 +186,7 @@ impl LinkState {
     pub fn observe(&self, ty: &Endset, pattern: Pattern<'_>, view: View) -> Vec<Tuple> {
         let class = coverage_class(ty);
         let mut out = Vec::new();
-        for t in self.type_slice_class(&class, view) {
-            let link = self.link_at(t);
+        for (t, link) in self.typed_links(&class, view) {
             let f_ok = pattern.from.iter().all(|probe| link.from_slot().covers(probe));
             let g_ok = pattern.to.iter().all(|probe| link.to_slot().covers(probe));
             if f_ok && g_ok {
@@ -212,8 +211,8 @@ impl LinkState {
     /// (§Core data model totality).
     pub fn is_k(&self, ty: &Endset, probe: &Tumbler) -> bool {
         let class = coverage_class(ty);
-        self.type_slice_class(&class, View::Active)
-            .any(|t| self.link_at(t).from_slot().covers(probe))
+        self.typed_links(&class, View::Active)
+            .any(|(_, link)| link.from_slot().covers(probe))
     }
 
     /// D1: the denoted member set (F.addrs() over the slice), deduplicated,
@@ -228,13 +227,10 @@ impl LinkState {
     /// (§Core data model totality).
     pub fn members(&self, ty: &Endset, view: View) -> Vec<Address> {
         let class = coverage_class(ty);
-        let mut members: OrdSet<Tumbler> = OrdSet::new();
-        for t in self.type_slice_class(&class, view) {
-            let link = self.link_at(t);
-            for m in link.from_slot().addrs() {
-                members.insert(m.clone());
-            }
-        }
+        let members: OrdSet<Tumbler> = self
+            .typed_links(&class, view)
+            .flat_map(|(_, link)| link.from_slot().addrs().cloned())
+            .collect();
         self.subtract_filtered(&class, view, members)
     }
 
@@ -250,15 +246,11 @@ impl LinkState {
     /// (§Core data model totality).
     pub fn targets_of(&self, ty: &Endset, x: &Address, view: View) -> Vec<Address> {
         let class = coverage_class(ty);
-        let mut targets: OrdSet<Tumbler> = OrdSet::new();
-        for t in self.type_slice_class(&class, view) {
-            let link = self.link_at(t);
-            if link.from_slot().covers(x.tumbler()) {
-                for g in link.to_slot().addrs() {
-                    targets.insert(g.clone());
-                }
-            }
-        }
+        let targets: OrdSet<Tumbler> = self
+            .typed_links(&class, view)
+            .filter(|(_, link)| link.from_slot().covers(x.tumbler()))
+            .flat_map(|(_, link)| link.to_slot().addrs().cloned())
+            .collect();
         self.subtract_filtered(&class, view, targets)
     }
 
@@ -381,15 +373,11 @@ impl LinkState {
     /// (§Core data model totality).
     pub fn sources_to(&self, ty: &Endset, target: &Address) -> Vec<Address> {
         let class = coverage_class(ty);
-        let mut sources: OrdSet<Tumbler> = OrdSet::new();
-        for t in self.type_slice_class(&class, View::Active) {
-            let link = self.link_at(t);
-            if link.to_slot().covers(target.tumbler()) {
-                for f in link.from_slot().addrs() {
-                    sources.insert(f.clone());
-                }
-            }
-        }
+        let sources: OrdSet<Tumbler> = self
+            .typed_links(&class, View::Active)
+            .filter(|(_, link)| link.to_slot().covers(target.tumbler()))
+            .flat_map(|(_, link)| link.from_slot().addrs().cloned())
+            .collect();
         sources.into_iter().map(lift_denoted).collect()
     }
 
@@ -526,9 +514,9 @@ impl LinkState {
                 }
             }
         }
-        // The sinks, ascending because `reach` is — then ONE walk of the
+        // The sinks, an ordered set as `reach` is — then ONE walk of the
         // active claim slice for all of them together.
-        let sinks: Vec<Tumbler> = reach.into_iter().filter(|t| self.is_sink(t)).collect();
+        let sinks: OrdSet<Tumbler> = reach.into_iter().filter(|t| self.is_sink(t)).collect();
         self.out_claims(sinks)
             .into_iter()
             .map(|(t, claims)| {
@@ -684,6 +672,21 @@ impl LinkState {
             .filter(move |t| !(active && self.nullified(t)))
     }
 
+    /// The typed slice AS LINKS: each index key of
+    /// [`type_slice_class`](LinkState::type_slice_class) paired with the value
+    /// it names — the one place the slice walk meets [`LinkState::link_at`],
+    /// so a read that wants the value rather than the key discharges the
+    /// index-key obligation here once. Lazy, as the slice walk is, and taking
+    /// `view` raw as it does.
+    fn typed_links<'a>(
+        &'a self,
+        class: &CoverageClass,
+        view: View,
+    ) -> impl Iterator<Item = (&'a Tumbler, &'a Link)> + 'a {
+        self.type_slice_class(class, view)
+            .map(move |t| (t, self.link_at(t)))
+    }
+
     /// BH1's filter DOMAIN: the addresses every active shipped `Retired`
     /// tuple's F DENOTES. Denotation, so a non-unit-depth span in a `Retired`
     /// F contributes no root — the managed surface cannot build one (`emit`
@@ -695,8 +698,8 @@ impl LinkState {
     /// root's span — per result element.
     fn retired_roots(&self) -> impl Iterator<Item = &Tumbler> + '_ {
         let retired = registry().shipped_class(ShippedType::Retired);
-        self.type_slice_class(retired, View::Active)
-            .flat_map(move |t| self.link_at(t).from_slot().addrs())
+        self.typed_links(retired, View::Active)
+            .flat_map(|(_, link)| link.from_slot().addrs())
     }
 
     /// The result-side BH1 rewrite, whole: a denoted result set lifted to
@@ -791,18 +794,16 @@ impl LinkState {
     /// makes the two coincide, and would answer with every claim beneath a
     /// document- or account-level argument.
     ///
-    /// Vertices come back ASCENDING, deduplicated, whatever order they arrived
-    /// in — sorted here rather than asked of the caller, so the binary search
-    /// the walk does is sound by construction.
-    fn out_claims(&self, vertices: Vec<Tumbler>) -> Vec<(Tumbler, Vec<Address>)> {
+    /// Vertices arrive as an `OrdSet`: ascending and deduplicated by the
+    /// argument's type, so the binary search the walk does is sound by
+    /// construction and nothing is sorted twice — the caller holds its reach
+    /// set ordered already.
+    fn out_claims(&self, vertices: OrdSet<Tumbler>) -> Vec<(Tumbler, Vec<Address>)> {
         let mut out: Vec<(Tumbler, Vec<Address>)> =
             vertices.into_iter().map(|t| (t, Vec::new())).collect();
-        out.sort_by(|(a, _), (b, _)| a.cmp(b));
-        out.dedup_by(|(a, _), (b, _)| a == b);
-        for claim in
-            self.type_slice_class(registry().shipped_class(ShippedType::Supersedes), View::Active)
-        {
-            for g in self.link_at(claim).to_slot().addrs() {
+        let sup = registry().shipped_class(ShippedType::Supersedes);
+        for (claim, link) in self.typed_links(sup, View::Active) {
+            for g in link.to_slot().addrs() {
                 if let Ok(i) = out.binary_search_by(|(t, _)| t.cmp(g)) {
                     out[i].1.push(lift(claim));
                 }
@@ -843,17 +844,16 @@ impl LinkState {
     /// whole-store span scan to narrow a hint lookup would cost more than the
     /// walk it replaced.
     fn target_of_class(&self, class: &CoverageClass, source: &Address) -> Option<Address> {
-        let mut survivor: Option<&Tumbler> = None;
-        for t in self.type_slice_class(class, View::Active) {
-            let link = self.link_at(t);
+        let mut survivor: Option<&Link> = None;
+        for (_, link) in self.typed_links(class, View::Active) {
             if link.from_slot().addrs().any(|f| f == source.tumbler()) {
                 if survivor.is_some() {
                     return None; // several active type-ty matches ⇒ ⊥
                 }
-                survivor = Some(t);
+                survivor = Some(link);
             }
         }
-        self.link_at(survivor?)
+        survivor?
             .to_slot()
             .single_denoted()
             .cloned()

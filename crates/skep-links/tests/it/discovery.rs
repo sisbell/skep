@@ -8,7 +8,7 @@
 use crate::common;
 
 use common::*;
-use skep_address::{Address, SpanSet};
+use skep_address::SpanSet;
 use skep_links::{enc, Endset, HasLinks, SlotArg, View, FROM, TO, TYPE};
 
 #[test]
@@ -41,13 +41,7 @@ fn stab_and_match_links_match_overlap_but_never_adjacency() {
         // past it, so neither span contains the other. Every other query in
         // the suite is unit-depth, which against a same-length extent can
         // only be Containment, Equal, Adjacent or Separated.
-        let extent = |lo: u32, hi: u32| {
-            Endset::from_spans([skep_address::Span::from_endpoints(
-                ca(lo).tumbler().clone(),
-                ca(hi).tumbler(),
-            )
-            .expect("well-formed span")])
-        };
+        let extent = |lo, hi| Endset::from_spans([iext(lo, hi)]);
         assert!(links.stab(FROM, &extent(2, 5), View::Audit).contains(&l));
         // The control, so the hit above is the overlap arm and not a query
         // that matches everything: a Separated extent misses.
@@ -82,21 +76,10 @@ fn match_links_narrows_to_the_same_set_its_conjuncts_intersect() {
     // with a nullified link present so the Active/Audit split is exercised.
     let k = kernel();
     let w = writer(&k);
-    let deposit = |from: &[Address], to: &[Address], ty: &[Address]| {
-        w.makelink(
-            P1,
-            &doc1(),
-            SlotArg::Addrs(from.to_vec()),
-            SlotArg::Addrs(to.to_vec()),
-            SlotArg::Addrs(ty.to_vec()),
-        )
-        .expect("open-surface deposit")
-        .0
-    };
-    let l1 = deposit(&[ca(1)], &[ca(2)], &[ca(7)]);
-    let l2 = deposit(&[ca(1)], &[ca(4)], &[ca(7)]);
-    let l3 = deposit(&[ca(5)], &[ca(2)], &[ca(8)]);
-    let l4 = deposit(&[ca(1), ca(5)], &[ca(2), ca(4)], &[ca(7)]);
+    let l1 = open_deposit(&w, &[ca(1)], &[ca(2)], &[ca(7)]);
+    let l2 = open_deposit(&w, &[ca(1)], &[ca(4)], &[ca(7)]);
+    let l3 = open_deposit(&w, &[ca(5)], &[ca(2)], &[ca(8)]);
+    let l4 = open_deposit(&w, &[ca(1), ca(5)], &[ca(2), ca(4)], &[ca(7)]);
     w.nullify(P1, &doc1(), &l3).expect("nullify one");
 
     let pool = [
@@ -246,15 +229,8 @@ fn followlink_folds_the_whole_slot_in_its_recorded_order() {
     // span or none, where a normalizing fold would agree.
     let k = kernel();
     let w = writer(&k);
-    let (l, _) = w
-        .makelink(
-            P1,
-            &doc1(),
-            SlotArg::Addrs(vec![ca(2), ca(1)]), // unsorted, on purpose
-            SlotArg::Addrs(vec![]),
-            SlotArg::Addrs(vec![unregistered_ta(10)]),
-        )
-        .expect("open-surface deposit");
+    // FROM unsorted, on purpose.
+    let l = open_deposit(&w, &[ca(2), ca(1)], &[], &[unregistered_ta(10)]);
     let want: SpanSet = [
         skep_address::subtree_of(ca(2).tumbler()),
         skep_address::subtree_of(ca(1).tumbler()),

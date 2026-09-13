@@ -3,8 +3,6 @@
 //! canonical address-set encoding [`enc`], and the one pure coverage
 //! classifier [`coverage_class`] with its [`CoverageClass`] key.
 
-use std::collections::BTreeMap;
-
 use im::{OrdMap, OrdSet, Vector};
 use serde::{Deserialize, Serialize};
 use skep_address::{
@@ -16,8 +14,8 @@ use skep_address::{
 /// M1's `SpanSet`, which is read-opaque to M7. Coverage is a query-time
 /// projection ([`Endset::covers`]); the sequence is read through
 /// [`Endset::spans`]/[`Endset::addrs`] and folds to a `SpanSet` only at an
-/// M1-call boundary: the crate-internal whole-endset fold FOLLOWLINK
-/// performs.
+/// M1-call boundary — the crate-internal whole-endset fold FOLLOWLINK's read
+/// and [`coverage_class`]'s content-extent partition perform.
 ///
 /// Derived `PartialEq`/`Eq`/`Hash` are STRUCTURAL (decomposition- and
 /// span-order-sensitive) — serde/container plumbing only, NEVER identity
@@ -138,8 +136,9 @@ impl Endset {
     }
 
     /// INTERNAL — the one WHOLE-ENDSET fold to a `SpanSet` (concatenation,
-    /// order-preserving, exactly M1's singleton+union), and FOLLOWLINK's
-    /// (F1/F3) sole use.
+    /// order-preserving, exactly M1's singleton+union): where an endset meets
+    /// M1's set algebra — FOLLOWLINK's (F1/F3) read and [`coverage_class`]'s
+    /// partition of a content extent.
     pub(crate) fn to_spanset(&self) -> SpanSet {
         self.0.iter().cloned().collect()
     }
@@ -313,11 +312,11 @@ impl CoverageClass {
 ///
 /// Address-denoting endset (every span unit-depth) ⇒ its ≼-minimal denoted
 /// antichain (I0a, exact, readable through [`CoverageClass::denoted`]);
-/// general level-uniform content endset ⇒ the per-`#start` partition, each
-/// part folded to a `SpanSet` then `canonical_key`d — built per part from its
-/// own spans, never through the whole-endset fold, the parts being span
-/// groups rather than endsets. PUBLIC so M9 can key `targets_keyed`'s map via
-/// `coverage_class(ty)`.
+/// general level-uniform content endset ⇒ M1's per-`#start` partition of the
+/// whole-endset fold ([`SpanSet::by_level_class`]), each part
+/// `canonical_key`d — the composition M1's `canonical_key` names as M7's,
+/// cross-length canonicalization being absent from the source algebra.
+/// PUBLIC so M9 can key `targets_keyed`'s map via `coverage_class(ty)`.
 ///
 /// TOTAL ON LEVEL-UNIFORM INPUT — which is all it ever receives: managed
 /// paths validate address-denoting, content paths are `iextent`-level-uniform
@@ -359,17 +358,14 @@ pub fn coverage_class(e: &Endset) -> CoverageClass {
         }
         CoverageClass(Class::Addrs(minimal))
     } else {
-        let mut by_start_len: BTreeMap<usize, Vec<Span>> = BTreeMap::new();
-        for s in e.spans() {
-            by_start_len
-                .entry(s.start().len())
-                .or_default()
-                .push(s.clone());
-        }
+        // M1's partition of the whole-endset fold, one `canonical_key` per
+        // part: cross-length canonicalization is absent from the source
+        // algebra, so the class is the composition of per-length keys, and
+        // the partition is M1's to state. An `OrdMap`, because a class is a
+        // hint key cloned at every fold and every replay.
         let mut extents: OrdMap<usize, CanonicalForm> = OrdMap::new();
-        for (start_len, spans) in by_start_len {
-            let set: SpanSet = spans.into_iter().collect();
-            let canonical = canonical_key(&set).expect(
+        for (start_len, part) in e.to_spanset().by_level_class() {
+            let canonical = canonical_key(&part).expect(
                 "coverage_class precondition violated: every span must be level-uniform \
                  (#start == #width); an off-contract hand-built span is a caller error, \
                  never skipped and never coarsened (§Core data model)",

@@ -15,7 +15,8 @@ use skep_arrangement::{Deposit, HasM5, M5Rec, M5State, VPos, VSpec};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, WorldState};
 use skep_links::{
-    enc, Caller, Endset, HasLinks, LinkRec, LinkState, LinkWriter, ReservedAddrs, Visibility,
+    enc, Caller, Endset, HasLinks, LinkRec, LinkState, LinkWriter, ReservedAddrs, SlotArg,
+    Visibility,
 };
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 
@@ -222,6 +223,34 @@ pub fn spec(source: &Address, subspace: u32, ordinal: u32, count: u32) -> VSpec 
         source: source.clone(),
         span: vspan(subspace, ordinal, count),
     }
+}
+
+/// The I-extent `[ca(lo), ca(hi))` — doc1's content elements `lo..hi` as one
+/// level-uniform span, the shape M5's `Run::iextent` yields and a `Resolve`
+/// slot stores verbatim. Half-open: `iext(1, 3)` covers `ca(1)` and `ca(2)`.
+pub fn iext(lo: u32, hi: u32) -> Span {
+    Span::from_endpoints(ca(lo).tumbler().clone(), ca(hi).tumbler())
+        .expect("test extents are well-formed")
+}
+
+/// An open-surface deposit into doc1 by its owner, every slot in the `Addrs`
+/// form — how the read and discovery suites populate a relation. Returns the
+/// link's address; ML0 makes every call a fresh link.
+pub fn open_deposit(
+    w: &LinkWriter<'_, World>,
+    from: &[Address],
+    to: &[Address],
+    ty: &[Address],
+) -> Address {
+    w.makelink(
+        P1,
+        &doc1(),
+        SlotArg::Addrs(from.to_vec()),
+        SlotArg::Addrs(to.to_vec()),
+        SlotArg::Addrs(ty.to_vec()),
+    )
+    .expect("open-surface deposit")
+    .0
 }
 
 // ─────────────────────────── the format type set ────────────────────────────

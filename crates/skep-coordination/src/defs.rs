@@ -81,7 +81,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// caller's value is kept, and the caller goes on evaluating or
     /// classifying it.
     pub fn define_predicate(&self, d: &Address, term: &TypedTerm) -> Result<(Address, Seq), DefineError> {
-        let blob = codec::encode(&term.signed)
+        let bytes = codec::encode(&term.signed)
             .expect("type_check admits no Tup parameter, and TypedTerm has no other public constructor");
         // Insert position off a snapshot read; M5's insert re-validates
         // against committed state (benign TOCTOU — item 6).
@@ -96,7 +96,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // into a PUBLISHED document surfaces as
         // `Insert(Rejected(PublishedTarget))`.
         let (start, _insert_seq) =
-            vs.insert(Caller::System, d, at, vec![Val::new(blob)], Deposit::Undeclared)?;
+            vs.insert(Caller::System, d, at, vec![Val::new(bytes)], Deposit::Undeclared)?;
         let (_pdef_tuple, seq) = self.register_pred(d, &start)?;
         Ok((start, seq))
     }
@@ -124,7 +124,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // calls pin their own snapshots — sound: the σ ever-gate ran first,
         // ever-registration is monotone, signature facts are
         // content-intrinsic).
-        let entry = self.check_under(signed, 0).map_err(RegisterError::IllTyped)?;
+        let entry = self.check_signed(signed, 0).map_err(RegisterError::IllTyped)?;
         // (iv) endorsement: every referent ACTIVELY registered at σ.
         let pdef = self.catalog.reserved(ShippedType::PredDef);
         if let Some(r) = refs.iter().find(|r| !w.links().is_k(pdef, r.tumbler())) {
@@ -269,8 +269,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
         }
         // Γ_D parameters read as bound constants (free Vars have empty
         // footprint); ⊤-stability is the `st` leg.
-        let a = Analyzer { catalog: &self.catalog, view: View::Audit, widen: true }.term(&flat);
-        if !a.st {
+        let analysis =
+            Analyzer { catalog: &self.catalog, view: View::Audit, widen: true }.term(&flat);
+        if !analysis.st {
             return Err(CertifyError::NotStable);
         }
         let (tuple, seq) = self.link_writer().emit(

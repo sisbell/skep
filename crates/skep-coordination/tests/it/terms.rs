@@ -171,13 +171,13 @@ pub fn elems(q: Term) -> Term {
     Term::Prim(Prim::Elems(at(q)))
 }
 
-pub fn def_(x: Term) -> Term {
+pub fn def(x: Term) -> Term {
     Term::Prim(Prim::Def(at(x)))
 }
 
 // ───────────────────────────────── atoms ─────────────────────────────────
 
-pub fn is_k_t(e: &Endset, x: Term) -> Term {
+pub fn is_k(e: &Endset, x: Term) -> Term {
     Term::Atom(Atom::IsK(conc(e), at(x)))
 }
 
@@ -231,11 +231,11 @@ pub fn tup_addrs_g(vv: u32) -> Term {
     Term::Atom(Atom::TupAddrsG(v(vv)))
 }
 
-pub fn in_cov_f(x: Term, vv: u32) -> Term {
+pub fn in_coverage_f(x: Term, vv: u32) -> Term {
     Term::Atom(Atom::InCoverageF(at(x), v(vv)))
 }
 
-pub fn in_cov_g(x: Term, vv: u32) -> Term {
+pub fn in_coverage_g(x: Term, vv: u32) -> Term {
     Term::Atom(Atom::InCoverageG(at(x), v(vv)))
 }
 
@@ -262,7 +262,7 @@ pub fn always_tup(c: &Coordinator<World>) -> Trigger {
 /// the suite's Marker action emits, so the fire falsifies it in place.
 pub fn not_marked(c: &Coordinator<World>) -> Trigger {
     Trigger::Inline(
-        c.type_check_trigger((v(1), Sort::Addr), not(is_k_t(&marker_ty(), var(1))))
+        c.type_check_trigger((v(1), Sort::Addr), not(is_k(&marker_ty(), var(1))))
             .expect("¬is_K(marker, x)"),
     )
 }

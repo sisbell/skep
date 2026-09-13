@@ -24,7 +24,7 @@ use skep_links::{Caller, EmitError, Tip};
 /// retraction is reversible, non-cascading, and evaluation keys on
 /// EVER-registration.
 #[test]
-fn def_lifecycle_register_evaluate_retract() {
+fn a_def_registers_evaluates_retracts_and_re_registers_afresh() {
     let k = kernel();
     let c = coord(&k);
 
@@ -95,7 +95,7 @@ fn define_predicate_returns_the_pdef_emit_s_seq() {
 /// DAG-recursively; a gap-de-registered referent blocks NEW registrations
 /// (endorsement) while existing consumers keep evaluating (no cascade).
 #[test]
-fn def_references_endorsement_and_no_cascade() {
+fn endorsement_gates_a_new_reference_and_retraction_never_cascades() {
     let k = kernel();
     let c = coord(&k);
 
@@ -132,7 +132,7 @@ fn def_references_endorsement_and_no_cascade() {
 /// and `type_check_trigger` — the one way to bind a `Tup` — yields a
 /// `TriggerTerm`, so no such def can be spelled.)
 #[test]
-fn define_and_register_rejections() {
+fn register_pred_refuses_garbage_bytes_an_empty_start_and_an_unregistered_home() {
     let k = kernel();
     let c = coord(&k);
 
@@ -184,21 +184,21 @@ fn register_pred_refuses_a_stored_referent_that_was_never_registered_before_chec
     let end = bytes.len();
     assert_eq!(&bytes[end - 2..], &[1, 0], "PR-ENC: the referent's last component, then the argument count");
     bytes[end - 2] = 4; // the reference now names ca4 — nothing is there
-    let g = insert_raw(&k, &doc1(), bytes);
-    assert_eq!(g, ca(3));
-    match c.register_pred(&doc1(), &g) {
+    let forged = insert_raw(&k, &doc1(), bytes);
+    assert_eq!(forged, ca(3));
+    match c.register_pred(&doc1(), &forged) {
         Err(RegisterError::ReferentNotEverRegistered(x)) => assert_eq!(x, ca(4)),
         other => panic!("expected ReferentNotEverRegistered(ca4) ahead of WT-ref, got {other:?}"),
     }
-    assert!(!c.is_ever_pred(&g, &k.snapshot()));
-    assert!(c.signature(&g).is_none());
+    assert!(!c.is_ever_pred(&forged, &k.snapshot()));
+    assert!(c.signature(&forged).is_none());
 
     let (r, _) = c
         .define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("R"))
         .expect("define R");
     assert_eq!(r, ca(4));
-    c.register_pred(&doc1(), &g).expect("the orphan content is adopted");
-    assert_eq!(c.evaluate_def(&g, &[], View::Active, &k.snapshot()), Ok(Value::Bool(true)));
+    c.register_pred(&doc1(), &forged).expect("the orphan content is adopted");
+    assert_eq!(c.evaluate_def(&forged, &[], View::Active, &k.snapshot()), Ok(Value::Bool(true)));
 }
 
 /// Stored content that parses and fails WT is `IllTyped`, carrying the
@@ -225,12 +225,12 @@ fn register_pred_refuses_stored_content_that_parses_but_fails_wt() {
     // Envelope length · parameter count · the parameter's name · its sort.
     assert_eq!(&bytes[1..4], &[1, 1, 2], "PR-ENC: one parameter, named 1, sorted Addr");
     bytes[3] = 7; // Nat
-    let g = insert_raw(&k, &doc1(), bytes);
+    let forged = insert_raw(&k, &doc1(), bytes);
     assert!(matches!(
-        c.register_pred(&doc1(), &g),
+        c.register_pred(&doc1(), &forged),
         Err(RegisterError::IllTyped(TypeError::SortMismatch { expected: Sort::Addr, found: Sort::Nat }))
     ));
-    assert!(c.signature(&g).is_none(), "orphan content, never registered");
+    assert!(c.signature(&forged).is_none(), "orphan content, never registered");
 }
 
 /// PR-ENC's envelope around a payload: the minimal varint length, then the
@@ -322,12 +322,12 @@ fn register_pred_refuses_a_stored_reg_expansion_past_the_node_budget() {
         payload.extend([10u8, var, 5]); // FORALL, the binder, REG
     }
     payload.extend([2u8, 1]); // LIT, TRUE
-    let g = insert_raw(&k, &doc1(), envelope(payload));
+    let forged = insert_raw(&k, &doc1(), envelope(payload));
     assert!(matches!(
-        c.register_pred(&doc1(), &g),
+        c.register_pred(&doc1(), &forged),
         Err(RegisterError::IllTyped(TypeError::TooLarge))
     ));
-    assert!(c.signature(&g).is_none(), "orphan content, never registered");
+    assert!(c.signature(&forged).is_none(), "orphan content, never registered");
 }
 
 /// A reference chain is bounded at registration, not discovered at a cold
@@ -444,7 +444,7 @@ fn a_breach_freezes_the_start_poisoned() {
     let k = kernel();
     let mut c = coord(&k);
     let g = insert_raw(&k, &doc1(), vec![0xff, 0x01, 0x02]);
-    links(&k)
+    link_writer(&k)
         .emit(Caller::System, &doc1(), &pred_def_ty(), &g, &[])
         .expect("the breach: a pdef past the gate");
     let s = k.snapshot();
@@ -526,7 +526,7 @@ fn def_probes_are_class_free_while_the_evaluator_s_look_is_not() {
     assert!(c.signature(&start).is_some());
     assert_eq!(c.evaluate_def(&start, &[], View::Active, &s), Ok(Value::Bool(true)));
     for view in [View::Active, View::Audit, View::Default] {
-        assert!(!decide_now(&k, &c, view, is_k_t(&pred_def_ty(), lit_addr(&start))), "{view:?}");
+        assert!(!decide_now(&k, &c, view, is_k(&pred_def_ty(), lit_addr(&start))), "{view:?}");
     }
 }
 
@@ -535,7 +535,7 @@ fn def_probes_are_class_free_while_the_evaluator_s_look_is_not() {
 /// rejects a raw `[K_sup]`-typed `emit`, so the design's def-lineage claim
 /// cannot commit — the first two of the three non-atomic transactions do).
 #[test]
-fn supersede_gates_lineage_and_fence_drift() {
+fn supersede_gates_up_front_and_trips_m7_s_supersession_fence() {
     let k = kernel();
     let c = coord(&k);
 
@@ -573,7 +573,7 @@ fn supersede_gates_lineage_and_fence_drift() {
 /// CVALID(0..iii) in order, the ST⁺ parameter widening, and the certificate's
 /// M7 deposit.
 #[test]
-fn certify_stable_cvalid_legs() {
+fn certify_stable_refuses_each_cvalid_leg_in_order_and_certifies_through_references() {
     let k = kernel();
     let c = coord(&k);
     let define = |t: Term| {

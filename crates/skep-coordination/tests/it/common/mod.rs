@@ -122,22 +122,21 @@ pub fn doc2() -> Address {
     a(&[1, 0, 1, 0, 2])
 }
 
-/// doc1 content element `k`.
+/// doc1 content element `ordinal`.
 pub fn ca(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 1, 0, 1, ordinal])
 }
 
-/// doc1 link element `k`.
+/// doc1 link element `ordinal`.
 pub fn la(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 1, 0, 2, ordinal])
 }
 
-/// Reserved type address `k` — ghost tumbler `[1,1,0,1,0,1,0,1,k]`
-/// (`ReservedAddrs::format` assignment order for k = 1..=5: pred_def,
-/// pred_stable, retired, supersedes, retraction; higher ordinals are
+/// Reserved type address `ordinal` — ghost tumbler `[1,1,0,1,0,1,0,1,ordinal]`
+/// (the shipped five at [`PRED_DEF`]..[`RETRACTION`]; higher ordinals are
 /// uncataloged numbers).
-pub fn ra(k: u32) -> Address {
-    a(&[1, 1, 0, 1, 0, 1, 0, 1, k])
+pub fn ra(ordinal: u32) -> Address {
+    a(&[1, 1, 0, 1, 0, 1, 0, 1, ordinal])
 }
 
 pub fn vp(subspace: u32, ordinal: u32) -> VPos {
@@ -146,27 +145,45 @@ pub fn vp(subspace: u32, ordinal: u32) -> VPos {
 
 // ─────────────────────────── the format type set ────────────────────────────
 
+/// The reserved-type ordinals — [`ra`]'s argument — in `ReservedAddrs::format`
+/// assignment order, which `catalog_projects_and_serves_reserved_endsets`
+/// pins against M7's registry.
+pub const PRED_DEF: u32 = 1;
+pub const PRED_STABLE: u32 = 2;
+pub const RETIRED: u32 = 3;
+pub const SUPERSEDES: u32 = 4;
+pub const RETRACTION: u32 = 5;
+
 /// The cataloged classes the tests lean on. `pred_def`/`pred_stable` are the
-/// two plain Unary idem⊤ classes; `retired` doubles as the MARKER class —
-/// the one cataloged Unary idem⊤ class outside the PredLayer pair, which the
-/// Marker action's guards demand.
+/// two plain Unary idem⊤ classes; the shipped Retired class plays two roles,
+/// each under its own name — [`retired_ty`] where a test retires an element,
+/// [`marker_ty`] where a test emits a marker.
 pub fn pred_def_ty() -> Endset {
-    enc(&[ra(1)])
+    enc(&[ra(PRED_DEF)])
 }
 pub fn pred_stable_ty() -> Endset {
-    enc(&[ra(2)])
+    enc(&[ra(PRED_STABLE)])
 }
+/// The shipped Retired class as the one BH1 (`ReadFilter`) class:
+/// `emit(retired_ty(), x)` is how a test retires `x`, and the UV rewrite's
+/// filter is what it then reads.
+pub fn retired_ty() -> Endset {
+    enc(&[ra(RETIRED)])
+}
+/// The MARKER class — the one cataloged Unary idem⊤ class outside the
+/// PredLayer pair, which the Marker action's guards demand. It is the shipped
+/// Retired class; a test that means the BH1 filter says [`retired_ty`].
 pub fn marker_ty() -> Endset {
-    enc(&[ra(3)]) // the shipped Retired class
+    enc(&[ra(RETIRED)])
 }
 pub fn retraction_ty() -> Endset {
-    enc(&[ra(5)])
+    enc(&[ra(RETRACTION)])
 }
 
 /// An UNCATALOGED type number — `type_check`'s `UnregisteredType` probe and
 /// the open surface's verbatim deposits.
-pub fn uncataloged_ty(k: u32) -> Endset {
-    enc(&[ra(k)])
+pub fn uncataloged_ty(ordinal: u32) -> Endset {
+    enc(&[ra(ordinal)])
 }
 
 // ─────────────────────────────── world assembly ─────────────────────────────
@@ -211,14 +228,17 @@ pub fn registry() -> Arc<TypeRegistry> {
     Arc::clone(skep_links::registry())
 }
 
-fn mk_vs(k: &Kernel<World>) -> Vstream<'_, World> {
+fn mk_vstream(k: &Kernel<World>) -> Vstream<'_, World> {
     Vstream::new(k)
 }
 
 /// The writer factory the Coordinator builds its M7 handles through: the
 /// kernel and the visibility class the Coordinator lends it (its injected
 /// `guest`, lane 3.3b).
-fn mk_ls<'k>(k: &'k Kernel<World>, visibility: &'k Visibility<'k, World>) -> LinkWriter<'k, World> {
+fn mk_link_writer<'k>(
+    k: &'k Kernel<World>,
+    visibility: &'k Visibility<'k, World>,
+) -> LinkWriter<'k, World> {
     LinkWriter::new(k, visibility)
 }
 
@@ -249,13 +269,20 @@ pub fn coord_with_guest(
     k: &Arc<Kernel<World>>,
     guest: Box<Visibility<'static, World>>,
 ) -> Coordinator<World> {
-    Coordinator::new(Arc::clone(k), registry(), Box::new(mk_vs), Box::new(mk_ls), guest)
+    Coordinator::new(
+        Arc::clone(k),
+        registry(),
+        Box::new(mk_vstream),
+        Box::new(mk_link_writer),
+        guest,
+    )
 }
 
-/// A TO-bearing tuple in a CATALOGED class, deposited through the open
-/// surface (the managed gate admits only Unary tuples in this format, and
-/// the open surface is shape-blind) — the M9 domain/eval tests' way of
-/// putting a relation with a G slot into a class the catalog speaks about.
+/// A TO-bearing tuple in a CATALOGED class (`ty` a reserved-type ordinal,
+/// [`PRED_DEF`]..), deposited through the open surface (the managed gate
+/// admits only Unary tuples in this format, and the open surface is
+/// shape-blind) — the M9 domain/eval tests' way of putting a relation with a
+/// G slot into a class the catalog speaks about.
 pub fn deposit_rel(k: &Arc<Kernel<World>>, ty: u32, from: &Address, to: &Address) -> Address {
     LinkWriter::new(k.as_ref(), &EVERYONE)
         .makelink(
@@ -269,9 +296,10 @@ pub fn deposit_rel(k: &Arc<Kernel<World>>, ty: u32, from: &Address, to: &Address
         .0
 }
 
-/// A LinkWriter handle for direct upstream writes in tests, at the
-/// all-visible class.
-pub fn links(k: &Arc<Kernel<World>>) -> LinkWriter<'_, World> {
+/// A `LinkWriter` for direct upstream writes in tests, at the all-visible
+/// class. (The READ state is M7's `HasLinks::links()` off a snapshot's
+/// world.)
+pub fn link_writer(k: &Arc<Kernel<World>>) -> LinkWriter<'_, World> {
     LinkWriter::new(k.as_ref(), &EVERYONE)
 }
 

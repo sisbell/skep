@@ -250,8 +250,8 @@ mod tests {
                 rewrite_term(self, t)
             }
         }
-        struct Count(usize);
-        impl Visit for Count {
+        struct NodeCount(usize);
+        impl Visit for NodeCount {
             fn term(&mut self, t: &Term) {
                 self.0 += 1;
                 visit_term(self, t)
@@ -260,7 +260,7 @@ mod tests {
         let body = every_former().body;
         let mut id = Identity(0);
         assert_eq!(id.term(&body), body);
-        let mut count = Count(0);
+        let mut count = NodeCount(0);
         count.term(&body);
         assert_eq!(count.0, id.0);
         assert!(count.0 > 60, "the fixture spans every former");

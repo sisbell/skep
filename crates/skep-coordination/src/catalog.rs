@@ -33,7 +33,7 @@ pub(crate) struct CatalogEntry {
 /// population).
 #[derive(Debug, Clone)]
 pub(crate) struct TypeCatalog {
-    map: HashMap<TypeKey, CatalogEntry>,
+    entries: HashMap<TypeKey, CatalogEntry>,
     order: Vec<TypeKey>,
     /// Shipped endsets, one per `ShippedType`, at the index [`slot`] assigns
     /// — the one function that both places and fetches.
@@ -72,51 +72,54 @@ impl TypeCatalog {
     /// no second copy to disagree, and genesis seeds every shipped class,
     /// so the registration lookups cannot miss (the `expect` states that).
     pub(crate) fn project(registry: &TypeRegistry) -> TypeCatalog {
-        let mut map: HashMap<TypeKey, CatalogEntry> = HashMap::new();
+        let mut entries: HashMap<TypeKey, CatalogEntry> = HashMap::new();
         let mut order: Vec<TypeKey> = Vec::new();
         let mut shipped: [Endset; 5] = std::array::from_fn(|_| Endset::empty());
 
         for t in ShippedType::ALL {
-            let e = registry.reserved_type(t).clone();
-            let class = coverage_class(&e);
+            let endset = registry.reserved_type(t).clone();
+            let class = coverage_class(&endset);
             let reg = registry
                 .registration(&class)
                 .expect("genesis seeds every shipped class (TypeRegistry::build)");
-            let key = TypeKey(e.clone());
-            shipped[slot(t)] = e;
+            let key = TypeKey(endset.clone());
+            shipped[slot(t)] = endset;
             order.push(key.clone());
-            map.insert(key, CatalogEntry { class, reg: reg.clone() });
+            entries.insert(key, CatalogEntry { class, reg: reg.clone() });
         }
 
         let bh1 = order
             .iter()
             .filter_map(|k| {
-                let e = &map[k];
-                e.reg
+                let entry = &entries[k];
+                entry
+                    .reg
                     .behaviors
                     .contains(&Behavior::ReadFilter)
-                    .then(|| (e.class.clone(), k.0.clone()))
+                    .then(|| (entry.class.clone(), k.0.clone()))
             })
             .collect();
         let bh3 = order
             .iter()
             .filter_map(|k| {
-                let e = &map[k];
-                (e.reg.shape == Shape::Binary && e.reg.behaviors.contains(&Behavior::ReverseLookup))
-                    .then(|| (e.class.clone(), k.0.clone()))
+                let entry = &entries[k];
+                (entry.reg.shape == Shape::Binary
+                    && entry.reg.behaviors.contains(&Behavior::ReverseLookup))
+                    .then(|| (entry.class.clone(), k.0.clone()))
             })
             .collect();
 
-        // The named classes read back from the map — the precomputed class,
-        // never a second classification.
-        let class_at = |t: ShippedType| map[&TypeKey(shipped[slot(t)].clone())].class.clone();
+        // The named classes read back from the entries — the precomputed
+        // class, never a second classification.
+        let class_at =
+            |t: ShippedType| entries[&TypeKey(shipped[slot(t)].clone())].class.clone();
         TypeCatalog {
             retraction_class: class_at(ShippedType::Retraction),
             supersedes_key: TypeKey(shipped[slot(ShippedType::Supersedes)].clone()),
             pred_def_class: class_at(ShippedType::PredDef),
             pred_stable_class: class_at(ShippedType::PredStable),
             shipped,
-            map,
+            entries,
             order,
             bh1,
             bh3,
@@ -126,7 +129,7 @@ impl TypeCatalog {
     /// The `Endset`-equality probe — authorizes the key AND yields its
     /// precomputed class (§Core data model).
     pub(crate) fn get(&self, k: &TypeKey) -> Option<&CatalogEntry> {
-        self.map.get(k)
+        self.entries.get(k)
     }
 
     /// M9's own cached accessor over the shipped endsets (no snapshot) —

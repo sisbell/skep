@@ -536,8 +536,8 @@ pub(crate) fn view_independent(t: &Term) -> bool {
 
 /// Assemble a `Dynamics` from one analysis pass at `view`.
 pub(crate) fn classify_term(catalog: &TypeCatalog, view: View, t: &Term) -> Dynamics {
-    let a = Analyzer { catalog, view, widen: false }.term(t);
-    let stability = match (a.st, a.sf) {
+    let analysis = Analyzer { catalog, view, widen: false }.term(t);
+    let stability = match (analysis.st, analysis.sf) {
         (true, true) => Stability::StSf,
         (true, false) => Stability::StOnly,
         (false, true) => Stability::SfOnly,
@@ -545,12 +545,12 @@ pub(crate) fn classify_term(catalog: &TypeCatalog, view: View, t: &Term) -> Dyna
     };
     Dynamics {
         active_exceptions: ActiveExceptions {
-            retraction_shrinks: !a.fp.active.is_empty(),
-            bh4_home_frontier: a.fp.home_frontier,
-            targets_keyed_cross_type: a.fp.targets_keyed,
+            retraction_shrinks: !analysis.fp.active.is_empty(),
+            bh4_home_frontier: analysis.fp.home_frontier,
+            targets_keyed_cross_type: analysis.fp.targets_keyed,
         },
         stability,
         view_independent: view_independent(t),
-        footprint: a.fp,
+        footprint: analysis.fp,
     }
 }

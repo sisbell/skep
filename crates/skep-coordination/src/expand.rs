@@ -230,7 +230,7 @@ mod tests {
         VarId::new(x).expect("test var below the watershed")
     }
 
-    fn ad(comps: &[u32]) -> Address {
+    fn a(comps: &[u32]) -> Address {
         validate(Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty"))
             .expect("T4-valid")
     }
@@ -247,7 +247,7 @@ mod tests {
     /// equal.
     #[test]
     fn expands_a_reference_with_fresh_disjoint_names() {
-        let p = ad(&[1, 0, 1, 0, 1, 0, 1, 1]);
+        let p = a(&[1, 0, 1, 0, 1, 0, 1, 1]);
         // P(x) := ∃ y ∈ L_dom :: y = x — the binder `y` is v(2), as the
         // host's is.
         let body = Term::Exists {
@@ -260,7 +260,7 @@ mod tests {
             result: Sort::Bool,
             evaluable: Arc::new(body),
             ref_free: true,
-            chain_depth: 2,
+            reach: 2,
         };
         let stub = Stub(HashMap::from([(p.tumbler().clone(), Arc::new(referent))]));
         // Host: ∃ y ∈ L_dom :: P(y).

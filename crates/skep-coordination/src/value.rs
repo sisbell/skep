@@ -73,7 +73,7 @@ pub(crate) fn value_sort(v: &Value) -> Sort {
 /// The signed term `(Γ_D, body)` (ASN-0130 SignedTerm): a PL body with its
 /// recorded parameter context — what `define_predicate` encodes, the def
 /// codec parses, and `parse_def` recovers from a run. Unchecked: WT over it
-/// is `Coordinator::check_under`'s, whose result carries it as
+/// is `Coordinator::check_signed`'s, whose result carries it as
 /// `TypedTerm::signed`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SignedTerm {

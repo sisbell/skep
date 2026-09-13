@@ -496,8 +496,8 @@ fn w_prim(b: &mut Vec<u8>, p: &Prim) {
     }
 }
 
-fn w_prim2(b: &mut Vec<u8>, t: u8, x: &Term, y: &Term) {
-    b.push(t);
+fn w_prim2(b: &mut Vec<u8>, tag: u8, x: &Term, y: &Term) {
+    b.push(tag);
     w_term(b, x);
     w_term(b, y);
 }
@@ -511,9 +511,9 @@ fn w_prim2(b: &mut Vec<u8>, t: u8, x: &Term, y: &Term) {
 /// so an undisciplined run reaches `register_pred`'s `ParseFailed` and the
 /// memo's freeze-on-breach.
 pub(crate) fn decode(bytes: &[u8]) -> Result<SignedTerm, Malformed> {
-    let mut r = Rd { b: bytes, i: 0, nodes: 0 };
+    let mut r = Rd { b: bytes, pos: 0, nodes: 0 };
     let len = r.len()?;
-    if bytes.get(r.i..).map(<[u8]>::len) != Some(len) {
+    if bytes.get(r.pos..).map(<[u8]>::len) != Some(len) {
         return Err(Malformed);
     }
     let n_params = r.len()?;
@@ -527,7 +527,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<SignedTerm, Malformed> {
         params.push((v, s));
     }
     let body = r.term(0)?;
-    if r.i != bytes.len() {
+    if r.pos != bytes.len() {
         return Err(Malformed);
     }
     Ok(SignedTerm { params, body })
@@ -535,7 +535,8 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<SignedTerm, Malformed> {
 
 struct Rd<'a> {
     b: &'a [u8],
-    i: usize,
+    /// The read cursor: the offset of the next unread byte of `b`.
+    pos: usize,
     /// Nodes built so far — the term and domain formers — against
     /// `MAX_TERM_NODES`.
     nodes: usize,
@@ -543,8 +544,8 @@ struct Rd<'a> {
 
 impl<'a> Rd<'a> {
     fn u8(&mut self) -> Result<u8, Malformed> {
-        let x = *self.b.get(self.i).ok_or(Malformed)?;
-        self.i += 1;
+        let x = *self.b.get(self.pos).ok_or(Malformed)?;
+        self.pos += 1;
         Ok(x)
     }
 
@@ -619,8 +620,8 @@ impl<'a> Rd<'a> {
 
     fn nat(&mut self) -> Result<Nat, Malformed> {
         let len = self.len()?;
-        let bytes = self.b.get(self.i..).and_then(|rest| rest.get(..len)).ok_or(Malformed)?;
-        self.i += len;
+        let bytes = self.b.get(self.pos..).and_then(|rest| rest.get(..len)).ok_or(Malformed)?;
+        self.pos += len;
         if bytes.is_empty() || (bytes.len() > 1 && bytes[0] == 0) {
             return Err(Malformed); // canonical big-endian only
         }
@@ -803,19 +804,16 @@ mod tests {
         VarId::new(x).expect("test var below the watershed")
     }
 
-    fn tum(comps: &[u32]) -> Tumbler {
-        Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty")
-    }
-
-    fn ad(comps: &[u32]) -> Address {
-        validate(tum(comps)).expect("T4-valid")
+    fn a(comps: &[u32]) -> Address {
+        validate(Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty"))
+            .expect("T4-valid")
     }
 
     /// decode ∘ encode = id on a body exercising every recursive family —
     /// PR-ENC's round-trip (injectivity witness on this input).
     #[test]
-    fn roundtrip_identity() {
-        let key = TypeKey(skep_links::enc(&[ad(&[1, 1, 0, 1, 0, 1, 0, 1, 1])]));
+    fn roundtrip_is_identity_on_every_recursive_family() {
+        let key = TypeKey(skep_links::enc(&[a(&[1, 1, 0, 1, 0, 1, 0, 1, 1])]));
         let body = Term::Exists {
             var: v(1),
             dom: Arc::new(Dom::Filter {
@@ -823,7 +821,7 @@ mod tests {
                 var: v(2),
                 pred: Arc::new(Term::Prim(Prim::AddrEq(
                     Arc::new(Term::Var(v(2))),
-                    Arc::new(Term::Lit(Lit::Addr(ad(&[1, 0, 1, 0, 1, 0, 1, 3])))),
+                    Arc::new(Term::Lit(Lit::Addr(a(&[1, 0, 1, 0, 1, 0, 1, 3])))),
                 ))),
             }),
             body: Arc::new(Term::And(
@@ -850,7 +848,7 @@ mod tests {
     /// and type position, and every encodable sort in Γ_D — so a tag the two
     /// halves read differently, anywhere in the table, fails here.
     #[test]
-    fn roundtrip_every_former() {
+    fn roundtrip_is_identity_on_every_former() {
         let signed = every_former();
         let bytes = encode(&signed).expect("Codom-only params encode");
         assert_eq!(decode(&bytes), Ok(signed));
@@ -868,7 +866,7 @@ mod tests {
     /// (PR-ENC's reserved supply): the first expansion name, minted through
     /// the crate-private constructor, must not survive a round trip.
     #[test]
-    fn decode_rejects_reserved_range_varid() {
+    fn decode_refuses_a_reserved_range_varid() {
         let signed = SignedTerm { params: vec![], body: Term::Var(VarId::expansion(0)) };
         let bytes = encode(&signed).expect("encode does not police body vars");
         assert_eq!(decode(&bytes), Err(Malformed));
@@ -876,7 +874,7 @@ mod tests {
 
     /// Trailing bytes are a parse failure ("fully consumed").
     #[test]
-    fn decode_rejects_trailing_bytes() {
+    fn decode_refuses_trailing_bytes() {
         let signed = SignedTerm { params: vec![], body: Term::Lit(Lit::True) };
         let mut bytes = encode(&signed).expect("encodes");
         bytes.push(0);
@@ -888,7 +886,7 @@ mod tests {
     /// well-formed 13-byte envelope (`0` params, `LIT`, `NAT`, the nine
     /// `0xff` limbs and the final `0x01`) around one hostile length.
     #[test]
-    fn decode_rejects_absurd_length_prefix() {
+    fn decode_refuses_an_absurd_length_prefix() {
         let mut bytes = vec![13, 0, tag::term::LIT, tag::lit::NAT];
         bytes.extend([0xff; 9]);
         bytes.push(0x01);
@@ -902,7 +900,7 @@ mod tests {
     /// bytes, an unknown tag in either family, an envelope the input cannot
     /// fill. So no two byte strings decode to one term.
     #[test]
-    fn decode_rejects_every_non_canonical_spelling() {
+    fn decode_refuses_every_non_canonical_spelling() {
         let closed_true = SignedTerm { params: vec![], body: Term::Lit(Lit::True) };
         assert_eq!(encode(&closed_true).expect("encodes"), vec![3, 0, 2, 1]);
         let not_true = SignedTerm { params: vec![], body: Term::Not(Arc::new(Term::Lit(Lit::True))) };

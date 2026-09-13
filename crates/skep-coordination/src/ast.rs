@@ -30,9 +30,8 @@ pub const EXPANSION_NAME_BASE: u32 = 1 << 31;
 /// past it (`Malformed`); the checker refuses any term, stored or supplied,
 /// whose evaluable projection — `Reg`-expansion joins and reference reaches
 /// included — would carry a walk past it (`TypeError::TooDeep`), and records
-/// each checked term's reach as `TypedTerm::chain_depth`, so a reference
-/// chain is bounded at registration rather than discovered at a cold
-/// derivation. The value sits where all of the walks fit a default 2 MiB
+/// each checked term's reach as `TypedTerm::reach`, so a reference chain is
+/// bounded at registration rather than discovered at a cold derivation. The value sits where all of the walks fit a default 2 MiB
 /// thread with margin in a debug build (the checker, the heaviest, overflows
 /// one near 200 levels there; a release build carries several times that),
 /// and far above any hand-authored body. The suite runs each walk at exactly
@@ -313,21 +312,21 @@ pub(crate) mod fixture {
         VarId::new(x).expect("test var below the watershed")
     }
 
-    fn ad(comps: &[u32]) -> Address {
+    fn a(comps: &[u32]) -> Address {
         validate(Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty"))
             .expect("T4-valid")
     }
 
-    fn a(t: Term) -> ArcTerm {
+    fn at(t: Term) -> ArcTerm {
         Arc::new(t)
     }
 
-    fn d(x: Dom) -> ArcDom {
+    fn ad(x: Dom) -> ArcDom {
         Arc::new(x)
     }
 
     pub(crate) fn every_former() -> SignedTerm {
-        let k = TypeRef::Concrete(TypeKey(enc(&[ad(&[1, 1, 0, 1, 0, 1, 0, 1, 1])])));
+        let k = TypeRef::Concrete(TypeKey(enc(&[a(&[1, 1, 0, 1, 0, 1, 0, 1, 1])])));
         let c = TypeRef::ClassVar(v(9));
         let x = || Term::Var(v(1));
         let y = || Term::Var(v(2));
@@ -338,77 +337,77 @@ pub(crate) mod fixture {
             // A natural past one byte: the codec's length-prefixed
             // big-endian limbs, not a single-byte special case.
             Lit::Nat(Nat::from(1u64 << 40)),
-            Lit::Addr(ad(&[1, 0, 1, 0, 1, 0, 1, 3])),
+            Lit::Addr(a(&[1, 0, 1, 0, 1, 0, 1, 3])),
             Lit::BotAddr,
             Lit::BotNat,
         ]
         .into_iter()
         .map(Term::Lit);
         let atoms = [
-            Atom::IsK(k.clone(), a(x())),
+            Atom::IsK(k.clone(), at(x())),
             Atom::Members(c.clone()),
-            Atom::TargetsOf(k.clone(), a(x())),
-            Atom::IsFiltered(k.clone(), a(x())),
-            Atom::Succs(k.clone(), a(x())),
-            Atom::Chain(k.clone(), a(x())),
-            Atom::Tip(k.clone(), a(x())),
-            Atom::IsInChain(k.clone(), a(x()), a(y())),
-            Atom::SourcesTo(k.clone(), a(x())),
-            Atom::TargetOf(k.clone(), a(x())),
-            Atom::TargetsKeyed(a(x())),
-            Atom::Age(k.clone(), a(x())),
-            Atom::Stale(k.clone(), a(x())),
-            Atom::IsDoc(a(x())),
+            Atom::TargetsOf(k.clone(), at(x())),
+            Atom::IsFiltered(k.clone(), at(x())),
+            Atom::Succs(k.clone(), at(x())),
+            Atom::Chain(k.clone(), at(x())),
+            Atom::Tip(k.clone(), at(x())),
+            Atom::IsInChain(k.clone(), at(x()), at(y())),
+            Atom::SourcesTo(k.clone(), at(x())),
+            Atom::TargetOf(k.clone(), at(x())),
+            Atom::TargetsKeyed(at(x())),
+            Atom::Age(k.clone(), at(x())),
+            Atom::Stale(k.clone(), at(x())),
+            Atom::IsDoc(at(x())),
             Atom::TupAddr(v(3)),
             Atom::TupAddrsF(v(3)),
             Atom::TupAddrsG(v(3)),
-            Atom::InCoverageF(a(x()), v(3)),
-            Atom::InCoverageG(a(x()), v(3)),
+            Atom::InCoverageF(at(x()), v(3)),
+            Atom::InCoverageG(at(x()), v(3)),
         ]
         .into_iter()
         .map(Term::Atom);
         let prims = [
-            Prim::AddrEq(a(x()), a(y())),
-            Prim::Prefix(a(x()), a(y())),
-            Prim::T1Lt(a(x()), a(y())),
-            Prim::SetMem(a(x()), a(y())),
-            Prim::SetEq(a(x()), a(y())),
-            Prim::IsEmpty(a(x())),
-            Prim::Elems(a(x())),
-            Prim::NatEq(a(x()), a(y())),
-            Prim::NatLe(a(x()), a(y())),
-            Prim::NatAdd(a(x()), a(y())),
-            Prim::MapGet(a(x()), c.clone()),
-            Prim::Def(a(x())),
+            Prim::AddrEq(at(x()), at(y())),
+            Prim::Prefix(at(x()), at(y())),
+            Prim::T1Lt(at(x()), at(y())),
+            Prim::SetMem(at(x()), at(y())),
+            Prim::SetEq(at(x()), at(y())),
+            Prim::IsEmpty(at(x())),
+            Prim::Elems(at(x())),
+            Prim::NatEq(at(x()), at(y())),
+            Prim::NatLe(at(x()), at(y())),
+            Prim::NatAdd(at(x()), at(y())),
+            Prim::MapGet(at(x()), c.clone()),
+            Prim::Def(at(x())),
         ]
         .into_iter()
         .map(Term::Prim);
         let formers = [
-            Term::Or(a(x()), a(y())),
-            Term::Not(a(x())),
-            Term::Implies(a(x()), a(y())),
-            Term::Iff(a(x()), a(y())),
-            Term::Forall { var: v(5), dom: d(Dom::MembersDom(k.clone())), body: a(x()) },
-            Term::Exists { var: v(5), dom: d(Dom::ActiveSlice(k.clone())), body: a(x()) },
-            Term::Let { var: v(6), bound: a(x()), body: a(y()) },
-            Term::IfSome { opt: a(x()), var: v(7), then_: a(y()), else_: a(x()) },
-            Term::Count(d(Dom::AuditSlice(c))),
-            Term::MaxT1(d(Dom::LinkDom)),
-            Term::MinT1(d(Dom::Reg)),
+            Term::Or(at(x()), at(y())),
+            Term::Not(at(x())),
+            Term::Implies(at(x()), at(y())),
+            Term::Iff(at(x()), at(y())),
+            Term::Forall { var: v(5), dom: ad(Dom::MembersDom(k.clone())), body: at(x()) },
+            Term::Exists { var: v(5), dom: ad(Dom::ActiveSlice(k.clone())), body: at(x()) },
+            Term::Let { var: v(6), bound: at(x()), body: at(y()) },
+            Term::IfSome { opt: at(x()), var: v(7), then_: at(y()), else_: at(x()) },
+            Term::Count(ad(Dom::AuditSlice(c))),
+            Term::MaxT1(ad(Dom::LinkDom)),
+            Term::MinT1(ad(Dom::Reg)),
             Term::BigUnion {
-                dom: d(Dom::Filter { dom: d(Dom::LinkDom), var: v(4), pred: a(x()) }),
+                dom: ad(Dom::Filter { dom: ad(Dom::LinkDom), var: v(4), pred: at(x()) }),
                 var: v(8),
-                body: a(y()),
+                body: at(y()),
             },
-            Term::Reflect(d(Dom::SetTerm(a(x())))),
-            Term::Ref { addr: ad(&[1, 0, 1, 0, 1, 0, 1, 4]), args: vec![a(x()), a(y())] },
+            Term::Reflect(ad(Dom::SetTerm(at(x())))),
+            Term::Ref { addr: a(&[1, 0, 1, 0, 1, 0, 1, 4]), args: vec![at(x()), at(y())] },
         ];
         // `And` is the spine, so it is spelled by the fold itself.
         let body = lits
             .chain(atoms)
             .chain(prims)
             .chain(formers)
-            .reduce(|l, r| Term::And(a(l), a(r)))
+            .reduce(|l, r| Term::And(at(l), at(r)))
             .expect("nonempty");
         let params = vec![
             (v(1), Sort::Bool),

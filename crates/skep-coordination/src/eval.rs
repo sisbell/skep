@@ -73,7 +73,7 @@ pub(crate) fn lift(t: &Tumbler) -> Address {
     validate(t.clone()).expect("PL set elements are store-minted, T4-valid addresses")
 }
 
-pub(crate) fn truthy(v: Value) -> bool {
+pub(crate) fn as_bool(v: Value) -> bool {
     match v {
         Value::Bool(b) => b,
         other => unreachable!("well-typed Bool position held {other:?}"),
@@ -110,7 +110,7 @@ fn tuple_var<'e>(env: &'e Env, v: &VarId) -> &'e Tuple {
     }
 }
 
-fn concrete(tr: &TypeRef) -> &TypeKey {
+fn key(tr: &TypeRef) -> &TypeKey {
     match tr {
         TypeRef::Concrete(k) => k,
         TypeRef::ClassVar(v) => {
@@ -225,7 +225,7 @@ impl<'a, W> EvalCtx<'a, W> {
     /// (none in this format; the type checker keeps the atom out of the
     /// vocabulary while that holds) — keyed by coverage class, each answered
     /// over the visible slice.
-    fn targets_keyed_at(&self, source: &Address) -> im::HashMap<CoverageClass, Address> {
+    fn targets_keyed(&self, source: &Address) -> im::HashMap<CoverageClass, Address> {
         let mut out = im::HashMap::new();
         for (class, endset) in self.catalog.bh3() {
             if let Some(target) = self.links.target_of(endset, source) {
@@ -256,24 +256,24 @@ pub(crate) fn eval_term<W>(cx: &EvalCtx<'_, W>, env: &Env, t: &Term) -> Value {
         },
         Term::Atom(a) => eval_atom(cx, env, a),
         Term::Prim(p) => eval_prim(cx, env, p),
-        Term::And(a, b) => Value::Bool(truthy(eval_term(cx, env, a)) && truthy(eval_term(cx, env, b))),
-        Term::Or(a, b) => Value::Bool(truthy(eval_term(cx, env, a)) || truthy(eval_term(cx, env, b))),
-        Term::Not(a) => Value::Bool(!truthy(eval_term(cx, env, a))),
+        Term::And(a, b) => Value::Bool(as_bool(eval_term(cx, env, a)) && as_bool(eval_term(cx, env, b))),
+        Term::Or(a, b) => Value::Bool(as_bool(eval_term(cx, env, a)) || as_bool(eval_term(cx, env, b))),
+        Term::Not(a) => Value::Bool(!as_bool(eval_term(cx, env, a))),
         Term::Implies(a, b) => {
-            Value::Bool(!truthy(eval_term(cx, env, a)) || truthy(eval_term(cx, env, b)))
+            Value::Bool(!as_bool(eval_term(cx, env, a)) || as_bool(eval_term(cx, env, b)))
         }
-        Term::Iff(a, b) => Value::Bool(truthy(eval_term(cx, env, a)) == truthy(eval_term(cx, env, b))),
+        Term::Iff(a, b) => Value::Bool(as_bool(eval_term(cx, env, a)) == as_bool(eval_term(cx, env, b))),
         // Short-circuit: ∀ stops at the first counterexample, ∃ at the first
         // witness (over the materialized slice — §Internal 2 tradeoff).
         Term::Forall { var, dom, body } => Value::Bool(
             enum_dom(cx, env, dom)
                 .into_iter()
-                .all(|e| truthy(eval_term(cx, &env.bind(*var, Value::from(e)), body))),
+                .all(|e| as_bool(eval_term(cx, &env.bind(*var, Value::from(e)), body))),
         ),
         Term::Exists { var, dom, body } => Value::Bool(
             enum_dom(cx, env, dom)
                 .into_iter()
-                .any(|e| truthy(eval_term(cx, &env.bind(*var, Value::from(e)), body))),
+                .any(|e| as_bool(eval_term(cx, &env.bind(*var, Value::from(e)), body))),
         ),
         Term::Let { var, bound, body } => {
             let b = eval_term(cx, env, bound);
@@ -345,30 +345,30 @@ pub(crate) fn eval_term<W>(cx: &EvalCtx<'_, W>, env: &Env, t: &Term) -> Value {
 fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
     match a {
         Atom::IsK(tr, e) => {
-            let k = concrete(tr);
+            let k = key(tr);
             let x = as_addr(eval_term(cx, env, e));
             Value::Bool(cx.is_k_at(k, &x, cx.view))
         }
-        Atom::Members(tr) => Value::AddrSet(cx.members_at(concrete(tr), cx.view)),
+        Atom::Members(tr) => Value::AddrSet(cx.members_at(key(tr), cx.view)),
         Atom::TargetsOf(tr, e) => {
             let x = as_addr(eval_term(cx, env, e));
-            Value::AddrSet(cx.targets_of_at(concrete(tr), &x, cx.view))
+            Value::AddrSet(cx.targets_of_at(key(tr), &x, cx.view))
         }
         // BH1: is_filtered_J ≡ is_k(J, ·) — D2, J's own active membership.
         Atom::IsFiltered(tr, e) => {
-            let k = concrete(tr);
+            let k = key(tr);
             let x = as_addr(eval_term(cx, env, e));
             Value::Bool(cx.links.is_k(&k.0, x.tumbler()))
         }
         Atom::Succs(tr, e) => {
-            let k = concrete(tr);
+            let k = key(tr);
             let x = as_addr(eval_term(cx, env, e));
             let set: OrdSet<Tumbler> =
                 cx.links.succs(&k.0, &x).into_iter().map(|a| a.tumbler().clone()).collect();
             Value::AddrSet(cx.uv_drop(k, set))
         }
         Atom::Chain(tr, e) => {
-            let k = concrete(tr);
+            let k = key(tr);
             let x = as_addr(eval_term(cx, env, e));
             let chain = cx.links.chain(&k.0, &x);
             let seq: im::Vector<Address> = if cx.view == View::Default {
@@ -385,7 +385,7 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
         // Verdict/traversal atoms are never UV-rewritten (UV): unfiltered
         // active walk.
         Atom::Tip(tr, e) => {
-            let k = concrete(tr);
+            let k = key(tr);
             let x = as_addr(eval_term(cx, env, e));
             Value::OptAddr(match cx.links.tip(&k.0, &x) {
                 Tip::Sink(a) => Some(a),
@@ -393,32 +393,32 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
             })
         }
         Atom::IsInChain(tr, e1, e2) => {
-            let k = concrete(tr);
+            let k = key(tr);
             let x = as_addr(eval_term(cx, env, e1));
             let y = as_addr(eval_term(cx, env, e2));
             Value::Bool(cx.links.is_in_chain(&k.0, &x, &y))
         }
         Atom::SourcesTo(tr, e) => {
-            let k = concrete(tr);
+            let k = key(tr);
             let x = as_addr(eval_term(cx, env, e));
             let set: OrdSet<Tumbler> =
                 cx.links.sources_to(&k.0, &x).into_iter().map(|a| a.tumbler().clone()).collect();
             Value::AddrSet(cx.uv_drop(k, set))
         }
         Atom::TargetOf(tr, e) => {
-            let k = concrete(tr);
+            let k = key(tr);
             let x = as_addr(eval_term(cx, env, e));
             Value::OptAddr(cx.links.target_of(&k.0, &x))
         }
         Atom::TargetsKeyed(e) => {
             let x = as_addr(eval_term(cx, env, e));
-            Value::Map(cx.targets_keyed_at(&x))
+            Value::Map(cx.targets_keyed(&x))
         }
         // BH4 totalization (ASN-0129): age(a) = ⊥ exactly when `a` is not
         // the address of an ACTIVE K-tuple — a tuple-identity test, not
         // is_k's coverage-of-F membership.
         Atom::Age(tr, e) => {
-            let k = concrete(tr);
+            let k = key(tr);
             let a = as_addr(eval_term(cx, env, e));
             let active_k_tuple = cx
                 .links
@@ -435,7 +435,7 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
         // Saturating Nat→u64 at the seam: a horizon ≥ 2^64 ⇒ stale = ∅ (all
         // non-stale) — never a wrapping truncation.
         Atom::Stale(tr, e) => {
-            let k = concrete(tr);
+            let k = key(tr);
             let h = as_nat(eval_term(cx, env, e));
             let h64 = u64::try_from(&h).unwrap_or(u64::MAX);
             let stale = cx
@@ -487,7 +487,7 @@ fn eval_prim<W>(cx: &EvalCtx<'_, W>, env: &Env, p: &Prim) -> Value {
         // coverage_class on user input); an absent key — non-BH3 K included —
         // denotes ⊥.
         Prim::MapGet(m, tr) => {
-            let k = concrete(tr);
+            let k = key(tr);
             let class = cx.class_of(k);
             match ev(m) {
                 Value::Map(map) => Value::OptAddr(map.get(class).cloned()),
@@ -511,19 +511,19 @@ pub(crate) fn enum_dom<W>(cx: &EvalCtx<'_, W>, env: &Env, d: &Dom) -> Vec<Arg> {
     match d {
         // M_K at the TERM view (view-parameterized domain).
         Dom::MembersDom(tr) => cx
-            .members_at(concrete(tr), cx.view)
+            .members_at(key(tr), cx.view)
             .iter()
             .map(|t| Arg::Addr(lift(t)))
             .collect(),
         Dom::ActiveSlice(tr) => cx
             .links
-            .observe(&concrete(tr).0, Pattern::default(), View::Active)
+            .observe(&key(tr).0, Pattern::default(), View::Active)
             .into_iter()
             .map(Arg::Tuple)
             .collect(),
         Dom::AuditSlice(tr) => cx
             .links
-            .observe(&concrete(tr).0, Pattern::default(), View::Audit)
+            .observe(&key(tr).0, Pattern::default(), View::Audit)
             .into_iter()
             .map(Arg::Tuple)
             .collect(),
@@ -542,7 +542,7 @@ pub(crate) fn enum_dom<W>(cx: &EvalCtx<'_, W>, env: &Env, d: &Dom) -> Vec<Arg> {
         Dom::Reg => unreachable!("no Reg domain survives type_check's Reg-expansion/folding"),
         Dom::Filter { dom, var, pred } => enum_dom(cx, env, dom)
             .into_iter()
-            .filter(|e| truthy(eval_term(cx, &env.bind(*var, Value::from(e.clone())), pred)))
+            .filter(|e| as_bool(eval_term(cx, &env.bind(*var, Value::from(e.clone())), pred)))
             .collect(),
         Dom::SetTerm(t) => {
             let s = as_set(eval_term(cx, env, t));

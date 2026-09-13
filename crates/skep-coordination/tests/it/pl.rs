@@ -39,7 +39,7 @@ fn catalog_projects_and_serves_reserved_endsets() {
 /// extended, a later binding of a name shadowing an earlier one as `bind`
 /// does.
 #[test]
-fn varid_reservation_and_env_binding() {
+fn varid_new_stops_at_the_watershed_and_env_binds_functionally() {
     assert!(VarId::new(EXPANSION_NAME_BASE).is_none());
     assert!(VarId::new(EXPANSION_NAME_BASE - 1).is_some());
     let base = Env::empty();
@@ -117,7 +117,7 @@ fn rejections_display_and_chain_to_their_cause() {
 /// Γ_D is part of the checking judgment: unbound vars, the def-path/
 /// trigger-path Tup split, sort synthesis, and the catalog/behavior guards.
 #[test]
-fn type_check_gamma_and_catalog_guards() {
+fn type_check_refuses_at_each_gamma_and_catalog_gate() {
     let k = kernel();
     let c = coord(&k);
 
@@ -130,7 +130,7 @@ fn type_check_gamma_and_catalog_guards() {
         Err(TypeError::TupParameter(_))
     ));
     let one_tup = c
-        .type_check_trigger((v(1), Sort::Tup), in_cov_f(lit_addr(&ca(1)), 1))
+        .type_check_trigger((v(1), Sort::Tup), in_coverage_f(lit_addr(&ca(1)), 1))
         .expect("a one-Tup-parameter Bool trigger");
     assert_eq!(one_tup.param(), &(v(1), Sort::Tup));
     assert!(matches!(
@@ -178,7 +178,7 @@ fn type_check_gamma_and_catalog_guards() {
 /// bare `Reg` in every position outside ∀/∃/`Count`, and the behavior
 /// guards of the BH1/BH2/BH4 atoms — each its own typed rejection.
 #[test]
-fn type_check_edges() {
+fn type_check_refuses_each_documented_edge_by_name() {
     let k = kernel();
     let c = coord(&k);
     let (p, _) = c
@@ -203,7 +203,7 @@ fn type_check_edges() {
     // The binder guard and `def` take an optional; the two branches agree.
     let opt_for_bool = || Some(TypeError::SortMismatch { expected: Sort::OptAddr, found: Sort::Bool });
     assert_eq!(c.type_check(vec![], if_some(tru(), 2, tru(), tru())).err(), opt_for_bool());
-    assert_eq!(c.type_check(vec![], def_(tru())).err(), opt_for_bool());
+    assert_eq!(c.type_check(vec![], def(tru())).err(), opt_for_bool());
     assert_eq!(
         c.type_check(vec![], if_some(bot_addr(), 2, tru(), lit_nat(1))).err(),
         Some(TypeError::SortMismatch { expected: Sort::Bool, found: Sort::Nat })
@@ -230,11 +230,11 @@ fn type_check_edges() {
         Err(TypeError::BehaviorMissing { needs: Behavior::Age, .. })
     ));
     assert!(matches!(
-        c.type_check(vec![], Term::Atom(Atom::Stale(conc(&marker_ty()), at(lit_nat(1))))),
+        c.type_check(vec![], Term::Atom(Atom::Stale(conc(&retired_ty()), at(lit_nat(1))))),
         Err(TypeError::BehaviorMissing { needs: Behavior::Age, .. })
     ));
     assert!(matches!(
-        c.type_check(vec![], succs(&marker_ty(), lit_addr(&ca(1)))),
+        c.type_check(vec![], succs(&retired_ty(), lit_addr(&ca(1)))),
         Err(TypeError::BehaviorMissing { needs: Behavior::Walk, .. })
     ));
     assert!(matches!(
@@ -283,10 +283,10 @@ fn type_check_refuses_a_term_nested_past_the_cap() {
 /// Reg-quantifiers expand per class; an instance-wise ill-typed body rejects
 /// whole.
 #[test]
-fn reg_expansion_folds_instantiates_and_rejects() {
+fn reg_expansion_folds_count_instantiates_per_class_and_refuses_an_ill_typed_instance() {
     let k = kernel();
     let c = coord(&k);
-    let ls = links(&k);
+    let writer = link_writer(&k);
 
     // The whole population: the shipped five.
     assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::Reg), lit_nat(5))));
@@ -305,7 +305,7 @@ fn reg_expansion_folds_instantiates_and_rejects() {
         .expect("Reg-quantified IsK body type-checks");
     let env = Env::empty().bind(v(1), Value::Addr(ca(5)));
     assert!(!c.decide(&ex, &env, View::Active, &k.snapshot()));
-    ls.emit(Caller::System, &doc1(), &pred_def_ty(), &ca(5), &[]).expect("pred_def emit");
+    writer.emit(Caller::System, &doc1(), &pred_def_ty(), &ca(5), &[]).expect("pred_def emit");
     assert!(c.decide(&ex, &env, View::Active, &k.snapshot()));
 
     // A class-indexed behavior atom at the bound class dies by instantiation
@@ -332,7 +332,7 @@ fn reg_expansion_folds_instantiates_and_rejects() {
 fn an_inner_reg_binder_shadows_the_outer() {
     let k = kernel();
     let c = coord(&k);
-    links(&k).emit(Caller::System, &doc1(), &pred_def_ty(), &ca(5), &[]).expect("pred_def on ca5");
+    link_writer(&k).emit(Caller::System, &doc1(), &pred_def_ty(), &ca(5), &[]).expect("pred_def on ca5");
     let is_k7 = || Term::Atom(Atom::IsK(TypeRef::ClassVar(v(7)), at(var(1))));
     let shadowed = c
         .type_check(vec![(v(1), Sort::Addr)], exists(7, Dom::Reg, forall(7, Dom::Reg, is_k7())))
@@ -353,7 +353,7 @@ fn an_inner_reg_binder_shadows_the_outer() {
 fn a_coverage_equal_but_byte_different_key_misses() {
     let k = kernel();
     let c = coord(&k);
-    let canonical = enc(&[ra(1)]);
+    let canonical = pred_def_ty();
     let dup = Endset::from_spans(canonical.spans().cloned().chain(canonical.spans().cloned()));
     assert_ne!(dup, canonical);
     assert_eq!(coverage_class(&dup), coverage_class(&canonical));
@@ -370,41 +370,40 @@ fn a_coverage_equal_but_byte_different_key_misses() {
 /// `K_queried` self-exclusion (settled OQ1), `L_dom`, reflection, BH3, the
 /// binder guard, and `is_doc`.
 #[test]
-fn eval_views_uv_rewrite_and_atoms() {
+fn a_verdict_reads_its_view_s_slice_and_uv_drops_only_other_bh1_classes() {
     let k = kernel();
     let c = coord(&k);
-    let ls = links(&k);
-    let retired = c.reserved_type(ShippedType::Retired).clone();
+    let writer = link_writer(&k);
 
-    let t1 = deposit_rel(&k, 2, &ca(1), &ca(2)); // pred_stable class, F=ca1, G=ca2
-    deposit_rel(&k, 2, &ca(3), &ca(2));
+    let t1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2)); // pred_stable class, F=ca1, G=ca2
+    deposit_rel(&k, PRED_STABLE, &ca(3), &ca(2));
 
     // is_K / member counting / L_dom / reflection membership.
-    assert!(decide_now(&k, &c, View::Active, is_k_t(&pred_stable_ty(), lit_addr(&ca(1)))));
+    assert!(decide_now(&k, &c, View::Active, is_k(&pred_stable_ty(), lit_addr(&ca(1)))));
     assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::MembersDom(conc(&pred_stable_ty()))), lit_nat(2))));
     assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::LinkDom), lit_nat(2))));
     assert!(decide_now(&k, &c, View::Active, set_mem(lit_addr(&la(1)), reflect(Dom::LinkDom))));
 
     // Retraction: the active reading shrinks, the audit reading persists —
     // the term view selects (PR-VIEW: the view is an eval parameter).
-    ls.nullify(Caller::System, &doc1(), &t1).expect("retract rel 1");
-    assert!(!decide_now(&k, &c, View::Active, is_k_t(&pred_stable_ty(), lit_addr(&ca(1)))));
-    assert!(decide_now(&k, &c, View::Audit, is_k_t(&pred_stable_ty(), lit_addr(&ca(1)))));
+    writer.nullify(Caller::System, &doc1(), &t1).expect("retract rel 1");
+    assert!(!decide_now(&k, &c, View::Active, is_k(&pred_stable_ty(), lit_addr(&ca(1)))));
+    assert!(decide_now(&k, &c, View::Audit, is_k(&pred_stable_ty(), lit_addr(&ca(1)))));
     // The audit tuple slice still carries t1 (∃ t ∈ L_rel :: ca1 ∈ cov_F(t)).
     assert!(decide_now(
         &k,
         &c,
         View::Active,
-        exists(1, Dom::AuditSlice(conc(&pred_stable_ty())), in_cov_f(lit_addr(&ca(1)), 1))
+        exists(1, Dom::AuditSlice(conc(&pred_stable_ty())), in_coverage_f(lit_addr(&ca(1)), 1))
     ));
 
     // UV default view: members(K, default) drops elements filtered by BH1
     // types OTHER than K — and never by K itself (retired is unfiltered in
     // its own default reading — the OQ1 commitment).
-    ls.emit(Caller::System, &doc1(), &retired, &ca(3), &[]).expect("retire ca3");
+    writer.emit(Caller::System, &doc1(), &retired_ty(), &ca(3), &[]).expect("retire ca3");
     assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::MembersDom(conc(&pred_stable_ty()))), lit_nat(1))));
     assert!(decide_now(&k, &c, View::Default, nat_eq(count(Dom::MembersDom(conc(&pred_stable_ty()))), lit_nat(0))));
-    assert!(decide_now(&k, &c, View::Default, nat_eq(count(Dom::MembersDom(conc(&retired))), lit_nat(1))));
+    assert!(decide_now(&k, &c, View::Default, nat_eq(count(Dom::MembersDom(conc(&retired_ty()))), lit_nat(1))));
 
     // V-DOC: residence is M3 registration.
     assert!(decide_now(&k, &c, View::Active, is_doc(lit_addr(&doc1()))));
@@ -423,11 +422,11 @@ fn eval_views_uv_rewrite_and_atoms() {
 fn is_k_at_default_is_never_uv_filtered() {
     let k = kernel();
     let c = coord(&k);
-    let ls = links(&k);
-    ls.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("rel");
-    ls.emit(Caller::System, &doc1(), &marker_ty(), &ca(3), &[]).expect("retire ca3");
+    let writer = link_writer(&k);
+    writer.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("rel");
+    writer.emit(Caller::System, &doc1(), &retired_ty(), &ca(3), &[]).expect("retire ca3");
     assert!(decide_now(&k, &c, View::Default, nat_eq(count(Dom::MembersDom(conc(&pred_stable_ty()))), lit_nat(0))));
-    assert!(decide_now(&k, &c, View::Default, is_k_t(&pred_stable_ty(), lit_addr(&ca(3)))));
+    assert!(decide_now(&k, &c, View::Default, is_k(&pred_stable_ty(), lit_addr(&ca(3)))));
 }
 
 /// UV on the target side: `targets_of(K, x)@default` drops the targets
@@ -437,16 +436,16 @@ fn is_k_at_default_is_never_uv_filtered() {
 fn targets_of_at_default_drops_filtered_targets() {
     let k = kernel();
     let c = coord(&k);
-    deposit_rel(&k, 2, &ca(1), &ca(2));
-    deposit_rel(&k, 2, &ca(1), &ca(4));
-    links(&k).emit(Caller::System, &doc1(), &marker_ty(), &ca(4), &[]).expect("retire ca4");
+    deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
+    deposit_rel(&k, PRED_STABLE, &ca(1), &ca(4));
+    link_writer(&k).emit(Caller::System, &doc1(), &retired_ty(), &ca(4), &[]).expect("retire ca4");
     let tof = || targets_of(&pred_stable_ty(), lit_addr(&ca(1)));
     assert!(decide_now(&k, &c, View::Active, nat_eq(count_set(tof()), lit_nat(2))));
     assert!(decide_now(&k, &c, View::Default, nat_eq(count_set(tof()), lit_nat(1))));
     assert!(!decide_now(&k, &c, View::Default, set_mem(lit_addr(&ca(4)), tof())));
     assert!(decide_now(&k, &c, View::Default, set_mem(lit_addr(&ca(2)), tof())));
-    assert!(decide_now(&k, &c, View::Active, is_filtered(&marker_ty(), lit_addr(&ca(4)))));
-    assert!(!decide_now(&k, &c, View::Active, is_filtered(&marker_ty(), lit_addr(&ca(2)))));
+    assert!(decide_now(&k, &c, View::Active, is_filtered(&retired_ty(), lit_addr(&ca(4)))));
+    assert!(!decide_now(&k, &c, View::Active, is_filtered(&retired_ty(), lit_addr(&ca(2)))));
 }
 
 /// `targets_of` matches its source by COVERAGE of F at `Active`/`Default`
@@ -460,7 +459,7 @@ fn targets_of_matches_the_source_by_coverage_at_active_and_by_denotation_at_audi
     let c = coord(&k);
     // F = enc({doc1}): its coverage is doc1's whole subtree, its denotation
     // the one address doc1.
-    deposit_rel(&k, 2, &doc1(), &ca(2));
+    deposit_rel(&k, PRED_STABLE, &doc1(), &ca(2));
     let under = || targets_of(&pred_stable_ty(), lit_addr(&ca(1)));
     let denoted = || targets_of(&pred_stable_ty(), lit_addr(&doc1()));
     assert!(decide_now(&k, &c, View::Active, set_mem(lit_addr(&ca(2)), under())));
@@ -469,7 +468,7 @@ fn targets_of_matches_the_source_by_coverage_at_active_and_by_denotation_at_audi
     for view in [View::Active, View::Default, View::Audit] {
         assert!(decide_now(&k, &c, view, set_mem(lit_addr(&ca(2)), denoted())), "{view:?}");
         assert!(
-            decide_now(&k, &c, view, is_k_t(&pred_stable_ty(), lit_addr(&ca(1)))),
+            decide_now(&k, &c, view, is_k(&pred_stable_ty(), lit_addr(&ca(1)))),
             "is_K matches by coverage at {view:?}"
         );
     }
@@ -481,16 +480,16 @@ fn targets_of_matches_the_source_by_coverage_at_active_and_by_denotation_at_audi
 /// FIRST argument, so it runs one way; `current_version` is `tip` at the
 /// shipped class.
 #[test]
-fn bh2_walk_over_a_linear_lineage() {
+fn over_a_linear_lineage_the_tip_is_the_sink_and_the_chain_runs_forward() {
     let k = kernel();
     let c = coord(&k);
     let sup = c.reserved_type(ShippedType::Supersedes).clone();
-    let l1 = deposit_rel(&k, 2, &ca(1), &ca(2));
-    let l2 = deposit_rel(&k, 2, &ca(3), &ca(4));
-    let l3 = deposit_rel(&k, 2, &ca(5), &ca(6));
-    let ls = links(&k);
-    ls.assert_sup(Caller::System, &doc1(), &l1, &l2).expect("l1 → l2");
-    ls.assert_sup(Caller::System, &doc1(), &l2, &l3).expect("l2 → l3");
+    let l1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
+    let l2 = deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
+    let l3 = deposit_rel(&k, PRED_STABLE, &ca(5), &ca(6));
+    let writer = link_writer(&k);
+    writer.assert_sup(Caller::System, &doc1(), &l1, &l2).expect("l1 → l2");
+    writer.assert_sup(Caller::System, &doc1(), &l2, &l3).expect("l2 → l3");
     let d = |t: Term| decide_now(&k, &c, View::Active, t);
 
     assert!(d(set_mem(lit_addr(&l2), succs(&sup, lit_addr(&l1)))));
@@ -515,26 +514,26 @@ fn bh2_tip_is_indeterminate_at_a_branch_and_a_cycle() {
     let k = kernel();
     let c = coord(&k);
     let sup = c.reserved_type(ShippedType::Supersedes).clone();
-    let l1 = deposit_rel(&k, 2, &ca(1), &ca(2));
-    let l2 = deposit_rel(&k, 2, &ca(3), &ca(4));
-    let l3 = deposit_rel(&k, 2, &ca(5), &ca(6));
-    let l4 = deposit_rel(&k, 2, &ca(7), &ca(8));
-    let l5 = deposit_rel(&k, 2, &ca(9), &ca(10));
-    let ls = links(&k);
-    ls.assert_sup(Caller::System, &doc1(), &l1, &l2).expect("l1 → l2");
-    ls.assert_sup(Caller::System, &doc1(), &l1, &l3).expect("l1 → l3: a branch");
-    ls.assert_sup(Caller::System, &doc1(), &l4, &l5).expect("l4 → l5");
-    ls.assert_sup(Caller::System, &doc1(), &l5, &l4).expect("l5 → l4: a cycle");
+    let l1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
+    let l2 = deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
+    let l3 = deposit_rel(&k, PRED_STABLE, &ca(5), &ca(6));
+    let l4 = deposit_rel(&k, PRED_STABLE, &ca(7), &ca(8));
+    let l5 = deposit_rel(&k, PRED_STABLE, &ca(9), &ca(10));
+    let writer = link_writer(&k);
+    writer.assert_sup(Caller::System, &doc1(), &l1, &l2).expect("l1 → l2");
+    writer.assert_sup(Caller::System, &doc1(), &l1, &l3).expect("l1 → l3: a branch");
+    writer.assert_sup(Caller::System, &doc1(), &l4, &l5).expect("l4 → l5");
+    writer.assert_sup(Caller::System, &doc1(), &l5, &l4).expect("l5 → l4: a cycle");
     let d = |t: Term| decide_now(&k, &c, View::Active, t);
 
     // The branch.
-    assert!(!d(def_(tip(&sup, lit_addr(&l1)))));
+    assert!(!d(def(tip(&sup, lit_addr(&l1)))));
     assert!(d(nat_eq(count_set(succs(&sup, lit_addr(&l1))), lit_nat(2))));
     assert!(d(nat_eq(count_set(elems(chain(&sup, lit_addr(&l1)))), lit_nat(1))));
     assert!(!d(is_in_chain(&sup, lit_addr(&l1), lit_addr(&l2))), "the chain halts at the branch");
     assert_eq!(c.current_version(&l1, &k.snapshot()), Tip::Indeterminate);
     // The cycle.
-    assert!(!d(def_(tip(&sup, lit_addr(&l4)))));
+    assert!(!d(def(tip(&sup, lit_addr(&l4)))));
     assert!(d(nat_eq(count_set(elems(chain(&sup, lit_addr(&l4)))), lit_nat(2))));
     assert!(d(is_in_chain(&sup, lit_addr(&l4), lit_addr(&l5))));
     assert!(d(is_in_chain(&sup, lit_addr(&l5), lit_addr(&l4))));
@@ -550,13 +549,13 @@ fn uv_drops_retired_elements_from_chain_and_succs_but_never_from_the_walk() {
     let k = kernel();
     let c = coord(&k);
     let sup = c.reserved_type(ShippedType::Supersedes).clone();
-    let l1 = deposit_rel(&k, 2, &ca(1), &ca(2));
-    let l2 = deposit_rel(&k, 2, &ca(3), &ca(4));
-    let l3 = deposit_rel(&k, 2, &ca(5), &ca(6));
-    let ls = links(&k);
-    ls.assert_sup(Caller::System, &doc1(), &l1, &l2).expect("l1 → l2");
-    ls.assert_sup(Caller::System, &doc1(), &l2, &l3).expect("l2 → l3");
-    ls.emit(Caller::System, &doc1(), &marker_ty(), &l2, &[]).expect("retire l2");
+    let l1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
+    let l2 = deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
+    let l3 = deposit_rel(&k, PRED_STABLE, &ca(5), &ca(6));
+    let writer = link_writer(&k);
+    writer.assert_sup(Caller::System, &doc1(), &l1, &l2).expect("l1 → l2");
+    writer.assert_sup(Caller::System, &doc1(), &l2, &l3).expect("l2 → l3");
+    writer.emit(Caller::System, &doc1(), &retired_ty(), &l2, &[]).expect("retire l2");
     let chain_len = |view: View, n_: u32| {
         decide_now(&k, &c, view, nat_eq(count_set(elems(chain(&sup, lit_addr(&l1)))), lit_nat(n_)))
     };
@@ -576,9 +575,9 @@ fn uv_drops_retired_elements_from_chain_and_succs_but_never_from_the_walk() {
 #[test]
 fn a_draft_homed_claim_moves_no_walk() {
     let k = kernel();
-    let l1 = deposit_rel(&k, 2, &ca(1), &ca(2));
-    let l2 = deposit_rel(&k, 2, &ca(3), &ca(4));
-    links(&k).assert_sup(Caller::System, &doc2(), &l1, &l2).expect("a claim homed in doc2");
+    let l1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
+    let l2 = deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
+    link_writer(&k).assert_sup(Caller::System, &doc2(), &l1, &l2).expect("a claim homed in doc2");
     let refusing = coord_with_guest(&k, Box::new(|_: &World, d: &Address| *d != doc2()));
     let sup = refusing.reserved_type(ShippedType::Supersedes).clone();
     assert!(decide_now(&k, &refusing, View::Active, is_empty(succs(&sup, lit_addr(&l1)))));
@@ -596,9 +595,9 @@ fn a_draft_homed_claim_moves_no_walk() {
 fn domains_have_set_semantics_and_binders_bind_the_element() {
     let k = kernel();
     let c = coord(&k);
-    deposit_rel(&k, 2, &ca(1), &ca(2));
-    deposit_rel(&k, 2, &ca(1), &ca(4));
-    deposit_rel(&k, 2, &ca(3), &ca(4));
+    deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
+    deposit_rel(&k, PRED_STABLE, &ca(1), &ca(4));
+    deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
     let ps = pred_stable_ty();
     let d = |t: Term| decide_now(&k, &c, View::Active, t);
 
@@ -616,7 +615,7 @@ fn domains_have_set_semantics_and_binders_bind_the_element() {
     }
     // Filter binds each element, address or tuple.
     assert!(d(nat_eq(count(filter(Dom::MembersDom(conc(&ps)), 2, addr_eq(var(2), lit_addr(&ca(1))))), lit_nat(1))));
-    assert!(d(nat_eq(count(filter(Dom::ActiveSlice(conc(&ps)), 2, in_cov_g(lit_addr(&ca(4)), 2))), lit_nat(2))));
+    assert!(d(nat_eq(count(filter(Dom::ActiveSlice(conc(&ps)), 2, in_coverage_g(lit_addr(&ca(4)), 2))), lit_nat(2))));
     // ⋃ over the tuple slice of each tuple's G; ∀ over each tuple's F.
     let targets = || big_union(Dom::ActiveSlice(conc(&ps)), 2, tup_addrs_g(2));
     assert!(d(nat_eq(count_set(targets()), lit_nat(2))));
@@ -638,21 +637,21 @@ fn domains_have_set_semantics_and_binders_bind_the_element() {
 /// (the else-branch answers, nothing panics), and prefix-smaller order (a
 /// document address is below its elements) — read through the binder guard.
 #[test]
-fn t1_extrema_and_the_binder_guard() {
+fn t1_extrema_answer_max_min_and_bot_through_the_binder_guard() {
     let k = kernel();
     let c = coord(&k);
-    deposit_rel(&k, 2, &ca(1), &ca(2));
-    deposit_rel(&k, 2, &ca(3), &ca(4));
-    let ps = || Dom::MembersDom(conc(&pred_stable_ty()));
+    deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
+    deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
+    let stable_dom = || Dom::MembersDom(conc(&pred_stable_ty()));
     let d = |t: Term| decide_now(&k, &c, View::Active, t);
-    assert!(d(if_some(Term::MaxT1(ad(ps())), 2, addr_eq(var(2), lit_addr(&ca(3))), fls())));
-    assert!(d(if_some(Term::MinT1(ad(ps())), 2, addr_eq(var(2), lit_addr(&ca(1))), fls())));
-    let none = || Dom::MembersDom(conc(&marker_ty()));
-    assert!(!d(def_(Term::MaxT1(ad(none())))));
-    assert!(d(if_some(Term::MinT1(ad(none())), 2, fls(), tru())));
-    deposit_rel(&k, 2, &doc1(), &ca(6));
-    assert!(d(if_some(Term::MinT1(ad(ps())), 2, addr_eq(var(2), lit_addr(&doc1())), fls())));
-    assert!(d(if_some(Term::MaxT1(ad(ps())), 2, addr_eq(var(2), lit_addr(&ca(3))), fls())));
+    assert!(d(if_some(Term::MaxT1(ad(stable_dom())), 2, addr_eq(var(2), lit_addr(&ca(3))), fls())));
+    assert!(d(if_some(Term::MinT1(ad(stable_dom())), 2, addr_eq(var(2), lit_addr(&ca(1))), fls())));
+    let empty_dom = || Dom::MembersDom(conc(&marker_ty()));
+    assert!(!d(def(Term::MaxT1(ad(empty_dom())))));
+    assert!(d(if_some(Term::MinT1(ad(empty_dom())), 2, fls(), tru())));
+    deposit_rel(&k, PRED_STABLE, &doc1(), &ca(6));
+    assert!(d(if_some(Term::MinT1(ad(stable_dom())), 2, addr_eq(var(2), lit_addr(&doc1())), fls())));
+    assert!(d(if_some(Term::MaxT1(ad(stable_dom())), 2, addr_eq(var(2), lit_addr(&ca(3))), fls())));
 }
 
 /// V-PRIM at the equal cases: ≼ is reflexive and directed, T1's order is
@@ -660,7 +659,7 @@ fn t1_extrema_and_the_binder_guard() {
 /// sorts, the set prims on the empty set — and the connectives over every
 /// cell of their tables.
 #[test]
-fn prims_at_their_equal_cases() {
+fn prims_answer_their_equal_cases_and_the_connectives_their_tables() {
     let k = kernel();
     let c = coord(&k);
     let d = |t: Term| decide_now(&k, &c, View::Active, t);
@@ -675,8 +674,8 @@ fn prims_at_their_equal_cases() {
     assert!(d(nat_eq(nat_add(lit_nat(1), lit_nat(2)), lit_nat(3))));
     assert!(d(nat_le(lit_nat(3), lit_nat(3))));
     assert!(!d(nat_le(lit_nat(4), lit_nat(3))));
-    assert!(!d(def_(bot_addr())));
-    assert!(!d(def_(bot_nat())));
+    assert!(!d(def(bot_addr())));
+    assert!(!d(def(bot_nat())));
     assert!(d(if_some(bot_nat(), 2, fls(), tru())));
     assert!(d(is_empty(members(&marker_ty()))));
     assert!(d(set_eq(members(&marker_ty()), members(&marker_ty()))));
@@ -699,9 +698,9 @@ fn a_verdict_is_as_of_its_snapshot() {
     let k = kernel();
     let c = coord(&k);
     let s0 = k.snapshot();
-    links(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
+    link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
     let s1 = k.snapshot();
-    let t = c.type_check(vec![], is_k_t(&pred_stable_ty(), lit_addr(&ca(1)))).expect("checks");
+    let t = c.type_check(vec![], is_k(&pred_stable_ty(), lit_addr(&ca(1)))).expect("checks");
     assert!(!c.decide(&t, &Env::empty(), View::Active, &s0));
     assert!(c.decide(&t, &Env::empty(), View::Active, &s1));
     assert!(s0.seq() < s1.seq());
@@ -758,7 +757,7 @@ fn eval_panics_on_a_set_holding_a_non_address() {
 
 #[test]
 #[should_panic(expected = "eval precondition")]
-fn eval_panics_on_ref_bearing_term() {
+fn eval_panics_on_a_ref_bearing_term() {
     let k = kernel();
     let c = coord(&k);
     let (p, _) = c
@@ -776,7 +775,7 @@ fn eval_panics_on_ref_bearing_term() {
 /// per-view audit-is_K rule, the PR-VIEW scan, and the named active-view
 /// exception.
 #[test]
-fn classify_stability_lattice_and_view_scan() {
+fn classify_places_a_spelling_on_the_lattice_relative_to_its_view() {
     let k = kernel();
     let c = coord(&k);
     let tc = |t: Term| c.type_check(vec![], t).expect("test term type-checks");
@@ -799,7 +798,7 @@ fn classify_stability_lattice_and_view_scan() {
 
     // Audit is_K at a step-constant argument is ST; the SAME term classified
     // at Active is Neither (PC3: classification is relative to the view).
-    let isk = tc1(is_k_t(&marker_ty(), var(1)));
+    let isk = tc1(is_k(&marker_ty(), var(1)));
     assert_eq!(c.classify(&isk, View::Audit).stability, Stability::StOnly);
     assert_eq!(c.classify(&isk, View::Active).stability, Stability::Neither);
 
@@ -843,7 +842,7 @@ fn classify_stability_lattice_and_view_scan() {
 /// derived closure forms, a non-literal threshold, and the Default view's
 /// BH1 charge.
 #[test]
-fn pd0_rules_over_a_generated_family() {
+fn the_pd0_rules_hold_over_a_generated_family() {
     let k = kernel();
     let c = coord(&k);
     let pd = || conc(&pred_def_ty());
@@ -905,7 +904,7 @@ fn pd0_rules_over_a_generated_family() {
     );
     assert_eq!(
         stab(
-            nat_le(lit_nat(2), count(filter(Dom::AuditSlice(pd()), 2, not(is_k_t(&pred_def_ty(), tup_addr(2)))))),
+            nat_le(lit_nat(2), count(filter(Dom::AuditSlice(pd()), 2, not(is_k(&pred_def_ty(), tup_addr(2)))))),
             View::Audit
         ),
         Stability::Neither
@@ -918,8 +917,8 @@ fn pd0_rules_over_a_generated_family() {
         Stability::Neither
     );
     // The Default reading of a core atom charges every BH1 filter slice.
-    let isk = c.type_check(vec![(v(1), Sort::Addr)], is_k_t(&pred_def_ty(), var(1))).expect("checks");
-    let retired = coverage_class(&marker_ty());
+    let isk = c.type_check(vec![(v(1), Sort::Addr)], is_k(&pred_def_ty(), var(1))).expect("checks");
+    let retired = coverage_class(&retired_ty());
     assert!(c.classify(&isk, View::Default).footprint.active_classes().any(|x| *x == retired));
     assert!(!c.classify(&isk, View::Active).footprint.active_classes().any(|x| *x == retired));
 }

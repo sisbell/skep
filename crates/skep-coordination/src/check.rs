@@ -57,7 +57,7 @@ pub struct TypedTerm {
     /// recurses to over this term, its `Reg`-expansion joins and its
     /// references' own reaches included. `≤ MAX_DEPTH` by construction; a
     /// `Ref` to this term adds `DERIVATION_COST` and one per argument.
-    pub(crate) chain_depth: u32,
+    pub(crate) reach: u32,
 }
 
 impl TypedTerm {
@@ -270,8 +270,8 @@ impl<'a> Checker<'a> {
     /// BH2 v1 narrowing (Conflicts §8): Walk atoms admitted only at the
     /// shipped `Supersedes` key — M7 v1 serves the walk only there.
     fn bh2(&self, tr: &TypeRef) -> Result<TypeKey, TypeError> {
-        let (k, e) = self.typeref(tr)?;
-        self.need(&k, e, Behavior::Walk)?;
+        let (k, entry) = self.typeref(tr)?;
+        self.need(&k, entry, Behavior::Walk)?;
         if k != self.catalog.supersedes_key {
             return Err(TypeError::UnservedWalkClass(k));
         }
@@ -315,21 +315,21 @@ impl<'a> Checker<'a> {
         body: &ArcTerm,
         depth: u32,
     ) -> Result<(CheckedDom, Checked), TypeError> {
-        let d = self.check_dom(ctx, dom, depth)?;
-        let ctx2 = ctx.update(var, d.elem);
-        let c = self.sub(&ctx2, body, Sort::Bool, depth)?;
-        Ok((d, c))
+        let cd = self.check_dom(ctx, dom, depth)?;
+        let inner = ctx.update(var, cd.elem);
+        let c = self.sub(&inner, body, Sort::Bool, depth)?;
+        Ok((cd, c))
     }
 
     /// A T1 order-extremum over an address-valued domain (PC2a).
     fn extremum(
         &self,
         ctx: &Ctx,
-        d: &ArcDom,
+        dm: &ArcDom,
         depth: u32,
         mk: fn(ArcDom) -> Term,
     ) -> Result<Checked, TypeError> {
-        let cd = self.check_dom(ctx, d, depth)?;
+        let cd = self.check_dom(ctx, dm, depth)?;
         want(Sort::Addr, cd.elem)?;
         Ok(Checked {
             term: Arc::new(mk(cd.dom)),
@@ -405,14 +405,14 @@ impl<'a> Checker<'a> {
                 })
             }
             Term::Let { var, bound, body } => {
-                let cb = self.check_term(ctx, bound, d)?;
-                let ctx2 = ctx.update(*var, cb.sort);
-                let cy = self.check_term(&ctx2, body, d)?;
+                let cbound = self.check_term(ctx, bound, d)?;
+                let inner = ctx.update(*var, cbound.sort);
+                let cbody = self.check_term(&inner, body, d)?;
                 Ok(Checked {
-                    term: Arc::new(Term::Let { var: *var, bound: cb.term, body: cy.term }),
-                    sort: cy.sort,
-                    ref_free: cb.ref_free && cy.ref_free,
-                    deepest: cb.deepest.max(cy.deepest),
+                    term: Arc::new(Term::Let { var: *var, bound: cbound.term, body: cbody.term }),
+                    sort: cbody.sort,
+                    ref_free: cbound.ref_free && cbody.ref_free,
+                    deepest: cbound.deepest.max(cbody.deepest),
                 })
             }
             Term::IfSome { opt, var, then_, else_ } => {
@@ -424,8 +424,8 @@ impl<'a> Checker<'a> {
                     Sort::OptNat => Sort::Nat,
                     other => return Err(TypeError::SortMismatch { expected: Sort::OptAddr, found: other }),
                 };
-                let ctx2 = ctx.update(*var, narrowed);
-                let ct = self.check_term(&ctx2, then_, d)?;
+                let inner = ctx.update(*var, narrowed);
+                let ct = self.check_term(&inner, then_, d)?;
                 let ce = self.check_term(ctx, else_, d)?;
                 want(ct.sort, ce.sort)?;
                 Ok(Checked {
@@ -463,8 +463,8 @@ impl<'a> Checker<'a> {
             Term::BigUnion { dom, var, body } => {
                 // PC2a excludes Reg from ⋃; Addr and Tup element sorts bind.
                 let cd = self.check_dom(ctx, dom, d)?;
-                let ctx2 = ctx.update(*var, cd.elem);
-                let cb = self.sub(&ctx2, body, Sort::AddrSet, d)?;
+                let inner = ctx.update(*var, cd.elem);
+                let cb = self.sub(&inner, body, Sort::AddrSet, d)?;
                 Ok(Checked {
                     term: Arc::new(Term::BigUnion { dom: cd.dom, var: *var, body: cb.term }),
                     sort: Sort::AddrSet,
@@ -530,7 +530,7 @@ impl<'a> Checker<'a> {
                 let reach = depth
                     .saturating_add(DERIVATION_COST)
                     .saturating_add(arity)
-                    .saturating_add(referent.chain_depth);
+                    .saturating_add(referent.reach);
                 if reach > MAX_DEPTH {
                     return Err(TypeError::TooDeep);
                 }
@@ -829,8 +829,8 @@ impl<'a> Checker<'a> {
             Dom::Reg => Err(TypeError::SortMismatch { expected: Sort::Addr, found: Sort::Tup }),
             Dom::Filter { dom, var, pred } => {
                 let base = self.check_dom(ctx, dom, d)?;
-                let ctx2 = ctx.update(*var, base.elem);
-                let c = self.sub(&ctx2, pred, Sort::Bool, d)?;
+                let inner = ctx.update(*var, base.elem);
+                let c = self.sub(&inner, pred, Sort::Bool, d)?;
                 Ok(CheckedDom {
                     dom: Arc::new(Dom::Filter { dom: base.dom, var: *var, pred: c.term }),
                     elem: base.elem,

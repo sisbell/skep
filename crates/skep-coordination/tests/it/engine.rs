@@ -22,7 +22,7 @@ use skep_links::{enc, Caller, HasLinks, NullifyError, ShippedType, Visibility};
 /// Every `register_rule` validation gate, as a typed rejection — never a
 /// deferred fire-time panic; `certify_rule` re-runs the same gates.
 #[test]
-fn register_rule_validation_gates() {
+fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
     let k = kernel();
     let mut c = coord(&k);
 
@@ -163,7 +163,7 @@ fn register_rule_validation_gates() {
 fn certify_rule_names_each_failed_leg() {
     let k = kernel();
     let c = coord(&k);
-    let members = || Dom::MembersDom(conc(&pred_stable_ty()));
+    let members_dom = || Dom::MembersDom(conc(&pred_stable_ty()));
     let trig = |body: Term| {
         Trigger::Inline(c.type_check_trigger((v(1), Sort::Addr), body).expect("trigger"))
     };
@@ -175,31 +175,31 @@ fn certify_rule_names_each_failed_leg() {
 
     // The canonical spelling at Active certifies nothing (PC3).
     assert_eq!(
-        lint(members(), trig(not(is_k_t(&marker_ty(), var(1)))), View::Active),
+        lint(members_dom(), trig(not(is_k(&marker_ty(), var(1)))), View::Active),
         uncertified(false, false, false)
     );
     // (b) the witness class must be the marker's.
     assert_eq!(
-        lint(members(), trig(not(is_k_t(&pred_stable_ty(), var(1)))), View::Audit),
+        lint(members_dom(), trig(not(is_k(&pred_stable_ty(), var(1)))), View::Audit),
         uncertified(true, false, true)
     );
     // (b) the witness must be the trigger's parameter.
     assert_eq!(
-        lint(members(), trig(not(is_k_t(&marker_ty(), lit_addr(&ca(1))))), View::Audit),
+        lint(members_dom(), trig(not(is_k(&marker_ty(), lit_addr(&ca(1))))), View::Audit),
         uncertified(true, false, true)
     );
     // (c) a Filter by an SF predicate leaves the grow-only closure.
     assert_eq!(
         lint(
-            filter(members(), 2, not(is_k_t(&marker_ty(), var(2)))),
-            trig(not(is_k_t(&marker_ty(), var(1)))),
+            filter(members_dom(), 2, not(is_k(&marker_ty(), var(2)))),
+            trig(not(is_k(&marker_ty(), var(1)))),
             View::Audit
         ),
         uncertified(true, true, false)
     );
     // (b) by spelling: the tuple's address is not the parameter.
     let tup = Trigger::Inline(
-        c.type_check_trigger((v(1), Sort::Tup), not(is_k_t(&marker_ty(), tup_addr(1))))
+        c.type_check_trigger((v(1), Sort::Tup), not(is_k(&marker_ty(), tup_addr(1))))
             .expect("Tup trigger"),
     );
     assert_eq!(
@@ -217,12 +217,12 @@ fn certify_rule_names_each_failed_leg() {
 fn marker_rule_certifies_fires_and_quiesces() {
     let k = kernel();
     let mut c = coord(&k);
-    let ls = links(&k);
-    ls.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel 1");
-    ls.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("rel 2");
+    let writer = link_writer(&k);
+    writer.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel 1");
+    writer.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("rel 2");
 
     let trig = Trigger::Inline(
-        c.type_check_trigger((v(1), Sort::Addr), not(is_k_t(&marker_ty(), var(1))))
+        c.type_check_trigger((v(1), Sort::Addr), not(is_k(&marker_ty(), var(1))))
             .expect("¬is_K(marker, x) @ audit"),
     );
     let rule = Rule {
@@ -281,7 +281,7 @@ fn marker_rule_certifies_fires_and_quiesces() {
 fn a_dedup_hit_in_the_gap_reports_deduped_and_commits_nothing() {
     let k = kernel();
     let mut c = coord(&k);
-    links(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
+    link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
     let id = c
         .register_rule(Rule {
             domain: Dom::MembersDom(conc(&pred_stable_ty())),
@@ -317,7 +317,7 @@ fn a_dedup_hit_in_the_gap_reports_deduped_and_commits_nothing() {
 fn step_peeks_at_the_caller_s_snapshot_but_fires_at_its_own() {
     let k = kernel();
     let mut c = coord(&k);
-    links(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
+    link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
     let id = c
         .register_rule(Rule {
             domain: Dom::MembersDom(conc(&pred_stable_ty())),
@@ -343,10 +343,10 @@ fn step_peeks_at_the_caller_s_snapshot_but_fires_at_its_own() {
 fn step_rotates_across_rules_rather_than_draining_one() {
     let k = kernel();
     let mut c = coord(&k);
-    let ls = links(&k);
-    ls.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel 1");
-    ls.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("rel 2");
-    ls.emit(Caller::System, &doc1(), &pred_def_ty(), &ca(5), &[]).expect("def-classed on ca5");
+    let writer = link_writer(&k);
+    writer.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel 1");
+    writer.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("rel 2");
+    writer.emit(Caller::System, &doc1(), &pred_def_ty(), &ca(5), &[]).expect("def-classed on ca5");
     let r1 = c
         .register_rule(Rule {
             domain: Dom::MembersDom(conc(&pred_stable_ty())),
@@ -381,7 +381,7 @@ fn step_rotates_across_rules_rather_than_draining_one() {
 fn a_failing_rule_does_not_starve_the_agenda() {
     let k = kernel();
     let mut c = coord(&k);
-    links(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
+    link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
     let unregistered = a(&[1, 0, 1, 0, 7]);
     let r1 = c
         .register_rule(Rule {
@@ -420,15 +420,15 @@ fn a_failing_rule_does_not_starve_the_agenda() {
 #[test]
 fn a_fire_into_an_unregistered_home_fails_loudly() {
     let unregistered = a(&[1, 0, 1, 0, 7]);
-    let members = || Dom::MembersDom(conc(&pred_stable_ty()));
+    let members_dom = || Dom::MembersDom(conc(&pred_stable_ty()));
     let marker_at = |home: &Address| FireAction::Marker { home: home.clone(), ty: key(&marker_ty()) };
 
     // (1) A Marker into no document.
     let k = kernel();
     let mut c = coord(&k);
-    links(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
+    link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
     let id = c
-        .register_rule(Rule { domain: members(), trigger: always_addr(&c), view: View::Audit, action: marker_at(&unregistered) })
+        .register_rule(Rule { domain: members_dom(), trigger: always_addr(&c), view: View::Audit, action: marker_at(&unregistered) })
         .expect("register");
     match c.step(&k.snapshot()) {
         StepOutcome::Failed { rule, arg, err: FireError::HomeNotRegistered } => {
@@ -442,7 +442,7 @@ fn a_fire_into_an_unregistered_home_fails_loudly() {
     // (2) A Nullify from no document.
     let k = kernel();
     let mut c = coord(&k);
-    let m1 = deposit_rel(&k, 2, &ca(1), &ca(2));
+    let m1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
     c.register_rule(Rule {
         domain: Dom::ActiveSlice(conc(&pred_stable_ty())),
         trigger: always_tup(&c),
@@ -460,8 +460,8 @@ fn a_fire_into_an_unregistered_home_fails_loudly() {
     let k = kernel();
     let refused = unregistered.clone();
     let mut c = coord_with_guest(&k, Box::new(move |_: &World, d: &Address| *d != refused));
-    links(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
-    c.register_rule(Rule { domain: members(), trigger: always_addr(&c), view: View::Audit, action: marker_at(&unregistered) })
+    link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
+    c.register_rule(Rule { domain: members_dom(), trigger: always_addr(&c), view: View::Audit, action: marker_at(&unregistered) })
         .expect("register");
     assert!(matches!(
         c.step(&k.snapshot()),
@@ -478,12 +478,12 @@ fn a_fire_into_an_unregistered_home_fails_loudly() {
 fn a_def_trigger_reads_only_the_snapshot_it_is_evaluated_on() {
     let k = kernel();
     let mut c = coord(&k);
-    links(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
+    link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
     let before = k.snapshot();
 
     // T(x) := ¬is_K(marker, x), stored as a def AFTER `before` was pinned.
     let t = c
-        .type_check(vec![(v(1), Sort::Addr)], not(is_k_t(&marker_ty(), var(1))))
+        .type_check(vec![(v(1), Sort::Addr)], not(is_k(&marker_ty(), var(1))))
         .expect("T type-checks");
     let (start, _) = c.define_predicate(&doc1(), &t).expect("define T");
     let rule = Rule {
@@ -517,9 +517,9 @@ fn a_def_trigger_reads_only_the_snapshot_it_is_evaluated_on() {
 fn a_default_view_rule_never_sees_a_uv_hidden_argument() {
     let k = kernel();
     let mut c = coord(&k);
-    let ls = links(&k);
-    ls.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("rel");
-    ls.emit(Caller::System, &doc1(), &marker_ty(), &ca(3), &[]).expect("retire ca3");
+    let writer = link_writer(&k);
+    writer.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("rel");
+    writer.emit(Caller::System, &doc1(), &retired_ty(), &ca(3), &[]).expect("retire ca3");
     let rule = |c: &Coordinator<World>, view: View| Rule {
         domain: Dom::MembersDom(conc(&pred_stable_ty())),
         trigger: always_addr(c),
@@ -556,7 +556,7 @@ fn a_fire_stops_at_the_draft_boundary_before_any_deposit() {
     // (1) The action's HOME is the draft: the member lives in doc1.
     let k = kernel();
     let mut c = coord_with_guest(&k, refuse_doc2());
-    links(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
+    link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
     let rule = Rule {
         domain: Dom::MembersDom(conc(&pred_stable_ty())),
         trigger: always_addr(&c),
@@ -583,7 +583,7 @@ fn a_fire_stops_at_the_draft_boundary_before_any_deposit() {
     let k = kernel();
     let mut c = coord_with_guest(&k, refuse_doc2());
     let in_doc2 = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
-    links(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &in_doc2, &[]).expect("rel");
+    link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &in_doc2, &[]).expect("rel");
     let rule = Rule {
         domain: Dom::MembersDom(conc(&pred_stable_ty())),
         trigger: always_addr(&c),
@@ -603,7 +603,7 @@ fn a_fire_stops_at_the_draft_boundary_before_any_deposit() {
     // (3) The argument IS the draft's own address: judged as itself.
     let k = kernel();
     let mut c = coord_with_guest(&k, refuse_doc2());
-    links(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &doc2(), &[]).expect("rel on the document address");
+    link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &doc2(), &[]).expect("rel on the document address");
     c.register_rule(Rule {
         domain: Dom::MembersDom(conc(&pred_stable_ty())),
         trigger: always_addr(&c),
@@ -622,7 +622,7 @@ fn a_fire_stops_at_the_draft_boundary_before_any_deposit() {
     // (4) Both readable: the same rule shape fires, and the deposit is real.
     let k = kernel();
     let mut c = coord_with_guest(&k, refuse_doc2());
-    links(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
+    link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
     let rule = Rule {
         domain: Dom::MembersDom(conc(&pred_stable_ty())),
         trigger: always_addr(&c),
@@ -653,13 +653,13 @@ fn the_trigger_s_look_is_filtered_at_guest_class() {
     // document doc1 are both readable, so before lane 4.1 this rule DEPOSITED.
     let k = kernel();
     let mut c = coord_with_guest(&k, refuse_doc2());
-    links(&k).emit(Caller::System, &doc2(), &pred_stable_ty(), &ca(1), &[]).expect("rel in doc2");
+    link_writer(&k).emit(Caller::System, &doc2(), &pred_stable_ty(), &ca(1), &[]).expect("rel in doc2");
     assert!(
         k.snapshot().world().links().is_k(&pred_stable_ty(), ca(1).tumbler()),
         "M7's class-free read holds the tuple — it is the evaluator's look that must not"
     );
-    assert!(!decide_now(&k, &c, View::Active, is_k_t(&pred_stable_ty(), lit_addr(&ca(1)))));
-    assert!(!decide_now(&k, &c, View::Audit, is_k_t(&pred_stable_ty(), lit_addr(&ca(1)))));
+    assert!(!decide_now(&k, &c, View::Active, is_k(&pred_stable_ty(), lit_addr(&ca(1)))));
+    assert!(!decide_now(&k, &c, View::Audit, is_k(&pred_stable_ty(), lit_addr(&ca(1)))));
     assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::MembersDom(conc(&pred_stable_ty()))), lit_nat(0))));
     assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::LinkDom), lit_nat(0))));
     let id = c
@@ -687,11 +687,11 @@ fn the_trigger_s_look_is_filtered_at_guest_class() {
     // in doc1 beside the draft's marker, and then quiesces on its own.
     let k = kernel();
     let mut c = coord_with_guest(&k, refuse_doc2());
-    links(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel in doc1");
+    link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel in doc1");
     let (draft_marker, _) =
-        links(&k).emit(Caller::System, &doc2(), &marker_ty(), &ca(1), &[]).expect("marker in doc2");
+        link_writer(&k).emit(Caller::System, &doc2(), &marker_ty(), &ca(1), &[]).expect("marker in doc2");
     let trig = Trigger::Inline(
-        c.type_check_trigger((v(1), Sort::Addr), not(is_k_t(&marker_ty(), var(1))))
+        c.type_check_trigger((v(1), Sort::Addr), not(is_k(&marker_ty(), var(1))))
             .expect("trigger"),
     );
     c.register_rule(Rule {
@@ -719,9 +719,9 @@ fn the_trigger_s_look_is_filtered_at_guest_class() {
     let k = kernel();
     let c = coord_with_guest(&k, refuse_doc2());
     let (t1, _) =
-        links(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel in doc1");
-    links(&k).nullify(Caller::System, &doc1(), &t1).expect("retract it");
-    links(&k).emit(Caller::System, &doc2(), &pred_stable_ty(), &ca(2), &[]).expect("rel in doc2");
+        link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel in doc1");
+    link_writer(&k).nullify(Caller::System, &doc1(), &t1).expect("retract it");
+    link_writer(&k).emit(Caller::System, &doc2(), &pred_stable_ty(), &ca(2), &[]).expect("rel in doc2");
     let in_audit = |a: &Address| {
         decide_now(
             &k,
@@ -732,7 +732,7 @@ fn the_trigger_s_look_is_filtered_at_guest_class() {
     };
     assert!(in_audit(&t1), "retracted, but homed in the readable doc1: in the audit slice");
     assert!(decide_now(&k, &c, View::Audit, nat_eq(count(Dom::AuditSlice(conc(&pred_stable_ty()))), lit_nat(1))));
-    assert!(!decide_now(&k, &c, View::Active, is_k_t(&pred_stable_ty(), lit_addr(&ca(2)))));
+    assert!(!decide_now(&k, &c, View::Active, is_k(&pred_stable_ty(), lit_addr(&ca(2)))));
 }
 
 // ─────────────────────────── nullify & scoping ───────────────────────────
@@ -742,10 +742,10 @@ fn the_trigger_s_look_is_filtered_at_guest_class() {
 /// misuse (an Addr-over-M_K domain) — surfaces `BadTarget` as a `Failed`
 /// step, never a silent skip.
 #[test]
-fn nullify_rules_uncertified_fire_and_failed_surface() {
+fn a_nullify_rule_is_uncertified_fires_once_and_surfaces_bad_target_as_failed() {
     let k = kernel();
     let mut c = coord(&k);
-    let m1 = deposit_rel(&k, 2, &ca(1), &ca(2)); // a pred_stable-classed tuple
+    let m1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2)); // a pred_stable-classed tuple
 
     let trig = Trigger::Inline(
         c.type_check_trigger((v(1), Sort::Tup), tru()).expect("Tup trigger"),
@@ -776,7 +776,7 @@ fn nullify_rules_uncertified_fire_and_failed_surface() {
     // links, so every fire trips M7's BadTarget — surfaced, rotate-past.
     let k2 = kernel();
     let mut c2 = coord(&k2);
-    deposit_rel(&k2, 2, &ca(1), &ca(2));
+    deposit_rel(&k2, PRED_STABLE, &ca(1), &ca(2));
     let trig2 = Trigger::Inline(
         c2.type_check_trigger((v(1), Sort::Addr), tru()).expect("Addr trigger"),
     );
@@ -801,15 +801,15 @@ fn nullify_rules_uncertified_fire_and_failed_surface() {
 /// strict over-approximation (never false quiescence) once a sort-
 /// incompatible rule joins the registry.
 #[test]
-fn quiescent_scoped_exact_then_over_approximates() {
+fn quiescent_scoped_is_exact_then_over_approximates_in_the_safe_direction() {
     let k = kernel();
     let mut c = coord(&k);
-    let ls = links(&k);
-    ls.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel 1");
-    ls.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("rel 2");
+    let writer = link_writer(&k);
+    writer.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel 1");
+    writer.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("rel 2");
 
     let trig = Trigger::Inline(
-        c.type_check_trigger((v(1), Sort::Addr), not(is_k_t(&marker_ty(), var(1))))
+        c.type_check_trigger((v(1), Sort::Addr), not(is_k(&marker_ty(), var(1))))
             .expect("trigger"),
     );
     let id = c
@@ -838,7 +838,7 @@ fn quiescent_scoped_exact_then_over_approximates() {
     // A Tup-domain rule is sort-incompatible with PerAddress: left UNSCOPED,
     // its enabled occurrence keeps the scoped verdict false — more work
     // reported, never false quiescence.
-    deposit_rel(&k, 1, &ca(5), &ca(6)); // a pred_def-classed tuple
+    deposit_rel(&k, PRED_DEF, &ca(5), &ca(6)); // a pred_def-classed tuple
     let trig_t = Trigger::Inline(
         c.type_check_trigger((v(2), Sort::Tup), tru()).expect("Tup trigger"),
     );
@@ -860,7 +860,7 @@ fn quiescent_scoped_exact_then_over_approximates() {
 fn the_tuple_scope_bodies_read_emitter_source_and_target() {
     let k = kernel();
     let mut c = coord(&k);
-    let l1 = deposit_rel(&k, 2, &ca(1), &ca(2));
+    let l1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
     c.register_rule(Rule {
         domain: Dom::ActiveSlice(conc(&pred_stable_ty())),
         trigger: always_tup(&c),
@@ -938,9 +938,9 @@ fn fire_count_answers_zero_for_a_foreign_rule_id() {
 fn fire_count_keys_on_exact_coverage_and_home() {
     let k = kernel();
     let mut c = coord_with_guest(&k, Box::new(|_: &World, d: &Address| *d != doc2()));
-    let ls = links(&k);
-    ls.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
-    ls.emit(Caller::System, &doc2(), &marker_ty(), &ca(1), &[]).expect("the draft's marker, ahead of the fire");
+    let writer = link_writer(&k);
+    writer.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
+    writer.emit(Caller::System, &doc2(), &marker_ty(), &ca(1), &[]).expect("the draft's marker, ahead of the fire");
     let id = c
         .register_rule(Rule {
             domain: Dom::MembersDom(conc(&pred_stable_ty())),
@@ -950,7 +950,7 @@ fn fire_count_keys_on_exact_coverage_and_home() {
         })
         .expect("register");
     assert!(matches!(c.step(&k.snapshot()), StepOutcome::Fired { .. }));
-    ls.emit(Caller::System, &doc1(), &marker_ty(), &doc1(), &[]).expect("a marker covering ca1 without naming it");
+    writer.emit(Caller::System, &doc1(), &marker_ty(), &doc1(), &[]).expect("a marker covering ca1 without naming it");
     assert_eq!(c.fire_count(id, &ca(1)), 1);
 }
 
@@ -977,23 +977,23 @@ fn armer_cycles_follow_the_edge_rule() {
 
     let k = kernel();
     let mut c = coord(&k);
-    c.register_rule(rule(&c, is_k_t(&pred_stable_ty(), var(1)), View::Audit, marker_action())).expect("register");
+    c.register_rule(rule(&c, is_k(&pred_stable_ty(), var(1)), View::Audit, marker_action())).expect("register");
     assert_eq!(c.armer_cycles(), none);
 
     let k = kernel();
     let mut c = coord(&k);
     let id = c
-        .register_rule(rule(&c, is_k_t(&pred_stable_ty(), var(1)), View::Default, marker_action()))
+        .register_rule(rule(&c, is_k(&pred_stable_ty(), var(1)), View::Default, marker_action()))
         .expect("register");
     assert_eq!(c.armer_cycles(), vec![vec![id]]);
 
     let k = kernel();
     let mut c = coord(&k);
     let a_id = c
-        .register_rule(rule(&c, is_k_t(&marker_ty(), var(1)), View::Active, FireAction::Nullify { home: doc1() }))
+        .register_rule(rule(&c, is_k(&marker_ty(), var(1)), View::Active, FireAction::Nullify { home: doc1() }))
         .expect("A");
     let b_id = c
-        .register_rule(rule(&c, is_k_t(&pred_stable_ty(), var(1)), View::Active, marker_action()))
+        .register_rule(rule(&c, is_k(&pred_stable_ty(), var(1)), View::Active, marker_action()))
         .expect("B");
     assert_eq!(c.armer_cycles(), vec![vec![a_id, b_id]]);
 }

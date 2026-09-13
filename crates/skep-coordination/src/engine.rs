@@ -16,7 +16,7 @@ use crate::check::{Checker, Ctx, TypedDom, TypedTerm};
 use crate::coordinator::{CheckedRule, Coordinator};
 use crate::dynamics::{Analyzer, Footprint};
 use crate::error::{FireError, RuleError};
-use crate::eval::{enum_dom, eval_term, truthy};
+use crate::eval::{as_bool, enum_dom, eval_term};
 use crate::memo::DefStatus;
 use crate::rule::{
     Arg, FireAction, FireOutcome, Occurrence, Rule, RuleCertification, RuleId, ScopeBody,
@@ -41,8 +41,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// [`Coordinator::certify_rule`].
     pub fn register_rule(&mut self, rule: Rule) -> Result<RuleId, RuleError> {
         let (dom, trigger) = self.validate_rule(&rule)?;
-        let id = RuleId(self.next_rule);
-        self.next_rule += 1;
+        let id = RuleId(self.next_rule_id);
+        self.next_rule_id += 1;
         self.rules.push(CheckedRule { id, dom, trigger, view: rule.view, action: rule.action });
         Ok(id)
     }
@@ -67,7 +67,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // over (canonical: trigger ¬is_K(a) @ audit ⟺ Marker{_, K}).
         let marker = match &rule.action {
             FireAction::Marker { ty, .. } => {
-                rule.view == View::Audit && self.marker_pattern(&flat, trigger.params()[0].0, ty)
+                rule.view == View::Audit
+                    && self.marker_matches_witness(&flat, trigger.params()[0].0, ty)
             }
             FireAction::Nullify { .. } => false,
         };
@@ -99,7 +100,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// The canonical certified-Marker witness match: `¬ is_K(x)` with `x`
     /// the trigger's parameter and `K` coverage-equal to `Marker.ty` (§8
     /// leg b — sound-but-incomplete, by spelling).
-    fn marker_pattern(&self, flat: &Term, param: VarId, ty: &crate::ast::TypeKey) -> bool {
+    fn marker_matches_witness(&self, flat: &Term, param: VarId, ty: &crate::ast::TypeKey) -> bool {
         let Term::Not(inner) = flat else { return false };
         let Term::Atom(Atom::IsK(TypeRef::Concrete(k), arg)) = inner.as_ref() else {
             return false;
@@ -120,7 +121,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // Domain: checked + Reg-expanded (a body-level Reg is legitimate PL;
         // a BARE Reg fails the sort check), closed (binds only its own
         // variables).
-        let resolve = |a: &Address, d: u32| self.def_at(a, d);
+        let resolve = |a: &Address, d: u32| self.resolve_def_at(a, d);
         let checker = Checker::new(&self.catalog, &resolve);
         let cd = checker
             .check_dom(&Ctx::new(), &rule.domain, 0)
@@ -211,7 +212,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     fn trigger_true(&self, rule: &CheckedRule, arg: &Arg, snap: &Snapshot<W>) -> bool {
         let cx = self.eval_ctx(snap.world(), rule.view, Some(self));
         let env = Env::empty().bind(rule.trigger.params()[0].0, Value::from(arg.clone()));
-        truthy(eval_term(&cx, &env, rule.trigger.evaluable.as_ref()))
+        as_bool(eval_term(&cx, &env, rule.trigger.evaluable.as_ref()))
     }
 
     fn first_enabled(&self, rule: &CheckedRule, snap: &Snapshot<W>) -> Option<Arg> {
@@ -255,7 +256,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         let cx = self.eval_ctx(snap.world(), View::Active, None);
         let s_of = |y: &Address| -> bool {
             let env = Env::empty().bind(scope_param, Value::Addr(y.clone()));
-            truthy(eval_term(&cx, &env, scope.evaluable.as_ref()))
+            as_bool(eval_term(&cx, &env, scope.evaluable.as_ref()))
         };
         for rule in &self.rules {
             let compatible = match body {
@@ -328,21 +329,22 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// document unreadable at guest class) → `Err(HomeNotRegistered)` →
     /// `Err(Emit | Nullify)`.
     ///
-    /// PRECONDITION: `e.rule` is a `RuleId` this `Coordinator` registered —
-    /// an `Occurrence` comes from this coordinator's own `next_enabled`, or
-    /// is aimed by hand at a known rule; an unregistered id is a precondition
-    /// violation and PANICS, like `decide` (`fire_count`, a monitor, answers
-    /// 0 for the same id — a count, not a fire).
-    pub fn fire(&self, e: &Occurrence) -> Result<FireOutcome, FireError> {
+    /// PRECONDITION: `occurrence.rule` is a `RuleId` this `Coordinator`
+    /// registered — an `Occurrence` comes from this coordinator's own
+    /// `next_enabled`, or is aimed by hand at a known rule; an unregistered
+    /// id is a precondition violation and PANICS, like `decide`
+    /// (`fire_count`, a monitor, answers 0 for the same id — a count, not a
+    /// fire).
+    pub fn fire(&self, occurrence: &Occurrence) -> Result<FireOutcome, FireError> {
         let rule = self
             .rules
             .iter()
-            .find(|r| r.id == e.rule)
+            .find(|r| r.id == occurrence.rule)
             .expect("fire precondition: the RuleId is registered with this Coordinator");
         let snap = self.kernel.snapshot();
         let arg = {
             let elems = self.enum_rule_dom(rule, &snap);
-            match &e.arg {
+            match &occurrence.arg {
                 Arg::Addr(a) => elems.into_iter().find(|x| matches!(x, Arg::Addr(b) if b == a)),
                 // Tuple membership keys on the tuple's address (R1
                 // AddressInjectivity: an address hit is a value hit).
@@ -386,20 +388,22 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // The writer at GUEST class (lane 3.3b, PUB-6.28): the fire's
         // idempotency lookup sees only guest-readable incumbents, so a fire
         // commits byte-identically to a world with no drafts.
-        let ls = self.link_writer();
+        let writer = self.link_writer();
         // Rule fires run as `Caller::System` (the ownership ruling's
         // automation path, 2026-08-16): M9 ⟂ M10 — a fire carries no wire
         // principal, and its authority is the operator's certified rule set,
         // not a session.
         match &rule.action {
-            FireAction::Marker { home, ty } => match ls.emit(Caller::System, home, &ty.0, &a, &[]) {
-                Ok((effect, seq)) => Ok(self.fired_or_deduped(&snap, effect, seq)),
-                Err(TxnError::Rejected(EmitError::HomeNotRegistered)) => {
-                    Err(FireError::HomeNotRegistered)
+            FireAction::Marker { home, ty } => {
+                match writer.emit(Caller::System, home, &ty.0, &a, &[]) {
+                    Ok((effect, seq)) => Ok(self.fired_or_deduped(&snap, effect, seq)),
+                    Err(TxnError::Rejected(EmitError::HomeNotRegistered)) => {
+                        Err(FireError::HomeNotRegistered)
+                    }
+                    Err(err) => Err(FireError::Emit(err)),
                 }
-                Err(err) => Err(FireError::Emit(err)),
-            },
-            FireAction::Nullify { home } => match ls.nullify(Caller::System, home, &a) {
+            }
+            FireAction::Nullify { home } => match writer.nullify(Caller::System, home, &a) {
                 Ok((effect, seq)) => Ok(self.fired_or_deduped(&snap, effect, seq)),
                 Err(TxnError::Rejected(NullifyError::HomeNotRegistered)) => {
                     Err(FireError::HomeNotRegistered)

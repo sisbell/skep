@@ -67,7 +67,7 @@ pub struct Coordinator<W: WorldState> {
     pub(crate) catalog: TypeCatalog,
     pub(crate) memo: DefMemo,
     pub(crate) rules: Vec<CheckedRule>,
-    pub(crate) next_rule: u64,
+    pub(crate) next_rule_id: u64,
     pub(crate) cursor: usize,
     pub(crate) mk_vstream: VstreamFactory<W>,
     pub(crate) mk_link_writer: LinkWriterFactory<W>,
@@ -94,7 +94,7 @@ impl<W: WorldState> fmt::Debug for Coordinator<W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Coordinator")
             .field("rules", &self.rules.iter().map(|r| r.id).collect::<Vec<_>>())
-            .field("next_rule", &self.next_rule)
+            .field("next_rule_id", &self.next_rule_id)
             .field("cursor", &self.cursor)
             .finish_non_exhaustive()
     }
@@ -132,7 +132,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
             catalog,
             memo: DefMemo::new(),
             rules: Vec::new(),
-            next_rule: 1,
+            next_rule_id: 1,
             cursor: 0,
             mk_vstream,
             mk_link_writer,
@@ -205,7 +205,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         if let Some((v, _)) = params.iter().find(|(_, s)| *s == Sort::Tup) {
             return Err(TypeError::TupParameter(*v));
         }
-        self.check_under(SignedTerm { params, body }, 0)
+        self.check_signed(SignedTerm { params, body }, 0)
     }
 
     /// Type-check a RULE TRIGGER: `body` under the one parameter `param` (any
@@ -214,7 +214,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// otherwise). The domain↔parameter sort reconciliation and the ref-free
     /// requirement are `register_rule`'s.
     pub fn type_check_trigger(&self, param: (VarId, Sort), body: Term) -> Result<TriggerTerm, TypeError> {
-        let t = self.check_under(SignedTerm { params: vec![param], body }, 0)?;
+        let t = self.check_signed(SignedTerm { params: vec![param], body }, 0)?;
         if t.result != Sort::Bool {
             return Err(TypeError::SortMismatch { expected: Sort::Bool, found: t.result });
         }
@@ -231,8 +231,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// the checker asks for them (a chain that runs past the bound is a
     /// PR-DISC-breach cycle — every legitimate chain was bounded at
     /// registration — and reads as "no signature", failing WT here).
-    pub(crate) fn check_under(&self, signed: SignedTerm, depth: u32) -> Result<TypedTerm, TypeError> {
-        let resolve = |a: &Address, d: u32| self.def_at(a, d);
+    pub(crate) fn check_signed(&self, signed: SignedTerm, depth: u32) -> Result<TypedTerm, TypeError> {
+        let resolve = |a: &Address, d: u32| self.resolve_def_at(a, d);
         let checker = Checker::new(&self.catalog, &resolve);
         let ctx: Ctx = signed.params.iter().copied().collect();
         let checked = checker.check_term(&ctx, &signed.body, depth)?;
@@ -241,7 +241,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
             result: checked.sort,
             evaluable: checked.term,
             ref_free: checked.ref_free,
-            chain_depth: checked.deepest.saturating_sub(depth),
+            reach: checked.deepest.saturating_sub(depth),
         })
     }
 
@@ -318,7 +318,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// Memo-or-derive with the derivation's root at nesting level `depth`:
     /// a memo hit answers at any level; past `MAX_DEPTH` — reachable only
     /// inside a PR-DISC-breach cycle, since every legitimate chain was
-    /// bounded at registration through `TypedTerm::chain_depth` — the answer
+    /// bounded at registration through `TypedTerm::reach` — the answer
     /// is undisciplined, never memoized (the outer derivation freezes its own
     /// start poisoned, not this one); otherwise derive from immutable
     /// content.
@@ -347,14 +347,14 @@ impl<W: CoordinationWorld> Coordinator<W> {
         }
         let verdict = parse_def(w, start)
             .map_err(|_| Breach)
-            .and_then(|signed| self.check_under(signed, depth).map_err(|_| Breach));
+            .and_then(|signed| self.check_signed(signed, depth).map_err(|_| Breach));
         self.memo.fill(start, verdict)
     }
 
     /// The defined referent at `start`, its derivation (if the memo misses)
     /// rooted at nesting level `depth` — the resolver the checker consults
     /// for a `Ref`, which asks at the level it charged the reference for.
-    pub(crate) fn def_at(&self, start: &Address, depth: u32) -> Option<Arc<TypedTerm>> {
+    pub(crate) fn resolve_def_at(&self, start: &Address, depth: u32) -> Option<Arc<TypedTerm>> {
         match self.def_status_at(start, depth) {
             DefStatus::Defined(e) => Some(e),
             _ => None,
@@ -369,7 +369,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// (freeze-on-breach, §Internal 4). No snapshot parameter — the miss
     /// path pins its own.
     pub fn signature(&self, start: &Address) -> Option<Signature> {
-        self.def_at(start, 0).map(|e| e.signature())
+        self.resolve_def_at(start, 0).map(|e| e.signature())
     }
 }
 
@@ -379,9 +379,6 @@ impl<W: CoordinationWorld> Coordinator<W> {
 /// (Conflicts §5).
 impl<W: CoordinationWorld> DefSource for Coordinator<W> {
     fn resolve_def(&self, addr: &Address) -> Option<Arc<TypedTerm>> {
-        match self.def_status(addr) {
-            DefStatus::Defined(e) => Some(e),
-            _ => None,
-        }
+        self.resolve_def_at(addr, 0)
     }
 }

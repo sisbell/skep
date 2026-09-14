@@ -56,6 +56,15 @@ pub struct TypedTerm {
     /// recurses to over this term, its `Reg`-expansion joins and its
     /// references' own reaches included. `≤ MAX_DEPTH` by construction; a
     /// `Ref` to this term adds `DERIVATION_COST` and one per argument.
+    ///
+    /// It bounds the FLAT REFERENCE EXPANSION's depth as well as this tree's,
+    /// because every node was checked at a level no shallower than the
+    /// position its expansion occupies — the `Reg` joins at the deepest
+    /// instance's level, a reference's arguments each at their own `Let`
+    /// position, its referent's body past the whole chain. That is what makes
+    /// the walks with no depth parameter of their own — `view_independent`'s
+    /// scan, `Analyzer::term`, the recursive `Drop` of an `Arc<Term>` chain —
+    /// safe on a caller's thread.
     pub(crate) reach: u32,
 }
 
@@ -118,8 +127,14 @@ impl TriggerTerm {
         self.0.source_body()
     }
 
-    /// The checked term beneath, shared — the shape the rule engine
-    /// captures at registration.
+    /// The checked term beneath, shared — the shape the rule engine captures
+    /// at registration, and the rule engine's alone. NEVER route it to
+    /// `define_predicate`: that signature takes the `&TypedTerm` this derefs
+    /// to, and its encode `expect` rests on a Γ_D that is Codom-only, which a
+    /// trigger's need not be (`type_check_trigger` admits one `Tup`
+    /// parameter). A `Tup`-sorted trigger persisted through that path is the
+    /// codec's `UnencodableTup` — a panic, not a rejection. The type system
+    /// does not close this: only the crate's own routing does.
     pub(crate) fn checked(&self) -> &Arc<TypedTerm> {
         &self.0
     }
@@ -564,7 +579,21 @@ impl<'a> Checker<'a> {
                 let params = referent.params();
                 let mut e_args: Vec<ArcTerm> = Vec::with_capacity(args.len());
                 for (i, arg) in args.iter().enumerate() {
-                    let c = self.check_term(ctx, arg, d)?;
+                    // PR3a binds each argument through a `Let` AT ITS OWN
+                    // POSITION, so argument `i` sits `i` levels below this
+                    // node in the flat expansion and its own expansion sits
+                    // below that. Each is therefore charged AT that position,
+                    // which is what keeps the invariant every walk over the
+                    // expansion rests on: a subterm's expansion position is
+                    // never deeper than its checked depth. The `arity` term
+                    // below bounds the referent's splice point and nothing
+                    // else, so without this charge `arity + argument reach`
+                    // could carry the expansion past `MAX_DEPTH` while every
+                    // recorded level stayed inside it — and that expansion is
+                    // what `certify_stable`'s and `certify_rule`'s analyses
+                    // walk, with no bound of their own.
+                    let pos = d.saturating_add(u32::try_from(i).unwrap_or(u32::MAX));
+                    let c = self.check_term(ctx, arg, pos)?;
                     match params.get(i) {
                         Some((_, s)) => want(*s, c.sort)?,
                         None => {

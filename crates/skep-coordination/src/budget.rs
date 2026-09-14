@@ -39,11 +39,13 @@ pub(crate) const MAX_DEPTH: u32 = 128;
 /// The levels a reference costs beyond its own node, in [`MAX_DEPTH`]'s
 /// units: the frames between a `Ref` node's check and its referent's — the
 /// resolver, the memo probe, the derivation — and the evaluator's and
-/// expander's re-entry at the referent. Each argument is charged one more on
-/// top of this (the flat expansion's `Let` per argument). Set against the
-/// same measurement as [`MAX_DEPTH`]: the chain test derives a chain
-/// registered to the cap cold, on a default thread, so a cost set too low
-/// aborts there.
+/// expander's re-entry at the referent. The flat expansion binds the
+/// arguments through a `Let` chain ABOVE the referent's body, so a reference
+/// of arity `k` costs `k` levels on top of this before the body begins; each
+/// argument is charged separately, at the position its own `Let` gives it
+/// (`Checker::check_term`'s `Ref` arm). Set against the same measurement as
+/// [`MAX_DEPTH`]: the chain test derives a chain registered to the cap cold,
+/// on a default thread, so a cost set too low aborts there.
 pub(crate) const DERIVATION_COST: u32 = 2;
 
 /// The ONE budget on the SIZE of a PL tree, counted in NODES AND IN THE
@@ -74,12 +76,14 @@ pub(crate) const MAX_TERM_NODES: usize = 1 << 16;
 /// position's endset is deliberately NOT charged — `Checker::guarded` refuses
 /// a non-cataloged key at the first instance, so it is copied once and dies.
 pub(crate) fn weight(t: &Term) -> usize {
-    1 + match t {
+    // Saturating, as [`Budget::charge`] is: a payload count that saturates
+    // must not then wrap the node's own unit back to zero and charge nothing.
+    1usize.saturating_add(match t {
         Term::Lit(Lit::Addr(a)) => a.tumbler().len(),
         Term::Lit(Lit::Nat(n)) => usize::try_from(n.bits().div_ceil(64)).unwrap_or(usize::MAX),
         Term::Ref { addr, .. } => addr.tumbler().len(),
         _ => 0,
-    }
+    })
 }
 
 /// ONE walk's spend against [`MAX_TERM_NODES`] — the counter the def decoder,

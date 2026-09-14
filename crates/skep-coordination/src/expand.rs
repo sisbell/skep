@@ -6,6 +6,14 @@
 //! DAG-recursive (Conflicts §5); the static analyses alone need the
 //! materialized flat term.
 //!
+//! The flat tree is no deeper than [`crate::budget::MAX_DEPTH`]: the checker charged every
+//! node at a level no shallower than the position its expansion occupies —
+//! each argument at its own `Let` position in the chain below, the referent's
+//! body past the whole chain — and recorded the maximum as
+//! `TypedTerm::reach`. So the analyses that walk this tree need no depth
+//! parameter of their own, and neither does the recursive `Drop` that frees
+//! it.
+//!
 //! Reference nodes are processed bottom-up (arguments before the node).
 //! Fresh names are drawn from the reserved `VarId ≥ EXPANSION_NAME_BASE`
 //! supply by ONE content-deterministic counter per top-level expansion — at

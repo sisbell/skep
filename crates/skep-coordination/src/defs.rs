@@ -79,12 +79,15 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// validate + register the `pdef`. Returns the def IDENTITY (content
     /// start address) and the `pdef` EMIT's commit `Seq` — NOT the insert's.
     ///
-    /// The stored-def parameters are Codom-only (ASN-0130 SignedTerm), and
-    /// that is the `TypedTerm` type's guarantee, not a check made here: every
-    /// `TypedTerm` came through `type_check`, and a trigger — the one checked
-    /// term that binds a tuple — is a `TriggerTerm`, which this signature
-    /// cannot receive. The codec's own `Tup` refusal (it has no tag for the
-    /// sort) is therefore unreachable from this path.
+    /// The stored-def parameters are Codom-only (ASN-0130 SignedTerm), and no
+    /// check is made here: a caller's only route to a `TypedTerm` is
+    /// `type_check`, which refuses a `Tup` in Γ_D, and the one checked term
+    /// that may bind a tuple is a `TriggerTerm`, which yields no `TypedTerm`
+    /// publicly. The codec's own `Tup` refusal (it has no tag for the sort) is
+    /// therefore unreachable from every call a caller can write. Within the
+    /// crate it is a ROUTING obligation, not a type-level one — a trigger's
+    /// checked term derefs to the `&TypedTerm` this signature takes, so
+    /// `TriggerTerm::checked`'s result must never be routed here.
     ///
     /// `d` must be a registered document that is NOT a published TARGET (M5's
     /// `published_target`: the publication bit of `trunk_of(d)` — `d` with its
@@ -109,8 +112,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// the caller's value is kept, and the caller goes on evaluating or
     /// classifying it.
     pub fn define_predicate(&self, d: &Address, term: &TypedTerm) -> Result<(Address, Seq), DefineError> {
-        let bytes = codec::encode(&term.signed)
-            .expect("type_check admits no Tup parameter, and TypedTerm has no other public constructor");
+        let bytes = codec::encode(&term.signed).expect(
+            "a Codom-only Γ_D: type_check admits no Tup parameter, TypedTerm has no other public \
+             constructor, and no path in this crate routes a TriggerTerm's checked term here",
+        );
         // Insert position off a snapshot read; M5's insert re-validates
         // against committed state (benign TOCTOU — item 6).
         let n_c = self.kernel.snapshot().world().m5().content_count(d);

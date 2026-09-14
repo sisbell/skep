@@ -498,6 +498,41 @@ fn type_check_refuses_a_term_nested_past_the_cap() {
     assert!(matches!(c.type_check(vec![], reg_at(125)), Err(TypeError::TooDeep)));
 }
 
+/// A `Ref`'s arguments are spliced into the flat expansion's `Let` chain at
+/// their OWN positions, so argument `i` expands `i` levels below the
+/// reference — a depth the reach formula's `arity` term charges once, at the
+/// referent's splice point, and never per argument. Charged at one level they
+/// would admit a term whose expansion is `arity + argument depth` deep, and
+/// hand it to `view_independent` and `st_plus`, which walk it with no bound of
+/// their own; chained with descending arities that reaches ~7,900 levels from
+/// ~8,000 nodes and overflows the caller's stack. Two nested calls fit and
+/// certify; a third, and one deep argument, do not.
+#[test]
+fn a_reference_s_arguments_are_charged_at_their_expansion_positions() {
+    let k = kernel();
+    let c = coord(&k);
+    const ARITY: u32 = 60;
+    let params: Vec<(VarId, Sort)> = (1..=ARITY).map(|i| (v(i), Sort::Bool)).collect();
+    let (p, _) = c
+        .define_predicate(&doc1(), &c.type_check(params, tru()).expect("P(b1..b60) := ⊤"))
+        .expect("define P");
+    // A call whose LAST argument is `last`; the other 59 are ⊤.
+    let call = |last: Term| Term::Ref {
+        addr: p.clone(),
+        args: (1..ARITY).map(|_| at(tru())).chain([at(last)]).collect(),
+    };
+    // Two nested calls expand to 59 + 60 = 119 `Let`s over the inner body.
+    let two = c.type_check(vec![], call(call(tru()))).expect("two levels fit");
+    let (two_start, _) = c.define_predicate(&doc1(), &two).expect("define");
+    c.certify_stable(&doc1(), &two_start).expect("its 120-level expansion analyzes");
+    // A third level would expand 60 levels further; each one adds 59 more.
+    assert!(matches!(c.type_check(vec![], call(call(call(tru())))), Err(TypeError::TooDeep)));
+    // The same arithmetic for one deep argument: at position 59 it expands 59
+    // levels below the reference, so its own 100 put the expansion at 160.
+    let deep = (0..100).fold(tru(), |t, _| not(t));
+    assert!(matches!(c.type_check(vec![], call(deep)), Err(TypeError::TooDeep)));
+}
+
 /// V-IDX: `count(Reg)` folds to the (constant) registered-class count;
 /// Reg-quantifiers expand per class; an instance-wise ill-typed body rejects
 /// whole.

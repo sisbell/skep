@@ -111,7 +111,7 @@ fn tuple_var<'e>(env: &'e Env, v: &VarId) -> &'e Tuple {
     }
 }
 
-impl<'a, W> EvalCtx<'a, W> {
+impl<W> EvalCtx<'_, W> {
     /// UV `K_queried` self-exclusion: `∃ J ∈ Φ, J ≠ K :: is_k(J, x)` — the
     /// per-type BH1 filter (D2), fixed active, never M7's aggregate
     /// `is_filtered`. Takes the queried KEY, so the class lookup a UV rewrite

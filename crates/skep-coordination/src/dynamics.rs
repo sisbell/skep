@@ -130,9 +130,12 @@ impl Footprint {
             && !self.targets_keyed
     }
 
-    fn union(mut self, other: &Footprint) -> Footprint {
-        self.audit.extend(other.audit.iter().cloned());
-        self.active.extend(other.active.iter().cloned());
+    /// This footprint with `other`'s reads added — both by value, as
+    /// `im::HashSet::union` is: every call site already owns its right-hand
+    /// side, and half of them build it inline.
+    fn union(mut self, other: Footprint) -> Footprint {
+        self.audit.extend(other.audit);
+        self.active.extend(other.active);
         self.all_audit |= other.all_audit;
         self.residence |= other.residence;
         self.home_frontier |= other.home_frontier;
@@ -289,7 +292,7 @@ impl<'a> Analyzer<'a> {
             Term::And(x, y) | Term::Or(x, y) => {
                 let ax = self.term(x);
                 let ay = self.term(y);
-                let fp = ax.fp.union(&ay.fp);
+                let fp = ax.fp.union(ay.fp);
                 Analysis { st: ax.st && ay.st, sf: ax.sf && ay.sf, grow_only: fp.is_step_constant(), fp }
             }
             Term::Not(x) => {
@@ -300,13 +303,13 @@ impl<'a> Analyzer<'a> {
             Term::Implies(x, y) => {
                 let ax = self.term(x);
                 let ay = self.term(y);
-                let fp = ax.fp.union(&ay.fp);
+                let fp = ax.fp.union(ay.fp);
                 Analysis { st: ax.sf && ay.st, sf: ax.st && ay.sf, grow_only: fp.is_step_constant(), fp }
             }
             Term::Iff(x, y) => {
                 let ax = self.term(x);
                 let ay = self.term(y);
-                let fp = ax.fp.union(&ay.fp);
+                let fp = ax.fp.union(ay.fp);
                 let both = ax.st && ax.sf && ay.st && ay.sf;
                 Analysis { st: both, sf: both, grow_only: fp.is_step_constant(), fp }
             }
@@ -329,14 +332,14 @@ impl<'a> Analyzer<'a> {
                 } else {
                     (false, false)
                 };
-                let fp = ad.fp.union(&ab.fp);
+                let fp = ad.fp.union(ab.fp);
                 Analysis { st, sf, grow_only: fp.is_step_constant(), fp }
             }
             Term::Let { bound, body, .. } => {
                 let ab = self.term(bound);
                 let ay = self.term(body);
                 let bound_const = ab.fp.is_step_constant();
-                let fp = ab.fp.union(&ay.fp);
+                let fp = ab.fp.union(ay.fp);
                 Analysis {
                     st: bound_const && ay.st,
                     sf: bound_const && ay.sf,
@@ -351,7 +354,7 @@ impl<'a> Analyzer<'a> {
                 let at = self.term(then_);
                 let ae = self.term(else_);
                 let guard_const = ao.fp.is_step_constant();
-                let fp = ao.fp.union(&at.fp).union(&ae.fp);
+                let fp = ao.fp.union(at.fp).union(ae.fp);
                 Analysis {
                     st: guard_const && at.st && ae.st,
                     sf: guard_const && at.sf && ae.sf,
@@ -365,8 +368,9 @@ impl<'a> Analyzer<'a> {
             Term::BigUnion { dom, body, .. } => {
                 let ad = self.dom(dom);
                 let ab = self.term(body);
-                let fp = ad.fp.union(&ab.fp);
-                let grow_only = fp.is_step_constant() || (ad.grow_only && ab.fp.is_step_constant());
+                let body_const = ab.fp.is_step_constant();
+                let fp = ad.fp.union(ab.fp);
+                let grow_only = fp.is_step_constant() || (ad.grow_only && body_const);
                 Analysis { st: fp.is_step_constant(), sf: fp.is_step_constant(), grow_only, fp }
             }
             // Reflect(D)'s footprint is D's; its value grows iff D does.
@@ -400,41 +404,41 @@ impl<'a> Analyzer<'a> {
             Atom::IsK(tr, e) => {
                 let ae = self.term(e);
                 let st = view == View::Audit && ae.fp.is_step_constant();
-                let fp = ae.fp.union(&self.slice_fp(tr.key(), Slice::of(view))).union(&self.read_filter_fp());
+                let fp = ae.fp.union(self.slice_fp(tr.key(), Slice::of(view))).union(self.read_filter_fp());
                 Analysis { st, sf: false, grow_only: false, fp }
             }
             // M_K in an audit-view term is a grow-only set value (V-AUD).
             Atom::Members(tr) => {
-                let fp = self.slice_fp(tr.key(), Slice::of(view)).union(&self.read_filter_fp());
+                let fp = self.slice_fp(tr.key(), Slice::of(view)).union(self.read_filter_fp());
                 Analysis { grow_only: view == View::Audit, st: false, sf: false, fp }
             }
             Atom::TargetsOf(tr, e) => {
                 let ae = self.term(e);
                 let grow_only = view == View::Audit && ae.fp.is_step_constant();
-                let fp = ae.fp.union(&self.slice_fp(tr.key(), Slice::of(view))).union(&self.read_filter_fp());
+                let fp = ae.fp.union(self.slice_fp(tr.key(), Slice::of(view))).union(self.read_filter_fp());
                 Analysis { grow_only, st: false, sf: false, fp }
             }
             Atom::IsFiltered(tr, e) => {
                 let ae = self.term(e);
-                state_read(ae.fp.union(&self.slice_fp(tr.key(), Slice::Active)))
+                state_read(ae.fp.union(self.slice_fp(tr.key(), Slice::Active)))
             }
             // BH2/BH3 collections: fixed-active reads — Neither — and the
             // evaluator UV-rewrites them, so a default term's footprint carries
             // the BH1 slices too.
             Atom::Succs(tr, e) | Atom::Chain(tr, e) | Atom::SourcesTo(tr, e) => {
                 let ae = self.term(e);
-                state_read(ae.fp.union(&self.slice_fp(tr.key(), Slice::Active)).union(&self.read_filter_fp()))
+                state_read(ae.fp.union(self.slice_fp(tr.key(), Slice::Active)).union(self.read_filter_fp()))
             }
             // Verdict/traversal atoms (tip/is_in_chain) and the single-target
             // projection are never UV-rewritten: fixed active.
             Atom::Tip(tr, e) | Atom::TargetOf(tr, e) => {
                 let ae = self.term(e);
-                state_read(ae.fp.union(&self.slice_fp(tr.key(), Slice::Active)))
+                state_read(ae.fp.union(self.slice_fp(tr.key(), Slice::Active)))
             }
             Atom::IsInChain(tr, x, y) => {
                 let ax = self.term(x);
                 let ay = self.term(y);
-                state_read(ax.fp.union(&ay.fp).union(&self.slice_fp(tr.key(), Slice::Active)))
+                state_read(ax.fp.union(ay.fp).union(self.slice_fp(tr.key(), Slice::Active)))
             }
             Atom::TargetsKeyed(e) => {
                 let ae = self.term(e);
@@ -450,14 +454,14 @@ impl<'a> Analyzer<'a> {
             // collection it does.
             Atom::Age(tr, e) => {
                 let ae = self.term(e);
-                let mut fp = ae.fp.union(&self.slice_fp(tr.key(), Slice::Active));
+                let mut fp = ae.fp.union(self.slice_fp(tr.key(), Slice::Active));
                 fp.home_frontier = true;
                 state_read(fp)
             }
             Atom::Stale(tr, e) => {
                 let ae = self.term(e);
                 let mut fp =
-                    ae.fp.union(&self.slice_fp(tr.key(), Slice::Active)).union(&self.read_filter_fp());
+                    ae.fp.union(self.slice_fp(tr.key(), Slice::Active)).union(self.read_filter_fp());
                 fp.home_frontier = true;
                 state_read(fp)
             }
@@ -486,7 +490,7 @@ impl<'a> Analyzer<'a> {
                 let ax = self.term(x);
                 let aset = self.term(s);
                 let st_grow = ax.fp.is_step_constant() && aset.grow_only;
-                let fp = ax.fp.union(&aset.fp);
+                let fp = ax.fp.union(aset.fp);
                 let step_const = fp.is_step_constant();
                 Analysis { st: step_const || st_grow, sf: step_const, grow_only: step_const, fp }
             }
@@ -522,7 +526,7 @@ impl<'a> Analyzer<'a> {
                 };
                 let (ax, sf) = side(x, y); // count(D) ≤ c: upper bound, false-stable
                 let (ay, st) = side(y, x); // c ≤ count(D): lower bound, true-stable
-                let fp = ax.fp.union(&ay.fp);
+                let fp = ax.fp.union(ay.fp);
                 let step_const = fp.is_step_constant();
                 Analysis { st: st || step_const, sf: sf || step_const, grow_only: step_const, fp }
             }
@@ -534,7 +538,7 @@ impl<'a> Analyzer<'a> {
             | Prim::NatAdd(x, y) => {
                 let ax = self.term(x);
                 let ay = self.term(y);
-                step_constant(ax.fp.union(&ay.fp))
+                step_constant(ax.fp.union(ay.fp))
             }
             Prim::Elems(x) | Prim::Def(x) => step_constant(self.term(x).fp),
             Prim::MapGet(m, _) => step_constant(self.term(m).fp),
@@ -548,7 +552,7 @@ impl<'a> Analyzer<'a> {
     pub(crate) fn dom(&self, d: &Dom) -> DomAnalysis {
         match d {
             Dom::MembersDom(tr) => DomAnalysis {
-                fp: self.slice_fp(tr.key(), Slice::of(self.view)).union(&self.read_filter_fp()),
+                fp: self.slice_fp(tr.key(), Slice::of(self.view)).union(self.read_filter_fp()),
                 grow_only: self.view == View::Audit,
             },
             Dom::ActiveSlice(tr) => {
@@ -563,7 +567,7 @@ impl<'a> Analyzer<'a> {
                 let ad = self.dom(dom);
                 let ap = self.term(pred);
                 let grow_only = (ad.grow_only && ap.st) || (ad.fp.is_step_constant() && ap.fp.is_step_constant());
-                DomAnalysis { fp: ad.fp.union(&ap.fp), grow_only }
+                DomAnalysis { fp: ad.fp.union(ap.fp), grow_only }
             }
             Dom::SetTerm(t) => {
                 let at = self.term(t);

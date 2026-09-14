@@ -28,7 +28,7 @@ use std::slice::from_ref;
 
 use skep_address::{content_subspace, Address, Nat};
 use skep_arrangement::{Deposit, VPos};
-use skep_content::{HasContent, Val};
+use skep_content::{ContentStore, Val};
 use skep_kernel::{Seq, Snapshot};
 use skep_links::{Caller, Pattern, ShippedType, Tip, View};
 
@@ -55,11 +55,12 @@ pub(crate) enum ParseFail {
 }
 
 /// Read the run at `start` back as its signed term `(Γ_D, body)` — the one
-/// content read M9 makes (M4 `value_at`), off the world of a pinned
-/// snapshot. The parse consumes exactly the run (the codec's envelope
-/// check), so a resident, well-formed def is exactly what was encoded.
-pub(crate) fn parse_def<W: HasContent>(w: &W, start: &Address) -> Result<SignedTerm, ParseFail> {
-    let val = w.content().value_at(start.tumbler()).ok_or(ParseFail::NotResident)?;
+/// content read M9 makes (M4 `value_at`), which the parameter states: the
+/// content store of a pinned snapshot's world, never the world. The parse
+/// consumes exactly the run (the codec's envelope check), so a resident,
+/// well-formed def is exactly what was encoded.
+pub(crate) fn parse_def(content: &ContentStore, start: &Address) -> Result<SignedTerm, ParseFail> {
+    let val = content.value_at(start.tumbler()).ok_or(ParseFail::NotResident)?;
     codec::decode(val.as_bytes()).map_err(|_| ParseFail::Malformed)
 }
 
@@ -175,7 +176,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         let snap = self.kernel.snapshot();
         let w = snap.world();
         // (0/i/ii) one Val, residence + extent + fully consumed.
-        let signed = parse_def(w, start).map_err(|e| match e {
+        let signed = parse_def(w.content(), start).map_err(|e| match e {
             ParseFail::NotResident => RegisterError::NotResident,
             ParseFail::Malformed => RegisterError::ParseFailed,
         })?;

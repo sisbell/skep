@@ -240,7 +240,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         if t.result != Sort::Bool {
             return Err(TypeError::SortMismatch { expected: Sort::Bool, found: t.result });
         }
-        Ok(TriggerTerm(Arc::new(t)))
+        Ok(TriggerTerm::new(t))
     }
 
     /// The ONE checker invocation: the catalog and the def resolver handed to
@@ -376,7 +376,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         if !self.ever_registered(w, start) {
             return Ok(DefStatus::NeverRegistered);
         }
-        let derived = match parse_def(w, start) {
+        let derived = match parse_def(w.content(), start) {
             Err(_) => Err(Breach),
             Ok(signed) => match self.check_signed(signed, depth) {
                 Ok(entry) => Ok(entry),

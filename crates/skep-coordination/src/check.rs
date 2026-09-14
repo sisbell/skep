@@ -109,9 +109,18 @@ impl TypedTerm {
 /// Holds the checked term shared, so a registration captures it without a
 /// copy.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TriggerTerm(pub(crate) Arc<TypedTerm>);
+pub struct TriggerTerm(Arc<TypedTerm>);
 
 impl TriggerTerm {
+    /// The one construction — `Coordinator::type_check_trigger`'s, after the
+    /// Bool-codomain check. The field being private, [`TriggerTerm::checked`]
+    /// is the ONLY in-crate route to the term beneath, which is where the
+    /// routing obligation is written: a maintainer cannot reach it without
+    /// passing the warning.
+    pub(crate) fn new(checked: TypedTerm) -> TriggerTerm {
+        TriggerTerm(Arc::new(checked))
+    }
+
     /// The one parameter — `register_rule` reconciles its sort with the
     /// domain's element sort.
     pub fn param(&self) -> &(VarId, Sort) {

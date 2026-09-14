@@ -563,7 +563,7 @@ struct Rd<'a> {
     nodes: Budget,
 }
 
-impl<'a> Rd<'a> {
+impl Rd<'_> {
     fn u8(&mut self) -> Result<u8, Malformed> {
         let x = *self.b.get(self.pos).ok_or(Malformed)?;
         self.pos += 1;

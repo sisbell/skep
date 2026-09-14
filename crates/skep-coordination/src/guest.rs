@@ -27,15 +27,19 @@
 //! the delegator that holds `guest`. M7 is told nothing.
 //!
 //! COST (PUB-7.15's shape): one `document_of` (M1 arithmetic, no read) and
-//! one predicate call per candidate tuple of the unfiltered read — a rule's
+//! one predicate call per candidate tuple a COLLECTION read keeps — a rule's
 //! domain over a type slice of N tuples costs N home tests, proportional to
-//! the unfiltered candidate set, as the read-side filters are. No per-home
+//! the unfiltered candidate set, as the read-side filters are; a MEMBERSHIP
+//! predicate stops at the first tuple that answers, so it pays at most that.
+//! No per-home
 //! memo is kept: the context is borrow-scoped to one verdict, the predicate the
 //! engine injects is an exception-set membership miss (one hash), and the
 //! evaluator carries no interior mutability.
 //!
 //! THE READS, each answered over the visible slice exactly as M7's own
-//! answers it over the whole: `is_k` and `observe` (the two reads the delta
+//! answers it over the whole — the collections by dropping the tuples of
+//! unreadable homes, the membership predicates by scanning for the first one
+//! that answers: `is_k` and `observe` (the two reads the delta
 //! names) and, listed as the delta asks, the rest the evaluator makes —
 //! `members`, `targets_of` and `targets_of_denoting` (D1/D3 over the visible
 //! slice, the last in V-AUD's exact-denotation regime, which is the one read
@@ -150,25 +154,33 @@ impl<'a, W> GuestLinks<'a, W> {
         self.home_readable(&t.addr)
     }
 
+    /// M7's `observe` over one stored slice, UNFILTERED — the ONE place a
+    /// slice widens to the `View` M7 names it by. Every read here starts from
+    /// it and narrows by [`GuestLinks::admits`]: the collections through
+    /// [`GuestLinks::observe`]'s `retain`, the two membership predicates
+    /// through `any`, which stops at the first tuple that answers.
+    fn candidates(&self, ty: &Endset, pat: Pattern<'_>, slice: Slice) -> Vec<Tuple> {
+        self.unfiltered.observe(ty, pat, slice.into())
+    }
+
     /// M7's `observe` over one stored slice, with the tuples of unreadable
-    /// homes dropped — the ONE filtering primitive every other read here is
-    /// built on (so the guest-class test has one statement), and the ONE
-    /// place a slice widens to the `View` M7 names it by.
+    /// homes dropped — the ONE filtering primitive every COLLECTION read here
+    /// is built on, so the guest-class test has one statement.
     pub(crate) fn observe(&self, ty: &Endset, pat: Pattern<'_>, slice: Slice) -> Vec<Tuple> {
-        let mut out = self.unfiltered.observe(ty, pat, slice.into());
+        let mut out = self.candidates(ty, pat, slice);
         out.retain(|t| self.admits(t));
         out
     }
 
     /// D2 over the visible slice: some visible type-`ty` tuple's F COVERS the
     /// probe. M7's own `is_k` does not expose the witnessing tuple, so the
-    /// answer is the home-filtered `observe` at the same coverage pattern —
-    /// the two are one predicate on the whole slice. The UV rewrite over the
-    /// active read is `EvalCtx`'s own.
+    /// answer is a home-filtered scan at the same coverage pattern — a
+    /// predicate over the slice, stopping at the first visible match. The UV
+    /// rewrite over the active read is `EvalCtx`'s own.
     pub(crate) fn is_k(&self, ty: &Endset, probe: &Tumbler, slice: Slice) -> bool {
-        !self
-            .observe(ty, Pattern { from: from_ref(probe), to: &[] }, slice)
-            .is_empty()
+        self.candidates(ty, Pattern { from: from_ref(probe), to: &[] }, slice)
+            .iter()
+            .any(|t| self.admits(t))
     }
 
     /// The deduplicated denotation of one slot over `tuples`: `⋃
@@ -342,11 +354,13 @@ impl<'a, W> GuestLinks<'a, W> {
     /// test, not [`GuestLinks::is_k`]'s coverage-of-F membership — the two
     /// reads differ, and BH4's totalization keys on this one ([`GuestLinks::age`]
     /// is untyped, M7's being untyped, so the type-indexing is PL's and the
-    /// read is answered here with the rest).
+    /// read is answered here with the rest). The address test comes first, so
+    /// the visibility test — which builds a tumbler per call — runs at most
+    /// once over the slice rather than once per tuple in it.
     pub(crate) fn is_active_tuple(&self, ty: &Endset, a: &Address) -> bool {
-        self.observe(ty, Pattern::default(), Slice::Active)
+        self.candidates(ty, Pattern::default(), Slice::Active)
             .iter()
-            .any(|t| t.addr == *a)
+            .any(|t| t.addr == *a && self.admits(t))
     }
 
     /// BH4 age: M7's own for a link of a readable home, ⊥ otherwise (a

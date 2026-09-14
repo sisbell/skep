@@ -296,13 +296,27 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// scope test as its argument filter — so a scoped verdict cannot come
     /// apart from an unscoped one on what "enabled" means.
     pub fn quiescent_scoped(&self, scope: &TypedTerm, body: ScopeBody, snap: &Snapshot<W>) -> bool {
+        // Each conjunct of Q7's "a ref-free one-Addr-parameter Bool
+        // TypedTerm" on its own, so a caller who trips one learns WHICH —
+        // arity before the parameter is indexed.
         assert!(
-            scope.is_ref_free()
-                && scope.params().len() == 1
-                && scope.params()[0].1 == Sort::Addr
-                && scope.result_sort() == Sort::Bool,
-            "quiescent_scoped precondition violated (Q7): scope must be a ref-free \
-             one-Addr-parameter Bool TypedTerm"
+            scope.is_ref_free(),
+            "quiescent_scoped precondition violated (Q7): the scope is ref-bearing"
+        );
+        assert!(
+            scope.params().len() == 1,
+            "quiescent_scoped precondition violated (Q7): the scope binds {} parameters, not 1",
+            scope.params().len()
+        );
+        assert!(
+            scope.params()[0].1 == Sort::Addr,
+            "quiescent_scoped precondition violated (Q7): the scope's parameter is {:?}, not Addr",
+            scope.params()[0].1
+        );
+        assert!(
+            scope.result_sort() == Sort::Bool,
+            "quiescent_scoped precondition violated (Q7): the scope's codomain is {:?}, not Bool",
+            scope.result_sort()
         );
         let scope_param = scope.params()[0].0;
         // The OPEN scope-view decision the doc states: `active`, the current
@@ -312,7 +326,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
             let env = Env::empty().bind(scope_param, Value::Addr(y.clone()));
             as_bool(eval_term(&cx, &env, scope.evaluable.as_ref()))
         };
-        let scoped = |arg: &Arg| in_scope(body, arg, &s_of) != Some(false);
+        // A `None` — the body and the element's shape disagree — leaves the
+        // rule UNSCOPED: every one of its arguments counts.
+        let scoped = |arg: &Arg| in_scope(body, arg, &s_of).unwrap_or(true);
         !self
             .rules
             .iter()
@@ -478,13 +494,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
         }
         for i in 0..n {
             let idx = (self.cursor + i) % n;
-            let (id, arg) = {
-                let rule = &self.rules[idx];
-                match self.first_enabled(rule, snap, |_| true) {
-                    Some(arg) => (rule.id, arg),
-                    None => continue,
-                }
+            let Some(arg) = self.first_enabled(&self.rules[idx], snap, |_| true) else {
+                continue;
             };
+            let id = self.rules[idx].id;
             self.cursor = (idx + 1) % n; // rotate past, success or failure
             // The outcome reports the bookkeeping KEY, not the bound value —
             // owned here, the argument itself moving into the occurrence.
@@ -538,9 +551,6 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // slot spelling `a` twice still keys on `{a}`: the recompute
         // over-counts, as its contract above says, and never under-counts.
         let exact = |e: &Endset, a: &Address| -> bool { e.single_denoted() == Some(a.tumbler()) };
-        let homed = |link: &Address, home: &Address| -> bool {
-            document_of(link).is_some_and(|o| o == *home)
-        };
         match &r.action {
             FireAction::Marker { home, ty } => links
                 .observe(
@@ -549,7 +559,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
                     View::Audit,
                 )
                 .iter()
-                .filter(|t| exact(&t.from, x) && homed(&t.addr, home))
+                .filter(|t| {
+                    exact(&t.from, x) && document_of(&t.addr).is_some_and(|d| d == *home)
+                })
                 .count() as u64,
             FireAction::Nullify { home } => links
                 .observe(

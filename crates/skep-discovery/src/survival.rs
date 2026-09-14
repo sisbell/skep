@@ -77,12 +77,18 @@ fn content_vspan_at(ordinal: &Nat, count: &Nat) -> Span {
 /// budget is refused every range; a `d` that one or two cut runs would carry
 /// past it — at the budget, or one run under — is refused exactly the ranges
 /// that cut that many; and every other `d` is answered for every range. A
-/// faulty request names its own fault first. The CONTENT runs are resolved
-/// before they are counted — the count includes the pieces the range's two
-/// ends cut out of runs, which no count M5 publishes shows — while `d`'s link
-/// runs, which no text range splits, are counted off M5's `#runs` and read
-/// only for a preview that is answered. So a refused preview has paid for
-/// resolving the surviving content and for no stab.
+/// faulty request names its own fault first.
+///
+/// The exact count includes the pieces the range's two ends cut out of runs,
+/// which no count M5 publishes shows, so it is taken once the content has
+/// resolved — but `d`'s own run counts are a LOWER bound on it, since the
+/// three spans partition `[1, n_C]` and every run contributes at least one
+/// piece, so they are read first, off M5's `#runs`, which reads no run. That
+/// pre-check refuses nothing the exact one would admit; what it buys is that
+/// a `d` past the budget however the range falls never has its arrangement
+/// resolved into a vector, and the exact check decides only the band of two
+/// runs the pre-check leaves. So a refused preview has paid for two map
+/// lookups, or for resolving the surviving content, and for no stab.
 ///
 /// The accepted set is M5's DELETE admission minus those two gates, and minus
 /// every request whose runs, as its range splits them, are past the run
@@ -132,6 +138,16 @@ pub fn delete_orphans_on<W: DiscoveryWorld>(
     let suffix_start = p_ordinal + width; // the first position past the deleted range
     if *p_ordinal < Nat::one() || suffix_start > &n_c + Nat::one() {
         return Err(OrphanError::OutOfBounds); // folds M5's NotArranged + OutOfBounds (width ≥ 1)
+    }
+    // The run budget as `d` alone already settles it, off M5's own `#runs`,
+    // which reads no run: the three spans below partition `[1, n_C]` and every
+    // content run contributes at least one piece, so this is a LOWER bound on
+    // the exact count taken after they resolve, and refuses nothing that check
+    // would admit. What it buys is that a `d` past the budget however the
+    // range falls is refused without its arrangement being resolved into a
+    // vector first.
+    if w.m5().content_run_count(d) + w.m5().link_run_count(d) > MAX_IMAGE_RUNS {
+        return Err(OrphanError::ImageTooLarge);
     }
 
     let a_del = w.m5().resolve(d, &content_vspan_at(p_ordinal, width)); // no clipping now (bounds checked)

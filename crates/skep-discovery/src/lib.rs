@@ -140,9 +140,11 @@
 //! runs, each over the run count its own work multiplies; the constant states
 //! the four counts and how their refusals relate. Its SQUARE holds the two
 //! joins a run count alone does not price — the run-list walk [`image_on`]
-//! asks of M5, and the touch test of a link's whole coverage behind the
-//! pointwise pair. [`MAX_ENDSET_SPANS`] bounds what a RETRIEVEENDSETS answer
-//! carries, the one quantity here the store supplies rather than the request.
+//! asks of M5, and the touch test of a link's whole coverage behind
+//! [`addressably_discoverable_from_on`]. [`MAX_ENDSET_SPANS`] bounds what an
+//! answer built of spans carries: a RETRIEVEENDSETS pair set, and the V-spans
+//! [`project_on`] makes M5 build, whose count is that read's join product —
+//! the quantities here the store supplies rather than the request.
 //!
 //! [`delete_orphans_on`] refuses under a word of its own,
 //! [`OrphanError::ImageTooLarge`]: its other verdicts are drawn from M5's
@@ -161,11 +163,11 @@
 //! prices them from this list, and a change to any line is a change to this
 //! interface.
 //!
-//! * [`image_on`] — no link-store read; one M5 `resolve` per region span,
-//!   each a walk of the reading surface's run-list from its first run, the
-//!   region's whole walk held to `MAX_IMAGE_RUNS²` — and, for a region whose
-//!   reach in positions alone passes that, one read of M5's `#runs` for the
-//!   surface's content, which reads no run.
+//! * [`image_on`] — no link-store read; one read of M5's `#runs` for the
+//!   surface's content, which reads no run, and then one M5 `resolve` per
+//!   region span the per-span ceiling admits, each a walk of the reading
+//!   surface's run-list from its first run, the region's whole walk held to
+//!   `MAX_IMAGE_RUNS²` and each span's own image to `MAX_IMAGE_RUNS`.
 //! * the region family ([`findlinks_v_on`], [`count_v_on`], [`window_v_on`],
 //!   [`retrieve_endsets_on`]) — three `stab`s, one per v1 slot, over the
 //!   image's runs; none when the image is empty. [`retrieve_endsets_on`]
@@ -187,9 +189,11 @@
 //!   ([`addressably_discoverable_from_on`]), plus one read of M5's `#runs`
 //!   for the reading surface, which reads no run — and then, for a read the
 //!   budget admits, those runs and ONE JOIN of the link's coverage against
-//!   them, held to `MAX_IMAGE_RUNS²` span tests: M5's `project` of one slot
-//!   against the content runs, or the touch test of every slot's every span
-//!   against every run, each test rebuilding both spans' endpoints.
+//!   them, each test rebuilding both spans' endpoints. The two products are
+//!   held at different numbers because they buy different things: the touch
+//!   test of every slot's every span against every run is work alone, at
+//!   `MAX_IMAGE_RUNS²`, while M5's `project` of one slot against the content
+//!   runs builds one V-span per overlapping pair, at `MAX_ENDSET_SPANS`.
 //!
 //! A window computes its family's whole candidate set before it cuts,
 //! whatever `n` and wherever the cursor: paging bounds the answer, never the

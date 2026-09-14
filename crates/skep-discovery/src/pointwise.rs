@@ -37,7 +37,7 @@ use skep_arrangement::reading_surface;
 use skep_kernel::Snapshot;
 use skep_links::Endset;
 
-use crate::budget::{MAX_IMAGE_RUNS, MAX_JOIN_STEPS};
+use crate::budget::{MAX_ENDSET_SPANS, MAX_IMAGE_RUNS, MAX_JOIN_STEPS};
 use crate::home::home_readable;
 use crate::types::QueryError;
 use crate::DiscoveryWorld;
@@ -45,10 +45,19 @@ use crate::DiscoveryWorld;
 /// May a join of `span_count` coverage spans against `run_count` arrangement
 /// runs go ahead? The pair's one budget rule, held at both reads: the runs at
 /// [`MAX_IMAGE_RUNS`], since they are read whole and joined before any test
-/// answers, and the product — the span tests the join makes — at its square,
-/// since the coverage side is the link's and a run count does not reach it.
-fn join_within_budget(span_count: usize, run_count: usize) -> bool {
-    run_count <= MAX_IMAGE_RUNS && span_count.saturating_mul(run_count) <= MAX_JOIN_STEPS
+/// answers, and the product — one per (run, coverage span) pair — at
+/// `max_product`, since the coverage side is the link's and a run count does
+/// not reach it.
+///
+/// The two reads pass DIFFERENT products, because the product means different
+/// things to them. For the touch test it is WORK and nothing else: a boolean
+/// `any` that allocates nothing and stops at its first overlap, so it is held
+/// at [`MAX_JOIN_STEPS`], the square. For [`project_on`] it is also the
+/// ANSWER — M5 pushes one V-span per overlapping pair into one vector before
+/// it normalizes, so the product is what the read makes M8 HOLD, and it is
+/// held at [`MAX_ENDSET_SPANS`], the budget this module gives a report.
+fn join_within_budget(span_count: usize, run_count: usize, max_product: usize) -> bool {
+    run_count <= MAX_IMAGE_RUNS && span_count.saturating_mul(run_count) <= max_product
 }
 
 /// I→V projection of link `a`'s `slot` into the CONTENT subspace of the
@@ -110,8 +119,19 @@ fn join_within_budget(span_count: usize, run_count: usize) -> bool {
 /// are held here (`ImageTooLarge`). `#runs(d)` is held at
 /// [`crate::MAX_IMAGE_RUNS`], counted over the reading surface's CONTENT
 /// runs — the runs M5's `project` actually joins against, so the factor
-/// priced is the factor multiplied — and the product at that budget's square.
-/// [`crate::MAX_IMAGE_RUNS`] sets the run count beside the other three.
+/// priced is the factor multiplied — and [`crate::MAX_IMAGE_RUNS`] sets that
+/// count beside the other three.
+///
+/// The PRODUCT is held at [`crate::MAX_ENDSET_SPANS`] and not at the run
+/// budget's square, because here it is the ANSWER and not merely the work:
+/// M5 pushes one V-span per overlapping (run, coverage span) pair into one
+/// vector before it normalizes, so a coverage of repeated spans over a
+/// document whose runs sit at one address realizes the product in full, for
+/// an answer that normalizes to a single span. The report budget is what
+/// bounds a report, and this is one — the touch test beside it, whose join
+/// allocates nothing, keeps the square. So a large-slot projection into a
+/// heavily fragmented document is refused, and a pointwise refusal has no
+/// split axis ([`crate::QueryError`]).
 pub fn project_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     a: &Address,
@@ -135,12 +155,13 @@ pub fn project_on<W: DiscoveryWorld>(
     // alone — the factor priced is the factor multiplied — read off M5's own
     // `#runs`, the accessor it publishes for a caller that owns admission
     // control over that join, so no run is touched to be counted. The product
-    // is held here as well: M7 caps a stored slot at `MAX_SLOT_SPANS` on its
-    // deposit paths, which keeps today's product inside the square, but that
-    // is M7's number on M7's write path, and the join this function hands M5
-    // is priced where it is incurred.
+    // is held at the ANSWER budget, because for this join the product IS the
+    // answer's pre-normalization size and not merely its work: M5 pushes one
+    // V-span per overlapping pair into one vector, and a slot's coverage may
+    // legitimately repeat one address up to M7's `MAX_SLOT_SPANS`, so a
+    // square's worth of pairs is a square's worth of spans held live.
     let run_count = w.m5().content_run_count(&surface);
-    if !join_within_budget(coverage.len(), run_count) {
+    if !join_within_budget(coverage.len(), run_count, MAX_ENDSET_SPANS) {
         return Err(QueryError::ImageTooLarge);
     }
     Ok(w.m5().project(&surface, &coverage)) // I→V, content subspace, level-class-safe inside M5
@@ -229,8 +250,11 @@ fn touches(e: &Endset, extents: &[Span]) -> bool {
 /// ranges over both subspaces and every extent is tested; and the product
 /// with the link's WHOLE coverage, `Σᵢ|eᵢ|`, at that budget's square — every
 /// slot may carry M7's `MAX_SLOT_SPANS`, so the run count alone would admit
-/// three times it. [`crate::MAX_IMAGE_RUNS`] sets the run count beside the
-/// other three.
+/// three times it. The SQUARE and not the report budget [`project_on`] holds
+/// its product to, because this join is a boolean `any` that allocates
+/// nothing and stops at its first overlap: its product is work, where the
+/// projection's is also its answer. [`crate::MAX_IMAGE_RUNS`] sets the run
+/// count beside the other three.
 pub fn addressably_discoverable_from_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     a: &Address,
@@ -255,7 +279,7 @@ pub fn addressably_discoverable_from_on<W: DiscoveryWorld>(
     // run of it being touched — which is what puts the budget ahead of the
     // lift rather than beside it.
     let run_count = w.m5().content_run_count(&surface) + w.m5().link_run_count(&surface);
-    if !join_within_budget(span_count, run_count) {
+    if !join_within_budget(span_count, run_count, MAX_JOIN_STEPS) {
         return Err(QueryError::ImageTooLarge);
     }
     // LP12's characterisation tested directly, per link — never the F-FULL

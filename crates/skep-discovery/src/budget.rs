@@ -3,7 +3,7 @@
 //! runs — the region family's image, the pointwise pair, the delete-orphan
 //! preview — each over the run count its own work multiplies, with its
 //! square [`MAX_JOIN_STEPS`] for the two joins no run count prices; and
-//! [`MAX_ENDSET_SPANS`], which bounds what a RETRIEVEENDSETS answer carries.
+//! [`MAX_ENDSET_SPANS`], which bounds what an answer built of spans carries.
 //! Each read applies its own; the numbers and their argument live here
 //! because the region family, the pointwise pair and the preview all consult
 //! them.
@@ -18,9 +18,13 @@
 ///
 /// * [`crate::image_on`] counts the runs the REGION resolves, which is a
 ///   request-shaped multiple of `#runs(d)`, so whether a `d` is refused
-///   depends on the region asked and not on `d` alone;
+///   depends on the region asked and not on `d` alone — and holds each span
+///   to the same number ahead of its own resolution, against the most that
+///   span could yield (the granularity note below);
 /// * [`crate::project_on`] counts `#content_runs(d)`, because M5's `project`
-///   joins the coverage against the content runs alone;
+///   joins the coverage against the content runs alone; its PRODUCT is the
+///   one this constant's square does not hold, that join's pairs being the
+///   answer it builds ([`MAX_ENDSET_SPANS`]);
 /// * [`crate::addressably_discoverable_from_on`] counts
 ///   `#content_runs(d) + #link_runs(d)`, because LP12 ranges over both
 ///   subspaces and every one of those extents is tested;
@@ -68,18 +72,27 @@
 ///   and a span past the end of a fragmented document walks every run and
 ///   returns none. The count above prices runs RETURNED and never sees that
 ///   walk; the square prices it, ahead of the first `resolve`.
-/// * The TOUCH TEST behind the pointwise pair: every span of a link's
-///   coverage against every run, where a link's WHOLE coverage is up to
-///   `MAX_SLOT_SPANS` a slot, so the run count alone admits three times the
-///   square. M5's `project` makes the same join over one slot, and the square
-///   holds it too, rather than leaving it to M7's cap agreeing with this one.
+/// * The TOUCH TEST behind [`crate::addressably_discoverable_from_on`]: every
+///   span of a link's coverage against every run, where a link's WHOLE
+///   coverage is up to `MAX_SLOT_SPANS` a slot, so the run count alone admits
+///   three times the square. Its product is WORK and only work — a boolean
+///   `any` that allocates nothing and stops at its first overlap — which is
+///   what the square prices. The one join of the same shape it does not hold
+///   is [`crate::project_on`]'s, whose product is the answer it builds and so
+///   belongs to [`MAX_ENDSET_SPANS`].
 ///
 /// THE GRANULARITY IS A REGION SPAN, as M6's coverage budget's is: the
 /// resolution stops at the first span whose image carries the accumulator
 /// past the budget, so an over-budget request stops resolving rather than
-/// resolving whole and then being measured. Within one span it bounds
-/// nothing — M5's `resolve` answers that span whole, at a size that is the
-/// DOCUMENT's fragmentation rather than the request's shape.
+/// resolving whole and then being measured. Within one span it bounds the
+/// MATERIALIZATION and not merely the count: M5's `resolve` answers a span
+/// whole, in one vector, so [`crate::image_on`] holds each span to this
+/// number ahead of the call, against the most that span could yield —
+/// `min(count, #runs(surface))`, since the resolution is clipped to the span
+/// and every run of it is at least one position wide. Otherwise the number
+/// would bound what a request RETURNS while a single span made M8 hold the
+/// whole of a fragmented document, which is the DOCUMENT's size rather than
+/// the request's shape.
 ///
 /// `#runs(d)` and `|links|` are the WORLD's, and no number here reaches them:
 /// they stay with request rate and concurrency, which are M10's as the
@@ -92,8 +105,10 @@ pub const MAX_IMAGE_RUNS: usize = 1 << 12;
 /// that square and nothing of its own.
 pub(crate) const MAX_JOIN_STEPS: usize = MAX_IMAGE_RUNS * MAX_IMAGE_RUNS;
 
-/// The most spans one RETRIEVEENDSETS answer may carry, and so the ceiling on
-/// what the pair set makes M8 hold live and what the presentation sorts.
+/// The most spans one ANSWER may carry, at the two reads whose answer is a
+/// span set: the ceiling on what [`crate::retrieve_endsets_on`]'s pair set
+/// makes M8 hold live and what its presentation sorts, and on the V-spans
+/// [`crate::project_on`] makes M5 build.
 ///
 /// The budget: a pair's cost is its spans, and the answer's is their sum —
 /// the sort is `O(B log B)` span comparisons over `B` accumulated spans (a
@@ -109,6 +124,13 @@ pub(crate) const MAX_JOIN_STEPS: usize = MAX_IMAGE_RUNS * MAX_IMAGE_RUNS;
 /// `2^12` answer budget would refuse a region touched by two such links —
 /// while `2^16` admits some twenty thousand ordinary small-endset links
 /// through one region.
+///
+/// Nor `MAX_JOIN_STEPS`, at [`crate::project_on`]: M5's `project` pushes one
+/// V-span per overlapping (run, coverage span) pair into a vector BEFORE it
+/// normalizes, so that join's product is its answer's pre-normalization size
+/// and not merely its step count, and a square's worth of pairs is a square's
+/// worth of spans held live. A report budget bounds a report; the pointwise
+/// join whose product is only work keeps the square.
 ///
 /// WHAT IT DOES NOT BOUND: `|links|` and any one link's endset size are the
 /// WORLD's, so the candidate walk this budget rides on is world-sized whatever

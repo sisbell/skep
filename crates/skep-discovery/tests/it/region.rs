@@ -360,6 +360,65 @@ fn the_region_family_refuses_an_image_past_the_run_budget() {
     }
 }
 
+/// §1 — the run budget bounds what a request makes M8 MATERIALIZE and not
+/// only what it returns: M5 hands one span's whole image back in a single
+/// `Vec`, so each span is held to the budget ahead of its own resolution,
+/// against the most it could yield — `min(count, #runs(surface))`.
+///
+/// The refused region below would answer ONE run, which is what makes this a
+/// ceiling rather than a measurement: no count of runs RETURNED can refuse
+/// it, and the same span over a one-run surface is answered, with that one
+/// run, while the same surface one position narrower is answered too. What
+/// the ceiling refuses is a span naming more positions than the budget over a
+/// surface holding more runs than it — the request whose whole image is small
+/// only because the two happen to line up, which the caller chooses and M8
+/// cannot know before M5 has built it.
+#[test]
+fn image_holds_one_spans_materialization_to_the_run_budget() {
+    let wide = MAX_IMAGE_RUNS as u32 + 1;
+    let k = kernel();
+    seed_content(&k, &doc1(), wide); // one run, `MAX + 1` positions
+    let vs = Vstream::new(&k);
+    // doc2: that whole run transcluded, then `MAX` width-1 runs behind it,
+    // none abutting the next — so the surface holds `MAX + 1` runs, and its
+    // first `MAX + 1` positions are one of them.
+    vs.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, wide)])
+        .expect("copy succeeds");
+    vs.copy(
+        SYS,
+        &doc2(),
+        vp(1, wide + 1),
+        &vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS],
+    )
+    .expect("copy succeeds");
+    assert_eq!(
+        k.snapshot().world().m5().content_runs(&doc2()).len(),
+        MAX_IMAGE_RUNS + 1
+    );
+    let reads = Reads(&k);
+
+    // At the ceiling: `MAX` positions of that surface, resolving to one run
+    // clipped to the span.
+    assert_eq!(
+        reads.image(&doc2(), &[vspan(1, 1, MAX_IMAGE_RUNS as u32)]),
+        Ok(vec![run(&ca(1), MAX_IMAGE_RUNS as u32)])
+    );
+    // What the refused region would ANSWER, read off a surface whose run
+    // count admits it: one run. So the refusal below is about what the
+    // resolution could build, and nothing that counts the answer can reach it.
+    assert_eq!(
+        reads.image(&doc1(), &[vspan(1, 1, wide)]),
+        Ok(vec![run(&ca(1), wide)])
+    );
+    for (name, refusal) in &region_entry_points(reads) {
+        assert_eq!(
+            refusal(&doc2(), &[vspan(1, 1, wide)]),
+            Some(QueryError::ImageTooLarge),
+            "{name}: a span that could resolve past the budget is refused before it resolves"
+        );
+    }
+}
+
 /// §1 — the RUN-LIST WALK, which the run budget cannot see. M5 reaches every
 /// span by walking the surface's run-list from its first run, so a span past
 /// the end of a fragmented document walks every run and returns none, and a

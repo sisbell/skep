@@ -265,13 +265,15 @@ pub enum QueryError {
     /// request into a different query. A caller that builds its region
     /// through that constructor cannot provoke this.
     BadRegion,
-    /// The read would join more arrangement I-runs than
-    /// [`crate::MAX_IMAGE_RUNS`] admits, or make a join its square does not:
-    /// the run-list walk behind the region family, the touch test of a link's
-    /// whole coverage behind the pointwise pair. Each of the three reads that
-    /// hold it counts the runs its own work multiplies, which the constant
-    /// states. The runs are the side of a join the request supplies; what
-    /// they are joined against is the world's.
+    /// The read would materialize or join more arrangement I-runs than
+    /// [`crate::MAX_IMAGE_RUNS`] admits, or exceed the product its own join is
+    /// held to: the square for the run-list walk behind the region family and
+    /// for the touch test of a link's whole coverage, and
+    /// [`crate::MAX_ENDSET_SPANS`] for the projection, whose product is the
+    /// span set it builds. Each of the three reads that hold it counts the
+    /// runs its own work multiplies, which the constant states. The runs are
+    /// the side of a join the request supplies; what they are joined against
+    /// is the world's.
     ImageTooLarge,
     /// The RETRIEVEENDSETS answer would carry more spans than
     /// [`crate::MAX_ENDSET_SPANS`]. The one budget here priced on what the

@@ -115,8 +115,22 @@ fn run_list_walk(region: &[Span], run_count: usize) -> usize {
 /// the runs RESOLVED rather than the distinct ones kept, because that is the
 /// quantity every later step is linear in — and counted AS THE IMAGE IS
 /// PRODUCED, so an over-budget request stops resolving instead of resolving
-/// whole and then being measured. A refusal, never a truncation: a truncated
-/// image drops links from every read-out composed on it, silently.
+/// whole and then being measured. Each span is held to that budget BEFORE it
+/// resolves as well as after, against the most it could yield: M5 hands one
+/// span's whole image back in a single `Vec`, so a budget behind the call can
+/// only refuse what is already built. That ceiling is
+/// `min(count, #runs(surface))` — `resolve` clips to the span, and every run
+/// it returns is at least one position wide — so what the request makes M8
+/// hold is bounded by the request's own shape. A refusal, never a truncation:
+/// a truncated image drops links from every read-out composed on it,
+/// silently.
+///
+/// So a span naming more positions than [`MAX_IMAGE_RUNS`] is refused over a
+/// surface holding more runs than that, whatever its image would have been.
+/// Over a surface of at most that many runs a single span is admitted
+/// whatever its count, and a single position over any surface; a region past
+/// the ceiling is asked in parts, which is the recourse [`QueryError`]
+/// states.
 ///
 /// HEAD-FLOAT (PUB round 2, lane 3.2; PUB-2.49, PUB-2.50, PUB-2.53): the
 /// arrangement resolved is `d`'s READING SURFACE — M5's `reading_surface`,
@@ -135,14 +149,16 @@ pub fn image_on<W: DiscoveryWorld>(
     }
     check_region(region)?;
     let surface = reading_surface(w.m3(), d);
+    // The surface's run count, off M5's own `#runs` — one map lookup, reading
+    // no run — because both budgets below are priced against it.
+    let run_count = w.m5().content_run_count(&surface);
     // The walk, priced against a run-list of unbounded length first — its
     // reach in positions — and in the surface's runs only past that. A region
     // whose reach in positions is within the square walks within it whatever
-    // the document, so the ordinary request is admitted without the surface's
-    // runs being counted; past that the count is taken, off M5's
-    // `content_run_count`, which reads no run.
+    // the document, so the ordinary request is admitted without the region
+    // being walked a second time.
     if run_list_walk(region, usize::MAX) > MAX_JOIN_STEPS
-        && run_list_walk(region, w.m5().content_run_count(&surface)) > MAX_JOIN_STEPS
+        && run_list_walk(region, run_count) > MAX_JOIN_STEPS
     {
         return Err(QueryError::ImageTooLarge);
     }
@@ -154,6 +170,20 @@ pub fn image_on<W: DiscoveryWorld>(
     let mut seen: HashSet<Run> = HashSet::new();
     let mut runs_resolved: usize = 0;
     for span in region {
+        // The most runs this span CAN yield: one per position it names, one
+        // per run of the surface, whichever is fewer — `resolve` clips to the
+        // span and every run it hands back is at least one position wide.
+        // Read BEFORE the call, because the call builds that whole image into
+        // one `Vec` and a budget behind it can only refuse what is already
+        // built. A `count` past `usize` prices at the run count, the most any
+        // span can yield; so does a span the region gate has already admitted
+        // and this reading cannot re-read.
+        let ceiling = as_ordinal_vspan(span)
+            .and_then(|v| v.count.to_usize())
+            .map_or(run_count, |count| count.min(run_count));
+        if runs_resolved.saturating_add(ceiling) > MAX_IMAGE_RUNS {
+            return Err(QueryError::ImageTooLarge);
+        }
         let span_image = w.m5().resolve(&surface, span);
         // `>` and not `==`: one span's image adds many runs at once.
         runs_resolved += span_image.len();

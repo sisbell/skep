@@ -8,7 +8,8 @@ use common::*;
 use skep_address::Address;
 use skep_arrangement::{HasM5, Vstream};
 use skep_discovery::{
-    addressably_discoverable_from_on, project_on, QueryError, FROM, MAX_IMAGE_RUNS, TO, TYPE,
+    addressably_discoverable_from_on, project_on, QueryError, FROM, MAX_ENDSET_SPANS,
+    MAX_IMAGE_RUNS, TO, TYPE,
 };
 use skep_links::{LinkWriter, SlotArg};
 
@@ -438,4 +439,57 @@ fn addressably_discoverable_from_holds_its_join_to_the_square_of_the_run_budget(
     );
     // M × M: the square itself is admitted.
     assert_eq!(reads.addressably_discoverable_from(&exact, &doc2()), Ok(true));
+}
+
+/// §5 — `project`'s join product is the ANSWER it builds and not merely the
+/// work it does: M5 pushes one V-span per overlapping (run, coverage span)
+/// pair into one vector before it normalizes. A coverage of REPEATED spans —
+/// `enc` maps a repeated address to a repeated span, so the count is the
+/// depositor's to choose up to M7's slot cap — over a document whose runs all
+/// sit at one address realizes that product in full, for an answer that
+/// normalizes to a single span. So it is held at the ANSWER budget, where the
+/// touch test beside it, whose join is a boolean that allocates nothing,
+/// keeps the square: the same link the projection refuses is answered there,
+/// which is what shows the two products are two numbers for a reason.
+#[test]
+fn project_holds_its_product_to_the_answer_budget() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    // Every run of doc2 at ONE address, so every coverage span covers every
+    // run and no (run, span) pair is skipped.
+    Vstream::new(&k)
+        .copy(
+            SYS,
+            &doc2(),
+            vp(1, 1),
+            &vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS],
+        )
+        .expect("copy succeeds");
+    assert_eq!(
+        k.snapshot().world().m5().content_runs(&doc2()).len(),
+        MAX_IMAGE_RUNS
+    );
+    let spans = MAX_ENDSET_SPANS / MAX_IMAGE_RUNS; // 16: the answer budget exactly
+    let at_budget = link(&store, &doc1(), &vec![ca(1); spans], &[ca(101)]);
+    let past = link(&store, &doc1(), &vec![ca(1); spans + 1], &[ca(101)]);
+    let reads = Reads(&k);
+
+    // At the budget the product is realized in full and normalizes to doc2's
+    // whole content — one span out of the 2^16 M5 built to find it.
+    let proj = reads
+        .project(&at_budget, FROM, &doc2())
+        .expect("at the answer budget");
+    assert!(proj.denotes(&t(&[1, 1])));
+    assert!(proj.denotes(&t(&[1, MAX_IMAGE_RUNS as u32])));
+    assert!(!proj.denotes(&t(&[1, MAX_IMAGE_RUNS as u32 + 1])));
+    // One span more in the slot, and the product is past it. The run count is
+    // unchanged and still within its own budget, so this refusal is the
+    // product's alone.
+    assert_eq!(
+        reads.project(&past, FROM, &doc2()),
+        Err(QueryError::ImageTooLarge)
+    );
+    // The touch test keeps the square, so the same link answers there.
+    assert_eq!(reads.addressably_discoverable_from(&past, &doc2()), Ok(true));
 }

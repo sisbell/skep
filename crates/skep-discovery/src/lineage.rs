@@ -19,10 +19,15 @@ use crate::{DiscoveryWorld, FROM, TO};
 /// with NO per-claim conformance filter, faithful because the assembled
 /// system is edit-disciplined (EL-DM — every `[K_sup]` claim is born through
 /// M7's `assert_sup`/`editlink`, which schema-conform their emission). The
-/// reliance is semantic only, never safety-bearing: every stored `[K_sup]`
-/// tuple carries unit-depth single-address F and G by M7's `[K_sup]`
-/// sole-writer fences — `Endset::single_denoted`, the test those fences
-/// establish — so the read-out cannot fault.
+/// reliance is semantic only, never safety-bearing, and it rests on BOTH
+/// clauses of M7's `[K_sup]` sole-writer fences, since the read-out takes
+/// something from each: every stored tuple carries unit-depth single-address
+/// F and G, so `Endset::single_denoted` answers rather than faulting; and
+/// each denotes a RESIDENT link — `assert_sup` checks residence outright, the
+/// `editlink` guard requires it of a caller-supplied successor, and the two
+/// open deposit paths refuse the class — so the tumbler it denotes is a store
+/// key minted by M3, hence T4-valid, and the address lift cannot fault
+/// either.
 ///
 /// `c` is a claim resident in `l`, as every address the enumeration hands
 /// over comes off M7's own index keys.
@@ -47,7 +52,11 @@ fn claim_at(l: &LinkState, c: &Address) -> SupClaim {
 /// the read-out rests on, naming which endpoint — F or G — it is reading.
 fn endpoint(e: &Endset, denotes: &'static str) -> Address {
     let t = e.single_denoted().expect(denotes).clone();
-    validate(t).expect("denoted claim endpoints are T4-valid link addresses")
+    validate(t).expect(
+        "a [K_sup] endpoint denotes a RESIDENT link — assert_sup checks residence, editlink's \
+         DC guard requires it of a caller's successor, and makelink/emit refuse the class — so \
+         it is a minted store key and T4-valid",
+    )
 }
 
 /// The shared claim enumeration: claims naming `key` at `slot`, restricted to

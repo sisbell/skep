@@ -8,7 +8,7 @@
 //! rejection. One thing well:
 //! the uniform request lifecycle — *parse → authorize → linearize →
 //! commit-gate → marshal → surface* — driven by a static dispatch table
-//! ([`Operation::execute`]).
+//! ([`OperationSurface::execute`]).
 //!
 //! M10 owns **no** per-store operation logic (M5/M6/M7/M8), **no** automation
 //! (M9 — a parallel surface, not below it), **no** ordering/durability/
@@ -72,25 +72,27 @@
 //! such ordering — M10 fixes one linearization point per operation and imposes
 //! none between concurrent ones (§8) — so it compares the `as_of` it receives
 //! against the `at` it is waiting for, and reissues the read until the
-//! comparison holds. [`Operation::log_position`] answers with the same
+//! comparison holds. [`OperationSurface::log_position`] answers with the same
 //! frontier without issuing an operation.
 //!
 //! A rejection is the one answer carrying no coordinate — a refused read
 //! reports no position, having answered from none — so a client tracking the
-//! frontier across a refusal asks [`Operation::log_position`] or reissues.
+//! frontier across a refusal asks [`OperationSurface::log_position`] or
+//! reissues.
 //!
 //! ## Boundary — deliberately NOT owned here
 //!
 //! * per-store operation logic (M5/M6/M7/M8) and automation (M9 ⟂ M10);
 //! * ordering, durability, recovery (M2) — the binary calls `Kernel::open`
-//!   and handles `OpenError` before constructing [`Operation`];
+//!   and handles `OpenError` before constructing [`OperationSurface`];
 //! * journaled state — M10 names no concrete `World`/`Record` and contributes
 //!   no slice, record, or fold to the engine;
 //! * the wire codec byte format, and the request-SIZE limits that travel with
 //!   it — [`Codec`] is a seam the transport fills, and its parser is the only
 //!   bound on how large a request may be, since M10 measures no field of the
-//!   `Op` it is handed ([`Codec::parse`]); the
-//!   request↔response correlation (no `ReqId` echo — §8), the `SessionId`
+//!   `Op` it is handed ([`Codec::parse`]); the request↔response correlation
+//!   — no frame M10 marshals carries a correlation id, and the optional
+//!   `ReqId` is an idempotency key, never one (§8); the `SessionId`
 //!   non-forgeability precondition and the authentication mechanism (§6), the
 //!   concurrency policy, and reorder/retry buffering (M10 *surfaces*
 //!   `Reorder`, it does not reorder);
@@ -105,7 +107,7 @@
 //!   only on the write path. A read is served against any `SessionId`, its
 //!   principal resolved for the read PREDICATE rather than to gate it, so
 //!   reads are masked (by M6 and M8, through that predicate) and never
-//!   refused for authority ([`Operation::execute`]). The one
+//!   refused for authority ([`OperationSurface::execute`]). The one
 //!   place M10 ASKS ω without wording it is the write door's source consult
 //!   (lane 3.3c, PUB-6.36/6.38): it defers to the store wherever the
 //!   destination's own ownership gate would refuse, through the store's own
@@ -142,7 +144,7 @@ mod successor;
 
 pub use codec::{Codec, ParseError};
 pub use op::{Op, OpKind, ReqId, Request, SuccessorSpec, MAX_REQ_ID_BYTES};
-pub use operation::{Operation, ReadPredicate};
+pub use operation::{OperationSurface, ReadPredicate};
 // `disposition_of` and `Rejection::classified` are public for the reason the
 // disposition is documented as recomputable: a transport that raises one of
 // M10's own codes on its own channel asks the table — or builds the whole
@@ -155,14 +157,14 @@ pub use session::SessionId;
 
 // Every upstream type or constructor named on the request/response path, plus
 // the two budgets a request is held to, re-exported so a caller of
-// [`Operation::execute`] spells one crate. That is where the line falls: what
-// a CALLER must name to build a `Request` or read a `Response` is nameable
-// from `skep_febe`; what an ASSEMBLER of the engine must name — `Kernel`,
-// `WorldState`, `Namespace`, `Vstream`, `LinkWriter`, the four accessor
-// traits — is not, because the binary that implements [`Stores`] holds every
-// crate by construction. A constructor's ERROR type travels with it: a
-// `Result` whose failure cannot be named is one a caller can only `unwrap`.
-// A re-export claims no ownership: each type's owning module stays
+// [`OperationSurface::execute`] spells one crate. That is where the line
+// falls: what a CALLER must name to build a `Request` or read a `Response` is
+// nameable from `skep_febe`; what an ASSEMBLER of the engine must name —
+// `Kernel`, `WorldState`, `Namespace`, `Vstream`, `LinkWriter`, the four
+// accessor traits — is not, because the binary that implements [`Stores`]
+// holds every crate by construction. A constructor's ERROR type travels with
+// it: a `Result` whose failure cannot be named is one a caller can only
+// `unwrap`. A re-export claims no ownership: each type's owning module stays
 // authoritative for it, exactly as M8 re-exports M7's slot numbering.
 //
 // M1, with the constructors, because `Address` is a field of thirty-odd `Op`
@@ -328,14 +330,14 @@ impl<
 /// same `Kernel<W>` on every call.** The signature does not force it — it is
 /// consulted afresh per request, so an impl that opened a kernel per call
 /// would compile — and every coordinate M10 reports rests on it:
-/// `Operation::log_position` and every read's `as_of` come from `kernel()`,
-/// while the link writes commit through `linkstore()`. Two kernels leave
-/// those coordinates describing different logs, each store still committing
-/// before it acknowledges and the reported positions no longer meaning what
-/// this module promises. That every driver is built over the ONE kernel
-/// `kernel()` names is not an obligation but a fact of the three provided
-/// bodies, which is why the whole precondition falls on the single method an
-/// implementer writes.
+/// `OperationSurface::log_position` and every read's `as_of` come from
+/// `kernel()`, while the link writes commit through `linkstore()`. Two kernels
+/// leave those coordinates describing different logs, each store still
+/// committing before it acknowledges and the reported positions no longer
+/// meaning what this module promises. That every driver is built over the ONE
+/// kernel `kernel()` names is not an obligation but a fact of the three
+/// provided bodies, which is why the whole precondition falls on the single
+/// method an implementer writes.
 ///
 /// The design flagged the engine-facing store-driver constructors as a
 /// required upstream interface amendment (Conflicts resolved #6); the as-built

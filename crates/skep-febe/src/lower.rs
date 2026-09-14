@@ -369,7 +369,7 @@ impl Lower for EditLinkError {
             // M7's own restatement of the per-slot span budget over the
             // finished successor — the same budget and the same leaf
             // MAKELINK's slots take. M10 builds those slots and holds them to
-            // that number as it builds them (`successor::endset_from_vspecs`),
+            // that number as it builds them (`successor::successor_slot`),
             // so this arm answers for a successor assembled some other way.
             EditLinkError::SlotTooLarge => (RejectCode::SlotTooLarge, None),
             EditLinkError::IllFormedSuccessor => (RejectCode::IllFormedSuccessor, None),

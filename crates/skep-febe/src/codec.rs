@@ -9,20 +9,25 @@ use crate::response::Response;
 
 /// The transport's codec (builder supplies one concrete impl).
 ///
-/// A [`Codec::parse`] failure never reaches `Operation::execute` (which takes
-/// an already-parsed [`Request`]), so it has no `Op` and no `OpKind` from
-/// `Op::kind()`. The TRANSPORT surfaces it through M10's never-silent model
-/// by wrapping [`Rejection::unparseable`] in `Response::Rejected` and
-/// marshaling that via [`Codec::marshal`] — the one never-silent obligation
-/// outside M10's exhaustive-dispatch enforcement (Invariants). The
-/// classification is M10's either way: the constructor applies the same code
-/// and disposition table every other rejection goes through.
+/// A [`Codec::parse`] failure never reaches `OperationSurface::execute`
+/// (which takes an already-parsed [`Request`]), so it has no `Op` and no
+/// `OpKind` from `Op::kind()`. The TRANSPORT surfaces it through M10's
+/// never-silent model by wrapping [`Rejection::unparseable`] in
+/// `Response::Rejected` and marshaling that via [`Codec::marshal`] — the one
+/// never-silent obligation outside M10's exhaustive-dispatch enforcement
+/// (Invariants). The classification is M10's either way: the constructor
+/// applies the same code and disposition table every other rejection goes
+/// through.
 ///
 /// [`Rejection::unparseable`]: crate::Rejection::unparseable
 ///
-/// A marshaled frame carries **no correlation id** (§8): the transport's own
-/// envelope, not the codec's frame, pairs each reply with the in-flight
-/// request's `ReqId`.
+/// A marshaled frame carries **no correlation id** (§8). Pairing a reply with
+/// its in-flight request is the TRANSPORT's, by whatever its own envelope
+/// carries — never by the request's [`ReqId`], which is an optional
+/// idempotency key ([`Request::id`]) and is absent from most requests.
+///
+/// [`ReqId`]: crate::ReqId
+/// [`Request::id`]: crate::Request::id
 pub trait Codec {
     /// wire → `Op` (+ id).
     ///

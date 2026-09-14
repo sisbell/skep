@@ -1,7 +1,7 @@
 //! End-to-end lifecycle tests over the public surface only: bootstrap →
 //! delegate → create → edit → link → query, all through
-//! `Operation::execute`, asserting exactly what the design/interface claim —
-//! commit-before-ack coordinates, the response shape per `Op`, the
+//! `OperationSurface::execute`, asserting exactly what the design/interface
+//! claim — commit-before-ack coordinates, the response shape per `Op`, the
 //! idempotency contract (§7), the session gate (§6), and the typed,
 //! classified rejections (§5).
 

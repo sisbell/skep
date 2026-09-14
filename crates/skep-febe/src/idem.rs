@@ -40,7 +40,7 @@ use crate::session::SessionId;
 /// The idempotency LRU's capacity, in the type [`LruCache`] demands — so
 /// nonzero is proven where the number is written, not re-proven where it is
 /// used.
-// OPEN DECISION: the interface pins `Operation::new(stores)` with NO
+// OPEN DECISION: the interface pins `OperationSurface::new(stores)` with NO
 // `idem_capacity` parameter, while the design (§7 / Core data model / Open
 // build decision 3) calls for an explicit construction-time knob with "no
 // implicit default". The interface is the higher authority for the public

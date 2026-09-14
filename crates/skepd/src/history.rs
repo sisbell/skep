@@ -35,7 +35,7 @@ use std::sync::Arc;
 use skep_engine::dump::WorldDump;
 use skep_address::Address;
 use skep_engine::{Engine, EngineStores, HistoryError, World};
-use skep_febe::{Operation, Request, Response};
+use skep_febe::{OperationSurface, Request, Response};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, Snapshot};
 use skep_namespace::PrincipalId;
 
@@ -284,7 +284,7 @@ fn execute_read_on(
     };
     let kernel =
         Kernel::open(cfg, world).expect("in-memory open runs no recovery and cannot fail");
-    let febe = Operation::new(Box::new(EngineStores::new(Arc::new(kernel))))
+    let febe = OperationSurface::new(Box::new(EngineStores::new(Arc::new(kernel))))
         .with_read_predicate(move |p: Option<PrincipalId>, doc: &Address| head.readable(p, doc));
     let session = match principal {
         Some(p) => febe.open_session(p),

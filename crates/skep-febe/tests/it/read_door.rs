@@ -15,7 +15,7 @@
 //!    unreadable origin costs its positions and not its neighbours';
 //! 5. the GUEST — a session resolving to no principal is MASKED, not gated.
 //!
-//! The write path's use of the same predicate is `source_gate.rs`.
+//! The write path's use of the same predicate is `write_door.rs`.
 //!
 //! Three words, three concepts, each the corpus's: a DOCUMENT is unreadable
 //! (PUB-6.1), a REQUEST is refused, an ANSWER is withheld.

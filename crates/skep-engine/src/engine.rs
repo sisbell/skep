@@ -204,7 +204,7 @@ impl Engine {
     }
 
     /// The `Stores<World>` factory the transport passes to M10's
-    /// `Operation::new` — the engine-facing store-driver constructors,
+    /// `OperationSurface::new` — the engine-facing store-driver constructors,
     /// wrapped once so the binary holds no assembly knowledge.
     pub fn stores(&self) -> EngineStores {
         self.stores.clone()
@@ -247,7 +247,7 @@ fn mk_link_store<'k>(
 }
 
 /// The concrete `Stores<World>` impl (M10 §Seams: "at startup, the `Stores`
-/// factory passed to `Operation::new`, built via the engine-facing
+/// factory passed to `OperationSurface::new`, built via the engine-facing
 /// store-driver constructors"). Holds only the shared kernel; each call
 /// hands out a fresh driver.
 #[derive(Clone, Debug)]

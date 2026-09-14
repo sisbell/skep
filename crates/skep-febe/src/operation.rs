@@ -1,9 +1,9 @@
-//! The lifecycle entry ([`Operation::execute`]) and the two static dispatch
-//! tables (§1–§4): parse → authorize → linearize → commit-gate → marshal →
-//! surface. The lifecycle's order lives here; the two pieces of state it
-//! consults belong to their own cards — [`crate::session::Sessions`] for the
-//! ephemeral binding (§6), [`crate::idem::IdemCache`] for the committed-write
-//! retry memo (§7).
+//! The lifecycle entry ([`OperationSurface::execute`]) and the two static
+//! dispatch tables (§1–§4): parse → authorize → linearize → commit-gate →
+//! marshal → surface. The lifecycle's order lives here; the two pieces of
+//! state it consults belong to their own cards — [`crate::session::Sessions`]
+//! for the ephemeral binding (§6), [`crate::idem::IdemCache`] for the
+//! committed-write retry memo (§7).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -55,12 +55,12 @@ use crate::{FebeWorld, Stores};
 /// per-run arm and M5's publish gate check registration before asking, as
 /// their own behaviour and not as a guarantee from here.
 ///
-/// Absent ([`Operation::new`] alone), M10 answers the world's own
+/// Absent ([`OperationSurface::new`] alone), M10 answers the world's own
 /// [`ReadableWorld::readable`], which is the live daemon's case: a read arm
 /// off the ONE snapshot it pins per request, so the answer and the `as_of` it
 /// is stamped with stand on one committed state, and the publish composite's
 /// source gate over the working world of the shot's own transaction, which M5
-/// hands it. Supplied ([`Operation::with_read_predicate`]), it
+/// hands it. Supplied ([`OperationSurface::with_read_predicate`]), it
 /// OVERRIDES the world the predicate is evaluated over — what a HISTORICAL
 /// read needs: `/op-at N` answers the N-world's content through the HEAD's
 /// exception set and grant set (PUB-6.48), so the daemon's throwaway front
@@ -71,25 +71,25 @@ use crate::{FebeWorld, Stores};
 /// WHERE IT IS EVALUATED, and what that position costs the supplier. On a
 /// READ it answers off the snapshot the request pinned, and the caller waits
 /// alone. On a WRITE it is lent to the store as the caller's VISIBILITY CLASS
-/// ([`Operation::visible_to`]) and evaluated INSIDE that store's transaction
-/// — M5's publish source gate, M7's value-keyed gates on the five link writes
-/// — under M2's applier lock. So it inherits `transact`'s precondition, which
-/// M5 states for the parameter M10 fills here and which M10 can no more check
-/// than M5 can: it MUST NOT call `transact` on that kernel (M2 answers a
-/// nested write with its reentrancy panic, the supplier's bug), and every
-/// other writer in the engine waits while it answers. A predicate that
-/// resolves its grants by asking the engine is the shape that trips both; one
-/// closed over a snapshot it already holds, as the daemon's historical door
-/// is, trips neither.
+/// ([`OperationSurface::visible_to`]) and evaluated INSIDE that store's
+/// transaction — M5's publish source gate, M7's value-keyed gates on the five
+/// link writes — under M2's applier lock. So it inherits `transact`'s
+/// precondition, which M5 states for the parameter M10 fills here and which
+/// M10 can no more check than M5 can: it MUST NOT call `transact` on that
+/// kernel (M2 answers a nested write with its reentrancy panic, the
+/// supplier's bug), and every other writer in the engine waits while it
+/// answers. A predicate that resolves its grants by asking the engine is the
+/// shape that trips both; one closed over a snapshot it already holds, as the
+/// daemon's historical door is, trips neither.
 ///
 /// This is the PREDICATE a door consults, never the act of consulting it:
 /// `consult_read` and `consult_write` are the two consults, in the corpus's
 /// sense, and both answer through the per-request binding
-/// [`Operation::readable_by`] makes of this.
+/// [`OperationSurface::readable_by`] makes of this.
 ///
 /// [`ReadableWorld::readable`]: crate::ReadableWorld::readable
-/// [`Operation::readable_by`]: crate::Operation
-/// [`Operation::visible_to`]: crate::Operation
+/// [`OperationSurface::readable_by`]: crate::OperationSurface
+/// [`OperationSurface::visible_to`]: crate::OperationSurface
 pub type ReadPredicate = dyn Fn(Option<PrincipalId>, &Address) -> bool + Send + Sync;
 
 /// M10's front-door handle (§Public interface). Owns **no** authoritative
@@ -98,16 +98,16 @@ pub type ReadPredicate = dyn Fn(Option<PrincipalId>, &Address) -> bool + Send + 
 /// ([`IdemCache`]), and a mirror of M2's poison state; none is ever snapshotted
 /// or replayed, which is why this is the one module that legitimately departs
 /// from the `im`-everywhere convention (§Core data model).
-pub struct Operation<W: WorldState> {
+pub struct OperationSurface<W: WorldState> {
     /// Borrowed authority: the binary's factory (M2/M3/M5/M7 own real state).
     stores: Box<dyn Stores<W>>,
     /// Which principal each open session speaks for — retired only by
-    /// [`Operation::close_session`] (§6).
+    /// [`OperationSurface::close_session`] (§6).
     sessions: Sessions,
     /// Hint: the committed-write retry memo (§7). A session's entries are
-    /// swept by [`Operation::close_session`] — those present when the sweep
-    /// runs (§6) — and the whole memo is lost on restart, so a post-restart
-    /// retry re-executes (duplicate, by design — ASN-0134 §A7).
+    /// swept by [`OperationSurface::close_session`] — those present when the
+    /// sweep runs (§6) — and the whole memo is lost on restart, so a
+    /// post-restart retry re-executes (duplicate, by design — ASN-0134 §A7).
     idem: IdemCache,
     /// Hint: a MIRROR of M2's own poison state, which is the fact's owner and
     /// publishes it as `Kernel::is_poisoned` — lock-free, infallible, and
@@ -115,7 +115,7 @@ pub struct Operation<W: WorldState> {
     /// actionable without a race. This copy is kept only so `execute`'s step
     /// (c) can fail a write fast without opening a doomed transaction, and it
     /// is raised by the first `TxnError::Poisoned` M10 itself meets
-    /// ([`Operation::map_txn`], §5/§9).
+    /// ([`OperationSurface::map_txn`], §5/§9).
     ///
     /// It therefore LAGS exactly the writes M10 did not issue — M9's rule
     /// fires reach M7's gated write path directly rather than through this
@@ -160,12 +160,12 @@ fn home_readable(a: &Address, readable: &impl Fn(&Address) -> bool) -> bool {
     document_of(a).is_none_or(|home| readable(&home))
 }
 
-/// THE READ SIDE'S CONSULT — the DOC-ARGUMENT consult (§2, PUB-6.12;
-/// PUB round 2, lane 3.3): the FIRST unreadable NAMED document of the
-/// read, in declaration order ([`Op::doc_arguments`], PUB-6.4), answers
-/// WITHHELD naming itself — `reorder`, `site.addr` the document, no
-/// `detail` (PUB-8.5). Consulted through `readable`, the ONE predicate this
-/// request was built with ([`Operation::readable_by`]), so the answer and
+/// THE READ SIDE'S CONSULT — the DOC-ARGUMENT consult (§2, PUB-6.12; PUB
+/// round 2, lane 3.3): the FIRST unreadable NAMED document of the read, in
+/// declaration order ([`Op::doc_arguments`], PUB-6.4), answers WITHHELD
+/// naming itself — `reorder`, `site.addr` the document, no `detail`
+/// (PUB-8.5). Consulted through `readable`, the ONE predicate this request
+/// was built with ([`OperationSurface::readable_by`]), so the answer and
 /// the `as_of` it is stamped with stand on one committed state.
 ///
 /// It runs AFTER registration — an unregistered document is fail-open
@@ -184,7 +184,7 @@ fn home_readable(a: &Address, readable: &impl Fn(&Address) -> bool) -> bool {
 /// door's policy cannot come to answer a predicate other than the one its
 /// request was built with.
 ///
-/// [`Operation::readable_by`]: Operation::readable_by
+/// [`OperationSurface::readable_by`]: OperationSurface::readable_by
 fn consult_read(
     kind: OpKind,
     op: &Op,
@@ -209,9 +209,10 @@ fn consult_read(
 /// the LINK-ADDRESS rule on the links a write validates by address
 /// (PUB-6.6: `edit_link.original`, `assert_sup.old`/`new`). Consulted
 /// through `readable`, the ONE predicate this request was built with
-/// ([`Operation::readable_by`]) — the same binding every read arm answers,
-/// so one front door answers one predicate — and BEFORE the store call (or
-/// the EDITLINK successor build) that would read the source's arrangement.
+/// ([`OperationSurface::readable_by`]) — the same binding every read arm
+/// answers, so one front door answers one predicate — and BEFORE the store
+/// call (or the EDITLINK successor build) that would read the source's
+/// arrangement.
 ///
 /// PRECONDITION: `readable` is built from `wc.principal`, off the same
 /// snapshot `m3` is read from, and from nothing else. The door DERIVES no
@@ -300,7 +301,7 @@ fn consult_read(
 /// (`Vstream::publish`) — which is those four stores' signatures to
 /// change, not this door's.
 ///
-/// [`Operation::readable_by`]: Operation::readable_by
+/// [`OperationSurface::readable_by`]: OperationSurface::readable_by
 fn consult_write(
     wc: &WriteCtx,
     op: &Op,
@@ -416,7 +417,7 @@ fn birth_version(m3: &M3State, m5: &M5State, trunk: &Address) -> Option<BirthVer
     Some(BirthVersion { addr, extent })
 }
 
-impl<W> Operation<W>
+impl<W> OperationSurface<W>
 where
     W: FebeWorld,
     W::Record: From<M3Rec> + From<M5Rec> + From<LinkRec> + From<ContentWrite>,
@@ -433,7 +434,7 @@ where
     /// interface's one-argument `new`, and the interface wins (see
     /// [`IdemCache`]).
     pub fn new(stores: Box<dyn Stores<W>>) -> Self {
-        Operation {
+        OperationSurface {
             stores,
             sessions: Sessions::new(),
             idem: IdemCache::new(),
@@ -512,10 +513,11 @@ where
     /// `None` is the GUEST — a session that resolves to no principal, which
     /// on the read path is a mask and never a refusal.
     ///
-    /// The write path's [`Operation::visible_to`] is the sibling shape and
-    /// not this one: a visibility class is lent to a STORE, which supplies
-    /// its own working world per call, so it stays `Fn(&W, &Address)` and is
-    /// closed over the front door rather than over a world.
+    /// The write path's [`OperationSurface::visible_to`] is the sibling
+    /// shape and not this one: a visibility class is lent to a STORE, which
+    /// supplies its own working world per call, so it stays `Fn(&W,
+    /// &Address)` and is closed over the front door rather than over a
+    /// world.
     ///
     /// `Send + Sync` are declared rather than left to inference, because an
     /// `impl Trait` return exposes only the bounds it states and the readers
@@ -557,7 +559,7 @@ where
     /// (transport) supplies the authenticated `PrincipalId`; unforgeability
     /// of the id is the transport's precondition (§6): it must hold the
     /// returned `SessionId` in the connection's authenticated state and inject
-    /// it into [`Operation::execute`], never read one off the wire.
+    /// it into [`OperationSurface::execute`], never read one off the wire.
     pub fn open_session(&self, principal: PrincipalId) -> SessionId {
         self.sessions.open(principal)
     }
@@ -571,10 +573,11 @@ where
     /// no write on it can ever be authorized again.
     ///
     /// WRITES are the whole of what this REFUSES. Reads take no session gate
-    /// ([`Operation::execute`]), so the retired id still reaches every read
-    /// arm and is answered — as the GUEST, since it now resolves to no
-    /// principal and `None` is the guest predicate. Logout therefore NARROWS
-    /// the read surface to the published documents rather than closing it; a
+    /// ([`OperationSurface::execute`]), so the retired id still reaches
+    /// every read arm and is answered — as the GUEST, since it now resolves
+    /// to no principal and `None` is the guest predicate. Logout therefore
+    /// NARROWS the read surface to the published documents rather than
+    /// closing it; a
     /// transport whose logout must REFUSE reads holds that policy itself.
     ///
     /// The sweep is not atomic against a request already in flight. An
@@ -629,16 +632,17 @@ where
     /// * On the READ path it resolves an `Option<PrincipalId>` for the read
     ///   predicate this surface answers, which MASKS and never refuses.
     ///   Every read is therefore served against any `SessionId` — bound,
-    ///   retired by [`Operation::close_session`], or never opened — and an
-    ///   id that resolves to no principal is answered as the GUEST, whose
-    ///   predicate admits the published documents alone. That is a mask.
+    ///   retired by [`OperationSurface::close_session`], or never opened —
+    ///   and an id that resolves to no principal is answered as the GUEST,
+    ///   whose predicate admits the published documents alone. That is a
+    ///   mask.
     ///
     /// So reads are masked, not gated, and the masking is M6's and M8's,
     /// driven by the one predicate this surface answers (PUB-6.39). A
     /// transport that adds its own read gate is adding a SECOND predicate to
     /// a surface that answers one, and two predicates that disagree about a
-    /// private draft is the failure `Operation::readable` is a chokepoint to
-    /// prevent.
+    /// private draft is the failure `OperationSurface::readable` is a
+    /// chokepoint to prevent.
     ///
     /// WHAT A MASKED ANSWER LOOKS LIKE, since "masked" does not by itself
     /// tell a client what it will receive. Four forms, and one read may carry
@@ -768,7 +772,7 @@ where
     /// per-op from the factory, returns only its post-commit value (A7 is
     /// upheld structurally — M10 has nothing to put on the wire until the
     /// driver returns at/after `lin(op)`), classifies `TxnError<E>` through
-    /// [`Operation::map_txn`] so the poison hint latches on the way past,
+    /// [`OperationSurface::map_txn`] so the poison hint latches on the way past,
     /// and stamps the committed `Seq`. Exhaustive over `Op` with NO `_`
     /// wildcard: the complementary (read) half is one explicit `|`-list arm
     /// rejecting `Malformed` — never a panic — so a newly added `Op` variant
@@ -1267,7 +1271,7 @@ where
     /// transaction. The latch is why every write arm classifies HERE and not
     /// through `lower_txn` directly — and the latch exists only because the
     /// gate reads M10's MIRROR of M2's poison state rather than asking M2,
-    /// so this method's whole reason is the mirror's ([`Operation`]).
+    /// so this method's whole reason is the mirror's ([`OperationSurface`]).
     /// `Relaxed` suffices: the flag is a hint, and M2 independently returns
     /// `Poisoned` to every later write whether or not this one is seen.
     fn map_txn<E: Lower>(&self, kind: OpKind, e: TxnError<E>) -> Rejection {
@@ -1424,8 +1428,8 @@ mod tests {
         }
     }
 
-    fn operation() -> Operation<World> {
-        Operation::new(Box::new(KernelStores { kernel: kernel() }))
+    fn surface() -> OperationSurface<World> {
+        OperationSurface::new(Box::new(KernelStores { kernel: kernel() }))
     }
 
     fn insert_op() -> Op {
@@ -1449,7 +1453,7 @@ mod tests {
     #[test]
     fn operation_is_send_and_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<Operation<World>>();
+        assert_send_sync::<OperationSurface<World>>();
     }
 
     /// §6: ids are unique within an uptime; a closed session is unbound, so a
@@ -1457,7 +1461,7 @@ mod tests {
     /// transaction — no store is touched.
     #[test]
     fn closed_session_write_is_unauthenticated() {
-        let febe = operation();
+        let febe = surface();
         let s1 = febe.open_session(PrincipalId(1));
         let s2 = febe.open_session(PrincipalId(2));
         assert_ne!(s1, s2);
@@ -1475,7 +1479,7 @@ mod tests {
     /// witnesses: no store is reached on the way to the refusal.
     #[test]
     fn every_write_on_an_unbound_session_is_unauthenticated_before_any_transaction() {
-        let febe = operation();
+        let febe = surface();
         let s = febe.open_session(PrincipalId(1));
         febe.close_session(s);
         let before = febe.log_position();
@@ -1508,7 +1512,7 @@ mod tests {
     /// half: an arm that panics fails here.
     #[test]
     fn no_read_is_ever_rejected_for_an_unbound_session() {
-        let febe = operation();
+        let febe = surface();
         let never_opened = SessionId(9999);
         for (op, is_read) in crate::op::tests::all_ops() {
             if !is_read {
@@ -1530,7 +1534,7 @@ mod tests {
     /// reads keep being served off the last root.
     #[test]
     fn poison_latch_halts_writes_but_reads_continue() {
-        let febe = operation();
+        let febe = surface();
         let s = febe.open_session(PrincipalId(1));
         let rej = febe.map_txn(OpKind::Insert, TxnError::<InsertError>::Poisoned);
         assert_eq!(rej.code, RejectCode::Poisoned);
@@ -1556,7 +1560,7 @@ mod tests {
     /// them.
     #[test]
     fn a_halted_kernel_outranks_an_unbound_session() {
-        let febe = operation();
+        let febe = surface();
         let s = febe.open_session(PrincipalId(1));
         febe.close_session(s);
         // Raised for the latch alone; the rejection itself answers no request.
@@ -1577,7 +1581,7 @@ mod tests {
     /// stale) can be memoized even when the request carried an id.
     #[test]
     fn only_committed_writes_are_cached() {
-        let febe = operation();
+        let febe = surface();
         let s = febe.open_session(PrincipalId(1));
         assert!(Response::Count { n: 3, as_of: Seq(1) }.as_ack().is_none());
         assert!(Response::Rejected(rejection(OpKind::Insert, RejectCode::Unauthenticated))
@@ -1608,7 +1612,7 @@ mod tests {
     /// the latch being unset.
     #[test]
     fn a_memoized_ack_is_replayed_on_a_poisoned_kernel() {
-        let febe = operation();
+        let febe = surface();
         let s = febe.bootstrap_session();
         let id = ReqId(b"node-5".to_vec());
         let node = || Op::RegisterNode { addr: tum(&[1, 5]) };
@@ -1649,7 +1653,7 @@ mod tests {
     /// nothing and commits nothing.
     #[test]
     fn a_memoized_ack_outliving_its_binding_is_replayed_not_refused() {
-        let febe = operation();
+        let febe = surface();
         let s = febe.open_session(PrincipalId(1));
         let id = ReqId(b"in-flight".to_vec());
         // The deposit a request already past step (a) makes after the sweep.
@@ -1688,7 +1692,7 @@ mod tests {
     /// complement arm must hold exactly the ops `is_read` sends elsewhere.
     #[test]
     fn each_dispatch_table_rejects_exactly_the_other_half() {
-        let febe = operation();
+        let febe = surface();
         for (op, is_read) in crate::op::tests::all_ops() {
             let kind = op.kind();
             let wrong_table = if is_read {

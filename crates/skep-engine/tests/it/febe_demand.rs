@@ -1,8 +1,8 @@
-//! The demand side (M10): the assembled `World` satisfies `Operation<W>`'s
-//! bounds as written, and the engine's `Stores<World>` factory drives the
-//! real request lifecycle. A short bootstrap→delegate→create→insert→retrieve
-//! round-trip is enough — M10's own suite owns the lifecycle semantics; this
-//! proves the assembly plugs in.
+//! The demand side (M10): the assembled `World` satisfies
+//! `OperationSurface<W>`'s bounds as written, and the engine's
+//! `Stores<World>` factory drives the real request lifecycle. A short
+//! bootstrap→delegate→create→insert→retrieve round-trip is enough — M10's own
+//! suite owns the lifecycle semantics; this proves the assembly plugs in.
 
 use crate::common;
 
@@ -13,7 +13,7 @@ use skep_address::Address;
 use skep_arrangement::Deposit;
 use skep_content::Val;
 use skep_engine::{Engine, EngineStores};
-use skep_febe::{Disposition, Op, Operation, RejectCode, Request, Response};
+use skep_febe::{Disposition, Op, OperationSurface, RejectCode, Request, Response};
 use skep_kernel::Kernel;
 use skep_namespace::PrincipalId;
 use skep_retrieval::Spec;
@@ -30,10 +30,10 @@ fn ack_addr(r: Response) -> skep_address::Address {
 #[test]
 fn engine_world_satisfies_the_febe_demand() {
     let engine = mem_engine();
-    let op: Operation<skep_engine::World> = Operation::new(Box::new(engine.stores()));
+    let febe: OperationSurface<skep_engine::World> = OperationSurface::new(Box::new(engine.stores()));
 
-    let boot_session = op.bootstrap_session();
-    let prefix = match op.execute(
+    let boot_session = febe.bootstrap_session();
+    let prefix = match febe.execute(
         boot_session,
         Request { id: None, op: Op::NextAccountPrefix { parent: node1() } },
     ) {
@@ -42,7 +42,7 @@ fn engine_world_satisfies_the_febe_demand() {
         _ => panic!("expected MaybeAddr"),
     };
 
-    let acct = ack_addr(op.execute(
+    let acct = ack_addr(febe.execute(
         boot_session,
         Request {
             id: None,
@@ -50,10 +50,10 @@ fn engine_world_satisfies_the_febe_demand() {
         },
     ));
 
-    let session = op.open_session(USER);
+    let session = febe.open_session(USER);
     // A DRAFT (explicit `false`): the account's flagless first mint would
     // be its published home, which takes no in-place edit (PUB-2.11).
-    let doc = ack_addr(op.execute(
+    let doc = ack_addr(febe.execute(
         session,
         Request {
             id: None,
@@ -61,7 +61,7 @@ fn engine_world_satisfies_the_febe_demand() {
         },
     ));
 
-    ack_addr(op.execute(
+    ack_addr(febe.execute(
         session,
         Request {
             id: None,
@@ -74,7 +74,7 @@ fn engine_world_satisfies_the_febe_demand() {
         },
     ));
 
-    match op.execute(
+    match febe.execute(
         session,
         Request {
             id: None,
@@ -97,14 +97,14 @@ fn engine_world_satisfies_the_febe_demand() {
 /// (PUB-8.4, PUB-8.5) — to a retired (guest) session and to a principal outside
 /// the owner's subtree, while the account's published home answers every
 /// class. The predicate's clauses are `tests/grants.rs`'s; what this pins is
-/// that `Operation<World>` reaches them at all.
+/// that `OperationSurface<World>` reaches them at all.
 #[test]
 fn m10_s_read_surface_answers_through_the_engine_s_predicate() {
     let engine = mem_engine();
-    let op: Operation<skep_engine::World> = Operation::new(Box::new(engine.stores()));
+    let febe: OperationSurface<skep_engine::World> = OperationSurface::new(Box::new(engine.stores()));
 
-    let boot = op.bootstrap_session();
-    let prefix = match op.execute(
+    let boot = febe.bootstrap_session();
+    let prefix = match febe.execute(
         boot,
         Request { id: None, op: Op::NextAccountPrefix { parent: node1() } },
     ) {
@@ -112,25 +112,25 @@ fn m10_s_read_surface_answers_through_the_engine_s_predicate() {
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
         _ => panic!("expected MaybeAddr"),
     };
-    let acct = ack_addr(op.execute(
+    let acct = ack_addr(febe.execute(
         boot,
         Request {
             id: None,
             op: Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: USER },
         },
     ));
-    let owner = op.open_session(USER);
+    let owner = febe.open_session(USER);
     // The flagless first mint is the account's HOME, born published
     // (PUB-8.21); the second is a private draft.
-    let home = ack_addr(op.execute(
+    let home = ack_addr(febe.execute(
         owner,
         Request { id: None, op: Op::CreateNewDocument { account: acct.clone(), published: None } },
     ));
-    let draft = ack_addr(op.execute(
+    let draft = ack_addr(febe.execute(
         owner,
         Request { id: None, op: Op::CreateNewDocument { account: acct.clone(), published: None } },
     ));
-    ack_addr(op.execute(
+    ack_addr(febe.execute(
         owner,
         Request {
             id: None,
@@ -144,7 +144,7 @@ fn m10_s_read_surface_answers_through_the_engine_s_predicate() {
     ));
 
     let read = |session, doc: &Address| {
-        op.execute(
+        febe.execute(
             session,
             Request {
                 id: None,
@@ -172,17 +172,17 @@ fn m10_s_read_surface_answers_through_the_engine_s_predicate() {
     }
     // GUEST — a retired session carries no principal (the daemon's guest
     // pattern): the guest predicate is published alone.
-    let guest = op.open_session(PrincipalId(4242));
-    op.close_session(guest);
+    let guest = febe.open_session(PrincipalId(4242));
+    febe.close_session(guest);
     withheld(read(guest, &draft), &draft);
     // NON-ENTITLED — a bound principal outside the owner's subtree, no grant.
-    let stranger = op.open_session(PrincipalId(77));
+    let stranger = febe.open_session(PrincipalId(77));
     withheld(read(stranger, &draft), &draft);
     // The published home answers both classes — a span set (empty, nothing
     // deposited), never a withheld answer: a published document never
     // answers withheld (PUB-6.3).
     for session in [guest, stranger] {
-        match op.execute(session, Request { id: None, op: Op::RetrieveDocVSpanSet { doc: home.clone() } })
+        match febe.execute(session, Request { id: None, op: Op::RetrieveDocVSpanSet { doc: home.clone() } })
         {
             Response::SpanSet { .. } => {}
             Response::Rejected(rej) => panic!("the published home was refused: {rej:?}"),
@@ -213,11 +213,11 @@ fn engine_stores_serves_a_kernel_rooted_at_a_reconstructed_world() {
 
     let world = engine.world_at(past).expect("a committed boundary answers");
     let kernel = Kernel::open(mem_cfg(), world).expect("an in-memory open runs no recovery");
-    let op: Operation<skep_engine::World> =
-        Operation::new(Box::new(EngineStores::new(Arc::new(kernel))));
-    let session = op.open_session(USER);
+    let febe: OperationSurface<skep_engine::World> =
+        OperationSurface::new(Box::new(EngineStores::new(Arc::new(kernel))));
+    let session = febe.open_session(USER);
 
-    match op.execute(
+    match febe.execute(
         session,
         Request {
             id: None,
@@ -233,7 +233,7 @@ fn engine_stores_serves_a_kernel_rooted_at_a_reconstructed_world() {
 
     // …and it is the PAST: the value committed after `past` is not in it. A
     // reconstruction that came back holding it would read as the head.
-    if let Response::Delivery { items, .. } = op.execute(
+    if let Response::Delivery { items, .. } = febe.execute(
         session,
         Request {
             id: None,

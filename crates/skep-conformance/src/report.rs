@@ -156,7 +156,7 @@ fn trunc(s: &str, n: usize) -> String {
 fn render_summary(records: &[ScenarioRecord]) -> String {
     let mut s = String::from("# skep conformance summary\n\n");
     s.push_str(&format!(
-        "{} scenarios played against skep's `Operation<World>::execute` surface.\n\n",
+        "{} scenarios played against skep's `OperationSurface<World>::execute`.\n\n",
         records.len()
     ));
     s.push_str("## Category × verdict\n\n");

@@ -23,7 +23,7 @@ use crate::reject::{FaultSite, RejectCode, Rejection};
 /// PRECEDENCE, since a successor may be wrong in several slots at once and
 /// exactly one answer goes back: the slots are built `from`, then `to`, then
 /// `ty`, and the first that refuses is the only refusal. Within a slot the
-/// first offending spec speaks (see [`endset_from_vspecs`]). Every refusal
+/// first offending spec speaks (see [`successor_slot`]). Every refusal
 /// names its slot in [`FaultSite`]'s `slot`, in M7's numbering ([`FROM`],
 /// [`TO`], [`TYPE`]) — the numbering `Op::FollowLink`'s and `Op::Project`'s
 /// slot index is already in — so the `index` beside it is read against a slot
@@ -44,8 +44,8 @@ pub(crate) fn successor_link(
     m5: &M5State,
     successor: &SuccessorSpec,
 ) -> Result<Link, Rejection> {
-    let from = endset_from_vspecs(m3, m5, FROM, &successor.from)?;
-    let to = endset_from_vspecs(m3, m5, TO, &successor.to)?;
+    let from = successor_slot(m3, m5, FROM, &successor.from)?;
+    let to = successor_slot(m3, m5, TO, &successor.to)?;
     let ty = match &successor.ty {
         SlotArg::Addrs(a) => {
             if a.len() > MAX_SLOT_SPANS {
@@ -53,7 +53,7 @@ pub(crate) fn successor_link(
             }
             enc(a)
         }
-        SlotArg::Resolve(v) => endset_from_vspecs(m3, m5, TYPE, v)?,
+        SlotArg::Resolve(v) => successor_slot(m3, m5, TYPE, v)?,
     };
     Ok(Link::triple(from, to, ty))
 }
@@ -130,7 +130,7 @@ pub(crate) fn successor_link(
 /// Past the guard and under the budget the tail is infallible: `Run::iextent`
 /// is total (every `Run` has `width ≥ 1` and an element-level `i_start`). An
 /// empty from/to is structurally fine; M7 gates the type slot.
-fn endset_from_vspecs(
+fn successor_slot(
     m3: &M3State,
     m5: &M5State,
     slot: usize,
@@ -232,7 +232,7 @@ mod tests {
 
         let ill_formed = VSpec { source: doc.clone(), span: span(&[2, 1], &[0, 1]) };
         let rej =
-            endset_from_vspecs(&m3, &m5, FROM, &[ill_formed]).expect_err("link-subspace span");
+            successor_slot(&m3, &m5, FROM, &[ill_formed]).expect_err("link-subspace span");
         assert_eq!(rej.op, OpKind::EditLink);
         assert_eq!(rej.code, RejectCode::IllFormedSpec);
         let site = rej.site.expect("localized");
@@ -243,7 +243,7 @@ mod tests {
         // would resolve to ⟨⟩, so it is refused instead.
         let unregistered = VSpec { source: doc, span: span(&[1, 1], &[0, 1]) };
         let rej =
-            endset_from_vspecs(&m3, &m5, TO, &[unregistered]).expect_err("unregistered source");
+            successor_slot(&m3, &m5, TO, &[unregistered]).expect_err("unregistered source");
         assert_eq!(rej.code, RejectCode::SourceNotRegistered);
         assert_eq!(rej.disposition, crate::reject::Disposition::Reorder);
         let site = rej.site.expect("localized");
@@ -251,7 +251,7 @@ mod tests {
         assert_eq!(site.index, Some(0));
 
         // No specs is not a fault: an empty slot the CALLER asked for.
-        assert!(endset_from_vspecs(&m3, &m5, FROM, &[]).expect("empty is fine").is_empty());
+        assert!(successor_slot(&m3, &m5, FROM, &[]).expect("empty is fine").is_empty());
     }
 
     /// §4: within a slot the FIRST offending spec speaks, and `IllFormedSpec`
@@ -267,12 +267,12 @@ mod tests {
         let unregistered = || VSpec { source: doc.clone(), span: span(&[1, 1], &[0, 1]) };
 
         // Both faults on ONE spec: the span is judged first.
-        let rej = endset_from_vspecs(&m3, &m5, FROM, &[ill_formed()]).expect_err("both faults");
+        let rej = successor_slot(&m3, &m5, FROM, &[ill_formed()]).expect_err("both faults");
         assert_eq!(rej.code, RejectCode::IllFormedSpec, "the span is judged before the source");
 
         // Two offending specs, the later one ill-formed: the earlier speaks,
         // and its index is what comes back.
-        let rej = endset_from_vspecs(&m3, &m5, FROM, &[unregistered(), ill_formed()])
+        let rej = successor_slot(&m3, &m5, FROM, &[unregistered(), ill_formed()])
             .expect_err("two offenders");
         assert_eq!(rej.code, RejectCode::SourceNotRegistered, "the first offender speaks");
         assert_eq!(rej.site.expect("localized").index, Some(0));

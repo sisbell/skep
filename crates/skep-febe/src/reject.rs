@@ -329,12 +329,12 @@ impl Rejection {
     }
 
     /// The rejection for a frame that never parsed into an [`Op`] — the one
-    /// rejection M10 cannot raise for itself, since [`Operation::execute`]
-    /// takes an already-parsed [`Request`] and so has no `Op` and no
-    /// `OpKind` from `Op::kind()`. The transport's [`Codec`] impl calls this
-    /// on its own `parse` failure and marshals the result like any other
-    /// response, which is how a malformed frame still gets exactly one
-    /// answer (Invariants, never-silent).
+    /// rejection M10 cannot raise for itself, since
+    /// [`OperationSurface::execute`] takes an already-parsed [`Request`] and
+    /// so has no `Op` and no `OpKind` from `Op::kind()`. The transport's
+    /// [`Codec`] impl calls this on its own `parse` failure and marshals the
+    /// result like any other response, which is how a malformed frame still
+    /// gets exactly one answer (Invariants, never-silent).
     ///
     /// Classification stays M10's: the code is `Malformed` and the
     /// disposition is whatever the table says `Malformed` disposes to, so an
@@ -343,7 +343,7 @@ impl Rejection {
     ///
     /// [`Op`]: crate::Op
     /// [`Codec`]: crate::Codec
-    /// [`Operation::execute`]: crate::Operation::execute
+    /// [`OperationSurface::execute`]: crate::OperationSurface::execute
     /// [`Request`]: crate::Request
     pub fn unparseable(e: ParseError) -> Rejection {
         let r = Rejection::classified(OpKind::Unparseable, RejectCode::Malformed, None);

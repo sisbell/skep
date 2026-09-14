@@ -14,7 +14,7 @@ use skep_arrangement::{HasM5, M5Rec, M5State, Run, VPos, VSpec};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_febe::{
-    BirthVersion, Deposit, Disposition, EditionClaim, Op, OpKind, Operation, RejectCode, Rejection,
+    BirthVersion, Deposit, Disposition, EditionClaim, Op, OpKind, OperationSurface, RejectCode, Rejection,
     ReqId, Request, Response, SessionId, Stores,
 };
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, WorldState};
@@ -221,18 +221,18 @@ impl Stores<World> for KernelStores {
     }
 }
 
-pub fn operation() -> Operation<World> {
+pub fn surface() -> OperationSurface<World> {
     seed_edition_claims(Vec::new()); // the empty class, until a test seeds it
-    Operation::new(Box::new(KernelStores { kernel: kernel() }))
+    OperationSurface::new(Box::new(KernelStores { kernel: kernel() }))
 }
 
 // ───────────────────────────── request helpers ──────────────────────────────
 
-pub fn ex(febe: &Operation<World>, session: SessionId, op: Op) -> Response {
+pub fn ex(febe: &OperationSurface<World>, session: SessionId, op: Op) -> Response {
     febe.execute(session, Request { id: None, op })
 }
 
-pub fn ex_id(febe: &Operation<World>, session: SessionId, id: &[u8], op: Op) -> Response {
+pub fn ex_id(febe: &OperationSurface<World>, session: SessionId, id: &[u8], op: Op) -> Response {
     febe.execute(session, Request { id: Some(ReqId(id.to_vec())), op })
 }
 
@@ -451,18 +451,18 @@ pub fn edition_claims(r: Response) -> Vec<EditionClaim> {
 
 pub const USER: PrincipalId = PrincipalId(7);
 
-/// An `Operation` plus a bootstrap session, one delegated account under the
-/// genesis node, and an open session for its principal — all driven through
-/// the FEBE surface itself.
+/// An `OperationSurface` plus a bootstrap session, one delegated account
+/// under the genesis node, and an open session for its principal — all driven
+/// through the FEBE surface itself.
 pub struct Fixture {
-    pub febe: Operation<World>,
+    pub febe: OperationSurface<World>,
     pub boot: SessionId,
     pub user: SessionId,
     pub account: Address,
 }
 
 pub fn setup() -> Fixture {
-    let febe = operation();
+    let febe = surface();
     let boot = febe.bootstrap_session();
     let (prefix, _) = maybe_addr(ex(&febe, boot, Op::NextAccountPrefix { parent: node1() }));
     let prefix = prefix.expect("the genesis node has a delegable next-form prefix");
@@ -569,7 +569,7 @@ pub fn setup_with_unreadable() -> (Fixture, Unreadable) {
             principal == Some(USER) || !unreadable.lock().expect("no poisoning").contains(doc)
         }
     };
-    let febe = operation().with_read_predicate(predicate);
+    let febe = surface().with_read_predicate(predicate);
     let boot = febe.bootstrap_session();
     let (prefix, _) = maybe_addr(ex(&febe, boot, Op::NextAccountPrefix { parent: node1() }));
     let prefix = prefix.expect("the genesis node has a delegable next-form prefix");

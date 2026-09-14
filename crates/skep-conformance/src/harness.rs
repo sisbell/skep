@@ -13,7 +13,7 @@ use skep_address::{Address, Nat, Span};
 use skep_arrangement::{Run, VPos, VSpec};
 use skep_content::Val;
 use skep_engine::{Engine, World};
-use skep_febe::{Deposit, Op, Operation, Request, Response, SessionId};
+use skep_febe::{Deposit, Op, OperationSurface, Request, Response, SessionId};
 use skep_kernel::{CheckpointPolicy, Durability, KernelConfig};
 use skep_links::{Endset, SlotArg};
 use skep_namespace::PrincipalId;
@@ -34,11 +34,11 @@ pub struct DeletedRegion {
 }
 
 pub struct Rig {
-    // Held so the engine (and its kernel Arc) outlives the operation handle;
+    // Held so the engine (and its kernel Arc) outlives the command surface;
     // EngineStores owns its own Arc clone, but keeping the assembler visible
     // makes the ownership story auditable.
     _engine: Engine,
-    op: Operation<World>,
+    febe: OperationSurface<World>,
     /// Bootstrap session — all delegations run under it (π₀'s prefix [1] is
     /// an ancestor of every prefix we mint).
     boot: SessionId,
@@ -92,18 +92,18 @@ impl Rig {
     /// an owned private draft. Through `make_link` — the harness holds no
     /// back door.
     fn setup_grant(
-        op: &Operation<World>,
+        febe: &OperationSurface<World>,
         session: SessionId,
         account: &Address,
     ) -> Result<Address, RigError> {
-        let home = match op.execute(
+        let home = match febe.execute(
             session,
             Request { id: None, op: Op::CreateNewDocument { account: account.clone(), published: None } },
         ) {
             Response::AckAddr { addr, .. } => addr,
             other => return Err(format!("home mint failed: {}", brief(&other))),
         };
-        match op.execute(
+        match febe.execute(
             session,
             Request {
                 id: None,
@@ -127,21 +127,21 @@ impl Rig {
         };
         let engine = Engine::open(cfg)
             .map_err(|e| format!("engine open: {e}"))?;
-        let op = Operation::new(Box::new(engine.stores()));
-        let boot = op.bootstrap_session();
+        let febe = OperationSurface::new(Box::new(engine.stores()));
+        let boot = febe.bootstrap_session();
 
         // Delegate the scenario's working account under node [1] — udanax's
         // DEFAULT_ACCOUNT analog. The α seed "1.1.0.1" ↦ this account is
         // installed by the runner.
         let node = addr(&[1]).ok_or("node [1] must validate")?;
-        let prefix = match op.execute(
+        let prefix = match febe.execute(
             boot,
             Request { id: None, op: Op::NextAccountPrefix { parent: node } },
         ) {
             Response::MaybeAddr { addr: Some(a), .. } => a,
             other => return Err(format!("next-account-prefix failed: {}", brief(&other))),
         };
-        let account = match op.execute(
+        let account = match febe.execute(
             boot,
             Request {
                 id: None,
@@ -154,14 +154,14 @@ impl Rig {
             Response::AckAddr { addr, .. } => addr,
             other => return Err(format!("bootstrap delegate failed: {}", brief(&other))),
         };
-        let session = op.open_session(PrincipalId(1));
+        let session = febe.open_session(PrincipalId(1));
         // The account's home and its setup grant come FIRST: the home must
         // be the account's doc 1 (the fold's residence pin, PUB-5.17).
-        let home = Rig::setup_grant(&op, session, &account)?;
+        let home = Rig::setup_grant(&febe, session, &account)?;
 
         let mut rig = Rig {
             _engine: engine,
-            op,
+            febe,
             boot,
             sessions: BTreeMap::new(),
             labels: BTreeMap::new(),
@@ -207,7 +207,7 @@ impl Rig {
     /// Execute one request under the current session. No idempotency key —
     /// the harness replays a linear script.
     pub fn exec(&self, o: Op) -> Response {
-        self.op.execute(self.current_session, Request { id: None, op: o })
+        self.febe.execute(self.current_session, Request { id: None, op: o })
     }
 
     /// The initially delegated account (α seed target).
@@ -285,7 +285,7 @@ impl Rig {
             .get(&crate::tum::addr_str(parent))
             .map(|(s, _)| *s)
             .unwrap_or(self.boot);
-        let prefix = match self.op.execute(
+        let prefix = match self.febe.execute(
             owner_session,
             Request { id: None, op: Op::NextAccountPrefix { parent: parent.clone() } },
         ) {
@@ -294,7 +294,7 @@ impl Rig {
         };
         let id = PrincipalId(self.next_principal);
         self.next_principal += 1;
-        let account = match self.op.execute(
+        let account = match self.febe.execute(
             owner_session,
             Request {
                 id: None,
@@ -304,10 +304,10 @@ impl Rig {
             Response::AckAddr { addr, .. } => addr,
             other => return Err(format!("delegate: {}", brief(&other))),
         };
-        let session = self.op.open_session(id);
+        let session = self.febe.open_session(id);
         // Every rig-delegated account carries the setup grant (ruling 21),
         // deposited under ITS session — the owner of the home it goes in.
-        let home = Rig::setup_grant(&self.op, session, &account)?;
+        let home = Rig::setup_grant(&self.febe, session, &account)?;
         self.homes.push(home);
         self.sessions
             .insert(crate::tum::addr_str(&account), (session, id));

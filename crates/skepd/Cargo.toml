@@ -40,7 +40,7 @@ client = []
 # The assembled engine: Engine::open (genesis-or-recover), the Stores<World>
 # factory, and (behind `observe`) the WorldDump surface.
 skep-engine = { path = "../skep-engine", default-features = false }
-# M10 — the operation surface this daemon transports: Operation, Op/Response,
+# M10 — the operation surface this daemon transports: OperationSurface, Op/Response,
 # the Codec seam, and the typed Rejection model.
 skep-febe = { path = "../skep-febe" }
 # M2 — KernelConfig/Durability/CheckpointPolicy (durability is configuration,
@@ -76,7 +76,7 @@ serde_json.workspace = true
 # written-out HTTP/1.1 subset over std's TcpListener; server.rs's module doc
 # carries why a pull-based server library cannot serve the commit stream.
 # No async runtime either: M2's single applier already serializes writes and
-# Operation::execute is Sync, so worker threads are the whole concurrency
+# OperationSurface::execute is Sync, so worker threads are the whole concurrency
 # story.
 #
 # Non-poisoning locks, used for EVERY lock this crate holds (the same

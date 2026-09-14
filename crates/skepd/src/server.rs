@@ -148,7 +148,7 @@ use parking_lot::Mutex;
 use serde_json::Value;
 use skep_engine::{Engine, EngineError, HistoryError, World};
 use skep_febe::{
-    Codec, Disposition, FaultSite, Op, Operation, OpKind, RejectCode, Rejection, Request,
+    Codec, Disposition, FaultSite, Op, OperationSurface, OpKind, RejectCode, Rejection, Request,
     Response, SessionId,
 };
 use skep_identity::IdentityState;
@@ -920,7 +920,7 @@ pub(crate) const GUEST_PRINCIPAL: PrincipalId = PrincipalId(u64::MAX);
 /// The retirement is what does the work, so it happens here rather than
 /// being left to a caller to remember: a session that stayed open would
 /// carry [`GUEST_PRINCIPAL`] into every unauthenticated write.
-pub(crate) fn open_guest_session(febe: &Operation<World>) -> SessionId {
+pub(crate) fn open_guest_session(febe: &OperationSurface<World>) -> SessionId {
     let guest = febe.open_session(GUEST_PRINCIPAL);
     febe.close_session(guest);
     guest
@@ -940,7 +940,7 @@ pub struct Daemon {
     /// against. `op` throughout this crate names an operation or its kind
     /// (`Op`, `OpKind`, `op_name`, the wire's own `"op"` field), so the
     /// boundary takes the boundary's name.
-    febe: Operation<World>,
+    febe: OperationSurface<World>,
     codec: JsonCodec,
     /// The AUTH session layer: config, the challenge and session stores,
     /// the credential write lock, the identity fold, the credential memo.
@@ -1036,7 +1036,7 @@ impl Daemon {
         // consult is history's (`history.rs`): a read as of N answers the
         // N-world's content through the HEAD's sets (PUB-6.48), which no
         // world of its own can supply.
-        let febe = Operation::new(Box::new(engine.stores()));
+        let febe = OperationSurface::new(Box::new(engine.stores()));
         let guest = open_guest_session(&febe);
         let auth = {
             let snap = engine.kernel().snapshot();
@@ -2240,12 +2240,12 @@ impl std::fmt::Debug for Skepd {
 /// Bind `127.0.0.1:port` (`0` = ephemeral) and serve with `workers`
 /// threads. Concurrency policy in full: each worker blocks in `accept`,
 /// serves the one request on that connection, closes it — one request per
-/// connection, `Connection: close` on every response (`Operation::execute`
-/// is `Sync` and M2's single applier serializes writes, so the worker count
-/// is the whole op-concurrency story). `GET /events` is the one exception
-/// to request/response: the worker hands the socket to a dedicated
-/// subscriber thread and returns to `accept` at once, so open streams never
-/// occupy the op pool.
+/// connection, `Connection: close` on every response
+/// (`OperationSurface::execute` is `Sync` and M2's single applier
+/// serializes writes, so the worker count is the whole op-concurrency
+/// story). `GET /events` is the one exception to request/response: the
+/// worker hands the socket to a dedicated subscriber thread and returns to
+/// `accept` at once, so open streams never occupy the op pool.
 ///
 /// PRECONDITION: `workers >= 1`. A count of zero asks for a server that
 /// serves nothing, which is a caller's bug rather than an outcome, so it

@@ -16,8 +16,8 @@ use skep_namespace::PrincipalId;
 /// M10 constructs one.
 ///
 /// `#[must_use]`: an id is the only handle on the binding it names, and
-/// `Operation::close_session` needs it, so dropping one leaves a binding
-/// nothing can retire for the rest of the uptime.
+/// `OperationSurface::close_session` needs it, so dropping one leaves a
+/// binding nothing can retire for the rest of the uptime.
 #[must_use]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct SessionId(pub(crate) u64);

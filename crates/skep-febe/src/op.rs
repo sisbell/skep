@@ -42,36 +42,36 @@ pub struct ReqId(pub Vec<u8>);
 ///
 /// The bill this bounds is M10's, so the number is M10's. A committed write's
 /// key stays RESIDENT for the life of its cache entry — until eviction, or
-/// until [`Operation::close_session`] purges the session — so the memo's
-/// retention is (cache capacity) × (this cap), and both factors have to be
-/// finite for the product to be. With this one uncapped the other factor
-/// would be whatever body size the transport admits: one session's worth of
-/// committed writes retaining gigabytes that do not clear when the caller
-/// stops, unlike every CPU cost on this surface.
+/// until [`OperationSurface::close_session`] purges the session — so the
+/// memo's retention is (cache capacity) × (this cap), and both factors have
+/// to be finite for the product to be. With this one uncapped the other
+/// factor would be whatever body size the transport admits: one session's
+/// worth of committed writes retaining gigabytes that do not clear when the
+/// caller stops, unlike every CPU cost on this surface.
 ///
-/// 256 bytes is far above any key a client needs — a UUID is 36 characters, a
-/// hex-encoded 256-bit value 64 — and puts the retained bill at a quarter
+/// 256 bytes is far above any key a client needs — a UUID is 36 characters,
+/// a hex-encoded 256-bit value 64 — and puts the retained bill at a quarter
 /// megabyte against the memo's 1024 entries.
 ///
 /// A transport refuses an over-long id at parse, which is the first door and
-/// the one that tells the client. [`crate::Operation`] holds the second: a key
-/// past this bound is simply not memoized, so a hand-assembled [`Request`]
-/// cannot enlarge the bill by skipping the parser.
+/// the one that tells the client. [`crate::OperationSurface`] holds the
+/// second: a key past this bound is simply not memoized, so a hand-assembled
+/// [`Request`] cannot enlarge the bill by skipping the parser.
 ///
-/// [`Operation::close_session`]: crate::Operation::close_session
+/// [`OperationSurface::close_session`]: crate::OperationSurface::close_session
 pub const MAX_REQ_ID_BYTES: usize = 256;
 
 /// The parsed request — one variant per FEBE operation (args in M1/M5/M7/M8
 /// types; the principal comes from the session, never the wire).
 ///
-/// A value, because [`Operation::execute`] consumes one: a transport that
-/// wants to hold what it dispatched — to log it, to buffer it for reorder, to
-/// reissue it under [`Request::id`] — keeps a clone, and one that classifies a
-/// request through [`Op::is_read`] before dispatching it can then still
-/// dispatch it. Comparison for the same callers: a harness pins the request it
-/// built against the one a parser produced.
+/// A value, because [`OperationSurface::execute`] consumes one: a transport
+/// that wants to hold what it dispatched — to log it, to buffer it for
+/// reorder, to reissue it under [`Request::id`] — keeps a clone, and one that
+/// classifies a request through [`Op::is_read`] before dispatching it can
+/// then still dispatch it. Comparison for the same callers: a harness pins
+/// the request it built against the one a parser produced.
 ///
-/// [`Operation::execute`]: crate::Operation::execute
+/// [`OperationSurface::execute`]: crate::OperationSurface::execute
 ///
 /// NOT `Debug`, on one leaf: M4's `Val`, which withholds it so that content
 /// bytes never render into a log. NOT `Hash`, on that leaf and M1's `Address`.
@@ -166,7 +166,7 @@ pub enum Op {
     /// destination at commit (the trunk's next member, or the base's
     /// daughter — PUB-2.39), places the runs by their origin (PUB-2.40) and
     /// runs the source gate (PUB-6.23) through the read predicate the daemon
-    /// supplies ([`Operation::with_read_predicate`]); M10 hands the shot
+    /// supplies ([`OperationSurface::with_read_predicate`]); M10 hands the shot
     /// through verbatim and names no policy of its own.
     ///
     /// SIZE is the caller's here as everywhere ([`Codec::parse`]), and for
@@ -177,7 +177,7 @@ pub enum Op {
     /// field M10 measures, and it is spent inside the write transaction under
     /// M2's applier lock.
     ///
-    /// [`Operation::with_read_predicate`]: crate::Operation::with_read_predicate
+    /// [`OperationSurface::with_read_predicate`]: crate::OperationSurface::with_read_predicate
     /// [`Codec::parse`]: crate::Codec::parse
     Publish { doc: Address, shot: Shot },
     // ── link writes (→ M7) ──
@@ -400,9 +400,9 @@ impl Op {
     /// Public because the partition is a fact about the request, not an
     /// implementation detail of the lifecycle: a transport that serializes
     /// or records writes must know which side an `Op` falls on BEFORE
-    /// [`Operation::execute`] takes it, and this is the one answer.
+    /// [`OperationSurface::execute`] takes it, and this is the one answer.
     ///
-    /// [`Operation::execute`]: crate::Operation::execute
+    /// [`OperationSurface::execute`]: crate::OperationSurface::execute
     //
     // The two-arm shape is load-bearing (compile-time non-exhaustiveness on a
     // new variant), so the `matches!` rewrite clippy suggests is refused.
@@ -522,13 +522,13 @@ impl Op {
     /// [`Op::source_arguments`] (PUB-6.23).
     ///
     /// Public because the consult has TWO sites that must agree on the list:
-    /// [`Operation::execute`] runs it over the snapshot it pins, and a
+    /// [`OperationSurface::execute`] runs it over the snapshot it pins, and a
     /// transport answering a HISTORICAL read runs it over the HEAD before
     /// any reconstruction (PUB-6.49: the head-set check precedes the
     /// N-world's registration check and the history refusals), reading the
     /// same list rather than restating it.
     ///
-    /// [`Operation::execute`]: crate::Operation::execute
+    /// [`OperationSurface::execute`]: crate::OperationSurface::execute
     pub fn doc_arguments(&self) -> Vec<&Address> {
         match self {
             Op::RetrieveV { specs } => specs.iter().map(|s| &s.doc).collect(),

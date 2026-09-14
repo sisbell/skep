@@ -7,7 +7,7 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 
 - **`Op` / `Response`** — the typed enumeration of every operation a
   client can request and every answer it can receive.
-- **`Operation::execute`** — total by contract: every input yields a
+- **`OperationSurface::execute`** — total by contract: every input yields a
   `Response`, never a panic; failures are typed rejections with
   fault-site localization.
 - **Sessions** — open / close / bootstrap handles and a per-session

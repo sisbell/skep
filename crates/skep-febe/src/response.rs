@@ -63,9 +63,9 @@ pub struct BirthVersion {
 ///
 /// A rejection carries none: it names the operation it refused and how, not a
 /// position. So a client tracking the frontier across a refusal asks
-/// [`Operation::log_position`] or reissues.
+/// [`OperationSurface::log_position`] or reissues.
 ///
-/// [`Operation::log_position`]: crate::Operation::log_position
+/// [`OperationSurface::log_position`]: crate::OperationSurface::log_position
 ///
 /// `Debug + PartialEq + Eq`, because the caller who holds one cannot supply
 /// them (both trait and type are foreign to it) and every use of an answer

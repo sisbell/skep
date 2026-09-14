@@ -1069,7 +1069,7 @@ fn a_fence_above_the_head_is_not_this_journals_and_is_discarded() {
 #[test]
 fn pre_feature_positions_answer_bare_entries() {
     use skep_engine::{Engine, KernelConfig};
-    use skep_febe::{Codec, Operation, Response, SessionId};
+    use skep_febe::{Codec, OperationSurface, Response, SessionId};
     use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability};
     use skep_namespace::PrincipalId;
     use skepd::JsonCodec;
@@ -1085,7 +1085,7 @@ fn pre_feature_positions_answer_bare_entries() {
             checkpoint: CheckpointPolicy::EveryN(1024),
         };
         let engine = Engine::open(cfg).expect("engine genesis");
-        let febe = Operation::new(Box::new(engine.stores()));
+        let febe = OperationSurface::new(Box::new(engine.stores()));
         let codec = JsonCodec;
         let exec = |sid: SessionId, frame: &str| {
             let req = codec

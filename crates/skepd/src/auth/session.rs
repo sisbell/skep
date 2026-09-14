@@ -515,7 +515,7 @@ pub(crate) fn handshake(
 #[cfg(test)]
 mod tests {
     use skep_engine::Engine;
-    use skep_febe::Operation;
+    use skep_febe::OperationSurface;
     use skep_kernel::{CheckpointPolicy, Durability, KernelConfig};
 
     use super::super::AuthOptions;
@@ -641,7 +641,7 @@ mod tests {
             checkpoint: CheckpointPolicy::Manual,
         })
         .expect("in-memory genesis cannot fail");
-        let febe = Operation::new(Box::new(engine.stores()));
+        let febe = OperationSurface::new(Box::new(engine.stores()));
         let snap = engine.kernel().snapshot();
         let world = snap.world();
         // Genesis: no account holds any key, so no signed binding is live.

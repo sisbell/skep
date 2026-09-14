@@ -166,8 +166,19 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// RETURNS `(tuple, seq)`: the active `pdef` tuple's address — the
     /// fresh deposit's, or on an idem⊤ dedup hit the incumbent's, with M7's
     /// base `Seq` and nothing committed — so ≤1 active `pdef` per start
-    /// within the guest class (PR0). POSTCONDITION: the memo holds `start`
-    /// defined, so `signature(start)` answers.
+    /// within the guest class (PR0).
+    ///
+    /// POSTCONDITION: the memo holds `start` defined, so `signature(start)`
+    /// answers — UNLESS a probe already froze `start` POISONED, which takes a
+    /// PR-DISC breach and which this call does not lift: the memo's first
+    /// fill wins and never yields (§Internal 4). The one shape is a
+    /// breach-registered start probed while a referent was still
+    /// unregistered — `DanglingReference` is the single WT verdict not fixed
+    /// by the immutable content — so the freeze stands, this call still
+    /// returns `Ok`, and `signature(start)` keeps answering `None`. Through
+    /// this gate it cannot arise: (iii) puts every referent's
+    /// ever-registration ahead of the check, and PR2 registers the DAG
+    /// bottom-up.
     pub fn register_pred(
         &self,
         home: &Address,
@@ -220,12 +231,19 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// (`ArgArityMismatch`); an argument at the wrong sort, or an `AddrSet`
     /// holding a tumbler that is no T4-valid address and so no ℘_fin(T)
     /// value (`ArgSortMismatch`). `args` bind positionally to Γ_D
-    /// (= `signature(start).params`). Pure pin to `snap`; the denotation is
-    /// DAG-recursive (`eval`'s walk + the one `Ref` arm), never a
-    /// materialized flat term (Conflicts §5). The denotation reads M7
-    /// through the GUEST-CLASS view (lane 4.1) — the same view an `Inline`
-    /// trigger reads — while the ever-registration probe stays class-free
-    /// (`ever_registered`).
+    /// (= `signature(start).params`). The denotation is DAG-recursive
+    /// (`eval`'s walk + the one `Ref` arm), never a materialized flat term
+    /// (Conflicts §5), and reads M7 through the GUEST-CLASS view (lane 4.1)
+    /// — the same view an `Inline` trigger reads — while the
+    /// ever-registration probe stays class-free (`ever_registered`).
+    ///
+    /// A pure pin to `snap` for the DENOTATION: every structural read it
+    /// makes is `snap`'s. The def's RESOLUTION is the memo's, which on a miss
+    /// pins its own later snapshot (`derive_def`); the answer is the same
+    /// either way, by `register_pred`'s argument — the ever-gate above ran at
+    /// `snap`, ever-registration is monotone, and signature facts are
+    /// content-intrinsic, so a def ever-registered at `snap` has its whole
+    /// referent DAG ever-registered there too (PR2, gate (iii)).
     pub fn evaluate_def(
         &self,
         start: &Address,
@@ -331,6 +349,16 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// with the aggregate threshold widened to a bound ℕ parameter, at a
     /// fixed view (view-independence makes the classification
     /// view-invariant).
+    ///
+    /// THE LEGS READ THREE STATES, and the operation is not atomic over
+    /// them: (0) resolves through the memo, which on a miss pins its own
+    /// snapshot (`derive_def`) — content-intrinsic, so the pin cannot change
+    /// the answer; (ii) reads the `snap` this call pins; the deposit is a
+    /// THIRD transaction after both. A def retracted in the gap is still
+    /// certified — the accepted state `retract_pred` states from its side,
+    /// the certificate being about the immutable content — and a def
+    /// registered between `snap` and the memo's pin answers `NotActive`,
+    /// which a retry resolves.
     ///
     /// RETURNS `(tuple, seq)`: the active `pd_stable` tuple's address — the
     /// fresh deposit's, or on re-certification the incumbent's, with M7's

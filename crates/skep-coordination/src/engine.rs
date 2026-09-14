@@ -439,13 +439,15 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// The DRAFT BOUNDARY (PUB round 2, lane 3.3, §5): the document a fire at
     /// guest class may not cross, or `None`. Both the action's HOME and the
     /// bound argument's DOCUMENT must be readable at guest class off the
-    /// fire's own snapshot, else the fire is refused BEFORE any deposit, as a
-    /// `Failed` step (never a silent skip); the home is asked first, so when
-    /// both fail it is the document named. An argument with no document field
-    /// is judged as itself — as is a document address bound as the argument.
-    /// The predicate is therefore consulted on addresses no gate has
-    /// established to be registered documents (the home, before M7's H-HOME),
-    /// which is why `Coordinator::new` obliges the assembler to make it TOTAL.
+    /// fire's own snapshot, else the fire is refused BEFORE any deposit — as
+    /// `FireError::DraftBoundary`, a `Failed` step through
+    /// [`Coordinator::step`], never a silent skip; the home is asked first,
+    /// so when both fail it is the document named. An argument with no
+    /// document field is judged as itself — as is a document address bound
+    /// as the argument. The predicate is therefore consulted on addresses no
+    /// gate has established to be registered documents (the home, before
+    /// M7's H-HOME), which is why `Coordinator::new` obliges the assembler
+    /// to make it TOTAL.
     ///
     /// This is the READ half of the class. What a deposit's own value-keyed
     /// gates see is `Coordinator::link_writer`'s (lane 3.3b).
@@ -487,6 +489,16 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// surfaces as `Failed` (never swallowed) and the cursor rotates PAST
     /// the failing occurrence, so it cannot starve the rest of the agenda
     /// (§7).
+    ///
+    /// CALLER'S OBLIGATION, and the hypothesis the reachability claim above
+    /// rests on: RE-PIN between steps — `step(&kernel.snapshot())` per
+    /// iteration. A `NoOp` makes NO progress toward `quiescent(snap)`: the
+    /// peek reads `snap` and only the fire reads the present, so an
+    /// occurrence the fire itself falsified is still enabled AT `snap`. A
+    /// driver that pins once and loops on the stale snapshot therefore gets
+    /// one fire and then `NoOp` forever, with `quiescent(&snap)` false
+    /// forever — no concurrent writer needed, the rule's own deposit being
+    /// what falsifies it.
     pub fn step(&mut self, snap: &Snapshot<W>) -> StepOutcome {
         let n = self.rules.len();
         if n == 0 {

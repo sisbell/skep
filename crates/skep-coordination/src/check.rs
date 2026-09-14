@@ -8,10 +8,13 @@
 //! The pass is also the crate's two resource doors for a term, stored or
 //! supplied: it refuses a tree that nests past [`MAX_DEPTH`] — counting the
 //! evaluable projection it builds (`Reg`-expansion joins included) and the
-//! reach of every reference through its referent — and one that spends the
-//! node [`Budget`], counting every node it visits or builds, so nested `Reg`
-//! quantifiers and an `Arc`-shared body are charged for what they produce and
-//! the check stops at the budget rather than after it.
+//! levels a reference costs, its referent's own reach and each argument at
+//! the `Let` position its index gives it ([`argument_depth`],
+//! [`reference_reach`]) — and one that spends the node [`Budget`], counting
+//! every node it visits or builds AND the payload each carries, so nested
+//! `Reg` quantifiers, an `Arc`-shared body and a large literal are charged
+//! for what they produce and the check stops at the budget rather than after
+//! it.
 
 use std::cell::Cell;
 use std::collections::HashSet;

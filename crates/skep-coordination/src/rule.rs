@@ -200,6 +200,11 @@ pub enum FireOutcome {
 /// repair (registering the home, publishing the document) is the caller's,
 /// and a rule that cannot be repaired is shed only with its coordinator.
 ///
+/// `NoOp` means the pick was enabled at the peeked snapshot and not at the
+/// fire's own: nothing committed, the cursor rotated, and — the peek being
+/// the CALLER's snapshot — no progress toward `quiescent` AT that snapshot.
+/// Re-pin per step ([`crate::Coordinator::step`] states the obligation).
+///
 /// Deliberately exhaustive, as `FireOutcome` is: a step fires, dedups, fails,
 /// finds its pick a no-op, or finds nothing enabled — the scheduler's whole
 /// case split, which a driver's exhaustive match should carry. `#[must_use]`

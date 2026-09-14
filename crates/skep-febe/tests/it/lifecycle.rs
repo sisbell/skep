@@ -97,6 +97,38 @@ fn the_publication_reads_answer_the_metadata_a_client_admits_an_edition_by() {
     }
 }
 
+/// PUB-8.46 and the registration refusal M10 ORIGINATES: the two COMPOSED
+/// reads — the only two whose refusal comes from no store — demand a
+/// registered DOCUMENT, and the TIER half of that demand is what bounds the
+/// edition-claim seam, since the world narrows its `to` range by no level: an
+/// account-tier target would ask after every document under it and a
+/// node-tier one after the whole store. A registered account, the genesis
+/// node and a content element are refused exactly as an unregistered document
+/// is, and the registered document beside them is answered.
+#[test]
+fn the_two_composed_reads_demand_a_registered_document_and_not_merely_an_entity() {
+    let fx = setup();
+    let d = create_doc(&fx);
+    let (element, _) = insert3(&fx, &d);
+    let ghost = ghost_doc(&fx.account, 91);
+
+    for named in [&fx.account, &node1(), &element, &ghost] {
+        for op in [
+            Op::DocMetadata { doc: named.clone() },
+            Op::EditionClaims { target: named.clone() },
+        ] {
+            let kind = op.kind();
+            let rej = rejected(ex(&fx.febe, fx.user, op));
+            assert_eq!(rej.op, kind);
+            assert_eq!(rej.code, RejectCode::DocNotRegistered, "{kind:?} on {named:?}");
+        }
+    }
+    // The registered document beside them is answered, so the eight refusals
+    // are about the ARGUMENT and not about the reads being broken.
+    assert_eq!(doc_metadata(ex(&fx.febe, fx.user, Op::DocMetadata { doc: d.clone() })).0, d);
+    assert!(edition_claims(ex(&fx.febe, fx.user, Op::EditionClaims { target: d })).is_empty());
+}
+
 /// PUB-8.16 / PUB-8.21: the three-valued flag rides through UNRESOLVED — M10
 /// decides nothing about it, and M3's create path resolves the absent arm. A
 /// fresh account's FIRST flagless mint is born PUBLISHED and the next is

@@ -2,7 +2,7 @@
 //! `common`'s readability fixture gives it (PUB round 2, lane 3.3; PUB-6.1,
 //! PUB-6.4, PUB-6.6, PUB-6.8, PUB-6.12, PUB-6.13, PUB-8.46).
 //!
-//! Five claims, all of them disclosure claims, and each a separate rule:
+//! Six claims, all of them disclosure claims, and each a separate rule:
 //!
 //! 1. the DOC-ARGUMENT CONSULT — the first unreadable NAMED document of a
 //!    read answers WITHHELD naming itself, ahead of every other validation;
@@ -13,7 +13,9 @@
 //!    drops each RESULT the caller may not read, at its identity;
 //! 4. the WITHHELD ITEM — a delivery masks per RUN, in place, so an
 //!    unreadable origin costs its positions and not its neighbours';
-//! 5. the GUEST — a session resolving to no principal is MASKED, not gated.
+//! 5. the GUEST — a session resolving to no principal is MASKED, not gated;
+//! 6. beneath all five, WHICH PREDICATE ANSWERS — the world's own where a
+//!    front door supplies none, the supplied one OVERRIDING it where it does.
 //!
 //! The write path's use of the same predicate is `write_door.rs`.
 //!
@@ -44,6 +46,41 @@ fn link_over(fx: &Fixture, home: &Address, covered: &Address) -> Address {
         },
     ))
     .0
+}
+
+/// The readability fixture's link pair. Four same-typed addresses, NAMED
+/// rather than positional: a tuple of four `Address`es is the swap this file
+/// would not notice.
+struct LinkPair {
+    /// The readable document both links' endsets cover, and `shown`'s home.
+    open: Address,
+    /// The home the stranger may not read — `hidden`'s.
+    secret: Address,
+    /// Homed in `secret`: the link only the home rule removes.
+    hidden: Address,
+    /// Homed in `open`: the link that survives every filter.
+    shown: Address,
+}
+
+/// Two links over ONE readable document's content, distinguished by nothing
+/// but their HOME, so only the result-set filter (PUB-6.13) can tell them
+/// apart — the query, the census, the window, the lineage probe and the
+/// orphan preview all reach both.
+///
+/// The unreadable home is created FIRST, so `hidden` sorts BEFORE `shown`: a
+/// link is minted in its home's link subspace, so the homes' address order is
+/// the links'. That is what lets a window of one distinguish a rule applied
+/// before the slice from one applied after (PUB-6.14) — and the fixture
+/// asserts its own premise rather than depending on it silently.
+fn two_links_over_one_document(fx: &Fixture, unreadable: &Unreadable) -> LinkPair {
+    let secret = create_doc(fx);
+    let open = create_doc(fx);
+    insert3(fx, &open);
+    let hidden = link_over(fx, &secret, &open);
+    let shown = link_over(fx, &open, &open);
+    assert!(hidden < shown, "the unreadable home's link must sort first");
+    unreadable.lock().expect("no poisoning").push(secret.clone());
+    LinkPair { open, secret, hidden, shown }
 }
 
 // ────────────────────── 1. the doc-argument consult ─────────────────────────
@@ -160,8 +197,9 @@ fn the_doc_argument_consult_speaks_before_any_other_validation() {
 
 /// PUB-6.8, the dual row: `project` and `discoverable_from` name the DOCUMENT
 /// `d`, never the link `a`. An unreadable `d` is withheld naming `d`; a link
-/// homed in an unreadable document is left to M8's own absence answer, and is
-/// never withheld — a withheld there would confirm the link exists.
+/// homed in an unreadable document takes M8's own ABSENCE answer — `NotALink`
+/// and `false`, exactly as an address naming no link — and never a withheld,
+/// which would confirm the link exists.
 #[test]
 fn the_dual_row_consults_the_document_and_never_the_link() {
     let (fx, unreadable) = setup_with_unreadable();
@@ -184,24 +222,33 @@ fn the_dual_row_consults_the_document_and_never_the_link() {
         &target,
     );
 
-    // The LINK's home unreadable, `d` readable: whatever M8 answers, it is
-    // not a withheld — the link is not a doc-argument.
-    unreadable.lock().expect("no poisoning").push(home);
+    // The LINK's home unreadable, `d` readable: the link is ABSENT to this
+    // caller (PUB-6.6) — `project` answers `NotALink`, exactly as an address
+    // naming no link, and `discoverable_from` answers `false`, the retracted
+    // link's answer. Never a WITHHELD, which would confirm the link is there.
+    // The link covers `d`'s OWN content, so a door that stopped threading the
+    // predicate would hand this caller the very positions of a document it may
+    // read that a link it may not see points at.
     let d = create_doc(&fx);
     insert3(&fx, &d);
-    for op in [
-        Op::Project { a: link.clone(), slot: FROM, d: d.clone() },
-        Op::DiscoverableFrom { a: link, d },
-    ] {
-        let kind = op.kind();
-        if let Response::Rejected(rej) = ex(&fx.febe, other, op) {
-            assert_ne!(
-                rej.code,
-                RejectCode::Withheld,
-                "{kind:?}: a link is not a doc-argument (PUB-6.8)"
-            );
-        }
-    }
+    let over_d = link_over(&fx, &home, &d);
+    // The owner's answers first, so the stranger's below are the absence rule
+    // and not an empty world.
+    let (mine, _) =
+        spanset(ex(&fx.febe, fx.user, Op::Project { a: over_d.clone(), slot: FROM, d: d.clone() }));
+    assert_ne!(mine, SpanSet::empty(), "the link really does project into `d`");
+    assert!(bool_val(ex(&fx.febe, fx.user, Op::DiscoverableFrom { a: over_d.clone(), d: d.clone() })));
+
+    unreadable.lock().expect("no poisoning").push(home);
+
+    let rej =
+        rejected(ex(&fx.febe, other, Op::Project { a: over_d.clone(), slot: FROM, d: d.clone() }));
+    assert_eq!(
+        rej.code,
+        RejectCode::NotALink,
+        "absent, exactly as an address naming no link: {rej}"
+    );
+    assert!(!bool_val(ex(&fx.febe, other, Op::DiscoverableFrom { a: over_d, d })));
 }
 
 /// PUB-6.12: a read that names no DOCUMENT has nothing to withhold — the FTT
@@ -307,12 +354,7 @@ fn a_link_homed_in_an_unreadable_document_reads_as_absent() {
 #[test]
 fn link_discovery_drops_links_homed_where_the_caller_cannot_read() {
     let (fx, unreadable) = setup_with_unreadable();
-    let open = create_doc(&fx);
-    insert3(&fx, &open);
-    let secret = create_doc(&fx);
-    let hidden = link_over(&fx, &secret, &open);
-    let shown = link_over(&fx, &open, &open);
-    unreadable.lock().expect("no poisoning").push(secret);
+    let LinkPair { open, hidden, shown, .. } = two_links_over_one_document(&fx, &unreadable);
     let other = fx.febe.open_session(OTHER);
     let region = || vec![vspan(1, 1, 3)];
 
@@ -324,7 +366,113 @@ fn link_discovery_drops_links_homed_where_the_caller_cannot_read() {
 
     // The census counts what the caller may see, by the same rule.
     assert_eq!(count(ex(&fx.febe, fx.user, Op::CountV { d: open.clone(), region: region() })), 2);
-    assert_eq!(count(ex(&fx.febe, other, Op::CountV { d: open, region: region() })), 1);
+    assert_eq!(count(ex(&fx.febe, other, Op::CountV { d: open.clone(), region: region() })), 1);
+
+    // The window applies the rule BEFORE its slice (PUB-6.14), so a window of
+    // one returns the link this caller may see rather than an empty batch.
+    let w = page(ex(
+        &fx.febe,
+        other,
+        Op::WindowV { d: open, region: region(), cur: None, n: 1 },
+    ));
+    assert_eq!(w.batch, vec![shown]);
+}
+
+/// PUB-6.13 on the reads that name NO document: the descriptor's `home` slot
+/// is a coverage constraint and not a doc-argument (PUB-6.12), so the consult
+/// never fires and the result-set filter is the ONLY thing between a caller
+/// and every link in the store. All three read-outs are filtered, the census
+/// counts the set the enumeration returns, and the window skips a refused link
+/// rather than counting it against `n`.
+#[test]
+fn the_descriptor_family_drops_links_homed_where_the_caller_cannot_read() {
+    let (fx, unreadable) = setup_with_unreadable();
+    let LinkPair { open, hidden, shown, .. } = two_links_over_one_document(&fx, &unreadable);
+    let other = fx.febe.open_session(OTHER);
+    let q = || FourSet { from: SlotSpec::Spans(enc([&open])), ..FourSet::any() };
+
+    let mine = addrs(ex(&fx.febe, fx.user, Op::FindLinksFtt { q: q() }));
+    assert!(mine.contains(&hidden) && mine.contains(&shown), "the owner reads both homes");
+    let theirs = addrs(ex(&fx.febe, other, Op::FindLinksFtt { q: q() }));
+    assert_eq!(theirs, vec![shown.clone()], "only the link homed where the caller reads");
+
+    assert_eq!(count(ex(&fx.febe, fx.user, Op::CountFtt { q: q() })), mine.len());
+    assert_eq!(
+        count(ex(&fx.febe, other, Op::CountFtt { q: q() })),
+        theirs.len(),
+        "the census counts the set the enumeration returns"
+    );
+
+    let w = page(ex(&fx.febe, other, Op::WindowFtt { q: q(), cur: None, n: 1 }));
+    assert_eq!(w.batch, vec![shown], "the hidden link is skipped, not counted against n");
+}
+
+/// PUB-6.12 and PUB-6.13 in one read, on BOTH lineage probes: each CLAIM is
+/// dropped at its own home, while the probe KEY takes no rule — every key
+/// below is itself homed where this caller cannot read, and every probe is
+/// still ANSWERED. So a stranger probing a link it may not see learns the
+/// claims living in documents it may read, and none of the others.
+#[test]
+fn supersession_claims_are_dropped_at_their_home_while_the_probe_key_takes_no_rule() {
+    let (fx, unreadable) = setup_with_unreadable();
+    let LinkPair { open, secret, hidden, shown } = two_links_over_one_document(&fx, &unreadable);
+    // A third link in the unreadable home, so BOTH probe keys below are homed
+    // where the stranger cannot read — the KEY half of the claim, in each
+    // direction rather than one.
+    let third = link_over(&fx, &secret, &open);
+    let sup = |home: &Address, old: &Address, new: &Address| {
+        ack_addr(ex(
+            &fx.febe,
+            fx.user,
+            Op::AssertSup { home: home.clone(), old: old.clone(), new: new.clone() },
+        ))
+        .0
+    };
+    // THREE DISTINCT `(old, new)` PAIRS, because a `[K_sup]` claim dedups on
+    // its VALUE across every home the writer can read: two homes asserting one
+    // pair are one claim, so a per-home pair is what makes these three claims.
+    // The readable one names both probe keys; each of the other two shares one
+    // key with it and lives where the stranger cannot read.
+    let readable_claim = sup(&open, &hidden, &third);
+    let (by_old, by_new) = (sup(&secret, &hidden, &shown), sup(&secret, &shown, &third));
+    let other = fx.febe.open_session(OTHER);
+
+    for (op, unreadable_claim) in [
+        (Op::InClaims { y: hidden, view: View::Active }, by_old),
+        (Op::OutClaims { x: third, view: View::Active }, by_new),
+    ] {
+        let kind = op.kind();
+        let mine: Vec<Address> =
+            claims(ex(&fx.febe, fx.user, op.clone())).into_iter().map(|c| c.claim).collect();
+        assert_eq!(mine.len(), 2, "{kind:?}: the owner reads both homes");
+        assert!(mine.contains(&readable_claim) && mine.contains(&unreadable_claim));
+        let theirs: Vec<Address> =
+            claims(ex(&fx.febe, other, op)).into_iter().map(|c| c.claim).collect();
+        assert_eq!(
+            theirs,
+            vec![readable_claim.clone()],
+            "{kind:?}: the claim homed where the caller cannot read is dropped — and the probe \
+             was answered, its own key being homed there too"
+        );
+    }
+}
+
+/// PUB-6.13 on the survival preview: the orphaned set drops every link whose
+/// HOME the caller may not read, at link identity — so a stranger previewing a
+/// delete in a document it CAN read is not handed the addresses of links
+/// living in documents it cannot. The whole of `open`'s content goes, so both
+/// links lose their last witness and what is left is the home rule's alone.
+#[test]
+fn the_orphan_preview_drops_links_homed_where_the_caller_cannot_read() {
+    let (fx, unreadable) = setup_with_unreadable();
+    let LinkPair { open, hidden, shown, .. } = two_links_over_one_document(&fx, &unreadable);
+    let other = fx.febe.open_session(OTHER);
+    let whole = || Op::DeleteOrphans { d: open.clone(), p: vp(1, 1), width: nat(3) };
+
+    let mine = orphans(ex(&fx.febe, fx.user, whole())).orphaned;
+    assert!(mine.contains(&hidden) && mine.contains(&shown), "both lose their last witness");
+    let theirs = orphans(ex(&fx.febe, other, whole())).orphaned;
+    assert_eq!(theirs, vec![shown], "the link homed where the caller cannot read is dropped");
 }
 
 /// PUB-6.13 on the container family: FINDDOCSCONTAINING drops a container the
@@ -353,16 +501,20 @@ fn find_docs_containing_drops_a_container_the_caller_cannot_read() {
     assert!(!theirs.contains(&secret), "an unreadable container is dropped at its identity");
 }
 
-/// PUB-8.46 / PUB-6.13: the world answers the CLASS unfiltered, and the DOOR
-/// keeps only the rows whose HOME the caller can read — so a draft edition's
-/// claim is invisible to a stranger and listed for its owner. The seeded rows
-/// stand for claims; nothing here asserts they are links.
+/// PUB-8.46 / PUB-6.13: the world answers the CLASS unfiltered, in
+/// link-address order, and the DOOR keeps only the rows whose HOME the caller
+/// can read — so a draft edition's claim is invisible to a stranger and listed
+/// for its owner. The draft-homed row sits BETWEEN the two survivors, so the
+/// order is a claim the answer can break: with one survivor every order is the
+/// right one. The seeded rows stand for claims; nothing here asserts they are
+/// links.
 #[test]
 fn an_edition_claim_homed_where_the_caller_cannot_read_is_dropped() {
     let (fx, unreadable) = setup_with_unreadable();
     let target = create_doc(&fx);
-    let open_home = create_doc(&fx);
+    let first_home = create_doc(&fx);
     let draft_home = create_doc(&fx);
+    let second_home = create_doc(&fx);
     unreadable.lock().expect("no poisoning").push(draft_home.clone());
     let row = |home: &Address| EditionClaim {
         claim: home.clone(),
@@ -370,14 +522,17 @@ fn an_edition_claim_homed_where_the_caller_cannot_read_is_dropped() {
         to: enc([&target]),
         active: true,
     };
-    seed_edition_claims(vec![row(&open_home), row(&draft_home)]);
+    seed_edition_claims(vec![row(&first_home), row(&draft_home), row(&second_home)]);
     let other = fx.febe.open_session(OTHER);
 
     let mine = edition_claims(ex(&fx.febe, fx.user, Op::EditionClaims { target: target.clone() }));
-    assert_eq!(mine.len(), 2, "the owner reads both homes, so both rows are listed");
+    assert_eq!(mine.len(), 3, "the owner reads every home, so every row is listed");
     let theirs = edition_claims(ex(&fx.febe, other, Op::EditionClaims { target }));
-    assert_eq!(theirs.len(), 1, "the draft-homed claim is dropped");
-    assert_eq!(theirs[0].home, open_home);
+    assert_eq!(
+        theirs.iter().map(|c| c.home.clone()).collect::<Vec<_>>(),
+        vec![first_home, second_home],
+        "the filter drops rows between survivors and never reorders them"
+    );
 }
 
 // ───────────────────────── 4. the withheld item ─────────────────────────────
@@ -465,4 +620,49 @@ fn a_retired_session_reads_as_the_guest_while_its_writes_are_refused() {
 
     let rej = rejected(ex(&fx.febe, fx.user, Op::Delete { doc: d, p: vp(1, 1), width: nat(1) }));
     assert_eq!(rej.code, RejectCode::Unauthenticated, "a write is gated where a read is masked");
+}
+
+// ──────────── 6. which predicate answers — the fork beneath all five ────────
+
+/// The default front door — `OperationSurface::new` with no predicate
+/// supplied, the LIVE DAEMON's configuration — answers the WORLD's own
+/// `ReadableWorld::readable`. Every other test in this file supplies a
+/// predicate, so this is the arm no other door test takes: a front door that
+/// stopped consulting the world would serve every private draft to every
+/// caller with the rest of this file green.
+#[test]
+fn the_worlds_own_predicate_masks_when_none_is_supplied() {
+    let fx = setup(); // NO supplied predicate
+    let d = create_doc(&fx);
+    insert3(&fx, &d);
+    seed_unreadable_world(vec![d.clone()]);
+    let other = fx.febe.open_session(OTHER);
+
+    let (set, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpan { doc: d.clone() }));
+    assert_ne!(set, SpanSet::empty(), "the owner reads its own document");
+    assert_withheld(
+        ex(&fx.febe, other, Op::RetrieveDocVSpan { doc: d.clone() }),
+        OpKind::RetrieveDocVSpan,
+        &d,
+    );
+}
+
+/// …and a SUPPLIED predicate OVERRIDES that world rather than narrowing it
+/// (`with_read_predicate`): the historical door supplies the HEAD's predicate
+/// precisely because the world it reconstructs would answer differently
+/// (PUB-6.48), so a door that conjoined the two would withhold exactly what
+/// `/op-at N` exists to disclose.
+#[test]
+fn a_supplied_predicate_overrides_the_world_rather_than_narrowing_it() {
+    let (fx, unreadable) = setup_with_unreadable(); // the SUPPLIED arm
+    let d = create_doc(&fx);
+    insert3(&fx, &d);
+    // The world refuses this document to the stranger; the supplied predicate
+    // admits it — its own list stays empty.
+    seed_unreadable_world(vec![d.clone()]);
+    assert!(unreadable.lock().expect("no poisoning").is_empty());
+    let other = fx.febe.open_session(OTHER);
+
+    let (set, _) = spanset(ex(&fx.febe, other, Op::RetrieveDocVSpan { doc: d }));
+    assert_ne!(set, SpanSet::empty(), "the supplied predicate is the whole answer");
 }

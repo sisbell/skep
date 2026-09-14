@@ -76,14 +76,36 @@ impl HasLinks for World {
         &self.links
     }
 }
+thread_local! {
+    /// The documents this world's OWN [`skep_febe::ReadableWorld`] refuses to
+    /// every principal but [`USER`] — the arm a front door built by
+    /// `OperationSurface::new` ALONE answers through, which is the live
+    /// daemon's configuration. EMPTY by default, so every read is admitted
+    /// and every suite that is not about this arm is unaffected.
+    ///
+    /// Cleared by [`surface`], as [`EDITION_CLAIMS`] is, so the table a test
+    /// sees is its own whether the harness gives each test a thread, a
+    /// process, or neither: no test depends on the order the suite runs in.
+    static UNREADABLE_WORLD: RefCell<Vec<Address>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Seed the documents the WORLD's own predicate refuses. A test that is about
+/// the SUPPLIED predicate takes [`setup_with_unreadable`] instead; the two
+/// spell the same rule, so which door answers is the whole of what a test
+/// using one and not the other exercises.
+pub fn seed_unreadable_world(docs: Vec<Address>) {
+    UNREADABLE_WORLD.with(|u| *u.borrow_mut() = docs);
+}
+
 impl skep_febe::ReadableWorld for World {
-    // Masking (published ∨ subtree ∨ grant) is the engine's predicate; this
-    // miniature world carries no exception set or grant fold, and the suites
-    // built on [`setup`] (lifecycle, coordinates, concurrency) are orthogonal
-    // to it — so every read is admitted. A suite that is ABOUT the door takes
-    // [`setup_with_unreadable`], which supplies its own `ReadPredicate`.
-    fn readable(&self, _principal: Option<PrincipalId>, _doc: &Address) -> bool {
-        true
+    /// Deriving the engine's real predicate — published ∨ subtree ∨ grant — is
+    /// the engine's, and its suite's; this miniature world carries no
+    /// exception set and no grant fold. What it carries is the ability to
+    /// REFUSE, so the fork in `OperationSurface::readable` has both arms
+    /// reachable from here: seeded through [`seed_unreadable_world`], this
+    /// answers for a front door that supplies no predicate of its own.
+    fn readable(&self, principal: Option<PrincipalId>, doc: &Address) -> bool {
+        principal == Some(USER) || UNREADABLE_WORLD.with(|u| !u.borrow().contains(doc))
     }
 }
 thread_local! {
@@ -93,8 +115,8 @@ thread_local! {
     /// carries none of its own and answers the empty class unless a test
     /// seeds it through [`seed_edition_claims`].
     ///
-    /// Cleared by [`operation`], which every fixture below goes through, so
-    /// the table a test sees is its own whether the harness gives each test a
+    /// Cleared by [`surface`], which every fixture below goes through, so the
+    /// table a test sees is its own whether the harness gives each test a
     /// thread, a process, or neither: no test depends on the order the suite
     /// runs in.
     static EDITION_CLAIMS: RefCell<Vec<EditionClaim>> = const { RefCell::new(Vec::new()) };
@@ -223,6 +245,7 @@ impl Stores<World> for KernelStores {
 
 pub fn surface() -> OperationSurface<World> {
     seed_edition_claims(Vec::new()); // the empty class, until a test seeds it
+    seed_unreadable_world(Vec::new()); // …and a world that admits every read
     OperationSurface::new(Box::new(KernelStores { kernel: kernel() }))
 }
 
@@ -540,6 +563,10 @@ pub fn deposit3(fx: &Fixture, doc: &Address) -> (Address, Seq) {
 // exercise (`skepd/tests/source_gate.rs`). What the suites built on this
 // fixture pin is the DOOR's own contract, independent of how the predicate is
 // derived.
+//
+// [`setup_with_unreadable`] supplies that predicate; the WORLD spells the same
+// rule through [`seed_unreadable_world`], for the arm a door that supplies none
+// answers through. Which of the two a test takes is which arm it exercises.
 //
 // Three words, three concepts, each the corpus's: a DOCUMENT is unreadable
 // (PUB-6.1), a REQUEST is refused, an ANSWER is withheld.

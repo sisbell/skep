@@ -400,15 +400,18 @@ fn require_registered_document(
 /// [`first_version_address`] for where it opens — the chain's anchor and
 /// opening ordinal being M3's alone.
 ///
-/// PRECONDITION: `trunk` is DOCUMENT-tier, which [`trunk_of`] is what
-/// discharges at the one call site. It is stated on the parameter because
-/// that is where a caller can see what it owes, and because the
-/// [`trunk_head`] guard above does not stand in for it: the same namespace
-/// key under an ACCOUNT is the sub-account chain, so an account with
-/// delegated sub-accounts answers `Some` there and reaches
-/// [`first_version_address`], which is registry-free and answers `None` for
-/// every tier but a document's — tripping the `expect` rather than
-/// answering absent.
+/// PRECONDITION: `trunk` is DOCUMENT-tier, which [`trunk_of`] discharges at
+/// the one call site. It is stated on the parameter because that is where a
+/// caller can see what it owes, and the `expect` is what ENFORCES it:
+/// [`first_version_address`] is registry-free and answers `None` for every
+/// tier but a document's, so a violation panics rather than fabricating the
+/// address of a chain no tier but a document's anchors.
+///
+/// The guard above stands in front of that panic, so no call reaches it:
+/// [`trunk_head`] delegates to M3's `latest_version`, which returns `None`
+/// for any tier but a document's BEFORE it consults a frontier — so an
+/// ACCOUNT, whose same namespace key is the sub-account chain, returns at
+/// the `?` rather than reaching the mint.
 fn birth_version(m3: &M3State, m5: &M5State, trunk: &Address) -> Option<BirthVersion> {
     trunk_head(m3, trunk)?;
     let addr = first_version_address(trunk)
@@ -512,6 +515,19 @@ where
     ///
     /// `None` is the GUEST — a session that resolves to no principal, which
     /// on the read path is a mask and never a refusal.
+    ///
+    /// HOW OFTEN IT IS ASKED falls into two classes, and only one of them is
+    /// request-sized. The two consults and the link-address rule ask once per
+    /// NAMED argument of the request, a count the transport's parser caps.
+    /// M6's per-run mask and M8's result-set filters ask once per RESULT ROW
+    /// — a count set by stored state, capped by nothing, and reached by an
+    /// unauthenticated guest through the FTT descriptor family, which names
+    /// no document at all and whose unconstrained form matches every active
+    /// link in the store. Each call projects its address to the document
+    /// that owns it, one allocation per component. M10 is what creates the
+    /// second class, by threading this one predicate down into the readers,
+    /// so it is where the class is named: a supplier sizing its own work
+    /// against a per-argument figure has priced only the first.
     ///
     /// The write path's [`OperationSurface::visible_to`] is the sibling
     /// shape and not this one: a visibility class is lent to a STORE, which
@@ -677,14 +693,18 @@ where
     ///   presented. A transport discharges this in [`Codec::parse`], where
     ///   the obligation is stated in full; a caller that assembles an [`Op`]
     ///   and calls HERE has no parser in between and owns the whole of it.
-    ///   Three operations are why it is worth owning: [`Op::Compare`] joins
-    ///   its two operand sets pairwise, [`Op::RetrieveV`] concatenates per
-    ///   spec without dedup, so one whole-document spec repeated n times
-    ///   delivers n copies of the document, and [`Op::Publish`] probes every
-    ///   address of every by-reference run — a cost set by the STORED content
-    ///   those runs name rather than by the request's size, and spent inside
-    ///   the write transaction under M2's applier lock, so where the two reads
-    ///   burn one caller's core the shot stalls every writer in the engine.
+    ///   Three operations are why it is worth owning, and each spends a
+    ///   different resource. [`Op::Compare`] joins its two operand sets
+    ///   pairwise, burning one caller's core. [`Op::RetrieveV`] delivers one
+    ///   heap item per V-POSITION of every spec and concatenates per spec
+    ///   without dedup, so the repeat is a multiplier on a per-spec term that
+    ///   is itself the document's stored extent — unbounded at ONE spec,
+    ///   since a `copy` doubles that extent per request while M5 caps only
+    ///   the runs — which makes its bill resident memory rather than CPU.
+    ///   [`Op::Publish`] probes every address of every by-reference run, a
+    ///   cost set by the STORED content those runs name rather than by the
+    ///   request's size, and spent inside the write transaction under M2's
+    ///   applier lock, so the shot stalls every writer in the engine.
     ///   Nothing on this path enforces any of the three — the one list M10
     ///   measures is the EDITLINK successor slot it builds for itself, against
     ///   M7's per-slot budget.

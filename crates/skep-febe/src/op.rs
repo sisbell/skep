@@ -212,6 +212,16 @@ pub enum Op {
     /// may not read comes back as the withheld `DeliveryItem` AT ITS OWN
     /// POSITION (PUB-6.41) — neither dropped from the delivery nor raised as
     /// a rejection — so positions are preserved and a caller handles that arm.
+    ///
+    /// SIZE is the caller's here as everywhere ([`Codec::parse`]), and this
+    /// is the read whose size is least like its request's: the delivery is
+    /// one heap item per active V-POSITION, and a document's V-extent is
+    /// VIRTUAL — M5 caps the RUNS it stores and no position count, so a
+    /// `copy` doubles that extent for one request's cost. A cap on `specs`
+    /// therefore bounds the multiplier and not the per-spec term, which is
+    /// the named document's whole arranged extent.
+    ///
+    /// [`Codec::parse`]: crate::Codec::parse
     RetrieveV { specs: Vec<Spec> },
     /// RETRIEVEDOCVSPAN (ASN-0112).
     RetrieveDocVSpan { doc: Address },

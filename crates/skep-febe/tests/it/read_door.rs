@@ -198,8 +198,16 @@ fn the_doc_argument_consult_speaks_before_any_other_validation() {
 /// PUB-6.8, the dual row: `project` and `discoverable_from` name the DOCUMENT
 /// `d`, never the link `a`. An unreadable `d` is withheld naming `d`; a link
 /// homed in an unreadable document takes M8's own ABSENCE answer — `NotALink`
-/// and `false`, exactly as an address naming no link — and never a withheld,
+/// from `project`, `false` from `discoverable_from` — and never a withheld,
 /// which would confirm the link exists.
+///
+/// The two absence answers are not alike, and the contrast row below is what
+/// makes that visible: `project` answers an unreadable home exactly as it
+/// answers an address NO LINK OCCUPIES, which is what PUB-6.6 requires, while
+/// `discoverable_from` answers `false` where an unoccupied address gets
+/// `NotALink`. The `false` here therefore pins M8's answer as it stands, which
+/// deviates from PUB-6.6's table; when that reader conforms, this assertion
+/// becomes `NotALink` and the contrast row stands unchanged.
 #[test]
 fn the_dual_row_consults_the_document_and_never_the_link() {
     let (fx, unreadable) = setup_with_unreadable();
@@ -224,8 +232,9 @@ fn the_dual_row_consults_the_document_and_never_the_link() {
 
     // The LINK's home unreadable, `d` readable: the link is ABSENT to this
     // caller (PUB-6.6) — `project` answers `NotALink`, exactly as an address
-    // naming no link, and `discoverable_from` answers `false`, the retracted
-    // link's answer. Never a WITHHELD, which would confirm the link is there.
+    // naming no link, and `discoverable_from` answers `false`, which is NOT
+    // what an unoccupied address gets (the contrast row below).
+    // Never a WITHHELD, which would confirm the link is there.
     // The link covers `d`'s OWN content, so a door that stopped threading the
     // predicate would hand this caller the very positions of a document it may
     // read that a link it may not see points at.
@@ -247,6 +256,16 @@ fn the_dual_row_consults_the_document_and_never_the_link() {
         rej.code,
         RejectCode::NotALink,
         "absent, exactly as an address naming no link: {rej}"
+    );
+    // The CONTRAST that makes the deviation legible: an address NO LINK
+    // OCCUPIES answers `NotALink`, so the `false` below is DISTINGUISHABLE
+    // from it — PUB-6.6's table pins `not_a_link` for this op and M8 answers
+    // `false`. When M8 conforms, the assertion below becomes `NotALink` and
+    // this one stands unchanged.
+    assert_eq!(
+        rejected(ex(&fx.febe, other, Op::DiscoverableFrom { a: d.clone(), d: d.clone() })).code,
+        RejectCode::NotALink,
+        "an unoccupied address is the answer a draft-homed link must match"
     );
     assert!(!bool_val(ex(&fx.febe, other, Op::DiscoverableFrom { a: over_d, d })));
 }

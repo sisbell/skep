@@ -35,6 +35,11 @@ pub struct Request {
 /// operations, since the memo is consulted before dispatch and written after
 /// it, and a restart empties it — so this is a hint that saves a duplicate
 /// commit, never a guarantee against one.
+///
+/// The one limit the CALLER governs: a key longer than [`MAX_REQ_ID_BYTES`]
+/// is accepted and simply not memoized, so a retry under it re-executes and
+/// is never told. A caller choosing a structured key — a URL, a serialized
+/// blob — should measure it against that bound.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ReqId(pub Vec<u8>);
 
@@ -128,7 +133,8 @@ pub enum Op {
     /// version with that version's base extent — what a client's own
     /// PUB-3.19 admission test needs, and nothing else. `doc` is a
     /// DOC-ARGUMENT (PUB-6.1): unreadable ⟹ `withheld` (fail-open at the
-    /// consult, PUB-6.12); unregistered ⟹ `DocNotRegistered` — M10's own
+    /// consult, PUB-6.12). It must also be a REGISTERED DOCUMENT:
+    /// unregistered, or any other tier, ⟹ `DocNotRegistered` — M10's own
     /// refusal, like [`Op::EditionClaims`]'s, since this read composes its
     /// answer from more than one store and so reaches none that could raise
     /// one. A version member answers its DOCUMENT's state (PUB-2.15).
@@ -261,8 +267,19 @@ pub enum Op {
     Project { a: Address, slot: usize, d: Address },
     /// Compound "arrangement-reachable AND active". The DUAL ROW, as
     /// [`Op::Project`]'s: `d` is the doc-argument and an unreadable one
-    /// answers `Withheld` naming `d`, while the link `a` is not one and takes
-    /// the reader's own absence answer (PUB-6.8).
+    /// answers `Withheld` naming `d`, while the link `a` is not one and so
+    /// never answers `Withheld` (PUB-6.8).
+    ///
+    /// WHAT `a` ANSWERS INSTEAD is where this op stands apart from its three
+    /// siblings, and a client reading absence off it should know so. A link
+    /// homed where the caller cannot read answers `false`; an address NO LINK
+    /// OCCUPIES answers `NotALink`. Those are two different answers, so —
+    /// unlike [`Op::ReadLink`], [`Op::FollowLink`] and [`Op::Project`], each
+    /// of which answers an unreadable home exactly as it answers an
+    /// unoccupied address — this op's answer distinguishes an occupied
+    /// address from an unoccupied one. PUB-6.6's table pins `not_a_link`
+    /// here, so the absence rule is unmet at this op until the reader that
+    /// owns the answer (M8's `addressably_discoverable_from_on`) gives it.
     DiscoverableFrom { a: Address, d: Address },
     /// Pre-edit link-survival what-if (ASN-0117 preview).
     DeleteOrphans { d: Address, p: VPos, width: Nat },
@@ -290,6 +307,11 @@ pub enum Op {
     /// (PUB-6.13), so a draft edition's claim is invisible to a stranger.
     /// The client's PUB-3.19 admission test over each home is its own,
     /// through [`Op::DocMetadata`].
+    ///
+    /// ORDER: the rows come back in LINK-ADDRESS order — the order the world
+    /// answers the class in, preserved through the home filter — so dropping
+    /// a row never reorders its neighbours and a client may page or diff the
+    /// answer without sorting it first.
     EditionClaims { target: Address },
 }
 

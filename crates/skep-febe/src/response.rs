@@ -154,7 +154,9 @@ pub enum Response {
     },
     /// edition_claims (PUB-8.46): the audit-view lookup of the edition-claim
     /// class over `target`, unsuperseded, retracted-or-not stated, homed
-    /// where the caller can read (PUB-6.13).
+    /// where the caller can read (PUB-6.13), in LINK-ADDRESS order — the
+    /// order the class is answered in, preserved through the home filter, so
+    /// dropping a row never reorders its neighbours.
     EditionClaims { claims: Vec<EditionClaim>, as_of: Seq },
     /// The never-silent surface: every failure of a parsed `Op` (Invariants).
     Rejected(Rejection),

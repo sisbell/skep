@@ -646,12 +646,14 @@ where
     ///   and its absence REFUSES: an unbound session is answered
     ///   `Unauthenticated` and no store is reached. That is a gate.
     /// * On the READ path it resolves an `Option<PrincipalId>` for the read
-    ///   predicate this surface answers, which MASKS and never refuses.
-    ///   Every read is therefore served against any `SessionId` — bound,
-    ///   retired by [`OperationSurface::close_session`], or never opened —
-    ///   and an id that resolves to no principal is answered as the GUEST,
-    ///   whose predicate admits the published documents alone. That is a
-    ///   mask.
+    ///   predicate this surface answers, which SHAPES the answer rather than
+    ///   gating the operation. Every read is therefore served against any
+    ///   `SessionId` — bound, retired by
+    ///   [`OperationSurface::close_session`], or never opened — and an id
+    ///   that resolves to no principal is answered as the GUEST, whose
+    ///   predicate admits the published documents alone. That is a mask.
+    ///   Where the predicate does REFUSE (form (1) below), the refusal names
+    ///   a DOCUMENT and never the caller's standing to read at all.
     ///
     /// So reads are masked, not gated, and the masking is M6's and M8's,
     /// driven by the one predicate this surface answers (PUB-6.39). A
@@ -661,27 +663,40 @@ where
     /// chokepoint to prevent.
     ///
     /// WHAT A MASKED ANSWER LOOKS LIKE, since "masked" does not by itself
-    /// tell a client what it will receive. Four forms, and one read may carry
-    /// more than one:
+    /// tell a client what it will receive. Four forms, numbered below in the
+    /// order they are given, and one read may carry more than one:
     ///
     /// * a `Withheld` REJECTION naming the first unreadable document the
     ///   request NAMES, in declaration order. Which documents an operation
     ///   names is [`Op::doc_arguments`], public for this reason.
-    /// * a SILENTLY SMALLER answer. The discovery, census, window, endset,
-    ///   orphan, lineage, container and edition-claim readers each drop every
-    ///   row whose home the caller may not read, so a count is a count of
-    ///   what THIS caller may see, and no field reports that anything was
-    ///   dropped.
+    /// * a SILENTLY SMALLER answer, which PUB-6.13 splits in two. The
+    ///   discovery, census, window, endset, orphan, lineage and
+    ///   edition-claim readers drop every row whose HOME the caller may not
+    ///   read; the container family drops every CONTAINER the caller cannot
+    ///   read, at its own identity. Either way a count is a count of what
+    ///   THIS caller may see, and no field reports that anything was dropped.
     /// * ABSENCE. A link address whose home document the caller may not read
-    ///   answers exactly as an address no link occupies (PUB-6.6), so absence
-    ///   does not distinguish "no link there" from "a link that is not yours
-    ///   to see" — see [`Op::ReadLink`] and [`Op::FollowLink`].
+    ///   answers as an address no link occupies (PUB-6.6), so absence does
+    ///   not distinguish "no link there" from "a link that is not yours to
+    ///   see" — at [`Op::ReadLink`], [`Op::FollowLink`] and [`Op::Project`],
+    ///   three of the four ops the rule covers. The fourth,
+    ///   [`Op::DiscoverableFrom`], does not match its unoccupied-address
+    ///   answer today and says so at its own variant.
     /// * a WITHHELD ITEM inside a payload, at its own position — RETRIEVEV's
     ///   delivery, whose runs are masked by origin ([`Op::RetrieveV`]).
     ///
-    /// What ties the four together, and what a client may rely on: no read is
-    /// ever REFUSED for authority, so nothing can be inferred from a refusal
-    /// about whether a thing exists.
+    /// What a client may rely on, stated to the width it holds: no read is
+    /// ever refused for want of a BOUND SESSION — that is the gate/mask
+    /// distinction above, and it is why any `SessionId` is served. Forms (2),
+    /// (3) and (4) disclose nothing further: no field reports a drop, and
+    /// absence does not distinguish "no link" from "not yours to see", with
+    /// the one exception named there. Form (1) is the informative one, BY
+    /// DESIGN — PUB-6.12 makes a `Withheld` mean a REGISTERED PRIVATE
+    /// document, which is exactly why the predicate must answer readable for
+    /// an address the store has not registered ([`ReadableWorld::readable`]),
+    /// so that no refusal can turn a nonexistent address into a hidden one.
+    ///
+    /// [`ReadableWorld::readable`]: crate::ReadableWorld::readable
     ///
     /// Two caller preconditions, neither of which this module can check for
     /// itself:
@@ -1048,8 +1063,10 @@ where
     /// other than the one `as_of` names. Reads hold no lock against writers,
     /// are zero-step (A1), and have no commit-before-ack obligation. No arm
     /// takes a session gate; every arm answers THROUGH the per-request read
-    /// predicate this function builds once off `principal`, which masks and
-    /// never refuses (`None` is the guest). Exhaustive over `Op` with the
+    /// predicate this function builds once off `principal` (`None` is the
+    /// guest), which SHAPES each answer — and, at the doc-argument consult
+    /// below, refuses a request naming a document this caller may not read.
+    /// Exhaustive over `Op` with the
     /// complementary (write) half as one explicit rejecting |-list — see
     /// `dispatch_write`.
     fn dispatch_read(&self, op: Op, principal: Option<PrincipalId>) -> Result<Response, Rejection> {
@@ -1196,10 +1213,13 @@ where
             // `project` and `discoverable_from`: `d` is in the consult above
             // (the dual row, PUB-6.8); the ABSENCE of a link `a` homed in an
             // unreadable document (PUB-6.6) is M8's to answer, through the
-            // predicate — see `project_on` and
-            // `addressably_discoverable_from_on` for the shape each gives
-            // and where it falls among their refusals. An admitted `project` is
-            // UNFILTERED at origin (PUB-6.15).
+            // predicate, and the two answer it differently. `project_on`
+            // gives `NotALink`, which is also what it gives for an address no
+            // link occupies, so the two are indistinguishable as the rule
+            // requires; `addressably_discoverable_from_on` gives `false`
+            // where an unoccupied address gets `NotALink`, so at that op the
+            // rule is unmet — see `Op::DiscoverableFrom`. An admitted
+            // `project` is UNFILTERED at origin (PUB-6.15).
             Op::Project { a, slot, d } => {
                 let set = project_on(&snap, &a, slot, &d, &readable)
                     .map_err(|e| lower_read(kind, e))?;

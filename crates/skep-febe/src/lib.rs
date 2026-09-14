@@ -106,8 +106,10 @@
 //!   verbatim (§6); M10 pre-checks only "is there a principal at all", and
 //!   only on the write path. A read is served against any `SessionId`, its
 //!   principal resolved for the read PREDICATE rather than to gate it, so
-//!   reads are masked (by M6 and M8, through that predicate) and never
-//!   refused for authority ([`OperationSurface::execute`]). The one
+//!   reads are masked (by M6 and M8, through that predicate) rather than
+//!   gated — a read is never refused for want of a bound session, though the
+//!   predicate itself refuses a request that NAMES a document the caller may
+//!   not read ([`OperationSurface::execute`] gives the four forms). The one
 //!   place M10 ASKS ω without wording it is the write door's source consult
 //!   (lane 3.3c, PUB-6.36/6.38): it defers to the store wherever the
 //!   destination's own ownership gate would refuse, through the store's own

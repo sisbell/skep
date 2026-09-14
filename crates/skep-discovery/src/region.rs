@@ -173,7 +173,7 @@ pub fn image_on<W: DiscoveryWorld>(
 /// ASN-0127 `findlinks(image(W,d))` ∩ the active view (View::Active internally
 /// == addressable == `dom(L)` ∖ nullified), as M7's native `OrdSet<Address>`
 /// (address order — ASN-0108's permanent enumeration key).
-pub(crate) fn findlinks_v_set_on<W: DiscoveryWorld>(
+fn findlinks_v_set_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
     region: &[Span],
@@ -208,7 +208,7 @@ pub fn findlinks_v_on<W: DiscoveryWorld>(
     readable: &dyn Fn(&Address) -> bool,
 ) -> Result<Vec<Address>, QueryError> {
     let sel = findlinks_v_set_on(s, d, region)?;
-    Ok(sel.iter().filter(|a| home_readable(readable, a)).cloned().collect())
+    Ok(sel.iter().filter(|&a| home_readable(readable, a)).cloned().collect())
 }
 
 /// Present-tense census of region-reaching links; the cardinality of
@@ -236,7 +236,7 @@ pub fn count_v_on<W: DiscoveryWorld>(
     readable: &dyn Fn(&Address) -> bool,
 ) -> Result<usize, QueryError> {
     let sel = findlinks_v_set_on(s, d, region)?;
-    Ok(sel.iter().filter(|a| home_readable(readable, a)).count())
+    Ok(sel.iter().filter(|&a| home_readable(readable, a)).count())
 }
 
 /// Windowed enumeration of the region family (ASN-0108, the

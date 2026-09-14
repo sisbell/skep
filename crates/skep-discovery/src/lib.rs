@@ -164,8 +164,8 @@
 //! * [`image_on`] — no link-store read; one M5 `resolve` per region span,
 //!   each a walk of the reading surface's run-list from its first run, the
 //!   region's whole walk held to `MAX_IMAGE_RUNS²` — and, for a region whose
-//!   reach in positions alone passes that, one read of the surface's content
-//!   runs to count them.
+//!   reach in positions alone passes that, one read of M5's `#runs` for the
+//!   surface's content, which reads no run.
 //! * the region family ([`findlinks_v_on`], [`count_v_on`], [`window_v_on`],
 //!   [`retrieve_endsets_on`]) — three `stab`s, one per v1 slot, over the
 //!   image's runs; none when the image is empty. [`retrieve_endsets_on`]
@@ -184,11 +184,12 @@
 //!   then one `readlink` and one `is_active` per claim the home rule admits.
 //! * the pointwise pair — no store walk: one `followlink` ([`project_on`]),
 //!   or one `readlink` and one `is_active`
-//!   ([`addressably_discoverable_from_on`]), plus M5's runs of `d`'s reading
-//!   surface and ONE JOIN of the link's coverage against them, held to
-//!   `MAX_IMAGE_RUNS²` span tests: M5's `project` of one slot against the
-//!   content runs, or the touch test of every slot's every span against
-//!   every run, each test rebuilding both spans' endpoints.
+//!   ([`addressably_discoverable_from_on`]), plus one read of M5's `#runs`
+//!   for the reading surface, which reads no run — and then, for a read the
+//!   budget admits, those runs and ONE JOIN of the link's coverage against
+//!   them, held to `MAX_IMAGE_RUNS²` span tests: M5's `project` of one slot
+//!   against the content runs, or the touch test of every slot's every span
+//!   against every run, each test rebuilding both spans' endpoints.
 //!
 //! A window computes its family's whole candidate set before it cuts,
 //! whatever `n` and wherever the cursor: paging bounds the answer, never the
@@ -252,9 +253,16 @@ pub use survival::delete_orphans_on;
 pub use types::{
     Cursor, FourSet, OrphanError, OrphanReport, QueryError, SlotSpec, SupClaim, Window,
 };
-// The 1-based standard slot numerals every query here indexes by, re-exported
-// from the store that owns them so M8 and M7 index one set of values.
-pub use skep_links::{FROM, TO, TYPE};
+// The 1-based standard slot numerals every query here indexes by, and the two
+// M7 types M8's own surface is written in: a descriptor slot's `Endset` (with
+// `enc`, the address lift that builds one) and the lineage pair's `View`.
+// Re-exported from the store that owns them so M8 and M7 name one set of
+// values, and so a caller holding this crate alone can construct M8's requests
+// and read its answers.
+pub use skep_links::{enc, Endset, View, FROM, TO, TYPE};
+// M5's two, on the same rule: the runs `image_on` answers with, and the
+// V-position the region constructor and the delete preview are asked at.
+pub use skep_arrangement::{Run, VPos};
 
 use skep_arrangement::HasM5;
 use skep_kernel::WorldState;

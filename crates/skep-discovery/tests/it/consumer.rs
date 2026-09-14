@@ -1,7 +1,8 @@
 //! The promises M8 makes to a consumer rather than to itself, checked from
 //! outside the crate: reads that answer off the snapshot they are handed,
-//! one named world bound, the standard traits its values carry, and
-//! rejection enums that stay exhaustively matchable.
+//! one named world bound, the standard traits its values carry, a request and
+//! answer vocabulary reachable through this crate alone, and rejection enums
+//! that stay exhaustively matchable.
 
 use crate::common;
 
@@ -142,6 +143,68 @@ fn the_value_surface_is_hashable_and_keys_by_representation() {
     assert!(reports.insert(OrphanReport {
         orphaned: vec![la(1)]
     }));
+}
+
+/// Every type M8's own signatures name is reachable under `skep_discovery`:
+/// the descriptor slot's `Endset` and the lift that builds one, the lineage
+/// pair's `View`, the runs `image_on` answers with, and the `VPos` the region
+/// constructor and the delete preview are asked at. So a caller that depends
+/// on this crate can build M8's requests and name its answers without also
+/// naming the store each type came from — only M1's value calculus is left
+/// out, which every consumer of any store crate already holds.
+///
+/// The check is the BUILD: every path below is spelled `m8::`, so dropping a
+/// re-export fails to compile rather than leaving a signature a caller cannot
+/// spell. Without the `View` re-export the lineage pair is uncallable, and
+/// without `Endset`/`enc` a descriptor cannot be narrowed past the wildcard.
+#[test]
+fn m8s_request_and_answer_types_are_reachable_through_this_crate() {
+    use skep_discovery as m8;
+
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
+    let (claim, _) = store
+        .assert_sup(SYS, &doc1(), &e1, &e2)
+        .expect("assert_sup succeeds");
+    let snap = k.snapshot();
+
+    // A descriptor narrowed past the wildcard: the slot's endset, and the
+    // address lift that builds one. Under the flipped storage convention the
+    // claim is the one link naming `e1` at FROM.
+    let from_e1: m8::Endset = m8::enc([&e1]);
+    let q = m8::FourSet {
+        from: m8::SlotSpec::Spans(from_e1),
+        ..m8::FourSet::any()
+    };
+    assert_eq!(
+        m8::findlinks_ftt_on(&snap, &q, &every_home),
+        vec![claim.clone()]
+    );
+
+    // The lineage pair's view, which without the re-export has no path at all.
+    let found: Vec<m8::SupClaim> = m8::in_claims_on(&snap, &e1, m8::View::Active, &every_home);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].claim, claim);
+
+    // The V-position both the region constructor and the preview are asked at,
+    // and the runs the image answers with.
+    let at = m8::VPos {
+        subspace: n(1),
+        ordinal: n(1),
+    };
+    let region = [m8::content_vspan(&at, &n(1)).expect("s_C, count ≥ 1")];
+    let image: Vec<m8::Run> = m8::image_on(&snap, &doc1(), &region).expect("image");
+    assert_eq!(image.len(), 1);
+    assert_eq!(image[0].i_start(), &ca(1));
+    let pairs: Vec<(usize, m8::Endset)> =
+        m8::retrieve_endsets_on(&snap, &doc1(), &region, &every_home).expect("retrieve_endsets");
+    assert_eq!(pairs, vec![(m8::FROM, m8::enc(&[ca(1)]))]);
+    let report: m8::OrphanReport =
+        m8::delete_orphans_on(&snap, &doc1(), &at, &n(1), &every_home).expect("preview");
+    assert_eq!(report.orphaned, vec![e1, e2]);
 }
 
 /// Both rejection enums are exhaustively matchable from OUTSIDE the crate —

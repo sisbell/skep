@@ -7,7 +7,7 @@
 
 use num_traits::{One, Zero};
 use skep_address::{content_subspace, Address, Nat, Span};
-use skep_arrangement::VPos;
+use skep_arrangement::{Run, VPos};
 use skep_kernel::Snapshot;
 
 use crate::budget::MAX_IMAGE_RUNS;
@@ -77,10 +77,12 @@ fn content_vspan_at(ordinal: &Nat, count: &Nat) -> Span {
 /// budget is refused every range; a `d` that one or two cut runs would carry
 /// past it — at the budget, or one run under — is refused exactly the ranges
 /// that cut that many; and every other `d` is answered for every range. A
-/// faulty request names its own fault first. The runs are resolved before
-/// they are counted — the count includes the pieces the range's two ends cut
-/// out of runs, which no count M5 publishes shows — so a refused preview has
-/// paid for reading them and for no stab.
+/// faulty request names its own fault first. The CONTENT runs are resolved
+/// before they are counted — the count includes the pieces the range's two
+/// ends cut out of runs, which no count M5 publishes shows — while `d`'s link
+/// runs, which no text range splits, are counted off M5's `#runs` and read
+/// only for a preview that is answered. So a refused preview has paid for
+/// resolving the surviving content and for no stab.
 ///
 /// The accepted set is M5's DELETE admission minus those two gates, and minus
 /// every request whose runs, as its range splits them, are past the run
@@ -146,19 +148,22 @@ pub fn delete_orphans_on<W: DiscoveryWorld>(
     } else {
         None
     };
-    // Every link run is retained — a text delete never touches links — and
-    // cloned out of M5's loan, since the surviving content runs join it below.
-    let mut retained: Vec<_> = w.m5().link_runs(d).cloned().collect();
+    // The surviving CONTENT runs. `d`'s link runs are retained too — a text
+    // delete never touches links — and are chained onto these where the query
+    // is lifted, so M5's loan of them is read rather than copied.
+    let mut retained: Vec<Run> = Vec::new();
     for span in [prefix, suffix].into_iter().flatten() {
         retained.extend(w.m5().resolve(d, &span));
     }
     // The run budget, on the side of the join the preview supplies: the runs
     // both stabs below take as their query, after every check of the request.
-    if a_del.len() + retained.len() > MAX_IMAGE_RUNS {
+    // The link runs are counted off M5's own `#runs`, which reads no run, so
+    // an over-budget `d` is refused without their being touched at all.
+    if a_del.len() + retained.len() + w.m5().link_run_count(d) > MAX_IMAGE_RUNS {
         return Err(OrphanError::ImageTooLarge);
     }
     let touching_deleted = stab_runs(w.links(), &a_del);
-    let touching_retained = stab_runs(w.links(), &retained);
+    let touching_retained = stab_runs(w.links(), retained.iter().chain(w.m5().link_runs(d)));
     // The relative complement is walked from the DELETED side — a link
     // touching what goes is kept unless the retained side also holds it —
     // NEVER `im`'s `difference`, which is SYMMETRIC and would fold in the

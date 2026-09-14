@@ -36,7 +36,7 @@ use crate::DiscoveryWorld;
 /// cheapest one to test. An AND is order-free, so this moves work and never
 /// the answer — and the sort is stable, so equal spellings keep FROM/TO/TYPE
 /// order and one descriptor still names one constraint list.
-pub(crate) fn candidates(l: &LinkState, q: &FourSet) -> OrdSet<Address> {
+fn candidates(l: &LinkState, q: &FourSet) -> OrdSet<Address> {
     match q.link_constraints() {
         None => OrdSet::new(), // FL-EMP: some slot is the zero
         Some(mut constraints) => {
@@ -58,11 +58,11 @@ pub(crate) fn candidates(l: &LinkState, q: &FourSet) -> OrdSet<Address> {
 /// #7: a home-only query degrades to a full active scan, accepted). The
 /// post-filter reads the candidates in place, so the survivors are never
 /// gathered into a set of their own.
-pub(crate) fn satisfying<'c>(
+fn satisfying<'c>(
     cand: &'c OrdSet<Address>,
     q: &'c FourSet,
 ) -> impl Iterator<Item = &'c Address> + 'c {
-    cand.iter().filter(move |a| q.at_home(a))
+    cand.iter().filter(move |&a| q.at_home(a))
 }
 
 /// FINDLINKS over the four-set descriptor (ASN-0121): the links satisfying
@@ -83,7 +83,7 @@ pub fn findlinks_ftt_on<W: DiscoveryWorld>(
 ) -> Vec<Address> {
     let cand = candidates(s.world().links(), q);
     satisfying(&cand, q)
-        .filter(|a| home_readable(readable, a))
+        .filter(|&a| home_readable(readable, a))
         .cloned()
         .collect()
 }
@@ -115,7 +115,7 @@ pub fn count_ftt_on<W: DiscoveryWorld>(
 ) -> usize {
     let cand = candidates(s.world().links(), q);
     satisfying(&cand, q)
-        .filter(|a| home_readable(readable, a))
+        .filter(|&a| home_readable(readable, a))
         .count()
 }
 

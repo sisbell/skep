@@ -396,6 +396,43 @@ fn delete_orphans_refuses_a_document_past_the_run_budget() {
     assert!(vs.delete(SYS, &doc2(), vp(1, 1), n(1)).is_ok());
 }
 
+/// §6 — the preview's budget counts `d`'s LINK runs too, which no text range
+/// splits and which the second stab therefore takes whole. `d` holds exactly
+/// the budget in content runs, so a range that cuts none of them is answered;
+/// seating one link there — one link run, one more query span — carries the
+/// same request past the budget. Every other budget fixture leaves `d`'s link
+/// subspace empty, where the link term is zero and a preview that forgot it
+/// would answer alike.
+#[test]
+fn the_preview_budget_counts_the_link_runs_the_second_stab_takes() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let many = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS];
+    Vstream::new(&k)
+        .copy(SYS, &doc2(), vp(1, 1), &many)
+        .expect("copy succeeds");
+    let reads = Reads(&k);
+
+    // One whole run deleted and every other retained, `MAX` in all — and no
+    // link run yet, the budget met exactly.
+    let snap = k.snapshot();
+    assert_eq!(snap.world().m5().content_runs(&doc2()).len(), MAX_IMAGE_RUNS);
+    assert_eq!(snap.world().m5().link_runs(&doc2()).len(), 0);
+    assert!(reads.delete_orphans(&doc2(), &vp(1, 1), &n(1)).is_ok());
+
+    // One link seated in doc2 — its content untouched, so only the link term
+    // moves, and the same request is past the budget.
+    let store = LinkWriter::new(&k, &EVERYONE);
+    link(&store, &doc2(), &[ca(1)], &[ca(101)]);
+    let snap = k.snapshot();
+    assert_eq!(snap.world().m5().content_runs(&doc2()).len(), MAX_IMAGE_RUNS);
+    assert_eq!(snap.world().m5().link_runs(&doc2()).len(), 1);
+    assert_eq!(
+        reads.delete_orphans(&doc2(), &vp(1, 1), &n(1)),
+        Err(OrphanError::ImageTooLarge)
+    );
+}
+
 /// §6 — the preview's budget counts `d`'s runs AS THE RANGE SPLITS THEM: each
 /// end of the range that falls inside a run adds one. `d` here holds
 /// `MAX − 1` runs, so a range cutting one run at both ends is refused, while

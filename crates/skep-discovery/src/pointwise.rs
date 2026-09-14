@@ -132,14 +132,15 @@ pub fn project_on<W: DiscoveryWorld>(
         .map_err(|_| QueryError::NotALink)?; // Err(Invalid) ⇒ NotALink (a ∉ dom(L) OR slot OOB)
     let surface = reading_surface(w.m3(), d); // head-float, on the registered `d`
     // CONTENT runs, because M5's `project` joins the coverage against those
-    // alone — the factor priced is the factor multiplied. The count is
-    // `content_runs(..).len()`, which M5 answers from its list's own length —
-    // no run is read or cloned. The product is held here as well: M7 caps a
-    // stored slot at `MAX_SLOT_SPANS` on its deposit paths, which keeps
-    // today's product inside the square, but that is M7's number on M7's
-    // write path, and the join this function hands M5 is priced where it is
-    // incurred.
-    if !join_within_budget(coverage.len(), w.m5().content_runs(&surface).len()) {
+    // alone — the factor priced is the factor multiplied — read off M5's own
+    // `#runs`, the accessor it publishes for a caller that owns admission
+    // control over that join, so no run is touched to be counted. The product
+    // is held here as well: M7 caps a stored slot at `MAX_SLOT_SPANS` on its
+    // deposit paths, which keeps today's product inside the square, but that
+    // is M7's number on M7's write path, and the join this function hands M5
+    // is priced where it is incurred.
+    let run_count = w.m5().content_run_count(&surface);
+    if !join_within_budget(coverage.len(), run_count) {
         return Err(QueryError::ImageTooLarge);
     }
     Ok(w.m5().project(&surface, &coverage)) // I→V, content subspace, level-class-safe inside M5
@@ -248,15 +249,21 @@ pub fn addressably_discoverable_from_on<W: DiscoveryWorld>(
         return Ok(false); // the ADDRESSABLE half (Conflicts #8)
     }
     let surface = reading_surface(w.m3(), d); // head-float, on the registered `d`
-    let (content_runs, link_runs) = (w.m5().content_runs(&surface), w.m5().link_runs(&surface));
     let span_count = link.slots().map(Endset::len).sum::<usize>(); // Σᵢ|eᵢ|, the side the link supplies
-    if !join_within_budget(span_count, content_runs.len() + link_runs.len()) {
+    // Both counts off M5's own `#runs`, the accessor it publishes for a caller
+    // that owns admission control, so an over-budget `d` is refused without a
+    // run of it being touched — which is what puts the budget ahead of the
+    // lift rather than beside it.
+    let run_count = w.m5().content_run_count(&surface) + w.m5().link_run_count(&surface);
+    if !join_within_budget(span_count, run_count) {
         return Err(QueryError::ImageTooLarge);
     }
     // LP12's characterisation tested directly, per link — never the F-FULL
     // whole-document-stab membership route.
-    let extents: Vec<Span> = content_runs
-        .chain(link_runs)
+    let extents: Vec<Span> = w
+        .m5()
+        .content_runs(&surface)
+        .chain(w.m5().link_runs(&surface))
         .map(|r| r.iextent())
         .collect(); // ran(M(reading_surface(d))) as I-extents, BOTH subspaces (LP12)
     Ok(link.slots().any(|e| touches(e, &extents)))

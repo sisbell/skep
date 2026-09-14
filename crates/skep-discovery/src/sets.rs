@@ -29,7 +29,7 @@ use crate::{FROM, TO, TYPE};
 /// per-slot read misses nothing. Nothing in M8 can check that — `stab`
 /// is per-slot and M8 owns no index — so it is stated once, here, and every
 /// slot-indexed read reaches the store through this list.
-pub(crate) const V1_SLOTS: [usize; 3] = [FROM, TO, TYPE];
+const V1_SLOTS: [usize; 3] = [FROM, TO, TYPE];
 
 /// The links whose coverage overlaps `runs`, PAIRED with the slot each set
 /// was stabbed at and kept SEPARATE (slot attribution reads them —
@@ -46,12 +46,22 @@ pub(crate) const V1_SLOTS: [usize; 3] = [FROM, TO, TYPE];
 /// keying a cache on `canonical_key`) would owe the partition `Run::iextent`
 /// names. Empty `runs` skip the store: M7 answers `stab(slot, ⟨⟩, ·) = ∅`
 /// for the endset they lift to, so the short-circuit saves a scan rather than
-/// changing an answer.
-pub(crate) fn stab_runs_by_slot(l: &LinkState, runs: &[Run]) -> [(usize, OrdSet<Address>); 3] {
-    if runs.is_empty() {
+/// changing an answer — asked of the lifted endset, which is empty exactly
+/// when the runs were, every run lifting to one span.
+///
+/// The runs are taken as a SEQUENCE rather than a slice, because that is all
+/// the lift reads: a caller whose runs are already contiguous passes the
+/// `&Vec<Run>` it holds, and one whose runs come from two arrangements —
+/// the preview's surviving content beside `d`'s link runs — chains M5's loan
+/// on rather than copying it into a vector to be read once.
+pub(crate) fn stab_runs_by_slot<'r>(
+    l: &LinkState,
+    runs: impl IntoIterator<Item = &'r Run>,
+) -> [(usize, OrdSet<Address>); 3] {
+    let query = Endset::from_spans(runs.into_iter().map(Run::iextent)); // coverage(query) = the runs
+    if query.is_empty() {
         return V1_SLOTS.map(|i| (i, OrdSet::new()));
     }
-    let query = Endset::from_spans(runs.iter().map(Run::iextent)); // coverage(query) = the runs
     V1_SLOTS.map(|i| (i, l.stab(i, &query, View::Active)))
 }
 
@@ -75,7 +85,10 @@ pub(crate) fn union_slots(by_slot: &[(usize, OrdSet<Address>); 3]) -> OrdSet<Add
 /// `findlinks(coverage of runs)` ∩ the active view, as M7's native
 /// `OrdSet<Address>` (address order — ASN-0108's permanent enumeration key):
 /// the selection index every run-anchored family reads.
-pub(crate) fn stab_runs(l: &LinkState, runs: &[Run]) -> OrdSet<Address> {
+pub(crate) fn stab_runs<'r>(
+    l: &LinkState,
+    runs: impl IntoIterator<Item = &'r Run>,
+) -> OrdSet<Address> {
     union_slots(&stab_runs_by_slot(l, runs))
 }
 
@@ -110,14 +123,15 @@ pub(crate) fn window_over(
     };
     let batch: Vec<Address> = candidates
         .range((lo, Unbounded))
-        .filter(|a| keep(a)) // a: &&Address → deref to &Address
+        .filter(|&a| keep(a))
         .take(n)
         .cloned()
         .collect();
+    let exhausted = batch.len() < n;
     let next = batch.last().cloned().or(cur);
     Window {
-        exhausted: batch.len() < n,
         batch,
         next,
+        exhausted,
     }
 }

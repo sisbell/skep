@@ -98,14 +98,15 @@ fn region_family_gates_doc_then_region_then_defines_empty() {
     assert!(reads.image(&doc1(), &[]).expect("empty region is defined").is_empty());
 }
 
-/// One region-family entry point reduced to the refusal it answers with, so
-/// the gate rule can be stated once and applied to all five.
+/// One region ENTRY POINT — `image` or one of the four reads that route
+/// through it — reduced to the refusal it answers with, so the gate rule can
+/// be stated once and applied to all five.
 type RegionRefusal<'a> = Box<dyn Fn(&Address, &[Span]) -> Option<QueryError> + 'a>;
 
-/// The one list every "every region entry point" law reads: the five reads
-/// that inherit `image_on`'s gates and budget, each reduced to its refusal
-/// through a copy of `reads`. A region read added to the family is added here,
-/// and every such law then covers it.
+/// The one list every "every region entry point" law reads: `image_on` and
+/// the four reads that inherit its gates and budget, each reduced to its
+/// refusal through a copy of `reads`. A region read added to the family is
+/// added here, and every such law then covers it.
 fn region_entry_points<'a>(reads: Reads<'a>) -> Vec<(&'static str, RegionRefusal<'a>)> {
     vec![
         ("image", Box::new(move |d, r| reads.image(d, r).err())),
@@ -433,7 +434,7 @@ fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
 }
 
 #[test]
-fn findlinks_v_is_disjunctive_and_active_filtered() {
+fn findlinks_v_is_disjunctive_and_addressable_filtered() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
     let store = LinkWriter::new(&k, &EVERYONE);

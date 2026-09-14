@@ -457,12 +457,12 @@ impl Reads<'_> {
         delete_orphans_on(&self.0.snapshot(), d, p, width, &every_home)
     }
 
-    pub fn in_claims(&self, y: &Address, v: View) -> Vec<SupClaim> {
-        in_claims_on(&self.0.snapshot(), y, v, &every_home)
+    pub fn in_claims(&self, y: &Address, view: View) -> Vec<SupClaim> {
+        in_claims_on(&self.0.snapshot(), y, view, &every_home)
     }
 
-    pub fn out_claims(&self, x: &Address, v: View) -> Vec<SupClaim> {
-        out_claims_on(&self.0.snapshot(), x, v, &every_home)
+    pub fn out_claims(&self, x: &Address, view: View) -> Vec<SupClaim> {
+        out_claims_on(&self.0.snapshot(), x, view, &every_home)
     }
 }
 

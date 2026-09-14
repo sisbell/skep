@@ -1,6 +1,6 @@
 //! §6 — the pre-edit link-survival check (ASN-0117): a pure what-if over the
 //! snapshot — it never calls M5's delete — built on the F-UDIST set identity
-//! `orphaned = findlinks(A_del) ∖ findlinks(retained_range)` over the ACTIVE
+//! `orphaned = findlinks(A_del) ∖ findlinks(retained)` over the ACTIVE
 //! view (a nullified link that lost its last witness in `d` is NOT reported —
 //! a deliberate divergence from ASN-0117's `D(d,Σ)` over `dom(L)`,
 //! Conflicts #8).

@@ -199,9 +199,9 @@ fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
             .map(|l| document_of(l).expect("a link has a home"))
             .collect()
     };
-    let sorted = |mut v: Vec<Address>| {
-        v.sort();
-        v
+    let sorted = |mut links: Vec<Address>| {
+        links.sort();
+        links
     };
 
     let found = findlinks_v_on(&snap, &doc1(), &[vspan(1, 1, 1)], &recorder)

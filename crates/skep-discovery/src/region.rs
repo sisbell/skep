@@ -1,10 +1,11 @@
 //! §1/§2/§4 — the content-region discovery family (V-anchored, present-tense,
-//! doc-gated, disjunctive over slots): `image` (V→I), `findlinks_v`,
-//! `count_v`, `window_v`, and RETRIEVEENDSETS. Every result is ASN-0131's
-//! selection index `sel = findlinks_V ∩ addressable`, read out four ways —
-//! nullified links never surface (Conflicts #8, a deliberate divergence from
-//! ASN-0127/0108's `findlinks_V`/`Match`, which no addressability filter
-//! narrows).
+//! doc-gated, disjunctive over slots) — `findlinks_v`, `count_v`, `window_v`
+//! and RETRIEVEENDSETS — and `image` (V→I), the resolution all four read
+//! through: their DOOR, not a member, since it names no link and stabs
+//! nothing. Every result is ASN-0131's selection index
+//! `sel = findlinks_V ∩ addressable`, read out four ways — nullified links
+//! never surface (Conflicts #8, a deliberate divergence from ASN-0127/0108's
+//! `findlinks_V`/`Match`, which no addressability filter narrows).
 //!
 //! The shape a request must have lives here too, as the constructor/gate pair
 //! [`content_vspan`]/`check_region` — the family that judges a region is the
@@ -66,10 +67,11 @@ fn check_region(region: &[Span]) -> Result<(), QueryError> {
 /// How many runs M5's `resolve` walks past for the spans of `region`, over a
 /// run-list `run_count` runs long, summed, saturating. It walks each span's
 /// list from the first run and stops at the first run starting at or past the
-/// span's end ordinal `e` — `ordinal + count`, read off M5's reading of the
-/// span — and every run is at least one position wide, so one span passes at
-/// most `min(run_count, e − 1)`. An end ordinal that does not fit a `usize`
-/// prices at `run_count` — the most any walk passes, never zero.
+/// ordinal of the span's REACH, `e` — M1's `reach`, which for an ordinal
+/// V-span is `ordinal + count` — and every run is at least one position wide,
+/// so one span passes at most `min(run_count, e − 1)`. A REACH ORDINAL that
+/// does not fit a `usize` prices at `run_count` — the most any walk passes,
+/// never zero.
 fn run_list_walk(region: &[Span], run_count: usize) -> usize {
     region.iter().fold(0usize, |steps, span| {
         let passed = as_ordinal_vspan(span)

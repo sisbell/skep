@@ -78,8 +78,8 @@ fn endpoint(e: &Endset, denotes: &'static str) -> Address {
 ///
 /// **Walked from the hits, and filtered before it is read out.** The claims
 /// naming `key` at `slot` are walked in address order and the `[K_sup]` slice
-/// — the store's whole supersession class under `v` — is only probed, so the
-/// large side is never the walked one (`im`'s `intersection` walks its
+/// — the store's whole supersession class under `view` — is only probed, so
+/// the large side is never the walked one (`im`'s `intersection` walks its
 /// argument through its copying consuming iterator). The home rule is asked of
 /// each claim's own address, and only a claim it admits is read out by
 /// [`claim_at`].
@@ -87,7 +87,7 @@ fn claims_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     slot: usize,
     key: &Address,
-    v: View,
+    view: View,
     readable: &dyn Fn(&Address) -> bool,
 ) -> Vec<SupClaim> {
     let l = s.world().links();
@@ -96,8 +96,8 @@ fn claims_on<W: DiscoveryWorld>(
     }
     let sup = l.reserved_type(ShippedType::Supersedes);
     let named = enc([key]); // bound: M7 borrows a constraint's query
-    let hits = l.match_links(&[(slot, &named)], v); // claims naming `key` at `slot`
-    let sup_slice = l.type_slice(sup, v); // the [K_sup] class under `v`
+    let hits = l.match_links(&[(slot, &named)], view); // claims naming `key` at `slot`
+    let sup_slice = l.type_slice(sup, view); // the [K_sup] class under `view`
     hits.iter()
         .filter(|&c| sup_slice.contains(c)) // restrict to supersession claims (Ŝ^Σ = S^Σ)
         // The result-set filter (PUB round 2, lane 3.3, §3), asked of the
@@ -114,8 +114,8 @@ fn claims_on<W: DiscoveryWorld>(
 ///
 /// TOTAL: every `Address` is admitted, and a `y` that is no resident link is
 /// no claim's `old`, so `[]` is the answer rather than a refusal — a caller
-/// owes no check that `y` is resident before asking. `v = Active` yields the
-/// operative graph (`succ_o`), `Audit` the full history (`succ_h`);
+/// owes no check that `y` is resident before asking. `view = Active` yields
+/// the operative graph (`succ_o`), `Audit` the full history (`succ_h`);
 /// `Default` behaves as `Active` (M7's reads coerce it).
 ///
 /// The view selects which CLAIMS are disclosed, never which endpoints: each
@@ -132,10 +132,10 @@ fn claims_on<W: DiscoveryWorld>(
 pub fn in_claims_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     y: &Address,
-    v: View,
+    view: View,
     readable: &dyn Fn(&Address) -> bool,
 ) -> Vec<SupClaim> {
-    claims_on(s, FROM, y, v, readable)
+    claims_on(s, FROM, y, view, readable)
 }
 
 /// The claims with `new = x` (ASN-0125 EL11b `out(x)`): probes TO under the
@@ -144,8 +144,8 @@ pub fn in_claims_on<W: DiscoveryWorld>(
 pub fn out_claims_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     x: &Address,
-    v: View,
+    view: View,
     readable: &dyn Fn(&Address) -> bool,
 ) -> Vec<SupClaim> {
-    claims_on(s, TO, x, v, readable)
+    claims_on(s, TO, x, view, readable)
 }

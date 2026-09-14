@@ -219,9 +219,9 @@ pub struct OrphanReport {
     pub orphaned: Vec<Address>,
 }
 
-/// The typed rejection of the QUERY surface — the region and pointwise
-/// families. Exactly these five arise on the surface as a whole, so a caller
-/// matching the whole surface — as M10's lowering does — writes no
+/// The typed rejection of the QUERY surface — the region family and the
+/// pointwise pair. Exactly these five arise on the surface as a whole, so a
+/// caller matching the whole surface — as M10's lowering does — writes no
 /// unreachable arm. Each read states which of them it raises, and a match
 /// over one read's result carries the rest as unreachable arms. The
 /// delete-orphan preview refuses on its own preconditions and carries its

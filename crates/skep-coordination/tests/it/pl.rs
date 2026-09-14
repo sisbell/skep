@@ -11,8 +11,8 @@ use crate::terms::*;
 use skep_address::Address;
 use skep_coordination::{
     Atom, Coordinator, DefineError, Dom, Env, Lit, Nat, RegisterError, Rule, RuleCertification,
-    ScopeBody, Sort, Stability, Term, TypeError, TypeKey, TypeRef, Value, VarId, View,
-    EXPANSION_NAME_BASE,
+    ScopeBody, Sort, Stability, SupersedeError, Term, TypeError, TypeKey, TypeRef, Value, VarId,
+    View, EXPANSION_NAME_BASE,
 };
 use skep_links::{coverage_class, enc, Behavior, Caller, Endset, HasLinks, ShippedType, Tip};
 
@@ -111,6 +111,24 @@ fn rejections_display_and_chain_to_their_cause() {
     let root = cause.source().expect("IllTyped carries its TypeError");
     assert_eq!(root.to_string(), ill.to_string());
     assert!(root.source().is_none());
+
+    // `supersede` nests one level further, each operation's vocabulary its
+    // own: SupersedeError → DefineError → RegisterError → TypeError.
+    let sup = SupersedeError::Define(define);
+    assert_eq!(
+        sup.to_string(),
+        format!("supersede: define_predicate: register_pred: the def is ill-typed: {ill}")
+    );
+    let define_cause = sup.source().expect("Define carries its DefineError");
+    assert_eq!(
+        define_cause.to_string(),
+        format!("define_predicate: register_pred: the def is ill-typed: {ill}")
+    );
+    assert!(define_cause.source().is_some(), "and the chain runs on beneath it");
+    // Its own up-front gate is a leaf, as `register_pred`'s parse refusal is.
+    let gate = SupersedeError::OldStartNotEverRegistered(ca(1));
+    assert_eq!(gate.to_string(), format!("supersede: old start {} is not an ever-registered def", ca(1)));
+    assert!(gate.source().is_none());
 }
 
 /// A rejection naming a type key reads as the addresses the key denotes, not

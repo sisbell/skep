@@ -137,30 +137,21 @@ impl Error for TypeError {
     }
 }
 
-/// `define_predicate`/`supersede` rejection. A tuple-binding term has no
-/// variant here: stored-def parameters are Codom-only (ASN-0130 SignedTerm)
-/// by the `TypedTerm` type, which no `Tup`-binding term inhabits.
+/// `define_predicate` rejection — its two transactions, the content insert
+/// and the `pdef` registration. A tuple-binding term has no variant here:
+/// stored-def parameters are Codom-only (ASN-0130 SignedTerm) by the
+/// `TypedTerm` type, which no `Tup`-binding term inhabits.
 #[derive(Debug)]
 pub enum DefineError {
-    /// `supersede` only: `old_start` is not an ever-registered def — gated UP
-    /// FRONT, before any transaction (a typo'd non-def address must not seed
-    /// a `supersedes` lineage; PR4 presupposes the superseded address IS a
-    /// definition).
-    OldStartNotEverRegistered(Address),
     Insert(TxnError<InsertError>),
     Register(RegisterError),
-    Supersede(TxnError<EmitError>),
 }
 
 impl fmt::Display for DefineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DefineError::OldStartNotEverRegistered(a) => {
-                write!(f, "supersede: old start {a} is not an ever-registered def")
-            }
             DefineError::Insert(e) => write!(f, "define_predicate: content insert failed: {e}"),
             DefineError::Register(e) => write!(f, "define_predicate: {e}"),
-            DefineError::Supersede(e) => write!(f, "supersede: the supersedes emit failed: {e}"),
         }
     }
 }
@@ -170,8 +161,43 @@ impl Error for DefineError {
         match self {
             DefineError::Insert(e) => Some(e),
             DefineError::Register(e) => Some(e),
-            DefineError::Supersede(e) => Some(e),
-            DefineError::OldStartNotEverRegistered(_) => None,
+        }
+    }
+}
+
+/// `supersede` rejection — its own up-front gate, the successor's definition
+/// (which carries `define_predicate`'s whole home requirement), and the
+/// lineage claim, the third of three non-atomic transactions.
+#[derive(Debug)]
+pub enum SupersedeError {
+    /// `old_start` is not an ever-registered def — gated UP FRONT, before any
+    /// transaction (a typo'd non-def address must not seed a `supersedes`
+    /// lineage; PR4 presupposes the superseded address IS a definition).
+    OldStartNotEverRegistered(Address),
+    Define(DefineError),
+    Supersede(TxnError<EmitError>),
+}
+
+impl fmt::Display for SupersedeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SupersedeError::OldStartNotEverRegistered(a) => {
+                write!(f, "supersede: old start {a} is not an ever-registered def")
+            }
+            SupersedeError::Define(e) => write!(f, "supersede: {e}"),
+            SupersedeError::Supersede(e) => {
+                write!(f, "supersede: the supersedes emit failed: {e}")
+            }
+        }
+    }
+}
+
+impl Error for SupersedeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            SupersedeError::Define(e) => Some(e),
+            SupersedeError::Supersede(e) => Some(e),
+            SupersedeError::OldStartNotEverRegistered(_) => None,
         }
     }
 }
@@ -496,6 +522,12 @@ impl From<TxnError<InsertError>> for DefineError {
 impl From<RegisterError> for DefineError {
     fn from(e: RegisterError) -> Self {
         DefineError::Register(e)
+    }
+}
+
+impl From<DefineError> for SupersedeError {
+    fn from(e: DefineError) -> Self {
+        SupersedeError::Define(e)
     }
 }
 

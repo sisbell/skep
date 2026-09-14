@@ -15,16 +15,42 @@
 
 use std::collections::HashMap;
 
-use skep_links::{Behavior, CoverageClass, Endset, Registration, ShippedType, TypeRegistry};
+use skep_links::{
+    Behavior, CoverageClass, Endset, Registration, Shape, ShippedType, TypeRegistry,
+};
 
 use crate::ast::TypeKey;
 
-/// One cataloged class: its precomputed coverage class and its registration
-/// (the injected registry's truth).
+/// One cataloged class: its precomputed coverage class, handed out, and its
+/// registration — the injected registry's truth, which it ANSWERS questions
+/// about rather than exposes, so a collaborator names the property it needs
+/// instead of knowing how a `Registration` records one.
 #[derive(Debug, Clone)]
 pub(crate) struct CatalogEntry {
     pub(crate) class: CoverageClass,
-    pub(crate) registration: Registration,
+    registration: Registration,
+}
+
+impl CatalogEntry {
+    /// Does the class's registration declare this behavior? V-STAT's test,
+    /// and M7's own question (`TypeRegistry::declares`) asked of the frozen
+    /// projection — so the checker names the behavior it needs.
+    pub(crate) fn declares(&self, behavior: Behavior) -> bool {
+        self.registration.behaviors.contains(&behavior)
+    }
+
+    /// Is the class Unary — `emit`'s shape, which a Marker action's tuple
+    /// must be (`register_rule`'s `BadMarkerType`)?
+    pub(crate) fn is_unary(&self) -> bool {
+        self.registration.shape == Shape::Unary
+    }
+
+    /// Is the class idem⊤? What the fire executor's gap dedup-absorption and
+    /// the Q3/I1a extinction analysis both require of a Marker type
+    /// (`register_rule`'s `NonIdemMarkerType`).
+    pub(crate) fn is_idem(&self) -> bool {
+        self.registration.idem
+    }
 }
 
 /// The frozen catalog. `order` fixes the deterministic `Reg`-expansion class

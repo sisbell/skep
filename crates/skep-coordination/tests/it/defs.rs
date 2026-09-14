@@ -13,7 +13,7 @@ use skep_arrangement::{HasM5, InsertError};
 use skep_content::HasContent;
 use skep_coordination::{
     CertifyError, Coordinator, DefineError, Dom, EvalError, Lit, Nat, RegisterError, RetractError,
-    Rule, Sort, Stability, Term, Trigger, TypeError, Value, View, RuleError,
+    Rule, RuleError, Sort, Stability, SupersedeError, Term, Trigger, TypeError, Value, View,
 };
 use skep_kernel::TxnError;
 use skep_links::{Caller, EmitError, NullifyError, Tip};
@@ -232,7 +232,9 @@ fn define_predicate_refuses_a_published_home_while_the_link_writes_land_there() 
     // … and `supersede` carries the requirement through its successor's insert.
     assert!(matches!(
         c.supersede(&published_doc(), &start, &term),
-        Err(DefineError::Insert(TxnError::Rejected(InsertError::PublishedTarget)))
+        Err(SupersedeError::Define(DefineError::Insert(TxnError::Rejected(
+            InsertError::PublishedTarget
+        ))))
     ));
 
     // The link path is outside the rule: a def whose content lives in a draft
@@ -851,7 +853,7 @@ fn supersede_gates_up_front_and_trips_m7_s_supersession_fence() {
     let untouched = k.snapshot().world().m5().content_count(&doc1());
     assert!(matches!(
         c.supersede(&doc1(), &ca(50), &c.type_check(vec![], tru()).expect("term")),
-        Err(DefineError::OldStartNotEverRegistered(_))
+        Err(SupersedeError::OldStartNotEverRegistered(_))
     ));
     assert_eq!(k.snapshot().world().m5().content_count(&doc1()), untouched);
 
@@ -869,7 +871,7 @@ fn supersede_gates_up_front_and_trips_m7_s_supersession_fence() {
     // fence for content-endpoint def lineage, this match arm flips.
     let before = k.snapshot().world().m5().content_count(&doc1());
     match c.supersede(&doc1(), &p_start, &c.type_check(vec![], Term::Lit(Lit::False)).expect("term")) {
-        Err(DefineError::Supersede(TxnError::Rejected(EmitError::SupersessionClass))) => {}
+        Err(SupersedeError::Supersede(TxnError::Rejected(EmitError::SupersessionClass))) => {}
         other => panic!("fence drift resolved? got {other:?}"),
     }
     assert_eq!(

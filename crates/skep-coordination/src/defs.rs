@@ -37,7 +37,9 @@ use crate::check::TypedTerm;
 use crate::codec;
 use crate::coordinator::Coordinator;
 use crate::dynamics::{st_plus, view_independent};
-use crate::error::{CertifyError, DefineError, EvalError, RegisterError, RetractError};
+use crate::error::{
+    CertifyError, DefineError, EvalError, RegisterError, RetractError, SupersedeError,
+};
 use crate::eval::eval_term;
 use crate::expand::{Expander, ExpansionTooLarge};
 use crate::memo::DefStatus;
@@ -276,9 +278,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// before any transaction: it must be EVER-registered (superseding a
     /// retracted def is legitimate lineage — PR4) — else
     /// `OldStartNotEverRegistered`. The successor's content is written
-    /// through `define_predicate`, so `home` carries that operation's
+    /// through `define_predicate`, so `home` carries that operation's whole
     /// requirement — a registered document that is not a published target —
-    /// and both of its refusals arrive here as `DefineError::Insert`.
+    /// and every one of its refusals arrives here as `SupersedeError::Define`.
     ///
     /// THREE non-atomic transactions, NO idempotency key — a lost-ack retry
     /// re-inserts a fresh successor and branches the lineage
@@ -291,17 +293,17 @@ impl<W: CoordinationWorld> Coordinator<W> {
         home: &Address,
         old_start: &Address,
         new_term: &TypedTerm,
-    ) -> Result<(Address, Seq), DefineError> {
+    ) -> Result<(Address, Seq), SupersedeError> {
         let snap = self.kernel.snapshot();
         if !self.is_ever_pred(old_start, &snap) {
-            return Err(DefineError::OldStartNotEverRegistered(old_start.clone()));
+            return Err(SupersedeError::OldStartNotEverRegistered(old_start.clone()));
         }
         let (new_start, _pdef_seq) = self.define_predicate(home, new_term)?;
         let sup = self.catalog.reserved_type(ShippedType::Supersedes);
         let (_claim, seq) = self
             .link_writer()
             .emit(Caller::System, home, sup, old_start, from_ref(&new_start))
-            .map_err(DefineError::Supersede)?;
+            .map_err(SupersedeError::Supersede)?;
         Ok((new_start, seq))
     }
 

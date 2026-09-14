@@ -101,8 +101,8 @@ pub use check::{TriggerTerm, TypedTerm};
 pub use coordinator::{Coordinator, LinkWriterFactory, VstreamFactory};
 pub use dynamics::{ActiveExceptions, Dynamics, Footprint, Stability};
 pub use error::{
-    CertifyError, DefineError, EvalError, FireError, RegisterError, RetractError,
-    RuleError, TypeError,
+    CertifyError, DefineError, EvalError, FireError, RegisterError, RetractError, RuleError,
+    SupersedeError, TypeError,
 };
 pub use rule::{
     FireAction, FireOutcome, Occurrence, Rule, RuleCertification, RuleId, ScopeBody, StepOutcome,
@@ -182,6 +182,7 @@ const _: fn() = || {
     owed::<StepOutcome>();
     owed_error::<TypeError>();
     owed_error::<DefineError>();
+    owed_error::<SupersedeError>();
     owed_error::<RegisterError>();
     owed_error::<EvalError>();
     owed_error::<CertifyError>();

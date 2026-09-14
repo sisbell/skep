@@ -339,7 +339,7 @@ impl<'a> Checker<'a> {
         };
         let entry = self.catalog.get(k).ok_or_else(|| TypeError::UnregisteredType(k.clone()))?;
         let declares = |needs: Behavior| -> Result<(), TypeError> {
-            if entry.registration.behaviors.contains(&needs) {
+            if entry.declares(needs) {
                 Ok(())
             } else {
                 Err(TypeError::BehaviorMissing { ty: k.clone(), needs })

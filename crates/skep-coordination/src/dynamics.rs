@@ -257,6 +257,13 @@ impl<'a> Analyzer<'a> {
     /// element (`EvalCtx::filtered_other`, fixed active); empty at `active`
     /// and `audit`, where no rewrite runs. Unioned into exactly the reads the
     /// evaluator UV-rewrites, so which those are is one token per arm.
+    ///
+    /// The atom arms that union it are exactly [`moves_with_view`]'s list,
+    /// which PR-VIEW's scan refuses — for a union of two reasons: the first
+    /// three take `Slice::of(view)`, the rest are UV-rewritten collections,
+    /// and `is_K` is both view-parameterized and charged here deliberately
+    /// though UV never rewrites it. So a change to either list belongs in
+    /// both.
     fn read_filter_fp(&self) -> Footprint {
         let mut fp = Footprint::default();
         if self.view == View::Default {
@@ -564,12 +571,50 @@ impl<'a> Analyzer<'a> {
 
 // ─────────────────────── PR-VIEW view-independence ───────────────────────
 
-/// The syntactic scan: no view-parameterized constituent (`is_K`/`members`/
-/// `targets_of`/`M_K`) and no UV-rewritten collection atom (`succs`/`chain`/
-/// `sources_to`/`stale`). The same answer at every view. Precondition as the
-/// `Analyzer`'s: ref-free input — a referent's body is the one part a `Ref`
-/// node's own spelling cannot vouch for, so the scan runs over the flat
-/// expansion, never around a `Ref`.
+/// The atoms whose denotation moves with the TERM VIEW, classified
+/// EXHAUSTIVELY: the three view-parameterized constituents (`is_K`/`members`/
+/// `targets_of` — D1–D3 and V-AUD read different slices, and `targets_of`
+/// matches its source differently at `audit`) and the four collections the
+/// evaluator UV-rewrites at `default` (`succs`/`chain`/`sources_to`/`stale`).
+/// Every other atom reads a fixed slice, or no state at all, and answers the
+/// same at every view — though its ARGUMENTS need not, so the caller walks on.
+///
+/// No `_` arm, deliberately. `certify_stable` stands behind this scan and a
+/// `pd_stable` tuple is a permanent content-addressed claim, so an atom added
+/// to `ast.rs` must be CLASSIFIED here rather than inherit the certifying
+/// answer by default — and a conservative default would be no better, since it
+/// would silently refuse a legitimate view-independent atom. These are also
+/// exactly the arms [`Analyzer::read_filter_fp`] is unioned into, so a change
+/// here belongs in both.
+fn moves_with_view(a: &Atom) -> bool {
+    match a {
+        Atom::IsK(..)
+        | Atom::Members(_)
+        | Atom::TargetsOf(..)
+        | Atom::Succs(..)
+        | Atom::Chain(..)
+        | Atom::SourcesTo(..)
+        | Atom::Stale(..) => true,
+        Atom::IsFiltered(..)
+        | Atom::Tip(..)
+        | Atom::IsInChain(..)
+        | Atom::TargetOf(..)
+        | Atom::TargetsKeyed(_)
+        | Atom::Age(..)
+        | Atom::IsDoc(_)
+        | Atom::TupAddr(_)
+        | Atom::TupAddrsF(_)
+        | Atom::TupAddrsG(_)
+        | Atom::InCoverageF(..)
+        | Atom::InCoverageG(..) => false,
+    }
+}
+
+/// The syntactic scan: no atom whose denotation [`moves_with_view`] and no
+/// `M_K` domain (view-parameterized like the core atoms it reflects). The same
+/// answer at every view. Precondition as the `Analyzer`'s: ref-free input — a
+/// referent's body is the one part a `Ref` node's own spelling cannot vouch
+/// for, so the scan runs over the flat expansion, never around a `Ref`.
 pub(crate) fn view_independent(t: &Term) -> bool {
     struct ViewScan {
         independent: bool,
@@ -580,15 +625,7 @@ pub(crate) fn view_independent(t: &Term) -> bool {
                 return;
             }
             match t {
-                Term::Atom(
-                    Atom::IsK(..)
-                    | Atom::Members(_)
-                    | Atom::TargetsOf(..)
-                    | Atom::Succs(..)
-                    | Atom::Chain(..)
-                    | Atom::SourcesTo(..)
-                    | Atom::Stale(..),
-                ) => self.independent = false,
+                Term::Atom(a) if moves_with_view(a) => self.independent = false,
                 Term::Ref { .. } => unreachable!(
                     "classification precondition: ref-free input (an inline trigger's projection or a flat expansion)"
                 ),
@@ -596,13 +633,22 @@ pub(crate) fn view_independent(t: &Term) -> bool {
             }
         }
 
+        /// `M_K` is the one view-parameterized domain; the rest name a fixed
+        /// slice (`A_K`/`L_K`/`L_dom`), carry no state (`Reg`, folded away at
+        /// type-check), or are closures whose children the walk reaches —
+        /// enumerated rather than caught, for [`moves_with_view`]'s reason.
         fn dom(&mut self, d: &Dom) {
             if !self.independent {
                 return;
             }
             match d {
                 Dom::MembersDom(_) => self.independent = false,
-                _ => visit_dom(self, d),
+                Dom::ActiveSlice(_)
+                | Dom::AuditSlice(_)
+                | Dom::LinkDom
+                | Dom::Reg
+                | Dom::Filter { .. }
+                | Dom::SetTerm(_) => visit_dom(self, d),
             }
         }
     }

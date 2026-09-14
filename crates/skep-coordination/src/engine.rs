@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use skep_address::{document_of, Address};
 use skep_kernel::{Seq, Snapshot, TxnError};
-use skep_links::{Caller, EmitError, Endset, NullifyError, Pattern, Shape, ShippedType, View};
+use skep_links::{Caller, EmitError, Endset, NullifyError, Pattern, ShippedType, View};
 
 use crate::ast::Term;
 use crate::check::{Checker, Ctx, TypedTerm};
@@ -205,10 +205,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
             let Some(entry) = self.catalog.get(ty) else {
                 return Err(RuleError::BadMarkerType(ty.clone()));
             };
-            if entry.registration.shape != Shape::Unary {
+            if !entry.is_unary() {
                 return Err(RuleError::BadMarkerType(ty.clone()));
             }
-            if !entry.registration.idem {
+            if !entry.is_idem() {
                 return Err(RuleError::NonIdemMarkerType(ty.clone()));
             }
             if self.catalog.is_pred_layer(&entry.class) {

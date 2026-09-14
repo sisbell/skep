@@ -20,7 +20,7 @@ use skep_arrangement::{as_ordinal_vspan, ordinal_vspan, reading_surface, Run, VP
 use skep_kernel::Snapshot;
 use skep_links::Endset;
 
-use crate::budget::{MAX_ENDSET_SPANS, MAX_IMAGE_RUNS, MAX_JOIN_STEPS};
+use crate::budget::{MAX_ANSWER_SPANS, MAX_IMAGE_RUNS, MAX_JOIN_STEPS};
 use crate::home::home_readable;
 use crate::sets::{stab_runs, stab_runs_by_slot, union_slots, window_over};
 use crate::types::{Cursor, QueryError, Window};
@@ -315,7 +315,7 @@ pub fn window_v_on<W: DiscoveryWorld>(
 /// order is pinned (slot, then lexicographic span-sequence), and so
 /// deterministic at a snapshot.
 ///
-/// Refuses past [`MAX_ENDSET_SPANS`] with `EndsetsTooLarge`, accumulated over
+/// Refuses past [`MAX_ANSWER_SPANS`] with `EndsetsTooLarge`, accumulated over
 /// the spans of the pairs actually KEPT — what the answer carries is what the
 /// budget prices, so the identity-withholding collapse counts once, as it
 /// ships once — and checked AS THE ANSWER IS PRODUCED, so an over-budget
@@ -363,7 +363,7 @@ pub fn retrieve_endsets_on<W: DiscoveryWorld>(
                 if kept.insert((*i, e)) {
                     // WHOLE endset, no clip
                     spans_kept += e.len();
-                    if spans_kept > MAX_ENDSET_SPANS {
+                    if spans_kept > MAX_ANSWER_SPANS {
                         return Err(QueryError::EndsetsTooLarge);
                     }
                 }

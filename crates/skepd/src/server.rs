@@ -343,7 +343,7 @@ impl ClassScans {
 /// link's coverage against that document's runs, each held by M8 to a number
 /// its cost statement records: the square of
 /// [`skep_discovery::MAX_IMAGE_RUNS`] for the walk and for the boolean touch
-/// test, and [`skep_discovery::MAX_ENDSET_SPANS`] for the projection, whose
+/// test, and [`skep_discovery::MAX_ANSWER_SPANS`] for the projection, whose
 /// join builds the span set it answers with. Each span of an `image` region
 /// is held to [`skep_discovery::MAX_IMAGE_RUNS`] ahead of its resolution as
 /// well, so no one of them materializes a fragmented document whole;

@@ -11,7 +11,7 @@ use skep_address::{document_of, Address};
 use skep_discovery::{
     addressably_discoverable_from_on, count_ftt_on, count_v_on, delete_orphans_on,
     findlinks_ftt_on, findlinks_v_on, in_claims_on, out_claims_on, project_on, retrieve_endsets_on,
-    window_ftt_on, window_v_on, FourSet, QueryError, SlotSpec, SupClaim, FROM, MAX_ENDSET_SPANS,
+    window_ftt_on, window_v_on, FourSet, QueryError, SlotSpec, SupClaim, FROM, MAX_ANSWER_SPANS,
     TO,
 };
 use skep_links::{enc, LinkWriter, View};
@@ -54,7 +54,7 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
 
     let snap = k.snapshot();
     let cannot_read_doc2 = |d: &Address| *d != doc2();
-    let survivors = |links: Vec<Address>| -> Vec<Address> {
+    let homed_outside_doc2 = |links: Vec<Address>| -> Vec<Address> {
         links
             .into_iter()
             .filter(|a| document_of(a) != Some(doc2()))
@@ -66,7 +66,7 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
     let all = findlinks_ftt_on(&snap, &q, &every_home);
     assert!(all.contains(&t0) && all.contains(&dropped), "doc2's links are in the store");
     let seen = findlinks_ftt_on(&snap, &q, &cannot_read_doc2);
-    assert_eq!(seen, survivors(all), "findlinks_ftt");
+    assert_eq!(seen, homed_outside_doc2(all), "findlinks_ftt");
     assert_eq!(count_ftt_on(&snap, &q, &cannot_read_doc2), seen.len(), "count_ftt");
     assert_eq!(
         drain_window(1, seen.len() + 1, |cur| {
@@ -81,7 +81,7 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
     let all = findlinks_v_on(&snap, &doc1(), &region, &every_home).expect("findlinks_v");
     assert!(all.contains(&t0) && all.contains(&t1), "doc2's links touch the region");
     let seen = findlinks_v_on(&snap, &doc1(), &region, &cannot_read_doc2).expect("findlinks_v");
-    assert_eq!(seen, survivors(all), "findlinks_v");
+    assert_eq!(seen, homed_outside_doc2(all), "findlinks_v");
     assert_eq!(
         count_v_on(&snap, &doc1(), &region, &cannot_read_doc2),
         Ok(seen.len()),
@@ -126,10 +126,10 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
     // RETRIEVEENDSETS withholds identity, so what it drops is PAIRS: t0's own
     // pair goes, and the one t1 shares with m2 stays, since m2 still carries
     // it.
-    let every_pair =
+    let all_pairs =
         retrieve_endsets_on(&snap, &doc1(), &region, &every_home).expect("retrieve_endsets");
-    assert_eq!(every_pair.len(), 5);
-    assert!(every_pair.contains(&(FROM, enc(&[ca(1), ca(102)]))), "t0's own pair");
+    assert_eq!(all_pairs.len(), 5);
+    assert!(all_pairs.contains(&(FROM, enc(&[ca(1), ca(102)]))), "t0's own pair");
     assert_eq!(
         retrieve_endsets_on(&snap, &doc1(), &region, &cannot_read_doc2),
         Ok(vec![
@@ -150,7 +150,7 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
     assert_eq!(
         delete_orphans_on(&snap, &doc1(), &vp(1, 3), &n(1), &cannot_read_doc2)
             .map(|r| r.orphaned),
-        Ok(survivors(orphaned))
+        Ok(homed_outside_doc2(orphaned))
     );
 
     // The lineage pair: the doc2-homed claim goes, from both probes.
@@ -160,14 +160,14 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
     assert_eq!(all, vec![kept.clone(), dropped.clone()]);
     assert_eq!(
         claims_of(in_claims_on(&snap, &m0, View::Active, &cannot_read_doc2)),
-        survivors(all)
+        homed_outside_doc2(all)
     );
     for new in [&m1, &t0] {
         let all = claims_of(out_claims_on(&snap, new, View::Active, &every_home));
         assert_eq!(all.len(), 1, "one claim names {new:?} as new");
         assert_eq!(
             claims_of(out_claims_on(&snap, new, View::Active, &cannot_read_doc2)),
-            survivors(all),
+            homed_outside_doc2(all),
             "out_claims({new:?})"
         );
     }
@@ -316,7 +316,7 @@ fn retrieve_endsets_filters_at_the_links_home_and_ships_its_endset_whole_at_orig
 #[test]
 fn retrieve_endsets_prices_its_span_budget_over_the_readers_own_answer() {
     const SPANS: u32 = 1024;
-    let at_budget = MAX_ENDSET_SPANS / SPANS as usize; // 64 whole endsets
+    let at_budget = MAX_ANSWER_SPANS / SPANS as usize; // 64 whole endsets
     let k = kernel();
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);

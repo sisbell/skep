@@ -357,15 +357,15 @@ fn the_preview_answers_a_published_target_the_delete_refuses() {
 fn delete_orphans_refuses_a_document_past_the_run_budget() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
-    let vs = Vstream::new(&k);
-    let many = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS];
-    vs.copy(SYS, &doc2(), vp(1, 1), &many).expect("copy succeeds");
+    let vstream = Vstream::new(&k);
+    let specs = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS];
+    vstream.copy(SYS, &doc2(), vp(1, 1), &specs).expect("copy succeeds");
     let reads = Reads(&k);
 
     // At the budget: one run deleted and every other retained, `MAX` in all.
     assert!(reads.delete_orphans(&doc2(), &vp(1, 1), &n(1)).is_ok());
 
-    vs.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, 1)])
+    vstream.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, 1)])
         .expect("copy succeeds");
     assert_eq!(
         k.snapshot().world().m5().content_runs(&doc2()).len(),
@@ -393,7 +393,7 @@ fn delete_orphans_refuses_a_document_past_the_run_budget() {
         Err(OrphanError::OutOfBounds)
     );
     // And the DELETE it previews, which stabs nothing, admits the request.
-    assert!(vs.delete(SYS, &doc2(), vp(1, 1), n(1)).is_ok());
+    assert!(vstream.delete(SYS, &doc2(), vp(1, 1), n(1)).is_ok());
 }
 
 /// §6 — the preview's budget counts `d`'s LINK runs too, which no text range
@@ -407,9 +407,9 @@ fn delete_orphans_refuses_a_document_past_the_run_budget() {
 fn the_preview_budget_counts_the_link_runs_the_second_stab_takes() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
-    let many = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS];
+    let specs = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS];
     Vstream::new(&k)
-        .copy(SYS, &doc2(), vp(1, 1), &many)
+        .copy(SYS, &doc2(), vp(1, 1), &specs)
         .expect("copy succeeds");
     let reads = Reads(&k);
 

@@ -4,7 +4,7 @@
 use crate::common;
 
 use common::*;
-use skep_discovery::{QueryError, FROM, MAX_ENDSET_SPANS, TO, TYPE};
+use skep_discovery::{QueryError, FROM, MAX_ANSWER_SPANS, TO, TYPE};
 use skep_links::{enc, Endset, LinkWriter, SlotArg, MAX_SLOT_SPANS};
 
 #[test]
@@ -103,7 +103,7 @@ fn retrieve_endsets_orders_pairs_that_tie_on_every_key_but_the_last() {
 #[test]
 fn retrieve_endsets_refuses_an_answer_past_the_span_budget() {
     const SPANS: u32 = 1024;
-    let at_budget = MAX_ENDSET_SPANS / SPANS as usize; // 64 whole endsets
+    let at_budget = MAX_ANSWER_SPANS / SPANS as usize; // 64 whole endsets
 
     let k = kernel();
     seed_content(&k, &doc1(), 1);
@@ -138,19 +138,20 @@ fn retrieve_endsets_refuses_an_answer_past_the_span_budget() {
 #[test]
 fn retrieve_endsets_prices_the_collapsed_answer_not_the_links_behind_it() {
     const SPANS: u32 = 1024;
-    let links = MAX_ENDSET_SPANS / SPANS as usize + 1; // one more than a per-link charge admits
+    // One more link than a per-link charge admits.
+    let link_count = MAX_ANSWER_SPANS / SPANS as usize + 1;
     let k = kernel();
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
     let reads = Reads(&k);
     let shared = wide_from(0, SPANS);
-    for i in 0..links as u32 {
+    for i in 0..link_count as u32 {
         link(&store, &doc1(), &shared, &[ca(101 + i)]);
     }
     let region = [vspan(1, 1, 1)];
     assert_eq!(
         reads.count_v(&doc1(), &region),
-        Ok(links),
+        Ok(link_count),
         "every link touches the region"
     );
     assert_eq!(

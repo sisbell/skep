@@ -269,14 +269,14 @@ pub enum QueryError {
     /// [`crate::MAX_IMAGE_RUNS`] admits, or exceed the product its own join is
     /// held to: the square for the run-list walk behind the region family and
     /// for the touch test of a link's whole coverage, and
-    /// [`crate::MAX_ENDSET_SPANS`] for the projection, whose product is the
+    /// [`crate::MAX_ANSWER_SPANS`] for the projection, whose product is the
     /// span set it builds. Each of the three reads that hold it counts the
     /// runs its own work multiplies, which the constant states. The runs are
     /// the side of a join the request supplies; what they are joined against
     /// is the world's.
     ImageTooLarge,
     /// The RETRIEVEENDSETS answer would carry more spans than
-    /// [`crate::MAX_ENDSET_SPANS`]. The one budget here priced on what the
+    /// [`crate::MAX_ANSWER_SPANS`]. The one budget here priced on what the
     /// store hands back rather than on what the request names.
     EndsetsTooLarge,
 }

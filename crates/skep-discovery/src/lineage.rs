@@ -48,10 +48,11 @@ fn claim_at(l: &LinkState, c: &Address) -> SupClaim {
     }
 }
 
-/// The single address a claim endpoint denotes. `denotes` states the fence
-/// the read-out rests on, naming which endpoint — F or G — it is reading.
-fn endpoint(e: &Endset, denotes: &'static str) -> Address {
-    let t = e.single_denoted().expect(denotes).clone();
+/// The single address a claim endpoint denotes. `fence` is the expect
+/// message, naming which of M7's `[K_sup]` sole-writer fences — F or G — this
+/// read-out rests on.
+fn endpoint(e: &Endset, fence: &'static str) -> Address {
+    let t = e.single_denoted().expect(fence).clone();
     validate(t).expect(
         "a [K_sup] endpoint denotes a RESIDENT link — assert_sup checks residence, editlink's \
          DC guard requires it of a caller's successor, and makelink/emit refuse the class — so \

@@ -3,7 +3,7 @@
 //! runs — the region family's image, the pointwise pair, the delete-orphan
 //! preview — each over the run count its own work multiplies, with its
 //! square [`MAX_JOIN_STEPS`] for the two joins no run count prices; and
-//! [`MAX_ENDSET_SPANS`], which bounds what an answer built of spans carries.
+//! [`MAX_ANSWER_SPANS`], which bounds what an answer built of spans carries.
 //! Each read applies its own; the numbers and their argument live here
 //! because the region family, the pointwise pair and the preview all consult
 //! them.
@@ -24,7 +24,7 @@
 /// * [`crate::project_on`] counts `#content_runs(d)`, because M5's `project`
 ///   joins the coverage against the content runs alone; its PRODUCT is the
 ///   one this constant's square does not hold, that join's pairs being the
-///   answer it builds ([`MAX_ENDSET_SPANS`]);
+///   answer it builds ([`MAX_ANSWER_SPANS`]);
 /// * [`crate::addressably_discoverable_from_on`] counts
 ///   `#content_runs(d) + #link_runs(d)`, because LP12 ranges over both
 ///   subspaces and every one of those extents is tested;
@@ -79,7 +79,7 @@
 ///   `any` that allocates nothing and stops at its first overlap — which is
 ///   what the square prices. The one join of the same shape it does not hold
 ///   is [`crate::project_on`]'s, whose product is the answer it builds and so
-///   belongs to [`MAX_ENDSET_SPANS`].
+///   belongs to [`MAX_ANSWER_SPANS`].
 ///
 /// THE GRANULARITY IS A REGION SPAN, as M6's coverage budget's is: the
 /// resolution stops at the first span whose image carries the accumulator
@@ -108,15 +108,18 @@ pub(crate) const MAX_JOIN_STEPS: usize = MAX_IMAGE_RUNS * MAX_IMAGE_RUNS;
 /// The most spans one ANSWER may carry, at the two reads whose answer is a
 /// span set: the ceiling on what [`crate::retrieve_endsets_on`]'s pair set
 /// makes M8 hold live and what its presentation sorts, and on the V-spans
-/// [`crate::project_on`] makes M5 build.
+/// [`crate::project_on`] makes M5 build. The two are different spans — the
+/// I-address spans of the endsets RETRIEVEENDSETS ships whole, and the
+/// V-spans `project` makes M5 build — and one number bounds both, which is
+/// why the name is the ANSWER's and not either kind's.
 ///
 /// The budget: a pair's cost is its spans, and the answer's is their sum —
 /// the sort is `O(B log B)` span comparisons over `B` accumulated spans (a
 /// comparison walks two span sequences to their first difference, so a long
 /// endset pays its length once rather than once per comparison), each span
 /// two `Tumbler`s. `2^16` is M5's `MAX_PLACED_RUNS` and M6's
-/// `MAX_COMPARE_PAIRS` — the substrate's existing answer to how large one
-/// REPORT may be.
+/// `MAX_COMPARE_PAIRS` — the substrate's existing number for how large one
+/// ANSWER may be.
 ///
 /// Not `MAX_IMAGE_RUNS`: that budget bounds one side of a join a caller
 /// supplies, and this bounds an answer the STORE supplies. One deposit may
@@ -129,11 +132,11 @@ pub(crate) const MAX_JOIN_STEPS: usize = MAX_IMAGE_RUNS * MAX_IMAGE_RUNS;
 /// V-span per overlapping (run, coverage span) pair into a vector BEFORE it
 /// normalizes, so that join's product is its answer's pre-normalization size
 /// and not merely its step count, and a square's worth of pairs is a square's
-/// worth of spans held live. A report budget bounds a report; the pointwise
+/// worth of spans held live. An answer budget bounds an answer; the pointwise
 /// join whose product is only work keeps the square.
 ///
 /// WHAT IT DOES NOT BOUND: `|links|` and any one link's endset size are the
 /// WORLD's, so the candidate walk this budget rides on is world-sized whatever
 /// the number — the same division M6 draws — and the answer's marshalled form
 /// is M10's, which owns no ceiling of its own beyond the one this bounds.
-pub const MAX_ENDSET_SPANS: usize = 1 << 16;
+pub const MAX_ANSWER_SPANS: usize = 1 << 16;

@@ -141,7 +141,7 @@
 //! the four counts and how their refusals relate. Its SQUARE holds the two
 //! joins a run count alone does not price — the run-list walk [`image_on`]
 //! asks of M5, and the touch test of a link's whole coverage behind
-//! [`addressably_discoverable_from_on`]. [`MAX_ENDSET_SPANS`] bounds what an
+//! [`addressably_discoverable_from_on`]. [`MAX_ANSWER_SPANS`] bounds what an
 //! answer built of spans carries: a RETRIEVEENDSETS pair set, and the V-spans
 //! [`project_on`] makes M5 build, whose count is that read's join product —
 //! the quantities here the store supplies rather than the request.
@@ -193,7 +193,7 @@
 //!   held at different numbers because they buy different things: the touch
 //!   test of every slot's every span against every run is work alone, at
 //!   `MAX_IMAGE_RUNS²`, while M5's `project` of one slot against the content
-//!   runs builds one V-span per overlapping pair, at `MAX_ENDSET_SPANS`.
+//!   runs builds one V-span per overlapping pair, at `MAX_ANSWER_SPANS`.
 //!
 //! A window computes its family's whole candidate set before it cuts,
 //! whatever `n` and wherever the cursor: paging bounds the answer, never the
@@ -246,7 +246,7 @@ mod sets;
 mod survival;
 mod types;
 
-pub use budget::{MAX_ENDSET_SPANS, MAX_IMAGE_RUNS};
+pub use budget::{MAX_ANSWER_SPANS, MAX_IMAGE_RUNS};
 pub use descriptor::{count_ftt_on, findlinks_ftt_on, window_ftt_on};
 pub use lineage::{in_claims_on, out_claims_on};
 pub use pointwise::{addressably_discoverable_from_on, project_on};

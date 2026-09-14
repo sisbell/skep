@@ -378,13 +378,13 @@ fn image_holds_one_spans_materialization_to_the_run_budget() {
     let wide = MAX_IMAGE_RUNS as u32 + 1;
     let k = kernel();
     seed_content(&k, &doc1(), wide); // one run, `MAX + 1` positions
-    let vs = Vstream::new(&k);
+    let vstream = Vstream::new(&k);
     // doc2: that whole run transcluded, then `MAX` width-1 runs behind it,
     // none abutting the next — so the surface holds `MAX + 1` runs, and its
     // first `MAX + 1` positions are one of them.
-    vs.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, wide)])
+    vstream.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, wide)])
         .expect("copy succeeds");
-    vs.copy(
+    vstream.copy(
         SYS,
         &doc2(),
         vp(1, wide + 1),
@@ -450,9 +450,9 @@ fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
     seed_content(&k, &doc1(), 1); // one run
     // doc2 one run past the budget: one COPY placing doc1's position many
     // times, each placement a width-1 run that abuts nothing.
-    let many = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS + 1];
+    let specs = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS + 1];
     Vstream::new(&k)
-        .copy(SYS, &doc2(), vp(1, 1), &many)
+        .copy(SYS, &doc2(), vp(1, 1), &specs)
         .expect("copy succeeds");
     assert_eq!(
         k.snapshot().world().m5().content_runs(&doc2()).len(),
@@ -472,7 +472,7 @@ fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
     let flat_deep: Vec<Span> = vec![vspan(1, MAX_IMAGE_RUNS as u32 + 1, 1); MAX_IMAGE_RUNS];
     // Spans whose reach ordinal is past `usize`, so no price can be read off
     // it — and which resolve nothing, so no run budget stands behind them.
-    let unreadable: Vec<Span> = vec![vspan_past_usize(1); MAX_IMAGE_RUNS];
+    let past_usize: Vec<Span> = vec![vspan_reaching_past_usize(1); MAX_IMAGE_RUNS];
     assert_eq!(reads.image(&doc2(), &flat_deep[..1]), Ok(vec![run(&ca(1), 1)]));
     assert_eq!(
         reads.image(&doc2(), &deep[..1]),
@@ -481,9 +481,9 @@ fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
     );
     assert_eq!(reads.image(&doc1(), &deep), Ok(vec![]));
     assert_eq!(
-        reads.image(&doc2(), &unreadable[..1]),
+        reads.image(&doc2(), &past_usize[..1]),
         Ok(vec![]),
-        "an unreadable reach resolves no run either"
+        "a reach past `usize` resolves no run either"
     );
 
     for (name, refusal) in &region_entry_points(reads) {
@@ -518,19 +518,19 @@ fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
             "{name}: a flat region deep in a surface past the run budget is the walk's to refuse"
         );
         assert_eq!(
-            refusal(&doc2(), &unreadable),
+            refusal(&doc2(), &past_usize),
             Some(QueryError::ImageTooLarge),
-            "{name}: an unreadable reach prices at the run count, never at zero"
+            "{name}: a reach past `usize` prices at the run count, never at zero"
         );
         assert_eq!(
-            refusal(&doc1(), &unreadable),
+            refusal(&doc1(), &past_usize),
             None,
             "{name}: and at the run count — over one run the same spans are answered"
         );
         assert_eq!(
-            refusal(&doc2(), &unreadable[..1]),
+            refusal(&doc2(), &past_usize[..1]),
             None,
-            "{name}: one unreadable reach is one walk"
+            "{name}: one reach past `usize` is one walk"
         );
     }
 }
@@ -557,22 +557,25 @@ fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
 #[test]
 fn the_walk_budget_admits_the_square_itself_and_refuses_one_step_past_it() {
     const WIDTH: u32 = MAX_IMAGE_RUNS as u32 / 2;
-    let runs = 2 * MAX_IMAGE_RUNS;
+    let run_count = 2 * MAX_IMAGE_RUNS;
     let k = kernel();
     seed_content(&k, &doc1(), WIDTH); // one run, WIDTH positions wide
     // doc2: `2 × MAX` runs of `WIDTH` positions each, none abutting the next,
     // so the run count reaches every span's reach below while the run-list is
     // short in the ordinals each span walks.
-    let many = vec![spec(&doc1(), 1, 1, WIDTH); runs];
+    let specs = vec![spec(&doc1(), 1, 1, WIDTH); run_count];
     Vstream::new(&k)
-        .copy(SYS, &doc2(), vp(1, 1), &many)
+        .copy(SYS, &doc2(), vp(1, 1), &specs)
         .expect("copy succeeds");
-    assert_eq!(k.snapshot().world().m5().content_runs(&doc2()).len(), runs);
+    assert_eq!(
+        k.snapshot().world().m5().content_runs(&doc2()).len(),
+        run_count
+    );
     let reads = Reads(&k);
 
     // `MAX / 2` spans each reaching `2 × MAX + 1`: both tiers price
     // `min(2 × MAX, 2 × MAX)` apiece, for `MAX × MAX` — the square exactly.
-    let at_square: Vec<Span> = vec![vspan(1, runs as u32, 1); MAX_IMAGE_RUNS / 2];
+    let at_square: Vec<Span> = vec![vspan(1, run_count as u32, 1); MAX_IMAGE_RUNS / 2];
     // One span pricing 1 more. Widening a span cannot do it: the run count
     // caps what any one span pays.
     let past_square: Vec<Span> = at_square

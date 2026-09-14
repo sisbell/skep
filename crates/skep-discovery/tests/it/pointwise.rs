@@ -8,7 +8,7 @@ use common::*;
 use skep_address::Address;
 use skep_arrangement::{HasM5, Vstream};
 use skep_discovery::{
-    addressably_discoverable_from_on, project_on, QueryError, FROM, MAX_ENDSET_SPANS,
+    addressably_discoverable_from_on, project_on, QueryError, FROM, MAX_ANSWER_SPANS,
     MAX_IMAGE_RUNS, TO, TYPE,
 };
 use skep_links::{LinkWriter, SlotArg};
@@ -321,9 +321,9 @@ fn the_pointwise_pair_holds_one_run_constant_over_two_quantities() {
     // nothing, so the arrangement holds one run per spec rather than
     // coalescing them. This is the world quantity the budget prices, and a
     // caller can build it far faster than a reader can pay for it.
-    let vs = Vstream::new(&k);
-    let many = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS];
-    vs.copy(SYS, &doc2(), vp(1, 1), &many).expect("copy succeeds");
+    let vstream = Vstream::new(&k);
+    let specs = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS];
+    vstream.copy(SYS, &doc2(), vp(1, 1), &specs).expect("copy succeeds");
     let snap = k.snapshot();
     assert_eq!(snap.world().m5().content_runs(&doc2()).len(), MAX_IMAGE_RUNS);
     assert_eq!(snap.world().m5().link_runs(&doc2()).len(), 0);
@@ -346,7 +346,7 @@ fn the_pointwise_pair_holds_one_run_constant_over_two_quantities() {
 
     // One CONTENT run past it, and both refuse — the quantities differ, the
     // constant does not.
-    vs.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, 1)])
+    vstream.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, 1)])
         .expect("copy succeeds");
     assert_eq!(
         reads.project(&e1, FROM, &doc2()),
@@ -412,9 +412,9 @@ fn addressably_discoverable_from_holds_its_join_to_the_square_of_the_run_budget(
     let wider = link(&store, &doc1(), &wide_from(1, m - 1), &[ca(101)]);
     // A FROM of `M − 2`: `M` in all.
     let exact = link(&store, &doc1(), &wide_from(0, m - 2), &[ca(101)]);
-    let vs = Vstream::new(&k);
-    let many = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS - 1];
-    vs.copy(SYS, &doc2(), vp(1, 1), &many).expect("copy succeeds");
+    let vstream = Vstream::new(&k);
+    let specs = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS - 1];
+    vstream.copy(SYS, &doc2(), vp(1, 1), &specs).expect("copy succeeds");
     let reads = Reads(&k);
     assert_eq!(
         k.snapshot().world().m5().link_runs(&doc2()).len(),
@@ -427,7 +427,7 @@ fn addressably_discoverable_from_holds_its_join_to_the_square_of_the_run_budget(
 
     // One run more. The run count is AT the budget, which admits it; the
     // product is (M + 1)M, past the square.
-    vs.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, 1)])
+    vstream.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, 1)])
         .expect("copy succeeds");
     assert_eq!(
         k.snapshot().world().m5().content_runs(&doc2()).len(),
@@ -470,7 +470,7 @@ fn project_holds_its_product_to_the_answer_budget() {
         k.snapshot().world().m5().content_runs(&doc2()).len(),
         MAX_IMAGE_RUNS
     );
-    let spans = MAX_ENDSET_SPANS / MAX_IMAGE_RUNS; // 16: the answer budget exactly
+    let spans = MAX_ANSWER_SPANS / MAX_IMAGE_RUNS; // 16: the answer budget exactly
     let at_budget = link(&store, &doc1(), &vec![ca(1); spans], &[ca(101)]);
     let past = link(&store, &doc1(), &vec![ca(1); spans + 1], &[ca(101)]);
     let reads = Reads(&k);

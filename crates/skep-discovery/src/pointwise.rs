@@ -37,7 +37,7 @@ use skep_arrangement::reading_surface;
 use skep_kernel::Snapshot;
 use skep_links::Endset;
 
-use crate::budget::{MAX_ENDSET_SPANS, MAX_IMAGE_RUNS, MAX_JOIN_STEPS};
+use crate::budget::{MAX_ANSWER_SPANS, MAX_IMAGE_RUNS, MAX_JOIN_STEPS};
 use crate::home::home_readable;
 use crate::types::QueryError;
 use crate::DiscoveryWorld;
@@ -55,7 +55,7 @@ use crate::DiscoveryWorld;
 /// at [`MAX_JOIN_STEPS`], the square. For [`project_on`] it is also the
 /// ANSWER — M5 pushes one V-span per overlapping pair into one vector before
 /// it normalizes, so the product is what the read makes M8 HOLD, and it is
-/// held at [`MAX_ENDSET_SPANS`], the budget this module gives a report.
+/// held at [`MAX_ANSWER_SPANS`], the budget this module gives an answer.
 fn join_within_budget(span_count: usize, run_count: usize, max_product: usize) -> bool {
     run_count <= MAX_IMAGE_RUNS && span_count.saturating_mul(run_count) <= max_product
 }
@@ -122,13 +122,13 @@ fn join_within_budget(span_count: usize, run_count: usize, max_product: usize) -
 /// priced is the factor multiplied — and [`crate::MAX_IMAGE_RUNS`] sets that
 /// count beside the other three.
 ///
-/// The PRODUCT is held at [`crate::MAX_ENDSET_SPANS`] and not at the run
+/// The PRODUCT is held at [`crate::MAX_ANSWER_SPANS`] and not at the run
 /// budget's square, because here it is the ANSWER and not merely the work:
 /// M5 pushes one V-span per overlapping (run, coverage span) pair into one
 /// vector before it normalizes, so a coverage of repeated spans over a
 /// document whose runs sit at one address realizes the product in full, for
-/// an answer that normalizes to a single span. The report budget is what
-/// bounds a report, and this is one — the touch test beside it, whose join
+/// an answer that normalizes to a single span. The answer budget is what
+/// bounds an answer, and this is one — the touch test beside it, whose join
 /// allocates nothing, keeps the square. So a large-slot projection into a
 /// heavily fragmented document is refused, and a pointwise refusal has no
 /// split axis ([`crate::QueryError`]).
@@ -161,7 +161,7 @@ pub fn project_on<W: DiscoveryWorld>(
     // legitimately repeat one address up to M7's `MAX_SLOT_SPANS`, so a
     // square's worth of pairs is a square's worth of spans held live.
     let run_count = w.m5().content_run_count(&surface);
-    if !join_within_budget(coverage.len(), run_count, MAX_ENDSET_SPANS) {
+    if !join_within_budget(coverage.len(), run_count, MAX_ANSWER_SPANS) {
         return Err(QueryError::ImageTooLarge);
     }
     Ok(w.m5().project(&surface, &coverage)) // I→V, content subspace, level-class-safe inside M5
@@ -250,7 +250,7 @@ fn touches(e: &Endset, extents: &[Span]) -> bool {
 /// ranges over both subspaces and every extent is tested; and the product
 /// with the link's WHOLE coverage, `Σᵢ|eᵢ|`, at that budget's square — every
 /// slot may carry M7's `MAX_SLOT_SPANS`, so the run count alone would admit
-/// three times it. The SQUARE and not the report budget [`project_on`] holds
+/// three times it. The SQUARE and not the answer budget [`project_on`] holds
 /// its product to, because this join is a boolean `any` that allocates
 /// nothing and stops at its first overlap: its product is work, where the
 /// projection's is also its answer. [`crate::MAX_IMAGE_RUNS`] sets the run

@@ -174,7 +174,7 @@ fn the_absent_publication_flag_reaches_the_store_unresolved() {
 /// public prefix (None = absent); RegisterNode runs under the bootstrap
 /// session with no principal semantics.
 #[test]
-fn bootstrap_and_namespace_reads() {
+fn the_namespace_reads_answer_the_registry_and_absence_is_not_a_refusal() {
     let fx = setup();
 
     // The delegated account is the prefix the read handed out (setup used it).
@@ -183,7 +183,7 @@ fn bootstrap_and_namespace_reads() {
 
     // An unknown principal is None — absence, not a rejection.
     let (absent, _) = maybe_addr(ex(&fx.febe, fx.user, Op::PrincipalPrefix { id: PrincipalId(99) }));
-    assert!(absent.is_none());
+    assert!(absent.is_none(), "an unregistered principal is answered absent, never refused");
 
     // The frontier advanced past the delegated prefix: the next peek differs.
     let (next, _) = maybe_addr(ex(&fx.febe, fx.boot, Op::NextAccountPrefix { parent: node1() }));
@@ -220,77 +220,80 @@ fn a_node_registers_under_any_bound_session_not_only_bootstrap() {
 /// DRAFT that transcludes the edition's content (PUB-2.27's own staging
 /// shape) — so SHOWDELETIONS still has an address the version holds.
 #[test]
-fn document_lifecycle() {
+fn the_document_family_answers_end_to_end() {
     let fx = setup();
-    let e = create_edition(&fx);
-    let (_start, at) = deposit3(&fx, &e);
+    let edition = create_edition(&fx);
+    let (_start, at) = deposit3(&fx, &edition);
 
     // Read-your-writes for a sequential client (G0): the later snapshot's
     // as_of is ≥ the write's committed coordinate.
     let (items, as_of) = delivery(ex(
         &fx.febe,
         fx.user,
-        Op::RetrieveV { specs: vec![Spec { doc: e.clone(), span: vspan(1, 1, 3) }] },
+        Op::RetrieveV { specs: vec![Spec { doc: edition.clone(), span: vspan(1, 1, 3) }] },
     ));
     assert_eq!(items.0.len(), 3);
     assert!(as_of >= at, "a later read sees at least the coordinate the write committed at");
 
-    let (bound, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpan { doc: e.clone() }));
+    let (bound, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpan { doc: edition.clone() }));
     assert_ne!(bound, SpanSet::empty());
-    let (exact, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpanSet { doc: e.clone() }));
+    let (exact, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpanSet { doc: edition.clone() }));
     assert_ne!(exact, SpanSet::empty());
 
     // Fork mints an EMPTY document (shares no content); Version is the
     // content-sharing fork (§3) — the two must not be conflated.
-    let (f, _) = ack_addr(ex(&fx.febe, fx.user, Op::Fork { published: None }));
-    let (f_set, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpanSet { doc: f.clone() }));
-    assert_eq!(f_set, SpanSet::empty());
-    let (v, _) = ack_addr(ex(&fx.febe, fx.user, Op::Version { d_src: e.clone(), published: None }));
-    let (v_set, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpanSet { doc: v.clone() }));
-    assert_ne!(v_set, SpanSet::empty());
+    let (fork, _) = ack_addr(ex(&fx.febe, fx.user, Op::Fork { published: None }));
+    let (fork_set, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpanSet { doc: fork.clone() }));
+    assert_eq!(fork_set, SpanSet::empty());
+    let (version, _) = ack_addr(ex(&fx.febe, fx.user, Op::Version { d_src: edition.clone(), published: None }));
+    let (version_set, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpanSet { doc: version.clone() }));
+    assert_ne!(version_set, SpanSet::empty());
 
-    // The version's content originated in e (SHOWORIGIN reports allocators).
-    let origins = addrs(ex(&fx.febe, fx.user, Op::ShowOrigin { doc: v.clone(), span: vspan(1, 1, 1) }));
-    assert_eq!(origins, vec![e.clone()]);
+    // The version's content originated in the edition (SHOWORIGIN reports
+    // allocators).
+    let origins = addrs(ex(&fx.febe, fx.user, Op::ShowOrigin { doc: version.clone(), span: vspan(1, 1, 1) }));
+    assert_eq!(origins, vec![edition.clone()]);
 
-    // COMPARE finds address-equal correspondences between e and its version.
+    // COMPARE finds address-equal correspondences between the edition and its
+    // version.
     let rep = compare(ex(
         &fx.febe,
         fx.user,
         Op::Compare {
-            rho1: vec![RegionSpec { doc: e.clone(), spans: vec![vspan(1, 1, 2)] }],
-            rho2: vec![RegionSpec { doc: v.clone(), spans: vec![vspan(1, 1, 2)] }],
+            rho1: vec![RegionSpec { doc: edition.clone(), spans: vec![vspan(1, 1, 2)] }],
+            rho2: vec![RegionSpec { doc: version.clone(), spans: vec![vspan(1, 1, 2)] }],
         },
     ));
-    assert!(!rep.0.is_empty(), "e and its version share address-equal content");
+    assert!(!rep.0.is_empty(), "the edition and its version share address-equal content");
 
-    // Present-tense containers of e's first element: at least e and v.
+    // Present-tense containers of the edition's first element: at least the
+    // edition and its version.
     let holders = addrs(ex(
         &fx.febe,
         fx.user,
         Op::FindDocsContaining {
-            regions: vec![RegionSpec { doc: e.clone(), spans: vec![vspan(1, 1, 1)] }],
+            regions: vec![RegionSpec { doc: edition.clone(), spans: vec![vspan(1, 1, 1)] }],
         },
     ));
-    assert!(holders.contains(&e), "the document that allocated the element contains it");
-    assert!(holders.contains(&v), "the version that shares it contains it too");
+    assert!(holders.contains(&edition), "the document that allocated the element contains it");
+    assert!(holders.contains(&version), "the version that shares it contains it too");
 
     // COPY transcludes into the empty fork; its arrangement is now non-empty.
-    ack(ex(&fx.febe, fx.user, Op::Copy { doc: f.clone(), at: vp(1, 1), specs: vec![vspec(&e, 1, 1)] }));
-    let (f_set, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpanSet { doc: f.clone() }));
-    assert_ne!(f_set, SpanSet::empty());
+    ack(ex(&fx.febe, fx.user, Op::Copy { doc: fork.clone(), at: vp(1, 1), specs: vec![vspec(&edition, 1, 1)] }));
+    let (fork_set, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpanSet { doc: fork.clone() }));
+    assert_ne!(fork_set, SpanSet::empty());
 
     // The in-place edits run in a DRAFT staged from the edition (PUB-2.27):
     // the edition itself refuses them (PUB-2.11).
-    let rej = rejected(ex(&fx.febe, fx.user, Op::Delete { doc: e.clone(), p: vp(1, 3), width: nat(1) }));
+    let rej = rejected(ex(&fx.febe, fx.user, Op::Delete { doc: edition.clone(), p: vp(1, 3), width: nat(1) }));
     assert_eq!(rej.code, RejectCode::PublishedTarget);
-    let d = create_doc(&fx);
-    ack(ex(&fx.febe, fx.user, Op::Copy { doc: d.clone(), at: vp(1, 1), specs: vec![vspec(&e, 1, 3)] }));
+    let draft = create_doc(&fx);
+    ack(ex(&fx.febe, fx.user, Op::Copy { doc: draft.clone(), at: vp(1, 1), specs: vec![vspec(&edition, 1, 3)] }));
 
-    // DELETE closes the gap in d; the removed I-address is still current in
-    // the version — exactly SHOWDELETIONS' a-with-b half.
-    ack(ex(&fx.febe, fx.user, Op::Delete { doc: d.clone(), p: vp(1, 3), width: nat(1) }));
-    let rep = deletions(ex(&fx.febe, fx.user, Op::ShowDeletions { d_a: d.clone(), d_b: v.clone() }));
+    // DELETE closes the gap in the draft; the removed I-address is still current
+    // in the version — exactly SHOWDELETIONS' a-with-b half.
+    ack(ex(&fx.febe, fx.user, Op::Delete { doc: draft.clone(), p: vp(1, 3), width: nat(1) }));
+    let rep = deletions(ex(&fx.febe, fx.user, Op::ShowDeletions { d_a: draft.clone(), d_b: version.clone() }));
     assert_eq!(rep.deleted_from_a_with_b.len(), 1);
     assert!(rep.deleted_from_b_with_a.is_empty(), "nothing was deleted from the version");
 
@@ -298,7 +301,7 @@ fn document_lifecycle() {
     ack(ex(
         &fx.febe,
         fx.user,
-        Op::Rearrange { doc: d.clone(), cuts: vec![vp(1, 1), vp(1, 2), vp(1, 3)] },
+        Op::Rearrange { doc: draft.clone(), cuts: vec![vp(1, 1), vp(1, 2), vp(1, 3)] },
     ));
 
     assert!(fx.febe.log_position() >= at, "the log never regresses past a committed write (G0)");
@@ -395,7 +398,7 @@ fn the_version_chain_refusals_surface_as_their_own_permanent_codes() {
 /// re-executing; the key is per-session and op-kind-matched; reads are never
 /// memoized; a fresh session re-executes (best-effort, by design).
 #[test]
-fn idempotent_retry() {
+fn a_sequential_retry_replays_its_ack_and_a_fresh_session_re_executes() {
     let fx = setup();
     let d = create_doc(&fx);
     let ins = || Op::Insert {
@@ -741,7 +744,7 @@ fn the_first_offending_successor_slot_is_the_one_that_speaks() {
 /// idempotent zero-step EMIT (§3), and the active-view consequences of
 /// NULLIFY.
 #[test]
-fn link_lifecycle() {
+fn the_link_family_answers_end_to_end() {
     let fx = setup();
     let d = create_doc(&fx);
     let (start, _) = insert3(&fx, &d);
@@ -845,19 +848,19 @@ fn link_lifecycle() {
     // AssertSup + archival lineage (flipped slot convention: old ⇐ FROM).
     let (claim2, _) =
         ack_addr(ex(&fx.febe, fx.user, Op::AssertSup { home: d.clone(), old: l1.clone(), new: l2.clone() }));
-    let inc = claims(ex(&fx.febe, fx.user, Op::InClaims { y: l1.clone(), view: View::Active }));
-    assert_eq!(inc.len(), 2); // editlink's claim + the explicit assert_sup claim
+    let in_claims = claims(ex(&fx.febe, fx.user, Op::InClaims { y: l1.clone(), view: View::Active }));
+    assert_eq!(in_claims.len(), 2); // editlink's claim + the explicit assert_sup claim
     assert!(
-        inc.iter().any(|c| c.claim == claim1 && c.new == succ),
+        in_claims.iter().any(|c| c.claim == claim1 && c.new == succ),
         "editlink's own claim names its successor as what supersedes l1"
     );
     assert!(
-        inc.iter().any(|c| c.claim == claim2 && c.new == l2 && c.active),
+        in_claims.iter().any(|c| c.claim == claim2 && c.new == l2 && c.active),
         "the explicit assert_sup claim names l2, and is active"
     );
-    let out = claims(ex(&fx.febe, fx.user, Op::OutClaims { x: l2.clone(), view: View::Active }));
-    assert_eq!(out.len(), 1);
-    assert_eq!(out[0].claim, claim2);
+    let out_claims = claims(ex(&fx.febe, fx.user, Op::OutClaims { x: l2.clone(), view: View::Active }));
+    assert_eq!(out_claims.len(), 1);
+    assert_eq!(out_claims[0].claim, claim2);
 
     // Idempotent zero-step EMIT (§3): a dedup hit returns (incumbent,
     // base_seq) with no commit — marshaled identically to the miss.
@@ -942,22 +945,22 @@ fn an_unarranged_source_commits_an_empty_successor_slot() {
     assert!(!link.to_slot().is_empty(), "the arranged source did");
 }
 
-/// §5/§6: the typed rejection surface — the session gate, the
-/// Reorder/Permanent disposition policy, M6's threaded FaultSite vs the
-/// fieldless M5/M8 lowerings, the M10-side editlink guard, and the as-built
-/// supersession fence.
+/// §5/§6: every failure arrives as a typed, classified, localized rejection —
+/// the session gate, the Reorder/Permanent disposition policy, M6's threaded
+/// FaultSite vs the fieldless M5/M8 lowerings, the M10-side editlink guard,
+/// and the as-built supersession fence.
 #[test]
-fn rejection_surface() {
+fn refusals_arrive_typed_classified_and_localized() {
     let fx = setup();
     let d = create_doc(&fx);
     let (start, _) = insert3(&fx, &d);
 
     // Write on an unbound (closed) session: Unauthenticated, pre-transaction.
-    let stray = fx.febe.open_session(PrincipalId(9));
-    fx.febe.close_session(stray);
+    let retired = fx.febe.open_session(PrincipalId(9));
+    fx.febe.close_session(retired);
     let rej = rejected(ex(
         &fx.febe,
-        stray,
+        retired,
         Op::Insert {
             doc: d.clone(),
             at: vp(1, 1),

@@ -68,9 +68,9 @@ fn ghost_type(doc: &Address, ordinal: u32) -> Address {
 #[test]
 fn a_copy_is_withheld_naming_its_first_unreadable_source() {
     let (fx, unreadable) = setup_with_unreadable();
-    let d = create_doc(&fx);
-    insert3(&fx, &d);
-    unreadable.lock().expect("no poisoning").push(d.clone());
+    let unreadable_doc = create_doc(&fx);
+    insert3(&fx, &unreadable_doc);
+    unreadable.lock().expect("no poisoning").push(unreadable_doc.clone());
     let (other, their_draft) = stranger(&fx);
     ack_addr(ex(
         &fx.febe,
@@ -84,24 +84,24 @@ fn a_copy_is_withheld_naming_its_first_unreadable_source() {
     ));
 
     // One spec, unreadable: withheld, the source named.
-    let r = ex(&fx.febe, other, Op::Copy { doc: their_draft.clone(), at: vp(1, 2), specs: vec![vspec(&d, 1, 1)] });
-    assert_withheld(r, OpKind::Copy, &d);
+    let r = ex(&fx.febe, other, Op::Copy { doc: their_draft.clone(), at: vp(1, 2), specs: vec![vspec(&unreadable_doc, 1, 1)] });
+    assert_withheld(r, OpKind::Copy, &unreadable_doc);
     // Two specs, the SECOND unreadable: `site.addr` is the second (PUB-6.4).
     let r = ex(
         &fx.febe,
         other,
-        Op::Copy { doc: their_draft.clone(), at: vp(1, 2), specs: vec![vspec(&their_draft, 1, 1), vspec(&d, 1, 1)] },
+        Op::Copy { doc: their_draft.clone(), at: vp(1, 2), specs: vec![vspec(&their_draft, 1, 1), vspec(&unreadable_doc, 1, 1)] },
     );
-    assert_withheld(r, OpKind::Copy, &d);
+    assert_withheld(r, OpKind::Copy, &unreadable_doc);
     // Nothing was placed by either refusal.
     let before = fx.febe.log_position();
-    let r = ex(&fx.febe, other, Op::Copy { doc: their_draft.clone(), at: vp(1, 2), specs: vec![vspec(&d, 1, 1)] });
+    let r = ex(&fx.febe, other, Op::Copy { doc: their_draft.clone(), at: vp(1, 2), specs: vec![vspec(&unreadable_doc, 1, 1)] });
     assert!(matches!(r, skep_febe::Response::Rejected(_)));
     assert_eq!(fx.febe.log_position(), before, "a withheld copy commits nothing");
 
     // The owner reads its own document, so its copy of the same source lands.
-    let e = create_doc(&fx);
-    ack(ex(&fx.febe, fx.user, Op::Copy { doc: e, at: vp(1, 1), specs: vec![vspec(&d, 1, 2)] }));
+    let user_draft = create_doc(&fx);
+    ack(ex(&fx.febe, fx.user, Op::Copy { doc: user_draft, at: vp(1, 1), specs: vec![vspec(&unreadable_doc, 1, 2)] }));
 }
 
 /// PUB-6.36 slot 1 ahead of slot 6 (PUB-6.38 "after the destination's
@@ -113,39 +113,39 @@ fn a_copy_is_withheld_naming_its_first_unreadable_source() {
 #[test]
 fn the_destinations_own_gate_stands_ahead_of_the_consult() {
     let (fx, unreadable) = setup_with_unreadable();
-    let d = create_doc(&fx);
-    insert3(&fx, &d);
+    let unreadable_doc = create_doc(&fx);
+    insert3(&fx, &unreadable_doc);
     let (l1, _) = ack_addr(ex(
         &fx.febe,
         fx.user,
         Op::MakeLink {
-            home: d.clone(),
+            home: unreadable_doc.clone(),
             from: SlotArg::Addrs(vec![]),
             to: SlotArg::Addrs(vec![]),
-            ty: SlotArg::Addrs(vec![ghost_type(&d, 1)]),
+            ty: SlotArg::Addrs(vec![ghost_type(&unreadable_doc, 1)]),
         },
     ));
     let (l2, _) = ack_addr(ex(
         &fx.febe,
         fx.user,
         Op::MakeLink {
-            home: d.clone(),
+            home: unreadable_doc.clone(),
             from: SlotArg::Addrs(vec![]),
             to: SlotArg::Addrs(vec![]),
-            ty: SlotArg::Addrs(vec![ghost_type(&d, 2)]),
+            ty: SlotArg::Addrs(vec![ghost_type(&unreadable_doc, 2)]),
         },
     ));
-    unreadable.lock().expect("no poisoning").push(d.clone());
+    unreadable.lock().expect("no poisoning").push(unreadable_doc.clone());
     let (other, _their_draft) = stranger(&fx);
 
     let assert_not_owner = |r: skep_febe::Response, kind: OpKind| {
         let rej = rejected(r);
         assert_eq!(rej.op, kind);
         assert_eq!(rej.code, RejectCode::NotOwner, "slot 1 speaks first: {rej}");
-        assert_eq!(rej.site.expect("the failing home").addr.as_ref(), Some(&d));
+        assert_eq!(rej.site.expect("the failing home").addr.as_ref(), Some(&unreadable_doc));
     };
     assert_not_owner(
-        ex(&fx.febe, other, Op::Copy { doc: d.clone(), at: vp(1, 4), specs: vec![vspec(&d, 1, 1)] }),
+        ex(&fx.febe, other, Op::Copy { doc: unreadable_doc.clone(), at: vp(1, 4), specs: vec![vspec(&unreadable_doc, 1, 1)] }),
         OpKind::Copy,
     );
     assert_not_owner(
@@ -153,10 +153,10 @@ fn the_destinations_own_gate_stands_ahead_of_the_consult() {
             &fx.febe,
             other,
             Op::MakeLink {
-                home: d.clone(),
+                home: unreadable_doc.clone(),
                 from: SlotArg::Addrs(vec![]),
-                to: SlotArg::Resolve(vec![vspec(&d, 1, 1)]),
-                ty: SlotArg::Addrs(vec![ghost_type(&d, 3)]),
+                to: SlotArg::Resolve(vec![vspec(&unreadable_doc, 1, 1)]),
+                ty: SlotArg::Addrs(vec![ghost_type(&unreadable_doc, 3)]),
             },
         ),
         OpKind::MakeLink,
@@ -169,17 +169,17 @@ fn the_destinations_own_gate_stands_ahead_of_the_consult() {
                 original: l1.clone(),
                 successor: SuccessorSpec {
                     from: vec![],
-                    to: vec![vspec(&d, 1, 1)],
-                    ty: SlotArg::Addrs(vec![ghost_type(&d, 4)]),
+                    to: vec![vspec(&unreadable_doc, 1, 1)],
+                    ty: SlotArg::Addrs(vec![ghost_type(&unreadable_doc, 4)]),
                 },
-                d_s: d.clone(),
-                d_a: d.clone(),
+                d_s: unreadable_doc.clone(),
+                d_a: unreadable_doc.clone(),
             },
         ),
         OpKind::EditLink,
     );
     assert_not_owner(
-        ex(&fx.febe, other, Op::AssertSup { home: d.clone(), old: l1, new: l2 }),
+        ex(&fx.febe, other, Op::AssertSup { home: unreadable_doc.clone(), old: l1, new: l2 }),
         OpKind::AssertSup,
     );
 }
@@ -190,19 +190,19 @@ fn the_destinations_own_gate_stands_ahead_of_the_consult() {
 #[test]
 fn a_version_of_an_unreadable_source_is_withheld_and_of_a_readable_one_lands() {
     let (fx, unreadable) = setup_with_unreadable();
-    let d = create_doc(&fx);
-    insert3(&fx, &d);
-    let e = create_doc(&fx);
-    insert3(&fx, &e);
-    unreadable.lock().expect("no poisoning").push(d.clone());
+    let unreadable_doc = create_doc(&fx);
+    insert3(&fx, &unreadable_doc);
+    let readable_doc = create_doc(&fx);
+    insert3(&fx, &readable_doc);
+    unreadable.lock().expect("no poisoning").push(unreadable_doc.clone());
     let (other, _their_draft) = stranger(&fx);
 
     assert_withheld(
-        ex(&fx.febe, other, Op::Version { d_src: d.clone(), published: None }),
+        ex(&fx.febe, other, Op::Version { d_src: unreadable_doc.clone(), published: None }),
         OpKind::Version,
-        &d,
+        &unreadable_doc,
     );
-    ack_addr(ex(&fx.febe, other, Op::Version { d_src: e, published: None }));
+    ack_addr(ex(&fx.febe, other, Op::Version { d_src: readable_doc, published: None }));
 }
 
 /// PUB-6.23 / PUB-6.24 on `make_link`: a RESOLVE-form slot into a source the
@@ -214,9 +214,9 @@ fn a_version_of_an_unreadable_source_is_withheld_and_of_a_readable_one_lands() {
 #[test]
 fn a_resolve_slot_into_an_unreadable_source_is_withheld_and_the_address_form_is_not() {
     let (fx, unreadable) = setup_with_unreadable();
-    let d = create_doc(&fx);
-    insert3(&fx, &d);
-    unreadable.lock().expect("no poisoning").push(d.clone());
+    let unreadable_doc = create_doc(&fx);
+    insert3(&fx, &unreadable_doc);
+    unreadable.lock().expect("no poisoning").push(unreadable_doc.clone());
     let (other, their_draft) = stranger(&fx);
     ack_addr(ex(
         &fx.febe,
@@ -236,12 +236,12 @@ fn a_resolve_slot_into_an_unreadable_source_is_withheld_and_the_address_form_is_
             Op::MakeLink {
                 home: their_draft.clone(),
                 from: SlotArg::Addrs(vec![]),
-                to: SlotArg::Resolve(vec![vspec(&d, 1, 1)]),
+                to: SlotArg::Resolve(vec![vspec(&unreadable_doc, 1, 1)]),
                 ty: SlotArg::Addrs(vec![ghost_type(&their_draft, 1)]),
             },
         ),
         OpKind::MakeLink,
-        &d,
+        &unreadable_doc,
     );
     // Declared order: a readable `to` (the stranger's own document) is
     // consulted before the unreadable `ty`, and the answer names the `ty`.
@@ -253,15 +253,15 @@ fn a_resolve_slot_into_an_unreadable_source_is_withheld_and_the_address_form_is_
                 home: their_draft.clone(),
                 from: SlotArg::Addrs(vec![]),
                 to: SlotArg::Resolve(vec![vspec(&their_draft, 1, 1)]),
-                ty: SlotArg::Resolve(vec![vspec(&d, 1, 1)]),
+                ty: SlotArg::Resolve(vec![vspec(&unreadable_doc, 1, 1)]),
             },
         ),
         OpKind::MakeLink,
-        &d,
+        &unreadable_doc,
     );
     // The address form names an I-position INSIDE the unreadable document and
     // is admitted (PUB-6.24): the recorded endset is the name, unresolved.
-    let inside = elem_addr(ElemPos { doc: d.clone(), subspace: nat(1), ordinal: nat(1) })
+    let inside = elem_addr(ElemPos { doc: unreadable_doc.clone(), subspace: nat(1), ordinal: nat(1) })
         .unwrap_or_else(|_| panic!("valid element position"));
     let (link, _) = ack_addr(ex(
         &fx.febe,
@@ -288,35 +288,35 @@ fn a_resolve_slot_into_an_unreadable_source_is_withheld_and_the_address_form_is_
 #[test]
 fn a_link_homed_in_an_unreadable_document_answers_absence_to_a_write() {
     let (fx, unreadable) = setup_with_unreadable();
-    let d = create_doc(&fx);
-    insert3(&fx, &d);
-    let e = create_doc(&fx);
-    insert3(&fx, &e);
-    let in_d = |ordinal: u32| {
+    let unreadable_doc = create_doc(&fx);
+    insert3(&fx, &unreadable_doc);
+    let readable_home = create_doc(&fx);
+    insert3(&fx, &readable_home);
+    let in_unreadable = |ordinal: u32| {
         ack_addr(ex(
             &fx.febe,
             fx.user,
             Op::MakeLink {
-                home: d.clone(),
+                home: unreadable_doc.clone(),
                 from: SlotArg::Addrs(vec![]),
                 to: SlotArg::Addrs(vec![]),
-                ty: SlotArg::Addrs(vec![ghost_type(&d, ordinal)]),
+                ty: SlotArg::Addrs(vec![ghost_type(&unreadable_doc, ordinal)]),
             },
         ))
         .0
     };
-    let (unreadable_l1, unreadable_l2) = (in_d(1), in_d(2));
-    let (public_l, _) = ack_addr(ex(
+    let (unreadable_l1, unreadable_l2) = (in_unreadable(1), in_unreadable(2));
+    let (readable_l, _) = ack_addr(ex(
         &fx.febe,
         fx.user,
         Op::MakeLink {
-            home: e.clone(),
+            home: readable_home.clone(),
             from: SlotArg::Addrs(vec![]),
             to: SlotArg::Addrs(vec![]),
-            ty: SlotArg::Addrs(vec![ghost_type(&e, 1)]),
+            ty: SlotArg::Addrs(vec![ghost_type(&readable_home, 1)]),
         },
     ));
-    unreadable.lock().expect("no poisoning").push(d.clone());
+    unreadable.lock().expect("no poisoning").push(unreadable_doc.clone());
     let (other, their_draft) = stranger(&fx);
     let successor = |to: Vec<skep_arrangement::VSpec>, ordinal: u32| SuccessorSpec {
         from: vec![],
@@ -339,7 +339,7 @@ fn a_link_homed_in_an_unreadable_document_answers_absence_to_a_write() {
     let rej = rejected(ex(
         &fx.febe,
         other,
-        Op::EditLink { original: unreadable_l1.clone(), successor: successor(vec![vspec(&d, 1, 1)], 2), d_s: their_draft.clone(), d_a: their_draft.clone() },
+        Op::EditLink { original: unreadable_l1.clone(), successor: successor(vec![vspec(&unreadable_doc, 1, 1)], 2), d_s: their_draft.clone(), d_a: their_draft.clone() },
     ));
     assert_eq!(rej.code, RejectCode::OriginalNotResident, "original ahead of successor: {rej}");
 
@@ -348,10 +348,10 @@ fn a_link_homed_in_an_unreadable_document_answers_absence_to_a_write() {
         ex(
             &fx.febe,
             other,
-            Op::EditLink { original: public_l.clone(), successor: successor(vec![vspec(&d, 1, 1)], 3), d_s: their_draft.clone(), d_a: their_draft.clone() },
+            Op::EditLink { original: readable_l.clone(), successor: successor(vec![vspec(&unreadable_doc, 1, 1)], 3), d_s: their_draft.clone(), d_a: their_draft.clone() },
         ),
         OpKind::EditLink,
-        &d,
+        &unreadable_doc,
     );
 
     // `assert_sup` over endpoints homed in the unreadable document.
@@ -367,7 +367,7 @@ fn a_link_homed_in_an_unreadable_document_answers_absence_to_a_write() {
     let rej = rejected(ex(
         &fx.febe,
         other,
-        Op::AssertSup { home: their_draft.clone(), old: public_l.clone(), new: unreadable_l2.clone() },
+        Op::AssertSup { home: their_draft.clone(), old: readable_l.clone(), new: unreadable_l2.clone() },
     ));
     assert_eq!(rej.code, RejectCode::EndpointNotResident);
 
@@ -377,12 +377,12 @@ fn a_link_homed_in_an_unreadable_document_answers_absence_to_a_write() {
         fx.user,
         Op::EditLink {
             original: unreadable_l1.clone(),
-            successor: SuccessorSpec { from: vec![], to: vec![vspec(&d, 1, 1)], ty: SlotArg::Addrs(vec![ghost_type(&d, 9)]) },
-            d_s: d.clone(),
-            d_a: d.clone(),
+            successor: SuccessorSpec { from: vec![], to: vec![vspec(&unreadable_doc, 1, 1)], ty: SlotArg::Addrs(vec![ghost_type(&unreadable_doc, 9)]) },
+            d_s: unreadable_doc.clone(),
+            d_a: unreadable_doc.clone(),
         },
     ));
-    ack_addr(ex(&fx.febe, fx.user, Op::AssertSup { home: d.clone(), old: unreadable_l1, new: unreadable_l2 }));
+    ack_addr(ex(&fx.febe, fx.user, Op::AssertSup { home: unreadable_doc.clone(), old: unreadable_l1, new: unreadable_l2 }));
 }
 
 /// PUB-6.36 slot 5 ahead of slot 6: the ONE cell where both apply — a source
@@ -394,9 +394,9 @@ fn a_link_homed_in_an_unreadable_document_answers_absence_to_a_write() {
 #[test]
 fn an_in_place_edit_of_a_published_destination_outranks_the_source_consult() {
     let (fx, unreadable) = setup_with_unreadable();
-    let d = create_doc(&fx);
-    insert3(&fx, &d);
-    unreadable.lock().expect("no poisoning").push(d.clone());
+    let unreadable_doc = create_doc(&fx);
+    insert3(&fx, &unreadable_doc);
+    unreadable.lock().expect("no poisoning").push(unreadable_doc.clone());
     let (other, their_draft) = stranger(&fx);
     let their_edition = stranger_edition(&fx, other);
 
@@ -404,7 +404,7 @@ fn an_in_place_edit_of_a_published_destination_outranks_the_source_consult() {
     let rej = rejected(ex(
         &fx.febe,
         other,
-        Op::Copy { doc: their_edition.clone(), at: vp(1, 1), specs: vec![vspec(&d, 1, 1)] },
+        Op::Copy { doc: their_edition.clone(), at: vp(1, 1), specs: vec![vspec(&unreadable_doc, 1, 1)] },
     ));
     assert_eq!(rej.op, OpKind::Copy);
     assert_eq!(rej.code, RejectCode::PublishedTarget, "slot 5 speaks before slot 6: {rej}");
@@ -414,18 +414,18 @@ fn an_in_place_edit_of_a_published_destination_outranks_the_source_consult() {
 
     // A DRAFT destination still meets the source consult…
     assert_withheld(
-        ex(&fx.febe, other, Op::Copy { doc: their_draft, at: vp(1, 1), specs: vec![vspec(&d, 1, 1)] }),
+        ex(&fx.febe, other, Op::Copy { doc: their_draft, at: vp(1, 1), specs: vec![vspec(&unreadable_doc, 1, 1)] }),
         OpKind::Copy,
-        &d,
+        &unreadable_doc,
     );
     // …and a READABLE source into the same published destination still meets
     // `published_target`, one layer later and in the same bytes.
-    let open = create_doc(&fx);
-    insert3(&fx, &open);
+    let readable_doc = create_doc(&fx);
+    insert3(&fx, &readable_doc);
     let rej = rejected(ex(
         &fx.febe,
         other,
-        Op::Copy { doc: their_edition, at: vp(1, 1), specs: vec![vspec(&open, 1, 1)] },
+        Op::Copy { doc: their_edition, at: vp(1, 1), specs: vec![vspec(&readable_doc, 1, 1)] },
     ));
     assert_eq!(rej.code, RejectCode::PublishedTarget);
     assert!(rej.site.is_none() && rej.detail.is_none());
@@ -439,16 +439,16 @@ fn an_in_place_edit_of_a_published_destination_outranks_the_source_consult() {
 #[test]
 fn an_unregistered_destination_also_stands_ahead_of_the_consult() {
     let (fx, unreadable) = setup_with_unreadable();
-    let d = create_doc(&fx);
-    insert3(&fx, &d);
-    unreadable.lock().expect("no poisoning").push(d.clone());
+    let unreadable_doc = create_doc(&fx);
+    insert3(&fx, &unreadable_doc);
+    unreadable.lock().expect("no poisoning").push(unreadable_doc.clone());
     let (other, _their_draft) = stranger(&fx);
     let ghost = ghost_doc(&account_of(&fx, other, OTHER), 77);
 
     let rej = rejected(ex(
         &fx.febe,
         other,
-        Op::Copy { doc: ghost, at: vp(1, 1), specs: vec![vspec(&d, 1, 1)] },
+        Op::Copy { doc: ghost, at: vp(1, 1), specs: vec![vspec(&unreadable_doc, 1, 1)] },
     ));
     assert_eq!(rej.op, OpKind::Copy);
     assert_eq!(rej.code, RejectCode::DocNotRegistered, "registration stands ahead: {rej}");
@@ -464,9 +464,9 @@ fn an_unregistered_destination_also_stands_ahead_of_the_consult() {
 #[test]
 fn a_shot_windowing_an_unreadable_origin_is_withheld_naming_it() {
     let (fx, unreadable) = setup_with_unreadable();
-    let e = create_edition(&fx);
-    let (e_start, _) = deposit3(&fx, &e);
-    unreadable.lock().expect("no poisoning").push(e.clone());
+    let unreadable_edition = create_edition(&fx);
+    let (edition_start, _) = deposit3(&fx, &unreadable_edition);
+    unreadable.lock().expect("no poisoning").push(unreadable_edition.clone());
     let (other, _their_draft) = stranger(&fx);
     let their_edition = stranger_edition(&fx, other);
 
@@ -476,17 +476,17 @@ fn a_shot_windowing_an_unreadable_origin_is_withheld_naming_it() {
         base: None,
         draft: None,
         runs: vec![ShotRun {
-            origin: e.clone(),
-            run: Run::new(e_start.clone(), nat(3)).expect("a content run"),
+            origin: unreadable_edition.clone(),
+            run: Run::new(edition_start.clone(), nat(3)).expect("a content run"),
         }],
     };
     let before = fx.febe.log_position();
     assert_withheld(
         ex(&fx.febe, other, Op::Publish { doc: their_edition, shot: shot() }),
         OpKind::Publish,
-        &e,
+        &unreadable_edition,
     );
     assert_eq!(fx.febe.log_position(), before, "a withheld shot commits nothing");
 
-    ack_addr(ex(&fx.febe, fx.user, Op::Publish { doc: e.clone(), shot: shot() }));
+    ack_addr(ex(&fx.febe, fx.user, Op::Publish { doc: unreadable_edition.clone(), shot: shot() }));
 }

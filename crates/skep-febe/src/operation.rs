@@ -115,7 +115,7 @@ pub struct OperationSurface<W: WorldState> {
     /// actionable without a race. This copy is kept only so `execute`'s step
     /// (c) can fail a write fast without opening a doomed transaction, and it
     /// is raised by the first `TxnError::Poisoned` M10 itself meets
-    /// ([`OperationSurface::map_txn`], §5/§9).
+    /// ([`OperationSurface::lower_write`], §5/§9).
     ///
     /// It therefore LAGS exactly the writes M10 did not issue — M9's rule
     /// fires reach M7's gated write path directly rather than through this
@@ -792,8 +792,8 @@ where
     /// per-op from the factory, returns only its post-commit value (A7 is
     /// upheld structurally — M10 has nothing to put on the wire until the
     /// driver returns at/after `lin(op)`), classifies `TxnError<E>` through
-    /// [`OperationSurface::map_txn`] so the poison hint latches on the way past,
-    /// and stamps the committed `Seq`. Exhaustive over `Op` with NO `_`
+    /// [`OperationSurface::lower_write`] so the poison hint latches on the way
+    /// past, and stamps the committed `Seq`. Exhaustive over `Op` with NO `_`
     /// wildcard: the complementary (read) half is one explicit `|`-list arm
     /// rejecting `Malformed` — never a panic — so a newly added `Op` variant
     /// is a compile-time non-exhaustiveness error here, at `is_read`, and at
@@ -835,7 +835,7 @@ where
                     .stores
                     .namespace()
                     .create_new_document(wc.principal, &account, published)
-                    .map_err(|e| self.map_txn(kind, e))?;
+                    .map_err(|e| self.lower_write(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             Op::Delegate { new_prefix, new_id } => {
@@ -843,7 +843,7 @@ where
                     .stores
                     .namespace()
                     .delegate(wc.principal, new_prefix, new_id)
-                    .map_err(|e| self.map_txn(kind, e))?;
+                    .map_err(|e| self.lower_write(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             // No principal: the node addr is supplied by provisioning, and
@@ -851,8 +851,11 @@ where
             // gate applied, uniformly (§6) — and it is the whole authority
             // check this path gets, here or in M3 (see `Op::RegisterNode`).
             Op::RegisterNode { addr } => {
-                let (addr, at) =
-                    self.stores.namespace().register_node(addr).map_err(|e| self.map_txn(kind, e))?;
+                let (addr, at) = self
+                    .stores
+                    .namespace()
+                    .register_node(addr)
+                    .map_err(|e| self.lower_write(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             // Fork ≠ Version (§3): mints an EMPTY account-tier document,
@@ -867,7 +870,7 @@ where
                     .stores
                     .namespace()
                     .fork(wc.principal, published)
-                    .map_err(|e| self.map_txn(kind, e))?;
+                    .map_err(|e| self.lower_write(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             // ── arrangement writes (→ M5; ω-gated in-store under the
@@ -881,7 +884,7 @@ where
                     .stores
                     .vstream()
                     .insert(wc.caller(), &doc, at, values, deposit)
-                    .map_err(|e| self.map_txn(kind, e))?; // returns post-commit
+                    .map_err(|e| self.lower_write(kind, e))?; // returns post-commit
                 Ok(Response::AckAddr { addr: start, at: committed_at }) // the exact V1 coordinate
             }
             Op::Delete { doc, p, width } => {
@@ -889,7 +892,7 @@ where
                     .stores
                     .vstream()
                     .delete(wc.caller(), &doc, p, width)
-                    .map_err(|e| self.map_txn(kind, e))?;
+                    .map_err(|e| self.lower_write(kind, e))?;
                 Ok(Response::Ack { at })
             }
             Op::Copy { doc, at, specs } => {
@@ -897,7 +900,7 @@ where
                     .stores
                     .vstream()
                     .copy(wc.caller(), &doc, at, &specs)
-                    .map_err(|e| self.map_txn(kind, e))?;
+                    .map_err(|e| self.lower_write(kind, e))?;
                 Ok(Response::Ack { at: committed_at })
             }
             Op::Rearrange { doc, cuts } => {
@@ -905,7 +908,7 @@ where
                     .stores
                     .vstream()
                     .rearrange(wc.caller(), &doc, &cuts)
-                    .map_err(|e| self.map_txn(kind, e))?;
+                    .map_err(|e| self.lower_write(kind, e))?;
                 Ok(Response::Ack { at })
             }
             Op::Version { d_src, published } => {
@@ -916,7 +919,7 @@ where
                     // three-valued flag: None ⇒ INHERIT published(d_src),
                     // off its own working state (PUB-8.17/8.18).
                     .version(wc.principal, &d_src, published)
-                    .map_err(|e| self.map_txn(kind, e))?;
+                    .map_err(|e| self.lower_write(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             // The SHOT (PUB-2.33, PUB-8.1): M5's composite decides the
@@ -932,7 +935,7 @@ where
                     .stores
                     .vstream()
                     .publish(wc.caller(), &doc, shot, &visibility)
-                    .map_err(|e| self.map_txn(kind, e))?;
+                    .map_err(|e| self.lower_write(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             // ── link writes (→ M7; ω-gated in-store on each written home —
@@ -946,7 +949,7 @@ where
                     .stores
                     .linkstore(&visibility)
                     .makelink(wc.caller(), &home, from, to, ty)
-                    .map_err(|e| self.map_txn(kind, e))?;
+                    .map_err(|e| self.lower_write(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             // Idempotent zero-step ops need no special case (§3): a dedup hit
@@ -958,7 +961,7 @@ where
                     .stores
                     .linkstore(&visibility)
                     .emit(wc.caller(), &home, &ty, &from, &to)
-                    .map_err(|e| self.map_txn(kind, e))?;
+                    .map_err(|e| self.lower_write(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             Op::Nullify { home, target } => {
@@ -966,7 +969,7 @@ where
                     .stores
                     .linkstore(&visibility)
                     .nullify(wc.caller(), &home, &target)
-                    .map_err(|e| self.map_txn(kind, e))?;
+                    .map_err(|e| self.lower_write(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             Op::AssertSup { home, old, new } => {
@@ -974,7 +977,7 @@ where
                     .stores
                     .linkstore(&visibility)
                     .assert_sup(wc.caller(), &home, &old, &new)
-                    .map_err(|e| self.map_txn(kind, e))?;
+                    .map_err(|e| self.lower_write(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             // The one read-assembled request (§4): the successor's content
@@ -993,7 +996,7 @@ where
                     .stores
                     .linkstore(&visibility)
                     .editlink(wc.caller(), &original, link, &d_s, &d_a)
-                    .map_err(|e| self.map_txn(kind, e))?;
+                    .map_err(|e| self.lower_write(kind, e))?;
                 Ok(Response::AckEdit { successor: edit.successor, claim: edit.claim, at })
             }
             // Complementary half — unreachable under the is_write partition
@@ -1285,16 +1288,22 @@ where
 
     // ── rejection surfacing (§5) ──
 
-    /// Classify a write path's `TxnError` through the [`lower_txn`] table,
-    /// latching the poison hint on the way past `Poisoned` so `execute` step
-    /// (c) can fail the next write fast rather than opening a doomed
-    /// transaction. The latch is why every write arm classifies HERE and not
-    /// through `lower_txn` directly — and the latch exists only because the
-    /// gate reads M10's MIRROR of M2's poison state rather than asking M2,
-    /// so this method's whole reason is the mirror's ([`OperationSurface`]).
-    /// `Relaxed` suffices: the flag is a hint, and M2 independently returns
-    /// `Poisoned` to every later write whether or not this one is seen.
-    fn map_txn<E: Lower>(&self, kind: OpKind, e: TxnError<E>) -> Rejection {
+    /// Lower a write path's `TxnError` — the write half of the lowering
+    /// family, beside the read arms' [`lower_read`]. It runs the [`lower_txn`]
+    /// table and latches the poison hint on the way past `Poisoned`, so
+    /// `execute` step (c) can fail the next write fast rather than opening a
+    /// doomed transaction.
+    ///
+    /// That latch is why this is a METHOD where `lower_read` is a free
+    /// function: every write arm comes through HERE and none reaches
+    /// [`lower_txn`] directly, which is in scope beside it and would build the
+    /// same rejection while leaving its operation outside the latch's cover.
+    /// And the latch exists only because the gate reads M10's MIRROR of M2's
+    /// poison state rather than asking M2, so this method's whole reason is
+    /// the mirror's ([`OperationSurface`]). `Relaxed` suffices: the flag is a
+    /// hint, and M2 independently returns `Poisoned` to every later write
+    /// whether or not this one is seen.
+    fn lower_write<E: Lower>(&self, kind: OpKind, e: TxnError<E>) -> Rejection {
         if matches!(e, TxnError::Poisoned) {
             self.poisoned.store(true, Ordering::Relaxed); // LATCH (§1(c)/§9)
         }
@@ -1471,7 +1480,7 @@ mod tests {
     /// §8: `execute` is reentrant & Sync — the handle is shareable across the
     /// transport's pipelined callers.
     #[test]
-    fn operation_is_send_and_sync() {
+    fn the_operation_surface_is_send_and_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<OperationSurface<World>>();
     }
@@ -1550,13 +1559,13 @@ mod tests {
     }
 
     /// §5/§9: the first `TxnError::Poisoned` latches the flag inside
-    /// `map_txn`; thereafter writes fail fast with Halt at step (c) while
+    /// `lower_write`; thereafter writes fail fast with Halt at step (c) while
     /// reads keep being served off the last root.
     #[test]
     fn poison_latch_halts_writes_but_reads_continue() {
         let febe = surface();
         let s = febe.open_session(PrincipalId(1));
-        let rej = febe.map_txn(OpKind::Insert, TxnError::<InsertError>::Poisoned);
+        let rej = febe.lower_write(OpKind::Insert, TxnError::<InsertError>::Poisoned);
         assert_eq!(rej.code, RejectCode::Poisoned);
         assert_eq!(rej.disposition, Disposition::Halt);
         assert!(febe.poisoned.load(Ordering::Relaxed));
@@ -1584,7 +1593,7 @@ mod tests {
         let s = febe.open_session(PrincipalId(1));
         febe.close_session(s);
         // Raised for the latch alone; the rejection itself answers no request.
-        let _ = febe.map_txn(OpKind::Insert, TxnError::<InsertError>::Poisoned);
+        let _ = febe.lower_write(OpKind::Insert, TxnError::<InsertError>::Poisoned);
         let rej = rejected(febe.execute(s, Request { id: None, op: insert_op() }));
         assert_eq!(
             rej.code,
@@ -1609,11 +1618,11 @@ mod tests {
             .is_none());
         // A rejected write carrying an id leaves no entry behind.
         let id = ReqId(b"req-2".to_vec());
-        let stray = febe.open_session(PrincipalId(3));
-        febe.close_session(stray);
-        let r = febe.execute(stray, Request { id: Some(id.clone()), op: insert_op() });
+        let retired = febe.open_session(PrincipalId(3));
+        febe.close_session(retired);
+        let r = febe.execute(retired, Request { id: Some(id.clone()), op: insert_op() });
         assert!(matches!(r, Response::Rejected(_)));
-        assert!(febe.idem.get(stray, &id, OpKind::Insert).is_none());
+        assert!(febe.idem.get(retired, &id, OpKind::Insert).is_none());
         // Nor does a read carrying one.
         let rid = ReqId(b"req-3".to_vec());
         let resp = febe.execute(
@@ -1643,7 +1652,7 @@ mod tests {
 
         // The kernel halts AFTER that write committed — the latch is what this
         // call is for, so the rejection it builds answers nothing.
-        let _ = febe.map_txn(OpKind::Insert, TxnError::<InsertError>::Poisoned);
+        let _ = febe.lower_write(OpKind::Insert, TxnError::<InsertError>::Poisoned);
         assert!(febe.poisoned.load(Ordering::Relaxed));
 
         // A fresh keyed write is halted at step (c) — the gate is live.

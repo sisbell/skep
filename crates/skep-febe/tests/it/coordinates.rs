@@ -61,13 +61,13 @@ fn every_write_acks_at_the_coordinate_it_committed() {
         Op::CreateNewDocument { account: fx.account.clone(), published: Some(false) },
     );
     assert_committed(&fx, OpKind::CreateNewDocument, &r, &mut seen);
-    let (d, _) = ack_addr(r);
+    let (draft, _) = ack_addr(r);
 
     let r = ex(
         &fx.febe,
         fx.user,
         Op::Insert {
-            doc: d.clone(),
+            doc: draft.clone(),
             at: vp(1, 1),
             values: vec![Val::new(vec![b'a']), Val::new(vec![b'b']), Val::new(vec![b'c'])],
             deposit: Deposit::Undeclared,
@@ -77,12 +77,12 @@ fn every_write_acks_at_the_coordinate_it_committed() {
 
     let r = ex(&fx.febe, fx.user, Op::Fork { published: None });
     assert_committed(&fx, OpKind::Fork, &r, &mut seen);
-    let (f, _) = ack_addr(r);
+    let (fork, _) = ack_addr(r);
 
     // A version needs a PUBLISHED owned source (PUB-2.9): the edition.
-    let e = create_edition(&fx);
-    let (e_start, _) = deposit3(&fx, &e);
-    let r = ex(&fx.febe, fx.user, Op::Version { d_src: e.clone(), published: None });
+    let edition = create_edition(&fx);
+    let (edition_start, _) = deposit3(&fx, &edition);
+    let r = ex(&fx.febe, fx.user, Op::Version { d_src: edition.clone(), published: None });
     assert_committed(&fx, OpKind::Version, &r, &mut seen);
     let (member, _) = ack_addr(r);
 
@@ -92,23 +92,23 @@ fn every_write_acks_at_the_coordinate_it_committed() {
         base: Some(Base { member, extent: nat(3) }),
         draft: None,
         runs: vec![ShotRun {
-            origin: e.clone(),
-            run: Run::new(e_start, nat(3)).expect("a content run"),
+            origin: edition.clone(),
+            run: Run::new(edition_start, nat(3)).expect("a content run"),
         }],
     };
-    let r = ex(&fx.febe, fx.user, Op::Publish { doc: e, shot });
+    let r = ex(&fx.febe, fx.user, Op::Publish { doc: edition, shot });
     assert_committed(&fx, OpKind::Publish, &r, &mut seen);
 
-    let r = ex(&fx.febe, fx.user, Op::Copy { doc: f, at: vp(1, 1), specs: vec![vspec(&d, 1, 1)] });
+    let r = ex(&fx.febe, fx.user, Op::Copy { doc: fork, at: vp(1, 1), specs: vec![vspec(&draft, 1, 1)] });
     assert_committed(&fx, OpKind::Copy, &r, &mut seen);
 
-    let r = ex(&fx.febe, fx.user, Op::Delete { doc: d.clone(), p: vp(1, 3), width: nat(1) });
+    let r = ex(&fx.febe, fx.user, Op::Delete { doc: draft.clone(), p: vp(1, 3), width: nat(1) });
     assert_committed(&fx, OpKind::Delete, &r, &mut seen);
 
     let r = ex(
         &fx.febe,
         fx.user,
-        Op::Rearrange { doc: d.clone(), cuts: vec![vp(1, 1), vp(1, 2), vp(1, 3)] },
+        Op::Rearrange { doc: draft.clone(), cuts: vec![vp(1, 1), vp(1, 2), vp(1, 3)] },
     );
     assert_committed(&fx, OpKind::Rearrange, &r, &mut seen);
 
@@ -185,30 +185,30 @@ fn every_write_acks_at_the_coordinate_it_committed() {
 #[test]
 fn every_read_reports_the_log_head_as_its_as_of() {
     let fx = setup();
-    let d = create_doc(&fx);
-    insert3(&fx, &d);
+    let draft = create_doc(&fx);
+    insert3(&fx, &draft);
     // The version's source is a PUBLISHED edition with content — the one
     // owned source `version` admits (PUB-2.9) — deposited into (PUB-2.59).
-    let e = create_edition(&fx);
-    deposit3(&fx, &e);
-    let (v, _) = ack_addr(ex(&fx.febe, fx.user, Op::Version { d_src: e, published: None }));
+    let edition = create_edition(&fx);
+    deposit3(&fx, &edition);
+    let (version, _) = ack_addr(ex(&fx.febe, fx.user, Op::Version { d_src: edition, published: None }));
     let mk = || Op::MakeLink {
-        home: d.clone(),
-        from: SlotArg::Resolve(vec![vspec(&d, 1, 1)]),
-        to: SlotArg::Resolve(vec![vspec(&d, 2, 1)]),
-        ty: SlotArg::Resolve(vec![vspec(&d, 3, 1)]),
+        home: draft.clone(),
+        from: SlotArg::Resolve(vec![vspec(&draft, 1, 1)]),
+        to: SlotArg::Resolve(vec![vspec(&draft, 2, 1)]),
+        ty: SlotArg::Resolve(vec![vspec(&draft, 3, 1)]),
     };
     let (l1, _) = ack_addr(ex(&fx.febe, fx.user, mk()));
     let (l2, _) = ack_addr(ex(&fx.febe, fx.user, mk()));
     ack_addr(ex(
         &fx.febe,
         fx.user,
-        Op::AssertSup { home: d.clone(), old: l1.clone(), new: l2.clone() },
+        Op::AssertSup { home: draft.clone(), old: l1.clone(), new: l2.clone() },
     ));
 
     let region = || vec![vspan(1, 1, 3)];
     let q = || FourSet {
-        home: SlotSpec::Spans(enc([&d])),
+        home: SlotSpec::Spans(enc([&draft])),
         from: SlotSpec::Any,
         to: SlotSpec::Any,
         ty: SlotSpec::Any,
@@ -218,33 +218,33 @@ fn every_read_reports_the_log_head_as_its_as_of() {
         Op::PrincipalPrefix { id: USER },
         Op::ReadLink { a: l1.clone() },
         Op::FollowLink { a: l1.clone(), slot: FROM },
-        Op::RetrieveV { specs: vec![Spec { doc: d.clone(), span: vspan(1, 1, 3) }] },
-        Op::RetrieveDocVSpan { doc: d.clone() },
-        Op::RetrieveDocVSpanSet { doc: d.clone() },
-        Op::ShowOrigin { doc: v.clone(), span: vspan(1, 1, 1) },
-        Op::ShowDeletions { d_a: d.clone(), d_b: v.clone() },
+        Op::RetrieveV { specs: vec![Spec { doc: draft.clone(), span: vspan(1, 1, 3) }] },
+        Op::RetrieveDocVSpan { doc: draft.clone() },
+        Op::RetrieveDocVSpanSet { doc: draft.clone() },
+        Op::ShowOrigin { doc: version.clone(), span: vspan(1, 1, 1) },
+        Op::ShowDeletions { d_a: draft.clone(), d_b: version.clone() },
         Op::Compare {
-            rho1: vec![RegionSpec { doc: d.clone(), spans: vec![vspan(1, 1, 2)] }],
-            rho2: vec![RegionSpec { doc: v, spans: vec![vspan(1, 1, 2)] }],
+            rho1: vec![RegionSpec { doc: draft.clone(), spans: vec![vspan(1, 1, 2)] }],
+            rho2: vec![RegionSpec { doc: version, spans: vec![vspan(1, 1, 2)] }],
         },
         Op::FindDocsContaining {
-            regions: vec![RegionSpec { doc: d.clone(), spans: vec![vspan(1, 1, 1)] }],
+            regions: vec![RegionSpec { doc: draft.clone(), spans: vec![vspan(1, 1, 1)] }],
         },
-        Op::Image { d: d.clone(), region: region() },
-        Op::FindLinksV { d: d.clone(), region: region() },
+        Op::Image { d: draft.clone(), region: region() },
+        Op::FindLinksV { d: draft.clone(), region: region() },
         Op::FindLinksFtt { q: q() },
-        Op::CountV { d: d.clone(), region: region() },
+        Op::CountV { d: draft.clone(), region: region() },
         Op::CountFtt { q: q() },
-        Op::WindowV { d: d.clone(), region: region(), cur: None, n: 1 },
+        Op::WindowV { d: draft.clone(), region: region(), cur: None, n: 1 },
         Op::WindowFtt { q: q(), cur: None, n: 1 },
-        Op::RetrieveEndsets { d: d.clone(), region: region() },
-        Op::Project { a: l1.clone(), slot: FROM, d: d.clone() },
-        Op::DiscoverableFrom { a: l1.clone(), d: d.clone() },
-        Op::DeleteOrphans { d: d.clone(), p: vp(1, 1), width: nat(1) },
+        Op::RetrieveEndsets { d: draft.clone(), region: region() },
+        Op::Project { a: l1.clone(), slot: FROM, d: draft.clone() },
+        Op::DiscoverableFrom { a: l1.clone(), d: draft.clone() },
+        Op::DeleteOrphans { d: draft.clone(), p: vp(1, 1), width: nat(1) },
         Op::InClaims { y: l1, view: View::Active },
         Op::OutClaims { x: l2, view: View::Active },
-        Op::DocMetadata { doc: d.clone() },
-        Op::EditionClaims { target: d.clone() },
+        Op::DocMetadata { doc: draft.clone() },
+        Op::EditionClaims { target: draft.clone() },
     ];
 
     let kinds: Vec<OpKind> = reads.iter().map(Op::kind).collect();

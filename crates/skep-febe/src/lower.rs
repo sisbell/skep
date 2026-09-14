@@ -44,6 +44,11 @@ pub(crate) fn lower_read<E: Lower>(kind: OpKind, e: E) -> Rejection {
 /// store's own typed refusal through its [`Lower`] impl, and M2's four
 /// transaction-level outcomes into M10's own codes.
 ///
+/// The dispatch arms reach this through `OperationSurface::lower_write`, which
+/// latches the poison hint on the way past — so a write arm that called this
+/// directly would build the right rejection and leave its operation outside
+/// the latch's cover.
+///
 /// Each of those four says something different about reissuing, and says it
 /// in the disposition, with the cause threaded where an operator needs it.
 /// `Durability` is the one `Retry` — the I/O text rides along, so the hint

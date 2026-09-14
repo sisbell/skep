@@ -137,14 +137,14 @@ fn successor_slot(
     specs: &[VSpec],
 ) -> Result<Endset, Rejection> {
     let mut spans = Vec::new();
-    for (index, vs) in specs.iter().enumerate() {
-        if !is_content_vspan(&vs.span) {
+    for (index, spec) in specs.iter().enumerate() {
+        if !is_content_vspan(&spec.span) {
             return Err(at_spec(slot, index, RejectCode::IllFormedSpec));
         }
-        if !m3.is_registered_document(&vs.source) {
+        if !m3.is_registered_document(&spec.source) {
             return Err(at_spec(slot, index, RejectCode::SourceNotRegistered));
         }
-        for run in m5.resolve(&vs.source, &vs.span) {
+        for run in m5.resolve(&spec.source, &spec.span) {
             if spans.len() == MAX_SLOT_SPANS {
                 return Err(slot_too_large(slot));
             }

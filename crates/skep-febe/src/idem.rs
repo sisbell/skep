@@ -113,8 +113,8 @@ impl IdemCache {
     /// request re-executes.
     pub(crate) fn get(&self, session: SessionId, id: &ReqId, kind: OpKind) -> Option<CommittedAck> {
         let mut g = self.entries.lock();
-        let c = g.get(&IdemKey { session, id: id.clone() })?; // bumps LRU recency
-        (c.kind == kind).then(|| c.ack.clone())
+        let tagged = g.get(&IdemKey { session, id: id.clone() })?; // bumps LRU recency
+        (tagged.kind == kind).then(|| tagged.ack.clone())
     }
 
     /// Drop the entries this session has committed under as of now — the

@@ -74,7 +74,7 @@ pub const MAX_REQ_ID_BYTES: usize = 256;
 /// [`OperationSurface::execute`]: crate::OperationSurface::execute
 ///
 /// NOT `Debug`, on one leaf: M4's `Val`, which withholds it so that content
-/// bytes never render into a log. NOT `Hash`, on that leaf and M1's `Address`.
+/// bytes never render into a log. NOT `Hash` either, on that same one leaf.
 /// Deliberately not `#[non_exhaustive]` either: a consumer's exhaustive match
 /// over this enum is what forces a new operation to be given a wire name and a
 /// marshaling, where a `_` arm would silently drop it.
@@ -303,7 +303,15 @@ pub enum Op {
 /// [`FROM`]: crate::FROM
 /// [`TO`]: crate::TO
 /// [`TYPE`]: crate::TYPE
-#[derive(Clone, PartialEq, Eq)]
+///
+/// `Debug`, unlike the [`Op`] that carries it: the absence there is `Val`'s,
+/// and no `Val` reaches this payload. So a client that meets an
+/// [`IllFormedSpec`] at some `slot`/`index` can render the successor it sent,
+/// and a harness comparing a built successor against a parsed one can write
+/// the `assert_eq!` its [`PartialEq`] is for.
+///
+/// [`IllFormedSpec`]: crate::RejectCode::IllFormedSpec
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SuccessorSpec {
     pub from: Vec<VSpec>,
     pub to: Vec<VSpec>,
@@ -960,6 +968,24 @@ pub(crate) mod tests {
             assert!(seen.insert(kind), "{kind:?} is produced by two variants");
         }
         assert_eq!(seen.len(), 41);
+    }
+
+    /// [`SuccessorSpec`] is a VALUE, and the comparison macros are what a
+    /// caller writes with one — a harness pinning a built successor against a
+    /// parsed one, a client rendering the successor a slot-localized
+    /// `IllFormedSpec` refused. `assert_eq!`/`assert_ne!` require `Debug` on
+    /// both operands, so the derive a caller depends on is exercised here
+    /// rather than merely written.
+    #[test]
+    fn a_successor_spec_is_a_value_the_comparison_macros_accept() {
+        let spec = |ordinal: u32| SuccessorSpec {
+            from: vec![vs()],
+            to: vec![],
+            ty: SlotArg::Addrs(vec![addr(&[1, 0, 1, 0, ordinal])]),
+        };
+        assert_eq!(spec(1), spec(1), "a rebuilt successor is the same successor");
+        assert_ne!(spec(1), spec(2), "…and one with another type slot is a different one");
+        assert_eq!(spec(1).clone(), spec(1), "a clone is the same successor too");
     }
 
     /// PUB-6.4: the doc-argument list runs in DECLARATION order across an

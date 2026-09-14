@@ -32,14 +32,17 @@ use crate::response::Response;
 /// per operation, say) and compare it against another. Equality is over all
 /// five fields, `detail` included: two rejections agreeing on op/code/
 /// disposition/site but carrying different messages are different answers to
-/// an operator, and compare unequal.
+/// an operator, and compare unequal. `Hash` agrees with that equality, so a
+/// transport may key by a whole rejection — per-`(op, code)` tallies, a set
+/// of the distinct refusals a client has met — as it already keys by a bare
+/// [`RejectCode`].
 ///
 /// `#[must_use]`: a rejection is an answer owed to a client, so building one
 /// and dropping it is the silence this module exists to prevent. A site that
 /// raises one for its side effect alone — latching the poison hint on the
 /// write path — says so with `let _ =`.
 #[must_use]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Rejection {
     pub op: OpKind,
     pub code: RejectCode,
@@ -75,7 +78,7 @@ pub enum Disposition {
 /// from M10's own EDITLINK successor guard, which fills `slot` and `index`.
 /// Every other M5/M8 variant still lowers with `site = None` (§5; M8's
 /// `DocNotRegistered` is fieldless, unlike M6's).
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 pub struct FaultSite {
     /// Which COMPARE spec-set (ρ₁/ρ₂) the fault came from.
     pub operand: Option<Operand>,
@@ -515,11 +518,11 @@ mod tests {
 
     /// A rejection is a VALUE: it clones, and it compares over all five
     /// fields — `detail` included, since a message an operator reads is part
-    /// of the answer. And the classification vocabulary keys a map, which is
-    /// the shape a transport tallying per-code counters reaches for; the
-    /// impls have to be here, because a consumer cannot add them.
+    /// of the answer. And it keys a map, as the classification vocabulary
+    /// alone does, which is the shape a transport tallying refusals reaches
+    /// for; the impls have to be here, because a consumer cannot add them.
     #[test]
-    fn a_rejection_is_a_value_and_its_codes_key_a_map() {
+    fn a_rejection_is_a_value_and_keys_a_map() {
         use std::collections::{HashMap, HashSet};
 
         let site = FaultSite { slot: Some(crate::FROM), index: Some(1), ..FaultSite::default() };
@@ -548,6 +551,20 @@ mod tests {
         }
         assert_eq!(per_code[&RejectCode::NotOwner], 2);
         assert_eq!(per_code.len(), 2);
+
+        // A WHOLE rejection keys a map too, and hashes consistently with the
+        // five-field equality above: the same refusal met twice is one key,
+        // and `rej`/`elsewhere` — which differ only in the site's slot — are
+        // two. Keying by the composite is what a transport tallying
+        // per-`(op, code)` or deduping repeated refusals reaches for, and
+        // only this crate can supply the impl.
+        let mut tally: HashMap<Rejection, u64> = HashMap::new();
+        for r in [rej.clone(), elsewhere.clone(), rej.clone()] {
+            *tally.entry(r).or_default() += 1;
+        }
+        assert_eq!(tally[&rej], 2, "the same refusal met twice is one key");
+        assert_eq!(tally[&elsewhere], 1);
+        assert_eq!(tally.len(), 2, "a fault in another slot is another key");
 
         let advised: HashSet<Disposition> = ALL_CODES.iter().map(|c| disposition_of(*c)).collect();
         assert_eq!(advised.len(), 4, "every disposition is the advice of some code");

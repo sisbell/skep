@@ -156,7 +156,7 @@ impl WriteCtx {
 /// agree about whether a link exists: a rule whose point is non-disclosure
 /// cannot be written twice and changed once. `document_of` is address
 /// arithmetic, so this reads nothing (PUB-6.38).
-fn home_readable(a: &Address, readable: &impl Fn(&Address) -> bool) -> bool {
+fn home_readable(a: &Address, readable: &dyn Fn(&Address) -> bool) -> bool {
     document_of(a).is_none_or(|home| readable(&home))
 }
 
@@ -188,7 +188,7 @@ fn home_readable(a: &Address, readable: &impl Fn(&Address) -> bool) -> bool {
 fn consult_read(
     kind: OpKind,
     op: &Op,
-    readable: &impl Fn(&Address) -> bool,
+    readable: &dyn Fn(&Address) -> bool,
 ) -> Result<(), Rejection> {
     for arg in op.doc_arguments() {
         if !readable(arg) {
@@ -306,7 +306,7 @@ fn consult_write(
     wc: &WriteCtx,
     op: &Op,
     m3: &M3State,
-    readable: &impl Fn(&Address) -> bool,
+    readable: &dyn Fn(&Address) -> bool,
 ) -> Result<(), Rejection> {
     let kind = op.kind();
     let WriteConsult::AfterOwnershipOf(destinations) = op.write_consult() else {

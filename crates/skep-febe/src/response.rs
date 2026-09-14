@@ -27,7 +27,7 @@ use crate::reject::Rejection;
 /// `active` is M7's active-view membership: `false` names a claim the home
 /// has nullified (retracted), which the audit view still lists (PUB-8.46,
 /// PUB-6.32).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct EditionClaim {
     /// The claim link's address.
     pub claim: Address,
@@ -48,7 +48,7 @@ pub struct EditionClaim {
 /// `extent` is that member's arranged content count, which a version never
 /// changes (PUB-2.50), so it is the base extent a client measures an edition
 /// against.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BirthVersion {
     /// The chain's opening member, `D.1`.
     pub addr: Address,
@@ -80,8 +80,16 @@ pub struct BirthVersion {
 /// Not `Clone`, and not for a bound's sake — every payload clones. Nothing
 /// needs to duplicate an answer: the one thing that outlives its request is
 /// the small [`CommittedAck`] a committed write yields, which the retry memo
-/// holds in place of the whole `Response` (§7). Not `Hash`, which M1's
-/// `Address` does not carry.
+/// holds in place of the whole `Response` (§7). Not `Hash`, on five payload
+/// leaves that lack it: M6's [`DeliveryItem`], [`Deletions`] and [`CorrPair`],
+/// and M7's [`Invalid`] and [`Link`]. M1's `Address` is NOT among them — it
+/// carries a hand-written `Hash`, identity being the tumbler — which is why
+/// [`EditionClaim`] and [`BirthVersion`] have one.
+///
+/// [`Deletions`]: skep_retrieval::Deletions
+/// [`CorrPair`]: skep_retrieval::CorrPair
+/// [`Invalid`]: skep_links::Invalid
+/// [`Link`]: skep_links::Link
 ///
 /// `#[must_use]` on the type rather than on `execute`, so it holds for every
 /// producer: a `Response` that is built and dropped is a request that was

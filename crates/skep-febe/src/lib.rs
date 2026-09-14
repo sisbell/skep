@@ -334,10 +334,12 @@ impl<
 /// `kernel()`, while the link writes commit through `linkstore()`. Two kernels
 /// leave those coordinates describing different logs, each store still
 /// committing before it acknowledges and the reported positions no longer
-/// meaning what this module promises. That every driver is built over the ONE
-/// kernel `kernel()` names is not an obligation but a fact of the three
-/// provided bodies, which is why the whole precondition falls on the single
-/// method an implementer writes.
+/// meaning what this module promises. The three provided bodies are each
+/// built over `kernel()`, so an implementer that supplies only the kernel
+/// cannot violate that half — which is why the precondition is stated on the
+/// one method such an implementer writes. An implementer that OVERRIDES one
+/// of the three takes the obligation back on, and owes the same single-kernel
+/// guarantee for whatever driver it returns.
 ///
 /// The design flagged the engine-facing store-driver constructors as a
 /// required upstream interface amendment (Conflicts resolved #6); the as-built

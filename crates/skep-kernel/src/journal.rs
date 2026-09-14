@@ -944,9 +944,12 @@ pub(crate) struct ScanOutcome {
     /// one than the scan was run with.
     s_load: u64,
     /// The boundary this scan COLLECTED to, as [`scan`] was called with it —
-    /// `None` for the whole scanned region. Carried here so a fold can be held
-    /// to it ([`ScanOutcome::records_to`]): records above it were read and
-    /// dropped, so a fold past it is one this outcome cannot answer.
+    /// `None` for the whole scanned region. Applied by
+    /// [`ScanOutcome::record_commit`], the only writer of the two collections
+    /// below, and read back by [`ScanOutcome::covers`] to hold a fold to it:
+    /// records above it were read and dropped, so a fold past it is one this
+    /// outcome cannot answer. Bounding the collection is what keeps a bounded
+    /// replay of one transaction from materializing the whole retained window.
     bound: Option<u64>,
     /// The last COMMITTED marker's `last_seq`, floored at `S_load` — §7's `W`
     /// (if no committed marker sits above the loaded checkpoint it is
@@ -954,18 +957,18 @@ pub(crate) struct ScanOutcome {
     /// recovery's own fold bound, so it names the last committed marker of the
     /// whole scanned region.
     pub committed_head: u64,
-    /// Every committed record at or below the scan's `bound`, unordered and
-    /// unfiltered — read through [`ScanOutcome::records_to`], which is where
-    /// the order, the range and the one-coordinate-once rule are settled.
-    /// Records above the bound are read and dropped rather than collected: no
-    /// fold reads them, and holding them is what made a one-transaction
-    /// bounded replay cost the whole retained window.
+    /// The records a fold may apply, unordered and unfiltered as collected.
+    /// Written only by [`ScanOutcome::record_commit`], which is where the
+    /// collection bound is applied; read through [`ScanOutcome::records_to`],
+    /// which is where the order, the range and the one-coordinate-once rule
+    /// are settled.
     committed_records: Vec<CommittedRecord>,
-    /// Every committed marker's `last_seq` at or below the scan's `bound`, in
-    /// scan order — the transaction boundaries a bounded replay may be asked
-    /// about, which [`ScanOutcome::require_boundary`] answers from. That
-    /// question reads the requested value and the boundaries below it, so a
-    /// boundary above the bound is one nothing can ask for.
+    /// The transaction boundaries a bounded replay may be asked about, in scan
+    /// order — the `Seq` values [`crate::Kernel::transact`] returned. Written
+    /// only by [`ScanOutcome::record_commit`]; read by
+    /// [`ScanOutcome::require_boundary`], which reads the requested value and
+    /// the boundaries below it, so a boundary the collection bound excluded is
+    /// one nothing can ask for.
     committed_boundaries: Vec<u64>,
     /// Corrupt runs in scan order — what [`ScanOutcome::fatal_run_to_head`]
     /// and [`ScanOutcome::fatal_run_anywhere`] answer from. The verdict on a
@@ -978,6 +981,29 @@ pub(crate) struct ScanOutcome {
 }
 
 impl ScanOutcome {
+    /// Take everything a COMMITTED transaction contributes: its marker's
+    /// `last_seq` raises the committed head and — when this scan's collection
+    /// bound admits it — joins the boundary set, and its records join the
+    /// committed set, filtered the same way.
+    ///
+    /// The head is deliberately UNBOUNDED: it is recovery's own fold bound, so
+    /// it must name the last committed marker wherever it sits. The two
+    /// COLLECTIONS obey `bound`, and per RECORD rather than per group, so a
+    /// transaction straddling the bound keeps the half below it. That
+    /// asymmetry is the whole of what `bound` means, and stating it here is
+    /// what keeps it off the walk — this is the only writer of either
+    /// collection, so the rule has one site.
+    fn record_commit(&mut self, marker: &Marker, records: Vec<CommittedRecord>) {
+        self.committed_head = self.committed_head.max(marker.last_seq);
+        let bound = self.bound;
+        let collected = |seq: u64| bound.is_none_or(|b| seq <= b);
+        if collected(marker.last_seq) {
+            self.committed_boundaries.push(marker.last_seq);
+        }
+        self.committed_records
+            .extend(records.into_iter().filter(|entry| collected(entry.seq)));
+    }
+
     /// The corrupt run a RECOVERY cannot answer around, classified within
     /// the committed region this scan derived: a run above the committed head
     /// is the un-acked / torn tail, which recovery is about to discard (§7).
@@ -1313,25 +1339,11 @@ pub(crate) fn scan(
                             }
                             if let Some(group) = pending.take_if(|group| group.txn == marker.txn) {
                                 if group.commits(&marker) {
-                                    // The head and the cut are unbounded: the
-                                    // first is recovery's own fold bound, and
-                                    // the second must name the last committed
-                                    // marker wherever it sits. Only what a
-                                    // caller READS above `bound` is dropped,
-                                    // and it is dropped per RECORD rather than
-                                    // per group, so a group straddling the
-                                    // bound keeps the half below it.
-                                    outcome.committed_head = outcome.committed_head.max(marker.last_seq);
+                                    outcome.record_commit(&marker, group.records);
+                                    // The cut is unbounded for the reason the
+                                    // head is: it must name the last committed
+                                    // marker wherever it sits.
                                     cut = Some((seg_index, end as u64));
-                                    if bound.is_none_or(|b| marker.last_seq <= b) {
-                                        outcome.committed_boundaries.push(marker.last_seq);
-                                    }
-                                    outcome.committed_records.extend(
-                                        group
-                                            .records
-                                            .into_iter()
-                                            .filter(|entry| bound.is_none_or(|b| entry.seq <= b)),
-                                    );
                                 }
                                 // else: torn txn — not committed; its frames are
                                 // either beyond W (tail, truncated) or explained
@@ -1385,13 +1397,14 @@ pub(crate) fn scan(
 /// The tail-truncation step (§7), run AFTER every refusal and BEFORE any
 /// write is served: durably remove everything after the last committed marker
 /// — cut its segment at the marker's frame end, delete every wholly-later
-/// segment, fsync file and directory. Every halt precedes it — the corrupt-run
-/// classification, an unenumerable frame stream, an exhausted `Seq` order, the
-/// fold's own verdict on an undecodable or repeated record, and an exhausted
-/// checkpoint chain — which is what leaves the store an operator images after
-/// a halt exactly as it was found (§7). This is what makes cross-session `Txn`
-/// uniqueness and file-order == `Seq`-order true at the next recovery (§1/§7).
-/// Idempotent; a failure fails `open()` with `Io`.
+/// segment, fsync file and directory. Every halt precedes it — every route to
+/// [`crate::OpenError::Corruption`], which enumerates them, and the exhausted
+/// checkpoint chain of [`crate::OpenError::BadCheckpoint`] — which is what
+/// leaves the store an operator images after a halt exactly as it was found
+/// (§7); [`crate::Kernel::open`] is where that order is kept and stated. This
+/// is what makes cross-session `Txn` uniqueness and file-order == `Seq`-order
+/// true at the next recovery (§1/§7). Idempotent; a failure fails `open()`
+/// with `Io`.
 ///
 /// The files are the scan's own [`TailCut`], so this cuts exactly what was
 /// scanned and nothing else.

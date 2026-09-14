@@ -4,16 +4,13 @@
 //! `apply` that also maintains a derived hint, and a `#[serde(skip)]` hint
 //! reseeded by `rebuild_derived`.
 
-#[path = "common/mutilate.rs"]
-mod mutilate;
-
 use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use mutilate::{append_bytes, ckpt_file, flip_byte, seg_file, truncate_file};
+use crate::mutilate::{append_bytes, ckpt_file, flip_byte, seg_file, truncate_file};
 use serde::{Deserialize, Serialize};
 use skep_kernel::{
     BurnedSeqPolicy, CheckpointError, CheckpointPolicy, Durability, HistoryError, Kernel,

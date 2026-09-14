@@ -11,14 +11,11 @@
 //! opens are findings, and the judges here panic on them with the full
 //! reproduction in the message.
 //!
-//! Compiled twice by design: as `mod hazard_util` from `hazard.rs`, and as
-//! a standalone zero-test target (cargo builds every `tests/*.rs`); the
-//! `dead_code` allow covers the second build.
+//! Plumbing for the hazard suite, not a suite of its own: it declares no
+//! tests, and `hazard` uses a subset of it — which is what the `dead_code`
+//! allow on its `mod` line in `main.rs` covers.
 
-#[path = "common/mutilate.rs"]
-mod mutilate;
-
-pub use mutilate::*;
+pub use crate::mutilate::*;
 
 use std::fs;
 use std::path::{Path, PathBuf};

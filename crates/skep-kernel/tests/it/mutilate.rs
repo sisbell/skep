@@ -1,8 +1,8 @@
-//! Naming and damaging the files a kernel keeps — the operations both
-//! integration tiers perform on a CLOSED store: name a segment or a
-//! checkpoint, flip a byte, cut a file short, append past the end.
+//! Naming and damaging the files a kernel keeps — the operations both suites
+//! perform on a CLOSED store: name a segment or a checkpoint, flip a byte,
+//! cut a file short, append past the end.
 //!
-//! These know no format. What each tier restates for itself is the *layout*
+//! These know no format. What each suite restates for itself is the *layout*
 //! it judges — the frame header, the checkpoint header, the frame walk —
 //! because reading the on-disk shape from outside the crate is the point of
 //! testing it at this tier. Reading a path and writing it back is not, so it

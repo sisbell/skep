@@ -8,3 +8,4 @@ mod hazard;
 #[allow(dead_code)]
 mod hazard_util;
 mod kernel;
+mod mutilate;

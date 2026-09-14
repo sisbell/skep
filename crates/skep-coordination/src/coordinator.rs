@@ -358,7 +358,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// charges them (well-founded by PR2; a breach cycle strictly deepens
     /// each round until the checker's nesting door refuses it).
     ///
-    /// What is memoized is the CONTENT's verdict and nothing else: an
+    /// What is memoized is the CONTENT's status and nothing else: an
     /// ever-registered start whose content fails the parse, or fails WT on
     /// its own account, fills the memo poisoned — freeze-on-breach (PR-DISC,
     /// §Internal 4). A nesting refusal ABOVE level 0 is not the content's:
@@ -376,7 +376,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         if !self.ever_registered(w, start) {
             return Ok(DefStatus::NeverRegistered);
         }
-        let verdict = match parse_def(w, start) {
+        let derived = match parse_def(w, start) {
             Err(_) => Err(Breach),
             Ok(signed) => match self.check_signed(signed, depth) {
                 Ok(entry) => Ok(entry),
@@ -384,7 +384,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 Err(_) => Err(Breach),
             },
         };
-        Ok(self.memo.fill(start, verdict))
+        Ok(self.memo.fill(start, derived))
     }
 
     /// The defined referent at `start`, its derivation (if the memo misses)

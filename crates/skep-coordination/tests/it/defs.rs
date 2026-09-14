@@ -871,7 +871,7 @@ fn supersede_gates_up_front_and_trips_m7_s_supersession_fence() {
     // fence for content-endpoint def lineage, this match arm flips.
     let before = k.snapshot().world().m5().content_count(&doc1());
     match c.supersede(&doc1(), &p_start, &c.type_check(vec![], Term::Lit(Lit::False)).expect("term")) {
-        Err(SupersedeError::Supersede(TxnError::Rejected(EmitError::SupersessionClass))) => {}
+        Err(SupersedeError::Lineage(TxnError::Rejected(EmitError::SupersessionClass))) => {}
         other => panic!("fence drift resolved? got {other:?}"),
     }
     assert_eq!(

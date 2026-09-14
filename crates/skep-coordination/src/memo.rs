@@ -1,5 +1,5 @@
 //! §Core data model / §Internal 4 — the DefMemo: M9's one interior-mutable
-//! hint, a per-start cache of PERMANENT verdicts about stored predicate
+//! hint, a per-start cache of PERMANENT statuses for stored predicate
 //! definitions. It holds no authority: every entry is recomputable from the
 //! def's immutable content plus M7's audit slice, and a rebuilt memo answers
 //! every question the old one did.
@@ -25,7 +25,7 @@ pub(crate) enum DefStatus {
     NeverRegistered,
 }
 
-/// A cached verdict. Both variants are PERMANENT: content is immutable and
+/// A cached status. Both variants are PERMANENT: content is immutable and
 /// ever-registration is monotone, so a `Defined` entry can never be
 /// contradicted, and a `Poisoned` one is freeze-on-breach (§Internal 4).
 #[derive(Debug)]
@@ -34,21 +34,21 @@ enum MemoEntry {
     Poisoned,
 }
 
-/// The verdict on an ever-registered start whose immutable content fails the
-/// PR-ENC parse or WT — the breach the poison records.
+/// An ever-registered start whose immutable content fails the PR-ENC parse or
+/// WT — the breach the poison records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Breach;
 
 /// The memo. THE POLICY, in two halves. THIS TYPE OWNS PERMANENCE: the first
 /// fill of a start wins and every later fill of it is a no-op (racing fills
-/// derive the same verdict from the same immutable content, so first-wins
-/// loses nothing), nothing is ever evicted or overwritten, and both verdicts
+/// derive the same status from the same immutable content, so first-wins
+/// loses nothing), nothing is ever evicted or overwritten, and both statuses
 /// are therefore permanent — content is immutable and ever-registration
 /// monotone, so a `Defined` entry can never be contradicted and a `Poisoned`
 /// one is freeze-on-breach. ADMISSION is `Coordinator::derive_def`'s, and
 /// cannot be this type's: only a start that is ever-registered AT A PINNED
 /// SNAPSHOT is offered (a never-registered start must surface a later
-/// registration), and only a verdict about the CONTENT is filled — a
+/// registration), and only a status about the CONTENT is filled — a
 /// derivation that could not complete at the level it was asked at fills
 /// nothing, that being the asking term's refusal, not the content's.
 ///
@@ -64,7 +64,7 @@ impl DefMemo {
         DefMemo(RwLock::new(HashMap::new()))
     }
 
-    /// The cached verdict, if any — `None` means "derive it", never "not a
+    /// The cached status, if any — `None` means "derive it", never "not a
     /// def".
     pub(crate) fn get(&self, start: &Address) -> Option<DefStatus> {
         let memo = self.0.read().unwrap_or_else(PoisonError::into_inner);
@@ -74,11 +74,11 @@ impl DefMemo {
         })
     }
 
-    /// Record a verdict for an ever-registered start — first fill wins — and
-    /// answer with whatever the memo now holds for it.
-    pub(crate) fn fill(&self, start: &Address, verdict: Result<TypedTerm, Breach>) -> DefStatus {
+    /// Record the derived status for an ever-registered start — first fill
+    /// wins — and answer with whatever the memo now holds for it.
+    pub(crate) fn fill(&self, start: &Address, derived: Result<TypedTerm, Breach>) -> DefStatus {
         let mut memo = self.0.write().unwrap_or_else(PoisonError::into_inner);
-        let entry = memo.entry(start.tumbler().clone()).or_insert_with(|| match verdict {
+        let entry = memo.entry(start.tumbler().clone()).or_insert_with(|| match derived {
             Ok(t) => MemoEntry::Defined(Arc::new(t)),
             Err(Breach) => MemoEntry::Poisoned,
         });

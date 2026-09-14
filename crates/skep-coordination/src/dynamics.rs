@@ -206,7 +206,7 @@ fn step_constant(fp: Footprint) -> Analysis {
 
 /// A state read whose value is free to change across steps: Neither, and
 /// outside the grow-only closure.
-fn reads(fp: Footprint) -> Analysis {
+fn state_read(fp: Footprint) -> Analysis {
     Analysis { fp, st: false, sf: false, grow_only: false }
 }
 
@@ -416,25 +416,25 @@ impl<'a> Analyzer<'a> {
             }
             Atom::IsFiltered(tr, e) => {
                 let ae = self.term(e);
-                reads(ae.fp.union(&self.slice_fp(tr.key(), Slice::Active)))
+                state_read(ae.fp.union(&self.slice_fp(tr.key(), Slice::Active)))
             }
             // BH2/BH3 collections: fixed-active reads — Neither — and the
             // evaluator UV-rewrites them, so a default term's footprint carries
             // the BH1 slices too.
             Atom::Succs(tr, e) | Atom::Chain(tr, e) | Atom::SourcesTo(tr, e) => {
                 let ae = self.term(e);
-                reads(ae.fp.union(&self.slice_fp(tr.key(), Slice::Active)).union(&self.read_filter_fp()))
+                state_read(ae.fp.union(&self.slice_fp(tr.key(), Slice::Active)).union(&self.read_filter_fp()))
             }
             // Verdict/traversal atoms (tip/is_in_chain) and the single-target
             // projection are never UV-rewritten: fixed active.
             Atom::Tip(tr, e) | Atom::TargetOf(tr, e) => {
                 let ae = self.term(e);
-                reads(ae.fp.union(&self.slice_fp(tr.key(), Slice::Active)))
+                state_read(ae.fp.union(&self.slice_fp(tr.key(), Slice::Active)))
             }
             Atom::IsInChain(tr, x, y) => {
                 let ax = self.term(x);
                 let ay = self.term(y);
-                reads(ax.fp.union(&ay.fp).union(&self.slice_fp(tr.key(), Slice::Active)))
+                state_read(ax.fp.union(&ay.fp).union(&self.slice_fp(tr.key(), Slice::Active)))
             }
             Atom::TargetsKeyed(e) => {
                 let ae = self.term(e);
@@ -443,7 +443,7 @@ impl<'a> Analyzer<'a> {
                     fp.active.insert(c.clone());
                 }
                 fp.targets_keyed = true;
-                reads(fp)
+                state_read(fp)
             }
             // BH4: fixed active + the home-wide frontier. `age` is a
             // projection the evaluator never UV-rewrites; the `stale`
@@ -452,14 +452,14 @@ impl<'a> Analyzer<'a> {
                 let ae = self.term(e);
                 let mut fp = ae.fp.union(&self.slice_fp(tr.key(), Slice::Active));
                 fp.home_frontier = true;
-                reads(fp)
+                state_read(fp)
             }
             Atom::Stale(tr, e) => {
                 let ae = self.term(e);
                 let mut fp =
                     ae.fp.union(&self.slice_fp(tr.key(), Slice::Active)).union(&self.read_filter_fp());
                 fp.home_frontier = true;
-                reads(fp)
+                state_read(fp)
             }
             // is_doc at a step-constant argument is ST (registration is
             // permanent).

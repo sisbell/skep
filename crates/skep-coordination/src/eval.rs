@@ -155,11 +155,11 @@ impl<'a, W> EvalCtx<'a, W> {
     /// (M7's own regime for this read), `audit` those whose F DENOTES it
     /// (V-AUD's exact membership, `GuestLinks::targets_of_denoting`).
     fn targets_of_at(&self, k: &TypeKey, x: &Address) -> OrdSet<Tumbler> {
-        let read = match self.view {
+        let answer = match self.view {
             View::Audit => self.links.targets_of_denoting(&k.0, x),
             View::Active | View::Default => self.links.targets_of(&k.0, x, Slice::Active),
         };
-        self.uv_rewrite(k, read)
+        self.uv_rewrite(k, answer)
     }
 
     /// `is_K(x)` at the CONTEXT's view — a verdict atom, so a `default` term
@@ -169,7 +169,7 @@ impl<'a, W> EvalCtx<'a, W> {
         self.links.is_k(&k.0, x.tumbler(), Slice::of(self.view))
     }
 
-    /// The UV rewrite over a whole read, and the ONE place an M7 answer
+    /// The UV rewrite over a whole M7 answer, and the ONE place that answer
     /// becomes a ℘_fin(T) value: M7 answers in `Address`, a PL set holds
     /// `Tumbler` (M1's `Address` is neither `Hash` nor `Ord`), and at
     /// `default` the elements [`EvalCtx::uv_keeps`] refuses are dropped — at
@@ -177,8 +177,8 @@ impl<'a, W> EvalCtx<'a, W> {
     /// rewrite costs one comparison per element and keeps them all. So every
     /// UV-rewritten read is ONE call, and a read that should have been
     /// rewritten and was not is visible as the one that did not make it.
-    fn uv_rewrite(&self, k: &TypeKey, read: Vec<Address>) -> OrdSet<Tumbler> {
-        read.into_iter().map(|a| a.tumbler().clone()).filter(|e| self.uv_keeps(k, e)).collect()
+    fn uv_rewrite(&self, k: &TypeKey, answer: Vec<Address>) -> OrdSet<Tumbler> {
+        answer.into_iter().map(|a| a.tumbler().clone()).filter(|e| self.uv_keeps(k, e)).collect()
     }
 
     /// BH3 join: `target_of` across the catalog's `ReverseLookup` classes —

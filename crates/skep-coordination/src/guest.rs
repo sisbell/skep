@@ -264,7 +264,7 @@ impl<'a, W> GuestLinks<'a, W> {
     }
 
     /// The visited-set-bounded forward walk (M7's own halting rule).
-    fn walk_sup(fwd: &ForwardClaims, x: &Tumbler) -> Walk {
+    fn walk_claims(fwd: &ForwardClaims, x: &Tumbler) -> Walk {
         let mut path = vec![x.clone()];
         let mut visited = OrdSet::unit(x.clone());
         let mut node = x.clone();
@@ -298,14 +298,14 @@ impl<'a, W> GuestLinks<'a, W> {
     /// BH2 chain over the visible operative claims.
     pub(crate) fn chain(&self, ty: &Endset, x: &Address) -> Vec<Address> {
         let fwd = self.forward_claims(ty);
-        Self::walk_sup(&fwd, x.tumbler()).path.iter().map(lift).collect()
+        Self::walk_claims(&fwd, x.tumbler()).path.iter().map(lift).collect()
     }
 
     /// BH2 head over the visible operative claims: `Sink(head)` at a
     /// successor-free node, `Indeterminate` at a branch or cycle.
     pub(crate) fn tip(&self, ty: &Endset, x: &Address) -> Tip {
         let fwd = self.forward_claims(ty);
-        match Self::walk_sup(&fwd, x.tumbler()).sink {
+        match Self::walk_claims(&fwd, x.tumbler()).sink {
             Some(sink) => Tip::Sink(lift(&sink)),
             None => Tip::Indeterminate,
         }

@@ -215,7 +215,7 @@ pub enum StepOutcome {
     Quiescent,
 }
 
-/// `certify_rule`'s verdict: SF trigger + Marker witness-coverage + grow-only
+/// `certify_rule`'s answer: SF trigger + Marker witness-coverage + grow-only
 /// domain (+ bounded input, a workload hypothesis) ⇒ terminating under weak
 /// fairness (Q5a/Q6); otherwise the failed legs are named. Sound but
 /// incomplete — never over-certifies.

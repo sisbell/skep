@@ -303,7 +303,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         let (_claim, seq) = self
             .link_writer()
             .emit(Caller::System, home, sup, old_start, from_ref(&new_start))
-            .map_err(SupersedeError::Supersede)?;
+            .map_err(SupersedeError::Lineage)?;
         Ok((new_start, seq))
     }
 

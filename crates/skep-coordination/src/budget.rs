@@ -48,7 +48,7 @@ pub(crate) const MAX_DEPTH: u32 = 128;
 /// aborts there.
 pub(crate) const DERIVATION_COST: u32 = 2;
 
-/// The level at which argument `i` of a reference at level `node` is checked
+/// The level at which argument `i` of a reference at level `depth` is checked
 /// — which is the level its own expansion will occupy. PR3a realizes a
 /// reference as a `Let` chain binding the arguments ABOVE the referent's
 /// body, argument `i` at position `i`, so argument `i` expands `i` levels
@@ -58,20 +58,20 @@ pub(crate) const DERIVATION_COST: u32 = 2;
 /// [`MAX_DEPTH`] while every recorded level stayed inside it — and that
 /// expansion is what `certify_stable`'s and `certify_rule`'s analyses walk,
 /// with no depth bound of their own.
-pub(crate) fn argument_depth(node: u32, i: usize) -> u32 {
-    node.saturating_add(1).saturating_add(u32::try_from(i).unwrap_or(u32::MAX))
+pub(crate) fn argument_depth(depth: u32, i: usize) -> u32 {
+    depth.saturating_add(1).saturating_add(u32::try_from(i).unwrap_or(u32::MAX))
 }
 
-/// The deepest level a walk through a reference at level `node` reaches: past
-/// [`DERIVATION_COST`] to the referent's own check, past the flat expansion's
-/// `Let` chain (one level per argument — PR3a), and through the referent's
-/// recorded reach. With [`argument_depth`] this is the WHOLE of what a
-/// reference costs in levels, stated here so the checker that charges it and
-/// the expander that builds to match cannot drift: a change to `expand.rs`'s
-/// realization of a reference is a change to these two functions, and the
-/// checker follows.
-pub(crate) fn reference_reach(node: u32, arity: usize, referent_reach: u32) -> u32 {
-    node.saturating_add(DERIVATION_COST)
+/// The deepest level a walk through a reference at level `depth` reaches:
+/// past [`DERIVATION_COST`] to the referent's own check, past the flat
+/// expansion's `Let` chain (one level per argument — PR3a), and through the
+/// referent's recorded reach. With [`argument_depth`] this is the WHOLE of
+/// what a reference costs in levels, stated here so the checker that charges
+/// it and the expander that builds to match cannot drift: a change to
+/// `expand.rs`'s realization of a reference is a change to these two
+/// functions, and the checker follows.
+pub(crate) fn reference_reach(depth: u32, arity: usize, referent_reach: u32) -> u32 {
+    depth.saturating_add(DERIVATION_COST)
         .saturating_add(u32::try_from(arity).unwrap_or(u32::MAX))
         .saturating_add(referent_reach)
 }

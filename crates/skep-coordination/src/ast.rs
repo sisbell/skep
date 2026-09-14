@@ -228,8 +228,7 @@ pub enum Dom {
     /// `Forall`/`Exists`/`Count`); expanded/folded at type_check (V-IDX).
     Reg,
     Filter { dom: ArcDom, var: VarId, pred: ArcTerm },
-    /// QD set-valued-term closure: a ℘_fin(T)-valued term reflected as a
-    /// domain.
+    /// QD set-valued-term closure: a ℘_fin(T)-valued term used as a domain.
     SetTerm(ArcTerm),
 }
 

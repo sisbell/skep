@@ -175,7 +175,9 @@ pub enum SupersedeError {
     /// lineage; PR4 presupposes the superseded address IS a definition).
     OldStartNotEverRegistered(Address),
     Define(DefineError),
-    Supersede(TxnError<EmitError>),
+    /// The lineage claim — the `supersedes` emit, the third of three
+    /// non-atomic transactions.
+    Lineage(TxnError<EmitError>),
 }
 
 impl fmt::Display for SupersedeError {
@@ -185,7 +187,7 @@ impl fmt::Display for SupersedeError {
                 write!(f, "supersede: old start {a} is not an ever-registered def")
             }
             SupersedeError::Define(e) => write!(f, "supersede: {e}"),
-            SupersedeError::Supersede(e) => {
+            SupersedeError::Lineage(e) => {
                 write!(f, "supersede: the supersedes emit failed: {e}")
             }
         }
@@ -196,7 +198,7 @@ impl Error for SupersedeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             SupersedeError::Define(e) => Some(e),
-            SupersedeError::Supersede(e) => Some(e),
+            SupersedeError::Lineage(e) => Some(e),
             SupersedeError::OldStartNotEverRegistered(_) => None,
         }
     }

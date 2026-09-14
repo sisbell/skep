@@ -959,6 +959,39 @@ mod tests {
         }
     }
 
+    /// The two varint OVERFLOW refusals, which the minimal-form check cannot
+    /// reach: a tenth limb whose bits fall off the top of a `u64`
+    /// (`shift == 63` with any bit but the lowest set), and an eleventh limb
+    /// at all (`shift > 63`). Neither is a trailing ZERO limb, so
+    /// `decode_refuses_every_non_canonical_spelling`'s cases leave both
+    /// unwatched, and `decode_refuses_an_absurd_length_prefix`'s nine `0xff`s
+    /// plus `0x01` exercise the first guard's ACCEPT path rather than its
+    /// refusal.
+    ///
+    /// Each respells the envelope length `3` of the canonical closed `True`,
+    /// so what the first guard keeps is PR-ENC's INJECTIVITY: `2u64 << 63` is
+    /// a legal shift evaluating to 0, so without that guard the ten-limb
+    /// string decodes to the very term the four-byte one does. The second
+    /// guard keeps `<< 70` — a shift past the type's width, and a panic —
+    /// from being reached at all. Both are def-codec fuzz-corpus seeds.
+    #[test]
+    fn decode_refuses_a_varint_whose_limbs_overflow_a_u64() {
+        let closed_true = SignedTerm { params: vec![], body: Term::Lit(Lit::True) };
+        assert_eq!(encode(&closed_true).expect("encodes"), vec![3, 0, 2, 1]);
+        // Ten limbs: the tenth contributes `2 << 63` = 0 — the same length,
+        // a different byte string.
+        let mut overflowing = vec![0x83];
+        overflowing.extend([0x80; 8]);
+        overflowing.extend([0x02, 0, 2, 1]);
+        assert_eq!(decode(&overflowing), Err(Malformed));
+        // Eleven limbs: the tenth is a legal high bit, the eleventh a shift
+        // past `u64`'s width.
+        let mut past_width = vec![0x83];
+        past_width.extend([0x80; 8]);
+        past_width.extend([0x81, 0x00, 0, 2, 1]);
+        assert_eq!(decode(&past_width), Err(Malformed));
+    }
+
     /// The nesting cap at its boundary: a body `MAX_DEPTH` formers deep
     /// decodes, one deeper is `Malformed`.
     #[test]

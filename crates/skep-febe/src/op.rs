@@ -127,9 +127,11 @@ pub enum Op {
     /// document's publication state, its owner account, and its birth
     /// version with that version's base extent — what a client's own
     /// PUB-3.19 admission test needs, and nothing else. `doc` is a
-    /// DOC-ARGUMENT (PUB-6.1): unreadable ⟹ `withheld`; unregistered ⟹
-    /// the store's `doc_not_registered` (fail-open at the consult, PUB-6.12).
-    /// A version member answers its DOCUMENT's state (PUB-2.15).
+    /// DOC-ARGUMENT (PUB-6.1): unreadable ⟹ `withheld` (fail-open at the
+    /// consult, PUB-6.12); unregistered ⟹ `DocNotRegistered` — M10's own
+    /// refusal, like [`Op::EditionClaims`]'s, since this read composes its
+    /// answer from more than one store and so reaches none that could raise
+    /// one. A version member answers its DOCUMENT's state (PUB-2.15).
     DocMetadata { doc: Address },
     // ── arrangement writes (→ M5) ──
     /// INSERT (ASN-0116). `Val` is M4's, carried in the payload verbatim —
@@ -652,8 +654,8 @@ impl Op {
 
     /// Whether the write door consults this op at all and — PUB-6.36 slot 1
     /// ahead of slot 6, PUB-6.38 — whose ownership gate it stands behind (see
-    /// [`Operation::consult_write`]). [`WriteConsult::AfterOwnershipOf`] for
-    /// exactly the writes the consult reaches — a source-reading write or one
+    /// `consult_write`). [`WriteConsult::AfterOwnershipOf`] for exactly the
+    /// writes the consult reaches — a source-reading write or one
     /// validating a link by address — listing the documents the store's own
     /// `not_owner` is judged on, EMPTY for `version`, whose mint lands in the
     /// caller's own account and which no destination gate precedes
@@ -679,7 +681,6 @@ impl Op {
     /// would invite a transport to rebuild the slot-1-before-slot-6 ordering
     /// M10 holds.
     ///
-    /// [`Operation::consult_write`]: crate::Operation
     pub(crate) fn write_consult(&self) -> WriteConsult<'_> {
         match self {
             Op::Copy { doc, .. } => WriteConsult::AfterOwnershipOf(vec![doc]),
@@ -737,8 +738,8 @@ impl Op {
     /// `_` arm: a new `Op` decides its row here.
     ///
     /// This names the CLASS; what restricts the door's pre-evaluation to
-    /// `copy` is the ORDER in which the door asks. [`Operation::consult_write`]
-    /// asks only after the deferral, so only CONSULTED writes reach it —
+    /// `copy` is the ORDER in which the door asks. `consult_write` asks only
+    /// after the deferral, so only CONSULTED writes reach it —
     /// `insert`, `delete` and `rearrange` read no source, answer
     /// [`WriteConsult::NotTaken`] from [`Op::write_consult`], and meet the
     /// store's own `published_target` unchanged, one layer later. The two
@@ -748,8 +749,6 @@ impl Op {
     /// `pub(crate)` for [`Op::write_consult`]'s reason: nothing
     /// outside M10 re-runs the door's pre-evaluation, which exists to order
     /// one refusal ahead of another inside this surface.
-    ///
-    /// [`Operation::consult_write`]: crate::Operation
     pub(crate) fn in_place_destination(&self) -> Option<&Address> {
         match self {
             Op::Insert { doc, .. }
@@ -1120,7 +1119,7 @@ pub(crate) mod tests {
     }
 
     /// PUB-2.11 / PUB-6.36 slot 5, at the OTHER pairing the door depends on
-    /// (`Operation::consult_write`). `in_place_destination` names the class
+    /// (`consult_write`). `in_place_destination` names the class
     /// — the four writes that advance an existing document's arrangement —
     /// and the door's ORDER is what narrows the pre-evaluation to `copy`:
     /// the check runs past the deferral, so only a CONSULTED member reaches

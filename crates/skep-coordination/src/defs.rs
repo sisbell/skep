@@ -89,10 +89,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// checked term derefs to the `&TypedTerm` this signature takes, so
     /// `TriggerTerm::checked`'s result must never be routed here.
     ///
-    /// `d` must be a registered document that is NOT a published TARGET (M5's
-    /// `published_target`: the publication bit of `trunk_of(d)` — `d` with its
-    /// version components stripped, so a chain's every member answers its
-    /// trunk's bit). An unregistered `d` is M5's door,
+    /// `home` must be a registered document that is NOT a published TARGET
+    /// (M5's `published_target`: the publication bit of `trunk_of(home)` —
+    /// `home` with its version components stripped, so a chain's every member
+    /// answers its trunk's bit). An unregistered `home` is M5's door,
     /// `Insert(Rejected(DocNotRegistered))`, before any content lands; a
     /// published target is `Insert(Rejected(PublishedTarget))` at the same
     /// door and for EVERY position, this insert being `Deposit::Undeclared` —
@@ -107,19 +107,23 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// retryable `Insert(Rejected(OutOfBounds))` — benign, recompute and
     /// re-insert (item 6; the design's `BadPosition`, split by the as-built
     /// M5); a `register_pred`-stage failure leaves harmless orphan content a
-    /// later `register_pred(d, start)` adopts. Borrows the term: the stored
+    /// later `register_pred(home, start)` adopts. Borrows the term: the stored
     /// def is re-derived from its own bytes by `register_pred`, so nothing of
     /// the caller's value is kept, and the caller goes on evaluating or
     /// classifying it.
-    pub fn define_predicate(&self, d: &Address, term: &TypedTerm) -> Result<(Address, Seq), DefineError> {
+    pub fn define_predicate(
+        &self,
+        home: &Address,
+        term: &TypedTerm,
+    ) -> Result<(Address, Seq), DefineError> {
         let bytes = codec::encode(&term.signed).expect(
             "a Codom-only Γ_D: type_check admits no Tup parameter, TypedTerm has no other public \
              constructor, and no path in this crate routes a TriggerTerm's checked term here",
         );
         // Insert position off a snapshot read; M5's insert re-validates
         // against committed state (benign TOCTOU — item 6).
-        let n_c = self.kernel.snapshot().world().m5().content_count(d);
-        let at = VPos { subspace: content_subspace(), ordinal: n_c + Nat::from(1u32) };
+        let content_count = self.kernel.snapshot().world().m5().content_count(home);
+        let at = VPos { subspace: content_subspace(), ordinal: content_count + Nat::from(1u32) };
         let vstream = (self.mk_vstream)(self.kernel.as_ref());
         // M9's writes run as `Caller::System` (the ownership ruling's
         // automation path, 2026-08-16): the coordination layer holds no wire
@@ -128,8 +132,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // insert is `Undeclared` — the door the published-target requirement
         // above is stated against.
         let (start, _insert_seq) =
-            vstream.insert(Caller::System, d, at, vec![Val::new(bytes)], Deposit::Undeclared)?;
-        let (_pdef_tuple, seq) = self.register_pred(d, &start)?;
+            vstream.insert(Caller::System, home, at, vec![Val::new(bytes)], Deposit::Undeclared)?;
+        let (_pdef_tuple, seq) = self.register_pred(home, &start)?;
         Ok((start, seq))
     }
 
@@ -143,7 +147,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// of WT-ref, so a stored reference to nothing is a gate refusal, not a
     /// dangling type error); WT + WT-ref over the signed term (`IllTyped`);
     /// a referent ever- but not actively registered at σ
-    /// (`ReferentNotActive` — endorsement); `d` not a registered document
+    /// (`ReferentNotActive` — endorsement); `home` not a registered document
     /// (`HomeNotRegistered`, P0); M7's own refusal of the emit (`Emit`).
     ///
     /// RETURNS `(tuple, seq)`: the active `pdef` tuple's address — the
@@ -151,7 +155,11 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// base `Seq` and nothing committed — so ≤1 active `pdef` per start
     /// within the guest class (PR0). POSTCONDITION: the memo holds `start`
     /// defined, so `signature(start)` answers.
-    pub fn register_pred(&self, d: &Address, start: &Address) -> Result<(Address, Seq), RegisterError> {
+    pub fn register_pred(
+        &self,
+        home: &Address,
+        start: &Address,
+    ) -> Result<(Address, Seq), RegisterError> {
         let snap = self.kernel.snapshot();
         let w = snap.world();
         // (0/i/ii) one Val, residence + extent + fully consumed.
@@ -168,7 +176,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // calls pin their own snapshots — sound: the σ ever-gate ran first,
         // ever-registration is monotone, signature facts are
         // content-intrinsic).
-        let entry = self.check_signed(signed, 0).map_err(RegisterError::IllTyped)?;
+        let def = self.check_signed(signed, 0).map_err(RegisterError::IllTyped)?;
         // (iv) endorsement: every referent ACTIVELY registered at σ.
         let pdef = self.catalog.reserved_type(ShippedType::PredDef);
         if let Some(referent) =
@@ -177,17 +185,17 @@ impl<W: CoordinationWorld> Coordinator<W> {
             return Err(RegisterError::ReferentNotActive(referent.clone()));
         }
         // (P0) home residence.
-        if !w.m3().is_registered_document(d) {
+        if !w.m3().is_registered_document(home) {
             return Err(RegisterError::HomeNotRegistered);
         }
-        // Valid ⇒ emit(d, [pdef], start, &[]) — Unary, |F| = 1; idem⊤ dedups
+        // Valid ⇒ emit(home, [pdef], start, &[]) — Unary, |F| = 1; idem⊤ dedups
         // to ≤1 active pdef per start WITHIN THE GUEST CLASS the System path
         // writes at (lane 3.3b, PUB-6.28): a pdef tuple homed in a document
         // unreadable at guest class is invisible to the dedup and a second is
         // minted beside it.
-        let (tuple, seq) = self.link_writer().emit(Caller::System, d, pdef, start, &[])?;
+        let (tuple, seq) = self.link_writer().emit(Caller::System, home, pdef, start, &[])?;
         // Memoize the freshly-derived hint (immutable-once-defined).
-        self.memo.fill(start, Ok(entry));
+        self.memo.fill(start, Ok(def));
         Ok((tuple, seq))
     }
 
@@ -215,7 +223,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         if !self.ever_registered(snap.world(), start) {
             return Err(EvalError::NotEverRegistered);
         }
-        let entry = match self.def_status(start) {
+        let def = match self.def_status(start) {
             DefStatus::Defined(e) => e,
             DefStatus::Poisoned => return Err(EvalError::UndisciplinedDef),
             // Unreachable: ever at the caller's snap and not at the memo's
@@ -223,7 +231,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
             // Answered rather than asserted, so the query stays total.
             DefStatus::NeverRegistered => return Err(EvalError::NotEverRegistered),
         };
-        let params = entry.params();
+        let params = def.params();
         if args.len() != params.len() {
             return Err(EvalError::ArgArityMismatch);
         }
@@ -236,7 +244,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         }
         let env: Env = params.iter().map(|(v, _)| *v).zip(args.iter().cloned()).collect();
         let cx = self.eval_ctx(snap.world(), view, Some(self));
-        Ok(eval_term(&cx, &env, entry.evaluable.as_ref()))
+        Ok(eval_term(&cx, &env, def.evaluable.as_ref()))
     }
 
     /// `is_K(pdef, start)@active`.
@@ -258,7 +266,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// before any transaction: it must be EVER-registered (superseding a
     /// retracted def is legitimate lineage — PR4) — else
     /// `OldStartNotEverRegistered`. The successor's content is written
-    /// through `define_predicate`, so `d` carries that operation's
+    /// through `define_predicate`, so `home` carries that operation's
     /// requirement — a registered document that is not a published target —
     /// and both of its refusals arrive here as `DefineError::Insert`.
     ///
@@ -270,7 +278,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// `supersedes` EMIT's commit `Seq` — the third transaction's.
     pub fn supersede(
         &self,
-        d: &Address,
+        home: &Address,
         old_start: &Address,
         new_term: &TypedTerm,
     ) -> Result<(Address, Seq), DefineError> {
@@ -278,11 +286,11 @@ impl<W: CoordinationWorld> Coordinator<W> {
         if !self.is_ever_pred(old_start, &snap) {
             return Err(DefineError::OldStartNotEverRegistered(old_start.clone()));
         }
-        let (new_start, _pdef_seq) = self.define_predicate(d, new_term)?;
+        let (new_start, _pdef_seq) = self.define_predicate(home, new_term)?;
         let sup = self.catalog.reserved_type(ShippedType::Supersedes);
         let (_claim, seq) = self
             .link_writer()
-            .emit(Caller::System, d, sup, old_start, from_ref(&new_start))
+            .emit(Caller::System, home, sup, old_start, from_ref(&new_start))
             .map_err(DefineError::Supersede)?;
         Ok((new_start, seq))
     }
@@ -303,8 +311,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// `UndisciplinedDef`), Boolean sort (`NotBoolean`), actively registered
     /// (`NotActive`), an expansion within the node budget
     /// (`ExpansionTooLarge`), view-independent expansion (`ViewDependent`),
-    /// ST⁺ (`NotStable`) — then emit `pd_stable` at `d`, which must be a
-    /// registered document: after every static leg, an unregistered `d` is
+    /// ST⁺ (`NotStable`) — then emit `pd_stable` at `home`, which must be a
+    /// registered document: after every static leg, an unregistered `home` is
     /// M7's door, `Emit(Rejected(HomeNotRegistered))`. ST⁺ runs PD0 over the
     /// FLAT reference expansion (ST⁺ is not compositional — §Internal 3),
     /// with the aggregate threshold widened to a bound ℕ parameter, at a
@@ -314,21 +322,24 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// RETURNS `(tuple, seq)`: the active `pd_stable` tuple's address — the
     /// fresh deposit's, or on re-certification the incumbent's, with M7's
     /// base `Seq` and nothing committed.
-    pub fn certify_stable(&self, d: &Address, start: &Address) -> Result<(Address, Seq), CertifyError> {
+    pub fn certify_stable(
+        &self,
+        home: &Address,
+        start: &Address,
+    ) -> Result<(Address, Seq), CertifyError> {
         let snap = self.kernel.snapshot();
-        let entry = match self.def_status(start) {
+        let def = match self.def_status(start) {
             DefStatus::Defined(e) => e,
             DefStatus::Poisoned => return Err(CertifyError::UndisciplinedDef),
             DefStatus::NeverRegistered => return Err(CertifyError::NotEverRegistered),
         };
-        if entry.result != Sort::Bool {
+        if def.result != Sort::Bool {
             return Err(CertifyError::NotBoolean);
         }
         if !self.is_active_pred(start, &snap) {
             return Err(CertifyError::NotActive);
         }
-        let flat_expansion =
-            self.expand_def(&entry).map_err(|_| CertifyError::ExpansionTooLarge)?;
+        let flat_expansion = self.expand_def(&def).map_err(|_| CertifyError::ExpansionTooLarge)?;
         if !view_independent(&flat_expansion) {
             return Err(CertifyError::ViewDependent);
         }
@@ -337,7 +348,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         }
         let (tuple, seq) = self.link_writer().emit(
             Caller::System,
-            d,
+            home,
             self.catalog.reserved_type(ShippedType::PredStable),
             start,
             &[],
@@ -352,12 +363,12 @@ impl<W: CoordinationWorld> Coordinator<W> {
             .is_k(self.catalog.reserved_type(ShippedType::PredStable), start.tumbler())
     }
 
-    /// De-register: M7::nullify, from the retracting home `d`, on ONE active
+    /// De-register: M7::nullify, from the retracting `home`, on ONE active
     /// `pdef` tuple at `start` — the first M7 lists, found via
     /// `.first().ok_or(NotActive)` (never `[0]` — item 8). One tuple per
     /// call: beside a second active `pdef` at the same start (a twin homed
     /// where the guest class could not see it when the first was minted),
-    /// `is_active_pred` stays true until each is retracted. `d` must be a
+    /// `is_active_pred` stays true until each is retracted. `home` must be a
     /// registered document — `Nullify(Rejected(HomeNotRegistered))`
     /// otherwise, after the `NotActive` probe. Content untouched; audit
     /// retains it; re-registration after nullify deposits afresh (the idem
@@ -369,7 +380,11 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// RETURNS `(retraction, seq)`: the address of the `[R]` tuple itself —
     /// never the `pdef`'s — or, on a dedup hit, the incumbent retraction's,
     /// with M7's base `Seq`.
-    pub fn retract_pred(&self, d: &Address, start: &Address) -> Result<(Address, Seq), RetractError> {
+    pub fn retract_pred(
+        &self,
+        home: &Address,
+        start: &Address,
+    ) -> Result<(Address, Seq), RetractError> {
         let target = {
             let snap = self.kernel.snapshot();
             snap.world()
@@ -384,15 +399,16 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 .addr
                 .clone()
         };
-        let (retraction, seq) = self.link_writer().nullify(Caller::System, d, &target)?;
+        let (retraction, seq) = self.link_writer().nullify(Caller::System, home, &target)?;
         Ok((retraction, seq))
     }
 
-    /// The flat `expand(start)` of a checked def, given its memo entry — one
-    /// `Expander` per top-level expansion, so the fresh-name sequence is
-    /// deterministic in the content alone (PR3) — or `ExpansionTooLarge`
-    /// when the reference DAG's unfolding outgrows the node budget.
-    pub(crate) fn expand_def(&self, entry: &TypedTerm) -> Result<Term, ExpansionTooLarge> {
-        Expander::new(self).expand(entry.evaluable.as_ref())
+    /// The flat `expand(start)` of a checked def, given the checked def the
+    /// memo holds — one `Expander` per top-level expansion, so the fresh-name
+    /// sequence is deterministic in the content alone (PR3) — or
+    /// `ExpansionTooLarge` when the reference DAG's unfolding outgrows the
+    /// node budget.
+    pub(crate) fn expand_def(&self, def: &TypedTerm) -> Result<Term, ExpansionTooLarge> {
+        Expander::new(self).expand(def.evaluable.as_ref())
     }
 }

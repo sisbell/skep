@@ -124,7 +124,7 @@ impl TypedDom {
 #[derive(Debug, Clone)]
 pub(crate) struct CheckedRule {
     pub(crate) id: RuleId,
-    pub(crate) dom: TypedDom,
+    pub(crate) domain: TypedDom,
     /// The checked trigger: a one-parameter Bool `TypedTerm` — an `Inline`
     /// trigger's own, or the memo entry of a `Def` trigger's def, captured
     /// at registration. The body is immutable content, so the trigger reads

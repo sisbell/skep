@@ -34,7 +34,7 @@ pub fn key(e: &Endset) -> TypeKey {
     TypeKey(e.clone())
 }
 
-pub fn conc(e: &Endset) -> TypeRef {
+pub fn concrete(e: &Endset) -> TypeRef {
     TypeRef::Concrete(key(e))
 }
 
@@ -178,31 +178,31 @@ pub fn def(x: Term) -> Term {
 // ───────────────────────────────── atoms ─────────────────────────────────
 
 pub fn is_k(e: &Endset, x: Term) -> Term {
-    Term::Atom(Atom::IsK(conc(e), at(x)))
+    Term::Atom(Atom::IsK(concrete(e), at(x)))
 }
 
 pub fn members(e: &Endset) -> Term {
-    Term::Atom(Atom::Members(conc(e)))
+    Term::Atom(Atom::Members(concrete(e)))
 }
 
 pub fn targets_of(e: &Endset, x: Term) -> Term {
-    Term::Atom(Atom::TargetsOf(conc(e), at(x)))
+    Term::Atom(Atom::TargetsOf(concrete(e), at(x)))
 }
 
 pub fn is_filtered(e: &Endset, x: Term) -> Term {
-    Term::Atom(Atom::IsFiltered(conc(e), at(x)))
+    Term::Atom(Atom::IsFiltered(concrete(e), at(x)))
 }
 
 pub fn succs(e: &Endset, x: Term) -> Term {
-    Term::Atom(Atom::Succs(conc(e), at(x)))
+    Term::Atom(Atom::Succs(concrete(e), at(x)))
 }
 
 pub fn chain(e: &Endset, x: Term) -> Term {
-    Term::Atom(Atom::Chain(conc(e), at(x)))
+    Term::Atom(Atom::Chain(concrete(e), at(x)))
 }
 
 pub fn tip(e: &Endset, x: Term) -> Term {
-    Term::Atom(Atom::Tip(conc(e), at(x)))
+    Term::Atom(Atom::Tip(concrete(e), at(x)))
 }
 
 /// `tip(e, x) = y` — the head, narrowed through the binder guard; false at
@@ -212,7 +212,7 @@ pub fn tip_is(e: &Endset, x: &Address, y: &Address) -> Term {
 }
 
 pub fn is_in_chain(e: &Endset, x: Term, y: Term) -> Term {
-    Term::Atom(Atom::IsInChain(conc(e), at(x), at(y)))
+    Term::Atom(Atom::IsInChain(concrete(e), at(x), at(y)))
 }
 
 pub fn is_doc(x: Term) -> Term {

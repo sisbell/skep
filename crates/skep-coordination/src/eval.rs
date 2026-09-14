@@ -480,8 +480,8 @@ pub(crate) fn enum_dom<W>(cx: &EvalCtx<'_, W>, env: &Env, d: &Dom) -> Vec<Arg> {
         Dom::LinkDom => {
             let mut out: OrdSet<Tumbler> = OrdSet::new();
             for k in cx.catalog.classes() {
-                for t in cx.links.observe(&k.0, Pattern::default(), Slice::Audit) {
-                    out.insert(t.addr.tumbler().clone());
+                for tuple in cx.links.observe(&k.0, Pattern::default(), Slice::Audit) {
+                    out.insert(tuple.addr.tumbler().clone());
                 }
             }
             out.iter().map(lift).map(Arg::Addr).collect()

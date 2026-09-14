@@ -32,7 +32,7 @@ use crate::CoordinationWorld;
 /// (`RuleError::TriggerExpansionTooLarge`) and handed on, so no later pass
 /// re-derives it or has to argue that it fits.
 struct Validated {
-    dom: TypedDom,
+    domain: TypedDom,
     trigger: Arc<TypedTerm>,
     flat_expansion: Term,
 }
@@ -68,7 +68,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// The same order in [`Coordinator::certify_rule`], which runs the same
     /// validation.
     pub fn register_rule(&mut self, rule: Rule) -> Result<RuleId, RuleError> {
-        let Validated { dom, trigger, flat_expansion } = self.validate_rule(&rule)?;
+        let Validated { domain, trigger, flat_expansion } = self.validate_rule(&rule)?;
         // `footprint(T_ρ)` at the declared view, from the same flat expansion
         // the budget just admitted: recorded on the rule, so §8's armer graph
         // reads it rather than re-deriving it per call
@@ -79,7 +79,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         self.next_rule_id += 1;
         self.rules.push(CheckedRule {
             id,
-            dom,
+            domain,
             trigger,
             view: rule.view,
             action: rule.action,
@@ -107,7 +107,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// spells; a `Nullify` rule fails it BY ACTION, whatever the trigger's
     /// stability (`Uncertified`, divergence-monitored).
     pub fn certify_rule(&self, rule: &Rule) -> Result<RuleCertification, RuleError> {
-        let Validated { dom, trigger, flat_expansion } = self.validate_rule(rule)?;
+        let Validated { domain, trigger, flat_expansion } = self.validate_rule(rule)?;
         // Leg (a): trigger ∈ SF at the declared view.
         let analyzer = Analyzer::new(&self.catalog, rule.view);
         let sf = analyzer.term(&flat_expansion).sf;
@@ -127,7 +127,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
             FireAction::Nullify { .. } => false,
         };
         // Leg (c): grow-only domain.
-        let grow_only = analyzer.dom(dom.as_dom()).grow_only;
+        let grow_only = analyzer.dom(domain.as_dom()).grow_only;
         if sf && marker && grow_only {
             Ok(RuleCertification::CertifiedTerminating)
         } else {
@@ -143,7 +143,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // Domain: checked + Reg-expanded (a body-level Reg is legitimate PL;
         // a BARE Reg fails the sort check), closed (binds only its own
         // variables).
-        let resolve = |a: &Address, d: u32| self.resolve_def_at(a, d);
+        let resolve = |start: &Address, depth: u32| self.resolve_def_at(start, depth);
         let checker = Checker::new(&self.catalog, &resolve);
         let cd = checker
             .check_dom(&Ctx::new(), &rule.domain, 0)
@@ -215,7 +215,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 return Err(RuleError::PredLayerMarkerType(ty.clone()));
             }
         }
-        Ok(Validated { dom: TypedDom(cd.dom), trigger, flat_expansion })
+        Ok(Validated { domain: TypedDom(cd.dom), trigger, flat_expansion })
     }
 
     // ─────────────────────── enumeration & triggers ───────────────────────
@@ -229,7 +229,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// does today (`next_enabled` → `None`, `step` → `Quiescent`).
     fn enum_rule_dom(&self, rule: &CheckedRule, snap: &Snapshot<W>) -> Vec<Arg> {
         let cx = self.eval_ctx(snap.world(), rule.view, None);
-        enum_dom(&cx, &Env::empty(), rule.dom.as_dom())
+        enum_dom(&cx, &Env::empty(), rule.domain.as_dom())
     }
 
     /// `T_ρ(x, snap)` at the rule's view, read THROUGH THE GUEST-CLASS VIEW
@@ -406,9 +406,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
         {
             let w = snap.world();
             let arg_doc = document_of(a).unwrap_or_else(|| a.clone());
-            for d in [rule.action.home(), &arg_doc] {
-                if !(self.guest)(w, d) {
-                    return Err(FireError::DraftBoundary(d.clone()));
+            for doc in [rule.action.home(), &arg_doc] {
+                if !(self.guest)(w, doc) {
+                    return Err(FireError::DraftBoundary(doc.clone()));
                 }
             }
         }

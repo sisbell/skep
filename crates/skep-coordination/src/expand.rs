@@ -97,7 +97,7 @@ impl Rewrite for Expander<'_> {
             return rewrite_term(self, t);
         };
         // Bottom-up: the arguments first, left to right.
-        let flat_args: Vec<Term> = args.iter().map(|a| self.term(a)).collect();
+        let flat_args: Vec<Term> = args.iter().map(|arg| self.term(arg)).collect();
         let referent = self
             .defs
             .resolve_def(addr)
@@ -107,10 +107,10 @@ impl Rewrite for Expander<'_> {
         let fresh_names: Vec<VarId> = referent.params().iter().map(|_| self.state.fresh()).collect();
         // … then its (recursively expanded) body's binders, depth-first
         // left-to-right.
-        let inner_flat = self.term(&referent.evaluable);
+        let flat_body = self.term(&referent.evaluable);
         let map: im::HashMap<VarId, VarId> =
             referent.params().iter().map(|(p, _)| *p).zip(fresh_names.iter().copied()).collect();
-        let mut out = Rename { state: &mut self.state, map }.term(&inner_flat);
+        let mut out = Rename { state: &mut self.state, map }.term(&flat_body);
         for (fresh, arg) in fresh_names.into_iter().zip(flat_args).rev() {
             out = Term::Let { var: fresh, bound: Arc::new(arg), body: Arc::new(out) };
         }

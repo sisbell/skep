@@ -117,7 +117,9 @@ struct Walk {
 /// M7's read surface at guest class, over the world of one pinned snapshot.
 pub(crate) struct GuestLinks<'a, W> {
     world: &'a W,
-    state: &'a LinkState,
+    /// M7's own answers, before this module's home filter narrows them — the
+    /// side every read below starts from and none of them hands back.
+    unfiltered: &'a LinkState,
     guest: &'a Visibility<'a, W>,
 }
 
@@ -132,7 +134,7 @@ impl<'a, W> GuestLinks<'a, W> {
     where
         W: HasLinks,
     {
-        GuestLinks { world, state: world.links(), guest }
+        GuestLinks { world, unfiltered: world.links(), guest }
     }
 
     /// The guest-class test, at link-HOME identity — as M7's dedup gate
@@ -153,7 +155,7 @@ impl<'a, W> GuestLinks<'a, W> {
     /// built on (so the guest-class test has one statement), and the ONE
     /// place a slice widens to the `View` M7 names it by.
     pub(crate) fn observe(&self, ty: &Endset, pat: Pattern<'_>, slice: Slice) -> Vec<Tuple> {
-        let mut out = self.state.observe(ty, pat, slice.into());
+        let mut out = self.unfiltered.observe(ty, pat, slice.into());
         out.retain(|t| self.admits(t));
         out
     }
@@ -353,13 +355,13 @@ impl<'a, W> GuestLinks<'a, W> {
         if !self.home_readable(a) {
             return None;
         }
-        self.state.age(a)
+        self.unfiltered.age(a)
     }
 
     /// BH4 stale set: M7's own (its `NotBh4` fence included), with the
     /// tuples of unreadable homes dropped; ascending address order kept.
     pub(crate) fn stale(&self, ty: &Endset, horizon: u64) -> Result<Vec<Address>, NotBh4> {
-        let stale = self.state.stale(ty, horizon)?;
+        let stale = self.unfiltered.stale(ty, horizon)?;
         Ok(stale.into_iter().filter(|a| self.home_readable(a)).collect())
     }
 }

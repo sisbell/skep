@@ -426,7 +426,11 @@ impl<'a> Checker<'a> {
     /// `DERIVATION_COST`).
     pub(crate) fn check_term(&self, ctx: &Ctx, t: &Term, depth: u32) -> Result<Checked, TypeError> {
         self.enter(weight(t), depth)?;
-        let d = depth + 1;
+        // `depth` is this node's level, `child_depth` the level its children
+        // occupy. Three arms pass `depth` deliberately: `Atom` and `Prim`,
+        // whose helpers derive their own child level, and `expand_reg`, whose
+        // join chain replaces this node rather than nesting beneath it.
+        let child_depth = depth + 1;
         match t {
             Term::Var(v) => match ctx.get(v) {
                 Some(s) => Ok(Self::leaf(Term::Var(*v), *s)),
@@ -444,12 +448,12 @@ impl<'a> Checker<'a> {
             }
             Term::Atom(a) => self.check_atom(ctx, a, depth),
             Term::Prim(p) => self.check_prim(ctx, p, depth),
-            Term::And(a, b) => self.bool2(ctx, a, b, d, Term::And),
-            Term::Or(a, b) => self.bool2(ctx, a, b, d, Term::Or),
-            Term::Implies(a, b) => self.bool2(ctx, a, b, d, Term::Implies),
-            Term::Iff(a, b) => self.bool2(ctx, a, b, d, Term::Iff),
+            Term::And(a, b) => self.bool2(ctx, a, b, child_depth, Term::And),
+            Term::Or(a, b) => self.bool2(ctx, a, b, child_depth, Term::Or),
+            Term::Implies(a, b) => self.bool2(ctx, a, b, child_depth, Term::Implies),
+            Term::Iff(a, b) => self.bool2(ctx, a, b, child_depth, Term::Iff),
             Term::Not(a) => {
-                let ca = self.sub(ctx, a, Sort::Bool, d)?;
+                let ca = self.sub(ctx, a, Sort::Bool, child_depth)?;
                 Ok(Checked {
                     term: Arc::new(Term::Not(ca.term)),
                     sort: Sort::Bool,
@@ -463,7 +467,7 @@ impl<'a> Checker<'a> {
                 self.expand_reg(ctx, *var, body, depth, Term::Or)
             }
             Term::Forall { var, dom, body } => {
-                let (cd, cb) = self.quantified(ctx, *var, dom, body, d)?;
+                let (cd, cb) = self.quantified(ctx, *var, dom, body, child_depth)?;
                 Ok(Checked {
                     term: Arc::new(Term::Forall { var: *var, dom: cd.dom, body: cb.term }),
                     sort: Sort::Bool,
@@ -471,7 +475,7 @@ impl<'a> Checker<'a> {
                 })
             }
             Term::Exists { var, dom, body } => {
-                let (cd, cb) = self.quantified(ctx, *var, dom, body, d)?;
+                let (cd, cb) = self.quantified(ctx, *var, dom, body, child_depth)?;
                 Ok(Checked {
                     term: Arc::new(Term::Exists { var: *var, dom: cd.dom, body: cb.term }),
                     sort: Sort::Bool,
@@ -479,9 +483,9 @@ impl<'a> Checker<'a> {
                 })
             }
             Term::Let { var, bound, body } => {
-                let cbound = self.check_term(ctx, bound, d)?;
+                let cbound = self.check_term(ctx, bound, child_depth)?;
                 let inner = ctx.update(*var, cbound.sort);
-                let cbody = self.check_term(&inner, body, d)?;
+                let cbody = self.check_term(&inner, body, child_depth)?;
                 Ok(Checked {
                     term: Arc::new(Term::Let { var: *var, bound: cbound.term, body: cbody.term }),
                     sort: cbody.sort,
@@ -491,15 +495,15 @@ impl<'a> Checker<'a> {
             Term::IfSome { opt, var, then_, else_ } => {
                 // The binder guard narrows T∪{⊥} → T (resp. ℕ∪{⊥} → ℕ) in
                 // the then-branch (PC2).
-                let co = self.check_term(ctx, opt, d)?;
+                let co = self.check_term(ctx, opt, child_depth)?;
                 let narrowed = match co.sort {
                     Sort::OptAddr => Sort::Addr,
                     Sort::OptNat => Sort::Nat,
                     other => return Err(TypeError::SortMismatch { expected: Sort::OptAddr, found: other }),
                 };
                 let inner = ctx.update(*var, narrowed);
-                let ct = self.check_term(&inner, then_, d)?;
-                let ce = self.check_term(ctx, else_, d)?;
+                let ct = self.check_term(&inner, then_, child_depth)?;
+                let ce = self.check_term(ctx, else_, child_depth)?;
                 want(ct.sort, ce.sort)?;
                 Ok(Checked {
                     term: Arc::new(Term::IfSome {
@@ -520,7 +524,7 @@ impl<'a> Checker<'a> {
                     Sort::Nat,
                 )),
                 _ => {
-                    let cd = self.check_dom(ctx, dm, d)?;
+                    let cd = self.check_dom(ctx, dm, child_depth)?;
                     Ok(Checked {
                         term: Arc::new(Term::Count(cd.dom)),
                         sort: Sort::Nat,
@@ -528,13 +532,13 @@ impl<'a> Checker<'a> {
                     })
                 }
             },
-            Term::MaxT1(dm) => self.extremum(ctx, dm, d, Term::MaxT1),
-            Term::MinT1(dm) => self.extremum(ctx, dm, d, Term::MinT1),
+            Term::MaxT1(dm) => self.extremum(ctx, dm, child_depth, Term::MaxT1),
+            Term::MinT1(dm) => self.extremum(ctx, dm, child_depth, Term::MinT1),
             Term::BigUnion { dom, var, body } => {
                 // PC2a excludes Reg from ⋃; Addr and Tup element sorts bind.
-                let cd = self.check_dom(ctx, dom, d)?;
+                let cd = self.check_dom(ctx, dom, child_depth)?;
                 let inner = ctx.update(*var, cd.elem);
-                let cb = self.sub(&inner, body, Sort::AddrSet, d)?;
+                let cb = self.sub(&inner, body, Sort::AddrSet, child_depth)?;
                 Ok(Checked {
                     term: Arc::new(Term::BigUnion { dom: cd.dom, var: *var, body: cb.term }),
                     sort: Sort::AddrSet,
@@ -545,7 +549,7 @@ impl<'a> Checker<'a> {
                 // QD-refl: only an address-valued domain reflects; a
                 // tuple-valued (or class-valued Reg) domain is rejected at
                 // the element-sort check.
-                let cd = self.check_dom(ctx, dm, d)?;
+                let cd = self.check_dom(ctx, dm, child_depth)?;
                 want(Sort::Addr, cd.elem)?;
                 Ok(Checked {
                     term: Arc::new(Term::Reflect(cd.dom)),
@@ -577,7 +581,7 @@ impl<'a> Checker<'a> {
                     Unresolved::TooDeep => TypeError::TooDeep,
                 })?;
                 let params = referent.params();
-                let mut e_args: Vec<ArcTerm> = Vec::with_capacity(args.len());
+                let mut checked_args: Vec<ArcTerm> = Vec::with_capacity(args.len());
                 for (i, arg) in args.iter().enumerate() {
                     // PR3a binds each argument through a `Let` AT ITS OWN
                     // POSITION, so argument `i` sits `i` levels below this
@@ -592,7 +596,7 @@ impl<'a> Checker<'a> {
                     // recorded level stayed inside it — and that expansion is
                     // what `certify_stable`'s and `certify_rule`'s analyses
                     // walk, with no bound of their own.
-                    let pos = d.saturating_add(u32::try_from(i).unwrap_or(u32::MAX));
+                    let pos = child_depth.saturating_add(u32::try_from(i).unwrap_or(u32::MAX));
                     let c = self.check_term(ctx, arg, pos)?;
                     match params.get(i) {
                         Some((_, s)) => want(*s, c.sort)?,
@@ -603,7 +607,7 @@ impl<'a> Checker<'a> {
                             })
                         }
                     }
-                    e_args.push(c.term);
+                    checked_args.push(c.term);
                 }
                 if args.len() < params.len() {
                     return Err(TypeError::SortMismatch {
@@ -623,7 +627,7 @@ impl<'a> Checker<'a> {
                 // referent's, which no `enter` on this pass records.
                 self.deepest.set(self.deepest.get().max(reach));
                 Ok(Checked {
-                    term: Arc::new(Term::Ref { addr: addr.clone(), args: e_args }),
+                    term: Arc::new(Term::Ref { addr: addr.clone(), args: checked_args }),
                     sort: referent.result,
                     ref_free: false,
                 })
@@ -681,7 +685,7 @@ impl<'a> Checker<'a> {
     }
 
     fn check_atom(&self, ctx: &Ctx, a: &Atom, depth: u32) -> Result<Checked, TypeError> {
-        let d = depth + 1;
+        let child_depth = depth + 1;
         // A V-TUP variable must be a Tup-sorted binding in scope.
         let tup_var = |v: VarId| -> Result<VarId, TypeError> {
             match ctx.get(&v) {
@@ -691,7 +695,7 @@ impl<'a> Checker<'a> {
             }
         };
         // A one-argument atom at a type position: the argument at `sort`.
-        let arg = |e: &ArcTerm, sort: Sort| self.sub(ctx, e, sort, d);
+        let arg = |e: &ArcTerm, sort: Sort| self.sub(ctx, e, sort, child_depth);
         let (atom, sort, ref_free) = match a {
             Atom::IsK(tr, e) => {
                 let k = self.guarded(tr, Guard::Cataloged)?;
@@ -823,20 +827,20 @@ impl<'a> Checker<'a> {
     }
 
     fn check_prim(&self, ctx: &Ctx, p: &Prim, depth: u32) -> Result<Checked, TypeError> {
-        let d = depth + 1;
+        let child_depth = depth + 1;
         match p {
-            Prim::AddrEq(a, b) => self.prim2(ctx, a, b, d, ADDR_PRED, Prim::AddrEq),
-            Prim::Prefix(a, b) => self.prim2(ctx, a, b, d, ADDR_PRED, Prim::Prefix),
-            Prim::T1Lt(a, b) => self.prim2(ctx, a, b, d, ADDR_PRED, Prim::T1Lt),
-            Prim::SetEq(a, b) => self.prim2(ctx, a, b, d, SET_PRED, Prim::SetEq),
-            Prim::NatEq(a, b) => self.prim2(ctx, a, b, d, NAT_PRED, Prim::NatEq),
-            Prim::NatLe(a, b) => self.prim2(ctx, a, b, d, NAT_PRED, Prim::NatLe),
-            Prim::NatAdd(a, b) => self.prim2(ctx, a, b, d, NAT_OP, Prim::NatAdd),
-            Prim::IsEmpty(s) => self.prim1(ctx, s, d, SET_PRED, Prim::IsEmpty),
-            Prim::Elems(q) => self.prim1(ctx, q, d, SEQ_ELEMS, Prim::Elems),
+            Prim::AddrEq(a, b) => self.prim2(ctx, a, b, child_depth, ADDR_PRED, Prim::AddrEq),
+            Prim::Prefix(a, b) => self.prim2(ctx, a, b, child_depth, ADDR_PRED, Prim::Prefix),
+            Prim::T1Lt(a, b) => self.prim2(ctx, a, b, child_depth, ADDR_PRED, Prim::T1Lt),
+            Prim::SetEq(a, b) => self.prim2(ctx, a, b, child_depth, SET_PRED, Prim::SetEq),
+            Prim::NatEq(a, b) => self.prim2(ctx, a, b, child_depth, NAT_PRED, Prim::NatEq),
+            Prim::NatLe(a, b) => self.prim2(ctx, a, b, child_depth, NAT_PRED, Prim::NatLe),
+            Prim::NatAdd(a, b) => self.prim2(ctx, a, b, child_depth, NAT_OP, Prim::NatAdd),
+            Prim::IsEmpty(s) => self.prim1(ctx, s, child_depth, SET_PRED, Prim::IsEmpty),
+            Prim::Elems(q) => self.prim1(ctx, q, child_depth, SEQ_ELEMS, Prim::Elems),
             Prim::SetMem(x, s) => {
-                let cx = self.sub(ctx, x, Sort::Addr, d)?;
-                let cs = self.sub(ctx, s, Sort::AddrSet, d)?;
+                let cx = self.sub(ctx, x, Sort::Addr, child_depth)?;
+                let cs = self.sub(ctx, s, Sort::AddrSet, child_depth)?;
                 Ok(Checked {
                     term: Arc::new(Term::Prim(Prim::SetMem(cx.term, cs.term))),
                     sort: Sort::Bool,
@@ -847,7 +851,7 @@ impl<'a> Checker<'a> {
                 // V-PRIM admits ·[K] per registered class — cataloged-only,
                 // no behavior requirement; a non-BH3/absent key denotes ⊥.
                 let k = self.guarded(tr, Guard::Cataloged)?;
-                let cm = self.sub(ctx, m, Sort::Map, d)?;
+                let cm = self.sub(ctx, m, Sort::Map, child_depth)?;
                 Ok(Checked {
                     term: Arc::new(Term::Prim(Prim::MapGet(cm.term, TypeRef::Concrete(k)))),
                     sort: Sort::OptAddr,
@@ -855,7 +859,7 @@ impl<'a> Checker<'a> {
                 })
             }
             Prim::Def(x) => {
-                let c = self.check_term(ctx, x, d)?;
+                let c = self.check_term(ctx, x, child_depth)?;
                 match c.sort {
                     Sort::OptAddr | Sort::OptNat => {}
                     other => return Err(TypeError::SortMismatch { expected: Sort::OptAddr, found: other }),
@@ -879,7 +883,7 @@ impl<'a> Checker<'a> {
         // A domain former carries no unbounded payload of its own: its type
         // position is a cataloged endset (`guarded`), its children are terms.
         self.enter(1, depth)?;
-        let d = depth + 1;
+        let child_depth = depth + 1;
         let leaf = |dom: Dom, elem: Sort| CheckedDom { dom: Arc::new(dom), elem, ref_free: true };
         match dm {
             Dom::MembersDom(tr) => {
@@ -897,9 +901,9 @@ impl<'a> Checker<'a> {
             Dom::LinkDom => Ok(leaf(Dom::LinkDom, Sort::Addr)),
             Dom::Reg => Err(TypeError::SortMismatch { expected: Sort::Addr, found: Sort::Tup }),
             Dom::Filter { dom, var, pred } => {
-                let base = self.check_dom(ctx, dom, d)?;
+                let base = self.check_dom(ctx, dom, child_depth)?;
                 let inner = ctx.update(*var, base.elem);
-                let c = self.sub(&inner, pred, Sort::Bool, d)?;
+                let c = self.sub(&inner, pred, Sort::Bool, child_depth)?;
                 Ok(CheckedDom {
                     dom: Arc::new(Dom::Filter { dom: base.dom, var: *var, pred: c.term }),
                     elem: base.elem,
@@ -907,7 +911,7 @@ impl<'a> Checker<'a> {
                 })
             }
             Dom::SetTerm(t) => {
-                let c = self.sub(ctx, t, Sort::AddrSet, d)?;
+                let c = self.sub(ctx, t, Sort::AddrSet, child_depth)?;
                 Ok(CheckedDom {
                     dom: Arc::new(Dom::SetTerm(c.term)),
                     elem: Sort::Addr,

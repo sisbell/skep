@@ -321,8 +321,8 @@ pub fn link_writer(k: &Arc<Kernel<World>>) -> LinkWriter<'_, World> {
 /// path M9's own writes take.
 pub fn insert_raw(k: &Arc<Kernel<World>>, doc: &Address, bytes: Vec<u8>) -> Address {
     let snap = k.snapshot();
-    let n_c = snap.world().m5().content_count(doc);
-    let at = VPos { subspace: n(1), ordinal: n_c + n(1) };
+    let content_count = snap.world().m5().content_count(doc);
+    let at = VPos { subspace: n(1), ordinal: content_count + n(1) };
     let (start, _) = Vstream::new(k.as_ref())
         .insert(skep_links::Caller::System, doc, at, vec![Val::new(bytes)], Deposit::Undeclared)
         .expect("test content INSERT succeeds");

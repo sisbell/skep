@@ -73,7 +73,7 @@ fn a_coordinator_is_send_sync_and_debug() {
     let mut c = coord(&k);
     let id = c
         .register_rule(Rule {
-            domain: Dom::MembersDom(conc(&pred_stable_ty())),
+            domain: Dom::MembersDom(concrete(&pred_stable_ty())),
             trigger: always_addr(&c),
             view: View::Audit,
             action: marker_action(),
@@ -226,9 +226,9 @@ fn the_public_types_compare_and_hash_as_a_caller_needs() {
 
     // `Stability` and `ActiveExceptions`: a tally over classified terms.
     let audit = |t: Term| c.classify(&c.type_check(vec![], t).expect("checks"), View::Audit);
-    let stable = audit(exists(1, Dom::AuditSlice(conc(&pred_def_ty())), tru()));
+    let stable = audit(exists(1, Dom::AuditSlice(concrete(&pred_def_ty())), tru()));
     let mut tally: HashMap<Stability, u32> = HashMap::new();
-    for d in [&stable, &audit(not(exists(1, Dom::AuditSlice(conc(&pred_def_ty())), tru())))] {
+    for d in [&stable, &audit(not(exists(1, Dom::AuditSlice(concrete(&pred_def_ty())), tru())))] {
         *tally.entry(d.stability).or_default() += 1;
     }
     assert_eq!(tally.get(&Stability::StOnly), Some(&1));
@@ -293,7 +293,7 @@ fn type_check_refuses_at_each_gamma_and_catalog_gate() {
     ));
     // An atom needing a behavior the registration lacks.
     assert!(matches!(
-        c.type_check(vec![], Term::Atom(Atom::SourcesTo(conc(&pred_def_ty()), at(lit_addr(&ca(1)))))),
+        c.type_check(vec![], Term::Atom(Atom::SourcesTo(concrete(&pred_def_ty()), at(lit_addr(&ca(1)))))),
         Err(TypeError::BehaviorMissing { needs: Behavior::ReverseLookup, .. })
     ));
     // A ClassVar under no enclosing Reg binder.
@@ -356,7 +356,7 @@ fn type_check_refuses_each_documented_edge_by_name() {
     // Only an address-valued domain reflects or has a T1 extremum; a bare
     // Reg outside ∀/∃/Count is class-valued and fails the same check.
     let tup_for_addr = || Some(TypeError::SortMismatch { expected: Sort::Addr, found: Sort::Tup });
-    let tuples = || Dom::ActiveSlice(conc(&pred_def_ty()));
+    let tuples = || Dom::ActiveSlice(concrete(&pred_def_ty()));
     assert_eq!(c.type_check(vec![], reflect(tuples())).err(), tup_for_addr());
     assert_eq!(c.type_check(vec![], Term::MaxT1(ad(tuples()))).err(), tup_for_addr());
     assert_eq!(c.type_check(vec![], reflect(Dom::Reg)).err(), tup_for_addr());
@@ -370,11 +370,11 @@ fn type_check_refuses_each_documented_edge_by_name() {
     // The behavior guards, one per behavior: BH4 on a class without Age,
     // BH2 on one without Walk, BH1 on one without ReadFilter.
     assert!(matches!(
-        c.type_check(vec![], Term::Atom(Atom::Age(conc(&pred_def_ty()), at(lit_addr(&ca(1)))))),
+        c.type_check(vec![], Term::Atom(Atom::Age(concrete(&pred_def_ty()), at(lit_addr(&ca(1)))))),
         Err(TypeError::BehaviorMissing { needs: Behavior::Age, .. })
     ));
     assert!(matches!(
-        c.type_check(vec![], Term::Atom(Atom::Stale(conc(&retired_ty()), at(lit_nat(1))))),
+        c.type_check(vec![], Term::Atom(Atom::Stale(concrete(&retired_ty()), at(lit_nat(1))))),
         Err(TypeError::BehaviorMissing { needs: Behavior::Age, .. })
     ));
     assert!(matches!(
@@ -415,7 +415,7 @@ fn type_check_reports_the_first_rejection_in_its_stated_walk_order() {
     );
     // A binder's domain before its body.
     assert!(matches!(
-        c.type_check(vec![], exists(2, Dom::MembersDom(conc(&uncataloged_ty(20))), lit_nat(1))),
+        c.type_check(vec![], exists(2, Dom::MembersDom(concrete(&uncataloged_ty(20))), lit_nat(1))),
         Err(TypeError::UnregisteredType(_))
     ));
     // A `Ref`'s referent before its arguments …
@@ -655,7 +655,7 @@ fn a_verdict_reads_its_view_s_slice_and_uv_drops_only_other_bh1_classes() {
 
     // is_K / member counting / L_dom / reflection membership.
     assert!(decide_now(&k, &c, View::Active, is_k(&pred_stable_ty(), lit_addr(&ca(1)))));
-    assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::MembersDom(conc(&pred_stable_ty()))), lit_nat(2))));
+    assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::MembersDom(concrete(&pred_stable_ty()))), lit_nat(2))));
     assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::LinkDom), lit_nat(2))));
     assert!(decide_now(&k, &c, View::Active, set_mem(lit_addr(&la(1)), reflect(Dom::LinkDom))));
 
@@ -669,16 +669,16 @@ fn a_verdict_reads_its_view_s_slice_and_uv_drops_only_other_bh1_classes() {
         &k,
         &c,
         View::Active,
-        exists(1, Dom::AuditSlice(conc(&pred_stable_ty())), in_coverage_f(lit_addr(&ca(1)), 1))
+        exists(1, Dom::AuditSlice(concrete(&pred_stable_ty())), in_coverage_f(lit_addr(&ca(1)), 1))
     ));
 
     // UV default view: members(K, default) drops elements filtered by BH1
     // types OTHER than K — and never by K itself (retired is unfiltered in
     // its own default reading — the OQ1 commitment).
     writer.emit(Caller::System, &doc1(), &retired_ty(), &ca(3), &[]).expect("retire ca3");
-    assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::MembersDom(conc(&pred_stable_ty()))), lit_nat(1))));
-    assert!(decide_now(&k, &c, View::Default, nat_eq(count(Dom::MembersDom(conc(&pred_stable_ty()))), lit_nat(0))));
-    assert!(decide_now(&k, &c, View::Default, nat_eq(count(Dom::MembersDom(conc(&retired_ty()))), lit_nat(1))));
+    assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::MembersDom(concrete(&pred_stable_ty()))), lit_nat(1))));
+    assert!(decide_now(&k, &c, View::Default, nat_eq(count(Dom::MembersDom(concrete(&pred_stable_ty()))), lit_nat(0))));
+    assert!(decide_now(&k, &c, View::Default, nat_eq(count(Dom::MembersDom(concrete(&retired_ty()))), lit_nat(1))));
 
     // V-DOC: residence is M3 registration.
     assert!(decide_now(&k, &c, View::Active, is_doc(lit_addr(&doc1()))));
@@ -700,7 +700,7 @@ fn is_k_at_default_is_never_uv_filtered() {
     let writer = link_writer(&k);
     writer.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("rel");
     writer.emit(Caller::System, &doc1(), &retired_ty(), &ca(3), &[]).expect("retire ca3");
-    assert!(decide_now(&k, &c, View::Default, nat_eq(count(Dom::MembersDom(conc(&pred_stable_ty()))), lit_nat(0))));
+    assert!(decide_now(&k, &c, View::Default, nat_eq(count(Dom::MembersDom(concrete(&pred_stable_ty()))), lit_nat(0))));
     assert!(decide_now(&k, &c, View::Default, is_k(&pred_stable_ty(), lit_addr(&ca(3)))));
 }
 
@@ -768,15 +768,15 @@ fn an_audit_reading_keeps_what_a_retraction_removes_from_the_active_one() {
     // members / M_K
     assert!(decide_at(View::Audit, set_mem(lit_addr(&ca(1)), members(&ps))));
     assert!(!decide_at(View::Active, set_mem(lit_addr(&ca(1)), members(&ps))));
-    assert!(decide_at(View::Audit, nat_eq(count(Dom::MembersDom(conc(&ps))), lit_nat(2))));
-    assert!(decide_at(View::Active, nat_eq(count(Dom::MembersDom(conc(&ps))), lit_nat(1))));
+    assert!(decide_at(View::Audit, nat_eq(count(Dom::MembersDom(concrete(&ps))), lit_nat(2))));
+    assert!(decide_at(View::Active, nat_eq(count(Dom::MembersDom(concrete(&ps))), lit_nat(1))));
     // targets_of
     let tof = || targets_of(&ps, lit_addr(&ca(1)));
     assert!(decide_at(View::Audit, set_mem(lit_addr(&ca(2)), tof())));
     assert!(!decide_at(View::Active, set_mem(lit_addr(&ca(2)), tof())));
     // A_K and L_K name their own slice at every term view.
-    assert!(decide_at(View::Audit, nat_eq(count(Dom::ActiveSlice(conc(&ps))), lit_nat(1))));
-    assert!(decide_at(View::Active, nat_eq(count(Dom::AuditSlice(conc(&ps))), lit_nat(2))));
+    assert!(decide_at(View::Audit, nat_eq(count(Dom::ActiveSlice(concrete(&ps))), lit_nat(1))));
+    assert!(decide_at(View::Active, nat_eq(count(Dom::AuditSlice(concrete(&ps))), lit_nat(2))));
 }
 
 /// BH2 over a linear lineage: `succs` is the one forward step, `chain` the
@@ -931,27 +931,27 @@ fn domains_have_set_semantics_and_binders_bind_the_element() {
     let d = |t: Term| decide_now(&k, &c, View::Active, t);
 
     // Three tuples, two distinct members.
-    assert!(d(nat_eq(count(Dom::MembersDom(conc(&ps))), lit_nat(2))));
-    assert!(d(nat_eq(count(Dom::ActiveSlice(conc(&ps))), lit_nat(3))));
+    assert!(d(nat_eq(count(Dom::MembersDom(concrete(&ps))), lit_nat(2))));
+    assert!(d(nat_eq(count(Dom::ActiveSlice(concrete(&ps))), lit_nat(3))));
     assert!(d(nat_eq(count_set(members(&ps)), lit_nat(2))));
     // The law: the term and the domain are one reading, at every view.
     for view in [View::Active, View::Audit, View::Default] {
-        assert!(decide_now(&k, &c, view, set_eq(members(&ps), reflect(Dom::MembersDom(conc(&ps))))), "{view:?}");
+        assert!(decide_now(&k, &c, view, set_eq(members(&ps), reflect(Dom::MembersDom(concrete(&ps))))), "{view:?}");
         assert!(
-            decide_now(&k, &c, view, nat_eq(count_set(members(&ps)), count(Dom::MembersDom(conc(&ps))))),
+            decide_now(&k, &c, view, nat_eq(count_set(members(&ps)), count(Dom::MembersDom(concrete(&ps))))),
             "{view:?}"
         );
     }
     // Filter binds each element, address or tuple.
-    assert!(d(nat_eq(count(filter(Dom::MembersDom(conc(&ps)), 2, addr_eq(var(2), lit_addr(&ca(1))))), lit_nat(1))));
-    assert!(d(nat_eq(count(filter(Dom::ActiveSlice(conc(&ps)), 2, in_coverage_g(lit_addr(&ca(4)), 2))), lit_nat(2))));
+    assert!(d(nat_eq(count(filter(Dom::MembersDom(concrete(&ps)), 2, addr_eq(var(2), lit_addr(&ca(1))))), lit_nat(1))));
+    assert!(d(nat_eq(count(filter(Dom::ActiveSlice(concrete(&ps)), 2, in_coverage_g(lit_addr(&ca(4)), 2))), lit_nat(2))));
     // ⋃ over the tuple slice of each tuple's G; ∀ over each tuple's F.
-    let targets = || big_union(Dom::ActiveSlice(conc(&ps)), 2, tup_addrs_g(2));
+    let targets = || big_union(Dom::ActiveSlice(concrete(&ps)), 2, tup_addrs_g(2));
     assert!(d(nat_eq(count_set(targets()), lit_nat(2))));
     assert!(d(set_mem(lit_addr(&ca(4)), targets())));
     assert!(d(forall(
         2,
-        Dom::ActiveSlice(conc(&ps)),
+        Dom::ActiveSlice(concrete(&ps)),
         or(set_mem(lit_addr(&ca(1)), tup_addrs_f(2)), set_mem(lit_addr(&ca(3)), tup_addrs_f(2)))
     )));
     // Let binds a set value.
@@ -972,7 +972,7 @@ fn the_quantifiers_denote_all_and_any() {
     let c = coord(&k);
     deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
     deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
-    let slice = || Dom::ActiveSlice(conc(&pred_stable_ty()));
+    let slice = || Dom::ActiveSlice(concrete(&pred_stable_ty()));
     let d = |t: Term| decide_now(&k, &c, View::Active, t);
     // ca1 is the F of one tuple of two.
     assert!(d(exists(2, slice(), in_coverage_f(lit_addr(&ca(1)), 2))));
@@ -981,7 +981,7 @@ fn the_quantifiers_denote_all_and_any() {
     assert!(!d(exists(2, slice(), in_coverage_f(lit_addr(&ca(9)), 2))));
     assert!(d(forall(2, slice(), not(in_coverage_f(lit_addr(&ca(9)), 2)))));
     // The empty domain: ∀ vacuous, ∃ false.
-    let empty = || Dom::MembersDom(conc(&marker_ty()));
+    let empty = || Dom::MembersDom(concrete(&marker_ty()));
     assert!(d(forall(2, empty(), fls())));
     assert!(!d(exists(2, empty(), tru())));
 }
@@ -1027,11 +1027,11 @@ fn t1_extrema_answer_max_min_and_bot_through_the_binder_guard() {
     let c = coord(&k);
     deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
     deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
-    let stable_dom = || Dom::MembersDom(conc(&pred_stable_ty()));
+    let stable_dom = || Dom::MembersDom(concrete(&pred_stable_ty()));
     let d = |t: Term| decide_now(&k, &c, View::Active, t);
     assert!(d(if_some(Term::MaxT1(ad(stable_dom())), 2, addr_eq(var(2), lit_addr(&ca(3))), fls())));
     assert!(d(if_some(Term::MinT1(ad(stable_dom())), 2, addr_eq(var(2), lit_addr(&ca(1))), fls())));
-    let empty_dom = || Dom::MembersDom(conc(&marker_ty()));
+    let empty_dom = || Dom::MembersDom(concrete(&marker_ty()));
     assert!(!d(def(Term::MaxT1(ad(empty_dom())))));
     assert!(d(if_some(Term::MinT1(ad(empty_dom())), 2, fls(), tru())));
     deposit_rel(&k, PRED_STABLE, &doc1(), &ca(6));
@@ -1090,19 +1090,19 @@ fn every_boolean_prim_answers_both_ways() {
     let ps = pred_stable_ty();
     let d = |t: Term| decide_now(&k, &c, View::Active, t);
     let sources = || members(&ps); // {ca1, ca3}
-    let targets = || big_union(Dom::ActiveSlice(conc(&ps)), 2, tup_addrs_g(2)); // {ca2, ca4}
+    let targets = || big_union(Dom::ActiveSlice(concrete(&ps)), 2, tup_addrs_g(2)); // {ca2, ca4}
 
     // ℕ `=` — the suite's count instrument.
     assert!(d(nat_eq(lit_nat(2), lit_nat(2))));
     assert!(!d(nat_eq(lit_nat(2), lit_nat(3))));
-    assert!(!d(nat_eq(count(Dom::MembersDom(conc(&ps))), lit_nat(3))));
+    assert!(!d(nat_eq(count(Dom::MembersDom(concrete(&ps))), lit_nat(3))));
     // ℘_fin(T) `=` — two sets of the SAME size and different elements, so a
     // cardinality-only equality is caught as well as a constant one.
     assert!(d(set_eq(sources(), sources())));
     assert!(!d(set_eq(sources(), targets())));
     assert!(!d(set_eq(sources(), members(&marker_ty()))));
     // Definedness, true at a defined optional.
-    assert!(d(def(Term::MinT1(ad(Dom::MembersDom(conc(&ps)))))));
+    assert!(d(def(Term::MinT1(ad(Dom::MembersDom(concrete(&ps)))))));
     assert!(!d(def(bot_addr())));
 }
 
@@ -1197,18 +1197,18 @@ fn classify_places_a_spelling_on_the_lattice_relative_to_its_view() {
     let tc1 = |t: Term| c.type_check(vec![(v(1), Sort::Addr)], t).expect("test term type-checks");
 
     // ∃ over the grow-only L_K is ST; its negation SF.
-    let ex = tc(exists(2, Dom::AuditSlice(conc(&pred_def_ty())), tru()));
+    let ex = tc(exists(2, Dom::AuditSlice(concrete(&pred_def_ty())), tru()));
     assert_eq!(c.classify(&ex, View::Audit).stability, Stability::StOnly);
-    let nex = tc(not(exists(2, Dom::AuditSlice(conc(&pred_def_ty())), tru())));
+    let nex = tc(not(exists(2, Dom::AuditSlice(concrete(&pred_def_ty())), tru())));
     assert_eq!(c.classify(&nex, View::Audit).stability, Stability::SfOnly);
 
     // Lower-bound counts ST, upper-bound SF, equality Neither (the
     // authoring-precision recommendation's substance).
-    let lo = tc(nat_le(lit_nat(2), count(Dom::AuditSlice(conc(&pred_def_ty())))));
+    let lo = tc(nat_le(lit_nat(2), count(Dom::AuditSlice(concrete(&pred_def_ty())))));
     assert_eq!(c.classify(&lo, View::Audit).stability, Stability::StOnly);
-    let hi = tc(nat_le(count(Dom::AuditSlice(conc(&pred_def_ty()))), lit_nat(2)));
+    let hi = tc(nat_le(count(Dom::AuditSlice(concrete(&pred_def_ty()))), lit_nat(2)));
     assert_eq!(c.classify(&hi, View::Audit).stability, Stability::SfOnly);
-    let eq = tc(nat_eq(count(Dom::AuditSlice(conc(&pred_def_ty()))), lit_nat(2)));
+    let eq = tc(nat_eq(count(Dom::AuditSlice(concrete(&pred_def_ty()))), lit_nat(2)));
     assert_eq!(c.classify(&eq, View::Audit).stability, Stability::Neither);
 
     // Audit is_K at a step-constant argument is ST; the SAME term classified
@@ -1224,7 +1224,7 @@ fn classify_places_a_spelling_on_the_lattice_relative_to_its_view() {
     // The named exception: an active-slice read can shrink under retraction —
     // a property of the footprint, so the flag and the footprint's own
     // accessor are one answer.
-    let act = tc(exists(2, Dom::ActiveSlice(conc(&pred_def_ty())), tru()));
+    let act = tc(exists(2, Dom::ActiveSlice(concrete(&pred_def_ty())), tru()));
     assert!(c.classify(&act, View::Active).active_exceptions.retraction_shrinks);
     assert!(c.classify(&act, View::Active).footprint.retraction_shrinks());
     assert!(!c.classify(&ex, View::Audit).active_exceptions.retraction_shrinks);
@@ -1273,7 +1273,7 @@ fn view_independence_refuses_every_view_parameterized_and_uv_rewritten_form() {
         targets_of(&ps, lit_addr(&ca(1))),
         succs(&sup, lit_addr(&ca(1))),
         chain(&sup, lit_addr(&ca(1))),
-        count(Dom::MembersDom(conc(&ps))),
+        count(Dom::MembersDom(concrete(&ps))),
     ] {
         assert!(!independent(t.clone()), "view-dependent: {t:?}");
     }
@@ -1282,8 +1282,8 @@ fn view_independence_refuses_every_view_parameterized_and_uv_rewritten_form() {
         tip(&sup, lit_addr(&ca(1))),
         is_in_chain(&sup, lit_addr(&ca(1)), lit_addr(&ca(2))),
         is_doc(lit_addr(&doc1())),
-        count(Dom::ActiveSlice(conc(&ps))),
-        count(Dom::AuditSlice(conc(&ps))),
+        count(Dom::ActiveSlice(concrete(&ps))),
+        count(Dom::AuditSlice(concrete(&ps))),
         count(Dom::LinkDom),
     ] {
         assert!(independent(t.clone()), "view-independent: {t:?}");
@@ -1302,7 +1302,7 @@ fn view_independence_refuses_every_view_parameterized_and_uv_rewritten_form() {
 fn the_pd0_rules_hold_over_a_generated_family() {
     let k = kernel();
     let c = coord(&k);
-    let pd = || conc(&pred_def_ty());
+    let pd = || concrete(&pred_def_ty());
     let lattice = |st: bool, sf: bool| match (st, sf) {
         (true, true) => Stability::StSf,
         (true, false) => Stability::StOnly,
@@ -1406,7 +1406,7 @@ fn the_default_view_charges_bh1_slices_for_exactly_the_uv_rewritten_reads() {
         targets_of(&pred_def_ty(), lit_addr(&ca(1))),
         chain(&sup, lit_addr(&ca(1))),
         succs(&sup, lit_addr(&ca(1))),
-        count(Dom::MembersDom(conc(&pred_def_ty()))),
+        count(Dom::MembersDom(concrete(&pred_def_ty()))),
     ] {
         assert!(charges(&t, View::Default), "UV-rewritten at Default: {t:?}");
         assert!(!charges(&t, View::Active), "no rewrite at Active: {t:?}");
@@ -1414,8 +1414,8 @@ fn the_default_view_charges_bh1_slices_for_exactly_the_uv_rewritten_reads() {
     for t in [
         tip(&sup, lit_addr(&ca(1))),
         is_in_chain(&sup, lit_addr(&ca(1)), lit_addr(&ca(2))),
-        count(Dom::ActiveSlice(conc(&pred_def_ty()))),
-        count(Dom::AuditSlice(conc(&pred_def_ty()))),
+        count(Dom::ActiveSlice(concrete(&pred_def_ty()))),
+        count(Dom::AuditSlice(concrete(&pred_def_ty()))),
     ] {
         assert!(!charges(&t, View::Default), "never UV-rewritten: {t:?}");
     }
@@ -1432,7 +1432,7 @@ fn the_default_view_charges_bh1_slices_for_exactly_the_uv_rewritten_reads() {
 fn classify_analyzes_each_domain_once() {
     let k = kernel();
     let c = coord(&k);
-    let l_k = || Dom::AuditSlice(conc(&pred_def_ty()));
+    let l_k = || Dom::AuditSlice(concrete(&pred_def_ty()));
     let innermost = nat_le(count(l_k()), lit_nat(1));
     let nested = |levels: u32| {
         (0..levels).fold(innermost.clone(), |t, _| nat_le(count(filter(l_k(), 2, t)), lit_nat(1)))

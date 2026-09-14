@@ -572,11 +572,11 @@ impl<'a> Analyzer<'a> {
 /// expansion, never around a `Ref`.
 pub(crate) fn view_independent(t: &Term) -> bool {
     struct ViewScan {
-        ok: bool,
+        independent: bool,
     }
     impl Visit for ViewScan {
         fn term(&mut self, t: &Term) {
-            if !self.ok {
+            if !self.independent {
                 return;
             }
             match t {
@@ -588,7 +588,7 @@ pub(crate) fn view_independent(t: &Term) -> bool {
                     | Atom::Chain(..)
                     | Atom::SourcesTo(..)
                     | Atom::Stale(..),
-                ) => self.ok = false,
+                ) => self.independent = false,
                 Term::Ref { .. } => unreachable!(
                     "classification precondition: ref-free input (an inline trigger's projection or a flat expansion)"
                 ),
@@ -597,18 +597,18 @@ pub(crate) fn view_independent(t: &Term) -> bool {
         }
 
         fn dom(&mut self, d: &Dom) {
-            if !self.ok {
+            if !self.independent {
                 return;
             }
             match d {
-                Dom::MembersDom(_) => self.ok = false,
+                Dom::MembersDom(_) => self.independent = false,
                 _ => visit_dom(self, d),
             }
         }
     }
-    let mut scan = ViewScan { ok: true };
+    let mut scan = ViewScan { independent: true };
     scan.term(t);
-    scan.ok
+    scan.independent
 }
 
 // ───────────────────────────── ST⁺ ─────────────────────────────

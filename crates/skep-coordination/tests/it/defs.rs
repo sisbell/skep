@@ -561,7 +561,7 @@ fn certify_stable_refuses_an_expansion_past_the_node_budget() {
     c.certify_stable(&doc1(), &p8).expect("P₈'s expansion fits the budget");
     assert!(matches!(c.certify_stable(&doc1(), &p), Err(CertifyError::ExpansionTooLarge)));
     let rule = Rule {
-        domain: Dom::MembersDom(conc(&pred_stable_ty())),
+        domain: Dom::MembersDom(concrete(&pred_stable_ty())),
         trigger: Trigger::Def(p.clone()),
         view: View::Audit,
         action: marker_action(),
@@ -679,7 +679,7 @@ fn a_breach_freezes_the_start_poisoned() {
     ));
     assert!(matches!(
         c.register_rule(Rule {
-            domain: Dom::MembersDom(conc(&pred_stable_ty())),
+            domain: Dom::MembersDom(concrete(&pred_stable_ty())),
             trigger: Trigger::Def(g.clone()),
             view: View::Audit,
             action: marker_action(),
@@ -700,7 +700,7 @@ fn a_probe_before_registration_does_not_freeze_the_start() {
     let start = ca(1);
     let def_rule = |c: &mut Coordinator<World>| {
         c.register_rule(Rule {
-            domain: Dom::MembersDom(conc(&pred_stable_ty())),
+            domain: Dom::MembersDom(concrete(&pred_stable_ty())),
             trigger: Trigger::Def(start.clone()),
             view: View::Audit,
             action: marker_action(),
@@ -893,7 +893,7 @@ fn certify_stable_refuses_each_cvalid_leg_in_order_and_certifies_through_referen
 
     // A ⊤-stable, view-independent Boolean def certifies and deposits; a
     // re-certification answers the incumbent and commits nothing.
-    let (s0, _) = define(exists(1, Dom::AuditSlice(conc(&pred_def_ty())), tru()));
+    let (s0, _) = define(exists(1, Dom::AuditSlice(concrete(&pred_def_ty())), tru()));
     assert!(!c.is_certified_stable(&s0, &k.snapshot()), "uncertified until it is certified");
     let (cert, _) = c.certify_stable(&doc1(), &s0).expect("certify");
     assert!(c.is_certified_stable(&s0, &k.snapshot()));
@@ -906,18 +906,18 @@ fn certify_stable_refuses_each_cvalid_leg_in_order_and_certifies_through_referen
     assert!(matches!(c.certify_stable(&doc1(), &sa), Err(CertifyError::NotBoolean)));
 
     // (ii) view-independent expansion (M_K is view-parameterized).
-    let (sv, _) = define(exists(1, Dom::MembersDom(conc(&pred_def_ty())), tru()));
+    let (sv, _) = define(exists(1, Dom::MembersDom(concrete(&pred_def_ty())), tru()));
     assert!(matches!(c.certify_stable(&doc1(), &sv), Err(CertifyError::ViewDependent)));
 
     // (iii) ST⁺: an SF-only spelling is not ⊤-stable.
-    let (sn, _) = define(not(exists(1, Dom::AuditSlice(conc(&pred_def_ty())), tru())));
+    let (sn, _) = define(not(exists(1, Dom::AuditSlice(concrete(&pred_def_ty())), tru())));
     assert!(matches!(c.certify_stable(&doc1(), &sn), Err(CertifyError::NotStable)));
     assert!(!c.is_certified_stable(&sn, &k.snapshot()), "a refused certification deposits nothing");
 
     // The ST⁺ widening: `count(L_K) ≥ x` with x a bound ℕ parameter
     // certifies (a literal-only PD0 would refuse) — while plain classify
     // stays Neither (the widening is certification-only).
-    let widened = nat_le(var(1), count(Dom::AuditSlice(conc(&pred_def_ty()))));
+    let widened = nat_le(var(1), count(Dom::AuditSlice(concrete(&pred_def_ty()))));
     let tw = c.type_check(vec![(v(1), Sort::Nat)], widened).expect("widened def");
     assert_eq!(c.classify(&tw, View::Audit).stability, Stability::Neither);
     let (sw, _) = c.define_predicate(&doc1(), &tw).expect("define widened");
@@ -955,7 +955,7 @@ fn certify_stable_refuses_each_cvalid_leg_in_order_and_certifies_through_referen
 
     // The order is forced where two legs fail: view-dependence speaks before
     // ST⁺, and the sort check before the activity check.
-    let (svn, _) = define(not(exists(1, Dom::MembersDom(conc(&pred_def_ty())), tru())));
+    let (svn, _) = define(not(exists(1, Dom::MembersDom(concrete(&pred_def_ty())), tru())));
     assert!(matches!(c.certify_stable(&doc1(), &svn), Err(CertifyError::ViewDependent)));
     c.retract_pred(&doc1(), &sa).expect("retract the non-Boolean def");
     assert!(matches!(c.certify_stable(&doc1(), &sa), Err(CertifyError::NotBoolean)));

@@ -138,8 +138,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// Distinct from M7's snapshot-bound `LinkState::reserved_type`, and
     /// byte-identical to it: the catalog is a projection of the same
     /// registry.
-    pub fn reserved_type(&self, t: ShippedType) -> &Endset {
-        self.catalog.reserved_type(t)
+    pub fn reserved_type(&self, ty: ShippedType) -> &Endset {
+        self.catalog.reserved_type(ty)
     }
 
     /// One verdict's read context over the world `w` of a pinned snapshot,
@@ -244,7 +244,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// and one whose derivation cannot complete at that level is `TooDeep`,
     /// with the referent left unjudged.
     pub(crate) fn check_signed(&self, signed: SignedTerm, depth: u32) -> Result<TypedTerm, TypeError> {
-        let resolve = |a: &Address, d: u32| self.resolve_def_at(a, d);
+        let resolve = |start: &Address, depth: u32| self.resolve_def_at(start, depth);
         Checker::new(&self.catalog, &resolve).check_signed(signed, depth)
     }
 

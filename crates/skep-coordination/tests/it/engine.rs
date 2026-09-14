@@ -75,13 +75,13 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
     // Domain↔trigger sort reconciliation: a Tup domain demands a Tup-param
     // trigger.
     assert!(matches!(
-        c.register_rule(mk(Dom::ActiveSlice(conc(&pred_stable_ty())), always_addr(&c), marker_action())),
+        c.register_rule(mk(Dom::ActiveSlice(concrete(&pred_stable_ty())), always_addr(&c), marker_action())),
         Err(RuleError::DomainTriggerSortMismatch { expected: Sort::Tup, found: Sort::Addr })
     ));
     // A Def trigger is Codom-only, so it can never serve a Tup domain.
     assert!(matches!(
         c.register_rule(mk(
-            Dom::ActiveSlice(conc(&pred_stable_ty())),
+            Dom::ActiveSlice(concrete(&pred_stable_ty())),
             Trigger::Def(p_start.clone()),
             marker_action()
         )),
@@ -93,14 +93,14 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
         .define_predicate(&doc1(), &c.type_check(vec![(v(1), Sort::Addr)], lit_nat(1)).expect("Nat def"))
         .expect("define a Nat-codomain def");
     assert!(matches!(
-        c.register_rule(mk(Dom::MembersDom(conc(&pred_stable_ty())), Trigger::Def(nat_def), marker_action())),
+        c.register_rule(mk(Dom::MembersDom(concrete(&pred_stable_ty())), Trigger::Def(nat_def), marker_action())),
         Err(RuleError::TriggerNotBoolean)
     ));
     let (closed_def, _) = c
         .define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("closed def"))
         .expect("define a closed def");
     assert!(matches!(
-        c.register_rule(mk(Dom::MembersDom(conc(&pred_stable_ty())), Trigger::Def(closed_def), marker_action())),
+        c.register_rule(mk(Dom::MembersDom(concrete(&pred_stable_ty())), Trigger::Def(closed_def), marker_action())),
         Err(RuleError::BadTriggerArity)
     ));
     // A ref-bearing Inline trigger.
@@ -108,12 +108,12 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
         .type_check_trigger((v(1), Sort::Addr), Term::Ref { addr: p_start.clone(), args: vec![at(var(1))] })
         .expect("ref-bearing trigger term");
     assert!(matches!(
-        c.register_rule(mk(Dom::MembersDom(conc(&pred_stable_ty())), Trigger::Inline(ref_trig), marker_action())),
+        c.register_rule(mk(Dom::MembersDom(concrete(&pred_stable_ty())), Trigger::Inline(ref_trig), marker_action())),
         Err(RuleError::RefBearingInlineTrigger)
     ));
     // A Def trigger with no defined signature.
     assert!(matches!(
-        c.register_rule(mk(Dom::MembersDom(conc(&pred_stable_ty())), Trigger::Def(ca(77)), marker_action())),
+        c.register_rule(mk(Dom::MembersDom(concrete(&pred_stable_ty())), Trigger::Def(ca(77)), marker_action())),
         Err(RuleError::DanglingDefTrigger(_))
     ));
     // Marker.ty guards: cataloged Unary and non-PredLayer. A Binary shipped
@@ -124,7 +124,7 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
     // a registered idem⊥ Unary class exists again.
     assert!(matches!(
         c.register_rule(mk(
-            Dom::MembersDom(conc(&pred_stable_ty())),
+            Dom::MembersDom(concrete(&pred_stable_ty())),
             always_addr(&c),
             FireAction::Marker { home: doc1(), ty: key(&retraction_ty()) }
         )),
@@ -132,7 +132,7 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
     ));
     assert!(matches!(
         c.register_rule(mk(
-            Dom::MembersDom(conc(&pred_stable_ty())),
+            Dom::MembersDom(concrete(&pred_stable_ty())),
             always_addr(&c),
             FireAction::Marker { home: doc1(), ty: key(&uncataloged_ty(20)) }
         )),
@@ -143,7 +143,7 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
         assert!(
             matches!(
                 c.register_rule(mk(
-                    Dom::MembersDom(conc(&pred_stable_ty())),
+                    Dom::MembersDom(concrete(&pred_stable_ty())),
                     always_addr(&c),
                     FireAction::Marker { home: doc1(), ty }
                 )),
@@ -161,7 +161,7 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
     ));
     assert!(matches!(
         c.register_rule(mk(
-            Dom::ActiveSlice(conc(&pred_stable_ty())),
+            Dom::ActiveSlice(concrete(&pred_stable_ty())),
             always_addr(&c),
             bad_marker()
         )),
@@ -192,9 +192,9 @@ fn a_peeked_occurrence_yields_the_key_the_monitor_counts_by() {
     let k = kernel();
     let mut c = coord(&k);
     let l1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
-    let tup = c
+    let tup_rule = c
         .register_rule(Rule {
-            domain: Dom::ActiveSlice(conc(&pred_stable_ty())),
+            domain: Dom::ActiveSlice(concrete(&pred_stable_ty())),
             trigger: always_tup(&c),
             view: View::Active,
             action: FireAction::Nullify { home: doc1() },
@@ -205,15 +205,15 @@ fn a_peeked_occurrence_yields_the_key_the_monitor_counts_by() {
     assert_ne!(peeked.arg, Arg::Addr(l1.clone()), "the key is not the element");
     assert_eq!(peeked.arg.key_addr(), &l1);
     assert!(matches!(c.step(&k.snapshot()), StepOutcome::Fired { .. }));
-    assert_eq!(c.fire_count(tup, peeked.arg.key_addr()), 1);
+    assert_eq!(c.fire_count(tup_rule, peeked.arg.key_addr()), 1);
 
     // An `Addr` domain: the key is the address itself.
     let k = kernel();
     let mut c = coord(&k);
     link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
-    let addr = c
+    let addr_rule = c
         .register_rule(Rule {
-            domain: Dom::MembersDom(conc(&pred_stable_ty())),
+            domain: Dom::MembersDom(concrete(&pred_stable_ty())),
             trigger: not_marked(&c),
             view: View::Audit,
             action: marker_action(),
@@ -222,7 +222,7 @@ fn a_peeked_occurrence_yields_the_key_the_monitor_counts_by() {
     let peeked = c.next_enabled(&k.snapshot()).expect("enabled");
     assert_eq!(peeked.arg.key_addr(), &ca(1));
     assert!(matches!(c.step(&k.snapshot()), StepOutcome::Fired { .. }));
-    assert_eq!(c.fire_count(addr, peeked.arg.key_addr()), 1);
+    assert_eq!(c.fire_count(addr_rule, peeked.arg.key_addr()), 1);
 }
 
 /// A fire's trigger and action see the STORE's domain element, never the
@@ -241,7 +241,7 @@ fn a_fire_binds_the_store_s_element_not_the_caller_s() {
     );
     let id = c
         .register_rule(Rule {
-            domain: Dom::ActiveSlice(conc(&pred_stable_ty())),
+            domain: Dom::ActiveSlice(concrete(&pred_stable_ty())),
             trigger: trig,
             view: View::Active,
             action: marker_action(),
@@ -267,7 +267,7 @@ fn a_fire_binds_the_store_s_element_not_the_caller_s() {
 fn certify_rule_names_each_failed_leg() {
     let k = kernel();
     let c = coord(&k);
-    let members_dom = || Dom::MembersDom(conc(&pred_stable_ty()));
+    let members_dom = || Dom::MembersDom(concrete(&pred_stable_ty()));
     let trig = |body: Term| {
         Trigger::Inline(c.type_check_trigger((v(1), Sort::Addr), body).expect("trigger"))
     };
@@ -307,7 +307,7 @@ fn certify_rule_names_each_failed_leg() {
             .expect("Tup trigger"),
     );
     assert_eq!(
-        lint(Dom::AuditSlice(conc(&pred_stable_ty())), tup, View::Audit),
+        lint(Dom::AuditSlice(concrete(&pred_stable_ty())), tup, View::Audit),
         uncertified(true, false, true)
     );
 }
@@ -330,7 +330,7 @@ fn marker_rule_certifies_fires_and_quiesces() {
             .expect("¬is_K(marker, x) @ audit"),
     );
     let rule = Rule {
-        domain: Dom::MembersDom(conc(&pred_stable_ty())),
+        domain: Dom::MembersDom(concrete(&pred_stable_ty())),
         trigger: trig,
         view: View::Audit,
         action: marker_action(),
@@ -388,7 +388,7 @@ fn a_dedup_hit_in_the_gap_reports_deduped_and_commits_nothing() {
     link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
     let id = c
         .register_rule(Rule {
-            domain: Dom::MembersDom(conc(&pred_stable_ty())),
+            domain: Dom::MembersDom(concrete(&pred_stable_ty())),
             trigger: always_addr(&c),
             view: View::Audit,
             action: marker_action(),
@@ -424,7 +424,7 @@ fn step_peeks_at_the_caller_s_snapshot_but_fires_at_its_own() {
     link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
     let id = c
         .register_rule(Rule {
-            domain: Dom::MembersDom(conc(&pred_stable_ty())),
+            domain: Dom::MembersDom(concrete(&pred_stable_ty())),
             trigger: not_marked(&c),
             view: View::Audit,
             action: marker_action(),
@@ -453,7 +453,7 @@ fn step_rotates_across_rules_rather_than_draining_one() {
     writer.emit(Caller::System, &doc1(), &pred_def_ty(), &ca(5), &[]).expect("def-classed on ca5");
     let r1 = c
         .register_rule(Rule {
-            domain: Dom::MembersDom(conc(&pred_stable_ty())),
+            domain: Dom::MembersDom(concrete(&pred_stable_ty())),
             trigger: not_marked(&c),
             view: View::Audit,
             action: marker_action(),
@@ -461,7 +461,7 @@ fn step_rotates_across_rules_rather_than_draining_one() {
         .expect("R1");
     let r2 = c
         .register_rule(Rule {
-            domain: Dom::MembersDom(conc(&pred_def_ty())),
+            domain: Dom::MembersDom(concrete(&pred_def_ty())),
             trigger: not_marked(&c),
             view: View::Audit,
             action: marker_action(),
@@ -489,7 +489,7 @@ fn a_failing_rule_does_not_starve_the_agenda() {
     let unregistered = a(&[1, 0, 1, 0, 7]);
     let r1 = c
         .register_rule(Rule {
-            domain: Dom::MembersDom(conc(&pred_stable_ty())),
+            domain: Dom::MembersDom(concrete(&pred_stable_ty())),
             trigger: always_addr(&c),
             view: View::Audit,
             action: FireAction::Marker { home: unregistered, ty: key(&marker_ty()) },
@@ -497,7 +497,7 @@ fn a_failing_rule_does_not_starve_the_agenda() {
         .expect("R1: fails at every fire");
     let r2 = c
         .register_rule(Rule {
-            domain: Dom::MembersDom(conc(&pred_stable_ty())),
+            domain: Dom::MembersDom(concrete(&pred_stable_ty())),
             trigger: not_marked(&c),
             view: View::Audit,
             action: marker_action(),
@@ -524,7 +524,7 @@ fn a_failing_rule_does_not_starve_the_agenda() {
 #[test]
 fn a_fire_into_an_unregistered_home_fails_loudly() {
     let unregistered = a(&[1, 0, 1, 0, 7]);
-    let members_dom = || Dom::MembersDom(conc(&pred_stable_ty()));
+    let members_dom = || Dom::MembersDom(concrete(&pred_stable_ty()));
     let marker_at = |home: &Address| FireAction::Marker { home: home.clone(), ty: key(&marker_ty()) };
 
     // (1) A Marker into no document.
@@ -548,7 +548,7 @@ fn a_fire_into_an_unregistered_home_fails_loudly() {
     let mut c = coord(&k);
     let m1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
     c.register_rule(Rule {
-        domain: Dom::ActiveSlice(conc(&pred_stable_ty())),
+        domain: Dom::ActiveSlice(concrete(&pred_stable_ty())),
         trigger: always_tup(&c),
         view: View::Active,
         action: FireAction::Nullify { home: unregistered.clone() },
@@ -591,7 +591,7 @@ fn a_def_trigger_reads_only_the_snapshot_it_is_evaluated_on() {
         .expect("T type-checks");
     let (start, _) = c.define_predicate(&doc1(), &t).expect("define T");
     let rule = Rule {
-        domain: Dom::MembersDom(conc(&pred_stable_ty())),
+        domain: Dom::MembersDom(concrete(&pred_stable_ty())),
         trigger: Trigger::Def(start.clone()),
         view: View::Audit,
         action: marker_action(),
@@ -625,7 +625,7 @@ fn a_default_view_rule_never_sees_a_uv_hidden_argument() {
     writer.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("rel");
     writer.emit(Caller::System, &doc1(), &retired_ty(), &ca(3), &[]).expect("retire ca3");
     let rule = |c: &Coordinator<World>, view: View| Rule {
-        domain: Dom::MembersDom(conc(&pred_stable_ty())),
+        domain: Dom::MembersDom(concrete(&pred_stable_ty())),
         trigger: always_addr(c),
         view,
         action: marker_action(),
@@ -662,7 +662,7 @@ fn a_fire_stops_at_the_draft_boundary_before_any_deposit() {
     let mut c = coord_with_guest(&k, refuse_doc2());
     link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
     let rule = Rule {
-        domain: Dom::MembersDom(conc(&pred_stable_ty())),
+        domain: Dom::MembersDom(concrete(&pred_stable_ty())),
         trigger: always_addr(&c),
         view: View::Audit,
         action: FireAction::Marker { home: doc2(), ty: key(&marker_ty()) },
@@ -689,7 +689,7 @@ fn a_fire_stops_at_the_draft_boundary_before_any_deposit() {
     let in_doc2 = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
     link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &in_doc2, &[]).expect("rel");
     let rule = Rule {
-        domain: Dom::MembersDom(conc(&pred_stable_ty())),
+        domain: Dom::MembersDom(concrete(&pred_stable_ty())),
         trigger: always_addr(&c),
         view: View::Audit,
         action: marker_action(),
@@ -709,7 +709,7 @@ fn a_fire_stops_at_the_draft_boundary_before_any_deposit() {
     let mut c = coord_with_guest(&k, refuse_doc2());
     link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &doc2(), &[]).expect("rel on the document address");
     c.register_rule(Rule {
-        domain: Dom::MembersDom(conc(&pred_stable_ty())),
+        domain: Dom::MembersDom(concrete(&pred_stable_ty())),
         trigger: always_addr(&c),
         view: View::Audit,
         action: marker_action(),
@@ -728,7 +728,7 @@ fn a_fire_stops_at_the_draft_boundary_before_any_deposit() {
     let mut c = coord_with_guest(&k, refuse_doc2());
     link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
     let rule = Rule {
-        domain: Dom::MembersDom(conc(&pred_stable_ty())),
+        domain: Dom::MembersDom(concrete(&pred_stable_ty())),
         trigger: always_addr(&c),
         view: View::Audit,
         action: marker_action(),
@@ -747,7 +747,7 @@ fn a_fire_stops_at_the_draft_boundary_before_any_deposit() {
         .expect("the only witnessing tuple is draft-homed");
     let id = c
         .register_rule(Rule {
-            domain: Dom::MembersDom(conc(&pred_stable_ty())),
+            domain: Dom::MembersDom(concrete(&pred_stable_ty())),
             trigger: always_addr(&c),
             view: View::Audit,
             action: FireAction::Marker { home: doc2(), ty: key(&marker_ty()) },
@@ -785,11 +785,11 @@ fn the_trigger_s_look_is_filtered_at_guest_class() {
     );
     assert!(!decide_now(&k, &c, View::Active, is_k(&pred_stable_ty(), lit_addr(&ca(1)))));
     assert!(!decide_now(&k, &c, View::Audit, is_k(&pred_stable_ty(), lit_addr(&ca(1)))));
-    assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::MembersDom(conc(&pred_stable_ty()))), lit_nat(0))));
+    assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::MembersDom(concrete(&pred_stable_ty()))), lit_nat(0))));
     assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::LinkDom), lit_nat(0))));
     let id = c
         .register_rule(Rule {
-            domain: Dom::MembersDom(conc(&pred_stable_ty())),
+            domain: Dom::MembersDom(concrete(&pred_stable_ty())),
             trigger: always_addr(&c),
             view: View::Audit,
             action: marker_action(),
@@ -820,7 +820,7 @@ fn the_trigger_s_look_is_filtered_at_guest_class() {
             .expect("trigger"),
     );
     c.register_rule(Rule {
-        domain: Dom::MembersDom(conc(&pred_stable_ty())),
+        domain: Dom::MembersDom(concrete(&pred_stable_ty())),
         trigger: trig,
         view: View::Audit,
         action: marker_action(),
@@ -852,11 +852,11 @@ fn the_trigger_s_look_is_filtered_at_guest_class() {
             &k,
             &c,
             View::Audit,
-            exists(1, Dom::AuditSlice(conc(&pred_stable_ty())), addr_eq(tup_addr(1), lit_addr(a))),
+            exists(1, Dom::AuditSlice(concrete(&pred_stable_ty())), addr_eq(tup_addr(1), lit_addr(a))),
         )
     };
     assert!(in_audit(&t1), "retracted, but homed in the readable doc1: in the audit slice");
-    assert!(decide_now(&k, &c, View::Audit, nat_eq(count(Dom::AuditSlice(conc(&pred_stable_ty()))), lit_nat(1))));
+    assert!(decide_now(&k, &c, View::Audit, nat_eq(count(Dom::AuditSlice(concrete(&pred_stable_ty()))), lit_nat(1))));
     assert!(!decide_now(&k, &c, View::Active, is_k(&pred_stable_ty(), lit_addr(&ca(2)))));
 }
 
@@ -876,7 +876,7 @@ fn a_nullify_rule_is_uncertified_fires_once_and_surfaces_bad_target_as_failed() 
         c.type_check_trigger((v(1), Sort::Tup), tru()).expect("Tup trigger"),
     );
     let rule = Rule {
-        domain: Dom::ActiveSlice(conc(&pred_stable_ty())),
+        domain: Dom::ActiveSlice(concrete(&pred_stable_ty())),
         trigger: trig,
         view: View::Active,
         action: FireAction::Nullify { home: doc1() },
@@ -918,7 +918,7 @@ fn a_nullify_rule_is_uncertified_fires_once_and_surfaces_bad_target_as_failed() 
         c2.type_check_trigger((v(1), Sort::Addr), tru()).expect("Addr trigger"),
     );
     let bad = Rule {
-        domain: Dom::MembersDom(conc(&pred_stable_ty())),
+        domain: Dom::MembersDom(concrete(&pred_stable_ty())),
         trigger: trig2,
         view: View::Active,
         action: FireAction::Nullify { home: doc1() },
@@ -951,7 +951,7 @@ fn quiescent_scoped_is_exact_then_over_approximates_in_the_safe_direction() {
     );
     let id = c
         .register_rule(Rule {
-            domain: Dom::MembersDom(conc(&pred_stable_ty())),
+            domain: Dom::MembersDom(concrete(&pred_stable_ty())),
             trigger: trig,
             view: View::Audit,
             action: marker_action(),
@@ -980,7 +980,7 @@ fn quiescent_scoped_is_exact_then_over_approximates_in_the_safe_direction() {
         c.type_check_trigger((v(2), Sort::Tup), tru()).expect("Tup trigger"),
     );
     c.register_rule(Rule {
-        domain: Dom::ActiveSlice(conc(&pred_def_ty())),
+        domain: Dom::ActiveSlice(concrete(&pred_def_ty())),
         trigger: trig_t,
         view: View::Active,
         action: FireAction::Nullify { home: doc1() },
@@ -999,7 +999,7 @@ fn the_tuple_scope_bodies_read_emitter_source_and_target() {
     let mut c = coord(&k);
     let l1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
     c.register_rule(Rule {
-        domain: Dom::ActiveSlice(conc(&pred_stable_ty())),
+        domain: Dom::ActiveSlice(concrete(&pred_stable_ty())),
         trigger: always_tup(&c),
         view: View::Active,
         action: FireAction::Nullify { home: doc1() },
@@ -1038,7 +1038,7 @@ fn a_multi_address_slot_is_in_scope_when_any_of_its_addresses_is() {
         )
         .expect("a tuple with two sources and two targets");
     c.register_rule(Rule {
-        domain: Dom::ActiveSlice(conc(&pred_stable_ty())),
+        domain: Dom::ActiveSlice(concrete(&pred_stable_ty())),
         trigger: always_tup(&c),
         view: View::Active,
         action: FireAction::Nullify { home: doc1() },
@@ -1081,7 +1081,7 @@ fn fire_panics_on_a_rule_id_from_another_coordinator() {
     let mut c1 = coord(&k);
     let id = c1
         .register_rule(Rule {
-            domain: Dom::MembersDom(conc(&pred_stable_ty())),
+            domain: Dom::MembersDom(concrete(&pred_stable_ty())),
             trigger: always_addr(&c1),
             view: View::Audit,
             action: marker_action(),
@@ -1098,7 +1098,7 @@ fn fire_count_answers_zero_for_a_foreign_rule_id() {
     let mut c1 = coord(&k);
     let id = c1
         .register_rule(Rule {
-            domain: Dom::MembersDom(conc(&pred_stable_ty())),
+            domain: Dom::MembersDom(concrete(&pred_stable_ty())),
             trigger: always_addr(&c1),
             view: View::Audit,
             action: marker_action(),
@@ -1120,7 +1120,7 @@ fn fire_count_keys_on_exact_coverage_and_home() {
     writer.emit(Caller::System, &doc2(), &marker_ty(), &ca(1), &[]).expect("the draft's marker, ahead of the fire");
     let id = c
         .register_rule(Rule {
-            domain: Dom::MembersDom(conc(&pred_stable_ty())),
+            domain: Dom::MembersDom(concrete(&pred_stable_ty())),
             trigger: not_marked(&c),
             view: View::Audit,
             action: marker_action(),
@@ -1144,7 +1144,7 @@ fn fire_counts_are_recomputed_from_the_store_not_tallied_in_memory() {
     let mut c = coord(&k);
     link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
     let rule = Rule {
-        domain: Dom::MembersDom(conc(&pred_stable_ty())),
+        domain: Dom::MembersDom(concrete(&pred_stable_ty())),
         trigger: not_marked(&c),
         view: View::Audit,
         action: marker_action(),
@@ -1175,7 +1175,7 @@ fn fire_counts_are_recomputed_from_the_store_not_tallied_in_memory() {
 #[test]
 fn armer_cycles_follow_the_edge_rule() {
     let rule = |c: &Coordinator<World>, body: Term, view: View, action: FireAction| Rule {
-        domain: Dom::MembersDom(conc(&pred_stable_ty())),
+        domain: Dom::MembersDom(concrete(&pred_stable_ty())),
         trigger: Trigger::Inline(c.type_check_trigger((v(1), Sort::Addr), body).expect("trigger")),
         view,
         action,

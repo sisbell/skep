@@ -21,7 +21,9 @@ use skep_address::{Address, Nat};
 use skep_links::Behavior;
 
 use crate::ast::{ArcDom, ArcTerm, Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId};
-use crate::budget::{weight, Budget, DERIVATION_COST, MAX_DEPTH};
+use crate::budget::{
+    argument_depth, reference_reach, weight, Budget, DERIVATION_COST, MAX_DEPTH,
+};
 use crate::catalog::TypeCatalog;
 use crate::error::TypeError;
 use crate::value::{Signature, SignedTerm, Sort};
@@ -54,8 +56,8 @@ pub struct TypedTerm {
     /// The reach, relative to the root: the deepest level any walk — the
     /// evaluator's, the expander's, the analyzer's, a cold derivation's —
     /// recurses to over this term, its `Reg`-expansion joins and its
-    /// references' own reaches included. `≤ MAX_DEPTH` by construction; a
-    /// `Ref` to this term adds `DERIVATION_COST` and one per argument.
+    /// references' own reaches included. `≤ MAX_DEPTH` by construction; what
+    /// a `Ref` to this term adds is [`crate::budget::reference_reach`]'s.
     ///
     /// It bounds the FLAT REFERENCE EXPANSION's depth as well as this tree's,
     /// because every node was checked at a level no shallower than the
@@ -560,66 +562,21 @@ impl<'a> Checker<'a> {
             Term::Ref { addr, args } => {
                 // WT-ref: types to C_r when signature(addr) is defined and
                 // each argᵢ checks at Cᵢ. No defined signature (never
-                // registered, or undisciplined) ⇒ DanglingReference. An
-                // arity mismatch is reported as a SortMismatch against the
-                // first unmatched formal (too few: expected that formal,
-                // found the result sort; too many: expected the result sort,
-                // found the extra argument's sort) — the closest expression
-                // the declared vocabulary admits.
+                // registered, or undisciplined) ⇒ DanglingReference.
                 //
                 // The referent is asked for at the level its own check would
-                // start at from here — this node's plus the derivation's —
-                // so the levels a cold derivation through this node reaches
-                // are exactly the reach charged below: this node's, the
-                // derivation's, one per argument (the expansion's `Let`
-                // chain), and the referent's own. A derivation that cannot
-                // complete at that level is THIS node's TooDeep — the same
-                // answer the reach check below gives on a memo hit — and
-                // says nothing about the referent.
+                // start at from here — this node's plus the derivation's — so
+                // the levels a cold derivation through this node reaches are
+                // exactly the reach `reference_reach` charges. A derivation
+                // that cannot complete at that level is THIS node's TooDeep —
+                // the same answer the reach check below gives on a memo hit —
+                // and says nothing about the referent.
                 let referent = (self.resolve)(addr, depth + DERIVATION_COST).map_err(|u| match u {
                     Unresolved::Dangling => TypeError::DanglingReference(addr.clone()),
                     Unresolved::TooDeep => TypeError::TooDeep,
                 })?;
-                let params = referent.params();
-                let mut checked_args: Vec<ArcTerm> = Vec::with_capacity(args.len());
-                for (i, arg) in args.iter().enumerate() {
-                    // PR3a binds each argument through a `Let` AT ITS OWN
-                    // POSITION, so argument `i` sits `i` levels below this
-                    // node in the flat expansion and its own expansion sits
-                    // below that. Each is therefore charged AT that position,
-                    // which is what keeps the invariant every walk over the
-                    // expansion rests on: a subterm's expansion position is
-                    // never deeper than its checked depth. The `arity` term
-                    // below bounds the referent's splice point and nothing
-                    // else, so without this charge `arity + argument reach`
-                    // could carry the expansion past `MAX_DEPTH` while every
-                    // recorded level stayed inside it — and that expansion is
-                    // what `certify_stable`'s and `certify_rule`'s analyses
-                    // walk, with no bound of their own.
-                    let pos = child_depth.saturating_add(u32::try_from(i).unwrap_or(u32::MAX));
-                    let c = self.check_term(ctx, arg, pos)?;
-                    match params.get(i) {
-                        Some((_, s)) => want(*s, c.sort)?,
-                        None => {
-                            return Err(TypeError::SortMismatch {
-                                expected: referent.result,
-                                found: c.sort,
-                            })
-                        }
-                    }
-                    checked_args.push(c.term);
-                }
-                if args.len() < params.len() {
-                    return Err(TypeError::SortMismatch {
-                        expected: params[args.len()].1,
-                        found: referent.result,
-                    });
-                }
-                let arity = u32::try_from(args.len()).unwrap_or(u32::MAX);
-                let reach = depth
-                    .saturating_add(DERIVATION_COST)
-                    .saturating_add(arity)
-                    .saturating_add(referent.reach);
+                let checked_args = self.reference_args(ctx, &referent, args, depth)?;
+                let reach = reference_reach(depth, args.len(), referent.reach);
                 if reach > MAX_DEPTH {
                     return Err(TypeError::TooDeep);
                 }
@@ -633,6 +590,45 @@ impl<'a> Checker<'a> {
                 })
             }
         }
+    }
+
+    /// WT-ref's argument matching: each argument checked at the level its own
+    /// `Let` gives it in the flat expansion ([`argument_depth`], over the
+    /// reference's own level `depth`), then matched against its formal. An
+    /// arity mismatch has no variant of its own, so it is reported as the
+    /// closest thing the declared vocabulary admits — a `SortMismatch` at the
+    /// first unmatched position: too few arguments expects that formal and
+    /// finds the reference's result sort, too many expects the result sort and
+    /// finds the extra argument's sort.
+    fn reference_args(
+        &self,
+        ctx: &Ctx,
+        referent: &TypedTerm,
+        args: &[ArcTerm],
+        depth: u32,
+    ) -> Result<Vec<ArcTerm>, TypeError> {
+        let params = referent.params();
+        let mut checked_args: Vec<ArcTerm> = Vec::with_capacity(args.len());
+        for (i, arg) in args.iter().enumerate() {
+            let c = self.check_term(ctx, arg, argument_depth(depth, i))?;
+            match params.get(i) {
+                Some((_, s)) => want(*s, c.sort)?,
+                None => {
+                    return Err(TypeError::SortMismatch {
+                        expected: referent.result,
+                        found: c.sort,
+                    })
+                }
+            }
+            checked_args.push(c.term);
+        }
+        if args.len() < params.len() {
+            return Err(TypeError::SortMismatch {
+                expected: params[args.len()].1,
+                found: referent.result,
+            });
+        }
+        Ok(checked_args)
     }
 
     /// V-IDX `Reg` expansion: instantiate `body` once per registered class,

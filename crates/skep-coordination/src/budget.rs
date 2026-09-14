@@ -1,11 +1,12 @@
 //! §Internal 1/4 — the resource budget: what an untrusted PL term may command
 //! of the process, and how each walk charges against it. Two numbers bound a
-//! term — [`MAX_DEPTH`] its nesting, [`MAX_TERM_NODES`] its size — one prices
-//! a reference ([`DERIVATION_COST`]), one prices a node ([`weight`]), and one
-//! counter spends the second ([`Budget`]); three doors enforce them, the def
-//! decoder's, the checker's and the expander's, differing only in the refusal
-//! each answers with (`Malformed`, `TypeError::{TooDeep, TooLarge}`,
-//! `ExpansionTooLarge`).
+//! term — [`MAX_DEPTH`] its nesting, [`MAX_TERM_NODES`] its size — a pair of
+//! functions prices a reference in levels ([`argument_depth`],
+//! [`reference_reach`], over [`DERIVATION_COST`]), one prices a node
+//! ([`weight`]), and one counter spends the size ([`Budget`]); three doors
+//! enforce them, the def decoder's, the checker's and the expander's,
+//! differing only in the refusal each answers with (`Malformed`,
+//! `TypeError::{TooDeep, TooLarge}`, `ExpansionTooLarge`).
 //!
 //! Every walk over a term recurses once per former on the caller's thread and
 //! none is bounded otherwise, so the caps are set against a MEASURED stack and
@@ -39,14 +40,41 @@ pub(crate) const MAX_DEPTH: u32 = 128;
 /// The levels a reference costs beyond its own node, in [`MAX_DEPTH`]'s
 /// units: the frames between a `Ref` node's check and its referent's — the
 /// resolver, the memo probe, the derivation — and the evaluator's and
-/// expander's re-entry at the referent. The flat expansion binds the
-/// arguments through a `Let` chain ABOVE the referent's body, so a reference
-/// of arity `k` costs `k` levels on top of this before the body begins; each
-/// argument is charged separately, at the position its own `Let` gives it
-/// (`Checker::check_term`'s `Ref` arm). Set against the same measurement as
-/// [`MAX_DEPTH`]: the chain test derives a chain registered to the cap cold,
-/// on a default thread, so a cost set too low aborts there.
+/// expander's re-entry at the referent. [`reference_reach`] composes this
+/// with the flat expansion's `Let` chain and the referent's own reach;
+/// [`argument_depth`] places each argument in that chain. Set against the
+/// same measurement as [`MAX_DEPTH`]: the chain test derives a chain
+/// registered to the cap cold, on a default thread, so a cost set too low
+/// aborts there.
 pub(crate) const DERIVATION_COST: u32 = 2;
+
+/// The level at which argument `i` of a reference at level `node` is checked
+/// — which is the level its own expansion will occupy. PR3a realizes a
+/// reference as a `Let` chain binding the arguments ABOVE the referent's
+/// body, argument `i` at position `i`, so argument `i` expands `i` levels
+/// below the node's children and must be charged there. Charging every
+/// argument at the children's level bounds the referent's splice point and
+/// nothing else: `arity + argument reach` could carry the flat expansion past
+/// [`MAX_DEPTH`] while every recorded level stayed inside it — and that
+/// expansion is what `certify_stable`'s and `certify_rule`'s analyses walk,
+/// with no depth bound of their own.
+pub(crate) fn argument_depth(node: u32, i: usize) -> u32 {
+    node.saturating_add(1).saturating_add(u32::try_from(i).unwrap_or(u32::MAX))
+}
+
+/// The deepest level a walk through a reference at level `node` reaches: past
+/// [`DERIVATION_COST`] to the referent's own check, past the flat expansion's
+/// `Let` chain (one level per argument — PR3a), and through the referent's
+/// recorded reach. With [`argument_depth`] this is the WHOLE of what a
+/// reference costs in levels, stated here so the checker that charges it and
+/// the expander that builds to match cannot drift: a change to `expand.rs`'s
+/// realization of a reference is a change to these two functions, and the
+/// checker follows.
+pub(crate) fn reference_reach(node: u32, arity: usize, referent_reach: u32) -> u32 {
+    node.saturating_add(DERIVATION_COST)
+        .saturating_add(u32::try_from(arity).unwrap_or(u32::MAX))
+        .saturating_add(referent_reach)
+}
 
 /// The ONE budget on the SIZE of a PL tree, counted in NODES AND IN THE
 /// PAYLOAD UNITS A NODE CARRIES ([`weight`]), so what it bounds is the tree's

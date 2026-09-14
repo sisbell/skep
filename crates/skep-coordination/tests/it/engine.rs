@@ -723,7 +723,33 @@ fn a_fire_stops_at_the_draft_boundary_before_any_deposit() {
         other => panic!("expected Failed(DraftBoundary(doc2)), got {other:?}"),
     }
 
-    // (4) Both readable: the same rule shape fires, and the deposit is real.
+    // (4) BOTH fail: the home is asked first, so it is the document named —
+    // the member's witnessing tuple stays in the readable doc1, its address
+    // lives in doc2, and the action's home is a third document the guest
+    // class also refuses.
+    let k = kernel();
+    let mut c = coord_with_guest(
+        &k,
+        Box::new(|_: &World, d: &Address| *d != doc2() && *d != published_doc()),
+    );
+    let in_doc2 = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &in_doc2, &[]).expect("rel");
+    c.register_rule(Rule {
+        domain: Dom::MembersDom(concrete(&pred_stable_ty())),
+        trigger: always_addr(&c),
+        view: View::Audit,
+        action: FireAction::Marker { home: published_doc(), ty: key(&marker_ty()) },
+    })
+    .expect("register");
+    match c.step(&k.snapshot()) {
+        StepOutcome::Failed { arg, err: FireError::DraftBoundary(d), .. } => {
+            assert_eq!(arg, in_doc2);
+            assert_eq!(d, published_doc(), "the home, not the argument's document");
+        }
+        other => panic!("expected Failed(DraftBoundary(the home)), got {other:?}"),
+    }
+
+    // (5) Both readable: the same rule shape fires, and the deposit is real.
     let k = kernel();
     let mut c = coord_with_guest(&k, refuse_doc2());
     link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
@@ -737,7 +763,7 @@ fn a_fire_stops_at_the_draft_boundary_before_any_deposit() {
     assert!(matches!(c.step(&k.snapshot()), StepOutcome::Fired { .. }));
     assert!(k.snapshot().world().links().is_k(&marker_ty(), ca(1).tumbler()));
 
-    // (5) The membership re-check speaks BEFORE the boundary: an argument out
+    // (6) The membership re-check speaks BEFORE the boundary: an argument out
     // of the VISIBLE domain is a `NoOp` even when the action's home is the
     // draft — the trigger never reaches the action, so nothing is refused.
     let k = kernel();

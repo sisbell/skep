@@ -394,35 +394,14 @@ impl<W: CoordinationWorld> Coordinator<W> {
             return Ok(FireOutcome::NoOp);
         }
         let a = arg.key_addr();
-        // THE GUEST-CLASS FILTER (PUB round 2, lane 3.3, §5): a fire runs at
-        // pinned GUEST class — its home and the bound argument's document
-        // must both be readable at guest class off the fire's own snapshot,
-        // else the fire is refused BEFORE any deposit, as a `Failed` step
-        // (never a silent skip). The predicate is the engine's
-        // (`World::readable_guest` = `published(doc)`, injected at assembly);
-        // a document address bound as the argument is judged as itself, and so
-        // is an address with no document field — so the predicate is consulted
-        // on addresses this fire has not established to be registered
-        // documents (the home, before M7's H-HOME gate), which is why
-        // `Coordinator::new` obliges the assembler to make it TOTAL.
-        //
-        // This filter refuses before any deposit; what the deposit's own
-        // VALUE-KEYED gates see is governed one step below (lane 3.3b): the
-        // writer is built at the same guest class, so a guest-invisible
-        // incumbent in a draft cannot absorb a fire as `Deduped` (PUB-6.28).
-        // PUB-6.28's three REGISTRATION conditions remain not built.
-        {
-            let w = snap.world();
-            let arg_doc = document_of(a).unwrap_or_else(|| a.clone());
-            for doc in [rule.action.home(), &arg_doc] {
-                if !(self.guest)(w, doc) {
-                    return Err(FireError::DraftBoundary(doc.clone()));
-                }
-            }
+        if let Some(doc) = self.draft_boundary(snap.world(), rule.action.home(), a) {
+            return Err(FireError::DraftBoundary(doc));
         }
         // The writer at GUEST class (lane 3.3b, PUB-6.28): the fire's
-        // idempotency lookup sees only guest-readable incumbents, so a fire
-        // commits byte-identically to a world with no drafts.
+        // idempotency lookup sees only guest-readable incumbents, so a
+        // guest-invisible incumbent in a draft cannot absorb a fire as
+        // `Deduped`, and a fire commits byte-identically to a world with no
+        // drafts. PUB-6.28's three REGISTRATION conditions remain not built.
         let writer = self.link_writer();
         // Rule fires run as `Caller::System` (the ownership ruling's
         // automation path, 2026-08-16): M9 ⟂ M10 — a fire carries no wire
@@ -439,6 +418,29 @@ impl<W: CoordinationWorld> Coordinator<W> {
             }
         };
         deposited.map(|(effect, seq)| self.fired_or_deduped(&snap, effect, seq))
+    }
+
+    /// The DRAFT BOUNDARY (PUB round 2, lane 3.3, §5): the document a fire at
+    /// guest class may not cross, or `None`. Both the action's HOME and the
+    /// bound argument's DOCUMENT must be readable at guest class off the
+    /// fire's own snapshot, else the fire is refused BEFORE any deposit, as a
+    /// `Failed` step (never a silent skip); the home is asked first, so when
+    /// both fail it is the document named. An argument with no document field
+    /// is judged as itself — as is a document address bound as the argument.
+    /// The predicate is therefore consulted on addresses no gate has
+    /// established to be registered documents (the home, before M7's H-HOME),
+    /// which is why `Coordinator::new` obliges the assembler to make it TOTAL.
+    ///
+    /// This is the READ half of the class. What a deposit's own value-keyed
+    /// gates see is `Coordinator::link_writer`'s (lane 3.3b).
+    fn draft_boundary(&self, w: &W, home: &Address, arg: &Address) -> Option<Address> {
+        let arg_doc = document_of(arg).unwrap_or_else(|| arg.clone());
+        for doc in [home, &arg_doc] {
+            if !(self.guest)(w, doc) {
+                return Some(doc.clone());
+            }
+        }
+        None
     }
 
     /// A returned incumbent was already resident at the fire snapshot; a

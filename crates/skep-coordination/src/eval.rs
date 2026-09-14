@@ -125,7 +125,7 @@ impl<'a, W> EvalCtx<'a, W> {
 
     /// The UV default-view rewrite as ONE predicate: at `default` an element
     /// of a read of class `k` is kept unless some OTHER BH1 class filters it;
-    /// at `active` and `audit` no rewrite runs and every element is kept.
+    /// at `active` and `audit` nothing is dropped and every element is kept.
     /// Every view-parameterized read and every UV-rewritten collection asks
     /// this and nothing else — the verdict atoms (`is_K`, `tip`,
     /// `is_in_chain`, `target_of`, `age`) never ask it (UV).
@@ -134,20 +134,19 @@ impl<'a, W> EvalCtx<'a, W> {
     }
 
     /// `members(K)` at the CONTEXT's view (D1 / V-AUD / UV): the view's own
-    /// slice — `Slice::of` folds `default` onto the active tuples — with the
-    /// UV rewrite over it, which `uv_rewrite` applies at `default` and nowhere
-    /// else. `⋃ F.addrs()` over that slice is D1's equation, and V-AUD's is
-    /// the same one over the audit slice. Every read is the guest-class
-    /// view's (lane 4.1), so a draft-homed tuple contributes no member at any
-    /// view.
+    /// slice — `Slice::of` folds `default` onto the active tuples — through
+    /// [`EvalCtx::uv_rewrite`], which drops an element at `default` and
+    /// nowhere else. `⋃ F.addrs()` over that slice is D1's equation, and
+    /// V-AUD's is the same one over the audit slice. Every read is the
+    /// guest-class view's (lane 4.1), so a draft-homed tuple contributes no
+    /// member at any view.
     ///
     /// `_at` marks the three VIEW-PARAMETERIZED reads — this one, `is_k_at`
     /// and `targets_of_at`, the core atoms and `M_K`, which take the TERM
     /// view — against the fixed-view atoms (BH1–BH4, `A_K`, `L_K`), which
     /// read their named slice whatever the term view says.
     fn members_at(&self, k: &TypeKey) -> OrdSet<Tumbler> {
-        let read = self.links.members(&k.0, Slice::of(self.view));
-        self.uv_rewrite(k, read.into_iter().map(|a| a.tumbler().clone()).collect())
+        self.uv_rewrite(k, self.links.members(&k.0, Slice::of(self.view)))
     }
 
     /// `targets_of(K, x)` at the CONTEXT's view (D3 / V-AUD / UV), then the
@@ -160,7 +159,7 @@ impl<'a, W> EvalCtx<'a, W> {
             View::Audit => self.links.targets_of_denoting(&k.0, x),
             View::Active | View::Default => self.links.targets_of(&k.0, x, Slice::Active),
         };
-        self.uv_rewrite(k, read.into_iter().map(|a| a.tumbler().clone()).collect())
+        self.uv_rewrite(k, read)
     }
 
     /// `is_K(x)` at the CONTEXT's view — a verdict atom, so a `default` term
@@ -170,14 +169,16 @@ impl<'a, W> EvalCtx<'a, W> {
         self.links.is_k(&k.0, x.tumbler(), Slice::of(self.view))
     }
 
-    /// The UV rewrite over a whole returned collection — the elements
-    /// [`EvalCtx::uv_keeps`] admits. An unrewritten set is handed back rather
-    /// than rebuilt, so `active` and `audit` pay nothing.
-    fn uv_rewrite(&self, k: &TypeKey, set: OrdSet<Tumbler>) -> OrdSet<Tumbler> {
-        if self.view != View::Default {
-            return set;
-        }
-        set.into_iter().filter(|e| self.uv_keeps(k, e)).collect()
+    /// The UV rewrite over a whole read, and the ONE place an M7 answer
+    /// becomes a ℘_fin(T) value: M7 answers in `Address`, a PL set holds
+    /// `Tumbler` (M1's `Address` is neither `Hash` nor `Ord`), and at
+    /// `default` the elements [`EvalCtx::uv_keeps`] refuses are dropped — at
+    /// `active` and `audit` that predicate short-circuits on the view, so the
+    /// rewrite costs one comparison per element and keeps them all. So every
+    /// UV-rewritten read is ONE call, and a read that should have been
+    /// rewritten and was not is visible as the one that did not make it.
+    fn uv_rewrite(&self, k: &TypeKey, read: Vec<Address>) -> OrdSet<Tumbler> {
+        read.into_iter().map(|a| a.tumbler().clone()).filter(|e| self.uv_keeps(k, e)).collect()
     }
 
     /// BH3 join: `target_of` across the catalog's `ReverseLookup` classes —
@@ -324,9 +325,7 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
         Atom::Succs(tr, e) => {
             let k = tr.key();
             let x = as_addr(eval_term(cx, env, e));
-            let set: OrdSet<Tumbler> =
-                cx.links.succs(&k.0, &x).into_iter().map(|a| a.tumbler().clone()).collect();
-            Value::AddrSet(cx.uv_rewrite(k, set))
+            Value::AddrSet(cx.uv_rewrite(k, cx.links.succs(&k.0, &x)))
         }
         Atom::Chain(tr, e) => {
             let k = tr.key();
@@ -355,9 +354,7 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
         Atom::SourcesTo(tr, e) => {
             let k = tr.key();
             let x = as_addr(eval_term(cx, env, e));
-            let set: OrdSet<Tumbler> =
-                cx.links.sources_to(&k.0, &x).into_iter().map(|a| a.tumbler().clone()).collect();
-            Value::AddrSet(cx.uv_rewrite(k, set))
+            Value::AddrSet(cx.uv_rewrite(k, cx.links.sources_to(&k.0, &x)))
         }
         Atom::TargetOf(tr, e) => {
             let k = tr.key();
@@ -391,8 +388,7 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
                 .links
                 .stale(&k.0, h64)
                 .expect("type-check admits Stale only at a BH4-registered class");
-            let set: OrdSet<Tumbler> = stale.into_iter().map(|a| a.tumbler().clone()).collect();
-            Value::AddrSet(cx.uv_rewrite(k, set))
+            Value::AddrSet(cx.uv_rewrite(k, stale))
         }
         // V-DOC — M3 residence (a registered-but-arrangementless doc is a
         // valid residence; the eager/lazy split).

@@ -212,9 +212,14 @@ fn reads(fp: Footprint) -> Analysis {
 
 /// One classification's fixed context: the catalog, the term view (PC3 —
 /// binds the view-parameterized constituents), and the ST⁺ threshold
-/// widening. The fused FP + PD0 pass runs over it. Precondition on every
-/// input: ref-free, every `TypeRef` concrete (the evaluable projection / a
-/// flat expansion).
+/// widening. The fused FP + PD0 pass runs over it.
+///
+/// PRECONDITIONS on every input: ref-free, every `TypeRef` concrete, and
+/// WITHIN [`crate::budget::MAX_DEPTH`] — this pass recurses once per node on
+/// the caller's thread with no bound of its own, and takes that bound from
+/// `TypedTerm::reach`, which the checker charges for the flat expansion as
+/// well as for the checked tree. The two shapes that satisfy all three are a
+/// checked term's evaluable projection and an `Expander` output.
 ///
 /// The fields are private and [`Analyzer::new`] leaves `widen` false, so
 /// [`st_plus`] — the one judgment PD0's widening belongs to — is the only
@@ -612,9 +617,11 @@ fn moves_with_view(a: &Atom) -> bool {
 
 /// The syntactic scan: no atom whose denotation [`moves_with_view`] and no
 /// `M_K` domain (view-parameterized like the core atoms it reflects). The same
-/// answer at every view. Precondition as the `Analyzer`'s: ref-free input — a
-/// referent's body is the one part a `Ref` node's own spelling cannot vouch
-/// for, so the scan runs over the flat expansion, never around a `Ref`.
+/// answer at every view. Preconditions as the [`Analyzer`]'s — the depth
+/// bound included: this walk has none of its own. Ref-free, in particular,
+/// because a referent's body is the one part a `Ref` node's own spelling
+/// cannot vouch for, so the scan runs over the flat expansion, never around a
+/// `Ref`.
 pub(crate) fn view_independent(t: &Term) -> bool {
     struct ViewScan {
         independent: bool,
@@ -665,8 +672,8 @@ pub(crate) fn view_independent(t: &Term) -> bool {
 /// — the one PD0 widening, and the reason it is not `classify`'s. Judged at
 /// a fixed view: `certify_stable` admits only view-independent expansions,
 /// so the classification is view-invariant. Γ_D parameters read as bound
-/// constants (a free `Var` has an empty footprint). Precondition as the
-/// `Analyzer`'s: ref-free input.
+/// constants (a free `Var` has an empty footprint). Preconditions as the
+/// [`Analyzer`]'s — the depth bound included: this walk has none of its own.
 pub(crate) fn st_plus(catalog: &TypeCatalog, t: &Term) -> bool {
     Analyzer { catalog, view: View::Audit, widen: true }.term(t).st
 }
@@ -678,7 +685,8 @@ pub(crate) fn st_plus(catalog: &TypeCatalog, t: &Term) -> bool {
 /// its emitted class against (§8 leg b). `None` for every other spelling:
 /// sound but incomplete, as the rest of this module is, and by spelling, so
 /// an equivalent trigger written otherwise is simply not certified.
-/// Precondition as the `Analyzer`'s: ref-free input.
+/// Preconditions as the [`Analyzer`]'s — the depth bound included: this walk
+/// has none of its own.
 pub(crate) fn negated_membership(t: &Term, param: VarId) -> Option<&TypeKey> {
     let Term::Not(inner) = t else { return None };
     match inner.as_ref() {

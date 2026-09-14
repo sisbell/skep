@@ -224,6 +224,15 @@ pub fn vspan(subspace: u32, ordinal: u32, count: u32) -> Span {
     Span::new(t(&[subspace, ordinal]), t(&[0, count])).expect("ordinal-level V-span is T12-valid")
 }
 
+/// An ordinal-level depth-2 CONTENT V-span whose REACH ORDINAL is past
+/// `usize` — a well-formed region span the gate admits and whose reach no
+/// walk price can read. [`vspan`] cannot build one: its ordinal is a `u32`.
+pub fn vspan_past_usize(count: u32) -> Span {
+    let start = Tumbler::new([n(1), Nat::from(u128::MAX)])
+        .expect("a two-component sequence is nonempty");
+    Span::new(start, t(&[0, count])).expect("count ≥ 1 at action point 2 ⇒ T12-valid")
+}
+
 /// A depth-2 V-position.
 pub fn vp(subspace: u32, ordinal: u32) -> VPos {
     VPos {
@@ -332,8 +341,12 @@ pub const SYS: skep_arrangement::Caller = skep_arrangement::Caller::System;
 
 /// Seed `count` one-byte content values into `doc`'s content subspace via
 /// M5's INSERT composite (so the discovery queries have arranged content).
+/// The bytes cycle: M8 reads no content, so what each position HOLDS is never
+/// asserted, and cycling is what keeps the helper total at any `count`.
 pub fn seed_content(k: &Kernel<World>, doc: &Address, count: u32) {
-    let vals: Vec<Val> = (0..count).map(|i| Val::new(vec![b'a' + i as u8])).collect();
+    let vals: Vec<Val> = (0..count)
+        .map(|i| Val::new(vec![b'a' + (i % 26) as u8]))
+        .collect();
     skep_arrangement::Vstream::new(k)
         .insert(SYS, doc, vp(1, 1), vals, Deposit::Undeclared)
         .expect("test content INSERT succeeds");

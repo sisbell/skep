@@ -45,13 +45,21 @@ fn lineage_probes_flipped_slots_with_residence_gate() {
     assert_eq!(reads.in_claims(&ca(1), View::Active), vec![]);
 
     // Nullifying the claim removes it from the operative graph but keeps it
-    // in the audit history, with its own activity disclosed honestly.
+    // in the audit history, with its own activity disclosed honestly — asked
+    // of BOTH probes, since `Audit` is the only view that tells a passed-
+    // through argument from a hard-coded `Active`, and every other
+    // `out_claims` here asks `Active` or `Default`, which coerces to it.
     store.nullify(SYS, &doc2(), &claim).expect("nullify succeeds");
     assert_eq!(reads.in_claims(&e1, View::Active), vec![]);
     let audit = reads.in_claims(&e1, View::Audit);
     assert_eq!(audit.len(), 1);
     assert_eq!(audit[0].claim, claim);
     assert!(!audit[0].active);
+    assert_eq!(reads.out_claims(&e2, View::Active), vec![]);
+    let out_audit = reads.out_claims(&e2, View::Audit);
+    assert_eq!(out_audit.len(), 1);
+    assert_eq!(out_audit[0].claim, claim);
+    assert!(!out_audit[0].active);
     // After the retraction Active and Audit part — the one state where
     // "Default reads as Active" can be told from "Default reads as Audit".
     assert_eq!(reads.in_claims(&e1, View::Default), vec![]);

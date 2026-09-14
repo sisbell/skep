@@ -73,6 +73,15 @@ fn region_family_gates_doc_then_region_then_defines_empty() {
                 "content_vspan at subspace {subspace}, count {count}"
             );
             if let Some(span) = built {
+                // WHICH span, not merely that there is one: `count` positions
+                // FROM `at`, so a constructor that transposed the two would
+                // still build a shape the gate accepts and name a different
+                // region. At count 2 the transposition is a different span.
+                assert_eq!(
+                    span,
+                    vspan(subspace, 1, count),
+                    "content_vspan builds `count` positions from `at`"
+                );
                 assert!(reads.count_v(&doc1(), &[span]).is_ok());
             } else if count >= 1 {
                 assert_eq!(
@@ -365,6 +374,17 @@ fn the_region_family_refuses_an_image_past_the_run_budget() {
 /// while a FLAT region deep in the surface — each span resolving one run, so
 /// the run count admits it — is the walk's to refuse; and the region gate
 /// still speaks first.
+///
+/// Two further shapes, each one a price nothing else here asks for.
+///
+/// A span whose REACH ORDINAL does not fit a `usize` prices at the RUN COUNT,
+/// the most any walk passes, and never at zero. No run budget stands behind
+/// that: such a span resolves NOTHING, so a price of zero admits the region
+/// and M5 pays the whole walk for an empty answer.
+///
+/// What this pins about the SQUARE is only that it is more than the run
+/// budget: every region here is refused with room to spare or admitted with
+/// room to spare. The boundary itself is the next test's.
 #[test]
 fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
     let k = kernel();
@@ -391,6 +411,9 @@ fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
     // last position and resolves exactly one run, so the run count admits it;
     // the walk — MAX × (MAX + 1) runs — does not.
     let flat_deep: Vec<Span> = vec![vspan(1, MAX_IMAGE_RUNS as u32 + 1, 1); MAX_IMAGE_RUNS];
+    // Spans whose reach ordinal is past `usize`, so no price can be read off
+    // it — and which resolve nothing, so no run budget stands behind them.
+    let unreadable: Vec<Span> = vec![vspan_past_usize(1); MAX_IMAGE_RUNS];
     assert_eq!(reads.image(&doc2(), &flat_deep[..1]), Ok(vec![run(&ca(1), 1)]));
     assert_eq!(
         reads.image(&doc2(), &deep[..1]),
@@ -398,6 +421,11 @@ fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
         "a span past the end resolves no run, whatever it walks"
     );
     assert_eq!(reads.image(&doc1(), &deep), Ok(vec![]));
+    assert_eq!(
+        reads.image(&doc2(), &unreadable[..1]),
+        Ok(vec![]),
+        "an unreadable reach resolves no run either"
+    );
 
     for (name, refusal) in &region_entry_points(reads) {
         assert_eq!(
@@ -429,6 +457,84 @@ fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
             refusal(&doc2(), &flat_deep),
             Some(QueryError::ImageTooLarge),
             "{name}: a flat region deep in a surface past the run budget is the walk's to refuse"
+        );
+        assert_eq!(
+            refusal(&doc2(), &unreadable),
+            Some(QueryError::ImageTooLarge),
+            "{name}: an unreadable reach prices at the run count, never at zero"
+        );
+        assert_eq!(
+            refusal(&doc1(), &unreadable),
+            None,
+            "{name}: and at the run count — over one run the same spans are answered"
+        );
+        assert_eq!(
+            refusal(&doc2(), &unreadable[..1]),
+            None,
+            "{name}: one unreadable reach is one walk"
+        );
+    }
+}
+
+/// §1 — the walk budget AT its boundary: the square itself is admitted, and
+/// one step past it is refused. Both halves need the two tiers to AGREE, so
+/// the admitted half is the expensive one to state: a span pays
+/// `min(run_count, e − 1)`, and a region priced at the square normally walks
+/// the square it is priced at. It does not here, because the runs are WIDE —
+/// the price counts ORDINALS and the walk counts RUNS, so spans reaching
+/// `2 × MAX` over runs `MAX / 2` positions wide price the run count apiece
+/// and walk four runs. That is the one shape where the equal case is
+/// affordable.
+///
+/// It takes both halves to pin the constant, and neither alone does much: a
+/// region refused with room to spare pins only an upper bound, and one
+/// admitted over a sparse document is rescued by the second tier whatever the
+/// constant says. Together they pin the square to its value AND the
+/// comparison at it — a `>=` refuses the admitted half, a smaller square
+/// refuses it too, and a larger one admits the refused half.
+///
+/// The RUN budget is deliberately left slack: half as many spans as it admits,
+/// each resolving one run, so the verdicts below are the walk budget's alone.
+#[test]
+fn the_walk_budget_admits_the_square_itself_and_refuses_one_step_past_it() {
+    const WIDTH: u32 = MAX_IMAGE_RUNS as u32 / 2;
+    let runs = 2 * MAX_IMAGE_RUNS;
+    let k = kernel();
+    seed_content(&k, &doc1(), WIDTH); // one run, WIDTH positions wide
+    // doc2: `2 × MAX` runs of `WIDTH` positions each, none abutting the next,
+    // so the run count reaches every span's reach below while the run-list is
+    // short in the ordinals each span walks.
+    let many = vec![spec(&doc1(), 1, 1, WIDTH); runs];
+    Vstream::new(&k)
+        .copy(SYS, &doc2(), vp(1, 1), &many)
+        .expect("copy succeeds");
+    assert_eq!(k.snapshot().world().m5().content_runs(&doc2()).len(), runs);
+    let reads = Reads(&k);
+
+    // `MAX / 2` spans each reaching `2 × MAX + 1`: both tiers price
+    // `min(2 × MAX, 2 × MAX)` apiece, for `MAX × MAX` — the square exactly.
+    let at_square: Vec<Span> = vec![vspan(1, runs as u32, 1); MAX_IMAGE_RUNS / 2];
+    // One span pricing 1 more. Widening a span cannot do it: the run count
+    // caps what any one span pays.
+    let past_square: Vec<Span> = at_square
+        .iter()
+        .cloned()
+        .chain([vspan(1, 1, 1)])
+        .collect();
+    // The premise: each span resolves ONE run, so the run budget — which
+    // admits `MAX` — has room to spare either way.
+    assert_eq!(reads.image(&doc2(), &at_square[..1]).map(|r| r.len()), Ok(1));
+
+    for (name, refusal) in &region_entry_points(reads) {
+        assert_eq!(
+            refusal(&doc2(), &at_square),
+            None,
+            "{name}: the square itself is admitted"
+        );
+        assert_eq!(
+            refusal(&doc2(), &past_square),
+            Some(QueryError::ImageTooLarge),
+            "{name}: one step past the square is refused, not truncated"
         );
     }
 }

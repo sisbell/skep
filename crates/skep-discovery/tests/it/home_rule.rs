@@ -11,7 +11,8 @@ use skep_address::{document_of, Address};
 use skep_discovery::{
     addressably_discoverable_from_on, count_ftt_on, count_v_on, delete_orphans_on,
     findlinks_ftt_on, findlinks_v_on, in_claims_on, out_claims_on, project_on, retrieve_endsets_on,
-    window_ftt_on, window_v_on, FourSet, QueryError, SupClaim, FROM, TO,
+    window_ftt_on, window_v_on, FourSet, QueryError, SlotSpec, SupClaim, FROM, MAX_ENDSET_SPANS,
+    TO,
 };
 use skep_links::{enc, LinkWriter, View};
 
@@ -172,20 +173,27 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
     }
 }
 
-/// The home rule's contract with its predicate: asked only of a candidate's
-/// HOME, at most once per candidate (PUB-7.15, PUB-7.16) — a window asks no
-/// further than it walks — and of the pointwise pair's `a` alone, never of a
-/// named `d`. Under the pure predicates every other test passes, a read that
-/// asked a link, asked twice, or asked the named document answers exactly as
-/// the right one does; a predicate that records what it is asked is where
-/// each shows.
+/// The home rule's contract with its predicate, over every read that takes
+/// one: asked only of a candidate's HOME, at most once per candidate
+/// (PUB-7.15, PUB-7.16) — a window asks no further than it walks, and a
+/// read asks only past its OTHER filters — and of the pointwise pair's `a`
+/// alone, never of a named `d`. Under the pure predicates every other test
+/// passes, a read that asked a link, asked once per slot, asked the named
+/// document, or asked ahead of the residence test answers exactly as the
+/// right one does; a predicate that records what it is asked is where each
+/// shows.
+///
+/// Each link here touches the region through FROM and TO both, which is what
+/// separates one ask per candidate from one ask per `(candidate, slot)`; and
+/// `d` is itself a home, so a preview that consulted its `d` shows as a
+/// fourth ask rather than as a different address.
 #[test]
 fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
     let store = LinkWriter::new(&k, &EVERYONE);
     for home in [doc1(), doc1(), doc2()] {
-        link(&store, &home, &[ca(1)], &[ca(101)]); // la(1), la(2), la2(1)
+        link(&store, &home, &[ca(1)], &[ca(1)]); // la(1), la(2), la2(1)
     }
     let snap = k.snapshot();
     let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
@@ -203,20 +211,63 @@ fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
         links.sort();
         links
     };
+    // The three candidates' homes, derived rather than spelled, so every
+    // assertion below reads "once per candidate" and not "three times".
+    let candidates = findlinks_ftt_on(&snap, &FourSet::any(), &every_home);
+    let homes = sorted(homes_of(&candidates));
+    let region = [vspan(1, 1, 1)];
 
-    let found = findlinks_v_on(&snap, &doc1(), &[vspan(1, 1, 1)], &recorder)
-        .expect("findlinks_v");
+    let found = findlinks_v_on(&snap, &doc1(), &region, &recorder).expect("findlinks_v");
     assert_eq!(found.len(), 3);
-    assert_eq!(sorted(asked.take()), sorted(homes_of(&found)));
+    assert_eq!(sorted(asked.take()), homes.clone());
     let found = findlinks_ftt_on(&snap, &FourSet::any(), &recorder);
     assert_eq!(found.len(), 3);
-    assert_eq!(sorted(asked.take()), sorted(homes_of(&found)));
+    assert_eq!(sorted(asked.take()), homes.clone());
+    // The counts ask exactly what their enumerations ask.
+    assert_eq!(count_v_on(&snap, &doc1(), &region, &recorder), Ok(3));
+    assert_eq!(sorted(asked.take()), homes.clone());
+    assert_eq!(count_ftt_on(&snap, &FourSet::any(), &recorder), 3);
+    assert_eq!(sorted(asked.take()), homes.clone());
     // A window of one asks of the one candidate it admits, and stops.
     assert_eq!(
         window_ftt_on(&snap, &FourSet::any(), None, 1, &recorder).batch,
         vec![la(1)]
     );
     assert_eq!(asked.take(), vec![doc1()]);
+    assert_eq!(
+        window_v_on(&snap, &doc1(), &region, None, 1, &recorder)
+            .expect("window_v")
+            .batch,
+        vec![la(1)]
+    );
+    assert_eq!(asked.take(), vec![doc1()]);
+    // RETRIEVEENDSETS asks at the CANDIDATE's identity, ONCE, before its slots
+    // are read: each link reaches the region through FROM and TO, so a rule
+    // asked per (candidate, slot) asks twice for each.
+    assert_eq!(
+        retrieve_endsets_on(&snap, &doc1(), &region, &recorder),
+        Ok(vec![(FROM, enc(&[ca(1)])), (TO, enc(&[ca(1)]))])
+    );
+    assert_eq!(sorted(asked.take()), homes.clone());
+    // The preview asks about the ORPHANS and never about the `d` it is asked
+    // at.
+    let report = delete_orphans_on(&snap, &doc1(), &vp(1, 1), &n(1), &recorder).expect("preview");
+    assert_eq!(report.orphaned.len(), 3);
+    assert_eq!(sorted(asked.take()), sorted(homes_of(&report.orphaned)));
+    // "Past its OTHER filters": under a home-bound descriptor only the
+    // residing candidate costs a consult, in the enumeration and in the
+    // window's lazy key-cut alike.
+    let homed_in_doc2 = FourSet {
+        home: SlotSpec::Spans(enc(&[doc2()])),
+        ..FourSet::any()
+    };
+    assert_eq!(findlinks_ftt_on(&snap, &homed_in_doc2, &recorder), vec![la2(1)]);
+    assert_eq!(asked.take(), vec![doc2()]);
+    assert_eq!(
+        window_ftt_on(&snap, &homed_in_doc2, None, 5, &recorder).batch,
+        vec![la2(1)]
+    );
+    assert_eq!(asked.take(), vec![doc2()]);
     // The pointwise pair asks `a`'s home once, and of a homeless `a` nothing.
     assert!(project_on(&snap, &la2(1), FROM, &doc1(), &recorder).is_ok());
     assert_eq!(asked.take(), vec![doc2()]);
@@ -251,6 +302,44 @@ fn retrieve_endsets_filters_at_the_links_home_and_ships_its_endset_whole_at_orig
         Ok(vec![(FROM, enc(&[ca(1), ca2(1)]))]),
         "the doc2-homed link's pair goes; the doc1-homed link's endset ships whole"
     );
+}
+
+/// §4 — the span budget prices the READER's own answer, not the store's: a
+/// link the home rule refuses contributes no pair and no spans (PUB-6.15), so
+/// a region whose whole answer is one span past the budget is still answered
+/// to a reader that cannot see the link carrying that span. A budget summed
+/// over the candidates instead would refuse a sixty-four-pair answer — and
+/// the refusal would tell that reader that links they may not see exist, on a
+/// verdict `QueryError` says they cannot reshape their way past. Every other
+/// budget test runs under the total predicate and every other home-rule test
+/// runs far under the budget, so neither can see this.
+#[test]
+fn retrieve_endsets_prices_its_span_budget_over_the_readers_own_answer() {
+    const SPANS: u32 = 1024;
+    let at_budget = MAX_ENDSET_SPANS / SPANS as usize; // 64 whole endsets
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    for i in 0..at_budget as u32 {
+        link(&store, &doc1(), &wide_from(i, SPANS), &[ca(101)]);
+    }
+    // One span more, homed where the second reader may not read.
+    link(&store, &doc2(), &[ca(1)], &[ca(101)]);
+    let snap = k.snapshot();
+    let region = [vspan(1, 1, 1)];
+
+    assert_eq!(
+        retrieve_endsets_on(&snap, &doc1(), &region, &every_home),
+        Err(QueryError::EndsetsTooLarge),
+        "the whole answer is one span past the budget"
+    );
+    let cannot_read_doc2 = |d: &Address| *d != doc2();
+    let pairs = retrieve_endsets_on(&snap, &doc1(), &region, &cannot_read_doc2)
+        .expect("this reader's own answer is AT the budget, not past it");
+    assert_eq!(pairs.len(), at_budget);
+    assert!(pairs
+        .iter()
+        .all(|(i, e)| *i == FROM && e.len() == SPANS as usize));
 }
 
 /// §7 — the home rule is asked of the CLAIM's own address, and a surviving

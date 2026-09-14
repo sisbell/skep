@@ -72,7 +72,15 @@ impl Value {
     /// of the invariant ([`lift`] is the binding site's): `eval`'s
     /// precondition and `evaluate_def`'s argument check ask it of every value
     /// a caller supplies, so `lift` is infallible on what passed here.
-    pub(crate) fn holds_addresses(&self) -> bool {
+    ///
+    /// Public as the DISCHARGE POINT for `eval`'s ℘_fin(T) precondition: a
+    /// caller that builds an `AddrSet` from tumblers it did not take from a
+    /// store-minted `Address` must be able to check it before calling, and
+    /// this crate re-exports `Tumbler` without M1's `validate`.
+    /// `evaluate_def` refuses the same condition as a value
+    /// (`ArgSortMismatch`), its Γ_D not being in the caller's hand; `eval`
+    /// asserts it, so the caller owes it and needs this.
+    pub fn holds_addresses(&self) -> bool {
         match self {
             Value::AddrSet(s) => s.iter().all(is_t4_valid),
             _ => true,

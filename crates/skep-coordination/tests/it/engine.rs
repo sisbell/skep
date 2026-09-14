@@ -1156,6 +1156,7 @@ fn fire_counts_are_recomputed_from_the_store_not_tallied_in_memory() {
     // A handle that fired nothing recomputes the same count from the store.
     let mut fresh = coord(&k);
     let id2 = fresh.register_rule(rule).expect("the same rule, a new handle");
+    assert_eq!(id2, id, "ids are minted per handle — two coordinators over one kernel collide");
     assert_eq!(fresh.fire_count(id2, &ca(1)), 1);
 
     // A non-rule writer at the same (type, home, exact F) — the Marker class

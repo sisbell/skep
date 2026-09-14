@@ -99,14 +99,22 @@ pub enum ScopeBody {
 /// is "registered earlier" — which is what makes `armer_cycles`' stated
 /// ordering checkable, and what lets a driver key a `BTreeMap` of per-rule
 /// state in registration order.
+///
+/// Minted PER-`Coordinator`, from that handle's own counter starting at 1, so
+/// an id is meaningful only to the handle that minted it and two handles over
+/// one kernel mint COLLIDING ids. `<` therefore orders the rules of ONE
+/// handle; an id carried to another either names no rule there — tripping
+/// `fire`'s precondition — or names a DIFFERENT rule, which no check here can
+/// detect. A driver holding several coordinators must keep their ids apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuleId(pub(crate) u64);
 
 /// A rule domain that passed `check_dom` — the `Dom` analogue of
 /// `TypedTerm`'s evaluable projection: every `TypeRef` `Concrete`, no
 /// surviving `Reg` binder. A [`Rule`]'s own `domain` is the raw submission;
-/// only this shape is ever enumerated, and only `register_rule` can build
-/// one, so the working set holds no unchecked domain.
+/// only this shape is ever enumerated, and only `validate_rule` builds one —
+/// the shared doorkeeper both `register_rule` and `certify_rule` run — so the
+/// working set holds no unchecked domain.
 #[derive(Debug, Clone)]
 pub(crate) struct TypedDom(pub(crate) ArcDom);
 

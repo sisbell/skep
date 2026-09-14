@@ -359,21 +359,25 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// `DraftBoundary`: the trigger never reaches the action. Answer order,
     /// as built: `NoOp` (out of the visible domain, or trigger false) →
     /// `Err(DraftBoundary(doc))` (the action's home or the argument's
-    /// document unreadable at guest class) → `Err(HomeNotRegistered)` →
-    /// `Err(Emit | Nullify)`.
+    /// document unreadable at guest class; when BOTH fail, the home is the
+    /// document named) → `Err(HomeNotRegistered)` → `Err(Emit | Nullify)`.
     ///
-    /// PRECONDITION: `occurrence.rule` is a `RuleId` this `Coordinator`
-    /// registered — an `Occurrence` comes from this coordinator's own
-    /// `next_enabled`, or is aimed by hand at a known rule; an unregistered
-    /// id is a precondition violation and PANICS, like `decide`
-    /// (`fire_count`, a monitor, answers 0 for the same id — a count, not a
-    /// fire).
+    /// PRECONDITION: `occurrence.rule` is a `RuleId` THIS `Coordinator`
+    /// minted — ids are per-handle, see [`RuleId`]. An `Occurrence` comes from
+    /// this coordinator's own `next_enabled`, or is aimed by hand at a known
+    /// rule; an id naming no rule here is a precondition violation and
+    /// PANICS, like `decide` (`fire_count`, a monitor, answers 0 for the same
+    /// id — a count, not a fire). An id that COLLIDES with one this handle
+    /// minted names that rule instead and fires ITS action, which is why the
+    /// id's provenance is the caller's obligation and not a check.
     pub fn fire(&self, occurrence: &Occurrence) -> Result<FireOutcome, FireError> {
         let rule = self
             .rules
             .iter()
             .find(|r| r.id == occurrence.rule)
-            .expect("fire precondition: the RuleId is registered with this Coordinator");
+            .expect(
+                "fire precondition: the RuleId was minted by this Coordinator (ids are per-handle)",
+            );
         let snap = self.kernel.snapshot();
         // Membership is the domain element's own identity rule
         // (`Arg::same_element`), and what it finds is the STORE's element —
@@ -396,7 +400,11 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // else the fire is refused BEFORE any deposit, as a `Failed` step
         // (never a silent skip). The predicate is the engine's
         // (`World::readable_guest` = `published(doc)`, injected at assembly);
-        // a document address bound as the argument is judged as itself.
+        // a document address bound as the argument is judged as itself, and so
+        // is an address with no document field — so the predicate is consulted
+        // on addresses this fire has not established to be registered
+        // documents (the home, before M7's H-HOME gate), which is why
+        // `Coordinator::new` obliges the assembler to make it TOTAL.
         //
         // This filter refuses before any deposit; what the deposit's own
         // VALUE-KEYED gates see is governed one step below (lane 3.3b): the
@@ -437,6 +445,12 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// fresh deposit's address is newly minted and absent from it. Safe
     /// direction under concurrency: at worst a gap-deposited witness is
     /// miscounted as a real fire — the monitor is only a backstop.
+    ///
+    /// Reads `LinkState` CLASS-FREE, as the def probes and the divergence
+    /// monitor do (`defs.rs` enumerates the regime): the writer runs at guest
+    /// class, so a returned incumbent is guest-readable and a fresh mint is
+    /// absent from this snapshot under either reading — the discrimination is
+    /// the same filtered or not.
     fn fired_or_deduped(&self, snap: &Snapshot<W>, effect: Address, seq: Seq) -> FireOutcome {
         if snap.world().links().readlink(&effect).is_some() {
             FireOutcome::Deduped { effect, seq }
@@ -498,9 +512,11 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// under-counts a genuine rule fire): count > 1 flags misbehavior for
     /// investigation — it does not certify it, and must never drive an
     /// automated kill. For a `Tup`-domain rule the key is the bound tuple's
-    /// `t.addr`. An unregistered `RuleId` counts 0. The count is as of a
-    /// snapshot pinned at the call — the one read in this group that takes
-    /// no caller's snapshot.
+    /// `t.addr`. A `RuleId` this handle did not mint counts 0 when it names no
+    /// rule here, and counts the LOCAL rule's attribution key when it collides
+    /// with one this handle minted — ids are per-handle ([`RuleId`]). The
+    /// count is as of a snapshot pinned at the call — the one read in this
+    /// group that takes no caller's snapshot.
     ///
     /// Reads `LinkState` CLASS-FREE, where every verdict reads through the
     /// guest-class view: the attribution key pins the home to the rule's own

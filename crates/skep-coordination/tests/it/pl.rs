@@ -167,6 +167,12 @@ fn a_value_is_buildable_and_self_describing_through_this_crate_s_own_paths() {
         assert_eq!(val.sort(), *sort, "{val:?}");
     }
 
+    // `eval`'s ℘_fin(T) precondition has a discharge point: a caller building
+    // a set from hand-made tumblers — this crate re-exports `Tumbler` without
+    // M1's `validate` — can reject one before `eval` asserts on it.
+    assert!(set.holds_addresses());
+    assert!(!Value::AddrSet(OrdSet::unit(t(&[1, 0, 0, 1]))).holds_addresses());
+
     // The re-exported `OrdSet<Tumbler>` IS the type the doors accept.
     let k = kernel();
     let c = coord(&k);

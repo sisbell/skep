@@ -64,9 +64,11 @@ pub enum TypeError {
     /// evaluable projection (`Reg`-expansion joins included), or the reach of
     /// a `Ref` — the referent's own recorded depth plus the derivation and
     /// the arguments — would carry a walk deeper than the one bound every
-    /// walk is set against; or a `Ref` whose referent's derivation cannot
-    /// complete at the level the `Ref` sits at, the referent left unjudged.
-    /// A def at the cap admits no reference to it.
+    /// walk is set against; or a `Ref` ARGUMENT whose own nesting, at the
+    /// `Let` position its index gives it in the flat expansion, would do the
+    /// same; or a `Ref` whose referent's derivation cannot complete at the
+    /// level the `Ref` sits at, the referent left unjudged. A def at the cap
+    /// admits no reference to it.
     TooDeep,
     /// The term, after `Reg`-expansion, exceeds the `MAX_TERM_NODES` budget —
     /// counted per node the checker visits or builds AND per unit of payload

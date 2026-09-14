@@ -112,6 +112,16 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// give one verdict two visibility answers for one document, and a
     /// factory capturing its own kernel or its own class would type-check and
     /// void the guarantee in silence.
+    ///
+    /// And `guest` must be TOTAL over every `&Address` M9 hands it, which is
+    /// not only registered documents: a fire consults it on the action's HOME
+    /// before M7's H-HOME gate has run — so on an address this crate has not
+    /// established to be a registered document — and on `document_of` of the
+    /// bound argument, falling back to the argument itself when it has no
+    /// document field. It must ANSWER for any of those, never panic, and
+    /// `false` is the safe answer for an address it does not recognize. The
+    /// engine's `World::readable_guest` is total by construction: M3's
+    /// `published` answers for any address.
     pub fn new(
         kernel: Arc<Kernel<W>>,
         registry: Arc<TypeRegistry>,
@@ -261,6 +271,11 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// the injected `guest` predicate refuses is invisible to the verdict,
     /// exactly as it is to a fire's gates. The verdict is "as of
     /// `snap.seq()`" (M2 V1 retrospective).
+    ///
+    /// Each precondition has a PUBLIC discharge point, so a caller can check
+    /// what it owes before it calls: [`TypedTerm::is_ref_free`],
+    /// [`TypedTerm::params`] against [`Value::sort`], and
+    /// [`Value::holds_addresses`].
     pub fn eval(&self, t: &TypedTerm, env: &Env, view: View, snap: &Snapshot<W>) -> Value {
         assert!(
             t.is_ref_free(),
@@ -282,7 +297,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     }
 
     /// Convenience for Bool-codomain terms; panics if the codomain is not
-    /// Bool, or on either of `eval`'s preconditions.
+    /// Bool, or on any of `eval`'s preconditions.
     pub fn decide(&self, t: &TypedTerm, env: &Env, view: View, snap: &Snapshot<W>) -> bool {
         assert!(
             t.result_sort() == Sort::Bool,

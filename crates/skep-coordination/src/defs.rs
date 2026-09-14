@@ -13,10 +13,16 @@
 //! `retract_pred`'s target probe all read M7's `LinkState` directly, and a
 //! def registered into a draft home is ever-registered as it was — signed,
 //! resolvable and evaluable — while the guest-class view the evaluator looks
-//! through hides its `pdef` tuple from `is_K`. The only other class-free
-//! read in the crate is the divergence monitor's (`engine.rs::fire_count`).
-//! Every read inside a VERDICT — this module's `evaluate_def` included —
-//! goes through `Coordinator::eval_ctx`'s guest-class view.
+//! through hides its `pdef` tuple from `is_K`. Two class-free reads sit
+//! outside this module and complete the list: the divergence monitor's
+//! (`engine.rs::fire_count`), whose attribution key pins the home to the
+//! rule's own action home; and a fire's gap discrimination
+//! (`engine.rs::fired_or_deduped`), which probes residence of the address M7
+//! just returned — the writer runs at guest class, so a returned incumbent is
+//! guest-readable and a fresh mint is absent from the fire snapshot under
+//! either reading, and the verdict is the same filtered or not. Every read
+//! inside a VERDICT — this module's `evaluate_def` included — goes through
+//! `Coordinator::eval_ctx`'s guest-class view.
 
 use std::slice::from_ref;
 
@@ -149,6 +155,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// a referent ever- but not actively registered at σ
     /// (`ReferentNotActive` — endorsement); `home` not a registered document
     /// (`HomeNotRegistered`, P0); M7's own refusal of the emit (`Emit`).
+    /// Where several referents fail one of the two referent gates, the
+    /// address carried is the FIRST in first-occurrence pre-order
+    /// (`ast::ref_addrs`), which is the referent the design's walk order
+    /// reaches first.
     ///
     /// RETURNS `(tuple, seq)`: the active `pdef` tuple's address — the
     /// fresh deposit's, or on an idem⊤ dedup hit the incumbent's, with M7's

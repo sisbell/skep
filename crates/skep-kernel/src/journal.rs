@@ -375,7 +375,9 @@ fn find_magic(buf: &[u8], from: usize) -> Option<usize> {
 /// [`inferred_last_seq`], [`reaches_genesis`], [`reclaim_below`] and
 /// [`scan`] — because a `firstSeq` read outside them is a coverage inference
 /// made away from the naming rule it rests on, and [`reclaim_below`] deletes
-/// files on that inference. A slice of these travels; the names inside do not.
+/// files on that inference. A slice of these travels; the names inside do not,
+/// and neither does the inference drawn from them — the one fact about segment
+/// coverage that leaves this module is [`reaches_genesis`]'s answer.
 pub(crate) struct SegmentMeta {
     first_seq: u64,
     path: PathBuf,
@@ -435,7 +437,11 @@ pub(crate) fn list_segments(dir: &Path) -> io::Result<Vec<SegmentMeta>> {
 /// conservative. `None` for the final (active) segment, which has no
 /// successor and therefore no trusted `lastSeq`: it is always scanned, never
 /// range-reclaimed (§1/§6/§7).
-pub(crate) fn inferred_last_seq(segs: &[SegmentMeta], i: usize) -> Option<u64> {
+///
+/// Private for the reason [`SegmentMeta`]'s fields are: a coverage inference
+/// drawn outside this module is drawn away from the naming rule it rests on,
+/// and [`reclaim_below`] deletes files on it.
+fn inferred_last_seq(segs: &[SegmentMeta], i: usize) -> Option<u64> {
     segs.get(i + 1).map(|next| next.first_seq.saturating_sub(1))
 }
 
@@ -924,11 +930,13 @@ pub(crate) struct TailCut {
     discard: Vec<PathBuf>,
 }
 
-/// Pass-1 result (§7): the committed head (§7's `W`), the committed records,
-/// the corrupt runs, and where the tail to truncate begins. A scan that could
-/// not enumerate the frame stream produces none of this — it answers
-/// [`ScanFail`] — so every field here describes the whole scanned region and
-/// carries no qualification.
+/// Pass-1 result (§7): the committed head (§7's `W`), the committed records a
+/// fold may read, the corrupt runs, and where the tail to truncate begins. A
+/// scan that could not enumerate the frame stream produces none of this — it
+/// answers [`ScanFail`] — so nothing here is a PREFIX of what the region
+/// holds. What it COLLECTED is bounded by the caller's own fold bound, which
+/// is why the records are reached through [`ScanOutcome::records_to`] rather
+/// than read as a set.
 pub(crate) struct ScanOutcome {
     /// The base this scan ran against — §7's `S_load`. Every judgment it
     /// answers is relative to that base, so it is carried here rather than
@@ -937,8 +945,8 @@ pub(crate) struct ScanOutcome {
     s_load: u64,
     /// The boundary this scan COLLECTED to, as [`scan`] was called with it —
     /// `None` for the whole scanned region. Carried here so a fold can be held
-    /// to it ([`ScanOutcome::covers`]): records above it were read and dropped,
-    /// so a fold past it is one this outcome cannot answer.
+    /// to it ([`ScanOutcome::records_to`]): records above it were read and
+    /// dropped, so a fold past it is one this outcome cannot answer.
     bound: Option<u64>,
     /// The last COMMITTED marker's `last_seq`, floored at `S_load` — §7's `W`
     /// (if no committed marker sits above the loaded checkpoint it is
@@ -946,12 +954,13 @@ pub(crate) struct ScanOutcome {
     /// recovery's own fold bound, so it names the last committed marker of the
     /// whole scanned region.
     pub committed_head: u64,
-    /// Every committed record at or below the scan's `bound`, unordered (the
-    /// caller sorts by `Seq` and filters to `(S_load, bound]`). Records above
-    /// the bound are read and dropped rather than collected: no caller reads
-    /// them, and holding them is what made a one-transaction bounded replay
-    /// cost the whole retained window.
-    pub committed_records: Vec<CommittedRecord>,
+    /// Every committed record at or below the scan's `bound`, unordered and
+    /// unfiltered — read through [`ScanOutcome::records_to`], which is where
+    /// the order, the range and the one-coordinate-once rule are settled.
+    /// Records above the bound are read and dropped rather than collected: no
+    /// fold reads them, and holding them is what made a one-transaction
+    /// bounded replay cost the whole retained window.
+    committed_records: Vec<CommittedRecord>,
     /// Every committed marker's `last_seq` at or below the scan's `bound`, in
     /// scan order — the transaction boundaries a bounded replay may be asked
     /// about, which [`ScanOutcome::require_boundary`] answers from. That
@@ -1014,7 +1023,7 @@ impl ScanOutcome {
     /// Records above that boundary were read and dropped, so a fold past it
     /// cannot restore them and would answer `Ok` with a world missing exactly
     /// the range between (§7).
-    pub(crate) fn covers(&self, bound: u64) -> bool {
+    fn covers(&self, bound: u64) -> bool {
         self.bound.is_none_or(|collected| bound <= collected)
     }
 
@@ -1034,6 +1043,43 @@ impl ScanOutcome {
             .copied()
             .filter(|&b| b < at)
             .fold(self.s_load, u64::max))
+    }
+
+    /// The committed records a fold over `(s_load, bound]` must apply, in
+    /// `Seq` order and each coordinate once. Order, range and uniqueness are
+    /// all facts about the set THIS scan derived, so they are settled here
+    /// rather than by whoever folds: [`crate::WorldState::apply`] is not
+    /// required to be idempotent, so a coordinate applied twice is silent
+    /// double application answered `Ok` — while a `Seq` merely MISSING is not
+    /// corruption at all, since a burned-`Seq` gap folds harmlessly (§6/§7).
+    ///
+    /// `Err` is a `Seq` this scan saw twice in that range — a journal no
+    /// sequencer here wrote, since each coordinate is minted once. This is the
+    /// ACROSS-transactions half of "no coordinate twice"; [`PendingTxn`]'s
+    /// `ordered` is the within-transaction half, and both sit with the journal
+    /// they are properties of.
+    ///
+    /// PRECONDITION — `bound` must be at or below the boundary this scan
+    /// COLLECTED to ([`ScanOutcome::covers`]). Records above it were read and
+    /// dropped, so a fold past it reads records that were never collected,
+    /// which no filter can restore: a caller's bug, answered as one rather
+    /// than with a world short by exactly that range.
+    pub(crate) fn records_to(&self, bound: u64) -> Result<Vec<&CommittedRecord>, u64> {
+        assert!(
+            self.covers(bound),
+            "fold to {bound} against a scan that did not collect that far: the \
+             records between them were never collected (Base::scan)"
+        );
+        let mut records: Vec<&CommittedRecord> = self
+            .committed_records
+            .iter()
+            .filter(|entry| entry.seq > self.s_load && entry.seq <= bound)
+            .collect();
+        records.sort_by_key(|entry| entry.seq);
+        match records.windows(2).find(|pair| pair[0].seq == pair[1].seq) {
+            Some(pair) => Err(pair[0].seq),
+            None => Ok(records),
+        }
     }
 }
 
@@ -1410,6 +1456,13 @@ mod tests {
         s
     }
 
+    /// The coordinates `records_to` hands a fold, in the order it hands them —
+    /// so an assertion reads as the sequence of applications it stands for.
+    fn folded_seqs(out: &ScanOutcome, bound: u64) -> Result<Vec<u64>, u64> {
+        out.records_to(bound)
+            .map(|records| records.iter().map(|entry| entry.seq).collect())
+    }
+
     /// The scan aims truncation at `segment` @ `offset`, with nothing later to
     /// discard (these fixtures hold one segment).
     fn assert_tail(out: &ScanOutcome, segment: &Path, offset: u64) {
@@ -1634,6 +1687,60 @@ mod tests {
         let out = segments.commit_txn(1, vec![RefusesSerialization], || installed = true);
         assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
         assert!(!installed, "a refused transaction installs nothing");
+    }
+
+    #[test]
+    fn records_to_orders_the_fold_ranges_it_and_refuses_a_repeated_seq() {
+        // The three facts about the derived set, settled where the set is:
+        // `apply` need not be idempotent, so a coordinate applied twice is
+        // silent double application answered `Ok`, and a coordinate applied
+        // out of order is a fold over a state that never existed.
+        let dir = tempdir().unwrap();
+        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        // File order is NOT `Seq` order here. In-order append plus the prior
+        // recovery's tail truncation normally makes the two agree, and the
+        // ordering is what holds a fold together where they do not.
+        write_txn(&mut writer, 5, vec![rec(50)]);
+        write_txn(&mut writer, 1, vec![rec(10), rec(20)]); // seqs 1, 2
+        let segs = list_segments(dir.path()).unwrap();
+
+        let outcome = scan(&segs, 0, None).unwrap();
+        assert_eq!(folded_seqs(&outcome, 5), Ok(vec![1, 2, 5]));
+        // The range is INCLUSIVE at the bound — a fold to 2 applies 2.
+        assert_eq!(folded_seqs(&outcome, 2), Ok(vec![1, 2]));
+        // …and EXCLUSIVE at the base, whose records the base already embodies.
+        assert_eq!(folded_seqs(&scan(&segs, 1, None).unwrap(), 5), Ok(vec![2, 5]));
+    }
+
+    #[test]
+    fn a_seq_the_committed_set_presents_twice_is_refused_in_range_and_ignored_below_it() {
+        // Two committed transactions at ONE coordinate: a journal no sequencer
+        // here wrote, since each `Seq` is minted once. Refused rather than
+        // folded twice (§7) — and the range is applied FIRST, so a repeat the
+        // base already embodies is harmless rather than a halt.
+        let dir = tempdir().unwrap();
+        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        write_txn(&mut writer, 1, vec![rec(10)]);
+        write_txn(&mut writer, 1, vec![rec(20)]);
+        let segs = list_segments(dir.path()).unwrap();
+
+        assert_eq!(folded_seqs(&scan(&segs, 0, None).unwrap(), 1), Err(1));
+        assert_eq!(folded_seqs(&scan(&segs, 1, None).unwrap(), 1), Ok(vec![]));
+    }
+
+    #[test]
+    #[should_panic(expected = "did not collect that far")]
+    fn a_fold_past_what_the_scan_collected_is_refused_as_the_callers_bug() {
+        // Records above the collection bound were read and dropped, so a fold
+        // past it reads a set that is missing exactly the range between —
+        // which no filter here can restore, and which would otherwise be
+        // answered `Ok` with a short world.
+        let dir = tempdir().unwrap();
+        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        write_txn(&mut writer, 1, vec![rec(10)]);
+        write_txn(&mut writer, 2, vec![rec(20)]);
+        let segs = list_segments(dir.path()).unwrap();
+        let _ = scan(&segs, 0, Some(1)).unwrap().records_to(2);
     }
 
     #[test]

@@ -7,7 +7,7 @@ use std::io;
 use std::num::NonZeroU64;
 use std::ops::{Deref, DerefMut};
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -344,6 +344,27 @@ impl DerefMut for Applier<'_> {
     }
 }
 
+/// What a JOURNALED kernel has and an in-memory one does not: where its files
+/// live, how many checkpoint bases its `BadCheckpoint` fallback chain keeps,
+/// the Σ₀ its derivations fold onto when no checkpoint covers a boundary, and
+/// the `open()`-held exclusion lock it holds for its lifetime (Lifecycle, §6).
+///
+/// One value rather than several optional fields, so "is there a journal?" is
+/// one question with one answer: under [`Durability::InMemory`] there is no
+/// directory, no fallback chain, nothing to derive and nothing to exclude, and
+/// the caller's `genesis` is consumed into the root rather than kept.
+struct Journaled<W> {
+    dir: PathBuf,
+    retain_checkpoints: usize,
+    /// Σ₀ — the genesis world this kernel was opened under, kept because it is
+    /// the base every derivation falls back to when no checkpoint covers the
+    /// boundary ([`Kernel::world_at`]).
+    genesis: W,
+    /// The `open()`-held exclusive advisory lock, kept for its `Drop`: the
+    /// flock releases when this file closes (Lifecycle).
+    _lock: File,
+}
+
 /// The transactional kernel over an engine-supplied `W` (§Public interface).
 /// v1 concurrency realization: the single applier (§8) — every write runs to
 /// completion under one global lock, subsuming the `LockKey` seam; the
@@ -364,13 +385,12 @@ pub struct Kernel<W: WorldState> {
     checkpoint_mutex: Mutex<()>,
     poisoned: AtomicBool,
     cfg: KernelConfig,
-    /// Σ₀ — the genesis world this kernel was opened under, kept because it
-    /// is the base every derivation falls back to when no checkpoint covers
-    /// the boundary ([`Kernel::world_at`]).
-    genesis: W,
-    /// The `open()`-held exclusive advisory lock (Lifecycle); `None` under
-    /// `Durability::InMemory`. Held for the kernel's lifetime.
-    _journal_lock: Option<File>,
+    /// The journaled half, or `None` under [`Durability::InMemory`]: every
+    /// path that touches files asks here, so the mode question is one question
+    /// with one answer. LAST, so the exclusion lock it carries drops after the
+    /// applier's appender — a kernel releases its journal only once it has
+    /// stopped writing to it.
+    journaled: Option<Journaled<W>>,
 }
 
 impl<W: WorldState> fmt::Debug for Kernel<W> {
@@ -445,23 +465,37 @@ impl<W: WorldState> Kernel<W> {
     /// by construction).
     pub fn open(cfg: KernelConfig, genesis: W) -> Result<Self, OpenError> {
         cfg.validate().map_err(OpenError::InvalidConfig)?;
-        let (root, journal, lock) = match &cfg.durability {
+        let (root, journal, journaled) = match &cfg.durability {
             // "Directly from genesis" (Lifecycle): no journal, no recovery,
-            // no rebuild_derived — the caller's live value is the root.
+            // no rebuild_derived — the caller's live value BECOMES the root,
+            // and nothing else here wants it, so it is moved rather than kept.
             Durability::InMemory => (
                 Committed {
                     seq: Seq(0),
-                    world: genesis.clone(),
+                    world: genesis,
                 },
                 Journal::InMemory,
                 None,
             ),
-            Durability::Fsync { journal_path, .. } => {
+            Durability::Fsync {
+                journal_path,
+                retain_checkpoints,
+                ..
+            } => {
                 let (root, journal, lock) = Self::recover(journal_path, &genesis)?;
-                (root, journal, Some(lock))
+                (
+                    root,
+                    journal,
+                    Some(Journaled {
+                        dir: journal_path.clone(),
+                        retain_checkpoints: *retain_checkpoints,
+                        genesis,
+                        _lock: lock,
+                    }),
+                )
             }
         };
-        Ok(Self::assemble(cfg, root, genesis, journal, lock))
+        Ok(Self::assemble(cfg, root, journal, journaled))
     }
 
     /// Recover the journal at `dir` into the root it commits from, its live
@@ -535,27 +569,11 @@ impl<W: WorldState> Kernel<W> {
         ))
     }
 
-    /// This kernel's journal configuration — where its files live and how many
-    /// checkpoint bases it retains — or `None` under [`Durability::InMemory`],
-    /// which has no journal at all (Lifecycle). Every path that touches files
-    /// goes through here, so the mode question is asked in one place.
-    fn journal_cfg(&self) -> Option<(&Path, usize)> {
-        match &self.cfg.durability {
-            Durability::InMemory => None,
-            Durability::Fsync {
-                journal_path,
-                retain_checkpoints,
-                ..
-            } => Some((journal_path, *retain_checkpoints)),
-        }
-    }
-
     fn assemble(
         cfg: KernelConfig,
         root: Committed<W>,
-        genesis: W,
         journal: Journal,
-        lock: Option<File>,
+        journaled: Option<Journaled<W>>,
     ) -> Self {
         let cadence = Cadence::new(cfg.checkpoint);
         let seq = Sequencer::recovered(root.seq, cfg.durability.burned_seq_policy());
@@ -569,8 +587,7 @@ impl<W: WorldState> Kernel<W> {
             checkpoint_mutex: Mutex::new(()),
             poisoned: AtomicBool::new(false),
             cfg,
-            genesis,
-            _journal_lock: lock,
+            journaled,
         }
     }
 
@@ -900,13 +917,13 @@ impl<W: WorldState> Kernel<W> {
         if self.poisoned.load(Ordering::Acquire) {
             return Err(CheckpointError::Poisoned);
         }
-        let Some((dir, retain_checkpoints)) = self.journal_cfg() else {
+        let Some(journaled) = &self.journaled else {
             return Ok(self.current_seq()); // nothing to persist or reclaim (§6)
         };
         let _serial = self.checkpoint_mutex.lock();
         let snap = self.root.load_full();
         let s = snap.seq;
-        checkpoint::write(dir, s.0, &snap.world).map_err(|fail| match fail {
+        checkpoint::write(&journaled.dir, s.0, &snap.world).map_err(|fail| match fail {
             checkpoint::WriteFail::Serialize(e) => CheckpointError::Serialize(e),
             checkpoint::WriteFail::Io(e) => CheckpointError::Io(e),
         })?;
@@ -914,12 +931,12 @@ impl<W: WorldState> Kernel<W> {
         // checkpoint set, which answers with the oldest survivor. There is
         // always one: `retain_checkpoints ≥ 1` is validated at `open`, and
         // this call has just added to the set the retention is applied to.
-        let s_old = checkpoint::retain(dir, retain_checkpoints)?
+        let s_old = checkpoint::retain(&journaled.dir, journaled.retain_checkpoints)?
             .expect("retention keeps N ≥ 1 of a set this call just added to");
         // Reclaim the journal below the OLDEST retained checkpoint — that
         // floor, not the newest, is what keeps the BadCheckpoint fallback
         // real (§6).
-        journal::reclaim_below(dir, s_old)?;
+        journal::reclaim_below(&journaled.dir, s_old)?;
         Ok(s)
     }
 
@@ -989,7 +1006,7 @@ impl<W: WorldState> Kernel<W> {
         // precedes every question about `at`: a caller told `BeyondHead` here
         // would walk `at` down to genesis before learning that none of it was
         // ever answerable.
-        let Some((dir, _)) = self.journal_cfg() else {
+        let Some(journaled) = &self.journaled else {
             return Err(HistoryError::Unjournaled);
         };
         let installed_head = self.current_seq();
@@ -1000,13 +1017,12 @@ impl<W: WorldState> Kernel<W> {
         }
         // The same base selection recovery runs, capped at `at` so a later
         // checkpoint cannot stand in for an earlier boundary.
-        let checkpoints = checkpoint::list(dir)?;
-        let segs = journal::list_segments(dir)?;
-        let base = replay::select_base(&checkpoints, &segs, Some(at.0), &self.genesis).map_err(
-            |fail| HistoryError::Reclaimed {
+        let checkpoints = checkpoint::list(&journaled.dir)?;
+        let segs = journal::list_segments(&journaled.dir)?;
+        let base = replay::select_base(&checkpoints, &segs, Some(at.0), &journaled.genesis)
+            .map_err(|fail| HistoryError::Reclaimed {
                 floor: fail.floor.map(Seq),
-            },
-        )?;
+            })?;
         // A boundary that IS the base is answered wholly from that base:
         // checkpoint seqs are committed boundaries (a checkpoint serializes an
         // installed root) and 0 is genesis, so there is nothing to fold, and

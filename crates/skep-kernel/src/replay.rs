@@ -6,11 +6,14 @@
 //! boundary) and in what else they do around it (recovery truncates the tail;
 //! bounded replay checks the requested value is a boundary at all). So
 //! the base-selection fallback chain, the `rebuild_derived` seeding and the
-//! exactly-once fold are stated once, here, and each caller supplies its
-//! bound and its own error vocabulary.
+//! fold itself are stated once, here, and each caller supplies its bound and
+//! its own error vocabulary. What makes that fold exactly-once is settled
+//! where the records are — [`crate::journal::ScanOutcome::records_to`] hands
+//! over an ordered, ranged set with no coordinate twice — so this module
+//! applies what it is given.
 
 use crate::checkpoint::CheckpointMeta;
-use crate::journal::{self, CommittedRecord, ScanFail, ScanOutcome, SegmentMeta};
+use crate::journal::{self, ScanFail, ScanOutcome, SegmentMeta};
 use crate::WorldState;
 
 /// A base to fold onto: the world embodying every record with
@@ -49,8 +52,9 @@ impl<W> Base<W> {
     /// one: the scan then collects only what a fold to it can read. Recovery
     /// passes `None`, since its own bound is the committed head the scan is
     /// about to derive. A LOWER bound than the fold's leaves the records
-    /// between them uncollected, which no filter downstream can restore —
-    /// [`fold_to`] refuses that pairing rather than answering a short world.
+    /// between them uncollected, which nothing downstream can restore — the
+    /// outcome refuses that pairing ([`ScanOutcome::records_to`]) rather than
+    /// answering a short world.
     pub(crate) fn scan(
         &self,
         segs: &[SegmentMeta],
@@ -137,60 +141,43 @@ pub(crate) struct FoldFail {
     pub cause: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
 }
 
-/// Fold the scanned region's committed records onto `base`, in `Seq` order,
-/// over exactly `(base.s_load, bound]` — each record exactly once, since
-/// [`WorldState::apply`] is not required to be idempotent, and with no
-/// contiguity required, since a burned-`Seq` gap folds harmlessly (§6/§7).
+/// Apply the committed records of `(base.s_load, bound]` onto `base`, one at
+/// a time, decoding each. The order they arrive in is `Seq` order and each
+/// coordinate arrives once, because [`ScanOutcome::records_to`] settles both
+/// — they are facts about the set that scan derived, and it is the element
+/// holding the set (§6/§7). This fold therefore applies what it is handed,
+/// which is what [`WorldState::apply`] not being idempotent requires of it.
 ///
 /// The scan is BORROWED, so its other answers — the tail cut among them —
 /// outlive the fold. That is what lets a caller refuse on this fold's verdict
 /// before it acts on any of them.
 ///
-/// `scan` must be THIS base's own ([`Base::scan`]), and must have been run
-/// with a collection bound at or above this one. A scan judged against another
-/// base makes the `(base.s_load, bound]` filter meaningless and this answers
-/// `Ok` with a world missing records; a [`ScanOutcome`]'s own base is private
-/// to [`crate::journal`], so nothing here can check it — [`Base::scan`] is what
-/// makes it true by construction. The bound IS checkable, and is: a fold past
-/// what the scan collected to reads records that were never collected, which
-/// the filter cannot restore, so it is refused as the caller's bug it is
-/// rather than answered short.
+/// `scan` must be THIS base's own ([`Base::scan`]). A scan judged against
+/// another base makes its own `(s_load, bound]` range a range over a different
+/// base, and this answers `Ok` with a world missing records; a
+/// [`ScanOutcome`]'s base is private to [`crate::journal`], so nothing here can
+/// check it — [`Base::scan`] is what makes it true by construction.
 ///
 /// `Err` is a committed, CRC-intact record that fails to decode as
-/// `W::Record` — corrupt committed data the derived state needs — or one the
-/// committed set presents TWICE; [`FoldFail`] carries which.
-/// Halt, never drop, and never twice (§7): the sequencer mints each `Seq`
-/// once, so a repeat is a journal this kernel did not write, and folding a
-/// coordinate twice through a fold that need not be idempotent is exactly
-/// what recovery may not do.
+/// `W::Record` — corrupt committed data the derived state needs, and the one
+/// refusal only a fold can make, since only a fold names `W::Record` — or a
+/// `Seq` the scan presents TWICE, which is [`ScanOutcome::records_to`]'s
+/// verdict carried out in this caller's vocabulary. [`FoldFail`] carries
+/// which. Halt, never drop, and never twice (§7): folding a coordinate twice
+/// through a fold that need not be idempotent is exactly what recovery may
+/// not do.
 pub(crate) fn fold_to<W: WorldState>(
     base: Base<W>,
     scan: &ScanOutcome,
     bound: u64,
 ) -> Result<W, FoldFail> {
-    assert!(
-        scan.covers(bound),
-        "fold to {bound} against a scan that did not collect that far: the \
-         records between them were never collected (Base::scan)"
-    );
-    let mut journaled: Vec<&CommittedRecord> = scan.committed_records.iter().collect();
-    journaled.sort_by_key(|entry| entry.seq);
+    let journaled = scan
+        .records_to(bound)
+        .map_err(|at| FoldFail { at, cause: None })?;
     let mut world = base.world;
-    let mut prev: Option<u64> = None;
     for entry in journaled {
-        let seq = entry.seq;
-        if seq <= base.s_load || seq > bound {
-            continue;
-        }
-        if prev == Some(seq) {
-            return Err(FoldFail {
-                at: seq,
-                cause: None,
-            });
-        }
-        prev = Some(seq);
         let record: W::Record = journal::decode_record(&entry.bytes).map_err(|e| FoldFail {
-            at: seq,
+            at: entry.seq,
             cause: Some(Box::new(e)),
         })?;
         world = world.apply(&record);

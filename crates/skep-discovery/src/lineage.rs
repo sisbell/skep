@@ -79,12 +79,15 @@ fn endpoint(e: &Endset, fence: &'static str) -> Address {
 /// address, so a non-link is no claim's endpoint. Resident, not active: a
 /// nullified link is still resident and remains a legal probe key.
 ///
-/// **Two upstream panicking preconditions are discharged here**, in the one
-/// place they are established: `type_slice` faults on a `ty` that is neither
-/// address-denoting nor `iextent`-built, and `sup` comes from
-/// `reserved_type`, which is address-denoting by construction; `match_links`
-/// requires that no constraint carry an empty endset, and `enc([key])` is
-/// one span.
+/// **Two upstream preconditions are discharged here**, in the one place they
+/// are established, and they arrive on DIFFERENT channels. `type_slice`
+/// FAULTS on a `ty` that is neither address-denoting nor `iextent`-built,
+/// and `sup` comes from `reserved_type`, which is address-denoting by
+/// construction. `match_links`' requirement that no constraint carry an
+/// empty endset is SEMANTIC and not panicking — M7 folds `stab(slot, ⟨⟩, ·)`
+/// to ∅, which empties the AND — so a violation would answer `[]` for every
+/// key, indistinguishable from the true `[]` the gate above returns;
+/// `enc([key])` is one span, so it cannot arise.
 ///
 /// **Walked from the hits, and filtered before it is read out.** The claims
 /// naming `key` at `slot` are walked in address order and the `[K_sup]` slice

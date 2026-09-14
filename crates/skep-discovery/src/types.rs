@@ -276,8 +276,11 @@ pub enum QueryError {
     /// is the world's.
     ImageTooLarge,
     /// The RETRIEVEENDSETS answer would carry more spans than
-    /// [`crate::MAX_ANSWER_SPANS`]. The one budget here priced on what the
-    /// store hands back rather than on what the request names.
+    /// [`crate::MAX_ANSWER_SPANS`] — the pairs the store hands back, not
+    /// anything the request names, so a caller cannot reshape its way past
+    /// it. [`crate::project_on`]'s product is held at the same number and
+    /// raises `ImageTooLarge` instead, which is why that constant is the
+    /// ANSWER's and not this variant's: two reads, two words, one budget.
     EndsetsTooLarge,
 }
 
@@ -290,7 +293,7 @@ impl fmt::Display for QueryError {
                 "query: the region is not content-subspace ordinal-level depth-2 V-spans"
             }
             QueryError::ImageTooLarge => {
-                "query: the arrangement runs the request would materialize or walk are past the run budget"
+                "query: the arrangement runs the request would materialize or walk, or the product of the join against them, are past this read's budget"
             }
             QueryError::EndsetsTooLarge => {
                 "query: the endsets touching the region are past the answer's span budget"

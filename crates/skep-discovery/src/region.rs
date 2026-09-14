@@ -111,26 +111,36 @@ fn run_list_walk(region: &[Span], run_count: usize) -> usize {
 /// and the sum over the region is what is priced — in RUNS, so a deep read of
 /// a long document holding few runs is never refused for its depth.
 ///
-/// Then refuses past [`MAX_IMAGE_RUNS`] with `ImageTooLarge`, counted over
-/// the runs RESOLVED rather than the distinct ones kept, because that is the
-/// quantity every later step is linear in — and counted AS THE IMAGE IS
-/// PRODUCED, so an over-budget request stops resolving instead of resolving
-/// whole and then being measured. Each span is held to that budget BEFORE it
-/// resolves as well as after, against the most it could yield: M5 hands one
-/// span's whole image back in a single `Vec`, so a budget behind the call can
-/// only refuse what is already built. That ceiling is
-/// `min(count, #runs(surface))` — `resolve` clips to the span, and every run
-/// it returns is at least one position wide — so what the request makes M8
-/// hold is bounded by the request's own shape. A refusal, never a truncation:
-/// a truncated image drops links from every read-out composed on it,
-/// silently.
+/// Then refuses past [`MAX_IMAGE_RUNS`] with `ImageTooLarge`, priced BEFORE
+/// each span resolves against the most it could yield — never against the
+/// distinct runs kept — so an over-budget request stops resolving instead of
+/// resolving whole and then being measured: M5 hands one span's whole image
+/// back in a single `Vec`, so a budget behind the call can only refuse what
+/// is already built. That ceiling is `min(count, #runs(surface))` —
+/// `resolve` clips to the span, and every run it returns is at least one
+/// position wide — so what the request makes M8 hold is bounded by the
+/// request's own shape, and the ACCEPTED SET is the ceiling's:
+/// `Σ min(countᵢ, #runs(surface)) ≤ MAX_IMAGE_RUNS`, not the image's. A
+/// request whose image would be small is therefore refused when its spans
+/// name more positions than the surface has runs to answer them with. A
+/// refusal, never a truncation: a truncated image drops links from every
+/// read-out composed on it, silently.
+///
+/// The count taken AFTER each resolve is the backstop on the one fact the
+/// ceiling borrows and M8 cannot check: that M5's `resolve` clips to the
+/// span and returns runs at least one position wide. While that holds the
+/// ceiling subsumes it and it cannot fire; it is kept because the guarantee
+/// is M5's, and a ceiling that silently under-estimated would truncate an
+/// image — the one thing this budget exists to refuse.
 ///
 /// So a span naming more positions than [`MAX_IMAGE_RUNS`] is refused over a
 /// surface holding more runs than that, whatever its image would have been.
 /// Over a surface of at most that many runs a single span is admitted
-/// whatever its count, and a single position over any surface; a region past
-/// the ceiling is asked in parts, which is the recourse [`QueryError`]
-/// states.
+/// whatever its count, and a single position over any surface the WALK
+/// admits — [`QueryError::ImageTooLarge`] states that limit: a single
+/// position is refused only over a reading surface of more than
+/// `MAX_IMAGE_RUNS²` content runs. A region past the ceiling is asked in
+/// parts, which is the recourse [`QueryError`] states.
 ///
 /// HEAD-FLOAT (PUB round 2, lane 3.2; PUB-2.49, PUB-2.50, PUB-2.53): the
 /// arrangement resolved is `d`'s READING SURFACE — M5's `reading_surface`,
@@ -185,8 +195,11 @@ pub fn image_on<W: DiscoveryWorld>(
             return Err(QueryError::ImageTooLarge);
         }
         let span_image = w.m5().resolve(&surface, span);
-        // `>` and not `==`: one span's image adds many runs at once.
         runs_resolved += span_image.len();
+        // The backstop, not the measure: the ceiling above has already
+        // admitted this span against the most it could yield, so this fires
+        // only if M5's clip returned more than the span named. `>` and not
+        // `==` because one span's image adds many runs at once.
         if runs_resolved > MAX_IMAGE_RUNS {
             return Err(QueryError::ImageTooLarge);
         }

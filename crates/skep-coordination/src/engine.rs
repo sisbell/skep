@@ -409,8 +409,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
         if !self.trigger_true(rule, &arg, &snap) {
             return Ok(FireOutcome::NoOp);
         }
-        let a = arg.key_addr();
-        if let Some(doc) = self.draft_boundary(snap.world(), rule.action.home(), a) {
+        let arg_addr = arg.key_addr();
+        if let Some(doc) = self.draft_boundary(snap.world(), rule.action.home(), arg_addr) {
             return Err(FireError::DraftBoundary(doc));
         }
         // The writer at GUEST class (lane 3.3b, PUB-6.28): the fire's
@@ -427,10 +427,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // statement over whatever was deposited.
         let deposited = match &rule.action {
             FireAction::Marker { home, ty } => {
-                writer.emit(Caller::System, home, &ty.0, a, &[]).map_err(emit_refusal)
+                writer.emit(Caller::System, home, &ty.0, arg_addr, &[]).map_err(emit_refusal)
             }
             FireAction::Nullify { home } => {
-                writer.nullify(Caller::System, home, a).map_err(nullify_refusal)
+                writer.nullify(Caller::System, home, arg_addr).map_err(nullify_refusal)
             }
         };
         deposited.map(|(effect, seq)| self.fired_or_deduped(&snap, effect, seq))
@@ -449,8 +449,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     ///
     /// This is the READ half of the class. What a deposit's own value-keyed
     /// gates see is `Coordinator::link_writer`'s (lane 3.3b).
-    fn draft_boundary(&self, w: &W, home: &Address, arg: &Address) -> Option<Address> {
-        let arg_doc = document_of(arg).unwrap_or_else(|| arg.clone());
+    fn draft_boundary(&self, w: &W, home: &Address, arg_addr: &Address) -> Option<Address> {
+        let arg_doc = document_of(arg_addr).unwrap_or_else(|| arg_addr.clone());
         for doc in [home, &arg_doc] {
             if !(self.guest)(w, doc) {
                 return Some(doc.clone());
@@ -501,17 +501,17 @@ impl<W: CoordinationWorld> Coordinator<W> {
             self.cursor = (idx + 1) % n; // rotate past, success or failure
             // The outcome reports the bookkeeping KEY, not the bound value —
             // owned here, the argument itself moving into the occurrence.
-            let a = arg.key_addr().clone();
+            let arg_addr = arg.key_addr().clone();
             let occurrence = Occurrence { rule: id, arg };
             return match self.fire(&occurrence) {
                 Ok(FireOutcome::Fired { effect, seq }) => {
-                    StepOutcome::Fired { rule: id, arg: a, effect, seq }
+                    StepOutcome::Fired { rule: id, arg: arg_addr, effect, seq }
                 }
                 Ok(FireOutcome::Deduped { effect, seq }) => {
-                    StepOutcome::Deduped { rule: id, arg: a, effect, seq }
+                    StepOutcome::Deduped { rule: id, arg: arg_addr, effect, seq }
                 }
                 Ok(FireOutcome::NoOp) => StepOutcome::NoOp,
-                Err(err) => StepOutcome::Failed { rule: id, arg: a, err },
+                Err(err) => StepOutcome::Failed { rule: id, arg: arg_addr, err },
             };
         }
         StepOutcome::Quiescent
@@ -539,8 +539,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// nothing (`FireError::DraftBoundary`), so no count this recompute can
     /// produce would differ under the filtered view — while an operator
     /// looking for a runaway wants every tuple the journal recovered.
-    pub fn fire_count(&self, rule: RuleId, x: &Address) -> u64 {
-        let Some(r) = self.rules.iter().find(|r| r.id == rule) else {
+    pub fn fire_count(&self, id: RuleId, x: &Address) -> u64 {
+        let Some(rule) = self.rules.iter().find(|r| r.id == id) else {
             return 0;
         };
         let snap = self.kernel.snapshot();
@@ -551,7 +551,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // slot spelling `a` twice still keys on `{a}`: the recompute
         // over-counts, as its contract above says, and never under-counts.
         let exact = |e: &Endset, a: &Address| -> bool { e.single_denoted() == Some(a.tumbler()) };
-        match &r.action {
+        match &rule.action {
             FireAction::Marker { home, ty } => links
                 .observe(
                     &ty.0,

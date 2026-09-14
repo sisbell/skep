@@ -51,14 +51,14 @@ pub(crate) struct ExpansionTooLarge;
 /// expansion's name sequence is a function of its content — and the node
 /// budget, one sum across both walks.
 struct State {
-    next: u32,
+    next_name: u32,
     nodes: Budget,
 }
 
 impl State {
     fn fresh(&mut self) -> VarId {
-        let v = VarId::expansion(self.next);
-        self.next += 1;
+        let v = VarId::expansion(self.next_name);
+        self.next_name += 1;
         v
     }
 }
@@ -73,7 +73,7 @@ pub(crate) struct Expander<'a> {
 
 impl<'a> Expander<'a> {
     pub(crate) fn new(defs: &'a dyn DefSource) -> Expander<'a> {
-        Expander { defs, state: State { next: 0, nodes: Budget::default() } }
+        Expander { defs, state: State { next_name: 0, nodes: Budget::default() } }
     }
 
     /// `expand` — the flat reference expansion of a checked (every `Ref`

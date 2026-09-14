@@ -631,7 +631,7 @@ fn a_fire_into_an_unregistered_home_fails_loudly() {
     // (2) A Nullify from no document.
     let k = kernel();
     let mut c = coord(&k);
-    let m1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
+    let l1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
     c.register_rule(Rule {
         domain: Dom::ActiveSlice(concrete(&pred_stable_ty())),
         trigger: always_tup(&c),
@@ -643,7 +643,7 @@ fn a_fire_into_an_unregistered_home_fails_loudly() {
         c.step(&k.snapshot()),
         StepOutcome::Failed { err: FireError::HomeNotRegistered, .. }
     ));
-    assert!(!k.snapshot().world().links().is_nullified(&m1));
+    assert!(!k.snapshot().world().links().is_nullified(&l1));
 
     // (3) The boundary is asked before M7's write path is entered.
     let k = kernel();
@@ -954,9 +954,9 @@ fn the_trigger_s_look_is_filtered_at_guest_class() {
     // stays in L_K (audit), doc2's never enters.
     let k = kernel();
     let c = coord_with_guest(&k, refuse_doc2());
-    let (t1, _) =
+    let (l1, _) =
         link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel in doc1");
-    link_writer(&k).nullify(Caller::System, &doc1(), &t1).expect("retract it");
+    link_writer(&k).nullify(Caller::System, &doc1(), &l1).expect("retract it");
     link_writer(&k).emit(Caller::System, &doc2(), &pred_stable_ty(), &ca(2), &[]).expect("rel in doc2");
     let in_audit = |a: &Address| {
         decide_now(
@@ -966,7 +966,7 @@ fn the_trigger_s_look_is_filtered_at_guest_class() {
             exists(1, Dom::AuditSlice(concrete(&pred_stable_ty())), addr_eq(tup_addr(1), lit_addr(a))),
         )
     };
-    assert!(in_audit(&t1), "retracted, but homed in the readable doc1: in the audit slice");
+    assert!(in_audit(&l1), "retracted, but homed in the readable doc1: in the audit slice");
     assert!(decide_now(&k, &c, View::Audit, nat_eq(count(Dom::AuditSlice(concrete(&pred_stable_ty()))), lit_nat(1))));
     assert!(!decide_now(&k, &c, View::Active, is_k(&pred_stable_ty(), lit_addr(&ca(2)))));
 }
@@ -981,7 +981,7 @@ fn the_trigger_s_look_is_filtered_at_guest_class() {
 fn a_nullify_rule_is_uncertified_fires_once_and_surfaces_bad_target_as_failed() {
     let k = kernel();
     let mut c = coord(&k);
-    let m1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2)); // a pred_stable-classed tuple
+    let l1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2)); // a pred_stable-classed tuple
 
     let trig = Trigger::Inline(
         c.type_check_trigger((v(1), Sort::Tup), tru()).expect("Tup trigger"),
@@ -1003,22 +1003,22 @@ fn a_nullify_rule_is_uncertified_fires_once_and_surfaces_bad_target_as_failed() 
     // bookkeeping key and not the element.
     assert!(
         matches!(
-            c.fire(&Occurrence { rule: id, arg: Arg::Addr(m1.clone()) }).expect("fire"),
+            c.fire(&Occurrence { rule: id, arg: Arg::Addr(l1.clone()) }).expect("fire"),
             FireOutcome::NoOp
         ),
         "an argument of a shape this domain never yields is out of it by construction"
     );
-    assert!(!k.snapshot().world().links().is_nullified(&m1), "nothing fired");
+    assert!(!k.snapshot().world().links().is_nullified(&l1), "nothing fired");
     match c.step(&k.snapshot()) {
         StepOutcome::Fired { rule, arg, .. } => {
             assert_eq!(rule, id);
-            assert_eq!(arg, m1); // Tup-domain bookkeeping projects to t.addr
+            assert_eq!(arg, l1); // Tup-domain bookkeeping projects to t.addr
         }
         other => panic!("expected Fired, got {other:?}"),
     }
-    assert!(k.snapshot().world().links().is_nullified(&m1));
+    assert!(k.snapshot().world().links().is_nullified(&l1));
     assert!(matches!(c.step(&k.snapshot()), StepOutcome::Quiescent));
-    assert_eq!(c.fire_count(id, &m1), 1);
+    assert_eq!(c.fire_count(id, &l1), 1);
 
     // The documented contract, violated: member addresses are not resident
     // links, so every fire trips M7's BadTarget — surfaced, rotate-past.

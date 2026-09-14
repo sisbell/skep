@@ -53,13 +53,13 @@ impl CatalogEntry {
     }
 }
 
-/// The frozen catalog. `order` fixes the deterministic `Reg`-expansion class
+/// The frozen catalog. `classes` fixes the deterministic `Reg`-expansion class
 /// order (the shipped types in `ShippedType` declaration order — the whole
 /// population).
 #[derive(Debug, Clone)]
 pub(crate) struct TypeCatalog {
     entries: HashMap<TypeKey, CatalogEntry>,
-    order: Vec<TypeKey>,
+    classes: Vec<TypeKey>,
     /// Shipped endsets, one per `ShippedType`, at the index
     /// [`shipped_index`] assigns — the one function that both places and
     /// fetches. Its length is the population's own count, so a shipped type
@@ -110,7 +110,7 @@ impl TypeCatalog {
     /// `expect` states that).
     pub(crate) fn project(registry: &TypeRegistry) -> TypeCatalog {
         let mut entries: HashMap<TypeKey, CatalogEntry> = HashMap::new();
-        let mut order: Vec<TypeKey> = Vec::new();
+        let mut classes: Vec<TypeKey> = Vec::new();
         let mut shipped: [Endset; ShippedType::ALL.len()] =
             std::array::from_fn(|_| Endset::empty());
 
@@ -123,7 +123,7 @@ impl TypeCatalog {
                 .clone();
             let key = TypeKey(endset.clone());
             shipped[shipped_index(ty)] = endset;
-            order.push(key.clone());
+            classes.push(key.clone());
             entries.insert(key, CatalogEntry { class, registration });
         }
 
@@ -133,7 +133,7 @@ impl TypeCatalog {
         // `ReverseLookup` set is exactly the classes `targets_keyed` joins
         // over — so the join and the footprint analysis of what it reads
         // cannot come apart.
-        let read_filter = order
+        let read_filter = classes
             .iter()
             .filter_map(|k| {
                 let entry = &entries[k];
@@ -142,7 +142,7 @@ impl TypeCatalog {
                     .then(|| (entry.class.clone(), k.0.clone()))
             })
             .collect();
-        let reverse_lookup = order
+        let reverse_lookup = classes
             .iter()
             .filter_map(|k| {
                 let entry = &entries[k];
@@ -163,7 +163,7 @@ impl TypeCatalog {
             pred_stable_class: shipped_class(ShippedType::PredStable),
             shipped,
             entries,
-            order,
+            classes,
             read_filter,
             reverse_lookup,
         }
@@ -197,7 +197,7 @@ impl TypeCatalog {
     /// The finite, fixed class list `Reg`-expansion instantiates over
     /// (deterministic order).
     pub(crate) fn classes(&self) -> &[TypeKey] {
-        &self.order
+        &self.classes
     }
 
     /// Φ — the cataloged `ReadFilter` classes (BH1), for the UV `K_queried`

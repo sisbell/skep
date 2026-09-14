@@ -748,7 +748,7 @@ fn a_verdict_reads_its_view_s_slice_and_uv_drops_only_other_bh1_classes() {
     let c = coord(&k);
     let writer = link_writer(&k);
 
-    let t1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2)); // pred_stable class, F=ca1, G=ca2
+    let l1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2)); // pred_stable class, F=ca1, G=ca2
     deposit_rel(&k, PRED_STABLE, &ca(3), &ca(2));
 
     // is_K / member counting / L_dom / reflection membership.
@@ -759,10 +759,10 @@ fn a_verdict_reads_its_view_s_slice_and_uv_drops_only_other_bh1_classes() {
 
     // Retraction: the active reading shrinks, the audit reading persists —
     // the term view selects (PR-VIEW: the view is an eval parameter).
-    writer.nullify(Caller::System, &doc1(), &t1).expect("retract rel 1");
+    writer.nullify(Caller::System, &doc1(), &l1).expect("retract rel 1");
     assert!(!decide_now(&k, &c, View::Active, is_k(&pred_stable_ty(), lit_addr(&ca(1)))));
     assert!(decide_now(&k, &c, View::Audit, is_k(&pred_stable_ty(), lit_addr(&ca(1)))));
-    // The audit tuple slice still carries t1 (∃ t ∈ L_rel :: ca1 ∈ cov_F(t)).
+    // The audit tuple slice still carries l1 (∃ t ∈ L_rel :: ca1 ∈ cov_F(t)).
     assert!(decide_now(
         &k,
         &c,
@@ -857,9 +857,9 @@ fn targets_of_matches_the_source_by_coverage_at_active_and_by_denotation_at_audi
 fn an_audit_reading_keeps_what_a_retraction_removes_from_the_active_one() {
     let k = kernel();
     let c = coord(&k);
-    let t1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
+    let l1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
     deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
-    link_writer(&k).nullify(Caller::System, &doc1(), &t1).expect("retract the ca1 tuple");
+    link_writer(&k).nullify(Caller::System, &doc1(), &l1).expect("retract the ca1 tuple");
     let ps = pred_stable_ty();
     let decide_at = |view: View, t: Term| decide_now(&k, &c, view, t);
 

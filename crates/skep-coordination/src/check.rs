@@ -349,7 +349,9 @@ impl<'a> Checker<'a> {
             TypeRef::Concrete(k) => k,
         };
         let entry = self.catalog.get(k).ok_or_else(|| TypeError::UnregisteredType(k.clone()))?;
-        let declares = |needs: Behavior| -> Result<(), TypeError> {
+        // The GATE, against `CatalogEntry::declares`'s question: this refuses,
+        // so every use of it ends in `?`.
+        let require = |needs: Behavior| -> Result<(), TypeError> {
             if entry.declares(needs) {
                 Ok(())
             } else {
@@ -358,12 +360,12 @@ impl<'a> Checker<'a> {
         };
         match guard {
             Guard::Cataloged => {}
-            Guard::Needs(b) => declares(b)?,
+            Guard::Needs(b) => require(b)?,
             // The behavior speaks before the serving narrowing: a class with
             // no `Walk` is `BehaviorMissing`, a Walk class M7 v1 does not
             // serve is `UnservedWalkClass`.
             Guard::Walk => {
-                declares(Behavior::Walk)?;
+                require(Behavior::Walk)?;
                 if k != self.catalog.supersedes_key() {
                     return Err(TypeError::UnservedWalkClass(k.clone()));
                 }

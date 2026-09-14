@@ -241,9 +241,9 @@ impl<'a> Analyzer<'a> {
         Analyzer { catalog, view, widen: false }
     }
 
-    /// A stability-threshold term: an ℕ literal, widened under ST⁺ to a bound
-    /// ℕ parameter — the one PD0 widening (§Internal 3).
-    fn threshold_ok(&self, t: &Term) -> bool {
+    /// Is this term admissible as a stability threshold? An ℕ literal, widened
+    /// under ST⁺ to a bound ℕ parameter — the one PD0 widening (§Internal 3).
+    fn admissible_threshold(&self, t: &Term) -> bool {
         matches!(t, Term::Lit(Lit::Nat(_))) || (self.widen && matches!(t, Term::Var(_)))
     }
 
@@ -350,14 +350,14 @@ impl<'a> Analyzer<'a> {
             // A state-reading guard leaves the node in Neither (its value free
             // to change across steps and flip the branch).
             Term::IfSome { opt, then_, else_, .. } => {
-                let ao = self.term(opt);
-                let at = self.term(then_);
-                let ae = self.term(else_);
-                let guard_const = ao.fp.is_step_constant();
-                let fp = ao.fp.union(at.fp).union(ae.fp);
+                let aopt = self.term(opt);
+                let athen = self.term(then_);
+                let aelse = self.term(else_);
+                let guard_const = aopt.fp.is_step_constant();
+                let fp = aopt.fp.union(athen.fp).union(aelse.fp);
                 Analysis {
-                    st: guard_const && at.st && ae.st,
-                    sf: guard_const && at.sf && ae.sf,
+                    st: guard_const && athen.st && aelse.st,
+                    sf: guard_const && athen.sf && aelse.sf,
                     grow_only: fp.is_step_constant(),
                     fp,
                 }
@@ -518,7 +518,7 @@ impl<'a> Analyzer<'a> {
                     match t {
                         Term::Count(d) => {
                             let ad = self.dom(d);
-                            let bound = self.threshold_ok(other) && ad.grow_only;
+                            let bound = self.admissible_threshold(other) && ad.grow_only;
                             (step_constant(ad.fp), bound)
                         }
                         _ => (self.term(t), false),

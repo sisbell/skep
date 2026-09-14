@@ -639,7 +639,7 @@ fn certify_stable_charges_a_referent_s_payload_against_the_expansion_budget() {
 fn a_stored_def_denotes_at_the_view_the_caller_names() {
     let k = kernel();
     let c = coord(&k);
-    let (t1, _) = link_writer(&k)
+    let (l1, _) = link_writer(&k)
         .emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(5), &[])
         .expect("a witness for ca5");
     let tt = c
@@ -649,7 +649,7 @@ fn a_stored_def_denotes_at_the_view_the_caller_names() {
     let at_view = |view: View| c.evaluate_def(&p, &[Value::Addr(ca(5))], view, &k.snapshot());
     assert_eq!(at_view(View::Active), Ok(Value::Bool(true)));
     assert_eq!(at_view(View::Audit), Ok(Value::Bool(true)));
-    link_writer(&k).nullify(Caller::System, &doc1(), &t1).expect("retract the witness");
+    link_writer(&k).nullify(Caller::System, &doc1(), &l1).expect("retract the witness");
     assert_eq!(at_view(View::Active), Ok(Value::Bool(false)));
     assert_eq!(at_view(View::Audit), Ok(Value::Bool(true)), "audit keeps the record");
 }

@@ -237,7 +237,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
             return Err(EvalError::NotEverRegistered);
         }
         let def = match self.def_status(start) {
-            DefStatus::Defined(e) => e,
+            DefStatus::Defined(def) => def,
             DefStatus::Poisoned => return Err(EvalError::UndisciplinedDef),
             // Unreachable: ever at the caller's snap and not at the memo's
             // own fresh pin cannot happen, ever-registration being monotone.
@@ -342,7 +342,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     ) -> Result<(Address, Seq), CertifyError> {
         let snap = self.kernel.snapshot();
         let def = match self.def_status(start) {
-            DefStatus::Defined(e) => e,
+            DefStatus::Defined(def) => def,
             DefStatus::Poisoned => return Err(CertifyError::UndisciplinedDef),
             DefStatus::NeverRegistered => return Err(CertifyError::NotEverRegistered),
         };

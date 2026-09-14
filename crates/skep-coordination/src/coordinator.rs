@@ -379,7 +379,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         let derived = match parse_def(w.content(), start) {
             Err(_) => Err(Breach),
             Ok(signed) => match self.check_signed(signed, depth) {
-                Ok(entry) => Ok(entry),
+                Ok(def) => Ok(def),
                 Err(TypeError::TooDeep) if depth > 0 => return Err(DerivedTooDeep),
                 Err(_) => Err(Breach),
             },
@@ -395,7 +395,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// is `Unresolved::TooDeep`, the referent unjudged.
     pub(crate) fn resolve_def_at(&self, start: &Address, depth: u32) -> Result<Arc<TypedTerm>, Unresolved> {
         match self.def_status_at(start, depth) {
-            Ok(DefStatus::Defined(e)) => Ok(e),
+            Ok(DefStatus::Defined(def)) => Ok(def),
             Ok(DefStatus::Poisoned | DefStatus::NeverRegistered) => Err(Unresolved::Dangling),
             Err(DerivedTooDeep) => Err(Unresolved::TooDeep),
         }
@@ -410,7 +410,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// path pins its own. A query: the memo it may fill answers every later
     /// probe as this one was answered.
     pub fn signature(&self, start: &Address) -> Option<Signature> {
-        self.resolve_def_at(start, 0).ok().map(|e| e.signature())
+        self.resolve_def_at(start, 0).ok().map(|def| def.signature())
     }
 }
 

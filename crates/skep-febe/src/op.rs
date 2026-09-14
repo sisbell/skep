@@ -194,12 +194,24 @@ pub enum Op {
     /// editlink: successor + supersession claim, one composite (§4).
     EditLink { original: Address, successor: SuccessorSpec, d_s: Address, d_a: Address },
     // ── raw link reads (→ M7) ──
-    /// Σ.L(a) verbatim.
+    /// Σ.L(a) verbatim. A link whose HOME DOCUMENT this caller may not read
+    /// answers ABSENT — `None`, exactly as an address no link occupies
+    /// (PUB-6.6) — never a rejection, which would confirm the link is there.
+    /// So `None` does not distinguish "no link" from "not yours to see", and
+    /// a client must not read it as the former.
     ReadLink { a: Address },
-    /// Slot coverage; carries its own in-band `Result` (⟨⟩ ≠ ⊥ — §2).
+    /// Slot coverage; carries its own in-band `Result` (⟨⟩ ≠ ⊥ — §2). A link
+    /// whose HOME DOCUMENT this caller may not read answers ABSENT, on the
+    /// `⊥` side of that very distinction: `Err(Invalid)`, exactly as an
+    /// address no link occupies (PUB-6.6), never `Ok(⟨⟩)`, which stays a
+    /// PRESENT link's empty slot.
     FollowLink { a: Address, slot: usize },
     // ── content/provenance reads (→ M6) ──
-    /// RETRIEVEV (ASN-0115).
+    /// RETRIEVEV (ASN-0115). Each spec's NAMED `doc` is consulted, so an
+    /// unreadable one answers `Withheld`; but a RUN whose origin the caller
+    /// may not read comes back as the withheld `DeliveryItem` AT ITS OWN
+    /// POSITION (PUB-6.41) — neither dropped from the delivery nor raised as
+    /// a rejection — so positions are preserved and a caller handles that arm.
     RetrieveV { specs: Vec<Spec> },
     /// RETRIEVEDOCVSPAN (ASN-0112).
     RetrieveDocVSpan { doc: Address },
@@ -230,9 +242,17 @@ pub enum Op {
     WindowFtt { q: FourSet, cur: Cursor, n: usize },
     /// RETRIEVEENDSETS (ASN-0131).
     RetrieveEndsets { d: Address, region: Vec<Span> },
-    /// I→V projection of a link slot into a document (ASN-0098).
+    /// I→V projection of a link slot into a document (ASN-0098). The DUAL
+    /// ROW (PUB-6.8): `d` is the doc-argument, so an unreadable `d` answers
+    /// `Withheld` NAMING `d`; the link `a` is not one, so a link homed where
+    /// the caller cannot read takes the reader's own absence answer instead.
+    /// A `Withheld` here is therefore always about `d`, and never a statement
+    /// about `a`.
     Project { a: Address, slot: usize, d: Address },
-    /// Compound "arrangement-reachable AND active".
+    /// Compound "arrangement-reachable AND active". The DUAL ROW, as
+    /// [`Op::Project`]'s: `d` is the doc-argument and an unreadable one
+    /// answers `Withheld` naming `d`, while the link `a` is not one and takes
+    /// the reader's own absence answer (PUB-6.8).
     DiscoverableFrom { a: Address, d: Address },
     /// Pre-edit link-survival what-if (ASN-0117 preview).
     DeleteOrphans { d: Address, p: VPos, width: Nat },

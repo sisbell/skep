@@ -637,8 +637,31 @@ where
     /// driven by the one predicate this surface answers (PUB-6.39). A
     /// transport that adds its own read gate is adding a SECOND predicate to
     /// a surface that answers one, and two predicates that disagree about a
-    /// private draft is the failure [`Operation::readable`] is a chokepoint
-    /// to prevent.
+    /// private draft is the failure `Operation::readable` is a chokepoint to
+    /// prevent.
+    ///
+    /// WHAT A MASKED ANSWER LOOKS LIKE, since "masked" does not by itself
+    /// tell a client what it will receive. Four forms, and one read may carry
+    /// more than one:
+    ///
+    /// * a `Withheld` REJECTION naming the first unreadable document the
+    ///   request NAMES, in declaration order. Which documents an operation
+    ///   names is [`Op::doc_arguments`], public for this reason.
+    /// * a SILENTLY SMALLER answer. The discovery, census, window, endset,
+    ///   orphan, lineage, container and edition-claim readers each drop every
+    ///   row whose home the caller may not read, so a count is a count of
+    ///   what THIS caller may see, and no field reports that anything was
+    ///   dropped.
+    /// * ABSENCE. A link address whose home document the caller may not read
+    ///   answers exactly as an address no link occupies (PUB-6.6), so absence
+    ///   does not distinguish "no link there" from "a link that is not yours
+    ///   to see" — see [`Op::ReadLink`] and [`Op::FollowLink`].
+    /// * a WITHHELD ITEM inside a payload, at its own position — RETRIEVEV's
+    ///   delivery, whose runs are masked by origin ([`Op::RetrieveV`]).
+    ///
+    /// What ties the four together, and what a client may rely on: no read is
+    /// ever REFUSED for authority, so nothing can be inferred from a refusal
+    /// about whether a thing exists.
     ///
     /// Two caller preconditions, neither of which this module can check for
     /// itself:
@@ -669,27 +692,32 @@ where
     /// so a write from an unbound session against a halted kernel answers
     /// `Poisoned`/`Halt` and never `Unauthenticated`. A client is told the
     /// engine has stopped even where its own defect is that it must
-    /// re-authenticate. Step (a) precedes both, so a retry of a write that
-    /// already committed is answered from the memo whatever either gate would
-    /// have said.
+    /// re-authenticate. The retry memo (a) precedes both, so a retry of a
+    /// write that already committed is answered from the memo whatever either
+    /// gate would have said. A READ takes none of the three: no gate, and no
+    /// memo either, the memo holding committed-write acknowledgments alone.
     pub fn execute(&self, session: SessionId, req: Request) -> Response {
         let Request { id, op } = req;
         let kind = op.kind(); // Copy; captured before dispatch moves the op
-        // (a) idempotency: a repeated (session, id) whose op-kind matches
-        //     returns the memoized committed-write ack, never re-executing.
-        //     Keyed on both — a replay under a DIFFERENT session misses (§7).
-        if let Some(id) = &id {
-            if let Some(ack) = self.idem.get(session, id, kind) {
-                return ack.into();
-            }
-        }
-        // (c) then (b) — in that order, which is the stated precedence when
-        //     both refusals hold — gating the write path only, since the
-        //     is_write/is_read split gives each path exactly the authority it
-        //     needs (§1). The write path resolves a PROVEN-bound principal
-        //     HERE (the one place it can fail); the read path takes neither
-        //     gate.
+        // (a), then (c), then (b) — that order being the stated precedence
+        //     when more than one applies — and all three on the write path
+        //     only, since the is_write/is_read split gives each path exactly
+        //     the authority it needs (§1). The write path resolves a
+        //     PROVEN-bound principal HERE (the one place it can fail); the
+        //     read path takes no gate and consults no memo.
         let resp = if op.is_write() {
+            // (a) idempotency: a repeated (session, id) whose op-kind matches
+            //     returns the memoized committed-write ack, never
+            //     re-executing. Keyed on both — a replay under a DIFFERENT
+            //     session misses (§7). Asked here rather than of every
+            //     request because the memo holds committed-write acks alone,
+            //     so a read's `kind` can never be a key and its lookup could
+            //     only take the memo's lock to be told so.
+            if let Some(id) = &id {
+                if let Some(ack) = self.idem.get(session, id, kind) {
+                    return ack.into();
+                }
+            }
             // (c) refuse writes on a poisoned kernel; reads are still served
             //     through the else-branch (§9).
             if self.poisoned.load(Ordering::Relaxed) {
@@ -763,6 +791,14 @@ where
         // stated precondition, which is why the two sit on adjacent lines.
         let readable = self.readable_by(snap.world(), Some(wc.principal));
         consult_write(&wc, &op, snap.world().m3(), &readable)?;
+        // THE VISIBILITY CLASS of this write (PUB-6.25), the read predicate's
+        // sibling: one value per request, derived from the same proven-bound
+        // principal, lent to whichever store gates this write INSIDE its own
+        // transaction — M5's per-origin source gate on the shot, M7's
+        // value-keyed gates on the five link writes. Bound once here, so
+        // "the ONE closure every such gate is handed" is a fact of the code
+        // rather than six arms agreeing.
+        let visibility = self.visible_to(wc.principal);
         match op {
             // ── namespace writes (→ M3) ──
             // The three-valued publication flag rides the op verbatim
@@ -868,7 +904,6 @@ where
             // registered (PUB-6.37). The ack is the member's address
             // (PUB-2.37).
             Op::Publish { doc, shot } => {
-                let visibility = self.visible_to(wc.principal);
                 let (addr, at) = self
                     .stores
                     .vstream()
@@ -883,7 +918,6 @@ where
             Op::MakeLink { home, from, to, ty } => {
                 // M7 handles both slot forms INSIDE its transact: Resolve
                 // V-specs off the txn base, Addrs deposited verbatim.
-                let visibility = self.visible_to(wc.principal);
                 let (addr, at) = self
                     .stores
                     .linkstore(&visibility)
@@ -896,7 +930,6 @@ where
             // identically to a miss (ASN-0134 §A1). The incumbent a hit names
             // is one this principal can read (PUB-6.25, PUB-6.26).
             Op::Emit { home, ty, from, to } => {
-                let visibility = self.visible_to(wc.principal);
                 let (addr, at) = self
                     .stores
                     .linkstore(&visibility)
@@ -905,7 +938,6 @@ where
                 Ok(Response::AckAddr { addr, at })
             }
             Op::Nullify { home, target } => {
-                let visibility = self.visible_to(wc.principal);
                 let (addr, at) = self
                     .stores
                     .linkstore(&visibility)
@@ -914,7 +946,6 @@ where
                 Ok(Response::AckAddr { addr, at })
             }
             Op::AssertSup { home, old, new } => {
-                let visibility = self.visible_to(wc.principal);
                 let (addr, at) = self
                     .stores
                     .linkstore(&visibility)
@@ -934,7 +965,6 @@ where
             // this build reads their arrangements (PUB-6.38).
             Op::EditLink { original, successor, d_s, d_a } => {
                 let link = successor_link(snap.world().m3(), snap.world().m5(), &successor)?;
-                let visibility = self.visible_to(wc.principal);
                 let (edit, at) = self
                     .stores
                     .linkstore(&visibility)

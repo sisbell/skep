@@ -382,8 +382,9 @@ fn idempotent_retry() {
     assert_eq!(at2, at1);
     assert_eq!(fx.febe.log_position(), log0);
 
-    // Same ReqId under a DIFFERENT op-kind: a miss — the read executes (and
-    // is itself never cached), leaving the write memo intact.
+    // A READ under the same ReqId consults no memo at all — the memo holds
+    // committed-write acks alone — so it executes, is itself never memoized,
+    // and leaves the write's entry untouched.
     let (set, _) = spanset(ex_id(&fx.febe, fx.user, b"ins-1", Op::RetrieveDocVSpan { doc: d.clone() }));
     assert_ne!(set, SpanSet::empty());
     let (addr3, at3) = ack_addr(ex_id(&fx.febe, fx.user, b"ins-1", ins()));
@@ -410,6 +411,41 @@ fn idempotent_retry() {
     let rej = rejected(ex_id(&fx.febe, fx.user, b"ins-1", ins()));
     assert_eq!(rej.code, RejectCode::Unauthenticated);
     assert_eq!(rej.disposition, Disposition::Permanent);
+}
+
+/// §7: the memo's op-kind tag, through `execute` — where only a WRITE now
+/// reaches it, the memo holding committed-write acks alone. A second write
+/// under a `ReqId` its session has already committed under, of a DIFFERENT
+/// kind, is never answered from that entry: it executes and commits on its
+/// own account. The SHAPES are what make the alternative intolerable —
+/// replaying the insert's entry would answer a DELETE with an `AckAddr`
+/// naming an address the client never asked about — so `ack`'s refusal of
+/// any other shape is half the assertion. Its own retry then replays ITS
+/// ack, so the key still works for the kind that now holds it.
+#[test]
+fn a_write_reusing_a_req_id_under_another_kind_executes_rather_than_replaying() {
+    let fx = setup();
+    let d = create_doc(&fx);
+    insert3(&fx, &d);
+    let (_, at_ins) = ack_addr(ex_id(
+        &fx.febe,
+        fx.user,
+        b"same",
+        Op::Insert {
+            doc: d.clone(),
+            at: vp(1, 1),
+            values: vec![skep_content::Val::new(vec![b'x'])],
+            deposit: Deposit::Undeclared,
+        },
+    ));
+
+    let del = || Op::Delete { doc: d.clone(), p: vp(1, 1), width: nat(1) };
+    let at_del = ack(ex_id(&fx.febe, fx.user, b"same", del()));
+    assert!(at_del > at_ins, "the cross-kind write executed and committed on its own account");
+
+    let log = fx.febe.log_position();
+    assert_eq!(ack(ex_id(&fx.febe, fx.user, b"same", del())), at_del, "its own retry replays");
+    assert_eq!(fx.febe.log_position(), log, "…and a replayed ack commits nothing");
 }
 
 /// §7/[`MAX_REQ_ID_BYTES`]: the memo's SECOND door, through `execute`. An id

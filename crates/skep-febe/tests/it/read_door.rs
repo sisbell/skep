@@ -2,7 +2,7 @@
 //! `common`'s readability fixture gives it (PUB round 2, lane 3.3; PUB-6.1,
 //! PUB-6.4, PUB-6.6, PUB-6.8, PUB-6.12, PUB-6.13, PUB-8.46).
 //!
-//! Four claims, all of them disclosure claims, and each a separate rule:
+//! Five claims, all of them disclosure claims, and each a separate rule:
 //!
 //! 1. the DOC-ARGUMENT CONSULT — the first unreadable NAMED document of a
 //!    read answers WITHHELD naming itself, ahead of every other validation;
@@ -11,7 +11,9 @@
 //!    never as a refusal that would confirm the link exists;
 //! 3. the RESULT-SET FILTER — a read whose arguments are all readable still
 //!    drops each RESULT the caller may not read, at its identity;
-//! 4. the GUEST — a session resolving to no principal is MASKED, not gated.
+//! 4. the WITHHELD ITEM — a delivery masks per RUN, in place, so an
+//!    unreadable origin costs its positions and not its neighbours';
+//! 5. the GUEST — a session resolving to no principal is MASKED, not gated.
 //!
 //! The write path's use of the same predicate is `source_gate.rs`.
 //!
@@ -22,8 +24,8 @@ use crate::common;
 
 use common::*;
 use skep_febe::{
-    enc, Address, EditionClaim, FourSet, Op, OpKind, RegionSpec, RejectCode, Response, SlotArg,
-    SlotSpec, Span, SpanSet, Spec, Tumbler, View, FROM, TO,
+    enc, Address, DeliveryItem, EditionClaim, FourSet, Op, OpKind, RegionSpec, RejectCode,
+    Response, SlotArg, SlotSpec, Span, SpanSet, Spec, Tumbler, View, FROM, TO,
 };
 
 /// One link whose endsets cover `covered`'s content, homed in `home` — the
@@ -378,7 +380,62 @@ fn an_edition_claim_homed_where_the_caller_cannot_read_is_dropped() {
     assert_eq!(theirs[0].home, open_home);
 }
 
-// ───────────────────────────────── 4. the guest ─────────────────────────────
+// ───────────────────────── 4. the withheld item ─────────────────────────────
+
+/// PUB-6.41: a delivery is masked per RUN, IN PLACE. A document the caller
+/// may read, holding one transcluded run from a document it may not, answers
+/// a `Withheld` item naming that ORIGIN at the run's own position — neither
+/// dropped from the delivery nor raised as a rejection — with the readable
+/// content on either side of it intact. So positions are preserved, one
+/// unreadable origin costs its own positions and not its neighbours', and a
+/// caller must handle the arm.
+#[test]
+fn a_delivery_masks_an_unreadable_origin_in_place() {
+    let (fx, unreadable) = setup_with_unreadable();
+    let open = create_doc(&fx);
+    insert3(&fx, &open);
+    let secret = create_doc(&fx);
+    insert3(&fx, &secret);
+    // One of `secret`'s positions transcluded into the MIDDLE of `open`, so
+    // "at its own position" is a claim with neighbours on both sides:
+    // `open`'s V-order becomes [open#1, secret#1, open#2, open#3].
+    ack(ex(
+        &fx.febe,
+        fx.user,
+        Op::Copy { doc: open.clone(), at: vp(1, 2), specs: vec![vspec(&secret, 1, 1)] },
+    ));
+    unreadable.lock().expect("no poisoning").push(secret.clone());
+    let other = fx.febe.open_session(OTHER);
+    let whole = || Op::RetrieveV { specs: vec![Spec { doc: open.clone(), span: vspan(1, 1, 4) }] };
+
+    // The owner reads both origins: four positions, nothing withheld.
+    let (mine, _) = delivery(ex(&fx.febe, fx.user, whole()));
+    assert_eq!(mine.len(), 4);
+    assert!(
+        mine.iter().all(|i| matches!(i, DeliveryItem::Content(_))),
+        "the owner's delivery masks nothing: {mine:?}"
+    );
+
+    // The stranger reads `open` and not `secret`: same length, same
+    // positions, one item replaced by the withheld arm.
+    let (theirs, _) = delivery(ex(&fx.febe, other, whole()));
+    assert_eq!(theirs.len(), 4, "a masked run is emitted, not dropped: {theirs:?}");
+    match &theirs.as_slice()[1] {
+        DeliveryItem::Withheld { origin, width } => {
+            assert_eq!(origin, &secret, "the withheld item names the run's ORIGIN document");
+            assert_eq!(width, &nat(1), "…and the positions it stands for");
+        }
+        other => panic!("expected the transcluded run to be withheld at its own position: {other:?}"),
+    }
+    for (i, item) in theirs.iter().enumerate().filter(|(i, _)| *i != 1) {
+        assert!(
+            matches!(item, DeliveryItem::Content(_)),
+            "position {i} is `open`'s own content and survives: {item:?}"
+        );
+    }
+}
+
+// ───────────────────────────────── 5. the guest ─────────────────────────────
 
 /// §2/§6: a read resolves the session to an `Option<PrincipalId>` for the
 /// PREDICATE, so a retired id is answered as the GUEST — masked, not gated.

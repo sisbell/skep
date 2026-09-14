@@ -108,7 +108,7 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
         .type_check_trigger((v(1), Sort::Addr), Term::Ref { addr: p_start.clone(), args: vec![at(var(1))] })
         .expect("ref-bearing trigger term");
     assert!(matches!(
-        c.register_rule(mk(Dom::MembersDom(concrete(&pred_stable_ty())), Trigger::Inline(ref_trig), marker_action())),
+        c.register_rule(mk(Dom::MembersDom(concrete(&pred_stable_ty())), Trigger::Inline(ref_trig.clone()), marker_action())),
         Err(RuleError::RefBearingInlineTrigger)
     ));
     // A Def trigger with no defined signature.
@@ -167,6 +167,28 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
         )),
         Err(RuleError::DomainTriggerSortMismatch { .. })
     ));
+    // Within a group the stated order likewise decides: for an `Inline`
+    // trigger ref-bearing speaks before the sort reconciliation …
+    assert!(matches!(
+        c.register_rule(mk(
+            Dom::ActiveSlice(concrete(&pred_stable_ty())),
+            Trigger::Inline(ref_trig),
+            marker_action()
+        )),
+        Err(RuleError::RefBearingInlineTrigger)
+    ));
+    // … and for a `Def` trigger arity before the Boolean codomain.
+    let (nat_closed, _) = c
+        .define_predicate(&doc1(), &c.type_check(vec![], lit_nat(1)).expect("closed Nat def"))
+        .expect("define a closed Nat-codomain def");
+    assert!(matches!(
+        c.register_rule(mk(
+            Dom::MembersDom(concrete(&pred_stable_ty())),
+            Trigger::Def(nat_closed),
+            marker_action()
+        )),
+        Err(RuleError::BadTriggerArity)
+    ));
 }
 
 /// `FireAction::home` answers the one fact both variants share — the document
@@ -223,6 +245,49 @@ fn a_peeked_occurrence_yields_the_key_the_monitor_counts_by() {
     assert_eq!(peeked.arg.key_addr(), &ca(1));
     assert!(matches!(c.step(&k.snapshot()), StepOutcome::Fired { .. }));
     assert_eq!(c.fire_count(addr_rule, peeked.arg.key_addr()), 1);
+}
+
+/// `next_enabled` peeks the first rule in REGISTRATION order among those with
+/// an enabled occurrence. The control registers the same two rules the other
+/// way round on a second handle: the pick follows registration, not the
+/// catalog's class order nor the arguments' address order. (Ids are minted
+/// per handle and collide, so the bound argument is what tells the two peeks
+/// apart.)
+#[test]
+fn next_enabled_names_the_first_rule_in_registration_order() {
+    let k = kernel();
+    let writer = link_writer(&k);
+    writer
+        .emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[])
+        .expect("a pred_stable member");
+    writer.emit(Caller::System, &doc1(), &pred_def_ty(), &ca(3), &[]).expect("a pred_def member");
+    let stable = |c: &Coordinator<World>| Rule {
+        domain: Dom::MembersDom(concrete(&pred_stable_ty())),
+        trigger: always_addr(c),
+        view: View::Audit,
+        action: marker_action(),
+    };
+    let def = |c: &Coordinator<World>| Rule {
+        domain: Dom::MembersDom(concrete(&pred_def_ty())),
+        trigger: always_addr(c),
+        view: View::Audit,
+        action: marker_action(),
+    };
+    let s = k.snapshot();
+
+    let mut c = coord(&k);
+    let first = c.register_rule(stable(&c)).expect("R1");
+    let second = c.register_rule(def(&c)).expect("R2");
+    assert!(first < second, "a RuleId orders by registration");
+    assert_eq!(c.next_enabled(&s), Some(Occurrence { rule: first, arg: Arg::Addr(ca(1)) }));
+
+    let mut reversed = coord(&k);
+    let def_first = reversed.register_rule(def(&reversed)).expect("R1'");
+    reversed.register_rule(stable(&reversed)).expect("R2'");
+    assert_eq!(
+        reversed.next_enabled(&s),
+        Some(Occurrence { rule: def_first, arg: Arg::Addr(ca(3)) })
+    );
 }
 
 /// A fire's trigger and action see the STORE's domain element, never the
@@ -313,6 +378,26 @@ fn certify_rule_names_each_failed_leg() {
 }
 
 // ─────────────────────────── fire, step, quiescence ───────────────────────────
+
+/// The empty registry is Q0's base case, vacuously true: no rule has an
+/// enabled occurrence, so a driver's `while !quiescent { step }` loop STOPS —
+/// `step` answers `Quiescent`, not `NoOp`, which mean opposite things to that
+/// loop — and the static reads answer over the empty set.
+#[test]
+fn a_coordinator_with_no_rules_is_quiescent() {
+    let k = kernel();
+    let mut c = coord(&k);
+    // State a rule could range over, so the verdict is the registry's emptiness.
+    link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
+    let s = k.snapshot();
+    assert!(c.quiescent(&s));
+    assert_eq!(c.next_enabled(&s), None);
+    assert!(matches!(c.step(&s), StepOutcome::Quiescent));
+    let none: Vec<Vec<RuleId>> = Vec::new();
+    assert_eq!(c.armer_cycles(), none);
+    let scope = c.type_check(vec![(v(9), Sort::Addr)], tru()).expect("a scope");
+    assert!(c.quiescent_scoped(&scope, ScopeBody::PerAddress, &s));
+}
 
 /// The canonical SF/Marker rule end to end: certification, Q0, peek, fair
 /// stepping to quiescence, extinction (NoOp on a re-aimed fire), the

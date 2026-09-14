@@ -16,7 +16,7 @@ use skep_coordination::{
     Rule, RuleError, Sort, Stability, SupersedeError, Term, Trigger, TypeError, Value, View,
 };
 use skep_kernel::TxnError;
-use skep_links::{Caller, EmitError, NullifyError, Tip};
+use skep_links::{Caller, EmitError, HasLinks, NullifyError, ShippedType, Tip};
 
 // ───────────────────────── definitions lifecycle ─────────────────────────
 
@@ -79,6 +79,31 @@ fn a_def_registers_evaluates_retracts_and_re_registers_afresh() {
     assert!(matches!(c.retract_pred(&doc1(), &start), Err(RetractError::NotActive)));
     let (p3, _) = c.register_pred(&doc1(), &start).expect("resurrect");
     assert_ne!(p3, p1);
+}
+
+/// `retract_pred` returns the `[R]` TUPLE it deposited — never the `pdef` it
+/// nullified — so a driver reconciling a retraction against M7's journal
+/// follows the right link. Both are homed in the retracting document, so only
+/// the slots tell them apart: the retraction's F denotes that home and its G
+/// the tuple it nullified.
+#[test]
+fn retract_pred_returns_the_retraction_never_the_pdef_it_nullified() {
+    let k = kernel();
+    let c = coord(&k);
+    let (start, _) = c
+        .define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("closed True"))
+        .expect("define");
+    // A re-registration dedups to the incumbent, which IS the active pdef.
+    let (pdef, _) = c.register_pred(&doc1(), &start).expect("dedup to the incumbent");
+    let (retraction, _) = c.retract_pred(&doc1(), &start).expect("retract");
+    assert_ne!(retraction, pdef);
+    let snap = k.snapshot();
+    let links = snap.world().links();
+    assert!(links.is_nullified(&pdef), "the pdef is what was nullified");
+    let r = links.readlink(&retraction).expect("the returned address is a resident link");
+    assert_eq!(r.type_slot(), &retraction_ty());
+    assert_eq!(r.from_slot().single_denoted(), Some(doc1().tumbler()));
+    assert_eq!(r.to_slot().single_denoted(), Some(pdef.tumbler()));
 }
 
 /// `define_predicate` returns the `pdef` EMIT's commit `Seq` — the last of
@@ -750,6 +775,26 @@ fn def_probes_are_class_free_while_the_evaluator_s_look_is_not() {
     for view in [View::Active, View::Audit, View::Default] {
         assert!(!decide_now(&k, &c, view, is_k(&pred_def_ty(), lit_addr(&start))), "{view:?}");
     }
+
+    // `is_certified_stable` is the same split: the certificate lands in the
+    // draft, so the def probe answers and the evaluator's look does not.
+    c.certify_stable(&doc2(), &start).expect("⊤ is Bool, active, view-independent and ST⁺");
+    assert!(c.is_certified_stable(&start, &k.snapshot()));
+    for view in [View::Active, View::Audit, View::Default] {
+        assert!(!decide_now(&k, &c, view, is_k(&pred_stable_ty(), lit_addr(&start))), "{view:?}");
+    }
+
+    // `current_version` walks M7's claims CLASS-FREE, where the `tip` atom
+    // rebuilds the walk over the VISIBLE ones — so one draft-homed claim moves
+    // the def layer's lineage read and not the evaluator's.
+    let l1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
+    let l2 = deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
+    link_writer(&k)
+        .assert_sup(Caller::System, &doc2(), &l1, &l2)
+        .expect("a claim homed in the draft");
+    let sup = c.reserved_type(ShippedType::Supersedes).clone();
+    assert_eq!(c.current_version(&l1, &k.snapshot()), Tip::Sink(l2));
+    assert!(decide_now(&k, &c, View::Active, tip_is(&sup, &l1, &l1)), "the atom's walk stops at l1");
 }
 
 /// ≤1 active `pdef` per start (PR0) holds WITHIN the guest class the writer

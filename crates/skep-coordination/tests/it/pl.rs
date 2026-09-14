@@ -10,9 +10,10 @@ use crate::terms::*;
 
 use skep_address::Address;
 use skep_coordination::{
-    Atom, Coordinator, DefineError, Dom, Env, Lit, Nat, RegisterError, Rule, RuleCertification,
-    ScopeBody, Sort, Stability, SupersedeError, Term, TypeError, TypeKey, TypeRef, Value, VarId,
-    View, EXPANSION_NAME_BASE,
+    Atom, CertifyError, Coordinator, DefineError, Dom, EmitError, Env, EvalError, FireError,
+    InsertError, Lit, Nat, NullifyError, RegisterError, RetractError, Rule, RuleCertification,
+    RuleError, ScopeBody, Sort, Stability, SupersedeError, Term, TxnError, TypeError, TypeKey,
+    TypeRef, Value, VarId, View, EXPANSION_NAME_BASE,
 };
 use skep_links::{coverage_class, enc, Behavior, Caller, Endset, HasLinks, ShippedType, Tip};
 
@@ -129,6 +130,48 @@ fn rejections_display_and_chain_to_their_cause() {
     let gate = SupersedeError::OldStartNotEverRegistered(ca(1));
     assert_eq!(gate.to_string(), format!("supersede: old start {} is not an ever-registered def", ca(1)));
     assert!(gate.source().is_none());
+}
+
+/// EVERY wrapping rejection yields the cause it carries — the law the two
+/// chains above walk one instance of each. Stated over the values because the
+/// rest are reachable only when M7 or M5 actually refuses, and because three
+/// of the nine `source` impls end in a catch-all, where a variant added later
+/// would lose its chain in silence and a driver's report would stop at M9's
+/// sentence instead of reaching M2's account.
+#[test]
+fn every_wrapping_rejection_yields_its_cause() {
+    use std::error::Error;
+    let emit = || TxnError::Rejected(EmitError::HomeNotRegistered);
+    let nullify = || TxnError::Rejected(NullifyError::BadTarget);
+    let insert = || TxnError::Rejected(InsertError::DocNotRegistered);
+    let wrapped: Vec<(Box<dyn Error + Send + Sync>, String)> = vec![
+        (Box::new(RegisterError::Emit(emit())), emit().to_string()),
+        (Box::new(CertifyError::Emit(emit())), emit().to_string()),
+        (Box::new(RetractError::Nullify(nullify())), nullify().to_string()),
+        (Box::new(FireError::Emit(emit())), emit().to_string()),
+        (Box::new(FireError::Nullify(nullify())), nullify().to_string()),
+        (Box::new(SupersedeError::Lineage(emit())), emit().to_string()),
+        (Box::new(DefineError::Insert(insert())), insert().to_string()),
+        (Box::new(RuleError::IllFormedDomain(TypeError::TooDeep)), TypeError::TooDeep.to_string()),
+        (
+            Box::new(TypeError::RegInstanceIllTyped(Box::new(TypeError::TooLarge))),
+            TypeError::TooLarge.to_string(),
+        ),
+    ];
+    for (err, cause) in wrapped {
+        let source = err.source().unwrap_or_else(|| panic!("{err} carries no cause"));
+        assert_eq!(source.to_string(), cause, "{err}");
+    }
+    // A leaf carries none — the same `source` that must answer above.
+    let leaves: Vec<Box<dyn Error + Send + Sync>> = vec![
+        Box::new(EvalError::ArgArityMismatch),
+        Box::new(RetractError::NotActive),
+        Box::new(FireError::HomeNotRegistered),
+        Box::new(RuleError::RefBearingDomain),
+    ];
+    for leaf in leaves {
+        assert!(leaf.source().is_none(), "{leaf} is a leaf");
+    }
 }
 
 /// A rejection naming a type key reads as the addresses the key denotes, not
@@ -522,6 +565,37 @@ fn type_check_refuses_a_term_nested_past_the_cap() {
     assert!(matches!(c.type_check(vec![], reg_at(125)), Err(TypeError::TooDeep)));
 }
 
+/// The DOMAIN family carries the checker's recursion on its own — a `Filter`
+/// chain descends to the innermost domain before any `pred` is checked — so
+/// it has a resource door of its own, and a supplied term is charged for
+/// every domain former as for every term former. A body of 2¹⁴ leaves, each
+/// `∃x ∈ {y ∈ L_dom | ⊤} :: ⊤`, is 2¹⁶ − 1 term formers beside 2¹⁵ domain
+/// formers: within the budget were the domains free, `TooLarge` when they
+/// are charged — and a body of half the leaves halves all of them, so the
+/// refusal is the budget's and not the shape's. The chain then pins the
+/// nesting boundary on the same family.
+#[test]
+fn type_check_charges_the_domain_family_and_caps_its_nesting() {
+    let k = kernel();
+    let c = coord(&k);
+    // Three term formers and two domain formers per leaf, joined by `and`.
+    let leaves = |l: u32| {
+        let leaf = || exists(2, filter(Dom::LinkDom, 3, tru()), tru());
+        let mut t = leaf();
+        for _ in 0..l.trailing_zeros() {
+            t = Term::And(at(t.clone()), at(t));
+        }
+        t
+    };
+    assert!(matches!(c.type_check(vec![], leaves(1 << 14)), Err(TypeError::TooLarge)));
+    c.type_check(vec![], leaves(1 << 13)).expect("half the leaves is half of each count");
+
+    // `count` at 0, filter k at k, the innermost `L_dom` at n + 1.
+    let filters = |n: usize| (0..n).fold(Dom::LinkDom, |d, _| filter(d, 2, tru()));
+    c.type_check(vec![], count(filters(127))).expect("a domain chain at the cap checks");
+    assert!(matches!(c.type_check(vec![], count(filters(128))), Err(TypeError::TooDeep)));
+}
+
 /// A `Ref`'s arguments are spliced into the flat expansion's `Let` chain at
 /// their OWN positions, so argument `i` expands `i` levels below the
 /// reference — a depth the reach formula's `arity` term charges once, at the
@@ -801,6 +875,46 @@ fn an_audit_reading_keeps_what_a_retraction_removes_from_the_active_one() {
     // A_K and L_K name their own slice at every term view.
     assert!(decide_at(View::Audit, nat_eq(count(Dom::ActiveSlice(concrete(&ps))), lit_nat(1))));
     assert!(decide_at(View::Active, nat_eq(count(Dom::AuditSlice(concrete(&ps))), lit_nat(2))));
+}
+
+/// The atoms PR-VIEW's scan calls view-INDEPENDENT must DENOTE the same at
+/// every view — the scan's half of that claim is watched
+/// (`view_independence_refuses_every_view_parameterized_and_uv_rewritten_form`),
+/// and this is the evaluator's, which is what `certify_stable` certifies on.
+/// Each reads a FIXED slice, so a retracted witness the AUDIT slice still
+/// holds must not move the answer; every row is stated absolutely, and the
+/// `audit` row is the one a view-parameterized read would fail. (`is_doc`
+/// reads M3 and no slice; the rest of the list is dormant in this format or
+/// binds a tuple.)
+#[test]
+fn a_fixed_slice_atom_denotes_the_same_at_every_view() {
+    let k = kernel();
+    let c = coord(&k);
+    let sup = c.reserved_type(ShippedType::Supersedes).clone();
+    let l1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
+    let l2 = deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
+    let writer = link_writer(&k);
+    // A claim the audit slice keeps and the active slice does not …
+    let (claim, _) = writer.assert_sup(Caller::System, &doc1(), &l1, &l2).expect("l1 → l2");
+    writer.nullify(Caller::System, &doc1(), &claim).expect("retract the claim");
+    // … and a BH1 membership likewise.
+    let (retired, _) =
+        writer.emit(Caller::System, &doc1(), &retired_ty(), &ca(5), &[]).expect("retire ca5");
+    writer.nullify(Caller::System, &doc1(), &retired).expect("un-retire ca5");
+    for view in [View::Active, View::Audit, View::Default] {
+        assert!(
+            !decide_now(&k, &c, view, is_filtered(&retired_ty(), lit_addr(&ca(5)))),
+            "is_filtered reads the ACTIVE retired slice at {view:?}"
+        );
+        assert!(
+            decide_now(&k, &c, view, tip_is(&sup, &l1, &l1)),
+            "the walk follows only OPERATIVE claims at {view:?}"
+        );
+        assert!(
+            !decide_now(&k, &c, view, is_in_chain(&sup, lit_addr(&l1), lit_addr(&l2))),
+            "the chain halts at l1 at {view:?}"
+        );
+    }
 }
 
 /// BH2 over a linear lineage: `succs` is the one forward step, `chain` the
@@ -1288,7 +1402,12 @@ fn view_independence_refuses_every_view_parameterized_and_uv_rewritten_form() {
     let ps = pred_stable_ty();
     let independent = |t: Term| {
         let tt = c.type_check(vec![], t).expect("test term type-checks");
-        c.classify(&tt, View::Audit).view_independent
+        let at = |view: View| c.classify(&tt, view).view_independent;
+        // `view_independent` is the one report `Dynamics` calls view-AGNOSTIC,
+        // so every row below states its claim at all three views at once.
+        assert_eq!(at(View::Active), at(View::Audit), "view_independent moved with the view");
+        assert_eq!(at(View::Audit), at(View::Default), "view_independent moved with the view");
+        at(View::Audit)
     };
     // `sources_to`/`stale` are out of the vocabulary in this format.
     for t in [

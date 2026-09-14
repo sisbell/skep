@@ -976,6 +976,57 @@ mod tests {
         assert_eq!(decode(&encode(&past).expect("encodes")), Err(Malformed));
     }
 
+    /// The DOMAIN family has its own recursion through `Rd::dom`, and
+    /// [`Rd::enter`] is its only door: a `Dom::Filter` chain descends to the
+    /// innermost domain BEFORE any `pred` is read, so nothing in the term
+    /// family bounds the descent. A body of 2¹⁵ `count(L_dom)` leaves is
+    /// 2¹⁶ − 1 term formers beside 2¹⁵ domain formers — within the budget
+    /// were the domains charged nothing, `Malformed` when they are charged
+    /// like every other former — and halving the leaves halves all three
+    /// counts, so the refusal is the budget's and not the shape's. The chain
+    /// then pins the nesting boundary on the same family: at the cap it
+    /// decodes, one level deeper it does not.
+    ///
+    /// On the ASCENT a filter's `pred` sits at the level its inner domain
+    /// occupied, so the term door co-fires there; it is the descent, and the
+    /// stack it spends, that only this family's door bounds.
+    #[test]
+    fn decode_charges_the_domain_family_and_caps_its_nesting() {
+        // A balanced `And` tree whose every leaf is `count(L_dom)`: L − 1
+        // `And`s, L `Count`s, and L domain formers beside them.
+        let leaves = |l: u32| {
+            let mut t = Term::Count(Arc::new(Dom::LinkDom));
+            for _ in 0..l.trailing_zeros() {
+                t = Term::And(Arc::new(t.clone()), Arc::new(t));
+            }
+            SignedTerm { params: vec![], body: t }
+        };
+        let past = leaves(1 << 15);
+        assert_eq!(decode(&encode(&past).expect("encodes")), Err(Malformed));
+        // Halving the leaves halves all three counts, so the same body is
+        // within the budget with the domains charged — the refusal above is
+        // the budget's, not the shape's.
+        let within = leaves(1 << 14);
+        assert_eq!(decode(&encode(&within).expect("encodes")), Ok(within));
+
+        // `Count` at 0, filter k at k, the innermost `L_dom` at n + 1.
+        let filters = |n: usize| {
+            let mut d = Dom::LinkDom;
+            for _ in 0..n {
+                d = Dom::Filter {
+                    dom: Arc::new(d),
+                    var: v(1),
+                    pred: Arc::new(Term::Lit(Lit::True)),
+                };
+            }
+            SignedTerm { params: vec![], body: Term::Count(Arc::new(d)) }
+        };
+        let at_cap = filters(MAX_DEPTH as usize - 1);
+        assert_eq!(decode(&encode(&at_cap).expect("encodes")), Ok(at_cap));
+        let deeper = filters(MAX_DEPTH as usize);
+        assert_eq!(decode(&encode(&deeper).expect("encodes")), Err(Malformed));
+    }
+
     /// The node budget at its boundary, on a body that is shallow and wide:
     /// a balanced `And` tree of 2¹⁵ leaves (2¹⁶ − 1 nodes, 16 formers deep)
     /// decodes, and one of 2¹⁶ leaves (2¹⁷ − 1 nodes) is `Malformed` — a

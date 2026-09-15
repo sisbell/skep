@@ -3,7 +3,7 @@
 //! instead of once per file. Nothing but module declarations belongs here.
 
 mod common;
-mod dump_class;
+mod dump_visible;
 mod editions;
 mod febe_demand;
 mod fires;

@@ -444,14 +444,14 @@ mod tests {
     #[test]
     fn the_central_record_lifts_each_store_to_its_own_variant_index() {
         let doc = addr(&[1, 0, 1, 0, 1]);
-        let namespace = M3Rec::Allocate { addr: doc.clone(), published: false };
-        let content = skep_content::stage_write(
+        let namespace_rec = M3Rec::Allocate { addr: doc.clone(), published: false };
+        let content_rec = skep_content::stage_write(
             &ContentStore::default(),
             &addr(&[1, 0, 1, 0, 1, 0, 1, 1]),
             Val::new(vec![b'x']),
         )
         .expect("a fresh content address stages a write");
-        let arrangement = skep_arrangement::stage_seat_link(
+        let arrangement_rec = skep_arrangement::stage_seat_link(
             &M5State::genesis(),
             &doc,
             &addr(&[1, 0, 1, 0, 1, 0, 2, 1]),
@@ -464,9 +464,9 @@ mod tests {
                 bytes[..4].try_into().expect("bincode writes a four-byte variant tag"),
             )
         };
-        assert_eq!(tag_of(namespace.into()), 0, "Namespace is variant 0");
-        assert_eq!(tag_of(content.into()), 1, "Content is variant 1");
-        assert_eq!(tag_of(arrangement.into()), 2, "Arrangement is variant 2");
+        assert_eq!(tag_of(namespace_rec.into()), 0, "Namespace is variant 0");
+        assert_eq!(tag_of(content_rec.into()), 1, "Content is variant 1");
+        assert_eq!(tag_of(arrangement_rec.into()), 2, "Arrangement is variant 2");
 
         let refuses = |tag: u32| -> bincode::ErrorKind {
             *bincode::deserialize::<Record>(&tag.to_le_bytes())
@@ -534,13 +534,13 @@ mod tests {
         // The pre-bit layout: additionally without M3's publication map, which
         // at genesis is empty and so is the eight zero bytes that end the
         // namespace section.
-        let namespace = bincode::serialize(&world.namespace).expect("M3 serializes");
+        let namespace_bytes = bincode::serialize(&world.namespace).expect("M3 serializes");
         assert!(
-            namespace.ends_with(&0u64.to_le_bytes()),
+            namespace_bytes.ends_with(&0u64.to_le_bytes()),
             "genesis's publication map is empty: an eight-byte zero length ends M3's bytes"
         );
         let mut pre_bit = pre_stamp.clone();
-        pre_bit.drain(namespace.len() - 8..namespace.len());
+        pre_bit.drain(namespace_bytes.len() - 8..namespace_bytes.len());
         assert!(
             bincode::deserialize::<World>(&pre_bit).is_err(),
             "a pre-publication checkpoint decoded — it must fail, never read as everything-published"

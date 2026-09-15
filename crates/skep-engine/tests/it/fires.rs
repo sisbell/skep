@@ -64,7 +64,7 @@ fn marker_rule(engine: &Engine, coord: &Coordinator<World>, home: Address) -> Ru
 
 /// The published home `1.0.1.0.1` and the private draft `1.0.1.0.2` of the
 /// genesis node's first account.
-fn docs(engine: &Engine) -> (Address, Address) {
+fn a_published_home_and_a_private_draft(engine: &Engine) -> (Address, Address) {
     let (acct, home) = setup_home(engine);
     assert_eq!(home, addr(&[1, 0, 1, 0, 1]), "the first account's home is its doc 1");
     let (draft, _) = engine
@@ -75,10 +75,10 @@ fn docs(engine: &Engine) -> (Address, Address) {
     (home, draft)
 }
 
-/// [`docs`] plus a `pred_stable` member at `member`, deposited in the
-/// PUBLISHED home.
+/// [`a_published_home_and_a_private_draft`] plus a `pred_stable` member at
+/// `member`, deposited in the PUBLISHED home.
 fn board(engine: &Engine, member: &Address) -> (Address, Address) {
-    let (home, draft) = docs(engine);
+    let (home, draft) = a_published_home_and_a_private_draft(engine);
     let pred_stable = engine.registry().reserved_type(ShippedType::PredStable).clone();
     engine
         .linkstore(&World::visible_to(Caller::System))
@@ -157,8 +157,8 @@ fn a_fire_is_never_absorbed_by_a_draft_homed_incumbent() {
 #[test]
 fn a_principal_s_writer_dedups_against_its_own_draft_homed_incumbent() {
     let engine = mem_engine();
-    // `setup_doc`'s explicit-`false` FIRST mint: the account's doc 1, private.
-    let (_acct, draft) = setup_doc(&engine);
+    // `setup_draft`'s explicit-`false` FIRST mint: the account's doc 1, private.
+    let (_acct, draft) = setup_draft(&engine);
     assert!(
         !engine.kernel().snapshot().world().readable(None, &draft),
         "the home must be a draft, or guest class reads it too and this proves nothing"
@@ -261,7 +261,7 @@ fn a_fire_within_the_published_world_lands() {
 fn a_rule_whose_only_matching_tuple_is_draft_homed_does_not_fire() {
     let engine = mem_engine();
     let member = addr(&[1, 0, 1, 0, 1, 0, 1, 1]); // a position of the PUBLISHED home
-    let (home, draft) = docs(&engine);
+    let (home, draft) = a_published_home_and_a_private_draft(&engine);
     let pred_stable = engine.registry().reserved_type(ShippedType::PredStable).clone();
     let retired = engine.registry().reserved_type(ShippedType::Retired).clone();
 
@@ -389,7 +389,7 @@ fn a_fire_commits_byte_identically_to_a_world_with_no_drafts() {
 #[test]
 fn domain_enumeration_excludes_the_draft_tuple_and_keeps_a_retracted_one() {
     let engine = mem_engine();
-    let (home, draft) = docs(&engine);
+    let (home, draft) = a_published_home_and_a_private_draft(&engine);
     let pred_stable = engine.registry().reserved_type(ShippedType::PredStable).clone();
     let member_1 = addr(&[1, 0, 1, 0, 1, 0, 1, 1]);
     let member_2 = addr(&[1, 0, 1, 0, 1, 0, 1, 2]);

@@ -78,7 +78,7 @@ fn checkpoint_file(dir: &Path) -> PathBuf {
     found.pop().expect("one checkpoint")
 }
 
-fn remove_checkpoints(dir: &Path) {
+fn remove_checkpoint(dir: &Path) {
     fs::remove_file(checkpoint_file(dir)).expect("remove the checkpoint");
 }
 
@@ -253,7 +253,7 @@ fn checkpoint_plus_replay_and_full_replay_yield_the_live_set() {
 
     // Full replay: with the checkpoint gone, genesis carries the base and
     // every record folds.
-    remove_checkpoints(dir.path());
+    remove_checkpoint(dir.path());
     {
         let engine = Engine::open(fsync_cfg(dir.path())).expect("reopen from genesis");
         assert_eq!(engine.kernel().current_seq(), head);
@@ -277,18 +277,18 @@ fn an_unregistered_address_is_absent_so_registration_guards_the_read() {
     assert!(world.published(&docs.edition));
 
     // A never-minted slot of the account's own document chain.
-    let never: Address = {
+    let never_minted: Address = {
         let comps = docs.acct.tumbler().iter().cloned().chain([nat(0), nat(99)]);
         validate(Tumbler::new(comps).expect("nonempty")).expect("T4-valid")
     };
-    assert!(!world.m3().is_registered_document(&never));
+    assert!(!world.m3().is_registered_document(&never_minted));
     assert!(
-        world.published(&never),
+        world.published(&never_minted),
         "absent from the set exactly as a published document is — the registration check stands ahead"
     );
-    assert_eq!(world.owner_account(&never), None);
+    assert_eq!(world.owner_account(&never_minted), None);
     assert!(
-        !world.m3().published(&never),
+        !world.m3().published(&never_minted),
         "M3's own read answers the fail-private direction there: the two agree on every \
          registered document — the contract's domain — and only there"
     );

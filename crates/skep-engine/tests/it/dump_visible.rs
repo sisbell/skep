@@ -80,19 +80,19 @@ fn board(engine: &Engine) -> Board {
 }
 
 /// A grant of `content_prefix` to `grantee`, issued by A from its doc 1.
-fn grant(engine: &Engine, b: &Board, content_prefix: &Address, grantee: &Address) -> Address {
-    grant_to(engine, b, content_prefix, vec![grantee.clone()])
+fn grant(engine: &Engine, board: &Board, content_prefix: &Address, grantee: &Address) -> Address {
+    grant_to(engine, board, content_prefix, vec![grantee.clone()])
 }
 
 /// [`grant`] with the `to` slot as DEPOSITED — empty for the ANY-PRINCIPAL
 /// form (PUB-5.8), whose record has no grantee to name.
-fn grant_to(engine: &Engine, b: &Board, content_prefix: &Address, to: Vec<Address>) -> Address {
+fn grant_to(engine: &Engine, board: &Board, content_prefix: &Address, to: Vec<Address>) -> Address {
     let issuer = Caller::Principal(A);
     engine
         .linkstore(&World::visible_to(issuer))
         .makelink(
             issuer,
-            &b.home_a,
+            &board.home_a,
             SlotArg::Addrs(vec![content_prefix.clone()]),
             SlotArg::Addrs(to),
             SlotArg::Addrs(vec![t_grant()]),
@@ -116,20 +116,20 @@ fn secret_line() -> String {
 #[test]
 fn the_v5_format_renders_the_publication_and_grants_sections() {
     let engine = mem_engine();
-    let b = board(&engine);
-    let g = grant(&engine, &b, &b.draft_a, &b.acct_b);
+    let board = board(&engine);
+    let g = grant(&engine, &board, &board.draft_a, &board.acct_b);
     let text = engine.world_dump().into_string();
 
     assert!(text.starts_with("skep-world-dump v5\n"), "unexpected banner: {text:.32}");
-    let publication = format!("\"publication\": [{}]", quoted(&b.draft_a));
+    let publication = format!("\"publication\": [{}]", quoted(&board.draft_a));
     assert!(text.contains(&publication), "expected {publication} in:\n{text}");
     let grants = format!(
         "\"grants\": {{{}: {{\"content_prefix\": {}, \"grantee\": {}, \"home\": {}, \"issuer\": {}}}}}",
         quoted(&g),
-        quoted(&b.draft_a),
-        quoted(&b.acct_b),
-        quoted(&b.home_a),
-        quoted(&b.acct_a),
+        quoted(&board.draft_a),
+        quoted(&board.acct_b),
+        quoted(&board.home_a),
+        quoted(&board.acct_a),
     );
     assert!(text.contains(&grants), "expected {grants} in:\n{text}");
     engine.check_hints().expect("the grant fold's seed equals its fold, through the section");
@@ -147,16 +147,16 @@ fn the_v5_format_renders_the_publication_and_grants_sections() {
 #[test]
 fn the_grant_section_renders_an_any_principal_grant_with_no_grantee() {
     let engine = mem_engine();
-    let b = board(&engine);
-    let g = grant_to(&engine, &b, &b.draft_a, vec![]); // empty `to` ⟹ ANY-PRINCIPAL
+    let board = board(&engine);
+    let g = grant_to(&engine, &board, &board.draft_a, vec![]); // empty `to` ⟹ ANY-PRINCIPAL
     let text = engine.world_dump().into_string();
 
     let grants = format!(
         "\"grants\": {{{}: {{\"content_prefix\": {}, \"grantee\": none, \"home\": {}, \"issuer\": {}}}}}",
         quoted(&g),
-        quoted(&b.draft_a),
-        quoted(&b.home_a),
-        quoted(&b.acct_a),
+        quoted(&board.draft_a),
+        quoted(&board.home_a),
+        quoted(&board.acct_a),
     );
     assert!(text.contains(&grants), "expected {grants} in:\n{text}");
     engine.check_hints().expect("the fold and its seed agree over a grantee-less record");
@@ -167,8 +167,8 @@ fn the_grant_section_renders_an_any_principal_grant_with_no_grantee() {
 #[test]
 fn the_filter_under_the_total_predicate_is_the_harness_walk() {
     let engine = mem_engine();
-    let b = board(&engine);
-    grant(&engine, &b, &b.draft_a, &b.acct_b);
+    let board = board(&engine);
+    grant(&engine, &board, &board.draft_a, &board.acct_b);
     let snap = engine.kernel().snapshot();
     let world = snap.world();
     assert_eq!(engine.dump_of_visible(world, &|_: &Address| true), engine.dump_of(world));
@@ -182,8 +182,8 @@ fn the_filter_under_the_total_predicate_is_the_harness_walk() {
 #[test]
 fn a_guest_s_dump_holds_no_draft_content_and_an_empty_publication_section() {
     let engine = mem_engine();
-    let b = board(&engine);
-    let g = grant(&engine, &b, &b.draft_a, &b.acct_b);
+    let board = board(&engine);
+    let g = grant(&engine, &board, &board.draft_a, &board.acct_b);
 
     let guest = engine.world_dump_visible_to(None).into_string();
     assert!(guest.starts_with("skep-world-dump v5\n"), "one banner for every class");
@@ -193,14 +193,14 @@ fn a_guest_s_dump_holds_no_draft_content_and_an_empty_publication_section() {
     );
     assert!(guest.contains("\"publication.drafts\": {}"), "…and so is the hint:\n{guest}");
     assert!(!guest.contains(&secret_line()), "a draft's content line leaves:\n{guest}");
-    assert!(!guest.contains(&quoted(&b.link_a)), "a draft's link leaves every hint:\n{guest}");
+    assert!(!guest.contains(&quoted(&board.link_a)), "a draft's link leaves every hint:\n{guest}");
     assert!(guest.contains(&quoted(&g)), "the published home's grant link stays:\n{guest}");
     // The grant section is kept whole, so the draft the guest cannot open is
     // still named there, as that grant's `content_prefix` — the one dotted
     // rendering of it a guest's text carries. (The namespace section names it
     // too, but in the authoritative maps' tumbler form, not this one.)
     assert!(
-        guest.contains(&quoted(&b.draft_a)),
+        guest.contains(&quoted(&board.draft_a)),
         "the whole-kept grant section still names the draft:\n{guest}"
     );
 
@@ -215,25 +215,25 @@ fn a_guest_s_dump_holds_no_draft_content_and_an_empty_publication_section() {
 #[test]
 fn an_owner_lists_its_drafts_and_a_grantee_follows_the_grant() {
     let engine = mem_engine();
-    let b = board(&engine);
+    let board = board(&engine);
 
     let before = engine.world_dump_visible_to(Some(B));
     assert_eq!(before, engine.world_dump_visible_to(None), "ungranted, B reads as the guest");
 
     let owner = engine.world_dump_visible_to(Some(A)).into_string();
-    let section = format!("\"publication\": [{}]", quoted(&b.draft_a));
+    let section = format!("\"publication\": [{}]", quoted(&board.draft_a));
     assert!(owner.contains(&section), "the owner's publication section lists its draft:\n{owner}");
     assert!(owner.contains(&secret_line()), "…with its content line:\n{owner}");
-    assert!(owner.contains(&quoted(&b.link_a)), "…and its link in the hints:\n{owner}");
+    assert!(owner.contains(&quoted(&board.link_a)), "…and its link in the hints:\n{owner}");
 
-    grant(&engine, &b, &b.draft_a, &b.acct_b);
+    grant(&engine, &board, &board.draft_a, &board.acct_b);
     let grantee = engine.world_dump_visible_to(Some(B)).into_string();
     assert!(
         grantee.contains(&section),
         "the grantee's publication section holds the granted draft:\n{grantee}"
     );
     assert!(grantee.contains(&secret_line()), "…and its content line:\n{grantee}");
-    assert!(grantee.contains(&quoted(&b.link_a)), "…and its link:\n{grantee}");
+    assert!(grantee.contains(&quoted(&board.link_a)), "…and its link:\n{grantee}");
     assert_eq!(
         grantee,
         engine.world_dump_visible_to(Some(A)).into_string(),
@@ -248,8 +248,8 @@ fn an_owner_lists_its_drafts_and_a_grantee_follows_the_grant() {
 fn two_dumps_of_equal_worlds_are_byte_equal_per_class() {
     let build = || {
         let engine = mem_engine();
-        let b = board(&engine);
-        grant(&engine, &b, &b.draft_a, &b.acct_b);
+        let board = board(&engine);
+        grant(&engine, &board, &board.draft_a, &board.acct_b);
         engine
     };
     let (e1, e2) = (build(), build());
@@ -273,13 +273,13 @@ fn two_dumps_of_equal_worlds_are_byte_equal_per_class() {
 fn a_historical_world_dumps_at_the_head_s_class() {
     let dir = tempdir().expect("tempdir");
     let engine = Engine::open(fsync_cfg(dir.path())).expect("open");
-    let b = board(&engine);
+    let board = board(&engine);
     let n: Seq = engine.kernel().current_seq();
 
     // After N: the grant, and a second draft.
-    grant(&engine, &b, &b.draft_a, &b.acct_b);
-    let (draft_2, _) =
-        engine.namespace().create_new_document(A, &b.acct_a, None).expect("A's second draft");
+    grant(&engine, &board, &board.draft_a, &board.acct_b);
+    let (draft_two, _) =
+        engine.namespace().create_new_document(A, &board.acct_a, None).expect("A's second draft");
 
     let head = engine.kernel().snapshot();
     let world_n = engine.world_at(n).expect("the N-world reconstructs");
@@ -291,10 +291,13 @@ fn a_historical_world_dumps_at_the_head_s_class() {
         .dump_of_visible(&world_n, &|doc: &Address| head.world().readable(Some(B), doc))
         .into_string();
     assert!(at_n.contains(&secret_line()), "a grant after N opens the draft at /dump?at=N:\n{at_n}");
-    let section_n = format!("\"publication\": [{}]", quoted(&b.draft_a));
-    assert!(at_n.contains(&section_n), "the publication section is the as-of-N set:\n{at_n}");
+    let first_draft_alone = format!("\"publication\": [{}]", quoted(&board.draft_a));
     assert!(
-        !at_n.contains(&quoted(&draft_2)),
+        at_n.contains(&first_draft_alone),
+        "the publication section is the as-of-N set:\n{at_n}"
+    );
+    assert!(
+        !at_n.contains(&quoted(&draft_two)),
         "…and B, which cannot read the later draft at the head either, sees none of it"
     );
     // …so the as-of-N claim is witnessed at a class that WOULD see the later
@@ -303,7 +306,7 @@ fn a_historical_world_dumps_at_the_head_s_class() {
         .dump_of_visible(&world_n, &|doc: &Address| head.world().readable(Some(A), doc))
         .into_string();
     assert!(
-        at_n_for_a.contains(&section_n),
+        at_n_for_a.contains(&first_draft_alone),
         "at A's head class the N-world's section still lists only the draft that existed at \
          N:\n{at_n_for_a}"
     );
@@ -319,15 +322,15 @@ fn a_historical_world_dumps_at_the_head_s_class() {
     // B's publication section lists that draft; A reads both, in address order.
     let head_b = engine.world_dump_visible_to(Some(B)).into_string();
     assert!(
-        head_b.contains(&section_n),
+        head_b.contains(&first_draft_alone),
         "B's head publication section: the granted draft alone:\n{head_b}"
     );
-    let mut both = vec![quoted(&b.draft_a), quoted(&draft_2)];
-    both.sort();
-    let section_a = format!("\"publication\": [{}]", both.join(", "));
+    let mut drafts = vec![quoted(&board.draft_a), quoted(&draft_two)];
+    drafts.sort();
+    let both_drafts = format!("\"publication\": [{}]", drafts.join(", "));
     let head_a = engine.world_dump_visible_to(Some(A)).into_string();
     assert!(
-        head_a.contains(&section_a),
+        head_a.contains(&both_drafts),
         "A's head publication section: both drafts, address order:\n{head_a}"
     );
 }
@@ -346,13 +349,13 @@ fn a_historical_world_dumps_at_the_head_s_class() {
 #[test]
 fn a_grant_names_an_address_the_client_invented() {
     let engine = mem_engine();
-    let b = board(&engine);
+    let board = board(&engine);
 
     // A document-tier address under A's account whose ordinal M3 never
     // allocated and never could reach.
     let huge: Nat = "123456789012345678901234567890".parse().expect("a thirty-digit component");
     let invented: Address = {
-        let comps = b.acct_a.tumbler().iter().cloned().chain([nat(0), huge]);
+        let comps = board.acct_a.tumbler().iter().cloned().chain([nat(0), huge]);
         validate(Tumbler::new(comps).expect("nonempty")).expect("a document tier address is T4-valid")
     };
     assert!(
@@ -360,7 +363,7 @@ fn a_grant_names_an_address_the_client_invented() {
         "the point is an address M3 never minted"
     );
 
-    grant(&engine, &b, &invented, &b.acct_b);
+    grant(&engine, &board, &invented, &board.acct_b);
 
     let guest = engine.world_dump_visible_to(None).into_string();
     assert!(

@@ -151,7 +151,7 @@ fn m10_s_read_surface_answers_through_the_engine_s_predicate() {
             },
         )
     };
-    let withheld = |resp: Response, doc: &Address| match resp {
+    let assert_withheld = |resp: Response, doc: &Address| match resp {
         Response::Rejected(rej) => {
             assert_eq!(rej.code, RejectCode::Withheld, "{rej:?}");
             assert_eq!(rej.disposition, Disposition::Reorder, "{rej:?}");
@@ -173,10 +173,10 @@ fn m10_s_read_surface_answers_through_the_engine_s_predicate() {
     // pattern): the guest predicate is published alone.
     let guest = febe.open_session(PrincipalId(4242));
     febe.close_session(guest);
-    withheld(read(guest, &draft), &draft);
+    assert_withheld(read(guest, &draft), &draft);
     // NON-ENTITLED — a bound principal outside the owner's subtree, no grant.
     let stranger = febe.open_session(PrincipalId(77));
-    withheld(read(stranger, &draft), &draft);
+    assert_withheld(read(stranger, &draft), &draft);
     // The published home answers both classes — a span set (empty, nothing
     // deposited), never a withheld answer: a published document never
     // answers withheld (PUB-6.3).
@@ -200,7 +200,7 @@ fn m10_s_read_surface_answers_through_the_engine_s_predicate() {
 fn engine_stores_serves_a_kernel_rooted_at_a_reconstructed_world() {
     let dir = tempdir().expect("tempdir");
     let engine = Engine::open(fsync_cfg(dir.path())).expect("fsync open");
-    let (_acct, doc) = setup_doc(&engine);
+    let (_acct, doc) = setup_draft(&engine);
     engine
         .vstream()
         .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'x'])], Deposit::Undeclared)

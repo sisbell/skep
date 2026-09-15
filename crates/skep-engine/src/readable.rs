@@ -104,7 +104,7 @@ impl World {
     ///   one unregistered address this clause does NOT open is one shaped as a
     ///   version member of a registered draft: it reads as that draft, and is
     ///   withheld wherever the draft is
-    ///   (`a_member_shaped_address_under_a_draft_reads_as_the_draft`).
+    ///   (`a_version_member_shaped_address_under_a_draft_reads_as_the_draft`).
     /// * SUBTREE (PUB-5.9, PUB-5.13-adjacent) — `owner_account(doc) ⊑
     ///   account(principal)`, ONE prefix compare DOWNWARD only, off the
     ///   exception set's MINT-TIME owner (never a nearest-account walk). A

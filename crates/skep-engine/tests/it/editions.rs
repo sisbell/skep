@@ -17,8 +17,9 @@ use skep_febe::EditionClaim;
 use skep_links::{enc, Endset, HasLinks, SlotArg, View};
 use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 
-/// The EDITION class type address (commons-seeding.md row `3.14 | edition`
-/// — OWNER CONFIRM OWED), as a client names it: `1.1.0.1.0.1.0.3.14`.
+/// The EDITION class type address (commons-seeding.md row `3.14 | edition`,
+/// confirmed by the owner 2026-09-07), as a client names it:
+/// `1.1.0.1.0.1.0.3.14`.
 fn t_edition() -> Address {
     addr(&[1, 1, 0, 1, 0, 1, 0, 3, 14])
 }
@@ -93,11 +94,11 @@ fn claim(engine: &Engine, home: &Address, to: &Address, ty: &Address) -> Address
         .expect("the claim deposits into A's own edition")
 }
 
-fn nullify(engine: &Engine, home: &Address, target: &Address) {
+fn nullify(engine: &Engine, home: &Address, claim: &Address) {
     let caller = Caller::Principal(A);
     engine
         .linkstore(&World::visible_to(caller))
-        .nullify(caller, home, target)
+        .nullify(caller, home, claim)
         .expect("the owner retracts its own claim");
 }
 
@@ -130,15 +131,15 @@ fn row_to(claim: &Address, home: &Address, to: Endset, active: bool) -> EditionC
 #[test]
 fn the_lookup_lists_the_class_s_claims_retracted_or_not_with_their_homes() {
     let engine = mem_engine();
-    let b = board(&engine);
-    let c1 = claim(&engine, &b.e1, &b.target, &t_edition());
-    let c2 = claim(&engine, &b.e2, &b.target, &t_edition_expanded());
-    nullify(&engine, &b.e2, &c2);
+    let board = board(&engine);
+    let c1 = claim(&engine, &board.e1, &board.target, &t_edition());
+    let c2 = claim(&engine, &board.e2, &board.target, &t_edition_expanded());
+    nullify(&engine, &board.e2, &c2);
 
     let w = world(&engine);
     assert_eq!(
-        w.edition_claims(&b.target),
-        vec![row(&c1, &b.e1, &b.target, true), row(&c2, &b.e2, &b.target, false)],
+        w.edition_claims(&board.target),
+        vec![row(&c1, &board.e1, &board.target, true), row(&c2, &board.e2, &board.target, false)],
         "both claims, homes named, the retraction stated"
     );
     // The active view — what a result-set read answers — holds one.
@@ -154,15 +155,15 @@ fn the_lookup_lists_the_class_s_claims_retracted_or_not_with_their_homes() {
 #[test]
 fn a_superseded_claim_and_a_foreign_type_leave_the_class() {
     let engine = mem_engine();
-    let b = board(&engine);
-    let old = claim(&engine, &b.e1, &b.target, &t_edition());
-    let new = claim(&engine, &b.e1, &b.target, &t_edition());
-    let foreign = claim(&engine, &b.e1, &b.target, &t_grant());
-    supersede(&engine, &b.e1, &old, &new);
+    let board = board(&engine);
+    let old = claim(&engine, &board.e1, &board.target, &t_edition());
+    let new = claim(&engine, &board.e1, &board.target, &t_edition());
+    let foreign = claim(&engine, &board.e1, &board.target, &t_grant());
+    supersede(&engine, &board.e1, &old, &new);
 
     let w = world(&engine);
-    let rows = w.edition_claims(&b.target);
-    assert_eq!(rows, vec![row(&new, &b.e1, &b.target, true)], "{rows:?}");
+    let rows = w.edition_claims(&board.target);
+    assert_eq!(rows, vec![row(&new, &board.e1, &board.target, true)], "{rows:?}");
     assert!(w.links().is_active(&old), "the superseded claim is still active — it is D4 that retires it");
     assert!(w.links().readlink(&foreign).is_some(), "the foreign-typed link is resident, and not in the class");
 }
@@ -176,24 +177,24 @@ fn a_superseded_claim_and_a_foreign_type_leave_the_class() {
 #[test]
 fn a_type_slot_denoting_the_class_and_a_foreign_class_is_no_member() {
     let engine = mem_engine();
-    let b = board(&engine);
-    let good = claim(&engine, &b.e1, &b.target, &t_edition());
+    let board = board(&engine);
+    let good = claim(&engine, &board.e1, &board.target, &t_edition());
     let caller = Caller::Principal(A);
     let (dual, _) = engine
         .linkstore(&World::visible_to(caller))
         .makelink(
             caller,
-            &b.e2,
-            SlotArg::Addrs(vec![b.e2.clone()]),
-            SlotArg::Addrs(vec![b.target.clone()]),
+            &board.e2,
+            SlotArg::Addrs(vec![board.e2.clone()]),
+            SlotArg::Addrs(vec![board.target.clone()]),
             SlotArg::Addrs(vec![t_edition(), t_grant()]),
         )
         .expect("a dual-typed link deposits through the open surface");
 
     let w = world(&engine);
     assert_eq!(
-        w.edition_claims(&b.target),
-        vec![row(&good, &b.e1, &b.target, true)],
+        w.edition_claims(&board.target),
+        vec![row(&good, &board.e1, &board.target, true)],
         "a slot that merely overlaps the class range is no member of it"
     );
     assert!(
@@ -211,15 +212,15 @@ fn a_type_slot_denoting_the_class_and_a_foreign_class_is_no_member() {
 #[test]
 fn a_type_slot_denoting_several_subtypes_of_the_class_is_a_member() {
     let engine = mem_engine();
-    let b = board(&engine);
+    let board = board(&engine);
     let caller = Caller::Principal(A);
     let (multi, _) = engine
         .linkstore(&World::visible_to(caller))
         .makelink(
             caller,
-            &b.e1,
-            SlotArg::Addrs(vec![b.e1.clone()]),
-            SlotArg::Addrs(vec![b.target.clone()]),
+            &board.e1,
+            SlotArg::Addrs(vec![board.e1.clone()]),
+            SlotArg::Addrs(vec![board.target.clone()]),
             SlotArg::Addrs(vec![t_edition_abridged(), t_edition_expanded()]),
         )
         .expect("a claim typed with two subtypes of the class deposits");
@@ -230,8 +231,8 @@ fn a_type_slot_denoting_several_subtypes_of_the_class_is_a_member() {
     let ty = w.links().readlink(&multi).expect("the claim is resident").type_slot();
     assert_eq!(ty.addrs().count(), 2, "the fixture must deposit a two-address type slot: {ty:?}");
     assert_eq!(
-        w.edition_claims(&b.target),
-        vec![row(&multi, &b.e1, &b.target, true)],
+        w.edition_claims(&board.target),
+        vec![row(&multi, &board.e1, &board.target, true)],
         "a slot whose every denoted address lies under the class is a member of it"
     );
 }
@@ -243,15 +244,18 @@ fn a_type_slot_denoting_several_subtypes_of_the_class_is_a_member() {
 #[test]
 fn a_draft_edition_s_claim_is_in_the_class_the_world_answers() {
     let engine = mem_engine();
-    let b = board(&engine);
-    let c3 = claim(&engine, &b.draft_edition, &b.target, &t_edition());
+    let board = board(&engine);
+    let c3 = claim(&engine, &board.draft_edition, &board.target, &t_edition());
     let w = world(&engine);
-    assert_eq!(w.edition_claims(&b.target), vec![row(&c3, &b.draft_edition, &b.target, true)]);
+    assert_eq!(
+        w.edition_claims(&board.target),
+        vec![row(&c3, &board.draft_edition, &board.target, true)]
+    );
     assert!(
-        !w.readable(None, &b.draft_edition),
+        !w.readable(None, &board.draft_edition),
         "the draft edition is the home the guest cannot read"
     );
-    assert!(w.readable(Some(A), &b.draft_edition), "…and the owner can");
+    assert!(w.readable(Some(A), &board.draft_edition), "…and the owner can");
 }
 
 /// The `to`-RANGE is the target's subtree: a claim denoting the target's
@@ -262,24 +266,33 @@ fn a_draft_edition_s_claim_is_in_the_class_the_world_answers() {
 #[test]
 fn the_to_range_is_the_target_s_subtree() {
     let engine = mem_engine();
-    let b = board(&engine);
-    let on_doc = claim(&engine, &b.e1, &b.target, &t_edition());
-    let on_member = claim(&engine, &b.e2, &b.version_member, &t_edition());
-    let on_other = claim(&engine, &b.e1, &b.other_target, &t_edition());
+    let board = board(&engine);
+    let on_doc = claim(&engine, &board.e1, &board.target, &t_edition());
+    let on_member = claim(&engine, &board.e2, &board.version_member, &t_edition());
+    let on_other = claim(&engine, &board.e1, &board.other_target, &t_edition());
 
     let w = world(&engine);
     assert_eq!(
-        w.edition_claims(&b.target),
-        vec![row(&on_doc, &b.e1, &b.target, true), row(&on_member, &b.e2, &b.version_member, true)],
+        w.edition_claims(&board.target),
+        vec![
+            row(&on_doc, &board.e1, &board.target, true),
+            row(&on_member, &board.e2, &board.version_member, true),
+        ],
         "the document names every claim denoting it or a version of it"
     );
     assert_eq!(
-        w.edition_claims(&b.version_member),
-        vec![row(&on_doc, &b.e1, &b.target, true), row(&on_member, &b.e2, &b.version_member, true)],
+        w.edition_claims(&board.version_member),
+        vec![
+            row(&on_doc, &board.e1, &board.target, true),
+            row(&on_member, &board.e2, &board.version_member, true),
+        ],
         "a version member names the claims denoting it and those denoting its document"
     );
-    assert_eq!(w.edition_claims(&b.other_target), vec![row(&on_other, &b.e1, &b.other_target, true)]);
-    assert!(w.edition_claims(&b.e1).is_empty(), "an edition is claimed by nothing");
+    assert_eq!(
+        w.edition_claims(&board.other_target),
+        vec![row(&on_other, &board.e1, &board.other_target, true)]
+    );
+    assert!(w.edition_claims(&board.e1).is_empty(), "an edition is claimed by nothing");
 }
 
 /// The `to` test is M7's OVERLAP regime and NOT denotation — and this is the
@@ -297,7 +310,7 @@ fn the_to_range_is_the_target_s_subtree() {
 #[test]
 fn a_to_slot_that_denotes_nothing_under_the_target_is_still_a_row() {
     let engine = mem_engine();
-    let b = board(&engine);
+    let board = board(&engine);
     let caller = Caller::Principal(A);
     // Claimed here is `other_target`, the published document with NO version:
     // a declared deposit into a published document lands in its HEAD member's
@@ -307,7 +320,7 @@ fn a_to_slot_that_denotes_nothing_under_the_target_is_still_a_row() {
         .vstream()
         .insert(
             caller,
-            &b.other_target,
+            &board.other_target,
             vp(1, 1),
             vec![Val::new(vec![b'a']), Val::new(vec![b'b'])],
             Deposit::Declared,
@@ -317,19 +330,19 @@ fn a_to_slot_that_denotes_nothing_under_the_target_is_still_a_row() {
         .linkstore(&World::visible_to(caller))
         .makelink(
             caller,
-            &b.e1,
-            SlotArg::Addrs(vec![b.e1.clone()]),
+            &board.e1,
+            SlotArg::Addrs(vec![board.e1.clone()]),
             // TWO positions wide, so the resolved span is not unit-depth.
-            SlotArg::Resolve(vec![vspec(&b.other_target, 1, 2)]),
+            SlotArg::Resolve(vec![vspec(&board.other_target, 1, 2)]),
             SlotArg::Addrs(vec![t_edition()]),
         )
         .expect("a claim over a RANGE of the target's content deposits");
 
     let w = world(&engine);
-    let rows = w.edition_claims(&b.other_target);
+    let rows = w.edition_claims(&board.other_target);
     assert_eq!(rows.len(), 1, "the ranged claim is a row of the target's class: {rows:?}");
     assert_eq!(rows[0].claim, ranged);
-    assert_eq!(rows[0].home, b.e1);
+    assert_eq!(rows[0].home, board.e1);
     // The premise, stated where it can fail: this slot must DENOTE nothing,
     // or the two readings agree here and the test says nothing about either.
     assert!(
@@ -348,22 +361,23 @@ fn a_to_slot_that_denotes_nothing_under_the_target_is_still_a_row() {
 #[test]
 fn the_lookup_ranges_over_whatever_tier_the_caller_names() {
     let engine = mem_engine();
-    let b = board(&engine);
-    let on_doc = claim(&engine, &b.e1, &b.target, &t_edition());
-    let on_member = claim(&engine, &b.e2, &b.version_member, &t_edition());
-    let on_other = claim(&engine, &b.e1, &b.other_target, &t_edition());
+    let board = board(&engine);
+    let on_doc = claim(&engine, &board.e1, &board.target, &t_edition());
+    let on_member = claim(&engine, &board.e2, &board.version_member, &t_edition());
+    let on_other = claim(&engine, &board.e1, &board.other_target, &t_edition());
 
     let w = world(&engine);
     // The account tier: every claim on any document A owns.
-    let account = document_of(&b.target).and_then(|d| parent(&d)).expect("the target's account");
+    let account =
+        document_of(&board.target).and_then(|d| parent(&d)).expect("the target's account");
     // …in LINK-address order, so e1's two claims precede e2's one whatever
     // the documents they name.
     assert_eq!(
         w.edition_claims(&account),
         vec![
-            row(&on_doc, &b.e1, &b.target, true),
-            row(&on_other, &b.e1, &b.other_target, true),
-            row(&on_member, &b.e2, &b.version_member, true),
+            row(&on_doc, &board.e1, &board.target, true),
+            row(&on_other, &board.e1, &board.other_target, true),
+            row(&on_member, &board.e2, &board.version_member, true),
         ],
         "an account address ranges over every document under it"
     );
@@ -384,27 +398,27 @@ fn the_lookup_ranges_over_whatever_tier_the_caller_names() {
 #[test]
 fn a_row_carries_the_to_slot_as_deposited_however_wide() {
     let engine = mem_engine();
-    let b = board(&engine);
+    let board = board(&engine);
     let caller = Caller::Principal(A);
     // A `to` slot naming the target and 63 never-minted addresses in the
     // edition's own subspace 3 — one address of the request, 64 of the
     // answer.
-    let mut to: Vec<Address> = vec![b.target.clone()];
-    to.extend((1..64u32).map(|n| element(&b.e1, 3, n)));
+    let mut to: Vec<Address> = vec![board.target.clone()];
+    to.extend((1..64u32).map(|n| element(&board.e1, 3, n)));
     let (wide, _) = engine
         .linkstore(&World::visible_to(caller))
         .makelink(
             caller,
-            &b.e1,
-            SlotArg::Addrs(vec![b.e1.clone()]),
+            &board.e1,
+            SlotArg::Addrs(vec![board.e1.clone()]),
             SlotArg::Addrs(to.clone()),
             SlotArg::Addrs(vec![t_edition()]),
         )
         .expect("a wide-slotted claim deposits through the open surface");
 
     let w = world(&engine);
-    let rows = w.edition_claims(&b.target);
-    assert_eq!(rows, vec![row_to(&wide, &b.e1, enc(to.iter()), true)], "{rows:?}");
+    let rows = w.edition_claims(&board.target);
+    assert_eq!(rows, vec![row_to(&wide, &board.e1, enc(to.iter()), true)], "{rows:?}");
     assert_eq!(
         rows[0].to.len(),
         64,

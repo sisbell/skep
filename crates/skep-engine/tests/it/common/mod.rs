@@ -18,7 +18,7 @@ use skep_retrieval::{Delivery, DeliveryItem};
 pub const USER: PrincipalId = PrincipalId(7);
 
 /// [`USER`] as the stores' ω-gated caller (the ownership ruling,
-/// 2026-08-16) — the owner of everything `setup_doc` creates.
+/// 2026-08-16) — the owner of everything `setup_draft` and `setup_home` create.
 pub const OWNER: Caller = Caller::Principal(USER);
 
 pub fn tum(comps: &[u32]) -> Tumbler {
@@ -87,7 +87,7 @@ pub fn mem_engine() -> Engine {
 
 /// Bootstrap prologue, all through the real drivers: peek the next delegable
 /// prefix under the genesis node, delegate it to [`USER`], create one
-/// document in the new account — a DRAFT. Returns `(account, document)`.
+/// document in the new account — a DRAFT. Returns `(account, draft)`.
 ///
 /// The draft is an explicit `false` on the account's FIRST mint: flagless,
 /// that mint would be the account's born-published home (PUB-8.21), and a
@@ -96,11 +96,11 @@ pub fn mem_engine() -> Engine {
 /// first mint is refused at the daemon's door alone (PUB-8.20); the engine
 /// mints it, which is the state this prologue wants. [`setup_home`] is the
 /// published twin.
-pub fn setup_doc(engine: &Engine) -> (Address, Address) {
+pub fn setup_draft(engine: &Engine) -> (Address, Address) {
     setup_with(engine, Some(false))
 }
 
-/// [`setup_doc`]'s published twin: the same prologue, minting the account's
+/// [`setup_draft`]'s published twin: the same prologue, minting the account's
 /// HOME — its flagless first document, born published (PUB-8.21, PUB-1.17).
 /// Returns `(account, home)`. Content enters it by declared deposits alone
 /// (PUB-2.59), and it is the one owned source `version` admits (PUB-2.9).

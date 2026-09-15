@@ -377,7 +377,7 @@ impl Grants {
     /// ANY-PRINCIPAL one.
     fn index_add(&mut self, entry: GrantIndexEntry<'_>) {
         let index = match entry.grantee {
-            Some(g) => self.by_grantee.entry(g.clone()).or_default(),
+            Some(grantee) => self.by_grantee.entry(grantee.clone()).or_default(),
             None => &mut self.universal,
         };
         set_insert(index, entry.content_prefix, entry.issuer.clone());
@@ -388,16 +388,16 @@ impl Grants {
     /// `by_grantee` holds no empty prefix map, as `set_remove` leaves no empty
     /// issuer set.
     fn index_remove(&mut self, entry: GrantIndexEntry<'_>) {
-        let Some(g) = entry.grantee else {
+        let Some(grantee) = entry.grantee else {
             set_remove(&mut self.universal, entry.content_prefix, entry.issuer);
             return;
         };
-        let Some(prefixes) = self.by_grantee.get_mut(g) else {
+        let Some(prefixes) = self.by_grantee.get_mut(grantee) else {
             return;
         };
         set_remove(prefixes, entry.content_prefix, entry.issuer);
         if prefixes.is_empty() {
-            self.by_grantee.remove(g);
+            self.by_grantee.remove(grantee);
         }
     }
 }
@@ -416,7 +416,7 @@ enum Kind {
     /// A revocation naming an EARLIER admitted grant's link address. Decided
     /// off the `from` slot ALONE, so this arm's `to` slot is never read and
     /// carries no meaning: a revoking record revokes whatever its `to` holds.
-    Revoke { old: Address },
+    Revoke { revoked: Address },
     /// A MALFORMED record, which is neither — a `from` denoting no address or
     /// one M1 refuses, or, on the fresh-grant arm, a `to` denoting more than
     /// one. The fold ignores it, so a malformed grant grants to nobody.
@@ -484,20 +484,20 @@ fn classify(prev: &Grants, home: &Address, value: &Link) -> Kind {
     // answered HERE, ahead of the `to` slot, which the precedence above makes
     // part of the rule rather than a property of this line's position.
     if prev.records.get(&from).is_some_and(|r| &r.home == home) {
-        return Kind::Revoke { old: from };
+        return Kind::Revoke { revoked: from };
     }
     // Otherwise a fresh grant: `to` empty ⟹ ANY-PRINCIPAL, exactly one address
     // ⟹ the grantee, anything else ⟹ malformed.
     let grantee = if value.to_slot().is_empty() {
         None
     } else {
-        let Some(g) = value.to_slot().single_denoted() else {
+        let Some(grantee) = value.to_slot().single_denoted() else {
             return Kind::Malformed; // a multi-address `to` is malformed
         };
-        let Ok(g) = validate(g.clone()) else {
+        let Ok(grantee) = validate(grantee.clone()) else {
             return Kind::Malformed;
         };
-        Some(g)
+        Some(grantee)
     };
     Kind::Grant { content_prefix: from, grantee }
 }
@@ -539,7 +539,7 @@ fn fold_one(
         Kind::Grant { content_prefix, grantee } => {
             next.admit(addr.clone(), GrantRecord { home, issuer, content_prefix, grantee });
         }
-        Kind::Revoke { old } => next.withdraw(&old),
+        Kind::Revoke { revoked } => next.withdraw(&revoked),
         Kind::Malformed => {}
     }
     next

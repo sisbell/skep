@@ -59,7 +59,7 @@ impl Deposited {
 /// over two of them, a retraction of the third, and one managed emission
 /// under the shipped `PredDef` class. `start` is the first I-address the
 /// document's content occupies, which the emission points from.
-fn every_hint_family(engine: &Engine, doc: &Address, start: &Address) -> Deposited {
+fn deposit_every_hint_family(engine: &Engine, doc: &Address, start: &Address) -> Deposited {
     // Every write below is the OWNER's, at the owner's own visibility class.
     let visibility = World::visible_to(OWNER);
     let make_link = |from: (u32, u32), to: (u32, u32)| {
@@ -96,12 +96,12 @@ fn every_hint_family(engine: &Engine, doc: &Address, start: &Address) -> Deposit
 /// neighbours.
 fn populated_dump() -> (String, Deposited) {
     let engine = Engine::open(mem_cfg()).expect("in-memory open");
-    let (_acct, doc) = setup_doc(&engine);
+    let (_acct, doc) = setup_draft(&engine);
     let (start, _) = engine
         .vstream()
         .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared)
         .expect("insert succeeds");
-    let deposited = every_hint_family(&engine, &doc, &start);
+    let deposited = deposit_every_hint_family(&engine, &doc, &start);
     (engine.world_dump().into_string(), deposited)
 }
 
@@ -130,8 +130,8 @@ fn seq_of(addrs: &[&Address]) -> String {
 /// One type class's rendering: its audit and active slices — LINK addresses,
 /// which is what a typed slice holds — and its key.
 fn class_of(links: &[&Address], key: &str) -> String {
-    let m = seq_of(links);
-    format!("{{\"active\": {m}, \"audit\": {m}, \"key\": [{:?}]}}", key)
+    let slice = seq_of(links);
+    format!("{{\"active\": {slice}, \"audit\": {slice}, \"key\": [{:?}]}}", key)
 }
 
 #[test]
@@ -172,13 +172,13 @@ fn the_dump_carries_the_supersession_forward_edges() {
 #[test]
 fn the_dump_carries_a_supersession_edge_out_of_a_retracted_link() {
     let engine = Engine::open(mem_cfg()).expect("in-memory open");
-    let (_acct, doc) = setup_doc(&engine);
+    let (_acct, doc) = setup_draft(&engine);
     engine
         .vstream()
         .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared)
         .expect("insert succeeds");
     let visibility = World::visible_to(OWNER);
-    let link = |from: u32, to: u32| {
+    let make_link = |from: u32, to: u32| {
         engine
             .linkstore(&visibility)
             .makelink(
@@ -191,7 +191,7 @@ fn the_dump_carries_a_supersession_edge_out_of_a_retracted_link() {
             .expect("makelink succeeds")
             .0
     };
-    let (old, new) = (link(1, 2), link(2, 1));
+    let (old, new) = (make_link(1, 2), make_link(2, 1));
     engine.linkstore(&visibility).assert_sup(OWNER, &doc, &old, &new).expect("assert_sup");
     engine.linkstore(&visibility).nullify(OWNER, &doc, &old).expect("retract the OLD endpoint");
 
@@ -221,9 +221,8 @@ fn the_dump_names_every_shipped_class_with_its_typed_slices() {
 /// PRESENCE is what makes a later loss visible.
 #[test]
 fn the_dump_projects_the_predicate_registry() {
-    let (text, deposited) = populated_dump();
+    let (text, _deposited) = populated_dump();
     let start = quoted(&addr(&[1, 0, 1, 0, 1, 0, 1, 1]));
-    let _ = &deposited;
     for entry in ["predicates.defs.audit", "predicates.defs.active"] {
         assert_entry(&text, entry, &format!("[{start}]"));
     }
@@ -244,12 +243,12 @@ fn two_engines_with_the_same_history_dump_byte_equal() {
     /// equal iteration orders are not the explanation.
     fn scripted() -> Engine {
         let engine = Engine::open(mem_cfg()).expect("in-memory open");
-        let (acct, doc) = setup_doc(&engine);
+        let (acct, doc) = setup_draft(&engine);
         let (start, _) = engine
             .vstream()
             .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared)
             .expect("insert succeeds");
-        every_hint_family(&engine, &doc, &start);
+        deposit_every_hint_family(&engine, &doc, &start);
         for byte in [b'r', b's', b't'] {
             let (d, _) = engine
                 .namespace()
@@ -275,14 +274,14 @@ fn two_engines_with_the_same_history_dump_byte_equal() {
 /// it, so what is pinned here is that the incremental fold reproduces the live
 /// world exactly.
 #[test]
-fn a_recovered_world_dumps_byte_equal_to_the_live_fold() {
+fn a_world_replayed_onto_a_content_only_checkpoint_dumps_byte_equal_to_the_live_fold() {
     let dir = tempdir().expect("tempdir");
 
     let dump_live;
     {
         let engine =
             Engine::open(fsync_cfg(dir.path())).expect("fsync open");
-        let (_acct, doc) = setup_doc(&engine);
+        let (_acct, doc) = setup_draft(&engine);
 
         // History batch A (below the checkpoint): content.
         let (start, _) = engine
@@ -296,7 +295,7 @@ fn a_recovered_world_dumps_byte_equal_to_the_live_fold() {
 
         // History batch B (the replay tail): every hint family, past the
         // checkpoint.
-        every_hint_family(&engine, &doc, &start);
+        deposit_every_hint_family(&engine, &doc, &start);
 
         let d1 = engine.world_dump();
         let d2 = engine.world_dump();
@@ -335,12 +334,12 @@ fn recovery_rebuilds_hints_from_a_checkpoint_that_already_holds_links() {
     {
         let engine =
             Engine::open(fsync_cfg(dir.path())).expect("fsync open");
-        let (_acct, doc) = setup_doc(&engine);
+        let (_acct, doc) = setup_draft(&engine);
         let (start, _) = engine
             .vstream()
             .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared)
             .expect("insert succeeds");
-        every_hint_family(&engine, &doc, &start);
+        deposit_every_hint_family(&engine, &doc, &start);
 
         // LOAD-BEARING: the checkpoint sits ABOVE every link, so the recovered
         // base is a world whose hints must be rebuilt rather than replayed.
@@ -373,14 +372,14 @@ fn recovery_rebuilds_hints_from_a_checkpoint_that_already_holds_links() {
 fn a_reconstructed_historical_world_carries_faithful_hints() {
     let dir = tempdir().expect("tempdir");
     let engine = Engine::open(fsync_cfg(dir.path())).expect("fsync open");
-    let (_acct, doc) = setup_doc(&engine);
+    let (_acct, doc) = setup_draft(&engine);
     let (start, _) = engine
         .vstream()
         .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared)
         .expect("insert succeeds");
 
     let past = engine.kernel().current_seq();
-    every_hint_family(&engine, &doc, &start);
+    deposit_every_hint_family(&engine, &doc, &start);
 
     let world = engine.world_at(past).expect("a committed boundary answers");
     engine.check_hints_of(&world).expect("a reconstructed world's hints match a rebuild");
@@ -401,7 +400,7 @@ fn a_reconstructed_historical_world_carries_faithful_hints() {
 #[test]
 fn a_caller_pinned_world_dumps_deterministically() {
     let engine = Engine::open(mem_cfg()).expect("in-memory open");
-    let (_acct, doc) = setup_doc(&engine);
+    let (_acct, doc) = setup_draft(&engine);
     engine
         .vstream()
         .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'v'])], Deposit::Undeclared)
@@ -430,12 +429,12 @@ fn a_caller_pinned_world_dumps_deterministically() {
 #[test]
 fn the_hint_check_refuses_a_world_whose_derived_state_was_never_rebuilt() {
     let engine = Engine::open(mem_cfg()).expect("in-memory open");
-    let (_acct, doc) = setup_doc(&engine);
+    let (_acct, draft) = setup_draft(&engine);
     let (start, _) = engine
         .vstream()
-        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared)
+        .insert(OWNER, &draft, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared)
         .expect("insert succeeds");
-    let deposited = every_hint_family(&engine, &doc, &start);
+    let deposited = deposit_every_hint_family(&engine, &draft, &start);
     let live = engine.kernel().snapshot().world().clone();
     let bytes = bincode::serialize(&live).expect("a world serializes");
     let unrebuilt: World = bincode::deserialize(&bytes).expect("this build's own bytes decode");
@@ -443,8 +442,8 @@ fn the_hint_check_refuses_a_world_whose_derived_state_was_never_rebuilt() {
     // The premise, in both of the directions the invariant note gives: the
     // empty exception set reads the draft PUBLISHED, and M7's empty hints read
     // a retracted link ACTIVE.
-    assert!(!live.readable(None, &doc), "live: the draft is private");
-    assert!(unrebuilt.readable(None, &doc), "unrebuilt: the empty set reads the draft published");
+    assert!(!live.readable(None, &draft), "live: the draft is private");
+    assert!(unrebuilt.readable(None, &draft), "unrebuilt: the empty set reads the draft published");
     assert!(!live.links().is_active(&deposited.nullified), "live: the retracted link is inactive");
     assert!(
         unrebuilt.links().is_active(&deposited.nullified),
@@ -463,8 +462,11 @@ fn the_hint_check_refuses_a_world_whose_derived_state_was_never_rebuilt() {
         .zip(err.rebuilt.as_bytes())
         .position(|(l, r)| l != r)
         .expect("the renderings differ within their common length");
-    let derived_from = err.live.as_str().find("\"grants\": ").expect("the first derived section");
-    assert!(at > derived_from, "the first difference, at byte {at}, lies in an authoritative slice");
+    let derived_start = err.live.as_str().find("\"grants\": ").expect("the first derived section");
+    assert!(
+        at > derived_start,
+        "the first difference, at byte {at}, lies in an authoritative slice"
+    );
 }
 
 /// The dump's vocabulary is part of its format, so it is pinned here rather

@@ -273,8 +273,8 @@ fn key(s: &str) -> SerdeTree {
 /// renders as a dotted sequence holds addresses and goes through
 /// [`addr_seq`], which writes the same text — `Address` renders as its own
 /// tumbler — off the validated value rather than off a projection of it.
-fn tum_seq<'a>(it: impl IntoIterator<Item = &'a Tumbler>) -> SerdeTree {
-    SerdeTree::Seq(it.into_iter().map(|t| SerdeTree::Str(t.to_string())).collect())
+fn tum_seq<'a>(tumblers: impl IntoIterator<Item = &'a Tumbler>) -> SerdeTree {
+    SerdeTree::Seq(tumblers.into_iter().map(|t| SerdeTree::Str(t.to_string())).collect())
 }
 
 /// A sequence of dotted ADDRESSES.
@@ -346,8 +346,9 @@ const PREDICATE_PROJECTIONS: [(&str, ShippedType, View); 4] = [
 /// slices are sequences of link addresses and reduce by home, while `key` is a
 /// compiled format constant and stays at every reader class. A fourth entry
 /// added here and left out of that statement would be rendered whole to every
-/// reader, which is why `every_hints_family_is_reduced_or_kept_by_name` holds
-/// this set as well as the four above it.
+/// reader, which is why
+/// `every_entry_at_each_level_of_the_tree_is_reduced_or_kept_by_name` holds this
+/// set as well as the four above it.
 ///
 /// `ty` carries M7's stated precondition — address-denoting or
 /// `iextent`-built, else `type_slice` panics naming it — and the one caller
@@ -525,8 +526,8 @@ fn grants_tree(world: &World) -> SerdeTree {
         world
             .grants
             .records()
-            .map(|(addr, rec)| {
-                let GrantRecord { home, issuer, content_prefix, grantee } = rec;
+            .map(|(addr, grant)| {
+                let GrantRecord { home, issuer, content_prefix, grantee } = grant;
                 let grantee = match grantee {
                     Some(g) => SerdeTree::Str(g.to_string()),
                     None => SerdeTree::Null,
@@ -827,9 +828,8 @@ mod tests {
     /// one slice at a time.
     #[test]
     fn each_authoritative_section_renders_its_own_slice() {
-        let (engine, rich) = populated_world();
+        let (_engine, rich) = populated_world();
         let bare = World::genesis();
-        let _ = &engine;
         let base = render_of(&authoritative_tree(&bare));
 
         for (slice, hybrid) in [

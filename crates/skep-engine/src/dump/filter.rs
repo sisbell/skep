@@ -149,9 +149,9 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 /// guest unreduced, deterministically and with nothing about it looking wrong.
 ///
 /// That statement accounts for ALL FIVE LEVELS of the tree, and
-/// `every_hints_family_is_reduced_or_kept_by_name` holds it against the
-/// builders at each. A level left out of that test is a level where an
-/// addition discloses, so the five are named rather than counted:
+/// `every_entry_at_each_level_of_the_tree_is_reduced_or_kept_by_name` holds it
+/// against the builders at each. A level left out of that test is a level
+/// where an addition discloses, so the five are named rather than counted:
 ///
 /// * the ROOT's four sections — two reduced, two kept whole with the reason
 ///   given above;
@@ -302,7 +302,7 @@ pub(super) fn filter_tree(
 ///
 /// Those three are what make the cross product below 1 × 1 per claim rather
 /// than a product of two slot widths, and
-/// `the_supersession_class_is_closed_to_the_open_surfaces` pins all three.
+/// `no_door_admits_a_wide_endpoint_into_the_supersession_class` pins all three.
 /// The last is the one whose relaxation costs most quietly: M7 admitting a
 /// multi-address endpoint would leave this derivation faithful, since it
 /// mirrors `fold_hints` whatever a slot holds, and would make the walk
@@ -463,14 +463,14 @@ fn retain_map_of_seqs(
     let Some(SerdeTree::Map(entries)) = at_path_mut(tree, path) else {
         return;
     };
-    entries.retain_mut(|(key, items)| {
-        let Some(key) = dotted_address(key).filter(|a| keep_key(a)) else {
+    entries.retain_mut(|(key, value)| {
+        let Some(key_addr) = dotted_address(key).filter(|a| keep_key(a)) else {
             return false;
         };
-        match items {
+        match value {
             SerdeTree::Seq(items) => {
                 items.retain(|item| {
-                    dotted_address(item).is_some_and(|item| keep_pair(&key, &item))
+                    dotted_address(item).is_some_and(|item_addr| keep_pair(&key_addr, &item_addr))
                 });
                 !items.is_empty()
             }
@@ -491,8 +491,8 @@ fn serde_form_address(node: &SerdeTree) -> Option<Address> {
 /// A dotted-address string — the form the dump's OWN builders render an
 /// address in, so the hints' entries and the two sections' — as the address
 /// it names. Read off a sequence item and off a map key alike.
-fn dotted_address(item: &SerdeTree) -> Option<Address> {
-    let SerdeTree::Str(s) = item else {
+fn dotted_address(node: &SerdeTree) -> Option<Address> {
+    let SerdeTree::Str(s) = node else {
         return None;
     };
     let comps: Option<Vec<Nat>> = s.split('.').map(|c| c.parse::<Nat>().ok()).collect();
@@ -678,7 +678,7 @@ mod tests {
     /// empty world carries the whole set and the assertion is over the format
     /// and not over a fixture.
     #[test]
-    fn every_hints_family_is_reduced_or_kept_by_name() {
+    fn every_entry_at_each_level_of_the_tree_is_reduced_or_kept_by_name() {
         let tree = dump_tree(&World::genesis());
         let keys_at = |tree: &SerdeTree, path: &[&str]| -> BTreeSet<String> {
             match at_path(tree, path) {
@@ -1016,7 +1016,7 @@ mod tests {
     /// wide-slotted supersedes-classed deposit would make the walk below a
     /// product of two slot widths per claim, paid on every filtered dump.
     #[test]
-    fn the_supersession_class_is_closed_to_the_open_surfaces() {
+    fn no_door_admits_a_wide_endpoint_into_the_supersession_class() {
         let (engine, world) = populated_world();
         let draft = the_one_draft(&world);
         let caller = Caller::Principal(USER);
@@ -1133,11 +1133,11 @@ mod tests {
                 .expect("a public link in the home")
                 .0
         };
-        let (l1, l2) = (public_link(41), public_link(42));
+        let (old, new) = (public_link(41), public_link(42));
         // The claim: homed in the DRAFT, over the two public links.
         engine
             .linkstore(&visibility)
-            .assert_sup(caller, &draft, &l1, &l2)
+            .assert_sup(caller, &draft, &old, &new)
             .expect("a draft-homed supersession claim over public links");
         engine.kernel().snapshot().world().clone()
     }
@@ -1346,14 +1346,14 @@ mod tests {
                 .expect("a public link in the home")
                 .0
         };
-        let (l1, l2) = (public_link(41), public_link(42));
+        let (old, new) = (public_link(41), public_link(42));
         let (public_claim, _) =
-            writer.assert_sup(caller, &home, &l1, &l2).expect("a claim in the published home");
+            writer.assert_sup(caller, &home, &old, &new).expect("a claim in the published home");
         writer.nullify(caller, &home, &public_claim).expect("the owner retracts its own claim");
         // A retracted incumbent is invisible to the managed gate's dedup, so
         // the same edge asserted from the draft is a FRESH claim.
         let (draft_claim, _) =
-            writer.assert_sup(caller, &draft, &l1, &l2).expect("the same edge, from the draft");
+            writer.assert_sup(caller, &draft, &old, &new).expect("the same edge, from the draft");
         assert_eq!(document_of(&draft_claim), Some(draft), "a fresh draft claim, not a dedup hit");
         (engine.kernel().snapshot().world().clone(), public_claim)
     }
@@ -1389,7 +1389,8 @@ mod tests {
     /// A `pred_stable` MEMBER — a content position of the PUBLISHED home —
     /// registered twice: once in the home and then RETRACTED, once in the
     /// private draft and operative. Returns the world and the member.
-    fn a_member_asserted_by_a_retracted_public_tuple_and_a_live_draft_tuple() -> (World, Address) {
+    fn a_member_asserted_by_a_retracted_public_tuple_and_an_operative_draft_tuple(
+    ) -> (World, Address) {
         let (engine, home, draft) = a_published_home_and_a_private_draft();
         let caller = Caller::Principal(USER);
         let visibility = World::visible_to(caller);
@@ -1418,7 +1419,8 @@ mod tests {
     /// identity tests see neither.
     #[test]
     fn a_projection_entry_is_judged_at_its_own_row_s_view() {
-        let (world, member) = a_member_asserted_by_a_retracted_public_tuple_and_a_live_draft_tuple();
+        let (world, member) =
+            a_member_asserted_by_a_retracted_public_tuple_and_an_operative_draft_tuple();
         let dotted = member.to_string();
         let full = dump_tree(&world);
         for family in ["predicates.stable.audit", "predicates.stable.active"] {

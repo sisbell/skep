@@ -127,7 +127,7 @@ impl fmt::Display for SerdeTree {
                 Ok(())
             }
             SerdeTree::Null => f.write_str("none"),
-            SerdeTree::Opt(v) => write!(f, "some({v})"),
+            SerdeTree::Opt(inner) => write!(f, "some({inner})"),
             SerdeTree::Seq(items) => {
                 f.write_str("[")?;
                 for (i, item) in items.iter().enumerate() {

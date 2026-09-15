@@ -19,9 +19,13 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   [skep-address](../skep-address) types: no I/O, no clock, no
   signature verification (verification lives at the session layer),
   no engine dependency.
+- **Write-path type classes** — the credential kinds widened by the
+  grants and audit-view classes, for the daemon's `nullify` refusals;
+  recognition only, never fold state.
 
-Pure enough for a mirror or an audit tool to embed directly; the
-engine wires it into the world fold.
+Pure enough for a mirror or an audit tool to embed directly. skepd
+holds the fold beside the world today; the spec seats it in the
+engine's world fold.
 
 ## License
 

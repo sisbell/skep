@@ -1,9 +1,11 @@
 //! The write path's type-recognition input (PUB-6.30, PUB-6.64; owner ruling
-//! D3, 2026-09-05): `WriteTypes` beside `TypeAddrs` — precedence (credential
-//! > grant > list), the one-span `Equal`-to-subtree discipline, a subtype by
-//! prefix, and `kind_of` unchanged. The class addresses are test placeholders
-//! in the commons doc's link subspace, exactly as `common`'s credential types
-//! are: this crate is parametric over them, the engine pins the real ones.
+//! D3, 2026-09-05): `WriteTypes` beside `TypeAddrs` — precedence (the
+//! credential kinds first; the classes prefix-free, so their own order
+//! decides nothing), the one-span `Equal`-to-subtree discipline, a subtype by
+//! prefix, the home-conditional member, and `kind_of` unchanged. The class
+//! addresses are test placeholders in the commons doc's link subspace,
+//! exactly as `common`'s credential types are: this crate is parametric over
+//! them, the engine pins the real ones.
 
 use crate::common;
 
@@ -89,9 +91,10 @@ fn a_class_at_a_credential_address_is_refused_at_construction() {
     let _ = WriteTypes::new(credential(), addr(T_ENROLL), audit_list());
 }
 
-/// PRECEDENCE within the list: the first match answers, so two class
-/// addresses that are prefix-related would shadow one another — refused at
-/// construction (the later class would be unreachable for every slot).
+/// PREFIX-FREEDOM within the list: two prefix-related class addresses put
+/// one address under two classes, which the declared order would then decide
+/// — refused at construction (here the later class, under the earlier, would
+/// be unreachable for every slot).
 #[test]
 #[should_panic(expected = "prefix-related")]
 fn prefix_related_class_addresses_are_refused_at_construction() {
@@ -101,14 +104,51 @@ fn prefix_related_class_addresses_are_refused_at_construction() {
     let _ = WriteTypes::new(credential(), addr(T_GRANT), list);
 }
 
-/// The grant precedes the list: a list address under the grant's prefix is
-/// the same shadowing, refused the same way.
+/// The grant is held to the list's rule: a list address under the grant's
+/// prefix puts one address under two classes, refused the same way.
 #[test]
 #[should_panic(expected = "prefix-related")]
 fn a_list_address_under_the_grant_is_refused_at_construction() {
     let mut list = audit_list();
     list.push((AuditClass::RailRecord, addr(&[1, 1, 0, 1, 0, 1, 0, 2, 90, 7])));
     let _ = WriteTypes::new(credential(), addr(T_GRANT), list);
+}
+
+/// PREFIX-FREEDOM is what makes the classes' declared order decide nothing:
+/// no address is under two classes, so the same classes listed in REVERSE
+/// classify every class address, and a subtype under each, exactly as the
+/// declared order does. The one order that decides is the credential kinds
+/// answering first.
+#[test]
+fn the_declared_order_of_the_classes_decides_nothing() {
+    let declared = types();
+    let mut list = audit_list();
+    list.reverse();
+    let reversed = WriteTypes::new(credential(), addr(T_GRANT), list);
+    for class_addr in [T_GRANT, T_SUCCESSOR_OF, T_ENDORSE, T_MARKER, T_DESIGNATION, T_RAIL, T_STEWARD]
+    {
+        let subtype: Vec<u32> = class_addr.iter().copied().chain([1]).collect();
+        for slot in [vec![unit(class_addr)], vec![unit(&subtype)]] {
+            let answer = declared.write_class(&slot);
+            assert!(answer.is_some(), "{class_addr:?}: the fixture names a class");
+            assert_eq!(reversed.write_class(&slot), answer, "{class_addr:?}");
+        }
+    }
+}
+
+/// RES-207/PUB-6.64 — which audit-view classes are members only where the
+/// link's own home is published: the steward's classification link, and no
+/// other. The whole table, so a flipped answer is discovered here rather than
+/// as a permanent refusal the spec does not make.
+#[test]
+fn only_the_steward_classification_requires_a_published_home() {
+    for (class, _) in audit_list() {
+        assert_eq!(
+            class.requires_published_home(),
+            class == AuditClass::StewardClassification,
+            "{class:?}"
+        );
+    }
 }
 
 /// `Equal` ONLY (AUTH-2.22's discipline): a slot of two spans, a span that
@@ -157,10 +197,11 @@ fn a_subtype_by_prefix_is_a_member_of_its_class() {
     assert_eq!(t.write_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2, 1, 7])]), None, "no credential subtypes");
 }
 
-/// `kind_of` UNCHANGED: the credential half of the input IS the fold's
-/// `TypeAddrs`, answering the same on every slot — a credential unit, a
-/// credential "subtype" (`None`), a two-span slot (`None`) — and the write
-/// classifier's `Credential` arm is exactly that answer lifted.
+/// `kind_of` UNCHANGED: the credential half of the input is an EQUAL copy of
+/// the `TypeAddrs` it was built from, answering the same on every slot — a
+/// credential unit, a credential "subtype" (`None`), a two-span slot (`None`)
+/// — and the write classifier's `Credential` arm is exactly that answer
+/// lifted.
 #[test]
 fn kind_of_is_unchanged_and_is_the_credential_arm() {
     let t = types();
@@ -173,11 +214,15 @@ fn kind_of_is_unchanged_and_is_the_credential_arm() {
         vec![unit(T_ENROLL), unit(T_RETIRE)],
         vec![unit(T_GRANT)],
     ] {
-        assert_eq!(t.credential().kind_of(&slot), plain.kind_of(&slot), "the same instance's rule");
+        assert_eq!(t.credential().kind_of(&slot), plain.kind_of(&slot), "an equal copy answers alike");
         match plain.kind_of(&slot) {
             Some(kind) => assert_eq!(t.write_class(&slot), Some(WriteClass::Credential(kind))),
             None => assert!(!matches!(t.write_class(&slot), Some(WriteClass::Credential(_)))),
         }
     }
-    assert_eq!(t.credential(), &plain, "the input carries the fold's own instance, unchanged");
+    assert_eq!(
+        t.credential(),
+        &plain,
+        "the input carries an equal copy of the TypeAddrs it was built from"
+    );
 }

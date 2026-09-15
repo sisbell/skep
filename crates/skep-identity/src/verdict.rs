@@ -122,8 +122,9 @@ impl Inert {
     /// AUTH-2.55 — THE ONE AUTHORITY for the fold's `detail` tokens: the
     /// variant name in snake_case. Consumers (wire enumerations, conformance
     /// lists, face tables) cite this method, never transcribe it; skepd's
-    /// `Refusal::token()` delegates here for the fold arm, with no fold
-    /// token name spelled outside the crate.
+    /// `CredentialRefusal::token()` owes the same for the fold arm, the
+    /// `malformed_payload` join included — no fold token name spelled outside
+    /// this crate.
     pub fn token(&self) -> &'static str {
         match self {
             Inert::Unpublished => "unpublished",

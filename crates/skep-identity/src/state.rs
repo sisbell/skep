@@ -20,15 +20,18 @@ use crate::verdict::{Effect, Inert, Verdict};
 /// one `std::sync` item (see the crate-level purity note).
 static EMPTY_KEY_SET: LazyLock<KeySet> = LazyLock::new(KeySet::default);
 
-/// AUTH-1.38 — the board's key table plus claim: a World slice and a folded
-/// projection, serialized in checkpoints, advanced only by [`step`], never
-/// journaled. Account addresses have ONE representation in the slice — both
-/// `sets`' keys and `claimant` are `Address` (AUTH-1.39). The serialized
-/// shape is a compatibility surface (the checkpoints, the engine's
+/// AUTH-1.38 — the board's key table plus claim: a folded projection,
+/// advanced only by [`step`] and never journaled, which the spec seats as a
+/// World slice serialized in checkpoints; as built skepd holds it beside the
+/// engine and rebuilds it at every open (the crate-level composition note).
+/// Account addresses have ONE representation in the slice — both `sets`'
+/// keys and `claimant` are `Address` (AUTH-1.39). The serialized shape is
+/// AUTH-1.40's compatibility surface — the checkpoints, the engine's
 /// `#[serde(default)] identity: Option<IdentityState>`, the cross-mirror
-/// `/dump` pin) and freezes with the first checkpoint a v1 board writes
-/// (AUTH-1.40). `IdentityState` at N is a function of the record stream ≤ N
-/// and the fold's frozen constants, and of nothing else (I2, AUTH-2.90).
+/// `/dump` pin, none of which the build writes yet — and freezes with the
+/// first checkpoint a v1 board writes. `IdentityState` at N is a function of
+/// the record stream ≤ N and the fold's frozen constants, and of nothing
+/// else (I2, AUTH-2.90).
 ///
 /// [`step`]: IdentityState::step
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,25 +40,11 @@ pub struct IdentityState {
     claimant: Option<Address>,
 }
 
-/// The engine seats [`IdentityState`] in its `World` (AUTH-2.79–2.88) and
-/// holds ONE [`TypeAddrs`] as `IDENTITY_TYPES` (AUTH-2.79) for the daemon's
-/// life, behind skepd's `Arc<Daemon>`; `skep_kernel::WorldState` demands
-/// `Send + Sync + 'static` of the first and the `Arc` demands it of the
-/// second. NOTHING in this crate names either bound, so a field that revoked
-/// one would break the ENGINE's or SKEPD's build, at a trait error naming
-/// `World` or `Arc<Daemon>` rather than the field that caused it. Both
-/// promises are checked here — one assertion each, covering `KeySet`,
-/// `Enrolled`, `PublicKey`, `Fingerprint`, `Address` and `Span`
-/// transitively.
-const _: fn() = || {
-    fn assert_send_sync<T: Send + Sync + 'static>() {}
-    assert_send_sync::<IdentityState>();
-    assert_send_sync::<TypeAddrs>();
-};
-
-/// AUTH-2.60 — the bound identity readers dispatch under, wherever the slice
-/// rides (the World; a mirror's projection): M10's `key_set` row and skepd's
-/// policy read through it.
+/// AUTH-2.60 — the bound a host that SEATS the slice implements (the World in
+/// AUTH-2.79's cast; a mirror's projection), so identity readers dispatch
+/// over the host instead of being handed the slice. As built no host
+/// implements it: skepd holds the fold beside its `World` and hands each
+/// reader `&IdentityState` (the crate-level composition note).
 pub trait HasIdentity {
     /// The identity slice.
     fn identity(&self) -> &IdentityState;
@@ -145,7 +134,10 @@ impl IdentityState {
     }
 
     /// AUTH-2.59 — every KEYED account with its set, in ADDRESS ORDER (the
-    /// `OrdMap`'s own order); `/dump`'s identity section is built from this.
+    /// `OrdMap`'s own order): the enumeration the spec builds `/dump`'s
+    /// identity section from — a section no dump renders as built, and not
+    /// the section the engine's dump gives that name, which is M3's
+    /// `authoritative.namespace` rather than this slice.
     /// An unkeyed or unknown account has no row here and [`key_set`] answers
     /// it the empty set — this is not the board's account roster, which is
     /// M3's fact and not this slice's (AUTH-2.58).

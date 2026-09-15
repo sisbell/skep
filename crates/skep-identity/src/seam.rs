@@ -2,9 +2,10 @@
 //!
 //! The seam answers FOUR FACTS across two traits and owns no algorithm
 //! (AUTH-2.31). The crate stays generic over the world-fact abstraction —
-//! it never names a concrete `World` (composition contract); the engine
-//! implements [`Values`] and [`FoldCtx`] for its assembled world, a mirror
-//! for its projection.
+//! it never names a concrete `World` (composition contract); the fold's host
+//! implements [`Values`] and [`FoldCtx`] for its assembled world — the
+//! engine in AUTH-2.79's cast, skepd's `WorldCtx` as built (the crate-level
+//! composition note) — and a mirror for its projection.
 
 use skep_address::{checked_inc, parent, Address, Level, Tumbler};
 

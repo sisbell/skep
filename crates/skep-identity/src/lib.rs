@@ -3,10 +3,30 @@
 //! The PURE heart of AUTH (AUTH-2.1): no I/O, no clock, no config, no
 //! signature library, no engine dependency. Dependencies are exactly
 //! `skep-address` (M1), `sha2`, `im`, `serde` — light enough for the engine,
-//! M10, checkpoint/replay, and any mirror tool to carry. Per AUTH-2.2,
-//! `crates/skepd` is the ONLY crate that calls an Ed25519 library; the World
-//! slice, fold hook and load check live in `crates/skep-engine`; the
-//! conformance pins in `crates/skep-conformance`.
+//! M10, checkpoint/replay, and any mirror tool to carry. AUTH-2.2 casts the
+//! crates around it: `crates/skepd` the ONLY crate that calls an Ed25519
+//! library, the World slice, fold hook and load check in
+//! `crates/skep-engine`, the conformance pins in `crates/skep-conformance`.
+//!
+//! ## Composition, as built
+//!
+//! The build holds the fold BESIDE the engine, so this crate's production
+//! collaborators are all in skepd, chiefly its `auth` module; skep-mcp reaches
+//! it only from its suite, to build records and sign session payloads.
+//! `auth/fold.rs` implements [`Values`]/[`FoldCtx`] over the assembled
+//! `World`, rebuilds the [`IdentityState`] from the recovered world at every
+//! open and for every historical `key_set` read — no checkpoint carries it —
+//! from the [`LinkDeposit`]s it lifts out of the store, and advances the live
+//! state from committed deposits. `auth/policy.rs` holds `IDENTITY_TYPES` and
+//! the [`WriteTypes`] input, builds the precheck's [`LinkDeposit`] (the
+//! committed step folds that same one) and hosts `deposits_credential_link`.
+//! `auth::Mode` is derived from [`IdentityState::claimant`]. skep-engine,
+//! M10's `skep-febe` and skep-conformance depend on nothing here; the I2 pins
+//! ride in this crate's own `tests/it/`; no host implements [`HasIdentity`].
+//! skepd's module docs record the divergence from AUTH-2.79–2.88's
+//! World-seated slice, riding to the engine round. Until it lands, an element
+//! card below that names the World, a checkpoint or the engine cites the
+//! SPEC's cast; this section keeps the build's.
 //!
 //! ## What lives here
 //!
@@ -24,11 +44,11 @@
 //!   AUTH-2.36–2.45);
 //! * the key set — [`Enrolled`], [`KeySet`] (AUTH-1.29–1.37);
 //! * shape recognition — [`CredentialKind`], [`TypeAddrs`], [`LinkDeposit`],
-//!   [`single_address`] (AUTH-2.20–2.28) — and, beside the fold's kinds, the
-//!   write path's wider type-recognition input [`WriteTypes`]/[`WriteClass`]
+//!   [`single_address`] (AUTH-2.20–2.28);
+//! * the write path's type-recognition input — [`WriteTypes`]/[`WriteClass`]
 //!   /[`AuditClass`] (PUB-6.30, PUB-6.64; owner ruling D3): the grant and
-//!   audit-view classes a `nullify` is refused at, answered off the same
-//!   one-span `Equal`-to-subtree discipline, `kind_of` untouched;
+//!   audit-view classes a `nullify` is refused at, read off the fold's
+//!   recognition with `kind_of` untouched;
 //! * the fold seam — [`Values`], [`FoldCtx`], [`Owner`] (AUTH-2.29–2.35);
 //! * the fold itself — [`IdentityState`] with `classify`/`step`, [`Verdict`],
 //!   [`Effect`], [`Inert`], [`HasIdentity`] (AUTH-1.38–1.41, AUTH-2.51–2.60,
@@ -41,13 +61,15 @@
 //! * `SessionEntry` / `KeyTestimony` (AUTH-1.49–1.56) — carry M10's
 //!   `SessionId`/`PrincipalId`; the sessions store is skepd process memory.
 //! * `deposits_credential_link` (AUTH-2.61) — "on the skepd policy surface":
-//!   it takes M10's `Op`, and `skep-operation` depends on THIS crate
-//!   (AUTH-2.2), so the function cannot live below it.
+//!   it takes M10's `Op`, which AUTH-2.1's dependency set cannot name, so the
+//!   function cannot live here (skepd's `auth/policy.rs` holds it).
 //! * Enforcement-mode derivation (AUTH-1.42–1.43) — a per-read formula over
-//!   [`HasIdentity`] plus `AuthConfig.local_trust`, computed daemon-side with
-//!   nothing stored; no signature is pinned for it here.
+//!   the board's claim ([`IdentityState::claimant`]) plus
+//!   `AuthConfig.local_trust`, computed daemon-side with nothing stored; no
+//!   signature is pinned for it here.
 //! * `IDENTITY_TYPES`, the `World::apply` hook, slice-less recovery
-//!   (AUTH-2.79–2.88) — engine/skepd integration over this crate's types.
+//!   (AUTH-2.79–2.88) — the spec's engine/skepd integration over this crate's
+//!   types; as built, skepd's alone (above).
 //!
 //! ## Traceability
 //!
@@ -73,6 +95,7 @@ mod seam;
 mod shape;
 mod state;
 mod verdict;
+mod write_class;
 
 pub use framing::{framed, Tag, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, TAGS};
 pub use key::{AlgRow, Fingerprint, KeyParseError, PublicKey, ALGS, ALG_ED25519};
@@ -83,8 +106,24 @@ pub use payload::{
 };
 pub use read::record_bytes;
 pub use seam::{FoldCtx, Owner, Values};
-pub use shape::{
-    single_address, AuditClass, CredentialKind, LinkDeposit, TypeAddrs, WriteClass, WriteTypes,
-};
+pub use shape::{single_address, CredentialKind, LinkDeposit, TypeAddrs};
 pub use state::{HasIdentity, IdentityState};
 pub use verdict::{Effect, Inert, Verdict};
+pub use write_class::{AuditClass, WriteClass, WriteTypes};
+
+/// What this crate's hosts demand of the values they keep across threads:
+/// skepd holds the live [`IdentityState`] behind a lock inside its
+/// `Arc<Daemon>` (`Send`), and ONE [`TypeAddrs`] and ONE [`WriteTypes`] in
+/// `static`s for the daemon's life (`Send + Sync`); AUTH-2.79's World slice
+/// would demand `Send + Sync + 'static` of the first. NOTHING in this crate
+/// names those bounds, so a field that revoked one — an `Rc`, a `Cell`, a
+/// cached `dyn` matcher — would compile here and break skepd's build at its
+/// `static` or its `Arc`, never naming the field that caused it. The
+/// promises are checked here instead, covering `KeySet`, `Enrolled`,
+/// `PublicKey`, `Fingerprint`, `Address` and `Span` transitively.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync + 'static>() {}
+    assert_send_sync::<IdentityState>();
+    assert_send_sync::<TypeAddrs>();
+    assert_send_sync::<WriteTypes>();
+};

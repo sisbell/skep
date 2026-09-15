@@ -418,17 +418,19 @@ pub(crate) fn nullify_refusal(
     let class = write_types().write_class(&spans)?;
     let m3 = world.m3();
     let claimed = identity.claimant().is_some();
-    // The class's own token, chosen before entitlement is consulted — the one
-    // arm carrying a second key of its own is the classification link's
-    // (RES-207): the LINK's own home published. A resident link's home is
+    // The class's own token, chosen before entitlement is consulted — the arm
+    // carrying a second key of its own is a home-conditional class's (RES-207,
+    // `AuditClass::requires_published_home` — today the classification link
+    // alone): the LINK's own home published. A resident link's home is
     // registered (M7's HomeNotRegistered gate), so `published()`'s
     // registered-only contract (PUB-6.37) holds on it; draft-homed it is an
     // ordinary link and this producer answers nothing.
     let token = match class {
         WriteClass::Credential(_) => CredentialRefusal::NullifyNotRetraction,
         WriteClass::Grant => CredentialRefusal::NullifyNotRevocation,
-        WriteClass::AuditView(AuditClass::StewardClassification)
-            if !document_of(target).as_ref().is_some_and(|d| published(world, d)) =>
+        WriteClass::AuditView(audit_class)
+            if audit_class.requires_published_home()
+                && !document_of(target).as_ref().is_some_and(|d| published(world, d)) =>
         {
             return None
         }

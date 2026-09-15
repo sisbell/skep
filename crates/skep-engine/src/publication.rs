@@ -214,9 +214,13 @@ pub(crate) fn fold(prev: &Drafts, namespace: &M3State, rec: &M3Rec) -> Drafts {
 /// doc states.
 ///
 /// SEED COST, per load and per `Engine::world_at` reconstruction: one walk of
-/// M3's publication map — `M3State::documents`, the store's own
-/// enumeration of its registered documents — then, per document, M3's own
-/// registration and bit lookups, and one ω resolution per draft.
+/// M3's publication map — `M3State::documents`, the store's own enumeration
+/// of its registered documents — then, per document, M3's own registration and
+/// bit lookups, and per DRAFT one ω resolution through [`owner_account_of`]:
+/// M3's `effective_owner_prefix`, a walk of the WHOLE principal registry. So
+/// the seed is Θ(drafts · |Π|). Both factors grow by one committed write
+/// apiece and neither is a caller's argument, so whatever serves historical
+/// reads pays that product per reconstruction it admits.
 pub(crate) fn seed(namespace: &M3State) -> Drafts {
     namespace
         .documents()

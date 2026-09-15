@@ -555,19 +555,23 @@ impl crate::Engine {
     /// [`crate::Engine::dump_of`] at a READER'S CLASS (PUB round 2, lane 3.4
     /// §4): the same tree, post-filtered by `readable` before render — what
     /// the filter drops and keeps is [`filter_tree`]'s one statement. The
-    /// predicate is the threaded one: a world's own `World::readable` closed
-    /// over a principal for a live dump, or the HEAD's for a historical world
-    /// (`/dump?at=N` — the N-world's state at the reader's class as the head
-    /// decides it, PUB-6.48), and the caller closes it over ONE snapshot
+    /// predicate is the threaded one: a world's own reader class
+    /// (`World::reader_class`) for a live dump, or the HEAD's for a historical
+    /// world (`/dump?at=N` — the N-world's state at the reader's class as the
+    /// head decides it, PUB-6.48), and the caller closes it over ONE snapshot
     /// (PUB-6.39). Under the total predicate this is `dump_of` byte for byte
     /// (the unit test pins it).
     ///
     /// COST: [`crate::Engine::dump_of`]'s plus, per filtered entry, one key
     /// decode — a `Tumbler` deserialize off the tree for the authoritative
     /// maps, a dotted parse for the hints and sections — and one predicate
-    /// call. On top of that, FIVE whole-class walks, because two hint
-    /// families name something other than the link whose deposit put it
-    /// there and the filter must recover that link to judge it:
+    /// call, whose own cost is the caller's: a predicate that asks
+    /// `World::readable` per entry pays the reader's registry scan once per
+    /// draft-homed entry at any reader class but the guest's, where one that
+    /// asks a single [`crate::ReaderClass`] pays it once per dump. On top of
+    /// that, FIVE whole-class walks, because two hint families name something
+    /// other than the link whose deposit put it there and the filter must
+    /// recover that link to judge it:
     ///
     /// * ONE over the supersession class, a `readlink` and an `is_nullified`
     ///   per claim, to key each rendered edge by the claims asserting it; and
@@ -602,15 +606,17 @@ impl crate::Engine {
     }
 
     /// The committed world at `principal`'s reader class, over ONE snapshot:
-    /// the predicate is that snapshot's own `World::readable`, so the state
-    /// dumped and the reader class it is filtered at stand on one committed
-    /// state. `None` is the GUEST (PUB-5.5) — published alone, so the
-    /// publication section renders EMPTY and no draft's content, arrangement
-    /// or link appears.
+    /// the predicate is ONE [`crate::ReaderClass`] bound off that snapshot for
+    /// the whole dump, so the state dumped and the reader class it is filtered
+    /// at stand on one committed state, and the reader's seat is looked up
+    /// once rather than per filtered entry. `None` is the GUEST (PUB-5.5) —
+    /// published alone, so the publication section renders EMPTY and no
+    /// draft's content, arrangement or link appears.
     pub fn world_dump_visible_to(&self, principal: Option<PrincipalId>) -> WorldDump {
         let snap = self.kernel().snapshot();
         let world = snap.world();
-        dump_visible(world, &|doc: &Address| world.readable(principal, doc))
+        let reader = world.reader_class(principal);
+        dump_visible(world, &|doc: &Address| reader.readable(doc))
     }
 
     /// Dump the currently committed world (one pinned snapshot) —

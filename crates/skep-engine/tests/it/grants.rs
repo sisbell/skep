@@ -4,7 +4,8 @@
 //! one predicate every read surface answers through. Store semantics are not
 //! re-tested here — what is tested is the ASSEMBLY: the fold, its admission,
 //! its revocation, its re-seed across a restart and under a historical
-//! reconstruction, and the three clauses of the predicate.
+//! reconstruction, the three clauses of the predicate, and the reader class
+//! it is bound as.
 
 use crate::common;
 
@@ -1274,4 +1275,39 @@ fn a_member_shaped_address_under_a_draft_reads_as_the_draft() {
     assert!(!w.readable(None, &member), "the guest reads it as the draft");
     assert!(!w.readable(Some(B), &member), "…and so does a stranger");
     assert!(w.readable(Some(A), &member), "while the owner reads it by the subtree clause");
+}
+
+/// ONE reader class, reused across documents of different owners, judges each
+/// by that document's OWN owner: what `World::reader_class` binds is the
+/// reader's SEAT, looked up once, and never a verdict. Asked of a seated
+/// reader and of an unseated one, whose seat resolves to none and must still
+/// reach the ANY-PRINCIPAL tier — an unseated principal is not the guest.
+#[test]
+fn one_reader_class_answers_each_document_by_its_own_owner() {
+    let engine = mem_engine();
+    let b = two_accounts(&engine);
+    engine.namespace().create_new_document(B, &b.acct_b, None).expect("B's published home");
+    let (draft_b, _) =
+        engine.namespace().create_new_document(B, &b.acct_b, None).expect("B's private draft");
+
+    let w = world(&engine);
+    let reader = w.reader_class(Some(B));
+    assert!(reader.readable(&b.home_a), "a published document, before any seat is looked up");
+    assert!(reader.readable(&draft_b), "B's own draft, by the subtree clause");
+    assert!(!reader.readable(&b.draft_a), "A's ungranted draft, through the SAME reader class");
+    assert!(reader.readable(&draft_b), "B's draft again: the class held a seat, not a verdict");
+    for doc in [&b.home_a, &draft_b, &b.draft_a] {
+        assert_eq!(reader.readable(doc), w.readable(Some(B), doc), "{doc}: one predicate");
+    }
+
+    grant(&engine, &b.home_a, &b.draft_a, vec![]); // empty `to` ⟹ ANY-PRINCIPAL
+    let w = world(&engine);
+    const UNSEATED: PrincipalId = PrincipalId(9);
+    assert!(
+        w.m3().principal_prefix(UNSEATED).is_none(),
+        "the fixture must leave this principal unseated, or it proves nothing about the tier"
+    );
+    let reader = w.reader_class(Some(UNSEATED));
+    assert!(!reader.readable(&draft_b), "no seat and no grant: B's draft stays closed");
+    assert!(reader.readable(&b.draft_a), "a seat of none still reaches A's ANY-PRINCIPAL grant");
 }

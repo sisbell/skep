@@ -312,7 +312,7 @@ mod tests {
     use std::error::Error;
 
     use crate::testkit::mem_engine;
-    use crate::{Draft, IssuerGrant, Record, UniversalGrant};
+    use crate::{Draft, IssuerGrant, ReaderClass, Record, UniversalGrant};
 
     use super::*;
 
@@ -341,12 +341,14 @@ mod tests {
     /// What a missing `Debug` costs is not the print, it is the wall: a
     /// caller's own type holding an assembled engine derives its own. Held of
     /// every type this crate exports that a caller can hold, the world and the
-    /// central record included — the record through a bound rather than a
-    /// value, since each store's record is that store's to construct.
+    /// central record included — the record and a reader class through a
+    /// bound rather than a value, since each store's record is that store's to
+    /// construct and a reader class borrows the world it reads.
     #[test]
     fn a_holder_of_the_assembled_types_derives_debug() {
         fn assert_debug<T: fmt::Debug>() {}
         assert_debug::<Record>();
+        assert_debug::<ReaderClass<'static>>();
 
         #[derive(Debug)]
         #[allow(dead_code)]

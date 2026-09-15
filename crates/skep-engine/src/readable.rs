@@ -11,6 +11,13 @@
 //! the projection every one of them shares (`trunk_of`: a version member reads
 //! as its document, PUB-2.15).
 //!
+//! The predicate has ONE body, [`ReaderClass::readable`]: the predicate closed
+//! over one principal and one world. [`World::readable`] asks it through a
+//! fresh reader class per call, and a caller that consults it once per ROW —
+//! a result-set filter, a filtered dump, a feed page — binds one reader class
+//! with [`World::reader_class`], so the reader's seat in M3's principal
+//! registry is looked up once rather than once per row.
+//!
 //! Two derived readings sit beside it, because both are the same predicate
 //! closed over a caller rather than a second rule: [`World::readable_guest`]
 //! is `readable(None, ·)`, the class M9's fires and every unauthenticated read
@@ -23,11 +30,51 @@
 //! trait, off its own read snapshot, and closes the answer over a caller
 //! itself. The inherent methods are the real ones.
 
+use std::sync::OnceLock;
+
 use skep_address::Address;
 use skep_arrangement::{trunk_of, Caller};
 use skep_namespace::{prefix_contains, PrincipalId};
 
 use crate::world::World;
+
+/// ONE READER'S CLASS over ONE world: the read predicate closed over one
+/// principal (`None` is the guest), with that principal's SEAT — the account
+/// M3's `principal_prefix` answers for it — looked up at most once for the
+/// class's life.
+///
+/// M3 answers a seat by scanning its principal registry, and the seat is the
+/// same for every document one reader asks about, so a caller that consults
+/// the predicate per row binds one class and pays that scan once rather than
+/// once per draft-homed row. What the class holds is the SEAT and never a
+/// verdict: every document is still judged by its own owner and its own
+/// grants, which `one_reader_class_answers_each_document_by_its_own_owner`
+/// holds.
+///
+/// The seat is resolved LAZILY, by the first question that reaches the
+/// subtree clause — a published document and every guest question answer
+/// before it — so [`World::readable`], which binds a fresh class per call,
+/// costs a published document no scan at all
+/// (`a_reader_class_resolves_its_seat_only_where_a_draft_needs_it`).
+///
+/// The fields are private: the seat is M3's answer for this class's own
+/// principal and never a caller's, so a class whose seat and principal
+/// disagree is not constructible. `OnceLock` rather than `OnceCell`, so the
+/// class is `Sync` and a closure borrowing it is `Send + Sync` — the bound
+/// M10's readers take a threaded predicate under.
+#[derive(Debug)]
+pub struct ReaderClass<'w> {
+    world: &'w World,
+    principal: Option<PrincipalId>,
+    seat: OnceLock<Option<&'w Address>>,
+}
+
+/// The `Send + Sync` [`ReaderClass`] promises, pinned where a field that
+/// revoked it would fail to compile.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<ReaderClass<'static>>();
+};
 
 impl World {
     /// THE read predicate (PUB-1.31): `readable(doc, principal) =
@@ -77,8 +124,8 @@ impl World {
     ///   reach it — being a principal at all is that tier's whole membership
     ///   test (PUB-5.8), and an unseated one is still not `None`.
     ///
-    /// COST, per call, uncached, in two walks — and the CALLER chooses the
-    /// first while the STORE chooses the second, so this figure is not one
+    /// COST, per call, uncached, in three terms — and the CALLER chooses the
+    /// first while the STORE chooses the other two, so this figure is not one
     /// number:
     ///
     /// * The PROJECTION runs ahead of every clause, so `doc` pays it before
@@ -94,6 +141,15 @@ impl World {
     ///   bounds the term in the live system is the CALLER's — the daemon's
     ///   wire cap on a tumbler's components, whose budget is written where
     ///   that number is.
+    /// * The SEAT: past the draft hit, a bound principal's account is M3's
+    ///   `principal_prefix`, a scan of the principal registry in address
+    ///   order — O(|Π|), up to the reader's own entry, and the WHOLE registry
+    ///   for a principal M3 seats nowhere. Π gains an entry for every
+    ///   principal M3 seats and loses none, so the term grows with the
+    ///   store's history, and it dominates wherever a caller consults per
+    ///   row: this method binds a fresh [`ReaderClass`] per call and so pays
+    ///   the scan once per draft-homed CALL, where a caller holding one class
+    ///   from [`World::reader_class`] pays it once per CLASS.
     /// * The GRANT clause then walks the projected document's ancestors,
     ///   `parent` again per level, with one probe of the principal-exact
     ///   index and one of the ANY-PRINCIPAL index at each. That walk is over
@@ -101,37 +157,24 @@ impl World {
     ///   hit — so its length is a registered document's depth, which is the
     ///   store's history rather than the request's.
     ///
-    /// Nothing is memoized, and this gates neither admission nor
+    /// Nothing is memoized across calls, and this gates neither admission nor
     /// concurrency.
     pub fn readable(&self, principal: Option<PrincipalId>, doc: &Address) -> bool {
-        let trunk = trunk_of(doc);
-        // Published clause — a published document (or member) is readable by
-        // all, and an unregistered one is fail-open here (PUB-7.5).
-        if self.published(&trunk) {
-            return true;
-        }
-        // A REGISTERED private draft from here: the exception set holds its
-        // mint-time owner. `None` cannot arise (published above covers the
-        // unregistered case), but is answered fail-closed. Borrowed, as every
-        // clause below wants it: nothing here outlives the slice it sits in.
-        let Some(owner) = self.owner_account(&trunk) else {
-            return false;
-        };
-        // The guest sees only published documents (no subtree, no grant).
-        let Some(id) = principal else {
-            return false;
-        };
-        // The principal's own account — M3's seat for it, which the two
-        // clauses below read differently: as an account to compare against
-        // the owner's, and as the grantee to probe the fold with.
-        let account = self.namespace.principal_prefix(id);
-        // Subtree clause — downward only.
-        if account.is_some_and(|account| prefix_contains(owner, account)) {
-            return true;
-        }
-        // Grant clause — the fold, grantee exact (`None` account ⟹ only the
-        // ANY-PRINCIPAL grants can match, which the fold probes regardless).
-        self.grants.grant_exists(owner, account, &trunk)
+        self.reader_class(principal).readable(doc)
+    }
+
+    /// The read predicate bound to ONE principal over THIS world, as a
+    /// [`ReaderClass`] a caller consults once per row: the same predicate
+    /// [`World::readable`] answers, with the principal's seat looked up once
+    /// for the class rather than once per draft-homed call. `None` is the
+    /// guest.
+    ///
+    /// The class borrows this world, so it answers about this world alone and
+    /// cannot outlive it: one class per reader per snapshot, and none for a
+    /// write, whose store hands its gate the working world on every consult
+    /// ([`World::visible_to`]).
+    pub fn reader_class(&self, principal: Option<PrincipalId>) -> ReaderClass<'_> {
+        ReaderClass { world: self, principal, seat: OnceLock::new() }
     }
 
     /// The GUEST predicate (PUB-1.31 with no principal; a grant opens nothing
@@ -154,6 +197,14 @@ impl World {
     /// own over the session's principal. Every other caller — the harnesses,
     /// this crate's tests, and [`crate::Engine::coordinator`] building M9's
     /// System-class writers — threads it through here.
+    ///
+    /// A write's class binds no [`ReaderClass`], and cannot: M7's value-keyed
+    /// gates and M5's publish shot hand this closure their WORKING world on
+    /// every consult, and that is not the world a class would have borrowed.
+    /// So at a PRINCIPAL's class each consult on a draft-homed candidate — per
+    /// dedup candidate in M7, per distinct origin document in M5 — pays
+    /// [`World::readable`]'s seat scan afresh, inside the store's transaction
+    /// and under M2's applier lock, where every waiting writer pays it too.
     pub fn visible_to(
         caller: Caller,
     ) -> impl Fn(&World, &Address) -> bool + Copy + Send + Sync + 'static {
@@ -161,6 +212,46 @@ impl World {
             Caller::Principal(p) => world.readable(Some(p), doc),
             Caller::System => world.readable_guest(doc),
         }
+    }
+}
+
+impl<'w> ReaderClass<'w> {
+    /// The read predicate at this reader class — its ONE body. Its clauses,
+    /// its projection and its cost are stated on [`World::readable`], which
+    /// asks this through a fresh class per call; a seat an earlier question
+    /// resolved is reused here, and nothing else is.
+    pub fn readable(&self, doc: &Address) -> bool {
+        let world = self.world;
+        let trunk = trunk_of(doc);
+        // Published clause — a published document (or member) is readable by
+        // all, and an unregistered one is fail-open here (PUB-7.5).
+        if world.published(&trunk) {
+            return true;
+        }
+        // A REGISTERED private draft from here: the exception set holds its
+        // mint-time owner. `None` cannot arise (published above covers the
+        // unregistered case), but is answered fail-closed. Borrowed, as every
+        // clause below wants it: nothing here outlives the slice it sits in.
+        let Some(owner) = world.owner_account(&trunk) else {
+            return false;
+        };
+        // The guest sees only published documents (no subtree, no grant).
+        let Some(id) = self.principal else {
+            return false;
+        };
+        // The principal's own account — M3's seat for it, looked up by the
+        // first question that reaches here and reused by every later one —
+        // which the two clauses below read differently: as an account to
+        // compare against the owner's, and as the grantee to probe the fold
+        // with.
+        let account = *self.seat.get_or_init(|| world.namespace.principal_prefix(id));
+        // Subtree clause — downward only.
+        if account.is_some_and(|account| prefix_contains(owner, account)) {
+            return true;
+        }
+        // Grant clause — the fold, grantee exact (`None` account ⟹ only the
+        // ANY-PRINCIPAL grants can match, which the fold probes regardless).
+        world.grants.grant_exists(owner, account, &trunk)
     }
 }
 
@@ -172,5 +263,41 @@ impl World {
 impl skep_febe::ReadableWorld for World {
     fn readable(&self, principal: Option<PrincipalId>, doc: &Address) -> bool {
         World::readable(self, principal, doc)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::testkit::{delegated_account, mem_engine, USER};
+
+    /// The seat is looked up LAZILY and at most once: the guest and a
+    /// published document answer before any scan of the principal registry,
+    /// and the first draft a bound principal asks about resolves it to M3's
+    /// own answer, which every later question reuses. Laziness is what lets
+    /// [`World::readable`] bind a fresh class per call and still cost a
+    /// published document no scan; a class that looked its seat up at
+    /// construction would charge one to every call on every published row.
+    #[test]
+    fn a_reader_class_resolves_its_seat_only_where_a_draft_needs_it() {
+        let engine = mem_engine();
+        let acct = delegated_account(&engine, USER);
+        let (home, _) =
+            engine.namespace().create_new_document(USER, &acct, None).expect("the home mint");
+        let (draft, _) = engine
+            .namespace()
+            .create_new_document(USER, &acct, None)
+            .expect("a later mint, private");
+        let snap = engine.kernel().snapshot();
+        let world = snap.world();
+
+        let guest = world.reader_class(None);
+        assert!(!guest.readable(&draft), "the guest reads no draft");
+        assert!(guest.seat.get().is_none(), "…and has no seat to look up");
+
+        let owner = world.reader_class(Some(USER));
+        assert!(owner.readable(&home), "the first flagless mint is published");
+        assert!(owner.seat.get().is_none(), "a published document answers before the scan");
+        assert!(owner.readable(&draft), "the owner reads its draft by the subtree clause");
+        assert_eq!(owner.seat.get(), Some(&Some(&acct)), "the draft looked up M3's own seat");
     }
 }

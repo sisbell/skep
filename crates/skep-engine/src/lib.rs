@@ -42,10 +42,12 @@
 //!   clause, M3's ω memo and the grant fold's probe. Every read surface —
 //!   M6's deliveries and doc-argument consults, M8's result-set filters —
 //!   answers through this one predicate, threaded down as an opaque
-//!   `Fn(&Address) -> bool` (PUB-6.39); a write evaluates it over its own
-//!   transaction's working world — the publish shot's source gate on each
-//!   origin, and every link write at the class [`World::visible_to`] maps its
-//!   caller to (PUB-6.25).
+//!   `Fn(&Address) -> bool` (PUB-6.39), and a caller that asks it once per
+//!   row binds one [`ReaderClass`] ([`World::reader_class`]), so the reader's
+//!   seat in M3's principal registry is looked up once rather than per row;
+//!   a write evaluates it over its own transaction's working world — the
+//!   publish shot's source gate on each origin, and every link write at the
+//!   class [`World::visible_to`] maps its caller to (PUB-6.25).
 //! * **The grant fold** (the `grants` module) — the second derived index the
 //!   predicate rests on: a fold over the LINK slice keyed grantee ×
 //!   content-prefix, seeded at load and folded on every link deposit
@@ -99,6 +101,7 @@ pub mod dump;
 pub use engine::{Engine, EngineError, EngineStores};
 pub use grants::{IssuerGrant, UniversalGrant};
 pub use publication::Draft;
+pub use readable::ReaderClass;
 pub use world::{Record, World};
 
 // The KERNEL types this crate's own public signatures name — `Kernel`,

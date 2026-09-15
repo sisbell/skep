@@ -92,7 +92,7 @@ use std::path::Path;
 use parking_lot::Mutex;
 use serde_json::Value;
 use skep_address::{is_prefix, parent, Address, Tumbler};
-use skep_engine::{Engine, IssuerGrant, World};
+use skep_engine::{Engine, IssuerGrant, ReaderClass, World};
 use skep_kernel::Seq;
 use skep_namespace::{HasM3, PrincipalId};
 
@@ -134,18 +134,19 @@ const MAX_FILTERED_PREFIXES: usize = 64;
 /// class, the stream keys its class opens, and the universal term's live
 /// set. The feed evaluates it and resolves nothing of its own.
 pub(crate) struct FeedClass<'a> {
-    /// The HEAD world every field below stands on: the one snapshot the
-    /// route pinned for this request.
-    world: &'a World,
-    /// The requester this class is of — `None` is the guest.
+    /// The requester's READER CLASS (`None` is the guest) over the HEAD
+    /// world every field below stands on — the one snapshot the route pinned
+    /// for this request — with the requester's seat looked up at most once
+    /// for the whole request.
     ///
-    /// It and `world` are the whole input: [`FeedClass::of`] derives the
-    /// three stream-key lists below from the pair and [`FeedClass::readable`]
-    /// answers the mask off the same pair, so a class whose mask and whose
-    /// stream keys belong to different principals is not constructible —
-    /// the keys would open a principal's drafts while the mask refused all
-    /// of them, which fails into an emptier page with nothing to report it.
-    principal: Option<PrincipalId>,
+    /// [`FeedClass::of`] builds it from the same `(world, principal)` pair it
+    /// derives the three stream-key lists below from, and
+    /// [`FeedClass::readable`] answers the mask off it, so a class whose mask
+    /// and whose stream keys belong to different principals is not
+    /// constructible — the keys would open a principal's drafts while the
+    /// mask refused all of them, which fails into an emptier page with
+    /// nothing to report it.
+    reader: ReaderClass<'a>,
     /// The requester's own account and its ancestor accounts (the subtree
     /// clause, PUB-7.24) — each a draft-stream key. Empty for the guest and
     /// for a node-tier principal.
@@ -189,19 +190,21 @@ impl<'a> FeedClass<'a> {
             Some(_) => world.universal_grants().into_iter().map(|g| g.content_prefix).collect(),
             None => Vec::new(),
         };
-        FeedClass { world, principal, subtree, issuers, universal_prefixes }
+        FeedClass { reader: world.reader_class(principal), subtree, issuers, universal_prefixes }
     }
 
     /// `readable(principal, ·)` at the head — THE mask (PUB-7.20), which
     /// [`Inner::visible`] applies per entry and [`Inner::sources`] applies
     /// per document in the merge arm's skip.
     ///
-    /// A method over the stored `(world, principal)` rather than a closure
-    /// the route hands in: the answer is a pure function of that pair, so
-    /// it costs no box and no indirect call per candidate, and there is no
-    /// separately supplied mask to disagree with the keys.
+    /// A method over the stored reader class rather than a closure the route
+    /// hands in: the answer is a pure function of the `(world, principal)`
+    /// pair the class was built from, so it costs no box and no indirect call
+    /// per candidate, the requester's seat is looked up once per request
+    /// rather than once per draft-homed candidate, and there is no separately
+    /// supplied mask to disagree with the keys.
     fn readable(&self, doc: &Address) -> bool {
-        self.world.readable(self.principal, doc)
+        self.reader.readable(doc)
     }
 }
 

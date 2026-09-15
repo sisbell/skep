@@ -322,13 +322,16 @@ impl WorldState for World {
     /// method never sees: `FormatStamp` and M3's own field order refuse it
     /// before any rebuild, and M2's fallback chain does get its turn.
     ///
-    /// COST is the two seeds', each stated at its own: `publication::seed`'s
-    /// grows with M3's publication map and `grants::seed`'s with the
-    /// grants class. Both are the STORE's size rather than a caller's, and
-    /// both are what M2's `Kernel::world_at` means where its own cost names
-    /// this method and does not size it — so a caller reading that figure for
-    /// a historical reconstruction reads these two for the rest of it. The
-    /// three store rebuilds above are M3's, M5's and M7's to state.
+    /// COST is the two seeds', each stated at its own, and neither is linear:
+    /// `publication::seed` pays one M3 ω walk — Θ(|Π|), the whole principal
+    /// registry — per draft, and `grants::seed` pays one per grant-typed link
+    /// homed in a published document. So beside the three store rebuilds,
+    /// which are M3's, M5's and M7's to state, this recovery is
+    /// O((drafts + grant-typed links) · |Π|), and every factor is the STORE's
+    /// size rather than a caller's. That product is what M2's
+    /// `Kernel::world_at` means where its own cost names this method and does
+    /// not size it — so a caller reading that figure for a historical
+    /// reconstruction reads this one for the rest of it.
     fn rebuild_derived(self) -> Self {
         let World { format, namespace, content, arrangement, links, drafts: _, grants: _ } = self;
         // M3, then M4: neither rebuilds — both slices are fully serialized, so

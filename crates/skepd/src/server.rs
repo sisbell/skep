@@ -1725,10 +1725,13 @@ impl Daemon {
                     return refuse(TransportError::WriteAtHistory, None);
                 }
                 let principal = resolved.principal();
-                // ONE head snapshot per request (PUB-6.39, PUB-6.48).
+                // ONE head snapshot per request (PUB-6.39, PUB-6.48), and ONE
+                // reader class over it, so the principal's seat is looked up
+                // once for every argument the consult asks about.
                 let head = self.engine.kernel().snapshot();
+                let reader = head.world().reader_class(principal);
                 for arg in frame.op.doc_arguments() {
-                    if !head.world().readable(principal, arg) {
+                    if !reader.readable(arg) {
                         return self.op_reply(&Response::Rejected(Rejection::classified(
                             frame.op.kind(),
                             RejectCode::Withheld,
@@ -1858,10 +1861,11 @@ impl Daemon {
             None => self.engine.world_dump_visible_to(principal),
             Some(at) => {
                 // The head predicate, closed over ONE head snapshot for this
-                // request — the two-world shape `history.rs` states.
+                // request — the two-world shape `history.rs` states — through
+                // ONE reader class, so the seat is looked up once per dump.
                 let head = self.engine.kernel().snapshot();
-                let readable =
-                    |doc: &skep_address::Address| head.world().readable(principal, doc);
+                let reader = head.world().reader_class(principal);
+                let readable = |doc: &skep_address::Address| reader.readable(doc);
                 match self.history.dump_at(&self.engine, at, &readable) {
                     Ok(d) => d,
                     Err(e) => return refuse_unavailable(e),

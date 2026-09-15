@@ -610,17 +610,22 @@ pub(crate) fn fold(prev: &Grants, namespace: &M3State, drafts: &Drafts, rec: &Li
 /// all. A store change that made any of the three time-varying splits the
 /// halves, and `Engine::check_hints` is where that shows.
 ///
-/// SEED COST, per load and per `Engine::world_at` reconstruction, and linear
-/// in the GRANTS CLASS rather than in anything a caller names: one
-/// `type_slice` over that class under the audit view, then per member one
-/// `readlink` and one [`fold_one`]. A member that ADMITS pays
-/// [`admitted_issuer`]'s three M3 reads on top, and then [`Grants::admit`]'s
-/// two inserts — one into the operative map, one into an ordered index whose
-/// key is a content-prefix and whose member is an issuer, both addresses a
-/// DEPOSITOR chose and neither bounded by this crate. So the figure is the
-/// store's, grown by every grant any account has ever issued and never
-/// shrunk: a revocation adds a record to the class rather than removing one,
-/// and a `nullify` leaves the claim in the audit view this walk must read.
+/// SEED COST, per load and per `Engine::world_at` reconstruction, and the
+/// PRODUCT of the grants class and M3's principal registry rather than
+/// anything a caller names: one `type_slice` over that class under the audit
+/// view, then per member one `readlink` and one [`fold_one`]. Every
+/// grant-typed member whose home is PUBLISHED — admitted or not, since the
+/// doc-1 test follows it — pays [`admitted_issuer`]'s ω resolution, M3's walk
+/// of the WHOLE principal registry, so the seed is Θ(members · |Π|) wherever
+/// the members are published-homed, which a depositor's own doc 1 is. A
+/// member that admits then adds [`Grants::admit`]'s two inserts — one into
+/// the operative map, one into an ordered index whose key is a content-prefix
+/// and whose member is an issuer, both addresses a DEPOSITOR chose and neither
+/// bounded by this crate. So the figure is the store's, grown by every
+/// grant-typed link any account has ever deposited and by every principal M3
+/// has ever seated, and never shrunk: a revocation adds a record to the class
+/// rather than removing one, and a `nullify` leaves the claim in the audit
+/// view this walk must read.
 /// `crate::publication::seed` states the exception set's own figure, and
 /// both run inside `WorldState::rebuild_derived` — the term M2's
 /// `Kernel::world_at` names in its cost and cannot size itself.

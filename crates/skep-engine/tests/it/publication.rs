@@ -263,11 +263,14 @@ fn checkpoint_plus_replay_and_full_replay_yield_the_live_set() {
 }
 
 /// Test 4 — miss = published: a published document is absent from the set,
-/// and so is an address never registered — the fail-open polarity PUB-7.5
-/// names, which is why the API's contract puts the caller's registration
-/// check AHEAD of the read (PUB-6.37; the daemon's publish gate does).
+/// and so is an address never registered, which reads `true` BY CONTRACT:
+/// the fail-open polarity PUB-7.5 names, and the postcondition the read
+/// predicate is built on (PUB-6.12). The registration check (PUB-6.37) is
+/// owed by the callers that act on the answer as a document's publication
+/// state, ahead of the read — the daemon's publish gate makes it — and M3's
+/// own read answers the other way for every address it does not register.
 #[test]
-fn an_unregistered_address_is_absent_so_registration_guards_the_read() {
+fn an_unregistered_address_is_absent_and_reads_published_by_contract() {
     let engine = mem_engine();
     let docs = mint_docs(&engine);
     let snap = engine.kernel().snapshot();
@@ -284,13 +287,13 @@ fn an_unregistered_address_is_absent_so_registration_guards_the_read() {
     assert!(!world.m3().is_registered_document(&never_minted));
     assert!(
         world.published(&never_minted),
-        "absent from the set exactly as a published document is — the registration check stands ahead"
+        "absent from the set exactly as a published document is, so it reads published by contract"
     );
     assert_eq!(world.owner_account(&never_minted), None);
     assert!(
         !world.m3().published(&never_minted),
         "M3's own read answers the fail-private direction there: the two agree on every \
-         registered document — the contract's domain — and only there"
+         registered document and part everywhere else, by design"
     );
 }
 

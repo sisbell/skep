@@ -564,8 +564,9 @@ impl crate::Engine {
     /// (the unit test pins it).
     ///
     /// COST: [`crate::Engine::dump_of`]'s plus, per filtered entry, one key
-    /// decode — a `Tumbler` deserialize off the tree for the authoritative
-    /// maps, a dotted parse for the hints and sections — and one predicate
+    /// decode — an `Address` deserialize off the tree for the authoritative
+    /// maps (a tumbler decode, then M1's `validate`), a dotted parse for the
+    /// hints and sections — and one predicate
     /// call, whose own cost is the caller's: a predicate that asks
     /// `World::readable` per entry pays the reader's registry scan once per
     /// draft-homed entry at any reader class but the guest's, where one that
@@ -736,6 +737,12 @@ impl crate::Engine {
     /// outside both halves and outside what `Ok(())` speaks for. That is the
     /// open direction `crate::publication` states, and no comparison of the
     /// two halves reaches it.
+    ///
+    /// PANICS rather than returning `Err` when `world` holds one of the shapes
+    /// [`crate::Engine::open`] names: the rebuild runs over its clone and
+    /// asserts what the stores' rebuilds and the exception set's seed assert.
+    /// So this certifies derived state against authoritative state those
+    /// assertions accept, and does not grade the authoritative state itself.
     ///
     /// COST, per call, uncached: two [`crate::Engine::dump_of`]s plus a clone
     /// of the world and a whole-links `rebuild_derived` over it — so upwards

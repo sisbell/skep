@@ -11,10 +11,12 @@
 //! sign), and the set carries no witness of its own against that state: a
 //! [`crate::World`] decoded from bytes has an empty set until the rebuild has
 //! run over it (`World`'s invariant note), and a document never registered is
-//! absent for the same reason a published one is — which is why every caller
-//! checks registration FIRST (PUB-6.37) and why M3's bit, not this index, is
-//! the authority (PUB-7.8's load check guards the bit; this set guards
-//! nothing).
+//! absent for the same reason a published one is — which is why a caller
+//! acting on the answer as a document's PUBLICATION STATE checks registration
+//! first (PUB-6.37), why the read predicate relies on exactly that absence
+//! (an address no mint produced reads READABLE, PUB-6.12), and why M3's bit,
+//! not this index, is the authority (PUB-7.8's load check guards the bit;
+//! this set guards nothing).
 //!
 //! That registration check closes the open direction for an UNREGISTERED
 //! address and for nothing else, and the set inherits a second case it cannot
@@ -86,22 +88,38 @@ impl World {
     /// wants the member's document's state projects to it first (PUB-2.15) —
     /// the daemon's publish gate does.
     ///
-    /// CONTRACT — `doc` is a REGISTERED document (PUB-6.37): an unregistered
-    /// address is absent from the set exactly as a published document is, so
-    /// this answers `true` for it — the fail-open direction — and the
-    /// registration check stands AHEAD of every call, at the caller. M3's own
-    /// `published` reads the bit at one map lookup and answers `false` there.
+    /// CONTRACT — TOTAL: this answers for every address, and an address the
+    /// set never held answers `true`. For a REGISTERED document that is its
+    /// publication state. For every other address — a document no mint
+    /// produced, an account, a node, an element — `true` is a POSTCONDITION,
+    /// not an accident of the polarity: [`World::readable`]'s published clause
+    /// asks this of addresses no gate has registered, and through it meets
+    /// M10's `ReadableWorld` obligation (an unregistered address reads
+    /// READABLE, so a read arm's own `*NotRegistered` speaks, PUB-6.12) and
+    /// M9's obligation that its guest predicate be total.
+    ///
+    /// So the REGISTRATION requirement (PUB-6.37) binds exactly the callers
+    /// that act on this answer as a document's PUBLICATION STATE, and each
+    /// discharges it ahead of its call: the daemon's publish gate and AUTH
+    /// fold by a registration test their own order places ahead of the read,
+    /// and this crate's grant admission by M7's `HomeNotRegistered` gate,
+    /// which registered every home it reads. The read predicate owes none and
+    /// must not acquire one —
+    /// `an_address_no_mint_produced_reads_readable_at_every_class_and_tier`
+    /// fails if it does. M3's own `published` reads the bit at one map lookup
+    /// and answers `false` for an unregistered address (fail-private).
     ///
     /// On every slice M3's own fold produced, the two agree on every
     /// registered document, because the seed and the fold below both answer
-    /// off M3's publication map. They part in TWO places, and the caller's
-    /// registration check closes only one. An UNREGISTERED address — outside
-    /// the contract — reads published here and private at M3, and the check
-    /// refuses it first. A REGISTERED document M3's publication map holds NO
-    /// entry for — inside the contract, and reachable only off a slice outside
-    /// M3's fold's totality domain — reads PUBLISHED here and PRIVATE at M3,
-    /// and the check passes it: that is the open direction this set inherits
-    /// from [`M3State::documents`], stated in the module doc.
+    /// off M3's publication map. They part in TWO places, and a
+    /// publication-state caller's registration check closes only one. An
+    /// UNREGISTERED address reads published here by the postcondition above
+    /// and private at M3, and that caller refuses it first. A REGISTERED
+    /// document M3's publication map holds NO entry for — reachable only off a
+    /// slice outside M3's fold's totality domain — reads PUBLISHED here and
+    /// PRIVATE at M3, and the check passes it, since the document IS
+    /// registered: that is the open direction this set inherits from
+    /// [`M3State::documents`], stated in the module doc.
     pub fn published(&self, doc: &Address) -> bool {
         is_published(&self.drafts, doc)
     }
@@ -131,9 +149,13 @@ impl World {
 /// holds it. The set stores the UNPUBLISHED side, so a published document is
 /// a membership MISS — one address hash, no walk (PUB-7.1, PUB-7.5).
 /// [`World::published`] is the public face and `crate::grants`' admission
-/// test is the other reader, so a build that answered the bool off M3's
-/// document records instead (PUB-7.69, the standing subtraction candidate)
-/// changes this function and nothing else.
+/// test is the other reader. A build that answered the bool off M3's document
+/// records instead (PUB-7.69, the standing subtraction candidate) replaces
+/// this function's body and must keep its POSTCONDITION — `true` for every
+/// address M3 does not register as a document, which [`World::published`]
+/// states and the read predicate is built on. `M3State::published` by itself
+/// answers `false` there, and would turn M10's front door into one that
+/// answers WITHHELD naming addresses no mint produced.
 pub(crate) fn is_published(drafts: &Drafts, doc: &Address) -> bool {
     !drafts.contains_key(doc)
 }

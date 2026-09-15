@@ -2,7 +2,9 @@
 //! 3.3, §5): the `Coordinator` the engine assembles carries
 //! `World::readable_guest` — `published(doc)` — and a fire whose Marker home
 //! or bound argument lies in a private draft is refused before any deposit,
-//! as a `Failed` step naming the draft. And (lane 3.3b, PUB-6.28) the same
+//! as a `Failed` step naming the draft, while a home NO MINT PRODUCED is no
+//! draft at all — the guest class reads it published, and M7's H-HOME gate
+//! refuses that fire as `HomeNotRegistered`. And (lane 3.3b, PUB-6.28) the same
 //! predicate is threaded into every writer the coordinator builds, so a
 //! fire's value-keyed gates see only guest-readable incumbents: a draft-homed
 //! tuple never absorbs a fire as `Deduped`. What is tested is the ASSEMBLY
@@ -38,6 +40,7 @@ use skep_coordination::{
 };
 use skep_engine::{Engine, World};
 use skep_links::{Caller, HasLinks, ShippedType, View};
+use skep_namespace::HasM3;
 
 /// An always-true one-Addr-parameter trigger.
 fn always(coord: &Coordinator<World>) -> Trigger {
@@ -223,6 +226,41 @@ fn a_fire_on_a_draft_s_content_is_refused_before_any_deposit() {
         }
         other => panic!("expected Failed(DraftBoundary(draft)), got {other:?}"),
     }
+}
+
+/// A Marker whose HOME no mint produced. The guest class reads an address the
+/// exception set never held as PUBLISHED — PUB-7.5's fail-open sign, and the
+/// answer M10's `ReadableWorld` requires of the same predicate — so the fire
+/// passes the draft boundary and M7's H-HOME gate refuses it:
+/// `HomeNotRegistered`, never `DraftBoundary`, and nothing deposited.
+/// `Engine::coordinator` states the discharge this holds.
+#[test]
+fn a_fire_into_a_home_no_mint_produced_is_refused_as_not_registered() {
+    let engine = mem_engine();
+    let member = addr(&[1, 0, 1, 0, 1, 0, 1, 1]); // a position of the published home
+    let (_home, _draft) = board(&engine, &member);
+    let never_minted = addr(&[1, 0, 1, 0, 99]);
+    assert!(
+        !engine.kernel().snapshot().world().m3().is_registered_document(&never_minted),
+        "the point is a home no mint produced"
+    );
+    let mut coord = engine.coordinator();
+    let rule = marker_rule(&engine, &coord, never_minted);
+    let id = coord
+        .register_rule(rule)
+        .expect("registration judges the rule's shape, never its home");
+    match coord.step(&engine.kernel().snapshot()) {
+        StepOutcome::Failed { rule, arg, err: FireError::HomeNotRegistered } => {
+            assert_eq!(rule, id);
+            assert_eq!(arg, member);
+        }
+        other => panic!("expected Failed(HomeNotRegistered), got {other:?}"),
+    }
+    let retired = engine.registry().reserved_type(ShippedType::Retired).clone();
+    assert!(
+        !engine.kernel().snapshot().world().links().is_k(&retired, member.tumbler()),
+        "no marker was deposited"
+    );
 }
 
 /// Home and argument both published: the same rule fires, and the marker is

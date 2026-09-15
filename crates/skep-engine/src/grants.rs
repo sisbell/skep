@@ -577,6 +577,14 @@ pub(crate) fn fold(prev: &Grants, namespace: &M3State, drafts: &Drafts, rec: &Li
 /// The SEED half (PUB-7.7): the grant fold a from-scratch walk of the GRANTS
 /// class yields. Runs at load, before replay; the fold carries it forward.
 ///
+/// PRECONDITIONS, owed by the caller and uncheckable here, each the far side
+/// of an edge `World::rebuild_derived` states with the test that watches it:
+/// `links` has been through `LinkState::rebuild_derived` — over unrebuilt
+/// links the class reads empty and the seed admits nothing — and `drafts` is
+/// the exception set seeded from this same `namespace` — an empty set reads
+/// every home published and admits a draft-homed grant the fold refused.
+/// `World::rebuild_derived`, the one caller, discharges both by its order.
+///
 /// The enumeration is the EXISTING M7 read `LinkState::type_slice` over
 /// `enc([t_grant])` under `View::Audit` (every deposit ever, in address
 /// order), plus `readlink` per address — NO new store read is added (the fence

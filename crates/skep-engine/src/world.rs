@@ -48,7 +48,13 @@ use crate::publication::{self, Drafts};
 /// every base it loads, before replay — at open, and again for every world
 /// [`crate::Engine::world_at`] reconstructs, which is why that method states
 /// the invariant as its own postcondition and why a reconstruction is
-/// servable as it stands. The `Deserialize` derived below establishes
+/// servable as it stands. [`WorldState::apply`] PRESERVES it: each arm folds
+/// exactly the derived structures its records can move — a store's hints
+/// inside that store's fold, and each engine index on the arm its doc names —
+/// under the premise that doc states (no record publishes a document), so a
+/// kernel whose root satisfies it satisfies it at every commit. Every
+/// `Engine::check_hints` this crate's suite runs over a live engine checks
+/// exactly that. The `Deserialize` derived below establishes
 /// nothing — it leaves M7's hints empty, so every typed slice
 /// reads as absent, nullification is invisible and `Active` equals `Audit`;
 /// it leaves the exception set EMPTY, so every document reads as PUBLISHED
@@ -240,6 +246,13 @@ impl WorldState for World {
     /// exactly the arms that name it here, and — because
     /// [`WorldState::rebuild_derived`] destructures rather than updates — it
     /// cannot reach a load path unanswered.
+    ///
+    /// TOTAL over what M2 hands it: a record a store's gate staged, or one
+    /// replayed from a journal those gates wrote, folded over a world that
+    /// satisfies [`World`]'s invariant. The `expect`s and the owner assertion
+    /// reachable from its arms discharge facts M7's fold asserts first and
+    /// M3's ops establish; over a record no gate could stage they fail-stop,
+    /// and [`crate::Engine::open`] states where that lands.
     fn apply(&self, r: &Record) -> World {
         match r {
             Record::Namespace(x) => {
@@ -316,9 +329,9 @@ impl WorldState for World {
     /// it needs of it — that every stored link key is T4-valid and
     /// element-level — as the seed asserts that every draft has an owner.
     /// With no error channel to refuse through, a base that violates any of
-    /// those panics rather than returning — inside `Kernel::open`, after that
-    /// checkpoint loaded, so M2's next-older-base fallback does not get its
-    /// turn. A base that cannot DECODE is the other case, and the one this
+    /// those panics rather than returning — inside `Kernel::open` and
+    /// `Kernel::world_at` alike, after that checkpoint loaded, so M2's
+    /// next-older-base fallback does not get its turn. A base that cannot DECODE is the other case, and the one this
     /// method never sees: `FormatStamp` and M3's own field order refuse it
     /// before any rebuild, and M2's fallback chain does get its turn.
     ///

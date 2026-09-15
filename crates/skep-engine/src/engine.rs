@@ -118,14 +118,33 @@ impl Engine {
     /// would have to keep.
     ///
     /// The kernel this hands [`EngineStores`] satisfies that constructor's
-    /// PRECONDITION under either durability mode, by a different route each
-    /// time. Journalled: M2 seeds whatever base it loads through
-    /// `WorldState::rebuild_derived` before replay, so the root is rebuilt
-    /// whether it came from a checkpoint or from genesis. In-memory: M2
-    /// installs the passed world unrebuilt, and the passed world is
-    /// [`World::genesis`], which carries its own derived hints and says why it
-    /// must. So the mode that skips the rebuild is the mode whose root needs
-    /// none.
+    /// PRECONDITION — its root satisfies [`World`]'s invariant — under either
+    /// durability mode, by a different route each time. Journalled: M2 seeds
+    /// whatever base it loads, a checkpoint or genesis, through
+    /// `WorldState::rebuild_derived`, which establishes the invariant, and
+    /// replays onto it through `WorldState::apply`, which preserves it.
+    /// In-memory: M2 installs the passed world unrebuilt, and the passed world
+    /// is [`World::genesis`], which satisfies the invariant as built and says
+    /// why it must. So the mode that skips the rebuild is the mode whose root
+    /// needs none.
+    ///
+    /// PRECONDITION passed through, not discharged: M2's caller contract on a
+    /// journalled `cfg` — the journal directory belongs to the kernel alone,
+    /// which creates, reads and deletes the segment, checkpoint and lock files
+    /// in it — binds this method's caller unchanged. M2's GENESIS contracts,
+    /// byte-identical on every reopen and consistent in its derived state as
+    /// passed, are the caller contracts this method discharges.
+    ///
+    /// PANICS, rather than returning `Err`, under `Durability::Fsync` when
+    /// recovery meets state that DECODES but violates a structural fact a fold
+    /// or a rebuild asserts — the stores' own, M7's that every link key is a
+    /// T4-valid element address among them, and the exception set's that a
+    /// registered draft's owner resolves to an account, reached from a
+    /// checkpoint base through its seed and from a replayed `Allocate` through
+    /// its fold. Neither `WorldState::rebuild_derived` nor `WorldState::apply`
+    /// has an error channel, and M2 selects and folds a base with no unwind
+    /// boundary, so such a checkpoint does not fall back to an older retained
+    /// base. No state the stores' ops produce holds such a shape.
     pub fn open(cfg: KernelConfig) -> Result<Engine, EngineError> {
         let kernel = Arc::new(Kernel::open(cfg, World::genesis())?);
         Ok(Engine { stores: EngineStores::new(kernel) })
@@ -193,6 +212,19 @@ impl Engine {
     /// Infallible: M9's catalog is a pure projection of the injected registry
     /// — with the type set compiled into the format there is no twice-passed
     /// configuration whose drift a validate-once-or-fail step would catch.
+    ///
+    /// M9 places THREE obligations on the values injected here and can check
+    /// none of them; each is discharged by construction. The two factories are
+    /// named fn items, which capture nothing, so each builds its handle over
+    /// exactly the kernel — and, for the writer, the visibility class — it is
+    /// handed. The guest predicate is [`World::visible_to`]'s System arm,
+    /// PURE and TOTAL as that method states. For an address M3 never
+    /// registered it answers `true` — PUB-7.5's fail-open sign, and the answer
+    /// M10's `ReadableWorld` requires of the same predicate — not the `false`
+    /// M9's constructor calls safe, so a fire whose action HOME no mint
+    /// produced passes the draft boundary and is refused by M7's H-HOME gate,
+    /// as `FireError::HomeNotRegistered`
+    /// (`a_fire_into_a_home_no_mint_produced_is_refused_as_not_registered`).
     pub fn coordinator(&self) -> Coordinator<World> {
         Coordinator::new(
             Arc::clone(&self.stores.kernel),
@@ -215,17 +247,24 @@ impl Engine {
     /// assembled world, forwarded verbatim. The contract, the refusal
     /// precedence and the cost are M2's, at that link.
     ///
-    /// POSTCONDITION, which is the assembler's rather than M2's because it is
-    /// [`World`]'s invariant it discharges: the returned world HAS been
-    /// through `WorldState::rebuild_derived`. M2 seeds every base it selects
-    /// through that call before folding onto it, and the fold is
+    /// POSTCONDITION, which is the assembler's rather than M2's because the
+    /// invariant it names is [`World`]'s: the returned world SATISFIES that
+    /// invariant — its derived state agrees with its authoritative state. M2
+    /// seeds every base it selects through [`WorldState::rebuild_derived`],
+    /// which establishes it, and folds onto that base through
     /// [`WorldState::apply`], which carries both derived indexes on their own
-    /// arms. So a reconstruction satisfies the invariant [`World`] states and
-    /// needs no rebuild from its receiver: it may be dumped, checked, served
-    /// at a reader's class, or paired with a kernel at [`EngineStores::new`],
-    /// whose precondition it discharges. That is the one thing a caller must
-    /// know and M2 cannot say, being generic over every `WorldState` and
-    /// knowing nothing of this world's indexes.
+    /// arms and so preserves it. A reconstruction therefore needs no rebuild
+    /// from its receiver: it may be dumped, checked, served at a reader's
+    /// class, or paired with a kernel at [`EngineStores::new`], whose
+    /// precondition it discharges. That is the one thing a caller must know
+    /// and M2 cannot say, being generic over every `WorldState` and knowing
+    /// nothing of this world's indexes.
+    ///
+    /// PANICS on the shapes [`Engine::open`] names, since M2 seeds every base
+    /// it selects through the same rebuild and folds the same records over it,
+    /// with no unwind boundary. A caller that serves historical reads per
+    /// request holds its own panic boundary around this call; the daemon's
+    /// request handler does.
     ///
     /// [`WorldState::apply`]: skep_kernel::WorldState::apply
     /// [`WorldState::rebuild_derived`]: skep_kernel::WorldState::rebuild_derived
@@ -267,12 +306,14 @@ impl EngineStores {
     /// precondition afresh.
     ///
     /// PRECONDITION, and the assembler's to state because the pairing is the
-    /// assembler's: `kernel`'s root must be a world that has been through
-    /// `WorldState::rebuild_derived`. In practice that means one
-    /// [`World::genesis`] built — which carries its own derived hints, and
-    /// says so — or one [`Engine::world_at`] reconstructed, whose replay
-    /// seeds its base through the rebuild. `Durability::InMemory` installs
-    /// the passed world unrebuilt, so a `World` that arrived any other way
+    /// assembler's: `kernel`'s installed world satisfies [`World`]'s
+    /// INVARIANT — its derived state agrees with its authoritative state.
+    /// [`World::genesis`] satisfies it as built; every base M2 loads satisfies
+    /// it once `WorldState::rebuild_derived` has run over it; and
+    /// `WorldState::apply` preserves it, so every world folded from one of
+    /// those keeps it — each [`Engine::world_at`] reconstruction, and every
+    /// commit an open kernel folds. `Durability::InMemory` installs the passed
+    /// world unrebuilt, so a `World` that arrived any other way
     /// (deserialized straight from bytes, say — `World: Deserialize` is
     /// forced on it by `WorldState`) is served here with M7's skip-serialized
     /// HINTS still empty and BOTH of the engine's derived indexes empty.

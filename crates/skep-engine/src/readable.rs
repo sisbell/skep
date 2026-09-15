@@ -92,18 +92,20 @@ impl World {
     /// * PUBLISHED (PUB-1.31's first clause) — an exception-set MISS on the
     ///   projected document. Fail-open (PUB-7.5), in two cases. An address
     ///   whose TRUNK M3 never registered is absent from the set and so
-    ///   answers readable here, which is why every doc-argument consult
-    ///   defers an unregistered document to its store's own `*NotRegistered`
-    ///   (a withheld answer is only ever a REGISTERED private document —
-    ///   PUB-6.12). A REGISTERED document M3's publication map holds no entry
-    ///   for — reachable only off a slice outside M3's fold's totality domain
-    ///   — is absent too, and answers readable to every class where M3
-    ///   answers it private; no registration check closes that one, since the
-    ///   document is registered (`crate::publication` states the open
-    ///   direction). The miss is asked of the trunk and never of `doc`, so the
-    ///   one unregistered address this clause does NOT open is one shaped as a
-    ///   version member of a registered draft: it reads as that draft, and is
-    ///   withheld wherever the draft is
+    ///   answers readable here — [`World::published`]'s postcondition — which
+    ///   is why every doc-argument consult defers an unregistered document to
+    ///   its store's own `*NotRegistered` (M10's `ReadableWorld`
+    ///   postcondition, PUB-6.12 — met for every unregistered address but the
+    ///   one shape this bullet ends on). A REGISTERED document M3's
+    ///   publication map holds no entry for — reachable only off a slice
+    ///   outside M3's fold's totality domain — is absent too, and answers
+    ///   readable to every class where M3 answers it private; no registration
+    ///   check closes that one, since the document is registered
+    ///   (`crate::publication` states the open direction). The miss is asked
+    ///   of the trunk and never of `doc`, so the one unregistered address this
+    ///   clause does NOT open is one shaped as a version member of a
+    ///   registered draft: it reads as that draft, and is withheld wherever
+    ///   the draft is
     ///   (`a_version_member_shaped_address_under_a_draft_reads_as_the_draft`).
     /// * SUBTREE (PUB-5.9, PUB-5.13-adjacent) — `owner_account(doc) ⊑
     ///   account(principal)`, ONE prefix compare DOWNWARD only, off the
@@ -205,6 +207,16 @@ impl World {
     /// dedup candidate in M7, per distinct origin document in M5 — pays
     /// [`World::readable`]'s seat scan afresh, inside the store's transaction
     /// and under M2's applier lock, where every waiting writer pays it too.
+    ///
+    /// PURE and TOTAL, and both are obligations other crates place on this
+    /// closure without being able to check them. PURE: it captures one `Copy`
+    /// `Caller` and reads nothing but the world handed to it, and the reader
+    /// class it binds per consult dies with the consult. That discharges M7's
+    /// CALLER'S OBLIGATION on a `Visibility` — a pure, deterministic function
+    /// of `(world, doc)`, on which `emit`'s and `assert_sup`'s published
+    /// determinism rests — and M9's purity obligation on the guest predicate
+    /// [`crate::Engine::coordinator`] injects. TOTAL: it answers every address
+    /// of every tier without panicking, as [`World::readable`] does.
     pub fn visible_to(
         caller: Caller,
     ) -> impl Fn(&World, &Address) -> bool + Copy + Send + Sync + 'static {
@@ -224,14 +236,19 @@ impl<'w> ReaderClass<'w> {
         let world = self.world;
         let trunk = trunk_of(doc);
         // Published clause — a published document (or member) is readable by
-        // all, and an unregistered one is fail-open here (PUB-7.5).
+        // all, and an address the set never held reads readable here:
+        // `World::published`'s postcondition, which M10's `ReadableWorld`
+        // obligation rests on (PUB-6.12). No registration check belongs ahead
+        // of it.
         if world.published(&trunk) {
             return true;
         }
-        // A REGISTERED private draft from here: the exception set holds its
-        // mint-time owner. `None` cannot arise (published above covers the
-        // unregistered case), but is answered fail-closed. Borrowed, as every
-        // clause below wants it: nothing here outlives the slice it sits in.
+        // A REGISTERED private draft from here: `published` answered `false`,
+        // so `trunk` is a key of the very map `owner_account` reads, in a
+        // world that cannot change between the two lines. The `else` exists
+        // because the type demands one, and answers fail-closed. Borrowed, as
+        // every clause below wants it: nothing here outlives the slice it
+        // sits in.
         let Some(owner) = world.owner_account(&trunk) else {
             return false;
         };
@@ -260,6 +277,23 @@ impl<'w> ReaderClass<'w> {
 /// predicate — published ∨ subtree ∨ grant ([`World::readable`]) — through this
 /// one accessor, off its own read snapshot. The inherent method is the real
 /// one; this is the seam the generic front door calls.
+///
+/// M10's trait places a POSTCONDITION on this impl: TOTAL over every address,
+/// and an UNREGISTERED one answers READABLE, so a read arm's own
+/// `*NotRegistered` speaks and a WITHHELD answer names only a registered
+/// private document (PUB-6.12). M10's door is built on it: its doc-argument
+/// consult walks a request's named documents before any registration check,
+/// and answers WITHHELD naming the first one this refuses. The inherent
+/// predicate meets it at every tier
+/// (`an_address_no_mint_produced_reads_readable_at_every_class_and_tier`)
+/// for every unregistered address but ONE shape: an address shaped as a
+/// version member of a REGISTERED DRAFT, which the projection reads as that
+/// draft (PUB-2.15) and so withholds wherever the draft is withheld
+/// (`a_version_member_shaped_address_under_a_draft_reads_as_the_draft`). On
+/// state the stores' ops produce, that is the projection's only observable
+/// effect — a registered version member carries its trunk's bit — so the
+/// departure is exactly that wide. It is recorded here, where M10 reads, and
+/// not endorsed: which of PUB-2.15 and PUB-6.12 governs is PUB's to say.
 impl skep_febe::ReadableWorld for World {
     fn readable(&self, principal: Option<PrincipalId>, doc: &Address) -> bool {
         World::readable(self, principal, doc)

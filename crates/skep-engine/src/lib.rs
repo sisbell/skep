@@ -28,7 +28,8 @@
 //!   under any other layout — the pre-publication-bit layout above all
 //!   (PUB-7.8) — fails to decode and M2's fallback chain takes over (PUB-7.9).
 //! * **Recovery order** (`WorldState::rebuild_derived` for `World`) — the
-//!   cross-store rebuild sequence at load, stated and pinned in one place.
+//!   cross-store rebuild sequence at load, stated in one place, with its two
+//!   engine edges pinned by the tests that method names.
 //! * **The exception set** ([`World::published`], [`World::owner_account`];
 //!   the `publication` module) — the derived membership index over M3's
 //!   publication bit (PUB-7.5; owner ruling D1, 2026-09-05: ONE publication

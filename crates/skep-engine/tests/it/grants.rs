@@ -1304,6 +1304,41 @@ fn a_version_member_shaped_address_under_a_draft_reads_as_the_draft() {
     assert!(w.readable(Some(A), &version_member), "while the owner reads it by the subtree clause");
 }
 
+/// `World::published`'s POSTCONDITION, held through the predicate M10's door
+/// consults: an address NO MINT PRODUCED reads READABLE at every reader class
+/// and at every tier, so a read arm's own `*NotRegistered` speaks and a
+/// WITHHELD answer never names an address that does not exist (PUB-6.12 —
+/// the obligation M10's `ReadableWorld` places on this implementer). M10's
+/// own suite drives its door over a test world of its own, so the engine's
+/// predicate is held here. The answer rides on the exception set answering
+/// `true` for an address it never held — the postcondition a build answering
+/// off M3's bit (PUB-7.69) must keep, since M3's own read answers `false`.
+#[test]
+fn an_address_no_mint_produced_reads_readable_at_every_class_and_tier() {
+    let engine = mem_engine();
+    let board = two_accounts(&engine);
+    let never_minted = validate(
+        Tumbler::new(board.acct_a.tumbler().iter().cloned().chain([nat(0), nat(99)]))
+            .expect("nonempty"),
+    )
+    .expect("a document tier address is T4-valid");
+    let w = world(&engine);
+    for unregistered in [
+        addr(&[9]),                   // a node no one registered
+        addr(&[1, 0, 99]),            // an account no one delegated
+        element(&never_minted, 1, 1), // an element of a document no one minted
+        never_minted,                 // …and that document
+    ] {
+        assert!(!w.m3().is_allocated(&unregistered), "{unregistered}: no mint produced it");
+        for principal in [None, Some(A), Some(B), Some(PrincipalId(9))] {
+            assert!(
+                w.readable(principal, &unregistered),
+                "{unregistered} at {principal:?}: an unregistered address reads READABLE"
+            );
+        }
+    }
+}
+
 /// ONE reader class, reused across documents of different owners, judges each
 /// by that document's OWN owner: what `World::reader_class` binds is the
 /// reader's SEAT, looked up once, and never a verdict. Asked of a seated

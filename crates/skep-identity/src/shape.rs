@@ -77,8 +77,8 @@ impl TypeAddrs {
     /// AUTH-2.22 — `Some` iff `ty` is EXACTLY ONE span that is `Equal` (M1
     /// `classify_spans`) to one of the three precomputed spans: one length
     /// check and at most three span comparisons. Any other arity, and any
-    /// overlap class other than `Equal` (`Containment` included), answers
-    /// `None`. An I2 frozen rule (AUTH-2.90).
+    /// `SpanRel` other than `Equal` (`Containment` included), answers `None`.
+    /// An I2 frozen rule (AUTH-2.90).
     pub fn kind_of(&self, ty: &[Span]) -> Option<CredentialKind> {
         let [span] = ty else { return None };
         if classify_spans(span, &self.enroll_span) == SpanRel::Equal {
@@ -126,7 +126,7 @@ pub struct LinkDeposit<'a> {
 /// home check are that slot's whole rule). `pub` so every discovery caller
 /// applies it paired with `kind_of` (AUTH-2.28, AUTH-2.112). The write path
 /// reads a TYPE slot through it too
-/// ([`WriteTypes::write_class`](crate::WriteTypes::write_class)), outside
+/// ([`WriteTypes::target_class`](crate::WriteTypes::target_class)), outside
 /// the fold. An I2 frozen rule (AUTH-2.90).
 pub fn single_address(slot: &[Span]) -> Option<Address> {
     let [span] = slot else { return None };

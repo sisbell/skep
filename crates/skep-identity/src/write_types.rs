@@ -16,16 +16,21 @@ use crate::shape::{single_address, CredentialKind, TypeAddrs};
 /// and never the boundary: the next audit-view class is one arm here — with
 /// its [`AuditClass::requires_published_home`] answer, which the compiler
 /// demands — and one address at [`WriteTypes::new`], with no edit to any rule
-/// that reads them. WHICH address names each class is the caller's to supply
-/// (the commons ledger's numbers, pinned in the engine) — this crate is
+/// that reads them. WHICH type address each class sits at is the caller's to
+/// supply (the commons ledger's numbers, pinned in the engine) — this crate is
 /// parametric over them exactly as it is over the three credential addresses
 /// (AUTH-7.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AuditClass {
     /// The succession pair's `successor-of` claim (PUB-7.63).
     SuccessorOf,
-    /// The succession pair's delegator endorsement — the `endorse` type
-    /// (PUB-7.63).
+    /// The succession pair's delegator endorsement (PUB-7.63), the member
+    /// PUB-6.64 lists by that name — recognized by its TYPE, `endorse`, and
+    /// so EVERY endorsement: the type and its subtypes by prefix (L10;
+    /// `endorse.trust` is one), whoever deposits it and whatever it endorses,
+    /// since [`WriteTypes::target_class`] reads the type slot alone. The name
+    /// is the role the pair reads the type in, not the breadth of what the
+    /// class admits (`skep_engine::types::t_endorse`).
     DelegatorEndorsement,
     /// The consumption marker (PUB-4.12): a nullified marker STILL CONSUMES.
     ConsumptionMarker,
@@ -46,10 +51,11 @@ impl AuditClass {
     /// ⇔ a link of this class is a MEMBER only where the link's OWN HOME is
     /// published (RES-207, PUB-6.64); draft-homed it is an ordinary link.
     /// The class's second key, answered by the class: the TYPE half is
-    /// [`WriteTypes::write_class`]'s, and the home half is a world read this
+    /// [`WriteTypes::target_class`]'s, and the home half is a world read this
     /// crate cannot take, so the caller takes it — keyed on THIS answer, never
     /// on a variant it names. Matched exhaustively with no wildcard, so a new
-    /// class does not compile until it says which kind of member it is.
+    /// class does not compile until it says whether its membership waits on
+    /// the link's home.
     pub fn requires_published_home(self) -> bool {
         match self {
             AuditClass::StewardClassification => true,
@@ -62,13 +68,13 @@ impl AuditClass {
     }
 }
 
-/// The write path's answer for one type slot (owner ruling D3): the class a
-/// `nullify`'s target belongs to. `None` from [`WriteTypes::write_class`] is
-/// an ORDINARY link — the R20 edition claim among them (PUB-6.32: read under
-/// the ACTIVE view, so its owner's retraction clears the state its faces read
-/// and is ADMITTED).
+/// The class of a `nullify`'s TARGET link, recognized by its type slot (owner
+/// ruling D3) — the "class of target link" wire.md's `nullify` cells are keyed
+/// on. `None` from [`WriteTypes::target_class`] is an ORDINARY link — the R20
+/// edition claim among them (PUB-6.32: read under the ACTIVE view, so its
+/// owner's retraction clears the state its faces read and is ADMITTED).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum WriteClass {
+pub enum TargetClass {
     /// A credential type — exactly [`TypeAddrs::kind_of`]'s answer
     /// (AUTH-2.22; PUB-6.10's cell).
     Credential(CredentialKind),
@@ -102,7 +108,7 @@ impl WriteTypes {
     /// Assemble the input: the credential kinds (answered FIRST — a
     /// credential type is never also a class), then the grant, then the
     /// audit-view classes in the order given. Keeps the class addresses
-    /// themselves: [`WriteTypes::write_class`] reads a slot's address once
+    /// themselves: [`WriteTypes::target_class`] reads a slot's address once
     /// and asks each class a prefix question of it.
     ///
     /// `credential` is kept as an OWNED copy, so this input agrees with the
@@ -152,34 +158,35 @@ impl WriteTypes {
         WriteTypes { credential, grant, audit }
     }
 
-    /// The write path's classification of a type slot: `Some` iff `ty` is
-    /// EXACTLY ONE span that names a class — a credential type by
+    /// The class of the target link a type slot belongs to: `Some` iff `ty` is
+    /// EXACTLY ONE span recognized as a class — a credential type by
     /// [`TypeAddrs::kind_of`]'s frozen rule (`Equal` to the type's own
-    /// subtree, no subtypes), else the grant or the audit-view class whose
-    /// address is a (possibly improper) prefix of the ONE address the slot
-    /// names. That address is [`single_address`]'s answer — one span `Equal`
-    /// to the subtree of its own T4-VALID start — so a span across a class's
-    /// subtree, or one containing it, names no address and is no member; and
-    /// a class names the address by being it or a prefix of it, the subtype
-    /// rule L10 states (commons-map.md: "hierarchy is prefix — one subtree
-    /// span matches a type and its subtypes"; `3.42.1` is an `endorse`). The
-    /// classes are prefix-free, so at most one names it. Any other arity, and
-    /// any slot naming no class, answers `None`: an ordinary link.
-    pub fn write_class(&self, ty: &[Span]) -> Option<WriteClass> {
+    /// subtree, no subtypes), else the grant or the audit-view class that the
+    /// ONE address the slot names is AT OR UNDER: the class's own type, or a
+    /// SUBTYPE of it, the rule L10 states (commons-map.md: "hierarchy is prefix
+    /// — one subtree span matches a type and its subtypes"; `3.42.1` is an
+    /// `endorse`). That address is [`single_address`]'s answer — one span
+    /// `Equal` to the subtree of its own T4-VALID start — so a span across a
+    /// class's subtree, or one containing it, names no address and is no
+    /// member. The classes are prefix-free, so an address is at or under at
+    /// most one of them. Any other arity, and any slot whose address is under
+    /// no class, answers `None`: an ordinary link.
+    pub fn target_class(&self, ty: &[Span]) -> Option<TargetClass> {
         if let Some(kind) = self.credential.kind_of(ty) {
-            return Some(WriteClass::Credential(kind));
+            return Some(TargetClass::Credential(kind));
         }
-        // The address the slot names, read ONCE: a class names the slot by
-        // being that address or a prefix of it (L10) — a question about this
-        // address, never a re-reading of the span per class.
+        // The address the slot names, read ONCE: the slot is a class's when
+        // that address is AT OR UNDER the class's own — its type or a subtype
+        // (L10) — a question about this address, never a re-reading of the
+        // span per class.
         let named = single_address(ty)?;
-        let names = |class_addr: &Address| is_prefix(class_addr.tumbler(), named.tumbler());
-        if names(&self.grant) {
-            return Some(WriteClass::Grant);
+        let at_or_under = |class_addr: &Address| is_prefix(class_addr.tumbler(), named.tumbler());
+        if at_or_under(&self.grant) {
+            return Some(TargetClass::Grant);
         }
         self.audit
             .iter()
-            .find(|(_, class_addr)| names(class_addr))
-            .map(|(class, _)| WriteClass::AuditView(*class))
+            .find(|(_, class_addr)| at_or_under(class_addr))
+            .map(|(class, _)| TargetClass::AuditView(*class))
     }
 }

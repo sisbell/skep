@@ -7,4 +7,4 @@ mod fold;
 mod grammar;
 mod props;
 mod surface;
-mod write_class;
+mod write_types;

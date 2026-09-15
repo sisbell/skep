@@ -11,17 +11,17 @@ use crate::common;
 
 use common::{addr, tum, unit, width_at_last, T_CLAIM, T_ENROLL, T_RETIRE};
 use skep_address::Span;
-use skep_identity::{AuditClass, CredentialKind, TypeAddrs, WriteClass, WriteTypes};
+use skep_identity::{AuditClass, CredentialKind, TargetClass, TypeAddrs, WriteTypes};
 
 // Placeholder class addresses, prefix-free among themselves and distinct
 // from the three credential placeholders.
 const T_GRANT: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 90];
 const T_SUCCESSOR_OF: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 59];
 const T_ENDORSE: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 42];
-const T_MARKER: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 91];
-const T_DESIGNATION: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 22];
-const T_RAIL: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 60];
-const T_STEWARD: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 61];
+const T_CONSUMPTION_MARKER: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 91];
+const T_JOURNAL_DESIGNATION: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 22];
+const T_RAIL_RECORD: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 60];
+const T_STEWARD_CLASSIFICATION: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 61];
 
 fn credential() -> TypeAddrs {
     TypeAddrs::new(addr(T_ENROLL), addr(T_RETIRE), addr(T_CLAIM))
@@ -32,10 +32,10 @@ fn audit_list() -> Vec<(AuditClass, skep_address::Address)> {
     vec![
         (AuditClass::SuccessorOf, addr(T_SUCCESSOR_OF)),
         (AuditClass::DelegatorEndorsement, addr(T_ENDORSE)),
-        (AuditClass::ConsumptionMarker, addr(T_MARKER)),
-        (AuditClass::JournalDesignation, addr(T_DESIGNATION)),
-        (AuditClass::RailRecord, addr(T_RAIL)),
-        (AuditClass::StewardClassification, addr(T_STEWARD)),
+        (AuditClass::ConsumptionMarker, addr(T_CONSUMPTION_MARKER)),
+        (AuditClass::JournalDesignation, addr(T_JOURNAL_DESIGNATION)),
+        (AuditClass::RailRecord, addr(T_RAIL_RECORD)),
+        (AuditClass::StewardClassification, addr(T_STEWARD_CLASSIFICATION)),
     ]
 }
 
@@ -49,37 +49,37 @@ fn types() -> WriteTypes {
 fn every_class_address_answers_its_own_arm() {
     let t = types();
     assert_eq!(
-        t.write_class(&[unit(T_ENROLL)]),
-        Some(WriteClass::Credential(CredentialKind::Enroll))
+        t.target_class(&[unit(T_ENROLL)]),
+        Some(TargetClass::Credential(CredentialKind::Enroll))
     );
     assert_eq!(
-        t.write_class(&[unit(T_RETIRE)]),
-        Some(WriteClass::Credential(CredentialKind::Retire))
+        t.target_class(&[unit(T_RETIRE)]),
+        Some(TargetClass::Credential(CredentialKind::Retire))
     );
     assert_eq!(
-        t.write_class(&[unit(T_CLAIM)]),
-        Some(WriteClass::Credential(CredentialKind::Claim))
+        t.target_class(&[unit(T_CLAIM)]),
+        Some(TargetClass::Credential(CredentialKind::Claim))
     );
-    assert_eq!(t.write_class(&[unit(T_GRANT)]), Some(WriteClass::Grant));
+    assert_eq!(t.target_class(&[unit(T_GRANT)]), Some(TargetClass::Grant));
     for (class, a) in audit_list() {
         let span = skep_address::subtree_of(a.tumbler());
         assert_eq!(
-            t.write_class(&[span]),
-            Some(WriteClass::AuditView(class)),
+            t.target_class(&[span]),
+            Some(TargetClass::AuditView(class)),
             "{} is {class:?}",
             a.tumbler()
         );
     }
 }
 
-/// An address naming no class is an ORDINARY link: a ghost type of some
+/// An address under no class is an ORDINARY link: a ghost type of some
 /// document's own, a content position, an unrelated subspace-3 name.
 #[test]
 fn an_unclassified_address_is_ordinary() {
     let t = types();
-    assert_eq!(t.write_class(&[unit(&[1, 1, 0, 5, 0, 3, 0, 3, 6, 1])]), None, "a ghost type");
-    assert_eq!(t.write_class(&[unit(&[1, 1, 0, 5, 0, 3, 0, 1, 1])]), None, "a content position");
-    assert_eq!(t.write_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2, 14])]), None, "another name");
+    assert_eq!(t.target_class(&[unit(&[1, 1, 0, 5, 0, 3, 0, 3, 6, 1])]), None, "a ghost type");
+    assert_eq!(t.target_class(&[unit(&[1, 1, 0, 5, 0, 3, 0, 1, 1])]), None, "a content position");
+    assert_eq!(t.target_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2, 14])]), None, "another name");
 }
 
 /// PRECEDENCE: the credential kinds answer FIRST and win, so a class address
@@ -125,13 +125,20 @@ fn the_declared_order_of_the_classes_decides_nothing() {
     let mut list = audit_list();
     list.reverse();
     let reversed = WriteTypes::new(credential(), addr(T_GRANT), list);
-    for class_addr in [T_GRANT, T_SUCCESSOR_OF, T_ENDORSE, T_MARKER, T_DESIGNATION, T_RAIL, T_STEWARD]
-    {
+    for class_addr in [
+        T_GRANT,
+        T_SUCCESSOR_OF,
+        T_ENDORSE,
+        T_CONSUMPTION_MARKER,
+        T_JOURNAL_DESIGNATION,
+        T_RAIL_RECORD,
+        T_STEWARD_CLASSIFICATION,
+    ] {
         let subtype: Vec<u32> = class_addr.iter().copied().chain([1]).collect();
         for slot in [vec![unit(class_addr)], vec![unit(&subtype)]] {
-            let answer = declared.write_class(&slot);
-            assert!(answer.is_some(), "{class_addr:?}: the fixture names a class");
-            assert_eq!(reversed.write_class(&slot), answer, "{class_addr:?}");
+            let answer = declared.target_class(&slot);
+            assert!(answer.is_some(), "{class_addr:?}: the fixture's address is at or under a class");
+            assert_eq!(reversed.target_class(&slot), answer, "{class_addr:?}");
         }
     }
 }
@@ -159,47 +166,47 @@ fn only_the_steward_classification_requires_a_published_home() {
 fn only_a_single_span_equal_to_a_class_subtree_is_a_member() {
     let t = types();
     // Two spans, both members on their own: not a member as a slot.
-    assert_eq!(t.write_class(&[unit(T_GRANT), unit(T_RAIL)]), None);
-    assert_eq!(t.write_class(&[]), None);
+    assert_eq!(t.target_class(&[unit(T_GRANT), unit(T_RAIL_RECORD)]), None);
+    assert_eq!(t.target_class(&[]), None);
     // A span covering the grant's subtree AND its sibling: Containment, not
     // Equal — and not the unit subtree of its own start either.
     let start = tum(T_GRANT);
     let len = start.len();
     let wide = Span::new(start, width_at_last(len, 2)).expect("a positive width");
-    assert_eq!(t.write_class(&[wide]), None);
+    assert_eq!(t.target_class(&[wide]), None);
     // A span starting one BELOW the grant, two wide: ProperOverlap of the
     // grant's subtree, no member of anything.
     let below = tum(&[1, 1, 0, 1, 0, 1, 0, 2, 89]);
     let len = below.len();
     let straddle = Span::new(below, width_at_last(len, 2)).expect("a positive width");
-    assert_eq!(t.write_class(&[straddle]), None);
+    assert_eq!(t.target_class(&[straddle]), None);
 }
 
 /// A SUBTYPE BY PREFIX is its class's member (L10: hierarchy is prefix — one
-/// subtree span matches a type and its subtypes): `endorse.trust` is a
-/// delegator endorsement, a grant subtype is a grant, two levels down too.
-/// A "subtype" of a CREDENTIAL type is nothing: `kind_of` is `Equal`-only
+/// subtree span matches a type and its subtypes): `endorse.trust` is in the
+/// delegator endorsement's class, a grant subtype is a grant, two levels down
+/// too. A "subtype" of a CREDENTIAL type is nothing: `kind_of` is `Equal`-only
 /// (the fold's frozen rule) and the classes do not reach it.
 #[test]
 fn a_subtype_by_prefix_is_a_member_of_its_class() {
     let t = types();
     assert_eq!(
-        t.write_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2, 42, 2])]),
-        Some(WriteClass::AuditView(AuditClass::DelegatorEndorsement)),
+        t.target_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2, 42, 2])]),
+        Some(TargetClass::AuditView(AuditClass::DelegatorEndorsement)),
         "endorse.trust"
     );
-    assert_eq!(t.write_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2, 90, 3])]), Some(WriteClass::Grant));
+    assert_eq!(t.target_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2, 90, 3])]), Some(TargetClass::Grant));
     assert_eq!(
-        t.write_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2, 59, 1, 4])]),
-        Some(WriteClass::AuditView(AuditClass::SuccessorOf)),
+        t.target_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2, 59, 1, 4])]),
+        Some(TargetClass::AuditView(AuditClass::SuccessorOf)),
         "two levels down"
     );
-    assert_eq!(t.write_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2, 1, 7])]), None, "no credential subtypes");
+    assert_eq!(t.target_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2, 1, 7])]), None, "no credential subtypes");
 }
 
 /// `kind_of` UNCHANGED: on every slot — a credential unit, a credential
 /// "subtype" (`None`), a two-span slot (`None`), a class address (`None`) —
-/// the write classifier's `Credential` arm is exactly the answer `kind_of`
+/// the target classifier's `Credential` arm is exactly the answer `kind_of`
 /// gives on the `TypeAddrs` the input was built from, in both directions.
 #[test]
 fn kind_of_is_unchanged_and_is_the_credential_arm() {
@@ -214,8 +221,8 @@ fn kind_of_is_unchanged_and_is_the_credential_arm() {
         vec![unit(T_GRANT)],
     ] {
         match plain.kind_of(&slot) {
-            Some(kind) => assert_eq!(t.write_class(&slot), Some(WriteClass::Credential(kind))),
-            None => assert!(!matches!(t.write_class(&slot), Some(WriteClass::Credential(_)))),
+            Some(kind) => assert_eq!(t.target_class(&slot), Some(TargetClass::Credential(kind))),
+            None => assert!(!matches!(t.target_class(&slot), Some(TargetClass::Credential(_)))),
         }
     }
 }

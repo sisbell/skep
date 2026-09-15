@@ -1028,7 +1028,7 @@ fn empty_to_on_an_enrollment_is_malformed_shape() {
 /// `subtree_of(T_enroll)` · a `ty` of ONE span CONTAINING
 /// `subtree_of(T_enroll)` · one CONTAINED BY it — `NotCredential` on each
 /// (AUTH-2.22's exactly-one-span-`Equal` rule: every other arity, and every
-/// overlap class other than `Equal`, in BOTH containment directions).
+/// `SpanRel` other than `Equal`, `Containment` in BOTH directions).
 #[test]
 fn unrecognized_type_slots_are_not_credential() {
     let mut fx = Fixture::new();

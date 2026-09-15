@@ -12,8 +12,8 @@ use skep_engine::types::{
 };
 use skep_febe::Op;
 use skep_identity::{
-    AuditClass, CredentialKind, Effect, IdentityState, Inert, LinkDeposit, TypeAddrs, Verdict,
-    WriteClass, WriteTypes,
+    AuditClass, CredentialKind, Effect, IdentityState, Inert, LinkDeposit, TargetClass, TypeAddrs,
+    Verdict, WriteTypes,
 };
 use skep_links::{enc, HasLinks, SlotArg};
 use skep_namespace::{first_document_address, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
@@ -415,7 +415,7 @@ pub(crate) fn nullify_refusal(
     // The same reads for every caller: the target's link, then its class.
     let link = world.links().readlink(target)?;
     let spans: Vec<Span> = link.type_slot().spans().cloned().collect();
-    let class = write_types().write_class(&spans)?;
+    let class = write_types().target_class(&spans)?;
     let m3 = world.m3();
     let claimed = identity.claimant().is_some();
     // The class's own token, chosen before entitlement is consulted — the arm
@@ -426,15 +426,15 @@ pub(crate) fn nullify_refusal(
     // registered-only contract (PUB-6.37) holds on it; draft-homed it is an
     // ordinary link and this producer answers nothing.
     let token = match class {
-        WriteClass::Credential(_) => CredentialRefusal::NullifyNotRetraction,
-        WriteClass::Grant => CredentialRefusal::NullifyNotRevocation,
-        WriteClass::AuditView(audit_class)
+        TargetClass::Credential(_) => CredentialRefusal::NullifyNotRetraction,
+        TargetClass::Grant => CredentialRefusal::NullifyNotRevocation,
+        TargetClass::AuditView(audit_class)
             if audit_class.requires_published_home()
                 && !document_of(target).as_ref().is_some_and(|d| published(world, d)) =>
         {
             return None
         }
-        WriteClass::AuditView(_) => CredentialRefusal::NullifyAuditView,
+        TargetClass::AuditView(_) => CredentialRefusal::NullifyAuditView,
     };
     // THE ENTITLEMENT, once and last, which is what makes "the token chosen
     // last" a fact about this function rather than three copies that agree:
@@ -1188,10 +1188,10 @@ mod tests {
         let types = write_types();
         let unit = |a: &Address| vec![subtree_of(a.tumbler())];
         assert_eq!(
-            types.write_class(&unit(&addr_of(&T_ENROLL))),
-            Some(WriteClass::Credential(CredentialKind::Enroll))
+            types.target_class(&unit(&addr_of(&T_ENROLL))),
+            Some(TargetClass::Credential(CredentialKind::Enroll))
         );
-        assert_eq!(types.write_class(&unit(t_grant())), Some(WriteClass::Grant));
+        assert_eq!(types.target_class(&unit(t_grant())), Some(TargetClass::Grant));
         for (class, addr) in [
             (AuditClass::SuccessorOf, t_successor_of()),
             (AuditClass::DelegatorEndorsement, t_endorse()),
@@ -1201,22 +1201,22 @@ mod tests {
             (AuditClass::StewardClassification, t_steward_classification()),
         ] {
             assert_eq!(
-                types.write_class(&unit(addr)),
-                Some(WriteClass::AuditView(class)),
+                types.target_class(&unit(addr)),
+                Some(TargetClass::AuditView(class)),
                 "{} is {class:?}",
                 addr.tumbler()
             );
         }
         // The edition class (3.14) is read under the ACTIVE view: no class.
-        assert_eq!(types.write_class(&unit(skep_engine::types::t_edition())), None);
+        assert_eq!(types.target_class(&unit(skep_engine::types::t_edition())), None);
         // A content I-span names nothing here either.
         let content = subtree_of(addr_of(&[1, 0, 1, 0, 1, 0, 1, 1]).tumbler());
-        assert_eq!(types.write_class(&[content]), None);
+        assert_eq!(types.target_class(&[content]), None);
         // A subtype by prefix is its class's member (L10): `endorse.trust`.
         let trust = addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 42, 2]);
         assert_eq!(
-            types.write_class(&unit(&trust)),
-            Some(WriteClass::AuditView(AuditClass::DelegatorEndorsement))
+            types.target_class(&unit(&trust)),
+            Some(TargetClass::AuditView(AuditClass::DelegatorEndorsement))
         );
     }
 }

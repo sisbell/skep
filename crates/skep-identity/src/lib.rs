@@ -45,7 +45,7 @@
 //! * the key set — [`Enrolled`], [`KeySet`] (AUTH-1.29–1.37);
 //! * shape recognition — [`CredentialKind`], [`TypeAddrs`], [`LinkDeposit`],
 //!   [`single_address`] (AUTH-2.20–2.28);
-//! * the write path's type-recognition input — [`WriteTypes`]/[`WriteClass`]
+//! * the write path's type-recognition input — [`WriteTypes`]/[`TargetClass`]
 //!   /[`AuditClass`] (PUB-6.30, PUB-6.64; owner ruling D3): the grant and
 //!   audit-view classes a `nullify` is refused at, read off the fold's
 //!   recognition with `kind_of` untouched;
@@ -95,7 +95,7 @@ mod seam;
 mod shape;
 mod state;
 mod verdict;
-mod write_class;
+mod write_types;
 
 pub use framing::{framed, Tag, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, TAGS};
 pub use key::{AlgRow, Fingerprint, KeyParseError, PublicKey, ALGS, ALG_ED25519};
@@ -109,7 +109,7 @@ pub use seam::{FoldCtx, Owner, Values};
 pub use shape::{single_address, CredentialKind, LinkDeposit, TypeAddrs};
 pub use state::{HasIdentity, IdentityState};
 pub use verdict::{Effect, Inert, Verdict};
-pub use write_class::{AuditClass, WriteClass, WriteTypes};
+pub use write_types::{AuditClass, TargetClass, WriteTypes};
 
 /// What this crate's hosts demand of the values they keep across threads:
 /// skepd holds the live [`IdentityState`] behind a lock inside its

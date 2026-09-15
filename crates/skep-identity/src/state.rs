@@ -122,7 +122,8 @@ impl IdentityState {
     /// AUTH-2.58 — the account's set; the EMPTY set for an unkeyed or
     /// unknown account. Account-hood is NOT a fact of this slice: a reader
     /// that needs it (the wire row's `not_an_account`) reads M3's
-    /// `is_account` BESIDE this call.
+    /// `is_registered_account` — the seam's [`FoldCtx::is_account`]
+    /// (AUTH-2.33) — BESIDE this call.
     pub fn key_set(&self, account: &Address) -> &KeySet {
         self.sets.get(account).unwrap_or(&*EMPTY_KEY_SET)
     }

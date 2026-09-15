@@ -66,7 +66,7 @@ fn board(engine: &Engine) -> Board {
     let (version_member, _) = engine
         .vstream()
         .version(A, &target, None)
-        .unwrap_or_else(|_| panic!("a version of the published target mints"));
+        .expect("a version of the published target mints");
     Board { target, version_member, e1, e2, draft_edition, other_target }
 }
 
@@ -85,7 +85,7 @@ fn claim(engine: &Engine, home: &Address, to: &Address, ty: &Address) -> Address
             SlotArg::Addrs(vec![ty.clone()]),
         )
         .map(|(addr, _)| addr)
-        .unwrap_or_else(|_| panic!("the claim deposits into A's own edition"))
+        .expect("the claim deposits into A's own edition")
 }
 
 fn nullify(engine: &Engine, home: &Address, target: &Address) {
@@ -93,7 +93,7 @@ fn nullify(engine: &Engine, home: &Address, target: &Address) {
     engine
         .linkstore(&World::visible_to(caller))
         .nullify(caller, home, target)
-        .unwrap_or_else(|_| panic!("the owner retracts its own claim"));
+        .expect("the owner retracts its own claim");
 }
 
 fn supersede(engine: &Engine, home: &Address, old: &Address, new: &Address) {
@@ -101,7 +101,7 @@ fn supersede(engine: &Engine, home: &Address, old: &Address, new: &Address) {
     engine
         .linkstore(&World::visible_to(caller))
         .assert_sup(caller, home, old, new)
-        .unwrap_or_else(|_| panic!("the owner supersedes its own claim"));
+        .expect("the owner supersedes its own claim");
 }
 
 fn world(engine: &Engine) -> World {
@@ -183,7 +183,7 @@ fn a_type_slot_denoting_the_class_and_a_foreign_class_is_no_member() {
             SlotArg::Addrs(vec![b.target.clone()]),
             SlotArg::Addrs(vec![t_edition(), t_grant()]),
         )
-        .unwrap_or_else(|_| panic!("a dual-typed link deposits through the open surface"));
+        .expect("a dual-typed link deposits through the open surface");
 
     let w = world(&engine);
     assert_eq!(
@@ -273,7 +273,7 @@ fn a_to_slot_that_denotes_nothing_under_the_target_is_still_a_row() {
             vec![Val::new(vec![b'a']), Val::new(vec![b'b'])],
             Deposit::Declared,
         )
-        .unwrap_or_else(|_| panic!("a declared deposit at fresh positions (PUB-2.59)"));
+        .expect("a declared deposit at fresh positions (PUB-2.59)");
     let (ranged, _) = engine
         .linkstore(&World::visible_to(caller))
         .makelink(
@@ -284,7 +284,7 @@ fn a_to_slot_that_denotes_nothing_under_the_target_is_still_a_row() {
             SlotArg::Resolve(vec![vspec(&b.other_target, 1, 2)]),
             SlotArg::Addrs(vec![t_edition()]),
         )
-        .unwrap_or_else(|_| panic!("a claim over a RANGE of the target's content deposits"));
+        .expect("a claim over a RANGE of the target's content deposits");
 
     let w = world(&engine);
     let rows = w.edition_claims(&b.other_target);
@@ -361,7 +361,7 @@ fn a_row_carries_the_to_slot_as_deposited_however_wide() {
             SlotArg::Addrs(to.clone()),
             SlotArg::Addrs(vec![t_edition()]),
         )
-        .unwrap_or_else(|_| panic!("a wide-slotted claim deposits through the open surface"));
+        .expect("a wide-slotted claim deposits through the open surface");
 
     let w = world(&engine);
     let rows = w.edition_claims(&b.target);

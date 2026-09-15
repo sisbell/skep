@@ -54,6 +54,8 @@
 //! CONTAINMENT (a granted prefix that is an ancestor of doc) ∩ the grant's
 //! issuer being doc's ω owner. The grantee side is PRINCIPAL-EXACT.
 
+use std::collections::BTreeMap;
+
 use im::{HashMap, OrdMap, OrdSet};
 use skep_address::{document_of, parent, validate, Address};
 use skep_links::{Link, LinkRec, LinkState, View};
@@ -73,23 +75,30 @@ use crate::world::World;
 /// still agree, so nothing refuses — a lookup keyed by the wrong half finds
 /// nothing, and the term it was for goes unserved with no sign of it. The
 /// field names are what make that mistake fail to compile instead.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct UniversalGrant {
+///
+/// A row BORROWS the world it was read from, as a map's own views do: the
+/// read copies no address, and a caller that keeps a row past that world
+/// clones what it keeps. Rows order by content-prefix, which no two rows of
+/// one read share, so that order is the one the read hands them back in.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct UniversalGrant<'a> {
     /// The content-prefix granted (a document or an account address).
-    pub content_prefix: Address,
+    pub content_prefix: &'a Address,
     /// The issuers who granted it, in address order.
-    pub issuers: Vec<Address>,
+    pub issuers: Vec<&'a Address>,
 }
 
 /// One row of the GRANTEE-INDEXED read ([`World::issuers_for`]): an issuer,
 /// and the union of the content-prefixes that issuer has granted the queried
-/// grantee. [`UniversalGrant`] is the transpose, and says why both are named.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IssuerGrant {
+/// grantee. [`UniversalGrant`] is the transpose, and says why both are named
+/// and what a row borrows. Rows order by issuer, which no two rows of one read
+/// share, so that order is the one the read hands them back in.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct IssuerGrant<'a> {
     /// The issuing account — a draft-stream key for the grantee.
-    pub issuer: Address,
+    pub issuer: &'a Address,
     /// The prefixes that issuer has granted the grantee, in address order.
-    pub content_prefixes: Vec<Address>,
+    pub content_prefixes: Vec<&'a Address>,
 }
 
 impl World {
@@ -97,12 +106,12 @@ impl World {
     /// content-prefix currently covered by an admitted, unrevoked
     /// ANY-PRINCIPAL grant, with the issuers that granted it — in prefix
     /// (tumbler) order, each issuer list in address order. An INDEX SHAPE,
-    /// never per-session state: the fold's universal index rendered as owned
-    /// values, enumerated once per request off one head snapshot by the feed's
-    /// universal term (a K-way merge of these prefixes' own position-index
-    /// lists, K = this list's length). Revocation is immediate here — a
-    /// revoking record withdraws its grant's entry from the index at the
-    /// commit that carries it — so a derivation off this read never serves
+    /// never per-session state: the fold's universal index as rows borrowed
+    /// from this world, enumerated once per request off one head snapshot by
+    /// the feed's universal term (a K-way merge of these prefixes' own
+    /// position-index lists, K = this list's length). Revocation is immediate
+    /// here — a revoking record withdraws its grant's entry from the index at
+    /// the commit that carries it — so a derivation off this read never serves
     /// withdrawn material (PUB-7.23). Reads the fold's query index, adds no
     /// fold state, and is `readable`'s own universal probe turned inside out:
     /// a document is universally granted iff one of its ancestor prefixes is
@@ -110,13 +119,12 @@ impl World {
     ///
     /// COST, per call, uncached, and linear in the WHOLE universal index —
     /// this read takes no argument, so there is nothing in the request to
-    /// read the figure off. One address clone per (prefix, issuer) pair, and
-    /// an address clone is a vector plus an allocation per component. The
-    /// index's size is the DEPOSITORS' choice: every admitted ANY-PRINCIPAL
-    /// grant any account issues adds an entry, so this grows with the store.
-    /// Nothing is memoized, so a caller polling per request re-pays per
-    /// request, and it gates neither admission nor concurrency.
-    pub fn universal_grants(&self) -> Vec<UniversalGrant> {
+    /// read the figure off. One vector of borrows per prefix, and no address
+    /// cloned. The index's size is the DEPOSITORS' choice: every admitted
+    /// ANY-PRINCIPAL grant any account issues adds an entry, so this grows
+    /// with the store. Nothing is memoized, so a caller polling per request
+    /// re-pays per request, and it gates neither admission nor concurrency.
+    pub fn universal_grants(&self) -> Vec<UniversalGrant<'_>> {
         self.grants.universal()
     }
 
@@ -132,14 +140,13 @@ impl World {
     /// [`World::universal_grants`], the tier's own read.
     ///
     /// COST, per call, uncached: one hash probe of the principal-exact index,
-    /// then a walk of THAT grantee's whole row to invert it — one address
-    /// clone per (prefix, issuer) pair on the way in and one on the way out,
-    /// through an ordered map, so a logarithmic factor with them. The row's
-    /// size is neither the caller's choice nor the grantee's: any account may
-    /// grant to any other, so the ISSUERS decide how much work a poll on this
-    /// grantee's behalf does. Nothing is memoized, and it gates neither
-    /// admission nor concurrency.
-    pub fn issuers_for(&self, grantee: &Address) -> Vec<IssuerGrant> {
+    /// then a walk of THAT grantee's whole row to invert it — one insert per
+    /// (prefix, issuer) pair into an ordered map of borrows, so a logarithmic
+    /// factor, and no address cloned. The row's size is neither the caller's
+    /// choice nor the grantee's: any account may grant to any other, so the
+    /// ISSUERS decide how much work a poll on this grantee's behalf does.
+    /// Nothing is memoized, and it gates neither admission nor concurrency.
+    pub fn issuers_for(&self, grantee: &Address) -> Vec<IssuerGrant<'_>> {
         self.grants.issuers_for(grantee)
     }
 }
@@ -226,17 +233,13 @@ pub(crate) struct Grants {
 // `universal` is an `OrdMap<Address, OrdSet<Address>>` and every value of
 // `by_grantee` is another one, so the fold's index maintenance is ONE shape
 // throughout: [`Grants::index_add`] and [`Grants::index_remove`] each SELECT
-// the index a [`GrantIndexEntry`] belongs in and hand it here, and
-// [`Grants::issuers_for`]'s inversion builds a third map of that same shape.
-// The decision at those sites is which index; the bookkeeping is here.
+// the index a [`GrantIndexEntry`] belongs in and hand it here. The decision
+// at those sites is which index; the bookkeeping is here.
 //
 // That ONE shape is why the two below are spelled concretely rather than over
-// a key and a member type: every map they edit is a map of addresses to sets
-// of addresses, and a signature that admitted a second pairing would be
-// claiming a generality the fold has no use for. What the two sides MEAN
-// differs by index — prefix to issuers one way, issuer to prefixes the other
-// — and no type could carry that, which is what the named [`UniversalGrant`]
-// and [`IssuerGrant`] rows exist to say at the surface.
+// a key and a member type: every map they edit keys a content-prefix to the
+// issuers who granted it, and a signature that admitted a second pairing
+// would be claiming a generality the fold has no use for.
 
 /// `map[key] ∪= {member}`, adding the key where it is absent.
 fn set_insert(map: &mut OrdMap<Address, OrdSet<Address>>, key: &Address, member: Address) {
@@ -296,59 +299,51 @@ impl Grants {
         grantee: Option<&Address>,
         doc: &Address,
     ) -> bool {
-        let mut next: Option<Address> = Some(doc.clone());
-        while let Some(ancestor) = next {
-            if let Some(grantee) = grantee {
-                if self
-                    .by_grantee
-                    .get(grantee)
-                    .and_then(|prefixes| prefixes.get(&ancestor))
-                    .is_some_and(|issuers| issuers.contains(owner))
-                {
-                    return true;
-                }
-            }
-            if self.universal.get(&ancestor).is_some_and(|issuers| issuers.contains(owner)) {
-                return true;
-            }
-            next = parent(&ancestor);
-        }
-        false
+        // A grant of `prefix` that `owner` issued, in either index — the
+        // principal-exact one first.
+        let covers = |prefix: &Address| {
+            grantee
+                .and_then(|grantee| self.by_grantee.get(grantee))
+                .and_then(|prefixes| prefixes.get(prefix))
+                .is_some_and(|issuers| issuers.contains(owner))
+                || self.universal.get(prefix).is_some_and(|issuers| issuers.contains(owner))
+        };
+        covers(doc) || std::iter::successors(parent(doc), parent).any(|ancestor| covers(&ancestor))
     }
 
-    /// The ANY-PRINCIPAL index as owned rows, in the `OrdMap`'s key order —
-    /// tumbler order — each issuer list in address order.
-    /// [`World::universal_grants`] is the public face.
-    pub(crate) fn universal(&self) -> Vec<UniversalGrant> {
+    /// The ANY-PRINCIPAL index as rows borrowed from it, in the `OrdMap`'s key
+    /// order — tumbler order — each issuer list in the `OrdSet`'s address
+    /// order. [`World::universal_grants`] is the public face.
+    pub(crate) fn universal(&self) -> Vec<UniversalGrant<'_>> {
         self.universal
             .iter()
-            .map(|(prefix, issuers)| UniversalGrant {
-                content_prefix: prefix.clone(),
-                issuers: issuers.iter().cloned().collect(),
+            .map(|(content_prefix, issuers)| UniversalGrant {
+                content_prefix,
+                issuers: issuers.iter().collect(),
             })
             .collect()
     }
 
-    /// The principal-exact index for one grantee, INVERTED: `by_grantee` keys
-    /// prefix → issuers (the shape `grant_exists`'s O(depth) probe wants);
-    /// the feed wants issuer → the union of that issuer's prefixes (the shape
-    /// its per-issuer stream test wants). Both orders are the `OrdMap`s' —
-    /// deterministic. [`World::issuers_for`] is the public face.
-    pub(crate) fn issuers_for(&self, grantee: &Address) -> Vec<IssuerGrant> {
-        let mut by_issuer: OrdMap<Address, OrdSet<Address>> = OrdMap::new();
+    /// The principal-exact index for one grantee, INVERTED over borrows:
+    /// `by_grantee` keys prefix → issuers (the shape `grant_exists`'s O(depth)
+    /// probe wants); the feed wants issuer → the union of that issuer's
+    /// prefixes (the shape its per-issuer stream test wants). The issuers come
+    /// out in the ordered map's key order, and each issuer's prefixes in
+    /// address order and without a repeat: the walk visits the prefixes in
+    /// key order, and an issuer sits at most once in any prefix's set.
+    /// [`World::issuers_for`] is the public face.
+    pub(crate) fn issuers_for(&self, grantee: &Address) -> Vec<IssuerGrant<'_>> {
+        let mut by_issuer: BTreeMap<&Address, Vec<&Address>> = BTreeMap::new();
         if let Some(prefixes) = self.by_grantee.get(grantee) {
             for (prefix, issuers) in prefixes.iter() {
                 for issuer in issuers.iter() {
-                    set_insert(&mut by_issuer, issuer, prefix.clone());
+                    by_issuer.entry(issuer).or_default().push(prefix);
                 }
             }
         }
         by_issuer
-            .iter()
-            .map(|(issuer, covered)| IssuerGrant {
-                issuer: issuer.clone(),
-                content_prefixes: covered.iter().cloned().collect(),
-            })
+            .into_iter()
+            .map(|(issuer, content_prefixes)| IssuerGrant { issuer, content_prefixes })
             .collect()
     }
 
@@ -496,13 +491,13 @@ fn classify(prev: &Grants, home: &Address, value: &Link) -> Kind {
     let grantee = if value.to_slot().is_empty() {
         None
     } else {
-        match value.to_slot().single_denoted() {
-            Some(g) => match validate(g.clone()) {
-                Ok(g) => Some(g),
-                Err(_) => return Kind::Malformed,
-            },
-            None => return Kind::Malformed, // a multi-address `to` is malformed
-        }
+        let Some(g) = value.to_slot().single_denoted() else {
+            return Kind::Malformed; // a multi-address `to` is malformed
+        };
+        let Ok(g) = validate(g.clone()) else {
+            return Kind::Malformed;
+        };
+        Some(g)
     };
     Kind::Grant { content_prefix: from, grantee }
 }

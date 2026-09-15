@@ -15,8 +15,7 @@ use common::*;
 use skep_address::{validate, Address, Nat, Tumbler};
 use skep_arrangement::{Caller, Deposit};
 use skep_content::Val;
-use skep_engine::{Engine, World};
-use skep_kernel::Seq;
+use skep_engine::{Engine, Seq, World};
 use skep_links::SlotArg;
 use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 use tempfile::tempdir;
@@ -76,7 +75,7 @@ fn board(engine: &Engine) -> Board {
             SlotArg::Resolve(vec![vspec(&draft_a, 2, 1)]),
             SlotArg::Resolve(vec![vspec(&draft_a, 1, 2)]),
         )
-        .unwrap_or_else(|_| panic!("the owner links within its draft"));
+        .expect("the owner links within its draft");
     Board { acct_a, home_a, draft_a, link_a, acct_b }
 }
 
@@ -99,7 +98,7 @@ fn grant_to(engine: &Engine, b: &Board, content_prefix: &Address, to: Vec<Addres
             SlotArg::Addrs(vec![t_grant()]),
         )
         .map(|(addr, _)| addr)
-        .unwrap_or_else(|_| panic!("the grant deposits into A's doc 1"))
+        .expect("the grant deposits into A's doc 1")
 }
 
 fn quoted(a: &Address) -> String {

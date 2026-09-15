@@ -67,7 +67,9 @@ pub(crate) type Drafts = im::HashMap<Address, Address>;
 /// is a draft. That is always no, so every entry would read as one the commit
 /// just minted, and nothing about the answer would look wrong. The field
 /// names are what make the swap fail to compile instead.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Rows order by document, so sorting them gives the set in address order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Draft<'a> {
     /// The draft document — a member of the set, so `published` is false for
     /// it (PUB-7.5).
@@ -114,12 +116,12 @@ impl World {
     }
 
     /// Every draft in the set with its owner account, as [`Draft`] rows, in NO
-    /// particular order (the map is hash-keyed; sort before comparing or
-    /// rendering). The enumeration is for readers that need the whole set —
-    /// the world dump's `publication.drafts` hint, and the daemon's change
-    /// feed, which walks it for the drafts a commit minted or rearranged —
-    /// where the read predicate's own consumers are point reads
-    /// ([`World::published`], [`World::owner_account`]).
+    /// particular order (the map is hash-keyed; sort the rows, which order by
+    /// document, before comparing or rendering them). The enumeration is for
+    /// readers that need the whole set — the world dump's `publication.drafts`
+    /// hint, and the daemon's change feed, which walks it for the drafts a
+    /// commit minted or rearranged — where the read predicate's own consumers
+    /// are point reads ([`World::published`], [`World::owner_account`]).
     pub fn drafts(&self) -> impl Iterator<Item = Draft<'_>> + '_ {
         self.drafts.iter().map(|(document, owner_account)| Draft { document, owner_account })
     }

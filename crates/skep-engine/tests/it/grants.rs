@@ -174,16 +174,11 @@ fn grant_typed(
     ty: Vec<skep_address::Address>,
 ) -> skep_address::Address {
     let caller = Caller::Principal(issuer);
-    match engine.linkstore(&World::visible_to(caller)).makelink(
-        caller,
-        home,
-        SlotArg::Addrs(from),
-        SlotArg::Addrs(to),
-        SlotArg::Addrs(ty),
-    ) {
-        Ok((addr, _)) => addr,
-        Err(_) => panic!("the link deposits into the issuer's own document"),
-    }
+    engine
+        .linkstore(&World::visible_to(caller))
+        .makelink(caller, home, SlotArg::Addrs(from), SlotArg::Addrs(to), SlotArg::Addrs(ty))
+        .expect("the link deposits into the issuer's own document")
+        .0
 }
 
 fn world(engine: &Engine) -> World {
@@ -451,16 +446,16 @@ fn a_grant_from_a_non_owner_opens_nothing() {
         .create_new_document(B, &b.acct_b, None)
         .expect("B's published home");
     // B tries to grant A's draft to itself, from B's home.
-    match engine.linkstore(&World::visible_to(Caller::Principal(B))).makelink(
-        Caller::Principal(B),
-        &home_b,
-        SlotArg::Addrs(vec![b.draft_a.clone()]),
-        SlotArg::Addrs(vec![b.acct_b.clone()]),
-        SlotArg::Addrs(vec![t_grant()]),
-    ) {
-        Ok(_) => {}
-        Err(_) => panic!("the deposit itself succeeds — coverage is a READ-time verdict"),
-    }
+    engine
+        .linkstore(&World::visible_to(Caller::Principal(B)))
+        .makelink(
+            Caller::Principal(B),
+            &home_b,
+            SlotArg::Addrs(vec![b.draft_a.clone()]),
+            SlotArg::Addrs(vec![b.acct_b.clone()]),
+            SlotArg::Addrs(vec![t_grant()]),
+        )
+        .expect("the deposit itself succeeds — coverage is a READ-time verdict");
     let w = world(&engine);
     assert!(
         !w.readable(Some(B), &b.draft_a),
@@ -489,10 +484,7 @@ fn an_any_principal_grant_from_a_non_owner_opens_nothing() {
     let w = world(&engine);
     assert_eq!(
         w.universal_grants(),
-        vec![UniversalGrant {
-            content_prefix: b.draft_a.clone(),
-            issuers: vec![b.acct_b.clone()],
-        }],
+        vec![UniversalGrant { content_prefix: &b.draft_a, issuers: vec![&b.acct_b] }],
         "the deposit must enter the universal index, or this test proves nothing"
     );
     assert!(
@@ -725,7 +717,7 @@ fn a_nullified_grant_still_opens_its_draft_and_the_audit_view_seed_agrees() {
     engine
         .linkstore(&World::visible_to(issuer))
         .nullify(issuer, &b.home_a, &g)
-        .unwrap_or_else(|_| panic!("the issuer retracts its own grant link"));
+        .expect("the issuer retracts its own grant link");
 
     let w = world(&engine);
     assert!(w.links().is_nullified(&g), "the fixture must retract the grant link");
@@ -755,7 +747,7 @@ fn a_supersession_claim_over_a_grant_revokes_nothing_and_the_seed_agrees() {
     engine
         .linkstore(&World::visible_to(issuer))
         .assert_sup(issuer, &b.home_a, &old, &new)
-        .unwrap_or_else(|_| panic!("the issuer claims its second grant supersedes its first"));
+        .expect("the issuer claims its second grant supersedes its first");
 
     let w = world(&engine);
     let sup = w.links().reserved_type(ShippedType::Supersedes);
@@ -766,10 +758,7 @@ fn a_supersession_claim_over_a_grant_revokes_nothing_and_the_seed_agrees() {
     );
     assert_eq!(
         w.issuers_for(&b.acct_b),
-        vec![IssuerGrant {
-            issuer: b.acct_a.clone(),
-            content_prefixes: vec![b.acct_a.clone(), b.draft_a.clone()],
-        }],
+        vec![IssuerGrant { issuer: &b.acct_a, content_prefixes: vec![&b.acct_a, &b.draft_a] }],
         "both grants stand: a [K_sup] claim is not the fold's revocation"
     );
     engine.check_hints().expect("the seed, which never sees the claim, reproduces the fold");
@@ -869,14 +858,8 @@ fn the_two_feed_enumerations_read_the_fold_s_live_state() {
     assert_eq!(
         w.issuers_for(&b.acct_b),
         vec![
-            IssuerGrant {
-                issuer: b.acct_a.clone(),
-                content_prefixes: vec![b.acct_a.clone(), b.draft_a.clone()],
-            },
-            IssuerGrant {
-                issuer: acct_c.clone(),
-                content_prefixes: vec![b.draft_a.clone(), draft_two.clone()],
-            },
+            IssuerGrant { issuer: &b.acct_a, content_prefixes: vec![&b.acct_a, &b.draft_a] },
+            IssuerGrant { issuer: &acct_c, content_prefixes: vec![&b.draft_a, &draft_two] },
         ],
         "B's issuers in address order, each with the UNION of its prefixes in address order"
     );
@@ -887,17 +870,16 @@ fn the_two_feed_enumerations_read_the_fold_s_live_state() {
     assert_eq!(
         w.universal_grants(),
         vec![
-            UniversalGrant {
-                content_prefix: b.draft_a.clone(),
-                issuers: vec![b.acct_a.clone()],
-            },
-            UniversalGrant {
-                content_prefix: draft_two.clone(),
-                issuers: vec![b.acct_a.clone(), acct_c.clone()],
-            },
+            UniversalGrant { content_prefix: &b.draft_a, issuers: vec![&b.acct_a] },
+            UniversalGrant { content_prefix: &draft_two, issuers: vec![&b.acct_a, &acct_c] },
         ],
         "the live any-principal set in prefix order, each issuer list in address order"
     );
+    // …and each read's order IS its rows' own `Ord`: a row orders by the key
+    // it is the one row for, so a caller that merges or re-sorts rows keeps
+    // the order the read handed them back in.
+    assert!(w.issuers_for(&b.acct_b).is_sorted(), "issuer rows order by issuer");
+    assert!(w.universal_grants().is_sorted(), "any-principal rows order by prefix");
     // The enumerations are the predicate turned inside out — and an entry
     // whose issuer is not the document's owner is listed and opens nothing.
     assert!(w.readable(Some(B), &b.draft_a));
@@ -912,11 +894,8 @@ fn the_two_feed_enumerations_read_the_fold_s_live_state() {
     assert_eq!(
         w.universal_grants(),
         vec![
-            UniversalGrant {
-                content_prefix: b.draft_a.clone(),
-                issuers: vec![b.acct_a.clone()],
-            },
-            UniversalGrant { content_prefix: draft_two.clone(), issuers: vec![acct_c.clone()] },
+            UniversalGrant { content_prefix: &b.draft_a, issuers: vec![&b.acct_a] },
+            UniversalGrant { content_prefix: &draft_two, issuers: vec![&acct_c] },
         ],
         "the revoked entry is gone at once, and only that entry"
     );

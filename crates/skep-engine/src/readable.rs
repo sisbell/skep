@@ -121,10 +121,8 @@ impl World {
         // the owner's, and as the grantee to probe the fold with.
         let account = self.namespace.principal_prefix(id);
         // Subtree clause — downward only.
-        if let Some(account) = account {
-            if prefix_contains(owner, account) {
-                return true;
-            }
+        if account.is_some_and(|account| prefix_contains(owner, account)) {
+            return true;
         }
         // Grant clause — the fold, grantee exact (`None` account ⟹ only the
         // ANY-PRINCIPAL grants can match, which the fold probes regardless).

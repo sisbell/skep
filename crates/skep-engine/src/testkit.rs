@@ -37,9 +37,8 @@ pub(crate) fn mem_engine() -> Engine {
 
 /// A T4-valid address from its components.
 pub(crate) fn addr(comps: &[u32]) -> Address {
-    let t = Tumbler::new(comps.iter().map(|&c| Nat::from(c)))
-        .unwrap_or_else(|_| panic!("test tumblers are nonempty"));
-    validate(t).unwrap_or_else(|_| panic!("test addresses are T4-valid"))
+    let t = Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("test tumblers are nonempty");
+    validate(t).expect("test addresses are T4-valid")
 }
 
 /// An element of `doc`'s subspace `s` at ordinal `n` — NEVER MINTED, which

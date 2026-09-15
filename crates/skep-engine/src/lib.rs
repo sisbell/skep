@@ -101,11 +101,21 @@ pub use grants::{IssuerGrant, UniversalGrant};
 pub use publication::Draft;
 pub use world::{Record, World};
 
-// The KERNEL types the engine's own signatures name, re-exported so a binary
-// can drive `Engine::open`, `coordinator()` and `world_at` — the whole
-// assembly surface — without naming M2 itself. The address and principal
-// vocabulary the read surfaces speak (`Address`, `PrincipalId`, `Caller`)
-// stays the stores' to export: a caller holding an argument for
-// `World::readable` or `Engine::world_dump_visible_to` already built it out
-// of the crate that owns it.
-pub use skep_kernel::{HistoryError, KernelConfig, OpenError, Seq};
+// The KERNEL types this crate's own public signatures name — `Kernel`,
+// `KernelConfig`, `OpenError`, `HistoryError` and `Seq` — and the three a
+// `KernelConfig` is built from, re-exported so a binary can open an engine,
+// pair a reconstructed world with a kernel at `EngineStores::new`, and call
+// `world_at` without naming M2 itself. The integration suite is a separate
+// crate and builds its kernel configurations and its historical kernel
+// through these names, so narrowing the set fails that build. What those
+// types' own methods hand back (`Snapshot`, `CheckpointError`, the drivers'
+// `TxnError`), and the `WorldState` trait `World` implements, are M2's
+// surface and stay M2's to export. The address and principal vocabulary the
+// read surfaces speak (`Address`, `PrincipalId`, `Caller`) stays the stores'
+// to export: a caller holding an argument for `World::readable` or
+// `Engine::world_dump_visible_to` already built it out of the crate that
+// owns it.
+pub use skep_kernel::{
+    BurnedSeqPolicy, CheckpointPolicy, Durability, HistoryError, Kernel, KernelConfig, OpenError,
+    Seq,
+};

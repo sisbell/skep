@@ -153,7 +153,7 @@ pub(crate) struct FeedClass<'a> {
     /// The grant-selected issuers (`World::issuers_for`, PUB-7.25) — each an
     /// issuing account with the union of the content prefixes it granted this
     /// principal, the issuer being the draft-stream key this clause opens.
-    issuers: Vec<IssuerGrant>,
+    issuers: Vec<IssuerGrant<'a>>,
     /// The live ANY-PRINCIPAL prefixes (`World::universal_grants`, PUB-7.22)
     /// — a key range over the position index, never a stream key. Empty for
     /// the guest (grants reach principals alone, PUB-5.109).
@@ -163,7 +163,7 @@ pub(crate) struct FeedClass<'a> {
     /// clause admits exactly the entries the issuing owner covers, so
     /// [`Inner::visible`] decides every candidate the prefix's index lists
     /// put forward.
-    universal_prefixes: Vec<Address>,
+    universal_prefixes: Vec<&'a Address>,
 }
 
 impl<'a> FeedClass<'a> {
@@ -779,7 +779,7 @@ impl Inner {
             }
         }
         for IssuerGrant { issuer, content_prefixes: prefixes } in &class.issuers {
-            let Some(stream) = self.streams.get(issuer) else { continue };
+            let Some(stream) = self.streams.get(*issuer) else { continue };
             // A grant at the issuer's account depth or wider IS the stream
             // (PUB-7.25); narrower prefixes take the per-entry containment
             // test against their union — while that union is small enough
@@ -821,7 +821,7 @@ impl Inner {
     /// the sources, and [`Inner::visible`] is the authority on every
     /// candidate that survives — so standing it aside can only widen a
     /// candidate set the mask then decides, and no page moves.
-    fn names_under(&self, at: u64, issuer: &Address, prefixes: &[Address]) -> bool {
+    fn names_under(&self, at: u64, issuer: &Address, prefixes: &[&Address]) -> bool {
         self.docs.get(&at).is_some_and(|ds| {
             ds.iter().any(|d| {
                 d.draft_owner.as_ref() == Some(issuer)

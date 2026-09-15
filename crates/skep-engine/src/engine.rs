@@ -312,7 +312,7 @@ mod tests {
     use std::error::Error;
 
     use crate::testkit::mem_engine;
-    use crate::Record;
+    use crate::{Draft, IssuerGrant, Record, UniversalGrant};
 
     use super::*;
 
@@ -372,6 +372,19 @@ mod tests {
             !rendered.contains("namespace"),
             "a world's slices are not a debug form: {rendered}"
         );
+    }
+
+    /// The enumeration ROWS are values a caller keys collections by, so each
+    /// carries every standard trait its fields support: a row sorts, and goes
+    /// into a `BTreeSet` or a `HashSet`, with nothing wrapped around it. A
+    /// derive dropped from one of them is a wall and not an omission, since a
+    /// caller cannot implement a standard trait for a type it does not own.
+    #[test]
+    fn the_enumeration_rows_are_ordered_hashable_values() {
+        fn assert_value<T: Clone + fmt::Debug + Eq + std::hash::Hash + Ord>() {}
+        assert_value::<Draft<'static>>();
+        assert_value::<UniversalGrant<'static>>();
+        assert_value::<IssuerGrant<'static>>();
     }
 
     /// The chain does not stop at the assembler: what an operator reads is

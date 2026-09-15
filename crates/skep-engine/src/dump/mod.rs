@@ -763,7 +763,7 @@ mod tests {
             Tumbler::new([Nat::from(1u32), Nat::from(ordinal)]).expect("nonempty"),
             Tumbler::new([Nat::from(0u32), Nat::from(width)]).expect("nonempty"),
         )
-        .unwrap_or_else(|_| panic!("well-formed test span"));
+        .expect("well-formed test span");
         VSpec { source: doc.clone(), span }
     }
 

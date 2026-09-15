@@ -8,8 +8,10 @@ use std::path::Path;
 
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{Caller, VPos, VSpec};
-use skep_engine::Engine;
-use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig};
+// The kernel configuration types come through the engine's own re-exports,
+// which is what holds that set to covering `Engine::open`: a narrowed set
+// fails to build here.
+use skep_engine::{BurnedSeqPolicy, CheckpointPolicy, Durability, Engine, KernelConfig};
 use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 use skep_retrieval::{Delivery, DeliveryItem};
 
@@ -24,7 +26,7 @@ pub fn tum(comps: &[u32]) -> Tumbler {
 }
 
 pub fn addr(comps: &[u32]) -> Address {
-    validate(tum(comps)).unwrap_or_else(|_| panic!("test addresses are T4-valid"))
+    validate(tum(comps)).expect("test addresses are T4-valid")
 }
 
 pub fn nat(x: u32) -> Nat {
@@ -42,8 +44,7 @@ pub fn vp(subspace: u32, ordinal: u32) -> VPos {
 
 /// An ordinal-level depth-2 V-span `[subspace, ordinal] w [0, width]`.
 pub fn vspan(subspace: u32, ordinal: u32, width: u32) -> Span {
-    Span::new(tum(&[subspace, ordinal]), tum(&[0, width]))
-        .unwrap_or_else(|_| panic!("well-formed test span"))
+    Span::new(tum(&[subspace, ordinal]), tum(&[0, width])).expect("well-formed test span")
 }
 
 /// A content V-spec over `doc`'s content subspace.
@@ -59,7 +60,7 @@ pub fn vspec(doc: &Address, ordinal: u32, width: u32) -> VSpec {
 pub fn element(doc: &Address, s: u32, n: u32) -> Address {
     let comps = doc.tumbler().iter().cloned().chain([nat(0), nat(s), nat(n)]);
     validate(Tumbler::new(comps).expect("test element tumblers are nonempty"))
-        .unwrap_or_else(|_| panic!("an element of a document is T4-valid"))
+        .expect("an element of a document is T4-valid")
 }
 
 pub fn mem_cfg() -> KernelConfig {

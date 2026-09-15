@@ -395,8 +395,8 @@ fn member_tuples(links: &LinkState, ty: &Endset, view: View) -> BTreeMap<Tumbler
 }
 
 /// The entry at `path` — a chain of string keys through nested maps — if the
-/// tree holds one there.
-fn at_path<'t>(tree: &'t mut SerdeTree, path: &[&str]) -> Option<&'t mut SerdeTree> {
+/// tree holds one there, borrowed for a reduction to retain in place.
+fn at_path_mut<'t>(tree: &'t mut SerdeTree, path: &[&str]) -> Option<&'t mut SerdeTree> {
     let Some((name, rest)) = path.split_first() else {
         return Some(tree);
     };
@@ -405,7 +405,7 @@ fn at_path<'t>(tree: &'t mut SerdeTree, path: &[&str]) -> Option<&'t mut SerdeTr
     };
     for (k, v) in entries.iter_mut() {
         if matches!(k, SerdeTree::Str(s) if s.as_str() == *name) {
-            return at_path(v, rest);
+            return at_path_mut(v, rest);
         }
     }
     None
@@ -413,14 +413,14 @@ fn at_path<'t>(tree: &'t mut SerdeTree, path: &[&str]) -> Option<&'t mut SerdeTr
 
 /// Keep the entries of the map at `path` whose KEY `keep` admits.
 fn retain_map(tree: &mut SerdeTree, path: &[&str], keep: &dyn Fn(&SerdeTree) -> bool) {
-    if let Some(SerdeTree::Map(entries)) = at_path(tree, path) {
+    if let Some(SerdeTree::Map(entries)) = at_path_mut(tree, path) {
         entries.retain(|(k, _)| keep(k));
     }
 }
 
 /// Keep the items of the sequence at `path` that `keep` admits.
 fn retain_seq(tree: &mut SerdeTree, path: &[&str], keep: &dyn Fn(&SerdeTree) -> bool) {
-    if let Some(SerdeTree::Seq(items)) = at_path(tree, path) {
+    if let Some(SerdeTree::Seq(items)) = at_path_mut(tree, path) {
         items.retain(|item| keep(item));
     }
 }
@@ -442,7 +442,7 @@ fn retain_map_of_seqs(
     keep_key: &dyn Fn(&Address) -> bool,
     keep_pair: &dyn Fn(&Address, &Address) -> bool,
 ) {
-    let Some(SerdeTree::Map(entries)) = at_path(tree, path) else {
+    let Some(SerdeTree::Map(entries)) = at_path_mut(tree, path) else {
         return;
     };
     entries.retain_mut(|(key, items)| {
@@ -463,11 +463,11 @@ fn retain_map_of_seqs(
 
 /// An address in a STORE's own serde form — a bare tumbler, which is how
 /// `Address` serializes and so how the authoritative maps key themselves —
-/// back through the types' own doors (`TreeDe`, then `validate`). Read off a
-/// map key today, and off whatever node the store wrote it to.
+/// back through the type's own door: `Address`'s `Deserialize`, whose
+/// `try_from` shadow is `validate`. Read off a map key today, and off
+/// whatever node the store wrote it to.
 fn serde_form_address(node: &SerdeTree) -> Option<Address> {
-    let tumbler = Tumbler::deserialize(TreeDe(node)).ok()?;
-    validate(tumbler).ok()
+    Address::deserialize(TreeDe(node)).ok()
 }
 
 /// A dotted-address string — the form the dump's OWN builders render an
@@ -579,8 +579,22 @@ mod tests {
         paths
     }
 
+    /// The entry at `path`, SHARED: the tests read the trees the reductions
+    /// write, and [`at_path_mut`] is the reductions' own walk.
+    fn at_path<'t>(tree: &'t SerdeTree, path: &[&str]) -> Option<&'t SerdeTree> {
+        let Some((name, rest)) = path.split_first() else {
+            return Some(tree);
+        };
+        let SerdeTree::Map(entries) = tree else {
+            return None;
+        };
+        let (_, next) =
+            entries.iter().find(|(k, _)| matches!(k, SerdeTree::Str(s) if s.as_str() == *name))?;
+        at_path(next, rest)
+    }
+
     /// The node at `path`, as a shape and a count.
-    fn shape_and_len(tree: &mut SerdeTree, path: &[&str]) -> (Shape, usize) {
+    fn shape_and_len(tree: &SerdeTree, path: &[&str]) -> (Shape, usize) {
         match at_path(tree, path) {
             Some(SerdeTree::Map(entries)) => (Shape::Map, entries.len()),
             Some(SerdeTree::Seq(items)) => (Shape::Seq, items.len()),
@@ -597,15 +611,15 @@ mod tests {
     #[test]
     fn the_v5_root_and_the_filter_s_paths_exist() {
         let (_engine, world) = populated_world();
-        let mut tree = dump_tree(&world);
+        let tree = dump_tree(&world);
         for (path, want) in reduced_paths() {
-            let (found, _) = shape_and_len(&mut tree, &path);
+            let (found, _) = shape_and_len(&tree, &path);
             assert_eq!(found, want, "{path:?}: the reduction's shape is not what the builder wrote");
         }
         // …and the two sections kept WHOLE are places in the tree too, so the
         // statement that names them can be read against something.
         for path in [&["authoritative", "namespace"][..], &["grants"]] {
-            assert!(at_path(&mut tree, path).is_some(), "{path:?} is a place in the v5 tree");
+            assert!(at_path(&tree, path).is_some(), "{path:?} is a place in the v5 tree");
         }
     }
 
@@ -647,8 +661,8 @@ mod tests {
     /// and not over a fixture.
     #[test]
     fn every_hints_family_is_reduced_or_kept_by_name() {
-        let mut tree = dump_tree(&World::genesis());
-        let keys_at = |tree: &mut SerdeTree, path: &[&str]| -> BTreeSet<String> {
+        let tree = dump_tree(&World::genesis());
+        let keys_at = |tree: &SerdeTree, path: &[&str]| -> BTreeSet<String> {
             match at_path(tree, path) {
                 Some(SerdeTree::Map(entries)) => entries
                     .iter()
@@ -671,7 +685,7 @@ mod tests {
             .map(|name| name.to_owned())
             .collect();
         assert_eq!(
-            keys_at(&mut tree, &["hints"]),
+            keys_at(&tree, &["hints"]),
             named,
             "a hints family the filter does not name is rendered whole to every reader class"
         );
@@ -683,7 +697,7 @@ mod tests {
             .map(|name| (*name).to_owned())
             .collect();
         assert_eq!(
-            keys_at(&mut tree, &[]),
+            keys_at(&tree, &[]),
             sections,
             "a root section the filter does not name is rendered whole to every reader class"
         );
@@ -696,7 +710,7 @@ mod tests {
             .map(|name| (*name).to_owned())
             .collect();
         assert_eq!(
-            keys_at(&mut tree, &["authoritative"]),
+            keys_at(&tree, &["authoritative"]),
             slices,
             "an authoritative slice the filter does not name is rendered whole to every \
              reader class"
@@ -716,7 +730,7 @@ mod tests {
         ] {
             let named: BTreeSet<String> = fields.iter().map(|name| (*name).to_owned()).collect();
             assert_eq!(
-                keys_at(&mut tree, &["authoritative", slice]),
+                keys_at(&tree, &["authoritative", slice]),
                 named,
                 "{slice}: a serde field the filter does not name is rendered whole to every \
                  reader class"
@@ -737,7 +751,7 @@ mod tests {
         for ty in ShippedType::ALL {
             let label = shipped_label(ty);
             assert_eq!(
-                keys_at(&mut tree, &["hints", "types", label]),
+                keys_at(&tree, &["hints", "types", label]),
                 class_entries,
                 "{label}: a shipped-class entry the filter does not name is rendered whole to \
                  every reader class"
@@ -766,11 +780,11 @@ mod tests {
     #[test]
     fn the_guest_filter_drops_a_draft_s_sections_and_keeps_the_namespace_section() {
         let (_engine, world) = populated_world();
-        let mut full = dump_tree(&world);
-        let mut guest =
+        let full = dump_tree(&world);
+        let guest =
             filter_tree(dump_tree(&world), &|doc: &Address| world.readable(None, doc), &world.links);
 
-        let len_at = |tree: &mut SerdeTree, path: &[&str]| match at_path(tree, path) {
+        let len_at = |tree: &SerdeTree, path: &[&str]| match at_path(tree, path) {
             Some(SerdeTree::Map(entries)) => entries.len(),
             Some(SerdeTree::Seq(items)) => items.len(),
             other => panic!("{path:?}: expected a map or a sequence, got {other:?}"),
@@ -785,8 +799,8 @@ mod tests {
             &["hints", "links.active"],
             &["hints", "publication.drafts"],
         ] {
-            assert!(len_at(&mut full, path) > 0, "{path:?}: the fixture must populate it");
-            assert_eq!(len_at(&mut guest, path), 0, "{path:?}: a guest reads nothing of a draft");
+            assert!(len_at(&full, path) > 0, "{path:?}: the fixture must populate it");
+            assert_eq!(len_at(&guest, path), 0, "{path:?}: a guest reads nothing of a draft");
         }
         // The namespace section is untouched. The GRANT section is kept whole
         // too, but this fixture deposits no grant, so what the loop below
@@ -794,8 +808,8 @@ mod tests {
         // suite's guest tests are what hold that section's content against a
         // world that has one.
         for path in [&["authoritative", "namespace"][..], &["grants"]] {
-            let a = render_of(at_path(&mut full, path).expect("present"));
-            let b = render_of(at_path(&mut guest, path).expect("present"));
+            let a = render_of(at_path(&full, path).expect("present"));
+            let b = render_of(at_path(&guest, path).expect("present"));
             assert_eq!(a, b, "{path:?} is kept whole");
         }
     }
@@ -841,7 +855,7 @@ mod tests {
             let class = engine.registry().reserved_type(ty).clone();
             writer
                 .emit(caller, &draft, &class, &element(&draft, 1, 9), &[])
-                .unwrap_or_else(|_| panic!("a {ty:?} tuple in the owner's own draft"));
+                .unwrap_or_else(|e| panic!("a {ty:?} tuple in the owner's own draft: {e:?}"));
         }
         engine.kernel().snapshot().world().clone()
     }
@@ -883,15 +897,15 @@ mod tests {
     #[test]
     fn every_reduced_path_actually_reduces() {
         let world = every_reduced_family_in_a_draft();
-        let mut full = dump_tree(&world);
-        let mut guest =
+        let full = dump_tree(&world);
+        let guest =
             filter_tree(dump_tree(&world), &|doc: &Address| world.readable(None, doc), &world.links);
         for (path, want) in reduced_paths() {
-            let (shape, len) = shape_and_len(&mut full, &path);
+            let (shape, len) = shape_and_len(&full, &path);
             assert_eq!(shape, want, "{path:?}: the reduction's shape is not the builder's");
             assert!(len > 0, "{path:?}: the fixture must populate every reduced family");
             assert_eq!(
-                shape_and_len(&mut guest, &path).1,
+                shape_and_len(&guest, &path).1,
                 0,
                 "{path:?}: a guest is owed nothing of a draft, and this path reduces nothing"
             );
@@ -899,7 +913,7 @@ mod tests {
         // The one entry whose reduction has a SECOND shape level: an edge's
         // value must be a sequence, or the pair test — and with it the claim's
         // home — never runs on it.
-        match at_path(&mut full, &["hints", "supersession"]) {
+        match at_path(&full, &["hints", "supersession"]) {
             Some(SerdeTree::Map(entries)) => {
                 assert!(!entries.is_empty(), "the fixture must render an edge");
                 for (old, succs) in entries.iter() {
@@ -948,16 +962,16 @@ mod tests {
             .expect("a predicate-classed link deposits through the open surface");
 
         let world = engine.kernel().snapshot().world().clone();
-        let mut full = dump_tree(&world);
+        let full = dump_tree(&world);
         assert_eq!(
-            projection(&mut full, "predicates.defs.audit").len(),
+            projection(&full, "predicates.defs.audit").len(),
             members.len(),
             "one deposit, one member per denoted address — the walks' real bound"
         );
-        let mut guest =
+        let guest =
             filter_tree(dump_tree(&world), &|doc: &Address| world.readable(None, doc), &world.links);
         assert!(
-            projection(&mut guest, "predicates.defs.audit").is_empty(),
+            projection(&guest, "predicates.defs.audit").is_empty(),
             "one tuple's home governs every member it denotes"
         );
         // …and the identity holds over the wide slot, which is what a
@@ -1110,7 +1124,7 @@ mod tests {
         engine.kernel().snapshot().world().clone()
     }
 
-    fn edge_count(tree: &mut SerdeTree) -> usize {
+    fn edge_count(tree: &SerdeTree) -> usize {
         match at_path(tree, &["hints", "supersession"]) {
             Some(SerdeTree::Map(entries)) => entries.len(),
             other => panic!("hints.supersession is a map, got {other:?}"),
@@ -1152,7 +1166,7 @@ mod tests {
         (world, public_member, private_member)
     }
 
-    fn projection(tree: &mut SerdeTree, family: &str) -> Vec<String> {
+    fn projection(tree: &SerdeTree, family: &str) -> Vec<String> {
         match at_path(tree, &["hints", family]) {
             Some(SerdeTree::Seq(items)) => items
                 .iter()
@@ -1182,9 +1196,9 @@ mod tests {
             predicate_tuples_across_the_draft_boundary();
         let dotted = |a: &Address| a.to_string();
 
-        let mut full = dump_tree(&world);
+        let full = dump_tree(&world);
         for family in ["predicates.stable.audit", "predicates.stable.active"] {
-            let members = projection(&mut full, family);
+            let members = projection(&full, family);
             assert_eq!(
                 members,
                 vec![dotted(&public_member), dotted(&private_member)],
@@ -1192,11 +1206,11 @@ mod tests {
             );
         }
 
-        let mut guest =
+        let guest =
             filter_tree(dump_tree(&world), &|doc: &Address| world.readable(None, doc), &world.links);
         for family in ["predicates.stable.audit", "predicates.stable.active"] {
             assert!(
-                projection(&mut guest, family).is_empty(),
+                projection(&guest, family).is_empty(),
                 "{family}: a guest reads neither the draft's registration nor its member"
             );
         }
@@ -1206,7 +1220,7 @@ mod tests {
         // then names neither member, because the public tuple's member is the
         // draft's. A guest reads that a registration exists in the published
         // home and not what it registers.
-        let slice_count = |tree: &mut SerdeTree, label: &str| {
+        let slice_count = |tree: &SerdeTree, label: &str| {
             match at_path(tree, &["hints", "types", "shipped.pred_stable", label]) {
                 Some(SerdeTree::Seq(items)) => items.len(),
                 other => {
@@ -1215,22 +1229,22 @@ mod tests {
             }
         };
         for (label, _) in SLICE_VIEWS {
-            assert_eq!(slice_count(&mut full, label), 2, "the fixture deposits two registrations");
+            assert_eq!(slice_count(&full, label), 2, "the fixture deposits two registrations");
             assert_eq!(
-                slice_count(&mut guest, label),
+                slice_count(&guest, label),
                 1,
                 "the {label} slice keeps the public registration and drops the draft-homed one"
             );
         }
 
         // The OWNER reads both homes, so both members stay…
-        let mut owner = filter_tree(
+        let owner = filter_tree(
             dump_tree(&world),
             &|doc: &Address| world.readable(Some(USER), doc),
             &world.links,
         );
         assert_eq!(
-            projection(&mut owner, "predicates.stable.audit"),
+            projection(&owner, "predicates.stable.audit"),
             vec![dotted(&public_member), dotted(&private_member)],
             "the owner reads both the tuples' homes and the members' documents"
         );
@@ -1254,24 +1268,24 @@ mod tests {
     #[test]
     fn a_draft_homed_supersession_claim_over_public_links_leaves_the_guest_s_edges() {
         let world = a_draft_homed_claim_over_public_links();
-        let mut full = dump_tree(&world);
-        assert_eq!(edge_count(&mut full), 1, "the fixture asserts exactly one edge");
-        let mut owner = filter_tree(
+        let full = dump_tree(&world);
+        assert_eq!(edge_count(&full), 1, "the fixture asserts exactly one edge");
+        let owner = filter_tree(
             dump_tree(&world),
             &|doc: &Address| world.readable(Some(USER), doc),
             &world.links,
         );
-        assert_eq!(edge_count(&mut owner), 1, "the owner reads the claim's home, so the edge stays");
-        let mut guest =
+        assert_eq!(edge_count(&owner), 1, "the owner reads the claim's home, so the edge stays");
+        let guest =
             filter_tree(dump_tree(&world), &|doc: &Address| world.readable(None, doc), &world.links);
-        assert_eq!(edge_count(&mut guest), 0, "no readably-homed claim asserts it: the edge leaves");
+        assert_eq!(edge_count(&guest), 0, "no readably-homed claim asserts it: the edge leaves");
         // …while the two public links themselves stay in the guest's slices.
-        let audit_count = |tree: &mut SerdeTree| match at_path(tree, &["hints", "links.audit"]) {
+        let audit_count = |tree: &SerdeTree| match at_path(tree, &["hints", "links.audit"]) {
             Some(SerdeTree::Seq(items)) => items.len(),
             other => panic!("hints.links.audit is a sequence, got {other:?}"),
         };
-        assert_eq!(audit_count(&mut guest), 2, "the two public links; the draft-homed claim left");
-        assert_eq!(audit_count(&mut full), 3, "…where the unfiltered walk carries the claim too");
+        assert_eq!(audit_count(&guest), 2, "the two public links; the draft-homed claim left");
+        assert_eq!(audit_count(&full), 3, "…where the unfiltered walk carries the claim too");
     }
 
     /// [`sup_edge_claims`]'s standing obligation, over a world that HAS an
@@ -1285,7 +1299,7 @@ mod tests {
     #[test]
     fn the_filter_over_a_supersession_edge_is_the_identity_under_the_total_predicate() {
         let world = a_draft_homed_claim_over_public_links();
-        assert_eq!(edge_count(&mut dump_tree(&world)), 1, "the fixture asserts exactly one edge");
+        assert_eq!(edge_count(&dump_tree(&world)), 1, "the fixture asserts exactly one edge");
         assert_eq!(
             dump_visible(&world, &|_: &Address| true),
             dump(&world),

@@ -85,7 +85,10 @@ impl World {
     ///   one address of a few components asking after every edition claim in
     ///   the store. Nothing below narrows by level, because the containment
     ///   regime that makes a document name its versions' claims is the same
-    ///   arithmetic at every tier.
+    ///   arithmetic at every tier. The account- and node-tier breadths are a
+    ///   DIRECT caller's alone: M10's `PublicationWorld` seam asks only after
+    ///   its own registration check, so through it `target` is one
+    ///   registered document.
     /// * `match_links` under the two constraints, then per HIT one `readlink`,
     ///   one `in_edition_class` walk, one `succs` over the shipped
     ///   supersession class and one `document_of`. That walk tests EVERY
@@ -142,21 +145,19 @@ impl World {
 }
 
 /// The lookup as M10's capability (lane 3.4, §2): M10 is generic over its
-/// world and names no `World`, so it asks this seam — [`World::edition_claims`]
-/// above, the inherent method being the real one — and applies the home rule
-/// (PUB-6.13) per row, off its own snapshot.
+/// world and names no `World`, so it asks this seam, which forwards to
+/// [`World::edition_claims`] above — the inherent method being the real one —
+/// and applies the home rule (PUB-6.13) per row, off its own snapshot.
 ///
-/// The `to` test this implementation applies is M7's OVERLAP regime against
-/// `target`'s subtree, which is WIDER than denotation: a claim whose `to`
-/// slot is a non-unit span across the subtree denotes no address in it and is
-/// still a row. That width is the containment the lookup is for — it is what
-/// makes a document name its versions' claims — and it is the same arithmetic
-/// at every tier, so a caller sizing this answer reads
-/// [`World::edition_claims`]'s cost and not the word "denotes". The type slot
-/// is the other way: class MEMBERSHIP there is over every DENOTED address, so
-/// a slot that merely overlaps the class range is refused. Membership is the
-/// whole of what a row is tested for — no home, issuer or publication test
-/// runs on this side of the seam.
+/// M10's `PublicationWorld` is where the contract this seam carries is
+/// stated: the two regimes the slots are judged by — OVERLAP for the `to`
+/// slot, DENOTATION for class membership — and the precondition that `target`
+/// is a registered document, which M10 checks before it asks. So through this
+/// seam the breadth term of [`World::edition_claims`]'s cost is ONE
+/// registered document's subtree, while the inherent method stays total over
+/// every tier for a direct caller. Membership is the whole of what a row is
+/// tested for — no home, issuer or publication test runs on this side of the
+/// seam.
 impl skep_febe::PublicationWorld for World {
     fn edition_claims(&self, target: &Address) -> Vec<EditionClaim> {
         World::edition_claims(self, target)

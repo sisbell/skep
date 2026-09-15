@@ -193,8 +193,10 @@ fn m10_s_read_surface_answers_through_the_engine_s_predicate() {
 
 /// The other kernel `EngineStores` serves: a throwaway one rooted at a world
 /// `Engine::world_at` reconstructed, which is how a daemon answers a
-/// historical read. Assembled here out of the engine's own parts, since the
-/// engine is where knowing which driver constructor fills which slot lives.
+/// historical read. Assembled here out of the engine's own parts: the factory
+/// supplies the kernel, M10's provided `Stores` bodies build the drivers over
+/// it, and the reconstruction discharges the factory's rebuilt-root
+/// precondition.
 #[test]
 fn engine_stores_serves_a_kernel_rooted_at_a_reconstructed_world() {
     let dir = tempdir().expect("tempdir");

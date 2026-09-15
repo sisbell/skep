@@ -22,15 +22,16 @@ impl World {
     /// M3 seeded with the baptismal roots (`M3State::genesis`: node `[1]`,
     /// bootstrap principal π₀), M4 empty (`ContentStore::default` — the
     /// permascroll starts with no content), M5 empty (`M5State::genesis`:
-    /// no arrangements, no provenance), and M7 with `links = ∅` under the
-    /// format registry — the five shipped classes including the PredLayer
-    /// `pdef`/`pd_stable` registrations (`LinkState::genesis`). Genesis
-    /// creates exactly two things: the namespace roots and the empty
-    /// docuverse. A CONSTANT — deterministic with no inputs to hold
-    /// constant — which is what discharges M2's byte-identical-genesis
-    /// caller contract by construction; the World's own leading format stamp
-    /// and the journal's format stamp, not a sealed configuration, name the
-    /// format that wrote a base.
+    /// no arrangements, no provenance), and M7 with `links = ∅` and empty
+    /// hints (`LinkState::genesis`), read against the format registry — M7's
+    /// module constant, whose five shipped classes include the PredLayer
+    /// `pdef`/`pd_stable` registrations. Genesis creates exactly two things:
+    /// the namespace roots and the empty docuverse. A CONSTANT —
+    /// deterministic with no inputs to hold constant — which is what
+    /// discharges M2's byte-identical-genesis caller contract by
+    /// construction; the World's own leading format stamp and the journal's
+    /// format stamp, not a sealed configuration, name the format that wrote a
+    /// base.
     ///
     /// The five reserved type addresses the M7 slice dispatches on are
     /// in-docuverse GHOST TUMBLERS (owner ruling, 2026-08-26): content
@@ -53,13 +54,17 @@ impl World {
     /// does not load, so M2 never runs `WorldState::rebuild_derived` over it
     /// — and every in-memory caller (the conformance rig, the daemon's
     /// historical reads, the whole in-memory suite) reads through whatever
-    /// hints it arrives with. That is why each slice above comes from its own
-    /// genesis constructor rather than from a placeholder: `LinkState::genesis`
-    /// builds a real registry over an empty links map, M5's rebuild is the
-    /// identity, and the exception set is EMPTY because no document exists
+    /// hints it arrives with. It needs no rebuild because every derived
+    /// structure over THIS authoritative state is empty — M3's roots register
+    /// no document, and the other three slices hold nothing — and each is
+    /// seeded empty here: M7's hints over an empty links map, M5's (whose
+    /// rebuild is the identity), the exception set, since no document exists
     /// at Σ₀ to be a draft — the one world where an empty set and
     /// everything-published are the same true statement (PUB-7.5's fail-open
-    /// sign has nothing to fail open over). `Engine::check_hints` is the
+    /// sign has nothing to fail open over) — and the grant fold, since no
+    /// link exists to be a grant. The corollary is a maintainer's: a genesis
+    /// that seeds anything beyond M3's roots — a document, a link — must seed
+    /// that entry's derived state beside it. `Engine::check_hints` is the
     /// standing check that what is seeded here equals a from-authoritative
     /// rebuild.
     pub fn genesis() -> World {

@@ -22,11 +22,11 @@
 //!   a compiled constant (the reserved type set is format, not
 //!   configuration — owner ruling, 2026-08-26). The type registry is M7's
 //!   module constant rather than any slice's state, so genesis carries none
-//!   of it: [`Engine::open`] clones that one `Arc<TypeRegistry>` and shares
-//!   it out to M9 (and any other assembly-time consumer). The World leads
-//!   its checkpoint bytes with a FORMAT STAMP, so a base written under any
-//!   other layout — the pre-publication-bit layout above all (PUB-7.8) —
-//!   fails to decode and M2's fallback chain takes over (PUB-7.9).
+//!   of it: every reader asks M7 for the one `Arc<TypeRegistry>`, and
+//!   [`Engine::coordinator`] clones it for M9, which takes an owned one. The
+//!   World leads its checkpoint bytes with a FORMAT STAMP, so a base written
+//!   under any other layout — the pre-publication-bit layout above all
+//!   (PUB-7.8) — fails to decode and M2's fallback chain takes over (PUB-7.9).
 //! * **Recovery order** (`WorldState::rebuild_derived` for `World`) — the
 //!   cross-store rebuild sequence at load, stated and pinned in one place.
 //! * **The exception set** ([`World::published`], [`World::owner_account`];
@@ -86,6 +86,10 @@ mod genesis;
 mod grants;
 mod publication;
 mod readable;
+// The in-crate suites' shared fixtures: the in-memory engine, the delegated
+// account and the address constructors they start from.
+#[cfg(test)]
+mod testkit;
 pub mod types;
 mod world;
 

@@ -477,16 +477,15 @@ fn dotted_address(item: &SerdeTree) -> Option<Address> {
 
 #[cfg(test)]
 mod tests {
-    use skep_address::validate;
     use skep_arrangement::Caller;
-    use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, TxnError};
+    use skep_kernel::TxnError;
     use skep_links::{
         enc, EditLinkError, EmitError, Link, MakeLinkError, ReservedAddrs, SlotArg,
     };
-    use skep_namespace::{HasM3, BOOTSTRAP_PRINCIPAL};
 
-    use crate::dump::tests::{addr, populated_world, render_of, USER};
+    use crate::dump::tests::{populated_world, render_of};
     use crate::dump::{dump, dump_tree, dump_visible, BANNER};
+    use crate::testkit::{delegated_account, element, mem_engine, USER};
     use crate::world::World;
     use crate::Engine;
 
@@ -501,19 +500,6 @@ mod tests {
     enum Shape {
         Map,
         Seq,
-    }
-
-    /// An element of `doc`'s subspace `s` at ordinal `n` — NEVER MINTED,
-    /// which neither a link slot nor an `emit` member requires. Subspace 1 is
-    /// a document's content space, so an element there is a position a
-    /// projection can name; subspace 3 is a space nothing ever mints into, so
-    /// a type slot filled from it lands in a coverage class of its own and
-    /// the shipped slices hold exactly what was deposited under them.
-    fn element(doc: &Address, s: u32, n: u32) -> Address {
-        let comps =
-            doc.tumbler().iter().cloned().chain([Nat::from(0u32), Nat::from(s), Nat::from(n)]);
-        validate(Tumbler::new(comps).expect("nonempty"))
-            .expect("an element of a document is T4-valid")
     }
 
     /// [`populated_world`]'s ONE draft — the document its content, its
@@ -539,22 +525,8 @@ mod tests {
     /// ACROSS that boundary, so it is established and asserted once here and
     /// each of them states only what it deposits.
     fn a_published_home_and_a_private_draft() -> (Engine, Address, Address) {
-        let cfg = KernelConfig {
-            durability: Durability::InMemory,
-            checkpoint: CheckpointPolicy::Manual,
-        };
-        let engine = Engine::open(cfg).expect("in-memory open cannot fail");
-        let prefix = engine
-            .kernel()
-            .snapshot()
-            .world()
-            .m3()
-            .next_account_prefix(&addr(&[1]))
-            .expect("the genesis node has a delegable next-form prefix");
-        let (acct, _) = engine
-            .namespace()
-            .delegate(BOOTSTRAP_PRINCIPAL, prefix.tumbler().clone(), USER)
-            .expect("delegation of the peeked prefix succeeds");
+        let engine = mem_engine();
+        let acct = delegated_account(&engine, USER);
         let (home, _) =
             engine.namespace().create_new_document(USER, &acct, None).expect("the home mint");
         let (draft, _) = engine

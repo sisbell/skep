@@ -16,6 +16,24 @@
 //! the authority (PUB-7.8's load check guards the bit; this set guards
 //! nothing).
 //!
+//! That registration check closes the open direction for an UNREGISTERED
+//! address and for nothing else, and the set inherits a second case it cannot
+//! reach: a REGISTERED document M3's walk never enumerates. The set is built
+//! by ADDITION over `M3State::documents`, which yields every registered
+//! document on any slice M3's own fold produced — and a slice outside that
+//! fold's totality domain can hold a registered document with NO publication
+//! entry (a jumped `Allocate` registers the ordinals it skipped). M3 answers
+//! such a document PRIVATE. This set never holds it, so it reads PUBLISHED
+//! here, and a registration check ahead of the call passes, because the
+//! document IS registered. `M3State::documents` assigns exactly this
+//! statement to an index built over its walk, which is why it stands here.
+//! Nothing in this crate detects the shape — detecting it at load means
+//! expanding every document chain to its members, the Θ(documents) cost M3's
+//! compressed frontiers exist to avoid — and
+//! `a_registered_document_with_no_publication_entry_reads_published_to_the_set`
+//! pins the direction so that it cannot move unnoticed; it does not endorse
+//! it.
+//!
 //! The engine adds no semantics here. The bit is M3's (`M3State::published`,
 //! written by the one record that registers the document, PUB-7.10); the
 //! owner is M3's ω answer for the document at the fold; what this module owns
@@ -78,10 +96,18 @@ impl World {
     /// address is absent from the set exactly as a published document is, so
     /// this answers `true` for it — the fail-open direction — and the
     /// registration check stands AHEAD of every call, at the caller. M3's own
-    /// `published` reads the bit at one map lookup and answers `false` there;
-    /// the two agree on every registered document by construction (the seed
-    /// and the fold below are both driven by M3's record) and differ only
-    /// outside the contract.
+    /// `published` reads the bit at one map lookup and answers `false` there.
+    ///
+    /// On every slice M3's own fold produced, the two agree on every
+    /// registered document, because the seed and the fold below are both
+    /// driven by M3's record. They part in TWO places, and the caller's
+    /// registration check closes only one. An UNREGISTERED address — outside
+    /// the contract — reads published here and private at M3, and the check
+    /// refuses it first. A REGISTERED document M3's record holds NO entry for
+    /// — inside the contract, and reachable only off a slice outside M3's
+    /// fold's totality domain — reads PUBLISHED here and PRIVATE at M3, and
+    /// the check passes it: that is the open direction this set inherits from
+    /// [`M3State::documents`], stated in the module doc.
     pub fn published(&self, doc: &Address) -> bool {
         is_published(&self.drafts, doc)
     }
@@ -147,6 +173,12 @@ fn draft_entry(namespace: &M3State, doc: &Address) -> Option<(Address, Address)>
 /// element `Allocate` touches nothing. `RegisterNode`/`RegisterPrincipal`
 /// mint no document, so they take the early return.
 ///
+/// The fold asks about the ONE address a record names. A jumped `Allocate` —
+/// outside M3's fold's totality domain — registers the ordinals it skipped as
+/// well, and nobody here asks about those, so the fold shares the seed's
+/// blind spot: a skipped document is registered, holds no publication entry,
+/// and never joins the set (the module doc's open direction).
+///
 /// This runs INSIDE `World::apply`, so the membership and the registration
 /// land in the ONE commit that carries the record (PUB-7.7 as RES-209 states
 /// it): a reader's head snapshot holds both or neither.
@@ -168,13 +200,21 @@ pub(crate) fn fold(prev: &Drafts, namespace: &M3State, rec: &M3Rec) -> Drafts {
 /// enumerations, and `Engine::check_hints` is the standing check that the
 /// enumerations reach the same documents.
 ///
-/// The ADDRESSES alone are the enumeration, and that is complete for the
-/// same reason the fold's is: M3 writes a publication entry and the
-/// registration in one fold step, and only for a document-tier mint, so the
-/// record's entries are exactly the registered documents and no draft can
-/// sit outside them. The bit the walk yields beside each address is not read
-/// here — it comes back through M3's own `published`, which is what makes
-/// this walk and the fold ONE rule rather than two that happen to agree.
+/// The ADDRESSES alone are the enumeration, and it is complete over every
+/// slice M3's own fold produced: M3 writes a publication entry and the
+/// registration in one fold step, and only for a document-tier mint, so there
+/// the record's entries are exactly the registered documents. The bit the
+/// walk yields beside each address is not read here — it comes back through
+/// M3's own `published`, which is what makes this walk and the fold ONE rule
+/// rather than two that happen to agree.
+///
+/// A decoded slice need not be fold-produced, and the rule's registration
+/// re-ask guards exactly one of the two ways it can differ: an entry for an
+/// address M3 does not register is skipped rather than fail-stopped on. The
+/// other is outside the walk altogether. A registered document with NO entry
+/// is never enumerated, so the rule is never asked of it — asked, it would
+/// answer DRAFT — and the set never holds it: the open direction the module
+/// doc states.
 pub(crate) fn seed(namespace: &M3State) -> Drafts {
     namespace
         .documents()
@@ -227,41 +267,19 @@ fn owner_account_of(namespace: &M3State, doc: &Address) -> Address {
 #[cfg(test)]
 mod tests {
     use serde::Deserialize;
-    use skep_address::{validate, Nat, Tumbler};
-    use skep_kernel::{CheckpointPolicy, Durability, KernelConfig};
-    use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
+    use skep_namespace::HasM3;
 
     use crate::canon::{to_tree, SerdeTree, TreeDe};
-    use crate::Engine;
+    use crate::testkit::{delegated_account, mem_engine, USER};
 
     use super::*;
 
-    const USER: PrincipalId = PrincipalId(7);
-
     /// M3's slice holding one account under the genesis node and one DRAFT
     /// document in it, driven through the real drivers, with the two
-    /// addresses. Restated here rather than shared: the integration suite's
-    /// prologue is unreachable from `src/`, and the dump module's own fixture
-    /// is behind the `dump` feature where this module is behind none.
+    /// addresses.
     fn account_with_a_draft() -> (M3State, Address, Address) {
-        let cfg = KernelConfig {
-            durability: Durability::InMemory,
-            checkpoint: CheckpointPolicy::Manual,
-        };
-        let engine = Engine::open(cfg).expect("in-memory open cannot fail");
-        let node = validate(Tumbler::new([Nat::from(1u32)]).expect("nonempty"))
-            .expect("the genesis node is T4-valid");
-        let prefix = engine
-            .kernel()
-            .snapshot()
-            .world()
-            .m3()
-            .next_account_prefix(&node)
-            .expect("the genesis node has a delegable next-form prefix");
-        let (acct, _) = engine
-            .namespace()
-            .delegate(BOOTSTRAP_PRINCIPAL, prefix.tumbler().clone(), USER)
-            .expect("delegation of the peeked prefix succeeds");
+        let engine = mem_engine();
+        let acct = delegated_account(&engine, USER);
         let (doc, _) = engine
             .namespace()
             .create_new_document(USER, &acct, Some(false))
@@ -270,37 +288,47 @@ mod tests {
         (namespace, acct, doc)
     }
 
-    /// The same slice with `acct`'s SEAT struck from Π — the corruption M3's
-    /// own `principals` doc names as a real arrival: "a seat can also arrive
-    /// inside a whole `M3State`, which decodes by bare derive". Built through
-    /// the slice's serde form (`crate::canon`) and back through M3's own
-    /// door, so nothing here reaches a private layout.
-    fn without_the_account_seat(namespace: &M3State, acct: &Address) -> M3State {
-        let seat = to_tree(acct).to_string();
+    /// `namespace` with the entry keyed by `key` struck from its serde map
+    /// field `field`. A whole `M3State` decodes by bare derive, and M3's own
+    /// docs name both strikes this suite makes as shapes a slice can arrive
+    /// in: a SEAT struck from Π (`principals`: "a seat can also arrive inside
+    /// a whole `M3State`, which decodes by bare derive"), and a registered
+    /// document's entry struck from the PUBLICATION map (`documents`: a
+    /// checkpoint "can hold a registered document with NO entry"). Built
+    /// through the slice's serde form (`crate::canon`) and back through M3's
+    /// own door, so nothing here reaches a private layout: the coupling is to
+    /// the field NAME, and the panic below is what stands in for a compiler
+    /// edge to it.
+    fn with_entry_struck(namespace: &M3State, field: &str, key: &Address) -> M3State {
+        let struck = to_tree(key).to_string();
         let mut tree = to_tree(namespace);
         let SerdeTree::Map(fields) = &mut tree else {
             panic!("M3State serializes as a struct — a map of its fields");
         };
-        let principals = fields
+        let map = fields
             .iter_mut()
             .find_map(|(name, value)| match name {
-                SerdeTree::Str(s) if s.as_str() == "principals" => Some(value),
+                SerdeTree::Str(s) if s.as_str() == field => Some(value),
                 _ => None,
             })
-            .expect("M3State serializes a `principals` field — the seat registry ω walks");
-        let SerdeTree::Map(seats) = principals else {
-            panic!("Π serializes as a map of prefix → id");
+            .unwrap_or_else(|| panic!("M3State serializes a `{field}` field"));
+        let SerdeTree::Map(entries) = map else {
+            panic!("M3's `{field}` serializes as a map keyed by address");
         };
-        let before = seats.len();
-        seats.retain(|(prefix, _)| prefix.to_string() != seat);
-        assert_eq!(before - seats.len(), 1, "the account's own seat must have been there to strike");
+        let before = entries.len();
+        entries.retain(|(entry_key, _)| entry_key.to_string() != struck);
+        assert_eq!(
+            before - entries.len(),
+            1,
+            "the `{field}` entry keyed {key} must have been there to strike"
+        );
         M3State::deserialize(TreeDe(&tree)).expect("M3's own types re-admit what they wrote")
     }
 
     /// The seed over a well-formed slice: the draft, memoized against the
-    /// ACCOUNT it was minted under. The premise the refusal below is read
-    /// against — without it, a test that panics proves only that something
-    /// went wrong.
+    /// ACCOUNT it was minted under. The premise the two corruptions below are
+    /// read against — without it, a test that panics or reads a document
+    /// published proves only that something went wrong.
     #[test]
     fn the_seed_memoizes_a_draft_s_own_account() {
         let (namespace, acct, doc) = account_with_a_draft();
@@ -325,7 +353,7 @@ mod tests {
     #[should_panic(expected = "is not the account it was minted under")]
     fn a_node_tier_owner_is_refused_rather_than_memoized() {
         let (namespace, acct, doc) = account_with_a_draft();
-        let corrupt = without_the_account_seat(&namespace, &acct);
+        let corrupt = with_entry_struck(&namespace, "principals", &acct);
         // The fixture must still reach the owner lookup: the document is
         // registered and its bit is still `false`, so `draft_entry` does not
         // return before it…
@@ -339,5 +367,35 @@ mod tests {
             "the struck seat must leave ω answering the node above the account"
         );
         let _ = seed(&corrupt);
+    }
+
+    /// The OPEN DIRECTION the set inherits from its enumeration, over the one
+    /// shape that reaches it: a REGISTERED document whose publication entry is
+    /// gone. M3 answers it private and its walk no longer yields it, so the
+    /// seed never asks the rule of it, and the set reads it PUBLISHED — past a
+    /// registration check, since the document IS registered. The rule itself,
+    /// asked of the document directly, answers DRAFT, which is what locates
+    /// the gap: in the ENUMERATION, not in the rule.
+    ///
+    /// Pinned so the direction cannot change unnoticed, not endorsed. The
+    /// shape lies outside M3's fold's totality domain — a jumped `Allocate`
+    /// is its live route, and M3's debug contiguity check refuses one — so it
+    /// is built through M3's serde door, the checkpoint route, rather than
+    /// through an op.
+    #[test]
+    fn a_registered_document_with_no_publication_entry_reads_published_to_the_set() {
+        let (namespace, _acct, doc) = account_with_a_draft();
+        let corrupt = with_entry_struck(&namespace, "publication", &doc);
+        assert!(corrupt.is_registered_document(&doc), "the registration is untouched");
+        assert!(
+            corrupt.documents().all(|(document, _)| document != &doc),
+            "M3's walk no longer yields the document"
+        );
+        assert!(!corrupt.published(&doc), "M3 answers the missing entry PRIVATE");
+        assert!(draft_entry(&corrupt, &doc).is_some(), "the rule, asked of it, answers DRAFT");
+        assert!(
+            is_published(&seed(&corrupt), &doc),
+            "the set, whose seed never asks the rule of it, reads it PUBLISHED"
+        );
     }
 }

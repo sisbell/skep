@@ -170,8 +170,8 @@ fn dump_visible(world: &World, readable: &dyn Fn(&Address) -> bool) -> WorldDump
 /// per-namespace frontier counts and the publication map), M4's content map,
 /// M5's arrangements — whose resident form IS the canonical maximally-merged
 /// decomposition, maintained by M5's fold — and its provenance R, and M7's
-/// link store. M7's `#[serde(skip)]` registry and hints are thereby excluded,
-/// exactly as this section demands: they are the [`hints_tree`] section's
+/// link store. M7's `#[serde(skip)]` hints are thereby excluded, exactly as
+/// this section demands: they are the [`hints_tree`] section's
 /// subject, and rendering them here would compare a derived structure against
 /// itself.
 ///
@@ -495,10 +495,13 @@ fn drafts_tree(world: &World) -> SerdeTree {
 /// ADDRESS, whether it is a registered document and what its bit is — which
 /// is what keeps the load path's fail-stop off an unregistered address. The
 /// rules coincide because M3 writes the publication entry and the
-/// registration in one fold step, and only for a document-tier mint, so the
-/// record's entries ARE the registered documents. A store that registered a
-/// document without an entry, or wrote an entry for anything else, would
-/// separate them.
+/// registration in one fold step, and only for a document-tier mint, so on
+/// any slice M3's fold produced the record's entries ARE the registered
+/// documents. Only an entry for an address M3 does NOT register separates
+/// them: this section keeps it by its bit, and the seed's re-ask drops it. A
+/// registered document with NO entry is absent from BOTH — neither walk
+/// reaches it — so their agreement cannot witness that shape, which is the
+/// open direction `crate::publication` states.
 ///
 /// This section is a PROJECTION of the record, not the only rendering of it:
 /// the same authoritative map travels whole inside `authoritative.namespace`,
@@ -732,6 +735,14 @@ impl crate::Engine {
     /// issuer to a single home, so sharing is always intra-home, where the
     /// seed's address order IS the fold's deposit order.
     ///
+    /// For the EXCEPTION SET the certificate has an edge of its own. Its two
+    /// halves enumerate M3's publication record alike — the fold asks the
+    /// one address each document-minting record writes an entry for, and the
+    /// seed walks the entries — so a registered document with NO entry is
+    /// outside both halves and outside what `Ok(())` speaks for. That is the
+    /// open direction `crate::publication` states, and no comparison of the
+    /// two halves reaches it.
+    ///
     /// COST, per call, uncached: two [`crate::Engine::dump_of`]s plus a clone
     /// of the world and a whole-links `rebuild_derived` over it — so upwards
     /// of twice that figure, and both dumps are resident at once for the
@@ -744,24 +755,15 @@ impl crate::Engine {
 
 #[cfg(test)]
 mod tests {
-    use skep_address::{validate, Nat, Span};
+    use skep_address::{Nat, Span};
     use skep_arrangement::{Caller, Deposit, VPos, VSpec};
     use skep_content::Val;
-    use skep_kernel::{CheckpointPolicy, Durability, KernelConfig};
     use skep_links::SlotArg;
-    use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 
+    use crate::testkit::{delegated_account, mem_engine, USER};
     use crate::Engine;
 
     use super::*;
-
-    pub(super) const USER: PrincipalId = PrincipalId(7);
-
-    pub(super) fn addr(comps: &[u32]) -> Address {
-        let t = Tumbler::new(comps.iter().map(|&c| Nat::from(c)))
-            .unwrap_or_else(|_| panic!("test tumblers are nonempty"));
-        validate(t).unwrap_or_else(|_| panic!("test addresses are T4-valid"))
-    }
 
     fn vspec(doc: &Address, ordinal: u32, width: u32) -> VSpec {
         let span = Span::new(
@@ -780,29 +782,14 @@ mod tests {
 
     /// An in-memory engine whose every slice holds something, driven through
     /// the real drivers: an account and a document (M3), two content values
-    /// (M4, arranged by M5), and one link (M7). The integration suite's own
-    /// prologue is in `tests/common`, which a unit test cannot reach, so this
-    /// restates it — cut to exactly what these tests read. Shared with the
-    /// `filter` submodule's tests, which need a world holding an entry in
-    /// every family the reduction reaches.
+    /// (M4, arranged by M5), and one link (M7) — the account off the crate's
+    /// `testkit`, and the mints and deposits this fixture's own, cut to
+    /// exactly what these tests read. Shared with the `filter` submodule's
+    /// tests, which need a world holding an entry in every family the
+    /// reduction reaches.
     pub(super) fn populated_world() -> (Engine, World) {
-        let cfg = KernelConfig {
-            durability: Durability::InMemory,
-            checkpoint: CheckpointPolicy::Manual,
-        };
-        let engine = Engine::open(cfg).expect("in-memory open cannot fail");
-
-        let prefix = {
-            let snap = engine.kernel().snapshot();
-            snap.world()
-                .m3()
-                .next_account_prefix(&addr(&[1]))
-                .expect("the genesis node has a delegable next-form prefix")
-        };
-        let (acct, _) = engine
-            .namespace()
-            .delegate(BOOTSTRAP_PRINCIPAL, prefix.tumbler().clone(), USER)
-            .expect("delegation of the peeked prefix succeeds");
+        let engine = mem_engine();
+        let acct = delegated_account(&engine, USER);
         // A DRAFT (explicit `false`): the flagless first mint would be the
         // published home, which takes no in-place edit (PUB-2.11).
         let (doc, _) = engine

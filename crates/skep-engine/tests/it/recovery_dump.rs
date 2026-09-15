@@ -284,8 +284,8 @@ fn a_recovered_world_dumps_byte_equal_to_the_live_fold() {
 
 /// The recovery the world actually has to survive: a checkpoint taken with the
 /// links already resident, so the reopen deserializes M7's slice with its
-/// skip-serialized registry and hints gone, rebuilds both from the
-/// authoritative links map, and only then replays the tail. The other
+/// skip-serialized hints gone, rebuilds them from the authoritative links map,
+/// and only then replays the tail. The other
 /// equivalence test checkpoints below the first link, so its rebuild runs over
 /// an empty map and says nothing about this one.
 #[test]
@@ -353,10 +353,9 @@ fn a_reconstructed_historical_world_carries_faithful_hints() {
 }
 
 /// A world the caller pinned itself — a snapshot rather than the engine's
-/// own committed read — dumps deterministically and its hints are faithful,
-/// with the genesis configuration supplied by the engine that produced it
-/// (the harness shape: any world this engine made, rendered against the one
-/// config it was sealed under).
+/// own committed read — dumps deterministically and its hints are faithful:
+/// the render takes nothing from the engine but the world it is handed, so a
+/// harness may pin any world this engine made and render it when it likes.
 #[test]
 fn a_caller_pinned_world_dumps_deterministically() {
     let engine = Engine::open(mem_cfg()).expect("in-memory open");

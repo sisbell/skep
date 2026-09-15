@@ -1,8 +1,8 @@
 //! The assembled engine handle: `Kernel::open` over the genesis [`World`],
-//! the one `Arc<TypeRegistry>` (M7's own module constant, shared), the
-//! store-driver constructors, the M9 `Coordinator` assembly, and the
-//! `Stores<World>` factory M10's transport injects. All dispatch and
-//! construction — no semantics.
+//! the one `Arc<TypeRegistry>` (M7's own module constant, reached and
+//! shared), the driver accessors that reach M10's provided `Stores` bodies,
+//! the M9 `Coordinator` assembly, and the `Stores<World>` factory M10's
+//! transport injects. All dispatch and construction — no semantics.
 
 use std::fmt;
 use std::sync::Arc;
@@ -65,10 +65,10 @@ impl std::error::Error for EngineError {
 /// The assembled engine: the recovered kernel over the one concrete
 /// [`World`].
 ///
-/// The kernel is held as the [`EngineStores`] factory rather than bare: the
-/// engine's own driver accessors read through it, so which driver constructor
-/// fills which slot is written once, in one type, for both the engine's
-/// callers and M10's transport. That factory is the whole of what an engine
+/// The kernel is held as the [`EngineStores`] factory rather than bare, so
+/// the engine's own driver accessors reach the same driver bodies M10's
+/// transport does — `Stores`' provided methods, which are M10's to write —
+/// rather than restating them. That factory is the whole of what an engine
 /// carries — the type registry [`Engine::registry`] hands out is M7's own
 /// module constant, not state of this handle's.
 pub struct Engine {
@@ -204,8 +204,9 @@ impl Engine {
     }
 
     /// The `Stores<World>` factory the transport passes to M10's
-    /// `OperationSurface::new` — the engine-facing store-driver constructors,
-    /// wrapped once so the binary holds no assembly knowledge.
+    /// `OperationSurface::new`: a clone of the handle on this engine's one
+    /// kernel, never a second kernel. The drivers it yields are M10's —
+    /// `Stores`' provided bodies, built over that kernel.
     pub fn stores(&self) -> EngineStores {
         self.stores.clone()
     }
@@ -246,10 +247,10 @@ fn mk_link_store<'k>(
     LinkWriter::new(k, visibility)
 }
 
-/// The concrete `Stores<World>` impl (M10 §Seams: "at startup, the `Stores`
-/// factory passed to `OperationSurface::new`, built via the engine-facing
-/// store-driver constructors"). Holds only the shared kernel; each call
-/// hands out a fresh driver.
+/// The concrete `Stores<World>` impl — the factory passed to M10's
+/// `OperationSurface::new` at startup (M10 §Seams). It holds the engine's one
+/// kernel and nothing else: the three drivers are `Stores`' provided bodies,
+/// each a fresh handle built over that kernel per call.
 #[derive(Clone, Debug)]
 pub struct EngineStores {
     kernel: Arc<Kernel<World>>,
@@ -258,12 +259,12 @@ pub struct EngineStores {
 impl EngineStores {
     /// Over any `Kernel<World>` — the live recovered one [`Engine`] holds, or
     /// a throwaway kernel rooted at a reconstructed historical world. Holding
-    /// the kernel is the whole of what an assembler owes `Stores<World>`: M3's
-    /// and M5's drivers follow from it and the trait gives them, and the impl
-    /// below writes only M7's. The engine's own `namespace`/`vstream`/
-    /// `linkstore` read through this type, so a caller that has a kernel and
-    /// needs an M10 over it asks for this rather than restating the
-    /// constructors and inheriting the next change to them.
+    /// the kernel is the whole of what an assembler owes `Stores<World>`: all
+    /// three drivers follow from it, and the trait gives them. The engine's
+    /// own `namespace`/`vstream`/`linkstore` read through this type, so a
+    /// caller that has a kernel and needs an M10 over it asks for this rather
+    /// than writing a second `Stores` impl, which would owe M10's one-kernel
+    /// precondition afresh.
     ///
     /// PRECONDITION, and the assembler's to state because the pairing is the
     /// assembler's: `kernel`'s root must be a world that has been through
@@ -289,10 +290,17 @@ impl EngineStores {
     }
 }
 
-/// The one kernel every driver M10 acquires is built over — which is the
-/// whole of what the trait asks of an implementer, the three drivers
-/// (including M7's writer at the class M10 hands in per write, lane 3.3b)
-/// following from it.
+/// The one kernel every driver M10 acquires is built over — the one method
+/// this impl writes, the three drivers being `Stores`' provided bodies over it
+/// (M7's writer among them, at the class M10 hands in per write, lane 3.3b).
+///
+/// M10 places one PRECONDITION on an implementer: this answers the SAME
+/// kernel on every call, since every coordinate M10 reports rests on it. It is
+/// discharged by construction — one `Arc`, fixed at [`EngineStores::new`] and
+/// never replaced, shared by every clone of the handle
+/// (`every_stores_clone_answers_the_engine_s_one_kernel` holds it). Overriding
+/// one of the provided bodies here would take that obligation back on for the
+/// driver it returned.
 impl Stores<World> for EngineStores {
     fn kernel(&self) -> &Kernel<World> {
         &self.kernel
@@ -303,18 +311,31 @@ impl Stores<World> for EngineStores {
 mod tests {
     use std::error::Error;
 
-    use skep_kernel::{CheckpointPolicy, Durability};
-
+    use crate::testkit::mem_engine;
     use crate::Record;
 
     use super::*;
 
-    fn mem_engine() -> Engine {
-        let cfg = KernelConfig {
-            durability: Durability::InMemory,
-            checkpoint: CheckpointPolicy::Manual,
-        };
-        Engine::open(cfg).expect("in-memory open cannot fail")
+    /// M10's one precondition on a `Stores` implementer, as a check: the
+    /// engine's own kernel read, the factory [`Engine::stores`] hands out, and
+    /// a clone of that factory all answer ONE kernel. Every coordinate M10
+    /// reports rests on it — `log_position` and each read's `as_of` come from
+    /// `kernel()`, while each link write commits through `linkstore()` — and
+    /// the discharge is structural, one `Arc` fixed at construction, so this
+    /// is what fails if the handle ever learns to swap or reopen its kernel.
+    #[test]
+    fn every_stores_clone_answers_the_engine_s_one_kernel() {
+        let engine = mem_engine();
+        let stores = engine.stores();
+        let clone = stores.clone();
+        assert!(
+            std::ptr::eq(engine.kernel(), stores.kernel()),
+            "the factory answers the engine's own kernel"
+        );
+        assert!(
+            std::ptr::eq(stores.kernel(), clone.kernel()),
+            "…and so does every clone of the factory"
+        );
     }
 
     /// What a missing `Debug` costs is not the print, it is the wall: a

@@ -438,7 +438,10 @@ fn is_grant_typed(value: &Link, grants_class: &Address) -> bool {
 ///
 /// `home` is a registered document (a deposit lands in no unregistered home,
 /// M7's HomeNotRegistered gate). `published(home)` is the exception-set miss —
-/// `home ∉ drafts`.
+/// `home ∉ drafts` — and so it inherits the set's open direction
+/// (`crate::publication`): a registered home M3's publication record holds no
+/// entry for reads published here where M3 answers it private, and a grant
+/// homed there admits.
 fn admitted_issuer(namespace: &M3State, drafts: &Drafts, home: &Address) -> Option<Address> {
     // Published: an exception-set miss (grants are born published). The
     // polarity is `crate::publication`'s to hold, not this module's.

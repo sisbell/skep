@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "The single assembler (Engine Composition Contract): the one concrete World over every store slice, the one central Record enum, the constant genesis, the pinned recovery order, the exception set over M3's publication bit, the read predicate with its grant fold, and the world dump surface"
+description = "The single assembler (Engine Composition Contract): the one concrete World over every store slice, the one central Record enum, the constant genesis, the stated recovery order, the exception set over M3's publication bit, the read predicate with its grant fold, the edition-claim lookup, the commons type pins, the M9 coordinator assembly, and the world dump surface"
 readme = "README.md"
 
 [features]
@@ -16,15 +16,19 @@ default = ["dump"]
 dump = []
 
 [dependencies]
-# The World/Record serde derives satisfying M2's WorldState bounds.
+# The World/Record serde derives satisfying M2's WorldState bounds, and the
+# dump's canonicalizing transcode (`canon`), which implements a serde
+# Serializer and Deserializer of its own.
 serde.workspace = true
-# The exception set (PUB-7.5) — a persistent hash map draft → owner account,
-# so the World's per-transact clone stays a root clone. The serde feature is
-# the workspace's; the set itself is `#[serde(skip)]` (derived, never
-# checkpointed).
+# The two derived indexes — the exception set (PUB-7.5), a persistent hash map
+# draft → owner account, and the grant fold's operative set and its two query
+# indexes — are `im` structures, so the World's per-transact clone stays a
+# handful of root clones. The serde feature is the workspace's; both indexes
+# are `#[serde(skip)]` (derived, never checkpointed).
 im.workspace = true
-# M1 — Tumbler/Address construction for the standard reserved type addresses
-# and the world dump's address rendering.
+# M1 — the address vocabulary: the commons type pins' construction, the grant
+# fold's and the edition-claim lookup's address arithmetic, and the world
+# dump's address rendering and the per-class filter's address recovery.
 skep-address = { path = "../skep-address" }
 # M2 — Kernel::open over the assembled World; WorldState is implemented here.
 skep-kernel = { path = "../skep-kernel" }
@@ -36,11 +40,14 @@ skep-arrangement = { path = "../skep-arrangement" }
 skep-links = { path = "../skep-links" }
 # M9 — the Coordinator is engine-assembled: the factory bodies presuppose the
 # engine can build Vstream/LinkWriter from &Kernel<W> (M9's standing assembly
-# obligation), and its catalog projects the engine-built registry.
+# obligation), and its catalog projects M7's registry constant, which the
+# engine reaches and hands it rather than builds.
 skep-coordination = { path = "../skep-coordination" }
 # M10 — the demand side: EngineStores realizes the Stores<World> factory the
-# transport injects into OperationSurface::new. M10 stays generic; only the binary
-# and this assembler ever name World against it.
+# transport injects into OperationSurface::new, and World implements M10's two
+# publication seams — ReadableWorld (the read predicate) and PublicationWorld
+# (the edition-claim lookup, answering in M10's EditionClaim rows). M10 stays
+# generic; only the binary and this assembler ever name World against it.
 skep-febe = { path = "../skep-febe" }
 
 [dev-dependencies]

@@ -16,7 +16,7 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   the assembled world, so store crates stay generic.
 - **Genesis and recovery order** — the constant initial world (the
   namespace roots and the empty docuverse; the reserved type registry
-  is compiled format, not seeded state) and the pinned
+  is compiled format, not seeded state) and the one stated
   `rebuild_derived` order.
 - **The exception set** — the derived membership index over M3's
   publication bit (`World::published`, `World::owner_account`):
@@ -27,12 +27,26 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   (published ∨ owner subtree ∨ grant), and the second derived
   index it rests on: a fold over the link store recognizing
   grant-typed records as values, seeded at load, folded on every
-  link deposit, never checkpointed.
-- **`Engine::open`** — genesis-or-recover in one call; the
+  link deposit, never checkpointed. The fold also enumerates the
+  change feed's grant keys (`World::universal_grants`,
+  `World::issuers_for`).
+- **The edition-claim lookup** — `World::edition_claims`, the
+  audit-view lookup over the edition-claim class, composed from the
+  link store's own reads and answered unfiltered, for the operation
+  surface to filter by home.
+- **The commons type pins** — the `types` module: every commons type
+  address the engine or the daemon keys on as a value, in one
+  prefix-free ledger.
+- **`Engine`** — `Engine::open`, genesis-or-recover in one call; the
+  M9 `Coordinator` assembly (`Engine::coordinator`); and the
   `Stores<World>` factory the operation surface injects.
+- **The world dump** (behind the default-on `dump` feature) — a
+  deterministic, byte-comparable rendering of the whole state, the
+  crash and conformance harnesses' oracle, and the same rendering
+  filtered at a reader's class for the daemon's `/dump`.
 
 Everything above the stores and below the wire: the one place a
-concrete `World` is named.
+concrete `World` is defined.
 
 ## License
 

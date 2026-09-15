@@ -21,9 +21,10 @@
 //! with their own validation, and no byte format in between. That is how the
 //! dump's per-class filter reads an address back out of a rendered slice, and
 //! how a test corrupts a store slice it has no mutating API for (the
-//! exception set's suite strikes a seat from M3's Π this way): the coupling
-//! is to the serde data model and a field NAME, never to a private layout or
-//! to any library's on-the-wire encoding.
+//! exception set's suite strikes an entry from one of M3's maps this way — a
+//! seat from Π, a document's publication entry): the coupling is to the serde
+//! data model and a field NAME, never to a private layout or to any library's
+//! on-the-wire encoding.
 //!
 //! The dump module holds every production caller of this one, which is why
 //! the crate compiles it with the `dump` feature — and for its own tests,
@@ -44,7 +45,8 @@ use serde::Deserializer;
 /// actually use, as a value a transcode can collect into. It holds entries
 /// and elements in the order the `Serialize` impl produced them; canonical
 /// order is this type's own `Display`, established as the text is written and
-/// so present in every build, whatever the `dump` feature says.
+/// so present wherever this module is compiled — the dump's builds and the
+/// crate's tests.
 ///
 /// So this type is deliberately NOT comparable. Two trees with equal contents
 /// in different collection order are equal only once rendered, and comparing
@@ -162,9 +164,9 @@ impl fmt::Display for SerdeTree {
 
 /// Append a tree's deterministic text to `out`, for a caller assembling one
 /// rendering out of several pieces — the dump's, and only the dump's. That
-/// is what the feature gates: the text itself is [`SerdeTree`]'s `Display`
-/// and is compiled either way, so with the dump off this adapter would be a
-/// function no caller has.
+/// is what this adapter's own gate is for: the module is compiled for the
+/// crate's tests whatever the `dump` feature says, and there, with the dump
+/// off, this adapter would be a function no caller has.
 #[cfg(feature = "dump")]
 pub(crate) fn render(tree: &SerdeTree, out: &mut String) {
     use std::fmt::Write as _;

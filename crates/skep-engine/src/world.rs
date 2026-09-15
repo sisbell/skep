@@ -2,10 +2,11 @@
 //! `WorldState` implementation, the accessor-trait implementations, and the
 //! record lifts — the Engine Composition Contract's "The engine crate
 //! assembles" block, realized verbatim for the four state-contributing
-//! stores (M3, M4, M5, M7) — plus the two things the assembled world carries
-//! that no store does: its checkpoint FORMAT STAMP and the exception set
-//! (`crate::publication`). M6/M8/M9/M10 contribute no slice and no record
-//! variant, so nothing of theirs appears here.
+//! stores (M3, M4, M5, M7) — plus the three things the assembled world
+//! carries that no store does: its checkpoint FORMAT STAMP, the exception set
+//! (`crate::publication`) and the grant fold (`crate::grants`). M6/M8/M9/M10
+//! contribute no slice and no record variant, so nothing of theirs appears
+//! here.
 
 use std::fmt;
 
@@ -253,7 +254,7 @@ impl WorldState for World {
             Record::Links(x) => {
                 // The grant fold rides the Links arm, from the record just
                 // folded (PUB-7.7's fold half): a `t_grant` deposit that
-                // admits joins the fold, a superseding one leaves it, and the
+                // admits joins the fold, a revoking one leaves it, and the
                 // registration and grant reach a reader in one snapshot. A
                 // link deposit changes neither M3 nor the exception set, so
                 // both are read as they stand.
@@ -268,20 +269,47 @@ impl WorldState for World {
     /// load is stated (runs once, before replay; M2 §7).
     ///
     /// Order: M3 → M4 → M5 → M7, the stores' dependency (DAG) order, then the
-    /// engine's own derived index over M3. Why: a store's hint rebuild may
-    /// only ever read slices UPSTREAM of it (a downstream read would invert
-    /// the module DAG), so rebuilding in dependency order guarantees every
-    /// slice a rebuild could legitimately consult is already restored; and
-    /// the engine's index reads a store slice, so it comes after every store
-    /// has finished with its own. As built, no STORE rebuild reads a foreign
-    /// slice at all — M3 and M4 are fully serialized (M2's default identity;
-    /// their docs say so), M5's `rebuild_derived` is the identity (no
-    /// skip-serialized hints in v1), and M7's recomputes its hints from its
-    /// OWN links map, under a registry that is a compiled constant rather
-    /// than state — so the inter-store order is future-proofing, pinned here
-    /// and held to by the recovery-equivalence test. The exception set's seed
-    /// (PUB-7.7's seed half — `publication::seed`) reads M3's slice, which
-    /// M3's identity rebuild has by then restored verbatim.
+    /// engine's two derived indexes — the exception set (PUB-7.7's seed half,
+    /// `publication::seed`, which reads M3's slice), then the grant fold
+    /// (`grants::seed`, which reads M3's slice, M7's REBUILT slice and the
+    /// SEEDED exception set).
+    ///
+    /// The STORE half of that order is future-proofing, and no test can hold
+    /// it. A store's hint rebuild may only ever read slices UPSTREAM of it (a
+    /// downstream read would invert the module DAG), so dependency order is
+    /// the one that stays right once a rebuild starts consulting another
+    /// slice. As built none does — M3 and M4 are fully serialized (M2's
+    /// default identity; their docs say so), M5's `rebuild_derived` is the
+    /// identity (no skip-serialized hints in v1), and M7's recomputes its
+    /// hints from its OWN links map, under a registry that is a compiled
+    /// constant rather than state — so every permutation of the four recovers
+    /// the same world, and no test can tell one from another.
+    ///
+    /// The ENGINE half is what the order rests on: two edges, each with its
+    /// reason and the test that fails when it is crossed.
+    ///
+    /// * The grant seed runs AFTER `links.rebuild_derived()`. It enumerates
+    ///   the grants class through `LinkState::type_slice`, which answers off
+    ///   M7's skip-serialized typed-slice hint, and a decoded slice holds that
+    ///   hint empty — so over unrebuilt links the class reads empty, the seed
+    ///   admits nothing, and a restart closes every grant. Only a real load
+    ///   shows it: `Engine::check_hints` rebuilds a live world's clone, whose
+    ///   hints are already current, so
+    ///   `the_fold_re_seeds_across_a_restart_and_an_empty_map_grants_nothing`
+    ///   is the one test that fails when this edge is crossed.
+    /// * The grant seed runs AFTER the exception set's, and is handed the
+    ///   SEEDED set. Grant admission's published clause is a miss on that set,
+    ///   and an empty one reads every home published — so the seed would
+    ///   admit at load a draft-homed grant the live fold refused, and a
+    ///   restart would open a private document. A load and
+    ///   `Engine::check_hints` both show it, since the check's rebuild runs
+    ///   this same order: `a_restart_does_not_admit_a_grant_the_live_fold_refused`
+    ///   fails across a restart, and `a_grant_homed_in_a_draft_doc_1_is_inert`
+    ///   fails on the check.
+    ///
+    /// The exception set's own seed reads M3's slice alone, which M3's
+    /// identity rebuild has restored verbatim, so it has no edge beyond
+    /// coming after M3.
     ///
     /// Infallible by M2's trait, and fail-stop in fact: the rebuilds composed
     /// here run over state that was just DESERIALIZED, and M7's asserts what
@@ -381,16 +409,11 @@ impl From<LinkRec> for Record {
 
 #[cfg(test)]
 mod tests {
-    use skep_address::{validate, Address, Nat, Tumbler};
     use skep_content::Val;
 
-    use super::*;
+    use crate::testkit::addr;
 
-    fn addr(comps: &[u32]) -> Address {
-        let t = Tumbler::new(comps.iter().map(|&c| Nat::from(c)))
-            .unwrap_or_else(|_| panic!("test tumblers are nonempty"));
-        validate(t).unwrap_or_else(|_| panic!("test addresses are T4-valid"))
-    }
+    use super::*;
 
     /// [`Record`]'s VARIANT ORDER is what M2's replay decodes by: bincode
     /// encodes a variant as its INDEX, positionally and with no name, so a

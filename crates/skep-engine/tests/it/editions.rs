@@ -250,10 +250,11 @@ fn the_to_range_is_the_target_s_subtree() {
 /// reading returns nothing. Every other claim in this file carries
 /// address-form slots, where the two readings agree on every row.
 ///
-/// The distinction is the containment the lookup exists for, and it is what
-/// M10's `PublicationWorld::edition_claims` describes the other way round. A
-/// narrowing of this side to match that text drops a whole class of claim
-/// from every reader's answer, and this is the row that would go with it.
+/// The distinction is the containment the lookup exists for, and M10's
+/// `PublicationWorld::edition_claims` states the same overlap regime in its
+/// own words. A narrowing of either side to denotation drops a whole class of
+/// claim from every reader's answer, and this is the row that would go with
+/// it.
 #[test]
 fn a_to_slot_that_denotes_nothing_under_the_target_is_still_a_row() {
     let engine = mem_engine();

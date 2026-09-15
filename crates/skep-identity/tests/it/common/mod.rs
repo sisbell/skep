@@ -234,22 +234,22 @@ impl Fixture {
         self.next_ord.get(home).copied().unwrap_or(1)
     }
 
-    pub fn enroll_dep(&mut self, home: &Address, to_acct: &[u32], payload: &[u8]) -> Dep {
+    pub fn enroll_dep(&mut self, home: &Address, subject: &[u32], payload: &[u8]) -> Dep {
         let from = self.mint(home, &[payload]);
         Dep {
             home: home.clone(),
             from,
-            to: vec![unit(to_acct)],
+            to: vec![unit(subject)],
             ty: vec![unit(T_ENROLL)],
         }
     }
 
-    pub fn retire_dep(&mut self, home: &Address, to_acct: &[u32], payload: &[u8]) -> Dep {
+    pub fn retire_dep(&mut self, home: &Address, subject: &[u32], payload: &[u8]) -> Dep {
         let from = self.mint(home, &[payload]);
         Dep {
             home: home.clone(),
             from,
-            to: vec![unit(to_acct)],
+            to: vec![unit(subject)],
             ty: vec![unit(T_RETIRE)],
         }
     }
@@ -317,10 +317,10 @@ pub fn retire_payload(indices: &[u8]) -> Vec<u8> {
 /// spelled here.
 pub fn token_of(v: &Verdict) -> Option<String> {
     match v {
-        Verdict::Inert(i @ Inert::MalformedPayload(e)) => {
-            Some(format!("{}:{}", i.token(), e.token()))
+        Verdict::Inert(inert @ Inert::MalformedPayload(e)) => {
+            Some(format!("{}:{}", inert.token(), e.token()))
         }
-        Verdict::Inert(i) => Some(i.token().to_owned()),
+        Verdict::Inert(inert) => Some(inert.token().to_owned()),
         _ => None,
     }
 }

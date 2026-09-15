@@ -258,7 +258,7 @@ pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
         // AUTH-2.12 — dispatch on the FIRST token: anchor · alg · else (the
         // scan has taken the `sig` lines already).
         let (first, rest) = split_token(line);
-        let (anchor, alg, rest) = if first == "anchor" {
+        let (anchor, alg, after_alg) = if first == "anchor" {
             // AUTH-2.11 — the anchor flag is the LEADING token; the line
             // then continues with the alg token.
             let Some(after_anchor) = rest else {
@@ -269,7 +269,7 @@ pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
         } else {
             (false, first, rest)
         };
-        let Some(after_alg) = rest else {
+        let Some(after_alg) = after_alg else {
             return Err(PayloadError::BadLine(n)); // alg token with no hex
         };
         let (hex, after_hex) = split_token(after_alg);

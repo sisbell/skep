@@ -107,10 +107,10 @@ impl ActKind {
 #[derive(Debug, Clone)]
 struct Act {
     kind: ActKind,
-    subject: usize,
-    home: usize,
-    keys: Vec<(u8, bool)>,
-    fps: Vec<u8>,
+    subject_index: usize,
+    home_index: usize,
+    enroll_entries: Vec<(u8, bool)>,
+    retire_indices: Vec<u8>,
 }
 
 const ACCOUNTS: [&[u32]; 5] = [CLAIMANT, ORG, NESTED, ACCT_A, ACCT_B];
@@ -141,12 +141,12 @@ fn act_strategy() -> impl Strategy<Value = Act> {
         prop::collection::vec((0..6u8, any::<bool>()), 0..4),
         prop::collection::vec(0..6u8, 0..4),
     )
-        .prop_map(|(kind, subject, home, keys, fps)| Act {
+        .prop_map(|(kind, subject_index, home_index, enroll_entries, retire_indices)| Act {
             kind: ActKind::from_draw(kind),
-            subject,
-            home,
-            keys,
-            fps,
+            subject_index,
+            home_index,
+            enroll_entries,
+            retire_indices,
         })
 }
 
@@ -162,11 +162,15 @@ struct Case {
 }
 
 fn materialize(fx: &mut Fixture, act: &Act) -> Case {
-    let subject_comps = ACCOUNTS[act.subject];
-    let (home, home_account, home_doc_one) = homes()[act.home].clone();
+    let subject_comps = ACCOUNTS[act.subject_index];
+    let (home, home_account, home_doc_one) = homes()[act.home_index].clone();
     let dep = match act.kind {
-        ActKind::Enroll => fx.enroll_dep(&home, subject_comps, &enroll_payload(&act.keys)),
-        ActKind::Retire => fx.retire_dep(&home, subject_comps, &retire_payload(&act.fps)),
+        ActKind::Enroll => {
+            fx.enroll_dep(&home, subject_comps, &enroll_payload(&act.enroll_entries))
+        }
+        ActKind::Retire => {
+            fx.retire_dep(&home, subject_comps, &retire_payload(&act.retire_indices))
+        }
         ActKind::Claim => fx.claim_dep(&home, subject_comps),
         ActKind::Noise => {
             let from = fx.mint(&home, &[b"noise"]);
@@ -210,10 +214,10 @@ proptest! {
         let mut ever_retired: BTreeSet<(Address, Fingerprint)> = BTreeSet::new();
         let mut first_flag: BTreeMap<(Address, Fingerprint), bool> = BTreeMap::new();
         let mut genesis_count: BTreeMap<Address, usize> = BTreeMap::new();
-        let mut claims = 0usize;
+        let mut claim_count = 0usize;
 
         for case in &cases {
-            let pre_nonempty_subject = !st.key_set(&case.subject).is_empty();
+            let subject_was_nonempty = !st.key_set(&case.subject).is_empty();
             let preview = fx.classify(&st, &case.dep);
             let (next, verdict) = fx.step(&st, &case.dep);
 
@@ -234,7 +238,7 @@ proptest! {
             // non-empty, every enrollment homed outside its own space is
             // inert (registry-, claimant- and stranger-homed alike).
             if case.kind == ActKind::Enroll
-                && pre_nonempty_subject
+                && subject_was_nonempty
                 && case.home_account != case.subject
             {
                 prop_assert!(matches!(verdict, Verdict::Inert(_)));
@@ -244,7 +248,7 @@ proptest! {
                 Verdict::Honored(Effect::Genesis { account, keys }) => {
                     // I5 — at most one Honored(Genesis) per account, and
                     // never onto a set that was already non-empty.
-                    prop_assert!(!pre_nonempty_subject);
+                    prop_assert!(!subject_was_nonempty);
                     *genesis_count.entry(account.clone()).or_insert(0) += 1;
                     prop_assert!(genesis_count[account] <= 1);
                     for k in keys {
@@ -268,8 +272,8 @@ proptest! {
                 Verdict::Honored(Effect::Claim { account: _ }) => {
                     // I6 — at most one Honored(Claim), only on an unclaimed
                     // board.
-                    claims += 1;
-                    prop_assert!(claims <= 1);
+                    claim_count += 1;
+                    prop_assert!(claim_count <= 1);
                     prop_assert!(st.claimant().is_none());
                 }
                 _ => {}
@@ -326,11 +330,11 @@ proptest! {
         // whole stream reproduces the same table (determinism over a fixed
         // ctx and stream).
         let fold_over = |start: &IdentityState, segment: &[Case]| -> IdentityState {
-            let mut acc = start.clone();
+            let mut folded = start.clone();
             for case in segment {
-                acc = fx.step(&acc, &case.dep).0;
+                folded = fx.step(&folded, &case.dep).0;
             }
-            acc
+            folded
         };
         let whole = fold_over(&IdentityState::genesis(), &cases);
         prop_assert_eq!(&whole, &st);

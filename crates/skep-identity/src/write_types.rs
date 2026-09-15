@@ -133,9 +133,9 @@ impl WriteTypes {
     ) -> WriteTypes {
         let audit: Vec<(AuditClass, Address)> = audit.into_iter().collect();
         {
-            let classes: Vec<&Address> =
+            let class_addrs: Vec<&Address> =
                 std::iter::once(&grant).chain(audit.iter().map(|(_, a)| a)).collect();
-            for (i, a) in classes.iter().enumerate() {
+            for (i, a) in class_addrs.iter().enumerate() {
                 assert!(
                     credential.kind_of(&[subtree_of(a.tumbler())]).is_none(),
                     "WriteTypes::new: class address {} is a credential type address \
@@ -143,7 +143,7 @@ impl WriteTypes {
                      unreachable",
                     a.tumbler()
                 );
-                for b in &classes[i + 1..] {
+                for b in &class_addrs[i + 1..] {
                     assert!(
                         !is_prefix(a.tumbler(), b.tumbler()) && !is_prefix(b.tumbler(), a.tumbler()),
                         "WriteTypes::new: class addresses {} and {} are prefix-related; an \

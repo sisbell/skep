@@ -53,7 +53,7 @@ fn framed_is_injective_across_field_boundaries() {
 /// moment the prefix width shrinks (256 wraps a u8, 65536 a u16), so this is
 /// where the be32 in the frame is actually load-bearing.
 #[test]
-fn framing_is_injective_at_the_prefix_width_boundaries() {
+fn framed_is_injective_at_the_prefix_width_boundaries() {
     for len in [256usize, 65_536] {
         let big = vec![0u8; len];
         assert_ne!(

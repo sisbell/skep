@@ -39,7 +39,7 @@ fn audit_list() -> Vec<(AuditClass, skep_address::Address)> {
     ]
 }
 
-fn types() -> WriteTypes {
+fn write_types() -> WriteTypes {
     WriteTypes::new(credential(), addr(T_GRANT), audit_list())
 }
 
@@ -47,7 +47,7 @@ fn types() -> WriteTypes {
 /// the same rule the fold reads, the grant, and each audit-view member.
 #[test]
 fn every_class_address_answers_its_own_arm() {
-    let t = types();
+    let t = write_types();
     assert_eq!(
         t.target_class(&[unit(T_ENROLL)]),
         Some(TargetClass::Credential(CredentialKind::Enroll))
@@ -78,7 +78,7 @@ fn every_class_address_answers_its_own_arm() {
 /// so an address ABOVE every class belongs to none of them.
 #[test]
 fn an_unclassified_address_is_ordinary() {
-    let t = types();
+    let t = write_types();
     assert_eq!(t.target_class(&[unit(&[1, 1, 0, 5, 0, 3, 0, 3, 6, 1])]), None, "a ghost type");
     assert_eq!(t.target_class(&[unit(&[1, 1, 0, 5, 0, 3, 0, 1, 1])]), None, "a content position");
     assert_eq!(t.target_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2, 14])]), None, "another name");
@@ -153,7 +153,7 @@ fn an_audit_class_at_a_credential_address_is_refused_at_construction() {
 /// answering first.
 #[test]
 fn the_declared_order_of_the_classes_decides_nothing() {
-    let declared = types();
+    let declared = write_types();
     let mut list = audit_list();
     list.reverse();
     let reversed = WriteTypes::new(credential(), addr(T_GRANT), list);
@@ -196,7 +196,7 @@ fn only_the_steward_classification_requires_a_published_home() {
 /// subtype's, below).
 #[test]
 fn only_a_single_span_equal_to_a_class_subtree_is_a_member() {
-    let t = types();
+    let t = write_types();
     // Two spans, both members on their own: not a member as a slot.
     assert_eq!(t.target_class(&[unit(T_GRANT), unit(T_RAIL_RECORD)]), None);
     assert_eq!(t.target_class(&[]), None);
@@ -221,7 +221,7 @@ fn only_a_single_span_equal_to_a_class_subtree_is_a_member() {
 #[test]
 fn a_many_span_slot_is_ordinary_in_two_steps() {
     let span = unit(T_GRANT);
-    assert_eq!(types().target_class(panics_past_two(&span)), None);
+    assert_eq!(write_types().target_class(panics_past_two(&span)), None);
 }
 
 /// A SUBTYPE BY PREFIX is its class's member (L10: hierarchy is prefix — one
@@ -231,7 +231,7 @@ fn a_many_span_slot_is_ordinary_in_two_steps() {
 /// (the fold's frozen rule) and the classes do not reach it.
 #[test]
 fn a_subtype_by_prefix_is_a_member_of_its_class() {
-    let t = types();
+    let t = write_types();
     assert_eq!(
         t.target_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2, 42, 2])]),
         Some(TargetClass::AuditView(AuditClass::DelegatorEndorsement)),
@@ -252,7 +252,7 @@ fn a_subtype_by_prefix_is_a_member_of_its_class() {
 /// gives on the `TypeAddrs` the input was built from, in both directions.
 #[test]
 fn kind_of_is_unchanged_and_is_the_credential_arm() {
-    let t = types();
+    let t = write_types();
     let plain = credential();
     for slot in [
         vec![unit(T_ENROLL)],

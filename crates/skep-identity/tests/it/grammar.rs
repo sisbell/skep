@@ -51,7 +51,7 @@ fn ok_retire(bytes: &[u8]) -> Vec<Fingerprint> {
 /// Corpus: a CRLF record — header ⇒ `bad_header`; a CRLF fingerprint line ⇒
 /// `bad_line` (AUTH-2.6: `\r` is an ordinary payload byte).
 #[test]
-fn crlf_is_ordinary_payload_byte() {
+fn cr_is_an_ordinary_payload_byte() {
     let crlf_enroll = format!("skep-enroll v1\r\ned25519 {}\r\n", hex(1));
     assert_eq!(err_enroll(crlf_enroll.as_bytes()), PayloadError::BadHeader);
 
@@ -147,7 +147,7 @@ fn separator_is_exactly_one_space() {
 /// Corpus: a `sig` line with garbage — skipped, whatever follows
 /// (AUTH-2.13, permanent per AUTH-2.94), on BOTH kinds (AUTH-2.14).
 #[test]
-fn sig_lines_are_skipped_with_garbage() {
+fn sig_lines_are_skipped_whatever_follows() {
     let record = format!("skep-enroll v1\nsig !! not remotely parseable !!\ned25519 {}\n", hex(1));
     assert_eq!(ok_enroll(record.as_bytes()).len(), 1);
 

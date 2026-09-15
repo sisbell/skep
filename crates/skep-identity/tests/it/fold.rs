@@ -143,11 +143,11 @@ fn endset_order_governs_concatenation() {
 fn repeated_spans_repeat_their_lines() {
     let mut fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
-    let f1 = format!("{}\n", fp(1).to_hex());
-    let f2 = format!("{}\n", fp(2).to_hex());
+    let fp1_line = format!("{}\n", fp(1).to_hex());
+    let fp2_line = format!("{}\n", fp(2).to_hex());
     let spans = fx.mint(
         &doc1(ACCT_A),
-        &[b"skep-retire v1\n", f1.as_bytes(), f2.as_bytes()],
+        &[b"skep-retire v1\n", fp1_line.as_bytes(), fp2_line.as_bytes()],
     );
     let dep = Dep {
         home: doc1(ACCT_A),
@@ -684,11 +684,11 @@ fn shape_precedes_the_payload_read() {
     assert_token(&fx.classify(&genesis_state, &dep), "malformed_shape");
 }
 
-/// Corpus: a deposit homed in a PUBLISHED second document of its account,
+/// Corpus: an ENROLLMENT homed in a PUBLISHED second document of its account,
 /// payload unparseable — `malformed_payload` naming the fault, never
 /// `not_doc_one` (AUTH-2.127: the payload precedes the home pin).
 #[test]
-fn payload_precedes_the_home_pin() {
+fn an_enrollment_payload_precedes_the_home_pin() {
     let mut fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
     let dep = fx.enroll_dep(&doc2(ACCT_A), ACCT_A, b"zzz not a header\n");
@@ -703,8 +703,8 @@ fn payload_precedes_the_home_pin() {
 fn unowned_home_is_malformed_shape() {
     let fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
-    let outside = addr(&[2, 1, 0, 9, 0, 1]); // under no registered prefix
-    let dep = fx.claim_dep(&outside, CLAIMANT);
+    let unowned_home = addr(&[2, 1, 0, 9, 0, 1]); // under no registered prefix
+    let dep = fx.claim_dep(&unowned_home, CLAIMANT);
     assert_token(&fx.classify(&genesis_state, &dep), "malformed_shape");
 }
 
@@ -717,9 +717,9 @@ fn unowned_home_is_malformed_shape() {
 #[test]
 fn an_unrecognized_type_in_an_unowned_home_is_not_credential() {
     let fx = Fixture::new();
-    let outside = addr(&[2, 1, 0, 9, 0, 1]); // under no registered prefix
+    let unowned_home = addr(&[2, 1, 0, 9, 0, 1]); // under no registered prefix
     let dep = Dep {
-        home: outside,
+        home: unowned_home,
         from: vec![unit(ACCT_A)],
         to: vec![unit(ACCT_A)],
         ty: vec![unit(&[1, 1, 0, 1, 0, 1, 0, 1, 1])], // a content I-span
@@ -740,8 +740,8 @@ fn an_unrecognized_type_in_an_unowned_home_is_not_credential() {
 fn an_unowned_home_is_malformed_shape_even_on_an_unpublished_board() {
     let mut fx = Fixture::new();
     fx.ctx.all_unpublished = true;
-    let outside = addr(&[2, 1, 0, 9, 0, 1]);
-    let dep = fx.claim_dep(&outside, CLAIMANT);
+    let unowned_home = addr(&[2, 1, 0, 9, 0, 1]);
+    let dep = fx.claim_dep(&unowned_home, CLAIMANT);
     assert_token(
         &fx.classify(&IdentityState::genesis(), &dep),
         "malformed_shape",
@@ -937,8 +937,9 @@ fn a_holder_retirement_outside_doc_1_is_not_doc_one_and_retires_nothing() {
 /// AUTH-2.66/AUTH-2.127 for RETIREMENTS — the payload precedes the home pin:
 /// an unparseable retirement in a published second document is
 /// `malformed_payload:bad_header`, never `not_doc_one`.
-/// `payload_precedes_the_home_pin` states the same order for enrollments only,
-/// so a retirement pin hoisted above its parse keeps that vector green.
+/// `an_enrollment_payload_precedes_the_home_pin` states the same order for
+/// enrollments only, so a retirement pin hoisted above its parse keeps that
+/// vector green.
 #[test]
 fn a_retirement_payload_precedes_the_home_pin() {
     let mut fx = Fixture::new();

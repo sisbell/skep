@@ -3,12 +3,13 @@
 //!
 //! [`crate::Engine::world_dump`] and [`crate::Engine::dump_of`] are the
 //! HARNESS-ONLY unfiltered walk. The daemon's `/dump` is that walk
-//! POST-FILTERED at the request's class — [`crate::Engine::dump_of_visible`]
-//! over the same threaded predicate every read answers (PUB-6.39) — and this
-//! filter runs over the dump TREE before a byte is rendered, so the two are
-//! one tree rendered twice and a class's dump is byte-identical to the walk
-//! under the total predicate. Determinism holds per class (PUB-8.26): the
-//! text is a function of the world and the class, conditioned on the head's
+//! POST-FILTERED at the request's reader class —
+//! [`crate::Engine::dump_of_visible`] over the same threaded predicate every
+//! read answers (PUB-6.39) — and this filter runs over the dump TREE before a
+//! byte is rendered, so the two are one tree rendered twice and a reader
+//! class's dump is byte-identical to the harness walk under the total
+//! predicate. Determinism holds per reader class (PUB-8.26): the text is a
+//! function of the world and the reader class, conditioned on the head's
 //! publication state, grant state and the reader's class.
 //!
 //! What every entry the filter reaches drops and keeps is [`filter_tree`]'s
@@ -33,14 +34,15 @@
 //!   it cannot recover it DROPS.
 //! * Two hint families name something OTHER than the link whose deposit put
 //!   it there — a supersession EDGE, a predicate MEMBER — and a link's home
-//!   is what governs, so this module RE-DERIVES the link from the class it
-//!   was rendered off ([`sup_edge_claims`], [`member_tuples`]). Each is a
+//!   is what governs, so this module RE-DERIVES the link from the type class
+//!   it was rendered off ([`sup_edge_claims`], [`member_tuples`]). Each is a
 //!   restatement of a rule M7 owns, and the standing obligation on both is to
-//!   stay that restatement: one that keyed fewer entries than the walk
-//!   renders would drop, under the TOTAL predicate, what the walk wrote, and
-//!   the identity that makes a class's dump the walk's own tree would fail.
-//!   That is why each is checked against the walk over a world that has the
-//!   entry, and not only against a class that reads it.
+//!   stay that restatement: one that keyed fewer entries than the harness
+//!   walk renders would drop, under the TOTAL predicate, what the harness walk
+//!   wrote, and the identity that makes a reader class's dump the harness
+//!   walk's own tree would fail. That is why each is checked against the
+//!   harness walk over a world that has the entry, and not only against a
+//!   reader class that reads it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -53,10 +55,10 @@ use crate::canon::{SerdeTree, TreeDe};
 use super::{shipped_label, PREDICATE_PROJECTIONS, SLICE_VIEWS};
 
 /// The by-home hint families that have NO TABLE OF THEIR OWN: each is a
-/// sequence of dotted LINK addresses, and an entry stays where the class reads
-/// the document its own address is homed in. That one test is the whole rule
-/// here BECAUSE the entry is the link — the thing whose existence the entry
-/// discloses is the thing being judged.
+/// sequence of dotted LINK addresses, and an entry stays where the reader
+/// class reads the document its own address is homed in. That one test is the
+/// whole rule here BECAUSE the entry is the link — the thing whose existence
+/// the entry discloses is the thing being judged.
 ///
 /// The rule governs more families than this list names, so the list is not
 /// the reduction's by-home reach: each shipped class's two slices are link
@@ -73,23 +75,24 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 
 /// The per-class post-filter over the dump tree — the ONE statement of what
 /// the entries it reaches drop and keep, applied before render so the harness
-/// walk and every class's dump are one tree. `readable` is the threaded
+/// walk and every reader class's dump are one tree. `readable` is the threaded
 /// predicate (PUB-6.39); every address is judged at its DOCUMENT
 /// (`document_of`, the address arithmetic the link-address rule uses,
 /// PUB-6.6), an address with no document — an account, a node — judged
 /// readable.
 ///
-/// * `authoritative.namespace` — KEPT whole. The identity state in it is not
+/// * `authoritative.namespace` — KEPT whole. The addresses in it are not
 ///   secret (PUB-1.13, an address is not), but the section is M3's WHOLE
-///   serde form and carries three things beside the registries: the
-///   `publication` map (every registered document with its bit — so a class
-///   reads the draft MEMBERSHIP of documents it cannot open, and the reduced
-///   `publication` section below reduces that SECTION and not what a class
-///   learns of publication state), the per-namespace frontier COUNTS (so a
-///   draft's content and link population is legible without any of its
-///   content), and the principal registry. Widening the reduction here would
-///   move bytes the crash and wire oracles pin, so what a class is owed of
-///   this section is the format owner's question and not this filter's.
+///   serde form, and beside the node registry it carries three things: the
+///   `publication` map (every registered document with its bit — so a reader
+///   class reads the draft MEMBERSHIP of documents it cannot open, and the
+///   reduced `publication` section below reduces that SECTION and not what a
+///   reader class learns of publication state), the per-namespace frontier
+///   COUNTS (so a draft's content and link population is legible without any
+///   of its content), and the principal registry. Widening the reduction here
+///   would move bytes the crash and wire oracles pin, so what a reader class
+///   is owed of this section is the format owner's question and not this
+///   filter's.
 /// * `authoritative.content.map` — a CONTENT LINE leaves when its element's
 ///   document is unreadable.
 /// * `authoritative.arrangement.{arrangements, provenance}` — the
@@ -112,19 +115,19 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 ///   things:
 ///     * The PREDICATE PROJECTIONS ([`PREDICATE_PROJECTIONS`]) are MEMBER
 ///       addresses — `LinkState::members` denotes the subjects, not the
-///       tuples — so an entry stays where the class reads the member's own
-///       document AND some `pred_def`/`pred_stable` tuple asserting it, at
+///       tuples — so an entry stays where the reader class reads the member's
+///       own document AND some `pred_def`/`pred_stable` tuple asserting it, at
 ///       that entry's own view, is readably homed. The REGISTRATION is a fact
 ///       deposited in that tuple's home, and a link's home governs what a
-///       class learns of it (PUB-6.13). Either test alone leaks one way: the
-///       member's alone puts a draft-homed registration in the guest's dump,
-///       the tuple's alone puts a draft's content position there.
+///       reader class learns of it (PUB-6.13). Either test alone leaks one
+///       way: the member's alone puts a draft-homed registration in the
+///       guest's dump, the tuple's alone puts a draft's content position there.
 ///     * A SUPERSESSION EDGE takes a third test beside its two endpoints'
 ///       homes (lane 4.2, F4; PUB-6.13, PUB-6.22, PUB-6.27): the edge stays
 ///       only where some operative CLAIM asserting it — the `[K_sup]` link
-///       the walk derived the edge from — is homed in a document the class
-///       reads. A claim is a link and its home governs, exactly as
-///       `in_claims`/`out_claims` filter lineage by the CLAIM's home: a
+///       the harness walk derived the edge from — is homed in a document the
+///       reader class reads. A claim is a link and its home governs, exactly
+///       as `in_claims`/`out_claims` filter lineage by the CLAIM's home: a
 ///       draft-homed `assert_sup` over two public links is invisible to a
 ///       guest there and leaves the guest's dump here.
 ///
@@ -133,11 +136,11 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 ///   both re-derivations are read at filter time off `links`, the render's own
 ///   source, through [`sup_edge_claims`] and [`member_tuples`].
 ///
-/// An entry NO PATH IN THE BODY NAMES is kept whole at every class. So the
-/// statement above is this reduction's COMPLETENESS as well as its content,
-/// and the gap it admits is the one nothing else here catches: a section or a
-/// hint family added to the tree and left out of it goes to the guest
-/// unreduced, deterministically and with nothing about it looking wrong.
+/// An entry NO PATH IN THE BODY NAMES is kept whole at every reader class. So
+/// the statement above is this reduction's COMPLETENESS as well as its
+/// content, and the gap it admits is the one nothing else here catches: a
+/// section or a hint family added to the tree and left out of it goes to the
+/// guest unreduced, deterministically and with nothing about it looking wrong.
 ///
 /// That statement accounts for ALL FIVE LEVELS of the tree, and
 /// `every_hints_family_is_reduced_or_kept_by_name` holds it against the
@@ -158,9 +161,9 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 /// The THIRD is the one whose additions are not an engine edit at all, and
 /// the reason the level is held here rather than left to the builders: a
 /// store growing a serde field on its slice renders whatever that field
-/// holds to every class, with every path in this body still naming a place
-/// of the shape it expects, and — by the module doc's first obligation —
-/// with no compiler edge from that store to this file.
+/// holds to every reader class, with every path in this body still naming a
+/// place of the shape it expects, and — by the module doc's first obligation
+/// — with no compiler edge from that store to this file.
 ///
 /// A key that fails to decode is DROPPED (fail-closed): every key here was
 /// rendered from an address a moment earlier, so none does, and a filter
@@ -256,20 +259,21 @@ pub(super) fn filter_tree(
 /// `succs_operative`'s nullified filter, and the STANDING OBLIGATION on this
 /// function is that it stay that composition: an edge the render carries must
 /// have at least one claim here, or the filter drops under the total
-/// predicate what the walk rendered, and the identity that makes a class's
-/// dump the walk's own tree fails. The test below over a world that HAS an
-/// edge is where that agreement is checked, and a change to M7's arm has its
-/// counterpart here.
+/// predicate what the harness walk rendered, and the identity that makes a
+/// reader class's dump the harness walk's own tree fails. The test below over
+/// a world that HAS an edge is where that agreement is checked, and a change
+/// to M7's arm has its counterpart here.
 ///
 /// Both slots are read through `Endset::addrs` UNGUARDED, which is
 /// `fold_hints`' own reading and must stay it: that iterator already keeps the
 /// unit-depth spans and drops the rest, so an `is_address_denoting` test here
 /// would be strictly stronger than the rule being mirrored and would key
-/// fewer edges than the walk renders.
+/// fewer edges than the harness walk renders.
 ///
-/// Nothing in the class can exercise the difference, and the reason is a
-/// CLOSURE rather than a coincidence. THREE deposits could put a link in the
-/// class, and each is refused or shaped by a door of M7's:
+/// Nothing in the supersession class can exercise the difference, and the
+/// reason is a CLOSURE rather than a coincidence. THREE deposits could put a
+/// link in the supersession class, and each is refused or shaped by a door of
+/// M7's:
 ///
 /// * `makelink` and `emit` refuse a supersedes-classed type slot outright
 ///   (`MakeLinkError::SupersessionClass`, `EmitError::SupersessionClass`), so
@@ -312,9 +316,10 @@ fn sup_edge_claims(links: &LinkState) -> BTreeMap<Tumbler, BTreeMap<Tumbler, Vec
         }
         // RESIDENCY is M7's stated postcondition on `type_slice`, and M7
         // fail-stops on it itself (`LinkState::link_at`). Skipping the claim
-        // instead would key fewer edges than the walk renders, which is the
-        // one departure this derivation's standing obligation forbids: under
-        // the total predicate the filter would drop what the walk wrote.
+        // instead would key fewer edges than the harness walk renders, which
+        // is the one departure this derivation's standing obligation forbids:
+        // under the total predicate the filter would drop what the harness
+        // walk wrote.
         let link = links
             .readlink(&claim)
             .expect("a type_slice key names a resident link (M7's postcondition)");
@@ -338,8 +343,9 @@ fn sup_edge_claims(links: &LinkState) -> BTreeMap<Tumbler, BTreeMap<Tumbler, Vec
 /// so the derivation is RESTATED here, and the STANDING OBLIGATION is that it
 /// stay `members`' own denotation rule: the union of the F-slot's denoted
 /// addresses over the class's slice under that view. Two departures from that
-/// rule would each break the identity that makes a class's dump the walk's own
-/// tree, by keying fewer members than the walk renders —
+/// rule would each break the identity that makes a reader class's dump the
+/// harness walk's own tree, by keying fewer members than the harness walk
+/// renders —
 ///
 /// * an `is_address_denoting` guard on the F slot, which is STRICTLY STRONGER
 ///   than `Endset::addrs`: that iterator already keeps the unit-depth spans
@@ -356,8 +362,8 @@ fn sup_edge_claims(links: &LinkState) -> BTreeMap<Tumbler, BTreeMap<Tumbler, Vec
 ///   `Active`, so each row of [`PREDICATE_PROJECTIONS`] carries the view its own
 ///   entries were rendered under.
 ///
-/// The reverse direction is free: keying a member the walk did NOT render
-/// costs a lookup nothing probes.
+/// The reverse direction is free: keying a member the harness walk did NOT
+/// render costs a lookup nothing probes.
 ///
 /// Read through M7's public surface alone — the class's `type_slice` and
 /// `readlink` per tuple — at filter time, as [`sup_edge_claims`] is. A tuple's
@@ -376,8 +382,8 @@ fn member_tuples(links: &LinkState, ty: &Endset, view: View) -> BTreeMap<Tumbler
     for tuple in links.type_slice(ty, view) {
         // RESIDENCY is M7's stated postcondition on `type_slice`, as at
         // `sup_edge_claims`, and skipping the tuple would key fewer members
-        // than the walk renders — the departure the standing obligation above
-        // forbids.
+        // than the harness walk renders — the departure the standing
+        // obligation above forbids.
         let link = links
             .readlink(&tuple)
             .expect("a type_slice key names a resident link (M7's postcondition)");
@@ -423,7 +429,7 @@ fn retain_seq(tree: &mut SerdeTree, path: &[&str], keep: &dyn Fn(&SerdeTree) -> 
 /// a sequence of dotted items — that both predicates admit: an entry stays
 /// where `keep_key` admits its key, and each of that entry's items stays where
 /// `keep_pair` admits it with the key. An entry whose sequence empties LEAVES,
-/// because the walk renders no empty one.
+/// because the harness walk renders no empty one.
 ///
 /// Both addresses re-enter through [`dotted_address`] here rather than at the
 /// caller, so this helper holds the fail-closed key rule itself: what does not
@@ -615,12 +621,12 @@ mod tests {
     /// its own reason:
     ///
     /// * a SHIPPED CLASS's submap, where the filter reduces two entries per
-    ///   class by NAME, so a fourth added beside them goes out whole with
-    ///   every path in the filter still naming a place; and
+    ///   shipped class by NAME, so a fourth added beside them goes out whole
+    ///   with every path in the filter still naming a place; and
     /// * an AUTHORITATIVE slice's serde fields, where the addition is not an
     ///   engine edit at all. A store growing a field on its slice discloses
-    ///   whatever that field holds about a document the class cannot open,
-    ///   and the store author has no compiler edge to this file.
+    ///   whatever that field holds about a document the reader class cannot
+    ///   open, and the store author has no compiler edge to this file.
     ///
     /// What this asks of an addition is a DISPOSITION, which is why the format
     /// tests pinning the rendered text are not a substitute at any level. Those
@@ -667,7 +673,7 @@ mod tests {
         assert_eq!(
             keys_at(&mut tree, &["hints"]),
             named,
-            "a hints family the filter does not name is rendered whole to every class"
+            "a hints family the filter does not name is rendered whole to every reader class"
         );
 
         // …the root, where each section has a disposition in the filter's one
@@ -679,7 +685,7 @@ mod tests {
         assert_eq!(
             keys_at(&mut tree, &[]),
             sections,
-            "a root section the filter does not name is rendered whole to every class"
+            "a root section the filter does not name is rendered whole to every reader class"
         );
 
         // …the AUTHORITATIVE section's own two levels, which no family list
@@ -692,7 +698,8 @@ mod tests {
         assert_eq!(
             keys_at(&mut tree, &["authoritative"]),
             slices,
-            "an authoritative slice the filter does not name is rendered whole to every class"
+            "an authoritative slice the filter does not name is rendered whole to every \
+             reader class"
         );
         // …then, inside each, that store's own serde fields — the level the
         // filter's four authoritative paths END in. A store adding a field to
@@ -711,7 +718,8 @@ mod tests {
             assert_eq!(
                 keys_at(&mut tree, &["authoritative", slice]),
                 named,
-                "{slice}: a serde field the filter does not name is rendered whole to every class"
+                "{slice}: a serde field the filter does not name is rendered whole to every \
+                 reader class"
             );
         }
 
@@ -731,7 +739,8 @@ mod tests {
             assert_eq!(
                 keys_at(&mut tree, &["hints", "types", label]),
                 class_entries,
-                "{label}: a class entry the filter does not name is rendered whole to every class"
+                "{label}: a shipped-class entry the filter does not name is rendered whole to \
+                 every reader class"
             );
         }
     }
@@ -750,12 +759,12 @@ mod tests {
     }
 
     /// …and under the GUEST predicate the draft's content, arrangement and
-    /// link leave while the identity section stays whole and the publication
-    /// slice empties: the populated world's one document is a DRAFT, so a
+    /// link leave while the namespace section stays whole and the publication
+    /// section empties: the populated world's one document is a DRAFT, so a
     /// guest sees its registration and nothing it holds. Asked of the TREE,
     /// where each section can be named, rather than of the text.
     #[test]
-    fn the_guest_filter_drops_a_draft_s_sections_and_keeps_identity() {
+    fn the_guest_filter_drops_a_draft_s_sections_and_keeps_the_namespace_section() {
         let (_engine, world) = populated_world();
         let mut full = dump_tree(&world);
         let mut guest =
@@ -779,7 +788,7 @@ mod tests {
             assert!(len_at(&mut full, path) > 0, "{path:?}: the fixture must populate it");
             assert_eq!(len_at(&mut guest, path), 0, "{path:?}: a guest reads nothing of a draft");
         }
-        // The identity section is untouched. The GRANT section is kept whole
+        // The namespace section is untouched. The GRANT section is kept whole
         // too, but this fixture deposits no grant, so what the loop below
         // compares there is one empty map against another — the integration
         // suite's guest tests are what hold that section's content against a
@@ -799,16 +808,16 @@ mod tests {
     /// link, which cover the authoritative maps and the two publication
     /// families; this adds the link population the shipped classes and the
     /// predicate projections need. The links carry ADDRESS-form slots under
-    /// ghost types of the draft's own never-minted subspace 3, so each lands
-    /// in an unregistered coverage class and the shipped slices hold exactly
-    /// the tuples deposited under them.
+    /// never-minted types in the draft's own subspace 3, so each lands in an
+    /// unregistered coverage class and the shipped slices hold exactly the
+    /// tuples deposited under them.
     fn every_reduced_family_in_a_draft() -> World {
         let (engine, world) = populated_world();
         let draft = the_one_draft(&world);
         let caller = Caller::Principal(USER);
         let visibility = World::visible_to(caller);
         let writer = engine.linkstore(&visibility);
-        let ghost_typed_link = |n: u32| {
+        let ordinary_link = |n: u32| {
             writer
                 .makelink(
                     caller,
@@ -821,7 +830,7 @@ mod tests {
                 .0
         };
         // Two endpoints for the supersession claim, and one link to retract.
-        let (old, new, doomed) = (ghost_typed_link(41), ghost_typed_link(42), ghost_typed_link(43));
+        let (old, new, doomed) = (ordinary_link(41), ordinary_link(42), ordinary_link(43));
         writer
             .assert_sup(caller, &draft, &old, &new)
             .expect("a supersession claim over two of the draft's links");
@@ -861,8 +870,8 @@ mod tests {
     /// and then each entry's VALUE, and an entry whose value it does not
     /// recognize is kept on the KEY test ALONE — with the claim's home never
     /// asked. Every other reduction has one shape and `reduced_paths` asserts
-    /// it; this is the one with two, and the second is what a class's own
-    /// edges turn on.
+    /// it; this is the one with two, and the second is what a reader class's
+    /// own edges turn on.
     ///
     /// It is the SHAPE claim that is completed here, not an unwatched
     /// disclosure: reshaping that family reddens
@@ -1008,7 +1017,7 @@ mod tests {
         );
 
         // Two ordinary links of the draft, to be the endpoints below.
-        let ghost_typed_link = |n: u32| {
+        let ordinary_link = |n: u32| {
             writer
                 .makelink(
                     caller,
@@ -1020,7 +1029,7 @@ mod tests {
                 .expect("a link in the owner's own draft")
                 .0
         };
-        let (old, new) = (ghost_typed_link(41), ghost_typed_link(42));
+        let (old, new) = (ordinary_link(41), ordinary_link(42));
 
         // The THIRD door, and the one no open surface guards: `editlink`
         // deposits the caller's own successor beside its claim, so a
@@ -1077,8 +1086,8 @@ mod tests {
         let (engine, home, draft) = a_published_home_and_a_private_draft();
         let caller = Caller::Principal(USER);
         let visibility = World::visible_to(caller);
-        // Two public links in the home under ghost types of its own
-        // never-minted subspace 3 (address-form slots, empty endsets).
+        // Two public links in the home under never-minted types in its own
+        // subspace 3 (address-form slots, empty endsets).
         let public_link = |n: u32| {
             engine
                 .linkstore(&visibility)
@@ -1163,7 +1172,7 @@ mod tests {
     /// The draft-homed registration of a PUBLIC member is the one a single
     /// member-home test admits: the guest's `shipped.pred_stable` slice is
     /// empty, because the tuple is draft-homed, while the projection would
-    /// name the member — the walk's two renderings of one deposit,
+    /// name the member — the harness walk's two renderings of one deposit,
     /// disagreeing, with a draft's content in the guest's dump. The public
     /// registration of a DRAFT's member is the mirror, and is what a single
     /// tuple-home test would admit.
@@ -1227,7 +1236,8 @@ mod tests {
         );
         // …and under the TOTAL predicate the filter is the identity, which is
         // what [`member_tuples`]' obligation rests on: a re-derivation that
-        // keyed fewer members than the walk renders would drop them here.
+        // keyed fewer members than the harness walk renders would drop them
+        // here.
         assert_eq!(
             dump_visible(&world, &|_: &Address| true),
             dump(&world),
@@ -1236,7 +1246,7 @@ mod tests {
     }
 
     /// Lane 4.2, F4 (register cell I3.a): a supersession CLAIM is a link and
-    /// its HOME governs what a class sees of it (PUB-6.13, PUB-6.22,
+    /// its HOME governs what a reader class sees of it (PUB-6.13, PUB-6.22,
     /// PUB-6.27) — so an edge in `hints.supersession` asserted only by a
     /// DRAFT-homed `assert_sup` over two PUBLIC links leaves the guest's dump
     /// with its claim, while both public endpoints stay, and the owner's dump

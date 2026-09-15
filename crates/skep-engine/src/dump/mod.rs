@@ -12,7 +12,7 @@
 //!
 //! A slice reaches the authoritative section through its SERDE CHECKPOINT
 //! FORM rather than through an enumeration: M4 publishes none and M3's
-//! covers its publication record alone, and M5's and M7's go the same way so
+//! covers its publication map alone, and M5's and M7's go the same way so
 //! that one seam serves all four. It is the
 //! bytes-level seam M2's checkpoints already depend on, down to serde's
 //! human-readable flag, which the transcode answers the way bincode does — so
@@ -24,7 +24,7 @@
 //! * **authoritative** (`authoritative_tree`) — one entry per store slice,
 //!   each the slice's own serde form.
 //! * **publication** (`publication_tree`, v5, PUB round 2, lane 3.4 §3) —
-//!   M3's AUTHORITATIVE publication slice projected to its drafts: the state
+//!   M3's AUTHORITATIVE publication map projected to its drafts: the state
 //!   the exception set is a derived index over, rendered apart from the
 //!   hints' copy of it (`hints.publication.drafts`, which STAYS — it is the
 //!   faithfulness check's subject, this section the authority it is checked
@@ -60,6 +60,7 @@ use skep_namespace::PrincipalId;
 
 use crate::canon::{render, to_tree, SerdeTree};
 use crate::grants::GrantRecord;
+use crate::publication::Draft;
 use crate::world::World;
 
 use filter::filter_tree;
@@ -118,9 +119,9 @@ impl AsRef<str> for WorldDump {
 }
 
 /// The banner every rendering leads with. v5 (2026-09-06, PUB round 2, lane
-/// 3.4): the root gained the `publication` SECTION (M3's authoritative slice,
-/// drafts in address order) and the `grants` SECTION (the grant fold's
-/// operative set). v4 (2026-09-05) was the hints section gaining
+/// 3.4): the root gained the `publication` SECTION (M3's authoritative
+/// publication map, drafts in address order) and the `grants` SECTION (the
+/// grant fold's operative set). v4 (2026-09-05) was the hints section gaining
 /// `publication.drafts`, the exception set; v3 the ghost-tumbler format. The
 /// banner's version moves with the section keys.
 const BANNER: &str = "skep-world-dump v5\n";
@@ -128,7 +129,7 @@ const BANNER: &str = "skep-world-dump v5\n";
 /// The dump as a TREE, before rendering: the authoritative section, the two
 /// publication-round sections, then the hints section over the shipped
 /// classes. The per-class filter ([`filter_tree`]) runs over this tree, so
-/// the harness-only walk and a class's dump are one tree rendered twice.
+/// the harness-only walk and a reader class's dump are one tree rendered twice.
 fn dump_tree(world: &World) -> SerdeTree {
     SerdeTree::Map(vec![
         (key("authoritative"), authoritative_tree(world)),
@@ -297,34 +298,34 @@ fn shipped_label(ty: ShippedType) -> &'static str {
     }
 }
 
-/// The dump's own name for each VIEW a class's slice is rendered under, with
-/// the view it is read at — [`class_tree`]'s two slice entries, in the order
-/// it writes them.
+/// The dump's own name for each VIEW a shipped class's slice is rendered
+/// under, with the view it is read at — [`class_tree`]'s two slice entries, in
+/// the order it writes them.
 ///
 /// TWO rows and not a total function over `View`: this format renders the
 /// audit and active slices and no third, so a view M7 has beside them is
-/// absent from a class's submap until a row here says otherwise.
+/// absent from a shipped class's submap until a row here says otherwise.
 ///
 /// The label and the view it names are one piece of format knowledge, so
 /// they are declared together and once, exactly as [`PREDICATE_PROJECTIONS`]
-/// is. The builder writes a class's slices off this table and the per-class
-/// filter reduces them off the same one, so a slice's entries cannot be
-/// judged at a view other than the one they were rendered under. The labels
-/// are the dump's own wire vocabulary, as [`shipped_label`]'s are — they are
-/// wire-visible and outlive any rename of the variant.
+/// is. The builder writes a shipped class's slices off this table and the
+/// per-class filter reduces them off the same one, so a slice's entries
+/// cannot be judged at a view other than the one they were rendered under.
+/// The labels are the dump's own wire vocabulary, as [`shipped_label`]'s are —
+/// they are wire-visible and outlive any rename of the variant.
 const SLICE_VIEWS: [(&str, View); 2] = [("audit", View::Audit), ("active", View::Active)];
 
 /// M9's definition registry as this format projects it: one hints family per
 /// (shipped class, view), each rendering `LinkState::members` — the SUBJECTS
 /// those tuples denote, never the tuples themselves.
 ///
-/// The family name, the class it is read off and the view it is read under
-/// are one piece of format knowledge, so they are declared together and once.
-/// The builder ([`hints_tree`]) writes these families off this table and the
-/// per-class filter reduces them off the same one, which is what keeps a
-/// family's entries from being judged at a class or a view other than the one
-/// they were rendered under — a disagreement two separate declarations could
-/// hold without contradicting either.
+/// The family name, the shipped class it is read off and the view it is read
+/// under are one piece of format knowledge, so they are declared together and
+/// once. The builder ([`hints_tree`]) writes these families off this table and
+/// the per-class filter reduces them off the same one, which is what keeps a
+/// family's entries from being read against a shipped class or a view other
+/// than the one they were rendered under — a disagreement two separate
+/// declarations could hold without contradicting either.
 ///
 /// The names are the dump's own wire vocabulary, as [`shipped_label`]'s are,
 /// and the ORDER is free: `render` sorts a map's entries, so the section's
@@ -340,13 +341,13 @@ const PREDICATE_PROJECTIONS: [(&str, ShippedType, View); 4] = [
 /// holds — its key endset, then one slice per row of [`SLICE_VIEWS`], each
 /// already an address-ordered `OrdSet`.
 ///
-/// That entry set is format, and it is the third level of the tree the
-/// per-class filter's completeness statement is held against: the slices are
-/// sequences of link addresses and reduce by home, while `key` is a compiled
-/// format constant and stays at every class. A fourth entry added here and
-/// left out of that statement would be rendered whole to every reader, which
-/// is why `every_hints_family_is_reduced_or_kept_by_name` holds this set as
-/// well as the two above it.
+/// That entry set is format, and it is the last of the five levels of the
+/// tree the per-class filter's completeness statement is held against: the
+/// slices are sequences of link addresses and reduce by home, while `key` is a
+/// compiled format constant and stays at every reader class. A fourth entry
+/// added here and left out of that statement would be rendered whole to every
+/// reader, which is why `every_hints_family_is_reduced_or_kept_by_name` holds
+/// this set as well as the four above it.
 ///
 /// `ty` carries M7's stated precondition — address-denoting or
 /// `iextent`-built, else `type_slice` panics naming it — and the one caller
@@ -409,7 +410,7 @@ fn hints_tree(world: &World) -> SerdeTree {
         (key("links.nullified"), addr_seq(audit.iter().filter(|addr| links.is_nullified(addr)))),
     ];
 
-    // Per-class typed slices: the shipped classes off M7's own one list.
+    // The shipped classes' typed slices, off M7's own one list.
     let mut classes: Vec<(SerdeTree, SerdeTree)> = Vec::new();
     for ty in ShippedType::ALL {
         classes.push((key(shipped_label(ty)), class_tree(links, links.reserved_type(ty))));
@@ -453,8 +454,8 @@ fn drafts_tree(world: &World) -> SerdeTree {
     SerdeTree::Map(
         world
             .drafts()
-            .map(|d| {
-                (SerdeTree::Str(d.document.to_string()), SerdeTree::Str(d.owner.to_string()))
+            .map(|Draft { document, owner_account }| {
+                (SerdeTree::Str(document.to_string()), SerdeTree::Str(owner_account.to_string()))
             })
             .collect(),
     )
@@ -462,13 +463,13 @@ fn drafts_tree(world: &World) -> SerdeTree {
 
 // ── the two publication-round sections (v5, lane 3.4 §3) ──
 
-/// The PUBLICATION section: M3's AUTHORITATIVE publication slice reduced to
-/// its DRAFT entries — the documents whose minting record journaled
-/// `published: false` — as dotted addresses in address order. Off M3's own
-/// enumeration of that record, `M3State::documents`, the walk the exception
-/// set's seed makes; the hints' `publication.drafts` is the FOLD's copy, and
+/// The PUBLICATION section: M3's AUTHORITATIVE publication map reduced to its
+/// DRAFT entries — the documents whose minting record journaled `published:
+/// false` — as dotted addresses in address order. Off M3's own enumeration of
+/// that map, `M3State::documents`, the walk the exception set's seed makes;
+/// the hints' `publication.drafts` is the FOLD's copy, and
 /// [`crate::Engine::check_hints_of`] compares that copy against the seed. A
-/// SEQUENCE — `render` sorts maps alone — in the record's own address order,
+/// SEQUENCE — `render` sorts maps alone — in the map's own address order,
 /// which is the order the filter preserves.
 ///
 /// One walk, TWO RULES over it, and the two agree on an invariant of M3's
@@ -478,17 +479,17 @@ fn drafts_tree(world: &World) -> SerdeTree {
 /// is what keeps the load path's fail-stop off an unregistered address. The
 /// rules coincide because M3 writes the publication entry and the
 /// registration in one fold step, and only for a document-tier mint, so on
-/// any slice M3's fold produced the record's entries ARE the registered
+/// any slice M3's fold produced the map's entries ARE the registered
 /// documents. Only an entry for an address M3 does NOT register separates
 /// them: this section keeps it by its bit, and the seed's re-ask drops it. A
 /// registered document with NO entry is absent from BOTH — neither walk
 /// reaches it — so their agreement cannot witness that shape, which is the
 /// open direction `crate::publication` states.
 ///
-/// This section is a PROJECTION of the record, not the only rendering of it:
-/// the same authoritative map travels whole inside `authoritative.namespace`,
-/// as one of M3's four serde fields. So the per-class filter's reduction of
-/// this section reduces THIS SECTION, and a class that cannot open a draft
+/// This section is a PROJECTION of the map, not the only rendering of it: the
+/// same authoritative map travels whole inside `authoritative.namespace`, as
+/// one of M3's four serde fields. So the per-class filter's reduction of this
+/// section reduces THIS SECTION, and a reader class that cannot open a draft
 /// still reads its bit there.
 fn publication_tree(world: &World) -> SerdeTree {
     addr_seq(
@@ -501,7 +502,7 @@ fn publication_tree(world: &World) -> SerdeTree {
 }
 
 /// The GRANT section: the grant fold's OPERATIVE set — every admitted,
-/// unsuperseded grant keyed by the grant link's own address, each entry its
+/// unrevoked grant keyed by the grant link's own address, each entry its
 /// `home` (the issuer's doc 1), its `issuer` (ω of the home), the
 /// `content_prefix` it shares and its `grantee` (`none` for the ANY-PRINCIPAL
 /// form, PUB-5.8). DERIVED — the fold's records, the engine keeping no grant
@@ -545,19 +546,21 @@ fn grants_tree(world: &World) -> SerdeTree {
 }
 
 /// The dump surface. Every rendering below is a pure function of the world it
-/// is handed and, where there is one, the class it is filtered at: nothing of
-/// this handle's own state reaches the text. The receiver is the engine a
-/// caller already holds, and the no-argument methods use it for the one thing
-/// it supplies — pinning the committed snapshot the world is read off.
+/// is handed and, where there is one, the reader class it is filtered at:
+/// nothing of this handle's own state reaches the text. The receiver is the
+/// engine a caller already holds, and the no-argument methods use it for the
+/// one thing it supplies — pinning the committed snapshot the world is read
+/// off.
 impl crate::Engine {
     /// [`crate::Engine::dump_of`] at a READER'S CLASS (PUB round 2, lane 3.4
     /// §4): the same tree, post-filtered by `readable` before render — what
     /// the filter drops and keeps is [`filter_tree`]'s one statement. The
     /// predicate is the threaded one: a world's own `World::readable` closed
     /// over a principal for a live dump, or the HEAD's for a historical world
-    /// (`/dump?at=N` — the N-world's state at the head's class, PUB-6.48),
-    /// and the caller closes it over ONE snapshot (PUB-6.39). Under the total
-    /// predicate this is `dump_of` byte for byte (the unit test pins it).
+    /// (`/dump?at=N` — the N-world's state at the reader's class as the head
+    /// decides it, PUB-6.48), and the caller closes it over ONE snapshot
+    /// (PUB-6.39). Under the total predicate this is `dump_of` byte for byte
+    /// (the unit test pins it).
     ///
     /// COST: [`crate::Engine::dump_of`]'s plus, per filtered entry, one key
     /// decode — a `Tumbler` deserialize off the tree for the authoritative
@@ -577,14 +580,15 @@ impl crate::Engine {
     /// walks are bounded differently, and by the STORE rather than by the
     /// request:
     ///
-    /// * the supersession walk is linear in its class, with one denoted
-    ///   address a side per claim — for the reasons `sup_edge_claims` in
-    ///   `dump::filter` gives, which name every door of M7's that bound rests
-    ///   on; while
+    /// * the supersession walk is linear in the supersession class, with one
+    ///   denoted address a side per claim — for the reasons `sup_edge_claims`
+    ///   in `dump::filter` gives, which name every door of M7's that bound
+    ///   rests on; while
     /// * the predicate walks are linear in the SUM OF SUBJECT-SLOT WIDTHS
-    ///   over their classes, each slot up to `skep_links::MAX_SLOT_SPANS`
-    ///   spans. That is `LinkState::members`' own bound, which
-    ///   `member_tuples` in `dump::filter` mirrors, and says why it must.
+    ///   over the two predicate classes, each slot up to
+    ///   `skep_links::MAX_SLOT_SPANS` spans. That is `LinkState::members`' own
+    ///   bound, which `member_tuples` in `dump::filter` mirrors, and says why
+    ///   it must.
     ///
     /// The filter additionally PARSES a dotted address per entry it judges,
     /// which is [`crate::Engine::dump_of`]'s magnitude term run backwards: a
@@ -597,12 +601,12 @@ impl crate::Engine {
         dump_visible(world, readable)
     }
 
-    /// The committed world at `principal`'s class, over ONE snapshot: the
-    /// predicate is that snapshot's own `World::readable`, so the state
-    /// dumped and the class it is filtered at stand on one committed state.
-    /// `None` is the GUEST (PUB-5.5) — published alone, so the publication
-    /// slice renders EMPTY and no draft's content, arrangement or link
-    /// appears.
+    /// The committed world at `principal`'s reader class, over ONE snapshot:
+    /// the predicate is that snapshot's own `World::readable`, so the state
+    /// dumped and the reader class it is filtered at stand on one committed
+    /// state. `None` is the GUEST (PUB-5.5) — published alone, so the
+    /// publication section renders EMPTY and no draft's content, arrangement
+    /// or link appears.
     pub fn world_dump_visible_to(&self, principal: Option<PrincipalId>) -> WorldDump {
         let snap = self.kernel().snapshot();
         let world = snap.world();
@@ -633,7 +637,7 @@ impl crate::Engine {
     /// slice into an owned value tree before a byte of text is written, and
     /// the render then materializes each map entry's own rendering as an
     /// owned `String` to sort by — so at peak the text exists at least twice
-    /// over. M3's publication record is read TWICE: once inside the
+    /// over. M3's publication map is read TWICE: once inside the
     /// authoritative transcode, and once more by [`publication_tree`], which
     /// walks it through M3's own enumeration — one entry per REGISTERED
     /// DOCUMENT, published or not, and no re-validation. The tree costs a node
@@ -652,15 +656,15 @@ impl crate::Engine {
     /// address that was never minted and never will be is stored and later
     /// rendered — and the sections that carry such addresses dotted include
     /// the `grants` section, which the per-class filter keeps WHOLE. So every
-    /// class pays this term, the guest included
+    /// reader class pays this term, the guest included
     /// (`a_grant_names_an_address_the_client_invented` pins the reach).
     ///
     /// The hints half adds two whole-store link scans
     /// (`match_links` under the empty constraint set, each lifting every key
     /// it walks), one `is_nullified` and one `succs` per audit LINK, and two
-    /// typed-slice walks per class. Nothing here is memoized, and peak memory
-    /// is that figure times the number of calls in flight. Admission and
-    /// concurrency are the caller's to gate; this method gates neither.
+    /// typed-slice walks per shipped class. Nothing here is memoized, and peak
+    /// memory is that figure times the number of calls in flight. Admission
+    /// and concurrency are the caller's to gate; this method gates neither.
     pub fn dump_of(&self, world: &World) -> WorldDump {
         dump(world)
     }
@@ -719,7 +723,7 @@ impl crate::Engine {
     /// seed's address order IS the fold's deposit order.
     ///
     /// For the EXCEPTION SET the certificate has an edge of its own. Its two
-    /// halves enumerate M3's publication record alike — the fold asks the
+    /// halves enumerate M3's publication map alike — the fold asks the
     /// one address each document-minting record writes an entry for, and the
     /// seed walks the entries — so a registered document with NO entry is
     /// outside both halves and outside what `Ok(())` speaks for. That is the

@@ -4,10 +4,10 @@
 //! filtered by the threaded predicate before render. The daemon's suite
 //! holds the wire oracle (H4: `/dump` equals this post-filter byte for byte);
 //! what is tested here is the engine's own: the filter under the total
-//! predicate IS the walk, the guest's slice is empty, an owner's lists its
-//! drafts, a grantee's follows the grant, a stranger's is the guest's, each
-//! class is deterministic (PUB-8.26), and a historical world dumps at the
-//! HEAD's class (PUB-6.48).
+//! predicate IS the walk, the guest's publication section is empty, an
+//! owner's lists its drafts, a grantee's follows the grant, a stranger's is
+//! the guest's, each class is deterministic (PUB-8.26), and a historical world
+//! dumps at the HEAD's class (PUB-6.48).
 
 use crate::common;
 
@@ -115,7 +115,7 @@ fn secret_line() -> String {
 /// fields — and the faithfulness check, which now compares the grant fold's
 /// seed against its fold through that section, still green.
 #[test]
-fn the_v5_format_names_the_publication_slice_and_the_grant_fold() {
+fn the_v5_format_renders_the_publication_and_grants_sections() {
     let engine = mem_engine();
     let b = board(&engine);
     let g = grant(&engine, &b, &b.draft_a, &b.acct_b);
@@ -175,27 +175,30 @@ fn the_filter_under_the_total_predicate_is_the_harness_walk() {
     assert_eq!(engine.dump_of_visible(world, &|_: &Address| true), engine.dump_of(world));
 }
 
-/// The GUEST (no principal): the publication slice EMPTY, the exception-set
+/// The GUEST (no principal): the publication section EMPTY, the exception-set
 /// hint empty, no content line of the draft, no link of the draft in any
-/// hint family — while the published home's grant and the identity section
+/// hint family — while the published home's grant and the namespace section
 /// stay. A STRANGER principal — no account, no grant — reads exactly what the
 /// guest reads.
 #[test]
-fn a_guest_s_dump_holds_no_draft_content_and_an_empty_slice() {
+fn a_guest_s_dump_holds_no_draft_content_and_an_empty_publication_section() {
     let engine = mem_engine();
     let b = board(&engine);
     let g = grant(&engine, &b, &b.draft_a, &b.acct_b);
 
     let guest = engine.world_dump_visible_to(None).into_string();
     assert!(guest.starts_with("skep-world-dump v5\n"), "one banner for every class");
-    assert!(guest.contains("\"publication\": []"), "the guest's slice is EMPTY:\n{guest}");
+    assert!(
+        guest.contains("\"publication\": []"),
+        "the guest's publication section is EMPTY:\n{guest}"
+    );
     assert!(guest.contains("\"publication.drafts\": {}"), "…and so is the hint:\n{guest}");
     assert!(!guest.contains(&secret_line()), "a draft's content line leaves:\n{guest}");
     assert!(!guest.contains(&quoted(&b.link_a)), "a draft's link leaves every hint:\n{guest}");
     assert!(guest.contains(&quoted(&g)), "the published home's grant link stays:\n{guest}");
     // The grant section is kept whole, so the draft the guest cannot open is
     // still named there, as that grant's `content_prefix` — the one dotted
-    // rendering of it a guest's text carries. (The identity section names it
+    // rendering of it a guest's text carries. (The namespace section names it
     // too, but in the authoritative maps' tumbler form, not this one.)
     assert!(
         guest.contains(&quoted(&b.draft_a)),
@@ -208,8 +211,8 @@ fn a_guest_s_dump_holds_no_draft_content_and_an_empty_slice() {
 
 /// The OWNER lists its drafts and reads their content and links; the
 /// GRANTEE follows the grant — before it, B's dump is the guest's; after it,
-/// B's holds the draft's slice entry, content and link — and the owner's and
-/// the grantee's dumps agree once both read the same set.
+/// B's holds the draft's publication-section entry, content and link — and the
+/// owner's and the grantee's dumps agree once both read the same set.
 #[test]
 fn an_owner_lists_its_drafts_and_a_grantee_follows_the_grant() {
     let engine = mem_engine();
@@ -219,14 +222,17 @@ fn an_owner_lists_its_drafts_and_a_grantee_follows_the_grant() {
     assert_eq!(before, engine.world_dump_visible_to(None), "ungranted, B reads as the guest");
 
     let owner = engine.world_dump_visible_to(Some(A)).into_string();
-    let slice = format!("\"publication\": [{}]", quoted(&b.draft_a));
-    assert!(owner.contains(&slice), "the owner's slice lists its draft:\n{owner}");
+    let section = format!("\"publication\": [{}]", quoted(&b.draft_a));
+    assert!(owner.contains(&section), "the owner's publication section lists its draft:\n{owner}");
     assert!(owner.contains(&secret_line()), "…with its content line:\n{owner}");
     assert!(owner.contains(&quoted(&b.link_a)), "…and its link in the hints:\n{owner}");
 
     grant(&engine, &b, &b.draft_a, &b.acct_b);
     let grantee = engine.world_dump_visible_to(Some(B)).into_string();
-    assert!(grantee.contains(&slice), "the grantee's slice holds the granted draft:\n{grantee}");
+    assert!(
+        grantee.contains(&section),
+        "the grantee's publication section holds the granted draft:\n{grantee}"
+    );
     assert!(grantee.contains(&secret_line()), "…and its content line:\n{grantee}");
     assert!(grantee.contains(&quoted(&b.link_a)), "…and its link:\n{grantee}");
     assert_eq!(
@@ -262,8 +268,8 @@ fn two_dumps_of_equal_worlds_are_byte_equal_per_class() {
 /// The historical shape (PUB-6.48, `/dump?at=N`'s two worlds): the N-world's
 /// state, filtered at the HEAD's class. A grant committed AFTER N makes the
 /// draft readable to B in the N-world's dump — its content line appears —
-/// while the publication slice is the AS-OF-N set: a second draft minted
-/// after N is in the head's slice and not in the N-world's.
+/// while the publication section is the AS-OF-N set: a second draft minted
+/// after N is in the head's section and not in the N-world's.
 #[test]
 fn a_historical_world_dumps_at_the_head_s_class() {
     let dir = tempdir().expect("tempdir");
@@ -280,13 +286,14 @@ fn a_historical_world_dumps_at_the_head_s_class() {
     let world_n = engine.world_at(n).expect("the N-world reconstructs");
 
     // The N-world at B's HEAD class: the draft's content is readable (the
-    // grant stands at the head), and the slice is the as-of-N set.
+    // grant stands at the head), and the publication section is the as-of-N
+    // set.
     let at_n = engine
         .dump_of_visible(&world_n, &|doc: &Address| head.world().readable(Some(B), doc))
         .into_string();
     assert!(at_n.contains(&secret_line()), "a grant after N opens the draft at /dump?at=N:\n{at_n}");
-    let slice_n = format!("\"publication\": [{}]", quoted(&b.draft_a));
-    assert!(at_n.contains(&slice_n), "the slice is the as-of-N set:\n{at_n}");
+    let section_n = format!("\"publication\": [{}]", quoted(&b.draft_a));
+    assert!(at_n.contains(&section_n), "the publication section is the as-of-N set:\n{at_n}");
     assert!(!at_n.contains(&quoted(&draft_2)), "a draft minted after N is not in the N-world");
 
     // The same N-world at the N-world's OWN class would withhold it — which
@@ -297,14 +304,20 @@ fn a_historical_world_dumps_at_the_head_s_class() {
     assert!(!own.contains(&secret_line()), "the N-world's own class has no grant yet");
 
     // The head, at B's class: B holds a grant on the first draft alone, so
-    // B's slice lists that draft; A reads both, in address order.
+    // B's publication section lists that draft; A reads both, in address order.
     let head_b = engine.world_dump_visible_to(Some(B)).into_string();
-    assert!(head_b.contains(&slice_n), "B's head slice: the granted draft alone:\n{head_b}");
+    assert!(
+        head_b.contains(&section_n),
+        "B's head publication section: the granted draft alone:\n{head_b}"
+    );
     let mut both = vec![quoted(&b.draft_a), quoted(&draft_2)];
     both.sort();
-    let slice_a = format!("\"publication\": [{}]", both.join(", "));
+    let section_a = format!("\"publication\": [{}]", both.join(", "));
     let head_a = engine.world_dump_visible_to(Some(A)).into_string();
-    assert!(head_a.contains(&slice_a), "A's head slice: both drafts, address order:\n{head_a}");
+    assert!(
+        head_a.contains(&section_a),
+        "A's head publication section: both drafts, address order:\n{head_a}"
+    );
 }
 
 /// The reach the dump's magnitude cost term rests on: a tumbler component is

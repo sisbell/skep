@@ -395,7 +395,7 @@ fn the_dump_names_each_section_for_its_store() {
             "the authoritative section {section} must be named: {text:.200}"
         );
     }
-    // v5 (lane 3.4): the publication slice and the grant fold's operative
+    // v5 (lane 3.4): M3's publication map and the grant fold's operative
     // set are sections of their own, beside the hints' copy of the set.
     for section in [r#""publication": ["#, r#""grants": {"#, r#""publication.drafts": {"#] {
         assert!(text.contains(section), "the v5 section {section} must be named: {text:.400}");

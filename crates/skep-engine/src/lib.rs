@@ -67,7 +67,7 @@
 //!   (PUB-6.30, PUB-6.64; lane 3.5). None is a registered M7 type.
 //! * **The world dump** ([`dump`], behind the `dump` feature) — a
 //!   deterministic, byte-comparable rendering of the authoritative observable
-//!   state (the publication slice and the grant fold's operative set as
+//!   state (M3's publication map and the grant fold's operative set as
 //!   sections of their own since v5) plus the recomputable hints (the
 //!   exception set among them), for the conformance and crash harnesses —
 //!   and, since lane 3.4, the same tree post-filtered at a READER'S CLASS

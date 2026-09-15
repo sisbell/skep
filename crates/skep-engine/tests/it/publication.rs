@@ -22,11 +22,11 @@ use skep_kernel::TxnError;
 use skep_namespace::HasM3;
 use tempfile::tempdir;
 
-/// The set as `(draft, owner)` pairs in address order — the hash-keyed map
-/// has no order of its own.
+/// The set as `(draft, owner account)` pairs in address order — the
+/// hash-keyed map has no order of its own.
 fn drafts_of(world: &World) -> Vec<(Address, Address)> {
     let mut pairs: Vec<(Address, Address)> =
-        world.drafts().map(|d| (d.document.clone(), d.owner.clone())).collect();
+        world.drafts().map(|d| (d.document.clone(), d.owner_account.clone())).collect();
     pairs.sort();
     pairs
 }

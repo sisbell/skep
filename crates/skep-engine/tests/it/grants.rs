@@ -3,7 +3,7 @@
 //! VALUE, seeded at load and folded on every deposit; `World::readable` is the
 //! one predicate every read surface answers through. Store semantics are not
 //! re-tested here — what is tested is the ASSEMBLY: the fold, its admission,
-//! its supersession, its re-seed across a restart, and the three clauses of
+//! its revocation, its re-seed across a restart, and the three clauses of
 //! the predicate.
 
 use crate::common;
@@ -624,7 +624,7 @@ fn a_grant_record_with_a_multi_address_slot_grants_nothing() {
 /// Revocation by supersession (PUB-5.13): a later admitted grant naming the
 /// earlier grant's own link address in `from` removes it.
 #[test]
-fn a_superseding_record_revokes_the_grant_it_names() {
+fn a_later_record_naming_a_grant_revokes_it() {
     let engine = mem_engine();
     let b = two_accounts(&engine);
     let g = grant(&engine, &b.home_a, &b.draft_a, vec![b.acct_b.clone()]);
@@ -634,7 +634,7 @@ fn a_superseding_record_revokes_the_grant_it_names() {
     grant(&engine, &b.home_a, &g, vec![b.acct_b.clone()]);
     assert!(
         !world(&engine).readable(Some(B), &b.draft_a),
-        "the superseding record revoked the grant"
+        "the later record naming the grant revoked it"
     );
 }
 
@@ -709,7 +709,7 @@ fn a_record_homed_elsewhere_revokes_no_grant_it_names() {
 
 /// RETRACTION IS NOT REVOCATION (PUB-5.13): the fold has no nullification
 /// arm, so a grant whose link a later `nullify` retracted still opens what it
-/// granted, and only a superseding grant record takes it back. That is the
+/// granted, and only a revoking grant record takes it back. That is the
 /// premise the seed's AUDIT view rests on — an active-view walk would drop
 /// exactly this grant, and the recovered fold would differ from the live one
 /// — so the check is the fold's own agreement with its seed, through the
@@ -812,7 +812,7 @@ fn the_fold_re_seeds_across_a_restart_and_an_empty_map_grants_nothing() {
 /// PUB-7.28): the LIVE ANY-PRINCIPAL set and a grantee's issuers with the
 /// union of covered prefixes — both read off the fold's own indexes, both
 /// agreeing with the predicate they are the inside-out of, and both moving
-/// with a superseding record at once (revocation is immediate, PUB-7.23).
+/// with a revoking record at once (revocation is immediate, PUB-7.23).
 ///
 /// Each enumeration is ordered at TWO levels — the rows by their key, then
 /// each row's own list — and this fixture carries at least two entries at
@@ -904,8 +904,9 @@ fn the_two_feed_enumerations_read_the_fold_s_live_state() {
     assert!(w.readable(Some(PrincipalId(9)), &draft_two), "any principal reads draft two");
     assert!(!w.readable(None, &draft_two), "the guest never does");
 
-    // A superseding record leaves the enumeration at the commit that carries
-    // it — no restart, no lag: A's entry leaves `draft_two`, C's stays.
+    // A revoking record withdraws its grant from the enumeration at the commit
+    // that carries it — no restart, no lag: A's entry leaves `draft_two`, C's
+    // stays.
     grant(&engine, &b.home_a, &g_any, vec![]);
     let w = world(&engine);
     assert_eq!(

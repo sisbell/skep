@@ -347,8 +347,8 @@ fn a_row_carries_the_to_slot_as_deposited_however_wide() {
     let engine = mem_engine();
     let b = board(&engine);
     let caller = Caller::Principal(A);
-    // A `to` slot naming the target and 63 ghost addresses of the edition's
-    // own never-minted subspace 3 — one address of the request, 64 of the
+    // A `to` slot naming the target and 63 never-minted addresses in the
+    // edition's own subspace 3 — one address of the request, 64 of the
     // answer.
     let mut to: Vec<Address> = vec![b.target.clone()];
     to.extend((1..64u32).map(|n| element(&b.e1, 3, n)));

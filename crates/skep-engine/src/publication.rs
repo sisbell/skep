@@ -73,7 +73,7 @@ pub struct Draft<'a> {
     /// it (PUB-7.5).
     pub document: &'a Address,
     /// Its owner account, fixed at the mint and never re-derived by a walk.
-    pub owner: &'a Address,
+    pub owner_account: &'a Address,
 }
 
 impl World {
@@ -91,15 +91,15 @@ impl World {
     /// `published` reads the bit at one map lookup and answers `false` there.
     ///
     /// On every slice M3's own fold produced, the two agree on every
-    /// registered document, because the seed and the fold below are both
-    /// driven by M3's record. They part in TWO places, and the caller's
+    /// registered document, because the seed and the fold below both answer
+    /// off M3's publication map. They part in TWO places, and the caller's
     /// registration check closes only one. An UNREGISTERED address — outside
     /// the contract — reads published here and private at M3, and the check
-    /// refuses it first. A REGISTERED document M3's record holds NO entry for
-    /// — inside the contract, and reachable only off a slice outside M3's
-    /// fold's totality domain — reads PUBLISHED here and PRIVATE at M3, and
-    /// the check passes it: that is the open direction this set inherits from
-    /// [`M3State::documents`], stated in the module doc.
+    /// refuses it first. A REGISTERED document M3's publication map holds NO
+    /// entry for — inside the contract, and reachable only off a slice outside
+    /// M3's fold's totality domain — reads PUBLISHED here and PRIVATE at M3,
+    /// and the check passes it: that is the open direction this set inherits
+    /// from [`M3State::documents`], stated in the module doc.
     pub fn published(&self, doc: &Address) -> bool {
         is_published(&self.drafts, doc)
     }
@@ -115,10 +115,13 @@ impl World {
 
     /// Every draft in the set with its owner account, as [`Draft`] rows, in NO
     /// particular order (the map is hash-keyed; sort before comparing or
-    /// rendering). The harnesses' enumeration; the spec's own consumers of the
-    /// set are point reads.
+    /// rendering). The enumeration is for readers that need the whole set —
+    /// the world dump's `publication.drafts` hint, and the daemon's change
+    /// feed, which walks it for the drafts a commit minted or rearranged —
+    /// where the read predicate's own consumers are point reads
+    /// ([`World::published`], [`World::owner_account`]).
     pub fn drafts(&self) -> impl Iterator<Item = Draft<'_>> + '_ {
-        self.drafts.iter().map(|(document, owner)| Draft { document, owner })
+        self.drafts.iter().map(|(document, owner_account)| Draft { document, owner_account })
     }
 }
 
@@ -185,7 +188,7 @@ pub(crate) fn fold(prev: &Drafts, namespace: &M3State, rec: &M3Rec) -> Drafts {
 }
 
 /// The SEED half (PUB-7.7): the set a from-scratch walk of M3's publication
-/// record yields — [`draft_entry`] asked of every document
+/// map yields — [`draft_entry`] asked of every document
 /// `M3State::documents` enumerates. Runs at load, before replay, and never on
 /// a live commit; the fold carries the set forward across everything above
 /// the base. The two halves agree because they are one rule under two
@@ -195,7 +198,7 @@ pub(crate) fn fold(prev: &Drafts, namespace: &M3State, rec: &M3Rec) -> Drafts {
 /// The ADDRESSES alone are the enumeration, and it is complete over every
 /// slice M3's own fold produced: M3 writes a publication entry and the
 /// registration in one fold step, and only for a document-tier mint, so there
-/// the record's entries are exactly the registered documents. The bit the
+/// the map's entries are exactly the registered documents. The bit the
 /// walk yields beside each address is not read here — it comes back through
 /// M3's own `published`, which is what makes this walk and the fold ONE rule
 /// rather than two that happen to agree.
@@ -209,7 +212,7 @@ pub(crate) fn fold(prev: &Drafts, namespace: &M3State, rec: &M3Rec) -> Drafts {
 /// doc states.
 ///
 /// SEED COST, per load and per `Engine::world_at` reconstruction: one walk of
-/// M3's publication record — `M3State::documents`, the store's own
+/// M3's publication map — `M3State::documents`, the store's own
 /// enumeration of its registered documents — then, per document, M3's own
 /// registration and bit lookups, and one ω resolution per draft.
 pub(crate) fn seed(namespace: &M3State) -> Drafts {

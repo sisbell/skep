@@ -39,11 +39,11 @@
 //!   ([`first_document_address`]`(issuer) == home`);
 //! * PUBLISHED — grants are born published, so the home is a published
 //!   document (an exception-set MISS);
-//! * UNSUPERSEDED — no later admitted record from that same home names it.
+//! * UNREVOKED — no later admitted record from that same home names it.
 //!
 //! Revocation is by SUPERSESSION (PUB-5.13), and the fold reads it from the
 //! GRANTS class alone: a later admitted `t_grant` record whose `from` names an
-//! EARLIER admitted grant's own link address supersedes it (issuer alone —
+//! EARLIER admitted grant's own link address revokes it (issuer alone —
 //! same home ⟹ same ω owner). A deposited `assert_sup` claim is lineage
 //! display, never a fold input.
 //!
@@ -94,7 +94,7 @@ pub struct IssuerGrant {
 
 impl World {
     /// THE LIVE ANY-PRINCIPAL SET, enumerable (PUB-7.22; lane 3.6 §3): every
-    /// content-prefix currently covered by an admitted, unsuperseded
+    /// content-prefix currently covered by an admitted, unrevoked
     /// ANY-PRINCIPAL grant, with the issuers that granted it — in prefix
     /// (tumbler) order, each issuer list in address order. An INDEX SHAPE,
     /// never per-session state: the fold's universal index rendered as owned
@@ -208,7 +208,7 @@ impl GrantRecord {
 /// be written past those two rather than beside them.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Grants {
-    /// Admitted, unsuperseded grants, keyed by the grant link's OWN address —
+    /// Admitted, unrevoked grants, keyed by the grant link's OWN address —
     /// so a revoking record removes exactly the RECORD it names. What leaves
     /// the query indexes with that record is its [`GrantIndexEntry`], which
     /// is a value and which a second record can name too.
@@ -270,7 +270,7 @@ impl Grants {
         Grants::default()
     }
 
-    /// The operative set — every admitted, unsuperseded grant with the grant
+    /// The operative set — every admitted, unrevoked grant with the grant
     /// link's own address — in the map's hash order (the world dump's grant
     /// section renders it, and the dump's rendering sorts a map's entries).
     /// The fold's one enumeration; the predicate's consumers are the point
@@ -422,10 +422,10 @@ enum Kind {
     /// off the `from` slot ALONE, so this arm's `to` slot is never read and
     /// carries no meaning: a revoking record revokes whatever its `to` holds.
     Revoke { old: Address },
-    /// A record that is neither — a `from` denoting no address or one M1
-    /// refuses, or, on the fresh-grant arm, a `to` denoting more than one. The
-    /// fold ignores it, so a malformed grant grants to nobody.
-    Ignore,
+    /// A MALFORMED record, which is neither — a `from` denoting no address or
+    /// one M1 refuses, or, on the fresh-grant arm, a `to` denoting more than
+    /// one. The fold ignores it, so a malformed grant grants to nobody.
+    Malformed,
 }
 
 /// Whether a link value is a `t_grant`-typed record — denotation equality on
@@ -443,7 +443,7 @@ fn is_grant_typed(value: &Link, grants_class: &Address) -> bool {
 /// `home` is a registered document (a deposit lands in no unregistered home,
 /// M7's HomeNotRegistered gate). `published(home)` is the exception-set miss —
 /// `home ∉ drafts` — and so it inherits the set's open direction
-/// (`crate::publication`): a registered home M3's publication record holds no
+/// (`crate::publication`): a registered home M3's publication map holds no
 /// entry for reads published here where M3 answers it private, and a grant
 /// homed there admits.
 fn admitted_issuer(namespace: &M3State, drafts: &Drafts, home: &Address) -> Option<Address> {
@@ -476,14 +476,14 @@ fn admitted_issuer(namespace: &M3State, drafts: &Drafts, home: &Address) -> Opti
 /// Every slot this DOES read is read for exactly one denoted address: the
 /// type slot at [`is_grant_typed`] before this is called, `from` always, and
 /// `to` on the fresh-grant arm alone. A slot denoting several, or a `from`
-/// denoting none or one M1 refuses, is [`Kind::Ignore`] — the fail-closed
+/// denoting none or one M1 refuses, is [`Kind::Malformed`] — the fail-closed
 /// direction, since a record naming two grantees grants to neither.
 fn classify(prev: &Grants, home: &Address, value: &Link) -> Kind {
     let Some(from) = value.from_slot().single_denoted() else {
-        return Kind::Ignore; // `from` must denote exactly one address
+        return Kind::Malformed; // `from` must denote exactly one address
     };
     let Ok(from) = validate(from.clone()) else {
-        return Kind::Ignore;
+        return Kind::Malformed;
     };
     // A `from` naming an admitted grant of THIS home is a revocation —
     // answered HERE, ahead of the `to` slot, which the precedence above makes
@@ -499,9 +499,9 @@ fn classify(prev: &Grants, home: &Address, value: &Link) -> Kind {
         match value.to_slot().single_denoted() {
             Some(g) => match validate(g.clone()) {
                 Ok(g) => Some(g),
-                Err(_) => return Kind::Ignore,
+                Err(_) => return Kind::Malformed,
             },
-            None => return Kind::Ignore, // a multi-address `to` is malformed
+            None => return Kind::Malformed, // a multi-address `to` is malformed
         }
     };
     Kind::Grant { content_prefix: from, grantee }
@@ -545,7 +545,7 @@ fn fold_one(
             next.admit(addr.clone(), GrantRecord { home, issuer, content_prefix, grantee });
         }
         Kind::Revoke { old } => next.withdraw(&old),
-        Kind::Ignore => {}
+        Kind::Malformed => {}
     }
     next
 }

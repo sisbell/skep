@@ -176,8 +176,8 @@ fn mid_body(len: u64) -> u64 {
 /// byte at every header/body region of the newest, truncations, deletion of
 /// the newest, and all-retained damage — must yield FULL recovery (fallback
 /// to the older base or to genesis, replaying more), never a silent serve
-/// from a corrupt base. The dump comparison against the pure-fold oracle is
-/// what would catch a silently-wrong base.
+/// from a corrupt base. The dump comparison against the acknowledged-root
+/// oracle is what would catch a silently-wrong base.
 ///
 /// (iv) with genesis still reachable: corrupting ALL retained checkpoints
 /// recovers fully by journal replay from genesis — that is the contract's
@@ -403,9 +403,9 @@ fn hazard_d_child_process_entry() {
 /// random delay, dozens of trials. The judgment after each kill: reopen
 /// succeeds (no wedge, no refusal — a half-written checkpoint is at most an
 /// ignored `.tmp`), no acked commit vanishes, every acked boundary answers
-/// `world_at`, the recovered fold dumps byte-equal to a checkpoint+replay
-/// of the same head, hints match a from-scratch rebuild, and recovery is
-/// idempotent (a second reopen dumps byte-equal).
+/// `world_at`, recovery dumps byte-equal to bounded replay of its own head,
+/// hints match a from-scratch rebuild, and recovery is idempotent (a second
+/// reopen dumps byte-equal).
 #[test]
 fn d_kill_mid_checkpoint_loses_no_acked_commit() {
     let trials: u64 = if exhaustive() { 40 } else { 10 };
@@ -508,7 +508,10 @@ fn d_trial(trial: u64) -> (usize, u64) {
     }
     let live = engine.world_dump();
     let refold = engine.dump_of(&engine.world_at(Seq(head)).expect("head answers"));
-    assert_eq!(live, refold, "FINDING ({ctx}): fold ≢ checkpoint+replay after the kill");
+    assert_eq!(
+        live, refold,
+        "FINDING ({ctx}): recovery ≢ bounded replay of its own head after the kill"
+    );
     engine
         .check_hints()
         .unwrap_or_else(|e| panic!("FINDING ({ctx}): hint divergence after the kill: {e}"));
@@ -599,7 +602,7 @@ fn e_seeded_random_mutation_lands_on_the_boundary_or_refuses_repeatably() {
                     assert_eq!(
                         live,
                         engine.dump_of(&at_head),
-                        "FINDING ({ctx}): fold ≢ checkpoint+replay"
+                        "FINDING ({ctx}): recovery ≢ bounded replay of its own head"
                     );
                     engine
                         .check_hints()

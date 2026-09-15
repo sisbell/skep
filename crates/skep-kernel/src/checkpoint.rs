@@ -351,4 +351,29 @@ mod tests {
         assert_eq!(listed.len(), 1, "only one spelling names a checkpoint");
         assert_eq!(listed[0].seq, 7);
     }
+
+    #[test]
+    fn checkpoints_list_in_seq_order_across_a_digit_boundary() {
+        // Every operation over `list`'s answer reads a position as an age:
+        // `retain` deletes from the front as the oldest, `select_base` walks
+        // from the back as the newest and reads the front as the floor. Name
+        // order and seq order agree while seqs have one digit — and
+        // `checkpoint.10` sorts BEFORE `checkpoint.9` by name.
+        let seqs_in = |dir: &Path| -> Vec<u64> {
+            list(dir).unwrap().iter().map(|cp| cp.seq).collect()
+        };
+        let dir = tempdir().unwrap();
+        for seq in [10, 1, 100, 9, 99] {
+            write(dir.path(), seq, &world()).expect("fixture checkpoint");
+        }
+        assert_eq!(seqs_in(dir.path()), vec![1, 9, 10, 99, 100]);
+        // …so retention keeps the numerically newest, and names the floor
+        // from them.
+        assert_eq!(retain(dir.path(), 2).unwrap(), Some(99));
+        assert_eq!(
+            seqs_in(dir.path()),
+            vec![99, 100],
+            "retention kept other than the newest bases"
+        );
+    }
 }

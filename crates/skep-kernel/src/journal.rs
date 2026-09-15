@@ -2001,6 +2001,35 @@ mod tests {
     }
 
     #[test]
+    fn segments_list_in_first_seq_order_across_a_digit_boundary() {
+        // A closed segment's reach is read off its SUCCESSOR's name; the scan
+        // skips on that inference and `reclaim_below` deletes on it. Name
+        // order and `firstSeq` order agree while names have one digit — and
+        // `seg-10.wal` sorts BEFORE `seg-9.wal` by name.
+        let dir = tempdir().unwrap();
+        for first_seq in [10, 1, 100, 9] {
+            fs::write(segment_path(dir.path(), first_seq), b"").unwrap();
+        }
+        let segs = list_segments(dir.path()).unwrap();
+        let firsts: Vec<u64> = segs.iter().map(|seg| seg.first_seq).collect();
+        assert_eq!(firsts, vec![1, 9, 10, 100]);
+        assert_eq!(
+            inferred_last_seq(&segs, 1),
+            Some(9),
+            "seg-9 ends where seg-10 begins"
+        );
+        // …and reclamation takes exactly the closed prefix that inference
+        // admits.
+        reclaim_below(dir.path(), 9).unwrap();
+        let left: Vec<u64> = list_segments(dir.path())
+            .unwrap()
+            .iter()
+            .map(|seg| seg.first_seq)
+            .collect();
+        assert_eq!(left, vec![10, 100]);
+    }
+
+    #[test]
     fn scan_groups_by_txn_and_derives_the_committed_head() {
         let dir = tempdir().unwrap();
         let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
@@ -2140,6 +2169,46 @@ mod tests {
         // whole of what there is to check here: what such a scan derived is a
         // prefix, so it produces no outcome at all — there is no committed
         // head to read short, and no cut for a truncation to be aimed with.
+        let fail = scan(&segs, 0, None).err();
+        assert!(
+            matches!(fail, Some(ScanFail::Unbounded { at: 0 })),
+            "got {fail:?}"
+        );
+    }
+
+    #[test]
+    fn resynchronization_charges_every_rejection_even_between_intact_frames() {
+        // The alternation the budget's own comment names: each expensive
+        // rejection is followed by an INTACT frame that closes the run it
+        // opened. A budget charged only while a run is open, or kept per run,
+        // sees one rejection at a time and never refuses — while the scan
+        // spends (rejections) × (claimed length) bytes of CRC on content its
+        // author chose. `resynchronization_over_planted_frame_headers_is_bounded`
+        // plants its headers back to back, so nothing closes a run there, and
+        // it cannot tell those budgets from this one.
+        let marker = bincode::serialize(&FramePayload::Marker(Marker {
+            txn: Txn(u64::MAX),
+            last_seq: 0,
+            records_checksum: 0,
+        }))
+        .unwrap();
+        let mut unit = Vec::new();
+        unit.extend_from_slice(&MAGIC);
+        unit.extend_from_slice(&(128 * 1024u32).to_le_bytes()); // a len that fits
+        unit.extend_from_slice(&0u32.to_le_bytes()); // a crc that will not
+        push_frame(&mut unit, &marker).unwrap(); // …then a frame that closes the run
+        let mut evil = Vec::new();
+        while evil.len() < 256 * 1024 {
+            evil.extend_from_slice(&unit);
+        }
+        let dir = tempdir().unwrap();
+        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        write_txn(&mut writer, 1, vec![evil]);
+        write_txn(&mut writer, 2, vec![rec(20)]);
+        let segs = list_segments(dir.path()).unwrap();
+        let starts = frame_starts(&segs[0].path);
+        flip_byte(&segs[0].path, starts[0] + FRAME_HEADER_LEN + 1);
+
         let fail = scan(&segs, 0, None).err();
         assert!(
             matches!(fail, Some(ScanFail::Unbounded { at: 0 })),

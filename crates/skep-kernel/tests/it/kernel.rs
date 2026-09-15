@@ -710,6 +710,45 @@ fn torn_tail_is_physically_truncated_and_seqs_reused() {
 }
 
 #[test]
+fn with_no_committed_marker_at_all_everything_scanned_is_tail() {
+    // §7's tail rule at its empty edge, which every other torn-tail fixture
+    // sits above: with no committed marker anywhere, the first scanned segment
+    // is cut at offset 0. What would survive otherwise is the torn
+    // transaction's whole RECORD frame, carrying `Txn(1)` — the identity the
+    // next session's first commit takes — and the recovery after that groups
+    // the two by `txn`, meets `Seq(1)` twice, and drops an acknowledged commit.
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    commit(&k, 10);
+    drop(k);
+    let seg = seg_file(dir.path(), 1);
+    let spans = frame_spans(&seg);
+    assert_eq!(spans.len(), 2); // T1's record and its marker
+    // Crash mid-append of T1's marker: its record frame is whole, and nothing
+    // is committed.
+    truncate_file(&seg, spans[1].0 + 3);
+
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(k.current_seq(), Seq(0));
+    assert_eq!(items(&k), Vec::<u64>::new());
+    assert_eq!(
+        fs::metadata(&seg).unwrap().len(),
+        0,
+        "the torn transaction's record frame survived recovery"
+    );
+    // …which is what makes reusing its coordinate, and its `Txn`, safe.
+    assert_eq!(commit(&k, 20), Seq(1));
+    drop(k);
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(
+        items(&k),
+        vec![20],
+        "an acknowledged commit was merged with the torn transaction whose Txn it reused"
+    );
+    assert_eq!(k.current_seq(), Seq(1));
+}
+
+#[test]
 fn corruption_in_replayed_range_halts_with_marker_landing_payload() {
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
@@ -1287,24 +1326,35 @@ fn reclamation_floor_is_the_oldest_retained_checkpoint() {
     }
     assert_eq!(k.checkpoint().unwrap(), Seq(4));
     for _ in 0..4 {
-        commit_blob(&k);
+        commit_blob(&k); // txn 5 rotates into seg-5 (§1 name-by-firstSeq)
     }
-    assert_eq!(k.checkpoint().unwrap(), Seq(8));
-    // Rotation at the txn boundary: txn 5 opened seg-5 (§1 name-by-firstSeq).
-    assert!(seg_file(dir.path(), 5).exists());
-    // Reclamation dropped only the closed segment wholly below the OLDEST
-    // retained checkpoint (S_old = 4) — not below the newest (§6).
+    assert_eq!(commit_blob(&k), Seq(9)); // …and txn 9 into seg-9, CLOSING seg-5
+    assert!(
+        seg_file(dir.path(), 9).exists(),
+        "the fixture must rotate twice"
+    );
+    assert_eq!(k.checkpoint().unwrap(), Seq(9));
+    // Reclamation dropped the closed segment wholly below the OLDEST retained
+    // checkpoint (S_old = 4)…
     assert!(!seg_file(dir.path(), 1).exists());
+    // …and kept the closed one above it, which covers (4, 8]: a floor at the
+    // NEWEST checkpoint deletes it (§6).
+    assert!(
+        seg_file(dir.path(), 5).exists(),
+        "reclamation ran below the newest retained checkpoint, taking the journal \
+         the older base replays"
+    );
     drop(k);
     // That floor is what makes the fallback real: corrupt the newest
-    // checkpoint and recovery still has journal above S_old to replay.
-    let cp = ckpt_file(dir.path(), 8);
+    // checkpoint and recovery replays from the older RETAINED base — genesis
+    // is gone, so no other base can carry the answer.
+    let cp = ckpt_file(dir.path(), 9);
     let len = fs::metadata(&cp).unwrap().len();
     flip_byte(&cp, len - 1);
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
-    assert_eq!(items(&k).len(), 8);
-    assert_eq!(k.snapshot().world().sum, 8 * BLOB as u64);
-    assert_eq!(k.current_seq(), Seq(8));
+    assert_eq!(items(&k).len(), 9);
+    assert_eq!(k.snapshot().world().sum, 9 * BLOB as u64);
+    assert_eq!(k.current_seq(), Seq(9));
 }
 
 #[test]
@@ -1510,6 +1560,54 @@ fn world_at_refuses_a_boundary_below_the_reclamation_floor() {
 }
 
 #[test]
+fn world_at_says_why_the_floor_it_names_refuses_when_that_base_is_damaged() {
+    // `Reclaimed.floor` is the oldest CANDIDATE, not a guarantee, and `cause`
+    // is what tells a caller which it is. The sibling above pins the absent
+    // half, where the floor answers; this is the half that ends the retry.
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_retain(dir.path(), 1), genesis()).unwrap();
+    for _ in 0..8 {
+        commit_blob(&k);
+    }
+    assert_eq!(k.checkpoint().unwrap(), Seq(8));
+    assert!(!seg_file(dir.path(), 1).exists(), "genesis must be unreachable");
+    // Rot in the sole retained base: its header checksum refuses it.
+    let cp = ckpt_file(dir.path(), 8);
+    let len = fs::metadata(&cp).unwrap().len();
+    flip_byte(&cp, len - 1);
+
+    // Below the window no candidate is tried, so the floor is the next thing
+    // to ask…
+    match k.world_at(Seq(4)) {
+        Err(HistoryError::Reclaimed {
+            floor: Some(Seq(8)),
+            cause: None,
+        }) => {}
+        other => panic!("expected Reclaimed at 4 with nothing tried, got {other:?}"),
+    }
+    // …and AT the floor the base is tried, and its refusal is the answer.
+    let err = k
+        .world_at(Seq(8))
+        .expect_err("a damaged sole base cannot answer its own boundary");
+    let HistoryError::Reclaimed {
+        floor: Some(Seq(8)),
+        cause: Some(cause),
+    } = &err
+    else {
+        panic!("the floor's refusal must travel, or a caller re-asks at 8 forever: {err:?}")
+    };
+    assert!(cause.to_string().contains("checksum"), "got {cause}");
+    assert!(
+        std::error::Error::source(&err).is_some(),
+        "the refusal must reach a chain walker"
+    );
+    assert!(
+        err.to_string().contains("checksum"),
+        "…and the sentence an operator reads: {err}"
+    );
+}
+
+#[test]
 fn world_at_answers_the_same_world_under_a_live_appender() {
     // The read path takes no kernel lock and opens the journal files while
     // the appender is writing them and rotation is adding new ones. Every
@@ -1659,6 +1757,30 @@ fn journal_bytes_trigger_counts_bytes_not_commits() {
     assert_eq!(checkpoint_count(dir.path()), 0);
     commit_blob(&k); // one commit, far past the threshold
     assert!(ckpt_file(dir.path(), 6).exists(), "the byte trigger did not fire");
+}
+
+#[test]
+fn journal_bytes_restarts_its_window_at_the_crossing() {
+    // §6: a crossing resets EVERY counter, so `JournalBytes(n)` is "every n
+    // bytes" rather than "every commit once n bytes have first gone by".
+    // `every_n_restarts_its_window_at_the_crossing` observes the commit
+    // counter; this observes the byte counter beside it.
+    let dir = tempdir().unwrap();
+    let mut cfg = cfg_retain(dir.path(), 8); // keep every base a stuck window would write
+    cfg.checkpoint = CheckpointPolicy::JournalBytes(4096);
+    let k = Kernel::open(cfg, genesis()).unwrap();
+    assert_eq!(commit_blob(&k), Seq(1)); // one commit, far past the threshold
+    assert!(ckpt_file(dir.path(), 1).exists(), "the first window did not fire");
+    for x in 2..=6u64 {
+        commit(&k, x); // 88 journal bytes each: nowhere near a fresh window
+    }
+    assert_eq!(
+        checkpoint_count(dir.path()),
+        1,
+        "the byte window did not restart"
+    );
+    assert_eq!(commit_blob(&k), Seq(7));
+    assert!(ckpt_file(dir.path(), 7).exists(), "the second window did not fire");
 }
 
 #[test]

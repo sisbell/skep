@@ -1383,6 +1383,54 @@ mod tests {
     }
 
     #[test]
+    fn world_at_carries_the_serializers_account_of_a_record_only_history_reaches() {
+        // `open()` folds only above its newest base, so a committed record
+        // BELOW that base is never decoded by recovery: a journal whose binary
+        // retired a record variant opens cleanly, and only a bounded replay
+        // from an older base meets the record. `HistoryError::Corruption`
+        // promises the account `OpenError::Corruption` carries, and this is
+        // the route that reaches it through `world_at`'s own mapping.
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+            // Variant index 5, written where `Narrow` has four…
+            writer
+                .commit_txn(1, vec![journal::encode_record(&5u32).unwrap()], || {})
+                .expect("fixture commit");
+            // …then a record this build reads, and a base embodying both.
+            writer
+                .commit_txn(2, vec![journal::encode_record(&Narrow::A).unwrap()], || {})
+                .expect("fixture commit");
+        }
+        checkpoint::write(dir.path(), 2, &NarrowWorld(Vec::new())).expect("fixture base");
+
+        let k = Kernel::<NarrowWorld>::open(
+            cfg(dir.path(), BurnedSeqPolicy::Rollback),
+            NarrowWorld(Vec::new()),
+        )
+        .expect("the newest base embodies the record this build cannot read");
+        assert_eq!(k.current_seq(), Seq(2));
+        assert!(
+            k.world_at(Seq(2)).is_ok(),
+            "the base's own boundary answers from the base"
+        );
+        // `NarrowWorld` is not `Debug`, so not `expect_err`.
+        let err = k
+            .world_at(Seq(1))
+            .err()
+            .expect("an undecodable committed record is not something to fold");
+        assert!(
+            matches!(err, HistoryError::Corruption { at: Seq(1), .. }),
+            "got {err:?}"
+        );
+        let cause = std::error::Error::source(&err)
+            .expect("the account is what separates a retired variant from rot")
+            .to_string();
+        assert!(cause.contains("variant index"), "got {cause}");
+        assert!(err.to_string().contains("variant index"), "got {err}");
+    }
+
+    #[test]
     fn a_journal_whose_frame_stream_cannot_be_enumerated_refuses_to_open() {
         // A record whose own bytes plant frame headers, and a lost sync
         // before it: the scan cannot enumerate the stream inside its
@@ -1536,6 +1584,29 @@ mod tests {
     }
 
     #[test]
+    fn an_interval_restarts_its_window_at_the_crossing() {
+        // §6: a crossing resets `last_reset`, so `Interval(d)` is "every d"
+        // rather than "every commit once d has first passed". No test can see
+        // that through checkpoint files without sleeping, so the cadence is
+        // driven directly, its window opened in the past rather than waited
+        // for. The only timing this depends on: two consecutive calls take
+        // under five seconds.
+        let window = std::time::Duration::from_secs(5);
+        let mut cadence = Cadence::new(CheckpointPolicy::Interval(window));
+        cadence.last_reset = Instant::now()
+            .checked_sub(window * 2)
+            .expect("the monotonic clock has run for ten seconds");
+        assert!(
+            cadence.charge_commit(0),
+            "a window opened ten seconds ago has elapsed"
+        );
+        assert!(
+            !cadence.charge_commit(0),
+            "the crossing did not restart the window"
+        );
+    }
+
+    #[test]
     fn retain_checkpoints_zero_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let bad_cfg = KernelConfig {
@@ -1637,12 +1708,16 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_checkpoints_each_leave_a_loadable_base() {
+    fn concurrent_checkpoints_each_leave_the_base_their_name_claims() {
         // §6: the API permits concurrent calls — an explicit caller call
         // racing the on-commit auto-trigger, or two callers — and the
         // dedicated checkpoint mutex is what keeps two of them off one
         // `checkpoint.tmp`. A base that fails its own header checksum is
-        // useless, and under `N = 1` it would be the only one.
+        // useless, and under `N = 1` it would be the only one. A base that
+        // loads must also be the one its name claims: the writer below pushes
+        // 0, 1, 2, … one record per commit, so the world at `Seq(s)` is
+        // exactly `0..s`, and a coordinate read apart from the root it names
+        // publishes a later world under an earlier boundary.
         let dir = tempfile::tempdir().unwrap();
         let cfg = KernelConfig {
             durability: Durability::Fsync {
@@ -1676,9 +1751,16 @@ mod tests {
         let checkpoints = checkpoint::list(dir.path()).unwrap();
         assert!(!checkpoints.is_empty(), "the fixture writes checkpoints");
         for cp in &checkpoints {
-            assert!(
-                cp.load::<Vec<u64>>().is_ok(),
-                "checkpoint {} does not load — two writers shared checkpoint.tmp",
+            let world = cp.load::<Vec<u64>>().unwrap_or_else(|refused| {
+                panic!(
+                    "checkpoint {} does not load — two writers shared checkpoint.tmp: {refused}",
+                    cp.seq
+                )
+            });
+            assert_eq!(
+                world,
+                (0..cp.seq).collect::<Vec<u64>>(),
+                "checkpoint {} does not embody the fold its name claims",
                 cp.seq
             );
         }

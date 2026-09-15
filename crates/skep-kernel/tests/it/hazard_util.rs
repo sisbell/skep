@@ -4,12 +4,13 @@
 //!
 //! The oracle discipline: while the journal is healthy, capture every
 //! committed boundary's `Seq`, the journal byte length once that commit was
-//! durable, and the `WorldDump` of `world_at` that boundary — all through
-//! the PUBLIC engine surface. After fault + reopen there are exactly three
-//! honest outcomes (full recovery, bounded rollback to the last boundary
-//! the intact prefix supports, loud refusal); silent divergence and wedged
-//! opens are findings, and the judges here panic on them with the full
-//! reproduction in the message.
+//! durable, and the `WorldDump` of the root acknowledged there, with bounded
+//! replay at that boundary held to it, all through the PUBLIC engine surface.
+//! After fault + reopen there are exactly three honest outcomes (full
+//! recovery, bounded rollback to the last boundary the intact prefix
+//! supports, loud refusal); silent divergence and wedged opens are findings,
+//! and the judges here panic on them with the full reproduction in the
+//! message.
 //!
 //! Plumbing for the hazard suite, not a suite of its own: it declares no
 //! tests, and `hazard` uses a subset of it — which is what the `dead_code`
@@ -209,7 +210,7 @@ impl Junk {
 
 /// One committed boundary of the fixture: its `Seq`, the journal byte
 /// length once it was durable (per-commit fsync makes the length final at
-/// capture), and the pure-fold oracle dump of the world at it.
+/// capture), and the dump of the root the kernel acknowledged at it.
 pub struct BoundaryOracle {
     pub seq: u64,
     pub journal_len: u64,
@@ -233,19 +234,37 @@ pub struct Fixture {
 impl Fixture {
     /// Build at `dir`. `ckpt_after` lists 1-based op indices after which
     /// `Kernel::checkpoint()` runs (empty ⇒ pure-journal fixture). Every
-    /// oracle dump is captured BEFORE any checkpoint exists at or above it,
-    /// so the oracle is always the pure genesis fold — recovered dumps
-    /// judged against it prove fold ≡ checkpoint+replay under the fault.
+    /// oracle dump is the root the kernel acknowledged at its boundary, which
+    /// no checkpoint touches, and bounded replay at that boundary is held to
+    /// it at capture, while the journal is healthy. A recovered dump judged
+    /// against it therefore holds recovery — from whichever base the fault
+    /// leaves standing — to the world that was acknowledged.
     pub fn build(dir: &Path, ckpt_after: &[usize]) -> Fixture {
         let engine =
             Engine::open(cfg_manual(dir)).expect("fixture open");
-        let genesis_dump =
-            engine.dump_of(&engine.world_at(Seq(0)).expect("genesis boundary answers"));
         let seg = seg_file(dir, 1);
         let mut boundaries: Vec<BoundaryOracle> = Vec::new();
 
+        // The acknowledged root's coordinate and dump, off ONE snapshot, with
+        // bounded replay at that coordinate held to the dump before any fault
+        // exists to excuse a difference.
+        let acknowledged_root = |engine: &Engine| {
+            let snap = engine.kernel().snapshot();
+            let dump = engine.dump_of(snap.world());
+            let replayed = engine.world_at(snap.seq()).expect("live boundary answers");
+            assert_eq!(
+                engine.dump_of(&replayed),
+                dump,
+                "bounded replay at {} diverged from the acknowledged root before any fault",
+                snap.seq()
+            );
+            (snap.seq(), dump)
+        };
+        let (genesis_seq, genesis_dump) = acknowledged_root(&engine);
+        assert_eq!(genesis_seq, Seq(0), "a fresh fixture opens at genesis");
+
         let capture = |engine: &Engine, boundaries: &mut Vec<BoundaryOracle>| {
-            let seq = engine.kernel().current_seq();
+            let (seq, dump) = acknowledged_root(engine);
             let journal_len = fs::metadata(&seg).expect("active segment exists").len();
             if let Some(prev) = boundaries.last() {
                 assert!(
@@ -253,11 +272,10 @@ impl Fixture {
                     "fixture commits must advance"
                 );
             }
-            let world = engine.world_at(seq).expect("live boundary answers");
             boundaries.push(BoundaryOracle {
                 seq: seq.0,
                 journal_len,
-                dump: engine.dump_of(&world),
+                dump,
             });
             if ckpt_after.contains(&boundaries.len()) {
                 engine.kernel().checkpoint().expect("fixture checkpoint");

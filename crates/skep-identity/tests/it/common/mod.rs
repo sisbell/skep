@@ -311,10 +311,9 @@ pub fn retire_payload(indices: &[u8]) -> Vec<u8> {
 
 // ---------------------------------------------------------------- verdicts
 
-/// The wire-shaped token of an inert verdict: the join skepd writes, built
-/// from the two authorities it joins — `Inert::token()` and, on the payload
-/// arm, `PayloadError::token()` (AUTH-2.55, AUTH-1.28). No fold token name is
-/// spelled here.
+/// The wire-shaped token of an inert verdict: the join skepd writes, as
+/// `Inert::token`'s doc states it, built from the two methods that doc names
+/// (AUTH-2.55, AUTH-1.28). No fold token name is spelled here.
 pub fn token_of(v: &Verdict) -> Option<String> {
     match v {
         Verdict::Inert(inert @ Inert::MalformedPayload(e)) => {

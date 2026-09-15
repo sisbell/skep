@@ -67,14 +67,15 @@ pub enum Effect {
 /// AUTH-2.54 — the inert vocabulary.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Inert {
-    /// The home document is not published (AUTH-2.66 item 3; I7,
-    /// AUTH-2.102). The origin answers `is_published` off the EXCEPTION SET
-    /// — the engine's membership index over the publication bit each
-    /// document is born with (PUB-1.9, PUB-7.5) — so a credential deposited
-    /// in a DRAFT-homed document fires this arm, ahead of the home pin and
-    /// of the payload parse. v1 wired the fact constant `true` (AUTH-2.117),
-    /// under which only a ctx deriving real publication reached it (a
-    /// mirror's, AUTH-2.123).
+    /// The home document is not published: [`FoldCtx::is_published`]
+    /// answered `false` for it (AUTH-2.66 item 3; I7, AUTH-2.102). Decided
+    /// after the home's account and ahead of every per-kind check, so a
+    /// credential deposited in a DRAFT-homed document answers this whatever
+    /// its shape, its payload or its home pin would otherwise earn. How a
+    /// host answers the fact — the origin's exception set, v1's constant
+    /// `true`, a mirror's guest visibility class — is stated on that method.
+    ///
+    /// [`FoldCtx::is_published`]: crate::FoldCtx::is_published
     Unpublished,
     /// The deposit cannot be read as its kind's shape, on any of three
     /// counts: the home is UNOWNED, so there is no H at all (AUTH-2.66
@@ -87,9 +88,9 @@ pub enum Inert {
     /// the fold has no `not_an_account`; that is the key-set READ row's
     /// (AUTH-2.58).
     MalformedShape,
-    /// The payload could not be read or parsed (AUTH-1.27); the wire detail
-    /// is `malformed_payload:` joined with `PayloadError::token()` — one
-    /// join, written in skepd (AUTH-2.55).
+    /// The payload could not be read or parsed (AUTH-1.27); the carried fault
+    /// is this arm's sub-token on the wire, in the join [`Inert::token`]
+    /// states.
     MalformedPayload(PayloadError),
     /// Credential link homed in a document of its account other than doc 1 —
     /// the home pin (AUTH-2.127, RES-17).
@@ -126,16 +127,19 @@ pub enum Inert {
 impl Inert {
     /// AUTH-2.55 — THE ONE AUTHORITY for the fold's `detail` tokens: the
     /// variant name in snake_case. Consumers (wire enumerations, conformance
-    /// lists, face tables) cite this method, never transcribe it; skepd's
-    /// `CredentialRefusal::token()` owes the same for the fold arm, the
-    /// `malformed_payload` join included — no fold token name spelled outside
-    /// this crate.
+    /// lists, face tables) cite this method, never transcribe it.
+    ///
+    /// A fold refusal's WIRE detail is this token — on the payload arm, this
+    /// token, `:`, and the carried fault's [`PayloadError::token`]. ONE join,
+    /// written by the consumer that marshals the refusal (skepd's
+    /// `CredentialRefusal::token()`, AUTH-2.55) from these two methods, so no
+    /// fold or payload token is spelled outside this crate. The join is stated
+    /// here and only here; [`Inert::MalformedPayload`] and
+    /// [`PayloadError::token`] cite it.
     pub fn token(&self) -> &'static str {
         match self {
             Inert::Unpublished => "unpublished",
             Inert::MalformedShape => "malformed_shape",
-            // The WIRE detail is this token, `:`, and PayloadError::token()
-            // (AUTH-1.28): one join, written in skepd.
             Inert::MalformedPayload(_) => "malformed_payload",
             Inert::NotDocOne => "not_doc_one",
             Inert::NoHolder => "no_holder",

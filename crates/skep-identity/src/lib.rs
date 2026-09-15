@@ -73,9 +73,10 @@
 //!
 //! ## Traceability
 //!
-//! Every public item's doc-comment cites the AUTH rule and invariant labels
-//! it realizes, so a reviewer can walk from code to spec without the
-//! documents open.
+//! Every public item's doc-comment cites the spec rule it realizes — AUTH's
+//! rule and invariant labels, and on the write path's type-recognition input
+//! the publication spec's (PUB-6.30, PUB-6.64, RES-207) and owner ruling D3 —
+//! so a reviewer can walk from code to spec without the documents open.
 //!
 //! ## Purity note
 //!

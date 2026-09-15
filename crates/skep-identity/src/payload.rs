@@ -129,9 +129,9 @@ pub enum PayloadError {
 
 impl PayloadError {
     /// AUTH-1.28 — THE ONE authority for the payload fault tokens. `<n>` is
-    /// the 1-based line number, which is why the return type is `String`.
-    /// The wire detail for a fold refusal is `Inert::token()`, `:`, and this
-    /// token — one join, written in skepd (AUTH-2.55).
+    /// the 1-based line number, which is why the return type is `String`. On
+    /// the wire this token is a fold refusal's payload sub-token, in the join
+    /// [`Inert::token`](crate::Inert::token) states (AUTH-2.55).
     pub fn token(&self) -> String {
         match self {
             PayloadError::TooLarge => "too_large".to_owned(),

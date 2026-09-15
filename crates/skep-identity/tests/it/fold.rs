@@ -698,14 +698,24 @@ fn an_enrollment_payload_precedes_the_home_pin() {
     );
 }
 
-/// AUTH-2.66 item 2 — an unowned home is `malformed_shape` (no ω answer).
+/// AUTH-2.66 item 2 — an unowned home is `malformed_shape` (no ω answer), at
+/// every address level: ω is a prefix question, never a level one. No
+/// registered document is unowned, so this case lies outside `LinkDeposit`'s
+/// precondition, and item 2 decides it anyway.
 #[test]
 fn unowned_home_is_malformed_shape() {
     let fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
-    let unowned_home = addr(&[2, 1, 0, 9, 0, 1]); // under no registered prefix
-    let dep = fx.claim_dep(&unowned_home, CLAIMANT);
-    assert_token(&fx.classify(&genesis_state, &dep), "malformed_shape");
+    // Under no registered prefix: a node, an account, a document, a position.
+    for unowned_home in [
+        vec![2, 1],
+        vec![2, 1, 0, 9],
+        vec![2, 1, 0, 9, 0, 1],
+        vec![2, 1, 0, 9, 0, 1, 0, 1, 1],
+    ] {
+        let dep = fx.claim_dep(&addr(&unowned_home), CLAIMANT);
+        assert_token(&fx.classify(&genesis_state, &dep), "malformed_shape");
+    }
 }
 
 /// AUTH-2.66 item 1 before item 2 — the KIND is settled first, so a deposit

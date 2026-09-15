@@ -114,13 +114,22 @@ impl TypeAddrs {
 /// [`IdentityState::classify`](crate::IdentityState::classify) asks
 /// [`FoldCtx::is_published`](crate::FoldCtx::is_published) of it — a BIRTH
 /// state, which only a registered document has — and the fold has no way to
-/// test registration first: the seam carries no such fact (AUTH-2.31's four),
-/// and ω answers an unallocated address as readily as a minted one (M3), so
-/// item 2 screens nothing out. The fold hook has both halves from
-/// `document_of` of a link M7 admitted; skepd's precheck takes the frame's
-/// `home` as sent, before M7 runs, and owes both ahead of `classify`. Outside
-/// the precondition no verdict is specified: the seam's answer outside its
-/// domain decides which refusal speaks.
+/// test registration first: the seam carries no such fact (AUTH-2.31's four).
+/// Item 2 refuses only an UNOWNED home, and no registered document is one: M3
+/// mints every document under a registered principal. ω answers an
+/// unallocated address under a registered principal as readily as a minted
+/// one (M3), so such a home passes item 2 and reaches item 3. The fold hook
+/// has both halves from `document_of` of a link M7 admitted; skepd's precheck
+/// takes the frame's `home` as sent, before M7 runs, and owes both ahead of
+/// `classify`.
+///
+/// Outside the precondition the fold still decides what its order decides
+/// ahead of item 3's read: a `ty` naming no credential answers
+/// `NotCredential` at item 1, and an UNOWNED home answers `malformed_shape`
+/// at item 2, at any level and whatever publication would say — cells the
+/// fold corpus pins. An OWNED home that is not a registered document reaches
+/// that read outside its domain, and there no verdict is specified: the
+/// seam's answer decides which refusal speaks.
 #[derive(Debug, Clone, Copy)]
 pub struct LinkDeposit<'a> {
     /// The link's home — a REGISTERED document (the PRECONDITION above).

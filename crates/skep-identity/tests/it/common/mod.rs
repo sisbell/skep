@@ -54,6 +54,14 @@ pub fn content_run(home: &Address, start_ord: u32, n: u32) -> Span {
     Span::new(start, width_at_last(len, n)).expect("positive last-component width")
 }
 
+/// A walk of `span` twice whose THIRD step panics — the witness that an arity
+/// check stops at the second span instead of counting or collecting the slot.
+pub fn panics_past_two<'s>(span: &'s Span) -> impl Iterator<Item = &'s Span> {
+    [span, span].into_iter().chain(std::iter::from_fn(|| -> Option<&'s Span> {
+        panic!("the arity check walked past the second span")
+    }))
+}
+
 // ---------------------------------------------------------------- the board
 
 pub const NODE: &[u32] = &[1, 1];

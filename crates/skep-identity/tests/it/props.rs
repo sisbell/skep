@@ -343,7 +343,7 @@ proptest! {
                 let token = token_of(&verdict);
                 prop_assert_eq!(token.as_deref(), Some("unpublished"));
             } else {
-                prop_assert!(matches!(verdict, Verdict::NotCredential));
+                prop_assert_eq!(&verdict, &Verdict::NotCredential);
             }
             prop_assert_eq!(&next, &genesis_state);
         }

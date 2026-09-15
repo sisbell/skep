@@ -8,7 +8,7 @@
 
 use skep_address::{is_prefix, subtree_of, Address, Span};
 
-use crate::shape::{single_address, CredentialKind, TypeAddrs};
+use crate::shape::{single_address, sole_span, CredentialKind, TypeAddrs};
 
 /// PUB-6.64's MEMBERS — the record classes whose HONORED STATE the
 /// publication spec reads under the AUDIT view, so a `nullify` of one clears
@@ -171,15 +171,22 @@ impl WriteTypes {
     /// member. The classes are prefix-free, so an address is at or under at
     /// most one of them. Any other arity, and any slot whose address is under
     /// no class, answers `None`: an ordinary link.
-    pub fn target_class(&self, ty: &[Span]) -> Option<TargetClass> {
-        if let Some(kind) = self.credential.kind_of(ty) {
+    ///
+    /// `ty` is a borrowed walk of the slot, as on [`TypeAddrs::kind_of`], and
+    /// is walked once.
+    pub fn target_class<'s>(&self, ty: impl IntoIterator<Item = &'s Span>) -> Option<TargetClass> {
+        // Arity once: every class — credential or not — is a ONE-span slot,
+        // so any other arity is an ordinary link, and the one span is what
+        // both rules below are asked about.
+        let span = sole_span(ty)?;
+        if let Some(kind) = self.credential.kind_of([span]) {
             return Some(TargetClass::Credential(kind));
         }
         // The address the slot names, read ONCE: the slot is a class's when
         // that address is AT OR UNDER the class's own — its type or a subtype
         // (L10) — a question about this address, never a re-reading of the
         // span per class.
-        let named = single_address(ty)?;
+        let named = single_address([span])?;
         let at_or_under = |class_addr: &Address| is_prefix(class_addr.tumbler(), named.tumbler());
         if at_or_under(&self.grant) {
             return Some(TargetClass::Grant);

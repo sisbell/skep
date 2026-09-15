@@ -138,18 +138,15 @@ impl Candidate {
 /// historical `key_set` read, which reconstructs a world and rebuilds over
 /// it under one reconstruction permit.
 ///
-/// Both terms carry a multiplier the shape above does not show. The lift
-/// CLONES each link's type slot in full before `kind_of` decides, so the
-/// first pass is O(Σ spans across every type slot in the world) rather
-/// than O(links) — M7 caps one slot at [`skep_links::MAX_SLOT_SPANS`], so
-/// a store of maximal-slot links multiplies the pass by that, and the
-/// clone is discarded on every negative answer. And each `step` re-reads and
-/// re-parses its deposit's record (bounded by
-/// [`skep_identity::MAX_RECORD_BYTES`]), so the O(d²) above is O(d²)
-/// record parses. The clone is forced by `TypeAddrs::kind_of` taking
-/// `&[Span]` while `Endset` yields an iterator; an iterator-taking
-/// `kind_of` would remove it here and at [`super::policy`]'s two readings
-/// alike.
+/// The fixpoint carries a multiplier the shape above does not show: each
+/// `step` re-reads and re-parses its deposit's record (bounded by
+/// [`skep_identity::MAX_RECORD_BYTES`]), so the O(d²) above is O(d²) record
+/// parses. The lift carries none: `kind_of` reads each link's STORED type
+/// slot in place and decides its arity in at most two steps of the walk, so
+/// the first pass is O(links) — at most three span comparisons each —
+/// whatever [`skep_links::MAX_SLOT_SPANS`] admits, and only a
+/// credential-shaped link's three slots are copied, into the `Candidate` its
+/// borrowed `LinkDeposit` is built from.
 pub(crate) fn canonical_identity(world: &World) -> IdentityState {
     let links = world.links();
     let types = identity_types();
@@ -158,13 +155,12 @@ pub(crate) fn canonical_identity(world: &World) -> IdentityState {
         .iter()
         .filter_map(|a| {
             let link = links.readlink(a)?;
-            let ty: Vec<Span> = link.type_slot().spans().cloned().collect();
-            let kind = types.kind_of(&ty)?;
+            let kind = types.kind_of(link.type_slot())?;
             Some(Candidate {
                 home: document_of(a)?,
                 from: link.from_slot().spans().cloned().collect(),
                 to: link.to_slot().spans().cloned().collect(),
-                ty,
+                ty: link.type_slot().spans().cloned().collect(),
                 is_claim: matches!(kind, skep_identity::CredentialKind::Claim),
             })
         })

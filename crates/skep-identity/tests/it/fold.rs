@@ -984,6 +984,19 @@ fn single_address_admits_exactly_one_address_form_span() {
     assert_eq!(single_address(&[invalid]), None);
 }
 
+/// AUTH-2.22/AUTH-2.26 — arity is decided in at most TWO steps of the slot's
+/// walk, which is what lets a caller hand in the store's own endset instead of
+/// a copy: a slot whose third step would panic is refused without reaching
+/// it. The two spans are each a type's own unit subtree, so a rule that read
+/// only the first span would answer `Some` here rather than `None`.
+#[test]
+fn arity_is_decided_in_two_steps_of_the_slot() {
+    let fx = Fixture::new();
+    let span = unit(T_ENROLL);
+    assert_eq!(fx.types.kind_of(panics_past_two(&span)), None);
+    assert_eq!(single_address(panics_past_two(&span)), None);
+}
+
 /// AUTH-2.57 totality on the `to` slot: a `to` span whose start does not
 /// VALIDATE is `malformed_shape` — the refusal
 /// `invalid_start_is_foreign_content_not_a_panic` pins on the `from` side.
@@ -1049,7 +1062,7 @@ fn unrecognized_type_slots_are_not_credential() {
             ty,
         };
         let (next, v) = fx.step(&genesis_state, &dep);
-        assert!(matches!(v, Verdict::NotCredential), "expected NotCredential");
+        assert_eq!(v, Verdict::NotCredential, "expected NotCredential");
         assert_eq!(next, genesis_state, "NotCredential must leave state unchanged");
     }
 }

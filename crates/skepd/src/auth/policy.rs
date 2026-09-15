@@ -187,10 +187,7 @@ fn slotarg_kind(s: &SlotArg) -> Option<CredentialKind> {
 pub(crate) fn deposits_credential_link(op: &Op) -> bool {
     match op {
         Op::MakeLink { ty, .. } => slotarg_kind(ty).is_some(),
-        Op::Emit { ty, .. } => {
-            let spans: Vec<Span> = ty.spans().cloned().collect();
-            identity_types().kind_of(&spans).is_some()
-        }
+        Op::Emit { ty, .. } => identity_types().kind_of(ty).is_some(),
         Op::EditLink { successor, .. } => slotarg_kind(&successor.ty).is_some(),
         // Every other op deposits no link at all, so none can be
         // credential-typed — including `Nullify`, whose class is
@@ -414,8 +411,7 @@ pub(crate) fn nullify_refusal(
     let Op::Nullify { home, target } = op else { return None };
     // The same reads for every caller: the target's link, then its class.
     let link = world.links().readlink(target)?;
-    let spans: Vec<Span> = link.type_slot().spans().cloned().collect();
-    let class = write_types().target_class(&spans)?;
+    let class = write_types().target_class(link.type_slot())?;
     let m3 = world.m3();
     let claimed = identity.claimant().is_some();
     // The class's own token, chosen before entitlement is consulted — the arm

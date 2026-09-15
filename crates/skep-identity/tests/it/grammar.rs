@@ -371,10 +371,10 @@ fn enrollment_constructor_polices_the_label_domain() {
     let e = Enrollment::new(key(1), false, Some(String::new())).unwrap();
     assert_eq!(e.label(), None);
 
-    assert!(matches!(
+    assert_eq!(
         Enrollment::new(key(1), false, Some("two\nlines".to_owned())),
         Err(LabelError::Newline)
-    ));
+    );
 }
 
 /// AUTH-1.28 — `PayloadError::token()`: the one authority, all eight rows.
@@ -410,23 +410,17 @@ fn public_key_surface() {
     assert!(PublicKey::parse("ed25519", &"ff".repeat(32)).is_ok());
 
     use skep_identity::KeyParseError;
-    assert!(matches!(
-        PublicKey::parse("rsa", &key_hex),
-        Err(KeyParseError::UnknownAlg)
-    ));
+    assert_eq!(PublicKey::parse("rsa", &key_hex), Err(KeyParseError::UnknownAlg));
     // BadHex BEFORE BadLength, on a token of the wrong length AND the wrong
     // bytes: the decode precedes the measure here, so a length test hoisted
     // ahead of it — the shape `Fingerprint::parse_hex` legitimately has,
     // AUTH-1.9 fixing ONE admitted length — would flip this row to BadLength.
-    assert!(matches!(PublicKey::parse("ed25519", "zz"), Err(KeyParseError::BadHex)));
-    assert!(matches!(
+    assert_eq!(PublicKey::parse("ed25519", "zz"), Err(KeyParseError::BadHex));
+    assert_eq!(
         PublicKey::parse("ed25519", &key_hex[..63]),
         Err(KeyParseError::BadHex) // 63 chars: odd length cannot decode
-    ));
-    assert!(matches!(
-        PublicKey::parse("ed25519", &key_hex[..62]),
-        Err(KeyParseError::BadLength)
-    ));
+    );
+    assert_eq!(PublicKey::parse("ed25519", &key_hex[..62]), Err(KeyParseError::BadLength));
 
     // `parse` takes two `&str` in a row, so a caller CAN swap them — and the
     // swap is loud, on either argument's own check: a hex string is in no
@@ -434,14 +428,8 @@ fn public_key_surface() {
     // decode admits. Nothing silently parses the wrong way round, which is
     // why AUTH-1.4's table lookup can stay inside this function rather than
     // being lifted into the caller's types.
-    assert!(matches!(
-        PublicKey::parse(&key_hex, ALG_ED25519),
-        Err(KeyParseError::UnknownAlg)
-    ));
-    assert!(matches!(
-        PublicKey::parse(ALG_ED25519, ALG_ED25519),
-        Err(KeyParseError::BadHex)
-    ));
+    assert_eq!(PublicKey::parse(&key_hex, ALG_ED25519), Err(KeyParseError::UnknownAlg));
+    assert_eq!(PublicKey::parse(ALG_ED25519, ALG_ED25519), Err(KeyParseError::BadHex));
 }
 
 /// AUTH-1.9 — `Fingerprint::to_hex`/`parse_hex`: 64 lowercase out; exactly

@@ -105,6 +105,7 @@ impl IdentityState {
     /// are a broken PRECONDITION, not an exception to this postcondition.
     ///
     /// [`Values`]: crate::Values
+    #[must_use = "step returns the next state and its verdict; it does not modify the receiver"]
     pub fn step(
         &self,
         types: &TypeAddrs,
@@ -379,6 +380,7 @@ impl IdentityState {
     ///
     /// [`classify`]: IdentityState::classify
     /// [`step`]: IdentityState::step
+    #[must_use = "apply returns the posted state; it does not modify the receiver"]
     fn apply(&self, effect: &Effect) -> IdentityState {
         let mut next = self.clone();
         match effect {

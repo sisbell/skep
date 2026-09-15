@@ -9,7 +9,7 @@
 
 use crate::common;
 
-use common::{addr, tum, unit, width_at_last, T_CLAIM, T_ENROLL, T_RETIRE};
+use common::{addr, panics_past_two, tum, unit, width_at_last, T_CLAIM, T_ENROLL, T_RETIRE};
 use skep_address::Span;
 use skep_identity::{AuditClass, CredentialKind, TargetClass, TypeAddrs, WriteTypes};
 
@@ -180,6 +180,16 @@ fn only_a_single_span_equal_to_a_class_subtree_is_a_member() {
     let len = below.len();
     let straddle = Span::new(below, width_at_last(len, 2)).expect("a positive width");
     assert_eq!(t.target_class(&[straddle]), None);
+}
+
+/// Arity once, in at most TWO steps: a many-span slot is an ordinary link
+/// without its walk being counted or collected, so the store's own endset is
+/// classified in place. Both spans are the grant's own unit subtree, so a
+/// rule that read only the first span would answer `Grant` here.
+#[test]
+fn a_many_span_slot_is_ordinary_in_two_steps() {
+    let span = unit(T_GRANT);
+    assert_eq!(types().target_class(panics_past_two(&span)), None);
 }
 
 /// A SUBTYPE BY PREFIX is its class's member (L10: hierarchy is prefix — one

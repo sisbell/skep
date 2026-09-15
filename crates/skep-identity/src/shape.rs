@@ -75,12 +75,16 @@ impl TypeAddrs {
     }
 
     /// AUTH-2.22 — `Some` iff `ty` is EXACTLY ONE span that is `Equal` (M1
-    /// `classify_spans`) to one of the three precomputed spans: one length
+    /// `classify_spans`) to one of the three precomputed spans: an arity
     /// check and at most three span comparisons. Any other arity, and any
     /// `SpanRel` other than `Equal` (`Containment` included), answers `None`.
     /// An I2 frozen rule (AUTH-2.90).
-    pub fn kind_of(&self, ty: &[Span]) -> Option<CredentialKind> {
-        let [span] = ty else { return None };
+    ///
+    /// `ty` is any borrowed walk of the slot — a slice, or M7's `&Endset` as
+    /// the store holds it — and the arity check takes at most two steps of
+    /// it, so no caller copies a slot to have it classified.
+    pub fn kind_of<'s>(&self, ty: impl IntoIterator<Item = &'s Span>) -> Option<CredentialKind> {
+        let span = sole_span(ty)?;
         if classify_spans(span, &self.enroll_span) == SpanRel::Equal {
             return Some(CredentialKind::Enroll);
         }
@@ -127,13 +131,25 @@ pub struct LinkDeposit<'a> {
 /// applies it paired with `kind_of` (AUTH-2.28, AUTH-2.112). The write path
 /// reads a TYPE slot through it too
 /// ([`WriteTypes::target_class`](crate::WriteTypes::target_class)), outside
-/// the fold. An I2 frozen rule (AUTH-2.90).
-pub fn single_address(slot: &[Span]) -> Option<Address> {
-    let [span] = slot else { return None };
+/// the fold. `slot` is a borrowed walk of the slot, as on
+/// [`TypeAddrs::kind_of`]. An I2 frozen rule (AUTH-2.90).
+pub fn single_address<'s>(slot: impl IntoIterator<Item = &'s Span>) -> Option<Address> {
+    let span = sole_span(slot)?;
     let addr = validate(span.start().clone()).ok()?;
     if classify_spans(span, &subtree_of(addr.tumbler())) == SpanRel::Equal {
         Some(addr)
     } else {
         None
+    }
+}
+
+/// The slot's ONE span, or `None` for every other arity — the arity half
+/// AUTH-2.22 and AUTH-2.26 share, decided in at most two steps of the walk,
+/// so no slot is counted, collected or copied to be refused.
+pub(crate) fn sole_span<'s>(slot: impl IntoIterator<Item = &'s Span>) -> Option<&'s Span> {
+    let mut spans = slot.into_iter();
+    match (spans.next(), spans.next()) {
+        (Some(span), None) => Some(span),
+        _ => None,
     }
 }

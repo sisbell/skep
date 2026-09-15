@@ -49,8 +49,8 @@
 //!
 //! ## The query indexes
 //!
-//! `grant_exists(doc, p)` tests doc's O(depth) ancestor prefixes in p's
-//! prefix-keyed set, plus one probe of the ANY-PRINCIPAL set. Coverage is
+//! `grant_exists(doc, p)` walks up from doc through its ancestor prefixes,
+//! probing p's prefix-keyed set and the ANY-PRINCIPAL set at each. Coverage is
 //! CONTAINMENT (a granted prefix that is an ancestor of doc) ∩ the grant's
 //! issuer being doc's ω owner. The grantee side is PRINCIPAL-EXACT.
 
@@ -151,7 +151,9 @@ impl World {
 /// One admitted grant record — enough to answer queries and to withdraw its
 /// index entry when a later record revokes it. The fields are crate-visible
 /// for the world dump's grant section (lane 3.4 §3), which renders the fold's
-/// operative set through [`Grants::records`].
+/// operative set through [`Grants::records`] and destructures each record
+/// whole — so a field added here is a field that section must render, or the
+/// faithfulness check stops speaking for the whole record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GrantRecord {
     /// The grant link's home document (the issuer's doc 1).
@@ -280,7 +282,9 @@ impl Grants {
     /// `grant_exists(doc, p)` (PUB-1.32's third clause): does some admitted
     /// grant cover `doc` for principal-account `grantee`, issued by doc's ω
     /// owner? Coverage = CONTAINMENT (a granted prefix ⊑ doc) ∩ the grant's
-    /// issuer is `owner`. O(depth) ancestor probes, plus one universal probe.
+    /// issuer is `owner`. One probe of the principal-exact index (when there
+    /// is a grantee) and one of the ANY-PRINCIPAL index at each ancestor,
+    /// `doc` itself included.
     ///
     /// `owner` is doc's mint-time ω owner (the exception set's memo), and the
     /// coverage's issuer clause is exactly `issuers.contains(owner)`: a grant
@@ -622,7 +626,7 @@ pub(crate) fn fold(prev: &Grants, namespace: &M3State, drafts: &Drafts, rec: &Li
 /// store's, grown by every grant any account has ever issued and never
 /// shrunk: a revocation adds a record to the class rather than removing one,
 /// and a `nullify` leaves the claim in the audit view this walk must read.
-/// `crate::publication`'s seed states the exception set's own figure, and
+/// `crate::publication::seed` states the exception set's own figure, and
 /// both run inside `WorldState::rebuild_derived` — the term M2's
 /// `Kernel::world_at` names in its cost and cannot size itself.
 pub(crate) fn seed(namespace: &M3State, links: &LinkState, drafts: &Drafts) -> Grants {

@@ -261,6 +261,31 @@ fn an_account_rung_grant_covers_the_account_s_documents_forward_inclusively() {
     assert!(!w.readable(Some(PrincipalId(3)), &later), "nor an ungranted principal");
 }
 
+/// …and the ANY-PRINCIPAL index is probed at EVERY ancestor, exactly as the
+/// principal-exact one is: an ACCOUNT-rung grant to every principal covers
+/// each document under the account, the one minted after it included. Every
+/// other any-principal grant in this suite names its document directly, so a
+/// walk that probed the universal index at `doc` alone would answer all of
+/// them and close only this one.
+#[test]
+fn an_any_principal_account_rung_grant_covers_the_account_s_documents() {
+    let engine = mem_engine();
+    let b = two_accounts(&engine);
+    grant(&engine, &b.home_a, &b.acct_a, vec![]); // empty `to` ⟹ ANY-PRINCIPAL
+    let (later, _) = engine
+        .namespace()
+        .create_new_document(A, &b.acct_a, None)
+        .expect("A's later draft");
+
+    let w = world(&engine);
+    for doc in [&b.draft_a, &later] {
+        assert!(w.readable(Some(B), doc), "B reads {doc} under the granted account");
+        assert!(w.readable(Some(PrincipalId(3)), doc), "…and so does any other principal");
+        assert!(!w.readable(None, doc), "the guest never does");
+    }
+    engine.check_hints().expect("the seed admits the account-rung grant as the fold did");
+}
+
 /// The SUBTREE clause runs DOWNWARD only (H1, PUB-1.32): a sub-account
 /// delegated under A reads A's draft (its prefix lies inside A's account);
 /// the org root — principal 0, seated at node [1], ABOVE every account —
@@ -948,8 +973,10 @@ fn two_grants_sharing_an_index_entry_are_withdrawn_together() {
 /// caller's own choice — and the answer is then the fail-open `true` the
 /// published clause gives an absent address (PUB-7.5).
 ///
-/// A DEEP DOCUMENT FIELD is the shape, because that field's length is the
-/// projection's iteration count and each iteration copies the whole address.
+/// A deep VERSION MEMBER is the shape, because the projection is the one
+/// step whose work follows the argument itself: `trunk_of` cuts the version
+/// components off in one truncation, linear in the address's component count
+/// (`World::readable`'s COST states the figure).
 /// Every clause below the projection is bounded by something the store chose:
 /// the exception set is a hash probe, and the grant clause's ancestor walk is
 /// reached only past a set HIT, so it only ever runs over a document M3
@@ -980,20 +1007,20 @@ fn the_read_predicate_projects_an_address_the_client_invented() {
         validate(Tumbler::new(comps).expect("nonempty")).expect("a document tier address is T4-valid")
     };
     // The premises, stated where they can fail: this must be a DOCUMENT — the
-    // level whose field the projection peels — with a field long enough that
-    // the peel is not one step, and it must be unregistered, so no clause
-    // below the projection can refuse it first.
+    // level whose version components the projection cuts off — carrying 63 of
+    // them, so the cut is real work and not the identity; and it must be
+    // unregistered, so no clause below the projection can refuse it first.
     assert_eq!(deep.level(), Level::Document);
     assert_eq!(
         deep.document_field().map(|field| field.len()),
         Some(64),
-        "the projection's iteration count IS this field's length"
+        "the document field is one ordinal and 63 version components"
     );
     assert!(
         !engine.kernel().snapshot().world().m3().is_registered_document(&deep),
         "the point is an address M3 never minted"
     );
-    // …and the projection really does run over all of it, peeling to the
+    // …and the projection really does cut all of them off, answering the
     // account's own doc 1 — which is not this address.
     assert_eq!(trunk_of(&deep), addr(&[1, 0, 1, 0, 1]));
 

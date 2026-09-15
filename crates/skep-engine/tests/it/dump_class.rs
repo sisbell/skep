@@ -296,9 +296,8 @@ fn a_historical_world_dumps_at_the_head_s_class() {
         .into_string();
     assert!(!own.contains(&secret_line()), "the N-world's own class has no grant yet");
 
-    // The head, at B's class: both drafts in the slice (the second by the
-    // account rung? no — B holds a grant on the first draft alone), so the
-    // head's slice for B is the first draft, and for A both.
+    // The head, at B's class: B holds a grant on the first draft alone, so
+    // B's slice lists that draft; A reads both, in address order.
     let head_b = engine.world_dump_visible_to(Some(B)).into_string();
     assert!(head_b.contains(&slice_n), "B's head slice: the granted draft alone:\n{head_b}");
     let mut both = vec![quoted(&b.draft_a), quoted(&draft_2)];

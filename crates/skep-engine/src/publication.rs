@@ -42,14 +42,6 @@
 //! off M3's document records; this build takes the set the spec names, and
 //! the standing subtraction candidate PUB-7.69 records is noted in the round's
 //! report).
-//!
-//! SEED COST, per load and per `Engine::world_at` reconstruction: one walk of
-//! M3's publication record — `M3State::documents`, the store's own
-//! enumeration of its registered documents — then, per document, M3's own
-//! registration and bit lookups, and one ω resolution per draft. The walk
-//! yields the bit beside each address and the seed does not read it: the bit
-//! comes back through M3's `published`, which is what makes the seed and the
-//! fold one rule (`draft_entry`).
 
 use skep_address::{Address, Level};
 use skep_namespace::{M3Rec, M3State};
@@ -215,6 +207,11 @@ pub(crate) fn fold(prev: &Drafts, namespace: &M3State, rec: &M3Rec) -> Drafts {
 /// is never enumerated, so the rule is never asked of it — asked, it would
 /// answer DRAFT — and the set never holds it: the open direction the module
 /// doc states.
+///
+/// SEED COST, per load and per `Engine::world_at` reconstruction: one walk of
+/// M3's publication record — `M3State::documents`, the store's own
+/// enumeration of its registered documents — then, per document, M3's own
+/// registration and bit lookups, and one ω resolution per draft.
 pub(crate) fn seed(namespace: &M3State) -> Drafts {
     namespace
         .documents()

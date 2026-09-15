@@ -8,10 +8,7 @@
 //! serde forms pushed through the canonicalizing transcode (maps sorted, so
 //! instance-specific hash iteration cannot leak into the bytes); the hints
 //! section is built from the stores' PUBLIC read surfaces over
-//! already-ordered results. Two dumps of equal worlds are byte-equal — with
-//! the type set a compiled format constant there is no configuration left to
-//! pair a rendering with, and the per-class sections are the shipped five in
-//! their one declaration order.
+//! already-ordered results. Two dumps of equal worlds are byte-equal.
 //!
 //! A slice reaches the authoritative section through its SERDE CHECKPOINT
 //! FORM rather than through an enumeration: M4 publishes none and M3's
@@ -62,6 +59,7 @@ use skep_links::{Endset, LinkState, ShippedType, View};
 use skep_namespace::PrincipalId;
 
 use crate::canon::{render, to_tree, SerdeTree};
+use crate::grants::GrantRecord;
 use crate::world::World;
 
 use filter::filter_tree;
@@ -186,23 +184,6 @@ fn authoritative_tree(world: &World) -> SerdeTree {
         (key("arrangement"), to_tree(&world.arrangement)),
         (key("links"), to_tree(&world.links)),
     ])
-}
-
-/// Hint faithfulness: dump the live world, rebuild its derived state from
-/// scratch through the engine's own recovery path
-/// (`WorldState::rebuild_derived` — the same call recovery makes before
-/// replay), dump again, compare bytes. Equal dumps certify that every hint
-/// THIS DUMP RENDERS matches a from-authoritative rebuild; the authoritative
-/// sections are untouched by the rebuild, so any divergence localizes to a
-/// hint, and a hint the dump does not render is not in the comparison.
-fn hints_faithful(world: &World) -> Result<(), HintDivergence> {
-    let live = dump(world);
-    let rebuilt = dump(&world.clone().rebuild_derived());
-    if live == rebuilt {
-        Ok(())
-    } else {
-        Err(HintDivergence { live, rebuilt })
-    }
 }
 
 /// The two disagreeing dumps, LOCALIZED by both renderings: `Display` and
@@ -391,7 +372,8 @@ fn class_tree(links: &LinkState, ty: &Endset) -> SerdeTree {
 /// identity in v1, so neither store appears.
 ///
 /// THREE of M7's hint families sit outside that reach, which is what bounds
-/// [`hints_faithful`] to an oracle over what this renders and nothing more:
+/// [`crate::Engine::check_hints_of`] to an oracle over what this renders and
+/// nothing more:
 ///
 /// * `dedup` has no public read surface at all.
 /// * `home_frontier` has one, `LinkState::age`, which is that hint less a
@@ -465,8 +447,8 @@ fn hints_tree(world: &World) -> SerdeTree {
 /// The assembler's own derived index rather than a store's — the one the
 /// HINTS section carries; the grant fold is the other, and its home is the
 /// `grants` section ([`grants_tree`]). This index's seed and fold are
-/// `crate::publication`'s, and this rendering is what [`hints_faithful`]
-/// compares them through.
+/// `crate::publication`'s, and this rendering is what
+/// [`crate::Engine::check_hints_of`] compares them through.
 fn drafts_tree(world: &World) -> SerdeTree {
     SerdeTree::Map(
         world
@@ -485,9 +467,9 @@ fn drafts_tree(world: &World) -> SerdeTree {
 /// `published: false` — as dotted addresses in address order. Off M3's own
 /// enumeration of that record, `M3State::documents`, the walk the exception
 /// set's seed makes; the hints' `publication.drafts` is the FOLD's copy, and
-/// [`hints_faithful`] compares that copy against the seed. A SEQUENCE —
-/// `render` sorts maps alone — in the record's own address order, which is
-/// the order the filter preserves.
+/// [`crate::Engine::check_hints_of`] compares that copy against the seed. A
+/// SEQUENCE — `render` sorts maps alone — in the record's own address order,
+/// which is the order the filter preserves.
 ///
 /// One walk, TWO RULES over it, and the two agree on an invariant of M3's
 /// rather than on a shared test. This section keeps an entry whose stored
@@ -523,32 +505,38 @@ fn publication_tree(world: &World) -> SerdeTree {
 /// `home` (the issuer's doc 1), its `issuer` (ω of the home), the
 /// `content_prefix` it shares and its `grantee` (`none` for the ANY-PRINCIPAL
 /// form, PUB-5.8). DERIVED — the fold's records, the engine keeping no grant
-/// slice — so [`hints_faithful`] covers the grant fold's RECORDS through this
-/// section: a seed that admitted a record the fold did not moves these bytes.
-/// It does not cover the fold's two QUERY INDEXES, which are what
-/// `grant_exists` probes and which nothing here renders —
-/// [`crate::Engine::check_hints_of`] states that gap and why it is not a live
-/// divergence. Collected in the
-/// fold's hash order; `render` sorts. Kept WHOLE by the per-class filter: a
-/// grant is a published document's record, and the addresses it names are
-/// not secret (PUB-1.13).
+/// slice — so [`crate::Engine::check_hints_of`] covers the grant fold's
+/// RECORDS through this section: a seed that admitted a record the fold did
+/// not moves these bytes. It does not cover the fold's two QUERY INDEXES,
+/// which are what `grant_exists` probes and which nothing here renders; that
+/// method states the gap and why it is not a live divergence.
+///
+/// The record is DESTRUCTURED WHOLE, so a field added to [`GrantRecord`]
+/// fails to compile here until this section accounts for it. That is what
+/// keeps the certificate about whole RECORDS: a field this section never
+/// rendered would be one a seed and a fold could disagree on in silence.
+///
+/// Collected in the fold's hash order; `render` sorts. Kept WHOLE by the
+/// per-class filter: a grant is a published document's record, and the
+/// addresses it names are not secret (PUB-1.13).
 fn grants_tree(world: &World) -> SerdeTree {
     SerdeTree::Map(
         world
             .grants
             .records()
             .map(|(addr, rec)| {
-                let grantee = match &rec.grantee {
+                let GrantRecord { home, issuer, content_prefix, grantee } = rec;
+                let grantee = match grantee {
                     Some(g) => SerdeTree::Str(g.to_string()),
                     None => SerdeTree::Null,
                 };
                 (
                     SerdeTree::Str(addr.to_string()),
                     SerdeTree::Map(vec![
-                        (key("content_prefix"), SerdeTree::Str(rec.content_prefix.to_string())),
+                        (key("content_prefix"), SerdeTree::Str(content_prefix.to_string())),
                         (key("grantee"), grantee),
-                        (key("home"), SerdeTree::Str(rec.home.to_string())),
-                        (key("issuer"), SerdeTree::Str(rec.issuer.to_string())),
+                        (key("home"), SerdeTree::Str(home.to_string())),
+                        (key("issuer"), SerdeTree::Str(issuer.to_string())),
                     ]),
                 )
             })
@@ -557,12 +545,10 @@ fn grants_tree(world: &World) -> SerdeTree {
 }
 
 /// The dump surface. Every rendering below is a pure function of the world it
-/// is handed and, where there is one, the class it is filtered at: the type
-/// set is a compiled format constant, so no configuration remains to pair a
-/// world with and nothing of this handle's own state reaches the text. The
-/// receiver is the engine a caller already holds, and the no-argument methods
-/// use it for the one thing it supplies — pinning the committed snapshot the
-/// world is read off.
+/// is handed and, where there is one, the class it is filtered at: nothing of
+/// this handle's own state reaches the text. The receiver is the engine a
+/// caller already holds, and the no-argument methods use it for the one thing
+/// it supplies — pinning the committed snapshot the world is read off.
 impl crate::Engine {
     /// [`crate::Engine::dump_of`] at a READER'S CLASS (PUB round 2, lane 3.4
     /// §4): the same tree, post-filtered by `readable` before render — what
@@ -591,16 +577,14 @@ impl crate::Engine {
     /// walks are bounded differently, and by the STORE rather than by the
     /// request:
     ///
-    /// * the supersession walk is linear in its class, because that class is
-    ///   CLOSED to the open surfaces — `makelink` and `emit` both refuse it —
-    ///   so every claim in it carries one denoted address a side; while
+    /// * the supersession walk is linear in its class, with one denoted
+    ///   address a side per claim — for the reasons `sup_edge_claims` in
+    ///   `dump::filter` gives, which name every door of M7's that bound rests
+    ///   on; while
     /// * the predicate walks are linear in the SUM OF SUBJECT-SLOT WIDTHS
-    ///   over their classes. `makelink` fences only the retraction and
-    ///   supersession classes, so a predicate-classed link may be deposited
-    ///   through the open surface with a subject slot of up to
-    ///   `skep_links::MAX_SLOT_SPANS` spans, each denoting a member of its
-    ///   own. That is `LinkState::members`' own bound, which this walk
-    ///   mirrors rather than adds to.
+    ///   over their classes, each slot up to `skep_links::MAX_SLOT_SPANS`
+    ///   spans. That is `LinkState::members`' own bound, which
+    ///   `member_tuples` in `dump::filter` mirrors, and says why it must.
     ///
     /// The filter additionally PARSES a dotted address per entry it judges,
     /// which is [`crate::Engine::dump_of`]'s magnitude term run backwards: a
@@ -639,12 +623,10 @@ impl crate::Engine {
         self.dump_of(snap.world())
     }
 
-    /// Dump any world THIS engine produced — a snapshot of its kernel, or a
-    /// world [`crate::Engine::world_at`] reconstructed — UNFILTERED, the
-    /// harness-only walk; [`crate::Engine::dump_of_visible`] is the same
-    /// world at a reader's class. The class sections
-    /// are the format's shipped five, so no pairing decision exists: any
-    /// world this format wrote renders against the same class list.
+    /// Dump any world — a snapshot of this engine's kernel, a world
+    /// [`crate::Engine::world_at`] reconstructed, or any other — UNFILTERED,
+    /// the harness-only walk; [`crate::Engine::dump_of_visible`] is the same
+    /// world at a reader's class.
     ///
     /// COST, per call, uncached, and linear in the WHOLE world rather than in
     /// anything the caller names. The authoritative half transcodes every
@@ -654,16 +636,12 @@ impl crate::Engine {
     /// over. M3's publication record is read TWICE: once inside the
     /// authoritative transcode, and once more by [`publication_tree`], which
     /// walks it through M3's own enumeration — one entry per REGISTERED
-    /// DOCUMENT, published or not, and no re-validation. That second read is
-    /// structural rather than incidental: the section must come off M3's
-    /// authoritative record and not off the derived set, which is what makes
-    /// it the authority the hint is checked against.
-    /// The tree costs a node per serialized ELEMENT, and a content byte
-    /// is an element: serde has no byte specialization for `[u8]`, so M4's
-    /// `Val` transcodes as a sequence of integers and not as a blob
-    /// (`a_content_byte_costs_a_whole_tree_node` pins that, because it is the
-    /// term that dominates this figure and it is not what the byte payload
-    /// looks like).
+    /// DOCUMENT, published or not, and no re-validation. The tree costs a node
+    /// per serialized ELEMENT, and a content byte is an element: serde has no
+    /// byte specialization for `[u8]`, so M4's `Val` transcodes as a sequence
+    /// of integers and not as a blob (`a_content_byte_costs_a_whole_tree_node`
+    /// pins that, because it is the term that dominates this figure and it is
+    /// not what the byte payload looks like).
     ///
     /// One term is not a count of anything: a component of a tumbler is a
     /// `Nat`, an arbitrary-precision integer with no magnitude bound, and
@@ -698,7 +676,12 @@ impl crate::Engine {
         self.check_hints_of(snap.world())
     }
 
-    /// [`crate::Engine::check_hints`] over any world this engine produced.
+    /// [`crate::Engine::check_hints`] over any world: dump it, rebuild its
+    /// derived state from scratch through `WorldState::rebuild_derived` — the
+    /// call recovery makes before replay — dump the rebuild, and compare the
+    /// bytes. The rebuild moves derived state alone, so a divergence always
+    /// lies in a derived rendering — a hint, or the grant section's records —
+    /// and never in an authoritative slice.
     ///
     /// `Ok(())` certifies EXACTLY what the dump renders: the audit and active
     /// slices, the nullified LINKS of the audit slice, the shipped classes'
@@ -749,7 +732,13 @@ impl crate::Engine {
     /// comparison. This is a harness surface: it gates nothing, and it should
     /// not acquire a caller that does not gate it.
     pub fn check_hints_of(&self, world: &World) -> Result<(), HintDivergence> {
-        hints_faithful(world)
+        let live = dump(world);
+        let rebuilt = dump(&world.clone().rebuild_derived());
+        if live == rebuilt {
+            Ok(())
+        } else {
+            Err(HintDivergence { live, rebuilt })
+        }
     }
 }
 

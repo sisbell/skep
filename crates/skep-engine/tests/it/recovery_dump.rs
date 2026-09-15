@@ -355,7 +355,10 @@ fn a_reconstructed_historical_world_carries_faithful_hints() {
 /// A world the caller pinned itself — a snapshot rather than the engine's
 /// own committed read — dumps deterministically and its hints are faithful:
 /// the render takes nothing from the engine but the world it is handed, so a
-/// harness may pin any world this engine made and render it when it likes.
+/// harness may pin any world and render it when it likes. That is asked of a
+/// SECOND engine as well, one that never saw this world: it renders the same
+/// bytes and passes the same check, so nothing of the handle a caller asks
+/// through reaches either answer.
 #[test]
 fn a_caller_pinned_world_dumps_deterministically() {
     let engine = Engine::open(mem_cfg()).expect("in-memory open");
@@ -370,6 +373,10 @@ fn a_caller_pinned_world_dumps_deterministically() {
     let d2 = engine.dump_of(snap.world());
     assert_eq!(d1, d2);
     engine.check_hints_of(snap.world()).expect("hints are faithful");
+
+    let unrelated = Engine::open(mem_cfg()).expect("a second in-memory open");
+    assert_eq!(unrelated.dump_of(snap.world()), d1, "a world renders alike through any engine");
+    unrelated.check_hints_of(snap.world()).expect("…and checks alike through any engine");
 }
 
 /// The dump's vocabulary is part of its format, so it is pinned here rather

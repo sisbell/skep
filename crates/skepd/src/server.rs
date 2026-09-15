@@ -2199,7 +2199,7 @@ fn refuse_unavailable(e: Unavailable) -> Reply {
             TransportError::NotAPosition,
             vec![("nearest", Value::Number(nearest.0.into()))],
         ),
-        HistoryError::Reclaimed { floor } => refuse_reclaimed(floor.map(|f| f.0)),
+        HistoryError::Reclaimed { floor, .. } => refuse_reclaimed(floor.map(|f| f.0)),
         // Unreachable under this daemon's Fsync configuration; mapped so the
         // surface stays total over the engine's error type.
         HistoryError::Unjournaled => refuse(

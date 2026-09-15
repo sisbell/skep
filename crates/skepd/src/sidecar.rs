@@ -553,7 +553,7 @@ impl CommitsLog {
 /// than discarding entries over a fault that may be transient.
 fn retention_floor(engine: &Engine) -> Option<u64> {
     match engine.world_at(Seq(0)) {
-        Err(HistoryError::Reclaimed { floor }) => Some(floor.map(|f| f.0).unwrap_or(0)),
+        Err(HistoryError::Reclaimed { floor, .. }) => Some(floor.map(|f| f.0).unwrap_or(0)),
         _ => None,
     }
 }

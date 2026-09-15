@@ -44,6 +44,8 @@ struct Committed<W> {
 ///
 /// [`seq`]: Snapshot::seq
 /// [`world`]: Snapshot::world
+#[must_use = "a snapshot does nothing unless read; taking one and dropping it \
+              leaves the kernel exactly as it was"]
 pub struct Snapshot<W: WorldState>(Arc<Committed<W>>);
 
 impl<W: WorldState> Snapshot<W> {
@@ -510,8 +512,9 @@ impl<W: WorldState> Kernel<W> {
         // The base, with its whole fallback chain: newest valid retained
         // checkpoint → next-older retained → genesis-while-reachable; an
         // exhausted chain is the operator-intervention condition (§6/§7).
-        let base = replay::select_base(&checkpoints, &segs, None, genesis)
-            .map_err(|_| OpenError::BadCheckpoint)?;
+        let base = replay::select_base(&checkpoints, &segs, None, genesis).map_err(|fail| {
+            OpenError::BadCheckpoint { cause: fail.cause }
+        })?;
 
         // Pass 1: derive W and classify the corrupt runs (§7). A scan that
         // could not enumerate the frame stream produces no outcome at all and
@@ -1022,6 +1025,7 @@ impl<W: WorldState> Kernel<W> {
         let base = replay::select_base(&checkpoints, &segs, Some(at.0), &journaled.genesis)
             .map_err(|fail| HistoryError::Reclaimed {
                 floor: fail.floor.map(Seq),
+                cause: fail.cause,
             })?;
         // A boundary that IS the base is answered wholly from that base:
         // checkpoint seqs are committed boundaries (a checkpoint serializes an
@@ -1426,6 +1430,48 @@ mod tests {
         );
     }
 
+    #[test]
+    fn an_exhausted_chain_says_why_its_newest_base_refused() {
+        // With the chain exhausted, the refusal's account is the WHOLE of what
+        // names the remedy: a base whose body will not decode is a binary on
+        // the wrong side of a `W` format change — roll it forward — where a
+        // failed checksum or a short file is damage. A bare "no retained
+        // checkpoint loads" sends an operator to their disk for both.
+        //
+        // This is the only tier that can reach both halves of the fixture:
+        // `checkpoint::write` mints the unusable base, and the reclamation
+        // that makes genesis unreachable needs the kernel that performs it.
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = cfg(dir.path(), BurnedSeqPolicy::Rollback); // retain 1: no fallback
+        {
+            let k = Kernel::<Vec<Vec<u8>>>::open(cfg.clone(), Vec::new()).unwrap();
+            for _ in 0..8 {
+                k.transact::<_, ()>(&[], |stg| {
+                    stg.push(vec![7u8; 300 * 1024]);
+                    Ok(())
+                })
+                .unwrap();
+            }
+            assert_eq!(k.checkpoint().unwrap(), Seq(8));
+        }
+        // The checkpoint's reclamation dropped the segment that begins the
+        // journal, so genesis can no longer stand in.
+        assert!(!journal::segment_path(dir.path(), 1).exists());
+        // Replace the sole retained base with one whose header checksum is
+        // VALID and whose body is not this world: everything the header can
+        // prove passes, and the decode still refuses.
+        checkpoint::write(dir.path(), 8, &"not this world".to_string()).expect("fixture base");
+
+        let err = Kernel::<Vec<Vec<u8>>>::open(cfg, Vec::new())
+            .expect_err("an exhausted chain refuses");
+        let OpenError::BadCheckpoint { cause: Some(_) } = &err else {
+            panic!("the skew must travel, or an operator restores media over a rolled binary: {err:?}")
+        };
+        // …and reaches a reporter walking the chain as well as one reading the
+        // sentence, which are two different consumers.
+        assert!(std::error::Error::source(&err).is_some());
+        assert!(err.to_string().contains("the newest refused"), "got {err}");
+    }
 
     #[test]
     fn a_head_at_the_seq_ceiling_refuses_to_open() {
@@ -1631,7 +1677,7 @@ mod tests {
         assert!(!checkpoints.is_empty(), "the fixture writes checkpoints");
         for cp in &checkpoints {
             assert!(
-                cp.load::<Vec<u64>>().is_some(),
+                cp.load::<Vec<u64>>().is_ok(),
                 "checkpoint {} does not load — two writers shared checkpoint.tmp",
                 cp.seq
             );

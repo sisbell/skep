@@ -350,7 +350,7 @@ fn c_checkpoint_chain_exhausted_with_genesis_unreachable_refuses_loudly() {
         }
         let ctx = format!("C-exhausted: {}", damage.label());
         match timed_open_result(&case, &ctx) {
-            Err(EngineError::Open(OpenError::BadCheckpoint)) => {}
+            Err(EngineError::Open(OpenError::BadCheckpoint { .. })) => {}
             Err(other) => panic!(
                 "FINDING ({ctx}): expected the loud BadCheckpoint refusal, got a different \
                  refusal: {other}"

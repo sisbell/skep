@@ -381,7 +381,7 @@ fn an_undecodable_checkpoint_with_no_older_start_point_refuses_to_open() {
     rewrite_checkpoint_body(dir.path(), &pre_stamp_body());
 
     match Engine::open(fsync_cfg(dir.path())) {
-        Err(EngineError::Open(OpenError::BadCheckpoint)) => {}
+        Err(EngineError::Open(OpenError::BadCheckpoint { .. })) => {}
         Err(other) => panic!("the exhausted chain must refuse BadCheckpoint, got: {other}"),
         Ok(engine) => panic!(
             "opened at head {} over an undecodable sole base with genesis unreachable — from what?",

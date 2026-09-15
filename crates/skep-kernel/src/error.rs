@@ -18,12 +18,22 @@ pub enum OpenError {
     /// of the journal-path exclusion lock (a second live kernel on this
     /// journal; Lifecycle).
     Io(io::Error),
-    /// No retained checkpoint loads (each unreadable / failed its checksum)
-    /// and genesis is unreachable (its covering journal reclaimed). Recovery
-    /// internally falls back newest → next-older RETAINED checkpoint →
-    /// genesis-while-reachable (§6/§7); this is returned only when that whole
-    /// chain is exhausted. Operator-intervention condition — not auto-retried.
-    BadCheckpoint,
+    /// No retained checkpoint loads and genesis is unreachable (its covering
+    /// journal reclaimed). Recovery internally falls back newest → next-older
+    /// RETAINED checkpoint → genesis-while-reachable (§6/§7); this is returned
+    /// only when that whole chain is exhausted. Operator-intervention
+    /// condition — not auto-retried.
+    BadCheckpoint {
+        /// Why the NEWEST base recovery could have used refused — the whole
+        /// of what names the remedy, since nothing else about an exhausted
+        /// chain distinguishes one condition from another. A body that will
+        /// not decode is a binary on the wrong side of a `W` format change:
+        /// roll it forward. A failed header checksum, a truncated file or a
+        /// foreign format stamp is damage: restore the media. `None` when no
+        /// candidate was tried at all — the journal retains no checkpoint,
+        /// and only its unreachable genesis was ever available.
+        cause: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
+    },
     /// Durable committed data the recovered state needs cannot be read. Four
     /// conditions reach here: a corrupt run inside the genuinely-replayed
     /// range `(S_load, W]` (a run reaching EOF is the un-acked / torn tail,
@@ -63,9 +73,14 @@ impl fmt::Display for OpenError {
         match self {
             OpenError::InvalidConfig(msg) => write!(f, "invalid kernel configuration: {msg}"),
             OpenError::Io(e) => write!(f, "journal open/recovery I/O failure: {e}"),
-            OpenError::BadCheckpoint => {
+            OpenError::BadCheckpoint { cause: None } => {
                 write!(f, "no retained checkpoint loads and genesis is unreachable")
             }
+            OpenError::BadCheckpoint { cause: Some(e) } => write!(
+                f,
+                "no retained checkpoint loads and genesis is unreachable; the newest \
+                 refused: {e}"
+            ),
             OpenError::Corruption { at, cause: None } => write!(
                 f,
                 "durable committed data cannot be read; coordinate naming the damage: {at}"
@@ -85,8 +100,10 @@ impl std::error::Error for OpenError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             OpenError::Io(e) => Some(e),
-            OpenError::Corruption { cause, .. } => cause.as_deref().map(|e| e as _),
-            OpenError::InvalidConfig(_) | OpenError::BadCheckpoint => None,
+            OpenError::Corruption { cause, .. } | OpenError::BadCheckpoint { cause } => {
+                cause.as_deref().map(|e| e as _)
+            }
+            OpenError::InvalidConfig(_) => None,
         }
     }
 }
@@ -187,8 +204,16 @@ pub enum HistoryError {
         /// The oldest retained checkpoint's seq — the oldest boundary a base
         /// could still be derived at — or `None` when no checkpoint exists.
         /// That checkpoint is the oldest CANDIDATE, not a guarantee: one that
-        /// fails its own header checksum refuses this way again.
+        /// refuses to load refuses this way again, which is what `cause`
+        /// distinguishes.
         floor: Option<Seq>,
+        /// Why the NEWEST base this call could have used refused, when one
+        /// was tried at all. That is what separates a boundary genuinely
+        /// below the retained window — where re-asking at `floor` succeeds —
+        /// from a retained base that is itself unusable, where re-asking at
+        /// `floor` refuses identically and a caller honouring the `floor`
+        /// alone retries forever.
+        cause: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
     },
     /// The kernel runs under [`crate::Durability::InMemory`]: there is no
     /// journal to derive history from.
@@ -219,12 +244,25 @@ impl fmt::Display for HistoryError {
             HistoryError::NotABoundary { nearest } => {
                 write!(f, "not a committed boundary; nearest at or below is {nearest}")
             }
-            HistoryError::Reclaimed { floor: Some(floor) } => write!(
-                f,
-                "history below the oldest retained checkpoint (seq {floor}) has been reclaimed"
-            ),
-            HistoryError::Reclaimed { floor: None } => {
-                write!(f, "no checkpoint and no genesis-reaching journal; history unavailable")
+            // Two independent facts — which floor, and why the newest base
+            // refused — so the sentence is built rather than spelled out over
+            // four arms.
+            HistoryError::Reclaimed { floor, cause } => {
+                match floor {
+                    Some(floor) => write!(
+                        f,
+                        "history below the oldest retained checkpoint (seq {floor}) has been \
+                         reclaimed"
+                    )?,
+                    None => write!(
+                        f,
+                        "no checkpoint and no genesis-reaching journal; history unavailable"
+                    )?,
+                }
+                match cause {
+                    Some(e) => write!(f, "; the newest base refused: {e}"),
+                    None => Ok(()),
+                }
             }
             HistoryError::Unjournaled => {
                 write!(f, "in-memory kernel: no journal to derive history from")
@@ -247,10 +285,11 @@ impl std::error::Error for HistoryError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             HistoryError::Io(e) => Some(e),
-            HistoryError::Corruption { cause, .. } => cause.as_deref().map(|e| e as _),
+            HistoryError::Corruption { cause, .. } | HistoryError::Reclaimed { cause, .. } => {
+                cause.as_deref().map(|e| e as _)
+            }
             HistoryError::BeyondHead { .. }
             | HistoryError::NotABoundary { .. }
-            | HistoryError::Reclaimed { .. }
             | HistoryError::Unjournaled => None,
         }
     }

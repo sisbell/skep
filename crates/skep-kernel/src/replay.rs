@@ -12,7 +12,7 @@
 //! over an ordered, ranged set with no coordinate twice — so this module
 //! applies what it is given.
 
-use crate::checkpoint::CheckpointMeta;
+use crate::checkpoint::{CheckpointMeta, LoadRefused};
 use crate::journal::{self, ScanFail, ScanOutcome, SegmentMeta};
 use crate::WorldState;
 
@@ -66,18 +66,31 @@ impl<W> Base<W> {
 
 /// No base at or below the requested boundary remains derivable: no retained
 /// checkpoint there loads, and the journal no longer reaches back to `Seq(1)`
-/// so genesis cannot stand in (§6/§7). `floor` is the oldest retained
-/// checkpoint's seq when one exists — the oldest boundary a base could still
-/// be derived at.
+/// so genesis cannot stand in (§6/§7).
 pub(crate) struct Unreachable {
+    /// The oldest retained checkpoint's seq when one exists — the oldest
+    /// boundary a base could still be derived at.
     pub floor: Option<u64>,
+    /// Why the NEWEST base this derivation could have used refused, which is
+    /// the whole of what is left to tell an operator once the chain is
+    /// exhausted: a body that will not decode says roll the binary, a failed
+    /// checksum says restore the media, and a bare refusal says neither.
+    /// `None` when no candidate was tried at all — no retained checkpoint, or
+    /// every one of them above the requested boundary.
+    ///
+    /// Only an exhausted chain reaches a caller, so a refusal the fallback
+    /// walked past is dropped: the derivation then succeeded, and why an
+    /// older base was preferred is not a failure to report.
+    pub cause: Option<LoadRefused>,
 }
 
 /// Choose the base (§6/§7): the newest checkpoint that loads — at or below
 /// `bound`, when one is given — else genesis while it is still reachable.
-/// A checkpoint failing its header checksum is skipped and the next-older
-/// RETAINED one tried, which is what makes the fallback chain real rather
-/// than nominal.
+/// A checkpoint that refuses ([`CheckpointMeta::load`]) is skipped and the
+/// next-older RETAINED one tried, which is what makes the fallback chain real
+/// rather than nominal; if nothing stands in, [`Unreachable`] carries why the
+/// newest candidate refused, since by then that account is all an operator
+/// has.
 ///
 /// Whichever base is chosen is seeded through
 /// [`WorldState::rebuild_derived`] BEFORE anything is folded onto it: the
@@ -100,21 +113,31 @@ pub(crate) fn select_base<W: WorldState>(
     bound: Option<u64>,
     genesis: &W,
 ) -> Result<Base<W>, Unreachable> {
+    let mut cause: Option<LoadRefused> = None;
     for cp in checkpoints.iter().rev() {
         if bound.is_some_and(|b| cp.seq > b) {
             continue;
         }
-        if let Some(world) = cp.load::<W>() {
-            return Ok(Base {
-                s_load: cp.seq,
-                world: world.rebuild_derived(),
-            });
+        match cp.load::<W>() {
+            Ok(world) => {
+                return Ok(Base {
+                    s_load: cp.seq,
+                    world: world.rebuild_derived(),
+                });
+            }
+            // Newest-first, so the first refusal met is the newest base's —
+            // the one this derivation most wanted, and the one an operator
+            // needs if nothing below it stands in either.
+            Err(refused) => {
+                cause.get_or_insert(refused);
+            }
         }
     }
     // Genesis stands in only while the journal still reaches back to it.
     if !journal::reaches_genesis(segs) {
         return Err(Unreachable {
             floor: checkpoints.first().map(|cp| cp.seq),
+            cause,
         });
     }
     Ok(Base {

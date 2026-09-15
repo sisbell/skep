@@ -358,10 +358,10 @@ mod tests {
     /// what a reporter walking `source` finds is M2's error itself.
     #[test]
     fn an_open_failure_carries_the_kernel_s_own_account_both_ways() {
-        let open_failure = EngineError::Open(OpenError::BadCheckpoint);
+        let open_failure = EngineError::Open(OpenError::BadCheckpoint { cause: None });
         let rendered = open_failure.to_string();
         assert!(
-            rendered.contains(&OpenError::BadCheckpoint.to_string()),
+            rendered.contains(&OpenError::BadCheckpoint { cause: None }.to_string()),
             "the operator must read M2's sentence, not a paraphrase: {rendered}"
         );
         assert!(

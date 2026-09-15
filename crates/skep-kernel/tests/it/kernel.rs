@@ -1470,7 +1470,13 @@ fn an_exhausted_fallback_chain_refuses_to_open() {
     assert!(!seg_file(dir.path(), 1).exists());
     fs::remove_file(ckpt_file(dir.path(), 8)).unwrap();
     let err = Kernel::open(cfg, genesis()).err().unwrap();
-    assert!(matches!(err, OpenError::BadCheckpoint), "got {err:?}");
+    // No candidate was tried at all — the journal retains no checkpoint — so
+    // there is no refusal to account for, and the variant says as much rather
+    // than naming a remedy it cannot know.
+    assert!(
+        matches!(err, OpenError::BadCheckpoint { cause: None }),
+        "got {err:?}"
+    );
 }
 
 #[test]
@@ -1488,7 +1494,14 @@ fn world_at_refuses_a_boundary_below_the_reclamation_floor() {
     assert!(!seg_file(dir.path(), 1).exists());
     for at in [Seq(4), Seq(5)] {
         match k.world_at(at) {
-            Err(HistoryError::Reclaimed { floor }) => assert_eq!(floor, Some(Seq(8))),
+            // The retained base is healthy and merely sits ABOVE the boundary
+            // asked for, so no candidate was tried and there is no refusal to
+            // account for. That absence is what tells a caller the floor is
+            // worth re-asking at, where a base that refused to load would
+            // refuse identically there.
+            Err(HistoryError::Reclaimed { floor, cause: None }) => {
+                assert_eq!(floor, Some(Seq(8)))
+            }
             other => panic!("expected Reclaimed at {at}, got {other:?}"),
         }
     }

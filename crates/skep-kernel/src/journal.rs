@@ -1439,15 +1439,16 @@ mod tests {
             .expect("fixture commit");
     }
 
-    /// Frame spans of a CLEAN journal file, via the real parser.
-    fn frame_spans(path: &Path) -> Vec<(usize, usize)> {
+    /// Byte offset of each frame in a CLEAN journal file, via the real parser
+    /// — which is what a fixture aims damage with.
+    fn frame_starts(path: &Path) -> Vec<usize> {
         let buf = fs::read(path).unwrap();
         let mut v = Vec::new();
         let mut pos = 0;
         while pos < buf.len() {
             match parse_frame(&buf, pos) {
                 Parsed::Intact { payload } => {
-                    v.push((pos, payload.end - pos));
+                    v.push(pos);
                     pos = payload.end;
                 }
                 Parsed::Bad { .. } => panic!("clean journal expected"),
@@ -2042,9 +2043,9 @@ mod tests {
         write_txn(&mut writer, 2, vec![rec(20)]);
         write_txn(&mut writer, 3, vec![rec(30)]);
         let segs = list_segments(dir.path()).unwrap();
-        let spans = frame_spans(&segs[0].path);
+        let starts = frame_starts(&segs[0].path);
         // Frames: 0=T1 rec, 1=T1 marker, 2=T2 rec, 3=T2 marker, 4=T3 rec, 5=T3 marker.
-        flip_byte(&segs[0].path, spans[2].0 + FRAME_HEADER_LEN + 1);
+        flip_byte(&segs[0].path, starts[2] + FRAME_HEADER_LEN + 1);
         let out = scan(&segs, 0, None).unwrap();
         assert_eq!(
             out.runs,
@@ -2069,9 +2070,9 @@ mod tests {
         write_txn(&mut writer, 2, vec![rec(20), rec(21)]);
         write_txn(&mut writer, 4, vec![rec(40)]);
         let segs = list_segments(dir.path()).unwrap();
-        let spans = frame_spans(&segs[0].path);
+        let starts = frame_starts(&segs[0].path);
         // Frames: 0=T1 rec, 1=T1 marker, 2..=3=T2 recs, 4=T2 marker, 5=T3 rec, 6=T3 marker.
-        flip_byte(&segs[0].path, spans[4].0 + FRAME_HEADER_LEN + 1);
+        flip_byte(&segs[0].path, starts[4] + FRAME_HEADER_LEN + 1);
         let out = scan(&segs, 0, None).unwrap();
         assert_eq!(
             out.runs,
@@ -2098,8 +2099,8 @@ mod tests {
         write_txn(&mut writer, 1, vec![embedded_magic]);
         write_txn(&mut writer, 2, vec![rec(20)]);
         let segs = list_segments(dir.path()).unwrap();
-        let spans = frame_spans(&segs[0].path);
-        flip_byte(&segs[0].path, spans[0].0 + FRAME_HEADER_LEN + 1);
+        let starts = frame_starts(&segs[0].path);
+        flip_byte(&segs[0].path, starts[0] + FRAME_HEADER_LEN + 1);
         let out = scan(&segs, 0, None).unwrap();
         assert_eq!(
             out.runs,
@@ -2132,8 +2133,8 @@ mod tests {
         write_txn(&mut writer, 1, vec![evil]);
         write_txn(&mut writer, 2, vec![rec(20)]);
         let segs = list_segments(dir.path()).unwrap();
-        let spans = frame_spans(&segs[0].path);
-        flip_byte(&segs[0].path, spans[0].0 + FRAME_HEADER_LEN + 1);
+        let starts = frame_starts(&segs[0].path);
+        flip_byte(&segs[0].path, starts[0] + FRAME_HEADER_LEN + 1);
 
         // The scan refuses, at the base's own coordinate. That refusal is the
         // whole of what there is to check here: what such a scan derived is a
@@ -2176,8 +2177,8 @@ mod tests {
         let segs = list_segments(dir.path()).unwrap();
         assert_eq!(segs.len(), 2, "the fixture rotates");
         // Tear seg-2's marker: its txn is no longer committed.
-        let spans = frame_spans(&segs[1].path);
-        flip_byte(&segs[1].path, spans[1].0 + FRAME_HEADER_LEN + 1);
+        let starts = frame_starts(&segs[1].path);
+        flip_byte(&segs[1].path, starts[1] + FRAME_HEADER_LEN + 1);
         let out = scan(&segs, 0, None).unwrap();
         assert_eq!(out.committed_head, 1);
         let tail = out.tail.as_ref().expect("a scanned region has a cut");

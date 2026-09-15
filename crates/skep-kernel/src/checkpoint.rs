@@ -24,6 +24,13 @@ use crate::journal::fsync_dir;
 const MAGIC: [u8; 4] = *b"SKC2";
 const HEADER_LEN: usize = 24;
 
+/// Why a checkpoint could not stand in as a base (§6). Every refusal is
+/// skipped the same way — the caller falls to the next-older retained base —
+/// so this carries no taxonomy to branch on, only the account that says which
+/// REMEDY, at the one point where that matters: the whole chain exhausted,
+/// with nothing else left to tell an operator.
+pub(crate) type LoadRefused = Box<dyn std::error::Error + Send + Sync + 'static>;
+
 /// One checkpoint on disk: the coordinate its name claims, and where it is.
 ///
 /// A slice of these must be ascending by `seq`, as [`list`] produces it: every
@@ -38,9 +45,19 @@ pub(crate) struct CheckpointMeta {
 }
 
 impl CheckpointMeta {
-    /// Load and validate this checkpoint. `None` means unreadable / failed its
-    /// checksum / name-header seq mismatch — the caller falls back to the
-    /// next-older retained checkpoint, then genesis-while-reachable (§6/§7).
+    /// Load and validate this checkpoint, or say why it cannot stand in as a
+    /// base: unreadable, short of its own header, a foreign format stamp, a
+    /// header seq disagreeing with the name, a body failing its checksum, or a
+    /// body that will not decode as `W`. The caller falls back to the
+    /// next-older retained checkpoint, then genesis-while-reachable (§6/§7) —
+    /// every refusal alike, which is why the account travels as one type
+    /// rather than as a taxonomy nobody branches on.
+    ///
+    /// The last of those is the one an operator most needs named. The header
+    /// checksum has passed by then, so the bytes ARE the bytes that were
+    /// written and the refusal is not rot: it is a writer/reader skew, a
+    /// binary on the wrong side of a `W` format change, whose remedy is to
+    /// roll the binary rather than to restore the media.
     ///
     /// The header this splits at [`HEADER_LEN`] is the one [`fn@write`]
     /// appends, field for field; see there for what a drifted half costs,
@@ -49,22 +66,45 @@ impl CheckpointMeta {
     /// The name-versus-header cross-check compares two independent sources,
     /// which is what makes it a check rather than a tautology: the seq comes
     /// from the directory entry, the header from the bytes.
-    pub(crate) fn load<W: DeserializeOwned>(&self) -> Option<W> {
-        let data = fs::read(&self.path).ok()?;
-        if data.len() < HEADER_LEN || data[0..4] != MAGIC {
-            return None;
+    pub(crate) fn load<W: DeserializeOwned>(&self) -> Result<W, LoadRefused> {
+        let data = fs::read(&self.path)?;
+        if data.len() < HEADER_LEN {
+            return Err("checkpoint is shorter than its own header".into());
         }
-        let seq = u64::from_le_bytes(data[4..12].try_into().ok()?);
-        let crc = u32::from_le_bytes(data[12..16].try_into().ok()?);
-        let body_len = u64::from_le_bytes(data[16..24].try_into().ok()?);
+        if data[0..4] != MAGIC {
+            return Err("checkpoint is not this build's format (wrong format stamp)".into());
+        }
+        // The length check above is what makes these three infallible, so a
+        // failure here is a reordering rather than a bad base and must not be
+        // answered as one.
+        let seq = u64::from_le_bytes(data[4..12].try_into().unwrap());
+        let crc = u32::from_le_bytes(data[12..16].try_into().unwrap());
+        let body_len = u64::from_le_bytes(data[16..24].try_into().unwrap());
         if seq != self.seq {
-            return None;
+            return Err(
+                format!("checkpoint header claims seq {seq}, its name claims {}", self.seq).into(),
+            );
         }
         let body = &data[HEADER_LEN..];
-        if body.len() as u64 != body_len || crc32c::crc32c(body) != crc {
-            return None;
+        if body.len() as u64 != body_len {
+            return Err(format!(
+                "checkpoint body is {} bytes, its header claims {body_len}",
+                body.len()
+            )
+            .into());
         }
-        bincode::deserialize(body).ok()
+        if crc32c::crc32c(body) != crc {
+            return Err(
+                "checkpoint body failed its header checksum (bit-rot or a torn write)".into(),
+            );
+        }
+        match bincode::deserialize(body) {
+            Ok(world) => Ok(world),
+            // The unsizing coercion site: `bincode::Error` is a boxed
+            // `ErrorKind`, which unsizes against this function's return type
+            // here and would need a `From` impl that does not exist under `?`.
+            Err(skew) => Err(skew),
+        }
     }
 }
 
@@ -228,7 +268,7 @@ mod tests {
         let listed = list(dir.path()).unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].seq, 7);
-        assert_eq!(listed[0].load::<Vec<u64>>(), Some(world()));
+        assert_eq!(listed[0].load::<Vec<u64>>().expect("the base loads"), world());
 
         // A crash mid-write leaves a `.tmp`, which is not a base.
         fs::write(dir.path().join("checkpoint.tmp"), b"not a checkpoint").unwrap();
@@ -239,7 +279,9 @@ mod tests {
     fn a_flipped_body_byte_refuses_the_base() {
         // The header checksum is what `load` validates before trusting a base,
         // because serde alone does not reliably detect bit-rot and a silently
-        // wrong base would defeat the whole `BadCheckpoint` fallback chain.
+        // wrong base would defeat the whole `BadCheckpoint` fallback chain —
+        // so the account must say the CHECKSUM caught it, which is what tells
+        // an operator to restore media rather than to roll a binary.
         let dir = tempdir().unwrap();
         write(dir.path(), 3, &world()).expect("fixture checkpoint");
         let path = checkpoint_path(dir.path(), 3);
@@ -247,7 +289,52 @@ mod tests {
         let last = data.len() - 1;
         data[last] ^= 0xFF;
         fs::write(&path, &data).unwrap();
-        assert_eq!(list(dir.path()).unwrap()[0].load::<Vec<u64>>(), None);
+        let refused = list(dir.path()).unwrap()[0]
+            .load::<Vec<u64>>()
+            .expect_err("a flipped body byte is not a base");
+        assert!(refused.to_string().contains("checksum"), "got {refused}");
+    }
+
+    #[test]
+    fn a_body_that_survives_its_checksum_and_will_not_decode_is_a_skew() {
+        // The one refusal the checksum has already ruled rot out of: these ARE
+        // the bytes that were written, and they still are not a `W`. That is a
+        // binary on the wrong side of a `W` format change, and the
+        // serializer's own account is the only thing that says so — where a
+        // bare "this base does not load" sends an operator to their disk.
+        //
+        // `bool` is the cheapest certain wrong type: its decoder rejects any
+        // byte but 0 and 1, and a `Vec`'s first byte is its length.
+        let refusal_reading = |len: usize| {
+            let dir = tempdir().unwrap();
+            write(dir.path(), 3, &vec![10u64; len]).expect("fixture checkpoint");
+            let refused = list(dir.path()).unwrap()[0]
+                .load::<bool>()
+                .expect_err("a body that is not a `bool` does not load as one");
+            assert!(
+                !refused.to_string().contains("checksum"),
+                "the checksum passed; this is a skew, not rot: {refused}"
+            );
+            refused.to_string()
+        };
+        // Two bodies rejected for two reasons, so what travels has to be the
+        // SERIALIZER's account of these bytes: a sentence this module could
+        // have written instead would be the same for both, and would leave an
+        // operator with no more than "it did not load".
+        assert_ne!(refusal_reading(3), refusal_reading(7));
+    }
+
+    #[test]
+    fn a_base_that_cannot_be_read_says_so_rather_than_looking_damaged() {
+        // Unreadable is not the same remedy as damaged, and the two were once
+        // one silent refusal. A directory bearing a checkpoint's name is the
+        // deterministic, privilege-free injection: `list` parses names and not
+        // file types, which the `journal_path` caller contract already says.
+        let dir = tempdir().unwrap();
+        fs::create_dir(checkpoint_path(dir.path(), 5)).unwrap();
+        let listed = list(dir.path()).unwrap();
+        assert_eq!(listed.len(), 1, "a name is a checkpoint, whatever the file type");
+        assert!(listed[0].load::<Vec<u64>>().is_err());
     }
 
     #[test]

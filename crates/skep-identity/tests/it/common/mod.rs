@@ -102,9 +102,20 @@ pub fn doc1(acct: &[u32]) -> Address {
     doc_of(acct, 1)
 }
 
-/// A second document of the account — the home pin's refused residence.
+/// A second document of the account — one of the home pin's refused
+/// residences.
 pub fn doc2(acct: &[u32]) -> Address {
     doc_of(acct, 2)
+}
+
+/// The first VERSION member of `doc` — `doc·1`, the opening slot of M3's
+/// `(source, 1)` version chain (`first_version_address`): a DIFFERENT
+/// document, owned by `doc`'s account, whose address has `doc` as a proper
+/// tumbler prefix.
+pub fn first_version_of(doc: &Address) -> Address {
+    let mut comps: Vec<Nat> = doc.tumbler().iter().cloned().collect();
+    comps.push(Nat::from(1u32));
+    validate(Tumbler::new(comps).expect("nonempty")).expect("a version member is a valid document")
 }
 
 // ---------------------------------------------------------------- the ctx

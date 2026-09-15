@@ -155,9 +155,11 @@ fn sig_lines_are_skipped_with_garbage() {
     assert_eq!(ok_retire(record.as_bytes()).len(), 1);
 }
 
-/// Corpus: `signature …` and `sigx` — the skip tests the FIRST TOKEN for
-/// EQUALITY, never a prefix, so a near-miss keyword is an ordinary line and
-/// fails its kind's grammar (AUTH-2.8, AUTH-2.13). A prefix test would
+/// Corpus: `signature …`, `sigx`, `sig\tjunk` and `sig\r` — the skip tests
+/// the FIRST TOKEN for EQUALITY, never a prefix, and a token ends only at a
+/// 0x20 (AUTH-2.8), so a TAB- or CR-joined `sig` is ONE token too: each
+/// near-miss is an ordinary line and fails its kind's grammar (AUTH-2.8,
+/// AUTH-2.13). A prefix test, or a skip that split on any whitespace, would
 /// silently ignore a malformed line inside a STRICT grammar.
 #[test]
 fn a_token_merely_beginning_sig_is_not_a_sig_line() {
@@ -167,6 +169,10 @@ fn a_token_merely_beginning_sig_is_not_a_sig_line() {
         err_retire(b"skep-retire v1\nsigx\n"),
         PayloadError::BadLine(2)
     );
+    let record = format!("skep-enroll v1\nsig\tjunk\ned25519 {}\n", hex(1));
+    assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadLine(2));
+    let record = format!("skep-retire v1\nsig\r\n{}\n", fp(1).to_hex());
+    assert_eq!(err_retire(record.as_bytes()), PayloadError::BadLine(2));
 }
 
 /// Corpus: a key line whose first token is an alg the build does not carry
@@ -320,6 +326,24 @@ fn empty_is_evaluated_only_after_a_clean_scan() {
 fn not_utf8_precedes_the_header_check() {
     assert_eq!(err_enroll(&[0xff, 0xfe, 0xfd]), PayloadError::NotUtf8);
     assert_eq!(err_retire(&[0xc3, 0x28]), PayloadError::NotUtf8);
+}
+
+/// AUTH-2.19 item 1 over the WHOLE record: a malformed line AHEAD of the bad
+/// bytes is `not_utf8`, never `bad_line:2`; and bad bytes inside a `sig` line
+/// still refuse the record — the cell where a skip that reads a line's bytes
+/// before decoding them HONORS a record the origin refuses. The vector above
+/// also fails the header, so a line-by-line decode and a byte-level skip both
+/// keep it green.
+#[test]
+fn not_utf8_is_decided_over_the_whole_record_sig_lines_included() {
+    let mut record = b"skep-enroll v1\nnot a line\n".to_vec();
+    record.extend_from_slice(&[0xff, b'\n']);
+    assert_eq!(err_enroll(&record), PayloadError::NotUtf8);
+
+    let mut record = b"skep-retire v1\nsig ".to_vec();
+    record.extend_from_slice(&[0xff, 0xfe, b'\n']);
+    record.extend_from_slice(format!("{}\n", fp(1).to_hex()).as_bytes());
+    assert_eq!(err_retire(&record), PayloadError::NotUtf8);
 }
 
 // ------------------------------------------------------- encode / domain

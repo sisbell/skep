@@ -9,10 +9,10 @@ use crate::common;
 use std::collections::BTreeMap;
 
 use common::*;
-use skep_address::Span;
+use skep_address::{Address, Span, Tumbler};
 use skep_identity::{
-    record_bytes, single_address, Effect, Enrolled, IdentityState, TypeAddrs, Verdict,
-    MAX_RECORD_BYTES,
+    record_bytes, single_address, Effect, Enrolled, FoldCtx, IdentityState, Owner, TypeAddrs,
+    Values, Verdict, MAX_RECORD_BYTES,
 };
 
 fn enroll_ty() -> Vec<Span> {
@@ -252,6 +252,29 @@ fn a_foreign_span_is_foreign_content_even_where_nothing_was_minted() {
     let dep = Dep {
         home: doc1(ACCT_A),
         from: vec![content_run(&doc1(ACCT_B), 1, 1)],
+        to: vec![unit(ACCT_A)],
+        ty: enroll_ty(),
+    };
+    assert_token(
+        &fx.classify(&IdentityState::genesis(), &dep),
+        "malformed_payload:foreign_content",
+    );
+}
+
+/// AUTH-2.44 — HOME ANCHORING is document EQUALITY, never containment: bytes
+/// minted in a VERSION MEMBER of the home (`home·1`, a different document the
+/// home's address is a proper prefix of) are `foreign_content`. Every other
+/// foreign span in the corpus sits under another ACCOUNT, where equality and
+/// containment agree — so a check spelled with M1's `under_document`, or with
+/// `is_prefix`, keeps those green and honors this record.
+#[test]
+fn a_version_members_bytes_are_foreign_to_the_document_it_versions() {
+    let mut fx = Fixture::new();
+    let home = doc1(ACCT_A);
+    let from = fx.mint(&first_version_of(&home), &[&enroll_payload(&[(1, true)])]);
+    let dep = Dep {
+        home,
+        from,
         to: vec![unit(ACCT_A)],
         ty: enroll_ty(),
     };
@@ -775,6 +798,22 @@ fn registry_homed_retirement_is_not_holder_retirement() {
     assert_token(&fx.classify(&st, &dep), "not_holder_retirement");
 }
 
+/// AUTH-2.71's LATCH — the registry that seeded an account enrolls into it
+/// again: `not_genesis_registry`, state unchanged (I5). The I5 property asserts
+/// only `Inert(_)`, and every other `not_genesis_registry` vector fires on an
+/// EMPTY set, the genesis arm's refusal — never the latch.
+#[test]
+fn a_registry_homed_enrollment_on_a_seeded_account_is_the_latch() {
+    let mut fx = Fixture::new();
+    let dep = fx.enroll_dep(&doc1(ORG), NESTED, &enroll_payload(&[(1, true)]));
+    let (st, v) = fx.step(&IdentityState::genesis(), &dep);
+    assert_honored(&v);
+    let dep = fx.enroll_dep(&doc1(ORG), NESTED, &enroll_payload(&[(2, false)]));
+    let (next, v) = fx.step(&st, &dep);
+    assert_token(&v, "not_genesis_registry");
+    assert_eq!(next, st);
+}
+
 /// AUTH-2.76's first refusal arm: a retirement homed in the subject's OWN
 /// doc 1 on an account that has never held a key — `no_holder`, never
 /// `not_holder_retirement`, which is the ancestor-homed refusal and names a
@@ -874,6 +913,158 @@ fn nested_claim_in_second_doc_is_not_doc_one() {
     let genesis_state = IdentityState::genesis();
     let dep = fx.claim_dep(&doc2(NESTED), NESTED);
     assert_token(&fx.classify(&genesis_state, &dep), "not_doc_one");
+}
+
+/// AUTH-2.127 on the RETIREMENT path — a holder retirement homed in a
+/// PUBLISHED second document of its own account is `not_doc_one`, and the key
+/// stays enrolled. `retire_path` makes its own pin call, and every other
+/// holder retirement vector is homed in doc 1, so with that call deleted this
+/// record retires a real key and no other holder vector notices.
+#[test]
+fn a_holder_retirement_outside_doc_1_is_not_doc_one_and_retires_nothing() {
+    let mut fx = Fixture::new();
+    let st = seeded(&mut fx); // fp(1) anchor, fp(2) non-anchor
+    let dep = fx.retire_dep(&doc2(ACCT_A), ACCT_A, &retire_payload(&[2]));
+    let (next, v) = fx.step(&st, &dep);
+    assert_token(&v, "not_doc_one");
+    assert_eq!(next, st);
+    assert!(
+        next.key_set(&addr(ACCT_A)).contains(&fp(2)),
+        "the key is still enrolled"
+    );
+}
+
+/// AUTH-2.66/AUTH-2.127 for RETIREMENTS — the payload precedes the home pin:
+/// an unparseable retirement in a published second document is
+/// `malformed_payload:bad_header`, never `not_doc_one`.
+/// `payload_precedes_the_home_pin` states the same order for enrollments only,
+/// so a retirement pin hoisted above its parse keeps that vector green.
+#[test]
+fn a_retirement_payload_precedes_the_home_pin() {
+    let mut fx = Fixture::new();
+    let dep = fx.retire_dep(&doc2(ACCT_A), ACCT_A, b"zzz not a header\n");
+    assert_token(
+        &fx.classify(&IdentityState::genesis(), &dep),
+        "malformed_payload:bad_header",
+    );
+}
+
+/// AUTH-2.127 for RETIREMENTS — the pin precedes the refusal arms: a
+/// retirement in the delegator's published second document is `not_doc_one`,
+/// never `not_holder_retirement`. A pin tested only where the arms would honor
+/// keeps the holder vector above green and flips this one.
+#[test]
+fn a_registry_homed_retirement_outside_doc_1_is_not_doc_one() {
+    let mut fx = Fixture::new();
+    let dep = fx.retire_dep(&doc2(ORG), NESTED, &retire_payload(&[1]));
+    assert_token(&fx.classify(&IdentityState::genesis(), &dep), "not_doc_one");
+}
+
+/// AUTH-2.67 condition 1 before condition 2 — a claim whose `from` is not its
+/// home's account AND which is homed outside doc 1 is `malformed_shape`, never
+/// `not_doc_one`: the one adjacent pair of the claim arm's written order no
+/// other vector decides.
+#[test]
+fn a_claims_shape_precedes_the_home_pin() {
+    let fx = Fixture::new();
+    let dep = Dep {
+        home: doc2(CLAIMANT),
+        from: vec![unit(ACCT_A)],
+        to: vec![],
+        ty: vec![unit(T_CLAIM)],
+    };
+    assert_token(
+        &fx.classify(&IdentityState::genesis(), &dep),
+        "malformed_shape",
+    );
+}
+
+/// AUTH-2.127 — the pin is EQUALITY with `A·0·1`: an enrollment homed in doc
+/// 1's published VERSION MEMBER (`A·0·1·1`, owned by A) is `not_doc_one`. The
+/// corpus's other wrong homes are second documents, which no prefix test
+/// confuses with doc 1, so a pin spelled "doc 1 or under it" passes them all
+/// and honors this genesis.
+#[test]
+fn a_version_member_of_doc_1_is_not_doc_one() {
+    let mut fx = Fixture::new();
+    let member = first_version_of(&doc1(ACCT_A));
+    let dep = fx.enroll_dep(&member, ACCT_A, &enroll_payload(&[(1, true)]));
+    assert_token(&fx.classify(&IdentityState::genesis(), &dep), "not_doc_one");
+}
+
+/// A conforming board EXCEPT that ω answers ONE fixed prefix for every
+/// address — the ctx `step`'s totality clause calls broken when that prefix
+/// is element-level (AUTH-2.126).
+struct FixedOwnerCtx {
+    board: TestCtx,
+    prefix: Address,
+}
+
+impl Values for FixedOwnerCtx {
+    fn value_at(&self, at: &Tumbler) -> Option<&[u8]> {
+        self.board.value_at(at)
+    }
+}
+
+impl FoldCtx for FixedOwnerCtx {
+    fn owner_of(&self, _: &Address) -> Option<Owner> {
+        Some(Owner {
+            prefix: self.prefix.clone(),
+            is_bootstrap: false,
+        })
+    }
+
+    fn is_account(&self, a: &Address) -> bool {
+        self.board.is_account(a)
+    }
+
+    fn is_published(&self, doc: &Address) -> bool {
+        self.board.is_published(doc)
+    }
+}
+
+/// A claim under a ctx whose ω answers an ELEMENT-level prefix — a content
+/// position — for every address, the claim's `from` naming that same
+/// position: the arm's shape check passes, and the home pin hands `doc_1_of`
+/// an operand M1's TA5a gate refuses.
+fn classify_under_an_element_level_owner() -> Verdict {
+    let fx = Fixture::new();
+    let position = [1, 1, 0, 5, 0, 1, 0, 1, 1];
+    let ctx = FixedOwnerCtx {
+        board: fx.ctx.clone(),
+        prefix: addr(&position),
+    };
+    let dep = Dep {
+        home: doc1(ACCT_A),
+        from: vec![unit(&position)],
+        to: vec![],
+        ty: vec![unit(T_CLAIM)],
+    };
+    IdentityState::genesis().classify(&fx.types, &ctx, &dep.as_link_deposit())
+}
+
+/// AUTH-2.126 — an element-level ω prefix is a broken ctx precondition, and a
+/// debug build names it at the home pin rather than folding under it. `step`
+/// names this obligation beside the zero-byte one; deleting `doc_1_of`'s debug
+/// assertion turns this red.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "element-level prefix")]
+fn an_element_level_owner_prefix_is_refused_at_the_home_pin() {
+    let _ = classify_under_an_element_level_owner();
+}
+
+/// AUTH-2.57 — the release-build half: the same broken ctx still gets a
+/// VERDICT, never a panic. `doc_1_of` answers its operand back, which is
+/// document-of nothing, so the pin refuses `not_doc_one`. `doc_1_of` spelled
+/// as `checked_inc(..).expect(..)` — how M3's `first_document_address` writes
+/// the same arithmetic — panics the release fold here. Runs under
+/// `cargo test --release` only; a debug build stops one step earlier, which
+/// [`an_element_level_owner_prefix_is_refused_at_the_home_pin`] pins.
+#[cfg(not(debug_assertions))]
+#[test]
+fn an_element_level_owner_prefix_answers_not_doc_one_in_release() {
+    assert_token(&classify_under_an_element_level_owner(), "not_doc_one");
 }
 
 // ------------------------------------------------------------ board state
@@ -1078,6 +1269,35 @@ fn type_addrs_refuses_a_repeated_type_address() {
     let _ = TypeAddrs::new(addr(T_ENROLL), addr(T_RETIRE), addr(T_RETIRE));
 }
 
+/// AUTH-2.20/AUTH-2.21 — PAIRWISE is three pairs, each repeat shadowing a
+/// different kind, and every one is refused at construction by the
+/// distinctness assertion. `type_addrs_refuses_a_repeated_type_address` pins
+/// the `retire == claim` pair alone, so with the `enroll != retire` or the
+/// `enroll != claim` conjunct dropped that vector still passes and this one
+/// fails, naming the triple it admitted.
+#[test]
+fn type_addrs_refuses_a_repeat_in_every_pair() {
+    for (enroll, retire, claim) in [
+        (T_ENROLL, T_ENROLL, T_CLAIM),
+        (T_ENROLL, T_RETIRE, T_ENROLL),
+        (T_ENROLL, T_RETIRE, T_RETIRE),
+    ] {
+        let (e, r, c) = (addr(enroll), addr(retire), addr(claim));
+        let refusal = std::panic::catch_unwind(move || TypeAddrs::new(e, r, c))
+            .err()
+            .unwrap_or_else(|| panic!("admitted {enroll:?} · {retire:?} · {claim:?}"));
+        let message = refusal
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| refusal.downcast_ref::<String>().map(String::as_str));
+        assert!(
+            message.is_some_and(|m| m.contains("pairwise distinct")),
+            "{enroll:?} · {retire:?} · {claim:?} was refused by {message:?}, \
+             not the distinctness assertion"
+        );
+    }
+}
+
 // -------------------------------------------------- key-set semantics
 
 /// `ACCT_A` seeded with an anchor key and a non-anchor key — the state the
@@ -1265,6 +1485,30 @@ fn retiring_an_enrolled_key_names_it_in_the_effect_and_removes_it() {
     assert!(!set.contains(&fp(2)));
     assert!(!set.is_anchor(&fp(2)));
     assert_eq!(set.retired().count(), 1);
+}
+
+/// AUTH-1.31/AUTH-1.30 — `is_anchor` answers NOW and `retired()` the key's
+/// lifetime, and the two disagree for exactly one key: a retired ANCHOR key.
+/// `retiring_an_enrolled_key_names_it_in_the_effect_and_removes_it` reads
+/// `is_anchor` of a key that was never an anchor, so an `is_anchor` that also
+/// consulted the retired map passes it — and fails here.
+#[test]
+fn a_retired_anchor_key_is_no_longer_an_anchor() {
+    let mut fx = Fixture::new();
+    let st = seeded(&mut fx); // fp(1) anchor, fp(2) non-anchor
+    let dep = fx.retire_dep(&doc1(ACCT_A), ACCT_A, &retire_payload(&[1]));
+    let (st, v) = fx.step(&st, &dep);
+    assert_honored(&v); // anchor-blind (AUTH-2.75): the only anchor may retire
+    let set = st.key_set(&addr(ACCT_A));
+    assert!(!set.contains(&fp(1)), "retired: no longer enrolled");
+    assert!(!set.is_anchor(&fp(1)), "is_anchor answers NOW");
+    assert_eq!(
+        set.retired()
+            .find(|(f, _)| **f == fp(1))
+            .map(|(_, anchor)| anchor),
+        Some(true),
+        "the retired row still says it WAS an anchor"
+    );
 }
 
 /// AUTH-1.30 — each retired row carries the flag its key was ENROLLED under,

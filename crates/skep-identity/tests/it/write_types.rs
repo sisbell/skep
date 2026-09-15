@@ -73,13 +73,20 @@ fn every_class_address_answers_its_own_arm() {
 }
 
 /// An address under no class is an ORDINARY link: a ghost type of some
-/// document's own, a content position, an unrelated subspace-3 name.
+/// document's own, a content position, an unrelated subspace-3 name — and the
+/// classes' common PARENT. Membership is AT OR UNDER a class, one direction,
+/// so an address ABOVE every class belongs to none of them.
 #[test]
 fn an_unclassified_address_is_ordinary() {
     let t = types();
     assert_eq!(t.target_class(&[unit(&[1, 1, 0, 5, 0, 3, 0, 3, 6, 1])]), None, "a ghost type");
     assert_eq!(t.target_class(&[unit(&[1, 1, 0, 5, 0, 3, 0, 1, 1])]), None, "a content position");
     assert_eq!(t.target_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2, 14])]), None, "another name");
+    assert_eq!(
+        t.target_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2])]),
+        None,
+        "the classes' parent, above every class"
+    );
 }
 
 /// PRECEDENCE: the credential kinds answer FIRST and win, so a class address
@@ -111,6 +118,31 @@ fn prefix_related_class_addresses_are_refused_at_construction() {
 fn a_list_address_under_the_grant_is_refused_at_construction() {
     let mut list = audit_list();
     list.push((AuditClass::RailRecord, addr(&[1, 1, 0, 1, 0, 1, 0, 2, 90, 7])));
+    let _ = WriteTypes::new(credential(), addr(T_GRANT), list);
+}
+
+/// PREFIX-FREEDOM runs BOTH ways: an EARLIER class address under a LATER one
+/// is the same mis-wiring as the reverse. The two vectors above each put the
+/// later address under the earlier, so a check that tested only that
+/// direction passes both; here the grant sits under a list address.
+#[test]
+#[should_panic(expected = "prefix-related")]
+fn a_grant_under_a_list_address_is_refused_at_construction() {
+    let mut list = audit_list();
+    list.push((AuditClass::RailRecord, addr(T_GRANT)));
+    let _ = WriteTypes::new(credential(), addr(&[1, 1, 0, 1, 0, 1, 0, 2, 90, 7]), list);
+}
+
+/// The credential refusal covers EVERY class address, the audit list's as
+/// well as the grant's: an audit class at a credential address would be
+/// unreachable, its slots answering `Credential` first.
+/// `a_class_at_a_credential_address_is_refused_at_construction` places only
+/// the GRANT there, so a check that read the grant alone passes it.
+#[test]
+#[should_panic(expected = "credential type address")]
+fn an_audit_class_at_a_credential_address_is_refused_at_construction() {
+    let mut list = audit_list();
+    list.push((AuditClass::RailRecord, addr(T_RETIRE)));
     let _ = WriteTypes::new(credential(), addr(T_GRANT), list);
 }
 

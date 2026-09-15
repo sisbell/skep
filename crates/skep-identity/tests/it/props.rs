@@ -6,7 +6,8 @@
 //! arms (I5 AUTH-2.100), claim first-wins (I6 AUTH-2.101), drafts
 //! authenticate nowhere (I7 AUTH-2.102), non-credential deposits change
 //! nothing (I8 AUTH-2.103), and the anchor flag's immutability per account
-//! (I9 AUTH-2.104).
+//! (I9 AUTH-2.104); beside them, AUTH-2.127's home pin as a law over the same
+//! streams.
 
 use crate::common;
 
@@ -114,17 +115,21 @@ struct Act {
 
 const ACCOUNTS: [&[u32]; 5] = [CLAIMANT, ORG, NESTED, ACCT_A, ACCT_B];
 
-/// Candidate homes: every account's doc 1 (own-space, registry-homed,
-/// claimant-homed and stranger-homed arms all reachable — I5's three homing
-/// arms) plus a second document (the home pin's refused residence).
-fn homes() -> Vec<(Address, Address)> {
+/// Candidate homes, each beside its home account and that account's doc 1 —
+/// a literal table, so the oracle the properties compare against is not the
+/// resolution the fold computes: every account's doc 1 (own-space,
+/// registry-homed, claimant-homed and stranger-homed arms all reachable —
+/// I5's three homing arms) plus the home pin's two refused residences, a
+/// second document and doc 1's own version member.
+fn homes() -> Vec<(Address, Address, Address)> {
     vec![
-        (doc1(CLAIMANT), addr(CLAIMANT)),
-        (doc1(ORG), addr(ORG)),
-        (doc1(NESTED), addr(NESTED)),
-        (doc1(ACCT_A), addr(ACCT_A)),
-        (doc1(ACCT_B), addr(ACCT_B)),
-        (doc2(ACCT_A), addr(ACCT_A)),
+        (doc1(CLAIMANT), addr(CLAIMANT), doc1(CLAIMANT)),
+        (doc1(ORG), addr(ORG), doc1(ORG)),
+        (doc1(NESTED), addr(NESTED), doc1(NESTED)),
+        (doc1(ACCT_A), addr(ACCT_A), doc1(ACCT_A)),
+        (doc1(ACCT_B), addr(ACCT_B), doc1(ACCT_B)),
+        (doc2(ACCT_A), addr(ACCT_A), doc1(ACCT_A)),
+        (first_version_of(&doc1(ACCT_A)), addr(ACCT_A), doc1(ACCT_A)),
     ]
 }
 
@@ -132,7 +137,7 @@ fn act_strategy() -> impl Strategy<Value = Act> {
     (
         0..4u8,
         0..ACCOUNTS.len(),
-        0..6usize,
+        0..homes().len(),
         prop::collection::vec((0..6u8, any::<bool>()), 0..4),
         prop::collection::vec(0..6u8, 0..4),
     )
@@ -146,18 +151,19 @@ fn act_strategy() -> impl Strategy<Value = Act> {
 }
 
 /// One case of the property: a scripted [`Act`] materialized into the
-/// deposit the fold sees, beside the two addresses the invariants reason
-/// over.
+/// deposit the fold sees, beside the addresses the invariants reason over —
+/// the subject, the home's account, and that account's doc 1.
 struct Case {
     dep: Dep,
     kind: ActKind,
     subject: Address,
     home_account: Address,
+    home_doc_one: Address,
 }
 
 fn materialize(fx: &mut Fixture, act: &Act) -> Case {
     let subject_comps = ACCOUNTS[act.subject];
-    let (home, home_account) = homes()[act.home].clone();
+    let (home, home_account, home_doc_one) = homes()[act.home].clone();
     let dep = match act.kind {
         ActKind::Enroll => fx.enroll_dep(&home, subject_comps, &enroll_payload(&act.keys)),
         ActKind::Retire => fx.retire_dep(&home, subject_comps, &retire_payload(&act.fps)),
@@ -178,6 +184,7 @@ fn materialize(fx: &mut Fixture, act: &Act) -> Case {
         kind: act.kind,
         subject: addr(subject_comps),
         home_account,
+        home_doc_one,
     }
 }
 
@@ -187,8 +194,9 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
 
     /// I2/I3/I4/I5/I6/I8/I9 over random deposit streams, checked at every
-    /// prefix, plus AUTH-2.57 (classify ≡ step's verdict) and the I2
-    /// composition property `fold(s ++ t) == fold_from(fold(s), t)`.
+    /// prefix, plus AUTH-2.57 (classify ≡ step's verdict), AUTH-2.127's home
+    /// pin as a law, and the I2 composition property
+    /// `fold(s ++ t) == fold_from(fold(s), t)`.
     #[test]
     fn fold_invariants_hold_over_random_streams(
         acts in prop::collection::vec(act_strategy(), 1..40)
@@ -215,6 +223,12 @@ proptest! {
             // inert verdict leaves the table untouched).
             if !matches!(verdict, Verdict::Honored(_)) {
                 prop_assert_eq!(&next, &st);
+            }
+            // AUTH-2.127 — the home pin as the LAW it is: every honored
+            // deposit, of every kind and arm, is homed in its home account's
+            // doc 1 — never a second document, never doc 1's version member.
+            if matches!(verdict, Verdict::Honored(_)) {
+                prop_assert_eq!(&case.dep.home, &case.home_doc_one);
             }
             // I5 — the latch: once the subject's set has EVER been
             // non-empty, every enrollment homed outside its own space is

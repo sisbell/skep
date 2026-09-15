@@ -78,12 +78,14 @@ pub enum Inert {
     Unpublished,
     /// The deposit cannot be read as its kind's shape, on any of three
     /// counts: the home is UNOWNED, so there is no H at all (AUTH-2.66
-    /// item 2); a SLOT deviates — an empty `from` (AUTH-2.47, ahead of the
-    /// parser), or a slot that is not one address-form span (AUTH-2.46,
-    /// AUTH-2.48, AUTH-2.26); or the address `to` resolves to is not an
-    /// ACCOUNT (`FoldCtx::is_account`, AUTH-2.33). That last one answers
-    /// THIS token — the fold has no `not_an_account`; that is the key-set
-    /// READ row's (AUTH-2.58).
+    /// item 2); a SLOT deviates from its kind's shape — for enroll/retire an
+    /// empty `from` (AUTH-2.47, ahead of the parser) or a `to` that is not
+    /// ONE address-form span (AUTH-2.46, AUTH-2.26), for the claim a `from`
+    /// that is not H in address form or a `to` that is not EMPTY (AUTH-2.48);
+    /// or the address an enroll/retire `to` resolves to is not an ACCOUNT
+    /// (`FoldCtx::is_account`, AUTH-2.33). That last one answers THIS token —
+    /// the fold has no `not_an_account`; that is the key-set READ row's
+    /// (AUTH-2.58).
     MalformedShape,
     /// The payload could not be read or parsed (AUTH-1.27); the wire detail
     /// is `malformed_payload:` joined with `PayloadError::token()` — one
@@ -105,9 +107,12 @@ pub enum Inert {
     /// The retirement names the whole enrolled set (AUTH-2.74): the record
     /// is inert WHOLE; non-emptiness stays monotone (I3, AUTH-2.97).
     WouldEmpty,
-    /// The record parses but changes nothing (AUTH-2.69, AUTH-2.74) — the
-    /// table is unchanged either way; the token is not (`Empty` is the
-    /// parse-level sibling, AUTH-2.16).
+    /// A HOLDER's own-space record that parses but changes nothing — the
+    /// holder arms alone answer it (AUTH-2.69, AUTH-2.74). The same record
+    /// anywhere else answers the refusal that decides it first — among the
+    /// arms, `no_holder`, `not_genesis_registry` or `not_holder_retirement` —
+    /// never this. The table is unchanged either way; the token is not
+    /// (`Empty` is the parse-level sibling, AUTH-2.16).
     NothingChanged,
     /// A claim on an already-claimed board (AUTH-2.67 item 4; I6).
     AlreadyClaimed,

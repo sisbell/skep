@@ -814,6 +814,27 @@ fn a_registry_homed_enrollment_on_a_seeded_account_is_the_latch() {
     assert_eq!(next, st);
 }
 
+/// AUTH-2.69/AUTH-2.74 — `nothing_changed` is the HOLDER arms' token alone: a
+/// record homed outside the subject's own space answers its home's refusal
+/// even where every line would change nothing. Every other `nothing_changed`
+/// vector is own-space, and the latch and ancestor-retirement vectors each
+/// carry a line that WOULD change the set — so, on a SEEDED account, a
+/// "nothing to post" test hoisted above the own-space test keeps them green
+/// and flips its kind's cell here.
+#[test]
+fn a_record_that_changes_nothing_answers_its_homes_refusal_outside_the_holder_arms() {
+    let mut fx = Fixture::new();
+    let dep = fx.enroll_dep(&doc1(ORG), NESTED, &enroll_payload(&[(1, true)]));
+    let (st, v) = fx.step(&IdentityState::genesis(), &dep);
+    assert_honored(&v);
+    // The registry re-lists the key NESTED already holds: the latch.
+    let dep = fx.enroll_dep(&doc1(ORG), NESTED, &enroll_payload(&[(1, true)]));
+    assert_token(&fx.classify(&st, &dep), "not_genesis_registry");
+    // The registry retires a key NESTED never held: no ancestor retires.
+    let dep = fx.retire_dep(&doc1(ORG), NESTED, &retire_payload(&[5]));
+    assert_token(&fx.classify(&st, &dep), "not_holder_retirement");
+}
+
 /// AUTH-2.76's first refusal arm: a retirement homed in the subject's OWN
 /// doc 1 on an account that has never held a key — `no_holder`, never
 /// `not_holder_retirement`, which is the ancestor-homed refusal and names a
@@ -1386,7 +1407,8 @@ fn retired_iterates_in_fingerprint_order() {
 }
 
 /// AUTH-2.59 — `keyed_accounts()` answers ADDRESS order, not the order the
-/// accounts were seeded in; `/dump`'s identity section is built from this.
+/// accounts were seeded in: the enumeration the spec builds `/dump`'s identity
+/// section from, a section no dump renders as built.
 #[test]
 fn keyed_accounts_iterates_in_address_order() {
     let mut fx = Fixture::new();

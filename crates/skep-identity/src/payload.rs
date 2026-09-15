@@ -240,7 +240,9 @@ fn split_token(s: &str) -> (&str, Option<&str>) {
 /// ([`PayloadError::DuplicateKey`]).
 ///
 /// POSTCONDITION — on `Ok`, the vector is NON-EMPTY (AUTH-2.16 answers
-/// `Empty` otherwise), in the record's LINE ORDER (which is the order
+/// `Empty` otherwise; the genesis post seeds a set that is therefore never
+/// empty, which is what lets the genesis arm fire at most once — I5,
+/// AUTH-2.100), in the record's LINE ORDER (which is the order
 /// `Effect::Genesis`/`Enroll` carry to `apply`), and no two entries carry
 /// the same key (AUTH-2.15 answers `DuplicateKey(n)` otherwise) — the
 /// promise that fixes a fingerprint's anchor flag within one record (I9,

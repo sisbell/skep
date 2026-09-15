@@ -105,9 +105,25 @@ impl TypeAddrs {
 /// (the frame's `home`). Address-form slots are constructed via M7's `enc`
 /// on ALL THREE slots (AUTH-2.24); `from` is in ENDSET ORDER and stays that
 /// way — no constructor may sort, dedup, or normalize it (AUTH-2.25).
+///
+/// PRECONDITION — `home` is a REGISTERED DOCUMENT, the only home M7's gate
+/// admits a link into. Both halves are the constructor's, and the fold checks
+/// neither. DOCUMENT level: [`record_bytes`](crate::record_bytes) and the
+/// home pin compare `home` against document addresses, so at any other level
+/// every span refuses and no deposit passes the pin. REGISTERED: item 3 of
+/// [`IdentityState::classify`](crate::IdentityState::classify) asks
+/// [`FoldCtx::is_published`](crate::FoldCtx::is_published) of it — a BIRTH
+/// state, which only a registered document has — and the fold has no way to
+/// test registration first: the seam carries no such fact (AUTH-2.31's four),
+/// and ω answers an unallocated address as readily as a minted one (M3), so
+/// item 2 screens nothing out. The fold hook has both halves from
+/// `document_of` of a link M7 admitted; skepd's precheck takes the frame's
+/// `home` as sent, before M7 runs, and owes both ahead of `classify`. Outside
+/// the precondition no verdict is specified: the seam's answer outside its
+/// domain decides which refusal speaks.
 #[derive(Debug, Clone, Copy)]
 pub struct LinkDeposit<'a> {
-    /// The link's home document.
+    /// The link's home — a REGISTERED document (the PRECONDITION above).
     pub home: &'a Address,
     /// The FROM slot — the record's spans, in ENDSET ORDER (AUTH-2.3).
     pub from: &'a [Span],

@@ -80,6 +80,13 @@ pub trait FoldCtx: Values {
     /// (AUTH-2.117); the fold asks it either way (AUTH-2.102, I7), and a
     /// mirror derives it as the guest visibility class (AUTH-2.123). NOT an
     /// I2 frozen constant (AUTH-2.90).
+    ///
+    /// Its domain is REGISTERED documents — a birth state is a fact about a
+    /// born document — and the fold asks it of a deposit's `home` alone, which
+    /// [`LinkDeposit`](crate::LinkDeposit) requires to be one. Outside that
+    /// domain no answer is specified (the origin's set answers `true` there,
+    /// fail-open), and the fold cannot screen such an address out for the
+    /// implementor: ω's answer at item 2 does not imply registration.
     fn is_published(&self, doc: &Address) -> bool;
 }
 

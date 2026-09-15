@@ -1,11 +1,11 @@
 //! The write path's type-recognition input (PUB-6.30, PUB-6.64; owner ruling
 //! D3, 2026-09-05): `WriteTypes` beside `TypeAddrs` — precedence (the
 //! credential kinds first; the classes prefix-free, so their own order
-//! decides nothing), the one-span `Equal`-to-subtree discipline, a subtype by
-//! prefix, the home-conditional member, and `kind_of` unchanged. The class
-//! addresses are test placeholders in the commons doc's link subspace,
-//! exactly as `common`'s credential types are: this crate is parametric over
-//! them, the engine pins the real ones.
+//! decides nothing), a complete class list, the one-span `Equal`-to-subtree
+//! discipline, a subtype by prefix, the home-conditional member, and `kind_of`
+//! unchanged. The class addresses are test placeholders in the commons doc's
+//! link subspace, exactly as `common`'s credential types are: this crate is
+//! parametric over them, the engine pins the real ones.
 
 use crate::common;
 
@@ -144,6 +144,31 @@ fn an_audit_class_at_a_credential_address_is_refused_at_construction() {
     let mut list = audit_list();
     list.push((AuditClass::RailRecord, addr(T_RETIRE)));
     let _ = WriteTypes::new(credential(), addr(T_GRANT), list);
+}
+
+/// COMPLETENESS: a builder that leaves ANY audit-view class out is refused at
+/// construction — a class with no address would answer every one of its slots
+/// as an ordinary link, and the `nullify` PUB-6.64 refuses would be admitted.
+/// Each omission is tried in turn and must meet the completeness assertion
+/// itself, so a class the crate's own list of classes forgot is the one this
+/// names.
+#[test]
+fn an_audit_list_missing_any_class_is_refused_at_construction() {
+    for (omitted, _) in audit_list() {
+        let list: Vec<_> = audit_list().into_iter().filter(|(class, _)| *class != omitted).collect();
+        let refusal =
+            std::panic::catch_unwind(move || WriteTypes::new(credential(), addr(T_GRANT), list))
+                .err()
+                .unwrap_or_else(|| panic!("admitted an audit list without {omitted:?}"));
+        let message = refusal
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| refusal.downcast_ref::<String>().map(String::as_str));
+        assert!(
+            message.is_some_and(|m| m.contains("has no address")),
+            "omitting {omitted:?} was refused by {message:?}, not the completeness assertion"
+        );
+    }
 }
 
 /// PREFIX-FREEDOM is what makes the classes' declared order decide nothing:

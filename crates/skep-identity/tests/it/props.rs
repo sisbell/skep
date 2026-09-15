@@ -6,8 +6,8 @@
 //! arms (I5 AUTH-2.100), claim first-wins (I6 AUTH-2.101), drafts
 //! authenticate nowhere (I7 AUTH-2.102), non-credential deposits change
 //! nothing (I8 AUTH-2.103), and the anchor flag's immutability per account
-//! (I9 AUTH-2.104); beside them, AUTH-2.127's home pin as a law over the same
-//! streams.
+//! (I9 AUTH-2.104); beside them, AUTH-2.127's home pin and `IdentityState`'s
+//! keyed rows as laws over the same streams.
 
 use crate::common;
 
@@ -199,7 +199,8 @@ proptest! {
 
     /// I2/I3/I4/I5/I6/I8/I9 over random deposit streams, checked at every
     /// prefix, plus AUTH-2.57 (classify ≡ step's verdict), AUTH-2.127's home
-    /// pin as a law, and the I2 composition property
+    /// pin, AUTH-1.32's fingerprint index and `IdentityState`'s keyed rows as
+    /// laws, and the I2 composition property
     /// `fold(s ++ t) == fold_from(fold(s), t)`.
     #[test]
     fn fold_invariants_hold_over_random_streams(
@@ -321,6 +322,13 @@ proptest! {
                 for (enrolled_fp, enrolled) in next.key_set(acct).enrolled() {
                     prop_assert_eq!(*enrolled_fp, Fingerprint::of(&enrolled.key));
                 }
+            }
+            // `IdentityState`'s standing invariant — every row is KEYED:
+            // `keyed_accounts` never yields an account whose set is empty.
+            // The posts' preconditions establish it and nothing on the write
+            // path re-checks it, so this is its statement over a folded table.
+            for (acct, set) in next.keyed_accounts() {
+                prop_assert!(!set.is_empty(), "{:?} holds a row with no key", acct);
             }
 
             st = next;

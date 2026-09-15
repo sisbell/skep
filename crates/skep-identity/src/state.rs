@@ -33,6 +33,17 @@ static EMPTY_KEY_SET: LazyLock<KeySet> = LazyLock::new(KeySet::default);
 /// the record stream ≤ N and the fold's frozen constants, and of nothing
 /// else (I2, AUTH-2.90).
 ///
+/// Standing invariant — every row of `sets` is KEYED, its enrolled map
+/// non-empty: what [`keyed_accounts`] promises, and what makes two states
+/// that answer every [`key_set`] and [`claimant`] read alike EQUAL, as values
+/// and as serialized bytes. [`step`] establishes it — the genesis post is
+/// never empty and no post empties a set (`apply`'s PRECONDITION) — and, like
+/// [`KeySet`]'s own, it is re-checked nowhere on this side, so a deserialized
+/// value carries it only as its source did.
+///
+/// [`claimant`]: IdentityState::claimant
+/// [`key_set`]: IdentityState::key_set
+/// [`keyed_accounts`]: IdentityState::keyed_accounts
 /// [`step`]: IdentityState::step
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IdentityState {
@@ -68,6 +79,12 @@ impl IdentityState {
     /// 4. the per-kind arm — claim (AUTH-2.67) or enroll/retire
     ///    (AUTH-2.69–2.76); every other deposit is AUTH-2.77's.
     ///
+    /// PRECONDITION — `dep` keeps [`LinkDeposit`]'s: its `home` a REGISTERED
+    /// document. Item 3 asks the seam a birth state, and this crate holds no
+    /// registration fact to test first, so the registration-first discipline
+    /// a publication read carries (PUB-6.37) is `dep`'s constructor's,
+    /// discharged before this call.
+    ///
     /// Total under the same conforming-ctx condition as [`step`], and the two
     /// debug assertions that condition names are reached from here.
     ///
@@ -94,7 +111,7 @@ impl IdentityState {
     }
 
     /// AUTH-2.56/AUTH-2.57 — classify-then-apply (on `Honored`) or self
-    /// unchanged.
+    /// unchanged; `dep` owes [`classify`]'s PRECONDITION.
     ///
     /// TOTAL under a CONFORMING ctx — one meeting [`Values`]' and [`FoldCtx`]'s
     /// stated obligations: no input a RECORD can carry reaches a panic, and
@@ -105,6 +122,7 @@ impl IdentityState {
     /// are a broken PRECONDITION, not an exception to this postcondition.
     ///
     /// [`Values`]: crate::Values
+    /// [`classify`]: IdentityState::classify
     #[must_use = "step returns the next state and its verdict; it does not modify the receiver"]
     pub fn step(
         &self,
@@ -375,10 +393,15 @@ impl IdentityState {
     /// AUTH-1.36 and I3 are void, and the fingerprints moved in one post are
     /// this arm's whole loop; `Enroll`'s `added` and `Genesis`' `keys` must be
     /// outside `retired` (AUTH-2.69's filter, AUTH-2.70's empty-set premise)
-    /// or AUTH-1.35 and I4 are void. [`step`] is the only caller and it passes
-    /// `classify`'s own answer.
+    /// or AUTH-1.35 and I4 are void. And `Genesis`' `keys` must be NON-EMPTY
+    /// — [`parse_enroll`]'s POSTCONDITION, AUTH-2.16 — or the post seats an
+    /// EMPTY row: [`keyed_accounts`] then yields an account holding no key,
+    /// and the set the genesis arm tests is still empty, so that arm can fire
+    /// again and I5 (AUTH-2.100) is void. [`step`] is the only caller and it
+    /// passes `classify`'s own answer.
     ///
     /// [`classify`]: IdentityState::classify
+    /// [`keyed_accounts`]: IdentityState::keyed_accounts
     /// [`step`]: IdentityState::step
     #[must_use = "apply returns the posted state; it does not modify the receiver"]
     fn apply(&self, effect: &Effect) -> IdentityState {

@@ -15,11 +15,12 @@ use crate::shape::{single_address, sole_span, CredentialKind, TypeAddrs};
 /// nothing and is refused at the write path. The list is the members' list
 /// and never the boundary: the next audit-view class is one arm here — with
 /// its [`AuditClass::requires_published_home`] answer, which the compiler
-/// demands — and one address at [`WriteTypes::new`], with no edit to any rule
-/// that reads them. WHICH type address each class sits at is the caller's to
-/// supply (the commons ledger's numbers, pinned in the engine) — this crate is
-/// parametric over them exactly as it is over the three credential addresses
-/// (AUTH-7.1).
+/// demands, and its entry in this type's own list of classes, which it does
+/// not — and one address at [`WriteTypes::new`], which refuses a builder that
+/// gives a class none, with no edit to any rule that reads them. WHICH type
+/// address each class sits at is the caller's to supply (the commons ledger's
+/// numbers, pinned in the engine) — this crate is parametric over them exactly
+/// as it is over the three credential addresses (AUTH-7.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AuditClass {
     /// The succession pair's `successor-of` claim (PUB-7.63).
@@ -48,6 +49,21 @@ pub enum AuditClass {
 }
 
 impl AuditClass {
+    /// Every class — the list [`WriteTypes::new`] holds its builder's audit
+    /// list to. The language enumerates no enum's arms, so it is kept by hand:
+    /// the compiler does not hold it to the enum, and the suite holds it only
+    /// to the classes its fixture names. It sits beside
+    /// [`AuditClass::requires_published_home`], whose exhaustive match is where
+    /// a new class first fails to compile, so the class joins it in that edit.
+    const ALL: [AuditClass; 6] = [
+        AuditClass::SuccessorOf,
+        AuditClass::DelegatorEndorsement,
+        AuditClass::ConsumptionMarker,
+        AuditClass::JournalDesignation,
+        AuditClass::RailRecord,
+        AuditClass::StewardClassification,
+    ];
+
     /// ⇔ a link of this class is a MEMBER only where the link's OWN HOME is
     /// published (RES-207, PUB-6.64); draft-homed it is an ordinary link.
     /// The class's second key, answered by the class: the TYPE half is
@@ -116,22 +132,39 @@ impl WriteTypes {
     /// `TypeAddrs` the fold reads (skepd clones its `IDENTITY_TYPES`). That
     /// agreement is the builder's to keep: nothing here can see the fold's.
     ///
+    /// PRECONDITION — `audit` gives EVERY [`AuditClass`] an address. A slot
+    /// answers [`TargetClass::AuditView`] for a class only if the class was
+    /// given one here, so [`TargetClass`]'s "`None` is an ORDINARY link"
+    /// holds only over a complete list: a class left out would answer `None`
+    /// for every one of its slots, and the `nullify` PUB-6.64 refuses would be
+    /// admitted.
+    ///
     /// PRECONDITION — the class addresses are PAIRWISE PREFIX-FREE and none
     /// is a credential type. A class address at or under another's puts one
     /// address under two classes, so the answer would be the declared
     /// order's rather than the class's — and a later class at or under an
     /// earlier one UNREACHABLE for every slot. Prefix-free, no address is
     /// under two classes and their order decides nothing; the one order that
-    /// decides is the credential kinds answering first. The same mis-wiring
-    /// [`TypeAddrs::new`] refuses, refused the same way: a panic at
-    /// construction, off every request path, since the addresses are the
-    /// engine's compiled constants and never a value a record can carry.
+    /// decides is the credential kinds answering first.
+    ///
+    /// Both are mis-wirings of the kind [`TypeAddrs::new`] refuses, refused
+    /// the same way, completeness first: a panic at construction, off every
+    /// request path, since the addresses are the engine's compiled constants
+    /// and never a value a record can carry.
     pub fn new(
         credential: TypeAddrs,
         grant: Address,
         audit: impl IntoIterator<Item = (AuditClass, Address)>,
     ) -> WriteTypes {
         let audit: Vec<(AuditClass, Address)> = audit.into_iter().collect();
+        for class in AuditClass::ALL {
+            assert!(
+                audit.iter().any(|(listed, _)| *listed == class),
+                "WriteTypes::new: audit-view class {class:?} has no address (PUB-6.64); a \
+                 class left out answers every one of its slots as an ordinary link, so the \
+                 nullify it refuses would be admitted"
+            );
+        }
         {
             let class_addrs: Vec<&Address> =
                 std::iter::once(&grant).chain(audit.iter().map(|(_, a)| a)).collect();

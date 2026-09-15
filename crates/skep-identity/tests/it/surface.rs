@@ -192,7 +192,7 @@ fn genesis_state_is_default_and_answers_empty() {
     assert_eq!(st.keyed_accounts().count(), 0);
 }
 
-/// AUTH-1.1/AUTH-1.7/AUTH-1.29 — the journaled/checkpointed value types
+/// AUTH-1.1/AUTH-1.7/AUTH-1.29 — the checkpoint-facing value types
 /// survive a serde round trip (through a format that admits non-string map
 /// keys; the full `IdentityState` round trip rides in `fold.rs` where a
 /// populated state exists).

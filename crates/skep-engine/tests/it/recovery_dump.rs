@@ -6,7 +6,8 @@
 //! from genesis dumps byte-equal to the world restored from checkpoint +
 //! rebuild_derived + replay, with the checkpoint taken both before and after
 //! the links exist), and hint faithfulness (live incrementally-maintained
-//! hints equal a from-authoritative rebuild).
+//! hints equal a from-authoritative rebuild) — with the faithfulness check's
+//! own power to refuse a world whose hints were never rebuilt.
 
 use crate::common;
 
@@ -15,7 +16,7 @@ use skep_address::Address;
 use skep_arrangement::Deposit;
 use skep_content::Val;
 use skep_engine::{Engine, World};
-use skep_links::{enc, ReservedAddrs, SlotArg};
+use skep_links::{enc, HasLinks, ReservedAddrs, SlotArg};
 use tempfile::tempdir;
 
 /// The shipped class ordinary emissions land in: `PredDef`, the first Unary
@@ -160,6 +161,44 @@ fn the_dump_carries_the_supersession_forward_edges() {
     // graph runs out of the superseded link, and the claim itself is not on it.
     let edges = format!("{{{}: {}}}", quoted(&deposited.sup_old), seq_of(&[&deposited.sup_new]));
     assert_entry(&text, "supersession", &edges);
+}
+
+/// A retracted ENDPOINT leaves its edges operative — Df-SUCC reads the CLAIM's
+/// activity and never the endpoint's (M7's EL14e) — so the section carries an
+/// edge out of a nullified link. The populated world's one edge runs out of an
+/// ACTIVE link, where a section walking the active slice for edges answers
+/// alike; here it would drop the edge, and every dump-to-dump comparison would
+/// stay green, since both sides are rendered by the same builder.
+#[test]
+fn the_dump_carries_a_supersession_edge_out_of_a_retracted_link() {
+    let engine = Engine::open(mem_cfg()).expect("in-memory open");
+    let (_acct, doc) = setup_doc(&engine);
+    engine
+        .vstream()
+        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared)
+        .expect("insert succeeds");
+    let visibility = World::visible_to(OWNER);
+    let link = |from: u32, to: u32| {
+        engine
+            .linkstore(&visibility)
+            .makelink(
+                OWNER,
+                &doc,
+                SlotArg::Resolve(vec![vspec(&doc, from, 1)]),
+                SlotArg::Resolve(vec![vspec(&doc, to, 1)]),
+                SlotArg::Resolve(vec![vspec(&doc, 1, 2)]),
+            )
+            .expect("makelink succeeds")
+            .0
+    };
+    let (old, new) = (link(1, 2), link(2, 1));
+    engine.linkstore(&visibility).assert_sup(OWNER, &doc, &old, &new).expect("assert_sup");
+    engine.linkstore(&visibility).nullify(OWNER, &doc, &old).expect("retract the OLD endpoint");
+
+    let text = engine.world_dump().into_string();
+    assert_entry(&text, "links.nullified", &seq_of(&[&old]));
+    assert_entry(&text, "supersession", &format!("{{{}: {}}}", quoted(&old), seq_of(&[&new])));
+    engine.check_hints().expect("the rebuild renders the same edge");
 }
 
 #[test]
@@ -377,6 +416,55 @@ fn a_caller_pinned_world_dumps_deterministically() {
     let unrelated = Engine::open(mem_cfg()).expect("a second in-memory open");
     assert_eq!(unrelated.dump_of(snap.world()), d1, "a world renders alike through any engine");
     unrelated.check_hints_of(snap.world()).expect("…and checks alike through any engine");
+}
+
+/// The hint check's OWN power. Every other `check_hints`/`check_hints_of` in
+/// this suite expects `Ok`, so a check that could not answer `Err` — one that
+/// returned `Ok` outright, or compared a world with itself — would leave every
+/// one of them green. Held over the world `World`'s invariant note names as
+/// outside the invariant: decoded from bytes, its authoritative slices the
+/// live world's and its derived state never rebuilt. The check must refuse
+/// it, report that world's rendering beside what a rebuild of those slices
+/// renders — which is the live world's — and find their first difference past
+/// the authoritative section, since a rebuild moves derived state alone.
+#[test]
+fn the_hint_check_refuses_a_world_whose_derived_state_was_never_rebuilt() {
+    let engine = Engine::open(mem_cfg()).expect("in-memory open");
+    let (_acct, doc) = setup_doc(&engine);
+    let (start, _) = engine
+        .vstream()
+        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared)
+        .expect("insert succeeds");
+    let deposited = every_hint_family(&engine, &doc, &start);
+    let live = engine.kernel().snapshot().world().clone();
+    let bytes = bincode::serialize(&live).expect("a world serializes");
+    let unrebuilt: World = bincode::deserialize(&bytes).expect("this build's own bytes decode");
+
+    // The premise, in both of the directions the invariant note gives: the
+    // empty exception set reads the draft PUBLISHED, and M7's empty hints read
+    // a retracted link ACTIVE.
+    assert!(!live.readable(None, &doc), "live: the draft is private");
+    assert!(unrebuilt.readable(None, &doc), "unrebuilt: the empty set reads the draft published");
+    assert!(!live.links().is_active(&deposited.nullified), "live: the retracted link is inactive");
+    assert!(
+        unrebuilt.links().is_active(&deposited.nullified),
+        "unrebuilt: the empty tombstone set reads the retracted link active"
+    );
+
+    let err = engine
+        .check_hints_of(&unrebuilt)
+        .expect_err("a world with no derived state must fail the check");
+    assert_eq!(err.live, engine.dump_of(&unrebuilt), "the live side is the checked world's rendering");
+    assert_eq!(err.rebuilt, engine.dump_of(&live), "the rebuilt side is what the live world renders");
+    let at = err
+        .live
+        .as_bytes()
+        .iter()
+        .zip(err.rebuilt.as_bytes())
+        .position(|(l, r)| l != r)
+        .expect("the renderings differ within their common length");
+    let derived_from = err.live.as_str().find("\"grants\": ").expect("the first derived section");
+    assert!(at > derived_from, "the first difference, at byte {at}, lies in an authoritative slice");
 }
 
 /// The dump's vocabulary is part of its format, so it is pinned here rather

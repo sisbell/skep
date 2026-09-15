@@ -43,16 +43,21 @@ impl World {
     /// PUB-2.15): `1.0.1.0.1.2` reads exactly as `1.0.1.0.1`.
     ///
     /// * PUBLISHED (PUB-1.31's first clause) — an exception-set MISS on the
-    ///   projected document. Fail-open (PUB-7.5), in two cases. An
-    ///   UNREGISTERED address is absent from the set and so answers readable
-    ///   here, which is why every doc-argument consult defers an unregistered
-    ///   document to its store's own `*NotRegistered` (a withheld answer is
-    ///   only ever a REGISTERED private document — PUB-6.12). A REGISTERED
-    ///   document M3's publication map holds no entry for — reachable only
-    ///   off a slice outside M3's fold's totality domain — is absent too, and
-    ///   answers readable to every class where M3 answers it private; no
-    ///   registration check closes that one, since the document is registered
-    ///   (`crate::publication` states the open direction).
+    ///   projected document. Fail-open (PUB-7.5), in two cases. An address
+    ///   whose TRUNK M3 never registered is absent from the set and so
+    ///   answers readable here, which is why every doc-argument consult
+    ///   defers an unregistered document to its store's own `*NotRegistered`
+    ///   (a withheld answer is only ever a REGISTERED private document —
+    ///   PUB-6.12). A REGISTERED document M3's publication map holds no entry
+    ///   for — reachable only off a slice outside M3's fold's totality domain
+    ///   — is absent too, and answers readable to every class where M3
+    ///   answers it private; no registration check closes that one, since the
+    ///   document is registered (`crate::publication` states the open
+    ///   direction). The miss is asked of the trunk and never of `doc`, so the
+    ///   one unregistered address this clause does NOT open is one shaped as a
+    ///   version member of a registered draft: it reads as that draft, and is
+    ///   withheld wherever the draft is
+    ///   (`a_member_shaped_address_under_a_draft_reads_as_the_draft`).
     /// * SUBTREE (PUB-5.9, PUB-5.13-adjacent) — `owner_account(doc) ⊑
     ///   account(principal)`, ONE prefix compare DOWNWARD only, off the
     ///   exception set's MINT-TIME owner (never a nearest-account walk). A

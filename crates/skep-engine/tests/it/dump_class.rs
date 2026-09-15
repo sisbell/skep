@@ -293,7 +293,20 @@ fn a_historical_world_dumps_at_the_head_s_class() {
     assert!(at_n.contains(&secret_line()), "a grant after N opens the draft at /dump?at=N:\n{at_n}");
     let section_n = format!("\"publication\": [{}]", quoted(&b.draft_a));
     assert!(at_n.contains(&section_n), "the publication section is the as-of-N set:\n{at_n}");
-    assert!(!at_n.contains(&quoted(&draft_2)), "a draft minted after N is not in the N-world");
+    assert!(
+        !at_n.contains(&quoted(&draft_2)),
+        "…and B, which cannot read the later draft at the head either, sees none of it"
+    );
+    // …so the as-of-N claim is witnessed at a class that WOULD see the later
+    // draft if the N-world held it: A reads both of its drafts at the head.
+    let at_n_for_a = engine
+        .dump_of_visible(&world_n, &|doc: &Address| head.world().readable(Some(A), doc))
+        .into_string();
+    assert!(
+        at_n_for_a.contains(&section_n),
+        "at A's head class the N-world's section still lists only the draft that existed at \
+         N:\n{at_n_for_a}"
+    );
 
     // The same N-world at the N-world's OWN class would withhold it — which
     // is what the head predicate is chosen over.

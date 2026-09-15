@@ -42,7 +42,13 @@
 //!   wrote, and the identity that makes a reader class's dump the harness
 //!   walk's own tree would fail. That is why each is checked against the
 //!   harness walk over a world that has the entry, and not only against a
-//!   reader class that reads it.
+//!   reader class that reads it. The obligation binds the other way too,
+//!   where no identity test can see it: one that keyed an EXTRA asserting
+//!   link against an entry the harness walk does render — a retracted claim,
+//!   a tuple read under another view — keeps that entry for every reader
+//!   class that reads the extra link's home, whatever the operative links
+//!   assert. That direction is checked against a reader class, over a world
+//!   where the extra link is readably homed and the operative one is not.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -264,6 +270,13 @@ pub(super) fn filter_tree(
 /// a world that HAS an edge is where that agreement is checked, and a change
 /// to M7's arm has its counterpart here.
 ///
+/// The NULLIFIED filter is the half of that composition no identity test can
+/// hold. A claim kept past its retraction is an EXTRA key, which the total
+/// predicate reads like any other, and it keeps for a reader class an edge
+/// that only a claim homed where that class cannot read still asserts:
+/// `a_retracted_public_claim_does_not_carry_a_draft_s_edge_to_the_guest` is
+/// where that direction is checked.
+///
 /// Both slots are read through `Endset::addrs` UNGUARDED, which is
 /// `fold_hints`' own reading and must stay it: that iterator already keeps the
 /// unit-depth spans and drops the rest, so an `is_address_denoting` test here
@@ -362,8 +375,13 @@ fn sup_edge_claims(links: &LinkState) -> BTreeMap<Tumbler, BTreeMap<Tumbler, Vec
 ///   `Active`, so each row of [`PREDICATE_PROJECTIONS`] carries the view its own
 ///   entries were rendered under.
 ///
-/// The reverse direction is free: keying a member the harness walk did NOT
-/// render costs a lookup nothing probes.
+/// Keying a member the harness walk did NOT render is free: nothing probes
+/// it. Keying an extra TUPLE against a member it DID render is not, because
+/// one readably-homed tuple keeps the entry — an audit-view tuple keyed for an
+/// active-view row keeps a member whose only active registration is a
+/// draft's, and the total predicate reads that tuple like any other, so no
+/// identity test can tell. `a_projection_entry_is_judged_at_its_own_row_s_view`
+/// holds the row's view in both directions.
 ///
 /// Read through M7's public surface alone — the class's `type_slice` and
 /// `readlink` per tuple — at filter time, as [`sup_edge_claims`] is. A tuple's
@@ -1305,5 +1323,132 @@ mod tests {
             dump(&world),
             "a re-derivation missing the edge's claim would drop the edge here"
         );
+    }
+
+    /// A world holding ONE supersession edge asserted by TWO claims over the
+    /// same two public links: one homed in the published home and then
+    /// RETRACTED, one homed in the private draft and operative. Returns the
+    /// world and the retracted public claim.
+    fn a_retracted_public_claim_beside_an_operative_draft_claim() -> (World, Address) {
+        let (engine, home, draft) = a_published_home_and_a_private_draft();
+        let caller = Caller::Principal(USER);
+        let visibility = World::visible_to(caller);
+        let writer = engine.linkstore(&visibility);
+        let public_link = |n: u32| {
+            writer
+                .makelink(
+                    caller,
+                    &home,
+                    SlotArg::Addrs(Vec::new()),
+                    SlotArg::Addrs(Vec::new()),
+                    SlotArg::Addrs(vec![element(&home, 3, n)]),
+                )
+                .expect("a public link in the home")
+                .0
+        };
+        let (l1, l2) = (public_link(41), public_link(42));
+        let (public_claim, _) =
+            writer.assert_sup(caller, &home, &l1, &l2).expect("a claim in the published home");
+        writer.nullify(caller, &home, &public_claim).expect("the owner retracts its own claim");
+        // A retracted incumbent is invisible to the managed gate's dedup, so
+        // the same edge asserted from the draft is a FRESH claim.
+        let (draft_claim, _) =
+            writer.assert_sup(caller, &draft, &l1, &l2).expect("the same edge, from the draft");
+        assert_eq!(document_of(&draft_claim), Some(draft), "a fresh draft claim, not a dedup hit");
+        (engine.kernel().snapshot().world().clone(), public_claim)
+    }
+
+    /// A RETRACTED claim asserts no edge (Df-SUCC), so it can make no edge
+    /// readable. Here the edge renders because the DRAFT's claim is operative,
+    /// and the one claim homed where a guest reads is the retracted one — so a
+    /// re-derivation that kept retracted claims would hand the guest an edge
+    /// only a draft asserts. Keying that EXTRA claim leaves the total
+    /// predicate's answer unchanged, so the identity tests cannot see it; only
+    /// a reader class can.
+    #[test]
+    fn a_retracted_public_claim_does_not_carry_a_draft_s_edge_to_the_guest() {
+        let (world, public_claim) = a_retracted_public_claim_beside_an_operative_draft_claim();
+        assert!(world.links.is_nullified(&public_claim), "the fixture must retract the public claim");
+        assert_eq!(edge_count(&dump_tree(&world)), 1, "the draft's operative claim renders the edge");
+        let owner = filter_tree(
+            dump_tree(&world),
+            &|doc: &Address| world.readable(Some(USER), doc),
+            &world.links,
+        );
+        assert_eq!(edge_count(&owner), 1, "the owner reads the operative claim's home");
+        let guest =
+            filter_tree(dump_tree(&world), &|doc: &Address| world.readable(None, doc), &world.links);
+        assert_eq!(
+            edge_count(&guest),
+            0,
+            "the only claim a guest reads is retracted, and a retracted claim asserts nothing"
+        );
+        assert_eq!(dump_visible(&world, &|_: &Address| true), dump(&world));
+    }
+
+    /// A `pred_stable` MEMBER — a content position of the PUBLISHED home —
+    /// registered twice: once in the home and then RETRACTED, once in the
+    /// private draft and operative. Returns the world and the member.
+    fn a_member_asserted_by_a_retracted_public_tuple_and_a_live_draft_tuple() -> (World, Address) {
+        let (engine, home, draft) = a_published_home_and_a_private_draft();
+        let caller = Caller::Principal(USER);
+        let visibility = World::visible_to(caller);
+        let writer = engine.linkstore(&visibility);
+        let member = element(&home, 1, 1);
+        let pred_stable = engine.registry().reserved_type(ShippedType::PredStable).clone();
+        let (public_tuple, _) = writer
+            .emit(caller, &home, &pred_stable, &member, &[])
+            .expect("a registration in the published home");
+        writer.nullify(caller, &home, &public_tuple).expect("the owner retracts its own tuple");
+        // As above: the retracted incumbent is invisible to `emit`'s dedup.
+        let (draft_tuple, _) = writer
+            .emit(caller, &draft, &pred_stable, &member, &[])
+            .expect("the same registration, from the draft");
+        assert_eq!(document_of(&draft_tuple), Some(draft), "a fresh draft tuple, not a dedup hit");
+        (engine.kernel().snapshot().world().clone(), member)
+    }
+
+    /// A projection entry is judged at the tuples asserting it UNDER ITS OWN
+    /// ROW'S VIEW, and the two views part on a retracted tuple: in AUDIT the
+    /// retracted public registration still asserts the member, so the guest
+    /// keeps the entry; in ACTIVE only the draft's does, so the guest loses
+    /// it. Judging both rows at one view fails one of the two guest assertions
+    /// below, whichever view it chose — and since the member keeps a tuple
+    /// under either view, the total predicate keeps it either way and the
+    /// identity tests see neither.
+    #[test]
+    fn a_projection_entry_is_judged_at_its_own_row_s_view() {
+        let (world, member) = a_member_asserted_by_a_retracted_public_tuple_and_a_live_draft_tuple();
+        let dotted = member.to_string();
+        let full = dump_tree(&world);
+        for family in ["predicates.stable.audit", "predicates.stable.active"] {
+            assert_eq!(
+                projection(&full, family),
+                vec![dotted.clone()],
+                "{family}: the fixture must render the member"
+            );
+        }
+        let guest =
+            filter_tree(dump_tree(&world), &|doc: &Address| world.readable(None, doc), &world.links);
+        assert_eq!(
+            projection(&guest, "predicates.stable.audit"),
+            vec![dotted.clone()],
+            "audit: the retracted public registration is readably homed, and still asserts it"
+        );
+        assert!(
+            projection(&guest, "predicates.stable.active").is_empty(),
+            "active: the only registration asserting the member is the draft's"
+        );
+        let owner = filter_tree(
+            dump_tree(&world),
+            &|doc: &Address| world.readable(Some(USER), doc),
+            &world.links,
+        );
+        assert_eq!(
+            projection(&owner, "predicates.stable.active"),
+            vec![dotted],
+            "the owner reads the draft's registration"
+        );
+        assert_eq!(dump_visible(&world, &|_: &Address| true), dump(&world));
     }
 }

@@ -28,6 +28,11 @@ fn t_edition_expanded() -> Address {
     addr(&[1, 1, 0, 1, 0, 1, 0, 3, 14, 2])
 }
 
+/// The `.1 abridged` descriptive subtype beneath it — a member by PREFIX too.
+fn t_edition_abridged() -> Address {
+    addr(&[1, 1, 0, 1, 0, 1, 0, 3, 14, 1])
+}
+
 /// The GRANTS class — a foreign type, outside the edition class.
 fn t_grant() -> Address {
     addr(&[1, 1, 0, 1, 0, 1, 0, 3, 90])
@@ -194,6 +199,40 @@ fn a_type_slot_denoting_the_class_and_a_foreign_class_is_no_member() {
     assert!(
         w.links().readlink(&dual).is_some(),
         "the dual-typed link is resident, and not in the class"
+    );
+}
+
+/// …and the quantifier's other half: a slot denoting SEVERAL addresses, every
+/// one of them under the class, IS a member. Membership is "each denoted
+/// address lies under the class", not "the slot denotes exactly one" — the
+/// grant fold's rule for its own class, which this lookup deliberately does
+/// not share, and the narrowing that would bring the two into line drops this
+/// row from every reader's answer.
+#[test]
+fn a_type_slot_denoting_several_subtypes_of_the_class_is_a_member() {
+    let engine = mem_engine();
+    let b = board(&engine);
+    let caller = Caller::Principal(A);
+    let (multi, _) = engine
+        .linkstore(&World::visible_to(caller))
+        .makelink(
+            caller,
+            &b.e1,
+            SlotArg::Addrs(vec![b.e1.clone()]),
+            SlotArg::Addrs(vec![b.target.clone()]),
+            SlotArg::Addrs(vec![t_edition_abridged(), t_edition_expanded()]),
+        )
+        .expect("a claim typed with two subtypes of the class deposits");
+
+    let w = world(&engine);
+    // The premise, stated where it can fail: the slot must DENOTE two
+    // addresses, or a one-address reading of it agrees with this one.
+    let ty = w.links().readlink(&multi).expect("the claim is resident").type_slot();
+    assert_eq!(ty.addrs().count(), 2, "the fixture must deposit a two-address type slot: {ty:?}");
+    assert_eq!(
+        w.edition_claims(&b.target),
+        vec![row(&multi, &b.e1, &b.target, true)],
+        "a slot whose every denoted address lies under the class is a member of it"
     );
 }
 

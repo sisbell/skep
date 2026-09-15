@@ -3,17 +3,20 @@
 //! VALUE, seeded at load and folded on every deposit; `World::readable` is the
 //! one predicate every read surface answers through. Store semantics are not
 //! re-tested here — what is tested is the ASSEMBLY: the fold, its admission,
-//! its revocation, its re-seed across a restart, and the three clauses of
-//! the predicate.
+//! its revocation, its re-seed across a restart and under a historical
+//! reconstruction, and the three clauses of the predicate.
 
 use crate::common;
 
 use common::*;
 use skep_address::{validate, Level, Tumbler};
-use skep_arrangement::{trunk_of, Caller};
+use skep_arrangement::{trunk_of, Caller, Deposit};
+use skep_content::Val;
 use skep_engine::{Engine, IssuerGrant, UniversalGrant, World};
 use skep_links::{HasLinks, ShippedType, SlotArg};
-use skep_namespace::{first_document_address, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
+use skep_namespace::{
+    first_document_address, prefix_contains, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL,
+};
 use tempfile::tempdir;
 
 /// The GRANTS class type address (COMMONS DECISION 5 — 1.1.0.1.0.1.0.3.90).
@@ -498,6 +501,116 @@ fn an_any_principal_grant_from_a_non_owner_opens_nothing() {
     engine.check_hints().expect("the seed refuses it for the reason the fold did");
 }
 
+/// A principal seated at a SUB-ACCOUNT of [`A`]'s ([`a_sub_account_of_a`]).
+const S: PrincipalId = PrincipalId(6);
+
+/// A sub-account of [`A`]'s, and the two documents its principal [`S`] mints.
+struct SubAccount {
+    acct: skep_address::Address,
+    /// S's published doc 1 — the one home S's grants admit from.
+    home: skep_address::Address,
+    /// S's private draft.
+    draft: skep_address::Address,
+}
+
+/// A sub-account of A's, delegated to [`S`], with its published doc 1 and a
+/// private draft. Its documents lie under A's prefix and are not A's — ω keeps
+/// the LONGEST covering seat — which is the premise both tests below turn on,
+/// so it is asserted here, where it is built.
+fn a_sub_account_of_a(engine: &Engine, b: &Board) -> SubAccount {
+    let prefix = engine
+        .kernel()
+        .snapshot()
+        .world()
+        .m3()
+        .next_account_prefix(&b.acct_a)
+        .expect("A's next sub-account prefix");
+    let (acct, _) =
+        engine.namespace().delegate(A, prefix.tumbler().clone(), S).expect("A delegates");
+    let (home, _) =
+        engine.namespace().create_new_document(S, &acct, None).expect("S's published doc 1");
+    let (draft, _) =
+        engine.namespace().create_new_document(S, &acct, None).expect("S's private draft");
+    let w = world(engine);
+    assert!(prefix_contains(&b.acct_a, &acct), "the fixture must NEST the two accounts");
+    assert!(w.readable(None, &home), "S's doc 1 is born published");
+    assert!(!w.readable(None, &draft), "S's later mint is a draft");
+    assert!(!w.readable(Some(A), &draft), "the parent reads nothing of its sub-account's draft");
+    SubAccount { acct, home, draft }
+}
+
+/// Coverage's ISSUER clause (PUB-5.19) is EQUALITY with the document's ω
+/// owner, never containment — and a SUB-ACCOUNT is where the two part, since
+/// A's account contains S's. A's account-rung grant covers S's draft by
+/// containment, so a clause read as "the issuer's account contains the
+/// owner's" would open S's draft to whoever A names, though A cannot read that
+/// draft itself. The non-owner tests above use a SIBLING account, which
+/// contains nothing, so neither can tell the two readings apart. Asked of
+/// both indexes.
+#[test]
+fn a_parent_account_s_grant_opens_none_of_its_sub_account_s_drafts() {
+    let engine = mem_engine();
+    let b = two_accounts(&engine);
+    let s = a_sub_account_of_a(&engine, &b);
+    grant(&engine, &b.home_a, &b.acct_a, vec![b.acct_b.clone()]);
+    grant(&engine, &b.home_a, &b.acct_a, vec![]); // empty `to` ⟹ ANY-PRINCIPAL
+
+    let w = world(&engine);
+    // Both grants ARE admitted, so each probe reaches its issuer clause.
+    assert!(w.readable(Some(B), &b.draft_a), "the named grant covers A's own draft");
+    assert!(
+        w.readable(Some(PrincipalId(9)), &b.draft_a),
+        "…and the ANY-PRINCIPAL one covers it for every principal"
+    );
+    assert!(
+        !w.readable(Some(B), &s.draft),
+        "the named grantee does not read the sub-account's draft"
+    );
+    assert!(
+        !w.readable(Some(PrincipalId(9)), &s.draft),
+        "…nor does every principal, through the ANY-PRINCIPAL grant"
+    );
+    assert!(w.readable(Some(S), &s.draft), "while its own owner does");
+    engine.check_hints().expect("the seed admits both grants as the fold did");
+}
+
+/// …and across the same boundary the other way: S READS A's draft, by the
+/// subtree clause, but reading is not owning, so S's admitted grants of it —
+/// from S's own published doc 1 — open it to nobody. A clause read as "the
+/// owner's account contains the issuer's" would admit both. Asked of both
+/// indexes.
+#[test]
+fn a_sub_account_s_grant_opens_none_of_its_parent_s_drafts() {
+    let engine = mem_engine();
+    let b = two_accounts(&engine);
+    let s = a_sub_account_of_a(&engine, &b);
+    grant_as(&engine, S, &s.home, &b.draft_a, vec![b.acct_b.clone()]);
+    grant_as(&engine, S, &s.home, &b.draft_a, vec![]); // empty `to` ⟹ ANY-PRINCIPAL
+
+    let w = world(&engine);
+    assert!(w.readable(Some(S), &b.draft_a), "S reads A's draft by subtree — the premise");
+    // Both records ARE admitted, so each probe reaches its issuer clause.
+    assert_eq!(
+        w.issuers_for(&b.acct_b),
+        vec![IssuerGrant { issuer: &s.acct, content_prefixes: vec![&b.draft_a] }],
+        "S's named grant must enter the principal-exact index, or this proves nothing"
+    );
+    assert_eq!(
+        w.universal_grants(),
+        vec![UniversalGrant { content_prefix: &b.draft_a, issuers: vec![&s.acct] }],
+        "…and its ANY-PRINCIPAL grant the universal one"
+    );
+    assert!(
+        !w.readable(Some(B), &b.draft_a),
+        "the issuer (S) is not the draft's ω owner (A), so the named grant opens nothing"
+    );
+    assert!(
+        !w.readable(Some(PrincipalId(9)), &b.draft_a),
+        "…and neither does the ANY-PRINCIPAL one"
+    );
+    engine.check_hints().expect("the seed admits S's records as the fold did");
+}
+
 /// The fold keys on the grants class by DENOTATION EQUALITY, so a type slot
 /// naming that class AMONG OTHERS is no grant record. `single_denoted`
 /// refuses a slot denoting several addresses; a fold reaching for a slot's
@@ -611,6 +724,56 @@ fn a_grant_record_with_a_multi_address_slot_grants_nothing() {
         "neither malformed record entered the fold"
     );
     engine.check_hints().expect("the seed ignores them for the reason the fold did");
+}
+
+/// A `to` slot that is NOT EMPTY but denotes NO address is MALFORMED, never
+/// the ANY-PRINCIPAL form: "empty" is the endset holding no span, not its
+/// denoting none, and the two part on a resolved content RANGE — one span two
+/// positions wide, which `Endset::addrs` skips. Read the other way, this
+/// record grants the draft to every principal. Every other `to` slot in this
+/// file is address-form, where the two readings agree.
+#[test]
+fn a_to_slot_that_is_not_empty_but_denotes_nothing_grants_to_nobody() {
+    let engine = mem_engine();
+    let b = two_accounts(&engine);
+    let caller = Caller::Principal(A);
+    engine
+        .vstream()
+        .insert(
+            caller,
+            &b.draft_a,
+            vp(1, 1),
+            vec![Val::new(vec![b'a']), Val::new(vec![b'b'])],
+            Deposit::Undeclared,
+        )
+        .expect("the owner writes two values into its draft");
+    let (link, _) = engine
+        .linkstore(&World::visible_to(caller))
+        .makelink(
+            caller,
+            &b.home_a,
+            SlotArg::Addrs(vec![b.draft_a.clone()]),
+            // TWO positions wide, so the resolved span is not unit-depth.
+            SlotArg::Resolve(vec![vspec(&b.draft_a, 1, 2)]),
+            SlotArg::Addrs(vec![t_grant()]),
+        )
+        .expect("a grant-typed record with a resolved `to` deposits");
+
+    let w = world(&engine);
+    let to = w.links().readlink(&link).expect("the record is resident").to_slot();
+    // The premise, stated where it can fail: a `to` that denotes an address,
+    // or holds no span, makes the two readings agree here.
+    assert!(
+        !to.is_empty() && to.addrs().next().is_none(),
+        "the fixture must deposit a `to` that holds a span and denotes nothing: {to:?}"
+    );
+    assert!(w.universal_grants().is_empty(), "the record is no ANY-PRINCIPAL grant");
+    assert!(w.issuers_for(&b.acct_b).is_empty(), "…nor a grant to anyone it names");
+    assert!(
+        !w.readable(Some(PrincipalId(9)), &b.draft_a),
+        "so no principal reads the draft through it"
+    );
+    engine.check_hints().expect("the seed refuses it for the reason the fold did");
 }
 
 /// Revocation by supersession (PUB-5.13): a later admitted grant naming the
@@ -797,6 +960,43 @@ fn the_fold_re_seeds_across_a_restart_and_an_empty_map_grants_nothing() {
     );
 }
 
+/// `Engine::world_at`'s POSTCONDITION — the returned world has been through
+/// `rebuild_derived` — over the one base that gives it teeth: a CHECKPOINT,
+/// which M2 decodes with the exception set and both grant indexes empty.
+/// Every other reconstruction in this suite starts from genesis, whose derived
+/// state is empty whether or not a rebuild ran, so a base selection that
+/// skipped the rebuild on a checkpoint would pass all of them — and every
+/// historical read would take the checkpoint's drafts for published and its
+/// grants for ungiven.
+#[test]
+fn a_reconstruction_over_a_checkpoint_base_answers_its_drafts_and_grants() {
+    let dir = tempdir().expect("tempdir");
+    let engine = Engine::open(fsync_cfg(dir.path())).expect("fsync open");
+    let b = two_accounts(&engine);
+    grant(&engine, &b.home_a, &b.draft_a, vec![b.acct_b.clone()]);
+    let base = engine.kernel().checkpoint().expect("the base the reconstruction starts from");
+    // A commit above the base, so the reconstruction FOLDS onto it…
+    let (later, past) =
+        engine.namespace().create_new_document(A, &b.acct_a, None).expect("A's later draft");
+    assert!(past > base, "the boundary sits above the checkpoint");
+    // …and one above `past`, so the answer is the past and not the head.
+    grant(&engine, &b.home_a, &later, vec![b.acct_b.clone()]);
+
+    let w = engine.world_at(past).expect("a committed boundary answers");
+    assert!(
+        !w.readable(None, &b.draft_a),
+        "the seeded exception set holds the checkpoint's draft"
+    );
+    assert!(!w.readable(None, &later), "…and the fold adds the one minted above it");
+    assert_eq!(
+        w.issuers_for(&b.acct_b),
+        vec![IssuerGrant { issuer: &b.acct_a, content_prefixes: vec![&b.draft_a] }],
+        "the grant fold is seeded from the checkpoint, and the grant above `past` is not in it"
+    );
+    assert!(w.readable(Some(B), &b.draft_a), "so the checkpoint's grant still opens its draft");
+    engine.check_hints_of(&w).expect("the reconstruction's rendered hints match a rebuild");
+}
+
 /// The fold's two enumerations for the feed (lane 3.6 §3; PUB-7.22,
 /// PUB-7.28): the LIVE ANY-PRINCIPAL set and a grantee's issuers with the
 /// union of covered prefixes — both read off the fold's own indexes, both
@@ -906,6 +1106,35 @@ fn the_two_feed_enumerations_read_the_fold_s_live_state() {
     assert_eq!(w.issuers_for(&b.acct_b).len(), 2, "B's grants are untouched by it");
 }
 
+/// Revoking the LAST issuer of an ANY-PRINCIPAL prefix removes the prefix's
+/// ROW: the enumeration is the set of prefixes currently granted, and an empty
+/// index means nothing granted. The feed test's revocation leaves a second
+/// issuer behind, so it cannot see a row that outlived its issuers — and
+/// neither can the predicate, since an empty issuer set opens nothing. The
+/// daemon's feed can: it merges one term per listed prefix, per request.
+#[test]
+fn revoking_an_any_principal_prefix_s_last_issuer_removes_its_row() {
+    let engine = mem_engine();
+    let b = two_accounts(&engine);
+    let g = grant(&engine, &b.home_a, &b.draft_a, vec![]); // empty `to` ⟹ ANY-PRINCIPAL
+    let w = world(&engine);
+    assert_eq!(
+        w.universal_grants(),
+        vec![UniversalGrant { content_prefix: &b.draft_a, issuers: vec![&b.acct_a] }],
+        "the fixture must enter the universal index"
+    );
+
+    grant(&engine, &b.home_a, &g, vec![]); // the revoking record
+    let w = world(&engine);
+    assert!(
+        w.universal_grants().is_empty(),
+        "no live grant covers the prefix, so no row names it: {:?}",
+        w.universal_grants()
+    );
+    assert!(!w.readable(Some(PrincipalId(9)), &b.draft_a), "and the predicate agrees");
+    engine.check_hints().expect("the seed agrees over the revocation");
+}
+
 /// The fold's query indexes are keyed by a grant's ISSUER, CONTENT-PREFIX and
 /// GRANTEE, and they are SETS: two admitted grants that agree on those three
 /// contribute ONE index entry, and nothing counts how many named it. So where
@@ -950,8 +1179,7 @@ fn two_grants_sharing_an_index_entry_are_withdrawn_together() {
 /// The reach the read predicate's PROJECTION cost term is paid over: the
 /// projection runs AHEAD of every clause, so a caller pays it on an address
 /// nothing can refuse — one M3 never registered, whose component count is the
-/// caller's own choice — and the answer is then the fail-open `true` the
-/// published clause gives an absent address (PUB-7.5).
+/// caller's own choice — before any clause has answered.
 ///
 /// A deep VERSION MEMBER is the shape, because the projection is the one
 /// step whose work follows the argument itself: `trunk_of` cuts the version
@@ -1005,9 +1233,13 @@ fn the_read_predicate_projects_an_address_the_client_invented() {
     assert_eq!(trunk_of(&deep), addr(&[1, 0, 1, 0, 1]));
 
     let w = world(&engine);
-    // The work is spent, and then the address is fail-open readable: at every
-    // class, for the guest that never authenticated as much as for the owner.
-    assert!(w.readable(None, &deep), "an unregistered address is fail-open (PUB-7.5)");
+    // The work is spent, and the address then reads as its trunk, A's
+    // published home: at every class, for the guest that never authenticated
+    // as much as for the owner. That answer is no witness to the projection —
+    // the deep address is absent from the exception set too, and would read
+    // readable without it — which is what
+    // `a_member_shaped_address_under_a_draft_reads_as_the_draft` is for.
+    assert!(w.readable(None, &deep), "its trunk is the published home, so every class reads it");
     assert!(w.readable(Some(A), &deep));
     assert!(w.readable(Some(B), &deep));
     // The registration check the contract puts AHEAD of the read is the
@@ -1015,4 +1247,31 @@ fn the_read_predicate_projects_an_address_the_client_invented() {
     // read answers the other way, so the deferral is a second walk and not a
     // cheaper first one.
     assert!(!w.m3().is_registered_document(&deep));
+}
+
+/// The PROJECTION, over the one shape where it moves an answer: an address
+/// shaped as a VERSION MEMBER of a DRAFT reads as that draft — the guest and a
+/// stranger refused, the owner admitted — though M3 never registered it.
+/// Every registered member carries its trunk's bit (PUB-8.17) and a private
+/// document is versionless (PUB-2.9), so on a registered address the
+/// projection never changes an answer; and the deep address of
+/// `the_read_predicate_projects_an_address_the_client_invented` has a
+/// PUBLISHED trunk, which reads readable either way. Without the projection
+/// this address is absent from the exception set, and so fail-open to every
+/// class.
+#[test]
+fn a_member_shaped_address_under_a_draft_reads_as_the_draft() {
+    let engine = mem_engine();
+    let b = two_accounts(&engine);
+    let member = validate(
+        Tumbler::new(b.draft_a.tumbler().iter().cloned().chain([nat(1)])).expect("nonempty"),
+    )
+    .expect("a version member of a document is T4-valid");
+    assert_eq!(member.level(), Level::Document, "a member is a document-tier address");
+    assert_eq!(trunk_of(&member), b.draft_a, "the projection names the draft");
+    let w = world(&engine);
+    assert!(!w.m3().is_registered_document(&member), "a private document is versionless");
+    assert!(!w.readable(None, &member), "the guest reads it as the draft");
+    assert!(!w.readable(Some(B), &member), "…and so does a stranger");
+    assert!(w.readable(Some(A), &member), "while the owner reads it by the subtree clause");
 }

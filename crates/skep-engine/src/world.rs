@@ -543,8 +543,10 @@ mod tests {
             "a pre-publication checkpoint decoded — it must fail, never read as everything-published"
         );
 
-        // …and the current bytes decode, with the derived set EMPTY until the
-        // rebuild runs over them — the hazard the invariant note names.
+        // …and this build's own bytes decode. Genesis holds no draft, so the
+        // empty set below says nothing about a rebuild: the hazard the
+        // invariant note names is held over a world that has one, in
+        // `the_hint_check_refuses_a_world_whose_derived_state_was_never_rebuilt`.
         let decoded = bincode::deserialize::<World>(&current).expect("this build's own bytes decode");
         assert_eq!(decoded.drafts().count(), 0);
     }

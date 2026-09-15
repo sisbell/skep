@@ -272,7 +272,7 @@ mod tests {
     use skep_namespace::HasM3;
 
     use crate::canon::{to_tree, SerdeTree, TreeDe};
-    use crate::testkit::{delegated_account, mem_engine, USER};
+    use crate::testkit::{addr, delegated_account, mem_engine, USER};
 
     use super::*;
 
@@ -328,7 +328,7 @@ mod tests {
     }
 
     /// The seed over a well-formed slice: the draft, memoized against the
-    /// ACCOUNT it was minted under. The premise the two corruptions below are
+    /// ACCOUNT it was minted under. The premise the corruptions below are
     /// read against — without it, a test that panics or reads a document
     /// published proves only that something went wrong.
     #[test]
@@ -369,6 +369,28 @@ mod tests {
             "the struck seat must leave ω answering the node above the account"
         );
         let _ = seed(&corrupt);
+    }
+
+    /// The EXISTENCE assertion, beside the tier one above: a registered draft
+    /// whose ω answers NOBODY — the seat of its own account and the genesis
+    /// node's above it both struck — is refused, never skipped. Skipping is the
+    /// tempting repair on a load path, and here it fails open: a skipped draft
+    /// is absent from the set, which every reader class reads as published.
+    #[test]
+    #[should_panic(expected = "has no effective owner")]
+    fn a_draft_whose_owner_resolves_to_nobody_is_refused_rather_than_skipped() {
+        let (namespace, acct, doc) = account_with_a_draft();
+        let seatless = with_entry_struck(
+            &with_entry_struck(&namespace, "principals", &acct),
+            "principals",
+            &addr(&[1]),
+        );
+        // The fixture must still reach the owner lookup, and reach it with
+        // nothing to find: registered, private, and covered by no seat.
+        assert!(seatless.is_registered_document(&doc), "the mint's registration is untouched");
+        assert!(!seatless.published(&doc), "the mint's bit is untouched");
+        assert_eq!(seatless.effective_owner_prefix(&doc), None, "no seat covers the draft");
+        let _ = seed(&seatless);
     }
 
     /// The OPEN DIRECTION the set inherits from its enumeration, over the one

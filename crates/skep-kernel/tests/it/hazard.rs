@@ -2,7 +2,7 @@
 //! journal tails (exhaustive over the final record), garbage tails,
 //! checkpoint corruption, and kill-mid-checkpoint process crashes. Fixtures
 //! are built through the PUBLIC engine surface, mutilated as files on a
-//! closed store, and judged through the public surface against the
+//! closed journal, and judged through the public surface against the
 //! capture-and-compare oracle in `hazard_util` — exactly three honest
 //! outcomes per the contracts (full recovery / bounded rollback of
 //! never-acked tail / loud refusal); silent divergence and wedged opens are
@@ -370,7 +370,7 @@ fn c_checkpoint_chain_exhausted_with_genesis_unreachable_refuses_loudly() {
 
 /// The child half of scenario D: re-exec'd by
 /// `d_kill_mid_checkpoint_loses_no_acked_commit` with
-/// `SKEP_HAZARD_D_DIR`/`SKEP_HAZARD_D_DOC` set, it recovers the store and
+/// `SKEP_HAZARD_D_DIR`/`SKEP_HAZARD_D_DOC` set, it reopens the journal and
 /// commits 48 KiB inserts forever — checkpointing every second commit
 /// (retain generous, so no reclamation and every boundary stays
 /// answerable) — printing `HAZACK <seq>` after each ack until SIGKILLed.
@@ -424,7 +424,7 @@ fn d_kill_mid_checkpoint_loses_no_acked_commit() {
 
 fn d_trial(trial: u64) -> (usize, u64) {
     let tmp = tempdir().expect("tempdir");
-    let dir = tmp.path().join("store");
+    let dir = tmp.path().join("journal");
     // Prologue in THIS process: delegate an account, create the document
     // the child will write into; then release the journal lock.
     let doc_str = {

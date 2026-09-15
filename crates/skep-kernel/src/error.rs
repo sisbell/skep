@@ -10,7 +10,7 @@ use crate::Seq;
 pub enum OpenError {
     /// The configuration is not one this kernel offers; the payload names the
     /// rule broken. Not an environmental failure: no retry and no operator
-    /// action on the store changes it, only a corrected configuration does.
+    /// action on the journal changes it, only a corrected configuration does.
     InvalidConfig(&'static str),
     /// I/O failure during open/recovery — including a recovery tail-truncation
     /// that fails to complete durably (§7; `open()` then fails, the step is
@@ -324,7 +324,7 @@ pub enum TxnError<E> {
     /// The budget is what keeps recovery's memory floor replica-independent:
     /// a transaction never spans a journal segment and recovery reads a
     /// segment whole, so an unbounded transaction would permanently raise the
-    /// cost of every later `open()` of the store it committed to.
+    /// cost of every later `open()` of the journal it committed to.
     ///
     /// [`Durability`]: TxnError::Durability
     /// [`Unencodable`]: TxnError::Unencodable

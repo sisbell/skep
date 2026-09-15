@@ -2,7 +2,7 @@
 //! mixed-op engine fixture with its capture-and-compare oracle, the file
 //! mutilation helpers, wedge-bounded opens, and a deterministic RNG.
 //!
-//! The oracle discipline: while the store is healthy, capture every
+//! The oracle discipline: while the journal is healthy, capture every
 //! committed boundary's `Seq`, the journal byte length once that commit was
 //! durable, and the `WorldDump` of `world_at` that boundary — all through
 //! the PUBLIC engine surface. After fault + reopen there are exactly three
@@ -142,17 +142,6 @@ pub fn timed_open(dir: &Path, ctx: &str) -> Engine {
 }
 
 // ── file mutilation ──
-
-/// Copy every regular file of `src` into a fresh `dst` (fixture → case).
-pub fn copy_dir(src: &Path, dst: &Path) {
-    fs::create_dir_all(dst).expect("case dir");
-    for entry in fs::read_dir(src).expect("fixture dir lists") {
-        let entry = entry.expect("dir entry");
-        if entry.file_type().expect("file type").is_file() {
-            fs::copy(entry.path(), dst.join(entry.file_name())).expect("copy fixture file");
-        }
-    }
-}
 
 /// Overwrite `[from, from+junk.len())` in place, clamped to the file end.
 pub fn overwrite_range(path: &Path, from: u64, junk: &[u8]) {

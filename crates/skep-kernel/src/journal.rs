@@ -50,7 +50,7 @@ pub(crate) const MAX_FRAME_LEN: u32 = 64 * 1024 * 1024;
 /// two and the second clause fails where it hurts: a transaction never spans
 /// a segment, so one oversized transaction permanently raises the floor of
 /// every later [`crate::Kernel::open`] and every [`crate::Kernel::world_at`]
-/// above that base — a store that opens on the machine that wrote it and not
+/// above that base — a journal that opens on the machine that wrote it and not
 /// on the replica.
 ///
 /// Being EQUAL rather than nested, the two limits do not stack: a transaction
@@ -389,7 +389,7 @@ pub(crate) struct SegmentMeta {
 /// Stated as a pair with [`parse_segment_name`], which reads it back by
 /// re-emitting it, because the format and the parse are one agreement: a
 /// change to either that the other does not match makes every segment on disk
-/// invisible to recovery, which reads as an empty store rather than as a
+/// invisible to recovery, which reads as an empty journal rather than as a
 /// failure.
 fn segment_name(first_seq: u64) -> String {
     format!("seg-{first_seq}.wal")
@@ -945,7 +945,7 @@ pub(crate) struct ScanOutcome {
     s_load: u64,
     /// The boundary this scan COLLECTED to, as [`scan`] was called with it —
     /// `None` for the whole scanned region. Applied by
-    /// [`ScanOutcome::record_commit`], the only writer of the two collections
+    /// [`ScanOutcome::collect_commit`], the only writer of the two collections
     /// below, and read back by [`ScanOutcome::covers`] to hold a fold to it:
     /// records above it were read and dropped, so a fold past it is one this
     /// outcome cannot answer. Bounding the collection is what keeps a bounded
@@ -958,14 +958,14 @@ pub(crate) struct ScanOutcome {
     /// whole scanned region.
     pub committed_head: u64,
     /// The records a fold may apply, unordered and unfiltered as collected.
-    /// Written only by [`ScanOutcome::record_commit`], which is where the
+    /// Written only by [`ScanOutcome::collect_commit`], which is where the
     /// collection bound is applied; read through [`ScanOutcome::records_to`],
     /// which is where the order, the range and the one-coordinate-once rule
     /// are settled.
     committed_records: Vec<CommittedRecord>,
     /// The transaction boundaries a bounded replay may be asked about, in scan
     /// order — the `Seq` values [`crate::Kernel::transact`] returned. Written
-    /// only by [`ScanOutcome::record_commit`]; read by
+    /// only by [`ScanOutcome::collect_commit`]; read by
     /// [`ScanOutcome::require_boundary`], which reads the requested value and
     /// the boundaries below it, so a boundary the collection bound excluded is
     /// one nothing can ask for.
@@ -981,7 +981,7 @@ pub(crate) struct ScanOutcome {
 }
 
 impl ScanOutcome {
-    /// Take everything a COMMITTED transaction contributes: its marker's
+    /// Collect everything a COMMITTED transaction contributes: its marker's
     /// `last_seq` raises the committed head and — when this scan's collection
     /// bound admits it — joins the boundary set, and its records join the
     /// committed set, filtered the same way.
@@ -993,7 +993,7 @@ impl ScanOutcome {
     /// asymmetry is the whole of what `bound` means, and stating it here is
     /// what keeps it off the walk — this is the only writer of either
     /// collection, so the rule has one site.
-    fn record_commit(&mut self, marker: &Marker, records: Vec<CommittedRecord>) {
+    fn collect_commit(&mut self, marker: &Marker, records: Vec<CommittedRecord>) {
         self.committed_head = self.committed_head.max(marker.last_seq);
         let bound = self.bound;
         let collected = |seq: u64| bound.is_none_or(|b| seq <= b);
@@ -1118,12 +1118,11 @@ impl ScanOutcome {
 /// record can never be closed by a later marker.
 ///
 /// One group at a time is not by itself a memory bound, because a journal is
-/// not obliged to have been written by this writer: frames spread over every
-/// segment of a store, all carrying one `txn`, are one group. So the size of
-/// the group is bounded HERE, by the same [`MAX_TXN_BYTES`] the write path
-/// refuses at ([`Self::oversize`]) — one segment's bytes plus one
-/// transaction's worth, which is the memory floor
-/// [`crate::Kernel::open`] promises on every replica.
+/// not obliged to have been written by this writer: frames spread across all
+/// its segments, all carrying one `txn`, are one group. So the size of the
+/// group is bounded HERE, by the same [`MAX_TXN_BYTES`] the write path refuses
+/// at ([`Self::oversize`]) — one segment's bytes plus one transaction's worth,
+/// which is the memory floor [`crate::Kernel::open`] promises on every replica.
 struct PendingTxn {
     txn: Txn,
     /// CRC32C over the record-frame payloads in ARRIVAL order — which is `Seq`
@@ -1211,8 +1210,8 @@ impl PendingTxn {
     /// The budget conjunct is the reader's half of a bound the write path
     /// already keeps: accepting a group past [`MAX_TXN_BYTES`] would fold a
     /// transaction this kernel could not have committed, and would let a
-    /// journal spread one `txn` over a whole store's segments while the scan
-    /// held every record of it.
+    /// journal spread one `txn` over all its segments while the scan held
+    /// every record of it.
     fn commits(&self, marker: &Marker) -> bool {
         self.ordered
             && !self.oversize
@@ -1339,7 +1338,7 @@ pub(crate) fn scan(
                             }
                             if let Some(group) = pending.take_if(|group| group.txn == marker.txn) {
                                 if group.commits(&marker) {
-                                    outcome.record_commit(&marker, group.records);
+                                    outcome.collect_commit(&marker, group.records);
                                     // The cut is unbounded for the reason the
                                     // head is: it must name the last committed
                                     // marker wherever it sits.
@@ -1400,11 +1399,11 @@ pub(crate) fn scan(
 /// segment, fsync file and directory. Every halt precedes it — every route to
 /// [`crate::OpenError::Corruption`], which enumerates them, and the exhausted
 /// checkpoint chain of [`crate::OpenError::BadCheckpoint`] — which is what
-/// leaves the store an operator images after a halt exactly as it was found
-/// (§7); [`crate::Kernel::open`] is where that order is kept and stated. This
-/// is what makes cross-session `Txn` uniqueness and file-order == `Seq`-order
-/// true at the next recovery (§1/§7). Idempotent; a failure fails `open()`
-/// with `Io`.
+/// leaves the journal directory an operator images after a halt exactly as it
+/// was found (§7); [`crate::Kernel::open`] is where that order is kept and
+/// stated. This is what makes cross-session `Txn` uniqueness and
+/// file-order == `Seq`-order true at the next recovery (§1/§7). Idempotent; a
+/// failure fails `open()` with `Io`.
 ///
 /// The files are the scan's own [`TailCut`], so this cuts exactly what was
 /// scanned and nothing else.
@@ -1834,7 +1833,7 @@ mod tests {
         // The reader's half of the write path's own bound: `commit_txn`
         // refuses a staging past MAX_TXN_BYTES before a byte is appended, so a
         // group past it is one no writer here emits — and accepting it would
-        // let a journal spread one `txn` over a whole store while the scan
+        // let a journal spread one `txn` over all its segments while the scan
         // held every record of it.
         //
         // The charge must reproduce the write side's term for term, which is

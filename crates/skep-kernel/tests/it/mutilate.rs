@@ -1,6 +1,6 @@
 //! Naming and damaging the files a kernel keeps — the operations both suites
-//! perform on a CLOSED store: name a segment or a checkpoint, flip a byte,
-//! cut a file short, append past the end.
+//! perform on a CLOSED journal: name a segment or a checkpoint, copy a
+//! fixture, flip a byte, cut a file short, append past the end.
 //!
 //! These know no format. What each suite restates for itself is the *layout*
 //! it judges — the frame header, the checkpoint header, the frame walk —
@@ -22,6 +22,18 @@ pub fn seg_file(dir: &Path, first_seq: u64) -> PathBuf {
 /// The checkpoint embodying `Seq ≤ seq` (§6).
 pub fn ckpt_file(dir: &Path, seq: u64) -> PathBuf {
     dir.join(format!("checkpoint.{seq}"))
+}
+
+/// Copy every regular file of `src` into a fresh `dst`, so one built fixture
+/// can be damaged several ways without rebuilding it.
+pub fn copy_dir(src: &Path, dst: &Path) {
+    fs::create_dir_all(dst).expect("case dir");
+    for entry in fs::read_dir(src).expect("fixture dir lists") {
+        let entry = entry.expect("dir entry");
+        if entry.file_type().expect("file type").is_file() {
+            fs::copy(entry.path(), dst.join(entry.file_name())).expect("copy fixture file");
+        }
+    }
 }
 
 /// Invert every bit of the byte at `offset`, so a single-bit-rot fixture

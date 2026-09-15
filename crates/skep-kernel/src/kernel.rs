@@ -700,7 +700,7 @@ impl<W: WorldState> Kernel<W> {
     /// acknowledged, so there is no sound path for that error through
     /// [`TxnError`], and v1 has no logging seam. A caller who needs to know
     /// whether checkpointing is succeeding must call [`Kernel::checkpoint`]
-    /// itself and read the result; a store that has stopped checkpointing
+    /// itself and read the result; a kernel that has stopped checkpointing
     /// goes on committing and says nothing.
     ///
     /// A panic out of `f` propagates with nothing of the transaction
@@ -1313,8 +1313,8 @@ mod tests {
             "got {err:?}"
         );
         // A halt cuts nothing: the fold's refusal precedes the tail
-        // truncation, so the store an operator images after a `Corruption` is
-        // the store that was there.
+        // truncation, so the journal an operator images after a `Corruption`
+        // is the journal that was there.
         assert_eq!(
             fs::read(&seg).unwrap(),
             before,
@@ -1459,8 +1459,8 @@ mod tests {
             "got {err:?}"
         );
         // A halt cuts nothing: the exhausted order is judged before the tail
-        // truncation, so the store an operator images after a `Corruption` is
-        // the store that was there.
+        // truncation, so the journal an operator images after a `Corruption`
+        // is the journal that was there.
         assert_eq!(
             fs::read(&seg).unwrap(),
             before,

@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use crate::mutilate::{append_bytes, ckpt_file, flip_byte, seg_file, truncate_file};
+use crate::mutilate::{append_bytes, ckpt_file, copy_dir, flip_byte, seg_file, truncate_file};
 use serde::{Deserialize, Serialize};
 use skep_kernel::{
     BurnedSeqPolicy, CheckpointError, CheckpointPolicy, Durability, HistoryError, Kernel,
@@ -735,8 +735,8 @@ fn corruption_in_replayed_range_halts_with_marker_landing_payload() {
         "got {err:?}"
     );
     // A halt cuts nothing: the classification precedes the tail truncation, so
-    // the store an operator images after a `Corruption` is the store that was
-    // there (§7 — destroying evidence ahead of intervention would be wrong).
+    // the journal an operator images after a `Corruption` is the journal that
+    // was there (§7 — destroying evidence ahead of intervention would be wrong).
     assert_eq!(
         fs::read(&seg).unwrap(),
         before,
@@ -1343,18 +1343,6 @@ fn recovery_skips_only_the_segments_the_base_already_embodies() {
     assert_eq!(k.snapshot().world().sum, 9 * BLOB as u64);
 }
 
-/// Every regular file of `src` into a fresh `dst`, so one built fixture can be
-/// damaged two ways without rebuilding it.
-fn copy_store(src: &Path, dst: &Path) {
-    fs::create_dir_all(dst).unwrap();
-    for entry in fs::read_dir(src).unwrap() {
-        let entry = entry.unwrap();
-        if entry.file_type().unwrap().is_file() {
-            fs::copy(entry.path(), dst.join(entry.file_name())).unwrap();
-        }
-    }
-}
-
 #[test]
 fn an_absent_segment_shortens_the_world_where_a_damaged_one_halts() {
     // Recovery's damage model is FRAMES THAT FAIL THEIR CRC. Damaging a
@@ -1382,7 +1370,7 @@ fn an_absent_segment_shortens_the_world_where_a_damaged_one_halts() {
     // Damaged: the middle segment's frames stop passing their CRC, so the
     // resync opens a run inside (S_load, W] — a loud halt, nothing folded.
     let damaged = tmp.path().join("damaged");
-    copy_store(&fixture, &damaged);
+    copy_dir(&fixture, &damaged);
     let mid = seg_file(&damaged, 5);
     let len = fs::metadata(&mid).unwrap().len() as usize;
     fs::write(&mid, vec![0u8; len]).unwrap();
@@ -1394,7 +1382,7 @@ fn an_absent_segment_shortens_the_world_where_a_damaged_one_halts() {
     // silent. The head is the true head, so nothing about the answer looks
     // wrong; only the four records seg-5 held are missing.
     let absent = tmp.path().join("absent");
-    copy_store(&fixture, &absent);
+    copy_dir(&fixture, &absent);
     fs::remove_file(seg_file(&absent, 5)).unwrap();
     let k = Kernel::<TestWorld>::open(cfg_fsync(&absent), genesis())
         .expect("a missing segment is not something this module detects");

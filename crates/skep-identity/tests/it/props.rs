@@ -47,7 +47,7 @@ proptest! {
             enrollments.push(e);
         }
         let encoded = encode_enroll(&enrollments);
-        let parsed = parse_enroll(&encoded);
+        let parsed = parse_enroll(encoded.as_bytes());
         prop_assert_eq!(parsed, Ok(enrollments));
     }
 
@@ -61,7 +61,7 @@ proptest! {
                 fps.push(f);
             }
         }
-        let parsed = parse_retire(&encode_retire(&fps));
+        let parsed = parse_retire(encode_retire(&fps).as_bytes());
         prop_assert_eq!(parsed, Ok(fps));
     }
 }

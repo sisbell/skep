@@ -171,13 +171,12 @@ fn claim_board(port: u16) {
     assert_eq!(v["resp"], "ack_addr", "owner home mint: {v}");
     assert_eq!(v["addr"], json!(OWNER_DOC1), "the home mint is doc 1");
     // The enrollment record — the anchor and the device key — as ONE ATOM.
-    let record = encode_enroll(&[
+    let record_text = encode_enroll(&[
         Enrollment::new(pubkey_of(&anchor_key()), true, Some("paper-a".into()))
             .expect("a legal label"),
         Enrollment::new(pubkey_of(&device_key()), false, Some("notebook".into()))
             .expect("a legal label"),
     ]);
-    let record_text = String::from_utf8(record).expect("the record grammar is UTF-8");
     // The record atom's insert is a DECLARED deposit (PUB-2.63; the
     // DECLARED horn of PUB-9.13): doc 1 is born published, and an undeclared
     // insert into it is the in-place edit the write path refuses (PUB-2.11).

@@ -282,12 +282,12 @@ pub fn enroll_payload(entries: &[(u8, bool)]) -> Vec<u8> {
         .iter()
         .map(|&(i, anchor)| enrollment(i, anchor))
         .collect();
-    encode_enroll(&enrollments)
+    encode_enroll(&enrollments).into_bytes()
 }
 
 pub fn retire_payload(indices: &[u8]) -> Vec<u8> {
     let fps: Vec<Fingerprint> = indices.iter().map(|&i| fp(i)).collect();
-    encode_retire(&fps)
+    encode_retire(&fps).into_bytes()
 }
 
 // ---------------------------------------------------------------- verdicts

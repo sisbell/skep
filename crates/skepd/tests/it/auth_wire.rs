@@ -42,14 +42,14 @@ fn enroll_atom_with_trailing_non_point(n: usize) -> String {
     let bad = PublicKey::parse("ed25519", &non_point_hex())
         .expect("64 hex parses — the fold admits syntax and never decodes the point");
     entries.push(Enrollment::new(bad, false, None).expect("no label"));
-    json_atom(&String::from_utf8(encode_enroll(&entries)).expect("utf-8"))
+    json_atom(&encode_enroll(&entries))
 }
 
 /// One retire record naming fingerprints, as its atom JSON fragment.
 fn retire_atom(fps: &[&str]) -> String {
     let parsed: Vec<Fingerprint> =
         fps.iter().map(|h| Fingerprint::parse_hex(h).expect("64 hex")).collect();
-    json_atom(&String::from_utf8(encode_retire(&parsed)).expect("utf-8"))
+    json_atom(&encode_retire(&parsed))
 }
 
 /// Land one credential record atom at `ordinal` of the claimant's doc 1 and
@@ -800,10 +800,7 @@ fn a_valid_hex_non_point_key_is_refused_at_enrollment() {
 
     let key = PublicKey::parse("ed25519", &non_point_hex())
         .expect("64 hex parses — the fold admits syntax and never decodes the point");
-    let text = String::from_utf8(encode_enroll(&[
-        Enrollment::new(key, false, None).expect("no label")
-    ]))
-    .expect("utf-8");
+    let text = encode_enroll(&[Enrollment::new(key, false, None).expect("no label")]);
     let record = record_atom(port, &signed, 2, &json_atom(&text));
     assert_eq!(
         rejected_detail(&deposit(port, &signed, &record, T_ENROLL)),

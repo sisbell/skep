@@ -532,7 +532,7 @@ fn cap_sized_enroll_payload(over: usize) -> Vec<u8> {
     // One label of pad−1 chars adds `pad` bytes (the space plus the label).
     let pad = MAX_RECORD_BYTES - base_len + over;
     entries[0] = Enrollment::new(wide_key(0), false, Some("x".repeat(pad - 1))).expect("label");
-    let payload = encode_enroll(&entries);
+    let payload = encode_enroll(&entries).into_bytes();
     assert_eq!(payload.len(), MAX_RECORD_BYTES + over);
     payload
 }

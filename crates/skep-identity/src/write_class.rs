@@ -105,6 +105,11 @@ impl WriteTypes {
     /// themselves: [`WriteTypes::write_class`] reads a slot's address once
     /// and asks each class a prefix question of it.
     ///
+    /// `credential` is kept as an OWNED copy, so this input agrees with the
+    /// fold about what a credential is only when its builder hands in the
+    /// `TypeAddrs` the fold reads (skepd clones its `IDENTITY_TYPES`). That
+    /// agreement is the builder's to keep: nothing here can see the fold's.
+    ///
     /// PRECONDITION — the class addresses are PAIRWISE PREFIX-FREE and none
     /// is a credential type. A class address at or under another's puts one
     /// address under two classes, so the answer would be the declared
@@ -145,15 +150,6 @@ impl WriteTypes {
             }
         }
         WriteTypes { credential, grant, audit }
-    }
-
-    /// The credential kinds this input answers first: an OWNED copy of the
-    /// [`TypeAddrs`] it was built from — equal to it, never shared. It agrees
-    /// with the fold about a credential only because its builder hands
-    /// [`WriteTypes::new`] the `TypeAddrs` the fold reads (skepd clones its
-    /// `IDENTITY_TYPES`); that agreement is the builder's to keep.
-    pub fn credential(&self) -> &TypeAddrs {
-        &self.credential
     }
 
     /// The write path's classification of a type slot: `Some` iff `ty` is

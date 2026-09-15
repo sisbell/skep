@@ -337,11 +337,11 @@ fn encode_emits_the_pinned_line_forms() {
         hex(1),
         hex(2)
     );
-    assert_eq!(record, want.into_bytes());
+    assert_eq!(record, want);
 
     let record = encode_retire(&[fp(1)]);
     let want = format!("skep-retire v1\n{}\n", fp(1).to_hex());
-    assert_eq!(record, want.into_bytes());
+    assert_eq!(record, want);
 }
 
 /// `parse(encode(x)) == x` on hand-picked domain corners (the full-domain
@@ -356,11 +356,11 @@ fn round_trip_domain_corners() {
         Enrollment::new(key(4), true, Some(" leading space".to_owned())).unwrap(),
         Enrollment::new(key(5), false, None).unwrap(),
     ];
-    let parsed = ok_enroll(&encode_enroll(&corners));
+    let parsed = ok_enroll(encode_enroll(&corners).as_bytes());
     assert_eq!(parsed, corners);
 
     let fps = vec![fp(1), fp(2), fp(3)];
-    let parsed = ok_retire(&encode_retire(&fps));
+    let parsed = ok_retire(encode_retire(&fps).as_bytes());
     assert_eq!(parsed, fps);
 }
 

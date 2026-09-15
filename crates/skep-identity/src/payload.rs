@@ -4,13 +4,15 @@
 //! One doorkeeper: record BYTES in, typed records out. The grammar — headers,
 //! tokenization, both kinds' line forms, the parse fault precedence — is a
 //! PERMANENT protocol pin, an I2 frozen constant (AUTH-2.90). Both kinds
-//! share one strictness and one fault precedence (AUTH-2.14, AUTH-2.19), so
-//! [`scan`] holds that obligation once and each kind's parser holds only its
-//! own line grammar. The bytes themselves arrive from `crate::read`.
+//! share one strictness, one fault precedence and one duplicate rule
+//! (AUTH-2.14, AUTH-2.15, AUTH-2.19), so [`scan`] holds those obligations
+//! once and each kind's parser holds only its own line grammar. The bytes
+//! themselves arrive from `crate::read`.
 //!
 //! [`scan`]: scan
 
 use core::fmt;
+use std::collections::BTreeSet;
 
 use crate::key::{Fingerprint, PublicKey};
 
@@ -170,14 +172,23 @@ impl std::error::Error for PayloadError {}
 /// `sig` line is skipped whatever follows, on both kinds (AUTH-2.13,
 /// AUTH-2.14, permanent per AUTH-2.94).
 ///
+/// AUTH-2.15 is the scan's too, since both kinds share it: a line whose
+/// `compared_by` value an earlier ACCEPTED line already carried is
+/// `DuplicateKey(n)`, naming the repeating line. The test runs only on a line
+/// `parse_line` has accepted, so within a line the kind's grammar decides
+/// first by construction. It is one ordered-set insert per line rather than a
+/// search of the lines before it, so no record's length makes the scan
+/// quadratic — the parsers are `pub`, and a caller's bytes need not have
+/// passed the READ's cap.
+///
 /// `parse_line` carries the KIND'S OWN line grammar and nothing else: it
-/// receives the 1-based line number (the header is line 1, AUTH-1.27), the
-/// line, and the items already accepted — the left side of its own AUTH-2.15
-/// duplicate comparison.
-fn scan<T>(
+/// receives the 1-based line number (the header is line 1, AUTH-1.27) and
+/// the line.
+fn scan<T, K: Ord>(
     bytes: &[u8],
     header: &str,
-    mut parse_line: impl FnMut(usize, &str, &[T]) -> Result<T, PayloadError>,
+    compared_by: impl Fn(&T) -> K,
+    mut parse_line: impl FnMut(usize, &str) -> Result<T, PayloadError>,
 ) -> Result<Vec<T>, PayloadError> {
     let text = core::str::from_utf8(bytes).map_err(|_| PayloadError::NotUtf8)?;
     let mut lines = text.split('\n');
@@ -185,6 +196,7 @@ fn scan<T>(
         return Err(PayloadError::BadHeader);
     }
     let mut out: Vec<T> = Vec::new();
+    let mut seen: BTreeSet<K> = BTreeSet::new();
     for (idx, line) in lines.enumerate() {
         let n = idx + 2; // 1-based, the header line 1 (AUTH-1.27)
         if line.is_empty() {
@@ -193,7 +205,10 @@ fn scan<T>(
         if split_token(line).0 == "sig" {
             continue;
         }
-        let item = parse_line(n, line, &out)?;
+        let item = parse_line(n, line)?;
+        if !seen.insert(compared_by(&item)) {
+            return Err(PayloadError::DuplicateKey(n));
+        }
         out.push(item);
     }
     if out.is_empty() {
@@ -231,16 +246,15 @@ fn split_token(s: &str) -> (&str, Option<&str>) {
 /// promise that fixes a fingerprint's anchor flag within one record (I9,
 /// AUTH-2.104).
 ///
-/// PRECONDITION — `bytes` is ONE record's bytes, at most
-/// [`MAX_RECORD_BYTES`]: what `crate::record_bytes` answers, and the only
-/// source AUTH-2.37 admits. Nothing here re-checks that cap; it is the
-/// CALLER's, and what makes it matter is AUTH-2.15 — the duplicate test
-/// compares each line's key against every key already accepted, so the scan
-/// is QUADRATIC in the line count. Under the cap that is at most 897 lines
-/// (a 73-byte minimum line) and ~4·10⁵ comparisons; on 64 MiB of such lines
-/// it is ~4·10¹¹.
+/// The record cap is the READ's, never this grammar's (AUTH-2.43): bytes over
+/// [`MAX_RECORD_BYTES`] parse here as any other bytes do — no length makes
+/// the parse quadratic — and the fold refuses such a record before its bytes
+/// reach a parser. An `Ok` over bytes that did not come from
+/// `crate::record_bytes` says the record PARSES, never that it reads.
 pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
-    scan(bytes, ENROLL_HEADER, |n, line, seen: &[Enrollment]| {
+    // AUTH-2.15 compares the PARSED key: hex case is no distinction, and
+    // neither is the line's flag or label.
+    scan(bytes, ENROLL_HEADER, |e: &Enrollment| e.key, |n, line| {
         // AUTH-2.12 — dispatch on the FIRST token: anchor · alg · else (the
         // scan has taken the `sig` lines already).
         let (first, rest) = split_token(line);
@@ -277,11 +291,6 @@ pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
             Some("") => return Err(PayloadError::BadLine(n)),
             Some(label) => Some(label.to_owned()),
         };
-        // AUTH-2.15 — a fingerprint repeating an earlier line's, compared as
-        // PARSED bytes (hex case is no distinction), whatever its flag.
-        if seen.iter().any(|e| e.key == key) {
-            return Err(PayloadError::DuplicateKey(n));
-        }
         // The parsed label is in the AUTH-1.24 domain by construction
         // (non-empty checked above; no '\n' — lines were split on it).
         Enrollment::new(key, anchor, label).map_err(|_| PayloadError::BadLine(n))
@@ -304,16 +313,12 @@ pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
 /// of the set would pass that test, empty the set, and void I3 (AUTH-2.97)
 /// and AUTH-1.36.
 ///
-/// PRECONDITION — `bytes` is ONE record's bytes, at most
-/// [`MAX_RECORD_BYTES`]: what `crate::record_bytes` answers, and the only
-/// source AUTH-2.37 admits. Nothing here re-checks that cap; it is the
-/// CALLER's, and what makes it matter is AUTH-2.15 — the duplicate test
-/// compares each line's fingerprint against every fingerprint already
-/// accepted, so the scan is QUADRATIC in the line count. Under the cap that
-/// is at most 1008 lines (a 65-byte minimum line) and ~5·10⁵ comparisons; on
-/// 64 MiB of such lines it is ~5·10¹¹.
+/// The record cap is the READ's, never this grammar's — as on
+/// [`parse_enroll`].
 pub fn parse_retire(bytes: &[u8]) -> Result<Vec<Fingerprint>, PayloadError> {
-    scan(bytes, RETIRE_HEADER, |n, line, seen: &[Fingerprint]| {
+    // AUTH-2.15 compares the PARSED fingerprint (hex case is no distinction),
+    // so `removed` never names one twice.
+    scan(bytes, RETIRE_HEADER, |fp: &Fingerprint| *fp, |n, line| {
         // AUTH-2.14 — no label, no trailing separator: ANY remainder after
         // the fingerprint token (`<64 hex> ` and `<64 hex> note` alike) is
         // BadLine.
@@ -321,35 +326,33 @@ pub fn parse_retire(bytes: &[u8]) -> Result<Vec<Fingerprint>, PayloadError> {
         if rest.is_some() {
             return Err(PayloadError::BadLine(n));
         }
-        let Some(fp) = Fingerprint::parse_hex(hex) else {
-            return Err(PayloadError::BadLine(n));
-        };
-        // AUTH-2.15 — never `removed = {F}` twice: the repeat is named.
-        if seen.contains(&fp) {
-            return Err(PayloadError::DuplicateKey(n));
-        }
-        Ok(fp)
+        Fingerprint::parse_hex(hex).ok_or(PayloadError::BadLine(n))
     })
 }
 
 /// AUTH-2.18 — encode an enrollment record; emits lowercase hex (AUTH-2.17)
 /// and the label verbatim.
 ///
+/// Answers TEXT, which a record is: a depositor places it in a text-valued
+/// insert as it stands. The parsers take bytes because the READ hands them
+/// bytes that need not be text (`NotUtf8`); nothing an encoder emits is ever
+/// one of those.
+///
 /// PRECONDITION — `enrollments` is NON-EMPTY and no two entries carry the
 /// same key: [`parse_enroll`]'s POSTCONDITION read from the other side, since
 /// a header-only record is `Empty` (AUTH-2.16) and a repeated key is
 /// `DuplicateKey(n)` (AUTH-2.15). Outside that domain this function still
-/// answers bytes — it emits what it is given and re-checks nothing — but they
-/// are bytes NO parser admits, so a depositor who writes them spends a
-/// permanent record on one the fold can never honor.
+/// answers a record — it emits what it is given and re-checks nothing — but
+/// NO parser admits it, so a depositor who writes it spends a permanent
+/// record on one the fold can never honor.
 ///
-/// POSTCONDITION — within it, `parse_enroll(encode_enroll(x)) == Ok(x)` over
-/// the whole [`Enrollment`] domain per entry: every anchor flag and every
-/// AUTH-1.24 label, trailing 0x20 included (I1, AUTH-2.89). The encoded
-/// LENGTH is a third obligation owned elsewhere — a record over
+/// POSTCONDITION — within it, `parse_enroll(encode_enroll(x).as_bytes())` is
+/// `Ok(x)` over the whole [`Enrollment`] domain per entry: every anchor flag
+/// and every AUTH-1.24 label, trailing 0x20 included (I1, AUTH-2.89). The
+/// encoded LENGTH is a third obligation owned elsewhere — a record over
 /// [`MAX_RECORD_BYTES`] round-trips here and is refused at the READ
 /// (AUTH-2.43).
-pub fn encode_enroll(enrollments: &[Enrollment]) -> Vec<u8> {
+pub fn encode_enroll(enrollments: &[Enrollment]) -> String {
     let mut out = String::new();
     out.push_str(ENROLL_HEADER);
     out.push('\n');
@@ -366,20 +369,21 @@ pub fn encode_enroll(enrollments: &[Enrollment]) -> Vec<u8> {
         }
         out.push('\n');
     }
-    out.into_bytes()
+    out
 }
 
-/// AUTH-2.18 — encode a retirement record; lowercase hex (AUTH-2.17).
+/// AUTH-2.18 — encode a retirement record, as TEXT like [`encode_enroll`];
+/// lowercase hex (AUTH-2.17).
 ///
 /// PRECONDITION — `fps` is NON-EMPTY and DUPLICATE-FREE, [`parse_retire`]'s
 /// POSTCONDITION read from the other side (`Empty`, AUTH-2.16;
-/// `DuplicateKey(n)`, AUTH-2.15); outside that domain the bytes are a record
-/// no parser admits, and nothing here re-checks them.
+/// `DuplicateKey(n)`, AUTH-2.15); outside that domain the text is a record no
+/// parser admits, and nothing here re-checks it.
 ///
-/// POSTCONDITION — within it, `parse_retire(encode_retire(x)) == Ok(x)`
-/// (I1, AUTH-2.89), under the same [`MAX_RECORD_BYTES`] obligation as
+/// POSTCONDITION — within it, `parse_retire(encode_retire(x).as_bytes())` is
+/// `Ok(x)` (I1, AUTH-2.89), under the same [`MAX_RECORD_BYTES`] obligation as
 /// [`encode_enroll`].
-pub fn encode_retire(fps: &[Fingerprint]) -> Vec<u8> {
+pub fn encode_retire(fps: &[Fingerprint]) -> String {
     let mut out = String::new();
     out.push_str(RETIRE_HEADER);
     out.push('\n');
@@ -387,6 +391,70 @@ pub fn encode_retire(fps: &[Fingerprint]) -> Vec<u8> {
         out.push_str(&fp.to_hex());
         out.push('\n');
     }
-    out.into_bytes()
+    out
 }
 
+#[cfg(test)]
+mod tests {
+    use core::cell::Cell;
+    use core::cmp::Ordering;
+
+    use super::{scan, PayloadError};
+
+    /// A line's duplicate-test key that counts every comparison made of it.
+    struct Counted<'a> {
+        value: u32,
+        comparisons: &'a Cell<u64>,
+    }
+
+    impl Ord for Counted<'_> {
+        fn cmp(&self, other: &Self) -> Ordering {
+            self.comparisons.set(self.comparisons.get() + 1);
+            self.value.cmp(&other.value)
+        }
+    }
+
+    impl PartialOrd for Counted<'_> {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
+    impl PartialEq for Counted<'_> {
+        fn eq(&self, other: &Self) -> bool {
+            self.value == other.value
+        }
+    }
+
+    impl Eq for Counted<'_> {}
+
+    /// AUTH-2.15's test costs `scan` a logarithmic number of comparisons per
+    /// line, never a search of the lines before it — what keeps a `pub`
+    /// parser handed an uncapped record from going quadratic in its line
+    /// count. Over 4096 distinct lines a search makes n(n−1)/2 ≈ 8·10⁶
+    /// comparisons and an ordered-set insert at most one node's keys per tree
+    /// level, well under the 128 per line allowed here; the floor of one per
+    /// line after the first proves the counter is live.
+    #[test]
+    fn the_duplicate_rule_makes_logarithmic_comparisons_per_line() {
+        const LINES: u64 = 4096;
+        let comparisons = Cell::new(0);
+        let record = core::iter::once("h".to_owned())
+            .chain((0..LINES).map(|i| i.to_string()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parsed = scan(
+            record.as_bytes(),
+            "h",
+            |value: &u32| Counted { value: *value, comparisons: &comparisons },
+            |n, line| line.parse::<u32>().map_err(|_| PayloadError::BadLine(n)),
+        );
+        assert_eq!(parsed.map(|items| items.len() as u64), Ok(LINES));
+        let made = comparisons.get();
+        assert!(made >= LINES - 1, "{made} comparisons: the counter is not live");
+        assert!(
+            made <= LINES * 128,
+            "{made} comparisons over {LINES} lines: the duplicate test searches"
+        );
+    }
+}

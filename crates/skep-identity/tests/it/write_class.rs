@@ -197,11 +197,10 @@ fn a_subtype_by_prefix_is_a_member_of_its_class() {
     assert_eq!(t.write_class(&[unit(&[1, 1, 0, 1, 0, 1, 0, 2, 1, 7])]), None, "no credential subtypes");
 }
 
-/// `kind_of` UNCHANGED: the credential half of the input is an EQUAL copy of
-/// the `TypeAddrs` it was built from, answering the same on every slot — a
-/// credential unit, a credential "subtype" (`None`), a two-span slot (`None`)
-/// — and the write classifier's `Credential` arm is exactly that answer
-/// lifted.
+/// `kind_of` UNCHANGED: on every slot — a credential unit, a credential
+/// "subtype" (`None`), a two-span slot (`None`), a class address (`None`) —
+/// the write classifier's `Credential` arm is exactly the answer `kind_of`
+/// gives on the `TypeAddrs` the input was built from, in both directions.
 #[test]
 fn kind_of_is_unchanged_and_is_the_credential_arm() {
     let t = types();
@@ -214,15 +213,9 @@ fn kind_of_is_unchanged_and_is_the_credential_arm() {
         vec![unit(T_ENROLL), unit(T_RETIRE)],
         vec![unit(T_GRANT)],
     ] {
-        assert_eq!(t.credential().kind_of(&slot), plain.kind_of(&slot), "an equal copy answers alike");
         match plain.kind_of(&slot) {
             Some(kind) => assert_eq!(t.write_class(&slot), Some(WriteClass::Credential(kind))),
             None => assert!(!matches!(t.write_class(&slot), Some(WriteClass::Credential(_)))),
         }
     }
-    assert_eq!(
-        t.credential(),
-        &plain,
-        "the input carries an equal copy of the TypeAddrs it was built from"
-    );
 }

@@ -85,7 +85,7 @@ pub fn enroll_atom_flagged(keys: &[(&SigningKey, bool)]) -> String {
         .iter()
         .map(|(sk, anchor)| Enrollment::new(public_key_of(sk), *anchor, None).expect("no label"))
         .collect();
-    json_atom(&String::from_utf8(encode_enroll(&entries)).expect("utf-8"))
+    json_atom(&encode_enroll(&entries))
 }
 
 pub fn hex(bytes: &[u8]) -> String {
@@ -150,13 +150,12 @@ pub fn claim_board(port: u16) {
     );
     assert_eq!(acked_addr(&v), CLAIMANT_DOC1, "the home mint is doc 1");
     // The enrollment record — the anchor and the device key — as ONE ATOM.
-    let record = encode_enroll(&[
+    let record_text = encode_enroll(&[
         Enrollment::new(public_key_of(&anchor_key()), true, Some("paper-a".into()))
             .expect("a legal label"),
         Enrollment::new(public_key_of(&device_key()), false, Some("notebook".into()))
             .expect("a legal label"),
     ]);
-    let record_text = String::from_utf8(record).expect("the record grammar is UTF-8");
     let atom = serde_json::to_string(&Value::String(record_text)).expect("json string");
     // The atom's insert carries the DEPOSIT DECLARATION (PUB-2.63; the
     // DECLARED horn of PUB-9.13): doc 1 is born published, and an undeclared

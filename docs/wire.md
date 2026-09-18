@@ -982,8 +982,18 @@ client's own admission tests need. `doc` is the trunk document the
 argument projects to (a version member answers its document's state);
 `published` its publication bit; `owner` its owner account (always
 present for a registered document); `birth` its birth version `D.1` and
-`birth_extent` that version's arranged content count, both present
-together once the document has a chain member and both `null` before it.
+`birth_extent` that version's BIRTH CONTENT — the content `D.1` was
+minted with, the leading runs of its arrangement at the mint, counted; a
+deposit is no part of it — both present together once the document has a
+chain member and both `null` before it. `birth_extent` is FROZEN at the
+mint (PUB-3.19): while `D.1` is still the chain's head a declared
+deposit appends to its arrangement (`insert`, §Arrangement), so its
+arranged content count grows and this value does not — the same at every
+later position, on `/op-at` as on `/op` — and a client subtracts
+nothing. One residue, as built: a `publish` with NO runs journals no
+arrangement for the member it mints, so a birth version born EMPTY that
+way answers `0` until it takes a deposit and that deposit's width after;
+no conforming mint is empty.
 
 <!-- wire: response doc_metadata -->
 ```json
@@ -1667,8 +1677,12 @@ seat above it, and that seat's principal.
 **`doc_metadata`** — the publication metadata a client needs to run
 PUB-3.19's admission test itself (v7.6, PUB round 2 lane 3.4): whether
 `doc` is published, its owner account, and its birth version with that
-version's base extent — a client images one edition's content over the
-birth version to decide admission, and reads nothing else here. `doc` is
+version's birth content (`birth_extent`) — a client images one edition's
+content over positions `1` through `birth_extent` of the birth version
+to decide admission, and reads nothing else here. That extent is what
+the edition was BORN with: a deposit the edition took while its birth
+version was still the head lies past it and is no part of what a claim
+is compared against, so a deposited edition still matches. `doc` is
 a document argument (unreadable → `withheld`; unregistered →
 `doc_not_registered`); a version member answers its DOCUMENT's state.
 → `doc_metadata`.

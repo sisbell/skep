@@ -209,6 +209,208 @@ fn doc_metadata_projects_a_version_member_to_its_document() {
     sd.shutdown();
 }
 
+/// The content extent `doc` answers — `retrieve_doc_v_span_set`'s content
+/// span width, `0` when the set carries none.
+fn content_extent(port: u16, token: &str, doc: &str) -> u64 {
+    next_content_ordinal(port, Some(token), doc) - 1
+}
+
+/// The `birth_extent` a `doc_metadata` answer carries, as the wire spells it.
+fn birth_extent(v: &Value) -> Option<&str> {
+    expect_resp(v, "doc_metadata")["birth_extent"].as_str()
+}
+
+/// PUB-3.19 as RES-276 reads it, under the owner's D2 (the pack's member-state
+/// row 1 — the ONE-MEMBER EDITION AS HEAD): `birth_extent` is the content the
+/// home was BORN with, FROZEN at the mint. A home born with N positions, then
+/// a declared deposit into `D.1` while `D.1` is still the head: the head's
+/// arrangement grows (PUB-2.66) and `doc_metadata` still answers
+/// `birth_extent == N`, on the trunk and on the member, on `/op` and — as of a
+/// position before the deposit and one after it — on `/op-at`, the same value.
+#[test]
+fn birth_extent_stays_at_the_birth_content_when_the_head_takes_a_deposit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+
+    // The home holds the ceremony atom, so its birth version is born with 1.
+    let member = acked_addr(&op(
+        port,
+        Some(&signed),
+        &format!(r#"{{"op":"version","d_src":"{CLAIMANT_DOC1}"}}"#),
+    ));
+    let born_at = head(port);
+    assert_eq!(birth_extent(&doc_metadata(port, Some(&signed), &member)), Some("1"));
+    assert_eq!(content_extent(port, &signed, &member), 1);
+
+    // Two declared deposits into the bare address while `D.1` is the head:
+    // each lands in `D.1` (PUB-2.66) and neither joins the birth content.
+    for (ordinal, grown) in [(2u64, 2u64), (3, 3)] {
+        expect_resp(
+            &op(
+                port,
+                Some(&signed),
+                &format!(
+                    r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":["z"],"deposit":true}}"#
+                ),
+            ),
+            "ack_addr",
+        );
+        assert_eq!(content_extent(port, &signed, &member), grown, "the head's arrangement grew");
+        for named in [CLAIMANT_DOC1, member.as_str()] {
+            let v = doc_metadata(port, Some(&signed), named);
+            assert_eq!(birth_extent(&v), Some("1"), "the birth content did not, asked of {named}: {v}");
+        }
+    }
+
+    // `/op-at`: as of the mint (before either deposit) and as of the head
+    // (after both), the same value — a historical world folds the same memo.
+    let after = head(port);
+    assert!(after > born_at, "the deposits committed");
+    let frame = format!(r#"{{"op":"doc_metadata","doc":"{CLAIMANT_DOC1}"}}"#);
+    for at in [born_at, after] {
+        let v = op_at_ok(port, Some(&signed), at, &frame);
+        assert_eq!(birth_extent(&v), Some("1"), "as of {at}: {v}");
+    }
+    sd.shutdown();
+}
+
+/// T5(b) (iii)'s daemon half and T6(b)'s VECTOR (PUB-3.19, PUB-3.106; RES-276,
+/// RES-284, RES-286's claimed half): a ONE-MEMBER edition whose claim was
+/// written over its complete content (PUB-3.10), which then takes a declared
+/// deposit. The claim read images the edition over `birth` / `birth_extent`:
+/// the image is ADDRESS FOR ADDRESS what it was at the mint — and so byte for
+/// byte, a content address naming its bytes for good — and still EQUALS the
+/// claim's FROM, so the edition stays in the selection domain and the fill's
+/// edition side does not fire MISMATCH — while the image over the member's
+/// WHOLE arrangement is one run longer, which is the extent a read that
+/// compared the live count would have used.
+#[test]
+fn a_deposited_one_member_edition_still_images_its_birth_content_under_the_claim_read() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+
+    // The edition E, born by ONE shot over a staging draft's two positions
+    // (PUB-3.11): its birth version E.1 holds exactly the confirmed runs.
+    let staged = private_draft(port, &owner, "ab");
+    let edition = published_edition(port, &signed);
+    let birth = acked_addr(&op(
+        port,
+        Some(&signed),
+        &format!(
+            r#"{{"op":"publish","doc":"{edition}","draft":"{staged}","runs":[{{"origin":"{staged}","i_start":"{staged}.0.1.1","width":"2"}}]}}"#
+        ),
+    ));
+    assert_eq!(birth, format!("{edition}.1"));
+    // The I-addresses positions `1 ..= extent` of the birth version image to,
+    // one per position — the form the claim's FROM is compared in.
+    let image_over = |extent: &str| -> Vec<String> {
+        let v = op(
+            port,
+            Some(&signed),
+            &format!(
+                r#"{{"op":"image","d":"{birth}","region":[{{"start":"1.1","width":"0.{extent}"}}]}}"#
+            ),
+        );
+        expect_resp(&v, "runs")["runs"]
+            .as_array()
+            .expect("runs")
+            .iter()
+            .flat_map(|run| {
+                addresses(
+                    run["i_start"].as_str().expect("i_start"),
+                    run["width"].as_str().expect("width"),
+                )
+            })
+            .collect()
+    };
+    let meta = doc_metadata(port, Some(&signed), &edition);
+    assert_eq!(expect_resp(&meta, "doc_metadata")["birth"].as_str(), Some(birth.as_str()));
+    assert_eq!(birth_extent(&meta), Some("2"));
+    // The edition's claim, written over its COMPLETE content at the mint
+    // (PUB-3.10): its FROM names exactly the addresses the birth images to,
+    // the draft's text re-minted under the edition's own I-space.
+    let born_with = image_over("2");
+    assert_eq!(born_with, vec![format!("{edition}.0.1.1"), format!("{edition}.0.1.2")]);
+    let claim_addr = acked_addr(&op(
+        port,
+        Some(&signed),
+        &format!(
+            r#"{{"op":"make_link","home":"{edition}","from":{{"addrs":["{}","{}"]}},"to":{{"addrs":["{CLAIMANT_DOC1}"]}},"ty":{{"addrs":["{T_EDITION}"]}}}}"#,
+            born_with[0], born_with[1]
+        ),
+    ));
+    // The claim's FROM as deposited, read back off the link: one address per
+    // position its spans cover.
+    let claim_from = || -> Vec<String> {
+        let v = op(port, Some(&signed), &format!(r#"{{"op":"read_link","a":"{claim_addr}"}}"#));
+        expect_resp(&v, "link_value")["link"]["slots"][0]
+            .as_array()
+            .expect("the FROM slot")
+            .iter()
+            .flat_map(|span| {
+                let width = span["width"].as_str().expect("width");
+                addresses(
+                    span["start"].as_str().expect("start"),
+                    width.rsplit('.').next().expect("a span width ends in its count"),
+                )
+            })
+            .collect()
+    };
+    assert_eq!(claim_from(), born_with, "at the mint FROM and extent are equal");
+
+    // A declared deposit into the edition while its birth version is the head.
+    expect_resp(
+        &op(
+            port,
+            Some(&signed),
+            &format!(
+                r#"{{"op":"insert","doc":"{edition}","at":{{"subspace":"1","ordinal":"3"}},"values":["z"],"deposit":true}}"#
+            ),
+        ),
+        "ack_addr",
+    );
+    assert_eq!(content_extent(port, &signed, &birth), 3, "the head's arrangement grew");
+
+    // The claim read, run as a client runs it: the class lookup names the
+    // claim and its home, `doc_metadata` of the home names `birth` and
+    // `birth_extent`, and the image over that extent is compared with the
+    // claim's FROM. `birth_extent` is unmoved, the image is what it was at the
+    // mint, and FROM still EQUALS it — the selection domain is not emptied
+    // (T5(b) (iii)) and the byte check compares the birth content (T6(b)'s
+    // vector).
+    let listed = edition_claims(port, Some(&signed), CLAIMANT_DOC1);
+    assert_eq!(rows(&listed), vec![(claim_addr.clone(), true)], "the claim stands: {listed}");
+    assert_eq!(listed["claims"][0]["home"].as_str(), Some(edition.as_str()));
+    let meta = doc_metadata(port, Some(&signed), &edition);
+    let extent = birth_extent(&meta).expect("a born edition carries its extent").to_string();
+    assert_eq!(extent, "2", "frozen at the mint: {meta}");
+    assert_eq!(image_over(&extent), born_with, "the birth content, address for address");
+    assert_eq!(claim_from(), image_over(&extent), "and the claim still matches it");
+    // The extent a live-count read would have compared is one position wider:
+    // its image holds the deposit, and EQUALS against the claim's FROM fails —
+    // the permanent MISMATCH, and the emptied domain, RES-276 closed.
+    let whole = image_over("3");
+    assert_eq!(whole.len(), 3, "the whole arrangement holds the deposit too");
+    assert_eq!(whole[..2], born_with[..], "the birth content is its LEADING runs");
+    assert_ne!(claim_from(), whole);
+    sd.shutdown();
+}
+
+/// The `count` I-addresses from `start` on, one per position: `start` with its
+/// last component advanced. How a run (`i_start`, `width`) and a link span
+/// (`start`, the count its `width` ends in) are brought to one form.
+fn addresses(start: &str, count: &str) -> Vec<String> {
+    let (prefix, first) = start.rsplit_once('.').expect("an element address has an ordinal");
+    let first: u64 = first.parse().expect("a decimal ordinal");
+    let count: u64 = count.parse().expect("a decimal count");
+    (first..first + count).map(|k| format!("{prefix}.{k}")).collect()
+}
+
 /// §7 item 2 — the audit-view edition-claim lookup: two editions claim the
 /// published home, one claim is then RETRACTED, and the audit view lists BOTH
 /// with the retraction stated where an active-view result set (`find_links_ftt`)

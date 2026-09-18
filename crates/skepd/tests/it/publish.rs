@@ -176,6 +176,20 @@ fn content_extent_as(port: u16, token: Option<&str>, doc: &str) -> u64 {
         .unwrap_or(0)
 }
 
+/// The BIRTH extent `doc_metadata` serves for `doc`'s document (PUB-3.19 as
+/// RES-276 reads it): the content its birth version `D.1` was minted with,
+/// frozen there — where [`content_extent`] of `D.1` is that member's LIVE
+/// arrangement, which grows with every deposit it takes as the head. Read as
+/// the guest, like [`content_extent`].
+fn birth_extent(port: u16, doc: &str) -> u64 {
+    let v = op(port, None, &format!(r#"{{"op":"doc_metadata","doc":"{doc}"}}"#));
+    expect_resp(&v, "doc_metadata")["birth_extent"]
+        .as_str()
+        .expect("a document with a chain member carries its birth extent")
+        .parse()
+        .expect("a count")
+}
+
 /// The per-byte text at content ordinals `from ..` of `doc`, read as the
 /// guest (a published document; see [`content_extent`]).
 fn text(port: u16, doc: &str, from: u64, width: u64) -> String {
@@ -352,6 +366,7 @@ fn a_daughter_lands_under_its_base_and_a_deposit_lands_in_the_head_member() {
     ));
     assert_eq!(m1, format!("{CLAIMANT_DOC1}.1"));
     assert_eq!(content_extent(port, &m1), 1);
+    assert_eq!(birth_extent(port, CLAIMANT_DOC1), 1, "born with the atom");
 
     // A deposit into the BARE address while a draft is staged off m1: it
     // lands in the head m1 (PUB-2.66), minted under doc 1's own chain.
@@ -359,6 +374,12 @@ fn a_daughter_lands_under_its_base_and_a_deposit_lands_in_the_head_member() {
     let z = acked_addr(&op(port, Some(&signed), &insert(CLAIMANT_DOC1, 2, "z", true)));
     assert_eq!(z, "1.0.1.0.1.0.1.2", "minted under the document's own content chain");
     assert_eq!(content_extent(port, &m1), 2, "the head's arrangement grew");
+    // …and the birth content did not (PUB-3.19, RES-276): the deposit is
+    // I-adjacent to the atom, so m1 now holds ONE run of two — nothing in the
+    // arrangement marks where the birth content ended, and the extent served
+    // is the one frozen at the mint.
+    assert_eq!(image(port, &m1, 1, 2), vec![(ATOM.to_string(), "2".to_string())]);
+    assert_eq!(birth_extent(port, CLAIMANT_DOC1), 1, "the birth extent stays at the mint's");
     assert_eq!(text(port, &m1, 2, 1), "z");
     assert_eq!(content_extent(port, CLAIMANT_DOC1), 2, "and the bare address floats to it");
     // wire.md §The change feed: a declared deposit "names the address the
@@ -422,6 +443,12 @@ fn a_daughter_lands_under_its_base_and_a_deposit_lands_in_the_head_member() {
     assert_eq!(content_extent(port, &m2), 3, "the head's did");
     assert_eq!(text(port, &m2, 3, 1), "y");
     assert_eq!(content_extent(port, CLAIMANT_DOC1), 3);
+    // The pack's member-state row 2 — a trunk member that took a deposit while
+    // it was the head, now pinned: its arrangement stands at two and its
+    // birth content at one, asked of any address of the chain.
+    for named in [CLAIMANT_DOC1, m1.as_str(), m2.as_str(), daughter.as_str()] {
+        assert_eq!(birth_extent(port, named), 1, "the document's birth extent, asked of {named}");
+    }
     // The other direction, and the cell that fixes the rule as "the address
     // NAMED": this deposit named the PINNED member m1 and grew m2, so an
     // entry naming the head would name an address the frame never carried.

@@ -390,15 +390,26 @@ fn require_registered_document(
 }
 
 /// The BIRTH VERSION of a trunk document — `D.1`, the slot its version chain
-/// opens at, with the arranged content count of what occupies it (PUB-8.12).
-/// `None` while the chain has no member, which is why the two halves travel
-/// as one [`BirthVersion`]: no arrangement is read for a document with no
-/// member, so the field is absent rather than zero.
+/// opens at, with the BIRTH CONTENT of what occupies it (PUB-8.12; PUB-3.19 as
+/// RES-276 reads it). `None` while the chain has no member, which is why the
+/// two halves travel as one [`BirthVersion`]: no extent is read for a
+/// document with no member, so the field is absent rather than zero.
 ///
-/// Both reads are their owner's own, asked rather than respelled: M5's
+/// The extent is the content `D.1` was BORN with — the leading runs of its
+/// arrangement at its mint — and NOT its arranged content count: while `D.1`
+/// is the head a declared deposit appends to its arrangement (PUB-2.66), and
+/// the count follows every one. The owner's ruling D2 (2026-09-17) FREEZES
+/// what is served, so no reader subtracts a remainder: a one-member edition
+/// that took a deposit still answers the extent its claim was written over
+/// (PUB-3.10), and so stays in the selection domain (RES-276) and passes the
+/// fill's edition side (RES-284, RES-286's claimed half).
+///
+/// All three reads are their owner's own, asked rather than respelled: M5's
 /// [`trunk_head`] for whether the chain has a member, M3's
 /// [`first_version_address`] for where it opens — the chain's anchor and
-/// opening ordinal being M3's alone.
+/// opening ordinal being M3's alone — and M5's
+/// [`birth_extent`](M5State::birth_extent) for the frozen extent, which M5's
+/// fold notes at the mint; that fold states the one state it cannot tell.
 ///
 /// PRECONDITION: `trunk` is DOCUMENT-tier, which [`trunk_of`] discharges at
 /// the one call site. It is stated on the parameter because that is where a
@@ -416,7 +427,7 @@ fn birth_version(m3: &M3State, m5: &M5State, trunk: &Address) -> Option<BirthVer
     trunk_head(m3, trunk)?;
     let addr = first_version_address(trunk)
         .expect("`trunk` is document-tier, the one tier that anchors a version chain");
-    let extent = m5.content_count(&addr);
+    let extent = m5.birth_extent(&addr);
     Some(BirthVersion { addr, extent })
 }
 

@@ -21,7 +21,8 @@
 //!   root sections, the hint family names, [`super::shipped_label`]'s
 //!   strings. A TRAILING component inside an authoritative slice is that
 //!   STORE's own serde field, and a private one: `map` is M4's,
-//!   `arrangements` and `provenance` are M5's, `links` is M7's. So a store
+//!   `arrangements` and `provenance` are M5's (its third, `birth_extents`, is
+//!   kept whole by name and ends no path), `links` is M7's. So a store
 //!   author renaming a field it never published has no reason to look here,
 //!   and the rename would leave the filter silently filtering nothing — which
 //!   is why every path is asserted to name a place in the tree.
@@ -105,6 +106,17 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 ///   ARRANGEMENT and LINK-SUBSPACE sections keyed by an unreadable document
 ///   leave (M5's per-document arrangement holds both subspaces; provenance
 ///   is keyed by the placing document).
+/// * `authoritative.arrangement.birth_extents` — KEPT whole (the owner's
+///   ruling, 2026-09-18). Every key M5's fold writes to its birth memo
+///   (PUB-3.19) is a VERSION MEMBER — a trunk's opening `D.1` — and every
+///   version address that exists names a PUBLISHED state, forever (PUB-2.10;
+///   a private document is versionless, PUB-2.9). So no entry is keyed by a
+///   document some reader class cannot open, and no reader class is owed
+///   less than the whole map; a reduction by the member's document would
+///   have nothing to drop in any world an op builds, which is why
+///   `every_reduced_path_actually_reduces` could not hold one. The
+///   disposition rests on that key set: a memo keyed by anything but a
+///   version member owes a reduction here.
 /// * `authoritative.links.links` — a LINK homed in an unreadable document
 ///   leaves.
 /// * `publication` — the SECTION reduced per entry to the readable drafts:
@@ -742,7 +754,9 @@ mod tests {
             // statement — listed so a fifth is a decision and not a default.
             ("namespace", &["frontiers", "nodes", "principals", "publication"][..]),
             ("content", &["map"]),
-            ("arrangement", &["arrangements", "provenance"]),
+            // M5's two keyed sections reduced, and its birth memo kept WHOLE
+            // with the reason in `filter_tree`'s statement.
+            ("arrangement", &["arrangements", "birth_extents", "provenance"]),
             // M7's skip-serialized hints occupy no bytes and so no key.
             ("links", &["links"]),
         ] {

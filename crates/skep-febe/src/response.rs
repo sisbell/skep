@@ -46,14 +46,19 @@ pub struct EditionClaim {
 ///
 /// One value rather than two fields, because the two are one fact: a document
 /// whose chain has no member has neither, and a document with one has both.
-/// `extent` is that member's arranged content count, which a version never
-/// changes (PUB-2.50), so it is the base extent a client measures an edition
-/// against.
+/// `extent` is that member's BIRTH CONTENT (PUB-3.19 as RES-276 reads it; the
+/// owner's D2): the content it was minted with, the leading runs of its
+/// arrangement, which a deposit never grows. It is NOT the member's arranged
+/// content count — a birth version is the head until a second member exists,
+/// and a head's arrangement takes every declared deposit (PUB-2.66) — so it
+/// is served frozen at the mint, the same at every later position, and is
+/// the base extent a client measures an edition against with nothing to
+/// subtract.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BirthVersion {
     /// The chain's opening member, `D.1`.
     pub addr: Address,
-    /// That member's arranged content count.
+    /// The content count that member was BORN with; a deposit is no part of it.
     pub extent: Nat,
 }
 

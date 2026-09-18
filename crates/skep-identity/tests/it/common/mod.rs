@@ -72,8 +72,11 @@ pub const CLAIMANT: &[u32] = &[1, 1, 0, 2];
 /// A delegator account (bootstrap tier).
 pub const ORG: &[u32] = &[1, 1, 0, 3];
 /// An account delegated BENEATH `ORG` (its parent is an account, so its
-/// delegator is `Account(ORG)` — AUTH-2.65).
-pub const NESTED: &[u32] = &[1, 1, 0, 3, 1];
+/// delegator is `Account(ORG)` — AUTH-2.65). A LATER child `inc(ORG, 2)`, not
+/// ORG's computed first sub-account: RES-80 (AUTH-2.62) makes the FIRST child
+/// of a bootstrap-tier account the un-genesis-able agent space, so a fixture
+/// that genesises a subdivision uses a later child.
+pub const NESTED: &[u32] = &[1, 1, 0, 3, 2];
 /// An ordinary bootstrap-tier account.
 pub const ACCT_A: &[u32] = &[1, 1, 0, 5];
 /// Another bootstrap-tier account.

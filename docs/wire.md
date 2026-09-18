@@ -398,27 +398,30 @@ the home document first — the convention is ONE composite atom, so one
 address names the whole record — then deposit a link whose `from` names
 those positions (endset order, bytes concatenated; every named position
 must be in the home's own space and occupied). A record is capped at
-64 KiB and reads:
+64 KiB and is ONE JSON OBJECT, admitted only in its canonical encoding:
 
 ```
-skep-enroll v1
-anchor ed25519 <64 hex public key> <label…>
-ed25519 <64 hex public key> <label…>
+{"type":"skep-enroll","keys":[{"alg":"ed25519","key":"<64 hex public key>","anchor":true,"label":"<label>"},{"alg":"ed25519","key":"<64 hex public key>","anchor":false}]}
 ```
 
 ```
-skep-retire v1
-<64 hex fingerprint>
+{"type":"skep-retire","fingerprints":["<64 hex fingerprint>"]}
 ```
 
-Line 1 is the header, byte-exact; one key (or fingerprint) per line;
-the LEADING token `anchor` marks an anchor key, and the flag is fixed
-for the fingerprint's lifetime; the label is everything after the hex,
-verbatim; `sig …` lines are skipped (reserved); lines split on `\n`
-alone; hex parses case-insensitively and is lowercase canonically. An
-unparseable record makes the deposit permanently inert — the daemon
-refuses it up front as `malformed_payload:<sub>` (§Credential
-refusals).
+`type` is the record kind, byte-exact and keyed to the link's type slot;
+`keys` (or `fingerprints`) is a non-empty array in the record's own
+order; each key entry is `{alg, key, anchor, label?}` in that member
+order — `anchor` a REQUIRED boolean marking an anchor key (the flag is
+fixed for the fingerprint's lifetime), `label` OPTIONAL (present only
+where a label exists, never empty, never containing a newline). The
+optional `sig` member is reserved, canonically LAST, and IGNORED
+whatever it holds. The canonical encoding pins members in schema order,
+no whitespace outside strings, lowercase hex, the shortest JSON escapes
+and no others, and no byte after the closing brace — a record is
+admitted only where its bytes are that encoding of every member it
+carries, `sig` included. An unparseable or non-canonical record makes
+the deposit permanently inert — the daemon refuses it up front as
+`malformed_payload:<sub>` (§Credential refusals).
 
 **The ceremony** is the unclaimed board's one admitted write sequence
 (worked end-to-end in §A first board): `delegate` from principal 0 →
@@ -1347,9 +1350,9 @@ type (§The claim ceremony and credentials) — run a stricter order:
   payload parse, so a draft-homed deposit answers it whatever its record
   says); and the payload joins
   `malformed_payload:<sub>` with `<sub>` one of `too_large`,
-  `foreign_content`, `missing_value`, `not_utf8`, `bad_header`,
-  `bad_line:<n>`, `duplicate_key:<n>`, `empty` (`<n>` a 1-based line
-  number, the record header being line 1).
+  `foreign_content`, `missing_value`, `not_utf8`, `bad_record`,
+  `duplicate_key:<n>`, `empty` (`<n>` a 1-based ENTRY index into the
+  record's `keys`/`fingerprints` array).
 * Then the daemon's own slots, in order: `undecodable_key` (valid-hex
   key bytes that decode to no Ed25519 point can never sign — refused at
   enrollment rather than discovered at a handshake);
@@ -2521,7 +2524,7 @@ names the whole record:
 
 ```
 POST /op   (session)   {"op": "insert", "doc": <doc 1>, "at": {"subspace": "1", "ordinal": "1"}, "deposit": true,
-                        "values": [{"atom": "skep-enroll v1\nanchor ed25519 <64 hex> paper\ned25519 <64 hex> notebook\n"}]}
+                        "values": [{"atom": "{\"type\":\"skep-enroll\",\"keys\":[{\"alg\":\"ed25519\",\"key\":\"<64 hex>\",\"anchor\":true,\"label\":\"paper\"},{\"alg\":\"ed25519\",\"key\":\"<64 hex>\",\"anchor\":false,\"label\":\"notebook\"}]}"}]}
 ```
 
 The insert is DECLARED (`"deposit": true`, §Arrangement): doc 1 is born

@@ -313,6 +313,11 @@ fn build_fixture(
     // (siblings); X → C under Ax (sub-delegation).
     let acc_p = delegate(port, boot, "1", P_PARENT);
     let p = &tokens.by_col[3];
+    // RES-80 (AUTH-2.62): acc_p is node-parented (bootstrap-tier), so its
+    // computed first sub-account is the AGENT SPACE and takes no genesis.
+    // Reserve it so acc_x is a LATER child, whose hire into acc_p's doc 1 is
+    // honored.
+    reserve_agent_space(port, p, &acc_p, 990_001);
     let acc_x = delegate(port, p, &acc_p, P_OWNER);
     let acc_s = delegate(port, p, &acc_p, P_SIBLING);
     let x = &tokens.owner;

@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 
 use im::OrdMap;
 use serde::{Deserialize, Serialize};
-use skep_address::Address;
+use skep_address::{checked_inc, parent, Address};
 
 use crate::key::Fingerprint;
 use crate::keyset::{Enrolled, KeySet};
@@ -168,15 +168,43 @@ impl IdentityState {
     }
 
     /// AUTH-2.62 — the genesis registry:
-    /// `Account(D) ⇒ Some(D)`; `Bootstrap ⇒ Some(claimant | A)` (the
-    /// account's OWN space while the board is unclaimed, the CLAIMANT's once
-    /// claimed); `None ⇒ None` (no genesis ever possible — every seeding
-    /// attempt `NotGenesisRegistry`, AUTH-2.63; unreachable for an address
-    /// M3 admits as an account, pinned for totality). Consulted ONLY by the
-    /// enroll genesis arm (AUTH-2.64).
+    /// the COMPUTED FIRST SUB-ACCOUNT `inc(B, 1)` of a BOOTSTRAP-TIER account
+    /// `B` (AUTH-2.65) ⇒ `None` — the RES-80 arm AHEAD of the three, the AGENT
+    /// SPACE `X.1` the ceremony reserves (RES-64), whose `S` is empty at every
+    /// instant and whose every seeding attempt is `NotGenesisRegistry` by
+    /// AUTH-2.71's FIRST refusal arm, from any hand, in any session, on every
+    /// board, forever; then `Account(D) ⇒ Some(D)`; `Bootstrap ⇒
+    /// Some(claimant | A)` (the account's OWN space while the board is
+    /// unclaimed, the CLAIMANT's once claimed); a `None` delegator ⇒ `None`.
+    /// `None ⇒` NO genesis is ever possible for the address: every seeding
+    /// attempt is `Inert(NotGenesisRegistry)` (AUTH-2.63) — for the agent space
+    /// the LOAD-BEARING refusal of that space (AUTH-5.87), for a `None`
+    /// delegator unreachable for an address M3 admits as an account, BOTH
+    /// pinned for totality. Consulted ONLY by the enroll genesis arm
+    /// (AUTH-2.64). THE FIRST ARM IS CRATE-LOCAL ARITHMETIC (AUTH-2.62,
+    /// RES-80): `parent()` and `inc(·, 1)` over the address, `B`'s tier read
+    /// through the EXISTING `delegator`/`owner_of` seam — NO seam method added,
+    /// no M3 query beyond the ω the registry already consults, AUTH-2.31's four
+    /// facts unmoved.
     fn genesis_registry(&self, ctx: &impl FoldCtx, subject: &Address) -> Option<Address> {
         match delegator(ctx, subject)? {
-            Delegator::Account(d) => Some(d),
+            Delegator::Account(d) => {
+                // AUTH-2.62's RES-80 arm — `subject == inc(B, 1)` for a
+                // BOOTSTRAP-TIER `B` (AUTH-2.65) ⇒ None. `B = parent(subject)`;
+                // its tier is `delegator(B) == Bootstrap`; the first-child test
+                // is `checked_inc(B, 1) == subject` (k = 1 always preserves T4,
+                // so `ok()` is the value; a peer/subdivision `inc(B, k≥2)` and
+                // a descendant fail the equality and take `Some(d)`).
+                let first_child_of_bootstrap = parent(subject).is_some_and(|b| {
+                    checked_inc(&b, 1).ok().as_ref() == Some(subject)
+                        && matches!(delegator(ctx, &b), Some(Delegator::Bootstrap))
+                });
+                if first_child_of_bootstrap {
+                    None
+                } else {
+                    Some(d)
+                }
+            }
             Delegator::Bootstrap => Some(self.claimant.clone().unwrap_or_else(|| subject.clone())),
         }
     }
@@ -282,6 +310,27 @@ impl IdentityState {
             // consulted here ONLY (AUTH-2.64).
             let registry = self.genesis_registry(ctx, subject);
             if registry.as_ref() == Some(home_account) {
+                // THE HANDOFF LATCH (AUTH-2.71), INSIDE the cell the genesis
+                // arm would otherwise honor and AHEAD of its post — so
+                // AUTH-2.72's written order below is unmoved, and no refusal
+                // moves at an account the genesis arm never reached. SCOPE: the
+                // SUBDIVISIONS alone (the `Some(Account(_))` arm), NEVER the
+                // bootstrap-delegated tier (AUTH-2.65), where a person's second
+                // top-level account is a sibling and a same-key genesis is
+                // legitimate. It refuses `NotGenesisRegistry` where any key the
+                // genesis names already stands ENROLLED in the set that OPENS
+                // THE ACCOUNT ABOVE `A` — a handoff gives an account to a party
+                // that could not already open it; a party that could needs no
+                // genesis. Comparand EMPTY (never-keyed ancestors) ⇒ the arm
+                // does not fire (RES-137); a fingerprint RETIRED in the set
+                // above does not count (RES-138 — the ENROLLED half only). NO
+                // new token, NO seam fact: it reads `S(·)` at `parent()`
+                // addresses (I2, AUTH-2.90; the token pin, AUTH-2.72).
+                if matches!(delegator(ctx, subject), Some(Delegator::Account(_)))
+                    && self.handoff_latch_fires(subject, enrollments)
+                {
+                    return Verdict::Inert(Inert::NotGenesisRegistry);
+                }
                 let keys: Vec<Enrolled> = enrollments.iter().map(enrolled_of).collect();
                 return Verdict::Honored(Effect::Genesis {
                     account: subject.clone(),
@@ -303,6 +352,46 @@ impl IdentityState {
         // attempt on a seeded account; every later delegator-homed record is
         // inert forever (I5, AUTH-2.100).
         Verdict::Inert(Inert::NotGenesisRegistry)
+    }
+
+    /// AUTH-2.71 — the handoff latch's comparand test: does any key the genesis
+    /// names already stand ENROLLED in the set that opens the account above
+    /// `subject`? The ENROLLED half only (`contains` reads enrolled-NOW — a
+    /// retired fingerprint opens nothing, I4 AUTH-2.98, RES-138); a comparand
+    /// with no non-empty set above answers `false` (the walk's terminus,
+    /// RES-137).
+    fn handoff_latch_fires(&self, subject: &Address, enrollments: &[Enrollment]) -> bool {
+        match self.opening_set_above(subject) {
+            None => false,
+            Some(opening) => enrollments
+                .iter()
+                .any(|enrollment| opening.contains(&Fingerprint::of(&enrollment.key))),
+        }
+    }
+
+    /// AUTH-2.71 / AUTH-4.30 (i) — the set that OPENS THE ACCOUNT ABOVE `a`:
+    /// the parent's set where it is non-empty, else the set of the nearest
+    /// account above the parent whose set is not empty — the upward walk over
+    /// `self.sets` by `parent()` arithmetic (crate-local, no seam fact, the
+    /// class of `inc(a, 2)` AUTH-2.126 already takes). `None` where NO account
+    /// above `a` holds a non-empty set — the walk's TERMINUS, pinned FOR
+    /// TOTALITY (AUTH-2.71): `step` must be total (AUTH-2.57) and I2
+    /// (AUTH-2.90) admits no band where one build reads the empty set and
+    /// another walks past the account tier. Every row of `self.sets` is KEYED
+    /// (its enrolled map non-empty — the standing invariant), so a present row
+    /// is a non-empty opening set; the `is_empty` guard keeps this total under
+    /// a value whose source did not.
+    fn opening_set_above(&self, a: &Address) -> Option<&KeySet> {
+        let mut cursor = parent(a);
+        while let Some(above) = cursor {
+            if let Some(set) = self.sets.get(&above) {
+                if !set.is_empty() {
+                    return Some(set);
+                }
+            }
+            cursor = parent(&above);
+        }
+        None
     }
 
     /// AUTH-2.66 item 4, RETIRE: arm entry, parse, home pin, arms — the

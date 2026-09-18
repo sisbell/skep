@@ -807,10 +807,31 @@ pub fn seat_stranger(port: u16, id: u64) -> Seat {
     Seat { account, session, doc1 }
 }
 
+/// Reserve `parent`'s AGENT SPACE — its computed first sub-account `X.1` —
+/// with a HELD, keyless delegation. Since RES-80 (AUTH-2.62) `X.1` takes NO
+/// genesis (`not_genesis_registry` forever), so a hire keys a LATER child of
+/// `parent`; reserving `X.1` makes the next `next_account_prefix(parent)` a
+/// later child, whose genesis registry is `parent` (AUTH-2.62's
+/// `Some(Account(parent))` arm) and whose hire into `parent`'s doc 1 is
+/// honored. `by` owns `parent`; `holder_id` is a throwaway principal. Answers
+/// the agent-space account. Delegation is ω-gated, never a credential write, so
+/// a bare `by` suffices.
+pub fn reserve_agent_space(port: u16, by: &str, parent: &str, holder_id: u64) -> String {
+    let agent_space = next_prefix_under(port, Some(by), parent);
+    expect_resp(
+        &op(port, Some(by), &format!(r#"{{"op":"delegate","new_prefix":"{agent_space}","new_id":{holder_id}}}"#)),
+        "ack_addr",
+    );
+    agent_space
+}
+
 /// A sub-account the OWNER delegates beneath the claimant's account, its
 /// home minted — a SUBTREE reader of every draft of the owner's (PUB-1.4,
-/// PUB-1.32).
+/// PUB-1.32). The claimant's computed first sub-account is the AGENT SPACE and
+/// takes no genesis (RES-80), so this reserves it first and seats a LATER
+/// child, which a hire into the claimant's doc 1 can key.
 pub fn seat_sub_account(port: u16, owner: &str, id: u64) -> Seat {
+    reserve_agent_space(port, owner, CLAIMANT_ACCOUNT, 100_000 + id);
     let (account, session) = delegate_under(port, owner, CLAIMANT_ACCOUNT, id);
     let doc1 = create_doc(port, &session, &account);
     Seat { account, session, doc1 }

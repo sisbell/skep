@@ -1,6 +1,7 @@
-//! The line grammar and parse-fault precedence — the I2 corpus's
-//! tokenization and parse-precedence vectors (AUTH-2.96), over
-//! AUTH-2.6–2.19 and the payload-type rules AUTH-1.23–1.28.
+//! The JSON record schemas and the parse-fault precedence — the I2
+//! canonical-profile corpus (AUTH-2.96 §2.1), over AUTH-2.128–2.130 and the
+//! payload-type rules AUTH-1.23–1.28. Every malformation below is measured
+//! against ONE canonical record; each answers the pinned token or is admitted.
 
 use crate::common;
 
@@ -12,6 +13,16 @@ use skep_identity::{
 
 fn hex(i: u8) -> String {
     key(i).to_hex()
+}
+
+fn fphex(i: u8) -> String {
+    fp(i).to_hex()
+}
+
+/// The one canonical enrolment record — one device key, no label — every
+/// malformation below mutates.
+fn canonical_enroll_record() -> String {
+    encode_enroll(&[Enrollment::new(key(1), false, None).expect("label-free")])
 }
 
 #[track_caller]
@@ -46,331 +57,366 @@ fn ok_retire(bytes: &[u8]) -> Vec<Fingerprint> {
     }
 }
 
-// ------------------------------------------------------------ tokenization
+// ------------------------------------------------- the canonical profile
 
-/// Corpus: a CRLF record — header ⇒ `bad_header`; a CRLF fingerprint line ⇒
-/// `bad_line` (AUTH-2.6: `\r` is an ordinary payload byte).
+/// The canonical record is admitted — both kinds (AUTH-2.128–2.130).
 #[test]
-fn cr_is_an_ordinary_payload_byte() {
-    let crlf_enroll = format!("skep-enroll v1\r\ned25519 {}\r\n", hex(1));
-    assert_eq!(err_enroll(crlf_enroll.as_bytes()), PayloadError::BadHeader);
-
-    let crlf_fp_line = format!("skep-retire v1\n{}\r\n", fp(1).to_hex());
-    assert_eq!(err_retire(crlf_fp_line.as_bytes()), PayloadError::BadLine(2));
+fn a_canonical_record_is_admitted() {
+    assert_eq!(
+        ok_enroll(canonical_enroll_record().as_bytes()),
+        vec![Enrollment::new(key(1), false, None).unwrap()]
+    );
+    assert_eq!(ok_retire(encode_retire(&[fp(1)]).as_bytes()), vec![fp(1)]);
 }
 
-/// Corpus: header with a trailing space; a leading blank line — `bad_header`
-/// (AUTH-2.7: line 1, literally, byte-exact).
+/// §2.1 row 1 — a body carrying the member `keys` TWICE is `bad_record` (never
+/// the LAST value, never the first, never a parser's choice): serde takes one,
+/// the canonical re-encode carries one, the byte-identity compare differs.
 #[test]
-fn header_is_byte_exact() {
-    let trailing = format!("skep-enroll v1 \ned25519 {}\n", hex(1));
-    assert_eq!(err_enroll(trailing.as_bytes()), PayloadError::BadHeader);
-
-    let leading_blank = format!("\nskep-enroll v1\ned25519 {}\n", hex(1));
-    assert_eq!(err_enroll(leading_blank.as_bytes()), PayloadError::BadHeader);
-
-    assert_eq!(err_enroll(b""), PayloadError::BadHeader);
-    assert_eq!(err_retire(b"skep-enroll v1\n"), PayloadError::BadHeader);
+fn a_duplicate_member_is_bad_record() {
+    let record = format!(
+        r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}],"keys":[{{"alg":"ed25519","key":"{h}","anchor":true}}]}}"#,
+        h = hex(1)
+    );
+    assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadRecord);
 }
 
-/// Corpus: a whitespace-only line — `bad_line` naming it (AUTH-2.7; a blank
-/// line is zero-length and ignored, a whitespace-only line is not blank).
+/// §2.1 row 2 — ANY byte after the closing brace is `bad_record` (AUTH-2.130
+/// clause 5).
 #[test]
-fn whitespace_only_line_is_bad_line_naming_it() {
-    let record = format!("skep-enroll v1\ned25519 {}\n \n", hex(1));
-    assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadLine(3));
+fn any_byte_after_the_closing_brace_is_bad_record() {
+    for suffix in ["\n", " ", "x", "\t", "}"] {
+        let record = format!("{}{suffix}", canonical_enroll_record());
+        assert_eq!(
+            err_enroll(record.as_bytes()),
+            PayloadError::BadRecord,
+            "suffix {suffix:?}"
+        );
+    }
 }
 
-/// Corpus: enroll key line ending in the separator (empty remainder) —
-/// `bad_line` (AUTH-2.10: the test is the REMAINDER, never the last byte).
+/// §2.1 row 3 — a leading UTF-8 BOM is `bad_record`.
 #[test]
-fn empty_label_remainder_is_bad_line() {
-    let record = format!("skep-enroll v1\ned25519 {} \n", hex(1));
-    assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadLine(2));
+fn a_leading_bom_is_bad_record() {
+    let record = format!("\u{feff}{}", canonical_enroll_record());
+    assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadRecord);
 }
 
-/// Corpus: `ed25519 <hex> my phone ` — honored; label verbatim with its
-/// trailing 0x20 (AUTH-1.24, AUTH-2.10).
+/// §2.1 row 4 — insignificant whitespace is `bad_record` (AUTH-2.130 clause 2):
+/// a space after a `:` or a `,`, and a `\r`/`\n` outside a string (a CRLF or
+/// pretty-printed body).
 #[test]
-fn label_keeps_trailing_space_verbatim() {
-    let record = format!("skep-enroll v1\ned25519 {} my phone \n", hex(1));
+fn insignificant_whitespace_is_bad_record() {
+    let h = hex(1);
+    let after_colon =
+        format!(r#"{{"type": "skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}]}}"#);
+    assert_eq!(err_enroll(after_colon.as_bytes()), PayloadError::BadRecord);
+
+    let after_comma =
+        format!(r#"{{"type":"skep-enroll", "keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}]}}"#);
+    assert_eq!(err_enroll(after_comma.as_bytes()), PayloadError::BadRecord);
+
+    let crlf = format!(
+        "{{\r\n\"type\":\"skep-enroll\",\"keys\":[{{\"alg\":\"ed25519\",\"key\":\"{h}\",\"anchor\":false}}]}}"
+    );
+    assert_eq!(err_enroll(crlf.as_bytes()), PayloadError::BadRecord);
+}
+
+/// §2.1 row 5 — a non-shortest escape (`A` where the value is `A`), an
+/// escaped `/`, and a `\u` escape for a character above U+001F are each
+/// `bad_record` (AUTH-2.130 clause 3: escape NOTHING else). The backslash is
+/// built at runtime so no source escape is decoded before the JSON sees it.
+#[test]
+fn non_canonical_escapes_are_bad_record() {
+    let h = hex(1);
+    let bs = char::from(92); // a backslash
+    for body in ["u0041", "/", "u00e9"] {
+        let record = format!(
+            r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false,"label":"{bs}{body}"}}]}}"#
+        );
+        assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadRecord, "escape {bs}{body}");
+    }
+}
+
+/// §2.1 row 6 — `"\ud800"` (legal JSON text, no Unicode scalar) is
+/// `bad_record` on every implementation, never accept-on-one.
+#[test]
+fn a_lone_surrogate_is_bad_record() {
+    let record = format!(
+        r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{}","anchor":false,"label":"{}ud800"}}]}}"#,
+        hex(1),
+        char::from(92)
+    );
+    assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadRecord);
+}
+
+/// §2.1 row 7 — reordered members are `bad_record`: `keys` before `type`, `sig`
+/// not last, an entry's `anchor` before its `key` (AUTH-2.130 clause 1).
+#[test]
+fn reordered_members_are_bad_record() {
+    let h = hex(1);
+    let keys_first =
+        format!(r#"{{"keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}],"type":"skep-enroll"}}"#);
+    assert_eq!(err_enroll(keys_first.as_bytes()), PayloadError::BadRecord);
+
+    let sig_not_last =
+        format!(r#"{{"type":"skep-enroll","sig":"00","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}]}}"#);
+    assert_eq!(err_enroll(sig_not_last.as_bytes()), PayloadError::BadRecord);
+
+    let anchor_first =
+        format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","anchor":false,"key":"{h}"}}]}}"#);
+    assert_eq!(err_enroll(anchor_first.as_bytes()), PayloadError::BadRecord);
+}
+
+/// §2.1 row 8 — an uppercase-hex `key` or `fingerprints` entry is `bad_record`:
+/// the PARSE is case-insensitive (AUTH-2.17) but the BODY is not the canonical
+/// encoding (AUTH-2.130 clause 4).
+#[test]
+fn uppercase_hex_is_bad_record() {
+    // A key whose hex carries letters (0xab ⇒ "abab…"), so uppercasing differs.
+    let up = hex(0xab).to_uppercase();
+    let enroll = format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{up}","anchor":false}}]}}"#);
+    assert_eq!(err_enroll(enroll.as_bytes()), PayloadError::BadRecord);
+
+    let up = fphex(1).to_uppercase();
+    let retire = format!(r#"{{"type":"skep-retire","fingerprints":["{up}"]}}"#);
+    assert_eq!(err_retire(retire.as_bytes()), PayloadError::BadRecord);
+}
+
+/// §2.1 rows 9–11 — a label outside the AUTH-1.24 domain is `bad_record`,
+/// never Honored with `label: None`: `""`, a `\n`, and `null`.
+#[test]
+fn a_label_outside_the_domain_is_bad_record() {
+    let h = hex(1);
+    for label in [r#""label":"""#, r#""label":"a\nb""#, r#""label":null"#] {
+        let record =
+            format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false,{label}}}]}}"#);
+        assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadRecord, "{label}");
+    }
+}
+
+/// §2.1 row 12 — `"label":"my phone "` (ends in 0x20) is Honored, the label
+/// verbatim with its trailing 0x20 (AUTH-1.24).
+#[test]
+fn a_trailing_space_label_is_admitted_verbatim() {
+    let record = format!(
+        r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{}","anchor":false,"label":"my phone "}}]}}"#,
+        hex(1)
+    );
     let parsed = ok_enroll(record.as_bytes());
     assert_eq!(parsed.len(), 1);
     assert_eq!(parsed[0].label(), Some("my phone "));
     assert!(!parsed[0].anchor);
 }
 
-/// Corpus: retirement lines `<64hex> ` and `<64hex> note` — `bad_line` ⇒
-/// whole record inert on both (AUTH-2.14: no label, no trailing separator).
+/// §2.1 row 13 — an extra member on the record, and on a key entry, are each
+/// `bad_record` (AUTH-2.128 "No other member").
 #[test]
-fn retire_line_admits_nothing_after_the_fingerprint() {
-    let trailing = format!("skep-retire v1\n{} \n", fp(1).to_hex());
-    assert_eq!(err_retire(trailing.as_bytes()), PayloadError::BadLine(2));
+fn an_extra_member_is_bad_record() {
+    let h = hex(1);
+    let on_record =
+        format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}],"extra":1}}"#);
+    assert_eq!(err_enroll(on_record.as_bytes()), PayloadError::BadRecord);
 
-    let with_note = format!("skep-retire v1\n{} note\n", fp(1).to_hex());
-    assert_eq!(err_retire(with_note.as_bytes()), PayloadError::BadLine(2));
+    let on_entry =
+        format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false,"extra":1}}]}}"#);
+    assert_eq!(err_enroll(on_entry.as_bytes()), PayloadError::BadRecord);
 }
 
-/// Corpus: `ED25519 <hex>` · `ANCHOR ed25519 <hex>` · `SIG <alg> <hex>` ·
-/// `P256 <hex>` — `bad_line` naming the line on each (AUTH-2.9: keyword
-/// tokens match as bytes, lowercase; case-insensitivity is the hex tokens'
-/// alone).
+/// §2.1 row 14 — `"anchor"` absent from a key entry is `bad_record` (the flag
+/// is REQUIRED, one spelling per value — AUTH-2.128).
 #[test]
-fn uppercase_keywords_are_bad_line() {
-    for line in [
-        format!("ED25519 {}", hex(1)),
-        format!("ANCHOR ed25519 {}", hex(1)),
-        format!("SIG ed25519 {}", hex(1)),
-        format!("P256 {}", hex(1)),
-    ] {
-        let record = format!("skep-enroll v1\n{line}\n");
-        assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadLine(2));
-    }
+fn a_missing_anchor_is_bad_record() {
+    let record = format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{}"}}]}}"#, hex(1));
+    assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadRecord);
 }
 
-/// Corpus: `ed25519  <hex>` (doubled 0x20) · `ed25519\t<hex>` (tab) ·
-/// `anchor  ed25519 <hex>` — `bad_line` on each (AUTH-2.8: no collapsing; a
-/// doubled separator yields an empty token; a tab is an ordinary byte
-/// INSIDE a token).
+/// §2.1 row 15 — a `type` disagreeing with the link's kind (`skep-retire` in an
+/// enroll-typed link), any other string, and a missing `type` are each
+/// `bad_record` (the parse is keyed to the kind, AUTH-2.128).
 #[test]
-fn separator_is_exactly_one_space() {
-    for line in [
-        format!("ed25519  {}", hex(1)),
-        format!("ed25519\t{}", hex(1)),
-        format!("anchor  ed25519 {}", hex(1)),
-    ] {
-        let record = format!("skep-enroll v1\n{line}\n");
-        assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadLine(2));
-    }
+fn a_wrong_or_missing_type_is_bad_record() {
+    let h = hex(1);
+    let disagree =
+        format!(r#"{{"type":"skep-retire","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}]}}"#);
+    assert_eq!(err_enroll(disagree.as_bytes()), PayloadError::BadRecord);
+
+    let other =
+        format!(r#"{{"type":"skep-enrol","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}]}}"#);
+    assert_eq!(err_enroll(other.as_bytes()), PayloadError::BadRecord);
+
+    let missing = format!(r#"{{"keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}]}}"#);
+    assert_eq!(err_enroll(missing.as_bytes()), PayloadError::BadRecord);
 }
 
-/// Corpus: a `sig` line with garbage — skipped, whatever follows
-/// (AUTH-2.13, permanent per AUTH-2.94), on BOTH kinds (AUTH-2.14).
+/// §2.1 row 16 — a `sig` member carrying garbage is SKIPPED, and the same
+/// record with no `sig` folds to the identical table: the `sig`-bearing body is
+/// ADMITTED (AUTH-2.130's sentence ranges over the record value, `sig`
+/// included), never `bad_record` (AUTH-2.13, AUTH-2.94).
 #[test]
-fn sig_lines_are_skipped_whatever_follows() {
-    let record = format!("skep-enroll v1\nsig !! not remotely parseable !!\ned25519 {}\n", hex(1));
-    assert_eq!(ok_enroll(record.as_bytes()).len(), 1);
-
-    let record = format!("skep-retire v1\nsig\n{}\n", fp(1).to_hex());
-    assert_eq!(ok_retire(record.as_bytes()).len(), 1);
-}
-
-/// Corpus: `signature …`, `sigx`, `sig\tjunk` and `sig\r` — the skip tests
-/// the FIRST TOKEN for EQUALITY, never a prefix, and a token ends only at a
-/// 0x20 (AUTH-2.8), so a TAB- or CR-joined `sig` is ONE token too: each
-/// near-miss is an ordinary line and fails its kind's grammar (AUTH-2.8,
-/// AUTH-2.13). A prefix test, or a skip that split on any whitespace, would
-/// silently ignore a malformed line inside a STRICT grammar.
-#[test]
-fn a_token_merely_beginning_sig_is_not_a_sig_line() {
-    let record = format!("skep-enroll v1\nsignature whatever\ned25519 {}\n", hex(1));
-    assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadLine(2));
-    assert_eq!(
-        err_retire(b"skep-retire v1\nsigx\n"),
-        PayloadError::BadLine(2)
+fn a_sig_member_is_skipped_and_the_table_is_identical() {
+    let h = hex(1);
+    let without = format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}]}}"#);
+    let with = format!(
+        r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}],"sig":"deadbeef not a real signature"}}"#
     );
-    let record = format!("skep-enroll v1\nsig\tjunk\ned25519 {}\n", hex(1));
-    assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadLine(2));
-    let record = format!("skep-retire v1\nsig\r\n{}\n", fp(1).to_hex());
-    assert_eq!(err_retire(record.as_bytes()), PayloadError::BadLine(2));
+    assert_eq!(
+        ok_enroll(with.as_bytes()),
+        ok_enroll(without.as_bytes()),
+        "the sig member is skipped; the entries are identical"
+    );
+
+    let with_r = format!(r#"{{"type":"skep-retire","fingerprints":["{}"],"sig":"garbage"}}"#, fphex(1));
+    assert_eq!(ok_retire(with_r.as_bytes()), vec![fp(1)]);
 }
 
-/// Corpus: a key line whose first token is an alg the build does not carry
-/// (`mldsa44 <hex>`; `p256 <hex>` before its coordinated upgrade) —
-/// `bad_line` ⇒ whole record inert (AUTH-2.12, AUTH-2.91).
+/// §2.1 row 17 — an unadmitted alg (`mldsa44`, `p256`, `ED25519`) and a `key`
+/// of the wrong hex length are each `bad_record` ⇒ whole record inert
+/// (AUTH-2.9, AUTH-2.91).
 #[test]
-fn uncarried_alg_token_is_bad_line() {
-    for alg in ["mldsa44", "p256"] {
-        let record = format!("skep-enroll v1\n{alg} {}\n", hex(1));
-        assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadLine(2));
+fn an_unadmitted_alg_or_wrong_hex_length_is_bad_record() {
+    let h = hex(1);
+    for alg in ["mldsa44", "p256", "ED25519"] {
+        let record =
+            format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"{alg}","key":"{h}","anchor":false}}]}}"#);
+        assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadRecord, "alg {alg}");
     }
+    let short = &h[..62];
+    let record = format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{short}","anchor":false}}]}}"#);
+    assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadRecord);
 }
 
-/// Corpus: `anchor ed25519 <hex>` beside `ed25519 <hex> anchor` — honored
-/// with `anchor: true` / honored, label `anchor`, NO flag (AUTH-2.11: the
-/// anchor flag is the LEADING token and never a trailing one).
+/// §2.1 row 18 — the anchor FLAG and a label of the word `anchor` are distinct:
+/// `anchor:true` Honored with the flag; `anchor:false, label:"anchor"` Honored
+/// with NO flag (AUTH-1.26, AUTH-2.128).
 #[test]
-fn anchor_is_the_leading_token_only() {
-    let leading = format!("skep-enroll v1\nanchor ed25519 {}\n", hex(1));
-    let parsed = ok_enroll(leading.as_bytes());
+fn the_anchor_flag_and_a_label_anchor_are_distinct() {
+    let record = encode_enroll(&[
+        Enrollment::new(key(1), true, None).unwrap(),
+        Enrollment::new(key(2), false, Some("anchor".to_owned())).unwrap(),
+    ]);
+    let parsed = ok_enroll(record.as_bytes());
+    assert_eq!(parsed.len(), 2);
     assert!(parsed[0].anchor);
     assert_eq!(parsed[0].label(), None);
-
-    let trailing = format!("skep-enroll v1\ned25519 {} anchor\n", hex(1));
-    let parsed = ok_enroll(trailing.as_bytes());
-    assert!(!parsed[0].anchor);
-    assert_eq!(parsed[0].label(), Some("anchor"));
+    assert!(!parsed[1].anchor);
+    assert_eq!(parsed[1].label(), Some("anchor"));
 }
 
-/// Corpus: `anchor` alone; `anchor anchor ed25519 …` — `bad_line`
-/// (AUTH-2.11; `anchor sig …` is the same refusal).
+/// §2.1 row 19 — a duplicate ENTRY names the 1-based repeating ENTRY index,
+/// never a line number (AUTH-2.15, AUTH-1.27): entry 2 repeats entry 1's key
+/// (under the opposite flag — the same parsed key), and a retirement listing
+/// one fingerprint twice.
 #[test]
-fn malformed_anchor_lines_are_bad_line() {
-    for line in [
-        "anchor".to_owned(),
-        format!("anchor anchor ed25519 {}", hex(1)),
-        format!("anchor sig ed25519 {}", hex(1)),
-    ] {
-        let record = format!("skep-enroll v1\n{line}\n");
-        assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadLine(2));
-    }
-}
-
-/// Corpus: an uppercase-hex key line; an uppercase-hex fingerprint line —
-/// parse exactly as their lowercase forms (AUTH-2.17).
-#[test]
-fn hex_tokens_are_case_insensitive() {
-    let lower = format!("skep-enroll v1\ned25519 {}\n", hex(7));
-    let upper = format!("skep-enroll v1\ned25519 {}\n", hex(7).to_uppercase());
-    assert_eq!(ok_enroll(lower.as_bytes()), ok_enroll(upper.as_bytes()));
-
-    let lower = format!("skep-retire v1\n{}\n", fp(7).to_hex());
-    let upper = format!("skep-retire v1\n{}\n", fp(7).to_hex().to_uppercase());
-    assert_eq!(ok_retire(lower.as_bytes()), ok_retire(upper.as_bytes()));
-}
-
-/// A blank line after line 1 is ignored but still counts for numbering
-/// (AUTH-2.7, AUTH-1.27: 1-based, the header line 1).
-#[test]
-fn blank_lines_are_ignored_and_numbering_is_positional() {
-    let record = format!("skep-enroll v1\n\ned25519 {}\n", hex(1));
-    assert_eq!(ok_enroll(record.as_bytes()).len(), 1);
-
-    let record = "skep-enroll v1\n\nnot a line\n";
-    assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadLine(3));
-}
-
-/// A duplicate under EITHER flag is the same duplicate — compared as PARSED
-/// bytes, whatever the flag (AUTH-2.15).
-#[test]
-fn duplicate_across_flags_is_duplicate_key() {
+fn a_duplicate_entry_names_the_repeating_entry_index() {
+    let h = hex(3);
     let record = format!(
-        "skep-enroll v1\ned25519 {}\nanchor ed25519 {}\n",
-        hex(3),
-        hex(3)
+        r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}},{{"alg":"ed25519","key":"{h}","anchor":true}}]}}"#
     );
-    assert_eq!(err_enroll(record.as_bytes()), PayloadError::DuplicateKey(3));
+    assert_eq!(err_enroll(record.as_bytes()), PayloadError::DuplicateKey(2));
+
+    let f = fphex(2);
+    let record = format!(r#"{{"type":"skep-retire","fingerprints":["{f}","{f}"]}}"#);
+    assert_eq!(err_retire(record.as_bytes()), PayloadError::DuplicateKey(2));
 }
 
-// ------------------------------------------------------- parse precedence
-
-/// Corpus: a retirement listing one fingerprint twice, the second in
-/// uppercase — `duplicate_key` naming the repeating line (AUTH-2.15).
+/// §2.1 row 20 — an empty `keys` or `fingerprints` array is `empty`, never
+/// `nothing_changed` (AUTH-2.16).
 #[test]
-fn retire_duplicate_names_the_repeating_line() {
+fn an_empty_array_is_empty() {
+    assert_eq!(err_enroll(br#"{"type":"skep-enroll","keys":[]}"#), PayloadError::Empty);
+    assert_eq!(err_retire(br#"{"type":"skep-retire","fingerprints":[]}"#), PayloadError::Empty);
+}
+
+/// §2.1 row 21 — an unadmitted alg at entry 1 beside a duplicate at entry 3 is
+/// `bad_record`, never `duplicate_key:3` (AUTH-2.19 item 2 precedes item 3).
+#[test]
+fn an_unadmitted_alg_precedes_a_later_duplicate() {
     let record = format!(
-        "skep-retire v1\n{}\n{}\n",
-        fp(2).to_hex(),
-        fp(2).to_hex().to_uppercase()
+        r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa44","key":"{h1}","anchor":false}},{{"alg":"ed25519","key":"{h2}","anchor":false}},{{"alg":"ed25519","key":"{h2}","anchor":false}}]}}"#,
+        h1 = hex(1),
+        h2 = hex(2)
     );
-    assert_eq!(err_retire(record.as_bytes()), PayloadError::DuplicateKey(3));
+    assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadRecord);
 }
 
-/// WITHIN one line the kind's own grammar decides BEFORE the AUTH-2.15
-/// duplicate test, on both kinds: a line that repeats an earlier key AND
-/// fails its grammar is `bad_line`, never `duplicate_key`. Two pinned wire
-/// tokens hold at once here and the contract says which speaks
-/// (`PayloadError::DuplicateKey`); every other duplicate vector uses
-/// well-formed lines and every other grammar vector a single line, so the
-/// cell where both refusals hold is this one's alone.
+/// §2.1 row 22 — `{"type":"skep-enroll","keys":[]}` carrying a fourth member is
+/// `bad_record`, never `empty` (AUTH-2.19 item 2 precedes item 4).
 #[test]
-fn a_line_that_both_repeats_and_malforms_is_bad_line() {
-    // Line 3 repeats line 2's key and ends in the separator — an EMPTY label
-    // remainder, which is `bad_line` (AUTH-2.10).
-    let record = format!("skep-enroll v1\ned25519 {}\ned25519 {} \n", hex(4), hex(4));
-    assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadLine(3));
-
-    // Line 3 repeats line 2's fingerprint and carries a remainder, which the
-    // retirement grammar admits nowhere (AUTH-2.14).
-    let record = format!(
-        "skep-retire v1\n{}\n{} note\n",
-        fp(4).to_hex(),
-        fp(4).to_hex()
+fn an_empty_keys_array_with_an_extra_member_is_bad_record() {
+    assert_eq!(
+        err_enroll(br#"{"type":"skep-enroll","keys":[],"extra":1}"#),
+        PayloadError::BadRecord
     );
-    assert_eq!(err_retire(record.as_bytes()), PayloadError::BadLine(3));
 }
 
-/// Corpus: a header-only retirement — `empty`, never `nothing_changed`
-/// (AUTH-2.16, `sig` lines included).
+/// AUTH-2.19 item 1 — UTF-8 before the schema check, on both kinds.
 #[test]
-fn header_only_record_is_empty() {
-    assert_eq!(err_retire(b"skep-retire v1\n"), PayloadError::Empty);
-    assert_eq!(err_retire(b"skep-retire v1"), PayloadError::Empty);
-    assert_eq!(err_retire(b"skep-retire v1\nsig only sig lines\n"), PayloadError::Empty);
-    assert_eq!(err_enroll(b"skep-enroll v1\nsig x\n\n"), PayloadError::Empty);
-}
-
-/// Corpus: uppercase keyword at line 2 + repeated fingerprint at line 4 —
-/// `bad_line:2`, never `duplicate_key:4` (AUTH-2.19 item 3: first failing
-/// line wins).
-#[test]
-fn first_failing_line_wins() {
-    let record = format!(
-        "skep-enroll v1\nED25519 {}\ned25519 {}\ned25519 {}\n",
-        hex(1),
-        hex(2),
-        hex(2)
-    );
-    assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadLine(2));
-}
-
-/// Corpus: `skep-enroll v1\n \n` — `bad_line:2`, never `empty` (AUTH-2.19
-/// item 4: `Empty` is evaluated only after a clean scan).
-#[test]
-fn empty_is_evaluated_only_after_a_clean_scan() {
-    assert_eq!(err_enroll(b"skep-enroll v1\n \n"), PayloadError::BadLine(2));
-}
-
-/// AUTH-2.19 item 1 — UTF-8 before everything.
-#[test]
-fn not_utf8_precedes_the_header_check() {
+fn not_utf8_precedes_the_schema_check() {
     assert_eq!(err_enroll(&[0xff, 0xfe, 0xfd]), PayloadError::NotUtf8);
     assert_eq!(err_retire(&[0xc3, 0x28]), PayloadError::NotUtf8);
 }
 
-/// AUTH-2.19 item 1 over the WHOLE record: a malformed line AHEAD of the bad
-/// bytes is `not_utf8`, never `bad_line:2`; and bad bytes inside a `sig` line
-/// still refuse the record — the cell where a skip that reads a line's bytes
-/// before decoding them HONORS a record the origin refuses. The vector above
-/// also fails the header, so a line-by-line decode and a byte-level skip both
-/// keep it green.
+/// AUTH-2.130 — a body that is not JSON at all is `bad_record`, the retired
+/// LINE FORM included (RES-98: the line grammar is retired).
 #[test]
-fn not_utf8_is_decided_over_the_whole_record_sig_lines_included() {
-    let mut record = b"skep-enroll v1\nnot a line\n".to_vec();
-    record.extend_from_slice(&[0xff, b'\n']);
-    assert_eq!(err_enroll(&record), PayloadError::NotUtf8);
+fn a_non_json_body_is_bad_record() {
+    assert_eq!(err_enroll(b"nonsense"), PayloadError::BadRecord);
+    let line_form = format!("skep-enroll v1\ned25519 {}\n", hex(1));
+    assert_eq!(err_enroll(line_form.as_bytes()), PayloadError::BadRecord);
+    assert_eq!(err_retire(b"{not json"), PayloadError::BadRecord);
+}
 
-    let mut record = b"skep-retire v1\nsig ".to_vec();
-    record.extend_from_slice(&[0xff, 0xfe, b'\n']);
-    record.extend_from_slice(format!("{}\n", fp(1).to_hex()).as_bytes());
-    assert_eq!(err_retire(&record), PayloadError::NotUtf8);
+/// AUTH-2.129 — the retirement schema's own checks: `fingerprints` an array of
+/// 64-hex strings, no other member.
+#[test]
+fn the_retirement_schema_is_enforced() {
+    assert_eq!(
+        err_retire(br#"{"type":"skep-retire","fingerprints":"x"}"#),
+        PayloadError::BadRecord
+    );
+    let short = fphex(1)[..62].to_owned();
+    assert_eq!(
+        err_retire(format!(r#"{{"type":"skep-retire","fingerprints":["{short}"]}}"#).as_bytes()),
+        PayloadError::BadRecord
+    );
+    assert_eq!(
+        err_retire(br#"{"type":"skep-retire","fingerprints":[1]}"#),
+        PayloadError::BadRecord
+    );
+    assert_eq!(
+        err_retire(br#"{"type":"skep-retire","fingerprints":[],"extra":1}"#),
+        PayloadError::BadRecord
+    );
 }
 
 // ------------------------------------------------------- encode / domain
 
-/// AUTH-2.18/AUTH-2.17 — the emission form, pinned: lowercase hex, leading
-/// `anchor`, one space before the verbatim label, `\n`-terminated lines.
+/// AUTH-2.18/AUTH-2.130 — the emission form, pinned: schema order, no
+/// whitespace, lowercase hex, the label escaped canonically, no `sig`.
 #[test]
-fn encode_emits_the_pinned_line_forms() {
+fn encode_emits_the_canonical_forms() {
     let record = encode_enroll(&[
         Enrollment::new(key(1), true, Some("desk key".to_owned())).unwrap(),
         Enrollment::new(key(2), false, None).unwrap(),
     ]);
     let want = format!(
-        "skep-enroll v1\nanchor ed25519 {} desk key\ned25519 {}\n",
+        r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{}","anchor":true,"label":"desk key"}},{{"alg":"ed25519","key":"{}","anchor":false}}]}}"#,
         hex(1),
         hex(2)
     );
     assert_eq!(record, want);
 
     let record = encode_retire(&[fp(1)]);
-    let want = format!("skep-retire v1\n{}\n", fp(1).to_hex());
+    let want = format!(r#"{{"type":"skep-retire","fingerprints":["{}"]}}"#, fphex(1));
     assert_eq!(record, want);
 }
 
-/// `parse(encode(x)) == x` on hand-picked domain corners (the full-domain
-/// proptest is I1's, in `props.rs`): trailing-0x20 label, `anchor` as a
-/// label, an interior-space label, a label starting with a space.
+/// `parse(encode(x)) == x` on hand-picked domain corners, the escaper included
+/// (the full-domain proptest is I1's, in `props.rs`): a trailing-0x20 label,
+/// `anchor` as a label, an interior-space label, a leading-space label, and a
+/// label carrying `"`, `\` and a tab — each escaped canonically and decoded
+/// back.
 #[test]
 fn round_trip_domain_corners() {
     let corners = vec![
@@ -378,7 +424,8 @@ fn round_trip_domain_corners() {
         Enrollment::new(key(2), false, Some("anchor".to_owned())).unwrap(),
         Enrollment::new(key(3), false, Some("two words here".to_owned())).unwrap(),
         Enrollment::new(key(4), true, Some(" leading space".to_owned())).unwrap(),
-        Enrollment::new(key(5), false, None).unwrap(),
+        Enrollment::new(key(5), false, Some("quote \" backslash \\ tab\tend".to_owned())).unwrap(),
+        Enrollment::new(key(6), false, None).unwrap(),
     ];
     let parsed = ok_enroll(encode_enroll(&corners).as_bytes());
     assert_eq!(parsed, corners);
@@ -401,16 +448,16 @@ fn enrollment_constructor_polices_the_label_domain() {
     );
 }
 
-/// AUTH-1.28 — `PayloadError::token()`: the one authority, all eight rows.
+/// AUTH-1.28 — `PayloadError::token()`: the one authority, all seven rows,
+/// `bad_record` in and the line-grammar tokens out (RES-98).
 #[test]
 fn every_payload_error_variant_has_its_pinned_token() {
     assert_eq!(PayloadError::TooLarge.token(), "too_large");
     assert_eq!(PayloadError::ForeignContent.token(), "foreign_content");
     assert_eq!(PayloadError::MissingValue.token(), "missing_value");
     assert_eq!(PayloadError::NotUtf8.token(), "not_utf8");
-    assert_eq!(PayloadError::BadHeader.token(), "bad_header");
+    assert_eq!(PayloadError::BadRecord.token(), "bad_record");
     assert_eq!(PayloadError::Empty.token(), "empty");
-    assert_eq!(PayloadError::BadLine(7).token(), "bad_line:7");
     assert_eq!(PayloadError::DuplicateKey(12).token(), "duplicate_key:12");
 }
 
@@ -425,8 +472,6 @@ fn public_key_surface() {
     assert_eq!(key_hex.len(), 64);
     assert_eq!(key_hex, key_hex.to_lowercase());
 
-    // Case-insensitive parse; syntax-only (0xff…ff is no curve point and is
-    // admitted anyway — AUTH-1.4 never decodes the point).
     assert_eq!(
         PublicKey::parse("ed25519", &key_hex.to_uppercase()).unwrap(),
         k
@@ -435,23 +480,13 @@ fn public_key_surface() {
 
     use skep_identity::KeyParseError;
     assert_eq!(PublicKey::parse("rsa", &key_hex), Err(KeyParseError::UnknownAlg));
-    // BadHex BEFORE BadLength, on a token of the wrong length AND the wrong
-    // bytes: the decode precedes the measure here, so a length test hoisted
-    // ahead of it — the shape `Fingerprint::parse_hex` legitimately has,
-    // AUTH-1.9 fixing ONE admitted length — would flip this row to BadLength.
     assert_eq!(PublicKey::parse("ed25519", "zz"), Err(KeyParseError::BadHex));
     assert_eq!(
         PublicKey::parse("ed25519", &key_hex[..63]),
-        Err(KeyParseError::BadHex) // 63 chars: odd length cannot decode
+        Err(KeyParseError::BadHex)
     );
     assert_eq!(PublicKey::parse("ed25519", &key_hex[..62]), Err(KeyParseError::BadLength));
 
-    // `parse` takes two `&str` in a row, so a caller CAN swap them — and the
-    // swap is loud, on either argument's own check: a hex string is in no
-    // ALGS row, and `ed25519` is seven characters, an odd length no hex
-    // decode admits. Nothing silently parses the wrong way round, which is
-    // why AUTH-1.4's table lookup can stay inside this function rather than
-    // being lifted into the caller's types.
     assert_eq!(PublicKey::parse(&key_hex, ALG_ED25519), Err(KeyParseError::UnknownAlg));
     assert_eq!(PublicKey::parse(ALG_ED25519, ALG_ED25519), Err(KeyParseError::BadHex));
 }

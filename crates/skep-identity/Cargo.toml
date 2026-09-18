@@ -9,12 +9,16 @@ description = "AUTH — pure credential data model and the deterministic identit
 readme = "README.md"
 
 [dependencies]
-# AUTH-2.1 pins the dependency set: skep-address, sha2, im, serde — light
-# enough for the engine, M10, checkpoint/replay, and any mirror tool to carry.
-# No I/O, no clock, no config, no signature library.
+# AUTH-2.1 pins the dependency set: skep-address, sha2, im, serde, serde_json —
+# light enough for the engine, M10, checkpoint/replay, and any mirror tool to
+# carry. No I/O, no clock, no config, no signature library. serde_json answers
+# ONE question — is this byte string a JSON value, and which — parsing to a
+# generic Value; every schema/profile/domain check and every verdict is IN this
+# crate (AUTH-2.128–2.130).
 skep-address = { path = "../skep-address" }
 im.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]

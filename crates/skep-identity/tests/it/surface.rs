@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use skep_identity::{
     framed, CredentialKind, Enrolled, Enrollment, Fingerprint, IdentityState, Inert, KeyParseError,
     LabelError, PayloadError, PublicKey, ALGS, ALG_ED25519, KEY_TAG, MAX_RECORD_BYTES,
-    NODE_HELLO_TAG, SESSION_TAG, TAGS,
+    NODE_HELLO_TAG, SESSION_TAG, SESSION_TAG_V2, TAGS,
 };
 
 /// AUTH-1.18/AUTH-1.21 — the record cap's VALUE, not merely its name: a
@@ -118,7 +118,9 @@ fn algs_and_arms_agree_both_directions() {
 }
 
 /// AUTH-2.93 — the `TAGS` assertion: every tag begins `skep-`, and no tag
-/// is a prefix of another (AUTH-1.15).
+/// is a prefix of another (AUTH-1.15). With `SESSION_TAG_V2` (RES-63) the
+/// check is load-bearing: `skep-session-v1` and `skep-session-v2` share the
+/// prefix `skep-session-v` yet neither is a prefix of the other.
 #[test]
 fn tags_are_skep_prefixed_and_prefix_free() {
     for tag in TAGS {
@@ -137,11 +139,12 @@ fn tags_are_skep_prefixed_and_prefix_free() {
             }
         }
     }
-    // The three declared constants are the table, in declaration order.
-    assert_eq!(TAGS.len(), 3);
+    // The four declared constants are the table, in declaration order.
+    assert_eq!(TAGS.len(), 4);
     assert_eq!(TAGS[0], KEY_TAG);
     assert_eq!(TAGS[1], SESSION_TAG);
-    assert_eq!(TAGS[2], NODE_HELLO_TAG);
+    assert_eq!(TAGS[2], SESSION_TAG_V2);
+    assert_eq!(TAGS[3], NODE_HELLO_TAG);
 }
 
 /// AUTH-1.11 — the three declared tags' BYTES, not merely their properties.
@@ -157,6 +160,7 @@ fn tags_are_skep_prefixed_and_prefix_free() {
 fn the_declared_tag_bytes_are_pinned() {
     assert_eq!(KEY_TAG.as_bytes(), b"skep-key-v1".as_slice());
     assert_eq!(SESSION_TAG.as_bytes(), b"skep-session-v1".as_slice());
+    assert_eq!(SESSION_TAG_V2.as_bytes(), b"skep-session-v2".as_slice());
     assert_eq!(NODE_HELLO_TAG.as_bytes(), b"skep-node-hello-v1".as_slice());
 }
 
@@ -273,9 +277,8 @@ fn payload_error_display_is_the_token() {
         PayloadError::ForeignContent,
         PayloadError::MissingValue,
         PayloadError::NotUtf8,
-        PayloadError::BadHeader,
+        PayloadError::BadRecord,
         PayloadError::Empty,
-        PayloadError::BadLine(7),
         PayloadError::DuplicateKey(12),
     ] {
         assert_eq!(e.to_string(), e.token(), "Display and token disagree");
@@ -295,8 +298,8 @@ fn error_types_lift_into_dyn_error() {
     assert_eq!(boxed.to_string(), KeyParseError::UnknownAlg.to_string());
     let boxed = lift(Enrollment::new(key(1), false, Some("a\nb".to_owned())).expect_err("newline"));
     assert_eq!(boxed.to_string(), LabelError::Newline.to_string());
-    let boxed = lift(PayloadError::BadLine(4));
-    assert_eq!(boxed.to_string(), "bad_line:4");
+    let boxed = lift(PayloadError::DuplicateKey(4));
+    assert_eq!(boxed.to_string(), "duplicate_key:4");
 }
 
 /// The vocabularies a consumer tallies are usable as MAP KEYS. `Eq` without
@@ -314,7 +317,7 @@ fn vocabulary_types_are_usable_as_map_keys() {
     for inert in [
         Inert::NotDocOne,
         Inert::NotDocOne,
-        Inert::MalformedPayload(PayloadError::BadLine(2)),
+        Inert::MalformedPayload(PayloadError::BadRecord),
     ] {
         *tally.entry(inert).or_insert(0) += 1;
     }
@@ -323,8 +326,8 @@ fn vocabulary_types_are_usable_as_map_keys() {
 
     // The other four, in the shape a conformance list takes.
     let faults: HashSet<PayloadError> = [
-        PayloadError::BadLine(2),
-        PayloadError::BadLine(2),
+        PayloadError::BadRecord,
+        PayloadError::BadRecord,
         PayloadError::NotUtf8,
     ]
     .into_iter()

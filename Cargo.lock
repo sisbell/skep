@@ -815,6 +815,7 @@ dependencies = [
  "im",
  "proptest",
  "serde",
+ "serde_json",
  "sha2",
  "skep-address",
 ]

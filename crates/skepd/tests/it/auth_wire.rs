@@ -709,7 +709,8 @@ fn a_credential_retry_replays_the_original_ack_kind_blind_and_per_session() {
 
     // (b) KIND-BLIND — the id alone. A RETIRE deposit under the same id
     // answers the enroll's ack; executed, it would read that enrollment
-    // record as a retirement and answer `malformed_payload:bad_header`.
+    // record as a retirement and answer `malformed_payload:bad_record` (the
+    // `type` disagrees with the link's kind).
     let other = deposit_frame(Some("k1"), &record, T_RETIRE);
     let (_, blind) = http(port, "POST", "/op", Some(&signed), other.as_bytes());
     assert_eq!(
@@ -732,7 +733,7 @@ fn a_credential_retry_replays_the_original_ack_kind_blind_and_per_session() {
     // carries the next frame through.
     let bad = record_atom(port, &signed, 3, &json_atom("nonsense"));
     let v = op(port, Some(&signed), &deposit_frame(Some("kr"), &bad, T_ENROLL));
-    assert_eq!(rejected_detail(&v), "credential_refused:malformed_payload:bad_header");
+    assert_eq!(rejected_detail(&v), "credential_refused:malformed_payload:bad_record");
     let good = record_atom(port, &signed, 4, &enroll_atom(&[&distinct_key(6)]));
     expect_resp(&op(port, Some(&signed), &deposit_frame(Some("kr"), &good, T_ENROLL)), "ack_addr");
 
@@ -753,18 +754,18 @@ fn a_malformed_record_names_its_payload_fault_after_the_join() {
     let port = sd.port();
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
 
-    // The header is byte-exact, so a record that is not one dies at line 1.
-    let bad_header = record_atom(port, &signed, 2, &json_atom("nonsense"));
+    // A body that is not the canonical schema dies as `bad_record`.
+    let bad_record = record_atom(port, &signed, 2, &json_atom("nonsense"));
     assert_eq!(
-        rejected_detail(&deposit(port, &signed, &bad_header, T_ENROLL)),
-        "credential_refused:malformed_payload:bad_header"
+        rejected_detail(&deposit(port, &signed, &bad_record, T_ENROLL)),
+        "credential_refused:malformed_payload:bad_record"
     );
-    // A PARAMETERIZED sub — two colons, and the 1-based line number the
-    // document fixes (the header is line 1, so a bad first key line is 2).
-    let bad_line = record_atom(port, &signed, 3, &json_atom("skep-enroll v1\nnope"));
+    // A PARAMETERIZED sub survives the join — a duplicate entry names its
+    // 1-based ENTRY index (AUTH-2.15, AUTH-1.28), two colons and all.
+    let dup = record_atom(port, &signed, 3, &enroll_atom(&[&distinct_key(5), &distinct_key(5)]));
     assert_eq!(
-        rejected_detail(&deposit(port, &signed, &bad_line, T_ENROLL)),
-        "credential_refused:malformed_payload:bad_line:2"
+        rejected_detail(&deposit(port, &signed, &dup, T_ENROLL)),
+        "credential_refused:malformed_payload:duplicate_key:2"
     );
 
     sd.shutdown();
@@ -891,7 +892,7 @@ fn a_draft_homed_credential_refuses_unpublished_and_the_home_pin_needs_a_publish
     );
     assert_eq!(
         rejected_detail(&enroll_in(&version, 3, &json_atom("nonsense"))),
-        "credential_refused:malformed_payload:bad_header",
+        "credential_refused:malformed_payload:bad_record",
         "the parse precedes the pin (AUTH-2.127)"
     );
 

@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 use common::*;
 use skep_address::{Address, Span, Tumbler};
 use skep_identity::{
-    record_bytes, single_address, Effect, Enrolled, FoldCtx, IdentityState, Owner, TypeAddrs,
-    Values, Verdict, MAX_RECORD_BYTES,
+    encode_enroll, record_bytes, single_address, Effect, Enrolled, Enrollment, FoldCtx,
+    IdentityState, Owner, TypeAddrs, Values, Verdict, MAX_RECORD_BYTES,
 };
 
 fn enroll_ty() -> Vec<Span> {
@@ -105,49 +105,55 @@ fn exact_cap_passes_then_foreign_span_refuses() {
 }
 
 /// Corpus: a two-span FROM named in DESCENDING address order — folds as the
-/// ENDSET order, never the address order (AUTH-2.3 span binding).
+/// ENDSET order, never the address order (AUTH-2.3 span binding). The
+/// canonical record is split at its closing `]}`, its HEAD minted ABOVE its
+/// TAIL: endset order (head first) reassembles it, address order (tail first)
+/// is not a JSON record.
 #[test]
 fn endset_order_governs_concatenation() {
     let mut fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
-    // The key line is minted at the LOWER address, the header at the HIGHER:
-    // endset order (header first) disagrees with address order.
-    let key_line = format!("ed25519 {}\n", key(1).to_hex());
-    let key_span = fx.mint(&doc1(ACCT_A), &[key_line.as_bytes()]);
-    let header_span = fx.mint(&doc1(ACCT_A), &[b"skep-enroll v1\n"]);
+    let record = enroll_payload(&[(1, false)]);
+    let split = record.len() - 2; // the closing "]}" is the last two bytes
+    let tail_span = fx.mint(&doc1(ACCT_A), &[&record[split..]]); // lower address
+    let head_span = fx.mint(&doc1(ACCT_A), &[&record[..split]]); // higher address
     let dep = Dep {
         home: doc1(ACCT_A),
-        from: vec![header_span[0].clone(), key_span[0].clone()],
+        from: vec![head_span[0].clone(), tail_span[0].clone()],
         to: vec![unit(ACCT_A)],
         ty: enroll_ty(),
     };
     assert_honored(&fx.classify(&genesis_state, &dep));
 
-    // The address-order reading concatenates key-line-first and dies at the
-    // header — proving the honored fold above really was endset order.
+    // The address-order reading concatenates tail-first and is not a record —
+    // proving the honored fold above really was endset order.
     let dep = Dep {
         home: doc1(ACCT_A),
-        from: vec![key_span[0].clone(), header_span[0].clone()],
+        from: vec![tail_span[0].clone(), head_span[0].clone()],
         to: vec![unit(ACCT_A)],
         ty: enroll_ty(),
     };
     assert_token(
         &fx.classify(&genesis_state, &dep),
-        "malformed_payload:bad_header",
+        "malformed_payload:bad_record",
     );
 }
 
-/// Corpus: the same spans named twice — `duplicate_key` naming the
-/// repeating line (AUTH-2.4: a repeated span repeats its key lines).
+/// Corpus: a repeated span CUT AT ENTRY BOUNDARIES repeats its entries
+/// (AUTH-2.4). A retirement split into the open, entry 1, a comma-prefixed
+/// entry 2, and the close: naming entry 2's span twice yields a canonical body
+/// with a duplicate at entry 3 — `duplicate_key:3`, the ENTRY index.
 #[test]
-fn repeated_spans_repeat_their_lines() {
+fn repeated_spans_repeat_their_entries() {
     let mut fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
-    let fp1_line = format!("{}\n", fp(1).to_hex());
-    let fp2_line = format!("{}\n", fp(2).to_hex());
+    let open = b"{\"type\":\"skep-retire\",\"fingerprints\":[".to_vec();
+    let entry1 = format!("\"{}\"", fp(1).to_hex());
+    let entry2 = format!(",\"{}\"", fp(2).to_hex());
+    let close = b"]}".to_vec();
     let spans = fx.mint(
         &doc1(ACCT_A),
-        &[b"skep-retire v1\n", fp1_line.as_bytes(), fp2_line.as_bytes()],
+        &[open.as_slice(), entry1.as_bytes(), entry2.as_bytes(), close.as_slice()],
     );
     let dep = Dep {
         home: doc1(ACCT_A),
@@ -155,15 +161,15 @@ fn repeated_spans_repeat_their_lines() {
             spans[0].clone(),
             spans[1].clone(),
             spans[2].clone(),
-            spans[1].clone(),
-            spans[2].clone(),
+            spans[2].clone(), // entry 2 repeated ⇒ a duplicate at entry 3
+            spans[3].clone(),
         ],
         to: vec![unit(ACCT_A)],
         ty: vec![unit(T_RETIRE)],
     };
     assert_token(
         &fx.classify(&genesis_state, &dep),
-        "malformed_payload:duplicate_key:4",
+        "malformed_payload:duplicate_key:3",
     );
 }
 
@@ -174,10 +180,9 @@ fn span_past_the_mint_is_missing_value() {
     let mut fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
     let home = doc1(ACCT_A);
-    let key_line = format!("ed25519 {}\n", key(1).to_hex());
-    fx.mint(&home, &[b"skep-enroll v1\n", key_line.as_bytes()]);
-    // The span reaches exactly ONE position past the mint — asked of the
-    // fixture, so the width follows the mint above instead of restating it.
+    // Two minted positions; the span reaches exactly ONE past them —
+    // `missing_value` fires in `record_bytes`, so the bytes need not parse.
+    fx.mint(&home, &[b"one", b"two"]);
     let dep = Dep {
         home: home.clone(),
         from: vec![content_run(&home, 1, fx.next_ord(&home))],
@@ -359,8 +364,7 @@ fn link_subspace_start_walks_to_missing_value() {
 fn reach_walk_never_a_count_off_width() {
     let mut fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
-    let key_line = format!("ed25519 {}\n", key(1).to_hex());
-    fx.mint(&doc1(ACCT_A), &[b"skep-enroll v1\n", key_line.as_bytes()]);
+    fx.mint(&doc1(ACCT_A), &[b"one", b"two"]);
     let start = content_pos(&doc1(ACCT_A), 1);
     let mut w = vec![0u32; 9];
     w[7] = 1; // action point at the subspace position, above the ordinal
@@ -372,7 +376,7 @@ fn reach_walk_never_a_count_off_width() {
         ty: enroll_ty(),
     };
     // The walk reads ords 1, 2, then outruns the mint: missing_value — NOT
-    // `empty`/`bad_header`, which the count-off-width misreading answers.
+    // `empty`/`bad_record`, which the count-off-width misreading answers.
     assert_token(
         &fx.classify(&genesis_state, &dep),
         "malformed_payload:missing_value",
@@ -419,8 +423,7 @@ fn reach_walk_membership_agrees_with_span_contains() {
 fn a_long_width_tail_changes_no_verdict() {
     let mut fx = Fixture::new();
     let home = doc1(ACCT_A);
-    let key_line = format!("ed25519 {}\n", key(1).to_hex());
-    fx.mint(&home, &[b"skep-enroll v1\n", key_line.as_bytes()]);
+    fx.mint(&home, &[b"one", b"two"]);
     let start = content_pos(&home, 1);
     // The action point `reach_walk_never_a_count_off_width` uses — at the
     // subspace, above the ordinal — plus 4096 trailing components T12 admits
@@ -461,8 +464,12 @@ fn empty_from_is_malformed_shape() {
 fn cap_counts_bytes_never_positions() {
     let mut fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
-    let body = vec![b'x'; MAX_RECORD_BYTES - 6]; // under cap alone; over with the header
-    let spans = fx.mint(&doc1(ACCT_A), &[b"skep-enroll v1\n", &body]);
+    // Two atoms whose SUM exceeds the cap though each is one POSITION —
+    // too_large is BYTES, never positions (AUTH-1.20). The bytes need not
+    // parse: the cap fires in `record_bytes`, ahead of the grammar.
+    let head = vec![b'{'; 16];
+    let body = vec![b'x'; MAX_RECORD_BYTES - 6]; // under cap alone; over with the head
+    let spans = fx.mint(&doc1(ACCT_A), &[&head, &body]);
     let dep = Dep {
         home: doc1(ACCT_A),
         from: spans,
@@ -497,19 +504,25 @@ fn a_missing_value_at_the_cap_is_missing_value_not_too_large() {
 }
 
 /// Corpus: a three-atom record whose concatenated bytes are under the cap —
-/// honored (AUTH-2.3: multi-span records are ordinary).
+/// honored (AUTH-2.3: multi-span records are ordinary). The canonical two-key
+/// record is split at entry boundaries into the open, entry 1, and
+/// comma-entry-2-plus-close.
 #[test]
 fn three_atom_record_folds() {
     let mut fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
-    let anchor_line = format!("anchor ed25519 {}\n", key(1).to_hex());
-    let non_anchor_line = format!("ed25519 {}\n", key(2).to_hex());
+    let record = encode_enroll(&[
+        Enrollment::new(key(1), true, None).unwrap(),
+        Enrollment::new(key(2), false, None).unwrap(),
+    ]);
+    let bracket = record.find('[').expect("the keys array opens") + 1;
+    let comma = record.find("},{").expect("two entries meet") + 1;
     let spans = fx.mint(
         &doc1(ACCT_A),
         &[
-            b"skep-enroll v1\n",
-            anchor_line.as_bytes(),
-            non_anchor_line.as_bytes(),
+            record[..bracket].as_bytes(),
+            record[bracket..comma].as_bytes(),
+            record[comma..].as_bytes(),
         ],
     );
     let dep = Dep {
@@ -529,32 +542,34 @@ fn three_atom_record_folds() {
     }
 }
 
-/// The key lines [`cap_sized_enroll_payload`] writes — chosen so that a
-/// `MAX_RECORD_BYTES` budget of `ed25519 <64 hex>` lines leaves room for the
-/// label that pads the record onto the mark; the helper asserts that as a
-/// fixture precondition.
-const CAP_SIZED_LINES: u32 = 897;
+/// The key entries [`cap_sized_enroll_payload`] writes — chosen so that a
+/// `MAX_RECORD_BYTES` budget of label-free `{"alg":…,"key":…,"anchor":false}`
+/// entries leaves room for the label that pads the record onto the mark; the
+/// helper asserts that as a fixture precondition. Under AUTH-2.130's canonical
+/// spelling the envelope is 32 B, each label-free entry 105 B plus a 1 B
+/// comma, so 32 + 617·105 + 616 = 65 433 ≤ 65 536 and 618 entries would
+/// overflow — the 897 of the retired line form become 617 here.
+const CAP_SIZED_LINES: u32 = 617;
 
-/// An enrollment record of exactly `MAX_RECORD_BYTES + over` bytes:
-/// [`CAP_SIZED_LINES`] key lines, the first carrying a label sized to land
+/// An enrolment record of exactly `MAX_RECORD_BYTES + over` bytes:
+/// [`CAP_SIZED_LINES`] key entries, the first carrying a label sized to land
 /// the total on the mark. Built FROM the constant, so a change to the cap
 /// moves the record with it and `max_record_bytes_is_64_kib` stays the one
 /// assertion that discovers it.
 fn cap_sized_enroll_payload(over: usize) -> Vec<u8> {
-    use skep_identity::{encode_enroll, Enrollment};
-
     let mut entries: Vec<Enrollment> = (0..CAP_SIZED_LINES)
         .map(|i| Enrollment::new(wide_key(i), false, None).expect("label-free"))
         .collect();
     let base_len = encode_enroll(&entries).len();
+    // Adding a label of L chars to a label-free entry adds 11 + L bytes: the
+    // `,"label":"…"` wrapper is 11 bytes (AUTH-2.130's canonical spelling).
     assert!(
-        base_len + 2 <= MAX_RECORD_BYTES,
-        "fixture arithmetic: {base_len} bytes of key lines leaves no room for a \
-         label pad under a {MAX_RECORD_BYTES}-byte cap"
+        base_len + 12 <= MAX_RECORD_BYTES,
+        "fixture arithmetic: {base_len} bytes of {CAP_SIZED_LINES} key entries leaves no room \
+         for a label under a {MAX_RECORD_BYTES}-byte cap"
     );
-    // One label of pad−1 chars adds `pad` bytes (the space plus the label).
     let pad = MAX_RECORD_BYTES - base_len + over;
-    entries[0] = Enrollment::new(wide_key(0), false, Some("x".repeat(pad - 1))).expect("label");
+    entries[0] = Enrollment::new(wide_key(0), false, Some("x".repeat(pad - 11))).expect("label");
     let payload = encode_enroll(&entries).into_bytes();
     assert_eq!(payload.len(), MAX_RECORD_BYTES + over);
     payload
@@ -656,7 +671,8 @@ fn publication_precedes_shape() {
     let mut fx = Fixture::new();
     fx.ctx.unpublished.insert(doc1(ACCT_A));
     let genesis_state = IdentityState::genesis();
-    let spans = fx.mint(&doc1(ACCT_A), &[b"skep-enroll v1\n"]);
+    let record = enroll_payload(&[(1, false)]);
+    let spans = fx.mint(&doc1(ACCT_A), &[record.as_slice()]);
     let dep = Dep {
         home: doc1(ACCT_A),
         from: spans,
@@ -691,10 +707,10 @@ fn shape_precedes_the_payload_read() {
 fn an_enrollment_payload_precedes_the_home_pin() {
     let mut fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
-    let dep = fx.enroll_dep(&doc2(ACCT_A), ACCT_A, b"zzz not a header\n");
+    let dep = fx.enroll_dep(&doc2(ACCT_A), ACCT_A, b"zzz not a record\n");
     assert_token(
         &fx.classify(&genesis_state, &dep),
-        "malformed_payload:bad_header",
+        "malformed_payload:bad_record",
     );
 }
 
@@ -974,10 +990,10 @@ fn a_holder_retirement_outside_doc_1_is_not_doc_one_and_retires_nothing() {
 #[test]
 fn a_retirement_payload_precedes_the_home_pin() {
     let mut fx = Fixture::new();
-    let dep = fx.retire_dep(&doc2(ACCT_A), ACCT_A, b"zzz not a header\n");
+    let dep = fx.retire_dep(&doc2(ACCT_A), ACCT_A, b"zzz not a record\n");
     assert_token(
         &fx.classify(&IdentityState::genesis(), &dep),
-        "malformed_payload:bad_header",
+        "malformed_payload:bad_record",
     );
 }
 
@@ -1132,6 +1148,149 @@ fn claimant_homed_genesis_flips_to_honored_at_the_claim() {
     match assert_honored(&fx.classify(&post, &dep)) {
         Effect::Genesis { account, .. } => assert_eq!(*account, addr(ACCT_A)),
         _ => panic!("expected a genesis effect"),
+    }
+}
+
+// -------------------------------------------- A3 and the handoff latch
+
+// The addresses A3 (AUTH-2.62's RES-80 arm) and the handoff latch (AUTH-2.71)
+// reason over, rooted at ACCT_A — a BOOTSTRAP-TIER account `B` (its parent is
+// the node, owned by the bootstrap principal). `B_FIRST_CHILD = inc(B, 1)` is
+// its computed first sub-account (the AGENT SPACE); `B_SUBDIVISION` is a LATER
+// child (a real subdivision); `B_SUB_DEEP` is a child of that subdivision;
+// `C_FIRST_CHILD` is the first child of the (non-bootstrap-tier) subdivision.
+const B_FIRST_CHILD: &[u32] = &[1, 1, 0, 5, 1]; // inc(ACCT_A, 1) — the agent space
+const B_SUBDIVISION: &[u32] = &[1, 1, 0, 5, 2]; // a later child of ACCT_A
+const B_SUB_DEEP: &[u32] = &[1, 1, 0, 5, 2, 5]; // a child of B_SUBDIVISION
+const C_FIRST_CHILD: &[u32] = &[1, 1, 0, 5, 2, 1]; // inc(B_SUBDIVISION, 1)
+
+/// Seat the A3/latch addresses as accounts. A fold ctx holds no M3, so the test
+/// seats ω and account-hood itself; each is owned by its own principal, so
+/// `delegator` classifies it `Account(parent)`.
+fn seat_accounts(fx: &mut Fixture, addrs: &[&[u32]]) {
+    for acct in addrs {
+        fx.ctx.owners.push((addr(acct), false));
+        fx.ctx.accounts.insert(addr(acct));
+    }
+}
+
+/// AUTH-2.96 row 51 (A3) — the agent space `inc(B, 1)` of a bootstrap-tier `B`
+/// takes NO genesis: `not_genesis_registry` from EVERY hand (homed in `B`'s own
+/// doc 1, the claimant's, and the agent space's own), before AND after `B`'s
+/// genesis and the claim (AUTH-2.62's RES-80 arm ⇒ `None`, AUTH-2.63).
+#[test]
+fn a3_the_agent_space_takes_no_genesis_from_any_hand() {
+    let mut fx = Fixture::new();
+    seat_accounts(&mut fx, &[B_FIRST_CHILD]);
+    let st = IdentityState::genesis();
+    for home in [ACCT_A, B_FIRST_CHILD, CLAIMANT] {
+        let dep = fx.enroll_dep(&doc1(home), B_FIRST_CHILD, &enroll_payload(&[(1, true)]));
+        assert_token(&fx.classify(&st, &dep), "not_genesis_registry");
+    }
+    // After B is keyed and the board is claimed, still.
+    let st = seed_own(&mut fx, &st, ACCT_A, &[(1, true)]);
+    let st = seed_own(&mut fx, &st, CLAIMANT, &[(9, true)]);
+    let st = claim_as(&mut fx, &st, CLAIMANT);
+    let dep = fx.enroll_dep(&doc1(ACCT_A), B_FIRST_CHILD, &enroll_payload(&[(2, false)]));
+    assert_token(&fx.classify(&st, &dep), "not_genesis_registry");
+}
+
+/// AUTH-2.96 row 52 (A3) — the arm is BOUNDED to the bootstrap tier's first
+/// child: a genesis for `inc(B, 2)` (a later child of bootstrap-tier `B`) and
+/// for `inc(C, 1)` (the first child of a NON-bootstrap-tier `C`), each with a
+/// fresh key, is `Honored(Genesis)`.
+#[test]
+fn a3_a_later_child_and_a_non_bootstrap_first_child_are_honored() {
+    let mut fx = Fixture::new();
+    seat_accounts(&mut fx, &[B_SUBDIVISION, C_FIRST_CHILD]);
+    let st = IdentityState::genesis();
+
+    // inc(B, 2) — a later child of the bootstrap-tier B, homed in B's doc 1.
+    let dep = fx.enroll_dep(&doc1(ACCT_A), B_SUBDIVISION, &enroll_payload(&[(1, false)]));
+    match assert_honored(&fx.classify(&st, &dep)) {
+        Effect::Genesis { account, .. } => assert_eq!(*account, addr(B_SUBDIVISION)),
+        other => panic!("expected a genesis effect, got {other:?}"),
+    }
+
+    // inc(C, 1) where C = B_SUBDIVISION is NOT bootstrap-tier, homed in C's doc 1.
+    let dep = fx.enroll_dep(&doc1(B_SUBDIVISION), C_FIRST_CHILD, &enroll_payload(&[(2, false)]));
+    match assert_honored(&fx.classify(&st, &dep)) {
+        Effect::Genesis { account, .. } => assert_eq!(*account, addr(C_FIRST_CHILD)),
+        other => panic!("expected a genesis effect, got {other:?}"),
+    }
+}
+
+/// AUTH-2.96 row 53 (the latch, AUTH-2.71) — a genesis for `inc(B, 2)` naming a
+/// key already ENROLLED in `B`'s set is `not_genesis_registry`; a genesis for
+/// the same key one level down at `inc(inc(B, 2), 5)` with `S(inc(B, 2))` EMPTY
+/// is too — the comparand is the set that OPENS THE ACCOUNT ABOVE, walked past
+/// the empty subdivision to `B`'s set.
+#[test]
+fn the_handoff_latch_fires_on_a_key_from_the_set_above() {
+    let mut fx = Fixture::new();
+    seat_accounts(&mut fx, &[B_SUBDIVISION, B_SUB_DEEP]);
+    // B holds fp(1); the agent's genesis names B's own key — a handoff to a
+    // party that could already open B.
+    let st = seed_own(&mut fx, &IdentityState::genesis(), ACCT_A, &[(1, true)]);
+
+    let dep = fx.enroll_dep(&doc1(ACCT_A), B_SUBDIVISION, &enroll_payload(&[(1, true)]));
+    assert_token(&fx.classify(&st, &dep), "not_genesis_registry");
+
+    // One level down, its own set empty: the walk climbs the empty subdivision
+    // to B's set (the comparand, AUTH-2.71's row 2009).
+    let dep = fx.enroll_dep(&doc1(B_SUBDIVISION), B_SUB_DEEP, &enroll_payload(&[(1, true)]));
+    assert_token(&fx.classify(&st, &dep), "not_genesis_registry");
+}
+
+/// AUTH-2.96 row 53 (the latch) — a FRESH-key genesis at `inc(B, 2)` is
+/// `Honored(Genesis)`: the comparand is `B`'s set and the key stands in no set
+/// above.
+#[test]
+fn the_handoff_latch_does_not_fire_on_a_fresh_key() {
+    let mut fx = Fixture::new();
+    seat_accounts(&mut fx, &[B_SUBDIVISION]);
+    let st = seed_own(&mut fx, &IdentityState::genesis(), ACCT_A, &[(1, true)]);
+    let dep = fx.enroll_dep(&doc1(ACCT_A), B_SUBDIVISION, &enroll_payload(&[(2, false)]));
+    match assert_honored(&fx.classify(&st, &dep)) {
+        Effect::Genesis { account, .. } => assert_eq!(*account, addr(B_SUBDIVISION)),
+        other => panic!("expected a genesis effect, got {other:?}"),
+    }
+}
+
+/// AUTH-2.96 row 55 (the latch's TERMINUS, RES-137) — a genesis beneath a chain
+/// in which NO account above holds a non-empty set is `Honored(Genesis)`: the
+/// comparand is EMPTY and the arm does not fire (pinned FOR TOTALITY).
+#[test]
+fn the_handoff_latch_does_not_fire_beneath_never_keyed_ancestors() {
+    let mut fx = Fixture::new();
+    seat_accounts(&mut fx, &[B_SUBDIVISION, B_SUB_DEEP]);
+    // Nothing above B_SUB_DEEP is keyed — not B_SUBDIVISION, not ACCT_A.
+    let st = IdentityState::genesis();
+    let dep = fx.enroll_dep(&doc1(B_SUBDIVISION), B_SUB_DEEP, &enroll_payload(&[(1, true)]));
+    match assert_honored(&fx.classify(&st, &dep)) {
+        Effect::Genesis { account, .. } => assert_eq!(*account, addr(B_SUB_DEEP)),
+        other => panic!("expected a genesis effect, got {other:?}"),
+    }
+}
+
+/// AUTH-2.96 row 54 (the latch, RES-138) — a genesis for `inc(B, 2)` naming a
+/// fingerprint RETIRED in `B`'s set and enrolled nowhere in it is
+/// `Honored(Genesis)`: the comparand is the ENROLLED half, a retired
+/// fingerprint opening nothing (I4, AUTH-2.98).
+#[test]
+fn the_handoff_latch_reads_the_enrolled_half_only() {
+    let mut fx = Fixture::new();
+    seat_accounts(&mut fx, &[B_SUBDIVISION]);
+    // B: fp(1) enrolled, fp(2) retired.
+    let st = seed_own(&mut fx, &IdentityState::genesis(), ACCT_A, &[(1, true), (2, false)]);
+    let dep = fx.retire_dep(&doc1(ACCT_A), ACCT_A, &retire_payload(&[2]));
+    let (st, v) = fx.step(&st, &dep);
+    assert_honored(&v);
+    // The genesis names fp(2), which stands RETIRED (not enrolled) in B's set.
+    let dep = fx.enroll_dep(&doc1(ACCT_A), B_SUBDIVISION, &enroll_payload(&[(2, false)]));
+    match assert_honored(&fx.classify(&st, &dep)) {
+        Effect::Genesis { account, .. } => assert_eq!(*account, addr(B_SUBDIVISION)),
+        other => panic!("expected a genesis effect, got {other:?}"),
     }
 }
 

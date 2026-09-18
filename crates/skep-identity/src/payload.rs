@@ -1,40 +1,45 @@
-//! Credential-record constants, payload types, and the pinned line grammar —
-//! AUTH-1.18–1.28, AUTH-2.6–2.19.
+//! Credential-record constants, payload types, and the JSON record schemas —
+//! AUTH-1.18–1.28, AUTH-2.128–2.130, AUTH-2.15–2.19.
 //!
-//! One doorkeeper: record BYTES in, typed records out. The grammar — headers,
-//! tokenization, both kinds' line forms, the parse fault precedence — is a
-//! PERMANENT protocol pin, an I2 frozen constant (AUTH-2.90). Both kinds
-//! share one strictness, one fault precedence and one duplicate rule
-//! (AUTH-2.14, AUTH-2.15, AUTH-2.19), so [`scan`] holds those obligations
-//! once and each kind's parser holds only its own line grammar. The bytes
+//! One doorkeeper: record BYTES in, typed records out. The two schemas
+//! (AUTH-2.128 enrolment, AUTH-2.129 retirement) and the CANONICAL ENCODING
+//! (AUTH-2.130) are PERMANENT protocol pins, I2 frozen constants (AUTH-2.90).
+//! Per AUTH-2.1 the crate uses `serde_json` to answer ONE question — is this
+//! byte string a JSON value, and which — parsing to a GENERIC
+//! [`serde_json::Value`], with every schema, profile and domain check written
+//! IN THIS CRATE, in the spec's own order: no `serde` derive, no
+//! `deny_unknown_fields`, no verdict delegated to the dependency. The bytes
 //! themselves arrive from `crate::read`.
-//!
-//! [`scan`]: scan
 
 use core::fmt;
+use core::fmt::Write as _;
 use std::collections::BTreeSet;
+
+use serde_json::Value;
 
 use crate::key::{Fingerprint, PublicKey};
 
-/// AUTH-1.18 — the enrollment header, line 1 byte-exact (AUTH-2.7).
-pub const ENROLL_HEADER: &str = "skep-enroll v1";
+/// AUTH-1.18 — the enrolment record's `type` member value (AUTH-2.128).
+pub const ENROLL_TYPE: &str = "skep-enroll";
 
-/// AUTH-1.18 — the retirement header, line 1 byte-exact (AUTH-2.7).
-pub const RETIRE_HEADER: &str = "skep-retire v1";
+/// AUTH-1.18 — the retirement record's `type` member value (AUTH-2.129).
+pub const RETIRE_TYPE: &str = "skep-retire";
 
 /// AUTH-1.18 — the record cap. Bounds ONE record — the concatenated bytes of
 /// the link's own FROM spans, never the home document (AUTH-1.19) — counted
 /// in BYTES, never positions (AUTH-1.20). A PERMANENT pin: there is no fold
-/// version and the constant MUST NOT change (AUTH-1.21, I2 AUTH-2.90). It
-/// bounds the fold's per-record work only under the wire-codec premise that
-/// every value carries ≥ 1 byte (AUTH-1.22).
+/// version and the constant MUST NOT change (AUTH-1.21, I2 AUTH-2.90), and it
+/// STANDS at 64 KiB over the narrower JSON record domain (AUTH-2.130's cost
+/// note). It bounds the fold's per-record work only under the wire-codec
+/// premise that every value carries ≥ 1 byte (AUTH-1.22).
 pub const MAX_RECORD_BYTES: usize = 64 * 1024;
 
-/// One enrollment line's parse (AUTH-1.23): the key, the anchor flag, and
-/// the informational label. `anchor` is the ANCHOR flag — part of the pinned
-/// line grammar from v1 (the LEADING token `anchor`, AUTH-1.26, AUTH-2.11);
-/// a fingerprint's flag is fixed for the fingerprint's lifetime by the
-/// record that first enrolls it (I9, AUTH-2.104).
+/// One enrolment key entry's parse (AUTH-1.23, AUTH-2.128): the key, the
+/// anchor flag, and the informational label. `anchor` is the ANCHOR flag — the
+/// REQUIRED BOOLEAN member `anchor` of the enrolment schema's key entry
+/// (AUTH-1.26, AUTH-2.128); a fingerprint's flag is fixed for the
+/// fingerprint's lifetime by the record that first enrolls it (I9,
+/// AUTH-2.104).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Enrollment {
     /// The enrolled public key.
@@ -83,9 +88,9 @@ impl std::error::Error for LabelError {}
 
 /// AUTH-1.27 — a payload fault. `TooLarge`, `ForeignContent` and
 /// `MissingValue` report that a record's payload could not be READ; the
-/// remaining variants that it could not be PARSED. The `usize` is a 1-based
-/// line number, the header being line 1; `DuplicateKey` names the REPEATING
-/// line (AUTH-2.15).
+/// remaining variants that it could not be PARSED. The `usize` is a 1-BASED
+/// INDEX INTO THE KIND'S ENTRY ARRAY — `keys` on an enrolment, `fingerprints`
+/// on a retirement — and `DuplicateKey` names the REPEATING ENTRY (AUTH-2.15).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PayloadError {
     /// The concatenated FROM-span bytes exceed [`MAX_RECORD_BYTES`]
@@ -108,28 +113,34 @@ pub enum PayloadError {
     MissingValue,
     /// The payload does not decode as UTF-8 (AUTH-2.19 item 1).
     NotUtf8,
-    /// Line 1 is not the kind's header, byte-exact (AUTH-2.7).
-    BadHeader,
-    /// The named line fails the kind's line grammar (AUTH-2.8–2.14).
-    BadLine(usize),
-    /// Zero key/fingerprint lines after a clean scan (AUTH-2.16) — never
-    /// `NothingChanged`.
+    /// The payload is not the kind's CANONICAL SCHEMA ENCODING (AUTH-2.128,
+    /// AUTH-2.129 under AUTH-2.130's admission sentence): not JSON at all, a
+    /// wrong or missing `type`, a missing/extra member, a wrong JSON type, an
+    /// unadmitted alg, a wrong hex length, a label outside AUTH-1.24, or ANY
+    /// non-canonical encoding — member order, insignificant whitespace,
+    /// escape choices, uppercase hex, a duplicate member, a trailing byte, a
+    /// BOM — none of which survives the byte-identity compare against a
+    /// minimal re-encoding (AUTH-2.130, AUTH-2.19 item 2, I2 AUTH-2.90).
+    BadRecord,
+    /// Zero key/fingerprint entries after a clean scan (AUTH-2.16) — never
+    /// `NothingChanged`; evaluated ONLY after the canonical schema check
+    /// (AUTH-2.19 item 4).
     Empty,
-    /// The named line repeats an earlier line's fingerprint, compared as
-    /// PARSED bytes (AUTH-2.15) — for the ENROLLMENT kind the parsed KEY,
-    /// whose fingerprint is a function of it. WITHIN one line the kind's own
-    /// line grammar decides FIRST, on both kinds: a line that repeats an
-    /// earlier key AND fails its grammar (an enrollment's empty label
-    /// remainder, a retirement's `<64 hex> note`) answers [`BadLine`], never
-    /// this.
+    /// The named ENTRY repeats an earlier entry's fingerprint, compared as
+    /// PARSED bytes (AUTH-2.15) — for the ENROLMENT kind the parsed KEY,
+    /// whose fingerprint is a function of it. The `usize` is the 1-based index
+    /// of the REPEATING entry in the kind's array (AUTH-1.27). The canonical
+    /// schema check decides FIRST (AUTH-2.19 item 2 before item 3), so a body
+    /// that is both non-canonical and duplicate-bearing answers
+    /// [`BadRecord`], never this.
     ///
-    /// [`BadLine`]: PayloadError::BadLine
+    /// [`BadRecord`]: PayloadError::BadRecord
     DuplicateKey(usize),
 }
 
 impl PayloadError {
     /// AUTH-1.28 — THE ONE authority for the payload fault tokens. `<n>` is
-    /// the 1-based line number, which is why the return type is `String`. On
+    /// the 1-based ENTRY index, which is why the return type is `String`. On
     /// the wire this token is a fold refusal's payload sub-token, in the join
     /// [`Inert::token`](crate::Inert::token) states (AUTH-2.55).
     pub fn token(&self) -> String {
@@ -138,9 +149,8 @@ impl PayloadError {
             PayloadError::ForeignContent => "foreign_content".to_owned(),
             PayloadError::MissingValue => "missing_value".to_owned(),
             PayloadError::NotUtf8 => "not_utf8".to_owned(),
-            PayloadError::BadHeader => "bad_header".to_owned(),
+            PayloadError::BadRecord => "bad_record".to_owned(),
             PayloadError::Empty => "empty".to_owned(),
-            PayloadError::BadLine(n) => format!("bad_line:{n}"),
             PayloadError::DuplicateKey(n) => format!("duplicate_key:{n}"),
         }
     }
@@ -160,303 +170,279 @@ impl fmt::Display for PayloadError {
 
 impl std::error::Error for PayloadError {}
 
-/// AUTH-2.19 — the scan BOTH kinds share, in ONE implementation: UTF-8
-/// first, else `NotUtf8` (item 1); line 1 the header, literally, byte-exact,
-/// else `BadHeader` (AUTH-2.7, item 2 — a leading blank line, a trailing
-/// space, a CRLF header each fail here); then lines 2..n IN ORDER (item 3),
-/// the FIRST failing line the verdict; and `Empty` only after a clean scan
-/// (AUTH-2.16, item 4).
-///
-/// Lines split on `\n` ONLY, nothing trimmed — `\r` is an ordinary payload
-/// byte (AUTH-2.6). A zero-length line is ignored (AUTH-2.6, AUTH-2.7); a
-/// `sig` line is skipped whatever follows, on both kinds (AUTH-2.13,
-/// AUTH-2.14, permanent per AUTH-2.94).
-///
-/// AUTH-2.15 is the scan's too, since both kinds share it: a line whose
-/// `compared_by` value an earlier ACCEPTED line already carried is
-/// `DuplicateKey(n)`, naming the repeating line. The test runs only on a line
-/// `parse_line` has accepted, so within a line the kind's grammar decides
-/// first by construction. It is one ordered-set insert per line rather than a
-/// search of the lines before it, so no record's length makes the scan
-/// quadratic — the parsers are `pub`, and a caller's bytes need not have
-/// passed the READ's cap.
-///
-/// `parse_line` carries the KIND'S OWN line grammar and nothing else: it
-/// receives the 1-based line number (the header is line 1, AUTH-1.27) and
-/// the line.
-fn scan<T, K: Ord>(
-    bytes: &[u8],
-    header: &str,
-    compared_by: impl Fn(&T) -> K,
-    mut parse_line: impl FnMut(usize, &str) -> Result<T, PayloadError>,
-) -> Result<Vec<T>, PayloadError> {
-    let text = core::str::from_utf8(bytes).map_err(|_| PayloadError::NotUtf8)?;
-    let mut lines = text.split('\n');
-    if lines.next() != Some(header) {
-        return Err(PayloadError::BadHeader);
-    }
-    let mut out: Vec<T> = Vec::new();
-    let mut seen: BTreeSet<K> = BTreeSet::new();
-    for (idx, line) in lines.enumerate() {
-        let n = idx + 2; // 1-based, the header line 1 (AUTH-1.27)
-        if line.is_empty() {
-            continue;
+/// AUTH-2.130 clause 3 — canonical JSON string escaping: escape EXACTLY `"`,
+/// `\` and U+0000–U+001F — the two-character forms where JSON defines one
+/// (`\b \f \n \r \t`), `\u00xx` with LOWERCASE hex otherwise — and escape
+/// NOTHING else (never `/`, never a non-ASCII character, never a `\uXXXX` for
+/// any character above U+001F).
+fn escape_json_string(s: &str, out: &mut String) {
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{09}' => out.push_str("\\t"),
+            '\u{0a}' => out.push_str("\\n"),
+            '\u{0c}' => out.push_str("\\f"),
+            '\u{0d}' => out.push_str("\\r"),
+            c if (c as u32) < 0x20 => {
+                // The remaining C0 controls: `\u00xx`, lowercase hex.
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
         }
-        if split_token(line).0 == "sig" {
-            continue;
-        }
-        let item = parse_line(n, line)?;
-        if !seen.insert(compared_by(&item)) {
-            return Err(PayloadError::DuplicateKey(n));
-        }
-        out.push(item);
     }
-    if out.is_empty() {
-        return Err(PayloadError::Empty);
-    }
-    Ok(out)
+    out.push('"');
 }
 
-/// AUTH-2.8 — tokens separate on exactly one ASCII 0x20, with NO collapsing
-/// and no other separator byte: the token before the FIRST 0x20, and the
-/// remainder AFTER it (`None` when no separator exists). A doubled separator
-/// therefore yields an empty token in the next position; a TAB is an
-/// ordinary byte inside a token.
-fn split_token(s: &str) -> (&str, Option<&str>) {
-    match s.split_once(' ') {
-        Some((token, rest)) => (token, Some(rest)),
-        None => (s, None),
+/// AUTH-2.130 — the canonical encoding of an enrolment record VALUE: members
+/// in schema order (`type` first, `keys`, `sig` last when present), each key
+/// entry `{alg, key, anchor, label?}` in that order, no whitespace outside
+/// strings, hex lowercase, the exact escape set, no byte after the brace. The
+/// admission sentence ranges over this whole value, `sig` INCLUDED (RES-105);
+/// [`encode_enroll`] is this function with `sig = None` (AUTH-2.18).
+fn canonical_enroll(entries: &[Enrollment], sig: Option<&str>) -> String {
+    let mut out = String::new();
+    out.push_str(r#"{"type":""#);
+    out.push_str(ENROLL_TYPE);
+    out.push_str(r#"","keys":["#);
+    for (i, e) in entries.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(r#"{"alg":""#);
+        out.push_str(e.key.alg());
+        out.push_str(r#"","key":""#);
+        out.push_str(&e.key.to_hex()); // AUTH-2.17 — hex lowercase
+        out.push_str(r#"","anchor":"#);
+        out.push_str(if e.anchor { "true" } else { "false" });
+        if let Some(label) = e.label() {
+            out.push_str(r#","label":"#);
+            escape_json_string(label, &mut out);
+        }
+        out.push('}');
     }
+    out.push(']');
+    if let Some(sig) = sig {
+        out.push_str(r#","sig":"#);
+        escape_json_string(sig, &mut out);
+    }
+    out.push('}');
+    out
 }
 
-/// AUTH-2.18 — parse an enrollment record: line 1 `skep-enroll v1`, each
-/// further line `[anchor ]ed25519 <64 hex>[ <label>]` (AUTH-2.12). Strict —
-/// any unparseable line makes the whole record inert; the scan and the fault
-/// precedence are the ones BOTH kinds share (AUTH-2.19): UTF-8, header, then
-/// lines 2..n in order with the first failing line the verdict, and `Empty`
-/// only after a clean scan. Hex tokens are case-insensitive (AUTH-2.17);
-/// keyword tokens match as bytes, lowercase (AUTH-2.9). Within a line the
-/// grammar decides before the AUTH-2.15 duplicate test
-/// ([`PayloadError::DuplicateKey`]).
+/// AUTH-2.130 — the canonical encoding of a retirement record VALUE:
+/// `{type, fingerprints, sig?}`, each fingerprint a 64-hex lowercase string in
+/// the record's own order. [`encode_retire`] is this with `sig = None`.
+fn canonical_retire(fps: &[Fingerprint], sig: Option<&str>) -> String {
+    let mut out = String::new();
+    out.push_str(r#"{"type":""#);
+    out.push_str(RETIRE_TYPE);
+    out.push_str(r#"","fingerprints":["#);
+    for (i, fp) in fps.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push('"');
+        out.push_str(&fp.to_hex()); // AUTH-2.17 — hex lowercase
+        out.push('"');
+    }
+    out.push(']');
+    if let Some(sig) = sig {
+        out.push_str(r#","sig":"#);
+        escape_json_string(sig, &mut out);
+    }
+    out.push('}');
+    out
+}
+
+/// AUTH-2.128 — validate ONE `keys` entry against the enrolment schema, one
+/// branch per member the schema names. An OBJECT of exactly `{alg, key,
+/// anchor}` or `{alg, key, anchor, label}`, in any order (member ORDER is the
+/// canonical encoding's, judged by AUTH-2.130's byte-identity compare, not
+/// here). Any other shape is [`PayloadError::BadRecord`] (AUTH-1.28).
+fn parse_key_entry(v: &Value) -> Result<Enrollment, PayloadError> {
+    let obj = v.as_object().ok_or(PayloadError::BadRecord)?;
+    // `alg` — STRING, an ALGS token (AUTH-2.128; admission is PublicKey::parse's,
+    // AUTH-1.6, AUTH-2.9's surviving half).
+    let alg = obj.get("alg").and_then(Value::as_str).ok_or(PayloadError::BadRecord)?;
+    // `key` — STRING, that row's hex length, parsed case-insensitively
+    // (AUTH-2.17); the case a body carries is judged by the byte-identity
+    // compare, so the PARSE admits uppercase and the canonical form is lower.
+    let key_hex = obj.get("key").and_then(Value::as_str).ok_or(PayloadError::BadRecord)?;
+    // `anchor` — BOOLEAN, REQUIRED, never omitted (AUTH-2.128).
+    let anchor = obj.get("anchor").and_then(Value::as_bool).ok_or(PayloadError::BadRecord)?;
+    // `label` — STRING, OPTIONAL: present only where a label exists, never
+    // `""`, never `null`, never containing `\n` (AUTH-1.24, AUTH-1.25).
+    let label = match obj.get("label") {
+        None => None,
+        Some(Value::String(s)) if !s.is_empty() && !s.contains('\n') => Some(s.clone()),
+        Some(_) => return Err(PayloadError::BadRecord),
+    };
+    // No other member (AUTH-2.128 "No other member"): exactly the three
+    // required, plus `label` iff it is present.
+    let expected = 3 + usize::from(obj.contains_key("label"));
+    if obj.len() != expected {
+        return Err(PayloadError::BadRecord);
+    }
+    let key = PublicKey::parse(alg, key_hex).map_err(|_| PayloadError::BadRecord)?;
+    // The label is in the AUTH-1.24 domain (non-empty, no `\n`, checked above),
+    // so `new` keeps it verbatim (AUTH-1.25); it never returns `Err` here.
+    Enrollment::new(key, anchor, label).map_err(|_| PayloadError::BadRecord)
+}
+
+/// AUTH-2.128, AUTH-2.130 — parse an enrolment record. The bytes decode as
+/// UTF-8 (else `NotUtf8`, AUTH-2.19 item 1), parse to a GENERIC
+/// [`serde_json::Value`] and validate the enrolment schema and its canonical
+/// encoding (else `BadRecord`, item 2), then the entries are scanned in order
+/// for a duplicate (`DuplicateKey(n)`, item 3), and `Empty` is answered only
+/// after a clean scan (item 4). No verdict is delegated to `serde_json`: it
+/// answers only "is this a JSON value, and which" (AUTH-2.1).
 ///
-/// POSTCONDITION — on `Ok`, the vector is NON-EMPTY (AUTH-2.16 answers
-/// `Empty` otherwise; the genesis post seeds a set that is therefore never
-/// empty, which is what lets the genesis arm fire at most once — I5,
-/// AUTH-2.100), in the record's LINE ORDER (which is the order
-/// `Effect::Genesis`/`Enroll` carry to `apply`), and no two entries carry
-/// the same key (AUTH-2.15 answers `DuplicateKey(n)` otherwise) — the
+/// POSTCONDITION — on `Ok`, the vector is NON-EMPTY (AUTH-2.16), in the
+/// record's own ENTRY ORDER (which is the order `Effect::Genesis`/`Enroll`
+/// carry to `apply`), and no two entries carry the same key (AUTH-2.15) — the
 /// promise that fixes a fingerprint's anchor flag within one record (I9,
 /// AUTH-2.104).
 ///
-/// The record cap is the READ's, never this grammar's (AUTH-2.43): bytes over
-/// [`MAX_RECORD_BYTES`] parse here as any other bytes do — no length makes
-/// the parse quadratic — and the fold refuses such a record before its bytes
-/// reach a parser. An `Ok` over bytes that did not come from
-/// `crate::record_bytes` says the record PARSES, never that it reads.
+/// The record cap is the READ's, never this parser's (AUTH-2.43).
 pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
-    // AUTH-2.15 compares the PARSED key: hex case is no distinction, and
-    // neither is the line's flag or label.
-    scan(bytes, ENROLL_HEADER, |e: &Enrollment| e.key, |n, line| {
-        // AUTH-2.12 — dispatch on the FIRST token: anchor · alg · else (the
-        // scan has taken the `sig` lines already).
-        let (first, rest) = split_token(line);
-        let (anchor, alg, after_alg) = if first == "anchor" {
-            // AUTH-2.11 — the anchor flag is the LEADING token; the line
-            // then continues with the alg token.
-            let Some(after_anchor) = rest else {
-                return Err(PayloadError::BadLine(n)); // `anchor` alone
-            };
-            let (alg, after_alg) = split_token(after_anchor);
-            (true, alg, after_alg)
-        } else {
-            (false, first, rest)
-        };
-        let Some(after_alg) = after_alg else {
-            return Err(PayloadError::BadLine(n)); // alg token with no hex
-        };
-        let (hex, after_hex) = split_token(after_alg);
-        // AUTH-2.9/AUTH-2.12 — the alg token is admitted by `PublicKey::parse`
-        // alone, which is where `ALGS` decides admission (AUTH-1.6): the token
-        // matches as BYTES, lowercase, so an alg the build does not carry,
-        // `anchor anchor …` and `anchor sig …` all arrive here and all answer
-        // BadLine. This grammar asks whether the pair is admitted and never
-        // why — the parse's three refusals are one line fault.
-        let Ok(key) = PublicKey::parse(alg, hex) else {
-            return Err(PayloadError::BadLine(n));
-        };
-        // AUTH-2.10 — the label is the REMAINDER after the one space that
-        // follows the hex token, verbatim (it may end in 0x20); an EMPTY
-        // remainder after that separator is BadLine — the test is the
-        // remainder, never the line's last byte.
-        let label = match after_hex {
-            None => None,
-            Some("") => return Err(PayloadError::BadLine(n)),
-            Some(label) => Some(label.to_owned()),
-        };
-        // The parsed label is in the AUTH-1.24 domain by construction
-        // (non-empty checked above; no '\n' — lines were split on it).
-        Enrollment::new(key, anchor, label).map_err(|_| PayloadError::BadLine(n))
-    })
-}
-
-/// AUTH-2.18 — parse a retirement record: line 1 `skep-retire v1`, each
-/// further line `<64 hex fingerprint>` AND NOTHING ELSE — any remainder
-/// after the fingerprint token is `BadLine` (AUTH-2.14). The scan and the
-/// fault precedence are the ones BOTH kinds share — the same ones the
-/// enrollment kind reads under (AUTH-2.19). Within a line the grammar decides
-/// before the AUTH-2.15 duplicate test ([`PayloadError::DuplicateKey`]).
-///
-/// POSTCONDITION — on `Ok`, the vector is NON-EMPTY (AUTH-2.16 answers
-/// `Empty` otherwise), in the record's LINE ORDER, and DUPLICATE-FREE
-/// (AUTH-2.15 answers `DuplicateKey(n)` otherwise). The distinctness is a
-/// promise the retirement arm's proof rests on, not an implementation
-/// detail: that arm reads `|removed| == |enrolled|` as set equality
-/// (AUTH-2.74), and a record listing one fingerprint twice beside the rest
-/// of the set would pass that test, empty the set, and void I3 (AUTH-2.97)
-/// and AUTH-1.36.
-///
-/// The record cap is the READ's, never this grammar's — as on
-/// [`parse_enroll`].
-pub fn parse_retire(bytes: &[u8]) -> Result<Vec<Fingerprint>, PayloadError> {
-    // AUTH-2.15 compares the PARSED fingerprint (hex case is no distinction),
-    // so `removed` never names one twice.
-    scan(bytes, RETIRE_HEADER, |fp: &Fingerprint| *fp, |n, line| {
-        // AUTH-2.14 — no label, no trailing separator: ANY remainder after
-        // the fingerprint token (`<64 hex> ` and `<64 hex> note` alike) is
-        // BadLine.
-        let (hex, rest) = split_token(line);
-        if rest.is_some() {
-            return Err(PayloadError::BadLine(n));
+    // AUTH-2.19 item 1 — UTF-8 before everything.
+    let text = core::str::from_utf8(bytes).map_err(|_| PayloadError::NotUtf8)?;
+    // AUTH-2.1/AUTH-2.19 item 2 — parse to a GENERIC value; a non-JSON body,
+    // a leading BOM, a lone surrogate, a trailing non-whitespace byte each
+    // fail here as `bad_record`.
+    let value: Value = serde_json::from_str(text).map_err(|_| PayloadError::BadRecord)?;
+    let obj = value.as_object().ok_or(PayloadError::BadRecord)?;
+    // `type` — STRING, exactly `skep-enroll` (AUTH-2.128; keyed to the kind, so
+    // a disagreeing or foreign `type` is `bad_record` and costs no daemon read).
+    match obj.get("type").and_then(Value::as_str) {
+        Some(t) if t == ENROLL_TYPE => {}
+        _ => return Err(PayloadError::BadRecord),
+    }
+    // `keys` — ARRAY (AUTH-2.128).
+    let keys_val = obj.get("keys").and_then(Value::as_array).ok_or(PayloadError::BadRecord)?;
+    // `sig` — STRING, OPTIONAL, canonically LAST, IGNORED by the fold whatever
+    // it holds (AUTH-2.13, AUTH-2.94); admitted with the body and absent from
+    // the answer (AUTH-2.18).
+    let sig = match obj.get("sig") {
+        None => None,
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(_) => return Err(PayloadError::BadRecord),
+    };
+    // No other member (AUTH-2.128): exactly `type`, `keys`, plus `sig` iff present.
+    if obj.len() != 2 + usize::from(obj.contains_key("sig")) {
+        return Err(PayloadError::BadRecord);
+    }
+    // Each entry against the schema, IN ORDER — the first failing entry is the
+    // verdict (an unadmitted alg at entry 1 precedes a duplicate at entry 3,
+    // AUTH-2.19 item 2 before item 3).
+    let mut entries = Vec::with_capacity(keys_val.len());
+    for entry in keys_val {
+        entries.push(parse_key_entry(entry)?);
+    }
+    // AUTH-2.130's ADMISSION SENTENCE — the byte-identity compare over the
+    // RECORD VALUE, `sig` INCLUDED (RES-105, I2 AUTH-2.90): admit only where
+    // the input is the canonical re-encoding of every member it carries.
+    if canonical_enroll(&entries, sig.as_deref()) != text {
+        return Err(PayloadError::BadRecord);
+    }
+    // AUTH-2.15/AUTH-2.19 item 3 — duplicate ENTRY, naming the 1-based repeating
+    // entry index; one ordered-set insert per entry, never a search.
+    let mut seen: BTreeSet<Fingerprint> = BTreeSet::new();
+    for (i, e) in entries.iter().enumerate() {
+        if !seen.insert(Fingerprint::of(&e.key)) {
+            return Err(PayloadError::DuplicateKey(i + 1));
         }
-        Fingerprint::parse_hex(hex).ok_or(PayloadError::BadLine(n))
-    })
+    }
+    // AUTH-2.16/AUTH-2.19 item 4 — `Empty` only after a clean scan.
+    if entries.is_empty() {
+        return Err(PayloadError::Empty);
+    }
+    Ok(entries)
 }
 
-/// AUTH-2.18 — encode an enrollment record; emits lowercase hex (AUTH-2.17)
-/// and the label verbatim.
+/// AUTH-2.129, AUTH-2.130 — parse a retirement record: the mirror of
+/// [`parse_enroll`] over the `fingerprints` array of 64-hex strings. The scan
+/// and the fault precedence are the ones BOTH kinds share (AUTH-2.19).
+///
+/// POSTCONDITION — on `Ok`, the vector is NON-EMPTY (AUTH-2.16), in the
+/// record's ENTRY ORDER, and DUPLICATE-FREE (AUTH-2.15). The distinctness is a
+/// promise the retirement arm's proof rests on: that arm reads
+/// `|removed| == |enrolled|` as set equality (AUTH-2.74), and a record listing
+/// one fingerprint twice beside the rest of the set would pass that test,
+/// empty the set, and void I3 (AUTH-2.97) and AUTH-1.36.
+pub fn parse_retire(bytes: &[u8]) -> Result<Vec<Fingerprint>, PayloadError> {
+    let text = core::str::from_utf8(bytes).map_err(|_| PayloadError::NotUtf8)?;
+    let value: Value = serde_json::from_str(text).map_err(|_| PayloadError::BadRecord)?;
+    let obj = value.as_object().ok_or(PayloadError::BadRecord)?;
+    match obj.get("type").and_then(Value::as_str) {
+        Some(t) if t == RETIRE_TYPE => {}
+        _ => return Err(PayloadError::BadRecord),
+    }
+    let fps_val = obj.get("fingerprints").and_then(Value::as_array).ok_or(PayloadError::BadRecord)?;
+    let sig = match obj.get("sig") {
+        None => None,
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(_) => return Err(PayloadError::BadRecord),
+    };
+    if obj.len() != 2 + usize::from(obj.contains_key("sig")) {
+        return Err(PayloadError::BadRecord);
+    }
+    // Each entry a 64-hex STRING, parsed case-insensitively (AUTH-2.17); the
+    // case a body carries is judged by the byte-identity compare below.
+    let mut fps = Vec::with_capacity(fps_val.len());
+    for entry in fps_val {
+        let hex = entry.as_str().ok_or(PayloadError::BadRecord)?;
+        fps.push(Fingerprint::parse_hex(hex).ok_or(PayloadError::BadRecord)?);
+    }
+    if canonical_retire(&fps, sig.as_deref()) != text {
+        return Err(PayloadError::BadRecord);
+    }
+    let mut seen: BTreeSet<Fingerprint> = BTreeSet::new();
+    for (i, fp) in fps.iter().enumerate() {
+        if !seen.insert(*fp) {
+            return Err(PayloadError::DuplicateKey(i + 1));
+        }
+    }
+    if fps.is_empty() {
+        return Err(PayloadError::Empty);
+    }
+    Ok(fps)
+}
+
+/// AUTH-2.18/AUTH-2.130 — encode an enrolment record in the canonical spelling,
+/// emitting the record value's ENTRIES and NO `sig` member (AUTH-2.130). Hex
+/// is lowercase (AUTH-2.17) and the label is escaped by the canonical rule
+/// (AUTH-2.130 clause 3).
 ///
 /// Answers TEXT, which a record is: a depositor places it in a text-valued
 /// insert as it stands. The parsers take bytes because the READ hands them
 /// bytes that need not be text (`NotUtf8`); nothing an encoder emits is ever
 /// one of those.
 ///
-/// PRECONDITION — `enrollments` is NON-EMPTY and no two entries carry the
-/// same key: [`parse_enroll`]'s POSTCONDITION read from the other side, since
-/// a header-only record is `Empty` (AUTH-2.16) and a repeated key is
-/// `DuplicateKey(n)` (AUTH-2.15). Outside that domain this function still
-/// answers a record — it emits what it is given and re-checks nothing — but
-/// NO parser admits it, so a depositor who writes it spends a permanent
-/// record on one the fold can never honor.
+/// PRECONDITION — `enrollments` is NON-EMPTY and no two entries carry the same
+/// key: [`parse_enroll`]'s POSTCONDITION read from the other side. Outside that
+/// domain this function still answers a record — it emits what it is given and
+/// re-checks nothing — but NO parser admits it.
 ///
 /// POSTCONDITION — within it, `parse_enroll(encode_enroll(x).as_bytes())` is
-/// `Ok(x)` over the whole [`Enrollment`] domain per entry: every anchor flag
-/// and every AUTH-1.24 label, trailing 0x20 included (I1, AUTH-2.89). The
-/// encoded LENGTH is a third obligation owned elsewhere — a record over
-/// [`MAX_RECORD_BYTES`] round-trips here and is refused at the READ
-/// (AUTH-2.43).
+/// `Ok(x)` over the whole [`Enrollment`] domain per entry, and
+/// `encode_enroll(parse_enroll(y)…)` reproduces the entries of any body the
+/// fold admits: the round trip is a BIJECTION (I1, AUTH-2.89; AUTH-2.130).
 pub fn encode_enroll(enrollments: &[Enrollment]) -> String {
-    let mut out = String::new();
-    out.push_str(ENROLL_HEADER);
-    out.push('\n');
-    for enrollment in enrollments {
-        if enrollment.anchor {
-            out.push_str("anchor "); // the LEADING token (AUTH-2.11)
-        }
-        out.push_str(enrollment.key.alg());
-        out.push(' ');
-        out.push_str(&enrollment.key.to_hex());
-        if let Some(label) = enrollment.label() {
-            out.push(' ');
-            out.push_str(label);
-        }
-        out.push('\n');
-    }
-    out
+    canonical_enroll(enrollments, None)
 }
 
-/// AUTH-2.18 — encode a retirement record, as TEXT like [`encode_enroll`];
-/// lowercase hex (AUTH-2.17).
+/// AUTH-2.18/AUTH-2.130 — encode a retirement record, as TEXT like
+/// [`encode_enroll`]; lowercase hex (AUTH-2.17), no `sig` member.
 ///
 /// PRECONDITION — `fps` is NON-EMPTY and DUPLICATE-FREE, [`parse_retire`]'s
-/// POSTCONDITION read from the other side (`Empty`, AUTH-2.16;
-/// `DuplicateKey(n)`, AUTH-2.15); outside that domain the text is a record no
-/// parser admits, and nothing here re-checks it.
+/// POSTCONDITION read from the other side.
 ///
 /// POSTCONDITION — within it, `parse_retire(encode_retire(x).as_bytes())` is
-/// `Ok(x)` (I1, AUTH-2.89), under the same [`MAX_RECORD_BYTES`] obligation as
-/// [`encode_enroll`].
+/// `Ok(x)` (I1, AUTH-2.89).
 pub fn encode_retire(fps: &[Fingerprint]) -> String {
-    let mut out = String::new();
-    out.push_str(RETIRE_HEADER);
-    out.push('\n');
-    for fp in fps {
-        out.push_str(&fp.to_hex());
-        out.push('\n');
-    }
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use core::cell::Cell;
-    use core::cmp::Ordering;
-
-    use super::{scan, PayloadError};
-
-    /// A line's duplicate-test key that counts every comparison made of it.
-    struct Counted<'a> {
-        value: u32,
-        comparisons: &'a Cell<u64>,
-    }
-
-    impl Ord for Counted<'_> {
-        fn cmp(&self, other: &Self) -> Ordering {
-            self.comparisons.set(self.comparisons.get() + 1);
-            self.value.cmp(&other.value)
-        }
-    }
-
-    impl PartialOrd for Counted<'_> {
-        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-            Some(self.cmp(other))
-        }
-    }
-
-    impl PartialEq for Counted<'_> {
-        fn eq(&self, other: &Self) -> bool {
-            self.value == other.value
-        }
-    }
-
-    impl Eq for Counted<'_> {}
-
-    /// AUTH-2.15's test costs `scan` a logarithmic number of comparisons per
-    /// line, never a search of the lines before it — what keeps a `pub`
-    /// parser handed an uncapped record from going quadratic in its line
-    /// count. Over 4096 distinct lines a search makes n(n−1)/2 ≈ 8·10⁶
-    /// comparisons and an ordered-set insert at most one node's keys per tree
-    /// level, well under the 128 per line allowed here; the floor of one per
-    /// line after the first proves the counter is live.
-    #[test]
-    fn the_duplicate_rule_makes_logarithmic_comparisons_per_line() {
-        const LINES: u64 = 4096;
-        let comparisons = Cell::new(0);
-        let record = core::iter::once("h".to_owned())
-            .chain((0..LINES).map(|i| i.to_string()))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let parsed = scan(
-            record.as_bytes(),
-            "h",
-            |value: &u32| Counted { value: *value, comparisons: &comparisons },
-            |n, line| line.parse::<u32>().map_err(|_| PayloadError::BadLine(n)),
-        );
-        assert_eq!(parsed.map(|items| items.len() as u64), Ok(LINES));
-        let made = comparisons.get();
-        assert!(made >= LINES - 1, "{made} comparisons: the counter is not live");
-        assert!(
-            made <= LINES * 128,
-            "{made} comparisons over {LINES} lines: the duplicate test searches"
-        );
-    }
+    canonical_retire(fps, None)
 }

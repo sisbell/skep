@@ -44,8 +44,17 @@ impl fmt::Debug for Tag {
 pub const KEY_TAG: Tag = Tag(b"skep-key-v1");
 
 /// The session-handshake framing tag (AUTH-1.11); its consumer is skepd's
-/// challenge/response signing surface.
+/// challenge/response signing surface. The v1 bytes sign an UNSCOPED
+/// (full-scope) session body.
 pub const SESSION_TAG: Tag = Tag(b"skep-session-v1");
+
+/// The v2 session-handshake framing tag (AUTH-1.11, RES-63): the bytes a
+/// CONTENT-scoped session body signs, distinct from [`SESSION_TAG`] so a v1
+/// signature over a scoped body verifies under neither. Consumed by skepd's
+/// signing surface (W2's row 8); declared here beside `framed` with its `TAGS`
+/// row, one edit in one place (AUTH-1.17). `skep-session-v1` and
+/// `skep-session-v2` are not prefixes of each other (AUTH-1.15).
+pub const SESSION_TAG_V2: Tag = Tag(b"skep-session-v2");
 
 /// The node-hello framing tag (AUTH-1.11); consumed by bebe as the declared
 /// constant (AUTH-2.118).
@@ -54,7 +63,7 @@ pub const NODE_HELLO_TAG: Tag = Tag(b"skep-node-hello-v1");
 /// The declared tag set (AUTH-1.11). Every tag begins `skep-` and no tag is
 /// a prefix of another (AUTH-1.15); the conformance assertion ranging over
 /// this value is the I2 obligation AUTH-2.93 pins.
-pub const TAGS: &[Tag] = &[KEY_TAG, SESSION_TAG, NODE_HELLO_TAG];
+pub const TAGS: &[Tag] = &[KEY_TAG, SESSION_TAG, SESSION_TAG_V2, NODE_HELLO_TAG];
 
 /// AUTH-1.12 — `framed(tag, fields)` produces
 /// `tag ‖ (per field f, in order: be32(len(f)) ‖ f)`, where `be32` is the

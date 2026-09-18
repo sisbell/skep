@@ -35,11 +35,11 @@
 //!   [`Fingerprint`] (AUTH-1.1–1.10);
 //! * framing and the tag set — [`Tag`], [`framed`], [`TAGS`]
 //!   (AUTH-1.11–1.17);
-//! * the credential-record constants and payload types — [`ENROLL_HEADER`],
-//!   [`RETIRE_HEADER`], [`MAX_RECORD_BYTES`], [`Enrollment`] with its refusal
-//!   [`LabelError`], [`PayloadError`] (AUTH-1.18–1.28) — with the line grammar
-//!   [`parse_enroll`]/[`parse_retire`]/[`encode_enroll`]/[`encode_retire`]
-//!   (AUTH-2.6–2.19);
+//! * the credential-record constants and payload types — [`ENROLL_TYPE`],
+//!   [`RETIRE_TYPE`], [`MAX_RECORD_BYTES`], [`Enrollment`] with its refusal
+//!   [`LabelError`], [`PayloadError`] (AUTH-1.18–1.28) — with the JSON record
+//!   schemas [`parse_enroll`]/[`parse_retire`]/[`encode_enroll`]/[`encode_retire`]
+//!   (AUTH-2.15–2.19, AUTH-2.128–2.130);
 //! * the ONE pinned payload read — [`record_bytes`] (AUTH-2.3–2.5,
 //!   AUTH-2.36–2.45);
 //! * the key set — [`Enrolled`], [`KeySet`] (AUTH-1.29–1.37);
@@ -98,12 +98,12 @@ mod state;
 mod verdict;
 mod write_types;
 
-pub use framing::{framed, Tag, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, TAGS};
+pub use framing::{framed, Tag, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, SESSION_TAG_V2, TAGS};
 pub use key::{AlgRow, Fingerprint, KeyParseError, PublicKey, ALGS, ALG_ED25519};
 pub use keyset::{Enrolled, KeySet};
 pub use payload::{
     encode_enroll, encode_retire, parse_enroll, parse_retire, Enrollment, LabelError, PayloadError,
-    ENROLL_HEADER, MAX_RECORD_BYTES, RETIRE_HEADER,
+    ENROLL_TYPE, MAX_RECORD_BYTES, RETIRE_TYPE,
 };
 pub use read::record_bytes;
 pub use seam::{FoldCtx, Owner, Values};

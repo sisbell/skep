@@ -94,7 +94,11 @@ fn writes_read_back_and_their_links_are_discoverable() {
     expect_resp(&insert_at(port, &s1, &doc1, 1, r#""hello, wire""#), "ack_addr");
 
     // Second principal, delegated under account1 by its owner (session 1),
-    // interleaving with principal 1's edits.
+    // interleaving with principal 1's edits. RES-80 (AUTH-2.62): account1 is
+    // node-parented, so its computed first sub-account is the AGENT SPACE and
+    // takes no genesis — reserve it so account2 is a LATER child, whose hire
+    // into account1's doc 1 is honored.
+    reserve_agent_space(port, &s1, &account1, 990_001);
     let v = op(port, Some(&s1), &format!(r#"{{"op":"next_account_prefix","parent":"{account1}"}}"#));
     let prefix2 = expect_resp(&v, "maybe_addr")["addr"].as_str().expect("prefix").to_string();
     let v = op(port, Some(&s1), &format!(r#"{{"op":"delegate","new_prefix":"{prefix2}","new_id":2}}"#));

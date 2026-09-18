@@ -118,6 +118,27 @@ pub fn open_signed_session(port: u16, principal: u64, sk: &SigningKey) -> String
     json(&resp)["session"].as_str().expect("session token").to_string()
 }
 
+/// One signed handshake, WHOLE and unjudged: a fresh challenge for
+/// `principal`, the body signed by `sk` over the origin actually dialed, and
+/// the `POST /session` answer as it came — status, headers, body bytes. For
+/// the cells whose subject is a REFUSAL (the 401's bytes, the 403's), where
+/// [`open_signed_session`]'s own assertion of a 200 is the wrong judge.
+pub fn signed_handshake(
+    port: u16,
+    principal: u64,
+    sk: &SigningKey,
+) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    let (st, body) = http(port, "GET", &format!("/challenge?principal={principal}"), None, b"");
+    assert_eq!(st, 200, "challenge: {}", String::from_utf8_lossy(&body));
+    let nonce = json(&body)["nonce"].as_str().expect("nonce").to_string();
+    let origin = format!("http://127.0.0.1:{port}");
+    let sig = sign_session(sk, &origin, &nonce, principal);
+    let body = format!(
+        "{{\"principal\":{principal},\"nonce\":\"{nonce}\",\"origin\":\"{origin}\",\"sig\":\"{sig}\"}}"
+    );
+    http_full(port, "POST", "/session", None, body.as_bytes())
+}
+
 /// The board claimed? — off `/health.auth.claimant`.
 pub fn claimed(port: u16) -> bool {
     let (st, body) = http(port, "GET", "/health", None, b"");
@@ -304,17 +325,91 @@ pub fn deposit_grant(
 /// before any listener exists: reserve an ephemeral port first, configure
 /// the loopback origin the suites dial, then serve on the reserved port.
 pub fn spawn_configured(dir: &Path, local_trust: bool) -> Skepd {
-    let reserved = TcpListener::bind(("127.0.0.1", 0)).expect("reserve an ephemeral port");
-    let port = reserved.local_addr().expect("reserved local addr").port();
-    let origin =
-        Origin::parse(&format!("http://127.0.0.1:{port}")).expect("a canonical loopback origin");
-    let mut opts = AuthOptions::default();
-    opts.local_trust = local_trust;
-    opts.configured = vec![origin];
-    let daemon = Daemon::open_with(dir, opts).expect("daemon open (genesis or recover)");
-    // The reservation held through the slow open; only the rebind gap races.
-    drop(reserved);
-    serve(daemon, port, DEFAULT_WORKERS).expect("bind the reserved port")
+    spawn_with_blocked_prefixes(dir, local_trust, None)
+}
+
+/// [`spawn_configured`] with the BLOCKED-PREFIX LIST's supply named — the
+/// library's face of `--blocked-prefixes <FILE>` (AUTH-4.70). The file is
+/// read at THIS open, as at every start, so it must already hold an issue
+/// ([`issue_blocked_list`]); the same helper re-issues it while the daemon
+/// runs. `None` is the daemon every other suite spawns: no supply, no list.
+pub fn spawn_with_blocked_prefixes(
+    dir: &Path,
+    local_trust: bool,
+    blocked_prefixes: Option<&Path>,
+) -> Skepd {
+    // The reservation is held through the slow open, so only the rebind gap
+    // races — and under this suite it DOES: every exchange is one
+    // connection, a run leaves some thirty thousand sockets in TIME_WAIT
+    // against an ephemeral range of 16 384, and with the range that full a
+    // port released here is one of the few free, so the next `connect`
+    // anywhere in the process is handed it. A lost race is `AddrInUse` on
+    // the rebind, and costs one more attempt on a fresh port: `serve`
+    // dropped the daemon with its error, so the data dir is free to reopen
+    // (recovery is idempotent), and the origin is rebuilt because it names
+    // the port. Bounded, so a port that can never be bound still fails loudly.
+    const ATTEMPTS: usize = 8;
+    for _ in 0..ATTEMPTS {
+        let reserved = TcpListener::bind(("127.0.0.1", 0)).expect("reserve an ephemeral port");
+        let port = reserved.local_addr().expect("reserved local addr").port();
+        let origin = Origin::parse(&format!("http://127.0.0.1:{port}"))
+            .expect("a canonical loopback origin");
+        let mut opts = AuthOptions::default();
+        opts.local_trust = local_trust;
+        opts.configured = vec![origin];
+        opts.blocked_prefixes = blocked_prefixes.map(Path::to_path_buf);
+        let daemon = Daemon::open_with(dir, opts).expect("daemon open (genesis or recover)");
+        drop(reserved);
+        match serve(daemon, port, DEFAULT_WORKERS) {
+            Ok(sd) => return sd,
+            Err(e) if e.kind() == ErrorKind::AddrInUse => continue,
+            Err(e) => panic!("bind the reserved port: {e}"),
+        }
+    }
+    panic!("bind the reserved port: lost the rebind race {ATTEMPTS} times running")
+}
+
+/// The list's two-field HEADER as a suite names it: the configured operator
+/// account and the board's binding-writing account, each optional — `None`
+/// is "the header names none", and the claimant is then the comparand
+/// (AUTH-4.36 step 4b).
+#[derive(Clone, Copy, Default)]
+pub struct BlockedHeader<'a> {
+    pub operator: Option<&'a str>,
+    pub binding_writer: Option<&'a str>,
+}
+
+/// ISSUE the blocked-prefix list at `path` — the serving layer's act, and
+/// the SAME act at the start-up supply and at every reissue: the whole list,
+/// `entries` as `(prefix, the takedown record's version address)`, written
+/// BESIDE the file and renamed OVER it. The atomic replace is the channel's
+/// own obligation (`BlockedSupply`): no reader meets a torn issue, and each
+/// issue is a new file, which is what the daemon's look at the next request
+/// keys on. An empty `entries` is the explicit empty list — the LIFT of
+/// everything.
+pub fn issue_blocked_list(path: &Path, header: BlockedHeader<'_>, entries: &[(&str, &str)]) {
+    let mut list = serde_json::Map::new();
+    if let Some(operator) = header.operator {
+        list.insert("operator".into(), Value::String(operator.into()));
+    }
+    if let Some(binding_writer) = header.binding_writer {
+        list.insert("binding_writer".into(), Value::String(binding_writer.into()));
+    }
+    let entries: Vec<Value> = entries
+        .iter()
+        .map(|(prefix, record)| json!({"prefix": prefix, "record": record}))
+        .collect();
+    list.insert("entries".into(), Value::Array(entries));
+    issue_blocked_list_bytes(path, Value::Object(list).to_string().as_bytes());
+}
+
+/// [`issue_blocked_list`] over bytes written VERBATIM — the refusal cells'
+/// door: an issue that is not a list arrives by the same atomic replace a
+/// good one does.
+pub fn issue_blocked_list_bytes(path: &Path, bytes: &[u8]) {
+    let beside = path.with_extension("next");
+    std::fs::write(&beside, bytes).expect("write the issue beside the list");
+    std::fs::rename(&beside, path).expect("rename the issue over the list");
 }
 
 /// Spawn a daemon and CLAIM its board: under the pre-claim admission gate

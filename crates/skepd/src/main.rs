@@ -33,6 +33,13 @@ const SKEPD_LOCAL_TRUST: EnvSetting =
 /// what a canonical origin is, shared with the `--origin` flag.
 const SKEPD_ORIGIN: &str = "SKEPD_ORIGIN";
 
+/// The blocked-prefix list's variable, a bare name as the data dir's is: its
+/// value is a PATH, which is whatever bytes the platform says and never owes
+/// being text, so it is read with `var_os` and nothing about it can be "not
+/// what was expected" at the parse. Whether the file it names is a list is
+/// [`Daemon::open_with`]'s to say.
+const SKEPD_BLOCKED_PREFIXES: &str = "SKEPD_BLOCKED_PREFIXES";
+
 /// The help text, with each default read from the constant that supplies
 /// it — so the program cannot describe a default it does not use.
 fn usage() -> String {
@@ -40,6 +47,7 @@ fn usage() -> String {
         "\
 usage: skepd --data-dir <DIR> [--port <PORT>] [--workers <N>]
              [--local-trust | --no-local-trust] [--origin <ORIGIN>]...
+             [--blocked-prefixes <FILE>]
 
   --data-dir <DIR>   journal/checkpoint directory (env: SKEPD_DATA_DIR);
                      created if absent, recovered if populated
@@ -58,6 +66,19 @@ usage: skepd --data-dir <DIR> [--port <PORT>] [--workers <N>]
                      https://board.example — repeatable; the signed
                      session arm accepts ONLY these once the board is
                      claimed (env: SKEPD_ORIGIN, comma-separated)
+  --blocked-prefixes <FILE>
+                     the blocked-prefix list the serving layer maintains
+                     (env: SKEPD_BLOCKED_PREFIXES): one JSON object,
+                     {{\"operator\": <account>, \"binding_writer\": <account>,
+                      \"entries\": [{{\"prefix\": <address>,
+                                   \"record\": <address>}}, ...]}}
+                     — the two header fields optional. A session under a
+                     listed prefix is refused 403 prefix_blocked and a
+                     live one ends. Read at EVERY start (a file that
+                     cannot be read, or is not a list, stops the start)
+                     and re-read whenever it is REPLACED — write the new
+                     list beside it and rename it over; no restart, no
+                     signal
   --help             this text
 
 The wire protocol is specified in skep/docs/wire.md."
@@ -70,6 +91,7 @@ struct Args {
     workers: usize,
     local_trust: bool,
     origins: Vec<Origin>,
+    blocked_prefixes: Option<PathBuf>,
 }
 
 /// Read one setting from the environment, or `None` when it is UNSET. Each
@@ -119,6 +141,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
             })
             .collect::<Result<_, _>>()?,
     };
+    let mut blocked_prefixes = std::env::var_os(SKEPD_BLOCKED_PREFIXES).map(PathBuf::from);
     let mut it = argv;
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -143,6 +166,10 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
                     v.parse::<Origin>().map_err(|e| format!("--origin: '{v}' is {e}"))?,
                 );
             }
+            "--blocked-prefixes" => {
+                let v = it.next().ok_or("--blocked-prefixes needs a value")?;
+                blocked_prefixes = Some(PathBuf::from(v));
+            }
             "--help" | "-h" => return Ok(None),
             other => return Err(format!("unknown argument '{other}'")),
         }
@@ -164,6 +191,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
         // AFFIRMATIVELY false — abstention keeps the notebook behavior.
         local_trust: local_trust.unwrap_or(true),
         origins,
+        blocked_prefixes,
     }))
 }
 
@@ -189,6 +217,9 @@ fn main() {
     let mut opts = AuthOptions::default();
     opts.local_trust = args.local_trust;
     opts.configured = args.origins.clone();
+    // Supplied at every start, as `--origin` is (AUTH-4.70): the file is
+    // read inside the open, and one that is not a list stops the start.
+    opts.blocked_prefixes = args.blocked_prefixes.clone();
     let daemon = match Daemon::open_with(&args.data_dir, opts) {
         Ok(d) => d,
         Err(e) => {
@@ -242,6 +273,18 @@ mod tests {
             .expect("a run, not usage");
         assert_eq!(a.data_dir, PathBuf::from("/tmp/skepd-test"));
         assert_eq!(a.port, 0);
+        let a = parse_args(argv(&["--data-dir", "/tmp/x", "--blocked-prefixes", "/etc/skepd/blocked.json"]))
+            .expect("valid flags")
+            .expect("a run, not usage");
+        assert_eq!(
+            a.blocked_prefixes,
+            Some(PathBuf::from("/etc/skepd/blocked.json")),
+            "the list's supply is a path, carried as given — reading it is the open's"
+        );
+        assert!(
+            parse_args(argv(&["--data-dir", "/tmp/x", "--blocked-prefixes"])).is_err(),
+            "the flag without its file is refused"
+        );
         assert!(parse_args(argv(&["--frobnicate"])).is_err(), "an unknown argument is refused");
         assert!(parse_args(argv(&["--port"])).is_err(), "a flag without its value is refused");
         assert!(

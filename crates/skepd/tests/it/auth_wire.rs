@@ -2043,3 +2043,731 @@ fn an_uppercase_signature_is_folded_where_an_uppercase_nonce_is_refused() {
 
     sd.shutdown();
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE BLOCKED-PREFIX LIST (AUTH-1.44, AUTH-4.36 step 4b, AUTH-4.63/4.64 item
+// 11, AUTH-4.70, AUTH-6.5) and THE TWO ACCESSORS (AUTH-4.30) — the vectors
+// RES-65 item 7 (n), RES-66 item 4 (i), RES-67 item 5 (l), RES-68 item 7 (m),
+// RES-115 and RES-140 record for the skepd lane.
+//
+// The list is CONFIG: every cell here moves it the way a serving layer does —
+// an issue written beside the supply file and renamed over it
+// (`issue_blocked_list`) — and never through the wire, which has no door for
+// it. The daemon looks at the file at the head of every request, so an issue
+// is in force at the first request after it.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Takedown records' version addresses, as entries cite them. The daemon
+/// reads no record and knows no takedown — it echoes the address — so these
+/// name nothing on the board; each is distinct so a 403 says WHICH entry
+/// answered.
+const RECORD_MEMBER: &str = "1.0.1.0.7.1";
+const RECORD_UNDER: &str = "1.0.1.0.8.1";
+const RECORD_CLAIMANT: &str = "1.0.1.0.9.1";
+const RECORD_SEAT: &str = "1.0.1.0.10.1";
+const RECORD_HOST: &str = "1.0.1.0.11.1";
+const RECORD_NODE: &str = "1.0.1.0.12.1";
+
+/// The bootstrap principal, which maps to the CLAIMANT on both accessors
+/// (AUTH-4.30) — so it signs with the claimant's keys, and an entry that
+/// covers the claimant covers it.
+const PRINCIPAL_ZERO: u64 = 0;
+
+/// An OFF-BOARD host's account — not under the board's own local `1`
+/// (REG-1.66), which is the test AUTH-4.36 step 4b names for "not an account
+/// of this board".
+const OFF_BOARD_HOST: &str = "2.0.7";
+
+/// A CLAIMED board (CLAIMED-PERMISSIVE) with the list's supply named: the
+/// data dir and the supply file sit side by side under `root`, so a restart
+/// over the same `root` meets the same file. The first issue is the EMPTY
+/// list unless the file is already there — the restart cells' case.
+fn spawn_listed(root: &std::path::Path) -> (skepd::Skepd, std::path::PathBuf) {
+    let list = root.join("blocked.json");
+    if !list.exists() {
+        issue_blocked_list(&list, BlockedHeader::default(), &[]);
+    }
+    let data = root.join("data");
+    std::fs::create_dir_all(&data).expect("the data dir");
+    let sd = spawn_with_blocked_prefixes(&data, true, Some(&list));
+    claim_board(sd.port());
+    (sd, list)
+}
+
+/// A top-level member: delegated from the bootstrap principal and KEYED by a
+/// hire into its genesis registry, the claimant's doc 1 (AUTH-2.62). The
+/// registrar's session is the ANCHOR's, so the genesis commits whatever
+/// grade the anchor gate asks of it.
+fn keyed_member(port: u16, anchor: &str, id: u64, key: &SigningKey) -> String {
+    let (account, _) = bootstrap_delegate(port, id);
+    hire(port, anchor, CLAIMANT_DOC1, &account, id, key);
+    account
+}
+
+/// The exact bytes AUTH-6.5 pins for the blocked handshake.
+fn prefix_blocked_body(record: &str) -> String {
+    format!(r#"{{"error":"prefix_blocked","record":"{record}"}}"#)
+}
+
+/// Assert one signed handshake answers the 403 with `record` — the status,
+/// the BYTES, and no death signal (a blocked handshake is a refusal with no
+/// entry: nothing to close).
+fn assert_blocked(port: u16, principal: u64, sk: &SigningKey, record: &str, what: &str) {
+    let (st, headers, body) = signed_handshake(port, principal, sk);
+    assert_eq!(st, 403, "{what}: {}", String::from_utf8_lossy(&body));
+    assert_eq!(String::from_utf8(body).expect("utf-8"), prefix_blocked_body(record), "{what}");
+    assert!(header(&headers, "Skepd-Session").is_none(), "{what}: /session is token-blind");
+}
+
+/// Present `token` on a read and answer whether the daemon signalled its
+/// death — the lazy kill's observable, on the cheapest route of the set.
+fn presented_dead(port: u16, token: &str) -> bool {
+    let (st, headers, _) = http_full(
+        port,
+        "POST",
+        "/op",
+        Some(token),
+        br#"{"op":"next_account_prefix","parent":"1"}"#,
+    );
+    assert_eq!(st, 200);
+    header(&headers, "Skepd-Session") == Some("closed")
+}
+
+/// RES-65 item 7 (n), the handshake's own cells: a signed body under a
+/// listed prefix answers `403 prefix_blocked` with the record's address — the
+/// nonce SPENT, the same 403 under a garbage `sig` (not a 400, not a 401:
+/// the signature is never reached) — while a sibling prefix's body answers
+/// 200; `X.1` under listed `X` is refused (the prefix test); the address
+/// carried is the LONGEST covering prefix's and a party under two entries is
+/// admitted only when both are lifted; a LIFT admits.
+///
+/// And step 4b's POSITION (AUTH-4.36): behind the origin set and the burn,
+/// ahead of the key set — so an origin refusal still precedes it and spends
+/// no nonce, and an unknown principal is never told a prefix is blocked.
+#[test]
+fn a_listed_prefix_answers_the_403_with_its_record_after_the_burn_and_before_the_key_set() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let (sd, list) = spawn_listed(root.path());
+    let port = sd.port();
+    let origin = format!("http://127.0.0.1:{port}");
+    let anchor = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
+    let (member_key, sibling_key) = (distinct_key(31), distinct_key(32));
+    let member = keyed_member(port, &anchor, 931, &member_key);
+    let sibling = keyed_member(port, &anchor, 932, &sibling_key);
+    // The member's first sub-account holds no set of its own: it opens BY
+    // REFERENCE against the member's, and it sits UNDER the member's prefix.
+    let (under, _) = delegate_under(port, &open_session(port, 931), &member, 933);
+    assert!(under.starts_with(&format!("{member}.")), "{under} sits under {member}");
+
+    issue_blocked_list(&list, BlockedHeader::default(), &[(&member, RECORD_MEMBER)]);
+
+    // The 403, its bytes, and the nonce SPENT: the same body again dies at
+    // the burn (step 3 stands ahead of 4b) and is the ordinary 401.
+    let nonce_for = |principal: u64| {
+        let (st, body) =
+            http(port, "GET", &format!("/challenge?principal={principal}"), None, b"");
+        assert_eq!(st, 200);
+        json(&body)["nonce"].as_str().expect("nonce").to_string()
+    };
+    let body_with = |principal: u64, nonce: &str, org: &str, sig: &str| {
+        format!(
+            "{{\"principal\":{principal},\"nonce\":\"{nonce}\",\"origin\":\"{org}\",\"sig\":\"{sig}\"}}"
+        )
+    };
+    let nonce = nonce_for(931);
+    let honest = body_with(931, &nonce, &origin, &sign_session(&member_key, &origin, &nonce, 931));
+    let (st, headers, body) = http_full(port, "POST", "/session", None, honest.as_bytes());
+    assert_eq!(st, 403, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(String::from_utf8(body).expect("utf-8"), prefix_blocked_body(RECORD_MEMBER));
+    assert!(header(&headers, "Skepd-Session").is_none(), "a refusal with no entry: no signal");
+    let (st, body) = http(port, "POST", "/session", None, honest.as_bytes());
+    assert_eq!(st, 401, "the 403 SPENT the nonce: {}", String::from_utf8_lossy(&body));
+    assert_eq!(String::from_utf8(body).expect("utf-8"), r#"{"error":"session_rejected"}"#);
+
+    // A garbage `sig` — well-formed, signing nothing — and a foreign key's:
+    // the SAME 403, because no key set is read and no signature verified.
+    let nonce = nonce_for(931);
+    let garbage = body_with(931, &nonce, &origin, &"00".repeat(64));
+    let (st, body) = http(port, "POST", "/session", None, garbage.as_bytes());
+    assert_eq!(st, 403, "not a 400 and not a 401: {}", String::from_utf8_lossy(&body));
+    assert_eq!(String::from_utf8(body).expect("utf-8"), prefix_blocked_body(RECORD_MEMBER));
+    assert_blocked(port, 931, &distinct_key(99), RECORD_MEMBER, "a foreign key's signature");
+
+    // Step 2 still stands AHEAD: a listed principal at a foreign origin is
+    // the 401, and its nonce SURVIVES to meet the 403 at the right origin.
+    let nonce = nonce_for(931);
+    let evil = "https://evil.example";
+    let foreign = body_with(931, &nonce, evil, &sign_session(&member_key, evil, &nonce, 931));
+    let (st, _) = http(port, "POST", "/session", None, foreign.as_bytes());
+    assert_eq!(st, 401, "the origin set is tested before the burn and before the block");
+    let retry = body_with(931, &nonce, &origin, &sign_session(&member_key, &origin, &nonce, 931));
+    let (st, _) = http(port, "POST", "/session", None, retry.as_bytes());
+    assert_eq!(st, 403, "and the origin refusal spent nothing");
+    // …and a principal the board does not know is never told of a block:
+    // there is no account to test, so step 4's own refusal answers.
+    let (st, _, body) = signed_handshake(port, 931_931, &member_key);
+    assert_eq!(st, 401);
+    assert_eq!(String::from_utf8(body).expect("utf-8"), r#"{"error":"session_rejected"}"#);
+
+    // A SIBLING prefix is admitted, and its session writes.
+    let sibling_token = open_signed_session(port, 932, &sibling_key);
+    expect_resp(&op(port, Some(&sibling_token), &create_frame(&sibling, None)), "ack_addr");
+
+    // `X.1` under listed `X`: refused with X's record — the prefix test.
+    assert_blocked(port, 933, &member_key, RECORD_MEMBER, "the account under the listed prefix");
+
+    // TWO covering entries: the LONGEST prefix's record answers, and lifting
+    // it alone leaves the party under the other.
+    issue_blocked_list(
+        &list,
+        BlockedHeader::default(),
+        &[(&member, RECORD_MEMBER), (&under, RECORD_UNDER)],
+    );
+    assert_blocked(port, 933, &member_key, RECORD_UNDER, "the longest covering prefix");
+    assert_blocked(port, 931, &member_key, RECORD_MEMBER, "the shorter entry's own party");
+    issue_blocked_list(&list, BlockedHeader::default(), &[(&member, RECORD_MEMBER)]);
+    assert_blocked(port, 933, &member_key, RECORD_MEMBER, "one of two lifted: still covered");
+
+    // THE LIFT — an issue in which the entry is absent — admits both.
+    issue_blocked_list(&list, BlockedHeader::default(), &[]);
+    let member_token = open_signed_session(port, 931, &member_key);
+    expect_resp(&op(port, Some(&member_token), &create_frame(&member, None)), "ack_addr");
+    open_signed_session(port, 933, &member_key);
+
+    sd.shutdown();
+}
+
+/// AUTH-4.64 item 11 — THE KILL. A live session under prefix `X`, the list
+/// re-issued with an entry covering `X`: its next request of EITHER kind
+/// carries `Skepd-Session: closed` on EACH route of the enumerated set, its
+/// next write answers `unauthenticated` with the header on that SAME
+/// response, and no `/changes` entry of it carries a position after the
+/// install. ARM-BLIND (a bare binding dies as a signed one does) and BY THE
+/// PREFIX TEST (a session under `X.1` dies with `X`'s entry). A sibling
+/// prefix's session is untouched — its M10 session and memo intact. After
+/// the LIFT the same principal's fresh handshake answers 200, and nothing
+/// is resurrected.
+#[test]
+fn a_reissued_entry_kills_the_live_sessions_under_it_on_every_route_of_the_set() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let (sd, list) = spawn_listed(root.path());
+    let port = sd.port();
+    let anchor = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
+    let (member_key, sibling_key) = (distinct_key(31), distinct_key(32));
+    let member = keyed_member(port, &anchor, 931, &member_key);
+    let sibling = keyed_member(port, &anchor, 932, &sibling_key);
+    delegate_under(port, &open_session(port, 931), &member, 933);
+
+    // One LIVE binding per route, opened before the install: a dead token is
+    // closed at its first presentation, and an UNKNOWN token signals too, so
+    // a binding presented twice would prove nothing about the second route.
+    let live = || open_signed_session(port, 931, &member_key);
+    let (on_read, on_write, on_op_at, on_changes, on_close, on_events) =
+        (live(), live(), live(), live(), live(), live());
+    #[cfg(feature = "observe")]
+    let on_dump = live();
+    let bare = open_session(port, 931);
+    let under = open_signed_session(port, 933, &member_key);
+    // The sibling's session holds a MEMOIZED ack — what "its M10 session and
+    // memo intact" is judged against afterwards.
+    let sibling_token = open_signed_session(port, 932, &sibling_key);
+    let memoized = format!(r#"{{"op":"create_new_document","id":"s1","account":"{sibling}"}}"#);
+    let original = op(port, Some(&sibling_token), &memoized);
+    expect_resp(&original, "ack_addr");
+    // The member writes while it still can.
+    expect_resp(&op(port, Some(&on_write), &create_frame(&member, None)), "ack_addr");
+
+    issue_blocked_list(&list, BlockedHeader::default(), &[(&member, RECORD_MEMBER)]);
+    // The first request after the issue installs it; the head it reports is
+    // the position the install stands at.
+    let installed_at = head_position(port);
+    // The list is CONFIG and is published nowhere: `/health.auth` keeps its
+    // four members with a list in force (AUTH-6.13's negative pin).
+    let auth = json(&get(port, "/health").1)["auth"].clone();
+    let members: Vec<&str> = auth.as_object().expect("auth").keys().map(String::as_str).collect();
+    assert_eq!(members, ["claimant", "local_trust", "origins", "signed_origins"], "{auth}");
+
+    // The next WRITE: `unauthenticated`, the signal on that SAME response.
+    let (st, headers, body) =
+        http_full(port, "POST", "/op", Some(&on_write), create_frame(&member, None).as_bytes());
+    assert_eq!(st, 200);
+    assert_eq!(json(&body)["code"].as_str(), Some("unauthenticated"), "{:?}", json(&body));
+    assert_eq!(header(&headers, "Skepd-Session"), Some("closed"));
+    assert_eq!(header(&headers, "Access-Control-Expose-Headers"), Some("Skepd-Session"));
+    assert_eq!(head_position(port), installed_at, "and the refused write committed nothing");
+
+    // EACH route of the enumerated set (AUTH-4.43), a live binding apiece.
+    let mut routes: Vec<(&str, &str, &str, &[u8])> = vec![
+        ("POST", "/op", &on_read, br#"{"op":"next_account_prefix","parent":"1"}"#),
+        ("POST", "/op-at", &on_op_at, br#"{"at":0,"frame":{"op":"next_account_prefix","parent":"1"}}"#),
+        ("GET", "/changes?since=0", &on_changes, b""),
+        ("POST", "/session/close", &on_close, b""),
+    ];
+    #[cfg(feature = "observe")]
+    routes.push(("GET", "/dump", &on_dump, b""));
+    for (method, path, token, body) in routes {
+        let (_, headers, _) = http_full(port, method, path, Some(token), body);
+        assert_eq!(
+            header(&headers, "Skepd-Session"),
+            Some("closed"),
+            "{method} {path}: a binding under the listed prefix dies at its presentation"
+        );
+    }
+    let (mut stream, head) = Sse::connect_with_token(port, &on_events);
+    assert!(
+        head.to_ascii_lowercase().contains("skepd-session: closed"),
+        "/events meets the block before the stream opens: {head}"
+    );
+
+    // ARM-BLIND, and BY THE PREFIX TEST.
+    assert!(presented_dead(port, &bare), "a BARE binding under the prefix dies as a signed one does");
+    assert!(presented_dead(port, &under), "a session under X.1 dies with X's entry");
+
+    // The sibling prefix is UNTOUCHED: its session lives, and M10's memo
+    // still holds its ack — the ORIGINAL answer, not a second mint.
+    assert!(!presented_dead(port, &sibling_token), "a sibling prefix's session is untouched");
+    assert_eq!(
+        op(port, Some(&sibling_token), &memoized),
+        original,
+        "the sibling's memoized ack replays: its M10 session and memo are intact"
+    );
+    stream.expect_commit(); // the dead token's stream still serves, as a guest's
+    expect_resp(&op(port, Some(&sibling_token), &create_frame(&sibling, None)), "ack_addr");
+
+    // No `/changes` entry of the killed key stands after the install.
+    let member_fp = fingerprint_hex(&member_key);
+    let page = json(&http(port, "GET", &format!("/changes?since={installed_at}"), Some(&anchor), b"").1);
+    for entry in page["changes"].as_array().expect("changes") {
+        assert_ne!(entry["key"].as_str(), Some(member_fp.as_str()), "after the install: {entry}");
+    }
+
+    // THE LIFT admits the next handshake and resurrects nothing.
+    issue_blocked_list(&list, BlockedHeader::default(), &[]);
+    let again = open_signed_session(port, 931, &member_key);
+    expect_resp(&op(port, Some(&again), &create_frame(&member, None)), "ack_addr");
+    assert!(presented_dead(port, &on_write), "a killed binding stays gone: the closed entry is no entry");
+
+    sd.shutdown();
+}
+
+/// THE HEADER ROWS (RES-66 item 4 (i), RES-67 item 5 (l), RES-68 item 7 (m);
+/// AUTH-4.64 item 11) — the install's two INERT comparands, at the four A3
+/// cells. An entry covering (a) the configured OPERATOR account (the claimant
+/// where the header names none), or (b) — where that account is NOT an
+/// account of this board — the board's BINDING-WRITING account (the claimant
+/// where the header omits it), is ignored at install: its party's sessions
+/// live and its handshakes are admitted, principal 0's with them where the
+/// comparand is the claimant. Every other entry installs.
+///
+/// One board, one reissue per row: the header is config, and the claimant —
+/// "the OLD REGISTRAR" of the two fork rows — is whoever claimed it.
+#[test]
+fn the_headers_two_comparands_are_inert_at_the_four_lineage_cells() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let (sd, list) = spawn_listed(root.path());
+    let port = sd.port();
+    let anchor = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
+    let (seat_key, member_key) = (distinct_key(41), distinct_key(42));
+    let seat = keyed_member(port, &anchor, 941, &seat_key);
+    let member = keyed_member(port, &anchor, 942, &member_key);
+    let claimant = CLAIMANT_ACCOUNT;
+    let zero = PRINCIPAL_ZERO;
+
+    // THE ROOT (and every unforked self-served board): the header names
+    // none, so (a) and (b) are ONE account, the claimant. An entry over it —
+    // or over any prefix ABOVE it, the board's own node included — is inert;
+    // a member's installs.
+    let claimant_live = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let zero_live = open_signed_session(port, zero, &device_key());
+    issue_blocked_list(
+        &list,
+        BlockedHeader::default(),
+        &[(claimant, RECORD_CLAIMANT), ("1", RECORD_NODE), (&member, RECORD_MEMBER)],
+    );
+    assert_blocked(port, 942, &member_key, RECORD_MEMBER, "the root: a member's entry installs");
+    assert!(!presented_dead(port, &claimant_live), "the root: the claimant's session lives");
+    assert!(!presented_dead(port, &zero_live), "the root: principal 0's session lives");
+    open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    open_signed_session(port, zero, &device_key());
+    open_signed_session(port, 941, &seat_key);
+    // …and a header that NAMES the claimant is the same row as one naming
+    // none (RES-66 item 4 (i)).
+    let names_the_claimant = BlockedHeader { operator: Some(claimant), binding_writer: None };
+    issue_blocked_list(&list, names_the_claimant, &[(claimant, RECORD_CLAIMANT)]);
+    assert!(!presented_dead(port, &claimant_live), "the root, the claimant named: it lives");
+    open_signed_session(port, zero, &device_key());
+
+    // A HOSTED TIER: the header names an OFF-BOARD host and omits the second
+    // field, so (b) is LIVE and the claimant is taken in the field's place —
+    // an entry over the served board's claimant is ignored, one over the
+    // host's own account covers no account of this board, and a MEMBER's
+    // installs and its session dies.
+    issue_blocked_list(&list, BlockedHeader::default(), &[]);
+    let member_live = open_signed_session(port, 942, &member_key);
+    let hosted = BlockedHeader { operator: Some(OFF_BOARD_HOST), binding_writer: None };
+    issue_blocked_list(
+        &list,
+        hosted,
+        &[(claimant, RECORD_CLAIMANT), (OFF_BOARD_HOST, RECORD_HOST), (&member, RECORD_MEMBER)],
+    );
+    assert!(presented_dead(port, &member_live), "hosted: a member's session dies");
+    assert_blocked(port, 942, &member_key, RECORD_MEMBER, "hosted: a member's entry installs");
+    assert!(!presented_dead(port, &claimant_live), "hosted: the served board's claimant lives");
+    assert!(!presented_dead(port, &zero_live), "hosted: principal 0's session lives");
+    open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    open_signed_session(port, zero, &device_key());
+
+    // A FORK THE COMMUNITY ITSELF SERVES: the header names the SEAT, an
+    // account of the copy — so (b) is SILENT and the old claimant stays
+    // blockable (RES-66). The entry over the OLD CLAIMANT installs and its
+    // sessions die, principal 0's among them (0 ↦ the claimant); the entry
+    // over the SEAT is ignored.
+    let seat_live = open_signed_session(port, 941, &seat_key);
+    let self_served = BlockedHeader { operator: Some(&seat), binding_writer: None };
+    issue_blocked_list(&list, self_served, &[(claimant, RECORD_CLAIMANT), (&seat, RECORD_SEAT)]);
+    assert!(presented_dead(port, &claimant_live), "fork: the old claimant's session dies");
+    assert!(presented_dead(port, &zero_live), "fork: principal 0's dies with it");
+    assert_blocked(port, CLAIMANT_PRINCIPAL, &device_key(), RECORD_CLAIMANT, "fork: the old claimant");
+    assert_blocked(port, zero, &device_key(), RECORD_CLAIMANT, "fork: principal 0 ↦ the claimant");
+    assert!(!presented_dead(port, &seat_live), "fork: the seat's session lives");
+    open_signed_session(port, 941, &seat_key);
+
+    // A FORK A THIRD PARTY SERVES: the operator off-board, the second field
+    // naming the SEAT — which is exempted, and NEVER the old claimant, as
+    // blockable here as on the self-served fork. The host's own entry is
+    // ignored.
+    let third_party =
+        BlockedHeader { operator: Some(OFF_BOARD_HOST), binding_writer: Some(&seat) };
+    issue_blocked_list(
+        &list,
+        third_party,
+        &[(claimant, RECORD_CLAIMANT), (&seat, RECORD_SEAT), (OFF_BOARD_HOST, RECORD_HOST)],
+    );
+    assert_blocked(port, CLAIMANT_PRINCIPAL, &device_key(), RECORD_CLAIMANT, "hosted fork: the old claimant");
+    assert_blocked(port, zero, &device_key(), RECORD_CLAIMANT, "hosted fork: principal 0");
+    assert!(!presented_dead(port, &seat_live), "hosted fork: the seat's session lives");
+    open_signed_session(port, 941, &seat_key);
+    open_signed_session(port, 942, &member_key);
+
+    sd.shutdown();
+}
+
+/// RES-115 — THE LIST IS SUPPLIED AT EVERY START: a restart re-installs it
+/// from the start-up supply, so no restart lapses a standing block — and an
+/// issue made while the daemon was DOWN is the one the next start installs.
+/// The two refusals beside it: a supply that is not a list STOPS the start
+/// (never an empty list in its place), and a reissue that is not a list
+/// installs NOTHING — the list in force stands until a good issue replaces
+/// it WHOLE.
+#[test]
+fn a_restart_reinstalls_the_list_and_a_bad_issue_installs_nothing() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let member_key = distinct_key(31);
+    let member = {
+        let (sd, list) = spawn_listed(root.path());
+        let port = sd.port();
+        let anchor = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
+        let member = keyed_member(port, &anchor, 931, &member_key);
+        issue_blocked_list(&list, BlockedHeader::default(), &[(&member, RECORD_MEMBER)]);
+        assert_blocked(port, 931, &member_key, RECORD_MEMBER, "blocked before the restart");
+        sd.shutdown();
+        member
+    };
+
+    // The restart: the same supply, and the block holds at the FIRST request
+    // — installed at open, with no reissue in between.
+    let (sd, list) = spawn_listed(root.path());
+    let port = sd.port();
+    assert_blocked(port, 931, &member_key, RECORD_MEMBER, "the block holds across the restart");
+
+    // A reissue that is not a list — torn JSON, an unknown field, an address
+    // no tumbler spells — installs nothing: the block stands.
+    for bad in [
+        &br#"{"entries":[{"prefix":"1.0.2","#[..],
+        br#"{"entries":[],"lifted":true}"#,
+        br#"{"entries":[{"prefix":"1..2","record":"1.0.1.0.7.1"}]}"#,
+        br#"{"operator":null,"entries":[]}"#,
+        br#"[]"#,
+    ] {
+        issue_blocked_list_bytes(&list, bad);
+        assert_blocked(port, 931, &member_key, RECORD_MEMBER, "a refused issue moves nothing");
+    }
+    // …and the next GOOD issue replaces the list whole.
+    issue_blocked_list(&list, BlockedHeader::default(), &[]);
+    open_signed_session(port, 931, &member_key);
+    sd.shutdown();
+
+    // An issue made while the daemon is DOWN is what the next start installs.
+    issue_blocked_list(&list, BlockedHeader::default(), &[(&member, RECORD_UNDER)]);
+    let (sd, list) = spawn_listed(root.path());
+    assert_blocked(sd.port(), 931, &member_key, RECORD_UNDER, "the start-up supply's current issue");
+    sd.shutdown();
+
+    // A supply that is NOT a list stops the start: `DaemonError`, not a
+    // daemon serving an empty list the standing records do not support.
+    issue_blocked_list_bytes(&list, b"not a list");
+    let mut opts = skepd::AuthOptions::default();
+    opts.blocked_prefixes = Some(list.clone());
+    let refused = skepd::Daemon::open_with(&root.path().join("data"), opts);
+    assert!(
+        matches!(refused, Err(skepd::DaemonError::BlockedPrefixes(_))),
+        "a malformed start-up supply refuses the open"
+    );
+    let mut opts = skepd::AuthOptions::default();
+    opts.blocked_prefixes = Some(root.path().join("no-such-file.json"));
+    let refused = skepd::Daemon::open_with(&root.path().join("data"), opts);
+    assert!(
+        matches!(refused, Err(skepd::DaemonError::BlockedPrefixes(_))),
+        "and so does a supply that is not there"
+    );
+}
+
+/// The accounts the accessor cells stand on, under the claimant `X`: `X.1`
+/// (the agent space, which takes no genesis — RES-80), `X.2` (a later child,
+/// unseeded), and `X.2.7` (unseeded, beneath it). None holds a key set of
+/// its own, so each opens BY REFERENCE.
+struct ByReference {
+    x1: u64,
+    x2: u64,
+    x2_account: String,
+    x2_7: u64,
+}
+
+fn by_reference_accounts(port: u16) -> ByReference {
+    let (x1, x2) = (951, 952);
+    let x = open_session(port, CLAIMANT_PRINCIPAL);
+    let (x1_account, _) = delegate_under(port, &x, CLAIMANT_ACCOUNT, x1);
+    assert_eq!(x1_account, format!("{CLAIMANT_ACCOUNT}.1"));
+    let (x2_account, x2_session) = delegate_under(port, &x, CLAIMANT_ACCOUNT, x2);
+    assert_eq!(x2_account, format!("{CLAIMANT_ACCOUNT}.2"));
+    // Next-form is mandatory, so `X.2.7` is the SEVENTH delegation under
+    // `X.2`, and its principal the seventh id.
+    let mut seventh = (String::new(), 0);
+    for id in 9_571..=9_577u64 {
+        seventh = (delegate_under(port, &x2_session, &x2_account, id).0, id);
+    }
+    assert_eq!(seventh.0, format!("{x2_account}.7"));
+    ByReference { x1, x2, x2_account, x2_7: seventh.1 }
+}
+
+/// AUTH-4.30 (i) — `key_subject` walks to the nearest keyed account above:
+/// a device key of `X` opens a SIGNED session AS an unseeded `X.2` (200), AS
+/// `X.1`, and AS `X.2.7` two levels down — and each writes, its testimony
+/// the key that opened it. The session authenticates against `X`'s set and
+/// is re-resolved per request, so a RETIREMENT AT `X` kills it at its next
+/// presentation (`Skepd-Session: closed`), exactly as it kills `X`'s own.
+#[test]
+fn a_key_of_the_holder_opens_its_unseeded_accounts_and_a_retirement_at_the_holder_kills_them() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let accounts = by_reference_accounts(port);
+    let device_fp = fingerprint_hex(&device_key());
+
+    let as_x1 = open_signed_session(port, accounts.x1, &device_key());
+    let as_x2 = open_signed_session(port, accounts.x2, &device_key());
+    let as_x2_7 = open_signed_session(port, accounts.x2_7, &device_key());
+    // A token that WRITES, as the account it names: the home mint of X.2,
+    // testified under the holder's key.
+    let minted = op(port, Some(&as_x2), &create_frame(&accounts.x2_account, None));
+    let at = acked_at(&minted);
+    let page = json(&http(port, "GET", &format!("/changes?since={}", at - 1), Some(&as_x2), b"").1);
+    let entry = page["changes"]
+        .as_array()
+        .expect("changes")
+        .iter()
+        .find(|e| e["at"].as_u64() == Some(at))
+        .unwrap_or_else(|| panic!("the mint's own entry: {page}"))
+        .clone();
+    assert_eq!(entry["key"].as_str(), Some(device_fp.as_str()), "the opening key testifies");
+    // A key NO set above holds opens nothing: the walk chose X's set, and
+    // the signature is verified against it.
+    let (st, _, _) = signed_handshake(port, accounts.x2, &distinct_key(77));
+    assert_eq!(st, 401, "a key outside the holder's set");
+    // `key_set` answers the unseeded account its OWN, EMPTY set — never the
+    // set that opens it (AUTH-6.19).
+    let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{}"}}"#, accounts.x2_account));
+    assert_eq!(v["enrolled"].as_array().map(Vec::len), Some(0), "{v}");
+
+    // The retirement at X, from X's anchor session.
+    let anchor = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
+    let ordinal = next_content_ordinal(port, Some(&anchor), CLAIMANT_DOC1);
+    let retire = record_atom(port, &anchor, ordinal, &retire_atom(&[&device_fp]));
+    expect_resp(&deposit(port, &anchor, &retire, T_RETIRE), "ack_addr");
+    for (what, token) in [("X.1", &as_x1), ("X.2", &as_x2), ("X.2.7", &as_x2_7)] {
+        assert!(presented_dead(port, token), "a retirement at X kills the session as {what}");
+    }
+    // The anchor still opens them: the set, not the key, is what they share.
+    open_signed_session(port, accounts.x2, &anchor_key());
+
+    sd.shutdown();
+}
+
+/// E2's THIRD TRIGGER (RES-128 C-4, RES-140; conformance T-E2(12)): a session
+/// opened by reference DIES at the genesis of the account it acts as, or of
+/// any account between it and the set it authenticated against — a genesis
+/// at `X.2` kills the session as `X.2` AND the one as `X.2.7`, `closed` at
+/// the next presentation — while the GIVER's session as `X`, and a session
+/// as `X.1` that the genesis is not above, are untouched. No code of its
+/// own: `key_subject` is re-run per request and now answers `X.2`.
+#[test]
+fn a_genesis_kills_the_sessions_opened_by_reference_at_and_beneath_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let accounts = by_reference_accounts(port);
+    let giver = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let as_x1 = open_signed_session(port, accounts.x1, &device_key());
+    let as_x2 = open_signed_session(port, accounts.x2, &device_key());
+    let as_x2_7 = open_signed_session(port, accounts.x2_7, &device_key());
+
+    // THE HANDOFF: X.2's genesis, homed in its registry — X's doc 1 — under
+    // a FRESH key (the latch refuses one the set above holds), from X's
+    // anchor session.
+    let anchor = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
+    let recipient_key = distinct_key(52);
+    let recipient =
+        hire(port, &anchor, CLAIMANT_DOC1, &accounts.x2_account, accounts.x2, &recipient_key);
+
+    assert!(presented_dead(port, &as_x2), "the session as X.2 dies at X.2's genesis");
+    assert!(presented_dead(port, &as_x2_7), "and the one as X.2.7: X.2 now stands between");
+    assert!(!presented_dead(port, &giver), "the giver's session as X is untouched");
+    assert!(!presented_dead(port, &as_x1), "and one as X.1, which the genesis is not above");
+    assert!(!presented_dead(port, &recipient), "the recipient's own session lives");
+
+    // The door has moved with the set: X's key opens neither any more, and
+    // the RECIPIENT's opens both — at a handed-off account's children the
+    // nearest keyed account above is the recipient's (RES-154).
+    for p in [accounts.x2, accounts.x2_7] {
+        let (st, _, body) = signed_handshake(port, p, &device_key());
+        assert_eq!(st, 401, "the giver's key no longer opens {p}");
+        assert_eq!(String::from_utf8(body).expect("utf-8"), r#"{"error":"session_rejected"}"#);
+        open_signed_session(port, p, &recipient_key);
+    }
+
+    sd.shutdown();
+}
+
+/// THE BLOCKED-PREFIX COMPARAND IS `session_account`'s, never `key_subject`'s
+/// (AUTH-4.30 (ii)): an entry over exactly `X.1` still covers a session as
+/// `X.1` — whose set is `X`'s, which the entry does not cover — at the
+/// handshake and at the kill alike; and REACH IS BY COVER, never by descent
+/// (AUTH-4.70): the entry over `X.1` reaches neither `X` nor `X.2`.
+#[test]
+fn an_entry_over_exactly_the_agent_space_covers_it_whosever_set_opens_it() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let (sd, list) = spawn_listed(root.path());
+    let port = sd.port();
+    let accounts = by_reference_accounts(port);
+    let x1_account = format!("{CLAIMANT_ACCOUNT}.1");
+    let as_x = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let as_x1 = open_signed_session(port, accounts.x1, &device_key());
+    let as_x2 = open_signed_session(port, accounts.x2, &device_key());
+
+    issue_blocked_list(&list, BlockedHeader::default(), &[(&x1_account, RECORD_UNDER)]);
+
+    assert!(presented_dead(port, &as_x1), "the live session as X.1 is covered by its OWN account");
+    assert_blocked(port, accounts.x1, &device_key(), RECORD_UNDER, "a handshake as X.1");
+    assert!(!presented_dead(port, &as_x), "the entry over X.1 does not reach X");
+    assert!(!presented_dead(port, &as_x2), "nor its sibling X.2");
+    open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    open_signed_session(port, accounts.x2, &device_key());
+
+    sd.shutdown();
+}
+
+/// AUTH-4.62 item 1 — the 401 body is BYTE-IDENTICAL across the thirteen
+/// arms, and the 403 sits OUTSIDE them by status. Driven here are the arms
+/// `every_handshake_failure_answers_the_same_401_bytes` does not reach: the
+/// RETIRED key, the MIS-SIGNED body (an enrolled key over other bytes), the
+/// bare bind where DISALLOWED (ENFORCING), principal 0 on an UNCLAIMED board,
+/// and the thirteenth — a principal whose KEY SUBJECT's set is EMPTY, which
+/// since the walk is the OWN-ADDRESS TERMINUS: a never-keyed top-level
+/// delegate, and an unseeded account under never-keyed ancestors, where no
+/// account above holds a set and step 5 refuses at the account's own
+/// address. (Expiry needs the 60 s TTL and is pinned at `handshake` itself.)
+#[test]
+fn the_thirteen_401_arms_stay_byte_identical_and_the_403_stands_outside_them() {
+    const REJECTED: &str = r#"{"error":"session_rejected"}"#;
+    let rejected = |what: &str, (st, headers, body): (u16, Vec<(String, String)>, Vec<u8>)| {
+        assert_eq!(st, 401, "{what}");
+        assert_eq!(String::from_utf8(body).expect("utf-8"), REJECTED, "{what}: the one code");
+        assert!(header(&headers, "Skepd-Session").is_none(), "{what}: /session is token-blind");
+    };
+
+    // Principal 0 on an UNCLAIMED board: no claimant, so nothing to sign
+    // with — exactly as an unknown principal (E6).
+    {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sd = spawn_unclaimed(dir.path());
+        rejected(
+            "principal 0 on an unclaimed board",
+            signed_handshake(sd.port(), PRINCIPAL_ZERO, &device_key()),
+        );
+        sd.shutdown();
+    }
+    // The bare bind where DISALLOWED: ENFORCING.
+    {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sd = spawn_configured(dir.path(), false);
+        claim_board(sd.port());
+        let body = format!("{{\"principal\":{CLAIMANT_PRINCIPAL}}}");
+        rejected(
+            "a bare bind on an ENFORCING board",
+            http_full(sd.port(), "POST", "/session", None, body.as_bytes()),
+        );
+        sd.shutdown();
+    }
+
+    let root = tempfile::tempdir().expect("tempdir");
+    let (sd, list) = spawn_listed(root.path());
+    let port = sd.port();
+    let origin = format!("http://127.0.0.1:{port}");
+    let p = CLAIMANT_PRINCIPAL;
+
+    // THE THIRTEENTH ARM, at the own-address terminus: a never-keyed
+    // top-level delegate, and an unseeded account beneath it — the walk
+    // finds no keyed account above, answers the account's OWN address, and
+    // step 5 refuses its empty set.
+    let (never_keyed, never_keyed_session) = bootstrap_delegate(port, 961);
+    delegate_under(port, &never_keyed_session, &never_keyed, 962);
+    rejected("a never-keyed top-level delegate", signed_handshake(port, 961, &device_key()));
+    rejected(
+        "an unseeded account under never-keyed ancestors",
+        signed_handshake(port, 962, &device_key()),
+    );
+
+    // MIS-SIGNED: an ENROLLED key, over bytes that are not this body's.
+    let (st, body) = http(port, "GET", &format!("/challenge?principal={p}"), None, b"");
+    assert_eq!(st, 200);
+    let nonce = json(&body)["nonce"].as_str().expect("nonce").to_string();
+    let sig = sign_session(&device_key(), &origin, &"ab".repeat(32), p);
+    let body = format!(
+        "{{\"principal\":{p},\"nonce\":\"{nonce}\",\"origin\":\"{origin}\",\"sig\":\"{sig}\"}}"
+    );
+    rejected("an enrolled key's signature over other bytes", http_full(port, "POST", "/session", None, body.as_bytes()));
+
+    // The RETIRED key.
+    let anchor = open_signed_session(port, p, &anchor_key());
+    let device_fp = fingerprint_hex(&device_key());
+    let ordinal = next_content_ordinal(port, Some(&anchor), CLAIMANT_DOC1);
+    let retire = record_atom(port, &anchor, ordinal, &retire_atom(&[&device_fp]));
+    expect_resp(&deposit(port, &anchor, &retire, T_RETIRE), "ack_addr");
+    rejected("a retired key", signed_handshake(port, p, &device_key()));
+
+    // THE 403 — outside the thirteen BY STATUS, its shape pinned: exactly
+    // two members, `error` and the one public datum `record`, no `detail`.
+    let member_key = distinct_key(31);
+    let member = keyed_member(port, &anchor, 931, &member_key);
+    issue_blocked_list(&list, BlockedHeader::default(), &[(&member, RECORD_MEMBER)]);
+    let (st, _, body) = signed_handshake(port, 931, &member_key);
+    assert_eq!(st, 403);
+    assert_eq!(String::from_utf8(body.clone()).expect("utf-8"), prefix_blocked_body(RECORD_MEMBER));
+    let shape = json(&body);
+    let members: Vec<&str> = shape.as_object().expect("an object").keys().map(String::as_str).collect();
+    assert_eq!(members, ["error", "record"], "one public datum beside the name: {shape}");
+    // …and the 401 beside it is unmoved by a list being in force.
+    rejected("a foreign key, under a list in force", signed_handshake(port, p, &distinct_key(98)));
+
+    sd.shutdown();
+}

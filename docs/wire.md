@@ -306,23 +306,61 @@ The signed bytes are
 
 over the body's OWN strings — `principal` as shortest ASCII decimal,
 `be32` the 4-byte big-endian byte length. Sign with a private key whose
-public key is enrolled for the principal's account: principal `0` signs
-with the CLAIMANT account's keys (none exist while unclaimed), every
-other principal with its own account's. Verification order: the origin
-must be in the **signed origin set**; the nonce burns (unknown,
-expired, wrong-principal and reused all die here, and the entry is gone
-either way); the account's key set must be non-empty; then every
-enrolled key is tried in fingerprint order (Ed25519 strict
+public key is enrolled for the account that principal's session
+AUTHENTICATES AGAINST: principal `0` signs with the CLAIMANT account's
+keys (none exist while unclaimed); every other principal with its own
+account's — or, where its own account holds NO enrolled key, with the
+keys of the NEAREST ACCOUNT ABOVE it that does (an unseeded sub-account
+opens against its holder's set, at every depth, until a genesis hands it
+away; `key_set` still answers such an account its own, empty lists —
+read it at the account, then at each account above, and take the first
+that is not empty). Verification order: the origin must be in the
+**signed origin set**; the nonce burns (unknown, expired,
+wrong-principal and reused all die here, and the entry is gone either
+way); the principal must name an account; **the blocked-prefix test** —
+the daemon's operator may supply a list of blocked prefixes, and a
+principal whose OWN account sits at or under one is refused here, its
+nonce spent, BEFORE any key set is read or signature verified (the 403
+below); the authenticating account's key set must be non-empty; then
+every enrolled key is tried in fingerprint order (Ed25519 strict
 verification) — no cutoff, ever.
 
-**Every handshake failure — bare and signed alike — answers the ONE
-auth transport error**, permanent, byte-identical across causes,
-carrying no detail by design:
+**Every handshake failure OF THE CREDENTIAL — bare and signed alike —
+answers the ONE auth transport error**, permanent, byte-identical across
+causes, carrying no detail by design:
 
 ```
 → 401
 {"error":"session_rejected"}
 ```
+
+**The one exception, by status.** A signed body naming a principal whose
+account sits at or under a BLOCKED PREFIX answers
+
+```
+→ 403
+{"error":"prefix_blocked","record":"1.0.1.0.7.1"}
+```
+
+— never the 401, which is every failure of the credential: this party's
+credential is not read. It is refused for what it is — an account under
+a prefix the board's operator has listed — on public facts, and `record`
+is the one datum the answer carries: the version address of the takedown
+record the covering entry cites (the LONGEST covering prefix's, where
+more than one covers), in the registry's global form, so a client reads
+the ground at the board that homes it. The test is of the session's OWN
+account — never of the account whose keys open it — so a prefix over
+`X.1` covers a session as `X.1` and never reaches one as `X`. The 403 is
+permanent until the operator LIFTS the entry: the nonce is spent and no
+re-challenge is owed, and a garbage `sig` answers the same 403, the
+signature never being reached. The list is the operator's configuration,
+supplied at every start and re-issued while the daemon runs; it is in no
+record and `/health` publishes nothing of it. An entry that would cover
+the operator's own account — or, where the operator holds no account on
+this board, the account that writes this board's bindings — is ignored:
+the block never reaches the hand that lifts it. The bare form is not
+tested at the handshake; a bare session under a listed prefix dies at
+its first presentation (below).
 
 Success is the familiar answer — the token, and `principal` echoed so
 the client can name its own account later via `principal_prefix`:
@@ -342,12 +380,19 @@ already-dead token answers 204 **with** the death signal below.
 
 Rules:
 
-* **Sessions can end before restart** — four ways: `POST
+* **Sessions can end before restart** — six ways: `POST
   /session/close`; a daemon restart (every token dies; a stale token
   then reads as unknown); **retirement** — a signed session dies when
-  its establishing key leaves the account's enrolled set; and **mode**
-  — a bare session's entry dies when the board is ENFORCING at
-  presentation. Dead entries are evicted lazily, at the next
+  its establishing key leaves the enrolled set of the account it
+  authenticated against; **a genesis** — a session opened against an
+  account ABOVE its own (its own account holding no key) dies when the
+  account it acts as is seeded, or any account between it and the one
+  whose set it authenticated against, the giver's own sessions
+  untouched; **a block** — a session, signed or bare, dies when the
+  operator re-issues the blocked-prefix list with an entry covering its
+  own account (a LIFT resurrects nothing: it admits the next handshake);
+  and **mode** — a bare session's entry dies when the board is ENFORCING
+  at presentation. Dead entries are evicted lazily, at the next
   presentation. There is no session TTL and no session cap.
 * **The death signal.** When a token-accepting route is presented an
   UNKNOWN token, or a token whose entry is dead, the daemon closes the
@@ -502,7 +547,8 @@ Non-200 statuses are transport-level failures with a body of the shape
 |--------|-----------------------------|-----------------------------------------|
 | 400    | `malformed_session_request` | `POST /session` body is neither session form (§Sessions); the nonce survives |
 | 400    | `malformed_challenge`       | the `/challenge` query isn't `principal=<non-negative integer>` |
-| 401    | `session_rejected`          | the `POST /session` handshake refused — one code for every cause, no detail (§Sessions) |
+| 401    | `session_rejected`          | the `POST /session` handshake refused — one code for every failure of the credential, no detail (§Sessions) |
+| 403    | `prefix_blocked`            | the `POST /session` signed body names a principal whose account sits at or under a prefix the operator has blocked; carries `record` — the takedown record's version address — and no `detail`; the nonce is spent; permanent until a lift (§Sessions) |
 | 400    | `malformed_op_at`           | `POST /op-at` body isn't `{"at": n, "frame": {…}}` |
 | 400    | `write_at_history`          | the `/op-at` frame is a write operation |
 | 400    | `beyond_head`               | the position exceeds the committed head (carries `head`) |

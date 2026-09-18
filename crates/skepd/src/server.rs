@@ -161,12 +161,12 @@ use crate::auth::policy::{
     DepositSpans,
 };
 use crate::auth::session::{
-    handshake, parse_session_body, resolve, Actor, GuestReason, SessionBinding, Token,
-    CHALLENGE_TTL,
+    handshake, parse_session_body, resolve, Actor, GuestReason, HandshakeRefusal,
+    SessionBinding, Token, CHALLENGE_TTL,
 };
 use crate::auth::{
-    bare_origins, signed_origins, startup_warnings, AuthOptions, AuthState, OsEntropy,
-    PortAlreadyBound,
+    bare_origins, blocked_prefixes, signed_origins, startup_warnings, AuthOptions, AuthState,
+    OsEntropy, PortAlreadyBound, Reissue,
 };
 use crate::codec::{
     check_keys, daemon_rejected, key_set_reply, obj, to_bytes, DaemonOp, DaemonRejection,
@@ -528,6 +528,13 @@ pub enum DaemonError {
     /// extended. A torn tail is NOT an error (it truncates); this is the
     /// data dir refusing I/O the kernel just performed.
     Sidecar(std::io::Error),
+    /// The blocked-prefix list's START-UP SUPPLY
+    /// ([`AuthOptions::blocked_prefixes`]) could not be read, or is not a
+    /// list (`InvalidData`); the error names the file. The list is supplied
+    /// at every start (AUTH-4.70), so a daemon that cannot read the one it
+    /// was handed does not start on an empty one: that would lapse every
+    /// standing block in silence.
+    BlockedPrefixes(std::io::Error),
 }
 
 impl std::fmt::Display for DaemonError {
@@ -535,6 +542,7 @@ impl std::fmt::Display for DaemonError {
         match self {
             DaemonError::Engine(e) => write!(f, "{e}"),
             DaemonError::Sidecar(e) => write!(f, "change-feed sidecar: {e}"),
+            DaemonError::BlockedPrefixes(e) => write!(f, "blocked-prefix list: {e}"),
         }
     }
 }
@@ -547,6 +555,7 @@ impl std::error::Error for DaemonError {
         match self {
             DaemonError::Engine(e) => Some(e),
             DaemonError::Sidecar(e) => Some(e),
+            DaemonError::BlockedPrefixes(e) => Some(e),
         }
     }
 }
@@ -775,6 +784,8 @@ impl std::fmt::Debug for HttpRequest {
 /// wire's transport-error table (wire.md §Transport errors, §Reading
 /// history, §The change feed), so a new failure cannot ship without a
 /// documented name, exactly as `code_name` guarantees for M10's rejections.
+/// The handshake's two answers — the 401 and the 403 — are the table's two
+/// rows written elsewhere: [`session_refused`] says why.
 #[derive(Clone, Copy, Debug)]
 enum TransportError {
     // The envelope and query parsers.
@@ -882,6 +893,34 @@ fn refuse_with(err: TransportError, fields: Vec<(&'static str, Value)>) -> Reply
     let mut pairs = fields;
     pairs.push(("error", Value::String(err.name().into())));
     Reply::json(err.status(), obj(pairs))
+}
+
+/// The handshake's two refusals, as their replies (AUTH-6.5) — the ONE home
+/// of both bodies, so the pair cannot drift. Every failure of the CREDENTIAL
+/// is `401 {"error":"session_rejected"}`: one code, no detail, byte-identical
+/// across its thirteen arms (AUTH-4.62 item 1), which a unit refusal makes
+/// true by construction. THE ONE EXCEPTION, BY STATUS, is step 4b's:
+/// `403 {"error":"prefix_blocked","record":"<address>"}`, the record's
+/// version address its one datum and public by construction — never the 401,
+/// because this party's credential was not read.
+///
+/// Built here and not through [`refuse`], as the 401 always was: the
+/// handshake's answers are AUTH-6.5's to word, a pair, and neither name is
+/// a [`TransportError`] variant — so neither can grow the optional `detail`
+/// every variant of that enum is offered.
+fn session_refused(refusal: &HandshakeRefusal) -> Reply {
+    match refusal {
+        HandshakeRefusal::Rejected(_) => {
+            Reply::json(401, obj(vec![("error", Value::String("session_rejected".into()))]))
+        }
+        HandshakeRefusal::Blocked { record } => Reply::json(
+            403,
+            obj(vec![
+                ("error", Value::String("prefix_blocked".into())),
+                ("record", Value::String(record.tumbler().to_string())),
+            ]),
+        ),
+    }
 }
 
 /// The paths this daemon serves — the one place the route set is stated, so
@@ -1009,11 +1048,16 @@ impl Daemon {
     }
 
     /// [`Daemon::open`] with the session-layer configuration named: the
-    /// local-trust flag and the configured origins. The identity fold is
+    /// local-trust flag, the configured origins, and the blocked-prefix
+    /// list's supply. The identity fold is
     /// seeded here from the RECOVERED world (derived state — the canonical
     /// rebuild; the journal stays the one source of truth), which reads
     /// every link in that world: [`crate::auth::fold::canonical_identity`]
     /// states the bound, and [`Daemon::open`] names it beside the sidecar's.
+    ///
+    /// A supply file the options name is read HERE, at every start, and the
+    /// list installed from it before anything is served
+    /// ([`DaemonError::BlockedPrefixes`] where it cannot be).
     pub fn open_with(data_dir: &Path, opts: AuthOptions) -> Result<Daemon, DaemonError> {
         let cfg = KernelConfig {
             durability: Durability::Fsync {
@@ -1044,7 +1088,7 @@ impl Daemon {
         let guest = open_guest_session(&febe);
         let auth = {
             let snap = engine.kernel().snapshot();
-            AuthState::open(opts, snap.world())
+            AuthState::open(opts, snap.world()).map_err(DaemonError::BlockedPrefixes)?
         };
         Ok(Daemon {
             engine,
@@ -1116,7 +1160,13 @@ impl Daemon {
     /// the way out is the headers [`write_reply`] supplies,
     /// [`UNIVERSAL_HEADERS`] among them, which wire.md promises on every
     /// response.
+    ///
+    /// Every request FIRST looks at the blocked-prefix list's supply
+    /// ([`Daemon::refresh_blocked_prefixes`]) — ahead of dispatch and of
+    /// every lock, so a reissue is in force before the request that noticed
+    /// it resolves its own actor, `/events` included.
     pub fn route(&self, req: &HttpRequest) -> Routed {
+        self.refresh_blocked_prefixes();
         match (req.method.as_str(), req.path.as_str()) {
             ("GET", "/events") => Routed::EventStream,
             _ => Routed::Reply(self.reply(req)),
@@ -1223,6 +1273,52 @@ impl Daemon {
         }
     }
 
+    /// Log the blocked-prefix list IN FORCE to stderr (AUTH-4.70: "the
+    /// startup log names the list in force"; AUTH-4.36 step 4b: an inert
+    /// entry is "ignored at install and said so in the log") — the count,
+    /// the header as the install resolved it, and the inert entries by
+    /// name. Written at the three moments an install happens: `at start`,
+    /// `reissued`, and `at claim`, where the flip re-compares the issue
+    /// against the claimant it first has. WHAT the lines say is
+    /// [`crate::auth::BlockedPrefixes::log_lines`]'s; the stream is this
+    /// daemon's, for [`Daemon::log_config_warnings`]'s reason.
+    ///
+    /// SILENT where no supply was named: that is a board with no serving
+    /// layer, and there is no list to name.
+    fn log_blocked_prefixes(&self, when: &str) {
+        let Some(path) = self.auth.blocked_supply_path() else { return };
+        // ONE write: the entry is several lines, and a line per write would
+        // let another thread's warning land inside it.
+        let mut entry = format!("skepd: blocked-prefix list ({when}, {}):", path.display());
+        for line in blocked_prefixes(&self.auth.cfg).log_lines() {
+            entry.push_str("\nskepd:   ");
+            entry.push_str(&line);
+        }
+        let _ = writeln!(std::io::stderr(), "{entry}");
+    }
+
+    /// THE REISSUE, at the head of every request (AUTH-4.70): where the
+    /// supply file moved, [`AuthState::reissue_blocked_prefixes`] re-reads
+    /// it and installs the new issue WHOLE under the credential write gate
+    /// — the list's commit — and the log names the list then in force. A
+    /// file that cannot be read, or is not a list, installs NOTHING: the
+    /// list in force stands and the refusal is logged, once.
+    ///
+    /// A COMMAND, and called under NO lock: it takes the write gate, which
+    /// is why it runs here and not where the list is read.
+    fn refresh_blocked_prefixes(&self) {
+        match self.auth.reissue_blocked_prefixes() {
+            None => {}
+            Some(Reissue::Installed) => self.log_blocked_prefixes("reissued"),
+            Some(Reissue::Refused(e)) => {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "skepd: blocked-prefix list: reissue REFUSED — {e}; the list in force stands"
+                );
+            }
+        }
+    }
+
     /// Close one token's binding in BOTH stores — the sessions map and M10
     /// — plus the credential memo. [`Daemon::resolve_actor`]'s eviction arm
     /// and `/session/close` share it.
@@ -1267,8 +1363,11 @@ impl Daemon {
     /// `POST /session` — the two-form body (AUTH-6.2): bare (honored per
     /// `bare_bind_allowed`) or signed (the challenge/response handshake,
     /// verified in EVERY mode). A syntax fault is the 400 and spends no
-    /// credential; every handshake failure is the ONE 401,
-    /// `session_rejected`, byte-identical across causes (AUTH-6.5).
+    /// credential; every handshake failure OF THE CREDENTIAL is the ONE
+    /// 401, `session_rejected`, byte-identical across causes (AUTH-6.5).
+    /// THE ONE EXCEPTION, BY STATUS: a signed body naming a principal under
+    /// a listed prefix is `403 prefix_blocked` carrying the record's
+    /// address (AUTH-4.36 step 4b) — [`session_refused`] builds both.
     fn post_session(&self, req: &HttpRequest) -> Reply {
         let body = match parse_session_body(&req.body) {
             Ok(b) => b,
@@ -1310,10 +1409,7 @@ impl Daemon {
                     ]),
                 )
             }
-            Err(_) => Reply::json(
-                401,
-                obj(vec![("error", Value::String("session_rejected".into()))]),
-            ),
+            Err(refusal) => session_refused(&refusal),
         }
     }
 
@@ -1629,6 +1725,15 @@ impl Daemon {
             );
             if flipped {
                 self.log_config_warnings(true);
+                // The claim flip's half of the list's install (RES-65 item
+                // 4): the claimant is the comparand wherever the header
+                // names none, and it exists from THIS commit — so the issue
+                // in force is re-compared here, under the write guard the
+                // claim committed under, and an entry the flip made inert
+                // is said so in the log.
+                if self.auth.reinstall_blocked_at_claim(&credential_lock) {
+                    self.log_blocked_prefixes("at claim");
+                }
             }
         }
         with_signal(op_answer(ack), closed)
@@ -2305,6 +2410,10 @@ pub fn serve(daemon: Daemon, port: u16, workers: usize) -> io::Result<Skepd> {
          disagreeing about the number every live session's origin set derives from",
     );
     daemon.log_config_warnings(false);
+    // The list installed at open, named beside the warnings (AUTH-4.70: "a
+    // restart never lapses a standing block and the startup log names the
+    // list in force").
+    daemon.log_blocked_prefixes("at start");
     let stop = Arc::new(AtomicBool::new(false));
     let subscribers = Arc::new(Subscribers::new());
     // Spawned FALLIBLY, and named: `thread::spawn` panics when the OS
@@ -3200,9 +3309,14 @@ mod tests {
         // Both transcriptions of wire.md's error column, measured against
         // each other. A NEW variant is caught by the compiler at `name`
         // and `status`; this catches one that reaches the wire without
-        // reaching either list. The `+ 1` is `session_rejected` — the one
-        // documented error name that is not a `TransportError` variant
-        // (the handshake's single 401, built at its own site per AUTH-6.5).
+        // reaching either list. The `+ 1` is `session_rejected` — the
+        // handshake's 401, which is not a `TransportError` variant (built
+        // at its own site per AUTH-6.5, [`session_refused`]). The
+        // handshake's SECOND answer, the 403 `prefix_blocked` (AUTH-6.5's
+        // one exception), is built beside it and stands in NEITHER list:
+        // no fuzz daemon is supplied a blocked-prefix list, so no fuzz
+        // target can be answered it and the oracle has no row for it yet.
+        // When the oracle's list takes the name, this becomes `+ 2`.
         #[cfg(feature = "observe")]
         assert_eq!(
             table.len() + 1,

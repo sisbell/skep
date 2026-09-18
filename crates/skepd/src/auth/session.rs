@@ -12,10 +12,10 @@ use skep_febe::SessionId;
 use skep_identity::{framed, Fingerprint, IdentityState, KeySet, SESSION_TAG};
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
 
-use super::{bare_origins, signed_origins, AuthConfig, Mode, Origin};
+use super::{bare_origins, blocked_prefixes, signed_origins, AuthConfig, Mode, Origin};
 use crate::codec::{check_keys, hex_nibble, hex_string};
 use crate::World;
-use skep_address::Address;
+use skep_address::{parent, Address, Level};
 use skep_namespace::HasM3;
 
 /// The challenge TTL — a PIN, not a knob: `ttl_ms` on the wire is a byte
@@ -310,19 +310,66 @@ pub(crate) fn bare_bind_allowed(
     }
 }
 
-/// AUTH-4.30 — the account a principal's keys are read from:
-/// `BOOTSTRAP_PRINCIPAL` ↦ the claimant (None while unclaimed, so an
-/// unclaimed board's 0 signs with nothing), else the principal's own
-/// prefix; `None` for an unknown principal.
-pub(crate) fn key_subject<'a>(
-    world: &'a World,
-    identity: &'a IdentityState,
+/// AUTH-4.30 (i) — WHOSE SET AUTHENTICATES, in THREE arms in this order:
+/// `BOOTSTRAP_PRINCIPAL` ↦ the claimant (`None` while unclaimed, so an
+/// unclaimed board's 0 signs with nothing, exactly as an unknown principal
+/// — E6); then, where the principal's own account `a` holds an EMPTY
+/// enrolled set, the NEAREST ACCOUNT ABOVE `a` WHOSE SET IS NOT — an
+/// account that opens BY REFERENCE authenticates against its holder's set,
+/// at every depth, until a genesis hands it away (RES-128); else `a`
+/// itself; `None` for an unknown principal.
+///
+/// The walk is `parent()` arithmetic over account-tier ancestors and stops
+/// at the account tier — no seam method, no M3 read beyond
+/// `principal_prefix`. Where NO account above holds a set the answer is
+/// `a`'s OWN address, whose set is empty (C-2): the two accessors stay
+/// `Some` together, the walk always terminates, and step 5 refuses there.
+///
+/// OWNED, as the spec declares it: the walk's answer is an address this
+/// function mints, which no borrow of the world can name. Resolved PER
+/// REQUEST and never cached in the binding (AUTH-4.31) — which is what
+/// makes E2's THIRD TRIGGER fall out of [`resolve`] with no code of its
+/// own (RES-140): a genesis at the account a session acts as, or at any
+/// account between it and the set it authenticated against, moves THIS
+/// answer to a set the session's key is not in (the handoff latch,
+/// AUTH-2.71, refuses a genesis naming a key of the set above).
+pub(crate) fn key_subject(
+    world: &World,
+    identity: &IdentityState,
     p: PrincipalId,
-) -> Option<&'a Address> {
+) -> Option<Address> {
     if p == BOOTSTRAP_PRINCIPAL {
-        identity.claimant()
+        return identity.claimant().cloned();
+    }
+    let own = world.m3().principal_prefix(p)?;
+    if identity.key_set(own).is_empty() {
+        let mut cursor = parent(own);
+        while let Some(above) = cursor.filter(|a| a.level() == Level::Account) {
+            if !identity.key_set(&above).is_empty() {
+                return Some(above);
+            }
+            cursor = parent(&above);
+        }
+    }
+    Some(own.clone())
+}
+
+/// AUTH-4.30 (ii) — THE SESSION'S OWN ACCOUNT, the one-arm map exactly:
+/// `BOOTSTRAP_PRINCIPAL` ↦ the claimant, else the principal's own prefix;
+/// `None` for an unknown principal. It disagrees with [`key_subject`] only
+/// where an account opens by reference, and THE BLOCKED-PREFIX COMPARAND IS
+/// THIS ONE's (step 4b; [`resolve`]'s blocked arm): an entry over exactly
+/// `X.1` covers a session as `X.1`, whosever set opened it, and an entry
+/// over `X.1` never reaches a session as `X`.
+pub(crate) fn session_account(
+    world: &World,
+    identity: &IdentityState,
+    p: PrincipalId,
+) -> Option<Address> {
+    if p == BOOTSTRAP_PRINCIPAL {
+        identity.claimant().cloned()
     } else {
-        world.m3().principal_prefix(p)
+        world.m3().principal_prefix(p).cloned()
     }
 }
 
@@ -331,6 +378,16 @@ pub(crate) fn key_subject<'a>(
 /// takes no store and holds no store guard. The identity state rides
 /// beside the world (the fold-beside-engine build; the spec reads it off
 /// `world.identity()`).
+///
+/// A `Found` binding meets THE BLOCK first (AUTH-4.63's second trigger):
+/// where the installed list covers the session's OWN account — step 4b's
+/// predicate, over [`session_account`] — the binding is DEAD, ARM-BLIND,
+/// signed and bare alike, ahead of the bare arm's per-request conjunct for
+/// the reason the mode is (AUTH-4.27): it holds for the holder everywhere
+/// until a lift, so the cell where the request would also refuse answers
+/// death and never `RequestRefused`. Config and NOT monotone (AUTH-4.45): a
+/// lift is an install in which the entry is absent, and it resurrects
+/// nothing — the next HANDSHAKE is what it admits.
 pub(crate) fn resolve(
     cfg: &AuthConfig,
     lookup: Lookup,
@@ -343,22 +400,29 @@ pub(crate) fn resolve(
     match lookup {
         Lookup::NoToken => Actor::Guest(GuestReason::NoToken),
         Lookup::Unknown => Actor::Guest(GuestReason::Unknown),
-        Lookup::Found(binding) => match binding.signer {
-            Some(fp) => {
-                let live = key_subject(world, identity, binding.principal)
-                    .is_some_and(|a| identity.key_set(a).contains(&fp));
-                if live {
-                    Actor::Principal(binding)
-                } else {
-                    Actor::Guest(GuestReason::BindingDead)
-                }
+        Lookup::Found(binding) => {
+            let blocked = session_account(world, identity, binding.principal)
+                .is_some_and(|own| blocked_prefixes(cfg).covers(&own).is_some());
+            if blocked {
+                return Actor::Guest(GuestReason::BindingDead);
             }
-            None => match bare_bind_allowed(cfg, peer, origin_hdr, claimed) {
-                BareBind::Allowed => Actor::Principal(binding),
-                BareBind::ModeRefused => Actor::Guest(GuestReason::BindingDead),
-                BareBind::RequestRefused => Actor::Guest(GuestReason::RequestRefused),
-            },
-        },
+            match binding.signer {
+                Some(fp) => {
+                    let live = key_subject(world, identity, binding.principal)
+                        .is_some_and(|a| identity.key_set(&a).contains(&fp));
+                    if live {
+                        Actor::Principal(binding)
+                    } else {
+                        Actor::Guest(GuestReason::BindingDead)
+                    }
+                }
+                None => match bare_bind_allowed(cfg, peer, origin_hdr, claimed) {
+                    BareBind::Allowed => Actor::Principal(binding),
+                    BareBind::ModeRefused => Actor::Guest(GuestReason::BindingDead),
+                    BareBind::RequestRefused => Actor::Guest(GuestReason::RequestRefused),
+                },
+            }
+        }
     }
 }
 
@@ -375,6 +439,24 @@ pub(crate) enum SessionBody {
 /// answer is the ONE code, `401 session_rejected`, byte-identical across
 /// causes.
 pub(crate) struct SessionRejected;
+
+/// The handshake's TWO refusal values (AUTH-4.34). Every failure of the
+/// CREDENTIAL is [`SessionRejected`], still a unit, so AUTH-4.35's
+/// leak-unrepresentability stands as before. The SECOND value is step 4b's
+/// and is distinct BY TYPE: it carries exactly one datum, public by
+/// construction — the version address of the takedown record the longest
+/// covering entry cites — and the route answers it `403 prefix_blocked`,
+/// NEVER the 401 (AUTH-6.5): this party's credential was not read.
+pub(crate) enum HandshakeRefusal {
+    Rejected(SessionRejected),
+    Blocked { record: Address },
+}
+
+impl From<SessionRejected> for HandshakeRefusal {
+    fn from(rejected: SessionRejected) -> HandshakeRefusal {
+        HandshakeRefusal::Rejected(rejected)
+    }
+}
 
 /// Parse the strict two-form body (AUTH-6.2, AUTH-6.3): the bare
 /// `{"principal": n}` or the signed four-field form, all three signed
@@ -463,8 +545,16 @@ fn find_signer(set: &KeySet, payload: &[u8], sig: &[u8; 64]) -> Option<Fingerpri
 }
 
 /// The handshake (AUTH-4.36/4.37): the signed arm's pinned order — origin
-/// set, burn, key subject, key set, payload, find_signer — and the bare
-/// arm's one predicate. Every failure is the same unit refusal.
+/// set, burn, the account, THE BLOCK (step 4b), key subject, key set,
+/// payload, find_signer — and the bare arm's one predicate. Every failure
+/// of the credential is the same unit refusal; step 4b's is the second
+/// value, [`HandshakeRefusal::Blocked`].
+///
+/// The BARE arm is untouched by the list (AUTH-4.37; RES-65 item 3's named
+/// residue): a bare bind naming a principal under a listed prefix is
+/// admitted as written — reachable only in CLAIMED-PERMISSIVE on loopback,
+/// which no deployment that issues a list runs — and [`resolve`]'s blocked
+/// arm, which is arm-blind, kills it at its first presentation.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handshake(
     cfg: &AuthConfig,
@@ -475,38 +565,57 @@ pub(crate) fn handshake(
     peer: Peer,
     origin_hdr: Option<&str>,
     now: Instant,
-) -> Result<(PrincipalId, Option<Fingerprint>), SessionRejected> {
+) -> Result<(PrincipalId, Option<Fingerprint>), HandshakeRefusal> {
     let claimed = identity.claimant().is_some();
     match body {
         SessionBody::Bare { principal } => {
             match bare_bind_allowed(cfg, peer, origin_hdr, claimed) {
                 BareBind::Allowed => Ok((principal, None)),
-                _ => Err(SessionRejected),
+                _ => Err(SessionRejected.into()),
             }
         }
         SessionBody::Signed { principal, nonce, origin, sig } => {
             // 2 — the signed set (the bare set until the claim's drop).
             if !signed_origins(cfg, claimed).contains(&origin) {
-                return Err(SessionRejected);
+                return Err(SessionRejected.into());
             }
             // 3 — the burn: unknown, expired, wrong-principal, reused all
             // die here, and the entry is gone either way.
             if !challenges.burn(&nonce, principal, now) {
-                return Err(SessionRejected);
+                return Err(SessionRejected.into());
             }
-            // 4/5 — the subject and its set.
-            let Some(account) = key_subject(world, identity, principal) else {
-                return Err(SessionRejected);
+            // 4 — the account, which takes TWO values (AUTH-4.30): the
+            // session's OWN for step 4b, whose set authenticates for step
+            // 5. They are `Some` together (C-2), so the unknown-principal
+            // arm — principal 0 on an unclaimed board included — is this
+            // one refusal, and a party naming a principal the board does
+            // not know is never told a prefix is blocked.
+            let Some(own) = session_account(world, identity, principal) else {
+                return Err(SessionRejected.into());
             };
-            let set = identity.key_set(account);
+            // 4b — THE BLOCK: the account KNOWN, no key set read and no
+            // signature verified for a party the board refuses. The nonce
+            // is SPENT (step 3 stands ahead) and no re-challenge is owed:
+            // the refusal is permanent until a lift. A config-fed gate in
+            // step 2's own shape — the daemon reads no record.
+            if let Some(record) = blocked_prefixes(cfg).covers(&own) {
+                return Err(HandshakeRefusal::Blocked { record: record.clone() });
+            }
+            // 5 — the subject's set. The subject is read HERE, behind 4b,
+            // because its walk reads key sets; ahead of 4b it would answer
+            // nothing 4b needs.
+            let Some(subject) = key_subject(world, identity, principal) else {
+                return Err(SessionRejected.into());
+            };
+            let set = identity.key_set(&subject);
             if set.is_empty() {
-                return Err(SessionRejected);
+                return Err(SessionRejected.into());
             }
             // 6/7 — the signature over the body's OWN strings.
             let payload = session_payload(&origin, &nonce.to_hex(), principal);
             match find_signer(set, &payload, &sig) {
                 Some(fp) => Ok((principal, Some(fp))),
-                None => Err(SessionRejected),
+                None => Err(SessionRejected.into()),
             }
         }
     }
@@ -525,7 +634,7 @@ mod tests {
     /// set is exactly the three loopback defaults and every membership
     /// answer below is the defaults' own.
     fn cfg_at(port: u16, local_trust: bool) -> AuthConfig {
-        let cfg = AuthConfig::new(AuthOptions { local_trust, configured: Vec::new() });
+        let cfg = AuthConfig::new(AuthOptions { local_trust, ..AuthOptions::default() });
         cfg.bind_port(port).expect("a fresh config binds once");
         cfg
     }
@@ -692,6 +801,54 @@ mod tests {
                 "{peer:?}: a signer no key set holds is dead"
             );
         }
+    }
+
+    /// AUTH-4.62 item 1's EXPIRED arm — the one of the thirteen no wire test
+    /// drives, since reaching it over HTTP needs the 60 s TTL. Here `now` is
+    /// an argument: a nonce presented at its expiry dies at the burn and is
+    /// the UNIT refusal, which `session_refused` marshals to the one 401
+    /// body — byte-identical with every other arm by construction — and
+    /// never the second value, which only step 4b produces.
+    #[test]
+    fn an_expired_nonce_is_the_unit_refusal() {
+        let engine = Engine::open(KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+        })
+        .expect("in-memory genesis cannot fail");
+        let snap = engine.kernel().snapshot();
+        let identity = IdentityState::genesis();
+        let cfg = cfg_at(8642, true);
+        let challenges = Challenges::new(4);
+        let issued = Instant::now();
+        let principal = PrincipalId(7);
+        let nonce = challenges.issue(principal, issued, &mut super::super::OsEntropy);
+        let body = SessionBody::Signed {
+            principal,
+            nonce,
+            // UNCLAIMED, so the signed set is the bare set and the dialed
+            // loopback default passes step 2: what refuses is the burn.
+            origin: Origin::parse("http://127.0.0.1:8642").expect("canonical"),
+            sig: [0u8; 64],
+        };
+        let outcome = handshake(
+            &cfg,
+            &challenges,
+            snap.world(),
+            &identity,
+            body,
+            Peer::Loopback,
+            None,
+            issued + CHALLENGE_TTL,
+        );
+        assert!(
+            matches!(outcome, Err(HandshakeRefusal::Rejected(SessionRejected))),
+            "an expired nonce is a failure of the credential: the unit refusal"
+        );
+        assert!(
+            !challenges.burn(&nonce, principal, issued),
+            "and the expired entry burned with the attempt"
+        );
     }
 
     /// AUTH-4.20 — the cap evicts oldest-first.

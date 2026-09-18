@@ -390,9 +390,12 @@ re-challenge is owed, and a garbage `sig` answers the same 403, the
 signature never being reached. The list is the operator's configuration,
 supplied at every start and re-issued while the daemon runs; it is in no
 record and `/health` publishes nothing of it. An entry that would cover
-the operator's own account — or, where the operator holds no account on
-this board, the account that writes this board's bindings — is ignored:
-the block never reaches the hand that lifts it. The bare form is not
+the operator's own account — or, where the operator's account is
+off-board (not under the node prefix the daemon was launched with,
+`--node-prefix` in §The claim ceremony and credentials; with none
+supplied every operator reads as this board's own and the test is off),
+the account that writes this board's bindings — is ignored: the block
+never reaches the hand that lifts it. The bare form is not
 tested at the handshake; a bare session under a listed prefix dies at
 its first presentation (below).
 
@@ -549,6 +552,23 @@ claimed with `--local-trust` still on (any loopback party may write as
 any principal — CLAIMED-PERMISSIVE), and a configured loopback-host
 origin naming a port the daemon is not bound to (keys enrolled under it
 are stranded until the origin is re-issued for the bound port).
+
+**The node prefix.** `--node-prefix 1.N` (env `SKEPD_NODE_PREFIX`),
+optional, names the board's full node prefix in the registry: a node
+address under the root `1` — an org's `1.3`, a subnode's `1.3.2` —
+never the root itself, and nothing under another first component. It
+is EGRESS AND ASSERTION CONFIG (REG-1.69): per daemon, supplied at
+launch as `--origin` is, in no record, journal, sidecar or fold, and
+never a journaled genesis fact — a board carries on under a fresh
+prefix by a reconfigure and restart (REG-1.70), the journal untouched.
+What this daemon decides by it today is ONE thing: the blocked-prefix
+list's off-board test (§Sessions) — whether the list's configured
+operator account is an account of this board — runs against this
+prefix and never against the local `1`, under which every address in
+the registry's global form would read as this board's own. The
+daemon's start-up log names the prefix in force or its absence; with
+none supplied that test is off, every operator reads as on-board, and a
+hosted board must supply one.
 
 ### Correlation and idempotency
 

@@ -301,19 +301,18 @@ pub fn next_content_ordinal(port: u16, token: Option<&str>, doc: &str) -> u64 {
 /// that delegator's doc 1. A refused deposit is an AUTH finding, not a
 /// fixture to bend: the panic names the verdict token.
 ///
-/// THE HAND AT A HANDOFF (AUTH-3.21, AUTH-5.90). Keying a SUBDIVISION of the
-/// claimant's — `CLAIMANT.k`, its genesis homed in the claimant's doc 1 — is
-/// no hire by the address test: it is the claimant's HANDOFF, anchor-grade,
-/// the ceremony's set holding a paper anchor ([`claim_board`]). So there the
-/// genesis is deposited from the claimant's ANCHOR session, imported for the
-/// one act and closed after it, as AUTH-5.90 has the giver do — whatever
-/// signed session the caller holds, which still lands the record atom. A
-/// suite that needs a keyed sub-account of the claimant's gets one by the act
-/// the spec names; the refusal a DEVICE session meets at that cell is
-/// `auth_wire`'s to pin, never this helper's to route around in silence.
-/// Every other hire is deposited from the caller's session as given: a
-/// top-level account's genesis enters no cone, and a subdivision of a
-/// registrar this helper keyed is device-grade, its set holding no anchor.
+/// THE HAND AT A HANDOFF (AUTH-3.21, AUTH-5.90) is the CALLER's to pass.
+/// Keying a SUBDIVISION of the claimant's — `CLAIMANT.k`, its genesis homed
+/// in the claimant's doc 1 — is no hire by the address test: it is the
+/// claimant's HANDOFF, anchor-grade, the ceremony's set holding a paper
+/// anchor ([`claim_board`]), and a caller that needs one passes the
+/// claimant's ANCHOR session as `registrar_signed` (`register.rs` does).
+/// Every deposit here runs from the session as given — nothing is routed
+/// around the gate in silence — so the refusal a DEVICE session meets at
+/// that cell is the caller's to meet or `auth_wire`'s to pin. Every other
+/// hire is device-grade from the caller's own session: a top-level
+/// account's genesis enters no cone, and a subdivision of a registrar this
+/// helper keyed has a set holding no anchor.
 pub fn hire(
     port: u16,
     registrar_signed: &str,
@@ -337,13 +336,9 @@ pub fn hire(
         "hire of {agent_id}: the enroll atom's deposit into {registrar_doc1}: {v}"
     );
     let atom_addr = acked_addr(&v);
-    let claimants_handoff = registrar_doc1 == CLAIMANT_DOC1
-        && agent_account.starts_with(&format!("{CLAIMANT_ACCOUNT}."));
-    let anchor_hand =
-        claimants_handoff.then(|| open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key()));
     let v = op(
         port,
-        Some(anchor_hand.as_deref().unwrap_or(registrar_signed)),
+        Some(registrar_signed),
         &format!(
             r#"{{"op":"make_link","home":"{registrar_doc1}","from":{{"addrs":["{atom_addr}"]}},"to":{{"addrs":["{agent_account}"]}},"ty":{{"addrs":["{T_ENROLL}"]}}}}"#
         ),
@@ -353,10 +348,6 @@ pub fn hire(
         Some("ack_addr"),
         "hire of {agent_id} ({agent_account}) refused by the fold — an AUTH finding: {v}"
     );
-    if let Some(hand) = &anchor_hand {
-        let (st, _) = http(port, "POST", "/session/close", Some(hand), b"");
-        assert_eq!(st, 204, "the imported anchor session closes after its one act");
-    }
     open_signed_session(port, agent_id, key)
 }
 
@@ -399,19 +390,26 @@ pub fn deposit_grant(
 /// before any listener exists: reserve an ephemeral port first, configure
 /// the loopback origin the suites dial, then serve on the reserved port.
 pub fn spawn_configured(dir: &Path, local_trust: bool) -> Skepd {
-    spawn_with_blocked_prefixes(dir, local_trust, None)
+    spawn_with_blocked_prefixes(dir, local_trust, None, None)
 }
 
 /// [`spawn_configured`] with the BLOCKED-PREFIX LIST's supply named — the
-/// library's face of `--blocked-prefixes <FILE>` (AUTH-4.70). The file is
-/// read at THIS open, as at every start, so it must already hold an issue
-/// ([`issue_blocked_list`]); the same helper re-issues it while the daemon
-/// runs. `None` is the daemon every other suite spawns: no supply, no list.
+/// library's face of `--blocked-prefixes <FILE>` (AUTH-4.70) — and the
+/// board's NODE PREFIX, the face of `--node-prefix 1.N` (REG-1.69), which
+/// the list's off-board test reads. The file is read at THIS open, as at
+/// every start, so it must already hold an issue ([`issue_blocked_list`]);
+/// the same helper re-issues it while the daemon runs. `None, None` is the
+/// daemon every other suite spawns: no supply, no list, no prefix.
 pub fn spawn_with_blocked_prefixes(
     dir: &Path,
     local_trust: bool,
     blocked_prefixes: Option<&Path>,
+    node_prefix: Option<&str>,
 ) -> Skepd {
+    let node_prefix = node_prefix.map(|text| {
+        AuthOptions::parse_node_prefix(text)
+            .unwrap_or_else(|| panic!("'{text}' is not a node prefix (1.N, under the root)"))
+    });
     // The reservation is held through the slow open, so only the rebind gap
     // races — and under this suite it DOES: every exchange is one
     // connection, a run leaves some thirty thousand sockets in TIME_WAIT
@@ -422,7 +420,17 @@ pub fn spawn_with_blocked_prefixes(
     // dropped the daemon with its error, so the data dir is free to reopen
     // (recovery is idempotent), and the origin is rebuilt because it names
     // the port. Bounded, so a port that can never be bound still fails loudly.
-    const ATTEMPTS: usize = 8;
+    //
+    // The SECOND race, on the same loop and the same budget: the retry
+    // reopens the SAME data dir, and the kernel's journal-directory flock
+    // from the attempt just dropped is not always re-acquirable the instant
+    // `close` returns under the parallel suite's load — a transient
+    // `WouldBlock` at open ([`open_lost_the_lock_race`]). It is not a bad
+    // data dir (a fresh tempdir, or one this helper itself just held), so it
+    // is retried with a brief backoff to let the release land, bounded the
+    // same way; any OTHER open error is a real fault and panics at once.
+    const ATTEMPTS: usize = 12;
+    let mut last_lock_err = None;
     for _ in 0..ATTEMPTS {
         let reserved = TcpListener::bind(("127.0.0.1", 0)).expect("reserve an ephemeral port");
         let port = reserved.local_addr().expect("reserved local addr").port();
@@ -432,7 +440,17 @@ pub fn spawn_with_blocked_prefixes(
         opts.local_trust = local_trust;
         opts.configured = vec![origin];
         opts.blocked_prefixes = blocked_prefixes.map(Path::to_path_buf);
-        let daemon = Daemon::open_with(dir, opts).expect("daemon open (genesis or recover)");
+        opts.node_prefix = node_prefix.clone();
+        let daemon = match Daemon::open_with(dir, opts) {
+            Ok(daemon) => daemon,
+            Err(e) if open_lost_the_lock_race(&e) => {
+                last_lock_err = Some(e.to_string());
+                drop(reserved);
+                std::thread::sleep(Duration::from_millis(25));
+                continue;
+            }
+            Err(e) => panic!("daemon open (genesis or recover) at {}: {e}", dir.display()),
+        };
         drop(reserved);
         match serve(daemon, port, DEFAULT_WORKERS) {
             Ok(sd) => return sd,
@@ -440,7 +458,28 @@ pub fn spawn_with_blocked_prefixes(
             Err(e) => panic!("bind the reserved port: {e}"),
         }
     }
-    panic!("bind the reserved port: lost the rebind race {ATTEMPTS} times running")
+    panic!(
+        "spawn: lost the rebind or journal-lock race {ATTEMPTS} times running \
+         (last lock error: {last_lock_err:?})"
+    )
+}
+
+/// Does this `Daemon::open_with` failure carry a transient journal-directory
+/// LOCK contention — the flock from the attempt just dropped not yet
+/// re-acquirable — rather than a real fault? Walks the error's `source`
+/// chain for an [`std::io::Error`] of kind [`ErrorKind::WouldBlock`], which
+/// `Kernel::open` surfaces from `flock(LOCK_EX | LOCK_NB)` (`OpenError::Io`).
+/// Only that one kind is retried; a bad checkpoint, a corrupt journal or any
+/// other I/O failure is a real condition and stops the spawn loudly.
+fn open_lost_the_lock_race(err: &skepd::DaemonError) -> bool {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(err);
+    while let Some(e) = source {
+        if let Some(io) = e.downcast_ref::<std::io::Error>() {
+            return io.kind() == ErrorKind::WouldBlock;
+        }
+        source = e.source();
+    }
+    false
 }
 
 /// The list's two-field HEADER as a suite names it: the configured operator

@@ -2078,23 +2078,50 @@ const RECORD_NODE: &str = "1.0.1.0.12.1";
 /// covers the claimant covers it.
 const PRINCIPAL_ZERO: u64 = 0;
 
-/// An OFF-BOARD host's account — not under the board's own local `1`
-/// (REG-1.66), which is the test AUTH-4.36 step 4b names for "not an account
-/// of this board".
+/// An OFF-BOARD host's account, lexically: `2` is no root the registry
+/// assigns (REG-1.67), so it sits under no `1.N` and the off-board test —
+/// the header's operator read against the board's NODE PREFIX (REG-1.69;
+/// AUTH-4.36 step 4b as ruled 2026-09-18) — refuses it under any prefix.
+/// The host in the registry's own global form, `1.N.0.k`, is the new
+/// vector's (`the_off_board_test_runs_against_the_node_prefix…`).
 const OFF_BOARD_HOST: &str = "2.0.7";
 
-/// A CLAIMED board (CLAIMED-PERMISSIVE) with the list's supply named: the
-/// data dir and the supply file sit side by side under `root`, so a restart
-/// over the same `root` meets the same file. The first issue is the EMPTY
-/// list unless the file is already there — the restart cells' case.
+/// The suite's board in the registry: `--node-prefix 1.3` (REG-1.69), which
+/// every listed board is launched with — so the off-board test is LIVE in
+/// every vector, and a header's operator is on-board iff it sits under it.
+const NODE_PREFIX: &str = "1.3";
+
+/// `local`'s GLOBAL form on the suite's board: the local `1` replaced by
+/// [`NODE_PREFIX`] (REG-1.66: "egress replaces the local `1` with the
+/// board's full node prefix") — the spelling the header's OPERATOR field
+/// carries, since the off-board test reads it against that prefix.
+fn global_form(local: &str) -> String {
+    let rest = local.strip_prefix('1').expect("a local-form address begins with 1");
+    format!("{NODE_PREFIX}{rest}")
+}
+
+/// A CLAIMED board (CLAIMED-PERMISSIVE) with the list's supply named and
+/// the suite's node prefix: [`spawn_listed_at`] at [`NODE_PREFIX`].
 fn spawn_listed(root: &std::path::Path) -> (skepd::Skepd, std::path::PathBuf) {
+    spawn_listed_at(root, Some(NODE_PREFIX))
+}
+
+/// A CLAIMED board (CLAIMED-PERMISSIVE) with the list's supply named and
+/// `node_prefix` in force, or none: the data dir and the supply file sit
+/// side by side under `root`, so a restart over the same `root` meets the
+/// same file. The first issue is the EMPTY list unless the file is already
+/// there — the restart cells' case.
+fn spawn_listed_at(
+    root: &std::path::Path,
+    node_prefix: Option<&str>,
+) -> (skepd::Skepd, std::path::PathBuf) {
     let list = root.join("blocked.json");
     if !list.exists() {
         issue_blocked_list(&list, BlockedHeader::default(), &[]);
     }
     let data = root.join("data");
     std::fs::create_dir_all(&data).expect("the data dir");
-    let sd = spawn_with_blocked_prefixes(&data, true, Some(&list));
+    let sd = spawn_with_blocked_prefixes(&data, true, Some(&list), node_prefix);
     claim_board(sd.port());
     (sd, list)
 }
@@ -2365,7 +2392,11 @@ fn a_reissued_entry_kills_the_live_sessions_under_it_on_every_route_of_the_set()
 /// comparand is the claimant. Every other entry installs.
 ///
 /// One board, one reissue per row: the header is config, and the claimant —
-/// "the OLD REGISTRAR" of the two fork rows — is whoever claimed it.
+/// "the OLD REGISTRAR" of the two fork rows — is whoever claimed it. The
+/// board is launched `--node-prefix 1.3`, so "NOT an account of this board"
+/// is read against that prefix (REG-1.69; the ruled form of step 4b): the
+/// lexically foreign host is off-board under it, and the seat a self-served
+/// fork names is spelled in the GLOBAL form the header carries.
 #[test]
 fn the_headers_two_comparands_are_inert_at_the_four_lineage_cells() {
     let root = tempfile::tempdir().expect("tempdir");
@@ -2396,7 +2427,10 @@ fn the_headers_two_comparands_are_inert_at_the_four_lineage_cells() {
     open_signed_session(port, zero, &device_key());
     open_signed_session(port, 941, &seat_key);
     // …and a header that NAMES the claimant is the same row as one naming
-    // none (RES-66 item 4 (i)).
+    // none (RES-66 item 4 (i)): the same inert set. Named here in the LOCAL
+    // form, under no `1.N`, it reads OFF-board under the ruled test, and (b)
+    // — the claimant, the field omitted — is the one account (a) already
+    // is; the verdicts are the row above's, by the other comparand.
     let names_the_claimant = BlockedHeader { operator: Some(claimant), binding_writer: None };
     issue_blocked_list(&list, names_the_claimant, &[(claimant, RECORD_CLAIMANT)]);
     assert!(!presented_dead(port, &claimant_live), "the root, the claimant named: it lives");
@@ -2423,13 +2457,20 @@ fn the_headers_two_comparands_are_inert_at_the_four_lineage_cells() {
     open_signed_session(port, zero, &device_key());
 
     // A FORK THE COMMUNITY ITSELF SERVES: the header names the SEAT, an
-    // account of the copy — so (b) is SILENT and the old claimant stays
-    // blockable (RES-66). The entry over the OLD CLAIMANT installs and its
-    // sessions die, principal 0's among them (0 ↦ the claimant); the entry
-    // over the SEAT is ignored.
+    // account of the copy — in the GLOBAL form under the board's node
+    // prefix, `1.3.0.k`, the form that reads ON-board — so (b) is SILENT
+    // and the old claimant stays blockable (RES-66). The entry over the OLD
+    // CLAIMANT installs and its sessions die, principal 0's among them (0 ↦
+    // the claimant); the entry over the SEAT — spelled as the header spells
+    // it, the operator being read as spelled — is ignored.
     let seat_live = open_signed_session(port, 941, &seat_key);
-    let self_served = BlockedHeader { operator: Some(&seat), binding_writer: None };
-    issue_blocked_list(&list, self_served, &[(claimant, RECORD_CLAIMANT), (&seat, RECORD_SEAT)]);
+    let seat_global = global_form(&seat);
+    let self_served = BlockedHeader { operator: Some(&seat_global), binding_writer: None };
+    issue_blocked_list(
+        &list,
+        self_served,
+        &[(claimant, RECORD_CLAIMANT), (&seat_global, RECORD_SEAT)],
+    );
     assert!(presented_dead(port, &claimant_live), "fork: the old claimant's session dies");
     assert!(presented_dead(port, &zero_live), "fork: principal 0's dies with it");
     assert_blocked(port, CLAIMANT_PRINCIPAL, &device_key(), RECORD_CLAIMANT, "fork: the old claimant");
@@ -2455,6 +2496,68 @@ fn the_headers_two_comparands_are_inert_at_the_four_lineage_cells() {
     open_signed_session(port, 942, &member_key);
 
     sd.shutdown();
+}
+
+/// THE OFF-BOARD TEST RUNS AGAINST THE NODE PREFIX (REG-1.69; AUTH-4.36 step
+/// 4b's comparand (b) as ruled 2026-09-18), never against the local root `1`
+/// — under which a host's account in the registry's GLOBAL form (`1.3.0.7`:
+/// every global address begins with the root, REG-1.66) read as on-board,
+/// (b) went silent, and the hosted board's claimant became blockable (W2a's
+/// escalation 3). ONE header — operator `1.3.0.7`, the second field omitted
+/// — installed on three boards:
+///
+/// * `--node-prefix 1.3`: the operator is ON-BOARD, under the prefix; (b) is
+///   SILENT, and the entry over the claimant — the binding-writing account —
+///   is LIVE: the claimant's session dies and its handshake is the 403;
+/// * `--node-prefix 1.5`: the same operator is OFF-BOARD; (b) is LIVE, and
+///   the entry over the served board's claimant is INERT (and logged): its
+///   session lives and its handshake is admitted, principal 0's with it;
+/// * no node prefix: the daemon cannot tell, the test is OFF and every
+///   operator reads as on-board — the claimant blockable, as on the first
+///   board — and the install log says so once (pinned at the unit level,
+///   the log being stderr).
+///
+/// On every board a MEMBER's entry installs: the list is in force, and only
+/// the exemption moves.
+#[test]
+fn the_off_board_test_runs_against_the_node_prefix_and_is_off_without_one() {
+    // Board `1.3`'s account `0.7`, in the registry's global form.
+    const OPERATOR: &str = "1.3.0.7";
+    let header = BlockedHeader { operator: Some(OPERATOR), binding_writer: None };
+    for (node_prefix, claimant_blockable, what) in [
+        (Some("1.3"), true, "--node-prefix 1.3: the operator on-board, (b) silent"),
+        (Some("1.5"), false, "--node-prefix 1.5: the operator off-board, (b) live"),
+        (None, true, "no --node-prefix: the test off, every operator on-board"),
+    ] {
+        let root = tempfile::tempdir().expect("tempdir");
+        let (sd, list) = spawn_listed_at(root.path(), node_prefix);
+        let port = sd.port();
+        let anchor = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
+        let member_key = distinct_key(51);
+        let member = keyed_member(port, &anchor, 951, &member_key);
+        let claimant_live = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+        let zero_live = open_signed_session(port, PRINCIPAL_ZERO, &device_key());
+        let member_live = open_signed_session(port, 951, &member_key);
+        issue_blocked_list(
+            &list,
+            header,
+            &[(CLAIMANT_ACCOUNT, RECORD_CLAIMANT), (&member, RECORD_MEMBER)],
+        );
+        assert!(presented_dead(port, &member_live), "{what}: a member's session dies");
+        assert_blocked(port, 951, &member_key, RECORD_MEMBER, what);
+        if claimant_blockable {
+            assert!(presented_dead(port, &claimant_live), "{what}: the claimant's session dies");
+            assert!(presented_dead(port, &zero_live), "{what}: principal 0's dies with it");
+            assert_blocked(port, CLAIMANT_PRINCIPAL, &device_key(), RECORD_CLAIMANT, what);
+            assert_blocked(port, PRINCIPAL_ZERO, &device_key(), RECORD_CLAIMANT, what);
+        } else {
+            assert!(!presented_dead(port, &claimant_live), "{what}: the served claimant lives");
+            assert!(!presented_dead(port, &zero_live), "{what}: principal 0's session lives");
+            open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+            open_signed_session(port, PRINCIPAL_ZERO, &device_key());
+        }
+        sd.shutdown();
+    }
 }
 
 /// RES-115 — THE LIST IS SUPPLIED AT EVERY START: a restart re-installs it

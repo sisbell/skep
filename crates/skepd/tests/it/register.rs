@@ -591,7 +591,10 @@ fn i4_a_b_a_grant_admits_only_from_the_issuer_s_own_published_doc_1() {
     let s = seat_stranger(port, 952);
     let s_signed = hire(port, &signed, CLAIMANT_DOC1, &s.account, 952, &distinct_key(52));
     let c = seat_sub_account(port, &owner, 953);
-    let c_signed = hire(port, &signed, CLAIMANT_DOC1, &c.account, 953, &distinct_key(53));
+    // A subdivision of the claimant's is the claimant's HANDOFF (AUTH-3.21):
+    // anchor-grade under the ceremony's paper anchor, so its genesis is
+    // deposited from the claimant's ANCHOR session, never the device's.
+    let c_signed = hire(port, &open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key()), CLAIMANT_DOC1, &c.account, 953, &distinct_key(53));
     let edition = published_edition(port, &signed);
     let journal = owner_draft(port, &owner);
 

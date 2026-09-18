@@ -2422,6 +2422,12 @@ pub fn serve(daemon: Daemon, port: u16, workers: usize) -> io::Result<Skepd> {
          disagreeing about the number every live session's origin set derives from",
     );
     daemon.log_config_warnings(false);
+    // The node prefix in force, or its absence (REG-1.69), named ONCE at
+    // start: the one config the blocked-prefix list's off-board test reads
+    // (AUTH-4.36 step 4b as ruled 2026-09-18). What the line says is
+    // [`crate::auth::AuthConfig::node_prefix_line`]'s; the stream is this
+    // daemon's, for [`Daemon::log_config_warnings`]'s reason.
+    let _ = writeln!(std::io::stderr(), "skepd: {}", daemon.auth.cfg.node_prefix_line());
     // The list installed at open, named beside the warnings (AUTH-4.70: "a
     // restart never lapses a standing block and the startup log names the
     // list in force").

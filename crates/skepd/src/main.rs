@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 use std::process::exit;
 
+use skep_address::Address;
 // `DEFAULT_WORKERS` is the LIBRARY's, not this binary's: it is the third
 // term of a relation whose other two are the daemon's permit pools, and the
 // library holds the assertion that keeps the three in step.
@@ -40,6 +41,18 @@ const SKEPD_ORIGIN: &str = "SKEPD_ORIGIN";
 /// [`Daemon::open_with`]'s to say.
 const SKEPD_BLOCKED_PREFIXES: &str = "SKEPD_BLOCKED_PREFIXES";
 
+/// The node prefix's variable, a bare name as the origin list's is: its
+/// value is parsed by [`AuthOptions::parse_node_prefix`], whose answer is
+/// an `Option` in [`Origin::parse`]'s shape rather than a `FromStr` the
+/// [`from_env`] pair could carry, so the two rules that helper holds are
+/// restated at its read.
+const SKEPD_NODE_PREFIX: &str = "SKEPD_NODE_PREFIX";
+
+/// What `--node-prefix` takes (REG-1.66, REG-1.69), said once for the flag,
+/// the variable and the usage text.
+const NODE_PREFIX_FORM: &str =
+    "a node prefix of the form 1.N — the board's node address under the root 1, never the root itself";
+
 /// The help text, with each default read from the constant that supplies
 /// it — so the program cannot describe a default it does not use.
 fn usage() -> String {
@@ -47,7 +60,7 @@ fn usage() -> String {
         "\
 usage: skepd --data-dir <DIR> [--port <PORT>] [--workers <N>]
              [--local-trust | --no-local-trust] [--origin <ORIGIN>]...
-             [--blocked-prefixes <FILE>]
+             [--blocked-prefixes <FILE>] [--node-prefix <PREFIX>]
 
   --data-dir <DIR>   journal/checkpoint directory (env: SKEPD_DATA_DIR);
                      created if absent, recovered if populated
@@ -79,6 +92,18 @@ usage: skepd --data-dir <DIR> [--port <PORT>] [--workers <N>]
                      and re-read whenever it is REPLACED — write the new
                      list beside it and rename it over; no restart, no
                      signal
+  --node-prefix <PREFIX>
+                     the board's full node prefix in the registry, 1.N
+                     (env: SKEPD_NODE_PREFIX) — an address under the root
+                     1, never the root itself. Egress and assertion
+                     config, per daemon, supplied at every start and
+                     never journaled; a fresh prefix is a reconfigure
+                     and restart. What it decides here: the blocked-
+                     prefix list's off-board test — whether the list's
+                     configured operator account is an account of this
+                     board — runs against it. Without it that test is
+                     OFF (every operator reads as this board's own): a
+                     hosted board must supply one
   --help             this text
 
 The wire protocol is specified in skep/docs/wire.md."
@@ -92,6 +117,7 @@ struct Args {
     local_trust: bool,
     origins: Vec<Origin>,
     blocked_prefixes: Option<PathBuf>,
+    node_prefix: Option<Address>,
 }
 
 /// Read one setting from the environment, or `None` when it is UNSET. Each
@@ -142,6 +168,19 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
             .collect::<Result<_, _>>()?,
     };
     let mut blocked_prefixes = std::env::var_os(SKEPD_BLOCKED_PREFIXES).map(PathBuf::from);
+    // The node prefix, under the origin list's two rules: bytes that are
+    // not text are refused rather than read as absent, and the value goes
+    // through the library's own parse — one grammar for the flag, the
+    // variable and every embedder.
+    let mut node_prefix: Option<Address> = match std::env::var(SKEPD_NODE_PREFIX) {
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(format!("{SKEPD_NODE_PREFIX}: the value is not UTF-8 text"))
+        }
+        Ok(v) => Some(AuthOptions::parse_node_prefix(&v).ok_or_else(|| {
+            format!("{SKEPD_NODE_PREFIX}: '{v}' is not {NODE_PREFIX_FORM}")
+        })?),
+    };
     let mut it = argv;
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -170,6 +209,12 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
                 let v = it.next().ok_or("--blocked-prefixes needs a value")?;
                 blocked_prefixes = Some(PathBuf::from(v));
             }
+            "--node-prefix" => {
+                let v = it.next().ok_or("--node-prefix needs a value")?;
+                node_prefix = Some(AuthOptions::parse_node_prefix(&v).ok_or_else(|| {
+                    format!("--node-prefix: '{v}' is not {NODE_PREFIX_FORM}")
+                })?);
+            }
             "--help" | "-h" => return Ok(None),
             other => return Err(format!("unknown argument '{other}'")),
         }
@@ -192,6 +237,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
         local_trust: local_trust.unwrap_or(true),
         origins,
         blocked_prefixes,
+        node_prefix,
     }))
 }
 
@@ -220,6 +266,10 @@ fn main() {
     // Supplied at every start, as `--origin` is (AUTH-4.70): the file is
     // read inside the open, and one that is not a list stops the start.
     opts.blocked_prefixes = args.blocked_prefixes.clone();
+    // The node prefix (REG-1.69): egress and assertion config, supplied at
+    // every start and never journaled — a fresh one is this binary
+    // relaunched (REG-1.70). `serve` names it, or its absence, at start.
+    opts.node_prefix = args.node_prefix.clone();
     let daemon = match Daemon::open_with(&args.data_dir, opts) {
         Ok(d) => d,
         Err(e) => {
@@ -302,6 +352,39 @@ mod tests {
                 .workers,
             2,
             "and a count in range is read as given"
+        );
+    }
+
+    /// REG-1.69's `--node-prefix 1.N`: an address under the root `1`, read
+    /// as given and optional; the root itself, an address under another
+    /// first component, and an account address are refused at the parse
+    /// with the form named — never repaired, never read as absent.
+    #[test]
+    fn the_node_prefix_flag_takes_a_node_address_under_the_root_and_nothing_else() {
+        let a = parse_args(argv(&["--data-dir", "/tmp/x", "--node-prefix", "1.3"]))
+            .expect("valid flags")
+            .expect("a run, not usage");
+        assert_eq!(
+            a.node_prefix.as_ref().map(|p| p.tumbler().to_string()),
+            Some("1.3".to_string()),
+            "the board's node prefix, as given"
+        );
+        let absent = parse_args(argv(&["--data-dir", "/tmp/x"]))
+            .expect("valid flags")
+            .expect("a run, not usage");
+        assert!(absent.node_prefix.is_none(), "the flag is optional: a notebook has none");
+        for bad in ["1", "2.4", "1.3.0.7", "1.0", "x", ""] {
+            match parse_args(argv(&["--data-dir", "/tmp/x", "--node-prefix", bad])) {
+                Err(refused) => assert!(
+                    refused.starts_with(&format!("--node-prefix: '{bad}' is not a node prefix")),
+                    "the refusal names the flag, the value and the form: {refused}"
+                ),
+                Ok(_) => panic!("'{bad}' is not a node prefix, and was not refused"),
+            }
+        }
+        assert!(
+            parse_args(argv(&["--data-dir", "/tmp/x", "--node-prefix"])).is_err(),
+            "the flag without its value is refused"
         );
     }
 }

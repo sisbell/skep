@@ -28,7 +28,7 @@ use std::time::SystemTime;
 use ed25519_dalek::VerifyingKey;
 use rand_core::{CryptoRng, RngCore};
 use serde_json::{Map, Value};
-use skep_address::{validate, Address, Nat, Tumbler};
+use skep_address::{validate, Address, Level, Nat, Tumbler};
 use skep_febe::{ReqId, SessionId};
 use skep_identity::{LinkDeposit, PublicKey};
 use skep_namespace::prefix_contains;
@@ -80,11 +80,56 @@ pub struct AuthOptions {
     /// format and the re-read are [`BlockedSupply`]'s. `None` is a board
     /// with no serving layer — the notebook — and no prefix is blocked.
     pub blocked_prefixes: Option<PathBuf>,
+    /// The board's full NODE PREFIX in the registry — `--node-prefix 1.N`
+    /// (REG-1.69): EGRESS AND ASSERTION CONFIG, per daemon, supplied at
+    /// every start as `configured` is and never a journaled genesis fact,
+    /// which is what lets the same board answer to a successor under a
+    /// fresh prefix — taken by a reconfigure and restart (REG-1.70). In no
+    /// record, journal, sidecar or fold. The ONE thing this daemon decides
+    /// by it: the blocked-prefix list's OFF-BOARD test
+    /// ([`BlockedPrefixes::installed_under`]) — whether the list's configured
+    /// operator account is an account of this board — read against this
+    /// prefix and never against the local root `1`, under which every
+    /// address in the registry's global form would read as this board's own
+    /// (REG-1.66). `None` is a board that has not been told its prefix: the
+    /// notebook, or a hosted board mis-launched — and that test is then OFF,
+    /// every operator reading as on-board, the start-up log saying so.
+    ///
+    /// PRECONDITION: a `Some` is what [`AuthOptions::parse_node_prefix`]
+    /// answers — a node address strictly under the root. The binary parses
+    /// its flag through it; an embedder owes the same.
+    pub node_prefix: Option<Address>,
 }
 
 impl Default for AuthOptions {
     fn default() -> AuthOptions {
-        AuthOptions { local_trust: true, configured: Vec::new(), blocked_prefixes: None }
+        AuthOptions {
+            local_trust: true,
+            configured: Vec::new(),
+            blocked_prefixes: None,
+            node_prefix: None,
+        }
+    }
+}
+
+impl AuthOptions {
+    /// REG-1.69's `--node-prefix 1.N`, parsed: the board's full node prefix
+    /// — a T4-valid NODE address strictly under the root `1` (REG-1.66: orgs
+    /// are allocated second components, `1.2`, `1.3`, …; a subnode sits
+    /// deeper, `1.3.2`). `None` for anything else: the root itself (a board
+    /// AT the root answers to no prefix but `1`, and every address is under
+    /// it — the off-board test has no work there), an address under another
+    /// first component (REG-1.67: no other root is assigned), an account or
+    /// document address, or text no tumbler spells. Carries no reason, as
+    /// [`Origin::parse`] carries none: the form is one shape, and the
+    /// binary's usage text states it.
+    pub fn parse_node_prefix(text: &str) -> Option<Address> {
+        let prefix = validate(wire_tumbler(text).ok()?).ok()?;
+        let root = root();
+        let under_root = prefix.level() == Level::Node
+            && prefix != root
+            && prefix_contains(&root, &prefix);
+        under_root.then_some(prefix)
     }
 }
 
@@ -102,7 +147,9 @@ impl Default for AuthOptions {
 /// fold — and the one member RE-ISSUED WHILE THE DAEMON RUNS, which is why
 /// it alone sits behind a lock. Read through [`blocked_prefixes`]; replaced
 /// whole by [`AuthConfig::install_blocked`], under the credential write
-/// gate.
+/// gate. And the NODE PREFIX (REG-1.69), fixed at open as `configured` is:
+/// a fresh one is a reconfigure and restart (REG-1.70), so it sits behind
+/// no lock, and every install of the list reads the one in force.
 pub(crate) struct AuthConfig {
     pub local_trust: bool,
     pub configured: BTreeSet<Origin>,
@@ -112,6 +159,9 @@ pub(crate) struct AuthConfig {
     /// level's `resolve`); what ORDERS an install against the writes it
     /// ends is the credential write gate its installer holds.
     blocked: parking_lot::RwLock<Arc<BlockedPrefixes>>,
+    /// [`AuthOptions::node_prefix`], as supplied; `None` where the daemon
+    /// was told none.
+    node_prefix: Option<Address>,
 }
 
 impl AuthConfig {
@@ -122,6 +172,30 @@ impl AuthConfig {
             port: OnceLock::new(),
             // Empty until [`AuthState::open`] installs the start-up supply.
             blocked: parking_lot::RwLock::new(Arc::new(BlockedPrefixes::default())),
+            node_prefix: opts.node_prefix,
+        }
+    }
+
+    /// The node prefix in force (REG-1.69), or `None` where the daemon was
+    /// told none — the one reader is the list's install, and the log.
+    pub fn node_prefix(&self) -> Option<&Address> {
+        self.node_prefix.as_ref()
+    }
+
+    /// The start-up line's text: the node prefix in force, or its absence
+    /// — said once, at start, whether or not a list is supplied, because a
+    /// hosted board launched without its prefix has its off-board test OFF
+    /// and would otherwise learn so only at its first install.
+    pub fn node_prefix_line(&self) -> String {
+        match &self.node_prefix {
+            Some(prefix) => format!(
+                "node prefix {} (--node-prefix): egress and assertion config, never journaled; \
+                 the blocked-prefix list's off-board test runs against it",
+                prefix.tumbler()
+            ),
+            None => "no --node-prefix: the off-board test is off (every operator account reads \
+                     as this board's own); a hosted board must supply one"
+                .to_string(),
         }
     }
 
@@ -257,13 +331,15 @@ impl AuthState {
 
     /// One install, whole: the issue compared against the two INERT
     /// comparands (AUTH-4.36 step 4b) — the header's, the claimant taken
-    /// where it names none — and the result swapped in under the write
-    /// gate. The claimant is read HERE, under that gate, because the claim
-    /// commits only under it: the comparands an install resolves are the
-    /// ones in force at its own position.
+    /// where it names none, the off-board test read against the node prefix
+    /// in force — and the result swapped in under the write gate. The
+    /// claimant is read HERE, under that gate, because the claim commits
+    /// only under it: the comparands an install resolves are the ones in
+    /// force at its own position.
     fn install_blocked(&self, lock: &LockWrite<'_>, issue: BlockedIssue) {
         let claimant = self.fold.snapshot().claimant().cloned();
-        self.cfg.install_blocked(lock, BlockedPrefixes::installed(issue, claimant.as_ref()));
+        let list = BlockedPrefixes::installed_under(issue, claimant.as_ref(), self.cfg.node_prefix());
+        self.cfg.install_blocked(lock, list);
     }
 
     /// THE CLAIM FLIP's half of the install (RES-65 item 4: "at the install,
@@ -777,13 +853,19 @@ pub(crate) struct BlockedPrefixes {
     /// Comparand (b) as this install resolved it — `Some` only where it is
     /// LIVE, which is where the operator account is off-board.
     binding_writer: Option<Address>,
+    /// The node prefix the off-board test ran against (REG-1.69), or `None`
+    /// where the daemon was told none and the test was off — kept beside
+    /// the verdicts so the log can say which.
+    node_prefix: Option<Address>,
 }
 
-/// The board's own LOCAL `1` (REG-1.66: "a board's OWN space is `1.x`
-/// locally, always"): the test AUTH-4.36 step 4b names for "an account of
-/// this board" is that its address sits under it, and it is M3's own test
-/// for the same question (`register_node`'s bootstrap-lineage guard).
-fn local_root() -> Address {
+/// The registry's ROOT, `1` (REG-1.66: every global address begins with it;
+/// a board's OWN space is `1.x` locally, the leading `1` reading as THIS NODE
+/// locally and as the root globally). The reference [`AuthOptions::
+/// parse_node_prefix`] admits a node prefix under — and NOT the off-board
+/// test's comparand: under it every global-form address reads as this
+/// board's own, which is the defect the node prefix exists to close.
+fn root() -> Address {
     let one = Tumbler::new([Nat::from(1u32)]).expect("one component is a tumbler");
     validate(one).expect("`1` is a T4-valid node address")
 }
@@ -792,9 +874,27 @@ impl BlockedPrefixes {
     /// THE INSTALL'S COMPARISON (AUTH-4.36 step 4b, in its own words): an
     /// entry covering (a) the CONFIGURED OPERATOR ACCOUNT — the claimant
     /// where the header names none — or (b), where that account is NOT an
-    /// account of this board (its address not under the board's own local
-    /// `1`), the board's BINDING-WRITING ACCOUNT — the claimant where the
-    /// header omits it — is INERT.
+    /// account of this board, the board's BINDING-WRITING ACCOUNT — the
+    /// claimant where the header omits it — is INERT.
+    ///
+    /// "NOT an account of this board" is THE OFF-BOARD TEST, and as ruled
+    /// (2026-09-18, W2a's escalation 3) it reads the header's operator
+    /// account against the board's NODE PREFIX (REG-1.69):
+    /// `!prefix_contains(node_prefix, operator)`. NEVER against the local
+    /// root `1` (REG-1.66), which the rule's sealed wording names and which
+    /// this build does not keep beside it: every address in the registry's
+    /// GLOBAL form begins with `1`, so under that test a host's `1.3.0.7`
+    /// read as on-board, (b) went silent, and the hosted board's claimant
+    /// became blockable — the cell REG-4.198 rules out. Two arms beside the
+    /// test: the claimant taken in the header's place is an account of this
+    /// board BY CONSTRUCTION ((a) and (b) are one account where the header
+    /// names none), so only a NAMED operator is tested — the fold's claimant
+    /// is in the local form, which no `1.N` contains; and with NO node
+    /// prefix supplied the daemon CANNOT tell, so every operator reads as
+    /// on-board — (b) silent — and the log says so once. The named operator
+    /// is read AS SPELLED, against the prefix and against the entries alike:
+    /// the header is the serving layer's to spell in the registry's global
+    /// form, the form the boundary speaks (REG-1.66).
     ///
     /// So (a) and (b) are one account where the header names none and at
     /// the root; (b) is SILENT on a fork the community itself serves, whose
@@ -809,9 +909,16 @@ impl BlockedPrefixes {
     /// COVER, never descent (AUTH-4.70): the test is
     /// `prefix_contains(entry.prefix, comparand)`, so an entry BELOW a
     /// comparand — the agent space, a delegated subtree — blocks as before.
-    fn installed(issue: BlockedIssue, claimant: Option<&Address>) -> BlockedPrefixes {
+    fn installed_under(
+        issue: BlockedIssue,
+        claimant: Option<&Address>,
+        node_prefix: Option<&Address>,
+    ) -> BlockedPrefixes {
         let operator = issue.header.operator.as_ref().or(claimant).cloned();
-        let off_board = operator.as_ref().is_some_and(|o| !prefix_contains(&local_root(), o));
+        let off_board = match (&issue.header.operator, node_prefix) {
+            (Some(named), Some(prefix)) => !prefix_contains(prefix, named),
+            _ => false,
+        };
         let binding_writer = if off_board {
             issue.header.binding_writer.as_ref().or(claimant).cloned()
         } else {
@@ -833,7 +940,18 @@ impl BlockedPrefixes {
                 }
             })
             .collect();
-        BlockedPrefixes { issue, inert, operator, binding_writer }
+        BlockedPrefixes { issue, inert, operator, binding_writer, node_prefix: node_prefix.cloned() }
+    }
+
+    /// [`BlockedPrefixes::installed_under`] told NO node prefix — the
+    /// off-board test off. Test-side only: its one caller outside this file
+    /// is `policy.rs`'s seat-carve unit test, which reads the header as
+    /// issued and asks nothing of the prefix (that file is not this lane's
+    /// to edit; the report names the call). Product code names the prefix
+    /// in force.
+    #[cfg(test)]
+    fn installed(issue: BlockedIssue, claimant: Option<&Address>) -> BlockedPrefixes {
+        BlockedPrefixes::installed_under(issue, claimant, None)
     }
 
     /// AUTH-4.36 step 4b's one predicate: `Some` iff some entry IN FORCE
@@ -874,10 +992,13 @@ impl BlockedPrefixes {
 
     /// THE LOG (AUTH-4.70 "the startup log names the list in force";
     /// AUTH-4.36 step 4b "ignored at install and said so in the log"): one
-    /// line naming the count and the header as resolved, then one line per
-    /// INERT entry, by name, with the comparand it covers. Entries in force
-    /// are counted and not listed: the file is theirs to be read from, and
-    /// a line per standing takedown at every reissue is a log nobody reads.
+    /// line naming the count, the header as resolved and the node prefix
+    /// the off-board test ran against — or, where none was supplied, that
+    /// the test was off, said once per install and not per entry — then one
+    /// line per INERT entry, by name, with the comparand it covers. Entries
+    /// in force are counted and not listed: the file is theirs to be read
+    /// from, and a line per standing takedown at every reissue is a log
+    /// nobody reads.
     pub fn log_lines(&self) -> Vec<String> {
         let named = |field: &Option<Address>, resolved: &Option<Address>, absent: &str| {
             match (field, resolved) {
@@ -888,13 +1009,28 @@ impl BlockedPrefixes {
         };
         let header = self.header();
         let operator = named(&header.operator, &self.operator, "the header names none");
-        let binding_writer = match &self.binding_writer {
-            live @ Some(_) => format!(
-                "{} — exempt, the operator account being off-board",
-                named(&header.binding_writer, live, "the header omits it")
+        let binding_writer = match (&self.binding_writer, &self.node_prefix) {
+            (live @ Some(_), Some(prefix)) => format!(
+                "{} — exempt, the operator account being off-board (not under the node \
+                 prefix {})",
+                named(&header.binding_writer, live, "the header omits it"),
+                prefix.tumbler(),
             ),
-            None => "not a comparand (the operator account is an account of this board, \
-                     or there is none)"
+            // Unreachable by construction — (b) is live only against a
+            // prefix — and answered rather than asserted: a log line is not
+            // the place to stop a daemon.
+            (live @ Some(_), None) => format!(
+                "{} — exempt, the operator account being off-board",
+                named(&header.binding_writer, live, "the header omits it"),
+            ),
+            (None, Some(prefix)) => format!(
+                "not a comparand (the operator account is an account of this board — under \
+                 the node prefix {}, or the claimant taken in the header's place — or there \
+                 is none)",
+                prefix.tumbler(),
+            ),
+            (None, None) => "not a comparand (no --node-prefix: the off-board test is off; a \
+                             hosted board must supply one)"
                 .to_string(),
         };
         let inert = self.inert.iter().filter(|i| i.is_some()).count();
@@ -1249,8 +1385,9 @@ mod tests {
     /// and component-wise, so `1.0.2` does not contain `1.0.21`.
     #[test]
     fn covers_answers_the_longest_covering_entrys_record() {
-        let list = BlockedPrefixes::installed(
+        let list = BlockedPrefixes::installed_under(
             issue(None, None, &[("1.0.2", "1.0.1.0.7.1"), ("1.0.2.1", "1.0.1.0.8.1")]),
+            None,
             None,
         );
         assert_eq!(list.covers(&addr("1.0.2")), Some(&addr("1.0.1.0.7.1")), "the prefix itself");
@@ -1259,11 +1396,13 @@ mod tests {
         assert_eq!(list.covers(&addr("1.0.2.1.4")), Some(&addr("1.0.1.0.8.1")));
         assert_eq!(list.covers(&addr("1.0.3")), None, "a sibling");
         assert_eq!(list.covers(&addr("1.0.21")), None, "containment is by component");
-        let below = BlockedPrefixes::installed(issue(None, None, &[("1.0.2.1", "1.0.1.0.8.1")]), None);
+        let below =
+            BlockedPrefixes::installed_under(issue(None, None, &[("1.0.2.1", "1.0.1.0.8.1")]), None, None);
         assert_eq!(below.covers(&addr("1.0.2")), None, "an entry over X.k does not reach X");
         // Two entries over ONE prefix: the first in supply order answers.
-        let tied = BlockedPrefixes::installed(
+        let tied = BlockedPrefixes::installed_under(
             issue(None, None, &[("1.0.2", "1.0.1.0.7.1"), ("1.0.2", "1.0.1.0.8.1")]),
+            None,
             None,
         );
         assert_eq!(tied.covers(&addr("1.0.2")), Some(&addr("1.0.1.0.7.1")));
@@ -1274,84 +1413,190 @@ mod tests {
     /// states: (a) and (b) one account where the header names none; (b)
     /// SILENT on a fork the community itself serves; (b) LIVE where the host
     /// is off-board — the claimant taken where the header omits the second
-    /// field, the SEAT and never the old claimant where it names one.
+    /// field, the SEAT and never the old claimant where it names one. Every
+    /// board here is launched `--node-prefix 1.3`, so the off-board test is
+    /// LIVE and reads the header's operator against that prefix (REG-1.69):
+    /// the seat a self-served fork names is spelled in the GLOBAL form the
+    /// header carries, `1.3.0.2`, and so is the entry over it — the operator
+    /// is read as spelled against the entries too, and a LOCAL-form entry
+    /// over the same account stands (the last cell; the report escalates the
+    /// form).
     #[test]
     fn the_install_ignores_exactly_the_entries_covering_a_comparand() {
         let (claimant, seat, member, host) = ("1.0.1", "1.0.2", "1.0.3", "2.0.7");
+        let seat_global = "1.3.0.2";
         let record = "1.0.1.0.7.1";
-        let entries = [(claimant, record), (seat, record), (member, record), (host, record)];
+        let prefix = addr("1.3");
+        let entries =
+            [(claimant, record), (seat, record), (member, record), (host, record), (seat_global, record)];
         let verdicts = |operator, binding_writer, claimed: Option<&str>| {
             let claimed = claimed.map(addr);
-            BlockedPrefixes::installed(issue(operator, binding_writer, &entries), claimed.as_ref()).inert
+            BlockedPrefixes::installed_under(
+                issue(operator, binding_writer, &entries),
+                claimed.as_ref(),
+                Some(&prefix),
+            )
+            .inert
         };
         let (a, b) = (Some(Comparand::Operator), Some(Comparand::BindingWriter));
         assert_eq!(
             verdicts(None, None, Some(claimant)),
-            [a, None, None, None],
+            [a, None, None, None, None],
             "the root: the header names none, so the claimant is the one comparand"
         );
         assert_eq!(
-            verdicts(Some(seat), None, Some(claimant)),
-            [None, a, None, None],
-            "a self-served fork: the seat is on-board, (b) is silent, the old claimant blockable"
+            verdicts(Some(seat_global), None, Some(claimant)),
+            [None, None, None, None, a],
+            "a self-served fork: the seat is on-board (under the prefix), (b) is silent, the \
+             old claimant blockable — and the operator is read as spelled: the global-form \
+             entry over the seat is inert, the local-form one stands"
         );
         assert_eq!(
             verdicts(Some(host), None, Some(claimant)),
-            [b, None, None, a],
+            [b, None, None, a, None],
             "a hosted tier: the operator off-board, the claimant taken for the omitted field"
         );
         assert_eq!(
             verdicts(Some(host), Some(seat), Some(claimant)),
-            [None, b, None, a],
+            [None, b, None, a, None],
             "a third-party-hosted fork: the SEAT exempt, never the old claimant"
         );
         assert_eq!(
             verdicts(None, None, None),
-            [None, None, None, None],
+            [None, None, None, None, None],
             "unclaimed, the header naming none: no comparand, every entry stands as issued"
+        );
+        assert_eq!(
+            verdicts(Some(seat), None, Some(claimant)),
+            [b, a, None, None, None],
+            "the seat spelled in the LOCAL form is under no `1.N` and reads OFF-board: (b) \
+             goes live and exempts the old claimant — the header's first field is the \
+             serving layer's to spell globally (escalated)"
         );
         // COVER: a prefix ABOVE a comparand covers it — the board's own node
         // included — and one BELOW it does not.
-        let list = BlockedPrefixes::installed(
+        let list = BlockedPrefixes::installed_under(
             issue(None, None, &[("1", record), ("1.0.1.1", record)]),
             Some(&addr(claimant)),
+            Some(&prefix),
         );
         assert_eq!(list.inert, [a, None], "above is inert; the agent space beneath blocks");
         assert_eq!(list.covers(&addr(member)), None, "an inert entry blocks nobody");
         assert!(list.covers(&addr("1.0.1.1")).is_some());
     }
 
+    /// THE OFF-BOARD TEST (AUTH-4.36 step 4b's comparand (b) as ruled
+    /// 2026-09-18; REG-1.69): a host's account in the registry's GLOBAL form,
+    /// `1.3.0.7`, is on-board under `--node-prefix 1.3` and off-board under
+    /// `--node-prefix 1.5` — the test runs against the prefix and never the
+    /// local root `1`, under which that address read as on-board on every
+    /// board (W2a's escalation 3). With NO prefix the test is off and every
+    /// operator reads as on-board. The claimant taken in the header's place
+    /// is never tested: it is an account of this board by construction.
+    #[test]
+    fn the_off_board_test_reads_the_node_prefix_and_never_the_local_root() {
+        let (claimant, record) = ("1.0.1", "1.0.1.0.7.1");
+        let (own, foreign) = (addr("1.3"), addr("1.5"));
+        let entries = [(claimant, record), ("1.3.0.7", record)];
+        let verdicts = |operator: Option<&str>, prefix: Option<&Address>| {
+            BlockedPrefixes::installed_under(issue(operator, None, &entries), Some(&addr(claimant)), prefix)
+                .inert
+        };
+        let (a, b) = (Some(Comparand::Operator), Some(Comparand::BindingWriter));
+        assert_eq!(
+            verdicts(Some("1.3.0.7"), Some(&own)),
+            [None, a],
+            "under 1.3 the operator is ON-board: (b) silent, the claimant's entry live"
+        );
+        assert_eq!(
+            verdicts(Some("1.3.0.7"), Some(&foreign)),
+            [b, a],
+            "under 1.5 the same operator is OFF-board: (b) live, the served claimant exempt"
+        );
+        assert_eq!(
+            verdicts(Some("1.3.0.7"), None),
+            [None, a],
+            "no node prefix: the test is off, every operator on-board"
+        );
+        assert_eq!(
+            verdicts(None, Some(&foreign)),
+            [a, None],
+            "the claimant taken in the header's place is on-board by construction, whatever \
+             the prefix — its local form is under no `1.N`"
+        );
+        let installed = BlockedPrefixes::installed_under(issue(Some("1.3.0.7"), None, &[]), None, Some(&own));
+        assert_eq!(installed.node_prefix, Some(own), "the prefix the install read is kept for the log");
+    }
+
+    /// REG-1.69's form, at the parse: a NODE address strictly under the root
+    /// `1` — an org's `1.N`, a subnode beneath — and nothing else: the root
+    /// itself, another first component (REG-1.67), an account or document
+    /// address, a trailing zero, text no tumbler spells.
+    #[test]
+    fn a_node_prefix_is_a_node_address_strictly_under_the_root() {
+        for ok in ["1.2", "1.3", "1.3.2", "1.1024.7"] {
+            let parsed = AuthOptions::parse_node_prefix(ok)
+                .unwrap_or_else(|| panic!("'{ok}' is a node prefix"));
+            assert_eq!(parsed, addr(ok));
+            assert_eq!(parsed.level(), Level::Node);
+        }
+        for bad in ["1", "2.4", "2", "1.3.0.7", "1.3.0.7.0.1", "1.0", "0.3", "1..3", "", "x", "1.3."] {
+            assert!(AuthOptions::parse_node_prefix(bad).is_none(), "'{bad}' is not a node prefix");
+        }
+    }
+
     /// The log NAMES the list in force (AUTH-4.70) — the count, the header
-    /// as resolved — and every INERT entry by name with the comparand it
-    /// covers (AUTH-4.36 step 4b: "ignored at install and said so in the
+    /// as resolved, the node prefix the off-board test ran against or that
+    /// the test was off — and every INERT entry by name with the comparand
+    /// it covers (AUTH-4.36 step 4b: "ignored at install and said so in the
     /// log"). Entries in force are counted, never listed.
     #[test]
     fn the_install_log_names_the_count_the_header_and_each_inert_entry() {
         let claimant = addr("1.0.1");
-        let list = BlockedPrefixes::installed(
+        let prefix = addr("1.3");
+        let list = BlockedPrefixes::installed_under(
             issue(Some("2.0.7"), None, &[("1.0.1", "1.0.1.0.9.1"), ("1.0.3", "1.0.1.0.7.1"), ("2.0.7", "1.0.1.0.11.1")]),
             Some(&claimant),
+            Some(&prefix),
         );
         assert_eq!(
             list.log_lines(),
             [
                 "1 of 3 entries in force, 2 inert; operator account 2.0.7 (the header's); \
                  binding-writing account 1.0.1 (the claimant — the header omits it) — exempt, \
-                 the operator account being off-board",
+                 the operator account being off-board (not under the node prefix 1.3)",
                 "entry 1.0.1 (record 1.0.1.0.9.1) is INERT — it covers the board's \
                  binding-writing account 1.0.1; ignored",
                 "entry 2.0.7 (record 1.0.1.0.11.1) is INERT — it covers the configured \
                  operator account 2.0.7; ignored",
             ]
         );
-        let root = BlockedPrefixes::installed(issue(None, None, &[("1.0.3", "1.0.1.0.7.1")]), Some(&claimant));
+        let root = BlockedPrefixes::installed_under(
+            issue(None, None, &[("1.0.3", "1.0.1.0.7.1")]),
+            Some(&claimant),
+            Some(&prefix),
+        );
         assert_eq!(
             root.log_lines(),
             ["1 of 1 entries in force, 0 inert; operator account 1.0.1 (the claimant — the \
               header names none); binding-writing account not a comparand (the operator \
-              account is an account of this board, or there is none)"]
+              account is an account of this board — under the node prefix 1.3, or the \
+              claimant taken in the header's place — or there is none)"]
         );
-        let unclaimed = BlockedPrefixes::installed(issue(None, None, &[]), None);
+        // No node prefix: the test is off, and the header line says so ONCE
+        // — per install, not per entry — whatever the header names.
+        let untold = BlockedPrefixes::installed_under(
+            issue(Some("1.3.0.7"), None, &[("1.0.1", "1.0.1.0.9.1"), ("1.0.3", "1.0.1.0.7.1")]),
+            Some(&claimant),
+            None,
+        );
+        assert_eq!(
+            untold.log_lines(),
+            ["2 of 2 entries in force, 0 inert; operator account 1.3.0.7 (the header's); \
+              binding-writing account not a comparand (no --node-prefix: the off-board test \
+              is off; a hosted board must supply one)"]
+        );
+        let unclaimed = BlockedPrefixes::installed_under(issue(None, None, &[]), None, None);
         assert!(
             unclaimed.log_lines()[0].contains("operator account none (the header names none, and the board is unclaimed)"),
             "{:?}",

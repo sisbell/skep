@@ -125,8 +125,12 @@ the content-prefix (a document, or an account — covering every document
 under it, those minted later included), `to` the grantee account, or
 empty for EVERY bound principal. A grant never opens anything to the
 guest. A later grant whose `from` names an earlier grant's own address
-revokes it. A grant homed anywhere but the issuer's own doc 1, or issued
-by anyone but the document's owner, opens nothing.
+revokes it, and a record whose `from` is anything else but a document or
+an account — a grant already revoked, a revoking record, a node, a
+version, any other address — is neither a grant nor a revocation: it
+opens nothing and lifts no revocation. A grant homed anywhere but the
+issuer's own doc 1, or issued by anyone but the document's owner, opens
+nothing.
 
 How a masked read answers:
 

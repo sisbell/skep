@@ -940,6 +940,159 @@ fn a_to_slot_that_is_not_empty_but_denotes_nothing_grants_to_nobody() {
     engine.check_hints().expect("the seed refuses it for the reason the fold did");
 }
 
+/// An address that stands OFF the ladder, built on a fresh board — one of the
+/// vectors of [`a_grant_whose_from_stands_on_neither_rung_is_of_neither_kind`].
+type OffTheLadder = fn(&Engine, &Board) -> skep_address::Address;
+
+/// THE FROM's RUNG (PUB-5.15 as RES-252 leaves it; PUB-5.10's ladder): a
+/// grant's `from` is a DOCUMENT or an ACCOUNT, and a record whose `from` is an
+/// address of neither rung is of NEITHER KIND — it enters no index, so no row
+/// of the universal set names a prefix the coverage test cannot cover, and no
+/// board-wide face announces a share nobody holds. One vector per way of
+/// standing off the ladder, each on its own board, each deposited in BOTH
+/// forms — a named grantee, and the empty `to` that would have made it
+/// universal — well-formed in every other respect and homed in A's published
+/// doc 1:
+///
+/// * a VERSION MEMBER of the draft: a document-LEVEL address, which the read
+///   predicate projects to its trunk before the grant clause walks up from
+///   it, so no walk ever probes it;
+/// * the NODE: an address that walk DOES reach. Until the rung was read, a
+///   node-rung record from A opened every draft A owns — containment ∩ A's
+///   own ω — though the ladder never held that rung; it opens nothing now;
+/// * a LINK ADDRESS in A's own doc 1 that NO record occupies — RES-252's own
+///   vector, an address-form slot taking no occupancy;
+/// * a link address in A's own doc 1 that an ORDINARY link occupies: resident,
+///   and no record of the class.
+///
+/// A link address that IS a record of the class from this home is the
+/// earlier-record test's, and those vectors sit beside the revocation tests
+/// below; one that is ANOTHER home's grant is
+/// [`a_record_homed_elsewhere_revokes_no_grant_it_names`].
+///
+/// A standing universal grant of a SECOND draft is on every board, so what is
+/// asserted of the universal set is that it is UNCHANGED, which an empty set
+/// cannot tell from unread.
+#[test]
+fn a_grant_whose_from_stands_on_neither_rung_is_of_neither_kind() {
+    let vectors: [(&str, OffTheLadder); 4] = [
+        ("a version member", |_, board| {
+            let member = validate(
+                Tumbler::new(board.draft_a.tumbler().iter().cloned().chain([nat(1)]))
+                    .expect("nonempty"),
+            )
+            .expect("a version member of a document is T4-valid");
+            // The premise: a document-LEVEL address that is not its own trunk.
+            assert_eq!(member.level(), Level::Document);
+            assert_eq!(trunk_of(&member), board.draft_a, "the projection names the draft");
+            member
+        }),
+        ("the node", |engine, board| {
+            let node = node1();
+            // The premise: the grant clause's ancestor walk reaches it.
+            assert!(prefix_contains(&node, &board.draft_a), "the node contains A's draft");
+            assert_eq!(
+                world(engine).owner_account(&board.draft_a),
+                Some(&board.acct_a),
+                "…and A, the issuer, is that draft's ω owner"
+            );
+            node
+        }),
+        ("a link address no record occupies", |engine, board| {
+            let vacant = element(&board.home_a, 2, 99);
+            assert!(world(engine).links().readlink(&vacant).is_none(), "nothing was deposited there");
+            vacant
+        }),
+        ("a link address an ordinary link occupies", |engine, board| {
+            let ordinary = grant_typed(
+                engine,
+                A,
+                &board.home_a,
+                vec![board.draft_a.clone()],
+                vec![board.acct_b.clone()],
+                vec![t_edition()],
+            );
+            assert!(world(engine).links().readlink(&ordinary).is_some(), "the link is resident");
+            ordinary
+        }),
+    ];
+
+    for (what, off_the_ladder) in vectors {
+        let engine = mem_engine();
+        let board = two_accounts(&engine);
+        let (draft_two, _) = engine
+            .namespace()
+            .create_new_document(A, &board.acct_a, None)
+            .expect("A's second draft");
+        grant(&engine, &board.home_a, &draft_two, vec![]); // the standing universal grant
+        let from = off_the_ladder(&engine, &board);
+
+        grant(&engine, &board.home_a, &from, vec![board.acct_b.clone()]);
+        grant(&engine, &board.home_a, &from, vec![]); // empty `to` ⟹ ANY-PRINCIPAL
+
+        let w = world(&engine);
+        assert_eq!(
+            w.universal_grants(),
+            vec![UniversalGrant { content_prefix: &draft_two, issuers: vec![&board.acct_a] }],
+            "{what}: the universal set is unchanged — no row names {from}"
+        );
+        assert!(
+            w.issuers_for(&board.acct_b).is_empty(),
+            "{what}: …and the named form entered the principal-exact index no more than that"
+        );
+        for principal in [B, PrincipalId(9)] {
+            assert!(
+                !w.readable(Some(principal), &board.draft_a),
+                "{what}: a record of neither kind opened A's draft to {principal:?}"
+            );
+        }
+        engine.check_hints().unwrap_or_else(|divergence| {
+            panic!("{what}: the seed must refuse it for the reason the fold did: {divergence:?}")
+        });
+    }
+}
+
+/// …and the two rungs the ladder DOES hold admit as they always have: a `from`
+/// at a DOCUMENT and a `from` at an ACCOUNT are GRANTS, each entering the
+/// index its `to` names. The rung is read off the ADDRESS — arithmetic, no
+/// registration read — so a sub-account prefix nobody delegated stands on the
+/// account rung as a delegated one does
+/// (`a_grant_names_an_address_the_client_invented` holds the same of a
+/// document no mint produced).
+#[test]
+fn a_grant_at_a_document_and_at_an_account_stands_on_the_ladder() {
+    let engine = mem_engine();
+    let board = two_accounts(&engine);
+    let undelegated = validate(
+        Tumbler::new(board.acct_a.tumbler().iter().cloned().chain([nat(7)])).expect("nonempty"),
+    )
+    .expect("a sub-account prefix is T4-valid");
+    assert_eq!(undelegated.level(), Level::Account, "an account-LEVEL address");
+    assert!(!world(&engine).m3().is_allocated(&undelegated), "…that M3 never delegated");
+
+    grant(&engine, &board.home_a, &board.draft_a, vec![]); // the DOCUMENT rung
+    grant(&engine, &board.home_a, &board.acct_a, vec![board.acct_b.clone()]); // the ACCOUNT rung
+    grant(&engine, &board.home_a, &undelegated, vec![]); // …by arithmetic alone
+
+    let w = world(&engine);
+    assert_eq!(
+        w.universal_grants(),
+        vec![
+            UniversalGrant { content_prefix: &board.draft_a, issuers: vec![&board.acct_a] },
+            UniversalGrant { content_prefix: &undelegated, issuers: vec![&board.acct_a] },
+        ],
+        "the document-rung grant, and the account-rung one over an undelegated prefix"
+    );
+    assert_eq!(
+        w.issuers_for(&board.acct_b),
+        vec![IssuerGrant { issuer: &board.acct_a, content_prefixes: vec![&board.acct_a] }],
+        "the account-rung grant, held by the grantee it names"
+    );
+    assert!(w.readable(Some(PrincipalId(9)), &board.draft_a), "the document rung opens the draft");
+    assert!(w.readable(Some(B), &board.draft_a), "…and so does the account rung, to its grantee");
+    engine.check_hints().expect("the seed admits all three as the fold did");
+}
+
 /// Revocation by supersession (PUB-5.13): a later admitted grant naming the
 /// earlier grant's own link address in `from` removes it.
 #[test]
@@ -955,6 +1108,52 @@ fn a_later_record_naming_a_grant_revokes_it() {
         !world(&engine).readable(Some(B), &board.draft_a),
         "the later record naming the grant revoked it"
     );
+}
+
+/// …and a record naming a grant ALREADY WITHDRAWN is of NEITHER KIND (PUB-5.15,
+/// RES-226): the revocation was the first one, and a second names the grant to
+/// no effect. The shape is a blind retry of the revoke after a lost ack, and
+/// its `to` is what made it dangerous. Read off the operative set — which the
+/// withdrawn grant has LEFT — the retry names nothing the fold knows and falls
+/// through to a FRESH GRANT over the grant's own link address: to the old
+/// grantee where its `to` names one, to ANY-PRINCIPAL where its `to` is empty.
+/// A universal share the issuer never made, permanent, and a row on every
+/// board-wide face. Both forms of the retry are deposited here, and neither
+/// enters an index: A RECORD THAT WITHDRAWS A SHARE NEVER BECOMES ONE.
+///
+/// Held TWICE, as
+/// [`a_record_naming_a_revocation_is_of_neither_kind_and_lifts_no_withdrawal`]
+/// and [`a_restart_keeps_the_earlier_records_a_later_record_is_classified_against`]
+/// are: the earlier-record test decides each record, and the ladder would
+/// refuse the link address in its `from` besides. No answer of the predicate
+/// can part the two, so the fold's own unit tests pin the first on its own —
+/// the key it keeps, and its turn ahead of the ladder.
+#[test]
+fn a_record_naming_a_withdrawn_grant_is_of_neither_kind() {
+    let engine = mem_engine();
+    let board = two_accounts(&engine);
+    let g = grant(&engine, &board.home_a, &board.draft_a, vec![board.acct_b.clone()]);
+    grant(&engine, &board.home_a, &g, vec![board.acct_b.clone()]); // the revocation
+    assert!(!world(&engine).readable(Some(B), &board.draft_a), "revoked");
+
+    // The retry, in both forms: `from` names the grant the first one withdrew.
+    grant(&engine, &board.home_a, &g, vec![board.acct_b.clone()]);
+    grant(&engine, &board.home_a, &g, vec![]); // empty `to` ⟹ ANY-PRINCIPAL, were it a grant
+
+    let w = world(&engine);
+    assert!(
+        w.universal_grants().is_empty(),
+        "the retry with an empty `to` became a universal grant over a link address: {:?}",
+        w.universal_grants()
+    );
+    assert!(
+        w.issuers_for(&board.acct_b).is_empty(),
+        "the retry naming the old grantee became a grant to it: {:?}",
+        w.issuers_for(&board.acct_b)
+    );
+    assert!(!w.readable(Some(B), &board.draft_a), "`grant_exists` stays false for the grantee");
+    assert!(!w.readable(Some(PrincipalId(9)), &board.draft_a), "…and for every other principal");
+    engine.check_hints().expect("the seed classifies both retries exactly as the fold did");
 }
 
 /// …and the REVOCATION test speaks before the `to` slot is read (the fold's
@@ -996,11 +1195,92 @@ fn a_revoking_record_revokes_whatever_its_to_slot_holds() {
     engine.check_hints().expect("the seed classifies it exactly as the fold did");
 }
 
+/// THE S2-NAMES-S1 CELL (PUB-5.15, RES-226): a record whose `from` names a
+/// REVOCATION is of NEITHER KIND. Read as "that record's supersession" it
+/// would unseat S1 — superseded by a later admitted record from its own home —
+/// and the grant S1 withdrew would stand again: `grant_exists` TRUE over a
+/// share its issuer took back. Read off the operative set, where no revocation
+/// ever sat, it lifts nothing and falls through to a fresh grant over S1's
+/// link address instead. It is neither: S2 moves no honored state and enters
+/// no index — and nor does S3, whose `from` names S2, a record ITSELF of
+/// neither kind. A WITHDRAWAL, ONCE HONORED, IS LIFTED BY NOTHING; what the
+/// issuer does to share again is grant again, which the last lines hold.
+#[test]
+fn a_record_naming_a_revocation_is_of_neither_kind_and_lifts_no_withdrawal() {
+    let engine = mem_engine();
+    let board = two_accounts(&engine);
+    let g = grant(&engine, &board.home_a, &board.draft_a, vec![board.acct_b.clone()]);
+    let s1 = grant(&engine, &board.home_a, &g, vec![board.acct_b.clone()]);
+    assert!(!world(&engine).readable(Some(B), &board.draft_a), "S1 withdrew the grant");
+
+    // S2 names S1 — in both forms, the empty `to` being the one that would
+    // have made it universal — and S3 names S2.
+    let s2 = grant(&engine, &board.home_a, &s1, vec![board.acct_b.clone()]);
+    grant(&engine, &board.home_a, &s1, vec![]);
+    grant(&engine, &board.home_a, &s2, vec![]);
+
+    let w = world(&engine);
+    assert!(
+        !w.readable(Some(B), &board.draft_a),
+        "a record naming the revocation lifted it: the withdrawn grant stands again"
+    );
+    assert!(
+        w.universal_grants().is_empty() && w.issuers_for(&board.acct_b).is_empty(),
+        "…and neither S2 nor S3 is a grant over the address it names: {:?} {:?}",
+        w.universal_grants(),
+        w.issuers_for(&board.acct_b)
+    );
+    engine.check_hints().expect("the seed classifies S2 and S3 exactly as the fold did");
+
+    // Sharing again is a FRESH grant, and nothing above stands in its way.
+    grant(&engine, &board.home_a, &board.draft_a, vec![board.acct_b.clone()]);
+    assert!(world(&engine).readable(Some(B), &board.draft_a), "a later grant admits again");
+}
+
+/// …and what both vectors above are decided on is FOLD STATE, journaled
+/// nowhere: a restart re-derives it off the grants class (PUB-7.7's seed
+/// half), so a record deposited AFTER the restart that names a grant
+/// withdrawn, or a revocation deposited, BEFORE it is of neither kind still.
+/// The checkpoint sits at HEAD, so the reopened base IS the checkpoint and
+/// nothing replays onto it: what the later deposits are classified against is
+/// what the seed alone rebuilt.
+#[test]
+fn a_restart_keeps_the_earlier_records_a_later_record_is_classified_against() {
+    let dir = tempdir().expect("tempdir");
+    let (board, g, s1) = {
+        let engine = Engine::open(fsync_cfg(dir.path())).expect("fsync open");
+        let board = two_accounts(&engine);
+        let g = grant(&engine, &board.home_a, &board.draft_a, vec![board.acct_b.clone()]);
+        let s1 = grant(&engine, &board.home_a, &g, vec![board.acct_b.clone()]);
+        assert!(!world(&engine).readable(Some(B), &board.draft_a), "live: S1 withdrew the grant");
+        engine.kernel().checkpoint().expect("checkpoint at head");
+        (board, g, s1)
+    };
+
+    let engine = Engine::open(fsync_cfg(dir.path())).expect("reopen over the checkpoint");
+    assert!(!world(&engine).readable(Some(B), &board.draft_a), "recovered: still withdrawn");
+    grant(&engine, &board.home_a, &g, vec![]); // names the withdrawn grant
+    grant(&engine, &board.home_a, &s1, vec![]); // names the revocation
+
+    let w = world(&engine);
+    assert!(
+        w.universal_grants().is_empty(),
+        "a record the live fold would have refused became a universal grant after a restart: {:?}",
+        w.universal_grants()
+    );
+    assert!(!w.readable(Some(B), &board.draft_a), "…and the withdrawal is lifted by neither");
+    engine.check_hints().expect("the recovered fold equals a from-authoritative rebuild");
+}
+
 /// …and revocation reads the grants class of ONE HOME (PUB-5.13): a record
-/// naming an earlier grant's link address from a home of its own is a fresh
-/// grant, never a revocation of what it names. Same home ⟹ same ω owner is
-/// the whole of the issuer restriction, and without it any account could
-/// retire any other account's grants by depositing one link in its own doc 1.
+/// naming an earlier grant's link address from a home of its own is never a
+/// revocation of what it names. Same home ⟹ same ω owner is the whole of the
+/// issuer restriction, and without it any account could retire any other
+/// account's grants by depositing one link in its own doc 1. Nor is it a
+/// GRANT: the earlier-record test passes it by — what it names is no record of
+/// ITS home — and the ladder then refuses it, a link address standing on
+/// neither rung (PUB-5.15, RES-252). It is of NEITHER KIND, where it was once
+/// a fresh grant of B's own over A's link address.
 ///
 /// The predicate is the only witness. Both halves of the discipline drive one
 /// classification, so a fold that dropped the home comparison and a seed that
@@ -1025,9 +1305,9 @@ fn a_record_homed_elsewhere_revokes_no_grant_it_names() {
         "a record homed in B's doc 1 retired A's grant: any account could retire any other's"
     );
     assert_eq!(
-        w.issuers_for(&board.acct_b).len(),
-        2,
-        "A's grant stands, and B's record is a fresh grant of B's own"
+        w.issuers_for(&board.acct_b),
+        vec![IssuerGrant { issuer: &board.acct_a, content_prefixes: vec![&board.draft_a] }],
+        "A's grant stands, and B's record — a link address in its `from` — is no grant of B's"
     );
     engine.check_hints().expect("both halves agree, which is why only the predicate sees this");
 }

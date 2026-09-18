@@ -18,7 +18,9 @@ use std::time::{Duration, Instant};
 
 use ed25519_dalek::{Signer, SigningKey};
 use serde_json::Value;
-use skep_identity::{encode_enroll, framed, Enrollment, PublicKey, SESSION_TAG};
+use skep_identity::{
+    encode_enroll, framed, Enrollment, PublicKey, SESSION_TAG, SESSION_TAG_V2,
+};
 use skepd::{serve, AuthOptions, Daemon, Origin, Skepd, DEFAULT_WORKERS};
 
 /// The credential type addresses this build allocates (AUTH-7.1 horn B):
@@ -100,6 +102,56 @@ pub fn sign_session(sk: &SigningKey, origin: &str, nonce: &str, principal: u64) 
         &[origin.as_bytes(), nonce.as_bytes(), principal.to_string().as_bytes()],
     );
     hex(&sk.sign(&payload).to_bytes())
+}
+
+/// [`sign_session`]'s SCOPED variant — the v2 bytes (AUTH-6.4):
+/// `framed(SESSION_TAG_V2, [origin, nonce, principal-decimal, scope])`, the
+/// layout a body carrying `"scope": <scope>` signs. `scope` is a parameter
+/// rather than the constant `content` so a cell can sign exactly what a
+/// malformed body says — the daemon refuses that body at the parse, whatever
+/// its signature.
+pub fn sign_session_scoped(
+    sk: &SigningKey,
+    origin: &str,
+    nonce: &str,
+    principal: u64,
+    scope: &str,
+) -> String {
+    let payload = framed(
+        SESSION_TAG_V2,
+        &[origin.as_bytes(), nonce.as_bytes(), principal.to_string().as_bytes(), scope.as_bytes()],
+    );
+    hex(&sk.sign(&payload).to_bytes())
+}
+
+/// A fresh challenge for `principal`: the nonce, as issued.
+pub fn challenge(port: u16, principal: u64) -> String {
+    let (st, body) = http(port, "GET", &format!("/challenge?principal={principal}"), None, b"");
+    assert_eq!(st, 200, "challenge: {}", String::from_utf8_lossy(&body));
+    json(&body)["nonce"].as_str().expect("nonce").to_string()
+}
+
+/// The SCOPED signed body (AUTH-6.2's third form), its members in the order
+/// the rule writes them — `scope` before `sig`.
+pub fn scoped_session_body(principal: u64, nonce: &str, origin: &str, sig: &str) -> String {
+    format!(
+        "{{\"principal\":{principal},\"nonce\":\"{nonce}\",\"origin\":\"{origin}\",\
+         \"scope\":\"content\",\"sig\":\"{sig}\"}}"
+    )
+}
+
+/// Open a CONTENT-scoped signed session for `principal` (AUTH-6.2's third
+/// form, AUTH-4.39): the body carries `"scope": "content"` and is signed
+/// under the v2 bytes, over the origin actually dialed. The session reads,
+/// writes content and closes as a full one does, and deposits no credential.
+pub fn open_content_session(port: u16, principal: u64, sk: &SigningKey) -> String {
+    let nonce = challenge(port, principal);
+    let origin = format!("http://127.0.0.1:{port}");
+    let sig = sign_session_scoped(sk, &origin, &nonce, principal, "content");
+    let body = scoped_session_body(principal, &nonce, &origin, &sig);
+    let (st, resp) = http(port, "POST", "/session", None, body.as_bytes());
+    assert_eq!(st, 200, "content session: {}", String::from_utf8_lossy(&resp));
+    json(&resp)["session"].as_str().expect("session token").to_string()
 }
 
 /// Open a SIGNED session for `principal` over the challenge/response
@@ -248,6 +300,20 @@ pub fn next_content_ordinal(port: u16, token: Option<&str>, doc: &str) -> u64 {
 /// `registrar_signed` is the delegator's SIGNED session and `registrar_doc1`
 /// that delegator's doc 1. A refused deposit is an AUTH finding, not a
 /// fixture to bend: the panic names the verdict token.
+///
+/// THE HAND AT A HANDOFF (AUTH-3.21, AUTH-5.90). Keying a SUBDIVISION of the
+/// claimant's — `CLAIMANT.k`, its genesis homed in the claimant's doc 1 — is
+/// no hire by the address test: it is the claimant's HANDOFF, anchor-grade,
+/// the ceremony's set holding a paper anchor ([`claim_board`]). So there the
+/// genesis is deposited from the claimant's ANCHOR session, imported for the
+/// one act and closed after it, as AUTH-5.90 has the giver do — whatever
+/// signed session the caller holds, which still lands the record atom. A
+/// suite that needs a keyed sub-account of the claimant's gets one by the act
+/// the spec names; the refusal a DEVICE session meets at that cell is
+/// `auth_wire`'s to pin, never this helper's to route around in silence.
+/// Every other hire is deposited from the caller's session as given: a
+/// top-level account's genesis enters no cone, and a subdivision of a
+/// registrar this helper keyed is device-grade, its set holding no anchor.
 pub fn hire(
     port: u16,
     registrar_signed: &str,
@@ -271,9 +337,13 @@ pub fn hire(
         "hire of {agent_id}: the enroll atom's deposit into {registrar_doc1}: {v}"
     );
     let atom_addr = acked_addr(&v);
+    let claimants_handoff = registrar_doc1 == CLAIMANT_DOC1
+        && agent_account.starts_with(&format!("{CLAIMANT_ACCOUNT}."));
+    let anchor_hand =
+        claimants_handoff.then(|| open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key()));
     let v = op(
         port,
-        Some(registrar_signed),
+        Some(anchor_hand.as_deref().unwrap_or(registrar_signed)),
         &format!(
             r#"{{"op":"make_link","home":"{registrar_doc1}","from":{{"addrs":["{atom_addr}"]}},"to":{{"addrs":["{agent_account}"]}},"ty":{{"addrs":["{T_ENROLL}"]}}}}"#
         ),
@@ -283,6 +353,10 @@ pub fn hire(
         Some("ack_addr"),
         "hire of {agent_id} ({agent_account}) refused by the fold — an AUTH finding: {v}"
     );
+    if let Some(hand) = &anchor_hand {
+        let (st, _) = http(port, "POST", "/session/close", Some(hand), b"");
+        assert_eq!(st, 204, "the imported anchor session closes after its one act");
+    }
     open_signed_session(port, agent_id, key)
 }
 

@@ -9,7 +9,7 @@ use ed25519_dalek::Signature;
 use rand_core::CryptoRng;
 use serde_json::Value;
 use skep_febe::SessionId;
-use skep_identity::{framed, Fingerprint, IdentityState, KeySet, SESSION_TAG};
+use skep_identity::{framed, Fingerprint, IdentityState, KeySet, SESSION_TAG, SESSION_TAG_V2};
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
 
 use super::{bare_origins, blocked_prefixes, signed_origins, AuthConfig, Mode, Origin};
@@ -176,14 +176,50 @@ impl Token {
     }
 }
 
-/// One live session's binding: the M10 session, the named principal, and
-/// the fingerprint of the enrolled key that established it (`None` = a
-/// bare bind, which signs nothing).
+/// A session's SCOPE (AUTH-4.39; RES-63): the LIMIT a signed session may
+/// declare for itself at its opening, inside its signed bytes. A `Content`
+/// session reads, holds its draft visibility, writes content, publishes,
+/// grants and closes exactly as a `Full` one does, and cannot deposit, retire
+/// or claim a credential. It only narrows: a signed body with no `scope` is
+/// `Full`, and the BARE arm is scope-less — a bare binding is `Full` in shape
+/// and keeps every rule it has.
+///
+/// Not a grade: the key that opened the session is not consulted, so an
+/// anchor key's content session is content-limited all the same.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Scope {
+    Full,
+    Content,
+}
+
+impl Scope {
+    /// The ONE value the body's `scope` member takes (AUTH-6.2) — the JSON
+    /// string, no other value, type or case; there is no `full` spelling
+    /// (absence IS full). Also the bytes a scoped body SIGNS (AUTH-6.4): the
+    /// parse admits exactly this string, which is what lets
+    /// [`session_payload`] frame it from the value and still frame "the
+    /// body's OWN bytes".
+    const CONTENT: &'static str = "content";
+}
+
+/// One live session's binding: the M10 session, the named principal, the
+/// fingerprint of the enrolled key that established it (`None` = a bare
+/// bind, which signs nothing), and the scope it declared.
+///
+/// `scope` is set ONCE, at the open, from the VERIFIED body — it is
+/// [`handshake`]'s answer, never the request's — and held for the binding's
+/// lifetime. It is READ at exactly one place, the precheck's slot (6), on
+/// every write the dispatch routes there ([`super::policy::precheck`]), and
+/// NOWHERE ELSE: [`resolve`], the death sequence, `/session/close`, the
+/// reads' draft visibility and [`SessionBinding::testimony`] are scope-blind,
+/// and `/health.auth` publishes nothing of it. It is in no record, journal,
+/// sidecar or fold: it dies with its binding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SessionBinding {
     pub sid: SessionId,
     pub principal: PrincipalId,
     pub signer: Option<Fingerprint>,
+    pub scope: Scope,
 }
 
 impl SessionBinding {
@@ -343,15 +379,34 @@ pub(crate) fn key_subject(
     }
     let own = world.m3().principal_prefix(p)?;
     if identity.key_set(own).is_empty() {
-        let mut cursor = parent(own);
-        while let Some(above) = cursor.filter(|a| a.level() == Level::Account) {
-            if !identity.key_set(&above).is_empty() {
-                return Some(above);
-            }
-            cursor = parent(&above);
+        if let Some(above) = keyed_above(identity, own) {
+            return Some(above);
         }
     }
     Some(own.clone())
+}
+
+/// AUTH-4.30 (i)'s WALK, over an ADDRESS: the NEAREST ACCOUNT ABOVE `a`
+/// whose enrolled set is not empty — `parent()` arithmetic over account-tier
+/// ancestors, stopping at the account tier — or `None` where no account
+/// above holds a set. `a`'s own set is not read: the walk starts above it.
+///
+/// ONE walk, two readers. [`key_subject`] takes it from a principal's own
+/// account, which is what a session there authenticates against. The
+/// precheck's slot (6) takes it from a previewed genesis's subject
+/// (AUTH-3.21): the TERMINUS is the `S` the address test measures a genesis
+/// at, "the account AUTH-4.30 (i)'s walk stops at" — so the two are this
+/// one function, and a handoff is told at exactly the account whose keys
+/// open the address it hands away (RES-172).
+pub(crate) fn keyed_above(identity: &IdentityState, a: &Address) -> Option<Address> {
+    let mut cursor = parent(a);
+    while let Some(above) = cursor.filter(|a| a.level() == Level::Account) {
+        if !identity.key_set(&above).is_empty() {
+            return Some(above);
+        }
+        cursor = parent(&above);
+    }
+    None
 }
 
 /// AUTH-4.30 (ii) — THE SESSION'S OWN ACCOUNT, the one-arm map exactly:
@@ -428,10 +483,14 @@ pub(crate) fn resolve(
 
 // ── the handshake (AUTH-4.32–4.41, AUTH-6.2–6.5) ─────────────────────────
 
-/// The two exact `POST /session` body forms (AUTH-6.2).
+/// The THREE exact `POST /session` body forms (AUTH-6.2): the bare body, the
+/// signed body, and the SCOPED signed body — the last two one variant, told
+/// apart by `scope`. A signed body WITHOUT the member is `Scope::Full`, the
+/// second form byte for byte; one carrying `"scope": "content"` is
+/// `Scope::Content`. The bare form has no scope to carry.
 pub(crate) enum SessionBody {
     Bare { principal: PrincipalId },
-    Signed { principal: PrincipalId, nonce: Nonce, origin: Origin, sig: [u8; 64] },
+    Signed { principal: PrincipalId, nonce: Nonce, origin: Origin, scope: Scope, sig: [u8; 64] },
 }
 
 /// The handshake refusal — a unit struct: the reason is DESTROYED at the
@@ -458,11 +517,18 @@ impl From<SessionRejected> for HandshakeRefusal {
     }
 }
 
-/// Parse the strict two-form body (AUTH-6.2, AUTH-6.3): the bare
-/// `{"principal": n}` or the signed four-field form, all three signed
-/// fields validated BEFORE anything burns — any failure is the 400
-/// `malformed_session_request` and the nonce survives. `Err(detail)` is
+/// Parse the strict three-form body (AUTH-6.2, AUTH-6.3): the bare
+/// `{"principal": n}`, the signed four-field form, or the SCOPED signed form
+/// carrying `"scope": "content"` beside them — all three signed fields, and
+/// `scope` when present a FOURTH, validated BEFORE anything burns. Any
+/// failure is the 400 `malformed_session_request` and the nonce survives: a
+/// scope fault is a syntax fault as the other three are. `Err(detail)` is
 /// the 400's detail text.
+///
+/// `scope` is the signed form's alone. On the BARE body it is "any other
+/// body" (AUTH-6.2), whatever its value — the bare arm is scope-less — so a
+/// client asking for the limit is never opened as something it did not ask
+/// for.
 pub(crate) fn parse_session_body(body: &[u8]) -> Result<SessionBody, String> {
     let v: Value =
         serde_json::from_slice(body).map_err(|e| format!("invalid JSON: {e}"))?;
@@ -477,10 +543,13 @@ pub(crate) fn parse_session_body(body: &[u8]) -> Result<SessionBody, String> {
     // The codec's never-silent device, so a client's typo is a named
     // failure here exactly as in a frame — and its echo of the offending
     // key is bounded, which a hand-rolled one is not.
-    check_keys(&m, &["principal", "nonce", "origin", "sig"])?;
+    check_keys(&m, &["principal", "nonce", "origin", "scope", "sig"])?;
     let signed_fields =
         [m.get("nonce"), m.get("origin"), m.get("sig")].iter().filter(|f| f.is_some()).count();
     match signed_fields {
+        0 if m.contains_key("scope") => {
+            Err("field 'scope' belongs to the signed session body alone".into())
+        }
         0 => Ok(SessionBody::Bare { principal }),
         3 => {
             let origin_text = m
@@ -498,7 +567,15 @@ pub(crate) fn parse_session_body(body: &[u8]) -> Result<SessionBody, String> {
                 m.get("sig").and_then(Value::as_str).ok_or("field 'sig' must be a string")?;
             let sig = parse_sig(sig_text)
                 .ok_or("field 'sig' is not 128 hex characters decoding to 64 bytes")?;
-            Ok(SessionBody::Signed { principal, nonce, origin, sig })
+            // The FOURTH strict field (AUTH-6.3): absent is FULL; present, it
+            // is exactly the JSON string `content` — no other value, no
+            // other type, no case variant.
+            let scope = match m.get("scope") {
+                None => Scope::Full,
+                Some(Value::String(s)) if s == Scope::CONTENT => Scope::Content,
+                Some(_) => return Err("field 'scope' must be exactly \"content\"".into()),
+            };
+            Ok(SessionBody::Signed { principal, nonce, origin, scope, sig })
         }
         _ => Err("a signed session body carries nonce, origin and sig together".into()),
     }
@@ -519,14 +596,33 @@ fn parse_sig(s: &str) -> Option<[u8; 64]> {
     Some(raw)
 }
 
-/// AUTH-6.4 — the signed bytes: `framed(SESSION_TAG, [origin, nonce,
-/// principal-as-shortest-decimal])` over the body's OWN strings; the
-/// daemon canonicalizes NOTHING on this path.
-pub(crate) fn session_payload(origin: &Origin, nonce_hex: &str, p: PrincipalId) -> Vec<u8> {
-    framed(
-        SESSION_TAG,
-        &[origin.as_str().as_bytes(), nonce_hex.as_bytes(), p.0.to_string().as_bytes()],
-    )
+/// AUTH-6.4 — the signed bytes, VERSIONED and never extended in place. An
+/// UNSCOPED body signs the v1 layout, `framed(SESSION_TAG, [origin, nonce,
+/// principal-as-shortest-decimal])`; a SCOPED body signs the v2 layout,
+/// `framed(SESSION_TAG_V2, [origin, nonce, principal, scope])` — each over
+/// the body's OWN strings; the daemon canonicalizes NOTHING on this path.
+///
+/// ONE payload per body, chosen by the body's own scope, so a scoped body is
+/// verified under v2 ONLY and an unscoped body under v1 ONLY: the tag names
+/// the grammar, a v1 signature never opens a scoped session and a v2
+/// signature never opens an unscoped one. The scope is therefore the
+/// SIGNER's declaration — a limit the signer did not sign could be lifted on
+/// the path by dropping the field.
+pub(crate) fn session_payload(
+    origin: &Origin,
+    nonce_hex: &str,
+    p: PrincipalId,
+    scope: Scope,
+) -> Vec<u8> {
+    let principal = p.0.to_string();
+    let [origin, nonce, principal] =
+        [origin.as_str().as_bytes(), nonce_hex.as_bytes(), principal.as_bytes()];
+    match scope {
+        Scope::Full => framed(SESSION_TAG, &[origin, nonce, principal]),
+        Scope::Content => {
+            framed(SESSION_TAG_V2, &[origin, nonce, principal, Scope::CONTENT.as_bytes()])
+        }
+    }
 }
 
 /// AUTH-4.32 — Ed25519 strict verification (`verify_strict` semantics);
@@ -555,6 +651,12 @@ fn find_signer(set: &KeySet, payload: &[u8], sig: &[u8; 64]) -> Option<Fingerpri
 /// admitted as written — reachable only in CLAIMED-PERMISSIVE on loopback,
 /// which no deployment that issues a list runs — and [`resolve`]'s blocked
 /// arm, which is arm-blind, kills it at its first presentation.
+///
+/// THE SCOPE is part of the answer (AUTH-4.39): a signed body's own, handed
+/// back only once its signature verified under the layout that scope names —
+/// so the binding the route opens carries a scope its signer SIGNED, and
+/// never one read off an unverified request. The bare arm answers
+/// `Scope::Full`: it is scope-less, `Full` in shape.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handshake(
     cfg: &AuthConfig,
@@ -565,16 +667,16 @@ pub(crate) fn handshake(
     peer: Peer,
     origin_hdr: Option<&str>,
     now: Instant,
-) -> Result<(PrincipalId, Option<Fingerprint>), HandshakeRefusal> {
+) -> Result<(PrincipalId, Option<Fingerprint>, Scope), HandshakeRefusal> {
     let claimed = identity.claimant().is_some();
     match body {
         SessionBody::Bare { principal } => {
             match bare_bind_allowed(cfg, peer, origin_hdr, claimed) {
-                BareBind::Allowed => Ok((principal, None)),
+                BareBind::Allowed => Ok((principal, None, Scope::Full)),
                 _ => Err(SessionRejected.into()),
             }
         }
-        SessionBody::Signed { principal, nonce, origin, sig } => {
+        SessionBody::Signed { principal, nonce, origin, scope, sig } => {
             // 2 — the signed set (the bare set until the claim's drop).
             if !signed_origins(cfg, claimed).contains(&origin) {
                 return Err(SessionRejected.into());
@@ -611,10 +713,14 @@ pub(crate) fn handshake(
             if set.is_empty() {
                 return Err(SessionRejected.into());
             }
-            // 6/7 — the signature over the body's OWN strings.
-            let payload = session_payload(&origin, &nonce.to_hex(), principal);
+            // 6/7 — the signature over the body's OWN strings, under the
+            // layout the body's scope names: v2 for a scoped body, v1 for an
+            // unscoped one, and never the other (AUTH-6.4). A v1 signature
+            // over a scoped body fails here — the one 401, like any
+            // signature failure.
+            let payload = session_payload(&origin, &nonce.to_hex(), principal, scope);
             match find_signer(set, &payload, &sig) {
-                Some(fp) => Ok((principal, Some(fp))),
+                Some(fp) => Ok((principal, Some(fp), scope)),
                 None => Err(SessionRejected.into()),
             }
         }
@@ -773,6 +879,7 @@ mod tests {
             sid: febe.open_session(PrincipalId(7)),
             principal: PrincipalId(7),
             signer: None,
+            scope: Scope::Full,
         };
         assert_eq!(
             go(Lookup::Found(bare.clone()), Peer::Loopback, None),
@@ -829,6 +936,7 @@ mod tests {
             // UNCLAIMED, so the signed set is the bare set and the dialed
             // loopback default passes step 2: what refuses is the burn.
             origin: Origin::parse("http://127.0.0.1:8642").expect("canonical"),
+            scope: Scope::Full,
             sig: [0u8; 64],
         };
         let outcome = handshake(
@@ -849,6 +957,91 @@ mod tests {
             !challenges.burn(&nonce, principal, issued),
             "and the expired entry burned with the attempt"
         );
+    }
+
+    /// AUTH-6.2/6.3 — the THREE body forms and the strict fourth field. A
+    /// signed body without `scope` is FULL (the second form, byte for byte);
+    /// `scope` takes exactly the JSON string `content`; any other value or
+    /// type — and `scope` on the BARE body, whatever it holds — is "any other
+    /// body". The parse stands ahead of the burn, so each `Err` here is a 400
+    /// that spends no nonce.
+    #[test]
+    fn the_session_body_takes_three_forms_and_scope_is_strict() {
+        let signed = |scope: &str| {
+            format!(
+                r#"{{"principal":7,"nonce":"{}","origin":"http://127.0.0.1:8642"{scope},"sig":"{}"}}"#,
+                "ab".repeat(32),
+                "cd".repeat(64)
+            )
+        };
+        assert!(matches!(
+            parse_session_body(br#"{"principal":7}"#),
+            Ok(SessionBody::Bare { principal: PrincipalId(7) })
+        ));
+        assert!(matches!(
+            parse_session_body(signed("").as_bytes()),
+            Ok(SessionBody::Signed { scope: Scope::Full, .. })
+        ));
+        assert!(matches!(
+            parse_session_body(signed(r#","scope":"content""#).as_bytes()),
+            Ok(SessionBody::Signed { scope: Scope::Content, .. })
+        ));
+        // No `full` spelling, no case variant, no other type: absence IS full.
+        for bad in [
+            r#""full""#,
+            r#""Content""#,
+            r#""CONTENT""#,
+            r#""content ""#,
+            r#""""#,
+            "null",
+            "true",
+            "1",
+            r#"["content"]"#,
+            r#"{"content":true}"#,
+        ] {
+            assert!(
+                parse_session_body(signed(&format!(r#","scope":{bad}"#)).as_bytes()).is_err(),
+                "scope {bad} is a syntax fault"
+            );
+        }
+        // The bare arm is scope-less: even the one admitted value refuses.
+        for bare in [r#"{"principal":7,"scope":"content"}"#, r#"{"principal":7,"scope":null}"#] {
+            assert!(parse_session_body(bare.as_bytes()).is_err(), "{bare}");
+        }
+        // …and a scope does not complete a partial signed triple.
+        assert!(parse_session_body(
+            format!(r#"{{"principal":7,"nonce":"{}","scope":"content"}}"#, "ab".repeat(32))
+                .as_bytes()
+        )
+        .is_err());
+    }
+
+    /// AUTH-6.4 — the layout is VERSIONED: an unscoped body signs the v1
+    /// bytes, unmoved, and a scoped body the v2 bytes — the same three fields
+    /// then `be32(|scope|)‖scope`, the body's own `content`. Pinned as BYTES,
+    /// spelled by hand: this is the reference layout a client signs.
+    #[test]
+    fn a_scoped_body_signs_the_v2_layout_and_an_unscoped_one_the_v1() {
+        let origin = Origin::parse("http://127.0.0.1:8642").expect("canonical");
+        let nonce = "ab".repeat(32);
+        let field = |bytes: &[u8]| {
+            let len = u32::try_from(bytes.len()).expect("a field fits be32");
+            [&len.to_be_bytes()[..], bytes].concat()
+        };
+        let body = [
+            field(origin.as_str().as_bytes()),
+            field(nonce.as_bytes()),
+            field(b"42"), // the principal as shortest ASCII decimal
+        ]
+        .concat();
+
+        let v1 = [&b"skep-session-v1"[..], &body].concat();
+        assert_eq!(session_payload(&origin, &nonce, PrincipalId(42), Scope::Full), v1);
+        let v2 = [&b"skep-session-v2"[..], &body, &field(b"content")].concat();
+        assert_eq!(session_payload(&origin, &nonce, PrincipalId(42), Scope::Content), v2);
+        // Neither is a prefix of the other, so no signature over one layout
+        // verifies over the other.
+        assert!(!v2.starts_with(&v1) && !v1.starts_with(&v2));
     }
 
     /// AUTH-4.20 — the cap evicts oldest-first.

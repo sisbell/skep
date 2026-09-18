@@ -4,7 +4,9 @@
 
 use std::sync::LazyLock;
 
-use skep_address::{document_of, ordinal, parent, validate, Address, Nat, Span, Tumbler};
+use skep_address::{
+    checked_inc, document_of, ordinal, parent, validate, Address, Nat, Span, Tumbler,
+};
 use skep_arrangement::trunk_of;
 use skep_engine::types::{
     t_consumption_marker, t_endorse, t_grant, t_journal_designation, t_rail_record,
@@ -19,7 +21,8 @@ use skep_links::{enc, HasLinks, SlotArg};
 use skep_namespace::{first_document_address, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 
 use super::fold::WorldCtx;
-use super::{LockRead, LockWrite};
+use super::session::{keyed_above, Scope};
+use super::{blocked_prefixes, AuthConfig, LockRead, LockWrite};
 use crate::World;
 
 /// The enrolled-set cap (RES-57, AUTH-3.57): daemon POLICY — a
@@ -263,7 +266,12 @@ pub(crate) enum CredentialRefusal {
     /// the wire's, CONFIRMED by the owner 2026-09-07 (wire.md §Credential
     /// refusals; the v7.10 changelog entry records the confirmation).
     NullifyAuditView,
-    /// Slot (6).
+    /// Slot (6), FIRST of the slot's two tokens (AUTH-3.44; RES-63): any
+    /// credential-typed deposit, retirement or claim from a CONTENT-scoped
+    /// session (AUTH-4.39) — whatever key opened it, and whether or not the
+    /// act is an anchor act. Token `content_session`, PINNED (AUTH-6.23).
+    ContentSession,
+    /// Slot (6), behind [`CredentialRefusal::ContentSession`].
     AnchorSessionRequired,
     /// Slot (2), ahead of the write lock.
     ResolvedFrom,
@@ -307,6 +315,7 @@ impl CredentialRefusal {
             CredentialRefusal::NullifyNotRetraction => "nullify_not_retraction".into(),
             CredentialRefusal::NullifyNotRevocation => "nullify_not_revocation".into(),
             CredentialRefusal::NullifyAuditView => "nullify_audit_view".into(),
+            CredentialRefusal::ContentSession => "content_session".into(),
             CredentialRefusal::AnchorSessionRequired => "anchor_session_required".into(),
             CredentialRefusal::ResolvedFrom => "resolved_from".into(),
             CredentialRefusal::TooManyEnrolled => "too_many_enrolled".into(),
@@ -1009,12 +1018,25 @@ impl DepositSpans {
 ///
 /// `world` and `identity` MUST be the pair taken under the write guard for
 /// this request; the guard argument is that contract's cheap half.
+///
+/// THE ACTOR is narrowed to what the session's OPENING fixed (AUTH-3.16): the
+/// key that established it and, beside it, the scope it declared (AUTH-4.39;
+/// RES-63) — still NO principal, so the forbidden ω check stays unwritable
+/// here. `scope` is read at the head of slot (6) and nowhere else.
+///
+/// `cfg` IS THE ONE CONFIG READ AUTH-3.21's SEAT CARVE REQUIRES AND NOTHING
+/// ELSE (AUTH-3.15; RES-195): the header the handshake compares at step 4b,
+/// read at slot (6) beside the claimant, by [`forked_seat`] alone. No origin,
+/// flag or list entry is read from it, and no address, content, cone,
+/// document or role rides in on it.
 pub(crate) fn precheck(
     lock: &LockWrite<'_>,
     world: &World,
     identity: &IdentityState,
     dep: &DepositSpans,
     signer: Option<&skep_identity::Fingerprint>,
+    scope: Scope,
+    cfg: &AuthConfig,
 ) -> Result<(), CredentialRefusal> {
     // (3) — the classify preview's verdict (AUTH-2.57): the fold's own
     // order — kind, home account, publication, the per-kind arm.
@@ -1070,23 +1092,40 @@ pub(crate) fn precheck(
             return Err(CredentialRefusal::TooManyEnrolled);
         }
     }
+    // (6) — TWO tokens, in THIS order (AUTH-3.44; RES-63). The HEAD is
+    // `content_session`: a CONTENT-scoped session deposits no credential —
+    // every deposit the dispatch routes here, whatever key opened the
+    // session and whether or not the act is an anchor act, so an anchor
+    // key's content session is refused HERE and never reaches the gate
+    // below. Behind slots (3)–(5): a content session's retry of an act
+    // another session committed still answers the head's preview token.
+    // The scope's ONE read (AUTH-4.39).
+    if scope == Scope::Content {
+        return Err(CredentialRefusal::ContentSession);
+    }
     // (6) — the anchor gate (AUTH-3.20–3.23): an anchor retirement or a
     // post-genesis anchor-flagged enrollment needs a session an anchor of
     // that account established; a bare session never satisfies it; the
     // record is refused WHOLE. Genesis is exempt (the seeding hand records
-    // the initial set, flags included).
+    // the initial set, flags included) — EXCEPT AT A HANDOFF (AUTH-3.21),
+    // which [`handoff_giver`] tells by address: there the gate reads the
+    // set that OPENS the account, the giver's, and only where that set
+    // holds an anchor — an anchorless giver's handoff stays device-grade
+    // (AUTH-5.16's standing price).
     let anchor_subject = match &effect {
         Effect::Retire { account, removed } => {
             let set = identity.key_set(account);
-            removed.iter().any(|fp| set.is_anchor(fp)).then_some(account)
+            removed.iter().any(|fp| set.is_anchor(fp)).then(|| account.clone())
         }
         Effect::Enroll { account, added } => {
-            added.iter().any(|e| e.anchor).then_some(account)
+            added.iter().any(|e| e.anchor).then(|| account.clone())
         }
-        _ => None,
+        Effect::Genesis { account, .. } => handoff_giver(identity, cfg, account)
+            .filter(|giver| identity.key_set(giver).enrolled().any(|(_, e)| e.anchor)),
+        Effect::Claim { .. } => None,
     };
     if let Some(account) = anchor_subject {
-        let set = identity.key_set(account);
+        let set = identity.key_set(&account);
         if !signer.is_some_and(|fp| set.is_anchor(fp)) {
             return Err(CredentialRefusal::AnchorSessionRequired);
         }
@@ -1119,6 +1158,92 @@ pub(crate) fn precheck(
     Ok(())
 }
 
+/// AUTH-3.21's ADDRESS TEST — what slot (6) tells of one previewed
+/// `Honored(Genesis)` BY ADDRESS, the one fact the precheck holds (ONE
+/// AUTHORITY, AUTH-2.109): `Some(S)` iff the genesis is a HANDOFF, `S` the
+/// GIVER — the account whose set opens `subject` and so grades the act; `None`
+/// for every genesis the gate is silent on. No document is read and no cone:
+/// `has_documents` stays MINT-FIRST's.
+///
+/// The rule's one sentence (RES-175): *a genesis is measured at the nearest
+/// keyed account above its address: beneath that account's agent space it is
+/// a HIRE's, beneath an agent it is a SPAWN's, into a direct child of a forked
+/// lineage's SEAT it is an ADMISSION's — each device-grade — anywhere else
+/// beneath a party's keys it is that party's HANDOFF, and a top-level
+/// account's own genesis enters no cone.* Arm by arm:
+///
+/// * `S` is the walk's TERMINUS ([`keyed_above`] — AUTH-4.30 (i)'s walk, the
+///   one `key_subject` takes), read ONCE and at no keyed account further up
+///   the chain (RES-172); where no keyed account stands above `subject` the
+///   genesis lies in NO cone — a bootstrap-tier account's own, the invite's,
+///   an org door's top-level mint, a never-keyed chain's;
+/// * a HIRE (AUTH-5.58 step 4) lands beneath `S`'s agent space — one of
+///   `inc(S, 1)`'s CHILDREN, the rule's own words, and never a deeper
+///   address: beneath an unseeded agent's slot nothing is a hire;
+/// * a SPAWN (AUTH-5.63) lands beneath an AGENT: `S` itself stands at
+///   `inc(inc(P, 1), n)` beneath ITS OWN nearest keyed ancestor `P`, and a
+///   keyed account at any other position is no agent — so a handed-off
+///   account standing elsewhere never reads as one. `P` is read to place `S`,
+///   never to grade the act;
+/// * an ADMISSION (RES-175's seat carve) lands in a DIRECT CHILD of the
+///   board's binding-writing account where that account is not the claimant
+///   ([`forked_seat`]) — the seat's HELD first child, `inc(seat, 1)` itself,
+///   is no admission and stays a handoff;
+/// * ANY OTHER genesis into a by-reference descendant of `S` — `inc(S, 1)`
+///   itself, the agents' home, included; `S` a person's account, an org
+///   root's or a node account's alike, the address read and never the role —
+///   is `S`'s HANDOFF.
+///
+/// The caller grades a handoff at `S`'s set: anchor-grade wherever that set
+/// holds an anchor, device-grade where it holds none.
+fn handoff_giver(identity: &IdentityState, cfg: &AuthConfig, subject: &Address) -> Option<Address> {
+    let giver = keyed_above(identity, subject)?;
+    let above = parent(subject);
+    let first_child = |of: &Address| checked_inc(of, 1).ok();
+    // The HIRE's: a child of the giver's agent space.
+    if above == first_child(&giver) {
+        return None;
+    }
+    // The SPAWN's: the giver is itself an agent.
+    let giver_is_agent =
+        keyed_above(identity, &giver).is_some_and(|holder| parent(&giver) == first_child(&holder));
+    if giver_is_agent {
+        return None;
+    }
+    // The ADMISSION's: a direct child of a forked lineage's seat, its held
+    // first child apart.
+    if let Some(seat) = forked_seat(cfg, identity) {
+        if above.as_ref() == Some(&seat) && first_child(&seat).as_ref() != Some(subject) {
+            return None;
+        }
+    }
+    Some(giver)
+}
+
+/// THE ONE CONFIG READ (AUTH-3.15, AUTH-3.21; RES-175, RES-195): the SEAT of a
+/// forked lineage — the list header's SECOND field, the board's
+/// binding-writing account (AUTH-4.36 step 4b; REG-3.52), where it is NOT the
+/// claimant. `None` — the carve SILENT — where the header omits the field
+/// (the claimant is then the binding-writing account) or names the claimant:
+/// on every unforked lineage the two are one account, so the carve reaches no
+/// notebook and no unforked org board.
+///
+/// Read beside `identity.claimant()` and COMPARED: the daemon derives
+/// nothing and reads no record for it. The field is read AS ISSUED
+/// ([`super::BlockedPrefixes::header`]), never as the install resolved its
+/// comparand (b): that one is live only where the operator is off-board,
+/// which is the BLOCK's question and not the carve's.
+///
+/// SILENT on an UNCLAIMED board too: there is no claimant for the field to
+/// differ from and no lineage to have forked. The rule does not speak to the
+/// cell, and the carve only ever WIDENS — so where its comparison has no
+/// referent the gate keeps its grade.
+fn forked_seat(cfg: &AuthConfig, identity: &IdentityState) -> Option<Address> {
+    let claimant = identity.claimant()?;
+    let seat = blocked_prefixes(cfg).header().binding_writer.clone()?;
+    (*claimant != seat).then_some(seat)
+}
+
 /// The five reserved subtree spans overlap nothing the credential types
 /// name: the identity types live in subspace 3 while the shipped classes
 /// sit at content positions 1..=5 — pinned so a change to either
@@ -1142,6 +1267,30 @@ mod tests {
         // is NOT a credential type.
         let retired = subtree_of(addr_of(&[1, 1, 0, 1, 0, 1, 0, 1, 1]).tumbler());
         assert_eq!(types.kind_of(&[retired]), None);
+    }
+
+    /// The seat carve's one config read is SILENT wherever its comparison has
+    /// no referent: with no header, and — the cell the rule does not speak to
+    /// — on an UNCLAIMED board, whose header can differ from no claimant. The
+    /// claimed cells (the field naming the claimant; naming another account)
+    /// are `auth_wire`'s, over the wire.
+    #[test]
+    fn the_seat_carve_is_silent_with_no_header_and_on_an_unclaimed_board() {
+        use super::super::{AuthOptions, BlockedHeader, BlockedIssue, BlockedPrefixes, CredentialLock};
+
+        let cfg = AuthConfig::new(AuthOptions::default());
+        let unclaimed = IdentityState::genesis();
+        assert_eq!(forked_seat(&cfg, &unclaimed), None, "no header");
+
+        let seat = addr_of(&[1, 0, 7]);
+        let issue = BlockedIssue {
+            header: BlockedHeader { operator: None, binding_writer: Some(seat.clone()) },
+            entries: Vec::new(),
+        };
+        let lock = CredentialLock::new();
+        cfg.install_blocked(&lock.write(), BlockedPrefixes::installed(issue, None));
+        assert_eq!(blocked_prefixes(&cfg).header().binding_writer, Some(seat), "the field, as issued");
+        assert_eq!(forked_seat(&cfg, &unclaimed), None, "no claimant for the field to differ from");
     }
 
     /// PUB-2.15's projection is address arithmetic and total: a version

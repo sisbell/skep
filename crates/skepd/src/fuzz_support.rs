@@ -85,6 +85,9 @@ pub const TRANSPORT_ERRORS: &[&str] = &[
     // The ONE auth transport code (AUTH-6.5): permanent, no detail, 401 —
     // a fuzz payload that assembles a well-formed signed body lands here.
     "session_rejected",
+    // The handshake's ONE exception, by status (AUTH-6.5): 403, carrying the
+    // takedown record's address — a principal under a listed prefix.
+    "prefix_blocked",
     "malformed_op_at",
     "write_at_history",
     "beyond_head",

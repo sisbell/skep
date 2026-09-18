@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use common::*;
 use serde_json::Value;
+use skep_identity::{encode_retire, Fingerprint};
 
 // ═══════════════════════════════════════════════════════════════════════
 // THE CONTRACT TABLE.
@@ -666,6 +667,246 @@ fn without_x_s_grant_the_sibling_and_parent_are_withheld_from_x_s_sources() {
     let tokens = open_tokens(port);
     let fixture = build_fixture(port, &boot, &tokens, &counters, false);
     walk_matrix(port, &fixture, &tokens, &stale0, &counters, &table(false), "no grant");
+    sd.shutdown();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// THE CONTENT ROWS (RES-63 item 6 (e); AUTH-4.39, AUTH-3.44 slot (6)).
+//
+// ADDED beside the matrix — no cell above moves ("editing a cell is a
+// reviewed authorization change"; adding rows is not). A signed session may
+// declare itself CONTENT-scoped inside its signed bytes; the scope is a LIMIT
+// beneath the key's grade, read at exactly one place — the credential path's
+// slot (6) — so the contract is two statements, one per half of the table:
+//   * content × each CREDENTIAL-typed act (device enrol, anchor enrol,
+//     retirement, genesis, claim) ⇒ `credential_refused content_session`,
+//     whatever the full session beside it answers;
+//   * content × each CONTENT write ⇒ the FULL session's own verdict, cell
+//     for cell — every row of [`MATRIX`], in the owner's column.
+// The two columns are two SIGNED sessions of the owner's, opened by the SAME
+// key, so the scope is the one thing a row's pair of cells differs by.
+// ═══════════════════════════════════════════════════════════════════════
+
+const CONTENT_SESSION: &str = "credential_refused:content_session";
+const ANCHOR_SESSION_REQUIRED: &str = "credential_refused:anchor_session_required";
+/// The store's own refusal of an UNDECLARED insert into a published document
+/// (PUB-2.11) — what a SIGNED owner meets where the bare owner met the gate.
+const PUBLISHED_TARGET: &str = "published_target";
+
+/// Column order of [`CONTENT_MATRIX`] — indexes into every row's `expect`.
+const SCOPE_COLS: [&str; 2] = ["full", "content"];
+
+#[derive(Clone, Copy)]
+struct ScopeRow {
+    label: &'static str,
+    expect: [&'static str; 2],
+}
+
+#[rustfmt::skip]
+const CONTENT_MATRIX: &[ScopeRow] = &[
+    // ── content × each credential-typed act ──            full                     content
+    ScopeRow { label: "enrol (device)",               expect: [OK,                      CONTENT_SESSION] },
+    // The owner's set holds no anchor, so its FULL device session meets the
+    // anchor gate — BEHIND the scope's token at slot (6) (AUTH-3.44).
+    ScopeRow { label: "enrol (anchor)",               expect: [ANCHOR_SESSION_REQUIRED, CONTENT_SESSION] },
+    ScopeRow { label: "retire",                       expect: [OK,                      CONTENT_SESSION] },
+    // The owner's own subdivision: a handoff, device-grade under its
+    // anchorless set (AUTH-3.21) — from a full session.
+    ScopeRow { label: "genesis",                      expect: [OK,                      CONTENT_SESSION] },
+    // On an UNCLAIMED board, where the fold previews the claim Honored.
+    ScopeRow { label: "claim",                        expect: [OK,                      CONTENT_SESSION] },
+    // ── content × each content write: the full session's own verdict ──
+    ScopeRow { label: "create_new_document",          expect: [OK,                      OK] },
+    ScopeRow { label: "delegate",                     expect: [OK,                      OK] },
+    ScopeRow { label: "register_node",                expect: [OK,                      OK] },
+    ScopeRow { label: "fork",                         expect: [OK,                      OK] },
+    ScopeRow { label: "insert",                       expect: [OK,                      OK] },
+    ScopeRow { label: "insert (published doc 1)",     expect: [PUBLISHED_TARGET,        PUBLISHED_TARGET] },
+    ScopeRow { label: "delete",                       expect: [OK,                      OK] },
+    ScopeRow { label: "rearrange",                    expect: [OK,                      OK] },
+    ScopeRow { label: "copy (foreign dest)",          expect: [OK,                      OK] },
+    ScopeRow { label: "copy (foreign source)",        expect: [OK,                      OK] },
+    ScopeRow { label: "version (foreign src)",        expect: [PRIVATE_SOURCE_VERSIONLESS, PRIVATE_SOURCE_VERSIONLESS] },
+    ScopeRow { label: "make_link",                    expect: [OK,                      OK] },
+    ScopeRow { label: "emit",                         expect: [OK,                      OK] },
+    ScopeRow { label: "assert_sup",                   expect: [OK,                      OK] },
+    ScopeRow { label: "nullify (home)",               expect: [OK,                      OK] },
+    ScopeRow { label: "nullify (target)",             expect: [OK,                      OK] },
+    ScopeRow { label: "edit_link (d_s)",              expect: [OK,                      OK] },
+    ScopeRow { label: "edit_link (d_a)",              expect: [OK,                      OK] },
+    ScopeRow { label: "edit_link (foreign original)", expect: [OK,                      OK] },
+];
+
+/// The credential rows' material: each act's record, landed in the owner's
+/// doc 1 ahead of the walk, and the subdivision the genesis row seeds.
+struct CredentialActs {
+    enrol_device: String,
+    enrol_anchor: String,
+    retire: String,
+    genesis: String,
+    subdivision: String,
+}
+
+/// The CLAIM row's own board: the claim previews Honored only while the
+/// board is UNCLAIMED, so its two cells run against a keyed PARTIAL there.
+/// `sessions` is indexed like [`SCOPE_COLS`].
+struct ClaimCells {
+    port: u16,
+    seat: Seat,
+    sessions: [String; 2],
+}
+
+/// One walk of [`CONTENT_MATRIX`]. `tokens` is indexed like [`SCOPE_COLS`]:
+/// per scope, the matrix's own token set with the OWNER's column bound to
+/// that scope's signed session — the bare owner token beside it still mints
+/// the rows' own targets, as it does in the matrix.
+struct ScopeWalk<'a> {
+    port: u16,
+    fixture: &'a Fixture,
+    counters: &'a Counters,
+    acts: CredentialActs,
+    claim: ClaimCells,
+    tokens: [Tokens; 2],
+}
+
+impl ScopeWalk<'_> {
+    /// One cell: a credential row's deposit, or — for a row of [`MATRIX`] —
+    /// that row's OWNER cell, run under the scoped session.
+    fn cell(&self, label: &str, col: usize) -> String {
+        let session = self.tokens[col].by_col[0].as_str();
+        let home = self.fixture.pub_doc.as_str();
+        let owner = self.fixture.owner_account.as_str();
+        let deposit = |record: &str, account: &str, ty: &str| {
+            verdict(&typed_link(self.port, session, home, &[record], &[account], ty))
+        };
+        match label {
+            "enrol (device)" => deposit(&self.acts.enrol_device, owner, T_ENROLL),
+            "enrol (anchor)" => deposit(&self.acts.enrol_anchor, owner, T_ENROLL),
+            "retire" => deposit(&self.acts.retire, owner, T_RETIRE),
+            "genesis" => deposit(&self.acts.genesis, &self.acts.subdivision, T_ENROLL),
+            "claim" => verdict(&op(
+                self.claim.port,
+                Some(&self.claim.sessions[col]),
+                &claim_frame(&self.claim.seat.doc1, &self.claim.seat.account),
+            )),
+            // The guest and stale columns are never walked here, so the
+            // stale token is never read.
+            matrix_row => {
+                run_cell(self.port, self.fixture, &self.tokens[col], "", self.counters, matrix_row, 0)
+            }
+        }
+    }
+}
+
+/// Land one record atom at the next free position of `doc1`.
+fn land_in(port: u16, signed: &str, doc1: &str, atom: &str) -> String {
+    let ordinal = next_content_ordinal(port, Some(signed), doc1);
+    acked_addr(&op(
+        port,
+        Some(signed),
+        &format!(
+            r#"{{"op":"insert","doc":"{doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":true}}"#
+        ),
+    ))
+}
+
+/// The content rows, walked (RES-63 item 6 (e)). Within a row the CONTENT
+/// cell runs FIRST: a credential act the full session commits would otherwise
+/// be the content session's RETRY of a committed act, and slot (3)'s preview
+/// token stands ahead of the scope's (AUTH-3.44) — which is the order's own
+/// statement, pinned in `auth_wire`, and not this table's.
+#[test]
+fn a_content_session_is_refused_every_credential_act_and_writes_content_as_a_full_one() {
+    for row in MATRIX {
+        assert!(
+            CONTENT_MATRIX.iter().any(|r| r.label == row.label),
+            "matrix row {:?} has no content row: content × each content write is cell for cell",
+            row.label
+        );
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let counters = Counters::new();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let boot = open_session(port, 0);
+    let fixture = build_fixture(port, &boot, &open_tokens(port), &counters, true);
+
+    // The two columns: the owner's hired key opens both.
+    let owner_key =
+        distinct_key(u8::try_from(P_OWNER).expect("a matrix principal id fits a seed byte"));
+    let scoped = |session: String| {
+        let mut tokens = open_tokens(port);
+        tokens.by_col[0] = session;
+        tokens
+    };
+    let tokens = [
+        scoped(open_signed_session(port, P_OWNER, &owner_key)),
+        scoped(open_content_session(port, P_OWNER, &owner_key)),
+    ];
+    let full = tokens[0].by_col[0].as_str();
+    let home = fixture.pub_doc.as_str();
+    let enrolled = distinct_key(101);
+    let acts = CredentialActs {
+        enrol_device: land_in(port, full, home, &enroll_atom(&[&enrolled])),
+        enrol_anchor: land_in(port, full, home, &enroll_atom_flagged(&[(&distinct_key(102), true)])),
+        retire: land_in(
+            port,
+            full,
+            home,
+            &json_atom(&encode_retire(&[Fingerprint::of(&public_key_of(&enrolled))])),
+        ),
+        genesis: land_in(port, full, home, &enroll_atom(&[&distinct_key(103)])),
+        subdivision: delegate(
+            port,
+            full,
+            &fixture.owner_account,
+            Counters::next(&counters.principal),
+        ),
+    };
+
+    // The claim row's board: unclaimed, a keyed partial, both scopes open.
+    let claim_dir = tempfile::tempdir().expect("tempdir");
+    let claim_sd = spawn_unclaimed(claim_dir.path());
+    let claim_key = distinct_key(104);
+    let claim = ClaimCells {
+        port: claim_sd.port(),
+        seat: seed_partial(claim_sd.port(), CLAIMANT_PRINCIPAL, &[(&claim_key, false)]),
+        sessions: [
+            open_signed_session(claim_sd.port(), CLAIMANT_PRINCIPAL, &claim_key),
+            open_content_session(claim_sd.port(), CLAIMANT_PRINCIPAL, &claim_key),
+        ],
+    };
+
+    let walk = ScopeWalk { port, fixture: &fixture, counters: &counters, acts, claim, tokens };
+    let mut mismatches: Vec<String> = Vec::new();
+    let mut cells = 0usize;
+    for row in CONTENT_MATRIX {
+        for col in [1, 0] {
+            let got = walk.cell(row.label, col);
+            cells += 1;
+            if got != row.expect[col] {
+                mismatches.push(format!(
+                    "  row={:<28} col={:<8} expected={} got={got}",
+                    row.label, SCOPE_COLS[col], row.expect[col]
+                ));
+            }
+        }
+    }
+    assert!(
+        mismatches.is_empty(),
+        "FINDING (content rows): {} of {cells} cells diverge from the contract table \
+         (an intended change here is a reviewed authorization change):\n{}",
+        mismatches.len(),
+        mismatches.join("\n")
+    );
+    println!(
+        "content rows: {} rows × {} columns = {cells} cells, all verdicts match",
+        CONTENT_MATRIX.len(),
+        SCOPE_COLS.len()
+    );
+
+    claim_sd.shutdown();
     sd.shutdown();
 }
 

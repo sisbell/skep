@@ -1360,11 +1360,14 @@ impl Daemon {
         )
     }
 
-    /// `POST /session` — the two-form body (AUTH-6.2): bare (honored per
-    /// `bare_bind_allowed`) or signed (the challenge/response handshake,
-    /// verified in EVERY mode). A syntax fault is the 400 and spends no
-    /// credential; every handshake failure OF THE CREDENTIAL is the ONE
-    /// 401, `session_rejected`, byte-identical across causes (AUTH-6.5).
+    /// `POST /session` — the three-form body (AUTH-6.2): bare (honored per
+    /// `bare_bind_allowed`), signed (the challenge/response handshake,
+    /// verified in EVERY mode), or SCOPED signed — the signed form carrying
+    /// `"scope": "content"`, verified under the v2 bytes and opening a
+    /// binding that deposits no credential (AUTH-4.39). A syntax fault — a
+    /// scope fault included — is the 400 and spends no credential; every
+    /// handshake failure OF THE CREDENTIAL is the ONE 401,
+    /// `session_rejected`, byte-identical across causes (AUTH-6.5).
     /// THE ONE EXCEPTION, BY STATUS: a signed body naming a principal under
     /// a listed prefix is `403 prefix_blocked` carrying the record's
     /// address (AUTH-4.36 step 4b) — [`session_refused`] builds both.
@@ -1388,7 +1391,7 @@ impl Daemon {
             Instant::now(),
         );
         match outcome {
-            Ok((principal, signer)) => {
+            Ok((principal, signer, scope)) => {
                 // Every POST /session mints a DISTINCT SessionId, principal
                 // 0 included (AUTH-4.40; M10's bootstrap_session mints
                 // fresh per call — confirmed as-built, AUTH-6.35).
@@ -1397,10 +1400,13 @@ impl Daemon {
                 } else {
                     self.febe.open_session(principal)
                 };
+                // The scope is set ONCE, here, from the VERIFIED body — the
+                // handshake's answer — and the 200 below says nothing of it
+                // (AUTH-4.39): a client knows the scope it asked for.
                 let token = self
                     .auth
                     .sessions
-                    .open(SessionBinding { sid, principal, signer }, &mut OsEntropy);
+                    .open(SessionBinding { sid, principal, signer, scope }, &mut OsEntropy);
                 Reply::json(
                     200,
                     obj(vec![
@@ -1685,13 +1691,19 @@ impl Daemon {
                 return with_signal(op_answer(ack), closed);
             }
         }
-        // 6 — the precheck's ordered slots over the deposit built at 2b.
+        // 6 — the precheck's ordered slots over the deposit built at 2b. The
+        // actor is what the session's opening fixed — its signer and, beside
+        // it, its scope, this being the scope's ONE read (AUTH-4.39) — and
+        // `cfg` is the seat carve's one config read (AUTH-3.15), stable under
+        // the write guard held here: the list's install takes the same one.
         if let Err(r) = crate::auth::policy::precheck(
             &credential_lock,
             snap.world(),
             &identity,
             &dep,
             binding.signer.as_ref(),
+            binding.scope,
+            &self.auth.cfg,
         ) {
             return with_signal(credential_refused(meta.kind, &r), closed);
         }
@@ -3309,17 +3321,22 @@ mod tests {
         // Both transcriptions of wire.md's error column, measured against
         // each other. A NEW variant is caught by the compiler at `name`
         // and `status`; this catches one that reaches the wire without
-        // reaching either list. The `+ 1` is `session_rejected` — the
-        // handshake's 401, which is not a `TransportError` variant (built
-        // at its own site per AUTH-6.5, [`session_refused`]). The
-        // handshake's SECOND answer, the 403 `prefix_blocked` (AUTH-6.5's
-        // one exception), is built beside it and stands in NEITHER list:
-        // no fuzz daemon is supplied a blocked-prefix list, so no fuzz
-        // target can be answered it and the oracle has no row for it yet.
-        // When the oracle's list takes the name, this becomes `+ 2`.
+        // reaching either list. The `+ 2` is the handshake's PAIR, neither
+        // a `TransportError` variant — both are built at their own site per
+        // AUTH-6.5, [`session_refused`]: `session_rejected`, the 401, and
+        // `prefix_blocked`, the 403 that is its one exception. The oracle's
+        // list names both because wire.md's error column does; no fuzz
+        // daemon is supplied a blocked-prefix list, so the second is a name
+        // no fuzz target is answered today.
+        for handshake_name in ["session_rejected", "prefix_blocked"] {
+            assert!(
+                crate::fuzz_support::TRANSPORT_ERRORS.contains(&handshake_name),
+                "{handshake_name} is answerable but absent from the fuzz oracle's list"
+            );
+        }
         #[cfg(feature = "observe")]
         assert_eq!(
-            table.len() + 1,
+            table.len() + 2,
             crate::fuzz_support::TRANSPORT_ERRORS.len(),
             "the two hand transcriptions of wire.md's error column disagree in length"
         );

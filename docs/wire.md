@@ -261,17 +261,18 @@ subsequent calls as the header:
 Skepd-Session: 9f3a6c21d4b8e07a5c1b2d4e6f708192
 ```
 
-**`POST /session`** accepts exactly two body forms. Anything else — an
-unknown field, a missing member of the signed triple, a malformed value
-— is `400 malformed_session_request` with a `detail`, and a 400 never
-spends a nonce: a syntax fault costs no re-challenge.
+**`POST /session`** accepts exactly three body forms. Anything else — an
+unknown field, a missing member of the signed triple, a malformed value,
+a `scope` that is not exactly `"content"` or that rides a bare body — is
+`400 malformed_session_request` with a `detail`, and a 400 never spends a
+nonce: a syntax fault costs no re-challenge.
 
 *Bare* — `{"principal": 2}`, v1's form unchanged. Honored only when ALL
 of: the board is not ENFORCING (§Identity); the TCP peer is loopback;
 and the request's `Origin` header, when present, parses as a canonical
 origin in the **bare origin set** (§The claim ceremony and credentials;
 `Origin: null` parses to nothing and refuses). Refusal is the one 401
-below.
+below. A bare body carries no `scope`.
 
 *Signed* — `{"principal": 2, "nonce": "<64 hex>", "origin":
 "<origin>", "sig": "<128 hex>"}` — verified in every mode, UNCLAIMED
@@ -281,6 +282,25 @@ slash, the scheme's default port omitted), `nonce` is 64 LOWERCASE hex,
 `sig` is 128 hex characters (case-free — it is decoded, never framed)
 for exactly 64 signature bytes. The daemon canonicalizes nothing on
 this path.
+
+*Scoped signed* — `{"principal": 2, "nonce": "<64 hex>", "origin":
+"<origin>", "scope": "content", "sig": "<128 hex>"}` — the signed form
+carrying one more strict field. `scope` is OPTIONAL on the signed body
+and takes exactly ONE value, the JSON string `"content"`: no other
+value, no other type, no case variant, and no `full` spelling — a signed
+body WITHOUT it is a FULL session, the form above byte for byte. It
+opens a **content-scoped session**: a signed session of its principal
+that reads, holds its draft visibility, writes content, publishes,
+grants and closes exactly as a full session does, and CANNOT deposit,
+retire or claim a credential — every credential-typed deposit from it
+answers `credential_refused` with `content_session` (§Credential
+refusals), whatever key opened it, an anchor key included. The scope is
+the SIGNER's own declaration, inside the signed bytes (below), set once
+at the opening and held for the session's life: the success answer does
+not echo it (a client knows the scope it asked for), it is in no record,
+and `GET /health` publishes nothing of it. A daemon that predates the
+field answers a scoped body the 400 above, so a client asking for the
+limit is never silently opened full.
 
 The handshake starts at the challenge:
 
@@ -298,14 +318,28 @@ costs a fresh challenge. At most 4096 nonces are live at once; past the
 cap the oldest is evicted. A malformed query is
 `400 malformed_challenge`.
 
-The signed bytes are
+The signed bytes are VERSIONED, never extended in place. An UNSCOPED
+body signs the v1 layout
 
 ```
 "skep-session-v1" ‖ be32(|origin|)‖origin ‖ be32(|nonce|)‖nonce ‖ be32(|principal|)‖principal
 ```
 
-over the body's OWN strings — `principal` as shortest ASCII decimal,
-`be32` the 4-byte big-endian byte length. Sign with a private key whose
+and a SCOPED body the v2 layout — the same three fields, then the scope:
+
+```
+"skep-session-v2" ‖ be32(|origin|)‖origin ‖ be32(|nonce|)‖nonce ‖ be32(|principal|)‖principal ‖ be32(|scope|)‖scope
+```
+
+each over the body's OWN strings — `principal` as shortest ASCII decimal,
+`scope` the body's own `content` bytes, `be32` the 4-byte big-endian byte
+length. The daemon verifies a scoped body under the v2 bytes ONLY and an
+unscoped body under the v1 bytes ONLY: the tag names the grammar, so a v1
+signature never opens a scoped session and a v2 signature never opens an
+unscoped one — either is a signature failure, the one 401 below, its
+nonce spent. (The scope sits INSIDE the signed bytes because a limit the
+signer did not sign could be lifted on the path by dropping the field.)
+The v2 layout binds the same signers as v1. Sign with a private key whose
 public key is enrolled for the account that principal's session
 AUTHENTICATES AGAINST: principal `0` signs with the CLAIMANT account's
 keys (none exist while unclaimed); every other principal with its own
@@ -1404,13 +1438,39 @@ type (§The claim ceremony and credentials) — run a stricter order:
   enrollment rather than discovered at a handshake);
   `too_many_enrolled` (the enrolled-set cap, **16** — daemon policy,
   raisable without format consequence; the enroll arm only, the
-  ceremony's genesis exempt); `anchor_session_required` (an anchor
-  retirement, or a post-genesis anchor-flagged enrollment, requires a
-  session an ANCHOR key of that account established — a bare session
-  never satisfies it; genesis exempt); and the two board-state arms
-  again — claimed: `signed_session_required` for ANY bare-session
-  deposit, genesis included; unclaimed: `claim_first` for any deposit
-  other than the ceremony's own genesis and claim.
+  ceremony's genesis exempt); then ONE slot holding TWO tokens, in this
+  order — `content_session` FIRST (ANY credential-typed deposit — an
+  enrollment, a retirement or a claim — from a CONTENT-scoped session,
+  §Sessions: whatever key opened the session and whether or not the act
+  is an anchor act, so an anchor key's content session answers this and
+  never the token behind it; the act needs a FULL session), and behind
+  it `anchor_session_required` (an anchor retirement, or a post-genesis
+  anchor-flagged enrollment, requires a session an ANCHOR key of that
+  account established — a bare session never satisfies it. A genesis is
+  exempt — the seeding hand records the initial set, flags included —
+  EXCEPT AT A HANDOFF, which the daemon tells by ADDRESS and by nothing
+  else: a genesis is measured at the nearest KEYED account above its
+  address, the account whose keys open it. Beneath that account's agent
+  space — a child of its first sub-account `X.1` — it is a HIRE's;
+  beneath an AGENT — a keyed account itself standing at `P.1.n` beneath
+  its own nearest keyed account `P` — a SPAWN's; into a direct child of
+  a forked lineage's SEAT — the blocked-prefix list's binding-writing
+  account where the operator's header names one that is not the
+  claimant, that seat's own first sub-account apart — an ADMISSION's:
+  each device-grade, committing from any signed session. ANYWHERE ELSE
+  beneath a party's keys — that account's first sub-account ITSELF, the
+  agents' home, included — it is that party's HANDOFF, and wherever the
+  set that opens the account holds an anchor it requires a session an
+  ANCHOR of THAT set established, a bare session never satisfying it;
+  where that set holds no anchor the handoff stays device-grade. A
+  top-level account's own genesis — the ceremony's, an invite's — has no
+  keyed account above it and meets no gate here); and the two
+  board-state arms again — claimed: `signed_session_required` for ANY
+  bare-session deposit, genesis included; unclaimed: `claim_first` for
+  any deposit other than the ceremony's own genesis and claim. The
+  tokens ahead of `content_session` stay ahead: a content session's
+  retry of an act another session committed still answers the fold's
+  own token (`nothing_changed`, `already_claimed`).
 * Behind the unclaimed arm, the CLAIM's own admission — `claim_residue`
   (v7.10; PUB-6.63, PUB-6.35 clause (b); the token **OWNER CONFIRM
   OWED**, proposed beside `claim_first` in the pre-claim tokens'

@@ -128,6 +128,26 @@ pub enum Op {
     /// [`Op::CreateNewDocument`] demands. Deliberately an explicit wire id,
     /// not the session principal (§2).
     PrincipalPrefix { id: PrincipalId },
+    /// THE OWNER-OF-ADDRESS READ (AUTH-6.37): ω UNPROJECTED — the LONGEST
+    /// registered prefix CONTAINING `addr` and the principal seated at it,
+    /// from ONE walk of M3's principal registry
+    /// (`M3State::effective_owner_pair`). `addr` rides in the serving
+    /// board's own LOCAL form — the form [`Op::Delegate`] takes and
+    /// [`Op::PrincipalPrefix`] answers — and need not be allocated: ω is a
+    /// pure prefix query. There is NO document argument, so nothing is
+    /// consulted and nothing withheld: like its two siblings above this is
+    /// public, immutable registry data, the same answer for every caller and
+    /// for none (no session is needed).
+    ///
+    /// AN ACCOUNT IS ALLOCATED — a seat of its own — IFF THE ANSWER'S PREFIX
+    /// EQUALS THE ADDRESS ASKED, the one test every caller makes. Any other
+    /// prefix names the nearest seat ABOVE `addr`, so an unallocated
+    /// `inc(X, 1)` answers `X`'s own principal and never none under the
+    /// node; `Some` alone is therefore NOT the allocation test (AUTH-5.87 op
+    /// (1)'s resume reads the equality and nothing else). Both halves are
+    /// absent, TOGETHER, only where no registered principal's prefix contains
+    /// `addr`. Total — no fault path, as the two reads above have none.
+    EffectiveOwner { addr: Address },
     /// The doc-metadata read (PUB-8.12; PUB round 2, lane 3.4 §1): a
     /// document's publication state, its owner account, and its birth
     /// version with that version's base extent — what a client's own
@@ -388,6 +408,7 @@ pub enum OpKind {
     Fork,
     NextAccountPrefix,
     PrincipalPrefix,
+    EffectiveOwner,
     DocMetadata,
     Insert,
     Delete,
@@ -451,6 +472,7 @@ impl Op {
         match self {
             Op::NextAccountPrefix { .. }
             | Op::PrincipalPrefix { .. }
+            | Op::EffectiveOwner { .. }
             | Op::DocMetadata { .. }
             | Op::ReadLink { .. }
             | Op::FollowLink { .. }
@@ -508,6 +530,7 @@ impl Op {
             Op::Fork { .. } => OpKind::Fork,
             Op::NextAccountPrefix { .. } => OpKind::NextAccountPrefix,
             Op::PrincipalPrefix { .. } => OpKind::PrincipalPrefix,
+            Op::EffectiveOwner { .. } => OpKind::EffectiveOwner,
             Op::DocMetadata { .. } => OpKind::DocMetadata,
             Op::Insert { .. } => OpKind::Insert,
             Op::Delete { .. } => OpKind::Delete,
@@ -556,7 +579,9 @@ impl Op {
     /// Every other read — the FTT descriptor family (its `home` is a coverage
     /// constraint, not a named document), the raw link reads (link-address
     /// ABSENCE, PUB-6.6, never withheld), the lineage probes (`y`/`x` are
-    /// probe keys, PUB-6.12), the namespace reads — names no document to
+    /// probe keys, PUB-6.12), the namespace reads (the owner-of-address read
+    /// among them: its `addr` is a registry probe, never a document argument,
+    /// AUTH-6.37) — names no document to
     /// withhold and answers the empty list; and every write answers it too,
     /// its source consult being the write door's own list,
     /// [`Op::source_arguments`] (PUB-6.23).
@@ -597,6 +622,7 @@ impl Op {
             // purpose, never defaulted to "consults nothing".
             Op::NextAccountPrefix { .. }
             | Op::PrincipalPrefix { .. }
+            | Op::EffectiveOwner { .. }
             | Op::ReadLink { .. }
             | Op::FollowLink { .. }
             | Op::FindLinksFtt { .. }
@@ -685,6 +711,7 @@ impl Op {
             | Op::AssertSup { .. }
             | Op::NextAccountPrefix { .. }
             | Op::PrincipalPrefix { .. }
+            | Op::EffectiveOwner { .. }
             | Op::ReadLink { .. }
             | Op::FollowLink { .. }
             | Op::RetrieveV { .. }
@@ -760,6 +787,7 @@ impl Op {
             | Op::Nullify { .. }
             | Op::NextAccountPrefix { .. }
             | Op::PrincipalPrefix { .. }
+            | Op::EffectiveOwner { .. }
             | Op::ReadLink { .. }
             | Op::FollowLink { .. }
             | Op::RetrieveV { .. }
@@ -828,6 +856,7 @@ impl Op {
             | Op::EditLink { .. }
             | Op::NextAccountPrefix { .. }
             | Op::PrincipalPrefix { .. }
+            | Op::EffectiveOwner { .. }
             | Op::ReadLink { .. }
             | Op::FollowLink { .. }
             | Op::RetrieveV { .. }
@@ -896,6 +925,7 @@ pub(crate) mod tests {
             (Op::Fork { published: None }, false),
             (Op::NextAccountPrefix { parent: addr(&[1]) }, true),
             (Op::PrincipalPrefix { id: PrincipalId(1) }, true),
+            (Op::EffectiveOwner { addr: addr(&[1, 0, 1, 1]) }, true),
             (Op::DocMetadata { doc: doc() }, true),
             (
                 Op::Insert {
@@ -968,16 +998,16 @@ pub(crate) mod tests {
     }
 
     /// §1: the read/write partition is exhaustive and two-sided
-    /// (`is_write == !is_read`), with 26 reads and 15 writes (the publish
+    /// (`is_write == !is_read`), with 27 reads and 15 writes (the publish
     /// shot joining the fourteen of the design, lane 3.2; the doc-metadata
     /// read and the edition-claim lookup joining the twenty-four reads,
-    /// lane 3.4).
+    /// lane 3.4; the owner-of-address read the twenty-seventh, AUTH-6.37).
     #[test]
     fn partition_matches_the_design_grouping() {
         let ops = all_ops();
-        assert_eq!(ops.len(), 41);
+        assert_eq!(ops.len(), 42);
         let reads = ops.iter().filter(|(_, r)| *r).count();
-        assert_eq!(reads, 26);
+        assert_eq!(reads, 27);
         for (op, expect_read) in &ops {
             assert_eq!(op.is_read(), *expect_read);
             assert_eq!(op.is_write(), !*expect_read);
@@ -999,7 +1029,7 @@ pub(crate) mod tests {
             assert_ne!(kind, OpKind::Unparseable);
             assert!(seen.insert(kind), "{kind:?} is produced by two variants");
         }
-        assert_eq!(seen.len(), 41);
+        assert_eq!(seen.len(), 42);
     }
 
     /// [`SuccessorSpec`] is a VALUE, and the comparison macros are what a
@@ -1053,6 +1083,14 @@ pub(crate) mod tests {
             vec![&d3],
             "the target is a named document, not a probe key"
         );
+        // AUTH-6.37: the owner-of-address read has NO document argument — its
+        // `addr` is a registry probe — so the consult is never asked about it
+        // and nothing is withheld, whatever the address names.
+        let op = Op::EffectiveOwner { addr: d1.clone() };
+        assert!(
+            op.doc_arguments().is_empty(),
+            "a DOCUMENT address asked about is still a probe, never a doc-argument"
+        );
         for (op, is_read) in all_ops() {
             let named = !op.doc_arguments().is_empty();
             let expects_consult = is_read
@@ -1060,6 +1098,7 @@ pub(crate) mod tests {
                     op,
                     Op::NextAccountPrefix { .. }
                         | Op::PrincipalPrefix { .. }
+                        | Op::EffectiveOwner { .. }
                         | Op::ReadLink { .. }
                         | Op::FollowLink { .. }
                         | Op::FindLinksFtt { .. }

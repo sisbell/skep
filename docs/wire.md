@@ -663,9 +663,14 @@ decimal **strings**: `"width": "3"`. On parse, a non-negative JSON integer
 is also accepted; canonical output is always the string form.
 
 **Machine-bounded integers** (`at`/`as_of` log positions, `slot`, `n`,
-counts, principal ids) are plain JSON numbers. They are `u64` server-side;
-values beyond 2^53 would lose precision in JavaScript-backed clients, but a
-log position or principal count approaching 2^53 is unreachable in practice.
+counts, principal ids) are plain JSON numbers. They are `u64` server-side,
+and a value beyond 2^53 − 1 would lose precision in a JavaScript-backed
+client. A log position or a count approaching that is unreachable in
+practice: both are bounded by what a board has committed. A **principal
+id** is not a count: it is a number a client CHOOSES (`delegate`'s
+`new_id`), so the board bounds it where it is minted: `delegate` refuses a
+`new_id` above 2^53 − 1 at the parse (§Namespace), and so registers no id a
+client cannot read exactly.
 
 **Spans** are `{"start": "<tumbler>", "width": "<tumbler>"}` — half-open
 intervals of the tumbler order. A zero-width span is invalid and rejected at
@@ -1547,6 +1552,18 @@ principal `new_id` as its owner, atomically. Obtain `new_prefix` from
 principal prefix names a delegation path, so it is capped at 64 components —
 deeper is `too_deep`. → `ack_addr` (the minted account address).
 
+`new_id` is bounded at the parse: a value above **2^53 − 1**
+(`9007199254740991`) is refused as any malformed frame is — the
+`unparseable` rejection, `malformed`, `permanent`; no code or token of its
+own — and nothing commits. That is the largest integer a JSON number carries
+exactly: past it a JavaScript-backed client rounds, and would then name a
+DIFFERENT principal at `/challenge` and in its signed session body than the
+one the board registered. Since a client ADOPTS whatever principal it finds
+seated at its account's first sub-account (`effective_owner`, below), an id
+no such client can say back would make that account unopenable from it, so
+the board registers none. A client minting `new_id` at random draws it
+inside the range — 53 random bits, never a full `u64`.
+
 <!-- wire: request delegate -->
 ```json
 {"new_id":2,"new_prefix":"1.0.2","op":"delegate"}
@@ -1598,6 +1615,48 @@ at session open — to resolve your own account. The argument is named
 <!-- wire: request principal_prefix -->
 ```json
 {"op":"principal_prefix","principal":2}
+```
+
+**`effective_owner`** — who owns `addr`: the LONGEST registered prefix
+containing `addr`, and the principal seated at it, from one walk of the
+principal registry. The one argument is `addr` — any address, in this
+board's own local form (the form `delegate` takes and `principal_prefix`
+answers); it need NOT be allocated, and there is no document argument.
+→ `effective_owner`: `{prefix, principal}`, both always present, carried
+together, and `null` TOGETHER only where no registered principal's prefix
+contains `addr` (an address not under this board's node `1`).
+
+An account is **allocated** — a seat of its own — **iff `prefix` equals
+the address you asked**, and that equality is the one test to make. Any
+other `prefix` names the nearest seat ABOVE `addr`: an unallocated first
+sub-account `X.1` answers `X`'s own prefix and `X`'s own principal, never
+nothing, so a non-null answer alone says nothing about allocation. This is
+how a client resumes when its `delegate` of `X.1` answers `not_authorized`
+because the address is already a seat: read `effective_owner` of `X.1`,
+and take `principal` only where `prefix` is `X.1` itself.
+
+Public, immutable registry data, like `principal_prefix`: NO session is
+needed and nothing is withheld — a guest and a bound principal are answered
+byte-identically — and it is served on `/op-at` too, as of any committed
+position (the seat above at a position before the `delegate` that
+allocated `addr`, the new seat from that position on).
+
+In the example `1.0.1.1` is NOT allocated: the answer names `1.0.1`, the
+seat above it, and that seat's principal.
+
+<!-- wire: request effective_owner -->
+```json
+{"addr":"1.0.1.1","op":"effective_owner"}
+```
+
+<!-- wire: response effective_owner -->
+```json
+{"as_of":9,"prefix":"1.0.1","principal":900,"resp":"effective_owner"}
+```
+
+<!-- wire: response effective_owner_none -->
+```json
+{"as_of":9,"prefix":null,"principal":null,"resp":"effective_owner"}
 ```
 
 **`doc_metadata`** — the publication metadata a client needs to run

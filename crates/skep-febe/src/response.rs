@@ -7,6 +7,7 @@ use skep_arrangement::Run;
 use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link};
+use skep_namespace::PrincipalId;
 use skep_retrieval::{CompareReport, Deletions, Delivery};
 
 use crate::reject::Rejection;
@@ -112,6 +113,18 @@ pub enum Response {
     Addrs { addrs: Vec<Address>, as_of: Seq },
     /// next-account-prefix / principal-prefix (`None` = absent/ineligible).
     MaybeAddr { addr: Option<Address>, as_of: Seq },
+    /// effective_owner (AUTH-6.37): ω UNPROJECTED — `(prefix, principal)`,
+    /// the LONGEST registered prefix containing the address asked and the
+    /// principal seated at it, off ONE walk of M3's registry. ONE optional
+    /// value rather than two optional fields, because the two are one fact
+    /// (the [`BirthVersion`] shape, and for its reason): they are M3's own
+    /// registry ENTRY, so a prefix without its principal is not something
+    /// this shape can say, and `None` — no registered principal's prefix
+    /// contains the address — takes both TOGETHER. The address asked is
+    /// ALLOCATED, a seat of its own, iff `prefix` equals it; any other
+    /// prefix names the nearest seat above it, which is why `Some` alone is
+    /// never the allocation test.
+    EffectiveOwner { owner: Option<(Address, PrincipalId)>, as_of: Seq },
     /// count_v / count_ftt.
     Count { n: usize, as_of: Seq },
     /// window_v / window_ftt.
@@ -219,6 +232,7 @@ impl Response {
             | Response::SpanSet { .. }
             | Response::Addrs { .. }
             | Response::MaybeAddr { .. }
+            | Response::EffectiveOwner { .. }
             | Response::Count { .. }
             | Response::Page { .. }
             | Response::Endsets { .. }

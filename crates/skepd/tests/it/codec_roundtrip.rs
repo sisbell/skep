@@ -115,6 +115,10 @@ fn all_requests() -> Vec<Request> {
         rq(None, Op::Fork { published: Some(true) }),
         rq(None, Op::NextAccountPrefix { parent: a(&[1]) }),
         rq(None, Op::PrincipalPrefix { id: PrincipalId(2) }),
+        // The owner-of-address read (AUTH-6.37): an ACCOUNT-tier address, and
+        // a DOCUMENT-tier one — `addr` is any address, a registry probe.
+        rq(None, Op::EffectiveOwner { addr: a(&[1, 0, 1, 1]) }),
+        rq(Some("probe-1"), Op::EffectiveOwner { addr: d1() }),
         rq(
             None,
             Op::Insert {
@@ -295,13 +299,14 @@ fn all_requests() -> Vec<Request> {
     ]
 }
 
-const OP_NAMES: [&str; 41] = [
+const OP_NAMES: [&str; 42] = [
     "create_new_document",
     "delegate",
     "register_node",
     "fork",
     "next_account_prefix",
     "principal_prefix",
+    "effective_owner",
     "doc_metadata",
     "insert",
     "delete",
@@ -340,7 +345,7 @@ const OP_NAMES: [&str; 41] = [
 ];
 
 /// parse ∘ marshal_request is the identity on canonical frames, for every
-/// variant; and the emitted op-name set is exactly the documented 41.
+/// variant; and the emitted op-name set is exactly the documented 42.
 #[test]
 fn every_op_round_trips_canonically() {
     let codec = JsonCodec;
@@ -418,6 +423,119 @@ fn request_id_round_trips() {
     let req = rq(Some("key-9"), Op::Fork { published: None });
     let parsed = parse_ok(&codec, &codec.marshal_request(&req));
     assert_eq!(parsed.id, Some(ReqId(b"key-9".to_vec())));
+}
+
+/// The owner-of-address read on the wire (AUTH-6.37). THE OP: one argument,
+/// `addr`, an address of ANY tier in the board's local form — no document
+/// argument, no principal, and under the frame discipline of every other op
+/// (a missing, mistyped or misnamed field is a parse fault). THE ANSWER: ω
+/// UNPROJECTED as two keys over one optional value — `prefix` and
+/// `principal` are ALWAYS present, carried together or `null` TOGETHER, so
+/// no marshal of this shape says one without the other.
+#[test]
+fn the_owner_of_address_read_parses_strictly_and_answers_the_pair_or_neither() {
+    let codec = JsonCodec;
+    for (frame, expect) in [
+        (r#"{"op":"effective_owner","addr":"1.0.1.1"}"#, a(&[1, 0, 1, 1])),
+        (r#"{"op":"effective_owner","addr":"1"}"#, a(&[1])),
+        (r#"{"op":"effective_owner","addr":"1.0.1.0.1.0.1.5"}"#, a(&[1, 0, 1, 0, 1, 0, 1, 5])),
+        (r#"{"op":"effective_owner","addr":"2.0.7","id":"k"}"#, a(&[2, 0, 7])),
+    ] {
+        let req = parse_ok(&codec, frame.as_bytes());
+        assert!(req.op.is_read(), "{frame}: a read");
+        assert!(req.op.doc_arguments().is_empty(), "{frame}: no document argument");
+        match req.op {
+            Op::EffectiveOwner { addr } => assert_eq!(addr, expect, "{frame}"),
+            _ => panic!("{frame} parsed to another op"),
+        }
+    }
+    for bad in [
+        r#"{"op":"effective_owner"}"#,
+        r#"{"op":"effective_owner","addr":null}"#,
+        r#"{"op":"effective_owner","addr":7}"#,
+        r#"{"op":"effective_owner","addr":"1.0"}"#,
+        r#"{"op":"effective_owner","addr":"1..1"}"#,
+        r#"{"op":"effective_owner","doc":"1.0.1.0.1"}"#,
+        r#"{"op":"effective_owner","addr":"1.0.1","doc":"1.0.1.0.1"}"#,
+        r#"{"op":"effective_owner","addr":"1.0.1","principal":900}"#,
+    ] {
+        assert!(codec.parse(bad.as_bytes()).is_err(), "{bad} must not parse");
+    }
+
+    let marshal = |owner: Option<(Address, PrincipalId)>| -> Value {
+        serde_json::from_slice(&codec.marshal(&Response::EffectiveOwner { owner, as_of: Seq(9) }))
+            .expect("marshal emits JSON")
+    };
+    assert_eq!(
+        marshal(Some((a(&[1, 0, 1]), PrincipalId(900)))),
+        serde_json::json!({"as_of": 9, "prefix": "1.0.1", "principal": 900, "resp": "effective_owner"}),
+    );
+    // Absent: both keys PRESENT and both null — never omitted, never split.
+    let none = marshal(None);
+    assert_eq!(
+        none,
+        serde_json::json!({"as_of": 9, "prefix": null, "principal": null, "resp": "effective_owner"}),
+    );
+    let keys: Vec<&str> = none.as_object().expect("an object").keys().map(String::as_str).collect();
+    assert_eq!(keys, ["as_of", "prefix", "principal", "resp"], "the absent answer keeps its shape");
+}
+
+/// `delegate` REFUSES a `new_id` outside the wire's exactly-representable
+/// range AT THE PARSE (AUTH-6.36's clause; AUTH-5.20): `2^53 − 1` is the
+/// largest id a JSON number carries exactly — past it a JavaScript-backed
+/// client rounds and would name a different principal than the board
+/// registered. A PARSE FAULT in the existing vocabulary: the `unparseable`
+/// rejection, `malformed`, `permanent`, a `detail` naming the field — no new
+/// code and no new token. The bound is `delegate`'s ALONE: it is the one
+/// field that MINTS an id, so a read naming an id past it still parses (and
+/// answers absent, no such id being registrable).
+#[test]
+fn delegate_refuses_a_new_id_past_the_exactly_representable_range_at_the_parse() {
+    const MAX_EXACT: u64 = (1 << 53) - 1;
+    assert_eq!(MAX_EXACT, 9_007_199_254_740_991, "2^53 − 1, JavaScript's MAX_SAFE_INTEGER");
+    let codec = JsonCodec;
+    let delegate = |id: &str| {
+        format!(r#"{{"op":"delegate","new_prefix":"1.0.2","new_id":{id}}}"#).into_bytes()
+    };
+
+    // The top of the range is admitted, and round-trips exactly.
+    for id in [0, 1, 900, MAX_EXACT - 1, MAX_EXACT] {
+        let req = parse_ok(&codec, &delegate(&id.to_string()));
+        match &req.op {
+            Op::Delegate { new_id, .. } => assert_eq!(*new_id, PrincipalId(id)),
+            _ => panic!("delegate expected"),
+        }
+        let again = parse_ok(&codec, &codec.marshal_request(&req));
+        assert!(again == req, "new_id {id} survives the canonical round trip");
+    }
+
+    // One past it, and everything above, is a parse fault naming the field.
+    for id in [MAX_EXACT + 1, MAX_EXACT + 2, 1 << 60, u64::MAX] {
+        let err = codec.parse(&delegate(&id.to_string())).err().unwrap_or_else(|| {
+            panic!("new_id {id} is past 2^53 − 1 and must not parse")
+        });
+        let detail = err.to_string();
+        assert!(detail.contains("new_id"), "the fault names the field: {detail}");
+        assert!(detail.contains(&MAX_EXACT.to_string()), "…and the bound: {detail}");
+        // The transport's answer to it is the ordinary unparseable rejection.
+        let v: Value = serde_json::from_slice(&codec.marshal(&codec.unparseable(err)))
+            .expect("marshal emits JSON");
+        assert_eq!(v["resp"], "rejected", "{v}");
+        assert_eq!(v["op"], "unparseable", "{v}");
+        assert_eq!(v["code"], "malformed", "no new code: {v}");
+        assert_eq!(v["disposition"], "permanent", "{v}");
+    }
+    // The forms that were never integers stay what they were: faults.
+    for bad in ["9007199254740992.0", "1e16", "-1", "\"900\"", "18446744073709551616", "null"] {
+        assert!(codec.parse(&delegate(bad)).is_err(), "new_id {bad} must not parse");
+    }
+
+    // The bound is the MINTING field's alone.
+    let read = format!(r#"{{"op":"principal_prefix","principal":{}}}"#, MAX_EXACT + 1);
+    match parse_ok(&codec, read.as_bytes()).op {
+        Op::PrincipalPrefix { id } => assert_eq!(id, PrincipalId(MAX_EXACT + 1)),
+        _ => panic!("principal_prefix expected"),
+    }
 }
 
 /// The deposit declaration on `insert` (PUB-9.13's DECLARED horn; owner
@@ -555,6 +673,15 @@ fn all_responses() -> Vec<(&'static str, Response)> {
         ("addrs", Response::Addrs { addrs: vec![link1()], as_of: Seq(9) }),
         ("maybe_addr", Response::MaybeAddr { addr: Some(a(&[1, 0, 2])), as_of: Seq(9) }),
         ("maybe_addr_none", Response::MaybeAddr { addr: None, as_of: Seq(9) }),
+        // The owner-of-address answer (AUTH-6.37): ω's pair, and its absence.
+        (
+            "effective_owner",
+            Response::EffectiveOwner {
+                owner: Some((a(&[1, 0, 1]), PrincipalId(900))),
+                as_of: Seq(9),
+            },
+        ),
+        ("effective_owner_none", Response::EffectiveOwner { owner: None, as_of: Seq(9) }),
         ("count", Response::Count { n: 2, as_of: Seq(9) }),
         (
             "page",

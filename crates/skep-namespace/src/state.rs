@@ -1534,10 +1534,11 @@ impl M3State {
 
     /// ω's resolution step: the Π entry whose prefix is the LONGEST covering
     /// prefix of `a` (§5) — THE one walk. [`M3State::effective_owner`]
-    /// projects the id, [`M3State::effective_owner_prefix`] the prefix, and
+    /// projects the id, [`M3State::effective_owner_prefix`] the prefix,
+    /// [`M3State::effective_owner_pair`] hands the entry back whole, and
     /// [`M3State::is_effective_owner`] compares; the cost promise and the O1a
     /// tier filter are stated on `effective_owner`, and the `principals`
-    /// range-walk upgrade lands here once, serving all three.
+    /// range-walk upgrade lands here once, serving all four.
     fn omega(&self, a: &Address) -> Option<(&Address, PrincipalId)> {
         self.principals
             .iter()
@@ -1604,6 +1605,26 @@ impl M3State {
     /// the entry ω matched, so the two cannot come apart.
     pub fn effective_owner_prefix(&self, a: &Address) -> Option<&Address> {
         self.omega(a).map(|(prefix, _)| prefix)
+    }
+
+    /// ω(a) UNPROJECTED: the Π entry ω matched, as the PAIR — the node or
+    /// account address the effective owner is seated at AND the principal
+    /// seated there (§5; ASN-0042 O2/O3). Same walk, same tier filter, same
+    /// cost as [`M3State::effective_owner`]: this is that ONE walk's whole
+    /// answer, where the two projections beside it each keep half.
+    ///
+    /// OPTIONAL, and published for the one reader that needs both halves of
+    /// ONE entry: the owner-of-address read (AUTH-6.37), whose allocation
+    /// test is `prefix == a` and whose principal must be the one seated AT
+    /// that prefix. Composing [`M3State::effective_owner_prefix`] with
+    /// [`M3State::effective_owner`] answers the same pair off one snapshot,
+    /// but walks Π TWICE, and that read's cost promise is the walk every
+    /// ownership check already makes — one. No caller is REQUIRED to use it;
+    /// it adds no state, no index and no fold fact, and `None` is exactly
+    /// the projections' `None`: no registered node- or account-tier prefix
+    /// contains `a`, so the two halves are absent TOGETHER by construction.
+    pub fn effective_owner_pair(&self, a: &Address) -> Option<(&Address, PrincipalId)> {
+        self.omega(a)
     }
 
     /// THE authorization predicate: is `id` the effective owner ω of `a`? An
@@ -2262,6 +2283,54 @@ mod tests {
                 namespace_of(&addr).is_some(),
                 door_admits,
                 "{comps:?}: the fold's key derivation disagrees with the door"
+            );
+        }
+    }
+
+    /// AUTH-6.37's optional accessor: [`M3State::effective_owner_pair`] is ω
+    /// UNPROJECTED — the two projections' answers, as ONE entry, at every
+    /// probe — and its `None` is theirs. The probes are the read's own cells:
+    /// a seat answers ITSELF (`prefix == a`, the allocation test); an
+    /// unallocated first child `inc(X, 1)` answers the seat ABOVE it, never
+    /// none under the node; a sub-account outranks its parent by length; and
+    /// an address no registered prefix contains has neither half.
+    #[test]
+    fn the_pair_accessor_is_omega_unprojected() {
+        let (x, x_id) = (a(&[1, 0, 1]), PrincipalId(7));
+        let (sub, sub_id) = (a(&[1, 0, 1, 2]), PrincipalId(9));
+        let s = M3State::genesis()
+            .apply_m3(&M3Rec::RegisterPrincipal { prefix: x.clone(), id: x_id })
+            .apply_m3(&M3Rec::RegisterPrincipal { prefix: sub.clone(), id: sub_id });
+
+        let node = a(&[1]);
+        for (probe, expect) in [
+            // A seat of its own: the prefix IS the address asked.
+            (x.clone(), Some((&x, x_id))),
+            (sub.clone(), Some((&sub, sub_id))),
+            (node.clone(), Some((&node, BOOTSTRAP_PRINCIPAL))),
+            // Unallocated `inc(X, 1)`: X's own seat, the nearest above it.
+            (a(&[1, 0, 1, 1]), Some((&x, x_id))),
+            // Beneath a sub-account: the LONGEST containing prefix wins.
+            (a(&[1, 0, 1, 2, 0, 4]), Some((&sub, sub_id))),
+            // A document of X's, and an unregistered sibling account under
+            // the node alone.
+            (a(&[1, 0, 1, 0, 3]), Some((&x, x_id))),
+            (a(&[1, 0, 2]), Some((&node, BOOTSTRAP_PRINCIPAL))),
+            // Under no registered prefix: both halves absent, TOGETHER.
+            (a(&[2]), None),
+            (a(&[2, 0, 7]), None),
+        ] {
+            let pair = s.effective_owner_pair(&probe);
+            assert_eq!(pair, expect, "ω's pair at {probe:?}");
+            assert_eq!(
+                pair.map(|(prefix, _)| prefix),
+                s.effective_owner_prefix(&probe),
+                "the pair's prefix is the prefix projection at {probe:?}"
+            );
+            assert_eq!(
+                pair.map(|(_, id)| id),
+                s.effective_owner(&probe),
+                "the pair's principal is the id projection at {probe:?}"
             );
         }
     }

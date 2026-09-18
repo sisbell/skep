@@ -194,6 +194,77 @@ fn the_namespace_reads_answer_the_registry_and_absence_is_not_a_refusal() {
     assert_eq!(node, addr(&[1, 2]));
 }
 
+/// THE OWNER-OF-ADDRESS READ (AUTH-6.37) over the surface: ω UNPROJECTED —
+/// the longest registered prefix containing `addr` and the principal seated
+/// at it, as ONE entry — and the four cells every caller of it stands on.
+/// ALLOCATED iff `prefix == addr`: a seat answers itself. An UNALLOCATED
+/// `inc(X, 1)` answers `X`'s OWN seat — never none under the node — so `Some`
+/// alone is not the allocation test (AUTH-5.87 op (1)'s resume reads the
+/// equality and nothing else), and the SAME address answers itself once a
+/// `delegate` seats it. Under no registered prefix, both halves are absent
+/// TOGETHER. And the read is SESSION-BLIND: a retired session — the guest —
+/// is answered exactly what the bound principal is.
+#[test]
+fn the_owner_of_address_read_answers_omega_unprojected() {
+    let fx = setup();
+    let owner_of = |session, a: &skep_address::Address| {
+        effective_owner(ex(&fx.febe, session, Op::EffectiveOwner { addr: a.clone() }))
+    };
+
+    // A seat of its own: the prefix IS the address asked, at both tiers.
+    assert_eq!(owner_of(fx.user, &fx.account), Some((fx.account.clone(), USER)));
+    assert_eq!(owner_of(fx.user, &node1()), Some((node1(), BOOTSTRAP_PRINCIPAL)));
+
+    // `inc(X, 1)`, peeked and NOT delegated: X's own principal at X's own
+    // prefix — the nearest seat above it — and so NOT allocated.
+    let (first_child, _) =
+        maybe_addr(ex(&fx.febe, fx.user, Op::NextAccountPrefix { parent: fx.account.clone() }));
+    let first_child = first_child.expect("a fresh account's first child is delegable");
+    let unallocated = owner_of(fx.user, &first_child).expect("never none under a seat");
+    assert_eq!(unallocated, (fx.account.clone(), USER), "the unallocated child answers X");
+    assert_ne!(unallocated.0, first_child, "prefix != addr: the address is not a seat");
+
+    // A document-tier address asked about is a registry probe like any other:
+    // no consult, no registration check, the owning seat.
+    let doc = create_doc(&fx);
+    assert_eq!(owner_of(fx.user, &doc), Some((fx.account.clone(), USER)));
+    let unminted = addr(&[1, 0, 1, 0, 99]);
+    assert_eq!(owner_of(fx.user, &unminted), Some((fx.account.clone(), USER)));
+
+    // Seated by a `delegate`, the same address answers ITSELF and the
+    // principal that delegate registered; beneath it the longest prefix wins.
+    let held = PrincipalId(31);
+    ack_addr(ex(
+        &fx.febe,
+        fx.user,
+        Op::Delegate { new_prefix: first_child.tumbler().clone(), new_id: held },
+    ));
+    assert_eq!(owner_of(fx.user, &first_child), Some((first_child.clone(), held)));
+    let (grandchild, _) =
+        maybe_addr(ex(&fx.febe, fx.user, Op::NextAccountPrefix { parent: first_child.clone() }));
+    assert_eq!(
+        owner_of(fx.user, &grandchild.expect("the new seat is delegable under")),
+        Some((first_child.clone(), held)),
+        "an unallocated grandchild answers the NEAREST seat, not the account above it"
+    );
+
+    // Under no registered principal's prefix: both halves absent, TOGETHER.
+    assert_eq!(owner_of(fx.user, &addr(&[2])), None);
+    assert_eq!(owner_of(fx.user, &addr(&[2, 0, 7])), None);
+
+    // SESSION-BLIND: the guest is answered what the bound principal is, at
+    // every cell above — public, immutable registry data, nothing withheld.
+    let guest = fx.febe.open_session(PrincipalId(77));
+    fx.febe.close_session(guest);
+    for probe in [fx.account.clone(), first_child.clone(), doc, addr(&[2, 0, 7])] {
+        assert_eq!(
+            owner_of(guest, &probe),
+            owner_of(fx.user, &probe),
+            "the guest and the bound principal are answered alike"
+        );
+    }
+}
+
 /// §6/`Op::RegisterNode`: a bound session is the ONLY gate on node admission
 /// — `Namespace::register_node` takes no principal and `NodeError` carries no
 /// authority variant — so an ordinary delegated principal registers a node,

@@ -175,7 +175,7 @@ fn every_write_acks_at_the_coordinate_it_committed() {
 
 /// A2/V1: `as_of` on EVERY read is the coordinate of the snapshot the answer
 /// came from. Nothing writes during the loop, so the log head taken once
-/// ahead of it is that coordinate for all 26 — a read that reports anything
+/// ahead of it is that coordinate for all 27 — a read that reports anything
 /// else is telling the client it has seen a position it has not.
 ///
 /// This pins the coordinate M10 *reports*. That every constituent of one
@@ -216,6 +216,7 @@ fn every_read_reports_the_log_head_as_its_as_of() {
     let reads = vec![
         Op::NextAccountPrefix { parent: node1() },
         Op::PrincipalPrefix { id: USER },
+        Op::EffectiveOwner { addr: fx.account.clone() },
         Op::ReadLink { a: l1.clone() },
         Op::FollowLink { a: l1.clone(), slot: FROM },
         Op::RetrieveV { specs: vec![Spec { doc: draft.clone(), span: vspan(1, 1, 3) }] },
@@ -248,7 +249,7 @@ fn every_read_reports_the_log_head_as_its_as_of() {
     ];
 
     let kinds: Vec<OpKind> = reads.iter().map(Op::kind).collect();
-    assert_eq!(kinds.len(), 26, "the read half of the partition is 26 operations");
+    assert_eq!(kinds.len(), 27, "the read half of the partition is 27 operations");
     for (i, a) in kinds.iter().enumerate() {
         for b in &kinds[i + 1..] {
             assert_ne!(a, b, "{a:?} is covered twice");

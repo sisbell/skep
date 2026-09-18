@@ -42,10 +42,11 @@ pub fn splitmix64(rng: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// The 21 response shapes every client must decode (wire.md §The response
+/// The 22 response shapes every client must decode (wire.md §The response
 /// envelope + §Rejections); a `/op` answer always carries one of these in
 /// `resp`. `doc_metadata` and `edition_claims` joined at wire v7.6 (PUB
-/// round 2, lane 3.4).
+/// round 2, lane 3.4); `effective_owner` with the owner-of-address read
+/// (AUTH-6.37).
 pub const RESP_SHAPES: &[&str] = &[
     "ack",
     "ack_addr",
@@ -54,6 +55,7 @@ pub const RESP_SHAPES: &[&str] = &[
     "span_set",
     "addrs",
     "maybe_addr",
+    "effective_owner",
     "count",
     "page",
     "endsets",

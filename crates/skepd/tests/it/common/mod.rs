@@ -1221,6 +1221,11 @@ pub fn doc_metadata_frame(doc: &str) -> String {
     format!(r#"{{"op":"doc_metadata","doc":"{doc}"}}"#)
 }
 
+/// The owner-of-address read (AUTH-6.37): one argument, `addr`.
+pub fn effective_owner_frame(addr: &str) -> String {
+    format!(r#"{{"op":"effective_owner","addr":"{addr}"}}"#)
+}
+
 pub fn image_frame(doc: &str, from: u64, width: u64) -> String {
     format!(r#"{{"op":"image","d":"{doc}","region":[{{"start":"1.{from}","width":"0.{width}"}}]}}"#)
 }
@@ -1316,6 +1321,33 @@ pub fn origins_of(port: u16, token: Option<&str>, doc: &str, from: u64, width: u
 /// The whole `doc_metadata` answer for `doc`, as `token`.
 pub fn doc_metadata(port: u16, token: Option<&str>, doc: &str) -> Value {
     op(port, token, &doc_metadata_frame(doc))
+}
+
+/// ω's pair for `addr` as `token` (`None` = the guest), off the head:
+/// `(prefix, principal)`, or `None` where BOTH members are null. A reply
+/// carrying one member without the other is a shape violation (AUTH-6.37:
+/// null TOGETHER) and panics here, so every cell that reads through this
+/// helper pins the pairing.
+pub fn effective_owner(port: u16, token: Option<&str>, addr: &str) -> Option<(String, u64)> {
+    owner_pair(&op(port, token, &effective_owner_frame(addr)))
+}
+
+/// The pair out of one `effective_owner` answer — `/op`'s or `/op-at`'s.
+pub fn owner_pair(v: &Value) -> Option<(String, u64)> {
+    let v = expect_resp(v, "effective_owner");
+    // Indexing a missing key reads as null, so presence is asked for itself:
+    // an absent owner is two nulls, never two omissions.
+    for member in ["prefix", "principal"] {
+        assert!(v.get(member).is_some(), "`{member}` is ALWAYS present: {v}");
+    }
+    match (&v["prefix"], &v["principal"]) {
+        (Value::Null, Value::Null) => None,
+        (Value::String(prefix), Value::Number(principal)) => Some((
+            prefix.clone(),
+            principal.as_u64().unwrap_or_else(|| panic!("a principal id is a u64: {v}")),
+        )),
+        _ => panic!("`prefix` and `principal` travel TOGETHER, carried or null: {v}"),
+    }
 }
 
 /// The link value at `a` as `token`: `null` where absent.

@@ -281,6 +281,7 @@ impl WritePath {
             | Response::SpanSet { .. }
             | Response::Addrs { .. }
             | Response::MaybeAddr { .. }
+            | Response::EffectiveOwner { .. }
             | Response::Count { .. }
             | Response::Page { .. }
             | Response::Endsets { .. }
@@ -409,7 +410,7 @@ pub(crate) enum AffectedDocs {
 /// older position's time AS the head's, the one thing that method's contract
 /// says it does not do. A read classified here as a write is refused from
 /// `/op-at` as `write_at_history`, denying a legitimate historical read.
-/// The two tables agree at 15 writes of 41.
+/// The two tables agree at 15 writes of 42.
 ///
 /// SECOND OBLIGATION, and the one no assertion here can reach:
 /// [`crate::feed::classify::derived_docs`] answers this same question — which
@@ -476,6 +477,7 @@ pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
         }
         Op::NextAccountPrefix { .. }
         | Op::PrincipalPrefix { .. }
+        | Op::EffectiveOwner { .. }
         | Op::ReadLink { .. }
         | Op::FollowLink { .. }
         | Op::RetrieveV { .. }

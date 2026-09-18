@@ -1021,6 +1021,7 @@ where
             // of the partition's correctness (§1).
             Op::NextAccountPrefix { .. }
             | Op::PrincipalPrefix { .. }
+            | Op::EffectiveOwner { .. }
             | Op::ReadLink { .. }
             | Op::FollowLink { .. }
             | Op::RetrieveV { .. }
@@ -1098,6 +1099,26 @@ where
             Op::PrincipalPrefix { id } => {
                 let addr = snap.world().m3().principal_prefix(id).cloned();
                 Ok(Response::MaybeAddr { addr, as_of })
+            }
+            // THE OWNER-OF-ADDRESS READ (AUTH-6.37): ω UNPROJECTED, off ONE
+            // walk of M3's principal registry — the walk every ownership
+            // check already makes (`effective_owner_pair`; the two
+            // projections composed would walk Π twice). Total, like its two
+            // siblings above, and public for their reason: the registry is
+            // immutable public data, so the answer is the same for every
+            // caller and for none, and `addr` is a registry probe rather than
+            // a document argument — it was never in the consult above, so
+            // nothing here is withheld. `addr` need not be allocated: an
+            // unallocated `inc(X, 1)` answers `X`'s own seat, and the caller's
+            // allocation test is `prefix == addr` — this door states the
+            // entry and draws no conclusion from it.
+            Op::EffectiveOwner { addr } => {
+                let owner = snap
+                    .world()
+                    .m3()
+                    .effective_owner_pair(&addr)
+                    .map(|(prefix, principal)| (prefix.clone(), principal));
+                Ok(Response::EffectiveOwner { owner, as_of })
             }
             // ── raw link reads (→ M7, §2): no driver handle — straight off
             //    the one snapshot.
@@ -1557,7 +1578,7 @@ mod tests {
     /// session — it is ANSWERED, as the guest. Every read arm is driven
     /// through `execute` on an id that was never opened; each may reject for
     /// its own reasons against a genesis world, but never for authentication.
-    /// Driving all 26 also exercises `execute`'s Total contract on the read
+    /// Driving all 27 also exercises `execute`'s Total contract on the read
     /// half: an arm that panics fails here.
     #[test]
     fn no_read_is_ever_rejected_for_an_unbound_session() {

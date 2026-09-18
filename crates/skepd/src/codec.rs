@@ -169,6 +169,32 @@ const MAX_NAT_DIGITS: usize = 4096;
 /// the same door.
 const MAX_TUMBLER_COMPONENTS: usize = 256;
 
+/// The largest principal id `delegate` will REGISTER: `2^53 − 1`, the top of
+/// the range a JSON number carries EXACTLY (AUTH-6.36's clause; AUTH-5.20).
+/// Principal ids ride the wire as plain JSON numbers and are `u64`
+/// server-side, and a JavaScript-backed client reads every number as a
+/// double: past this value it ROUNDS, so such a client would hold a DIFFERENT
+/// id from the one the board registered.
+///
+/// That was a client's own mistake to avoid while a client only ever met ids
+/// it minted itself (AUTH-5.20's MUST binds the minting hand, and is unmoved).
+/// It is the BOARD's to refuse since the setup act ADOPTS whatever principal
+/// sits at `inc(X, 1)` (AUTH-5.87 op (1); the owner-of-address read,
+/// AUTH-6.37): a squatter's `delegate` of that address under an id `≥ 2^53`
+/// would seat a principal no JavaScript-backed frontend can name — its
+/// `GET /challenge?principal=N` and its `POST /session` body would carry the
+/// rounded number, a different principal — and the holder's agent space would
+/// be unopenable from that client on every device, at a cell an adversary
+/// chooses at zero cost. Refused here, no `delegate` off this wire registers
+/// an id a client cannot say back.
+///
+/// A PARSE FAULT AND NO NEW TOKEN: spent at [`p_minted_id`], on `delegate`'s
+/// `new_id` alone — the one field that mints an id — and answered as the
+/// ordinary `unparseable` rejection. The fold, M3 and M10 are untouched:
+/// `PrincipalId` stays a `u64`, and an `Op` assembled by hand past this bound
+/// is this codec's caller's to answer for ([`JsonCodec::marshal_request`]).
+const MAX_MINTED_PRINCIPAL_ID: u64 = (1 << 53) - 1;
+
 // The most bytes one frame's idempotency `id` may carry is
 // [`MAX_REQ_ID_BYTES`], imported above. This daemon never interprets the id;
 // the bound is M10's, because the retention is M10's — the memo keeps the key
@@ -199,11 +225,12 @@ impl JsonCodec {
     /// parse — [`MAX_WIRE_LIST`] elements per array, [`MAX_INSERT_VALUES`]
     /// minted values per `insert`, [`MAX_NAT_DIGITS`] per tumbler
     /// component, [`MAX_TUMBLER_COMPONENTS`] per tumbler,
-    /// [`MAX_REQ_ID_BYTES`] per idempotency id — carries no zero-byte
-    /// `Val`, which [`j_atom`] renders as `{"atom": ""}` and [`p_val_form`]
-    /// refuses by design (coarse granularity must be said, and a zero-byte
-    /// atom says nothing), and carries an `id`, if any, that is UTF-8,
-    /// which a `ReqId` this codec parsed always is. Under all of that,
+    /// [`MAX_REQ_ID_BYTES`] per idempotency id,
+    /// [`MAX_MINTED_PRINCIPAL_ID`] for a `delegate`'s `new_id` — carries no
+    /// zero-byte `Val`, which [`j_atom`] renders as `{"atom": ""}` and
+    /// [`p_val_form`] refuses by design (coarse granularity must be said, and
+    /// a zero-byte atom says nothing), and carries an `id`, if any, that is
+    /// UTF-8, which a `ReqId` this codec parsed always is. Under all of that,
     /// `parse(marshal_request(r))` reproduces `r` and re-marshaling the
     /// parse is byte-identical.
     ///
@@ -212,10 +239,10 @@ impl JsonCodec {
     /// does not re-check it (one check, one owner). The upstream value types
     /// admit every violation — `Endset::from_spans` takes any span count,
     /// T0(a) leaves a component's magnitude unbounded by design, `Val::new`
-    /// takes any bytes, and `ReqId`'s field is public — so a caller
-    /// assembling a `Request` by hand owes the whole precondition. A
-    /// `Request` this codec produced satisfies it by construction, which is
-    /// what makes the round-trip oracle sound.
+    /// takes any bytes, `PrincipalId` is any `u64`, and `ReqId`'s field is
+    /// public — so a caller assembling a `Request` by hand owes the whole
+    /// precondition. A `Request` this codec produced satisfies it by
+    /// construction, which is what makes the round-trip oracle sound.
     ///
     /// One normalization survives the precondition rather than being
     /// excluded by it: `SlotSpec::Spans` over an EMPTY endset marshals as
@@ -473,12 +500,13 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
         },
         "delegate" => Op::Delegate {
             new_prefix: fields.tum("new_prefix")?,
-            new_id: PrincipalId(fields.u64("new_id")?),
+            new_id: PrincipalId(fields.minted_id("new_id")?),
         },
         "register_node" => Op::RegisterNode { addr: fields.tum("addr")? },
         "fork" => Op::Fork { published: fields.published()? },
         "next_account_prefix" => Op::NextAccountPrefix { parent: fields.addr("parent")? },
         "principal_prefix" => Op::PrincipalPrefix { id: PrincipalId(fields.u64("principal")?) },
+        "effective_owner" => Op::EffectiveOwner { addr: fields.addr("addr")? },
         "doc_metadata" => Op::DocMetadata { doc: fields.addr("doc")? },
         "insert" => Op::Insert {
             doc: fields.addr("doc")?,
@@ -628,6 +656,15 @@ impl Fields {
 
     fn u64(&mut self, k: &'static str) -> PResult<u64> {
         self.field(k, p_u64)
+    }
+
+    /// `delegate`'s `new_id` — the ONE principal id on the wire that MINTS,
+    /// and so the one held to [`MAX_MINTED_PRINCIPAL_ID`] at this door. Every
+    /// other id field only NAMES a principal: one some `delegate` registered
+    /// is inside the range by this bound, and one nobody registered answers
+    /// absent.
+    fn minted_id(&mut self, k: &'static str) -> PResult<u64> {
+        self.field(k, p_minted_id)
     }
 
     fn usize(&mut self, k: &'static str) -> PResult<usize> {
@@ -808,6 +845,22 @@ fn p_u64(v: &Value) -> PResult<u64> {
 
 fn p_usize(v: &Value) -> PResult<usize> {
     usize::try_from(p_u64(v)?).map_err(|_| PErr("integer exceeds this platform's usize".into()))
+}
+
+/// A principal id about to be REGISTERED, held to the wire's
+/// exactly-representable range ([`MAX_MINTED_PRINCIPAL_ID`]). A PARSE FAULT
+/// like every other malformed field — the ordinary `unparseable` rejection,
+/// no new code and no new token — so the frame reaches no session gate, no
+/// lock and no store, and nothing commits.
+fn p_minted_id(v: &Value) -> PResult<u64> {
+    let id = p_u64(v)?;
+    if id > MAX_MINTED_PRINCIPAL_ID {
+        return Err(PErr(format!(
+            "{id} is past {MAX_MINTED_PRINCIPAL_ID} (2^53 - 1), the largest principal id a \
+             JSON number carries exactly"
+        )));
+    }
+    Ok(id)
 }
 
 /// ℕ: canonical decimal string; a non-negative JSON integer is accepted
@@ -1207,6 +1260,9 @@ fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         Op::PrincipalPrefix { id } => {
             (op_name(OpKind::PrincipalPrefix), vec![("principal", j_u64(id.0))])
         }
+        Op::EffectiveOwner { addr } => {
+            (op_name(OpKind::EffectiveOwner), vec![("addr", j_addr(addr))])
+        }
         Op::DocMetadata { doc } => (op_name(OpKind::DocMetadata), vec![("doc", j_addr(doc))]),
         Op::Insert { doc, at, values, deposit } => {
             let mut pairs = vec![("doc", j_addr(doc)), ("at", j_vpos(at)), ("values", j_values(values))];
@@ -1386,6 +1442,21 @@ fn j_response(r: &Response) -> Value {
             "maybe_addr",
             vec![
                 ("addr", addr.as_ref().map(j_addr).unwrap_or(Value::Null)),
+                ("as_of", j_seq(*as_of)),
+            ],
+        ),
+        // The owner-of-address answer (AUTH-6.37): ω UNPROJECTED. `prefix` and
+        // `principal` are two wire keys over ONE optional value — M3's own
+        // registry entry — so they are ALWAYS present and null TOGETHER,
+        // exactly where no registered principal's prefix contains the address
+        // asked (`doc_metadata`'s `birth`/`birth_extent` pairing, and for its
+        // reason). Allocated iff `prefix` equals the address asked: that test
+        // is the caller's, and nothing here pre-draws it.
+        Response::EffectiveOwner { owner, as_of } => (
+            "effective_owner",
+            vec![
+                ("prefix", owner.as_ref().map(|(p, _)| j_addr(p)).unwrap_or(Value::Null)),
+                ("principal", owner.as_ref().map(|(_, id)| j_u64(id.0)).unwrap_or(Value::Null)),
                 ("as_of", j_seq(*as_of)),
             ],
         ),
@@ -1879,6 +1950,7 @@ pub(crate) fn op_name(k: OpKind) -> &'static str {
         OpKind::Fork => "fork",
         OpKind::NextAccountPrefix => "next_account_prefix",
         OpKind::PrincipalPrefix => "principal_prefix",
+        OpKind::EffectiveOwner => "effective_owner",
         OpKind::DocMetadata => "doc_metadata",
         OpKind::Insert => "insert",
         OpKind::Delete => "delete",

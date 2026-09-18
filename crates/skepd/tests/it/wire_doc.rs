@@ -21,6 +21,7 @@ use skep_febe::{
 };
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link};
+use skep_namespace::PrincipalId;
 use skep_retrieval::{CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, SpanFault};
 use skepd::JsonCodec;
 
@@ -64,13 +65,14 @@ fn blocks() -> Vec<(String, String, String)> {
     out
 }
 
-const OP_NAMES: [&str; 41] = [
+const OP_NAMES: [&str; 42] = [
     "create_new_document",
     "delegate",
     "register_node",
     "fork",
     "next_account_prefix",
     "principal_prefix",
+    "effective_owner",
     "doc_metadata",
     "insert",
     "delete",
@@ -109,7 +111,7 @@ const OP_NAMES: [&str; 41] = [
 ];
 
 /// Every request example parses, is canonical (re-marshal equals the doc
-/// value), is tagged with the marker's own op name — and all 41 ops appear.
+/// value), is tagged with the marker's own op name — and all 42 ops appear.
 #[test]
 fn doc_request_examples_are_canonical_and_complete() {
     let codec = JsonCodec;
@@ -208,6 +210,14 @@ fn fixture(name: &str) -> Response {
         "addrs" => Response::Addrs { addrs: vec![link1()], as_of: Seq(9) },
         "maybe_addr" => Response::MaybeAddr { addr: Some(a(&[1, 0, 2])), as_of: Seq(9) },
         "maybe_addr_none" => Response::MaybeAddr { addr: None, as_of: Seq(9) },
+        // The owner-of-address answer (AUTH-6.37): ω's pair — the claimant's
+        // seat and the principal at it — and the both-null answer an address
+        // under no registered prefix takes.
+        "effective_owner" => Response::EffectiveOwner {
+            owner: Some((a(&[1, 0, 1]), PrincipalId(900))),
+            as_of: Seq(9),
+        },
+        "effective_owner_none" => Response::EffectiveOwner { owner: None, as_of: Seq(9) },
         "count" => Response::Count { n: 2, as_of: Seq(9) },
         "page" => Response::Page {
             window: Window { batch: vec![link1()], next: Some(link1()), exhausted: true },
@@ -319,9 +329,9 @@ fn fixture(name: &str) -> Response {
     }
 }
 
-/// The 21 response shapes every client must decode; each must appear as a
+/// The 22 response shapes every client must decode; each must appear as a
 /// doc marker (variant markers like `follow_invalid` are extra coverage).
-const REQUIRED_SHAPES: [&str; 21] = [
+const REQUIRED_SHAPES: [&str; 22] = [
     "ack",
     "ack_addr",
     "ack_edit",
@@ -329,6 +339,7 @@ const REQUIRED_SHAPES: [&str; 21] = [
     "span_set",
     "addrs",
     "maybe_addr",
+    "effective_owner",
     "count",
     "page",
     "endsets",
@@ -344,6 +355,77 @@ const REQUIRED_SHAPES: [&str; 21] = [
     "edition_claims",
     "rejected",
 ];
+
+/// The prose between `from` and the first of `until` after it, with every
+/// whitespace run collapsed — so a re-wrap of a paragraph moves no pin.
+fn prose(from: &str, until: &[&str]) -> String {
+    let text = wire_md();
+    let start = text.find(from).unwrap_or_else(|| panic!("wire.md no longer carries {from:?}"));
+    let rest = &text[start + from.len()..];
+    let end = until.iter().filter_map(|u| rest.find(u)).min().unwrap_or(rest.len());
+    rest[..end].split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// One op's row of §Operations: from its bold name to the next row or heading.
+fn op_row(name: &str) -> String {
+    prose(&format!("\n**`{name}`** —"), &["\n**`", "\n### ", "\n## "])
+}
+
+/// The `new_id` bound is ONE number in two places — the `delegate` row and
+/// the codec's parse (AUTH-6.36's clause; AUTH-5.20) — so the number is READ
+/// out of the row and handed to the codec: the doc's own bound parses, one
+/// past it does not. And §Value encodings' integer note, which once said a
+/// principal id approaching 2^53 was "unreachable in practice" — the OPPOSITE
+/// of the bound — says it of positions and counts alone, and points here.
+#[test]
+fn doc_new_id_bound_is_the_codecs_own() {
+    let row = op_row("delegate");
+    assert!(row.contains("2^53 − 1"), "the delegate row states the bound: {row}");
+    let bound: u64 = row
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .find(|t| t.len() > 1 && t.bytes().all(|b| b.is_ascii_digit()))
+        .unwrap_or_else(|| panic!("the delegate row spells the bound as a literal: {row}"))
+        .parse()
+        .expect("the literal is a u64");
+    assert_eq!(bound, (1u64 << 53) - 1, "the literal IS 2^53 − 1");
+    let codec = JsonCodec;
+    let frame = |id: u64| format!(r#"{{"new_id":{id},"new_prefix":"1.0.2","op":"delegate"}}"#);
+    assert!(codec.parse(frame(bound).as_bytes()).is_ok(), "the doc's own bound is admitted");
+    assert!(codec.parse(frame(bound + 1).as_bytes()).is_err(), "one past it is a parse fault");
+    for fact in ["`unparseable`", "no code or token of its own", "nothing commits"] {
+        assert!(row.contains(fact), "the delegate row says {fact:?}: {row}");
+    }
+
+    let note = prose("**Machine-bounded integers**", &["\n**Spans**"]);
+    assert!(
+        !note.contains("principal count"),
+        "the integer note no longer calls a principal id unreachable: {note}"
+    );
+    assert!(
+        note.contains("`delegate` refuses a `new_id` above 2^53 − 1 at the parse"),
+        "the integer note states the bound: {note}"
+    );
+}
+
+/// The owner-of-address row (AUTH-6.37) carries the facts a client builds
+/// on, each in the row itself: the one allocation test, the both-null
+/// answer, no session, and `/op-at`.
+#[test]
+fn doc_owner_of_address_row_states_the_allocation_test() {
+    let row = op_row("effective_owner");
+    for fact in [
+        "iff `prefix` equals the address you asked",
+        "`null` TOGETHER",
+        "there is no document argument",
+        "NO session is needed",
+        "nothing is withheld",
+        "served on `/op-at` too",
+    ] {
+        assert!(row.contains(fact), "the effective_owner row says {fact:?}: {row}");
+    }
+}
 
 /// Every `op_at` example is the strict `{"at", "frame"}` envelope around a
 /// canonical READ frame — the doc's history examples parse through the same

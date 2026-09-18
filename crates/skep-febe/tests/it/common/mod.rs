@@ -287,6 +287,7 @@ pub fn as_of(r: &Response) -> Seq {
         | Response::SpanSet { as_of, .. }
         | Response::Addrs { as_of, .. }
         | Response::MaybeAddr { as_of, .. }
+        | Response::EffectiveOwner { as_of, .. }
         | Response::Count { as_of, .. }
         | Response::Page { as_of, .. }
         | Response::Endsets { as_of, .. }
@@ -336,6 +337,16 @@ pub fn maybe_addr(r: Response) -> (Option<Address>, Seq) {
         Response::MaybeAddr { addr, as_of } => (addr, as_of),
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
         other => panic!("expected MaybeAddr, got {other:?}"),
+    }
+}
+
+/// ω's pair off the owner-of-address read (AUTH-6.37): `(prefix, principal)`,
+/// or `None` where no registered principal's prefix contains the address.
+pub fn effective_owner(r: Response) -> Option<(Address, PrincipalId)> {
+    match r {
+        Response::EffectiveOwner { owner, .. } => owner,
+        Response::Rejected(rej) => panic!("rejected: {rej:?}"),
+        other => panic!("expected EffectiveOwner, got {other:?}"),
     }
 }
 

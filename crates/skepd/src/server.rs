@@ -1922,7 +1922,8 @@ impl Daemon {
     /// the feed. What this route adds over the feed's own paging is the
     /// requester's FEED CLASS (PUB-6.40): resolved ONCE, off ONE head
     /// snapshot — the read predicate at the requester's class, the
-    /// requester's own and ancestor accounts (the subtree clause), its
+    /// requester's own and ancestor accounts and the prefix its descendant
+    /// owner accounts lie under (the subtree clause, both ways), its
     /// grant-selected issuers with their covered prefixes, and the live
     /// any-principal set (the universal term, principals alone) — and
     /// threaded down; the feed module resolves nothing itself. An absent

@@ -294,46 +294,192 @@ fn an_any_principal_account_rung_grant_covers_the_account_s_documents() {
     engine.check_hints().expect("the seed admits the account-rung grant as the fold did");
 }
 
-/// The SUBTREE clause runs DOWNWARD only (H1, PUB-1.32): a sub-account
-/// delegated under A reads A's draft (its prefix lies inside A's account);
-/// the org root — principal 0, seated at node [1], ABOVE every account —
-/// reads no draft by subtree; and the org's members are siblings, so B reads
-/// nothing of A's.
-#[test]
-fn the_subtree_clause_runs_downward_only() {
-    let engine = mem_engine();
-    let board = two_accounts(&engine);
-    // A sub-account of A, delegated by A (the owner of A's prefix).
-    let sub_prefix = engine
+/// A principal seated at A's FIRST sub-account ([`nested_accounts`]).
+const CHILD: PrincipalId = PrincipalId(11);
+
+/// A principal seated beneath [`CHILD`]'s account — A's grandchild.
+const GRANDCHILD: PrincipalId = PrincipalId(13);
+
+/// A principal seated at A's SECOND sub-account — [`CHILD`]'s nested sibling.
+const SECOND_CHILD: PrincipalId = PrincipalId(14);
+
+/// A board with NESTED accounts, each holding one private draft: [`A`] and
+/// its sibling [`B`] under the genesis node, [`CHILD`] and [`SECOND_CHILD`]
+/// beneath A, and [`GRANDCHILD`] beneath CHILD.
+struct Nested {
+    board: Board,
+    child_draft: skep_address::Address,
+    grandchild_draft: skep_address::Address,
+    second_child_draft: skep_address::Address,
+    b_draft: skep_address::Address,
+}
+
+/// A sub-account delegated beneath `parent` by the principal seated there,
+/// seated with `id`, and its one private draft — an explicit-`false` first
+/// mint, which the engine mints. Returns `(the account, the draft)`.
+fn sub_account_with_a_draft(
+    engine: &Engine,
+    delegator: PrincipalId,
+    parent: &skep_address::Address,
+    id: PrincipalId,
+) -> (skep_address::Address, skep_address::Address) {
+    let prefix = engine
         .kernel()
         .snapshot()
         .world()
         .m3()
-        .next_account_prefix(&board.acct_a)
-        .expect("A's next sub-account prefix");
-    let (sub, _) = engine
+        .next_account_prefix(parent)
+        .expect("the parent's next sub-account prefix");
+    let (acct, _) = engine
         .namespace()
-        .delegate(A, sub_prefix.tumbler().clone(), PrincipalId(11))
-        .expect("A delegates a sub-account");
-    let (sub_draft, _) = engine
+        .delegate(delegator, prefix.tumbler().clone(), id)
+        .expect("the parent delegates a sub-account");
+    assert!(prefix_contains(parent, &acct), "the fixture must NEST the two accounts");
+    let (draft, _) = engine
         .namespace()
-        .create_new_document(PrincipalId(11), &sub, Some(false))
+        .create_new_document(id, &acct, Some(false))
         .expect("the sub-account's own private draft");
+    (acct, draft)
+}
 
+fn nested_accounts(engine: &Engine) -> Nested {
+    let board = two_accounts(engine);
+    let (child, child_draft) = sub_account_with_a_draft(engine, A, &board.acct_a, CHILD);
+    let (_, grandchild_draft) = sub_account_with_a_draft(engine, CHILD, &child, GRANDCHILD);
+    let (_, second_child_draft) =
+        sub_account_with_a_draft(engine, A, &board.acct_a, SECOND_CHILD);
+    // B's first mint is its published home; its second is the draft.
+    engine.namespace().create_new_document(B, &board.acct_b, None).expect("B's published home");
+    let (b_draft, _) =
+        engine.namespace().create_new_document(B, &board.acct_b, None).expect("B's private draft");
+    Nested { board, child_draft, grandchild_draft, second_child_draft, b_draft }
+}
+
+/// The SUBTREE clause runs BOTH WAYS (H1; PUB-1.32 as amended, PUB RES-215):
+/// a sub-account reads the drafts of the accounts ABOVE it (its prefix lies
+/// inside theirs), and a parent account reads the drafts of the accounts
+/// BENEATH it (theirs lie inside its own) — each transitively, one vector per
+/// direction and per depth. A read and never ω: the parent owns none of what
+/// it reads there.
+#[test]
+fn the_subtree_clause_runs_both_ways() {
+    let engine = mem_engine();
+    let n = nested_accounts(&engine);
     let w = world(&engine);
-    assert!(w.readable(Some(PrincipalId(11)), &board.draft_a), "A's sub-account reads A's draft");
+
+    // The first compare — the principal at or beneath the owner.
+    assert!(w.readable(Some(CHILD), &n.board.draft_a), "A's sub-account reads A's draft");
+    assert!(w.readable(Some(GRANDCHILD), &n.board.draft_a), "…and so does its grandchild");
+    assert!(w.readable(Some(GRANDCHILD), &n.child_draft), "…which reads its own parent's too");
+
+    // The second compare — the principal at or above the owner.
+    assert!(w.readable(Some(A), &n.child_draft), "A reads its sub-account's draft");
+    assert!(w.readable(Some(A), &n.grandchild_draft), "…and its grandchild's, transitively");
+    assert!(w.readable(Some(CHILD), &n.grandchild_draft), "a sub-account reads its own sub-account's");
+
+    // Reading is not owning: ω stays exact-match on what the parent reads.
+    assert_eq!(
+        w.m3().effective_owner(&n.child_draft),
+        Some(CHILD),
+        "the sub-account's draft is the sub-account's, never the parent's that reads it"
+    );
+}
+
+/// A SIBLING reads nothing of its sibling's under either compare — neither
+/// account's prefix contains the other's — at the top of the account tier
+/// (the org's members, A and B) and NESTED (two sub-accounts of one parent);
+/// and the relation does not run sideways through a shared ancestor: B reads
+/// nothing beneath A, and nothing beneath A reads B's.
+#[test]
+fn a_sibling_account_reads_nothing_of_its_sibling_s() {
+    let engine = mem_engine();
+    let n = nested_accounts(&engine);
+    let w = world(&engine);
+
+    assert!(!w.readable(Some(B), &n.board.draft_a), "a sibling account reads nothing of A's");
+    assert!(!w.readable(Some(A), &n.b_draft), "…nor A of its sibling's");
     assert!(
-        !w.readable(Some(A), &sub_draft),
-        "A does NOT read its sub-account's draft — the subtree runs downward, never up"
+        !w.readable(Some(CHILD), &n.second_child_draft),
+        "two sub-accounts of one parent are siblings: the first reads nothing of the second's"
+    );
+    assert!(!w.readable(Some(SECOND_CHILD), &n.child_draft), "…nor the second of the first's");
+    assert!(
+        !w.readable(Some(SECOND_CHILD), &n.grandchild_draft),
+        "…nor of what lies beneath the first"
     );
     assert!(
-        !w.readable(Some(BOOTSTRAP_PRINCIPAL), &board.draft_a),
-        "the org root (principal 0 at node [1]) reads no draft by subtree"
+        !w.readable(Some(GRANDCHILD), &n.second_child_draft),
+        "…nor the first's sub-account of the second's"
     );
-    assert!(!w.readable(Some(B), &board.draft_a), "a sibling account reads nothing of A's");
+    assert!(!w.readable(Some(B), &n.child_draft), "A's sibling reads nothing beneath A");
+    assert!(!w.readable(Some(CHILD), &n.b_draft), "…and nothing beneath A reads A's sibling's");
+    // The parent they share reads both: the clause is ancestry, not kinship.
+    assert!(w.readable(Some(A), &n.child_draft) && w.readable(Some(A), &n.second_child_draft));
+}
+
+/// The GUEST holds no account and satisfies neither compare: on the nested
+/// board it reads the published homes and no draft at any depth.
+#[test]
+fn the_guest_reads_published_documents_alone_on_a_nested_board() {
+    let engine = mem_engine();
+    let n = nested_accounts(&engine);
+    let w = world(&engine);
+
+    assert!(w.readable(None, &n.board.home_a), "the published home is readable by all");
+    for draft in
+        [&n.board.draft_a, &n.child_draft, &n.grandchild_draft, &n.second_child_draft, &n.b_draft]
+    {
+        assert!(!w.readable(None, draft), "the guest reads no draft: {draft}");
+        assert!(!w.readable_guest(draft), "…and `readable_guest` is that answer: {draft}");
+    }
+}
+
+/// THE PRINCIPAL-0 VECTOR (PUB-1.32: the node-tier principal 0 is EXCLUDED BY
+/// NAME; PUB-7.2): the node's own principal is seated at node `[1]`, whose
+/// prefix contains EVERY account on the board, so the second compare taken
+/// bare — `account(p) ⊑ owner_account(doc)` — would admit it to every draft
+/// there is. A seat that is no ACCOUNT is no account's ancestor for the
+/// clause: on a board with nested accounts principal 0 reads no draft at any
+/// depth by subtree, and one by GRANT alone.
+#[test]
+fn the_node_tier_principal_reads_no_draft_by_subtree() {
+    let engine = mem_engine();
+    let n = nested_accounts(&engine);
+    let w = world(&engine);
+
+    // The premise: principal 0's seat is the node, and the node contains
+    // every owner account below — the second compare's bare answer is YES.
+    let seat = w.m3().principal_prefix(BOOTSTRAP_PRINCIPAL).expect("genesis seats principal 0");
+    assert_eq!(seat.level(), Level::Node, "principal 0 is seated at a node, never an account");
+    let drafts =
+        [&n.board.draft_a, &n.child_draft, &n.grandchild_draft, &n.second_child_draft, &n.b_draft];
+    for draft in drafts {
+        let owner = w.owner_account(draft).expect("a draft has a memoized owner");
+        assert!(
+            prefix_contains(seat, owner),
+            "the fixture must put {owner} under the node, or the vector proves nothing"
+        );
+        assert!(
+            !w.readable(Some(BOOTSTRAP_PRINCIPAL), draft),
+            "principal 0 (at node [1]) reads no draft by subtree: {draft}"
+        );
+    }
     assert!(
-        w.readable(Some(BOOTSTRAP_PRINCIPAL), &board.home_a),
+        w.readable(Some(BOOTSTRAP_PRINCIPAL), &n.board.home_a),
         "…but everyone reads the published home"
+    );
+
+    // By grant alone: an ANY-PRINCIPAL grant reaches principal 0 as it
+    // reaches every principal, and opens exactly the draft it names.
+    grant(&engine, &n.board.home_a, &n.board.draft_a, vec![]); // empty `to` ⟹ ANY-PRINCIPAL
+    let w = world(&engine);
+    assert!(
+        w.readable(Some(BOOTSTRAP_PRINCIPAL), &n.board.draft_a),
+        "the node's principal reads a draft a grant opens to it"
+    );
+    assert!(
+        !w.readable(Some(BOOTSTRAP_PRINCIPAL), &n.child_draft),
+        "…and still none the grant does not name"
     );
 }
 
@@ -548,7 +694,10 @@ fn a_sub_account_of_a(engine: &Engine, board: &Board) -> SubAccount {
     assert!(prefix_contains(&board.acct_a, &acct), "the fixture must NEST the two accounts");
     assert!(w.readable(None, &home), "S's doc 1 is born published");
     assert!(!w.readable(None, &draft), "S's later mint is a draft");
-    assert!(!w.readable(Some(A), &draft), "the parent reads nothing of its sub-account's draft");
+    // The parent READS its sub-account's draft — the subtree clause runs both
+    // ways (PUB-1.32 as amended) — and owns none of it, which is the premise.
+    assert!(w.readable(Some(A), &draft), "the parent reads its sub-account's draft by subtree");
+    assert_eq!(w.owner_account(&draft), Some(&acct), "…and ω keeps it the sub-account's");
     SubAccount { acct, home, draft }
 }
 
@@ -556,10 +705,12 @@ fn a_sub_account_of_a(engine: &Engine, board: &Board) -> SubAccount {
 /// owner, never containment — and a SUB-ACCOUNT is where the two part, since
 /// A's account contains S's. A's account-rung grant covers S's draft by
 /// containment, so a clause read as "the issuer's account contains the
-/// owner's" would open S's draft to whoever A names, though A cannot read that
-/// draft itself. The non-owner tests above use a SIBLING account, which
-/// contains nothing, so neither can tell the two readings apart. Asked of
-/// both indexes.
+/// owner's" would open S's draft to whoever A names, though A only READS that
+/// draft — by the subtree clause, which runs both ways (PUB-1.32 as amended) —
+/// and owns none of it: reading is not owning, the same boundary the test
+/// below crosses the other way. The non-owner tests above use a SIBLING
+/// account, which contains nothing, so neither can tell the two readings
+/// apart. Asked of both indexes.
 #[test]
 fn a_parent_account_s_grant_opens_none_of_its_sub_account_s_drafts() {
     let engine = mem_engine();

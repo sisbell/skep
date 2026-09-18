@@ -32,7 +32,7 @@
 
 use std::sync::OnceLock;
 
-use skep_address::Address;
+use skep_address::{Address, Level};
 use skep_arrangement::{trunk_of, Caller};
 use skep_namespace::{prefix_contains, PrincipalId};
 
@@ -107,17 +107,35 @@ impl World {
     ///   registered draft: it reads as that draft, and is withheld wherever
     ///   the draft is
     ///   (`a_version_member_shaped_address_under_a_draft_reads_as_the_draft`).
-    /// * SUBTREE (PUB-5.9, PUB-5.13-adjacent) — `owner_account(doc) ⊑
-    ///   account(principal)`, ONE prefix compare DOWNWARD only, off the
-    ///   exception set's MINT-TIME owner (never a nearest-account walk). A
-    ///   node-tier principal (principal 0, seated at a node) has a prefix
-    ///   shorter than any account, so the compare excludes it; org members are
-    ///   SIBLINGS, so neither reads the other's drafts. Both of those hold
-    ///   because the LEFT operand is an ACCOUNT: a node-tier owner would
-    ///   contain every account beneath it and admit each of their principals
-    ///   here. The exception set asserts that tier where it memoizes the
-    ///   owner (`crate::publication`), so this clause is a bare prefix
-    ///   compare rather than a compare plus a tier gate.
+    /// * SUBTREE (PUB-1.32 as amended, PUB RES-215; PUB-7.2) — BOTH WAYS:
+    ///   `owner_account(doc) ⊑ account(principal) ∨ account(principal) ⊑
+    ///   owner_account(doc)`, TWO prefix compares off the exception set's
+    ///   MINT-TIME owner, the second run only where the first fails — never
+    ///   a subtree enumeration, never a nearest-account walk. The first
+    ///   admits a principal at or BENEATH the owner (the owner's delegates,
+    ///   transitively); the second a principal at or ABOVE it (the owner's
+    ///   parent account and every account above that), so a parent account
+    ///   reads its sub-accounts' drafts as a sub-account reads its parent's.
+    ///   That is a READ and never ω: ownership stays exact-match, and a
+    ///   parent account owns none of a sub-account's documents. Org members
+    ///   are SIBLINGS — neither prefix contains the other — so neither reads
+    ///   the other's drafts. Each compare's LEFT operand must be an ACCOUNT,
+    ///   and the two sides discharge that differently. The OWNER's tier is
+    ///   asserted where the exception set memoizes it (`crate::publication`):
+    ///   a node-tier owner would contain every account beneath it and admit
+    ///   each of their principals. The PRINCIPAL's is tested HERE, ahead of
+    ///   the second compare, because its seat is M3's registry answer
+    ///   verbatim and nothing asserts it: THE NODE-TIER PRINCIPAL 0 IS
+    ///   EXCLUDED BY NAME (PUB-1.32). Principal 0 is seated at a node — `[1]`,
+    ///   M3's genesis seat — and a node prefix contains every account beneath
+    ///   it, so the bare second compare would admit it to every draft on the
+    ///   board. Under the first compare alone its exclusion was a consequence
+    ///   of the direction (a node prefix is shorter than any account's), and
+    ///   that does not survive the second. So a seat that is no ACCOUNT —
+    ///   principal 0's, or a sub-node's — is no account's ancestor for this
+    ///   clause: the node reads no draft by subtree, by grant alone
+    ///   (`the_subtree_clause_runs_both_ways`,
+    ///   `the_node_tier_principal_reads_no_draft_by_subtree`).
     /// * GRANT (PUB-5.8, PUB-5.19) — the grant fold, grantee PRINCIPAL-EXACT,
     ///   coverage containment ∩ issuer = doc's ω owner. A principal M3 holds
     ///   no SEAT for is not thereby the guest: the subtree clause has no
@@ -262,8 +280,17 @@ impl<'w> ReaderClass<'w> {
         // compare against the owner's, and as the grantee to probe the fold
         // with.
         let account = *self.seat.get_or_init(|| world.namespace.principal_prefix(id));
-        // Subtree clause — downward only.
-        if account.is_some_and(|account| prefix_contains(owner, account)) {
+        // Subtree clause — both ways (PUB-1.32 as amended, PUB RES-215): the
+        // owner's prefix containing the principal's, or the principal's
+        // containing the owner's, the second compare run only where the
+        // first fails — and only for a seat at the ACCOUNT tier. Principal 0
+        // is seated at a node, which contains every account beneath it, so
+        // it is excluded by name here: a node-tier seat is no account's
+        // ancestor for this clause.
+        if account.is_some_and(|account| {
+            prefix_contains(owner, account)
+                || (account.level() == Level::Account && prefix_contains(account, owner))
+        }) {
             return true;
         }
         // Grant clause — the fold, grantee exact (`None` account ⟹ only the

@@ -392,14 +392,18 @@ fn edit_link_and_assert_sup_answer_absence_for_links_homed_in_a_private_document
 /// H1 cell 4, the SUBTREE axis — the cell the property suite surfaced (H4,
 /// `properties.rs`, whose chain world names an ancestor's link from a
 /// descendant and the reverse in every run): the link-address rule on writes
-/// runs the subtree clause DOWNWARD only (PUB-1.32), so a SUB-ACCOUNT's
-/// `assert_sup` and `edit_link` over links homed in its ANCESTOR's draft
-/// land, while the ancestor's over links homed in the sub-account's draft
-/// answer `endpoint_not_resident` / `original_not_resident` — the
-/// never-deposited address's answer, even to the principal that delegated
-/// the account, and on a mixed pair as on a wholly unreadable one.
+/// runs the subtree clause BOTH WAYS (PUB-1.32 as amended, PUB RES-215), so a
+/// SUB-ACCOUNT's `assert_sup` and `edit_link` over links homed in its
+/// ANCESTOR's draft land, and the ancestor's over links homed in the
+/// sub-account's draft land as well — a wholly descendant pair and a mixed
+/// one alike — each write homed in its own caller's draft. What the axis
+/// still withholds is a SIBLING's: a second sub-account of the same owner
+/// reads nothing of the first's, and the links homed there answer it
+/// `endpoint_not_resident` / `original_not_resident`, the never-deposited
+/// address's answer. Reading is not owning: the ancestor's same edit HOMED
+/// in the sub-account's draft is `not_owner` (PUB-6.36 slot 1).
 #[test]
-fn a_sub_account_names_its_ancestor_s_links_and_the_ancestor_cannot_name_the_sub_account_s() {
+fn a_sub_account_and_its_ancestor_name_each_other_s_links_and_a_sibling_names_neither() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
@@ -415,11 +419,33 @@ fn a_sub_account_names_its_ancestor_s_links_and_the_ancestor_cannot_name_the_sub
     // the links homed there land in its own draft.
     expect_resp(&op(port, Some(&sub.session), &assert_sup_frame(&sub.draft, &up1, &up2)), "ack_addr");
     expect_resp(&op(port, Some(&sub.session), &edit_link_frame(&up1, &sub.draft, None, 3)), "ack_edit");
-    // Never upward: the owner does not read the sub-account's draft, so the
-    // links homed there are absent to it — its own delegation notwithstanding.
-    assert_absent(&op(port, Some(&owner), &assert_sup_frame(&src, &down1, &down2)), "endpoint_not_resident");
-    assert_absent(&op(port, Some(&owner), &assert_sup_frame(&src, &up1, &down2)), "endpoint_not_resident");
-    assert_absent(&op(port, Some(&owner), &edit_link_frame(&down1, &src, None, 3)), "original_not_resident");
+    // And upward: the owner reads the sub-account's draft, so the links homed
+    // there are resident to it and its writes over them land in ITS draft.
+    expect_resp(&op(port, Some(&owner), &assert_sup_frame(&src, &down1, &down2)), "ack_addr");
+    expect_resp(&op(port, Some(&owner), &assert_sup_frame(&src, &up1, &down2)), "ack_addr");
+    expect_resp(&op(port, Some(&owner), &edit_link_frame(&down1, &src, None, 3)), "ack_edit");
+    // Reading is not owning: the same edit homed in the sub-account's draft
+    // is refused at slot 1, the read the subtree gives notwithstanding.
+    assert_not_owner(&op(port, Some(&owner), &edit_link_frame(&down1, &sub.draft, None, 4)), &sub.draft);
+
+    // Never sideways: a second sub-account of the same owner is the first's
+    // SIBLING — neither prefix contains the other — so the first's links are
+    // absent to it, on a mixed pair as on a wholly unreadable one, while the
+    // owner's above them both stay resident.
+    let sibling = sub_account(port, &owner, 992);
+    assert_absent(
+        &op(port, Some(&sibling.session), &assert_sup_frame(&sibling.draft, &down1, &down2)),
+        "endpoint_not_resident",
+    );
+    assert_absent(
+        &op(port, Some(&sibling.session), &assert_sup_frame(&sibling.draft, &up1, &down2)),
+        "endpoint_not_resident",
+    );
+    assert_absent(
+        &op(port, Some(&sibling.session), &edit_link_frame(&down1, &sibling.draft, None, 5)),
+        "original_not_resident",
+    );
+    expect_resp(&op(port, Some(&sibling.session), &edit_link_frame(&up2, &sibling.draft, None, 6)), "ack_edit");
 
     sd.shutdown();
 }

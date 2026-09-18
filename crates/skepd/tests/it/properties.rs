@@ -34,6 +34,11 @@
 //!  6. Restart equivalence — reopen the same store: recovered head, head
 //!     dump, a historical dump, a historical read, and the full doc/link
 //!     oracle pass must all agree byte-for-byte with the pre-shutdown run.
+//!  7. The subtree clause, model against daemon — at sequence end every
+//!     (reader, pooled draft) pair answers on the wire as the model's two
+//!     prefix compares say: the chain's principals read each other's drafts
+//!     BOTH WAYS, and principal 0, seated at the node above them, reads none
+//!     (PUB-1.32 as amended: excluded by name).
 //!
 //! Budget: 24 sequences of 60–120 ops (`PROPS_EXHAUSTIVE=1` scales to 96 of
 //! 120–240), designed to stay under ~90 s total. Failure seeds persist to
@@ -300,25 +305,30 @@ fn dump_at(port: u16, at: u64) -> Option<Vec<u8>> {
 /// inside its predecessor's subtree; one empty document each.
 ///
 /// THE SUBTREE WORLD. Every pooled document is a private draft, and the read
-/// predicate admits a foreign draft only by the SUBTREE clause — the reader's
-/// account lies INSIDE the draft owner's account, one prefix compare, so a
-/// sub-account reads its ancestors' drafts and never the reverse (PUB-1.32;
-/// `World::readable`; the engine's `the_subtree_clause_runs_downward_only`)
-/// — or by a grant, which is a signed-session write into the granting
-/// account's published home (RES-26) that these bare sessions cannot make.
-/// The chain makes the subtree clause carry every cross-owner arm this suite
-/// generates: a writer's copy/version SOURCES are drawn from
-/// [`readable_by`] — its own drafts and its ancestors' — so each source is
+/// predicate admits a foreign draft only by the SUBTREE clause — which runs
+/// BOTH WAYS, two prefix compares: the reader's account lies INSIDE the draft
+/// owner's account, or the owner's inside the reader's, so a sub-account
+/// reads its ancestors' drafts and an ancestor its descendants' (PUB-1.32 as
+/// amended, PUB RES-215; `World::readable`; the engine's
+/// `the_subtree_clause_runs_both_ways`) — or by a grant, which is a
+/// signed-session write into the granting account's published home (RES-26)
+/// that these bare sessions cannot make. The model of the clause is
+/// [`in_owner_subtree`], and the chain makes it carry every cross-owner arm
+/// this suite generates, in BOTH directions: a writer's copy/version SOURCES
+/// are drawn from [`readable_by`] — its own drafts, its ancestors' and its
+/// descendants', which in a chain is every pooled draft — so each source is
 /// readable to the writer at the write (PUB-6.23's consult at M10's door,
 /// lane 3.3c) and every run's origin is readable to the destination's owner
 /// on read-back, and the naive byte shadow stays exact with no withheld item
 /// (PUB-1.55); and the links a write VALIDATES BY ADDRESS —
 /// `assert_sup.old`/`new`, `edit_link.original` — are drawn from
 /// [`readable_links`], those homed in a document the writer reads, since a
-/// link homed in a descendant's draft answers the writer ABSENCE at the same
-/// door (PUB-6.6's link-address rule on writes, lane 3.3c). Reads by an
-/// ancestor or a sibling are `read_surface.rs`'s cells; the write door's own
-/// refusals are `source_gate.rs`'s.
+/// link homed in a draft it could NOT read answers the writer ABSENCE at the
+/// same door (PUB-6.6's link-address rule on writes, lane 3.3c). The one
+/// principal ABOVE the chain that reads none of it is principal 0, seated at
+/// the node: [`check_subtree_reads`] holds the model to the wire for it and
+/// for the three writers alike. Reads by a sibling are `read_surface.rs`'s
+/// cells; the write door's own refusals are `source_gate.rs`'s.
 fn setup(port: u16) -> Shadow {
     let boot = open_session(port, 0);
     let acc_a = delegate(port, &boot, "1", 1);
@@ -386,24 +396,61 @@ fn own_doc(shadow: &Shadow, pi: usize, sel: u8) -> usize {
     pool[sel as usize % pool.len()]
 }
 
+/// Principal 0's SEAT: the genesis node, above every account [`setup`]
+/// delegates — the one reader in this world the subtree clause excludes by
+/// name.
+const NODE_SEAT: &str = "1";
+
+/// M3's `prefix_contains` over dotted text: `prefix` contains `addr` iff it
+/// IS `addr` or is a COMPONENT-wise prefix of it — `1.0.2` contains
+/// `1.0.2.1` and never `1.0.21`.
+fn contains(prefix: &str, addr: &str) -> bool {
+    addr == prefix || addr.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('.'))
+}
+
+/// Is the dotted `seat` at the ACCOUNT tier — exactly one `0` separator
+/// (`N.0.U`)? A node (`1`) carries none.
+fn is_account(seat: &str) -> bool {
+    seat.split('.').filter(|c| *c == "0").count() == 1
+}
+
+/// THE MODEL of the read predicate's subtree clause (PUB-1.32 as amended, PUB
+/// RES-215; `World::readable`), over dotted addresses: TWO prefix compares —
+/// the owner's account containing the reader's seat (the reader at or BENEATH
+/// the owner), or the reader's seat containing the owner's account (at or
+/// ABOVE it) — the second with an ACCOUNT alone on its left. A NODE-tier
+/// seat contains every account beneath it and is no account's ancestor for
+/// the clause: principal 0, seated at [`NODE_SEAT`], is EXCLUDED BY NAME and
+/// reads no draft by subtree.
+fn in_owner_subtree(owner_account: &str, seat: &str) -> bool {
+    contains(owner_account, seat) || (is_account(seat) && contains(seat, owner_account))
+}
+
+/// Does principal `pi` read document `di` by the subtree clause — the model's
+/// answer, off the two accounts [`setup`] recorded.
+fn reads(shadow: &Shadow, pi: usize, di: usize) -> bool {
+    let owner_account = &shadow.principals[shadow.docs[di].owner].account;
+    in_owner_subtree(owner_account, &shadow.principals[pi].account)
+}
+
 /// The documents principal `pi` can READ under the predicate's subtree clause
-/// in the chain [`setup`] builds: its own, and every ancestor account's (a
-/// lower index). Never empty — the caller's own pool is never empty.
+/// ([`in_owner_subtree`]): its own, every ancestor account's and every
+/// descendant account's — in the chain [`setup`] builds, every pooled
+/// draft. Never empty — the caller's own pool is never empty.
 fn readable_by(shadow: &Shadow, pi: usize) -> Vec<usize> {
-    (0..shadow.docs.len()).filter(|&i| shadow.docs[i].owner <= pi).collect()
+    (0..shadow.docs.len()).filter(|&di| reads(shadow, pi, di)).collect()
 }
 
 /// The links principal `pi` can NAME as a write's link-address argument —
 /// `assert_sup.old`/`new`, `edit_link.original` — and have the write land:
-/// those homed in a document [`readable_by`] `pi`. A link homed in a
-/// DESCENDANT's draft is unreadable to its ancestor, and the write door
-/// answers it exactly as for an address no link occupies —
+/// those homed in a document `pi` [`reads`]. A link homed in a draft the
+/// writer could NOT read — a sibling's, which the chain holds none of — the
+/// write door answers exactly as for an address no link occupies —
 /// `endpoint_not_resident` / `original_not_resident` (PUB-6.6's link-address
 /// rule on writes, lane 3.3c) — the specified answer, so the generator never
 /// names one; that refusal's cell is `source_gate.rs`'s. May be empty.
 fn readable_links(shadow: &Shadow, pi: usize) -> Vec<usize> {
-    let home_readable = |k: &usize| shadow.docs[shadow.links[*k].home_doc].owner <= pi;
-    (0..shadow.links.len()).filter(home_readable).collect()
+    (0..shadow.links.len()).filter(|&k| reads(shadow, pi, shadow.links[k].home_doc)).collect()
 }
 
 /// The deterministic degradation target: one byte prepended to the caller's
@@ -533,8 +580,9 @@ fn step(op_index: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunS
             // caller's own account as a private copy (the flag absent, the
             // source's bit inherited), which is the valid-by-construction
             // write — and the foreign draft must be READABLE to the caller,
-            // which in the chain is an ancestor's (the subtree world,
-            // [`setup`]); the first principal has none and degrades.
+            // which in the chain is every other principal's: an ancestor's
+            // or a descendant's, the subtree clause running both ways (the
+            // subtree world, [`setup`]). A caller with none degrades.
             let foreign: Vec<usize> = readable_by(shadow, pi)
                 .into_iter()
                 .filter(|&i| shadow.docs[i].owner != pi)
@@ -955,6 +1003,46 @@ fn check_links(shadow: &Shadow, state: &mut RunState, scope: LinkScope) {
     }
 }
 
+/// Oracle 7 — the subtree clause, MODEL AGAINST DAEMON. Every pooled document
+/// is a private draft and this world holds no grant, so `readable` IS the
+/// subtree clause, and [`in_owner_subtree`] must answer what the wire answers
+/// for every (reader, document) pair: `doc_metadata` answers the read, or is
+/// `withheld` (PUB-6.1). The readers are the three chain principals — each
+/// reads every draft in the chain, its ancestors' by the first compare and
+/// its descendants' by the second — and PRINCIPAL 0, seated at the node above
+/// them all, which reads none: the exclusion the second compare does not
+/// give by construction, asked here of every draft the plan produced.
+fn check_subtree_reads(shadow: &Shadow, state: &RunState) {
+    let boot = open_session(state.port, 0);
+    let readers = shadow
+        .principals
+        .iter()
+        .map(|p| (p.account.as_str(), p.token.as_str()))
+        .chain([(NODE_SEAT, boot.as_str())]);
+    for (seat, token) in readers {
+        for d in &shadow.docs {
+            let owner_account = &shadow.principals[d.owner].account;
+            let v = op(
+                state.port,
+                Some(token),
+                &format!(r#"{{"op":"doc_metadata","doc":"{}"}}"#, d.addr),
+            );
+            let got = match v["resp"].as_str() {
+                Some("doc_metadata") => true,
+                Some("rejected") if v["code"].as_str() == Some("withheld") => false,
+                _ => panic!("FINDING: doc_metadata on {} answers neither the read nor `withheld`: {v}", d.addr),
+            };
+            assert_eq!(
+                got,
+                in_owner_subtree(owner_account, seat),
+                "FINDING: the reader seated at {seat} and the draft {} of account {owner_account} \
+                 diverge from the model's subtree clause: {v}",
+                d.addr
+            );
+        }
+    }
+}
+
 /// Capture the current committed position: the live dump and every
 /// non-empty document's live read body (with its frame, for /op-at replay).
 fn capture_position(shadow: &Shadow, state: &mut RunState) {
@@ -1044,6 +1132,7 @@ fn run_case(plan: &[PlanOp]) {
     // whole-history replay.
     check_all_docs(&shadow, &mut state);
     check_links(&shadow, &mut state, LinkScope::All);
+    check_subtree_reads(&shadow, &state);
     capture_position(&shadow, &mut state);
     replay_captures(&shadow, &state);
 

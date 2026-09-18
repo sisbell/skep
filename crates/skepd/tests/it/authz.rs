@@ -43,9 +43,10 @@ use skep_identity::{encode_retire, Fingerprint};
 //     the caller may not read answers `withheld`. The matrix's premise —
 //     every target X's — stands because X GRANTS its account to every
 //     principal (`build_fixture`, the ruling of 2026-09-06); the same cells
-//     WITHOUT the grant are the second table below, where the sibling and
-//     the parent are withheld and the child still reads by the subtree
-//     clause (PUB-1.32).
+//     WITHOUT the grant are the second table below, where the sibling is
+//     withheld and the child AND the parent still read by the subtree
+//     clause, which runs both ways (PUB-1.32 as amended, PUB RES-215) — a
+//     READ and never ω: the parent's write cells above stay `not_owner`.
 //   * `edit_link` of a FOREIGN original with both homes your own is the
 //     sanctioned "propose a change" path for links: allowed — where the
 //     original's home is readable. Homed in a document the caller may not
@@ -137,22 +138,24 @@ const MATRIX: &[Row] = &[
 ];
 
 /// The cells that turn WITHOUT X's grant (lane 3.3c, PUB-6.23, PUB-6.6): the
-/// SIBLING and the PARENT cannot read X's drafts — the subtree clause runs
-/// downward only (PUB-1.32), so the parent reads none of X's — while the
-/// CHILD, delegated under X, reads them and keeps its cell. Every other row
-/// is unchanged: a foreign DESTINATION is `not_owner` ahead of any source
-/// consult (PUB-6.36 slot 1), and the guest and stale columns never reach a
+/// SIBLING cannot read X's drafts — neither account's prefix contains the
+/// other's — while the CHILD, delegated under X, and the PARENT, X's own
+/// delegator above it, both read them and keep their cells: the subtree
+/// clause runs both ways (PUB-1.32 as amended, PUB RES-215), so the parent
+/// column's three READ cells are `ok` here exactly as they are under the
+/// grant. Every other row is unchanged: a foreign DESTINATION is `not_owner`
+/// ahead of any source consult (PUB-6.36 slot 1) — the parent's included,
+/// reading is not owning — and the guest and stale columns never reach a
 /// store.
 #[rustfmt::skip]
 const NO_GRANT_ROWS: &[Row] = &[
     //                                              owner sibling         child           parent            guest            stale
-    Row { label: "copy (foreign source)", expect: [OK, WITHHELD,       OK,             WITHHELD,         UNAUTHENTICATED, UNAUTHENTICATED] },
+    Row { label: "copy (foreign source)", expect: [OK, WITHHELD,       OK,             OK,               UNAUTHENTICATED, UNAUTHENTICATED] },
     Row { label: "version (foreign src)", expect: [PRIVATE_SOURCE_VERSIONLESS,
-                                                       WITHHELD,       OK,             WITHHELD,         UNAUTHENTICATED, UNAUTHENTICATED] },
+                                                       WITHHELD,       OK,             OK,               UNAUTHENTICATED, UNAUTHENTICATED] },
     Row { label: "edit_link (foreign original)",
                                           expect: [OK, ORIGINAL_NOT_RESIDENT,
-                                                                       OK,             ORIGINAL_NOT_RESIDENT,
-                                                                                                         UNAUTHENTICATED, UNAUTHENTICATED] },
+                                                                       OK,             OK,               UNAUTHENTICATED, UNAUTHENTICATED] },
 ];
 
 /// The contract table for a fixture WITH or WITHOUT X's grant: [`MATRIX`] as
@@ -644,15 +647,17 @@ fn authorization_matrix_holds_and_survives_restart() {
 /// included, grant withheld — walked once against [`table`]`(false)`. The
 /// three rows that turn are the source-reading and link-address cells:
 /// `copy (foreign source)` and `version (foreign src)` answer `withheld` to
-/// the SIBLING and the PARENT (PUB-6.23; the parent reads none of X's drafts,
-/// the subtree clause running downward only, PUB-1.32) and stay `ok` for the
-/// CHILD; `edit_link (foreign original)` answers `original_not_resident` to
-/// the two — the original's home unreadable, the link ABSENT to them
-/// (PUB-6.6) — never `withheld`, never `not_owner`. Every other cell holds:
-/// a foreign DESTINATION is `not_owner` ahead of any consult (PUB-6.36 slot
-/// 1), and the guest and stale columns never reach a store.
+/// the SIBLING (PUB-6.23) and stay `ok` for the CHILD and the PARENT — the
+/// subtree clause runs both ways (PUB-1.32 as amended, PUB RES-215), so the
+/// parent reads X's drafts as the child does; `edit_link (foreign original)`
+/// answers `original_not_resident` to the sibling — the original's home
+/// unreadable, the link ABSENT to it (PUB-6.6) — never `withheld`, never
+/// `not_owner`. Every other cell holds: a foreign DESTINATION is `not_owner`
+/// ahead of any consult (PUB-6.36 slot 1) — the parent's write cells
+/// unmoved, reading is not owning — and the guest and stale columns never
+/// reach a store.
 #[test]
-fn without_x_s_grant_the_sibling_and_parent_are_withheld_from_x_s_sources() {
+fn without_x_s_grant_the_sibling_is_withheld_from_x_s_sources_and_the_parent_reads_them() {
     let dir = tempfile::tempdir().expect("tempdir");
     let counters = Counters::new();
     let stale0 = {

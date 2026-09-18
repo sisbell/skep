@@ -110,10 +110,15 @@ published(doc) ∨ principal ∈ owner_subtree(doc) ∨ grant_exists(doc,
 principal)` — evaluated against the one committed snapshot the read is
 answered from. The reader classes: the GUEST (no token, or a dead one)
 sees published documents alone; a session principal additionally sees
-every document of its own account and of the accounts above it — the
-subtree runs DOWNWARD only, so a parent account reads none of a
-sub-account's drafts, org members are siblings to each other, and the
-node-tier principal 0 reads no draft by subtree; a GRANT-HOLDER sees
+every document of its own account, of the accounts above it and of the
+accounts beneath it — the subtree runs BOTH WAYS (PUB-1.32), two prefix
+compares, so a sub-account reads its parent account's drafts and a
+parent account reads its sub-accounts' drafts, each transitively; a read
+and never ownership (§Identity: a parent account still owns none of a
+sub-account's documents); org members are siblings to each other and
+read nothing of each other's, and the node-tier principal 0 — seated at
+the node, above every account — is excluded by name and reads no draft
+by subtree, by grant alone; a GRANT-HOLDER sees
 what a grant record opens to it. A grant is an ordinary `make_link` in
 the owner's doc 1: `ty` the grants class `1.1.0.1.0.1.0.3.90`, `from`
 the content-prefix (a document, or an account — covering every document
@@ -2486,8 +2491,10 @@ page is answered from:
   `new`, its commit position — never its home, `old`, or a byte.
 
 A principal's page is its SUPPLEMENT merged over the published stream:
-its own account's draft writes, its ancestor accounts' (the subtree
-clause reads upward), those of the drafts a grant to it names, and — for
+its own account's draft writes, its ancestor accounts' and its
+descendant accounts' — every owner account beneath its own (the subtree
+clause runs both ways, PUB-7.24; principal 0, seated at the node, has
+neither) — those of the drafts a grant to it names, and — for
 every bound principal, never the guest — the drafts under a live
 ANY-PRINCIPAL grant, derived at serve from the grant fold, so a
 revocation leaves the next page with no restart. Each position appears
@@ -2530,8 +2537,10 @@ re-mint, a minting op having no cross-restart memo; and the widening
 triggers (PUB-7.36–7.38) — a grant naming you (or ANY-PRINCIPAL)
 committed after your `since`, or a change of your own class (sign-in,
 principal switch, session death), is your trigger to fetch
-`drafts=true` per range the wider class adds (`under=` your own and
-ancestor account prefixes, and each grant's prefix), from your own
+`drafts=true` per range the wider class adds (`under=` your own,
+ancestor and descendant account prefixes — a descendant's lies under
+your own, so your own prefix covers them all — and each grant's
+prefix), from your own
 last-held position per range and from the floor only where the range is
 new to you, deduplicating by position with the wider rendering winning
 (a straddle held as `[T]` re-arrives as `[D, T]`). Fetched entries are
@@ -2866,7 +2875,9 @@ built):
   over the visible stream. `[]`-docs entries are never masked; a bare
   entry classifies from the journal. A principal's page is its
   supplement merged over the published stream — own and ancestor
-  accounts' drafts, grant-named drafts, and the live any-principal
+  accounts' drafts (and descendant accounts', since the subtree clause
+  runs both ways — PUB-1.32 as amended, §The read predicate),
+  grant-named drafts, and the live any-principal
   drafts derived at serve (a revocation leaves the next page, no
   restart) — each position once (PUB-7.22–7.28).
 * `nullify`'s `docs` names the TARGET link's home beside the record's

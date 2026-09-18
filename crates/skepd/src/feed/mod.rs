@@ -54,8 +54,12 @@
 //! # The supplement (PUB-7.22–7.28)
 //!
 //! A principal's page is the K-way merge, deduplicated by position, of: the
-//! published walk; its OWN account's and its ANCESTOR accounts' streams (the
-//! subtree clause reads upward); its grant-selected ISSUER streams, each
+//! published walk; its OWN account's, its ANCESTOR accounts' and its
+//! DESCENDANT owner accounts' streams (the subtree clause runs both ways,
+//! PUB-1.32 as amended — own and ancestors by key, the owner accounts
+//! beneath it as one key range of `streams` under its account, the term
+//! that is the price of the ancestor read, PUB-7.24; a node-tier principal
+//! opens neither); its grant-selected ISSUER streams, each
 //! under a per-entry containment test against the union of that issuer's
 //! covered prefixes for this principal (an account-depth grant is the
 //! stream whole); and the UNIVERSAL term, derived at serve — the position
@@ -87,6 +91,7 @@ mod derived;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::io::{self, Write};
+use std::ops::Bound;
 use std::path::Path;
 
 use parking_lot::Mutex;
@@ -140,7 +145,7 @@ pub(crate) struct FeedClass<'a> {
     /// for the whole request.
     ///
     /// [`FeedClass::of`] builds it from the same `(world, principal)` pair it
-    /// derives the three stream-key lists below from, and
+    /// derives the stream keys below from, and
     /// [`FeedClass::readable`] answers the mask off it, so a class whose mask
     /// and whose stream keys belong to different principals is not
     /// constructible — the keys would open a principal's drafts while the
@@ -148,9 +153,29 @@ pub(crate) struct FeedClass<'a> {
     /// nothing to report it.
     reader: ReaderClass<'a>,
     /// The requester's own account and its ancestor accounts (the subtree
-    /// clause, PUB-7.24) — each a draft-stream key. Empty for the guest and
+    /// clause's first compare — the requester at or beneath the owner,
+    /// PUB-1.32, PUB-7.24) — each a draft-stream key. Empty for the guest and
     /// for a node-tier principal.
     subtree: Vec<Address>,
+    /// The requester's own ACCOUNT, as the prefix its DESCENDANT OWNER
+    /// ACCOUNTS' streams lie under (the subtree clause's second compare — the
+    /// requester at or above the owner, PUB-1.32 as amended; the descendant
+    /// term of PUB-7.24 as RES-220 pins it). A PREFIX and never a key list,
+    /// as the universal term's are: the streams are keyed per owner account
+    /// in tumbler order, so every owner account beneath this one is ONE
+    /// contiguous key range, which [`streams_beneath`] enumerates at serve —
+    /// O(descendant owner accounts), and an account beneath it that owns no
+    /// draft stream costs nothing.
+    ///
+    /// `None` for the guest and for a NODE-TIER principal, and the second is
+    /// the read predicate's principal-0 exclusion, kept here as its twin:
+    /// principal 0 is seated at a node, whose prefix contains every owner
+    /// account on the board, and it is no account's ancestor for the subtree
+    /// clause (PUB-1.32: excluded by name) — so it opens no descendant range.
+    /// The mask would refuse every entry such a range put forward, so what
+    /// the `None` keeps off principal 0's page is the COST, a merge of every
+    /// draft stream there is, and never an answer.
+    descendants_under: Option<Address>,
     /// The grant-selected issuers (`World::issuers_for`, PUB-7.25) — each an
     /// issuing account with the union of the content prefixes it granted this
     /// principal, the issuer being the draft-stream key this clause opens.
@@ -183,6 +208,10 @@ impl<'a> FeedClass<'a> {
             }
             cur = parent(&a);
         }
+        // An ACCOUNT alone opens the descendant range — the tier test the
+        // read predicate makes ahead of its second compare, so principal 0's
+        // node seat opens none.
+        let descendants_under = account.clone().filter(|a| world.m3().is_registered_account(a));
         let issuers = account.as_ref().map(|pa| world.issuers_for(pa)).unwrap_or_default();
         // The issuing accounts the engine hands back beside each prefix are
         // dropped at this seam, for the reason the field states.
@@ -190,7 +219,13 @@ impl<'a> FeedClass<'a> {
             Some(_) => world.universal_grants().into_iter().map(|g| g.content_prefix).collect(),
             None => Vec::new(),
         };
-        FeedClass { reader: world.reader_class(principal), subtree, issuers, universal_prefixes }
+        FeedClass {
+            reader: world.reader_class(principal),
+            subtree,
+            descendants_under,
+            issuers,
+            universal_prefixes,
+        }
     }
 
     /// `readable(principal, ·)` at the head — THE mask (PUB-7.20), which
@@ -738,10 +773,12 @@ impl Inner {
     /// the mask, and complete by construction in each of the two branches
     /// this function has, which are complete for different reasons.
     ///
-    /// The WALK branch's five source kinds cover every visible position: a
+    /// The WALK branch's six source kinds cover every visible position: a
     /// `[]`-docs or published-touching entry is in the published walk; a
-    /// draft entry is in its owner's stream, which the subtree clause, the
-    /// grant clause or the universal term selects.
+    /// draft entry is in its owner's stream, which the subtree clause — by
+    /// key for the requester's own and ancestor accounts, by range for the
+    /// owner accounts beneath it — the grant clause or the universal term
+    /// selects.
     ///
     /// The MERGE branch returns before any of them, from the index alone,
     /// and is complete for its own narrower question: a position visible
@@ -778,6 +815,15 @@ impl Inner {
         }
         for account in &class.subtree {
             if let Some(stream) = self.streams.get(account) {
+                sources.push(Box::new(at_or_above(stream, start)));
+            }
+        }
+        // The DESCENDANT OWNER ACCOUNTS term (PUB-7.24 as RES-220 pins it):
+        // the subtree clause runs both ways, so a parent's page carries the
+        // draft positions of every owner account beneath its own — which the
+        // masked bitmap keeps off the published walk and no key above opens.
+        if let Some(account) = &class.descendants_under {
+            for (_owner, stream) in streams_beneath(&self.streams, account) {
                 sources.push(Box::new(at_or_above(stream, start)));
             }
         }
@@ -902,6 +948,34 @@ impl Inner {
 fn at_or_above(positions: &[u64], start: u64) -> impl Iterator<Item = u64> + '_ {
     let i = positions.partition_point(|&p| p < start);
     positions[i..].iter().copied()
+}
+
+/// The draft streams of the owner accounts STRICTLY beneath `account` — the
+/// DESCENDANT OWNER ACCOUNTS term of a principal's supplement (PUB-7.24 as
+/// RES-220 pins it). [`Inner::streams`] is keyed by owner account in tumbler
+/// order, so the owner accounts under a prefix are one CONTIGUOUS key range
+/// under M1's ordering — the fact [`Inner::under_prefix`] spells for the
+/// position index — and the enumeration is a `range` opened past `account`
+/// and cut at the first key it does not contain. Never a walk of the map, and
+/// never a walk of M3's accounts: it costs the owner accounts beneath
+/// `account` that HOLD a stream, which is the pinned term exactly, and an
+/// account beneath it that owns no draft is not in the map to be counted.
+///
+/// `account`'s own stream is excluded: [`FeedClass::subtree`] keys it, and the
+/// range opens past it so that no stream is merged twice.
+///
+/// A CANDIDATE source like the rest, and never the answer: a key this range
+/// admits that is no descendant account — reachable only off a
+/// `feed-streams.log` this daemon did not write — puts forward positions
+/// [`Inner::visible`] then judges entry by entry.
+fn streams_beneath<'a>(
+    streams: &'a BTreeMap<Address, Vec<u64>>,
+    account: &'a Address,
+) -> impl Iterator<Item = (&'a Address, &'a [u64])> + 'a {
+    streams
+        .range::<Address, _>((Bound::Excluded(account), Bound::Unbounded))
+        .take_while(move |(owner, _)| is_prefix(account.tumbler(), owner.tumbler()))
+        .map(|(owner, positions)| (owner, positions.as_slice()))
 }
 
 /// The bitmap's test: docs non-empty and every one a draft. The fact is
@@ -1039,6 +1113,32 @@ mod tests {
         ];
         let out: Vec<u64> = Merge::new(sources).collect();
         assert_eq!(out, vec![1, 4, 5, 9, 12]);
+    }
+
+    /// The descendant range is the owner accounts STRICTLY beneath the
+    /// requester's own, and nothing else: its own stream is keyed beside it
+    /// and never ranged, a sibling's is past the cut, and containment is by
+    /// COMPONENT — `1.0.21` is no account under `1.0.2`, though its text
+    /// extends it.
+    #[test]
+    fn the_descendant_range_is_the_owner_accounts_strictly_beneath() {
+        let a = |s: &str| parse_dotted(s).expect("a test address");
+        let streams: BTreeMap<Address, Vec<u64>> =
+            ["1.0.2", "1.0.2.1", "1.0.2.1.1", "1.0.2.2", "1.0.3", "1.0.21"]
+                .iter()
+                .zip(1u64..)
+                .map(|(owner, at)| (a(owner), vec![at]))
+                .collect();
+        let beneath = |account: &str| -> Vec<String> {
+            streams_beneath(&streams, &a(account)).map(|(owner, _)| owner.to_string()).collect()
+        };
+        assert_eq!(beneath("1.0.2"), ["1.0.2.1", "1.0.2.1.1", "1.0.2.2"]);
+        assert_eq!(beneath("1.0.2.1"), ["1.0.2.1.1"], "the middle of a chain ranges what is below it");
+        assert!(beneath("1.0.2.2").is_empty() && beneath("1.0.3").is_empty(), "a leaf ranges nothing");
+        // The range hands back each stream it admits, not merely its key.
+        let middle = a("1.0.2.1");
+        let positions: Vec<&[u64]> = streams_beneath(&streams, &middle).map(|(_, p)| p).collect();
+        assert_eq!(positions, [&[3u64][..]]);
     }
 
     /// A list starts at its first member at or above the fence — the fence

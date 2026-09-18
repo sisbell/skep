@@ -12,7 +12,9 @@
 //! PUB-6.1) — never a serving path.
 //!
 //! The board (PUB-6.59's own list): drafts of THREE accounts in a chain (A,
-//! A.1 under A, A.1.1 under A.1 — the subtree clause reads upward), a NAMED
+//! A.1 under A, A.1.1 under A.1 — the subtree clause runs both ways, so
+//! A.1.1's page carries its ancestors' draft writes and A's its descendants',
+//! PUB-1.32 as amended, PUB-7.24), a NAMED
 //! grant (A's draft D1 to a stranger B), an ANY-PRINCIPAL grant (A's D2),
 //! straddling `nullify` and `edit_link` entries (a draft-homed record
 //! against A's public doc 1), and a masked run three draft writes long with
@@ -576,6 +578,35 @@ fn every_page_of_every_class_is_the_oracle_s_walk() {
 
     // ── 1. THE ORACLE ──
     check_oracle(&board, &fences(&board), &[1, 3, 256], &narrowings(&board));
+
+    // ── 1b. THE DESCENDANT TERM (PUB-7.24 as RES-220 pins it). The oracle
+    //    walks whatever `readable()` answers, so it is direction-neutral by
+    //    construction; the direction is pinned here. The subtree clause runs
+    //    both ways (PUB-1.32 as amended), so the owner A's page carries the
+    //    draft-only positions of the owner accounts BENEATH it — A.1's and
+    //    A.1.1's mints and writes, which the masked bitmap keeps off the
+    //    published walk and only the descendant streams supply — on the plain
+    //    page and the drafts-only form; the stranger's and the guest's carry
+    //    none of them. ──
+    let beneath_a: Vec<u64> = board
+        .log
+        .iter()
+        .filter(|e| !e.docs.is_empty())
+        .filter(|e| e.docs.iter().all(|d| board.drafts.contains(d) && under_prefix(&board.a1_acct, d)))
+        .map(|e| e.at)
+        .collect();
+    assert!(beneath_a.len() >= 4, "the fixture mints and writes one draft apiece in A.1 and A.1.1: {beneath_a:?}");
+    for drafts in [false, true] {
+        let n = Narrowing { under: None, drafts };
+        let (page, ..) = actual(port, Some(&board.a), &query(board.since0, 256, n));
+        for at in &beneath_a {
+            assert!(ats(&page).contains(at), "A sees its descendants' draft write at {at} (drafts={drafts}): {:?}", ats(&page));
+        }
+        let (page, ..) = actual(port, Some(&board.c), &query(board.since0, 256, n));
+        assert!(beneath_a.iter().all(|at| !ats(&page).contains(at)), "a stranger sees none of them (drafts={drafts}): {:?}", ats(&page));
+    }
+    let (page, ..) = actual(port, None, &query(board.since0, 256, Narrowing { under: None, drafts: false }));
+    assert!(beneath_a.iter().all(|at| !ats(&page).contains(at)), "nor the guest: {:?}", ats(&page));
 
     // ── 2. PUB-6.44: the guest's page over the masked run of D1 writes is
     //    never short of `limit` before head, `last` a visible position. ──

@@ -111,16 +111,20 @@ fn writes_read_back_and_their_links_are_discoverable() {
     expect_resp(&insert_at(port, &s2, &doc2, 1, r#""linked text""#), "ack_addr");
     expect_resp(&insert_at(port, &s1, &doc1, 12, r#"" and more""#), "ack_addr");
 
-    // Each owner reads its own draft: doc2 is the sub-account's, and the
-    // subtree runs DOWNWARD only (PUB-1.32), so principal 1 — account2's
-    // delegator — is no reader of it; only s2 is.
+    // Each owner reads its own draft. doc2 is the sub-account's, and the
+    // subtree clause runs BOTH WAYS (PUB-1.32 as amended, PUB RES-215), so
+    // principal 1 — account2's delegator, the account above it — reads it
+    // too, as s2 reads doc1: a read and never ω, doc2 stays principal 2's.
     assert_eq!(read_text(port, Some(&s1), &doc1, 20), "hello, wire and more");
     assert_eq!(read_text(port, Some(&s2), &doc2, 11), "linked text");
 
     // THE GRANT (lane 3.3c): the link below puts doc2 — the sub-account's
     // private draft — in principal 1's `to` V-spec, and the write door's
-    // source consult (PUB-6.23) refuses a source the session may not read,
-    // so principal 2 GRANTS account2 to account1 first. A grant is a write
+    // source consult (PUB-6.23) refuses a source the session may not read.
+    // Principal 1 reads doc2 by the subtree clause since it runs both ways,
+    // so the consult would pass without a grant; principal 2 GRANTS account2
+    // to account1 all the same, and the walk stands as this lifecycle's
+    // exercise of the hire chain and the signed deposit. A grant is a write
     // into account2's PUBLISHED doc 1, admitted from a SIGNED session alone
     // (RES-26), and every principal here is delegated and keyless — so the
     // claimant hires principal 1 (registry: the claimant's doc 1) and

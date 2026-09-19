@@ -180,6 +180,8 @@ fn claim_board(port: u16) {
     // The record atom's insert is a DECLARED deposit (PUB-2.63; the
     // DECLARED horn of PUB-9.13): doc 1 is born published, and an undeclared
     // insert into it is the in-place edit the write path refuses (PUB-2.11).
+    // The declaration names the record's CLASS TYPE (PUB-2.64) — ENROLL's,
+    // the type the pair's `make_link` below carries.
     let v = op(
         port,
         Some(&owner),
@@ -188,7 +190,7 @@ fn claim_board(port: u16) {
             "doc": OWNER_DOC1,
             "at": {"subspace": "1", "ordinal": "1"},
             "values": [{"atom": record_text}],
-            "deposit": true,
+            "deposit": T_ENROLL,
         })
         .to_string(),
     );

@@ -233,11 +233,14 @@ pub fn claim_board(port: u16) {
     // The atom's insert carries the DEPOSIT DECLARATION (PUB-2.63; the
     // DECLARED horn of PUB-9.13): doc 1 is born published, and an undeclared
     // insert into it is the in-place edit the write path refuses (PUB-2.11).
+    // The declaration NAMES THE CLASS (PUB-2.64): ENROLL's type, the type the
+    // pair's `make_link` below carries — and the door's class test is
+    // session-blind, so this BARE pre-claim insert is admitted on it (T1(b)).
     let v = op(
         port,
         Some(&claimant),
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"1"}},"values":[{{"atom":{atom}}}],"deposit":true}}"#
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"1"}},"values":[{{"atom":{atom}}}],"deposit":"{T_ENROLL}"}}"#
         ),
     );
     expect_resp(&v, "ack_addr");
@@ -293,8 +296,8 @@ pub fn next_content_ordinal(port: u16, token: Option<&str>, doc: &str) -> u64 {
 /// from the delegator's SIGNED session as the one-atom verified deposit
 /// (AUTH-5.4): the enroll atom of the agent's DEVICE-flagged public key
 /// (device-flagged only, AUTH-5.63) inserted into the registry doc 1 at its
-/// next free position with `deposit: true`, then the `make_link` naming the
-/// atom, the agent's account and `T_ENROLL`. The fold's genesis arm latches
+/// next free position, DECLARED under `T_ENROLL` (`deposit`, PUB-2.64), then
+/// the `make_link` naming the atom, the agent's account and that same type. The fold's genesis arm latches
 /// the set (AUTH-2.70); the agent then opens a signed session with `key`.
 ///
 /// `registrar_signed` is the delegator's SIGNED session and `registrar_doc1`
@@ -326,7 +329,7 @@ pub fn hire(
         port,
         Some(registrar_signed),
         &format!(
-            r#"{{"op":"insert","doc":"{registrar_doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}],"deposit":true}}"#,
+            r#"{{"op":"insert","doc":"{registrar_doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}],"deposit":"{T_ENROLL}"}}"#,
             enroll_atom(&[key])
         ),
     );
@@ -1058,10 +1061,15 @@ pub fn published_edition(port: u16, signed: &str) -> String {
 
 // ── arrangement writes ───────────────────────────────────────────────────
 
+/// A per-byte PROSE insert, undeclared or DECLARED. What a declared one here
+/// deposits is PUB-2.60's residue — bytes of the depositor's choosing under a
+/// declared class type — so it names a MEMBER type, [`T_ENROLL`], which the
+/// door admits on the type alone (PUB-2.11, RES-249/261), what the bytes are
+/// being nothing it can test.
 pub fn insert_frame(doc: &str, ordinal: u64, text: &str, deposit: bool) -> String {
-    let flag = if deposit { r#","deposit":true"# } else { "" };
+    let declaration = if deposit { format!(r#","deposit":"{T_ENROLL}""#) } else { String::new() };
     format!(
-        r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":["{text}"]{flag}}}"#
+        r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":["{text}"]{declaration}}}"#
     )
 }
 
@@ -1690,7 +1698,7 @@ pub fn seed_partial(port: u16, id: u64, keys: &[(&SigningKey, bool)]) -> Seat {
         port,
         Some(&session),
         &format!(
-            r#"{{"op":"insert","doc":"{doc1}","at":{{"subspace":"1","ordinal":"1"}},"values":[{{"atom":{}}}],"deposit":true}}"#,
+            r#"{{"op":"insert","doc":"{doc1}","at":{{"subspace":"1","ordinal":"1"}},"values":[{{"atom":{}}}],"deposit":"{T_ENROLL}"}}"#,
             enroll_atom_flagged(keys)
         ),
     );

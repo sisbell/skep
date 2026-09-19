@@ -10,7 +10,7 @@ use crate::common;
 
 use common::*;
 use skep_address::{document_of, parent, Address};
-use skep_arrangement::{Caller, Deposit};
+use skep_arrangement::{deposit_class_types, Caller, Deposit};
 use skep_content::Val;
 use skep_engine::{Engine, World};
 use skep_febe::EditionClaim;
@@ -315,7 +315,9 @@ fn a_to_slot_that_denotes_nothing_under_the_target_is_still_a_row() {
     // Claimed here is `other_target`, the published document with NO version:
     // a declared deposit into a published document lands in its HEAD member's
     // arrangement (PUB-2.66), and this one is its own head, so the content it
-    // takes is content the resolve below can name in its own V-space.
+    // takes is content the resolve below can name in its own V-space. The
+    // declaration names ENROLL's type, the first member of M5's set
+    // (PUB-2.11, RES-261) — the bytes are prose, PUB-2.60's residue.
     engine
         .vstream()
         .insert(
@@ -323,7 +325,7 @@ fn a_to_slot_that_denotes_nothing_under_the_target_is_still_a_row() {
             &board.other_target,
             vp(1, 1),
             vec![Val::new(vec![b'a']), Val::new(vec![b'b'])],
-            Deposit::Declared,
+            Deposit::Declared(deposit_class_types()[0].clone()),
         )
         .expect("a declared deposit at fresh positions (PUB-2.59)");
     let (ranged, _) = engine

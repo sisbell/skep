@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
-use skep_arrangement::{HasM5, M5Rec, M5State, Run, VPos, VSpec};
+use skep_arrangement::{deposit_class_types, HasM5, M5Rec, M5State, Run, VPos, VSpec};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_febe::{
@@ -549,6 +549,14 @@ pub fn insert3(fx: &Fixture, doc: &Address) -> (Address, Seq) {
     ))
 }
 
+/// The deposit declaration this suite's declared fixtures carry: ENROLL's
+/// type, the first member of M5's set (PUB-2.11, RES-261). What they deposit
+/// is prose — PUB-2.60's residue, bytes of the depositor's choosing under a
+/// declared class type — which the door admits on the type alone.
+pub fn declared() -> Deposit {
+    Deposit::Declared(deposit_class_types()[0].clone())
+}
+
 /// [`insert3`] as a DECLARED deposit — the one way content enters a
 /// PUBLISHED document on this surface (PUB-2.59, PUB-9.13): three values at
 /// the empty edition's fresh positions.
@@ -560,7 +568,7 @@ pub fn deposit3(fx: &Fixture, doc: &Address) -> (Address, Seq) {
             doc: doc.clone(),
             at: vp(1, 1),
             values: vec![Val::new(vec![b'a']), Val::new(vec![b'b']), Val::new(vec![b'c'])],
-            deposit: Deposit::Declared,
+            deposit: declared(),
         },
     ))
 }

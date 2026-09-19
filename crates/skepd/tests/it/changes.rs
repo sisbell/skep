@@ -522,13 +522,14 @@ fn the_key_testimony_names_the_key_that_signed_the_session() {
 
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     // A declared deposit at the home's fresh position — the one insert a
-    // published document admits (PUB-2.59).
+    // published document admits (PUB-2.59). The byte is prose, PUB-2.60's
+    // residue, declared under a MEMBER type — ENROLL's.
     let (_, entry) = feed_entry(
         port,
         &signed,
         "a signed write",
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["s"],"deposit":true}}"#
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["s"],"deposit":"{T_ENROLL}"}}"#
         ),
     );
     assert_eq!(
@@ -1125,11 +1126,12 @@ fn pre_feature_positions_answer_bare_entries() {
         };
         // Doc 1 is born published (PUB-8.21), so this is a DECLARED deposit-shaped
         // append at a fresh position (PUB-2.59's shape; PUB-9.13's declared horn) —
-        // the one write a published home admits in place. The subject is unchanged.
+        // the one write a published home admits in place, its prose declared under
+        // a MEMBER type, ENROLL's (PUB-2.60's residue). The subject is unchanged.
         match exec(
             s1,
             &format!(
-                r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"1"}},"values":["hi"],"deposit":true}}"#
+                r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"1"}},"values":["hi"],"deposit":"{T_ENROLL}"}}"#
             ),
         ) {
             Response::AckAddr { at, .. } => {

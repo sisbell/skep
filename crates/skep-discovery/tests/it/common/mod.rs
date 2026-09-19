@@ -13,7 +13,9 @@
 
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
-use skep_arrangement::{reading_surface, Deposit, HasM5, M5Rec, M5State, Run, VPos, VSpec};
+use skep_arrangement::{
+    deposit_class_types, reading_surface, Deposit, HasM5, M5Rec, M5State, Run, VPos, VSpec,
+};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_discovery::{
     addressably_discoverable_from_on, count_ftt_on, count_v_on, delete_orphans_on,
@@ -357,7 +359,9 @@ pub fn seed_content(k: &Kernel<World>, doc: &Address, count: u32) {
 /// appended at the fresh end of the arrangement its readers answer from —
 /// `doc`'s own while it has no member, its trunk head's once it has one
 /// (PUB-2.66). The atoms are minted under `doc`'s own content chain either
-/// way; only the placement floats.
+/// way; only the placement floats. The declaration names ENROLL's type, the
+/// first member of M5's set (PUB-2.11, RES-261): the bytes are prose —
+/// PUB-2.60's residue — which the door admits on the type alone.
 pub fn seed_published_content(k: &Kernel<World>, doc: &Address, count: u32) {
     let fresh = {
         let snap = k.snapshot();
@@ -374,7 +378,7 @@ pub fn seed_published_content(k: &Kernel<World>, doc: &Address, count: u32) {
                 ordinal: fresh,
             },
             vals,
-            Deposit::Declared,
+            Deposit::Declared(deposit_class_types()[0].clone()),
         )
         .expect("a declared deposit at the fresh end is admitted into a published document");
 }

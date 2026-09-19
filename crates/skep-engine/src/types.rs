@@ -5,6 +5,17 @@
 //! (`commons-map.md`), where the AUTH round's credential types
 //! (`3.{1,2,3}`, the daemon's own constants) already sit.
 //!
+//! NOT PINNED HERE, and where they are: the credential types. The engine
+//! keys on none of them, so they take no reader below. ENROLL `3.1` and
+//! RETIRE `3.2` are spelled twice, each where its consumer can read it — the
+//! daemon's `T_ENROLL` / `T_RETIRE` for the credential fold, and M5's
+//! [`deposit_class_types`](skep_arrangement::deposit_class_types), the set
+//! the insert door tests a deposit declaration's class type against
+//! (PUB-2.11; RES-249, RES-261), M5 sitting below this crate and the daemon
+//! alike. The daemon's suite pins the two spellings EQUAL; the ledger's tests
+//! below hold M5's set prefix-free against every pin, so a pin that joins
+//! cannot land on, above or beneath a deposit-class type unnoticed.
+//!
 //! Two consumers: the engine's own derived indexes ([`t_grant`] for the grant
 //! fold, [`t_edition`] for the audit-view edition-claim lookup), and the
 //! daemon's write-path type-recognition input (PUB round 2, lane 3.5 §1;
@@ -197,6 +208,29 @@ mod tests {
                     "{} and {} are prefix-related",
                     a.tumbler(),
                     b.tumbler()
+                );
+            }
+        }
+    }
+
+    /// The deposit class's types — M5's set, the credential types ENROLL and
+    /// RETIRE (the module doc's pointer) — are prefix-free against every pin:
+    /// none IS a pin, which would make a typed-link class with no atom (the
+    /// grant, the edition claim, `successor-of`) a member the insert door
+    /// admits a declared deposit under (PUB-2.11, RES-261), and none sits
+    /// above or beneath one, which would make the daemon's prefix-recognizing
+    /// write path read a credential as that pin's class or subtype. Walked
+    /// off the same ONE list, so a ninth pin meets the set where it joins.
+    #[test]
+    fn the_deposit_class_types_are_prefix_free_against_every_pin() {
+        for ty in skep_arrangement::deposit_class_types() {
+            for (read, _) in PINS {
+                let pin = read();
+                assert!(
+                    !is_prefix(ty.tumbler(), pin.tumbler()) && !is_prefix(pin.tumbler(), ty.tumbler()),
+                    "the deposit-class type {} and the pin {} are prefix-related",
+                    ty.tumbler(),
+                    pin.tumbler()
                 );
             }
         }

@@ -903,8 +903,9 @@ where
             //    session caller — the ownership ruling, 2026-08-16; the
             //    version-chain refusals in-store too, D2b) ──
             // The DEPOSIT DECLARATION rides the op as M5's own value
-            // (PUB-9.13), so the exemption is claimed only by the
-            // `Deposit::Declared` the client sent and M10 converts nothing.
+            // (PUB-9.13), class type and all (PUB-2.64), so the exemption is
+            // claimed only by the `Deposit::Declared` the client sent: M10
+            // converts nothing and tests nothing — the class test is M5's.
             Op::Insert { doc, at, values, deposit } => {
                 let (start, committed_at) = self
                     .stores

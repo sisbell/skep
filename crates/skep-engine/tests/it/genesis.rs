@@ -10,7 +10,7 @@
 use crate::common;
 
 use common::*;
-use skep_arrangement::{Deposit, HasM5};
+use skep_arrangement::{deposit_class_types, Deposit, HasM5};
 use skep_content::{HasContent, Val};
 use skep_engine::World;
 use skep_links::{coverage_class, HasLinks, ReservedAddrs, ShippedType, View};
@@ -173,7 +173,8 @@ fn no_reserved_address_is_ever_minted_and_the_ceremony_is_not_renumbered() {
     // INSERT drives the content chain: the permascroll writes land from
     // position GHOST_POSITIONS + 1, and keep going contiguously. The
     // ceremony's doc-1 is born published, so the write is what the ceremony's
-    // own record atom is — a DECLARED deposit at its fresh positions
+    // own record atom is — a deposit DECLARED under ENROLL's type, the genesis
+    // enrollment's class (PUB-2.11, PUB-2.64), at its fresh positions
     // (PUB-2.59, PUB-2.63).
     let (start, _) = engine
         .vstream()
@@ -182,7 +183,7 @@ fn no_reserved_address_is_ever_minted_and_the_ceremony_is_not_renumbered() {
             &doc1,
             vp(1, 1),
             vec![Val::new(vec![b'a']), Val::new(vec![b'b'])],
-            Deposit::Declared,
+            Deposit::Declared(deposit_class_types()[0].clone()),
         )
         .expect("insert into the ghost doc succeeds");
     assert_eq!(

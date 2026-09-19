@@ -224,7 +224,7 @@ fn i1_e_a_credential_deposit_appends_to_the_head_alone_and_a_pinned_member_never
         port,
         Some(&signed),
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{record}}}],"deposit":true}}"#
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{record}}}],"deposit":"{T_ENROLL}"}}"#
         ),
     );
     let atom = acked_addr(&v);
@@ -754,7 +754,7 @@ fn i10_a_the_pre_claim_catalogue_is_refused_claim_first() {
         port,
         Some(&sess2),
         &format!(
-            r#"{{"op":"insert","doc":"{home2}","at":{{"subspace":"1","ordinal":"1"}},"values":[{{"atom":{}}}],"deposit":true}}"#,
+            r#"{{"op":"insert","doc":"{home2}","at":{{"subspace":"1","ordinal":"1"}},"values":[{{"atom":{}}}],"deposit":"{T_ENROLL}"}}"#,
             enroll_atom(&[&distinct_key(4)])
         ),
     );
@@ -805,7 +805,7 @@ fn i10_c_a_partial_s_key_set_is_latched_and_a_bare_claim_over_it_is_the_race() {
         port,
         Some(&a.session),
         &format!(
-            r#"{{"op":"insert","doc":"{}","at":{{"subspace":"1","ordinal":"2"}},"values":[{{"atom":{}}}],"deposit":true}}"#,
+            r#"{{"op":"insert","doc":"{}","at":{{"subspace":"1","ordinal":"2"}},"values":[{{"atom":{}}}],"deposit":"{T_ENROLL}"}}"#,
             a.doc1,
             enroll_atom(&[&distinct_key(12)])
         ),

@@ -447,7 +447,7 @@ fn the_version_chain_refusals_surface_as_their_own_permanent_codes() {
             doc: e.clone(),
             at: vp(1, 4),
             values: vec![skep_content::Val::new(vec![b'r'])],
-            deposit: Deposit::Declared,
+            deposit: declared(),
         },
     ));
     let rej = rejected(ex(
@@ -457,7 +457,23 @@ fn the_version_chain_refusals_surface_as_their_own_permanent_codes() {
             doc: e.clone(),
             at: vp(1, 2),
             values: vec![skep_content::Val::new(vec![b'r'])],
-            deposit: Deposit::Declared,
+            deposit: declared(),
+        },
+    ));
+    assert_eq!(rej.code, RejectCode::PublishedTarget);
+    // The declaration NAMES the class and M5 tests it (PUB-2.11, RES-249):
+    // declared under a type the deposit class does not hold — the edition's
+    // own address, no class type at all — the fresh position a member is
+    // admitted at is refused the same way, and M10 lowers M5's verdict
+    // unchanged.
+    let rej = rejected(ex(
+        &fx.febe,
+        fx.user,
+        Op::Insert {
+            doc: e.clone(),
+            at: vp(1, 5),
+            values: vec![skep_content::Val::new(vec![b'r'])],
+            deposit: Deposit::Declared(e.clone()),
         },
     ));
     assert_eq!(rej.code, RejectCode::PublishedTarget);

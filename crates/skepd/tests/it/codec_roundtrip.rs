@@ -135,14 +135,15 @@ fn all_requests() -> Vec<Request> {
                 deposit: Deposit::Undeclared,
             },
         ),
-        // The deposit declaration (PUB-9.13, DECLARED): rides only when made.
+        // The deposit declaration (PUB-9.13, DECLARED): rides only when made,
+        // as the class TYPE it names (PUB-2.64) — ENROLL's here.
         rq(
             None,
             Op::Insert {
                 doc: d1(),
                 at: vp(1, 2),
                 values: vec![Val::new(b"record".to_vec())],
-                deposit: Deposit::Declared,
+                deposit: Deposit::Declared(a(&[1, 1, 0, 1, 0, 1, 0, 3, 1])),
             },
         ),
         rq(None, Op::Delete { doc: d1(), p: vp(1, 3), width: n(2) }),
@@ -538,50 +539,79 @@ fn delegate_refuses_a_new_id_past_the_exactly_representable_range_at_the_parse()
     }
 }
 
-/// The deposit declaration on `insert` (PUB-9.13's DECLARED horn; owner
-/// 2026-09-05): absent and explicit `null` alike read `false`, `true`
-/// declares, `false` is the same as absent, a non-boolean is a parse fault —
-/// and the canonical form carries the field only when the declaration was
-/// made, so the flag the client sent is what the daemon holds and nothing
-/// is coerced either way.
+/// The deposit declaration on `insert` (PUB-9.13's DECLARED horn; PUB-2.64 as
+/// RES-249 re-cut it): THE VALUE IS THE RECORD CLASS's TYPE, an address
+/// string. ABSENT is the one spelling of no declaration; a present field
+/// declares the address it carries — ANY T4-valid address, the codec knowing
+/// no class, membership being M5's door's to test — and everything else is a
+/// parse fault: the retired `true` and `false`, an explicit `null` (which
+/// every `take_opt` field reads as absence and this one does not), and any
+/// string that is no address. The canonical form carries the field only when
+/// the declaration was made, as the address it named, so the type the client
+/// sent is what the daemon holds and nothing is coerced either way.
 #[test]
-fn the_deposit_declaration_reads_absent_null_true_and_false() {
+fn the_deposit_declaration_reads_absent_or_a_class_type_address_and_nothing_else() {
     let codec = JsonCodec;
-    let frame = |flag: &str| {
+    let frame = |field: &str| {
         format!(
-            r#"{{"op":"insert","doc":"1.0.1.0.1","at":{{"subspace":"1","ordinal":"1"}},"values":["a"]{flag}}}"#
+            r#"{{"op":"insert","doc":"1.0.1.0.1","at":{{"subspace":"1","ordinal":"1"}},"values":["a"]{field}}}"#
         )
         .into_bytes()
     };
     let deposit_of = |req: &Request| match &req.op {
-        Op::Insert { deposit, .. } => *deposit,
+        Op::Insert { deposit, .. } => deposit.clone(),
         _ => panic!("insert expected"),
     };
     let absent = deposit_of(&parse_ok(&codec, &frame("")));
     assert_eq!(absent, Deposit::Undeclared, "absent is no declaration");
-    assert_eq!(
-        deposit_of(&parse_ok(&codec, &frame(r#","deposit":null"#))),
-        Deposit::Undeclared,
-        "null is absence"
-    );
-    assert_eq!(
-        deposit_of(&parse_ok(&codec, &frame(r#","deposit":false"#))),
-        Deposit::Undeclared
-    );
-    assert_eq!(
-        deposit_of(&parse_ok(&codec, &frame(r#","deposit":true"#))),
-        Deposit::Declared
-    );
-    for bad in [r#","deposit":1"#, r#","deposit":"true""#, r#","deposit":[]"#] {
-        assert!(codec.parse(&frame(bad)).is_err(), "{bad} is not a declaration, and is never coerced");
+    // A class type declares — ENROLL's, RETIRE's — and so does an address the
+    // deposit class does not hold (the grant type; a document): the parse is
+    // class-blind, and the refusal of a non-member is the store's
+    // (`published_target`), never a parse fault.
+    for ty in [
+        a(&[1, 1, 0, 1, 0, 1, 0, 3, 1]),
+        a(&[1, 1, 0, 1, 0, 1, 0, 3, 2]),
+        a(&[1, 1, 0, 1, 0, 1, 0, 3, 90]),
+        d1(),
+    ] {
+        let field = format!(r#","deposit":"{}""#, ty.tumbler());
+        assert_eq!(deposit_of(&parse_ok(&codec, &frame(&field))), Deposit::Declared(ty));
     }
-    // Canonical: the field rides only when the declaration was made.
-    let canon = |flag: &str| -> Value {
-        serde_json::from_slice(&codec.marshal_request(&parse_ok(&codec, &frame(flag)))).expect("json")
+    for bad in [
+        r#","deposit":true"#,
+        r#","deposit":false"#,
+        r#","deposit":null"#,
+        r#","deposit":1"#,
+        r#","deposit":"true""#,
+        r#","deposit":"""#,
+        r#","deposit":"1.0""#,
+        r#","deposit":"1..1""#,
+        r#","deposit":[]"#,
+        r#","deposit":["1.1.0.1.0.1.0.3.1"]"#,
+        r#","deposit":{"addrs":["1.1.0.1.0.1.0.3.1"]}"#,
+    ] {
+        // `Request` derives no Debug, so `expect_err` cannot apply; match.
+        let err = match codec.parse(&frame(bad)) {
+            Err(e) => e,
+            Ok(_) => panic!("{bad} is not a declaration, and is never coerced"),
+        };
+        let detail = err.detail.clone().expect("a parse failure names what failed");
+        assert!(detail.contains("field 'deposit'"), "{bad}: the detail names the field: {detail}");
+        // The transport's answer to it is the ordinary unparseable rejection.
+        let v: Value = serde_json::from_slice(&codec.marshal(&codec.unparseable(err)))
+            .expect("marshal emits JSON");
+        assert_eq!(v["code"], "malformed", "{bad}: {v}");
+    }
+    // Canonical: the field rides only when the declaration was made, as the
+    // address it named.
+    let canon = |field: &str| -> Value {
+        serde_json::from_slice(&codec.marshal_request(&parse_ok(&codec, &frame(field)))).expect("json")
     };
     assert!(canon("").get("deposit").is_none());
-    assert!(canon(r#","deposit":false"#).get("deposit").is_none());
-    assert_eq!(canon(r#","deposit":true"#)["deposit"], Value::Bool(true));
+    assert_eq!(
+        canon(r#","deposit":"1.1.0.1.0.1.0.3.1""#)["deposit"],
+        Value::String("1.1.0.1.0.1.0.3.1".into())
+    );
 }
 
 /// wire v5.2 (PUB-8.16): the three-valued `published` flag on the minting

@@ -84,10 +84,15 @@ fn assert_gated(v: &Value) {
     assert_eq!(rej["detail"].as_str(), Some("signed_session_required"), "{v}");
 }
 
+/// A per-byte PROSE insert, undeclared or DECLARED. A declared one names a
+/// MEMBER type of the deposit class, ENROLL's (PUB-2.11, PUB-2.64): what
+/// these suites deposit is prose — PUB-2.60's residue, bytes of the
+/// depositor's choosing under a declared class type — which the door admits
+/// on the type alone.
 fn insert(doc: &str, at: u64, text: &str, deposit: bool) -> String {
-    let flag = if deposit { r#","deposit":true"# } else { "" };
+    let declaration = if deposit { format!(r#","deposit":"{T_ENROLL}""#) } else { String::new() };
     format!(
-        r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{at}"}},"values":["{text}"]{flag}}}"#
+        r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{at}"}},"values":["{text}"]{declaration}}}"#
     )
 }
 

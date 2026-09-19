@@ -134,7 +134,7 @@ fn credential_link(port: u16, signed: &str, seed: u8) -> String {
         port,
         Some(signed),
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}],"deposit":true}}"#,
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}],"deposit":"{T_ENROLL}"}}"#,
             enroll_atom(&[&distinct_key(seed)])
         ),
     );
@@ -193,7 +193,7 @@ fn a_grant_typed_nullify_is_refused_to_the_issuer_and_masked_for_everyone_else()
         port,
         Some(&bare),
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"1"}},"values":[{{"atom":{}}}],"deposit":true}}"#,
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"1"}},"values":[{{"atom":{}}}],"deposit":"{T_ENROLL}"}}"#,
             enroll_atom_flagged(&[(&anchor_key(), true), (&device_key(), false)])
         ),
     );

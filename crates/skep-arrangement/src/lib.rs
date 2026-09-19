@@ -78,14 +78,15 @@
 //! through [`published_target`], after [`trunk_of`] has projected a version
 //! member to its document (PUB-2.15). The refusals are enforced here,
 //! whatever runs ahead of the store. The one exemption is the DECLARED deposit
-//! (PUB-9.13's DECLARED horn): an `insert` carrying [`Deposit::Declared`] at
-//! the one position a published chain admits — `n_C + 1` of the arrangement
-//! [`deposit_surface`] names, the head, or the document's own while it has no
-//! member (PUB-2.59, PUB-2.61, PUB-2.66). The declaration exempts nothing by
-//! itself — the shape must bear it out — and is never a bypass;
-//! [`Vstream::insert`] states how every other insert into a published
-//! document is refused. Link writes are
-//! outside the rule (PUB-2.12): `stage_seat_link` is untouched.
+//! (PUB-9.13's DECLARED horn): an `insert` carrying [`Deposit::Declared`] —
+//! the record class's TYPE, one [`deposit_class_types`] holds (PUB-2.11,
+//! PUB-2.64; RES-249, RES-261) — at the one position a published chain admits
+//! — `n_C + 1` of the arrangement [`deposit_surface`] names, the head, or the
+//! document's own while it has no member (PUB-2.59, PUB-2.61, PUB-2.66). The
+//! declaration exempts nothing by itself — the class must hold its type and
+//! the shape must bear it out — and is never a bypass; [`Vstream::insert`]
+//! states how every other insert into a published document is refused. Link
+//! writes are outside the rule (PUB-2.12): `stage_seat_link` is untouched.
 //!
 //! ## The publish shot and head-float (PUB round 2, lane 3.2)
 //!
@@ -181,7 +182,7 @@ pub use chain::{deposit_surface, published_target, reading_surface, trunk_head, 
 pub use error::{
     CopyError, DeleteError, InsertError, PublishError, RearrangeError, SeatError, VersionError,
 };
-pub use ops::{Deposit, Vstream, MAX_PLACED_RUNS, MAX_REINSERTED_VALUES};
+pub use ops::{deposit_class_types, Deposit, Vstream, MAX_PLACED_RUNS, MAX_REINSERTED_VALUES};
 pub use run::{Run, RunError};
 pub use runlist::Runs;
 pub use seat::{seat_link, stage_seat_link};

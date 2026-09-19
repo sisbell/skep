@@ -750,18 +750,23 @@ impl Fields {
     }
 
     /// `insert`'s DEPOSIT DECLARATION (PUB-9.13's DECLARED horn, owner ruling
-    /// 2026-09-05; PUB-2.63): absent and explicit `null` alike read
-    /// `Undeclared` — an ordinary edit — and only a literal `true` declares.
-    /// Any other value is a parse fault, never coerced. Both arms are written
-    /// out, which is where M5 asks a reader to see which one is declared.
+    /// 2026-09-05; PUB-2.63): THE FIELD's VALUE IS THE RECORD CLASS's TYPE
+    /// (PUB-2.64; RES-249), an address string, and ABSENT — the field not
+    /// sent — is the one spelling of `Undeclared`, an ordinary edit. So this
+    /// field does not go through [`take_opt`](Self::take_opt): an explicit
+    /// `null` is a declaration with nothing in it, and like the retired
+    /// `true` / `false` and any other non-address it is a parse fault, never
+    /// coerced to either arm. Which types the deposit class holds is not this
+    /// parse's to know: any T4-valid address declares, and M5's door tests it
+    /// (`published_target` for a type the class does not hold). Both arms are
+    /// written out, which is where M5 asks a reader to see which one is
+    /// declared.
     fn deposit(&mut self) -> PResult<Deposit> {
-        match self.take_opt("deposit") {
+        match self.0.remove("deposit") {
             None => Ok(Deposit::Undeclared),
-            Some(v) => match v.as_bool() {
-                Some(true) => Ok(Deposit::Declared),
-                Some(false) => Ok(Deposit::Undeclared),
-                None => Err(PErr("field 'deposit': expected true or false".into())),
-            },
+            Some(v) => p_addr(&v)
+                .map(Deposit::Declared)
+                .map_err(|e| PErr(format!("field 'deposit': {e}"))),
         }
     }
 
@@ -1266,11 +1271,12 @@ fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         Op::DocMetadata { doc } => (op_name(OpKind::DocMetadata), vec![("doc", j_addr(doc))]),
         Op::Insert { doc, at, values, deposit } => {
             let mut pairs = vec![("doc", j_addr(doc)), ("at", j_vpos(at)), ("values", j_values(values))];
-            // Canonical: the declaration rides only when made — absent IS
-            // `Undeclared` on the wire, so an undeclared insert marshals to no
-            // field and `parse ∘ marshal` is a fixpoint.
+            // Canonical: the declaration rides only when made, as the class
+            // type it names (PUB-2.64) — absent IS `Undeclared` on the wire,
+            // so an undeclared insert marshals to no field and
+            // `parse ∘ marshal` is a fixpoint.
             match deposit {
-                Deposit::Declared => pairs.push(("deposit", Value::Bool(true))),
+                Deposit::Declared(ty) => pairs.push(("deposit", j_addr(ty))),
                 Deposit::Undeclared => {}
             }
             (op_name(OpKind::Insert), pairs)
@@ -2427,5 +2433,27 @@ mod tests {
         let v = obj(vec![("k", j_u64(1)), ("a", j_u64(9)), ("k", j_u64(2))]);
         assert_eq!(v["k"], j_u64(2), "the last pair given wins");
         assert_eq!(to_bytes(v), br#"{"a":9,"k":2}"#.to_vec(), "and the keys still sort");
+    }
+
+    /// The class types a `deposit` field can usefully carry are SPELLED
+    /// TWICE — M5's set, which its insert door tests a declaration against
+    /// and which sits below this crate, and the daemon's own credential
+    /// constants, which the fold classifies the pair's `make_link` by — and
+    /// the two are pinned EQUAL here, member for member in the set's order,
+    /// ENROLL then RETIRE (PUB-2.11, PUB-2.63; RES-249, RES-261). This is
+    /// the one place both spellings are in reach: the constants are this
+    /// crate's own and no integration suite can name them, and the parse
+    /// above is where a declared type enters the daemon. If this fails, an
+    /// enrollment a client declares as the fold will classify it is refused
+    /// `published_target` at the store — or admitted there and typed as
+    /// nothing the fold honors.
+    #[test]
+    fn the_deposit_class_types_are_the_daemons_enroll_and_retire_constants() {
+        use crate::auth::policy::{T_ENROLL, T_RETIRE};
+        let spelled: Vec<Vec<Nat>> = skep_arrangement::deposit_class_types()
+            .iter()
+            .map(|ty| ty.tumbler().iter().cloned().collect())
+            .collect();
+        assert_eq!(spelled, [T_ENROLL.map(Nat::from).to_vec(), T_RETIRE.map(Nat::from).to_vec()]);
     }
 }

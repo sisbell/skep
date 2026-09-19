@@ -62,15 +62,18 @@ fn retire_atom(fps: &[&str]) -> String {
 /// needs a session the publish gate admits — a signed one on a claimed
 /// board — and it carries the DEPOSIT DECLARATION (PUB-2.63; PUB-9.13's
 /// DECLARED horn), since an undeclared insert into a published document is
-/// the in-place edit the write path refuses (PUB-2.11). Kept apart from
+/// the in-place edit the write path refuses (PUB-2.11). The declaration
+/// names the record's CLASS (PUB-2.64): `ty` is the type the pair's
+/// [`deposit`] then carries — `T_ENROLL` for an enrollment record, a
+/// malformed one included, `T_RETIRE` for a retire record. Kept apart from
 /// [`deposit`] for exactly that reason: the two writes meet different gates,
 /// and only the second is the credential path's.
-fn record_atom(port: u16, signed_token: &str, ordinal: u64, atom: &str) -> String {
+fn record_atom(port: u16, signed_token: &str, ordinal: u64, atom: &str, ty: &str) -> String {
     let v = op(
         port,
         Some(signed_token),
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":true}}"#
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":"{ty}"}}"#
         ),
     );
     expect_resp(&v, "ack_addr");
@@ -303,13 +306,14 @@ fn publish_gate_shuts_bare_published_writes_and_admits_signed_ones() {
     // Accept: the SIGNED session writes the SAME position into the
     // published home — as the DECLARED deposit the write path admits there
     // (PUB-2.59; an undeclared insert is the refused in-place edit, PUB-2.11,
-    // which is the store's cell, `tests/version_chain.rs`).
+    // which is the store's cell, `tests/version_chain.rs`). The byte is
+    // prose, PUB-2.60's residue, declared under a MEMBER type — ENROLL's.
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let v = op(
         port,
         Some(&signed),
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["y"],"deposit":true}}"#
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["y"],"deposit":"{T_ENROLL}"}}"#
         ),
     );
     expect_resp(&v, "ack_addr");
@@ -461,7 +465,7 @@ fn the_enrolled_cap_refuses_at_sixteen_and_genesis_is_exempt() {
             port,
             Some(&signed),
             &format!(
-                r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{atom_ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":true}}"#
+                r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{atom_ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":"{T_ENROLL}"}}"#
             ),
         );
         expect_resp(&v, "ack_addr");
@@ -539,7 +543,7 @@ fn a_genesis_record_meets_its_key_cap_at_both_ends() {
             port,
             Some(&account_token),
             &format!(
-                r#"{{"op":"insert","doc":"{doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}],"deposit":true}}"#,
+                r#"{{"op":"insert","doc":"{doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}],"deposit":"{T_ENROLL}"}}"#,
                 enroll_atom(keys)
             ),
         );
@@ -619,7 +623,7 @@ fn the_undecodable_key_scan_stops_one_key_past_the_cap() {
             port,
             Some(&account_token),
             &format!(
-                r#"{{"op":"insert","doc":"{doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}],"deposit":true}}"#,
+                r#"{{"op":"insert","doc":"{doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}],"deposit":"{T_ENROLL}"}}"#,
                 enroll_atom_with_trailing_non_point(real_keys)
             ),
         );
@@ -695,7 +699,7 @@ fn a_credential_retry_replays_the_original_ack_kind_blind_and_per_session() {
     let sd = spawn(dir.path());
     let port = sd.port();
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
-    let record = record_atom(port, &signed, 2, &enroll_atom(&[&distinct_key(5)]));
+    let record = record_atom(port, &signed, 2, &enroll_atom(&[&distinct_key(5)]), T_ENROLL);
     let frame = deposit_frame(Some("k1"), &record, T_ENROLL);
 
     let (st, first) = http(port, "POST", "/op", Some(&signed), frame.as_bytes());
@@ -736,10 +740,10 @@ fn a_credential_retry_replays_the_original_ack_kind_blind_and_per_session() {
 
     // (d) A refusal is never memoized: after one under `kr`, the same id
     // carries the next frame through.
-    let bad = record_atom(port, &signed, 3, &json_atom("nonsense"));
+    let bad = record_atom(port, &signed, 3, &json_atom("nonsense"), T_ENROLL);
     let v = op(port, Some(&signed), &deposit_frame(Some("kr"), &bad, T_ENROLL));
     assert_eq!(rejected_detail(&v), "credential_refused:malformed_payload:bad_record");
-    let good = record_atom(port, &signed, 4, &enroll_atom(&[&distinct_key(6)]));
+    let good = record_atom(port, &signed, 4, &enroll_atom(&[&distinct_key(6)]), T_ENROLL);
     expect_resp(&op(port, Some(&signed), &deposit_frame(Some("kr"), &good, T_ENROLL)), "ack_addr");
 
     sd.shutdown();
@@ -760,14 +764,14 @@ fn a_malformed_record_names_its_payload_fault_after_the_join() {
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
 
     // A body that is not the canonical schema dies as `bad_record`.
-    let bad_record = record_atom(port, &signed, 2, &json_atom("nonsense"));
+    let bad_record = record_atom(port, &signed, 2, &json_atom("nonsense"), T_ENROLL);
     assert_eq!(
         rejected_detail(&deposit(port, &signed, &bad_record, T_ENROLL)),
         "credential_refused:malformed_payload:bad_record"
     );
     // A PARAMETERIZED sub survives the join — a duplicate entry names its
     // 1-based ENTRY index (AUTH-2.15, AUTH-1.28), two colons and all.
-    let dup = record_atom(port, &signed, 3, &enroll_atom(&[&distinct_key(5), &distinct_key(5)]));
+    let dup = record_atom(port, &signed, 3, &enroll_atom(&[&distinct_key(5), &distinct_key(5)]), T_ENROLL);
     assert_eq!(
         rejected_detail(&deposit(port, &signed, &dup, T_ENROLL)),
         "credential_refused:malformed_payload:duplicate_key:2"
@@ -807,7 +811,7 @@ fn a_valid_hex_non_point_key_is_refused_at_enrollment() {
     let key = PublicKey::parse("ed25519", &non_point_hex())
         .expect("64 hex parses — the fold admits syntax and never decodes the point");
     let text = encode_enroll(&[Enrollment::new(key, false, None).expect("no label")]);
-    let record = record_atom(port, &signed, 2, &json_atom(&text));
+    let record = record_atom(port, &signed, 2, &json_atom(&text), T_ENROLL);
     assert_eq!(
         rejected_detail(&deposit(port, &signed, &record, T_ENROLL)),
         "credential_refused:undecodable_key"
@@ -844,15 +848,15 @@ fn a_draft_homed_credential_refuses_unpublished_and_the_home_pin_needs_a_publish
     // V-position `ordinal`. The atom's I-address is the insert's own ack —
     // a version's content chain is its own, so the I-ordinal is not the
     // V-ordinal there — and home anchoring puts the record in `home`. The
-    // atom's insert is DECLARED (PUB-2.63): into the published member it is
-    // the deposit the write path admits, and into the draft the flag is
-    // inert.
+    // atom's insert is DECLARED under ENROLL's type (PUB-2.63, PUB-2.64):
+    // into the published member it is the deposit the write path admits, and
+    // into the draft the declaration is inert.
     let enroll_in = |home: &str, ordinal: u64, atom: &str| -> Value {
         let v = op(
             port,
             Some(&signed),
             &format!(
-                r#"{{"op":"insert","doc":"{home}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":true}}"#
+                r#"{{"op":"insert","doc":"{home}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":"{T_ENROLL}"}}"#
             ),
         );
         let atom_addr = acked_addr(&v);
@@ -921,11 +925,12 @@ fn the_publish_gate_projects_a_version_member_to_its_document() {
 
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
     // A bare write homed in the member: refused — the member projects to the
-    // published doc 1. (Declared, and at the member's fresh position, so
-    // the store's in-place refusal is not what answers below: the write is
-    // the deposit a published head admits, PUB-2.59.)
+    // published doc 1. (Declared under a member type — ENROLL's, the byte
+    // being prose — and at the member's fresh position, so the store's
+    // in-place refusal is not what answers below: the write is the deposit a
+    // published head admits, PUB-2.59.)
     let insert = format!(
-        r#"{{"op":"insert","doc":"{version}","at":{{"subspace":"1","ordinal":"2"}},"values":["x"],"deposit":true}}"#
+        r#"{{"op":"insert","doc":"{version}","at":{{"subspace":"1","ordinal":"2"}},"values":["x"],"deposit":"{T_ENROLL}"}}"#
     );
     assert_eq!(rejected_detail(&op(port, Some(&bare), &insert)), "credential_refused:signed_session_required");
     // A bare version OF the member: refused the same way.
@@ -1232,7 +1237,7 @@ fn a_credential_nullify_refuses_the_home_owner_and_masks_everyone_else() {
         port,
         Some(&signed),
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":[{{"atom":{}}}],"deposit":true}}"#,
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":[{{"atom":{}}}],"deposit":"{T_ENROLL}"}}"#,
             enroll_atom(&[&distinct_key(3)])
         ),
     );
@@ -1333,7 +1338,7 @@ fn pre_claim_a_credential_nullify_answers_claim_first_ahead_of_the_nullify_cell(
         port,
         Some(&claimant),
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"1"}},"values":[{{"atom":{}}}],"deposit":true}}"#,
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"1"}},"values":[{{"atom":{}}}],"deposit":"{T_ENROLL}"}}"#,
             enroll_atom_flagged(&[(&anchor_key(), true), (&device_key(), false)])
         ),
     );
@@ -1481,13 +1486,14 @@ fn restart_recovers_the_identity_fold() {
     // The recovered fold verifies a fresh signed handshake, and the signed
     // session deposits into the published home (ordinal 2 — the one legal
     // insert slot after the ceremony's atom, and a declared deposit there is
-    // the one insert a published head admits, PUB-2.59).
+    // the one insert a published head admits, PUB-2.59; the byte is prose,
+    // declared under a member type, ENROLL's — PUB-2.60's residue).
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let v = op(
         port,
         Some(&signed),
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["r"],"deposit":true}}"#
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["r"],"deposit":"{T_ENROLL}"}}"#
         ),
     );
     expect_resp(&v, "ack_addr");
@@ -1603,7 +1609,7 @@ fn retiring_a_key_needs_an_anchor_session_and_kills_that_keys_sessions() {
     let anchor_token = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
 
     // Trigger 1 — an ANCHOR retirement from a non-anchor session refuses.
-    let anchor_retire = record_atom(port, &device_token, 2, &retire_atom(&[&anchor_fp]));
+    let anchor_retire = record_atom(port, &device_token, 2, &retire_atom(&[&anchor_fp]), T_RETIRE);
     let v = deposit(port, &device_token, &anchor_retire, T_RETIRE);
     assert_eq!(rejected_detail(&v), "credential_refused:anchor_session_required");
     // …and a BARE session never satisfies it either (§Credential refusals),
@@ -1618,17 +1624,17 @@ fn retiring_a_key_needs_an_anchor_session_and_kills_that_keys_sessions() {
     // Trigger 2 — a post-genesis ANCHOR-FLAGGED enrollment, same gate.
     let fresh = distinct_key(9);
     let flagged_enroll =
-        record_atom(port, &device_token, 3, &enroll_atom_flagged(&[(&fresh, true)]));
+        record_atom(port, &device_token, 3, &enroll_atom_flagged(&[(&fresh, true)]), T_ENROLL);
     let v = deposit(port, &device_token, &flagged_enroll, T_ENROLL);
     assert_eq!(rejected_detail(&v), "credential_refused:anchor_session_required");
     // The same enrollment UNFLAGGED passes, so the gate is the FLAG and not
     // the act.
     let plain_enroll =
-        record_atom(port, &device_token, 4, &enroll_atom_flagged(&[(&fresh, false)]));
+        record_atom(port, &device_token, 4, &enroll_atom_flagged(&[(&fresh, false)]), T_ENROLL);
     expect_resp(&deposit(port, &device_token, &plain_enroll, T_ENROLL), "ack_addr");
 
     // The anchor's own session retires the device key.
-    let device_retire = record_atom(port, &anchor_token, 5, &retire_atom(&[&device_fp]));
+    let device_retire = record_atom(port, &anchor_token, 5, &retire_atom(&[&device_fp]), T_RETIRE);
     expect_resp(&deposit(port, &anchor_token, &device_retire, T_RETIRE), "ack_addr");
 
     // key_set moves the fingerprint from enrolled to retired.
@@ -2700,7 +2706,7 @@ fn a_key_of_the_holder_opens_its_unseeded_accounts_and_a_retirement_at_the_holde
     // The retirement at X, from X's anchor session.
     let anchor = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
     let ordinal = next_content_ordinal(port, Some(&anchor), CLAIMANT_DOC1);
-    let retire = record_atom(port, &anchor, ordinal, &retire_atom(&[&device_fp]));
+    let retire = record_atom(port, &anchor, ordinal, &retire_atom(&[&device_fp]), T_RETIRE);
     expect_resp(&deposit(port, &anchor, &retire, T_RETIRE), "ack_addr");
     for (what, token) in [("X.1", &as_x1), ("X.2", &as_x2), ("X.2.7", &as_x2_7)] {
         assert!(presented_dead(port, token), "a retirement at X kills the session as {what}");
@@ -2859,7 +2865,7 @@ fn the_thirteen_401_arms_stay_byte_identical_and_the_403_stands_outside_them() {
     let anchor = open_signed_session(port, p, &anchor_key());
     let device_fp = fingerprint_hex(&device_key());
     let ordinal = next_content_ordinal(port, Some(&anchor), CLAIMANT_DOC1);
-    let retire = record_atom(port, &anchor, ordinal, &retire_atom(&[&device_fp]));
+    let retire = record_atom(port, &anchor, ordinal, &retire_atom(&[&device_fp]), T_RETIRE);
     expect_resp(&deposit(port, &anchor, &retire, T_RETIRE), "ack_addr");
     rejected("a retired key", signed_handshake(port, p, &device_key()));
 
@@ -2901,15 +2907,16 @@ const SIGNED_SESSION_REQUIRED: &str = "credential_refused:signed_session_require
 
 /// Land one credential record atom at the next free position of `doc1` and
 /// answer its address — [`record_atom`] for a registry that is not the
-/// claimant's. `session` is one the publish gate admits into a published
-/// home: a signed one, of either scope.
-fn land_record(port: u16, session: &str, doc1: &str, atom: &str) -> String {
+/// claimant's, declared under the record's class type `ty` as that one is.
+/// `session` is one the publish gate admits into a published home: a signed
+/// one, of either scope.
+fn land_record(port: u16, session: &str, doc1: &str, atom: &str, ty: &str) -> String {
     let ordinal = next_content_ordinal(port, Some(session), doc1);
     acked_addr(&op(
         port,
         Some(session),
         &format!(
-            r#"{{"op":"insert","doc":"{doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":true}}"#
+            r#"{{"op":"insert","doc":"{doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":"{ty}"}}"#
         ),
     ))
 }
@@ -2954,7 +2961,7 @@ fn a_handoff_is_anchor_grade_wherever_the_set_that_opens_the_account_holds_an_an
 
     // ROW 5 — a by-reference descendant of S = X that is neither a hire's nor
     // a spawn's address: X's HANDOFF, and X's set holds the ceremony's anchor.
-    let record = land_record(port, &device, CLAIMANT_DOC1, &fresh_member(61));
+    let record = land_record(port, &device, CLAIMANT_DOC1, &fresh_member(61), T_ENROLL);
     for (hand, token) in [("a device session", &device), ("a bare session", &bare)] {
         let v = enroll_for(port, token, CLAIMANT_DOC1, &record, &x2);
         assert_eq!(verdict(&v), ANCHOR_SESSION_REQUIRED, "{hand}'s genesis at X.2: {v}");
@@ -2972,7 +2979,7 @@ fn a_handoff_is_anchor_grade_wherever_the_set_that_opens_the_account_holds_an_an
     // no anchor of X's, commits it.
     let (member, _) = bootstrap_delegate(port, 961);
     let member_key = distinct_key(62);
-    let record = land_record(port, &device, CLAIMANT_DOC1, &enroll_atom(&[&member_key]));
+    let record = land_record(port, &device, CLAIMANT_DOC1, &enroll_atom(&[&member_key]), T_ENROLL);
     let v = enroll_for(port, &bare, CLAIMANT_DOC1, &record, &member);
     assert_eq!(verdict(&v), SIGNED_SESSION_REQUIRED, "a bare genesis in no cone meets (7): {v}");
     expect_resp(&enroll_for(port, &device, CLAIMANT_DOC1, &record, &member), "ack_addr");
@@ -2983,7 +2990,7 @@ fn a_handoff_is_anchor_grade_wherever_the_set_that_opens_the_account_holds_an_an
     let member_doc1 = create_doc(port, &giver, &member);
     reserve_agent_space(port, &giver, &member, 9611);
     let (handed, _) = delegate_under(port, &giver, &member, 9612);
-    let record = land_record(port, &giver, &member_doc1, &fresh_member(63));
+    let record = land_record(port, &giver, &member_doc1, &fresh_member(63), T_ENROLL);
     expect_resp(&enroll_for(port, &giver, &member_doc1, &record, &handed), "ack_addr");
     assert_eq!(enrolled_count(port, &handed), 1);
 
@@ -3021,6 +3028,7 @@ fn a_hire_and_a_spawn_are_device_grade_and_the_agents_home_itself_is_a_handoff()
         &x_anchor,
         CLAIMANT_DOC1,
         &enroll_atom_flagged(&[(&r_paper, true), (&r_device, false)]),
+        T_ENROLL,
     );
     expect_resp(&enroll_for(port, &x_anchor, CLAIMANT_DOC1, &record, &y), "ack_addr");
     let r = open_signed_session(port, 952, &r_device);
@@ -3029,7 +3037,7 @@ fn a_hire_and_a_spawn_are_device_grade_and_the_agents_home_itself_is_a_handoff()
     // ROW 5 — the agents' home itself.
     let (home, _) = delegate_under(port, &r, &y, 9521);
     assert_eq!(home, format!("{y}.1"));
-    let home_record = land_record(port, &r, &y_doc1, &fresh_member(63));
+    let home_record = land_record(port, &r, &y_doc1, &fresh_member(63), T_ENROLL);
     let v = enroll_for(port, &r, &y_doc1, &home_record, &home);
     assert_eq!(verdict(&v), ANCHOR_SESSION_REQUIRED, "the agents' home is a handoff: {v}");
 
@@ -3046,6 +3054,7 @@ fn a_hire_and_a_spawn_are_device_grade_and_the_agents_home_itself_is_a_handoff()
         &as_home,
         &home_doc1,
         &enroll_atom_flagged(&[(&g_paper, true), (&g_device, false)]),
+        T_ENROLL,
     );
     expect_resp(&enroll_for(port, &as_home, &home_doc1, &record, &agent), "ack_addr");
 
@@ -3062,6 +3071,7 @@ fn a_hire_and_a_spawn_are_device_grade_and_the_agents_home_itself_is_a_handoff()
         &g,
         &agent_doc1,
         &enroll_atom_flagged(&[(&w_paper, true), (&w_device, false)]),
+        T_ENROLL,
     );
     expect_resp(&enroll_for(port, &g, &agent_doc1, &record, &worker), "ack_addr");
 
@@ -3072,7 +3082,7 @@ fn a_hire_and_a_spawn_are_device_grade_and_the_agents_home_itself_is_a_handoff()
     let w = open_signed_session(port, 952_111, &w_device);
     let worker_doc1 = create_doc(port, &w, &worker);
     let (below, _) = delegate_under(port, &w, &worker, 9_521_111);
-    let record = land_record(port, &w, &worker_doc1, &fresh_member(68));
+    let record = land_record(port, &w, &worker_doc1, &fresh_member(68), T_ENROLL);
     let v = enroll_for(port, &w, &worker_doc1, &record, &below);
     assert_eq!(verdict(&v), ANCHOR_SESSION_REQUIRED, "measured at the worker alone: {v}");
     let w_anchor = open_signed_session(port, 952_111, &w_paper);
@@ -3108,6 +3118,7 @@ fn the_seat_carve_admits_into_the_seats_direct_child_and_is_silent_without_the_h
         &device,
         CLAIMANT_DOC1,
         &enroll_atom_flagged(&[(&t_paper, true), (&t_device, false)]),
+        T_ENROLL,
     );
     expect_resp(&enroll_for(port, &device, CLAIMANT_DOC1, &record, &t), "ack_addr");
     let seat = open_signed_session(port, 941, &t_device);
@@ -3123,7 +3134,7 @@ fn the_seat_carve_admits_into_the_seats_direct_child_and_is_silent_without_the_h
 
     // SILENT: no header, and a header whose second field names the CLAIMANT
     // — on an unforked lineage the two are one account. T.2 is T's handoff.
-    let t2_record = land_record(port, &seat, &t_doc1, &fresh_member(43));
+    let t2_record = land_record(port, &seat, &t_doc1, &fresh_member(43), T_ENROLL);
     for silent in [header(None), header(Some(CLAIMANT_ACCOUNT))] {
         issue_blocked_list(&list, silent, &[]);
         let v = enroll_for(port, &seat, &t_doc1, &t2_record, &t2);
@@ -3136,7 +3147,7 @@ fn the_seat_carve_admits_into_the_seats_direct_child_and_is_silent_without_the_h
     // The seat's HELD first child is no admission. At a TOP-LEVEL seat the
     // fold refuses it first: `inc(B, 1)` of a bootstrap-tier account takes no
     // genesis (AUTH-2.62), slot (3) ahead of slot (6).
-    let t1_record = land_record(port, &seat, &t_doc1, &fresh_member(44));
+    let t1_record = land_record(port, &seat, &t_doc1, &fresh_member(44), T_ENROLL);
     let v = enroll_for(port, &seat, &t_doc1, &t1_record, &t1);
     assert_eq!(verdict(&v), "credential_refused:not_genesis_registry", "{v}");
 
@@ -3149,14 +3160,15 @@ fn the_seat_carve_admits_into_the_seats_direct_child_and_is_silent_without_the_h
         &seat,
         &t_doc1,
         &enroll_atom_flagged(&[(&q_paper, true), (&q_device, false)]),
+        T_ENROLL,
     );
     expect_resp(&enroll_for(port, &seat, &t_doc1, &record, &t3), "ack_addr");
     let q = open_signed_session(port, 9413, &q_device);
     let q_doc1 = create_doc(port, &q, &t3);
     let (q1, _) = delegate_under(port, &q, &t3, 94_131);
     let (q2, _) = delegate_under(port, &q, &t3, 94_132);
-    let q1_record = land_record(port, &q, &q_doc1, &fresh_member(47));
-    let q2_record = land_record(port, &q, &q_doc1, &fresh_member(48));
+    let q1_record = land_record(port, &q, &q_doc1, &fresh_member(47), T_ENROLL);
+    let q2_record = land_record(port, &q, &q_doc1, &fresh_member(48), T_ENROLL);
     // While T is the seat the carve reaches T's DIRECT children and no
     // deeper: T.3's own child is T.3's handoff.
     let v = enroll_for(port, &q, &q_doc1, &q2_record, &q2);
@@ -3168,7 +3180,7 @@ fn the_seat_carve_admits_into_the_seats_direct_child_and_is_silent_without_the_h
     // …and T, the seat no longer, is a giver again: its device session is
     // refused where its paper commits.
     let (t4, _) = delegate_under(port, &seat, &t, 9414);
-    let t4_record = land_record(port, &seat, &t_doc1, &fresh_member(49));
+    let t4_record = land_record(port, &seat, &t_doc1, &fresh_member(49), T_ENROLL);
     let v = enroll_for(port, &seat, &t_doc1, &t4_record, &t4);
     assert_eq!(verdict(&v), ANCHOR_SESSION_REQUIRED, "the carve moved with the header: {v}");
     let t_anchor = open_signed_session(port, 941, &t_paper);
@@ -3201,13 +3213,13 @@ fn a_stolen_device_key_cannot_seize_a_subdivision_the_walk_ends_at_slot_6() {
 
     let thief = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let thief_key = distinct_key(91);
-    let record = land_record(port, &thief, CLAIMANT_DOC1, &enroll_atom(&[&thief_key]));
+    let record = land_record(port, &thief, CLAIMANT_DOC1, &enroll_atom(&[&thief_key]), T_ENROLL);
     let v = enroll_for(port, &thief, CLAIMANT_DOC1, &record, topic);
     assert_eq!(verdict(&v), ANCHOR_SESSION_REQUIRED, "the seizure: {v}");
     // The climb: a device-flagged enrollment at X is device-grade and
     // commits, and the session that key opens is no anchor's either.
     let climber = distinct_key(92);
-    let own = land_record(port, &thief, CLAIMANT_DOC1, &enroll_atom(&[&climber]));
+    let own = land_record(port, &thief, CLAIMANT_DOC1, &enroll_atom(&[&climber]), T_ENROLL);
     expect_resp(&deposit(port, &thief, &own, T_ENROLL), "ack_addr");
     let climbed = open_signed_session(port, CLAIMANT_PRINCIPAL, &climber);
     let v = enroll_for(port, &climbed, CLAIMANT_DOC1, &record, topic);
@@ -3346,12 +3358,12 @@ fn a_content_session_writes_content_and_deposits_no_credential() {
 
     // A DEVICE ENROL and a RETIREMENT — each previewed Honored, each
     // device-grade, each committed below by a FULL device session.
-    let enrol = land_record(port, &content, CLAIMANT_DOC1, &fresh_member(71));
+    let enrol = land_record(port, &content, CLAIMANT_DOC1, &fresh_member(71), T_ENROLL);
     let retire =
-        land_record(port, &content, CLAIMANT_DOC1, &retire_atom(&[&fingerprint_hex(&distinct_key(71))]));
+        land_record(port, &content, CLAIMANT_DOC1, &retire_atom(&[&fingerprint_hex(&distinct_key(71))]), T_RETIRE);
     // AN ANCHOR ACT — an anchor-flagged enrollment.
     let anchor_act =
-        land_record(port, &content, CLAIMANT_DOC1, &enroll_atom_flagged(&[(&distinct_key(72), true)]));
+        land_record(port, &content, CLAIMANT_DOC1, &enroll_atom_flagged(&[(&distinct_key(72), true)]), T_ENROLL);
 
     for (whose, token) in [("a device key's", &content), ("an anchor key's", &paper_content)] {
         for (act, record, ty) in [

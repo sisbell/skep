@@ -13,10 +13,13 @@
 //! both, PUB-6.37).
 //!
 //! The one door into a published head is the DECLARED deposit (PUB-2.59,
-//! PUB-2.63): `insert` with `deposit:true` at fresh positions past the
-//! arranged extent. The write path keys on the insert's deposit
-//! declaration; an undeclared append on a published head is an in-place
-//! edit and refuses (PUB-9.13).
+//! PUB-2.63): `insert` whose `deposit` field names a record class's TYPE
+//! that the deposit class holds (PUB-2.11, PUB-2.64; RES-249, RES-261 —
+//! today ENROLL's and RETIRE's), at fresh positions past the arranged
+//! extent. The write path keys on the insert's deposit declaration and tests
+//! the type it names; an undeclared append on a published head is an
+//! in-place edit and refuses (PUB-9.13), and so does one declared under any
+//! other type.
 //!
 //! Every suite runs post-claim on a CLAIMED-PERMISSIVE board (`spawn`): the
 //! claimant's doc 1 is the published document under test — born published,
@@ -53,10 +56,24 @@ fn assert_gated(v: &Value) {
     assert_eq!(rej["detail"].as_str(), Some("signed_session_required"), "{v}");
 }
 
+/// A per-byte PROSE insert, undeclared or DECLARED. A declared one names a
+/// MEMBER type, ENROLL's: what these suites deposit is prose — PUB-2.60's
+/// residue, bytes of the depositor's choosing under a declared class type —
+/// which the door admits on the type alone. [`insert_declared`] names any
+/// other type.
 fn insert(doc: &str, at: u64, text: &str, deposit: bool) -> String {
-    let flag = if deposit { r#","deposit":true"# } else { "" };
+    if deposit {
+        return insert_declared(doc, at, text, T_ENROLL);
+    }
     format!(
-        r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{at}"}},"values":["{text}"]{flag}}}"#
+        r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{at}"}},"values":["{text}"]}}"#
+    )
+}
+
+/// [`insert`], DECLARED under the class type `ty`.
+fn insert_declared(doc: &str, at: u64, text: &str, ty: &str) -> String {
+    format!(
+        r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{at}"}},"values":["{text}"],"deposit":"{ty}"}}"#
     )
 }
 
@@ -296,7 +313,8 @@ fn the_cross_owner_branch_is_refused_by_neither_rule() {
 /// declared and fresh — committed, and a link may then name it (the
 /// deposit's second half); declared past the append boundary — the
 /// arrangement's own `out_of_bounds`, the refusal having cleared. Into a
-/// draft the declaration is inert.
+/// draft the declaration is inert. Every declaration here names a MEMBER
+/// type (ENROLL's, [`insert`]); the class test is the next suite's.
 #[test]
 fn the_declared_deposit_is_the_one_door_into_a_published_head() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -314,7 +332,7 @@ fn the_declared_deposit_is_the_one_door_into_a_published_head() {
         port,
         Some(&signed),
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"2","ordinal":"1"}},"values":["l"],"deposit":true}}"#
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"2","ordinal":"1"}},"values":["l"],"deposit":"{T_ENROLL}"}}"#
         ),
     );
     assert_refused(&v, "published_target");
@@ -324,6 +342,11 @@ fn the_declared_deposit_is_the_one_door_into_a_published_head() {
 
     let atom = acked_addr(&op(port, Some(&signed), &insert(CLAIMANT_DOC1, 2, "r", true)));
     assert_eq!(atom, format!("{CLAIMANT_DOC1}.0.1.2"), "the record lands at the head's fresh position");
+    // The link naming it carries a type of the owner's own, not the declared
+    // one: the byte is prose, a malformed record of the class it named
+    // (PUB-2.60), and the pair's carrying of the declared type (PUB-2.63) is
+    // the conforming ceremony's to keep — the daemon holds no declaration to
+    // compare a later link against.
     let v = op(
         port,
         Some(&signed),
@@ -344,6 +367,142 @@ fn the_declared_deposit_is_the_one_door_into_a_published_head() {
     let d = draft_with(port, &bare, "ab");
     expect_resp(&op(port, Some(&bare), &insert(&d, 1, "c", true)), "ack_addr");
     expect_resp(&op(port, Some(&bare), &insert(&d, 4, "e", false)), "ack_addr");
+    sd.shutdown();
+}
+
+/// PUB-2.11 / PUB-2.64 (RES-249, RES-261) — THE DECLARATION NAMES THE CLASS,
+/// AND THE WRITE PATH TESTS IT. The `deposit` field carries the record
+/// class's TYPE, and a declared insert on a published target is admitted
+/// only where that type is one the deposit class's own input holds — the two
+/// classes that deposit an atom today, ENROLL and RETIRE. A declaration
+/// naming any other type — a class whose record is its typed link alone (the
+/// grant, the edition claim, the claim link), a subtype beneath a member, an
+/// arbitrary type of the owner's own — answers `published_target` exactly as
+/// an undeclared append does, permanent, no `detail`, nothing committed. The
+/// two shape clauses stand beside the test unmoved.
+#[test]
+fn the_declaration_names_the_class_and_the_write_path_tests_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+
+    // Doc 1 holds the ceremony's one atom at ordinal 1; ordinal 2 is fresh.
+    // A declared NON-member there, where a member is admitted:
+    let before = head(port);
+    let own_type = format!("{CLAIMANT_DOC1}.0.3.6.1");
+    let enroll_subtype = format!("{T_ENROLL}.1");
+    for (name, ty) in [
+        ("the grant type", T_GRANT),
+        ("the edition-claim type", "1.1.0.1.0.1.0.3.14"),
+        ("the claim link's type", T_CLAIM),
+        ("a subtype beneath ENROLL", enroll_subtype.as_str()),
+        ("an arbitrary type of the owner's own", own_type.as_str()),
+        ("the target itself", CLAIMANT_DOC1),
+    ] {
+        let v = op(port, Some(&signed), &insert_declared(CLAIMANT_DOC1, 2, "p", ty));
+        assert_eq!(expect_resp(&v, "rejected")["code"].as_str(), Some("published_target"), "{name}: {v}");
+        assert_refused(&v, "published_target");
+    }
+    // The two shape clauses, unmoved: a declared MEMBER at an ARRANGED
+    // position, and an UNDECLARED append at the fresh one.
+    assert_refused(&op(port, Some(&signed), &insert_declared(CLAIMANT_DOC1, 1, "d", T_RETIRE)), "published_target");
+    assert_refused(&op(port, Some(&signed), &insert(CLAIMANT_DOC1, 2, "u", false)), "published_target");
+    // A non-member's refusal is the TARGET's, wherever it points: past the
+    // append boundary a member is told its position is bad, a non-member
+    // that its target is published.
+    assert_refused(&op(port, Some(&signed), &insert_declared(CLAIMANT_DOC1, 9, "p", T_GRANT)), "published_target");
+    let v = op(port, Some(&signed), &insert_declared(CLAIMANT_DOC1, 9, "p", T_ENROLL));
+    assert_eq!(expect_resp(&v, "rejected")["code"].as_str(), Some("out_of_bounds"), "{v}");
+    assert_eq!(head(port), before, "a refused declaration commits nothing");
+
+    // THE RETIRED FORMS ARE MALFORMED, never coerced to either arm: the
+    // boolean the field used to carry, an explicit `null` (absent is the one
+    // spelling of no declaration, PUB-2.64), and a value that is no address.
+    // The frame dies at the parse — `unparseable`, nothing committed.
+    for bad in ["true", "false", "null", "1", r#""true""#, r#""""#, r#""1.0""#, r#"["1.1.0.1.0.1.0.3.1"]"#] {
+        let frame = format!(
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["m"],"deposit":{bad}}}"#
+        );
+        let v = op(port, Some(&signed), &frame);
+        let rej = expect_resp(&v, "rejected");
+        assert_eq!(rej["op"].as_str(), Some("unparseable"), "deposit {bad}: {v}");
+        assert_eq!(rej["code"].as_str(), Some("malformed"), "deposit {bad}: {v}");
+    }
+    assert_eq!(head(port), before, "a malformed declaration commits nothing");
+
+    // A declared MEMBER at the fresh position is admitted — each of the two:
+    // an enrollment record under ENROLL's type, a retire record under
+    // RETIRE's. (The class test reads the TYPE; what the atom is it cannot
+    // tell, which is why the prose deposits above it in this file land too.)
+    let enroll = op(
+        port,
+        Some(&signed),
+        &format!(
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":[{{"atom":{}}}],"deposit":"{T_ENROLL}"}}"#,
+            enroll_atom(&[&distinct_key(81)])
+        ),
+    );
+    assert_eq!(acked_addr(&enroll), format!("{CLAIMANT_DOC1}.0.1.2"));
+    let enrolled_at = head(port);
+    assert!(enrolled_at > before, "the ENROLL deposit committed");
+    let retire_record = skep_identity::encode_retire(&[skep_identity::Fingerprint::of(&public_key_of(&distinct_key(81)))]);
+    let retire = op(
+        port,
+        Some(&signed),
+        &format!(
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"3"}},"values":[{{"atom":{}}}],"deposit":"{T_RETIRE}"}}"#,
+            json_atom(&retire_record)
+        ),
+    );
+    assert_eq!(acked_addr(&retire), format!("{CLAIMANT_DOC1}.0.1.3"));
+    assert!(head(port) > enrolled_at, "the RETIRE deposit committed");
+
+    // Into a DRAFT the declaration is inert, whatever it names.
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let d = draft_with(port, &bare, "ab");
+    expect_resp(&op(port, Some(&bare), &insert_declared(&d, 3, "c", T_GRANT)), "ack_addr");
+    sd.shutdown();
+}
+
+/// T1(b) — THE GENESIS ENROLLMENT IS ADMITTED FROM A BARE PRE-CLAIM SESSION.
+/// The claim ceremony's step 4 `insert`s the enrollment record into a doc 1
+/// that was BORN PUBLISHED, from a session that cannot be signed — the key
+/// set is empty until this very write (AUTH-5.55; RES-274). The door's class
+/// test is the store's and is session-blind, so it binds here too: declared
+/// under ENROLL's type the atom lands; declared under a type the class does
+/// not hold, the same bare insert answers `published_target`, and undeclared
+/// it does as well. ([`claim_board`] runs the admitted half under every
+/// suite; this is the cell by name, with its refused neighbours.)
+#[test]
+fn the_genesis_enrollment_is_admitted_from_a_bare_pre_claim_session_on_its_class_type() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_unclaimed(dir.path());
+    let port = sd.port();
+    let (account, bare) = bootstrap_delegate(port, CLAIMANT_PRINCIPAL);
+    assert_eq!(account, CLAIMANT_ACCOUNT, "the ceremony is the board's first delegate");
+    let doc1 = create_doc(port, &bare, &account);
+    assert_eq!(doc1, CLAIMANT_DOC1, "the home mint is doc 1, born published");
+    let genesis = |declaration: &str| {
+        format!(
+            r#"{{"op":"insert","doc":"{doc1}","at":{{"subspace":"1","ordinal":"1"}},"values":[{{"atom":{}}}]{declaration}}}"#,
+            enroll_atom_flagged(&[(&anchor_key(), true), (&device_key(), false)])
+        )
+    };
+    let before = head(port);
+    assert_refused(&op(port, Some(&bare), &genesis("")), "published_target");
+    assert_refused(&op(port, Some(&bare), &genesis(&format!(r#","deposit":"{T_GRANT}""#))), "published_target");
+    assert_refused(&op(port, Some(&bare), &genesis(&format!(r#","deposit":"{T_CLAIM}""#))), "published_target");
+    assert_eq!(head(port), before, "the refused genesis attempts commit nothing");
+    let v = op(port, Some(&bare), &genesis(&format!(r#","deposit":"{T_ENROLL}""#)));
+    assert_eq!(acked_addr(&v), format!("{doc1}.0.1.1"), "the genesis enrollment lands, bare and pre-claim");
+    assert!(!claimed(port), "the board is still unclaimed: the claim is a later step");
+    // The pair's second half carries the type the declaration named
+    // (PUB-2.63), and the fold honors it: the device key can now sign in.
+    let atom = format!("{doc1}.0.1.1");
+    let v = typed_link(port, &bare, &doc1, &[atom.as_str()], &[account.as_str()], T_ENROLL);
+    expect_resp(&v, "ack_addr");
+    open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     sd.shutdown();
 }
 

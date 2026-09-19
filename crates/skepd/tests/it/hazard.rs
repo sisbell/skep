@@ -31,7 +31,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use common::{acked_addr, expect_resp, json, op, open_session};
+use common::{acked_addr, expect_resp, json, op, open_session, T_ENROLL};
 use serde_json::Value;
 use skepd::{Daemon, HttpRequest, Reply, Routed, Seq};
 
@@ -295,7 +295,8 @@ fn e_trial(trial: u64) -> (usize, usize) {
     // document is the account's home, born published, so each append is a
     // DECLARED deposit at the head's fresh position (PUB-2.59; an undeclared
     // insert into a published document is the in-place edit the store
-    // refuses, PUB-2.11).
+    // refuses, PUB-2.11). The chunks here and below are prose — PUB-2.60's
+    // residue — declared under a MEMBER type, ENROLL's.
     let expect_char = |i: u64| char::from(b'a' + ((i - 1) % 26) as u8);
     let mut inserts_acked: u64 = 0;
     go_tx.send(()).expect("killer is waiting");
@@ -303,7 +304,7 @@ fn e_trial(trial: u64) -> (usize, usize) {
     loop {
         i += 1;
         let frame = format!(
-            r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{i}"}},"values":["{}"],"deposit":true}}"#,
+            r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{i}"}},"values":["{}"],"deposit":"{T_ENROLL}"}}"#,
             expect_char(i)
         );
         match try_op(port, Some(&s1), &frame) {
@@ -443,7 +444,7 @@ fn f_sidecar_mutilation_never_touches_the_world() {
                 &d,
                 Some(&s1),
                 &format!(
-                    r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{i}"}},"values":["{ch}"],"deposit":true}}"#
+                    r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{i}"}},"values":["{ch}"],"deposit":"{T_ENROLL}"}}"#
                 ),
             );
             acks.push(v["at"].as_u64().expect("insert at"));
@@ -713,7 +714,7 @@ fn g_disk_exhaustion_stops_acks_before_durability() {
         stop_code = loop {
             let ord = inserts_acked * W + 1;
             let frame = format!(
-                r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{ord}"}},"values":["{chunk}"],"deposit":true}}"#
+                r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{ord}"}},"values":["{chunk}"],"deposit":"{T_ENROLL}"}}"#
             );
             let v = route_op(&d, Some(&s1), &frame);
             match v["resp"].as_str() {

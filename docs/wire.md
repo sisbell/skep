@@ -517,9 +517,11 @@ the deposit permanently inert — the daemon refuses it up front as
 **The ceremony** is the unclaimed board's one admitted write sequence
 (worked end-to-end in §A first board): `delegate` from principal 0 →
 the home mint (`create_new_document`, which becomes doc 1) → the record
-`insert` into doc 1 (declared, `deposit:true` — the home is published
-from birth, and a record atom is the deposit-class write it admits,
-§Arrangement) → the genesis enroll deposit → the claim deposit.
+`insert` into doc 1 (declared under the enroll type, `deposit:
+"1.1.0.1.0.1.0.3.1"` — the home is published from birth, and a record
+atom declared under its class's type is the deposit-class write it
+admits, §Arrangement) → the genesis enroll deposit, its `ty` that same
+type → the claim deposit.
 The genesis deposit seeds the account's key set (the enrolled-set cap
 does not bind it, and the anchor gate is exempt — the seeding hand
 records the initial set, flags included); the claim deposit flips the
@@ -1195,7 +1197,7 @@ never reaches these codes on a published document.
 
 | code | op | when |
 | --- | --- | --- |
-| `published_target` | `insert`, `copy`, `delete`, `rearrange` | `doc` is a PUBLISHED document (or a member of one) — the one exemption is a **declared deposit**, `insert` with `deposit:true` at fresh content positions past the arranged extent (§Arrangement) |
+| `published_target` | `insert`, `copy`, `delete`, `rearrange` | `doc` is a PUBLISHED document (or a member of one) — the one exemption is a **declared deposit**, `insert` whose `deposit` names a type the deposit class holds, at fresh content positions past the arranged extent; a `deposit` naming any other type answers this code as an undeclared append does (§Arrangement) |
 | `private_version_of_published` | `version` | you own `d_src`, `d_src` is PUBLISHED, and an explicit `published:false` asks for a private member |
 | `private_source_versionless` | `version`, `publish` | you own `d_src` (or the shot's `doc`) and it is PRIVATE — whatever the flag; a private document has no chain to append to (v7.3: on `publish` this is the flag-`true` face below) |
 
@@ -1288,10 +1290,10 @@ the float (PUB-6.37). NOT floated, pinned as the seam it is:
 the address named — a client comparing versions names the members.
 
 **The deposit cell** (PUB-2.65, PUB-2.66). A declared deposit into a
-published chain — `insert` with `deposit:true`, named by the bare
-address, by the head, or by a pinned older member — lands in the HEAD
-member's arrangement and nowhere else, judged fresh against the head's
-extent; the atom's identity is minted under the chain of the address
+published chain — `insert` with `deposit` naming a deposit-class type
+(§Arrangement), named by the bare address, by the head, or by a pinned
+older member — lands in the HEAD member's arrangement and nowhere else,
+judged fresh against the head's extent; the atom's identity is minted under the chain of the address
 named (`1.0.1.0.1.0.1.4` for the bare address, `1.0.1.0.1.1.0.1.1` for
 the member). A pinned member's arrangement never grows. The in-place
 refusal (`published_target`) stands on every address of the chain as
@@ -1764,23 +1766,41 @@ bytes, and one non-UTF-8 composite — eighteen positions:
 ```
 
 The optional `deposit` field is the **deposit declaration** (v7.2;
-PUB-2.59, PUB-9.13): `true` says this insert is a deposit-class record —
-a credential record atom, say — landing at fresh positions past the
-document's arranged extent. `false`, `null` and absent are all "no
-declaration"; any other value is a parse fault. The write path keys on
-the declaration: a published document admits an `insert` if and only if
-it is declared AND deposit-shaped — `at` a content position past every
-arranged one, disturbing no arrangement — and an undeclared append on a
-published head is an in-place edit and refuses `published_target`, as
-does a declared insert at an arranged position or outside the content
-subspace. A declared insert past the append boundary answers the
-arrangement's own `out_of_bounds`. Into a draft the declaration is inert.
-The canonical frame carries the field only when the declaration is made.
-This example deposits one record atom at the head's second position:
+PUB-2.59, PUB-9.13), and ITS VALUE IS THE RECORD CLASS's TYPE (PUB-2.11,
+PUB-2.64): a type ADDRESS string, saying this insert is a record atom of
+that deposit class — a credential record, say — landing at fresh
+positions past the document's arranged extent. It is the type the
+`make_link` naming the atom then carries (PUB-2.63): the declaration is
+the claim, and that link is where the pair bears it out. ABSENT is the
+one spelling of "not a deposit"; a present field must be an address, so
+`true`, `false`, `null` and any other non-address are a parse fault
+(`malformed`), never read as either arm. The write path keys on the
+declaration AND TESTS THE TYPE IT NAMES: a published document admits an
+`insert` if and only if it is declared, the declared type is one the
+deposit class holds, AND the insert is deposit-shaped — `at` a content
+position past every arranged one, disturbing no arrangement. The types
+held are the classes that deposit an ATOM — today the two credential
+records, **enroll `1.1.0.1.0.1.0.3.1`** and **retire
+`1.1.0.1.0.1.0.3.2`**, by exact address (a subtype beneath one is no
+member); a class whose record is its typed link alone — the grant, the
+edition claim, `successor-of`, `published-in-error`, the claim link —
+deposits no atom and is never among them. An undeclared append on a
+published head is an in-place edit and refuses `published_target`, and
+so does an insert declared under any other type, wherever it lands, and
+a declared insert at an arranged position or outside the content
+subspace. A declared insert past the append boundary, under a type the
+class holds, answers the arrangement's own `out_of_bounds`. The test is
+of the TYPE alone — the daemon cannot tell a record from prose at the
+`insert` — so bytes declared under a held type are admitted, a malformed
+record of the class they name, honored for nothing (PUB-2.60). Into a
+draft the declaration is inert, whatever it names. The canonical frame
+carries the field only when the declaration is made, as the address it
+named. This example deposits one enrollment record atom at the head's
+second position:
 
 <!-- wire: request insert -->
 ```json
-{"at":{"ordinal":"2","subspace":"1"},"deposit":true,"doc":"1.0.1.0.1","op":"insert","values":[{"atom":"one credential record"}]}
+{"at":{"ordinal":"2","subspace":"1"},"deposit":"1.1.0.1.0.1.0.3.1","doc":"1.0.1.0.1","op":"insert","values":[{"atom":"one credential record"}]}
 ```
 
 **`delete`** — remove `width` positions of `doc` starting at `p`. → `ack`.
@@ -2735,14 +2755,19 @@ seat it in doc 1 as ONE composite value — one position, so one address
 names the whole record:
 
 ```
-POST /op   (session)   {"op": "insert", "doc": <doc 1>, "at": {"subspace": "1", "ordinal": "1"}, "deposit": true,
+POST /op   (session)   {"op": "insert", "doc": <doc 1>, "at": {"subspace": "1", "ordinal": "1"},
+                        "deposit": "1.1.0.1.0.1.0.3.1",                 # T_enroll — the record's class type
                         "values": [{"atom": "{\"type\":\"skep-enroll\",\"keys\":[{\"alg\":\"ed25519\",\"key\":\"<64 hex>\",\"anchor\":true,\"label\":\"paper\"},{\"alg\":\"ed25519\",\"key\":\"<64 hex>\",\"anchor\":false,\"label\":\"notebook\"}]}"}]}
 ```
 
-The insert is DECLARED (`"deposit": true`, §Arrangement): doc 1 is born
-published, and the record atom is the deposit-class write a published
-document admits — an undeclared insert into it is the in-place edit the
-store refuses `published_target`.
+The insert is DECLARED under the record's class type (`"deposit":
+"1.1.0.1.0.1.0.3.1"`, T_enroll; §Arrangement): doc 1 is born published,
+and a record atom declared under a type the deposit class holds is the
+write a published document admits — an undeclared insert into it, or one
+declared under any other type, is the in-place edit the store refuses
+`published_target`. The store's test is session-blind, so this bare
+pre-claim insert is admitted on it. The `make_link` below carries the
+SAME type (PUB-2.63).
 
 Deposit it — the genesis enrollment, then (from a signed session,
 proving custody before the flip) the claim:

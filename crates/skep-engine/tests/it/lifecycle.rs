@@ -10,7 +10,7 @@ use crate::common;
 
 use common::*;
 use skep_address::Address;
-use skep_arrangement::Deposit;
+use skep_arrangement::{deposit_class_types, Deposit};
 use skep_content::Val;
 use skep_discovery::findlinks_v_on;
 use skep_engine::{Engine, World};
@@ -44,7 +44,10 @@ fn a_cross_store_lifecycle_survives_a_journal_reopen() {
         let (_acct, d) = setup_home(&engine);
         doc = d;
 
-        // M5+M4+M3 composite: deposit three values at the head.
+        // M5+M4+M3 composite: deposit three values at the head, declared
+        // under ENROLL's type — the first member of M5's set (PUB-2.11,
+        // RES-261); the bytes are prose, PUB-2.60's residue, which the door
+        // admits on the type alone.
         let (_start, insert_seq) = engine
             .vstream()
             .insert(
@@ -52,7 +55,7 @@ fn a_cross_store_lifecycle_survives_a_journal_reopen() {
                 &doc,
                 vp(1, 1),
                 vec![Val::new(vec![b'x']), Val::new(vec![b'y']), Val::new(vec![b'z'])],
-                Deposit::Declared,
+                Deposit::Declared(deposit_class_types()[0].clone()),
             )
             .expect("insert succeeds");
 

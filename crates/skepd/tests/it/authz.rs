@@ -571,14 +571,15 @@ fn walk_matrix(
 /// enrollment derives from the registry, so a post-restart handshake must
 /// still sign in and land. The write is a DECLARED deposit at the home's
 /// fresh position — the one insert a published document admits past the gate
-/// (PUB-2.59); the undeclared twin is the store's own refusal,
+/// (PUB-2.59), its byte prose declared under a MEMBER type, ENROLL's
+/// (PUB-2.60's residue); the undeclared twin is the store's own refusal,
 /// `tests/version_chain.rs`. The position is READ off the head for THIS walk
 /// (`next_content_ordinal`): the ceremony's atom holds 1, the claimant's hire
 /// of P holds 2, and each walk's deposit advances the head by one.
 fn signed_claimant_writes_its_published_doc1(port: u16, walk: &str) {
     let ordinal = next_content_ordinal(port, None, CLAIMANT_DOC1);
     let frame = format!(
-        r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":["z"],"deposit":true}}"#
+        r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":["z"],"deposit":"{T_ENROLL}"}}"#
     );
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
     let v = op(port, Some(&bare), &frame);
@@ -803,14 +804,16 @@ impl ScopeWalk<'_> {
     }
 }
 
-/// Land one record atom at the next free position of `doc1`.
-fn land_in(port: u16, signed: &str, doc1: &str, atom: &str) -> String {
+/// Land one record atom at the next free position of `doc1`, DECLARED under
+/// its record's class type `ty` (PUB-2.64) — the type the act's deposit then
+/// carries: `T_ENROLL` for an enrollment record, `T_RETIRE` for a retire.
+fn land_in(port: u16, signed: &str, doc1: &str, atom: &str, ty: &str) -> String {
     let ordinal = next_content_ordinal(port, Some(signed), doc1);
     acked_addr(&op(
         port,
         Some(signed),
         &format!(
-            r#"{{"op":"insert","doc":"{doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":true}}"#
+            r#"{{"op":"insert","doc":"{doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":"{ty}"}}"#
         ),
     ))
 }
@@ -853,15 +856,16 @@ fn a_content_session_is_refused_every_credential_act_and_writes_content_as_a_ful
     let home = fixture.pub_doc.as_str();
     let enrolled = distinct_key(101);
     let acts = CredentialActs {
-        enrol_device: land_in(port, full, home, &enroll_atom(&[&enrolled])),
-        enrol_anchor: land_in(port, full, home, &enroll_atom_flagged(&[(&distinct_key(102), true)])),
+        enrol_device: land_in(port, full, home, &enroll_atom(&[&enrolled]), T_ENROLL),
+        enrol_anchor: land_in(port, full, home, &enroll_atom_flagged(&[(&distinct_key(102), true)]), T_ENROLL),
         retire: land_in(
             port,
             full,
             home,
             &json_atom(&encode_retire(&[Fingerprint::of(&public_key_of(&enrolled))])),
+            T_RETIRE,
         ),
-        genesis: land_in(port, full, home, &enroll_atom(&[&distinct_key(103)])),
+        genesis: land_in(port, full, home, &enroll_atom(&[&distinct_key(103)]), T_ENROLL),
         subdivision: delegate(
             port,
             full,

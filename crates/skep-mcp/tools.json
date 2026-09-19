@@ -174,8 +174,9 @@
             }
           },
           "deposit": {
-            "type": "boolean",
-            "description": "The deposit declaration (PUB-2.59, PUB-9.13): true says this insert is a deposit-class record atom landing at fresh positions past the document's arranged extent. A published document admits ONLY declared deposits at fresh positions; an undeclared insert into it, or a declared one touching an arranged position, is refused published_target (stage the change in a draft, then publish it as the next version). Into a draft the flag is inert. Absent means false."
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "The deposit declaration (PUB-2.59, PUB-2.64, PUB-9.13): the TYPE ADDRESS of the record class this insert's atom is of — the same type the make_link naming the atom then carries (PUB-2.63) — saying this insert is a deposit-class record atom landing at fresh positions past the document's arranged extent. A published document admits ONLY a deposit declared under a type its deposit class holds (today the enroll type 1.1.0.1.0.1.0.3.1 and the retire type 1.1.0.1.0.1.0.3.2), at fresh positions; an undeclared insert into it, one declared under any other type, or a declared one touching an arranged position, is refused published_target (stage the change in a draft, then publish it as the next version). Into a draft the declaration is inert. Absent means not a deposit; true, false and null are malformed."
           }
         },
         "required": ["doc", "at", "values"],

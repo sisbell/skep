@@ -246,13 +246,15 @@ fn birth_extent_stays_at_the_birth_content_when_the_head_takes_a_deposit() {
 
     // Two declared deposits into the bare address while `D.1` is the head:
     // each lands in `D.1` (PUB-2.66) and neither joins the birth content.
+    // The byte is prose — PUB-2.60's residue, the very atom RES-276 is about
+    // — declared under a MEMBER type, ENROLL's (PUB-2.11, PUB-2.64).
     for (ordinal, grown) in [(2u64, 2u64), (3, 3)] {
         expect_resp(
             &op(
                 port,
                 Some(&signed),
                 &format!(
-                    r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":["z"],"deposit":true}}"#
+                    r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":["z"],"deposit":"{T_ENROLL}"}}"#
                 ),
             ),
             "ack_addr",
@@ -363,13 +365,14 @@ fn a_deposited_one_member_edition_still_images_its_birth_content_under_the_claim
     };
     assert_eq!(claim_from(), born_with, "at the mint FROM and extent are equal");
 
-    // A declared deposit into the edition while its birth version is the head.
+    // A declared deposit into the edition while its birth version is the head
+    // — prose under a MEMBER type, ENROLL's, as above.
     expect_resp(
         &op(
             port,
             Some(&signed),
             &format!(
-                r#"{{"op":"insert","doc":"{edition}","at":{{"subspace":"1","ordinal":"3"}},"values":["z"],"deposit":true}}"#
+                r#"{{"op":"insert","doc":"{edition}","at":{{"subspace":"1","ordinal":"3"}},"values":["z"],"deposit":"{T_ENROLL}"}}"#
             ),
         ),
         "ack_addr",

@@ -195,7 +195,7 @@ fn hire_logged(
         claimant_signed,
         "insert",
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}],"deposit":true}}"#,
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}],"deposit":"{T_ENROLL}"}}"#,
             enroll_atom(&[key])
         ),
         Some(vec![CLAIMANT_DOC1.to_string()]),
@@ -358,7 +358,8 @@ fn build(port: u16) -> Board {
     );
 
     // A tail past the straddles: one more draft write, and a declared
-    // deposit into A's published doc 1 (visible to all).
+    // deposit into A's published doc 1 (visible to all) — prose under a
+    // MEMBER type, ENROLL's (PUB-2.60's residue).
     insert(&mut log, port, &a, &d1, "s");
     let ordinal = next_content_ordinal(port, Some(&a_signed), &a_doc1);
     write(
@@ -367,7 +368,7 @@ fn build(port: u16) -> Board {
         &a_signed,
         "insert",
         &format!(
-            r#"{{"op":"insert","doc":"{a_doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":["z"],"deposit":true}}"#
+            r#"{{"op":"insert","doc":"{a_doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":["z"],"deposit":"{T_ENROLL}"}}"#
         ),
         Some(vec![a_doc1.clone()]),
     );

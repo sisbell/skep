@@ -24,7 +24,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{
-    is_ordinal_vspan, seat_link, Caller, Deposit, HasM5, M5State, VPos, VSpec, Vstream,
+    deposit_class_types, is_ordinal_vspan, seat_link, Caller, Deposit, HasM5, M5State, VPos, VSpec,
+    Vstream,
 };
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, WorldState};
@@ -194,6 +195,15 @@ fn val(b: &[u8]) -> Val {
     Val::new(b)
 }
 
+/// The deposit declaration every declared fixture below carries: ENROLL's
+/// type, the first member of M5's set (PUB-2.11, RES-261). What the fixtures
+/// deposit is prose (`b"a"`, `b"z"`) — PUB-2.60's residue, bytes of the
+/// depositor's choosing under a declared class type — which the door admits
+/// on the type alone.
+fn declared() -> Deposit {
+    Deposit::Declared(deposit_class_types()[0].clone())
+}
+
 /// The seeded owner of doc1/doc2 — write fixtures run under it, so the ω
 /// gate (ownership ruling, 2026-08-16) is exercised, not skipped.
 const P1: Caller = Caller::Principal(PrincipalId(1));
@@ -296,7 +306,7 @@ fn insert3(k: &Kernel<World>) -> Vstream<'_, World> {
 /// (PUB-2.59, PUB-9.13).
 fn deposit3(k: &Kernel<World>) -> Vstream<'_, World> {
     let vs = Vstream::new(k);
-    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], Deposit::Declared)
+    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], declared())
         .expect("deposit commits");
     vs
 }
@@ -1160,7 +1170,7 @@ fn a_published_address_answers_from_its_trunk_head_once_it_has_one() {
     }
     let (fork, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("fork commits");
     assert_eq!(fork, vdoc()); // the trunk's first member, and so its head
-    vs.insert(P1, &fork, vp(1, 4), vec![val(b"z")], Deposit::Declared)
+    vs.insert(P1, &fork, vp(1, 4), vec![val(b"z")], declared())
         .expect("fork deposit commits"); // head = [a, b, c, z]
     let s = k.snapshot();
     let q = Query::new(&s);
@@ -1250,7 +1260,7 @@ fn a_published_address_with_an_empty_arrangement_of_its_own_reports_its_head() {
         // the head's.
         assert_eq!(ok_of(q.doc_vspanset(&pdoc())), SpanSet::empty());
     }
-    vs.insert(P1, &fork, vp(1, 1), vec![val(b"z")], Deposit::Declared)
+    vs.insert(P1, &fork, vp(1, 1), vec![val(b"z")], declared())
         .expect("head deposit commits");
     let s = k.snapshot();
     let q = Query::new(&s);
@@ -1306,7 +1316,7 @@ fn a_pinned_member_answers_its_own_arrangement_after_the_head_moves_on() {
         .expect("second fork commits");
     assert_eq!(first, vdoc());
     assert_eq!(second, a(&[1, 0, 1, 0, 3, 2])); // the trunk's second member, now its head
-    vs.insert(P1, &second, vp(1, 4), vec![val(b"z")], Deposit::Declared)
+    vs.insert(P1, &second, vp(1, 4), vec![val(b"z")], declared())
         .expect("head deposit commits"); // head = [a, b, c, z]
     let s = k.snapshot();
     let q = Query::new(&s);
@@ -1399,7 +1409,7 @@ fn show_origin_v_projects_an_origin_at_whatever_depth_its_document_sits() {
     let (fork, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("fork commits");
     assert_eq!(fork, vdoc()); // one component deeper than its source…
     let (start, _) = vs
-        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], Deposit::Declared)
+        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], declared())
         .expect("fork deposit commits");
     assert_eq!(start, vca(1)); // …and its own chain one component longer
     let s = k.snapshot();
@@ -1744,7 +1754,7 @@ fn show_deletions_enumerates_the_address_named_and_does_not_float() {
         .version(PrincipalId(1), &pdoc(), None)
         .expect("fork commits");
     let (start, _) = vs
-        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], Deposit::Declared)
+        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], declared())
         .expect("head deposit commits");
     assert_eq!(start, vca(1)); // the head holds vca1 at V4; pdoc's own arrangement never will
     vs.copy(
@@ -2143,7 +2153,7 @@ fn compare_joins_blocks_of_different_address_lengths_without_pairing_across_them
     deposit3(&k); // pdoc = [pca1, pca2, pca3]
     let (fork, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("fork commits");
     let (start, _) = vs
-        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], Deposit::Declared)
+        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], declared())
         .expect("fork deposit commits");
     assert_eq!(start, vca(1)); // the fork's chain mints LENGTH-9 elements
     vs.copy(
@@ -2793,7 +2803,7 @@ fn find_docs_containing_filters_to_present_tense_containers() {
     let (fork, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("fork commits");
     assert_eq!(fork, vdoc()); // shares pdoc's three
     let (start, _) = vs
-        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], Deposit::Declared)
+        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], declared())
         .expect("fork deposit commits");
     assert_eq!(start, vca(1)); // the fork's chain mints LENGTH-9 elements
     vs.copy(

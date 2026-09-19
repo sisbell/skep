@@ -165,13 +165,18 @@ pub enum Op {
     ///
     /// `deposit` is the DEPOSIT DECLARATION (PUB-9.13's DECLARED horn, owner
     /// ruling 2026-09-05; PUB-2.59, PUB-2.63): the deposit-class record
-    /// atom's untyped first `insert` says so, and M5 admits a
-    /// [`Deposit::Declared`] insert into a PUBLISHED document iff it is
-    /// deposit-shaped — fresh positions past the arranged extent — where an
-    /// [`Deposit::Undeclared`] one, or a declared one touching an arranged
-    /// position, refuses `published_target` (PUB-2.11). Absent on the wire is
-    /// `Undeclared`; into a draft the declaration is inert. It is M5's own
-    /// two-state type, carried verbatim: M10 decides nothing about it.
+    /// atom's first `insert` NAMES ITS CLASS — the declaration carries the
+    /// class's TYPE address, the one the pair's `make_link` then carries
+    /// (PUB-2.11, PUB-2.64; RES-249) — and M5 admits a
+    /// [`Deposit::Declared`] insert into a PUBLISHED document iff that type
+    /// is one its deposit class holds AND the insert is deposit-shaped —
+    /// fresh positions past the arranged extent — where an
+    /// [`Deposit::Undeclared`] one, a declared one naming any other type, or
+    /// a declared one touching an arranged position, refuses
+    /// `published_target` (PUB-2.11). Absent on the wire is `Undeclared`;
+    /// into a draft the declaration is inert. It is M5's own two-variant
+    /// type, carried verbatim: M10 decides nothing about it, the class test
+    /// included.
     Insert { doc: Address, at: VPos, values: Vec<Val>, deposit: Deposit },
     /// DELETE (ASN-0117).
     Delete { doc: Address, p: VPos, width: Nat },

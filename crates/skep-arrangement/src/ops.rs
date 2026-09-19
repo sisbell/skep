@@ -43,12 +43,13 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::sync::LazyLock;
 
 use num_traits::{One, Zero};
-use skep_address::{content_subspace, document_of, Address, Nat};
+use skep_address::{content_subspace, document_of, elem_addr, Address, ElemPos, Nat};
 use skep_content::{stage_write, ContentError, ContentWrite, HasContent, Val};
 use skep_kernel::{Kernel, LockKey, Seq, Staging, TxnError, WorldState};
-use skep_namespace::{HasM3, M3Rec, M3State, MintError, PrincipalId};
+use skep_namespace::{ghost_home_doc, HasM3, M3Rec, M3State, MintError, PrincipalId};
 
 use crate::auth::{gate_write, Caller};
 use crate::chain::{deposit_surface, published_target, reading_surface, trunk_head, trunk_of};
@@ -69,29 +70,113 @@ use crate::HasM5;
 /// ([`Vstream::insert`] states the shape). Into a private document it is
 /// inert. Content only — a link deposit is outside the rule (PUB-2.12).
 ///
+/// THE DECLARATION NAMES THE RECORD CLASS (PUB-2.11, PUB-2.64; RES-249): what
+/// it carries is the class's TYPE address — the type the pair's `make_link`
+/// then carries (PUB-2.63) — and the write path tests it, admitting a
+/// declared insert on a published document only where that type is one
+/// [`deposit_class_types`] holds. A bare "this is a deposit" was a fact that
+/// did not separate the exempt record from ordinary prose at a fresh
+/// position; the class type is the claim the pair bears out.
+///
 /// A type and not a flag because the declaration is read where it is made,
 /// and the two ways of making it wrongly are not alike. An insert that should
 /// have been declared is refused `PublishedTarget`, loudly. A declaration on
-/// an ordinary edit is admitted at a fresh position of a published document —
-/// the write the refusal exists to stop, placed wherever [`deposit_surface`]
-/// points — and nothing reports it; on the [`Caller::System`] path no ω check
-/// stands between the declaration and the arrangement either. For the same
-/// reason there is no `From<bool>`: a boolean becomes this value with both
-/// arms written out, where a reader sees which one is declared.
+/// an ordinary edit, under a type the class holds, is admitted at a fresh
+/// position of a published document — PUB-2.60's residue, placed wherever
+/// [`deposit_surface`] points — and nothing reports it; on the
+/// [`Caller::System`] path no ω check stands between the declaration and the
+/// arrangement either. For the same reason there is no `From<bool>` and no
+/// `From<Address>`: an address becomes this value with the variant written
+/// out, where a reader sees that it is declared.
 ///
 /// Two variants because the corpus has two — an insert is declared or it is
 /// not — so a match on it is exhaustive, and a third variant would change the
-/// exemption itself. `Default` is `Undeclared`: the wire reads an absent,
-/// `null` or `false` field as no declaration.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+/// exemption itself. `Default` is `Undeclared`: on the wire an ABSENT field
+/// is the one spelling of no declaration (PUB-2.64).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Deposit {
     /// No declaration: an ordinary edit — and, on a published document, an
     /// in-place edit, refused.
     #[default]
     Undeclared,
-    /// The deposit declaration: admitted on a published document at a fresh
-    /// content position of the arrangement the deposit lands in.
-    Declared,
+    /// The deposit declaration, carrying the record class's TYPE: admitted on
+    /// a published document where the type is a member of
+    /// [`deposit_class_types`] AND the insert names a fresh content position
+    /// of the arrangement the deposit lands in. A type the set does not hold
+    /// is refused `PublishedTarget`, as an undeclared append is.
+    Declared(Address),
+}
+
+/// The commons' TYPE subspace of the ghost home document — subspace 3, the
+/// core vocabulary's home, where nothing is ever minted (no M3 door mints
+/// into any document's subspace 3), so no content address can equal a type
+/// spelled there.
+const COMMONS_TYPE_SUBSPACE: u32 = 3;
+
+/// The commons ordinals of [`deposit_class_types`]' members, in the set's
+/// order — the two atom-bearing CREDENTIAL classes (AUTH-5.4: a credential
+/// record is ONE ATOM, a DECLARED deposit into the home document):
+///
+/// * `1` — ENROLL, `1.1.0.1.0.1.0.3.1`;
+/// * `2` — RETIRE, `1.1.0.1.0.1.0.3.2`.
+///
+/// The daemon's own constants for the same two addresses (`T_ENROLL`,
+/// `T_RETIRE`) sit above this crate, where the door cannot read them, so this
+/// is a SECOND SPELLING — and the daemon's suite pins the two EQUAL, member
+/// for member, and this set prefix-free against the engine's commons ledger
+/// (`skep-engine/src/types.rs`), so neither spelling moves alone.
+const DEPOSIT_CLASS_ORDINALS: [u32; 2] = [1, 2];
+
+/// THE DEPOSIT CLASS's TYPE-RECOGNITION INPUT at the insert door (PUB-2.11;
+/// RES-249, RES-261; the owner's ruling, 2026-09-18): the members' list of
+/// PUB-2.61's class sentence RESTRICTED TO THE CLASSES THAT DEPOSIT AN ATOM —
+/// a BUILD-TIME set, M5's own, each member the ghost home document's
+/// ([`ghost_home_doc`]) subspace-3 element at its commons ordinal
+/// ([`DEPOSIT_CLASS_ORDINALS`]). Today: ENROLL and RETIRE, in that order.
+///
+/// Membership is EQUALITY — the membership compare RES-249 pins, and the
+/// compare the credential classifier makes of the pair's link type (exactly
+/// one span `Equal` to the class's, containment answering nothing): a
+/// subtype beneath a member is no member. A class joins at the rule that
+/// mints it or that states it rides this class (RES-261), by one ordinal
+/// above and nothing else; each type held here that no conforming `insert`
+/// bears out is one more prose path under PUB-2.60's residue, so the set
+/// holds what deposits an atom TODAY and no more.
+///
+/// JOINING LATER, each at its own type's allocation:
+///
+/// * the DISPLAY-NAME record — IN by PUB-2.62 (RES-261): its doc-1 content
+///   write is a deposit into a published home; it joins at P8's allocation
+///   (the write itself is deferred, AUTH RES-62);
+/// * the INVITE LETTER — RES-221 gave it a body, so it deposits an atom; it
+///   joins at its type's allocation (no type is pinned for it yet).
+///
+/// NEVER — a class whose record is its typed link and endsets alone is in the
+/// deposit class and NOT in this input (RES-261), no conforming `insert`
+/// ever declaring it:
+///
+/// * the GRANT — its link and endsets alone, NO BODY (PUB-5.15, RES-221);
+/// * `published-in-error` — the same (PUB-5.116, RES-220);
+/// * the EDITION CLAIM — NO BODY (RES-221);
+/// * `successor-of` — NO BODY (RES-221);
+/// * the CLAIM link — names the account in its FROM and deposits no atom
+///   (AUTH's third credential type, `3.3`).
+///
+/// HELD, not manufactured per call: one process-wide value, built at its
+/// first read — the addresses are compiled format constants, and the door
+/// consults them on every declared insert into a published document.
+pub fn deposit_class_types() -> &'static [Address] {
+    static TYPES: LazyLock<[Address; 2]> = LazyLock::new(|| {
+        DEPOSIT_CLASS_ORDINALS.map(|ordinal| {
+            elem_addr(ElemPos {
+                doc: ghost_home_doc(),
+                subspace: Nat::from(COMMONS_TYPE_SUBSPACE),
+                ordinal: Nat::from(ordinal),
+            })
+            .expect("ghost_home_doc is Document-level; the subspace and every ordinal are ≥ 1")
+        })
+    });
+    &*TYPES
 }
 
 /// The most runs one COPY, or one publish shot, may place — and so the
@@ -280,29 +365,37 @@ where
     /// PUB-2.59, PUB-2.61; PUB-9.13's DECLARED horn, owner-ruled). When the
     /// document `doc` projects to (PUB-2.15) is PUBLISHED, an insert is an
     /// in-place edit (PUB-2.11's in-place advance) and refuses
-    /// `PublishedTarget` — UNLESS `deposit` is [`Deposit::Declared`] AND the
+    /// `PublishedTarget` — UNLESS `deposit` is [`Deposit::Declared`], the
+    /// TYPE it carries is a member of [`deposit_class_types`], AND the
     /// insert is deposit-SHAPED: `at` names a fresh content position past the
     /// arranged extent, so the placement appends and disturbs no arrangement.
-    /// The declaration exempts nothing by itself — the shape must bear it out
-    /// — and is never a bypass: a declared insert at an arranged position
-    /// refuses with the same code, and an UNDECLARED append refuses too (the
-    /// cost RES-209 item 5 named, closed). Into a PRIVATE document the
-    /// declaration is inert — every insert is admitted there as before.
-    /// A declared deposit whose fresh position lies past the append boundary
-    /// clears this refusal and meets `OutOfBounds` below, so it is told its
-    /// position is bad rather than that its target is published.
+    /// The declaration exempts nothing by itself — the class must hold its
+    /// type and the shape must bear it out — and is never a bypass: a
+    /// declaration naming a type the class does not hold (the grant's, the
+    /// edition claim's, any other address) refuses with the same code
+    /// wherever it lands (PUB-2.11; RES-249, RES-261), a declared insert at an
+    /// arranged position refuses with it too, and an UNDECLARED append
+    /// refuses as well (the cost RES-209 item 5 named, closed). THE TEST IS A
+    /// MEMBERSHIP COMPARE against a build-time set: it reads nothing, and
+    /// what the bytes ARE it cannot tell — prose declared under a member type
+    /// is admitted, a malformed record of the class it names, which is
+    /// PUB-2.60's accepted residue. Into a PRIVATE document the declaration
+    /// is inert, whatever it names — every insert is admitted there as
+    /// before. A declared deposit whose fresh position lies past the append
+    /// boundary clears this refusal and meets `OutOfBounds` below, so it is
+    /// told its position is bad rather than that its target is published.
     /// `Caller::System` is NOT exempt (PUB-6.28): a rule fire never advances
     /// a published arrangement in place.
     ///
-    /// So a published document admits exactly ONE insert: a declared deposit
-    /// at `[s_C, n_C + 1]` of the arrangement it lands in — the one position
-    /// both fresh and inside the append boundary. A caller builds that
-    /// position by asking [`deposit_surface`] for the arrangement and
-    /// [`content_count`](crate::M5State::content_count) of it for `n_C`. A
-    /// position read before another deposit landed there is no longer fresh,
-    /// and the deposit carrying it is refused `PublishedTarget` like any
-    /// in-place edit — the remedy being a fresh position, not the draft the
-    /// refusal's face proposes.
+    /// So a published document admits exactly ONE insert: a deposit declared
+    /// under a member type, at `[s_C, n_C + 1]` of the arrangement it lands
+    /// in — the one position both fresh and inside the append boundary. A
+    /// caller builds that position by asking [`deposit_surface`] for the
+    /// arrangement and [`content_count`](crate::M5State::content_count) of it
+    /// for `n_C`. A position read before another deposit landed there is no
+    /// longer fresh, and the deposit carrying it is refused `PublishedTarget`
+    /// like any in-place edit — the remedy being a fresh position, not the
+    /// draft the refusal's face proposes.
     ///
     /// AN ACCOUNT'S HOME IS SUCH A TARGET. The flagless first mint into an
     /// empty account is born published — M3's own create path resolves that
@@ -364,11 +457,11 @@ where
         // (`head_lock_key`), so the landing decided inside cannot move under
         // it. Both are arithmetic on the request.
         let mut keys = vec![M3State::content_lock_key(doc)];
-        let declared = match deposit {
-            Deposit::Undeclared => false,
-            Deposit::Declared => {
+        let declared = match &deposit {
+            Deposit::Undeclared => None,
+            Deposit::Declared(ty) => {
                 keys.push(head_lock_key(doc));
-                true
+                Some(ty)
             }
         };
         self.kernel.transact(&keys, |stg| {
@@ -380,8 +473,9 @@ where
                 InsertError::NotOwner,
             )?;
             // PUB-6.36 slot 5: on a registered, owned target, the
-            // published-target refusal — cleared only by a DECLARED deposit
-            // at a FRESH position (PUB-2.59, PUB-9.13) of the arrangement the
+            // published-target refusal — cleared only by a deposit DECLARED
+            // under a type the deposit class holds (PUB-2.11, RES-249/261) at
+            // a FRESH position (PUB-2.59, PUB-9.13) of the arrangement the
             // deposit lands in: the HEAD member's, or the document's own
             // while it has none (PUB-2.66). Which arrangement the insert
             // lands in is decided with the refusal, one case at a time.
@@ -389,10 +483,16 @@ where
                 let world = stg.working();
                 let m3 = world.m3();
                 if !published_target(m3, doc) {
-                    // Private: the declaration is inert, and the insert edits
-                    // the arrangement named.
+                    // Private: the declaration is inert, whatever it names,
+                    // and the insert edits the arrangement named.
                     doc.clone()
-                } else if declared {
+                } else if let Some(ty) = declared {
+                    // The CLASS TEST: a membership compare against M5's own
+                    // build-time set, reading nothing. A declaration naming
+                    // any other type answers as an undeclared append does.
+                    if !deposit_class_types().contains(ty) {
+                        return Err(InsertError::PublishedTarget);
+                    }
                     // The chain's frontier, read under the head key pushed
                     // above — the one insert a published document admits.
                     let surface = deposit_surface(m3, doc);
@@ -1560,10 +1660,38 @@ mod tests {
 
     #[test]
     fn the_absent_declaration_is_the_default() {
-        // The wire reads an absent, `null` or `false` `deposit` field as no
-        // declaration, so the value a caller gets without saying anything is
+        // The wire reads an absent `deposit` field as no declaration
+        // (PUB-2.64), so the value a caller gets without saying anything is
         // the one that clears no refusal — never the exemption.
         assert_eq!(Deposit::default(), Deposit::Undeclared);
+    }
+
+    /// The set as spelled: ENROLL then RETIRE, each the ghost home document's
+    /// subspace-3 element at its commons ordinal — where no M3 door mints, so
+    /// no content address equals a member — pairwise prefix-free, since
+    /// membership is equality and a member beneath another would be a subtype
+    /// the door never reads as one. The pin EQUAL to the daemon's constants
+    /// and prefix-free against the engine's ledger is the daemon suite's, which
+    /// can see all three spellings; this crate sits below the other two.
+    #[test]
+    fn the_deposit_class_types_are_enroll_and_retire_in_the_ghost_homes_type_subspace() {
+        let types = deposit_class_types();
+        let spelled: Vec<String> = types.iter().map(|ty| ty.tumbler().to_string()).collect();
+        assert_eq!(spelled, ["1.1.0.1.0.1.0.3.1", "1.1.0.1.0.1.0.3.2"]);
+        for ty in types {
+            assert_eq!(document_of(ty), Some(ghost_home_doc()), "{ty:?}: homed in the ghost document");
+            assert_eq!(ty.subspace(), Some(&n(COMMONS_TYPE_SUBSPACE)), "{ty:?}: the type subspace");
+        }
+        let (enroll, retire) = (types[0].tumbler(), types[1].tumbler());
+        assert!(!skep_address::is_prefix(enroll, retire) && !skep_address::is_prefix(retire, enroll));
+    }
+
+    /// The set is ONE value, held: two reads hand back the same slice, not
+    /// two equal ones — the door consults it on every declared insert into a
+    /// published document, and a member is nine big-integer components.
+    #[test]
+    fn the_deposit_class_types_are_one_held_value_rather_than_a_construction_per_read() {
+        assert!(std::ptr::eq(deposit_class_types(), deposit_class_types()));
     }
 
     /// A world carrying a content store beside the arrangement — the one

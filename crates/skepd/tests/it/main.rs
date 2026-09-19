@@ -37,6 +37,7 @@ mod restart;
 mod scan_bound;
 mod source_gate;
 mod transport;
+mod universal_grants;
 mod vectors;
 mod version_chain;
 mod wire_doc;

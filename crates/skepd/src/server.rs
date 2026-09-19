@@ -351,7 +351,7 @@ impl ClassScans {
 /// (`retrieve_v`, `compare`, `show_deletions`, `find_docs_containing`,
 /// `show_origin`) and the M3 reads touch no link store at all.
 ///
-/// NOT exhaustive over `Op` (41 variants against 11), so a new READ that
+/// NOT exhaustive over `Op` (43 variants against 11), so a new READ that
 /// walks the link store must be added by hand — `write_meta`'s table, which
 /// the compiler does force, reaches writes alone. Nothing about a query is
 /// read here: not the class, not the cursor, not the slots, and not whether

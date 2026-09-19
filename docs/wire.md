@@ -890,6 +890,23 @@ present; `null` means absent/ineligible (not an error).
 {"addr":null,"as_of":9,"resp":"maybe_addr"}
 ```
 
+**`effective_owner`** — effective_owner (§Namespace): who owns the address
+asked — `prefix` the LONGEST registered prefix containing it and
+`principal` the principal seated there. Both are always present, carried
+together, and `null` TOGETHER only where no registered principal's prefix
+contains the address; the address is an allocated seat iff `prefix` equals
+it (the row states the test).
+
+<!-- wire: response effective_owner -->
+```json
+{"as_of":9,"prefix":"1.0.1","principal":900,"resp":"effective_owner"}
+```
+
+<!-- wire: response effective_owner_none -->
+```json
+{"as_of":9,"prefix":null,"principal":null,"resp":"effective_owner"}
+```
+
 **`count`** — count_v / count_ftt.
 
 <!-- wire: response count -->
@@ -1021,6 +1038,23 @@ way). Only rows whose home you may read are returned.
 <!-- wire: response edition_claims -->
 ```json
 {"as_of":9,"claims":[{"active":true,"claim":"1.0.1.0.5.0.2.1","home":"1.0.1.0.5","to":[{"start":"1.0.1.0.1","width":"0.0.0.0.1"}]}],"resp":"edition_claims"}
+```
+
+**`universal_grants`** — universal_grants (§Grants): the grant fold's live
+any-principal set, as a bound principal may display it. `rows` is always
+present: one row per COVERED content prefix — `prefix`, a document or an
+account — with the `issuers` who granted it to every principal, in prefix
+order, each issuer list in address order; `[]` for a guest, under this
+same tag — an answer, never a rejection.
+
+<!-- wire: response universal_grants -->
+```json
+{"as_of":9,"resp":"universal_grants","rows":[{"issuers":["1.0.1"],"prefix":"1.0.1.0.2"}]}
+```
+
+<!-- wire: response universal_grants_empty -->
+```json
+{"as_of":9,"resp":"universal_grants","rows":[]}
 ```
 
 **`key_set`** — key_set: an account's credential table (§Identity
@@ -1662,22 +1696,13 @@ byte-identically — and it is served on `/op-at` too, as of any committed
 position (the seat above at a position before the `delegate` that
 allocated `addr`, the new seat from that position on).
 
-In the example `1.0.1.1` is NOT allocated: the answer names `1.0.1`, the
-seat above it, and that seat's principal.
+In the example `1.0.1.1` is NOT allocated: the answer (§The response
+envelope's `effective_owner` example) names `1.0.1`, the seat above it, and
+that seat's principal.
 
 <!-- wire: request effective_owner -->
 ```json
 {"addr":"1.0.1.1","op":"effective_owner"}
-```
-
-<!-- wire: response effective_owner -->
-```json
-{"as_of":9,"prefix":"1.0.1","principal":900,"resp":"effective_owner"}
-```
-
-<!-- wire: response effective_owner_none -->
-```json
-{"as_of":9,"prefix":null,"principal":null,"resp":"effective_owner"}
 ```
 
 **`doc_metadata`** — the publication metadata a client needs to run
@@ -2260,6 +2285,47 @@ from this answer. → `edition_claims`.
 <!-- wire: request edition_claims -->
 ```json
 {"op":"edition_claims","target":"1.0.1.0.1"}
+```
+
+### Grants
+
+**`universal_grants`** — the any-principal discovery read (PUB-8.47): the
+grant fold's LIVE universal set — every content prefix an admitted,
+unrevoked grant with an EMPTY `to` names, a document or an account
+(§The read predicate) — with the issuers who granted it, one row per
+prefix in prefix order, each issuer list in address order. It takes no
+argument: the set is a board population, not yours, and every bound
+principal — a bare session or a signed one, the issuer or a stranger — is
+answered the same rows. It is empty for a guest (`rows: []`, an answer and
+never a rejection): a grant reaches principals alone, and this read hands
+a guest nothing a guest could read.
+
+Here the served prefix is the covered one, never the stored prefix: a row
+is the fold's index entry narrowed to what the fold ANSWERS from — the
+`from` prefix as deposited where it is the prefix the registry's
+`effective_owner` answers the issuer for, or the issuer's own account where
+the `from` is wider — so every issuer listed owns the prefix beside it. A
+record whose `from` names a document under someone else's account is
+admitted, stands in the fold (`/dump`'s `grants` section lists it) and is
+NO row here: the two are disjoint. An agent `X.1`'s grant whose `from` is
+its hirer's account `X` is served at `X.1`, the agent's own space, grouped
+with every other share served there. A hirer's grant whose `from` lies
+under its registered sub-account `X.1` is NO row: `X.1`'s documents are
+`X.1`'s (§Namespace, `effective_owner`). What you are handed is
+therefore the set the daemon's own read predicate answers from, never a
+superset to render as a face; it decides what a client may DISPLAY — the
+arrival face, the any-principal arm, a back-fill — and nothing about what
+is served, the change feed applying the same live set itself (§The change
+feed). Revocation is immediate: a withdrawn grant's row is gone at the next
+read. It is served on `/op-at` too, as of any committed position — present
+at a position before the revocation, gone from it on — bound or guest
+exactly as `/op` answers. Its cost is the live set's own size plus one
+registry walk per stored row (`effective_owner`), never a scan of the
+grants class. → `universal_grants`.
+
+<!-- wire: request universal_grants -->
+```json
+{"op":"universal_grants"}
 ```
 
 ## Reading history

@@ -202,6 +202,7 @@ pub(crate) fn deposits_credential_link(op: &Op) -> bool {
         | Op::NextAccountPrefix { .. }
         | Op::PrincipalPrefix { .. }
         | Op::EffectiveOwner { .. }
+        | Op::UniversalGrants
         | Op::Insert { .. }
         | Op::Delete { .. }
         | Op::Copy { .. }

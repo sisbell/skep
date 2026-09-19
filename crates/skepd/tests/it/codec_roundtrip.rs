@@ -12,7 +12,7 @@ use skep_content::Val;
 use skep_discovery::{FourSet, OrphanReport, SlotSpec, SupClaim, Window};
 use skep_febe::{
     BirthVersion, Codec, Deposit, Disposition, EditionClaim, FaultSite, Op, OpKind, ParseError,
-    RejectCode, Rejection, ReqId, Request, Response, SlotArg, SuccessorSpec,
+    RejectCode, Rejection, ReqId, Request, Response, SlotArg, SuccessorSpec, UniversalGrant,
 };
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link, View, MAX_SLOT_SPANS};
@@ -297,10 +297,14 @@ fn all_requests() -> Vec<Request> {
         // The two publication reads (lane 3.4).
         rq(None, Op::DocMetadata { doc: d1() }),
         rq(None, Op::EditionClaims { target: d1() }),
+        // The any-principal discovery read (PUB-8.47): no argument, with and
+        // without the idempotency id.
+        rq(None, Op::UniversalGrants),
+        rq(Some("poll-1"), Op::UniversalGrants),
     ]
 }
 
-const OP_NAMES: [&str; 42] = [
+const OP_NAMES: [&str; 43] = [
     "create_new_document",
     "delegate",
     "register_node",
@@ -343,10 +347,11 @@ const OP_NAMES: [&str; 42] = [
     "in_claims",
     "out_claims",
     "edition_claims",
+    "universal_grants",
 ];
 
 /// parse ∘ marshal_request is the identity on canonical frames, for every
-/// variant; and the emitted op-name set is exactly the documented 42.
+/// variant; and the emitted op-name set is exactly the documented 43.
 #[test]
 fn every_op_round_trips_canonically() {
     let codec = JsonCodec;
@@ -479,6 +484,65 @@ fn the_owner_of_address_read_parses_strictly_and_answers_the_pair_or_neither() {
     );
     let keys: Vec<&str> = none.as_object().expect("an object").keys().map(String::as_str).collect();
     assert_eq!(keys, ["as_of", "prefix", "principal", "resp"], "the absent answer keeps its shape");
+}
+
+/// The any-principal discovery read on the wire (PUB-8.47). THE OP: no
+/// argument at all — `{"op":"universal_grants"}`, the idempotency `id`
+/// admitted as on every read — and any other field is a parse fault, as
+/// everywhere. THE ANSWER: `rows`, ALWAYS present, one object per served
+/// prefix carrying exactly `prefix` and `issuers`, in the order M10 served
+/// them; the guest's empty answer is `rows: []` under the same tag, never a
+/// rejection and never an omitted key.
+#[test]
+fn the_universal_grants_read_parses_bare_and_answers_rows_always_present() {
+    let codec = JsonCodec;
+    for frame in [
+        r#"{"op":"universal_grants"}"#,
+        r#"{"op":"universal_grants","id":"poll-7"}"#,
+        r#"{"id":"k","op":"universal_grants"}"#,
+    ] {
+        let req = parse_ok(&codec, frame.as_bytes());
+        assert!(req.op.is_read(), "{frame}: a read");
+        assert!(req.op.doc_arguments().is_empty(), "{frame}: no document argument");
+        assert!(matches!(req.op, Op::UniversalGrants), "{frame} parsed to another op");
+    }
+    for bad in [
+        r#"{"op":"universal_grants","doc":"1.0.1.0.1"}"#,
+        r#"{"op":"universal_grants","principal":900}"#,
+        r#"{"op":"universal_grants","prefix":"1.0.1"}"#,
+        r#"{"op":"universal_grants","rows":[]}"#,
+        r#"{"op":"universal_grants","addr":null}"#,
+    ] {
+        assert!(codec.parse(bad.as_bytes()).is_err(), "{bad} must not parse");
+    }
+
+    let marshal = |rows: Vec<UniversalGrant>| -> Value {
+        serde_json::from_slice(&codec.marshal(&Response::UniversalGrants { rows, as_of: Seq(9) }))
+            .expect("marshal emits JSON")
+    };
+    assert_eq!(
+        marshal(vec![
+            UniversalGrant { prefix: d2(), issuers: vec![a(&[1, 0, 1])] },
+            UniversalGrant {
+                prefix: a(&[1, 0, 2, 1]),
+                issuers: vec![a(&[1, 0, 2]), a(&[1, 0, 2, 1])],
+            },
+        ]),
+        serde_json::json!({
+            "as_of": 9,
+            "resp": "universal_grants",
+            "rows": [
+                {"issuers": ["1.0.1"], "prefix": "1.0.1.0.2"},
+                {"issuers": ["1.0.2", "1.0.2.1"], "prefix": "1.0.2.1"},
+            ],
+        }),
+        "rows in the order served, each exactly `prefix` and `issuers`"
+    );
+    // Empty: `rows` PRESENT and empty — never omitted, the tag unchanged.
+    let empty = marshal(Vec::new());
+    assert_eq!(empty, serde_json::json!({"as_of": 9, "resp": "universal_grants", "rows": []}));
+    let keys: Vec<&str> = empty.as_object().expect("an object").keys().map(String::as_str).collect();
+    assert_eq!(keys, ["as_of", "resp", "rows"], "the empty answer keeps its shape");
 }
 
 /// `delegate` REFUSES a `new_id` outside the wire's exactly-representable
@@ -834,6 +898,16 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 as_of: Seq(9),
             },
         ),
+        // The any-principal discovery read (PUB-8.47): served rows, and the
+        // guest's empty answer under the same tag.
+        (
+            "universal_grants",
+            Response::UniversalGrants {
+                rows: vec![UniversalGrant { prefix: d2(), issuers: vec![a(&[1, 0, 1])] }],
+                as_of: Seq(9),
+            },
+        ),
+        ("universal_grants_empty", Response::UniversalGrants { rows: Vec::new(), as_of: Seq(9) }),
         (
             "rejected",
             Response::Rejected(Rejection {

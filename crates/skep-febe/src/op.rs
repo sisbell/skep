@@ -338,6 +338,35 @@ pub enum Op {
     /// a row never reorders its neighbours and a client may page or diff the
     /// answer without sorting it first.
     EditionClaims { target: Address },
+    /// THE ANY-PRINCIPAL DISCOVERY READ (PUB-8.47; RES-224): the grant
+    /// fold's LIVE universal set, exposed to a bound principal as one wire
+    /// read — one row per content prefix with the issuers who granted it to
+    /// every principal, in prefix order — and EMPTY for the guest
+    /// (PUB-5.109): an answer, never a refusal, since grants reach principals
+    /// alone. No argument: the set is a board population, and the answer
+    /// does not depend on WHICH principal asks, only on guest against bound.
+    /// It names no document, so nothing is consulted and nothing withheld.
+    ///
+    /// The served row is FOLD-FILTERED, never raw (RES-231, RES-264,
+    /// RES-273, RES-298): each stored row is narrowed to the prefix its issuer
+    /// ω-owns, and THE COMPARE IS ω's (RES-298) — the STORED prefix where the
+    /// registry's `effective_owner` of it is the issuer's account; the
+    /// issuer's OWN account where the stored prefix CONTAINS that account and
+    /// is not it (an agent's share over its hirer's prefix); and NO row
+    /// otherwise (a stranger's record over a stranger's document; a hirer's
+    /// grant beneath its REGISTERED sub-account, the granter not the owner) —
+    /// so a client is handed the set the fold ANSWERS from and never the index
+    /// it keys on (RES-258). The compare is M3's own walk, ONE per stored row
+    /// off the read's snapshot: no read class and no index is added
+    /// (PUB-3.48), the fold's universal index is the slot, and the bound is
+    /// that index's own size (PUB-7.45) times that walk.
+    ///
+    /// What it serves is the client's — the arrival face, the any-principal
+    /// arm, the back-fill — and never what the daemon SERVES: the feed applies
+    /// the same live set itself at serve, so this read changes what a client
+    /// may DISPLAY and nothing about what it can read (PUB-8.42's list, not
+    /// PUB-8.43's bound). Total, like every read that takes no document.
+    UniversalGrants,
 }
 
 /// EditLink's successor, assembled by M10 from content V-specs (§4).
@@ -449,6 +478,7 @@ pub enum OpKind {
     InClaims,
     OutClaims,
     EditionClaims,
+    UniversalGrants,
     /// A frame that never parsed into an `Op` — stamped by the TRANSPORT,
     /// never by [`Op::kind`].
     Unparseable,
@@ -501,7 +531,8 @@ impl Op {
             | Op::DeleteOrphans { .. }
             | Op::InClaims { .. }
             | Op::OutClaims { .. }
-            | Op::EditionClaims { .. } => true,
+            | Op::EditionClaims { .. }
+            | Op::UniversalGrants => true,
             Op::CreateNewDocument { .. }
             | Op::Delegate { .. }
             | Op::RegisterNode { .. }
@@ -571,6 +602,7 @@ impl Op {
             Op::InClaims { .. } => OpKind::InClaims,
             Op::OutClaims { .. } => OpKind::OutClaims,
             Op::EditionClaims { .. } => OpKind::EditionClaims,
+            Op::UniversalGrants => OpKind::UniversalGrants,
         }
     }
 
@@ -586,7 +618,8 @@ impl Op {
     /// ABSENCE, PUB-6.6, never withheld), the lineage probes (`y`/`x` are
     /// probe keys, PUB-6.12), the namespace reads (the owner-of-address read
     /// among them: its `addr` is a registry probe, never a document argument,
-    /// AUTH-6.37) — names no document to
+    /// AUTH-6.37), the any-principal discovery read (no argument at all, its
+    /// rows fold-filtered at its own arm, PUB-8.47) — names no document to
     /// withhold and answers the empty list; and every write answers it too,
     /// its source consult being the write door's own list,
     /// [`Op::source_arguments`] (PUB-6.23).
@@ -635,6 +668,7 @@ impl Op {
             | Op::WindowFtt { .. }
             | Op::InClaims { .. }
             | Op::OutClaims { .. }
+            | Op::UniversalGrants
             | Op::CreateNewDocument { .. }
             | Op::Delegate { .. }
             | Op::RegisterNode { .. }
@@ -740,7 +774,8 @@ impl Op {
             | Op::InClaims { .. }
             | Op::OutClaims { .. }
             | Op::DocMetadata { .. }
-            | Op::EditionClaims { .. } => Vec::new(),
+            | Op::EditionClaims { .. }
+            | Op::UniversalGrants => Vec::new(),
         }
     }
 
@@ -816,7 +851,8 @@ impl Op {
             | Op::InClaims { .. }
             | Op::OutClaims { .. }
             | Op::DocMetadata { .. }
-            | Op::EditionClaims { .. } => WriteConsult::NotTaken,
+            | Op::EditionClaims { .. }
+            | Op::UniversalGrants => WriteConsult::NotTaken,
         }
     }
 
@@ -885,7 +921,8 @@ impl Op {
             | Op::InClaims { .. }
             | Op::OutClaims { .. }
             | Op::DocMetadata { .. }
-            | Op::EditionClaims { .. } => None,
+            | Op::EditionClaims { .. }
+            | Op::UniversalGrants => None,
         }
     }
 }
@@ -999,20 +1036,22 @@ pub(crate) mod tests {
             (Op::InClaims { y: doc(), view: View::Active }, true),
             (Op::OutClaims { x: doc(), view: View::Active }, true),
             (Op::EditionClaims { target: doc() }, true),
+            (Op::UniversalGrants, true),
         ]
     }
 
     /// §1: the read/write partition is exhaustive and two-sided
-    /// (`is_write == !is_read`), with 27 reads and 15 writes (the publish
+    /// (`is_write == !is_read`), with 28 reads and 15 writes (the publish
     /// shot joining the fourteen of the design, lane 3.2; the doc-metadata
     /// read and the edition-claim lookup joining the twenty-four reads,
-    /// lane 3.4; the owner-of-address read the twenty-seventh, AUTH-6.37).
+    /// lane 3.4; the owner-of-address read the twenty-seventh, AUTH-6.37;
+    /// the any-principal discovery read the twenty-eighth, PUB-8.47).
     #[test]
     fn partition_matches_the_design_grouping() {
         let ops = all_ops();
-        assert_eq!(ops.len(), 42);
+        assert_eq!(ops.len(), 43);
         let reads = ops.iter().filter(|(_, r)| *r).count();
-        assert_eq!(reads, 27);
+        assert_eq!(reads, 28);
         for (op, expect_read) in &ops {
             assert_eq!(op.is_read(), *expect_read);
             assert_eq!(op.is_write(), !*expect_read);
@@ -1034,7 +1073,7 @@ pub(crate) mod tests {
             assert_ne!(kind, OpKind::Unparseable);
             assert!(seen.insert(kind), "{kind:?} is produced by two variants");
         }
-        assert_eq!(seen.len(), 42);
+        assert_eq!(seen.len(), 43);
     }
 
     /// [`SuccessorSpec`] is a VALUE, and the comparison macros are what a
@@ -1096,6 +1135,9 @@ pub(crate) mod tests {
             op.doc_arguments().is_empty(),
             "a DOCUMENT address asked about is still a probe, never a doc-argument"
         );
+        // PUB-8.47: the any-principal discovery read takes no argument, so
+        // there is nothing to consult; its rows are fold-filtered at its arm.
+        assert!(Op::UniversalGrants.doc_arguments().is_empty());
         for (op, is_read) in all_ops() {
             let named = !op.doc_arguments().is_empty();
             let expects_consult = is_read
@@ -1111,6 +1153,7 @@ pub(crate) mod tests {
                         | Op::WindowFtt { .. }
                         | Op::InClaims { .. }
                         | Op::OutClaims { .. }
+                        | Op::UniversalGrants
                 );
             assert_eq!(named, expects_consult, "{:?}: the doc-argument row", op.kind());
         }

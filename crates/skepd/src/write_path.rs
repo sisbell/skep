@@ -295,6 +295,7 @@ impl WritePath {
             | Response::Claims { .. }
             | Response::DocMetadata { .. }
             | Response::EditionClaims { .. }
+            | Response::UniversalGrants { .. }
             | Response::Rejected(_) => return None,
         };
         // [`AffectedDocs::Minted`] and this arm are one decision in two
@@ -410,7 +411,7 @@ pub(crate) enum AffectedDocs {
 /// older position's time AS the head's, the one thing that method's contract
 /// says it does not do. A read classified here as a write is refused from
 /// `/op-at` as `write_at_history`, denying a legitimate historical read.
-/// The two tables agree at 15 writes of 42.
+/// The two tables agree at 15 writes of 43.
 ///
 /// SECOND OBLIGATION, and the one no assertion here can reach:
 /// [`crate::feed::classify::derived_docs`] answers this same question — which
@@ -478,6 +479,7 @@ pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
         Op::NextAccountPrefix { .. }
         | Op::PrincipalPrefix { .. }
         | Op::EffectiveOwner { .. }
+        | Op::UniversalGrants
         | Op::ReadLink { .. }
         | Op::FollowLink { .. }
         | Op::RetrieveV { .. }

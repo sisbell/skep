@@ -154,7 +154,7 @@ pub use operation::{OperationSurface, ReadPredicate};
 // transcribing the row, so the two cannot come to advise the same code
 // differently.
 pub use reject::{disposition_of, Disposition, FaultSite, RejectCode, Rejection};
-pub use response::{BirthVersion, EditionClaim, Response};
+pub use response::{BirthVersion, EditionClaim, Response, UniversalGrant};
 pub use session::SessionId;
 
 // Every upstream type or constructor named on the request/response path, plus
@@ -249,12 +249,14 @@ pub trait ReadableWorld {
 }
 
 /// The publication VOCABULARY as a capability of the world M10 reads (PUB
-/// round 2, lane 3.4 §2): a class whose membership is decided by a pinned
+/// round 2, lane 3.4 §2): classes whose membership is decided by a pinned
 /// type address, which is the engine's knowledge and not this module's. Its
 /// own seam, beside [`ReadableWorld`] rather than inside it, because the two
 /// answer unrelated questions — one is a predicate consulted by the whole
-/// operation surface, this is a class lookup consulted by one operation —
-/// and each should be nameable by a consumer that wants only it.
+/// operation surface, these are class lookups each consulted by one
+/// operation — and each should be nameable by a consumer that wants only it.
+/// Two lookups: the edition-claim class over a target, and the grant fold's
+/// live ANY-PRINCIPAL set (PUB-8.47), the second read's one input.
 pub trait PublicationWorld {
     /// The audit-view edition-claim lookup (PUB-8.46; PUB round 2, lane 3.4
     /// §2): every link of the edition-claim class whose `to` slot OVERLAPS
@@ -287,6 +289,22 @@ pub trait PublicationWorld {
     /// reads for it (`match_links`, `succs`, `is_active`) and names no
     /// type-vocabulary semantics of its own beyond the pinned address.
     fn edition_claims(&self, target: &Address) -> Vec<EditionClaim>;
+
+    /// THE LIVE ANY-PRINCIPAL SET (PUB-8.47, PUB-7.22): the grant fold's
+    /// universal index as rows — every content prefix an admitted, unrevoked
+    /// ANY-PRINCIPAL grant names, with the issuers who granted it — in
+    /// prefix order, each issuer list in address order. The engine's
+    /// `World::universal_grants`, cloned out of its borrow.
+    ///
+    /// RAW, by design, as [`PublicationWorld::edition_claims`] is unfiltered:
+    /// the world answers the INDEX — the STORED prefix beside each issuer —
+    /// and the front door serves the ANSWER SET, narrowing every row to the
+    /// prefix the issuer ω-owns by ω over the row's prefix (RES-231, RES-264,
+    /// RES-273), off the same snapshot. No index is added and no read class:
+    /// this is the fold's own slot, enumerated once per request, and its
+    /// bound is that index's own size (PUB-7.45). Principal-blind — the
+    /// guest's empty answer is the front door's.
+    fn universal_grants(&self) -> Vec<UniversalGrant>;
 }
 
 /// The world the front door dispatches over: M2's fold contract plus every

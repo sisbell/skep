@@ -1358,6 +1358,50 @@ pub fn owner_pair(v: &Value) -> Option<(String, u64)> {
     }
 }
 
+/// The any-principal discovery read (PUB-8.47): no argument.
+pub fn universal_grants_frame() -> String {
+    r#"{"op":"universal_grants"}"#.to_string()
+}
+
+/// The rows out of one `universal_grants` answer — `/op`'s or `/op-at`'s —
+/// as `(prefix, issuers)` in the order served. `rows` is ALWAYS present (the
+/// guest's answer is the empty array under the same tag) and every row is
+/// exactly `prefix` and `issuers`; a shape violation panics here, so every
+/// cell read through this helper pins the shape.
+pub fn grant_rows(v: &Value) -> Vec<(String, Vec<String>)> {
+    let v = expect_resp(v, "universal_grants");
+    let rows = v
+        .get("rows")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("`rows` is ALWAYS present, an array: {v}"));
+    rows.iter()
+        .map(|row| {
+            assert_eq!(
+                row.as_object().map(|o| o.len()),
+                Some(2),
+                "a row is exactly `prefix` and `issuers`: {v}"
+            );
+            let prefix = row["prefix"]
+                .as_str()
+                .unwrap_or_else(|| panic!("a row carries `prefix`, an address: {v}"))
+                .to_string();
+            let issuers = row["issuers"]
+                .as_array()
+                .unwrap_or_else(|| panic!("a row carries `issuers`, an array: {v}"))
+                .iter()
+                .map(|i| i.as_str().unwrap_or_else(|| panic!("an issuer is an address: {v}")).to_string())
+                .collect();
+            (prefix, issuers)
+        })
+        .collect()
+}
+
+/// The any-principal discovery read as `token` (`None` = the guest), off the
+/// head: the served rows, `(prefix, issuers)` each.
+pub fn universal_grants(port: u16, token: Option<&str>) -> Vec<(String, Vec<String>)> {
+    grant_rows(&op(port, token, &universal_grants_frame()))
+}
+
 /// The link value at `a` as `token`: `null` where absent.
 pub fn read_link(port: u16, token: Option<&str>, a: &str) -> Value {
     let v = op(port, token, &read_link_frame(a));

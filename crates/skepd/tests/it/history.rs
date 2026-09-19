@@ -311,14 +311,16 @@ fn historical_reads_answer_every_earlier_state() {
 
 /// `stamp_as_of`'s stamped arm, restated: moving a shape between its two
 /// arms is a visible decision here, the discipline this suite already
-/// applies to the codec's wire caps.
-const STAMPED_SHAPES: usize = 17;
+/// applies to the codec's wire caps. Nineteen: the seventeen of lane 3.4,
+/// the owner-of-address read's `effective_owner` (AUTH-6.37) and the
+/// any-principal discovery read's `universal_grants` (PUB-8.47).
+const STAMPED_SHAPES: usize = 19;
 
 /// wire.md §The response envelope: `as_of` reports the position the answer
 /// is OF. On the history surface `stamp_as_of` is what makes that true —
 /// the throwaway kernel is rooted at the historical world with its own seq
 /// at 0, so M10's live stamping must be overwritten — and it is a
-/// hand-written seventeen-shape table whose doc says "every read shape is
+/// hand-written nineteen-shape table whose doc says "every read shape is
 /// listed".
 ///
 /// Deleting a variant from it is a compile error. MOVING one to the
@@ -326,7 +328,7 @@ const STAMPED_SHAPES: usize = 17;
 /// `Response::Count { .. }` is a legal alternative there. The shape then
 /// answers `as_of: 0` at every position, and a client scrubbing history or
 /// correlating a historical read with `/changes` reads the answer as one
-/// of genesis. Three shapes were watched; the other fourteen would move
+/// of genesis. Three shapes were watched; the other sixteen would move
 /// with nothing red.
 #[test]
 fn every_read_shape_stamps_the_position_it_is_of() {
@@ -378,6 +380,13 @@ fn every_read_shape_stamps_the_position_it_is_of() {
         // The one row whose argument is a DOCUMENT rather than the link:
         // M10 refuses an unregistered target `doc_not_registered`.
         ("edition_claims", format!(r#"{{"op":"edition_claims","target":"{d2}"}}"#)),
+        // The owner-of-address read (AUTH-6.37): a registry probe, no
+        // document argument, answered for any address.
+        ("effective_owner", format!(r#"{{"op":"effective_owner","addr":"{d1}"}}"#)),
+        // The any-principal discovery read (PUB-8.47): no argument; the
+        // owner is bound, so the SHAPE answers — its rows empty on this
+        // board, and `as_of` still the position asked.
+        ("universal_grants", r#"{"op":"universal_grants"}"#.to_string()),
     ];
 
     let mut seen: BTreeSet<&str> = BTreeSet::new();

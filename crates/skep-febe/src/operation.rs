@@ -5,6 +5,7 @@
 //! for the ephemeral binding (§6), [`crate::idem::IdemCache`] for the
 //! committed-write retry memo (§7).
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 // `FebeWorld` names the accessor bound set, and its supertraits carry the
@@ -20,14 +21,16 @@ use skep_discovery::{
 };
 use skep_kernel::{Seq, TxnError, WorldState};
 use skep_links::{Invalid, LinkRec};
-use skep_namespace::{first_version_address, M3Rec, M3State, PrincipalId, BOOTSTRAP_PRINCIPAL};
+use skep_namespace::{
+    first_version_address, prefix_contains, M3Rec, M3State, PrincipalId, BOOTSTRAP_PRINCIPAL,
+};
 use skep_retrieval::Query;
 
 use crate::idem::IdemCache;
 use crate::lower::{lower_read, lower_txn, Lower};
 use crate::op::{Op, OpKind, Request, WriteConsult};
 use crate::reject::{reject, rejection, FaultSite, RejectCode, Rejection};
-use crate::response::{BirthVersion, Response};
+use crate::response::{BirthVersion, Response, UniversalGrant};
 use crate::session::{SessionId, Sessions};
 use crate::successor::successor_link;
 use crate::{FebeWorld, Stores};
@@ -429,6 +432,65 @@ fn birth_version(m3: &M3State, m5: &M5State, trunk: &Address) -> Option<BirthVer
         .expect("`trunk` is document-tier, the one tier that anchors a version chain");
     let extent = m5.birth_extent(&addr);
     Some(BirthVersion { addr, extent })
+}
+
+/// THE FOLD-FILTER of the any-principal discovery read (PUB-8.47; RES-231,
+/// RES-264, RES-273, RES-298): the STORED rows of the live universal index,
+/// narrowed to what the fold answers from. Coverage is containment ∩ the
+/// issuer's own documents (PUB-5.9) and the fold applies the ownership half
+/// at the lookup (`grant_exists`'s issuer compare, PUB-7.3), never at
+/// indexing — so the index is a SUPERSET of entitlement, and a client handed
+/// it raw would render a stranger's record over a stranger's document as a
+/// board-wide face (PUB-5.21's MUST NEVER). What is served instead is the
+/// ruled compare, and THE COMPARE IS ω's (RES-298): `m3`'s
+/// [`effective_owner_prefix`](M3State::effective_owner_prefix) of the stored
+/// prefix — longest-match, the walk the fold's own owner memo is taken by at
+/// the mint — against each issuer of the row, three arms:
+///
+/// * where ω of the stored prefix IS the issuer's account, the served prefix
+///   is the STORED prefix, unchanged — the issuer's account, a document of
+///   it, or a sub-prefix of it no delegation has seated (RES-298's named
+///   residue: ω answers the issuer there until one does, and the row drops at
+///   the next read after);
+/// * where the stored prefix CONTAINS the issuer's account and is not it —
+///   WIDER, an agent's share over its hirer's prefix (RES-264) — the served
+///   prefix is the issuer's OWN account, which is every document the issuer
+///   owns under it and exactly what `grant_exists` answers `true` for;
+/// * otherwise the pair contributes NO row: a stranger's record over a
+///   stranger's document (RES-231's cell), and a hirer's grant beneath its
+///   REGISTERED sub-account — inside the hirer's account by address, the
+///   sub-account's by ω, so the granter is not the owner and the fold honors
+///   the grant for no document.
+///
+/// Rows GROUP by the served prefix — two stored rows can narrow to one — and
+/// come back in prefix order, the issuers of a row in address order without
+/// a repeat, so the ruled shape stands: one row per content prefix with the
+/// issuers who granted it. ω being a function, and an issuer a seat ω
+/// answers itself at, every served row carries exactly ONE issuer: the
+/// plural is the index's. No read class and no index (PUB-3.48): the compare
+/// is M3's own walk, ONE per stored row off the snapshot the arm holds, so
+/// the cost is the index's own size (PUB-7.45) times that walk. The seat's
+/// declined widenings are declined here too — never the stored prefix, never
+/// an "or contains" test.
+fn covered_universal_grants(m3: &M3State, stored: Vec<UniversalGrant>) -> Vec<UniversalGrant> {
+    let mut served: BTreeMap<Address, BTreeSet<Address>> = BTreeMap::new();
+    for UniversalGrant { prefix, issuers } in stored {
+        let owner = m3.effective_owner_prefix(&prefix);
+        for issuer in issuers {
+            let covered = if owner == Some(&issuer) {
+                prefix.clone() // ω answers the issuer for the stored prefix: unchanged
+            } else if prefix_contains(&prefix, &issuer) && prefix != issuer {
+                issuer.clone() // wider than the issuer's account: the account
+            } else {
+                continue; // ω answers another seat, or none: no row
+            };
+            served.entry(covered).or_default().insert(issuer);
+        }
+    }
+    served
+        .into_iter()
+        .map(|(prefix, issuers)| UniversalGrant { prefix, issuers: issuers.into_iter().collect() })
+        .collect()
 }
 
 impl<W> OperationSurface<W>
@@ -1057,7 +1119,8 @@ where
             | Op::InClaims { .. }
             | Op::OutClaims { .. }
             | Op::DocMetadata { .. }
-            | Op::EditionClaims { .. } => Err(rejection(kind, RejectCode::Malformed)),
+            | Op::EditionClaims { .. }
+            | Op::UniversalGrants => Err(rejection(kind, RejectCode::Malformed)),
         }
     }
 
@@ -1320,6 +1383,27 @@ where
                     .collect();
                 Ok(Response::EditionClaims { claims, as_of })
             }
+            // THE ANY-PRINCIPAL DISCOVERY READ (PUB-8.47): the world hands
+            // over the fold's live universal INDEX, enumerated ONCE off this
+            // snapshot, and this door serves the ANSWER SET — each row
+            // narrowed to the prefix its issuer ω-owns by the compare
+            // `covered_universal_grants` states (RES-231/264/273/298), ω
+            // asked of this same snapshot's registry, grouped by the served
+            // prefix in prefix order. The GUEST is answered EMPTY
+            // (PUB-5.109) — an answer, never a refusal, and no consult, there
+            // being no document argument — so the index is not even walked
+            // for a requester no grant reaches; every bound principal, keyed
+            // or bare, is handed the same rows, the set being a board
+            // population and not the requester's. The daemon's feed applies
+            // the same live set at serve, so nothing here decides what is
+            // served — only what a client may display.
+            Op::UniversalGrants => {
+                let rows = match principal {
+                    None => Vec::new(),
+                    Some(_) => covered_universal_grants(world.m3(), world.universal_grants()),
+                };
+                Ok(Response::UniversalGrants { rows, as_of })
+            }
             // Complementary half — see dispatch_write's twin arm (§1).
             Op::CreateNewDocument { .. }
             | Op::Delegate { .. }
@@ -1451,6 +1535,12 @@ mod tests {
         // type address lives there); this world carries none, so the lookup
         // answers the empty class and the arm's shape is what is exercised.
         fn edition_claims(&self, _target: &Address) -> Vec<crate::EditionClaim> {
+            Vec::new()
+        }
+        // The grant fold is the engine's too; this world carries none, so the
+        // live universal set is empty and the arm's shape is what is
+        // exercised (the narrowing has its own vectors in `tests/it`).
+        fn universal_grants(&self) -> Vec<UniversalGrant> {
             Vec::new()
         }
     }

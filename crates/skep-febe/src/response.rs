@@ -62,6 +62,39 @@ pub struct BirthVersion {
     pub extent: Nat,
 }
 
+/// One row of the ANY-PRINCIPAL DISCOVERY READ (PUB-8.47; RES-224): a
+/// content prefix and the issuers whose live universal grants name it, each
+/// an address — the two fields the fold's own universal index already carries
+/// (`skep-engine`'s `UniversalGrant`), OWNED rather than borrowed, because
+/// this crate names no engine world and an answer outlives the snapshot it
+/// was read from.
+///
+/// The one row shape on BOTH sides of M10's seam, and it means two things
+/// there. [`PublicationWorld::universal_grants`] hands over the STORED rows —
+/// `prefix` as the index keys it, the issuers as the index holds them — which
+/// is the index and not the answer set (RES-258). The read's arm serves the
+/// COVERED rows (RES-231, RES-264, RES-273), and THE COMPARE IS ω's
+/// (RES-298): `prefix` is the STORED prefix where the registry's
+/// `effective_owner` of it is the issuer's account, the issuer's OWN account
+/// where the stored prefix CONTAINS that account and is not it, and the pair
+/// contributes NO row otherwise — a disjoint pair, and a hirer's grant beneath
+/// its REGISTERED sub-account — so every issuer listed ω-owns the prefix by
+/// construction, and the set a client is handed is the set `grant_exists`
+/// answers from. Served rows group by the served prefix and come in prefix
+/// order, each issuer list in address order without a repeat; and a served
+/// row carries exactly ONE issuer (RES-298) — ω being a function, and an
+/// issuer a seat ω answers itself at — so the plural is the index's: only a
+/// STORED row lists more than one.
+///
+/// [`PublicationWorld::universal_grants`]: crate::PublicationWorld::universal_grants
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct UniversalGrant {
+    /// The content prefix — a document or an account address.
+    pub prefix: Address,
+    /// The issuing accounts, in address order.
+    pub issuers: Vec<Address>,
+}
+
 /// The marshaled response. Every variant but [`Response::Rejected`] carries
 /// one coordinate — `at` on the three acknowledging shapes, `as_of` on every
 /// read answer — and what a client does with the pair is [the two
@@ -90,7 +123,7 @@ pub struct BirthVersion {
 /// leaves that lack it: M6's [`DeliveryItem`], [`Deletions`] and [`CorrPair`],
 /// and M7's [`Invalid`] and [`Link`]. M1's `Address` is NOT among them — it
 /// carries a hand-written `Hash`, identity being the tumbler — which is why
-/// [`EditionClaim`] and [`BirthVersion`] have one.
+/// [`EditionClaim`], [`BirthVersion`] and [`UniversalGrant`] have one.
 ///
 /// [`Deletions`]: skep_retrieval::Deletions
 /// [`CorrPair`]: skep_retrieval::CorrPair
@@ -176,6 +209,15 @@ pub enum Response {
     /// order the class is answered in, preserved through the home filter, so
     /// dropping a row never reorders its neighbours.
     EditionClaims { claims: Vec<EditionClaim>, as_of: Seq },
+    /// universal_grants (PUB-8.47): the fold's live ANY-PRINCIPAL set as a
+    /// client may DISPLAY it — one row per COVERED content prefix with the
+    /// issuers who granted it, in prefix order, each row fold-filtered
+    /// ([`UniversalGrant`]); EMPTY where the requester is the guest
+    /// (PUB-5.109), an answer and never a refusal, and the same rows for
+    /// every bound principal. Nothing here decides what is SERVED — the
+    /// daemon applies the same live set itself at serve — so the answer
+    /// changes what a client shows and never what it can read.
+    UniversalGrants { rows: Vec<UniversalGrant>, as_of: Seq },
     /// The never-silent surface: every failure of a parsed `Op` (Invariants).
     Rejected(Rejection),
 }
@@ -251,6 +293,7 @@ impl Response {
             | Response::Claims { .. }
             | Response::DocMetadata { .. }
             | Response::EditionClaims { .. }
+            | Response::UniversalGrants { .. }
             | Response::Rejected(_) => None,
         }
     }

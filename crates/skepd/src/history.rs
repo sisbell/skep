@@ -243,7 +243,7 @@ impl Drop for Permit<'_> {
 /// write that did not happen, carrying a position that names nothing
 /// ([`stamp_as_of`] leaves acks alone). The route's own guard restates M10's
 /// read/write partition, which `crate::write_path::write_meta` records as
-/// agreeing at 15 writes of 42 and warns can drift — so the assert below is
+/// agreeing at 15 writes of 43 and warns can drift — so the assert below is
 /// what makes this premise loud for the reader auditing exactly that drift.
 ///
 /// THE TWO-WORLD SHAPE (PUB-6.48, PUB-6.61): the CONTENT answered is the
@@ -318,7 +318,8 @@ fn stamp_as_of(resp: &mut Response, at: Seq) {
         | Response::Orphans { as_of, .. }
         | Response::Claims { as_of, .. }
         | Response::DocMetadata { as_of, .. }
-        | Response::EditionClaims { as_of, .. } => *as_of = at,
+        | Response::EditionClaims { as_of, .. }
+        | Response::UniversalGrants { as_of, .. } => *as_of = at,
         Response::Ack { .. }
         | Response::AckAddr { .. }
         | Response::AckEdit { .. }

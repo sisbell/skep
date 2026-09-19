@@ -57,7 +57,8 @@ use skep_content::Val;
 use skep_discovery::{FourSet, SlotSpec, SupClaim, Window};
 use skep_febe::{
     disposition_of, Codec, Deposit, Disposition, EditionClaim, FaultSite, Op, OpKind, ParseError,
-    RejectCode, Rejection, ReqId, Request, Response, SlotArg, SuccessorSpec, MAX_REQ_ID_BYTES,
+    RejectCode, Rejection, ReqId, Request, Response, SlotArg, SuccessorSpec, UniversalGrant,
+    MAX_REQ_ID_BYTES,
 };
 use skep_identity::KeySet;
 use skep_kernel::Seq;
@@ -598,6 +599,9 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
         "in_claims" => Op::InClaims { y: fields.addr("y")?, view: fields.view("view")? },
         "out_claims" => Op::OutClaims { x: fields.addr("x")?, view: fields.view("view")? },
         "edition_claims" => Op::EditionClaims { target: fields.addr("target")? },
+        // No argument (PUB-8.47): `finish` refuses any field beside `op` and
+        // the idempotency `id`, as everywhere.
+        "universal_grants" => Op::UniversalGrants,
         other => return Err(PErr(format!("unknown op '{}'", bounded(other)))),
     })
 }
@@ -1419,6 +1423,7 @@ fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         Op::EditionClaims { target } => {
             (op_name(OpKind::EditionClaims), vec![("target", j_addr(target))])
         }
+        Op::UniversalGrants => (op_name(OpKind::UniversalGrants), Vec::new()),
     }
 }
 
@@ -1528,6 +1533,13 @@ fn j_response(r: &Response) -> Value {
         Response::EditionClaims { claims, as_of } => (
             "edition_claims",
             vec![("claims", j_edition_claims(claims)), ("as_of", j_seq(*as_of))],
+        ),
+        // The any-principal discovery read (PUB-8.47): one row per COVERED
+        // content prefix with the issuers who granted it, in prefix order;
+        // `rows` is always present and EMPTY for the guest — an answer.
+        Response::UniversalGrants { rows, as_of } => (
+            "universal_grants",
+            vec![("rows", j_universal_grants(rows)), ("as_of", j_seq(*as_of))],
         ),
         Response::Rejected(rej) => return j_rejection(rej),
     };
@@ -1901,6 +1913,19 @@ fn j_edition_claims(cs: &[EditionClaim]) -> Value {
     Value::Array(cs.iter().map(j_edition_claim).collect())
 }
 
+/// One row of the any-principal discovery read (wire.md §universal_grants):
+/// the COVERED content prefix — the stored prefix where the registry's
+/// `effective_owner` answers the issuer for it, or the issuer's own account
+/// where the stored prefix is wider (PUB-8.47; RES-298), so every issuer
+/// listed owns it — and the issuing accounts, in address order.
+fn j_universal_grant(g: &UniversalGrant) -> Value {
+    obj(vec![("prefix", j_addr(&g.prefix)), ("issuers", j_addrs(&g.issuers))])
+}
+
+fn j_universal_grants(gs: &[UniversalGrant]) -> Value {
+    Value::Array(gs.iter().map(j_universal_grant).collect())
+}
+
 /// One `retrieve_endsets` pair: the 1-based slot and its endset.
 fn j_endset_pair(slot: usize, e: &Endset) -> Value {
     obj(vec![("slot", j_usize(slot)), ("endset", j_endset(e))])
@@ -1992,6 +2017,7 @@ pub(crate) fn op_name(k: OpKind) -> &'static str {
         OpKind::InClaims => "in_claims",
         OpKind::OutClaims => "out_claims",
         OpKind::EditionClaims => "edition_claims",
+        OpKind::UniversalGrants => "universal_grants",
         OpKind::Unparseable => "unparseable",
     }
 }

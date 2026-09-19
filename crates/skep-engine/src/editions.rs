@@ -162,6 +162,23 @@ impl skep_febe::PublicationWorld for World {
     fn edition_claims(&self, target: &Address) -> Vec<EditionClaim> {
         World::edition_claims(self, target)
     }
+
+    /// The live ANY-PRINCIPAL set as M10's capability (PUB-8.47, RES-224):
+    /// [`World::universal_grants`]'s rows — the STORED prefix and its issuers,
+    /// the inherent read being the real one — cloned out of their borrow, in
+    /// the order that read hands them back. RAW, as the seam above is: the
+    /// fold-filter that narrows a served row to the prefix its issuer ω-owns
+    /// (RES-231/264/273) is M10's own, at the read's arm, and nothing about a
+    /// row's coverage is decided on this side of the seam.
+    fn universal_grants(&self) -> Vec<skep_febe::UniversalGrant> {
+        World::universal_grants(self)
+            .into_iter()
+            .map(|row| skep_febe::UniversalGrant {
+                prefix: row.content_prefix.clone(),
+                issuers: row.issuers.into_iter().cloned().collect(),
+            })
+            .collect()
+    }
 }
 
 /// Class MEMBERSHIP by prefix: the type slot denotes addresses (every span

@@ -17,7 +17,7 @@ use skep_content::Val;
 use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_febe::{
     BirthVersion, Codec, Disposition, EditionClaim, FaultSite, OpKind, ParseError, RejectCode,
-    Rejection, Response,
+    Rejection, Response, UniversalGrant,
 };
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link};
@@ -65,7 +65,7 @@ fn blocks() -> Vec<(String, String, String)> {
     out
 }
 
-const OP_NAMES: [&str; 42] = [
+const OP_NAMES: [&str; 43] = [
     "create_new_document",
     "delegate",
     "register_node",
@@ -108,10 +108,11 @@ const OP_NAMES: [&str; 42] = [
     "in_claims",
     "out_claims",
     "edition_claims",
+    "universal_grants",
 ];
 
 /// Every request example parses, is canonical (re-marshal equals the doc
-/// value), is tagged with the marker's own op name — and all 42 ops appear.
+/// value), is tagged with the marker's own op name — and all 43 ops appear.
 #[test]
 fn doc_request_examples_are_canonical_and_complete() {
     let codec = JsonCodec;
@@ -304,6 +305,14 @@ fn fixture(name: &str) -> Response {
             }],
             as_of: Seq(9),
         },
+        // The any-principal discovery read (PUB-8.47): one served row — the
+        // claimant's draft, granted to every principal by the claimant — and
+        // the guest's empty answer under the same tag.
+        "universal_grants" => Response::UniversalGrants {
+            rows: vec![UniversalGrant { prefix: a(&[1, 0, 1, 0, 2]), issuers: vec![a(&[1, 0, 1])] }],
+            as_of: Seq(9),
+        },
+        "universal_grants_empty" => Response::UniversalGrants { rows: Vec::new(), as_of: Seq(9) },
         "rejected" => Response::Rejected(Rejection {
             op: OpKind::Insert,
             code: RejectCode::Unauthenticated,
@@ -329,9 +338,9 @@ fn fixture(name: &str) -> Response {
     }
 }
 
-/// The 22 response shapes every client must decode; each must appear as a
+/// The 23 response shapes every client must decode; each must appear as a
 /// doc marker (variant markers like `follow_invalid` are extra coverage).
-const REQUIRED_SHAPES: [&str; 22] = [
+const REQUIRED_SHAPES: [&str; 23] = [
     "ack",
     "ack_addr",
     "ack_edit",
@@ -353,22 +362,34 @@ const REQUIRED_SHAPES: [&str; 22] = [
     "claims",
     "doc_metadata",
     "edition_claims",
+    "universal_grants",
     "rejected",
 ];
 
 /// The prose between `from` and the first of `until` after it, with every
 /// whitespace run collapsed — so a re-wrap of a paragraph moves no pin.
-fn prose(from: &str, until: &[&str]) -> String {
+/// Searched from the first occurrence of `after` (`""` is the top), so a
+/// caller can skip past a section whose entries share the form it is after.
+fn prose_after(after: &str, from: &str, until: &[&str]) -> String {
     let text = wire_md();
+    let base = text.find(after).unwrap_or_else(|| panic!("wire.md no longer carries {after:?}"));
+    let text = &text[base..];
     let start = text.find(from).unwrap_or_else(|| panic!("wire.md no longer carries {from:?}"));
     let rest = &text[start + from.len()..];
     let end = until.iter().filter_map(|u| rest.find(u)).min().unwrap_or(rest.len());
     rest[..end].split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn prose(from: &str, until: &[&str]) -> String {
+    prose_after("", from, until)
+}
+
 /// One op's row of §Operations: from its bold name to the next row or heading.
+/// Searched from §Operations, since a shape's entry under §The response
+/// envelope opens with the same bold name where the shape and the op share
+/// one (`effective_owner`, `universal_grants`).
 fn op_row(name: &str) -> String {
-    prose(&format!("\n**`{name}`** —"), &["\n**`", "\n### ", "\n## "])
+    prose_after("\n## Operations", &format!("\n**`{name}`** —"), &["\n**`", "\n### ", "\n## "])
 }
 
 /// The `new_id` bound is ONE number in two places — the `delegate` row and
@@ -424,6 +445,37 @@ fn doc_owner_of_address_row_states_the_allocation_test() {
         "served on `/op-at` too",
     ] {
         assert!(row.contains(fact), "the effective_owner row says {fact:?}: {row}");
+    }
+}
+
+/// The any-principal discovery row (PUB-8.47) carries the facts a client
+/// builds on, each in the row itself: no argument, prefix order, empty for
+/// a guest, the served prefix the COVERED one and never the stored prefix,
+/// and `/op-at`. And the envelope lists the shape with its tested examples,
+/// as it lists `effective_owner`'s — the list whole, no shape documented
+/// under its op alone.
+#[test]
+fn doc_universal_grants_row_states_the_covered_prefix_and_the_guests_empty_answer() {
+    let row = op_row("universal_grants");
+    for fact in [
+        "takes no argument",
+        "in prefix order",
+        "empty for a guest",
+        "the served prefix is the covered one",
+        "never the stored prefix",
+        "served on `/op-at`",
+    ] {
+        assert!(row.contains(fact), "the universal_grants row says {fact:?}: {row}");
+    }
+    let envelope = prose("\n## The response envelope", &["\n## Rejections"]);
+    for shape in REQUIRED_SHAPES {
+        if shape == "rejected" {
+            continue; // its own section
+        }
+        assert!(
+            envelope.contains(&format!("**`{shape}`** —")),
+            "§The response envelope lists `{shape}`"
+        );
     }
 }
 

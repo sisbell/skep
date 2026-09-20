@@ -168,7 +168,7 @@ impl skep_febe::PublicationWorld for World {
     /// the inherent read being the real one — cloned out of their borrow, in
     /// the order that read hands them back. RAW, as the seam above is: the
     /// fold-filter that narrows a served row to the prefix its issuer ω-owns
-    /// (RES-231/264/273) is M10's own, at the read's arm, and nothing about a
+    /// (RES-231/264/273/298) is M10's own, at the read's arm, and nothing about a
     /// row's coverage is decided on this side of the seam.
     fn universal_grants(&self) -> Vec<skep_febe::UniversalGrant> {
         World::universal_grants(self)

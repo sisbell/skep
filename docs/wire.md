@@ -85,7 +85,8 @@ is deliberately no `mode` field; clients derive it from the pair):
   refused; only signed sessions write.
 
 The signed session is cryptographic identity — a challenge signed by a
-key enrolled for the principal's account (§Sessions). The bare session is
+key enrolled for the account the session authenticates against
+(§Sessions). The bare session is
 v1's **local trust**, retained as a mode rather than the whole model; the
 daemon still binds **127.0.0.1 only**.
 
@@ -154,8 +155,17 @@ How a masked read answers:
 * **A delivery masks per run**: a published arrangement that windows a
   draft you may not read delivers the `withheld` item at that run's own
   position (§Value encodings); extents are never shrunk.
-* The namespace reads (`next_account_prefix`, `principal_prefix`) are
-  exempt — registry data, served to every class. The lineage reads
+* The namespace reads (`next_account_prefix`, `principal_prefix`,
+  `effective_owner`) are exempt — registry data, served to every class
+  (AUTH-6.37) — and so is `key_set` (§Identity reads), which reads
+  credential records alone, born published by law: PUB-6.50's rule, a
+  surface exempt iff its answer is invariant across classes, and these
+  four answer a guest and a bound principal byte-identically.
+  `universal_grants` (§Grants) is NOT exempt and is no class scan either:
+  it names no document and walks no link store, and it is gated by class
+  at the door — every bound principal is answered the same rows, the
+  guest `rows: []`, an answer and never a rejection (PUB-8.47,
+  PUB-5.109). The lineage reads
   (`in_claims`, `out_claims`) are NOT: each takes the result-set filter
   at the claim's HOME (PUB-6.13) — a claim homed in a document you may
   not read is absent from the answer; `y`/`x` is a filter value, never
@@ -523,9 +533,13 @@ atom declared under its class's type is the deposit-class write it
 admits, §Arrangement) → the genesis enroll deposit, its `ty` that same
 type → the claim deposit.
 The genesis deposit seeds the account's key set (the enrolled-set cap
-does not bind it, and the anchor gate is exempt — the seeding hand
-records the initial set, flags included); the claim deposit flips the
-board claimed — first claim wins, permanently. Only a top-level
+does not bind it, and the anchor gate is exempt of THIS genesis — the
+seeding hand records the initial set, flags included: a top-level
+account's own genesis, with no keyed account above it; a genesis that
+hands a SUB-account away is anchor-grade wherever the set that opens the
+account holds an anchor, the hire, the spawn and a forked seat's
+admission apart — AUTH-3.21, §Credential refusals); the claim deposit
+flips the board claimed — first claim wins, permanently. Only a top-level
 (bootstrap-delegated) account with a non-empty key set can claim. The
 ceremony's convention signs the claim with a just-enrolled key, proving
 custody before the flip; the unclaimed window itself admits the deposit
@@ -610,7 +624,7 @@ Non-200 statuses are transport-level failures with a body of the shape
 
 | Status | `error`                     | When                                    |
 |--------|-----------------------------|-----------------------------------------|
-| 400    | `malformed_session_request` | `POST /session` body is neither session form (§Sessions); the nonce survives |
+| 400    | `malformed_session_request` | `POST /session` body is none of the three session forms (§Sessions); the nonce survives |
 | 400    | `malformed_challenge`       | the `/challenge` query isn't `principal=<non-negative integer>` |
 | 401    | `session_rejected`          | the `POST /session` handshake refused — one code for every failure of the credential, no detail (§Sessions) |
 | 403    | `prefix_blocked`            | the `POST /session` signed body names a principal whose account sits at or under a prefix the operator has blocked; carries `record` — the takedown record's version address — and no `detail`; the nonce is spent; permanent until a lift (§Sessions) |
@@ -757,6 +771,16 @@ position-value sequences never render alike.
   positions); a masked run is the reader's, not the named document's —
   a document the reader may not read at all is a `withheld` REJECTION
   (§Rejections), never a delivery.
+
+* **An item kind you do not know** is no fault of the delivery: a client
+  MUST NOT fail the read on it. Keep the item at its own place in the
+  sequence — never dropped, never coalesced into a neighbour, the items
+  after it still read — and show it as not rendered. A later delta adds
+  position-preserving item kinds beside `withheld` (PUB-8.38), and such a
+  kind carries its `width`, as `withheld` does, so a client's position
+  count runs past it. The daemon stays strict about what it is SENT
+  (§The request envelope); this is what a client does with what it is
+  HANDED.
 
 Count positions, not items: `{"content": "hello"}` spans five positions,
 `{"atom": "hello"}` spans one.
@@ -1539,7 +1563,11 @@ type (§The claim ceremony and credentials) — run a stricter order:
   claimant, that seat's own first sub-account apart — an ADMISSION's:
   each device-grade, committing from any signed session. ANYWHERE ELSE
   beneath a party's keys — that account's first sub-account ITSELF, the
-  agents' home, included — it is that party's HANDOFF, and wherever the
+  agents' home, included, wherever the fold honors the genesis at all: a
+  bootstrap-delegated, top-level account's first sub-account takes none,
+  the fold's own verdict above answering `not_genesis_registry` from
+  every hand, an anchor session included, and standing ahead of this
+  slot — it is that party's HANDOFF, and wherever the
   set that opens the account holds an anchor it requires a session an
   ANCHOR of THAT set established, a bare session never satisfying it;
   where that set holds no anchor the handoff stays device-grade. A
@@ -1726,9 +1754,12 @@ a document argument (unreadable → `withheld`; unregistered →
 ### Identity reads
 
 **`key_set`** — the credential table of `account`: who can sign for it,
-now and historically. Principal-free like every read — NO session is
-needed; the auth work deliberately preserves the no-session read — and
-served on `/op-at` too, as of any committed position (the same
+now and historically. Principal-free — exempt from the read predicate
+(§The read predicate; PUB-6.50: it reads credential records alone, born
+published by law), so NO session is needed and a guest and a bound
+principal are answered byte-identically; the auth work deliberately
+preserves the no-session read — and served on `/op-at` too, as of any
+committed position (the same
 dispatcher; a historical world's identity table is rebuilt from the
 deposits committed by then, under the reconstruction budget like every
 historical answer). A non-account address rejects with the existing
@@ -2560,6 +2591,11 @@ Each entry:
   not treat absence as a protocol violation.
 * `time` — the commit's wall-clock unix milliseconds, or `null` (below).
 
+A client MUST ignore an entry member it does not know, and a member of
+the page object likewise: an entry gains members by later deltas (the
+reserved `new_prefix`/`new_id`, below), and a consumer written to today's
+five must not treat a sixth as a protocol violation.
+
 Only writes appear: reads are not in the journal and never enter the feed.
 Rejected operations committed nothing and never appear. An idempotent
 retry re-acknowledges the original commit — one entry per commit, ever.
@@ -2865,6 +2901,14 @@ values), which is exactly why the retrieve's width is `"0.5"` and the
 delivery is `[{"content": "hello"}]`.
 
 ## Changelog of wire decisions
+
+This document is in DEVELOPMENT. The changelog below is the record
+through v7.10 and stops there: from the R2 round on — 2026-09-18 to
+2026-09-20, the AUTH lanes W1, W2a, W2b, W2c and W3 and the PUB lanes
+W4, W5a, W5b, W5c and W8, each in its report under the design repo's
+`_designs/AUTH/updates/` and `_designs/PUB/updates/` — the body of this
+document is the contract as it stands at HEAD, and no compatibility with
+an earlier reading is promised. Versioning resumes at the first release.
 
 v7.1 through v7.10 are ONE additive delta over v7.0 — PUB round 2, lanes
 2.1 (the publication bit on the record and in the slice), 2.2 (the

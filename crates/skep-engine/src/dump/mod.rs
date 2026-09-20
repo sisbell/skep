@@ -73,9 +73,10 @@ use filter::filter_tree;
 ///
 /// What equal dumps CERTIFY is what this format renders: every authoritative
 /// slice, and every hint the hints section reaches. It is not that the worlds
-/// agree — five derived structures sit outside the rendering, two of them the
-/// grant fold's query indexes, which are what the read predicate's third
-/// clause probes. [`crate::Engine::check_hints_of`] names all five and gives
+/// agree — six derived structures sit outside the rendering, three of them the
+/// grant fold's: its two query indexes, which are what the read predicate's
+/// third clause probes, and its earlier-record key.
+/// [`crate::Engine::check_hints_of`] names all six and gives
 /// the argument that the two indexes cannot in fact diverge; a harness
 /// treating equal dumps as equal worlds is reading past that argument rather
 /// than resting on it.
@@ -679,7 +680,7 @@ impl crate::Engine {
 
     /// Run the hint-faithfulness check against the committed world.
     ///
-    /// What `Ok(())` certifies — and the five derived structures it leaves
+    /// What `Ok(())` certifies — and the six derived structures it leaves
     /// uncertified — is [`crate::Engine::check_hints_of`]'s.
     ///
     /// COST: [`crate::Engine::check_hints_of`]'s, over the committed world.
@@ -705,7 +706,7 @@ impl crate::Engine {
     /// the same drafts with the same owners (PUB-7.7's two halves), and for
     /// the grants that the fold over every link deposit and the seed over
     /// the grants class's type slice admit the same RECORDS. It
-    /// certifies nothing of the FIVE derived structures the dump does not
+    /// certifies nothing of the SIX derived structures the dump does not
     /// reach, and each of those drives something a caller can observe:
     ///
     /// * M7's `dedup` drives `emit`'s incumbent lookup and with it
@@ -718,8 +719,12 @@ impl crate::Engine {
     ///   mis-derived one is an authorization answer rather than a stale
     ///   figure. The dump's grant section renders the fold's RECORDS and
     ///   neither index, so no comparison here reaches them.
+    /// * The grant fold's EARLIER-RECORD KEY — `earlier` — drives
+    ///   `classify`'s second outcome: whether a record naming an earlier
+    ///   record of its home is a revocation or of neither kind (PUB-5.15).
+    ///   The grant section renders the records and not the key.
     ///
-    /// A rebuild that mis-derived any of the five passes here. For the two
+    /// A rebuild that mis-derived any of the six passes here. For the two
     /// indexes that is a gap in the CERTIFICATE rather than a live
     /// divergence, and the argument belongs beside the claim: both halves of
     /// the discipline drive one `grants::fold_one`, so an index is a function

@@ -135,7 +135,7 @@ thread_local! {
     /// the engine's composition, so this miniature world carries none of its
     /// own and answers the empty index unless a test seeds it through
     /// [`seed_universal_grants`]; the FOLD-FILTER that narrows each served
-    /// row (RES-231/264/273) is M10's own and is what a test seeding this is
+    /// row (RES-231/264/273/298) is M10's own and is what a test seeding this is
     /// about. Cleared by [`surface`], as [`EDITION_CLAIMS`] is.
     static UNIVERSAL_GRANTS: RefCell<Vec<UniversalGrant>> = const { RefCell::new(Vec::new()) };
 }

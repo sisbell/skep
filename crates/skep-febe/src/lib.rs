@@ -300,7 +300,7 @@ pub trait PublicationWorld {
     /// the world answers the INDEX — the STORED prefix beside each issuer —
     /// and the front door serves the ANSWER SET, narrowing every row to the
     /// prefix the issuer ω-owns by ω over the row's prefix (RES-231, RES-264,
-    /// RES-273), off the same snapshot. No index is added and no read class:
+    /// RES-273, RES-298), off the same snapshot. No index is added and no read class:
     /// this is the fold's own slot, enumerated once per request, and its
     /// bound is that index's own size (PUB-7.45). Principal-blind — the
     /// guest's empty answer is the front door's.

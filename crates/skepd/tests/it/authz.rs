@@ -325,6 +325,12 @@ fn build_fixture(
     let acc_x = delegate(port, p, &acc_p, P_OWNER);
     let acc_s = delegate(port, p, &acc_p, P_SIBLING);
     let x = &tokens.owner;
+    // THE LAYOUT (RES-64 item 9; RES-80's as-built table): `inc(acc_x, 1)` is
+    // X's AGENT SPACE whatever X's tier. acc_x is NOT bootstrap-tier, so A3 is
+    // silent there and a genesis at it would fold — C moves off it all the
+    // same, for the layout's reason: the child column is a SUBDIVISION of X's,
+    // and a holder's subdivisions are LATER children. Reserved first, as P's is.
+    reserve_agent_space(port, x, &acc_x, 990_002);
     let acc_c = delegate(port, x, &acc_x, P_CHILD);
 
     // MINT-FIRST (RES-26): each account's first mint is its doc 1, born
@@ -415,18 +421,36 @@ fn run_cell(
     label: &str,
     col: usize,
 ) -> String {
-    // The caller context: a session (or none), and a document the caller
-    // owns. Guest and stale cells name X's resources — M10's session gate
-    // fires before any store sees the frame.
+    // The caller context: a session (or none). Guest and stale cells name
+    // X's resources — M10's session gate fires before any store sees the
+    // frame.
     let token: Option<&str> = match col {
         0..=3 => Some(tokens.by_col[col].as_str()),
         4 => None,
         _ => Some(stale_token),
     };
+    let frame = cell_frame(port, fixture, tokens, token, counters, label, col);
+    verdict(&op(port, token, &frame))
+}
+
+/// One cell's FRAME, unsent: the row's op as column `col`'s caller names it,
+/// the per-cell fresh resources minted here where the row consumes them —
+/// apart from [`run_cell`] so a walk that reads more than the verdict (the
+/// listed-prefix column's death signal) sends the same frame itself.
+fn cell_frame(
+    port: u16,
+    fixture: &Fixture,
+    tokens: &Tokens,
+    token: Option<&str>,
+    counters: &Counters,
+    label: &str,
+    col: usize,
+) -> String {
+    // A document the caller owns; the guest and stale cells name X's.
     let own_doc: &str = if col <= 3 { &fixture.own_doc[col] } else { &fixture.own_doc[0] };
     let authed = col <= 3;
 
-    let frame = match label {
+    match label {
         "create_new_document" => {
             format!(r#"{{"op":"create_new_document","account":"{}"}}"#, fixture.owner_account)
         }
@@ -524,9 +548,7 @@ fn run_cell(
             )
         }
         other => panic!("matrix row with no frame builder: {other}"),
-    };
-
-    verdict(&op(port, token, &frame))
+    }
 }
 
 /// Walk every cell; collect mismatches so one report names them all.
@@ -916,6 +938,184 @@ fn a_content_session_is_refused_every_credential_act_and_writes_content_as_a_ful
     );
 
     claim_sd.shutdown();
+    sd.shutdown();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// THE LISTED-PREFIX COLUMN (RES-65 item 7 (n); AUTH-4.36 step 4b, AUTH-4.63,
+// AUTH-4.64 item 11).
+//
+// ADDED beside the matrix — no cell above moves. The caller is "a principal
+// under a listed prefix": the OWNER, its account covered by an entry of the
+// BLOCKED-PREFIX LIST. The list is CONFIG — issued the way a serving layer
+// issues it (`issue_blocked_list`), in force at the first request after — and
+// the column is two statements:
+//   * every write cell is UNREACHABLE, the session never opening: the
+//     owner's handshake answers `403 prefix_blocked` with the entry's record;
+//   * the LIVE-session cells — a binding opened BEFORE the install — answer
+//     `unauthenticated` with `Skepd-Session: closed` on that SAME response,
+//     at every row of [`MATRIX`] and ARM-BLIND: a signed binding and a bare.
+// ONE binding per cell: a dead token is closed at its first presentation and
+// an UNKNOWN token signals too, so a binding presented twice would prove
+// nothing about the second row.
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Column order of [`LISTED_MATRIX`] — the two arms a live session has.
+const LISTED_COLS: [&str; 2] = ["signed", "bare"];
+
+/// The takedown record the entry cites. The daemon reads no record — it
+/// echoes the address — so this names nothing on the board.
+const LISTED_RECORD: &str = "1.0.1.0.7.1";
+
+#[derive(Clone, Copy)]
+struct ListedRow {
+    label: &'static str,
+    /// Each cell's verdict — and every cell carries the death signal.
+    expect: [&'static str; 2],
+}
+
+#[rustfmt::skip]
+const LISTED_MATRIX: &[ListedRow] = &[
+    // ── a principal under a listed prefix, its session LIVE before the install ──
+    //                                                      signed           bare
+    ListedRow { label: "create_new_document",          expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
+    ListedRow { label: "delegate",                     expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
+    ListedRow { label: "register_node",                expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
+    ListedRow { label: "fork",                         expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
+    ListedRow { label: "insert",                       expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
+    ListedRow { label: "insert (published doc 1)",     expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
+    ListedRow { label: "delete",                       expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
+    ListedRow { label: "rearrange",                    expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
+    ListedRow { label: "copy (foreign dest)",          expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
+    ListedRow { label: "copy (foreign source)",        expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
+    ListedRow { label: "version (foreign src)",        expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
+    ListedRow { label: "make_link",                    expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
+    ListedRow { label: "emit",                         expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
+    ListedRow { label: "assert_sup",                   expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
+    ListedRow { label: "nullify (home)",               expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
+    ListedRow { label: "nullify (target)",             expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
+    ListedRow { label: "edit_link (d_s)",              expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
+    ListedRow { label: "edit_link (d_a)",              expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
+    ListedRow { label: "edit_link (foreign original)", expect: [UNAUTHENTICATED, UNAUTHENTICATED] },
+];
+
+/// One presentation, WHOLE: the verdict, and whether that SAME response
+/// carried the death signal.
+fn presented(port: u16, token: &str, frame: &str) -> (String, bool) {
+    let (st, headers, body) = http_full(port, "POST", "/op", Some(token), frame.as_bytes());
+    assert_eq!(st, 200, "op transport failed: {}", String::from_utf8_lossy(&body));
+    (verdict(&json(&body)), header(&headers, "Skepd-Session") == Some("closed"))
+}
+
+/// The listed-prefix column, walked (RES-65 item 7 (n)). Every frame is built
+/// — and the per-cell targets its row consumes are minted — BEFORE the
+/// install, from the owner's still-live session: after it no session of the
+/// owner's mints anything, which is the column.
+#[test]
+fn a_principal_under_a_listed_prefix_is_closed_at_every_write_and_its_handshake_is_blocked() {
+    assert_eq!(LISTED_MATRIX.len(), MATRIX.len(), "one listed row per matrix row, and no other");
+    for row in MATRIX {
+        assert!(
+            LISTED_MATRIX.iter().any(|r| r.label == row.label),
+            "matrix row {:?} has no listed row: the column is every write cell",
+            row.label
+        );
+    }
+
+    // A CLAIMED board with the list's supply named: the first issue is the
+    // EMPTY list, so the fixture is built with nothing in force.
+    let root = tempfile::tempdir().expect("tempdir");
+    let list = root.path().join("blocked.json");
+    issue_blocked_list(&list, BlockedHeader::default(), &[]);
+    let data = root.path().join("data");
+    std::fs::create_dir_all(&data).expect("the data dir");
+    let sd = spawn_with_blocked_prefixes(&data, true, Some(&list), Some("1.3"));
+    let port = sd.port();
+    claim_board(port);
+
+    let counters = Counters::new();
+    let boot = open_session(port, 0);
+    let tokens = open_tokens(port);
+    let fixture = build_fixture(port, &boot, &tokens, &counters, true);
+    let owner_key =
+        distinct_key(u8::try_from(P_OWNER).expect("a matrix principal id fits a seed byte"));
+
+    // Per cell, BEFORE the install: the row's frame in the owner's column,
+    // and a binding of the cell's arm — shown LIVE by a read that carries no
+    // signal.
+    let live = |token: &str| !presented(port, token, r#"{"op":"next_account_prefix","parent":"1"}"#).1;
+    let cells: Vec<(&ListedRow, usize, String, String)> = LISTED_MATRIX
+        .iter()
+        .flat_map(|row| [0, 1].map(|col| (row, col)))
+        .map(|(row, col)| {
+            let frame =
+                cell_frame(port, &fixture, &tokens, Some(tokens.owner.as_str()), &counters, row.label, 0);
+            let binding = match LISTED_COLS[col] {
+                "signed" => open_signed_session(port, P_OWNER, &owner_key),
+                _ => open_session(port, P_OWNER),
+            };
+            assert!(live(&binding), "{} / {}: the binding is live before the install", row.label, LISTED_COLS[col]);
+            (row, col, frame, binding)
+        })
+        .collect();
+
+    // THE INSTALL: an entry over the owner's account. The first request after
+    // the issue installs it; the head it reports is where the install stands.
+    issue_blocked_list(&list, BlockedHeader::default(), &[(&fixture.owner_account, LISTED_RECORD)]);
+    let installed_at = head_position(port);
+
+    let mut mismatches: Vec<String> = Vec::new();
+    for (row, col, frame, binding) in &cells {
+        let (got, closed) = presented(port, binding, frame);
+        if got != row.expect[*col] || !closed {
+            mismatches.push(format!(
+                "  row={:<28} col={:<8} expected={} with `Skepd-Session: closed`  got={got} (closed: {closed})",
+                row.label, LISTED_COLS[*col], row.expect[*col]
+            ));
+        }
+    }
+    assert!(
+        mismatches.is_empty(),
+        "FINDING (listed-prefix column): {} of {} cells diverge from the contract table \
+         (an intended change here is a reviewed authorization change):\n{}",
+        mismatches.len(),
+        cells.len(),
+        mismatches.join("\n")
+    );
+    assert_eq!(head_position(port), installed_at, "and no cell of the column committed anything");
+    println!(
+        "listed-prefix column: {} rows × {} columns = {} cells, all verdicts match",
+        LISTED_MATRIX.len(),
+        LISTED_COLS.len(),
+        cells.len()
+    );
+
+    // EVERY WRITE CELL IS UNREACHABLE: the session never opens. The 403, its
+    // bytes — the entry's record, the one public datum — and no signal: a
+    // blocked handshake is a refusal with no entry.
+    let (st, headers, body) = signed_handshake(port, P_OWNER, &owner_key);
+    assert_eq!(st, 403, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(
+        String::from_utf8(body).expect("utf-8"),
+        format!(r#"{{"error":"prefix_blocked","record":"{LISTED_RECORD}"}}"#)
+    );
+    assert!(header(&headers, "Skepd-Session").is_none(), "/session is token-blind");
+
+    // BY THE PREFIX TEST, and no wider: the CHILD sits under the listed prefix
+    // and dies with it; the SIBLING beside it and the PARENT above it are
+    // under no entry — an entry over X does not reach the account above X —
+    // and write as they did.
+    let own_insert = |col: usize| {
+        let frame = format!(
+            r#"{{"op":"insert","doc":"{}","at":{{"subspace":"1","ordinal":"1"}},"values":["z"]}}"#,
+            fixture.own_doc[col]
+        );
+        presented(port, &tokens.by_col[col], &frame)
+    };
+    assert_eq!(own_insert(2), (UNAUTHENTICATED.to_string(), true), "the child, under X's prefix");
+    assert_eq!(own_insert(1), (OK.to_string(), false), "the sibling");
+    assert_eq!(own_insert(3), (OK.to_string(), false), "the parent");
+
     sd.shutdown();
 }
 

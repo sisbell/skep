@@ -173,6 +173,68 @@ fn repeated_spans_repeat_their_entries() {
     );
 }
 
+/// Corpus: the same repeat CUT ANYWHERE ELSE (AUTH-2.96's row, its second
+/// input; AUTH-2.4). The same retirement, entry 2 cut MID-ENTRY — two span
+/// boundaries inside the fingerprint's hex. Each span named once, the record
+/// folds: the cut is no fault of its own (spans MAY split anything). Any of
+/// the three named twice and the concatenation is no canonical record — the
+/// head and the tail break the JSON, the middle leaves a 96-hex fingerprint —
+/// `bad_record`, inert, never `duplicate_key`: no entry repeats, a piece of
+/// one does.
+#[test]
+fn a_repeated_span_cut_mid_entry_is_bad_record() {
+    let mut fx = Fixture::new();
+    let st = seed_own(
+        &mut fx,
+        &IdentityState::genesis(),
+        ACCT_A,
+        &[(1, false), (2, false), (3, false)],
+    );
+    let open = b"{\"type\":\"skep-retire\",\"fingerprints\":[".to_vec();
+    let entry1 = format!("\"{}\"", fp(1).to_hex());
+    let hex2 = fp(2).to_hex();
+    let head = format!(",\"{}", &hex2[..16]);
+    let middle = &hex2[16..48];
+    let tail = format!("{}\"", &hex2[48..]);
+    let close = b"]}".to_vec();
+    let spans = fx.mint(
+        &doc1(ACCT_A),
+        &[
+            open.as_slice(),
+            entry1.as_bytes(),
+            head.as_bytes(),
+            middle.as_bytes(),
+            tail.as_bytes(),
+            close.as_slice(),
+        ],
+    );
+    let retirement = |from: Vec<Span>| Dep {
+        home: doc1(ACCT_A),
+        from,
+        to: vec![unit(ACCT_A)],
+        ty: vec![unit(T_RETIRE)],
+    };
+
+    // Each span once: the bytes are the canonical retirement, and it folds.
+    assert_eq!(
+        record_bytes(&fx.ctx, &doc1(ACCT_A), &spans).expect("home-minted spans read"),
+        retire_payload(&[1, 2])
+    );
+    match assert_honored(&fx.classify(&st, &retirement(spans.clone()))) {
+        Effect::Retire { removed, .. } => assert_eq!(*removed, vec![fp(1), fp(2)]),
+        other => panic!("expected a retire effect, got {other:?}"),
+    }
+
+    // A piece of entry 2 named twice — the head, the middle, the tail.
+    for repeated in [2, 3, 4] {
+        let mut from = spans.clone();
+        from.insert(repeated, spans[repeated].clone());
+        let (next, v) = fx.step(&st, &retirement(from));
+        assert_token(&v, "malformed_payload:bad_record");
+        assert_eq!(next, st, "span {repeated} named twice: the table is unchanged");
+    }
+}
+
 /// Corpus: a FROM span running one position past what the home minted —
 /// `missing_value` (AUTH-2.45: an endset names addresses verbatim).
 #[test]

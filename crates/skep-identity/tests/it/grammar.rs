@@ -184,11 +184,22 @@ fn uppercase_hex_is_bad_record() {
 }
 
 /// §2.1 rows 9–11 — a label outside the AUTH-1.24 domain is `bad_record`,
-/// never Honored with `label: None`: `""`, a `\n`, and `null`.
+/// never Honored with `label: None`: `""`, a `\n`, and `null` — and row 11's
+/// class clause, a `label` member carrying an absent value in ANY OTHER
+/// spelling: `false`, `0`, `[]`, `{}`. The member is a STRING or it is not
+/// there (AUTH-2.128); no falsy value reads as "no label".
 #[test]
 fn a_label_outside_the_domain_is_bad_record() {
     let h = hex(1);
-    for label in [r#""label":"""#, r#""label":"a\nb""#, r#""label":null"#] {
+    for label in [
+        r#""label":"""#,
+        r#""label":"a\nb""#,
+        r#""label":null"#,
+        r#""label":false"#,
+        r#""label":0"#,
+        r#""label":[]"#,
+        r#""label":{}"#,
+    ] {
         let record =
             format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false,{label}}}]}}"#);
         assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadRecord, "{label}");

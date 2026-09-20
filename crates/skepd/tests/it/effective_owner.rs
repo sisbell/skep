@@ -252,6 +252,13 @@ fn op_at_answers_the_owner_as_of_the_position_asked() {
 /// the act ends. The read needs no session, and the act NEVER RE-PEEKS the
 /// frontier: after the refusal the peek names `inc(X, 2)`, a second space the
 /// act never names.
+///
+/// And (c) row 1's FOURTH layout vector (RES-64 item 8), CUT TO THE STANDING
+/// WORDS: after the ceremony and the act, X's doc-1 credential links read in
+/// order are EXACTLY X's genesis and then the claim, and none names `X.1`. The
+/// row's recorded tail — "then `X.1`'s genesis" — is VOID: RES-80 gives the
+/// agent space no genesis from any hand, and RES-118 retired the act's op (2),
+/// which was that deposit.
 #[test]
 fn the_setup_act_meets_not_authorized_reads_the_owner_and_resumes_at_op_three() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -304,6 +311,47 @@ fn the_setup_act_meets_not_authorized_reads_the_owner_and_resumes_at_op_three() 
     assert_eq!(meta["published"].as_bool(), Some(true), "born published: {meta}");
     assert_eq!(meta["owner"].as_str(), Some(agent_space.as_str()), "{meta}");
     assert_eq!(effective_owner(port, None, &home), Some((agent_space.clone(), adopted)));
+
+    // THE LAYOUT'S FOURTH VECTOR, cut to the standing words: after the
+    // ceremony and the act's ops (1) and (3), the credential links homed in
+    // X's doc 1, by type and in link order.
+    let homed_under = |ty: &str| {
+        let scan = ftt_frame("find_links_ftt", &unit_span(CLAIMANT_DOC1), r#""any""#, r#""any""#, &unit_span(ty));
+        addrs_of(&op(port, None, &scan))
+    };
+    let (genesis, claim) = (format!("{CLAIMANT_DOC1}.0.2.1"), format!("{CLAIMANT_DOC1}.0.2.2"));
+    assert_eq!(homed_under(T_ENROLL), [genesis.as_str()], "one enrolment: X's genesis, the FIRST link");
+    assert_eq!(homed_under(T_CLAIM), [claim.as_str()], "one claim, the SECOND link");
+    assert_eq!(homed_under(T_RETIRE), Vec::<String>::new());
+    assert!(read_link(port, None, &format!("{CLAIMANT_DOC1}.0.2.3")).is_null(), "and no link after the claim");
+    // What the two NAME, slot by slot (`from`, `to`, `ty`), by span start.
+    let named = |link: &str| -> Vec<Vec<String>> {
+        let value = read_link(port, None, link);
+        let slots = value["slots"].as_array().unwrap_or_else(|| panic!("{link} is a link: {value}"));
+        slots
+            .iter()
+            .map(|slot| {
+                let spans = slot.as_array().expect("a slot is a span array");
+                spans.iter().map(|s| s["start"].as_str().expect("a span start").to_string()).collect()
+            })
+            .collect()
+    };
+    let strs = |names: &[&str]| -> Vec<String> { names.iter().map(|n| n.to_string()).collect() };
+    assert_eq!(
+        named(&genesis),
+        [strs(&[CEREMONY_ATOM]), strs(&[x]), strs(&[T_ENROLL])],
+        "the genesis: the ceremony's record, TO X"
+    );
+    assert_eq!(named(&claim), [strs(&[x]), strs(&[]), strs(&[T_CLAIM])], "the claim: FROM X, to nothing");
+    // …and none names `X.1`: nothing either link names is at it or beneath it.
+    // (Asked of the link VALUES — a four-set query matches by OVERLAP, and the
+    // span naming X contains X.1.)
+    let beneath = format!("{agent_space}.");
+    for link in [&genesis, &claim] {
+        for start in named(link).concat() {
+            assert!(start != agent_space && !start.starts_with(&beneath), "{link} names {start}");
+        }
+    }
 
     // The session op (3) opened is CLOSED when the act ends; the holder's own
     // is untouched by any of it.

@@ -1049,6 +1049,282 @@ fn the_first_mint_door_refuses_explicit_false_and_a_flagless_first_mint_is_publi
     sd.shutdown();
 }
 
+/// The first-mint pair's THIRD vector ((c) row 9 (ii)): TWO CONCURRENT FIRST
+/// MINTS into ONE empty account — both ACKED, EXACTLY ONE born published. The
+/// flagless default is resolved off WORKING state inside the mint's own
+/// transaction (PUB-8.21), under the kernel's single applier lock, taken
+/// before the base root is loaded — and the daemon stands AHEAD of that, its
+/// gates and the execute they gate under one serialization lock (AUTH-3.35's
+/// plain sequence). So the two serialize: the second mint's base already
+/// holds the first's document, and it is born a PRIVATE draft — never a
+/// second home, and never refused (the door refuses an explicit `false`
+/// alone). What is pinned here is the OUTCOME at the wire, whichever layer
+/// holds it: a daemon that resolved the default ahead of its serialization
+/// lock hands both mints `true`, and only a real race shows it.
+///
+/// The race is REAL: one daemon; per round one fresh EMPTY account, TWO live
+/// sessions of its principal, two threads released off one barrier, each
+/// sending the flagless `create_new_document`. Which session's mint commits
+/// first is the scheduler's to say, so the rounds run until BOTH orders have
+/// occurred, and never fewer than `MIN_ROUNDS`: the pin holds whichever wins.
+///
+/// "Born published" is read three ways — `doc_metadata.published` as the owner,
+/// the guest's read (served the home, `withheld` the draft), and the
+/// behavioural read of the door's own vector above: a bare write into the home
+/// meets the publish gate, a bare write into the draft commits.
+#[test]
+fn two_concurrent_first_mints_bear_exactly_one_published_home() {
+    use std::sync::{Arc, Barrier};
+
+    const MIN_ROUNDS: usize = 16;
+    const MAX_ROUNDS: usize = 256;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path()); // claimed, CLAIMED-PERMISSIVE (bare binds honored)
+    let port = sd.port();
+    let boot = open_session(port, 0);
+
+    // `won[i]`: the rounds in which session `i`'s mint committed FIRST.
+    let mut won = [0usize; 2];
+    let mut rounds = 0;
+    while rounds < MAX_ROUNDS && (rounds < MIN_ROUNDS || won.contains(&0)) {
+        let id = 810_000 + rounds as u64;
+        let (account, first) = delegate_empty_account(port, &boot, id);
+        let sessions = [first, open_session(port, id)];
+        assert_ne!(sessions[0], sessions[1], "two live sessions of the one principal");
+
+        let barrier = Arc::new(Barrier::new(sessions.len()));
+        let mints: Vec<_> = sessions
+            .iter()
+            .map(|session| {
+                let (barrier, session) = (Arc::clone(&barrier), session.clone());
+                let frame = create_frame(&account, None);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    op(port, Some(&session), &frame)
+                })
+            })
+            .collect();
+        // Both ACKED — neither is refused, neither is lost.
+        let minted: Vec<String> =
+            mints.into_iter().map(|mint| acked_addr(&mint.join().expect("a mint thread"))).collect();
+
+        // The chain's first two documents, one each: the account's doc 1 went
+        // to the mint that committed first.
+        let (home, draft) = (format!("{account}.0.1"), format!("{account}.0.2"));
+        let winner = minted.iter().position(|doc| *doc == home).unwrap_or_else(|| {
+            panic!("round {rounds}: neither mint is {home}: {minted:?}")
+        });
+        assert_eq!(minted[1 - winner], draft, "round {rounds}: two distinct addresses: {minted:?}");
+
+        // EXACTLY ONE born published — and it is the home.
+        let published = |doc: &str| {
+            let meta = doc_metadata(port, Some(&sessions[0]), doc);
+            expect_resp(&meta, "doc_metadata")["published"].as_bool().expect("a boolean")
+        };
+        assert!(published(&home), "round {rounds}: the first committed mint is born published");
+        assert!(!published(&draft), "round {rounds}: the second is born PRIVATE, never a second home");
+        // The guest is served the one and withheld the other.
+        let meta = doc_metadata(port, None, &home);
+        assert_eq!(expect_resp(&meta, "doc_metadata")["published"].as_bool(), Some(true), "{meta}");
+        assert_withheld(&doc_metadata(port, None, &draft), &draft);
+        // The door's behavioural read, from the LOSING session: the home is
+        // behind the publish gate, the draft takes a bare write.
+        let bare_write = |doc: &str| {
+            op(port, Some(&sessions[1 - winner]), &insert_frame(doc, 1, "p", false))
+        };
+        assert_eq!(rejected_detail(&bare_write(&home)), GATED, "round {rounds}");
+        expect_resp(&bare_write(&draft), "ack_addr");
+
+        won[winner] += 1;
+        rounds += 1;
+    }
+    eprintln!("concurrent first mints: {rounds} rounds; committed first — session 0: {}, session 1: {}", won[0], won[1]);
+    assert!(
+        !won.contains(&0),
+        "both orders must occur — {rounds} rounds, committed first {won:?}"
+    );
+
+    sd.shutdown();
+}
+
+/// The first-mint pair's FOURTH vector ((c) row 9 (iii); the conformance
+/// pack's §2.13 row 4; AUTH RES-182) — THE CORPUS ROW "REACHED ONLY OUTSIDE A
+/// CONFORMING DAEMON" (AUTH-3.58): a board built WITHOUT the daemon's refusal
+/// producer serves a private "home", and AUTH-3.58's and AUTH-3.72's
+/// NO-CLEARING-ACT cells stand on it.
+///
+/// The explicit-`false` FIRST mint is written BELOW the door — by the engine
+/// directly, through `OperationSurface`, no daemon in the path — since M3 mints
+/// it private and refuses nothing (the door is the daemon's alone, PUB-8.20).
+/// The account is seated on a claimed board first, by the daemon, and keyed
+/// after, by the claimant's hire into the claimant's own PUBLISHED doc 1, so
+/// the account is a HOLDER whose one honored home is a draft. skepd over that
+/// dir serves doc 1 PRIVATE, and then:
+///
+/// - the HOLDER cell: an enrolment and a retirement homed in doc 1 answer
+///   `unpublished`; the same record in a published second document answers
+///   `not_doc_one`; written again in doc 1 it re-fires `unpublished` — no
+///   clearing act, the set unmoved;
+/// - the GENESIS cell (AUTH-3.72): the genesis this delegator writes for its
+///   own delegate, homed in its doc 1 — the one legal genesis home — answers
+///   `unpublished`, and `not_doc_one` anywhere else: a keyless subtree.
+#[test]
+fn a_home_minted_private_below_the_door_is_served_private_and_has_no_clearing_act() {
+    use skep_engine::{Engine, KernelConfig};
+    use skep_febe::{Codec, OperationSurface, Response};
+    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability};
+    use skep_namespace::PrincipalId;
+    use skepd::JsonCodec;
+
+    const HOLDER: u64 = 820;
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    // Phase 1 — the daemon: a claimed board, and one EMPTY account seated on it.
+    let account = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let boot = open_session(port, 0);
+        let (account, _) = delegate_empty_account(port, &boot, HOLDER);
+        sd.shutdown();
+        account
+    };
+    let home = format!("{account}.0.1");
+
+    // Phase 2 — BELOW THE DOOR: the engine directly, the account's own
+    // principal, its FIRST mint carrying the explicit `false`.
+    {
+        let cfg = KernelConfig {
+            durability: Durability::Fsync {
+                journal_path: dir.path().to_path_buf(),
+                retain_checkpoints: 2,
+                burned_seq: BurnedSeqPolicy::Rollback,
+            },
+            checkpoint: CheckpointPolicy::EveryN(1024),
+        };
+        let engine = Engine::open(cfg).expect("engine recover");
+        let febe = OperationSurface::new(Box::new(engine.stores()));
+        let codec = JsonCodec;
+        let req = codec
+            .parse(create_frame(&account, Some(false)).as_bytes())
+            .unwrap_or_else(|e| panic!("test frame does not parse: {:?}", e.detail));
+        match febe.execute(febe.open_session(PrincipalId(HOLDER)), req) {
+            Response::AckAddr { addr, .. } => {
+                assert_eq!(addr.tumbler().to_string(), home, "the first mint IS doc 1")
+            }
+            other => panic!(
+                "M3 mints an explicit-false first document private and refuses nothing: {}",
+                String::from_utf8_lossy(&codec.marshal(&other))
+            ),
+        }
+        drop(febe);
+        drop(engine); // releases the journal-directory lock for the daemon
+    }
+
+    // Phase 3 — skepd over that dir.
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let boot = open_session(port, 0);
+    // The door stands on this very daemon: the same mint through it is refused,
+    // so the private home came from nowhere a conforming daemon reaches.
+    let (other_account, other) = delegate_empty_account(port, &boot, HOLDER + 1);
+    assert_eq!(
+        rejected_detail(&op(port, Some(&other), &create_frame(&other_account, Some(false)))),
+        "credential_refused:mint_home_public"
+    );
+
+    // Doc 1 is served PRIVATE: `published: false` to its owner, withheld from
+    // the guest.
+    let bare = open_session(port, HOLDER);
+    let meta = doc_metadata(port, Some(&bare), &home);
+    let meta = expect_resp(&meta, "doc_metadata");
+    assert_eq!(meta["published"].as_bool(), Some(false), "a private \"home\": {meta}");
+    assert_eq!(meta["owner"].as_str(), Some(account.as_str()), "{meta}");
+    assert_withheld(&doc_metadata(port, None, &home), &home);
+
+    // The claimant keys the account — its genesis homed in the CLAIMANT's doc 1
+    // (AUTH-2.62), which is published — so the account is a HOLDER.
+    let claimant = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let holder_key = distinct_key(21);
+    let holder = hire(port, &claimant, CLAIMANT_DOC1, &account, HOLDER, &holder_key);
+    let enrolled = |of: &str| {
+        let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{of}"}}"#));
+        expect_resp(&v, "key_set")["enrolled"].as_array().expect("enrolled").len()
+    };
+    assert_eq!(enrolled(&account), 1);
+
+    // A credential deposit for `subject` homed in `doc`, from the holder's
+    // SIGNED session: the record atom at `ordinal`, then the link naming it.
+    // The atom's insert is DECLARED (PUB-2.63): the published second document
+    // admits no other, and into a draft the declaration is inert.
+    let deposit_in = |doc: &str, ordinal: u64, atom: &str, subject: &str, ty: &str| -> Value {
+        let v = op(
+            port,
+            Some(&holder),
+            &format!(
+                r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":"{ty}"}}"#
+            ),
+        );
+        let atom_addr = acked_addr(&v);
+        op(
+            port,
+            Some(&holder),
+            &format!(
+                r#"{{"op":"make_link","home":"{doc}","from":{{"addrs":["{atom_addr}"]}},"to":{{"addrs":["{subject}"]}},"ty":{{"addrs":["{ty}"]}}}}"#
+            ),
+        )
+    };
+    // The one other home a holder can publish: a second document, minted
+    // `published: true` from its signed session.
+    let second = acked_addr(&op(port, Some(&holder), &create_frame(&account, Some(true))));
+    assert_eq!(second, format!("{account}.0.2"));
+
+    // THE HOLDER CELL (AUTH-3.58).
+    let another_key = enroll_atom(&[&distinct_key(22)]);
+    assert_eq!(
+        rejected_detail(&deposit_in(&home, 1, &another_key, &account, T_ENROLL)),
+        "credential_refused:unpublished",
+        "the holder's one honored home is a draft"
+    );
+    assert_eq!(
+        rejected_detail(&deposit_in(&second, 1, &another_key, &account, T_ENROLL)),
+        "credential_refused:not_doc_one",
+        "every other home answers the home pin"
+    );
+    assert_eq!(
+        rejected_detail(&deposit_in(&home, 2, &another_key, &account, T_ENROLL)),
+        "credential_refused:unpublished",
+        "written again in doc 1, it re-fires: no clearing act"
+    );
+    let holder_fp = fingerprint_hex(&holder_key);
+    let retirement = retire_atom(&[holder_fp.as_str()]);
+    assert_eq!(
+        rejected_detail(&deposit_in(&home, 3, &retirement, &account, T_RETIRE)),
+        "credential_refused:unpublished",
+        "a retirement included"
+    );
+    assert_eq!(enrolled(&account), 1, "the set is unmoved");
+
+    // THE GENESIS CELL (AUTH-3.72): this account's doc 1 is its delegates'
+    // genesis registry. A LATER child — the first is the agent space, which
+    // takes no genesis from any hand (RES-80).
+    reserve_agent_space(port, &holder, &account, HOLDER + 2);
+    let (delegate, _) = delegate_under(port, &holder, &account, HOLDER + 3);
+    let genesis = enroll_atom(&[&distinct_key(23)]);
+    assert_eq!(
+        rejected_detail(&deposit_in(&home, 4, &genesis, &delegate, T_ENROLL)),
+        "credential_refused:unpublished",
+        "the one legal genesis home is a draft"
+    );
+    assert_eq!(
+        rejected_detail(&deposit_in(&second, 2, &genesis, &delegate, T_ENROLL)),
+        "credential_refused:not_doc_one"
+    );
+    assert_eq!(enrolled(&delegate), 0, "a keyless subtree");
+
+    sd.shutdown();
+}
+
 /// The publish gate's EXPLICIT-FLAG row (PUB-6.43, §4.5): on a claimed board a
 /// bare session's `published:true` mint into a NON-empty account lands in the
 /// published world and is refused `signed_session_required`; a draft mint
@@ -3046,8 +3322,23 @@ fn a_hire_and_a_spawn_are_device_grade_and_the_agents_home_itself_is_a_handoff()
     // key, no anchor of Y's — and the hire's registry is the home's doc 1.
     let as_home = open_signed_session(port, 9521, &r_device);
     let home_doc1 = create_doc(port, &as_home, &home);
-    let (agent, _) = delegate_under(port, &as_home, &home, 95_211);
+    let agent = next_prefix_under(port, Some(&as_home), &home);
     assert_eq!(agent, format!("{home}.1"));
+    // THE LAYOUT'S FIFTH VECTOR, its second half (RES-64 item 8; (c) row 1):
+    // the hire's `delegate` from the HOLDER's own session AS `Y` is
+    // `not_authorized` and commits nothing. R's keys OPEN `Y.1` by reference,
+    // but the principal bound to a session as `Y` does not OWN it — the
+    // agents' home is its own seat — so M3's ownership guard answers. The SAME
+    // frame from the session as `Y.1` acks.
+    let hire_delegate = format!(r#"{{"op":"delegate","new_prefix":"{agent}","new_id":95211}}"#);
+    let before = head_position(port);
+    let v = op(port, Some(&r), &hire_delegate);
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!(rej["op"].as_str(), Some("delegate"), "{v}");
+    assert_eq!(rej["code"].as_str(), Some("not_authorized"), "the holder's session as Y: {v}");
+    assert_eq!(head_position(port), before, "the refused delegate committed nothing");
+    assert_eq!(next_prefix_under(port, None, &home), agent, "and seated nobody");
+    assert_eq!(acked_addr(&op(port, Some(&as_home), &hire_delegate)), agent);
     let (g_paper, g_device) = (distinct_key(64), distinct_key(65));
     let record = land_record(
         port,

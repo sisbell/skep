@@ -1,10 +1,12 @@
 //! M9's fires at GUEST class through the assembled engine (PUB round 2, lane
 //! 3.3, §5): the `Coordinator` the engine assembles carries
-//! `World::readable_guest` — `published(doc)` — and a fire whose Marker home
-//! or bound argument lies in a private draft is refused before any deposit,
-//! as a `Failed` step naming the draft, while a home NO MINT PRODUCED is no
-//! draft at all — the guest class reads it published, and M7's H-HOME gate
-//! refuses that fire as `HomeNotRegistered`. And (lane 3.3b, PUB-6.28) the same
+//! `World::readable_guest` — publication at the document's trunk — and a fire
+//! whose Marker home or bound argument lies in a private draft is refused
+//! before any deposit, as a `Failed` step naming the draft, while a home NO
+//! MINT PRODUCED is no draft at all — the guest class reads it published, and
+//! M7's H-HOME gate refuses that fire as `HomeNotRegistered` — unless it is
+//! shaped as a version member of a draft, which the guest class reads as that
+//! draft and refuses at the draft boundary. And (lane 3.3b, PUB-6.28) the same
 //! predicate is threaded into every writer the coordinator builds, so a
 //! fire's value-keyed gates see only guest-readable incumbents: a draft-homed
 //! tuple never absorbs a fire as `Deduped`. What is tested is the ASSEMBLY
@@ -230,12 +232,12 @@ fn a_fire_on_a_draft_s_content_is_refused_before_any_deposit() {
     }
 }
 
-/// A Marker whose HOME no mint produced. The guest class reads an address the
-/// exception set never held as PUBLISHED — PUB-7.5's fail-open sign, and the
-/// answer M10's `ReadableWorld` requires of the same predicate — so the fire
-/// passes the draft boundary and M7's H-HOME gate refuses it:
-/// `HomeNotRegistered`, never `DraftBoundary`, and nothing deposited.
-/// `Engine::coordinator` states the discharge this holds.
+/// A Marker whose HOME no mint produced. The guest class reads an address whose
+/// TRUNK the exception set never held — this one is its own trunk — as
+/// PUBLISHED: PUB-7.5's fail-open sign, and the answer M10's `ReadableWorld`
+/// requires of the same predicate. So the fire passes the draft boundary and
+/// M7's H-HOME gate refuses it: `HomeNotRegistered`, never `DraftBoundary`, and
+/// nothing deposited. `Engine::coordinator` states the discharge this holds.
 #[test]
 fn a_fire_into_a_home_no_mint_produced_is_refused_as_not_registered() {
     let engine = mem_engine();
@@ -257,6 +259,46 @@ fn a_fire_into_a_home_no_mint_produced_is_refused_as_not_registered() {
             assert_eq!(arg, member);
         }
         other => panic!("expected Failed(HomeNotRegistered), got {other:?}"),
+    }
+    let retired = engine.registry().reserved_type(ShippedType::Retired).clone();
+    assert!(
+        !engine.kernel().snapshot().world().links().is_k(&retired, member.tumbler()),
+        "no marker was deposited"
+    );
+}
+
+/// …and the one home no mint produced that the guest class does NOT read
+/// published: an address shaped as a version member of a private DRAFT, which
+/// the predicate projects to that draft (PUB-2.15) — the exception
+/// `World::readable` records. The fire is refused at the draft boundary,
+/// naming the home as the rule gave it, ahead of M7's H-HOME gate; nothing is
+/// deposited. `Engine::coordinator` states it.
+#[test]
+fn a_fire_into_a_version_member_shaped_home_under_a_draft_is_refused_at_the_draft_boundary() {
+    let engine = mem_engine();
+    let member = addr(&[1, 0, 1, 0, 1, 0, 1, 1]); // a position of the published home
+    let (_home, draft) = board(&engine, &member);
+    let shaped = addr(&[1, 0, 1, 0, 2, 1]); // the draft's first version member, by shape
+    assert_eq!(draft, addr(&[1, 0, 1, 0, 2]), "the premise: shaped under the draft");
+    assert!(
+        !engine.kernel().snapshot().world().m3().is_registered_document(&shaped),
+        "a private document is versionless, so no mint produced it"
+    );
+    let mut coord = engine.coordinator();
+    let rule = marker_rule(&engine, &coord, shaped.clone());
+    let id = coord
+        .register_rule(rule)
+        .expect("registration judges the rule's shape, never its home");
+    match coord.step(&engine.kernel().snapshot()) {
+        StepOutcome::Failed { rule, arg, err: FireError::DraftBoundary(d) } => {
+            assert_eq!(rule, id);
+            assert_eq!(arg, member);
+            assert_eq!(
+                d, shaped,
+                "the refusal names the home the rule gave, which no mint produced"
+            );
+        }
+        other => panic!("expected Failed(DraftBoundary), got {other:?}"),
     }
     let retired = engine.registry().reserved_type(ShippedType::Retired).clone();
     assert!(

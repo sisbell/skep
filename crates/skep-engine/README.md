@@ -7,8 +7,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 
 - **`World`** — the store slices (namespace, content, arrangement,
   links) as one immutable value implementing the kernel's
-  `WorldState`, led by a checkpoint format stamp so a base written
-  under another layout fails to decode rather than misreading.
+  `WorldState`, led by a checkpoint format stamp; a base written
+  under another layout fails to decode rather than loading as a
+  misread world.
 - **The central record enum** — one variant per store's record type;
   the engine lifts and folds, but store records stay constructible
   only by their own crates.

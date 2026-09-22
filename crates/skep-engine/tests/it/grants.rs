@@ -10,7 +10,7 @@
 use crate::common;
 
 use common::*;
-use skep_address::{validate, Address, Level, Tumbler};
+use skep_address::{document_of, validate, Address, Level, Tumbler};
 use skep_arrangement::{trunk_of, Caller, Deposit};
 use skep_content::Val;
 use skep_engine::{Engine, IssuerGrant, UniversalGrant, World};
@@ -1587,6 +1587,45 @@ fn two_grants_sharing_an_index_entry_are_withdrawn_together() {
     engine.check_hints().expect("the seed reproduces the fold over a shared index entry");
 }
 
+/// …and on the ANY-PRINCIPAL index, the form M10's
+/// `PublicationWorld::universal_grants` answers. Its trait text promises every
+/// prefix an admitted, unrevoked grant names; the index holds one entry per
+/// (issuer, prefix) and counts nothing, so revoking either of two identical
+/// grants withdraws the row for both while the survivor stays operative — the
+/// departure `World::universal_grants` and the seam's impl record.
+#[test]
+fn two_any_principal_grants_sharing_an_entry_are_withdrawn_together() {
+    let engine = mem_engine();
+    let board = two_accounts(&engine);
+    // Two identical ANY-PRINCIPAL grants (empty `to`): one entry between them.
+    let first = grant_record(&engine, &board.home_a, &board.draft_a, vec![]);
+    let second = grant_record(&engine, &board.home_a, &board.draft_a, vec![]);
+    assert_ne!(first, second, "two deposits, two link addresses");
+    let w = world(&engine);
+    assert_eq!(
+        w.universal_grants(),
+        vec![UniversalGrant { content_prefix: &board.draft_a, issuers: vec![&board.acct_a] }],
+        "the premise: one row, the entry both grants contributed"
+    );
+
+    // Revoke the FIRST: a later record naming its link address.
+    grant_record(&engine, &board.home_a, &first, vec![]);
+
+    let w = world(&engine);
+    assert!(w.universal_grants().is_empty(), "the shared entry left with the revoked grant");
+    assert!(
+        <World as skep_febe::PublicationWorld>::universal_grants(&w).is_empty(),
+        "…and M10's seam answers the index, the survivor's prefix missing from it"
+    );
+    assert!(!w.readable(Some(PrincipalId(9)), &board.draft_a), "the predicate agrees");
+    let text = engine.world_dump().into_string();
+    assert!(
+        text.contains(&format!("{:?}", second.to_string())),
+        "the second grant is still an operative record:\n{text}"
+    );
+    engine.check_hints().expect("the seed reproduces the fold over a shared entry");
+}
+
 /// The reach the read predicate's PROJECTION cost term is paid over: the
 /// projection runs AHEAD of every clause, so a caller pays it on an address
 /// nothing can refuse — one M3 never registered, whose component count is the
@@ -1726,6 +1765,46 @@ fn an_address_no_mint_produced_reads_readable_at_every_reader_class_and_tier() {
                 "{unregistered} at {principal:?}: an unregistered address reads READABLE"
             );
         }
+    }
+}
+
+/// The projection stops at the DOCUMENT tier (`World::readable`): an element is
+/// judged as ITSELF, and no element is ever a draft, so a content position
+/// MINTED in a private draft reads READABLE to the guest and to a stranger
+/// while the draft it lies in does not. Projecting to the document is the
+/// CALLER's step (`document_of`), which M10's link-address rule and the dump
+/// filter each take. Pinned so the obligation `World::readable` states moves
+/// only on purpose.
+#[test]
+fn an_element_of_a_draft_is_judged_as_itself_not_as_its_document() {
+    let engine = mem_engine();
+    let board = two_accounts(&engine);
+    let (position, _) = engine
+        .vstream()
+        .insert(
+            Caller::Principal(A),
+            &board.draft_a,
+            vp(1, 1),
+            vec![Val::new(vec![b'x'])],
+            Deposit::Undeclared,
+        )
+        .expect("the owner writes its draft");
+    let w = world(&engine);
+    assert_eq!(
+        document_of(&position),
+        Some(board.draft_a.clone()),
+        "the premise: the position is minted in the draft"
+    );
+    assert!(w.m3().is_allocated(&position), "…and allocated there");
+    for principal in [None, Some(B)] {
+        assert!(
+            w.readable(principal, &position),
+            "at {principal:?}: handed the element, the predicate judges the element"
+        );
+        assert!(
+            !w.readable(principal, &board.draft_a),
+            "at {principal:?}: …while the document it lies in stays withheld"
+        );
     }
 }
 

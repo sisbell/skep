@@ -29,8 +29,10 @@
 //!   of it: every reader asks M7 for the one `Arc<TypeRegistry>`, and
 //!   [`Engine::coordinator`] clones it for M9, which takes an owned one. The
 //!   World leads its checkpoint bytes with a FORMAT STAMP, so a base written
-//!   under any other layout — the pre-publication-bit layout above all
-//!   (PUB-7.8) — fails to decode and M2's fallback chain takes over (PUB-7.9).
+//!   under any other format count — the pre-publication-bit layout above all
+//!   (PUB-7.8) — fails to decode at its first word, the one older layout this
+//!   count also names fails later by the arithmetic the stamp's card states,
+//!   and either way M2's fallback chain takes over (PUB-7.9).
 //! * **Recovery order** (`WorldState::rebuild_derived` for `World`) — the
 //!   cross-store rebuild sequence at load, stated in one place, with its two
 //!   engine edges pinned by the tests that method names.
@@ -60,12 +62,15 @@
 //!   (PUB-7.7), with NO checkpoint slice. It also publishes its two feed
 //!   enumerations ([`World::universal_grants`], [`World::issuers_for`]; lane
 //!   3.6) — the live ANY-PRINCIPAL set and a grantee's issuers with the
-//!   prefixes their grants name, as [`UniversalGrant`] and [`IssuerGrant`]
-//!   rows: the fold's STORED index, a superset of entitlement — the key set
-//!   the daemon's change feed resolves once per request (PUB-7.22,
-//!   PUB-7.28); M10's any-principal discovery read (PUB-8.47) takes the
-//!   first through `PublicationWorld::universal_grants`, raw, and narrows it
-//!   itself.
+//!   prefixes their index entries name, as [`UniversalGrant`] and
+//!   [`IssuerGrant`] rows — the key set the daemon's change feed resolves
+//!   once per request (PUB-7.22, PUB-7.28); M10's any-principal discovery
+//!   read (PUB-8.47) takes the first through
+//!   `PublicationWorld::universal_grants`, raw, and narrows it itself. What
+//!   they enumerate is the fold's STORED index, a superset of entitlement, and
+//!   ENTRIES rather than grants: one per (issuer, prefix, grantee), which a
+//!   revocation of either of two identical grants removes (the `grants`
+//!   module states it).
 //! * **The edition-claim lookup** ([`World::edition_claims`]; the `editions`
 //!   module) — the audit-view `to`-range lookup over the R20 edition-claim
 //!   class (PUB-8.46, lane 3.4, §2), composed from M7's own audit reads over

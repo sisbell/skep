@@ -35,10 +35,15 @@ use crate::publication::{self, Drafts};
 /// in declaration order and carries no names, so a rename is byte-neutral for
 /// recovery and a reordering is not. The `FormatStamp` LEADS, and that is
 /// load-bearing: it is the first thing a decoder reads, so a checkpoint
-/// written under any other World layout — the pre-publication-bit layout
-/// above all (PUB-7.8) — is refused at byte 0 by a value comparison, before
-/// any slice's bytes are read as another's. The two skip-serialized fields,
-/// `drafts` and `grants`, sit outside the surface: neither occupies a byte.
+/// written under any other format COUNT, or before there was one — the
+/// pre-publication-bit layout above all (PUB-7.8) — is refused at byte 0 by a
+/// value comparison, before any slice's bytes are read as another's. A count
+/// names a layout only while it was bumped with it: the one older layout
+/// count 1 also names passes that word, and its bytes ARE read as another
+/// slice's before the decode refuses it, by the arithmetic `FormatStamp`'s
+/// card states and `a_base_written_before_the_birth_memo_fails_to_decode`
+/// pins. The two skip-serialized fields, `drafts` and `grants`, sit outside
+/// the surface: neither occupies a byte.
 ///
 /// INVARIANT — a world's derived state agrees with its authoritative state:
 /// concretely, M7's skip-serialized hints and the engine's own two derived
@@ -85,11 +90,15 @@ use crate::publication::{self, Drafts};
 /// not unwind, because M2 drops the previous root inside the atomic install:
 /// no type in the world's closure implements a `Drop` that can panic. And
 /// this type's and [`Record`]'s `Deserialize` must terminate and must not
-/// exhaust the stack on any byte string: that closure holds no recursive
-/// type, so decode depth is a property of the types and not of the bytes. A
-/// slice that moves to an eagerly-copied collection, or grows a recursive
-/// value, breaks one of these where the obligation's own text is a crate
-/// away.
+/// exhaust the stack on any byte string, and M2 names the two shapes that
+/// break that. The closure holds no RECURSIVE type, so decode depth is a
+/// property of the types and not of the bytes; and no SEQUENCE in it has an
+/// element that decodes from zero bytes — every element carries bytes of its
+/// own, a length prefix or the byte or digit it is — so a hostile length
+/// prefix runs out of input instead of spinning the decoder. A slice that
+/// moves to an eagerly-copied collection, grows a recursive value, or holds a
+/// sequence of zero-sized elements breaks one of these where the obligation's
+/// own text is a crate away.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct World {
     /// The checkpoint format this layout is — first, so it is read first.
@@ -354,9 +363,12 @@ impl WorldState for World {
     /// With no error channel to refuse through, a base that violates any of
     /// those panics rather than returning — inside `Kernel::open` and
     /// `Kernel::world_at` alike, after that checkpoint loaded, so M2's
-    /// next-older-base fallback does not get its turn. A base that cannot DECODE is the other case, and the one this
-    /// method never sees: `FormatStamp` and M3's own field order refuse it
-    /// before any rebuild, and M2's fallback chain does get its turn.
+    /// next-older-base fallback does not get its turn. A base that cannot
+    /// DECODE is the other case, and the one this method never sees: the
+    /// decode refuses it before any rebuild — at `FormatStamp`'s word for a
+    /// base under another count, and later for the one older layout count 1
+    /// also names (that card states the arithmetic) — and M2's fallback chain
+    /// does get its turn.
     ///
     /// COST is the two seeds', each stated at its own, and neither is linear:
     /// `publication::seed` pays one M3 ω walk — Θ(|Π|), the whole principal
@@ -452,6 +464,15 @@ impl skep_febe::PublicationWorld for World {
     /// fold-filter that narrows a served row to the prefix its issuer ω-owns
     /// (RES-231/264/273/298) is M10's own, at the read's arm, and nothing about
     /// a row's coverage is decided on this side of the seam.
+    ///
+    /// M10's trait promises every content prefix an admitted, unrevoked
+    /// ANY-PRINCIPAL grant names, and one shape falls short of it: where two
+    /// such grants of one issuer name one prefix and EITHER is revoked, the
+    /// fold's index — one entry per (issuer, prefix), and no count — drops the
+    /// survivor's prefix, and so does this seam ([`World::universal_grants`]
+    /// states it; `two_any_principal_grants_sharing_an_entry_are_withdrawn_together`
+    /// pins it through this impl). Recorded here, where M10 reads, and not
+    /// decided: whether the index should count is PUB's question.
     fn universal_grants(&self) -> Vec<skep_febe::UniversalGrant> {
         World::universal_grants(self)
             .into_iter()
@@ -523,9 +544,9 @@ mod tests {
     /// fields in declaration order to any serializer, so the transcode's
     /// COLLECTION order (before a rendering sorts it) is that order. The names
     /// are here to identify the fields; the ORDER is the claim — the format
-    /// stamp FIRST (it is what refuses a foreign layout before any slice is
-    /// read), and the two skip-serialized derived indexes absent, since they
-    /// occupy no bytes.
+    /// stamp FIRST (it is what refuses a base under a foreign format count
+    /// before any slice is read), and the two skip-serialized derived indexes
+    /// absent, since they occupy no bytes.
     #[test]
     fn the_world_serializes_its_slices_in_declaration_order() {
         assert_eq!(

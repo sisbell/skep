@@ -259,9 +259,10 @@ pub(crate) fn seed(namespace: &M3State) -> Drafts {
 /// account-tier prefix longer than a document's own account can cover it.
 ///
 /// TWO facts about the answer are asserted here, in every build, and neither
-/// is decoration: this value is the left operand of [`crate::World::readable`]'s
-/// subtree compare and the issuer the grant fold's coverage clause matches
-/// on, so a wrong one is an authorization answer rather than a wrong log line.
+/// is decoration: this value is the left operand of the subtree clause's FIRST
+/// compare (`in_owner_subtree` in `crate::readable`) and the issuer the grant
+/// fold's coverage clause matches on, so a wrong one is an authorization
+/// answer rather than a wrong log line.
 ///
 /// * ITS EXISTENCE, the fail-CLOSED direction. `mint_document` refuses an
 ///   unregistered account and every registered account is a principal, so a

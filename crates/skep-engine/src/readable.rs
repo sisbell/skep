@@ -93,6 +93,20 @@ impl World {
     /// projects a version member to its document first (`trunk_of`, M5,
     /// PUB-2.15): `1.0.1.0.1.2` reads exactly as `1.0.1.0.1`.
     ///
+    /// That projection is the ONLY one, and it stops at the document tier: an
+    /// address of any other tier — an element, an account, a node — is judged
+    /// as ITSELF, and no such address is ever a draft, so it reads READABLE at
+    /// every reader class whatever document it lies in, a MINTED link or
+    /// content position of a private draft included. So the answer this gives
+    /// is a DOCUMENT's, and a caller asking about a link or a content position
+    /// owes the projection to the document it lies in — M1's `document_of`,
+    /// then this, the composition M5's `trunk_of` names — as M10's
+    /// link-address rule (`home_readable`, PUB-6.38), M9's draft boundary and
+    /// the dump's per-class filter each take it. Handed the element itself,
+    /// this answers [`World::published`]'s fail-open `true`, not the
+    /// document's answer
+    /// (`an_element_of_a_draft_is_judged_as_itself_not_as_its_document`).
+    ///
     /// * PUBLISHED (PUB-1.31's first clause) — an exception-set MISS on the
     ///   projected document. Fail-open (PUB-7.5), in two cases. An address
     ///   whose TRUNK M3 never registered is absent from the set and so
@@ -129,7 +143,12 @@ impl World {
     ///   to test and the principal-exact index has no key to probe, so both
     ///   fall through, but the ANY-PRINCIPAL grants still reach it — being a
     ///   principal at all is that tier's whole membership test (PUB-5.8), and
-    ///   an unseated one is still not `None`.
+    ///   an unseated one is still not `None`. The clause is the fold's INDEX
+    ///   probe and inherits the index's one shortfall: an unrevoked grant
+    ///   covers nothing once an identical grant — one issuer, one prefix, one
+    ///   grantee — is revoked, since the two shared one entry, until a later
+    ///   grant adds that entry again (`crate::grants`' query-index section
+    ///   states the rule).
     ///
     /// COST, per call, uncached, in three terms — and the CALLER chooses the
     /// first while the STORE chooses the other two, so this figure is not one

@@ -103,12 +103,15 @@ impl Engine {
     /// own format stamp; one written under the retired `GenesisConfig`
     /// regime (the 9-space reserved addresses, the config-carrying M7
     /// checkpoint shape) does not reopen under this format. A CHECKPOINT
-    /// names the World layout that wrote it through the World's own leading
-    /// format stamp (`world.rs`), so a base from a build before M3's
-    /// publication bit fails to DECODE (PUB-7.8) and M2's fallback chain
-    /// takes over: the next-older retained base, genesis while the journal
-    /// still reaches it, else `OpenError::BadCheckpoint` (PUB-7.9) — never a
-    /// decoded world with an empty exception set.
+    /// leads with the World's own format stamp (`world.rs`), which names the
+    /// format COUNT that wrote it — a count and not a layout, since count 1
+    /// names two. A base from a build before M3's publication bit wrote no
+    /// stamp and fails to DECODE at its first word (PUB-7.8); the one older
+    /// layout this count also names fails later in the decode, by the
+    /// arithmetic the stamp's card states. Either way M2's fallback chain takes
+    /// over: the next-older retained base, genesis while the journal still
+    /// reaches it, else `OpenError::BadCheckpoint` (PUB-7.9) — never a decoded
+    /// world with an empty exception set.
     ///
     /// There is nothing to assemble beyond that recovery. The type registry
     /// M9 is handed at [`Engine::coordinator`] is `skep_links::registry` —
@@ -205,10 +208,11 @@ impl Engine {
     /// the visibility class M9 lends it), and the read predicate M9's fires
     /// run at (PUB round 2, lane 3.3, §5). M9 is the System caller — the one
     /// with no session — so its class is [`World::visible_to`]'s System arm,
-    /// asked for here rather than restated: `published(doc)`, so a rule's
-    /// effect never crosses the draft boundary. M9 threads that same
-    /// predicate into every writer it builds (lane 3.3b, PUB-6.28), so a
-    /// fire's value-keyed gates see only guest-readable incumbents.
+    /// asked for here rather than restated: `readable(None, ·)`, publication at
+    /// the document's TRUNK (PUB-2.15), so a rule's effect never crosses the
+    /// draft boundary. M9 threads that same predicate into every writer it
+    /// builds (lane 3.3b, PUB-6.28), so a fire's value-keyed gates see only
+    /// guest-readable incumbents.
     /// Infallible: M9's catalog is a pure projection of the injected registry
     /// — with the type set compiled into the format there is no twice-passed
     /// configuration whose drift a validate-once-or-fail step would catch.
@@ -225,6 +229,14 @@ impl Engine {
     /// produced passes the draft boundary and is refused by M7's H-HOME gate,
     /// as `FireError::HomeNotRegistered`
     /// (`a_fire_into_a_home_no_mint_produced_is_refused_as_not_registered`).
+    ///
+    /// With ONE exception, the one [`World::readable`] and its `ReadableWorld`
+    /// impl record: an address shaped as a version member of a REGISTERED
+    /// DRAFT reads as that draft, so a fire whose home — or whose bound
+    /// argument's document — is such an address is refused AT the draft
+    /// boundary, as `FireError::DraftBoundary` naming an address no mint
+    /// produced, ahead of H-HOME
+    /// (`a_fire_into_a_version_member_shaped_home_under_a_draft_is_refused_at_the_draft_boundary`).
     pub fn coordinator(&self) -> Coordinator<World> {
         Coordinator::new(
             Arc::clone(&self.stores.kernel),

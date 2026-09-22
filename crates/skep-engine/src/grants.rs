@@ -87,10 +87,28 @@
 //! issuer being doc's ω owner. The grantee side is PRINCIPAL-EXACT.
 //!
 //! Coverage's issuer half is applied AT THE PROBE and never at indexing, so
-//! the indexes hold every prefix an admitted grant NAMES, and the two public
-//! enumerations over them ([`World::universal_grants`],
-//! [`World::issuers_for`]) hand out that STORED population — a superset of
-//! what the grants cover.
+//! the indexes hold the prefixes admitted grants NAME, whoever owns what lies
+//! under them, and the two public enumerations over them
+//! ([`World::universal_grants`], [`World::issuers_for`]) hand out that STORED
+//! population — a superset of what the grants cover.
+//!
+//! And what the indexes hold is ENTRIES, not grants: one (issuer,
+//! content-prefix, grantee) triple apiece ([`GrantIndexEntry`]), a set member
+//! with no count. An admitted grant adds its entry and a revocation removes the
+//! entry of the grant it names, so where two operative grants share one — an
+//! issuer granting one prefix to one grantee twice, which MAKELINK's open
+//! surface deposits as two records — revoking EITHER takes the entry both
+//! contributed. The other stays operative (the dump's `grants` section renders
+//! it, and a rebuild agrees) yet is in no index: `grant_exists` answers `false`
+//! for what it covers and neither enumeration lists it, until a later grant
+//! adds the entry again. So everything read off the indexes answers one set:
+//! every entry an admitted grant added and no later revocation removed — every
+//! prefix an unrevoked grant names, LESS an entry a sibling's revocation took
+//! (`two_grants_sharing_an_index_entry_are_withdrawn_together`,
+//! `two_any_principal_grants_sharing_an_entry_are_withdrawn_together`).
+//! Whether PUB-1.31's third clause owes the survivor an answer, which an index
+//! that counts would give, is PUB's question; this module records the
+//! departure and does not decide it.
 
 use std::collections::BTreeMap;
 
@@ -105,9 +123,11 @@ use crate::types::t_grant;
 use crate::world::World;
 
 /// One STORED row of the LIVE ANY-PRINCIPAL set ([`World::universal_grants`]):
-/// a content-prefix as the index keys it, and the issuers whose admitted
-/// ANY-PRINCIPAL grants name it — a pair that opens only those documents under
-/// the prefix whose ω owner is the issuer, and none at all where it owns none.
+/// a content-prefix as the index keys it, and the issuers whose ANY-PRINCIPAL
+/// index ENTRIES name it — one entry per issuer, which a revocation of either of
+/// two identical grants removes ([`World::universal_grants`] states that
+/// shape). The pair opens only those documents under the prefix whose ω owner
+/// is the issuer, and none at all where it owns none.
 ///
 /// A named row rather than a pair, because the two grant enumerations are
 /// TRANSPOSES of each other and every half of both is an account or a
@@ -125,41 +145,43 @@ use crate::world::World;
 pub struct UniversalGrant<'a> {
     /// The content-prefix the grants name (a document or an account address).
     pub content_prefix: &'a Address,
-    /// The issuers whose grants name it, in address order.
+    /// The issuers whose index entries name it, in address order.
     pub issuers: Vec<&'a Address>,
 }
 
 /// One STORED row of the GRANTEE-INDEXED read ([`World::issuers_for`]): an
-/// issuer, and the union of the content-prefixes that issuer's admitted
-/// grants to the queried grantee NAME — which open, as a [`UniversalGrant`]
-/// row's do, only the documents under them whose ω owner is the issuer.
-/// [`UniversalGrant`] is the transpose, and says why both are named and what a
-/// row borrows. Rows order by issuer, which no two rows of one read share, so
-/// that order is the one the read hands them back in.
+/// issuer, and the union of the content-prefixes its index ENTRIES for the
+/// queried grantee name — its admitted grants' prefixes, less an entry a
+/// revocation took from an identical grant ([`World::issuers_for`] states that
+/// shape). They open, as a [`UniversalGrant`] row's do, only the documents
+/// under them whose ω owner is the issuer. [`UniversalGrant`] is the
+/// transpose, and says why both are named and what a row borrows. Rows order
+/// by issuer, which no two rows of one read share, so that order is the one the
+/// read hands them back in.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct IssuerGrant<'a> {
     /// The issuing account — a draft-stream key for the grantee.
     pub issuer: &'a Address,
-    /// The prefixes that issuer's grants to the grantee name, in address
-    /// order.
+    /// The prefixes that issuer's index entries for the grantee name, in
+    /// address order.
     pub content_prefixes: Vec<&'a Address>,
 }
 
 impl World {
     /// THE LIVE ANY-PRINCIPAL SET, enumerable (PUB-7.22; lane 3.6 §3): every
-    /// content-prefix an admitted, unrevoked ANY-PRINCIPAL grant NAMES, with
-    /// the issuers whose grants name it — in prefix (tumbler) order, each
-    /// issuer list in address order. An INDEX SHAPE, never per-session state:
-    /// the fold's universal index as rows borrowed from this world, enumerated
-    /// once per request off one head snapshot by the feed's universal term (a
-    /// K-way merge of these prefixes' own position-index lists, K = this
-    /// list's length). Revocation is immediate here — a revoking record
-    /// withdraws its grant's entry from the index at the commit that carries
-    /// it — so a derivation off this read never serves withdrawn material
-    /// (PUB-7.23). Reads the fold's query index, adds no fold state, and is
-    /// `readable`'s own universal probe turned inside out: a document is
-    /// universally granted iff one of its ancestor prefixes is listed here
-    /// with its ω owner among the issuers.
+    /// content-prefix an admitted, unrevoked ANY-PRINCIPAL grant NAMES (less
+    /// the one shape stated below), with the issuers whose grants name it — in
+    /// prefix (tumbler) order, each issuer list in address order. An INDEX
+    /// SHAPE, never per-session state: the fold's universal index as rows
+    /// borrowed from this world, enumerated once per request off one head
+    /// snapshot by the feed's universal term (a K-way merge of these prefixes'
+    /// own position-index lists, K = this list's length). Revocation is
+    /// immediate here — a revoking record withdraws its grant's entry from the
+    /// index at the commit that carries it — so a derivation off this read
+    /// never serves withdrawn material (PUB-7.23). Reads the fold's query
+    /// index, adds no fold state, and is `readable`'s own universal probe
+    /// turned inside out: a document is universally granted iff one of its
+    /// ancestor prefixes is listed here with its ω owner among the issuers.
     ///
     /// The rows are STORED, and a SUPERSET of entitlement. Admission (I4)
     /// tests a record's HOME and never what its prefix covers, and the
@@ -172,6 +194,18 @@ impl World {
     /// what its issuer ω-owns (RES-231/264/273/298) before it serves one, and
     /// the daemon's feed uses the prefixes alone, as key ranges under its
     /// per-entry mask.
+    ///
+    /// The rows are index ENTRIES, not grants, and that is where they fall
+    /// SHORT of the first sentence: an entry is held once and counted never,
+    /// so where two ANY-PRINCIPAL grants of one issuer name one prefix and
+    /// EITHER is revoked, the entry both contributed leaves with it, and the
+    /// survivor — unrevoked, operative, and rendered by the dump's `grants`
+    /// section — is listed nowhere here until a later grant adds the entry
+    /// again (`crate::grants`' query-index section states the rule;
+    /// `two_any_principal_grants_sharing_an_entry_are_withdrawn_together` pins
+    /// it). M10's `PublicationWorld::universal_grants` promises every prefix an
+    /// admitted, unrevoked grant names; this is the one shape where that seam
+    /// answers less.
     ///
     /// COST, per call, uncached, and linear in the WHOLE universal index —
     /// this read takes no argument, so there is nothing in the request to
@@ -186,14 +220,15 @@ impl World {
 
     /// THE GRANTEE-INDEXED READ (PUB-7.28; lane 3.6 §3): for `grantee` — a
     /// principal's account address — its ISSUERS, each with the UNION of the
-    /// content-prefixes that issuer's admitted grants to it NAME, in issuer
-    /// order, each prefix list in address order. The discovery term a feed
-    /// poll re-pays: grants SELECT issuer streams (PUB-7.25), so a holder of N
-    /// grants from M issuers merges M streams, each under one containment test
-    /// against the union this read hands back. Reads the fold's principal-exact
-    /// index — `grantee` alone, never its subtree (PUB-5.5) — and adds no fold
-    /// state. The ANY-PRINCIPAL grants are NOT here; they are
-    /// [`World::universal_grants`], the tier's own read.
+    /// content-prefixes that issuer's admitted grants to it NAME (less the one
+    /// shape stated below), in issuer order, each prefix list in address
+    /// order. The discovery term a feed poll re-pays: grants SELECT issuer
+    /// streams (PUB-7.25), so a holder of N grants from M issuers merges M
+    /// streams, each under one containment test against the union this read
+    /// hands back. Reads the fold's principal-exact index — `grantee` alone,
+    /// never its subtree (PUB-5.5) — and adds no fold state. The ANY-PRINCIPAL
+    /// grants are NOT here; they are [`World::universal_grants`], the tier's
+    /// own read.
     ///
     /// The rows are STORED pairs, a SUPERSET of entitlement for the reason
     /// [`World::universal_grants`] gives: an issuer's grant over a prefix whose
@@ -202,6 +237,11 @@ impl World {
     /// A row selects a stream to look in and grants nothing by itself; what
     /// the feed serves out of that stream is decided by its per-entry mask,
     /// the read predicate.
+    ///
+    /// They are index ENTRIES too: where two grants from one issuer name one
+    /// prefix for `grantee` and EITHER is revoked, the survivor's prefix leaves
+    /// its issuer's row, and the row with it where that prefix was its last
+    /// (`two_grants_sharing_an_index_entry_are_withdrawn_together`).
     ///
     /// COST, per call, uncached: one hash probe of the principal-exact index,
     /// then a walk of THAT grantee's whole row to invert it — one insert per
@@ -386,12 +426,14 @@ impl Grants {
         self.operative_records.iter()
     }
 
-    /// `grant_exists(doc, p)` (PUB-1.32's third clause): does some admitted
-    /// grant cover `doc` for principal-account `grantee`, issued by doc's ω
-    /// owner? Coverage = CONTAINMENT (a granted prefix ⊑ doc) ∩ the grant's
-    /// issuer is `owner`. One probe of the principal-exact index (when there
-    /// is a grantee) and one of the ANY-PRINCIPAL index at each ancestor,
-    /// `doc` itself included.
+    /// `grant_exists(doc, p)` (PUB-1.31's third clause): does some index ENTRY
+    /// cover `doc` for principal-account `grantee`, issued by doc's ω owner —
+    /// an entry an admitted grant added and no revocation has since removed,
+    /// which is every operative grant's but one a sibling's revocation took
+    /// (the module doc's query-index section)? Coverage = CONTAINMENT (a
+    /// granted prefix ⊑ doc) ∩ the grant's issuer is `owner`. One probe of the
+    /// principal-exact index (when there is a grantee) and one of the
+    /// ANY-PRINCIPAL index at each ancestor, `doc` itself included.
     ///
     /// `owner` is doc's mint-time ω owner (the exception set's memo), and the
     /// coverage's issuer clause is exactly `issuers.contains(owner)`: a grant

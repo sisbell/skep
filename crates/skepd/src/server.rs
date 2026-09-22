@@ -531,13 +531,25 @@ const MAX_CHANGES_LIMIT: usize = 4096;
 #[cfg(feature = "client")]
 const BOARD_HTML: &str = include_str!("../../../clients/board.html");
 
-/// `Daemon::open` failure — every variant is an operator-intervention
-/// condition: report and stop, never retry.
+/// `Daemon::open` failure — WHICH SUBSYSTEM refused, and not a disposition:
+/// two of the three are uniform operator-intervention conditions (report and
+/// stop, never retry) and `Engine` is not. A caller that means to RETRY reads
+/// the wrapped error and never this enum alone, which cannot tell the two
+/// apart.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum DaemonError {
-    /// The engine could not genesis/recover (corrupt journal, bad
-    /// checkpoint).
+    /// The engine could not genesis/recover — M2's `OpenError` verbatim, and
+    /// the ONE variant here whose disposition is the WRAPPED error's rather
+    /// than this enum's. `BadCheckpoint` and `Corruption` are operator
+    /// intervention and `InvalidConfig` wants a corrected configuration; `Io`
+    /// fuses failures no retry clears WITH the two M2 documents as clearable
+    /// — the journal-path exclusion lock ([`Daemon::open`]'s precondition: a
+    /// second live kernel on this data dir) and a recovery truncation the
+    /// next open repeats. So `Io` narrows a failure to POSSIBLY retryable and
+    /// no further, and a caller that retries on it bounds its attempts. Reach
+    /// it through this enum's `source`, or by destructuring
+    /// `Engine(EngineError::Open(…))`.
     Engine(EngineError),
     /// `commits.log` (the commit-metadata sidecar) or one of the change
     /// feed's four derived sidecars could not be opened, replayed, or
@@ -773,7 +785,11 @@ pub struct HttpRequest {
     /// literal string and parses to nothing.
     pub origin: Option<String>,
     /// The TCP peer's loopback-ness — established by the accept path from
-    /// the socket's peer address; a caller routing by hand supplies it.
+    /// the socket's peer address. A caller routing over its own transport
+    /// supplies it, and takes it from [`Peer::of`] rather than deriving it:
+    /// that is this daemon's own rule, and the paragraph above says what
+    /// getting it wrong costs. A transport with no address at all — a Unix
+    /// socket — names the variant it means.
     pub peer: Peer,
     /// The body, exactly `Content-Length` bytes (empty when absent).
     pub body: Vec<u8>,
@@ -1042,12 +1058,17 @@ impl Daemon {
     ///
     /// PRECONDITION: no other live kernel holds `data_dir`. M2 takes an
     /// exclusive lock on the journal directory, and a second open fails on
-    /// it — the one [`DaemonError`] a retry can clear, and so the one
-    /// exception to the disposition below. [`Skepd::shutdown`] and `Skepd`'s
-    /// `Drop` both release that lock before returning, which is what closes
-    /// the race with a stopping server. Every other variant is an
-    /// operator-intervention condition (corrupt journal, bad checkpoint,
-    /// a data dir refusing I/O the kernel just performed):
+    /// it — the one CONDITION here a retry can clear, and so the one
+    /// exception to the disposition below. It is NOT a variant of
+    /// [`DaemonError`]: it arrives inside `Engine`, as
+    /// `EngineError::Open(OpenError::Io(_))`, an arm that also carries
+    /// failures no retry clears — so a caller that retries matches the
+    /// wrapped `OpenError` and bounds its attempts, where one matching
+    /// `DaemonError::Engine(_)` alone would loop on a corrupt journal.
+    /// [`Skepd::shutdown`] and `Skepd`'s `Drop` both release that lock before
+    /// returning, which is what closes the race with a stopping server. Every
+    /// other condition is an operator-intervention one (corrupt journal, bad
+    /// checkpoint, a data dir refusing I/O the kernel just performed):
     /// surface it and exit, never retry.
     ///
     /// TWO steps here cost more than O(1) in the data dir. The feed's open
@@ -1066,7 +1087,9 @@ impl Daemon {
 
     /// [`Daemon::open`] with the session-layer configuration named: the
     /// local-trust flag, the configured origins, and the blocked-prefix
-    /// list's supply. The identity fold is
+    /// list's supply. [`Daemon::open`]'s PRECONDITION and its account of
+    /// which failures a retry can clear are this one's too — that method
+    /// delegates here, so both doors carry one contract. The identity fold is
     /// seeded here from the RECOVERED world (derived state — the canonical
     /// rebuild; the journal stays the one source of truth), which reads
     /// every link in that world: [`crate::auth::fold::canonical_identity`]

@@ -345,7 +345,7 @@ impl WritePath {
 #[derive(Debug)]
 pub(crate) struct FrameMeta {
     pub kind: OpKind,
-    pub docs: AffectedDocs,
+    docs: AffectedDocs,
 }
 
 impl FrameMeta {
@@ -360,18 +360,22 @@ impl FrameMeta {
 /// affected documents, and the session that committed it. The
 /// frame-derived stage of a `commits.log` entry — [`crate::sidecar::CommitMeta`]
 /// is the next one, completed at record time with the committed position
-/// and the wall-clock time. Reachable only through
-/// [`FrameMeta::attributed`], which is what lets
+/// and the wall-clock time.
+///
+/// Reachable only through [`FrameMeta::attributed`] — a fact of the FIELDS
+/// and not of the call sites: they are private, so `server.rs`, which is
+/// where the write sequences live and where a hand-built meta is the thing
+/// to reach for, cannot spell the struct expression. That is what lets
 /// [`WritePath::commit_under`] state its precondition about one value.
 #[derive(Debug)]
 pub(crate) struct WriteMeta {
-    pub kind: OpKind,
-    pub docs: AffectedDocs,
+    kind: OpKind,
+    docs: AffectedDocs,
     /// The write's AUTH TESTIMONY (AUTH-4.48; wire.md §The change feed):
     /// the establishing key's fingerprint hex, or `"bare"` for a bare bind
     /// — never an absence, which the wire's `key` field reserves for
     /// testimony that was LOST.
-    pub testimony: String,
+    testimony: String,
 }
 
 /// A write's affected document(s) for the feed (wire.md §The change feed):

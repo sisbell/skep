@@ -220,3 +220,44 @@ fn a_dropped_server_releases_the_journal_lock() {
     );
     sd.shutdown();
 }
+
+/// [`skepd::Daemon::open`]'s PRECONDITION, and the SHAPE its contract tells a
+/// retrying caller to match: while one kernel holds a data dir, a second open
+/// of it is refused — and the refusal arrives as
+/// `Engine(EngineError::Open(OpenError::Io(_)))`, NOT as a `DaemonError`
+/// variant of its own.
+///
+/// The distinction is the whole of the advice. `DaemonError` classifies which
+/// subsystem refused and not what to do about it, so a supervising embedder
+/// that restarts a daemon — the contemplated caller, whose race with a
+/// stopping server `Skepd::shutdown` and `Drop` exist to close — must match
+/// the WRAPPED error to tell this from a corrupt journal, which M2 marks halt
+/// and never retry. Matching `DaemonError::Engine(_)` alone loops forever on
+/// one and gives up on the other; this pins the shape that tells them apart,
+/// which is a fact about M2 that the contract restates and nothing else
+/// holds.
+///
+/// The release half is `a_dropped_server_releases_the_journal_lock`'s: there
+/// a daemon goes out of scope and the dir reopens. Here one is held, so the
+/// refusal is reached.
+#[test]
+fn a_second_open_of_one_data_dir_is_the_retryable_shape_the_contract_names() {
+    use skep_kernel::OpenError;
+    use skepd::{Daemon, DaemonError, EngineError};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let held = Daemon::open(dir.path()).expect("genesis open");
+
+    let refused = Daemon::open(dir.path())
+        .expect_err("a second live kernel on one journal is refused");
+    assert!(
+        matches!(refused, DaemonError::Engine(EngineError::Open(OpenError::Io(_)))),
+        "the lock failure rides M2's `Io` arm, which is what a retrying caller \
+         matches to tell it from a corrupt journal: {refused:?}"
+    );
+
+    // …and it is the LOCK and not the dir: the same open succeeds the moment
+    // the holder is gone, which is what makes the refusal worth retrying.
+    drop(held);
+    Daemon::open(dir.path()).expect("the released lock reopens");
+}

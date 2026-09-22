@@ -252,7 +252,13 @@ impl<'a> FeedClass<'a> {
 pub(crate) struct Query {
     /// The fence: positions strictly above it.
     pub since: u64,
-    /// The page cap, over the VISIBLE stream.
+    /// The page cap, over the VISIBLE stream — AT LEAST ONE. A zero cap is
+    /// not a smaller page: [`Feed::page`] breaks on the first visible
+    /// candidate and answers `more: true` with `last` echoing `since`, which
+    /// is a client told to poll again at a fence that never advances. The
+    /// wire's own parser refuses it (`limit: must be 1..=4096`) rather than
+    /// clamping, so this daemon's one constructor discharges it; a second one
+    /// owes it.
     pub limit: usize,
     /// `under=`: only entries whose reduced docs name a document under this
     /// tumbler (PUB-7.31).
@@ -653,6 +659,10 @@ impl Feed {
     }
 
     /// The data behind `GET /changes` at `class`.
+    ///
+    /// PRECONDITION: `query.limit >= 1` ([`Query::limit`] says what a zero
+    /// answers). Not re-checked here — one check, one owner, and the owner is
+    /// the parser that built the `Query`.
     pub fn page(&self, class: &FeedClass<'_>, query: &Query) -> ChangesAnswer {
         let inner = self.inner.lock();
         if !inner.log.admits_since(query.since) {

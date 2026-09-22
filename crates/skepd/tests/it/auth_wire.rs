@@ -2653,24 +2653,37 @@ fn spawn_listed(root: &std::path::Path) -> (skepd::Skepd, std::path::PathBuf) {
     spawn_listed_at(root, Some(NODE_PREFIX))
 }
 
-/// A CLAIMED board (CLAIMED-PERMISSIVE) with the list's supply named and
-/// `node_prefix` in force, or none: the data dir and the supply file sit
-/// side by side under `root`, so a restart over the same `root` meets the
-/// same file. The first issue is the EMPTY list unless the file is already
-/// there — the restart cells' case.
-fn spawn_listed_at(
-    root: &std::path::Path,
-    node_prefix: Option<&str>,
-) -> (skepd::Skepd, std::path::PathBuf) {
+/// The supply file and the data dir, side by side under `root` — so a
+/// restart over the same `root` meets the same file. The first issue is the
+/// EMPTY list unless the file is already there, which is the restart cells'
+/// case.
+fn listed_dirs(root: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
     let list = root.join("blocked.json");
     if !list.exists() {
         issue_blocked_list(&list, BlockedHeader::default(), &[]);
     }
     let data = root.join("data");
     std::fs::create_dir_all(&data).expect("the data dir");
+    (list, data)
+}
+
+/// A CLAIMED board (CLAIMED-PERMISSIVE) with the list's supply named and
+/// `node_prefix` in force, or none.
+fn spawn_listed_at(
+    root: &std::path::Path,
+    node_prefix: Option<&str>,
+) -> (skepd::Skepd, std::path::PathBuf) {
+    let (list, data) = listed_dirs(root);
     let sd = spawn_with_blocked_prefixes(&data, true, Some(&list), node_prefix);
     claim_board(sd.port());
     (sd, list)
+}
+
+/// [`spawn_listed`]'s board WITHOUT the claim — the pre-claim window, where
+/// the list has no claimant to take as its comparand.
+fn spawn_listed_unclaimed(root: &std::path::Path) -> (skepd::Skepd, std::path::PathBuf) {
+    let (list, data) = listed_dirs(root);
+    (spawn_with_blocked_prefixes(&data, true, Some(&list), Some(NODE_PREFIX)), list)
 }
 
 /// A top-level member: delegated from the bootstrap principal and KEYED by a
@@ -3175,6 +3188,130 @@ fn a_restart_reinstalls_the_list_and_a_bad_issue_installs_nothing() {
         matches!(refused, Err(skepd::DaemonError::BlockedPrefixes(_))),
         "and so does a supply that is not there"
     );
+}
+
+/// RES-115's RUNTIME half, on the accident the operator is likeliest to have:
+/// the supply file DELETED while the daemon runs. Its identity moved, so the
+/// channel looks — and the read fails, which installs NOTHING (the list is
+/// replaced WHOLE or not at all), so an absent file is NO LIFT: a lift of
+/// everything is an ISSUE, the explicit empty list.
+///
+/// The bad-bytes cells above fail inside the supply's parse; a deletion fails
+/// one layer earlier, at the open, and stamps no file where they stamp one —
+/// so "no file, no blocks", the natural reading, lifts every standing
+/// takedown at the next request and passes every one of those cells.
+///
+/// And the channel is not stuck by the accident: the next good issue installs,
+/// so the operator's own lift still works afterwards.
+#[test]
+fn deleting_the_supply_installs_nothing_and_the_list_in_force_stands() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let (sd, list) = spawn_listed(root.path());
+    let port = sd.port();
+    let anchor = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
+    let member_key = distinct_key(34);
+    let member = keyed_member(port, &anchor, 934, &member_key);
+    let live = open_signed_session(port, 934, &member_key);
+
+    issue_blocked_list(&list, BlockedHeader::default(), &[(&member, RECORD_MEMBER)]);
+    assert!(presented_dead(port, &live), "the entry is in force");
+    assert_blocked(port, 934, &member_key, RECORD_MEMBER, "the entry is in force");
+
+    std::fs::remove_file(&list).expect("remove the supply");
+    assert_blocked(port, 934, &member_key, RECORD_MEMBER, "the file gone: the block stands");
+    // The second look rules out a first request that happened not to reach
+    // the channel, and pins that the refusal is remembered without the list
+    // moving under it.
+    assert_blocked(port, 934, &member_key, RECORD_MEMBER, "…and at the next look too");
+
+    // The next GOOD issue installs: the failed look stopped nothing.
+    issue_blocked_list(&list, BlockedHeader::default(), &[]);
+    open_signed_session(port, 934, &member_key);
+
+    sd.shutdown();
+}
+
+/// RES-115 and AUTH-4.36 step 4b together, at the ONE install the reissue
+/// cells cannot reach: the START-UP install reads the claimant the canonical
+/// rebuild has just recovered, so an entry over the claimant is INERT again
+/// after a restart. Installed without it — the "there is no fold yet at open"
+/// reading — comparand (a) is absent, `covers` answers nobody, the entry goes
+/// LIVE, and the board's owner is locked out of their own board on every
+/// restart, principal 0 with it: the cell REG-4.198 rules out, appearing at
+/// the moment nobody is watching.
+///
+/// The member's entry is the PAIRING that makes the claimant's admission mean
+/// anything: the same install put it in force, so the claimant being admitted
+/// is not merely a list that failed to install at all.
+#[test]
+fn a_restart_installs_the_list_against_the_recovered_claimant() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let member_key = distinct_key(33);
+    {
+        let (sd, list) = spawn_listed(root.path());
+        let port = sd.port();
+        let anchor = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
+        let member = keyed_member(port, &anchor, 933, &member_key);
+        issue_blocked_list(
+            &list,
+            BlockedHeader::default(),
+            &[(CLAIMANT_ACCOUNT, RECORD_CLAIMANT), (&member, RECORD_MEMBER)],
+        );
+        assert_blocked(port, 933, &member_key, RECORD_MEMBER, "before the restart: the member");
+        open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+        sd.shutdown();
+    }
+
+    let (sd, _) = spawn_listed(root.path());
+    let port = sd.port();
+    open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    // Principal 0 is the second witness of the same comparand: it maps to the
+    // claimant on both accessors (AUTH-4.30), so it is exempt with it.
+    open_signed_session(port, PRINCIPAL_ZERO, &device_key());
+    assert_blocked(port, 933, &member_key, RECORD_MEMBER, "the restart installed the list");
+    sd.shutdown();
+}
+
+/// RES-65 item 4's residue and item 3's, in the window no other listed board
+/// is in: UNCLAIMED. The header names none and there is NO CLAIMANT to take in
+/// its place, so there is no comparand and every entry STANDS AS ISSUED — over
+/// the very account the ceremony would have claimed with, which is what makes
+/// the residue a residue. It reaches its own prefix and no other, so the kill
+/// is by coverage and not by a list merely being in force.
+///
+/// And the BARE ARM is untouched by the list (AUTH-4.37): a bare bind naming a
+/// covered principal is admitted as written — never the 403, which the signed
+/// arm alone answers — and `resolve`'s arm-blind kill is what ends it, at the
+/// first presentation.
+///
+/// The claimed-board contrast for the same entry is
+/// [`the_headers_two_comparands_are_inert_at_the_four_lineage_cells`], where
+/// the claimant IS the comparand and the entry over it is inert. It cannot be
+/// run on this board: the ceremony must be the board's first delegate, and
+/// this cell has already spent that address.
+#[test]
+fn an_unclaimed_board_has_no_comparand_so_every_entry_stands_as_issued() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let (sd, list) = spawn_listed_unclaimed(root.path());
+    let port = sd.port();
+    assert!(!claimed(port), "the pre-claim window");
+
+    let (covered, covered_session) = bootstrap_delegate(port, 961);
+    let (_, sibling_session) = bootstrap_delegate(port, 962);
+    assert_eq!(covered, CLAIMANT_ACCOUNT, "the first delegate takes the claimant's address");
+
+    issue_blocked_list(&list, BlockedHeader::default(), &[(&covered, RECORD_CLAIMANT)]);
+    assert!(presented_dead(port, &covered_session), "no claimant, no comparand: the entry stands");
+    assert!(!presented_dead(port, &sibling_session), "and it reaches its own prefix and no other");
+
+    let (st, headers, body) =
+        http_full(port, "POST", "/session", None, br#"{"principal":961}"#);
+    assert_eq!(st, 200, "the bare arm reads no list: {}", String::from_utf8_lossy(&body));
+    assert!(header(&headers, "Skepd-Session").is_none(), "/session is token-blind");
+    let fresh = json(&body)["session"].as_str().expect("session").to_string();
+    assert!(presented_dead(port, &fresh), "…and the fresh binding dies at its first presentation");
+
+    sd.shutdown();
 }
 
 /// The accounts the accessor cells stand on, under the claimant `X`: `X.1`

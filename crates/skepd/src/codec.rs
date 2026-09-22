@@ -37,7 +37,7 @@
 //!   silently failed.
 //!
 //! What this file renders is the OPERATION CHANNEL: M10's `Response`s, the
-//! daemon-originated rejections [`daemon_rejected`] builds, and the
+//! daemon-originated rejections ([`credential_refused_reply`]), and the
 //! `key_set` row. The transport's own shapes — `/health`, `/session`,
 //! `/challenge`, `/changes` and its entries, the `{"error": …}` bodies,
 //! the commit stream's payload — are built where their state lives, and
@@ -345,17 +345,17 @@ fn parse_key_set(v: Value) -> PResult<DaemonOp> {
 /// five. `disposition` is typed because [`disposition_name`] is the table
 /// that spells it, and `code` takes [`code_name`]'s output wherever M10
 /// carries the code.
-pub(crate) struct DaemonRejection<'a> {
+struct DaemonRejection<'a> {
     /// The refused op's wire name: [`op_name`]'s output, or the daemon's
     /// own name for a row M10 has no `OpKind` for.
-    pub op: &'a str,
+    op: &'a str,
     /// [`code_name`]'s output, or [`CREDENTIAL_REFUSED`].
-    pub code: &'a str,
-    pub disposition: Disposition,
-    pub detail: Option<String>,
+    code: &'a str,
+    disposition: Disposition,
+    detail: Option<String>,
 }
 
-pub(crate) fn daemon_rejected(r: DaemonRejection<'_>) -> Vec<u8> {
+fn daemon_rejected(r: DaemonRejection<'_>) -> Vec<u8> {
     let mut pairs = vec![
         ("resp", Value::String("rejected".into())),
         ("op", Value::String(r.op.into())),
@@ -423,6 +423,33 @@ pub(crate) fn key_set_reply(as_of: Seq, set: Option<&KeySet>) -> Vec<u8> {
         ("resp", Value::String("key_set".into())),
         ("retired", Value::Array(retired)),
     ]))
+}
+
+/// One daemon-originated CREDENTIAL refusal, marshaled (AUTH-3.53–3.54):
+/// `code: credential_refused` and `disposition: permanent` UNIFORMLY — the
+/// remedy lives in the face, never in the disposition — with `detail` the
+/// machine token the refusal names itself by, and `op` the refused op's own
+/// wire name, lowered from its `OpKind` through [`op_name`]'s table so no
+/// caller holds one to pass on.
+///
+/// Here rather than at the route, for [`key_set_reply`]'s reason: this is
+/// the family's WIRE SHAPE and this is where those shapes are rendered.
+/// Three of its four fields are fixed by the spec, so choosing them here
+/// leaves a caller the two that vary and leaves [`CREDENTIAL_REFUSED`],
+/// [`DaemonRejection`] and [`daemon_rejected`] with no reader outside this
+/// module.
+///
+/// The token rides as an owned `String` — the refusal's own `token()`
+/// answer, moved rather than copied — so this module renders the family's
+/// vocabulary without depending on the type that enumerates it, the
+/// arrangement [`key_set_reply`] has with the identity slice.
+pub(crate) fn credential_refused_reply(op: OpKind, token: String) -> Vec<u8> {
+    daemon_rejected(DaemonRejection {
+        op: op_name(op),
+        code: CREDENTIAL_REFUSED,
+        disposition: Disposition::Permanent,
+        detail: Some(token),
+    })
 }
 
 /// Serialize a finished `Value` tree — the one place this crate turns a
@@ -919,6 +946,19 @@ pub(crate) fn wire_tumbler(s: &str) -> Result<Tumbler, String> {
     Tumbler::new(comps).map_err(|e| format!("'{}': {e}", bounded(s)))
 }
 
+/// A dotted-decimal ADDRESS off the wire: [`wire_tumbler`]'s capped parse
+/// refined by M1's `validate` — THE address door, as that function is the
+/// tumbler's, so the two steps that make a wire address are composed once
+/// and a caller adds only the field name its own grammar gives it. `Err`
+/// carries the detail text.
+///
+/// The UNCAPPED twin is [`crate::feed::classify::parse_dotted`], which
+/// refines its own grammar the same way and states why a name that reached
+/// a FILE is already past the budgets a client meets.
+pub(crate) fn wire_address(s: &str) -> Result<Address, String> {
+    validate(wire_tumbler(s)?).map_err(|e| format!("not a T4-valid address: {e}"))
+}
+
 /// [`wire_tumbler`] over a JSON string — the frame side's face of the one
 /// bounded parse.
 fn p_tum(v: &Value) -> PResult<Tumbler> {
@@ -926,8 +966,12 @@ fn p_tum(v: &Value) -> PResult<Tumbler> {
     wire_tumbler(s).map_err(PErr)
 }
 
+/// [`wire_address`] over a JSON string — the frame side's face, as [`p_tum`]
+/// is [`wire_tumbler`]'s. The non-string fault is `p_tum`'s verbatim: the
+/// two faces refuse the same shape for the same reason.
 fn p_addr(v: &Value) -> PResult<Address> {
-    validate(p_tum(v)?).map_err(|e| PErr(format!("not a T4-valid address: {e}")))
+    let s = v.as_str().ok_or_else(|| PErr("expected a dotted-decimal string".into()))?;
+    wire_address(s).map_err(PErr)
 }
 
 /// Guard which KEYS a sub-object may carry; unknown keys fail like unknown
@@ -2044,7 +2088,7 @@ fn fault_name(f: SpanFault) -> &'static str {
 /// spells by hand rather than through [`code_name`] (AUTH's new code,
 /// wire.md §Credential refusals). It retires the day `RejectCode` grows a
 /// variant for it.
-pub(crate) const CREDENTIAL_REFUSED: &str = "credential_refused";
+const CREDENTIAL_REFUSED: &str = "credential_refused";
 
 /// snake_case of every `RejectCode` variant — exhaustive, so a new code
 /// cannot ship without a wire name.
@@ -2209,6 +2253,35 @@ mod tests {
         let deeper = vec!["1"; MAX_TUMBLER_COMPONENTS + 1].join(".");
         let e = tum(deeper).expect_err("one component past the cap must not parse");
         assert!(e.0.contains("component"), "the refusal names the depth cap: {e}");
+    }
+
+    /// [`wire_address`] is BOTH steps that make a wire address: the capped
+    /// tumbler parse and M1's T4 refinement. Composing them once is the
+    /// point, so this pins that each step is present and that neither face
+    /// of the door can lose one — a caller that re-composed them itself
+    /// could keep the caps and drop T4, which admits an address no address
+    /// arithmetic in the system is defined on.
+    #[test]
+    fn the_address_door_is_the_capped_parse_and_the_t4_refinement_together() {
+        assert_eq!(
+            wire_address("1.0.1.0.1").expect("a T4-valid address").to_string(),
+            "1.0.1.0.1"
+        );
+        // The T4 half: a tumbler `wire_tumbler` admits and `validate` does not.
+        let not_t4 = "1.0.0.3";
+        assert!(wire_tumbler(not_t4).is_ok(), "the tumbler half admits it");
+        let e = wire_address(not_t4).expect_err("the T4 half refuses it");
+        assert!(e.contains("T4-valid"), "the refusal names the clause: {e}");
+        // The CAP half, on both axes, so neither is lost to the refinement.
+        for over in
+            ["9".repeat(MAX_NAT_DIGITS + 1), vec!["1"; MAX_TUMBLER_COMPONENTS + 1].join(".")]
+        {
+            let e = wire_address(&over).expect_err("past a wire cap");
+            assert!(e.contains("wire cap"), "the refusal names the cap: {e}");
+        }
+        // The frame's face answers alike, being that door over a JSON string.
+        assert!(p_addr(&Value::String(not_t4.into())).is_err());
+        assert!(p_addr(&Value::Number(1.into())).is_err(), "and a non-string is refused");
     }
 
     /// Both ends of the id cap. The id is the one frame field this daemon

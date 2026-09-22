@@ -240,7 +240,10 @@ pub(crate) fn deposits_credential_link(op: &Op) -> bool {
 
 /// The daemon-side refusal vocabulary (AUTH-3.53). Every one marshals as
 /// `code: credential_refused, disposition: permanent, detail: token()`
-/// (AUTH-3.54 — `Permanent` UNIFORMLY; the remedy lives in the face).
+/// (AUTH-3.54 — `Permanent` UNIFORMLY; the remedy lives in the face) — a
+/// uniformity [`crate::codec::credential_refused_reply`] performs rather
+/// than leaves to each producer, so what varies here is the TOKEN and
+/// nothing else.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CredentialRefusal {
     /// The fold's own verdict — produced by `precheck`, slot (3).

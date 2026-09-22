@@ -148,8 +148,8 @@ use parking_lot::Mutex;
 use serde_json::Value;
 use skep_engine::{Engine, EngineError, HistoryError, World};
 use skep_febe::{
-    Codec, Disposition, FaultSite, Op, OperationSurface, OpKind, RejectCode, Rejection, Request,
-    Response, SessionId,
+    Codec, FaultSite, Op, OperationSurface, OpKind, RejectCode, Rejection, Request, Response,
+    SessionId,
 };
 use skep_identity::IdentityState;
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq, Snapshot};
@@ -169,8 +169,7 @@ use crate::auth::{
     OsEntropy, PortAlreadyBound, Reissue,
 };
 use crate::codec::{
-    check_keys, daemon_rejected, key_set_reply, obj, to_bytes, DaemonOp, DaemonRejection,
-    JsonCodec, CREDENTIAL_REFUSED,
+    check_keys, credential_refused_reply, key_set_reply, obj, to_bytes, DaemonOp, JsonCodec,
 };
 use crate::feed::{ChangesAnswer, FeedClass, Query};
 use crate::history::{History, Permit, Permits, Unavailable};
@@ -1750,9 +1749,13 @@ impl Daemon {
                 // 4): the claimant is the comparand wherever the header
                 // names none, and it exists from THIS commit — so the issue
                 // in force is re-compared here, under the write guard the
-                // claim committed under, and an entry the flip made inert
-                // is said so in the log.
-                if self.auth.reinstall_blocked_at_claim(&credential_lock) {
+                // claim committed under.
+                self.auth.reinstall_blocked_at_claim(&credential_lock);
+                // The flip can only have made an entry INERT, so an issue
+                // with no entries has nothing to say; where it has one, the
+                // whole list in force is named (AUTH-4.36 step 4b's
+                // "ignored at install and said so in the log").
+                if !blocked_prefixes(&self.auth.cfg).issue_is_empty() {
                     self.log_blocked_prefixes("at claim");
                 }
             }
@@ -2104,19 +2107,13 @@ fn refuse_scan_busy(kind: OpKind) -> Reply {
     )
 }
 
-/// One daemon-originated credential refusal as its 200-enveloped rejection
-/// (AUTH-3.54): `code: credential_refused`, `disposition: permanent`
-/// uniformly, `detail` the machine token. The op field names the refused
-/// op, exactly as M10's rejections do — lowered from its `OpKind` here, so
-/// the wire name comes from [`crate::codec::op_name`]'s table rather than
-/// from a caller holding one to pass on.
+/// One daemon-originated credential refusal as its 200-enveloped rejection.
+/// The ROW is [`credential_refused_reply`]'s — `code`, `disposition` and the
+/// token's seat are the wire's and are fixed there — and what this adds is
+/// the transport's own half: the 200 [`op_answer`] gives every answer on
+/// that channel, whatever the answer says.
 fn credential_refused(kind: OpKind, r: &CredentialRefusal) -> Reply {
-    op_answer(daemon_rejected(DaemonRejection {
-        op: crate::codec::op_name(kind),
-        code: CREDENTIAL_REFUSED,
-        disposition: Disposition::Permanent,
-        detail: Some(r.token()),
-    }))
+    op_answer(credential_refused_reply(kind, r.token()))
 }
 
 /// The `/challenge` query: exactly `principal=<non-negative integer>`.

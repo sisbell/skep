@@ -33,7 +33,7 @@ use skep_febe::{ReqId, SessionId};
 use skep_identity::{LinkDeposit, PublicKey};
 use skep_namespace::prefix_contains;
 
-use crate::codec::{check_keys, wire_tumbler};
+use crate::codec::{check_keys, wire_address};
 use crate::World;
 use fold::{CredMemo, IdentityFold};
 use session::{Challenges, Sessions};
@@ -124,7 +124,7 @@ impl AuthOptions {
     /// [`Origin::parse`] carries none: the form is one shape, and the
     /// binary's usage text states it.
     pub fn parse_node_prefix(text: &str) -> Option<Address> {
-        let prefix = validate(wire_tumbler(text).ok()?).ok()?;
+        let prefix = wire_address(text).ok()?;
         let root = root();
         let under_root = prefix.level() == Level::Node
             && prefix != root
@@ -347,13 +347,16 @@ impl AuthState {
     /// The claimant is the comparand wherever the header names none, and it
     /// is set ONCE, by the claim — so the issue in force is re-compared at
     /// that one transition, under the write guard the claim itself commits
-    /// under. Answers whether there is a list to say anything about: an
-    /// empty issue has no entry the flip could move.
-    pub fn reinstall_blocked_at_claim(&self, lock: &LockWrite<'_>) -> bool {
+    /// under.
+    ///
+    /// Answers NOTHING: whether the flip is worth a log line is the log's
+    /// question, and the list in force answers it
+    /// ([`BlockedPrefixes::issue_is_empty`]) at the site that writes the
+    /// line. This install keeps the issue's entries, so that read is the
+    /// same either side of it.
+    pub fn reinstall_blocked_at_claim(&self, lock: &LockWrite<'_>) {
         let issue = blocked_prefixes(&self.cfg).issue.clone();
-        let listed = !issue.entries.is_empty();
         self.install_blocked(lock, issue);
-        listed
     }
 
     /// THE REISSUE CHANNEL's daemon half (AUTH-4.70 "RE-ISSUED to the
@@ -517,11 +520,12 @@ pub(crate) fn verifying_key(key: &PublicKey) -> Option<VerifyingKey> {
 /// admitted `s` and the handshake's already-canonical check IS this parse.
 ///
 /// The canonical text is the whole value; `https` and `host` sit beside it
-/// because [`startup_warnings`]'s port-change arm asks for them by name. No
-/// resolved port is kept: an origin's port is IN that text (omitted at the
-/// scheme's default, which is what makes the text canonical), and every
-/// other reader asks only for membership, which the text decides — the
-/// admission rule above makes it determine the rest.
+/// because they are what tells a LOOPBACK-HOST origin
+/// ([`Origin::names_loopback_host`]), which is the one question anything
+/// asks of an origin's parts. No resolved port is kept: an origin's port is
+/// IN that text (omitted at the scheme's default, which is what makes the
+/// text canonical), and every other reader asks only for membership, which
+/// the text decides — the admission rule above makes it determine the rest.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Origin {
     canonical: String,
@@ -600,6 +604,16 @@ impl Origin {
     /// The canonical text — what the wire carries and what health publishes.
     pub fn as_str(&self) -> &str {
         &self.canonical
+    }
+
+    /// Whether this origin names one of the three [`LOOPBACK_HOSTS`] over
+    /// plain HTTP — the shape [`loopback_defaults`] mints, whatever port it
+    /// carries. The ONE question anything asks of an origin's parts, so the
+    /// parts answer it here: [`startup_warnings`]'s port-change arm is about
+    /// a configured origin naming a loopback host at a port this daemon is
+    /// not bound to, and this is the first half of that sentence.
+    fn names_loopback_host(&self) -> bool {
+        !self.https && LOOPBACK_HOSTS.contains(&self.host.as_str())
     }
 }
 
@@ -761,8 +775,7 @@ pub(crate) fn startup_warnings(cfg: &AuthConfig, claimed: bool) -> Vec<Warning> 
     }
     let defaults = loopback_defaults(cfg.port());
     for o in &cfg.configured {
-        let is_loopback_host = !o.https && LOOPBACK_HOSTS.contains(&o.host.as_str());
-        if is_loopback_host && !defaults.contains(o) {
+        if o.names_loopback_host() && !defaults.contains(o) {
             out.push(Warning::ConfiguredLoopbackPortChanged(o.clone()));
         }
     }
@@ -963,6 +976,14 @@ impl BlockedPrefixes {
     /// The entries in force — every entry of the issue but the inert ones.
     fn in_force(&self) -> usize {
         self.inert.iter().filter(|i| i.is_none()).count()
+    }
+
+    /// Whether the issue carries NO entries — the question the claim flip's
+    /// log asks, and about the ISSUE rather than the entries in force: the
+    /// flip's news is exactly that an entry became INERT, so an inert entry
+    /// is something to say and an absent one is not.
+    pub fn issue_is_empty(&self) -> bool {
+        self.issue.entries.is_empty()
     }
 
     /// THE LOG (AUTH-4.70 "the startup log names the list in force";
@@ -1222,12 +1243,13 @@ fn parse_issue(bytes: &[u8]) -> Result<BlockedIssue, String> {
 }
 
 /// One address member: absent ⇒ `None`; present ⇒ a dotted-decimal string
-/// through the codec's bounded tumbler parse, T4-valid — or a named refusal.
+/// through [`crate::codec::wire_address`], the wire's one capped-and-T4
+/// address door — or a named refusal, this file's own grammar supplying the
+/// field name and that door the fault.
 fn address_field(m: &Map<String, Value>, k: &str) -> Result<Option<Address>, String> {
     let Some(v) = m.get(k) else { return Ok(None) };
     let s = v.as_str().ok_or_else(|| format!("field '{k}' must be a dotted-decimal string"))?;
-    let tumbler = wire_tumbler(s).map_err(|detail| format!("field '{k}': {detail}"))?;
-    validate(tumbler).map(Some).map_err(|e| format!("field '{k}' is not a T4-valid address: {e}"))
+    wire_address(s).map(Some).map_err(|detail| format!("field '{k}': {detail}"))
 }
 
 #[cfg(test)]
@@ -1372,7 +1394,7 @@ mod tests {
     }
 
     fn addr(s: &str) -> Address {
-        validate(wire_tumbler(s).expect("a tumbler")).expect("a T4-valid address")
+        wire_address(s).expect("a T4-valid address")
     }
 
     fn issue(operator: Option<&str>, binding_writer: Option<&str>, entries: &[(&str, &str)]) -> BlockedIssue {
@@ -1492,6 +1514,28 @@ mod tests {
         assert_eq!(list.inert, [a, None], "above is inert; the agent space beneath blocks");
         assert_eq!(list.covers(&addr(member)), None, "an inert entry blocks nobody");
         assert!(list.covers(&addr("1.0.1.1")).is_some());
+    }
+
+    /// The claim flip's log question ([`BlockedPrefixes::issue_is_empty`]) is
+    /// about the ISSUE and never about the entries in force. The two differ
+    /// at exactly the cell the flip's log exists for — every entry inert,
+    /// because the claimant the flip seats is what made them so — so a
+    /// version asking `in_force() == 0` instead would fall silent on the one
+    /// install AUTH-4.36 step 4b requires be "said so in the log".
+    #[test]
+    fn an_all_inert_issue_is_not_an_empty_one() {
+        let claimant = addr("1.0.1");
+        let all_inert = BlockedPrefixes::installed_under(
+            issue(None, None, &[("1.0.1", "1.0.1.0.9.1")]),
+            Some(&claimant),
+            Some(&addr("1.3")),
+        );
+        assert_eq!(all_inert.in_force(), 0, "the claim made its one entry inert");
+        assert!(!all_inert.issue_is_empty(), "and that is exactly what the log must say");
+        let empty =
+            BlockedPrefixes::installed_under(issue(None, None, &[]), Some(&claimant), None);
+        assert!(empty.issue_is_empty(), "an issue with no entries has nothing to say");
+        assert!(BlockedPrefixes::default().issue_is_empty(), "nor has no supply at all");
     }
 
     /// THE OFF-BOARD TEST (AUTH-4.36 step 4b's comparand (b) as ruled

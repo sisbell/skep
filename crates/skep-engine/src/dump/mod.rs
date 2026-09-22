@@ -168,9 +168,12 @@ fn dump_visible(world: &World, readable: &dyn Fn(&Address) -> bool) -> WorldDump
 /// What each entry carries is that slice's checkpoint form and nothing else:
 /// M3's four serde fields (the node registry, the principals, the
 /// per-namespace frontier counts and the publication map), M4's content map,
-/// M5's arrangements — whose resident form IS the canonical maximally-merged
-/// decomposition, maintained by M5's fold — and its provenance R, and M7's
-/// link store. M7's `#[serde(skip)]` hints are thereby excluded, exactly as
+/// M5's three — its arrangements, whose resident form IS the canonical
+/// maximally-merged decomposition maintained by M5's fold; its provenance R;
+/// and its birth memo, each birth member's content count at its mint, frozen
+/// there and checkpointed because nothing else M5 holds can recompute it,
+/// which the per-class filter keeps whole — and M7's link store. M7's
+/// `#[serde(skip)]` hints are thereby excluded, exactly as
 /// this section demands: they are the [`hints_tree`] section's
 /// subject, and rendering them here would compare a derived structure against
 /// itself.
@@ -856,31 +859,6 @@ mod tests {
                 "the authoritative section ignores the {slice} slice"
             );
         }
-    }
-
-    /// `World`'s DECLARATION order is what M2's bincode checkpoints encode —
-    /// positionally, with no field names — so a reordering silently mis-reads
-    /// every checkpoint on disk while a rename is byte-neutral. Serde emits
-    /// fields in declaration order to any serializer, so the transcode's
-    /// COLLECTION order (before `render` sorts) is that order. The names are
-    /// here to identify the fields; the ORDER is the claim — the format stamp
-    /// FIRST (it is what refuses a foreign layout before any slice is read),
-    /// and the skip-serialized exception set absent, since it occupies no
-    /// bytes.
-    #[test]
-    fn the_world_serializes_its_slices_in_declaration_order() {
-        let world = World::genesis();
-        let SerdeTree::Map(entries) = to_tree(&world) else {
-            panic!("a world transcodes as a map of its fields")
-        };
-        let names: Vec<&str> = entries
-            .iter()
-            .map(|(k, _)| match k {
-                SerdeTree::Str(s) => s.as_str(),
-                other => panic!("struct field keys are strings, got {other:?}"),
-            })
-            .collect();
-        assert_eq!(names, ["format", "namespace", "content", "arrangement", "links"]);
     }
 
     /// The term that dominates a dump's cost, pinned where the cost is

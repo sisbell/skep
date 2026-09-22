@@ -1,6 +1,8 @@
 //! The audit-view EDITION-CLAIM lookup (PUB-8.46; PUB round 2, lane 3.4 §2)
 //! — the engine's composition of M7's audit reads over the R20 edition-claim
-//! class, answering M10's `PublicationWorld::edition_claims`.
+//! class, answering M10's `PublicationWorld::edition_claims`. That seam's
+//! impl is `crate::world`'s, beside the World's other role impls, because
+//! the same trait asks for the grant fold's any-principal index too.
 //!
 //! An edition claim is an ORDINARY link (deposited through MAKELINK's open
 //! surface, address-form slots) whose type slot denotes the edition class —
@@ -139,43 +141,6 @@ impl World {
                     active: links.is_active(&claim),
                     claim,
                 })
-            })
-            .collect()
-    }
-}
-
-/// The lookup as M10's capability (lane 3.4, §2): M10 is generic over its
-/// world and names no `World`, so it asks this seam, which forwards to
-/// [`World::edition_claims`] above — the inherent method being the real one —
-/// and applies the home rule (PUB-6.13) per row, off its own snapshot.
-///
-/// M10's `PublicationWorld` is where the contract this seam carries is
-/// stated: the two regimes the slots are judged by — OVERLAP for the `to`
-/// slot, DENOTATION for class membership — and the precondition that `target`
-/// is a registered document, which M10 checks before it asks. So through this
-/// seam the breadth term of [`World::edition_claims`]'s cost is ONE
-/// registered document's subtree, while the inherent method stays total over
-/// every tier for a direct caller. Membership is the whole of what a row is
-/// tested for — no home, issuer or publication test runs on this side of the
-/// seam.
-impl skep_febe::PublicationWorld for World {
-    fn edition_claims(&self, target: &Address) -> Vec<EditionClaim> {
-        World::edition_claims(self, target)
-    }
-
-    /// The live ANY-PRINCIPAL set as M10's capability (PUB-8.47, RES-224):
-    /// [`World::universal_grants`]'s rows — the STORED prefix and its issuers,
-    /// the inherent read being the real one — cloned out of their borrow, in
-    /// the order that read hands them back. RAW, as the seam above is: the
-    /// fold-filter that narrows a served row to the prefix its issuer ω-owns
-    /// (RES-231/264/273/298) is M10's own, at the read's arm, and nothing about a
-    /// row's coverage is decided on this side of the seam.
-    fn universal_grants(&self) -> Vec<skep_febe::UniversalGrant> {
-        World::universal_grants(self)
-            .into_iter()
-            .map(|row| skep_febe::UniversalGrant {
-                prefix: row.content_prefix.clone(),
-                issuers: row.issuers.into_iter().cloned().collect(),
             })
             .collect()
     }

@@ -630,6 +630,10 @@ fn a_grant_from_a_non_owner_opens_nothing() {
 /// the PRINCIPAL-EXACT index and leaves the universal one empty. A record has
 /// a grantee or it has none, so the predicate's two probes take two tests.
 /// Here B grants A's draft to EVERY principal, from B's own published doc 1.
+///
+/// It is also the row `World::universal_grants` names as proof that its rows
+/// are STORED and a superset of entitlement: the record is admitted on its
+/// home alone, so its row is listed, and it entitles nobody.
 #[test]
 fn an_any_principal_grant_from_a_non_owner_opens_nothing() {
     let engine = mem_engine();
@@ -742,7 +746,8 @@ fn a_parent_account_s_grant_opens_none_of_its_sub_account_s_drafts() {
 /// subtree clause, but reading is not owning, so S's admitted grants of it —
 /// from S's own published doc 1 — open it to nobody. A clause read as "the
 /// owner's account contains the issuer's" would admit both. Asked of both
-/// indexes.
+/// indexes — and so it holds, for `World::issuers_for` as for
+/// `World::universal_grants`, a STORED row that entitles nobody.
 #[test]
 fn a_sub_account_s_grant_opens_none_of_its_parent_s_drafts() {
     let engine = mem_engine();
@@ -1451,9 +1456,10 @@ fn a_reconstruction_over_a_checkpoint_base_answers_its_drafts_and_grants() {
 
 /// The fold's two enumerations for the feed (lane 3.6 §3; PUB-7.22,
 /// PUB-7.28): the LIVE ANY-PRINCIPAL set and a grantee's issuers with the
-/// union of covered prefixes — both read off the fold's own indexes, both
-/// agreeing with the predicate they are the inside-out of, and both moving
-/// with a revoking record at once (revocation is immediate, PUB-7.23).
+/// union of the prefixes their grants name — both read off the fold's own
+/// indexes, both agreeing with the predicate they are the inside-out of, and
+/// both moving with a revoking record at once (revocation is immediate,
+/// PUB-7.23).
 ///
 /// Each enumeration is ordered at TWO levels — the rows by their key, then
 /// each row's own list — and this fixture carries at least two entries at

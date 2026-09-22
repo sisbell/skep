@@ -6,13 +6,15 @@
 //! carries that no store does: its checkpoint FORMAT STAMP, the exception set
 //! (`crate::publication`) and the grant fold (`crate::grants`). M6/M8/M9/M10
 //! contribute no slice and no record variant, so nothing of theirs appears
-//! here.
+//! here but one role impl, M10's `PublicationWorld` seam.
 
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use skep_address::Address;
 use skep_arrangement::{HasM5, M5Rec, M5State};
 use skep_content::{ContentStore, ContentWrite, HasContent};
+use skep_febe::EditionClaim;
 use skep_kernel::WorldState;
 use skep_links::{HasLinks, LinkRec, LinkState};
 use skep_namespace::{HasM3, M3Rec, M3State};
@@ -131,10 +133,23 @@ impl fmt::Debug for World {
 
 /// The World checkpoint FORMAT — the version the layout of [`World`]'s bytes
 /// is. The high 32 bits spell `SKPW`; the low 32 count the layouts this
-/// crate has written. `1` is the layout that carries M3's publication bit
-/// (2026-09-05, PUB round 1). A slice's layout change is a World layout
-/// change: bump the count with it, and every older checkpoint refuses at
-/// this word instead of decoding one slice's bytes as another's.
+/// crate has written. A slice's layout change is a World layout change: bump
+/// the count with it, and every older checkpoint refuses at this word instead
+/// of decoding one slice's bytes as another's. The author who changes a slice
+/// is a store's, with no edge to this file, so the rule is held where it
+/// meets them: `each_slice_serializes_the_fields_the_format_count_names` pins
+/// every slice's top-level fields to the count, and says what it cannot see
+/// below that level.
+///
+/// `1` names TWO layouts. The first carries M3's publication bit (2026-09-05,
+/// PUB round 1); the second is that layout with M5's birth memo appended to
+/// its slice (W5, 2026-09-17), under the same count. So a base written under
+/// the first passes this word, and M5's decoder then reads M7's link bytes as
+/// the memo: its refusal is left to that misalignment — near-certain, not
+/// certain — which makes it the one older layout this word does not refuse.
+/// Moving the count would refuse it here, and would refuse the second
+/// layout's bases too, which decode: a decision about the bases already on
+/// disk, and the owner's to take.
 ///
 /// PUB-7.8: a pre-publication checkpoint MUST fail to DECODE rather than
 /// resolve to everything-published. M3's own field order already makes that
@@ -389,10 +404,54 @@ impl HasLinks for World {
     }
 }
 
-// M10's two publication seams are implemented beside the compositions they
-// answer: `ReadableWorld` — the read predicate as a capability — in
-// `crate::readable`, and `PublicationWorld` — the edition-claim lookup — in
-// `crate::editions`.
+// M10's two publication seams. `ReadableWorld` — the read predicate as a
+// capability — forwards to one composition and sits beside it, in
+// `crate::readable`. `PublicationWorld` forwards to two, and one impl block
+// can sit beside only one of them, so it sits here with the World's other
+// role impls.
+
+/// M10's `PublicationWorld` seam: M10 is generic over its world and names no
+/// `World`, so it reaches the two CLASS lookups its publication reads are
+/// built on through this trait, off its own snapshot, and applies its own
+/// rules per row. Each method forwards to the inherent read that is the real
+/// one — the edition-claim lookup in `crate::editions`, the grant fold's
+/// any-principal index in `crate::grants` — and neither decides anything on
+/// this side of the seam.
+impl skep_febe::PublicationWorld for World {
+    /// The edition-claim lookup as M10's capability (lane 3.4, §2): forwards
+    /// to [`World::edition_claims`], the inherent method being the real one,
+    /// and M10 applies the home rule (PUB-6.13) per row.
+    ///
+    /// M10's `PublicationWorld` is where the contract this seam carries is
+    /// stated: the two regimes the slots are judged by — OVERLAP for the `to`
+    /// slot, DENOTATION for class membership — and the precondition that
+    /// `target` is a registered document, which M10 checks before it asks. So
+    /// through this seam the breadth term of [`World::edition_claims`]'s cost
+    /// is ONE registered document's subtree, while the inherent method stays
+    /// total over every tier for a direct caller. Membership is the whole of
+    /// what a row is tested for — no home, issuer or publication test runs on
+    /// this side of the seam.
+    fn edition_claims(&self, target: &Address) -> Vec<EditionClaim> {
+        World::edition_claims(self, target)
+    }
+
+    /// The live ANY-PRINCIPAL set as M10's capability (PUB-8.47, RES-224):
+    /// [`World::universal_grants`]'s rows — the STORED prefix and its issuers,
+    /// the inherent read being the real one — cloned out of their borrow, in
+    /// the order that read hands them back. RAW, as the lookup above is: the
+    /// fold-filter that narrows a served row to the prefix its issuer ω-owns
+    /// (RES-231/264/273/298) is M10's own, at the read's arm, and nothing about
+    /// a row's coverage is decided on this side of the seam.
+    fn universal_grants(&self) -> Vec<skep_febe::UniversalGrant> {
+        World::universal_grants(self)
+            .into_iter()
+            .map(|row| skep_febe::UniversalGrant {
+                prefix: row.content_prefix.clone(),
+                issuers: row.issuers.into_iter().cloned().collect(),
+            })
+            .collect()
+    }
+}
 
 // The record lifts — the write-side mirror of the accessors: stores return
 // their OWN record type and the caller lifts with `.into()` (contract hard
@@ -426,9 +485,87 @@ impl From<LinkRec> for Record {
 mod tests {
     use skep_content::Val;
 
+    use crate::canon::{to_tree, SerdeTree};
     use crate::testkit::addr;
 
     use super::*;
+
+    /// The top-level field names a value's serde form carries, in the order
+    /// its `Serialize` impl emits them — which is the order bincode lays their
+    /// bytes down in, and so the order M2's checkpoints encode.
+    fn field_names(value: &impl Serialize) -> Vec<String> {
+        let SerdeTree::Map(entries) = to_tree(value) else {
+            panic!("a struct transcodes as a map of its fields")
+        };
+        entries
+            .into_iter()
+            .map(|(k, _)| match k {
+                SerdeTree::Str(s) => s,
+                other => panic!("struct field keys are strings, got {other:?}"),
+            })
+            .collect()
+    }
+
+    /// `World`'s DECLARATION order is what M2's bincode checkpoints encode —
+    /// positionally, with no field names — so a reordering silently mis-reads
+    /// every checkpoint on disk while a rename is byte-neutral. Serde emits
+    /// fields in declaration order to any serializer, so the transcode's
+    /// COLLECTION order (before a rendering sorts it) is that order. The names
+    /// are here to identify the fields; the ORDER is the claim — the format
+    /// stamp FIRST (it is what refuses a foreign layout before any slice is
+    /// read), and the two skip-serialized derived indexes absent, since they
+    /// occupy no bytes.
+    #[test]
+    fn the_world_serializes_its_slices_in_declaration_order() {
+        assert_eq!(
+            field_names(&World::genesis()),
+            ["format", "namespace", "content", "arrangement", "links"]
+        );
+    }
+
+    /// Each slice's own checkpoint layout, at its TOP LEVEL, pinned to the
+    /// World format count that names it. A slice's layout is a World layout
+    /// ([`FormatStamp`]), and the author who changes one is a store's, with
+    /// no edge to this file: count 1 names two layouts because a slice grew a
+    /// field under it. This pin is where such a change meets the count — a
+    /// field appended, removed, renamed or reordered on any slice fails here,
+    /// and the failure says what it owes. The count is asserted beside the
+    /// fields, so a bump that leaves this pin behind fails too.
+    ///
+    /// It cannot see BELOW a slice's top level: a nested type gaining a field
+    /// moves the World's bytes with every name here unchanged, and that change
+    /// still owes the bump by hand. Nor is the dump filter's field-set check a
+    /// substitute: that one asks for a reduction's DISPOSITION, compiles with
+    /// the `dump` feature alone, and is answered without touching the count.
+    #[test]
+    fn each_slice_serializes_the_fields_the_format_count_names() {
+        const PINNED_COUNT: u64 = 0x534B_5057_0000_0001;
+        assert_eq!(
+            WORLD_FORMAT, PINNED_COUNT,
+            "WORLD_FORMAT moved without this pin: restate each slice's fields under the new count"
+        );
+        let world = World::genesis();
+        for (slice, found, pinned) in [
+            (
+                "namespace",
+                field_names(&world.namespace),
+                &["frontiers", "nodes", "principals", "publication"][..],
+            ),
+            ("content", field_names(&world.content), &["map"]),
+            (
+                "arrangement",
+                field_names(&world.arrangement),
+                &["arrangements", "provenance", "birth_extents"],
+            ),
+            ("links", field_names(&world.links), &["links"]),
+        ] {
+            assert_eq!(
+                found, pinned,
+                "{slice}'s checkpoint layout moved under WORLD_FORMAT {WORLD_FORMAT:#018x}: \
+                 that is a World layout change — bump the count, then this pin"
+            );
+        }
+    }
 
     /// [`Record`]'s VARIANT ORDER is what M2's replay decodes by: bincode
     /// encodes a variant as its INDEX, positionally and with no name, so a

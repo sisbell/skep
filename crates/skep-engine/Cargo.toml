@@ -46,8 +46,9 @@ skep-coordination = { path = "../skep-coordination" }
 # M10 — the demand side: EngineStores realizes the Stores<World> factory the
 # transport injects into OperationSurface::new, and World implements M10's two
 # publication seams — ReadableWorld (the read predicate) and PublicationWorld
-# (the edition-claim lookup, answering in M10's EditionClaim rows). M10 stays
-# generic; only the binary and this assembler ever name World against it.
+# (the edition-claim lookup and the grant fold's any-principal index,
+# answering in M10's EditionClaim and UniversalGrant rows). M10 stays generic;
+# only the binary and this assembler ever name World against it.
 skep-febe = { path = "../skep-febe" }
 
 [dev-dependencies]

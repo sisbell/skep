@@ -29,7 +29,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   grant-typed records as values, seeded at load, folded on every
   link deposit, never checkpointed. The fold also enumerates the
   change feed's grant keys (`World::universal_grants`,
-  `World::issuers_for`).
+  `World::issuers_for`), and the stored index M10's any-principal
+  discovery read narrows.
 - **The edition-claim lookup** — `World::edition_claims`, the
   audit-view lookup over the edition-claim class, composed from the
   link store's own reads and answered unfiltered, for the operation

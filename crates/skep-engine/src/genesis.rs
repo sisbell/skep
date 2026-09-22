@@ -22,16 +22,16 @@ impl World {
     /// M3 seeded with the baptismal roots (`M3State::genesis`: node `[1]`,
     /// bootstrap principal π₀), M4 empty (`ContentStore::default` — the
     /// permascroll starts with no content), M5 empty (`M5State::genesis`:
-    /// no arrangements, no provenance), and M7 with `links = ∅` and empty
-    /// hints (`LinkState::genesis`), read against the format registry — M7's
-    /// module constant, whose five shipped classes include the PredLayer
-    /// `pdef`/`pd_stable` registrations. Genesis creates exactly two things:
-    /// the namespace roots and the empty docuverse. A CONSTANT —
-    /// deterministic with no inputs to hold constant — which is what
-    /// discharges M2's byte-identical-genesis caller contract by
-    /// construction; the World's own leading format stamp and the journal's
-    /// format stamp, not a sealed configuration, name the format that wrote a
-    /// base.
+    /// no arrangements, no provenance, no birth memo), and M7 with
+    /// `links = ∅` and empty hints (`LinkState::genesis`), read against the
+    /// format registry — M7's module constant, whose five shipped classes
+    /// include the PredLayer `pdef`/`pd_stable` registrations. Genesis
+    /// creates exactly two things: the namespace roots and the empty
+    /// docuverse. A CONSTANT — deterministic with no inputs to hold constant
+    /// — which is what discharges M2's byte-identical-genesis caller contract
+    /// by construction; the World's own leading format stamp and the
+    /// journal's format stamp, not a sealed configuration, name the format
+    /// that wrote a base.
     ///
     /// The five reserved type addresses the M7 slice dispatches on are
     /// in-docuverse GHOST TUMBLERS (owner ruling, 2026-08-26): content

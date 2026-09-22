@@ -49,8 +49,10 @@
 //!    (RES-252) and its `to` denotes one address or is empty (RES-238), and
 //!    of NEITHER KIND otherwise.
 //!
-//! A record of NEITHER KIND enters no index and moves no honored state — the
-//! malformed arm above, which is the fold's one arm for a record it ignores.
+//! A record of NEITHER KIND enters no index and moves no honored state, a
+//! malformed record among them: [`Kind::Neither`] is the fold's one arm for
+//! such a record, and the record joins the earlier-record key and nothing
+//! else.
 //! The key in (2) is EVERY earlier admitted record and never the operative
 //! set alone, which a revoked grant has left: read off that set, a record
 //! naming a withdrawn grant or a revocation names nothing the fold knows and
@@ -83,6 +85,12 @@
 //! probing p's prefix-keyed set and the ANY-PRINCIPAL set at each. Coverage is
 //! CONTAINMENT (a granted prefix that is an ancestor of doc) ∩ the grant's
 //! issuer being doc's ω owner. The grantee side is PRINCIPAL-EXACT.
+//!
+//! Coverage's issuer half is applied AT THE PROBE and never at indexing, so
+//! the indexes hold every prefix an admitted grant NAMES, and the two public
+//! enumerations over them ([`World::universal_grants`],
+//! [`World::issuers_for`]) hand out that STORED population — a superset of
+//! what the grants cover.
 
 use std::collections::BTreeMap;
 
@@ -96,8 +104,10 @@ use crate::publication::{is_published, Drafts};
 use crate::types::t_grant;
 use crate::world::World;
 
-/// One row of the LIVE ANY-PRINCIPAL set ([`World::universal_grants`]): a
-/// content-prefix, and the issuers who have granted it to every principal.
+/// One STORED row of the LIVE ANY-PRINCIPAL set ([`World::universal_grants`]):
+/// a content-prefix as the index keys it, and the issuers whose admitted
+/// ANY-PRINCIPAL grants name it — a pair that opens only those documents under
+/// the prefix whose ω owner is the issuer, and none at all where it owns none.
 ///
 /// A named row rather than a pair, because the two grant enumerations are
 /// TRANSPOSES of each other and every half of both is an account or a
@@ -113,40 +123,55 @@ use crate::world::World;
 /// one read share, so that order is the one the read hands them back in.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct UniversalGrant<'a> {
-    /// The content-prefix granted (a document or an account address).
+    /// The content-prefix the grants name (a document or an account address).
     pub content_prefix: &'a Address,
-    /// The issuers who granted it, in address order.
+    /// The issuers whose grants name it, in address order.
     pub issuers: Vec<&'a Address>,
 }
 
-/// One row of the GRANTEE-INDEXED read ([`World::issuers_for`]): an issuer,
-/// and the union of the content-prefixes that issuer has granted the queried
-/// grantee. [`UniversalGrant`] is the transpose, and says why both are named
-/// and what a row borrows. Rows order by issuer, which no two rows of one read
-/// share, so that order is the one the read hands them back in.
+/// One STORED row of the GRANTEE-INDEXED read ([`World::issuers_for`]): an
+/// issuer, and the union of the content-prefixes that issuer's admitted
+/// grants to the queried grantee NAME — which open, as a [`UniversalGrant`]
+/// row's do, only the documents under them whose ω owner is the issuer.
+/// [`UniversalGrant`] is the transpose, and says why both are named and what a
+/// row borrows. Rows order by issuer, which no two rows of one read share, so
+/// that order is the one the read hands them back in.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct IssuerGrant<'a> {
     /// The issuing account — a draft-stream key for the grantee.
     pub issuer: &'a Address,
-    /// The prefixes that issuer has granted the grantee, in address order.
+    /// The prefixes that issuer's grants to the grantee name, in address
+    /// order.
     pub content_prefixes: Vec<&'a Address>,
 }
 
 impl World {
     /// THE LIVE ANY-PRINCIPAL SET, enumerable (PUB-7.22; lane 3.6 §3): every
-    /// content-prefix currently covered by an admitted, unrevoked
-    /// ANY-PRINCIPAL grant, with the issuers that granted it — in prefix
-    /// (tumbler) order, each issuer list in address order. An INDEX SHAPE,
-    /// never per-session state: the fold's universal index as rows borrowed
-    /// from this world, enumerated once per request off one head snapshot by
-    /// the feed's universal term (a K-way merge of these prefixes' own
-    /// position-index lists, K = this list's length). Revocation is immediate
-    /// here — a revoking record withdraws its grant's entry from the index at
-    /// the commit that carries it — so a derivation off this read never serves
-    /// withdrawn material (PUB-7.23). Reads the fold's query index, adds no
-    /// fold state, and is `readable`'s own universal probe turned inside out:
-    /// a document is universally granted iff one of its ancestor prefixes is
-    /// listed here with its ω owner among the issuers.
+    /// content-prefix an admitted, unrevoked ANY-PRINCIPAL grant NAMES, with
+    /// the issuers whose grants name it — in prefix (tumbler) order, each
+    /// issuer list in address order. An INDEX SHAPE, never per-session state:
+    /// the fold's universal index as rows borrowed from this world, enumerated
+    /// once per request off one head snapshot by the feed's universal term (a
+    /// K-way merge of these prefixes' own position-index lists, K = this
+    /// list's length). Revocation is immediate here — a revoking record
+    /// withdraws its grant's entry from the index at the commit that carries
+    /// it — so a derivation off this read never serves withdrawn material
+    /// (PUB-7.23). Reads the fold's query index, adds no fold state, and is
+    /// `readable`'s own universal probe turned inside out: a document is
+    /// universally granted iff one of its ancestor prefixes is listed here
+    /// with its ω owner among the issuers.
+    ///
+    /// The rows are STORED, and a SUPERSET of entitlement. Admission (I4)
+    /// tests a record's HOME and never what its prefix covers, and the
+    /// issuer half of coverage is applied at the probe (`grant_exists`), not
+    /// at indexing — so an account's grant over another account's document is
+    /// a row here that opens nothing
+    /// (`an_any_principal_grant_from_a_non_owner_opens_nothing` holds one). A
+    /// row is therefore no entitlement, and never a displayable answer
+    /// (PUB-5.21). M10's any-principal discovery read narrows each row to
+    /// what its issuer ω-owns (RES-231/264/273/298) before it serves one, and
+    /// the daemon's feed uses the prefixes alone, as key ranges under its
+    /// per-entry mask.
     ///
     /// COST, per call, uncached, and linear in the WHOLE universal index —
     /// this read takes no argument, so there is nothing in the request to
@@ -161,14 +186,22 @@ impl World {
 
     /// THE GRANTEE-INDEXED READ (PUB-7.28; lane 3.6 §3): for `grantee` — a
     /// principal's account address — its ISSUERS, each with the UNION of the
-    /// content-prefixes that issuer has granted it, in issuer order, each
-    /// prefix list in address order. The discovery term a feed poll re-pays:
-    /// grants SELECT issuer streams (PUB-7.25), so a holder of N grants from M
-    /// issuers merges M streams, each under one containment test against the
-    /// union this read hands back. Reads the fold's principal-exact index —
-    /// `grantee` alone, never its subtree (PUB-5.5) — and adds no fold state.
-    /// The ANY-PRINCIPAL grants are NOT here; they are
+    /// content-prefixes that issuer's admitted grants to it NAME, in issuer
+    /// order, each prefix list in address order. The discovery term a feed
+    /// poll re-pays: grants SELECT issuer streams (PUB-7.25), so a holder of N
+    /// grants from M issuers merges M streams, each under one containment test
+    /// against the union this read hands back. Reads the fold's principal-exact
+    /// index — `grantee` alone, never its subtree (PUB-5.5) — and adds no fold
+    /// state. The ANY-PRINCIPAL grants are NOT here; they are
     /// [`World::universal_grants`], the tier's own read.
+    ///
+    /// The rows are STORED pairs, a SUPERSET of entitlement for the reason
+    /// [`World::universal_grants`] gives: an issuer's grant over a prefix whose
+    /// documents it does not ω-own is a row here that opens nothing
+    /// (`a_sub_account_s_grant_opens_none_of_its_parent_s_drafts` holds one).
+    /// A row selects a stream to look in and grants nothing by itself; what
+    /// the feed serves out of that stream is decided by its per-entry mask,
+    /// the read predicate.
     ///
     /// COST, per call, uncached: one hash probe of the principal-exact index,
     /// then a walk of THAT grantee's whole row to invert it — one insert per
@@ -234,10 +267,16 @@ impl GrantRecord {
 }
 
 /// The grant fold: the operative grant set, the two query indexes it is
-/// projected into, and the earlier-record key the classification reads. All
-/// `im` persistent structures, so `World::clone` on the commit path is one
-/// more root clone. `#[serde(skip)]` at the World: derived, never
-/// checkpointed (the module docs' hint discipline).
+/// projected into, and the earlier-record key. All `im` persistent
+/// structures, so `World::clone` on the commit path is one more root clone.
+/// `#[serde(skip)]` at the World: derived, never checkpointed (the module
+/// docs' hint discipline).
+///
+/// The classification asks the fold two questions, and asks both through
+/// methods: whether a `from` names an earlier record of its home
+/// ([`Grants::holds_earlier`]), and whether that record is an operative grant
+/// ([`Grants::is_operative`]). How the key and the operative set relate is
+/// this type's to keep, so no caller reads either structure to answer them.
 ///
 /// The set and its two indexes must agree, and [`Grants::admit`] and
 /// [`Grants::withdraw`] are the only two transitions that move any of the
@@ -330,8 +369,9 @@ impl Grants {
     /// The operative set — every admitted, unrevoked grant with the grant
     /// link's own address — in the map's hash order (the world dump's grant
     /// section renders it, and the dump's rendering sorts a map's entries).
-    /// The fold's one enumeration; the predicate's consumers are the point
-    /// probes above.
+    /// The operative set's one enumeration, where [`Grants::universal`] and
+    /// [`Grants::issuers_for`] enumerate the query indexes; the predicate's
+    /// consumers are the point probes below.
     pub(crate) fn records(&self) -> impl Iterator<Item = (&Address, &GrantRecord)> + '_ {
         self.records.iter()
     }
@@ -447,6 +487,17 @@ impl Grants {
         self.earlier.contains(addr) && document_of(addr).as_ref() == Some(home)
     }
 
+    /// Whether `addr` is the link address of an OPERATIVE grant — admitted
+    /// and not withdrawn — which is the one earlier record a later record of
+    /// its home REVOKES (PUB-5.15). Every such grant is in the earlier-record
+    /// key as well, and a withdrawal is what parts the two answers: the grant
+    /// leaves the operative set and stays in the key. So of a record the key
+    /// holds, this is the question that tells a revocation from a record of
+    /// neither kind.
+    fn is_operative(&self, addr: &Address) -> bool {
+        self.records.contains_key(addr)
+    }
+
     /// [`Grants::admit`]'s index step: add `entry` to the query index its
     /// grantee names — the PRINCIPAL-EXACT one keyed by the grantee, or the
     /// ANY-PRINCIPAL one.
@@ -495,15 +546,17 @@ enum Kind {
     /// whatever its `to` holds.
     Revoke { revoked: Address },
     /// A record of NEITHER KIND (PUB-5.15) — the one fail-closed arm, whatever
-    /// put the record there: a `from` denoting no address, several, or one M1
-    /// refuses; a `from` naming an earlier record of this home that is no
-    /// operative grant — a grant already withdrawn, a revocation, or a record
-    /// itself of neither kind; a `from` standing on neither rung of the
-    /// ladder; or, on the fresh-grant arm, a `to` denoting more than one. The
-    /// fold enters it in no index and moves no honored state by it, so a
-    /// malformed grant grants to nobody and a malformed revocation lifts
-    /// nothing.
-    Malformed,
+    /// put the record there, and three things do. It may be MALFORMED: a
+    /// `from` denoting no address, several, or one M1 refuses, or, on the
+    /// fresh-grant arm, a `to` denoting more than one. It may be well formed
+    /// and name a SPENT record: a `from` naming an earlier record of this home
+    /// that is no operative grant — a grant already withdrawn, which is what a
+    /// blind retry of a revoke names, a revocation, or a record itself of
+    /// neither kind. Or its `from` may stand on neither rung of the ladder.
+    /// The fold enters it in no index and moves no honored state by it — it
+    /// joins the earlier-record key and nothing else — so it grants to nobody
+    /// and lifts nothing, whichever of the three put it here.
+    Neither,
 }
 
 /// Whether a link value is a `t_grant`-typed record — denotation equality on
@@ -602,14 +655,15 @@ fn on_the_ladder(from: &Address) -> bool {
 /// Every slot this DOES read is read for exactly one denoted address: the
 /// type slot at [`is_grant_typed`] before this is called, `from` always, and
 /// `to` on the fresh-grant arm alone. A slot denoting several, or a `from`
-/// denoting none or one M1 refuses, is [`Kind::Malformed`] — the fail-closed
-/// direction, since a record naming two grantees grants to neither.
+/// denoting none or one M1 refuses, is malformed and so of [`Kind::Neither`]
+/// — the fail-closed direction, since a record naming two grantees grants to
+/// neither.
 fn classify(prev: &Grants, home: &Address, value: &Link) -> Kind {
     let Some(from) = value.from_slot().single_denoted() else {
-        return Kind::Malformed; // `from` must denote exactly one address
+        return Kind::Neither; // `from` must denote exactly one address
     };
     let Ok(from) = validate(from.clone()) else {
-        return Kind::Malformed;
+        return Kind::Neither;
     };
     // A `from` naming an EARLIER admitted record of THIS home is decided HERE
     // and by nothing below — ahead of the ladder and of the `to` slot, which
@@ -620,14 +674,14 @@ fn classify(prev: &Grants, home: &Address, value: &Link) -> Kind {
     // fresh-grant arm: that fall-through is what made a retried revoke a grant
     // over a link address.
     if prev.holds_earlier(&from, home) {
-        if prev.records.contains_key(&from) {
+        if prev.is_operative(&from) {
             return Kind::Revoke { revoked: from };
         }
-        return Kind::Malformed;
+        return Kind::Neither;
     }
     // Otherwise a fresh grant, and only over a prefix a grant can cover.
     if !on_the_ladder(&from) {
-        return Kind::Malformed; // neither a document nor an account
+        return Kind::Neither; // neither a document nor an account
     }
     // `to` empty ⟹ ANY-PRINCIPAL, exactly one address ⟹ the grantee, anything
     // else ⟹ malformed.
@@ -635,10 +689,10 @@ fn classify(prev: &Grants, home: &Address, value: &Link) -> Kind {
         None
     } else {
         let Some(grantee) = value.to_slot().single_denoted() else {
-            return Kind::Malformed; // a multi-address `to` is malformed
+            return Kind::Neither; // a multi-address `to` is malformed
         };
         let Ok(grantee) = validate(grantee.clone()) else {
-            return Kind::Malformed;
+            return Kind::Neither;
         };
         Some(grantee)
     };
@@ -690,7 +744,7 @@ fn fold_one(
             next.admit(addr.clone(), GrantRecord { home, issuer, content_prefix, grantee });
         }
         Kind::Revoke { revoked } => next.withdraw(&revoked),
-        Kind::Malformed => {}
+        Kind::Neither => {}
     }
     next.keep_earlier(addr.clone());
     next
@@ -857,15 +911,30 @@ mod tests {
     /// NEITHER KIND sits at a link address, which the ladder refuses as well,
     /// so no answer of the predicate can tell a fold that kept the key from
     /// one that leaned on the ladder — and the promise the key carries must
-    /// not rest on that overlap ([`classify`]). So the key is asked directly:
-    /// it keeps the grant the operative set let go, the revocation, and a
-    /// record of neither kind; it answers for their own home alone; and the
-    /// seed rebuilds it whole, since nothing journals it.
+    /// not rest on that overlap ([`classify`]). So the key is asked directly,
+    /// beside the operative set it parts from: the grant is operative until
+    /// its revocation and stays in the key after it; the key keeps the
+    /// revocation and a record of neither kind too, none of them operative;
+    /// it answers for their own home alone; and the seed rebuilds it whole,
+    /// since nothing journals it.
+    ///
+    /// The predicate watches only one direction of [`Grants::is_operative`]:
+    /// answering `false` of a live grant would turn every revocation into a
+    /// record of neither kind, and the suite's revocation tests would fail.
+    /// The other direction no answer can show — a record naming one that is
+    /// no operative grant withdraws nothing whichever arm it is sent to, so a
+    /// `true` there moves no state — and this test is what holds it.
     #[test]
     fn the_earlier_record_key_keeps_what_the_operative_set_lets_go() {
         let engine = mem_engine();
         let (home, draft) = a_home_and_a_draft(&engine);
         let grant = record(&engine, &home, &draft);
+        {
+            let snap = engine.kernel().snapshot();
+            let grants = &snap.world().grants;
+            assert!(grants.is_operative(&grant), "admitted, the grant is operative");
+            assert!(grants.holds_earlier(&grant, &home), "…and an earlier record of its home");
+        }
         let revocation = record(&engine, &home, &grant);
         let neither = record(&engine, &home, &addr(&[1])); // the node stands on neither rung
 
@@ -882,6 +951,7 @@ mod tests {
         ];
         for (what, member) in members {
             assert!(world.grants.holds_earlier(member, &home), "{what} is an earlier record");
+            assert!(!world.grants.is_operative(member), "{what} is no operative grant");
             assert!(!world.grants.holds_earlier(member, &draft), "{what}: of its own home alone");
         }
         assert!(
@@ -920,7 +990,7 @@ mod tests {
         keyed.keep_earlier(home.clone());
         assert!(keyed.holds_earlier(&home, &home), "the synthetic member answers for its own home");
         assert!(
-            matches!(classify(&keyed, &home, link), Kind::Malformed),
+            matches!(classify(&keyed, &home, link), Kind::Neither),
             "a `from` naming an earlier record that is no operative grant reached the grant arm"
         );
     }

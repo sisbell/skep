@@ -14,8 +14,8 @@ use skep_engine::types::{
 };
 use skep_febe::Op;
 use skep_identity::{
-    AuditClass, CredentialKind, Effect, IdentityState, Inert, LinkDeposit, TargetClass, TypeAddrs,
-    Verdict, WriteTypes,
+    AuditClass, CredentialKind, Effect, Fingerprint, IdentityState, Inert, LinkDeposit,
+    TargetClass, TypeAddrs, Verdict, WriteTypes,
 };
 use skep_links::{enc, HasLinks, SlotArg};
 use skep_namespace::{first_document_address, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
@@ -590,7 +590,7 @@ pub(crate) fn board_state_refusal(
     identity: &IdentityState,
     op: &Op,
     principal: PrincipalId,
-    signer: Option<&skep_identity::Fingerprint>,
+    signer: Option<&Fingerprint>,
 ) -> Option<CredentialRefusal> {
     if identity.claimant().is_some() {
         publish_gate(world, op, principal, signer)
@@ -651,7 +651,7 @@ fn publish_gate(
     world: &World,
     op: &Op,
     principal: PrincipalId,
-    signer: Option<&skep_identity::Fingerprint>,
+    signer: Option<&Fingerprint>,
 ) -> Option<CredentialRefusal> {
     if signer.is_some() {
         return None;
@@ -959,7 +959,7 @@ pub(crate) fn plain_refusal(
     identity: &IdentityState,
     op: &Op,
     principal: PrincipalId,
-    signer: Option<&skep_identity::Fingerprint>,
+    signer: Option<&Fingerprint>,
 ) -> Option<CredentialRefusal> {
     first_mint_private_refusal(lock, world, op, principal)
         .or_else(|| mint_home_refusal(lock, world, op, principal))
@@ -1042,7 +1042,7 @@ pub(crate) fn precheck(
     world: &World,
     identity: &IdentityState,
     dep: &DepositSpans,
-    signer: Option<&skep_identity::Fingerprint>,
+    signer: Option<&Fingerprint>,
     scope: Scope,
     seat: Option<&Address>,
 ) -> Result<(), CredentialRefusal> {

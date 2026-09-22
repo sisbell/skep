@@ -203,16 +203,20 @@ impl<'a> FeedClass<'a> {
         let mut subtree = Vec::new();
         let mut cur = account.clone();
         while let Some(a) = cur {
-            if world.m3().is_registered_account(&a) {
-                subtree.push(a.clone());
-            }
+            // The next cursor first, so a registered account MOVES into the
+            // walk's answer rather than being cloned beside it.
             cur = parent(&a);
+            if world.m3().is_registered_account(&a) {
+                subtree.push(a);
+            }
         }
+        // The grants BORROW the world rather than the account they select on,
+        // so this term runs ahead of the one that consumes it.
+        let issuers = account.as_ref().map(|pa| world.issuers_for(pa)).unwrap_or_default();
         // An ACCOUNT alone opens the descendant range — the tier test the
         // read predicate makes ahead of its second compare, so principal 0's
         // node seat opens none.
-        let descendants_under = account.clone().filter(|a| world.m3().is_registered_account(a));
-        let issuers = account.as_ref().map(|pa| world.issuers_for(pa)).unwrap_or_default();
+        let descendants_under = account.filter(|a| world.m3().is_registered_account(a));
         // The issuing accounts the engine hands back beside each prefix are
         // dropped at this seam, for the reason the field states.
         let universal_prefixes = match principal {
@@ -522,7 +526,7 @@ impl Feed {
                 for owner in &owners {
                     streams.entry(owner.clone()).or_default().push(at);
                 }
-                f_streams.append(at, vec![(STREAMS_OWNERS, addr_strings(owners.iter()))])?;
+                f_streams.append(at, vec![(STREAMS_OWNERS, addr_strings(&owners))])?;
             }
         }
         f_streams.fence(head)?;
@@ -585,7 +589,7 @@ impl Feed {
                         (!owners.is_empty()).then(|| {
                             derived::record_object(
                                 *at,
-                                vec![(STREAMS_OWNERS, addr_strings(owners.iter()))],
+                                vec![(STREAMS_OWNERS, addr_strings(&owners))],
                             )
                         })
                     })
@@ -722,7 +726,7 @@ impl Inner {
             }
             self.files
                 .streams
-                .append_or_report(at, vec![(STREAMS_OWNERS, addr_strings(owners.iter()))]);
+                .append_or_report(at, vec![(STREAMS_OWNERS, addr_strings(&owners))]);
         }
         if !docs.is_empty() {
             self.docs.insert(at, docs);
@@ -990,8 +994,8 @@ fn doc_strings(docs: &[Doc]) -> Value {
     Value::Array(docs.iter().map(|d| Value::String(d.addr.to_string())).collect())
 }
 
-fn addr_strings<'a>(addrs: impl Iterator<Item = &'a Address>) -> Value {
-    Value::Array(addrs.map(|a| Value::String(a.to_string())).collect())
+fn addr_strings<'a>(addrs: impl IntoIterator<Item = &'a Address>) -> Value {
+    Value::Array(addrs.into_iter().map(|a| Value::String(a.to_string())).collect())
 }
 
 /// One derived record's array field, as its RAW elements — so a caller

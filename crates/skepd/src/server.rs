@@ -281,6 +281,7 @@ pub(crate) struct ClassScans(Permits);
 /// constructors, and the wire name it maps to is
 /// [`TransportError::ScanBusy`] — the same condition one layer out, which is
 /// why the two share a word and why the type keeps them apart.
+#[derive(Debug)]
 pub(crate) struct ScanBusy;
 
 impl ClassScans {
@@ -1059,7 +1060,7 @@ impl Daemon {
     /// identity fold is the other: [`Daemon::open_with`] rebuilds it from
     /// the recovered world, which reads every link in it —
     /// [`crate::auth::fold::canonical_identity`] states that bound.
-    pub fn open(data_dir: &Path) -> Result<Daemon, DaemonError> {
+    pub fn open(data_dir: impl AsRef<Path>) -> Result<Daemon, DaemonError> {
         Daemon::open_with(data_dir, AuthOptions::default())
     }
 
@@ -1074,7 +1075,11 @@ impl Daemon {
     /// A supply file the options name is read HERE, at every start, and the
     /// list installed from it before anything is served
     /// ([`DaemonError::BlockedPrefixes`] where it cannot be).
-    pub fn open_with(data_dir: &Path, opts: AuthOptions) -> Result<Daemon, DaemonError> {
+    pub fn open_with(
+        data_dir: impl AsRef<Path>,
+        opts: AuthOptions,
+    ) -> Result<Daemon, DaemonError> {
+        let data_dir = data_dir.as_ref();
         let cfg = KernelConfig {
             durability: Durability::Fsync {
                 journal_path: data_dir.to_path_buf(),
@@ -2589,13 +2594,13 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
     let _ = stream.set_nodelay(true);
     let _ = stream.set_read_timeout(Some(REQUEST_READ_TIMEOUT));
     let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
-    // The peer's loopback-ness, off the socket itself (AUTH-4.14). This
-    // daemon binds 127.0.0.1, so every peer is loopback today; deriving it
-    // rather than asserting it is what a bind-override needs no change for.
-    let peer = match stream.peer_addr() {
-        Ok(a) if a.ip().is_loopback() => Peer::Loopback,
-        _ => Peer::Remote,
-    };
+    // The peer's loopback-ness, off the socket itself (AUTH-4.14) — the class
+    // is [`Peer::of`]'s, and what this site decides is the unknowable case: a
+    // peer whose address cannot be read is REMOTE, never the bare bind's
+    // privilege by default. This daemon binds 127.0.0.1, so every peer is
+    // loopback today; deriving it rather than asserting it is what a
+    // bind-override needs no change for.
+    let peer = stream.peer_addr().map_or(Peer::Remote, |a| Peer::of(a.ip()));
     // One deadline per transfer: the socket's own timeouts bound silence and
     // are renewed by any byte, so this is what bounds a peer that is slow
     // rather than quiet. The reply gets its own below, which is what keeps a
@@ -3576,6 +3581,65 @@ mod tests {
             .map(|&(_, v)| v)
             .expect("the preflight names its allowed headers");
         assert!(allow.contains(SESSION_HEADER), "{allow} must name {SESSION_HEADER}");
+    }
+
+    /// The two constructors take a path the std way — anything
+    /// `AsRef<Path>` — so a caller holding a `String` or a `&str` (a config
+    /// value, a CLI argument before conversion) opens without converting
+    /// first. Every other test in this crate hands them a `&Path`, which is
+    /// the same door; this is the half of it those do not exercise.
+    #[test]
+    fn a_daemon_opens_from_any_path_like() {
+        let owned_dir = tempfile::tempdir().expect("tempdir");
+        let borrowed_dir = tempfile::tempdir().expect("tempdir");
+        let owned: String = owned_dir.path().to_str().expect("a UTF-8 temp path").to_string();
+        let borrowed: &str = borrowed_dir.path().to_str().expect("a UTF-8 temp path");
+        let from_string = Daemon::open(owned).expect("genesis open from a String");
+        let from_str = Daemon::open(borrowed).expect("genesis open from a &str");
+        assert_eq!(
+            from_string.log_position().0,
+            from_str.log_position().0,
+            "two fresh data dirs open at one position, whatever kind of value named them"
+        );
+    }
+
+    /// The class-scan admission at both ends (wire v7.9): a bounded op takes
+    /// one of the [`MAX_CONCURRENT_CLASS_SCANS`] permits and any other read
+    /// takes none, a drained pool REFUSES rather than queueing, and a
+    /// released permit reopens its slot. The pool is per-op-shape, so an
+    /// unbounded read is admitted while it is drained — which is what keeps
+    /// the bound off the reads that walk no link store.
+    #[test]
+    fn the_class_scan_admission_takes_a_permit_only_for_a_bounded_op() {
+        let op = |frame: &str| {
+            JsonCodec
+                .parse(frame.as_bytes())
+                .unwrap_or_else(|e| panic!("{frame}: {:?}", e.detail))
+                .op
+        };
+        let bounded =
+            op(r#"{"op":"count_ftt","q":{"from":"any","home":"any","to":"any","ty":"any"}}"#);
+        let unbounded = op(r#"{"op":"doc_metadata","doc":"1.0.1.0.1"}"#);
+        let scans = ClassScans::new();
+        assert!(
+            scans.admit(&unbounded).expect("an unbounded read is admitted").is_none(),
+            "…and spends no permit"
+        );
+        let held: Vec<_> = (0..MAX_CONCURRENT_CLASS_SCANS)
+            .map(|_| {
+                scans.admit(&bounded).expect("a permit").expect("a bounded read takes one")
+            })
+            .collect();
+        scans.admit(&bounded).expect_err("a drained pool refuses; it never queues");
+        assert!(
+            scans.admit(&unbounded).expect("an unbounded read is admitted").is_none(),
+            "a drained pool does not reach the reads it does not bound"
+        );
+        drop(held);
+        assert!(
+            scans.admit(&bounded).expect("a released permit reopens its slot").is_some(),
+            "and the reopened slot is a permit, not an admission with none"
+        );
     }
 
     /// A server with no workers serves nothing, so asking for one is the

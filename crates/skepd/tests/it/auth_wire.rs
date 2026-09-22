@@ -3176,14 +3176,14 @@ fn a_restart_reinstalls_the_list_and_a_bad_issue_installs_nothing() {
     issue_blocked_list_bytes(&list, b"not a list");
     let mut opts = skepd::AuthOptions::default();
     opts.blocked_supply_path = Some(list.clone());
-    let refused = skepd::Daemon::open_with(&root.path().join("data"), opts);
+    let refused = skepd::Daemon::open_with(root.path().join("data"), opts);
     assert!(
         matches!(refused, Err(skepd::DaemonError::BlockedPrefixes(_))),
         "a malformed start-up supply refuses the open"
     );
     let mut opts = skepd::AuthOptions::default();
     opts.blocked_supply_path = Some(root.path().join("no-such-file.json"));
-    let refused = skepd::Daemon::open_with(&root.path().join("data"), opts);
+    let refused = skepd::Daemon::open_with(root.path().join("data"), opts);
     assert!(
         matches!(refused, Err(skepd::DaemonError::BlockedPrefixes(_))),
         "and so does a supply that is not there"

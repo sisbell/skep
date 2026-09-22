@@ -166,7 +166,7 @@ impl History {
         head: &Snapshot<World>,
     ) -> Result<Response, Unavailable> {
         let (_permit, world) = self.reconstruct(engine, at)?;
-        let mut resp = execute_read_on(world, frame, principal, head.world().clone());
+        let mut resp = execute_read_on(world, frame, principal, head.world());
         stamp_as_of(&mut resp, at);
         Ok(resp)
     }
@@ -267,15 +267,21 @@ impl Drop for Permit<'_> {
 /// assembled any other way would be read through stale hints, and nothing
 /// about the answer would look wrong.
 ///
+/// The two worlds differ BY TYPE in the signature below — the content is
+/// MOVED in, the mask is BORROWED — so the transposition that would answer
+/// the head's content through the N-world's sets, inverting both halves of
+/// the shape above at once, does not compile.
+///
 /// The `Stores<World>` factory is the engine's [`EngineStores`], over this
 /// throwaway kernel rather than the live one: which store driver fills which
 /// slot is assembly knowledge, and the daemon holds none of it. The `Arc` is
-/// one allocation against a whole-world replay; `head` is one root clone.
+/// one allocation against a whole-world replay; `head` is one root clone,
+/// taken inside because the predicate's closure owns its captures.
 fn execute_read_on(
     world: World,
     frame: Request,
     principal: Option<PrincipalId>,
-    head: World,
+    head: &World,
 ) -> Response {
     debug_assert!(frame.op.is_read(), "the history surface runs read frames alone");
     let cfg = KernelConfig {
@@ -284,6 +290,11 @@ fn execute_read_on(
     };
     let kernel =
         Kernel::open(cfg, world).expect("in-memory open runs no recovery and cannot fail");
+    // The predicate's closure is boxed behind M10's `ReadPredicate`, so it
+    // owns its captures: one root clone, made HERE so the two worlds differ
+    // BY TYPE at the signature above and the swap this card warns about
+    // cannot compile.
+    let head = head.clone();
     let febe = OperationSurface::new(Box::new(EngineStores::new(Arc::new(kernel))))
         .with_read_predicate(move |p: Option<PrincipalId>, doc: &Address| head.readable(p, doc));
     let session = match principal {

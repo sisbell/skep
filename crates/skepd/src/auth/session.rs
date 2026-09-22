@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
+use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
 use ed25519_dalek::Signature;
@@ -59,6 +60,32 @@ pub enum Peer {
 }
 
 impl Peer {
+    /// The class of a peer at `ip` (AUTH-4.14): `Loopback` for an address
+    /// `IpAddr::is_loopback` admits — `127.0.0.0/8` and `::1` both, which is
+    /// the whole of it — and `Remote` otherwise.
+    ///
+    /// Here rather than at the accept path because this type is PUBLIC and a
+    /// caller routing over its own transport builds one
+    /// ([`crate::HttpRequest`]): the bare bind is the one privilege this
+    /// daemon grants without a signature, so a `Loopback` for a socket that
+    /// is not one hands that privilege to the network. The rule is four
+    /// tokens and both near-misses are unsafe in a direction the type can
+    /// close — `ip == Ipv4Addr::LOCALHOST` denies a legitimate `::1` bind,
+    /// and any host-reachability notion admits a LAN peer — so the daemon's
+    /// own answer is offered rather than described.
+    ///
+    /// An `IpAddr` and not a `SocketAddr`: the port is not read, and
+    /// `SocketAddr::ip` is what a caller holding one calls. A caller whose
+    /// transport carries no address at all — a Unix socket — names the
+    /// variant it means.
+    pub fn of(ip: IpAddr) -> Peer {
+        if ip.is_loopback() {
+            Peer::Loopback
+        } else {
+            Peer::Remote
+        }
+    }
+
     pub(crate) fn is_loopback(self) -> bool {
         matches!(self, Peer::Loopback)
     }
@@ -546,6 +573,11 @@ pub(crate) enum SessionBody {
 /// return, so nothing a route marshals can leak it (AUTH-4.35). The wire
 /// answer is the ONE code, `401 session_rejected`, byte-identical across
 /// causes.
+///
+/// `Debug` discloses nothing a unit struct could hold, and is what lets a
+/// caller reach for the ordinary `Result` vocabulary — `expect_err` over a
+/// hand-written `matches!` — on the handshake's answer.
+#[derive(Debug)]
 pub(crate) struct SessionRejected;
 
 /// The handshake's TWO refusal values (AUTH-4.34). Every failure of the
@@ -555,6 +587,11 @@ pub(crate) struct SessionRejected;
 /// construction — the version address of the takedown record the longest
 /// covering entry cites — and the route answers it `403 prefix_blocked`,
 /// NEVER the 401 (AUTH-6.5): this party's credential was not read.
+///
+/// `Debug` carries nothing the wire withholds: the `Rejected` arm is the
+/// unit, and `record` is the one datum AUTH-6.5 calls public by
+/// construction — the address the 403 itself renders.
+#[derive(Debug)]
 pub(crate) enum HandshakeRefusal {
     Rejected(SessionRejected),
     Blocked { record: Address },
@@ -862,6 +899,30 @@ mod tests {
         assert!(ch.burn(&b, PrincipalId(1), now), "and so does the second");
     }
 
+    /// AUTH-4.14's classification, at the two cells its near-misses get
+    /// wrong in opposite directions: the WHOLE of `127.0.0.0/8` and `::1`
+    /// are loopback — so an IPv4-literal test would deny a legitimate `::1`
+    /// bare bind — and every routable address is remote, including the
+    /// private ranges a host-reachability notion would admit, which is the
+    /// silent widening that hands the bare bind to a LAN.
+    #[test]
+    fn a_peer_is_loopback_over_the_whole_of_both_loopback_ranges() {
+        for ip in ["127.0.0.1", "127.0.0.2", "127.255.255.254", "::1"] {
+            let parsed: IpAddr = ip.parse().expect("a literal address");
+            assert_eq!(Peer::of(parsed), Peer::Loopback, "{ip}");
+        }
+        for ip in ["10.0.0.1", "192.168.1.7", "172.16.0.1", "8.8.8.8", "::", "fe80::1", "2001:db8::1"] {
+            let parsed: IpAddr = ip.parse().expect("a literal address");
+            assert_eq!(Peer::of(parsed), Peer::Remote, "{ip}");
+        }
+        // The v4-mapped form of a loopback address is NOT itself loopback —
+        // `::ffff:127.0.0.1` is a v6 address whose own range is routable —
+        // so a peer that arrives in it is refused the bare bind rather than
+        // granted it by a mapping this daemon does not perform.
+        let mapped: IpAddr = "::ffff:127.0.0.1".parse().expect("a literal address");
+        assert_eq!(Peer::of(mapped), Peer::Remote);
+    }
+
     /// AUTH-4.26 — the bare-bind cells, the board's MODE first: a loopback
     /// peer at an admitted origin is refused in ENFORCING, and a
     /// non-loopback peer or an unadmitted origin is refused for THIS
@@ -1013,7 +1074,7 @@ mod tests {
             scope: Scope::Full,
             sig: [0u8; 64],
         };
-        let outcome = handshake(
+        let refusal = handshake(
             &cfg,
             &challenges,
             snap.world(),
@@ -1022,10 +1083,11 @@ mod tests {
             Peer::Loopback,
             None,
             issued + CHALLENGE_TTL,
-        );
+        )
+        .expect_err("an expired nonce is a failure of the credential");
         assert!(
-            matches!(outcome, Err(HandshakeRefusal::Rejected(SessionRejected))),
-            "an expired nonce is a failure of the credential: the unit refusal"
+            matches!(refusal, HandshakeRefusal::Rejected(SessionRejected)),
+            "the UNIT refusal, never step 4b's second value: {refusal:?}"
         );
         assert!(
             !challenges.burn(&nonce, principal, issued),

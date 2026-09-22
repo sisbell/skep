@@ -394,7 +394,20 @@ fn scan<T>(bytes: &[u8], schema: Schema<T>) -> Result<Vec<T>, PayloadError> {
     // Each entry against the kind's schema, IN ORDER — the first failing entry
     // is the verdict (an unadmitted alg at entry 1 precedes a duplicate at
     // entry 3, AUTH-2.19 item 2 before item 3).
-    let mut entries = Vec::with_capacity(entries_val.len());
+    //
+    // The vector is sized by what the entries PARSE to, never by what the
+    // array CLAIMS: `entries_val.len()` is the depositor's count, and a body
+    // whose every element is `1` refuses at entry 1 — a capacity taken from
+    // that count is reserved for entries never pushed. Under the READ's cap
+    // (AUTH-2.43) that costs at most a doubling of what `serde_json` already
+    // holds; but the cap is the read's and not this parser's, so a caller
+    // reaching here without `record_bytes` (AUTH-2.37's non-folding reader)
+    // sizes the allocation from the body alone, where a large enough count
+    // ABORTS rather than answering `BadRecord`. The growth given up is ten
+    // reallocations under 64 KiB: no record this parser admits carries more
+    // than ~975 entries, the canonical spelling's smallest entry being the
+    // retirement's 67 bytes.
+    let mut entries: Vec<T> = Vec::new();
     for entry in entries_val {
         entries.push((schema.parse_entry)(entry)?);
     }

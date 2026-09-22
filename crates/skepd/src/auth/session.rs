@@ -135,13 +135,30 @@ impl Challenges {
     }
 
     /// SINGLE-USE: the burn (AUTH-4.21) — removes the entry from BOTH
-    /// structures whether or not it validates; true iff present, unexpired,
-    /// and issued for `principal`.
+    /// structures whether or not it VALIDATES (a wrong principal and an
+    /// expired entry both burn); true iff present, unexpired, and issued for
+    /// `principal`.
+    ///
+    /// A nonce the MAP never held is absent from the QUEUE too, so the
+    /// whole-queue sweep below is a no-op in exactly that case and is
+    /// skipped: [`Challenges::issue`] inserts into both, this removes from
+    /// both, and the eviction pops from both, so membership agrees. (Two
+    /// draws colliding — 2⁻²⁵⁶ — would leave `order` a stale member the
+    /// eviction later pops against an absent map entry, which costs one slot
+    /// of the cap and nothing else.)
+    ///
+    /// THE MISS is the case a stranger drives, which is why the skip is
+    /// worth its sentence: `POST /session` reaches here with ANY 64-hex
+    /// nonce, past the origin-set test and nothing else — no key set is read
+    /// and no signature verified until step 5 — so an unswept miss would buy
+    /// a [`super::MAX_LIVE_NONCES`]-element scan of 32-byte nonces per
+    /// unauthenticated request, under this store's ONE mutex, queueing every
+    /// `GET /challenge` behind it.
     pub fn burn(&self, nonce: &Nonce, principal: PrincipalId, now: Instant) -> bool {
         let mut inner = self.inner.lock();
-        let entry = inner.map.remove(nonce);
+        let Some((issued_to, expires)) = inner.map.remove(nonce) else { return false };
         inner.order.retain(|n| n != nonce);
-        matches!(entry, Some((p, expires)) if p == principal && now < expires)
+        issued_to == principal && now < expires
     }
 }
 
@@ -803,6 +820,29 @@ mod tests {
         let n3 = ch.issue(PrincipalId(7), now, &mut rng);
         assert!(ch.burn(&n3, PrincipalId(7), now + Duration::from_secs(1)));
         assert!(!ch.burn(&n3, PrincipalId(7), now + Duration::from_secs(1)), "single use");
+    }
+
+    /// The burn's SWEEP is skipped on a MISS, and a miss leaves the store
+    /// exactly as it was — the premise that makes skipping it
+    /// answer-preserving. `POST /session` reaches the burn with any 64-hex
+    /// nonce, past the origin-set test and nothing else, so the miss is the
+    /// path a stranger drives; if a miss ever began to disturb the store, the
+    /// skip would silently change behaviour rather than merely cost less.
+    #[test]
+    fn a_burn_that_misses_leaves_the_store_untouched() {
+        let ch = Challenges::new(2);
+        let mut rng = super::super::OsEntropy;
+        let now = Instant::now();
+        let a = ch.issue(PrincipalId(1), now, &mut rng);
+        let b = ch.issue(PrincipalId(1), now, &mut rng);
+        let stranger = Nonce([0x5a; 32]);
+        for _ in 0..8 {
+            assert!(!ch.burn(&stranger, PrincipalId(1), now), "a nonce nobody issued");
+        }
+        // Both live nonces still burn: the misses removed nothing and, at a
+        // cap of two, displaced nothing either.
+        assert!(ch.burn(&a, PrincipalId(1), now), "the first still burns");
+        assert!(ch.burn(&b, PrincipalId(1), now), "and so does the second");
     }
 
     /// AUTH-4.26 — the bare-bind cells, the board's MODE first: a loopback

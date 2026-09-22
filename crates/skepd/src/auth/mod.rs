@@ -42,6 +42,26 @@ use session::{Challenges, Sessions};
 /// past it the oldest is evicted. Entered into the store once, at `new`.
 pub(crate) const MAX_LIVE_NONCES: usize = 4096;
 
+/// The most bytes one ISSUE of the blocked-prefix list may carry
+/// ([`BlockedSupply`]), refused before the read rather than after it.
+///
+/// The cap bounds the FAILURE case and not the legitimate one: an entry is
+/// two addresses in the registry's global form under a small JSON wrapper,
+/// under a hundred bytes, so this admits order 90,000 standing takedown
+/// records — four orders of magnitude above a board's plausible list. What
+/// it removes is the unbounded one, which is a path that is NOT a list: a
+/// read-to-end followed by a whole `serde_json::Value` over those bytes, at
+/// the ~20× transient heap this crate prices on [`crate::body_cap`]. It is
+/// paid at [`AuthState::open`] before the listener binds, where the open
+/// promises a named refusal rather than a hang; and at every reissue with
+/// the supply's `seen` HELD at the head of routing, so every in-flight
+/// request waits on it, `/health` and `/session` included.
+///
+/// The number is [`crate::body_cap`]'s own largest admitted input, cited
+/// rather than re-derived: this file carries strictly less per record than a
+/// frame does, so the same ceiling is the same headroom or more.
+const MAX_BLOCKED_SUPPLY_BYTES: usize = 8 * 1024 * 1024;
+
 /// The daemon's session-layer configuration, as the operator supplies it:
 /// the local-trust flag (Phase A default ON — a hosted image must set it
 /// AFFIRMATIVELY false, AUTH-4.57 (i)) and the configured origins
@@ -1027,7 +1047,7 @@ impl BlockedPrefixes {
     /// STANDING takedown records.
     pub fn covers(&self, account: &Address) -> Option<&Address> {
         let mut longest: Option<&BlockedEntry> = None;
-        for (entry, inert) in self.issue.entries.iter().zip(&self.inert) {
+        for (entry, inert) in self.judged() {
             if inert.is_some() || !prefix_contains(&entry.prefix, account) {
                 continue;
             }
@@ -1039,6 +1059,26 @@ impl BlockedPrefixes {
         longest.map(|entry| &entry.record)
     }
 
+    /// Each entry of the issue beside the install's verdict on it — THE one
+    /// pairing, so the two vectors meet at one site rather than at three
+    /// `zip`s. A `zip` truncates silently, and the direction that truncates
+    /// is the one that fails OPEN: an `inert` shorter than `entries` makes
+    /// every entry past its end invisible to [`BlockedPrefixes::covers`],
+    /// which is a standing block that stops blocking with nothing to say so.
+    ///
+    /// INVARIANT: the two have equal length, established by
+    /// [`BlockedPrefixes::installed_under`], which maps one from the other,
+    /// and by `Default`, which leaves both empty. Nothing mutates either
+    /// after the install; a lift is a fresh ISSUE and a fresh install.
+    fn judged(&self) -> impl Iterator<Item = (&BlockedEntry, Option<Comparand>)> {
+        debug_assert_eq!(
+            self.issue.entries.len(),
+            self.inert.len(),
+            "an entry and its verdict are built together and never moved apart"
+        );
+        self.issue.entries.iter().zip(self.inert.iter().copied())
+    }
+
     /// The header as issued — what the log names, and the seat carve's read
     /// (AUTH-3.21, RES-175).
     pub fn header(&self) -> &BlockedHeader {
@@ -1047,7 +1087,7 @@ impl BlockedPrefixes {
 
     /// The entries in force — every entry of the issue but the inert ones.
     fn in_force(&self) -> usize {
-        self.inert.iter().filter(|i| i.is_none()).count()
+        self.judged().filter(|(_, inert)| inert.is_none()).count()
     }
 
     /// Whether the issue carries NO entries — the question the claim flip's
@@ -1099,14 +1139,14 @@ impl BlockedPrefixes {
                              hosted board must supply one)"
                 .to_string(),
         };
-        let inert = self.inert.iter().filter(|i| i.is_some()).count();
+        let inert = self.judged().filter(|(_, verdict)| verdict.is_some()).count();
         let mut lines = vec![format!(
             "{} of {} entries in force, {inert} inert; operator account {operator}; \
              binding-writing account {binding_writer}",
             self.in_force(),
             self.issue.entries.len(),
         )];
-        for (entry, comparand) in self.issue.entries.iter().zip(&self.inert) {
+        for (entry, comparand) in self.judged() {
             let (covered, exempted) = match comparand {
                 None => continue,
                 Some(Comparand::Operator) => ("the configured operator account", &self.operator),
@@ -1230,16 +1270,27 @@ impl BlockedSupply {
 
     /// One read of the file, whole: its identity off the OPEN handle — so
     /// the stamp names the bytes read, and a replace landing between this
-    /// and the next look is seen as one — then the parse. Every failure is
-    /// an `io::Error` naming the path; a file that is not a list is
-    /// `InvalidData`.
+    /// and the next look is seen as one — then the byte cap, then the
+    /// parse. Every failure is an `io::Error` naming the path; a file that
+    /// is not a list, and one past [`MAX_BLOCKED_SUPPLY_BYTES`], are both
+    /// `InvalidData`, so the channel's two refusals travel as one kind.
     fn read(&self) -> io::Result<(FileStamp, BlockedIssue)> {
         use std::io::Read;
         let named = |e: io::Error| io::Error::new(e.kind(), format!("{}: {e}", self.path.display()));
-        let mut file = std::fs::File::open(&self.path).map_err(named)?;
+        let file = std::fs::File::open(&self.path).map_err(named)?;
         let stamp = FileStamp::of(&file.metadata().map_err(named)?);
         let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes).map_err(named)?;
+        // ONE PAST the cap, so a file that exactly fills it is told apart
+        // from one that exceeds it — and `take` rather than a length test
+        // off the stamp, which a file being appended to concurrently
+        // outruns.
+        file.take(MAX_BLOCKED_SUPPLY_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(named)?;
+        if bytes.len() > MAX_BLOCKED_SUPPLY_BYTES {
+            return Err(named(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("the list is past the {MAX_BLOCKED_SUPPLY_BYTES}-byte supply cap"),
+            )));
+        }
         let issue = parse_issue(&bytes)
             .map_err(|detail| named(io::Error::new(io::ErrorKind::InvalidData, detail)))?;
         Ok((stamp, issue))
@@ -1732,6 +1783,29 @@ mod tests {
             "{:?}",
             unclaimed.log_lines()
         );
+    }
+
+    /// The supply's BYTE CAP at both ends: a file AT the cap is read and
+    /// parsed, one byte past it is refused unread. The at-cap half is the
+    /// load-bearing one — a `>` that became a `>=` would refuse a list the
+    /// budget admits — and the padding is insignificant whitespace, so what
+    /// the refusal answers is the SIZE and not the grammar.
+    #[test]
+    fn a_supply_past_the_byte_cap_is_refused_unread() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("blocked.json");
+        let mut at_cap = br#"{"entries":[]}"#.to_vec();
+        at_cap.resize(MAX_BLOCKED_SUPPLY_BYTES, b' ');
+        std::fs::write(&path, &at_cap).expect("write");
+        let (_supply, issue) = BlockedSupply::open(&path).expect("a supply at the cap is read");
+        assert_eq!(issue, BlockedIssue::default(), "and parses to the empty list");
+
+        let mut over = at_cap;
+        over.push(b' ');
+        std::fs::write(&path, &over).expect("write");
+        let e = BlockedSupply::open(&path).expect_err("one byte past the cap is refused");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "the channel's one refusal kind");
+        assert!(e.to_string().contains("supply cap"), "the refusal names the cap: {e}");
     }
 
     /// The supply file's grammar: one strict JSON object. `entries` is

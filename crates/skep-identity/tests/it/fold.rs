@@ -723,15 +723,15 @@ fn three_atom_record_folds() {
 /// spelling the envelope is 32 B, each label-free entry 105 B plus a 1 B
 /// comma, so 32 + 617·105 + 616 = 65 433 ≤ 65 536 and 618 entries would
 /// overflow — the 897 of the retired line form become 617 here.
-const CAP_SIZED_LINES: u32 = 617;
+const CAP_SIZED_ENTRIES: u32 = 617;
 
 /// An enrollment record of exactly `MAX_RECORD_BYTES + over` bytes:
-/// [`CAP_SIZED_LINES`] key entries, the first carrying a label sized to land
+/// [`CAP_SIZED_ENTRIES`] key entries, the first carrying a label sized to land
 /// the total on the mark. Built FROM the constant, so a change to the cap
 /// moves the record with it and `max_record_bytes_is_64_kib` stays the one
 /// assertion that discovers it.
 fn cap_sized_enroll_payload(over: usize) -> Vec<u8> {
-    let mut entries: Vec<Enrollment> = (0..CAP_SIZED_LINES)
+    let mut entries: Vec<Enrollment> = (0..CAP_SIZED_ENTRIES)
         .map(|i| Enrollment::new(wide_key(i), false, None).expect("label-free"))
         .collect();
     let base_len = encode_enroll(&entries).len();
@@ -739,7 +739,7 @@ fn cap_sized_enroll_payload(over: usize) -> Vec<u8> {
     // `,"label":"…"` wrapper is 11 bytes (AUTH-2.130's canonical spelling).
     assert!(
         base_len + 12 <= MAX_RECORD_BYTES,
-        "fixture arithmetic: {base_len} bytes of {CAP_SIZED_LINES} key entries leaves no room \
+        "fixture arithmetic: {base_len} bytes of {CAP_SIZED_ENTRIES} key entries leaves no room \
          for a label under a {MAX_RECORD_BYTES}-byte cap"
     );
     let pad = MAX_RECORD_BYTES - base_len + over;
@@ -758,7 +758,7 @@ fn record_at_exactly_the_cap_folds_and_one_more_byte_inerts() {
 
     let dep = fx.enroll_dep(&doc1(ACCT_A), ACCT_A, &cap_sized_enroll_payload(0));
     match assert_honored(&fx.classify(&genesis_state, &dep)) {
-        Effect::Genesis { keys, .. } => assert_eq!(keys.len(), CAP_SIZED_LINES as usize),
+        Effect::Genesis { keys, .. } => assert_eq!(keys.len(), CAP_SIZED_ENTRIES as usize),
         _ => panic!("expected a genesis effect"),
     }
 
@@ -795,7 +795,7 @@ fn a_record_of_cap_many_one_byte_positions_folds() {
         ty: enroll_ty(),
     };
     match assert_honored(&fx.classify(&IdentityState::genesis(), &dep)) {
-        Effect::Genesis { keys, .. } => assert_eq!(keys.len(), CAP_SIZED_LINES as usize),
+        Effect::Genesis { keys, .. } => assert_eq!(keys.len(), CAP_SIZED_ENTRIES as usize),
         _ => panic!("expected a genesis effect"),
     }
 }
@@ -1341,8 +1341,8 @@ const C_FIRST_CHILD: &[u32] = &[1, 1, 0, 5, 2, 1]; // inc(B_SUBDIVISION, 1)
 /// Seat the A3/latch addresses as accounts. A fold ctx holds no M3, so the test
 /// seats ω and account-hood itself; each is owned by its own principal, so
 /// `delegator` classifies it `Account(parent)`.
-fn seat_accounts(fx: &mut Fixture, addrs: &[&[u32]]) {
-    for acct in addrs {
+fn seat_accounts(fx: &mut Fixture, accounts: &[&[u32]]) {
+    for acct in accounts {
         fx.ctx.owners.push((addr(acct), false));
         fx.ctx.accounts.insert(addr(acct));
     }

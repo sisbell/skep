@@ -28,7 +28,7 @@ use skep_identity::{
 /// generator `.+` (any non-newline text, so labels ending in 0x20 or carrying
 /// `"`, `\`, a tab or a control char are generated, not dodged — AUTH-2.89
 /// forbids narrowing to dodge them).
-fn enroll_entries() -> impl Strategy<Value = Vec<Enrollment>> {
+fn enrollments() -> impl Strategy<Value = Vec<Enrollment>> {
     prop::collection::vec((any::<[u8; 32]>(), any::<bool>(), prop::option::of(".+")), 1..8)
         .prop_map(|raws| {
             let mut out: Vec<Enrollment> = Vec::new();
@@ -73,7 +73,7 @@ proptest! {
     /// I1 (AUTH-2.89) DIRECTION 1 — `parse(encode(x)) == x` over `Enrollment`'s
     /// WHOLE domain, both kinds.
     #[test]
-    fn i1_parse_encode_round_trip(entries in enroll_entries(), fps in retire_fps()) {
+    fn i1_parse_encode_round_trip(entries in enrollments(), fps in retire_fps()) {
         prop_assert_eq!(parse_enroll(encode_enroll(&entries).as_bytes()), Ok(entries));
         prop_assert_eq!(parse_retire(encode_retire(&fps).as_bytes()), Ok(fps));
     }
@@ -86,7 +86,7 @@ proptest! {
     /// the sig-STRIPPED body (AUTH-2.13, AUTH-2.94, AUTH-2.130).
     #[test]
     fn i1_encode_parse_bijection_over_the_record_value(
-        entries in enroll_entries(),
+        entries in enrollments(),
         fps in retire_fps(),
         enroll_sig in prop::option::of("[ -~&&[^\"\\\\]]{0,40}"),
         retire_sig in prop::option::of("[ -~&&[^\"\\\\]]{0,40}"),
@@ -297,17 +297,17 @@ proptest! {
                     prop_assert!(!subject_was_nonempty);
                     *genesis_count.entry(account.clone()).or_insert(0) += 1;
                     prop_assert!(genesis_count[account] <= 1);
-                    for k in keys {
+                    for enrolled in keys {
                         first_flag
-                            .entry((account.clone(), Fingerprint::of(&k.key)))
-                            .or_insert(k.anchor);
+                            .entry((account.clone(), Fingerprint::of(&enrolled.key)))
+                            .or_insert(enrolled.anchor);
                     }
                 }
                 Verdict::Honored(Effect::Enroll { account, added }) => {
-                    for k in added {
+                    for enrolled in added {
                         first_flag
-                            .entry((account.clone(), Fingerprint::of(&k.key)))
-                            .or_insert(k.anchor);
+                            .entry((account.clone(), Fingerprint::of(&enrolled.key)))
+                            .or_insert(enrolled.anchor);
                     }
                 }
                 Verdict::Honored(Effect::Retire { account, removed }) => {

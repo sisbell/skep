@@ -367,9 +367,9 @@ fn key_and_fingerprint_render_as_their_hex() {
 #[test]
 fn tag_is_copy_and_debugs_as_its_bytes() {
     let tag = KEY_TAG;
-    let once = framed(tag, &[b"a"]);
-    let twice = framed(tag, &[b"a"]);
-    assert_eq!(once, twice);
+    let first = framed(tag, &[b"a"]);
+    let second = framed(tag, &[b"a"]);
+    assert_eq!(first, second);
     for t in TAGS {
         assert_eq!(framed(*t, &[]), t.as_bytes());
     }

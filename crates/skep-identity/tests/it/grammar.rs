@@ -11,11 +11,11 @@ use skep_identity::{
     PayloadError, PublicKey, ALG_ED25519,
 };
 
-fn hex(i: u8) -> String {
+fn key_hex(i: u8) -> String {
     key(i).to_hex()
 }
 
-fn fphex(i: u8) -> String {
+fn fp_hex(i: u8) -> String {
     fp(i).to_hex()
 }
 
@@ -76,7 +76,7 @@ fn a_canonical_record_is_admitted() {
 fn a_duplicate_member_is_bad_record() {
     let record = format!(
         r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}],"keys":[{{"alg":"ed25519","key":"{h}","anchor":true}}]}}"#,
-        h = hex(1)
+        h = key_hex(1)
     );
     assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadRecord);
 }
@@ -107,7 +107,7 @@ fn a_leading_bom_is_bad_record() {
 /// pretty-printed body).
 #[test]
 fn insignificant_whitespace_is_bad_record() {
-    let h = hex(1);
+    let h = key_hex(1);
     let after_colon =
         format!(r#"{{"type": "skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}]}}"#);
     assert_eq!(err_enroll(after_colon.as_bytes()), PayloadError::BadRecord);
@@ -134,7 +134,7 @@ fn insignificant_whitespace_is_bad_record() {
 /// side.
 #[test]
 fn non_canonical_escapes_are_bad_record() {
-    let h = hex(1);
+    let h = key_hex(1);
     let bs = char::from(92); // a backslash
     for body in ["u0041", "/", "u00e9", "u0009", "u001F"] {
         let record = format!(
@@ -150,7 +150,7 @@ fn non_canonical_escapes_are_bad_record() {
 fn a_lone_surrogate_is_bad_record() {
     let record = format!(
         r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{}","anchor":false,"label":"{}ud800"}}]}}"#,
-        hex(1),
+        key_hex(1),
         char::from(92)
     );
     assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadRecord);
@@ -160,7 +160,7 @@ fn a_lone_surrogate_is_bad_record() {
 /// not last, an entry's `anchor` before its `key` (AUTH-2.130 clause 1).
 #[test]
 fn reordered_members_are_bad_record() {
-    let h = hex(1);
+    let h = key_hex(1);
     let keys_first =
         format!(r#"{{"keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}],"type":"skep-enroll"}}"#);
     assert_eq!(err_enroll(keys_first.as_bytes()), PayloadError::BadRecord);
@@ -180,11 +180,11 @@ fn reordered_members_are_bad_record() {
 #[test]
 fn uppercase_hex_is_bad_record() {
     // A key whose hex carries letters (0xab ⇒ "abab…"), so uppercasing differs.
-    let up = hex(0xab).to_uppercase();
+    let up = key_hex(0xab).to_uppercase();
     let enroll = format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{up}","anchor":false}}]}}"#);
     assert_eq!(err_enroll(enroll.as_bytes()), PayloadError::BadRecord);
 
-    let up = fphex(1).to_uppercase();
+    let up = fp_hex(1).to_uppercase();
     let retire = format!(r#"{{"type":"skep-retire","fingerprints":["{up}"]}}"#);
     assert_eq!(err_retire(retire.as_bytes()), PayloadError::BadRecord);
 }
@@ -196,7 +196,7 @@ fn uppercase_hex_is_bad_record() {
 /// there (AUTH-2.128); no falsy value reads as "no label".
 #[test]
 fn a_label_outside_the_domain_is_bad_record() {
-    let h = hex(1);
+    let h = key_hex(1);
     for label in [
         r#""label":"""#,
         r#""label":"a\nb""#,
@@ -218,7 +218,7 @@ fn a_label_outside_the_domain_is_bad_record() {
 fn a_trailing_space_label_is_admitted_verbatim() {
     let record = format!(
         r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{}","anchor":false,"label":"my phone "}}]}}"#,
-        hex(1)
+        key_hex(1)
     );
     let parsed = ok_enroll(record.as_bytes());
     assert_eq!(parsed.len(), 1);
@@ -230,7 +230,7 @@ fn a_trailing_space_label_is_admitted_verbatim() {
 /// `bad_record` (AUTH-2.128 "No other member").
 #[test]
 fn an_extra_member_is_bad_record() {
-    let h = hex(1);
+    let h = key_hex(1);
     let on_record =
         format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}],"extra":1}}"#);
     assert_eq!(err_enroll(on_record.as_bytes()), PayloadError::BadRecord);
@@ -244,7 +244,7 @@ fn an_extra_member_is_bad_record() {
 /// is REQUIRED, one spelling per value — AUTH-2.128).
 #[test]
 fn a_missing_anchor_is_bad_record() {
-    let record = format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{}"}}]}}"#, hex(1));
+    let record = format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{}"}}]}}"#, key_hex(1));
     assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadRecord);
 }
 
@@ -253,7 +253,7 @@ fn a_missing_anchor_is_bad_record() {
 /// `bad_record` (the parse is keyed to the kind, AUTH-2.128).
 #[test]
 fn a_wrong_or_missing_type_is_bad_record() {
-    let h = hex(1);
+    let h = key_hex(1);
     let disagree =
         format!(r#"{{"type":"skep-retire","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}]}}"#);
     assert_eq!(err_enroll(disagree.as_bytes()), PayloadError::BadRecord);
@@ -272,7 +272,7 @@ fn a_wrong_or_missing_type_is_bad_record() {
 /// included), never `bad_record` (AUTH-2.13, AUTH-2.94).
 #[test]
 fn a_sig_member_is_skipped_and_the_table_is_identical() {
-    let h = hex(1);
+    let h = key_hex(1);
     let without = format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}]}}"#);
     let with = format!(
         r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}],"sig":"deadbeef not a real signature"}}"#
@@ -283,7 +283,7 @@ fn a_sig_member_is_skipped_and_the_table_is_identical() {
         "the sig member is skipped; the entries are identical"
     );
 
-    let with_r = format!(r#"{{"type":"skep-retire","fingerprints":["{}"],"sig":"garbage"}}"#, fphex(1));
+    let with_r = format!(r#"{{"type":"skep-retire","fingerprints":["{}"],"sig":"garbage"}}"#, fp_hex(1));
     assert_eq!(ok_retire(with_r.as_bytes()), vec![fp(1)]);
 }
 
@@ -292,7 +292,7 @@ fn a_sig_member_is_skipped_and_the_table_is_identical() {
 /// (AUTH-2.9, AUTH-2.91).
 #[test]
 fn an_unadmitted_alg_or_wrong_hex_length_is_bad_record() {
-    let h = hex(1);
+    let h = key_hex(1);
     for alg in ["mldsa44", "p256", "ED25519"] {
         let record =
             format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"{alg}","key":"{h}","anchor":false}}]}}"#);
@@ -326,13 +326,13 @@ fn the_anchor_flag_and_a_label_anchor_are_distinct() {
 /// one fingerprint twice.
 #[test]
 fn a_duplicate_entry_names_the_repeating_entry_index() {
-    let h = hex(3);
+    let h = key_hex(3);
     let record = format!(
         r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}},{{"alg":"ed25519","key":"{h}","anchor":true}}]}}"#
     );
     assert_eq!(err_enroll(record.as_bytes()), PayloadError::DuplicateKey(2));
 
-    let f = fphex(2);
+    let f = fp_hex(2);
     let record = format!(r#"{{"type":"skep-retire","fingerprints":["{f}","{f}"]}}"#);
     assert_eq!(err_retire(record.as_bytes()), PayloadError::DuplicateKey(2));
 }
@@ -351,8 +351,8 @@ fn an_empty_array_is_empty() {
 fn an_unadmitted_alg_precedes_a_later_duplicate() {
     let record = format!(
         r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa44","key":"{h1}","anchor":false}},{{"alg":"ed25519","key":"{h2}","anchor":false}},{{"alg":"ed25519","key":"{h2}","anchor":false}}]}}"#,
-        h1 = hex(1),
-        h2 = hex(2)
+        h1 = key_hex(1),
+        h2 = key_hex(2)
     );
     assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadRecord);
 }
@@ -368,7 +368,7 @@ fn an_unadmitted_alg_precedes_a_later_duplicate() {
 #[test]
 fn a_non_canonical_body_that_also_repeats_an_entry_is_bad_record() {
     // Insignificant whitespace after a `:`, two entries carrying one key.
-    let h = hex(3);
+    let h = key_hex(3);
     let spaced = format!(
         r#"{{"type": "skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}},{{"alg":"ed25519","key":"{h}","anchor":true}}]}}"#
     );
@@ -376,14 +376,14 @@ fn a_non_canonical_body_that_also_repeats_an_entry_is_bad_record() {
 
     // Uppercase hex, which the PARSE admits (AUTH-2.17), so both entries really
     // do carry one key and the duplicate is real — the compare decides first.
-    let up = hex(0xab).to_uppercase();
+    let up = key_hex(0xab).to_uppercase();
     let uppercase = format!(
         r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{up}","anchor":false}},{{"alg":"ed25519","key":"{up}","anchor":true}}]}}"#
     );
     assert_eq!(err_enroll(uppercase.as_bytes()), PayloadError::BadRecord);
 
     // The retirement kind keeps the same precedence.
-    let f = fphex(1).to_uppercase();
+    let f = fp_hex(1).to_uppercase();
     let retire = format!(r#"{{"type":"skep-retire","fingerprints":["{f}","{f}"]}}"#);
     assert_eq!(err_retire(retire.as_bytes()), PayloadError::BadRecord);
 }
@@ -410,7 +410,7 @@ fn not_utf8_precedes_the_schema_check() {
 #[test]
 fn a_non_json_body_is_bad_record() {
     assert_eq!(err_enroll(b"nonsense"), PayloadError::BadRecord);
-    let line_form = format!("skep-enroll v1\ned25519 {}\n", hex(1));
+    let line_form = format!("skep-enroll v1\ned25519 {}\n", key_hex(1));
     assert_eq!(err_enroll(line_form.as_bytes()), PayloadError::BadRecord);
     assert_eq!(err_retire(b"{not json"), PayloadError::BadRecord);
 }
@@ -423,7 +423,7 @@ fn the_retirement_schema_is_enforced() {
         err_retire(br#"{"type":"skep-retire","fingerprints":"x"}"#),
         PayloadError::BadRecord
     );
-    let short = fphex(1)[..62].to_owned();
+    let short = fp_hex(1)[..62].to_owned();
     assert_eq!(
         err_retire(format!(r#"{{"type":"skep-retire","fingerprints":["{short}"]}}"#).as_bytes()),
         PayloadError::BadRecord
@@ -450,13 +450,13 @@ fn encode_emits_the_canonical_forms() {
     ]);
     let want = format!(
         r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{}","anchor":true,"label":"desk key"}},{{"alg":"ed25519","key":"{}","anchor":false}}]}}"#,
-        hex(1),
-        hex(2)
+        key_hex(1),
+        key_hex(2)
     );
     assert_eq!(record, want);
 
     let record = encode_retire(&[fp(1)]);
-    let want = format!(r#"{{"type":"skep-retire","fingerprints":["{}"]}}"#, fphex(1));
+    let want = format!(r#"{{"type":"skep-retire","fingerprints":["{}"]}}"#, fp_hex(1));
     assert_eq!(record, want);
 }
 
@@ -486,7 +486,7 @@ fn the_canonical_escape_table_is_pinned_as_bytes() {
         .expect("the AUTH-1.24 domain admits every character here")]);
     let want = format!(
         r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{}","anchor":false,"label":"\u0000\u0001\u0007\b\t\u000b\f\r\u000e\u001f \"\\/é~"}}]}}"#,
-        hex(1)
+        key_hex(1)
     );
     assert_eq!(record, want);
 

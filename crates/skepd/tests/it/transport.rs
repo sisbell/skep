@@ -158,6 +158,18 @@ fn requests_outside_the_http_subset_are_refused_malformed_http() {
             "a non-numeric Content-Length",
             b"POST /op HTTP/1.1\r\nContent-Length: ten\r\n\r\n".to_vec(),
         ),
+        // RFC 7230 §3.3.2 is `1*DIGIT`, where `usize::from_str` admits a
+        // leading `+` — so the body below is DELIVERED IN FULL if the
+        // daemon takes std's reading: 13 bytes are read, the frame parses,
+        // and `/op` answers 200. The body is what makes the row
+        // load-bearing; one without it would be refused either way, on the
+        // EOF inside the declared length, and pin nothing. Leading zeros
+        // need no row — `0013` IS `1*DIGIT` and stays admitted.
+        (
+            "a Content-Length with a leading plus",
+            format!("POST /op HTTP/1.1\r\nContent-Length: +13\r\n\r\n{}", r#"{"op":"fork"}"#)
+                .into_bytes(),
+        ),
         ("a body cut short of its declared length", cut_short.into_bytes()),
         // A header this daemon READS, twice. Silently taking the last would
         // pick between a stalled read and a truncated frame by which line

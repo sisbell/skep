@@ -2877,6 +2877,21 @@ fn read_request(
         let (name, value) = (name.trim(), value.trim());
         if name.eq_ignore_ascii_case("Content-Length") {
             at_most_once(&content_length, "header", name)?;
+            // RFC 7230 §3.3.2 is `1*DIGIT`, and `usize::from_str` is wider:
+            // it admits a leading `+`. The condition is the one
+            // [`Origin::parse`] already spends on a port, at the field where
+            // two recipients of the same bytes must agree. The divergence
+            // costs nothing HERE — this daemon answers one request per
+            // connection and closes, reading exactly the declared length —
+            // but a FRONTING PROXY that follows §3.3.3 and refuses `+13`
+            // re-reads this body as the head of a new request on ITS client
+            // connection, and a keep-alive refactor would build the same
+            // desync inside this parser. Leading zeros stay admitted:
+            // `0013` IS `1*DIGIT`. The `parse` below keeps the range check,
+            // so an over-`usize` length is still refused, in one wording.
+            if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(format!("bad Content-Length '{value}'").into());
+            }
             content_length =
                 Some(value.parse().map_err(|_| format!("bad Content-Length '{value}'"))?);
         } else if name.eq_ignore_ascii_case(SESSION_HEADER) {

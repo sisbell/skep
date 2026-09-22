@@ -1120,7 +1120,17 @@ pub(crate) fn precheck(
     // set that OPENS the account, the giver's, and only where that set
     // holds an anchor — an anchorless giver's handoff stays device-grade
     // (AUTH-5.16's standing price).
-    let anchor_subject = match &effect {
+    //
+    // THE ACCOUNT WHOSE ANCHORS GRADE THIS ACT, answered from two different
+    // places: a retirement's and an enrollment's own account, and — at a
+    // handoff — the GIVER, which is never the genesis's subject. "Subject" is
+    // deliberately unspent on it: the word is live in two senses in this
+    // subsystem — the account whose set is CONSULTED
+    // ([`super::session::key_subject`], AUTH-4.30 (i)) and the account being
+    // ACTED ON ([`handoff_giver`]'s own parameter) — and the Genesis arm
+    // holds both in one expression, where only the first would be true of
+    // this value.
+    let anchor_account = match &effect {
         Effect::Retire { account, removed } => {
             let set = identity.key_set(account);
             removed.iter().any(|fp| set.is_anchor(fp)).then(|| account.clone())
@@ -1132,8 +1142,8 @@ pub(crate) fn precheck(
             .filter(|giver| identity.key_set(giver).enrolled().any(|(_, e)| e.anchor)),
         Effect::Claim { .. } => None,
     };
-    if let Some(account) = anchor_subject {
-        let set = identity.key_set(&account);
+    if let Some(anchor_account) = anchor_account {
+        let set = identity.key_set(&anchor_account);
         if !signer.is_some_and(|fp| set.is_anchor(fp)) {
             return Err(CredentialRefusal::AnchorSessionRequired);
         }

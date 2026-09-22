@@ -498,9 +498,9 @@ impl Feed {
                 .filter_map(Value::as_str)
                 .filter_map(parse_dotted)
             {
-                let s = streams.entry(owner).or_default();
-                if s.last() != Some(at) {
-                    s.push(*at);
+                let stream = streams.entry(owner).or_default();
+                if stream.last() != Some(at) {
+                    stream.push(*at);
                 }
             }
         }

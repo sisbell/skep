@@ -1179,15 +1179,15 @@ impl BlockedPrefixes {
                              hosted board must supply one)"
                 .to_string(),
         };
-        let inert = self.judged().filter(|(_, verdict)| verdict.is_some()).count();
+        let inert_entries = self.judged().filter(|(_, inert)| inert.is_some()).count();
         let mut lines = vec![format!(
-            "{} of {} entries in force, {inert} inert; operator account {operator}; \
+            "{} of {} entries in force, {inert_entries} inert; operator account {operator}; \
              binding-writing account {binding_writer}",
             self.in_force(),
             self.issue.entries.len(),
         )];
-        for (entry, comparand) in self.judged() {
-            let (covered, exempted) = match comparand {
+        for (entry, inert) in self.judged() {
+            let (covered, exempted) = match inert {
                 None => continue,
                 Some(Comparand::Operator) => ("the configured operator account", &self.operator),
                 Some(Comparand::BindingWriter) => {

@@ -257,7 +257,7 @@ pub(crate) struct SessionBinding {
 }
 
 impl SessionBinding {
-    /// The key testimony of a write this session commits (AUTH-4.48): the
+    /// The AUTH testimony of a write this session commits (AUTH-4.48): the
     /// establishing key's fingerprint hex, or `"bare"` for a bare bind.
     /// Lives here because the signer does — a write path that must name
     /// the testimony asks the binding rather than re-deriving the rule.
@@ -987,7 +987,7 @@ mod tests {
     /// AUTH-4.62 item 1's EXPIRED arm — the one of the thirteen no wire test
     /// drives, since reaching it over HTTP needs the 60 s TTL. Here `now` is
     /// an argument: a nonce presented at its expiry dies at the burn and is
-    /// the UNIT refusal, which `session_refused` marshals to the one 401
+    /// the UNIT refusal, which `refuse_handshake` marshals to the one 401
     /// body — byte-identical with every other arm by construction — and
     /// never the second value, which only step 4b produces.
     #[test]

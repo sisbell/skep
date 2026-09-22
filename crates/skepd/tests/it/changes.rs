@@ -492,9 +492,9 @@ fn feed_entry(port: u16, token: &str, what: &str, frame: &str) -> (Value, Value)
     (ack, entries[0].clone())
 }
 
-/// The key testimony (AUTH-4.48, wire v7) names the key that established
-/// the committing session — the field a reader of the feed attributes a
-/// write by, so both of its answers are pinned here and pinned apart.
+/// The write's TESTIMONY (AUTH-4.48, wire v7) — the wire's `key` field —
+/// names the key that established the committing session, so both of its
+/// answers are pinned here and pinned apart.
 ///
 /// `"bare"` is the load-bearing one: it is a positive claim that nobody
 /// signed, not a null a reader can distrust, and the sidecar never
@@ -503,7 +503,7 @@ fn feed_entry(port: u16, token: &str, what: &str, frame: &str) -> (Value, Value)
 /// read out of `key_set`, tying the entry to what the wire itself
 /// publishes about that key rather than to a value this test computes.
 #[test]
-fn the_key_testimony_names_the_key_that_signed_the_session() {
+fn the_testimony_names_the_key_that_signed_the_session() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();

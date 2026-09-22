@@ -801,7 +801,7 @@ impl std::fmt::Debug for HttpRequest {
 /// history, §The change feed), so a new failure cannot ship without a
 /// documented name, exactly as `code_name` guarantees for M10's rejections.
 /// The handshake's two answers — the 401 and the 403 — are the table's two
-/// rows written elsewhere: [`session_refused`] says why.
+/// rows written elsewhere: [`refuse_handshake`] says why.
 #[derive(Clone, Copy, Debug)]
 enum TransportError {
     // The envelope and query parsers.
@@ -924,7 +924,7 @@ fn refuse_with(err: TransportError, fields: Vec<(&'static str, Value)>) -> Reply
 /// handshake's answers are AUTH-6.5's to word, a pair, and neither name is
 /// a [`TransportError`] variant — so neither can grow the optional `detail`
 /// every variant of that enum is offered.
-fn session_refused(refusal: &HandshakeRefusal) -> Reply {
+fn refuse_handshake(refusal: &HandshakeRefusal) -> Reply {
     match refusal {
         HandshakeRefusal::Rejected(_) => {
             Reply::json(401, obj(vec![("error", Value::String("session_rejected".into()))]))
@@ -1409,7 +1409,7 @@ impl Daemon {
     /// `session_rejected`, byte-identical across causes (AUTH-6.5).
     /// THE ONE EXCEPTION, BY STATUS: a signed body naming a principal under
     /// a listed prefix is `403 prefix_blocked` carrying the record's
-    /// address (AUTH-4.36 step 4b) — [`session_refused`] builds both.
+    /// address (AUTH-4.36 step 4b) — [`refuse_handshake`] builds both.
     fn post_session(&self, req: &HttpRequest) -> Reply {
         let body = match parse_session_body(&req.body) {
             Ok(b) => b,
@@ -1454,7 +1454,7 @@ impl Daemon {
                     ]),
                 )
             }
-            Err(refusal) => session_refused(&refusal),
+            Err(refusal) => refuse_handshake(&refusal),
         }
     }
 
@@ -1922,7 +1922,7 @@ impl Daemon {
                 // The auth object (AUTH-6.13), rendered where its state
                 // lives — the claimant, the flag and the two origin sets,
                 // with the wire's own negative pin stated there too.
-                ("auth", self.auth.health_object()),
+                ("auth", self.auth.auth_object()),
                 ("head_time", head_time),
                 ("log_position", Value::Number(self.febe.log_position().0.into())),
                 ("ok", Value::Bool(true)),
@@ -3346,7 +3346,7 @@ mod tests {
         // and `status`; this catches one that reaches the wire without
         // reaching either list. The `+ 2` is the handshake's PAIR, neither
         // a `TransportError` variant — both are built at their own site per
-        // AUTH-6.5, [`session_refused`]: `session_rejected`, the 401, and
+        // AUTH-6.5, [`refuse_handshake`]: `session_rejected`, the 401, and
         // `prefix_blocked`, the 403 that is its one exception. The oracle's
         // list names both because wire.md's error column does; no fuzz
         // daemon is supplied a blocked-prefix list, so the second is a name

@@ -427,7 +427,7 @@ impl AuthState {
     /// `signed_origins` cannot straddle the claim between THEMSELVES;
     /// `/health`'s own card states the straddle its independent reads still
     /// admit.
-    pub fn health_object(&self) -> Value {
+    pub fn auth_object(&self) -> Value {
         let identity = self.fold.snapshot();
         let claimed = identity.claimant().is_some();
         let origins = |set: BTreeSet<Origin>| {

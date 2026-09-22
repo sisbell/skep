@@ -637,12 +637,12 @@ impl Feed {
         at: u64,
         op: &'static str,
         docs: Vec<Address>,
-        key: String,
+        testimony: String,
         world: &World,
     ) {
         let mut inner = self.inner.lock();
         let rendered: Vec<String> = docs.iter().map(|a| a.tumbler().to_string()).collect();
-        let Some(offset) = inner.log.record(serial, at, op, rendered, key) else {
+        let Some(offset) = inner.log.record(serial, at, op, rendered, testimony) else {
             return;
         };
         inner.fold_position(at, offset, classify(world, docs));

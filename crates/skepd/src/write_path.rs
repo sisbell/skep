@@ -191,8 +191,8 @@ impl WritePath {
         resp
     }
 
-    /// The data behind `GET /changes` at the requester's class — the key
-    /// set the route resolved off its one head snapshot, and the query.
+    /// The data behind `GET /changes` at the requester's class — the FEED
+    /// CLASS the route resolved off its one head snapshot, and the query.
     pub fn changes(&self, class: &FeedClass<'_>, query: &Query) -> ChangesAnswer {
         self.feed.page(class, query)
     }
@@ -272,7 +272,7 @@ impl WritePath {
         meta: WriteMeta,
         resp: &Response,
     ) -> Option<Seq> {
-        let WriteMeta { kind, docs, key } = meta;
+        let WriteMeta { kind, docs, testimony } = meta;
         let (at, minted) = match resp {
             Response::Ack { at } => (*at, None),
             Response::AckAddr { addr, at } => (*at, Some(addr)),
@@ -327,7 +327,7 @@ impl WritePath {
             }
         };
         let post = self.stores.kernel().snapshot();
-        self.feed.record(serial, at.0, op_name(kind), docs, key, post.world());
+        self.feed.record(serial, at.0, op_name(kind), docs, testimony, post.world());
         Some(at)
     }
 }
@@ -338,9 +338,10 @@ impl WritePath {
 /// tell: the op kind and the affected documents. Not yet a [`WriteMeta`]:
 /// the AUTH testimony (AUTH-4.48) is the committing session's, which no
 /// frame carries, so [`FrameMeta::attributed`] is the only way to reach a
-/// value [`WritePath::commit_under`] accepts. A placeholder key would be a
-/// wrong answer that looks right — `"bare"` is what a genuine bare-session
-/// write records, and the feed never re-derives an entry it holds.
+/// value [`WritePath::commit_under`] accepts. A placeholder testimony would
+/// be a wrong answer that looks right — `"bare"` is what a genuine
+/// bare-session write records, and the feed never re-derives an entry it
+/// holds.
 #[derive(Debug)]
 pub(crate) struct FrameMeta {
     pub kind: OpKind,
@@ -348,10 +349,10 @@ pub(crate) struct FrameMeta {
 }
 
 impl FrameMeta {
-    /// Attribute this write to the session committing it — the key
-    /// testimony from [`crate::auth::session::SessionBinding::testimony`].
-    pub fn attributed(self, key: String) -> WriteMeta {
-        WriteMeta { kind: self.kind, docs: self.docs, key }
+    /// Attribute this write to the session committing it — the testimony
+    /// from [`crate::auth::session::SessionBinding::testimony`].
+    pub fn attributed(self, testimony: String) -> WriteMeta {
+        WriteMeta { kind: self.kind, docs: self.docs, testimony }
     }
 }
 
@@ -366,9 +367,11 @@ impl FrameMeta {
 pub(crate) struct WriteMeta {
     pub kind: OpKind,
     pub docs: AffectedDocs,
-    /// The AUTH key testimony (AUTH-4.48): the establishing key's
-    /// fingerprint hex, or `"bare"` for a bare bind.
-    pub key: String,
+    /// The write's AUTH TESTIMONY (AUTH-4.48; wire.md §The change feed):
+    /// the establishing key's fingerprint hex, or `"bare"` for a bare bind
+    /// — never an absence, which the wire's `key` field reserves for
+    /// testimony that was LOST.
+    pub testimony: String,
 }
 
 /// A write's affected document(s) for the feed (wire.md §The change feed):

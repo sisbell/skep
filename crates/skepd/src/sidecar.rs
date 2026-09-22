@@ -1,6 +1,6 @@
 //! The commit-metadata sidecar (wire v6): `commits.log` in the data dir —
 //! one JSON line per committed write `(position, op kind, affected docs,
-//! unix millis, key testimony)`, appended by the write path at ack time and
+//! unix millis, testimony)`, appended by the write path at ack time and
 //! replayed on reopen. This is daemon-owned TRANSPORT METADATA, never
 //! substrate state (wire.md §The change feed) — exempt from the
 //! no-second-persistence-layer rule for the same reason as the kernel's
@@ -460,7 +460,7 @@ impl CommitsLog {
         at: u64,
         op: &'static str,
         docs: Vec<String>,
-        key: String,
+        testimony: String,
     ) -> Option<LineOffset> {
         if at <= self.open_head || self.entries.contains_key(&at) {
             return None;
@@ -471,7 +471,9 @@ impl CommitsLog {
             .unwrap_or(0);
         let time = now.max(self.last_time);
         self.last_time = time;
-        let meta = CommitMeta::Recorded { op: op.to_string(), docs, time, key: Some(key) };
+        // The one line where the concept meets the wire field it rides in
+        // (`CommitMeta::Recorded.key`, wire.md's `key`).
+        let meta = CommitMeta::Recorded { op: op.to_string(), docs, time, key: Some(testimony) };
         let offset = LineOffset(self.len);
         // Testimony must not fail the op: the write is committed and the
         // ack is owed regardless; a lost append answers BARE after restart,

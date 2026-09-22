@@ -224,7 +224,12 @@ pub(crate) struct CommitsLog {
     /// a fact about this journal and is discarded at open, exactly as an
     /// entry above it is — the coverage clause above means something only
     /// under that.
-    pub min_since: u64,
+    ///
+    /// Read from outside this file through [`CommitsLog::admits_since`] and
+    /// [`CommitsLog::floor`], the predicate and the datum this fence
+    /// answers: the distinction from the wire's `floor` is this file's to
+    /// keep, and so is every comparison against it.
+    min_since: u64,
     /// The journal head at open — the fence between replayed history and
     /// this uptime's commits. An ack carrying a position at or below it
     /// (an idempotency-memo replay, `emit`'s incumbent ack) is never a
@@ -521,14 +526,26 @@ impl CommitsLog {
         self.entries.values().next_back().and_then(CommitMeta::time)
     }
 
+    /// Whether this log can answer a `/changes` query fenced at `since`:
+    /// coverage is complete over `(min_since, head]`, so a `since` at or
+    /// above that fence is admissible and one below it reaches into what the
+    /// walk could not enumerate.
+    ///
+    /// The PREDICATE beside [`CommitsLog::floor`]'s datum — the two are one
+    /// sentence, and a caller that refuses a query asks for both rather than
+    /// comparing against a fence whose distinction from the wire's `floor`
+    /// this file spends two doc comments keeping.
+    pub fn admits_since(&self, since: u64) -> bool {
+        since >= self.min_since
+    }
+
     /// The oldest position still ANSWERABLE — the wire's `floor` (wire.md
-    /// §Reading history), which is the first entry ABOVE
-    /// [`CommitsLog::min_since`] and not that number itself. The two are one
-    /// apart by definition, keeping them apart is this file's job (both
-    /// fields' docs refuse each other's meaning), and so is the step between
-    /// them: a caller rendering `floor` asks rather than deriving it from
-    /// two of this type's fields. `None` where nothing above the fence
-    /// survives.
+    /// §Reading history), which is the first entry ABOVE the fence
+    /// [`CommitsLog::admits_since`] tests and not that number itself. The two
+    /// are one apart by definition, keeping them apart is this file's job,
+    /// and so is the step between them: a caller rendering `floor` asks
+    /// rather than deriving it from this type's own state. `None` where
+    /// nothing above the fence survives.
     pub fn floor(&self) -> Option<u64> {
         self.entries.range(self.min_since.saturating_add(1)..).next().map(|(k, _)| *k)
     }

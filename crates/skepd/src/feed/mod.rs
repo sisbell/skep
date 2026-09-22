@@ -261,10 +261,11 @@ pub(crate) struct Query {
 /// The answer `GET /changes` marshals.
 #[derive(Debug)]
 pub(crate) enum ChangesAnswer {
-    /// `since` reaches below what the feed can enumerate; `floor` is the
-    /// wire's sense of the word (wire.md §Reading history: the oldest
-    /// position still answerable), which is NOT `CommitsLog::min_since` —
-    /// the distinction, and the step between the two numbers, are
+    /// `since` reaches below what the feed can enumerate
+    /// ([`CommitsLog::admits_since`]); `floor` is the wire's sense of the
+    /// word (wire.md §Reading history: the oldest position still
+    /// answerable), which is NOT the fence that predicate tests — the
+    /// distinction, and the step between the two numbers, are
     /// [`CommitsLog::floor`]'s, which is what this field is filled from.
     /// Class-invariant, like every position (PUB-6.52's residue).
     Reclaimed { floor: Option<u64> },
@@ -654,7 +655,7 @@ impl Feed {
     /// The data behind `GET /changes` at `class`.
     pub fn page(&self, class: &FeedClass<'_>, query: &Query) -> ChangesAnswer {
         let inner = self.inner.lock();
-        if query.since < inner.log.min_since {
+        if !inner.log.admits_since(query.since) {
             return ChangesAnswer::Reclaimed { floor: inner.log.floor() };
         }
         let Some(start) = query.since.checked_add(1) else {

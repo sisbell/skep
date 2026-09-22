@@ -33,7 +33,7 @@ use skep_febe::{ReqId, SessionId};
 use skep_identity::{LinkDeposit, PublicKey};
 use skep_namespace::prefix_contains;
 
-use crate::codec::{check_keys, wire_address};
+use crate::codec::{check_keys, obj, wire_address};
 use crate::World;
 use fold::{CredMemo, IdentityFold};
 use session::{Challenges, Sessions};
@@ -406,6 +406,45 @@ impl AuthState {
     /// The supply file's path, for the log; `None` where none was named.
     pub fn blocked_supply_path(&self) -> Option<&Path> {
         self.blocked_supply.as_ref().map(|s| s.path.as_path())
+    }
+
+    /// `/health`'s `auth` OBJECT (AUTH-6.13), rendered HERE because this is
+    /// where its state lives — the convention `auth/` keeps for everything
+    /// else it publishes ([`Warning`]'s `Display`,
+    /// [`AuthConfig::node_prefix_line`], [`BlockedPrefixes::log_lines`]), and
+    /// the one the codec's module doc states for a transport shape: built
+    /// where its state lives, deterministic through [`crate::codec::obj`].
+    ///
+    /// Four members, each published VERBATIM from the function that answers
+    /// it, so the published list and the arm's own rule are ONE rule: the
+    /// claimant from the fold, `local_trust` from the config, and the TWO
+    /// origin sets from [`bare_origins`] and [`signed_origins`]. NO `mode`
+    /// field — the negative pin, and it belongs beside [`Mode`], which says
+    /// why: the wire publishes the PAIR and the client derives the mode, so
+    /// the type is the daemon's and not the wire's.
+    ///
+    /// ONE fold snapshot for the whole object, so `claimant` and
+    /// `signed_origins` cannot straddle the claim between THEMSELVES;
+    /// `/health`'s own card states the straddle its independent reads still
+    /// admit.
+    pub fn health_object(&self) -> Value {
+        let identity = self.fold.snapshot();
+        let claimed = identity.claimant().is_some();
+        let origins = |set: BTreeSet<Origin>| {
+            Value::Array(set.iter().map(|o| Value::String(o.as_str().to_string())).collect())
+        };
+        obj(vec![
+            (
+                "claimant",
+                identity
+                    .claimant()
+                    .map(|a| Value::String(a.tumbler().to_string()))
+                    .unwrap_or(Value::Null),
+            ),
+            ("local_trust", Value::Bool(self.cfg.local_trust)),
+            ("origins", origins(bare_origins(&self.cfg))),
+            ("signed_origins", origins(signed_origins(&self.cfg, claimed))),
+        ])
     }
 
     /// The credential path's committed tail (AUTH-3.43), whole and under

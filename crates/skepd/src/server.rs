@@ -165,8 +165,8 @@ use crate::auth::session::{
     SessionBinding, Token, CHALLENGE_TTL,
 };
 use crate::auth::{
-    bare_origins, blocked_prefixes, signed_origins, startup_warnings, AuthOptions, AuthState,
-    OsEntropy, PortAlreadyBound, Reissue,
+    blocked_prefixes, startup_warnings, AuthOptions, AuthState, OsEntropy, PortAlreadyBound,
+    Reissue,
 };
 use crate::codec::{
     check_keys, credential_refused_reply, key_set_reply, obj, to_bytes, DaemonOp, JsonCodec,
@@ -432,10 +432,10 @@ const CORS_MAX_AGE_SECS: &str = "86400";
 
 /// The headers wire.md promises on EVERY response: the cross-origin
 /// posture, the exposure that lets a page read the death signal, and the
-/// one-request-per-connection framing. Written once because the event
-/// stream's head is composed outside [`write_reply`] — a stream is not a
-/// request/response reply — so a change to any of them must reach both
-/// writers or reach neither.
+/// one-request-per-connection framing. Emitted by [`response_head`], which
+/// opens every response this daemon writes — the reply path's and the event
+/// stream's alike, a stream not being a request/response reply — so a change
+/// to any of them reaches both by construction.
 ///
 /// Exported because [`Reply`] names them as a caller's obligation. They are
 /// name/value pairs — the same shape [`Reply::headers`] carries — rather
@@ -1900,45 +1900,26 @@ impl Daemon {
         // (a fresh world): transport metadata, never invented, and never an
         // older position's time offered in the head's place.
         //
-        // THREE independent reads under no lock — this, the identity fold
-        // below, and `log_position` at the end — so this answer may straddle
-        // one in-flight commit at either seam. A `head_time` correct for the
-        // position the sidecar last recorded sits beside a `log_position`
-        // one commit newer; and a client polling for the claim flip can see
-        // the position advance before `claimant` appears, or read the
-        // pre-claim `signed_origins` beside a post-claim position, which
-        // costs it one `session_rejected` and a retry. Every one of them
-        // corrects itself on the next probe. Taking the write lock here
+        // THREE independent reads under no lock — this, the auth object's
+        // own fold snapshot, and `log_position` at the end — so this answer
+        // may straddle one in-flight commit at either seam. A `head_time`
+        // correct for the position the sidecar last recorded sits beside a
+        // `log_position` one commit newer; and a client polling for the claim
+        // flip can see the position advance before `claimant` appears, or
+        // read the pre-claim `signed_origins` beside a post-claim position,
+        // which costs it one `session_rejected` and a retry. Every one of
+        // them corrects itself on the next probe. Taking the write lock here
         // would serialize a liveness probe behind writes, which is the worse
         // trade; `CommitsLog::head_time` states what each field is true of.
         let head_time =
             self.writes.head_time().map(|t| Value::Number(t.into())).unwrap_or(Value::Null);
-        // The auth object (AUTH-6.13): claimant, local_trust, and the TWO
-        // origin lists — each published VERBATIM from its set function, so
-        // the published list and the arm's own rule are one rule. NO
-        // `.mode` field (the negative pin): mode is derived client-side
-        // from the pair.
-        let identity = self.auth.fold.snapshot();
-        let claimed = identity.claimant().is_some();
-        let origin_list = |set: std::collections::BTreeSet<crate::auth::Origin>| {
-            Value::Array(set.iter().map(|o| Value::String(o.as_str().to_string())).collect())
-        };
-        let auth = obj(vec![
-            (
-                "claimant",
-                identity
-                    .claimant()
-                    .map(|a| Value::String(a.tumbler().to_string()))
-                    .unwrap_or(Value::Null),
-            ),
-            ("local_trust", Value::Bool(self.auth.cfg.local_trust)),
-            ("origins", origin_list(bare_origins(&self.auth.cfg))),
-            ("signed_origins", origin_list(signed_origins(&self.auth.cfg, claimed))),
-        ]);
         Reply::json(
             200,
             obj(vec![
-                ("auth", auth),
+                // The auth object (AUTH-6.13), rendered where its state
+                // lives — the claimant, the flag and the two origin sets,
+                // with the wire's own negative pin stated there too.
+                ("auth", self.auth.health_object()),
                 ("head_time", head_time),
                 ("log_position", Value::Number(self.febe.log_position().0.into())),
                 ("ok", Value::Bool(true)),
@@ -2979,18 +2960,33 @@ fn push_header(head: &mut Vec<u8>, name: &str, value: &str) {
     head.extend_from_slice(format!("{name}: {value}\r\n").as_bytes());
 }
 
+/// The opening of EVERY response this daemon writes: the status line, then
+/// [`UNIVERSAL_HEADERS`] — which wire.md §Transport and §Cross-origin access
+/// promise on every response. The one place a response BEGINS, as
+/// [`push_header`] is the one place a header becomes bytes, and for the same
+/// reason: a stream is not a [`Reply`], so [`serve_events`] composes its own
+/// head — but its opening IS the reply path's at status 200, and spelled by
+/// hand it is a second entry in [`reason`]'s table with nothing keeping the
+/// two in step. The caller appends its own headers, the blank line, and
+/// whatever body it has.
+fn response_head(status: u16) -> Vec<u8> {
+    let mut head = Vec::with_capacity(256);
+    head.extend_from_slice(format!("HTTP/1.1 {status} {}\r\n", reason(status)).as_bytes());
+    for (name, value) in UNIVERSAL_HEADERS {
+        push_header(&mut head, name, value);
+    }
+    head
+}
+
 /// Write one complete reply; the connection closes behind it. Every reply
 /// carries [`UNIVERSAL_HEADERS`] — the cross-origin posture, the death
 /// signal's exposure, and the one-request-per-connection framing — supplied
-/// at this one choke point so no reply can miss them, and shared with
-/// `serve_events`, which composes its own head because a stream is not a
-/// reply. A bodiless reply carries no content headers (RFC 7230's 204).
+/// by [`response_head`], which is also what opens the event stream, so no
+/// response this daemon writes can miss them. A bodiless reply carries no
+/// content headers (RFC 7230's 204).
 fn write_reply(stream: &mut TcpStream, reply: &Reply, deadline: Instant) -> io::Result<()> {
-    let mut head = Vec::with_capacity(256);
-    head.extend_from_slice(
-        format!("HTTP/1.1 {} {}\r\n", reply.status, reason(reply.status)).as_bytes(),
-    );
-    for (name, value) in UNIVERSAL_HEADERS.iter().chain(&reply.headers) {
+    let mut head = response_head(reply.status);
+    for (name, value) in &reply.headers {
         push_header(&mut head, name, value);
     }
     // The body and the headers describing it come from one value, so the
@@ -3050,10 +3046,7 @@ fn reason(status: u16) -> &'static str {
 /// `GET /changes` already carries — see that method for the window the
 /// distinction closes.
 fn serve_events(daemon: &Daemon, mut stream: TcpStream, closed: bool) {
-    let mut head = b"HTTP/1.1 200 OK\r\n".to_vec();
-    for (name, value) in UNIVERSAL_HEADERS {
-        push_header(&mut head, name, value);
-    }
+    let mut head = response_head(200);
     push_header(&mut head, "Content-Type", "text/event-stream");
     push_header(&mut head, "Cache-Control", "no-cache");
     if closed {

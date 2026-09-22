@@ -947,7 +947,7 @@ fn a_content_session_is_refused_every_credential_act_and_writes_content_as_a_ful
 //
 // ADDED beside the matrix — no cell above moves. The caller is "a principal
 // under a listed prefix": the OWNER, its account covered by an entry of the
-// BLOCKED-PREFIX LIST. The list is CONFIG — issued the way a serving layer
+// BLOCKED-PREFIX LIST. The list is CONFIG — issued the way an operator
 // issues it (`issue_blocked_list`), in force at the first request after — and
 // the column is two statements:
 //   * every write cell is UNREACHABLE, the session never opening: the

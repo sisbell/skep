@@ -71,15 +71,22 @@ pub struct AuthOptions {
     /// defaults the claim-time drop exists to remove.
     pub configured: Vec<Origin>,
     /// The BLOCKED-PREFIX LIST's supply (AUTH-1.44, AUTH-4.70): the file
-    /// the serving layer maintains from the standing takedown records of
+    /// the operator maintains from the standing takedown records of
     /// the board it fronts — `--blocked-prefixes <FILE>`. SUPPLIED AT EVERY
     /// START, as `configured` is: a named file is read at open, and one
     /// that cannot be read or is not a list FAILS the open, so no restart
     /// starts the daemon on an empty list the standing records do not
     /// support. RE-ISSUED while the daemon runs by replacing the file; the
     /// format and the re-read are [`BlockedSupply`]'s. `None` is a board
-    /// with no serving layer — the notebook — and no prefix is blocked.
-    pub blocked_prefixes: Option<PathBuf>,
+    /// whose operator supplies none — the notebook — and no prefix is
+    /// blocked.
+    ///
+    /// Deliberately not `blocked_prefixes`, as `configured` is deliberately
+    /// not `origins`: [`blocked_prefixes`] is the function answering the
+    /// LIST IN FORCE, and this is the path of the FILE that supplies it.
+    /// The flag keeps the list's name — `--blocked-prefixes` is what an
+    /// operator thinks about — and the field keeps the file's.
+    pub blocked_supply_path: Option<PathBuf>,
     /// The board's full NODE PREFIX in the registry — `--node-prefix 1.N`
     /// (REG-1.69): EGRESS AND ASSERTION CONFIG, per daemon, supplied at
     /// every start as `configured` is and never a journaled genesis fact,
@@ -106,7 +113,7 @@ impl Default for AuthOptions {
         AuthOptions {
             local_trust: true,
             configured: Vec::new(),
-            blocked_prefixes: None,
+            blocked_supply_path: None,
             node_prefix: None,
         }
     }
@@ -309,7 +316,7 @@ impl AuthState {
     /// started on an empty list instead would lapse every standing block in
     /// silence, which is the one thing "supplied at every start" rules out.
     pub fn open(opts: AuthOptions, world: &World) -> io::Result<AuthState> {
-        let (blocked_supply, issue) = match opts.blocked_prefixes.as_deref() {
+        let (blocked_supply, issue) = match opts.blocked_supply_path.as_deref() {
             Some(path) => {
                 let (supply, issue) = BlockedSupply::open(path)?;
                 (Some(supply), issue)
@@ -813,7 +820,7 @@ pub(crate) struct BlockedHeader {
     pub binding_writer: Option<Address>,
 }
 
-/// One ISSUE of the list, as the serving layer supplies it: the header and
+/// One ISSUE of the list, as the operator supplies it: the header and
 /// every entry, in supply order, before the install's comparison.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct BlockedIssue {
@@ -892,7 +899,7 @@ impl BlockedPrefixes {
     /// prefix supplied the daemon CANNOT tell, so every operator reads as
     /// on-board — (b) silent — and the log says so once. The named operator
     /// is read AS SPELLED, against the prefix and against the entries alike:
-    /// the header is the serving layer's to spell in the registry's global
+    /// the header is the operator's to spell in the registry's global
     /// form, the form the boundary speaks (REG-1.66).
     ///
     /// So (a) and (b) are one account where the header names none and at
@@ -948,7 +955,7 @@ impl BlockedPrefixes {
     /// ground. A party under more than one entry is admitted only when
     /// every one is lifted, which falls out: each lift leaves the next
     /// longest covering it. Two entries over ONE prefix tie, and the first
-    /// in supply order answers — the serving layer's own order, so the
+    /// in supply order answers — the operator's own order, so the
     /// datum is a function of the issue alone.
     ///
     /// A scan of the list per consult, and a list is as long as a board's
@@ -1076,7 +1083,7 @@ pub(crate) enum Reissue {
 
 /// THE CHANNEL (AUTH-4.70: "its channel the build's"; RES-65 item 4's
 /// recommendation, "a file the flag `--blocked-prefixes <path>` names"): a
-/// file the serving layer owns, read at every start and RE-READ WHEN IT
+/// file the operator owns, read at every start and RE-READ WHEN IT
 /// MOVES — its identity checked at the head of every request
 /// ([`AuthState::reissue_blocked_prefixes`]), one `stat`.
 ///
@@ -1106,7 +1113,7 @@ pub(crate) enum Reissue {
 /// because a truncated object does not parse: a reader racing a writer
 /// that did not replace the file atomically REFUSES the torn issue and
 /// keeps the list in force, where a line format would install the half it
-/// saw. The serving layer still owes the ATOMIC REPLACE (write beside,
+/// saw. The operator still owes the ATOMIC REPLACE (write beside,
 /// rename over) — it is also what gives every issue a fresh identity.
 pub(crate) struct BlockedSupply {
     path: PathBuf,
@@ -1116,7 +1123,7 @@ pub(crate) struct BlockedSupply {
     seen: parking_lot::Mutex<Option<FileStamp>>,
 }
 
-/// A file's identity, cheaply: what moves when the serving layer replaces
+/// A file's identity, cheaply: what moves when the operator replaces
 /// it. The inode is what makes two issues written inside one timestamp tick
 /// distinct (a rename-over is always a new file); where there is none, the
 /// modification time and the length carry it alone.
@@ -1502,7 +1509,7 @@ mod tests {
             [b, a, None, None, None],
             "the seat spelled in the LOCAL form is under no `1.N` and reads OFF-board: (b) \
              goes live and exempts the old claimant — the header's first field is the \
-             serving layer's to spell globally (escalated)"
+             operator's to spell globally (escalated)"
         );
         // COVER: a prefix ABOVE a comparand covers it — the board's own node
         // included — and one BELOW it does not.

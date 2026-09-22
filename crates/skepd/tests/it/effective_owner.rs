@@ -52,7 +52,7 @@ fn prefix_of(port: u16, id: u64) -> Option<String> {
 /// (PUB-8.9, which takes the owner account from `prefix`). And an address
 /// under no registered prefix answers both members null, TOGETHER.
 #[test]
-fn a_seat_answers_itself_and_an_unallocated_first_child_answers_the_seat_above() {
+fn a_seat_answers_itself_and_an_unallocated_first_sub_account_answers_the_seat_above() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
@@ -64,13 +64,13 @@ fn a_seat_answers_itself_and_an_unallocated_first_child_answers_the_seat_above()
     assert_eq!(effective_owner(port, None, "1"), Some(("1".to_string(), 0)), "and so does the node");
 
     // `inc(X, 1)` — the board's own arithmetic names it — NOT yet delegated.
-    let first_child = next_prefix_under(port, None, x);
-    assert_eq!(first_child, format!("{x}.1"), "inc(X, 1) is X's first sub-account");
-    let unallocated = effective_owner(port, None, &first_child);
+    let first_sub_account = next_prefix_under(port, None, x);
+    assert_eq!(first_sub_account, format!("{x}.1"), "inc(X, 1) is X's first sub-account");
+    let unallocated = effective_owner(port, None, &first_sub_account);
     assert_eq!(unallocated, x_seat, "an unallocated inc(X, 1) answers X's prefix and principal");
     assert_ne!(
         unallocated.expect("never none under a seat").0,
-        first_child,
+        first_sub_account,
         "prefix != addr: the address asked is not a seat, whatever else the answer holds"
     );
     // An unregistered SIBLING of X's answers the node's seat — never none
@@ -89,16 +89,16 @@ fn a_seat_answers_itself_and_an_unallocated_first_child_answers_the_seat_above()
 
     // Seated by a `delegate`, the same address answers ITSELF…
     let held = 4_242;
-    expect_resp(&op(port, Some(&owner), &delegate_frame(&first_child, held)), "ack_addr");
+    expect_resp(&op(port, Some(&owner), &delegate_frame(&first_sub_account, held)), "ack_addr");
     assert_eq!(
-        effective_owner(port, None, &first_child),
-        Some((first_child.clone(), held)),
+        effective_owner(port, None, &first_sub_account),
+        Some((first_sub_account.clone(), held)),
         "allocated: prefix == addr, and the principal is the one seated AT it"
     );
     // …an unallocated address beneath it answers THAT seat, not X above it…
     assert_eq!(
-        effective_owner(port, None, &format!("{first_child}.1")),
-        Some((first_child.clone(), held)),
+        effective_owner(port, None, &format!("{first_sub_account}.1")),
+        Some((first_sub_account.clone(), held)),
         "the LONGEST registered prefix containing the address"
     );
     // …and X's own answer, and its other unallocated children's, are unmoved.
@@ -121,7 +121,7 @@ fn a_seat_answers_itself_and_an_unallocated_first_child_answers_the_seat_above()
 /// (c) row 8, NO SESSION: the read is principal-free and session-blind. The
 /// guest, the owner's BARE session, the owner's SIGNED session, a stranger's
 /// session and a token the daemon never issued are answered BYTE-IDENTICALLY
-/// — at a seat, at an unallocated first child, at a private draft of the
+/// — at a seat, at an unallocated first sub-account, at a private draft of the
 /// owner's, and off the registry — on `/op` and on `/op-at` alike. (A dead
 /// token's response carries the death signal in a HEADER; the body, which is
 /// the answer, is the guest's.)

@@ -31,13 +31,13 @@ pub(crate) fn line(args: std::fmt::Arguments<'_>) {
 /// beneath it, every line carrying the prefix.
 ///
 /// Written as ONE `writeln!` because a line per write lets another thread's
-/// notice land inside this one, and an entry a reader cannot tell the extent
+/// notice land inside this one, and a notice a reader cannot tell the extent
 /// of is worse than a long line.
-pub(crate) fn block(head: std::fmt::Arguments<'_>, rest: &[String]) {
-    let mut entry = format!("skepd: {head}");
+pub(crate) fn lines(head: std::fmt::Arguments<'_>, rest: &[String]) {
+    let mut text = format!("skepd: {head}");
     for line in rest {
-        entry.push_str("\nskepd:   ");
-        entry.push_str(line);
+        text.push_str("\nskepd:   ");
+        text.push_str(line);
     }
-    let _ = writeln!(std::io::stderr(), "{entry}");
+    let _ = writeln!(std::io::stderr(), "{text}");
 }

@@ -2602,7 +2602,7 @@ fn an_uppercase_signature_is_folded_where_an_uppercase_nonce_is_refused() {
 // RES-65 item 7 (n), RES-66 item 4 (i), RES-67 item 5 (l), RES-68 item 7 (m),
 // RES-115 and RES-140 record for the skepd lane.
 //
-// The list is CONFIG: every cell here moves it the way a serving layer does —
+// The list is CONFIG: every cell here moves it the way an operator does —
 // an issue written beside the supply file and renamed over it
 // (`issue_blocked_list`) — and never through the wire, which has no door for
 // it. The daemon looks at the file at the head of every request, so an issue
@@ -3162,14 +3162,14 @@ fn a_restart_reinstalls_the_list_and_a_bad_issue_installs_nothing() {
     // daemon serving an empty list the standing records do not support.
     issue_blocked_list_bytes(&list, b"not a list");
     let mut opts = skepd::AuthOptions::default();
-    opts.blocked_prefixes = Some(list.clone());
+    opts.blocked_supply_path = Some(list.clone());
     let refused = skepd::Daemon::open_with(&root.path().join("data"), opts);
     assert!(
         matches!(refused, Err(skepd::DaemonError::BlockedPrefixes(_))),
         "a malformed start-up supply refuses the open"
     );
     let mut opts = skepd::AuthOptions::default();
-    opts.blocked_prefixes = Some(root.path().join("no-such-file.json"));
+    opts.blocked_supply_path = Some(root.path().join("no-such-file.json"));
     let refused = skepd::Daemon::open_with(&root.path().join("data"), opts);
     assert!(
         matches!(refused, Err(skepd::DaemonError::BlockedPrefixes(_))),
@@ -3548,7 +3548,7 @@ fn a_handoff_is_anchor_grade_wherever_the_set_that_opens_the_account_holds_an_an
 /// * a child of `inc(Y, 1)` is a HIRE — device-grade, COMMITS;
 /// * a genesis beneath that AGENT — which stands at `inc(inc(Y, 1), 1)`
 ///   beneath its own nearest keyed ancestor `Y`, and holds an anchor of its
-///   own — is a SPAWN: device-grade, COMMITS, its first child included;
+///   own — is a SPAWN: device-grade, COMMITS, its first sub-account included;
 /// * and the terminus is read ALONE: the WORKER that spawn keyed stands at no
 ///   agent's position, so a genesis beneath it is the worker's own HANDOFF,
 ///   graded at the worker's set — an agent further up the chain is not read.
@@ -3615,8 +3615,8 @@ fn a_hire_and_a_spawn_are_device_grade_and_the_agents_home_itself_is_a_handoff()
     expect_resp(&enroll_for(port, &as_home, &home_doc1, &record, &agent), "ack_addr");
 
     // ROW 2 — THE SPAWN, beneath the agent, from the agent's DEVICE session:
-    // its first child, which beneath any account that is no agent is that
-    // account's agents' home and a handoff.
+    // its first sub-account, which beneath any account that is no agent is
+    // that account's agents' home and a handoff.
     let g = open_signed_session(port, 95_211, &g_device);
     let agent_doc1 = create_doc(port, &g, &agent);
     let (worker, _) = delegate_under(port, &g, &agent, 952_111);
@@ -3656,7 +3656,7 @@ fn a_hire_and_a_spawn_are_device_grade_and_the_agents_home_itself_is_a_handoff()
 /// list header's SECOND field, compared with the claimant. Where it names an
 /// account that is NOT the claimant — the SEAT of a forked lineage — a
 /// genesis into that account's DIRECT CHILD is an ADMISSION, device-grade;
-/// `inc(seat, 1)` itself, the seat's held first child, stays a HANDOFF; and
+/// `inc(seat, 1)` itself, the seat's own first sub-account, stays a HANDOFF; and
 /// with no header, or one naming the claimant, the carve is SILENT. The field
 /// is config, read per request: re-issue it and the carve moves with it.
 #[test]
@@ -3700,7 +3700,7 @@ fn the_seat_carve_admits_into_the_seats_direct_child_and_is_silent_without_the_h
     // the same deposit is an ADMISSION.
     issue_blocked_list(&list, header(Some(&t)), &[]);
     expect_resp(&enroll_for(port, &seat, &t_doc1, &t2_record, &t2), "ack_addr");
-    // The seat's HELD first child is no admission. At a TOP-LEVEL seat the
+    // The seat's own first sub-account is no admission. At a TOP-LEVEL seat the
     // fold refuses it first: `inc(B, 1)` of a bootstrap-tier account takes no
     // genesis (AUTH-2.62), slot (3) ahead of slot (6).
     let t1_record = land_record(port, &seat, &t_doc1, &fresh_member(44), T_ENROLL);

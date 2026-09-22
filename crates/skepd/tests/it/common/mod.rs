@@ -442,7 +442,7 @@ pub fn spawn_with_blocked_prefixes(
         let mut opts = AuthOptions::default();
         opts.local_trust = local_trust;
         opts.configured = vec![origin];
-        opts.blocked_prefixes = blocked_prefixes.map(Path::to_path_buf);
+        opts.blocked_supply_path = blocked_prefixes.map(Path::to_path_buf);
         opts.node_prefix = node_prefix.clone();
         let daemon = match Daemon::open_with(dir, opts) {
             Ok(daemon) => daemon,
@@ -495,7 +495,7 @@ pub struct BlockedHeader<'a> {
     pub binding_writer: Option<&'a str>,
 }
 
-/// ISSUE the blocked-prefix list at `path` — the serving layer's act, and
+/// ISSUE the blocked-prefix list at `path` — the operator's act, and
 /// the SAME act at the start-up supply and at every reissue: the whole list,
 /// `entries` as `(prefix, the takedown record's version address)`, written
 /// BESIDE the file and renamed OVER it. The atomic replace is the channel's

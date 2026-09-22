@@ -80,7 +80,7 @@ usage: skepd --data-dir <DIR> [--port <PORT>] [--workers <N>]
                      session arm accepts ONLY these once the board is
                      claimed (env: SKEPD_ORIGIN, comma-separated)
   --blocked-prefixes <FILE>
-                     the blocked-prefix list the serving layer maintains
+                     the blocked-prefix list the operator maintains
                      (env: SKEPD_BLOCKED_PREFIXES): one JSON object,
                      {{\"operator\": <account>, \"binding_writer\": <account>,
                       \"entries\": [{{\"prefix\": <address>,
@@ -265,7 +265,7 @@ fn main() {
     opts.configured = args.origins.clone();
     // Supplied at every start, as `--origin` is (AUTH-4.70): the file is
     // read inside the open, and one that is not a list stops the start.
-    opts.blocked_prefixes = args.blocked_prefixes.clone();
+    opts.blocked_supply_path = args.blocked_prefixes.clone();
     // The node prefix (REG-1.69): egress and assertion config, supplied at
     // every start and never journaled — a fresh one is this binary
     // relaunched (REG-1.70). `serve` names it, or its absence, at start.

@@ -1185,9 +1185,9 @@ pub(crate) fn precheck(
 ///   the chain (RES-172); where no keyed account stands above `subject` the
 ///   genesis lies in NO cone — a bootstrap-tier account's own, the invite's,
 ///   an org door's top-level mint, a never-keyed chain's;
-/// * a HIRE (AUTH-5.58 step 4) lands beneath `S`'s agent space — one of
-///   `inc(S, 1)`'s CHILDREN, the rule's own words, and never a deeper
-///   address: beneath an unseeded agent's slot nothing is a hire;
+/// * a HIRE (AUTH-5.58 step 4) lands beneath `S`'s agent space — a child of
+///   its FIRST SUB-ACCOUNT `inc(S, 1)`, the rule's own words, and never a
+///   deeper address: beneath an unseeded agent's slot nothing is a hire;
 /// * a SPAWN (AUTH-5.63) lands beneath an AGENT: `S` itself stands at
 ///   `inc(inc(P, 1), n)` beneath ITS OWN nearest keyed ancestor `P`, and a
 ///   keyed account at any other position is no agent — so a handed-off
@@ -1195,12 +1195,12 @@ pub(crate) fn precheck(
 ///   never to grade the act;
 /// * an ADMISSION (RES-175's seat carve) lands in a DIRECT CHILD of the
 ///   board's binding-writing account where that account is not the claimant
-///   ([`forked_seat`]) — the seat's HELD first child, `inc(seat, 1)` itself,
-///   is no admission and stays a handoff;
-/// * ANY OTHER genesis into a by-reference descendant of `S` — `inc(S, 1)`
-///   itself, the agents' home, included; `S` a person's account, an org
-///   root's or a node account's alike, the address read and never the role —
-///   is `S`'s HANDOFF.
+///   ([`forked_seat`]) — the seat's own FIRST SUB-ACCOUNT, `inc(seat, 1)`
+///   itself, is no admission and stays a handoff;
+/// * ANY OTHER genesis into a by-reference descendant of `S` — `S`'s own
+///   first sub-account `inc(S, 1)`, the agents' home, included; `S` a
+///   person's account, an org root's or a node account's alike, the address
+///   read and never the role — is `S`'s HANDOFF.
 ///
 /// The caller grades a handoff at `S`'s set: anchor-grade wherever that set
 /// holds an anchor, device-grade where it holds none.
@@ -1211,21 +1211,21 @@ fn handoff_giver(
 ) -> Option<Address> {
     let giver = keyed_above(identity, subject)?;
     let above = parent(subject);
-    let first_child = |of: &Address| checked_inc(of, 1).ok();
-    // The HIRE's: a child of the giver's agent space.
-    if above == first_child(&giver) {
+    let first_sub_account = |of: &Address| checked_inc(of, 1).ok();
+    // The HIRE's: a child of the giver's first sub-account, its agent space.
+    if above == first_sub_account(&giver) {
         return None;
     }
     // The SPAWN's: the giver is itself an agent.
-    let giver_is_agent =
-        keyed_above(identity, &giver).is_some_and(|holder| parent(&giver) == first_child(&holder));
+    let giver_is_agent = keyed_above(identity, &giver)
+        .is_some_and(|holder| parent(&giver) == first_sub_account(&holder));
     if giver_is_agent {
         return None;
     }
-    // The ADMISSION's: a direct child of a forked lineage's seat, its held
-    // first child apart.
+    // The ADMISSION's: a direct child of a forked lineage's seat, the seat's
+    // own first sub-account apart.
     if let Some(seat) = forked_seat(seat, identity) {
-        if above.as_ref() == Some(&seat) && first_child(&seat).as_ref() != Some(subject) {
+        if above.as_ref() == Some(&seat) && first_sub_account(&seat).as_ref() != Some(subject) {
             return None;
         }
     }

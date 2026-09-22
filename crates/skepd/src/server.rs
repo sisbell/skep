@@ -1162,11 +1162,11 @@ impl Daemon {
     /// response.
     ///
     /// Every request FIRST looks at the blocked-prefix list's supply
-    /// ([`Daemon::refresh_blocked_prefixes`]) — ahead of dispatch and of
+    /// ([`Daemon::reissue_blocked_prefixes`]) — ahead of dispatch and of
     /// every lock, so a reissue is in force before the request that noticed
     /// it resolves its own actor, `/events` included.
     pub fn route(&self, req: &HttpRequest) -> Routed {
-        self.refresh_blocked_prefixes();
+        self.reissue_blocked_prefixes();
         match (req.method.as_str(), req.path.as_str()) {
             ("GET", "/events") => Routed::EventStream,
             _ => Routed::Reply(self.reply(req)),
@@ -1283,11 +1283,11 @@ impl Daemon {
     /// [`crate::auth::BlockedPrefixes::log_lines`]'s; the stream is this
     /// daemon's, for [`Daemon::log_config_warnings`]'s reason.
     ///
-    /// SILENT where no supply was named: that is a board with no serving
-    /// layer, and there is no list to name.
+    /// SILENT where no supply was named: that is a board whose operator
+    /// supplies none, and there is no list to name.
     fn log_blocked_prefixes(&self, when: &str) {
         let Some(path) = self.auth.blocked_supply_path() else { return };
-        notice::block(
+        notice::lines(
             format_args!("blocked-prefix list ({when}, {}):", path.display()),
             &blocked_prefixes(&self.auth.cfg).log_lines(),
         );
@@ -1314,7 +1314,7 @@ impl Daemon {
     ///
     /// A COMMAND, and called under NO lock: it takes the write gate, which
     /// is why it runs here and not where the list is read.
-    fn refresh_blocked_prefixes(&self) {
+    fn reissue_blocked_prefixes(&self) {
         match self.auth.reissue_blocked_prefixes() {
             None => {}
             Some(Reissue::Installed) => self.log_blocked_prefixes("reissued"),

@@ -12,7 +12,7 @@
 //! themselves arrive from `crate::read`.
 //!
 //! The two kinds share one record envelope and one fault precedence
-//! (AUTH-2.19): [`scan`] holds the precedence and the parse side of the
+//! (AUTH-2.19): [`parse_record`] holds the precedence and the parse side of the
 //! envelope, [`canonical_record`] the encode side, and a kind's [`Schema`]
 //! carries only the five rows that kind decides for itself — read by its
 //! parser and its encoder alike, so the two sides cannot disagree about the
@@ -290,19 +290,19 @@ fn retirement_fingerprint(fp: &Fingerprint) -> Fingerprint {
 /// One record kind's SCHEMA — everything AUTH-2.128 and AUTH-2.129 say
 /// DIFFERENTLY, and nothing they say alike. Five rows, read by the kind's
 /// parser and its encoder alike. The envelope both schemas state in identical
-/// words is written once on each side — [`scan`] reads it, [`canonical_record`]
-/// writes it, both from the rows above — and AUTH-2.19's fault precedence,
-/// which both kinds keep, is [`scan`]'s.
+/// words is written once on each side — [`parse_record`] reads it,
+/// [`canonical_record`] writes it, both from the rows above — and AUTH-2.19's
+/// fault precedence, which both kinds keep, is [`parse_record`]'s.
 ///
-/// PRECONDITION — two rows must AGREE, and [`scan`] checks neither. For every
-/// entry `parse_entry` admits from a canonical body, `encode_entry` must
+/// PRECONDITION — two rows must AGREE, and [`parse_record`] checks neither.
+/// For every entry `parse_entry` admits from a canonical body, `encode_entry` must
 /// re-emit the bytes that entry spelled: AUTH-2.130's admission sentence is
 /// spelled `canonical_record(schema, parsed, sig) == text`, so an
 /// `encode_entry` that is not `parse_entry`'s inverse refuses EVERY record of
 /// the kind — silently, permanently, and with no fault to tell it from a
 /// malformed body. The ENVELOPE half of that inversion needs no precondition:
 /// [`canonical_record`] spells the `type` value and the entry-array member
-/// from the very rows [`scan`] reads to FIND them, so the encode and parse
+/// from the very rows [`parse_record`] reads to FIND them, so the encode and parse
 /// sides cannot disagree about either. And `compared_by` must be the
 /// kind's AUTH-2.15 sameness rule, because it is the ONLY thing standing
 /// behind each parser's DUPLICATE-FREE POSTCONDITION: a `compared_by` that
@@ -397,7 +397,7 @@ fn canonical_record<T>(schema: &Schema<T>, entries: &[T], sig: Option<&str>) -> 
 /// No verdict is delegated to `serde_json`: it answers only "is this a JSON
 /// value, and which" (AUTH-2.1). Everything a kind decides for itself is its
 /// [`Schema`]'s five rows.
-fn scan<T>(bytes: &[u8], schema: Schema<T>) -> Result<Vec<T>, PayloadError> {
+fn parse_record<T>(bytes: &[u8], schema: Schema<T>) -> Result<Vec<T>, PayloadError> {
     // AUTH-2.19 item 1 — UTF-8 before everything.
     let text = core::str::from_utf8(bytes).map_err(|_| PayloadError::NotUtf8)?;
     // AUTH-2.1/AUTH-2.19 item 2 — parse to a GENERIC value; a non-JSON body,
@@ -488,11 +488,11 @@ fn scan<T>(bytes: &[u8], schema: Schema<T>) -> Result<Vec<T>, PayloadError> {
 ///
 /// The record cap is the READ's, never this parser's (AUTH-2.43).
 pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
-    scan(bytes, ENROLL_SCHEMA)
+    parse_record(bytes, ENROLL_SCHEMA)
 }
 
 /// AUTH-2.129, AUTH-2.130 — parse a retirement record: the mirror of
-/// [`parse_enroll`] over the `fingerprints` array of 64-hex strings. The scan
+/// [`parse_enroll`] over the `fingerprints` array of 64-hex strings. The parse
 /// and the fault precedence are the ones BOTH kinds share (AUTH-2.19).
 ///
 /// POSTCONDITION — on `Ok`, the vector is NON-EMPTY (AUTH-2.16), in the
@@ -502,7 +502,7 @@ pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
 /// one fingerprint twice beside the rest of the set would pass that test,
 /// empty the set, and void I3 (AUTH-2.97) and AUTH-1.36.
 pub fn parse_retire(bytes: &[u8]) -> Result<Vec<Fingerprint>, PayloadError> {
-    scan(bytes, RETIRE_SCHEMA)
+    parse_record(bytes, RETIRE_SCHEMA)
 }
 
 /// AUTH-2.18/AUTH-2.130 — encode an enrollment record in the canonical spelling,

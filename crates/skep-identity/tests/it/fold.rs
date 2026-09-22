@@ -56,7 +56,7 @@ fn home_minted_bytes_fold_and_foreign_ones_do_not() {
         ty: enroll_ty(),
     };
     let (next, v) = fx.step(&genesis_state, &dep);
-    assert_token(&v, "malformed_payload:foreign_content");
+    assert_detail(&v, "malformed_payload:foreign_content");
     assert_eq!(next, genesis_state);
 }
 
@@ -76,7 +76,7 @@ fn cap_fault_fires_before_second_spans_home_check() {
         to: vec![unit(ACCT_A)],
         ty: enroll_ty(),
     };
-    assert_token(
+    assert_detail(
         &fx.classify(&genesis_state, &dep),
         "malformed_payload:too_large",
     );
@@ -98,7 +98,7 @@ fn exact_cap_passes_then_foreign_span_refuses() {
         to: vec![unit(ACCT_A)],
         ty: enroll_ty(),
     };
-    assert_token(
+    assert_detail(
         &fx.classify(&genesis_state, &dep),
         "malformed_payload:foreign_content",
     );
@@ -132,7 +132,7 @@ fn cap_fault_fires_before_a_second_spans_validity_and_position_checks() {
             to: vec![unit(ACCT_A)],
             ty: enroll_ty(),
         };
-        assert_token(
+        assert_detail(
             &fx.classify(&IdentityState::genesis(), &dep),
             "malformed_payload:too_large",
         );
@@ -168,7 +168,7 @@ fn endset_order_governs_concatenation() {
         to: vec![unit(ACCT_A)],
         ty: enroll_ty(),
     };
-    assert_token(
+    assert_detail(
         &fx.classify(&genesis_state, &dep),
         "malformed_payload:bad_record",
     );
@@ -202,7 +202,7 @@ fn repeated_spans_repeat_their_entries() {
         to: vec![unit(ACCT_A)],
         ty: vec![unit(T_RETIRE)],
     };
-    assert_token(
+    assert_detail(
         &fx.classify(&genesis_state, &dep),
         "malformed_payload:duplicate_key:3",
     );
@@ -265,7 +265,7 @@ fn a_repeated_span_cut_mid_entry_is_bad_record() {
         let mut from = spans.clone();
         from.insert(repeated, spans[repeated].clone());
         let (next, v) = fx.step(&st, &retirement(from));
-        assert_token(&v, "malformed_payload:bad_record");
+        assert_detail(&v, "malformed_payload:bad_record");
         assert_eq!(next, st, "span {repeated} named twice: the table is unchanged");
     }
 }
@@ -362,7 +362,7 @@ fn span_past_the_mint_is_missing_value() {
         to: vec![unit(ACCT_A)],
         ty: enroll_ty(),
     };
-    assert_token(
+    assert_detail(
         &fx.classify(&genesis_state, &dep),
         "malformed_payload:missing_value",
     );
@@ -413,7 +413,7 @@ fn invalid_start_is_foreign_content_not_a_panic() {
         to: vec![unit(ACCT_A)],
         ty: enroll_ty(),
     };
-    assert_token(
+    assert_detail(
         &fx.classify(&genesis_state, &dep),
         "malformed_payload:foreign_content",
     );
@@ -434,7 +434,7 @@ fn a_foreign_span_is_foreign_content_even_where_nothing_was_minted() {
         to: vec![unit(ACCT_A)],
         ty: enroll_ty(),
     };
-    assert_token(
+    assert_detail(
         &fx.classify(&IdentityState::genesis(), &dep),
         "malformed_payload:foreign_content",
     );
@@ -457,7 +457,7 @@ fn a_version_members_bytes_are_foreign_to_the_document_it_versions() {
         to: vec![unit(ACCT_A)],
         ty: enroll_ty(),
     };
-    assert_token(
+    assert_detail(
         &fx.classify(&IdentityState::genesis(), &dep),
         "malformed_payload:foreign_content",
     );
@@ -531,7 +531,7 @@ fn non_positions_are_foreign_content() {
             to: vec![unit(ACCT_A)],
             ty: enroll_ty(),
         };
-        assert_token(
+        assert_detail(
             &fx.classify(&genesis_state, &dep),
             "malformed_payload:foreign_content",
         );
@@ -551,7 +551,7 @@ fn link_subspace_start_walks_to_missing_value() {
         to: vec![unit(ACCT_A)],
         ty: enroll_ty(),
     };
-    assert_token(
+    assert_detail(
         &fx.classify(&genesis_state, &dep),
         "malformed_payload:missing_value",
     );
@@ -578,7 +578,7 @@ fn reach_walk_never_a_count_off_width() {
     };
     // The walk reads ords 1, 2, then outruns the mint: missing_value — NOT
     // `empty`/`bad_record`, which the count-off-width misreading answers.
-    assert_token(
+    assert_detail(
         &fx.classify(&genesis_state, &dep),
         "malformed_payload:missing_value",
     );
@@ -637,7 +637,7 @@ fn a_long_width_tail_changes_no_verdict() {
         to: vec![unit(ACCT_A)],
         ty: enroll_ty(),
     };
-    assert_token(
+    assert_detail(
         &fx.classify(&IdentityState::genesis(), &dep),
         "malformed_payload:missing_value",
     );
@@ -655,7 +655,7 @@ fn empty_from_is_malformed_shape() {
         to: vec![unit(ACCT_A)],
         ty: enroll_ty(),
     };
-    assert_token(&fx.classify(&genesis_state, &dep), "malformed_shape");
+    assert_detail(&fx.classify(&genesis_state, &dep), "malformed_shape");
 }
 
 /// Corpus: a two-atom record — the head atom plus one under-cap atom whose
@@ -677,7 +677,7 @@ fn cap_counts_bytes_never_positions() {
         to: vec![unit(ACCT_A)],
         ty: enroll_ty(),
     };
-    assert_token(
+    assert_detail(
         &fx.classify(&genesis_state, &dep),
         "malformed_payload:too_large",
     );
@@ -698,7 +698,7 @@ fn a_missing_value_at_the_cap_is_missing_value_not_too_large() {
         to: vec![unit(ACCT_A)],
         ty: enroll_ty(),
     };
-    assert_token(
+    assert_detail(
         &fx.classify(&IdentityState::genesis(), &dep),
         "malformed_payload:missing_value",
     );
@@ -791,7 +791,7 @@ fn record_at_exactly_the_cap_folds_and_one_more_byte_inerts() {
 
     // One byte more: inert.
     let dep = fx.enroll_dep(&doc1(ACCT_A), ACCT_A, &cap_sized_enroll_payload(1));
-    assert_token(
+    assert_detail(
         &fx.classify(&genesis_state, &dep),
         "malformed_payload:too_large",
     );
@@ -856,7 +856,7 @@ fn a_zero_byte_ctx_is_bounded_by_the_position_budget() {
         to: vec![unit(ACCT_A)],
         ty: enroll_ty(),
     };
-    assert_token(
+    assert_detail(
         &fx.classify(&IdentityState::genesis(), &dep),
         "malformed_payload:too_large",
     );
@@ -880,7 +880,7 @@ fn publication_precedes_shape() {
         to: vec![unit(ACCT_A), unit(ACCT_B)],
         ty: enroll_ty(),
     };
-    assert_token(&fx.classify(&genesis_state, &dep), "unpublished");
+    assert_detail(&fx.classify(&genesis_state, &dep), "unpublished");
 }
 
 /// Corpus: a two-span `to` beside a home-minted 64 KiB+1 `from` span —
@@ -898,7 +898,7 @@ fn shape_precedes_the_payload_read() {
         to: vec![unit(ACCT_A), unit(ACCT_B)],
         ty: enroll_ty(),
     };
-    assert_token(&fx.classify(&genesis_state, &dep), "malformed_shape");
+    assert_detail(&fx.classify(&genesis_state, &dep), "malformed_shape");
 }
 
 /// Corpus: an ENROLLMENT homed in a PUBLISHED second document of its account,
@@ -909,7 +909,7 @@ fn an_enrollment_payload_precedes_the_home_pin() {
     let mut fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
     let dep = fx.enroll_dep(&doc2(ACCT_A), ACCT_A, b"zzz not a record\n");
-    assert_token(
+    assert_detail(
         &fx.classify(&genesis_state, &dep),
         "malformed_payload:bad_record",
     );
@@ -931,7 +931,7 @@ fn unowned_home_is_malformed_shape() {
         vec![2, 1, 0, 9, 0, 1, 0, 1, 1],
     ] {
         let dep = fx.claim_dep(&addr(&unowned_home), CLAIMANT);
-        assert_token(&fx.classify(&genesis_state, &dep), "malformed_shape");
+        assert_detail(&fx.classify(&genesis_state, &dep), "malformed_shape");
     }
 }
 
@@ -969,7 +969,7 @@ fn an_unowned_home_is_malformed_shape_even_on_an_unpublished_board() {
     fx.ctx.all_unpublished = true;
     let unowned_home = addr(&[2, 1, 0, 9, 0, 1]);
     let dep = fx.claim_dep(&unowned_home, CLAIMANT);
-    assert_token(
+    assert_detail(
         &fx.classify(&IdentityState::genesis(), &dep),
         "malformed_shape",
     );
@@ -985,13 +985,13 @@ fn unpublished_home_inerts_every_shape() {
     let genesis_state = IdentityState::genesis();
 
     let dep = fx.enroll_dep(&doc1(ACCT_A), ACCT_A, &enroll_payload(&[(1, true)]));
-    assert_token(&fx.classify(&genesis_state, &dep), "unpublished");
+    assert_detail(&fx.classify(&genesis_state, &dep), "unpublished");
 
     let dep = fx.retire_dep(&doc1(ACCT_A), ACCT_A, &retire_payload(&[1]));
-    assert_token(&fx.classify(&genesis_state, &dep), "unpublished");
+    assert_detail(&fx.classify(&genesis_state, &dep), "unpublished");
 
     let dep = fx.claim_dep(&doc1(CLAIMANT), CLAIMANT);
-    assert_token(&fx.classify(&genesis_state, &dep), "unpublished");
+    assert_detail(&fx.classify(&genesis_state, &dep), "unpublished");
 }
 
 // ---------------------------------------------------------- verdict tokens
@@ -1004,7 +1004,7 @@ fn stranger_homed_genesis_is_not_genesis_registry() {
     let mut fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
     let dep = fx.enroll_dep(&doc1(ACCT_B), ACCT_A, &enroll_payload(&[(1, true)]));
-    assert_token(&fx.classify(&genesis_state, &dep), "not_genesis_registry");
+    assert_detail(&fx.classify(&genesis_state, &dep), "not_genesis_registry");
 }
 
 /// Corpus: a retirement of a member's key homed in the ORG's own doc 1 (the
@@ -1022,7 +1022,7 @@ fn registry_homed_retirement_is_not_holder_retirement() {
     assert_honored(&v);
     // The retirement through that same home is inert.
     let dep = fx.retire_dep(&doc1(ORG), NESTED, &retire_payload(&[2]));
-    assert_token(&fx.classify(&st, &dep), "not_holder_retirement");
+    assert_detail(&fx.classify(&st, &dep), "not_holder_retirement");
 }
 
 /// AUTH-2.71's LATCH — the registry that seeded an account enrolls into it
@@ -1037,7 +1037,7 @@ fn a_registry_homed_enrollment_on_a_seeded_account_is_the_latch() {
     assert_honored(&v);
     let dep = fx.enroll_dep(&doc1(ORG), NESTED, &enroll_payload(&[(2, false)]));
     let (next, v) = fx.step(&st, &dep);
-    assert_token(&v, "not_genesis_registry");
+    assert_detail(&v, "not_genesis_registry");
     assert_eq!(next, st);
 }
 
@@ -1056,10 +1056,10 @@ fn a_record_that_changes_nothing_answers_its_homes_refusal_outside_the_holder_ar
     assert_honored(&v);
     // The registry re-lists the key NESTED already holds: the latch.
     let dep = fx.enroll_dep(&doc1(ORG), NESTED, &enroll_payload(&[(1, true)]));
-    assert_token(&fx.classify(&st, &dep), "not_genesis_registry");
+    assert_detail(&fx.classify(&st, &dep), "not_genesis_registry");
     // The registry retires a key NESTED never held: no ancestor retires.
     let dep = fx.retire_dep(&doc1(ORG), NESTED, &retire_payload(&[5]));
-    assert_token(&fx.classify(&st, &dep), "not_holder_retirement");
+    assert_detail(&fx.classify(&st, &dep), "not_holder_retirement");
 }
 
 /// AUTH-2.76's first refusal arm: a retirement homed in the subject's OWN
@@ -1070,7 +1070,7 @@ fn a_record_that_changes_nothing_answers_its_homes_refusal_outside_the_holder_ar
 fn own_space_retirement_on_a_never_keyed_account_is_no_holder() {
     let mut fx = Fixture::new();
     let dep = fx.retire_dep(&doc1(ACCT_A), ACCT_A, &retire_payload(&[1]));
-    assert_token(&fx.classify(&IdentityState::genesis(), &dep), "no_holder");
+    assert_detail(&fx.classify(&IdentityState::genesis(), &dep), "no_holder");
 }
 
 /// Corpus: a claim by a KEYLESS TOP-LEVEL account on an already-claimed
@@ -1083,7 +1083,7 @@ fn already_claimed_beats_claimant_keyless() {
     let st = seed_own(&mut fx, &genesis_state, CLAIMANT, &[(9, true)]);
     let st = claim_as(&mut fx, &st, CLAIMANT);
     let dep = fx.claim_dep(&doc1(ACCT_B), ACCT_B); // ACCT_B is keyless
-    assert_token(&fx.classify(&st, &dep), "already_claimed");
+    assert_detail(&fx.classify(&st, &dep), "already_claimed");
 }
 
 /// Corpus: a claim by a NESTED account on an already-claimed board —
@@ -1096,7 +1096,7 @@ fn claimant_not_top_level_beats_already_claimed() {
     let st = seed_own(&mut fx, &genesis_state, CLAIMANT, &[(9, true)]);
     let st = claim_as(&mut fx, &st, CLAIMANT);
     let dep = fx.claim_dep(&doc1(NESTED), NESTED);
-    assert_token(&fx.classify(&st, &dep), "claimant_not_top_level");
+    assert_detail(&fx.classify(&st, &dep), "claimant_not_top_level");
 }
 
 /// AUTH-2.62's `None ⇒ None` and AUTH-2.72's written order: an own-space
@@ -1109,7 +1109,7 @@ fn own_space_genesis_without_a_delegator_is_not_genesis_registry() {
     let mut fx = Fixture::new();
     fx.register_orphan();
     let dep = fx.enroll_dep(&doc1(ORPHAN), ORPHAN, &enroll_payload(&[(1, true)]));
-    assert_token(
+    assert_detail(
         &fx.classify(&IdentityState::genesis(), &dep),
         "not_genesis_registry",
     );
@@ -1123,7 +1123,7 @@ fn claim_without_a_delegator_is_claimant_not_top_level() {
     let mut fx = Fixture::new();
     fx.register_orphan();
     let dep = fx.claim_dep(&doc1(ORPHAN), ORPHAN);
-    assert_token(
+    assert_detail(
         &fx.classify(&IdentityState::genesis(), &dep),
         "claimant_not_top_level",
     );
@@ -1138,7 +1138,7 @@ fn holder_enrollment_outside_doc_1_is_not_doc_one() {
     let genesis_state = IdentityState::genesis();
     let st = seed_own(&mut fx, &genesis_state, ACCT_A, &[(1, true)]);
     let dep = fx.enroll_dep(&doc2(ACCT_A), ACCT_A, &enroll_payload(&[(2, false)]));
-    assert_token(&fx.classify(&st, &dep), "not_doc_one");
+    assert_detail(&fx.classify(&st, &dep), "not_doc_one");
 }
 
 /// Corpus: a genesis enrollment homed in the delegator's PUBLISHED second
@@ -1149,7 +1149,7 @@ fn genesis_in_delegators_second_doc_is_not_doc_one() {
     let mut fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
     let dep = fx.enroll_dep(&doc2(ORG), NESTED, &enroll_payload(&[(3, true)]));
-    assert_token(&fx.classify(&genesis_state, &dep), "not_doc_one");
+    assert_detail(&fx.classify(&genesis_state, &dep), "not_doc_one");
 }
 
 /// Corpus: a claim by a NESTED account homed in its own PUBLISHED second
@@ -1160,7 +1160,7 @@ fn nested_claim_in_second_doc_is_not_doc_one() {
     let fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
     let dep = fx.claim_dep(&doc2(NESTED), NESTED);
-    assert_token(&fx.classify(&genesis_state, &dep), "not_doc_one");
+    assert_detail(&fx.classify(&genesis_state, &dep), "not_doc_one");
 }
 
 /// AUTH-2.127 on the RETIREMENT path — a holder retirement homed in a
@@ -1174,7 +1174,7 @@ fn a_holder_retirement_outside_doc_1_is_not_doc_one_and_retires_nothing() {
     let st = seeded(&mut fx); // fp(1) anchor, fp(2) non-anchor
     let dep = fx.retire_dep(&doc2(ACCT_A), ACCT_A, &retire_payload(&[2]));
     let (next, v) = fx.step(&st, &dep);
-    assert_token(&v, "not_doc_one");
+    assert_detail(&v, "not_doc_one");
     assert_eq!(next, st);
     assert!(
         next.key_set(&addr(ACCT_A)).contains(&fp(2)),
@@ -1192,7 +1192,7 @@ fn a_holder_retirement_outside_doc_1_is_not_doc_one_and_retires_nothing() {
 fn a_retirement_payload_precedes_the_home_pin() {
     let mut fx = Fixture::new();
     let dep = fx.retire_dep(&doc2(ACCT_A), ACCT_A, b"zzz not a record\n");
-    assert_token(
+    assert_detail(
         &fx.classify(&IdentityState::genesis(), &dep),
         "malformed_payload:bad_record",
     );
@@ -1206,7 +1206,7 @@ fn a_retirement_payload_precedes_the_home_pin() {
 fn a_registry_homed_retirement_outside_doc_1_is_not_doc_one() {
     let mut fx = Fixture::new();
     let dep = fx.retire_dep(&doc2(ORG), NESTED, &retire_payload(&[1]));
-    assert_token(&fx.classify(&IdentityState::genesis(), &dep), "not_doc_one");
+    assert_detail(&fx.classify(&IdentityState::genesis(), &dep), "not_doc_one");
 }
 
 /// AUTH-2.67 condition 1 before condition 2 — a claim whose `from` is not its
@@ -1222,7 +1222,7 @@ fn a_claims_shape_precedes_the_home_pin() {
         to: vec![],
         ty: vec![unit(T_CLAIM)],
     };
-    assert_token(
+    assert_detail(
         &fx.classify(&IdentityState::genesis(), &dep),
         "malformed_shape",
     );
@@ -1238,7 +1238,7 @@ fn a_version_member_of_doc_1_is_not_doc_one() {
     let mut fx = Fixture::new();
     let member = first_version_of(&doc1(ACCT_A));
     let dep = fx.enroll_dep(&member, ACCT_A, &enroll_payload(&[(1, true)]));
-    assert_token(&fx.classify(&IdentityState::genesis(), &dep), "not_doc_one");
+    assert_detail(&fx.classify(&IdentityState::genesis(), &dep), "not_doc_one");
 }
 
 /// A conforming board EXCEPT that ω answers ONE fixed prefix for every
@@ -1313,7 +1313,7 @@ fn an_element_level_owner_prefix_is_refused_at_the_home_pin() {
 #[cfg(not(debug_assertions))]
 #[test]
 fn an_element_level_owner_prefix_answers_not_doc_one_in_release() {
-    assert_token(&classify_under_an_element_level_owner(), "not_doc_one");
+    assert_detail(&classify_under_an_element_level_owner(), "not_doc_one");
 }
 
 // ------------------------------------------------------------ board state
@@ -1331,7 +1331,7 @@ fn own_space_genesis_flips_to_no_holder_at_the_claim() {
 
     let st = seed_own(&mut fx, &genesis_state, CLAIMANT, &[(9, true)]);
     let st = claim_as(&mut fx, &st, CLAIMANT);
-    assert_token(&fx.classify(&st, &dep), "no_holder");
+    assert_detail(&fx.classify(&st, &dep), "no_holder");
 }
 
 /// Corpus: the same genesis homed in the CLAIMANT's doc 1, before / after
@@ -1343,7 +1343,7 @@ fn claimant_homed_genesis_flips_to_honored_at_the_claim() {
     let genesis_state = IdentityState::genesis();
     let pre = seed_own(&mut fx, &genesis_state, CLAIMANT, &[(9, true)]);
     let dep = fx.enroll_dep(&doc1(CLAIMANT), ACCT_A, &enroll_payload(&[(1, true)]));
-    assert_token(&fx.classify(&pre, &dep), "not_genesis_registry");
+    assert_detail(&fx.classify(&pre, &dep), "not_genesis_registry");
 
     let post = claim_as(&mut fx, &pre, CLAIMANT);
     match assert_honored(&fx.classify(&post, &dep)) {
@@ -1386,14 +1386,14 @@ fn a3_the_agent_space_takes_no_genesis_from_any_hand() {
     let st = IdentityState::genesis();
     for home in [ACCT_A, B_FIRST_CHILD, CLAIMANT] {
         let dep = fx.enroll_dep(&doc1(home), B_FIRST_CHILD, &enroll_payload(&[(1, true)]));
-        assert_token(&fx.classify(&st, &dep), "not_genesis_registry");
+        assert_detail(&fx.classify(&st, &dep), "not_genesis_registry");
     }
     // After B is keyed and the board is claimed, still.
     let st = seed_own(&mut fx, &st, ACCT_A, &[(1, true)]);
     let st = seed_own(&mut fx, &st, CLAIMANT, &[(9, true)]);
     let st = claim_as(&mut fx, &st, CLAIMANT);
     let dep = fx.enroll_dep(&doc1(ACCT_A), B_FIRST_CHILD, &enroll_payload(&[(2, false)]));
-    assert_token(&fx.classify(&st, &dep), "not_genesis_registry");
+    assert_detail(&fx.classify(&st, &dep), "not_genesis_registry");
 }
 
 /// AUTH-2.96 row 52 (A3) — the arm is BOUNDED to the bootstrap tier's first
@@ -1435,12 +1435,12 @@ fn the_handoff_latch_fires_on_a_key_from_the_set_above() {
     let st = seed_own(&mut fx, &IdentityState::genesis(), ACCT_A, &[(1, true)]);
 
     let dep = fx.enroll_dep(&doc1(ACCT_A), B_SUBDIVISION, &enroll_payload(&[(1, true)]));
-    assert_token(&fx.classify(&st, &dep), "not_genesis_registry");
+    assert_detail(&fx.classify(&st, &dep), "not_genesis_registry");
 
     // One level down, its own set empty: the walk climbs the empty subdivision
     // to B's set (the comparand, AUTH-2.71's row 2009).
     let dep = fx.enroll_dep(&doc1(B_SUBDIVISION), B_SUB_DEEP, &enroll_payload(&[(1, true)]));
-    assert_token(&fx.classify(&st, &dep), "not_genesis_registry");
+    assert_detail(&fx.classify(&st, &dep), "not_genesis_registry");
 }
 
 /// AUTH-2.96 row 53 (the latch) — a FRESH-key genesis at `inc(B, 2)` is
@@ -1514,21 +1514,21 @@ fn to_slot_shape_is_malformed_on_all_kinds() {
         to: vec![unit(ACCT_A), unit(ACCT_B)],
         ty: enroll_ty(),
     };
-    assert_token(&fx.classify(&genesis_state, &dep), "malformed_shape");
+    assert_detail(&fx.classify(&genesis_state, &dep), "malformed_shape");
     let dep = Dep {
         home: doc1(ACCT_A),
         from: spans.clone(),
         to: vec![unit(ACCT_A), unit(ACCT_B)],
         ty: vec![unit(T_RETIRE)],
     };
-    assert_token(&fx.classify(&genesis_state, &dep), "malformed_shape");
+    assert_detail(&fx.classify(&genesis_state, &dep), "malformed_shape");
     let dep = Dep {
         home: doc1(CLAIMANT),
         from: vec![unit(CLAIMANT)],
         to: vec![unit(ACCT_A)],
         ty: vec![unit(T_CLAIM)],
     };
-    assert_token(&fx.classify(&genesis_state, &dep), "malformed_shape");
+    assert_detail(&fx.classify(&genesis_state, &dep), "malformed_shape");
 
     // A single span that is no subtree: it covers TWO account subtrees.
     let two_accounts = Span::new(tum(ACCT_A), width_at_last(ACCT_A.len(), 2)).expect("T12");
@@ -1538,7 +1538,7 @@ fn to_slot_shape_is_malformed_on_all_kinds() {
         to: vec![two_accounts.clone()],
         ty: enroll_ty(),
     };
-    assert_token(&fx.classify(&genesis_state, &dep), "malformed_shape");
+    assert_detail(&fx.classify(&genesis_state, &dep), "malformed_shape");
 
     // The claim's FROM under the same test (AUTH-2.26 governs both).
     let dep = Dep {
@@ -1547,7 +1547,7 @@ fn to_slot_shape_is_malformed_on_all_kinds() {
         to: vec![],
         ty: vec![unit(T_CLAIM)],
     };
-    assert_token(&fx.classify(&genesis_state, &dep), "malformed_shape");
+    assert_detail(&fx.classify(&genesis_state, &dep), "malformed_shape");
 }
 
 /// AUTH-2.26 — the whole rule, directly: `Some(A)` for exactly one span
@@ -1594,7 +1594,7 @@ fn invalid_to_start_is_malformed_shape_not_a_panic() {
         to: vec![invalid],
         ty: enroll_ty(),
     };
-    assert_token(
+    assert_detail(
         &fx.classify(&IdentityState::genesis(), &dep),
         "malformed_shape",
     );
@@ -1613,7 +1613,7 @@ fn empty_to_on_an_enrollment_is_malformed_shape() {
         to: vec![],
         ty: enroll_ty(),
     };
-    assert_token(
+    assert_detail(
         &fx.classify(&IdentityState::genesis(), &dep),
         "malformed_shape",
     );
@@ -1805,7 +1805,7 @@ fn re_listing_an_enrolled_key_under_the_anchor_flag_changes_nothing() {
     let st = seeded(&mut fx);
     let dep = fx.enroll_dep(&doc1(ACCT_A), ACCT_A, &enroll_payload(&[(2, true)]));
     let (next, v) = fx.step(&st, &dep);
-    assert_token(&v, "nothing_changed");
+    assert_detail(&v, "nothing_changed");
     assert_eq!(next, st);
     assert!(!next.key_set(&addr(ACCT_A)).is_anchor(&fp(2)));
 }
@@ -1943,7 +1943,7 @@ fn retiring_an_already_retired_key_changes_nothing() {
     let st = seeded_then_retired(&mut fx);
     let dep = fx.retire_dep(&doc1(ACCT_A), ACCT_A, &retire_payload(&[2]));
     let (next, v) = fx.step(&st, &dep);
-    assert_token(&v, "nothing_changed");
+    assert_detail(&v, "nothing_changed");
     assert_eq!(next, st);
 }
 
@@ -1955,7 +1955,7 @@ fn a_retired_fingerprint_never_re_enrolls() {
     let st = seeded_then_retired(&mut fx);
     let dep = fx.enroll_dep(&doc1(ACCT_A), ACCT_A, &enroll_payload(&[(2, true)]));
     let (next, v) = fx.step(&st, &dep);
-    assert_token(&v, "nothing_changed");
+    assert_detail(&v, "nothing_changed");
     assert_eq!(next, st);
 }
 
@@ -1967,7 +1967,7 @@ fn retiring_the_whole_enrolled_set_is_would_empty() {
     let st = seeded_then_retired(&mut fx);
     let dep = fx.retire_dep(&doc1(ACCT_A), ACCT_A, &retire_payload(&[1]));
     let (next, v) = fx.step(&st, &dep);
-    assert_token(&v, "would_empty");
+    assert_detail(&v, "would_empty");
     assert_eq!(next, st);
 }
 
@@ -1987,7 +1987,7 @@ fn retiring_the_whole_set_plus_a_stranger_is_still_would_empty() {
     let st = seeded(&mut fx);
     let dep = fx.retire_dep(&doc1(ACCT_A), ACCT_A, &retire_payload(&[1, 2, 5]));
     let (next, v) = fx.step(&st, &dep);
-    assert_token(&v, "would_empty");
+    assert_detail(&v, "would_empty");
     assert_eq!(next, st);
     assert!(
         !next.key_set(&addr(ACCT_A)).is_empty(),
@@ -2004,7 +2004,7 @@ fn board_admits_one_claim_and_only_from_a_keyed_account() {
 
     // Keyless claimant, pre-claim: condition 5.
     let dep = fx.claim_dep(&doc1(CLAIMANT), CLAIMANT);
-    assert_token(&fx.classify(&genesis_state, &dep), "claimant_keyless");
+    assert_detail(&fx.classify(&genesis_state, &dep), "claimant_keyless");
 
     // Seed both top-level accounts BEFORE the claim (post-claim, an
     // own-space genesis is `no_holder` — the AUTH-2.62 flip).
@@ -2022,7 +2022,7 @@ fn board_admits_one_claim_and_only_from_a_keyed_account() {
     // First-wins: a second claim, even by another seeded top-level account.
     let second_claim = fx.claim_dep(&doc1(ACCT_B), ACCT_B);
     let (st, v) = fx.step(&st, &second_claim);
-    assert_token(&v, "already_claimed");
+    assert_detail(&v, "already_claimed");
     assert_eq!(st.claimant(), Some(&addr(CLAIMANT)));
 
     // A claim whose `from` is not the home's account: shape (condition 1).
@@ -2032,7 +2032,7 @@ fn board_admits_one_claim_and_only_from_a_keyed_account() {
         to: vec![],
         ty: vec![unit(T_CLAIM)],
     };
-    assert_token(&fx.classify(&st, &dep), "malformed_shape");
+    assert_detail(&fx.classify(&st, &dep), "malformed_shape");
 }
 
 /// AUTH-1.40 — the checkpointed frame AROUND `Enrolled`: `KeySet`'s two maps

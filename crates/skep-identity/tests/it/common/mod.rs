@@ -318,18 +318,22 @@ pub fn retire_payload(indices: &[u8]) -> Vec<u8> {
 /// string, the one skepd marshals. No token, and no join, is spelled here:
 /// the corpus's literal expectations (`"malformed_payload:foreign_content"`)
 /// are what pin it.
-pub fn token_of(v: &Verdict) -> Option<String> {
+pub fn detail_of(v: &Verdict) -> Option<String> {
     match v {
         Verdict::Inert(inert) => Some(inert.detail()),
         _ => None,
     }
 }
 
+/// Assert an inert verdict's wire `detail` — [`detail_of`]'s string, which on
+/// the payload arm is the JOIN (`malformed_payload:bad_record`) and on every
+/// other arm the bare token. `Inert::token()` alone is the arm-by-arm
+/// vocabulary, and no vector here asserts that.
 #[track_caller]
-pub fn assert_token(v: &Verdict, want: &str) {
-    match token_of(v) {
-        Some(got) => assert_eq!(got, want, "wrong inert token"),
-        None => panic!("expected Inert({want}), got {v:?}"),
+pub fn assert_detail(v: &Verdict, want: &str) {
+    match detail_of(v) {
+        Some(got) => assert_eq!(got, want, "wrong inert detail"),
+        None => panic!("expected Inert with detail {want}, got {v:?}"),
     }
 }
 

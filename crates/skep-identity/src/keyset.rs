@@ -93,7 +93,7 @@ impl KeySet {
         self.enrolled.len()
     }
 
-    /// Enrol one key, the map key derived via `Fingerprint::of` on the key
+    /// Enroll one key, the map key derived via `Fingerprint::of` on the key
     /// inserted — establishing AUTH-1.32 by construction (AUTH-2.53).
     /// Crate-private: only `apply` posts.
     ///

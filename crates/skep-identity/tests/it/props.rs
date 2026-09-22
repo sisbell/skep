@@ -411,8 +411,8 @@ proptest! {
         for case in &cases {
             let (next, verdict) = fx.step(&genesis_state, &case.dep);
             if case.kind.is_credential() {
-                let token = token_of(&verdict);
-                prop_assert_eq!(token.as_deref(), Some("unpublished"));
+                let detail = detail_of(&verdict);
+                prop_assert_eq!(detail.as_deref(), Some("unpublished"));
             } else {
                 prop_assert_eq!(&verdict, &Verdict::NotCredential);
             }

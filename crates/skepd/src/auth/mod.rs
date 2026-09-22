@@ -1276,23 +1276,24 @@ impl BlockedSupply {
     /// `InvalidData`, so the channel's two refusals travel as one kind.
     fn read(&self) -> io::Result<(FileStamp, BlockedIssue)> {
         use std::io::Read;
-        let named = |e: io::Error| io::Error::new(e.kind(), format!("{}: {e}", self.path.display()));
-        let file = std::fs::File::open(&self.path).map_err(named)?;
-        let stamp = FileStamp::of(&file.metadata().map_err(named)?);
+        let with_path =
+            |e: io::Error| io::Error::new(e.kind(), format!("{}: {e}", self.path.display()));
+        let file = std::fs::File::open(&self.path).map_err(with_path)?;
+        let stamp = FileStamp::of(&file.metadata().map_err(with_path)?);
         let mut bytes = Vec::new();
         // ONE PAST the cap, so a file that exactly fills it is told apart
         // from one that exceeds it — and `take` rather than a length test
         // off the stamp, which a file being appended to concurrently
         // outruns.
-        file.take(MAX_BLOCKED_SUPPLY_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(named)?;
+        file.take(MAX_BLOCKED_SUPPLY_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(with_path)?;
         if bytes.len() > MAX_BLOCKED_SUPPLY_BYTES {
-            return Err(named(io::Error::new(
+            return Err(with_path(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("the list is past the {MAX_BLOCKED_SUPPLY_BYTES}-byte supply cap"),
             )));
         }
         let issue = parse_issue(&bytes)
-            .map_err(|detail| named(io::Error::new(io::ErrorKind::InvalidData, detail)))?;
+            .map_err(|detail| with_path(io::Error::new(io::ErrorKind::InvalidData, detail)))?;
         Ok((stamp, issue))
     }
 
@@ -1351,13 +1352,15 @@ fn parse_issue(bytes: &[u8]) -> Result<BlockedIssue, String> {
         .iter()
         .enumerate()
         .map(|(i, entry)| {
-            let at = |detail: String| format!("entries[{i}]: {detail}");
-            let Value::Object(e) = entry else {
-                return Err(at("expected a JSON object".into()));
+            let in_entry = |detail: String| format!("entries[{i}]: {detail}");
+            let Value::Object(entry) = entry else {
+                return Err(in_entry("expected a JSON object".into()));
             };
-            check_keys(e, &["prefix", "record"]).map_err(at)?;
+            check_keys(entry, &["prefix", "record"]).map_err(in_entry)?;
             let required = |k: &str| {
-                address_field(e, k).map_err(at)?.ok_or_else(|| at(format!("missing field '{k}'")))
+                address_field(entry, k)
+                    .map_err(in_entry)?
+                    .ok_or_else(|| in_entry(format!("missing field '{k}'")))
             };
             Ok(BlockedEntry { prefix: required("prefix")?, record: required("record")? })
         })

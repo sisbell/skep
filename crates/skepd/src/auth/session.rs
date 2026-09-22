@@ -919,15 +919,15 @@ mod tests {
         // Genesis: no account holds any key, so no signed binding is live.
         let identity = IdentityState::genesis();
         let cfg = cfg_at(8642, true);
-        let go = |lookup, peer, origin| resolve(&cfg, lookup, peer, origin, world, &identity);
+        let actor_of = |lookup, peer, origin| resolve(&cfg, lookup, peer, origin, world, &identity);
 
         assert_eq!(
-            go(Lookup::NoToken, Peer::Loopback, None),
+            actor_of(Lookup::NoToken, Peer::Loopback, None),
             Actor::Guest(GuestReason::NoToken),
             "no token: nothing to close"
         );
         assert_eq!(
-            go(Lookup::Unknown, Peer::Loopback, None),
+            actor_of(Lookup::Unknown, Peer::Loopback, None),
             Actor::Guest(GuestReason::Unknown),
             "an unknown token: the glue closes and signals"
         );
@@ -939,12 +939,12 @@ mod tests {
             scope: Scope::Full,
         };
         assert_eq!(
-            go(Lookup::Found(bare.clone()), Peer::Loopback, None),
+            actor_of(Lookup::Found(bare.clone()), Peer::Loopback, None),
             Actor::Principal(bare.clone()),
             "a bare bind the mode honors resolves to its principal"
         );
         assert_eq!(
-            go(Lookup::Found(bare.clone()), Peer::Remote, None),
+            actor_of(Lookup::Found(bare.clone()), Peer::Remote, None),
             Actor::Guest(GuestReason::RequestRefused),
             "a bare bind off loopback: refused for this request, and it LIVES"
         );
@@ -960,7 +960,7 @@ mod tests {
         // which is why the two cells below must answer alike.
         for peer in [Peer::Loopback, Peer::Remote] {
             assert_eq!(
-                go(Lookup::Found(signed.clone()), peer, Some("https://evil.example")),
+                actor_of(Lookup::Found(signed.clone()), peer, Some("https://evil.example")),
                 Actor::Guest(GuestReason::BindingDead),
                 "{peer:?}: a signer no key set holds is dead"
             );

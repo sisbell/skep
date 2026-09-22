@@ -27,6 +27,12 @@ const SKEPD_WORKERS: EnvSetting = EnvSetting { var: "SKEPD_WORKERS", expected: "
 const SKEPD_LOCAL_TRUST: EnvSetting =
     EnvSetting { var: "SKEPD_LOCAL_TRUST", expected: "true or false" };
 
+/// The data dir's variable, a bare name rather than an [`EnvSetting`]: its
+/// value is a PATH, which is whatever bytes the platform says and never owes
+/// being text, so it is read with `var_os` and nothing about it can be "not
+/// what was expected" at the parse.
+const SKEPD_DATA_DIR: &str = "SKEPD_DATA_DIR";
+
 /// The origin list's variable, a bare name rather than an [`EnvSetting`]:
 /// its value is a LIST, so [`from_env`] cannot carry it, and the phrase
 /// that pair exists to hold is [`skepd::NotCanonical`]'s — one home for
@@ -143,7 +149,7 @@ fn from_env<T: std::str::FromStr>(setting: EnvSetting) -> Result<Option<T>, Stri
 /// The command line, or `None` when the caller asked for the usage text.
 /// Parsing decides what was asked for; ending the process is [`main`]'s.
 fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
-    let mut data_dir = std::env::var_os("SKEPD_DATA_DIR").map(PathBuf::from);
+    let mut data_dir = std::env::var_os(SKEPD_DATA_DIR).map(PathBuf::from);
     let mut port: Option<u16> = from_env(SKEPD_PORT)?;
     let mut workers: Option<usize> = from_env(SKEPD_WORKERS)?;
     let mut local_trust: Option<bool> = from_env(SKEPD_LOCAL_TRUST)?;
@@ -216,7 +222,8 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
         return Err("--workers: a server with no workers serves nothing".into());
     }
     Ok(Some(Args {
-        data_dir: data_dir.ok_or("--data-dir (or SKEPD_DATA_DIR) is required")?,
+        data_dir: data_dir
+            .ok_or_else(|| format!("--data-dir (or {SKEPD_DATA_DIR}) is required"))?,
         port: port.unwrap_or(DEFAULT_PORT),
         workers,
         // Phase A default ON (AUTH-1.45): a hosted image must set the flag

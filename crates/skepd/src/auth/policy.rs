@@ -1210,10 +1210,10 @@ fn handoff_giver(
     subject: &Address,
 ) -> Option<Address> {
     let giver = keyed_above(identity, subject)?;
-    let above = parent(subject);
+    let subject_parent = parent(subject);
     let first_sub_account = |of: &Address| checked_inc(of, 1).ok();
     // The HIRE's: a child of the giver's first sub-account, its agent space.
-    if above == first_sub_account(&giver) {
+    if subject_parent == first_sub_account(&giver) {
         return None;
     }
     // The SPAWN's: the giver is itself an agent.
@@ -1225,7 +1225,9 @@ fn handoff_giver(
     // The ADMISSION's: a direct child of a forked lineage's seat, the seat's
     // own first sub-account apart.
     if let Some(seat) = forked_seat(seat, identity) {
-        if above.as_ref() == Some(&seat) && first_sub_account(&seat).as_ref() != Some(subject) {
+        if subject_parent.as_ref() == Some(&seat)
+            && first_sub_account(&seat).as_ref() != Some(subject)
+        {
             return None;
         }
     }

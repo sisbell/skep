@@ -126,11 +126,17 @@ fn insignificant_whitespace_is_bad_record() {
 /// escaped `/`, and a `\u` escape for a character above U+001F are each
 /// `bad_record` (AUTH-2.130 clause 3: escape NOTHING else). The backslash is
 /// built at runtime so no source escape is decoded before the JSON sees it.
+///
+/// The last two are the near-misses of the table's POSITIVE half: `\u0009`
+/// where the canonical form is `\t`, and `\u001F` where it is `\u001f` — each
+/// admitted the moment the encoder adopts that spelling, which is what
+/// [`the_canonical_escape_table_is_pinned_as_bytes`] watches from the emission
+/// side.
 #[test]
 fn non_canonical_escapes_are_bad_record() {
     let h = hex(1);
     let bs = char::from(92); // a backslash
-    for body in ["u0041", "/", "u00e9"] {
+    for body in ["u0041", "/", "u00e9", "u0009", "u001F"] {
         let record = format!(
             r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false,"label":"{bs}{body}"}}]}}"#
         );
@@ -351,6 +357,37 @@ fn an_unadmitted_alg_precedes_a_later_duplicate() {
     assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadRecord);
 }
 
+/// AUTH-2.19 item 2 before item 3 at the CANONICAL half — the cell
+/// [`PayloadError::DuplicateKey`]'s own card names: a body that is both
+/// non-canonical and duplicate-bearing answers `bad_record`, never
+/// `duplicate_key`. Row 21 puts an unadmitted ALG ahead of the duplicate, which
+/// fails inside the ENTRY LOOP and so reads the same under either ordering;
+/// every entry of every body below parses cleanly and only the byte-identity
+/// compare refuses them. Moving the duplicate scan above that compare answers
+/// `duplicate_key:2` for all three rows and leaves the rest of the suite green.
+#[test]
+fn a_non_canonical_body_that_also_repeats_an_entry_is_bad_record() {
+    // Insignificant whitespace after a `:`, two entries carrying one key.
+    let h = hex(3);
+    let spaced = format!(
+        r#"{{"type": "skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}},{{"alg":"ed25519","key":"{h}","anchor":true}}]}}"#
+    );
+    assert_eq!(err_enroll(spaced.as_bytes()), PayloadError::BadRecord);
+
+    // Uppercase hex, which the PARSE admits (AUTH-2.17), so both entries really
+    // do carry one key and the duplicate is real — the compare decides first.
+    let up = hex(0xab).to_uppercase();
+    let uppercase = format!(
+        r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{up}","anchor":false}},{{"alg":"ed25519","key":"{up}","anchor":true}}]}}"#
+    );
+    assert_eq!(err_enroll(uppercase.as_bytes()), PayloadError::BadRecord);
+
+    // The retirement kind keeps the same precedence.
+    let f = fphex(1).to_uppercase();
+    let retire = format!(r#"{{"type":"skep-retire","fingerprints":["{f}","{f}"]}}"#);
+    assert_eq!(err_retire(retire.as_bytes()), PayloadError::BadRecord);
+}
+
 /// §2.1 row 22 — `{"type":"skep-enroll","keys":[]}` carrying a fourth member is
 /// `bad_record`, never `empty` (AUTH-2.19 item 2 precedes item 4).
 #[test]
@@ -421,6 +458,42 @@ fn encode_emits_the_canonical_forms() {
     let record = encode_retire(&[fp(1)]);
     let want = format!(r#"{{"type":"skep-retire","fingerprints":["{}"]}}"#, fphex(1));
     assert_eq!(record, want);
+}
+
+/// AUTH-2.130 clause 3 — the canonical escape table as BYTES, the whole of it:
+/// `"` and `\` escaped, the C0 controls JSON gives a two-character form take it
+/// (`\b \f \r \t`; `\n` is outside the AUTH-1.24 label domain), every other C0
+/// control takes `\u00xx` with LOWERCASE hex, and U+0020 and above is emitted
+/// raw — never `/`, never a non-ASCII character.
+///
+/// Every other escape vector compares the encoder against ITSELF: the admission
+/// rule re-encodes with the same function, and a JSON `\u` escape decodes
+/// case-insensitively. So an encoder emitting `\u0009` for a tab, or `\u001F`
+/// for U+001F, round-trips cleanly and is admitted while an origin and a mirror
+/// disagree forever about which bodies are canonical — and therefore about the
+/// key table. `round_trip_domain_corners` and I1 alike stay green under both,
+/// and I1's `.+` labels DO reach the escape table — reaching a corner is not
+/// the same as being able to judge it, and only a byte compare judges it. This
+/// is the one assertion that reads the emitted bytes.
+#[test]
+fn the_canonical_escape_table_is_pinned_as_bytes() {
+    // Every character the table decides differently, plus the boundaries on
+    // either side of the C0 range: the four two-character forms a label can
+    // carry, `\u00xx` controls below, between and above them, the first raw
+    // character (U+0020), and the three that must never be escaped.
+    let label = "\u{0}\u{1}\u{7}\u{8}\u{9}\u{b}\u{c}\u{d}\u{e}\u{1f}\u{20}\"\\/é~";
+    let record = encode_enroll(&[Enrollment::new(key(1), false, Some(label.to_owned()))
+        .expect("the AUTH-1.24 domain admits every character here")]);
+    let want = format!(
+        r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{}","anchor":false,"label":"\u0000\u0001\u0007\b\t\u000b\f\r\u000e\u001f \"\\/é~"}}]}}"#,
+        hex(1)
+    );
+    assert_eq!(record, want);
+
+    // …and those bytes are a RECORD, admitted with the label verbatim: the
+    // emission form pinned above is the one the parser reads back.
+    let parsed = ok_enroll(want.as_bytes());
+    assert_eq!(parsed[0].label(), Some(label));
 }
 
 /// `parse(encode(x)) == x` on hand-picked domain corners, the escaper included

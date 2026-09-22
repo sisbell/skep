@@ -104,6 +104,41 @@ fn exact_cap_passes_then_foreign_span_refuses() {
     );
 }
 
+/// AUTH-2.39 — the per-span interleave at checks 1 and 2, the half
+/// [`cap_fault_fires_before_second_spans_home_check`] leaves open: span 1's
+/// WALK completes before span 2's VALIDITY or POSITION-HOOD is looked at. That
+/// vector's second span is valid AND a position, so hoisting checks 1 and 2
+/// into a pre-pass over the whole endset — the natural "refuse a malformed
+/// endset before reading anything" shape — keeps it green and answers
+/// `foreign_content` for both rows here.
+#[test]
+fn cap_fault_fires_before_a_second_spans_validity_and_position_checks() {
+    let big = vec![b'x'; MAX_RECORD_BYTES + 1];
+    for second in [
+        // Adjacent zeros: T4-invalid, so check 1 refuses it and it never
+        // reaches check 3 at all.
+        Span::new(tum(&[1, 1, 0, 5, 0, 1, 0, 0, 1]), width_at_last(9, 1))
+            .expect("T12-valid carrier span"),
+        // The home's OWN document address: T4-valid and home-anchored, a
+        // NON-position, so only check 2 stands between it and the walk.
+        unit(&[1, 1, 0, 5, 0, 1]),
+    ] {
+        // A fresh fixture per row, so neither row's mint depends on the other's.
+        let mut fx = Fixture::new();
+        let home_span = fx.mint(&doc1(ACCT_A), &[&big]);
+        let dep = Dep {
+            home: doc1(ACCT_A),
+            from: vec![home_span[0].clone(), second],
+            to: vec![unit(ACCT_A)],
+            ty: enroll_ty(),
+        };
+        assert_token(
+            &fx.classify(&IdentityState::genesis(), &dep),
+            "malformed_payload:too_large",
+        );
+    }
+}
+
 /// Corpus: a two-span FROM named in DESCENDING address order — folds as the
 /// ENDSET order, never the address order (AUTH-2.3 span binding). The
 /// canonical record is split at its closing `]}`, its HEAD minted ABOVE its

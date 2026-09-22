@@ -161,7 +161,7 @@ use crate::auth::policy::{
     DepositSpans,
 };
 use crate::auth::session::{
-    handshake, parse_session_body, resolve, Actor, GuestReason, HandshakeRefusal,
+    handshake, parse_session_body, resolve, Actor, GuestReason, HandshakeRefusal, Opened,
     SessionBinding, Token, CHALLENGE_TTL,
 };
 use crate::auth::{
@@ -174,6 +174,7 @@ use crate::codec::{
 };
 use crate::feed::{ChangesAnswer, FeedClass, Query};
 use crate::history::{History, Permit, Permits, Unavailable};
+use crate::notice;
 use crate::write_path::{write_meta, FrameMeta, SerialGuard, StreamStep, WritePath};
 
 pub use crate::auth::session::Peer;
@@ -1269,7 +1270,7 @@ impl Daemon {
         let claimed = self.auth.fold.snapshot().claimant().is_some();
         let when = if at_claim { " (at claim)" } else { "" };
         for w in startup_warnings(&self.auth.cfg, claimed) {
-            let _ = writeln!(std::io::stderr(), "skepd: warning{when}: {w}");
+            notice::line(format_args!("warning{when}: {w}"));
         }
     }
 
@@ -1287,14 +1288,22 @@ impl Daemon {
     /// layer, and there is no list to name.
     fn log_blocked_prefixes(&self, when: &str) {
         let Some(path) = self.auth.blocked_supply_path() else { return };
-        // ONE write: the entry is several lines, and a line per write would
-        // let another thread's warning land inside it.
-        let mut entry = format!("skepd: blocked-prefix list ({when}, {}):", path.display());
-        for line in blocked_prefixes(&self.auth.cfg).log_lines() {
-            entry.push_str("\nskepd:   ");
-            entry.push_str(&line);
-        }
-        let _ = writeln!(std::io::stderr(), "{entry}");
+        notice::block(
+            format_args!("blocked-prefix list ({when}, {}):", path.display()),
+            &blocked_prefixes(&self.auth.cfg).log_lines(),
+        );
+    }
+
+    /// The node prefix in force, or its absence (REG-1.69), named ONCE at
+    /// start — whether or not a list is supplied, because a hosted board
+    /// launched without its prefix has its off-board test OFF and would
+    /// otherwise learn so only at its first install. It is the one config the
+    /// blocked-prefix list's off-board test reads (AUTH-4.36 step 4b as ruled
+    /// 2026-09-18). WHAT the line says is
+    /// [`crate::auth::AuthConfig::node_prefix_line`]'s; the stream is this
+    /// daemon's, for [`Daemon::log_config_warnings`]'s reason.
+    fn log_node_prefix(&self) {
+        notice::line(format_args!("{}", self.auth.cfg.node_prefix_line()));
     }
 
     /// THE REISSUE, at the head of every request (AUTH-4.70): where the
@@ -1310,12 +1319,9 @@ impl Daemon {
         match self.auth.reissue_blocked_prefixes() {
             None => {}
             Some(Reissue::Installed) => self.log_blocked_prefixes("reissued"),
-            Some(Reissue::Refused(e)) => {
-                let _ = writeln!(
-                    std::io::stderr(),
-                    "skepd: blocked-prefix list: reissue REFUSED — {e}; the list in force stands"
-                );
-            }
+            Some(Reissue::Refused(e)) => notice::line(format_args!(
+                "blocked-prefix list: reissue REFUSED — {e}; the list in force stands"
+            )),
         }
     }
 
@@ -1391,7 +1397,7 @@ impl Daemon {
             Instant::now(),
         );
         match outcome {
-            Ok((principal, signer, scope)) => {
+            Ok(Opened { principal, signer, scope }) => {
                 // Every POST /session mints a DISTINCT SessionId, principal
                 // 0 included (AUTH-4.40; M10's bootstrap_session mints
                 // fresh per call — confirmed as-built, AUTH-6.35).
@@ -1693,9 +1699,12 @@ impl Daemon {
         }
         // 6 — the precheck's ordered slots over the deposit built at 2b. The
         // actor is what the session's opening fixed — its signer and, beside
-        // it, its scope, this being the scope's ONE read (AUTH-4.39) — and
-        // `cfg` is the seat carve's one config read (AUTH-3.15), stable under
-        // the write guard held here: the list's install takes the same one.
+        // it, its scope, this being the scope's ONE read (AUTH-4.39) — and the
+        // SEAT is the carve's one input (AUTH-3.15), read HERE so the precheck
+        // declares the collaborator it has rather than the whole config. The
+        // list is stable under the write guard held here: its install takes
+        // the same one.
+        let list = blocked_prefixes(&self.auth.cfg);
         if let Err(r) = crate::auth::policy::precheck(
             &credential_lock,
             snap.world(),
@@ -1703,7 +1712,7 @@ impl Daemon {
             &dep,
             binding.signer.as_ref(),
             binding.scope,
-            &self.auth.cfg,
+            list.header().binding_writer.as_ref(),
         ) {
             return with_signal(credential_refused(meta.kind, &r), closed);
         }
@@ -2423,12 +2432,9 @@ pub fn serve(daemon: Daemon, port: u16, workers: usize) -> io::Result<Skepd> {
          disagreeing about the number every live session's origin set derives from",
     );
     daemon.log_config_warnings(false);
-    // The node prefix in force, or its absence (REG-1.69), named ONCE at
-    // start: the one config the blocked-prefix list's off-board test reads
-    // (AUTH-4.36 step 4b as ruled 2026-09-18). What the line says is
-    // [`crate::auth::AuthConfig::node_prefix_line`]'s; the stream is this
-    // daemon's, for [`Daemon::log_config_warnings`]'s reason.
-    let _ = writeln!(std::io::stderr(), "skepd: {}", daemon.auth.cfg.node_prefix_line());
+    // The node prefix in force, or its absence (REG-1.69), which the
+    // blocked-prefix list's off-board test reads.
+    daemon.log_node_prefix();
     // The list installed at open, named beside the warnings (AUTH-4.70: "a
     // restart never lapses a standing block and the startup log names the
     // list in force").

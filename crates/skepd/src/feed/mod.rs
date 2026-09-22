@@ -90,7 +90,7 @@ mod derived;
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
-use std::io::{self, Write};
+use std::io;
 use std::ops::Bound;
 use std::path::Path;
 
@@ -697,13 +697,9 @@ impl Inner {
     /// claiming completeness, not the silent incompleteness the coverage
     /// check closes.
     fn fold_position(&mut self, at: u64, offset: LineOffset, docs: Vec<Doc>) {
-        report_append_failure(
-            self.files
-                .offsets
-                .append(at, vec![(OFFSETS_OFFSET, Value::Number(offset.0.into()))]),
-            OFFSETS_FILE,
-            at,
-        );
+        self.files
+            .offsets
+            .append_or_report(at, vec![(OFFSETS_OFFSET, Value::Number(offset.0.into()))]);
         if !docs.is_empty() {
             for d in &docs {
                 let list = self
@@ -714,15 +710,11 @@ impl Inner {
                     list.1.push(at);
                 }
             }
-            report_append_failure(
-                self.files.index.append(at, vec![(INDEX_DOCS, doc_strings(&docs))]),
-                INDEX_FILE,
-                at,
-            );
+            self.files.index.append_or_report(at, vec![(INDEX_DOCS, doc_strings(&docs))]);
         }
         if masked_at_commit(&docs) {
             self.masked.insert(at);
-            report_append_failure(self.files.masked.append(at, vec![]), MASKED_FILE, at);
+            self.files.masked.append_or_report(at, vec![]);
         } else {
             self.published.insert(at);
         }
@@ -731,11 +723,9 @@ impl Inner {
             for owner in &owners {
                 self.streams.entry(owner.clone()).or_default().push(at);
             }
-            report_append_failure(
-                self.files.streams.append(at, vec![(STREAMS_OWNERS, addr_strings(owners.iter()))]),
-                STREAMS_FILE,
-                at,
-            );
+            self.files
+                .streams
+                .append_or_report(at, vec![(STREAMS_OWNERS, addr_strings(owners.iter()))]);
         }
         if !docs.is_empty() {
             self.docs.insert(at, docs);
@@ -1034,20 +1024,6 @@ fn classify_bare(engine: &Engine, log: &CommitsLog, at: u64) -> Option<Vec<Addre
     let below = engine.world_at(Seq(prev)).ok()?;
     let above = engine.world_at(Seq(at)).ok()?;
     Some(derived_docs(&below, &above))
-}
-
-/// A derived append that failed: reported, never a failed op — the resident
-/// twin is right for this uptime, the file stops taking lines
-/// ([`DerivedFile`]'s own `stopped` states why), and the next open's tail
-/// derivation re-covers this position and every one after it. So ONE notice
-/// per file per uptime: the appends behind a stopped file answer `Ok` and
-/// write nothing, and a busy board's stderr carries the first failure alone.
-/// `writeln!` rather than `eprintln!`, for `sidecar.rs`'s reason (a lost log
-/// pipe must not panic a committed write's ack).
-fn report_append_failure(r: io::Result<()>, file: &str, at: u64) {
-    if let Err(e) = r {
-        let _ = writeln!(std::io::stderr(), "skepd: {file} append failed at position {at}: {e}");
-    }
 }
 
 /// The K-way merge of ascending position sources, deduplicated by

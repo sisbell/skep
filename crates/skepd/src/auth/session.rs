@@ -235,6 +235,21 @@ impl SessionBinding {
     }
 }
 
+/// What the HANDSHAKE established about one party: the three facts a
+/// session's OPENING fixes (AUTH-3.16, AUTH-4.39) — everything
+/// [`SessionBinding`] is but the `SessionId`, which M10 mints afterwards and
+/// the route supplies.
+///
+/// Named rather than a triple because these ARE that type's fields: the route
+/// reads them straight into one, and a reader of [`handshake`]'s signature
+/// should not have to reach the call site to learn which absence is which.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Opened {
+    pub principal: PrincipalId,
+    pub signer: Option<Fingerprint>,
+    pub scope: Scope,
+}
+
 /// A map lookup's three arms, constructed in ONE home so no call site can
 /// mis-map them (AUTH-4.23).
 #[derive(Debug, PartialEq, Eq)]
@@ -667,12 +682,14 @@ pub(crate) fn handshake(
     peer: Peer,
     origin_hdr: Option<&str>,
     now: Instant,
-) -> Result<(PrincipalId, Option<Fingerprint>, Scope), HandshakeRefusal> {
+) -> Result<Opened, HandshakeRefusal> {
     let claimed = identity.claimant().is_some();
     match body {
         SessionBody::Bare { principal } => {
             match bare_bind_allowed(cfg, peer, origin_hdr, claimed) {
-                BareBind::Allowed => Ok((principal, None, Scope::Full)),
+                BareBind::Allowed => {
+                    Ok(Opened { principal, signer: None, scope: Scope::Full })
+                }
                 _ => Err(SessionRejected.into()),
             }
         }
@@ -720,7 +737,7 @@ pub(crate) fn handshake(
             // signature failure.
             let payload = session_payload(&origin, &nonce.to_hex(), principal, scope);
             match find_signer(set, &payload, &sig) {
-                Some(fp) => Ok((principal, Some(fp), scope)),
+                Some(fp) => Ok(Opened { principal, signer: Some(fp), scope }),
                 None => Err(SessionRejected.into()),
             }
         }

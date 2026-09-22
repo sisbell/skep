@@ -14,7 +14,7 @@
 //! exactly one point (the hit is kind-BLIND).
 //!
 //! And slot (6) whole: the anchor gate's HANDOFF exception, told by address
-//! at the walk's terminus (AUTH-3.21) with the seat carve's one config read,
+//! at the walk's terminus (AUTH-3.21) with the seat carve's one input,
 //! and the CONTENT-scoped session — the third body form, the v2 bytes, and
 //! `content_session` at the head of the slot (RES-63).
 
@@ -3430,7 +3430,7 @@ fn the_thirteen_401_arms_stay_byte_identical_and_the_403_stands_outside_them() {
 // ═══════════════════════════════════════════════════════════════════════════
 // THE ANCHOR GATE'S HANDOFF EXCEPTION AT SLOT (6) (AUTH-3.21; RES-165, 170,
 // 171, 172, 175) — the conformance pack's §2.4 table BY TERMINUS, row by row —
-// THE SEAT CARVE's one config read (AUTH-3.15; RES-195), and THE
+// THE SEAT CARVE's one input (AUTH-3.15; RES-195), and THE
 // CONTENT-SCOPED SESSION (AUTH-6.2–6.4, AUTH-4.39, AUTH-3.44; RES-63 item 7).
 //
 // A genesis is a record landed in its REGISTRY's doc 1 and an enroll-typed
@@ -3652,7 +3652,7 @@ fn a_hire_and_a_spawn_are_device_grade_and_the_agents_home_itself_is_a_handoff()
     sd.shutdown();
 }
 
-/// §2.4 rows 3 and 4 — THE SEAT CARVE, and AUTH-3.15's ONE CONFIG READ: the
+/// §2.4 rows 3 and 4 — THE SEAT CARVE, and AUTH-3.15's ONE INPUT: the
 /// list header's SECOND field, compared with the claimant. Where it names an
 /// account that is NOT the claimant — the SEAT of a forked lineage — a
 /// genesis into that account's DIRECT CHILD is an ADMISSION, device-grade;

@@ -472,24 +472,18 @@ impl CommitsLog {
         // ack is owed regardless; a lost append answers BARE after restart,
         // which [`CommitsLog::stopped`] is what makes true — the failure
         // stops this file, so the next open's walk starts below the gap
-        // instead of above it.
-        // Reported without `eprintln!`, which PANICS when the stderr write
-        // fails: a daemon whose log pipe has lost its reader would then fail
-        // the op this arm exists to keep succeeding, answering
-        // `internal_panic` for a write that committed and losing the caller
-        // its position. Both failures are swallowed for the one reason.
+        // instead of above it. The failure is REPORTED through
+        // [`crate::notice`], which states why a notice may not panic.
         let line = entry_line(at, &meta);
         if !self.stopped {
             match self.file.write_all(&line) {
                 Ok(()) => self.len += line.len() as u64,
                 Err(e) => {
                     self.stopped = true;
-                    let _ = writeln!(
-                        std::io::stderr(),
-                        "skepd: commits.log append failed at position {at}: {e}; this file \
-                         takes no further line, so the next open re-derives from {at} as \
-                         bare entries"
-                    );
+                    crate::notice::line(format_args!(
+                        "commits.log append failed at position {at}: {e}; this file takes no \
+                         further line, so the next open re-derives from {at} as bare entries"
+                    ));
                 }
             }
         }
@@ -840,15 +834,12 @@ fn min_since_line(min_since: u64) -> Vec<u8> {
 /// One line carrying document names this daemon cannot parse — the notice
 /// both halves of the feed's name-parsing share: this file's own
 /// [`demote_malformed_names`] and the derived index's read of the same
-/// names. `writeln!` to stderr rather than `eprintln!`, for
-/// [`CommitsLog::record`]'s reason: `eprintln!` PANICS when the stderr write
-/// fails, and a lost log pipe must not fail an open or a committed write's
-/// ack.
+/// names. Written through [`crate::notice`], which owns the stream and
+/// states why a notice may not panic.
 pub(crate) fn report_malformed_names(file: &str, at: u64, dropped: usize) {
-    let _ = writeln!(
-        std::io::stderr(),
-        "skepd: {file} position {at} carries {dropped} malformed document name(s)"
-    );
+    crate::notice::line(format_args!(
+        "{file} position {at} carries {dropped} malformed document name(s)"
+    ));
 }
 
 /// One newline-terminated file line — the codec's serializer, so a line is

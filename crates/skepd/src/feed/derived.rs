@@ -200,6 +200,28 @@ impl DerivedFile {
         Ok(())
     }
 
+    /// Append one record and REPORT a failed write rather than returning it —
+    /// the RECORD-time disposition, where the commit has landed and the ack is
+    /// owed whatever this file does. [`DerivedFile::append`] keeps the
+    /// fallible form for [`crate::feed::Feed::open`], which propagates into
+    /// `DaemonError::Sidecar`: at open nothing is owed yet, so a data dir that
+    /// cannot take a write the kernel just performed is an operator condition
+    /// worth reporting rather than limping past.
+    ///
+    /// The notice names THIS file, from the name this handle already holds, so
+    /// no caller pairs a handle with a file-name constant. ONE per file per
+    /// uptime: [`DerivedFile::stopped`] answers `Ok` and writes nothing after
+    /// the first failure, so a busy board's stderr carries it alone, and that
+    /// field's own card says what the stop buys.
+    pub fn append_or_report(&mut self, at: u64, fields: Vec<(&'static str, Value)>) {
+        if let Err(e) = self.append(at, fields) {
+            crate::notice::line(format_args!(
+                "{} append failed at position {at}: {e}",
+                self.name
+            ));
+        }
+    }
+
     /// Append the coverage fence `{"covered":N}` — a no-op when the file
     /// already covers `covered`, and a no-op on a stopped file, whose
     /// coverage claim must stay below the position it lost.
@@ -408,5 +430,32 @@ mod tests {
         let (reopened, entries) = DerivedFile::open(dir.path(), INDEX_FILE, 20).expect("reopen");
         assert!(entries.is_empty());
         assert_eq!(reopened.coverage(), 0, "an empty file claims nothing");
+    }
+
+    /// The RECORD-time append swallows its failure and composes the stop rule:
+    /// a caller between a commit and its ack owes an ack whatever this file
+    /// does, so [`DerivedFile::append_or_report`] answers unit — a caller
+    /// cannot forget to handle what it is never given — and still leaves
+    /// coverage BELOW the position it lost, which is what the next open's
+    /// tail derivation reads. A version writing past [`DerivedFile::append`]
+    /// rather than through it would report and then claim the gap.
+    #[test]
+    fn the_record_time_append_swallows_its_failure_and_still_stops_the_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut f = DerivedFile::over_unwritable(dir.path(), INDEX_FILE, 9);
+
+        f.append_or_report(10, vec![(INDEX_DOCS, Value::Array(vec![]))]);
+        assert_eq!(f.coverage(), 9, "the lost position does not raise the claim");
+
+        // The position after the gap, and the fence over it: both no-ops, so
+        // the on-disk claim can never cover what was lost.
+        f.append_or_report(11, vec![(INDEX_DOCS, Value::Array(vec![]))]);
+        f.fence(20).expect("a fence on a stopped file is a no-op");
+        assert_eq!(f.coverage(), 9, "a stopped file's coverage stays where the gap left it");
+        assert_eq!(
+            std::fs::read(dir.path().join(INDEX_FILE)).expect("read"),
+            Vec::<u8>::new(),
+            "nothing reached the file after the failure"
+        );
     }
 }

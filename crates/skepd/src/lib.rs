@@ -62,6 +62,7 @@ mod auth;
 mod codec;
 mod feed;
 mod history;
+mod notice;
 mod server;
 mod sidecar;
 mod write_path;

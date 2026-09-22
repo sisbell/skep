@@ -371,28 +371,14 @@ impl AuthState {
     /// A re-read that FAILS installs nothing (the list is replaced WHOLE or
     /// not at all): the list in force stands, the refusal is returned for
     /// the log ONCE, and the file is not retried until it moves again.
+    ///
+    /// The look itself is [`BlockedSupply::reissue`]'s — the file's identity
+    /// is that type's own knowledge. What this half owns is the INSTALL, which
+    /// takes a gate the channel knows nothing about.
     pub fn reissue_blocked_prefixes(&self) -> Option<Reissue> {
-        let supply = self.blocked_supply.as_ref()?;
-        let current = FileStamp::at(&supply.path);
-        // Held across the install: a request arriving mid-install waits for
-        // it rather than resolving under a list an earlier request has
-        // already seen superseded. Lock order is `seen` → the write gate;
-        // nothing holding the gate touches `seen`.
-        let mut seen = supply.seen.lock();
-        if *seen == current {
-            return None;
-        }
-        match supply.read() {
-            Ok((stamp, issue)) => {
-                self.install_blocked(&self.credential_lock.write(), issue);
-                *seen = Some(stamp);
-                Some(Reissue::Installed)
-            }
-            Err(e) => {
-                *seen = current;
-                Some(Reissue::Refused(e))
-            }
-        }
+        self.blocked_supply
+            .as_ref()?
+            .reissue(|issue| self.install_blocked(&self.credential_lock.write(), issue))
     }
 
     /// The supply file's path, for the log; `None` where none was named.
@@ -943,17 +929,6 @@ impl BlockedPrefixes {
         BlockedPrefixes { issue, inert, operator, binding_writer, node_prefix: node_prefix.cloned() }
     }
 
-    /// [`BlockedPrefixes::installed_under`] told NO node prefix — the
-    /// off-board test off. Test-side only: its one caller outside this file
-    /// is `policy.rs`'s seat-carve unit test, which reads the header as
-    /// issued and asks nothing of the prefix (that file is not this lane's
-    /// to edit; the report names the call). Product code names the prefix
-    /// in force.
-    #[cfg(test)]
-    fn installed(issue: BlockedIssue, claimant: Option<&Address>) -> BlockedPrefixes {
-        BlockedPrefixes::installed_under(issue, claimant, None)
-    }
-
     /// AUTH-4.36 step 4b's one predicate: `Some` iff some entry IN FORCE
     /// contains `account` — M3's containment, [`prefix_contains`] — and the
     /// address carried is the LONGEST covering prefix's record, the nearest
@@ -1175,6 +1150,40 @@ impl BlockedSupply {
         let issue = parse_issue(&bytes)
             .map_err(|detail| named(io::Error::new(io::ErrorKind::InvalidData, detail)))?;
         Ok((stamp, issue))
+    }
+
+    /// One look at the file, and the install where it MOVED — the channel's
+    /// whole operation, here because the identity it turns on is this type's
+    /// own. `None` is the ordinary request's answer: nothing moved, at the
+    /// cost of one `stat`.
+    ///
+    /// `install` is the CALLER's, because the list is replaced under a gate
+    /// this type knows nothing about. It runs with `seen` HELD, so a request
+    /// arriving mid-install waits for it rather than resolving under a list an
+    /// earlier request has already seen superseded. Lock order is therefore
+    /// `seen` → whatever `install` takes, and nothing holding that gate
+    /// touches `seen`.
+    ///
+    /// A re-read that FAILS calls `install` not at all — the list is replaced
+    /// WHOLE or not — and the failed look is REMEMBERED, so the refusal is
+    /// answered once rather than at every request until the file moves again.
+    fn reissue(&self, install: impl FnOnce(BlockedIssue)) -> Option<Reissue> {
+        let current = FileStamp::at(&self.path);
+        let mut seen = self.seen.lock();
+        if *seen == current {
+            return None;
+        }
+        match self.read() {
+            Ok((stamp, issue)) => {
+                install(issue);
+                *seen = Some(stamp);
+                Some(Reissue::Installed)
+            }
+            Err(e) => {
+                *seen = current;
+                Some(Reissue::Refused(e))
+            }
+        }
     }
 }
 

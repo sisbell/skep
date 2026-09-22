@@ -22,7 +22,7 @@ use skep_namespace::{first_document_address, HasM3, PrincipalId, BOOTSTRAP_PRINC
 
 use super::fold::WorldCtx;
 use super::session::{keyed_above, Scope};
-use super::{blocked_prefixes, AuthConfig, LockRead, LockWrite};
+use super::{LockRead, LockWrite};
 use crate::World;
 
 /// The enrolled-set cap (RES-57, AUTH-3.57): daemon POLICY — a
@@ -1026,11 +1026,14 @@ impl DepositSpans {
 /// RES-63) — still NO principal, so the forbidden ω check stays unwritable
 /// here. `scope` is read at the head of slot (6) and nowhere else.
 ///
-/// `cfg` IS THE ONE CONFIG READ AUTH-3.21's SEAT CARVE REQUIRES AND NOTHING
-/// ELSE (AUTH-3.15; RES-195): the header the handshake compares at step 4b,
-/// read at slot (6) beside the claimant, by [`forked_seat`] alone. No origin,
-/// flag or list entry is read from it, and no address, content, cone,
-/// document or role rides in on it.
+/// `seat` IS AUTH-3.21's SEAT CARVE'S ONE INPUT AND NOTHING ELSE (AUTH-3.15;
+/// RES-195): the blocked-prefix list header's SECOND field, the board's
+/// binding-writing account AS ISSUED — the header the handshake compares at
+/// step 4b — read at slot (6) beside the claimant, by [`forked_seat`] alone.
+/// The whole of [`super::AuthConfig`] is deliberately out of reach: no origin,
+/// flag, list entry or node prefix can be read from here, because none of
+/// them is an argument. And no address, content, cone, document or role rides
+/// in on this one.
 pub(crate) fn precheck(
     lock: &LockWrite<'_>,
     world: &World,
@@ -1038,7 +1041,7 @@ pub(crate) fn precheck(
     dep: &DepositSpans,
     signer: Option<&skep_identity::Fingerprint>,
     scope: Scope,
-    cfg: &AuthConfig,
+    seat: Option<&Address>,
 ) -> Result<(), CredentialRefusal> {
     // (3) — the classify preview's verdict (AUTH-2.57): the fold's own
     // order — kind, home account, publication, the per-kind arm.
@@ -1122,7 +1125,7 @@ pub(crate) fn precheck(
         Effect::Enroll { account, added } => {
             added.iter().any(|e| e.anchor).then(|| account.clone())
         }
-        Effect::Genesis { account, .. } => handoff_giver(identity, cfg, account)
+        Effect::Genesis { account, .. } => handoff_giver(identity, seat, account)
             .filter(|giver| identity.key_set(giver).enrolled().any(|(_, e)| e.anchor)),
         Effect::Claim { .. } => None,
     };
@@ -1198,7 +1201,11 @@ pub(crate) fn precheck(
 ///
 /// The caller grades a handoff at `S`'s set: anchor-grade wherever that set
 /// holds an anchor, device-grade where it holds none.
-fn handoff_giver(identity: &IdentityState, cfg: &AuthConfig, subject: &Address) -> Option<Address> {
+fn handoff_giver(
+    identity: &IdentityState,
+    seat: Option<&Address>,
+    subject: &Address,
+) -> Option<Address> {
     let giver = keyed_above(identity, subject)?;
     let above = parent(subject);
     let first_child = |of: &Address| checked_inc(of, 1).ok();
@@ -1214,7 +1221,7 @@ fn handoff_giver(identity: &IdentityState, cfg: &AuthConfig, subject: &Address) 
     }
     // The ADMISSION's: a direct child of a forked lineage's seat, its held
     // first child apart.
-    if let Some(seat) = forked_seat(cfg, identity) {
+    if let Some(seat) = forked_seat(seat, identity) {
         if above.as_ref() == Some(&seat) && first_child(&seat).as_ref() != Some(subject) {
             return None;
         }
@@ -1222,28 +1229,31 @@ fn handoff_giver(identity: &IdentityState, cfg: &AuthConfig, subject: &Address) 
     Some(giver)
 }
 
-/// THE ONE CONFIG READ (AUTH-3.15, AUTH-3.21; RES-175, RES-195): the SEAT of a
-/// forked lineage — the list header's SECOND field, the board's
+/// THE SEAT CARVE'S COMPARISON (AUTH-3.15, AUTH-3.21; RES-175, RES-195): the
+/// SEAT of a forked lineage — the list header's SECOND field, the board's
 /// binding-writing account (AUTH-4.36 step 4b; REG-3.52), where it is NOT the
 /// claimant. `None` — the carve SILENT — where the header omits the field
 /// (the claimant is then the binding-writing account) or names the claimant:
 /// on every unforked lineage the two are one account, so the carve reaches no
 /// notebook and no unforked org board.
 ///
-/// Read beside `identity.claimant()` and COMPARED: the daemon derives
-/// nothing and reads no record for it. The field is read AS ISSUED
-/// ([`super::BlockedPrefixes::header`]), never as the install resolved its
-/// comparand (b): that one is live only where the operator is off-board,
-/// which is the BLOCK's question and not the carve's.
+/// `seat` is the field AS ISSUED ([`super::BlockedPrefixes::header`]), never
+/// as the install resolved its comparand (b): that one is live only where the
+/// operator is off-board, which is the BLOCK's question and not the carve's.
+/// It arrives as an argument rather than as a config this reads for itself,
+/// so the whole of [`super::AuthConfig`] — every origin, flag, list entry and
+/// the node prefix — is out of reach of this gate by construction. Compared
+/// against `identity.claimant()`: the daemon derives nothing and reads no
+/// record for it.
 ///
 /// SILENT on an UNCLAIMED board too: there is no claimant for the field to
 /// differ from and no lineage to have forked. The rule does not speak to the
 /// cell, and the carve only ever WIDENS — so where its comparison has no
 /// referent the gate keeps its grade.
-fn forked_seat(cfg: &AuthConfig, identity: &IdentityState) -> Option<Address> {
+fn forked_seat(seat: Option<&Address>, identity: &IdentityState) -> Option<Address> {
     let claimant = identity.claimant()?;
-    let seat = blocked_prefixes(cfg).header().binding_writer.clone()?;
-    (*claimant != seat).then_some(seat)
+    let seat = seat?;
+    (claimant != seat).then(|| seat.clone())
 }
 
 /// The five reserved subtree spans overlap nothing the credential types
@@ -1271,28 +1281,21 @@ mod tests {
         assert_eq!(types.kind_of(&[retired]), None);
     }
 
-    /// The seat carve's one config read is SILENT wherever its comparison has
-    /// no referent: with no header, and — the cell the rule does not speak to
-    /// — on an UNCLAIMED board, whose header can differ from no claimant. The
-    /// claimed cells (the field naming the claimant; naming another account)
-    /// are `auth_wire`'s, over the wire.
+    /// The seat carve is SILENT wherever its comparison has no referent: with
+    /// no header field, and — the cell the rule does not speak to — on an
+    /// UNCLAIMED board, whose header can differ from no claimant. The claimed
+    /// cells (the field naming the claimant; naming another account) are
+    /// `auth_wire`'s, over the wire.
     #[test]
     fn the_seat_carve_is_silent_with_no_header_and_on_an_unclaimed_board() {
-        use super::super::{AuthOptions, BlockedHeader, BlockedIssue, BlockedPrefixes, CredentialLock};
-
-        let cfg = AuthConfig::new(AuthOptions::default());
         let unclaimed = IdentityState::genesis();
-        assert_eq!(forked_seat(&cfg, &unclaimed), None, "no header");
-
+        assert_eq!(forked_seat(None, &unclaimed), None, "the header omits the field");
         let seat = addr_of(&[1, 0, 7]);
-        let issue = BlockedIssue {
-            header: BlockedHeader { operator: None, binding_writer: Some(seat.clone()) },
-            entries: Vec::new(),
-        };
-        let lock = CredentialLock::new();
-        cfg.install_blocked(&lock.write(), BlockedPrefixes::installed(issue, None));
-        assert_eq!(blocked_prefixes(&cfg).header().binding_writer, Some(seat), "the field, as issued");
-        assert_eq!(forked_seat(&cfg, &unclaimed), None, "no claimant for the field to differ from");
+        assert_eq!(
+            forked_seat(Some(&seat), &unclaimed),
+            None,
+            "no claimant for the field to differ from"
+        );
     }
 
     /// PUB-2.15's projection is address arithmetic and total: a version

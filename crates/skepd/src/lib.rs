@@ -82,7 +82,7 @@ pub use auth::{
 pub use codec::JsonCodec;
 pub use server::{
     body_cap, serve, Body, Daemon, DaemonError, HttpRequest, Peer, Reply, Routed, Skepd,
-    DEFAULT_WORKERS, UNIVERSAL_HEADERS,
+    DEFAULT_WORKERS, MIN_WORKERS, UNIVERSAL_HEADERS,
 };
 
 /// The engine types this crate's public surface hands out: the world

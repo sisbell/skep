@@ -323,7 +323,8 @@ impl AuthState {
     /// install's comparands read.
     ///
     /// Fails only on that supply: a file the options name that cannot be
-    /// read, or is not a list. An operator condition — a daemon that
+    /// read, is not a list, or is past the channel's byte cap
+    /// ([`MAX_BLOCKED_SUPPLY_BYTES`]). An operator condition — a daemon that
     /// started on an empty list instead would lapse every standing block in
     /// silence, which is the one thing "supplied at every start" rules out.
     pub fn open(opts: AuthOptions, world: &World) -> io::Result<AuthState> {
@@ -1154,12 +1155,23 @@ impl BlockedPrefixes {
                     ("the board's binding-writing account", &self.binding_writer)
                 }
             };
-            let exempted = exempted.as_ref().expect("an entry is inert only against a comparand");
+            // Unreachable by construction — [`BlockedPrefixes::installed_under`]
+            // judges an entry against a comparand only inside `covers`, which
+            // requires that comparand `Some` — and ANSWERED rather than
+            // asserted, for the reason the arm above gives. The cell is
+            // sharper here than there: this renders from
+            // `credential_sequence` under both write locks AFTER the claim has
+            // committed ([`crate::notice`]), so a panic is `500
+            // internal_panic` for a one-time-only write that landed and whose
+            // retry meets `already_claimed`. The debug assert is what makes
+            // the premise loud where a test can see it.
+            debug_assert!(exempted.is_some(), "an entry is inert only against a comparand");
+            let account =
+                exempted.as_ref().map(|a| format!(" {}", a.tumbler())).unwrap_or_default();
             lines.push(format!(
-                "entry {} (record {}) is INERT — it covers {covered} {}; ignored",
+                "entry {} (record {}) is INERT — it covers {covered}{account}; ignored",
                 entry.prefix.tumbler(),
                 entry.record.tumbler(),
-                exempted.tumbler(),
             ));
         }
         lines
@@ -1180,8 +1192,8 @@ pub(crate) fn blocked_prefixes(cfg: &AuthConfig) -> Arc<BlockedPrefixes> {
 pub(crate) enum Reissue {
     /// The new issue is the list in force.
     Installed,
-    /// The file could not be read or is not a list: nothing was installed
-    /// and the list in force stands.
+    /// The file could not be read, is not a list, or is past the byte cap:
+    /// nothing was installed and the list in force stands.
     Refused(io::Error),
 }
 

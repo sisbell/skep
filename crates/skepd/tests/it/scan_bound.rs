@@ -540,3 +540,56 @@ fn the_guest_and_the_claimant_draw_on_one_pool() {
 
     sd.shutdown();
 }
+
+/// [`skepd::MIN_WORKERS`] is the caller's half of the obligation [`serve`]
+/// states and deliberately does not re-check: leave a worker free of the two
+/// permit pools, or a caller INSIDE both bounds occupies the whole pool and
+/// the daemon answers nothing — `/health` and `/session` included — with
+/// every structure inside it healthy.
+///
+/// Named HERE, from outside the library, because that is the whole of what
+/// the constant buys: the two pools' counts are crate-private, so before it
+/// an embedder was handed a relation over quantities it could not name,
+/// evaluate, or watch for change. This test fails to COMPILE if the export
+/// is dropped, which is the check the obligation needs.
+///
+/// The count is then spent as a real `workers` argument and both pools are
+/// drained through the daemon's hooks, so the minimum is pinned as a count
+/// `serve` accepts and serves at. What it does not pin is worker OCCUPANCY:
+/// as this file's own header says, a scan over a test-sized world finishes
+/// in microseconds, so no wire request holds a worker long enough to race —
+/// which is why the pooled-permit relation is a compile-time assertion
+/// beside the constant rather than a test here.
+#[test]
+fn the_minimum_worker_count_is_evaluable_and_serves_with_both_pools_drained() {
+    assert!(
+        skepd::MIN_WORKERS > 1,
+        "the minimum leaves a worker free of the pools, so it exceeds serve's own floor"
+    );
+    assert!(
+        skepd::DEFAULT_WORKERS >= skepd::MIN_WORKERS,
+        "the shipped default satisfies the obligation it documents"
+    );
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let daemon = skepd::Daemon::open(dir.path()).expect("genesis open");
+    let sd = skepd::serve(daemon, 0, skepd::MIN_WORKERS).expect("serve at the minimum count");
+    let port = sd.port();
+
+    // Both pools drained — the state the obligation is about.
+    let mut held: Vec<skepd::Permit<'_>> = Vec::new();
+    while let Some(p) = sd.daemon().try_hold_scan_permit() {
+        held.push(p);
+    }
+    while let Some(p) = sd.daemon().try_hold_reconstruction_permit() {
+        held.push(p);
+    }
+    assert!(held.len() >= 2, "both pools had permits to drain: {}", held.len());
+
+    let (st, body) = get(port, "/health");
+    assert_eq!(st, 200, "the liveness probe answers: {}", String::from_utf8_lossy(&body));
+    assert_eq!(json(&body)["ok"].as_bool(), Some(true));
+
+    drop(held);
+    sd.shutdown();
+}

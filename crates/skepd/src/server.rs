@@ -65,8 +65,8 @@
 //! access): it stays, because neither credential is browser-ambient.
 //! Reads are principal-free, so `*` grants any page the whole read
 //! surface. Writes do not follow it: a write needs a session,
-//! [`crate::auth::bare_bind_allowed`] refuses a bare bind whose `Origin`
-//! is not in the bare set (a browser sends that header on every
+//! [`crate::auth::session::bare_bind_allowed`] refuses a bare bind whose
+//! `Origin` is not in the bare set (a browser sends that header on every
 //! cross-origin POST), and the signed arm binds its origin inside the
 //! signature. A foreign page's POST is fenced by the daemon rather than
 //! by what the browser lets it read back, which is why a narrower ACAO
@@ -213,7 +213,8 @@ const RETAINED_CHECKPOINTS: usize = 2;
 /// bootstraps are never starved by directory scans, nor the reverse.
 ///
 /// The SUM of this and the reconstruction pool must leave a worker free:
-/// [`DEFAULT_WORKERS`] carries that relation and the assertion that holds it.
+/// [`MIN_WORKERS`] holds that relation, and an assertion beside it holds the
+/// shipped default to it.
 pub(crate) const MAX_CONCURRENT_CLASS_SCANS: usize = 2;
 
 /// The request worker count `skepd` serves with when the operator names
@@ -227,8 +228,8 @@ pub(crate) const MAX_CONCURRENT_CLASS_SCANS: usize = 2;
 /// is inside both bounds, and if that exhausts the workers the daemon
 /// answers nothing — `/health` and `/session` included — with every
 /// structure inside it healthy. The relation is therefore
-/// `reconstructions + class scans < workers`, and the assertion below is
-/// what keeps it from being arithmetic a reader has to do across two files.
+/// `workers >= `[`MIN_WORKERS`], and the assertion below is what keeps it
+/// from being arithmetic a reader has to do across two files.
 ///
 /// Four pooled slots plus two free is the smallest split that keeps the
 /// liveness probe, the handshake and the write path answerable while both
@@ -236,13 +237,27 @@ pub(crate) const MAX_CONCURRENT_CLASS_SCANS: usize = 2;
 /// completes in milliseconds, where a pooled one is a whole-store scan or a
 /// whole-world replay.
 ///
-/// An embedder calling [`serve`] with its own count owes the same relation;
-/// nothing here can check theirs, and `serve`'s own card says so.
+/// An embedder calling [`serve`] with its own count owes the same relation,
+/// and [`MIN_WORKERS`] is the form in which they can evaluate it.
 pub const DEFAULT_WORKERS: usize = 6;
 
+/// The smallest worker count that satisfies [`serve`]'s pooled-permit
+/// obligation: ONE MORE than the slots the two permit pools hold together,
+/// so a caller holding every permit of both still leaves a worker to answer
+/// `/health`, `/session` and the write path.
+///
+/// PUBLIC because it is the caller's half of an obligation [`serve`] states
+/// and deliberately does not re-check: the two pools' own counts are this
+/// crate's, so `workers >= MIN_WORKERS` is the only form an embedder naming
+/// its own count can evaluate. DERIVED from the two rather than written
+/// down, so a pool that moves moves this with it — which is what keeps the
+/// obligation and the check on one number.
+pub const MIN_WORKERS: usize =
+    crate::history::MAX_CONCURRENT_RECONSTRUCTIONS + MAX_CONCURRENT_CLASS_SCANS + 1;
+
 const _: () = assert!(
-    crate::history::MAX_CONCURRENT_RECONSTRUCTIONS + MAX_CONCURRENT_CLASS_SCANS < DEFAULT_WORKERS,
-    "the two permit pools must leave a worker free at the shipped default: a caller \
+    DEFAULT_WORKERS >= MIN_WORKERS,
+    "the shipped default must satisfy serve's own pooled-permit obligation: a caller \
      inside both bounds would otherwise occupy every worker"
 );
 
@@ -529,11 +544,12 @@ pub enum DaemonError {
     /// data dir refusing I/O the kernel just performed.
     Sidecar(std::io::Error),
     /// The blocked-prefix list's START-UP SUPPLY
-    /// ([`AuthOptions::blocked_prefixes`]) could not be read, or is not a
-    /// list (`InvalidData`); the error names the file. The list is supplied
-    /// at every start (AUTH-4.70), so a daemon that cannot read the one it
-    /// was handed does not start on an empty one: that would lapse every
-    /// standing block in silence.
+    /// ([`AuthOptions::blocked_supply_path`]) could not be read, is not a
+    /// list, or is past the byte cap the supply channel applies — the last
+    /// two both `InvalidData`; the error names the file and, for the cap,
+    /// the number. The list is supplied at every start (AUTH-4.70), so a
+    /// daemon that cannot read the one it was handed does not start on an
+    /// empty one: that would lapse every standing block in silence.
     BlockedPrefixes(std::io::Error),
 }
 
@@ -720,10 +736,10 @@ pub enum Routed {
 /// `origin` and `peer` are different in kind: a violation there is a SILENT
 /// WIDENING of the one privilege this daemon grants without a signature. An
 /// absent `origin` reads as "no `Origin` header", which
-/// [`crate::auth::bare_bind_allowed`] admits, so a caller that does not
-/// forward the header removes the daemon-side fence; and a `peer` reported
-/// `Loopback` for a socket that is not one hands the bare bind to the
-/// network.
+/// [`crate::auth::session::bare_bind_allowed`] admits, so a caller that
+/// does not forward the header removes the daemon-side fence; and a `peer`
+/// reported `Loopback` for a socket that is not one hands the bare bind to
+/// the network.
 ///
 /// The body cap is the OUTERMOST bound on what a frame allocates, and the
 /// one clause a caller cannot discharge by inspection: every JSON-carrying
@@ -1152,8 +1168,10 @@ impl Daemon {
     /// credential memo. So routing one write frame twice COMMITS TWICE
     /// unless the frame carries an idempotency `id` (wire.md §Correlation
     /// and idempotency) — a speculative retry after a timeout duplicates
-    /// the insert or mints a second document. The only routes that alter
-    /// nothing are `GET /health` and, in `client` builds, `GET /`.
+    /// the insert or mints a second document. Of the DISPATCH arms, the two
+    /// that alter nothing are `GET /health` and, in `client` builds,
+    /// `GET /` — but no route does, because the reissue below sits ahead of
+    /// dispatch on every request.
     ///
     /// What the caller owes on the way in is [`HttpRequest`]'s field
     /// precondition, which routing cannot check; what a [`Reply`] is not on
@@ -2386,14 +2404,14 @@ impl std::fmt::Debug for Skepd {
 /// establishes it by refusing a zero count where the flag is read, which is
 /// also what makes its startup line's worker count honest.
 ///
-/// OBLIGATION the count carries and this function cannot check: leave a
-/// worker free of the two permit pools —
-/// `MAX_CONCURRENT_RECONSTRUCTIONS + MAX_CONCURRENT_CLASS_SCANS < workers`.
-/// A caller holding every permit of both is INSIDE both bounds, so at or
-/// below the sum they occupy the whole pool and the daemon answers nothing,
-/// `/health` and `/session` included. [`DEFAULT_WORKERS`] satisfies it and
-/// carries the assertion that holds it; an embedder naming its own count
-/// owes it, and a smaller one is what the two bounds exist to prevent.
+/// OBLIGATION the count carries: `workers >= `[`MIN_WORKERS`], which leaves
+/// a worker free of the two permit pools. A caller holding every permit of
+/// both is INSIDE both bounds, so below that count they occupy the whole
+/// pool and the daemon answers nothing, `/health` and `/session` included.
+/// [`DEFAULT_WORKERS`] satisfies it and carries the assertion that holds it;
+/// an embedder naming its own count owes it, and `serve` does NOT re-check —
+/// the obligation is the caller's, and [`MIN_WORKERS`] is how they evaluate
+/// it.
 ///
 /// SECOND PRECONDITION: `daemon`'s auth port is UNBOUND. `serve` binds it,
 /// and a daemon already carrying one has two callers disagreeing about the

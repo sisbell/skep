@@ -10,12 +10,13 @@
 //! Every function serves one contract: **any bytes in → exactly one
 //! well-formed answer out, never a panic, never a hang, never silence.** The
 //! oracle functions report a violation — that is the finding — either by
-//! panicking with it ([`codec_roundtrip_oracle`]) or by returning it as an
-//! `Err` the calling test panics on ([`check_http_response`],
-//! [`envelope_oracle`]), which is the shape used where the reproduction is
-//! the caller's seed rather than the oracle's input. The exchange helper
-//! never hangs (bounded socket deadlines); the mutation engine is a pure,
-//! deterministic `(seed, corpus) → bytes`.
+//! panicking with it ([`crate::fuzz_support::codec_roundtrip_oracle`]) or
+//! by returning it as an `Err` the calling test panics on
+//! ([`crate::fuzz_support::check_http_response`],
+//! [`crate::fuzz_support::envelope_oracle`]), which is the shape used where
+//! the reproduction is the caller's seed rather than the oracle's input.
+//! The exchange helper never hangs (bounded socket deadlines); the
+//! mutation engine is a pure, deterministic `(seed, corpus) → bytes`.
 //!
 //! Dependency posture: std plus this crate's own `serde_json`/codec only —
 //! no `tempfile`, no server library — so exposing it adds nothing to a

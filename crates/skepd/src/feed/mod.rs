@@ -419,9 +419,8 @@ impl Feed {
                 }
             }
         }
-        let index_coverage = f_index.coverage();
         let index_tail: Vec<u64> =
-            log.entries.range(index_coverage.saturating_add(1)..).map(|(k, _)| *k).collect();
+            log.entries.range(f_index.first_uncovered()..).map(|(k, _)| *k).collect();
         for &at in &index_tail {
             if let std::collections::btree_map::Entry::Vacant(vacant) = docs.entry(at) {
                 let addrs: Vec<Address> = match log.entries.get(&at) {
@@ -465,9 +464,8 @@ impl Feed {
             .map(|(at, _)| *at)
             .filter(|at| log.entries.contains_key(at))
             .collect();
-        let masked_coverage = f_masked.coverage();
         let masked_tail: Vec<u64> =
-            log.entries.range(masked_coverage.saturating_add(1)..).map(|(k, _)| *k).collect();
+            log.entries.range(f_masked.first_uncovered()..).map(|(k, _)| *k).collect();
         for at in masked_tail {
             if masked_at_commit(docs.get(&at).map(Vec::as_slice).unwrap_or(&[])) {
                 masked.insert(at);
@@ -516,9 +514,8 @@ impl Feed {
             positions.sort_unstable();
             positions.dedup();
         }
-        let streams_coverage = f_streams.coverage();
         let streams_tail: Vec<u64> =
-            log.entries.range(streams_coverage.saturating_add(1)..).map(|(k, _)| *k).collect();
+            log.entries.range(f_streams.first_uncovered()..).map(|(k, _)| *k).collect();
         for at in streams_tail {
             let owners = owners_of(docs.get(&at).map(Vec::as_slice).unwrap_or(&[]));
             if !owners.is_empty() {
@@ -542,10 +539,9 @@ impl Feed {
                     == log.offsets.get(at).map(|o| o.0)
             });
         if offsets_agree {
-            let offsets_coverage = f_offsets.coverage();
             let offsets_tail: Vec<(u64, LineOffset)> = log
                 .offsets
-                .range(offsets_coverage.saturating_add(1)..)
+                .range(f_offsets.first_uncovered()..)
                 .map(|(k, v)| (*k, *v))
                 .collect();
             for (at, offset) in offsets_tail {

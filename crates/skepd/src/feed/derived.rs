@@ -181,6 +181,21 @@ impl DerivedFile {
         self.coverage
     }
 
+    /// The first position this file has NOT processed — one past its
+    /// coverage, and where each open's re-derivation of its MISSING TAIL
+    /// begins. The `+ 1` is what the fence MEANS
+    /// ([`DerivedFile::coverage`]: every position at or below it is
+    /// processed), so that reading is a fact of this type rather than of the
+    /// four arithmetic expressions [`crate::feed::Feed::open`] would
+    /// otherwise spell — one per derived structure, over two different maps,
+    /// and a fifth the day a fifth file lands.
+    ///
+    /// Saturating, so a file covering `u64::MAX` answers `u64::MAX` and its
+    /// tail is the empty range rather than a wrap to genesis.
+    pub fn first_uncovered(&self) -> u64 {
+        self.coverage().saturating_add(1)
+    }
+
     /// Append one record for `at` with the file's own fields, in the shape
     /// [`record_object`] fixes — so an appended line and the rewritten line
     /// that reproduces it are one spelling rather than two that must agree.

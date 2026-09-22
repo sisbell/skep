@@ -162,11 +162,11 @@ use crate::auth::policy::{
 };
 use crate::auth::session::{
     handshake, parse_session_body, resolve, Actor, GuestReason, HandshakeRefusal, Opened,
-    SessionBinding, Token, CHALLENGE_TTL,
+    SessionBinding, Token, CHALLENGE_TTL_MS,
 };
 use crate::auth::{
-    blocked_prefixes, startup_warnings, AuthOptions, AuthState, OsEntropy, PortAlreadyBound,
-    Reissue,
+    blocked_prefixes, startup_warnings, AuthOptions, AuthState, LockWrite, OsEntropy,
+    PortAlreadyBound, Reissue,
 };
 use crate::codec::{
     check_keys, credential_refused_reply, key_set_reply, obj, to_bytes, DaemonOp, JsonCodec,
@@ -1323,6 +1323,34 @@ impl Daemon {
         notice::line(self.auth.cfg.node_prefix_line());
     }
 
+    /// THE CLAIM FLIP's consequences, whole and under the write guard the
+    /// claim committed under: the config-lockout warnings logged a second
+    /// time (RES-30 requires it at the flip unconditionally), the
+    /// blocked-prefix list RE-INSTALLED against the claimant this commit
+    /// first seated (RES-65 item 4 — the comparand the header defers to
+    /// wherever it names none), and the list in force named where the issue
+    /// has anything to say.
+    ///
+    /// One method because the three fire TOGETHER and only here — the claim
+    /// is set once, so this is the one transition at which a comparand
+    /// appears and the two logs are owed again — which is
+    /// [`crate::auth::AuthState::commit_tail`]'s own reason for bundling the
+    /// three obligations one step earlier. `lock` is that obligation and not
+    /// a decoration: the re-install replaces the list under the gate the
+    /// claim itself committed under, so no write lands between the claim and
+    /// the comparands it moves.
+    fn on_claim_flip(&self, lock: &LockWrite<'_>) {
+        self.log_config_warnings(true);
+        self.auth.reinstall_blocked_at_claim(lock);
+        // The flip can only have made an entry INERT, so an issue with no
+        // entries has nothing to say; where it has one, the whole list in
+        // force is named (AUTH-4.36 step 4b's "ignored at install and said
+        // so in the log").
+        if !blocked_prefixes(&self.auth.cfg).issue_is_empty() {
+            self.log_blocked_prefixes("at claim");
+        }
+    }
+
     /// THE REISSUE, at the head of every request (AUTH-4.70): where the
     /// supply file moved, [`AuthState::reissue_blocked_prefixes`] re-reads
     /// it and installs the new issue WHOLE under the credential write gate
@@ -1366,19 +1394,7 @@ impl Daemon {
             obj(vec![
                 ("nonce", Value::String(nonce.to_hex())),
                 ("principal", Value::Number(principal.into())),
-                // A byte pin of [`CHALLENGE_TTL`], so the wire reports that
-                // constant or nothing: a fallback literal here would be a
-                // second spelling of the number the store uses, free to
-                // drift from it in silence on the one field whose whole
-                // contract is that it does not.
-                (
-                    "ttl_ms",
-                    Value::Number(
-                        u64::try_from(CHALLENGE_TTL.as_millis())
-                            .expect("CHALLENGE_TTL is seconds; its millis fit u64")
-                            .into(),
-                    ),
-                ),
+                ("ttl_ms", Value::Number(CHALLENGE_TTL_MS.into())),
             ]),
         )
     }
@@ -1762,20 +1778,7 @@ impl Daemon {
                 &ack,
             );
             if flipped {
-                self.log_config_warnings(true);
-                // The claim flip's half of the list's install (RES-65 item
-                // 4): the claimant is the comparand wherever the header
-                // names none, and it exists from THIS commit — so the issue
-                // in force is re-compared here, under the write guard the
-                // claim committed under.
-                self.auth.reinstall_blocked_at_claim(&credential_lock);
-                // The flip can only have made an entry INERT, so an issue
-                // with no entries has nothing to say; where it has one, the
-                // whole list in force is named (AUTH-4.36 step 4b's
-                // "ignored at install and said so in the log").
-                if !blocked_prefixes(&self.auth.cfg).issue_is_empty() {
-                    self.log_blocked_prefixes("at claim");
-                }
+                self.on_claim_flip(&credential_lock);
             }
         }
         with_signal(op_answer(ack), closed)

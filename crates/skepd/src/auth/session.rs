@@ -22,6 +22,23 @@ use skep_namespace::HasM3;
 /// pin of this constant (AUTH-4.12).
 pub(crate) const CHALLENGE_TTL: Duration = Duration::from_secs(60);
 
+/// [`CHALLENGE_TTL`] as the WIRE publishes it — `ttl_ms` on `GET /challenge`
+/// (AUTH-6.1), and a byte pin of that constant, derived beside it as
+/// [`SESSION_TOKEN_BYTES`] is derived from its own: the wire reports the
+/// number the store uses or the build fails. A literal at the route would be
+/// a second spelling of it, free to drift in silence on the one field whose
+/// whole contract is that it does not, and a runtime conversion there would
+/// check per request what is knowable once.
+pub(crate) const CHALLENGE_TTL_MS: u64 = CHALLENGE_TTL.as_millis() as u64;
+
+/// The cast above is lossless — asserted at COMPILE time, and this is the
+/// whole proof rather than the shorter "the TTL is seconds", which is true
+/// of `from_secs(u64::MAX)` too.
+const _: () = assert!(
+    CHALLENGE_TTL_MS as u128 == CHALLENGE_TTL.as_millis(),
+    "the challenge TTL must be publishable as a u64 count of milliseconds"
+);
+
 /// Session-token unpredictability (AUTH-4.13): at least this many bits per
 /// token from a `CryptoRng` — never a per-process prefix plus a counter.
 pub(crate) const SESSION_TOKEN_BITS: usize = 128;

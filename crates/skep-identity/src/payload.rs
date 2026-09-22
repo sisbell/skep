@@ -10,6 +10,10 @@
 //! IN THIS CRATE, in the spec's own order: no `serde` derive, no
 //! `deny_unknown_fields`, no verdict delegated to the dependency. The bytes
 //! themselves arrive from `crate::read`.
+//!
+//! The two kinds share one record envelope and one fault precedence
+//! (AUTH-2.19), so [`scan`] holds those once and a kind's [`Schema`] carries
+//! only the five rows that kind decides for itself.
 
 use core::fmt;
 use core::fmt::Write as _;
@@ -292,6 +296,126 @@ fn parse_key_entry(v: &Value) -> Result<Enrollment, PayloadError> {
     Enrollment::new(key, anchor, label).map_err(|_| PayloadError::BadRecord)
 }
 
+/// AUTH-2.129 — validate ONE `fingerprints` entry against the retirement
+/// schema: a STRING of exactly 64 hex characters, parsed case-insensitively
+/// (AUTH-2.17); the case a body carries is judged by AUTH-2.130's
+/// byte-identity compare, not here. Any other shape is
+/// [`PayloadError::BadRecord`] (AUTH-1.28).
+fn parse_fingerprint_entry(v: &Value) -> Result<Fingerprint, PayloadError> {
+    let hex = v.as_str().ok_or(PayloadError::BadRecord)?;
+    Fingerprint::parse_hex(hex).ok_or(PayloadError::BadRecord)
+}
+
+/// AUTH-2.15 for the ENROLMENT kind — two entries are the same entry when
+/// their PARSED KEYS have one fingerprint, which is a function of the key:
+/// never the entry's flag, its label, or the hex case its body spelled.
+fn enrollment_key_fingerprint(e: &Enrollment) -> Fingerprint {
+    Fingerprint::of(&e.key)
+}
+
+/// AUTH-2.15 for the RETIREMENT kind — two entries are the same entry when
+/// they are one fingerprint.
+fn retirement_fingerprint(fp: &Fingerprint) -> Fingerprint {
+    *fp
+}
+
+/// One record kind's SCHEMA — everything AUTH-2.128 and AUTH-2.129 say
+/// DIFFERENTLY, and nothing they say alike. Five rows; the envelope both
+/// schemas state in identical words, and AUTH-2.19's fault precedence both
+/// kinds keep, are [`scan`]'s and written once.
+struct Schema<T, K> {
+    /// The `type` member's ONE admitted value ([`ENROLL_TYPE`],
+    /// [`RETIRE_TYPE`]).
+    type_token: &'static str,
+    /// The entry array's member name (`keys`, `fingerprints`).
+    entries_member: &'static str,
+    /// AUTH-2.128/AUTH-2.129 — ONE entry against the kind's entry schema.
+    parse_entry: fn(&Value) -> Result<T, PayloadError>,
+    /// AUTH-2.130 — the record VALUE's canonical encoding, `sig` included.
+    canonical: fn(&[T], Option<&str>) -> String,
+    /// AUTH-2.15 — what two entries are compared BY.
+    compared_by: fn(&T) -> K,
+}
+
+/// AUTH-2.19 — the fault precedence BOTH kinds keep, and the record envelope
+/// both schemas state alike, in ONE place: the bytes decode as UTF-8 (else
+/// `NotUtf8`, item 1); the body is a JSON object of exactly `type`, the kind's
+/// entry array, and an OPTIONAL `sig` — a STRING the fold IGNORES whatever it
+/// holds (AUTH-2.13, AUTH-2.94), and no other member (AUTH-2.128, AUTH-2.129)
+/// — whose entries each parse and whose bytes ARE the canonical re-encoding of
+/// the value they spell (else `BadRecord`, AUTH-2.130 and item 2); then the
+/// entries are scanned in order for a duplicate (`DuplicateKey(n)` naming the
+/// 1-based REPEATING entry, item 3); and `Empty` is answered ONLY after a
+/// clean scan (item 4).
+///
+/// Item 2 precedes item 3 BY CONSTRUCTION: the duplicate test runs only on
+/// entries the canonical compare has already admitted. It is one ordered-set
+/// insert per entry, never a search of the entries before it, so no record
+/// length makes the scan quadratic.
+///
+/// No verdict is delegated to `serde_json`: it answers only "is this a JSON
+/// value, and which" (AUTH-2.1). Everything a kind decides for itself is its
+/// [`Schema`]'s five rows.
+fn scan<T, K: Ord>(bytes: &[u8], schema: Schema<T, K>) -> Result<Vec<T>, PayloadError> {
+    // AUTH-2.19 item 1 — UTF-8 before everything.
+    let text = core::str::from_utf8(bytes).map_err(|_| PayloadError::NotUtf8)?;
+    // AUTH-2.1/AUTH-2.19 item 2 — parse to a GENERIC value; a non-JSON body,
+    // a leading BOM, a lone surrogate, a trailing non-whitespace byte each
+    // fail here as `bad_record`.
+    let value: Value = serde_json::from_str(text).map_err(|_| PayloadError::BadRecord)?;
+    let obj = value.as_object().ok_or(PayloadError::BadRecord)?;
+    // `type` — STRING, exactly the kind's token (the parse is keyed to the
+    // kind, so a disagreeing or foreign `type` is `bad_record` and costs no
+    // daemon read).
+    match obj.get("type").and_then(Value::as_str) {
+        Some(t) if t == schema.type_token => {}
+        _ => return Err(PayloadError::BadRecord),
+    }
+    // The entry array — ARRAY (AUTH-2.128 `keys`, AUTH-2.129 `fingerprints`).
+    let entries_val = obj
+        .get(schema.entries_member)
+        .and_then(Value::as_array)
+        .ok_or(PayloadError::BadRecord)?;
+    // `sig` — STRING, OPTIONAL, canonically LAST, IGNORED by the fold whatever
+    // it holds (AUTH-2.13, AUTH-2.94); admitted with the body and absent from
+    // the answer (AUTH-2.18).
+    let sig = match obj.get("sig") {
+        None => None,
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(_) => return Err(PayloadError::BadRecord),
+    };
+    // No other member: exactly `type`, the entry array, plus `sig` iff present.
+    if obj.len() != 2 + usize::from(obj.contains_key("sig")) {
+        return Err(PayloadError::BadRecord);
+    }
+    // Each entry against the kind's schema, IN ORDER — the first failing entry
+    // is the verdict (an unadmitted alg at entry 1 precedes a duplicate at
+    // entry 3, AUTH-2.19 item 2 before item 3).
+    let mut entries = Vec::with_capacity(entries_val.len());
+    for entry in entries_val {
+        entries.push((schema.parse_entry)(entry)?);
+    }
+    // AUTH-2.130's ADMISSION SENTENCE — the byte-identity compare over the
+    // RECORD VALUE, `sig` INCLUDED (RES-105, I2 AUTH-2.90): admit only where
+    // the input is the canonical re-encoding of every member it carries.
+    if (schema.canonical)(&entries, sig.as_deref()) != text {
+        return Err(PayloadError::BadRecord);
+    }
+    // AUTH-2.15/AUTH-2.19 item 3 — duplicate ENTRY, naming the 1-based
+    // repeating entry index; one ordered-set insert per entry, never a search.
+    let mut seen: BTreeSet<K> = BTreeSet::new();
+    for (i, entry) in entries.iter().enumerate() {
+        if !seen.insert((schema.compared_by)(entry)) {
+            return Err(PayloadError::DuplicateKey(i + 1));
+        }
+    }
+    // AUTH-2.16/AUTH-2.19 item 4 — `Empty` only after a clean scan.
+    if entries.is_empty() {
+        return Err(PayloadError::Empty);
+    }
+    Ok(entries)
+}
+
 /// AUTH-2.128, AUTH-2.130 — parse an enrolment record. The bytes decode as
 /// UTF-8 (else `NotUtf8`, AUTH-2.19 item 1), parse to a GENERIC
 /// [`serde_json::Value`] and validate the enrolment schema and its canonical
@@ -308,59 +432,16 @@ fn parse_key_entry(v: &Value) -> Result<Enrollment, PayloadError> {
 ///
 /// The record cap is the READ's, never this parser's (AUTH-2.43).
 pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
-    // AUTH-2.19 item 1 — UTF-8 before everything.
-    let text = core::str::from_utf8(bytes).map_err(|_| PayloadError::NotUtf8)?;
-    // AUTH-2.1/AUTH-2.19 item 2 — parse to a GENERIC value; a non-JSON body,
-    // a leading BOM, a lone surrogate, a trailing non-whitespace byte each
-    // fail here as `bad_record`.
-    let value: Value = serde_json::from_str(text).map_err(|_| PayloadError::BadRecord)?;
-    let obj = value.as_object().ok_or(PayloadError::BadRecord)?;
-    // `type` — STRING, exactly `skep-enroll` (AUTH-2.128; keyed to the kind, so
-    // a disagreeing or foreign `type` is `bad_record` and costs no daemon read).
-    match obj.get("type").and_then(Value::as_str) {
-        Some(t) if t == ENROLL_TYPE => {}
-        _ => return Err(PayloadError::BadRecord),
-    }
-    // `keys` — ARRAY (AUTH-2.128).
-    let keys_val = obj.get("keys").and_then(Value::as_array).ok_or(PayloadError::BadRecord)?;
-    // `sig` — STRING, OPTIONAL, canonically LAST, IGNORED by the fold whatever
-    // it holds (AUTH-2.13, AUTH-2.94); admitted with the body and absent from
-    // the answer (AUTH-2.18).
-    let sig = match obj.get("sig") {
-        None => None,
-        Some(Value::String(s)) => Some(s.clone()),
-        Some(_) => return Err(PayloadError::BadRecord),
-    };
-    // No other member (AUTH-2.128): exactly `type`, `keys`, plus `sig` iff present.
-    if obj.len() != 2 + usize::from(obj.contains_key("sig")) {
-        return Err(PayloadError::BadRecord);
-    }
-    // Each entry against the schema, IN ORDER — the first failing entry is the
-    // verdict (an unadmitted alg at entry 1 precedes a duplicate at entry 3,
-    // AUTH-2.19 item 2 before item 3).
-    let mut entries = Vec::with_capacity(keys_val.len());
-    for entry in keys_val {
-        entries.push(parse_key_entry(entry)?);
-    }
-    // AUTH-2.130's ADMISSION SENTENCE — the byte-identity compare over the
-    // RECORD VALUE, `sig` INCLUDED (RES-105, I2 AUTH-2.90): admit only where
-    // the input is the canonical re-encoding of every member it carries.
-    if canonical_enroll(&entries, sig.as_deref()) != text {
-        return Err(PayloadError::BadRecord);
-    }
-    // AUTH-2.15/AUTH-2.19 item 3 — duplicate ENTRY, naming the 1-based repeating
-    // entry index; one ordered-set insert per entry, never a search.
-    let mut seen: BTreeSet<Fingerprint> = BTreeSet::new();
-    for (i, e) in entries.iter().enumerate() {
-        if !seen.insert(Fingerprint::of(&e.key)) {
-            return Err(PayloadError::DuplicateKey(i + 1));
-        }
-    }
-    // AUTH-2.16/AUTH-2.19 item 4 — `Empty` only after a clean scan.
-    if entries.is_empty() {
-        return Err(PayloadError::Empty);
-    }
-    Ok(entries)
+    scan(
+        bytes,
+        Schema {
+            type_token: ENROLL_TYPE,
+            entries_member: "keys",
+            parse_entry: parse_key_entry,
+            canonical: canonical_enroll,
+            compared_by: enrollment_key_fingerprint,
+        },
+    )
 }
 
 /// AUTH-2.129, AUTH-2.130 — parse a retirement record: the mirror of
@@ -374,42 +455,16 @@ pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
 /// one fingerprint twice beside the rest of the set would pass that test,
 /// empty the set, and void I3 (AUTH-2.97) and AUTH-1.36.
 pub fn parse_retire(bytes: &[u8]) -> Result<Vec<Fingerprint>, PayloadError> {
-    let text = core::str::from_utf8(bytes).map_err(|_| PayloadError::NotUtf8)?;
-    let value: Value = serde_json::from_str(text).map_err(|_| PayloadError::BadRecord)?;
-    let obj = value.as_object().ok_or(PayloadError::BadRecord)?;
-    match obj.get("type").and_then(Value::as_str) {
-        Some(t) if t == RETIRE_TYPE => {}
-        _ => return Err(PayloadError::BadRecord),
-    }
-    let fps_val = obj.get("fingerprints").and_then(Value::as_array).ok_or(PayloadError::BadRecord)?;
-    let sig = match obj.get("sig") {
-        None => None,
-        Some(Value::String(s)) => Some(s.clone()),
-        Some(_) => return Err(PayloadError::BadRecord),
-    };
-    if obj.len() != 2 + usize::from(obj.contains_key("sig")) {
-        return Err(PayloadError::BadRecord);
-    }
-    // Each entry a 64-hex STRING, parsed case-insensitively (AUTH-2.17); the
-    // case a body carries is judged by the byte-identity compare below.
-    let mut fps = Vec::with_capacity(fps_val.len());
-    for entry in fps_val {
-        let hex = entry.as_str().ok_or(PayloadError::BadRecord)?;
-        fps.push(Fingerprint::parse_hex(hex).ok_or(PayloadError::BadRecord)?);
-    }
-    if canonical_retire(&fps, sig.as_deref()) != text {
-        return Err(PayloadError::BadRecord);
-    }
-    let mut seen: BTreeSet<Fingerprint> = BTreeSet::new();
-    for (i, fp) in fps.iter().enumerate() {
-        if !seen.insert(*fp) {
-            return Err(PayloadError::DuplicateKey(i + 1));
-        }
-    }
-    if fps.is_empty() {
-        return Err(PayloadError::Empty);
-    }
-    Ok(fps)
+    scan(
+        bytes,
+        Schema {
+            type_token: RETIRE_TYPE,
+            entries_member: "fingerprints",
+            parse_entry: parse_fingerprint_entry,
+            canonical: canonical_retire,
+            compared_by: retirement_fingerprint,
+        },
+    )
 }
 
 /// AUTH-2.18/AUTH-2.130 — encode an enrolment record in the canonical spelling,

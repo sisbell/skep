@@ -9,7 +9,7 @@ use skep_address::{checked_inc, parent, Address};
 
 use crate::key::Fingerprint;
 use crate::keyset::{Enrolled, KeySet};
-use crate::payload::{parse_enroll, parse_retire, Enrollment};
+use crate::payload::{parse_enroll, parse_retire, Enrollment, PayloadError};
 use crate::read::record_bytes;
 use crate::seam::{delegator, doc_1_of, document_account, Delegator, FoldCtx};
 use crate::shape::{single_address, CredentialKind, LinkDeposit, TypeAddrs};
@@ -244,29 +244,55 @@ impl IdentityState {
         })
     }
 
-    /// AUTH-2.66 item 4, ENROLL: arm entry (shape, then the one payload
-    /// read, then parse), then the home pin AHEAD of the account comparisons
-    /// (AUTH-2.127 — a wrong-home deposit whose payload is unparseable
-    /// answers `malformed_payload`, never `not_doc_one`; a wrong-home
-    /// genesis `not_doc_one`, never `not_genesis_registry`), then the arms.
+    /// AUTH-2.66 item 4 — the arm entry BOTH payload-carrying kinds share, in
+    /// the one order AUTH-2.127 pins for them: the shape checks and the one
+    /// payload read ([`subject_and_record`]), then the kind's parse, then the
+    /// home pin, then the kind's arms. Every adjacency here is a `detail` pin
+    /// — a wrong-home deposit whose payload is unparseable answers
+    /// `malformed_payload`, never `not_doc_one`; a wrong-home genesis
+    /// `not_doc_one`, never `not_genesis_registry` — so the order is written
+    /// HERE, once, rather than once per kind. The CLAIM kind does not come
+    /// through here: it carries no payload, and it pins its home at a
+    /// different point among its own conditions (AUTH-2.67 item 2,
+    /// [`claim_path`]).
+    ///
+    /// [`claim_path`]: IdentityState::claim_path
+    fn payload_path<T>(
+        &self,
+        ctx: &impl FoldCtx,
+        dep: &LinkDeposit,
+        home_account: &Address,
+        parse: impl FnOnce(&[u8]) -> Result<Vec<T>, PayloadError>,
+        arms: impl FnOnce(&Address, &[T]) -> Verdict,
+    ) -> Verdict {
+        let (subject, bytes) = match subject_and_record(ctx, dep) {
+            Ok(found) => found,
+            Err(inert) => return Verdict::Inert(inert),
+        };
+        let entries = match parse(&bytes) {
+            Ok(entries) => entries,
+            Err(e) => return Verdict::Inert(Inert::MalformedPayload(e)),
+        };
+        if !homed_in_doc_one(dep, home_account) {
+            return Verdict::Inert(Inert::NotDocOne);
+        }
+        arms(&subject, &entries)
+    }
+
+    /// AUTH-2.66 item 4, ENROLL — the enrolment kind's two rows of
+    /// [`payload_path`]: `parse_enroll`, then [`enroll_arms`].
+    ///
+    /// [`payload_path`]: IdentityState::payload_path
+    /// [`enroll_arms`]: IdentityState::enroll_arms
     fn enroll_path(
         &self,
         ctx: &impl FoldCtx,
         dep: &LinkDeposit,
         home_account: &Address,
     ) -> Verdict {
-        let (subject, bytes) = match subject_and_record(ctx, dep) {
-            Ok(found) => found,
-            Err(inert) => return Verdict::Inert(inert),
-        };
-        let enrollments = match parse_enroll(&bytes) {
-            Ok(enrollments) => enrollments,
-            Err(e) => return Verdict::Inert(Inert::MalformedPayload(e)),
-        };
-        if !homed_in_doc_one(dep, home_account) {
-            return Verdict::Inert(Inert::NotDocOne);
-        }
-        self.enroll_arms(ctx, &subject, home_account, &enrollments)
+        self.payload_path(ctx, dep, home_account, parse_enroll, |subject, enrollments| {
+            self.enroll_arms(ctx, subject, home_account, enrollments)
+        })
     }
 
     /// AUTH-2.69–2.72 — the enrollment arms, in the written order (hoisting
@@ -313,22 +339,9 @@ impl IdentityState {
                 // THE HANDOFF LATCH (AUTH-2.71), INSIDE the cell the genesis
                 // arm would otherwise honor and AHEAD of its post — so
                 // AUTH-2.72's written order below is unmoved, and no refusal
-                // moves at an account the genesis arm never reached. SCOPE: the
-                // SUBDIVISIONS alone (the `Some(Account(_))` arm), NEVER the
-                // bootstrap-delegated tier (AUTH-2.65), where a person's second
-                // top-level account is a sibling and a same-key genesis is
-                // legitimate. It refuses `NotGenesisRegistry` where any key the
-                // genesis names already stands ENROLLED in the set that OPENS
-                // THE ACCOUNT ABOVE `A` — a handoff gives an account to a party
-                // that could not already open it; a party that could needs no
-                // genesis. Comparand EMPTY (never-keyed ancestors) ⇒ the arm
-                // does not fire (RES-137); a fingerprint RETIRED in the set
-                // above does not count (RES-138 — the ENROLLED half only). NO
-                // new token, NO seam fact: it reads `S(·)` at `parent()`
-                // addresses (I2, AUTH-2.90; the token pin, AUTH-2.72).
-                if matches!(delegator(ctx, subject), Some(Delegator::Account(_)))
-                    && self.handoff_latch_fires(subject, enrollments)
-                {
+                // moves at an account the genesis arm never reached. What the
+                // latch IS, scope and comparand, is its own card.
+                if self.handoff_latch_fires(ctx, subject, enrollments) {
                     return Verdict::Inert(Inert::NotGenesisRegistry);
                 }
                 let keys: Vec<Enrolled> = enrollments.iter().map(enrolled_of).collect();
@@ -354,13 +367,36 @@ impl IdentityState {
         Verdict::Inert(Inert::NotGenesisRegistry)
     }
 
-    /// AUTH-2.71 — the handoff latch's comparand test: does any key the genesis
-    /// names already stand ENROLLED in the set that opens the account above
-    /// `subject`? The ENROLLED half only (`contains` reads enrolled-NOW — a
-    /// retired fingerprint opens nothing, I4 AUTH-2.98, RES-138); a comparand
-    /// with no non-empty set above answers `false` (the walk's terminus,
-    /// RES-137).
-    fn handoff_latch_fires(&self, subject: &Address, enrollments: &[Enrollment]) -> bool {
+    /// AUTH-2.71 — THE HANDOFF LATCH, whole: does it fire for a genesis at
+    /// `subject` naming these keys? Two conditions, the SCOPE first, so no
+    /// caller can ask half the rule.
+    ///
+    /// SCOPE — the SUBDIVISIONS alone (`delegator(subject) == Account(_)`),
+    /// NEVER the bootstrap-delegated tier (AUTH-2.65), where a person's second
+    /// top-level account is a sibling and a same-key genesis is legitimate.
+    ///
+    /// COMPARAND — any key the genesis names already stands ENROLLED in the
+    /// set that OPENS THE ACCOUNT ABOVE `subject` ([`opening_set_above`]): a
+    /// handoff gives an account to a party that could not already open it, and
+    /// a party that could needs no genesis. The ENROLLED half only (`contains`
+    /// reads enrolled-NOW — a retired fingerprint opens nothing, I4
+    /// AUTH-2.98, RES-138); a comparand with no non-empty set above answers
+    /// `false` (the walk's terminus, RES-137).
+    ///
+    /// NO new token and NO seam fact: the scope reads the ω the genesis
+    /// registry already consults, and the comparand reads `S(·)` at `parent()`
+    /// addresses (I2, AUTH-2.90; the token pin, AUTH-2.72).
+    ///
+    /// [`opening_set_above`]: IdentityState::opening_set_above
+    fn handoff_latch_fires(
+        &self,
+        ctx: &impl FoldCtx,
+        subject: &Address,
+        enrollments: &[Enrollment],
+    ) -> bool {
+        if !matches!(delegator(ctx, subject), Some(Delegator::Account(_))) {
+            return false;
+        }
         match self.opening_set_above(subject) {
             None => false,
             Some(opening) => enrollments
@@ -394,28 +430,20 @@ impl IdentityState {
         None
     }
 
-    /// AUTH-2.66 item 4, RETIRE: arm entry, parse, home pin, arms — the
-    /// mirror of [`enroll_path`] over `parse_retire`.
+    /// AUTH-2.66 item 4, RETIRE — the retirement kind's two rows of
+    /// [`payload_path`]: `parse_retire`, then [`retire_arms`].
     ///
-    /// [`enroll_path`]: IdentityState::enroll_path
+    /// [`payload_path`]: IdentityState::payload_path
+    /// [`retire_arms`]: IdentityState::retire_arms
     fn retire_path(
         &self,
         ctx: &impl FoldCtx,
         dep: &LinkDeposit,
         home_account: &Address,
     ) -> Verdict {
-        let (subject, bytes) = match subject_and_record(ctx, dep) {
-            Ok(found) => found,
-            Err(inert) => return Verdict::Inert(inert),
-        };
-        let fps = match parse_retire(&bytes) {
-            Ok(fps) => fps,
-            Err(e) => return Verdict::Inert(Inert::MalformedPayload(e)),
-        };
-        if !homed_in_doc_one(dep, home_account) {
-            return Verdict::Inert(Inert::NotDocOne);
-        }
-        self.retire_arms(&subject, home_account, &fps)
+        self.payload_path(ctx, dep, home_account, parse_retire, |subject, fps| {
+            self.retire_arms(subject, home_account, fps)
+        })
     }
 
     /// AUTH-2.74–2.76 — the retirement arms. ANCHOR-BLIND on purpose

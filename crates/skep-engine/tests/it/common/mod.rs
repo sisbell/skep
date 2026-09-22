@@ -85,6 +85,32 @@ pub fn mem_engine() -> Engine {
     Engine::open(mem_cfg()).expect("in-memory open cannot fail")
 }
 
+/// A fresh ACCOUNT under `parent`, delegated by `delegator` to `principal` at
+/// the prefix M3 names next: peeked off one snapshot and claimed by the next
+/// commit, which nothing else in a single-threaded test can take first. The
+/// integration suite's twin of the unit `testkit`'s `delegated_account`,
+/// general in its parent and its delegator.
+#[track_caller]
+pub fn delegated_account(
+    engine: &Engine,
+    parent: &Address,
+    delegator: PrincipalId,
+    principal: PrincipalId,
+) -> Address {
+    let prefix = engine
+        .kernel()
+        .snapshot()
+        .world()
+        .m3()
+        .next_account_prefix(parent)
+        .expect("the parent has a delegable next-form prefix");
+    engine
+        .namespace()
+        .delegate(delegator, prefix.tumbler().clone(), principal)
+        .expect("delegation of the peeked prefix succeeds")
+        .0
+}
+
 /// Bootstrap prologue, all through the real drivers: peek the next delegable
 /// prefix under the genesis node, delegate it to [`USER`], create one
 /// document in the new account — a DRAFT. Returns `(account, draft)`.
@@ -109,17 +135,7 @@ pub fn setup_home(engine: &Engine) -> (Address, Address) {
 }
 
 fn setup_with(engine: &Engine, published: Option<bool>) -> (Address, Address) {
-    let prefix = {
-        let snap = engine.kernel().snapshot();
-        snap.world()
-            .m3()
-            .next_account_prefix(&node1())
-            .expect("the genesis node has a delegable next-form prefix")
-    };
-    let (acct, _) = engine
-        .namespace()
-        .delegate(BOOTSTRAP_PRINCIPAL, prefix.tumbler().clone(), USER)
-        .expect("delegation of the peeked next-form prefix succeeds");
+    let acct = delegated_account(engine, &node1(), BOOTSTRAP_PRINCIPAL, USER);
     let (doc, _) = engine
         .namespace()
         .create_new_document(USER, &acct, published)

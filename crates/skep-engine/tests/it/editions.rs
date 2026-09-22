@@ -15,7 +15,7 @@ use skep_content::Val;
 use skep_engine::{Engine, World};
 use skep_febe::EditionClaim;
 use skep_links::{enc, Endset, HasLinks, SlotArg, View};
-use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
+use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
 
 /// The EDITION class type address (commons-seeding.md row `3.14 | edition`,
 /// confirmed by the owner 2026-09-07), as a client names it:
@@ -59,9 +59,7 @@ struct Board {
 
 fn board(engine: &Engine) -> Board {
     let ns = engine.namespace();
-    let prefix =
-        engine.kernel().snapshot().world().m3().next_account_prefix(&node1()).expect("prefix A");
-    let (acct, _) = ns.delegate(BOOTSTRAP_PRINCIPAL, prefix.tumbler().clone(), A).expect("A");
+    let acct = delegated_account(engine, &node1(), BOOTSTRAP_PRINCIPAL, A);
     let mint = |flag: Option<bool>| ns.create_new_document(A, &acct, flag).expect("A mints").0;
     let _home = mint(None); // doc 1, born published
     let target = mint(Some(true));

@@ -308,24 +308,13 @@ impl EngineStores {
     /// PRECONDITION, and the assembler's to state because the pairing is the
     /// assembler's: `kernel`'s installed world satisfies [`World`]'s
     /// INVARIANT — its derived state agrees with its authoritative state.
-    /// [`World::genesis`] satisfies it as built; every base M2 loads satisfies
-    /// it once `WorldState::rebuild_derived` has run over it; and
-    /// `WorldState::apply` preserves it, so every world folded from one of
-    /// those keeps it — each [`Engine::world_at`] reconstruction, and every
-    /// commit an open kernel folds. `Durability::InMemory` installs the passed
-    /// world unrebuilt, so a `World` that arrived any other way
-    /// (deserialized straight from bytes, say — `World: Deserialize` is
-    /// forced on it by `WorldState`) is served here with M7's skip-serialized
-    /// HINTS still empty and BOTH of the engine's derived indexes empty.
-    /// Reads then answer with
-    /// nullification invisible, `Active` equal to `Audit`, every typed slice
-    /// empty and no supersession edge at all; EVERY document published —
-    /// the fail-open sign PUB-7.5 names; and every grant ungiven, which is
-    /// that sign the other way (PUB-7.68), so the two derived indexes fail in
-    /// OPPOSITE directions over one unrebuilt world and neither looks wrong
-    /// from a single answer. (The type
-    /// registry is not in that hazard: it is M7's module constant, so it
-    /// answers the same on any world however the world arrived.)
+    /// Every world this crate hands out satisfies it — [`World::genesis`] as
+    /// built, and each [`Engine::world_at`] reconstruction — and [`World`]'s
+    /// note names the paths that establish and preserve it.
+    /// `Durability::InMemory` installs the passed world unrebuilt, so a
+    /// `World` that arrived any other way (deserialized straight from bytes,
+    /// say) is served here exactly as it arrived; [`World`]'s note says what
+    /// reads then answer.
     pub fn new(kernel: Arc<Kernel<World>>) -> EngineStores {
         EngineStores { kernel }
     }

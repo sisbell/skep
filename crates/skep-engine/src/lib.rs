@@ -13,10 +13,14 @@
 //! this crate's world dump. Sizing a change to the public surface means
 //! those three.
 //!
-//! **The engine adds no semantics.** Every function here is dispatch,
-//! lifting, construction, or rendering; every guard, policy, and
-//! computation lives in a store. These obligations are the engine's alone,
-//! one module apiece:
+//! **The engine re-decides nothing a store decides.** A store's guards,
+//! policies and computations live in that store, and the engine reaches them
+//! by dispatch, lifting, construction and rendering alone. What the engine
+//! owns is what no single store can hold, one module apiece — and where one
+//! of those obligations applies a rule of its own (the grant fold's
+//! classification and admission, the read predicate's subtree clause, the
+//! edition class's membership test, the dump's per-class reduction), the
+//! module that applies it states it:
 //!
 //! * **Genesis** ([`World::genesis`], [`Engine::open`]) — the initial world,
 //!   a compiled constant (the reserved type set is format, not
@@ -40,7 +44,8 @@
 //! * **The read predicate** ([`World::readable`]; the `readable` module) —
 //!   the one function `readable(doc, principal) = published(doc) ∨ subtree ∨
 //!   grant_exists` (PUB-1.31, lane 3.3, §1), composing the exception set's
-//!   clause, M3's ω memo and the grant fold's probe. Every read surface —
+//!   clause, the subtree clause the `readable` module writes over M3's ω memo
+//!   and M3's seat, and the grant fold's probe. Every read surface —
 //!   M6's deliveries and doc-argument consults, M8's result-set filters —
 //!   answers through this one predicate, threaded down as an opaque
 //!   `Fn(&Address) -> bool` (PUB-6.39), and a caller that asks it once per

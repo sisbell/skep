@@ -56,39 +56,40 @@ use crate::publication::{self, Drafts};
 /// under the premise that doc states (no record publishes a document), so a
 /// kernel whose root satisfies it satisfies it at every commit. Every
 /// `Engine::check_hints` this crate's suite runs over a live engine checks
-/// exactly that. The `Deserialize` derived below establishes
-/// nothing — it leaves M7's hints empty, so every typed slice
-/// reads as absent, nullification is invisible and `Active` equals `Audit`;
-/// it leaves the exception set EMPTY, so every document reads as PUBLISHED
-/// (the fail-open sign PUB-7.5 names, in the one place it is reachable); and
-/// it leaves the grant fold EMPTY, whose sign runs the OTHER way (PUB-7.68),
-/// so every grant reads as ungiven. The two therefore fail in opposite
-/// directions over one unrebuilt world, and no single answer looks wrong. So
-/// a world decoded from bytes is not one until the rebuild has run over it.
-/// That gate cannot be closed here: `WorldState:
-/// DeserializeOwned` forces the impl to exist, and this type is public, so
-/// the only defence is the discipline of the one mode that skips the rebuild
-/// — `Durability::InMemory` installs the passed world as the root exactly as
+/// exactly that. The `Deserialize` derived below establishes nothing — it
+/// leaves M7's hints empty, so every typed slice reads as absent, no
+/// supersession edge exists, nullification is invisible and `Active` equals
+/// `Audit`; it leaves the exception set EMPTY, so every document reads as
+/// PUBLISHED (the fail-open sign PUB-7.5 names, in the one place it is
+/// reachable); and it leaves the grant fold EMPTY, whose sign runs the OTHER
+/// way (PUB-7.68), so every grant reads as ungiven. The two therefore fail in
+/// opposite directions over one unrebuilt world, and no single answer looks
+/// wrong. So a world decoded from bytes is not one until the rebuild has run
+/// over it. That gate cannot be closed here: `WorldState: DeserializeOwned`
+/// forces the impl to exist, and this type is public, so the only defence is
+/// the discipline of the one mode that skips the rebuild —
+/// `Durability::InMemory` installs the passed world as the root exactly as
 /// given, and [`crate::EngineStores::new`] states the precondition for the
-/// kernels built that way and what reads answer when it is violated. M7's
-/// type registry is outside the hazard: it is that module's compiled format
-/// constant, not carried state, so nothing about it can arrive unrebuilt.
+/// kernels built that way. M7's type registry is outside the hazard: it is
+/// that module's compiled format constant, not carried state, so nothing
+/// about it can arrive unrebuilt.
 ///
 /// THREE OBLIGATIONS `WorldState` places on this type that M2 cannot check,
 /// each discharged by a fact about the slices rather than about this file.
 /// `Clone` must be cheap, because M2 clones a world per `transact` while
 /// holding the applier lock: every field is `im`-persistent through and
-/// through — the four slices, the exception set and the grant fold's three
-/// structures alike — so the `..self.clone()` in [`WorldState::apply`] copies
-/// a fixed handful of ROOTS and no element of any collection, whatever the
-/// world holds. `Drop` must not unwind, because M2 drops the previous
-/// root inside the atomic install: no type in the world's closure implements
-/// a `Drop` that can panic. And this type's and [`Record`]'s `Deserialize`
-/// must terminate and must not exhaust the stack on any byte string: that
-/// closure holds no recursive type, so decode depth is a property of the
-/// types and not of the bytes. A slice that moves to an eagerly-copied
-/// collection, or grows a recursive value, breaks one of these where the
-/// obligation's own text is a crate away.
+/// through — the four slices, the exception set, and every structure the
+/// grant fold holds (`Grants`' card lists them) alike — so the
+/// `..self.clone()` in [`WorldState::apply`] copies a fixed handful of ROOTS
+/// and no element of any collection, whatever the world holds. `Drop` must
+/// not unwind, because M2 drops the previous root inside the atomic install:
+/// no type in the world's closure implements a `Drop` that can panic. And
+/// this type's and [`Record`]'s `Deserialize` must terminate and must not
+/// exhaust the stack on any byte string: that closure holds no recursive
+/// type, so decode depth is a property of the types and not of the bytes. A
+/// slice that moves to an eagerly-copied collection, or grows a recursive
+/// value, breaks one of these where the obligation's own text is a crate
+/// away.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct World {
     /// The checkpoint format this layout is — first, so it is read first.

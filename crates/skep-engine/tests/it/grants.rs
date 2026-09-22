@@ -21,8 +21,8 @@ use skep_namespace::{
 use tempfile::tempdir;
 
 /// The GRANTS class type address (COMMONS DECISION 5 — 1.1.0.1.0.1.0.3.90).
-/// Hardcoded here as a client would name it; the engine constant is crate
-/// private.
+/// Spelled here as a client would name it, rather than read off
+/// `skep_engine::types::t_grant`, so the suite drives the wire value itself.
 fn t_grant() -> skep_address::Address {
     addr(&[1, 1, 0, 1, 0, 1, 0, 3, 90])
 }
@@ -60,31 +60,12 @@ struct Board {
 /// [`B`], a stranger to A's subtree.
 fn two_accounts(engine: &Engine) -> Board {
     let ns = engine.namespace();
-    let node = node1();
-    let prefix_a = engine
-        .kernel()
-        .snapshot()
-        .world()
-        .m3()
-        .next_account_prefix(&node)
-        .expect("prefix A");
-    let (acct_a, _) = ns
-        .delegate(BOOTSTRAP_PRINCIPAL, prefix_a.tumbler().clone(), A)
-        .expect("delegate A");
+    let acct_a = delegated_account(engine, &node1(), BOOTSTRAP_PRINCIPAL, A);
     let (home_a, _) =
         ns.create_new_document(A, &acct_a, None).expect("A's published home");
     let (draft_a, _) =
         ns.create_new_document(A, &acct_a, None).expect("A's private draft");
-    let prefix_b = engine
-        .kernel()
-        .snapshot()
-        .world()
-        .m3()
-        .next_account_prefix(&node)
-        .expect("prefix B");
-    let (acct_b, _) = ns
-        .delegate(BOOTSTRAP_PRINCIPAL, prefix_b.tumbler().clone(), B)
-        .expect("delegate B");
+    let acct_b = delegated_account(engine, &node1(), BOOTSTRAP_PRINCIPAL, B);
     Board { acct_a, home_a, draft_a, acct_b }
 }
 
@@ -106,15 +87,7 @@ const C: PrincipalId = PrincipalId(5);
 /// differently.
 fn draft_home_account(engine: &Engine) -> (skep_address::Address, skep_address::Address) {
     let ns = engine.namespace();
-    let prefix = engine
-        .kernel()
-        .snapshot()
-        .world()
-        .m3()
-        .next_account_prefix(&node1())
-        .expect("prefix D");
-    let (acct, _) =
-        ns.delegate(BOOTSTRAP_PRINCIPAL, prefix.tumbler().clone(), D).expect("delegate D");
+    let acct = delegated_account(engine, &node1(), BOOTSTRAP_PRINCIPAL, D);
     let (home, _) =
         ns.create_new_document(D, &acct, Some(false)).expect("an explicit-false FIRST mint");
     let (secret, _) = ns.create_new_document(D, &acct, None).expect("a later mint, private");
@@ -323,17 +296,7 @@ fn sub_account_with_a_draft(
     parent: &skep_address::Address,
     id: PrincipalId,
 ) -> (skep_address::Address, skep_address::Address) {
-    let prefix = engine
-        .kernel()
-        .snapshot()
-        .world()
-        .m3()
-        .next_account_prefix(parent)
-        .expect("the parent's next sub-account prefix");
-    let (acct, _) = engine
-        .namespace()
-        .delegate(delegator, prefix.tumbler().clone(), id)
-        .expect("the parent delegates a sub-account");
+    let acct = delegated_account(engine, parent, delegator, id);
     assert!(prefix_contains(parent, &acct), "the fixture must NEST the two accounts");
     let (draft, _) = engine
         .namespace()
@@ -490,17 +453,7 @@ fn the_node_tier_principal_reads_no_draft_by_subtree() {
 fn a_grant_to_an_account_excludes_its_sub_accounts() {
     let engine = mem_engine();
     let board = two_accounts(&engine);
-    let sub_prefix = engine
-        .kernel()
-        .snapshot()
-        .world()
-        .m3()
-        .next_account_prefix(&board.acct_b)
-        .expect("B's next sub-account prefix");
-    engine
-        .namespace()
-        .delegate(B, sub_prefix.tumbler().clone(), PrincipalId(12))
-        .expect("B delegates a sub-account");
+    delegated_account(&engine, &board.acct_b, B, PrincipalId(12));
     grant(&engine, &board.home_a, &board.draft_a, vec![board.acct_b.clone()]);
     let w = world(&engine);
     assert!(w.readable(Some(B), &board.draft_a), "the grantee reads");
@@ -681,15 +634,7 @@ struct SubAccount {
 /// the LONGEST covering seat — which is the premise both tests below turn on,
 /// so it is asserted here, where it is built.
 fn a_sub_account_of_a(engine: &Engine, board: &Board) -> SubAccount {
-    let prefix = engine
-        .kernel()
-        .snapshot()
-        .world()
-        .m3()
-        .next_account_prefix(&board.acct_a)
-        .expect("A's next sub-account prefix");
-    let (acct, _) =
-        engine.namespace().delegate(A, prefix.tumbler().clone(), S).expect("A delegates");
+    let acct = delegated_account(engine, &board.acct_a, A, S);
     let (home, _) =
         engine.namespace().create_new_document(S, &acct, None).expect("S's published doc 1");
     let (draft, _) =
@@ -847,17 +792,7 @@ fn a_grant_record_with_a_multi_address_slot_grants_nothing() {
     // A second grantee ACCOUNT, seated: the grant clause probes the
     // principal-exact index with the principal's own account, so a principal
     // with no account could not answer this question either way.
-    let prefix_c = engine
-        .kernel()
-        .snapshot()
-        .world()
-        .m3()
-        .next_account_prefix(&node1())
-        .expect("prefix C");
-    let (acct_c, _) = engine
-        .namespace()
-        .delegate(BOOTSTRAP_PRINCIPAL, prefix_c.tumbler().clone(), PrincipalId(3))
-        .expect("delegate C");
+    let acct_c = delegated_account(&engine, &node1(), BOOTSTRAP_PRINCIPAL, PrincipalId(3));
     let (draft_two, _) = engine
         .namespace()
         .create_new_document(A, &board.acct_a, None)
@@ -1477,17 +1412,7 @@ fn the_two_feed_enumerations_read_the_fold_s_live_state() {
         .expect("A's second draft");
     // A SECOND ISSUER, seated after A and B, so its account address sorts
     // last: `acct_c` is the row every deposit below puts FIRST.
-    let prefix_c = engine
-        .kernel()
-        .snapshot()
-        .world()
-        .m3()
-        .next_account_prefix(&node1())
-        .expect("prefix C");
-    let (acct_c, _) = engine
-        .namespace()
-        .delegate(BOOTSTRAP_PRINCIPAL, prefix_c.tumbler().clone(), C)
-        .expect("delegate C");
+    let acct_c = delegated_account(&engine, &node1(), BOOTSTRAP_PRINCIPAL, C);
     let (home_c, _) =
         engine.namespace().create_new_document(C, &acct_c, None).expect("C's published home");
     assert!(board.acct_a < acct_c, "the fixture wants A's account to sort before C's");

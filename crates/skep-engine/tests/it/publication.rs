@@ -425,11 +425,11 @@ fn the_dump_renders_the_exception_set_as_a_hint() {
 
 /// The set's two renderings are ordered by two different rules, and this is
 /// the fixture where they part. The SECTION is a SEQUENCE in M3's own map
-/// order — ADDRESS order, which `render` leaves alone because it sorts maps
-/// and nothing else. The HINT is a MAP, whose entries `render` sorts by their
-/// RENDERED TEXT. A tumbler component is a number and a dotted rendering is
-/// decimal, so the two orders agree only while every ordinal has the same
-/// digit count.
+/// order — ADDRESS order, which the dump's rendering leaves alone because it
+/// sorts maps and nothing else. The HINT is a MAP, whose entries the
+/// rendering sorts by their RENDERED TEXT. A tumbler component is a number
+/// and a dotted rendering is decimal, so the two orders agree only while
+/// every ordinal has the same digit count.
 ///
 /// Ten drafts in one account cross that boundary at 9 → 10. Its neighbour
 /// above builds one expectation by sorting STRINGS and reads it against both

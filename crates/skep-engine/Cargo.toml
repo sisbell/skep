@@ -20,11 +20,11 @@ dump = []
 # dump's canonicalizing transcode (`canon`), which implements a serde
 # Serializer and Deserializer of its own.
 serde.workspace = true
-# The two derived indexes — the exception set (PUB-7.5), a persistent hash map
-# draft → owner account, and the grant fold's operative set and its two query
-# indexes — are `im` structures, so the World's per-transact clone stays a
-# handful of root clones. The serde feature is the workspace's; both indexes
-# are `#[serde(skip)]` (derived, never checkpointed).
+# The two derived indexes — the exception set (PUB-7.5) and the grant fold,
+# whose card lists its structures — are built of `im` structures, so the
+# World's per-transact clone stays a handful of root clones. The serde feature
+# is the workspace's; both indexes are `#[serde(skip)]` (derived, never
+# checkpointed).
 im.workspace = true
 # M1 — the address vocabulary: the commons type pins' construction, the grant
 # fold's and the edition-claim lookup's address arithmetic, and the world

@@ -4,9 +4,10 @@
 //! addresses are compiled format constants — `ReservedAddrs::format`, the
 //! ghost tumblers `1.1.0.1.0.1.0.1.x` for x = 1..=5 — identical on every
 //! board because they ARE the format, not because a sealed configuration
-//! enforced agreement. The registry every consumer reads is built from them
-//! by M7 (`TypeRegistry::build`, a startup assertion rather than an input
-//! validation), so nothing here can drift and nothing here can fail.
+//! enforced agreement. The registry every consumer reads is M7's module
+//! constant (`skep_links::registry`), built from them once per process under
+//! M7's own startup assertion, so nothing here can drift and nothing here can
+//! fail.
 
 use skep_arrangement::M5State;
 use skep_content::ContentStore;
@@ -35,19 +36,13 @@ impl World {
     ///
     /// The five reserved type addresses the M7 slice dispatches on are
     /// in-docuverse GHOST TUMBLERS (owner ruling, 2026-08-26): content
-    /// positions 1..=5 of doc 1 of account 1 — the operator's, by the
-    /// claim-ceremony convention — of the registry node `1.1`. Nothing is
-    /// seeded at them and nothing ever will be: collision-freedom ("a
-    /// reserved name can never equal an allocated address") is the
-    /// ALLOCATOR'S non-reissue guarantee, not this genesis's — M3 compiles
-    /// the matching ghost-region floor (`skep_namespace::ghost_position`;
-    /// the allocator reading is the-frontier-starts-past-the-region, since
-    /// M3's compressed representation cannot skip an ordinal without
-    /// allocating it), so the ceremony's doc-1 mint lands at its ordinary
-    /// ordinal, the ghost positions sit inside that real doc-1, and its
-    /// first content mint lands at position 6. The abolished out-of-tree
-    /// `9.0.9.0.9.0.9.k` space argued from unreachability of a foreign
-    /// subtree; no address space exists outside the docuverse.
+    /// positions of the registry node's doc 1, which
+    /// `skep_namespace::ghost_position` spells. Nothing is seeded at them and
+    /// nothing ever will be, and that is not this genesis's to guarantee:
+    /// non-reissue — a reserved name never equals an allocated address — is
+    /// M3's allocator floor, which `skep_namespace::GHOST_POSITIONS` names and
+    /// M3 argues where the floor is written. So genesis seeds the namespace
+    /// roots alone, and the ghost region needs nothing from it.
     ///
     /// Σ₀ CARRIES ITS OWN DERIVED HINTS, and must: under
     /// `Durability::InMemory` this value IS the installed root — that mode

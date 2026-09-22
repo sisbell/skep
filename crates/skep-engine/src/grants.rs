@@ -276,7 +276,10 @@ impl GrantRecord {
 /// methods: whether a `from` names an earlier record of its home
 /// ([`Grants::holds_earlier`]), and whether that record is an operative grant
 /// ([`Grants::is_operative`]). How the key and the operative set relate is
-/// this type's to keep, so no caller reads either structure to answer them.
+/// this type's to keep, on both sides: no caller reads either structure to
+/// answer those questions, and every record the fold takes goes through
+/// [`Grants::take_admitted`], the fold's one caller of the three transitions
+/// below, so every operative grant is in the key.
 ///
 /// The set and its two indexes must agree, and [`Grants::admit`] and
 /// [`Grants::withdraw`] are the only two transitions that move any of the
@@ -285,7 +288,9 @@ impl GrantRecord {
 /// caller, and a fold arm that moved the set without its index would have to
 /// be written past those two rather than beside them. The earlier-record key
 /// stands apart from that agreement: [`Grants::keep_earlier`] is its one
-/// transition, it only ever gains, and neither of the other two touches it.
+/// transition, it only ever gains, neither of the other two touches it, and
+/// [`Grants::take_admitted`] takes it for every admitted record, after that
+/// record's effect.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Grants {
     /// Admitted, unrevoked grants, keyed by the grant link's OWN address —
@@ -301,12 +306,13 @@ pub(crate) struct Grants {
     /// withdrawn grant, or naming the revocation, finds nothing there, and a
     /// test keyed on it alone reads such a record as a fresh grant.
     ///
-    /// A record joins AFTER its own classification ([`fold_one`]), so at any
-    /// record's turn the members from its home are exactly the records that
-    /// home deposited EARLIER — the deposit order the test is stable under.
-    /// One set for every home: a link address names its own home
-    /// ([`document_of`]), so [`Grants::holds_earlier`] asks the same-home
-    /// question of the address and keeps no per-home structure.
+    /// A record joins AFTER its own classification
+    /// ([`Grants::take_admitted`]), so at any record's turn the members from
+    /// its home are exactly the records that home deposited EARLIER — the
+    /// deposit order the test is stable under. One set for every home: a link
+    /// address names its own home ([`document_of`]), so
+    /// [`Grants::holds_earlier`] asks the same-home question of the address
+    /// and keeps no per-home structure.
     ///
     /// FOLD STATE like the rest, journaled nowhere and re-derived by [`seed`]
     /// off the same walk. It grows by one address per admitted record of the
@@ -441,10 +447,39 @@ impl Grants {
             .collect()
     }
 
+    /// The fold's step over ONE ADMITTED record of the class, deposited at
+    /// `addr` in `home` by `issuer` — [`admitted_issuer`]'s answer. The record
+    /// is classified against the fold as it stands and its kind takes effect:
+    /// a GRANT is admitted, a REVOCATION withdraws the grant it names, and a
+    /// record of NEITHER kind moves nothing honored. Then, whatever its kind,
+    /// it is kept as an earlier record, so a later record of its home naming
+    /// it is answered by PUB-5.15's second outcome.
+    ///
+    /// ONE step, because the classification rests on two orders inside it.
+    /// The record is classified BEFORE it joins the key, so it never names
+    /// itself as an earlier record. And it joins the key in the same step as
+    /// its effect, so every grant this makes operative is in the key — without
+    /// which a later record naming it would pass the earlier-record test by,
+    /// meet the ladder, and revoke nothing
+    /// (`the_earlier_record_key_keeps_what_the_operative_set_lets_go` holds a
+    /// fresh grant in both at once).
+    fn take_admitted(&mut self, addr: &Address, home: Address, issuer: Address, value: &Link) {
+        let kind = classify(self, &home, value);
+        match kind {
+            Kind::Grant { content_prefix, grantee } => {
+                self.admit(addr.clone(), GrantRecord { home, issuer, content_prefix, grantee });
+            }
+            Kind::Revoke { revoked } => self.withdraw(&revoked),
+            Kind::Neither => {}
+        }
+        self.keep_earlier(addr.clone());
+    }
+
     /// ADMIT `grant`, deposited at link address `addr`: it joins the operative
     /// set under its own address and its [`GrantIndexEntry`] joins the query
     /// index that entry names. One transition, so the set and its projection
-    /// cannot part. [`admitted_issuer`] is the test this acts on.
+    /// cannot part. [`Grants::take_admitted`] is its one caller, for a record
+    /// [`classify`] finds a GRANT.
     fn admit(&mut self, addr: Address, grant: GrantRecord) {
         self.index_add(grant.index_entry());
         self.records.insert(addr, grant);
@@ -489,11 +524,12 @@ impl Grants {
 
     /// Whether `addr` is the link address of an OPERATIVE grant — admitted
     /// and not withdrawn — which is the one earlier record a later record of
-    /// its home REVOKES (PUB-5.15). Every such grant is in the earlier-record
-    /// key as well, and a withdrawal is what parts the two answers: the grant
-    /// leaves the operative set and stays in the key. So of a record the key
-    /// holds, this is the question that tells a revocation from a record of
-    /// neither kind.
+    /// its home REVOKES (PUB-5.15). [`Grants::take_admitted`] keeps every
+    /// record it takes as an earlier one, so every such grant is in the
+    /// earlier-record key as well, and a withdrawal is what parts the two
+    /// answers: the grant leaves the operative set and stays in the key. So of
+    /// a record the key holds, this is the question that tells a revocation
+    /// from a record of neither kind.
     fn is_operative(&self, addr: &Address) -> bool {
         self.records.contains_key(addr)
     }
@@ -568,8 +604,8 @@ fn is_grant_typed(value: &Link, grants_class: &Address) -> bool {
 
 /// Admission (I4), asked of a record's home: the ISSUER (ω of `home`) where
 /// the home is that issuer's OWN doc 1 and PUBLISHED, else `None`. A QUERY,
-/// which is why it is named for its answer — [`Grants::admit`] is the
-/// transition that acts on it.
+/// which is why it is named for its answer — [`Grants::take_admitted`] is the
+/// step that acts on it.
 ///
 /// `home` is a registered document (a deposit lands in no unregistered home,
 /// M7's HomeNotRegistered gate). `published(home)` is the exception-set miss —
@@ -708,15 +744,8 @@ fn classify(prev: &Grants, home: &Address, value: &Link) -> Kind {
 /// seed threads its own across the walk, and the fold gives a clone of the
 /// world's. The two paths that move nothing hand it straight back, so a link
 /// deposit that is no admitted record of the class — which is nearly all of
-/// them — costs no copy at all. [`classify`] reads it before the move, since
-/// a revocation is recognized by the operative set it is about to leave, and
-/// an earlier record by the key this one has not yet joined.
-///
-/// EVERY admitted record of the class moves the fold by one step at least:
-/// whatever its kind, it joins the earlier-record key — after its own
-/// classification, so a record naming its own address names no earlier one. A
-/// record of NEITHER KIND moves that key and nothing else, which is what lets
-/// the next record naming IT be answered as PUB-5.15's second outcome states.
+/// them — costs no copy at all; an admitted one is taken by
+/// [`Grants::take_admitted`], whatever its kind.
 fn fold_one(
     prev: Grants,
     namespace: &M3State,
@@ -737,16 +766,8 @@ fn fold_one(
     let Some(issuer) = admitted_issuer(namespace, drafts, &home) else {
         return prev; // unadmitted: neither grant nor revocation
     };
-    let kind = classify(&prev, &home, value);
     let mut next = prev;
-    match kind {
-        Kind::Grant { content_prefix, grantee } => {
-            next.admit(addr.clone(), GrantRecord { home, issuer, content_prefix, grantee });
-        }
-        Kind::Revoke { revoked } => next.withdraw(&revoked),
-        Kind::Neither => {}
-    }
-    next.keep_earlier(addr.clone());
+    next.take_admitted(addr, home, issuer, value);
     next
 }
 

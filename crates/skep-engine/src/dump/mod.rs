@@ -58,7 +58,7 @@ use skep_kernel::WorldState;
 use skep_links::{Endset, LinkState, ShippedType, View};
 use skep_namespace::PrincipalId;
 
-use crate::canon::{render, to_tree, SerdeTree};
+use crate::canon::{to_tree, SerdeTree};
 use crate::grants::GrantRecord;
 use crate::publication::Draft;
 use crate::world::World;
@@ -73,13 +73,12 @@ use filter::filter_tree;
 ///
 /// What equal dumps CERTIFY is what this format renders: every authoritative
 /// slice, and every hint the hints section reaches. It is not that the worlds
-/// agree — six derived structures sit outside the rendering, three of them the
-/// grant fold's: its two query indexes, which are what the read predicate's
-/// third clause probes, and its earlier-record key.
-/// [`crate::Engine::check_hints_of`] names all six and gives
-/// the argument that the two indexes cannot in fact diverge; a harness
-/// treating equal dumps as equal worlds is reading past that argument rather
-/// than resting on it.
+/// agree: derived structures sit outside the rendering — the grant fold's two
+/// query indexes, which the read predicate's third clause probes, among them
+/// — and [`crate::Engine::check_hints_of`] names every one and gives the
+/// argument that those two indexes cannot in fact diverge; a harness treating
+/// equal dumps as equal worlds is reading past that argument rather than
+/// resting on it.
 ///
 /// The text goes out — through `Display`, `as_str`, `as_bytes`,
 /// `into_string` — and none comes in. A dump exists only because an engine
@@ -140,12 +139,10 @@ fn dump_tree(world: &World) -> SerdeTree {
     ])
 }
 
-/// Banner, tree, newline — the one rendering both dumps share.
+/// Banner, tree, newline — the one rendering both dumps share, the tree
+/// written by its own deterministic `Display`.
 fn render_dump(root: &SerdeTree) -> WorldDump {
-    let mut s = String::from(BANNER);
-    render(root, &mut s);
-    s.push('\n');
-    WorldDump(s)
+    WorldDump(format!("{BANNER}{root}\n"))
 }
 
 /// Render one world UNFILTERED — the harness-only walk.
@@ -332,8 +329,8 @@ const SLICE_VIEWS: [(&str, View); 2] = [("audit", View::Audit), ("active", View:
 /// declarations could hold without contradicting either.
 ///
 /// The names are the dump's own wire vocabulary, as [`shipped_label`]'s are,
-/// and the ORDER is free: `render` sorts a map's entries, so the section's
-/// bytes do not depend on it.
+/// and the ORDER is free: the rendering sorts a map's entries, so the
+/// section's bytes do not depend on it.
 const PREDICATE_PROJECTIONS: [(&str, ShippedType, View); 4] = [
     ("predicates.defs.audit", ShippedType::PredDef, View::Audit),
     ("predicates.defs.active", ShippedType::PredDef, View::Active),
@@ -442,7 +439,7 @@ fn hints_tree(world: &World) -> SerdeTree {
     }
 
     // The engine's own derived index: the exception set (PUB-7.5), a map
-    // draft → owner account. Collected in the set's hash order; `render`
+    // draft → owner account. Collected in the set's hash order; the rendering
     // sorts map entries, so the text is a function of the contents alone.
     entries.push((key("publication.drafts"), drafts_tree(world)));
 
@@ -474,8 +471,8 @@ fn drafts_tree(world: &World) -> SerdeTree {
 /// that map, `M3State::documents`, the walk the exception set's seed makes;
 /// the hints' `publication.drafts` is the FOLD's copy, and
 /// [`crate::Engine::check_hints_of`] compares that copy against the seed. A
-/// SEQUENCE — `render` sorts maps alone — in the map's own address order,
-/// which is the order the filter preserves.
+/// SEQUENCE — the rendering sorts maps alone — in the map's own address
+/// order, which is the order the filter preserves.
 ///
 /// One walk, TWO RULES over it, and the two agree on an invariant of M3's
 /// rather than on a shared test. This section keeps an entry whose stored
@@ -522,7 +519,7 @@ fn publication_tree(world: &World) -> SerdeTree {
 /// keeps the certificate about whole RECORDS: a field this section never
 /// rendered would be one a seed and a fold could disagree on in silence.
 ///
-/// Collected in the fold's hash order; `render` sorts. Kept WHOLE by the
+/// Collected in the fold's hash order; the rendering sorts. Kept WHOLE by the
 /// per-class filter: a grant is a published document's record, and the
 /// addresses it names are not secret (PUB-1.13).
 fn grants_tree(world: &World) -> SerdeTree {
@@ -683,8 +680,8 @@ impl crate::Engine {
 
     /// Run the hint-faithfulness check against the committed world.
     ///
-    /// What `Ok(())` certifies — and the six derived structures it leaves
-    /// uncertified — is [`crate::Engine::check_hints_of`]'s.
+    /// What `Ok(())` certifies, and which derived structures it leaves
+    /// uncertified, is [`crate::Engine::check_hints_of`]'s.
     ///
     /// COST: [`crate::Engine::check_hints_of`]'s, over the committed world.
     pub fn check_hints(&self) -> Result<(), HintDivergence> {
@@ -790,9 +787,7 @@ mod tests {
     }
 
     pub(super) fn render_of(tree: &SerdeTree) -> String {
-        let mut s = String::new();
-        render(tree, &mut s);
-        s
+        tree.to_string()
     }
 
     /// An in-memory engine whose every slice holds something, driven through

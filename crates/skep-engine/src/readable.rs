@@ -3,13 +3,14 @@
 //! visibility class every write is gated at.
 //!
 //! `readable(doc, principal) = published(doc) ∨ subtree ∨ grant_exists(doc,
-//! principal)`: three clauses over three owners, composed here and nowhere
-//! else. The published clause is the exception set's (`crate::publication`),
-//! the subtree clause is M3's ω answer memoized in that same set, and the
-//! grant clause is the grant fold's (`crate::grants`). No clause is decided
-//! here — this module states their composition, their short-circuit order and
-//! the projection every one of them shares (`trunk_of`: a version member reads
-//! as its document, PUB-2.15).
+//! principal)`: three clauses, composed here and nowhere else. The PUBLISHED
+//! clause is the exception set's (`crate::publication`) and the GRANT clause
+//! the grant fold's (`crate::grants`); the SUBTREE clause is this module's own
+//! — `in_owner_subtree`, over two answers of M3's: the owner the exception set
+//! memoized at the mint, and the reader's seat. This module states that
+//! clause, the three clauses' composition and short-circuit order, and the
+//! projection all three share (`trunk_of`: a version member reads as its
+//! document, PUB-2.15).
 //!
 //! The predicate has ONE body, [`ReaderClass::readable`]: the predicate closed
 //! over one principal and one world. [`World::readable`] asks it through a
@@ -107,34 +108,17 @@ impl World {
     ///   registered draft: it reads as that draft, and is withheld wherever
     ///   the draft is
     ///   (`a_version_member_shaped_address_under_a_draft_reads_as_the_draft`).
-    /// * SUBTREE (PUB-1.32 as amended, PUB RES-215; PUB-7.2) — BOTH WAYS:
-    ///   `owner_account(doc) ⊑ account(principal) ∨ account(principal) ⊑
-    ///   owner_account(doc)`, TWO prefix compares off the exception set's
-    ///   MINT-TIME owner, the second run only where the first fails — never
-    ///   a subtree enumeration, never a nearest-account walk. The first
-    ///   admits a principal at or BENEATH the owner (the owner's delegates,
-    ///   transitively); the second a principal at or ABOVE it (the owner's
-    ///   parent account and every account above that), so a parent account
-    ///   reads its sub-accounts' drafts as a sub-account reads its parent's.
-    ///   That is a READ and never ω: ownership stays exact-match, and a
-    ///   parent account owns none of a sub-account's documents. Org members
-    ///   are SIBLINGS — neither prefix contains the other — so neither reads
-    ///   the other's drafts. Each compare's LEFT operand must be an ACCOUNT,
-    ///   and the two sides discharge that differently. The OWNER's tier is
-    ///   asserted where the exception set memoizes it (`crate::publication`):
-    ///   a node-tier owner would contain every account beneath it and admit
-    ///   each of their principals. The PRINCIPAL's is tested HERE, ahead of
-    ///   the second compare, because its seat is M3's registry answer
-    ///   verbatim and nothing asserts it: THE NODE-TIER PRINCIPAL 0 IS
-    ///   EXCLUDED BY NAME (PUB-1.32). Principal 0 is seated at a node — `[1]`,
-    ///   M3's genesis seat — and a node prefix contains every account beneath
-    ///   it, so the bare second compare would admit it to every draft on the
-    ///   board. Under the first compare alone its exclusion was a consequence
-    ///   of the direction (a node prefix is shorter than any account's), and
-    ///   that does not survive the second. So a seat that is no ACCOUNT —
-    ///   principal 0's, or a sub-node's — is no account's ancestor for this
-    ///   clause: the node reads no draft by subtree, by grant alone
-    ///   (`the_subtree_clause_runs_both_ways`,
+    /// * SUBTREE (PUB-1.32 as amended, PUB RES-215; PUB-7.2) — BOTH WAYS: a
+    ///   principal reads the drafts of the account it is seated at, of every
+    ///   account above that and of every account beneath it — its own line of
+    ///   ancestry, so a parent reads its sub-accounts' drafts as a sub-account
+    ///   reads its parent's, and SIBLINGS read nothing of each other's. That
+    ///   is a READ and never ω: ownership stays exact-match. A seat that is no
+    ///   ACCOUNT reads no draft this way — THE NODE-TIER PRINCIPAL 0 IS
+    ///   EXCLUDED BY NAME (PUB-1.32), and reads a draft by grant alone. Two
+    ///   prefix compares off the owner the exception set fixed at the mint,
+    ///   never a subtree enumeration; the rule and its tier gate are
+    ///   `in_owner_subtree`'s (`the_subtree_clause_runs_both_ways`,
     ///   `the_node_tier_principal_reads_no_draft_by_subtree`).
     /// * GRANT (PUB-5.8, PUB-5.19) — the grant fold, grantee PRINCIPAL-EXACT,
     ///   coverage containment ∩ issuer = doc's ω owner. A principal M3 holds
@@ -280,23 +264,36 @@ impl<'w> ReaderClass<'w> {
         // compare against the owner's, and as the grantee to probe the fold
         // with.
         let account = *self.seat.get_or_init(|| world.namespace.principal_prefix(id));
-        // Subtree clause — both ways (PUB-1.32 as amended, PUB RES-215): the
-        // owner's prefix containing the principal's, or the principal's
-        // containing the owner's, the second compare run only where the
-        // first fails — and only for a seat at the ACCOUNT tier. Principal 0
-        // is seated at a node, which contains every account beneath it, so
-        // it is excluded by name here: a node-tier seat is no account's
-        // ancestor for this clause.
-        if account.is_some_and(|account| {
-            prefix_contains(owner, account)
-                || (account.level() == Level::Account && prefix_contains(account, owner))
-        }) {
+        // Subtree clause — `in_owner_subtree` states it.
+        if account.is_some_and(|seat| in_owner_subtree(seat, owner)) {
             return true;
         }
         // Grant clause — the fold, grantee exact (`None` account ⟹ only the
         // ANY-PRINCIPAL grants can match, which the fold probes regardless).
         world.grants.grant_exists(owner, account, &trunk)
     }
+}
+
+/// The SUBTREE clause (PUB-1.32 as amended, PUB RES-215; PUB-7.2): whether a
+/// principal seated at `seat` reads the drafts owned by account `owner` by
+/// ancestry alone — the clause's whole rule, and the one place it is written.
+///
+/// BOTH WAYS, as two prefix compares off the owner the exception set fixed at
+/// the mint, the second run only where the first fails: the first admits a
+/// seat at or BENEATH the owner, the second a seat at or ABOVE it.
+///
+/// Each compare's LEFT operand must be an ACCOUNT, because a node prefix
+/// contains every account beneath it, and the two sides discharge that
+/// differently. The OWNER is the first compare's left operand, and its tier
+/// is asserted where the exception set memoizes it (`crate::publication`'s
+/// `owner_account_of`); a node seat never passes that compare, being shorter
+/// than any account prefix. The SEAT is the second compare's left operand,
+/// and its tier is tested here, ahead of that compare, because the seat is
+/// M3's registry answer verbatim and nothing asserts it: principal 0 is
+/// seated at the node `[1]`, and the bare second compare would admit it to
+/// every draft on the board.
+fn in_owner_subtree(seat: &Address, owner: &Address) -> bool {
+    prefix_contains(owner, seat) || (seat.level() == Level::Account && prefix_contains(seat, owner))
 }
 
 /// The read predicate as M10's capability (lane 3.3, §1): M10 is generic over
@@ -329,7 +326,29 @@ impl skep_febe::ReadableWorld for World {
 
 #[cfg(test)]
 mod tests {
-    use crate::testkit::{delegated_account, mem_engine, USER};
+    use crate::testkit::{addr, delegated_account, mem_engine, USER};
+
+    use super::in_owner_subtree;
+
+    /// The subtree clause over bare addresses, one case per way it answers: a
+    /// seat at the owner, beneath it or above it reads the owner's drafts; a
+    /// sibling's does not; and neither does a NODE seat — principal 0's —
+    /// though its prefix contains the owner's, because the second compare runs
+    /// for an account-tier seat alone. The integration suite reaches these
+    /// cases through whole boards; this is the rule on its own.
+    #[test]
+    fn the_subtree_clause_admits_a_seat_s_line_of_ancestry_and_no_node() {
+        let owner = addr(&[1, 0, 1, 2]);
+        for (seat, reads, what) in [
+            (addr(&[1, 0, 1, 2]), true, "the owner's own seat"),
+            (addr(&[1, 0, 1, 2, 3]), true, "a seat beneath the owner"),
+            (addr(&[1, 0, 1]), true, "a seat above the owner"),
+            (addr(&[1, 0, 1, 3]), false, "a sibling's seat"),
+            (addr(&[1]), false, "the node's seat, above every account"),
+        ] {
+            assert_eq!(in_owner_subtree(&seat, &owner), reads, "{what}");
+        }
+    }
 
     /// The seat is looked up LAZILY and at most once: the guest and a
     /// published document answer before any scan of the principal registry,

@@ -48,13 +48,10 @@ struct Board {
 /// (principal 2), a stranger to A's subtree until granted.
 fn board(engine: &Engine) -> Board {
     let ns = engine.namespace();
-    let prefix = |engine: &Engine| {
-        engine.kernel().snapshot().world().m3().next_account_prefix(&node1()).expect("a prefix")
-    };
-    let (acct_a, _) = ns.delegate(BOOTSTRAP_PRINCIPAL, prefix(engine).tumbler().clone(), A).expect("A");
+    let acct_a = delegated_account(engine, &node1(), BOOTSTRAP_PRINCIPAL, A);
     let (home_a, _) = ns.create_new_document(A, &acct_a, None).expect("A's published home");
     let (draft_a, _) = ns.create_new_document(A, &acct_a, None).expect("A's private draft");
-    let (acct_b, _) = ns.delegate(BOOTSTRAP_PRINCIPAL, prefix(engine).tumbler().clone(), B).expect("B");
+    let acct_b = delegated_account(engine, &node1(), BOOTSTRAP_PRINCIPAL, B);
     let owner = Caller::Principal(A);
     engine
         .vstream()

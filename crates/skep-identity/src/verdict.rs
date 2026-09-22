@@ -100,7 +100,11 @@ pub enum Inert {
     NoHolder,
     /// An ENROLLMENT homed in neither the holder's space nor the account's
     /// genesis registry, or a genesis attempt on a seeded account — the
-    /// latch (AUTH-2.71).
+    /// latch — or the HANDOFF LATCH, tested inside the cell the genesis arm
+    /// would otherwise honor: a genesis at an account beneath a
+    /// bootstrap-tier account naming a key that already stands in the set
+    /// that opens the account above it, the same token and no row of its
+    /// own (AUTH-2.71).
     NotGenesisRegistry,
     /// A RETIREMENT homed outside the subject account's own space
     /// (AUTH-2.76): no ancestor retires a holder's keys.

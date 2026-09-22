@@ -293,11 +293,11 @@ pub(crate) enum CredentialRefusal {
     /// Slot (8)'s CLAIM arm — the claim's own admission (PUB-6.63, RES-24;
     /// PUB round 2, lane 4.2): the claim is refused where the top-level
     /// account space holds any principal above the genesis floor but the one
-    /// this ceremony's own `delegate` minted. Token `claim_residue` — OWNER
-    /// CONFIRM OWED (the code is the wire's to name beside `claim_first`;
-    /// proposed in the pre-claim tokens' convention). The face is PUB-6.63's
-    /// verbatim: "this board carries pre-claim residue — re-genesis before
-    /// claiming."
+    /// this ceremony's own `delegate` minted. Token `claim_residue` —
+    /// owner-confirmed as named and worded (2026-09-20; AUTH RES-202 pins it
+    /// beside `claim_first` in the pre-claim tokens' convention). The face is
+    /// PUB-6.63's verbatim: "this board carries pre-claim residue — re-genesis
+    /// before claiming."
     ClaimResidue,
 }
 

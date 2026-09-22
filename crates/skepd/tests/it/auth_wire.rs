@@ -1979,6 +1979,207 @@ fn retiring_a_key_needs_an_anchor_session_and_kills_that_keys_sessions() {
     sd.shutdown();
 }
 
+/// THE RETIRE OF A LAST ANCHOR, over the wire (the conformance pack's row 14;
+/// AUTH-5.46's last-anchor arm, AUTH-3.20, AUTH-3.21's "where it holds none
+/// the act stays device-grade"). An anchor session retires EVERY enrolled
+/// anchor in one record — a second anchor it enrolled, and its own key — a
+/// device key remaining: the act COMMITS (slot (6) reads the session's key,
+/// an anchor of the set; the fold's whole-set test sees the device key
+/// stand), and both anchors' sessions are dead at their next presentation,
+/// the retiring one included. From then on the account is device-grade for
+/// good: a retired anchor signs no handshake; an anchor-flagged enrolment
+/// answers `anchor_session_required` from the device session and from a bare
+/// one, there being no key left that could open the session the gate asks
+/// for, while the same key UNFLAGGED enrols; and a HANDOFF genesis beneath
+/// the account — refused `anchor_session_required` from the device session
+/// while an anchor stood — now COMMITS from it: the downgrade AUTH-5.46 names
+/// beside the permanence, AUTH-3.21's anchorless arm.
+#[test]
+fn retiring_the_last_anchor_commits_kills_the_retiring_session_and_leaves_the_account_device_grade() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let device_fp = fingerprint_hex(&device_key());
+    let anchor_fp = fingerprint_hex(&anchor_key());
+    let device = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let anchor = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+
+    // A SECOND anchor, enrolled from the anchor's session — the gate admits an
+    // anchor-flagged enrolment from an anchor session — and a session it opens.
+    let second = distinct_key(64);
+    let second_fp = fingerprint_hex(&second);
+    let ordinal = next_content_ordinal(port, Some(&anchor), CLAIMANT_DOC1);
+    let flagged =
+        record_atom(port, &anchor, ordinal, &enroll_atom_flagged(&[(&second, true)]), T_ENROLL);
+    expect_resp(&deposit(port, &anchor, &flagged, T_ENROLL), "ack_addr");
+    let second_session = open_signed_session(port, CLAIMANT_PRINCIPAL, &second);
+
+    // The subdivision X.2 the handoff cell is read at (X.1 is the held agent
+    // space, which takes no genesis). While an anchor stands in X's set, X's
+    // handoff is anchor-grade: the device session's genesis there is refused.
+    delegate_under(port, &bare, CLAIMANT_ACCOUNT, 951);
+    let (x2, _) = delegate_under(port, &bare, CLAIMANT_ACCOUNT, 952);
+    let handoff = land_record(port, &device, CLAIMANT_DOC1, &fresh_member(65), T_ENROLL);
+    let v = enroll_for(port, &device, CLAIMANT_DOC1, &handoff, &x2);
+    assert_eq!(verdict(&v), ANCHOR_SESSION_REQUIRED, "an anchor enrolled: X's handoff is anchor-grade: {v}");
+    assert_eq!(enrolled_count(port, &x2), 0, "a refused handoff commits nothing");
+
+    // THE ACT: every enrolled anchor retired in one record, from the first
+    // anchor's own session, the device key remaining — it COMMITS.
+    let ordinal = next_content_ordinal(port, Some(&anchor), CLAIMANT_DOC1);
+    let last_anchors =
+        record_atom(port, &anchor, ordinal, &retire_atom(&[&anchor_fp, &second_fp]), T_RETIRE);
+    expect_resp(&deposit(port, &anchor, &last_anchors, T_RETIRE), "ack_addr");
+
+    // `key_set`: the device key alone enrolled, no anchor flag left; both
+    // anchors retired, each under the flag it was enrolled with.
+    let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
+    let enrolled = v["enrolled"].as_array().expect("enrolled");
+    assert_eq!(enrolled.len(), 1, "{v}");
+    assert_eq!(enrolled[0]["fingerprint"].as_str(), Some(device_fp.as_str()), "{v}");
+    assert_eq!(enrolled[0]["anchor"].as_bool(), Some(false), "no anchor stands enrolled: {v}");
+    let retired: Vec<(String, bool)> = v["retired"]
+        .as_array()
+        .expect("retired")
+        .iter()
+        .map(|e| (e["fingerprint"].as_str().expect("fp").to_string(), e["anchor"].as_bool().expect("flag")))
+        .collect();
+    assert_eq!(retired.len(), 2, "{v}");
+    for fp in [&anchor_fp, &second_fp] {
+        assert!(retired.contains(&(fp.clone(), true)), "{fp} retired under its anchor flag: {v}");
+    }
+
+    // THE DEATH: the retiring session and the second anchor's are dead at
+    // the commit — `closed` at their next presentation — the device's lives,
+    // and a retired anchor signs no handshake.
+    assert!(presented_dead(port, &anchor), "the retiring anchor's session dies at the commit");
+    assert!(presented_dead(port, &second_session), "the second anchor's session dies with its key");
+    assert!(!presented_dead(port, &device), "the device session is untouched");
+    let (st, _, _) = signed_handshake(port, CLAIMANT_PRINCIPAL, &anchor_key());
+    assert_eq!(st, 401, "a retired anchor signs no handshake");
+
+    // THE PERMANENCE (AUTH-5.46): no anchor can ever be enrolled on this
+    // account again. The gate asks for a session an anchor of the account
+    // established (AUTH-3.20), and no enrolled key could open one.
+    let fresh = distinct_key(66);
+    let ordinal = next_content_ordinal(port, Some(&device), CLAIMANT_DOC1);
+    let flagged =
+        record_atom(port, &device, ordinal, &enroll_atom_flagged(&[(&fresh, true)]), T_ENROLL);
+    for (hand, token) in [("the device session", &device), ("a bare session", &bare)] {
+        let v = deposit(port, token, &flagged, T_ENROLL);
+        assert_eq!(rejected_detail(&v), "credential_refused:anchor_session_required", "{hand}: {v}");
+    }
+    // …while the account stays usable at DEVICE grade: the same key,
+    // unflagged, enrols from the device session.
+    let ordinal = next_content_ordinal(port, Some(&device), CLAIMANT_DOC1);
+    let plain =
+        record_atom(port, &device, ordinal, &enroll_atom_flagged(&[(&fresh, false)]), T_ENROLL);
+    expect_resp(&deposit(port, &device, &plain, T_ENROLL), "ack_addr");
+
+    // THE DOWNGRADE beside the permanence: X's set holds no anchor, so X's
+    // handoff — the SAME record, the SAME frame, refused from this session
+    // above — is device-grade now and COMMITS from it.
+    expect_resp(&enroll_for(port, &device, CLAIMANT_DOC1, &handoff, &x2), "ack_addr");
+    assert_eq!(enrolled_count(port, &x2), 1, "the recipient's key, latched from a device session");
+
+    sd.shutdown();
+}
+
+/// `would_empty`, `no_holder` and `not_holder_retirement` OVER THE WIRE (the
+/// conformance pack's row 15; AUTH-3.56's three rows — AUTH-2.74; AUTH-2.71,
+/// AUTH-2.76): the fold's own retirement verdicts as the `credential_refused`
+/// details a live daemon answers at slot (3), each from the hand best placed
+/// to make the act — a SIGNED session, an anchor's where the claimant acts,
+/// so no gate behind (3) could be what refuses — and `key_set` unmoved after
+/// each. The fold corpus pins the three at the crate; this is the join the
+/// daemon writes and the wire spells.
+///
+/// * `would_empty` — the claimant retires its WHOLE enrolled set, the anchor
+///   and the device key, in one record: the record is inert whole, both keys
+///   stand, and the device key still opens a session;
+/// * `not_holder_retirement` — the claimant, whose doc 1 is a member's
+///   genesis registry, retires the member's key from THAT registry: the
+///   retirement arms never read the delegator, no ancestor retires a
+///   holder's keys, and the member's key still opens the member's session;
+/// * `no_holder` — an own-space retirement at `X.2`, a subdivision that opens
+///   BY REFERENCE and has never held a key of its own, written from the
+///   session as `X.2` the holder's device key opened and naming that key: the
+///   account's own set is empty, and the key stands at `X` as `X`'s own.
+#[test]
+fn the_fold_s_three_retirement_refusals_are_answered_over_the_wire_and_move_no_key() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let device_fp = fingerprint_hex(&device_key());
+    let anchor_fp = fingerprint_hex(&anchor_key());
+    let anchor = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let key_set =
+        |account: &str| op(port, None, &format!(r#"{{"op":"key_set","account":"{account}"}}"#));
+    // The two tables of a `key_set` answer — `as_of` aside, which every commit
+    // (a landed record atom included) moves.
+    let tables = |v: &Value| (v["enrolled"].clone(), v["retired"].clone());
+    let fingerprints = |v: &Value, field: &str| -> Vec<String> {
+        v[field]
+            .as_array()
+            .unwrap_or_else(|| panic!("{field}: {v}"))
+            .iter()
+            .map(|e| e["fingerprint"].as_str().expect("fp").to_string())
+            .collect()
+    };
+
+    // `would_empty` — every enrolled key of the claimant in one retirement.
+    let before = key_set(CLAIMANT_ACCOUNT);
+    assert_eq!(fingerprints(&before, "enrolled").len(), 2, "the ceremony's two keys: {before}");
+    let ordinal = next_content_ordinal(port, Some(&anchor), CLAIMANT_DOC1);
+    let whole_set =
+        record_atom(port, &anchor, ordinal, &retire_atom(&[&anchor_fp, &device_fp]), T_RETIRE);
+    let v = deposit(port, &anchor, &whole_set, T_RETIRE);
+    assert_eq!(rejected_detail(&v), "credential_refused:would_empty", "{v}");
+    assert_eq!(v["disposition"].as_str(), Some("permanent"), "{v}");
+    assert_eq!(tables(&key_set(CLAIMANT_ACCOUNT)), tables(&before), "the claimant's table is unchanged");
+    open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+
+    // `not_holder_retirement` — the member's key, retired from the claimant's
+    // doc 1: the member's genesis registry, and not its own space.
+    let member_key = distinct_key(67);
+    let member_fp = fingerprint_hex(&member_key);
+    let member = keyed_member(port, &anchor, 967, &member_key);
+    let member_before = key_set(&member);
+    assert_eq!(fingerprints(&member_before, "enrolled"), vec![member_fp.clone()], "{member_before}");
+    let ordinal = next_content_ordinal(port, Some(&anchor), CLAIMANT_DOC1);
+    let from_the_registry = record_atom(port, &anchor, ordinal, &retire_atom(&[&member_fp]), T_RETIRE);
+    let v = typed_link(port, &anchor, CLAIMANT_DOC1, &[from_the_registry.as_str()], &[member.as_str()], T_RETIRE);
+    assert_eq!(rejected_detail(&v), "credential_refused:not_holder_retirement", "{v}");
+    assert_eq!(v["disposition"].as_str(), Some("permanent"), "{v}");
+    assert_eq!(tables(&key_set(&member)), tables(&member_before), "the member's table is unchanged");
+    open_signed_session(port, 967, &member_key);
+
+    // `no_holder` — an own-space retirement at X.2, which opens by reference:
+    // its home minted and the record landed from the session as X.2.
+    delegate_under(port, &bare, CLAIMANT_ACCOUNT, 951);
+    let (x2, _) = delegate_under(port, &bare, CLAIMANT_ACCOUNT, 952);
+    let as_x2 = open_signed_session(port, 952, &device_key());
+    let x2_doc1 = create_doc(port, &as_x2, &x2);
+    let own_space = land_record(port, &as_x2, &x2_doc1, &retire_atom(&[&device_fp]), T_RETIRE);
+    let v = typed_link(port, &as_x2, &x2_doc1, &[own_space.as_str()], &[x2.as_str()], T_RETIRE);
+    assert_eq!(rejected_detail(&v), "credential_refused:no_holder", "{v}");
+    assert_eq!(v["disposition"].as_str(), Some("permanent"), "{v}");
+    let x2_set = key_set(&x2);
+    assert!(
+        fingerprints(&x2_set, "enrolled").is_empty() && fingerprints(&x2_set, "retired").is_empty(),
+        "X.2's own set is empty both ways: {x2_set}"
+    );
+    assert!(
+        fingerprints(&key_set(CLAIMANT_ACCOUNT), "enrolled").contains(&device_fp),
+        "the key named stands at X, as X's own"
+    );
+    open_signed_session(port, 952, &device_key());
+
+    sd.shutdown();
+}
+
 /// ENFORCING (§Identity) — the mode no other test instantiates, and the
 /// claim flip as the one runtime transition that reaches it, since
 /// `--local-trust` is fixed at open and pre-claim the flag is not consulted.
@@ -2155,6 +2356,13 @@ fn every_enrolled_key_signs_including_the_last_in_fingerprint_order() {
 /// of `SessionRejected` is that a client learns nothing about WHICH check
 /// failed. Each row is a different arm of `handshake`.
 ///
+/// The last two rows are E6's NEGATIVE half (AUTH-4.68: principal 0's set is
+/// the claimant's — "signed with a non-claimant ENROLLED key it fails"): a
+/// key enrolled NOWHERE, which would fail under any reading of 0's subject,
+/// and a key ENROLLED at a member account of this board, which fails only
+/// because 0 reads the claimant's set alone (AUTH-4.30 (i)'s first arm) and
+/// never "any account's".
+///
 /// Expiry is the one cause deliberately omitted: reaching it needs the 60 s
 /// TTL, and a sleeping test is the wrong trade.
 #[test]
@@ -2188,6 +2396,15 @@ fn every_handshake_failure_answers_the_same_401_bytes() {
     );
     assert_eq!(st, 200, "the first use of a nonce succeeds");
 
+    // E6's enrolled non-claimant key: a member hired into the claimant's doc 1
+    // — `keyed_member` opens the member's own session with it, so the key is
+    // live on this board — and, the positive half beside it, a CLAIMANT key
+    // opens principal 0.
+    let anchor = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
+    let member_key = distinct_key(23);
+    keyed_member(port, &anchor, 923, &member_key);
+    open_signed_session(port, 0, &device_key());
+
     let rows: Vec<(&str, String)> = vec![
         (
             "an origin outside the signed set",
@@ -2210,6 +2427,10 @@ fn every_handshake_failure_answers_the_same_401_bytes() {
         (
             "principal 0, whose subject is the claimant, signing with a foreign key",
             signed_body(0, &nonce_for(0), &origin, &distinct_key(22)),
+        ),
+        (
+            "principal 0, whose subject is the claimant, signing with a key ENROLLED at a member account",
+            signed_body(0, &nonce_for(0), &origin, &member_key),
         ),
     ];
     for (what, body) in rows {
@@ -2238,6 +2459,50 @@ fn every_handshake_failure_answers_the_same_401_bytes() {
         r#"{"error":"session_rejected"}"#,
         "the bare arm's refusal is the same one code"
     );
+
+    sd.shutdown();
+}
+
+/// E6's POSITIVE cell carried THROUGH TO A WRITE (the conformance pack's row
+/// 16; AUTH-4.68, AUTH-4.30 (i)'s first arm, AUTH-5.10): after the claim, a
+/// session as principal 0 opened with a CLAIMANT key — 0's subject is the
+/// claimant's set — runs the top-tier `delegate`, "0's whole reach", and it
+/// COMMITS: the new seat answers `effective_owner` with its own prefix and
+/// the id minted, the frontier moves, and the seated principal's bare
+/// session mints its home. Every other `delegate` from 0 in these suites
+/// rides a BARE session (`common::bootstrap_delegate`). And the reach is the
+/// PRINCIPAL's, never the key's: the SAME key opened as the claimant is
+/// refused by M3 on the SAME frame — `not_ancestor`, the prefix asked lying
+/// outside the caller's own, H1's `delegate` row (`authz.rs`) — top-tier
+/// seeding runs AS principal 0 and M3 refuses any other caller (AUTH-5.10).
+#[test]
+fn a_signed_principal_0_session_runs_the_top_tier_delegate_and_it_commits() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let as_zero = open_signed_session(port, PRINCIPAL_ZERO, &device_key());
+    let as_claimant = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let prefix = next_prefix_under(port, Some(&as_zero), "1");
+    let frame = format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":978}}"#);
+
+    // The same key, as the CLAIMANT: not principal 0, so not 0's reach — M3's
+    // own refusal, the daemon's register spelling it, and nothing commits.
+    let v = op(port, Some(&as_claimant), &frame);
+    assert_eq!(verdict(&v), "not_ancestor", "the claimant's principal owns no top-level frontier: {v}");
+    assert_eq!(v["disposition"].as_str(), Some("permanent"), "{v}");
+    assert_eq!(next_prefix_under(port, None, "1"), prefix, "nothing committed");
+
+    // As principal 0, SIGNED with the claimant's key: the delegate commits.
+    expect_resp(&op(port, Some(&as_zero), &frame), "ack_addr");
+    assert_eq!(
+        effective_owner(port, None, &prefix),
+        Some((prefix.clone(), 978)),
+        "a seat of its own, the id minted"
+    );
+    assert_ne!(next_prefix_under(port, None, "1"), prefix, "the frontier moved");
+    let seated = open_session(port, 978);
+    assert_eq!(create_doc(port, &seated, &prefix), format!("{prefix}.0.1"), "the seated principal's home mint");
+    assert!(!presented_dead(port, &as_zero), "the signed 0 session lives across its own write");
 
     sd.shutdown();
 }

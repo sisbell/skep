@@ -131,7 +131,7 @@ pub enum KeyParseError {
 }
 
 /// Prose, never a second wire vocabulary: a `KeyParseError` reaches no wire.
-/// `parse_enroll` answers `PayloadError::BadLine(n)` for every one of these,
+/// `parse_enroll` answers `PayloadError::BadRecord` for every one of these,
 /// and that is the fault a consumer renders (AUTH-1.28).
 impl fmt::Display for KeyParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

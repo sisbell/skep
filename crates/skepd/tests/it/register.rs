@@ -780,6 +780,11 @@ fn i10_b_the_claim_refuses_over_a_second_hand_s_residue() {
 
     let v = op(port, Some(&signed), &claim_frame(&operator.doc1, &operator.account));
     assert_eq!(v["resp"].as_str(), Some("rejected"), "I10.b: the claim refuses over pre-claim residue — two top-level principals above the genesis floor: {v}");
+    // The refusal's BYTES, as the wire spells them (§Credential refusals;
+    // AUTH-6.23's row; PUB-6.63): `credential_refused` with the detail
+    // `claim_residue`, permanent — no act on the board clears it.
+    assert_eq!(verdict(&v), "credential_refused:claim_residue", "I10.b: the token's bytes: {v}");
+    assert_eq!(v["disposition"].as_str(), Some("permanent"), "I10.b: {v}");
     assert!(!claimed(port), "…and the board stays unclaimed, its one cure re-genesis");
     sd.shutdown();
 }
@@ -892,6 +897,10 @@ fn i11_d_the_operator_s_lost_state_retry_is_refused_at_the_claim() {
     let signed = open_signed_session(port, 802, &device_key());
     let v = op(port, Some(&signed), &claim_frame(&retry.doc1, &retry.account));
     assert_eq!(v["resp"].as_str(), Some("rejected"), "I11.d: the lost-state retry is refused at the claim: {v}");
+    // The same BYTES as I10.b's: the residue being the operator's own
+    // abandoned partial changes nothing — cardinality, never provenance.
+    assert_eq!(verdict(&v), "credential_refused:claim_residue", "I11.d: the token's bytes: {v}");
+    assert_eq!(v["disposition"].as_str(), Some("permanent"), "I11.d: {v}");
     assert!(!claimed(port));
     sd.shutdown();
 }

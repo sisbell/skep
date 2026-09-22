@@ -1580,8 +1580,8 @@ type (§The claim ceremony and credentials) — run a stricter order:
   retry of an act another session committed still answers the fold's
   own token (`nothing_changed`, `already_claimed`).
 * Behind the unclaimed arm, the CLAIM's own admission — `claim_residue`
-  (v7.10; PUB-6.63, PUB-6.35 clause (b); the token **OWNER CONFIRM
-  OWED**, proposed beside `claim_first` in the pre-claim tokens'
+  (v7.10; PUB-6.63, PUB-6.35 clause (b); the token owner-confirmed, AUTH
+  RES-202, beside `claim_first` in the pre-claim tokens'
   convention): the claim deposit is admitted only where the top-level
   account space — the accounts delegated under the claimant's node —
   holds EXACTLY ONE principal above the genesis floor, the one this
@@ -2738,10 +2738,11 @@ sees them), byte-exact:
 Routed, not yet in the protocol: `delegate` entries carrying the minted
 `new_prefix` and `new_id` (equivalently serving, a
 principal-enumeration read as of a position). Today a `delegate` entry
-carries `docs: []` and names neither, so the span from `delegate` to
-the first signed session is resumable from client state only — no
-board-side read ties a new account to its principal id. Reserved as a
-later round's delta.
+carries `docs: []` and names neither; the board-side read that ties a
+new account to its principal id is `effective_owner` (§Operations), so
+what still waits on the feed item is ATTRIBUTION alone — WHICH KEY wrote
+a given `delegate` (AUTH-5.73 as AUTH RES-197 re-cut it; AUTH-6.36).
+Reserved as a later round's delta.
 
 **Retention.** The feed's memory is the daemon's `commits.log` sidecar
 plus what the journal can still reconstruct. When `since` reaches below
@@ -2956,8 +2957,8 @@ narrowed per class; no shape changes, the dump banner stays `v5`):
   whose claim landed in the published doc 1, its claim deposited there.
   Registration and ω stand ahead on both homes, as M7's own home gate
   has them; a caller owning either alone answers `not_owner`.
-* New `credential_refused` token `claim_residue` (permanent; **OWNER
-  CONFIRM OWED** — proposed beside `claim_first` in the pre-claim
+* New `credential_refused` token `claim_residue` (permanent;
+  owner-confirmed, AUTH RES-202 — beside `claim_first` in the pre-claim
   tokens' convention; §Credential refusals, §The claim ceremony): THE
   CLAIM REFUSES OVER RESIDUE (PUB-6.63, PUB-6.35 clause (b); register
   cells I10.b, I11.d). The claim deposit is admitted only where the

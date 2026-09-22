@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 use common::*;
 use skep_address::{Address, Span, Tumbler};
 use skep_identity::{
-    encode_enroll, record_bytes, single_address, Effect, Enrolled, Enrollment, FoldCtx,
-    IdentityState, Owner, TypeAddrs, Values, Verdict, MAX_RECORD_BYTES,
+    encode_enroll, encode_retire, record_bytes, single_address, Effect, Enrolled, Enrollment,
+    Fingerprint, FoldCtx, IdentityState, Owner, TypeAddrs, Values, Verdict, MAX_RECORD_BYTES,
 };
 
 fn enroll_ty() -> Vec<Span> {
@@ -232,6 +232,82 @@ fn a_repeated_span_cut_mid_entry_is_bad_record() {
         let (next, v) = fx.step(&st, &retirement(from));
         assert_token(&v, "malformed_payload:bad_record");
         assert_eq!(next, st, "span {repeated} named twice: the table is unchanged");
+    }
+}
+
+/// Corpus: the CANONICAL-BY-CONCATENATION cell (AUTH-2.4's condition, as
+/// RES-199 item 17 and RES-202 item 11 leave it; AUTH-2.96's row, its last
+/// clause). The same retirement cut at offset `k` INSIDE entry 1's hex and at
+/// the SAME offset inside entry 2's, so the middle span runs from one
+/// fingerprint's offset to the next's. Named twice, it spells a well-formed
+/// fingerprint between the two — entry 2's head on entry 1's tail — and the
+/// concatenation IS a canonical three-entry retirement, one its depositor
+/// could have written whole. Neither the `duplicate_key` cell nor the
+/// `bad_record` one: the read binds the spans verbatim (AUTH-2.3) and the
+/// arms fold the record it spells — `Honored(Retire)` removing the two
+/// enrolled fingerprints, the spelled middle one — enrolled nowhere —
+/// filtered out by `F ∩ enrolled` (AUTH-2.74), the third key standing.
+#[test]
+fn a_repeated_span_from_one_fingerprints_offset_to_the_nexts_is_canonical_by_concatenation() {
+    let mut fx = Fixture::new();
+    let st = seed_own(
+        &mut fx,
+        &IdentityState::genesis(),
+        ACCT_A,
+        &[(1, false), (2, false), (3, false)],
+    );
+    let (hex1, hex2) = (fp(1).to_hex(), fp(2).to_hex());
+    let retirement = |from: Vec<Span>| Dep {
+        home: doc1(ACCT_A),
+        from,
+        to: vec![unit(ACCT_A)],
+        ty: vec![unit(T_RETIRE)],
+    };
+    for k in [1usize, 32, 63] {
+        let head = format!("{{\"type\":\"skep-retire\",\"fingerprints\":[\"{}", &hex1[..k]);
+        let middle = format!("{}\",\"{}", &hex1[k..], &hex2[..k]);
+        let tail = format!("{}\"]}}", &hex2[k..]);
+        let spans = fx.mint(
+            &doc1(ACCT_A),
+            &[head.as_bytes(), middle.as_bytes(), tail.as_bytes()],
+        );
+
+        // Each span once: the canonical two-entry retirement.
+        assert_eq!(
+            record_bytes(&fx.ctx, &doc1(ACCT_A), &spans).expect("home-minted spans read"),
+            retire_payload(&[1, 2]),
+            "offset {k}: each span once"
+        );
+
+        // The middle named twice: the bytes ARE the canonical retirement of
+        // entry 1, the spelled fingerprint, entry 2 — nothing the read did
+        // to them, only what the endset named (AUTH-2.3).
+        let spelled = Fingerprint::parse_hex(&format!("{}{}", &hex2[..k], &hex1[k..]))
+            .expect("two halves of lowercase hex spell a fingerprint");
+        assert!(
+            ![fp(1), fp(2), fp(3)].contains(&spelled),
+            "offset {k}: the spelled fingerprint is enrolled nowhere"
+        );
+        let twice = vec![spans[0].clone(), spans[1].clone(), spans[1].clone(), spans[2].clone()];
+        assert_eq!(
+            record_bytes(&fx.ctx, &doc1(ACCT_A), &twice).expect("home-minted spans read"),
+            encode_retire(&[fp(1), spelled, fp(2)]).into_bytes(),
+            "offset {k}: the concatenation is a canonical record"
+        );
+
+        // …and it folds by the arms as that record: the two enrolled
+        // fingerprints retire, the spelled one is `F ∩ enrolled`'s discard,
+        // the third key stands.
+        let (next, v) = fx.step(&st, &retirement(twice));
+        match assert_honored(&v) {
+            Effect::Retire { removed, .. } => {
+                assert_eq!(*removed, vec![fp(1), fp(2)], "offset {k}: `removed` in record order")
+            }
+            other => panic!("offset {k}: expected a retire effect, got {other:?}"),
+        }
+        let set = next.key_set(&addr(ACCT_A));
+        assert!(!set.contains(&fp(1)) && !set.contains(&fp(2)), "offset {k}: both named keys retired");
+        assert!(set.contains(&fp(3)), "offset {k}: the third key stands");
     }
 }
 
@@ -1045,7 +1121,7 @@ fn a_holder_retirement_outside_doc_1_is_not_doc_one_and_retires_nothing() {
 
 /// AUTH-2.66/AUTH-2.127 for RETIREMENTS — the payload precedes the home pin:
 /// an unparseable retirement in a published second document is
-/// `malformed_payload:bad_header`, never `not_doc_one`.
+/// `malformed_payload:bad_record`, never `not_doc_one`.
 /// `an_enrollment_payload_precedes_the_home_pin` states the same order for
 /// enrollments only, so a retirement pin hoisted above its parse keeps that
 /// vector green.

@@ -20,11 +20,15 @@
 //! So a notice never fails and never reports. A caller wanting the condition
 //! back holds it already.
 
+use std::fmt::Display;
 use std::io::Write;
 
-/// One notice line.
-pub(crate) fn line(args: std::fmt::Arguments<'_>) {
-    let _ = writeln!(std::io::stderr(), "skepd: {args}");
+/// One notice line — anything this crate can render: `format_args!` where
+/// the text must be built, and a `String`, a `&str` or a value whose own
+/// `Display` IS the notice (a startup `Warning`, a `NotANodePrefix`)
+/// directly, with no formatting ceremony to route it through.
+pub(crate) fn line(what: impl Display) {
+    let _ = writeln!(std::io::stderr(), "skepd: {what}");
 }
 
 /// One notice spanning several lines: `head`, then each of `rest` indented
@@ -33,7 +37,7 @@ pub(crate) fn line(args: std::fmt::Arguments<'_>) {
 /// Written as ONE `writeln!` because a line per write lets another thread's
 /// notice land inside this one, and a notice a reader cannot tell the extent
 /// of is worse than a long line.
-pub(crate) fn lines(head: std::fmt::Arguments<'_>, rest: &[String]) {
+pub(crate) fn lines(head: impl Display, rest: &[String]) {
     let mut text = format!("skepd: {head}");
     for line in rest {
         text.push_str("\nskepd:   ");

@@ -76,7 +76,9 @@ mod write_path;
 #[doc(hidden)]
 pub mod fuzz_support;
 
-pub use auth::{AuthOptions, NotCanonical, Origin, PortAlreadyBound};
+pub use auth::{
+    AuthOptions, NodePrefix, NotANodePrefix, NotCanonical, Origin, PortAlreadyBound,
+};
 pub use codec::JsonCodec;
 pub use server::{
     body_cap, serve, Body, Daemon, DaemonError, HttpRequest, Peer, Reply, Routed, Skepd,
@@ -147,6 +149,8 @@ const _: fn() = || {
     assert_send_sync::<AuthOptions>();
     assert_send_sync::<Origin>();
     assert_send_sync::<NotCanonical>();
+    assert_send_sync::<NodePrefix>();
+    assert_send_sync::<NotANodePrefix>();
     assert_send_sync::<PortAlreadyBound>();
     assert_send_sync::<Peer>();
 };

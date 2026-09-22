@@ -55,6 +55,20 @@ pub(crate) const MAX_LIVE_NONCES: usize = 4096;
 /// added silently would be answered from a default the caller never chose;
 /// here every field is an operator's option and abstention is the safe
 /// state, which is the whole shape of `local_trust`'s own ruling.
+///
+/// From outside this crate that starting-and-setting is the MUTATION form:
+/// `#[non_exhaustive]` bars a struct expression, functional update syntax
+/// (`..Default::default()`) included, so the shape this file's own tests use
+/// is in-crate only.
+///
+/// ```
+/// use skepd::AuthOptions;
+///
+/// let mut opts = AuthOptions::default();
+/// opts.local_trust = false;
+/// // …and whatever else this caller means to change; a knob added later
+/// // arrives at its own default rather than at whatever a literal omitted.
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct AuthOptions {
@@ -102,10 +116,9 @@ pub struct AuthOptions {
     /// notebook, or a hosted board mis-launched — and that test is then OFF,
     /// every operator reading as on-board, the start-up log saying so.
     ///
-    /// PRECONDITION: a `Some` is what [`AuthOptions::parse_node_prefix`]
-    /// answers — a node address strictly under the root. The binary parses
-    /// its flag through it; an embedder owes the same.
-    pub node_prefix: Option<Address>,
+    /// The FORM is [`NodePrefix`]'s, carried by the type: a `Some` is a node
+    /// address strictly under the root because nothing else can be built.
+    pub node_prefix: Option<NodePrefix>,
 }
 
 impl Default for AuthOptions {
@@ -116,27 +129,6 @@ impl Default for AuthOptions {
             blocked_supply_path: None,
             node_prefix: None,
         }
-    }
-}
-
-impl AuthOptions {
-    /// REG-1.69's `--node-prefix 1.N`, parsed: the board's full node prefix
-    /// — a T4-valid NODE address strictly under the root `1` (REG-1.66: orgs
-    /// are allocated second components, `1.2`, `1.3`, …; a subnode sits
-    /// deeper, `1.3.2`). `None` for anything else: the root itself (a board
-    /// AT the root answers to no prefix but `1`, and every address is under
-    /// it — the off-board test has no work there), an address under another
-    /// first component (REG-1.67: no other root is assigned), an account or
-    /// document address, or text no tumbler spells. Carries no reason, as
-    /// [`Origin::parse`] carries none: the form is one shape, and the
-    /// binary's usage text states it.
-    pub fn parse_node_prefix(text: &str) -> Option<Address> {
-        let prefix = wire_address(text).ok()?;
-        let root = root();
-        let under_root = prefix.level() == Level::Node
-            && prefix != root
-            && prefix_contains(&root, &prefix);
-        under_root.then_some(prefix)
     }
 }
 
@@ -168,7 +160,7 @@ pub(crate) struct AuthConfig {
     blocked: parking_lot::RwLock<Arc<BlockedPrefixes>>,
     /// [`AuthOptions::node_prefix`], as supplied; `None` where the daemon
     /// was told none.
-    node_prefix: Option<Address>,
+    node_prefix: Option<NodePrefix>,
 }
 
 impl AuthConfig {
@@ -185,7 +177,7 @@ impl AuthConfig {
 
     /// The node prefix in force (REG-1.69), or `None` where the daemon was
     /// told none — the one reader is the list's install, and the log.
-    pub fn node_prefix(&self) -> Option<&Address> {
+    pub fn node_prefix(&self) -> Option<&NodePrefix> {
         self.node_prefix.as_ref()
     }
 
@@ -196,9 +188,8 @@ impl AuthConfig {
     pub fn node_prefix_line(&self) -> String {
         match &self.node_prefix {
             Some(prefix) => format!(
-                "node prefix {} (--node-prefix): egress and assertion config, never journaled; \
-                 the blocked-prefix list's off-board test runs against it",
-                prefix.tumbler()
+                "node prefix {prefix} (--node-prefix): egress and assertion config, never \
+                 journaled; the blocked-prefix list's off-board test runs against it"
             ),
             None => "no --node-prefix: the off-board test is off (every operator account reads \
                      as this board's own); a hosted board must supply one"
@@ -789,6 +780,91 @@ pub(crate) fn startup_warnings(cfg: &AuthConfig, claimed: bool) -> Vec<Warning> 
     out
 }
 
+// ── the node prefix (REG-1.69) ───────────────────────────────────────────
+
+/// The board's full NODE PREFIX in the registry (REG-1.69): a T4-valid NODE
+/// address STRICTLY UNDER the root `1` — an org's `1.N` (REG-1.66: orgs are
+/// allocated second components, `1.2`, `1.3`, …), a subnode deeper beneath
+/// it (`1.3.2`). The invariant is the TYPE's, as [`Origin`]'s canonical form
+/// is: every value comes through the [`FromStr`](std::str::FromStr) below,
+/// so no field of this type holds the root itself (a board AT the root
+/// answers to no prefix but `1`, and every address is under it — the
+/// off-board test has no work there), an address under another first
+/// component (REG-1.67: no other root is assigned), an account or document
+/// address, or text no tumbler spells.
+///
+/// WHY THE TYPE AND NOT A PRECONDITION: it is the OFF-BOARD TEST's
+/// comparand ([`BlockedPrefixes::installed_under`]) and nothing else, and
+/// that test is `prefix_contains(node_prefix, operator)` — address
+/// arithmetic, which ANSWERS for any address at all and so cannot refuse a
+/// prefix that is not one. An account address there — the obvious slip, the
+/// operator field it is compared against being one — or the root would yield
+/// an off-board verdict meaning nothing, and a wrong verdict either lifts a
+/// standing takedown block or makes the served board's claimant blockable,
+/// the two cells REG-4.198 rules out. So the form is checked where a value
+/// is made rather than where it is used, and the daemon that holds one holds
+/// a prefix.
+///
+/// ONE door, where [`Origin`] keeps two: that type's `parse` exists for an
+/// internal predicate use (`Origin::parse(h).is_some_and(…)`) this one has
+/// none of, so `str::parse` is the whole surface — which is also what lets
+/// `main.rs`'s `from_env` carry this setting like every other.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NodePrefix(Address);
+
+impl NodePrefix {
+    /// The prefix as an address — what [`prefix_contains`] takes.
+    pub fn address(&self) -> &Address {
+        &self.0
+    }
+}
+
+impl fmt::Display for NodePrefix {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0.tumbler())
+    }
+}
+
+/// [`NodePrefix`]'s parse refused: the text is not a node prefix. Carries no
+/// reason, as [`NotCanonical`] carries none: the form is one shape, and this
+/// states it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NotANodePrefix;
+
+impl fmt::Display for NotANodePrefix {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("not a node prefix (1.N — a node address strictly under the root 1)")
+    }
+}
+
+impl std::error::Error for NotANodePrefix {}
+
+/// The ecosystem door, and the ONLY one: every [`NodePrefix`] is one this
+/// parse admitted, which is what makes the type's invariant a fact rather
+/// than a precondition a caller owes.
+impl std::str::FromStr for NodePrefix {
+    type Err = NotANodePrefix;
+
+    fn from_str(s: &str) -> Result<NodePrefix, NotANodePrefix> {
+        let prefix = wire_address(s).map_err(|_| NotANodePrefix)?;
+        let root = root();
+        let under_root =
+            prefix.level() == Level::Node && prefix != root && prefix_contains(&root, &prefix);
+        under_root.then_some(NodePrefix(prefix)).ok_or(NotANodePrefix)
+    }
+}
+
+/// The registry's ROOT, `1` (REG-1.66: every global address begins with it;
+/// a board's OWN space is `1.x` locally, the leading `1` reading as THIS NODE
+/// locally and as the root globally). The reference a [`NodePrefix`] is
+/// admitted under — and NOT the off-board test's comparand: under it every
+/// global-form address reads as this board's own, which is the defect the
+/// node prefix exists to close.
+fn root() -> Address {
+    let one = Tumbler::new([Nat::from(1u32)]).expect("one component is a tumbler");
+    validate(one).expect("`1` is a T4-valid node address")
+}
+
 // ── the blocked-prefix list (AUTH-1.44, AUTH-4.36 step 4b, AUTH-4.70) ────
 
 /// One entry of the BLOCKED-PREFIX LIST (AUTH-4.36 step 4b): a prefix, and
@@ -862,18 +938,7 @@ pub(crate) struct BlockedPrefixes {
     /// The node prefix the off-board test ran against (REG-1.69), or `None`
     /// where the daemon was told none and the test was off — kept beside
     /// the verdicts so the log can say which.
-    node_prefix: Option<Address>,
-}
-
-/// The registry's ROOT, `1` (REG-1.66: every global address begins with it;
-/// a board's OWN space is `1.x` locally, the leading `1` reading as THIS NODE
-/// locally and as the root globally). The reference [`AuthOptions::
-/// parse_node_prefix`] admits a node prefix under — and NOT the off-board
-/// test's comparand: under it every global-form address reads as this
-/// board's own, which is the defect the node prefix exists to close.
-fn root() -> Address {
-    let one = Tumbler::new([Nat::from(1u32)]).expect("one component is a tumbler");
-    validate(one).expect("`1` is a T4-valid node address")
+    node_prefix: Option<NodePrefix>,
 }
 
 impl BlockedPrefixes {
@@ -918,11 +983,11 @@ impl BlockedPrefixes {
     fn installed_under(
         issue: BlockedIssue,
         claimant: Option<&Address>,
-        node_prefix: Option<&Address>,
+        node_prefix: Option<&NodePrefix>,
     ) -> BlockedPrefixes {
         let operator = issue.header.operator.as_ref().or(claimant).cloned();
         let off_board = match (&issue.header.operator, node_prefix) {
-            (Some(named), Some(prefix)) => !prefix_contains(prefix, named),
+            (Some(named), Some(prefix)) => !prefix_contains(prefix.address(), named),
             _ => false,
         };
         let binding_writer = if off_board {
@@ -1015,9 +1080,8 @@ impl BlockedPrefixes {
         let binding_writer = match (&self.binding_writer, &self.node_prefix) {
             (live @ Some(_), Some(prefix)) => format!(
                 "{} — exempt, the operator account being off-board (not under the node \
-                 prefix {})",
+                 prefix {prefix})",
                 named(&header.binding_writer, live, "the header omits it"),
-                prefix.tumbler(),
             ),
             // Unreachable by construction — (b) is live only against a
             // prefix — and answered rather than asserted: a log line is not
@@ -1028,9 +1092,8 @@ impl BlockedPrefixes {
             ),
             (None, Some(prefix)) => format!(
                 "not a comparand (the operator account is an account of this board — under \
-                 the node prefix {}, or the claimant taken in the header's place — or there \
-                 is none)",
-                prefix.tumbler(),
+                 the node prefix {prefix}, or the claimant taken in the header's place — or \
+                 there is none)"
             ),
             (None, None) => "not a comparand (no --node-prefix: the off-board test is off; a \
                              hosted board must supply one)"
@@ -1073,6 +1136,7 @@ pub(crate) fn blocked_prefixes(cfg: &AuthConfig) -> Arc<BlockedPrefixes> {
 
 /// What one look at a moved supply file came to — the reissue's two
 /// outcomes, for the log [`crate::Daemon`] writes.
+#[derive(Debug)]
 pub(crate) enum Reissue {
     /// The new issue is the list in force.
     Installed,
@@ -1115,6 +1179,7 @@ pub(crate) enum Reissue {
 /// keeps the list in force, where a line format would install the half it
 /// saw. The operator still owes the ATOMIC REPLACE (write beside,
 /// rename over) — it is also what gives every issue a fresh identity.
+#[derive(Debug)]
 pub(crate) struct BlockedSupply {
     path: PathBuf,
     /// The file's identity as last looked at — `None` for a file that was
@@ -1127,7 +1192,7 @@ pub(crate) struct BlockedSupply {
 /// it. The inode is what makes two issues written inside one timestamp tick
 /// distinct (a rename-over is always a new file); where there is none, the
 /// modification time and the length carry it alone.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct FileStamp {
     modified: Option<SystemTime>,
     len: u64,
@@ -1404,6 +1469,10 @@ mod tests {
         wire_address(s).expect("a T4-valid address")
     }
 
+    fn node_prefix(s: &str) -> NodePrefix {
+        s.parse().expect("a node prefix")
+    }
+
     fn issue(operator: Option<&str>, binding_writer: Option<&str>, entries: &[(&str, &str)]) -> BlockedIssue {
         BlockedIssue {
             header: BlockedHeader {
@@ -1464,7 +1533,7 @@ mod tests {
         let (claimant, seat, member, host) = ("1.0.1", "1.0.2", "1.0.3", "2.0.7");
         let seat_global = "1.3.0.2";
         let record = "1.0.1.0.7.1";
-        let prefix = addr("1.3");
+        let prefix = node_prefix("1.3");
         let entries =
             [(claimant, record), (seat, record), (member, record), (host, record), (seat_global, record)];
         let verdicts = |operator, binding_writer, claimed: Option<&str>| {
@@ -1535,7 +1604,7 @@ mod tests {
         let all_inert = BlockedPrefixes::installed_under(
             issue(None, None, &[("1.0.1", "1.0.1.0.9.1")]),
             Some(&claimant),
-            Some(&addr("1.3")),
+            Some(&node_prefix("1.3")),
         );
         assert_eq!(all_inert.in_force(), 0, "the claim made its one entry inert");
         assert!(!all_inert.issue_is_empty(), "and that is exactly what the log must say");
@@ -1556,9 +1625,9 @@ mod tests {
     #[test]
     fn the_off_board_test_reads_the_node_prefix_and_never_the_local_root() {
         let (claimant, record) = ("1.0.1", "1.0.1.0.7.1");
-        let (own, foreign) = (addr("1.3"), addr("1.5"));
+        let (own, foreign) = (node_prefix("1.3"), node_prefix("1.5"));
         let entries = [(claimant, record), ("1.3.0.7", record)];
-        let verdicts = |operator: Option<&str>, prefix: Option<&Address>| {
+        let verdicts = |operator: Option<&str>, prefix: Option<&NodePrefix>| {
             BlockedPrefixes::installed_under(issue(operator, None, &entries), Some(&addr(claimant)), prefix)
                 .inert
         };
@@ -1595,13 +1664,14 @@ mod tests {
     #[test]
     fn a_node_prefix_is_a_node_address_strictly_under_the_root() {
         for ok in ["1.2", "1.3", "1.3.2", "1.1024.7"] {
-            let parsed = AuthOptions::parse_node_prefix(ok)
-                .unwrap_or_else(|| panic!("'{ok}' is a node prefix"));
-            assert_eq!(parsed, addr(ok));
-            assert_eq!(parsed.level(), Level::Node);
+            let parsed: NodePrefix =
+                ok.parse().unwrap_or_else(|_| panic!("'{ok}' is a node prefix"));
+            assert_eq!(parsed.address(), &addr(ok));
+            assert_eq!(parsed.address().level(), Level::Node);
+            assert_eq!(parsed.to_string(), ok, "and renders as the operator spelled it");
         }
         for bad in ["1", "2.4", "2", "1.3.0.7", "1.3.0.7.0.1", "1.0", "0.3", "1..3", "", "x", "1.3."] {
-            assert!(AuthOptions::parse_node_prefix(bad).is_none(), "'{bad}' is not a node prefix");
+            assert!(bad.parse::<NodePrefix>().is_err(), "'{bad}' is not a node prefix");
         }
     }
 
@@ -1613,7 +1683,7 @@ mod tests {
     #[test]
     fn the_install_log_names_the_count_the_header_and_each_inert_entry() {
         let claimant = addr("1.0.1");
-        let prefix = addr("1.3");
+        let prefix = node_prefix("1.3");
         let list = BlockedPrefixes::installed_under(
             issue(Some("2.0.7"), None, &[("1.0.1", "1.0.1.0.9.1"), ("1.0.3", "1.0.1.0.7.1"), ("2.0.7", "1.0.1.0.11.1")]),
             Some(&claimant),

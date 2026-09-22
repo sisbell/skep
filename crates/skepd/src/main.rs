@@ -5,11 +5,10 @@
 use std::path::PathBuf;
 use std::process::exit;
 
-use skep_address::Address;
 // `DEFAULT_WORKERS` is the LIBRARY's, not this binary's: it is the third
 // term of a relation whose other two are the daemon's permit pools, and the
 // library holds the assertion that keeps the three in step.
-use skepd::{serve, AuthOptions, Daemon, Origin, DEFAULT_WORKERS};
+use skepd::{serve, AuthOptions, Daemon, NodePrefix, Origin, DEFAULT_WORKERS};
 
 const DEFAULT_PORT: u16 = 8642;
 
@@ -41,12 +40,12 @@ const SKEPD_ORIGIN: &str = "SKEPD_ORIGIN";
 /// [`Daemon::open_with`]'s to say.
 const SKEPD_BLOCKED_PREFIXES: &str = "SKEPD_BLOCKED_PREFIXES";
 
-/// The node prefix's variable, a bare name as the origin list's is: its
-/// value is parsed by [`AuthOptions::parse_node_prefix`], whose answer is
-/// an `Option` in [`Origin::parse`]'s shape rather than a `FromStr` the
-/// [`from_env`] pair could carry, so the two rules that helper holds are
-/// restated at its read.
-const SKEPD_NODE_PREFIX: &str = "SKEPD_NODE_PREFIX";
+/// The node prefix's variable (REG-1.69), carried by [`from_env`] like every
+/// other setting: [`NodePrefix`]'s `FromStr` is what lets it, so the two
+/// rules that pair holds — a non-UTF-8 value refused rather than read as
+/// absent, and one message shape — are stated once and spent here too.
+const SKEPD_NODE_PREFIX: EnvSetting =
+    EnvSetting { var: "SKEPD_NODE_PREFIX", expected: NODE_PREFIX_FORM };
 
 /// What `--node-prefix` takes (REG-1.66, REG-1.69), said once for the flag,
 /// the variable and the usage text.
@@ -117,7 +116,7 @@ struct Args {
     local_trust: bool,
     origins: Vec<Origin>,
     blocked_prefixes: Option<PathBuf>,
-    node_prefix: Option<Address>,
+    node_prefix: Option<NodePrefix>,
 }
 
 /// Read one setting from the environment, or `None` when it is UNSET. Each
@@ -168,19 +167,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
             .collect::<Result<_, _>>()?,
     };
     let mut blocked_prefixes = std::env::var_os(SKEPD_BLOCKED_PREFIXES).map(PathBuf::from);
-    // The node prefix, under the origin list's two rules: bytes that are
-    // not text are refused rather than read as absent, and the value goes
-    // through the library's own parse — one grammar for the flag, the
-    // variable and every embedder.
-    let mut node_prefix: Option<Address> = match std::env::var(SKEPD_NODE_PREFIX) {
-        Err(std::env::VarError::NotPresent) => None,
-        Err(std::env::VarError::NotUnicode(_)) => {
-            return Err(format!("{SKEPD_NODE_PREFIX}: the value is not UTF-8 text"))
-        }
-        Ok(v) => Some(AuthOptions::parse_node_prefix(&v).ok_or_else(|| {
-            format!("{SKEPD_NODE_PREFIX}: '{v}' is not {NODE_PREFIX_FORM}")
-        })?),
-    };
+    let mut node_prefix: Option<NodePrefix> = from_env(SKEPD_NODE_PREFIX)?;
     let mut it = argv;
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -211,7 +198,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
             }
             "--node-prefix" => {
                 let v = it.next().ok_or("--node-prefix needs a value")?;
-                node_prefix = Some(AuthOptions::parse_node_prefix(&v).ok_or_else(|| {
+                node_prefix = Some(v.parse::<NodePrefix>().map_err(|_| {
                     format!("--node-prefix: '{v}' is not {NODE_PREFIX_FORM}")
                 })?);
             }
@@ -365,7 +352,7 @@ mod tests {
             .expect("valid flags")
             .expect("a run, not usage");
         assert_eq!(
-            a.node_prefix.as_ref().map(|p| p.tumbler().to_string()),
+            a.node_prefix.as_ref().map(|p| p.to_string()),
             Some("1.3".to_string()),
             "the board's node prefix, as given"
         );

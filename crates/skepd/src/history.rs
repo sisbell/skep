@@ -133,10 +133,10 @@ impl History {
         &self,
         engine: &Engine,
         at: Seq,
-        readable: &dyn Fn(&Address) -> bool,
+        readable: impl Fn(&Address) -> bool,
     ) -> Result<WorldDump, Unavailable> {
         let (_permit, world) = self.reconstruct(engine, at)?;
-        Ok(engine.dump_of_visible(&world, readable))
+        Ok(engine.dump_of_visible(&world, &readable))
     }
 
     /// One already-classified READ frame answered as of `at`: reconstruct

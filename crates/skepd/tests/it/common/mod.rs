@@ -21,7 +21,7 @@ use serde_json::Value;
 use skep_identity::{
     encode_enroll, framed, Enrollment, PublicKey, SESSION_TAG, SESSION_TAG_V2,
 };
-use skepd::{serve, AuthOptions, Daemon, Origin, Skepd, DEFAULT_WORKERS};
+use skepd::{serve, AuthOptions, Daemon, NodePrefix, Origin, Skepd, DEFAULT_WORKERS};
 
 /// The credential type addresses this build allocates (AUTH-7.1 horn B):
 /// subspace 3 of the ghost document, ordinals enroll·retire·claim.
@@ -410,8 +410,7 @@ pub fn spawn_with_blocked_prefixes(
     node_prefix: Option<&str>,
 ) -> Skepd {
     let node_prefix = node_prefix.map(|text| {
-        AuthOptions::parse_node_prefix(text)
-            .unwrap_or_else(|| panic!("'{text}' is not a node prefix (1.N, under the root)"))
+        text.parse::<NodePrefix>().unwrap_or_else(|e| panic!("'{text}' is {e}"))
     });
     // The reservation is held through the slow open, so only the rebind gap
     // races — and under this suite it DOES: every exchange is one

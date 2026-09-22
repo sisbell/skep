@@ -1302,7 +1302,7 @@ impl Daemon {
     /// [`crate::auth::AuthConfig::node_prefix_line`]'s; the stream is this
     /// daemon's, for [`Daemon::log_config_warnings`]'s reason.
     fn log_node_prefix(&self) {
-        notice::line(format_args!("{}", self.auth.cfg.node_prefix_line()));
+        notice::line(self.auth.cfg.node_prefix_line());
     }
 
     /// THE REISSUE, at the head of every request (AUTH-4.70): where the
@@ -1995,8 +1995,7 @@ impl Daemon {
                 // ONE reader class, so the seat is looked up once per dump.
                 let head = self.engine.kernel().snapshot();
                 let reader = head.world().reader_class(principal);
-                let readable = |doc: &skep_address::Address| reader.readable(doc);
-                match self.history.dump_at(&self.engine, at, &readable) {
+                match self.history.dump_at(&self.engine, at, |doc| reader.readable(doc)) {
                     Ok(d) => d,
                     Err(e) => return refuse_unavailable(e),
                 }

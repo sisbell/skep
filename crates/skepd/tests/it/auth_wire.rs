@@ -2942,6 +2942,125 @@ fn a_reissued_entry_kills_the_live_sessions_under_it_on_every_route_of_the_set()
     sd.shutdown();
 }
 
+/// AUTH-4.44 and `Daemon::route`'s own rule — THE REISSUE STANDS AHEAD OF
+/// DISPATCH ON EVERY REQUEST, `/events` INCLUDED: a stream opening as the
+/// FIRST request after an issue installs that issue before it resolves its
+/// own actor, so a covered token meets `Skepd-Session: closed` on the
+/// stream's own head.
+///
+/// `/events` is the one route where a missed install is never corrected: a
+/// stream resolves ONCE, at open, and the binding it opened under lives for
+/// the connection. Put the look below dispatch — the natural place for a
+/// per-request `stat`, since `Routed::EventStream` returns before `reply`
+/// and a stream is not a reply — and this connect reads the PRE-issue list,
+/// the stream opens with no signal, and a party the operator ordered dead
+/// holds a live subscription for as long as it cares to.
+///
+/// The kill suite's own stream connects only after eight requests have
+/// already installed the issue, and the one cell whose blocking request IS
+/// its installing request drives `/session`, which goes through `reply`. So
+/// this is the position neither of them puts `/events` in.
+#[test]
+fn a_stream_opening_first_after_an_issue_installs_it_before_it_resolves() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let (sd, list) = spawn_listed(root.path());
+    let port = sd.port();
+    let anchor = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
+    let member_key = distinct_key(35);
+    let member = keyed_member(port, &anchor, 935, &member_key);
+    let live = open_signed_session(port, 935, &member_key);
+
+    // A stream opened BEFORE the issue carries no signal — the control that
+    // makes the assertion below a statement about the install rather than
+    // about this token.
+    let (mut before, head) = Sse::connect_with_token(port, &live);
+    assert!(
+        !head.to_ascii_lowercase().contains("skepd-session: closed"),
+        "no entry covers this binding yet: {head}"
+    );
+    before.expect_commit();
+
+    // THE ISSUE, and then NOTHING but the stream: the connect is the request
+    // that notices the file moved.
+    issue_blocked_list(&list, BlockedHeader::default(), &[(&member, RECORD_MEMBER)]);
+    let (_after, head) = Sse::connect_with_token(port, &live);
+    assert!(
+        head.to_ascii_lowercase().contains("skepd-session: closed"),
+        "/events installed the reissue ahead of its own resolve: {head}"
+    );
+
+    sd.shutdown();
+}
+
+/// AUTH-4.63's second trigger against AUTH-4.27's order — THE BLOCK IS AHEAD
+/// OF THE BARE ARM'S PER-REQUEST CONJUNCT: a BARE binding under a listed
+/// prefix, presented from an origin OUTSIDE the bare set, answers DEATH and
+/// never `RequestRefused`. It is the one cell where both would refuse, and so
+/// the only one that tells their order apart.
+///
+/// The fear is the tidy inversion — test the cheap set membership first and
+/// spend the list's linear scan only where the request would otherwise be
+/// admitted, a cost `covers`' own card discloses per consult. Under it this
+/// presentation is "refused for this request", which the rule reserves for a
+/// binding that LIVES: no signal, nothing closed, and the M10 session and its
+/// memo retained for a party the operator ordered dead.
+///
+/// The proof that it is death and not a refusal is that a LIFT does not bring
+/// it back. `the_origin_header_fences_the_bare_bind_without_killing_it` is
+/// this cell's other half, on a board with no list: there the same
+/// presentation must NOT kill, and `a_reissued_entry_kills…` sends no
+/// `Origin` at all, so the inversion is invisible to both.
+#[test]
+fn the_block_outranks_a_refused_origin_and_kills_the_bare_binding() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let (sd, list) = spawn_listed(root.path());
+    let port = sd.port();
+    let anchor = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
+    let member_key = distinct_key(36);
+    let member = keyed_member(port, &anchor, 936, &member_key);
+    let bare = open_session(port, 936);
+    let draft = create_frame(&member, None);
+    let evil = "https://evil.example";
+    // The binding writes: the foreign origin alone would refuse it for THAT
+    // request and leave it alive, which is what the block is about to outrank.
+    expect_resp(&op(port, Some(&bare), &draft), "ack_addr");
+
+    issue_blocked_list(&list, BlockedHeader::default(), &[(&member, RECORD_MEMBER)]);
+    let (st, headers, body) =
+        http_with_origin(port, "POST", "/op", Some(&bare), evil, draft.as_bytes());
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(
+        json(&body)["code"].as_str(),
+        Some("unauthenticated"),
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    assert_eq!(
+        header(&headers, "Skepd-Session"),
+        Some("closed"),
+        "the cell where BOTH would refuse answers death, never refused-for-this-request"
+    );
+
+    // …and death is permanent, which is what tells it from a request refusal:
+    // after the LIFT the same token is still gone, where a binding merely
+    // refused for one request would write again the moment the entry went.
+    issue_blocked_list(&list, BlockedHeader::default(), &[]);
+    assert!(presented_dead(port, &bare), "a killed bare binding stays gone after the lift");
+    let (st, _, body) = http_full(port, "POST", "/op", Some(&bare), draft.as_bytes());
+    assert_eq!(st, 200);
+    assert_eq!(
+        json(&body)["code"].as_str(),
+        Some("unauthenticated"),
+        "and it writes nothing: {}",
+        String::from_utf8_lossy(&body)
+    );
+    // The PRINCIPAL is admitted again — the lift is a lift, not a ban.
+    let fresh = open_session(port, 936);
+    expect_resp(&op(port, Some(&fresh), &draft), "ack_addr");
+
+    sd.shutdown();
+}
+
 /// THE HEADER ROWS (RES-66 item 4 (i), RES-67 item 5 (l), RES-68 item 7 (m);
 /// AUTH-4.64 item 11) — the install's two INERT comparands, at the four A3
 /// cells. An entry covering (a) the configured OPERATOR account (the claimant
@@ -3118,6 +3237,60 @@ fn the_off_board_test_runs_against_the_node_prefix_and_is_off_without_one() {
         }
         sd.shutdown();
     }
+}
+
+/// REG-1.69/1.70 — THE NODE PREFIX IS PER-DAEMON CONFIG, SUPPLIED AT EVERY
+/// START AND IN NO RECORD, JOURNAL, SIDECAR OR FOLD: one board, one journal,
+/// one supply file, one header — and the off-board test follows the FLAG
+/// across a restart, which is how a board answers to a successor prefix.
+///
+/// Under `1.3` the header's operator is an account of this board, so (b) is
+/// silent and the entry over the claimant is LIVE. Restarted under `1.5` —
+/// the same data dir, the same list, the same recovered claimant — the
+/// operator is off-board, (b) goes live, and that entry is INERT. Remember
+/// the prefix anywhere and the documented reconfigure does nothing: the
+/// served claimant stays blockable, or a standing block stays lifted.
+///
+/// The three-board table above cannot see this — each board writes its own
+/// state under its own flag, so anything remembered at first start agrees
+/// with the flag on every row — and it is also the one cell where BOTH
+/// start-up comparands resolve live at once: the recovered claimant standing
+/// as (b) because a named operator is off-board.
+#[test]
+fn a_restart_under_a_fresh_node_prefix_moves_the_off_board_test() {
+    // Board `1.3`'s account `0.7`, in the registry's global form.
+    const OPERATOR: &str = "1.3.0.7";
+    let header = BlockedHeader { operator: Some(OPERATOR), binding_writer: None };
+    let root = tempfile::tempdir().expect("tempdir");
+    let member_key = distinct_key(37);
+    {
+        let (sd, list) = spawn_listed_at(root.path(), Some("1.3"));
+        let port = sd.port();
+        let anchor = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
+        let member = keyed_member(port, &anchor, 937, &member_key);
+        issue_blocked_list(
+            &list,
+            header,
+            &[(CLAIMANT_ACCOUNT, RECORD_CLAIMANT), (&member, RECORD_MEMBER)],
+        );
+        // Under the board's OWN prefix the operator is on-board: (b) silent,
+        // the claimant blockable, principal 0 with it.
+        assert_blocked(port, CLAIMANT_PRINCIPAL, &device_key(), RECORD_CLAIMANT, "under 1.3");
+        assert_blocked(port, PRINCIPAL_ZERO, &device_key(), RECORD_CLAIMANT, "under 1.3");
+        assert_blocked(port, 937, &member_key, RECORD_MEMBER, "under 1.3");
+        sd.shutdown();
+    }
+
+    // THE RECONFIGURE: the same root, so the same data dir and the same
+    // supply file — only the flag moves.
+    let (sd, _) = spawn_listed_at(root.path(), Some("1.5"));
+    let port = sd.port();
+    open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    open_signed_session(port, PRINCIPAL_ZERO, &device_key());
+    // The MEMBER's entry is the pairing: it covers no comparand under either
+    // prefix, so the list being in force is not in question — only (b) moved.
+    assert_blocked(port, 937, &member_key, RECORD_MEMBER, "the list is still in force under 1.5");
+    sd.shutdown();
 }
 
 /// RES-115 — THE LIST IS SUPPLIED AT EVERY START: a restart re-installs it

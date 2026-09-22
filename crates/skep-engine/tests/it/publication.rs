@@ -395,7 +395,6 @@ fn an_undecodable_checkpoint_with_no_older_start_point_refuses_to_open() {
 /// The dump renders the set as a hint — draft → owner, address-ordered — so
 /// the crash and conformance harnesses' byte comparison covers it, and the
 /// hint-faithfulness check compares the fold against the seed through it.
-#[cfg(feature = "dump")]
 #[test]
 fn the_dump_renders_the_exception_set_as_a_hint() {
     let engine = mem_engine();
@@ -437,7 +436,6 @@ fn the_dump_renders_the_exception_set_as_a_hint() {
 /// the coincidence of its three single-digit ordinals; here the two lists are
 /// asserted to differ before either is read against the dump, so neither can
 /// be checked against the other's rule.
-#[cfg(feature = "dump")]
 #[test]
 fn the_publication_section_is_address_ordered_where_its_hint_is_text_ordered() {
     fn quoted(a: &Address) -> String {

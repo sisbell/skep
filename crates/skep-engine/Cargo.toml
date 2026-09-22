@@ -15,6 +15,15 @@ readme = "README.md"
 default = ["dump"]
 dump = []
 
+# The one integration-test binary needs the dump surface: `Engine::check_hints`,
+# the faithfulness oracle four of its suites end on, lives there. Declared as a
+# requirement of the target, so a build without the feature skips the binary
+# rather than compiling it against a surface that is absent.
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+required-features = ["dump"]
+
 [dependencies]
 # The World/Record serde derives satisfying M2's WorldState bounds, and the
 # dump's canonicalizing transcode (`canon`), which implements a serde

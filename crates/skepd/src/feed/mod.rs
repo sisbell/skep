@@ -144,8 +144,8 @@ pub(crate) struct FeedClass<'a> {
     /// for this request — with the requester's seat looked up at most once
     /// for the whole request.
     ///
-    /// [`FeedClass::of`] builds it from the same `(world, principal)` pair it
-    /// derives the stream keys below from, and
+    /// [`FeedClass::of`] builds it from the request's `(world, principal)`
+    /// pair and derives the stream keys below from ITS seat, and
     /// [`FeedClass::readable`] answers the mask off it, so a class whose mask
     /// and whose stream keys belong to different principals is not
     /// constructible — the keys would open a principal's drafts while the
@@ -199,7 +199,10 @@ impl<'a> FeedClass<'a> {
     /// which is why the resolution lives here rather than at the route,
     /// where it would restate them.
     pub fn of(world: &'a World, principal: Option<PrincipalId>) -> FeedClass<'a> {
-        let account = principal.and_then(|p| world.m3().principal_prefix(p).cloned());
+        let reader = world.reader_class(principal);
+        // The seat the mask resolves, handed out: the stream keys below and
+        // the mask stand on one lookup in M3's principal registry.
+        let account = reader.seat().cloned();
         let mut subtree = Vec::new();
         let mut cur = account.clone();
         while let Some(a) = cur {
@@ -224,7 +227,7 @@ impl<'a> FeedClass<'a> {
             None => Vec::new(),
         };
         FeedClass {
-            reader: world.reader_class(principal),
+            reader,
             subtree,
             descendants_under,
             issuers,

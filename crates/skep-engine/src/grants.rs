@@ -222,7 +222,7 @@ impl World {
 /// One admitted grant record — enough to answer queries and to withdraw its
 /// index entry when a later record revokes it. The fields are crate-visible
 /// for the world dump's grant section (lane 3.4 §3), which renders the fold's
-/// operative set through [`Grants::operative_records`] and destructures each
+/// operative set through `Grants::operative_records` and destructures each
 /// record whole — so a field added here is a field that section must render,
 /// or the faithfulness check stops speaking for the whole record.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -380,6 +380,8 @@ impl Grants {
     /// entries). The operative set's one enumeration, where
     /// [`Grants::universal`] and [`Grants::issuers_for`] enumerate the query
     /// indexes; the predicate's consumers are the point probes below.
+    /// Compiled with the `dump` feature alone, which holds its one caller.
+    #[cfg(feature = "dump")]
     pub(crate) fn operative_records(&self) -> impl Iterator<Item = (&Address, &GrantRecord)> + '_ {
         self.operative_records.iter()
     }
@@ -465,7 +467,7 @@ impl Grants {
     /// earlier-record test by, meet the ladder, and revoke nothing
     /// (`the_earlier_record_set_keeps_what_the_operative_set_lets_go` holds a
     /// fresh grant in both at once).
-    fn take_admitted(&mut self, addr: &Address, home: Address, issuer: Address, value: &Link) {
+    fn take_admitted(&mut self, addr: Address, home: Address, issuer: Address, value: &Link) {
         let kind = classify(self, &home, value);
         match kind {
             Kind::Grant { content_prefix, grantee } => {
@@ -474,7 +476,7 @@ impl Grants {
             Kind::Revoke { revoked } => self.withdraw(&revoked),
             Kind::Neither => {}
         }
-        self.keep_earlier(addr.clone());
+        self.keep_earlier(addr);
     }
 
     /// ADMIT `grant`, deposited at link address `addr`: it joins the operative
@@ -748,11 +750,18 @@ fn classify(prev: &Grants, home: &Address, value: &Link) -> Kind {
 /// deposit that is no admitted record of the class — which is nearly all of
 /// them — costs no copy at all; an admitted one is taken by
 /// [`Grants::take_admitted`], whatever its kind.
+///
+/// The link address arrives owned for the same reason — each caller owns the
+/// address it hands over and drops it on return — and because the fold KEEPS
+/// it: every admitted record joins the earlier-record set under its own
+/// address, so a revocation or a record of neither kind is kept without a
+/// copy, and only a GRANT, which the operative set keys under that address
+/// too, costs one.
 fn fold_one(
     prev: Grants,
     namespace: &M3State,
     drafts: &Drafts,
-    addr: &Address,
+    addr: Address,
     value: &Link,
 ) -> Grants {
     if !is_grant_typed(value, t_grant()) {
@@ -763,7 +772,7 @@ fn fold_one(
     // that failed it is a store already corrupt. Skipping it instead would
     // lose a grant or a revocation on one path and not the other, and the two
     // halves would part at the next restart with nothing looking wrong.
-    let home = document_of(addr)
+    let home = document_of(&addr)
         .expect("a link address is element-level, so its home document exists");
     let Some(issuer) = admitted_issuer(namespace, drafts, &home) else {
         return prev; // unadmitted: neither grant nor revocation
@@ -800,7 +809,7 @@ pub(crate) fn fold(prev: &Grants, namespace: &M3State, drafts: &Drafts, rec: &Li
     // accept.
     let link_addr = validate(addr.clone())
         .expect("a staged link address is T4-valid (M7's fold asserted it a moment ago)");
-    fold_one(prev.clone(), namespace, drafts, &link_addr, value)
+    fold_one(prev.clone(), namespace, drafts, link_addr, value)
 }
 
 /// The SEED half (PUB-7.7): the grant fold a from-scratch walk of the GRANTS
@@ -886,7 +895,7 @@ pub(crate) fn seed(namespace: &M3State, links: &LinkState, drafts: &Drafts) -> G
         let value = links
             .readlink(&addr)
             .expect("a type_slice key names a resident link (M7's postcondition)");
-        grants = fold_one(grants, namespace, drafts, &addr, value);
+        grants = fold_one(grants, namespace, drafts, addr, value);
     }
     grants
 }

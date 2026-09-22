@@ -18,7 +18,7 @@ use skep_namespace::PrincipalId;
 use skep_retrieval::Spec;
 use tempfile::tempdir;
 
-fn ack_addr(r: Response) -> skep_address::Address {
+fn ack_addr(r: Response) -> Address {
     match r {
         Response::AckAddr { addr, .. } => addr,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),

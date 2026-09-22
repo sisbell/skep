@@ -2,8 +2,6 @@
 //! constructors, kernel configurations, and the bootstrap→delegate→create
 //! prologue every cross-store scenario starts from.
 
-#![allow(dead_code)] // each integration test binary uses a subset
-
 use std::path::Path;
 
 use skep_address::{validate, Address, Nat, Span, Tumbler};
@@ -21,10 +19,12 @@ pub const USER: PrincipalId = PrincipalId(7);
 /// 2026-08-16) — the owner of everything `setup_draft` and `setup_home` create.
 pub const OWNER: Caller = Caller::Principal(USER);
 
+#[track_caller]
 pub fn tum(comps: &[u32]) -> Tumbler {
     Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("test tumblers are nonempty")
 }
 
+#[track_caller]
 pub fn addr(comps: &[u32]) -> Address {
     validate(tum(comps)).expect("test addresses are T4-valid")
 }
@@ -43,11 +43,13 @@ pub fn vp(subspace: u32, ordinal: u32) -> VPos {
 }
 
 /// An ordinal-level depth-2 V-span `[subspace, ordinal] w [0, width]`.
+#[track_caller]
 pub fn vspan(subspace: u32, ordinal: u32, width: u32) -> Span {
     Span::new(tum(&[subspace, ordinal]), tum(&[0, width])).expect("well-formed test span")
 }
 
 /// A content V-spec over `doc`'s content subspace.
+#[track_caller]
 pub fn vspec(doc: &Address, ordinal: u32, width: u32) -> VSpec {
     VSpec { source: doc.clone(), span: vspan(1, ordinal, width) }
 }
@@ -57,6 +59,7 @@ pub fn vspec(doc: &Address, ordinal: u32, width: u32) -> VSpec {
 /// document's content space, so an element there is a position a read can
 /// name; subspace 3 is a space nothing ever mints into, so a type slot filled
 /// from it lands in a coverage class of its own.
+#[track_caller]
 pub fn element(doc: &Address, s: u32, n: u32) -> Address {
     let comps = doc.tumbler().iter().cloned().chain([nat(0), nat(s), nat(n)]);
     validate(Tumbler::new(comps).expect("test element tumblers are nonempty"))

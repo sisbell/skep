@@ -57,13 +57,16 @@ use crate::world::World;
 /// before it — so [`World::readable`], which binds a fresh class per call,
 /// costs a published document no scan at all
 /// (`a_reader_class_resolves_its_seat_only_where_a_draft_needs_it`).
+/// [`ReaderClass::seat`] hands the same resolved seat out, so a caller keying
+/// anything else off the reader's seat — a feed's stream keys — pays the scan
+/// once for both, and a clone carries whatever its original resolved.
 ///
 /// The fields are private: the seat is M3's answer for this class's own
 /// principal and never a caller's, so a class whose seat and principal
 /// disagree is not constructible. `OnceLock` rather than `OnceCell`, so the
 /// class is `Sync` and a closure borrowing it is `Send + Sync` — the bound
 /// M10's readers take a threaded predicate under.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ReaderClass<'w> {
     world: &'w World,
     principal: Option<PrincipalId>,
@@ -230,6 +233,23 @@ impl World {
 }
 
 impl<'w> ReaderClass<'w> {
+    /// The reader's SEAT — M3's `principal_prefix` answer for this class's own
+    /// principal, `None` for the guest and for a principal M3 seats nowhere:
+    /// an account for every principal but the node-tier principal 0, whose
+    /// seat is the node itself. Resolved in the one cell
+    /// [`ReaderClass::readable`] resolves it in, at most once for the class's
+    /// life, so a caller keying anything else off the reader's seat pays M3's
+    /// registry scan once for both. The guest resolves nothing: it has no
+    /// principal to look up.
+    ///
+    /// The answer borrows the WORLD, not the class, so it outlives the class
+    /// that resolved it.
+    pub fn seat(&self) -> Option<&'w Address> {
+        let world = self.world;
+        let id = self.principal?;
+        *self.seat.get_or_init(|| world.namespace.principal_prefix(id))
+    }
+
     /// The read predicate at this reader class — its ONE body. Its clauses,
     /// its projection and its cost are stated on [`World::readable`], which
     /// asks this through a fresh class per call; a seat an earlier question
@@ -255,9 +275,9 @@ impl<'w> ReaderClass<'w> {
             return false;
         };
         // The guest sees only published documents (no subtree, no grant).
-        let Some(id) = self.principal else {
+        if self.principal.is_none() {
             return false;
-        };
+        }
         // `account(principal)` — the principal's SEAT, M3's `principal_prefix`
         // answer, looked up by the first question that reaches here and reused
         // by every later one. It is an account for every principal but the
@@ -265,7 +285,7 @@ impl<'w> ReaderClass<'w> {
         // the subtree clause tests the seat's tier. The two clauses below read
         // it differently: as the seat the subtree clause tests, and as the
         // grantee the fold is probed with.
-        let account = *self.seat.get_or_init(|| world.namespace.principal_prefix(id));
+        let account = self.seat();
         // Subtree clause — `in_owner_subtree` states it.
         if account.is_some_and(|seat| in_owner_subtree(seat, owner)) {
             return true;
@@ -359,6 +379,11 @@ mod tests {
     /// [`World::readable`] bind a fresh class per call and still cost a
     /// published document no scan; a class that looked its seat up at
     /// construction would charge one to every call on every published row.
+    ///
+    /// [`ReaderClass::seat`] answers out of that same cell and fills it where
+    /// no draft has yet, so a caller keying anything else off the seat shares
+    /// the predicate's one scan; and a clone carries the resolved seat with
+    /// it rather than starting over.
     #[test]
     fn a_reader_class_resolves_its_seat_only_where_a_draft_needs_it() {
         let engine = mem_engine();
@@ -375,11 +400,20 @@ mod tests {
         let guest = world.reader_class(None);
         assert!(!guest.readable(&draft), "the guest reads no draft");
         assert!(guest.seat.get().is_none(), "…and has no seat to look up");
+        assert_eq!(guest.seat(), None, "the guest has no seat to hand out");
+        assert!(guest.seat.get().is_none(), "…and asking for one resolves nothing");
 
         let owner = world.reader_class(Some(USER));
         assert!(owner.readable(&home), "the first flagless mint is published");
         assert!(owner.seat.get().is_none(), "a published document answers before the scan");
         assert!(owner.readable(&draft), "the owner reads its draft by the subtree clause");
         assert_eq!(owner.seat.get(), Some(&Some(&acct)), "the draft looked up M3's own seat");
+        assert_eq!(owner.seat(), Some(&acct), "the accessor hands out the seat the draft resolved");
+        let copy = owner.clone();
+        assert_eq!(copy.seat.get(), Some(&Some(&acct)), "a clone carries what its original resolved");
+
+        let fresh = world.reader_class(Some(USER));
+        assert_eq!(fresh.seat(), Some(&acct), "the accessor resolves M3's own seat");
+        assert_eq!(fresh.seat.get(), Some(&Some(&acct)), "…into the cell the predicate reads");
     }
 }

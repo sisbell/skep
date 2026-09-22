@@ -12,10 +12,6 @@
 //! published home beside a later draft — because the flags it mints with are
 //! what its tests are about. What every fixture does before minting is here.
 
-// The dump's suites are the only callers of some of these, and they are
-// compiled with the `dump` feature alone.
-#![allow(dead_code)]
-
 use skep_address::{validate, Address, Nat, Tumbler};
 use skep_kernel::{CheckpointPolicy, Durability, KernelConfig};
 use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
@@ -36,6 +32,7 @@ pub(crate) fn mem_engine() -> Engine {
 }
 
 /// A T4-valid address from its components.
+#[track_caller]
 pub(crate) fn addr(comps: &[u32]) -> Address {
     let t = Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("test tumblers are nonempty");
     validate(t).expect("test addresses are T4-valid")
@@ -46,6 +43,7 @@ pub(crate) fn addr(comps: &[u32]) -> Address {
 /// document's content space, so an element there is a position a projection
 /// can name; subspace 3 is a space nothing ever mints into, so a type slot
 /// filled from it lands in a coverage class of its own.
+#[track_caller]
 pub(crate) fn element(doc: &Address, s: u32, n: u32) -> Address {
     let comps =
         doc.tumbler().iter().cloned().chain([Nat::from(0u32), Nat::from(s), Nat::from(n)]);
@@ -56,6 +54,7 @@ pub(crate) fn element(doc: &Address, s: u32, n: u32) -> Address {
 /// `principal` at the prefix M3 names next: peeked off one snapshot and
 /// claimed by the next commit, which nothing else in a single-threaded test
 /// can take first.
+#[track_caller]
 pub(crate) fn delegated_account(engine: &Engine, principal: PrincipalId) -> Address {
     let prefix = engine
         .kernel()

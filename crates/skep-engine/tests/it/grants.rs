@@ -10,7 +10,7 @@
 use crate::common;
 
 use common::*;
-use skep_address::{validate, Level, Tumbler};
+use skep_address::{validate, Address, Level, Tumbler};
 use skep_arrangement::{trunk_of, Caller, Deposit};
 use skep_content::Val;
 use skep_engine::{Engine, IssuerGrant, UniversalGrant, World};
@@ -23,13 +23,13 @@ use tempfile::tempdir;
 /// The GRANTS class type address (COMMONS DECISION 5 — 1.1.0.1.0.1.0.3.90).
 /// Spelled here as a client would name it, rather than read off
 /// `skep_engine::types::t_grant`, so the suite drives the wire value itself.
-fn t_grant() -> skep_address::Address {
+fn t_grant() -> Address {
     addr(&[1, 1, 0, 1, 0, 1, 0, 3, 90])
 }
 
 /// The EDITION class — `1.1.0.1.0.1.0.3.14`, a commons type OUTSIDE the
 /// grants class. For the record that names the grants class among others.
-fn t_edition() -> skep_address::Address {
+fn t_edition() -> Address {
     addr(&[1, 1, 0, 1, 0, 1, 0, 3, 14])
 }
 
@@ -37,7 +37,7 @@ fn t_edition() -> skep_address::Address {
 /// write path recognizes a class's subtypes BY PREFIX; the fold recognizes
 /// its class by the ADDRESS. The two rules differ on purpose, and this is the
 /// address that tells them apart.
-fn t_grant_subtype() -> skep_address::Address {
+fn t_grant_subtype() -> Address {
     addr(&[1, 1, 0, 1, 0, 1, 0, 3, 90, 1])
 }
 
@@ -49,10 +49,10 @@ const A: PrincipalId = PrincipalId(1);
 const B: PrincipalId = PrincipalId(2);
 
 struct Board {
-    acct_a: skep_address::Address,
-    home_a: skep_address::Address,
-    draft_a: skep_address::Address,
-    acct_b: skep_address::Address,
+    acct_a: Address,
+    home_a: Address,
+    draft_a: Address,
+    acct_b: Address,
 }
 
 /// Two accounts under the genesis node: [`A`] with a published home (its
@@ -85,7 +85,7 @@ const C: PrincipalId = PrincipalId(5);
 /// draft-homed record fails the DOC-1 clause as well, so a fold that skipped
 /// the publication test answers those the same way and only this one
 /// differently.
-fn draft_home_account(engine: &Engine) -> (skep_address::Address, skep_address::Address) {
+fn draft_home_account(engine: &Engine) -> (Address, Address) {
     let ns = engine.namespace();
     let acct = delegated_account(engine, &node1(), BOOTSTRAP_PRINCIPAL, D);
     let (home, _) =
@@ -105,10 +105,10 @@ fn draft_home_account(engine: &Engine) -> (skep_address::Address, skep_address::
 /// verdict, not the deposit's — the residence test below leans on that.
 fn grant(
     engine: &Engine,
-    home: &skep_address::Address,
-    from: &skep_address::Address,
-    to: Vec<skep_address::Address>,
-) -> skep_address::Address {
+    home: &Address,
+    from: &Address,
+    to: Vec<Address>,
+) -> Address {
     grant_as(engine, A, home, from, to)
 }
 
@@ -117,10 +117,10 @@ fn grant(
 fn grant_as(
     engine: &Engine,
     issuer: PrincipalId,
-    home: &skep_address::Address,
-    from: &skep_address::Address,
-    to: Vec<skep_address::Address>,
-) -> skep_address::Address {
+    home: &Address,
+    from: &Address,
+    to: Vec<Address>,
+) -> Address {
     grant_slots(engine, issuer, home, vec![from.clone()], to)
 }
 
@@ -131,10 +131,10 @@ fn grant_as(
 fn grant_slots(
     engine: &Engine,
     issuer: PrincipalId,
-    home: &skep_address::Address,
-    from: Vec<skep_address::Address>,
-    to: Vec<skep_address::Address>,
-) -> skep_address::Address {
+    home: &Address,
+    from: Vec<Address>,
+    to: Vec<Address>,
+) -> Address {
     grant_typed(engine, issuer, home, from, to, vec![t_grant()])
 }
 
@@ -145,11 +145,11 @@ fn grant_slots(
 fn grant_typed(
     engine: &Engine,
     issuer: PrincipalId,
-    home: &skep_address::Address,
-    from: Vec<skep_address::Address>,
-    to: Vec<skep_address::Address>,
-    ty: Vec<skep_address::Address>,
-) -> skep_address::Address {
+    home: &Address,
+    from: Vec<Address>,
+    to: Vec<Address>,
+    ty: Vec<Address>,
+) -> Address {
     let caller = Caller::Principal(issuer);
     engine
         .linkstore(&World::visible_to(caller))
@@ -281,10 +281,10 @@ const SECOND_CHILD: PrincipalId = PrincipalId(14);
 /// beneath A, and [`GRANDCHILD`] beneath CHILD.
 struct Nested {
     board: Board,
-    child_draft: skep_address::Address,
-    grandchild_draft: skep_address::Address,
-    second_child_draft: skep_address::Address,
-    b_draft: skep_address::Address,
+    child_draft: Address,
+    grandchild_draft: Address,
+    second_child_draft: Address,
+    b_draft: Address,
 }
 
 /// A sub-account delegated beneath `parent` by the principal seated there,
@@ -293,9 +293,9 @@ struct Nested {
 fn sub_account_with_a_draft(
     engine: &Engine,
     delegator: PrincipalId,
-    parent: &skep_address::Address,
+    parent: &Address,
     id: PrincipalId,
-) -> (skep_address::Address, skep_address::Address) {
+) -> (Address, Address) {
     let acct = delegated_account(engine, parent, delegator, id);
     assert!(prefix_contains(parent, &acct), "the fixture must NEST the two accounts");
     let (draft, _) = engine
@@ -622,11 +622,11 @@ const S: PrincipalId = PrincipalId(6);
 
 /// A sub-account of [`A`]'s, and the two documents its principal [`S`] mints.
 struct SubAccount {
-    acct: skep_address::Address,
+    acct: Address,
     /// S's published doc 1 — the one home S's grants admit from.
-    home: skep_address::Address,
+    home: Address,
     /// S's private draft.
-    draft: skep_address::Address,
+    draft: Address,
 }
 
 /// A sub-account of A's, delegated to [`S`], with its published doc 1 and a
@@ -882,7 +882,7 @@ fn a_to_slot_that_is_not_empty_but_denotes_nothing_grants_to_nobody() {
 
 /// An address that stands OFF the ladder, built on a fresh board — one of the
 /// vectors of [`a_grant_whose_from_stands_on_neither_rung_is_of_neither_kind`].
-type OffTheLadder = fn(&Engine, &Board) -> skep_address::Address;
+type OffTheLadder = fn(&Engine, &Board) -> Address;
 
 /// THE FROM's RUNG (PUB-5.15 as RES-252 leaves it; PUB-5.10's ladder): a
 /// grant's `from` is a DOCUMENT or an ACCOUNT, and a record whose `from` is an
@@ -1590,7 +1590,7 @@ fn the_read_predicate_projects_an_address_the_client_invented() {
     // A DOCUMENT address under A's account whose document field is a long run
     // of version components — T4-valid, registered nowhere, and never
     // reachable by any mint.
-    let deep: skep_address::Address = {
+    let deep: Address = {
         let comps = board
             .acct_a
             .tumbler()

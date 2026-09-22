@@ -11,8 +11,13 @@ use crate::framing::{framed, KEY_TAG};
 /// carries (AUTH-2.128), and `ALGS`' first row.
 pub const ALG_ED25519: &str = "ed25519";
 
-/// One [`ALGS`] row (AUTH-1.5).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// One [`ALGS`] row (AUTH-1.5). Not comparable as a whole: [`AlgRow::make`]
+/// is a function pointer, and its ADDRESS says nothing about which arm it is
+/// — one function may hold several addresses across codegen units, and
+/// distinct functions may be merged onto one — so a row-level `==` would
+/// answer unpredictably. The three DECLARED columns compare directly, which
+/// is what the AUTH-2.92 assertion does.
+#[derive(Debug, Clone, Copy)]
 pub struct AlgRow {
     /// The alg TOKEN — the value a key entry's `alg` member carries
     /// (AUTH-1.1, AUTH-2.128).
@@ -22,21 +27,41 @@ pub struct AlgRow {
     /// The KEY FAMILY — a curve, or a PQ parameter set. No two rows may
     /// name the same family (AUTH-1.5; the assertion is AUTH-2.92's).
     pub family: &'static str,
+    /// AUTH-1.4 — the row's ARM: the decoded raw bytes to a [`PublicKey`] of
+    /// THIS row's variant, `None` iff they are not this row's raw length.
+    /// Having it here is what makes [`ALGS`] the whole table —
+    /// [`PublicKey::parse`] calls it instead of matching the token a second
+    /// time, so a row with no arm does not compile, where a `parse` that had
+    /// forgotten one would compile and refuse every key of the new algorithm.
+    /// The agreement with `raw_len` is the AUTH-2.92 assertion's.
+    pub make: fn(&[u8]) -> Option<PublicKey>,
 }
 
-/// The algorithm set (AUTH-1.5): the single declared table, three columns —
-/// the TOKEN (a key entry's `alg` member), the RAW LENGTH, and the KEY
-/// FAMILY (a curve, or a PQ parameter set) — and no two rows may name the
-/// same family. [`PublicKey::parse`] and [`PublicKey::alg`] both READ this
-/// table (AUTH-1.6), so carrying a new algorithm arm is ONE edit (the enum
-/// arm plus its row) plus the I2 agreement assertion (AUTH-2.92). The token
-/// set this table admits is an I2 frozen constant (AUTH-2.90); adding a row
-/// is a coordinated grammar upgrade (AUTH-2.91) under the
-/// one-canonical-raw-form-per-token obligation (AUTH-2.99).
+/// [`ALGS`]' Ed25519 arm (AUTH-1.4) — a CHECKED conversion, so bytes of any
+/// other length answer `None`, which [`PublicKey::parse`] reports as
+/// `BadLength`, rather than panicking on a length the caller chose.
+fn make_ed25519(raw: &[u8]) -> Option<PublicKey> {
+    <[u8; 32]>::try_from(raw).ok().map(PublicKey::Ed25519)
+}
+
+/// The algorithm set (AUTH-1.5): the single declared table, four columns —
+/// the TOKEN (a key entry's `alg` member), the RAW LENGTH, the KEY FAMILY (a
+/// curve, or a PQ parameter set), and the ARM that builds the key — and no
+/// two rows may name the same family. [`PublicKey::parse`] and
+/// [`PublicKey::alg`] both READ this table (AUTH-1.6), so carrying a new
+/// algorithm arm is the enum arm, its row, and the two exhaustive matches
+/// (`alg`, `raw`) the compiler names, plus the I2 agreement assertion
+/// (AUTH-2.92). Nothing dispatches on the token a second time: the row
+/// carries its own [`AlgRow::make`], so there is no admission path a new row
+/// can be left out of. The token set this table admits is an I2 frozen
+/// constant (AUTH-2.90); adding a row is a coordinated grammar upgrade
+/// (AUTH-2.91) under the one-canonical-raw-form-per-token obligation
+/// (AUTH-2.99).
 pub const ALGS: &[AlgRow] = &[AlgRow {
     token: ALG_ED25519,
     raw_len: 32,
     family: "edwards25519",
+    make: make_ed25519,
 }];
 
 /// A public key (AUTH-1.1): v1 admits Ed25519 only, and the enum is the
@@ -75,9 +100,10 @@ impl PublicKey {
     /// AUTH-1.4 — SYNTAX-ONLY admission, the checks in THIS order with the
     /// FIRST failure the verdict: the alg token is looked up in [`ALGS`]
     /// (`UnknownAlg` when absent), then the hex MUST decode (`BadHex`
-    /// otherwise — case-insensitively, AUTH-1.3), then the decoded bytes must
-    /// be exactly that row's raw length (`BadLength` otherwise); the curve
-    /// point is never decoded. The order is observable and pinned:
+    /// otherwise — case-insensitively, AUTH-1.3), then that row's own
+    /// [`AlgRow::make`] must accept the decoded bytes, which it does at
+    /// exactly the row's raw length and no other (`BadLength` otherwise); the
+    /// curve point is never decoded. The order is observable and pinned:
     /// `parse("rsa", "zz")` is `UnknownAlg`, `parse("ed25519", "zz")` is
     /// `BadHex` — a length test hoisted ahead of the decode would flip that
     /// second row, which is what `public_key_surface` watches.
@@ -87,25 +113,14 @@ impl PublicKey {
             .find(|a| a.token == alg)
             .ok_or(KeyParseError::UnknownAlg)?;
         let bytes = hex_decode(hex).ok_or(KeyParseError::BadHex)?;
-        if bytes.len() != row.raw_len {
-            return Err(KeyParseError::BadLength);
-        }
-        match alg {
-            // The conversion is CHECKED, so the arm's array length and its
-            // ALGS row's `raw_len` need not agree for this to be sound: an
-            // arm whose array is not its row's length answers `BadLength` —
-            // the token the row check above already answers — rather than
-            // panicking on a length the caller chose. That agreement is the
-            // AUTH-2.92 assertion's, and adding an arm (AUTH-2.91) cannot
-            // make a hostile entry panic here while it is out.
-            ALG_ED25519 => match <[u8; 32]>::try_from(bytes.as_slice()) {
-                Ok(raw) => Ok(PublicKey::Ed25519(raw)),
-                Err(_) => Err(KeyParseError::BadLength),
-            },
-            // Reachable only if ALGS carries a token no arm constructs — the
-            // drift the AUTH-2.92 assertion fails at test time.
-            _ => Err(KeyParseError::UnknownAlg),
-        }
+        // The row decides the length, by its own CHECKED conversion: the row
+        // is what says which variant these bytes are, so there is no second
+        // match on `alg` and no unreachable catch-all. A row whose `make`
+        // disagreed with its `raw_len` would answer `BadLength` rather than
+        // panic on a length the caller chose; that agreement is the AUTH-2.92
+        // assertion's, and adding a row (AUTH-2.91) cannot make a hostile
+        // entry panic here while it is out.
+        (row.make)(&bytes).ok_or(KeyParseError::BadLength)
     }
 }
 

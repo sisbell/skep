@@ -12,8 +12,11 @@
 //! themselves arrive from `crate::read`.
 //!
 //! The two kinds share one record envelope and one fault precedence
-//! (AUTH-2.19), so [`scan`] holds those once and a kind's [`Schema`] carries
-//! only the five rows that kind decides for itself.
+//! (AUTH-2.19): [`scan`] holds the precedence and the parse side of the
+//! envelope, [`canonical_record`] the encode side, and a kind's [`Schema`]
+//! carries only the five rows that kind decides for itself — read by its
+//! parser and its encoder alike, so the two sides cannot disagree about the
+//! `type` value or the member name.
 
 use core::fmt;
 use core::fmt::Write as _;
@@ -200,65 +203,30 @@ fn escape_json_string(s: &str, out: &mut String) {
     out.push('"');
 }
 
-/// AUTH-2.130 — the canonical encoding of an enrollment record VALUE: members
-/// in schema order (`type` first, `keys`, `sig` last when present), each key
-/// entry `{alg, key, anchor, label?}` in that order, no whitespace outside
-/// strings, hex lowercase, the exact escape set, no byte after the brace. The
-/// admission sentence ranges over this whole value, `sig` INCLUDED (RES-105);
-/// [`encode_enroll`] is this function with `sig = None` (AUTH-2.18).
-fn canonical_enroll(entries: &[Enrollment], sig: Option<&str>) -> String {
-    let mut out = String::new();
-    out.push_str(r#"{"type":""#);
-    out.push_str(ENROLL_TYPE);
-    out.push_str(r#"","keys":["#);
-    for (i, e) in entries.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        out.push_str(r#"{"alg":""#);
-        out.push_str(e.key.alg());
-        out.push_str(r#"","key":""#);
-        out.push_str(&e.key.to_hex()); // AUTH-2.17 — hex lowercase
-        out.push_str(r#"","anchor":"#);
-        out.push_str(if e.anchor { "true" } else { "false" });
-        if let Some(label) = e.label() {
-            out.push_str(r#","label":"#);
-            escape_json_string(label, &mut out);
-        }
-        out.push('}');
-    }
-    out.push(']');
-    if let Some(sig) = sig {
-        out.push_str(r#","sig":"#);
-        escape_json_string(sig, &mut out);
+/// AUTH-2.130 — ONE `keys` entry in the canonical spelling: `{alg, key,
+/// anchor, label?}` in that member order, hex lowercase (AUTH-2.17), the
+/// label escaped by [`escape_json_string`] (clause 3). The ENVELOPE around
+/// the array is [`canonical_record`]'s and is not written here.
+fn write_key_entry(e: &Enrollment, out: &mut String) {
+    out.push_str(r#"{"alg":""#);
+    out.push_str(e.key.alg());
+    out.push_str(r#"","key":""#);
+    out.push_str(&e.key.to_hex()); // AUTH-2.17 — hex lowercase
+    out.push_str(r#"","anchor":"#);
+    out.push_str(if e.anchor { "true" } else { "false" });
+    if let Some(label) = e.label() {
+        out.push_str(r#","label":"#);
+        escape_json_string(label, out);
     }
     out.push('}');
-    out
 }
 
-/// AUTH-2.130 — the canonical encoding of a retirement record VALUE:
-/// `{type, fingerprints, sig?}`, each fingerprint a 64-hex lowercase string in
-/// the record's own order. [`encode_retire`] is this with `sig = None`.
-fn canonical_retire(fps: &[Fingerprint], sig: Option<&str>) -> String {
-    let mut out = String::new();
-    out.push_str(r#"{"type":""#);
-    out.push_str(RETIRE_TYPE);
-    out.push_str(r#"","fingerprints":["#);
-    for (i, fp) in fps.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        out.push('"');
-        out.push_str(&fp.to_hex()); // AUTH-2.17 — hex lowercase
-        out.push('"');
-    }
-    out.push(']');
-    if let Some(sig) = sig {
-        out.push_str(r#","sig":"#);
-        escape_json_string(sig, &mut out);
-    }
-    out.push('}');
-    out
+/// AUTH-2.130 — ONE `fingerprints` entry: a 64-hex lowercase string
+/// (AUTH-2.17), quoted.
+fn write_fingerprint_entry(fp: &Fingerprint, out: &mut String) {
+    out.push('"');
+    out.push_str(&fp.to_hex()); // AUTH-2.17 — hex lowercase
+    out.push('"');
 }
 
 /// AUTH-2.128 — validate ONE `keys` entry against the enrollment schema, one
@@ -320,16 +288,22 @@ fn retirement_fingerprint(fp: &Fingerprint) -> Fingerprint {
 }
 
 /// One record kind's SCHEMA — everything AUTH-2.128 and AUTH-2.129 say
-/// DIFFERENTLY, and nothing they say alike. Five rows; the envelope both
-/// schemas state in identical words, and AUTH-2.19's fault precedence both
-/// kinds keep, are [`scan`]'s and written once.
+/// DIFFERENTLY, and nothing they say alike. Five rows, read by the kind's
+/// parser and its encoder alike. The envelope both schemas state in identical
+/// words is written once on each side — [`scan`] reads it, [`canonical_record`]
+/// writes it, both from the rows above — and AUTH-2.19's fault precedence,
+/// which both kinds keep, is [`scan`]'s.
 ///
 /// PRECONDITION — two rows must AGREE, and [`scan`] checks neither. For every
-/// entry `parse_entry` admits from a canonical body, `canonical` must re-emit
-/// the bytes that entry spelled: AUTH-2.130's admission sentence is spelled
-/// `canonical(parsed) == text`, so a `canonical` that is not `parse_entry`'s
-/// inverse refuses EVERY record of the kind — silently, permanently, and with
-/// no fault to tell it from a malformed body. And `compared_by` must be the
+/// entry `parse_entry` admits from a canonical body, `write_entry` must
+/// re-emit the bytes that entry spelled: AUTH-2.130's admission sentence is
+/// spelled `canonical_record(schema, parsed, sig) == text`, so a `write_entry`
+/// that is not `parse_entry`'s inverse refuses EVERY record of the kind —
+/// silently, permanently, and with no fault to tell it from a malformed body.
+/// The ENVELOPE half of that inversion needs no precondition:
+/// [`canonical_record`] spells the `type` value and the entry-array member
+/// from the very rows [`scan`] reads to FIND them, so the encode and parse
+/// sides cannot disagree about either. And `compared_by` must be the
 /// kind's AUTH-2.15 sameness rule, because it is the ONLY thing standing
 /// behind each parser's DUPLICATE-FREE POSTCONDITION: a `compared_by` that
 /// separated two entries the kind calls one would admit a record the
@@ -344,13 +318,64 @@ struct Schema<T> {
     entries_member: &'static str,
     /// AUTH-2.128/AUTH-2.129 — ONE entry against the kind's entry schema.
     parse_entry: fn(&Value) -> Result<T, PayloadError>,
-    /// AUTH-2.130 — the record VALUE's canonical encoding, `sig` included.
-    canonical: fn(&[T], Option<&str>) -> String,
+    /// AUTH-2.130 — ONE entry in the canonical spelling, appended to the
+    /// buffer. The ENVELOPE is [`canonical_record`]'s, written once from
+    /// `type_value` and `entries_member` above.
+    write_entry: fn(&T, &mut String),
     /// AUTH-2.15 — the FINGERPRINT two entries are compared by:
     /// `enrollment_key_fingerprint` takes the parsed key's,
     /// `retirement_fingerprint` the entry itself. BOTH kinds compare
     /// fingerprints, so that is the type here and not a parameter.
     compared_by: fn(&T) -> Fingerprint,
+}
+
+/// The ENROLLMENT kind's table (AUTH-2.128, AUTH-2.130): the ONE place the
+/// kind's five rows are written, read by [`parse_enroll`] and
+/// [`encode_enroll`] alike.
+const ENROLL_SCHEMA: Schema<Enrollment> = Schema {
+    type_value: ENROLL_TYPE,
+    entries_member: "keys",
+    parse_entry: parse_key_entry,
+    write_entry: write_key_entry,
+    compared_by: enrollment_key_fingerprint,
+};
+
+/// The RETIREMENT kind's table (AUTH-2.129, AUTH-2.130), as [`ENROLL_SCHEMA`].
+const RETIRE_SCHEMA: Schema<Fingerprint> = Schema {
+    type_value: RETIRE_TYPE,
+    entries_member: "fingerprints",
+    parse_entry: parse_fingerprint_entry,
+    write_entry: write_fingerprint_entry,
+    compared_by: retirement_fingerprint,
+};
+
+/// AUTH-2.130 — the canonical encoding of a record VALUE: the ENVELOPE both
+/// schemas state in identical words, written ONCE. `{"type":"<value>",`
+/// `"<member>":[` the entries comma-separated `]`, then `,"sig":<escaped>`
+/// when present, then `}` — no whitespace outside strings, no byte after the
+/// brace (clauses 2 and 5). The admission sentence ranges over this whole
+/// value, `sig` INCLUDED (RES-105); [`encode_enroll`] and [`encode_retire`]
+/// are this function with `sig = None` (AUTH-2.18).
+fn canonical_record<T>(schema: &Schema<T>, entries: &[T], sig: Option<&str>) -> String {
+    let mut out = String::new();
+    out.push_str(r#"{"type":""#);
+    out.push_str(schema.type_value);
+    out.push_str(r#"",""#);
+    out.push_str(schema.entries_member);
+    out.push_str(r#"":["#);
+    for (i, entry) in entries.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        (schema.write_entry)(entry, &mut out);
+    }
+    out.push(']');
+    if let Some(sig) = sig {
+        out.push_str(r#","sig":"#);
+        escape_json_string(sig, &mut out);
+    }
+    out.push('}');
+    out
 }
 
 /// AUTH-2.19 — the fault precedence BOTH kinds keep, and the record envelope
@@ -427,7 +452,7 @@ fn scan<T>(bytes: &[u8], schema: Schema<T>) -> Result<Vec<T>, PayloadError> {
     // AUTH-2.130's ADMISSION SENTENCE — the byte-identity compare over the
     // RECORD VALUE, `sig` INCLUDED (RES-105, I2 AUTH-2.90): admit only where
     // the input is the canonical re-encoding of every member it carries.
-    if (schema.canonical)(&entries, sig.as_deref()) != text {
+    if canonical_record(&schema, &entries, sig.as_deref()) != text {
         return Err(PayloadError::BadRecord);
     }
     // AUTH-2.15/AUTH-2.19 item 3 — duplicate ENTRY, naming the 1-based
@@ -461,16 +486,7 @@ fn scan<T>(bytes: &[u8], schema: Schema<T>) -> Result<Vec<T>, PayloadError> {
 ///
 /// The record cap is the READ's, never this parser's (AUTH-2.43).
 pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
-    scan(
-        bytes,
-        Schema {
-            type_value: ENROLL_TYPE,
-            entries_member: "keys",
-            parse_entry: parse_key_entry,
-            canonical: canonical_enroll,
-            compared_by: enrollment_key_fingerprint,
-        },
-    )
+    scan(bytes, ENROLL_SCHEMA)
 }
 
 /// AUTH-2.129, AUTH-2.130 — parse a retirement record: the mirror of
@@ -484,16 +500,7 @@ pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
 /// one fingerprint twice beside the rest of the set would pass that test,
 /// empty the set, and void I3 (AUTH-2.97) and AUTH-1.36.
 pub fn parse_retire(bytes: &[u8]) -> Result<Vec<Fingerprint>, PayloadError> {
-    scan(
-        bytes,
-        Schema {
-            type_value: RETIRE_TYPE,
-            entries_member: "fingerprints",
-            parse_entry: parse_fingerprint_entry,
-            canonical: canonical_retire,
-            compared_by: retirement_fingerprint,
-        },
-    )
+    scan(bytes, RETIRE_SCHEMA)
 }
 
 /// AUTH-2.18/AUTH-2.130 — encode an enrollment record in the canonical spelling,
@@ -516,7 +523,7 @@ pub fn parse_retire(bytes: &[u8]) -> Result<Vec<Fingerprint>, PayloadError> {
 /// `encode_enroll(parse_enroll(y)…)` reproduces the entries of any body the
 /// fold admits: the round trip is a BIJECTION (I1, AUTH-2.89; AUTH-2.130).
 pub fn encode_enroll(enrollments: &[Enrollment]) -> String {
-    canonical_enroll(enrollments, None)
+    canonical_record(&ENROLL_SCHEMA, enrollments, None)
 }
 
 /// AUTH-2.18/AUTH-2.130 — encode a retirement record, as TEXT like
@@ -528,5 +535,5 @@ pub fn encode_enroll(enrollments: &[Enrollment]) -> String {
 /// POSTCONDITION — within it, `parse_retire(encode_retire(x).as_bytes())` is
 /// `Ok(x)` (I1, AUTH-2.89).
 pub fn encode_retire(fps: &[Fingerprint]) -> String {
-    canonical_retire(fps, None)
+    canonical_record(&RETIRE_SCHEMA, fps, None)
 }

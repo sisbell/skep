@@ -75,17 +75,17 @@ fn fingerprint_is_sha256_of_the_framed_key() {
 }
 
 /// AUTH-2.92 — the `ALGS` assertion: `PublicKey`'s arms and `ALGS` agree in
-/// BOTH directions and in ALL THREE columns.
+/// BOTH directions and in ALL FOUR columns.
 #[test]
 fn algs_and_arms_agree_both_directions() {
-    // Table → arms: every token parses at its row's length, and the
-    // constructed arm answers that token at that raw length.
+    // Table → arms: every row's `make` accepts that row's raw length, and the
+    // key it builds answers that row's token at that raw length.
     for row in ALGS {
         let hex = "00".repeat(row.raw_len);
         let k = PublicKey::parse(row.token, &hex).unwrap_or_else(|_| {
             panic!(
-                "ALGS token {} does not parse — no arm carries it, or the arm's \
-                 array is not this row's raw_len of {}",
+                "ALGS token {} does not parse — the row's `make` does not \
+                 accept this row's raw_len of {} bytes",
                 row.token, row.raw_len
             )
         });

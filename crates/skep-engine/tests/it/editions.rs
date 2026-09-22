@@ -386,11 +386,12 @@ fn a_to_slot_that_denotes_nothing_under_the_target_is_still_a_row() {
     assert!(!rows[0].to.is_empty(), "…while still covering the target's own subtree");
 }
 
-/// The COST paragraph's BREADTH term, pinned: the lookup ranges over
-/// `target`'s whole subtree and restricts `target`'s LEVEL nowhere, so a NODE
-/// address — three components, the genesis node — answers with every edition
-/// claim under it, across accounts and documents alike. What bounds this read
-/// is the store's size and not the request's.
+/// The caller's share of the COST paragraph's HITS term — the BREADTH —
+/// pinned: the lookup ranges over `target`'s whole subtree and restricts
+/// `target`'s LEVEL nowhere, so a NODE address — three components, the
+/// genesis node — answers with every edition claim under it, across accounts
+/// and documents alike. What bounds this read is the store's size and not the
+/// request's.
 #[test]
 fn the_lookup_ranges_over_whatever_tier_the_caller_names() {
     let engine = mem_engine();
@@ -424,10 +425,41 @@ fn the_lookup_ranges_over_whatever_tier_the_caller_names() {
     assert!(document_of(&node1()).is_none(), "the node names no document, and is not refused");
 }
 
+/// …and the containment runs the OTHER way as well: the share of the COST
+/// paragraph's HITS term that no caller chooses. A claim whose `to` names an
+/// ANCESTOR of the target — its account, its node — overlaps the target's
+/// subtree, so it is a row of the lookup for EVERY document beneath it, a
+/// registered target among them, which is all M10's registration check
+/// admits. One address-form deposit naming the genesis node is thereby a row
+/// of every answer on the board. Pinned as REACH, the way the test above pins
+/// the caller's own breadth; which of these rows PUB-8.46 means to answer is
+/// PUB's to say.
+#[test]
+fn a_claim_naming_an_ancestor_of_the_target_is_a_row_of_its_lookup() {
+    let engine = mem_engine();
+    let board = board(&engine);
+    let account =
+        document_of(&board.target).and_then(|d| parent(&d)).expect("the target's account");
+    let on_account = claim(&engine, &board.e1, &account, &t_edition());
+    let on_node = claim(&engine, &board.e2, &node1(), &t_edition());
+
+    let w = world(&engine);
+    for target in [&board.target, &board.version_member, &board.other_target] {
+        assert_eq!(
+            w.edition_claims(target),
+            vec![
+                row(&on_account, &board.e1, &account, true),
+                row(&on_node, &board.e2, &node1(), true),
+            ],
+            "{target}: the claims naming its account and its node are rows of its lookup"
+        );
+    }
+}
+
 /// …and the ANSWER's size is the DEPOSITOR's, not the request's: a row
 /// matched on one address carries its `to` endset AS DEPOSITED, so a claim
 /// naming the target among many addresses hands the whole slot back to a
-/// caller that asked after one. The cost paragraph's third term.
+/// caller that asked after one. The cost paragraph's last term.
 #[test]
 fn a_row_carries_the_to_slot_as_deposited_however_wide() {
     let engine = mem_engine();

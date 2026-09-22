@@ -28,11 +28,13 @@
 //! The `to` test is M7's OVERLAP regime and not denotation, which is what
 //! makes a document name every claim on it or on any version of it, and a
 //! version member name those on it and those on its document (coverage
-//! CONTAINMENT). The difference between the two readings is a row: a `to`
-//! slot that is a non-unit span across the target's subtree denotes no
-//! address under it and is still an answer here. The TYPE slot is judged the
-//! other way, over every denoted address, so the two range lookups above
-//! narrow to two different tests below and not to one test twice.
+//! CONTAINMENT) — and, by the same containment, every target name the claims
+//! on its account and on its node, so one claim naming a node is a row of
+//! every answer beneath it. The difference between the two readings is a
+//! row: a `to` slot that is a non-unit span across the target's subtree
+//! denotes no address under it and is still an answer here. The TYPE slot is
+//! judged the other way, over every denoted address, so the two range lookups
+//! above narrow to two different tests below and not to one test twice.
 //!
 //! Three per-hit checks then hold:
 //!
@@ -76,25 +78,37 @@ impl World {
     /// inside its hint fold. That is a store invariant violated, never a
     /// caller's argument, and it is why the two arms below are `expect`s.
     ///
-    /// COST, per call, uncached, in three terms — and the caller chooses the
-    /// first while the STORE chooses the other two, so this figure is not
-    /// read off the request:
+    /// COST, per call, uncached, in four terms — the first paid whatever
+    /// `target` names, the second the caller's and every depositor's
+    /// together, the last two the STORE's — so this figure is not read off the
+    /// request:
     ///
-    /// * The `to` RANGE is `target`'s whole subtree and `target`'s LEVEL is
-    ///   unrestricted here, so the breadth is the caller's: a version member
-    ///   ranges over itself, a document over its versions, an ACCOUNT over
-    ///   every document under it and a NODE over every account under that —
-    ///   one address of a few components asking after every edition claim in
-    ///   the store. Nothing below narrows by level, because the containment
-    ///   regime that makes a document name its versions' claims is the same
-    ///   arithmetic at every tier. The account- and node-tier breadths are a
-    ///   DIRECT caller's alone: M10's `PublicationWorld` seam asks only after
-    ///   its own registration check, so through it `target` is one
-    ///   registered document.
-    /// * `match_links` under the two constraints, then per HIT one `readlink`,
-    ///   one `in_edition_class` walk, one `succs` over the shipped
-    ///   supersession class and one `document_of`. That walk tests EVERY
-    ///   address the type slot denotes and short-circuits only on a
+    /// * The SCAN, which dominates: `match_links` drives its FIRST constraint
+    ///   through M7's `stab`, as built a brute scan of every stored link — up
+    ///   to one overlap test per `to`-slot span of every link in the store,
+    ///   retracted links included, each slot up to
+    ///   `skep_links::MAX_SLOT_SPANS` spans. The two ranges decide which links
+    ///   SURVIVE the walk, never how many it visits, so a registered document
+    ///   costs what a node does, and every call walks the whole store.
+    /// * The HITS. The `to` RANGE is `target`'s whole subtree and `target`'s
+    ///   LEVEL is unrestricted here, so the breadth is the caller's: a version
+    ///   member ranges over itself, a document over its versions, an ACCOUNT
+    ///   over every document under it and a NODE over every account under
+    ///   that — one address of a few components asking after every edition
+    ///   claim in the store. Nothing below narrows by level, because the
+    ///   containment regime that makes a document name its versions' claims is
+    ///   the same arithmetic at every tier. The account- and node-tier
+    ///   breadths are a DIRECT caller's alone: M10's `PublicationWorld` seam
+    ///   asks only after its own registration check, so through it `target` is
+    ///   one registered document. That bounds the caller's share of the hits
+    ///   and nothing more: overlap admits every claim whose `to` names an
+    ///   ANCESTOR of `target` too, so one address-form deposit naming a node is
+    ///   a hit of every lookup beneath it, and how many hits a registered
+    ///   document draws is the depositors' choice, board-wide
+    ///   (`a_claim_naming_an_ancestor_of_the_target_is_a_row_of_its_lookup`).
+    /// * Per HIT, one `readlink`, one `in_edition_class` walk, one `succs` over
+    ///   the shipped supersession class and one `document_of`. That walk tests
+    ///   EVERY address the type slot denotes and short-circuits only on a
     ///   non-member, so a slot filled with subtypes of the class runs to
     ///   completion and keeps its row; its bound is
     ///   `skep_links::MAX_SLOT_SPANS`, which is a slot's bound and not a

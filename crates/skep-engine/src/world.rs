@@ -145,12 +145,19 @@ impl fmt::Debug for World {
 /// `1` names TWO layouts. The first carries M3's publication bit (2026-09-05,
 /// PUB round 1); the second is that layout with M5's birth memo appended to
 /// its slice (W5, 2026-09-17), under the same count. So a base written under
-/// the first passes this word, and M5's decoder then reads M7's link bytes as
-/// the memo: its refusal is left to that misalignment — near-certain, not
-/// certain — which makes it the one older layout this word does not refuse.
-/// Moving the count would refuse it here, and would refuse the second
-/// layout's bases too, which decode: a decision about the bases already on
-/// disk, and the owner's to take.
+/// the first passes this word — the one older layout it does not refuse — and
+/// M5's decoder then reads M7's bytes as the memo. That misreading fails on
+/// every store an op can write, by the encoding's arithmetic rather than by
+/// chance: with no link the memo swallows M7's whole slice; otherwise the
+/// memo's first value ends midway through a count whose high half is zero, so
+/// the next count read is zero or at least 2³², and zero is reachable only
+/// through a sole link no deposit surface writes.
+/// `a_base_written_before_the_birth_memo_fails_to_decode` states that
+/// arithmetic in full and pins the refusal on each shape it branches on, so a
+/// change beneath a slice's top level that moved the misreading fails there
+/// rather than on disk. Moving the count would refuse such a base here
+/// instead, and would refuse the second layout's bases too, which decode: a
+/// decision about the bases already on disk, and the owner's to take.
 ///
 /// PUB-7.8: a pre-publication checkpoint MUST fail to DECODE rather than
 /// resolve to everything-published. M3's own field order already makes that
@@ -427,11 +434,13 @@ impl skep_febe::PublicationWorld for World {
     /// stated: the two regimes the slots are judged by — OVERLAP for the `to`
     /// slot, DENOTATION for class membership — and the precondition that
     /// `target` is a registered document, which M10 checks before it asks. So
-    /// through this seam the breadth term of [`World::edition_claims`]'s cost
-    /// is ONE registered document's subtree, while the inherent method stays
-    /// total over every tier for a direct caller. Membership is the whole of
-    /// what a row is tested for — no home, issuer or publication test runs on
-    /// this side of the seam.
+    /// through this seam `target` is ONE registered document, which bounds the
+    /// caller's share of the hits and neither the store scan every call pays
+    /// nor the rows a claim naming the target's account or node contributes
+    /// ([`World::edition_claims`]'s COST). The inherent method stays total
+    /// over every tier for a direct caller. Membership is the whole of what a
+    /// row is tested for — no home, issuer or publication test runs on this
+    /// side of the seam.
     fn edition_claims(&self, target: &Address) -> Vec<EditionClaim> {
         World::edition_claims(self, target)
     }
@@ -485,9 +494,10 @@ impl From<LinkRec> for Record {
 #[cfg(test)]
 mod tests {
     use skep_content::Val;
+    use skep_links::{Caller, SlotArg};
 
     use crate::canon::{to_tree, SerdeTree};
-    use crate::testkit::addr;
+    use crate::testkit::{addr, delegated_account, element, mem_engine, USER};
 
     use super::*;
 
@@ -703,5 +713,121 @@ mod tests {
         // `the_hint_check_refuses_a_world_whose_derived_state_was_never_rebuilt`.
         let decoded = bincode::deserialize::<World>(&current).expect("this build's own bytes decode");
         assert_eq!(decoded.drafts().count(), 0);
+    }
+
+    /// A world holding one link per entry of `shapes`, each homed in a
+    /// private DRAFT — where no version mints, so M5's birth memo stays empty
+    /// — its `from` and its `to` each naming one never-minted content position
+    /// of the draft (`true`) or none, and its type slot a never-minted address
+    /// of the draft's own subspace 3.
+    fn links_in_a_draft(shapes: &[(bool, bool)]) -> World {
+        let engine = mem_engine();
+        let acct = delegated_account(&engine, USER);
+        let (draft, _) = engine
+            .namespace()
+            .create_new_document(USER, &acct, Some(false))
+            .expect("an explicit-false mint is a draft");
+        let caller = Caller::Principal(USER);
+        let visibility = World::visible_to(caller);
+        let writer = engine.linkstore(&visibility);
+        let slot = |names: bool, subspace: u32| {
+            SlotArg::Addrs(if names { vec![element(&draft, subspace, 1)] } else { Vec::new() })
+        };
+        for &(from, to) in shapes {
+            writer
+                .makelink(caller, &draft, slot(from, 1), slot(to, 1), slot(true, 3))
+                .expect("a link in the owner's own draft");
+        }
+        engine.kernel().snapshot().world().clone()
+    }
+
+    /// `world`'s bytes as a build from before M5's birth memo wrote them: the
+    /// stamp, then each slice's, with M5's cut short of the memo — its LAST
+    /// field (`each_slice_serializes_the_fields_the_format_count_names`) and,
+    /// in every world handed here, EMPTY, so the eight-byte zero length that
+    /// ends M5's bytes. Checked rather than assumed: the memo is read off the
+    /// slice's serde form, and the same parts kept whole must be this build's
+    /// own bytes.
+    fn written_before_the_birth_memo(world: &World) -> Vec<u8> {
+        let SerdeTree::Map(fields) = to_tree(&world.arrangement) else {
+            panic!("M5State serializes as a struct — a map of its fields")
+        };
+        let memo = fields.iter().find_map(|(name, value)| match name {
+            SerdeTree::Str(s) if s.as_str() == "birth_extents" => Some(value),
+            _ => None,
+        });
+        assert!(
+            matches!(memo, Some(SerdeTree::Map(entries)) if entries.is_empty()),
+            "the fixture must leave M5's birth memo empty, or cutting its length misreads M5"
+        );
+        let stamp = bincode::serialize(&FormatStamp).expect("the stamp serializes");
+        let m3 = bincode::serialize(&world.namespace).expect("M3 serializes");
+        let m4 = bincode::serialize(&world.content).expect("M4 serializes");
+        let m5 = bincode::serialize(&world.arrangement).expect("M5 serializes");
+        let m7 = bincode::serialize(&world.links).expect("M7 serializes");
+        assert_eq!(
+            bincode::serialize(world).expect("a world serializes"),
+            [stamp.as_slice(), m3.as_slice(), m4.as_slice(), m5.as_slice(), m7.as_slice()].concat(),
+            "a World's bytes are the stamp, then each slice's"
+        );
+        assert!(m5.ends_with(&0u64.to_le_bytes()), "the empty memo's zero length ends M5's bytes");
+        [stamp.as_slice(), m3.as_slice(), m4.as_slice(), &m5[..m5.len() - 8], m7.as_slice()]
+            .concat()
+    }
+
+    /// The older layout count 1 still names — the publication-bit layout,
+    /// before M5's birth memo was appended — fails to DECODE all the same,
+    /// and by the encoding's arithmetic rather than by chance.
+    ///
+    /// This build reads such a base's M7 bytes as the memo. With no link, the
+    /// memo takes M7's link count as its own empty length, and M7 then finds
+    /// nothing left to read. Otherwise the memo takes that count as its own,
+    /// the first link's key as its first key (both are addresses), and the
+    /// first 20 bytes of that link as its first value: a `Nat` is a counted
+    /// run of `u32`s, and the count it meets is the link's arity, which is 3
+    /// for every stored link. Byte 20 falls midway through a count whose high
+    /// half is zero — `to`'s span count where `from` is empty, else the first
+    /// `from` span's component count — so the NEXT count read, M7's link
+    /// count where the store holds one link and the memo's second key where it
+    /// holds more, is the low half of the count after that one, shifted up 32
+    /// bits: the type slot's span count, a `to` span's component count, or a
+    /// component's digit count. At least 2³² runs the decode off the end.
+    /// Zero reads as an empty tumbler where there is a second key, which
+    /// `Tumbler`'s door refuses; where there is none it DECODES, as an empty
+    /// links map. And zero needs a link whose three slots are all empty, or
+    /// whose first `from` span opens with a zero component, and no deposit
+    /// surface leaves either as a store's sole link: the open gate refuses an
+    /// empty type slot (MAKELINK's `EmptyTypeResolution`) and the managed gate
+    /// types every tuple with a registered class; and a sole link is
+    /// MAKELINK's, `emit`'s or `nullify`'s — `assert_sup` and `editlink` need
+    /// resident links beside the ones they deposit — each of which starts
+    /// every `from` span at an address, which opens nonzero (T4).
+    ///
+    /// So the refusal is held on each shape that arithmetic branches on: no
+    /// link; one link through its type count, through a `to` and through a
+    /// `from`; and two links — each world's own bytes decoding beside it, so
+    /// the cut and not the fixture is what refuses. Pinned because
+    /// `each_slice_serializes_the_fields_the_format_count_names` cannot see
+    /// beneath a slice's top level: a change to `Link`, `Endset`, `Span`,
+    /// `Tumbler` or `Nat`'s encoding that moved this arithmetic would otherwise
+    /// turn such a base into a world with its links misread.
+    #[test]
+    fn a_base_written_before_the_birth_memo_fails_to_decode() {
+        let stores: [(&str, &[(bool, bool)]); 5] = [
+            ("no link", &[]),
+            ("one link, `from` and `to` empty: the type count", &[(false, false)]),
+            ("one link with a `to`: a span start's component count", &[(false, true)]),
+            ("one link with a `from`: a component's digit count", &[(true, false)]),
+            ("two links: the memo's second key", &[(false, false), (false, false)]),
+        ];
+        for (store, shapes) in stores {
+            let world = links_in_a_draft(shapes);
+            bincode::deserialize::<World>(&bincode::serialize(&world).expect("a world serializes"))
+                .expect("this build's own bytes decode");
+            assert!(
+                bincode::deserialize::<World>(&written_before_the_birth_memo(&world)).is_err(),
+                "{store}: a base written before the birth memo decoded, its links read as the memo"
+            );
+        }
     }
 }

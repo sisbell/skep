@@ -719,7 +719,7 @@ impl crate::Engine {
     ///   mis-derived one is an authorization answer rather than a stale
     ///   figure. The dump's grant section renders the fold's RECORDS and
     ///   neither index, so no comparison here reaches them.
-    /// * The grant fold's EARLIER-RECORD SET — `earlier` — drives
+    /// * The grant fold's EARLIER-RECORD SET — `earlier_records` — drives
     ///   `classify`'s second outcome: whether a record naming an earlier
     ///   record of its home is a revocation or of neither kind (PUB-5.15).
     ///   The grant section renders the operative set and not the

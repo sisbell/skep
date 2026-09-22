@@ -230,7 +230,7 @@ impl Engine {
             Arc::clone(&self.stores.kernel),
             Arc::clone(self.registry()),
             Box::new(mk_vstream),
-            Box::new(mk_link_store),
+            Box::new(mk_link_writer),
             Box::new(World::visible_to(Caller::System)),
         )
     }
@@ -279,7 +279,7 @@ fn mk_vstream(k: &Kernel<World>) -> Vstream<'_, World> {
     Vstream::new(k)
 }
 
-fn mk_link_store<'k>(
+fn mk_link_writer<'k>(
     k: &'k Kernel<World>,
     visibility: &'k Visibility<'k, World>,
 ) -> LinkWriter<'k, World> {

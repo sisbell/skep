@@ -162,7 +162,7 @@ fn the_grant_section_renders_an_any_principal_grant_with_no_grantee() {
 /// The filter under the TOTAL predicate is the harness-only walk, byte for
 /// byte — the two are one tree rendered twice.
 #[test]
-fn the_filter_under_the_total_predicate_is_the_harness_walk() {
+fn the_filter_under_the_total_predicate_is_the_harness_only_walk() {
     let engine = mem_engine();
     let board = board(&engine);
     grant(&engine, &board, &board.draft_a, &board.acct_b);

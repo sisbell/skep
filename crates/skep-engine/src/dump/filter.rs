@@ -714,7 +714,7 @@ mod tests {
 
         // The hints section: the by-home families, the by-tuple families, and
         // the three the filter reduces through an arm of their own.
-        let named: BTreeSet<String> = REDUCED_BY_HOME
+        let families: BTreeSet<String> = REDUCED_BY_HOME
             .iter()
             .copied()
             .chain(PREDICATE_PROJECTIONS.iter().map(|(family, _, _)| *family))
@@ -723,7 +723,7 @@ mod tests {
             .collect();
         assert_eq!(
             keys_at(&tree, &["hints"]),
-            named,
+            families,
             "a hints family the filter does not name is rendered whole to every reader class"
         );
 
@@ -870,7 +870,7 @@ mod tests {
     /// class's dump with the suite green, and so would a reduction here that
     /// emptied the field. The fixture drives both of M5's writing arms: a
     /// placement into a DRAFT, which must note nothing, and an owned version of
-    /// the published HOME, whose snapshot notes the member it mints.
+    /// the published HOME, whose snapshot notes the birth member it mints.
     #[test]
     fn every_birth_memo_key_is_a_version_member_whose_state_the_guest_reads() {
         let (engine, home, draft) = a_published_home_and_a_private_draft();
@@ -884,7 +884,7 @@ mod tests {
                 Deposit::Undeclared,
             )
             .expect("the owner writes its draft");
-        let (member, _) = engine
+        let (birth_member, _) = engine
             .vstream()
             .version(USER, &home, None)
             .expect("an owned version of the published home");
@@ -900,7 +900,10 @@ mod tests {
                 .collect(),
             other => panic!("M5's birth memo renders as a map, got {other:?}"),
         };
-        assert!(keys.contains(&member), "the fixture must give the memo its birth member: {keys:?}");
+        assert!(
+            keys.contains(&birth_member),
+            "the fixture must give the memo its birth member: {keys:?}"
+        );
         for key in &keys {
             assert_ne!(
                 trunk_of(key),
@@ -953,11 +956,11 @@ mod tests {
                 .0
         };
         // Two endpoints for the supersession claim, and one link to retract.
-        let (old, new, doomed) = (ordinary_link(41), ordinary_link(42), ordinary_link(43));
+        let (old, new, retracted) = (ordinary_link(41), ordinary_link(42), ordinary_link(43));
         writer
             .assert_sup(caller, &draft, &old, &new)
             .expect("a supersession claim over two of the draft's links");
-        writer.nullify(caller, &draft, &doomed).expect("the owner retracts its own link");
+        writer.nullify(caller, &draft, &retracted).expect("the owner retracts its own link");
         // One managed tuple per remaining shipped class, over members of the
         // draft — which is what puts the predicate projections in the tree.
         for ty in [ShippedType::Retired, ShippedType::PredDef, ShippedType::PredStable] {

@@ -320,7 +320,7 @@ pub(crate) struct Grants {
     /// off the same walk. It grows by one address per admitted record of the
     /// class and never shrinks — a revocation ADDS a record — so its size is
     /// the depositors', as the class's own is.
-    earlier: HashSet<Address>,
+    earlier_records: HashSet<Address>,
     /// The PRINCIPAL-EXACT index: grantee account → its granted
     /// content-prefixes → the issuers who granted them.
     by_grantee: HashMap<Address, OrdMap<Address, OrdSet<Address>>>,
@@ -510,7 +510,7 @@ impl Grants {
     /// for every admitted record of the class whatever its kind, and undone by
     /// nothing: a withdrawn grant stays a member, which is the point of it.
     fn keep_earlier(&mut self, addr: Address) {
-        self.earlier.insert(addr);
+        self.earlier_records.insert(addr);
     }
 
     /// Whether `addr` is the link address of an EARLIER admitted record of the
@@ -523,7 +523,7 @@ impl Grants {
     /// not answered here. The probe runs first, so an address that names no
     /// record — nearly every `from` there is — costs no arithmetic at all.
     fn holds_earlier(&self, addr: &Address, home: &Address) -> bool {
-        self.earlier.contains(addr) && document_of(addr).as_ref() == Some(home)
+        self.earlier_records.contains(addr) && document_of(addr).as_ref() == Some(home)
     }
 
     /// Whether `addr` is the link address of an OPERATIVE grant — admitted
@@ -912,7 +912,7 @@ mod tests {
 
     /// [`USER`]'s account with its published doc 1 — the one home its records
     /// of the class admit from — and a later private draft: `(home, draft)`.
-    fn a_home_and_a_draft(engine: &Engine) -> (Address, Address) {
+    fn a_published_home_and_a_private_draft(engine: &Engine) -> (Address, Address) {
         let acct = delegated_account(engine, USER);
         let (home, _) =
             engine.namespace().create_new_document(USER, &acct, None).expect("the home mint");
@@ -960,7 +960,7 @@ mod tests {
     #[test]
     fn the_earlier_record_set_keeps_what_the_operative_set_lets_go() {
         let engine = mem_engine();
-        let (home, draft) = a_home_and_a_draft(&engine);
+        let (home, draft) = a_published_home_and_a_private_draft(&engine);
         let grant = record(&engine, &home, &draft);
         {
             let snap = engine.kernel().snapshot();
@@ -992,8 +992,11 @@ mod tests {
             "an address of this home that no record occupies is no member"
         );
         let seeded = seed(&world.namespace, &world.links, &world.drafts);
-        assert_eq!(seeded.earlier, world.grants.earlier, "the seed rebuilds the set the fold kept");
-        assert_eq!(seeded.earlier.len(), members.len(), "…one member per admitted record");
+        assert_eq!(
+            seeded.earlier_records, world.grants.earlier_records,
+            "the seed rebuilds the set the fold kept"
+        );
+        assert_eq!(seeded.earlier_records.len(), members.len(), "…one member per admitted record");
     }
 
     /// …and [`classify`] CONSULTS the earlier-record set AHEAD of the ladder,
@@ -1010,7 +1013,7 @@ mod tests {
     #[test]
     fn the_earlier_record_test_speaks_before_the_ladder() {
         let engine = mem_engine();
-        let (home, _) = a_home_and_a_draft(&engine);
+        let (home, _) = a_published_home_and_a_private_draft(&engine);
         let naming_the_home = record(&engine, &home, &home);
         let snap = engine.kernel().snapshot();
         let link = snap.world().links.readlink(&naming_the_home).expect("the record is resident");

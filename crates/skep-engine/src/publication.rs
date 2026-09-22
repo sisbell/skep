@@ -356,10 +356,10 @@ mod tests {
     /// document's entry struck from the PUBLICATION map (`documents`: a
     /// checkpoint "can hold a registered document with NO entry").
     fn with_entry_struck(namespace: &M3State, field: &str, key: &Address) -> M3State {
-        let struck = to_tree(key).to_string();
+        let rendered = to_tree(key).to_string();
         with_map_field_edited(namespace, field, |entries| {
             let before = entries.len();
-            entries.retain(|(entry_key, _)| entry_key.to_string() != struck);
+            entries.retain(|(entry_key, _)| entry_key.to_string() != rendered);
             assert_eq!(
                 before - entries.len(),
                 1,

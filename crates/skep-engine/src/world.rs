@@ -733,9 +733,9 @@ mod tests {
         let slot = |names: bool, subspace: u32| {
             SlotArg::Addrs(if names { vec![element(&draft, subspace, 1)] } else { Vec::new() })
         };
-        for &(from, to) in shapes {
+        for &(with_from, with_to) in shapes {
             writer
-                .makelink(caller, &draft, slot(from, 1), slot(to, 1), slot(true, 3))
+                .makelink(caller, &draft, slot(with_from, 1), slot(with_to, 1), slot(true, 3))
                 .expect("a link in the owner's own draft");
         }
         engine.kernel().snapshot().world().clone()
@@ -761,18 +761,34 @@ mod tests {
             "the fixture must leave M5's birth memo empty, or cutting its length misreads M5"
         );
         let stamp = bincode::serialize(&FormatStamp).expect("the stamp serializes");
-        let m3 = bincode::serialize(&world.namespace).expect("M3 serializes");
-        let m4 = bincode::serialize(&world.content).expect("M4 serializes");
-        let m5 = bincode::serialize(&world.arrangement).expect("M5 serializes");
-        let m7 = bincode::serialize(&world.links).expect("M7 serializes");
+        let namespace_bytes = bincode::serialize(&world.namespace).expect("M3 serializes");
+        let content_bytes = bincode::serialize(&world.content).expect("M4 serializes");
+        let arrangement_bytes = bincode::serialize(&world.arrangement).expect("M5 serializes");
+        let links_bytes = bincode::serialize(&world.links).expect("M7 serializes");
         assert_eq!(
             bincode::serialize(world).expect("a world serializes"),
-            [stamp.as_slice(), m3.as_slice(), m4.as_slice(), m5.as_slice(), m7.as_slice()].concat(),
+            [
+                stamp.as_slice(),
+                namespace_bytes.as_slice(),
+                content_bytes.as_slice(),
+                arrangement_bytes.as_slice(),
+                links_bytes.as_slice(),
+            ]
+            .concat(),
             "a World's bytes are the stamp, then each slice's"
         );
-        assert!(m5.ends_with(&0u64.to_le_bytes()), "the empty memo's zero length ends M5's bytes");
-        [stamp.as_slice(), m3.as_slice(), m4.as_slice(), &m5[..m5.len() - 8], m7.as_slice()]
-            .concat()
+        assert!(
+            arrangement_bytes.ends_with(&0u64.to_le_bytes()),
+            "the empty memo's zero length ends M5's bytes"
+        );
+        [
+            stamp.as_slice(),
+            namespace_bytes.as_slice(),
+            content_bytes.as_slice(),
+            &arrangement_bytes[..arrangement_bytes.len() - 8],
+            links_bytes.as_slice(),
+        ]
+        .concat()
     }
 
     /// The older layout count 1 still names — the publication-bit layout,

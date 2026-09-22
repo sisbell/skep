@@ -363,11 +363,11 @@ fn a_fire_commits_byte_identically_to_a_world_with_no_drafts() {
         let retired = engine.registry().reserved_type(ShippedType::Retired).clone();
         if with_draft_tuples {
             let visibility = World::visible_to(OWNER);
-            let owner = engine.linkstore(&visibility);
-            owner
+            let writer = engine.linkstore(&visibility);
+            writer
                 .emit(OWNER, &draft, &retired, &member, &[])
                 .expect("the draft's own marker on the member");
-            owner
+            writer
                 .emit(OWNER, &draft, &pred_stable, &other, &[])
                 .expect("the draft's own relation on another member");
         }

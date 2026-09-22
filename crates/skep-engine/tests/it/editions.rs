@@ -276,11 +276,11 @@ fn a_type_slot_denoting_several_subtypes_of_the_class_is_a_member() {
 fn a_draft_edition_s_claim_is_in_the_class_the_world_answers() {
     let engine = mem_engine();
     let board = board(&engine);
-    let c3 = claim(&engine, &board.draft_edition, &board.target, &t_edition());
+    let draft_claim = claim(&engine, &board.draft_edition, &board.target, &t_edition());
     let w = world(&engine);
     assert_eq!(
         w.edition_claims(&board.target),
-        vec![row(&c3, &board.draft_edition, &board.target, true)]
+        vec![row(&draft_claim, &board.draft_edition, &board.target, true)]
     );
     assert!(
         !w.readable(None, &board.draft_edition),
@@ -292,14 +292,14 @@ fn a_draft_edition_s_claim_is_in_the_class_the_world_answers() {
 /// The `to`-RANGE is the target's subtree: a claim denoting the target's
 /// VERSION answers for the document (containment) and for the version member;
 /// a claim on the document answers for its version member too (the document's
-/// subtree contains the member's); a claim on another document never answers
-/// for this one, and answers for its own.
+/// subtree contains the version member's); a claim on another document never
+/// answers for this one, and answers for its own.
 #[test]
 fn the_to_range_is_the_target_s_subtree() {
     let engine = mem_engine();
     let board = board(&engine);
     let on_doc = claim(&engine, &board.e1, &board.target, &t_edition());
-    let on_member = claim(&engine, &board.e2, &board.version_member, &t_edition());
+    let on_version_member = claim(&engine, &board.e2, &board.version_member, &t_edition());
     let on_other = claim(&engine, &board.e1, &board.other_target, &t_edition());
 
     let w = world(&engine);
@@ -307,7 +307,7 @@ fn the_to_range_is_the_target_s_subtree() {
         w.edition_claims(&board.target),
         vec![
             row(&on_doc, &board.e1, &board.target, true),
-            row(&on_member, &board.e2, &board.version_member, true),
+            row(&on_version_member, &board.e2, &board.version_member, true),
         ],
         "the document names every claim denoting it or a version of it"
     );
@@ -315,7 +315,7 @@ fn the_to_range_is_the_target_s_subtree() {
         w.edition_claims(&board.version_member),
         vec![
             row(&on_doc, &board.e1, &board.target, true),
-            row(&on_member, &board.e2, &board.version_member, true),
+            row(&on_version_member, &board.e2, &board.version_member, true),
         ],
         "a version member names the claims denoting it and those denoting its document"
     );
@@ -397,7 +397,7 @@ fn the_lookup_ranges_over_whatever_tier_the_caller_names() {
     let engine = mem_engine();
     let board = board(&engine);
     let on_doc = claim(&engine, &board.e1, &board.target, &t_edition());
-    let on_member = claim(&engine, &board.e2, &board.version_member, &t_edition());
+    let on_version_member = claim(&engine, &board.e2, &board.version_member, &t_edition());
     let on_other = claim(&engine, &board.e1, &board.other_target, &t_edition());
 
     let w = world(&engine);
@@ -411,7 +411,7 @@ fn the_lookup_ranges_over_whatever_tier_the_caller_names() {
         vec![
             row(&on_doc, &board.e1, &board.target, true),
             row(&on_other, &board.e1, &board.other_target, true),
-            row(&on_member, &board.e2, &board.version_member, true),
+            row(&on_version_member, &board.e2, &board.version_member, true),
         ],
         "an account address ranges over every document under it"
     );

@@ -102,9 +102,9 @@ fn m10_s_read_surface_answers_through_the_engine_s_predicate() {
     let engine = mem_engine();
     let febe: OperationSurface<skep_engine::World> = OperationSurface::new(Box::new(engine.stores()));
 
-    let boot = febe.bootstrap_session();
+    let boot_session = febe.bootstrap_session();
     let prefix = match febe.execute(
-        boot,
+        boot_session,
         Request { id: None, op: Op::NextAccountPrefix { parent: node1() } },
     ) {
         Response::MaybeAddr { addr: Some(a), .. } => a,
@@ -112,7 +112,7 @@ fn m10_s_read_surface_answers_through_the_engine_s_predicate() {
         _ => panic!("expected MaybeAddr"),
     };
     let acct = ack_addr(febe.execute(
-        boot,
+        boot_session,
         Request {
             id: None,
             op: Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: USER },

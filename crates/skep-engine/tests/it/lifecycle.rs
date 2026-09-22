@@ -33,7 +33,7 @@ fn a_cross_store_lifecycle_survives_a_journal_reopen() {
     let dir = tempdir().expect("tempdir");
     let expected = vec![b"x".to_vec(), b"y".to_vec(), b"z".to_vec()];
 
-    let (doc, version_doc, link, last_seq);
+    let (doc, version_member, link, last_seq);
     {
         let engine = Engine::open(fsync_cfg(dir.path())).expect("fsync open");
 
@@ -98,13 +98,14 @@ fn a_cross_store_lifecycle_survives_a_journal_reopen() {
         }
 
         // M5+M3: version — a copy-on-write fork sharing the content.
-        let (vd, _version_seq) = engine.vstream().version(USER, &doc, None).expect("version succeeds");
-        version_doc = vd;
+        let (vm, _version_seq) =
+            engine.vstream().version(USER, &doc, None).expect("version succeeds");
+        version_member = vm;
         {
             let snap = engine.kernel().snapshot();
             let q = Query::new(&snap);
             let delivery = q
-                .retrieve_v(&[Spec { doc: version_doc.clone(), span: vspan(1, 1, 3) }])
+                .retrieve_v(&[Spec { doc: version_member.clone(), span: vspan(1, 1, 3) }])
                 .unwrap_or_else(|e| panic!("retrieve of the version failed: {e}"));
             assert_eq!(delivered_bytes(&delivery), expected, "the version shares the content");
         }
@@ -113,7 +114,7 @@ fn a_cross_store_lifecycle_survives_a_journal_reopen() {
         // discoverable from it too — cross-store transclusion discovery.
         let found_in_version = findlinks_v_on(
             &engine.kernel().snapshot(),
-            &version_doc,
+            &version_member,
             &[vspan(1, 1, 3)],
             &every_home,
         )
@@ -135,7 +136,7 @@ fn a_cross_store_lifecycle_survives_a_journal_reopen() {
 
         let snap = engine.kernel().snapshot();
         let q = Query::new(&snap);
-        for d in [&doc, &version_doc] {
+        for d in [&doc, &version_member] {
             let delivery = q
                 .retrieve_v(&[Spec { doc: (*d).clone(), span: vspan(1, 1, 3) }])
                 .unwrap_or_else(|e| panic!("retrieve after recovery failed: {e}"));

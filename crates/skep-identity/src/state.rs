@@ -85,6 +85,19 @@ impl IdentityState {
     /// a publication read carries (PUB-6.37) is `dep`'s constructor's,
     /// discharged before this call.
     ///
+    /// PRECONDITION — `types` is the board's ONE [`TypeAddrs`], the SAME value
+    /// at every step of one record stream. It is a frozen constant
+    /// (`IDENTITY_TYPES`, AUTH-2.90) that reaches the fold as an ARGUMENT
+    /// rather than as a `const`, because the three addresses are open
+    /// (AUTH-7.1) and this crate is parametric over them — so the constancy is
+    /// the CALLER's to supply and nothing here can test it. Two steps given
+    /// different values fold one stream against two credential vocabularies,
+    /// and [`IdentityState`]'s I2 statement — a function of the record stream
+    /// and the fold's frozen constants, and of nothing else — is void, with
+    /// every verdict in the run individually correct. skepd holds ONE in a
+    /// `static`; a mirror owes the same, having fixed one address form for it
+    /// (AUTH-2.125).
+    ///
     /// Total under the same conforming-ctx condition as [`step`], and the two
     /// debug assertions that condition names are reached from here.
     ///
@@ -111,7 +124,7 @@ impl IdentityState {
     }
 
     /// AUTH-2.56/AUTH-2.57 — classify-then-apply (on `Honored`) or self
-    /// unchanged; `dep` owes [`classify`]'s PRECONDITION.
+    /// unchanged; `dep` and `types` owe [`classify`]'s PRECONDITIONS.
     ///
     /// TOTAL under a CONFORMING ctx — one meeting [`Values`]' and [`FoldCtx`]'s
     /// stated obligations: no input a RECORD can carry reaches a panic, and

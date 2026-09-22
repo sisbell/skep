@@ -1817,8 +1817,9 @@ fn re_listing_an_enrolled_key_under_the_anchor_flag_changes_nothing() {
 /// `re_listing_an_enrolled_key_under_the_anchor_flag_changes_nothing` and
 /// `a_retired_fingerprint_never_re_enrolls` pin records where EVERY entry is
 /// filtered out — which an `added` computed as "all the entries, if any entry
-/// is new" also satisfies; this mixed record is what tells them apart. It is
-/// also the corpus's only assertion of an `Effect::Enroll`.
+/// is new" also satisfies; this mixed record is what tells them apart.
+/// `an_effect_carries_its_entries_in_record_order` states the ORDER `added`
+/// carries; this one states which entries reach it at all.
 #[test]
 fn a_holder_enrollment_adds_only_the_entries_that_are_neither_enrolled_nor_retired() {
     let mut fx = Fixture::new();
@@ -1857,6 +1858,85 @@ fn a_holder_enrollment_adds_only_the_entries_that_are_neither_enrolled_nor_retir
         !set.contains(&fp(2)),
         "I4: the retired key does not re-enter"
     );
+}
+
+/// AUTH-2.52 — `Effect`'s POSTCONDITION: `keys`, `added` and `removed` are in
+/// the RECORD's own ENTRY ORDER, and the two filtered arms carry the
+/// SUBSEQUENCE of it their filter admits. Every record below lists its entries
+/// in DESCENDING fingerprint order — the order the crate answers everywhere
+/// else (`enrolled()`, `retired()`, the duplicate scan's ordered set), and the
+/// one a second implementation reaches for first — so an effect collected in
+/// fingerprint order answers the exact REVERSE of each claim here, and one
+/// collected as "every entry" fails the two subsequence rows.
+///
+/// The order is promised because the effect is READ: skepd's key-decodability
+/// courtesy walks a bounded PREFIX of `keys`/`added`, so which refusal token an
+/// over-cap record earns depends on it, and `classify` is a mirror's ORACLE
+/// (AUTH-2.57) whose answers are compared under `Effect`'s `PartialEq`. The
+/// corpus's other `Effect::Enroll` and `Effect::Retire` assertions carry ONE
+/// entry each, which no order can tell apart.
+#[test]
+fn an_effect_carries_its_entries_in_record_order() {
+    let mut fx = Fixture::new();
+    let row = |i: u8, anchor: bool| Enrolled { key: key(i), anchor };
+    // Descending fingerprint order: the reverse of every other read's answer.
+    let descending = |indices: &[u8]| -> Vec<u8> {
+        let mut v = indices.to_vec();
+        v.sort_by_key(|&i| fp(i));
+        v.reverse();
+        v
+    };
+
+    // GENESIS — EVERY entry, in record order, each under its own flag.
+    let seeding: Vec<(u8, bool)> = descending(&[1, 2, 3, 4])
+        .into_iter()
+        .map(|i| (i, i % 2 == 0))
+        .collect();
+    let dep = fx.enroll_dep(&doc1(ACCT_A), ACCT_A, &enroll_payload(&seeding));
+    let (st, v) = fx.step(&IdentityState::genesis(), &dep);
+    match assert_honored(&v) {
+        Effect::Genesis { keys, .. } => assert_eq!(
+            *keys,
+            seeding.iter().map(|&(i, a)| row(i, a)).collect::<Vec<_>>(),
+            "genesis keys are every entry, in record order"
+        ),
+        other => panic!("expected a genesis effect, got {other:?}"),
+    }
+
+    // ENROLL — the SUBSEQUENCE the filter admits: an already-enrolled key sits
+    // in the MIDDLE, so `added` is a proper subsequence of the record.
+    let fresh = descending(&[5, 6, 7]);
+    let listed = vec![
+        (fresh[0], false),
+        (1, true), // enrolled already (I4, I9): filtered out
+        (fresh[1], false),
+        (fresh[2], false),
+    ];
+    let dep = fx.enroll_dep(&doc1(ACCT_A), ACCT_A, &enroll_payload(&listed));
+    let (st, v) = fx.step(&st, &dep);
+    match assert_honored(&v) {
+        Effect::Enroll { added, .. } => assert_eq!(
+            *added,
+            fresh.iter().map(|&i| row(i, false)).collect::<Vec<_>>(),
+            "added is the record's order, the filtered entry skipped"
+        ),
+        other => panic!("expected an enroll effect, got {other:?}"),
+    }
+
+    // RETIRE — the same over `F ∩ enrolled`: a fingerprint enrolled nowhere
+    // sits in the middle, and four of the seven keys stay enrolled (I3).
+    let retiring = descending(&[2, 3, 5]);
+    let named = vec![retiring[0], 9, retiring[1], retiring[2]];
+    let dep = fx.retire_dep(&doc1(ACCT_A), ACCT_A, &retire_payload(&named));
+    let (_, v) = fx.step(&st, &dep);
+    match assert_honored(&v) {
+        Effect::Retire { removed, .. } => assert_eq!(
+            *removed,
+            retiring.iter().map(|&i| fp(i)).collect::<Vec<_>>(),
+            "removed is the record's order, the stranger skipped"
+        ),
+        other => panic!("expected a retire effect, got {other:?}"),
+    }
 }
 
 /// AUTH-2.74 — an honored retirement names the removed fingerprints in its

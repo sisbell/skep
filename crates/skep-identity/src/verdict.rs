@@ -29,6 +29,22 @@ pub enum Verdict {
 /// SET the post amends; on `Claim` it is the CLAIMANT, and that arm amends
 /// no set — it posts `claimant`. `apply` reads the effect and DECIDES
 /// NOTHING (AUTH-2.53).
+///
+/// POSTCONDITION — `keys`, `added` and `removed` are in the RECORD's own
+/// ENTRY ORDER ([`parse_enroll`](crate::parse_enroll) /
+/// [`parse_retire`](crate::parse_retire)'s POSTCONDITION): `Genesis`' `keys`
+/// are EVERY entry of the record in that order, and `Enroll`'s `added` and
+/// `Retire`'s `removed` are the SUBSEQUENCE of it the arm's own filter
+/// admits. Nothing sorts, dedups or re-groups them.
+///
+/// `apply` is order-BLIND — its posts go into ordered maps and the parsers
+/// left the entries duplicate-free (AUTH-2.15), so no permutation changes the
+/// key table. The order is promised because the effect is READ: skepd's
+/// key-decodability courtesy walks a bounded PREFIX of `keys`/`added`, so
+/// under a different order an over-cap record earns a different refusal
+/// token; and `classify` is a mirror's ORACLE (AUTH-2.57), so two
+/// implementations folding one record must answer one `Effect` under this
+/// type's `PartialEq`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     /// The genesis arm's post (AUTH-2.70): the account AND the keys the step
@@ -38,7 +54,8 @@ pub enum Effect {
     Genesis {
         /// The seeded account.
         account: Address,
-        /// The seeding keys, flags as the entries carry them.
+        /// The seeding keys — EVERY entry of the record, in its ENTRY ORDER,
+        /// flags as the entries carry them.
         keys: Vec<Enrolled>,
     },
     /// The holder-enrollment post (AUTH-2.69): each ADDED key with the flag
@@ -46,14 +63,16 @@ pub enum Effect {
     Enroll {
         /// The enrolling account.
         account: Address,
-        /// The keys actually added (`∉ enrolled ∧ ∉ retired`).
+        /// The keys actually added (`∉ enrolled ∧ ∉ retired`), in the record's
+        /// ENTRY ORDER.
         added: Vec<Enrolled>,
     },
     /// The retirement post (AUTH-2.74): fingerprints only.
     Retire {
         /// The retiring account.
         account: Address,
-        /// The fingerprints removed (`F ∩ enrolled`).
+        /// The fingerprints removed (`F ∩ enrolled`), in the record's ENTRY
+        /// ORDER.
         removed: Vec<Fingerprint>,
     },
     /// The claim post (AUTH-2.67 item 6): `claimant = Some(account)`; at

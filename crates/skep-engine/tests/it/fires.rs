@@ -11,10 +11,11 @@
 //! (the predicate reaches M9 on both paths, and it is the publication read);
 //! the refusal's own order is M9's suite, the filtered lookup M7's.
 //!
-//! The caller-to-class mapping has a second arm, and it is here because this
-//! is where a dedup hit can be read: a PRINCIPAL writes at its own class, so
-//! its writer sees an incumbent homed in its own draft where the System
-//! caller's does not (PUB-6.25).
+//! The caller-to-visibility-class mapping (`World::visible_to`) has a second
+//! arm, and it is here because this is where a dedup hit can be read: a
+//! PRINCIPAL writes at its own visibility class, so its writer sees an
+//! incumbent homed in its own draft where the System caller's does not
+//! (PUB-6.25).
 //!
 //! And the TRIGGER side (lane 4.1, PUB-6.28's other half): the rule's LOOK —
 //! the evaluator's link reads and the domain enumeration — runs at the same
@@ -24,9 +25,9 @@
 //! byte-identically to a world with no drafts". The cells: a rule over a
 //! published tuple fires (the four cells above stand); a rule whose only
 //! matching tuple is draft-homed does not, with no `DraftBoundary`; the
-//! byte-identical commit; the view orthogonal to the class over the tuple
-//! domains and `L_dom`; a `Def` trigger seeing the same filtered store as an
-//! inline one.
+//! byte-identical commit; the view orthogonal to the reader class over the
+//! tuple domains and `L_dom`; a `Def` trigger seeing the same filtered store
+//! as an inline one.
 
 use crate::common;
 
@@ -113,7 +114,7 @@ fn a_fire_is_never_absorbed_by_a_draft_homed_incumbent() {
     assert_eq!(document_of(&incumbent), Some(draft.clone()));
     assert!(
         engine.kernel().snapshot().world().links().is_k(&retired, member.tumbler()),
-        "the class holds the tuple already — in the draft"
+        "the `retired` class holds the tuple already — in the draft"
     );
 
     let mut coord = engine.coordinator();
@@ -134,8 +135,9 @@ fn a_fire_is_never_absorbed_by_a_draft_homed_incumbent() {
     }
     assert_eq!(coord.fire_count(id, &member), 1, "one real fire, homed where the rule fires");
 
-    // The guest-visible marker is now the incumbent the fire's class can
-    // read: the next step is a dedup hit on it, and never on the draft's.
+    // The guest-visible marker is now the incumbent the fire's visibility
+    // class can read: the next step is a dedup hit on it, and never on the
+    // draft's.
     match coord.step(&engine.kernel().snapshot()) {
         StepOutcome::Deduped { effect, .. } => {
             assert_ne!(effect, incumbent);
@@ -146,17 +148,17 @@ fn a_fire_is_never_absorbed_by_a_draft_homed_incumbent() {
 }
 
 /// The PRINCIPAL arm of the same mapping (PUB-6.25), which the System arm
-/// above is the complement of: a principal writes at ITS OWN class, so
-/// `emit`'s idempotency gate reads the incumbents that principal can read —
-/// including one homed in a private draft of its own. A writer built at guest
-/// class instead cannot see that incumbent, and mints a second tuple beside
-/// it: two active tuples of one identity in one document, with nothing about
-/// either looking wrong.
+/// above is the complement of: a principal writes at ITS OWN visibility
+/// class, so `emit`'s idempotency gate reads the incumbents that principal can
+/// read — including one homed in a private draft of its own. A writer built at
+/// guest class instead cannot see that incumbent, and mints a second tuple
+/// beside it: two active tuples of one identity in one document, with nothing
+/// about either looking wrong.
 ///
 /// Every other write in this crate's suite runs through the principal arm and
 /// asserts nothing about it, because visibility gates the dedup LOOKUP and
-/// never the deposit — a writer at the wrong class still writes to the same
-/// place. The dedup hit is the one answer that moves.
+/// never the deposit — a writer at the wrong visibility class still writes to
+/// the same place. The dedup hit is the one answer that moves.
 #[test]
 fn a_principal_s_writer_dedups_against_its_own_draft_homed_incumbent() {
     let engine = mem_engine();
@@ -311,7 +313,7 @@ fn a_rule_whose_only_matching_tuple_is_draft_homed_does_not_fire() {
     assert_eq!(document_of(&q), Some(draft));
     assert!(
         engine.kernel().snapshot().world().links().is_k(&pred_stable, member.tumbler()),
-        "M7's class-free read holds the tuple — it is the rule's look that must not"
+        "M7's visibility-free read holds the tuple — it is the rule's look that must not"
     );
 
     let mut coord = engine.coordinator();
@@ -418,7 +420,7 @@ fn a_fire_commits_byte_identically_to_a_world_with_no_drafts() {
     assert_eq!((count_with, count_without), (1, 1));
 }
 
-/// The VIEW is orthogonal to the CLASS (visibility is by HOME, PUB-1.31;
+/// The VIEW is orthogonal to the READER CLASS (visibility is by HOME, PUB-1.31;
 /// PUB-6.13): over the tuple domains and `L_dom`, the draft-homed tuple never
 /// enters, while a RETRACTED tuple of the published home stays in the audit
 /// readings — `AuditSlice` and `L_dom` keep it, `ActiveSlice` drops it for
@@ -467,7 +469,7 @@ fn domain_enumeration_excludes_the_draft_tuple_and_keeps_a_retracted_one() {
     assert!(holds(&coord, Dom::AuditSlice(k.clone()), &p1, true));
     assert!(holds(&coord, Dom::AuditSlice(k.clone()), &p2, true));
     assert!(!holds(&coord, Dom::AuditSlice(k.clone()), &q, true));
-    // ActiveSlice: the view drops p2, the class drops q.
+    // ActiveSlice: the view drops p2, the reader class drops q.
     assert!(holds(&coord, Dom::ActiveSlice(k.clone()), &p1, true));
     assert!(!holds(&coord, Dom::ActiveSlice(k.clone()), &p2, true));
     assert!(!holds(&coord, Dom::ActiveSlice(k.clone()), &q, true));
@@ -475,7 +477,7 @@ fn domain_enumeration_excludes_the_draft_tuple_and_keeps_a_retracted_one() {
     assert!(holds(&coord, Dom::LinkDom, &p1, false));
     assert!(holds(&coord, Dom::LinkDom, &p2, false));
     assert!(!holds(&coord, Dom::LinkDom, &q, false));
-    // The count agrees: two visible audit tuples of the class.
+    // The count agrees: two visible audit tuples of `pred_stable`.
     let two = coord
         .type_check(
             vec![],
@@ -531,8 +533,8 @@ fn domain_enumeration_excludes_the_draft_tuple_and_keeps_a_retracted_one() {
 /// A DEF trigger reads the same filtered store as an inline one: the def's
 /// checked body, captured at registration, is evaluated through the same
 /// guest-class context. The def is stored in the owner's draft (a def cannot be
-/// defined into a published document) and its REGISTRATION is class-free —
-/// it is the def's LOOK that is at guest class: a `retired` marker homed in
+/// defined into a published document) and its REGISTRATION is visibility-free
+/// — it is the def's LOOK that is at guest class: a `retired` marker homed in
 /// the draft is invisible to `T(x) = is_K(retired, x)` whether `T` is the
 /// rule's `Def` trigger or its `Inline` twin; the same marker in the
 /// published home is seen by both.
@@ -556,7 +558,8 @@ fn a_def_trigger_sees_the_same_filtered_store_as_an_inline_one() {
         Arc::new(Term::Var(x)),
     ));
     // T(x) = is_K(retired, x), defined into the draft and registered there
-    // (class-free — a pdef tuple in a draft home is still ever-registered).
+    // (visibility-free — a pdef tuple in a draft home is still
+    // ever-registered).
     let checked =
         coord.type_check(vec![(x, Sort::Addr)], body.clone()).expect("T type-checks");
     let (start, _) =
@@ -578,7 +581,7 @@ fn a_def_trigger_sees_the_same_filtered_store_as_an_inline_one() {
     let snap = engine.kernel().snapshot();
     assert!(
         snap.world().links().is_k(&retired, member.tumbler()),
-        "M7's class-free read holds the draft's marker"
+        "M7's visibility-free read holds the draft's marker"
     );
     assert_eq!(
         coord.evaluate_def(&start, &[Value::Addr(member.clone())], View::Audit, &snap),

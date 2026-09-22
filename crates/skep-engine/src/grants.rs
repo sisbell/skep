@@ -51,17 +51,17 @@
 //!
 //! A record of NEITHER KIND enters no index and moves no honored state, a
 //! malformed record among them: [`Kind::Neither`] is the fold's one arm for
-//! such a record, and the record joins the earlier-record key and nothing
+//! such a record, and the record joins the earlier-record set and nothing
 //! else.
-//! The key in (2) is EVERY earlier admitted record and never the operative
-//! set alone, which a revoked grant has left: read off that set, a record
-//! naming a withdrawn grant or a revocation names nothing the fold knows and
-//! goes on to the grant arm, where the ladder alone stands between it and a
-//! fresh grant over a LINK ADDRESS — universal where its `to` is empty, which
-//! a blind retry of a revoke is. Two promises rest on this test, each on the
-//! outcome that states it and neither on what the addresses happen to make
-//! true: A RECORD THAT WITHDRAWS A SHARE NEVER BECOMES ONE, and A WITHDRAWAL,
-//! ONCE HONORED, IS LIFTED BY NOTHING.
+//! The set outcome (2) is decided on holds EVERY earlier admitted record, and
+//! never the operative set alone, which a revoked grant has left: read off that
+//! set, a record naming a withdrawn grant or a revocation names nothing the
+//! fold knows and goes on to the grant arm, where the ladder alone stands
+//! between it and a fresh grant over a LINK ADDRESS — universal where its `to`
+//! is empty, which a blind retry of a revoke is. Two promises rest on this
+//! test, each on the outcome that states it and neither on what the addresses
+//! happen to make true: A RECORD THAT WITHDRAWS A SHARE NEVER BECOMES ONE, and
+//! A WITHDRAWAL, ONCE HONORED, IS LIFTED BY NOTHING.
 //!
 //! ## Admission (I4, PUB-5.19)
 //!
@@ -222,9 +222,9 @@ impl World {
 /// One admitted grant record — enough to answer queries and to withdraw its
 /// index entry when a later record revokes it. The fields are crate-visible
 /// for the world dump's grant section (lane 3.4 §3), which renders the fold's
-/// operative set through [`Grants::records`] and destructures each record
-/// whole — so a field added here is a field that section must render, or the
-/// faithfulness check stops speaking for the whole record.
+/// operative set through [`Grants::operative_records`] and destructures each
+/// record whole — so a field added here is a field that section must render,
+/// or the faithfulness check stops speaking for the whole record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GrantRecord {
     /// The grant link's home document (the issuer's doc 1).
@@ -267,7 +267,7 @@ impl GrantRecord {
 }
 
 /// The grant fold: the operative grant set, the two query indexes it is
-/// projected into, and the earlier-record key. All `im` persistent
+/// projected into, and the earlier-record set. All `im` persistent
 /// structures, so `World::clone` on the commit path is one more root clone.
 /// `#[serde(skip)]` at the World: derived, never checkpointed (the module
 /// docs' hint discipline).
@@ -275,36 +275,38 @@ impl GrantRecord {
 /// The classification asks the fold two questions, and asks both through
 /// methods: whether a `from` names an earlier record of its home
 /// ([`Grants::holds_earlier`]), and whether that record is an operative grant
-/// ([`Grants::is_operative`]). How the key and the operative set relate is
-/// this type's to keep, on both sides: no caller reads either structure to
-/// answer those questions, and every record the fold takes goes through
-/// [`Grants::take_admitted`], the fold's one caller of the three transitions
-/// below, so every operative grant is in the key.
+/// ([`Grants::is_operative`]). How the earlier-record set and the operative
+/// set relate is this type's to keep, on both sides: no caller reads either
+/// structure to answer those questions, and every record the fold takes goes
+/// through [`Grants::take_admitted`], the fold's one caller of the three
+/// transitions below, so every operative grant is in the earlier-record set.
 ///
-/// The set and its two indexes must agree, and [`Grants::admit`] and
-/// [`Grants::withdraw`] are the only two transitions that move any of the
+/// The operative set and its two indexes must agree, and [`Grants::admit`]
+/// and [`Grants::withdraw`] are the only two transitions that move any of the
 /// three — each doing the record edit and the index edit as ONE step. So the
 /// projection this type's fields describe is performed here rather than at a
 /// caller, and a fold arm that moved the set without its index would have to
-/// be written past those two rather than beside them. The earlier-record key
+/// be written past those two rather than beside them. The earlier-record set
 /// stands apart from that agreement: [`Grants::keep_earlier`] is its one
 /// transition, it only ever gains, neither of the other two touches it, and
 /// [`Grants::take_admitted`] takes it for every admitted record, after that
 /// record's effect.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Grants {
-    /// Admitted, unrevoked grants, keyed by the grant link's OWN address —
-    /// so a revoking record removes exactly the RECORD it names. What leaves
-    /// the query indexes with that record is its [`GrantIndexEntry`], which
-    /// is a value and which a second record can name too.
-    records: HashMap<Address, GrantRecord>,
-    /// THE EARLIER-RECORD KEY (PUB-5.15, RES-226): the link address of EVERY
+    /// THE OPERATIVE SET: the admitted, unrevoked grant records, keyed by the
+    /// grant link's OWN address — so a revoking record removes exactly the
+    /// RECORD it names. What leaves the query indexes with that record is its
+    /// [`GrantIndexEntry`], which is a value and which a second record can
+    /// name too.
+    operative_records: HashMap<Address, GrantRecord>,
+    /// THE EARLIER-RECORD SET (PUB-5.15, RES-226): the link address of EVERY
     /// admitted record of the class, whatever [`classify`] made of it — a
     /// grant live or since withdrawn, a revocation, a record of neither kind
-    /// — and never pruned. It is what `records` cannot be: [`Grants::withdraw`]
-    /// takes a revoked grant OUT of that map, so a later record naming the
-    /// withdrawn grant, or naming the revocation, finds nothing there, and a
-    /// test keyed on it alone reads such a record as a fresh grant.
+    /// — and never pruned. It is what `operative_records` cannot be:
+    /// [`Grants::withdraw`] takes a revoked grant OUT of that map, so a later
+    /// record naming the withdrawn grant, or naming the revocation, finds
+    /// nothing there, and a test decided on that map alone reads such a
+    /// record as a fresh grant.
     ///
     /// A record joins AFTER its own classification
     /// ([`Grants::take_admitted`]), so at any record's turn the members from
@@ -372,14 +374,14 @@ impl Grants {
         Grants::default()
     }
 
-    /// The operative set — every admitted, unrevoked grant with the grant
-    /// link's own address — in the map's hash order (the world dump's grant
-    /// section renders it, and the dump's rendering sorts a map's entries).
-    /// The operative set's one enumeration, where [`Grants::universal`] and
-    /// [`Grants::issuers_for`] enumerate the query indexes; the predicate's
-    /// consumers are the point probes below.
-    pub(crate) fn records(&self) -> impl Iterator<Item = (&Address, &GrantRecord)> + '_ {
-        self.records.iter()
+    /// The operative set — every admitted, unrevoked grant record with the
+    /// grant link's own address — in the map's hash order (the world dump's
+    /// grant section renders it, and the dump's rendering sorts a map's
+    /// entries). The operative set's one enumeration, where
+    /// [`Grants::universal`] and [`Grants::issuers_for`] enumerate the query
+    /// indexes; the predicate's consumers are the point probes below.
+    pub(crate) fn operative_records(&self) -> impl Iterator<Item = (&Address, &GrantRecord)> + '_ {
+        self.operative_records.iter()
     }
 
     /// `grant_exists(doc, p)` (PUB-1.32's third clause): does some admitted
@@ -456,12 +458,12 @@ impl Grants {
     /// it is answered by PUB-5.15's second outcome.
     ///
     /// ONE step, because the classification rests on two orders inside it.
-    /// The record is classified BEFORE it joins the key, so it never names
-    /// itself as an earlier record. And it joins the key in the same step as
-    /// its effect, so every grant this makes operative is in the key — without
-    /// which a later record naming it would pass the earlier-record test by,
-    /// meet the ladder, and revoke nothing
-    /// (`the_earlier_record_key_keeps_what_the_operative_set_lets_go` holds a
+    /// The record is classified BEFORE it joins the earlier-record set, so it
+    /// never names itself as an earlier record. And it joins that set in the
+    /// same step as its effect, so every grant this makes operative is in the
+    /// set — without which a later record naming it would pass the
+    /// earlier-record test by, meet the ladder, and revoke nothing
+    /// (`the_earlier_record_set_keeps_what_the_operative_set_lets_go` holds a
     /// fresh grant in both at once).
     fn take_admitted(&mut self, addr: &Address, home: Address, issuer: Address, value: &Link) {
         let kind = classify(self, &home, value);
@@ -482,7 +484,7 @@ impl Grants {
     /// [`classify`] finds a GRANT.
     fn admit(&mut self, addr: Address, grant: GrantRecord) {
         self.index_add(grant.index_entry());
-        self.records.insert(addr, grant);
+        self.operative_records.insert(addr, grant);
     }
 
     /// WITHDRAW the grant deposited at `addr`: it leaves the operative set and
@@ -496,13 +498,13 @@ impl Grants {
     /// the entry both contributed, while the other record stays in the
     /// operative set the dump's grant section renders.
     fn withdraw(&mut self, addr: &Address) {
-        if let Some(grant) = self.records.remove(addr) {
+        if let Some(grant) = self.operative_records.remove(addr) {
             self.index_remove(grant.index_entry());
         }
     }
 
     /// KEEP the admitted record deposited at `addr` as an EARLIER one to every
-    /// record that follows it — the earlier-record key's one transition, taken
+    /// record that follows it — the earlier-record set's one transition, taken
     /// for every admitted record of the class whatever its kind, and undone by
     /// nothing: a withdrawn grant stays a member, which is the point of it.
     fn keep_earlier(&mut self, addr: Address) {
@@ -510,7 +512,7 @@ impl Grants {
     }
 
     /// Whether `addr` is the link address of an EARLIER admitted record of the
-    /// class homed in `home` — the key PUB-5.15's second outcome decides on.
+    /// class homed in `home` — the set PUB-5.15's second outcome decides on.
     /// EARLIER is the set's own invariant (a record joins after its turn), and
     /// SAME HOME is read off the address: a record is homed in the document
     /// its link address lies in, which is how [`fold_one`] derives every
@@ -526,12 +528,12 @@ impl Grants {
     /// and not withdrawn — which is the one earlier record a later record of
     /// its home REVOKES (PUB-5.15). [`Grants::take_admitted`] keeps every
     /// record it takes as an earlier one, so every such grant is in the
-    /// earlier-record key as well, and a withdrawal is what parts the two
-    /// answers: the grant leaves the operative set and stays in the key. So of
-    /// a record the key holds, this is the question that tells a revocation
-    /// from a record of neither kind.
+    /// earlier-record set as well, and a withdrawal is what parts the two
+    /// answers: the grant leaves the operative set and stays in the
+    /// earlier-record set. So of a record that set holds, this is the question
+    /// that tells a revocation from a record of neither kind.
     fn is_operative(&self, addr: &Address) -> bool {
-        self.records.contains_key(addr)
+        self.operative_records.contains_key(addr)
     }
 
     /// [`Grants::admit`]'s index step: add `entry` to the query index its
@@ -590,7 +592,7 @@ enum Kind {
     /// blind retry of a revoke names, a revocation, or a record itself of
     /// neither kind. Or its `from` may stand on neither rung of the ladder.
     /// The fold enters it in no index and moves no honored state by it — it
-    /// joins the earlier-record key and nothing else — so it grants to nobody
+    /// joins the earlier-record set and nothing else — so it grants to nobody
     /// and lifts nothing, whichever of the three put it here.
     Neither,
 }
@@ -685,7 +687,7 @@ fn on_the_ladder(from: &Address) -> bool {
 /// the second outcome sends to NEITHER KIND is one the ladder would have
 /// refused too. That is arithmetic accident and not shape, which is PUB-5.15's
 /// own ground for stating a test: the promise that a withdrawal is lifted by
-/// nothing is held by the key it is stated over, and stays held under a
+/// nothing is held by the set it is stated over, and stays held under a
 /// ladder that one day gains a rung.
 ///
 /// Every slot this DOES read is read for exactly one denoted address: the
@@ -705,10 +707,10 @@ fn classify(prev: &Grants, home: &Address, value: &Link) -> Kind {
     // and by nothing below — ahead of the ladder and of the `to` slot, which
     // the precedence above makes part of the rule rather than a property of
     // this line's position. An operative grant is REVOKED. Anything else the
-    // key holds — a grant already withdrawn, a revocation, a record of neither
-    // kind — is named to no effect, and the record naming it NEVER reaches the
-    // fresh-grant arm: that fall-through is what made a retried revoke a grant
-    // over a link address.
+    // earlier-record set holds — a grant already withdrawn, a revocation, a
+    // record of neither kind — is named to no effect, and the record naming
+    // it NEVER reaches the fresh-grant arm: that fall-through is what made a
+    // retried revoke a grant over a link address.
     if prev.holds_earlier(&from, home) {
         if prev.is_operative(&from) {
             return Kind::Revoke { revoked: from };
@@ -772,29 +774,30 @@ fn fold_one(
 }
 
 /// The FOLD half (PUB-7.7): the grant fold after `rec` has been applied to the
-/// link store. `rec` is the record just folded; `namespace`/`drafts` are the
-/// world's slices as of this commit (a link deposit changes neither, so both
-/// are the authoritative state a query would read).
+/// link store. `rec` is the journal record just folded; `namespace`/`drafts`
+/// are the world's slices as of this commit (a link deposit changes neither,
+/// so both are the authoritative state a query would read).
 ///
 /// ONLY A DEPOSIT moves the fold, and that is a premise [`seed`] rests on
 /// rather than a convenience. `LinkRec` is `#[non_exhaustive]`, so the early
 /// return absorbs every variant M7 has not written yet — and the two halves
 /// read a link's slots from different places: this one from the value the
-/// record carries, the seed from `readlink` at the end of history. Those are
-/// the same value because M7's model has no update and no delete: every write
-/// is a deposit of an immutable link at a fresh address, and `editlink`
-/// deposits a successor rather than touching its original. A record that
-/// changed a resident link's slots would split the halves, and it would have
-/// to be answered here.
+/// journal record carries, the seed from `readlink` at the end of history.
+/// Those are the same value because M7's model has no update and no delete:
+/// every write is a deposit of an immutable link at a fresh address, and
+/// `editlink` deposits a successor rather than touching its original. A
+/// journal record that changed a resident link's slots would split the
+/// halves, and it would have to be answered here.
 pub(crate) fn fold(prev: &Grants, namespace: &M3State, drafts: &Drafts, rec: &LinkRec) -> Grants {
     let LinkRec::Deposit { addr, value, .. } = rec else {
         return prev.clone();
     };
     // T4 VALIDITY is M7's own totality domain for a staged link address, and
     // `World::apply` has already run `LinkState::apply_link` over this very
-    // record, whose hint fold asserts it — so by the time this line runs the
-    // question is settled, twice over. Answering it a third time by returning
-    // the previous fold would silently drop a grant the store did accept.
+    // journal record, whose hint fold asserts it — so by the time this line
+    // runs the question is settled, twice over. Answering it a third time by
+    // returning the previous fold would silently drop a grant the store did
+    // accept.
     let link_addr = validate(addr.clone())
         .expect("a staged link address is T4-valid (M7's fold asserted it a moment ago)");
     fold_one(prev.clone(), namespace, drafts, &link_addr, value)
@@ -816,10 +819,10 @@ pub(crate) fn fold(prev: &Grants, namespace: &M3State, drafts: &Drafts, rec: &Li
 /// order), plus `readlink` per address — NO new store read is added (the fence
 /// asked which read the seed uses; this is it). Within one home, addresses are
 /// ordinal-ordered = deposit-ordered, so a revocation is always processed
-/// after the grant it names, the earlier-record key holds at each record's
+/// after the grant it names, the earlier-record set holds at each record's
 /// turn exactly the records of its home the fold's held, and the seed
 /// reproduces the fold. ACROSS homes the walk's order is not the deposits',
-/// and the classification cannot tell: the key is asked of one home at a time
+/// and the classification cannot tell: the set is asked of one home at a time
 /// ([`Grants::holds_earlier`]), so another home's members, early or late,
 /// answer nothing.
 ///
@@ -838,8 +841,8 @@ pub(crate) fn fold(prev: &Grants, namespace: &M3State, drafts: &Drafts, rec: &Li
 /// The halves also read the world at different TIMES: [`fold`] is handed M3
 /// and the exception set as of the deposit's own commit, this walk as of the
 /// end of history. [`admitted_issuer`]'s three questions answer alike at
-/// both, each for its own reason. The BIT: M3 writes it once, at the record
-/// that registers the document, and the exception set only ever GAINS
+/// both, each for its own reason. The BIT: M3 writes it once, at the journal
+/// record that registers the document, and the exception set only ever GAINS
 /// entries — so a home published when its grant landed is published still,
 /// and a draft-homed one was unadmitted at both readings. The OWNER: no
 /// account-tier prefix longer than a document's own account can cover it
@@ -857,7 +860,7 @@ pub(crate) fn fold(prev: &Grants, namespace: &M3State, drafts: &Drafts, rec: &Li
 /// doc-1 test follows it — pays [`admitted_issuer`]'s ω resolution, M3's walk
 /// of the WHOLE principal registry, so the seed is Θ(members · |Π|) wherever
 /// the members are published-homed, which a depositor's own doc 1 is. A
-/// member whose home admits then joins the earlier-record key — one insert of
+/// member whose home admits then joins the earlier-record set — one insert of
 /// its own link address, whatever its kind — and one that is a GRANT adds
 /// [`Grants::admit`]'s two besides — one into the operative map, one into an
 /// ordered index whose key is a content-prefix and whose member is an issuer,
@@ -928,16 +931,16 @@ mod tests {
             .0
     }
 
-    /// THE EARLIER-RECORD KEY, held on its own. Every record the key sends to
+    /// THE EARLIER-RECORD SET, held on its own. Every record the set sends to
     /// NEITHER KIND sits at a link address, which the ladder refuses as well,
-    /// so no answer of the predicate can tell a fold that kept the key from
-    /// one that leaned on the ladder — and the promise the key carries must
-    /// not rest on that overlap ([`classify`]). So the key is asked directly,
+    /// so no answer of the predicate can tell a fold that kept the set from
+    /// one that leaned on the ladder — and the promise the set carries must
+    /// not rest on that overlap ([`classify`]). So the set is asked directly,
     /// beside the operative set it parts from: the grant is operative until
-    /// its revocation and stays in the key after it; the key keeps the
-    /// revocation and a record of neither kind too, none of them operative;
-    /// it answers for their own home alone; and the seed rebuilds it whole,
-    /// since nothing journals it.
+    /// its revocation and stays in the earlier-record set after it; that set
+    /// keeps the revocation and a record of neither kind too, none of them
+    /// operative; it answers for their own home alone; and the seed rebuilds
+    /// it whole, since nothing journals it.
     ///
     /// The predicate watches only one direction of [`Grants::is_operative`]:
     /// answering `false` of a live grant would turn every revocation into a
@@ -946,7 +949,7 @@ mod tests {
     /// no operative grant withdraws nothing whichever arm it is sent to, so a
     /// `true` there moves no state — and this test is what holds it.
     #[test]
-    fn the_earlier_record_key_keeps_what_the_operative_set_lets_go() {
+    fn the_earlier_record_set_keeps_what_the_operative_set_lets_go() {
         let engine = mem_engine();
         let (home, draft) = a_home_and_a_draft(&engine);
         let grant = record(&engine, &home, &draft);
@@ -962,7 +965,7 @@ mod tests {
         let snap = engine.kernel().snapshot();
         let world = snap.world();
         assert!(
-            world.grants.records.is_empty(),
+            world.grants.operative_records.is_empty(),
             "the premise: the operative set has let the revoked grant go, and held nothing else"
         );
         let members = [
@@ -980,21 +983,21 @@ mod tests {
             "an address of this home that no record occupies is no member"
         );
         let seeded = seed(&world.namespace, &world.links, &world.drafts);
-        assert_eq!(seeded.earlier, world.grants.earlier, "the seed rebuilds the key the fold kept");
+        assert_eq!(seeded.earlier, world.grants.earlier, "the seed rebuilds the set the fold kept");
         assert_eq!(seeded.earlier.len(), members.len(), "…one member per admitted record");
     }
 
-    /// …and [`classify`] CONSULTS the key AHEAD of the ladder, which no state
-    /// the store can reach will show: every record of the class sits at a link
-    /// address, and the ladder refuses those on its own. So the key here is
-    /// SYNTHETIC — it holds a DOCUMENT address, as though a record of the
-    /// class sat on a rung — which is the one shape where the two tests part.
-    /// The ladder admits that `from`; the earlier-record test, speaking first,
-    /// sends the record naming it to NEITHER KIND. A classification that
-    /// dropped the consultation, or ran it after the ladder's arm, answers a
-    /// fresh grant here. That is the precedence PUB-5.15's second promise
-    /// rests on, pinned where a ladder that gained a rung would otherwise be
-    /// the first thing to test it.
+    /// …and [`classify`] CONSULTS the earlier-record set AHEAD of the ladder,
+    /// which no state the store can reach will show: every record of the class
+    /// sits at a link address, and the ladder refuses those on its own. So the
+    /// set here is SYNTHETIC — it holds a DOCUMENT address, as though a record
+    /// of the class sat on a rung — which is the one shape where the two tests
+    /// part. The ladder admits that `from`; the earlier-record test, speaking
+    /// first, sends the record naming it to NEITHER KIND. A classification
+    /// that dropped the consultation, or ran it after the ladder's arm,
+    /// answers a fresh grant here. That is the precedence PUB-5.15's second
+    /// promise rests on, pinned where a ladder that gained a rung would
+    /// otherwise be the first thing to test it.
     #[test]
     fn the_earlier_record_test_speaks_before_the_ladder() {
         let engine = mem_engine();
@@ -1007,11 +1010,14 @@ mod tests {
             matches!(classify(&Grants::new(), &home, link), Kind::Grant { .. }),
             "the premise: asked alone, the ladder admits a `from` at a document"
         );
-        let mut keyed = Grants::new();
-        keyed.keep_earlier(home.clone());
-        assert!(keyed.holds_earlier(&home, &home), "the synthetic member answers for its own home");
+        let mut synthetic = Grants::new();
+        synthetic.keep_earlier(home.clone());
         assert!(
-            matches!(classify(&keyed, &home, link), Kind::Neither),
+            synthetic.holds_earlier(&home, &home),
+            "the synthetic member answers for its own home"
+        );
+        assert!(
+            matches!(classify(&synthetic, &home, link), Kind::Neither),
             "a `from` naming an earlier record that is no operative grant reached the grant arm"
         );
     }

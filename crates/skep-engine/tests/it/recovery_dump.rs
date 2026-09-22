@@ -164,11 +164,12 @@ fn the_dump_carries_the_supersession_forward_edges() {
 }
 
 /// A retracted ENDPOINT leaves its edges operative — Df-SUCC reads the CLAIM's
-/// activity and never the endpoint's (M7's EL14e) — so the section carries an
-/// edge out of a nullified link. The populated world's one edge runs out of an
-/// ACTIVE link, where a section walking the active slice for edges answers
-/// alike; here it would drop the edge, and every dump-to-dump comparison would
-/// stay green, since both sides are rendered by the same builder.
+/// activity and never the endpoint's (M7's EL14e) — so the supersession
+/// family carries an edge out of a nullified link. The populated world's one
+/// edge runs out of an ACTIVE link, where a family walking the active slice
+/// for edges answers alike; here it would drop the edge, and every
+/// dump-to-dump comparison would stay green, since both sides are rendered by
+/// the same builder.
 #[test]
 fn the_dump_carries_a_supersession_edge_out_of_a_retracted_link() {
     let engine = Engine::open(mem_cfg()).expect("in-memory open");
@@ -470,25 +471,22 @@ fn the_hint_check_refuses_a_world_whose_derived_state_was_never_rebuilt() {
 }
 
 /// The dump's vocabulary is part of its format, so it is pinned here rather
-/// than left to whatever the assembler happens to call its fields: each
-/// authoritative section is named for the store whose slice it renders, and
-/// the banner names the version those keys belong to.
+/// than left to whatever the assembler happens to call its fields: each slice
+/// of the authoritative section is named for the store it belongs to, and the
+/// banner names the version those keys belong to.
 #[test]
-fn the_dump_names_each_section_for_its_store() {
+fn the_dump_names_each_slice_of_the_authoritative_section_for_its_store() {
     let engine = Engine::open(mem_cfg()).expect("in-memory open");
     let text = engine.world_dump().into_string();
 
     assert!(text.starts_with("skep-world-dump v5\n"), "unexpected banner: {text:.32}");
-    for section in [r#""namespace""#, r#""content""#, r#""arrangement""#, r#""links""#] {
-        assert!(
-            text.contains(section),
-            "the authoritative section {section} must be named: {text:.200}"
-        );
+    for slice in [r#""namespace""#, r#""content""#, r#""arrangement""#, r#""links""#] {
+        assert!(text.contains(slice), "the authoritative slice {slice} must be named: {text:.200}");
     }
     // v5 (lane 3.4): M3's publication map and the grant fold's operative
     // set are sections of their own, beside the hints' copy of the set.
-    for section in [r#""publication": ["#, r#""grants": {"#, r#""publication.drafts": {"#] {
-        assert!(text.contains(section), "the v5 section {section} must be named: {text:.400}");
+    for key in [r#""publication": ["#, r#""grants": {"#, r#""publication.drafts": {"#] {
+        assert!(text.contains(key), "the v5 key {key} must be named: {text:.400}");
     }
 }
 

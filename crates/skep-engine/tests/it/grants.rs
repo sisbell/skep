@@ -1067,7 +1067,7 @@ fn a_later_record_naming_a_grant_revokes_it() {
 /// are: the earlier-record test decides each record, and the ladder would
 /// refuse the link address in its `from` besides. No answer of the predicate
 /// can part the two, so the fold's own unit tests pin the first on its own —
-/// the key it keeps, and its turn ahead of the ladder.
+/// the set it keeps, and its turn ahead of the ladder.
 #[test]
 fn a_record_naming_a_withdrawn_grant_is_of_neither_kind() {
     let engine = mem_engine();
@@ -1620,12 +1620,15 @@ fn the_read_predicate_projects_an_address_the_client_invented() {
 
     let w = world(&engine);
     // The work is spent, and the address then reads as its trunk, A's
-    // published home: at every class, for the guest that never authenticated
-    // as much as for the owner. That answer is no witness to the projection —
-    // the deep address is absent from the exception set too, and would read
-    // readable without it — which is what
+    // published home: at every reader class, for the guest that never
+    // authenticated as much as for the owner. That answer is no witness to the
+    // projection — the deep address is absent from the exception set too, and
+    // would read readable without it — which is what
     // `a_version_member_shaped_address_under_a_draft_reads_as_the_draft` is for.
-    assert!(w.readable(None, &deep), "its trunk is the published home, so every class reads it");
+    assert!(
+        w.readable(None, &deep),
+        "its trunk is the published home, so every reader class reads it"
+    );
     assert!(w.readable(Some(A), &deep));
     assert!(w.readable(Some(B), &deep));
     // The registration check the contract puts AHEAD of the read is the
@@ -1644,7 +1647,7 @@ fn the_read_predicate_projects_an_address_the_client_invented() {
 /// `the_read_predicate_projects_an_address_the_client_invented` has a
 /// PUBLISHED trunk, which reads readable either way. Without the projection
 /// this address is absent from the exception set, and so fail-open to every
-/// class.
+/// reader class.
 #[test]
 fn a_version_member_shaped_address_under_a_draft_reads_as_the_draft() {
     let engine = mem_engine();
@@ -1676,7 +1679,7 @@ fn a_version_member_shaped_address_under_a_draft_reads_as_the_draft() {
 /// `true` for an address it never held — the postcondition a build answering
 /// off M3's bit (PUB-7.69) must keep, since M3's own read answers `false`.
 #[test]
-fn an_address_no_mint_produced_reads_readable_at_every_class_and_tier() {
+fn an_address_no_mint_produced_reads_readable_at_every_reader_class_and_tier() {
     let engine = mem_engine();
     let board = two_accounts(&engine);
     let never_minted = validate(
@@ -1719,7 +1722,10 @@ fn one_reader_class_answers_each_document_by_its_own_owner() {
     assert!(reader.readable(&board.home_a), "a published document, before any seat is looked up");
     assert!(reader.readable(&draft_b), "B's own draft, by the subtree clause");
     assert!(!reader.readable(&board.draft_a), "A's ungranted draft, through the SAME reader class");
-    assert!(reader.readable(&draft_b), "B's draft again: the class held a seat, not a verdict");
+    assert!(
+        reader.readable(&draft_b),
+        "B's draft again: the reader class held a seat, not a verdict"
+    );
     for doc in [&board.home_a, &draft_b, &board.draft_a] {
         assert_eq!(reader.readable(doc), w.readable(Some(B), doc), "{doc}: one predicate");
     }

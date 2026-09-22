@@ -7,7 +7,7 @@
 //! [`crate::Engine::dump_of_visible`] over the same threaded predicate every
 //! read answers (PUB-6.39) — and this filter runs over the dump TREE before a
 //! byte is rendered, so the two are one tree rendered twice and a reader
-//! class's dump is byte-identical to the harness walk under the total
+//! class's dump is byte-identical to the harness-only walk under the total
 //! predicate. Determinism holds per reader class (PUB-8.26): the text is a
 //! function of the world and the reader class, conditioned on the head's
 //! publication state, grant state and the reader's class.
@@ -38,18 +38,19 @@
 //!   is what governs, so this module RE-DERIVES the link from the type class
 //!   it was rendered off ([`sup_edge_claims`], [`member_tuples`]). Each is a
 //!   restatement of a rule M7 owns, and the standing obligation on both is to
-//!   stay that restatement: one that keyed fewer entries than the harness
-//!   walk renders would drop, under the TOTAL predicate, what the harness walk
-//!   wrote, and the identity that makes a reader class's dump the harness
-//!   walk's own tree would fail. That is why each is checked against the
-//!   harness walk over a world that has the entry, and not only against a
-//!   reader class that reads it. The obligation binds the other way too,
-//!   where no identity test can see it: one that keyed an EXTRA asserting
-//!   link against an entry the harness walk does render — a retracted claim,
-//!   a tuple read under another view — keeps that entry for every reader
-//!   class that reads the extra link's home, whatever the operative links
-//!   assert. That direction is checked against a reader class, over a world
-//!   where the extra link is readably homed and the operative one is not.
+//!   stay that restatement: one that keyed fewer entries than the
+//!   harness-only walk renders would drop, under the TOTAL predicate, what
+//!   the harness-only walk wrote, and the identity that makes a reader
+//!   class's dump the harness-only walk's own tree would fail. That is why
+//!   each is checked against the harness-only walk over a world that has the
+//!   entry, and not only against a reader class that reads it. The obligation
+//!   binds the other way too, where no identity test can see it: one that
+//!   keyed an EXTRA asserting link against an entry the harness-only walk
+//!   does render — a retracted claim, a tuple read under another view — keeps
+//!   that entry for every reader class that reads the extra link's home,
+//!   whatever the operative links assert. That direction is checked against a
+//!   reader class, over a world where the extra link is readably homed and
+//!   the operative one is not.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -81,16 +82,16 @@ use super::{shipped_label, PREDICATE_PROJECTIONS, SLICE_VIEWS};
 const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullified"];
 
 /// The per-class post-filter over the dump tree — the ONE statement of what
-/// the entries it reaches drop and keep, applied before render so the harness
-/// walk and every reader class's dump are one tree. `readable` is the threaded
-/// predicate (PUB-6.39); every address is judged at its DOCUMENT
-/// (`document_of`, the address arithmetic the link-address rule uses,
-/// PUB-6.6), an address with no document — an account, a node — judged
+/// the entries it reaches drop and keep, applied before render so the
+/// harness-only walk and every reader class's dump are one tree. `readable`
+/// is the threaded predicate (PUB-6.39); every address is judged at its
+/// DOCUMENT (`document_of`, the address arithmetic the link-address rule
+/// uses, PUB-6.6), an address with no document — an account, a node — judged
 /// readable.
 ///
 /// * `authoritative.namespace` — KEPT whole. The addresses in it are not
-///   secret (PUB-1.13, an address is not), but the section is M3's WHOLE
-///   serde form, and beside the node registry it carries three things: the
+///   secret (PUB-1.13, an address is not), but the slice is M3's WHOLE serde
+///   form, and beside the node registry it carries three things: the
 ///   `publication` map (every registered document with its bit — so a reader
 ///   class reads the draft MEMBERSHIP of documents it cannot open, and the
 ///   reduced `publication` section below reduces that SECTION and not what a
@@ -98,22 +99,22 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 ///   COUNTS (so a draft's content and link population is legible without any
 ///   of its content), and the principal registry. Widening the reduction here
 ///   would move bytes the crash and wire oracles pin, so what a reader class
-///   is owed of this section is the format owner's question and not this
+///   is owed of this slice is the format owner's question and not this
 ///   filter's.
 /// * `authoritative.content.map` — a CONTENT LINE leaves when its element's
 ///   document is unreadable.
-/// * `authoritative.arrangement.{arrangements, provenance}` — the
-///   ARRANGEMENT and LINK-SUBSPACE sections keyed by an unreadable document
-///   leave (M5's per-document arrangement holds both subspaces; provenance
-///   is keyed by the placing document).
+/// * `authoritative.arrangement.{arrangements, provenance}` — the ENTRIES
+///   keyed by an unreadable document leave: its arrangement (M5's
+///   per-document arrangement holds content and LINK subspaces alike) and its
+///   provenance (keyed by the placing document).
 /// * `authoritative.arrangement.birth_extents` — KEPT whole (the owner's
 ///   ruling, 2026-09-18). Every key M5's fold writes to its birth memo
 ///   (PUB-3.19) is a VERSION MEMBER — a trunk's opening `D.1` — and every
 ///   version address that exists names a PUBLISHED state, forever (PUB-2.10;
 ///   a private document is versionless, PUB-2.9). So no entry is keyed by a
 ///   document some reader class cannot open, and no reader class is owed
-///   less than the whole map; a reduction by the member's document would
-///   have nothing to drop in any world an op builds, which is why
+///   less than the whole map; a reduction by the version member's document
+///   would have nothing to drop in any world an op builds, which is why
 ///   `every_reduced_path_actually_reduces` could not hold one. The
 ///   disposition rests on that key set: a memo keyed by anything but a
 ///   version member owes a reduction here.
@@ -143,8 +144,8 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 ///     * A SUPERSESSION EDGE takes a third test beside its two endpoints'
 ///       homes (lane 4.2, F4; PUB-6.13, PUB-6.22, PUB-6.27): the edge stays
 ///       only where some operative CLAIM asserting it — the `[K_sup]` link
-///       the harness walk derived the edge from — is homed in a document the
-///       reader class reads. A claim is a link and its home governs, exactly
+///       the harness-only walk derived the edge from — is homed in a document
+///       the reader class reads. A claim is a link and its home governs, exactly
 ///       as `in_claims`/`out_claims` filter lineage by the CLAIM's home: a
 ///       draft-homed `assert_sup` over two public links is invisible to a
 ///       guest there and leaves the guest's dump here.
@@ -165,8 +166,9 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 /// against the builders at each. A level left out of that test is a level
 /// where an addition discloses, so the five are named rather than counted:
 ///
-/// * the ROOT's four sections — two reduced, two kept whole with the reason
-///   given above;
+/// * the ROOT's four sections — `publication` and `hints` reduced, `grants`
+///   kept whole with the reason given above, and `authoritative` reduced
+///   slice by slice at the two levels below;
 /// * the AUTHORITATIVE section's four slices, one per store;
 /// * inside each of those, that STORE's own serde fields — the level whose
 ///   names the four paths above end in;
@@ -263,7 +265,7 @@ pub(super) fn filter_tree(
 
 /// The OPERATIVE supersession claims, keyed by the edge each asserts — the
 /// denoted OLD endpoint, then the denoted NEW one — for the per-class filter
-/// over the dump's `hints.supersession` section.
+/// over the dump's `hints.supersession` family.
 ///
 /// NESTED, as M7's own `sup_fwd` hint is and as the fold that builds it is:
 /// the caller holds the two endpoints separately, and a probe of a map keyed
@@ -277,10 +279,10 @@ pub(super) fn filter_tree(
 /// `succs_operative`'s nullified filter, and the STANDING OBLIGATION on this
 /// function is that it stay that composition: an edge the render carries must
 /// have at least one claim here, or the filter drops under the total
-/// predicate what the harness walk rendered, and the identity that makes a
-/// reader class's dump the harness walk's own tree fails. The test below over
-/// a world that HAS an edge is where that agreement is checked, and a change
-/// to M7's arm has its counterpart here.
+/// predicate what the harness-only walk rendered, and the identity that makes
+/// a reader class's dump the harness-only walk's own tree fails. The test
+/// below over a world that HAS an edge is where that agreement is checked,
+/// and a change to M7's arm has its counterpart here.
 ///
 /// The NULLIFIED filter is the half of that composition no identity test can
 /// hold. A claim kept past its retraction is an EXTRA key, which the total
@@ -293,7 +295,7 @@ pub(super) fn filter_tree(
 /// `fold_hints`' own reading and must stay it: that iterator already keeps the
 /// unit-depth spans and drops the rest, so an `is_address_denoting` test here
 /// would be strictly stronger than the rule being mirrored and would key
-/// fewer edges than the harness walk renders.
+/// fewer edges than the harness-only walk renders.
 ///
 /// Nothing in the supersession class can exercise the difference, and the
 /// reason is a CLOSURE rather than a coincidence. THREE deposits could put a
@@ -341,10 +343,10 @@ fn sup_edge_claims(links: &LinkState) -> BTreeMap<Tumbler, BTreeMap<Tumbler, Vec
         }
         // RESIDENCY is M7's stated postcondition on `type_slice`, and M7
         // fail-stops on it itself (`LinkState::link_at`). Skipping the claim
-        // instead would key fewer edges than the harness walk renders, which
-        // is the one departure this derivation's standing obligation forbids:
-        // under the total predicate the filter would drop what the harness
-        // walk wrote.
+        // instead would key fewer edges than the harness-only walk renders,
+        // which is the one departure this derivation's standing obligation
+        // forbids: under the total predicate the filter would drop what the
+        // harness-only walk wrote.
         let link = links
             .readlink(&claim)
             .expect("a type_slice key names a resident link (M7's postcondition)");
@@ -369,8 +371,8 @@ fn sup_edge_claims(links: &LinkState) -> BTreeMap<Tumbler, BTreeMap<Tumbler, Vec
 /// stay `members`' own denotation rule: the union of the F-slot's denoted
 /// addresses over the class's slice under that view. Two departures from that
 /// rule would each break the identity that makes a reader class's dump the
-/// harness walk's own tree, by keying fewer members than the harness walk
-/// renders —
+/// harness-only walk's own tree, by keying fewer members than the
+/// harness-only walk renders —
 ///
 /// * an `is_address_denoting` guard on the F slot, which is STRICTLY STRONGER
 ///   than `Endset::addrs`: that iterator already keeps the unit-depth spans
@@ -387,13 +389,14 @@ fn sup_edge_claims(links: &LinkState) -> BTreeMap<Tumbler, BTreeMap<Tumbler, Vec
 ///   `Active`, so each row of [`PREDICATE_PROJECTIONS`] carries the view its own
 ///   entries were rendered under.
 ///
-/// Keying a member the harness walk did NOT render is free: nothing probes
-/// it. Keying an extra TUPLE against a member it DID render is not, because
-/// one readably-homed tuple keeps the entry — an audit-view tuple keyed for an
-/// active-view row keeps a member whose only active registration is a
-/// draft's, and the total predicate reads that tuple like any other, so no
-/// identity test can tell. `a_projection_entry_is_judged_at_its_own_row_s_view`
-/// holds the row's view in both directions.
+/// Keying a member the harness-only walk did NOT render is free: nothing
+/// probes it. Keying an extra TUPLE against a member it DID render is not,
+/// because one readably-homed tuple keeps the entry — an audit-view tuple
+/// keyed for an active-view row keeps a member whose only active registration
+/// is a draft's, and the total predicate reads that tuple like any other, so
+/// no identity test can tell.
+/// `a_projection_entry_is_judged_at_its_own_row_s_view` holds the row's view
+/// in both directions.
 ///
 /// Read through M7's public surface alone — the class's `type_slice` and
 /// `readlink` per tuple — at filter time, as [`sup_edge_claims`] is. A tuple's
@@ -412,7 +415,7 @@ fn member_tuples(links: &LinkState, ty: &Endset, view: View) -> BTreeMap<Tumbler
     for tuple in links.type_slice(ty, view) {
         // RESIDENCY is M7's stated postcondition on `type_slice`, as at
         // `sup_edge_claims`, and skipping the tuple would key fewer members
-        // than the harness walk renders — the departure the standing
+        // than the harness-only walk renders — the departure the standing
         // obligation above forbids.
         let link = links
             .readlink(&tuple)
@@ -459,7 +462,7 @@ fn retain_seq(tree: &mut SerdeTree, path: &[&str], keep: &dyn Fn(&SerdeTree) -> 
 /// a sequence of dotted items — that both predicates admit: an entry stays
 /// where `keep_key` admits its key, and each of that entry's items stays where
 /// `keep_pair` admits it with the key. An entry whose sequence empties LEAVES,
-/// because the harness walk renders no empty one.
+/// because the harness-only walk renders no empty one.
 ///
 /// Both addresses re-enter through [`dotted_address`] here rather than at the
 /// caller, so this helper holds the fail-closed key rule itself: what does not
@@ -582,8 +585,8 @@ mod tests {
     /// expects there — built from the filter's own family list, the format's
     /// projection table and the one shipped-class table, so a family added to
     /// any of them is walked by the tests below without an edit here. Every
-    /// component of every path is a compiled string: the section names are
-    /// literals, the family names are the two tables' own, and
+    /// component of every path is a compiled string: the section, slice and
+    /// field names are literals, the family names are the two tables' own, and
     /// [`shipped_label`] answers with the format's.
     fn reduced_paths() -> Vec<(Vec<&'static str>, Shape)> {
         let mut paths = vec![
@@ -646,8 +649,9 @@ mod tests {
             let (found, _) = shape_and_len(&tree, &path);
             assert_eq!(found, want, "{path:?}: the reduction's shape is not what the builder wrote");
         }
-        // …and the two sections kept WHOLE are places in the tree too, so the
-        // statement that names them can be read against something.
+        // …and the slice and the section kept WHOLE — `authoritative.namespace`
+        // and `grants` — are places in the tree too, so the statement that
+        // names them can be read against something.
         for path in [&["authoritative", "namespace"][..], &["grants"]] {
             assert!(at_path(&tree, path).is_some(), "{path:?} is a place in the v5 tree");
         }
@@ -685,7 +689,7 @@ mod tests {
     /// one list. What it still catches there is a family written into
     /// `super::hints_tree` beside the table rather than into it.
     ///
-    /// Asked of GENESIS, because the section keys are FORMAT rather than
+    /// Asked of GENESIS, because the tree's keys are FORMAT rather than
     /// content: every builder pushes every key whatever the world holds, so an
     /// empty world carries the whole set and the assertion is over the format
     /// and not over a fixture.
@@ -698,7 +702,7 @@ mod tests {
                     .iter()
                     .map(|(k, _)| match k {
                         SerdeTree::Str(s) => s.clone(),
-                        other => panic!("{path:?}: section keys are strings, got {other:?}"),
+                        other => panic!("{path:?}: the tree's keys are strings, got {other:?}"),
                     })
                     .collect(),
                 other => panic!("{path:?}: expected a map, got {other:?}"),
@@ -721,7 +725,9 @@ mod tests {
         );
 
         // …the root, where each section has a disposition in the filter's one
-        // statement: two reduced, two kept whole with the reason given.
+        // statement: `publication` and `hints` reduced, `grants` kept whole
+        // with the reason given, and `authoritative` reduced slice by slice at
+        // the two levels below.
         let sections: BTreeSet<String> = ["authoritative", "publication", "grants", "hints"]
             .iter()
             .map(|name| (*name).to_owned())
@@ -754,7 +760,7 @@ mod tests {
             // statement — listed so a fifth is a decision and not a default.
             ("namespace", &["frontiers", "nodes", "principals", "publication"][..]),
             ("content", &["map"]),
-            // M5's two keyed sections reduced, and its birth memo kept WHOLE
+            // M5's two keyed fields reduced, and its birth memo kept WHOLE
             // with the reason in `filter_tree`'s statement.
             ("arrangement", &["arrangements", "birth_extents", "provenance"]),
             // M7's skip-serialized hints occupy no bytes and so no key.
@@ -805,12 +811,13 @@ mod tests {
     }
 
     /// …and under the GUEST predicate the draft's content, arrangement and
-    /// link leave while the namespace section stays whole and the publication
-    /// section empties: the populated world's one document is a DRAFT, so a
-    /// guest sees its registration and nothing it holds. Asked of the TREE,
-    /// where each section can be named, rather than of the text.
+    /// link leave while the namespace slice and the grants section stay whole
+    /// and the publication section empties: the populated world's one
+    /// document is a DRAFT, so a guest sees its registration and nothing it
+    /// holds. Asked of the TREE, where each place can be named, rather than of
+    /// the text.
     #[test]
-    fn the_guest_filter_drops_a_draft_s_sections_and_keeps_the_namespace_section() {
+    fn the_guest_filter_drops_a_draft_s_entries_and_keeps_the_namespace_slice_and_grants_section() {
         let (_engine, world) = populated_world();
         let full = dump_tree(&world);
         let guest =
@@ -834,7 +841,7 @@ mod tests {
             assert!(len_at(&full, path) > 0, "{path:?}: the fixture must populate it");
             assert_eq!(len_at(&guest, path), 0, "{path:?}: a guest reads nothing of a draft");
         }
-        // The namespace section is untouched. The GRANT section is kept whole
+        // The namespace slice is untouched. The GRANT section is kept whole
         // too, but this fixture deposits no grant, so what the loop below
         // compares there is one empty map against another — the integration
         // suite's guest tests are what hold that section's content against a
@@ -1118,7 +1125,7 @@ mod tests {
         for claim in &claims {
             let value = world.links.readlink(claim).expect("a slice key is resident");
             for slot in [value.from_slot(), value.to_slot()] {
-                assert!(slot.is_address_denoting(), "a class member's endpoints are addresses");
+                assert!(slot.is_address_denoting(), "a claim's endpoints are addresses");
                 assert_eq!(slot.addrs().count(), 1, "one denoted address a side: the 1 × 1");
             }
         }
@@ -1218,10 +1225,10 @@ mod tests {
     /// The draft-homed registration of a PUBLIC member is the one a single
     /// member-home test admits: the guest's `shipped.pred_stable` slice is
     /// empty, because the tuple is draft-homed, while the projection would
-    /// name the member — the harness walk's two renderings of one deposit,
-    /// disagreeing, with a draft's content in the guest's dump. The public
-    /// registration of a DRAFT's member is the mirror, and is what a single
-    /// tuple-home test would admit.
+    /// name the member — the harness-only walk's two renderings of one
+    /// deposit, disagreeing, with a draft's content in the guest's dump. The
+    /// public registration of a DRAFT's member is the mirror, and is what a
+    /// single tuple-home test would admit.
     #[test]
     fn a_guest_s_predicate_projections_hold_neither_a_draft_s_tuple_nor_its_member() {
         let (world, public_member, private_member) =
@@ -1282,8 +1289,8 @@ mod tests {
         );
         // …and under the TOTAL predicate the filter is the identity, which is
         // what [`member_tuples`]' obligation rests on: a re-derivation that
-        // keyed fewer members than the harness walk renders would drop them
-        // here.
+        // keyed fewer members than the harness-only walk renders would drop
+        // them here.
         assert_eq!(
             dump_visible(&world, &|_: &Address| true),
             dump(&world),

@@ -683,8 +683,8 @@ mod tests {
         );
 
         // The pre-bit layout: additionally without M3's publication map, which
-        // at genesis is empty and so is the eight zero bytes that end the
-        // namespace section.
+        // at genesis is empty and so is the eight zero bytes that end M3's
+        // slice.
         let namespace_bytes = bincode::serialize(&world.namespace).expect("M3 serializes");
         assert!(
             namespace_bytes.ends_with(&0u64.to_le_bytes()),

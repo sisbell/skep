@@ -105,7 +105,7 @@ impl World {
     /// and this crate's grant admission by M7's `HomeNotRegistered` gate,
     /// which registered every home it reads. The read predicate owes none and
     /// must not acquire one —
-    /// `an_address_no_mint_produced_reads_readable_at_every_class_and_tier`
+    /// `an_address_no_mint_produced_reads_readable_at_every_reader_class_and_tier`
     /// fails if it does. M3's own `published` reads the bit at one map lookup
     /// and answers `false` for an unregistered address (fail-private).
     ///

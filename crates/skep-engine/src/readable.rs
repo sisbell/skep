@@ -40,9 +40,9 @@ use skep_namespace::{prefix_contains, PrincipalId};
 use crate::world::World;
 
 /// ONE READER'S CLASS over ONE world: the read predicate closed over one
-/// principal (`None` is the guest), with that principal's SEAT — the account
-/// M3's `principal_prefix` answers for it — looked up at most once for the
-/// class's life.
+/// principal (`None` is the guest), with that principal's SEAT — the prefix
+/// M3's `principal_prefix` answers for it, an account for every principal but
+/// the node-tier principal 0 — looked up at most once for the class's life.
 ///
 /// M3 answers a seat by scanning its principal registry, and the seat is the
 /// same for every document one reader asks about, so a caller that consults
@@ -83,7 +83,7 @@ impl World {
     /// principal)` — one function, three clauses, short-circuiting.
     ///
     /// `principal` is `None` for the GUEST (PUB-1.31 with no principal: the
-    /// subtree clause has no account to hold, and the grant clause — the
+    /// subtree clause has no seat to test, and the grant clause — the
     /// ANY-PRINCIPAL form included, PUB-5.8, PUB-5.9 — reaches principals
     /// alone, PUB-5.109): a guest sees a document iff it is published, so
     /// [`World::readable_guest`] is `readable(None, ·)`. Every clause
@@ -122,11 +122,11 @@ impl World {
     ///   `the_node_tier_principal_reads_no_draft_by_subtree`).
     /// * GRANT (PUB-5.8, PUB-5.19) — the grant fold, grantee PRINCIPAL-EXACT,
     ///   coverage containment ∩ issuer = doc's ω owner. A principal M3 holds
-    ///   no SEAT for is not thereby the guest: the subtree clause has no
-    ///   account to compare and the principal-exact index has no key to
-    ///   probe, so both fall through, but the ANY-PRINCIPAL grants still
-    ///   reach it — being a principal at all is that tier's whole membership
-    ///   test (PUB-5.8), and an unseated one is still not `None`.
+    ///   no SEAT for is not thereby the guest: the subtree clause has no seat
+    ///   to test and the principal-exact index has no key to probe, so both
+    ///   fall through, but the ANY-PRINCIPAL grants still reach it — being a
+    ///   principal at all is that tier's whole membership test (PUB-5.8), and
+    ///   an unseated one is still not `None`.
     ///
     /// COST, per call, uncached, in three terms — and the CALLER chooses the
     /// first while the STORE chooses the other two, so this figure is not one
@@ -145,7 +145,7 @@ impl World {
     ///   bounds the term in the live system is the CALLER's — the daemon's
     ///   wire cap on a tumbler's components, whose budget is written where
     ///   that number is.
-    /// * The SEAT: past the draft hit, a bound principal's account is M3's
+    /// * The SEAT: past the draft hit, a bound principal's seat is M3's
     ///   `principal_prefix`, a scan of the principal registry in address
     ///   order — O(|Π|), up to the reader's own entry, and the WHOLE registry
     ///   for a principal M3 seats nowhere. Π gains an entry for every
@@ -237,11 +237,11 @@ impl<'w> ReaderClass<'w> {
     pub fn readable(&self, doc: &Address) -> bool {
         let world = self.world;
         let trunk = trunk_of(doc);
-        // Published clause — a published document (or member) is readable by
-        // all, and an address the set never held reads readable here:
-        // `World::published`'s postcondition, which M10's `ReadableWorld`
-        // obligation rests on (PUB-6.12). No registration check belongs ahead
-        // of it.
+        // Published clause — a published document (or version member) is
+        // readable by all, and an address the set never held reads readable
+        // here: `World::published`'s postcondition, which M10's
+        // `ReadableWorld` obligation rests on (PUB-6.12). No registration check
+        // belongs ahead of it.
         if world.published(&trunk) {
             return true;
         }
@@ -258,17 +258,19 @@ impl<'w> ReaderClass<'w> {
         let Some(id) = self.principal else {
             return false;
         };
-        // The principal's own account — M3's seat for it, looked up by the
-        // first question that reaches here and reused by every later one —
-        // which the two clauses below read differently: as an account to
-        // compare against the owner's, and as the grantee to probe the fold
-        // with.
+        // `account(principal)` — the principal's SEAT, M3's `principal_prefix`
+        // answer, looked up by the first question that reaches here and reused
+        // by every later one. It is an account for every principal but the
+        // node-tier principal 0, whose seat is the node itself, which is why
+        // the subtree clause tests the seat's tier. The two clauses below read
+        // it differently: as the seat the subtree clause tests, and as the
+        // grantee the fold is probed with.
         let account = *self.seat.get_or_init(|| world.namespace.principal_prefix(id));
         // Subtree clause — `in_owner_subtree` states it.
         if account.is_some_and(|seat| in_owner_subtree(seat, owner)) {
             return true;
         }
-        // Grant clause — the fold, grantee exact (`None` account ⟹ only the
+        // Grant clause — the fold, grantee exact (no seat ⟹ only the
         // ANY-PRINCIPAL grants can match, which the fold probes regardless).
         world.grants.grant_exists(owner, account, &trunk)
     }
@@ -309,7 +311,7 @@ fn in_owner_subtree(seat: &Address, owner: &Address) -> bool {
 /// consult walks a request's named documents before any registration check,
 /// and answers WITHHELD naming the first one this refuses. The inherent
 /// predicate meets it at every tier
-/// (`an_address_no_mint_produced_reads_readable_at_every_class_and_tier`)
+/// (`an_address_no_mint_produced_reads_readable_at_every_reader_class_and_tier`)
 /// for every unregistered address but ONE shape: an address shaped as a
 /// version member of a REGISTERED DRAFT, which the projection reads as that
 /// draft (PUB-2.15) and so withholds wherever the draft is withheld

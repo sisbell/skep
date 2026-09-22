@@ -79,10 +79,10 @@ pub fn t_grant() -> &'static Address {
 /// translated .4 revised .5 annotated` beneath it (note 3: "a descriptive
 /// edition relation is `edition.*`"); commons-map.md places the core
 /// vocabulary at `3.1–3.21` with `edition` listed. Class membership is by
-/// PREFIX: a type slot denoting
-/// `3.14.k` is a subtype's member and counts — the lookup names the CLASS,
-/// not one address. NOT a write-path refusal class: the claim is read under
-/// the ACTIVE view (PUB-6.32), so its owner's `nullify` is admitted.
+/// PREFIX (L10): a subtype is its class's member, so a type slot denoting
+/// `3.14.k` counts — the lookup names the CLASS, not one address. NOT a
+/// write-path refusal class: the claim is read under the ACTIVE view
+/// (PUB-6.32), so its owner's `nullify` is admitted.
 pub fn t_edition() -> &'static Address {
     static ADDR: LazyLock<Address> = LazyLock::new(|| commons_type(14));
     &ADDR

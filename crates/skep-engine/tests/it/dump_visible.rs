@@ -173,7 +173,7 @@ fn the_filter_under_the_total_predicate_is_the_harness_walk() {
 
 /// The GUEST (no principal): the publication section EMPTY, the exception-set
 /// hint empty, no content line of the draft, no link of the draft in any
-/// hint family — while the published home's grant and the namespace section
+/// hint family — while the published home's grant and the namespace slice
 /// stay. A STRANGER principal — no account, no grant — reads exactly what the
 /// guest reads.
 #[test]
@@ -194,7 +194,7 @@ fn a_guest_s_dump_holds_no_draft_content_and_an_empty_publication_section() {
     assert!(guest.contains(&quoted(&g)), "the published home's grant link stays:\n{guest}");
     // The grant section is kept whole, so the draft the guest cannot open is
     // still named there, as that grant's `content_prefix` — the one dotted
-    // rendering of it a guest's text carries. (The namespace section names it
+    // rendering of it a guest's text carries. (The namespace slice names it
     // too, but in the authoritative maps' tumbler form, not this one.)
     assert!(
         guest.contains(&quoted(&board.draft_a)),

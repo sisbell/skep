@@ -175,7 +175,7 @@ fn dump_visible(world: &World, readable: &dyn Fn(&Address) -> bool) -> WorldDump
 /// subject, and rendering them here would compare a derived structure against
 /// itself.
 ///
-/// The section keys are the dump's own wire vocabulary, exactly as
+/// These slice keys are the dump's own wire vocabulary, exactly as
 /// [`shipped_label`]'s are: they name each slice for the store it belongs to
 /// and match the [`World`] field names by intent, not by construction. They
 /// are part of the format, so the banner's version moves with them.
@@ -260,10 +260,10 @@ fn window(s: &str, i: usize) -> &str {
 
 // ── the hints section, from public reads only ──
 
-/// A section key — a string node, the one shape a key in this format takes.
-/// Every caller hands a compiled `&str`: the section names are literals, and
-/// the family and class names are the format's own tables ([`SLICE_VIEWS`],
-/// [`PREDICATE_PROJECTIONS`], [`shipped_label`]).
+/// A key — a string node, the one shape a key in this format takes. Every
+/// caller hands a compiled `&str`: the section, slice and field names are
+/// literals, and the family and class names are the format's own tables
+/// ([`SLICE_VIEWS`], [`PREDICATE_PROJECTIONS`], [`shipped_label`]).
 fn key(s: &str) -> SerdeTree {
     SerdeTree::Str(s.to_owned())
 }
@@ -526,7 +526,7 @@ fn grants_tree(world: &World) -> SerdeTree {
     SerdeTree::Map(
         world
             .grants
-            .records()
+            .operative_records()
             .map(|(addr, grant)| {
                 let GrantRecord { home, issuer, content_prefix, grantee } = grant;
                 let grantee = match grantee {
@@ -719,10 +719,11 @@ impl crate::Engine {
     ///   mis-derived one is an authorization answer rather than a stale
     ///   figure. The dump's grant section renders the fold's RECORDS and
     ///   neither index, so no comparison here reaches them.
-    /// * The grant fold's EARLIER-RECORD KEY — `earlier` — drives
+    /// * The grant fold's EARLIER-RECORD SET — `earlier` — drives
     ///   `classify`'s second outcome: whether a record naming an earlier
     ///   record of its home is a revocation or of neither kind (PUB-5.15).
-    ///   The grant section renders the records and not the key.
+    ///   The grant section renders the operative set and not the
+    ///   earlier-record set.
     ///
     /// A rebuild that mis-derived any of the six passes here. For the two
     /// indexes that is a gap in the CERTIFICATE rather than a live
@@ -831,13 +832,13 @@ mod tests {
         (engine, world)
     }
 
-    /// Each authoritative section renders ITS OWN slice: a world differing in
+    /// The authoritative section renders EVERY slice: a world differing in
     /// exactly one slice must render a different authoritative section, or the
     /// harnesses' byte comparison is blind to that store. Only a test inside
     /// the crate can pose the question, because only here can a world be built
     /// one slice at a time.
     #[test]
-    fn each_authoritative_section_renders_its_own_slice() {
+    fn the_authoritative_section_renders_every_slice() {
         let (_engine, rich) = populated_world();
         let bare = World::genesis();
         let base = render_of(&authoritative_tree(&bare));

@@ -768,7 +768,7 @@ impl crate::Engine {
 
 #[cfg(test)]
 mod tests {
-    use skep_address::{Nat, Span};
+    use skep_address::{validate, Nat, Span};
     use skep_arrangement::{Caller, Deposit, VPos, VSpec};
     use skep_content::Val;
     use skep_links::SlotArg;
@@ -882,6 +882,62 @@ mod tests {
         // would have written.
         let text = render_of(&to_tree(&Val::new(vec![255u8; 4])));
         assert_eq!(text, "[255, 255, 255, 255]");
+    }
+
+    /// The hint check's rebuild runs FROM SCRATCH, and that is what makes it an
+    /// oracle over a LIVE world: a fold that drifted leaves its index POPULATED
+    /// and wrong, never empty. The integration suite's
+    /// `the_hint_check_refuses_a_world_whose_derived_state_was_never_rebuilt`
+    /// holds the EMPTY case — a decoded world, every derived index empty — and a
+    /// rebuild that re-seeded only an EMPTY index would go on refusing that
+    /// world while passing every drifted one it is handed, every recovered
+    /// world M2's crash harness ends a full-depth judgment on among them. So
+    /// each engine index is drifted here while it stays populated: the
+    /// exception set one entry wider than M3's publication map, and a grant
+    /// fold holding a record this world's links never deposited.
+    #[test]
+    fn the_hint_check_refuses_a_populated_index_that_drifted_from_its_rebuild() {
+        let (engine, world) = populated_world();
+        engine.check_hints_of(&world).expect("the premise: the populated world is faithful");
+
+        // The exception set, one entry wider: a document-tier address under the
+        // draft's own owner that no mint produced, memoized beside the draft.
+        let owner = world.drafts().next().expect("the fixture's draft").owner_account.clone();
+        let comps = owner.tumbler().iter().cloned().chain([Nat::from(0u32), Nat::from(99u32)]);
+        let phantom = validate(Tumbler::new(comps).expect("nonempty"))
+            .expect("a document-tier address under the owner is T4-valid");
+        let wider = World { drafts: world.drafts.update(phantom, owner), ..world.clone() };
+        engine
+            .check_hints_of(&wider)
+            .expect_err("an exception set one entry wider than its rebuild must fail the check");
+
+        // The grant fold, holding a record of ANOTHER world's: an admitted
+        // grant deposited through a second engine, carried over whole.
+        let granting = mem_engine();
+        let acct = delegated_account(&granting, USER);
+        let (home, _) =
+            granting.namespace().create_new_document(USER, &acct, None).expect("the home mint");
+        let (draft, _) = granting
+            .namespace()
+            .create_new_document(USER, &acct, None)
+            .expect("a later mint, private");
+        let caller = Caller::Principal(USER);
+        granting
+            .linkstore(&World::visible_to(caller))
+            .makelink(
+                caller,
+                &home,
+                SlotArg::Addrs(vec![draft]),
+                SlotArg::Addrs(vec![]),
+                SlotArg::Addrs(vec![crate::types::t_grant().clone()]),
+            )
+            .expect("a grant in the issuer's own doc 1");
+        let granted = granting.kernel().snapshot().world().clone();
+        assert_eq!(granted.universal_grants().len(), 1, "the premise: the grant is admitted");
+        let foreign = World { grants: granted.grants.clone(), ..world.clone() };
+        engine
+            .check_hints_of(&foreign)
+            .expect_err("a grant fold its links never deposited must fail the check");
     }
 
     fn divergence(live: &str, rebuilt: &str) -> HintDivergence {

@@ -16,7 +16,7 @@ use skep_address::Address;
 use skep_arrangement::Deposit;
 use skep_content::Val;
 use skep_engine::{Engine, World};
-use skep_links::{enc, HasLinks, ReservedAddrs, SlotArg};
+use skep_links::{enc, HasLinks, ReservedAddrs, ShippedType, SlotArg};
 use tempfile::tempdir;
 
 /// The shipped class ordinary emissions land in: `PredDef`, the first Unary
@@ -127,11 +127,16 @@ fn seq_of(addrs: &[&Address]) -> String {
     format!("[{}]", rendered.join(", "))
 }
 
-/// One type class's rendering: its audit and active slices — LINK addresses,
-/// which is what a typed slice holds — and its key.
+/// One type class's rendering where its two views PART: its audit and active
+/// slices — LINK addresses, which is what a typed slice holds — and its key.
+fn class_of_views(audit: &[&Address], active: &[&Address], key: &str) -> String {
+    let (audit, active) = (seq_of(audit), seq_of(active));
+    format!("{{\"active\": {active}, \"audit\": {audit}, \"key\": [{key:?}]}}")
+}
+
+/// …and where they agree, as they do for every class no retraction touches.
 fn class_of(links: &[&Address], key: &str) -> String {
-    let slice = seq_of(links);
-    format!("{{\"active\": {slice}, \"audit\": {slice}, \"key\": [{:?}]}}", key)
+    class_of_views(links, links, key)
 }
 
 #[test]
@@ -230,6 +235,49 @@ fn the_dump_projects_the_predicate_registry() {
     for entry in ["predicates.stable.audit", "predicates.stable.active"] {
         assert_entry(&text, entry, "[]");
     }
+}
+
+/// The ACTIVE half of the dump's two view-split families, seen to part from
+/// the AUDIT half. Every other fixture here retracts an ORDINARY link, so each
+/// shipped class's two slices, and each predicate projection's two rows,
+/// render alike in it — and a builder that read the audit view under both
+/// labels would pass every assertion in this file while the faithfulness
+/// check stopped reaching M7's active-view typed slices and member sets. Here
+/// two `pred_stable` tuples register two members and the first is RETRACTED:
+/// it stays in its class's audit slice and leaves the active one, and its
+/// member stays in the audit projection and leaves the active one, no active
+/// tuple asserting it. The retraction is an active tuple of its own class, so
+/// the active half is also seen non-empty.
+#[test]
+fn a_shipped_class_s_active_slice_and_active_projection_render_the_active_view() {
+    let engine = Engine::open(mem_cfg()).expect("in-memory open");
+    let (_acct, draft) = setup_draft(&engine);
+    let pred_stable = engine.registry().reserved_type(ShippedType::PredStable).clone();
+    let visibility = World::visible_to(OWNER);
+    let register = |member: &Address| {
+        engine
+            .linkstore(&visibility)
+            .emit(OWNER, &draft, &pred_stable, member, &[])
+            .expect("a pred_stable tuple in the owner's own draft")
+            .0
+    };
+    let (retracted_member, kept_member) = (element(&draft, 1, 1), element(&draft, 1, 2));
+    let (retracted, kept) = (register(&retracted_member), register(&kept_member));
+    let (retraction, _) = engine
+        .linkstore(&visibility)
+        .nullify(OWNER, &draft, &retracted)
+        .expect("the owner retracts its own tuple");
+
+    let text = engine.world_dump().into_string();
+    assert_entry(
+        &text,
+        "shipped.pred_stable",
+        &class_of_views(&[&retracted, &kept], &[&kept], "1.1.0.1.0.1.0.1.2"),
+    );
+    assert_entry(&text, "predicates.stable.audit", &seq_of(&[&retracted_member, &kept_member]));
+    assert_entry(&text, "predicates.stable.active", &seq_of(&[&kept_member]));
+    assert_entry(&text, "shipped.retraction", &class_of(&[&retraction], "1.1.0.1.0.1.0.1.5"));
+    engine.check_hints().expect("a rebuild renders both views as the live world does");
 }
 
 /// The determinism clause, stated over EQUAL WORLDS rather than one world: two

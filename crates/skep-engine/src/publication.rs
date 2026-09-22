@@ -229,7 +229,10 @@ pub(crate) fn fold(prev: &Drafts, namespace: &M3State, rec: &M3Rec) -> Drafts {
 ///
 /// A decoded slice need not be fold-produced, and the rule's registration
 /// re-ask guards exactly one of the two ways it can differ: an entry for an
-/// address M3 does not register is skipped rather than fail-stopped on. The
+/// address M3 does not register is skipped — neither fail-stopped on nor,
+/// where an account above the address answers ω, memoized as a draft that
+/// `World::published` would then answer `false` for
+/// (`the_seed_skips_an_entry_for_an_address_the_registry_never_held`). The
 /// other is outside the walk altogether. A registered document with NO entry
 /// is never enumerated, so the rule is never asked of it — asked, it would
 /// answer DRAFT — and the set never holds it: the open direction the module
@@ -295,6 +298,7 @@ fn owner_account_of(namespace: &M3State, doc: &Address) -> Address {
 #[cfg(test)]
 mod tests {
     use serde::Deserialize;
+    use skep_address::{validate, Nat, Tumbler};
     use skep_namespace::HasM3;
 
     use crate::canon::{to_tree, SerdeTree, TreeDe};
@@ -316,19 +320,16 @@ mod tests {
         (namespace, acct, doc)
     }
 
-    /// `namespace` with the entry keyed by `key` struck from its serde map
-    /// field `field`. A whole `M3State` decodes by bare derive, and M3's own
-    /// docs name both strikes this suite makes as shapes a slice can arrive
-    /// in: a SEAT struck from Π (`principals`: "a seat can also arrive inside
-    /// a whole `M3State`, which decodes by bare derive"), and a registered
-    /// document's entry struck from the PUBLICATION map (`documents`: a
-    /// checkpoint "can hold a registered document with NO entry"). Built
-    /// through the slice's serde form (`crate::canon`) and back through M3's
-    /// own door, so nothing here reaches a private layout: the coupling is to
-    /// the field NAME, and the panic below is what stands in for a compiler
-    /// edge to it.
-    fn with_entry_struck(namespace: &M3State, field: &str, key: &Address) -> M3State {
-        let struck = to_tree(key).to_string();
+    /// `namespace` with its serde map field `field` edited by `edit`, then
+    /// decoded back through M3's own door. Built through the slice's serde form
+    /// (`crate::canon`), so nothing here reaches a private layout: the coupling
+    /// is to the field NAME, and the panics below are what stand in for a
+    /// compiler edge to it.
+    fn with_map_field_edited(
+        namespace: &M3State,
+        field: &str,
+        edit: impl FnOnce(&mut Vec<(SerdeTree, SerdeTree)>),
+    ) -> M3State {
         let mut tree = to_tree(namespace);
         let SerdeTree::Map(fields) = &mut tree else {
             panic!("M3State serializes as a struct — a map of its fields");
@@ -343,14 +344,49 @@ mod tests {
         let SerdeTree::Map(entries) = map else {
             panic!("M3's `{field}` serializes as a map keyed by address");
         };
-        let before = entries.len();
-        entries.retain(|(entry_key, _)| entry_key.to_string() != struck);
-        assert_eq!(
-            before - entries.len(),
-            1,
-            "the `{field}` entry keyed {key} must have been there to strike"
-        );
+        edit(entries);
         M3State::deserialize(TreeDe(&tree)).expect("M3's own types re-admit what they wrote")
+    }
+
+    /// `namespace` with the entry keyed by `key` struck from its serde map
+    /// field `field`. A whole `M3State` decodes by bare derive, and M3's own
+    /// docs name both strikes this suite makes as shapes a slice can arrive
+    /// in: a SEAT struck from Π (`principals`: "a seat can also arrive inside
+    /// a whole `M3State`, which decodes by bare derive"), and a registered
+    /// document's entry struck from the PUBLICATION map (`documents`: a
+    /// checkpoint "can hold a registered document with NO entry").
+    fn with_entry_struck(namespace: &M3State, field: &str, key: &Address) -> M3State {
+        let struck = to_tree(key).to_string();
+        with_map_field_edited(namespace, field, |entries| {
+            let before = entries.len();
+            entries.retain(|(entry_key, _)| entry_key.to_string() != struck);
+            assert_eq!(
+                before - entries.len(),
+                1,
+                "the `{field}` entry keyed {key} must have been there to strike"
+            );
+        })
+    }
+
+    /// …and with an entry `key → value` ADDED: the other shape a slice decoded
+    /// by bare derive can carry and no fold produces — M3's `documents` names
+    /// it too, telling a reader that must not fail-stop on a corrupted slice
+    /// to re-ask registration per entry.
+    fn with_entry_added(
+        namespace: &M3State,
+        field: &str,
+        key: &Address,
+        value: SerdeTree,
+    ) -> M3State {
+        let added = to_tree(key);
+        let rendered = added.to_string();
+        with_map_field_edited(namespace, field, |entries| {
+            assert!(
+                entries.iter().all(|(entry_key, _)| entry_key.to_string() != rendered),
+                "the `{field}` entry keyed {key} must be new"
+            );
+            entries.push((added, value));
+        })
     }
 
     /// The seed over a well-formed slice: the draft, memoized against the
@@ -447,5 +483,46 @@ mod tests {
             is_published(&seed(&corrupt), &doc),
             "the set, whose seed never asks the rule of it, reads it PUBLISHED"
         );
+    }
+
+    /// The seed's REGISTRATION RE-ASK, stated on both sides of the seam —
+    /// [`draft_entry`] here, and M3's `documents`, which tells a reader that
+    /// must not fail-stop on a corrupted slice to re-ask registration per
+    /// entry "as the engine's seed does". M3's walk yields EVERY entry of its
+    /// publication map, and a slice decoded by bare derive can carry one for an
+    /// address the registry never held. A seed trusting the bit the walk yields
+    /// beside it — one lookup cheaper per document — would memoize that
+    /// address as a DRAFT here, where the account above it answers ω, and
+    /// `World::published` would answer `false` for an address no mint
+    /// produced: the TOTAL contract's postcondition broken, and M10's door
+    /// answering WITHHELD naming it (PUB-6.12). On a slice M3's fold produced
+    /// every entry is a registered document, so no other fixture can tell the
+    /// two seeds apart.
+    #[test]
+    fn the_seed_skips_an_entry_for_an_address_the_registry_never_held() {
+        let (namespace, acct, doc) = account_with_a_draft();
+        let comps = acct.tumbler().iter().cloned().chain([Nat::from(0u32), Nat::from(99u32)]);
+        let phantom = validate(Tumbler::new(comps).expect("nonempty"))
+            .expect("a document-tier address under the account is T4-valid");
+        let corrupt = with_entry_added(&namespace, "publication", &phantom, SerdeTree::Bool(false));
+        // The premise, where it can fail: M3's walk yields the entry as private…
+        assert!(
+            corrupt.documents().any(|(document, published)| document == &phantom && !published),
+            "M3's walk yields the added entry, its bit private"
+        );
+        // …the registry never held the address…
+        assert!(!corrupt.is_registered_document(&phantom), "no mint produced it");
+        // …and ω answers the account above it, so a seed that asked the owner
+        // would memoize the address rather than panic.
+        assert_eq!(corrupt.effective_owner_prefix(&phantom), Some(&acct));
+
+        let drafts = seed(&corrupt);
+        assert!(
+            is_published(&drafts, &phantom),
+            "the seed memoized an address no mint produced as a draft: `published` would answer \
+             false"
+        );
+        assert_eq!(drafts.get(&doc), Some(&acct), "…while the registered draft is memoized");
+        assert_eq!(drafts.len(), 1, "one draft, and none for the address the registry never held");
     }
 }

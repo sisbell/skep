@@ -100,12 +100,15 @@ fn nullify(engine: &Engine, home: &Address, claim: &Address) {
         .expect("the owner retracts its own claim");
 }
 
-fn supersede(engine: &Engine, home: &Address, old: &Address, new: &Address) {
+/// Supersede `old` by `new` through the managed class, as A, from `home`.
+/// Returns the supersession claim's address.
+fn supersede(engine: &Engine, home: &Address, old: &Address, new: &Address) -> Address {
     let caller = Caller::Principal(A);
     engine
         .linkstore(&World::visible_to(caller))
         .assert_sup(caller, home, old, new)
-        .expect("the owner supersedes its own claim");
+        .expect("the owner supersedes its own claim")
+        .0
 }
 
 fn world(engine: &Engine) -> World {
@@ -164,6 +167,36 @@ fn a_superseded_claim_and_a_foreign_type_leave_the_class() {
     assert_eq!(rows, vec![row(&new, &board.e1, &board.target, true)], "{rows:?}");
     assert!(w.links().is_active(&old), "the superseded claim is still active — it is D4 that retires it");
     assert!(w.links().readlink(&foreign).is_some(), "the foreign-typed link is resident, and not in the class");
+}
+
+/// …and UNSUPERSEDED is the OPERATIVE reading (Df-SUCC): a supersession its
+/// claimant then RETRACTED retires nothing, so the claim it named is back in
+/// the class beside the one that briefly succeeded it. The test above holds
+/// the retirement; this one holds that it is a present fact and not a
+/// historical one — a lookup asking whether a claim was EVER superseded
+/// passes the test above and keeps this row out for good.
+#[test]
+fn a_claim_whose_supersession_was_retracted_is_back_in_the_class() {
+    let engine = mem_engine();
+    let board = board(&engine);
+    let old = claim(&engine, &board.e1, &board.target, &t_edition());
+    let new = claim(&engine, &board.e1, &board.target, &t_edition());
+    let sup = supersede(&engine, &board.e1, &old, &new);
+    assert_eq!(
+        world(&engine).edition_claims(&board.target),
+        vec![row(&new, &board.e1, &board.target, true)],
+        "the premise: superseded, the old claim leaves the class"
+    );
+
+    nullify(&engine, &board.e1, &sup);
+    assert_eq!(
+        world(&engine).edition_claims(&board.target),
+        vec![
+            row(&old, &board.e1, &board.target, true),
+            row(&new, &board.e1, &board.target, true),
+        ],
+        "a retracted supersession retires nothing: the old claim is back, active"
+    );
 }
 
 /// Class MEMBERSHIP is over EVERY denoted address: a type slot naming the

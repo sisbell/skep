@@ -117,7 +117,9 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 ///   would have nothing to drop in any world an op builds, which is why
 ///   `every_reduced_path_actually_reduces` could not hold one. The
 ///   disposition rests on that key set: a memo keyed by anything but a
-///   version member owes a reduction here.
+///   version member owes a reduction here, and
+///   `every_birth_memo_key_is_a_version_member_whose_state_the_guest_reads`
+///   holds the key set against a world whose memo has an entry.
 /// * `authoritative.links.links` — a LINK homed in an unreadable document
 ///   leaves.
 /// * `publication` — the SECTION reduced per entry to the readable drafts:
@@ -516,7 +518,8 @@ fn dotted_address(node: &SerdeTree) -> Option<Address> {
 
 #[cfg(test)]
 mod tests {
-    use skep_arrangement::Caller;
+    use skep_arrangement::{trunk_of, Caller, Deposit, VPos};
+    use skep_content::Val;
     use skep_kernel::TxnError;
     use skep_links::{
         enc, EditLinkError, EmitError, Link, MakeLinkError, ReservedAddrs, SlotArg,
@@ -560,7 +563,7 @@ mod tests {
 
     /// An account with a PUBLISHED home and a PRIVATE draft, and the engine
     /// that minted them: the account's first flagless mint is its home
-    /// (PUB-8.21) and a later one is a draft. The two fixtures below deposit
+    /// (PUB-8.21) and a later one is a draft. The fixtures below deposit
     /// ACROSS that boundary, so it is established and asserted once here and
     /// each of them states only what it deposits.
     fn a_published_home_and_a_private_draft() -> (Engine, Address, Address) {
@@ -851,6 +854,73 @@ mod tests {
             let b = render_of(at_path(&guest, path).expect("present"));
             assert_eq!(a, b, "{path:?} is kept whole");
         }
+    }
+
+    /// The premise `authoritative.arrangement.birth_extents`' WHOLE disposition
+    /// rests on, held against the memo a world actually carries: every key M5's
+    /// fold writes there is a VERSION MEMBER, and every version address names a
+    /// PUBLISHED state (PUB-2.10; a private document is versionless, PUB-2.9) —
+    /// so the guest, the narrowest reader class, reads every key's document,
+    /// and keeping the field whole discloses nothing.
+    ///
+    /// Nothing else holds the premise, and no other fixture gives the memo an
+    /// entry at all: the level test pins the field's NAME, and the identity and
+    /// guest tests run over versionless worlds. So a memo M5 widened — noting a
+    /// trunk's own birth, a draft's among them — would reach every reader
+    /// class's dump with the suite green, and so would a reduction here that
+    /// emptied the field. The fixture drives both of M5's writing arms: a
+    /// placement into a DRAFT, which must note nothing, and an owned version of
+    /// the published HOME, whose snapshot notes the member it mints.
+    #[test]
+    fn every_birth_memo_key_is_a_version_member_whose_state_the_guest_reads() {
+        let (engine, home, draft) = a_published_home_and_a_private_draft();
+        engine
+            .vstream()
+            .insert(
+                Caller::Principal(USER),
+                &draft,
+                VPos { subspace: Nat::from(1u32), ordinal: Nat::from(1u32) },
+                vec![Val::new(vec![b'd'])],
+                Deposit::Undeclared,
+            )
+            .expect("the owner writes its draft");
+        let (member, _) = engine
+            .vstream()
+            .version(USER, &home, None)
+            .expect("an owned version of the published home");
+        let world = engine.kernel().snapshot().world().clone();
+        let path = ["authoritative", "arrangement", "birth_extents"];
+        let full = dump_tree(&world);
+        let keys: Vec<Address> = match at_path(&full, &path) {
+            Some(SerdeTree::Map(entries)) => entries
+                .iter()
+                .map(|(k, _)| {
+                    serde_form_address(k).expect("a memo key is an address in M5's serde form")
+                })
+                .collect(),
+            other => panic!("M5's birth memo renders as a map, got {other:?}"),
+        };
+        assert!(keys.contains(&member), "the fixture must give the memo its birth member: {keys:?}");
+        for key in &keys {
+            assert_ne!(
+                trunk_of(key),
+                *key,
+                "birth memo key {key} is no version member: the whole disposition owes a reduction"
+            );
+            assert!(
+                world.readable(None, key),
+                "birth memo key {key} names a state the guest cannot read, and the guest's dump \
+                 carries it"
+            );
+        }
+        let guest =
+            filter_tree(dump_tree(&world), &|doc: &Address| world.readable(None, doc), &world.links);
+        assert_eq!(
+            render_of(at_path(&guest, &path).expect("present")),
+            render_of(at_path(&full, &path).expect("present")),
+            "the guest's dump carries the memo whole"
+        );
+        assert_eq!(dump_visible(&world, &|_: &Address| true), dump(&world));
     }
 
     /// A world holding an entry in EVERY family the reduction reaches, all of

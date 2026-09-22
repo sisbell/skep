@@ -348,6 +348,8 @@ impl skep_febe::ReadableWorld for World {
 
 #[cfg(test)]
 mod tests {
+    use skep_address::{is_prefix, Address, Level};
+
     use crate::testkit::{addr, delegated_account, mem_engine, USER};
 
     use super::in_owner_subtree;
@@ -369,6 +371,39 @@ mod tests {
             (addr(&[1]), false, "the node's seat, above every account"),
         ] {
             assert_eq!(in_owner_subtree(&seat, &owner), reads, "{what}");
+        }
+    }
+
+    /// …and the clause as the LAW it is, over every pair a small family makes —
+    /// nodes at the top level and beneath one, accounts at three depths under
+    /// two nodes — against the rule restated symmetrically: a seat reads an
+    /// owner's drafts by ancestry iff the seat is an ACCOUNT and the two lie on
+    /// one line of ancestry, either above the other. The five cases above are
+    /// chosen points, and their node is `[1]`, the one address no deeper node
+    /// shares; a tier gate spelled "not principal 0" passes them all and meets
+    /// `[1.1]` here.
+    #[test]
+    fn the_subtree_clause_is_one_line_of_ancestry_from_an_account_seat() {
+        let nodes = [addr(&[1]), addr(&[2]), addr(&[1, 1])];
+        let accounts = [
+            addr(&[1, 0, 1]),
+            addr(&[1, 0, 2]),
+            addr(&[1, 0, 1, 1]),
+            addr(&[1, 0, 1, 2]),
+            addr(&[1, 0, 1, 1, 1]),
+            addr(&[1, 0, 1, 1, 2]),
+            addr(&[1, 1, 0, 1]),
+            addr(&[1, 1, 0, 1, 1]),
+            addr(&[2, 0, 1]),
+        ];
+        let on_one_line = |a: &Address, b: &Address| {
+            is_prefix(a.tumbler(), b.tumbler()) || is_prefix(b.tumbler(), a.tumbler())
+        };
+        for seat in nodes.iter().chain(&accounts) {
+            for owner in &accounts {
+                let law = seat.level() == Level::Account && on_one_line(seat, owner);
+                assert_eq!(in_owner_subtree(seat, owner), law, "seat {seat}, owner {owner}");
+            }
         }
     }
 
@@ -415,5 +450,11 @@ mod tests {
         let fresh = world.reader_class(Some(USER));
         assert_eq!(fresh.seat(), Some(&acct), "the accessor resolves M3's own seat");
         assert_eq!(fresh.seat.get(), Some(&Some(&acct)), "…into the cell the predicate reads");
+
+        // …and the seat borrows the WORLD, not the class: the class below is a
+        // temporary, dropped at the end of its statement, so this binding
+        // compiles only while `seat` answers the world's lifetime.
+        let outlived = world.reader_class(Some(USER)).seat();
+        assert_eq!(outlived, Some(&acct), "a seat outlives the class that resolved it");
     }
 }

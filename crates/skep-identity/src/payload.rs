@@ -206,8 +206,8 @@ fn escape_json_string(s: &str, out: &mut String) {
 /// AUTH-2.130 — ONE `keys` entry in the canonical spelling: `{alg, key,
 /// anchor, label?}` in that member order, hex lowercase (AUTH-2.17), the
 /// label escaped by [`escape_json_string`] (clause 3). The ENVELOPE around
-/// the array is [`canonical_record`]'s and is not written here.
-fn write_key_entry(e: &Enrollment, out: &mut String) {
+/// the array is [`canonical_record`]'s and is not encoded here.
+fn encode_key_entry(e: &Enrollment, out: &mut String) {
     out.push_str(r#"{"alg":""#);
     out.push_str(e.key.alg());
     out.push_str(r#"","key":""#);
@@ -223,7 +223,7 @@ fn write_key_entry(e: &Enrollment, out: &mut String) {
 
 /// AUTH-2.130 — ONE `fingerprints` entry: a 64-hex lowercase string
 /// (AUTH-2.17), quoted.
-fn write_fingerprint_entry(fp: &Fingerprint, out: &mut String) {
+fn encode_fingerprint_entry(fp: &Fingerprint, out: &mut String) {
     out.push('"');
     out.push_str(&fp.to_hex()); // AUTH-2.17 — hex lowercase
     out.push('"');
@@ -295,12 +295,12 @@ fn retirement_fingerprint(fp: &Fingerprint) -> Fingerprint {
 /// which both kinds keep, is [`scan`]'s.
 ///
 /// PRECONDITION — two rows must AGREE, and [`scan`] checks neither. For every
-/// entry `parse_entry` admits from a canonical body, `write_entry` must
+/// entry `parse_entry` admits from a canonical body, `encode_entry` must
 /// re-emit the bytes that entry spelled: AUTH-2.130's admission sentence is
-/// spelled `canonical_record(schema, parsed, sig) == text`, so a `write_entry`
-/// that is not `parse_entry`'s inverse refuses EVERY record of the kind —
-/// silently, permanently, and with no fault to tell it from a malformed body.
-/// The ENVELOPE half of that inversion needs no precondition:
+/// spelled `canonical_record(schema, parsed, sig) == text`, so an
+/// `encode_entry` that is not `parse_entry`'s inverse refuses EVERY record of
+/// the kind — silently, permanently, and with no fault to tell it from a
+/// malformed body. The ENVELOPE half of that inversion needs no precondition:
 /// [`canonical_record`] spells the `type` value and the entry-array member
 /// from the very rows [`scan`] reads to FIND them, so the encode and parse
 /// sides cannot disagree about either. And `compared_by` must be the
@@ -321,7 +321,7 @@ struct Schema<T> {
     /// AUTH-2.130 — ONE entry in the canonical spelling, appended to the
     /// buffer. The ENVELOPE is [`canonical_record`]'s, written once from
     /// `type_value` and `entries_member` above.
-    write_entry: fn(&T, &mut String),
+    encode_entry: fn(&T, &mut String),
     /// AUTH-2.15 — the FINGERPRINT two entries are compared by:
     /// `enrollment_key_fingerprint` takes the parsed key's,
     /// `retirement_fingerprint` the entry itself. BOTH kinds compare
@@ -336,7 +336,7 @@ const ENROLL_SCHEMA: Schema<Enrollment> = Schema {
     type_value: ENROLL_TYPE,
     entries_member: "keys",
     parse_entry: parse_key_entry,
-    write_entry: write_key_entry,
+    encode_entry: encode_key_entry,
     compared_by: enrollment_key_fingerprint,
 };
 
@@ -345,7 +345,7 @@ const RETIRE_SCHEMA: Schema<Fingerprint> = Schema {
     type_value: RETIRE_TYPE,
     entries_member: "fingerprints",
     parse_entry: parse_fingerprint_entry,
-    write_entry: write_fingerprint_entry,
+    encode_entry: encode_fingerprint_entry,
     compared_by: retirement_fingerprint,
 };
 
@@ -367,7 +367,7 @@ fn canonical_record<T>(schema: &Schema<T>, entries: &[T], sig: Option<&str>) -> 
         if i > 0 {
             out.push(',');
         }
-        (schema.write_entry)(entry, &mut out);
+        (schema.encode_entry)(entry, &mut out);
     }
     out.push(']');
     if let Some(sig) = sig {

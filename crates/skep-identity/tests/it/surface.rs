@@ -78,13 +78,13 @@ fn fingerprint_is_sha256_of_the_framed_key() {
 /// BOTH directions and in ALL FOUR columns.
 #[test]
 fn algs_and_arms_agree_both_directions() {
-    // Table → arms: every row's `make` accepts that row's raw length, and the
-    // key it builds answers that row's token at that raw length.
+    // Table → arms: every row's `from_raw` accepts that row's raw length, and
+    // the key it builds answers that row's token at that raw length.
     for row in ALGS {
         let hex = "00".repeat(row.raw_len);
         let k = PublicKey::parse(row.token, &hex).unwrap_or_else(|_| {
             panic!(
-                "ALGS token {} does not parse — the row's `make` does not \
+                "ALGS token {} does not parse — the row's `from_raw` does not \
                  accept this row's raw_len of {} bytes",
                 row.token, row.raw_len
             )

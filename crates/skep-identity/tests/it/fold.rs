@@ -485,6 +485,33 @@ fn zero_byte_value_is_refused_at_the_read() {
     let _ = fx.classify(&IdentityState::genesis(), &dep);
 }
 
+/// AUTH-1.22 — the debug build names a SINGLE zero-byte answer among
+/// non-empty ones, which is the violation a host actually ships: the walk
+/// appends a real value at ord 1 and meets the empty one at ord 2, where the
+/// read's assertion fires. `zero_byte_value_is_refused_at_the_read`'s only
+/// value is the empty one and the release bound's are empty at every position,
+/// so an assertion narrowed to the all-empty ctx — hoisted out of the loop, or
+/// guarded on nothing having been appended yet — keeps both of them green
+/// while this record folds on a ctx that broke the premise.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "AUTH-1.22")]
+fn a_lone_zero_byte_value_among_non_empty_ones_is_refused_at_the_read() {
+    let mut fx = Fixture::new();
+    let home = doc1(ACCT_A);
+    // ord 1 carries a whole record, so the walk has appended real bytes before
+    // it reaches the empty value at ord 2.
+    fx.mint(&home, &[&enroll_payload(&[(1, true)])]);
+    fx.ctx.values.insert(content_pos(&home, 2), Vec::new());
+    let dep = Dep {
+        home: home.clone(),
+        from: vec![content_run(&home, 1, 2)],
+        to: vec![unit(ACCT_A)],
+        ty: enroll_ty(),
+    };
+    let _ = fx.classify(&IdentityState::genesis(), &dep);
+}
+
 /// Corpus: a document-level start equal to the home · a subspace-only
 /// element start · an element field deeper than subspace·ordinal —
 /// `foreign_content` on all three, never `missing_value`, never a walk of

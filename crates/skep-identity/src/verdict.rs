@@ -152,9 +152,12 @@ impl Inert {
     /// token, `:`, and the carried fault's [`PayloadError::token`]. ONE join,
     /// written by the consumer that marshals the refusal (skepd's
     /// `CredentialRefusal::token()`, AUTH-2.55) from these two methods, so no
-    /// fold or payload token is spelled outside this crate. The join is stated
-    /// here and only here; [`Inert::MalformedPayload`] and
-    /// [`PayloadError::token`] cite it.
+    /// fold or payload token is spelled outside this crate. The join is
+    /// DEFINED here, and [`Inert::MalformedPayload`] and
+    /// [`PayloadError::token`] cite this definition; [`Inert`]'s own card adds
+    /// the half a definition cannot give — why `{}` must not write the join,
+    /// and the `@` binding that lets a consumer write it from BOTH halves of
+    /// one value.
     pub fn token(&self) -> &'static str {
         match self {
             Inert::Unpublished => "unpublished",

@@ -491,7 +491,19 @@ impl IdentityState {
     /// Every set-touching arm of [`apply`] posts through here, so how a row
     /// is fetched, defaulted and re-seated is decided in ONE place.
     ///
+    /// PRECONDITION — `post` leaves the set NON-EMPTY. This is the ONE place a
+    /// row is seated, so it is the one place that obligation is owed, and
+    /// nothing here checks it: a closure that leaves the set empty seats an
+    /// EMPTY row and voids [`IdentityState`]'s standing invariant —
+    /// [`keyed_accounts`] would yield an account holding no key, and two
+    /// states answering every [`key_set`] and [`claimant`] read alike would
+    /// compare unequal, as values and as checkpoint bytes. HOW each arm of
+    /// [`apply`] discharges it is that routine's PRECONDITION.
+    ///
     /// [`apply`]: IdentityState::apply
+    /// [`keyed_accounts`]: IdentityState::keyed_accounts
+    /// [`key_set`]: IdentityState::key_set
+    /// [`claimant`]: IdentityState::claimant
     fn post_to_set(&mut self, account: &Address, post: impl FnOnce(&mut KeySet)) {
         let mut set = self.sets.get(account).cloned().unwrap_or_default();
         post(&mut set);
@@ -510,15 +522,27 @@ impl IdentityState {
     /// AUTH-1.36 and I3 are void, and the fingerprints moved in one post are
     /// this arm's whole loop; `Enroll`'s `added` and `Genesis`' `keys` must be
     /// outside `retired` (AUTH-2.69's filter, AUTH-2.70's empty-set premise)
-    /// or AUTH-1.35 and I4 are void. And `Genesis`' `keys` must be NON-EMPTY
-    /// — [`parse_enroll`]'s POSTCONDITION, AUTH-2.16 — or the post seats an
-    /// EMPTY row: [`keyed_accounts`] then yields an account holding no key,
-    /// and the set the genesis arm tests is still empty, so that arm can fire
-    /// again and I5 (AUTH-2.100) is void. [`step`] is the only caller and it
-    /// passes `classify`'s own answer.
+    /// or AUTH-1.35 and I4 are void. And every arm must leave the posted set
+    /// NON-EMPTY — [`post_to_set`]'s PRECONDITION, where the standing
+    /// invariant is owed — by a DIFFERENT route on each. `Genesis`' `keys` are
+    /// non-empty ([`parse_enroll`]'s POSTCONDITION, AUTH-2.16); were they not,
+    /// the post would seat an EMPTY row, [`keyed_accounts`] would yield an
+    /// account holding no key, and the set the genesis arm tests would still
+    /// be empty, so that arm could fire again and I5 (AUTH-2.100) would be
+    /// void. `Enroll`'s account ALREADY holds a non-empty row, because
+    /// AUTH-2.69's arm fires only on `!S.is_empty()` — so an `Enroll` naming
+    /// an account with no row is outside this precondition whatever `added`
+    /// holds, and `added`'s own non-emptiness is that arm's `NothingChanged`
+    /// test, not this one's. `Retire`'s proper-subset clause above carries its
+    /// half already: nothing is a proper subset of the empty set, so a
+    /// `Retire` cannot reach a rowless account, and a proper subset of a
+    /// non-empty set leaves it non-empty. A NEW arm owes the obligation, not
+    /// one of these three routes. [`step`] is the only caller and it passes
+    /// `classify`'s own answer.
     ///
     /// [`classify`]: IdentityState::classify
     /// [`keyed_accounts`]: IdentityState::keyed_accounts
+    /// [`post_to_set`]: IdentityState::post_to_set
     /// [`step`]: IdentityState::step
     #[must_use = "apply returns the posted state; it does not modify the receiver"]
     fn apply(&self, effect: &Effect) -> IdentityState {

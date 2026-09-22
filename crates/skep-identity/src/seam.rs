@@ -34,17 +34,23 @@ pub trait Values {
     /// level covers every ordinal above its start.
     ///
     /// A ctx that answers `Some(&[])` at a covered position is NOT one this
-    /// crate folds under — and in RELEASE the crate cannot tell you so. Two
-    /// mechanisms bear on the violation and NEITHER is a detector: the
-    /// per-record position budget bounds the WORST case, where every covered
-    /// position answers `Some(&[])` and nothing else would end the walk (it
-    /// ends at `TooLarge`, in bounded work); and `record_bytes` debug-asserts
-    /// the premise at the one call that rests on it, so a debug build names
-    /// the violation at its first occurrence. A SINGLE zero-byte answer among
-    /// non-empty ones reaches neither: it appends nothing, the walk ends where
-    /// it always would, and the record reads, parses and FOLDS with nothing
-    /// anywhere reporting that the premise was broken. Discharging AUTH-1.22
-    /// is the implementor's, in full.
+    /// crate folds under, and what the crate does about it splits by BUILD.
+    /// In DEBUG, `record_bytes` debug-asserts the premise at the one call that
+    /// rests on it, so it IS a detector — of every violation the walk REACHES,
+    /// a SINGLE zero-byte answer among non-empty ones as much as a ctx that
+    /// answers `Some(&[])` everywhere — naming it at its first occurrence, and
+    /// the record does not fold. It detects nothing the walk never asks: a
+    /// position past an earlier refusal is never read. In RELEASE nothing is
+    /// named. The one mechanism that still bears on the violation there is the
+    /// per-record position budget, and it is NOT a detector: it bounds the
+    /// WORST case, where every covered position answers `Some(&[])` and
+    /// nothing else would end the walk (it ends at `TooLarge`, in bounded
+    /// work), and `TooLarge` is the verdict an honest over-cap record earns
+    /// too, so no caller can read a broken premise off it. A SINGLE zero-byte
+    /// answer among non-empty ones reaches nothing at all in release: it
+    /// appends nothing, the walk ends where it always would, and the record
+    /// reads, parses and FOLDS with nothing reporting that the premise was
+    /// broken. Discharging AUTH-1.22 is the implementor's, in full.
     fn value_at(&self, at: &Tumbler) -> Option<&[u8]>;
 }
 

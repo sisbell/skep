@@ -323,6 +323,19 @@ fn retirement_fingerprint(fp: &Fingerprint) -> Fingerprint {
 /// DIFFERENTLY, and nothing they say alike. Five rows; the envelope both
 /// schemas state in identical words, and AUTH-2.19's fault precedence both
 /// kinds keep, are [`scan`]'s and written once.
+///
+/// PRECONDITION — two rows must AGREE, and [`scan`] checks neither. For every
+/// entry `parse_entry` admits from a canonical body, `canonical` must re-emit
+/// the bytes that entry spelled: AUTH-2.130's admission sentence is spelled
+/// `canonical(parsed) == text`, so a `canonical` that is not `parse_entry`'s
+/// inverse refuses EVERY record of the kind — silently, permanently, and with
+/// no fault to tell it from a malformed body. And `compared_by` must be the
+/// kind's AUTH-2.15 sameness rule, because it is the ONLY thing standing
+/// behind each parser's DUPLICATE-FREE POSTCONDITION: a `compared_by` that
+/// separated two entries the kind calls one would admit a record the
+/// retirement arm reads as a proper subset (AUTH-2.74), emptying a key set and
+/// voiding I3 (AUTH-2.97) and AUTH-1.36. A kind is added by filling this
+/// table; these are what filling it owes.
 struct Schema<T> {
     /// The `type` member's ONE admitted value ([`ENROLL_TYPE`],
     /// [`RETIRE_TYPE`]).

@@ -95,6 +95,24 @@ fn algs_and_arms_agree_both_directions() {
             row.raw_len,
             "row length is not the arm's raw length"
         );
+        // …and NO OTHER length: `from_raw` answers `None` IFF the bytes are not
+        // this row's raw length (AUTH-1.4), so one byte either side is
+        // `BadLength`. Every other length vector in the suite is SHORT, and a
+        // `from_raw` spelled over a 32-byte PREFIX — `raw.get(..32)` — accepts
+        // every longer key and TRUNCATES it, so two distinct `key` hex strings
+        // fold to one fingerprint, against AUTH-2.99's one canonical raw form
+        // per token. At the record level AUTH-2.130's compare hides that (the
+        // 64-hex re-encoding differs from the body), so the over-length row has
+        // to be stated here, against `parse` itself.
+        for wrong in [row.raw_len - 1, row.raw_len + 1] {
+            assert_eq!(
+                PublicKey::parse(row.token, &"00".repeat(wrong)),
+                Err(KeyParseError::BadLength),
+                "{}: {wrong} bytes must not parse — raw_len is {}",
+                row.token,
+                row.raw_len
+            );
+        }
     }
     // Arms → table: every variant's token is a row. A NEW VARIANT MUST BE
     // ADDED HERE beside its ALGS row (AUTH-2.91's one-edit-plus-assertion).

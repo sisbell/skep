@@ -287,6 +287,56 @@ fn a_sig_member_is_skipped_and_the_table_is_identical() {
     assert_eq!(ok_retire(with_r.as_bytes()), vec![fp(1)]);
 }
 
+/// AUTH-2.130 clause 3 on the `sig` member — the second string the encoder
+/// escapes, and the one no other vector gives a character the escape table
+/// decides. Every other `sig` in the suite is escape-free: the literals in the
+/// vectors above, and the I1 generator's printable-ASCII class minus `"` and
+/// `\`, which cannot draw a control character at all. So emitting `sig` raw
+/// between quotes refuses every signature carrying a `"`, a `\` or a control
+/// character — permanently, as `bad_record`, with the whole suite green.
+///
+/// `\n` is reachable ONLY here: AUTH-1.24 bars it from a label, so
+/// [`the_canonical_escape_table_is_pinned_as_bytes`] cannot exercise that arm
+/// of the table from the emission side at all. Spelling U+000A as the `\u00xx`
+/// fallback instead inverts both `\n` rows below — the canonical body refused,
+/// the non-canonical one admitted — turning over a frozen protocol pin (I2,
+/// AUTH-2.90) in silence.
+#[test]
+fn a_sig_is_admitted_only_in_its_canonical_escaping() {
+    let base = canonical_enroll_record();
+    let splice = |sig_text: &str| format!("{},\"sig\":\"{sig_text}\"}}", &base[..base.len() - 1]);
+    // As on `non_canonical_escapes_are_bad_record`: the backslash is built at
+    // runtime, so no source escape is decoded before the JSON sees it.
+    let bs = char::from(92);
+
+    // A sig holding every character the table decides differently — a newline
+    // among them — beside U+0020 and the three that must never be escaped.
+    let canonical_sig = format!("{bs}u0000{bs}b{bs}t{bs}n{bs}f{bs}r{bs}u001f {bs}\"{bs}{bs}/é~");
+    assert_eq!(
+        ok_enroll(splice(&canonical_sig).as_bytes()),
+        ok_enroll(base.as_bytes()),
+        "a canonically escaped sig is admitted, and ignored"
+    );
+
+    // The near-misses, each one backslash away from a canonical spelling: a
+    // `u00xx` where the table gives a two-character form, uppercase escape hex,
+    // an escape for a character that takes none, an escaped `/`.
+    for body in [
+        "u000a", // the canonical form is the two-character newline escape
+        "u0009", // …the tab escape
+        "u0008", // …the backspace escape
+        "u001F", // the canonical escape hex is LOWERCASE
+        "u0041", // `A` is emitted raw
+        "/",     // `/` is never escaped
+    ] {
+        assert_eq!(
+            err_enroll(splice(&format!("{bs}{body}")).as_bytes()),
+            PayloadError::BadRecord,
+            "sig escape {bs}{body}"
+        );
+    }
+}
+
 /// §2.1 row 17 — an unadmitted alg (`mldsa44`, `p256`, `ED25519`) and a `key`
 /// of the wrong hex length are each `bad_record` ⇒ whole record inert
 /// (AUTH-2.9, AUTH-2.91).

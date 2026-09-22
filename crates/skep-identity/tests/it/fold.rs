@@ -340,8 +340,9 @@ fn span_past_the_mint_is_missing_value() {
 /// stripped a trailing `\r` is the sharp case: `\r` is an ordinary payload
 /// byte (AUTH-2.6), so every other vector in the corpus stays green while a
 /// mirror is handed different bytes than the origin. (A trim that also ate
-/// the line's `\n` is caught by the grammar-sensitive vectors; the byte the
-/// grammar does not judge is the one nothing else watches.) `record_bytes` is
+/// a byte the grammar judges is caught by the grammar-sensitive vectors; the
+/// byte the grammar does not judge is the one nothing else watches.)
+/// `record_bytes` is
 /// `pub` for the non-folding reader AUTH-2.37 requires to LINK it rather than
 /// re-implement it, and this is the only vector that calls it as that reader
 /// does.
@@ -595,7 +596,7 @@ fn empty_from_is_malformed_shape() {
     assert_token(&fx.classify(&genesis_state, &dep), "malformed_shape");
 }
 
-/// Corpus: a two-atom record — the header atom plus one under-cap atom whose
+/// Corpus: a two-atom record — the head atom plus one under-cap atom whose
 /// SUM exceeds the cap — `too_large`: bytes, never positions (AUTH-1.20:
 /// two positions are nowhere near a position cap).
 #[test]
@@ -689,7 +690,7 @@ fn three_atom_record_folds() {
 /// overflow — the 897 of the retired line form become 617 here.
 const CAP_SIZED_LINES: u32 = 617;
 
-/// An enrolment record of exactly `MAX_RECORD_BYTES + over` bytes:
+/// An enrollment record of exactly `MAX_RECORD_BYTES + over` bytes:
 /// [`CAP_SIZED_LINES`] key entries, the first carrying a label sized to land
 /// the total on the mark. Built FROM the constant, so a change to the cap
 /// moves the record with it and `max_record_bytes_is_64_kib` stays the one
@@ -980,9 +981,9 @@ fn a_registry_homed_enrollment_on_a_seeded_account_is_the_latch() {
 
 /// AUTH-2.69/AUTH-2.74 — `nothing_changed` is the HOLDER arms' token alone: a
 /// record homed outside the subject's own space answers its home's refusal
-/// even where every line would change nothing. Every other `nothing_changed`
+/// even where every entry would change nothing. Every other `nothing_changed`
 /// vector is own-space, and the latch and ancestor-retirement vectors each
-/// carry a line that WOULD change the set — so, on a SEEDED account, a
+/// carry an entry that WOULD change the set — so, on a SEEDED account, a
 /// "nothing to post" test hoisted above the own-space test keeps them green
 /// and flips its kind's cell here.
 #[test]
@@ -1664,7 +1665,7 @@ fn enrolled_reads_report_membership_and_the_anchor_flag() {
 
 /// AUTH-1.31 — `enrolled()` answers FINGERPRINT order, not the order the
 /// record listed the keys in (the ordering the realm genesis-set framing
-/// reuses, AUTH-2.119). The record here lists its lines in DESCENDING
+/// reuses, AUTH-2.119). The record here lists its entries in DESCENDING
 /// fingerprint order, so a set iterating in record order answers the exact
 /// reverse of the claim.
 #[test]
@@ -1747,22 +1748,22 @@ fn re_listing_an_enrolled_key_under_the_anchor_flag_changes_nothing() {
     assert!(!next.key_set(&addr(ACCT_A)).is_anchor(&fp(2)));
 }
 
-/// AUTH-2.69 — the holder post: `added` is exactly the lines whose
-/// fingerprints are neither ENROLLED nor RETIRED, whatever flag the line
-/// carries (I4 AUTH-2.98, I9 AUTH-2.104), and the filtered lines do NOT ride
+/// AUTH-2.69 — the holder post: `added` is exactly the entries whose
+/// fingerprints are neither ENROLLED nor RETIRED, whatever flag the entry
+/// carries (I4 AUTH-2.98, I9 AUTH-2.104), and the filtered entries do NOT ride
 /// in on the new key's coat-tails.
 /// `re_listing_an_enrolled_key_under_the_anchor_flag_changes_nothing` and
-/// `a_retired_fingerprint_never_re_enrolls` pin records where EVERY line is
-/// filtered out — which an `added` computed as "all the lines, if any line is
-/// new" also satisfies; this mixed record is what tells them apart. It is
+/// `a_retired_fingerprint_never_re_enrolls` pin records where EVERY entry is
+/// filtered out — which an `added` computed as "all the entries, if any entry
+/// is new" also satisfies; this mixed record is what tells them apart. It is
 /// also the corpus's only assertion of an `Effect::Enroll`.
 #[test]
-fn a_holder_enrollment_adds_only_the_lines_that_are_neither_enrolled_nor_retired() {
+fn a_holder_enrollment_adds_only_the_entries_that_are_neither_enrolled_nor_retired() {
     let mut fx = Fixture::new();
     // enrolled = {fp(1): anchor}, retired = {fp(2): non-anchor}.
     let st = seeded_then_retired(&mut fx);
-    // Line 2 re-lists the ENROLLED key under the OPPOSITE flag; line 3 the
-    // RETIRED one; line 4 is new, and an anchor.
+    // Entry 1 re-lists the ENROLLED key under the OPPOSITE flag; entry 2 the
+    // RETIRED one; entry 3 is new, and an anchor.
     let dep = fx.enroll_dep(
         &doc1(ACCT_A),
         ACCT_A,
@@ -1778,14 +1779,14 @@ fn a_holder_enrollment_adds_only_the_lines_that_are_neither_enrolled_nor_retired
                     key: key(3),
                     anchor: true
                 }],
-                "only the new line is added, with the flag that line carries"
+                "only the new entry is added, with the flag that entry carries"
             );
         }
         other => panic!("expected an enroll effect, got {other:?}"),
     }
     let set = next.key_set(&addr(ACCT_A));
     assert!(set.contains(&fp(3)), "the new key is enrolled");
-    assert!(set.is_anchor(&fp(3)), "under the flag its line carried");
+    assert!(set.is_anchor(&fp(3)), "under the flag its entry carried");
     assert!(
         set.is_anchor(&fp(1)),
         "I9: the re-listed key keeps its FIRST flag"
@@ -1885,7 +1886,7 @@ fn retiring_an_already_retired_key_changes_nothing() {
 }
 
 /// I4 (AUTH-2.98) — a retired fingerprint never re-enters its account's set:
-/// the re-enrollment line is outside `added` whatever flag it carries.
+/// the re-enrollment entry is outside `added` whatever flag it carries.
 #[test]
 fn a_retired_fingerprint_never_re_enrolls() {
     let mut fx = Fixture::new();

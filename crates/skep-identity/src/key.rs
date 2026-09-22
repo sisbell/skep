@@ -7,14 +7,15 @@ use sha2::{Digest, Sha256};
 
 use crate::framing::{framed, KEY_TAG};
 
-/// The Ed25519 alg token (AUTH-1.1) — the line grammar's first token and
-/// `ALGS`' first row.
+/// The Ed25519 alg token (AUTH-1.1) — the value a key entry's `alg` member
+/// carries (AUTH-2.128), and `ALGS`' first row.
 pub const ALG_ED25519: &str = "ed25519";
 
 /// One [`ALGS`] row (AUTH-1.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AlgRow {
-    /// The alg TOKEN — the line grammar's first token (AUTH-1.1).
+    /// The alg TOKEN — the value a key entry's `alg` member carries
+    /// (AUTH-1.1, AUTH-2.128).
     pub token: &'static str,
     /// The RAW KEY LENGTH in bytes (AUTH-1.2).
     pub raw_len: usize,
@@ -24,7 +25,7 @@ pub struct AlgRow {
 }
 
 /// The algorithm set (AUTH-1.5): the single declared table, three columns —
-/// the TOKEN (the line grammar's first token), the RAW LENGTH, and the KEY
+/// the TOKEN (a key entry's `alg` member), the RAW LENGTH, and the KEY
 /// FAMILY (a curve, or a PQ parameter set) — and no two rows may name the
 /// same family. [`PublicKey::parse`] and [`PublicKey::alg`] both READ this
 /// table (AUTH-1.6), so carrying a new algorithm arm is ONE edit (the enum
@@ -96,7 +97,7 @@ impl PublicKey {
             // the token the row check above already answers — rather than
             // panicking on a length the caller chose. That agreement is the
             // AUTH-2.92 assertion's, and adding an arm (AUTH-2.91) cannot
-            // make a hostile line panic here while it is out.
+            // make a hostile entry panic here while it is out.
             ALG_ED25519 => match <[u8; 32]>::try_from(bytes.as_slice()) {
                 Ok(raw) => Ok(PublicKey::Ed25519(raw)),
                 Err(_) => Err(KeyParseError::BadLength),
@@ -148,7 +149,7 @@ impl std::error::Error for KeyParseError {}
 /// The algorithm-agnostic identity of a key (AUTH-1.7):
 /// `SHA-256(framed(KEY_TAG, [alg, raw]))` (AUTH-1.8). A FOLD INPUT, not
 /// merely a display form (I2, AUTH-2.90): the fingerprint is the key-set map
-/// key, the token a retirement names, and the serialized value.
+/// key, the entry a retirement names, and the serialized value.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Fingerprint([u8; 32]);
 

@@ -279,7 +279,7 @@ impl IdentityState {
         arms(&subject, &entries)
     }
 
-    /// AUTH-2.66 item 4, ENROLL — the enrolment kind's two rows of
+    /// AUTH-2.66 item 4, ENROLL — the enrollment kind's two rows of
     /// [`payload_path`]: `parse_enroll`, then [`enroll_arms`].
     ///
     /// [`payload_path`]: IdentityState::payload_path
@@ -311,7 +311,7 @@ impl IdentityState {
         let own_space = home_account == subject;
         // Holder arm (AUTH-2.69): `H == A ∧ !S.is_empty()`.
         if own_space && !set.is_empty() {
-            // A line naming an already-enrolled or retired fingerprint is
+            // An entry naming an already-enrolled or retired fingerprint is
             // outside `added` WHATEVER its flag (I4 AUTH-2.98; I9 AUTH-2.104).
             let added: Vec<Enrolled> = enrollments
                 .iter()
@@ -579,7 +579,7 @@ fn subject_and_record(ctx: &impl FoldCtx, dep: &LinkDeposit) -> Result<(Address,
     Ok((subject, bytes))
 }
 
-/// AUTH-2.52 — what an honored enrollment KEEPS from a parsed line: the key
+/// AUTH-2.52 — what an honored enrollment KEEPS from a parsed entry: the key
 /// and the flag it enters under. The label is informational (AUTH-1.23) and
 /// is not a fold input, so it stops here — the one place that is decided.
 fn enrolled_of(enrollment: &Enrollment) -> Enrolled {

@@ -19,7 +19,7 @@ fn fphex(i: u8) -> String {
     fp(i).to_hex()
 }
 
-/// The one canonical enrolment record — one device key, no label — every
+/// The one canonical enrollment record — one device key, no label — every
 /// malformation below mutates.
 fn canonical_enroll_record() -> String {
     encode_enroll(&[Enrollment::new(key(1), false, None).expect("label-free")])

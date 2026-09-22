@@ -91,7 +91,7 @@ proptest! {
         enroll_sig in prop::option::of("[ -~&&[^\"\\\\]]{0,40}"),
         retire_sig in prop::option::of("[ -~&&[^\"\\\\]]{0,40}"),
     ) {
-        // Enrolment: the no-sig body re-encodes to itself.
+        // Enrollment: the no-sig body re-encodes to itself.
         let base = encode_enroll(&entries);
         prop_assert_eq!(&encode_enroll(&parse_enroll(base.as_bytes()).unwrap()), &base);
         if let Some(sig) = enroll_sig {

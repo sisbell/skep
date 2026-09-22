@@ -38,7 +38,7 @@ pub enum Effect {
     Genesis {
         /// The seeded account.
         account: Address,
-        /// The seeding keys, flags as the lines carry them.
+        /// The seeding keys, flags as the entries carry them.
         keys: Vec<Enrolled>,
     },
     /// The holder-enrollment post (AUTH-2.69): each ADDED key with the flag

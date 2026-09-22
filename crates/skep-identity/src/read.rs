@@ -15,7 +15,7 @@ use crate::seam::Values;
 /// AUTH-2.36 — THE ONE implementation of the pinned payload read: the
 /// link's own FROM endset, its I-spans' bytes read in ENDSET ORDER and
 /// concatenated, verbatim (SPAN BINDING, AUTH-2.3 — nothing sorts, dedups,
-/// normalizes or coalesces; spans may repeat, overlap, or split a line,
+/// normalizes or coalesces; spans may repeat, overlap, or split an entry,
 /// AUTH-2.4). Bound at [`Values`] — the one-method supertrait, never the
 /// whole world seam; [`MAX_RECORD_BYTES`] is INTERNAL and not a parameter.
 ///

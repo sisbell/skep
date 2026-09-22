@@ -750,12 +750,10 @@ fn a_credential_retry_replays_the_original_ack_kind_blind_and_per_session() {
 }
 
 /// The payload family's `malformed_payload:<sub>` join (wire.md §Credential
-/// refusals) — the one wire detail this crate COMPOSES rather than
-/// delegates. `Inert::token()` answers the bare `malformed_payload`, and
-/// the sub exists only because `CredentialRefusal::token()` carries an arm
-/// of its own for it; the two arms look redundant, and collapsing them
-/// emits a token that is not in the documented set at all, on the family
-/// that tells an operator WHY their record was rejected.
+/// refusals). `Inert::detail()` writes it and `CredentialRefusal::token()`
+/// cites that one method, so this crate composes no wire token — what these
+/// assertions watch is that the join survives the marshal, sub and all, on
+/// the family that tells an operator WHY their record was rejected.
 #[test]
 fn a_malformed_record_names_its_payload_fault_after_the_join() {
     let dir = tempfile::tempdir().expect("tempdir");

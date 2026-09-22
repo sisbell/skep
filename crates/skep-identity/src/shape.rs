@@ -15,8 +15,9 @@ pub enum CredentialKind {
 }
 
 /// AUTH-2.20 — the three credential type addresses with their precomputed
-/// `subtree_of(T)` unit-subtree spans. All fields private, no reader outside
-/// [`TypeAddrs::kind_of`]. The engine constructs its one `IDENTITY_TYPES`
+/// `subtree_of(T)` unit-subtree spans. All fields private, and no method
+/// outside [`TypeAddrs::kind_of`] reads one. The engine constructs its one
+/// `IDENTITY_TYPES`
 /// from the commons-seeding constants via [`TypeAddrs::new`] (AUTH-2.79);
 /// the exact three addresses are OPEN (AUTH-7.1) and this crate is
 /// parametric over them — `IDENTITY_TYPES` itself is an I2 frozen constant
@@ -25,8 +26,11 @@ pub enum CredentialKind {
 /// AUTH-2.20's field list leaves no reader to compare through.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeAddrs {
-    // The addresses, kept per AUTH-2.20's field list; nothing reads them
-    // outside `kind_of`'s precomputed spans, hence the allows.
+    // The three addresses, kept per AUTH-2.20's field list. `kind_of` reads
+    // none of them — it compares the spans precomputed from them here — so
+    // their readers are the derives: `PartialEq` (the cross-mirror agreement
+    // above), `Debug`, `Clone`. The lint does not count a derive as a read,
+    // hence the allows; the fields are not spare.
     #[allow(dead_code)]
     enroll: Address,
     #[allow(dead_code)]

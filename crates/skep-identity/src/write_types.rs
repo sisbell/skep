@@ -147,6 +147,14 @@ impl WriteTypes {
     /// under two classes and their order decides nothing; the one order that
     /// decides is the credential kinds answering first.
     ///
+    /// The credential half is asked THROUGH [`TypeAddrs::kind_of`], on the
+    /// unit subtree span of the class address — the very call
+    /// [`WriteTypes::target_class`] makes, on the very span form an
+    /// address-form slot carries — rather than against the three addresses
+    /// [`TypeAddrs`] holds. That is what makes the wiring check and the
+    /// runtime rule ONE question: they cannot drift, whatever `kind_of`'s
+    /// frozen rule turns out to compare.
+    ///
     /// Both are mis-wirings of the kind [`TypeAddrs::new`] refuses, refused
     /// the same way, completeness first: a panic at construction, off every
     /// request path, since the addresses are the engine's compiled constants

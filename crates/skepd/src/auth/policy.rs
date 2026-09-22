@@ -305,16 +305,13 @@ pub(crate) enum CredentialRefusal {
 }
 
 impl CredentialRefusal {
-    /// The wire `detail` token: the fold arm delegates to `Inert::token()`
-    /// (the payload arm is the one `malformed_payload:<sub>` join,
-    /// AUTH-2.55); the daemon-side tokens are hand-spelled here and only
+    /// The wire `detail` token: the fold arm delegates to `Inert::detail()`,
+    /// which writes the payload arm's `malformed_payload:<sub>` join itself
+    /// (AUTH-2.55); the daemon-side tokens are hand-spelled here and only
     /// here.
     pub fn token(&self) -> String {
         match self {
-            CredentialRefusal::Inert(Inert::MalformedPayload(p)) => {
-                format!("malformed_payload:{}", p.token())
-            }
-            CredentialRefusal::Inert(i) => i.token().to_string(),
+            CredentialRefusal::Inert(i) => i.detail(),
             CredentialRefusal::EmitNotMakeLink => "emit_not_make_link".into(),
             CredentialRefusal::UndecodableKey => "undecodable_key".into(),
             CredentialRefusal::NullifyNotRetraction => "nullify_not_retraction".into(),

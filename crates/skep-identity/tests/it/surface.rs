@@ -185,6 +185,24 @@ fn every_inert_variant_has_its_pinned_token() {
     assert_eq!(Inert::ClaimantNotTopLevel.token(), "claimant_not_top_level");
 }
 
+/// AUTH-2.55/AUTH-1.28 — `Inert::detail()`: the wire detail, which is the
+/// token on eleven arms and the JOIN on the twelfth.
+/// `every_inert_variant_has_its_pinned_token` pins the token half; this pins
+/// the join — the half every consumer would otherwise assemble for itself,
+/// and the `duplicate_key:<n>` row carries a parameterized sub through it.
+#[test]
+fn inert_detail_is_the_token_joined_to_its_payload_fault() {
+    assert_eq!(Inert::NotDocOne.detail(), Inert::NotDocOne.token());
+    assert_eq!(
+        Inert::MalformedPayload(PayloadError::BadRecord).detail(),
+        "malformed_payload:bad_record"
+    );
+    assert_eq!(
+        Inert::MalformedPayload(PayloadError::DuplicateKey(3)).detail(),
+        "malformed_payload:duplicate_key:3"
+    );
+}
+
 /// AUTH-1.41 — `genesis() == default()`; AUTH-2.58 — the empty set for an
 /// unknown account; AUTH-2.56 — no claimant, no keyed accounts at genesis.
 #[test]

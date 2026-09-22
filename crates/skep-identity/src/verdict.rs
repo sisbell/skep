@@ -66,19 +66,18 @@ pub enum Effect {
 
 /// AUTH-2.54 — the inert vocabulary. A VERDICT and never an `Err` — it
 /// reaches no `Result` in this crate — so it is not a `std::error::Error`,
-/// and deliberately not `Display` either. A refusal's wire detail is
+/// and deliberately not `Display` either: a refusal's wire detail is
 /// [`token`]'s string on every arm but [`MalformedPayload`], whose detail is
-/// the JOIN; a `Display` writing `token()` alone would answer
+/// the JOIN, so a `Display` writing `token()` alone would answer
 /// `malformed_payload` where the detail is `malformed_payload:bad_record` —
 /// half a wire detail, from the one trait a consumer reaches for without
-/// reading anything. `{}` is refused so that reach lands on [`token`], which
-/// states the join. Writing the join takes BOTH halves of one value, which an
-/// `@` binding gives: match `inert @ Inert::MalformedPayload(e)` and join
-/// `inert.token()` with `e.token()` — never a spelled-out
-/// `"malformed_payload:"`. [`PayloadError`], whose token is whole on every
-/// arm, does implement `Display`.
+/// reading anything. `{}` is refused so that reach lands on [`detail`], which
+/// WRITES the join; a consumer marshals a refusal by citing that one method
+/// and never spells `"malformed_payload:"` for itself. [`PayloadError`],
+/// whose token is whole on every arm, does implement `Display`.
 ///
 /// [`token`]: Inert::token
+/// [`detail`]: Inert::detail
 /// [`MalformedPayload`]: Inert::MalformedPayload
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Inert {
@@ -104,8 +103,8 @@ pub enum Inert {
     /// (AUTH-2.58).
     MalformedShape,
     /// The payload could not be read or parsed (AUTH-1.27); the carried fault
-    /// is this arm's sub-token on the wire, in the join [`Inert::token`]
-    /// states.
+    /// is this arm's sub-token on the wire, in the join [`Inert::detail`]
+    /// writes.
     MalformedPayload(PayloadError),
     /// Credential link homed in a document of its account other than doc 1 —
     /// the home pin (AUTH-2.127, RES-17).
@@ -148,16 +147,10 @@ impl Inert {
     /// variant name in snake_case. Consumers (wire enumerations, conformance
     /// lists, face tables) cite this method, never transcribe it.
     ///
-    /// A fold refusal's WIRE detail is this token — on the payload arm, this
-    /// token, `:`, and the carried fault's [`PayloadError::token`]. ONE join,
-    /// written by the consumer that marshals the refusal (skepd's
-    /// `CredentialRefusal::token()`, AUTH-2.55) from these two methods, so no
-    /// fold or payload token is spelled outside this crate. The join is
-    /// DEFINED here, and [`Inert::MalformedPayload`] and
-    /// [`PayloadError::token`] cite this definition; [`Inert`]'s own card adds
-    /// the half a definition cannot give — why `{}` must not write the join,
-    /// and the `@` binding that lets a consumer write it from BOTH halves of
-    /// one value.
+    /// This is the TOKEN and not always the whole wire detail: on
+    /// [`Inert::MalformedPayload`] the detail is this token joined to the
+    /// carried fault's, which [`Inert::detail`] writes. A consumer marshaling
+    /// a refusal wants that one; this is the arm-by-arm vocabulary.
     pub fn token(&self) -> &'static str {
         match self {
             Inert::Unpublished => "unpublished",
@@ -172,6 +165,23 @@ impl Inert {
             Inert::AlreadyClaimed => "already_claimed",
             Inert::ClaimantKeyless => "claimant_keyless",
             Inert::ClaimantNotTopLevel => "claimant_not_top_level",
+        }
+    }
+
+    /// AUTH-2.55 — THE WIRE `detail` a fold refusal carries: [`token`] on
+    /// every arm, and on [`MalformedPayload`] that token, `:`, and the
+    /// carried fault's [`PayloadError::token`] (AUTH-1.28). The join is this
+    /// crate's to WRITE and not merely to describe, as [`PayloadError`]'s own
+    /// one-argument join is (`duplicate_key:<n>`) — so a consumer marshaling a
+    /// refusal cites this one method and spells no token and no separator
+    /// (skepd's `CredentialRefusal::token()` is one arm over it).
+    ///
+    /// [`token`]: Inert::token
+    /// [`MalformedPayload`]: Inert::MalformedPayload
+    pub fn detail(&self) -> String {
+        match self {
+            Inert::MalformedPayload(e) => format!("{}:{}", self.token(), e.token()),
+            _ => self.token().to_owned(),
         }
     }
 }

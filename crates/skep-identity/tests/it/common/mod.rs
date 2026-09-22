@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use skep_address::{is_prefix, subtree_of, validate, Address, Nat, Span, Tumbler};
 use skep_identity::{
-    encode_enroll, encode_retire, Effect, Enrollment, Fingerprint, FoldCtx, IdentityState, Inert,
+    encode_enroll, encode_retire, Effect, Enrollment, Fingerprint, FoldCtx, IdentityState,
     LinkDeposit, Owner, PublicKey, TypeAddrs, Values, Verdict,
 };
 
@@ -314,15 +314,13 @@ pub fn retire_payload(indices: &[u8]) -> Vec<u8> {
 
 // ---------------------------------------------------------------- verdicts
 
-/// The wire-shaped token of an inert verdict: the join skepd writes, as
-/// `Inert::token`'s doc states it, built from the two methods that doc names
-/// (AUTH-2.55, AUTH-1.28). No fold token name is spelled here.
+/// The wire `detail` of an inert verdict — [`skep_identity::Inert::detail`]'s
+/// string, the one skepd marshals. No token, and no join, is spelled here:
+/// the corpus's literal expectations (`"malformed_payload:foreign_content"`)
+/// are what pin it.
 pub fn token_of(v: &Verdict) -> Option<String> {
     match v {
-        Verdict::Inert(inert @ Inert::MalformedPayload(e)) => {
-            Some(format!("{}:{}", inert.token(), e.token()))
-        }
-        Verdict::Inert(inert) => Some(inert.token().to_owned()),
+        Verdict::Inert(inert) => Some(inert.detail()),
         _ => None,
     }
 }

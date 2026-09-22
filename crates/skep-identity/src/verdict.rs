@@ -64,8 +64,23 @@ pub enum Effect {
     },
 }
 
-/// AUTH-2.54 — the inert vocabulary.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// AUTH-2.54 — the inert vocabulary. A VERDICT and never an `Err` — it
+/// reaches no `Result` in this crate — so it is not a `std::error::Error`,
+/// and deliberately not `Display` either. A refusal's wire detail is
+/// [`token`]'s string on every arm but [`MalformedPayload`], whose detail is
+/// the JOIN; a `Display` writing `token()` alone would answer
+/// `malformed_payload` where the detail is `malformed_payload:bad_record` —
+/// half a wire detail, from the one trait a consumer reaches for without
+/// reading anything. `{}` is refused so that reach lands on [`token`], which
+/// states the join. Writing the join takes BOTH halves of one value, which an
+/// `@` binding gives: match `inert @ Inert::MalformedPayload(e)` and join
+/// `inert.token()` with `e.token()` — never a spelled-out
+/// `"malformed_payload:"`. [`PayloadError`], whose token is whole on every
+/// arm, does implement `Display`.
+///
+/// [`token`]: Inert::token
+/// [`MalformedPayload`]: Inert::MalformedPayload
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Inert {
     /// The home document is not published: [`FoldCtx::is_published`]
     /// answered `false` for it (AUTH-2.66 item 3; I7, AUTH-2.102). Decided

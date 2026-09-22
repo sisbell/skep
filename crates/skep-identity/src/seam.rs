@@ -119,6 +119,7 @@ pub(crate) fn document_account(ctx: &impl FoldCtx, doc: &Address) -> Option<Addr
 }
 
 /// AUTH-2.35 — the delegator classification `delegator(ctx, a)` projects to.
+#[derive(Debug)]
 pub(crate) enum Delegator {
     /// The parent's owner is the bootstrap principal — the bootstrap-delegated
     /// tier: every account one separator deep, on every board (AUTH-2.65).

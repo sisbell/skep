@@ -130,7 +130,12 @@ impl TypeAddrs {
 /// fold corpus pins. An OWNED home that is not a registered document reaches
 /// that read outside its domain, and there no verdict is specified: the
 /// seam's answer decides which refusal speaks.
-#[derive(Debug, Clone, Copy)]
+///
+/// `PartialEq` compares what two deposits NAME — the home and the three
+/// slots, by value, never which buffers they borrow — so the fold hook's view
+/// and the precheck's view of one deposit compare equal. The orphan rule puts
+/// it out of a consumer's reach, so it is derived here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LinkDeposit<'a> {
     /// The link's home — a REGISTERED document (the PRECONDITION above).
     pub home: &'a Address,

@@ -323,7 +323,7 @@ fn retirement_fingerprint(fp: &Fingerprint) -> Fingerprint {
 /// DIFFERENTLY, and nothing they say alike. Five rows; the envelope both
 /// schemas state in identical words, and AUTH-2.19's fault precedence both
 /// kinds keep, are [`scan`]'s and written once.
-struct Schema<T, K> {
+struct Schema<T> {
     /// The `type` member's ONE admitted value ([`ENROLL_TYPE`],
     /// [`RETIRE_TYPE`]).
     type_value: &'static str,
@@ -333,8 +333,11 @@ struct Schema<T, K> {
     parse_entry: fn(&Value) -> Result<T, PayloadError>,
     /// AUTH-2.130 — the record VALUE's canonical encoding, `sig` included.
     canonical: fn(&[T], Option<&str>) -> String,
-    /// AUTH-2.15 — what two entries are compared BY.
-    compared_by: fn(&T) -> K,
+    /// AUTH-2.15 — the FINGERPRINT two entries are compared by:
+    /// `enrollment_key_fingerprint` takes the parsed key's,
+    /// `retirement_fingerprint` the entry itself. BOTH kinds compare
+    /// fingerprints, so that is the type here and not a parameter.
+    compared_by: fn(&T) -> Fingerprint,
 }
 
 /// AUTH-2.19 — the fault precedence BOTH kinds keep, and the record envelope
@@ -356,7 +359,7 @@ struct Schema<T, K> {
 /// No verdict is delegated to `serde_json`: it answers only "is this a JSON
 /// value, and which" (AUTH-2.1). Everything a kind decides for itself is its
 /// [`Schema`]'s five rows.
-fn scan<T, K: Ord>(bytes: &[u8], schema: Schema<T, K>) -> Result<Vec<T>, PayloadError> {
+fn scan<T>(bytes: &[u8], schema: Schema<T>) -> Result<Vec<T>, PayloadError> {
     // AUTH-2.19 item 1 — UTF-8 before everything.
     let text = core::str::from_utf8(bytes).map_err(|_| PayloadError::NotUtf8)?;
     // AUTH-2.1/AUTH-2.19 item 2 — parse to a GENERIC value; a non-JSON body,
@@ -403,7 +406,7 @@ fn scan<T, K: Ord>(bytes: &[u8], schema: Schema<T, K>) -> Result<Vec<T>, Payload
     }
     // AUTH-2.15/AUTH-2.19 item 3 — duplicate ENTRY, naming the 1-based
     // repeating entry index; one ordered-set insert per entry, never a search.
-    let mut seen: BTreeSet<K> = BTreeSet::new();
+    let mut seen: BTreeSet<Fingerprint> = BTreeSet::new();
     for (i, entry) in entries.iter().enumerate() {
         if !seen.insert((schema.compared_by)(entry)) {
             return Err(PayloadError::DuplicateKey(i + 1));

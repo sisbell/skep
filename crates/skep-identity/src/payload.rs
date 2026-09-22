@@ -419,10 +419,12 @@ fn scan<T>(bytes: &[u8], schema: Schema<T>) -> Result<Vec<T>, PayloadError> {
         .ok_or(PayloadError::BadRecord)?;
     // `sig` — STRING, OPTIONAL, canonically LAST, IGNORED by the fold whatever
     // it holds (AUTH-2.13, AUTH-2.94); admitted with the body and absent from
-    // the answer (AUTH-2.18).
+    // the answer (AUTH-2.18). BORROWED from `value`, never copied: the body is
+    // a depositor-chosen string the read's cap bounds only at 64 KiB
+    // (AUTH-2.43), and `canonical_record` wants a `&str`.
     let sig = match obj.get("sig") {
         None => None,
-        Some(Value::String(s)) => Some(s.clone()),
+        Some(Value::String(s)) => Some(s.as_str()),
         Some(_) => return Err(PayloadError::BadRecord),
     };
     // No other member: exactly `type`, the entry array, plus `sig` iff present.
@@ -452,7 +454,7 @@ fn scan<T>(bytes: &[u8], schema: Schema<T>) -> Result<Vec<T>, PayloadError> {
     // AUTH-2.130's ADMISSION SENTENCE — the byte-identity compare over the
     // RECORD VALUE, `sig` INCLUDED (RES-105, I2 AUTH-2.90): admit only where
     // the input is the canonical re-encoding of every member it carries.
-    if canonical_record(&schema, &entries, sig.as_deref()) != text {
+    if canonical_record(&schema, &entries, sig) != text {
         return Err(PayloadError::BadRecord);
     }
     // AUTH-2.15/AUTH-2.19 item 3 — duplicate ENTRY, naming the 1-based

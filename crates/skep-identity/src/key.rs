@@ -17,7 +17,15 @@ pub const ALG_ED25519: &str = "ed25519";
 /// across codegen units, and distinct functions may be merged onto one — so a
 /// row-level `==` would answer unpredictably. The three DATA columns compare
 /// directly, which is what the AUTH-2.92 assertion does.
+///
+/// `#[non_exhaustive]`: READ, never constructed by a caller — [`ALGS`] is the
+/// single declared table and an I2 frozen constant (AUTH-2.90), so a foreign
+/// row is not a thing this crate wants built, and the columns grow (the fourth
+/// arrived with the CONSTRUCTOR). Field READS are unaffected, which is what
+/// the AUTH-2.92 assertion takes; a fifth column is then an addition rather
+/// than a broken build.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct AlgRow {
     /// The alg TOKEN — the value a key entry's `alg` member carries
     /// (AUTH-1.1, AUTH-2.128).
@@ -71,6 +79,11 @@ pub const ALGS: &[AlgRow] = &[AlgRow {
 /// reserved slot for a future P-256 arm. Syntax-level only — this crate never
 /// decodes a curve point (AUTH-1.4) and no field type in the crate can carry
 /// a private key (I1, AUTH-2.89).
+///
+/// Deliberately NOT `#[non_exhaustive]`: a consumer's exhaustive match over
+/// this enum is what forces a new algorithm to be given a decode wherever a
+/// key is used, where a `_` arm would silently refuse every key of it. The
+/// break at the P-256 arm IS AUTH-2.91's coordination, in the compiler.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum PublicKey {
     /// 32 raw Ed25519 key bytes — the `ALGS` row's length (AUTH-1.2).

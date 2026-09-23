@@ -35,11 +35,9 @@ use std::sync::Arc;
 use skep_engine::dump::WorldDump;
 use skep_address::Address;
 use skep_engine::{Engine, EngineStores, HistoryError, World};
-use skep_febe::{OperationSurface, Request, Response};
+use skep_febe::{OperationSurface, Request, Response, SessionId};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, Snapshot};
 use skep_namespace::PrincipalId;
-
-use crate::server::open_guest_session;
 
 /// Concurrent historical reconstructions (`Engine::world_at` behind
 /// `/op-at` and `/dump?at`) allowed at once: each is a whole-checkpoint
@@ -230,8 +228,8 @@ impl Drop for Permit<'_> {
 /// throwaway in-memory M2 kernel rooted at that world, a throwaway M10 over
 /// it, one `execute`. All the read semantics stay M10's and the stores' —
 /// the daemon only assembles. The session is the reader's own principal, or
-/// the retired guest (the guest pattern) when the request presented none:
-/// the read predicate resolves off it.
+/// M10's guest ([`SessionId::GUEST`]) when the request presented none: the
+/// read predicate resolves off it.
 ///
 /// PRECONDITION: `frame.op` is a READ, and it is the ROUTE that establishes
 /// it — `crate::server::Daemon::op_at_reply` refuses a write frame `400
@@ -299,7 +297,7 @@ fn execute_read_on(
         .with_read_predicate(move |p: Option<PrincipalId>, doc: &Address| head.readable(p, doc));
     let session = match principal {
         Some(p) => febe.open_session(p),
-        None => open_guest_session(&febe),
+        None => SessionId::GUEST,
     };
     febe.execute(session, frame)
 }

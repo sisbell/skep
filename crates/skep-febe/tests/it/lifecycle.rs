@@ -11,8 +11,8 @@ use common::*;
 use skep_address::{elem_addr, ElemPos, SpanSet};
 use skep_discovery::{FourSet, SlotSpec};
 use skep_febe::{
-    Deposit, Disposition, Op, OpKind, RejectCode, SlotArg, SuccessorSpec, UniversalGrant,
-    UniversalIndexRow, FROM, MAX_REQ_ID_BYTES,
+    Deposit, Disposition, Op, OpKind, RejectCode, SessionId, SlotArg, SuccessorSpec,
+    UniversalGrant, UniversalIndexRow, FROM, MAX_REQ_ID_BYTES,
 };
 use skep_links::{enc, View, MAX_SLOT_SPANS};
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
@@ -203,8 +203,8 @@ fn the_namespace_reads_answer_the_registry_and_absence_is_not_a_refusal() {
 /// alone is not the allocation test (AUTH-5.87 op (1)'s resume reads the
 /// equality and nothing else), and the SAME address answers itself once a
 /// `delegate` seats it. Under no registered prefix, both halves are absent
-/// TOGETHER. And the read is SESSION-BLIND: a retired session — the guest —
-/// is answered exactly what the bound principal is.
+/// TOGETHER. And the read is SESSION-BLIND: the GUEST is answered exactly
+/// what the bound principal is.
 #[test]
 fn the_owner_of_address_read_answers_omega_unprojected() {
     let fx = setup();
@@ -255,14 +255,34 @@ fn the_owner_of_address_read_answers_omega_unprojected() {
 
     // SESSION-BLIND: the guest is answered what the bound principal is, at
     // every cell above — public, immutable registry data, nothing withheld.
-    let guest = fx.febe.open_session(PrincipalId(77));
-    fx.febe.close_session(guest);
+    let guest = SessionId::GUEST;
     for probe in [fx.account.clone(), first_child.clone(), doc, addr(&[2, 0, 7])] {
         assert_eq!(
             owner_of(guest, &probe),
             owner_of(fx.user, &probe),
             "the guest and the bound principal are answered alike"
         );
+    }
+}
+
+/// The any-principal read's served guarantee (PUB-8.47; RES-231, RES-298),
+/// asked of the registry through the surface's own owner-of-address read:
+/// every served row carries ONE issuer, and it is the seat ω answers for the
+/// row's prefix — the answer set, never the index. Vacuous over no rows.
+fn assert_served_rows_are_omega_owned(fx: &Fixture, served: &[UniversalGrant]) {
+    for r in served {
+        let seat =
+            effective_owner(ex(&fx.febe, fx.user, Op::EffectiveOwner { addr: r.prefix.clone() }))
+                .map(|(seat, _)| seat);
+        assert_eq!(r.issuers.len(), 1, "ω is a function: one issuer per served row, {r:?}");
+        for issuer in &r.issuers {
+            assert_eq!(
+                seat.as_ref(),
+                Some(issuer),
+                "{issuer} does not ω-own {}: the row is the index, not the answer",
+                r.prefix
+            );
+        }
     }
 }
 
@@ -358,29 +378,13 @@ fn the_any_principal_discovery_read_hands_a_client_the_answer_set_never_the_inde
     );
     assert!(served.iter().all(|r| r.prefix != dy2), "a disjoint pair contributes no row");
     // RES-231 and RES-298 in one sentence: the served set never names a
-    // granter who is not the owner, whatever the index holds — every row
-    // carries ONE issuer, and it is the seat ω answers for the served prefix,
-    // asked of the registry through the surface's own owner-of-address read.
-    for r in &served {
-        let seat = effective_owner(ex(&fx.febe, fx.user, Op::EffectiveOwner { addr: r.prefix.clone() }))
-            .map(|(seat, _)| seat);
-        assert_eq!(r.issuers.len(), 1, "ω is a function: one issuer per served row, {r:?}");
-        for issuer in &r.issuers {
-            assert_eq!(
-                seat.as_ref(),
-                Some(issuer),
-                "{issuer} does not ω-own {}: the row is the index, not the answer",
-                r.prefix
-            );
-        }
-    }
+    // granter who is not the owner, whatever the index holds.
+    assert_served_rows_are_omega_owned(&fx, &served);
 
-    // THE GUEST — a retired session — is answered EMPTY, never refused
-    // (PUB-5.109); a SECOND bound principal is handed the same rows: the set
-    // is a board population, not the requester's.
-    let guest = fx.febe.open_session(PrincipalId(77));
-    fx.febe.close_session(guest);
-    let r = ex(&fx.febe, guest, Op::UniversalGrants);
+    // THE GUEST is answered EMPTY, never refused (PUB-5.109); a SECOND bound
+    // principal is handed the same rows: the set is a board population, not
+    // the requester's.
+    let r = ex(&fx.febe, SessionId::GUEST, Op::UniversalGrants);
     assert_eq!(as_of(&r), fx.febe.log_position(), "an answer, stamped like any read");
     assert!(universal_grants(r).is_empty(), "the guest is outside every grant");
     let other = fx.febe.open_session(OTHER);
@@ -402,13 +406,11 @@ fn the_any_principal_discovery_read_hands_a_client_the_answer_set_never_the_inde
 /// passes the pair by, ω not answering `Z`; containment ALONE would serve it
 /// — `Z` contains `Z` — as `(Z, [Z])`, a granter the registry seats nowhere
 /// listed as the owner of what is the node's; "and is not it" makes the pair
-/// NO row. The check is the vector above's invariant loop — one issuer per
-/// served row, the seat ω answers for its prefix, asked through the surface's
-/// own owner-of-address read — vacuous over the empty answer and RED at
-/// `(Z, [Z])` the moment the clause goes. THE CONTROL: seated by a `delegate`,
-/// `Z` answers itself and the SAME stored row is served unchanged, by the
-/// exact arm — so what dropped it was the missing seat, and the seeded row
-/// did reach the door.
+/// NO row. The check is `assert_served_rows_are_omega_owned` — vacuous over
+/// the empty answer and RED at `(Z, [Z])` the moment the clause goes. THE
+/// CONTROL: seated by a `delegate`, `Z` answers itself and the SAME stored
+/// row is served unchanged, by the exact arm — so what dropped it was the
+/// missing seat, and the seeded row did reach the door.
 ///
 /// The seeded row's issuer is no seat, so it lies outside the obligation
 /// [`UniversalIndexRow`] states for every row the world hands over —
@@ -420,22 +422,6 @@ fn an_unseated_issuer_over_its_own_prefix_is_no_row() {
     let read = || universal_grants(ex(&fx.febe, fx.user, Op::UniversalGrants));
     let owner_of = |a: &skep_address::Address| {
         effective_owner(ex(&fx.febe, fx.user, Op::EffectiveOwner { addr: a.clone() }))
-    };
-    // The invariant loop of the vector above, in its own form: every served
-    // row carries ONE issuer, and it is the seat ω answers for the prefix.
-    let every_issuer_is_the_seat_of_its_prefix = |served: &[UniversalGrant]| {
-        for r in served {
-            let seat = owner_of(&r.prefix).map(|(seat, _)| seat);
-            assert_eq!(r.issuers.len(), 1, "ω is a function: one issuer per served row, {r:?}");
-            for issuer in &r.issuers {
-                assert_eq!(
-                    seat.as_ref(),
-                    Some(issuer),
-                    "{issuer} does not ω-own {}: the row is the index, not the answer",
-                    r.prefix
-                );
-            }
-        }
     };
 
     // Z: the node's next top-level account, peeked and NOT delegated — no
@@ -452,13 +438,13 @@ fn an_unseated_issuer_over_its_own_prefix_is_no_row() {
 
     // NO row: ω answers the node, so the exact arm passes the pair by, and Z
     // is not WIDER than Z. Without `prefix != issuer` the read serves
-    // (Z, [Z]) and the loop is red at it.
+    // (Z, [Z]) and the served-row check is red at it.
     let served = read();
-    every_issuer_is_the_seat_of_its_prefix(&served);
+    assert_served_rows_are_omega_owned(&fx, &served);
     assert!(served.is_empty(), "an unseated issuer over its own prefix is no row: {served:?}");
 
     // THE CONTROL: seat Z and ω answers Z for Z — the same stored row is
-    // served unchanged at the next read, and the loop holds over a row.
+    // served unchanged at the next read, and the check holds over a row.
     ack_addr(ex(
         &fx.febe,
         fx.boot,
@@ -471,7 +457,7 @@ fn an_unseated_issuer_over_its_own_prefix_is_no_row() {
         vec![UniversalGrant { prefix: z.clone(), issuers: vec![z.clone()] }],
         "ω answers the issuer for the stored prefix: unchanged"
     );
-    every_issuer_is_the_seat_of_its_prefix(&served);
+    assert_served_rows_are_omega_owned(&fx, &served);
 }
 
 /// THE EXACT ARM's named residue (PUB-8.47; RES-298), as `Op::UniversalGrants`
@@ -508,7 +494,7 @@ fn an_unseated_sub_prefix_is_served_until_a_delegation_seats_it() {
         vec![UniversalGrant { prefix: child.clone(), issuers: vec![fx.account.clone()] }],
         "ω answers X at the unseated child: the stored prefix is served unchanged"
     );
-    assert_eq!(seat_of(&served[0].prefix).as_ref(), Some(&served[0].issuers[0]));
+    assert_served_rows_are_omega_owned(&fx, &served);
 
     // Seated by X's own `delegate`: ω answers the child itself, and X's
     // account is no wider than the child, so X's share over it is no row.

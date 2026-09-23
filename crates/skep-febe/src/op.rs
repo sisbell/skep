@@ -189,13 +189,8 @@ pub enum Op {
     /// supplies ([`OperationSurface::with_read_predicate`]); M10 hands the shot
     /// through verbatim and names no policy of its own.
     ///
-    /// SIZE is the caller's here as everywhere ([`Codec::parse`]), and for
-    /// this op the request's size is not its cost: M5's existence check probes
-    /// every address of every BY-REFERENCE run, so the work is `Σ width` over
-    /// them, capped by neither of M5's two budgets — `TooManyValues` sums the
-    /// DRAFT-NATIVE widths, `TooManyRuns` counts placed runs — nor by any
-    /// field M10 measures, and it is spent inside the write transaction under
-    /// M2's applier lock.
+    /// SIZE: its work is not bounded by its request's size; [`Codec::parse`]
+    /// says why and what a route owes.
     ///
     /// [`OperationSurface::with_read_predicate`]: crate::OperationSurface::with_read_predicate
     /// [`Codec::parse`]: crate::Codec::parse
@@ -233,13 +228,8 @@ pub enum Op {
     /// POSITION (PUB-6.41) — neither dropped from the delivery nor raised as
     /// a rejection — so positions are preserved and a caller handles that arm.
     ///
-    /// SIZE is the caller's here as everywhere ([`Codec::parse`]), and this
-    /// is the read whose size is least like its request's: the delivery is
-    /// one heap item per active V-POSITION, and a document's V-extent is
-    /// VIRTUAL — M5 caps the RUNS it stores and no position count, so a
-    /// `copy` doubles that extent for one request's cost. A cap on `specs`
-    /// therefore bounds the multiplier and not the per-spec term, which is
-    /// the named document's whole arranged extent.
+    /// SIZE: its work is not bounded by its request's size; [`Codec::parse`]
+    /// says why and what a route owes.
     ///
     /// [`Codec::parse`]: crate::Codec::parse
     RetrieveV { specs: Vec<Spec> },
@@ -640,13 +630,15 @@ impl Op {
     /// its source consult being the write door's own list,
     /// [`Op::source_arguments`] (PUB-6.23).
     ///
-    /// Public because the consult has TWO sites that must agree on the list:
-    /// [`OperationSurface::execute`] runs it over the snapshot it pins, and a
-    /// transport answering a HISTORICAL read runs it over the HEAD before
-    /// any reconstruction (PUB-6.49: the head-set check precedes the
-    /// N-world's registration check and the history refusals), reading the
-    /// same list rather than restating it.
+    /// Public as a fact about the request: it is what a caller reads to know
+    /// which documents a `Withheld` may name. The consult over it is
+    /// [`consult_read`], shared by both doors that run it —
+    /// [`OperationSurface::execute`] over the snapshot it pins, and a
+    /// transport answering a HISTORICAL read over the HEAD before any
+    /// reconstruction (PUB-6.49) — so the list, its order and the verdict
+    /// have one spelling.
     ///
+    /// [`consult_read`]: crate::consult_read
     /// [`OperationSurface::execute`]: crate::OperationSurface::execute
     pub fn doc_arguments(&self) -> Vec<&Address> {
         match self {

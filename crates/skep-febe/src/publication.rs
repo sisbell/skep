@@ -96,13 +96,14 @@ pub(crate) fn require_registered_document(
 /// [`birth_extent`](M5State::birth_extent) for the frozen extent, which M5's
 /// fold notes at the mint; that fold states the one state it cannot tell.
 ///
-/// PRECONDITION: `trunk` is DOCUMENT-tier, which
-/// [`trunk_of`](skep_arrangement::trunk_of) discharges at the one call site.
-/// It is stated on the parameter because that is where a caller can see what
-/// it owes, and the `expect` is what ENFORCES it: [`first_version_address`] is
-/// registry-free and answers `None` for every tier but a document's, so a
-/// violation panics rather than fabricating the address of a chain no tier
-/// but a document's anchors.
+/// PRECONDITION: `trunk` is DOCUMENT-tier. The one call site discharges it in
+/// two steps: [`require_registered_document`] establishes the tier, and
+/// [`trunk_of`](skep_arrangement::trunk_of) preserves it — it never makes a
+/// document of anything else. It is stated on the parameter because that is
+/// where a caller can see what it owes, and the `expect` is what ENFORCES it:
+/// [`first_version_address`] is registry-free and answers `None` for every
+/// tier but a document's, so a violation panics rather than fabricating the
+/// address of a chain no tier but a document's anchors.
 ///
 /// The guard above stands in front of that panic, so no call reaches it:
 /// [`trunk_head`] delegates to M3's `latest_version`, which returns `None`

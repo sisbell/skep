@@ -54,13 +54,16 @@ pub trait Codec {
     /// on that sum rather than a bound on it, and a per-tumbler digit cap
     /// bounds how many digits a `width` is written with, not how far it walks
     /// — one run of eighteen digits outruns any content a store will ever
-    /// hold. M5 prices the walk and names this layer as the owner of the
-    /// number: `Vstream::publish`'s COST paragraph ends by calling the
-    /// by-reference runs' `Σ width` one of "the numbers a route that carries
-    /// this op owes". It is spent INSIDE the write transaction, under M2's
-    /// applier lock, so it is paid by every other writer in the engine and
-    /// not by the caller alone. A parser that means to bound it caps that sum
-    /// here; nothing downstream of this door does.
+    /// hold. Neither of M5's own budgets caps it either: `TooManyValues` sums
+    /// the DRAFT-NATIVE widths and `TooManyRuns` counts placed runs, so the
+    /// by-reference walk falls between them. M5 prices the walk and names
+    /// this layer as the owner of the number: `Vstream::publish`'s COST
+    /// paragraph ends by calling the by-reference runs' `Σ width` one of "the
+    /// numbers a route that carries this op owes". It is spent INSIDE the
+    /// write transaction, under M2's applier lock, so it is paid by every
+    /// other writer in the engine and not by the caller alone. A parser that
+    /// means to bound it caps that sum here; nothing downstream of this door
+    /// does.
     ///
     /// [`Op::RetrieveV`] delivers one heap item per active V-POSITION of
     /// every run it names, and a document's V-extent is VIRTUAL: M5 caps the

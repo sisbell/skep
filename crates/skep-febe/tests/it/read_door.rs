@@ -26,8 +26,8 @@ use crate::common;
 
 use common::*;
 use skep_febe::{
-    enc, Address, DeliveryItem, EditionClaim, FourSet, Op, OpKind, RegionSpec, RejectCode,
-    Response, SlotArg, SlotSpec, Span, SpanSet, Spec, Tumbler, View, FROM, TO,
+    consult_read, enc, Address, DeliveryItem, EditionClaim, FourSet, Op, OpKind, RegionSpec,
+    RejectCode, Response, SlotArg, SlotSpec, Span, SpanSet, Spec, Tumbler, View, FROM, TO,
 };
 
 /// One link whose endsets cover `covered`'s content, homed in `home` — the
@@ -155,6 +155,42 @@ fn a_read_is_withheld_naming_its_first_unreadable_document() {
     // The consult is per principal: the owner reads its own documents.
     let (set, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpan { doc: d1 }));
     assert_ne!(set, SpanSet::empty());
+}
+
+/// PUB-6.49's second door: a transport answering a HISTORICAL read runs the
+/// consult itself, over the head's predicate, before any reconstruction — and
+/// what it runs is `consult_read`, the function `execute` runs. Called
+/// directly with the predicate this front door answers the stranger through,
+/// it refuses exactly as `execute` does, every field of the rejection alike,
+/// and admits exactly what `execute` answers — so one request has one verdict
+/// at either door.
+#[test]
+fn a_transport_running_the_consult_itself_gets_the_verdict_execute_gives() {
+    let (fx, unreadable) = setup_with_unreadable();
+    let readable_doc = create_doc(&fx);
+    insert3(&fx, &readable_doc);
+    let unreadable_doc = create_doc(&fx);
+    insert3(&fx, &unreadable_doc);
+    unreadable.lock().expect("no poisoning").push(unreadable_doc.clone());
+    let other = fx.febe.open_session(OTHER);
+    // The predicate the front door answers the stranger through, spelled for
+    // a caller that holds no front door.
+    let refused_to_other = unreadable.lock().expect("no poisoning").clone();
+    let readable = |doc: &Address| !refused_to_other.contains(doc);
+
+    let refused = Op::ShowDeletions { d_a: readable_doc.clone(), d_b: unreadable_doc.clone() };
+    let direct = consult_read(&refused, &readable).expect_err("`d_b` is unreadable");
+    assert_eq!(
+        direct,
+        rejected(ex(&fx.febe, other, refused)),
+        "one request, one verdict — whichever door runs the consult"
+    );
+    assert_withheld(Response::Rejected(direct), OpKind::ShowDeletions, &unreadable_doc);
+
+    let admitted = Op::RetrieveDocVSpan { doc: readable_doc.clone() };
+    assert!(consult_read(&admitted, &readable).is_ok(), "a readable argument passes");
+    let (set, _) = spanset(ex(&fx.febe, other, admitted));
+    assert_ne!(set, SpanSet::empty(), "…and `execute` answers it");
 }
 
 /// PUB-6.12's ORDER: the consult runs before any other validation, so a

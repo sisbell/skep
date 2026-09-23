@@ -178,9 +178,9 @@ fn home_readable(a: &Address, readable: &dyn Fn(&Address) -> bool) -> bool {
 /// round 2, lane 3.3): the FIRST unreadable NAMED document of the read, in
 /// declaration order ([`Op::doc_arguments`], PUB-6.4), answers WITHHELD
 /// naming itself — `reorder`, `site.addr` the document, no `detail`
-/// (PUB-8.5). Consulted through `readable`, the ONE predicate this request
-/// was built with ([`OperationSurface::readable_by`]), so the answer and
-/// the `as_of` it is stamped with stand on one committed state.
+/// (PUB-8.5). Consulted through `readable`, the one predicate the request
+/// answers through, so the verdict and the answer it guards stand on one
+/// committed state.
 ///
 /// It runs AFTER registration — an unregistered document is fail-open
 /// readable (PUB-7.5) and defers to its store's own `*NotRegistered` —
@@ -188,26 +188,29 @@ fn home_readable(a: &Address, readable: &dyn Fn(&Address) -> bool) -> bool {
 /// withheld and a private one never reaches a refusal that would describe
 /// it. The complementary rules of the read door live with the answers
 /// they shape rather than here: the link-ADDRESS absence rule at the two
-/// arms it governs ([`home_readable`]), and the result-set filter inside
-/// each reader that applies it.
+/// arms it governs, and the result-set filter inside each reader that
+/// applies it.
 ///
-/// Named, and named beside [`consult_write`], because the two are one
-/// obligation split by path: this door and that one decide who may read
-/// what, and a reader looking for either should find both. Both are
-/// functions OVER the predicate rather than methods that fetch it, so a
-/// door's policy cannot come to answer a predicate other than the one its
-/// request was built with.
+/// PUBLIC, because two callers must give one request one verdict.
+/// [`OperationSurface::execute`] runs it ahead of every read arm, over the
+/// predicate it binds off the snapshot it pins; a transport answering a
+/// HISTORICAL read runs it over the HEAD's predicate BEFORE it reconstructs
+/// the N-world (PUB-6.49: the head-set check precedes the N-world's
+/// registration check and the history refusals). The list, its order and
+/// the verdict all live here, so the two answers cannot come apart.
 ///
-/// [`OperationSurface::readable_by`]: OperationSurface::readable_by
-fn consult_read(
-    kind: OpKind,
-    op: &Op,
-    readable: &dyn Fn(&Address) -> bool,
-) -> Result<(), Rejection> {
+/// Its sibling is the write side's consult, `consult_write`: one obligation
+/// split by path, the two deciding who may read what, so a reader looking
+/// for either should find both. Both are functions OVER the predicate rather
+/// than methods that fetch it, so a door's policy cannot come to answer a
+/// predicate other than the one its request was built with.
+///
+/// [`OperationSurface::execute`]: crate::OperationSurface::execute
+pub fn consult_read(op: &Op, readable: &dyn Fn(&Address) -> bool) -> Result<(), Rejection> {
     for arg in op.doc_arguments() {
         if !readable(arg) {
             return Err(Rejection::classified(
-                kind,
+                op.kind(),
                 RejectCode::Withheld,
                 Some(FaultSite { addr: Some(arg.clone()), ..FaultSite::default() }),
             ));
@@ -548,8 +551,10 @@ where
     /// every read arm and is answered — as the GUEST, since it now resolves
     /// to no principal and `None` is the guest predicate. Logout therefore
     /// NARROWS the read surface to the published documents rather than
-    /// closing it; a
-    /// transport whose logout must REFUSE reads holds that policy itself.
+    /// closing it; a transport whose logout must REFUSE reads holds that
+    /// policy itself. A transport that needs a guest names
+    /// [`SessionId::GUEST`] rather than opening a session only to retire it
+    /// here, which leaves a live binding wherever the retirement is missed.
     ///
     /// The sweep is not atomic against a request already in flight. An
     /// `execute` past its step-(a) lookup may deposit its ack after the sweep
@@ -604,11 +609,13 @@ where
     ///   predicate this surface answers, which SHAPES the answer rather than
     ///   gating the operation. Every read is therefore served against any
     ///   `SessionId` — bound, retired by
-    ///   [`OperationSurface::close_session`], or never opened — and an id
-    ///   that resolves to no principal is answered as the GUEST, whose
-    ///   predicate admits the published documents alone. That is a mask.
-    ///   Where the predicate does REFUSE (form (1) below), the refusal names
-    ///   a DOCUMENT and never the caller's standing to read at all.
+    ///   [`OperationSurface::close_session`], or never opened, among which
+    ///   [`SessionId::GUEST`] is the one a caller can name and the handle for
+    ///   a request that presents no session — and an id that resolves to no
+    ///   principal is answered as the GUEST, whose predicate admits the
+    ///   published documents alone. That is a mask. Where the predicate does
+    ///   REFUSE (form (1) below), the refusal names a DOCUMENT and never the
+    ///   caller's standing to read at all.
     ///
     /// So reads are masked, not gated, and the masking is M6's and M8's,
     /// driven by the one predicate this surface answers (PUB-6.39). A
@@ -661,26 +668,14 @@ where
     ///
     /// * NON-FORGEABILITY (§6): `session` MUST originate in the transport's
     ///   connection state, never a wire-supplied value.
-    /// * SIZE: M10 measures no field of the [`Op`] it is handed, so every
-    ///   list, tumbler and magnitude in `req` reaches the owning store as
-    ///   presented. A transport discharges this in [`Codec::parse`], where
-    ///   the obligation is stated in full; a caller that assembles an [`Op`]
-    ///   and calls HERE has no parser in between and owns the whole of it.
-    ///   Three operations are why it is worth owning, and each spends a
-    ///   different resource. [`Op::Compare`] joins its two operand sets
-    ///   pairwise, burning one caller's core. [`Op::RetrieveV`] delivers one
-    ///   heap item per V-POSITION of every spec and concatenates per spec
-    ///   without dedup, so the repeat is a multiplier on a per-spec term that
-    ///   is itself the document's stored extent — unbounded at ONE spec,
-    ///   since a `copy` doubles that extent per request while M5 caps only
-    ///   the runs — which makes its bill resident memory rather than CPU.
-    ///   [`Op::Publish`] probes every address of every by-reference run, a
-    ///   cost set by the STORED content those runs name rather than by the
-    ///   request's size, and spent inside the write transaction under M2's
-    ///   applier lock, so the shot stalls every writer in the engine.
-    ///   Nothing on this path enforces any of the three — the one list M10
-    ///   measures is the EDITLINK successor slot it builds for itself, against
-    ///   M7's per-slot budget.
+    /// * SIZE: M10 measures no field of the [`Op`] it is handed — the one list
+    ///   it measures is the EDITLINK successor slot it builds for itself,
+    ///   against M7's per-slot budget — so every list, tumbler and magnitude
+    ///   in `req` reaches the owning store as presented. A transport
+    ///   discharges this in [`Codec::parse`], which also names and prices the
+    ///   operations whose work their size does not bound; a caller that
+    ///   assembles an [`Op`] and calls HERE has no parser in between and owns
+    ///   the same obligation.
     ///
     /// [`Codec::parse`]: crate::Codec::parse
     ///
@@ -1051,13 +1046,13 @@ where
         // The doc-argument consult (PUB-6.12), off that same predicate and
         // ahead of every arm, so no read validates an argument it may not
         // describe: the first unreadable NAMED document answers WITHHELD.
-        consult_read(kind, &op, &readable)?;
+        consult_read(&op, &readable)?;
         match op {
             // ── namespace reads (→ M3, §2): the M3-internal frontier/
             //    registry values Delegate/CreateNewDocument demand. Total —
             //    Option<Address>, no fault path.
             Op::NextAccountPrefix { parent } => {
-                let addr = snap.world().m3().next_account_prefix(&parent);
+                let addr = world.m3().next_account_prefix(&parent);
                 Ok(Response::MaybeAddr { addr, as_of })
             }
             // Takes an explicit wire id, not the session's bound principal —
@@ -1065,24 +1060,17 @@ where
             // the answer is the same for every caller and the wire id is what
             // is being asked ABOUT.
             Op::PrincipalPrefix { id } => {
-                let addr = snap.world().m3().principal_prefix(id).cloned();
+                let addr = world.m3().principal_prefix(id).cloned();
                 Ok(Response::MaybeAddr { addr, as_of })
             }
-            // THE OWNER-OF-ADDRESS READ (AUTH-6.37): ω UNPROJECTED, off ONE
-            // walk of M3's principal registry — the walk every ownership
-            // check already makes (`effective_owner_pair`; the two
-            // projections composed would walk Π twice). Total, like its two
-            // siblings above, and public for their reason: the registry is
-            // immutable public data, so the answer is the same for every
-            // caller and for none, and `addr` is a registry probe rather than
-            // a document argument — it was never in the consult above, so
-            // nothing here is withheld. `addr` need not be allocated: an
-            // unallocated `inc(X, 1)` answers `X`'s own seat, and the caller's
-            // allocation test is `prefix == addr` — this door states the
-            // entry and draws no conclusion from it.
+            // AUTH-6.37: ω's whole entry off ONE walk of M3's registry
+            // (`effective_owner_pair`); the two projections composed would
+            // walk it twice. `addr` is a registry probe, not a doc-argument, so
+            // the consult above passed it by. What the entry means to a caller
+            // — the allocation test included — is `Op::EffectiveOwner`'s
+            // contract.
             Op::EffectiveOwner { addr } => {
-                let owner = snap
-                    .world()
+                let owner = world
                     .m3()
                     .effective_owner_pair(&addr)
                     .map(|(prefix, principal)| (prefix.clone(), principal));
@@ -1235,22 +1223,12 @@ where
             // ── publication reads (lane 3.4, PUB-8.47): answers this door
             //    COMPOSES; what they need that no store computes is
             //    `crate::publication`'s ──
-            // The doc-metadata read (PUB-8.12): the publication state a
-            // client's own admission tests need, and nothing else. `doc` was
-            // consulted above, so a withheld answer has already spoken for a
-            // private document the caller cannot read, and the registration
-            // refusal below is this door's OWN (`require_registered_document`
-            // — this read composes an answer rather than calling one store
-            // operation, so no store is there to raise it).
-            //
-            // A version member answers its DOCUMENT's state (PUB-2.15), so
-            // the argument projects to its trunk and EVERY field of the row
-            // is read off that one address: M5's own `published_target`, so
-            // the bit a client runs PUB-3.19 against is the bit every gate
-            // keys on; M3's ω, carried rather than recomputed by the client
-            // (`Some` on every registered document — ω is total over the
-            // registered space — the `Option` standing only so the shape
-            // never invents one); and the birth version (`birth_version`).
+            // PUB-8.12: `doc` passed the consult above, so an unreadable one
+            // was answered `withheld` before the registration refusal below
+            // could describe it. The argument projects to its trunk (PUB-2.15)
+            // and every field is read off that one address: M5's own
+            // `published_target` (the bit every gate keys on), M3's ω, and the
+            // birth version.
             Op::DocMetadata { doc } => {
                 let m3 = world.m3();
                 require_registered_document(m3, kind, &doc)?;
@@ -1260,15 +1238,11 @@ where
                 let birth = birth_version(m3, world.m5(), &trunk);
                 Ok(Response::DocMetadata { doc: trunk, published, owner, birth, as_of })
             }
-            // The audit-view edition-claim lookup (PUB-8.46): the world
-            // answers the CLASS whose `to` overlaps `target`'s subtree —
-            // unsuperseded, retracted-or-not — and this door keeps each row
-            // whose HOME the caller reads (PUB-6.13, the result-set rule),
-            // off the one predicate above. A draft edition's claim is thereby
-            // invisible to a stranger and listed for its owner; the client's
-            // own PUB-3.19 admission test runs over the home this row names.
-            // The registration refusal is this door's OWN, and it is what
-            // BOUNDS the seam (`require_registered_document`).
+            // PUB-8.46: the world answers the class unfiltered, in
+            // link-address order; the home rule (PUB-6.13) keeps each row whose
+            // home this request's predicate admits, so the order survives the
+            // filter. The registration refusal is what confines the world's
+            // `to` range to one document's subtree.
             Op::EditionClaims { target } => {
                 require_registered_document(world.m3(), kind, &target)?;
                 let claims = world
@@ -1278,22 +1252,13 @@ where
                     .collect();
                 Ok(Response::EditionClaims { claims, as_of })
             }
-            // THE ANY-PRINCIPAL DISCOVERY READ (PUB-8.47): the world hands
-            // over the fold's live universal INDEX, enumerated ONCE off this
-            // snapshot, and this door serves the ANSWER SET — each row
-            // narrowed to the prefix its issuer ω-owns by the compare
-            // `Op::UniversalGrants` states (RES-231/264/273/298), which
-            // `covered_universal_grants` realizes with ω asked of this same
-            // snapshot's registry, grouped by the served prefix in prefix
-            // order. Index rows and served rows are two types, so the index
-            // has no way onto the wire unnarrowed. The GUEST is answered
-            // EMPTY (PUB-5.109) — an answer, never a refusal, and no consult,
-            // there being no document argument — so the index is not even
-            // walked for a requester no grant reaches; every bound principal,
-            // keyed or bare, is handed the same rows, the set being a board
-            // population and not the requester's. The daemon's feed applies
-            // the same live set at serve, so nothing here decides what is
-            // served — only what a client may display.
+            // PUB-8.47: the guest is answered before the index is enumerated,
+            // so the index is not walked for a requester no grant reaches. For
+            // a bound principal: one enumeration off this snapshot, narrowed by
+            // `covered_universal_grants` with ω asked of the same snapshot's
+            // registry. Index rows and served rows are two types, so the index
+            // cannot reach the wire unnarrowed. What the answer promises is
+            // `Op::UniversalGrants`'s contract.
             Op::UniversalGrants => {
                 let rows = match principal {
                     None => Vec::new(),
@@ -1542,28 +1507,33 @@ mod tests {
     }
 
     /// §6/§Invariants: the step-(b) gate is ONE uniform rule — a write
-    /// requires a bound session, full stop — so it holds for all fourteen
-    /// writes, `RegisterNode` (whose principal M3 ignores) included. And it
+    /// requires a bound session, full stop — so it holds for every write,
+    /// `RegisterNode` (whose principal M3 ignores) included, and for every
+    /// unbound id alike: one retired by `close_session`, and
+    /// [`SessionId::GUEST`], which no `open` mints. The second is what makes
+    /// the constant safe to hand to every unauthenticated request. And it
     /// holds BEFORE any transaction, which is what the unmoved log position
     /// witnesses: no store is reached on the way to the refusal.
     #[test]
     fn every_write_on_an_unbound_session_is_unauthenticated_before_any_transaction() {
         let febe = surface();
-        let s = febe.open_session(PrincipalId(1));
-        febe.close_session(s);
+        let retired = febe.open_session(PrincipalId(1));
+        febe.close_session(retired);
         let before = febe.log_position();
-        for (op, is_read) in crate::op::tests::all_ops() {
-            if is_read {
-                continue;
-            }
-            let kind = op.kind();
-            match febe.execute(s, Request { id: None, op }) {
-                Response::Rejected(rej) => {
-                    assert_eq!(rej.op, kind, "the rejection names the op it refused");
-                    assert_eq!(rej.code, RejectCode::Unauthenticated, "{kind:?}");
-                    assert_eq!(rej.disposition, Disposition::Permanent, "{kind:?}");
+        for session in [retired, SessionId::GUEST] {
+            for (op, is_read) in crate::op::tests::all_ops() {
+                if is_read {
+                    continue;
                 }
-                _ => panic!("{kind:?} was answered on an unbound session"),
+                let kind = op.kind();
+                match febe.execute(session, Request { id: None, op }) {
+                    Response::Rejected(rej) => {
+                        assert_eq!(rej.op, kind, "the rejection names the op it refused");
+                        assert_eq!(rej.code, RejectCode::Unauthenticated, "{kind:?} under {session:?}");
+                        assert_eq!(rej.disposition, Disposition::Permanent, "{kind:?}");
+                    }
+                    _ => panic!("{kind:?} was answered on the unbound session {session:?}"),
+                }
             }
         }
         assert_eq!(

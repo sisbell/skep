@@ -10,10 +10,10 @@ use parking_lot::Mutex;
 use skep_namespace::PrincipalId;
 
 /// An M10-minted session handle (§6). The field is deliberately private:
-/// ids come from [`Sessions::open`] alone, and the transport injects them
-/// from the connection's authenticated binding — a `SessionId` is never read
-/// off the wire (the §6 non-forgeability precondition), so nothing outside
-/// M10 constructs one.
+/// ids come from [`Sessions::open`] alone, save [`SessionId::GUEST`], which
+/// no `open` mints, and the transport injects them from the connection's
+/// authenticated binding — a `SessionId` is never read off the wire (the §6
+/// non-forgeability precondition), so nothing outside M10 constructs one.
 ///
 /// `#[must_use]`: an id is the only handle on the binding it names, and
 /// `OperationSurface::close_session` needs it, so dropping one leaves a
@@ -21,6 +21,23 @@ use skep_namespace::PrincipalId;
 #[must_use]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct SessionId(pub(crate) u64);
+
+impl SessionId {
+    /// THE GUEST — the one id a caller names without opening a session. No
+    /// [`OperationSurface::open_session`] mints it, so it resolves to no
+    /// principal for the life of every surface:
+    /// [`OperationSurface::execute`] answers each read under it as the guest
+    /// (the published documents alone) and refuses each write
+    /// `Unauthenticated`. It is what a transport hands a request that
+    /// presents no session.
+    ///
+    /// Naming it forges nothing: it carries none of a bound session's
+    /// authority, and no write at all. Closing it is a no-op.
+    ///
+    /// [`OperationSurface::open_session`]: crate::OperationSurface::open_session
+    /// [`OperationSurface::execute`]: crate::OperationSurface::execute
+    pub const GUEST: SessionId = SessionId(0);
+}
 
 /// Which principal each open session speaks for, and the counter that mints
 /// the handles (§6). Ids are unique within one M10 uptime (reset on restart;
@@ -36,6 +53,8 @@ pub(crate) struct Sessions {
 
 impl Sessions {
     pub(crate) fn new() -> Sessions {
+        // 0 is `SessionId::GUEST`, which no `open` mints: the counter starts
+        // past it.
         Sessions { bindings: Mutex::new(HashMap::new()), next_id: AtomicU64::new(1) }
     }
 
@@ -87,5 +106,29 @@ mod tests {
         for _ in 0..4 {
             assert_ne!(sessions.open(PrincipalId(1)), s1);
         }
+    }
+
+    /// The guest is the one id no `open` mints: it resolves to no principal,
+    /// and closing it retires nothing — every binding opened beside it stays.
+    #[test]
+    fn the_guest_is_never_minted_and_never_bound() {
+        let sessions = Sessions::new();
+        let opened: Vec<(SessionId, PrincipalId)> = (0..8)
+            .map(|i| {
+                let principal = PrincipalId(i);
+                (sessions.open(principal), principal)
+            })
+            .collect();
+        assert!(
+            opened.iter().all(|(s, _)| *s != SessionId::GUEST),
+            "no `open` mints the guest"
+        );
+        assert_eq!(sessions.principal_of(SessionId::GUEST), None, "the guest is bound to no one");
+
+        sessions.close(SessionId::GUEST);
+        for (s, principal) in opened {
+            assert_eq!(sessions.principal_of(s), Some(principal), "closing the guest retires nothing");
+        }
+        assert_eq!(sessions.principal_of(SessionId::GUEST), None);
     }
 }

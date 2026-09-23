@@ -157,7 +157,7 @@ mod successor;
 
 pub use codec::{Codec, ParseError};
 pub use op::{Op, OpKind, ReqId, Request, SuccessorSpec, MAX_REQ_ID_BYTES};
-pub use operation::{OperationSurface, ReadPredicate};
+pub use operation::{consult_read, OperationSurface, ReadPredicate};
 // `disposition_of` and `Rejection::classified` are public for the reason the
 // disposition is documented as recomputable: a transport that raises one of
 // M10's own codes on its own channel asks the table — or builds the whole

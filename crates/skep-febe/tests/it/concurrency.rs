@@ -148,9 +148,8 @@ fn two_concurrent_first_mints_below_the_daemon_bear_exactly_one_published_home()
     let febe = OperationSurface::new(Box::new(KernelStores { kernel: Arc::clone(&kernel) }))
         .with_read_predicate(published_or_own(kernel));
     let boot = febe.bootstrap_session();
-    // The GUEST: a retired id resolves to no principal (§6).
-    let guest = febe.open_session(PrincipalId(77));
-    febe.close_session(guest);
+    // The GUEST: the one id no `open` mints, bound to no principal (§6).
+    let guest = SessionId::GUEST;
 
     // `won[i]`: the rounds in which thread `i`'s mint committed FIRST.
     let mut won = [0usize; 2];

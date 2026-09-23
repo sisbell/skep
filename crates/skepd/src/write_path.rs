@@ -145,12 +145,11 @@ impl WritePath {
     /// what every gate arm does; what must not happen is a committing
     /// `execute` under this guard OUTSIDE `commit_under`, which would
     /// leave the position unrecorded and unannounced. The one execute this
-    /// crate performs outside it is the guest reply, and it is safe for a
-    /// reason stated elsewhere: [`crate::server::open_guest_session`]'s
-    /// session is retired, so M10 refuses a write under it without
-    /// committing. Nothing here can check either half, and a snapshot
-    /// taken outside the guard lets a commit land between what a gate read
-    /// and what it gated.
+    /// crate performs outside it is the guest reply, and it is safe because
+    /// it runs under `SessionId::GUEST`, which M10 never binds, so M10
+    /// refuses a write under it without committing. Nothing here can check
+    /// either half, and a snapshot taken outside the guard lets a commit
+    /// land between what a gate read and what it gated.
     pub fn serial_lock(&self) -> SerialGuard<'_> {
         SerialGuard(self.serial.lock())
     }

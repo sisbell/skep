@@ -43,9 +43,10 @@
 //! the daemon maps the opaque token → M10-minted `SessionId` in its own
 //! state, so a `SessionId` never rides the wire (M10's non-forgeability
 //! precondition). A request with no token, or one whose binding is gone,
-//! runs under a pre-retired guest session: reads are principal-free and
-//! succeed, writes get M10's own `Unauthenticated`, and a token naming a
-//! binding this daemon has closed carries `Skepd-Session: closed` back.
+//! runs under M10's guest session (`SessionId::GUEST`, bound to no
+//! principal): reads are principal-free and succeed, writes get M10's own
+//! `Unauthenticated`, and a token naming a binding this daemon has closed
+//! carries `Skepd-Session: closed` back.
 //! `auth/` owns the rest and this file holds none of it: the two origin
 //! sets and their publication, the handshake, the credential write lock,
 //! the ordered refusal producers, and the identity fold rebuilt beside the
@@ -147,10 +148,7 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use serde_json::Value;
 use skep_engine::{Engine, EngineError, HistoryError, World};
-use skep_febe::{
-    Codec, FaultSite, Op, OperationSurface, OpKind, RejectCode, Rejection, Request, Response,
-    SessionId,
-};
+use skep_febe::{consult_read, Codec, Op, OperationSurface, OpKind, Request, Response, SessionId};
 use skep_identity::IdentityState;
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq, Snapshot};
 use skep_namespace::PrincipalId;
@@ -969,42 +967,9 @@ fn path_is_known(path: &str) -> bool {
         || (cfg!(feature = "client") && path == "/")
 }
 
-/// The principal a guest session is minted under. Arbitrary by
-/// construction: the session is retired before any request runs, so the
-/// value never reaches a store — what makes a guest a guest is the retired
-/// binding, not the principal it named. Named once so the two places that
-/// mint one cannot drift, and so a reader meeting `u64::MAX` in either is
-/// not left asking whether the number is significant to M3 or M10.
-///
-/// A client may NAME this id — `POST /session {"principal":
-/// 18446744073709551615}` mints a LIVE session under it, since
-/// [`session_principal`] accepts any non-negative integer and it is the
-/// guest's RETIREMENT, not its number, that makes it a guest. That is free
-/// while the value means nothing, so the meaninglessness is load-bearing:
-/// the day this id means anything — a reserved identity, a default owner,
-/// an audit tag, all of which authentication makes natural — either that
-/// meaning must not attach to a nameable principal, or `session_principal`
-/// must refuse this one.
-pub(crate) const GUEST_PRINCIPAL: PrincipalId = PrincipalId(u64::MAX);
-
-/// Mint one session and retire it at once — THE guest pattern, and the one
-/// obligation both the live surface and the history surface need: under a
-/// retired session M10 serves reads (which are principal-free) and refuses
-/// writes with its own `Unauthenticated`, which is how this daemon holds no
-/// authorization policy of its own.
-///
-/// The retirement is what does the work, so it happens here rather than
-/// being left to a caller to remember: a session that stayed open would
-/// carry [`GUEST_PRINCIPAL`] into every unauthenticated write.
-pub(crate) fn open_guest_session(febe: &OperationSurface<World>) -> SessionId {
-    let guest = febe.open_session(GUEST_PRINCIPAL);
-    febe.close_session(guest);
-    guest
-}
-
 // The token ↔ session binding, the handshake, and per-request resolution
 // live in `crate::auth` (the AUTH session layer). What remains here is the
-// guest pattern above and the glue below.
+// glue below.
 
 /// The daemon's state: the assembled engine, M10's front door, the codec,
 /// and the token → session binding. Socket-free — [`Daemon::route`] is the
@@ -1021,8 +986,6 @@ pub struct Daemon {
     /// The AUTH session layer: config, the challenge and session stores,
     /// the credential write lock, the identity fold, the credential memo.
     auth: AuthState,
-    /// The permanently retired session every guest request runs under.
-    guest: SessionId,
     /// The write path: the serialization point, the commit-metadata sidecar
     /// behind `GET /changes` and `head_time` (wire v6), and the commit
     /// stream behind `GET /events` (wire v4). One field because the three
@@ -1129,7 +1092,6 @@ impl Daemon {
         // N-world's content through the HEAD's sets (PUB-6.48), which no
         // world of its own can supply.
         let febe = OperationSurface::new(Box::new(engine.stores()));
-        let guest = open_guest_session(&febe);
         let auth = {
             let snap = engine.kernel().snapshot();
             AuthState::open(opts, snap.world()).map_err(DaemonError::BlockedPrefixes)?
@@ -1139,7 +1101,6 @@ impl Daemon {
             febe,
             codec: JsonCodec,
             auth,
-            guest,
             writes,
             history: History::new(),
             scans: ClassScans::new(),
@@ -1558,13 +1519,13 @@ impl Daemon {
         }
     }
 
-    /// The session a request's dispatch runs under: the actor's, or the
-    /// permanently retired guest (M10 serves reads and refuses writes
+    /// The session a request's dispatch runs under: the actor's, or M10's
+    /// guest, [`SessionId::GUEST`] (M10 serves reads and refuses writes
     /// `Unauthenticated` under it).
     fn actor_sid(&self, actor: &Actor) -> SessionId {
         match actor {
             Actor::Principal(e) => e.sid,
-            Actor::Guest(_) => self.guest,
+            Actor::Guest(_) => SessionId::GUEST,
         }
     }
 
@@ -1595,7 +1556,7 @@ impl Daemon {
     /// (AUTH-4.29 — historical routes included), while the two write
     /// sequences must resolve against the snapshot their gates stand on
     /// (AUTH-4.28's WHICH-lookup pin). Every Guest then answers
-    /// `unauthenticated` by executing under the retired guest session —
+    /// `unauthenticated` by executing under M10's guest session —
     /// M10's own code, with the op kind named.
     ///
     /// The answer is a [`Resolved`], whose two fields are the actor this
@@ -1652,12 +1613,12 @@ impl Daemon {
         (snap, identity, resolved)
     }
 
-    /// The answer every Guest arm gives: execute under the permanently
-    /// retired guest session, which is M10's own `Unauthenticated` with the
+    /// The answer every Guest arm gives: execute under M10's guest session,
+    /// [`SessionId::GUEST`], which is M10's own `Unauthenticated` with the
     /// op kind named. This daemon holds no authorization policy of its own,
     /// so the refusal is M10's to word.
     fn guest_reply(&self, frame: Request) -> Reply {
-        self.op_reply(&self.febe.execute(self.guest, frame))
+        self.op_reply(&self.febe.execute(SessionId::GUEST, frame))
     }
 
     /// The PLAIN sequence (AUTH-3.35): the read lock → the serialization
@@ -1851,8 +1812,8 @@ impl Daemon {
     ///
     /// THE READER IS THE PRESENTED SESSION's (PUB-8.13; PUB round 2, lane
     /// 3.3): the route resolved `resolved` against the head, and the read
-    /// runs as that principal — the retired guest when none was presented —
-    /// never as a guest regardless of the token. And the read predicate is
+    /// runs as that principal — the guest when none was presented — never
+    /// as a guest regardless of the token. And the read predicate is
     /// the HEAD's (PUB-6.48): ONE head snapshot is taken here, at admission,
     /// and every consult of this request reads its exception set and grant
     /// set — the doc-argument consult below, and, threaded into the throwaway
@@ -1867,9 +1828,10 @@ impl Daemon {
     /// `doc_not_registered` for a position before its creation; and before
     /// `history_reclaimed` and `history_busy`, so one op has one code, and a
     /// withheld answer occupies no reconstruction permit (PUB-7.11). The
-    /// list of named documents is M10's own (`Op::doc_arguments`, declaration
-    /// order, PUB-6.4), the rejection M10's own classification (PUB-8.4,
-    /// PUB-8.5: `withheld`, `reorder`, `site.addr` the document, no detail).
+    /// consult is M10's own (`consult_read`) — the list of named documents,
+    /// its declaration order (PUB-6.4) and the verdict (PUB-8.4, PUB-8.5:
+    /// `withheld`, `reorder`, `site.addr` the document, no detail) — asked
+    /// here over the head's predicate rather than restated.
     fn op_at_reply(&self, resolved: &Resolved, body: &[u8]) -> Reply {
         let (at, frame) = match op_at_envelope(body) {
             Ok(x) => x,
@@ -1908,14 +1870,8 @@ impl Daemon {
                 // once for every argument the consult asks about.
                 let head = self.engine.kernel().snapshot();
                 let reader = head.world().reader_class(principal);
-                for arg in frame.op.doc_arguments() {
-                    if !reader.readable(arg) {
-                        return self.op_reply(&Response::Rejected(Rejection::classified(
-                            frame.op.kind(),
-                            RejectCode::Withheld,
-                            Some(FaultSite { addr: Some(arg.clone()), ..FaultSite::default() }),
-                        )));
-                    }
+                if let Err(rej) = consult_read(&frame.op, &|doc| reader.readable(doc)) {
+                    return self.op_reply(&Response::Rejected(rej));
                 }
                 match self.history.read_at(&self.engine, at, *frame, principal, &head) {
                     Ok(resp) => self.op_reply(&resp),

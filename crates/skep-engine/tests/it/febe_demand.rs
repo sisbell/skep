@@ -13,7 +13,7 @@ use skep_address::Address;
 use skep_arrangement::Deposit;
 use skep_content::Val;
 use skep_engine::{Engine, EngineStores, Kernel};
-use skep_febe::{Disposition, Op, OperationSurface, RejectCode, Request, Response};
+use skep_febe::{Disposition, Op, OperationSurface, RejectCode, Request, Response, SessionId};
 use skep_namespace::PrincipalId;
 use skep_retrieval::Spec;
 use tempfile::tempdir;
@@ -93,7 +93,7 @@ fn engine_world_satisfies_the_febe_demand() {
 /// implements with the engine's own `readable` (published ∨ subtree ∨ grant,
 /// PUB-1.31). So over this engine a private draft is delivered to its owner and
 /// answers WITHHELD — `reorder`, `site.addr` the document, no `detail`
-/// (PUB-8.4, PUB-8.5) — to a retired (guest) session and to a principal outside
+/// (PUB-8.4, PUB-8.5) — to the guest session and to a principal outside
 /// the owner's subtree, while the account's published home answers every
 /// class. The predicate's clauses are `tests/grants.rs`'s; what this pins is
 /// that `OperationSurface<World>` reaches them at all.
@@ -169,10 +169,10 @@ fn m10_s_read_surface_answers_through_the_engine_s_predicate() {
         Response::Rejected(rej) => panic!("the owner was refused its own draft: {rej:?}"),
         _ => panic!("expected Delivery"),
     }
-    // GUEST — a retired session carries no principal (the daemon's guest
-    // pattern): the guest predicate is published alone.
-    let guest = febe.open_session(PrincipalId(4242));
-    febe.close_session(guest);
+    // GUEST — M10's guest session carries no principal (the session the
+    // daemon hands a request with none): the guest predicate is published
+    // alone.
+    let guest = SessionId::GUEST;
     assert_withheld(read(guest, &draft), &draft);
     // NON-ENTITLED — a bound principal outside the owner's subtree, no grant.
     let stranger = febe.open_session(PrincipalId(77));

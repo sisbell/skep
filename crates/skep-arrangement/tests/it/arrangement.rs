@@ -1047,6 +1047,31 @@ fn version_of_an_empty_source_has_a_zero_content_footprint() {
 }
 
 #[test]
+fn a_version_born_empty_keeps_a_birth_extent_of_zero_through_its_first_deposit() {
+    // BIRTH★ through `version`: an owned fork of a memberless edition mints
+    // the birth version by snapshot, and the snapshot is staged WHATEVER the
+    // surface holds, so a version born empty is noted at zero by its own
+    // mint. Read at once, zero proves nothing — an extent never noted reads
+    // zero too — so the version takes a deposit: noted, the zero stands;
+    // never noted, the deposit is the first placement the fold sees, and it
+    // is read as the birth. A `version` that skipped an empty snapshot, as the
+    // shot skips an empty placement and as the record's explicit-runs form
+    // (Open decision #4) invites, is that second case — and every content
+    // read and R answer the same under it, so this read alone sees it.
+    let k = mem_kernel();
+    let vs = Vstream::new(&k);
+    let (member, _) = vs
+        .version(PrincipalId(1), &pdoc(), None)
+        .expect("the birth version, of an empty edition");
+    assert_eq!(member, vdoc(), "the chain's first member");
+    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"z")], declared())
+        .expect("a deposit landing in the head the version minted");
+    let s = k.snapshot();
+    assert_eq!(s.world().m5().content_count(&member), n(1), "the head took the deposit");
+    assert_eq!(s.world().m5().birth_extent(&member), n(0), "born empty, whatever it took since");
+}
+
+#[test]
 fn a_fork_is_as_empty_as_the_reading_surface_it_snapshots_not_the_address_named() {
     // ASN-0123 V1 under head-float: the fork is empty exactly when the
     // arrangement it snapshots — its source's READING SURFACE — is, whatever
@@ -1550,6 +1575,50 @@ fn the_declaration_names_the_class_and_the_door_admits_a_held_type_alone() {
 }
 
 #[test]
+fn the_door_admits_a_declared_type_exactly_when_it_equals_a_held_type() {
+    // RES-249: membership in the deposit class is EQUALITY — a subtype
+    // beneath a member is no member, and nothing ABOVE one is either. Asked
+    // of every address one step from a member in the tumbler tree, generated
+    // rather than chosen: each T4-valid PREFIX of each member (its type
+    // subspace, the ghost home document, that document's account, its node),
+    // each member, each member's first CHILD, and the two commons ordinals
+    // beside them — at the one position a published document admits a
+    // deposit. A door testing containment in either direction, or the
+    // document or subspace a type lies in, admits one of these.
+    let k = mem_kernel();
+    let vs = Vstream::new(&k);
+    let mut family: Vec<Address> = Vec::new();
+    for member in [enroll_ty(), retire_ty()] {
+        let comps: Vec<Nat> = member.tumbler().iter().cloned().collect();
+        for len in 1..=comps.len() {
+            let prefix = Tumbler::new(comps[..len].iter().cloned()).expect("a prefix is nonempty");
+            if let Ok(address) = validate(prefix) {
+                family.push(address);
+            }
+        }
+        let child = Tumbler::new(comps.iter().cloned().chain([n(1)])).expect("nonempty");
+        family.push(validate(child).expect("a member's child is T4-valid"));
+    }
+    family.extend([3, 4].map(|ordinal| a(&[1, 1, 0, 1, 0, 1, 0, 3, ordinal])));
+    family.sort();
+    family.dedup();
+    assert_eq!(family.len(), 11, "five shared prefixes, two members, two children, two siblings");
+    let mut admitted: Vec<Address> = Vec::new();
+    for ty in &family {
+        let held = *ty == enroll_ty() || *ty == retire_ty();
+        let n_c = k.snapshot().world().m5().content_count(&pdoc());
+        let at = VPos::content(&n_c + &n(1));
+        match vs.insert(P1, &pdoc(), at, vec![val(b"x")], Deposit::Declared(ty.clone())) {
+            Ok(_) => admitted.push(ty.clone()),
+            Err(TxnError::Rejected(InsertError::PublishedTarget)) => {}
+            Err(other) => panic!("{ty:?}: expected an admission or PublishedTarget, got {other:?}"),
+        }
+        assert_eq!(admitted.contains(ty), held, "{ty:?}: admitted exactly when it equals a held type");
+    }
+    assert_eq!(admitted, vec![enroll_ty(), retire_ty()]);
+}
+
+#[test]
 fn a_version_member_target_is_judged_as_its_document() {
     // PUB-2.15 on the four edits: a member of a PUBLISHED document is refused
     // whatever its own journaled bit says, and a member of a PRIVATE document
@@ -1912,6 +1981,51 @@ fn a_birth_shot_carries_no_tail_and_a_memberless_base_carries_its_deposits() {
     };
     assert_eq!(birth(Some(base(&pdoc(), 3))), n(4), "the memberless base carries the deposit");
     assert_eq!(birth(None), n(3), "the birth shape carries no tail");
+}
+
+#[test]
+fn the_birth_extent_of_a_shot_born_version_counts_its_whole_placement_and_no_later_deposit() {
+    // BIRTH★ through the ops (PUB-3.19, RES-276): the extent the doc-metadata
+    // read serves for `D.1` is the count its MINTING commit left, and the
+    // fold knows that count only because the shot journals the member's
+    // whole arrangement — the runs by reference, the draft's re-inserted text
+    // and the base's carried tail — as ONE placement, the first naming it. A
+    // shot that staged any family as a placement of its own would leave the
+    // first one's count as the birth while every content read and R answered
+    // as they do now; this read alone sees it.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
+    insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
+    vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], declared())
+        .expect("a deposit into the memberless edition, after the render took three");
+    let (member, _) = vs
+        .publish(
+            P1,
+            &pdoc(),
+            Shot {
+                base: Some(base(&pdoc(), 3)),
+                draft: Some(doc1()),
+                runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &ca(1), 1)],
+            },
+            &readable_by(PrincipalId(1)),
+        )
+        .expect("the birth version");
+    assert_eq!(member, vdoc(), "the chain's first member");
+    {
+        let s = k.snapshot();
+        let m5 = s.world().m5();
+        // a b c by reference, the draft's a re-inserted at pca(5), z carried
+        // from pca(4): three families, none I-adjacent to the next.
+        assert_eq!(m5.content_run_count(&member), 3, "the fixture places three families");
+        assert_eq!(m5.content_count(&member), n(5));
+        assert_eq!(m5.birth_extent(&member), n(5), "born with all five");
+    }
+    // A deposit into the head grows the member and not its birth.
+    vs.insert(P1, &pdoc(), vp(1, 6), vec![val(b"y")], declared())
+        .expect("a deposit landing in the head D.1");
+    let s = k.snapshot();
+    assert_eq!(s.world().m5().content_count(&member), n(6));
+    assert_eq!(s.world().m5().birth_extent(&member), n(5), "the deposit is no part of the birth");
 }
 
 #[test]

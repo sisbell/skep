@@ -72,5 +72,8 @@ tempfile.workspace = true
 bincode.workspace = true
 # The load-check test rewrites a checkpoint's body under a VALID header, so
 # the decode — not the checksum — is what refuses it: M2's header checksum
-# is CRC32C (the same crate and version skep-kernel pins).
+# is CRC32C (the same crate and version skep-kernel pins), and since `SKC3`
+# the header also commits to the body by SHA-256 (`body_hash`), which the
+# same rewrite recomputes through the workspace's sha2.
 crc32c = "0.6"
+sha2.workspace = true

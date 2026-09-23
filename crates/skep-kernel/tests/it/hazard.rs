@@ -18,7 +18,7 @@ use crate::hazard_util;
 
 use std::fs;
 use std::io::{BufRead, BufReader, Write as _};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -85,11 +85,33 @@ fn a_torn_journal_tail_recovers_to_the_exact_boundary() {
 
 // ── B. Torn tail + garbage tail ──────────────────────────────────────────
 
+/// The bytes ACTUALLY PRESENT, as the boundary rule reads them: the length
+/// of the longest prefix of the case's segment that is byte-identical to the
+/// healthy fixture's. Scenario B's oracle binds on this figure and never on
+/// the cut point, because junk is judged by what it leaves on disk, not by
+/// where it was aimed: junk that restores the very bytes a cut took away has
+/// restored them, and a marker restored byte for byte IS a committed marker,
+/// which the kernel is right to honour. Under `SKJ3` that is not
+/// hypothetical — the empty signature slot closes every marker with nine
+/// zero bytes (its tag and its length), so a cut at `hi − 1` plus zero junk
+/// reconstructs the marker exactly, and a zero overwritten in place by a zero
+/// never left. Everything past the intact prefix is what the scan sees as
+/// junk, and "a torn suffix classifies as EOF" is then the claim judged.
+fn intact_prefix_len(fixture: &Fixture, case_dir: &Path) -> u64 {
+    let healthy = fs::read(seg_file(&fixture.dir, 1)).expect("read the healthy segment");
+    let present = fs::read(seg_file(case_dir, 1)).expect("read the case's segment");
+    healthy.iter().zip(&present).take_while(|(a, b)| a == b).count() as u64
+}
+
 /// Scenario B: instead of a clean truncation, the tail is junk — appended
 /// after a cut, or overwritten in place to EOF — in three patterns (zeros,
 /// 0xFF, seeded random). "A torn suffix classifies as EOF": the junk must
-/// never be read as records, so the judgment is identical to scenario A's
-/// at the same cut point.
+/// never be read as records, so the judgment is scenario A's at the prefix
+/// the bytes actually present support ([`intact_prefix_len`]) — the cut
+/// point, except where the junk restored what the cut took, in which case
+/// the restored marker commits and the rule binds one boundary higher. The
+/// grid is built to reach that case (a cut at `hi − 1` under zero junk,
+/// appended and in place), and the test asserts it did.
 #[test]
 fn b_garbage_tail_classifies_as_eof_not_as_records() {
     let tmp = tempdir().expect("tempdir");
@@ -114,6 +136,10 @@ fn b_garbage_tail_classifies_as_eof_not_as_records() {
     let junk_lens: &[u64] = if exhaustive() { &[1, 7, 64, 512, 4096] } else { &[7, 512] };
     let cases = tmp.path().join("cases");
     let mut judged = 0usize;
+    // Cases where the junk restored bytes the cut took — the intact prefix
+    // ran past the cut point. The oracle is asked to judge by the bytes
+    // present, and this is the tally proving that judgment was exercised.
+    let mut restored = 0usize;
     for (cut_index, &cut) in cuts.iter().enumerate() {
         let patterns = [
             Junk::Zeros,
@@ -126,12 +152,15 @@ fn b_garbage_tail_classifies_as_eof_not_as_records() {
                 copy_dir(&fixture.dir, &case);
                 truncate_file(&seg_file(&case, 1), cut);
                 append_bytes(&seg_file(&case, 1), &pattern.bytes(junk_len as usize));
+                let intact = intact_prefix_len(&fixture, &case);
+                assert!(intact >= cut, "a cut at {cut} cannot leave fewer than {cut} intact bytes");
+                restored += usize::from(intact > cut);
                 let ctx = format!(
-                    "B: cut {cut} of {full_len} + {} junk ×{junk_len} appended \
-                     (seed base 0x5EED_0000+{cut_index})",
+                    "B: cut {cut} of {full_len} + {} junk ×{junk_len} appended, intact prefix \
+                     {intact} (seed base 0x5EED_0000+{cut_index})",
                     pattern.name()
                 );
-                judge_prefix(&fixture, &case, cut, Depth::Head, &ctx);
+                judge_prefix(&fixture, &case, intact, Depth::Head, &ctx);
                 fs::remove_dir_all(&case).expect("case cleanup");
                 judged += 1;
             }
@@ -139,19 +168,28 @@ fn b_garbage_tail_classifies_as_eof_not_as_records() {
                 let case = cases.join(format!("b-ovr-{cut}-{}", pattern.name()));
                 copy_dir(&fixture.dir, &case);
                 overwrite_range(&seg_file(&case, 1), cut, &pattern.bytes((full_len - cut) as usize));
+                let intact = intact_prefix_len(&fixture, &case);
+                assert!(intact >= cut, "an overwrite from {cut} cannot leave fewer than {cut} intact bytes");
+                restored += usize::from(intact > cut);
                 let ctx = format!(
-                    "B: in-place {} overwrite of [{cut}, {full_len}) \
+                    "B: in-place {} overwrite of [{cut}, {full_len}), intact prefix {intact} \
                      (seed base 0x5EED_0000+{cut_index})",
                     pattern.name()
                 );
-                judge_prefix(&fixture, &case, cut, Depth::Head, &ctx);
+                judge_prefix(&fixture, &case, intact, Depth::Head, &ctx);
                 fs::remove_dir_all(&case).expect("case cleanup");
                 judged += 1;
             }
         }
     }
+    assert!(
+        restored > 0,
+        "the grid must reach a case where junk restores a cut marker byte for byte (a cut at \
+         hi − 1 under zero junk), or the oracle's bytes-present judgment is never exercised"
+    );
     println!(
-        "B: {judged} garbage-tail cases judged over {} cut points (exhaustive={})",
+        "B: {judged} garbage-tail cases judged over {} cut points, {restored} with a marker \
+         the junk restored (exhaustive={})",
         cuts.len(),
         exhaustive()
     );
@@ -159,10 +197,11 @@ fn b_garbage_tail_classifies_as_eof_not_as_records() {
 
 // ── C. Checkpoint corruption ─────────────────────────────────────────────
 
-/// A checkpoint file's header: magic + seq + crc + body_len. Restated here
-/// because this tier damages the format as bytes rather than through the
-/// crate's own writer; the body starts at this offset.
-const CHECKPOINT_HEADER_LEN: u64 = 24;
+/// A checkpoint file's header (`SKC3`): magic + seq + crc + body_len +
+/// chain_head + body_hash. Restated here because this tier damages the
+/// format as bytes rather than through the crate's own writer; the body
+/// starts at this offset.
+const CHECKPOINT_HEADER_LEN: u64 = 88;
 
 /// The offset halfway through the body of a checkpoint file of `len` bytes —
 /// where a flip or a cut lands in the serialized `W` rather than in a header

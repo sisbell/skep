@@ -24,6 +24,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 The kernel knows nothing about documents, links, or addresses — it is
 generic over the world the engine assembles.
 
+A board written under an older format stamp is refused by name
+(`OpenError::ForeignFormat`), and the remedy is the ruled one: there is
+no migration path — every board is a development artifact (PUB-1.2):
+delete the data directory and start over.
+
 ## License
 
 Licensed under either of

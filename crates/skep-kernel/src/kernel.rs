@@ -451,15 +451,22 @@ impl<W: WorldState> Kernel<W> {
     /// exactly as given — which is why that value must already carry its own
     /// derived hints ([`WorldState::rebuild_derived`]'s genesis obligation).
     ///
-    /// DAMAGE MODEL — what recovery detects is FRAMES THAT FAIL THEIR CRC. A
-    /// segment that is ABSENT leaves no run to classify and no gap to detect:
-    /// §7 requires no `Seq` contiguity over the replayed range, so a missing
-    /// segment is indistinguishable from a burned range, and this answers `Ok`
-    /// with a world short by exactly that segment's records — at the true
-    /// head, so nothing about the answer looks wrong. The `journal_path`
-    /// caller contract is what keeps that out of reach; nothing here detects
-    /// it, and `an_absent_segment_shortens_the_world_where_a_damaged_one_halts`
-    /// is what pins the asymmetry.
+    /// DAMAGE MODEL — what recovery detects is FRAMES THAT FAIL THEIR CRC
+    /// and, since `SKJ3`, LINKS THAT FAIL THE CHAIN. A segment that is ABSENT
+    /// leaves no run to classify and no gap to detect: §7 requires no `Seq`
+    /// contiguity over the replayed range, so a missing segment is
+    /// indistinguishable from a burned range by coordinates alone, and this
+    /// once answered `Ok` with a world short by exactly that segment's
+    /// records — at the true head, so nothing about the answer looked wrong.
+    /// The commit chain closes that blind spot: the first committed
+    /// transaction after the hole chains from a predecessor the scan never
+    /// saw, its link does not verify, and this halts with
+    /// [`OpenError::Corruption`] naming a chain break at that transaction's
+    /// `last_seq` — as a damaged segment halts, the run's verdict speaking
+    /// first where there is one. The `journal_path` caller contract still
+    /// keeps the files whole; what it no longer has to keep is the silence,
+    /// and `an_absent_segment_halts_as_a_chain_break_where_a_damaged_one_halts_as_a_run`
+    /// is what pins the symmetry.
     ///
     /// REFUSAL PRECEDENCE — the steps above are the order in which refusals
     /// speak: [`OpenError::InvalidConfig`] precedes the lock, the lock

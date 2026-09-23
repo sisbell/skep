@@ -1394,17 +1394,22 @@ fn recovery_skips_only_the_segments_the_base_already_embodies() {
 }
 
 #[test]
-fn an_absent_segment_shortens_the_world_where_a_damaged_one_halts() {
-    // Recovery's damage model is FRAMES THAT FAIL THEIR CRC. Damaging a
-    // segment's bytes opens a corrupt run that classifies inside the replayed
-    // range and halts. REMOVING that segment leaves no run to classify and no
-    // gap to detect — §7 requires no `Seq` contiguity, so a missing segment is
-    // indistinguishable from a burned range — and recovery answers `Ok` with a
-    // world short by exactly that segment's records, at the true head.
-    //
-    // The `journal_path` caller contract is what keeps this out of reach:
-    // nothing in this module detects it. Asserting both on one fixture is what
-    // makes the ASYMMETRY the subject rather than either behaviour alone.
+fn an_absent_segment_halts_as_a_chain_break_where_a_damaged_one_halts_as_a_run() {
+    // Recovery's damage model WAS frames that fail their CRC, and an absent
+    // closed segment was its documented blind spot: REMOVING a segment leaves
+    // no run to classify and no gap to detect — §7 requires no `Seq`
+    // contiguity, so a missing segment is indistinguishable from a burned
+    // range by coordinates alone — and recovery answered `Ok` with a world
+    // short by exactly that segment's records, at the true head, silently.
+    // The commit chain (`SKJ3`, QUEUE item 10) closes it: every committed
+    // transaction above the base carries SHA-256 over its predecessor's chain
+    // value, and the first transaction after the hole chains from a
+    // predecessor the scan never saw, so its link does not verify. Both
+    // halves now HALT — `Corruption`, nothing folded, nothing cut — and what
+    // this fixture makes the subject is the SYMMETRY: the same coordinate,
+    // two accounts. A damaged segment is a corrupt run, which speaks first
+    // and carries no cause; an absent one is a chain break, whose cause says
+    // which link failed.
     let tmp = tempdir().unwrap();
     let fixture = tmp.path().join("fixture");
     let k = Kernel::open(cfg_fsync(&fixture), genesis()).unwrap();
@@ -1418,7 +1423,10 @@ fn an_absent_segment_shortens_the_world_where_a_damaged_one_halts() {
     assert_eq!(segment_count(&fixture), 3, "the fixture must rotate twice");
 
     // Damaged: the middle segment's frames stop passing their CRC, so the
-    // resync opens a run inside (S_load, W] — a loud halt, nothing folded.
+    // resync opens a run inside (S_load, W] that lands on T9's first intact
+    // frame — a loud halt at 9, the run's verdict, with no cause: the run's
+    // own bytes are unreadable. (T9's link fails too — it chains from a T8
+    // the run swallowed — but the run names the root cause and speaks first.)
     let damaged = tmp.path().join("damaged");
     copy_dir(&fixture, &damaged);
     let mid = seg_file(&damaged, 5);
@@ -1426,18 +1434,38 @@ fn an_absent_segment_shortens_the_world_where_a_damaged_one_halts() {
     fs::write(&mid, vec![0u8; len]).unwrap();
     let err = Kernel::<TestWorld>::open(cfg_fsync(&damaged), genesis())
         .expect_err("a corrupt run in the replayed range is a halt");
-    assert!(matches!(err, OpenError::Corruption { .. }), "got {err:?}");
+    assert!(
+        matches!(err, OpenError::Corruption { at: Seq(9), cause: None }),
+        "a damaged segment is a corrupt run, named at the next intact frame: got {err:?}"
+    );
 
-    // Absent: the same records, unreachable the other way — and this one is
-    // silent. The head is the true head, so nothing about the answer looks
-    // wrong; only the four records seg-5 held are missing.
+    // Absent: the same records, unreachable the other way. The scan reads
+    // seg-1 (T1..T4) and then seg-9; T9's marker chains from T8's value, the
+    // scan's running value is T4's, so the link fails at T9's `last_seq` — a
+    // CHAIN BREAK at 9, never a shorter world at the true head.
     let absent = tmp.path().join("absent");
     copy_dir(&fixture, &absent);
     fs::remove_file(seg_file(&absent, 5)).unwrap();
-    let k = Kernel::<TestWorld>::open(cfg_fsync(&absent), genesis())
-        .expect("a missing segment is not something this module detects");
-    assert_eq!(k.current_seq(), Seq(9), "the head is the true head");
-    assert_eq!(items(&k).len(), 5, "…and the world is short by seg-5's records");
+    let survivors = [seg_file(&absent, 1), seg_file(&absent, 9)];
+    let found: Vec<Vec<u8>> = survivors.iter().map(|seg| fs::read(seg).unwrap()).collect();
+    let err = Kernel::<TestWorld>::open(cfg_fsync(&absent), genesis())
+        .expect_err("an absent closed segment is a chain break, not a shorter world");
+    assert!(
+        matches!(err, OpenError::Corruption { at: Seq(9), cause: Some(_) }),
+        "an absent segment is a chain break at the first transaction after it: got {err:?}"
+    );
+    assert!(err.to_string().contains("chain break"), "the account names the break: {err}");
+    assert!(std::error::Error::source(&err).is_some(), "the cause travels");
+    // A halt cuts nothing: the surviving segments are byte for byte as they
+    // were found, and the refusal REPEATS — nothing was written, so nothing
+    // repaired it, and an operator can act on what the second open says.
+    for (seg, before) in survivors.iter().zip(&found) {
+        assert_eq!(&fs::read(seg).unwrap(), before, "a halted open touched {}", seg.display());
+    }
+    assert!(matches!(
+        Kernel::<TestWorld>::open(cfg_fsync(&absent), genesis()),
+        Err(OpenError::Corruption { at: Seq(9), cause: Some(_) })
+    ));
 }
 
 #[test]

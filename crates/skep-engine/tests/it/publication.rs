@@ -14,6 +14,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use common::*;
+use sha2::{Digest, Sha256};
 use skep_address::{validate, Address, Tumbler};
 use skep_arrangement::{Deposit, VersionError};
 use skep_content::Val;
@@ -82,14 +83,21 @@ fn remove_checkpoint(dir: &Path) {
     fs::remove_file(checkpoint_file(dir)).expect("remove the checkpoint");
 }
 
-/// M2's checkpoint layout, at the two offsets the pair below reads and writes
-/// it at: `[magic 4][seq u64 LE][crc32c(body) u32 LE][body_len u64 LE][body]`.
-/// The magic and the seq are carried across a rewrite unchanged, so
-/// [`CKPT_KEPT_PREFIX`] ends where the crc begins and [`CKPT_HEADER_LEN`] is
-/// where the body does. Both constants are here rather than at their uses, so
-/// the read and the write cannot drift apart.
+/// M2's checkpoint layout (`SKC3`), at the offsets the pair below reads and
+/// writes it at: `[magic 4][seq u64 LE][crc32c(body) u32 LE][body_len u64 LE]
+/// [chain_head 32][body_hash 32][body]`. Three fields are carried across a
+/// rewrite unchanged — the magic and the seq, and the chain head, which is
+/// the commit chain's value at the checkpoint's coordinate and no function of
+/// the body — and three are recomputed for the body written: the crc, the
+/// length, and the SHA-256 body hash the header commits to the body by. So
+/// [`CKPT_KEPT_PREFIX`] ends where the crc begins, the chain head is the
+/// second carried span at [`CKPT_CHAIN_HEAD_AT`]..[`CKPT_BODY_HASH_AT`], and
+/// [`CKPT_HEADER_LEN`] is where the body starts. All four are here rather
+/// than at their uses, so the read and the write cannot drift apart.
 const CKPT_KEPT_PREFIX: usize = 12;
-const CKPT_HEADER_LEN: usize = 24;
+const CKPT_CHAIN_HEAD_AT: usize = 24;
+const CKPT_BODY_HASH_AT: usize = 56;
+const CKPT_HEADER_LEN: usize = 88;
 
 /// The checkpoint's BODY — the bytes past M2's header.
 fn checkpoint_body(dir: &Path) -> Vec<u8> {
@@ -98,14 +106,16 @@ fn checkpoint_body(dir: &Path) -> Vec<u8> {
 }
 
 /// Replace the checkpoint's BODY under a VALID header, so the DECODE is what
-/// refuses it and never the checksum: the magic and the seq are carried over,
-/// and the checksum and the length are recomputed for the body written.
+/// refuses it and never the checksum or the hash: the magic, the seq and the
+/// chain head are carried over, and the checksum, the length and the body
+/// hash are recomputed for the body written.
 ///
-/// The header this rebuilds is M2's, and nothing in M2 forces the offsets
-/// above to follow it. A rewrite that reconstructed them wrongly would leave
-/// a base M2 discards for its CHECKSUM, which its fallback chain answers
-/// exactly as it answers a failed decode — so both tests below would still
-/// pass while testing neither. The CONTROL CASE in
+/// The header this rebuilds is M2's `SKC3`, and nothing in M2 forces the
+/// offsets above to follow it. A rewrite that reconstructed them wrongly, or
+/// hashed the body wrongly, would leave a base M2 discards for its CHECKSUM
+/// or its HASH, which its fallback chain answers exactly as it answers a
+/// failed decode — so both tests below would still pass while testing
+/// neither. The CONTROL CASE in
 /// `an_undecodable_checkpoint_with_no_older_start_point_refuses_to_open` is
 /// what refuses that: it puts a checkpoint's own body back through this
 /// function over a journal that cannot reach genesis, where a base M2 no
@@ -113,9 +123,13 @@ fn checkpoint_body(dir: &Path) -> Vec<u8> {
 fn rewrite_checkpoint_body(dir: &Path, body: &[u8]) {
     let path = checkpoint_file(dir);
     let data = fs::read(&path).expect("read the checkpoint");
+    let body_hash: [u8; 32] = Sha256::digest(body).into();
     let mut out = data[..CKPT_KEPT_PREFIX].to_vec();
     out.extend_from_slice(&crc32c::crc32c(body).to_le_bytes());
     out.extend_from_slice(&(body.len() as u64).to_le_bytes());
+    out.extend_from_slice(&data[CKPT_CHAIN_HEAD_AT..CKPT_BODY_HASH_AT]);
+    out.extend_from_slice(&body_hash);
+    assert_eq!(out.len(), CKPT_HEADER_LEN, "the header rebuilt is the one the body starts after");
     out.extend_from_slice(body);
     fs::write(&path, out).expect("rewrite the checkpoint");
 }
@@ -370,13 +384,16 @@ fn an_undecodable_checkpoint_with_no_older_start_point_refuses_to_open() {
 
     // The CONTROL: the checkpoint's OWN body, back through the same rewrite.
     // The substitution below is only a decode failure if what surrounds the
-    // body is a header M2 reads, and with genesis unreachable an open is the
-    // one question whose answer turns on that. A rewrite that rebuilt M2's
-    // header wrongly refuses HERE, where the base is this build's own.
+    // body is a header M2 reads — the `SKC3` offsets, the checksum AND the
+    // body hash — and with genesis unreachable an open is the one question
+    // whose answer turns on that. A rewrite that rebuilt M2's header wrongly
+    // refuses HERE, where the base is this build's own.
     rewrite_checkpoint_body(dir.path(), &checkpoint_body(dir.path()));
     {
-        let engine = Engine::open(fsync_cfg(dir.path()))
-            .expect("a rewritten header M2 no longer reads: the layout constants have moved");
+        let engine = Engine::open(fsync_cfg(dir.path())).expect(
+            "a rewritten header M2 no longer reads: the layout constants have moved, or the \
+             body hash is not the one the header must commit to",
+        );
         assert_eq!(engine.kernel().current_seq(), head, "…and the base is the one it was taken at");
     }
 

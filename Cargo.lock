@@ -777,6 +777,7 @@ dependencies = [
  "crc32c",
  "im",
  "serde",
+ "sha2",
  "skep-address",
  "skep-arrangement",
  "skep-content",

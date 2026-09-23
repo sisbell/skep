@@ -3441,7 +3441,7 @@ configuration is retired — the two owner rulings of 2026-08-26, applied):
   the values are the format, not a sealed configuration, so the
   byte-identical-genesis caller contract and the reopened-under-
   different-config refusals are gone; the journal and checkpoint format
-  stamps (`SKJ2`/`SKC2`) name the format that wrote them. The
+  stamps (`SKJ3`/`SKC3`) name the format that wrote them. The
   architecture's extension path is predicates (pdef content), not new
   compiled substrate classes.
 * FORMAT CONSEQUENCE, accepted by the owner in the ruling (pre-release):

@@ -1505,14 +1505,14 @@ fn the_declaration_names_the_class_and_the_door_admits_a_held_type_alone() {
     // ENROLL and RETIRE, the two classes that deposit an atom.
     let k = mem_kernel();
     let vs = Vstream::new(&k);
-    let (enrolled, _) = vs
+    let (enroll_start, _) = vs
         .insert(P1, &pdoc(), vp(1, 1), vec![val(b"an enrollment record")], Deposit::Declared(enroll_ty()))
         .expect("a declared ENROLL atom at a fresh position is admitted");
-    assert_eq!(enrolled, pca(1));
-    let (retired, _) = vs
+    assert_eq!(enroll_start, pca(1));
+    let (retire_start, _) = vs
         .insert(P1, &pdoc(), vp(1, 2), vec![val(b"a retire record")], Deposit::Declared(retire_ty()))
         .expect("a declared RETIRE atom at a fresh position is admitted");
-    assert_eq!(retired, pca(2));
+    assert_eq!(retire_start, pca(2));
     // A declared NON-member at the one position a member is admitted at: the
     // classes whose deposit is their typed link alone — the grant (`3.90`),
     // the edition claim (`3.14`), `successor-of` (`3.59`), the claim link
@@ -1673,9 +1673,9 @@ fn an_accounts_home_is_a_published_target_from_its_flagless_first_mint() {
     let vs = Vstream::new(&k);
     let p2 = Caller::Principal(PrincipalId(2));
     // Principal 2's account holds no documents at genesis.
-    let empty_account = a(&[1, 0, 2]);
+    let p2_account = a(&[1, 0, 2]);
     let (home, _) = ns
-        .create_new_document(PrincipalId(2), &empty_account, None)
+        .create_new_document(PrincipalId(2), &p2_account, None)
         .expect("the flagless first mint into an empty account commits");
     assert_eq!(home, a(&[1, 0, 2, 0, 1]));
     assert!(
@@ -1696,7 +1696,7 @@ fn an_accounts_home_is_a_published_target_from_its_flagless_first_mint() {
     // The account's SECOND flagless mint is a draft: an undeclared insert is
     // admitted there as into any private document.
     let (draft, _) = ns
-        .create_new_document(PrincipalId(2), &empty_account, None)
+        .create_new_document(PrincipalId(2), &p2_account, None)
         .expect("a later flagless mint into the account commits");
     assert_eq!(draft, a(&[1, 0, 2, 0, 2]));
     assert!(
@@ -2352,14 +2352,14 @@ fn a_run_bridging_a_gap_in_what_the_base_arranges_is_not_carried() {
         .expect("the head windows w and y, never x");
     assert_eq!(k.snapshot().world().m5().content_count(&member1), n(5));
     let refusing = recording_consult(&asked, vec![]);
-    let staged = |runs: Vec<ShotRun>| Shot { base: Some(base(&member1, 5)), draft: None, runs };
+    let shot_off_member1 = |runs: Vec<ShotRun>| Shot { base: Some(base(&member1, 5)), draft: None, runs };
     let before = k.current_seq();
     asked.borrow_mut().clear();
     assert!(matches!(
         rejected(vs.publish(
             P1,
             &pdoc(),
-            staged(vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 3)]),
+            shot_off_member1(vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 3)]),
             &refusing
         )),
         PublishError::Withheld(d) if d == doc2()
@@ -2373,7 +2373,7 @@ fn a_run_bridging_a_gap_in_what_the_base_arranges_is_not_carried() {
         .publish(
             P1,
             &pdoc(),
-            staged(vec![
+            shot_off_member1(vec![
                 shot_run(&pdoc(), &pca(1), 3),
                 shot_run(&doc2(), &w, 1),
                 shot_run(&doc2(), &y, 1),
@@ -2578,9 +2578,9 @@ fn the_source_gate_is_asked_about_the_world_it_found_the_origin_registered_in() 
     assert!(fail_open(earlier.world(), &draft), "the earlier world's answer admits the draft");
     // Each question is recorded with whether the world it arrived with
     // registers what it asks about.
-    let asked: RefCell<Vec<bool>> = RefCell::new(Vec::new());
+    let registered_when_asked: RefCell<Vec<bool>> = RefCell::new(Vec::new());
     let consult = |world: &World, origin: &Address| {
-        asked.borrow_mut().push(world.m3().is_registered_document(origin));
+        registered_when_asked.borrow_mut().push(world.m3().is_registered_document(origin));
         fail_open(world, origin)
     };
     assert!(matches!(
@@ -2593,7 +2593,7 @@ fn the_source_gate_is_asked_about_the_world_it_found_the_origin_registered_in() 
         PublishError::Withheld(d) if d == draft
     ));
     assert_eq!(
-        asked.borrow().as_slice(),
+        registered_when_asked.borrow().as_slice(),
         &[true],
         "asked once, of a world that registers the origin it is asked about"
     );
@@ -3493,9 +3493,9 @@ fn the_v_span_reading_hands_a_foreign_caller_the_parts_it_would_otherwise_index(
     // the neighbours add is answered by the reading itself. The reading is a
     // VIEW into the span it read, so the span outlives it.
     let content = vspan(1, 7, 4);
-    let read = as_ordinal_vspan(&content).expect("an ordinal V-span reads");
-    assert_eq!((read.subspace, read.ordinal, read.count), (&n(1), &n(7), &n(4)));
-    assert!(read.is_content());
+    let reading = as_ordinal_vspan(&content).expect("an ordinal V-span reads");
+    assert_eq!((reading.subspace, reading.ordinal, reading.count), (&n(1), &n(7), &n(4)));
+    assert!(reading.is_content());
     assert!(!as_ordinal_vspan(&vspan(2, 1, 1)).expect("a link V-span reads").is_content());
     // What the verdict refuses, the reading refuses: one shape, two forms.
     let action_point_1 = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-legal");

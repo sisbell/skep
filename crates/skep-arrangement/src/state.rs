@@ -264,22 +264,23 @@ impl M5State {
         self.arrangements.update(doc.clone(), arr)
     }
 
-    /// `birth_extents` with `member`'s extent NOTED — `born_with()`, asked
-    /// only where it is wanted — when `member` is a birth version
+    /// `birth_extents` with `doc`'s extent NOTED — `born_with()`, asked only
+    /// where it is wanted — when `doc` is a birth version
     /// ([`is_birth_version`]) not yet noted; `birth_extents` as they stand
-    /// otherwise. The two placing arms call it with the count their record
-    /// leaves the member holding, and BIRTH★ is this function's second test:
-    /// an entry, once written, is what every later call hands back.
+    /// otherwise. The two placing arms call it with the document their record
+    /// places into and the count the record leaves it holding, and BIRTH★ is
+    /// this function's second test: an entry, once written, is what every
+    /// later call hands back.
     #[must_use = "returns the updated birth extents; it does not modify the receiver"]
     fn birth_extents_noting(
         &self,
-        member: &Address,
+        doc: &Address,
         born_with: impl FnOnce() -> Nat,
     ) -> im::OrdMap<Address, Nat> {
-        if !is_birth_version(member) || self.birth_extents.contains_key(member) {
+        if !is_birth_version(doc) || self.birth_extents.contains_key(doc) {
             return self.birth_extents.clone();
         }
-        self.birth_extents.update(member.clone(), born_with())
+        self.birth_extents.update(doc.clone(), born_with())
     }
 
     /// PUB-3.19's BIRTH CONTENT, as a count (RES-276; the owner's D2): the
@@ -633,7 +634,7 @@ mod tests {
                 source: doc1(),
                 new: vdoc(),
             };
-            let record_bytes = bincode::serialize(&rec).expect("the record encodes").len();
+            let fork_bytes = bincode::serialize(&rec).expect("the record encodes").len();
             let forked = s.apply_m5(&rec);
             assert_eq!(
                 forked.content_runs(&vdoc()).collect::<Vec<_>>(),
@@ -641,19 +642,19 @@ mod tests {
             );
             (
                 s.content_runs(&doc1()).len(),
-                record_bytes,
+                fork_bytes,
                 forked.provenance.ever_contained(&vdoc()).len(),
             )
         };
         // One R span per source run, at both sizes…
         assert_eq!(fork(2), (2, fork(2).1, 2));
-        let (source_runs, record_bytes, r_spans) = fork(64);
+        let (source_runs, fork_bytes, r_spans) = fork(64);
         assert_eq!((source_runs, r_spans), (64, 64));
         // …from a record whose size did not move between them.
-        assert_eq!(record_bytes, fork(2).1);
+        assert_eq!(fork_bytes, fork(2).1);
         // And the record that PAYS for what it commands, for contrast: the
         // same spans into R, carried.
-        let placing = bincode::serialize(&M5Rec::ContentPlace {
+        let placing_bytes = bincode::serialize(&M5Rec::ContentPlace {
             doc: doc1(),
             at: n(1),
             runs: runs(64),
@@ -661,9 +662,9 @@ mod tests {
         .expect("the record encodes")
         .len();
         assert!(
-            record_bytes * 10 < placing,
-            "a fork commands {r_spans} permanent R spans in {record_bytes} bytes; \
-             placing the same spans costs {placing}"
+            fork_bytes * 10 < placing_bytes,
+            "a fork commands {r_spans} permanent R spans in {fork_bytes} bytes; \
+             placing the same spans costs {placing_bytes}"
         );
     }
 
@@ -898,13 +899,13 @@ mod tests {
         // is noted as zero — the arrangement and R still gain no entry — and
         // the version's first deposit then finds its extent already noted: a
         // home born with no content stays an edition of nothing (RES-130).
-        let empty = M5State::genesis().apply_m5(&M5Rec::VersionSnapshot {
+        let born_empty = M5State::genesis().apply_m5(&M5Rec::VersionSnapshot {
             source: doc2(),
             new: vdoc(),
         });
-        assert_eq!(empty.birth_extents.get(&vdoc()), Some(&n(0)));
-        assert!(empty.arrangements.get(&vdoc()).is_none());
-        let deposited = place(&empty, &vdoc(), 1, vec![run(&ca(1), 1)]);
+        assert_eq!(born_empty.birth_extents.get(&vdoc()), Some(&n(0)));
+        assert!(born_empty.arrangements.get(&vdoc()).is_none());
+        let deposited = place(&born_empty, &vdoc(), 1, vec![run(&ca(1), 1)]);
         assert_eq!(deposited.content_count(&vdoc()), n(1));
         assert_eq!(deposited.birth_extent(&vdoc()), n(0), "born empty, whatever it took since");
         // A cross-owner fork's `new` is a fresh DOCUMENT and notes nothing.

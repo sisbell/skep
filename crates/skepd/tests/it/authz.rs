@@ -30,7 +30,7 @@ use skep_identity::{encode_retire, Fingerprint};
 //   * ω exactness — a caller owns a document iff its account is EXACTLY the
 //     document's nearest registered account prefix; parent and sub-account
 //     own each other's documents in NEITHER direction (skep-arrangement
-//     auth.rs; the deliberate fix of green's `tumbleraccounteq`).
+//     ownership.rs; the deliberate fix of green's `tumbleraccounteq`).
 //   * `delegate`'s pinned rejection order (M3 §6): a non-ancestor delegator
 //     is `not_ancestor` BEFORE authorization; an ancestor that is not
 //     ω(new_prefix) is `not_authorized` (the parent-of-owner cell).

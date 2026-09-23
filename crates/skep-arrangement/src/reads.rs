@@ -1005,9 +1005,9 @@ mod tests {
         let mut hits = 0usize;
         for cover in &family {
             let one = SpanSet::singleton(cover.clone());
-            let footprint = !s.project(&doc1(), &one).is_empty();
-            assert_eq!(s.arranges_any(&doc1(), &one), footprint, "{cover:?}");
-            hits += usize::from(footprint);
+            let has_footprint = !s.project(&doc1(), &one).is_empty();
+            assert_eq!(s.arranges_any(&doc1(), &one), has_footprint, "{cover:?}");
+            hits += usize::from(has_footprint);
         }
         assert_eq!(hits, 11, "every span but [ca4, ca5), [ca9, ca10) and the link extent");
         let misses: SpanSet = vec![run(&ca(9), 1).iextent(), run(&la(1), 2).iextent()]
@@ -1163,7 +1163,7 @@ mod tests {
     }
 
     #[test]
-    fn ever_containing_keeps_a_ghost_the_present_tense_filter_drops() {
+    fn ever_containing_keeps_a_ghost_whose_footprint_is_now_empty() {
         // ASN-0124 FD-GHOST: doc1 places and then deletes what doc2 still
         // holds. The historical answer keeps doc1 (FD-RMONO — R never loses a
         // member); `project` is the present witness that separates them, and

@@ -446,7 +446,7 @@ impl RunList {
             return self.clone();
         };
         // Descending splits on the prefix keep absolute coordinates.
-        let (mut prefix, ext_right) = self.split_at(last);
+        let (mut prefix, exterior_right) = self.split_at(last);
         let mut regions: Vec<Vec<Run>> = Vec::with_capacity(remaining.len());
         for cut in remaining.iter().rev() {
             let (left, region) = split_runs(prefix.iter(), cut);
@@ -457,7 +457,7 @@ impl RunList {
         for region in regions {
             out.extend(region);
         }
-        out.extend(ext_right);
+        out.extend(exterior_right);
         RunList(coalesced(out))
     }
 

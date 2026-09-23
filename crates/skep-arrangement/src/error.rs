@@ -580,9 +580,9 @@ mod tests {
         // needs — a declaration, its type one the deposit class holds, a
         // fresh content position — since a published document refuses an
         // insert lacking any one of them.
-        let insert = InsertError::PublishedTarget.to_string();
+        let insert_line = InsertError::PublishedTarget.to_string();
         for condition in ["undeclared", "deposit class", "fresh content"] {
-            assert!(insert.contains(condition), "{condition}: {insert}");
+            assert!(insert_line.contains(condition), "{condition}: {insert_line}");
         }
         assert!(VersionError::PrivateSourceVersionless.to_string().contains("versionless"));
         assert!(VersionError::PrivateVersionOfPublished.to_string().contains("sibling draft"));

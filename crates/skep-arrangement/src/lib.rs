@@ -162,10 +162,10 @@
 
 #![forbid(unsafe_code)]
 
-mod auth;
 mod chain;
 mod error;
 mod ops;
+mod ownership;
 mod provenance;
 mod reads;
 mod run;
@@ -178,12 +178,12 @@ mod vspace;
 #[cfg(test)]
 pub(crate) mod testutil;
 
-pub use auth::Caller;
 pub use chain::{deposit_surface, published_target, reading_surface, trunk_head, trunk_of};
 pub use error::{
     CopyError, DeleteError, InsertError, PublishError, RearrangeError, SeatError, VersionError,
 };
 pub use ops::{deposit_class_types, Deposit, Vstream, MAX_PLACED_RUNS, MAX_REINSERTED_VALUES};
+pub use ownership::Caller;
 pub use run::{Run, RunError};
 pub use runlist::Runs;
 pub use seat::{seat_link, stage_seat_link};

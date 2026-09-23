@@ -51,11 +51,11 @@ use skep_content::{stage_write, ContentError, ContentWrite, HasContent, Val};
 use skep_kernel::{Kernel, LockKey, Seq, Staging, TxnError, WorldState};
 use skep_namespace::{ghost_home_doc, HasM3, M3Rec, M3State, MintError, PrincipalId};
 
-use crate::auth::{gate_write, Caller};
 use crate::chain::{deposit_surface, published_target, reading_surface, trunk_head, trunk_of};
 use crate::error::{
     CopyError, DeleteError, InsertError, PublishError, RearrangeError, VersionError,
 };
+use crate::ownership::{gate_write, Caller};
 use crate::run::Run;
 use crate::runlist::extend_or_push_run;
 use crate::shot::Shot;
@@ -1953,19 +1953,19 @@ mod tests {
         let p1 = Caller::Principal(PrincipalId(1));
         // Non-adjacent starts (`shift(ca(2k), 1) = ca(2k + 1) ≠ ca(2k + 2)`),
         // so nothing coalesces and the source really holds this many runs.
-        let over_budget_runs = MAX_PLACED_RUNS + 1;
-        let present: Vec<u32> = (1..=over_budget_runs as u32).map(|k| 2 * k).collect();
+        let over_budget_run_count = MAX_PLACED_RUNS + 1;
+        let present: Vec<u32> = (1..=over_budget_run_count as u32).map(|k| 2 * k).collect();
         let runs: Vec<Run> = present.iter().map(|&k| run(&ca(k), 1)).collect();
         let k = gate_kernel_arranging(runs, &present);
         assert_eq!(
             k.snapshot().world().m5().content_runs(&doc1()).len(),
-            over_budget_runs,
+            over_budget_run_count,
             "the source arranges one run per placed address"
         );
         // ONE spec, whose span covers the whole source.
         let whole = [VSpec {
             source: doc1(),
-            span: vspan(1, 1, over_budget_runs as u32),
+            span: vspan(1, 1, over_budget_run_count as u32),
         }];
         assert!(matches!(
             rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &whole)),
@@ -2302,9 +2302,9 @@ mod tests {
             rejected(vs.publish(p1, &pdoc(), from_the_draft(&[MAX_REINSERTED_VALUES + 1]), &anyone)),
             PublishError::TooManyValues
         ));
-        let half = MAX_REINSERTED_VALUES / 2 + 1;
+        let past_half = MAX_REINSERTED_VALUES / 2 + 1;
         assert!(matches!(
-            rejected(vs.publish(p1, &pdoc(), from_the_draft(&[half, half]), &anyone)),
+            rejected(vs.publish(p1, &pdoc(), from_the_draft(&[past_half, past_half]), &anyone)),
             PublishError::TooManyValues
         ));
         // Exactly the budget passes the count, and its first probe finds the

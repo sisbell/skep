@@ -451,22 +451,60 @@ impl<W: WorldState> Kernel<W> {
     /// exactly as given — which is why that value must already carry its own
     /// derived hints ([`WorldState::rebuild_derived`]'s genesis obligation).
     ///
-    /// DAMAGE MODEL — what recovery detects is FRAMES THAT FAIL THEIR CRC
-    /// and, since `SKJ3`, LINKS THAT FAIL THE CHAIN. A segment that is ABSENT
-    /// leaves no run to classify and no gap to detect: §7 requires no `Seq`
-    /// contiguity over the replayed range, so a missing segment is
-    /// indistinguishable from a burned range by coordinates alone, and this
-    /// once answered `Ok` with a world short by exactly that segment's
-    /// records — at the true head, so nothing about the answer looked wrong.
-    /// The commit chain closes that blind spot: the first committed
-    /// transaction after the hole chains from a predecessor the scan never
-    /// saw, its link does not verify, and this halts with
-    /// [`OpenError::Corruption`] naming a chain break at that transaction's
-    /// `last_seq` — as a damaged segment halts, the run's verdict speaking
-    /// first where there is one. The `journal_path` caller contract still
-    /// keeps the files whole; what it no longer has to keep is the silence,
-    /// and `an_absent_segment_halts_as_a_chain_break_where_a_damaged_one_halts_as_a_run`
-    /// is what pins the symmetry.
+    /// DAMAGE MODEL — three outcomes, pinned case by case by the chain's
+    /// tamper matrix (`tests/it/chain.rs`; QUEUE item 10, piece (b)) against
+    /// a FILE-LEVEL WRITER of the data directory who can rewrite any byte and
+    /// re-fix any CRC. What recovery detects is FRAMES THAT FAIL THEIR CRC —
+    /// the corrupt-run verdict, which speaks first where there is one — and,
+    /// since `SKJ3`, LINKS THAT FAIL THE CHAIN.
+    ///
+    /// CAUGHT — a chain break: [`OpenError::Corruption`] naming the
+    /// `last_seq` of the first committed transaction above the base whose
+    /// marker's chain is not the recomputation over its predecessor's value
+    /// and its own record frames, the cause travelling and nothing cut. A
+    /// record payload rewritten with every CRC re-fixed, at that transaction;
+    /// a marker's chain field edited, at that transaction, the next never
+    /// masking it; two transactions swapped, at the one now sitting first; a
+    /// transaction deleted and the file closed up, a closed segment rolled
+    /// back to an older copy of itself, a closed segment ABSENT — each at the
+    /// next transaction, the one chaining from a predecessor the scan never
+    /// saw (§7 requires no `Seq` contiguity, so by coordinates alone each of
+    /// these was once a shorter world answered `Ok` at the true head); a
+    /// checkpoint's `chain_head` edited, at the first transaction above it —
+    /// nothing in the header covers that field, so the base loads and the
+    /// journal contradicts it; two damages, at the first only — the chain
+    /// cannot see past a break. A marker's `records_checksum` or `last_seq`
+    /// edited alone is caught one transaction LATER: the marker's own
+    /// validation, older than the chain, refuses to close the group, the
+    /// transaction un-commits, and the chain names the next. The signature
+    /// slot is NOT a chain input, by design: a filled slot opens.
+    ///
+    /// REFUSED — the checkpoint's own door: a body rewritten with its CRC
+    /// re-fixed fails `body_hash`, the fallback reaches an older base or
+    /// genesis, and the journal above it re-verifies.
+    ///
+    /// NOT CAUGHT BY DESIGN — histories the chain alone accepts, which the
+    /// ruling assigns to piece 2, the PUBLISHED HEAD ([`Kernel::chain_head`]
+    /// is its input; a peer holding an older head checks that the new
+    /// history EXTENDS it). A CLEAN TAIL CUT — the last transactions removed
+    /// at a boundary, or the last marker's checksum edited, which un-commits
+    /// it into the torn tail recovery cuts — opens at the shorter head. A
+    /// CONSISTENT RE-CHAIN — a rewrite at any point with every later link
+    /// recomputed, from genesis or mid-history, the retained checkpoints'
+    /// heads rewritten with it — passes: the chain has no anchor but its seed
+    /// and the base's header, and a base's BODY, which nothing compares to
+    /// the journal below it, the forger re-mints with this kernel's own
+    /// `checkpoint()` over the forged replay. A checkpoint BODY forged with
+    /// its CRC and `body_hash` re-fixed loads as the base. A checkpoint AT THE HEAD with
+    /// its `chain_head` edited opens, and every later commit chains from the
+    /// edited value. And, pending the owner's reading of the ruling's "any
+    /// rewrite" (the matrix's case 12): the chain is verified for
+    /// transactions above the base only, so a rewrite BELOW a standing base
+    /// is unseen at `open` while that base stands, seen by a
+    /// [`Kernel::world_at`] below the base (which verifies from genesis), and
+    /// beyond any replay once reclamation drops the segment. The
+    /// `journal_path` caller contract still keeps the files whole; what it
+    /// no longer has to keep is the silence.
     ///
     /// REFUSAL PRECEDENCE — the steps above are the order in which refusals
     /// speak: [`OpenError::InvalidConfig`] precedes the lock, the lock
@@ -930,6 +968,26 @@ impl<W: WorldState> Kernel<W> {
     /// including when poisoned.
     pub fn current_seq(&self) -> Seq {
         self.root.load().seq
+    }
+
+    /// The commit chain's value at the installed head: the `chain` the
+    /// marker closing [`Kernel::current_seq`]'s transaction carries on disk,
+    /// or what recovery derived for that head — the last committed marker's
+    /// above the base, else the base's own (the `SKC3` header's
+    /// `chain_head`, or the seed at genesis). The seed at every coordinate
+    /// under [`Durability::InMemory`], where there are no frames to hash.
+    /// Read lock-free off the root, like [`Kernel::current_seq`] and with
+    /// the same caveat: equal AT THE INSTANT OF CALL to the value for that
+    /// coordinate, and no substitute for reading the two together — a commit
+    /// may land between two calls.
+    ///
+    /// PIECE (c)'S INPUT (QUEUE item 10, the PUBLISHED HEAD; `/health`): what
+    /// a periodically published head carries, and what a peer holding an
+    /// older head checks the new history EXTENDS — the closer for the
+    /// histories the chain alone accepts, which [`Kernel::open`]'s damage
+    /// model names.
+    pub fn chain_head(&self) -> [u8; 32] {
+        self.root.load().chain
     }
 
     /// Whether an unrecoverable failure has halted this kernel's write paths

@@ -2,6 +2,7 @@
 //! this binary, not a target of its own, so the gate links these tests once
 //! instead of once per file. Nothing but module declarations belongs here.
 
+mod chain;
 mod golden;
 mod hazard;
 // Shared plumbing, not a suite: `hazard` uses a subset, so the allow that was

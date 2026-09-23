@@ -71,19 +71,20 @@ use crate::HasM5;
 /// inert. Content only — a link deposit is outside the rule (PUB-2.12).
 ///
 /// THE DECLARATION NAMES THE RECORD CLASS (PUB-2.11, PUB-2.64; RES-249): what
-/// it carries is the class's TYPE address — the type the pair's `make_link`
-/// then carries (PUB-2.63) — and the write path tests it, admitting a
-/// declared insert on a published document only where that type is one
-/// [`deposit_class_types`] holds. A bare "this is a deposit" was a fact that
-/// did not separate the exempt record from ordinary prose at a fresh
-/// position; the class type is the claim the pair bears out.
+/// it carries is the class's TYPE address — the type the `make_link` naming
+/// the atom then carries (PUB-2.63) — and the write path tests it, admitting
+/// a declared insert on a published document only where that type is one
+/// [`deposit_class_types`] holds. A bare "this is a deposit" would not
+/// separate the exempt record atom from ordinary prose at a fresh position;
+/// the class type does, and the `make_link` naming the atom, carrying that
+/// same type, is where the declaration is borne out.
 ///
 /// A type and not a flag because the declaration is read where it is made,
 /// and the two ways of making it wrongly are not alike. An insert that should
 /// have been declared is refused `PublishedTarget`, loudly. A declaration on
-/// an ordinary edit, under a type the class holds, is admitted at a fresh
-/// position of a published document — PUB-2.60's residue, placed wherever
-/// [`deposit_surface`] points — and nothing reports it; on the
+/// an ordinary edit, under a type the deposit class holds, is admitted at a
+/// fresh position of a published document — PUB-2.60's residue, placed
+/// wherever [`deposit_surface`] points — and nothing reports it; on the
 /// [`Caller::System`] path no ω check stands between the declaration and the
 /// arrangement either. For the same reason there is no `From<bool>` and no
 /// `From<Address>`: an address becomes this value with the variant written
@@ -135,13 +136,14 @@ const DEPOSIT_CLASS_ORDINALS: [u32; 2] = [1, 2];
 /// ([`DEPOSIT_CLASS_ORDINALS`]). Today: ENROLL and RETIRE, in that order.
 ///
 /// Membership is EQUALITY — the membership compare RES-249 pins, and the
-/// compare the credential classifier makes of the pair's link type (exactly
-/// one span `Equal` to the class's, containment answering nothing): a
-/// subtype beneath a member is no member. A class joins at the rule that
-/// mints it or that states it rides this class (RES-261), by one ordinal
-/// above and nothing else; each type held here that no conforming `insert`
-/// bears out is one more prose path under PUB-2.60's residue, so the set
-/// holds what deposits an atom TODAY and no more.
+/// compare the credential classifier makes of the type slot of the
+/// `make_link` naming the atom (exactly one span `Equal` to the class's,
+/// containment answering nothing): a subtype beneath a member is no member.
+/// A class joins at the rule that mints it or that states it rides this
+/// class (RES-261), by one ordinal above and nothing else; each type held
+/// here that no conforming `insert` bears out is one more prose path under
+/// PUB-2.60's residue, so the set holds what deposits an atom TODAY and no
+/// more.
 ///
 /// JOINING LATER, each at its own type's allocation:
 ///
@@ -151,9 +153,9 @@ const DEPOSIT_CLASS_ORDINALS: [u32; 2] = [1, 2];
 /// * the INVITE LETTER — RES-221 gave it a body, so it deposits an atom; it
 ///   joins at its type's allocation (no type is pinned for it yet).
 ///
-/// NEVER — a class whose record is its typed link and endsets alone is in the
-/// deposit class and NOT in this input (RES-261), no conforming `insert`
-/// ever declaring it:
+/// NEVER — a class that deposits its typed link and endsets alone, and no
+/// atom: PUB-2.61's class sentence names it, but its type is never one the
+/// deposit class holds (RES-261), no conforming `insert` ever declaring it:
 ///
 /// * the GRANT — its link and endsets alone, NO BODY (PUB-5.15, RES-221);
 /// * `published-in-error` — the same (PUB-5.116, RES-220);
@@ -162,8 +164,8 @@ const DEPOSIT_CLASS_ORDINALS: [u32; 2] = [1, 2];
 /// * the CLAIM link — names the account in its FROM and deposits no atom
 ///   (AUTH's third credential type, `3.3`).
 ///
-/// HELD, not manufactured per call: one process-wide value, built at its
-/// first read — the addresses are compiled format constants, and the door
+/// HELD, not manufactured per call: one process-wide value, constructed at
+/// its first read — the addresses are compiled format constants, and the door
 /// consults them on every declared insert into a published document.
 pub fn deposit_class_types() -> &'static [Address] {
     static TYPES: LazyLock<[Address; 2]> = LazyLock::new(|| {
@@ -369,16 +371,16 @@ where
     /// TYPE it carries is a member of [`deposit_class_types`], AND the
     /// insert is deposit-SHAPED: `at` names a fresh content position past the
     /// arranged extent, so the placement appends and disturbs no arrangement.
-    /// The declaration exempts nothing by itself — the class must hold its
-    /// type and the shape must bear it out — and is never a bypass: a
-    /// declaration naming a type the class does not hold (the grant's, the
-    /// edition claim's, any other address) refuses with the same code
-    /// wherever it lands (PUB-2.11; RES-249, RES-261), a declared insert at an
-    /// arranged position refuses with it too, and an UNDECLARED append
+    /// The declaration exempts nothing by itself — the deposit class must
+    /// hold its type and the shape must bear it out — and is never a bypass:
+    /// a declaration naming a type the deposit class does not hold (the
+    /// grant's, the edition claim's, any other address) refuses with the same
+    /// code wherever it lands (PUB-2.11; RES-249, RES-261), a declared insert
+    /// at an arranged position refuses with it too, and an UNDECLARED append
     /// refuses as well (the cost RES-209 item 5 named, closed). THE TEST IS A
     /// MEMBERSHIP COMPARE against a build-time set: it reads nothing, and
-    /// what the bytes ARE it cannot tell — prose declared under a member type
-    /// is admitted, a malformed record of the class it names, which is
+    /// what the bytes ARE it cannot tell — prose declared under a held type
+    /// is admitted, a malformed record atom of the class it names, which is
     /// PUB-2.60's accepted residue. Into a PRIVATE document the declaration
     /// is inert, whatever it names — every insert is admitted there as
     /// before. A declared deposit whose fresh position lies past the append
@@ -388,7 +390,7 @@ where
     /// a published arrangement in place.
     ///
     /// So a published document admits exactly ONE insert: a deposit declared
-    /// under a member type, at `[s_C, n_C + 1]` of the arrangement it lands
+    /// under a held type, at `[s_C, n_C + 1]` of the arrangement it lands
     /// in — the one position both fresh and inside the append boundary. A
     /// caller builds that position by asking [`deposit_surface`] for the
     /// arrangement and [`content_count`](crate::M5State::content_count) of it
@@ -419,9 +421,10 @@ where
     /// While the document has no member the deposit lands in its own
     /// arrangement, which is what its readers answer from until a head exists
     /// (PUB-2.66's memberless reading). The atom's IDENTITY is minted under
-    /// the content chain of the address the caller NAMED (`mint_content(doc)`)
-    /// — the document's own I-space for a bare address, one prefix down the
-    /// chain (PUB-2.52) — so the start returned is under that chain; only the
+    /// the CONTENT CHAIN of the address the caller NAMED (`mint_content(doc)`)
+    /// — the document's own for a bare address, a member's own for a member
+    /// (PUB-2.52) — so the start returned lies under the named address's
+    /// content chain whichever arrangement the deposit lands in; only the
     /// placement floats.
     ///
     /// COST, AND WHO OWNS IT. This op admits any `values` length: there is no
@@ -452,12 +455,12 @@ where
         values: Vec<Val>,
         deposit: Deposit,
     ) -> Result<(Address, Seq), TxnError<InsertError>> {
-        // The mint chain's key, and — for a declared deposit, which reads the
-        // chain's frontier to find where it lands — the head's
+        // The content chain's key, and — for a declared deposit, which reads
+        // the version chain's frontier to find where it lands — the head's
         // (`head_lock_key`), so the landing decided inside cannot move under
         // it. Both are arithmetic on the request.
         let mut keys = vec![M3State::content_lock_key(doc)];
-        let declared = match &deposit {
+        let declared_type = match &deposit {
             Deposit::Undeclared => None,
             Deposit::Declared(ty) => {
                 keys.push(head_lock_key(doc));
@@ -486,7 +489,7 @@ where
                     // Private: the declaration is inert, whatever it names,
                     // and the insert edits the arrangement named.
                     doc.clone()
-                } else if let Some(ty) = declared {
+                } else if let Some(ty) = declared_type {
                     // The CLASS TEST: a membership compare against M5's own
                     // build-time set, reading nothing. A declaration naming
                     // any other type answers as an undeclared append does.
@@ -541,8 +544,9 @@ where
     /// member of `doc`'s chain, born PUBLISHED, in ONE commit, its
     /// arrangement taken from the CLIENT-SUPPLIED runs of `shot` (PUB-8.1)
     /// and from nothing any draft holds at commit. Returns the member's
-    /// address and the commit `Seq`. The birth version of the mint ceremony
-    /// (PUB-2.34) is this same composite with `shot.base` absent.
+    /// address and the commit `Seq`. The mint ceremony's birth version
+    /// (PUB-2.34) is minted by this same composite in its birth shape,
+    /// `shot.base` absent.
     ///
     /// DESTINATION (PUB-2.37, PUB-2.39, PUB-2.55): the next member of the
     /// chain anchored at the base, decided AT COMMIT — the trunk's next
@@ -554,24 +558,25 @@ where
     /// head's daughter (PUB-2.44); nothing is positionally applied to an
     /// advanced head and nothing is refused for want of a base (PUB-2.38). A
     /// memberless document is its own base, and the base absent is the birth
-    /// version (PUB-2.34): the chain's first member, `D.1`, either way,
-    /// admitted only while the chain is empty — once a member exists the
-    /// document's own pre-chain arrangement is no base, and the shot must name
-    /// the member it was staged from (`BaseSuperseded`). The two are ONE
-    /// DESTINATION and not one arrangement: with no base there is no extent
-    /// and so no carried tail, and a deposit that landed in the memberless
-    /// document after the render stays in the pre-chain arrangement the member
-    /// supersedes. A client wanting the deposit cell honored at birth names the
-    /// document itself as its base, with the extent its render took.
+    /// shape (PUB-2.34); either way the shot mints the birth version, the
+    /// chain's first member `D.1`, and either form is admitted only while the
+    /// chain is empty — once a member exists the document's own pre-chain
+    /// arrangement is no base, and the shot must name the member it was staged
+    /// from (`BaseSuperseded`). The two are ONE DESTINATION and not one
+    /// arrangement: with no base there is no extent and so no carried tail,
+    /// and a deposit that landed in the memberless document after the render
+    /// stays in the pre-chain arrangement the member supersedes. A client
+    /// wanting the deposit cell honored at birth names the document itself as
+    /// its base, with the extent its render took.
     ///
     /// THE MEMBER'S ARRANGEMENT (PUB-2.40, PUB-2.41, PUB-2.42): each supplied
     /// run by its ORIGIN DOCUMENT — the trunk (PUB-2.15) of the document that
     /// minted its addresses, which the run's own start settles (`document_of`
     /// then `trunk_of`) and the client's stated `origin` must project to. The
-    /// document's OWN I-space (its own chain or any member's) is placed by
-    /// reference; the STAGING DRAFT's is RE-INSERTED as fresh identity under
-    /// the document's own I-space, each value through INSERT's own
-    /// allocation step (`allocate_for_placement`), the bytes read at the
+    /// document's OWN I-space (its own content chain or any member's) is
+    /// placed by reference; the STAGING DRAFT's is RE-INSERTED as fresh
+    /// identity under the document's own I-space, each value through INSERT's
+    /// own allocation step (`allocate_for_placement`), the bytes read at the
     /// draft's addresses — a byte read, never an arrangement read — so the
     /// committed member references no address of the draft; any OTHER
     /// document's stays a window, answering its origin. The three families are

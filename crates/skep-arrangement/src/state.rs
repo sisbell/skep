@@ -45,22 +45,22 @@ impl DocArrangement {
 /// derived-hint fields ⇒ [`rebuild_derived`](M5State::rebuild_derived) is
 /// the identity.
 ///
-/// THE BIRTH MEMO (`birth_extents`; PUB-3.19 as RES-276 reads it, frozen by
-/// the owner's ruling D2, 2026-09-17) is the third field, and the one that is
-/// DERIVED: per BIRTH MEMBER — a trunk's opening version `D.1` — the content
-/// count that member was BORN with, which
+/// THE BIRTH EXTENTS (`birth_extents`; PUB-3.19 as RES-276 reads it, frozen
+/// by the owner's ruling D2, 2026-09-17) are the third field, and the one
+/// that is DERIVED: per BIRTH VERSION — a trunk's opening member `D.1` — the
+/// content count that version was BORN with, which
 /// [`birth_extent`](M5State::birth_extent) answers and the doc-metadata read
-/// serves. It has no record of its own and no op writes it: the fold notes it
-/// off the record that gives the member its arrangement — the mint commit's
-/// own placement, or the snapshot an owned VERSION stages — so replay
-/// re-derives it from the journal as it stands and the journal carries
-/// nothing for it. It is NOT a recomputable hint all the same, which is why
-/// the checkpoint carries it and `rebuild_derived` has nothing to seed: while
-/// a birth member is the head a declared deposit appends to its arrangement
-/// (PUB-2.66), the run-list merges an I-adjacent deposit INTO the last birth
-/// run, and R keeps spans and no record boundary, so nothing the arrangement
-/// holds afterwards says where the birth content ended. Nothing reads it to
-/// decide a write.
+/// serves. They have no record of their own and no op writes them: the fold
+/// notes each off the record that gives the version its arrangement — the
+/// mint commit's own placement, or the snapshot an owned VERSION stages — so
+/// replay re-derives them from the journal as it stands and the journal
+/// carries nothing for them. They are NOT a recomputable hint all the same,
+/// which is why the checkpoint carries them and `rebuild_derived` has nothing
+/// to seed: while a birth version is the head a declared deposit appends to
+/// its arrangement (PUB-2.66), the run-list merges an I-adjacent deposit INTO
+/// the last birth run, and R keeps spans and no record boundary, so nothing
+/// the arrangement holds afterwards says where the birth content ended.
+/// Nothing reads them to decide a write.
 ///
 /// CLASS INVARIANTS, relating the fields. The reads state what they
 /// answer; these are what makes those answers mean it.
@@ -94,9 +94,9 @@ impl DocArrangement {
 ///   V-positions, so a run's V-start is a prefix sum (§1; ASN-0047 D-SEQ★, via
 ///   contiguity D-CTG★ and minimum-position D-MIN★), and no fold arm can open
 ///   a gap because there is nothing in which to open one.
-/// * **BIRTH★ — a birth member's extent is noted ONCE and never moved.** The
-///   memo gains `m`'s entry at the first placing record that names `m` —
-///   [`ContentPlace`](M5Rec::ContentPlace) or
+/// * **BIRTH★ — a birth version's extent is noted ONCE and never moved.**
+///   `birth_extents` gains `m`'s entry at the first placing record that
+///   names `m` — [`ContentPlace`](M5Rec::ContentPlace) or
 ///   [`VersionSnapshot`](M5Rec::VersionSnapshot), a snapshot of an EMPTY
 ///   source noting zero — and no later record touches it, so a deposit that
 ///   grows the head grows `content_count(m)` and not `birth_extent(m)`. On
@@ -140,13 +140,12 @@ impl DocArrangement {
 /// holds and what every insertion site already had. Three consequences, and
 /// the key form was chosen for the third: an `Address` orders by its tumbler
 /// (M1's `Ord` delegates), so the map's iteration order — and with it the
-/// determinism of [`docs_ever_containing`](M5State::docs_ever_containing) and
-/// the class order of [`deletions`](M5State::deletions) — is the tumbler
-/// order; an `Address` serializes AS its bare tumbler, so the checkpoint
-/// encoding is a map of flat tumblers exactly as the data model prescribes;
-/// and an `Address` re-validates on the way in (M1's `try_from` shadow), so a
-/// key that is not T4-valid is a decode failure M2 reports as corruption
-/// rather than a value some later read has to assert about.
+/// determinism of [`docs_ever_containing`](M5State::docs_ever_containing) —
+/// is the tumbler order; an `Address` serializes AS its bare tumbler, so the
+/// checkpoint encoding is a map of flat tumblers exactly as the data model
+/// prescribes; and an `Address` re-validates on the way in (M1's `try_from`
+/// shadow), so a key that is not T4-valid is a decode failure M2 reports as
+/// corruption rather than a value some later read has to assert about.
 ///
 /// Serialization needs the `im` crate's `serde` feature and
 /// `Tumbler: Serialize/DeserializeOwned` (M1's `num-bigint` serde feature) —
@@ -158,15 +157,15 @@ pub struct M5State {
     pub(crate) birth_extents: im::OrdMap<Address, Nat>,
 }
 
-/// Is `doc` a BIRTH MEMBER — the opening member `D.1` of its trunk's version
-/// chain, the one member whose extent the birth memo holds? Asked of the two
+/// Is `doc` a BIRTH VERSION — the opening member `D.1` of its trunk's version
+/// chain, the one member whose extent `birth_extents` holds? Asked of the two
 /// owners of that fact rather than respelled: [`trunk_of`] for the trunk
 /// (PUB-2.15) and M3's [`first_version_address`] for where its chain opens.
 /// Pure address arithmetic — the fold reads no slice but its own — and
 /// settled at the first comparison for every address that is no version
 /// member, which is every draft a placement names. A DAUGHTER's first member
 /// (`D.3.1`) is not one: its trunk's chain opens at `D.1`.
-fn is_birth_member(doc: &Address) -> bool {
+fn is_birth_version(doc: &Address) -> bool {
     let trunk = trunk_of(doc);
     trunk != *doc && first_version_address(&trunk).as_ref() == Some(doc)
 }
@@ -265,38 +264,38 @@ impl M5State {
         self.arrangements.update(doc.clone(), arr)
     }
 
-    /// The birth memo with `member`'s extent NOTED — `born_with()`, asked
-    /// only where it is wanted — when `member` is a birth member
-    /// ([`is_birth_member`]) the memo does not hold yet; the memo as it
-    /// stands otherwise. The two placing arms call it with the count their
-    /// record leaves the member holding, and BIRTH★ is this function's
-    /// second test: an entry, once written, is what every later call hands
-    /// back.
-    #[must_use = "returns the updated birth memo; it does not modify the receiver"]
+    /// `birth_extents` with `member`'s extent NOTED — `born_with()`, asked
+    /// only where it is wanted — when `member` is a birth version
+    /// ([`is_birth_version`]) not yet noted; `birth_extents` as they stand
+    /// otherwise. The two placing arms call it with the count their record
+    /// leaves the member holding, and BIRTH★ is this function's second test:
+    /// an entry, once written, is what every later call hands back.
+    #[must_use = "returns the updated birth extents; it does not modify the receiver"]
     fn birth_extents_noting(
         &self,
         member: &Address,
         born_with: impl FnOnce() -> Nat,
     ) -> im::OrdMap<Address, Nat> {
-        if !is_birth_member(member) || self.birth_extents.contains_key(member) {
+        if !is_birth_version(member) || self.birth_extents.contains_key(member) {
             return self.birth_extents.clone();
         }
         self.birth_extents.update(member.clone(), born_with())
     }
 
     /// PUB-3.19's BIRTH CONTENT, as a count (RES-276; the owner's D2): the
-    /// content extent the birth member `member` — a trunk's `D.1` — was
+    /// content extent the birth version `member` — a trunk's `D.1` — was
     /// MINTED with, the leading runs of its arrangement, which a deposit
     /// taken while it is the head never joins. `content_count(member)` is the
     /// live extent and follows every such deposit; this one is frozen at the
     /// mint, so positions `[1, birth_extent]` of the member are what an
-    /// edition's claim was written over (PUB-3.10), at every later position.
+    /// edition's claim was written over (PUB-3.10), and this extent answers
+    /// the same as of every later `Seq`.
     ///
-    /// Zero for an address the memo does not hold: a member born with no
-    /// content that has taken none since, and every address that is no birth
-    /// member — it answers the address named, as every read here does, and a
-    /// caller asks M3 first whether the member exists at all. One map lookup,
-    /// reading no run.
+    /// Zero for an address with no extent noted: a birth version born with
+    /// no content that has taken none since, and every address that is no
+    /// birth version — it answers the address named, as every read here does,
+    /// and a caller asks M3 first whether the member exists at all. One map
+    /// lookup, reading no run.
     pub fn birth_extent(&self, member: &Address) -> Nat {
         self.birth_extents.get(member).cloned().unwrap_or_default()
     }
@@ -326,12 +325,13 @@ impl M5State {
             // root install, so a reader never observes M-updated-without-R
             // (J1★ ⇒ P4★/P4a; with INSERT's composite, J0 ⇒ P7a).
             //
-            // THE BIRTH MEMO rides this arm (BIRTH★; PUB-3.19, RES-276): the
-            // shot journals a member's WHOLE arrangement as one placement at
-            // ordinal 1, in the commit that mints it (PUB-3.11), so the first
-            // placement naming a birth member IS its mint and the count it
-            // leaves is the birth content; every later placement naming it is
-            // a deposit the head took, and finds the memo written.
+            // THE BIRTH EXTENT is noted on this arm (BIRTH★; PUB-3.19,
+            // RES-276): the shot journals a member's WHOLE arrangement as one
+            // placement at ordinal 1, in the commit that mints it (PUB-3.11),
+            // so the first placement naming a birth version IS its mint and
+            // the count it leaves is the birth extent; every later placement
+            // naming it is a deposit the head took, and finds its extent
+            // already noted.
             //
             // THE ONE STATE THE FOLD CANNOT TELL: a shot with NO runs pushes
             // no placement, so a member born EMPTY by the shot leaves nothing
@@ -425,14 +425,14 @@ impl M5State {
             // migration beside the M2-concurrency one stated on the variant.
             // `Vstream::version` states who owns the bound meanwhile.
             //
-            // THE BIRTH MEMO rides this arm too (BIRTH★): an owned VERSION of
-            // a memberless published document mints its birth member by this
-            // record, and the count shared is what that member is born with.
-            // The record is staged whatever the surface holds, so an EMPTY
-            // birth is noted here as ZERO — the one entry the empty arm
-            // writes, and what keeps the member's first deposit from reading
-            // as its birth. A cross-owner fork's `new` is a fresh document,
-            // no birth member, and notes nothing.
+            // THE BIRTH EXTENT is noted on this arm too (BIRTH★): an owned
+            // VERSION of a memberless published document mints its birth
+            // version by this record, and the count shared is what that
+            // version is born with. The record is staged whatever the surface
+            // holds, so an EMPTY birth is noted here as ZERO — the one entry
+            // the empty arm writes, and what keeps the version's first deposit
+            // from reading as its birth. A cross-owner fork's `new` is a fresh
+            // document, no birth version, and notes nothing.
             M5Rec::VersionSnapshot { source, new } => {
                 let content = self.content_list(source).clone();
                 let birth_extents = self.birth_extents_noting(new, || content.total_width());
@@ -834,23 +834,24 @@ mod tests {
     }
 
     #[test]
-    fn a_birth_member_s_extent_is_frozen_at_its_mint_and_a_deposit_never_joins_it() {
+    fn a_birth_version_s_extent_is_frozen_at_its_mint_and_a_deposit_never_joins_it() {
         // BIRTH★ (PUB-3.19, RES-276): the shot journals a member's whole
         // arrangement as ONE placement at ordinal 1, so the first placement
         // naming `D.1` is its mint and the count it leaves is the birth
-        // content. Every later placement is a deposit the head took: the
+        // extent. Every later placement is a deposit the head took: the
         // arrangement grows (PUB-2.66) and the birth extent does not.
         let born = place(&M5State::genesis(), &vdoc(), 1, vec![run(&ca(1), 3)]);
         assert_eq!(born.birth_extent(&vdoc()), n(3));
-        // An I-ADJACENT deposit, which is why the extent is a memo and not a
-        // read of the arrangement: the run-list merges the deposit INTO the
-        // last birth run, so afterwards no run boundary marks where the birth
-        // content ended.
+        // An I-ADJACENT deposit, which is why the extent is noted at the mint
+        // rather than read off the arrangement: the run-list merges the
+        // deposit INTO the last birth run, so afterwards no run boundary marks
+        // where the birth content ended.
         let grown = place(&born, &vdoc(), 4, vec![run(&ca(4), 1)]);
         assert_eq!(grown.content_runs(&vdoc()).cloned().collect::<Vec<_>>(), vec![run(&ca(1), 4)]);
         assert_eq!(grown.content_count(&vdoc()), n(4), "the head's arrangement grew");
         assert_eq!(grown.birth_extent(&vdoc()), n(3), "the birth content did not");
-        // A second deposit, minted under the member's own chain: the same.
+        // A second deposit, minted under the member's own content chain: the
+        // same.
         let grown = place(&grown, &vdoc(), 5, vec![run(&vca(1), 1)]);
         assert_eq!(grown.content_count(&vdoc()), n(5));
         assert_eq!(grown.birth_extent(&vdoc()), n(3));
@@ -859,11 +860,12 @@ mod tests {
     }
 
     #[test]
-    fn only_a_trunk_s_opening_member_is_memoed() {
-        // The memo is per TRUNK, keyed by its birth member `D.1` — the one
-        // address the doc-metadata read serves an extent for. A trunk, a
-        // later trunk member, a daughter of the birth member and the first
-        // daughter of a later member each take a placement and note nothing:
+    fn only_a_trunk_s_birth_version_has_its_extent_noted() {
+        // `birth_extents` holds one entry per TRUNK, keyed by its birth
+        // version `D.1` — the one address the doc-metadata read serves an
+        // extent for. A trunk, a later trunk member, a daughter of the birth
+        // version and the first daughter of a later member each take a
+        // placement and note nothing:
         // the last is `first_version_address` of ITS anchor, which is why the
         // test asks the chain the TRUNK opens.
         let mut s = M5State::genesis();
@@ -875,15 +877,18 @@ mod tests {
         ] {
             s = place(&s, &doc, 1, vec![run(&ca(1), 2)]);
             assert_eq!(s.content_count(&doc), n(2));
-            assert_eq!(s.birth_extent(&doc), n(0), "{doc:?} is no birth member");
+            assert_eq!(s.birth_extent(&doc), n(0), "{doc:?} is no birth version");
         }
-        assert!(s.birth_extents.is_empty(), "and the memo holds no entry for any of them");
+        assert!(
+            s.birth_extents.is_empty(),
+            "and `birth_extents` holds no entry for any of them"
+        );
     }
 
     #[test]
-    fn a_snapshot_born_member_is_memoed_at_what_it_shares_and_an_empty_birth_at_zero() {
+    fn a_snapshot_born_version_is_noted_at_what_it_shares_and_an_empty_birth_at_zero() {
         // An owned VERSION of a memberless published document mints the birth
-        // member by `VersionSnapshot`: what it shares is what it is born with.
+        // version by `VersionSnapshot`: what it shares is what it is born with.
         let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 3)]);
         let s = s.apply_m5(&M5Rec::VersionSnapshot {
             source: doc1(),
@@ -894,8 +899,8 @@ mod tests {
         assert_eq!((s.content_count(&vdoc()), s.birth_extent(&vdoc())), (n(4), n(3)));
         // The record is staged whatever the surface holds, so an EMPTY birth
         // is noted as zero — the arrangement and R still gain no entry — and
-        // the member's first deposit then finds the memo written: a home born
-        // with no content stays an edition of nothing (RES-130).
+        // the version's first deposit then finds its extent already noted: a
+        // home born with no content stays an edition of nothing (RES-130).
         let empty = M5State::genesis().apply_m5(&M5Rec::VersionSnapshot {
             source: doc2(),
             new: vdoc(),
@@ -1051,15 +1056,15 @@ mod tests {
     }
 
     #[test]
-    fn the_birth_memo_rides_the_checkpoint_because_nothing_can_rebuild_it() {
-        // The memo is DERIVED by the fold and CARRIED by the checkpoint: a
-        // checkpoint replaces the journal prefix it was folded from, and the
-        // arrangement it holds no longer says where the birth content ended
-        // (the deposit below merged into the birth run). So it is a serialized
-        // field, not a skip-serialized hint — `rebuild_derived` is still the
-        // identity — and a decoded state answers the extent its records
-        // folded to, where a rebuild off the arrangement could only answer
-        // the live count.
+    fn the_birth_extents_ride_the_checkpoint_because_nothing_can_rebuild_them() {
+        // The birth extents are DERIVED by the fold and CARRIED by the
+        // checkpoint: a checkpoint replaces the journal prefix it was folded
+        // from, and the arrangement it holds no longer says where the birth
+        // content ended (the deposit below merged into the birth run). So they
+        // are a serialized field, not a skip-serialized hint —
+        // `rebuild_derived` is still the identity — and a decoded state
+        // answers the extent its records folded to, where a rebuild off the
+        // arrangement could only answer the live count.
         let born = place(&M5State::genesis(), &vdoc(), 1, vec![run(&ca(1), 3)]);
         let grown = place(&born, &vdoc(), 4, vec![run(&ca(4), 1)]);
         let bytes = bincode::serialize(&grown).expect("state serializes");
@@ -1068,7 +1073,8 @@ mod tests {
         assert_eq!(back.content_count(&vdoc()), n(4));
         assert_eq!(back.birth_extent(&vdoc()), n(3), "the frozen extent, not the live count");
         assert_eq!(back.clone().rebuild_derived(), back);
-        // Replay re-derives it: the same records fold to the same memo.
+        // Replay re-derives them: the same records fold to the same birth
+        // extents.
         let again = place(
             &place(&M5State::genesis(), &vdoc(), 1, vec![run(&ca(1), 3)]),
             &vdoc(),

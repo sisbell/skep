@@ -46,9 +46,9 @@ pub struct ShotRun {
 /// The base a staged draft was taken from (PUB-2.37): the MEMBER the
 /// stager's `copy` named as its source — the trunk head for the ordinary
 /// shot, a pinned member for the daughter shot — or the document itself
-/// while it has no member yet (a published document between its birth and
-/// its first shot, PUB-2.66's memberless reading), together with how many of
-/// its content positions the copy TOOK.
+/// while it has no member yet (a published document between its mint and
+/// its birth version, PUB-2.66's memberless reading), together with how many
+/// of its content positions the copy TOOK.
 ///
 /// `extent` is what lets the composite honor PUB-2.42's deposit cell against
 /// a whole-arrangement supply: a published member's arrangement changes only
@@ -77,11 +77,11 @@ pub struct Base {
 /// One publish shot (PUB-2.33): the next member of the document's chain,
 /// born published, in one commit.
 ///
-/// `base` absent is the BIRTH VERSION (PUB-2.34): the chain's first member,
-/// admitted only while the chain is empty. `runs` is the WHOLE arrangement
-/// the client rendered (PUB-2.33 as amended); the composite appends the
-/// base's post-render deposits after it (PUB-2.42, PUB-2.45) — with a base;
-/// absent, nothing is appended.
+/// `base` absent is the BIRTH SHAPE (PUB-2.34), which mints the BIRTH VERSION
+/// — the chain's first member — and is admitted only while the chain is
+/// empty. `runs` is the WHOLE arrangement the client rendered (PUB-2.33 as
+/// amended); the composite appends the base's post-render deposits after it
+/// (PUB-2.42, PUB-2.45) — with a base; absent, nothing is appended.
 ///
 /// `draft` names the staging draft whose native runs are re-inserted as
 /// fresh identity under the document's own I-space (PUB-2.40, PUB-2.41);
@@ -104,7 +104,7 @@ pub struct Base {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Shot {
     /// The member the draft was staged from, with the extent the copy took;
-    /// absent for the birth version.
+    /// absent in the birth shape.
     pub base: Option<Base>,
     /// The staging draft, whose runs are re-inserted as fresh identity — a
     /// document outside the shot's own chain, as the type's REQUIRES states.

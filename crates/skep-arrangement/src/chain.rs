@@ -11,11 +11,11 @@
 //!
 //! The two surfaces are two answers because they differ at exactly one kind
 //! of address, a PINNED member — any member other than the trunk head
-//! (PUB-2.66's pinned older member; the records' "older", PUB-2.39). Every
-//! version address answers its own member forever (PUB-2.50), the head's
-//! included; but a declared deposit naming any member lands on the head, so
-//! a pinned member's arrangement never grows, and the head's grows until a
-//! later trunk member becomes the head.
+//! (PUB-2.66's pinned older member; PUB-2.39's "older"). Every version
+//! address answers its own member forever (PUB-2.50), the head's included;
+//! but a declared deposit naming any member lands on the head, so a pinned
+//! member's arrangement never grows, and the head's grows until a later
+//! trunk member becomes the head.
 //!
 //! A LINK deposit — M7's writes into a document's link subspace, gated by
 //! the same [`Caller`](crate::Caller) — is outside the version-chain rule
@@ -128,8 +128,8 @@ pub fn published_target(m3: &M3State, doc: &Address) -> bool {
 /// * A VERSION address answers ITSELF, forever (PUB-2.50).
 /// * A BARE document address that is PUBLISHED answers its TRUNK HEAD
 ///   (PUB-2.53) — and, while it has no member yet, its OWN arrangement: a
-///   published document between its birth and its first shot serves what it
-///   holds, its declared deposits landing there until a head member exists
+///   published document between its mint and its birth version serves what
+///   it holds, its declared deposits landing there until a head member exists
 ///   (PUB-2.66's memberless reading).
 /// * A PRIVATE document answers itself: head-float is INERT there. A
 ///   private document is versionless (PUB-2.9) and so has no member to
@@ -232,7 +232,7 @@ mod tests {
     /// document, the head itself, a pinned member and a daughter alike — and a
     /// private document takes its own inserts whatever a fixture stamped under
     /// it. The daughter is also what makes the pinned member a real case: it
-    /// gives member1 a chain of its own, whose latest is not the trunk's head.
+    /// gives member1 a daughter chain, whose latest is not the trunk's head.
     #[test]
     fn a_declared_deposit_lands_on_the_head_whichever_chain_address_it_names() {
         let m3 = seeded_m3();
@@ -245,7 +245,7 @@ mod tests {
             .apply_m3(&M3Rec::Allocate { addr: member1.clone(), published: true })
             .apply_m3(&M3Rec::Allocate { addr: member2.clone(), published: true })
             .apply_m3(&M3Rec::Allocate { addr: daughter.clone(), published: true });
-        assert_eq!(m3.latest_version(&member1), Some(daughter.clone()), "member1's own chain");
+        assert_eq!(m3.latest_version(&member1), Some(daughter.clone()), "member1's daughter chain");
         for named in [&edition, &member1, &member2, &daughter] {
             assert_eq!(
                 deposit_surface(&m3, named),

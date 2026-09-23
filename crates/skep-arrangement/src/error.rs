@@ -24,11 +24,12 @@ use skep_namespace::MintError;
 ///
 /// `PublishedTarget` is the version-chain model's in-place advance refusal
 /// (PUB-2.11; owner ruling D2b): the target's DOCUMENT (a version member
-/// projects to it, PUB-2.15) is PUBLISHED, and this insert is not an
-/// admitted deposit — one DECLARED deposit-shaped (PUB-2.59, PUB-2.61,
-/// PUB-9.13's DECLARED horn), which is the one exemption. The face, verbatim
-/// from PUB-2.11's table: "⟨D⟩ is published — it advances by versions. Stage
-/// your change in a draft, then publish it as the next version."
+/// projects to it, PUB-2.15) is PUBLISHED, and this insert is not the one
+/// exemption: an insert DECLARED under a type the deposit class holds
+/// (PUB-2.64; RES-249, RES-261) AND deposit-shaped (PUB-2.59, PUB-2.61,
+/// PUB-9.13's DECLARED horn). The face, verbatim from PUB-2.11's table:
+/// "⟨D⟩ is published — it advances by versions. Stage your change in a
+/// draft, then publish it as the next version."
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InsertError {
     DocNotRegistered,
@@ -336,7 +337,7 @@ impl fmt::Display for InsertError {
                 f.write_str("insert: the caller is not the document's effective owner (ω)")
             }
             InsertError::PublishedTarget => f.write_str(
-                "insert: the document is published — it advances by versions; stage the change in a draft, then publish it as the next version (an undeclared or non-fresh deposit is an in-place edit)",
+                "insert: the document is published — it advances by versions; stage the change in a draft, then publish it as the next version (an undeclared insert, one declared under a type the deposit class does not hold, and a declared insert at any position but a fresh content one are each an in-place edit)",
             ),
             InsertError::NotContentSubspace => {
                 f.write_str("insert: at.subspace is not the content subspace s_C")
@@ -574,6 +575,14 @@ mod tests {
         ] {
             assert!(line.contains("published"), "{line}");
             assert!(line.contains("next version"), "{line}");
+        }
+        // INSERT's line also names each of the three things the one exemption
+        // needs — a declaration, its type one the deposit class holds, a
+        // fresh content position — since a published document refuses an
+        // insert lacking any one of them.
+        let insert = InsertError::PublishedTarget.to_string();
+        for condition in ["undeclared", "deposit class", "fresh content"] {
+            assert!(insert.contains(condition), "{condition}: {insert}");
         }
         assert!(VersionError::PrivateSourceVersionless.to_string().contains("versionless"));
         assert!(VersionError::PrivateVersionOfPublished.to_string().contains("sibling draft"));

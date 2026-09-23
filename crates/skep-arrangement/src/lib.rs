@@ -83,10 +83,11 @@
 //! PUB-2.64; RES-249, RES-261) — at the one position a published chain admits
 //! — `n_C + 1` of the arrangement [`deposit_surface`] names, the head, or the
 //! document's own while it has no member (PUB-2.59, PUB-2.61, PUB-2.66). The
-//! declaration exempts nothing by itself — the class must hold its type and
-//! the shape must bear it out — and is never a bypass; [`Vstream::insert`]
-//! states how every other insert into a published document is refused. Link
-//! writes are outside the rule (PUB-2.12): `stage_seat_link` is untouched.
+//! declaration exempts nothing by itself — the deposit class must hold its
+//! type and the shape must bear it out — and is never a bypass;
+//! [`Vstream::insert`] states how every other insert into a published
+//! document is refused. Link writes are outside the rule (PUB-2.12):
+//! `stage_seat_link` is untouched.
 //!
 //! ## The publish shot and head-float (PUB round 2, lane 3.2)
 //!
@@ -101,8 +102,8 @@
 //! outside the chain, as [`Shot`] requires), and any other document's stay
 //! windows behind the source gate (PUB-2.40, PUB-6.23);
 //! the base's post-render deposits are carried after them (PUB-2.42,
-//! PUB-2.45). The BIRTH VERSION is the same composite with the base absent
-//! (PUB-2.34), and so with no tail to carry.
+//! PUB-2.45). The BIRTH VERSION is minted by the same composite in its BIRTH
+//! SHAPE — the base absent (PUB-2.34) — and so with no tail to carry.
 //!
 //! The readers that FLOAT — M6's and M8's arrangement readers, and
 //! `version`'s snapshot, each composing [`reading_surface`] first — answer a

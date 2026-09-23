@@ -1083,7 +1083,7 @@ fn a_fork_is_as_empty_as_the_reading_surface_it_snapshots_not_the_address_named(
             Shot { base: None, draft: None, runs: vec![] },
             &readable_by(PrincipalId(1)),
         )
-        .expect("an empty birth member");
+        .expect("an empty birth version");
     let (fork, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("forks the empty head");
     let s = k.snapshot();
     let m5 = s.world().m5();
@@ -1468,16 +1468,16 @@ fn a_declared_deposit_at_a_fresh_position_clears_the_refusal() {
     vs.insert(P1, &doc1(), vp(1, 2), vec![val(b"i")], declared())
         .expect("a declared interior insert into a draft commits — the declaration is inert there");
     vs.insert(P1, &doc1(), vp(1, 6), vec![val(b"g")], Deposit::Declared(pdoc()))
-        .expect("a declaration naming no class type is as inert in a draft as one naming a member");
+        .expect("a declaration naming no class type is as inert in a draft as one naming a held type");
     assert_eq!(k.snapshot().world().m5().content_count(&doc1()), n(6));
 }
 
 #[test]
-fn the_declaration_names_the_class_and_the_door_admits_a_member_type_alone() {
+fn the_declaration_names_the_class_and_the_door_admits_a_held_type_alone() {
     // PUB-2.11 / PUB-2.64 (RES-249, RES-261): the declaration carries the
     // record class's TYPE, and a declared insert on a published target is
-    // admitted only where that type is one the deposit class's own input
-    // holds — today ENROLL and RETIRE, the two classes that deposit an atom.
+    // admitted only where that type is one the deposit class holds — today
+    // ENROLL and RETIRE, the two classes that deposit an atom.
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     let (enrolled, _) = vs
@@ -1489,12 +1489,13 @@ fn the_declaration_names_the_class_and_the_door_admits_a_member_type_alone() {
         .expect("a declared RETIRE atom at a fresh position is admitted");
     assert_eq!(retired, pca(2));
     // A declared NON-member at the one position a member is admitted at: the
-    // classes whose record is its typed link alone — the grant (`3.90`), the
-    // edition claim (`3.14`), `successor-of` (`3.59`), the claim link (`3.3`)
-    // — deposit no atom and are never in the input; a SUBTYPE beneath a
-    // member is no member, membership being equality; and an address that is
-    // no type at all — the target itself, its own content, an account — is
-    // none either. Each answers as an undeclared append does.
+    // classes whose deposit is their typed link alone — the grant (`3.90`),
+    // the edition claim (`3.14`), `successor-of` (`3.59`), the claim link
+    // (`3.3`) — deposit no atom, and the deposit class never holds their
+    // types; a SUBTYPE beneath a member is no member, membership being
+    // equality; and an address that is no type at all — the target itself,
+    // its own content, an account — is none either. Each answers as an
+    // undeclared append does.
     let commons = |ordinal: u32| a(&[1, 1, 0, 1, 0, 1, 0, 3, ordinal]);
     let before = k.current_seq();
     let non_members = [
@@ -1835,7 +1836,7 @@ fn a_declared_deposit_in_the_staging_interval_is_carried_by_the_shot() {
     let (start, _) = vs
         .insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], declared())
         .expect("a deposit at the head's fresh position");
-    assert_eq!(start, pca(4), "minted under the document's own chain");
+    assert_eq!(start, pca(4), "minted under the document's own content chain");
     assert_eq!(k.snapshot().world().m5().content_count(&member1), n(4), "it landed in the HEAD (PUB-2.66)");
     assert_eq!(k.snapshot().world().m5().content_count(&pdoc()), n(3), "not in the pre-chain arrangement");
     // The shot: the client's rendering (a, c) with the extent its copy took.
@@ -2699,7 +2700,7 @@ fn a_stated_origin_or_draft_that_is_no_document_is_refused_not_projected() {
     let (member1, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the first member");
     let (member_start, _) = vs
         .insert(P1, &member1, vp(1, 4), vec![val(b"z")], declared())
-        .expect("a deposit named by the member, minted under its chain");
+        .expect("a deposit named by the member, minted under its content chain");
     assert_eq!(member_start, vca(1));
     let shoot = |runs: Vec<ShotRun>, draft: Option<Address>| {
         vs.publish(P1, &pdoc(), Shot { base: Some(base(&member1, 4)), draft, runs }, &readable)
@@ -2785,14 +2786,15 @@ fn a_declared_deposit_into_a_published_chain_lands_in_the_head_member_alone() {
     // PUB-2.65/2.66 (lane 3.2's ruling): once a head exists, a declared deposit
     // appends to the HEAD member's arrangement — named by the bare address,
     // by the head, or by a pinned member — and to nothing else; the atom's
-    // identity is minted under the chain of the address named; and the
-    // in-place refusal on the chain stands as before. `version` of the bare
-    // address then shares the HEAD's arrangement, not the pre-chain one.
+    // identity is minted under the content chain of the address named; and
+    // the in-place refusal on the chain stands as before. `version` of the
+    // bare address then shares the HEAD's arrangement, not the pre-chain one.
     let k = mem_kernel();
     let vs = deposit_abc(&k);
     let (member1, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the first member");
     assert_eq!(member1, vdoc());
-    // Named by the bare address: minted under pdoc's chain, placed in member1.
+    // Named by the bare address: minted under pdoc's content chain, placed
+    // in member1.
     let (bare_start, _) = vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], declared()).expect("deposit");
     assert_eq!(bare_start, pca(4));
     {
@@ -2802,8 +2804,8 @@ fn a_declared_deposit_into_a_published_chain_lands_in_the_head_member_alone() {
         assert_eq!(m5.point(&member1, &vp(1, 4)), Some(pca(4)));
         assert_eq!(m5.content_count(&pdoc()), n(3), "the pre-chain arrangement did not");
     }
-    // Named by the head itself: minted under the member's chain, placed in
-    // it; judged fresh against the head's extent.
+    // Named by the head itself: minted under the member's content chain,
+    // placed in it; judged fresh against the head's extent.
     let (head_start, _) = vs.insert(P1, &member1, vp(1, 5), vec![val(b"y")], declared()).expect("deposit");
     assert_eq!(head_start, vca(1));
     assert!(matches!(
@@ -3468,8 +3470,8 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
     assert_eq!(m5.point(&fork, &vp(1, 3)), Some(pca(3)));
     assert_eq!(m5.point(&fork, &vp(1, 4)), None);
     // The shot replayed as one placement: the member holds the four by
-    // reference and the fresh `c` under the edition's own chain, and the
-    // bare address floats to it.
+    // reference and the fresh `c` under the edition's own content chain, and
+    // the bare address floats to it.
     assert_eq!(m5.content_count(&vdoc()), n(5));
     assert_eq!(m5.point(&vdoc(), &vp(1, 5)), Some(pca(5)));
     assert_eq!(read_v(&s, &vdoc(), 5), b"c".to_vec());

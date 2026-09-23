@@ -14,12 +14,15 @@ use skep_address::{Level, Nat};
 use crate::error::ContentError;
 use crate::value::Val;
 
-/// Fixed-seed deterministic build-hasher → reproducible checkpoint
-/// serialization across runs (§Core data model: keys are trusted internal
-/// tumblers, not adversarial input, so flooding-resistance buys nothing).
-/// MUST be `BuildHasher + Default + Clone + Send + Sync + 'static`: the
-/// first three so [`ContentStore`]'s `Default`/`Clone`/`Deserialize` derives
-/// hold; the last three because `ContentStore` becomes a field of the
+/// Fixed-seed deterministic build-hasher (§Core data model: keys are trusted
+/// internal tumblers, not adversarial input, so flooding-resistance buys
+/// nothing). Its stated purpose — reproducible checkpoint serialization
+/// across runs — is discharged since 2026-09-23 by the sorting `Serialize`
+/// below, which does not read iteration order at all; the alias stays for
+/// its cost (a fixed hasher is cheaper than a randomized one) and for the
+/// bounds. MUST be `BuildHasher + Default + Clone + Send + Sync + 'static`:
+/// the first three so [`ContentStore`]'s `Default`/`Clone`/`Deserialize`
+/// derives hold; the last three because `ContentStore` becomes a field of the
 /// engine's `W`, and M2's `WorldState` bound requires
 /// `Send + Sync + 'static` — a pick missing them surfaces as an opaque
 /// compile error in `skep-engine`, far from the decision point. The
@@ -63,16 +66,56 @@ pub(crate) fn debug_assert_content_address(addr: &Address, site: &str) {
 /// `im::HashMap`, not `OrdMap`: the entire query surface is point membership
 /// and point value-at — nobody needs ordered iteration, range, or prefix
 /// scans (the allocator's max-under-prefix reads M3's own frontier, never
-/// M4 — Conflicts #3), so `Tumbler`'s `Ord` is deliberately unused; only
-/// `Eq + Hash` is relied on. Persistent (`im`) for the commit path: each
-/// `transact` produces a *new* `World` and outstanding snapshots pin old
-/// ones — [`apply_write`](ContentStore::apply_write) is O(log₃₂ n) and
-/// old/new maps share all untouched structure. The `Serialize`/`Deserialize`
-/// derive requires the `im` crate built with its `serde` feature (an
-/// M4-local dependency knob).
-#[derive(Clone, Default, Serialize, Deserialize)]
+/// M4 — Conflicts #3), so only `Eq + Hash` is relied on for the READS.
+/// Persistent (`im`) for the commit path: each `transact` produces a *new*
+/// `World` and outstanding snapshots pin old ones —
+/// [`apply_write`](ContentStore::apply_write) is O(log₃₂ n) and old/new maps
+/// share all untouched structure. The `Deserialize` derive requires the `im`
+/// crate built with its `serde` feature (an M4-local dependency knob);
+/// `Serialize` is written by hand, below, and is where `Tumbler`'s `Ord` IS
+/// used: the checkpoint's bytes must be a function of the contents.
+#[derive(Clone, Default, Deserialize)]
 pub struct ContentStore {
     map: im::HashMap<Tumbler, Val, FixedHasher>,
+}
+
+/// CANONICAL SERIALIZATION (2026-09-23, QUEUE item 10 option (i)): the same
+/// serde form the derive produced — a struct with the one field `map`, the
+/// map as a map with its length — but its entries emitted in `Tumbler` order
+/// rather than in the HAMT's iteration order, which is a function of the
+/// hasher crate's version and the platform's word size (`BigUint` hashes its
+/// digit vector, whose digit is `u32` on 32-bit and `u64` on 64-bit targets)
+/// and not of the contents. So two writes of one store, on two processes or
+/// two machines, yield one byte string, and M2's checkpoint header can commit
+/// to its body by hash. `Deserialize` is untouched: bincode's map decode is
+/// order-agnostic, and the HAMT is rebuilt from the entries whatever order
+/// they arrive in. Cost: one O(n log n) sort of the entry set per checkpoint,
+/// on top of the O(n) serialization the checkpoint already pays.
+impl Serialize for ContentStore {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut store = serializer.serialize_struct("ContentStore", 1)?;
+        store.serialize_field("map", &InTumblerOrder(&self.map))?;
+        store.end()
+    }
+}
+
+/// The content map as a serde map in `Tumbler` order — the sorting half of
+/// [`ContentStore`]'s `Serialize`, kept apart so the struct's own shape above
+/// reads as the derive's.
+struct InTumblerOrder<'a>(&'a im::HashMap<Tumbler, Val, FixedHasher>);
+
+impl Serialize for InTumblerOrder<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut entries: Vec<(&Tumbler, &Val)> = self.0.iter().collect();
+        entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        let mut map = serializer.serialize_map(Some(entries.len()))?;
+        for (addr, val) in entries {
+            map.serialize_entry(addr, val)?;
+        }
+        map.end()
+    }
 }
 
 impl ContentStore {

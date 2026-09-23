@@ -231,6 +231,30 @@ pub struct Fixture {
     pub full_len: u64,
 }
 
+/// How far a fixture's op sequence runs: the hazard suite's eleven, or those
+/// eleven EXTENDED by the golden fixture's seven (the encoding report's §7).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Extent {
+    /// The eleven ops the H3 ruling names — the dirty-crash suite's fixture,
+    /// unchanged.
+    Hazard,
+    /// The eleven, then the ops that reach every journal variant and leaf
+    /// form the eleven do not: `RegisterNode` with a component above 2³² (a
+    /// two-digit `Nat`), `Allocate { published: true }`, a second document,
+    /// a multi-run `ContentPlace` (a copy from a range the pivot fragmented),
+    /// and `ContentReorder` in both its shapes (three and four ordinals).
+    Golden,
+}
+
+/// The op index of a golden fixture's commits — eleven hazard ops and the
+/// seven golden ones; the hazard fixture stops at the first figure.
+pub const HAZARD_OPS: usize = 11;
+pub const GOLDEN_OPS: usize = 18;
+
+/// A node component above 2³²: two base-`u32` digits, the `Nat` form the
+/// hazard ops never reach.
+pub const WIDE_NODE_COMPONENT: u64 = (1u64 << 32) + 7;
+
 impl Fixture {
     /// Build at `dir`. `ckpt_after` lists 1-based op indices after which
     /// `Kernel::checkpoint()` runs (empty ⇒ pure-journal fixture). Every
@@ -240,6 +264,20 @@ impl Fixture {
     /// against it therefore holds recovery — from whichever base the fault
     /// leaves standing — to the world that was acknowledged.
     pub fn build(dir: &Path, ckpt_after: &[usize]) -> Fixture {
+        Self::build_with(dir, ckpt_after, Extent::Hazard)
+    }
+
+    /// [`Fixture::build`] EXTENDED by the golden fixture's seven ops
+    /// ([`Extent::Golden`]): the eighteen commits the byte fixture under
+    /// `tests/golden/` is produced from — by these ops and never by literals,
+    /// since M5's record variants cannot be built outside their crate. The
+    /// same capture discipline: one oracle dump per boundary, bounded replay
+    /// held to it while the journal is healthy.
+    pub fn build_golden(dir: &Path, ckpt_after: &[usize]) -> Fixture {
+        Self::build_with(dir, ckpt_after, Extent::Golden)
+    }
+
+    fn build_with(dir: &Path, ckpt_after: &[usize], extent: Extent) -> Fixture {
         let engine =
             Engine::open(cfg_manual(dir)).expect("fixture open");
         let seg = seg_file(dir, 1);
@@ -374,9 +412,76 @@ impl Fixture {
         engine.vstream().delete(OWNER, &doc, vp(1, 1), n(1)).expect("delete");
         capture(&engine, &mut boundaries);
 
+        if extent == Extent::Golden {
+            // 12: a node whose second component is above 2³² — `RegisterNode`,
+            //     and the two-digit `Nat` form, which no other op reaches.
+            let wide = Tumbler::new(vec![n(1), Nat::from(WIDE_NODE_COMPONENT)])
+                .expect("a two-component node tumbler");
+            engine.namespace().register_node(wide).expect("register the wide node");
+            capture(&engine, &mut boundaries);
+
+            // 13: a PUBLISHED document — `Allocate { published: true }`, the
+            //     bit the draft mint above journals as `false`. Left empty: a
+            //     published document takes no in-place edit (PUB-2.11).
+            engine
+                .namespace()
+                .create_new_document(USER, &acct, Some(true))
+                .expect("create the published document");
+            capture(&engine, &mut boundaries);
+
+            // 14: a second DRAFT, the copy's destination's source.
+            let (doc2, _) = engine
+                .namespace()
+                .create_new_document(USER, &acct, Some(false))
+                .expect("create the second document");
+            capture(&engine, &mut boundaries);
+
+            // 15: its content — three values, one run.
+            engine
+                .vstream()
+                .insert(
+                    OWNER,
+                    &doc2,
+                    vp(1, 1),
+                    vec![Val::new(vec![b'x']), Val::new(vec![b'y']), Val::new(vec![b'z'])],
+                    Deposit::Undeclared,
+                )
+                .expect("insert xyz");
+            capture(&engine, &mut boundaries);
+
+            // 16: a three-ordinal REARRANGE (the pivot): [1, 2) moves after
+            //     [2, 4), so `x y z` reads `y z x` — and the arrangement is now
+            //     two runs, the fragmented source the copy below wants.
+            engine
+                .vstream()
+                .rearrange(OWNER, &doc2, &[vp(1, 1), vp(1, 2), vp(1, 4)])
+                .expect("pivot doc2");
+            capture(&engine, &mut boundaries);
+
+            // 17: a COPY of that fragmented range into the first document, at
+            //     its append boundary — a `ContentPlace` carrying two runs.
+            engine
+                .vstream()
+                .copy(OWNER, &doc, vp(1, 3), &[vspec(&doc2, 1, 3)])
+                .expect("copy doc2's range into doc");
+            capture(&engine, &mut boundaries);
+
+            // 18: a four-ordinal REARRANGE (the swap) over the five positions
+            //     the first document now holds.
+            engine
+                .vstream()
+                .rearrange(OWNER, &doc, &[vp(1, 1), vp(1, 2), vp(1, 4), vp(1, 6)])
+                .expect("swap in doc");
+            capture(&engine, &mut boundaries);
+        }
+
         drop(engine); // journal lock released; the fixture is now files.
 
-        assert_eq!(boundaries.len(), 11, "the mixed fixture is eleven commits");
+        let commits = match extent {
+            Extent::Hazard => HAZARD_OPS,
+            Extent::Golden => GOLDEN_OPS,
+        };
+        assert_eq!(boundaries.len(), commits, "the fixture is {commits} commits");
         let full_len = fs::metadata(&seg).expect("segment").len();
         assert_eq!(
             full_len,

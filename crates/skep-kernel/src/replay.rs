@@ -12,22 +12,27 @@
 //! over an ordered, ranged set with no coordinate twice — so this module
 //! applies what it is given.
 
-use crate::checkpoint::{CheckpointMeta, LoadRefused};
+use crate::checkpoint::{CheckpointMeta, LoadRefused, Loaded};
 use crate::journal::{self, ScanFail, ScanOutcome, SegmentMeta};
 use crate::WorldState;
 
 /// A base to fold onto: the world embodying every record with
-/// `Seq ≤ s_load`, already seeded through [`WorldState::rebuild_derived`].
+/// `Seq ≤ s_load`, already seeded through [`WorldState::rebuild_derived`],
+/// and the commit chain's value at that coordinate, which the scan above it
+/// verifies the first committed transaction against.
 ///
-/// The two travel together and neither is settable from outside this module,
+/// The three travel together and none is settable from outside this module,
 /// so [`select_base`] is the only site that can mint one. That is what makes
 /// the pairing an invariant rather than a habit: a world at a coordinate it
 /// does not embody folds records it already holds, and since
 /// [`WorldState::apply`] need not be idempotent, that is silent double
-/// application answered `Ok`.
+/// application answered `Ok`; and a chain value from anywhere but the base's
+/// own header would judge the first link above the base against the wrong
+/// predecessor.
 pub(crate) struct Base<W> {
     s_load: u64,
     world: W,
+    chain_head: [u8; 32],
 }
 
 impl<W> Base<W> {
@@ -60,7 +65,7 @@ impl<W> Base<W> {
         segs: &[SegmentMeta],
         bound: Option<u64>,
     ) -> Result<ScanOutcome, ScanFail> {
-        journal::scan(segs, self.s_load, bound)
+        journal::scan(segs, self.s_load, bound, self.chain_head)
     }
 }
 
@@ -98,6 +103,11 @@ pub(crate) struct Unreachable {
 /// carries the hints forward across everything above it (§7, seam
 /// contract 2).
 ///
+/// The chain value a base carries is its own: a checkpoint's `SKC3` header
+/// holds the chain at its coordinate, and genesis holds
+/// [`journal::CHAIN_GENESIS`] — the one seam replay needs for the chain, since
+/// this is the only site that reads a header.
+///
 /// `genesis` is borrowed and copied only on the branch that uses it, so the
 /// common case — a checkpoint that loads — costs no copy of a world at all.
 ///
@@ -119,10 +129,11 @@ pub(crate) fn select_base<W: WorldState>(
             continue;
         }
         match cp.load::<W>() {
-            Ok(world) => {
+            Ok(Loaded { world, chain_head }) => {
                 return Ok(Base {
                     s_load: cp.seq,
                     world: world.rebuild_derived(),
+                    chain_head,
                 });
             }
             // Newest-first, so the first refusal met is the newest base's —
@@ -143,6 +154,7 @@ pub(crate) fn select_base<W: WorldState>(
     Ok(Base {
         s_load: 0,
         world: genesis.clone().rebuild_derived(),
+        chain_head: journal::CHAIN_GENESIS,
     })
 }
 

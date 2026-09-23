@@ -5,9 +5,45 @@ use std::io;
 
 use crate::Seq;
 
+/// The one remedy a board written under another format has (PUB-1.2, the
+/// owner's ruling of 2026-09-23: dev boards regenerate; no migration path, no
+/// dual-stamp reading). Rendered by [`OpenError::ForeignFormat`] for the
+/// journal and by the checkpoint's own load refusal for a checkpoint, so the
+/// daemon prints the same sentence whichever file names the foreign stamp.
+pub(crate) const NO_MIGRATION_REMEDY: &str = "there is no migration path — every board is a \
+    development artifact (PUB-1.2): delete the data directory and start over";
+
+/// A four-byte format stamp as an operator reads it: printable ASCII as
+/// itself (`SKJ2`), anything else escaped (`\xff`), so a message naming a
+/// stamp never emits a control byte.
+pub(crate) fn stamp_text(stamp: &[u8; 4]) -> String {
+    stamp.escape_ascii().to_string()
+}
+
 /// Failure of [`crate::Kernel::open`] (§6/§7).
 #[derive(Debug)]
 pub enum OpenError {
+    /// The journal was written under ANOTHER format: its first scanned
+    /// segment opens with a well-formed sync word that is not this build's
+    /// (`SKJ2` under a build writing `SKJ3`). Refused BY NAME, before the
+    /// scan — which would otherwise read the whole segment as one corrupt run
+    /// reaching end-of-file, classify it as the un-acked tail, TRUNCATE the
+    /// segment to nothing and serve an empty board — and before any write, so
+    /// the files are exactly as they were found. Operator-intervention
+    /// condition — not auto-retried; the remedy is the ruled one
+    /// ([`NO_MIGRATION_REMEDY`]): no build reads two formats.
+    ///
+    /// A checkpoint under another format is refused the same way but on its
+    /// own channel: it is one base among a fallback chain, so it is skipped
+    /// with its account, and reaches an operator through
+    /// [`OpenError::BadCheckpoint`]'s cause when the chain is exhausted —
+    /// naming the stamp found, the stamp expected and the same remedy.
+    ForeignFormat {
+        /// The sync word the segment opens with.
+        found: [u8; 4],
+        /// The sync word this build writes and reads.
+        expected: [u8; 4],
+    },
     /// The configuration is not one this kernel offers; the payload names the
     /// rule broken. Not an environmental failure: no retry and no operator
     /// action on the journal changes it, only a corrected configuration does.
@@ -28,39 +64,49 @@ pub enum OpenError {
         /// of what names the remedy, since nothing else about an exhausted
         /// chain distinguishes one condition from another. A body that will
         /// not decode is a binary on the wrong side of a `W` format change:
-        /// roll it forward. A failed header checksum, a truncated file or a
-        /// foreign format stamp is damage: restore the media. `None` when no
-        /// candidate was tried at all — the journal retains no checkpoint,
-        /// and only its unreachable genesis was ever available.
+        /// roll it forward. A failed header checksum or hash, or a truncated
+        /// file, is damage: restore the media. A foreign format stamp is a
+        /// board written under another format, and its account names the
+        /// stamp found, the stamp expected and the remedy
+        /// ([`NO_MIGRATION_REMEDY`]), as [`OpenError::ForeignFormat`] does
+        /// for the journal. `None` when no candidate was tried at all — the
+        /// journal retains no checkpoint, and only its unreachable genesis
+        /// was ever available.
         cause: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
     },
-    /// Durable committed data the recovered state needs cannot be read. Four
+    /// Durable committed data the recovered state needs cannot be read. Five
     /// conditions reach here: a corrupt run inside the genuinely-replayed
     /// range `(S_load, W]` (a run reaching EOF is the un-acked / torn tail,
     /// not this); a segment whose frame stream could not be enumerated in
     /// bounded work, so nothing derived from it is more than a prefix; a
-    /// committed record that does not decode as `W::Record`, or one the
-    /// committed set presents twice; and a committed head that leaves no
-    /// coordinate for a successor, which no sequencer here could have
-    /// written. Halt, never drop — nothing is folded, nothing is installed,
-    /// and nothing is truncated. Operator-intervention condition — not
-    /// auto-retried (§7).
+    /// committed transaction above the base whose marker carries a chain
+    /// value that is not the recomputation over its predecessor's and its
+    /// own records — a CHAIN BREAK: the transaction was rewritten
+    /// consistently with its frame CRCs, or the one it should follow is not
+    /// the one before it; a committed record that does not decode as
+    /// `W::Record`, or one the committed set presents twice; and a committed
+    /// head that leaves no coordinate for a successor, which no sequencer
+    /// here could have written. Halt, never drop — nothing is folded,
+    /// nothing is installed, and nothing is truncated.
+    /// Operator-intervention condition — not auto-retried (§7).
     Corruption {
         /// The coordinate naming the damage, which differs by condition: for
         /// a corrupt run, the next INTACT frame's coordinate — the run's own
         /// seqs are unreadable, so this bounds the damage rather than
         /// locating it; for an unbounded resynchronization, the base's own
         /// coordinate, since the damage lies somewhere above it and the scan
-        /// could not reach past it to say where; for an undecodable or
-        /// repeated record, that record's own `Seq`; for an exhausted order,
-        /// the committed head itself.
+        /// could not reach past it to say where; for a chain break, the
+        /// `last_seq` of the first transaction whose chain did not verify;
+        /// for an undecodable or repeated record, that record's own `Seq`;
+        /// for an exhausted order, the committed head itself.
         at: Seq,
-        /// The account of what could not be read, for the one condition that
-        /// has one: a committed record that does not decode as `W::Record`,
-        /// where the serializer's own refusal is what separates a
-        /// writer/reader skew — a binary rolled back over a record format —
+        /// The account of what could not be read, for the two conditions
+        /// that have one: a committed record that does not decode as
+        /// `W::Record`, where the serializer's own refusal is what separates
+        /// a writer/reader skew — a binary rolled back over a record format —
         /// from bit-rot, two conditions this variant otherwise reports
-        /// alike and an operator must not treat alike. The other three carry
+        /// alike and an operator must not treat alike; and a chain break,
+        /// whose account says which link failed. The other three carry
         /// `None`: a corrupt run's own bytes are unreadable, an unenumerable
         /// stream is a work-budget verdict, and an exhausted order is
         /// arithmetic.
@@ -72,6 +118,13 @@ impl fmt::Display for OpenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             OpenError::InvalidConfig(msg) => write!(f, "invalid kernel configuration: {msg}"),
+            OpenError::ForeignFormat { found, expected } => write!(
+                f,
+                "journal is not this build's format: its segment opens with the stamp `{}`, this \
+                 build reads and writes `{}` only; {NO_MIGRATION_REMEDY}",
+                stamp_text(found),
+                stamp_text(expected)
+            ),
             OpenError::Io(e) => write!(f, "journal open/recovery I/O failure: {e}"),
             OpenError::BadCheckpoint { cause: None } => {
                 write!(f, "no retained checkpoint loads and genesis is unreachable")
@@ -103,7 +156,9 @@ impl std::error::Error for OpenError {
             OpenError::Corruption { cause, .. } | OpenError::BadCheckpoint { cause } => {
                 cause.as_deref().map(|e| e as _)
             }
-            OpenError::InvalidConfig(_) => None,
+            // A foreign stamp is the whole of its own account: the two words
+            // and the remedy are in the sentence, and nothing underlies them.
+            OpenError::InvalidConfig(_) | OpenError::ForeignFormat { .. } => None,
         }
     }
 }

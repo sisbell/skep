@@ -32,6 +32,16 @@ use crate::{LockKey, Seq, WorldState};
 struct Committed<W> {
     seq: Seq,
     world: W,
+    /// The commit chain's value at `seq`: what the transaction that installed
+    /// this root carried in its marker, or what recovery derived for the
+    /// committed head. Paired with the coordinate for the reason the world
+    /// is — a checkpoint taken off this root writes it as the header's
+    /// `chain_head`, and a chain read apart from the root it names would
+    /// commit a later world under an earlier boundary.
+    /// [`journal::CHAIN_GENESIS`] at `Seq(0)` and, under
+    /// [`Durability::InMemory`], at every coordinate: there are no frames to
+    /// hash, and nothing reads it there.
+    chain: [u8; 32],
 }
 
 /// A pinned, consistent view of one committed state (MIC clauses 4 & 6;
@@ -454,10 +464,13 @@ impl<W: WorldState> Kernel<W> {
     /// REFUSAL PRECEDENCE — the steps above are the order in which refusals
     /// speak: [`OpenError::InvalidConfig`] precedes the lock, the lock
     /// precedes any read of the journal, [`OpenError::BadCheckpoint`]
-    /// precedes [`OpenError::Corruption`], and EVERY route to `Corruption`,
-    /// in the order they speak — an unenumerable frame stream, the classified
-    /// corrupt run, the exhausted `Seq` order, and the fold's own verdict on
-    /// an undecodable or repeated record — precedes the tail truncation, which
+    /// precedes [`OpenError::ForeignFormat`] — the first scanned segment's
+    /// stamp is read once the base has said where the scan begins, and
+    /// before a byte of the scan — which precedes [`OpenError::Corruption`],
+    /// and EVERY route to `Corruption`, in the order they speak — an
+    /// unenumerable frame stream, the classified corrupt run, the chain
+    /// break, the exhausted `Seq` order, and the fold's own verdict on an
+    /// undecodable or repeated record — precedes the tail truncation, which
     /// is why a halt never cuts anything.
     ///
     /// CALLER CONTRACT — `genesis` (= Σ₀) MUST be byte-identical on every
@@ -475,6 +488,7 @@ impl<W: WorldState> Kernel<W> {
                 Committed {
                     seq: Seq(0),
                     world: genesis,
+                    chain: journal::CHAIN_GENESIS,
                 },
                 Journal::InMemory,
                 None,
@@ -516,11 +530,29 @@ impl<W: WorldState> Kernel<W> {
             OpenError::BadCheckpoint { cause: fail.cause }
         })?;
 
-        // Pass 1: derive W and classify the corrupt runs (§7). A scan that
-        // could not enumerate the frame stream produces no outcome at all and
-        // halts here. Of the runs it does report, those beyond W and the EOF
-        // ones are the un-acked/torn tail, physically discarded below, and
-        // those at or below S_load are already embodied in the base.
+        // THE FOREIGN-STAMP REFUSAL, ahead of the scan (the encoding report's
+        // §8; the owner's ruling of 2026-09-23). A segment written under
+        // another format holds no frame this build's sync word anchors, so
+        // the scan would read the whole of it as one corrupt run reaching
+        // end-of-file — the un-acked tail — and the cut below would TRUNCATE
+        // it to nothing and serve an empty board over a journal it had just
+        // erased. Refused by name instead, before a byte is scanned and
+        // before anything is written: the files stay as they were found.
+        if let Some(found) = journal::foreign_stamp(&segs, base.s_load())? {
+            return Err(OpenError::ForeignFormat {
+                found,
+                expected: journal::MAGIC,
+            });
+        }
+
+        // Pass 1: derive W, classify the corrupt runs and verify the chain
+        // (§7). A scan that could not enumerate the frame stream produces no
+        // outcome at all and halts here. Of the runs it does report, those
+        // beyond W and the EOF ones are the un-acked/torn tail, physically
+        // discarded below, and those at or below S_load are already embodied
+        // in the base. The run verdict speaks before the chain's: a run that
+        // swallowed a transaction breaks the chain at the next one, and the
+        // run names the cause.
         let scan = base.scan(&segs, None).map_err(|fail| match fail {
             ScanFail::Io(e) => OpenError::Io(e),
             ScanFail::Unbounded { at } => OpenError::Corruption {
@@ -534,6 +566,12 @@ impl<W: WorldState> Kernel<W> {
                 cause: None,
             });
         }
+        if let Some(at) = scan.chain_break() {
+            return Err(OpenError::Corruption {
+                at: Seq(at),
+                cause: Some(journal::chain_break_cause(at)),
+            });
+        }
 
         // The coordinate this session would commit at. A journal whose head
         // leaves none is one this kernel's sequencer cannot have written, and
@@ -544,6 +582,9 @@ impl<W: WorldState> Kernel<W> {
             at: Seq(committed_head),
             cause: None,
         })?;
+        // The chain at that head: what the appender continues from and the
+        // root carries, so a checkpoint off this root names the right link.
+        let chain_head = scan.chain_head;
 
         // Pass 2: fold exactly (S_load, W], in Seq order (§6/§7).
         let world = replay::fold_to(base, &scan, committed_head).map_err(|fail| {
@@ -561,11 +602,12 @@ impl<W: WorldState> Kernel<W> {
         // this cut settles and which the appender reads once.
         journal::truncate_tail(dir, &scan)?;
 
-        let writer = JournalWriter::open_active(dir, next_seq)?;
+        let writer = JournalWriter::open_active(dir, next_seq, chain_head)?;
         Ok((
             Committed {
                 seq: Seq(committed_head),
                 world,
+                chain: chain_head,
             },
             Journal::Segments(writer),
             lock,
@@ -766,10 +808,6 @@ impl<W: WorldState> Kernel<W> {
             self.poisoned.store(true, Ordering::Release);
             return Err(TxnError::Poisoned);
         };
-        let committed = Committed {
-            seq: Seq(last),
-            world: working,
-        };
 
         // The commit region: one call into the journal, which serializes the
         // records, judges the size limits no mode may skip, and commits
@@ -792,10 +830,15 @@ impl<W: WorldState> Kernel<W> {
             let state = &mut *state;
             let root = &self.root;
             catch_unwind(AssertUnwindSafe(move || {
-                state.journal.commit_txn(first, records, move || {
+                state.journal.commit_txn(first, records, move |chain| {
                     // Atomic install AFTER durability (A0/A4; durable-before-
-                    // visible §1): external readers see none-or-all.
-                    root.store(Arc::new(committed));
+                    // visible §1): external readers see none-or-all. The
+                    // root carries the chain the durable marker does.
+                    root.store(Arc::new(Committed {
+                        seq: Seq(last),
+                        world: working,
+                        chain,
+                    }));
                 })
             }))
         };
@@ -926,9 +969,13 @@ impl<W: WorldState> Kernel<W> {
         let _serial = self.checkpoint_mutex.lock();
         let snap = self.root.load_full();
         let s = snap.seq;
-        checkpoint::write(&journaled.dir, s.0, &snap.world).map_err(|fail| match fail {
-            checkpoint::WriteFail::Serialize(e) => CheckpointError::Serialize(e),
-            checkpoint::WriteFail::Io(e) => CheckpointError::Io(e),
+        // The seq, the world and the chain head off ONE root: a checkpoint
+        // names the chain at its own coordinate, never a later root's.
+        checkpoint::write(&journaled.dir, s.0, &snap.world, &snap.chain).map_err(|fail| {
+            match fail {
+                checkpoint::WriteFail::Serialize(e) => CheckpointError::Serialize(e),
+                checkpoint::WriteFail::Io(e) => CheckpointError::Io(e),
+            }
         })?;
         // Retention policy — how many bases to keep — applied to the
         // checkpoint set, which answers with the oldest survivor. There is
@@ -1052,6 +1099,15 @@ impl<W: WorldState> Kernel<W> {
                 cause: None,
             });
         }
+        // A chain break anywhere above the base is at-rest damage for the
+        // reason a run anywhere is: the link that failed may sit above `at`,
+        // and what it says is that the region is not the history it claims.
+        if let Some(break_at) = scan.chain_break() {
+            return Err(HistoryError::Corruption {
+                at: Seq(break_at),
+                cause: Some(journal::chain_break_cause(break_at)),
+            });
+        }
         if let Err(nearest) = scan.require_boundary(at.0) {
             return Err(HistoryError::NotABoundary {
                 nearest: Seq(nearest),
@@ -1102,6 +1158,165 @@ mod tests {
             },
             checkpoint: CheckpointPolicy::Manual,
         }
+    }
+
+    /// A fresh appender at genesis, for the journals these tests build
+    /// without a kernel.
+    fn fresh_writer(dir: &std::path::Path) -> JournalWriter {
+        JournalWriter::open_active(dir, 1, journal::CHAIN_GENESIS).unwrap()
+    }
+
+    #[test]
+    fn a_journal_under_another_format_is_refused_by_name_and_left_untouched() {
+        // The encoding report's §8: under `SKJ2` a foreign-stamp journal was
+        // not refused but WIPED — scanned as one corrupt run reaching
+        // end-of-file, classified as the un-acked tail, truncated to zero
+        // bytes and served as an empty board. Under `SKJ3` it is refused
+        // before the scan, naming the stamp found, the stamp expected and the
+        // ruled remedy, and every byte is as it was found. The fixture is
+        // this build's own journal with every sync word rewritten to `SKJ2`:
+        // the frame CRC does not cover the sync word, so this is byte for
+        // byte what an old-format file looks like to the parser.
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let k = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
+                .unwrap();
+            for x in [10u64, 20] {
+                k.transact::<_, ()>(&[], |stg| {
+                    stg.push(x);
+                    Ok(())
+                })
+                .unwrap();
+            }
+        }
+        let seg = journal::segment_path(dir.path(), 1);
+        let mut data = fs::read(&seg).unwrap();
+        let mut pos = 0usize;
+        while pos + journal::FRAME_HEADER_LEN <= data.len() {
+            assert_eq!(&data[pos..pos + 4], b"SKJ3", "a clean frame stream");
+            data[pos..pos + 4].copy_from_slice(b"SKJ2");
+            let len = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().unwrap()) as usize;
+            pos += journal::FRAME_HEADER_LEN + len;
+        }
+        fs::write(&seg, &data).unwrap();
+
+        let err = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
+            .expect_err("another format's journal is not this build's to open");
+        assert!(
+            matches!(
+                err,
+                OpenError::ForeignFormat {
+                    found: [b'S', b'K', b'J', b'2'],
+                    expected: [b'S', b'K', b'J', b'3'],
+                }
+            ),
+            "got {err:?}"
+        );
+        let rendered = err.to_string();
+        for named in ["`SKJ2`", "`SKJ3`", "not this build's format", "delete the data directory"] {
+            assert!(rendered.contains(named), "{named} missing from: {rendered}");
+        }
+        assert!(std::error::Error::source(&err).is_none());
+        assert_eq!(fs::read(&seg).unwrap(), data, "the refused journal was touched");
+        // …and it keeps refusing: a halt writes nothing, so nothing repairs it.
+        assert!(matches!(
+            Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new()),
+            Err(OpenError::ForeignFormat { .. })
+        ));
+        assert_eq!(fs::read(&seg).unwrap(), data);
+
+        // Damage at offset 0 is NOT a format event: it stays the scan's — here
+        // a torn first frame with nothing committed after it, which is the
+        // un-acked tail, cut and served empty, as the dirty-crash suite pins.
+        let mut junk = data.clone();
+        junk[..4].copy_from_slice(&[0xAB, 0xCD, 0xEF, 0x01]);
+        // Every frame back to this build's stamp but the first, which is junk.
+        let mut pos = 0usize;
+        while pos + journal::FRAME_HEADER_LEN <= junk.len() {
+            if pos > 0 {
+                junk[pos..pos + 4].copy_from_slice(b"SKJ3");
+            }
+            let len = u32::from_le_bytes(junk[pos + 4..pos + 8].try_into().unwrap()) as usize;
+            pos += journal::FRAME_HEADER_LEN + len;
+        }
+        fs::write(&seg, &junk).unwrap();
+        let out = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new());
+        assert!(
+            !matches!(out, Err(OpenError::ForeignFormat { .. })),
+            "junk at offset 0 was read as a format stamp: {out:?}"
+        );
+    }
+
+    #[test]
+    fn a_chain_break_halts_the_open_and_the_bounded_read_and_cuts_nothing() {
+        // Three commits; the second's marker rewritten consistently with its
+        // frame CRC. Every frame is intact and every group commits, so
+        // nothing but the chain can see it — and the open halts on it, at
+        // the coordinate the rewritten transaction closes, with an account,
+        // truncating nothing; the bounded read halts the same way.
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let k = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
+                .unwrap();
+            for x in [10u64, 20, 30] {
+                k.transact::<_, ()>(&[], |stg| {
+                    stg.push(x);
+                    Ok(())
+                })
+                .unwrap();
+            }
+        }
+        let seg = journal::segment_path(dir.path(), 1);
+        let mut data = fs::read(&seg).unwrap();
+        // Frames: 0=T1 rec, 1=T1 marker, 2=T2 rec, 3=T2 marker, …
+        let mut starts = Vec::new();
+        let mut pos = 0usize;
+        while pos + journal::FRAME_HEADER_LEN <= data.len() {
+            starts.push(pos);
+            let len = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().unwrap()) as usize;
+            pos += journal::FRAME_HEADER_LEN + len;
+        }
+        let marker = starts[3];
+        let len = u32::from_le_bytes(data[marker + 4..marker + 8].try_into().unwrap()) as usize;
+        let payload = marker + journal::FRAME_HEADER_LEN..marker + journal::FRAME_HEADER_LEN + len;
+        data[payload.start + 24] ^= 0xFF; // the chain's first byte
+        let crc = crc32c::crc32c_append(
+            crc32c::crc32c(&data[marker + 4..marker + 8]),
+            &data[payload.clone()],
+        );
+        data[marker + 8..marker + 12].copy_from_slice(&crc.to_le_bytes());
+        // A torn tail past the last committed marker, so there IS something a
+        // truncation would take.
+        data.extend_from_slice(&[0xAB, 0xCD, 0xEF]);
+        fs::write(&seg, &data).unwrap();
+
+        let err = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
+            .expect_err("a broken chain is not something to fold");
+        assert!(
+            matches!(err, OpenError::Corruption { at: Seq(2), .. }),
+            "got {err:?}"
+        );
+        assert!(err.to_string().contains("chain break"), "got {err}");
+        assert!(std::error::Error::source(&err).is_some());
+        assert_eq!(fs::read(&seg).unwrap(), data, "a halted open truncated the journal");
+
+        // The bounded read, off a kernel opened over a checkpoint ABOVE the
+        // break — the base embodies the rewrite, so the open succeeds — halts
+        // on the same break when asked for a boundary below the base.
+        fs::write(&seg, &data[..data.len() - 3]).unwrap();
+        checkpoint::write(dir.path(), 3, &vec![10u64, 20, 30], &journal::CHAIN_GENESIS)
+            .expect("fixture base");
+        let k = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
+            .expect("the base embodies the rewritten transaction");
+        assert_eq!(k.current_seq(), Seq(3));
+        let err = k
+            .world_at(Seq(1))
+            .expect_err("a genesis replay meets the break at 2, above the boundary asked");
+        assert!(
+            matches!(err, HistoryError::Corruption { at: Seq(2), .. }),
+            "got {err:?}"
+        );
+        assert!(err.to_string().contains("chain break"), "got {err}");
     }
 
     // A world of raw byte records, for the size-refusal tests: `Vec<u64>`'s
@@ -1262,15 +1477,15 @@ mod tests {
         // Seq is never corruption.
         let dir = tempfile::tempdir().unwrap();
         {
-            let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+            let mut writer = fresh_writer(dir.path());
             let rec = |x: u64| journal::encode_record(&x).unwrap();
             // A journal built without a kernel: no root to install into.
             writer
-                .commit_txn(1, vec![rec(10)], || {})
+                .commit_txn(1, vec![rec(10)], |_| {})
                 .expect("fixture commit");
             // burned 2..=4
             writer
-                .commit_txn(5, vec![rec(50), rec(60)], || {})
+                .commit_txn(5, vec![rec(50), rec(60)], |_| {})
                 .expect("fixture commit");
         }
         let k = Kernel::<Vec<u64>>::open(
@@ -1290,13 +1505,13 @@ mod tests {
         // outcome recovery may not have. Halt (§7).
         let dir = tempfile::tempdir().unwrap();
         {
-            let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+            let mut writer = fresh_writer(dir.path());
             let rec = |x: u64| journal::encode_record(&x).unwrap();
             writer
-                .commit_txn(1, vec![rec(10)], || {})
+                .commit_txn(1, vec![rec(10)], |_| {})
                 .expect("fixture commit");
             writer
-                .commit_txn(1, vec![rec(20)], || {})
+                .commit_txn(1, vec![rec(20)], |_| {})
                 .expect("fixture commit");
         }
         // A torn tail past the last committed marker, so there IS something a
@@ -1358,10 +1573,10 @@ mod tests {
         // `Corruption` conditions that has an account at all (§7).
         let dir = tempfile::tempdir().unwrap();
         {
-            let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+            let mut writer = fresh_writer(dir.path());
             // Variant index 5, written where `Narrow` has four.
             writer
-                .commit_txn(1, vec![journal::encode_record(&5u32).unwrap()], || {})
+                .commit_txn(1, vec![journal::encode_record(&5u32).unwrap()], |_| {})
                 .expect("fixture commit");
         }
         let err = Kernel::<NarrowWorld>::open(
@@ -1392,17 +1607,18 @@ mod tests {
         // the route that reaches it through `world_at`'s own mapping.
         let dir = tempfile::tempdir().unwrap();
         {
-            let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+            let mut writer = fresh_writer(dir.path());
             // Variant index 5, written where `Narrow` has four…
             writer
-                .commit_txn(1, vec![journal::encode_record(&5u32).unwrap()], || {})
+                .commit_txn(1, vec![journal::encode_record(&5u32).unwrap()], |_| {})
                 .expect("fixture commit");
             // …then a record this build reads, and a base embodying both.
             writer
-                .commit_txn(2, vec![journal::encode_record(&Narrow::A).unwrap()], || {})
+                .commit_txn(2, vec![journal::encode_record(&Narrow::A).unwrap()], |_| {})
                 .expect("fixture commit");
         }
-        checkpoint::write(dir.path(), 2, &NarrowWorld(Vec::new())).expect("fixture base");
+        checkpoint::write(dir.path(), 2, &NarrowWorld(Vec::new()), &journal::CHAIN_GENESIS)
+            .expect("fixture base");
 
         let k = Kernel::<NarrowWorld>::open(
             cfg(dir.path(), BurnedSeqPolicy::Rollback),
@@ -1440,19 +1656,19 @@ mod tests {
         // coordinate — genesis here (§7).
         let dir = tempfile::tempdir().unwrap();
         {
-            let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+            let mut writer = fresh_writer(dir.path());
             let mut evil = Vec::new();
             while evil.len() < 256 * 1024 {
-                evil.extend_from_slice(b"SKJ2");
+                evil.extend_from_slice(b"SKJ3");
                 evil.extend_from_slice(&(64 * 1024u32).to_le_bytes()); // a len that fits
                 evil.extend_from_slice(&0u32.to_le_bytes()); // a crc that will not
                 evil.extend_from_slice(&[0u8; 4]);
             }
             writer
-                .commit_txn(1, vec![evil], || {})
+                .commit_txn(1, vec![evil], |_| {})
                 .expect("fixture commit");
             writer
-                .commit_txn(2, vec![journal::encode_record(&20u64).unwrap()], || {})
+                .commit_txn(2, vec![journal::encode_record(&20u64).unwrap()], |_| {})
                 .expect("fixture commit");
         }
         // Break the frame carrying those bytes, so the scan resynchronizes
@@ -1508,7 +1724,8 @@ mod tests {
         // Replace the sole retained base with one whose header checksum is
         // VALID and whose body is not this world: everything the header can
         // prove passes, and the decode still refuses.
-        checkpoint::write(dir.path(), 8, &"not this world".to_string()).expect("fixture base");
+        checkpoint::write(dir.path(), 8, &"not this world".to_string(), &journal::CHAIN_GENESIS)
+            .expect("fixture base");
 
         let err = Kernel::<Vec<Vec<u8>>>::open(cfg, Vec::new())
             .expect_err("an exhausted chain refuses");
@@ -1529,10 +1746,10 @@ mod tests {
         // wrapped (§2/§7).
         let dir = tempfile::tempdir().unwrap();
         {
-            let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+            let mut writer = fresh_writer(dir.path());
             let record = journal::encode_record(&10u64).unwrap();
             writer
-                .commit_txn(u64::MAX, vec![record], || {})
+                .commit_txn(u64::MAX, vec![record], |_| {})
                 .expect("fixture commit");
         }
         // A torn tail past the last committed marker, so there IS something a
@@ -1751,19 +1968,54 @@ mod tests {
         let checkpoints = checkpoint::list(dir.path()).unwrap();
         assert!(!checkpoints.is_empty(), "the fixture writes checkpoints");
         for cp in &checkpoints {
-            let world = cp.load::<Vec<u64>>().unwrap_or_else(|refused| {
+            let loaded = cp.load::<Vec<u64>>().unwrap_or_else(|refused| {
                 panic!(
                     "checkpoint {} does not load — two writers shared checkpoint.tmp: {refused}",
                     cp.seq
                 )
             });
             assert_eq!(
-                world,
+                loaded.world,
                 (0..cp.seq).collect::<Vec<u64>>(),
                 "checkpoint {} does not embody the fold its name claims",
                 cp.seq
             );
+            // …and names the chain at its own coordinate — the value the
+            // marker closing that boundary carries on disk, which is what a
+            // base at `cp.seq` hands the scan above it. Genesis's is the seed.
+            assert_eq!(
+                loaded.chain_head,
+                chain_at(dir.path(), cp.seq),
+                "checkpoint {} names a chain value that is not the one at its coordinate",
+                cp.seq
+            );
         }
+    }
+
+    /// The chain value at boundary `seq`, read off the journal's own bytes:
+    /// the `chain` field of the marker whose `last_seq` is `seq`, in the one
+    /// segment these fixtures write — what a checkpoint at `seq` must carry
+    /// as its `chain_head`. The seed at genesis, which no marker closes.
+    fn chain_at(dir: &std::path::Path, seq: u64) -> [u8; 32] {
+        if seq == 0 {
+            return journal::CHAIN_GENESIS;
+        }
+        let buf = fs::read(journal::segment_path(dir, 1)).unwrap();
+        let mut pos = 0usize;
+        while pos + journal::FRAME_HEADER_LEN <= buf.len() {
+            let len = u32::from_le_bytes(buf[pos + 4..pos + 8].try_into().unwrap()) as usize;
+            let payload =
+                &buf[pos + journal::FRAME_HEADER_LEN..pos + journal::FRAME_HEADER_LEN + len];
+            // A marker payload: tag 1 (4), txn (8), last_seq (8), checksum
+            // (4), then the chain (32).
+            if payload[..4] == 1u32.to_le_bytes()
+                && u64::from_le_bytes(payload[12..20].try_into().unwrap()) == seq
+            {
+                return payload[24..56].try_into().unwrap();
+            }
+            pos += journal::FRAME_HEADER_LEN + len;
+        }
+        panic!("no committed marker closes {seq}")
     }
 
     #[test]

@@ -831,6 +831,7 @@ dependencies = [
  "im",
  "parking_lot",
  "serde",
+ "sha2",
  "skep-address",
  "skep-arrangement",
  "skep-content",

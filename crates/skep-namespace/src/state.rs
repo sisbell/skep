@@ -58,7 +58,12 @@ pub const BOOTSTRAP_PRINCIPAL: PrincipalId = PrincipalId(0);
 /// [`M3State::next_in`], discharged there by the caller's own gate and stated
 /// beside the `validate` that consumes it — which is why a key may exist that
 /// no `next_in` path can reach, and why that costs nothing.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// `Ord` is the frontier map's key order (2026-09-23, QUEUE item 10 option
+/// (i)): the anchor's tumbler order, then the generator's numeral. It is what
+/// makes the checkpoint's `frontiers` bytes a function of the contents — no
+/// read consults it.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "NsKeyShadow")]
 pub(crate) struct NsKey {
     parent: Tumbler,
@@ -121,7 +126,9 @@ impl TryFrom<NsKeyShadow> for NsKey {
 /// `NextField` off an Element anchor, which every mint's registered-entity
 /// gate already excludes. Encodes as its numeral, so the checkpointed
 /// frontier key and [`ns_lock_key`]'s trailing byte read the same either way.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Orders by declaration, which is numeral order (`SameField` = 1 before
+/// `NextField` = 2): the second component of [`NsKey`]'s key order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(into = "u8", try_from = "u8")]
 pub(crate) enum Generator {
     SameField,
@@ -309,33 +316,36 @@ impl TryFrom<M3RecShadow> for M3Rec {
 ///
 /// The `Serialize` impl targets bincode-class formats, M2's checkpoint
 /// encoding: `frontiers` is keyed by a struct, which formats requiring string
-/// keys (JSON among them) refuse. Nor are the bytes stable across processes —
-/// `im::HashMap` iterates in an order the process's hash seed picks — so a
-/// caller wanting a byte-comparable rendering canonicalizes it (the engine's
-/// observation surface transcodes for exactly this reason) rather than
-/// hashing the encoding. Field ORDER is the compatibility surface (bincode
-/// carries no names): a field is APPENDED, never inserted, so an older
-/// checkpoint decodes its prefix and fails at the field it lacks rather than
-/// mis-reading one field as another.
+/// keys (JSON among them) refuse. The bytes are CANONICAL (2026-09-23, QUEUE
+/// item 10 option (i)): every field is an ordered collection, so two slices
+/// holding the same entries encode to one byte string on any process and any
+/// machine — which is what lets M2's checkpoint header commit to its body by
+/// hash. Field ORDER is the compatibility surface (bincode carries no names):
+/// a field is APPENDED, never inserted, so an older checkpoint decodes its
+/// prefix and fails at the field it lacks rather than mis-reading one field
+/// as another.
 ///
 /// Equality is structural, and it is the meaning of the type: two slices are
 /// equal iff their three registries and the publication map hold the same
-/// entries, whatever order a process's hash seed iterates them in. So a
-/// slice recovered from a
-/// checkpoint is comparable to the one it was taken from — the whole claim
-/// recovery makes — without going through a rendering. There is no
-/// [`Default`]: [`M3State::genesis`] is not an empty value (it seeds `[1]`
-/// into `nodes` and Π), and an empty one would be a world with no bootstrap
-/// principal.
+/// entries. So a slice recovered from a checkpoint is comparable to the one
+/// it was taken from — the whole claim recovery makes — without going through
+/// a rendering. There is no [`Default`]: [`M3State::genesis`] is not an empty
+/// value (it seeds `[1]` into `nodes` and Π), and an empty one would be a
+/// world with no bootstrap principal.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct M3State {
     /// THE baptismal registry (ASN-0040 B), in B1+B2 compressed form. A
     /// namespace's entire realized set `{c₁..cₘ}` IS the single count `m` — a
     /// gap is literally unrepresentable (B1 free). Covers every chain:
     /// accounts, documents, versions, content, links. Values are big-ints (B9
-    /// unbounded). A `HashMap` because mint and membership are *point* lookups
-    /// on one namespace; namespaces are never iterated, so order is not paid
-    /// for.
+    /// unbounded). Mint and membership are *point* lookups on one namespace
+    /// and namespaces are never iterated, so no READ pays for order; the
+    /// map is an `OrdMap` all the same (2026-09-23, QUEUE item 10 option (i),
+    /// in place of the `im::HashMap` whose per-process `RandomState` made
+    /// this the one hash-ordered slice of the checkpoint), because the order
+    /// is WRITTEN: the checkpoint's bytes are a function of the contents, and
+    /// a published head can name a checkpoint by hash. The cost is a tumbler
+    /// comparison per lookup instead of a hash.
     ///
     /// The count is the realized set for every namespace but the ghost content
     /// one, whose realized set is `{c_{floor+1}..cₘ}`: the format's one
@@ -349,7 +359,7 @@ pub struct M3State {
     /// part TOGETHER WITH `nodes`, which is the pair
     /// [`M3State::is_allocated`] dispatches over and
     /// [`M3State::entity_level`] then filters by tier.
-    frontiers: im::HashMap<NsKey, Nat>,
+    frontiers: im::OrdMap<NsKey, Nat>,
 
     /// The node registry. Node addresses (zeros = 0), externally minted
     /// (ASN-0047 NodeBaptism — provisioning mints node addresses OUTSIDE the
@@ -439,14 +449,14 @@ pub struct M3State {
     /// the docuverse's, and bounding it would bound the product rather than
     /// refuse a resource.
     ///
-    /// OPEN DECISION (collection shape — the delta names none): an `OrdMap`
-    /// rather than the frontier map's `HashMap`. The read is a point lookup
-    /// either way — O(log |documents|) tumbler compares here — and what the
-    /// ordered map buys is a checkpoint encoding and an iteration order that
-    /// are functions of the contents: two boards with one history checkpoint
-    /// this field to one byte string, and [`M3State::documents`], the walk
-    /// the exception set's seed makes, yields them in address order. `nodes`
-    /// and `principals` already pay that price for the same reason.
+    /// OPEN DECISION (collection shape — the delta names none): an `OrdMap`.
+    /// The read is a point lookup either way — O(log |documents|) tumbler
+    /// compares here — and what the ordered map buys is a checkpoint encoding
+    /// and an iteration order that are functions of the contents: two boards
+    /// with one history checkpoint this field to one byte string, and
+    /// [`M3State::documents`], the walk the exception set's seed makes,
+    /// yields them in address order. `nodes` and `principals` already pay
+    /// that price for the same reason, and `frontiers` does since option (i).
     publication: im::OrdMap<Address, bool>,
 }
 
@@ -886,15 +896,13 @@ impl M3State {
     /// `Kernel::open(cfg, genesis-World)` with it; "load empty journal" and
     /// "fresh genesis" are the same code path (§7). Deterministic, per M2's
     /// byte-identical-genesis caller contract — and byte-identical ACROSS
-    /// PROCESSES because the one hash-ordered field is empty here: `nodes` and
-    /// `principals` are ordered, so the seed set is the gate. Seeding a
-    /// `frontiers` entry into this value would break that contract, and would
-    /// break it silently, since within one process the encoding is stable and
-    /// no test can see the difference.
+    /// PROCESSES because every field is ordered (since option (i) the
+    /// frontier map too, so the contract no longer rests on this value
+    /// holding no frontier entry).
     pub fn genesis() -> M3State {
         let root = bootstrap_root();
         M3State {
-            frontiers: im::HashMap::new(),
+            frontiers: im::OrdMap::new(),
             nodes: im::OrdSet::unit(root.clone()),
             principals: im::OrdMap::unit(root.clone(), BOOTSTRAP_PRINCIPAL),
             // No document exists at Σ₀, so no document has a publication

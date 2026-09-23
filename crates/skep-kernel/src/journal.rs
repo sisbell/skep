@@ -16,19 +16,30 @@
 //! never range-reclaimed (§1/§6/§7).
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
+use bincode::Options;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// Per-frame sync word anchoring recovery resynchronization (§1/§7) — and
 /// the journal's FORMAT stamp: the trailing numeral names the format that
 /// wrote the frame. Bumped 1 → 2 at the 2026-08-26 genesis re-baseline
 /// (ghost-tumbler reserved types; `GenesisConfig` retired), so a journal
-/// written under the 9-space regime does not reopen as this format's.
-const MAGIC: [u8; 4] = *b"SKJ2";
+/// written under the 9-space regime does not reopen as this format's. Bumped
+/// 2 → 3 on 2026-09-23 (QUEUE item 10, the hash chain's first lane): the
+/// commit marker gained its chain field and signature slot, the codec was
+/// pinned behind [`codec`], and the checkpoint went canonical beside it
+/// (`SKC3`). A segment opening with another format's sync word is refused BY
+/// NAME at `open` ([`foreign_stamp`]) rather than read as this one's.
+pub(crate) const MAGIC: [u8; 4] = *b"SKJ3";
+/// The stamp's fixed prefix: what makes four bytes a well-formed journal sync
+/// word of SOME format. [`foreign_stamp`] tells a foreign stamp (`SKJ` + a
+/// numeral this build does not write) from damage (anything else) by it.
+const STAMP_PREFIX: &[u8; 3] = b"SKJ";
 /// Frame header: magic (4) + len (4) + crc (4).
 pub(crate) const FRAME_HEADER_LEN: usize = 12;
 /// Sanity bound on a single frame — the journal's FRAME CAP (open build
@@ -133,11 +144,150 @@ pub(crate) struct CommittedRecord {
 /// are framed in, so recovery reproduces it by streaming the frames as it
 /// reads them. Distinct from the marker's own per-frame `crc`, and
 /// byte-reproducible at recovery (§1/§7).
+///
+/// LAYOUT (`SKJ3`; bincode fixint LE, the fields positionally, no names): the
+/// [`FramePayload`] tag (4), `txn` (8), `last_seq` (8), `records_checksum`
+/// (4), `chain` (32 — a serde array is a tuple, no length prefix), `sig_alg`
+/// (1), `sig` (8 + n). SIXTY-FIVE bytes with the slot empty, which
+/// [`MARKER_FRAME_LEN`] carries and the accounting test and the golden
+/// fixture pin. The two fields appended for `SKJ3` sit AFTER
+/// `records_checksum`, the slot LAST: `records_checksum` covers record frame
+/// payloads only, the marker's own frame CRC covers whatever the marker holds,
+/// and resynchronization reads the sync word and the header — so
+/// [`PendingTxn::commits`] and the resync are untouched by either field, and
+/// a FILLED slot appends bytes after `sig_alg` and moves no other marker byte
+/// (its frame's `len` and `crc` differ, as any payload's must).
+///
+/// Decoded through [`MarkerShadow`], the one door that holds the slot's
+/// one-spelling-of-empty rule; the bytes are the struct's own.
 #[derive(Serialize, Deserialize)]
+#[serde(try_from = "MarkerShadow")]
 pub(crate) struct Marker {
     pub txn: Txn,
     pub last_seq: u64,
     pub records_checksum: u32,
+    /// THE CHAIN (QUEUE item 10, X1): this transaction's link of the commit
+    /// chain — SHA-256 over its predecessor's value and this transaction's
+    /// own bytes exactly as [`ChainLink`] states them. Bound to the stamp
+    /// rather than tagged: a hash, unlike a signature, is recomputable from
+    /// the bytes it covers, so a change of hash would be a re-chaining of
+    /// every board — a format event by nature, and a tag would buy nothing.
+    /// COMPUTED by the writer and RECOMPUTED by every replay; never
+    /// zero-filled, so the bytes this field holds under `SKJ3` are the bytes
+    /// it holds forever.
+    pub chain: [u8; 32],
+    /// The signature slot's tag (X2): which hybrid pair `sig` was made under.
+    /// [`SIG_ALG_UNSIGNED`] (`0`) is the one value this build writes; the
+    /// kernel reads the tag only to hold the one-spelling-of-empty rule at
+    /// [`MarkerShadow`]'s door and never interprets the blob — a signed
+    /// marker's verification is the verifier's, beside the table, fold-inert.
+    pub sig_alg: u8,
+    /// The signature under the pair `sig_alg` names — EMPTY under tag `0`,
+    /// which costs eight bytes (the length prefix) per commit.
+    pub sig: Vec<u8>,
+}
+
+/// The at-rest shadow of [`Marker`] — same fields, same order, so the frame
+/// bytes are the struct's own — and the ONE door a marker re-enters memory
+/// through. It holds the slot's rule: EMPTY has one spelling, tag `0` with no
+/// bytes. Tag `0` with bytes (a signature under no pair) and a non-zero tag
+/// with none (a pair that signed nothing) are refused at decode, so a marker
+/// that spells them is an undecodable frame to the scan — treated as corrupt,
+/// classified by run — rather than a second empty a later reader could
+/// disagree about.
+#[derive(Deserialize)]
+struct MarkerShadow {
+    txn: Txn,
+    last_seq: u64,
+    records_checksum: u32,
+    chain: [u8; 32],
+    sig_alg: u8,
+    sig: Vec<u8>,
+}
+
+impl TryFrom<MarkerShadow> for Marker {
+    type Error = &'static str;
+    fn try_from(shadow: MarkerShadow) -> Result<Marker, &'static str> {
+        if (shadow.sig_alg == SIG_ALG_UNSIGNED) != shadow.sig.is_empty() {
+            return Err(
+                "a commit marker's signature slot has one spelling of empty: tag 0 with no bytes",
+            );
+        }
+        Ok(Marker {
+            txn: shadow.txn,
+            last_seq: shadow.last_seq,
+            records_checksum: shadow.records_checksum,
+            chain: shadow.chain,
+            sig_alg: shadow.sig_alg,
+            sig: shadow.sig,
+        })
+    }
+}
+
+/// The signature slot's EMPTY tag: unsigned, the one value this build writes.
+/// The pairs the design names — `1` = ML-DSA-65 + Ed25519 (the ruled
+/// default), `2` reserved for FN-DSA-512 + Ed25519 — are the signed-ops
+/// lane's to write and a verifier's to read; a change of pair is a verifier
+/// update, never a stamp bump.
+pub(crate) const SIG_ALG_UNSIGNED: u8 = 0;
+
+/// THE CHAIN'S GENESIS — chain₀, the value the first transaction of a journal
+/// chains from: thirty-two zero bytes. Named here, read by the writer of a
+/// fresh journal and by every replay from genesis, and pinned by the golden
+/// fixture, whose first marker's chain is SHA-256 over this seed and that
+/// transaction's bytes. When a checkpoint is the base the value read is the
+/// `SKC3` header's `chain_head` instead — the chain at that checkpoint's
+/// coordinate, which the marker that held it may no longer exist to say.
+pub(crate) const CHAIN_GENESIS: [u8; 32] = [0u8; 32];
+
+/// One link of the commit chain under construction — the ONE spelling of
+/// what the chain hashes, used by the writer ([`encode_txn`]) and the reader
+/// ([`PendingTxn`]) alike, so the two cannot disagree about a single byte:
+///
+/// ```text
+/// chain(T) = SHA-256(
+///     chain(T − 1)                      32 bytes: the previous COMMITTED transaction's value in journal
+///                                       order; CHAIN_GENESIS for a journal's first, the SKC3 header's
+///                                       chain_head for the first above a checkpoint base
+///   ‖ payload_1 ‖ … ‖ payload_k         each RECORD frame's payload exactly as framed — the
+///                                       FramePayload tag, seq, txn, the length prefix and the record's
+///                                       own bytes — in the order framed: the bytes records_checksum
+///                                       streams, which the frame CRC has verified before they are read
+///   ‖ txn LE64 ‖ last_seq LE64 ‖ records_checksum LE32
+///                                       the marker's own PRE-CHAIN fields, as the marker frame carries them
+/// )
+/// ```
+///
+/// NOT hashed: the frame headers (sync word, `len`, `crc` — derivable from
+/// the payload and the stamp), the `chain` field itself, and the signature
+/// slot (a signature over the chain must sit outside it). A writer hashes
+/// what it framed and a reader hashes what the CRC just verified, from the
+/// same byte strings, so the chain needs no canonical re-serialization on
+/// either side; that the records themselves have one byte-form per value on
+/// every machine is the codec's promise ([`codec`]), which is what makes two
+/// replicas of one history agree on every link.
+struct ChainLink(Sha256);
+
+impl ChainLink {
+    /// Open the link that follows `prev`.
+    fn open(prev: &[u8; 32]) -> ChainLink {
+        ChainLink(Sha256::new().chain_update(prev))
+    }
+
+    /// Stream one record frame's payload, exactly as framed.
+    fn record(&mut self, payload: &[u8]) {
+        self.0.update(payload);
+    }
+
+    /// Close the link with the marker's own pre-chain fields.
+    fn close(self, txn: Txn, last_seq: u64, records_checksum: u32) -> [u8; 32] {
+        self.0
+            .chain_update(txn.0.to_le_bytes())
+            .chain_update(last_seq.to_le_bytes())
+            .chain_update(records_checksum.to_le_bytes())
+            .finalize()
+            .into()
+    }
 }
 
 /// The serde-tagged frame payload (§1).
@@ -145,6 +295,43 @@ pub(crate) struct Marker {
 pub(crate) enum FramePayload {
     Record(LogRecord),
     Marker(Marker),
+}
+
+/// THE CODEC — the one configuration of bincode 1 every byte this crate
+/// writes or reads goes through: the frame payloads, the `W::Record` bytes
+/// inside them, and the checkpoint body (the seven production sites and every
+/// test fixture that pins bytes). Its settings, each load-bearing:
+///
+/// * FIXED-WIDTH integers — a `u64` is eight bytes whatever its value, a
+///   length prefix is a `u64`, an enum tag a `u32`, a `bool` or `u8` one
+///   byte, an `Option` one tag byte then its payload, a struct or tuple its
+///   fields in declaration order with no names and no count, a newtype its
+///   inner value with nothing added, an array a tuple with no prefix;
+/// * LITTLE-ENDIAN;
+/// * NO byte limit (the frame cap and the transaction budget bound the bytes
+///   before the codec sees them);
+/// * TRAILING BYTES REJECTED on decode — the decoder accepts exactly the
+///   encoder's output, so a frame payload, record or checkpoint body carrying
+///   bytes past its value is a decode refusal (`Corruption` at replay, a
+///   skipped base at load) rather than a silent pass. This is the read-side
+///   half of "one byte-form per value".
+///
+/// The first three are the configuration bincode's free functions used under
+/// `SKJ2`, so no byte moved for the codec's sake at the `SKJ3` bump — the
+/// format moved for the marker's; the fourth is new and changes no written
+/// byte. A function rather than a `const` because bincode 1's options are a
+/// type-state builder with no `const fn`; the value is `Copy`, so a call site
+/// takes a fresh one: `codec().serialize(&v)`, `codec().deserialize(bytes)`.
+/// The workspace pins `bincode = "=1.3.3"`, and the golden fixtures under
+/// `tests/golden/` pin this configuration's output byte for byte: a release
+/// of bincode or serde that moved a width, a tag or a shadow fails there by
+/// name.
+pub(crate) fn codec() -> impl Options + Copy {
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .with_little_endian()
+        .with_no_limit()
+        .reject_trailing_bytes()
 }
 
 /// A decode refusal as the `io::Error` it is: bytes read off a disk that do
@@ -155,7 +342,8 @@ fn invalid_data(e: bincode::Error) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, e)
 }
 
-/// One `W::Record`'s wire form — the `bytes` a [`LogRecord`] frame carries.
+/// One `W::Record`'s wire form — the `bytes` a [`LogRecord`] frame carries,
+/// under [`codec`].
 ///
 /// Stated as a pair with [`decode_record`], here, because the encode and the
 /// decode are one agreement: a change to either that the other does not match
@@ -164,15 +352,15 @@ fn invalid_data(e: bincode::Error) -> io::Error {
 /// identifies a refusal, and it travels unwrapped: the encode precedes every
 /// file operation, so nothing it can answer with is a disk's failure.
 pub(crate) fn encode_record<R: Serialize>(record: &R) -> Result<Vec<u8>, bincode::Error> {
-    bincode::serialize(record)
+    codec().serialize(record)
 }
 
 /// Read back what [`encode_record`] wrote. `Err` is a committed, CRC-intact
 /// record that does not decode as this `W::Record` — corrupt committed data,
 /// or a writer/reader skew, either way something the fold cannot supply and
-/// must not skip (§7).
+/// must not skip (§7). Trailing bytes are a refusal here too ([`codec`]).
 pub(crate) fn decode_record<R: DeserializeOwned>(bytes: &[u8]) -> io::Result<R> {
-    bincode::deserialize(bytes).map_err(invalid_data)
+    codec().deserialize(bytes).map_err(invalid_data)
 }
 
 /// Append one framed payload to `buf`: `[magic][len][crc(len+payload)][payload]`.
@@ -195,9 +383,12 @@ fn push_frame(buf: &mut Vec<u8>, payload: &[u8]) -> io::Result<()> {
 
 /// Encode one whole transaction: its record frames (seqs `first_seq..`) then
 /// its terminal commit marker, ready for a single `write_all` + one barrier
-/// fsync (§1/§3). The bytes are consumed into their frames: the caller has no
-/// use for them past this call, and a commit is no place to copy every record
-/// a second time.
+/// fsync (§1/§3), and answer the chain value the marker carries — this
+/// transaction's link, computed from `prev_chain` and the frames as they are
+/// built ([`ChainLink`]), which the writer adopts once the barrier passes.
+/// The bytes are consumed into their frames: the caller has no use for them
+/// past this call, and a commit is no place to copy every record a second
+/// time.
 ///
 /// The `Seq` arithmetic here stays in range because the coordinates were
 /// already minted: [`crate::Kernel::transact`] draws the whole range
@@ -212,7 +403,11 @@ fn push_frame(buf: &mut Vec<u8>, payload: &[u8]) -> io::Result<()> {
 /// [`Journal::commit_txn`] asserts the same rule at its own entry, for a
 /// reason of its own: there it is what makes the two durability arms answer a
 /// violation alike.
-fn encode_txn(first_seq: u64, record_bytes: Vec<Vec<u8>>) -> io::Result<Vec<u8>> {
+fn encode_txn(
+    first_seq: u64,
+    record_bytes: Vec<Vec<u8>>,
+    prev_chain: &[u8; 32],
+) -> io::Result<(Vec<u8>, [u8; 32])> {
     let n = record_bytes.len() as u64;
     assert!(n > 0, "zero-step ops never reach the journal");
     let txn = Txn(first_seq);
@@ -222,25 +417,33 @@ fn encode_txn(first_seq: u64, record_bytes: Vec<Vec<u8>>) -> io::Result<Vec<u8>>
     // contract budgets for — a doubling `Vec` transiently holds a third.
     let mut buf = Vec::with_capacity(txn_encoded_len(&record_bytes) as usize);
     let mut checksum = 0u32;
+    let mut link = ChainLink::open(prev_chain);
     for (i, bytes) in record_bytes.into_iter().enumerate() {
-        let payload = bincode::serialize(&FramePayload::Record(LogRecord {
-            seq: first_seq + i as u64,
-            txn,
-            bytes,
-        }))
-        .map_err(invalid_data)?;
+        let payload = codec()
+            .serialize(&FramePayload::Record(LogRecord {
+                seq: first_seq + i as u64,
+                txn,
+                bytes,
+            }))
+            .map_err(invalid_data)?;
         checksum = crc32c::crc32c_append(checksum, &payload);
+        link.record(&payload);
         push_frame(&mut buf, &payload)?;
     }
     let last_seq = first_seq + (n - 1);
-    let payload = bincode::serialize(&FramePayload::Marker(Marker {
-        txn,
-        last_seq,
-        records_checksum: checksum,
-    }))
-    .map_err(invalid_data)?;
+    let chain = link.close(txn, last_seq, checksum);
+    let payload = codec()
+        .serialize(&FramePayload::Marker(Marker {
+            txn,
+            last_seq,
+            records_checksum: checksum,
+            chain,
+            sig_alg: SIG_ALG_UNSIGNED,
+            sig: Vec::new(),
+        }))
+        .map_err(invalid_data)?;
     push_frame(&mut buf, &payload)?;
-    Ok(buf)
+    Ok((buf, chain))
 }
 
 /// What [`encode_txn`] wraps around one record's own bytes inside its frame
@@ -252,9 +455,13 @@ fn encode_txn(first_seq: u64, record_bytes: Vec<Vec<u8>>) -> io::Result<Vec<u8>>
 /// silently loosening either limit it feeds.
 pub(crate) const RECORD_PAYLOAD_OVERHEAD: u64 = 28;
 /// The marker frame's whole encoded size: header (12) plus the tagged
-/// [`Marker`] payload — tag (4), `txn` (8), `last_seq` (8),
-/// `records_checksum` (4). Pinned alongside [`RECORD_PAYLOAD_OVERHEAD`].
-const MARKER_FRAME_LEN: u64 = frame_len(24);
+/// [`Marker`] payload with its slot EMPTY — tag (4), `txn` (8), `last_seq`
+/// (8), `records_checksum` (4), `chain` (32), `sig_alg` (1), `sig`'s length
+/// prefix (8): 65, so 77 in all. Pinned alongside [`RECORD_PAYLOAD_OVERHEAD`].
+/// A constant only while the empty slot has a value-independent size, which
+/// it does; a FILLED slot changes the accounting at the two sites this seeds,
+/// which is the signed-ops lane's to add.
+const MARKER_FRAME_LEN: u64 = frame_len(65);
 
 /// What one framed payload occupies in a segment: the header [`push_frame`]
 /// writes, plus the payload it wraps. The outer of the two levels every
@@ -570,6 +777,14 @@ pub(crate) struct JournalWriter {
     dir: PathBuf,
     file: File,
     len: u64,
+    /// The commit chain's running value: the chain of the last COMMITTED
+    /// transaction in this journal, which the next one links from
+    /// ([`ChainLink`]). Seeded at [`JournalWriter::open_active`] with what
+    /// recovery derived — the last committed marker's value, or the base's —
+    /// advanced only once a transaction's barrier has passed (a transaction
+    /// truncated back leaves it where it was), and carried across a segment
+    /// rotation: the chain is over the journal, not the segment.
+    chain: [u8; 32],
     /// What the transaction in progress has reached. On entry to
     /// [`JournalWriter::commit_txn`] this is always [`InFlight::Idle`]: every
     /// path that returns to a caller who may commit again leaves it so, and
@@ -592,7 +807,12 @@ impl JournalWriter {
     /// above the real data, so the next failed barrier truncates back to a
     /// mark above it and cuts committed frames. Appends still land at the end
     /// of file, which is what makes the mistake silent.
-    pub(crate) fn open_active(dir: &Path, next_seq: u64) -> io::Result<Self> {
+    ///
+    /// `chain` is the commit chain's value at the committed head this
+    /// appender continues from — what the recovery scan derived
+    /// ([`ScanOutcome::chain_head`]), or [`CHAIN_GENESIS`] for a journal with
+    /// nothing committed — and is the second thing this reads once.
+    pub(crate) fn open_active(dir: &Path, next_seq: u64, chain: [u8; 32]) -> io::Result<Self> {
         let segs = list_segments(dir)?;
         match segs.last() {
             Some(seg) => {
@@ -602,14 +822,15 @@ impl JournalWriter {
                     dir: dir.to_path_buf(),
                     file,
                     len,
+                    chain,
                     in_flight: InFlight::Idle,
                 })
             }
-            None => Self::create_segment(dir, next_seq),
+            None => Self::create_segment(dir, next_seq, chain),
         }
     }
 
-    fn create_segment(dir: &Path, first_seq: u64) -> io::Result<Self> {
+    fn create_segment(dir: &Path, first_seq: u64, chain: [u8; 32]) -> io::Result<Self> {
         let path = segment_path(dir, first_seq);
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
         // The new entry must be durable before any commit acked out of this
@@ -621,6 +842,7 @@ impl JournalWriter {
             dir: dir.to_path_buf(),
             file,
             len,
+            chain,
             in_flight: InFlight::Idle,
         })
     }
@@ -642,22 +864,29 @@ impl JournalWriter {
     /// durable commit and its install is the one failure this writer cannot
     /// repair (§3). Bounding it inside the call is what keeps a caller from
     /// leaving the writer believing a committed transaction is still in
-    /// flight.
+    /// flight. It is handed the transaction's chain value — the marker's,
+    /// now durable — so the root it installs carries the chain at its own
+    /// coordinate, which is what a checkpoint taken off that root writes as
+    /// its `chain_head`.
     pub(crate) fn commit_txn(
         &mut self,
         first_seq: u64,
         record_bytes: Vec<Vec<u8>>,
-        install: impl FnOnce(),
+        install: impl FnOnce([u8; 32]),
     ) -> Result<u64, CommitFail> {
-        let buf = encode_txn(first_seq, record_bytes)
+        let (buf, chain) = encode_txn(first_seq, record_bytes, &self.chain)
             .map_err(|e| CommitFail::Unencodable(Box::new(e)))?;
         self.maybe_rotate(first_seq).map_err(CommitFail::Clean)?;
         let mark = self.len;
         self.in_flight = InFlight::Appending { mark };
         match self.append(&buf).and_then(|()| self.barrier()) {
             Ok(()) => {
+                // Durable, so the chain has advanced whatever happens to the
+                // install: a poisoned kernel's next recovery derives this
+                // same value from the marker on disk.
+                self.chain = chain;
                 self.in_flight = InFlight::Barriered;
-                install();
+                install(chain);
                 self.in_flight = InFlight::Idle;
                 Ok(buf.len() as u64)
             }
@@ -721,7 +950,8 @@ impl JournalWriter {
         }
         // Under per-commit Fsync the old segment is already durable (the
         // previous txn's barrier fsynced it) — the §1 rotation discipline.
-        *self = Self::create_segment(&self.dir, first_seq)?;
+        // The chain rides across: it is over the journal, not the segment.
+        *self = Self::create_segment(&self.dir, first_seq, self.chain)?;
         Ok(())
     }
 
@@ -761,7 +991,10 @@ impl Journal {
     /// file can refuse — [`JournalWriter::commit_txn`] for the durable one,
     /// and for the in-memory one no bytes appended, no failure available, and
     /// an install where the durable journal installs, after a barrier it has
-    /// no need of.
+    /// no need of. The in-memory arm hands `install` [`CHAIN_GENESIS`]: the
+    /// chain is over journal frames, of which that arm builds none, and
+    /// nothing reads a chain off an in-memory kernel — it writes no
+    /// checkpoint.
     ///
     /// The two limits are judged AS THE LOOP GOES, and a record past the
     /// budget is dropped rather than kept, which is what makes enforcing
@@ -800,7 +1033,7 @@ impl Journal {
         &mut self,
         first_seq: u64,
         records: Vec<R>,
-        install: impl FnOnce(),
+        install: impl FnOnce([u8; 32]),
     ) -> Result<u64, CommitFail> {
         assert!(
             !records.is_empty(),
@@ -834,7 +1067,7 @@ impl Journal {
         }
         match self {
             Journal::InMemory => {
-                install();
+                install(CHAIN_GENESIS);
                 Ok(0)
             }
             Journal::Segments(writer) => writer.commit_txn(first_seq, record_bytes, install),
@@ -978,9 +1211,30 @@ pub(crate) struct ScanOutcome {
     /// [`truncate_tail`] cuts. Resolved here and read there, so no caller can
     /// aim a truncation at a region other than the one this scan judged.
     tail: Option<TailCut>,
+    /// The commit chain's value at the committed head: the last committed
+    /// marker's `chain` in journal order above the base, or the base's own
+    /// value when nothing above it committed. What the appender continues
+    /// from and the recovered root carries. Never bounded, for the reason
+    /// the head is not.
+    pub chain_head: [u8; 32],
+    /// The first CHAIN BREAK above the base, as the `last_seq` of the
+    /// committed transaction whose marker's `chain` was not the recomputation
+    /// ([`ChainLink`]) over the previous committed transaction's value and
+    /// its own records — `None` when every link above the base verified.
+    /// Recorded rather than refused on the spot, so the corrupt-run
+    /// classification, which names the root cause when a run swallowed the
+    /// predecessor, speaks first; read through [`ScanOutcome::chain_break`].
+    chain_break: Option<u64>,
 }
 
 impl ScanOutcome {
+    /// The first chain break above the base ([`ScanOutcome::chain_break`]'s
+    /// field), for the two callers to halt on in their own vocabulary —
+    /// after the corrupt-run verdict, which names the root cause where a run
+    /// lost the predecessor a break follows from.
+    pub(crate) fn chain_break(&self) -> Option<u64> {
+        self.chain_break
+    }
     /// Collect everything a COMMITTED transaction contributes: its marker's
     /// `last_seq` raises the committed head and — when this scan's collection
     /// bound admits it — joins the boundary set, and its records join the
@@ -1151,10 +1405,16 @@ struct PendingTxn {
     /// The group's records, in arrival order. Released the moment the group is
     /// known dead, since nothing downstream can want it.
     records: Vec<CommittedRecord>,
+    /// The chain link this group would close, streamed beside the checksum
+    /// from the same payloads: opened on the running chain value — which
+    /// cannot move while a group is open, since only a committed marker
+    /// moves it and a committed marker closes the group — and closed with
+    /// the marker's fields by [`PendingTxn::chain_closing`].
+    chain: ChainLink,
 }
 
 impl PendingTxn {
-    fn open(txn: Txn) -> PendingTxn {
+    fn open(txn: Txn, prev_chain: &[u8; 32]) -> PendingTxn {
         PendingTxn {
             txn,
             checksum: 0,
@@ -1165,19 +1425,29 @@ impl PendingTxn {
             accounted: MARKER_FRAME_LEN,
             oversize: false,
             records: Vec::new(),
+            chain: ChainLink::open(prev_chain),
         }
+    }
+
+    /// The chain value `marker` MUST carry to be this group's honest close:
+    /// the link opened on the running value, streamed with this group's
+    /// payloads, closed with the marker's own pre-chain fields — the writer's
+    /// computation ([`encode_txn`]) re-run from the bytes the CRC verified.
+    fn chain_closing(&self, marker: &Marker) -> [u8; 32] {
+        ChainLink(self.chain.0.clone()).close(marker.txn, marker.last_seq, marker.records_checksum)
     }
 
     /// Take one record frame of this transaction: `payload` is the frame
     /// payload exactly as framed, which is what `records_checksum` covers —
-    /// and what [`frame_len`] charges, a framed payload being the inner level
-    /// [`record_payload_len`] gives the write side.
+    /// and the chain, and what [`frame_len`] charges, a framed payload being
+    /// the inner level [`record_payload_len`] gives the write side.
     fn push(&mut self, record: LogRecord, payload: &[u8]) {
         if self.last_seq.is_some_and(|prev| record.seq <= prev) {
             self.ordered = false;
         }
         self.last_seq = Some(record.seq);
         self.checksum = crc32c::crc32c_append(self.checksum, payload);
+        self.chain.record(payload);
         self.accounted = self.accounted.saturating_add(frame_len(payload.len() as u64));
         self.oversize |= self.accounted > MAX_TXN_BYTES;
         if self.ordered && !self.oversize {
@@ -1259,19 +1529,34 @@ impl PendingTxn {
 /// that plants frame headers costs a bounded scan and a halt rather than an
 /// unbounded one.
 ///
+/// THE CHAIN IS VERIFIED HERE, in the same pass (QUEUE item 10): every
+/// committed transaction above `s_load` must carry, in its marker, the
+/// recomputation of [`ChainLink`] over the previous committed transaction's
+/// value — `chain_at_base` for the first, which is [`CHAIN_GENESIS`] from
+/// genesis and the `SKC3` header's `chain_head` off a checkpoint — and its
+/// own record payloads as the CRC verified them. A mismatch is recorded as
+/// the first CHAIN BREAK ([`ScanOutcome::chain_break`]) and the running value
+/// continues from the marker's own claim; transactions at or below the base
+/// are not verified, being embodied in it, exactly as a corrupt run there is
+/// harmless. The link is verified in JOURNAL order, which is the order the
+/// writer chained in, and it is verified without re-serializing anything:
+/// the bytes hashed are the framed payloads in the buffer.
+///
 /// `segs` must be ASCENDING by `firstSeq`, as [`list_segments`] produces it.
 /// The skip test, the tail resolution and [`inferred_last_seq`] all read a
 /// neighbour's name as this segment's bound, so an out-of-order slice makes
 /// those inferences meaningless — and [`reclaim_below`], which reads the same
 /// order, deletes on one of them.
 ///
-/// Reached through [`crate::replay::Base::scan`], which supplies `s_load` from
-/// the base it selected. A scan and the fold that consumes it must agree on
-/// their base, and that is the one route where they cannot disagree.
+/// Reached through [`crate::replay::Base::scan`], which supplies `s_load` and
+/// `chain_at_base` from the base it selected. A scan and the fold that
+/// consumes it must agree on their base, and that is the one route where they
+/// cannot disagree.
 pub(crate) fn scan(
     segs: &[SegmentMeta],
     s_load: u64,
     bound: Option<u64>,
+    chain_at_base: [u8; 32],
 ) -> Result<ScanOutcome, ScanFail> {
     let mut outcome = ScanOutcome {
         s_load,
@@ -1281,7 +1566,12 @@ pub(crate) fn scan(
         committed_boundaries: Vec::new(),
         runs: Vec::new(),
         tail: None,
+        chain_head: chain_at_base,
+        chain_break: None,
     };
+    // The commit chain's running value: the last committed marker's above
+    // the base, in journal order, else the base's.
+    let mut chain = chain_at_base;
     // The scanned-segment index and the BYTE offset just past the last
     // committed marker's frame — where the tail begins. Resolved to a
     // `TailCut` once at the end rather than at each committed marker, which
@@ -1318,7 +1608,7 @@ pub(crate) fn scan(
                     // the indexing below, and stated once for all three arms.
                     let end = payload.end;
                     let payload = &buf[payload];
-                    match bincode::deserialize::<FramePayload>(payload) {
+                    match codec().deserialize::<FramePayload>(payload) {
                         Ok(FramePayload::Record(record)) => {
                             if run_open {
                                 outcome.runs.push(RunEnd::landed_on_record(record.seq));
@@ -1327,7 +1617,7 @@ pub(crate) fn scan(
                             let mut group = pending
                                 .take()
                                 .filter(|group| group.txn == record.txn)
-                                .unwrap_or_else(|| PendingTxn::open(record.txn));
+                                .unwrap_or_else(|| PendingTxn::open(record.txn, &chain));
                             group.push(record, payload);
                             pending = Some(group);
                         }
@@ -1338,6 +1628,18 @@ pub(crate) fn scan(
                             }
                             if let Some(group) = pending.take_if(|group| group.txn == marker.txn) {
                                 if group.commits(&marker) {
+                                    // The chain: verified above the base only
+                                    // — the base embodies what sits at or
+                                    // below it — and recorded, not refused,
+                                    // so the run classification speaks first.
+                                    if marker.last_seq > s_load {
+                                        if group.chain_closing(&marker) != marker.chain
+                                            && outcome.chain_break.is_none()
+                                        {
+                                            outcome.chain_break = Some(marker.last_seq);
+                                        }
+                                        chain = marker.chain;
+                                    }
                                     outcome.collect_commit(&marker, group.records);
                                     // The cut is unbounded for the reason the
                                     // head is: it must name the last committed
@@ -1376,6 +1678,7 @@ pub(crate) fn scan(
     if run_open {
         outcome.runs.push(RunEnd::Eof);
     }
+    outcome.chain_head = chain;
     // Everything past the last committed marker is tail. When the scanned
     // region holds no committed marker at all, everything scanned is tail:
     // the first scanned segment is cut at offset 0. Harmless corrupt runs
@@ -1391,6 +1694,54 @@ pub(crate) fn scan(
                 .collect(),
         });
     Ok(outcome)
+}
+
+/// The account a chain break travels with, in the two callers' `cause`
+/// slot: what the marker at `at` should have carried and did not.
+pub(crate) fn chain_break_cause(at: u64) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+    format!(
+        "chain break: the commit marker closing the transaction at {at} does not carry SHA-256 \
+         over the previous committed transaction's chain value and this transaction's own record \
+         frames — the transaction was rewritten consistently with its frame CRCs, or the one it \
+         follows is not the one before it"
+    )
+    .into()
+}
+
+/// THE FOREIGN-STAMP PROBE (§8 of the encoding report): the first four bytes
+/// of the first segment [`scan`] would read above `s_load` — the same skip
+/// rule, so this looks where the scan will look — when they are a
+/// well-formed journal sync word of ANOTHER format: [`STAMP_PREFIX`] followed
+/// by a numeral this build does not write (`SKJ1`, `SKJ2`, …). `None` for an
+/// empty or absent segment, for this build's own stamp, and for anything
+/// that is not a sync word at all — zeros, a torn header, junk — which is
+/// DAMAGE, and stays the scan's to classify as a corrupt run or the un-acked
+/// tail (the dirty-crash suite's honest outcomes), never a format event.
+///
+/// Read BEFORE the scan by [`crate::Kernel::open`], because the scan cannot
+/// tell the two apart: an old-format segment contains no frame the new sync
+/// word anchors, so its resynchronization runs to end-of-file, classifies
+/// the whole segment as the un-acked tail, and the tail cut then TRUNCATES it
+/// to nothing and serves an empty board — an old-stamp board wiped rather
+/// than refused. Refusing on this probe, ahead of the scan and the cut, is
+/// what leaves the files untouched.
+pub(crate) fn foreign_stamp(segs: &[SegmentMeta], s_load: u64) -> io::Result<Option<[u8; 4]>> {
+    let Some(first) = segs
+        .iter()
+        .enumerate()
+        .find(|(i, _)| inferred_last_seq(segs, *i).is_none_or(|last| last > s_load))
+        .map(|(_, seg)| seg)
+    else {
+        return Ok(None);
+    };
+    let mut head = Vec::with_capacity(MAGIC.len());
+    File::open(&first.path)?
+        .take(MAGIC.len() as u64)
+        .read_to_end(&mut head)?;
+    let Ok(stamp) = <[u8; 4]>::try_from(head.as_slice()) else {
+        return Ok(None); // shorter than a sync word: damage or empty, not a stamp
+    };
+    Ok((stamp.starts_with(STAMP_PREFIX) && stamp != MAGIC).then_some(stamp))
 }
 
 /// The tail-truncation step (§7), run AFTER every refusal and BEFORE any
@@ -1435,8 +1786,53 @@ mod tests {
     /// install into — so the install step is empty.
     fn write_txn(writer: &mut JournalWriter, first: u64, record_bytes: Vec<Vec<u8>>) {
         writer
-            .commit_txn(first, record_bytes, || {})
+            .commit_txn(first, record_bytes, |_| {})
             .expect("fixture commit");
+    }
+
+    /// A fresh appender at genesis: the chain seeded where a new journal's is.
+    fn open_fresh(dir: &Path) -> JournalWriter {
+        JournalWriter::open_active(dir, 1, CHAIN_GENESIS).unwrap()
+    }
+
+    /// An unsigned marker whose chain is NOT under test — the fixtures that
+    /// hand-build a marker build one that never commits, or one with no
+    /// group, so the chain it carries is never read.
+    fn marker(txn: Txn, last_seq: u64, records_checksum: u32) -> Marker {
+        Marker {
+            txn,
+            last_seq,
+            records_checksum,
+            chain: [0u8; 32],
+            sig_alg: SIG_ALG_UNSIGNED,
+            sig: Vec::new(),
+        }
+    }
+
+    /// The `chain` field of the committed marker closing the frame at `pos`.
+    fn chain_of_marker_at(path: &Path, pos: usize) -> [u8; 32] {
+        let buf = fs::read(path).unwrap();
+        let Parsed::Intact { payload } = parse_frame(&buf, pos) else {
+            panic!("intact marker frame expected at {pos}")
+        };
+        match codec().deserialize::<FramePayload>(&buf[payload]).unwrap() {
+            FramePayload::Marker(m) => m.chain,
+            FramePayload::Record(_) => panic!("a marker frame expected at {pos}"),
+        }
+    }
+
+    /// Rewrite the payload of the intact frame at `pos` through `edit` and
+    /// RE-SEAL its CRC, so the frame stays intact: what a consistent rewrite
+    /// looks like — the thing the chain exists to catch and the CRC cannot.
+    fn rewrite_payload(path: &Path, pos: usize, edit: impl FnOnce(&mut [u8])) {
+        let mut data = fs::read(path).unwrap();
+        let Parsed::Intact { payload } = parse_frame(&data, pos) else {
+            panic!("intact frame expected at {pos}")
+        };
+        edit(&mut data[payload.clone()]);
+        let crc = crc32c::crc32c_append(crc32c::crc32c(&data[pos + 4..pos + 8]), &data[payload]);
+        data[pos + 8..pos + 12].copy_from_slice(&crc.to_le_bytes());
+        fs::write(path, data).unwrap();
     }
 
     /// Byte offset of each frame in a CLEAN journal file, via the real parser
@@ -1544,17 +1940,26 @@ mod tests {
             vec![rec(u64::MAX), vec![7u8; 300], Vec::new()],
         ] {
             let expected = txn_encoded_len(&record_bytes);
-            let buf = encode_txn(u64::MAX - 3, record_bytes).unwrap();
+            let (buf, _) = encode_txn(u64::MAX - 3, record_bytes, &CHAIN_GENESIS).unwrap();
             assert_eq!(buf.len() as u64, expected);
         }
+        // The marker half, stated as the figures the layout doc promises: a
+        // 65-byte payload with the slot empty, a 77-byte frame.
+        let empty_marker = codec()
+            .serialize(&FramePayload::Marker(marker(Txn(u64::MAX), u64::MAX, u32::MAX)))
+            .unwrap();
+        assert_eq!(empty_marker.len(), 65);
+        assert_eq!(MARKER_FRAME_LEN, 77);
+        assert_eq!(MARKER_FRAME_LEN, frame_len(empty_marker.len() as u64));
         // The per-record half: what push_frame judges is the wrapped payload,
         // the record's own bytes plus RECORD_PAYLOAD_OVERHEAD exactly.
-        let payload = bincode::serialize(&FramePayload::Record(LogRecord {
-            seq: u64::MAX,
-            txn: Txn(u64::MAX),
-            bytes: vec![1, 2, 3],
-        }))
-        .unwrap();
+        let payload = codec()
+            .serialize(&FramePayload::Record(LogRecord {
+                seq: u64::MAX,
+                txn: Txn(u64::MAX),
+                bytes: vec![1, 2, 3],
+            }))
+            .unwrap();
         assert_eq!(payload.len() as u64, 3 + RECORD_PAYLOAD_OVERHEAD);
 
         // …and the READER charges a framed payload to the same figure, which
@@ -1562,7 +1967,7 @@ mod tests {
         // accounting: a transaction the writer emits AT the budget accounts to
         // the budget on the way back in, so recovery cannot refuse a
         // transaction this kernel acked.
-        let mut group = PendingTxn::open(Txn(u64::MAX));
+        let mut group = PendingTxn::open(Txn(u64::MAX), &CHAIN_GENESIS);
         group.push(
             LogRecord {
                 seq: u64::MAX,
@@ -1589,7 +1994,7 @@ mod tests {
         // caller fixing a value is not first told to split.
         let cap_bytes = (MAX_FRAME_LEN as u64 - RECORD_PAYLOAD_OVERHEAD) as usize;
         let over_frame = vec![vec![0u8; cap_bytes + 1 - prefix]];
-        let out = journal.commit_txn(1, over_frame, || installs += 1);
+        let out = journal.commit_txn(1, over_frame, |_| installs += 1);
         assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
 
         // At the budget exactly: commits — the refusal begins one past the
@@ -1600,11 +2005,11 @@ mod tests {
             txn_encoded_len(&[encode_record(&at_budget[0]).unwrap()]),
             MAX_TXN_BYTES
         );
-        assert!(journal.commit_txn(1, at_budget, || installs += 1).is_ok());
+        assert!(journal.commit_txn(1, at_budget, |_| installs += 1).is_ok());
 
         // One byte past: OverBudget, carrying the size.
         let past_budget = vec![vec![0u8; body + 1]];
-        match journal.commit_txn(1, past_budget, || installs += 1) {
+        match journal.commit_txn(1, past_budget, |_| installs += 1) {
             Err(CommitFail::OverBudget { bytes }) => assert_eq!(bytes, MAX_TXN_BYTES + 1),
             other => panic!("expected OverBudget, got {other:?}"),
         }
@@ -1621,7 +2026,7 @@ mod tests {
             txn_encoded_len(&encoded)
         };
         assert!(expected > MAX_TXN_BYTES + record_frame_len(8 + prefix));
-        match journal.commit_txn(1, far_over, || installs += 1) {
+        match journal.commit_txn(1, far_over, |_| installs += 1) {
             Err(CommitFail::OverBudget { bytes }) => assert_eq!(bytes, expected),
             other => panic!("expected the whole staging accounted, got {other:?}"),
         }
@@ -1644,7 +2049,7 @@ mod tests {
         let past_cap = vec![0u8; cap_bytes + 1 - prefix];
         let mut journal = Journal::InMemory;
         let mut installed = false;
-        let out = journal.commit_txn(1, vec![at_cap, past_cap], || installed = true);
+        let out = journal.commit_txn(1, vec![at_cap, past_cap], |_| installed = true);
         assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
         assert!(!installed, "a refused transaction installs nothing");
     }
@@ -1675,20 +2080,20 @@ mod tests {
 
         // The encode: a record the serializer refuses, in the mode that would
         // otherwise never encode anything.
-        let out = memory.commit_txn(1, vec![RefusesSerialization], || installed = true);
+        let out = memory.commit_txn(1, vec![RefusesSerialization], |_| installed = true);
         assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
 
         // The frame cap, which is a property of frames this arm never builds.
         let prefix = encode_record(&Vec::<u8>::new()).unwrap().len();
         let cap_bytes = (MAX_FRAME_LEN as u64 - RECORD_PAYLOAD_OVERHEAD) as usize;
         let over_frame = vec![vec![0u8; cap_bytes + 1 - prefix]];
-        let out = memory.commit_txn(1, over_frame, || installed = true);
+        let out = memory.commit_txn(1, over_frame, |_| installed = true);
         assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
 
         // The transaction budget, likewise.
         let half = (MAX_TXN_BYTES / 2) as usize;
         let over_budget = vec![vec![0u8; half], vec![0u8; half]];
-        let out = memory.commit_txn(1, over_budget, || installed = true);
+        let out = memory.commit_txn(1, over_budget, |_| installed = true);
         assert!(matches!(out, Err(CommitFail::OverBudget { .. })), "got {out:?}");
 
         assert!(!installed, "a refused transaction installs nothing");
@@ -1696,8 +2101,8 @@ mod tests {
         // …and the durable arm answers the same, which is the parity these
         // three refusals exist to hold: one judgment, one place, both modes.
         let dir = tempdir().unwrap();
-        let mut segments = Journal::Segments(JournalWriter::open_active(dir.path(), 1).unwrap());
-        let out = segments.commit_txn(1, vec![RefusesSerialization], || installed = true);
+        let mut segments = Journal::Segments(open_fresh(dir.path()));
+        let out = segments.commit_txn(1, vec![RefusesSerialization], |_| installed = true);
         assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
         assert!(!installed, "a refused transaction installs nothing");
     }
@@ -1709,7 +2114,7 @@ mod tests {
         // silent double application answered `Ok`, and a coordinate applied
         // out of order is a fold over a state that never existed.
         let dir = tempdir().unwrap();
-        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        let mut writer = open_fresh(dir.path());
         // File order is NOT `Seq` order here. In-order append plus the prior
         // recovery's tail truncation normally makes the two agree, and the
         // ordering is what holds a fold together where they do not.
@@ -1717,12 +2122,12 @@ mod tests {
         write_txn(&mut writer, 1, vec![rec(10), rec(20)]); // seqs 1, 2
         let segs = list_segments(dir.path()).unwrap();
 
-        let outcome = scan(&segs, 0, None).unwrap();
+        let outcome = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
         assert_eq!(folded_seqs(&outcome, 5), Ok(vec![1, 2, 5]));
         // The range is INCLUSIVE at the bound — a fold to 2 applies 2.
         assert_eq!(folded_seqs(&outcome, 2), Ok(vec![1, 2]));
         // …and EXCLUSIVE at the base, whose records the base already embodies.
-        assert_eq!(folded_seqs(&scan(&segs, 1, None).unwrap(), 5), Ok(vec![2, 5]));
+        assert_eq!(folded_seqs(&scan(&segs, 1, None, CHAIN_GENESIS).unwrap(), 5), Ok(vec![2, 5]));
     }
 
     #[test]
@@ -1732,13 +2137,13 @@ mod tests {
         // folded twice (§7) — and the range is applied FIRST, so a repeat the
         // base already embodies is harmless rather than a halt.
         let dir = tempdir().unwrap();
-        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        let mut writer = open_fresh(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 1, vec![rec(20)]);
         let segs = list_segments(dir.path()).unwrap();
 
-        assert_eq!(folded_seqs(&scan(&segs, 0, None).unwrap(), 1), Err(1));
-        assert_eq!(folded_seqs(&scan(&segs, 1, None).unwrap(), 1), Ok(vec![]));
+        assert_eq!(folded_seqs(&scan(&segs, 0, None, CHAIN_GENESIS).unwrap(), 1), Err(1));
+        assert_eq!(folded_seqs(&scan(&segs, 1, None, CHAIN_GENESIS).unwrap(), 1), Ok(vec![]));
     }
 
     #[test]
@@ -1749,11 +2154,11 @@ mod tests {
         // which no filter here can restore, and which would otherwise be
         // answered `Ok` with a short world.
         let dir = tempdir().unwrap();
-        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        let mut writer = open_fresh(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 2, vec![rec(20)]);
         let segs = list_segments(dir.path()).unwrap();
-        let _ = scan(&segs, 0, Some(1)).unwrap().records_to(2);
+        let _ = scan(&segs, 0, Some(1), CHAIN_GENESIS).unwrap().records_to(2);
     }
 
     #[test]
@@ -1765,27 +2170,25 @@ mod tests {
         let mut buf = Vec::new();
         let mut checksum = 0u32;
         for bytes in [vec![1u8], vec![2u8]] {
-            let payload = bincode::serialize(&FramePayload::Record(LogRecord {
-                seq: 2,
-                txn: Txn(2),
-                bytes,
-            }))
-            .unwrap();
+            let payload = codec()
+                .serialize(&FramePayload::Record(LogRecord {
+                    seq: 2,
+                    txn: Txn(2),
+                    bytes,
+                }))
+                .unwrap();
             checksum = crc32c::crc32c_append(checksum, &payload);
             push_frame(&mut buf, &payload).unwrap();
         }
-        let payload = bincode::serialize(&FramePayload::Marker(Marker {
-            txn: Txn(2),
-            last_seq: 2,
-            records_checksum: checksum,
-        }))
-        .unwrap();
+        let payload = codec()
+            .serialize(&FramePayload::Marker(marker(Txn(2), 2, checksum)))
+            .unwrap();
         push_frame(&mut buf, &payload).unwrap();
 
         let dir = tempdir().unwrap();
         fs::write(segment_path(dir.path(), 2), &buf).unwrap();
         let segs = list_segments(dir.path()).unwrap();
-        let out = scan(&segs, 1, None).unwrap();
+        let out = scan(&segs, 1, None, CHAIN_GENESIS).unwrap();
         assert_eq!(out.committed_head, 1, "the repeat must not commit");
         assert!(out.committed_records.is_empty());
         assert!(out.committed_boundaries.is_empty());
@@ -1803,27 +2206,26 @@ mod tests {
         let mut buf = Vec::new();
         let mut checksum = 0u32;
         for seq in 5..=7u64 {
-            let payload = bincode::serialize(&FramePayload::Record(LogRecord {
-                seq,
-                txn: Txn(5),
-                bytes: rec(seq * 10),
-            }))
-            .unwrap();
+            let payload = codec()
+                .serialize(&FramePayload::Record(LogRecord {
+                    seq,
+                    txn: Txn(5),
+                    bytes: rec(seq * 10),
+                }))
+                .unwrap();
             checksum = crc32c::crc32c_append(checksum, &payload);
             push_frame(&mut buf, &payload).unwrap();
         }
-        let payload = bincode::serialize(&FramePayload::Marker(Marker {
-            txn: Txn(5),
-            last_seq: 5, // the group reaches 7
-            records_checksum: checksum,
-        }))
-        .unwrap();
+        // `last_seq` 5: the group reaches 7.
+        let payload = codec()
+            .serialize(&FramePayload::Marker(marker(Txn(5), 5, checksum)))
+            .unwrap();
         push_frame(&mut buf, &payload).unwrap();
 
         let dir = tempdir().unwrap();
         fs::write(segment_path(dir.path(), 5), &buf).unwrap();
         let segs = list_segments(dir.path()).unwrap();
-        let out = scan(&segs, 4, None).unwrap();
+        let out = scan(&segs, 4, None, CHAIN_GENESIS).unwrap();
         assert_eq!(out.committed_head, 4, "a short marker must not commit");
         assert!(out.committed_records.is_empty());
         assert!(out.committed_boundaries.is_empty());
@@ -1841,11 +2243,15 @@ mod tests {
         // what the two cases below check from either side of the edge: four
         // record frames plus the marker frame land EXACTLY on the budget.
         const N: u64 = 4;
-        let payload_len =
-            ((MAX_TXN_BYTES - MARKER_FRAME_LEN) / N - FRAME_HEADER_LEN as u64) as usize;
-        let buf = vec![7u8; payload_len + 1];
+        // Four frames share the budget less the marker; the LAST absorbs the
+        // division's remainder, so the sum lands on the budget exactly
+        // whatever the marker's size leaves over.
+        let for_records = MAX_TXN_BYTES - MARKER_FRAME_LEN;
+        let payload_len = (for_records / N - FRAME_HEADER_LEN as u64) as usize;
+        let last_len = payload_len + (for_records % N) as usize;
+        let buf = vec![7u8; last_len + 1];
         let group_of = |last: &[u8]| {
-            let mut group = PendingTxn::open(Txn(1));
+            let mut group = PendingTxn::open(Txn(1), &CHAIN_GENESIS);
             for seq in 1..=N {
                 let payload = if seq == N { last } else { &buf[..payload_len] };
                 let record = LogRecord {
@@ -1857,15 +2263,11 @@ mod tests {
             }
             group
         };
-        let closed_by = |group: &PendingTxn| Marker {
-            txn: Txn(1),
-            last_seq: N,
-            records_checksum: group.checksum,
-        };
+        let closed_by = |group: &PendingTxn| marker(Txn(1), N, group.checksum);
 
         // At the budget: a transaction this writer can emit, so it commits —
         // the refusal begins one byte past the budget, not at it.
-        let at_budget = group_of(&buf[..payload_len]);
+        let at_budget = group_of(&buf[..last_len]);
         assert_eq!(at_budget.accounted, MAX_TXN_BYTES);
         assert!(at_budget.commits(&closed_by(&at_budget)));
         assert_eq!(at_budget.records.len() as u64, N);
@@ -1889,18 +2291,15 @@ mod tests {
         // the ceiling — never wrapped to 0, which would report a run above the
         // base as one below it (§7).
         let mut buf = vec![0xABu8; 8]; // no magic: a corrupt run opens here
-        let payload = bincode::serialize(&FramePayload::Marker(Marker {
-            txn: Txn(u64::MAX),
-            last_seq: u64::MAX,
-            records_checksum: 0,
-        }))
-        .unwrap();
+        let payload = codec()
+            .serialize(&FramePayload::Marker(marker(Txn(u64::MAX), u64::MAX, 0)))
+            .unwrap();
         push_frame(&mut buf, &payload).unwrap();
 
         let dir = tempdir().unwrap();
         fs::write(segment_path(dir.path(), 1), &buf).unwrap();
         let segs = list_segments(dir.path()).unwrap();
-        let out = scan(&segs, 0, None).unwrap();
+        let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
         assert_eq!(
             out.runs,
             vec![RunEnd::Landed {
@@ -1916,8 +2315,11 @@ mod tests {
         // the variant index as a `u32`, then the fields in declaration order,
         // with a [`Txn`] occupying exactly the `u64` it wraps. A journal
         // written by one build is read by the next, so the layout is pinned
-        // here rather than left to whatever the derives happen to produce.
-        let buf = encode_txn(2, vec![vec![9u8, 8, 7]]).unwrap();
+        // here rather than left to whatever the derives happen to produce —
+        // the marker's chain included, computed here by hand from the bytes
+        // `ChainLink` says it covers, so the formula is pinned beside the
+        // layout and not only by the golden fixture.
+        let (buf, chain) = encode_txn(2, vec![vec![9u8, 8, 7]], &CHAIN_GENESIS).unwrap();
 
         let mut expected_record = Vec::new();
         expected_record.extend_from_slice(&0u32.to_le_bytes()); // FramePayload::Record
@@ -1931,17 +2333,205 @@ mod tests {
         let end = payload.end; // where the marker frame begins
         assert_eq!(&buf[payload], expected_record.as_slice());
 
+        // records_checksum: over the record frames' payloads, in Seq order.
+        let records_checksum = crc32c::crc32c_append(0, &expected_record);
+        // The chain: SHA-256 over the genesis seed, the record payload as
+        // framed, then the marker's own pre-chain fields in their wire form.
+        let expected_chain: [u8; 32] = Sha256::new()
+            .chain_update(CHAIN_GENESIS)
+            .chain_update(&expected_record)
+            .chain_update(2u64.to_le_bytes()) // txn
+            .chain_update(2u64.to_le_bytes()) // last_seq
+            .chain_update(records_checksum.to_le_bytes())
+            .finalize()
+            .into();
+        assert_eq!(chain, expected_chain, "the writer answers the chain it framed");
+
         let mut expected_marker = Vec::new();
         expected_marker.extend_from_slice(&1u32.to_le_bytes()); // FramePayload::Marker
         expected_marker.extend_from_slice(&2u64.to_le_bytes()); // txn
         expected_marker.extend_from_slice(&2u64.to_le_bytes()); // last_seq
-        // records_checksum: over the record frames' payloads, in Seq order.
-        expected_marker
-            .extend_from_slice(&crc32c::crc32c_append(0, &expected_record).to_le_bytes());
+        expected_marker.extend_from_slice(&records_checksum.to_le_bytes());
+        expected_marker.extend_from_slice(&expected_chain); // chain: a 32-tuple, no prefix
+        expected_marker.push(SIG_ALG_UNSIGNED); // sig_alg
+        expected_marker.extend_from_slice(&0u64.to_le_bytes()); // sig: empty, its length alone
+        assert_eq!(expected_marker.len(), 65, "the empty marker payload");
         let Parsed::Intact { payload } = parse_frame(&buf, end) else {
             panic!("intact marker frame expected")
         };
         assert_eq!(&buf[payload], expected_marker.as_slice());
+    }
+
+    #[test]
+    fn the_marker_decoder_admits_one_spelling_of_empty() {
+        // The slot's rule, held at the decode door: tag 0 with no bytes is
+        // EMPTY, the one spelling; tag 0 with bytes (a signature under no
+        // pair) and a non-zero tag with none (a pair that signed nothing) are
+        // refused, so no two readers can disagree about whether a marker is
+        // signed. A filled slot under a non-zero tag DECODES — the kernel
+        // never interprets the blob — and rejecting trailing bytes is what
+        // keeps the length prefix the whole of the slot's extent.
+        let honest = codec()
+            .serialize(&FramePayload::Marker(marker(Txn(3), 3, 0)))
+            .unwrap();
+        assert!(codec().deserialize::<FramePayload>(&honest).is_ok());
+        // Layout: tag 4 | txn 8 | last_seq 8 | checksum 4 | chain 32 | sig_alg @56 | len @57..65.
+        let with = |sig_alg: u8, sig: &[u8]| {
+            let mut bytes = honest[..56].to_vec();
+            bytes.push(sig_alg);
+            bytes.extend_from_slice(&(sig.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(sig);
+            bytes
+        };
+        let refused = |bytes: &[u8]| {
+            codec()
+                .deserialize::<FramePayload>(bytes)
+                .err()
+                .map(|e| e.to_string())
+                .expect("refused")
+        };
+        assert!(refused(&with(0, &[0xAA])).contains("one spelling of empty"));
+        assert!(refused(&with(1, &[])).contains("one spelling of empty"));
+        assert!(codec().deserialize::<FramePayload>(&with(1, &[0xAA, 0xBB])).is_ok());
+        // Trailing bytes past the slot are not a longer slot: refused.
+        let mut trailing = with(0, &[]);
+        trailing.push(0);
+        assert!(codec().deserialize::<FramePayload>(&trailing).is_err());
+    }
+
+    #[test]
+    fn each_commit_chains_from_its_predecessor_and_a_consistent_rewrite_breaks_the_chain() {
+        // The chain links every committed transaction to the one before it,
+        // from the genesis seed; the scan recomputes each link from the
+        // bytes the CRC verified and answers the head's value. A rewrite that
+        // keeps every frame CRC consistent — which is what a file-level
+        // writer does, and what neither the CRC nor `records_checksum` can
+        // see — is caught as a CHAIN BREAK at the first transaction whose
+        // marker no longer follows from its predecessor.
+        let dir = tempdir().unwrap();
+        let mut writer = open_fresh(dir.path());
+        write_txn(&mut writer, 1, vec![rec(10)]);
+        write_txn(&mut writer, 2, vec![rec(20), rec(21)]);
+        write_txn(&mut writer, 4, vec![rec(40)]);
+        let segs = list_segments(dir.path()).unwrap();
+        let starts = frame_starts(&segs[0].path);
+        // Frames: 0=T1 rec, 1=T1 marker, 2..=3=T2 recs, 4=T2 marker, 5=T3 rec, 6=T3 marker.
+        let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
+        assert_eq!(out.chain_break(), None);
+        assert_eq!(out.chain_head, chain_of_marker_at(&segs[0].path, starts[6]));
+        assert_ne!(out.chain_head, CHAIN_GENESIS);
+        // …and the appender continues from it: a scan from a base ABOVE T1
+        // seeded with T1's own value verifies T2 and T3 against it.
+        let t1 = chain_of_marker_at(&segs[0].path, starts[1]);
+        let above = scan(&segs, 1, None, t1).unwrap();
+        assert_eq!(above.chain_break(), None);
+        assert_eq!(above.chain_head, out.chain_head);
+        // …while a wrong base value is a break at the first transaction
+        // above the base, and nowhere below it.
+        let wrong = scan(&segs, 1, None, CHAIN_GENESIS).unwrap();
+        assert_eq!(wrong.chain_break(), Some(3));
+
+        // Rewrite T2's marker's chain, re-sealing its frame CRC: every frame
+        // stays intact, every group still commits, and the break lands on T2.
+        let t2 = chain_of_marker_at(&segs[0].path, starts[4]);
+        rewrite_payload(&segs[0].path, starts[4], |payload| payload[24] ^= 0xFF);
+        assert_ne!(chain_of_marker_at(&segs[0].path, starts[4]), t2, "the rewrite took");
+        let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
+        assert!(out.runs.is_empty(), "no frame was damaged");
+        assert_eq!(out.committed_head, 4, "the groups still commit — the halt is the caller's");
+        assert_eq!(out.chain_break(), Some(3), "T2 closes at 3");
+        // A rewritten marker AT the base is not this scan's to judge: the base
+        // embodies it, and T3 verifies against the value the base vouches for
+        // — what T2 carried when that base was taken…
+        assert_eq!(scan(&segs, 3, None, t2).unwrap().chain_break(), None);
+        // …while against a base that vouches for something else, T3 is the
+        // first break, and T2 below it is never named.
+        assert_eq!(scan(&segs, 3, None, [0x77; 32]).unwrap().chain_break(), Some(4));
+    }
+
+    #[test]
+    fn a_foreign_stamp_is_told_from_damage() {
+        // The probe names a FORMAT — a well-formed sync word this build does
+        // not write — and nothing else: this build's own stamp, an empty
+        // segment, a segment shorter than a sync word, and junk at offset 0
+        // all answer `None`, because those are the scan's (an empty journal,
+        // the un-acked tail, a corrupt run), never a format event.
+        let dir = tempdir().unwrap();
+        let mut writer = open_fresh(dir.path());
+        write_txn(&mut writer, 1, vec![rec(10)]);
+        drop(writer);
+        let segs = list_segments(dir.path()).unwrap();
+        let seg = segs[0].path.clone();
+        let stamped = |stamp: &[u8]| {
+            let mut data = fs::read(&seg).unwrap();
+            data[..stamp.len()].copy_from_slice(stamp);
+            fs::write(&seg, data).unwrap();
+        };
+        assert_eq!(foreign_stamp(&segs, 0).unwrap(), None, "this build's own stamp");
+        stamped(b"SKJ2");
+        assert_eq!(foreign_stamp(&segs, 0).unwrap(), Some(*b"SKJ2"));
+        stamped(b"SKJ1");
+        assert_eq!(foreign_stamp(&segs, 0).unwrap(), Some(*b"SKJ1"));
+        stamped(b"SKJ9");
+        assert_eq!(foreign_stamp(&segs, 0).unwrap(), Some(*b"SKJ9"));
+        stamped(&[0xAB, 0xCD, 0xEF, 0x01]);
+        assert_eq!(foreign_stamp(&segs, 0).unwrap(), None, "junk is damage, not a format");
+        stamped(&[0, 0, 0, 0]);
+        assert_eq!(foreign_stamp(&segs, 0).unwrap(), None, "zeros are damage, not a format");
+        fs::write(&seg, b"SKJ").unwrap();
+        assert_eq!(foreign_stamp(&segs, 0).unwrap(), None, "shorter than a sync word");
+        fs::write(&seg, b"").unwrap();
+        assert_eq!(foreign_stamp(&segs, 0).unwrap(), None, "an empty segment");
+        assert_eq!(foreign_stamp(&[], 0).unwrap(), None, "no segment at all");
+
+        // The probe looks where the scan looks: a closed segment the base
+        // embodies is skipped, so a foreign stamp there is not read — and
+        // the first segment the scan WOULD read is.
+        let dir = tempdir().unwrap();
+        let mut writer = open_fresh(dir.path());
+        write_txn(&mut writer, 1, vec![vec![7u8; SEGMENT_ROTATE_BYTES as usize]]); // fills seg-1
+        write_txn(&mut writer, 2, vec![rec(20)]); // rotates into seg-2
+        drop(writer);
+        let segs = list_segments(dir.path()).unwrap();
+        assert_eq!(segs.len(), 2, "the fixture rotates");
+        let stamp_seg = |path: &Path, stamp: &[u8; 4]| {
+            let mut data = fs::read(path).unwrap();
+            data[..4].copy_from_slice(stamp);
+            fs::write(path, data).unwrap();
+        };
+        stamp_seg(&segs[0].path, b"SKJ2");
+        assert_eq!(foreign_stamp(&segs, 0).unwrap(), Some(*b"SKJ2"), "seg-1 is read from genesis");
+        assert_eq!(foreign_stamp(&segs, 1).unwrap(), None, "seg-1 is skipped above a base at 1");
+        stamp_seg(&segs[1].path, b"SKJ2");
+        assert_eq!(foreign_stamp(&segs, 1).unwrap(), Some(*b"SKJ2"), "seg-2 is read");
+    }
+
+    #[test]
+    fn the_chain_rides_across_a_segment_rotation() {
+        // The chain is over the journal, not the segment: the first
+        // transaction of a new segment links from the last of the old one,
+        // and a scan across the boundary verifies every link.
+        let dir = tempdir().unwrap();
+        let mut writer = open_fresh(dir.path());
+        write_txn(&mut writer, 1, vec![vec![7u8; SEGMENT_ROTATE_BYTES as usize]]); // fills seg-1
+        write_txn(&mut writer, 2, vec![rec(20)]); // rotates into seg-2
+        write_txn(&mut writer, 3, vec![rec(30)]);
+        drop(writer);
+        let segs = list_segments(dir.path()).unwrap();
+        assert_eq!(segs.len(), 2, "the fixture rotates");
+        let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
+        assert_eq!(out.chain_break(), None);
+        assert_eq!(out.committed_head, 3);
+        let seg2_starts = frame_starts(&segs[1].path);
+        assert_eq!(out.chain_head, chain_of_marker_at(&segs[1].path, seg2_starts[3]));
+        // Reopened over the rotated journal, the appender continues the same
+        // chain: the next commit verifies against what the scan derived.
+        let mut writer = JournalWriter::open_active(dir.path(), 4, out.chain_head).unwrap();
+        write_txn(&mut writer, 4, vec![rec(40)]);
+        drop(writer);
+        let segs = list_segments(dir.path()).unwrap();
+        let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
+        assert_eq!((out.chain_break(), out.committed_head), (None, 4));
     }
 
     #[test]
@@ -1950,12 +2540,16 @@ mod tests {
         // is behind the writer by the time it returns: a later unwind finds
         // nothing of it to repair, and the next transaction starts clean (§3).
         let dir = tempdir().unwrap();
-        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
-        let mut installed = false;
+        let mut writer = open_fresh(dir.path());
+        let mut installed = None;
         writer
-            .commit_txn(1, vec![rec(10)], || installed = true)
+            .commit_txn(1, vec![rec(10)], |chain| installed = Some(chain))
             .expect("fixture commit");
-        assert!(installed, "the commit installs before it returns");
+        let installed = installed.expect("the commit installs before it returns");
+        // …and hands the install the chain the marker on disk carries.
+        let segs = list_segments(dir.path()).unwrap();
+        let starts = frame_starts(&segs[0].path);
+        assert_eq!(installed, chain_of_marker_at(&segs[0].path, starts[1]));
         let repair = writer.repair_after_unwind();
         assert!(matches!(repair, UnwindRepair::Clean), "got {repair:?}");
     }
@@ -1966,15 +2560,15 @@ mod tests {
         // the install unaccounted for. Its record+marker tail stays —
         // removing an acked commit is what recovery may never do (§3).
         let dir = tempdir().unwrap();
-        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        let mut writer = open_fresh(dir.path());
         let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = writer.commit_txn(1, vec![rec(10)], || panic!("install unwinds"));
+            let _ = writer.commit_txn(1, vec![rec(10)], |_| panic!("install unwinds"));
         }));
         assert!(unwound.is_err(), "the panic reaches the caller");
         let repair = writer.repair_after_unwind();
         assert!(matches!(repair, UnwindRepair::AfterBarrier), "got {repair:?}");
         let segs = list_segments(dir.path()).unwrap();
-        assert_eq!(scan(&segs, 0, None).unwrap().committed_head, 1);
+        assert_eq!(scan(&segs, 0, None, CHAIN_GENESIS).unwrap().committed_head, 1);
     }
 
     #[test]
@@ -2032,11 +2626,11 @@ mod tests {
     #[test]
     fn scan_groups_by_txn_and_derives_the_committed_head() {
         let dir = tempdir().unwrap();
-        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        let mut writer = open_fresh(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 2, vec![rec(20), rec(21)]); // seqs 2, 3
         let segs = list_segments(dir.path()).unwrap();
-        let out = scan(&segs, 0, None).unwrap();
+        let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
         assert_eq!(out.committed_head, 3);
         assert!(out.runs.is_empty());
         assert_eq!(committed_seqs(&out), vec![1, 2, 3]);
@@ -2051,11 +2645,11 @@ mod tests {
         // §7: the replayed range needs NO Seq-contiguity — a TolerateGap burn
         // folds harmlessly; a missing Seq is never corruption.
         let dir = tempdir().unwrap();
-        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        let mut writer = open_fresh(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 5, vec![rec(50), rec(60)]); // burned 2..=4
         let segs = list_segments(dir.path()).unwrap();
-        let out = scan(&segs, 0, None).unwrap();
+        let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
         assert_eq!(out.committed_head, 6);
         assert!(out.runs.is_empty());
         assert_eq!(committed_seqs(&out), vec![1, 5, 6]);
@@ -2067,7 +2661,7 @@ mod tests {
         // resync lands on T2's marker — a marker landing: at = last_seq + 1,
         // inferred max = last_seq (markers carry no Seq of their own; §7).
         let dir = tempdir().unwrap();
-        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        let mut writer = open_fresh(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 2, vec![rec(20)]);
         write_txn(&mut writer, 3, vec![rec(30)]);
@@ -2075,7 +2669,7 @@ mod tests {
         let starts = frame_starts(&segs[0].path);
         // Frames: 0=T1 rec, 1=T1 marker, 2=T2 rec, 3=T2 marker, 4=T3 rec, 5=T3 marker.
         flip_byte(&segs[0].path, starts[2] + FRAME_HEADER_LEN + 1);
-        let out = scan(&segs, 0, None).unwrap();
+        let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
         assert_eq!(
             out.runs,
             vec![RunEnd::Landed {
@@ -2087,6 +2681,9 @@ mod tests {
         // W is still bounded by the last committed marker (T3's).
         assert_eq!(out.committed_head, 3);
         assert_eq!(committed_seqs(&out), vec![1, 3]);
+        // T3 was chained from T2, which this scan never committed: a chain
+        // break at 3 — recorded, so the run above names the root cause first.
+        assert_eq!(out.chain_break(), Some(3));
     }
 
     #[test]
@@ -2094,7 +2691,7 @@ mod tests {
         // T2 = seqs 2..=3; corrupt T2's MARKER. The resync lands on T3's first
         // record (seq 4) — a record landing: at = seq, inferred max = seq − 1.
         let dir = tempdir().unwrap();
-        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        let mut writer = open_fresh(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 2, vec![rec(20), rec(21)]);
         write_txn(&mut writer, 4, vec![rec(40)]);
@@ -2102,7 +2699,7 @@ mod tests {
         let starts = frame_starts(&segs[0].path);
         // Frames: 0=T1 rec, 1=T1 marker, 2..=3=T2 recs, 4=T2 marker, 5=T3 rec, 6=T3 marker.
         flip_byte(&segs[0].path, starts[4] + FRAME_HEADER_LEN + 1);
-        let out = scan(&segs, 0, None).unwrap();
+        let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
         assert_eq!(
             out.runs,
             vec![RunEnd::Landed {
@@ -2112,6 +2709,7 @@ mod tests {
         );
         assert_eq!(out.committed_head, 4);
         assert_eq!(committed_seqs(&out), vec![1, 4]);
+        assert_eq!(out.chain_break(), Some(4), "T3 followed the T2 this scan lost");
     }
 
     #[test]
@@ -2120,7 +2718,7 @@ mod tests {
         // resync must reject the embedded magic (its crc check fails) and land
         // on the real next frame — T1's marker (§1/§7).
         let dir = tempdir().unwrap();
-        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        let mut writer = open_fresh(dir.path());
         let mut embedded_magic = Vec::new();
         embedded_magic.extend_from_slice(b"xx");
         embedded_magic.extend_from_slice(&MAGIC);
@@ -2130,7 +2728,7 @@ mod tests {
         let segs = list_segments(dir.path()).unwrap();
         let starts = frame_starts(&segs[0].path);
         flip_byte(&segs[0].path, starts[0] + FRAME_HEADER_LEN + 1);
-        let out = scan(&segs, 0, None).unwrap();
+        let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
         assert_eq!(
             out.runs,
             vec![RunEnd::Landed {
@@ -2140,6 +2738,7 @@ mod tests {
         );
         assert_eq!(out.committed_head, 2);
         assert_eq!(committed_seqs(&out), vec![2]);
+        assert_eq!(out.chain_break(), Some(2), "T2 followed the T1 this scan lost");
     }
 
     #[test]
@@ -2151,7 +2750,7 @@ mod tests {
         // (payload / 16) × (claimed len) bytes of work — quadratic in a record
         // whose size the caller chooses, and an `open()` that never returns.
         let dir = tempdir().unwrap();
-        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        let mut writer = open_fresh(dir.path());
         let mut evil = Vec::new();
         while evil.len() < 256 * 1024 {
             evil.extend_from_slice(&MAGIC);
@@ -2169,7 +2768,7 @@ mod tests {
         // whole of what there is to check here: what such a scan derived is a
         // prefix, so it produces no outcome at all — there is no committed
         // head to read short, and no cut for a truncation to be aimed with.
-        let fail = scan(&segs, 0, None).err();
+        let fail = scan(&segs, 0, None, CHAIN_GENESIS).err();
         assert!(
             matches!(fail, Some(ScanFail::Unbounded { at: 0 })),
             "got {fail:?}"
@@ -2186,12 +2785,9 @@ mod tests {
         // author chose. `resynchronization_over_planted_frame_headers_is_bounded`
         // plants its headers back to back, so nothing closes a run there, and
         // it cannot tell those budgets from this one.
-        let marker = bincode::serialize(&FramePayload::Marker(Marker {
-            txn: Txn(u64::MAX),
-            last_seq: 0,
-            records_checksum: 0,
-        }))
-        .unwrap();
+        let marker = codec()
+            .serialize(&FramePayload::Marker(marker(Txn(u64::MAX), 0, 0)))
+            .unwrap();
         let mut unit = Vec::new();
         unit.extend_from_slice(&MAGIC);
         unit.extend_from_slice(&(128 * 1024u32).to_le_bytes()); // a len that fits
@@ -2202,14 +2798,14 @@ mod tests {
             evil.extend_from_slice(&unit);
         }
         let dir = tempdir().unwrap();
-        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        let mut writer = open_fresh(dir.path());
         write_txn(&mut writer, 1, vec![evil]);
         write_txn(&mut writer, 2, vec![rec(20)]);
         let segs = list_segments(dir.path()).unwrap();
         let starts = frame_starts(&segs[0].path);
         flip_byte(&segs[0].path, starts[0] + FRAME_HEADER_LEN + 1);
 
-        let fail = scan(&segs, 0, None).err();
+        let fail = scan(&segs, 0, None, CHAIN_GENESIS).err();
         assert!(
             matches!(fail, Some(ScanFail::Unbounded { at: 0 })),
             "got {fail:?}"
@@ -2219,13 +2815,13 @@ mod tests {
     #[test]
     fn torn_tail_reaches_eof() {
         let dir = tempdir().unwrap();
-        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        let mut writer = open_fresh(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 2, vec![rec(20)]);
         // Crash mid-append: a partial header at the tail.
         writer.append(&[0xAB, 0xCD, 0xEF]).unwrap();
         let segs = list_segments(dir.path()).unwrap();
-        let out = scan(&segs, 0, None).unwrap();
+        let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
         assert_eq!(out.runs, vec![RunEnd::Eof]);
         assert_eq!(out.committed_head, 2);
         assert_eq!(committed_seqs(&out), vec![1, 2]);
@@ -2240,7 +2836,7 @@ mod tests {
         // torn: the cut aims at the older segment's marker end, and the whole
         // younger segment is tail to discard (§7).
         let dir = tempdir().unwrap();
-        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        let mut writer = open_fresh(dir.path());
         write_txn(&mut writer, 1, vec![vec![7u8; SEGMENT_ROTATE_BYTES as usize]]); // fills seg-1
         write_txn(&mut writer, 2, vec![rec(20)]); // rotates into seg-2
         let segs = list_segments(dir.path()).unwrap();
@@ -2248,7 +2844,7 @@ mod tests {
         // Tear seg-2's marker: its txn is no longer committed.
         let starts = frame_starts(&segs[1].path);
         flip_byte(&segs[1].path, starts[1] + FRAME_HEADER_LEN + 1);
-        let out = scan(&segs, 0, None).unwrap();
+        let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
         assert_eq!(out.committed_head, 1);
         let tail = out.tail.as_ref().expect("a scanned region has a cut");
         assert_eq!(tail.segment, segs[0].path);
@@ -2259,13 +2855,13 @@ mod tests {
     #[test]
     fn require_boundary_answers_from_the_committed_markers() {
         let dir = tempdir().unwrap();
-        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        let mut writer = open_fresh(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 2, vec![rec(20), rec(21)]); // a composite: boundary 3
         write_txn(&mut writer, 4, vec![rec(40)]);
         let segs = list_segments(dir.path()).unwrap();
 
-        let out = scan(&segs, 0, None).unwrap();
+        let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
         assert_eq!(out.require_boundary(3), Ok(()));
         // A composite's interior Seq was never a boundary (§3).
         assert_eq!(out.require_boundary(2), Err(1));
@@ -2273,7 +2869,7 @@ mod tests {
         // The active segment is always scanned, so it reports boundaries
         // below a base too — but those have no base left to fold from, and
         // the nearest ANSWERABLE boundary is the base's own seq.
-        let out = scan(&segs, 3, None).unwrap();
+        let out = scan(&segs, 3, None, CHAIN_GENESIS).unwrap();
         assert_eq!(out.require_boundary(4), Ok(()));
         assert_eq!(out.require_boundary(2), Err(3));
     }
@@ -2287,13 +2883,13 @@ mod tests {
         // it — so the edge is inclusive at all three, and a bound that dropped
         // its own coordinate would answer a short world.
         let dir = tempdir().unwrap();
-        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        let mut writer = open_fresh(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 2, vec![rec(20), rec(21)]); // a composite: boundary 3
         write_txn(&mut writer, 4, vec![rec(40)]);
         let segs = list_segments(dir.path()).unwrap();
 
-        let out = scan(&segs, 0, Some(3)).unwrap();
+        let out = scan(&segs, 0, Some(3), CHAIN_GENESIS).unwrap();
         assert_eq!(committed_seqs(&out), vec![1, 2, 3], "the bound is inclusive");
         assert_eq!(out.require_boundary(3), Ok(()), "…of its own boundary too");
         assert_eq!(out.require_boundary(1), Ok(()));
@@ -2304,7 +2900,7 @@ mod tests {
 
         // A composite STRADDLING the bound keeps the half below it: its group
         // is filtered per record, not discarded whole.
-        let out = scan(&segs, 0, Some(2)).unwrap();
+        let out = scan(&segs, 0, Some(2), CHAIN_GENESIS).unwrap();
         assert_eq!(committed_seqs(&out), vec![1, 2]);
         // …and 3 is then a boundary nothing can ask about, so the nearest
         // answerable one is 1 — never the interior coordinate 2.

@@ -24,6 +24,10 @@ crc32c = "0.6"
 # ownership (auto-released on process death, unlike a create_new sentinel).
 bincode.workspace = true
 fs2 = "0.4"
+# The commit chain (QUEUE item 10): SHA-256 over each transaction's framed
+# record payloads and its predecessor's chain value, carried in the commit
+# marker and recomputed at replay; the checkpoint header's body hash.
+sha2.workspace = true
 
 [dev-dependencies]
 # The design names `im` for W's persistent slices; M2 itself is generic over W,

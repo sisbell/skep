@@ -138,18 +138,17 @@ impl Provenance {
     /// [`M5State::docs_ever_containing`](crate::M5State::docs_ever_containing)
     /// states what this answer means to a caller, and who owns that bound.
     pub(crate) fn docs_ever_containing(&self, coverage: &SpanSet) -> Vec<Address> {
-        let mut out = Vec::new();
-        for (doc, spans) in self.0.iter() {
-            let hit = spans.iter().any(|placed| {
-                coverage
-                    .iter()
-                    .any(|cover| classify_spans(placed, cover) != SpanRel::Separated)
-            });
-            if hit {
-                out.push(doc.clone());
-            }
-        }
-        out
+        self.0
+            .iter()
+            .filter(|(_, spans)| {
+                spans.iter().any(|placed| {
+                    coverage
+                        .iter()
+                        .any(|cover| classify_spans(placed, cover) != SpanRel::Separated)
+                })
+            })
+            .map(|(doc, _)| doc.clone())
+            .collect()
     }
 }
 

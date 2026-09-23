@@ -331,7 +331,10 @@ impl M5State {
             // so the first placement naming a birth version IS its mint and
             // the count it leaves is the birth extent; every later placement
             // naming it is a deposit the head took, and finds its extent
-            // already noted.
+            // already noted. The count is read off the spliced list itself,
+            // built once and then installed — the list this record leaves the
+            // member holding, as the snapshot arm below counts the list it
+            // shares.
             //
             // THE ONE STATE THE FOLD CANNOT TELL: a shot with NO runs pushes
             // no placement, so a member born EMPTY by the shot leaves nothing
@@ -343,16 +346,10 @@ impl M5State {
             // empty surface is exact (the snapshot arm below notes its zero),
             // so the state is a client's own empty shot into its own home.
             M5Rec::ContentPlace { doc, at, runs } => {
-                let arrangements = self
-                    .arrangements_with_content(doc, |c| c.splice_in(at, runs.iter().cloned()));
-                let birth_extents = self.birth_extents_noting(doc, || {
-                    arrangements
-                        .get(doc)
-                        .map(|arr| arr.content.total_width())
-                        .unwrap_or_default()
-                });
+                let content = self.content_list(doc).splice_in(at, runs.iter().cloned());
+                let birth_extents = self.birth_extents_noting(doc, || content.total_width());
                 M5State {
-                    arrangements,
+                    arrangements: self.arrangements_with_content(doc, |_| content),
                     provenance: self.provenance.append(doc, runs),
                     birth_extents,
                 }
@@ -942,10 +939,7 @@ mod tests {
         // PANIC, and this fold runs on the replay path: the failure would be
         // an abort inside `Kernel::open` rather than a rejected request.
         let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 5)]);
-        let content_at = |k: &Nat| VPos {
-            subspace: content_subspace(),
-            ordinal: k.clone(),
-        };
+        let content_at = |k: &Nat| VPos::content(k.clone());
         for r in [
             // `at` below the first boundary, past the append boundary, and a
             // placement carrying no runs at all.

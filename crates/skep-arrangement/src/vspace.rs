@@ -25,6 +25,19 @@ pub struct VPos {
 }
 
 impl VPos {
+    /// The CONTENT position at `ordinal` — `[s_C, ordinal]`, in the subspace
+    /// every edit op writes to. The constructing half of
+    /// [`is_content`](VPos::is_content), as `Some` is of `is_some`: the
+    /// numeral is M1's (T7), and a caller building a content position names
+    /// the subspace by this rather than spelling `content_subspace()` beside
+    /// the ordinal. Takes the ordinal by value, since the position keeps it.
+    pub fn content(ordinal: Nat) -> VPos {
+        VPos {
+            subspace: content_subspace(),
+            ordinal,
+        }
+    }
+
     /// Does this position name the CONTENT subspace s_C? The numeral is M1's
     /// (T7), and naming the classification here is what keeps the four edit
     /// ops that gate on it from each restating the comparison — the same
@@ -236,6 +249,10 @@ mod tests {
         assert!(vp(1, 2).is_content());
         assert!(!vp(2, 1).is_content());
         assert!(!vp(7, 1).is_content());
+        // And the constructing half: a content position built by name is the
+        // position its numerals spell, and it classifies as content.
+        assert_eq!(VPos::content(n(2)), vp(1, 2));
+        assert!(VPos::content(n(2)).is_content());
         // And the span reader answers the same question off its borrowed
         // numeral, which is what makes COPY's two subspace gates one rule.
         let content = vspan(1, 1, 3);

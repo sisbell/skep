@@ -26,7 +26,7 @@
 
 use std::slice::from_ref;
 
-use skep_address::{content_subspace, Address, Nat};
+use skep_address::{Address, Nat};
 use skep_arrangement::{Deposit, VPos};
 use skep_content::{ContentStore, Val};
 use skep_kernel::{Seq, Snapshot};
@@ -132,7 +132,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // Insert position off a snapshot read; M5's insert re-validates
         // against committed state (benign TOCTOU — item 6).
         let content_count = self.kernel.snapshot().world().m5().content_count(home);
-        let at = VPos { subspace: content_subspace(), ordinal: content_count + Nat::from(1u32) };
+        let at = VPos::content(content_count + Nat::from(1u32));
         let vstream = (self.mk_vstream)(self.kernel.as_ref());
         // M9's writes run as `Caller::System` (the ownership ruling's
         // automation path, 2026-08-16): the coordination layer holds no wire

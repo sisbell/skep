@@ -20,7 +20,7 @@
 use std::sync::LazyLock;
 
 use num_traits::One;
-use skep_address::{content_subspace, difference_sets, union, Address, Nat, Span, SpanSet};
+use skep_address::{difference_sets, union, Address, Nat, Span, SpanSet};
 
 use crate::run::Run;
 use crate::runlist::{RunList, Runs};
@@ -38,8 +38,8 @@ impl M5State {
     /// no read decides for itself what an absent document answers and the
     /// eleventh read inherits the convention rather than restating it. Every
     /// read of the map — the folds' included, which clone what they will
-    /// update and, for a fork, read its source through
-    /// [`content_list`](M5State::content_list) — comes through here, which
+    /// update and read the content list a placement splices or a fork shares
+    /// through [`content_list`](M5State::content_list) — comes through here, which
     /// leaves `arrangements` touched directly only by the writes that own it:
     /// the folds' `update`, and the no-op arm that hands the map back whole.
     pub(crate) fn arrangement_of(&self, doc: &Address) -> &DocArrangement {
@@ -356,10 +356,7 @@ impl M5State {
                 let Some(covered) = block.run.offsets_covered_by(cover) else {
                     continue;
                 };
-                let at = VPos {
-                    subspace: content_subspace(),
-                    ordinal: &block.v_start + covered.lo(),
-                };
+                let at = VPos::content(&block.v_start + covered.lo());
                 vspans.push(
                     ordinal_vspan(&at, &covered.width())
                         .expect("an OffsetRange is nonempty, so its width is ≥ 1"),
@@ -719,7 +716,7 @@ mod tests {
         ] {
             assert!(count >= n(2), "the fixture arranges both subspaces");
             assert_eq!(
-                runs.fold(n(0), |acc, r| acc + r.width()),
+                runs.map(Run::width).sum::<Nat>(),
                 count,
                 "subspace {subspace}: the count is the run widths' sum"
             );

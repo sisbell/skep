@@ -276,7 +276,7 @@ fn blocks_of<'a>(runs: impl Iterator<Item = &'a Run>) -> impl Iterator<Item = Bl
 impl RunList {
     /// `n(d)` for this subspace — the total arranged width.
     pub(crate) fn total_width(&self) -> Nat {
-        self.0.iter().fold(Nat::zero(), |acc, r| acc + &r.width)
+        self.0.iter().map(Run::width).sum()
     }
 
     /// `#runs` — how many runs the list holds, the fragmentation every
@@ -360,8 +360,10 @@ impl RunList {
             .filter_map(|resident| run.offsets_covered_by(&resident.iextent()))
             .collect();
         // Swept in the order the ranges OPEN: a gap is a range opening past
-        // what the ranges before it reached.
-        covered.sort_by(|a, b| a.lo().cmp(b.lo()));
+        // what the ranges before it reached. Ranges opening at one offset see
+        // the same `reached` and leave it at the largest of their `hi`s
+        // whichever comes first, so the sort need not be stable.
+        covered.sort_unstable_by(|a, b| a.lo().cmp(b.lo()));
         let mut reached = Nat::zero();
         for range in &covered {
             if *range.lo() > reached {

@@ -133,7 +133,7 @@ const DEPOSIT_CLASS_ORDINALS: [u32; 2] = [1, 2];
 /// PUB-2.61's class sentence RESTRICTED TO THE CLASSES THAT DEPOSIT AN ATOM —
 /// a BUILD-TIME set, M5's own, each member the ghost home document's
 /// ([`ghost_home_doc`]) subspace-3 element at its commons ordinal
-/// ([`DEPOSIT_CLASS_ORDINALS`]). Today: ENROLL and RETIRE, in that order.
+/// (`DEPOSIT_CLASS_ORDINALS`). Today: ENROLL and RETIRE, in that order.
 ///
 /// Membership is EQUALITY — the membership compare RES-249 pins, and the
 /// compare the credential classifier makes of the type slot of the
@@ -824,7 +824,8 @@ where
             let reinserted = supplied
                 .iter()
                 .filter(|settled| draft_native(&settled.origin_doc))
-                .fold(Nat::zero(), |sum, settled| sum + settled.run.width());
+                .map(|settled| settled.run.width())
+                .sum::<Nat>();
             if reinserted > Nat::from(MAX_REINSERTED_VALUES) {
                 return Err(PublishError::TooManyValues);
             }

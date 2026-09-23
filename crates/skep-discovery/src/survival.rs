@@ -6,7 +6,7 @@
 //! Conflicts #8).
 
 use num_traits::{One, Zero};
-use skep_address::{content_subspace, Address, Nat, Span};
+use skep_address::{Address, Nat, Span};
 use skep_arrangement::{Run, VPos};
 use skep_kernel::Snapshot;
 
@@ -24,10 +24,7 @@ use crate::DiscoveryWorld;
 /// subspace is `s_C` here by construction, and the callers' width ≥ 1 guard
 /// excludes `count = 0`, the only other thing declined.
 fn content_vspan_at(ordinal: &Nat, count: &Nat) -> Span {
-    let at = VPos {
-        subspace: content_subspace(),
-        ordinal: ordinal.clone(),
-    };
+    let at = VPos::content(ordinal.clone());
     content_vspan(&at, count).expect("s_C ∧ width ≥ 1 ⇒ count ≥ 1")
 }
 
@@ -127,7 +124,7 @@ pub fn delete_orphans_on<W: DiscoveryWorld>(
     if !w.m3().is_registered_document(d) {
         return Err(OrphanError::DocNotRegistered);
     }
-    if p.subspace != content_subspace() {
+    if !p.is_content() {
         return Err(OrphanError::NotContentSubspace); // s_C only (mirror M5 DeleteError)
     }
     let p_ordinal = &p.ordinal;

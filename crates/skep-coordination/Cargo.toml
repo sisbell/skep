@@ -16,7 +16,7 @@ im.workspace = true
 # M1 — tumbler/address/span algebra: the T1 order and is_prefix behind
 # V-PRIM's ≼/</T1 extrema; validate/is_t4_valid for the set-element lifts and
 # the def codec's parse; document_of for the guest-class home test and the
-# fire attribution key; content_subspace for the def insert position.
+# fire attribution key.
 skep-address = { path = "../skep-address" }
 # M2 — every verdict reads one pinned Snapshot; every write rides M5's/M7's
 # transact-wrapped ops (M9 drives no transact directly).
@@ -27,7 +27,7 @@ skep-namespace = { path = "../skep-namespace" }
 # read; lives in the operation-surface pass, never the denotation).
 skep-content = { path = "../skep-content" }
 # M5 — Vstream::insert writes def content through the placement composite
-# (J0); content_count for the append position.
+# (J0); content_count and VPos::content for the append position.
 skep-arrangement = { path = "../skep-arrangement" }
 # M7 — the entire PL read surface (observe + BH1–BH4 + is_k/members/
 # targets_of) and the gated writes (emit/nullify).

@@ -11,8 +11,8 @@ use common::*;
 use skep_address::{elem_addr, ElemPos, SpanSet};
 use skep_discovery::{FourSet, SlotSpec};
 use skep_febe::{
-    Deposit, Disposition, Op, OpKind, RejectCode, SlotArg, SuccessorSpec, UniversalGrant, FROM,
-    MAX_REQ_ID_BYTES,
+    Deposit, Disposition, Op, OpKind, RejectCode, SlotArg, SuccessorSpec, UniversalGrant,
+    UniversalIndexRow, FROM, MAX_REQ_ID_BYTES,
 };
 use skep_links::{enc, View, MAX_SLOT_SPANS};
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
@@ -321,6 +321,15 @@ fn the_any_principal_discovery_read_hands_a_client_the_answer_set_never_the_inde
     let dx1 = ghost_doc(&x1, 1); // X.1's document
     let dy = ghost_doc(&y, 1); // Y's document
     let dy2 = ghost_doc(&y, 2); // another of Y's
+
+    // Two row types, one per side of the seam: `stored` builds what the world
+    // hands over, `row` what a client is served.
+    let stored = |content_prefix: &skep_address::Address, issuers: &[&skep_address::Address]| {
+        UniversalIndexRow {
+            content_prefix: content_prefix.clone(),
+            issuers: issuers.iter().map(|a| (*a).clone()).collect(),
+        }
+    };
     let row = |prefix: &skep_address::Address, issuers: &[&skep_address::Address]| UniversalGrant {
         prefix: prefix.clone(),
         issuers: issuers.iter().map(|a| (*a).clone()).collect(),
@@ -328,12 +337,12 @@ fn the_any_principal_discovery_read_hands_a_client_the_answer_set_never_the_inde
     // The STORED index, deliberately out of prefix order: what each row
     // narrows to is stated beside it.
     seed_universal_grants(vec![
-        row(&x, &[&x1]),      // RES-264: X.1's share over X, wider ⇒ served at X.1
-        row(&dy, &[&x, &y]),  // RES-231: X's record over Y's document ⇒ X dropped; Y's stands
-        row(&dx1, &[&x1]),    // ω answers X.1 for its own document ⇒ unchanged
-        row(&x1, &[&x, &x1]), // RES-298: X's share over its SEATED X.1 ⇒ X dropped; X.1's own stands
-        row(&dy2, &[&x1]),    // X.1's record over Y's other document ⇒ no row at all
-        row(&dx, &[&x]),      // ω answers X for its own document ⇒ unchanged
+        stored(&x, &[&x1]),      // RES-264: X.1's share over X, wider ⇒ served at X.1
+        stored(&dy, &[&x, &y]),  // RES-231: X's record over Y's document ⇒ X dropped; Y's stands
+        stored(&dx1, &[&x1]),    // ω answers X.1 for its own document ⇒ unchanged
+        stored(&x1, &[&x, &x1]), // RES-298: X's share over its SEATED X.1 ⇒ X dropped; X.1's own stands
+        stored(&dy2, &[&x1]),    // X.1's record over Y's other document ⇒ no row at all
+        stored(&dx, &[&x]),      // ω answers X for its own document ⇒ unchanged
     ]);
 
     let served = read(fx.user);
@@ -400,6 +409,11 @@ fn the_any_principal_discovery_read_hands_a_client_the_answer_set_never_the_inde
 /// `Z` answers itself and the SAME stored row is served unchanged, by the
 /// exact arm — so what dropped it was the missing seat, and the seeded row
 /// did reach the door.
+///
+/// The seeded row's issuer is no seat, so it lies outside the obligation
+/// [`UniversalIndexRow`] states for every row the world hands over —
+/// deliberately: an unseated issuer is the only input at which the strict
+/// reading of WIDER can be observed at all.
 #[test]
 fn an_unseated_issuer_over_its_own_prefix_is_no_row() {
     let fx = setup();
@@ -431,8 +445,10 @@ fn an_unseated_issuer_over_its_own_prefix_is_no_row() {
     assert_eq!(owner_of(&z), Some((node1(), BOOTSTRAP_PRINCIPAL)), "no seat: ω(Z) is the node");
 
     // The ONE stored row, seeded RAW: Z's universal share over Z itself.
-    let stored = UniversalGrant { prefix: z.clone(), issuers: vec![z.clone()] };
-    seed_universal_grants(vec![stored.clone()]);
+    seed_universal_grants(vec![UniversalIndexRow {
+        content_prefix: z.clone(),
+        issuers: vec![z.clone()],
+    }]);
 
     // NO row: ω answers the node, so the exact arm passes the pair by, and Z
     // is not WIDER than Z. Without `prefix != issuer` the read serves
@@ -450,8 +466,59 @@ fn an_unseated_issuer_over_its_own_prefix_is_no_row() {
     ));
     assert_eq!(owner_of(&z), Some((z.clone(), PrincipalId(21))), "seated, Z answers itself");
     let served = read();
-    assert_eq!(served, vec![stored], "ω answers the issuer for the stored prefix: unchanged");
+    assert_eq!(
+        served,
+        vec![UniversalGrant { prefix: z.clone(), issuers: vec![z.clone()] }],
+        "ω answers the issuer for the stored prefix: unchanged"
+    );
     every_issuer_is_the_seat_of_its_prefix(&served);
+}
+
+/// THE EXACT ARM's named residue (PUB-8.47; RES-298), as `Op::UniversalGrants`
+/// states it: a stored prefix that is a sub-prefix of the issuer's account no
+/// delegation has seated is served UNCHANGED — ω answers the issuer there —
+/// and the row drops at the first read after a delegation seats it, ω then
+/// answering the new seat while the issuer's account is no wider than the
+/// stored prefix. Each read holds the served guarantee: the one issuer listed
+/// is the seat ω answers for its prefix, asked through the surface's own
+/// owner-of-address read.
+#[test]
+fn an_unseated_sub_prefix_is_served_until_a_delegation_seats_it() {
+    let fx = setup();
+    let read = || universal_grants(ex(&fx.febe, fx.user, Op::UniversalGrants));
+    let seat_of = |a: &skep_address::Address| {
+        effective_owner(ex(&fx.febe, fx.user, Op::EffectiveOwner { addr: a.clone() }))
+            .map(|(seat, _)| seat)
+    };
+
+    // `inc(X, 1)`, peeked and NOT delegated: a sub-prefix of X, and no seat.
+    let (child, _) =
+        maybe_addr(ex(&fx.febe, fx.user, Op::NextAccountPrefix { parent: fx.account.clone() }));
+    let child = child.expect("a fresh account's first child is delegable");
+    assert_eq!(seat_of(&child), Some(fx.account.clone()), "no seat: ω answers X at the child");
+
+    // X's universal share over its unseated child, seeded RAW.
+    seed_universal_grants(vec![UniversalIndexRow {
+        content_prefix: child.clone(),
+        issuers: vec![fx.account.clone()],
+    }]);
+    let served = read();
+    assert_eq!(
+        served,
+        vec![UniversalGrant { prefix: child.clone(), issuers: vec![fx.account.clone()] }],
+        "ω answers X at the unseated child: the stored prefix is served unchanged"
+    );
+    assert_eq!(seat_of(&served[0].prefix).as_ref(), Some(&served[0].issuers[0]));
+
+    // Seated by X's own `delegate`: ω answers the child itself, and X's
+    // account is no wider than the child, so X's share over it is no row.
+    ack_addr(ex(
+        &fx.febe,
+        fx.user,
+        Op::Delegate { new_prefix: child.tumbler().clone(), new_id: PrincipalId(41) },
+    ));
+    assert_eq!(seat_of(&child), Some(child.clone()), "seated, the child answers itself");
+    assert!(read().is_empty(), "the row drops at the first read after the delegation");
 }
 
 /// §6/`Op::RegisterNode`: a bound session is the ONLY gate on node admission

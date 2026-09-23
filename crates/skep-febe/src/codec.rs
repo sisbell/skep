@@ -92,6 +92,14 @@ pub trait Codec {
     /// what a transport can still bound: `find_links_ftt` returns the whole
     /// matched set where `window_ftt` pages it.
     ///
+    /// [`Op::UniversalGrants`] has that shape unconditionally. It takes no
+    /// argument at all, so its frame is the bare op name, and its cost is the
+    /// grant fold's live universal index — whose size the depositors choose,
+    /// and which grows with the store — times one registry walk per stored
+    /// row, the ω compare the narrowing makes. Nor has it a paged form: the
+    /// whole covered set comes back in one response, which is the one thing
+    /// about it a transport can bound.
+    ///
     /// Shape is not the implementer's: `Address`, `Span` and `Tumbler`
     /// validate in their own constructors (and re-enter them on deserialize),
     /// so a parsed argument is well formed by construction and no dispatch arm
@@ -111,6 +119,7 @@ pub trait Codec {
     /// [`Op::Publish`]: crate::Op::Publish
     /// [`Op::RetrieveV`]: crate::Op::RetrieveV
     /// [`Op::FindLinksFtt`]: crate::Op::FindLinksFtt
+    /// [`Op::UniversalGrants`]: crate::Op::UniversalGrants
     /// [`MAX_REQ_ID_BYTES`]: crate::MAX_REQ_ID_BYTES
     fn parse(&self, frame: &[u8]) -> Result<Request, ParseError>;
     /// Typed response → wire bytes. Total by signature: there is no failure

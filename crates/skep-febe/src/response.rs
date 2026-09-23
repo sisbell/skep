@@ -62,36 +62,28 @@ pub struct BirthVersion {
     pub extent: Nat,
 }
 
-/// One row of the ANY-PRINCIPAL DISCOVERY READ (PUB-8.47; RES-224): a
-/// content prefix and the issuers whose live universal grants name it, each
-/// an address — the two fields the fold's own universal index already carries
-/// (`skep-engine`'s `UniversalGrant`), OWNED rather than borrowed, because
-/// this crate names no engine world and an answer outlives the snapshot it
-/// was read from.
+/// One row of the ANY-PRINCIPAL DISCOVERY READ (PUB-8.47; RES-224), as a
+/// client is served it: a COVERED content prefix and the issuers whose live
+/// universal grants cover it, each an address. OWNED rather than borrowed,
+/// because an answer outlives the snapshot it was read from.
 ///
-/// The one row shape on BOTH sides of M10's seam, and it means two things
-/// there. [`PublicationWorld::universal_grants`] hands over the STORED rows —
-/// `prefix` as the index keys it, the issuers as the index holds them — which
-/// is the index and not the answer set (RES-258). The read's arm serves the
-/// COVERED rows (RES-231, RES-264, RES-273), and THE COMPARE IS ω's
-/// (RES-298): `prefix` is the STORED prefix where the registry's
-/// `effective_owner` of it is the issuer's account, the issuer's OWN account
-/// where the stored prefix CONTAINS that account and is not it, and the pair
-/// contributes NO row otherwise — a disjoint pair, and a hirer's grant beneath
-/// its REGISTERED sub-account — so every issuer listed ω-owns the prefix by
-/// construction, and the set a client is handed is the set `grant_exists`
-/// answers from. Served rows group by the served prefix and come in prefix
-/// order, each issuer list in address order without a repeat; and a served
-/// row carries exactly ONE issuer (RES-298) — ω being a function, and an
-/// issuer a seat ω answers itself at — so the plural is the index's: only a
-/// STORED row lists more than one.
+/// M10 builds one only by narrowing the world's [`UniversalIndexRow`]s by
+/// the compare [`Op::UniversalGrants`] states, so every issuer listed ω-owns
+/// the prefix beside it, and the set a client is handed is the set the
+/// fold's `grant_exists` answers from (RES-231, RES-264, RES-273, RES-298).
+/// Rows come in prefix order, each issuer list in address order without a
+/// repeat. `issuers` is a list because RES-224 rules the shape — one row per
+/// content prefix with the issuers who granted it — and in practice it holds
+/// exactly ONE: ω is a function, and every issuer the fold indexes is a seat
+/// ω answers itself at (the obligation [`UniversalIndexRow`] states).
 ///
-/// [`PublicationWorld::universal_grants`]: crate::PublicationWorld::universal_grants
+/// [`UniversalIndexRow`]: crate::UniversalIndexRow
+/// [`Op::UniversalGrants`]: crate::Op::UniversalGrants
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct UniversalGrant {
-    /// The content prefix — a document or an account address.
+    /// The covered content prefix — a document or an account address.
     pub prefix: Address,
-    /// The issuing accounts, in address order.
+    /// The issuing accounts, each ω-owning `prefix`, in address order.
     pub issuers: Vec<Address>,
 }
 

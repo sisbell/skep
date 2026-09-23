@@ -1,18 +1,30 @@
-//! The lifecycle entry ([`OperationSurface::execute`]) and the two static
-//! dispatch tables (§1–§4): parse → authorize → linearize → commit-gate →
-//! marshal → surface. The lifecycle's order lives here; the two pieces of
-//! state it consults belong to their own cards — [`crate::session::Sessions`]
+//! Two residents, and the second guards the first.
+//!
+//! The LIFECYCLE: its entry ([`OperationSurface::execute`]) and the two
+//! static dispatch tables (§1–§4) — parse → authorize → linearize →
+//! commit-gate → marshal → surface. The lifecycle's order lives here; the
+//! pieces it consults belong to their own cards — [`crate::session::Sessions`]
 //! for the ephemeral binding (§6), [`crate::idem::IdemCache`] for the
-//! committed-write retry memo (§7).
+//! committed-write retry memo (§7), and [`crate::publication`] for what the
+//! composed publication reads need that no store computes.
+//!
+//! The READABILITY DOOR: the one read predicate a front door answers through
+//! — its world's own or a supplied [`ReadPredicate`], bound once per request
+//! by [`OperationSurface::readable_by`] — the two consults it drives
+//! ([`consult_read`], [`consult_write`]), the link-address absence rule
+//! ([`home_readable`]), and the visibility class lent to a store for one
+//! write. It stays beside the lifecycle rather than on a card of its own
+//! because the two share the proven-bound principal: `consult_write` rides
+//! the lifecycle's [`WriteCtx`], and its precondition — the predicate built
+//! from that principal and from nothing else — is stated against it.
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 // `FebeWorld` names the accessor bound set, and its supertraits carry the
 // `m3()`/`m5()`/`links()` methods the read arms call, so no accessor trait
 // is imported here by name.
 use skep_address::{document_of, Address};
-use skep_arrangement::{published_target, trunk_head, trunk_of, Caller, M5Rec, M5State};
+use skep_arrangement::{published_target, trunk_of, Caller, M5Rec};
 use skep_content::ContentWrite;
 use skep_discovery::{
     addressably_discoverable_from_on, count_ftt_on, count_v_on, delete_orphans_on,
@@ -21,16 +33,15 @@ use skep_discovery::{
 };
 use skep_kernel::{Seq, TxnError, WorldState};
 use skep_links::{Invalid, LinkRec};
-use skep_namespace::{
-    first_version_address, prefix_contains, M3Rec, M3State, PrincipalId, BOOTSTRAP_PRINCIPAL,
-};
+use skep_namespace::{M3Rec, M3State, PrincipalId, BOOTSTRAP_PRINCIPAL};
 use skep_retrieval::Query;
 
 use crate::idem::IdemCache;
 use crate::lower::{lower_read, lower_txn, Lower};
 use crate::op::{Op, OpKind, Request, WriteConsult};
+use crate::publication::{birth_version, covered_universal_grants, require_registered_document};
 use crate::reject::{reject, rejection, FaultSite, RejectCode, Rejection};
-use crate::response::{BirthVersion, Response, UniversalGrant};
+use crate::response::Response;
 use crate::session::{SessionId, Sessions};
 use crate::successor::successor_link;
 use crate::{FebeWorld, Stores};
@@ -364,135 +375,6 @@ fn consult_write(
     Ok(())
 }
 
-/// The registration refusal M10 ORIGINATES, for the two reads that COMPOSE
-/// their answer instead of calling one store operation ([`Op::DocMetadata`],
-/// [`Op::EditionClaims`]). Every other read's `*NotRegistered` is its store's,
-/// raised where the store meets the address; these two reach no single store
-/// that could raise one, so the check is this door's and is named as such.
-///
-/// It is not bookkeeping — each of the two would answer something worse
-/// without it. It is what BOUNDS the edition-claim seam: the world narrows
-/// its `to` range by no level, so an account-tier target would ask after
-/// every document under it and a node-tier one after the store, and
-/// requiring document tier is what confines the lookup to one document's
-/// claims. And it is what keeps the doc-metadata read from FABRICATING a
-/// row for an address no mint produced — ω answers by longest prefix for any
-/// address under a registered account, and the rest of that row would be a
-/// plausible `false` and `None`, indistinguishable from a real private
-/// unarranged document.
-fn require_registered_document(
-    m3: &M3State,
-    kind: OpKind,
-    doc: &Address,
-) -> Result<(), Rejection> {
-    if m3.is_registered_document(doc) {
-        Ok(())
-    } else {
-        Err(rejection(kind, RejectCode::DocNotRegistered))
-    }
-}
-
-/// The BIRTH VERSION of a trunk document — `D.1`, the slot its version chain
-/// opens at, with the BIRTH CONTENT of what occupies it (PUB-8.12; PUB-3.19 as
-/// RES-276 reads it). `None` while the chain has no member, which is why the
-/// two halves travel as one [`BirthVersion`]: no extent is read for a
-/// document with no member, so the field is absent rather than zero.
-///
-/// The extent is the content `D.1` was BORN with — the leading runs of its
-/// arrangement at its mint — and NOT its arranged content count: while `D.1`
-/// is the head a declared deposit appends to its arrangement (PUB-2.66), and
-/// the count follows every one. The owner's ruling D2 (2026-09-17) FREEZES
-/// what is served, so no reader subtracts a remainder: a one-member edition
-/// that took a deposit still answers the extent its claim was written over
-/// (PUB-3.10), and so stays in the selection domain (RES-276) and passes the
-/// fill's edition side (RES-284, RES-286's claimed half).
-///
-/// All three reads are their owner's own, asked rather than respelled: M5's
-/// [`trunk_head`] for whether the chain has a member, M3's
-/// [`first_version_address`] for where it opens — the chain's anchor and
-/// opening ordinal being M3's alone — and M5's
-/// [`birth_extent`](M5State::birth_extent) for the frozen extent, which M5's
-/// fold notes at the mint; that fold states the one state it cannot tell.
-///
-/// PRECONDITION: `trunk` is DOCUMENT-tier, which [`trunk_of`] discharges at
-/// the one call site. It is stated on the parameter because that is where a
-/// caller can see what it owes, and the `expect` is what ENFORCES it:
-/// [`first_version_address`] is registry-free and answers `None` for every
-/// tier but a document's, so a violation panics rather than fabricating the
-/// address of a chain no tier but a document's anchors.
-///
-/// The guard above stands in front of that panic, so no call reaches it:
-/// [`trunk_head`] delegates to M3's `latest_version`, which returns `None`
-/// for any tier but a document's BEFORE it consults a frontier — so an
-/// ACCOUNT, whose same namespace key is the sub-account chain, returns at
-/// the `?` rather than reaching the mint.
-fn birth_version(m3: &M3State, m5: &M5State, trunk: &Address) -> Option<BirthVersion> {
-    trunk_head(m3, trunk)?;
-    let addr = first_version_address(trunk)
-        .expect("`trunk` is document-tier, the one tier that anchors a version chain");
-    let extent = m5.birth_extent(&addr);
-    Some(BirthVersion { addr, extent })
-}
-
-/// THE FOLD-FILTER of the any-principal discovery read (PUB-8.47; RES-231,
-/// RES-264, RES-273, RES-298): the STORED rows of the live universal index,
-/// narrowed to what the fold answers from. Coverage is containment ∩ the
-/// issuer's own documents (PUB-5.9) and the fold applies the ownership half
-/// at the lookup (`grant_exists`'s issuer compare, PUB-7.3), never at
-/// indexing — so the index is a SUPERSET of entitlement, and a client handed
-/// it raw would render a stranger's record over a stranger's document as a
-/// board-wide face (PUB-5.21's MUST NEVER). What is served instead is the
-/// ruled compare, and THE COMPARE IS ω's (RES-298): `m3`'s
-/// [`effective_owner_prefix`](M3State::effective_owner_prefix) of the stored
-/// prefix — longest-match, the walk the fold's own owner memo is taken by at
-/// the mint — against each issuer of the row, three arms:
-///
-/// * where ω of the stored prefix IS the issuer's account, the served prefix
-///   is the STORED prefix, unchanged — the issuer's account, a document of
-///   it, or a sub-prefix of it no delegation has seated (RES-298's named
-///   residue: ω answers the issuer there until one does, and the row drops at
-///   the next read after);
-/// * where the stored prefix CONTAINS the issuer's account and is not it —
-///   WIDER, an agent's share over its hirer's prefix (RES-264) — the served
-///   prefix is the issuer's OWN account, which is every document the issuer
-///   owns under it and exactly what `grant_exists` answers `true` for;
-/// * otherwise the pair contributes NO row: a stranger's record over a
-///   stranger's document (RES-231's cell), and a hirer's grant beneath its
-///   REGISTERED sub-account — inside the hirer's account by address, the
-///   sub-account's by ω, so the granter is not the owner and the fold honors
-///   the grant for no document.
-///
-/// Rows GROUP by the served prefix — two stored rows can narrow to one — and
-/// come back in prefix order, the issuers of a row in address order without
-/// a repeat, so the ruled shape stands: one row per content prefix with the
-/// issuers who granted it. ω being a function, and an issuer a seat ω
-/// answers itself at, every served row carries exactly ONE issuer: the
-/// plural is the index's. No read class and no index (PUB-3.48): the compare
-/// is M3's own walk, ONE per stored row off the snapshot the arm holds, so
-/// the cost is the index's own size (PUB-7.45) times that walk. The seat's
-/// declined widenings are declined here too — never the stored prefix, never
-/// an "or contains" test.
-fn covered_universal_grants(m3: &M3State, stored: Vec<UniversalGrant>) -> Vec<UniversalGrant> {
-    let mut served: BTreeMap<Address, BTreeSet<Address>> = BTreeMap::new();
-    for UniversalGrant { prefix, issuers } in stored {
-        let owner = m3.effective_owner_prefix(&prefix);
-        for issuer in issuers {
-            let covered = if owner == Some(&issuer) {
-                prefix.clone() // ω answers the issuer for the stored prefix: unchanged
-            } else if prefix_contains(&prefix, &issuer) && prefix != issuer {
-                issuer.clone() // wider than the issuer's account: the account
-            } else {
-                continue; // ω answers another seat, or none: no row
-            };
-            served.entry(covered).or_default().insert(issuer);
-        }
-    }
-    served
-        .into_iter()
-        .map(|(prefix, issuers)| UniversalGrant { prefix, issuers: issuers.into_iter().collect() })
-        .collect()
-}
-
 impl<W> OperationSurface<W>
 where
     W: FebeWorld,
@@ -748,6 +630,9 @@ where
     ///   read; the container family drops every CONTAINER the caller cannot
     ///   read, at its own identity. Either way a count is a count of what
     ///   THIS caller may see, and no field reports that anything was dropped.
+    ///   The any-principal read is smaller still for the GUEST: grants reach
+    ///   principals alone (PUB-5.109), so the guest is answered no rows, and
+    ///   an empty answer there says nothing about whether any grant stands.
     /// * ABSENCE. A link address whose home document the caller may not read
     ///   answers as an address no link occupies (PUB-6.6), so absence does
     ///   not distinguish "no link there" from "a link that is not yours to
@@ -1137,14 +1022,22 @@ where
     /// surfaces: `Query::new` for M6, and M8's `*_on` reads over that same
     /// snapshot (Conflicts resolved #5), so no answer comes from a position
     /// other than the one `as_of` names. Reads hold no lock against writers,
-    /// are zero-step (A1), and have no commit-before-ack obligation. No arm
-    /// takes a session gate; every arm answers THROUGH the per-request read
-    /// predicate this function builds once off `principal` (`None` is the
-    /// guest), which SHAPES each answer — and, at the doc-argument consult
-    /// below, refuses a request naming a document this caller may not read.
-    /// Exhaustive over `Op` with the
-    /// complementary (write) half as one explicit rejecting |-list — see
-    /// `dispatch_write`.
+    /// are zero-step (A1), and have no commit-before-ack obligation.
+    ///
+    /// No arm takes a session gate. What `principal` (`None` is the guest)
+    /// SHAPES is decided in exactly two places. One is the per-request read
+    /// predicate this function builds once off it, which every masking arm
+    /// answers through — and which, at the doc-argument consult below,
+    /// refuses a request naming a document this caller may not read. The
+    /// other is the any-principal arm, which asks the principal itself:
+    /// grants reach principals alone (PUB-5.109), so the guest is answered no
+    /// rows — the one per-caller rule on this path that is not the predicate,
+    /// decided here because this is where the caller is known. The three
+    /// registry reads answer through neither, their data being public and the
+    /// same for every caller.
+    ///
+    /// Exhaustive over `Op` with the complementary (write) half as one
+    /// explicit rejecting |-list — see `dispatch_write`.
     fn dispatch_read(&self, op: Op, principal: Option<PrincipalId>) -> Result<Response, Rejection> {
         let kind = op.kind();
         let snap = self.stores.kernel().snapshot();
@@ -1339,7 +1232,9 @@ where
                 let claims = out_claims_on(&snap, &x, view, &readable); // total
                 Ok(Response::Claims { claims, as_of })
             }
-            // ── publication reads (lane 3.4) ──
+            // ── publication reads (lane 3.4, PUB-8.47): answers this door
+            //    COMPOSES; what they need that no store computes is
+            //    `crate::publication`'s ──
             // The doc-metadata read (PUB-8.12): the publication state a
             // client's own admission tests need, and nothing else. `doc` was
             // consulted above, so a withheld answer has already spoken for a
@@ -1387,13 +1282,15 @@ where
             // over the fold's live universal INDEX, enumerated ONCE off this
             // snapshot, and this door serves the ANSWER SET — each row
             // narrowed to the prefix its issuer ω-owns by the compare
-            // `covered_universal_grants` states (RES-231/264/273/298), ω
-            // asked of this same snapshot's registry, grouped by the served
-            // prefix in prefix order. The GUEST is answered EMPTY
-            // (PUB-5.109) — an answer, never a refusal, and no consult, there
-            // being no document argument — so the index is not even walked
-            // for a requester no grant reaches; every bound principal, keyed
-            // or bare, is handed the same rows, the set being a board
+            // `Op::UniversalGrants` states (RES-231/264/273/298), which
+            // `covered_universal_grants` realizes with ω asked of this same
+            // snapshot's registry, grouped by the served prefix in prefix
+            // order. Index rows and served rows are two types, so the index
+            // has no way onto the wire unnarrowed. The GUEST is answered
+            // EMPTY (PUB-5.109) — an answer, never a refusal, and no consult,
+            // there being no document argument — so the index is not even
+            // walked for a requester no grant reaches; every bound principal,
+            // keyed or bare, is handed the same rows, the set being a board
             // population and not the requester's. The daemon's feed applies
             // the same live set at serve, so nothing here decides what is
             // served — only what a client may display.
@@ -1538,9 +1435,9 @@ mod tests {
             Vec::new()
         }
         // The grant fold is the engine's too; this world carries none, so the
-        // live universal set is empty and the arm's shape is what is
+        // live universal index is empty and the arm's shape is what is
         // exercised (the narrowing has its own vectors in `tests/it`).
-        fn universal_grants(&self) -> Vec<UniversalGrant> {
+        fn universal_grants(&self) -> Vec<crate::UniversalIndexRow> {
             Vec::new()
         }
     }

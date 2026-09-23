@@ -15,7 +15,7 @@ use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_febe::{
     BirthVersion, Deposit, Disposition, EditionClaim, Op, OpKind, OperationSurface, RejectCode, Rejection,
-    ReqId, Request, Response, SessionId, Stores, UniversalGrant,
+    ReqId, Request, Response, SessionId, Stores, UniversalGrant, UniversalIndexRow,
 };
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, WorldState};
 use skep_links::{enc, Endset, HasLinks, Invalid, Link, LinkRec, LinkState};
@@ -131,19 +131,19 @@ pub fn seed_edition_claims(rows: Vec<EditionClaim>) {
 thread_local! {
     /// The STORED rows this world's [`skep_febe::PublicationWorld`] hands the
     /// any-principal discovery read (PUB-8.47) — the live universal INDEX as
-    /// the engine would enumerate it, prefix and issuers per row. The fold is
-    /// the engine's composition, so this miniature world carries none of its
-    /// own and answers the empty index unless a test seeds it through
-    /// [`seed_universal_grants`]; the FOLD-FILTER that narrows each served
-    /// row (RES-231/264/273/298) is M10's own and is what a test seeding this is
-    /// about. Cleared by [`surface`], as [`EDITION_CLAIMS`] is.
-    static UNIVERSAL_GRANTS: RefCell<Vec<UniversalGrant>> = const { RefCell::new(Vec::new()) };
+    /// the engine would enumerate it, content prefix and issuers per row. The
+    /// fold is the engine's composition, so this miniature world carries none
+    /// of its own and answers the empty index unless a test seeds it through
+    /// [`seed_universal_grants`]; the FOLD-FILTER that narrows each row into
+    /// a served one (RES-231/264/273/298) is M10's own and is what a test
+    /// seeding this is about. Cleared by [`surface`], as [`EDITION_CLAIMS`] is.
+    static UNIVERSAL_GRANTS: RefCell<Vec<UniversalIndexRow>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Seed the STORED rows `Op::UniversalGrants` is answered from, RAW — the
+/// Seed the index rows `Op::UniversalGrants` is answered from, RAW — the
 /// index, never the answer set: M10's own narrowing is what a test using
 /// this is about.
-pub fn seed_universal_grants(rows: Vec<UniversalGrant>) {
+pub fn seed_universal_grants(rows: Vec<UniversalIndexRow>) {
     UNIVERSAL_GRANTS.with(|g| *g.borrow_mut() = rows);
 }
 
@@ -151,7 +151,7 @@ impl skep_febe::PublicationWorld for World {
     fn edition_claims(&self, _target: &Address) -> Vec<EditionClaim> {
         EDITION_CLAIMS.with(|c| c.borrow().clone())
     }
-    fn universal_grants(&self) -> Vec<UniversalGrant> {
+    fn universal_grants(&self) -> Vec<UniversalIndexRow> {
         UNIVERSAL_GRANTS.with(|g| g.borrow().clone())
     }
 }

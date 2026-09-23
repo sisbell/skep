@@ -148,17 +148,6 @@ pub enum Op {
     /// absent, TOGETHER, only where no registered principal's prefix contains
     /// `addr`. Total — no fault path, as the two reads above have none.
     EffectiveOwner { addr: Address },
-    /// The doc-metadata read (PUB-8.12; PUB round 2, lane 3.4 §1): a
-    /// document's publication state, its owner account, and its birth
-    /// version with that version's base extent — what a client's own
-    /// PUB-3.19 admission test needs, and nothing else. `doc` is a
-    /// DOC-ARGUMENT (PUB-6.1): unreadable ⟹ `withheld` (fail-open at the
-    /// consult, PUB-6.12). It must also be a REGISTERED DOCUMENT:
-    /// unregistered, or any other tier, ⟹ `DocNotRegistered` — M10's own
-    /// refusal, like [`Op::EditionClaims`]'s, since this read composes its
-    /// answer from more than one store and so reaches none that could raise
-    /// one. A version member answers its DOCUMENT's state (PUB-2.15).
-    DocMetadata { doc: Address },
     // ── arrangement writes (→ M5) ──
     /// INSERT (ASN-0116). `Val` is M4's, carried in the payload verbatim —
     /// M10 names M4's types and calls no M4 function.
@@ -312,7 +301,20 @@ pub enum Op {
     InClaims { y: Address, view: View },
     /// Archival supersession lineage: claims with `new = x`.
     OutClaims { x: Address, view: View },
-    // ── publication reads (→ the world's composition of M7, lane 3.4) ──
+    // ── publication reads (lane 3.4, PUB-8.47): answers M10 COMPOSES rather
+    //    than forwards to one store — what they need that no store computes
+    //    is the `publication` card's ──
+    /// The doc-metadata read (PUB-8.12; PUB round 2, lane 3.4 §1): a
+    /// document's publication state, its owner account, and its birth
+    /// version with that version's base extent — what a client's own
+    /// PUB-3.19 admission test needs, and nothing else. `doc` is a
+    /// DOC-ARGUMENT (PUB-6.1): unreadable ⟹ `withheld` (fail-open at the
+    /// consult, PUB-6.12). It must also be a REGISTERED DOCUMENT:
+    /// unregistered, or any other tier, ⟹ `DocNotRegistered` — M10's own
+    /// refusal, like [`Op::EditionClaims`]'s, since this read composes its
+    /// answer from more than one store and so reaches none that could raise
+    /// one. A version member answers its DOCUMENT's state (PUB-2.15).
+    DocMetadata { doc: Address },
     /// The audit-view edition-claim lookup (PUB-8.46): every UNSUPERSEDED
     /// claim of the edition-claim class whose `to` slot OVERLAPS `target`'s
     /// subtree, WHETHER OR NOT RETRACTED, each with its home (the edition)
@@ -349,17 +351,31 @@ pub enum Op {
     ///
     /// The served row is FOLD-FILTERED, never raw (RES-231, RES-264,
     /// RES-273, RES-298): each stored row is narrowed to the prefix its issuer
-    /// ω-owns, and THE COMPARE IS ω's (RES-298) — the STORED prefix where the
-    /// registry's `effective_owner` of it is the issuer's account; the
-    /// issuer's OWN account where the stored prefix CONTAINS that account and
-    /// is not it (an agent's share over its hirer's prefix); and NO row
-    /// otherwise (a stranger's record over a stranger's document; a hirer's
-    /// grant beneath its REGISTERED sub-account, the granter not the owner) —
-    /// so a client is handed the set the fold ANSWERS from and never the index
-    /// it keys on (RES-258). The compare is M3's own walk, ONE per stored row
-    /// off the read's snapshot: no read class and no index is added
-    /// (PUB-3.48), the fold's universal index is the slot, and the bound is
-    /// that index's own size (PUB-7.45) times that walk.
+    /// ω-owns, so a client is handed the set the fold ANSWERS from and never
+    /// the index it keys on (RES-258). THE COMPARE IS ω's (RES-298) — the
+    /// registry's `effective_owner` of the stored prefix against each issuer
+    /// of the row — in three arms:
+    ///
+    /// * where ω of the stored prefix IS the issuer's account, the STORED
+    ///   prefix, unchanged: that account, a document of it, or a sub-prefix
+    ///   of it no delegation has seated (RES-298's named residue — ω answers
+    ///   the issuer there until a delegation seats the sub-prefix, and the row
+    ///   drops at the next read after);
+    /// * where the stored prefix CONTAINS the issuer's account and is not it —
+    ///   WIDER, an agent's share over its hirer's prefix (RES-264) — the
+    ///   issuer's OWN account, which is every document the issuer owns under
+    ///   the stored prefix and exactly what the fold's probe answers `true`
+    ///   for;
+    /// * otherwise NO row: a stranger's record over a stranger's document
+    ///   (RES-231's cell), and a hirer's grant beneath its REGISTERED
+    ///   sub-account — inside the hirer's account by address, the
+    ///   sub-account's by ω, so the granter is not the owner and the fold
+    ///   honors the grant for no document.
+    ///
+    /// The compare is M3's own walk, ONE per stored row off the read's
+    /// snapshot: no read class and no index is added (PUB-3.48), the fold's
+    /// universal index is the slot, and the bound is that index's own size
+    /// (PUB-7.45) times that walk.
     ///
     /// What it serves is the client's — the arrival face, the any-principal
     /// arm, the back-fill — and never what the daemon SERVES: the feed applies
@@ -443,7 +459,6 @@ pub enum OpKind {
     NextAccountPrefix,
     PrincipalPrefix,
     EffectiveOwner,
-    DocMetadata,
     Insert,
     Delete,
     Copy,
@@ -477,6 +492,7 @@ pub enum OpKind {
     DeleteOrphans,
     InClaims,
     OutClaims,
+    DocMetadata,
     EditionClaims,
     UniversalGrants,
     /// A frame that never parsed into an `Op` — stamped by the TRANSPORT,

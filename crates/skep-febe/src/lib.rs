@@ -12,11 +12,13 @@
 //!
 //! M10 owns **no** per-store operation logic (M5/M6/M7/M8), **no** automation
 //! (M9 — a parallel surface, not below it), **no** ordering/durability/
-//! recovery (M2), and **no** journaled state. It holds exactly one piece of
-//! *authoritative* state, and authoritative only for the uptime: which
-//! principal a session speaks for (§6). Everything else it holds is a **hint**
-//! that may be lost with no loss of correctness — the best-effort retry memo
-//! (§7) and the poison latch (§9). It is, concretely, a lifecycle wrapper +
+//! recovery (M2), and **no** journaled state; the one rule it performs on
+//! another component's behalf is named below, beside the reads that need it.
+//! It holds exactly one piece of *authoritative* state, and authoritative
+//! only for the uptime: which principal a session speaks for (§6).
+//! Everything else it holds is a **hint** that may be lost with no loss of
+//! correctness — the best-effort retry memo (§7) and the poison latch (§9).
+//! It is, concretely, a lifecycle wrapper +
 //! dispatch table + readability door + client-model adapter. The door is the
 //! largest of the four: ONE read predicate per request, the two consults it
 //! drives — the read side's doc-argument consult and the write side's source
@@ -26,8 +28,16 @@
 //! families committed as one M2 transaction — is latent with zero occupants:
 //! the design resolves that no v1 operation needs one (Conflicts resolved
 //! #1). A cross-family READ needs no transaction and is answered off the one
-//! snapshot the read dispatch pins; two are ([`Op::DocMetadata`],
-//! [`Op::EditionClaims`]), and each says at its arm what it assembles.
+//! snapshot the read dispatch pins. Three are: [`Op::DocMetadata`] (M3's
+//! publication bit, owner and chain with M5's frozen birth extent),
+//! [`Op::EditionClaims`] (the world's edition-claim class under the door's
+//! home rule) and [`Op::UniversalGrants`] (the grant fold's live universal
+//! index narrowed by M3's ω). Each says at its arm what it assembles, and
+//! what the three need that no store computes for them is the `publication`
+//! card's. That card holds the one rule M10 performs on another component's
+//! behalf: the any-principal read's fold-filter RE-DERIVES the grant fold's
+//! issuer test as a projection over rows, because the world hands its
+//! universal index raw ([`PublicationWorld::universal_grants`]).
 //!
 //! Spec traceability: each public item's doc-comment cites the labels it
 //! realizes (ASN-0134 A1/A2/A5/A7/V1/V2/G0, and §§ of the M10 design), so a
@@ -123,8 +133,8 @@
 //! acquires the three transact-driving store drivers per-op from the injected
 //! [`Stores`] factory. Two capabilities of that world are M10's own seams,
 //! and are two because they answer unrelated questions: [`ReadableWorld`],
-//! the read predicate every operation consults, and [`PublicationWorld`],
-//! the edition-claim class lookup one read asks.
+//! the one read predicate the surface answers through, and
+//! [`PublicationWorld`], the two class lookups the publication reads ask.
 //!
 //! The `M10 → M4` edge names four types and calls no M4
 //! function (design, Conflicts resolved #4): `HasContent` is a [`FebeWorld`]
@@ -139,6 +149,7 @@ mod idem;
 mod lower;
 mod op;
 mod operation;
+mod publication;
 mod reject;
 mod response;
 mod session;
@@ -255,8 +266,9 @@ pub trait ReadableWorld {
 /// answer unrelated questions — one is a predicate consulted by the whole
 /// operation surface, these are class lookups each consulted by one
 /// operation — and each should be nameable by a consumer that wants only it.
-/// Two lookups: the edition-claim class over a target, and the grant fold's
-/// live ANY-PRINCIPAL set (PUB-8.47), the second read's one input.
+/// Two lookups: the edition-claim class over a target, [`Op::EditionClaims`]'s
+/// input, and the grant fold's live ANY-PRINCIPAL index (PUB-8.47),
+/// [`Op::UniversalGrants`]'s.
 pub trait PublicationWorld {
     /// The audit-view edition-claim lookup (PUB-8.46; PUB round 2, lane 3.4
     /// §2): every link of the edition-claim class whose `to` slot OVERLAPS
@@ -290,21 +302,65 @@ pub trait PublicationWorld {
     /// type-vocabulary semantics of its own beyond the pinned address.
     fn edition_claims(&self, target: &Address) -> Vec<EditionClaim>;
 
-    /// THE LIVE ANY-PRINCIPAL SET (PUB-8.47, PUB-7.22): the grant fold's
-    /// universal index as rows — every content prefix an admitted, unrevoked
-    /// ANY-PRINCIPAL grant names, with the issuers who granted it — in
-    /// prefix order, each issuer list in address order. The engine's
-    /// `World::universal_grants`, cloned out of its borrow.
+    /// THE LIVE ANY-PRINCIPAL INDEX (PUB-8.47, PUB-7.22): the grant fold's
+    /// universal index as [`UniversalIndexRow`]s — every content prefix an
+    /// admitted, unrevoked ANY-PRINCIPAL grant names, with the issuers who
+    /// granted it — in prefix order, each issuer list in address order. The
+    /// engine's `World::universal_grants`, cloned out of its borrow.
     ///
-    /// RAW, by design, as [`PublicationWorld::edition_claims`] is unfiltered:
-    /// the world answers the INDEX — the STORED prefix beside each issuer —
-    /// and the front door serves the ANSWER SET, narrowing every row to the
-    /// prefix the issuer ω-owns by ω over the row's prefix (RES-231, RES-264,
-    /// RES-273, RES-298), off the same snapshot. No index is added and no read class:
+    /// The INDEX, and never the answer set (RES-258): the world hands over the
+    /// STORED rows, and the front door serves the COVERED ones, narrowing
+    /// every row to the prefix its issuer ω-owns, by ω over the row's prefix
+    /// off the same snapshot ([`Op::UniversalGrants`] states the compare;
+    /// RES-231, RES-264, RES-273, RES-298). So this seam answers in its own
+    /// row type and a client is served another ([`UniversalGrant`]): the
+    /// edition-claim lookup's rows are answer rows the front door DROPS per
+    /// caller and never rewrites, while these are index rows it TRANSFORMS,
+    /// alike for every caller. Each row keeps the one obligation
+    /// [`UniversalIndexRow`] states. No index is added and no read class:
     /// this is the fold's own slot, enumerated once per request, and its
     /// bound is that index's own size (PUB-7.45). Principal-blind — the
     /// guest's empty answer is the front door's.
-    fn universal_grants(&self) -> Vec<UniversalGrant>;
+    fn universal_grants(&self) -> Vec<UniversalIndexRow>;
+}
+
+/// One STORED row of the grant fold's live ANY-PRINCIPAL index, as
+/// [`PublicationWorld::universal_grants`] hands it over (PUB-8.47, PUB-7.22):
+/// a content prefix as the index keys it, and the issuers whose index entries
+/// name it. OWNED, so the seam carries no lifetime of the world behind it:
+/// the narrowing takes the rows by value and moves each issuer into the
+/// served row it lands in.
+///
+/// A row of the INDEX, never of an answer (RES-258). Coverage is containment
+/// ∩ the issuer's own documents (PUB-5.9), and the fold applies the ownership
+/// half at its probe (`grant_exists`'s issuer compare, PUB-7.3) and never at
+/// indexing, so a row is a SUPERSET of entitlement: it may list several
+/// issuers, and an issuer may own nothing under the prefix. Handed to a
+/// client as it stands, a stranger's record over a stranger's document would
+/// render as a board-wide face (PUB-5.21's MUST NEVER). The front door
+/// narrows every row before a client sees one ([`Op::UniversalGrants`]
+/// states the compare), and what it serves is the other row type,
+/// [`UniversalGrant`] — so a row of this type has no way into a response.
+///
+/// WHAT AN IMPLEMENTER OWES. The engine hands rows over in prefix order, each
+/// issuer list in address order without a repeat — the fold's own shape —
+/// and the narrowing relies on neither, grouping and ordering what it serves
+/// for itself. It relies on ONE fact, and the served guarantee — every issuer
+/// listed ω-owns the prefix beside it — rests on it: **every issuer is a
+/// registered seat**, a prefix M3's principal registry holds, so ω answers
+/// the issuer at its own address. The fold takes each issuer as ω of a
+/// grant's home and the registry only grows, so the engine meets it by
+/// construction; nothing on this side of the seam checks it. An issuer that
+/// is no seat would be served at its own account wherever a stored prefix is
+/// wider than it, as though it owned what ω gives to another seat.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct UniversalIndexRow {
+    /// The content prefix as the index keys it — a document or an account
+    /// address.
+    pub content_prefix: Address,
+    /// The issuers whose index entries name it, in address order, each a
+    /// registered seat.
+    pub issuers: Vec<Address>,
 }
 
 /// The world the front door dispatches over: M2's fold contract plus every
@@ -313,8 +369,8 @@ pub trait PublicationWorld {
 /// Composition Contract — no state, no record variant, no fold). The two
 /// publication seams join the set for PUB round 2: [`ReadableWorld`], off
 /// which every read builds its per-request `Fn(&Address) -> bool` (lane
-/// 3.3), and [`PublicationWorld`], which the edition-claim lookup asks
-/// (lane 3.4).
+/// 3.3), and [`PublicationWorld`], which the edition-claim and any-principal
+/// reads ask (lane 3.4, PUB-8.47).
 ///
 /// Named for the reason M6 names `RetrievalWorld` and M7 `LinkWorld`: one word for
 /// the seam, so a consumer generic over the same world writes one bound

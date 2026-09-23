@@ -1,6 +1,7 @@
-//! §D/§E — arrangement reads (resolve/point/image/project), the content
-//! subspace's admission predicates, and the provenance reads
-//! (deletions/docs_ever_containing), pure over any M2 snapshot (§2, §9).
+//! §D/§E — arrangement reads (resolve/iter_resolve/point/image/project/
+//! arranges_any), the content subspace's admission predicates, and the
+//! provenance reads (deletions/docs_ever_containing), pure over any M2
+//! snapshot (§2, §9).
 //!
 //! **Level-class discipline** (§2): a SpanSet aggregated across runs — a
 //! region image, an endset's coverage, the internal `content_image`, a
@@ -11,10 +12,11 @@
 //! (`SpanSet::by_level_class`), runs the M1 op within each class, and unions
 //! the per-class results; where overlap/membership suffices it uses the total
 //! `classify_spans`/`contains`. The discipline is ENCAPSULATED behind the
-//! query methods ([`M5State::project`], [`M5State::deletions`]) and OWED by
-//! whoever aggregates run I-extents themselves — [`M5State::image`]'s raw
-//! cover, and the runs [`M5State::resolve`] hands back for a caller to lift.
-//! Both routes reach [`Run::iextent`], where the obligation is stated
+//! query methods ([`M5State::project`], [`M5State::arranges_any`],
+//! [`M5State::deletions`]) and OWED by whoever aggregates run I-extents
+//! themselves — [`M5State::image`]'s raw cover, and the runs
+//! [`M5State::resolve`] and [`M5State::iter_resolve`] hand back for a caller
+//! to lift. Both routes reach [`Run::iextent`], where the obligation is stated
 //! (Conflicts #8).
 
 use std::sync::LazyLock;
@@ -94,19 +96,31 @@ impl M5State {
     }
 
     /// [`resolve`](M5State::resolve)'s LAZY twin — the same runs, in the same
-    /// order, under the same defensive folds, clipped as they are pulled.
+    /// order, under the same defensive folds, clipped as they are pulled — so
+    /// every promise `resolve` makes of its runs, the contiguous V tiling
+    /// included, is made of what this yields.
     ///
-    /// CRATE-PRIVATE, and the reason is what the two forms cost: a
-    /// resolution's size is the SOURCE document's fragmentation, which the
-    /// asking request does not choose, so a consumer that carries a budget of
-    /// its own holds that budget instead of the whole resolution. COPY is that
-    /// consumer — its accumulator is capped at
-    /// [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS), so pulling lazily means an
-    /// over-budget spec stops the walk at the cap rather than materializing
-    /// the source's every run first and refusing afterwards. Outside this
-    /// crate the vector is the right shape: M6, M7 and M8 each hand the runs
-    /// onward, and admission control on those routes is theirs.
-    pub(crate) fn iter_resolve(&self, doc: &Address, span: &Span) -> impl Iterator<Item = Run> + '_ {
+    /// The form for a consumer that carries a budget of its own, and the
+    /// reason is what the two forms cost: a resolution's size is the SOURCE
+    /// document's fragmentation, which the asking request does not choose.
+    /// Pulled a run at a time and counted as it is pulled, an over-budget
+    /// span stops its walk at the budget rather than materializing the
+    /// source's every run and being refused afterwards, so what the consumer
+    /// holds live is its budget and not the resolution. COPY's accumulator
+    /// (capped at [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS)) consumes it so,
+    /// and so do the neighbours' produced-as-they-go budgets: M6's COMPARE
+    /// blocks and FINDDOCSCONTAINING coverage, M7's MAKELINK slot spans and
+    /// M10's successor slot spans. [`resolve`](M5State::resolve) is this
+    /// collected, for a caller that hands the runs onward whole.
+    ///
+    /// What pulling does NOT bound is the walk to the span's opening ordinal:
+    /// the prefix-sum walk passes every run that ends before it before the
+    /// first run is yielded — all of them, for a span opening past the
+    /// arranged end — so one call is `Θ(#runs left of the opening ordinal)`
+    /// steps whatever it yields, and
+    /// [`content_run_count`](M5State::content_run_count) is that walk's
+    /// ceiling for a content span, readable before asking.
+    pub fn iter_resolve(&self, doc: &Address, span: &Span) -> impl Iterator<Item = Run> + '_ {
         as_ordinal_vspan(span)
             .and_then(|vspan| {
                 self.arrangement_of(doc)
@@ -132,10 +146,15 @@ impl M5State {
     /// The region's I-image as a SpanSet (§2; ASN-0127 `image(W, d, Σ)`, the
     /// addresses `doc`'s arrangement maps the V-region `span` onto):
     /// `⋃ r.iextent()` over the runs [`resolve`](M5State::resolve) returns —
-    /// the aggregate M6's FINDDOCSCONTAINING feeds to
-    /// [`docs_ever_containing`](M5State::docs_ever_containing) and to
-    /// [`project`](M5State::project), lifted here so the query does not
-    /// re-derive it. `union` (concatenation) only ⇒ total, never faults, NOT
+    /// the coverage operand
+    /// [`docs_ever_containing`](M5State::docs_ever_containing),
+    /// [`project`](M5State::project) and
+    /// [`arranges_any`](M5State::arranges_any) take, collected whole. A
+    /// caller that counts its coverage against a budget pulls the same runs
+    /// off [`iter_resolve`](M5State::iter_resolve) and lifts each with
+    /// [`Run::iextent`] as it counts, as M6's FINDDOCSCONTAINING does, so an
+    /// over-budget region stops at the budget rather than being collected
+    /// here first. `union` (concatenation) only ⇒ total, never faults, NOT
     /// normalized; possibly mixed-length when `span` covers transcluded runs,
     /// so it is consumed under the level-class discipline (the hazard is
     /// stated on [`Run::iextent`], which every aggregator of run I-extents
@@ -191,8 +210,9 @@ impl M5State {
     /// [`content_runs`](M5State::content_runs) would hand back, without handing
     /// them back. NOT [`content_count`](M5State::content_count), which is the
     /// positions those runs cover. It is the quantity COPY's resolve walk,
-    /// [`project`](M5State::project)'s join, VERSION's R-append and the shot's
-    /// carried-run sweep are priced in, so a caller that owns admission
+    /// [`project`](M5State::project)'s and
+    /// [`arranges_any`](M5State::arranges_any)'s joins, VERSION's R-append and
+    /// the shot's carried-run sweep are priced in, so a caller that owns admission
     /// control for one of them reads the number here rather than materializing
     /// the runs to count them. One map lookup, reading no run; absent doc ⇒ 0.
     pub fn content_run_count(&self, doc: &Address) -> usize {
@@ -320,8 +340,8 @@ impl M5State {
     /// I→V projection (§2; ASN-0119 RA7c) — CONTENT subspace ONLY, by
     /// construction (link reverse-discovery is M7's BH3; there is no subspace
     /// argument): the V-positions of `doc` whose content I-address falls in
-    /// `coverage` — an I-address cover, either an endset's coverage (M7/M8) or
-    /// a region [`image`](M5State::image) (M6), possibly fragmented and
+    /// `coverage` — an I-address cover, an endset's coverage (M8's route) or a
+    /// region [`image`](M5State::image) alike, possibly fragmented and
     /// mixed-length — as depth-2 V-spans, normalized. The result is the
     /// FOOTPRINT those addresses have in `doc` (ASN-0119's `project`), which
     /// is why a footprint interrupted in V-space comes back as several spans.
@@ -336,17 +356,23 @@ impl M5State {
     /// block's V-start to where the range opens — the range answering for how
     /// many positions it covers, so no reader subtracts its bounds. Scan of
     /// the forward content map (Open decision #2 v1 default), so the cost is
-    /// `#runs(doc) × |coverage|` — the
-    /// product of two quantities this method does not bound. `#runs(doc)`
-    /// grows with `doc`'s own edit and transclusion history; `|coverage|` is
-    /// bounded on M7's and M8's route (an endset is capped at deposit,
-    /// `MAX_SLOT_SPANS`) and by nothing on M6's, where it is an
-    /// [`image`](M5State::image) of a region. Admission control is the
-    /// caller's, as it is for
+    /// `#runs(doc) × |coverage|` — the product of two quantities this method
+    /// does not bound. `#runs(doc)` grows with `doc`'s own edit and
+    /// transclusion history; `|coverage|` is the caller's — on M8's route an
+    /// endset's coverage, capped at deposit (M7's `MAX_SLOT_SPANS`).
+    /// Admission control is the caller's, as it is for
     /// [`docs_ever_containing`](M5State::docs_ever_containing), and both
     /// factors are cheap to read before asking:
     /// [`content_run_count`](M5State::content_run_count) and
     /// `coverage.len()`.
+    ///
+    /// HEAP, which the work does not state: the footprint is built whole
+    /// before it is normalized — one V-span per overlapping (block, cover)
+    /// pair, held live — so the transient reaches that product itself where a
+    /// coverage repeats an address the arrangement repeats. A caller pricing
+    /// this read prices that vector, as M8's answer budget does; a caller that
+    /// needs only whether the footprint is empty asks
+    /// [`arranges_any`](M5State::arranges_any), which builds none of it.
     pub fn project(&self, doc: &Address, coverage: &SpanSet) -> SpanSet {
         let mut vspans: Vec<Span> = Vec::new();
         // An absent document is a CASE and not a path: its content run-list is
@@ -369,6 +395,36 @@ impl M5State {
         // touch).
         set.normalize()
             .expect("depth-2 V-spans share one level class")
+    }
+
+    /// Does `doc`'s CONTENT arrangement hold ANY address `coverage` contains —
+    /// is its [`project`](M5State::project) footprint non-empty? Exactly
+    /// `!project(doc, coverage).is_empty()`, answered without building the
+    /// footprint: the same run-by-cover question `project` asks, stopping at
+    /// the first yes, so nothing is held beyond one pair's transient. The
+    /// present tense of the corpus's I-side containment (FD-FIND), and the
+    /// narrowing that turns
+    /// [`docs_ever_containing`](M5State::docs_ever_containing)'s candidates
+    /// into present containers — what M6's FINDDOCSCONTAINING asks of each
+    /// candidate.
+    ///
+    /// TOTAL for any coverage, mixed-length included: every run is asked about
+    /// every cover through the run's own offset arithmetic
+    /// (`Run::offsets_covered_by`, both of whose branches are total), never
+    /// through the carried-run test's length filter (`RunList::covers`), which
+    /// is sound only between two run I-extents — a subtree cover holds
+    /// addresses of every length beneath it. CONTENT subspace only, as
+    /// `project` is.
+    ///
+    /// COST: at most `#runs(doc) × |coverage|` pair tests — `project`'s
+    /// factors, whose admission control stays the caller's — and no heap
+    /// beyond one pair's. Absent doc or empty coverage ⇒ `false`.
+    pub fn arranges_any(&self, doc: &Address, coverage: &SpanSet) -> bool {
+        self.content_list(doc).iter().any(|run| {
+            coverage
+                .iter()
+                .any(|cover| run.offsets_covered_by(cover).is_some())
+        })
     }
 
     /// The current content-image cover (M5-INTERNAL — the SHOWDELETIONS
@@ -451,10 +507,11 @@ impl M5State {
     /// ever-containment, and from ever to now, the second being FD-GHOST's
     /// `ghosts`, documents that held queried material at some past boundary
     /// and hold none of it now. A caller wanting present containment
-    /// discharges BOTH at once with `project(d, coverage) ≠ ⟨⟩` off the same
-    /// M2 snapshot, which answers from the live arrangement and so admits
-    /// neither a ghost nor a merely adjacent candidate (M6's
-    /// FINDDOCSCONTAINING).
+    /// discharges BOTH at once with
+    /// [`arranges_any`](M5State::arranges_any)`(d, coverage)` — `project(d,
+    /// coverage) ≠ ⟨⟩` without the footprint — off the same M2 snapshot, which
+    /// answers from the live arrangement and so admits neither a ghost nor a
+    /// merely adjacent candidate (M6's FINDDOCSCONTAINING).
     ///
     /// A SUPERSET with no false negatives: a document genuinely holding an
     /// address of `coverage` placed a span that overlaps it in the tumbler
@@ -467,13 +524,13 @@ impl M5State {
     /// both operands' endpoints. Neither factor is bounded here — R never
     /// loses a member (P2), so it is the sum of every run ever placed by any
     /// document, and `coverage` is as large as the caller's own aggregation
-    /// (M6 builds it from [`image`](M5State::image), whose size is the source
-    /// document's fragmentation). There is no index over R in v1 (Open
-    /// decision #3, which belongs here, R's owner) and no admission gate: this
-    /// method refuses nothing and bounds nothing, so admission control and
-    /// concurrency for the query that composes on it are the CALLER's, and a
-    /// route that carries this read owes that number. The relation's total
-    /// size has no cheap read: it is
+    /// (M6 builds it from region images, whose size is the source documents'
+    /// fragmentation, and caps it as it is produced). There is no index over R
+    /// in v1 (Open decision #3, which belongs here, R's owner) and no
+    /// admission gate: this method refuses nothing and bounds nothing, so
+    /// admission control and concurrency for the query that composes on it
+    /// are the CALLER's, and a route that carries this read owes that number.
+    /// The relation's total size has no cheap read: it is
     /// [`recorded_span_count`](M5State::recorded_span_count) summed over every
     /// document, which v1 does not keep.
     pub fn docs_ever_containing(&self, coverage: &SpanSet) -> Vec<Address> {
@@ -925,6 +982,52 @@ mod tests {
     }
 
     #[test]
+    fn arranges_any_is_the_footprints_non_emptiness_without_building_it() {
+        // §2/FD-FIND: `arranges_any(d, c)` is `!project(d, c).is_empty()`,
+        // asked against `project` itself — every span alone, then mixed
+        // coverages. The family hits through both of the run's branches (the
+        // subtree reaches only the length-9 runs, which a length filter over
+        // the covers would skip) and misses three ways.
+        let s = place(&arranged(), &doc1(), 6, vec![run(&ca(2), 2)]); // ca1 ca2 ca3 vca1 vca2 ca2 ca3
+        let mut family: Vec<Span> = Vec::new();
+        for lo in 1..=4u32 {
+            for hi in lo + 1..=5 {
+                family.push(
+                    Span::from_endpoints(ca(lo).tumbler().clone(), ca(hi).tumbler()).expect("lo < hi"),
+                );
+            }
+        }
+        family.push(subtree_of(&t(&[1, 0, 1, 0, 1, 1])));
+        family.push(Span::new(ca(3).tumbler().clone(), t(&[1])).expect("T12: action point 1 ≤ 8"));
+        family.push(run(&ca(9), 1).iextent());
+        family.push(run(&la(1), 2).iextent());
+        assert_eq!(family.len(), 14);
+        let mut hits = 0usize;
+        for cover in &family {
+            let one = SpanSet::singleton(cover.clone());
+            let footprint = !s.project(&doc1(), &one).is_empty();
+            assert_eq!(s.arranges_any(&doc1(), &one), footprint, "{cover:?}");
+            hits += usize::from(footprint);
+        }
+        assert_eq!(hits, 11, "every span but [ca4, ca5), [ca9, ca10) and the link extent");
+        let misses: SpanSet = vec![run(&ca(9), 1).iextent(), run(&la(1), 2).iextent()]
+            .into_iter()
+            .collect();
+        assert!(!s.arranges_any(&doc1(), &misses));
+        assert!(s.project(&doc1(), &misses).is_empty());
+        let one_hit: SpanSet = vec![run(&ca(9), 1).iextent(), run(&vca(2), 1).iextent()]
+            .into_iter()
+            .collect();
+        assert!(s.arranges_any(&doc1(), &one_hit));
+        assert!(!s.project(&doc1(), &one_hit).is_empty());
+        assert!(!s.arranges_any(&doc1(), &SpanSet::empty()), "an empty coverage");
+        assert!(
+            !s.arranges_any(&doc2(), &SpanSet::singleton(run(&ca(1), 1).iextent())),
+            "an absent document"
+        );
+    }
+
+    #[test]
     fn an_address_the_document_still_arranges_elsewhere_is_not_deleted() {
         // §9: SHOWDELETIONS is ASN-0075's DELETED(a, d) ≡ (a, d) ∈ R ∧
         // a ∉ ran(M(d)) — a SET difference. A document that transcludes its
@@ -1041,8 +1144,8 @@ mod tests {
     #[test]
     fn docs_ever_containing_is_a_deterministic_overlap_superset() {
         // §9: not-Separated candidates (Adjacent included — a harmless
-        // superset member the project filter removes), distinct keys, Tumbler
-        // order.
+        // superset member the present-tense filter, `arranges_any`, removes),
+        // distinct keys, Tumbler order.
         let s = place(&M5State::genesis(), &doc2(), 1, vec![run(&ca(1), 2)]);
         let s = place(&s, &doc1(), 1, vec![run(&ca(1), 2)]);
         let cov = SpanSet::singleton(run(&ca(1), 1).iextent());

@@ -31,9 +31,11 @@ skep-namespace = { path = "../skep-namespace" }
 # exactly one operation and unspellable in the other six.
 skep-content = { path = "../skep-content" }
 # M5 — the workhorse: reading_surface, the one function that decides WHICH
-# arrangement a floating reader answers from (head-float); then resolve/point/
-# counts/runs/image/project/docs_ever_containing/deletions, the reads that
-# answer for whatever address they are handed; Run, which answers for its own
+# arrangement a floating reader answers from (head-float); then resolve/
+# iter_resolve/point/counts/runs/arranges_any/docs_ever_containing/deletions,
+# the reads that answer for whatever address they are handed — iter_resolve
+# being the lazy form the two request budgets stop a walk with, and
+# arranges_any the present-tense filter; Run, which answers for its own
 # positions; and VPos (re-exported through M6's surface). Both halves of the
 # ordinal-vspan shape come from here too — ordinal_vspan builds the extents M6
 # reports, and as_ordinal_vspan reads the spans M6 is asked about, refusing

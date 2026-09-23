@@ -2791,7 +2791,7 @@ fn compare_gates_both_operands_whole_before_either_budget_can_refuse() {
 #[test]
 fn find_docs_containing_filters_to_present_tense_containers() {
     // ASN-0124 FD-SOUND: docs_ever_containing's historical superset is
-    // narrowed by the project filter to CURRENT holders; the raw union may
+    // narrowed by the present-tense filter to CURRENT holders; the raw union may
     // be mixed-length (M5 owns the level-class discipline); bare identities,
     // tumbler-ordered.
     // The length-9 origin is the owned fork of the PUBLISHED edition (the
@@ -2917,12 +2917,13 @@ fn find_docs_containing_filtered_drops_a_container_at_its_identity() {
 }
 
 #[test]
-fn find_docs_containing_filtered_consults_its_predicate_of_every_candidate_ahead_of_project() {
+fn find_docs_containing_filtered_consults_its_predicate_of_every_candidate_ahead_of_the_present_tense_filter(
+) {
     // `find_docs_containing_filtered`'s card (PUB-6.17): the predicate is
     // asked of each CANDIDATE — M5's historical superset, ghosts included —
-    // FIRST, before `project` is paid, and only after the gate has passed the
-    // whole request. A ghost is therefore consulted and then dropped; a
-    // filter that paid `project` first would never ask about it.
+    // FIRST, before `arranges_any` is paid, and only after the gate has passed
+    // the whole request. A ghost is therefore consulted and then dropped; a
+    // filter that paid `arranges_any` first would never ask about it.
     let k = mem_kernel();
     let vs = three_runs(&k); // doc2 = [x][ca1, ca2][ca1]; doc1 = [ca1, ca2, ca3]
     vs.delete(P1, &doc1(), vp(1, 1), n(3))
@@ -2947,7 +2948,7 @@ fn find_docs_containing_filtered_consults_its_predicate_of_every_candidate_ahead
         "a rejected request consults the predicate of nothing"
     );
     // Answered: the ghost doc1 is consulted as a candidate and dropped by
-    // `project`; the answer names doc2 alone.
+    // `arranges_any`; the answer names doc2 alone.
     assert_eq!(
         ok_of(q.find_docs_containing_filtered(
             &[region_spec(doc2(), vec![vspan(1, 2, 1)])],
@@ -3068,8 +3069,8 @@ fn find_docs_containing_refuses_a_request_whose_coverage_outnumbers_the_budget_t
 fn find_docs_containing_refuses_a_request_whose_spans_outnumber_the_budget_though_they_resolve_to_nothing(
 ) {
     // The budget's other count. Every span handed to M5 is one Θ(#runs(doc))
-    // `image` walk whether or not it yields coverage — a span opening past the
-    // arranged extent walks the whole list and yields none — so a coverage
+    // resolution walk whether or not it yields coverage — a span opening past
+    // the arranged extent walks the whole list and yields none — so a coverage
     // count alone would admit any number of empty-resolving spans and their
     // walks with them, from a nested region×span request the body cap alone
     // sizes. The SPAN count refuses it, before phase 1 resolves past the
@@ -3113,8 +3114,8 @@ fn find_docs_containing_refuses_a_request_whose_spans_outnumber_the_budget_thoug
         FindError::TooMuchCoverage
     );
     // A span M5 folds to nothing at once — a well-formed depth-3 span, or a
-    // foreign-subspace one, both of which pass this gate — is handed to
-    // `image` and counted all the same.
+    // foreign-subspace one, both of which pass this gate — is handed to M5's
+    // resolution and counted all the same.
     for folded in [deep_span(1), vspan(3, 1, 1)] {
         assert!(
             s.world().m5().image(&doc1(), &folded).is_empty(),

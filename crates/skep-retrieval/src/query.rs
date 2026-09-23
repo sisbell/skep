@@ -22,14 +22,15 @@ use crate::{Query, RetrievalWorld, MAX_COMPARE_OPERAND_BLOCKS};
 /// world-sized scans behind it.
 ///
 /// ONE join-side budget, not a second. `docs_ever_containing` joins this
-/// coverage against the whole of R, and `project` runs it against each
+/// coverage against the whole of R, and `arranges_any` runs it against each
 /// candidate's runs, so the coverage is one side of a join exactly as a
 /// COMPARE operand is — and it takes that operand's budget BY DEFINITION,
-/// counted the same two ways (the spans handed to M5's `image`, and the
-/// coverage they produce) and priced on [`MAX_COMPARE_OPERAND_BLOCKS`]'s
-/// card, which also says why the count is two, what each count refuses, and
-/// what neither bounds within one span. Pricing the two apart is a
-/// deliberate edit of this line, never a drift between two literals.
+/// counted the same two ways (the spans handed to M5's lazy `iter_resolve`,
+/// and the coverage they produce) and priced on
+/// [`MAX_COMPARE_OPERAND_BLOCKS`]'s card, which also says why the count is
+/// two, what each count refuses, and what the counts stop within one span and
+/// what they do not. Pricing the two apart is a deliberate edit of this line,
+/// never a drift between two literals.
 ///
 /// WHAT IT DOES NOT BOUND, and neither could any number here: `|R|` and
 /// `#runs(d)` are the WORLD's, not the request's, so they stay with rate and
@@ -639,29 +640,27 @@ impl<W: RetrievalWorld> Query<'_, W> {
     ///
     /// COST, IN THREE FACTORS OF WHICH ONE IS THE REQUEST'S. The work is
     /// `|spans| · #runs(doc) + |candidates| · #runs(d) · |coverage|`: the
-    /// coverage is the union of the region images, one `image` walk per span,
-    /// each `Θ(#runs(doc))` whether or not it yields coverage; the candidate
-    /// scan runs that coverage against the whole of M5's R⁻¹ index; and the
-    /// filter is one `project` per candidate, each itself
-    /// `#runs(d) · |coverage|` in the CANDIDATE's own fragmentation — a factor
-    /// the request never names and M6 never sees. Each `project` is a cost in
-    /// HEAP as well as in steps: it materializes and sorts one span per
-    /// overlapping (run, cover) pair before M6 reads one bit off it, so the
-    /// peak transient of the filter is that product in live heap and the
-    /// operation asks for a whole footprint where it needs only its
-    /// non-emptiness.
+    /// coverage is the union of the region images, one resolution walk per
+    /// span, each `Θ(#runs(doc))` whether or not it yields coverage; the
+    /// candidate scan runs that coverage against the whole of M5's R⁻¹ index;
+    /// and the filter is one `arranges_any` per candidate, each at worst
+    /// `#runs(d) · |coverage|` pair tests in the CANDIDATE's own fragmentation
+    /// — a factor the request never names and M6 never sees — and each
+    /// holding nothing: it asks M5 whether the footprint is empty rather than
+    /// building it.
     ///
     /// Only `|spans|` and `|coverage|` are the request's, and both are capped
     /// at [`MAX_FIND_COVERAGE_SPANS`] (`TooMuchCoverage`, refused AS THE
     /// REQUEST RESOLVES — the span past the budget before its walk, the
     /// coverage past it as it is produced — so an over-budget request stops
     /// resolving rather than resolving whole and then being measured; why
-    /// both are counted, and what neither count bounds within one span, are
-    /// on the budget's card). That is a REFUSAL, never a truncation: a
-    /// request past the budget gets a typed rejection and no answer, so
-    /// FD-COMPLETE holds verbatim for every request this operation answers —
-    /// a truncated coverage would silently drop containers, which is the
-    /// hazard the operation names. A caller wanting more splits the request.
+    /// both are counted, and what the counts stop within one span and what
+    /// they do not, are on the budget's card). That is a REFUSAL, never a
+    /// truncation: a request past the budget gets a typed rejection and no
+    /// answer, so FD-COMPLETE holds verbatim for every request this operation
+    /// answers — a truncated coverage would silently drop containers, which is
+    /// the hazard the operation names. A caller wanting more splits the
+    /// request.
     ///
     /// `|R|` and `#runs(d)` are the WORLD's and no number here reaches them:
     /// they stay with request rate and concurrency, which are M10's as the
@@ -688,7 +687,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// registered target — so no registry check precedes the predicate here,
     /// where RETRIEVEV's masked form needs one, and adding one would be a
     /// second check of a discharged obligation. The predicate is asked of
-    /// each candidate FIRST, before `project` is paid (PUB-6.17), and only
+    /// each candidate FIRST, before `arranges_any` is paid (PUB-6.17), and only
     /// after the gate and both counts of the coverage budget have passed the
     /// whole request.
     pub fn find_docs_containing_filtered(
@@ -713,16 +712,17 @@ impl<W: RetrievalWorld> Query<'_, W> {
             }
         }
         // Phase 1: resolve to content I-coverage — the union of every region
-        // span's `image`, raw and possibly mixed-length: M5's
-        // `docs_ever_containing`/`project` apply the level-class discipline
-        // INTERNALLY, so the raw union passes straight through and M6 owns no
-        // level-class discipline anywhere. The union of the images IS their
-        // concatenation, so they are gathered in submitted order and the
-        // coverage is built from them once. Gathering rather than re-unioning
-        // is what keeps the walk LINEAR in the coverage: `union` answers with
-        // a fresh set, so an accumulator threaded through it copies the
-        // coverage built so far at every span, and the budget below would
-        // then bound a quantity that costs its own square to produce.
+        // span's image, each resolved run lifted by `Run::iextent`, raw and
+        // possibly mixed-length: M5's `docs_ever_containing`/`arranges_any`
+        // apply the level-class discipline INTERNALLY, so the raw union passes
+        // straight through and M6 owns no level-class discipline anywhere.
+        // The union of the images IS their concatenation, so they are
+        // gathered in submitted order and the coverage is built from them
+        // once. Gathering rather than re-unioning is what keeps the walk
+        // LINEAR in the coverage: `union` answers with a fresh set, so an
+        // accumulator threaded through it copies the coverage built so far at
+        // every span, and the budget below would then bound a quantity that
+        // costs its own square to produce.
         let mut coverage_spans: Vec<Span> = Vec::new();
         let mut spans_handed = 0usize;
         for r in regions {
@@ -735,19 +735,22 @@ impl<W: RetrievalWorld> Query<'_, W> {
                     return Err(FindError::TooMuchCoverage); // refused before the walk
                 }
                 spans_handed += 1;
-                coverage_spans.extend(m5.image(&r.doc, span));
                 // The coverage budget, refused AS THE COVERAGE IS PRODUCED —
-                // `>` and not `==`, because one span's image adds many
-                // coverage spans at once.
-                if coverage_spans.len() > MAX_FIND_COVERAGE_SPANS {
-                    return Err(FindError::TooMuchCoverage);
+                // one run at a time off M5's lazy resolution, so a span over a
+                // heavily fragmented document stops its walk at the budget
+                // rather than resolving whole and then being measured.
+                for run in m5.iter_resolve(&r.doc, span) {
+                    if coverage_spans.len() == MAX_FIND_COVERAGE_SPANS {
+                        return Err(FindError::TooMuchCoverage);
+                    }
+                    coverage_spans.push(run.iextent());
                 }
             }
         }
         let coverage: SpanSet = coverage_spans.into_iter().collect(); // collect AS GIVEN
         // Phase 2: the historical superset (tumbler-ordered, level-classes
         // handled inside M5), narrowed by the present-tense filter — one
-        // `project` per candidate, non-empty iff the candidate holds some
+        // `arranges_any` per candidate, true iff the candidate holds some
         // covered address NOW. TWO narrowings separate that superset from the
         // live answer, and the filter discharges both at once — from
         // order-overlap to genuine ever-containment, M5's test admitting the
@@ -763,14 +766,12 @@ impl<W: RetrievalWorld> Query<'_, W> {
             // container consult (lane 3.3, §3): a container the reader may not
             // read is dropped at its identity, before it reaches the answer.
             // The predicate goes first (PUB-6.17): the cheap test ahead of the
-            // one that materializes a footprint. Its registered-only
-            // precondition (PUB-6.37) holds by construction — R records
-            // placements in registered documents alone — so nothing is
-            // re-checked here.
-            // Emptiness is M1's `SpanSet::is_empty`, denotationally exact
-            // because no algebra result carries a zero-width span (zero spans
-            // ⇔ empty denotation).
-            .filter(|d| readable(d) && !m5.project(d, &coverage).is_empty())
+            // pair scan. Its registered-only precondition (PUB-6.37) holds by
+            // construction — R records placements in registered documents
+            // alone — so nothing is re-checked here.
+            // `arranges_any` is `!project(d, coverage).is_empty()`, answered
+            // without building the footprint; M5's law test pins the two alike.
+            .filter(|d| readable(d) && m5.arranges_any(d, &coverage))
             .collect())
     }
 }

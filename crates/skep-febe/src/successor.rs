@@ -60,12 +60,13 @@ pub(crate) fn successor_link(
 
 /// Assemble one successor slot from its content V-specs.
 ///
-/// M5's `resolve` is total, and answers ⟨⟩ four ways: a span whose shape is
-/// not depth-2 ordinal-level; a document with no entry in M5's arrangement
-/// map; a subspace outside {s_C, s_L}; and a well-formed spec whose ordinal
-/// range holds nothing. A ⟨⟩ deposited into a slot is indistinguishable from
-/// a slot the caller meant to leave empty, so the two faults a client can
-/// act on are typed here, ahead of `resolve`:
+/// M5's resolution — `iter_resolve`, pulled a run at a time below, yielding
+/// exactly `resolve`'s runs — is total, and answers ⟨⟩ four ways: a span
+/// whose shape is not depth-2 ordinal-level; a document with no entry in M5's
+/// arrangement map; a subspace outside {s_C, s_L}; and a well-formed spec
+/// whose ordinal range holds nothing. A ⟨⟩ deposited into a slot is
+/// indistinguishable from a slot the caller meant to leave empty, so the two
+/// faults a client can act on are typed here, ahead of `resolve`:
 ///
 /// * `IllFormedSpec` — the span is not a content V-span ([`is_content_vspan`]
 ///   covers the shape and subspace cases together). Permanent: the request
@@ -109,14 +110,17 @@ pub(crate) fn successor_link(
 /// disposition, the same refusal) and costs the engine one slot's worth of
 /// spans instead of every spec's.
 ///
-/// That budget bounds the slot's spans and nothing else, so two costs sit
-/// outside it. ONE spec's own `resolve` vector is built whole — M5's
-/// allocation, one document's fragmentation, and the same exposure M7 carries
-/// for MAKELINK's `Resolve` slots. And the count is of SPANS, not of specs: a
-/// spec that resolves to nothing pushes nothing, so the cap never sees it and
-/// the walk runs to the end of the list at one arrangement lookup per spec —
-/// which is the shape both surviving ⟨⟩ sources produce. Neither cost is
-/// bounded here; the caller's list length is what bounds them.
+/// That budget bounds the slot's spans and, each spec's runs being pulled one
+/// at a time off M5's lazy `iter_resolve` so the cap ends a spec's walk where
+/// the slot crosses it — as M7 builds MAKELINK's `Resolve` slots — the live
+/// peak of building them. What sits outside it is WORK, in two shapes. Each
+/// spec's walk to its opening ordinal passes the source's runs before it
+/// whatever the spec yields, so its cost is the SOURCE's fragmentation and not
+/// the request's size. And the count is of SPANS, not of specs: a spec that
+/// resolves to nothing pushes nothing, so the cap never sees it and the walk
+/// runs to the end of the list at one arrangement lookup per spec — which is
+/// the shape both surviving ⟨⟩ sources produce. Neither is bounded here; the
+/// caller's list length is the multiplier of both.
 ///
 /// PRECEDENCE within the slot, since several specs may be wrong and exactly
 /// one answer goes back: the specs are walked in order and the FIRST offending
@@ -144,7 +148,7 @@ fn successor_slot(
         if !m3.is_registered_document(&spec.source) {
             return Err(at_spec(slot, index, RejectCode::SourceNotRegistered));
         }
-        for run in m5.resolve(&spec.source, &spec.span) {
+        for run in m5.iter_resolve(&spec.source, &spec.span) {
             if spans.len() == MAX_SLOT_SPANS {
                 return Err(slot_too_large(slot));
             }

@@ -697,14 +697,14 @@ fn is_wf_content_spec(m3: &M3State, spec: &VSpec) -> bool {
 /// applier lock; `emit` builds its value before the transact, and an
 /// `editlink` successor is built entirely by its caller.
 ///
-/// It bounds a slot's RESULT and nothing else. The WORK a `Resolve` slot
-/// commands is bounded by its companion [`MAX_SLOT_RESOLVE_STEPS`], because
-/// the result cannot bound it: a spec aimed past its source's arranged end
-/// keeps no span and walks the whole run list — and so is the TRANSIENT that
-/// work materializes, which is a slot's real live peak and an order above the
-/// stored figure above. And M10 additionally reuses this number as its wire
-/// list cap (`MAX_WIRE_LIST = MAX_SLOT_SPANS`), which
-/// makes it the bound on a QUERY endset's span count too — a use this
+/// It bounds a slot's RESULT and, the resolution being pulled a run at a
+/// time and stopped here, the live peak of building it — and nothing else.
+/// The WORK a `Resolve` slot commands is bounded by its companion
+/// [`MAX_SLOT_RESOLVE_STEPS`], because the result cannot bound it: a spec
+/// aimed past its source's arranged end keeps no span and walks the whole run
+/// list. And M10 additionally reuses this number as its wire list cap
+/// (`MAX_WIRE_LIST = MAX_SLOT_SPANS`), which makes it the bound on a QUERY
+/// endset's span count too — a use this
 /// argument does not cover: a query's cost is
 /// `|links| × |query spans| × |slot spans|` ([`crate::LinkState::stab`]), and
 /// this constant bounds two of those three factors while the store size,
@@ -729,30 +729,23 @@ pub const MAX_SLOT_SPANS: usize = 4096;
 /// The charge is the SOURCE's whole run count
 /// ([`M5State::content_run_count`], one map lookup reading no run), which is
 /// the worst case rather than the actual steps: the runs left of an ordinal
-/// are not derivable from the ordinal, run widths being arbitrary, and M5
-/// publishes only the collecting `resolve`, so the walk cannot report what it
-/// spent. That makes the bound conservative in the one direction that is
-/// safe — a narrow early span over a hugely fragmented source is refused for
-/// work it would not have done.
+/// are not derivable from the ordinal, run widths being arbitrary, and M5's
+/// resolution does not report the steps it spent. That makes the bound
+/// conservative in the one direction that is safe — a narrow early span over
+/// a hugely fragmented source is refused for work it would not have done.
 ///
-/// It bounds a TRANSIENT as well as a duration, and the transient is the
-/// larger figure. M5's `resolve` collects before it returns, so one spec's run
-/// vector is materialized whole before the span budget above sees a single
-/// span — and a spec cannot yield more runs than the steps it was charged, so
-/// this constant caps that vector at `MAX_SLOT_RESOLVE_STEPS` runs. At order
-/// 300 bytes a `Run` (an `Address`'s tumbler plus a width `Nat`) that is
-/// ~75 MB of live peak, an order above the stored endset's own ~2 MB —
-/// dropped when the spec's loop ends, and one spec at a time, so it is a peak
-/// and not a sum. Bounding it at the span budget instead would need M5's lazy
-/// `iter_resolve`, which is crate-private to M5.
+/// It bounds a DURATION and not a transient: each spec's runs are pulled one
+/// at a time off M5's lazy `iter_resolve`, and the span budget above stops
+/// the walk where the slot crosses it, so a slot's live peak is the spans it
+/// keeps — [`MAX_SLOT_SPANS`]' figure — whatever this constant admits.
 ///
 /// `64 × MAX_SLOT_SPANS` steps: the product admits the wire's 4096 specs over
 /// a 64-run source, 64 specs over a 4096-run one, or one spec over a
 /// 262,144-run one. At order 50 ns per `Nat` add-and-compare that is ~13 ms
 /// of applier-lock hold per slot and ~40 ms across a three-slot MAKELINK.
 /// What an operator prices that against is its own documents' fragmentation,
-/// which is what the charge reads, its tolerance for holding the write path,
-/// and the live peak above, which this same number sets.
+/// which is what the charge reads, and its tolerance for holding the write
+/// path.
 pub const MAX_SLOT_RESOLVE_STEPS: usize = 64 * MAX_SLOT_SPANS;
 
 /// One MAKELINK slot's endset, read off the txn base — `None` iff the slot
@@ -763,12 +756,13 @@ pub const MAX_SLOT_RESOLVE_STEPS: usize = 64 * MAX_SLOT_SPANS;
 /// `Resolve`: ρ as content I-extents — readable, level-uniform spans (ML1
 /// coverage-exactness by construction: the runs trace exactly allocated
 /// content, cross-origin runs arrive un-coalesced). Both budgets are charged
-/// as the slot is built, and each stops it: the spans as they are kept, and
-/// the work BEFORE each resolve, so a refusal precedes the walk it refuses
-/// rather than following it. The two are independent because a spec that
-/// keeps nothing still walks its whole source (see
-/// [`MAX_SLOT_RESOLVE_STEPS`]); the span count alone would see such a slot as
-/// empty.
+/// as the slot is built, and each stops it: the spans as they are kept,
+/// pulled a run at a time off M5's lazy `iter_resolve` so the span budget
+/// ends the walk itself, and the work BEFORE each resolve, so a refusal
+/// precedes the walk it refuses rather than following it. The two are
+/// independent because a spec that keeps nothing still walks its whole source
+/// (see [`MAX_SLOT_RESOLVE_STEPS`]); the span count alone would see such a
+/// slot as empty.
 ///
 /// `Addrs`: the canonical name encoding, deposited unresolved, one span per
 /// name, counted before the encoding is built and commanding no walk.
@@ -788,7 +782,7 @@ fn slot_endset(m5: &M5State, arg: &SlotArg) -> Option<Endset> {
                 if steps > MAX_SLOT_RESOLVE_STEPS {
                     return None;
                 }
-                for run in m5.resolve(&spec.source, &spec.span) {
+                for run in m5.iter_resolve(&spec.source, &spec.span) {
                     if spans.len() == MAX_SLOT_SPANS {
                         return None;
                     }
@@ -808,7 +802,7 @@ where
 {
     /// MAKELINK (ASN-0120, as amended 2026-08-16): build three endsets — a
     /// [`SlotArg::Resolve`] slot resolves its V-specs to content I-extents
-    /// (M5 `resolve` + `Run::iextent`, read off the txn BASE — the whole op
+    /// (M5 `iter_resolve` + `Run::iextent`, read off the txn BASE — the whole op
     /// linearizes at its commit, ASN-0134); a [`SlotArg::Addrs`] slot is
     /// `enc(addrs)`, the NAMES verbatim (L8: matching is by address,
     /// contents never examined; ghost names valid, L9) — require the type
@@ -1116,7 +1110,7 @@ where
     /// about order or duplicates, and this is the only op handing it two keys
     /// of one space) — inlining two `emit_core` calls (the public
     /// `assert_sup` CANNOT be called: M2 is non-reentrant). Allocates the
-    /// fresh successor (value supplied — M10 builds it via M5 `resolve` +
+    /// fresh successor (value supplied — M10 builds it via M5 `iter_resolve` +
     /// `Run::iextent` + `Endset::from_spans`/`enc` + `Link::triple`, off any
     /// prior snapshot — ML8/EL0), then asserts it supersedes `original`.
     /// Successor born UNSEATED; both writes commit atomically (EL7);

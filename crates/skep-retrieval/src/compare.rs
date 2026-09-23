@@ -56,13 +56,15 @@ use crate::{Query, RetrievalWorld};
 /// more, never less — and M5's fold conditions stay M5's, restated nowhere
 /// in this crate.
 ///
-/// WHAT NEITHER COUNT BOUNDS: the transient one span materializes. M5's
-/// `resolve` and `image` hand back a span's resolution WHOLE, sized by the
-/// document's fragmentation and not the request's shape, and the lazy form
-/// is crate-private to M5; M6 consults the block count as the runs are
-/// produced and the coverage count after each image, so what each bounds
-/// is the LIST — the join's factor, the scans' multiplier — and not the
-/// peak heap of resolving one span over a heavily fragmented document.
+/// WHAT THE COUNTS STOP, AND WHAT THEY DO NOT. Both are consulted as M5's lazy
+/// `iter_resolve` produces each run — the block count here, the coverage count
+/// at FINDDOCSCONTAINING — so a span over a heavily fragmented document stops
+/// its walk at the budget, and what one span makes M6 hold live passes the
+/// budget by at most the run that trips it: each count bounds the LIST — the
+/// join's factor, the scans' multiplier — and the peak heap of building it.
+/// Neither bounds `#runs(doc)`, the document's own fragmentation: each span's
+/// walk to its opening ordinal passes that many runs whatever the span yields,
+/// and it is the world's factor, not the request's.
 pub const MAX_COMPARE_OPERAND_BLOCKS: usize = 1 << 12;
 
 /// The most correspondences one COMPARE may report, and so the ceiling on what
@@ -75,10 +77,10 @@ pub const MAX_COMPARE_OPERAND_BLOCKS: usize = 1 << 12;
 /// order 64 MiB of report; it is also M5's `MAX_PLACED_RUNS`, the substrate's
 /// existing answer to how many runs one operation may materialize.
 ///
-/// It is not a ceiling on the whole query's heap, and neither budget is: one
-/// span over a fragmented document materializes that document's entire
-/// resolution before a block is counted (the caveat is on
-/// [`MAX_COMPARE_OPERAND_BLOCKS`]'s card).
+/// With [`MAX_COMPARE_OPERAND_BLOCKS`] it bounds what the query holds live:
+/// the two operands' block lists and this report, every span's resolution
+/// being pulled a run at a time off M5's lazy `iter_resolve` and stopped at
+/// the block budget (that card says what the operand counts stop).
 ///
 /// [`MAX_COMPARE_OPERAND_BLOCKS`] cannot stand in for it: two operands at that
 /// budget whose spans all resolve to ONE shared I-address report the SQUARE of
@@ -297,19 +299,21 @@ impl<'a> Block<'a> {
 /// resolving rather than resolving whole and then being measured.
 ///
 /// Both counts are [`MAX_COMPARE_OPERAND_BLOCKS`]'s, whose card says why
-/// there are two, what each refuses, and what neither bounds within one
-/// span. Here the span count is taken as the span is handed to M5 — before
-/// the reader's let-else, so a declined span counts — and the block count
-/// as `resolve`'s runs are pushed.
+/// there are two, what each refuses, and what the counts stop within one span
+/// and what they do not. Here the span count is taken as the span is handed to
+/// M5 — before the reader's let-else, so a declined span counts — and the
+/// block count as M5's lazy `iter_resolve` produces each run, so the walk of a
+/// span that crosses the budget stops where it crosses.
 ///
-/// V-RECONSTRUCTION (load-bearing for X12-R1 soundness): `resolve` PROMISES
-/// that its runs tile V contiguously from the first run's `max(ordinal, 1)`,
-/// each next run beginning where the previous one ends — which is precisely
-/// what lets a caller recover every run's V-start by accumulating widths from
-/// the span's own ordinal, with no V-gaps to skip and no second question
-/// asked. That promise rests on D-SEQ★ (ASN-0047), a subspace's arranged
-/// positions being its dense prefix, and D-SEQ★ is what the per-run assertion
-/// tripwires. Asserting on EVERY run (not first-run-only) localizes a future
+/// V-RECONSTRUCTION (load-bearing for X12-R1 soundness): `iter_resolve` yields
+/// `resolve`'s runs in `resolve`'s order, and `resolve` PROMISES that they
+/// tile V contiguously from the first run's `max(ordinal, 1)`, each next run
+/// beginning where the previous one ends — which is precisely what lets a
+/// caller recover every run's V-start by accumulating widths from the span's
+/// own ordinal, with no V-gaps to skip and no second question asked. That
+/// promise rests on D-SEQ★ (ASN-0047), a subspace's arranged positions being
+/// its dense prefix, and D-SEQ★ is what the per-run assertion tripwires.
+/// Asserting on EVERY run (not first-run-only) localizes a future
 /// M5 regression to the EXACT mis-aligning run instead of letting a
 /// mid-document V-gap slip past a first-run check and silently mis-set a later
 /// block's `v_start`.
@@ -327,7 +331,7 @@ impl<'a> Block<'a> {
 /// arrangement and answer.
 ///
 /// The ZERO-FREE start puts `ordinal ≥ 1` at every span, so the cursor M6
-/// opens at the span's own ordinal IS `resolve`'s `max(ordinal, 1)` and M6
+/// opens at the span's own ordinal IS the resolution's `max(ordinal, 1)` and M6
 /// carries no clamp of its own — relax zero-freedom and every foot of every
 /// correspondence from an ordinal-0 span is off by one, with the assertion
 /// below the only thing that would say so, and only in debug. And the
@@ -335,12 +339,12 @@ impl<'a> Block<'a> {
 /// may name — the operand region this builds is a content region because the
 /// gate admits nothing else.
 ///
-/// The cursor is opened from M5's own reading of the span — the shape
-/// `resolve` folds every span through — so the let-else below is LIVE rather
+/// The cursor is opened from M5's own reading of the span — the shape M5's
+/// resolution folds every span through — so the let-else below is LIVE rather
 /// than the total form of a settled fact: a well-formed but depth-incompatible
 /// (`#start ≥ 3`) span is exactly the one M5's reader declines, and it opens
-/// no cursor, asks nothing, and contributes no blocks — the same answer
-/// `resolve` gives the same span, which is no runs.
+/// no cursor, asks nothing, and contributes no blocks — the same answer M5's
+/// resolution gives the same span, which is no runs.
 ///
 /// The blocks borrow the REGIONS, not `m3` or `m5`: each carries a reference
 /// to the document of the region that named it, so the lifetime is written out
@@ -373,8 +377,8 @@ fn resolve_blocks<'a>(
             }
             spans_handed += 1;
             // M5's own shape reader: a span it declines (well-formed but
-            // depth-incompatible) contributes no blocks, as `resolve` would
-            // have contributed no runs for it.
+            // depth-incompatible) contributes no blocks, as the resolution
+            // would have yielded no runs for it.
             let Some(shape) = as_ordinal_vspan(span) else {
                 continue;
             };
@@ -382,7 +386,9 @@ fn resolve_blocks<'a>(
                 subspace: shape.subspace.clone(),
                 ordinal: shape.ordinal.clone(),
             };
-            for run in m5.resolve(&surface, span) {
+            // Pulled a run at a time, so the block budget below stops the
+            // walk rather than measuring a resolution already built whole.
+            for run in m5.iter_resolve(&surface, span) {
                 if out.len() >= MAX_COMPARE_OPERAND_BLOCKS {
                     return None; // the operand's budget, refused as produced
                 }

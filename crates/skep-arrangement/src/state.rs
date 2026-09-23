@@ -110,7 +110,7 @@ impl DocArrangement {
 /// [`deletions`](M5State::deletions) is the deleted set rather than an
 /// arbitrary difference, and [`docs_ever_containing`](M5State::docs_ever_containing)
 /// is a superset with no false negatives — the property that makes narrowing
-/// it by [`project`](M5State::project) sound.
+/// it by [`arranges_any`](M5State::arranges_any) sound.
 ///
 /// Three things a caller may rely on under D-SEQ★, each restated where it is
 /// answered so a reader need not come here for it:
@@ -126,13 +126,13 @@ impl DocArrangement {
 ///   so a caller that needs their V-starts accumulates widths instead of
 ///   locating each run again.
 ///
-/// EVERY READ HERE ANSWERS THE ADDRESS NAMED. `resolve`, `point`, `image`,
-/// `content_runs`, `link_runs`, `content_count`, `link_count`,
-/// `content_run_count`, `link_run_count`, `project`, `deletions` and
-/// `recorded_span_count` never float: asked of a bare published document
-/// with members, they answer its own pre-chain arrangement, which the chain
-/// has superseded, and its own R↾doc, not the trunk head's. Head-float
-/// (PUB-2.49) is a composition the READER makes —
+/// EVERY READ HERE ANSWERS THE ADDRESS NAMED. `resolve`, `iter_resolve`,
+/// `point`, `image`, `content_runs`, `link_runs`, `content_count`,
+/// `link_count`, `content_run_count`, `link_run_count`, `project`,
+/// `arranges_any`, `deletions` and `recorded_span_count` never float: asked
+/// of a bare published document with members, they answer its own pre-chain
+/// arrangement, which the chain has superseded, and its own R↾doc, not the
+/// trunk head's. Head-float (PUB-2.49) is a composition the READER makes —
 /// [`reading_surface`](crate::reading_surface) first, then the read — as
 /// M6's and M8's arrangement readers do.
 ///

@@ -3267,10 +3267,11 @@ fn seating_appends_a_home_link_refuses_a_reseat_and_never_touches_r() {
 // ---- §D/§E composed queries ----
 
 #[test]
-fn find_docs_containing_composes_candidates_with_the_project_filter() {
+fn find_docs_containing_composes_candidates_with_the_present_tense_filter() {
     // §9: docs_ever_containing is the historical superset (P2 keeps the
-    // deleter as a candidate); project is the current-containment filter —
-    // both off ONE snapshot.
+    // deleter as a candidate); arranges_any is the current-containment
+    // filter, the non-emptiness of project's footprint — all off ONE
+    // snapshot.
     let k = mem_kernel();
     let vs = insert_abc(&k);
     vs.copy(
@@ -3294,7 +3295,9 @@ fn find_docs_containing_composes_candidates_with_the_project_filter() {
     // Candidate superset: both docs have ever contained the region, doc1 as
     // FD-GHOST's ghost.
     assert_eq!(m5.docs_ever_containing(&region), vec![doc1(), doc2()]);
-    // Current-containment narrows to doc2.
+    // Current-containment narrows to doc2, and the footprint says the same.
+    assert!(!m5.arranges_any(&doc1(), &region));
+    assert!(m5.arranges_any(&doc2(), &region));
     assert!(m5.project(&doc1(), &region).is_empty());
     assert!(!m5.project(&doc2(), &region).is_empty());
     // And doc1's loss is exactly what SHOWDELETIONS reports.
@@ -3397,6 +3400,56 @@ fn reads_fold_an_absent_document_to_empty_results() {
     assert!(!m5.deletions(&doc1()).is_empty());
     assert_eq!(m5.content_count(&doc1()), n(2));
     assert_eq!(m5.link_count(&doc1()), n(1));
+}
+
+#[test]
+fn the_lazy_resolution_yields_what_resolve_collects_and_a_prefix_when_stopped() {
+    // §2: a consumer with a budget of its own — M6's COMPARE blocks and
+    // FINDDOCSCONTAINING coverage, M7's and M10's slot spans — pulls runs
+    // one at a time and stops at that budget: what it pulls is `resolve`'s
+    // answer, run for run, and what it holds on stopping is a prefix of it.
+    // Asked from a foreign crate, which is where those budgets live, over
+    // both subspaces, a clamped opening, one run's interior, the seam of a
+    // self-transclusion and the empty resolution past the arranged end.
+    let k = mem_kernel();
+    let vs = insert_abc(&k);
+    vs.copy(
+        P1,
+        &doc1(),
+        vp(1, 1),
+        &[VSpec {
+            source: doc1(),
+            span: vspan(1, 1, 3),
+        }],
+    )
+    .expect("self-copy commits"); // [ca1..3][ca1..3]: two runs
+    seat_link(&k, &doc1(), &a(&[1, 0, 1, 0, 1, 0, 2, 1])).expect("seat commits");
+    let s = k.snapshot();
+    let m5 = s.world().m5();
+    assert_eq!(m5.content_run_count(&doc1()), 2, "the premise: a seam to resolve across");
+    for span in [
+        vspan(1, 1, 6),
+        vspan(1, 2, 4),
+        vspan(1, 0, 3),
+        vspan(1, 4, 1),
+        vspan(1, 7, 2),
+        vspan(2, 1, 1),
+    ] {
+        let whole = m5.resolve(&doc1(), &span);
+        assert_eq!(m5.iter_resolve(&doc1(), &span).collect::<Vec<_>>(), whole, "{span:?}");
+        for take in 0..=whole.len() {
+            assert_eq!(
+                m5.iter_resolve(&doc1(), &span).take(take).collect::<Vec<_>>(),
+                whole[..take],
+                "{span:?} stopped after {take}"
+            );
+        }
+    }
+    // The resolutions are what their spans name — so the agreement above is
+    // not two empty answers agreeing.
+    assert_eq!(m5.resolve(&doc1(), &vspan(1, 2, 4)).len(), 2, "across the seam");
+    assert!(m5.resolve(&doc1(), &vspan(1, 7, 2)).is_empty(), "past the arranged end");
+    assert_eq!(m5.resolve(&doc1(), &vspan(2, 1, 1)).len(), 1, "the link subspace");
 }
 
 // ---- the public values' standard traits ----

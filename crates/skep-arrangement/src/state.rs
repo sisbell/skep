@@ -103,8 +103,18 @@ impl DocArrangement {
 ///   the op path `birth_extent(m) ≤ content_count(m)`, and positions
 ///   `[1, birth_extent(m)]` of `m` are the arrangement it was minted with: a
 ///   published member admits no removal and no re-arrangement (PUB-2.11), and
-///   a deposit lands past the arranged extent. ONE STATE ESCAPES IT, stated
-///   on the fold's arm: a member the SHOT minted with no runs.
+///   a deposit lands past the arranged extent. ONE STATE ESCAPES IT — a birth
+///   version the SHOT minted with no runs, whose first deposit is noted as
+///   its birth: [`birth_extent`](M5State::birth_extent) states what it
+///   answers there, and the fold's `ContentPlace` arm why no record separates
+///   that deposit from a mint. On the DECODE path BIRTH★ is M2's integrity,
+///   as P4★ is: a checkpoint carries `birth_extents` whole, and no door
+///   re-establishes that each key is a birth version or each count its
+///   mint's. A decoded state violating it faults nothing — no read does
+///   arithmetic on an extent, and [`birth_extent`](M5State::birth_extent)
+///   answers the count carried — but a consumer that takes the key set for
+///   version members, as the engine's dump filter does, trusts the checkpoint
+///   for it.
 ///
 /// Two public reads mean what they say only under P4★:
 /// [`deletions`](M5State::deletions) is the deleted set rather than an
@@ -134,7 +144,9 @@ impl DocArrangement {
 /// arrangement, which the chain has superseded, and its own R↾doc, not the
 /// trunk head's. Head-float (PUB-2.49) is a composition the READER makes —
 /// [`reading_surface`](crate::reading_surface) first, then the read — as
-/// M6's and M8's arrangement readers do.
+/// M6's and M8's arrangement readers do. [`birth_extent`](M5State::birth_extent)
+/// answers the address named as well: asked of a bare document it answers
+/// zero — the document is no birth version — and never its `D.1`'s extent.
 ///
 /// Both fields key by the document `Address`, which is what every caller
 /// holds and what every insertion site already had. Three consequences, and
@@ -228,8 +240,8 @@ pub enum M5Rec {
 }
 
 impl M5State {
-    /// Σ₀ for M5: `{}` arrangements, `{}` provenance. Deterministic, per M2's
-    /// byte-identical-genesis caller contract.
+    /// Σ₀ for M5: `{}` arrangements, `{}` provenance, `{}` birth extents.
+    /// Deterministic, per M2's byte-identical-genesis caller contract.
     pub fn genesis() -> M5State {
         M5State::default()
     }
@@ -286,11 +298,24 @@ impl M5State {
     /// PUB-3.19's BIRTH CONTENT, as a count (RES-276; the owner's D2): the
     /// content extent the birth version `member` — a trunk's `D.1` — was
     /// MINTED with, the leading runs of its arrangement, which a deposit
-    /// taken while it is the head never joins. `content_count(member)` is the
-    /// live extent and follows every such deposit; this one is frozen at the
-    /// mint, so positions `[1, birth_extent]` of the member are what an
-    /// edition's claim was written over (PUB-3.10), and this extent answers
-    /// the same as of every later `Seq`.
+    /// taken while it is the head never joins — one state excepted, below.
+    /// `content_count(member)` is the live extent and follows every such
+    /// deposit; this one is frozen at the mint, so positions
+    /// `[1, birth_extent]` of the member are what an edition's claim was
+    /// written over (PUB-3.10), and this extent answers the same as of every
+    /// later `Seq`.
+    ///
+    /// ONE STATE ANSWERS OTHERWISE, and it is BIRTH★'s residue
+    /// ([`M5State`]): a birth version the SHOT minted with NO runs journals no
+    /// placement at its mint — [`Vstream::publish`](crate::Vstream::publish)
+    /// pushes none for an empty placement — so the first placement this slice
+    /// folds for it is its first DEPOSIT, and the count that deposit leaves is
+    /// noted as its birth. Such a version answers zero, exactly, until a
+    /// deposit lands, and the count its first deposit left ever after; no
+    /// record this slice folds tells that deposit from a mint's placement. A
+    /// conforming mint is never empty (PUB-3.11), and a birth version an owned
+    /// VERSION mints empty is noted at zero by its own snapshot and answers
+    /// zero exactly.
     ///
     /// Zero for an address with no extent noted: a birth version born with
     /// no content that has taken none since, and every address that is no

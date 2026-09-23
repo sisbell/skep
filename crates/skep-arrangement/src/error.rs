@@ -161,8 +161,13 @@ pub enum VersionError {
 /// verdicts; which one wins when several apply is stated on
 /// [`Vstream::publish`](crate::Vstream::publish) and only there.
 ///
-/// * `DocNotRegistered` / `NotOwner(doc)` — the destination's registration
-///   and ω; the payload names the failing document.
+/// Below, `doc` is the address the shot NAMES and THE DOCUMENT is the one it
+/// projects to (PUB-2.15): registration and ω are judged on the address
+/// named, and publication, the chain and the base on the document — the
+/// shot is the document's, whichever member names it.
+///
+/// * `DocNotRegistered` / `NotOwner(doc)` — the registration and ω of the
+///   address named; the payload is that address.
 /// * `SourceNotRegistered` — the base, the document the draft projects to
 ///   (PUB-2.15), or a run's origin document is not a registered document.
 /// * `BadRun` — a supplied run is not a content run of its stated origin:
@@ -170,17 +175,17 @@ pub enum VersionError {
 ///   (PUB-2.15) of the document that minted it — is not the document the
 ///   client's `origin` projects to. Address arithmetic on the request alone;
 ///   it discloses nothing about what exists.
-/// * `BaseNotInChain` — `base` names a document that is neither `doc` nor a
-///   member of `doc`'s chain (PUB-2.37: a shot lands under its own base).
-/// * `BaseSuperseded` — the base is absent, or is `doc` itself, while `doc`
-///   already has a member: the birth shape (PUB-2.34) and the memberless
-///   base (PUB-2.66) both name the document's own pre-chain arrangement,
-///   which the chain has superseded; name the member the draft was staged
-///   from.
+/// * `BaseNotInChain` — `base` names a document that is neither the document
+///   nor a member of its chain (PUB-2.37: a shot lands under its own base).
+/// * `BaseSuperseded` — the base is absent, or names the document itself,
+///   while the document already has a member: the birth shape (PUB-2.34) and
+///   the memberless base (PUB-2.66) both name the document's own pre-chain
+///   arrangement, which the chain has superseded; name the member the draft
+///   was staged from.
 /// * `BaseExtentTooLarge` — `base.extent` exceeds the base's current content
 ///   count: the render claims to have seen more than the member holds.
-/// * `PrivateSourceVersionless` — `doc` is PRIVATE: private documents are
-///   versionless (PUB-2.9), and a shot appends a version. ONE code with
+/// * `PrivateSourceVersionless` — the document is PRIVATE: private documents
+///   are versionless (PUB-2.9), and a shot appends a version. ONE code with
 ///   `version`'s own (the wire's `private_source_versionless`); the face is
 ///   PUB-2.9's `true` arm, the intent being publication: "⟨D⟩ is private —
 ///   publishing means minting a separate edition: select what to publish

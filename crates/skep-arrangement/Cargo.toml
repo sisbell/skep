@@ -5,18 +5,19 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "M5 — Arrangements & Editing (Vstream): the per-document mutable V→I arrangement (POOM) plus the append-only content-provenance relation R; editing/versioning operations and the publish shot, the version-chain reads (head-float and the deposit surface), link seating for M7, forward/reverse arrangement reads, and the R read surface"
+description = "M5 — Arrangements & Editing (Vstream): the per-document mutable V→I arrangement (POOM) plus the append-only content-provenance relation R; editing/versioning operations and the publish shot, the version-chain reads (head-float and the deposit surface), link seating for M7, forward/reverse arrangement reads, the R read surface, and the birth-extent read"
 readme = "README.md"
 
 [dependencies]
 # The design's mandated slice shapes (§Core data model): persistent im
-# collections for the two authoritative slices — arrangements keyed by the
-# document Address (im::OrdMap) and the provenance relation (im::OrdMap of
+# collections for the three fields of M5's slice — arrangements keyed by the
+# document Address (im::OrdMap), the provenance relation (im::OrdMap of
 # im::Vector<Span>, behind the Provenance type that keeps it append-only,
-# keyed the same way) — plus the
+# keyed the same way), and the birth extents the fold derives
+# (im::OrdMap<Address, Nat>, keyed by each trunk's birth version) — plus the
 # RunList's v1 physical backing im::Vector<Run> (Open build decision #1
-# default). The serde feature because both slices are fully serialized in
-# checkpoints (no skip-serialize; rebuild_derived is identity).
+# default). The serde feature because all three fields are fully serialized
+# in checkpoints (no skip-serialize; rebuild_derived is identity).
 im.workspace = true
 # Nat::zero()/one()/is_zero() are trait fns the ordinal math keeps in scope.
 num-traits.workspace = true
@@ -28,6 +29,8 @@ skep-address = { path = "../skep-address" }
 skep-kernel = { path = "../skep-kernel" }
 # M3 — registration, ownership, publication and version-frontier reads (the
 # last two through chain.rs), the pure mints composed into M5's composites,
+# first_version_address (which member is a trunk's birth version, the key of
+# the birth extents), ghost_home_doc (where the deposit class's types sit),
 # and the *_lock_key constructors (the workspace's one source of
 # Space::Namespace-tagged key bytes — see the serialization-key note in lib.rs).
 skep-namespace = { path = "../skep-namespace" }

@@ -603,8 +603,8 @@ where
     /// has yet.
     ///
     /// Check order (which error wins), PUB-6.36's slots: `DocNotRegistered`
-    /// → `NotOwner` (slot 1, the destination's ω — the only question the shot
-    /// asks of its caller, and one [`Caller::System`] passes) → registration
+    /// → `NotOwner` (slot 1, ω on the address named — the only question the
+    /// shot asks of its caller, and one [`Caller::System`] passes) → registration
     /// (slot 3): `SourceNotRegistered` for the base, then the document the
     /// draft projects to (PUB-2.15), then each run's origin document in run
     /// order, each run's SHAPE (`BadRun`)
@@ -658,8 +658,10 @@ where
     /// transaction's working world; no origin is locked (a window is a
     /// reference).
     ///
-    /// A member address given as `doc` is projected to its document first:
-    /// the shot is the document's, whichever member names it.
+    /// A member address given as `doc` is gated AS NAMED — its registration
+    /// and ω — and then projected to its document (PUB-2.15): the shot is
+    /// the document's, whichever member names it, and its publication, chain
+    /// and base are judged on that document.
     ///
     /// `shot` is taken by value because the composite keeps it: the member's
     /// arrangement is built from the shot's runs, and each by-reference run
@@ -705,7 +707,7 @@ where
             }
         }
         self.kernel.transact(&keys, |stg| {
-            // Slot 1: the destination's registration and ω.
+            // Slot 1: registration and ω, on the address named.
             gate_write(
                 stg.working().m3(),
                 caller,

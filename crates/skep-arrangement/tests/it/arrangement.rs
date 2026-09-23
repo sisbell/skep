@@ -2029,6 +2029,42 @@ fn the_birth_extent_of_a_shot_born_version_counts_its_whole_placement_and_no_lat
 }
 
 #[test]
+fn a_birth_version_the_shot_minted_empty_answers_its_first_deposit_as_its_birth() {
+    // BIRTH★'s one residue, pinned through the ops as `birth_extent` states
+    // it: a shot with no runs journals no placement at its mint, so the
+    // first placement the fold sees for the birth version is its first
+    // DEPOSIT, noted as the birth — zero, exactly, until then; the count that
+    // deposit left after. Whoever closes the residue (a mint that notes its
+    // own empty birth) turns this red and rewrites `birth_extent`'s card with
+    // it.
+    let k = mem_kernel();
+    let vs = Vstream::new(&k);
+    let (member, _) = vs
+        .publish(
+            P1,
+            &pdoc(),
+            Shot { base: None, draft: None, runs: vec![] },
+            &readable_by(PrincipalId(1)),
+        )
+        .expect("an empty birth version, in the birth shape");
+    assert_eq!(member, vdoc(), "the chain's first member");
+    assert_eq!(
+        k.snapshot().world().m5().birth_extent(&member),
+        n(0),
+        "exact until a deposit lands"
+    );
+    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"z")], declared())
+        .expect("a deposit landing in the head the shot minted");
+    let s = k.snapshot();
+    assert_eq!(s.world().m5().content_count(&member), n(1), "the head took the deposit");
+    assert_eq!(
+        s.world().m5().birth_extent(&member),
+        n(1),
+        "the first deposit, read as the birth"
+    );
+}
+
+#[test]
 fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
     // PUB-8.1's second constraint, PUB-6.36's order, PUB-6.24's carried cell:
     // the consult is asked per DISTINCT origin, in run order, of exactly the
@@ -2784,6 +2820,20 @@ fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing
             P1,
             &pdoc(),
             Shot { base: Some(base(&pdoc(), 99)), draft: None, runs: vec![] },
+            &readable
+        )),
+        PublishError::BaseSuperseded
+    ));
+    // Named by the member, the shot is still the document's (PUB-2.15): a
+    // base naming the document itself is its superseded pre-chain
+    // arrangement, whichever chain address names the shot. Judged against
+    // the address named instead, the pre-chain arrangement would pass for a
+    // base and a member would be minted off it.
+    assert!(matches!(
+        rejected(vs.publish(
+            P1,
+            &member1,
+            Shot { base: Some(base(&pdoc(), 3)), draft: None, runs: vec![] },
             &readable
         )),
         PublishError::BaseSuperseded

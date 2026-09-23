@@ -754,6 +754,24 @@ where
         self.stores.kernel().current_seq()
     }
 
+    /// The frontier's COORDINATE AND CHAIN together — [`log_position`]'s
+    /// `Seq` and the commit chain's value AT it (the quantity
+    /// `Kernel::chain_head` reads) — off ONE kernel `Snapshot`, one root
+    /// load: the root carries the two beside each other, so the pair names
+    /// one committed state, and the chain value IS the chain of that
+    /// position. `current_seq()` and `chain_head()` asked separately cannot
+    /// promise that: a commit may land between the two loads. What
+    /// `/health` serves as `log_position` and `chain_head` (QUEUE item 10,
+    /// piece (c)). Like [`log_position`], asking costs no operation and
+    /// takes no lock. The chain is the seed — thirty-two zero bytes — at
+    /// `Seq(0)` and, under `Durability::InMemory`, at every coordinate.
+    ///
+    /// [`log_position`]: OperationSurface::log_position
+    pub fn head_coordinate(&self) -> (Seq, [u8; 32]) {
+        let snap = self.stores.kernel().snapshot();
+        (snap.seq(), snap.chain())
+    }
+
     // ── write dispatch (§1/§3/§4) ──
 
     /// The static table for the write half: every arm acquires a driver

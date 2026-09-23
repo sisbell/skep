@@ -70,6 +70,24 @@ impl<W: WorldState> Snapshot<W> {
     pub fn world(&self) -> &W {
         &self.0.world
     }
+
+    /// The commit chain's value AT this view's coordinate — the third
+    /// constituent the root carries, beside [`Snapshot::seq`] and
+    /// [`Snapshot::world`]: the `chain` the marker closing that coordinate's
+    /// transaction carries on disk, or what recovery derived for the
+    /// committed head. The seed (`journal::CHAIN_GENESIS`, thirty-two zero
+    /// bytes) at `Seq(0)` and, under [`Durability::InMemory`], at every
+    /// coordinate: there are no frames to hash. By value (`[u8; 32]: Copy`).
+    ///
+    /// Read it off the SAME snapshot as the [`Snapshot::seq`] it is paired
+    /// with — the multi-read rule above — and `(seq(), chain())` names one
+    /// committed state: the chain OF that position. [`Kernel::current_seq`]
+    /// and [`Kernel::chain_head`] read the same two fields lock-free, but in
+    /// two loads, between which a commit may land. `/health`'s pair (QUEUE
+    /// item 10, piece (c)) is read here, through one root load.
+    pub fn chain(&self) -> [u8; 32] {
+        self.0.chain
+    }
 }
 
 impl<W: WorldState> Clone for Snapshot<W> {

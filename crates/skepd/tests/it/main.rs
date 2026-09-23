@@ -5,6 +5,7 @@
 mod auth_wire;
 mod authz;
 mod cascade;
+mod chain_head;
 mod changes;
 mod client;
 mod codec_roundtrip;

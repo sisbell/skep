@@ -1888,27 +1888,42 @@ impl Daemon {
         // older position's time offered in the head's place.
         //
         // THREE independent reads under no lock — this, the auth object's
-        // own fold snapshot, and `log_position` at the end — so this answer
-        // may straddle one in-flight commit at either seam. A `head_time`
-        // correct for the position the sidecar last recorded sits beside a
-        // `log_position` one commit newer; and a client polling for the claim
-        // flip can see the position advance before `claimant` appears, or
-        // read the pre-claim `signed_origins` beside a post-claim position,
-        // which costs it one `session_rejected` and a retry. Every one of
-        // them corrects itself on the next probe. Taking the write lock here
-        // would serialize a liveness probe behind writes, which is the worse
-        // trade; `CommitsLog::head_time` states what each field is true of.
+        // own fold snapshot, and the head coordinate at the end — so this
+        // answer may straddle one in-flight commit at either seam. A
+        // `head_time` correct for the position the sidecar last recorded
+        // sits beside a `log_position` one commit newer; and a client
+        // polling for the claim flip can see the position advance before
+        // `claimant` appears, or read the pre-claim `signed_origins` beside
+        // a post-claim position, which costs it one `session_rejected` and
+        // a retry. Every one of them corrects itself on the next probe.
+        // Taking the write lock here would serialize a liveness probe behind
+        // writes, which is the worse trade; `CommitsLog::head_time` states
+        // what each field is true of.
+        //
+        // `log_position` and `chain_head` do NOT straddle each other: the
+        // kernel's root carries the seq and the chain together, and
+        // `head_coordinate` reads both off ONE snapshot — one root load —
+        // so the chain served is the chain AT the position served, never
+        // `current_seq()` and `chain_head()` asked apart with a commit
+        // landing between. The value is the KERNEL's (the marker closing
+        // that position's transaction carries it; recovery derives it),
+        // rendered as 64 lowercase hex and never recomputed here; a fresh
+        // world answers the genesis seed — sixty-four `0`s — never null.
         let head_time =
             self.writes.head_time().map(|t| Value::Number(t.into())).unwrap_or(Value::Null);
+        // The auth object (AUTH-6.13), rendered where its state lives — the
+        // claimant, the flag and the two origin sets, with the wire's own
+        // negative pin stated there too. Read BEFORE the coordinate, which
+        // is the direction the straddle above describes.
+        let auth = self.auth.auth_object();
+        let (log_position, chain_head) = self.febe.head_coordinate();
         Reply::json(
             200,
             obj(vec![
-                // The auth object (AUTH-6.13), rendered where its state
-                // lives — the claimant, the flag and the two origin sets,
-                // with the wire's own negative pin stated there too.
-                ("auth", self.auth.auth_object()),
+                ("auth", auth),
+                ("chain_head", Value::String(crate::codec::hex_string(&chain_head))),
                 ("head_time", head_time),
-                ("log_position", Value::Number(self.febe.log_position().0.into())),
+                ("log_position", Value::Number(log_position.0.into())),
                 ("ok", Value::Bool(true)),
             ]),
         )

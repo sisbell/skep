@@ -2772,15 +2772,40 @@ are never renumbered per class; and the two straddle renderings above.
 
 ## The other endpoints
 
-**`GET /health`** → `200` with `ok`, `log_position`, `head_time`, and —
-since v7 — the `auth` object. Token-blind. `head_time` is the newest
-recorded commit's wall-clock unix milliseconds (§The change feed's
-timestamp scope: transport metadata) — `null` on a fresh world or when
-the head position's record is bare. A claimed board configured with one
+**`GET /health`** → `200` with `ok`, `log_position`, `head_time`,
+`chain_head` and — since v7 — the `auth` object. Token-blind, and
+class-invariant (§Cross-origin access: it carries neither cache header —
+the one answer for every requester). `head_time` is the newest recorded
+commit's wall-clock unix milliseconds (§The change feed's timestamp
+scope: transport metadata) — `null` on a fresh world or when the head
+position's record is bare. `chain_head` (QUEUE item 10, piece (c) —
+ADDITIVE, no version bump) is the commit chain's value at the COMMITTED
+HEAD: a string of 64 lowercase hex characters, the 32-byte SHA-256 link
+the kernel's journal computes at every commit over the previous link and
+that transaction's canonical record frames and marker fields, from a
+genesis seed of thirty-two zero bytes. It is the kernel's value, served
+as the journal holds it and never recomputed by the daemon; and it is
+the chain OF THE `log_position` BESIDE IT — the two are read off ONE
+kernel snapshot (the root carries the position and the chain together),
+so the pair names one committed state: the value piece (d), the
+published head, is to carry — not yet in the protocol — and what a peer
+holding an older head will check a newer history extends. A fresh world
+answers the seed, sixty-four `0`s at `log_position` 0 — never `null`; a
+kernel running in-memory would answer the seed at every position, there
+being no frames to hash, but this daemon always journals, its test
+harness included. `head_time` and `auth` are separate reads under no
+lock, so either may straddle one in-flight commit against the pair — a
+`head_time` one position behind, or a claim visible in one field before
+the other — and every such reading corrects itself on the next probe.
+The forward rule the change feed states for its own members (§The change
+feed: "a client MUST ignore an entry member it does not know … a consumer
+written to today's five must not treat a sixth as a protocol violation")
+holds here too: a consumer written to the four earlier members must not
+treat the fifth as a violation. A claimed board configured with one
 origin answers, illustratively:
 
 ```json
-{"auth":{"claimant":"1.0.1","local_trust":true,"origins":["http://127.0.0.1:8642","http://[::1]:8642","http://localhost:8642","https://board.example"],"signed_origins":["https://board.example"]},"head_time":1786838400047,"log_position":24,"ok":true}
+{"auth":{"claimant":"1.0.1","local_trust":true,"origins":["http://127.0.0.1:8642","http://[::1]:8642","http://localhost:8642","https://board.example"],"signed_origins":["https://board.example"]},"chain_head":"a65b74b44f6e7c4338342b8a6a8760b6d73e753b57492fc43b3ab2599f7b75b7","head_time":1786838400047,"log_position":24,"ok":true}
 ```
 
 `auth.claimant` is the claiming account's address, `null` while

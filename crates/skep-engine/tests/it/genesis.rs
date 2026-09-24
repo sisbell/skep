@@ -10,11 +10,14 @@
 use crate::common;
 
 use common::*;
-use skep_arrangement::{deposit_class_types, Deposit, HasM5};
+use skep_arrangement::{deposit_class_types, Caller, Deposit, HasM5};
 use skep_content::{HasContent, Val};
 use skep_engine::World;
 use skep_links::{coverage_class, HasLinks, ReservedAddrs, ShippedType, View};
-use skep_namespace::{ghost_home_doc, ghost_position, HasM3, BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS};
+use skep_namespace::{
+    ghost_home_doc, ghost_position, system_account, system_node, HasM3, BOOTSTRAP_PRINCIPAL,
+    GHOST_POSITIONS, SYSTEM_PRINCIPAL,
+};
 
 /// M7's own list of the five — read rather than restated, so a walk here
 /// cannot come to cover four classes out of five.
@@ -131,19 +134,31 @@ fn the_format_pins_its_five_reserved_addresses() {
 /// clause of the ghost-tumbler ruling (1c): dispatch is by number, so a
 /// fresh mint landing on the `retraction` value would be catastrophic. The
 /// ghost region is REACHABLE territory (that is what the old 9-space test
-/// proved could never happen by unreachability): the registry node is
-/// admitted, the claim ceremony's delegate lands the operator at account 1,
-/// its doc-1 mints at its ordinary ordinal — and the doc's content frontier
-/// provably starts past the region, so INSERT's content lands from position
-/// 6 and nothing exists at any ghost tumbler, before or after.
+/// proved could never happen by unreachability): the ghost home document is
+/// real, and since PUB-6.65 its whole lineage is genesis's — the registry
+/// node, the system account at ordinal 1 and its doc-1 are seeded at exactly
+/// the ordinals the ceremony's delegate and doc-1 mint used to land on — and
+/// the doc's content frontier provably starts past the region, so INSERT's
+/// content lands from position 6 and nothing exists at any ghost tumbler,
+/// before or after.
 #[test]
 fn no_reserved_address_is_ever_minted_and_the_ceremony_is_not_renumbered() {
     let engine = mem_engine();
     let reserved = ReservedAddrs::format();
 
-    // Before any of the lineage exists: nothing at the five, anywhere.
+    // The lineage is seeded at its ordinary ordinals — the pin renumbers
+    // nothing — and its document is born EMPTY: nothing at the five, anywhere.
+    let doc1 = ghost_home_doc();
     {
         let snap = engine.kernel().snapshot();
+        let m3 = snap.world().m3();
+        assert!(m3.is_allocated(&system_node()), "the registry node 1.1 is seeded");
+        assert!(
+            m3.is_registered_account(&system_account()),
+            "the system account sits at account ordinal 1 under it"
+        );
+        assert_eq!(system_account(), addr(&[1, 1, 0, 1]));
+        assert!(m3.is_registered_document(&doc1), "its doc-1 IS the ghost home document");
         for addr in [
             &reserved.pred_def,
             &reserved.pred_stable,
@@ -151,35 +166,20 @@ fn no_reserved_address_is_ever_minted_and_the_ceremony_is_not_renumbered() {
             &reserved.supersedes,
             &reserved.retraction,
         ] {
-            assert!(!snap.world().m3().is_allocated(addr), "{addr} allocated at genesis");
+            assert!(!m3.is_allocated(addr), "{addr} allocated at genesis");
         }
     }
 
-    // The registry node 1.1, its operator (the claim ceremony's delegate,
-    // at account ordinal 1 by next-form), and the ceremony's doc-1 — all at
-    // their ordinary ordinals: the pin renumbers nothing.
-    engine.namespace().register_node(tum(&[1, 1])).expect("the registry node is admissible");
-    let (operator, _) = engine
-        .namespace()
-        .delegate(BOOTSTRAP_PRINCIPAL, tum(&[1, 1, 0, 1]), USER)
-        .expect("the operator lands at account 1");
-    assert_eq!(operator, addr(&[1, 1, 0, 1]));
-    let (doc1, _) = engine
-        .namespace()
-        .create_new_document(USER, &operator, None)
-        .expect("the ceremony's doc-1");
-    assert_eq!(doc1, ghost_home_doc(), "doc-1 IS the ghost home document");
-
     // INSERT drives the content chain: the permascroll writes land from
-    // position GHOST_POSITIONS + 1, and keep going contiguously. The
-    // ceremony's doc-1 is born published, so the write is what the ceremony's
-    // own record atom is — a deposit DECLARED under ENROLL's type, the genesis
-    // enrollment's class (PUB-2.11, PUB-2.64), at its fresh positions
-    // (PUB-2.59, PUB-2.63).
+    // position GHOST_POSITIONS + 1, and keep going contiguously. Doc-1 is
+    // born published, so the write is what the ceremony's own record atom
+    // is — a deposit DECLARED under ENROLL's type, the genesis enrollment's
+    // class (PUB-2.11, PUB-2.64), at its fresh positions (PUB-2.59,
+    // PUB-2.63) — written as the account's own principal, the system's.
     let (start, _) = engine
         .vstream()
         .insert(
-            OWNER,
+            Caller::Principal(SYSTEM_PRINCIPAL),
             &doc1,
             vp(1, 1),
             vec![Val::new(vec![b'a']), Val::new(vec![b'b'])],

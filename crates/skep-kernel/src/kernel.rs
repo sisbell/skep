@@ -1073,6 +1073,44 @@ impl<W: WorldState> Kernel<W> {
         Ok(s)
     }
 
+    /// The NEWEST RETAINED checkpoint's coordinate and the two hashes its
+    /// `SKC3` header carries — `(seq, chain_head, body_hash)` — or `None` under
+    /// [`Durability::InMemory`] and before the first checkpoint. ADDITIVE
+    /// (QUEUE item 10 piece 2, the PUBLISHED HEAD): what a head record's `base`
+    /// member names (PUB-6.65), so a peer that copies a checkpoint file has its
+    /// coordinate attested, a full replica verifies the base's canonical body
+    /// by `body_hash`, and the coordinate survives the retention
+    /// (`retain_checkpoints`) that drops the file — the base is the one durable
+    /// record of a reclaimed checkpoint's coordinate.
+    ///
+    /// Reads the newest file's HEADER ALONE — never the body — so it costs one
+    /// directory list and one short read, not a world deserialization. The
+    /// header layout is [`checkpoint`]'s: an 88-byte `SKC3` header whose last
+    /// two 32-byte fields are `chain_head` (at offset 24) and `body_hash` (at
+    /// 56). FAIL-QUIET — `None` on any I/O error or a file shorter than its own
+    /// header — because the head writer that reads this must never fail a
+    /// commit over it: it writes `base: null` instead. Lock-free, like
+    /// [`Kernel::chain_head`]: it consults the directory, not the applier, so a
+    /// checkpoint racing this read is at worst not-yet-seen, never a torn one
+    /// ([`crate::checkpoint::write`] renames a whole file into place).
+    pub fn newest_checkpoint(&self) -> Option<(Seq, [u8; 32], [u8; 32])> {
+        let journaled = self.journaled.as_ref()?;
+        // `list` is ascending by seq (§6), so the last entry is the newest.
+        let newest = checkpoint::list(&journaled.dir).ok()?.pop()?;
+        let path = journaled.dir.join(format!("checkpoint.{}", newest.seq));
+        let data = std::fs::read(&path).ok()?;
+        // The `SKC3` header (checkpoint.rs owns the layout): 88 bytes, the last
+        // two 32-byte fields the chain head and the body hash. Read at those
+        // offsets rather than through `load`, which deserializes the whole body
+        // to hand back a world this caller does not want.
+        if data.len() < 88 {
+            return None;
+        }
+        let chain_head: [u8; 32] = data[24..56].try_into().ok()?;
+        let body_hash: [u8; 32] = data[56..88].try_into().ok()?;
+        Some((Seq(newest.seq), chain_head, body_hash))
+    }
+
     /// The committed world as of boundary `at` — READ-ONLY bounded replay
     /// over this kernel's own journal directory (the journal already holds
     /// every committed state; this makes a prefix of it answerable). Base =
@@ -1247,6 +1285,37 @@ mod tests {
     /// without a kernel.
     fn fresh_writer(dir: &std::path::Path) -> JournalWriter {
         JournalWriter::open_active(dir, 1, journal::CHAIN_GENESIS).unwrap()
+    }
+
+    /// [`Kernel::newest_checkpoint`] (QUEUE item 10 piece 2, the head's `base`):
+    /// `None` until a checkpoint exists, then the header's triple — the
+    /// checkpointed seq, the chain at it (equal to [`Kernel::chain_head`]), and
+    /// a real body hash. Read off the header alone, so it agrees with the
+    /// values `checkpoint()` wrote without deserializing the body.
+    #[test]
+    fn newest_checkpoint_is_none_then_the_header_triple() {
+        let dir = tempfile::tempdir().unwrap();
+        let kernel =
+            Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new()).unwrap();
+        assert_eq!(kernel.newest_checkpoint(), None, "no checkpoint has been taken yet");
+
+        kernel
+            .transact::<_, ()>(&[], |stg| {
+                stg.push(7u64);
+                Ok(())
+            })
+            .unwrap();
+        let s = kernel.checkpoint().expect("one checkpoint");
+
+        let (seq, chain_head, body_hash) =
+            kernel.newest_checkpoint().expect("a checkpoint now exists");
+        assert_eq!(seq, s, "the newest checkpoint's own seq");
+        assert_eq!(
+            chain_head,
+            kernel.chain_head(),
+            "the header's chain_head is the chain at the checkpointed head"
+        );
+        assert_ne!(body_hash, [0u8; 32], "the body hash is a real SHA-256, not the zero seed");
     }
 
     #[test]

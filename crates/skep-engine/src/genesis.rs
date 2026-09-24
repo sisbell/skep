@@ -27,8 +27,13 @@ impl World {
     /// `links = ∅` and empty hints (`LinkState::genesis`), read against the
     /// format registry — M7's module constant, whose five shipped classes
     /// include the PredLayer `pdef`/`pd_stable` registrations. Genesis
-    /// creates exactly two things: the namespace roots and the empty
-    /// docuverse. A CONSTANT — deterministic with no inputs to hold constant
+    /// creates the namespace roots, the system account seed, and an otherwise
+    /// content-empty docuverse: `M3State::genesis` registers the baptismal
+    /// roots AND — since PUB-6.65 (RES-304) — sub-node `1.1`, the system
+    /// account `1.1.0.1` seated at `SYSTEM_PRINCIPAL`, and that account's doc 1
+    /// and doc 2 born published (the daemon's head document `H` is doc 2); no
+    /// content is minted, so M4/M5/M7 stay empty. A CONSTANT — deterministic
+    /// with no inputs to hold constant
     /// — which is what discharges M2's byte-identical-genesis caller contract
     /// by construction; the World's own leading format stamp and the
     /// journal's format stamp, not a sealed configuration, name the format
@@ -50,18 +55,20 @@ impl World {
     /// — and every in-memory caller (the conformance rig, the daemon's
     /// historical reads, the whole in-memory suite) reads through whatever
     /// hints it arrives with. It needs no rebuild because every derived
-    /// structure over THIS authoritative state is empty — M3's roots register
-    /// no document, and the other three slices hold nothing — and each is
-    /// seeded empty here: M7's hints over an empty links map, M5's (whose
-    /// rebuild is the identity), the exception set, since no document exists
-    /// at Σ₀ to be a draft — the one world where an empty set and
-    /// everything-published are the same true statement (PUB-7.5's fail-open
-    /// sign has nothing to fail open over) — and the grant fold, since no
-    /// link exists to be a grant. The corollary is a maintainer's: a genesis
-    /// that seeds anything beyond M3's roots — a document, a link — must seed
-    /// that entry's derived state beside it. `Engine::check_hints` is the
-    /// standing check that what is seeded here equals a from-authoritative
-    /// rebuild.
+    /// structure over THIS authoritative state is empty — and each is seeded
+    /// empty here: M7's hints over an empty links map, M5's (whose rebuild is
+    /// the identity), the exception set, since the only documents at Σ₀ — the
+    /// system account's two — are BORN PUBLISHED and the set stores the
+    /// UNPUBLISHED side (PUB-7.5), so it has nothing to hold; the world where
+    /// an empty set and everything-published are the same true statement
+    /// (PUB-7.5's fail-open sign has nothing to fail open over) — and the grant
+    /// fold, since no link exists to be a grant. The corollary is a
+    /// maintainer's, and the system account seed is the first to exercise it: a
+    /// genesis that seeds anything beyond M3's roots — a document, a link —
+    /// must seed that entry's derived state beside it, and two born-published
+    /// documents seed NOTHING (no draft, no grant). `Engine::check_hints` is
+    /// the standing check that what is seeded here equals a from-authoritative
+    /// rebuild, and it holds over the seed.
     pub fn genesis() -> World {
         World {
             format: FormatStamp,

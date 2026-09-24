@@ -40,6 +40,7 @@ use skep_kernel::Seq;
 
 use crate::codec::op_name;
 use crate::feed::{ChangesAnswer, Feed, FeedClass, Query};
+use crate::head::HeadWriter;
 
 /// The commit stream's wait bound: a subscriber that has heard nothing for
 /// this long is answered [`StreamStep::Keepalive`], which `server.rs` frames
@@ -111,6 +112,11 @@ pub(crate) struct WritePath {
     /// (`Feed::record` takes the head as it stands after the execute, under
     /// the serialization guard, so it is this commit's own state).
     stores: EngineStores,
+    /// The PUBLISHED HEAD writer (PUB-6.65): evaluated after each committing
+    /// write records its position (in [`WritePath::commit_under`]), it writes
+    /// the head document `H` on the cadence, its own two commits riding this
+    /// same card through `commit_under` under the caller's serialization guard.
+    head: HeadWriter,
 }
 
 impl WritePath {
@@ -120,7 +126,12 @@ impl WritePath {
     /// this card's guarantee (see the module doc). Fallible only in the
     /// feed — the lock and the stream are memory — so the caller's error
     /// type need name only that.
-    pub fn open(data_dir: &Path, engine: &Engine) -> io::Result<WritePath> {
+    pub fn open(
+        data_dir: &Path,
+        engine: &Engine,
+        head_every_commits: u64,
+        head_max_interval_millis: u64,
+    ) -> io::Result<WritePath> {
         let feed = Feed::open(data_dir, engine)?;
         // Seeded AFTER the feed, from the same head, and before any febe
         // exists to commit between the two: the stream's first announced
@@ -129,7 +140,24 @@ impl WritePath {
         // sequenced statements — the order is then a fact of the code
         // rather than of the order two fields happen to be listed in.
         let commit_stream = CommitStream::at(engine.kernel().current_seq());
-        Ok(WritePath { serial: Mutex::new(()), feed, commit_stream, stores: engine.stores() })
+        // The head writer resumes by reading H's latest member off the engine's
+        // recovered root (PUB-6.65's I7 (a)); the two cadence constants are the
+        // daemon's, beside the checkpoint cadence.
+        let head = HeadWriter::open(engine.stores(), head_every_commits, head_max_interval_millis);
+        Ok(WritePath {
+            serial: Mutex::new(()),
+            feed,
+            commit_stream,
+            stores: engine.stores(),
+            head,
+        })
+    }
+
+    /// The test seam behind [`crate::Daemon::head_set_clock_millis`]: fix the
+    /// head writer's clock, so a test drives the time-bound trigger without a
+    /// `sleep`. Not a stable API.
+    pub(crate) fn head_set_clock_millis(&self, millis: u64) {
+        self.head.set_clock_millis(millis);
     }
 
     /// Take the write-serialization lock ALONE — for the auth write
@@ -186,6 +214,12 @@ impl WritePath {
         let resp = execute();
         if let Some(at) = self.record(serial, meta, &resp) {
             self.commit_stream.announce(at);
+            // THE HEAD HOOK (PUB-6.65): a committing write records its
+            // position, and the head writer evaluates its cadence here — where
+            // `record` returns the committed position. Its own two commits
+            // re-enter this method and take the writer's re-entrancy
+            // short-circuit, so they are neither counted nor re-triggering.
+            self.head.after_commit(self, serial, at);
         }
         resp
     }

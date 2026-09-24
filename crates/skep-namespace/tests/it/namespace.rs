@@ -16,10 +16,10 @@ use skep_kernel::{
     WorldState,
 };
 use skep_namespace::{
-    first_document_address, first_version_address, ghost_home_doc, ghost_position, prefix_contains,
-    CreateDocumentError, DelegateError, HasM3, M3Rec, M3State, MintError, Namespace, NodeError,
-    PrincipalId, BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS, MAX_NODE_COMPONENTS,
-    MAX_PRINCIPAL_COMPONENTS,
+    first_document_address, first_version_address, ghost_home_doc, ghost_position, head_document,
+    prefix_contains, system_account, CreateDocumentError, DelegateError, HasM3, M3Rec, M3State,
+    MintError, Namespace, NodeError, PrincipalId, BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS,
+    MAX_NODE_COMPONENTS, MAX_PRINCIPAL_COMPONENTS, SYSTEM_PRINCIPAL,
 };
 use tempfile::tempdir;
 
@@ -2215,20 +2215,23 @@ fn only_a_document_allocate_writes_the_publication_map() {
     assert!(s.is_registered_document(&a(&[1, 0, 1, 0, 1, 1])));
     assert!(!s.published(&a(&[1, 0, 1, 0, 1, 1])));
     // The enumeration is the registered documents and nothing else — the
-    // account and the element are absent — in address order.
+    // account and the element are absent — in address order: the two minted
+    // here, then genesis's two born-published seeds under the system account
+    // (PUB-6.65: `1.1.0.1.0.1` and `H`), which sort above everything under
+    // `1.0.1`.
     let (doc, version) = (a(&[1, 0, 1, 0, 1]), a(&[1, 0, 1, 0, 1, 1]));
+    let (seed_1, seed_h) = (ghost_home_doc(), head_document());
     assert_eq!(
         s.documents().collect::<Vec<_>>(),
-        vec![(&doc, true), (&version, false)]
+        vec![(&doc, true), (&version, false), (&seed_1, true), (&seed_h, true)]
     );
     // The walk is exact-size and double-ended, as a map walk is in std: the
     // count is answered without walking, and the back of the walk is the
-    // ADDRESS-greatest entry — which is also the newest here only because
-    // these two were minted in ascending address order
-    // (`the_publication_walk_is_in_address_order_not_mint_order` is the shape
-    // that tells the two apart).
-    assert_eq!(s.documents().len(), 2);
-    assert_eq!(s.documents().next_back(), Some((&version, false)));
+    // ADDRESS-greatest entry — the seeded `H`, which is not the newest (the
+    // version was minted last; `the_publication_walk_is_in_address_order_not_mint_order`
+    // is the shape that tells the two apart among minted documents).
+    assert_eq!(s.documents().len(), 4);
+    assert_eq!(s.documents().next_back(), Some((&seed_h, true)));
 }
 
 /// The walk is in ADDRESS order, which is not mint order: a version of doc 1
@@ -2237,7 +2240,9 @@ fn only_a_document_allocate_writes_the_publication_map() {
 /// ordinals — so this is the shape that tells them apart, and it is the shape
 /// the engine's dump renders (two boards with one history must render one byte
 /// string). It also fixes what `.next_back()` gives: the ADDRESS-greatest
-/// entry, which is NOT the newest document.
+/// entry, which is NOT the newest document. Genesis is never empty since
+/// PUB-6.65's seed — the system account's doc 1 and `H`, born published — so
+/// every walk here ends with those two, above everything minted under `1.0.1`.
 #[test]
 fn the_publication_walk_is_in_address_order_not_mint_order() {
     let (d1, d2, v1) = (
@@ -2245,14 +2250,19 @@ fn the_publication_walk_is_in_address_order_not_mint_order() {
         a(&[1, 0, 1, 0, 2]),
         a(&[1, 0, 1, 0, 1, 1]),
     );
-    // Empty, one, many — the walk's three sizes, in mint order d1, d2, v1.
+    let (seed_1, seed_h) = (ghost_home_doc(), head_document());
+    // The seed alone, one minted, many — the walk's three sizes, in mint order
+    // d1, d2, v1.
     let s = M3State::genesis();
-    assert_eq!(s.documents().len(), 0);
+    assert_eq!(s.documents().collect::<Vec<_>>(), vec![(&seed_1, true), (&seed_h, true)]);
     let s = s.apply_m3(&alloc(&[1, 0, 1])).apply_m3(&M3Rec::Allocate {
         addr: d1.clone(),
         published: true,
     });
-    assert_eq!(s.documents().collect::<Vec<_>>(), vec![(&d1, true)]);
+    assert_eq!(
+        s.documents().collect::<Vec<_>>(),
+        vec![(&d1, true), (&seed_1, true), (&seed_h, true)]
+    );
     let s = s
         .apply_m3(&M3Rec::Allocate {
             addr: d2.clone(),
@@ -2263,16 +2273,19 @@ fn the_publication_walk_is_in_address_order_not_mint_order() {
             published: true,
         });
 
-    // Address order — d1, then d1's version, then d2 — not the mint order
-    // d1, d2, v1.
+    // Address order — d1, then d1's version, then d2, then the seed — not the
+    // mint order (seed), d1, d2, v1.
     assert_eq!(
         s.documents().collect::<Vec<_>>(),
-        vec![(&d1, true), (&v1, true), (&d2, false)]
+        vec![(&d1, true), (&v1, true), (&d2, false), (&seed_1, true), (&seed_h, true)]
     );
-    assert_eq!(s.documents().len(), 3);
+    assert_eq!(s.documents().len(), 5);
     // So the back of the walk is the address-greatest entry and not the
-    // newest: v1 was minted last, and d2 is what `.next_back()` answers.
-    assert_eq!(s.documents().next_back(), Some((&d2, false)));
+    // newest: v1 was minted last, and the seeded `H` — older than all three —
+    // is what `.next_back()` answers; among the minted three, d2 is the
+    // greatest and v1 sorts below it.
+    assert_eq!(s.documents().next_back(), Some((&seed_h, true)));
+    assert_eq!(s.documents().nth_back(2), Some((&d2, false)));
 }
 
 /// PUB-1.9/PUB-1.68, and PUB-7.7's fold half: no public function changes a
@@ -2386,29 +2399,34 @@ fn a_record_or_checkpoint_without_the_bit_fails_to_decode() {
         "a pre-publication Allocate decoded — it must fail, never default"
     );
 
-    // The checkpointed slice, pre-publication shape: three fields — the
-    // frontier map, the node set, the principal map — at genesis, where the
-    // first is empty and a `Vec` of pairs encodes exactly as the maps do.
-    #[derive(Serialize)]
-    struct OldM3State {
-        frontiers: Vec<(u8, u8)>, // empty: an empty map's bytes name no entry type
-        nodes: Vec<Tumbler>,
-        principals: Vec<(Tumbler, PrincipalId)>,
-    }
-    let old = bincode::serialize(&OldM3State {
-        frontiers: vec![],
-        nodes: vec![t(&[1])],
-        principals: vec![(t(&[1]), BOOTSTRAP_PRINCIPAL)],
-    })
-    .expect("serialize the old shape");
+    // The checkpointed slice: the frontier map, the node set, the principal
+    // map, and then the publication map — the field the bit appended. Genesis
+    // is no longer empty (PUB-6.65's seed: sub-node 1.1, the system account
+    // 1.1.0.1, its doc 1 and `H` born published), so the three trailing fields
+    // are hand-built from the seed's public pins — a `Vec` of pairs encodes
+    // exactly as the maps do — and pinned as the slice's suffix; the frontier
+    // map's key is the crate's own type, so its bytes lead the slice as the
+    // encoding writes them, ahead of the three. The old shape is then the
+    // slice short of the appended map, and it must not decode.
     let new = bincode::serialize(&M3State::genesis()).expect("serialize genesis");
-    assert_eq!(
-        new,
-        [old.as_slice(), &0u64.to_le_bytes()[..]].concat(),
-        "the current checkpoint shape is the old bytes plus the (empty) publication map"
-    );
+    let nodes = bincode::serialize(&vec![t(&[1]), t(&[1, 1])]).expect("the node set");
+    let principals = bincode::serialize(&vec![
+        (t(&[1]), BOOTSTRAP_PRINCIPAL),
+        (t(&[1, 1, 0, 1]), SYSTEM_PRINCIPAL),
+    ])
+    .expect("the principal map");
+    let publication = bincode::serialize(&vec![
+        (t(&[1, 1, 0, 1, 0, 1]), true),
+        (t(&[1, 1, 0, 1, 0, 2]), true),
+    ])
+    .expect("the publication map");
     assert!(
-        bincode::deserialize::<M3State>(&old).is_err(),
+        new.ends_with(&[nodes.as_slice(), principals.as_slice(), publication.as_slice()].concat()),
+        "the current checkpoint shape ends with the seed's nodes, principals and publication map"
+    );
+    let old = &new[..new.len() - publication.len()];
+    assert!(
+        bincode::deserialize::<M3State>(old).is_err(),
         "a pre-publication checkpoint decoded — it must fail, never read as everything-published"
     );
 }
@@ -2471,41 +2489,36 @@ fn ghost_position_refuses_the_ordinal_below_the_region() {
 /// The non-reissue guarantee, driven through the real ops — the load-bearing
 /// clause of the ghost-tumbler ruling: dispatch is by number, so the
 /// allocator must provably never issue any of the five reserved values. The
-/// ghost region IS reachable territory (registry node admitted, operator
-/// delegated, doc-1 created, content minted), which is exactly why the floor
-/// exists; this drives the one chain that could issue a ghost tumbler from
-/// genesis to well past the region and watches every answer.
+/// ghost region IS reachable territory — the ghost home document is REAL, and
+/// since PUB-6.65 it is genesis's own: sub-node 1.1, the system account
+/// 1.1.0.1 and its doc 1 are seeded at exactly the ordinals the registry node,
+/// the operator's delegate and the ceremony's doc-1 used to land on here —
+/// which is exactly why the floor exists; this drives the one chain that could
+/// issue a ghost tumbler from genesis to well past the region and watches
+/// every answer.
 #[test]
 fn the_content_chain_of_the_ghost_home_doc_never_issues_a_ghost_tumbler() {
     let k = mem_kernel(genesis_world());
     let ns = Namespace::new(&k);
 
-    // Before any of its lineage exists, nothing exists at a ghost tumbler.
-    for ordinal in 1..=GHOST_POSITIONS {
+    // The lineage is seeded and its document is EMPTY: nothing exists at a
+    // ghost tumbler at genesis.
+    let doc1 = ghost_home_doc();
+    {
+        let snap = k.snapshot();
+        let m3 = snap.world().m3();
+        assert!(m3.is_registered_account(&system_account()), "the seed seats the system account");
         assert!(
-            !k.snapshot()
-                .world()
-                .m3()
-                .is_allocated(&ghost_position(ordinal)),
-            "ghost {ordinal} allocated at genesis"
+            m3.is_registered_document(&doc1),
+            "the seed registers the ghost home document at its ordinary ordinal"
         );
+        for ordinal in 1..=GHOST_POSITIONS {
+            assert!(
+                !m3.is_allocated(&ghost_position(ordinal)),
+                "ghost {ordinal} allocated at genesis"
+            );
+        }
     }
-
-    // The registry node 1.1, admitted under the abstract root [1]; the claim
-    // ceremony's delegate (the operator at account 1); the ceremony's doc-1.
-    ns.register_node(t(&[1, 1]))
-        .expect("the registry node 1.1 is admissible");
-    let (operator, _) = ns
-        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 1, 0, 1]), ID1)
-        .expect("the operator lands at account 1");
-    let (doc1, _) = ns
-        .create_new_document(ID1, &operator, None)
-        .expect("the ceremony's doc-1");
-    assert_eq!(
-        doc1,
-        ghost_home_doc(),
-        "the ceremony's doc-1 is the ghost home document, at its ordinary ordinal"
-    );
 
     // Drive the one namespace whose chain contains the five ghost tumblers:
     // every mint lands PAST the region, contiguously from GHOST_POSITIONS + 1.
@@ -2545,15 +2558,18 @@ fn the_content_chain_of_the_ghost_home_doc_never_issues_a_ghost_tumbler() {
     });
     assert_eq!(version, a(&[1, 1, 0, 1, 0, 1, 1]));
 
-    // A SECOND document under the operator carries no floor: its content
-    // chain starts at 1 like any other — the region is five positions of one
-    // document, not a rule about the prefix.
-    let (doc2, _) = ns.create_new_document(ID1, &operator, None).expect("doc-2");
-    assert_eq!(doc2, a(&[1, 1, 0, 1, 0, 2]));
-    let first = commit_mint(&k, M3State::content_lock_key(&doc2), |m3| {
-        m3.mint_content(&doc2)
+    // ANOTHER document under the account carries no floor: its content chain
+    // starts at 1 like any other — the region is five positions of one
+    // document, not a rule about the prefix. Doc 2 is the seeded `H`, so the
+    // account's next mint (as its own principal, the system's) is doc 3.
+    let (doc3, _) = ns
+        .create_new_document(SYSTEM_PRINCIPAL, &system_account(), None)
+        .expect("doc-3");
+    assert_eq!(doc3, a(&[1, 1, 0, 1, 0, 3]));
+    let first = commit_mint(&k, M3State::content_lock_key(&doc3), |m3| {
+        m3.mint_content(&doc3)
     });
-    assert_eq!(first, a(&[1, 1, 0, 1, 0, 2, 0, 1, 1]));
+    assert_eq!(first, a(&[1, 1, 0, 1, 0, 3, 0, 1, 1]));
 }
 
 /// The floored frontier is ordinary recoverable state: a slice that minted
@@ -2564,12 +2580,9 @@ fn the_content_chain_of_the_ghost_home_doc_never_issues_a_ghost_tumbler() {
 #[test]
 fn a_floored_frontier_survives_the_checkpoint_round_trip() {
     let k = mem_kernel(genesis_world());
-    let ns = Namespace::new(&k);
-    ns.register_node(t(&[1, 1])).expect("register 1.1");
-    let (operator, _) = ns
-        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 1, 0, 1]), ID1)
-        .expect("delegate the operator");
-    let (doc1, _) = ns.create_new_document(ID1, &operator, None).expect("doc-1");
+    // The ghost home document is genesis's (PUB-6.65's seed), born empty: the
+    // first mint on its chain is what floors the frontier.
+    let doc1 = ghost_home_doc();
     commit_mint(&k, M3State::content_lock_key(&doc1), |m3| {
         m3.mint_content(&doc1)
     });
@@ -2597,13 +2610,16 @@ fn the_fold_fail_stops_on_an_allocate_inside_the_ghost_region() {
     M3State::genesis().apply_m3(&alloc(&[1, 1, 0, 1, 0, 1, 0, 1, 1]));
 }
 
-/// Account prefix 1.1 is the node operator's by standing convention (ruling
-/// clause 2), and M3 already enforces the half a format can: the first
-/// delegate under ANY node receives account ordinal 1 — the frontier's
-/// `c₁ = N·0·1`, which `delegate`'s next-form gate demands verbatim — and
-/// once seated it is never re-delegated, because prefix freshness refuses
-/// the seat a second time. Pinned at the bootstrap node and at the registry
-/// node, the two boards the numbering ruling names.
+/// The first account under a node is its first delegate's by standing
+/// convention (ruling clause 2), and M3 already enforces the half a format
+/// can: the first delegate under ANY node receives account ordinal 1 — the
+/// frontier's `c₁ = N·0·1`, which `delegate`'s next-form gate demands
+/// verbatim — and once seated it is never re-delegated, because prefix
+/// freshness refuses the seat a second time. Pinned at the bootstrap node and
+/// at the host node 1.2 (the numbering ruling's other named node); at the
+/// registry node 1.1 the seat is genesis's own — PUB-6.65 seeds the system
+/// account at 1.1.0.1 — so there the test pins the seed holding ordinal 1 and
+/// the next arrival landing at 2.
 #[test]
 fn the_first_delegate_under_a_node_receives_account_ordinal_one() {
     let k = mem_kernel(genesis_world());
@@ -2627,35 +2643,46 @@ fn the_first_delegate_under_a_node_receives_account_ordinal_one() {
         .expect("the first delegate under [1]");
     assert_eq!(first, a(&[1, 0, 1]));
 
-    // The registry node: the operator's prefix is 1.1.0.1, and once seated
-    // it cannot be delegated to anyone else — π₀ is no longer its ω (the
-    // gate order reaches NotAuthorized before freshness), and the operator
-    // itself is refused at ancestry (a prefix is never its own strict
-    // ancestor). The next arrival lands at ordinal 2.
-    ns.register_node(t(&[1, 1])).expect("register 1.1");
-    let snap = k.snapshot();
-    assert_eq!(
-        snap.world().m3().next_account_prefix(&a(&[1, 1])),
-        Some(a(&[1, 1, 0, 1])),
-        "the claim ceremony's delegate lands the operator at account 1"
-    );
-    drop(snap);
-    let (operator, _) = ns
-        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 1, 0, 1]), ID2)
-        .expect("the operator's delegation");
-    assert_eq!(operator, a(&[1, 1, 0, 1]));
-    assert!(matches!(
-        rejected(ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 1, 0, 1]), UNKNOWN_ID)),
-        DelegateError::NotAuthorized
-    ));
-    assert!(matches!(
-        rejected(ns.delegate(ID2, t(&[1, 1, 0, 1]), UNKNOWN_ID)),
-        DelegateError::NotAncestor
-    ));
+    // The registry node 1.1 is seeded, and ordinal 1 under it is the system
+    // account's seat (PUB-6.65): the seed took the first ordinal the way a
+    // first delegate does, so the peek there already answers ordinal 2.
     let snap = k.snapshot();
     assert_eq!(
         snap.world().m3().next_account_prefix(&a(&[1, 1])),
         Some(a(&[1, 1, 0, 2])),
+        "the seeded system account holds ordinal 1 under the registry node"
+    );
+    drop(snap);
+
+    // The host node 1.2, registered here: the operator's prefix is 1.2.0.1,
+    // and once seated it cannot be delegated to anyone else — π₀ is no longer
+    // its ω (the gate order reaches NotAuthorized before freshness), and the
+    // operator itself is refused at ancestry (a prefix is never its own strict
+    // ancestor). The next arrival lands at ordinal 2.
+    ns.register_node(t(&[1, 2])).expect("register 1.2");
+    let snap = k.snapshot();
+    assert_eq!(
+        snap.world().m3().next_account_prefix(&a(&[1, 2])),
+        Some(a(&[1, 2, 0, 1])),
+        "the first delegate under the host node lands at account 1"
+    );
+    drop(snap);
+    let (operator, _) = ns
+        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 2, 0, 1]), ID2)
+        .expect("the operator's delegation");
+    assert_eq!(operator, a(&[1, 2, 0, 1]));
+    assert!(matches!(
+        rejected(ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 2, 0, 1]), UNKNOWN_ID)),
+        DelegateError::NotAuthorized
+    ));
+    assert!(matches!(
+        rejected(ns.delegate(ID2, t(&[1, 2, 0, 1]), UNKNOWN_ID)),
+        DelegateError::NotAncestor
+    ));
+    let snap = k.snapshot();
+    assert_eq!(
+        snap.world().m3().next_account_prefix(&a(&[1, 2])),
+        Some(a(&[1, 2, 0, 2])),
         "the operator's prefix is never delegated to anyone else"
     );
 }

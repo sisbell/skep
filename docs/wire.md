@@ -2583,9 +2583,12 @@ Each entry:
   REDUCED to the documents you may read (below).
 * `key` (v7) — the write's AUTH testimony: the 64-hex fingerprint of the
   enrolled key whose signed session committed it; `"bare"` for a
-  bare-session write; `null` ONLY for lost metadata (a bare entry, or a
-  record written before testimony existed) — never for a bare write, and
-  never invented. Forward rule, pinned now: on a feed served by a daemon
+  bare-session write; `"system"` for a write the board's own daemon makes
+  in-process with no session, as the system account's principal — the
+  published head document `H` and its staging draft, and no other write
+  (§The other endpoints, PUB-6.65); `null` ONLY for lost metadata (a bare
+  entry, or a record written before testimony existed) — never for a bare
+  write, and never invented. Forward rule, pinned now: on a feed served by a daemon
   that did not itself commit the entry (a future mirror), the field is
   ABSENT rather than null — a consumer written to the three values must
   not treat absence as a protocol violation.
@@ -2817,6 +2820,30 @@ loopback defaults, in every mode), `signed_origins` the SIGNED arm's
 (configured alone once claimed; the bare set before) — the two differ
 exactly on a claimed board. There is deliberately NO `mode` field:
 derive the mode from the `(claimant, local_trust)` pair (§Identity).
+
+**The published head document** — `1.1.0.1.0.2`, the version-chain document
+`H` (PUB-6.65; QUEUE item 10 piece (d)). The board's OWN daemon writes `H` as
+a NEW PUBLISHED VERSION of itself on the write path's cadence, a `skep-head`
+record: ONE JSON object whose members are, in this order and no other, `type`
+(`"skep-head"`), `format` (the journal stamp the `chain` was computed under,
+`"SKJ3"` today), `position`, `chain` (64 lowercase hex), `base` (the newest
+retained checkpoint at or below `position` — `seq`, `chain`, `body_hash` — or
+`null` before the first) and `prev` (the previous head's `position` and
+`chain`, or `null` at the first). No timestamp (two heads of one board at one
+position are byte-identical) and no `sig` — the head is UNSIGNED. A head is
+written when 64 commits that are not the writer's own have landed since the
+last head, OR the newest retained checkpoint moved, OR an hour has passed and
+the position moved — never on a peer's request, never twice for one position.
+`/health` is the LIVE pair (this instant, no address, uncopyable); `H` is the
+DURABLE record — addressable, guest-readable (`retrieve_v` on the bare `H`,
+no token, floats to the latest head; `H.k`, the k-th version member, is pinned
+forever), versioned and mirror-carried, and it survives reclamation as
+checkpoint state. It is what a peer holding an older head re-reads to check a
+newer history EXTENDS it: re-read `H.k` byte-equal and the board still stands
+by that `chain` at that `position`; different, gone, or superseded by an older
+newest head, and it does not. Each head shows on `/changes` as one public
+`publish` entry with `key: "system"`; the staging draft the record is composed
+in is a private document of the system account, masked at every class.
 
 **`GET /`** (only in builds with the `client` feature — **default-off**,
 the 2026-08-22 ruling (AUTH-4.57(e); R89, the client rule): the served

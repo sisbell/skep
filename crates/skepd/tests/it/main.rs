@@ -25,6 +25,7 @@ mod fuzz_envelope;
 mod fuzz_http;
 mod h1_residue;
 mod hazard;
+mod head;
 mod history;
 mod http_lifecycle;
 mod nullify_class;

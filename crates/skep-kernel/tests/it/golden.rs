@@ -19,7 +19,7 @@
 //! new golden fails by name). A fourth proves option (i)'s claim directly:
 //! two PROCESSES writing one history write one checkpoint byte string.
 //!
-//! REGENERATION — at a format bump, and never otherwise:
+//! REGENERATION — at a format bump or a genesis change, and never otherwise:
 //!
 //! ```text
 //! SKEP_GOLDEN_WRITE=1 cargo test -p skep-kernel --test it golden::the_writer_pin

@@ -1043,10 +1043,19 @@ fn check_subtree_reads(shadow: &Shadow, state: &RunState) {
     }
 }
 
-/// Capture the current committed position: the live dump and every
-/// non-empty document's live read body (with its frame, for /op-at replay).
+/// Capture the board's committed position: the live dump and every non-empty
+/// document's live read body (with its frame, for /op-at replay).
+///
+/// The position is READ off `/health` here, never taken from the last ack: a
+/// PUBLISHED HEAD (PUB-6.65) fires inside a committing op's request, after
+/// that op's own commit and before its ack, so the board's head can stand
+/// above the acked position — and the live dump below is of the board's head,
+/// which `/dump?at` must reproduce at THAT position. Nothing commits between
+/// the read and the dump (this test is the board's only writer, and a head
+/// fires only inside a commit), so the dump and the reads are of one moment.
 fn capture_position(shadow: &Shadow, state: &mut RunState) {
-    if state.captures.last().is_some_and(|c| c.at == state.head) {
+    let at = health_pos(state.port);
+    if state.captures.last().is_some_and(|c| c.at == at) {
         return;
     }
     let dump = live_dump(state.port);
@@ -1065,7 +1074,11 @@ fn capture_position(shadow: &Shadow, state: &mut RunState) {
         assert_eq!(st, 200, "the captured position's read failed");
         reads.push((frame, d.owner, body));
     }
-    state.captures.push(Capture { at: state.head, dump, reads });
+    state.captures.push(Capture { at, dump, reads });
+    // What this run knows as the head is now the board's own, a head the last
+    // op triggered included — the position the restart oracle then expects
+    // the recovered board to answer.
+    state.head = at;
 }
 
 /// Oracles 1 + 2: every captured position must answer byte-identically from

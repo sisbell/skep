@@ -61,6 +61,7 @@
 mod auth;
 mod codec;
 mod feed;
+mod head;
 mod history;
 mod notice;
 mod server;

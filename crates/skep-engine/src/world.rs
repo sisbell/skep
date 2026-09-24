@@ -690,10 +690,13 @@ mod tests {
     /// the stamp. The premise is pinned first, so the hand-built shapes are
     /// the old ones and not a strawman: the current encoding IS the stamp
     /// followed by the four slices, and M3's slice at genesis IS its old
-    /// bytes followed by the empty publication map's eight-byte length (M3's
-    /// own test pins that half; this one rides it).
+    /// bytes followed by the publication map — since PUB-6.65's seed, the
+    /// system account's two born-published documents behind an eight-byte
+    /// length (M3's own test pins that half; this one rides it).
     #[test]
     fn a_checkpoint_without_the_bit_or_the_stamp_fails_to_decode() {
+        use skep_namespace::{ghost_home_doc, head_document};
+
         let world = World::genesis();
         let current = bincode::serialize(&world).expect("a world serializes");
         let stamp = bincode::serialize(&FormatStamp).expect("a u64 serializes");
@@ -714,15 +717,20 @@ mod tests {
         );
 
         // The pre-bit layout: additionally without M3's publication map, which
-        // at genesis is empty and so is the eight zero bytes that end M3's
-        // slice.
+        // at genesis holds the seed's two born-published documents and nothing
+        // else — hand-built from the seed's public pins (a `Vec` of pairs
+        // encodes exactly as the map does) and pinned as the bytes that end
+        // M3's slice.
         let namespace_bytes = bincode::serialize(&world.namespace).expect("M3 serializes");
+        let publication_bytes =
+            bincode::serialize(&vec![(ghost_home_doc(), true), (head_document(), true)])
+                .expect("the map's entries serialize");
         assert!(
-            namespace_bytes.ends_with(&0u64.to_le_bytes()),
-            "genesis's publication map is empty: an eight-byte zero length ends M3's bytes"
+            namespace_bytes.ends_with(&publication_bytes),
+            "genesis's publication map is the seed's two documents: their entries end M3's bytes"
         );
         let mut pre_bit = pre_stamp.clone();
-        pre_bit.drain(namespace_bytes.len() - 8..namespace_bytes.len());
+        pre_bit.drain(namespace_bytes.len() - publication_bytes.len()..namespace_bytes.len());
         assert!(
             bincode::deserialize::<World>(&pre_bit).is_err(),
             "a pre-publication checkpoint decoded — it must fail, never read as everything-published"

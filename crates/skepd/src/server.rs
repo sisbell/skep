@@ -189,6 +189,22 @@ const CHECKPOINT_EVERY_COMMITS: u64 = 1024;
 /// [`CHECKPOINT_EVERY_COMMITS`].
 const RETAINED_CHECKPOINTS: usize = 2;
 
+/// The PUBLISHED HEAD cadence (PUB-6.65, RES-304), beside the checkpoint's and
+/// for the same reason it lives here: the daemon writes the head document `H`
+/// when N commits that are not its own head writes have landed since the last
+/// head. N = 64 — at that count the unheld tail a rewrite can hide in is ≤ 64
+/// commits and the heads are ~1/64 of the commits, ~19 bytes per user commit
+/// amortized (the investigation's §3.3 table). No timer thread exists (see
+/// [`CHECKPOINT_EVERY_COMMITS`]); the count is evaluated on the write path.
+const HEAD_EVERY_COMMITS: u64 = 64;
+
+/// The PUBLISHED HEAD's time bound (PUB-6.65): a head is also due when this
+/// long has passed since the last head AND the position has moved, so a slow
+/// board's head does not go stale beyond an hour — evaluated LAZILY on the next
+/// commit, never by a thread, and never writing a duplicate for a position that
+/// has not moved.
+const HEAD_MAX_INTERVAL_MILLIS: u64 = 3_600_000; // one hour
+
 /// Concurrent CLASS SCANS admitted at `/op` at once (wire v7.9; PUB-8.36,
 /// PUB-8.37): the link-discovery reads [`is_class_scan`] enumerates, each of
 /// which walks the LINK STORE END TO END — M7's `stab` is "a brute scan of
@@ -1075,7 +1091,8 @@ impl Daemon {
             checkpoint: CheckpointPolicy::EveryN(CHECKPOINT_EVERY_COMMITS),
         };
         let engine = Engine::open(cfg).map_err(DaemonError::Engine)?;
-        let writes = WritePath::open(data_dir, &engine).map_err(DaemonError::Sidecar)?;
+        let writes = WritePath::open(data_dir, &engine, HEAD_EVERY_COMMITS, HEAD_MAX_INTERVAL_MILLIS)
+            .map_err(DaemonError::Sidecar)?;
         // THE READ PREDICATE (PUB-1.31; PUB-6.39's one-per-request shape;
         // PUB round 2, lane 3.3). The live front door is given NO consult:
         // M10 answers `World::readable` — published ∨ subtree ∨ grant, with
@@ -1801,6 +1818,27 @@ impl Daemon {
     #[doc(hidden)]
     pub fn try_hold_scan_permit(&self) -> Option<Permit<'_>> {
         self.scans.try_hold()
+    }
+
+    /// TEST HOOK (the same standing as the two above: `#[doc(hidden)]`, not a
+    /// stable API): fix the PUBLISHED HEAD writer's clock at `millis`, so a
+    /// test drives the head's time bound (PUB-6.65 trigger (c)) through a seam
+    /// rather than a `sleep`. The writer's real clock is monotonic wall-time
+    /// since open; a fixed reading here holds until changed.
+    #[doc(hidden)]
+    pub fn head_set_clock_millis(&self, millis: u64) {
+        self.writes.head_set_clock_millis(millis);
+    }
+
+    /// TEST HOOK (the same standing): take a checkpoint now, so a test drives
+    /// the head's checkpoint-moved trigger (PUB-6.65 trigger (b)) without
+    /// committing a whole `CHECKPOINT_EVERY_COMMITS` window. The next
+    /// committing write's `after_commit` observes the moved checkpoint seq and
+    /// writes a head. Logged-and-dropped like the auto-trigger — a checkpoint
+    /// error never fails the caller.
+    #[doc(hidden)]
+    pub fn head_checkpoint_now(&self) {
+        let _ = self.engine.kernel().checkpoint();
     }
 
     /// `POST /op-at` — answer one READ frame as of a committed position:

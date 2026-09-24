@@ -35,6 +35,23 @@ pub struct PrincipalId(pub u64);
 /// any later principal from re-claiming id 0 (§7).
 pub const BOOTSTRAP_PRINCIPAL: PrincipalId = PrincipalId(0);
 
+/// The SYSTEM ACCOUNT's fixed principal (PUB-6.65, RES-304): the id genesis
+/// seats at [`system_account`] `1.1.0.1`, the commons/system account the
+/// board's own daemon writes the published head document into. Never `0` (that
+/// is [`BOOTSTRAP_PRINCIPAL`]) and a reserved sentinel no client can seat: the
+/// account holds no key and can never enrol one (AUTH-6.19's cell — a keyless
+/// account answers empty lists), and [`Namespace::delegate`]'s id-freshness
+/// gate refuses this id `DuplicateId` because genesis has already registered it
+/// (§6/§7). So no principal but the one genesis seats ever bears it, and it can
+/// act only in-process, never over a session.
+///
+/// The VALUE is a conspicuous reserved sentinel — `9 × 10^15`, well below the
+/// wire's `2^53 − 1` exact-integer cap (AUTH-5.20) yet far above any ordinary
+/// delegation — so a client's attempt to re-seat it PARSES and reaches the
+/// freshness gate, refused `duplicate_id` (the "not fresh" refusal PUB-6.65
+/// names), rather than being turned away earlier as an unrepresentable number.
+pub const SYSTEM_PRINCIPAL: PrincipalId = PrincipalId(9_000_000_000_000_000);
+
 /// A namespace — ASN-0040's `(p, d)`: chain anchor `parent` + generator
 /// [`Generator`]. THE frontier-map key, and (through the injective
 /// [`ns_lock_key`] encoding) the lock key — one key type, one code path, so
@@ -590,6 +607,37 @@ pub fn ghost_home_doc() -> Address {
     validate(t).expect("the ghost home document 1.1.0.1.0.1 is T4-valid by construction")
 }
 
+/// The SYSTEM SUB-NODE `1.1` (PUB-6.65, RES-304) — the node the system
+/// account is delegated under, registered by [`M3State::genesis`]. The seed
+/// lives under THIS sub-node's allocator, never under node `[1]`'s, so node
+/// `[1]`'s own account frontier — the input the claim floor reads
+/// (`next_account_prefix([1])`, PUB-6.52) — stays exactly what it was, and the
+/// honest claim admits as before.
+pub fn system_node() -> Address {
+    let t = Tumbler::new([1u32, 1].into_iter().map(Nat::from)).expect("a two-component sequence is nonempty");
+    validate(t).expect("the system node 1.1 is T4-valid by construction")
+}
+
+/// The SYSTEM ACCOUNT `1.1.0.1` (PUB-6.65, RES-304) — the commons account of
+/// the design, owned by [`SYSTEM_PRINCIPAL`] and seeded by [`M3State::genesis`]
+/// with its doc 1 (the commons registry's future home, which IS
+/// [`ghost_home_doc`]) and its doc 2 (the daemon's head document `H`), both
+/// born published. Its account chain sits under [`system_node`].
+pub fn system_account() -> Address {
+    let t = Tumbler::new([1u32, 1, 0, 1].into_iter().map(Nat::from)).expect("a four-component sequence is nonempty");
+    validate(t).expect("the system account 1.1.0.1 is T4-valid by construction")
+}
+
+/// The head document `H` = `1.1.0.1.0.2` (PUB-6.65, RES-304) — doc 2 of
+/// [`system_account`], the NEW-VERSION-PER-HEAD document the daemon writes.
+/// Seeded born published by [`M3State::genesis`]. The engine pins the same
+/// address beside the commons pins (`skep_engine::types`); the two must agree,
+/// and the head writer's publish would refuse were they to drift.
+pub fn head_document() -> Address {
+    let t = Tumbler::new([1u32, 1, 0, 1, 0, 2].into_iter().map(Nat::from)).expect("a six-component sequence is nonempty");
+    validate(t).expect("the head document 1.1.0.1.0.2 is T4-valid by construction")
+}
+
 /// Ghost tumbler `ordinal` of the region — M1's element address of
 /// [`ghost_home_doc`] at [`content_subspace`], at that ordinal:
 /// `[1,1,0,1,0,1,0,1,ordinal]`. The one mint-shaped spelling of the five
@@ -891,23 +939,64 @@ pub fn prefix_contains(prefix: &Address, a: &Address) -> bool {
 // ---------------------------------------------------------------------------
 
 impl M3State {
-    /// Σ₀ + O14: `nodes = {[1]}`, `frontiers = {}`,
-    /// `Π = { [1] → BOOTSTRAP_PRINCIPAL }`. `pub` — the engine seeds
-    /// `Kernel::open(cfg, genesis-World)` with it; "load empty journal" and
-    /// "fresh genesis" are the same code path (§7). Deterministic, per M2's
-    /// byte-identical-genesis caller contract — and byte-identical ACROSS
-    /// PROCESSES because every field is ordered (since option (i) the
-    /// frontier map too, so the contract no longer rests on this value
-    /// holding no frontier entry).
+    /// Σ₀ + O14, plus the SYSTEM ACCOUNT seed (PUB-6.65, RES-304): `nodes =
+    /// {[1], [1.1]}`, `Π = { [1] → BOOTSTRAP_PRINCIPAL, [1.1.0.1] →
+    /// SYSTEM_PRINCIPAL }`, the account chain `([1.1], 2)` at 1 and the
+    /// document chain `([1.1.0.1], 2)` at 2, and both documents born published.
+    /// `pub` — the engine seeds `Kernel::open(cfg, genesis-World)` with it;
+    /// "load empty journal" and "fresh genesis" are the same code path (§7).
+    /// Deterministic, per M2's byte-identical-genesis caller contract — and
+    /// byte-identical ACROSS PROCESSES because every field is ordered (since
+    /// option (i) the frontier map too).
+    ///
+    /// WHAT THE SEED CREATES, and what it deliberately does not. It registers
+    /// SUB-NODE [`system_node`] `1.1`, seats [`SYSTEM_PRINCIPAL`] at
+    /// [`system_account`] `1.1.0.1` under it, and registers that account's doc
+    /// 1 ([`ghost_home_doc`], the commons registry's future home) and doc 2
+    /// ([`head_document`] `H`), both PUBLISHED. It touches node `[1]`'s own
+    /// account allocator NOWHERE — the seeded account chain is `([1.1], 2)`, not
+    /// `([1], 2)` — so `next_account_prefix([1])` still answers `1.0.1` and the
+    /// claim floor (PUB-6.35, `policy::claim_residue_refusal`) stays zero. It
+    /// mints no CONTENT: both documents are born empty, so the ghost content
+    /// namespace's frontier is untouched and its floor ([`ghost_floor`],
+    /// [`GHOST_POSITIONS`]) stands — nothing exists at a ghost tumbler. Two
+    /// PUBLISHED documents add nothing to the exception set (PUB-7.5 stores the
+    /// UNPUBLISHED side) and no link exists, so every derived structure over
+    /// this state is still empty and `Engine::check_hints` holds by
+    /// construction — the corollary the engine's `genesis.rs` states, undisturbed.
     pub fn genesis() -> M3State {
         let root = bootstrap_root();
+        let node = system_node(); // 1.1
+        let account = system_account(); // 1.1.0.1
+        let doc1 = ghost_home_doc(); // 1.1.0.1.0.1 — the commons registry's home
+        let doc2 = head_document(); // 1.1.0.1.0.2 — the head document H
+
+        // The two frontiers the seed advances, each the key its own mint would
+        // have read (§1/§A): the account chain (1.1, 2) to c₁ = 1.1.0.1, and
+        // the document chain (1.1.0.1, 2) to c₂ = 1.1.0.1.0.2 (doc 1 then doc 2,
+        // M3's document chain being sequential).
+        let mut frontiers = im::OrdMap::new();
+        frontiers.insert(account_ns(&node), Nat::from(1u32));
+        frontiers.insert(document_ns(&account), Nat::from(2u32));
+
+        let mut nodes = im::OrdSet::unit(root.clone());
+        nodes.insert(node);
+
+        let mut principals = im::OrdMap::unit(root.clone(), BOOTSTRAP_PRINCIPAL);
+        principals.insert(account, SYSTEM_PRINCIPAL);
+
+        // The two documents' RESOLVED publication bits, exactly as their
+        // minting Allocates would have journaled them (PUB-7.10): born
+        // published (PUB-1.25's genesis/commons-seeded row).
+        let mut publication = im::OrdMap::new();
+        publication.insert(doc1, true);
+        publication.insert(doc2, true);
+
         M3State {
-            frontiers: im::OrdMap::new(),
-            nodes: im::OrdSet::unit(root.clone()),
-            principals: im::OrdMap::unit(root.clone(), BOOTSTRAP_PRINCIPAL),
-            // No document exists at Σ₀, so no document has a publication
-            // state: the empty docuverse is empty on this axis too.
-            publication: im::OrdMap::new(),
+            frontiers,
+            nodes,
+            principals,
+            publication,
         }
     }
 

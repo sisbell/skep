@@ -167,6 +167,29 @@ pub fn t_steward_classification() -> &'static Address {
     &ADDR
 }
 
+/// The HEAD DOCUMENT `H` — `1.1.0.1.0.2` (PUB-6.65, RES-304; owner-ruled
+/// 2026-09-23). Doc 2 of the system account
+/// ([`skep_namespace::system_account`]), which `M3State::genesis` seeds born
+/// published; the board's own daemon writes it as a NEW PUBLISHED VERSION per
+/// head on the write path's cadence. NOT a commons TYPE — it is a DOCUMENT,
+/// not a subspace-3 element — so it is built here rather than through
+/// [`commons_type`], takes no commons row, and joins none of the prefix-free
+/// guarantees the type ledger keeps; it is pinned BESIDE that ledger because it
+/// is the one other address genesis reserves and the head writer keys on.
+/// [`skep_namespace::head_document`] builds the same address for the genesis
+/// seed — the two are held equal by the test below, and the head writer's
+/// publish would refuse were they to drift.
+pub fn head_document() -> &'static Address {
+    static ADDR: LazyLock<Address> = LazyLock::new(|| {
+        validate(
+            Tumbler::new([1u32, 1, 0, 1, 0, 2].into_iter().map(Nat::from))
+                .expect("the head document components are nonempty"),
+        )
+        .expect("the head document 1.1.0.1.0.2 is T4-valid by construction")
+    });
+    &ADDR
+}
+
 #[cfg(test)]
 mod tests {
     use skep_address::is_prefix;
@@ -261,5 +284,22 @@ mod tests {
                 read().tumbler()
             );
         }
+    }
+
+    /// The HEAD DOCUMENT pin (PUB-6.65): `1.1.0.1.0.2`, held like the commons
+    /// pins, and — the load-bearing half — EQUAL to the address
+    /// `skep_namespace` builds for the genesis seed. A drift between the two
+    /// would seed one document and have the daemon write another. It is NOT a
+    /// commons type, so it is deliberately absent from [`PINS`] and its
+    /// prefix-free guarantees; this pins its identity on its own.
+    #[test]
+    fn the_head_document_is_1_1_0_1_0_2_and_agrees_with_the_seed() {
+        assert_eq!(head_document().to_string(), "1.1.0.1.0.2");
+        assert_eq!(
+            head_document(),
+            &skep_namespace::head_document(),
+            "the engine's head-document pin and M3's genesis seed must be one address"
+        );
+        assert!(std::ptr::eq(head_document(), head_document()), "held, not rebuilt per read");
     }
 }

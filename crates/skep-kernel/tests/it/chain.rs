@@ -15,31 +15,39 @@
 //!
 //! * CAUGHT — `OpenError::Corruption` naming a CHAIN BREAK at the `last_seq`
 //!   of the first committed transaction whose marker's chain is not the
-//!   recomputation over its predecessor's, the cause travelling, every file
-//!   byte for byte as found (a halt cuts nothing), and the refusal
-//!   repeating;
+//!   recomputation over its predecessor's — or, since the chain's open
+//!   items (2026-09-23), the BASE'S OWN LINK at the base's seq (a checkpoint
+//!   header disagreeing with the marker closing it, seen at the head always)
+//!   or the EDITED TRANSACTION at its own seq (an intact transaction its
+//!   intact marker does not close, a shape no writer leaves) — the cause
+//!   travelling, every file byte for byte as found (a halt cuts nothing),
+//!   and the refusal repeating;
 //! * REFUSED — the checkpoint's own refusal (`body_hash`), the fallback
 //!   chain then reaching genesis, which re-verifies the journal;
 //! * NOT CAUGHT BY DESIGN — a history the chain alone accepts, which the
-//!   ruling assigns to piece 2, the PUBLISHED HEAD: a clean tail cut; a
-//!   consistent re-chain, from genesis or from any point, the checkpoint's
-//!   head rewritten with it; a checkpoint body forged with its hash
-//!   re-fixed; a checkpoint AT the head with its chain head edited; and —
-//!   pending the owner's reading of "any rewrite", case 12 — damage below a
-//!   standing base. Each is asserted as such, and named in `Kernel::open`'s
-//!   damage model.
+//!   ruling assigns to piece 2, the PUBLISHED HEAD, whose saved pairs are
+//!   checked against the board's RECOMPUTATION through `Kernel::chain_at`:
+//!   a clean tail cut; a consistent re-chain, from genesis or from any
+//!   point, the checkpoint's head rewritten with it; a checkpoint body
+//!   forged with its hash re-fixed; the base's own link edited consistently
+//!   on both sides and re-chained above (case 14), or its marker's segment
+//!   skipped — the boundary coincidence, case 15; and — the owner's reading
+//!   of "any rewrite", case 12 — damage below a standing base, unseen at
+//!   open and seen by any bounded read below the base. Each is asserted as
+//!   such, and named in `Kernel::open`'s damage model.
 //!
 //! Two bases are exercised. With the golden's checkpoint REMOVED the open's
 //! base is genesis and every one of the eighteen links is verified, which is
 //! where the mid-history cases live; with it STANDING (`checkpoint.37`) the
-//! open verifies the two transactions above it, and a `world_at` below it
-//! verifies from genesis — which is what cases 9 and 12 turn on.
+//! open verifies the base's own link — the marker closing 37 is in the one
+//! segment — and the two transactions above it, and a `world_at` below it
+//! verifies from genesis — which is what cases 9, 12 and 14 turn on.
 //!
 //! A case the code does not meet at the outcome the ruling requires is a
 //! STOP by name, never an assertion loosened to what the code does. None
-//! arose; where the coordinate named differs from the brief's expectation
-//! (case 2: one transaction later, the marker's own validation speaking
-//! before the chain) the test says why and the report carries it.
+//! arose. Case 2 once named one transaction LATER — the marker's own
+//! validation speaking before the chain — and since the open items it names
+//! the edited transaction itself; the test says why.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -194,9 +202,26 @@ fn segment_count(dir: &Path) -> usize {
         .count()
 }
 
+/// The three accounts a halt travels with, by the phrase each opens on — a
+/// link that failed its recomputation, the base's own link (a header
+/// disagreeing with the marker closing it), and the edited transaction (an
+/// intact transaction its intact marker does not close). A case names the
+/// one it expects, so a halt at the right coordinate for the wrong reason
+/// is a finding.
+const LINK_BREAK: &str = "chain break: the commit marker";
+const BASE_LINK: &str = "chain break at the base";
+const EDITED_TXN: &str = "chain break at an edited transaction";
+
 /// CAUGHT: the open halts with a chain break at `at` — the cause travels and
 /// names the break, nothing is cut or written, and the refusal repeats.
 fn open_halts_with_chain_break(dir: &Path, at: u64, ctx: &str) {
+    open_halts_naming(dir, at, LINK_BREAK, ctx);
+}
+
+/// CAUGHT, by the verdict `phrase` names: the open halts with `Corruption`
+/// at `at`, the account opening on `phrase` and travelling as a source,
+/// nothing cut or written, and the refusal repeating.
+fn open_halts_naming(dir: &Path, at: u64, phrase: &str, ctx: &str) {
     let before = files_of(dir);
     let err = match timed_open_result(dir, ctx) {
         Ok(_) => panic!("FINDING ({ctx}): the open SUCCEEDED over a rewrite the chain must catch"),
@@ -214,8 +239,8 @@ fn open_halts_with_chain_break(dir: &Path, at: u64, ctx: &str) {
         other => panic!("FINDING ({ctx}): expected a Corruption halt naming {at}, got {other:?}"),
     }
     assert!(
-        err.to_string().contains("chain break"),
-        "FINDING ({ctx}): the account names the break: {err}"
+        err.to_string().contains(phrase),
+        "FINDING ({ctx}): the account names the verdict ({phrase:?}): {err}"
     );
     assert!(
         std::error::Error::source(&err).is_some(),
@@ -271,21 +296,45 @@ fn every_boundary_answers(engine: &Engine, golden: &Golden, ctx: &str) {
 
 /// A bounded read at `at` halts with a chain break at `break_at`.
 fn history_halts_with_chain_break(engine: &Engine, at: u64, break_at: u64, ctx: &str) {
-    match engine.world_at(Seq(at)) {
-        Err(HistoryError::Corruption { at: found, cause }) => {
-            assert_eq!(
-                found,
-                Seq(break_at),
-                "FINDING ({ctx}): world_at({at}) names the wrong coordinate"
-            );
-            let cause = cause.unwrap_or_else(|| {
-                panic!("FINDING ({ctx}): a chain break travels with its account")
-            });
-            assert!(cause.to_string().contains("chain break"), "FINDING ({ctx}): {cause}");
+    history_halts_naming(engine, at, break_at, LINK_BREAK, ctx);
+}
+
+/// A bounded read at `at` — the world AND the chain, which run the same
+/// verification — halts with `Corruption` at `break_at`, the account
+/// opening on `phrase`.
+fn history_halts_naming(engine: &Engine, at: u64, break_at: u64, phrase: &str, ctx: &str) {
+    let world = engine.world_at(Seq(at)).map(|_| ());
+    let chain = engine.kernel().chain_at(Seq(at)).map(|_| ());
+    for (what, outcome) in [("world_at", world), ("chain_at", chain)] {
+        match outcome {
+            Err(HistoryError::Corruption { at: found, cause }) => {
+                assert_eq!(
+                    found,
+                    Seq(break_at),
+                    "FINDING ({ctx}): {what}({at}) names the wrong coordinate"
+                );
+                let cause = cause.unwrap_or_else(|| {
+                    panic!("FINDING ({ctx}): a chain break travels with its account")
+                });
+                assert!(cause.to_string().contains(phrase), "FINDING ({ctx}): {what}: {cause}");
+            }
+            Err(other) => {
+                panic!("FINDING ({ctx}): {what}({at}) refused for another reason: {other}")
+            }
+            Ok(()) => {
+                panic!("FINDING ({ctx}): {what}({at}) ANSWERED over a rewrite the chain must catch")
+            }
         }
-        Err(other) => panic!("FINDING ({ctx}): world_at({at}) refused for another reason: {other}"),
-        Ok(_) => panic!("FINDING ({ctx}): world_at({at}) ANSWERED over a rewrite the chain must catch"),
     }
+}
+
+/// `Kernel::chain_at(at)` answers `expected`.
+fn chain_at_is(engine: &Engine, at: u64, expected: &[u8; 32], ctx: &str) {
+    let found = engine
+        .kernel()
+        .chain_at(Seq(at))
+        .unwrap_or_else(|e| panic!("FINDING ({ctx}): chain_at({at}) refused: {e}"));
+    assert_eq!(&found, expected, "FINDING ({ctx}): chain_at({at}) is not the chain at {at}");
 }
 
 /// One link of the chain, recomputed exactly as the writer states it —
@@ -421,10 +470,11 @@ fn forge_and_rechain(
 ///
 /// The weaker rewrite that re-fixes the frame CRC alone leaves the marker's
 /// `records_checksum` stale, and the marker's own validation — older than
-/// the chain — then refuses to close the group: the transaction UN-COMMITS,
-/// and the chain names the NEXT committed transaction, the first whose link
-/// fails, since what it follows in the file is no longer what it was chained
-/// from. Caught either way; the coordinate differs.
+/// the chain — refuses to close the group: the transaction UN-COMMITS. It is
+/// then an intact transaction its intact marker does not close, a shape no
+/// writer leaves, and the open names THAT transaction (the chain's open
+/// items, case 2's verdict) rather than the next committed one, whose link
+/// also fails. Caught either way; the account differs.
 #[test]
 fn c01_a_record_payload_rewritten_with_every_crc_refixed_breaks_at_that_transaction() {
     let golden = Golden::build();
@@ -443,11 +493,12 @@ fn c01_a_record_payload_rewritten_with_every_crc_refixed_breaks_at_that_transact
     rewrite_frame(&seg_file(&case, 1), golden.txn(OP).records[0].start, |payload| {
         payload[RECORD_BYTES_AT + 40] ^= 0xFF
     });
-    open_halts_with_chain_break(
+    open_halts_naming(
         &case,
-        golden.seq(OP + 1),
+        golden.seq(OP),
+        EDITED_TXN,
         "case 1, the weaker rewrite: the frame CRC re-fixed, records_checksum stale — the \
-         transaction un-commits and the next is the first link that fails",
+         transaction un-commits, and is named as the intact transaction its marker does not close",
     );
 }
 
@@ -455,17 +506,24 @@ fn c01_a_record_payload_rewritten_with_every_crc_refixed_breaks_at_that_transact
 /// are chain inputs — but they are the marker's OWN validation first, older
 /// than the chain: a marker whose checksum or `last_seq` does not close its
 /// group commits nothing, so the edited transaction UN-COMMITS before the
-/// chain sees it, and the chain names the NEXT committed transaction — the
-/// first whose link fails, chaining as it does from a predecessor the scan
-/// never committed. CAUGHT, one transaction after the edit: the brief's "at
-/// that transaction" holds for these two fields only when the records are
-/// rewritten to match them, which is case 1.
+/// chain sees it. What is left is an INTACT transaction — every record
+/// frame and the marker passing their CRCs — that its marker does not
+/// close, and no writer of this format leaves that shape: the writer
+/// streams the checksum over the frames it writes and sets `last_seq` to
+/// the last record's, a crash truncates or loses frames. So the scan
+/// records the edited transaction by the GROUP's own last seq (in the
+/// `last_seq` arm the marker's is the forged field) and the open is CAUGHT
+/// AT THAT TRANSACTION with the edited-transaction account — before the
+/// next committed transaction's link, which fails too, gets to name the
+/// coordinate one later, as it did before the chain's open items.
 ///
-/// On the LAST transaction the same edit is a tail cut in disguise: the
-/// un-committed marker is the torn tail, recovery cuts it and opens one
-/// transaction short — case 10's limit, the published head's to see.
+/// On the LAST transaction the same edit was once a tail cut in disguise —
+/// the un-committed marker read as the torn tail, recovery cut it and
+/// opened one transaction short. Now it halts the same way, nothing cut:
+/// the halt precedes the tail truncation, and the segment keeps its
+/// length.
 #[test]
-fn c02_a_markers_checksum_or_last_seq_edited_uncommits_it_and_breaks_at_the_next() {
+fn c02_a_markers_checksum_or_last_seq_edited_is_caught_at_that_transaction_uncut() {
     let golden = Golden::build();
     const OP: usize = 9;
     for (field, at) in [("records_checksum", MARKER_CHECKSUM_AT), ("last_seq", MARKER_LAST_SEQ_AT)] {
@@ -473,13 +531,13 @@ fn c02_a_markers_checksum_or_last_seq_edited_uncommits_it_and_breaks_at_the_next
         rewrite_frame(&seg_file(&case, 1), golden.txn(OP).marker.start, |payload| {
             payload[at] ^= 0xFF
         });
-        open_halts_with_chain_break(
+        open_halts_naming(
             &case,
-            golden.seq(OP + 1),
+            golden.seq(OP),
+            EDITED_TXN,
             &format!(
                 "case 2: the marker's {field} edited, its CRC re-fixed — the marker no longer \
-                 closes its group, the transaction un-commits, and the next is the first link \
-                 that fails"
+                 closes its intact group, and the transaction is named as the edited one"
             ),
         );
     }
@@ -489,17 +547,16 @@ fn c02_a_markers_checksum_or_last_seq_edited_uncommits_it_and_breaks_at_the_next
     rewrite_frame(&seg, golden.txn(GOLDEN_OPS).marker.start, |payload| {
         payload[MARKER_CHECKSUM_AT] ^= 0xFF
     });
-    let engine = open_recovers(
+    open_halts_naming(
         &case,
-        &golden,
-        golden.seq(GOLDEN_OPS - 1),
-        "case 2 on the last transaction: a tail cut in disguise",
+        golden.seq(GOLDEN_OPS),
+        EDITED_TXN,
+        "case 2 on the last transaction: once a tail cut in disguise, now the edited transaction",
     );
-    drop(engine);
     assert_eq!(
         fs::metadata(&seg).expect("segment").len(),
-        golden.txn(GOLDEN_OPS - 1).bytes.end as u64,
-        "the un-committed last transaction was the torn tail, and recovery cut it"
+        golden.fixture.full_len,
+        "the halt precedes the tail truncation: the un-committed last transaction was not cut"
     );
 }
 
@@ -817,44 +874,45 @@ fn c08_a_checkpoint_body_rewritten_is_refused_by_its_hash_and_a_body_forged_with
 /// CASE 9 — A CHECKPOINT'S `chain_head` EDITED, its CRC and `body_hash` left
 /// consistent — which they are: nothing in the `SKC3` header covers that
 /// field. So the code does not REFUSE — the base LOADS carrying the edited
-/// value — and the open is CAUGHT at the first transaction above the base,
-/// whose link fails against it.
+/// value — and the open is CAUGHT at the BASE'S OWN COORDINATE: the marker
+/// closing the base's seq is in the scanned segment (the golden's one
+/// segment; at the head, the active segment always), and the chain it
+/// carries is not the header's — two stored values disagreeing, nothing
+/// recomputed, named with the base's own account (the chain's open items,
+/// item 4). Where that marker is NOT scanned — its closed segment ending
+/// exactly at the base's seq, case 15 — the first transaction above the
+/// base is the one whose link fails against the header, as it was before.
 ///
-/// NOT CAUGHT BY DESIGN — the checkpoint AT THE HEAD: nothing above the
-/// base, no link to fail. The open succeeds, the root carries the edited
-/// value, `chain_head()` reports it, and the next commit chains from it: a
-/// fork the chain alone accepts, and the published head's to see (a peer
-/// holding the head as it was finds the new history does not extend it).
+/// The checkpoint AT THE HEAD was the fork the chain alone accepted:
+/// nothing above the base, no link to fail, the root carrying the edited
+/// value and the next commit chaining from it — which since `0f0115b` the
+/// head document would have PUBLISHED as the board's own. Now CAUGHT the
+/// same way: the head's marker is in the active segment, always scanned,
+/// and disagrees with the header. Nothing is cut, and the files stay as
+/// found.
 #[test]
-fn c09_a_checkpoints_chain_head_edited_breaks_at_the_first_transaction_above_it() {
+fn c09_a_checkpoints_chain_head_edited_breaks_at_the_bases_own_coordinate() {
     let golden = Golden::build();
 
     let case = golden.case("c09");
     flip_byte(&ckpt_file(&case, golden.checkpoint_seq()), (CKPT_CHAIN_HEAD_AT + 3) as u64);
-    open_halts_with_chain_break(
+    open_halts_naming(
         &case,
-        golden.seq(CHECKPOINT_AFTER_OP + 1),
-        "case 9: the checkpoint's chain_head edited",
+        golden.checkpoint_seq(),
+        BASE_LINK,
+        "case 9: the checkpoint's chain_head edited, mid-history, its marker in the scanned segment",
     );
 
     let at_head = Fixture::build_golden(&golden.tmp.path().join("at-head"), &[GOLDEN_OPS]);
     let head = at_head.last_seq();
     let edited = [0xE7u8; 32];
     set_checkpoint_chain_head(&ckpt_file(&at_head.dir, head), &edited);
-    let engine = timed_open(&at_head.dir, "case 9: a head checkpoint's chain_head edited");
-    assert_eq!(engine.kernel().current_seq(), Seq(head));
-    assert_eq!(&engine.world_dump(), at_head.dump_for(head));
-    assert_eq!(engine.kernel().chain_head(), edited, "the root carries the edited value");
-    engine.namespace().register_node(t(&[1, 77])).expect("one commit after the fork");
-    let data = fs::read(seg_file(&at_head.dir, 1)).expect("segment");
-    let txns = transactions(&data);
-    let new = txns.last().expect("the new transaction");
-    assert_eq!(
-        new.chain,
-        chain_over(&edited, &data, new),
-        "the next commit chained from the edited value"
+    open_halts_naming(
+        &at_head.dir,
+        head,
+        BASE_LINK,
+        "case 9: a head checkpoint's chain_head edited — the at-head fork, closed",
     );
-    assert_eq!(engine.kernel().chain_head(), new.chain);
 }
 
 /// CASE 10 — THE TAIL TRUNCATED AT A TRANSACTION BOUNDARY: NOT CAUGHT BY DESIGN.
@@ -1025,29 +1083,35 @@ fn c11_a_consistent_rewrite_from_genesis_or_from_any_point_passes() {
 
     // (c) …and the checkpoint's `chain_head` is the one anchor the journal
     //     has above its seed: the same forgery with the checkpoint left as
-    //     the golden wrote it fails its first link above the base — case 9's
-    //     door, which a forger who can write the checkpoint file closes with
-    //     one more write, as (a) did.
+    //     the golden wrote it fails the BASE'S OWN LINK — the forger
+    //     re-chained op 16's marker, the header still carries the golden's
+    //     value, and the two disagree at 37 — case 9's door, which a forger
+    //     who can write the checkpoint file closes with one more write, as
+    //     (a) did.
     let case = golden.case("c11-checkpoint-kept");
     forge_and_rechain(&golden, &case, 4, A, FORGED, CheckpointAfterForgery::Kept);
-    open_halts_with_chain_break(
+    open_halts_naming(
         &case,
-        golden.seq(CHECKPOINT_AFTER_OP + 1),
+        golden.checkpoint_seq(),
+        BASE_LINK,
         "case 11 with the checkpoint's head kept as the golden wrote it",
     );
 }
 
 /// CASE 12 — DAMAGE BELOW A STANDING CHECKPOINT BASE — a consistent rewrite in the
-/// segment the base already covers, the segment still present. What the
-/// code does today, "verified for transactions above the base only": the
-/// base embodies the rewritten transaction, the scan verifies the two links
-/// above it, and the open recovers the whole history at the true head with
-/// the golden's world — NOT CAUGHT while the base stands, and once
-/// reclamation drops the segment, beyond any replay. A bounded read BELOW
-/// the base selects genesis and verifies every link, and is caught at the
+/// segment the base already covers, the segment still present. The
+/// ruling's "any rewrite" as the owner reads it (2026-09-23): the chain is
+/// verified for transactions above the base a replay SELECTS. So the base
+/// embodies the rewritten transaction, the scan verifies the base's own
+/// link and the two links above it, and the open recovers the whole
+/// history at the true head with the golden's world — NOT CAUGHT while the
+/// base stands, and once reclamation drops the segment, beyond any replay.
+/// A bounded read BELOW the base — a world or a chain, `world_at` and
+/// `chain_at` running one verification — selects genesis and verifies
+/// every link from there to the journal's end, and is caught at the
 /// rewritten transaction whether the boundary asked lies above it or below
-/// it. Pinned as the code's reading pending the owner's; the report carries
-/// both readings of the ruling's "any rewrite".
+/// it: the on-demand full verification of the surviving journal, which the
+/// daemon serves as `GET /chain?at=N` with no world materialized.
 #[test]
 fn c12_damage_below_a_standing_base_is_unseen_at_open_and_seen_by_a_replay_from_genesis() {
     let golden = Golden::build();
@@ -1073,6 +1137,13 @@ fn c12_damage_below_a_standing_base_is_unseen_at_open_and_seen_by_a_replay_from_
         golden.dump(above),
         "a boundary above the base scans above it only"
     );
+    // The chain at and above the base: the base's own (the header's, which
+    // is the golden's marker's at 37) and the two markers above, none of
+    // them consulting the rewritten segment below the base.
+    chain_at_is(&engine, ckpt_seq, &golden.txn(CHECKPOINT_AFTER_OP).chain, "case 12: at the base");
+    chain_at_is(&engine, above, &golden.txn(CHECKPOINT_AFTER_OP + 1).chain, "case 12: above the base");
+    chain_at_is(&engine, golden.head(), &golden.txn(GOLDEN_OPS).chain, "case 12: at the head");
+    // Below the base, the world and the chain halt alike, at the rewrite.
     history_halts_with_chain_break(
         &engine,
         golden.seq(12),
@@ -1104,6 +1175,348 @@ fn c13_two_damages_name_the_first_only() {
     rewrite_frame(&seg, golden.txn(5).marker.start, |payload| payload[MARKER_CHAIN_AT] ^= 0xFF);
     rewrite_frame(&seg, golden.txn(12).marker.start, |payload| payload[MARKER_CHAIN_AT] ^= 0xFF);
     open_halts_with_chain_break(&case, golden.seq(5), "case 13: chain fields edited at ops 5 and 12");
+}
+
+/// Give op `op`'s marker the chain `value` and re-chain every marker above
+/// it from that value, each frame re-sealed — what a forger who edits the
+/// base's own link does to keep the links above it verifying. Answers the
+/// chains written, by boundary, `op`'s first.
+fn set_marker_chain_and_rechain_above(seg: &Path, op: usize, value: &[u8; 32]) -> Vec<(u64, [u8; 32])> {
+    let mut data = fs::read(seg).expect("segment");
+    let txns = transactions(&data);
+    let edited = &txns[op - 1];
+    let at = edited.marker.payload.start + MARKER_CHAIN_AT;
+    data[at..at + 32].copy_from_slice(value);
+    reseal_frame(&mut data, &edited.marker);
+    let mut chains = vec![(edited.last_seq, *value)];
+    let mut prev = *value;
+    for txn in &txns[op..] {
+        let chain = chain_over(&prev, &data, txn);
+        let at = txn.marker.payload.start + MARKER_CHAIN_AT;
+        data[at..at + 32].copy_from_slice(&chain);
+        reseal_frame(&mut data, &txn.marker);
+        chains.push((txn.last_seq, chain));
+        prev = chain;
+    }
+    fs::write(seg, data).expect("write the re-chained segment");
+    chains
+}
+
+/// CASE 14 — THE BASE'S OWN LINK EDITED ON BOTH SIDES: the marker closing the
+/// base's seq given a new chain, every link above re-chained from it, and
+/// the header rewritten to match — the residue item 4's check leaves (the
+/// damage model's (i)). NOT CAUGHT at open: the two stored values agree,
+/// the links above verify, the root carries the edit, and the world is the
+/// golden's at every boundary (no record was touched). SEEN by any bounded
+/// read BELOW the base — a world or a chain, one verification — which
+/// selects genesis, recomputes the link at the base's seq over its true
+/// predecessor, and fails it THERE. `chain_at` at the base answers the
+/// edit: the forgery a peer's saved pair contradicts.
+#[test]
+fn c14_the_bases_link_edited_on_both_sides_passes_at_open_and_fails_from_below() {
+    let golden = Golden::build();
+    let ckpt_seq = golden.checkpoint_seq();
+    let edited = [0x5Cu8; 32];
+
+    let case = golden.case("c14");
+    let rechained = set_marker_chain_and_rechain_above(&seg_file(&case, 1), CHECKPOINT_AFTER_OP, &edited);
+    set_checkpoint_chain_head(&ckpt_file(&case, ckpt_seq), &edited);
+    let engine = open_recovers(
+        &case,
+        &golden,
+        golden.head(),
+        "case 14: the base's marker and header edited alike, the links above re-chained",
+    );
+    let (_, head_chain) = rechained.last().expect("the re-chained head");
+    assert_eq!(engine.kernel().chain_head(), *head_chain, "the root carries the re-chained head");
+    assert_ne!(*head_chain, golden.txn(GOLDEN_OPS).chain, "the head moved");
+    // At and above the base: the world is the golden's, the chain the edit's.
+    assert_eq!(
+        &engine.dump_of(&engine.world_at(Seq(ckpt_seq)).expect("the base's own boundary")),
+        golden.dump(ckpt_seq)
+    );
+    chain_at_is(&engine, ckpt_seq, &edited, "case 14: the base answers the header's edited value");
+    let above = golden.seq(CHECKPOINT_AFTER_OP + 1);
+    assert_eq!(
+        &engine.dump_of(&engine.world_at(Seq(above)).expect("a boundary above the base")),
+        golden.dump(above)
+    );
+    chain_at_is(&engine, above, &rechained[1].1, "case 14: above the base, the re-chained link");
+    // Below the base: genesis is selected, and the link at the base's seq
+    // fails over op 16's true predecessor — the link's own account, since
+    // from genesis there is no base whose header could disagree.
+    history_halts_with_chain_break(
+        &engine,
+        golden.seq(12),
+        ckpt_seq,
+        "case 14: a boundary below the base recomputes the edited link",
+    );
+    history_halts_with_chain_break(&engine, golden.seq(3), ckpt_seq, "case 14: a boundary further below");
+}
+
+/// The segment files of `dir`, ascending by the first seq their names carry.
+fn segment_paths(dir: &Path) -> Vec<PathBuf> {
+    let mut segs: Vec<(u64, PathBuf)> = fs::read_dir(dir)
+        .expect("dir")
+        .filter_map(|entry| {
+            let entry = entry.expect("entry");
+            let name = entry.file_name().into_string().ok()?;
+            let first: u64 = name.strip_prefix("seg-")?.strip_suffix(".wal")?.parse().ok()?;
+            Some((first, entry.path()))
+        })
+        .collect();
+    segs.sort();
+    segs.into_iter().map(|(_, path)| path).collect()
+}
+
+/// The two-segment history cases 15 and the reclaim refusal are built on:
+/// a ~1 MiB insert fills `seg-1`, the checkpoint is taken AT that commit —
+/// so the marker closing the base's seq is seg-1's LAST frame and seg-1's
+/// inferred last seq is the base's — and the next commit rotates into
+/// `seg-2`, which the one after extends. Its own history, built through
+/// the engine as case 7's is.
+struct TwoSegments {
+    dir: PathBuf,
+    /// The fill's boundary: the checkpoint's seq, and seg-1's inferred last.
+    base: u64,
+    /// The two boundaries above, both in seg-2.
+    above: [u64; 2],
+    /// The chain at each of the three boundaries, as the engine reported it.
+    chains: BTreeMap<u64, [u8; 32]>,
+    dump_at_base: WorldDump,
+    dump_at_head: WorldDump,
+}
+
+impl TwoSegments {
+    fn build(dir: &Path) -> TwoSegments {
+        const SEGMENT_FILL: usize = 1024 * 1024;
+        let engine = Engine::open(cfg_manual(dir)).expect("open the fixture");
+        let prefix = {
+            let snap = engine.kernel().snapshot();
+            snap.world().m3().next_account_prefix(&node1()).expect("a delegable prefix")
+        };
+        let (acct, _) = engine
+            .namespace()
+            .delegate(BOOTSTRAP_PRINCIPAL, prefix.tumbler().clone(), USER)
+            .expect("delegate");
+        let (doc, _) = engine
+            .namespace()
+            .create_new_document(USER, &acct, Some(false))
+            .expect("create a draft");
+        let (_, filled) = engine
+            .vstream()
+            .insert(
+                OWNER,
+                &doc,
+                vp(1, 1),
+                vec![Val::new(vec![0x5A; SEGMENT_FILL])],
+                Deposit::Undeclared,
+            )
+            .expect("the ~1 MiB insert");
+        let base = filled.0;
+        assert_eq!(segment_count(dir), 1, "the fill lands in seg-1");
+        let mut chains = BTreeMap::new();
+        chains.insert(base, engine.kernel().chain_head());
+        let dump_at_base = engine.world_dump();
+        let taken = engine.kernel().checkpoint().expect("the checkpoint at the fill's boundary");
+        assert_eq!(taken, Seq(base));
+        assert_eq!(segment_count(dir), 1, "a checkpoint rotates nothing");
+        let (_, b) = engine
+            .vstream()
+            .insert(OWNER, &doc, vp(1, 2), vec![Val::new(vec![b'b'])], Deposit::Undeclared)
+            .expect("insert b");
+        assert_eq!(segment_count(dir), 2, "the commit after the fill rotates");
+        chains.insert(b.0, engine.kernel().chain_head());
+        let (_, c) = engine
+            .vstream()
+            .insert(OWNER, &doc, vp(1, 3), vec![Val::new(vec![b'c'])], Deposit::Undeclared)
+            .expect("insert c");
+        chains.insert(c.0, engine.kernel().chain_head());
+        let dump_at_head = engine.world_dump();
+        drop(engine);
+        let seg1 = fs::read(seg_file(dir, 1)).expect("seg-1");
+        assert_eq!(
+            transactions(&seg1).last().expect("a marker").last_seq,
+            base,
+            "seg-1's last frame is the marker closing the base's seq: what the skip rule turns on"
+        );
+        TwoSegments {
+            dir: dir.to_path_buf(),
+            base,
+            above: [b.0, c.0],
+            chains,
+            dump_at_base,
+            dump_at_head,
+        }
+    }
+
+    fn case(&self, tmp: &Path, name: &str) -> PathBuf {
+        let dir = tmp.join(name);
+        copy_dir(&self.dir, &dir);
+        dir
+    }
+}
+
+/// CASE 15 — THE BOUNDARY COINCIDENCE: the base's marker segment SKIPPED. The
+/// scan opens no closed segment whose inferred last seq is at or below the
+/// base's, and a segment ending EXACTLY at the base's seq is one — so the
+/// marker closing the base's seq is never read, and the base's own link is
+/// checked vacuously (the damage model's (ii)). With the header edited
+/// there, the open behaves as it did before item 4: the first transaction
+/// above the base is judged against the header and fails — CAUGHT at that
+/// transaction with the LINK's account, not the base's. And with NOTHING
+/// above the base — the one transaction above cut away, seg-2 empty, case
+/// 10's shape — the edited header OPENS: NOT CAUGHT, pinned; the root
+/// carries the edit and `chain_at` at the base answers it, which a peer's
+/// saved pair contradicts. Covering the coincidence is the skip rule's to
+/// change, and named out of this fence.
+#[test]
+fn c15_the_boundary_coincidence_skips_the_bases_marker_and_the_check_is_vacuous() {
+    let tmp = tempdir().expect("tempdir");
+    let two = TwoSegments::build(&tmp.path().join("two-segments"));
+    {
+        let engine = timed_open(&two.dir, "case 15: the two-segment history before any damage");
+        assert_eq!(engine.kernel().current_seq(), Seq(two.above[1]));
+        assert_eq!(engine.world_dump(), two.dump_at_head);
+        for (seq, chain) in &two.chains {
+            chain_at_is(&engine, *seq, chain, "case 15: the clean two-segment history");
+        }
+    }
+    let edited = [0xB1u8; 32];
+
+    let case = two.case(tmp.path(), "c15-above");
+    set_checkpoint_chain_head(&ckpt_file(&case, two.base), &edited);
+    open_halts_naming(
+        &case,
+        two.above[0],
+        LINK_BREAK,
+        "case 15: the header edited, its marker's segment skipped — the first link above fails \
+         against it, and the base's own link is not judged",
+    );
+
+    let case = two.case(tmp.path(), "c15-nothing-above");
+    set_checkpoint_chain_head(&ckpt_file(&case, two.base), &edited);
+    truncate_file(&segment_paths(&case)[1], 0);
+    let engine = timed_open(&case, "case 15: the header edited, nothing above the base");
+    assert_eq!(engine.kernel().current_seq(), Seq(two.base));
+    assert_eq!(engine.world_dump(), two.dump_at_base);
+    assert_eq!(
+        engine.kernel().chain_head(),
+        edited,
+        "NOT CAUGHT BY DESIGN: the base's marker segment skipped and nothing above it, the root \
+         carries the edited value"
+    );
+    chain_at_is(&engine, two.base, &edited, "case 15: the base answers the edit");
+}
+
+/// `Kernel::chain_at` below the reclaim floor: once a checkpoint at the head
+/// retires `seg-1` — the segment ending at the older base's seq lies wholly
+/// below the oldest retained checkpoint — no base at or below a boundary in
+/// it remains derivable, and the chain there is `Reclaimed { floor }`, the
+/// floor naming the oldest retained base, exactly as `world_at` refuses; at
+/// the floor the base's own chain answers, and above it the markers'.
+#[test]
+fn chain_at_is_reclaimed_below_the_floor_and_answers_from_the_floor_up() {
+    let tmp = tempdir().expect("tempdir");
+    let two = TwoSegments::build(&tmp.path().join("two-segments"));
+    let case = two.case(tmp.path(), "reclaimed");
+    let engine = timed_open(&case, "the two-segment history");
+    engine.kernel().checkpoint().expect("a checkpoint at the head");
+    assert_eq!(segment_count(&case), 1, "seg-1, wholly below the oldest retained checkpoint, is reclaimed");
+    for seq in [0, two.base - 1] {
+        match engine.kernel().chain_at(Seq(seq)) {
+            Err(HistoryError::Reclaimed { floor, .. }) => {
+                assert_eq!(floor, Some(Seq(two.base)), "the floor is the oldest retained base")
+            }
+            other => panic!("chain_at({seq}) below the floor: expected Reclaimed, got {other:?}"),
+        }
+        assert!(
+            matches!(engine.world_at(Seq(seq)), Err(HistoryError::Reclaimed { floor: Some(f), .. }) if f == Seq(two.base)),
+            "world_at({seq}) refuses the same way"
+        );
+    }
+    for (seq, chain) in &two.chains {
+        chain_at_is(&engine, *seq, chain, "from the floor up, every boundary");
+    }
+    assert_eq!(
+        engine.kernel().chain_at(Seq(two.above[1])).expect("the head"),
+        engine.kernel().chain_head(),
+        "at the head — now the newest base's own seq — chain_at is chain_head"
+    );
+}
+
+/// `Kernel::chain_at(N)` — the chain AS OF a boundary, off the same scan as
+/// `world_at` and under its refusals: every one of the golden's eighteen
+/// boundaries answers its marker's chain, from genesis and over the
+/// standing base alike; `0` is the seed; the base's own seq is the header's
+/// value; the head equals `chain_head()`, before and after a commit; a
+/// boundary beyond the head, a composite's interior seq and an in-memory
+/// kernel refuse as `world_at` does. What `GET /chain?at=N` serves.
+#[test]
+fn chain_at_answers_every_boundarys_marker_chain_and_refuses_as_world_at_does() {
+    let golden = Golden::build();
+    let head = golden.head();
+
+    let case = golden.case_from_genesis("chain-at-genesis");
+    let engine = timed_open(&case, "chain_at from genesis");
+    chain_at_is(&engine, 0, &CHAIN_SEED, "genesis is the seed");
+    for op in 1..=GOLDEN_OPS {
+        chain_at_is(&engine, golden.seq(op), &golden.txn(op).chain, "from genesis, every boundary");
+    }
+    assert_eq!(
+        engine.kernel().chain_at(Seq(head)).expect("the head"),
+        engine.kernel().chain_head(),
+        "at the head, chain_at IS chain_head"
+    );
+    drop(engine);
+
+    let case = golden.case("chain-at-standing");
+    let engine = timed_open(&case, "chain_at over the standing base");
+    let ckpt_seq = golden.checkpoint_seq();
+    let header = checkpoint_chain_head(&ckpt_file(&case, ckpt_seq));
+    assert_eq!(header, golden.txn(CHECKPOINT_AFTER_OP).chain, "the header is the marker's at 37");
+    chain_at_is(&engine, ckpt_seq, &header, "the base's own seq answers the header");
+    chain_at_is(&engine, 0, &CHAIN_SEED, "genesis, over the standing base");
+    for op in 1..=GOLDEN_OPS {
+        chain_at_is(
+            &engine,
+            golden.seq(op),
+            &golden.txn(op).chain,
+            "over the standing base, every boundary — below it from genesis, above it from the base",
+        );
+    }
+    assert_eq!(engine.kernel().chain_at(Seq(head)).expect("the head"), engine.kernel().chain_head());
+
+    match engine.kernel().chain_at(Seq(head + 1)) {
+        Err(HistoryError::BeyondHead { head: found }) => assert_eq!(found, Seq(head)),
+        other => panic!("beyond the head: expected BeyondHead, got {other:?}"),
+    }
+    let composite = golden.txn(4);
+    assert!(composite.first_seq < composite.last_seq, "op 4 is a multi-record composite");
+    match engine.kernel().chain_at(Seq(composite.first_seq)) {
+        Err(HistoryError::NotABoundary { nearest }) => assert_eq!(nearest, Seq(golden.seq(3))),
+        other => panic!("a composite's interior seq: expected NotABoundary, got {other:?}"),
+    }
+
+    engine.namespace().register_node(t(&[1, 77])).expect("one commit");
+    let new_head = engine.kernel().current_seq();
+    let data = fs::read(seg_file(&case, 1)).expect("segment");
+    let new = transactions(&data).last().expect("the new marker").clone();
+    assert_eq!(new.last_seq, new_head.0);
+    chain_at_is(&engine, new_head.0, &new.chain, "after a commit, the new head");
+    assert_eq!(engine.kernel().chain_at(new_head).expect("the new head"), engine.kernel().chain_head());
+    chain_at_is(&engine, head, &golden.txn(GOLDEN_OPS).chain, "the old head still answers its own");
+    drop(engine);
+
+    let mem = Engine::open(KernelConfig {
+        durability: Durability::InMemory,
+        checkpoint: CheckpointPolicy::Manual,
+    })
+    .expect("an in-memory engine");
+    assert!(
+        matches!(mem.kernel().chain_at(Seq(0)), Err(HistoryError::Unjournaled)),
+        "no journal, no history: the same refusal as world_at's"
+    );
 }
 
 /// `Kernel::chain_head()` — piece (c)'s input: the committed head's chain

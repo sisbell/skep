@@ -40,12 +40,13 @@ use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, Snaps
 use skep_namespace::PrincipalId;
 
 /// Concurrent historical reconstructions (`Engine::world_at` behind
-/// `/op-at` and `/dump?at`) allowed at once: each is a whole-checkpoint
-/// deserialize plus journal fold, per call, uncached, and each leaves a
-/// whole second world resident for as long as its answer is being built —
-/// two keeps history panes serviceable without letting core-bound replay
-/// occupy the worker pool or letting reconstructed worlds accumulate one
-/// per worker.
+/// `/op-at` and `/dump?at`, and the chain read behind `/chain?at`, which
+/// spends a permit of this pool for the span of its scan) allowed at once:
+/// each is a whole-checkpoint deserialize plus journal fold, per call,
+/// uncached, and each leaves a whole second world resident for as long as
+/// its answer is being built — two keeps history panes serviceable without
+/// letting core-bound replay occupy the worker pool or letting
+/// reconstructed worlds accumulate one per worker.
 pub(crate) const MAX_CONCURRENT_RECONSTRUCTIONS: usize = 2;
 
 /// Why a historical answer is unavailable — the daemon's momentary
@@ -167,6 +168,25 @@ impl History {
         let mut resp = execute_read_on(world, frame, principal, head.world());
         stamp_as_of(&mut resp, at);
         Ok(resp)
+    }
+
+    /// The commit chain's value AS OF `at` — `GET /chain?at=N` (the chain's
+    /// open items, item 7; QUEUE item 10) — the kernel's own recomputation
+    /// off its journal (`Kernel::chain_at`), under THIS pool's permit,
+    /// conservatively: the kernel selects the base and READS every segment
+    /// above it exactly as a reconstruction does (the corrupt-run sweep and
+    /// the chain's verification run to the journal's end), so it is the same
+    /// core-bound I/O, with no world folded and none resident — the permit
+    /// spans the call alone and returns with it. A lighter pool of its own is
+    /// a later refinement; sharing this one keeps the bound the wire promises
+    /// for historical work one number. The permit is taken before `at` is
+    /// examined, so [`Unavailable::Busy`] precedes every journal verdict here
+    /// as it does for a reconstruction.
+    pub(crate) fn chain_at(&self, engine: &Engine, at: Seq) -> Result<[u8; 32], Unavailable> {
+        let Some(_permit) = self.permits.try_acquire() else {
+            return Err(Unavailable::Busy);
+        };
+        engine.kernel().chain_at(at).map_err(Unavailable::Journal)
     }
 
     /// TEST HOOK (the `fuzz_support` standing: not a stable API): hold one

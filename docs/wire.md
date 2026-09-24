@@ -30,6 +30,7 @@ acknowledged only after it is durable on disk.
 | `POST /op`       | One operation frame in, one response document out.         |
 | `POST /op-at`    | One **read** frame answered as of a committed position (§Reading history). |
 | `GET /health`    | Liveness, current log position, and the head commit's time. |
+| `GET /chain`     | The commit chain's value as of a committed position, `?at=N` (§Reading history). |
 | `GET /events`    | Server-sent stream of committed positions (§The commit stream). |
 | `GET /changes`   | The pull delta feed of committed writes, masked at the presented token's class (§The change feed). |
 | `GET /`          | The embedded authoring client, one HTML file (only in `client` builds — the feature is default-off). |
@@ -632,14 +633,14 @@ Non-200 statuses are transport-level failures with a body of the shape
 | 400    | `write_at_history`          | the `/op-at` frame is a write operation |
 | 400    | `beyond_head`               | the position exceeds the committed head (carries `head`) |
 | 400    | `not_a_position`            | the number is not a committed position (carries `nearest`) |
-| 400    | `malformed_at`              | the `/dump` query isn't `at=<position>` |
+| 400    | `malformed_at`              | the `/dump` or `/chain` query isn't `at=<position>` (`/chain` requires it) |
 | 400    | `malformed_changes`         | the `/changes` query isn't `since=<position>` with an optional in-range `limit`, an optional dotted-decimal `under`, and an optional `drafts=true|false` |
 | 400    | `malformed_http`            | the request is not the HTTP subset skepd speaks (bad head, chunked body, a body cut short) |
 | 404    | `no_such_endpoint`          | unknown path (including `/dump` on a build without `observe` and `/` on a build without `client`) |
 | 405    | `method_not_allowed`        | known path, wrong method                |
 | 413    | `payload_too_large`         | the declared `Content-Length` exceeds the 8 MiB request-body cap |
 | 410    | `history_reclaimed`         | the position (`/op-at`) or the `since` fence (`/changes`) predates retained history (carries `floor` when known) |
-| 503    | `history_busy`              | all historical-reconstruction permits (`/op-at`, `/dump?at`) are in use; retry shortly |
+| 503    | `history_busy`              | all historical-reconstruction permits (`/op-at`, `/dump?at`, `/chain?at`) are in use; retry shortly |
 | 503    | `scan_busy`                 | all class-scan permits are in use — a `find_links_ftt`/`count_ftt`/`window_ftt` on `/op` whose four-set constrains `ty` alone (§Link discovery reads); carries `op`; retry shortly |
 | 500    | `internal_panic`            | a handler bug; the daemon stays up      |
 | 500    | `history_io` / `history_corrupt` | reading the journal for a historical position failed / found at-rest corruption |
@@ -2479,6 +2480,34 @@ at that class. Position errors are `/op-at`'s, the reconstruction bound
 included (`503 history_busy`); a malformed query is `400 {"error":
 "malformed_at", "detail": …}`.
 
+**`GET /chain?at=<position>`** — the commit chain's value AS OF that
+position: `200 {"at": N, "chain": "<64 lowercase hex>"}`, the value
+`/health` serves as `chain_head` for the head (§The other endpoints), at
+any committed position, RECOMPUTED by the kernel off its own journal
+under the verification a historical read runs — every link from the
+checkpoint it selects at or below `at` to the journal's END, so a
+position below the newest checkpoint verifies the whole surviving
+journal from the base it selects — with no world materialized.
+Token-blind and class-invariant like `/health` (a hash over the whole
+journal discloses no byte, and `/health` already serves it to everyone):
+at the current head it equals `chain_head` beside `log_position`, at a
+retained checkpoint's own position it is that checkpoint's header value,
+and at `0` it is the genesis seed. Position errors are `/op-at`'s —
+`beyond_head`, `not_a_position`, `history_reclaimed`, the reconstruction
+bound `503 history_busy` (it rides the same permit pool, conservatively:
+the scan reads what a reconstruction reads), `history_io` /
+`history_corrupt` — and a malformed or ABSENT query is `400 {"error":
+"malformed_at", "detail": …}`. What it is for: any `(position, chain)`
+pair a client holds — a `/health` reading it saved, a published head's
+own members, a pair another peer relayed — is checkable against the
+board's recomputation while the position is above the retention floor.
+A journal re-chained after the fact answers the forged value here, which
+the saved pair contradicts, where a stored head record the forger left
+untouched still re-reads byte-equal; a tail cut answers `beyond_head`
+or a different value. Below the floor nothing answers, and the answer is
+the serving daemon's word, as every answer here is. ADDITIVE, no version
+bump (`chain_head`'s precedent).
+
 Routed, not yet in the protocol: an I-ADDRESSED value read as of a
 position — the home's mint frontier at N plus the values under it, a
 fact no arrangement-addressed read composes (an address minted and
@@ -2841,7 +2870,11 @@ forever), versioned and mirror-carried, and it survives reclamation as
 checkpoint state. It is what a peer holding an older head re-reads to check a
 newer history EXTENDS it: re-read `H.k` byte-equal and the board still stands
 by that `chain` at that `position`; different, gone, or superseded by an older
-newest head, and it does not. Each head shows on `/changes` as one public
+newest head, and it does not. And a saved pair — a head's own `(position,
+chain)`, or a `/health` reading — is checked against the board's
+RECOMPUTATION at `GET /chain?at=<position>` (§Reading history), which a
+re-chained journal cannot pass while the byte compare of an untouched
+`H.k` still does. Each head shows on `/changes` as one public
 `publish` entry with `key: "system"`; the staging draft the record is composed
 in is a private document of the system account, masked at every class.
 

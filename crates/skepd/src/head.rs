@@ -52,6 +52,25 @@
 //! draft and no member, and the next head's shot names the newer atom
 //! (PUB-2.26's no-residue).
 //!
+//! RESUME FROM THE FEED (the chain's open items, item 2). The cadence's two
+//! counters are seeded at open from the change feed's testimony about the
+//! commits landed ABOVE the recorded head's position (`Feed::entries_above`),
+//! so that PUB-6.65's "64 commits … have landed since the last head" and "one
+//! hour has passed since the last head" are true of the BOARD across a
+//! restart and not of the process: `commits_since_head` is the count of those
+//! entries whose key is not `"system"` — a bare entry counts, conservative by
+//! at most the head's own commits, so a head fires at most a few commits early
+//! and never twice — and the hour's origin is the head's own last
+//! `"system"`-keyed entry's recorded `time` (else the first entry above the
+//! position carrying a time; else open-time). A BARE OR ABSENT SIDECAR FALLS
+//! BACK to open-time seeding, the behaviour before the seed: the count starts
+//! at zero and the hour is measured from open. The clock's domain is therefore
+//! wall-clock unix milliseconds, the feed's own. D1 is kept — a gate reads
+//! testimony to decide WHEN, and the head's bytes stay a pure function of the
+//! root; AUTH-4.56's rewritable sidecar can move one head's timing within the
+//! bounds the triggers already allow, never a duplicate and never a changed
+//! content.
+//!
 //! WHAT A REFUSAL DOES. A driver refusal on any of the head's commits is a
 //! SURFACED failure (I11 (c), PUB-5.75: never a board left silently headless):
 //! a `skepd:` notice names it, the head is skipped for this cycle with the
@@ -69,7 +88,7 @@
 //! account owns `H` and its draft, and nothing in the engine is widened.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -83,7 +102,9 @@ use skep_kernel::Seq;
 use skep_namespace::{system_account, HasM3, SYSTEM_PRINCIPAL};
 
 use crate::codec::hex_string;
+use crate::feed::Feed;
 use crate::notice;
+use crate::sidecar::CommitMeta;
 use crate::write_path::{write_meta, SerialGuard, WritePath};
 
 /// The head record's `format` member — the journal stamp in force (`SKJ3`),
@@ -95,24 +116,32 @@ const FORMAT_STAMP: &str = "SKJ3";
 
 /// The head writer's own clock, so the time bound (trigger (c)) is drivable in
 /// tests through a seam rather than a `sleep`. In production `now_millis` is
-/// monotonic wall-time since open; [`Clock::set_millis`] overrides it with a
-/// fixed reading (the test seam, reached through
-/// [`crate::Daemon::head_set_clock_millis`]).
+/// WALL-CLOCK unix milliseconds — the domain the feed records commit times
+/// in, so the resume can seed the last head's time from the head's own entry
+/// (the module doc's RESUME FROM THE FEED); a wall clock that steps is
+/// tolerated by the trigger's `saturating_sub`, and the cost of a step is one
+/// head early or late by the step, never a duplicate. [`Clock::set_millis`]
+/// overrides it with a fixed reading (the test seam, reached through
+/// [`crate::Daemon::head_set_clock_millis`]), which a test therefore sets
+/// RELATIVE TO the wall clock rather than at small numbers a seeded origin
+/// would dwarf.
 struct Clock {
-    start: Instant,
-    /// [`u64::MAX`] means "use the real monotonic clock"; any other value is a
+    /// [`u64::MAX`] means "use the real wall clock"; any other value is a
     /// test override, held until changed.
     test_millis: AtomicU64,
 }
 
 impl Clock {
     fn new() -> Clock {
-        Clock { start: Instant::now(), test_millis: AtomicU64::new(u64::MAX) }
+        Clock { test_millis: AtomicU64::new(u64::MAX) }
     }
 
     fn now_millis(&self) -> u64 {
         match self.test_millis.load(Ordering::Relaxed) {
-            u64::MAX => self.start.elapsed().as_millis() as u64,
+            u64::MAX => SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0),
             fixed => fixed,
         }
     }
@@ -140,8 +169,11 @@ struct HeadState {
     /// LANDED nothing (an idempotency replay, an incumbent ack) is told from a
     /// commit: the seq did not pass this.
     last_seen_position: u64,
-    /// Commits that are not the writer's own since the last head (or open) —
-    /// trigger (a)'s count.
+    /// Commits that are not the writer's own since the last head — trigger
+    /// (a)'s count. Seeded at open from the feed's entries above the last
+    /// head's position (the module doc's RESUME FROM THE FEED), so a board
+    /// restarted every few commits still reaches 64; zero where the sidecar
+    /// is bare or absent.
     commits_since_head: u64,
     /// The newest retained checkpoint's seq AS THE LAST HEAD NAMED IT (its
     /// `base.seq`; `None` where it named `null`, and before the first head) —
@@ -149,10 +181,13 @@ struct HeadState {
     /// Read off `H` at open, so a checkpoint that landed after the last head
     /// is attested by the next head whichever side of a restart it fell on.
     last_checkpoint_seq: Option<u64>,
-    /// The clock reading at the last head (or open) — trigger (c)'s base. The
-    /// clock is this uptime's, so after a reopen the hour is measured from
-    /// open: the head carries no timestamp (two heads of one board at one
-    /// position are byte-identical), so no better origin is on record.
+    /// The clock reading at the last head — trigger (c)'s base, in wall-clock
+    /// unix milliseconds. Seeded at open from the last head's own recorded
+    /// `time` in the feed (RESUME FROM THE FEED), so after a reopen the hour
+    /// is measured from the last head the BOARD wrote and not from this open;
+    /// the head itself carries no timestamp (two heads of one board at one
+    /// position are byte-identical), so a bare or absent sidecar leaves this
+    /// at open-time, the one origin then on record.
     last_head_millis: u64,
     /// The staging draft — [`staging_draft_address`] once it is registered,
     /// found at open or minted at first need; `None` only on a board that has
@@ -221,11 +256,15 @@ impl HeadWriter {
     /// the right `prev` and does not re-name a position already published; its
     /// `base.seq` seeds trigger (b)'s reference, so a checkpoint the last head
     /// did not name is attested by the next; and the staging draft is found
-    /// where an earlier uptime minted it. All off ONE snapshot.
+    /// where an earlier uptime minted it. All off ONE snapshot. And by reading
+    /// the FEED (the module doc's RESUME FROM THE FEED): the entries above that
+    /// position seed trigger (a)'s count and trigger (c)'s origin, a bare or
+    /// absent sidecar falling back to zero and to open-time.
     pub(crate) fn open(
         stores: EngineStores,
         every_commits: u64,
         max_interval_millis: u64,
+        feed: &Feed,
     ) -> HeadWriter {
         let clock = Clock::new();
         let now = clock.now_millis();
@@ -236,15 +275,20 @@ impl HeadWriter {
             None => (None, [0u8; 32], None),
         };
         let staging_draft = find_staging_draft(snap.world());
+        // The feed is the daemon's testimony about its own commits: every
+        // entry above the position the last head named landed since that
+        // head, the head's own commits among them, keyed "system". No head
+        // yet, and every retained entry is "since the last head".
+        let seeds = resume_seeds(&feed.entries_above(last_position.unwrap_or(0)));
         HeadWriter {
             stores,
             state: Mutex::new(HeadState {
                 last_position,
                 last_chain,
                 last_seen_position: snap.seq().0,
-                commits_since_head: 0,
+                commits_since_head: seeds.commits_since_head,
                 last_checkpoint_seq,
-                last_head_millis: now,
+                last_head_millis: seeds.last_head_millis.unwrap_or(now),
                 staging_draft,
             }),
             writing: AtomicBool::new(false),
@@ -549,6 +593,40 @@ fn marshal_head(
     }
     s.push('}');
     s.into_bytes()
+}
+
+/// The cadence's two seeds, read off the feed's entries above the last head's
+/// position (the module doc's RESUME FROM THE FEED).
+struct ResumeSeeds {
+    /// Entries whose key is not `"system"` — every commit landed since the
+    /// head that was not the head's own; a bare entry, keyless, counts.
+    commits_since_head: u64,
+    /// The head's own time: the LAST `"system"`-keyed entry's recorded `time`
+    /// — the head's publish, or a later attempt's orphaned insert, either way
+    /// the board's most recent head work — else the first entry above the
+    /// position carrying a time (a witness no earlier than the head, so the
+    /// hour fires no sooner than it is owed), else `None`: open-time.
+    last_head_millis: Option<u64>,
+}
+
+/// RESUME FROM THE FEED: the seeds over the entries above the last head's
+/// position, in position order, as [`Feed::entries_above`] hands them over.
+fn resume_seeds(above: &[(u64, CommitMeta)]) -> ResumeSeeds {
+    let is_system = |meta: &CommitMeta| {
+        matches!(meta, CommitMeta::Recorded { key: Some(key), .. } if key == "system")
+    };
+    let time_of = |meta: &CommitMeta| match meta {
+        CommitMeta::Recorded { time, .. } => Some(*time),
+        CommitMeta::Bare => None,
+    };
+    let commits_since_head = above.iter().filter(|(_, meta)| !is_system(meta)).count() as u64;
+    let last_head_millis = above
+        .iter()
+        .rev()
+        .find(|(_, meta)| is_system(meta))
+        .and_then(|(_, meta)| time_of(meta))
+        .or_else(|| above.iter().find_map(|(_, meta)| time_of(meta)));
+    ResumeSeeds { commits_since_head, last_head_millis }
 }
 
 /// RESUME-BY-READING: `H`'s latest member's recorded head, or `None` when the

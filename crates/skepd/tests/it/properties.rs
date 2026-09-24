@@ -42,7 +42,10 @@
 //!
 //! Budget: 24 sequences of 60–120 ops (`PROPS_EXHAUSTIVE=1` scales to 96 of
 //! 120–240), designed to stay under ~90 s total. Failure seeds persist to
-//! `proptest-regressions/` — commit them; they are pins.
+//! `properties.proptest-regressions` BESIDE this file — pinned by name in
+//! [`config`], since proptest's default resolution walks up to this binary's
+//! `main.rs` and would read and write `tests/proptest-regressions/` instead,
+//! where the tracked seeds were never replayed — commit them; they are pins.
 //!
 //! Finding protocol (H3/H2 discipline): a real violation becomes
 //! `#[ignore = "FINDING-n: …"]` with the assertion INTACT and the shrunk
@@ -52,6 +55,7 @@ use crate::common;
 
 use common::*;
 use proptest::prelude::*;
+use proptest::test_runner::FileFailurePersistence;
 use serde_json::{json, Value};
 
 fn exhaustive() -> bool {
@@ -1217,6 +1221,15 @@ fn config() -> ProptestConfig {
         // Shrinking re-runs whole cases (~1–2 s each); bound the budget so
         // a failing run still reports its shrunk plan within minutes.
         max_shrink_iters: 200,
+        // The seed file is `properties.proptest-regressions` beside this
+        // source — the tracked pins, replayed first on every run. Pinned by
+        // name: the default (`SourceParallel`) resolves through the nearest
+        // `main.rs`, which this one-binary layout puts at `tests/it/`, to
+        // `tests/proptest-regressions/properties.txt` — a file the tracked
+        // seeds never lived in (the chain's open items, item 1).
+        failure_persistence: Some(Box::new(FileFailurePersistence::WithSource(
+            "proptest-regressions",
+        ))),
         ..ProptestConfig::default()
     }
 }

@@ -585,19 +585,21 @@ pub(crate) fn bootstrap_root() -> &'static Address {
 /// landing on the `retraction` value would be catastrophic. The old 9-space
 /// bought non-collision by sitting outside every admissible subtree; the
 /// ghost region sits INSIDE the docuverse, at the first five content
-/// positions of doc-1 of the registry node's operator, and that document is
-/// minted into by an ordinary `register_node([1,1])` → `delegate` →
-/// `create_new_document` → INSERT sequence — so unreachability cannot be
-/// proven and an explicit allocator skip is required. The skip is
-/// [`ghost_floor`]; the argument that it suffices is stated there.
+/// positions of doc-1 of the system account `1.1.0.1`, a REAL document
+/// seeded at genesis (`M3State::genesis`, PUB-6.65) whose content chain any
+/// INSERT by its principal would extend — so unreachability cannot be proven
+/// and an explicit allocator skip is required. The skip is [`ghost_floor`];
+/// the argument that it suffices is stated there.
 pub const GHOST_POSITIONS: u32 = 5;
 
-/// The ghost region's home document — doc 1 of account 1 of the registry
-/// node `1.1`: `[1,1,0,1,0,1]` (owner numbering, FINAL 2026-08-27: registry
-/// = node 1.1, host = 1.2, root `[1]` abstract). Account 1 is the node
-/// operator's by the claim-ceremony convention — the first delegate under a
-/// node receives account ordinal 1, which `delegate`'s next-form gate
-/// enforces — and doc 1 is the ceremony's own doc-1 mint (AUTH-5.55 step 2).
+/// The ghost region's home document — doc 1 of the SYSTEM ACCOUNT `1.1.0.1`:
+/// `[1,1,0,1,0,1]` (owner numbering, FINAL 2026-08-27: registry = node 1.1,
+/// host = 1.2, root `[1]` abstract). Account ordinal 1 under the registry
+/// node `1.1` is seated at genesis by `M3State::genesis` for
+/// `SYSTEM_PRINCIPAL` (PUB-6.65), keyless and no operator's — at every other
+/// node the first delegate receives ordinal 1 by the claim-ceremony
+/// convention, which `delegate`'s next-form gate enforces — and doc 1 is
+/// born at genesis beside doc 2, the head document, not minted by a ceremony.
 /// Both land at their ordinary ordinals: the document is REAL, only content
 /// positions 1..=[`GHOST_POSITIONS`] inside it are ghost, and its first
 /// content mint lands at position [`GHOST_POSITIONS`] + 1.

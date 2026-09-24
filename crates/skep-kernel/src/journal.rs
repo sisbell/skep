@@ -1225,6 +1225,45 @@ pub(crate) struct ScanOutcome {
     /// classification, which names the root cause when a run swallowed the
     /// predecessor, speaks first; read through [`ScanOutcome::chain_break`].
     chain_break: Option<u64>,
+    /// THE BASE'S OWN LINK (QUEUE item 10's case 9, the at-head fork): the
+    /// base's seq when the committed marker closing `s_load` itself was
+    /// scanned and its `chain` is not `chain_at_base` — the `SKC3` header's
+    /// `chain_head`, which nothing in the header covers. Two STORED values
+    /// disagreeing, nothing recomputed: the header was rewritten, or the
+    /// marker was. `None` when they agree, and `None` — vacuously — when
+    /// that marker was not scanned: a closed segment ending exactly at
+    /// `s_load` is skipped, and one below the reclaim floor is gone. At the
+    /// HEAD the marker is always scanned, since the active segment is.
+    /// Recorded, not refused, for the reason `chain_break` is; read through
+    /// [`ScanOutcome::base_mismatch`].
+    base_mismatch: Option<u64>,
+    /// THE EDITED TRANSACTION (case 2's coordinate): the last seq of the
+    /// first transaction whose frames were ALL intact and whose intact
+    /// marker did not close it ([`PendingTxn::commits`] refused) — the
+    /// GROUP's own last seq, since in the `last_seq`-edited shape the
+    /// marker's is the forged field. NO WRITER OF THIS JOURNAL PRODUCES THAT
+    /// SHAPE: [`encode_txn`] streams `records_checksum` over the frames it
+    /// writes and sets `last_seq` to the last record's, emits one
+    /// transaction's frames contiguously and `Seq`-ascending, and refuses a
+    /// group past the budget before a byte lands; a crash truncates (a frame
+    /// fails its CRC) or loses frames (they are absent), and never leaves a
+    /// complete marker disagreeing with complete records. So the marker was
+    /// rewritten — and the transaction it closed is un-committed, which on
+    /// the LAST transaction is the tail cut in disguise this names before
+    /// recovery cuts it. A group that met a corrupt or undecodable frame
+    /// while open, or whose first record closed a corrupt run (the run may
+    /// have eaten its own earlier frames), is not clean and never records
+    /// here: that is the corrupt-run verdict's. Recorded, not refused; read
+    /// through [`ScanOutcome::uncommitted_intact`].
+    uncommitted_intact: Option<u64>,
+    /// The running chain AT `bound`: the `chain` of the committed marker
+    /// whose `last_seq` is `bound`, above the base — `None` when `bound` is
+    /// `None`, is not a committed boundary above the base, or is the base's
+    /// own seq (the base answers that itself). What
+    /// [`crate::Kernel::chain_at`] answers, captured in the pass that
+    /// verifies every link to the journal's end; read through
+    /// [`ScanOutcome::chain_at_bound`].
+    chain_at_bound: Option<[u8; 32]>,
 }
 
 impl ScanOutcome {
@@ -1234,6 +1273,49 @@ impl ScanOutcome {
     /// lost the predecessor a break follows from.
     pub(crate) fn chain_break(&self) -> Option<u64> {
         self.chain_break
+    }
+
+    /// The base's own link failed ([`ScanOutcome::base_mismatch`]'s field):
+    /// `Some(s_load)` when the scanned marker closing the base's seq does
+    /// not carry the header's `chain_head`.
+    pub(crate) fn base_mismatch(&self) -> Option<u64> {
+        self.base_mismatch
+    }
+
+    /// The first intact transaction whose intact marker did not close it
+    /// ([`ScanOutcome::uncommitted_intact`]'s field), by its own last seq.
+    pub(crate) fn uncommitted_intact(&self) -> Option<u64> {
+        self.uncommitted_intact
+    }
+
+    /// The chain at the collection bound ([`ScanOutcome::chain_at_bound`]'s
+    /// field): the committed marker's `chain` at `bound`, when one closed
+    /// there above the base.
+    pub(crate) fn chain_at_bound(&self) -> Option<[u8; 32]> {
+        self.chain_at_bound
+    }
+
+    /// THE CHAIN'S VERDICTS, in the order they speak — the coordinate and
+    /// the account each caller wraps as its own `Corruption`: the base's own
+    /// link ([`ScanOutcome::base_mismatch`]), then the intact transaction its
+    /// marker does not close ([`ScanOutcome::uncommitted_intact`]), then the
+    /// chain break ([`ScanOutcome::chain_break`]). One site for the order, so
+    /// the open and the two bounded reads cannot drift on it. A verdict of
+    /// an earlier kind speaks first whatever its coordinate, as the
+    /// corrupt-run verdict — which every caller asks for BEFORE this, in its
+    /// own classification — does: the base's link is the lowest coordinate
+    /// scanned, and the un-committed transaction is the ROOT of the break
+    /// the next committed one shows. `None` when every link verified.
+    pub(crate) fn chain_verdict(
+        &self,
+    ) -> Option<(u64, Box<dyn std::error::Error + Send + Sync + 'static>)> {
+        if let Some(at) = self.base_mismatch() {
+            return Some((at, base_mismatch_cause(at)));
+        }
+        if let Some(at) = self.uncommitted_intact() {
+            return Some((at, uncommitted_intact_cause(at)));
+        }
+        self.chain_break().map(|at| (at, chain_break_cause(at)))
     }
     /// Collect everything a COMMITTED transaction contributes: its marker's
     /// `last_seq` raises the committed head and — when this scan's collection
@@ -1411,10 +1493,18 @@ struct PendingTxn {
     /// moves it and a committed marker closes the group — and closed with
     /// the marker's fields by [`PendingTxn::chain_closing`].
     chain: ChainLink,
+    /// Whether every frame this group could have had was seen intact: opened
+    /// `false` when the group's first record closed a corrupt run — the run
+    /// may have eaten this transaction's own earlier frames — and cleared
+    /// when a corrupt or undecodable frame is met while the group is open.
+    /// A clean group its intact marker does not close is the shape no
+    /// writer produces ([`ScanOutcome::uncommitted_intact`]); an unclean one
+    /// is the corrupt-run verdict's, whatever its marker says.
+    clean: bool,
 }
 
 impl PendingTxn {
-    fn open(txn: Txn, prev_chain: &[u8; 32]) -> PendingTxn {
+    fn open(txn: Txn, prev_chain: &[u8; 32], clean: bool) -> PendingTxn {
         PendingTxn {
             txn,
             checksum: 0,
@@ -1426,6 +1516,7 @@ impl PendingTxn {
             oversize: false,
             records: Vec::new(),
             chain: ChainLink::open(prev_chain),
+            clean,
         }
     }
 
@@ -1542,6 +1633,23 @@ impl PendingTxn {
 /// writer chained in, and it is verified without re-serializing anything:
 /// the bytes hashed are the framed payloads in the buffer.
 ///
+/// TWO MORE VERDICTS ARE RECORDED in the same pass, refused by the callers
+/// as the break is (the chain's open items, 2026-09-23). THE BASE'S OWN
+/// LINK: when the committed marker closing `s_load` itself is scanned — at
+/// the head always, since the active segment is; mid-history whenever the
+/// base's segment is — its `chain` must equal `chain_at_base`, the header's
+/// `chain_head`, else [`ScanOutcome::base_mismatch`] names the base: two
+/// stored values disagree, and a header edited at the head, which no link
+/// above it would ever judge, is seen here rather than forked from. THE
+/// EDITED TRANSACTION: a group whose every frame was intact and whose intact
+/// marker does not close it — a shape no writer of this format produces —
+/// is recorded as [`ScanOutcome::uncommitted_intact`] at the group's own
+/// last seq, naming the transaction that was edited rather than the next
+/// one, whose link then also fails. Neither moves `committed_head`, the
+/// collections or the tail cut: the scan records, the callers halt. And
+/// ONE VALUE IS CAPTURED: the running chain at `bound`
+/// ([`ScanOutcome::chain_at_bound`]), for [`crate::Kernel::chain_at`].
+///
 /// `segs` must be ASCENDING by `firstSeq`, as [`list_segments`] produces it.
 /// The skip test, the tail resolution and [`inferred_last_seq`] all read a
 /// neighbour's name as this segment's bound, so an out-of-order slice makes
@@ -1568,6 +1676,9 @@ pub(crate) fn scan(
         tail: None,
         chain_head: chain_at_base,
         chain_break: None,
+        base_mismatch: None,
+        uncommitted_intact: None,
+        chain_at_bound: None,
     };
     // The commit chain's running value: the last committed marker's above
     // the base, in journal order, else the base's.
@@ -1610,6 +1721,11 @@ pub(crate) fn scan(
                     let payload = &buf[payload];
                     match codec().deserialize::<FramePayload>(payload) {
                         Ok(FramePayload::Record(record)) => {
+                            // A group opened by the record a run landed on
+                            // is not clean: the run may have been its own
+                            // earlier frames. A group already open met the
+                            // run while open, and was marked below.
+                            let landed = run_open;
                             if run_open {
                                 outcome.runs.push(RunEnd::landed_on_record(record.seq));
                                 run_open = false;
@@ -1617,7 +1733,7 @@ pub(crate) fn scan(
                             let mut group = pending
                                 .take()
                                 .filter(|group| group.txn == record.txn)
-                                .unwrap_or_else(|| PendingTxn::open(record.txn, &chain));
+                                .unwrap_or_else(|| PendingTxn::open(record.txn, &chain, !landed));
                             group.push(record, payload);
                             pending = Some(group);
                         }
@@ -1639,12 +1755,37 @@ pub(crate) fn scan(
                                             outcome.chain_break = Some(marker.last_seq);
                                         }
                                         chain = marker.chain;
+                                        // The value at the bound, once the
+                                        // running chain IS this marker's.
+                                        if bound == Some(marker.last_seq) {
+                                            outcome.chain_at_bound = Some(chain);
+                                        }
+                                    } else if marker.last_seq == s_load
+                                        && marker.chain != chain_at_base
+                                        && outcome.base_mismatch.is_none()
+                                    {
+                                        // The base's own link: the marker
+                                        // closing the base's seq carries the
+                                        // chain the header must — stored
+                                        // against stored, nothing recomputed.
+                                        outcome.base_mismatch = Some(s_load);
                                     }
                                     outcome.collect_commit(&marker, group.records);
                                     // The cut is unbounded for the reason the
                                     // head is: it must name the last committed
                                     // marker wherever it sits.
                                     cut = Some((seg_index, end as u64));
+                                } else if group.clean && outcome.uncommitted_intact.is_none() {
+                                    // Every frame intact, the marker intact,
+                                    // and it does not close them: no writer
+                                    // produces this — the marker was edited.
+                                    // Named at the GROUP's last seq, the
+                                    // marker's being the forged field in one
+                                    // of the two shapes. Not committed all
+                                    // the same: the scan records, the
+                                    // callers halt.
+                                    outcome.uncommitted_intact =
+                                        Some(group.last_seq.unwrap_or(marker.last_seq));
                                 }
                                 // else: torn txn — not committed; its frames are
                                 // either beyond W (tail, truncated) or explained
@@ -1653,8 +1794,14 @@ pub(crate) fn scan(
                         }
                         // Intact by CRC but undecodable: writer/reader skew.
                         // Treat as a corrupt frame — it participates in run
-                        // classification rather than being silently dropped.
-                        Err(_) => run_open = true,
+                        // classification rather than being silently dropped,
+                        // and an open group is no longer clean.
+                        Err(_) => {
+                            run_open = true;
+                            if let Some(group) = pending.as_mut() {
+                                group.clean = false;
+                            }
+                        }
                     }
                     pos = end;
                 }
@@ -1667,6 +1814,12 @@ pub(crate) fn scan(
                         return Err(ScanFail::Unbounded { at: s_load });
                     }
                     run_open = true;
+                    // A group open across a corrupt frame may have lost one
+                    // of its own: whatever its marker says of it is the
+                    // run's to explain, never the edited-transaction verdict.
+                    if let Some(group) = pending.as_mut() {
+                        group.clean = false;
+                    }
                     pos = match find_magic(&buf, pos + 1) {
                         Some(p) => p,
                         None => buf.len(),
@@ -1704,6 +1857,37 @@ pub(crate) fn chain_break_cause(at: u64) -> Box<dyn std::error::Error + Send + S
          over the previous committed transaction's chain value and this transaction's own record \
          frames — the transaction was rewritten consistently with its frame CRCs, or the one it \
          follows is not the one before it"
+    )
+    .into()
+}
+
+/// The account the base's own link travels with
+/// ([`ScanOutcome::base_mismatch`]): two stored values at one coordinate
+/// disagree, and which party lies is not said — so the remedy is the
+/// operator's, named here, rather than a silent fallback to an older base
+/// that would leave the edited header on disk for the next head to publish.
+pub(crate) fn base_mismatch_cause(at: u64) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+    format!(
+        "chain break at the base: the checkpoint at {at} carries a chain_head that is not the \
+         chain the journal's own commit marker closing {at} carries — the checkpoint header was \
+         rewritten, or the marker was; nothing was recomputed, two stored values disagree. Remove \
+         or restore the checkpoint and the open re-verifies from the base below it"
+    )
+    .into()
+}
+
+/// The account the edited transaction travels with
+/// ([`ScanOutcome::uncommitted_intact`]): the shape, the four ways a marker
+/// fails to close an intact group, and why no writer leaves it.
+pub(crate) fn uncommitted_intact_cause(
+    at: u64,
+) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+    format!(
+        "chain break at an edited transaction: the transaction ending at {at} is intact frame by \
+         frame but its commit marker does not close it — its records_checksum or last_seq \
+         disagrees with the records it carries, or they are not Seq-ascending, or they exceed \
+         the transaction budget; no writer of this journal produces that shape, so the marker \
+         was rewritten, and the transaction it closed is un-committed"
     )
     .into()
 }
@@ -1967,7 +2151,7 @@ mod tests {
         // accounting: a transaction the writer emits AT the budget accounts to
         // the budget on the way back in, so recovery cannot refuse a
         // transaction this kernel acked.
-        let mut group = PendingTxn::open(Txn(u64::MAX), &CHAIN_GENESIS);
+        let mut group = PendingTxn::open(Txn(u64::MAX), &CHAIN_GENESIS, true);
         group.push(
             LogRecord {
                 seq: u64::MAX,
@@ -2192,6 +2376,10 @@ mod tests {
         assert_eq!(out.committed_head, 1, "the repeat must not commit");
         assert!(out.committed_records.is_empty());
         assert!(out.committed_boundaries.is_empty());
+        // Every frame intact and the marker not closing them: the
+        // edited-transaction verdict is RECORDED at the group's last seq —
+        // the scan refuses nothing itself; the callers halt on it.
+        assert_eq!(out.uncommitted_intact(), Some(2));
     }
 
     #[test]
@@ -2229,6 +2417,8 @@ mod tests {
         assert_eq!(out.committed_head, 4, "a short marker must not commit");
         assert!(out.committed_records.is_empty());
         assert!(out.committed_boundaries.is_empty());
+        // Recorded at the GROUP's last seq (7), not the marker's forged 5.
+        assert_eq!(out.uncommitted_intact(), Some(7));
     }
 
     #[test]
@@ -2251,7 +2441,7 @@ mod tests {
         let last_len = payload_len + (for_records % N) as usize;
         let buf = vec![7u8; last_len + 1];
         let group_of = |last: &[u8]| {
-            let mut group = PendingTxn::open(Txn(1), &CHAIN_GENESIS);
+            let mut group = PendingTxn::open(Txn(1), &CHAIN_GENESIS, true);
             for seq in 1..=N {
                 let payload = if seq == N { last } else { &buf[..payload_len] };
                 let record = LogRecord {

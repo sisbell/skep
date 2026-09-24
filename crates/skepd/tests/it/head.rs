@@ -6,6 +6,11 @@
 //!
 //! The cadence's clock and its checkpoint are driven through the daemon's test
 //! seams (`head_set_clock_millis`, `head_checkpoint_now`) — never a `sleep`.
+//! The clock seam's readings are wall-clock unix milliseconds (the writer's
+//! domain since its resume seeds the hour from the feed's recorded times —
+//! the chain's open items, item 2), so every reading here is set relative to
+//! [`clock_origin`]; the hour-survives-a-restart test moves the RECORD, not
+//! the clock.
 
 use crate::common;
 
@@ -100,6 +105,51 @@ fn force_head(sd: &Skepd, session: &str, account: &str, clock: &mut u64) -> u64 
     commit(sd.port(), session, account)
 }
 
+/// A test clock's origin: the wall clock now, in unix milliseconds — the
+/// writer's own domain, whose hour is seeded from the feed's recorded times
+/// (wall-clock) or from open-time (wall-clock) — so readings set through the
+/// seam are relative to now rather than small numbers a seeded origin would
+/// dwarf into "not yet an hour".
+fn clock_origin() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("after the epoch")
+        .as_millis() as u64
+}
+
+/// Two hours, in the sidecar's own milliseconds.
+const TWO_HOURS_MILLIS: u64 = 2 * 60 * 60 * 1000;
+
+/// Rewrite every recorded `time` in the sidecar `age` milliseconds into the
+/// past — the feed's testimony (AUTH-4.56: a rewritable sidecar), which the
+/// head writer's resume reads its hour's origin from. Every time moves
+/// alike, so the file stays monotone; the digit count is kept, so every
+/// line keeps its length and the derived offset array stays true.
+fn age_sidecar(dir: &Path, age: u64) {
+    let path = dir.join("commits.log");
+    let text = std::fs::read_to_string(&path).expect("commits.log");
+    let mut out = String::with_capacity(text.len());
+    let mut aged = 0;
+    for line in text.lines() {
+        let mut line = line.to_string();
+        if let Some(start) = line.find("\"time\":") {
+            let digits = start + "\"time\":".len();
+            let end = line[digits..]
+                .find(|c: char| !c.is_ascii_digit())
+                .map_or(line.len(), |i| digits + i);
+            let time: u64 = line[digits..end].parse().expect("a recorded time");
+            let older = (time - age).to_string();
+            assert_eq!(older.len(), end - digits, "the rewrite keeps every line's length");
+            line.replace_range(digits..end, &older);
+            aged += 1;
+        }
+        out.push_str(&line);
+        out.push('\n');
+    }
+    assert!(aged > 0, "the sidecar recorded the head's own commits");
+    std::fs::write(&path, out).expect("rewrite commits.log");
+}
+
 fn copy_dir(src: &Path, dst: &Path) {
     std::fs::create_dir_all(dst).expect("create dst");
     for entry in std::fs::read_dir(src).expect("read src") {
@@ -135,7 +185,7 @@ fn the_count_trigger_writes_a_head_at_the_64th_non_head_commit() {
     let sd = spawn(dir.path());
     let port = sd.port();
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
-    let mut clock = 1;
+    let mut clock = clock_origin();
 
     // A first head off the time bound gives a known reset point: the count
     // trigger is then exactly 64 commits from here.
@@ -176,7 +226,7 @@ fn a_checkpoint_moves_the_head_and_a_quiet_board_writes_none() {
     let sd = spawn(dir.path());
     let port = sd.port();
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
-    let mut clock = 1;
+    let mut clock = clock_origin();
 
     force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
     let base = head_record(port, H).expect("a head").clone();
@@ -221,7 +271,7 @@ fn the_time_bound_writes_one_and_never_a_duplicate() {
     let sd = spawn(dir.path());
     let port = sd.port();
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
-    let mut clock = 1;
+    let mut clock = clock_origin();
 
     let p1 = force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
     let head1 = expect_latest_head(port);
@@ -254,7 +304,7 @@ fn an_idempotent_replay_lands_nothing_and_counts_nothing_toward_a_head() {
     let sd = spawn(dir.path());
     let port = sd.port();
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
-    let mut clock = 1;
+    let mut clock = clock_origin();
     let p1 = force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
 
     // One landed commit under an idempotency id…
@@ -306,7 +356,7 @@ fn an_idempotent_replay_lands_nothing_and_counts_nothing_toward_a_head() {
 #[test]
 fn a_checkpoint_taken_before_a_restart_is_attested_by_the_first_head_after_it() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut clock = 1;
+    let mut clock = clock_origin();
 
     let checkpoint_seq = {
         let sd = spawn(dir.path());
@@ -341,6 +391,114 @@ fn a_checkpoint_taken_before_a_restart_is_attested_by_the_first_head_after_it() 
     sd.shutdown();
 }
 
+/// RESUME — the COUNT survives a restart (the chain's open items, item 2;
+/// PUB-6.65's "64 commits that are not the head writer's own have landed
+/// since the last head" — of the board, not of the process): 40 commits after
+/// a head, a restart, 24 more — and the 64th landed commit since that head
+/// writes the next, on the second uptime, with the clock left alone and no
+/// checkpoint taken, so no other trigger can be what fired. Before the seed a
+/// restarted board counted from zero, and a board restarted every fewer than
+/// 64 commits wrote heads at checkpoints alone.
+#[test]
+fn the_commit_count_since_the_last_head_survives_a_restart() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut clock = clock_origin();
+
+    let head_position = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let owner = open_session(port, CLAIMANT_PRINCIPAL);
+        let p = force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
+        for _ in 0..40 {
+            commit(port, &owner, CLAIMANT_ACCOUNT);
+        }
+        assert_eq!(
+            head_record(port, H).unwrap()["position"].as_u64().unwrap(),
+            p,
+            "40 commits since the head: no head yet"
+        );
+        sd.shutdown();
+        p
+    };
+
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let mut last_at = 0;
+    for i in 1..=24u64 {
+        last_at = commit(port, &owner, CLAIMANT_ACCOUNT);
+        if i < 24 {
+            assert_eq!(
+                head_record(port, H).unwrap()["position"].as_u64().unwrap(),
+                head_position,
+                "no head before the 64th landed commit since the last head (restart + {i})"
+            );
+        }
+    }
+    let rec = expect_latest_head(port);
+    assert_eq!(
+        rec["position"].as_u64().unwrap(),
+        last_at,
+        "the 64th commit since the last head — 40 before the restart, 24 after — wrote the head"
+    );
+    assert!(rec["base"].is_null(), "no checkpoint was taken: the count is what fired: {rec}");
+    sd.shutdown();
+}
+
+/// RESUME — the HOUR survives a restart (item 2; PUB-6.65's "one hour has
+/// passed since the last head"): the last head's own commits are the feed's
+/// `"system"`-keyed entries above the position it named, and their recorded
+/// `time` is the head's, so the writer seeds the hour's origin there. Pinned
+/// by moving the RECORD rather than the clock: the sidecar — rewritable
+/// testimony, AUTH-4.56 — is rewritten with every `time` two hours older,
+/// the daemon restarted with its clock left alone, and the first commit
+/// writes a head (an hour has passed since the last head AS RECORDED, though
+/// not since open) while the second, under the hour since the new head,
+/// writes none. Before the seed the hour was measured from open, and this
+/// board would have written no time-bound head for its first hour up.
+#[test]
+fn the_hour_since_the_last_head_survives_a_restart() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut clock = clock_origin();
+
+    let head_position = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let owner = open_session(port, CLAIMANT_PRINCIPAL);
+        let p = force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
+        // One more commit, so the head's own entries are not the feed's last:
+        // the origin is read off the head's OWN "system" entry, not the head
+        // position's time.
+        commit(port, &owner, CLAIMANT_ACCOUNT);
+        assert_eq!(head_record(port, H).unwrap()["position"].as_u64().unwrap(), p);
+        sd.shutdown();
+        p
+    };
+    age_sidecar(dir.path(), TWO_HOURS_MILLIS);
+
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let at = commit(port, &owner, CLAIMANT_ACCOUNT);
+    let rec = expect_latest_head(port);
+    assert_eq!(
+        rec["position"].as_u64().unwrap(),
+        at,
+        "the first commit after the reopen wrote a head: an hour has passed since the last head \
+         as the feed records it, and the writer's hour is the board's"
+    );
+    assert!(rec["prev"]["position"].as_u64() == Some(head_position), "its prev is the head before: {rec}");
+    assert!(rec["base"].is_null(), "no checkpoint was taken, and two commits are not 64: {rec}");
+    let again = commit(port, &owner, CLAIMANT_ACCOUNT);
+    assert!(again > at);
+    assert_eq!(
+        head_record(port, H).unwrap()["position"].as_u64().unwrap(),
+        at,
+        "the second commit, under the hour since the new head, writes none"
+    );
+    sd.shutdown();
+}
+
 /// The staging draft is minted ONCE — doc 3 of the system account — and found
 /// again after a restart (PUB-6.65: the head reaches `H` and the system
 /// account's own staging draft and NO other document; the writer resumes by
@@ -351,7 +509,7 @@ fn a_checkpoint_taken_before_a_restart_is_attested_by_the_first_head_after_it() 
 #[test]
 fn a_restarted_writer_finds_the_staging_draft_it_minted_and_mints_no_other() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut clock = 1;
+    let mut clock = clock_origin();
 
     let (first_head_cost, mint_cost) = {
         let sd = spawn(dir.path());
@@ -399,7 +557,7 @@ fn a_head_names_a_coordinate_strictly_below_its_own_commit() {
     let sd = spawn(dir.path());
     let port = sd.port();
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
-    let mut clock = 1;
+    let mut clock = clock_origin();
 
     let p1 = force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
     let head1 = expect_latest_head(port);
@@ -432,7 +590,7 @@ fn a_peer_re_reads_a_saved_head_byte_equal_and_walks_prev() {
     let sd = spawn(dir.path());
     let port = sd.port();
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
-    let mut clock = 1;
+    let mut clock = clock_origin();
 
     for _ in 0..3 {
         force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
@@ -473,7 +631,7 @@ fn a_peer_re_reads_a_saved_head_byte_equal_and_walks_prev() {
 fn a_restored_tail_cut_drops_the_later_head_and_regrows_a_different_one() {
     let live = tempfile::tempdir().expect("tempdir");
     let backup = tempfile::tempdir().expect("tempdir");
-    let mut clock = 1;
+    let mut clock = clock_origin();
 
     // Head k−1 = H.1, then snapshot the data dir.
     {
@@ -556,7 +714,7 @@ fn one_altered_op_re_chains_the_head_at_the_same_position() {
             &format!(r#"{{"op":"insert","doc":"{draft}","at":{{"subspace":"1","ordinal":"1"}},"values":["{text}"]}}"#),
         );
         sd.daemon().head_checkpoint_now();
-        let mut clock = 1u64;
+        let mut clock = clock_origin();
         force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
         let rec = expect_latest_head(port);
         sd.shutdown();
@@ -636,7 +794,7 @@ fn the_head_is_guest_readable_its_feed_entry_is_system_and_the_draft_is_masked()
     let sd = spawn(dir.path());
     let port = sd.port();
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
-    let mut clock = 1;
+    let mut clock = clock_origin();
 
     let before = head_position_via_changes_baseline(port);
     force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
@@ -717,7 +875,7 @@ fn two_daemons_over_one_sequence_write_byte_identical_heads() {
         let sd = spawn(dir);
         let port = sd.port();
         let owner = open_session(port, CLAIMANT_PRINCIPAL);
-        let mut clock = 1;
+        let mut clock = clock_origin();
         // The same three commits, then a forced head — identical on both.
         for _ in 0..3 {
             commit(port, &owner, CLAIMANT_ACCOUNT);

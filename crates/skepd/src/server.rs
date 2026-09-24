@@ -840,7 +840,8 @@ enum TransportError {
     MalformedChallenge,
     MalformedOpAt,
     MalformedChanges,
-    #[cfg(feature = "observe")]
+    /// The one-parameter `at=<position>` query of `/dump?at` (observe builds)
+    /// and `/chain?at` (every build), so it is no longer `observe`-gated.
     MalformedAt,
     // Routing.
     NoSuchEndpoint,
@@ -869,7 +870,6 @@ impl TransportError {
             TransportError::MalformedChallenge => "malformed_challenge",
             TransportError::MalformedOpAt => "malformed_op_at",
             TransportError::MalformedChanges => "malformed_changes",
-            #[cfg(feature = "observe")]
             TransportError::MalformedAt => "malformed_at",
             TransportError::NoSuchEndpoint => "no_such_endpoint",
             TransportError::MethodNotAllowed => "method_not_allowed",
@@ -902,9 +902,8 @@ impl TransportError {
             | TransportError::WriteAtHistory
             | TransportError::BeyondHead
             | TransportError::NotAPosition
-            | TransportError::MalformedHttp => 400,
-            #[cfg(feature = "observe")]
-            TransportError::MalformedAt => 400,
+            | TransportError::MalformedHttp
+            | TransportError::MalformedAt => 400,
             TransportError::NoSuchEndpoint => 404,
             TransportError::MethodNotAllowed => 405,
             TransportError::HistoryReclaimed => 410,
@@ -978,7 +977,7 @@ fn path_is_known(path: &str) -> bool {
     matches!(
         path,
         "/session" | "/session/close" | "/challenge" | "/op" | "/op-at" | "/health" | "/events"
-            | "/changes"
+            | "/changes" | "/chain"
     ) || (cfg!(feature = "observe") && path == "/dump")
         || (cfg!(feature = "client") && path == "/")
 }
@@ -1202,8 +1201,8 @@ impl Daemon {
     /// the arms wearing [`Daemon::token_route`]: `/op`, `/op-at`,
     /// `/changes`, `/dump` and `/session/close` here, plus `/events`, which
     /// the accept path runs by hand because a stream is not a [`Reply`].
-    /// `/health`, `/challenge`, `/session` and `/` are token-blind by
-    /// design.
+    /// `/health`, `/chain`, `/challenge`, `/session` and `/` are token-blind
+    /// by design.
     fn reply(&self, req: &HttpRequest) -> Reply {
         match (req.method.as_str(), req.path.as_str()) {
             // CORS preflight (wire v4): 204 on any known path; an unknown
@@ -1224,6 +1223,11 @@ impl Daemon {
                 class_varying(self.token_route(req, |r| self.op_at_reply(r, &req.body)))
             }
             ("GET", "/health") => self.get_health(),
+            // Token-blind and class-invariant like `/health`, whose value it
+            // recomputes at any position: a hash over the whole journal
+            // discloses no byte, so no class varies it and no cache header
+            // rides it.
+            ("GET", "/chain") => self.get_chain(req.query.as_deref()),
             ("GET", "/changes") => {
                 class_varying(self.token_route(req, |r| self.get_changes(r, req.query.as_deref())))
             }
@@ -1967,6 +1971,42 @@ impl Daemon {
         )
     }
 
+    /// `GET /chain?at=N` (the chain's open items, item 7; QUEUE item 10) —
+    /// the commit chain's value AS OF committed position `N`, `{"at": N,
+    /// "chain": "<64 lowercase hex>"}`: the kernel's RECOMPUTATION off its
+    /// own journal (`Kernel::chain_at`), under the verification a historical
+    /// read runs — every link from the base it selects below `N` to the
+    /// journal's end — and under the same reconstruction permit, with no
+    /// world materialized. At the committed head it is the value `/health`
+    /// serves as `chain_head` beside `log_position`; at `0` the genesis seed.
+    /// Token-blind and class-invariant like `/health`: a hash over the whole
+    /// journal discloses no byte, and `/health` already serves it to
+    /// everyone. What a peer holding a saved `(position, chain)` pair — a
+    /// `/health` reading, a published head's members — checks against the
+    /// board's recomputation rather than the board's stored claim (wire.md
+    /// §The other endpoints): a re-chained journal answers the forgery here,
+    /// which the saved pair contradicts. The refusals are `/op-at`'s through
+    /// [`refuse_unavailable`] — `beyond_head`, `not_a_position`,
+    /// `history_reclaimed`, `history_busy`, `history_io`/`history_corrupt`,
+    /// `no_journal` — and a malformed or absent `at` is `malformed_at`, the
+    /// `/dump` query's own refusal.
+    fn get_chain(&self, query: Option<&str>) -> Reply {
+        let at = match chain_at_param(query) {
+            Ok(at) => at,
+            Err(detail) => return refuse(TransportError::MalformedAt, Some(&detail)),
+        };
+        match self.history.chain_at(&self.engine, at) {
+            Ok(chain) => Reply::json(
+                200,
+                obj(vec![
+                    ("at", Value::Number(at.0.into())),
+                    ("chain", Value::String(crate::codec::hex_string(&chain))),
+                ]),
+            ),
+            Err(e) => refuse_unavailable(e),
+        }
+    }
+
     /// `GET /changes?since=N[&limit=K][&under=P][&drafts=true]` (wire v6;
     /// class-gated since v7.8) — the delta read: the committed positions in
     /// `(N, head]` the presented token's class may see, oldest first, from
@@ -2294,9 +2334,11 @@ fn op_at_envelope(body: &[u8]) -> Result<(Seq, Value), String> {
     Ok((Seq(at), frame))
 }
 
-/// The `/dump` query: nothing, or exactly `at=<decimal position>`.
-#[cfg(feature = "observe")]
-fn dump_at_param(query: Option<&str>) -> Result<Option<Seq>, String> {
+/// The one-parameter `at=<decimal position>` query two routes read —
+/// `/dump`, where it is optional, and `/chain`, where it is required —
+/// `route` naming the route in the refusal's detail: nothing, or exactly one
+/// `at`.
+fn at_param(query: Option<&str>, route: &str) -> Result<Option<Seq>, String> {
     let query = match query {
         None | Some("") => return Ok(None),
         Some(query) => query,
@@ -2312,12 +2354,26 @@ fn dump_at_param(query: Option<&str>) -> Result<Option<Seq>, String> {
             }
             other => {
                 return Err(format!(
-                    "unknown parameter '{other}'; the one /dump parameter is at=<position>"
+                    "unknown parameter '{other}'; the one {route} parameter is at=<position>"
                 ))
             }
         }
     }
     Ok(at)
+}
+
+/// The `/dump` query: nothing, or exactly `at=<decimal position>`.
+#[cfg(feature = "observe")]
+fn dump_at_param(query: Option<&str>) -> Result<Option<Seq>, String> {
+    at_param(query, "/dump")
+}
+
+/// The `/chain` query: exactly `at=<decimal position>`, REQUIRED — the
+/// head's own pair is `/health`'s, so a chain read with no position names
+/// nothing.
+fn chain_at_param(query: Option<&str>) -> Result<Seq, String> {
+    at_param(query, "/chain")?
+        .ok_or_else(|| String::from("missing parameter 'at'; the one /chain parameter is at=<position>"))
 }
 
 /// The `410 history_reclaimed` refusal: the position asked for is older
@@ -3165,6 +3221,7 @@ mod tests {
         "/op",
         "/op-at",
         "/health",
+        "/chain",
         "/events",
         "/changes",
         #[cfg(feature = "observe")]
@@ -3330,18 +3387,6 @@ mod tests {
         );
     }
 
-    /// The `observe`-only row of the table below, in the one shape that
-    /// compiles under either feature setting.
-    #[cfg(feature = "observe")]
-    fn observe_rows() -> Vec<(TransportError, &'static str, u16)> {
-        vec![(TransportError::MalformedAt, "malformed_at", 400)]
-    }
-
-    #[cfg(not(feature = "observe"))]
-    fn observe_rows() -> Vec<(TransportError, &'static str, u16)> {
-        Vec::new()
-    }
-
     /// wire.md §HTTP status codes, BOTH columns — the discipline
     /// [`code_name`](crate::codec) already gives M10's sixty rejection
     /// codes. The table is transcribed by hand for the reason
@@ -3355,13 +3400,14 @@ mod tests {
     /// watched here and nowhere else.
     #[test]
     fn every_transport_error_pairs_its_documented_name_with_its_documented_status() {
-        let mut table: Vec<(TransportError, &'static str, u16)> = vec![
+        let table: Vec<(TransportError, &'static str, u16)> = vec![
             (TransportError::MalformedSessionRequest, "malformed_session_request", 400),
             (TransportError::MalformedChallenge, "malformed_challenge", 400),
             (TransportError::MalformedOpAt, "malformed_op_at", 400),
             (TransportError::WriteAtHistory, "write_at_history", 400),
             (TransportError::BeyondHead, "beyond_head", 400),
             (TransportError::NotAPosition, "not_a_position", 400),
+            (TransportError::MalformedAt, "malformed_at", 400),
             (TransportError::MalformedChanges, "malformed_changes", 400),
             (TransportError::MalformedHttp, "malformed_http", 400),
             (TransportError::NoSuchEndpoint, "no_such_endpoint", 404),
@@ -3375,7 +3421,6 @@ mod tests {
             (TransportError::HistoryBusy, "history_busy", 503),
             (TransportError::ScanBusy, "scan_busy", 503),
         ];
-        table.extend(observe_rows());
         for &(err, name, status) in &table {
             assert_eq!(err.name(), name, "wire name drifted for {err:?}");
             assert_eq!(err.status(), status, "{name} must be answered with {status}");

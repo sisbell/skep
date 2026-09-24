@@ -141,9 +141,16 @@ impl WritePath {
         // rather than of the order two fields happen to be listed in.
         let commit_stream = CommitStream::at(engine.kernel().current_seq());
         // The head writer resumes by reading H's latest member off the engine's
-        // recovered root (PUB-6.65's I7 (a)); the two cadence constants are the
-        // daemon's, beside the checkpoint cadence.
-        let head = HeadWriter::open(engine.stores(), head_every_commits, head_max_interval_millis);
+        // recovered root (PUB-6.65's I7 (a)) and its cadence's two counters off
+        // the feed opened above — the commits landed since that head, and the
+        // head's own recorded time (the chain's open items, item 2); the two
+        // cadence constants are the daemon's, beside the checkpoint cadence.
+        let head = HeadWriter::open(
+            engine.stores(),
+            head_every_commits,
+            head_max_interval_millis,
+            &feed,
+        );
         Ok(WritePath {
             serial: Mutex::new(()),
             feed,

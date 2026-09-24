@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use common::*;
 use proptest::prelude::*;
+use proptest::test_runner::FileFailurePersistence;
 use skep_address::Address;
 use skep_identity::{
     encode_enroll, encode_retire, parse_enroll, parse_retire, Effect, Enrollment, Fingerprint,
@@ -69,7 +70,25 @@ fn with_canonical_sig(base: &str, sig: &str) -> String {
     format!("{},\"sig\":\"{sig}\"}}", &base[..base.len() - 1])
 }
 
+/// The suite's config at `cases`: the seed file is `props.proptest-regressions`
+/// beside this source — the tracked pins, replayed first on every run — pinned
+/// by name, since proptest's default (`SourceParallel`) resolves through the
+/// nearest `main.rs`, which this one-binary layout puts at `tests/it/`, to
+/// `tests/proptest-regressions/props.txt`, a file the tracked seeds never
+/// lived in (the chain's open items, item 1). Both blocks below take it.
+fn config(cases: u32) -> ProptestConfig {
+    ProptestConfig {
+        cases,
+        failure_persistence: Some(Box::new(FileFailurePersistence::WithSource(
+            "proptest-regressions",
+        ))),
+        ..ProptestConfig::default()
+    }
+}
+
 proptest! {
+    #![proptest_config(config(ProptestConfig::default().cases))]
+
     /// I1 (AUTH-2.89) DIRECTION 1 — `parse(encode(x)) == x` over `Enrollment`'s
     /// WHOLE domain, both kinds.
     #[test]
@@ -240,7 +259,7 @@ fn materialize(fx: &mut Fixture, act: &Act) -> Case {
 // ------------------------------------------------------- the fold streams
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(64))]
+    #![proptest_config(config(64))]
 
     /// I2/I3/I4/I5/I6/I8/I9 over random deposit streams, checked at every
     /// prefix, plus AUTH-2.57 (classify ≡ step's verdict), AUTH-2.127's home

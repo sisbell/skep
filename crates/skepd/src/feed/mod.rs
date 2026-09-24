@@ -694,6 +694,12 @@ impl Feed {
     pub fn head_time(&self) -> Option<u64> {
         self.inner.lock().log.head_time()
     }
+
+    /// Every recorded entry above `position` — `CommitsLog::entries_above`,
+    /// for the head writer's resume.
+    pub fn entries_above(&self, position: u64) -> Vec<(u64, CommitMeta)> {
+        self.inner.lock().log.entries_above(position)
+    }
 }
 
 impl Inner {

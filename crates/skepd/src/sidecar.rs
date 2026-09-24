@@ -551,6 +551,22 @@ impl CommitsLog {
     pub fn floor(&self) -> Option<u64> {
         self.entries.range(self.min_since.saturating_add(1)..).next().map(|(k, _)| *k)
     }
+
+    /// Every entry ABOVE `position`, in position order — what the PUBLISHED
+    /// HEAD writer's resume reads (`crate::head`; the chain's open items,
+    /// item 2): the commits landed since the head that named `position`,
+    /// and among them the head's own `"system"`-keyed commits, whose
+    /// recorded `time` is the head's. Testimony read at a GATE to decide
+    /// WHEN, never a fold input (D1): a bare entry answers no time and no
+    /// key, and a rewritten one moves a head's timing within the bounds the
+    /// triggers already allow. Cloned, once at open — at most the retained
+    /// window — so the writer holds no borrow of this file.
+    pub fn entries_above(&self, position: u64) -> Vec<(u64, CommitMeta)> {
+        self.entries
+            .range(position.saturating_add(1)..)
+            .map(|(at, meta)| (*at, meta.clone()))
+            .collect()
+    }
 }
 
 /// The oldest position the journal can still answer, or `None` when it can

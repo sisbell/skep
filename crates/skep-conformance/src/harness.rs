@@ -14,7 +14,7 @@ use skep_arrangement::{Run, VPos, VSpec};
 use skep_content::Val;
 use skep_engine::{Engine, World};
 use skep_febe::{Deposit, Op, OperationSurface, Request, Response, SessionId};
-use skep_kernel::{CheckpointPolicy, Durability, KernelConfig};
+use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
 use skep_links::{Endset, SlotArg};
 use skep_namespace::PrincipalId;
 
@@ -124,6 +124,8 @@ impl Rig {
         let cfg = KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
+            // Consulted by nothing: an in-memory kernel frames no marker.
+            salt: SaltSource::Os,
         };
         let engine = Engine::open(cfg)
             .map_err(|e| format!("engine open: {e}"))?;

@@ -5,13 +5,13 @@
 //! bit-rot, and a silently-wrong base would defeat the `BadCheckpoint`
 //! fallback chain).
 //!
-//! Layout (`SKC3`): `[magic 4][seq u64 LE][crc32c(body) u32 LE][body_len u64 LE]
+//! Layout (`SKC4`): `[magic 4][seq u64 LE][crc32c(body) u32 LE][body_len u64 LE]
 //! [chain_head 32][body_hash 32][body]`, at `checkpoint.<S>`; the fixed temp
 //! name `checkpoint.tmp` is ignored by recovery (a crash mid-checkpoint leaves
 //! at most an ignored `.tmp` — §6). `chain_head` is the commit chain's value
 //! at `seq` — the marker that held it may be reclaimed, and this is where a
 //! replay above the base continues the chain from; `body_hash` is SHA-256 over
-//! the body, meaningful because the body is CANONICAL under `SKC3`: every
+//! the body, meaningful because the body is CANONICAL under `SKC4`: every
 //! serialized slice iterates in key order (the encoding report's option (i)),
 //! so two writes of one world, on two processes or two machines, yield one
 //! byte string, and a published head can name a checkpoint by
@@ -34,9 +34,12 @@ use crate::journal::{codec, fsync_dir};
 // the 2026-08-26 genesis re-baseline (M7's slice no longer carries a sealed
 // type config, so pre-baseline checkpoint bytes are not this format's), and
 // 2 → 3 on 2026-09-23 with the journal's `SKJ3` (QUEUE item 10): the header
-// gained `chain_head` and `body_hash`, and the body went canonical. A
-// checkpoint under another stamp is refused at `load` naming the stamp found.
-const MAGIC: [u8; 4] = *b"SKC3";
+// gained `chain_head` and `body_hash`, and the body went canonical; and 3 → 4
+// on 2026-09-24 with the journal's `SKJ4` (the chain's salt): nothing in the
+// layout moved, but `chain_head` is a value under the salted preimage, which
+// no `SKC3` header's is. A checkpoint under another stamp is refused at
+// `load` naming the stamp found.
+const MAGIC: [u8; 4] = *b"SKC4";
 /// The header's fields, at the offsets `write` lays them down and `load`
 /// splits them at — one spelling of each, so the two cannot drift.
 const SEQ_AT: usize = 4;
@@ -323,7 +326,7 @@ mod tests {
         let body = codec().serialize(&world()).unwrap();
 
         let mut expected = Vec::new();
-        expected.extend_from_slice(b"SKC3");
+        expected.extend_from_slice(b"SKC4");
         expected.extend_from_slice(&7u64.to_le_bytes()); // seq
         expected.extend_from_slice(&crc32c::crc32c(&body).to_le_bytes()); // crc(body)
         expected.extend_from_slice(&(body.len() as u64).to_le_bytes()); // body_len
@@ -403,7 +406,7 @@ mod tests {
             .load::<Vec<u64>>()
             .expect_err("another format's checkpoint is not a base")
             .to_string();
-        for named in ["`SKC2`", "`SKC3`", "not this build's format", "delete the data directory"] {
+        for named in ["`SKC2`", "`SKC4`", "not this build's format", "delete the data directory"] {
             assert!(refused.contains(named), "{named} missing from: {refused}");
         }
     }

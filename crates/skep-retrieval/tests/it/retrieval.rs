@@ -28,7 +28,7 @@ use skep_arrangement::{
     Vstream,
 };
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
-use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, WorldState};
+use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 use skep_retrieval::{
     CompareError, CompareReport, CorrPair, Deletions, DeletionsError, Delivery, DeliveryItem,
@@ -289,6 +289,7 @@ fn mem_kernel() -> Kernel<World> {
     let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(0),
     };
     Kernel::open(cfg, genesis()).expect("in-memory open")
 }

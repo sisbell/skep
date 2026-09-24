@@ -1171,7 +1171,7 @@ fn two_concurrent_first_mints_bear_exactly_one_published_home() {
 fn a_home_minted_private_below_the_door_is_served_private_and_has_no_clearing_act() {
     use skep_engine::{Engine, KernelConfig};
     use skep_febe::{Codec, OperationSurface, Response};
-    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability};
+    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, SaltSource};
     use skep_namespace::PrincipalId;
     use skepd::JsonCodec;
 
@@ -1199,6 +1199,7 @@ fn a_home_minted_private_below_the_door_is_served_private_and_has_no_clearing_ac
                 burned_seq: BurnedSeqPolicy::Rollback,
             },
             checkpoint: CheckpointPolicy::EveryN(1024),
+            salt: SaltSource::Seeded(0),
         };
         let engine = Engine::open(cfg).expect("engine recover");
         let febe = OperationSurface::new(Box::new(engine.stores()));

@@ -197,6 +197,35 @@ fn chain_at_refuses_as_op_at_does() {
     sd.shutdown();
 }
 
+/// THE SALT IS SERVED BY NO ROUTE (`SKJ4`): `/chain`'s answer body has exactly
+/// the members `at` and `chain` — the value, sixty-four hex, and nothing of
+/// the marker it was read from: no `salt`, no marker bytes, no frame. (The
+/// server's routes were grep'd at the lane for marker or frame serving:
+/// `/health`, `/chain`, `/changes`, `/events`, `/dump` and `/op-at` read the
+/// kernel's values, the sidecar and a reconstructed world, never a segment.)
+/// `/health` likewise carries no such member.
+#[test]
+fn chain_at_serves_the_value_alone_no_salt_and_no_marker_byte() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let at = commit(port, &owner);
+    let (st, body) = get(port, &format!("/chain?at={at}"));
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
+    let v = json(&body);
+    let keys: Vec<&str> = v.as_object().expect("an object").keys().map(String::as_str).collect();
+    assert_eq!(keys, ["at", "chain"], "exactly the two members, and no salt: {v}");
+    let text = String::from_utf8_lossy(&body);
+    assert!(!text.contains("salt") && !text.contains("marker"), "{text}");
+    assert_eq!(v["chain"].as_str().map(str::len), Some(64), "a hash, not a marker's bytes: {v}");
+    let (st, body) = get(port, "/health");
+    assert_eq!(st, 200);
+    let h = json(&body);
+    assert!(h.get("salt").is_none() && h.get("marker").is_none(), "{h}");
+    sd.shutdown();
+}
+
 /// `history_reclaimed`, reached honestly: bulk inserts rotate the journal's
 /// segment, a checkpoint at the head retaining one drops the segments wholly
 /// below it (the recipe `changes.rs` compacts the sidecar with), and a
@@ -205,7 +234,7 @@ fn chain_at_refuses_as_op_at_does() {
 #[test]
 fn chain_at_below_the_retention_floor_is_history_reclaimed() {
     use skep_engine::{Engine, KernelConfig};
-    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, Seq};
+    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, SaltSource, Seq};
 
     let dir = tempfile::tempdir().expect("tempdir");
     let (early, head, head_chain) = {
@@ -244,6 +273,7 @@ fn chain_at_below_the_retention_floor_is_history_reclaimed() {
                 burned_seq: BurnedSeqPolicy::Rollback,
             },
             checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(0),
         };
         let engine = Engine::open(cfg).expect("engine recover");
         engine.kernel().checkpoint().expect("checkpoint reclaims below itself");

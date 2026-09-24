@@ -107,12 +107,14 @@ use crate::notice;
 use crate::sidecar::CommitMeta;
 use crate::write_path::{write_meta, SerialGuard, WritePath};
 
-/// The head record's `format` member — the journal stamp in force (`SKJ3`),
+/// The head record's `format` member — the journal stamp in force (`SKJ4`),
 /// which names the hash and the byte format the `chain` value was computed
 /// under, so a newer daemon reading an older head knows which chain it belongs
-/// to. Not a bump: SKJ3/SKC3 stand (PUB-6.65, the golden regenerated under the
-/// same stamp).
-const FORMAT_STAMP: &str = "SKJ3";
+/// to. `SKJ4` since the chain's salt (2026-09-24): every chain value is now
+/// SHA-256 over a preimage carrying a per-transaction salt, so a head naming
+/// `SKJ3` belongs to a chain no `SKJ4` board recomputes. The stamp is the one
+/// member that moved; the head's schema and its other bytes are as they were.
+const FORMAT_STAMP: &str = "SKJ4";
 
 /// The head writer's own clock, so the time bound (trigger (c)) is drivable in
 /// tests through a seam rather than a `sleep`. In production `now_millis` is

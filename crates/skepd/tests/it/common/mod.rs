@@ -409,6 +409,22 @@ pub fn spawn_with_blocked_prefixes(
     blocked_prefixes: Option<&Path>,
     node_prefix: Option<&str>,
 ) -> Skepd {
+    spawn_under(dir, local_trust, blocked_prefixes, node_prefix, None)
+}
+
+/// [`spawn_with_blocked_prefixes`] with the kernel's SALT SOURCE named:
+/// `None` is the production door (`Daemon::open_with`, OS entropy per
+/// transaction — every other spawn here), `Some(seed)` the test seam
+/// (`Daemon::open_seeded`, the seeded stream), which the head suite's
+/// determinism pins need: two daemons over one op sequence write one chain
+/// only under one seed. The retry loop below is the same either way.
+fn spawn_under(
+    dir: &Path,
+    local_trust: bool,
+    blocked_prefixes: Option<&Path>,
+    node_prefix: Option<&str>,
+    salt_seed: Option<u64>,
+) -> Skepd {
     let node_prefix = node_prefix.map(|text| {
         text.parse::<NodePrefix>().unwrap_or_else(|e| panic!("'{text}' is {e}"))
     });
@@ -443,7 +459,11 @@ pub fn spawn_with_blocked_prefixes(
         opts.configured = vec![origin];
         opts.blocked_supply_path = blocked_prefixes.map(Path::to_path_buf);
         opts.node_prefix = node_prefix.clone();
-        let daemon = match Daemon::open_with(dir, opts) {
+        let opened = match salt_seed {
+            None => Daemon::open_with(dir, opts),
+            Some(seed) => Daemon::open_seeded(dir, opts, seed),
+        };
+        let daemon = match opened {
             Ok(daemon) => daemon,
             Err(e) if open_lost_the_lock_race(&e) => {
                 last_lock_err = Some(e.to_string());
@@ -533,6 +553,19 @@ pub fn issue_blocked_list_bytes(path: &Path, bytes: &[u8]) {
 /// local trust stays the default, so the suites' bare sessions still bind).
 pub fn spawn(dir: &Path) -> Skepd {
     let sd = spawn_configured(dir, true);
+    claim_board(sd.port());
+    sd
+}
+
+/// [`spawn`] under the SEEDED salt source (`Daemon::open_seeded`, the test
+/// seam): every transaction's salt is `SHA-256(seed ‖ position)`, so two
+/// boards spawned here under one seed and driven through one op sequence
+/// write one journal, one chain and one head byte string, and under two
+/// seeds two of each. The head suite's determinism pins are its only
+/// callers; every other suite spawns the production door, whose OS-drawn
+/// salts make every board's chain its own.
+pub fn spawn_seeded(dir: &Path, seed: u64) -> Skepd {
+    let sd = spawn_under(dir, true, None, None, Some(seed));
     claim_board(sd.port());
     sd
 }

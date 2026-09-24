@@ -23,7 +23,7 @@ use skep_discovery::{
     retrieve_endsets_on, window_ftt_on, window_v_on, Cursor, FourSet, OrphanError, OrphanReport,
     QueryError, SupClaim, Window,
 };
-use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, WorldState};
+use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, WorldState};
 use skep_links::{
     enc, Endset, HasLinks, LinkRec, LinkState, LinkWriter, SlotArg, View,
 };
@@ -331,6 +331,7 @@ pub fn kernel() -> Kernel<World> {
     let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(0),
     };
     Kernel::open(cfg, genesis_world()).expect("in-memory open cannot fail")
 }

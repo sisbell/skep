@@ -16,7 +16,7 @@ use skep_address::{validate, Address, Nat, Tumbler};
 use skep_arrangement::{Deposit, HasM5, M5Rec, M5State, VPos, Vstream};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_coordination::Coordinator;
-use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, WorldState};
+use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, WorldState};
 use skep_links::{
     enc, Caller, Endset, HasLinks, LinkRec, LinkState, LinkWriter, SlotArg, TypeRegistry,
     Visibility,
@@ -229,6 +229,7 @@ pub fn kernel() -> Arc<Kernel<World>> {
     let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(0),
     };
     Arc::new(Kernel::open(cfg, genesis_world()).expect("in-memory open cannot fail"))
 }

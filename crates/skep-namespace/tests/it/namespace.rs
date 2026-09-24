@@ -12,8 +12,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use skep_address::{content_subspace, link_subspace, validate, Address, Level, Nat, Tumbler};
 use skep_kernel::{
-    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, LockKey, TxnError,
-    WorldState,
+    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, LockKey, SaltSource,
+    TxnError, WorldState,
 };
 use skep_namespace::{
     first_document_address, first_version_address, ghost_home_doc, ghost_position, head_document,
@@ -85,6 +85,7 @@ fn mem_kernel(genesis: World) -> Kernel<World> {
     let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(0),
     };
     Kernel::open(cfg, genesis).expect("in-memory open")
 }
@@ -97,6 +98,7 @@ fn fsync_config(dir: &Path) -> KernelConfig {
             burned_seq: BurnedSeqPolicy::Rollback,
         },
         checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(0),
     }
 }
 

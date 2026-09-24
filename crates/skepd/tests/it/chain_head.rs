@@ -24,7 +24,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use skep_engine::{Engine, KernelConfig};
-use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability};
+use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, SaltSource};
 
 use common::{
     acked_at, claim_board, get, json, op, op_at, open_session, spawn_unclaimed,
@@ -77,6 +77,7 @@ fn reopen(dir: &Path) -> Engine {
             burned_seq: BurnedSeqPolicy::Rollback,
         },
         checkpoint: CheckpointPolicy::EveryN(1024),
+        salt: SaltSource::Seeded(0),
     };
     let mut last_lock_err = None;
     for _ in 0..ATTEMPTS {

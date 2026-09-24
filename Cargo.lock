@@ -829,6 +829,7 @@ dependencies = [
  "bincode",
  "crc32c",
  "fs2",
+ "getrandom 0.3.4",
  "im",
  "parking_lot",
  "serde",

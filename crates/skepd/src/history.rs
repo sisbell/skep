@@ -36,7 +36,7 @@ use skep_engine::dump::WorldDump;
 use skep_address::Address;
 use skep_engine::{Engine, EngineStores, HistoryError, World};
 use skep_febe::{OperationSurface, Request, Response, SessionId};
-use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, Snapshot};
+use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, Snapshot};
 use skep_namespace::PrincipalId;
 
 /// Concurrent historical reconstructions (`Engine::world_at` behind
@@ -305,6 +305,12 @@ fn execute_read_on(
     let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
+        // The daemon's own source, for the record: this kernel frames no
+        // marker and draws no salt. The salts of the history it answers were
+        // READ off the journal's markers by the replay that built `world`,
+        // never regenerated — a reconstruction under any source is the same
+        // reconstruction.
+        salt: SaltSource::Os,
     };
     let kernel =
         Kernel::open(cfg, world).expect("in-memory open runs no recovery and cannot fail");

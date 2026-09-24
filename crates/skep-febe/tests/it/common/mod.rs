@@ -17,7 +17,7 @@ use skep_febe::{
     BirthVersion, Deposit, Disposition, EditionClaim, Op, OpKind, OperationSurface, RejectCode, Rejection,
     ReqId, Request, Response, SessionId, Stores, UniversalGrant, UniversalIndexRow,
 };
-use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, WorldState};
+use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, WorldState};
 use skep_links::{enc, Endset, HasLinks, Invalid, Link, LinkRec, LinkState};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 use skep_retrieval::{CompareReport, Deletions, Delivery};
@@ -249,6 +249,7 @@ pub fn kernel() -> Arc<Kernel<World>> {
     let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(0),
     };
     Arc::new(Kernel::open(cfg, genesis_world()).expect("in-memory open cannot fail"))
 }

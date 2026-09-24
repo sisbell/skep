@@ -13,7 +13,7 @@
 //! what its tests are about. What every fixture does before minting is here.
 
 use skep_address::{validate, Address, Nat, Tumbler};
-use skep_kernel::{CheckpointPolicy, Durability, KernelConfig};
+use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
 use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 
 use crate::Engine;
@@ -22,11 +22,14 @@ use crate::Engine;
 pub(crate) const USER: PrincipalId = PrincipalId(7);
 
 /// An engine over an in-memory kernel: no journal, and [`crate::World::genesis`]
-/// installed as the root exactly as built.
+/// installed as the root exactly as built. The salt source is the seeded one
+/// every fixture uses — consulted by nothing here, since an in-memory kernel
+/// frames no marker to salt.
 pub(crate) fn mem_engine() -> Engine {
     let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(0),
     };
     Engine::open(cfg).expect("in-memory open cannot fail")
 }

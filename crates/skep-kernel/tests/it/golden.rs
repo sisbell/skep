@@ -1,16 +1,20 @@
 //! The GOLDEN BYTE FIXTURE (the encoding report's §7; QUEUE item 10, the
-//! hash chain's first lane, `SKJ3`/`SKC3`): one journal segment, one
-//! checkpoint and one world dump per boundary, produced BY THE OPS of
-//! [`Fixture::build_golden`] — the hazard suite's eleven extended by the
-//! seven that reach every journal variant and leaf form — and committed under
-//! `tests/golden/` as `seg-1.wal`, `checkpoint.<S>` and `dumps/<seq>.txt`.
+//! hash chain's first lane; `SKJ4`/`SKC4` since the chain's salt): one
+//! journal segment, one checkpoint and one world dump per boundary, produced
+//! BY THE OPS of [`Fixture::build_golden`] — the hazard suite's eleven
+//! extended by the seven that reach every journal variant and leaf form —
+//! under the SEEDED salt source ([`GOLDEN_SALT_SEED`]: a marker's salt is a
+//! pure function of the seed and the transaction, so the bytes reproduce),
+//! and committed under `tests/golden/` as `seg-1.wal`, `checkpoint.<S>` and
+//! `dumps/<seq>.txt`.
 //!
 //! What the pin catches: a release of bincode or serde that moves a width or
 //! a tag, a field reordered or inserted, a variant inserted, a shadow that no
-//! longer matches its type, a chain formula or seed that moves, a checkpoint
-//! header field that moves, a slice whose iteration order stops being a
-//! function of its contents — each fails here by name. What it cannot catch
-//! is a change that keeps the bytes, which is no change.
+//! longer matches its type, a chain formula or seed that moves, a salt
+//! formula that moves, a checkpoint header field that moves, a slice whose
+//! iteration order stops being a function of its contents — each fails here
+//! by name. What it cannot catch is a change that keeps the bytes, which is
+//! no change.
 //!
 //! Three tests, as the report names them: the WRITER pin (the ops reproduce
 //! the files byte for byte), the READER pin (this build opens the files and
@@ -34,7 +38,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::hazard_util::{
-    cfg_manual, ckpt_file, copy_dir, flip_byte, node1, seg_file, Fixture, GOLDEN_OPS, USER,
+    cfg_manual, ckpt_file, copy_dir, flip_byte, node1, seg_file, Fixture, GOLDEN_OPS,
+    GOLDEN_SALT_SEED, USER,
 };
 use skep_engine::Engine;
 use skep_kernel::Seq;
@@ -44,10 +49,16 @@ use tempfile::tempdir;
 /// The op after which the golden checkpoints: the pivot, so the checkpoint
 /// body carries the wide node, the published bit, both documents and a
 /// fragmented arrangement, and the copy and the swap replay ABOVE it — the
-/// reader pin then exercises the `SKC3` header's `chain_head` as the value
+/// reader pin then exercises the `SKC4` header's `chain_head` as the value
 /// the chain continues from, and the boundaries below it fold from genesis
 /// with the chain verified from its seed.
 const CHECKPOINT_AFTER_OP: usize = 16;
+
+/// The seed the golden was regenerated under, restated beside the stamps it
+/// belongs with: a golden written under another seed carries other salts,
+/// other chains and another checkpoint header, and fails the writer pin by
+/// name.
+const _: () = assert!(GOLDEN_SALT_SEED == 0x534B_4A34);
 
 /// The journal frame header: magic + len + crc, restated for the byte-level
 /// probe below.
@@ -272,7 +283,7 @@ fn the_reader_pin_this_build_opens_the_golden_and_answers_every_boundary() {
 
 /// (c) THE STAMP GATE — the golden's files open with this build's own
 /// format stamps, observed through the public surface (a fresh journal's and
-/// a fresh checkpoint's first four bytes), and those are `SKJ3` and `SKC3`.
+/// a fresh checkpoint's first four bytes), and those are `SKJ4` and `SKC4`.
 /// A stamp bump without a regenerated golden fails here by name, as does a
 /// regenerated golden under a stamp this test does not spell.
 #[test]
@@ -316,8 +327,8 @@ fn the_stamp_gate_the_golden_carries_this_builds_format_stamps() {
     );
     // The spellings this lane pinned: a regenerated golden under a later
     // stamp must move these too, in the same commit as its stamp bump.
-    assert_eq!(&golden_journal, b"SKJ3");
-    assert_eq!(&golden_checkpoint, b"SKC3");
+    assert_eq!(&golden_journal, b"SKJ4");
+    assert_eq!(&golden_checkpoint, b"SKC4");
 }
 
 /// Option (i)'s claim, proved directly: two PROCESSES — this one and a

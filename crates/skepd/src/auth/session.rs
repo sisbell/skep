@@ -819,7 +819,7 @@ pub(crate) fn handshake(
 mod tests {
     use skep_engine::Engine;
     use skep_febe::OperationSurface;
-    use skep_kernel::{CheckpointPolicy, Durability, KernelConfig};
+    use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
 
     use super::super::AuthOptions;
     use super::*;
@@ -989,6 +989,7 @@ mod tests {
         let engine = Engine::open(KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(0),
         })
         .expect("in-memory genesis cannot fail");
         let febe = OperationSurface::new(Box::new(engine.stores()));
@@ -1056,6 +1057,7 @@ mod tests {
         let engine = Engine::open(KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(0),
         })
         .expect("in-memory genesis cannot fail");
         let snap = engine.kernel().snapshot();

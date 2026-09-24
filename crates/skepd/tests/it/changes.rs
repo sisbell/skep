@@ -1071,7 +1071,7 @@ fn a_fence_above_the_head_is_not_this_journals_and_is_discarded() {
 fn pre_feature_positions_answer_bare_entries() {
     use skep_engine::{Engine, KernelConfig};
     use skep_febe::{Codec, OperationSurface, Response, SessionId};
-    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability};
+    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, SaltSource};
     use skep_namespace::PrincipalId;
     use skepd::JsonCodec;
 
@@ -1084,6 +1084,7 @@ fn pre_feature_positions_answer_bare_entries() {
                 burned_seq: BurnedSeqPolicy::Rollback,
             },
             checkpoint: CheckpointPolicy::EveryN(1024),
+            salt: SaltSource::Seeded(0),
         };
         let engine = Engine::open(cfg).expect("engine genesis");
         let febe = OperationSurface::new(Box::new(engine.stores()));
@@ -1195,7 +1196,7 @@ fn pre_feature_positions_answer_bare_entries() {
 #[test]
 fn the_sidecar_compacts_to_the_journals_retention() {
     use skep_engine::{Engine, KernelConfig};
-    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, Seq};
+    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, SaltSource, Seq};
 
     let dir = tempfile::tempdir().expect("tempdir");
 
@@ -1243,6 +1244,7 @@ fn the_sidecar_compacts_to_the_journals_retention() {
                 burned_seq: BurnedSeqPolicy::Rollback,
             },
             checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(0),
         };
         let engine = Engine::open(cfg).expect("engine recover");
         engine.kernel().checkpoint().expect("checkpoint reclaims below itself");

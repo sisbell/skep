@@ -29,7 +29,7 @@ use skep_arrangement::{Caller, Deposit, VPos, VSpec};
 use skep_content::Val;
 use skep_engine::dump::WorldDump;
 use skep_engine::{Engine, EngineError, World};
-use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq};
+use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource, Seq};
 use skep_links::SlotArg;
 use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 
@@ -102,6 +102,15 @@ pub fn parse_addr(s: &str) -> Address {
 
 // ── kernel configurations ──
 
+/// THE SEEDED SALT SOURCE every kernel fixture in this suite is built under
+/// (`SKJ4`): the golden's ops, the hazard fixtures, every reopen and every
+/// bounded open. Under it a transaction's salt is `SHA-256(seed ‖ txn)` —
+/// deterministic, so the golden's bytes are reproducible from the ops on any
+/// machine on any day (the writer pin), and two processes write one segment
+/// — where the OS source a daemon uses would salt every run differently. The
+/// seed spells the stamp it was chosen for.
+pub const GOLDEN_SALT_SEED: u64 = 0x534B_4A34; // "SKJ4"
+
 pub fn cfg(dir: &Path, checkpoint: CheckpointPolicy, retain: usize) -> KernelConfig {
     KernelConfig {
         durability: Durability::Fsync {
@@ -110,6 +119,7 @@ pub fn cfg(dir: &Path, checkpoint: CheckpointPolicy, retain: usize) -> KernelCon
             burned_seq: BurnedSeqPolicy::Rollback,
         },
         checkpoint,
+        salt: SaltSource::Seeded(GOLDEN_SALT_SEED),
     }
 }
 

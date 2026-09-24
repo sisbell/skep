@@ -1601,7 +1601,7 @@ mod tests {
 
     use serde::{Deserialize, Serialize};
     use skep_content::ContentStore;
-    use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig};
+    use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource};
     use skep_namespace::M3State;
 
     use super::*;
@@ -1654,6 +1654,7 @@ mod tests {
         let cfg = KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(0),
         };
         Kernel::open(cfg, MiniWorld { m3: seeded_m3(), m5 }).expect("in-memory open")
     }
@@ -1762,6 +1763,7 @@ mod tests {
         let cfg = KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(0),
         };
         Kernel::open(
             cfg,
@@ -1839,6 +1841,7 @@ mod tests {
         let cfg = KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(0),
         };
         let k = Kernel::open(
             cfg,
@@ -2048,6 +2051,7 @@ mod tests {
         let cfg = KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(0),
         };
         let k = Kernel::open(
             cfg,
@@ -2175,6 +2179,7 @@ mod tests {
         let cfg = KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(0),
         };
         Kernel::open(cfg, ShotWorld { m3, content, m5 }).expect("in-memory open")
     }

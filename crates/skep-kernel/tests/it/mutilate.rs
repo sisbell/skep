@@ -72,23 +72,24 @@ pub fn append_bytes(path: &Path, bytes: &[u8]) {
 
 // ── the frame-aware helpers: the chain's tamper matrix ───────────────────
 //
-// The `SKJ3` layout these judge, restated. A frame is
+// The `SKJ4` layout these judge, restated. A frame is
 // `[magic 4][len u32 LE][crc32c u32 LE][payload]`, its CRC over the `len`
 // bytes and the payload. A payload opens with a `u32` tag: `0` a RECORD —
 // `seq` u64, `txn` u64, then the record's own bytes behind a `u64` length —
 // and `1` a MARKER — `txn` u64, `last_seq` u64, `records_checksum` u32
 // (CRC32C streamed over the transaction's record payloads in file order),
-// `chain` [u8; 32], `sig_alg` u8, `sig` behind a `u64` length: sixty-five
-// bytes with the slot empty. A transaction is a run of record frames closed
-// by the marker after them. Every helper below walks a CLEAN segment by its
-// length fields and re-seals exactly the CRCs the edit it makes would break,
-// so every frame stays intact to the parser and the chain alone is left to
-// judge what changed.
+// `salt` [u8; 32] (the per-transaction salt, the last bytes the chain
+// hashes), `chain` [u8; 32], `sig_alg` u8, `sig` behind a `u64` length:
+// ninety-seven bytes with the slot empty. A transaction is a run of record
+// frames closed by the marker after them. Every helper below walks a CLEAN
+// segment by its length fields and re-seals exactly the CRCs the edit it
+// makes would break, so every frame stays intact to the parser and the chain
+// alone is left to judge what changed.
 
 /// The frame header: magic + len + crc.
 pub const FRAME_HEADER_LEN: usize = 12;
 /// The sync word every frame of this build opens with.
-const FRAME_MAGIC: &[u8; 4] = b"SKJ3";
+const FRAME_MAGIC: &[u8; 4] = b"SKJ4";
 /// The payload tags.
 pub const RECORD_TAG: u32 = 0;
 pub const MARKER_TAG: u32 = 1;
@@ -99,11 +100,12 @@ pub const RECORD_BYTES_AT: usize = 28;
 pub const MARKER_TXN_AT: usize = 4;
 pub const MARKER_LAST_SEQ_AT: usize = 12;
 pub const MARKER_CHECKSUM_AT: usize = 20;
-pub const MARKER_CHAIN_AT: usize = 24;
-pub const MARKER_SIG_ALG_AT: usize = 56;
-pub const MARKER_SIG_LEN_AT: usize = 57;
+pub const MARKER_SALT_AT: usize = 24;
+pub const MARKER_CHAIN_AT: usize = 56;
+pub const MARKER_SIG_ALG_AT: usize = 88;
+pub const MARKER_SIG_LEN_AT: usize = 89;
 /// A marker payload's length with the signature slot EMPTY.
-pub const MARKER_EMPTY_LEN: usize = 65;
+pub const MARKER_EMPTY_LEN: usize = 97;
 
 /// One frame of a clean segment: where its header begins, where its payload
 /// lies. The frame ends where the payload does.
@@ -133,6 +135,9 @@ pub struct Txn {
     pub first_seq: u64,
     pub last_seq: u64,
     pub records_checksum: u32,
+    /// The marker's salt field, as found — the per-transaction salt the
+    /// chain hashes last (`SKJ4`).
+    pub salt: [u8; 32],
     /// The marker's chain field, as found.
     pub chain: [u8; 32],
 }
@@ -189,8 +194,9 @@ pub fn transactions(data: &[u8]) -> Vec<Txn> {
                         p[MARKER_LAST_SEQ_AT..MARKER_CHECKSUM_AT].try_into().unwrap(),
                     ),
                     records_checksum: u32::from_le_bytes(
-                        p[MARKER_CHECKSUM_AT..MARKER_CHAIN_AT].try_into().unwrap(),
+                        p[MARKER_CHECKSUM_AT..MARKER_SALT_AT].try_into().unwrap(),
                     ),
+                    salt: p[MARKER_SALT_AT..MARKER_CHAIN_AT].try_into().unwrap(),
                     chain: p[MARKER_CHAIN_AT..MARKER_SIG_ALG_AT].try_into().unwrap(),
                     marker: frame,
                 });

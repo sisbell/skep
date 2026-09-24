@@ -25,7 +25,7 @@ pub(crate) fn stamp_text(stamp: &[u8; 4]) -> String {
 pub enum OpenError {
     /// The journal was written under ANOTHER format: its first scanned
     /// segment opens with a well-formed sync word that is not this build's
-    /// (`SKJ2` under a build writing `SKJ3`). Refused BY NAME, before the
+    /// (`SKJ3` under a build writing `SKJ4`). Refused BY NAME, before the
     /// scan — which would otherwise read the whole segment as one corrupt run
     /// reaching end-of-file, classify it as the un-acked tail, TRUNCATE the
     /// segment to nothing and serve an empty board — and before any write, so

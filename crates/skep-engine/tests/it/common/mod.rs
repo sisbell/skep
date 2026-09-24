@@ -9,7 +9,9 @@ use skep_arrangement::{Caller, VPos, VSpec};
 // The kernel configuration types come through the engine's own re-exports,
 // which is what holds that set to covering `Engine::open`: a narrowed set
 // fails to build here.
-use skep_engine::{BurnedSeqPolicy, CheckpointPolicy, Durability, Engine, KernelConfig};
+use skep_engine::{
+    BurnedSeqPolicy, CheckpointPolicy, Durability, Engine, KernelConfig, SaltSource,
+};
 use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 use skep_retrieval::{Delivery, DeliveryItem};
 
@@ -66,10 +68,15 @@ pub fn element(doc: &Address, s: u32, n: u32) -> Address {
         .expect("an element of a document is T4-valid")
 }
 
+/// The seeded salt source every fixture here writes under: deterministic,
+/// so a journaled fixture's bytes are the same on every run.
+const TEST_SEED: u64 = 0xE7;
+
 pub fn mem_cfg() -> KernelConfig {
     KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(TEST_SEED),
     }
 }
 
@@ -81,6 +88,7 @@ pub fn fsync_cfg(path: &Path) -> KernelConfig {
             burned_seq: BurnedSeqPolicy::Rollback,
         },
         checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(TEST_SEED),
     }
 }
 

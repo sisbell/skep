@@ -16,7 +16,7 @@ use arc_swap::ArcSwap;
 use parking_lot::{Mutex, MutexGuard};
 
 use crate::checkpoint;
-use crate::config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig};
+use crate::config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
 use crate::error::{CheckpointError, HistoryError, OpenError, TxnError};
 use crate::journal::{self, CommitFail, Journal, JournalWriter, ScanFail, UnwindRepair};
 use crate::replay;
@@ -502,7 +502,12 @@ impl<W: WorldState> Kernel<W> {
     /// shape no writer of this format leaves, so the marker was rewritten;
     /// on the LAST transaction too, where un-committing it would otherwise
     /// have been the torn tail recovery cuts. The signature slot is NOT a
-    /// chain input, by design: a filled slot opens.
+    /// chain input, by design: a filled slot opens. The SALT IS one (`SKJ4`,
+    /// the matrix's case 16): a marker's salt edited, its CRC re-fixed, is
+    /// caught at that transaction — and being drawn at random per
+    /// transaction and served by no route, it is what keeps a served chain
+    /// value from confirming a guess at a transaction's bytes, while against
+    /// a party holding the journal, who holds the bytes, it protects nothing.
     ///
     /// REFUSED — the checkpoint's own door: a body rewritten with its CRC
     /// re-fixed fails `body_hash`, the fallback reaches an older base or
@@ -580,7 +585,7 @@ impl<W: WorldState> Kernel<W> {
                 retain_checkpoints,
                 ..
             } => {
-                let (root, journal, lock) = Self::recover(journal_path, &genesis)?;
+                let (root, journal, lock) = Self::recover(journal_path, &genesis, cfg.salt)?;
                 (
                     root,
                     journal,
@@ -597,9 +602,15 @@ impl<W: WorldState> Kernel<W> {
     }
 
     /// Recover the journal at `dir` into the root it commits from, its live
-    /// appender, and the exclusion lock the kernel holds for its lifetime
-    /// (§7).
-    fn recover(dir: &Path, genesis: &W) -> Result<(Committed<W>, Journal, File), OpenError> {
+    /// appender — handed `salt`, the configured [`SaltSource`] every
+    /// transaction it commits draws from (`SKJ4`); recovery itself draws
+    /// nothing, reading each salt off its marker — and the exclusion lock the
+    /// kernel holds for its lifetime (§7).
+    fn recover(
+        dir: &Path,
+        genesis: &W,
+        salt: SaltSource,
+    ) -> Result<(Committed<W>, Journal, File), OpenError> {
         fs::create_dir_all(dir)?;
         let lock = journal::acquire_journal_lock(dir)?;
         let segs = journal::list_segments(dir)?;
@@ -689,7 +700,7 @@ impl<W: WorldState> Kernel<W> {
         // this cut settles and which the appender reads once.
         journal::truncate_tail(dir, &scan)?;
 
-        let writer = JournalWriter::open_active(dir, next_seq, chain_head)?;
+        let writer = JournalWriter::open_active(dir, next_seq, chain_head, salt)?;
         Ok((
             Committed {
                 seq: Seq(committed_head),
@@ -1015,7 +1026,7 @@ impl<W: WorldState> Kernel<W> {
     /// The commit chain's value at the installed head: the `chain` the
     /// marker closing [`Kernel::current_seq`]'s transaction carries on disk,
     /// or what recovery derived for that head — the last committed marker's
-    /// above the base, else the base's own (the `SKC3` header's
+    /// above the base, else the base's own (the `SKC4` header's
     /// `chain_head`, or the seed at genesis). The seed at every coordinate
     /// under [`Durability::InMemory`], where there are no frames to hash.
     /// Read lock-free off the root, like [`Kernel::current_seq`] and with
@@ -1098,7 +1109,7 @@ impl<W: WorldState> Kernel<W> {
     }
 
     /// The NEWEST RETAINED checkpoint's coordinate and the two hashes its
-    /// `SKC3` header carries — `(seq, chain_head, body_hash)` — or `None` under
+    /// `SKC4` header carries — `(seq, chain_head, body_hash)` — or `None` under
     /// [`Durability::InMemory`] and before the first checkpoint. ADDITIVE
     /// (QUEUE item 10 piece 2, the PUBLISHED HEAD): what a head record's `base`
     /// member names (PUB-6.65), so a peer that copies a checkpoint file has its
@@ -1109,7 +1120,7 @@ impl<W: WorldState> Kernel<W> {
     ///
     /// Reads the newest file's HEADER ALONE — never the body — so it costs one
     /// directory list and one short read, not a world deserialization. The
-    /// header layout is [`checkpoint`]'s: an 88-byte `SKC3` header whose last
+    /// header layout is [`checkpoint`]'s: an 88-byte `SKC4` header whose last
     /// two 32-byte fields are `chain_head` (at offset 24) and `body_hash` (at
     /// 56). FAIL-QUIET — `None` on any I/O error or a file shorter than its own
     /// header — because the head writer that reads this must never fail a
@@ -1123,7 +1134,7 @@ impl<W: WorldState> Kernel<W> {
         let newest = checkpoint::list(&journaled.dir).ok()?.pop()?;
         let path = journaled.dir.join(format!("checkpoint.{}", newest.seq));
         let data = std::fs::read(&path).ok()?;
-        // The `SKC3` header (checkpoint.rs owns the layout): 88 bytes, the last
+        // The `SKC4` header (checkpoint.rs owns the layout): 88 bytes, the last
         // two 32-byte fields the chain head and the body hash. Read at those
         // offsets rather than through `load`, which deserializes the whole body
         // to hand back a world this caller does not want.
@@ -1288,7 +1299,7 @@ impl<W: WorldState> Kernel<W> {
     /// [`HistoryError::BeyondHead`], [`HistoryError::Reclaimed`],
     /// [`HistoryError::Corruption`] — the corrupt run, then the chain's own
     /// verdicts — then [`HistoryError::NotABoundary`]), and the same answer
-    /// for a boundary that IS the base: the base's own chain, the `SKC3`
+    /// for a boundary that IS the base: the base's own chain, the `SKC4`
     /// header's `chain_head` or the seed at genesis, answered without
     /// consulting the journal and so never halting. Deterministic in `at`
     /// across calls, processes and base choices, since a checkpoint's header
@@ -1389,6 +1400,9 @@ mod tests {
         }
     }
 
+    /// The seeded salt source these fixtures write under, named once.
+    const TEST_SEED: u64 = 0x2B;
+
     fn cfg(dir: &std::path::Path, burned_seq: BurnedSeqPolicy) -> KernelConfig {
         KernelConfig {
             durability: Durability::Fsync {
@@ -1397,13 +1411,15 @@ mod tests {
                 burned_seq,
             },
             checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(TEST_SEED),
         }
     }
 
     /// A fresh appender at genesis, for the journals these tests build
     /// without a kernel.
     fn fresh_writer(dir: &std::path::Path) -> JournalWriter {
-        JournalWriter::open_active(dir, 1, journal::CHAIN_GENESIS).unwrap()
+        JournalWriter::open_active(dir, 1, journal::CHAIN_GENESIS, SaltSource::Seeded(TEST_SEED))
+            .unwrap()
     }
 
     /// [`Kernel::newest_checkpoint`] (QUEUE item 10 piece 2, the head's `base`):
@@ -1464,7 +1480,7 @@ mod tests {
         let mut data = fs::read(&seg).unwrap();
         let mut pos = 0usize;
         while pos + journal::FRAME_HEADER_LEN <= data.len() {
-            assert_eq!(&data[pos..pos + 4], b"SKJ3", "a clean frame stream");
+            assert_eq!(&data[pos..pos + 4], b"SKJ4", "a clean frame stream");
             data[pos..pos + 4].copy_from_slice(b"SKJ2");
             let len = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().unwrap()) as usize;
             pos += journal::FRAME_HEADER_LEN + len;
@@ -1478,13 +1494,13 @@ mod tests {
                 err,
                 OpenError::ForeignFormat {
                     found: [b'S', b'K', b'J', b'2'],
-                    expected: [b'S', b'K', b'J', b'3'],
+                    expected: [b'S', b'K', b'J', b'4'],
                 }
             ),
             "got {err:?}"
         );
         let rendered = err.to_string();
-        for named in ["`SKJ2`", "`SKJ3`", "not this build's format", "delete the data directory"] {
+        for named in ["`SKJ2`", "`SKJ4`", "not this build's format", "delete the data directory"] {
             assert!(rendered.contains(named), "{named} missing from: {rendered}");
         }
         assert!(std::error::Error::source(&err).is_none());
@@ -1505,7 +1521,7 @@ mod tests {
         let mut pos = 0usize;
         while pos + journal::FRAME_HEADER_LEN <= junk.len() {
             if pos > 0 {
-                junk[pos..pos + 4].copy_from_slice(b"SKJ3");
+                junk[pos..pos + 4].copy_from_slice(b"SKJ4");
             }
             let len = u32::from_le_bytes(junk[pos + 4..pos + 8].try_into().unwrap()) as usize;
             pos += journal::FRAME_HEADER_LEN + len;
@@ -1616,6 +1632,7 @@ mod tests {
         let mem = KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(TEST_SEED),
         };
         f(Kernel::open(mem, Vec::new()).unwrap(), "InMemory");
     }
@@ -1938,7 +1955,7 @@ mod tests {
             let mut writer = fresh_writer(dir.path());
             let mut evil = Vec::new();
             while evil.len() < 256 * 1024 {
-                evil.extend_from_slice(b"SKJ3");
+                evil.extend_from_slice(b"SKJ4");
                 evil.extend_from_slice(&(64 * 1024u32).to_le_bytes()); // a len that fits
                 evil.extend_from_slice(&0u32.to_le_bytes()); // a crc that will not
                 evil.extend_from_slice(&[0u8; 4]);
@@ -2067,6 +2084,7 @@ mod tests {
         let cfg = KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(TEST_SEED),
         };
         let k = Kernel::<Vec<u64>>::open(cfg, Vec::new()).unwrap();
         k.applier.state.lock().seq.high_water = u64::MAX;
@@ -2112,6 +2130,7 @@ mod tests {
                 burned_seq: BurnedSeqPolicy::Rollback,
             },
             checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(TEST_SEED),
         };
         let err = Kernel::<Vec<u64>>::open(bad_cfg.clone(), Vec::new())
             .err()
@@ -2187,6 +2206,7 @@ mod tests {
         let cfg = KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(TEST_SEED),
         };
         let k = Kernel::<Vec<u64>>::open(cfg, Vec::new()).unwrap();
         k.transact::<_, ()>(&[], |stg| {
@@ -2222,6 +2242,7 @@ mod tests {
                 burned_seq: BurnedSeqPolicy::Rollback,
             },
             checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(TEST_SEED),
         };
         let k = Kernel::<Vec<u64>>::open(cfg, Vec::new()).unwrap();
         std::thread::scope(|s| {
@@ -2285,12 +2306,12 @@ mod tests {
             let len = u32::from_le_bytes(buf[pos + 4..pos + 8].try_into().unwrap()) as usize;
             let payload =
                 &buf[pos + journal::FRAME_HEADER_LEN..pos + journal::FRAME_HEADER_LEN + len];
-            // A marker payload: tag 1 (4), txn (8), last_seq (8), checksum
-            // (4), then the chain (32).
+            // A marker payload (`SKJ4`): tag 1 (4), txn (8), last_seq (8),
+            // checksum (4), the salt (32), then the chain (32).
             if payload[..4] == 1u32.to_le_bytes()
                 && u64::from_le_bytes(payload[12..20].try_into().unwrap()) == seq
             {
-                return payload[24..56].try_into().unwrap();
+                return payload[56..88].try_into().unwrap();
             }
             pos += journal::FRAME_HEADER_LEN + len;
         }
@@ -2382,6 +2403,7 @@ mod tests {
         let cfg = KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(TEST_SEED),
         };
         let k = Kernel::<Vec<u64>>::open(cfg, Vec::new()).unwrap();
         for x in [10u64, 20] {

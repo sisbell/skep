@@ -1,8 +1,11 @@
 //! Kernel configuration — the knobs the design's Open-build-decisions section
 //! selects, carried on [`KernelConfig`] (§Public interface).
 
+use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
+
+use sha2::{Digest, Sha256};
 
 /// Kernel configuration, passed to [`crate::Kernel::open`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,16 +27,93 @@ pub struct KernelConfig {
     /// succeeding calls [`crate::Kernel::checkpoint`] itself and reads the
     /// result.
     pub checkpoint: CheckpointPolicy,
+    /// Where the commit chain's per-transaction SALT comes from (`SKJ4`):
+    /// [`SaltSource::Os`] for every deployment, [`SaltSource::Seeded`] for
+    /// fixtures and tests alone. Consulted once per journaled commit, by the
+    /// appender, for the thirty-two bytes the commit marker stores and the
+    /// chain hashes; never consulted on replay, where the salt is read off
+    /// the marker, and never under [`Durability::InMemory`], which frames
+    /// nothing.
+    pub salt: SaltSource,
 }
 
 impl KernelConfig {
     /// The rules this configuration must satisfy, asked of each knob in field
-    /// order — [`Durability::validate`], then [`CheckpointPolicy::validate`].
-    /// Each rule lives with the knob it constrains; `Err` names the rule
-    /// broken, which is the whole of what a caller can act on.
+    /// order — [`Durability::validate`], then [`CheckpointPolicy::validate`],
+    /// then [`SaltSource::validate`]. Each rule lives with the knob it
+    /// constrains; `Err` names the rule broken, which is the whole of what a
+    /// caller can act on.
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
         self.durability.validate()?;
-        self.checkpoint.validate()
+        self.checkpoint.validate()?;
+        self.salt.validate()
+    }
+}
+
+/// Where the commit chain's per-transaction SALT is drawn from (`SKJ4`; the
+/// signed-ops re-base report's R1, the owner's ruling of 2026-09-23). Every
+/// committed transaction's marker carries thirty-two salt bytes, and the
+/// chain's preimage hashes them after the marker's other fields
+/// ([`crate::journal`]'s `ChainLink`), so a reader holding two consecutive
+/// chain values off the wire — `/chain?at=N` serves both `chain(N − 1)` and
+/// `chain(N)` to everyone — cannot CONFIRM a guess at transaction `N`'s bytes
+/// by hashing the guess: the preimage has thirty-two bytes the reader was
+/// never served. Stored in the marker at commit and READ BACK on every
+/// replay, never regenerated, so the source matters only on the write path
+/// and a journal written under one source replays under any.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaltSource {
+    /// PRODUCTION: thirty-two bytes of OS entropy per transaction
+    /// (`getrandom`), unpredictable to every party that does not hold the
+    /// journal. The one source a daemon opens under — a daemon under any
+    /// other source publishes chain values a reader can invert, which is the
+    /// oracle the salt exists to close.
+    Os,
+    /// FIXTURES AND TESTS ONLY, never a daemon's: a deterministic stream, the
+    /// salt of transaction `txn` being `SHA-256(seed LE64 ‖ txn LE64)` — a
+    /// pure function of the seed and the transaction's identity, so a
+    /// replayed op sequence under one seed writes ONE history byte for byte
+    /// (the golden fixture, two processes writing one checkpoint, two
+    /// daemons writing one head), and under two seeds two histories that
+    /// differ at every position. Nothing about it is secret: the seed is in
+    /// the test's source.
+    Seeded(u64),
+}
+
+impl SaltSource {
+    /// The rule this source must satisfy: none — both sources are modes this
+    /// kernel offers, and which one a deployment may use is the caller's
+    /// discipline (a daemon is `Os`), which a configuration cannot check.
+    /// Spelled out variant by variant, for the reason
+    /// [`Durability::validate`]'s is: a source added here has to say whether
+    /// it carries a rule.
+    pub(crate) fn validate(self) -> Result<(), &'static str> {
+        match self {
+            SaltSource::Os | SaltSource::Seeded(_) => Ok(()),
+        }
+    }
+
+    /// Draw the salt for the transaction whose identity — its first `Seq` —
+    /// is `txn`. The one site salt bytes are made: the appender calls it once
+    /// per commit, before a frame is built, and stores the answer in the
+    /// marker. `Err` is the OS refusing entropy, which nothing here can
+    /// repair; the commit that asked is then a true no-op the caller may
+    /// re-invoke, since no byte of it has been framed.
+    pub(crate) fn draw(self, txn: u64) -> io::Result<[u8; 32]> {
+        match self {
+            SaltSource::Os => {
+                let mut salt = [0u8; 32];
+                getrandom::fill(&mut salt)
+                    .map_err(|e| io::Error::other(format!("OS entropy unavailable: {e}")))?;
+                Ok(salt)
+            }
+            SaltSource::Seeded(seed) => Ok(Sha256::new()
+                .chain_update(seed.to_le_bytes())
+                .chain_update(txn.to_le_bytes())
+                .finalize()
+                .into()),
+        }
     }
 }
 
@@ -247,6 +327,7 @@ mod tests {
                 burned_seq: BurnedSeqPolicy::Rollback,
             },
             checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Os,
         };
         assert_eq!(
             bad.validate().unwrap_err(),
@@ -255,8 +336,62 @@ mod tests {
         let in_memory = KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Os,
         };
         assert!(in_memory.validate().is_ok());
+    }
+
+    #[test]
+    fn both_salt_sources_are_modes_this_kernel_offers() {
+        // The salt knob carries no rule: which source a deployment may use is
+        // the caller's discipline (a daemon is `Os`), and a configuration
+        // cannot check it. Both validate, in either durability mode.
+        for salt in [SaltSource::Os, SaltSource::Seeded(0), SaltSource::Seeded(u64::MAX)] {
+            for durability in [Durability::InMemory, fsync_mode(BurnedSeqPolicy::Rollback)] {
+                let cfg = KernelConfig {
+                    durability,
+                    checkpoint: CheckpointPolicy::Manual,
+                    salt,
+                };
+                assert!(cfg.validate().is_ok(), "{salt:?} is a mode this offers");
+            }
+        }
+    }
+
+    #[test]
+    fn the_seeded_salt_is_a_pure_function_of_the_seed_and_the_transaction() {
+        // The formula, spelled out by hand beside the source: SHA-256 over
+        // the seed's eight little-endian bytes then the transaction's — so a
+        // replayed op sequence under one seed writes one history, and the
+        // golden fixture's markers carry exactly these bytes.
+        let by_hand = |seed: u64, txn: u64| -> [u8; 32] {
+            let mut preimage = Vec::with_capacity(16);
+            preimage.extend_from_slice(&seed.to_le_bytes());
+            preimage.extend_from_slice(&txn.to_le_bytes());
+            Sha256::digest(&preimage).into()
+        };
+        for (seed, txn) in [(0, 1), (7, 1), (7, 2), (u64::MAX, u64::MAX)] {
+            assert_eq!(SaltSource::Seeded(seed).draw(txn).unwrap(), by_hand(seed, txn));
+        }
+        // Deterministic across draws, distinct across transactions and across
+        // seeds: two boards under two seeds salt every position differently.
+        let seeded = SaltSource::Seeded(7);
+        assert_eq!(seeded.draw(1).unwrap(), seeded.draw(1).unwrap());
+        assert_ne!(seeded.draw(1).unwrap(), seeded.draw(2).unwrap());
+        assert_ne!(seeded.draw(1).unwrap(), SaltSource::Seeded(8).draw(1).unwrap());
+        assert_ne!(seeded.draw(1).unwrap(), [0u8; 32], "a salt is never the zero seed");
+    }
+
+    #[test]
+    fn the_os_source_draws_fresh_entropy_on_every_call() {
+        // Two draws for ONE transaction differ: the OS source is a function
+        // of nothing the caller supplies, which is what makes a chain value
+        // under it confirm no guess. (Equal draws would be a 2^-256 event.)
+        let first = SaltSource::Os.draw(1).expect("OS entropy");
+        let second = SaltSource::Os.draw(1).expect("OS entropy");
+        assert_ne!(first, second, "the OS source repeated a salt");
+        assert_ne!(first, [0u8; 32]);
+        assert_ne!(first, SaltSource::Seeded(0).draw(1).unwrap(), "not the seeded stream");
     }
 
     #[test]
@@ -269,6 +404,7 @@ mod tests {
         let with = |checkpoint| KernelConfig {
             durability: Durability::InMemory,
             checkpoint,
+            salt: SaltSource::Os,
         };
         assert_eq!(
             with(CheckpointPolicy::EveryN(0)).validate().unwrap_err(),
@@ -285,6 +421,7 @@ mod tests {
         let journaled = KernelConfig {
             durability: fsync_mode(BurnedSeqPolicy::Rollback),
             checkpoint: CheckpointPolicy::EveryN(0),
+            salt: SaltSource::Os,
         };
         assert_eq!(
             journaled.validate().unwrap_err(),

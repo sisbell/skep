@@ -28,6 +28,12 @@ fs2 = "0.4"
 # record payloads and its predecessor's chain value, carried in the commit
 # marker and recomputed at replay; the checkpoint header's body hash.
 sha2.workspace = true
+# The chain's SALT (`SKJ4`): thirty-two OS-entropy bytes per transaction,
+# stored in the commit marker and hashed into the chain's preimage, so a
+# served chain value confirms no guess at a transaction's bytes.
+# `SaltSource::Os` draws them here; the seeded source the fixtures use draws
+# none. Already in the workspace lock through skepd.
+getrandom = "0.3"
 
 [dev-dependencies]
 # The design names `im` for W's persistent slices; M2 itself is generic over W,

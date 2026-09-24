@@ -58,7 +58,8 @@
 //! ```no_run
 //! use serde::{Deserialize, Serialize};
 //! use skep_kernel::{
-//!     BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, WorldState,
+//!     BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource,
+//!     WorldState,
 //! };
 //!
 //! #[derive(Clone, Serialize, Deserialize)]
@@ -81,6 +82,7 @@
 //!         burned_seq: BurnedSeqPolicy::Rollback,
 //!     },
 //!     checkpoint: CheckpointPolicy::EveryN(1024),
+//!     salt: SaltSource::Os,
 //! };
 //! let kernel = Kernel::open(cfg, World { log: vec![] }).unwrap();
 //! let (_, seq) = kernel
@@ -101,7 +103,7 @@ mod journal;
 mod kernel;
 mod replay;
 
-pub use config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig};
+pub use config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
 pub use error::{CheckpointError, HistoryError, OpenError, TxnError};
 pub use journal::MAX_TXN_BYTES;
 pub use kernel::{Kernel, Snapshot, Staging};

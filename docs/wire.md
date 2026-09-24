@@ -2488,9 +2488,13 @@ under the verification a historical read runs — every link from the
 checkpoint it selects at or below `at` to the journal's END, so a
 position below the newest checkpoint verifies the whole surviving
 journal from the base it selects — with no world materialized.
-Token-blind and class-invariant like `/health` (a hash over the whole
-journal discloses no byte, and `/health` already serves it to everyone):
-at the current head it equals `chain_head` beside `log_position`, at a
+Token-blind and class-invariant like `/health`: every link's preimage
+carries a per-transaction SALT — thirty-two random bytes stored in the
+commit marker (`SKJ4`) and served by no route — so a served chain value
+confirms no guess at a transaction's bytes, even to a reader holding the
+value before it and able to enumerate the transaction's candidates, and
+`/health` already serves the head's value to everyone. At the current
+head it equals `chain_head` beside `log_position`, at a
 retained checkpoint's own position it is that checkpoint's header value,
 and at `0` it is the genesis seed. Position errors are `/op-at`'s —
 `beyond_head`, `not_a_position`, `history_reclaimed`, the reconstruction
@@ -2855,7 +2859,7 @@ derive the mode from the `(claimant, local_trust)` pair (§Identity).
 a NEW PUBLISHED VERSION of itself on the write path's cadence, a `skep-head`
 record: ONE JSON object whose members are, in this order and no other, `type`
 (`"skep-head"`), `format` (the journal stamp the `chain` was computed under,
-`"SKJ3"` today), `position`, `chain` (64 lowercase hex), `base` (the newest
+`"SKJ4"` today), `position`, `chain` (64 lowercase hex), `base` (the newest
 retained checkpoint at or below `position` — `seq`, `chain`, `body_hash` — or
 `null` before the first) and `prev` (the previous head's `position` and
 `chain`, or `null` at the first). No timestamp (two heads of one board at one
@@ -3526,7 +3530,7 @@ configuration is retired — the two owner rulings of 2026-08-26, applied):
   the values are the format, not a sealed configuration, so the
   byte-identical-genesis caller contract and the reopened-under-
   different-config refusals are gone; the journal and checkpoint format
-  stamps (`SKJ3`/`SKC3`) name the format that wrote them. The
+  stamps (`SKJ4`/`SKC4`) name the format that wrote them. The
   architecture's extension path is predicates (pdef content), not new
   compiled substrate classes.
 * FORMAT CONSEQUENCE, accepted by the owner in the ruling (pre-release):

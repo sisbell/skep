@@ -21,14 +21,16 @@
 //!   or the EDITED TRANSACTION at its own seq (an intact transaction its
 //!   intact marker does not close, a shape no writer leaves) — the cause
 //!   travelling, every file byte for byte as found (a halt cuts nothing),
-//!   and the refusal repeating;
+//!   and the refusal repeating; since `SKJ4` the marker's SALT is a chain
+//!   input too, and a salt edited is a link that fails (case 16);
 //! * REFUSED — the checkpoint's own refusal (`body_hash`), the fallback
 //!   chain then reaching genesis, which re-verifies the journal;
 //! * NOT CAUGHT BY DESIGN — a history the chain alone accepts, which the
 //!   ruling assigns to piece 2, the PUBLISHED HEAD, whose saved pairs are
 //!   checked against the board's RECOMPUTATION through `Kernel::chain_at`:
 //!   a clean tail cut; a consistent re-chain, from genesis or from any
-//!   point, the checkpoint's head rewritten with it; a checkpoint body
+//!   point, the checkpoint's head rewritten with it — the forger choosing
+//!   its own salts, the salt being no anchor; a checkpoint body
 //!   forged with its hash re-fixed; the base's own link edited consistently
 //!   on both sides and re-chained above (case 14), or its marker's segment
 //!   skipped — the boundary coincidence, case 15; and — the owner's reading
@@ -55,20 +57,20 @@ use std::path::{Path, PathBuf};
 
 use crate::hazard_util::{
     cfg_manual, ckpt_file, copy_dir, flip_byte, node1, seg_file, t, timed_open,
-    timed_open_result, truncate_file, vp, Fixture, GOLDEN_OPS, OWNER, USER,
+    timed_open_result, truncate_file, vp, Fixture, GOLDEN_OPS, GOLDEN_SALT_SEED, OWNER, USER,
 };
 use crate::mutilate::{
     delete_txn, records_checksum, replace_frame_payload, reseal_frame, rewrite_frame,
     rewrite_txn, rollback_segment, swap_txns, transactions, Txn, MARKER_CHAIN_AT,
-    MARKER_CHECKSUM_AT, MARKER_EMPTY_LEN, MARKER_LAST_SEQ_AT, MARKER_SIG_ALG_AT,
-    MARKER_SIG_LEN_AT, RECORD_BYTES_AT,
+    MARKER_CHECKSUM_AT, MARKER_EMPTY_LEN, MARKER_LAST_SEQ_AT, MARKER_SALT_AT,
+    MARKER_SIG_ALG_AT, MARKER_SIG_LEN_AT, RECORD_BYTES_AT,
 };
 use sha2::{Digest, Sha256};
 use skep_arrangement::Deposit;
 use skep_content::Val;
 use skep_engine::dump::WorldDump;
 use skep_engine::{Engine, EngineError, OpenError};
-use skep_kernel::{CheckpointPolicy, Durability, HistoryError, KernelConfig, Seq};
+use skep_kernel::{CheckpointPolicy, Durability, HistoryError, KernelConfig, SaltSource, Seq};
 use skep_namespace::{HasM3, BOOTSTRAP_PRINCIPAL};
 use tempfile::{tempdir, TempDir};
 
@@ -81,7 +83,7 @@ const CHECKPOINT_AFTER_OP: usize = 16;
 /// of case 11 starts from it.
 const CHAIN_SEED: [u8; 32] = [0u8; 32];
 
-/// The checkpoint header (`SKC3`), restated for the byte-level edits of
+/// The checkpoint header (`SKC4`), restated for the byte-level edits of
 /// cases 8, 9 and 11: `[magic 4][seq u64][crc32c(body) u32][body_len u64]
 /// [chain_head 32][body_hash 32][body]`.
 const CKPT_CRC_AT: usize = 12;
@@ -133,6 +135,16 @@ impl Golden {
                 txn.records_checksum,
                 records_checksum(&data, txn),
                 "the layout restated here reads the checksum the writer wrote"
+            );
+            // The golden was regenerated under the SEEDED source: every
+            // marker's salt is the stream's value for its transaction, which
+            // is what makes the bytes reproducible — and what a golden
+            // written under OS entropy could never be.
+            assert_eq!(
+                txn.salt,
+                seeded_salt(GOLDEN_SALT_SEED, txn.txn),
+                "the marker at {} carries the seeded source's salt",
+                txn.last_seq
             );
         }
         Golden { tmp, fixture, txns }
@@ -339,21 +351,55 @@ fn chain_at_is(engine: &Engine, at: u64, expected: &[u8; 32], ctx: &str) {
 
 /// One link of the chain, recomputed exactly as the writer states it —
 /// SHA-256 over the predecessor's value, the record payloads as framed, then
-/// `txn`, `last_seq` and `records_checksum` in their wire form. Restated
-/// here so the forger of case 11 is held to the writer's own formula: were
-/// the two to drift, the forgery would be CAUGHT and that case would fail
-/// loudly rather than pass. The sanity check at its head pins them equal
-/// over the untouched golden.
+/// `txn`, `last_seq` and `records_checksum` in their wire form, then the
+/// marker's SALT as the segment holds it NOW (read off `data`, not off the
+/// `Txn` mapped before any edit, so a forger who re-salts a marker chains
+/// over the salt it wrote). Restated here so the forger of case 11 is held
+/// to the writer's own formula: were the two to drift, the forgery would be
+/// CAUGHT and that case would fail loudly rather than pass. The sanity check
+/// at its head pins them equal over the untouched golden.
 fn chain_over(prev: &[u8; 32], data: &[u8], txn: &Txn) -> [u8; 32] {
     let mut link = Sha256::new().chain_update(prev);
     for record in &txn.records {
         link.update(&data[record.payload.clone()]);
     }
+    let salt_at = txn.marker.payload.start + MARKER_SALT_AT;
     link.chain_update(txn.txn.to_le_bytes())
         .chain_update(txn.last_seq.to_le_bytes())
         .chain_update(records_checksum(data, txn).to_le_bytes())
+        .chain_update(&data[salt_at..salt_at + 32])
         .finalize()
         .into()
+}
+
+/// The seeded salt source's formula, restated: `SHA-256(seed LE64 ‖ txn
+/// LE64)` — what every golden marker's salt must be, and what a golden
+/// regenerated under any other source or seed fails by name.
+fn seeded_salt(seed: u64, txn: u64) -> [u8; 32] {
+    Sha256::new()
+        .chain_update(seed.to_le_bytes())
+        .chain_update(txn.to_le_bytes())
+        .finalize()
+        .into()
+}
+
+/// A salt of the FORGER's choosing for the marker closing `last_seq` —
+/// nothing to do with the writer's stream, which the forger need not know:
+/// the salt is no anchor, and a consistent re-chain chains over whatever the
+/// marker holds.
+fn forger_salt(last_seq: u64) -> [u8; 32] {
+    Sha256::new()
+        .chain_update(b"a salt of the forger's own choosing")
+        .chain_update(last_seq.to_le_bytes())
+        .finalize()
+        .into()
+}
+
+/// Write `salt` into `txn`'s marker in place. The frame's CRC is the
+/// caller's to re-seal.
+fn set_marker_salt(data: &mut [u8], txn: &Txn, salt: &[u8; 32]) {
+    let at = txn.marker.payload.start + MARKER_SALT_AT;
+    data[at..at + 32].copy_from_slice(salt);
 }
 
 /// Flip a byte of one of a transaction's RECORD payloads, inside the
@@ -403,9 +449,10 @@ enum CheckpointAfterForgery {
 }
 
 /// Forge op `op`: replace `needle` — found ONCE across the op's record
-/// payloads — with `replacement` of the same length, re-chain every link
-/// from that transaction to the end, and deal with the golden's checkpoint
-/// as `checkpoint` says. Answers the re-chained links by boundary.
+/// payloads — with `replacement` of the same length, give every marker from
+/// that transaction on a salt of the forger's own choosing, re-chain every
+/// link from there to the end over those salts, and deal with the golden's
+/// checkpoint as `checkpoint` says. Answers the re-chained links by boundary.
 fn forge_and_rechain(
     golden: &Golden,
     case: &Path,
@@ -434,12 +481,15 @@ fn forge_and_rechain(
         data[hits[0]..hits[0] + needle.len()].copy_from_slice(replacement);
     });
     // Re-chain from the forged transaction, seeded with its predecessor's
-    // value as the golden wrote it — the seed itself for the first.
+    // value as the golden wrote it — the seed itself for the first — each
+    // marker re-salted with the forger's own value first, so the links are
+    // over salts the writer never drew.
     let mut prev = if op == 1 { CHAIN_SEED } else { golden.txn(op - 1).chain };
     let mut data = fs::read(&seg).expect("segment");
     let txns = transactions(&data);
     let mut chains = Vec::new();
     for txn in &txns[op - 1..] {
+        set_marker_salt(&mut data, txn, &forger_salt(txn.last_seq));
         let chain = chain_over(&prev, &data, txn);
         let at = txn.marker.payload.start + MARKER_CHAIN_AT;
         data[at..at + 32].copy_from_slice(&chain);
@@ -963,9 +1013,16 @@ fn c10_a_clean_tail_cut_opens_at_the_shorter_head() {
 /// The golden's first marker's chain is SHA-256 over the seed, and every
 /// later link is over bytes the forger holds, so a forgery re-chained from
 /// any point — genesis, or mid-history — passes: the chain has no anchor
-/// but its seed and the base's header. The world served is the forger's, at
-/// every boundary from the forgery on; the head's chain is not the golden's
-/// — which is exactly what a published head would show, and all it could.
+/// but its seed and the base's header. The SALT (`SKJ4`) is no anchor
+/// either, and the forger here proves it by CHOOSING ITS OWN — every
+/// re-chained marker is re-salted with a value the writer never drew, and
+/// the links recomputed over those; the salt sits in the marker beside the
+/// bytes it salts, and a party holding the journal holds both. STILL NOT
+/// CAUGHT BY DESIGN: what the salt closes is the confirmation oracle over
+/// SERVED values, which a party who can rewrite the journal never needed.
+/// The world served is the forger's, at every boundary from the forgery on;
+/// the head's chain is not the golden's — which is exactly what a published
+/// head would show, and all it could.
 ///
 /// The checkpoint is the forger's one loose end, and it is not a check: with
 /// its `chain_head` rewritten the open passes, and its BODY — which nothing
@@ -1028,6 +1085,12 @@ fn c11_a_consistent_rewrite_from_genesis_or_from_any_point_passes() {
         &9u64.to_le_bytes(),
         CheckpointAfterForgery::HeadRewritten,
     );
+    // The forger's salts are on disk — none of them the seeded stream's —
+    // and every one of the eighteen links verifies over them.
+    for txn in transactions(&fs::read(seg_file(&case, 1)).expect("segment")) {
+        assert_eq!(txn.salt, forger_salt(txn.last_seq), "the forger's own salt at {}", txn.last_seq);
+        assert_ne!(txn.salt, seeded_salt(GOLDEN_SALT_SEED, txn.txn));
+    }
     let engine = timed_open(&case, "case 11: a consistent forgery from genesis, the base's head rewritten");
     assert_eq!(engine.kernel().current_seq(), Seq(golden.head()));
     assert_ne!(engine.kernel().chain_head(), golden.txn(GOLDEN_OPS).chain, "the head moved");
@@ -1252,6 +1315,94 @@ fn c14_the_bases_link_edited_on_both_sides_passes_at_open_and_fails_from_below()
         "case 14: a boundary below the base recomputes the edited link",
     );
     history_halts_with_chain_break(&engine, golden.seq(3), ckpt_seq, "case 14: a boundary further below");
+}
+
+/// CASE 16 — A MARKER'S SALT EDITED, CRC RE-FIXED (`SKJ4`): THE SALT IS A CHAIN
+/// INPUT. The writer closed the link with the salt it drew and stored; the
+/// scan closes it with the salt it READS off the marker; so a salt edited in
+/// place is a link that no longer verifies — CAUGHT at that transaction with
+/// the link's account, the next not masking it (it chains from the stored
+/// value, which the edit left alone). Mid-history from genesis, above a
+/// standing base, and on the last transaction, as case 3 for the chain
+/// field; the edit is a single byte, so nothing but the salt moved. Case 4
+/// (the slot) is unchanged: the slot stays outside every link.
+///
+/// What the salt is NOT: an anchor. The same edit with the chain recomputed
+/// over the new salt and every link above re-chained — a consistent rewrite
+/// — opens at the true head with the golden's world at every boundary, its
+/// chain the forger's: case 11's shape, restated for the salt alone.
+#[test]
+fn c16_a_markers_salt_edited_breaks_at_that_transaction() {
+    let golden = Golden::build();
+    const OP: usize = 9;
+
+    let case = golden.case_from_genesis("c16");
+    rewrite_frame(&seg_file(&case, 1), golden.txn(OP).marker.start, |payload| {
+        payload[MARKER_SALT_AT + 7] ^= 0xFF
+    });
+    open_halts_with_chain_break(&case, golden.seq(OP), "case 16: the marker's salt edited");
+
+    let case = golden.case("c16-above-base");
+    let op = CHECKPOINT_AFTER_OP + 1;
+    rewrite_frame(&seg_file(&case, 1), golden.txn(op).marker.start, |payload| {
+        payload[MARKER_SALT_AT] ^= 0xFF
+    });
+    open_halts_with_chain_break(
+        &case,
+        golden.seq(op),
+        "case 16: the first marker above the base, its salt edited, one transaction after it",
+    );
+
+    let case = golden.case("c16-last");
+    rewrite_frame(&seg_file(&case, 1), golden.txn(GOLDEN_OPS).marker.start, |payload| {
+        payload[MARKER_SALT_AT + 31] ^= 0xFF
+    });
+    open_halts_with_chain_break(
+        &case,
+        golden.seq(GOLDEN_OPS),
+        "case 16: the last marker's salt edited — a committed marker still, so its link fails",
+    );
+
+    // The consistent rewrite: op 9 re-salted, its chain recomputed over the
+    // new salt from op 8's value, every link above re-chained — the base
+    // removed so the open replays from genesis. NOT CAUGHT BY DESIGN: the
+    // world is the golden's everywhere (no record moved), the chain is the
+    // forger's from op 9 on.
+    let case = golden.case_from_genesis("c16-rechained");
+    let seg = seg_file(&case, 1);
+    let mut data = fs::read(&seg).expect("segment");
+    let txns = transactions(&data);
+    let mut prev = golden.txn(OP - 1).chain;
+    let mut rechained = Vec::new();
+    for txn in &txns[OP - 1..] {
+        if txn.last_seq == golden.seq(OP) {
+            set_marker_salt(&mut data, txn, &forger_salt(txn.last_seq));
+        }
+        let chain = chain_over(&prev, &data, txn);
+        let at = txn.marker.payload.start + MARKER_CHAIN_AT;
+        data[at..at + 32].copy_from_slice(&chain);
+        reseal_frame(&mut data, &txn.marker);
+        rechained.push((txn.last_seq, chain));
+        prev = chain;
+    }
+    fs::write(&seg, data).expect("write the re-chained segment");
+    let engine = open_recovers(
+        &case,
+        &golden,
+        golden.head(),
+        "case 16: the salt rewritten and the chain recomputed over it — consistent, not caught",
+    );
+    let (_, head_chain) = rechained.last().expect("the re-chained head");
+    assert_eq!(engine.kernel().chain_head(), *head_chain, "the root carries the re-chained head");
+    assert_ne!(*head_chain, golden.txn(GOLDEN_OPS).chain, "the head moved");
+    for op in 1..GOLDEN_OPS + 1 {
+        if op < OP {
+            chain_at_is(&engine, golden.seq(op), &golden.txn(op).chain, "case 16: below the re-salt, the golden's chain");
+        } else {
+            chain_at_is(&engine, golden.seq(op), &rechained[op - OP].1, "case 16: from the re-salt on, the forger's chain");
+        }
+    }
+    every_boundary_answers(&engine, &golden, "case 16, re-chained: the world is the golden's");
 }
 
 /// The segment files of `dir`, ascending by the first seq their names carry.
@@ -1511,6 +1662,7 @@ fn chain_at_answers_every_boundarys_marker_chain_and_refuses_as_world_at_does() 
     let mem = Engine::open(KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(GOLDEN_SALT_SEED),
     })
     .expect("an in-memory engine");
     assert!(
@@ -1560,6 +1712,7 @@ fn chain_head_is_the_committed_heads_marker_chain() {
     let mem = Engine::open(KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(GOLDEN_SALT_SEED),
     })
     .expect("an in-memory engine");
     assert_eq!(mem.kernel().chain_head(), CHAIN_SEED);

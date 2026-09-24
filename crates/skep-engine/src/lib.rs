@@ -119,7 +119,7 @@ pub use readable::ReaderClass;
 pub use world::{Record, World};
 
 // The KERNEL types this crate's own public signatures name — `Kernel`,
-// `KernelConfig`, `OpenError`, `HistoryError` and `Seq` — and the three a
+// `KernelConfig`, `OpenError`, `HistoryError` and `Seq` — and the four a
 // `KernelConfig` is built from, re-exported so a binary can open an engine,
 // pair a reconstructed world with a kernel at `EngineStores::new`, and call
 // `world_at` without naming M2 itself. The integration suite is a separate
@@ -134,5 +134,5 @@ pub use world::{Record, World};
 // owns it.
 pub use skep_kernel::{
     BurnedSeqPolicy, CheckpointPolicy, Durability, HistoryError, Kernel, KernelConfig, OpenError,
-    Seq,
+    SaltSource, Seq,
 };

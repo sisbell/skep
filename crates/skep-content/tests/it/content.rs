@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Tumbler};
 use skep_content::{stage_write, write, ContentError, ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{
-    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, TxnError, WorldState,
+    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, TxnError,
+    WorldState,
 };
 use skep_namespace::M3State;
 use tempfile::tempdir;
@@ -81,6 +82,7 @@ fn mem_kernel() -> Kernel<World> {
     let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(0),
     };
     Kernel::open(cfg, genesis()).expect("in-memory open")
 }
@@ -93,6 +95,7 @@ fn cfg_fsync(dir: &Path) -> KernelConfig {
             burned_seq: BurnedSeqPolicy::Rollback,
         },
         checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(0),
     }
 }
 

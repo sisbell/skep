@@ -16,12 +16,19 @@ use crate::common;
 
 use std::path::Path;
 
-use common::{acked_at, get, json, op, open_session, spawn, CLAIMANT_ACCOUNT, CLAIMANT_PRINCIPAL};
+use common::{
+    acked_at, get, json, op, open_session, spawn, spawn_seeded, CLAIMANT_ACCOUNT,
+    CLAIMANT_PRINCIPAL,
+};
 use serde_json::Value;
 use skepd::Skepd;
 
 /// The head document `H` — doc 2 of the system account (PUB-6.65).
 const H: &str = "1.1.0.1.0.2";
+
+/// The head record's `format` member — the journal stamp in force, `SKJ4`
+/// since the chain's salt. The one head member that moved at the bump.
+const FORMAT: &str = "SKJ4";
 
 /// The k-th head — the k-th version member of `H`'s trunk chain, `H·k`.
 fn head_member(k: u64) -> String {
@@ -84,6 +91,7 @@ fn head_record(port: u16, doc: &str) -> Option<Value> {
 fn expect_latest_head(port: u16) -> Value {
     let rec = head_record(port, H).expect("H has a head member");
     assert_eq!(rec["type"].as_str(), Some("skep-head"), "kind: {rec}");
+    assert_eq!(rec["format"].as_str(), Some(FORMAT), "the stamp in force: {rec}");
     assert!(rec.get("sig").is_none(), "the head is UNSIGNED: {rec}");
     assert!(rec["position"].is_u64(), "position is a number: {rec}");
     let chain = rec["chain"].as_str().expect("chain string");
@@ -866,26 +874,118 @@ fn genesis_seeds_the_system_account_documents_born_published() {
     sd.shutdown();
 }
 
+/// The one seed the determinism pin's two boards share, and the two seeds
+/// the salt's pin keeps apart.
+const ONE_SEED: u64 = 0x11;
+const OTHER_SEED: u64 = 0x22;
+
+/// `GET /chain?at=N` → the value, or `None` where `N` is not a committed
+/// position (a composite's interior seq).
+fn chain_at(port: u16, at: u64) -> Option<String> {
+    let (st, body) = get(port, &format!("/chain?at={at}"));
+    let v = json(&body);
+    match st {
+        200 => Some(v["chain"].as_str().expect("chain string").to_string()),
+        400 if v["error"].as_str() == Some("not_a_position") => None,
+        _ => panic!("/chain?at={at}: {st} {v}"),
+    }
+}
+
+/// One board's witness for the two pins below: the same three commits then a
+/// forced head, under `seed`.
+struct Board {
+    /// The triggering commit's acked position — what the head names.
+    trigger: u64,
+    /// The live head once the head's own two commits have landed.
+    head: u64,
+    /// `/chain?at=N` at every committed position from 1 to the head.
+    chains: Vec<(u64, String)>,
+    /// The head's raw bytes.
+    bytes: String,
+}
+
+fn board_under(dir: &Path, seed: u64) -> Board {
+    let sd = spawn_seeded(dir, seed);
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let mut clock = clock_origin();
+    for _ in 0..3 {
+        commit(port, &owner, CLAIMANT_ACCOUNT);
+    }
+    let trigger = force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
+    let (head, _) = health(port);
+    let chains: Vec<(u64, String)> =
+        (1..=head).filter_map(|at| chain_at(port, at).map(|chain| (at, chain))).collect();
+    let bytes = atom_str(port, H).expect("a head");
+    sd.shutdown();
+    Board { trigger, head, chains, bytes }
+}
+
+/// THE POSITIONS AS THEY WERE BEFORE THE SALT, pinned: the head names the
+/// triggering commit — the ceremony's commits, three creates and the fourth —
+/// and the live head is that plus the head's own insert and publish. The
+/// salt adds no record and moves no coordinate, and these are the figures
+/// the same ops produced at `d77bfa4`, before it; a position moving here is
+/// a STOP, not a number to update.
+const TRIGGER_POSITION: u64 = 16;
+const HEAD_POSITION: u64 = 24;
+
 /// (viii) — two daemons over ONE op sequence write byte-identical heads. The
 /// head record carries no timestamp and no board-unique term, so identical
-/// histories yield identical head bytes.
+/// histories yield identical head bytes — under ONE SALT SEED: the chain's
+/// per-transaction salt (`SKJ4`) is the one board-unique term a history now
+/// carries, in the preimage and never in the record, and the seeded source
+/// (`spawn_seeded`, the daemon's test seam) makes it a function of the
+/// position alone. Under the production door's OS entropy two boards write
+/// two chains, which the next test pins. The positions are what they were
+/// before the salt: it adds no record.
 #[test]
 fn two_daemons_over_one_sequence_write_byte_identical_heads() {
-    fn board(dir: &Path) -> String {
-        let sd = spawn(dir);
-        let port = sd.port();
-        let owner = open_session(port, CLAIMANT_PRINCIPAL);
-        let mut clock = clock_origin();
-        // The same three commits, then a forced head — identical on both.
-        for _ in 0..3 {
-            commit(port, &owner, CLAIMANT_ACCOUNT);
-        }
-        force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
-        let bytes = atom_str(port, H).expect("a head");
-        sd.shutdown();
-        bytes
-    }
     let a = tempfile::tempdir().expect("tempdir");
     let b = tempfile::tempdir().expect("tempdir");
-    assert_eq!(board(a.path()), board(b.path()), "one op sequence writes one head byte string");
+    let a = board_under(a.path(), ONE_SEED);
+    let b = board_under(b.path(), ONE_SEED);
+    assert_eq!(a.bytes, b.bytes, "one op sequence under one seed writes one head byte string");
+    assert_eq!((a.trigger, a.head), (b.trigger, b.head), "one pair of positions");
+    assert_eq!(a.chains, b.chains, "one chain at every committed position");
+    // The head names the position of the commit that triggered it — the
+    // fourth create after the ceremony — strictly below its own commit, and
+    // both figures are what they were before the salt.
+    let rec: Value = serde_json::from_str(&a.bytes).expect("a head record");
+    assert_eq!(rec["format"].as_str(), Some(FORMAT));
+    assert_eq!(rec["position"].as_u64(), Some(a.trigger), "the head names the triggering commit");
+    assert!(a.trigger < a.head, "a head names a coordinate strictly below its own commit");
+    assert_eq!((a.trigger, a.head), (TRIGGER_POSITION, HEAD_POSITION), "a position moved: STOP");
+}
+
+/// (viii′) — THE SALT'S EFFECT, pinned from the wire: two daemons over ONE op
+/// sequence under TWO seeds write chains that DIFFER at every committed
+/// position from the first, and heads that differ in their `chain` — while
+/// every position, the head's included, is the same, since the salt adds no
+/// record and moves no coordinate. Position 0 is the seed on both and is not
+/// a difference.
+#[test]
+fn two_daemons_under_two_seeds_differ_in_every_chain_value_and_in_the_head() {
+    let a = tempfile::tempdir().expect("tempdir");
+    let b = tempfile::tempdir().expect("tempdir");
+    let a = board_under(a.path(), ONE_SEED);
+    let b = board_under(b.path(), OTHER_SEED);
+    assert_eq!((a.trigger, a.head), (b.trigger, b.head), "the salt moves no position");
+    assert_eq!((a.trigger, a.head), (TRIGGER_POSITION, HEAD_POSITION), "a position moved: STOP");
+    let positions_a: Vec<u64> = a.chains.iter().map(|(at, _)| *at).collect();
+    let positions_b: Vec<u64> = b.chains.iter().map(|(at, _)| *at).collect();
+    assert_eq!(positions_a, positions_b, "the same committed positions on both boards");
+    assert!(positions_a.len() >= 4, "the ceremony, three creates and the head: {positions_a:?}");
+    for ((at, x), (_, y)) in a.chains.iter().zip(&b.chains) {
+        assert_ne!(x, y, "two seeds, two chain values at position {at}");
+    }
+    assert_ne!(a.bytes, b.bytes, "two seeds, two head byte strings");
+    let (ra, rb): (Value, Value) = (
+        serde_json::from_str(&a.bytes).expect("a head record"),
+        serde_json::from_str(&b.bytes).expect("a head record"),
+    );
+    assert_eq!(ra["position"].as_u64(), Some(TRIGGER_POSITION), "the heads name one position");
+    assert_eq!(ra["position"], rb["position"]);
+    assert_eq!(ra["format"], rb["format"], "one stamp");
+    assert_ne!(ra["chain"], rb["chain"], "the heads' chains differ: the salt is in the preimage");
 }

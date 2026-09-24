@@ -1783,6 +1783,7 @@ fn checkpoint_roundtrip_then_rebuild_derived_restores_every_hint() {
     let cfg = skep_kernel::KernelConfig {
         durability: skep_kernel::Durability::InMemory,
         checkpoint: skep_kernel::CheckpointPolicy::Manual,
+        salt: skep_kernel::SaltSource::Seeded(0),
     };
     let k2 = skep_kernel::Kernel::open(cfg, recovered).expect("reopen");
     let w2 = writer(&k2);

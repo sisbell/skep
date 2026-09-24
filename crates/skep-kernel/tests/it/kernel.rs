@@ -14,8 +14,8 @@ use crate::mutilate::{append_bytes, ckpt_file, copy_dir, flip_byte, seg_file, tr
 use serde::{Deserialize, Serialize};
 use skep_kernel::{
     BurnedSeqPolicy, CheckpointError, CheckpointPolicy, Durability, HistoryError, Kernel,
-    KernelConfig, LockKey, OpenError, Seq, Snapshot, Space, Staging, TxnError, WorldState,
-    MAX_TXN_BYTES,
+    KernelConfig, LockKey, OpenError, SaltSource, Seq, Snapshot, Space, Staging, TxnError,
+    WorldState, MAX_TXN_BYTES,
 };
 use tempfile::tempdir;
 
@@ -172,6 +172,10 @@ impl WorldState for FragileWorld {
     }
 }
 
+/// The seeded salt source this suite's kernels write under (`SKJ4`):
+/// deterministic, so a fixture's bytes are the same on every run.
+const TEST_SEED: u64 = 0x4B;
+
 fn cfg_fsync(dir: &Path) -> KernelConfig {
     cfg_retain(dir, 2)
 }
@@ -186,6 +190,7 @@ fn cfg_retain(dir: &Path, retain: usize) -> KernelConfig {
             burned_seq: BurnedSeqPolicy::Rollback,
         },
         checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(TEST_SEED),
     }
 }
 
@@ -193,6 +198,7 @@ fn cfg_in_memory() -> KernelConfig {
     KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(TEST_SEED),
     }
 }
 
@@ -241,7 +247,7 @@ fn frame_spans(path: &Path) -> Vec<(u64, u64)> {
     let mut pos = 0usize;
     let header = FRAME_HEADER_LEN as usize;
     while pos + header <= buf.len() {
-        assert_eq!(&buf[pos..pos + 4], b"SKJ3", "expected a clean frame stream");
+        assert_eq!(&buf[pos..pos + 4], b"SKJ4", "expected a clean frame stream");
         let len = u32::from_le_bytes(buf[pos + 4..pos + 8].try_into().unwrap()) as usize;
         spans.push((pos as u64, (header + len) as u64));
         pos += header + len;
@@ -978,7 +984,7 @@ fn world_at_halts_when_the_frame_stream_cannot_be_enumerated() {
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
     let mut evil = Vec::new();
     while evil.len() < 256 * 1024 {
-        evil.extend_from_slice(b"SKJ3");
+        evil.extend_from_slice(b"SKJ4");
         evil.extend_from_slice(&(64 * 1024u32).to_le_bytes()); // a len that fits
         evil.extend_from_slice(&0u32.to_le_bytes()); // a crc that will not
         evil.extend_from_slice(&[0u8; 4]);
@@ -1191,6 +1197,7 @@ fn under_tolerate_gap_a_failed_txn_leaves_the_high_water_advanced() {
             burned_seq: BurnedSeqPolicy::TolerateGap,
         },
         checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(TEST_SEED),
     };
     let k = Kernel::open(cfg.clone(), genesis()).unwrap();
     commit(&k, 10);
@@ -1702,7 +1709,7 @@ fn world_at_ignores_the_suffix_a_racing_append_can_leave() {
     assert_eq!(world_items(&k.world_at(Seq(2)).unwrap()), vec![10, 20]);
 
     // A frame torn mid-write: a header claiming a payload that never landed.
-    let mut torn = b"SKJ3".to_vec();
+    let mut torn = b"SKJ4".to_vec();
     torn.extend_from_slice(&4096u32.to_le_bytes()); // a length…
     torn.extend_from_slice(&0u32.to_le_bytes()); // …a crc…
     torn.extend_from_slice(b"xyz"); // …and the payload stops here
@@ -1919,6 +1926,7 @@ fn in_memory_mode_starts_from_genesis_and_recovers_nothing() {
     let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::EveryN(1), // trigger evaluates; checkpoint() is a no-op
+        salt: SaltSource::Seeded(TEST_SEED),
     };
     let k = Kernel::open(cfg.clone(), genesis()).unwrap();
     // "Directly from genesis": no load, no rebuild_derived (Lifecycle).

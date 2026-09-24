@@ -150,7 +150,9 @@ use serde_json::Value;
 use skep_engine::{Engine, EngineError, HistoryError, World};
 use skep_febe::{consult_read, Codec, Op, OperationSurface, OpKind, Request, Response, SessionId};
 use skep_identity::IdentityState;
-use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq, Snapshot};
+use skep_kernel::{
+    BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource, Seq, Snapshot,
+};
 use skep_namespace::PrincipalId;
 
 use crate::auth::fold::{canonical_identity, key_set_of};
@@ -1080,6 +1082,24 @@ impl Daemon {
         data_dir: impl AsRef<Path>,
         opts: AuthOptions,
     ) -> Result<Daemon, DaemonError> {
+        // THE PRODUCTION SALT (`SKJ4`): OS entropy per transaction, the one
+        // source a daemon opens under — a seeded stream is a pure function
+        // of the seed and the position, which is exactly the predictability
+        // the salt exists to deny a reader of `/chain?at=N`. The seeded
+        // source reaches a daemon through the test seam alone
+        // ([`Daemon::open_seeded`], `#[doc(hidden)]`).
+        Self::open_under(data_dir, opts, SaltSource::Os)
+    }
+
+    /// The one open, under a named salt source — [`Daemon::open_with`]'s
+    /// body, which that door reaches with [`SaltSource::Os`] and the test
+    /// seam [`Daemon::open_seeded`] with a seeded stream. Private, so no
+    /// third caller can name a source.
+    fn open_under(
+        data_dir: impl AsRef<Path>,
+        opts: AuthOptions,
+        salt: SaltSource,
+    ) -> Result<Daemon, DaemonError> {
         let data_dir = data_dir.as_ref();
         let cfg = KernelConfig {
             durability: Durability::Fsync {
@@ -1088,6 +1108,7 @@ impl Daemon {
                 burned_seq: BurnedSeqPolicy::Rollback,
             },
             checkpoint: CheckpointPolicy::EveryN(CHECKPOINT_EVERY_COMMITS),
+            salt,
         };
         let engine = Engine::open(cfg).map_err(DaemonError::Engine)?;
         let writes = WritePath::open(data_dir, &engine, HEAD_EVERY_COMMITS, HEAD_MAX_INTERVAL_MILLIS)
@@ -1832,6 +1853,24 @@ impl Daemon {
     #[doc(hidden)]
     pub fn head_set_clock_millis(&self, millis: u64) {
         self.writes.head_set_clock_millis(millis);
+    }
+
+    /// TEST HOOK (the same standing: `#[doc(hidden)]`, not a stable API):
+    /// [`Daemon::open_with`] under the SEEDED salt source
+    /// (`SaltSource::Seeded(seed)`) in place of OS entropy, so two harness
+    /// daemons over one op sequence write one chain and one head byte string
+    /// (`head.rs`'s determinism pin), and two seeds write two — the salt's
+    /// effect pinned from the wire. NEVER a deployment's: the seeded stream
+    /// is a pure function of the seed and the position, which is exactly the
+    /// predictability the salt exists to deny a reader of `/chain?at=N`;
+    /// `open_with` is the production door and takes no source.
+    #[doc(hidden)]
+    pub fn open_seeded(
+        data_dir: impl AsRef<Path>,
+        opts: AuthOptions,
+        seed: u64,
+    ) -> Result<Daemon, DaemonError> {
+        Self::open_under(data_dir, opts, SaltSource::Seeded(seed))
     }
 
     /// TEST HOOK (the same standing): take a checkpoint now, so a test drives

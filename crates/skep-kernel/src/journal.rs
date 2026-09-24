@@ -25,6 +25,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::config::SaltSource;
+
 /// Per-frame sync word anchoring recovery resynchronization (§1/§7) — and
 /// the journal's FORMAT stamp: the trailing numeral names the format that
 /// wrote the frame. Bumped 1 → 2 at the 2026-08-26 genesis re-baseline
@@ -33,9 +35,14 @@ use sha2::{Digest, Sha256};
 /// 2 → 3 on 2026-09-23 (QUEUE item 10, the hash chain's first lane): the
 /// commit marker gained its chain field and signature slot, the codec was
 /// pinned behind [`codec`], and the checkpoint went canonical beside it
-/// (`SKC3`). A segment opening with another format's sync word is refused BY
+/// (`SKC3`). Bumped 3 → 4 on 2026-09-24 (the chain's SALT; the signed-ops
+/// re-base report's R1): the commit marker gained a per-transaction random
+/// salt that the chain's preimage hashes, so every chain value moved — the
+/// marker doc's own definition of a format event — and the checkpoint stamp
+/// moved with it (`SKC4`), its `chain_head` being a value under the salted
+/// rule. A segment opening with another format's sync word is refused BY
 /// NAME at `open` ([`foreign_stamp`]) rather than read as this one's.
-pub(crate) const MAGIC: [u8; 4] = *b"SKJ3";
+pub(crate) const MAGIC: [u8; 4] = *b"SKJ4";
 /// The stamp's fixed prefix: what makes four bytes a well-formed journal sync
 /// word of SOME format. [`foreign_stamp`] tells a foreign stamp (`SKJ` + a
 /// numeral this build does not write) from damage (anything else) by it.
@@ -145,18 +152,21 @@ pub(crate) struct CommittedRecord {
 /// reads them. Distinct from the marker's own per-frame `crc`, and
 /// byte-reproducible at recovery (§1/§7).
 ///
-/// LAYOUT (`SKJ3`; bincode fixint LE, the fields positionally, no names): the
+/// LAYOUT (`SKJ4`; bincode fixint LE, the fields positionally, no names): the
 /// [`FramePayload`] tag (4), `txn` (8), `last_seq` (8), `records_checksum`
-/// (4), `chain` (32 — a serde array is a tuple, no length prefix), `sig_alg`
-/// (1), `sig` (8 + n). SIXTY-FIVE bytes with the slot empty, which
-/// [`MARKER_FRAME_LEN`] carries and the accounting test and the golden
-/// fixture pin. The two fields appended for `SKJ3` sit AFTER
-/// `records_checksum`, the slot LAST: `records_checksum` covers record frame
-/// payloads only, the marker's own frame CRC covers whatever the marker holds,
-/// and resynchronization reads the sync word and the header — so
-/// [`PendingTxn::commits`] and the resync are untouched by either field, and
-/// a FILLED slot appends bytes after `sig_alg` and moves no other marker byte
-/// (its frame's `len` and `crc` differ, as any payload's must).
+/// (4), `salt` (32 — a serde array is a tuple, no length prefix), `chain`
+/// (32), `sig_alg` (1), `sig` (8 + n). NINETY-SEVEN bytes with the slot
+/// empty, which [`MARKER_FRAME_LEN`] carries and the accounting test and the
+/// golden fixture pin. The three fields appended since `SKJ2` sit AFTER
+/// `records_checksum` — the salt (`SKJ4`) first, then the chain, the slot
+/// LAST: `records_checksum` covers record frame payloads only, the marker's
+/// own frame CRC covers whatever the marker holds, and resynchronization
+/// reads the sync word and the header — so [`PendingTxn::commits`] and the
+/// resync are untouched by any of the three, and a FILLED slot appends bytes
+/// after `sig_alg` and moves no other marker byte (its frame's `len` and
+/// `crc` differ, as any payload's must). The salt's place, before the chain,
+/// is the preimage's own order: the chain is computed OVER the salt, so the
+/// bytes it is computed over precede it, as `records_checksum` does.
 ///
 /// Decoded through [`MarkerShadow`], the one door that holds the slot's
 /// one-spelling-of-empty rule; the bytes are the struct's own.
@@ -166,15 +176,28 @@ pub(crate) struct Marker {
     pub txn: Txn,
     pub last_seq: u64,
     pub records_checksum: u32,
+    /// THE SALT (`SKJ4`; the signed-ops re-base report's R1): thirty-two
+    /// bytes DRAWN per transaction from the kernel's [`SaltSource`] — OS
+    /// entropy in production, a seeded stream in fixtures — stored here at
+    /// commit and READ BACK from here by every replay, never regenerated,
+    /// and hashed into `chain` after the marker's other pre-chain fields
+    /// ([`ChainLink::close`]). Served by no route: `/chain?at=N` and
+    /// `/health` serve the chain value alone, the feed carries no marker
+    /// byte. That is what it is for — a reader holding `chain(N − 1)` and
+    /// `chain(N)` off the wire cannot confirm a guess at transaction `N`'s
+    /// bytes, since the preimage has thirty-two bytes that reader was never
+    /// served. A chain input, so a marker whose salt is edited is a chain
+    /// break at that transaction (the tamper matrix's case 16).
+    pub salt: [u8; 32],
     /// THE CHAIN (QUEUE item 10, X1): this transaction's link of the commit
     /// chain — SHA-256 over its predecessor's value and this transaction's
-    /// own bytes exactly as [`ChainLink`] states them. Bound to the stamp
-    /// rather than tagged: a hash, unlike a signature, is recomputable from
-    /// the bytes it covers, so a change of hash would be a re-chaining of
-    /// every board — a format event by nature, and a tag would buy nothing.
-    /// COMPUTED by the writer and RECOMPUTED by every replay; never
-    /// zero-filled, so the bytes this field holds under `SKJ3` are the bytes
-    /// it holds forever.
+    /// own bytes exactly as [`ChainLink`] states them, the salt among them.
+    /// Bound to the stamp rather than tagged: a hash, unlike a signature, is
+    /// recomputable from the bytes it covers, so a change of hash would be a
+    /// re-chaining of every board — a format event by nature, and a tag
+    /// would buy nothing. COMPUTED by the writer and RECOMPUTED by every
+    /// replay; never zero-filled, so the bytes this field holds under
+    /// `SKJ4` are the bytes it holds forever.
     pub chain: [u8; 32],
     /// The signature slot's tag (X2): which hybrid pair `sig` was made under.
     /// [`SIG_ALG_UNSIGNED`] (`0`) is the one value this build writes; the
@@ -200,6 +223,7 @@ struct MarkerShadow {
     txn: Txn,
     last_seq: u64,
     records_checksum: u32,
+    salt: [u8; 32],
     chain: [u8; 32],
     sig_alg: u8,
     sig: Vec<u8>,
@@ -217,6 +241,7 @@ impl TryFrom<MarkerShadow> for Marker {
             txn: shadow.txn,
             last_seq: shadow.last_seq,
             records_checksum: shadow.records_checksum,
+            salt: shadow.salt,
             chain: shadow.chain,
             sig_alg: shadow.sig_alg,
             sig: shadow.sig,
@@ -236,7 +261,7 @@ pub(crate) const SIG_ALG_UNSIGNED: u8 = 0;
 /// fresh journal and by every replay from genesis, and pinned by the golden
 /// fixture, whose first marker's chain is SHA-256 over this seed and that
 /// transaction's bytes. When a checkpoint is the base the value read is the
-/// `SKC3` header's `chain_head` instead — the chain at that checkpoint's
+/// `SKC4` header's `chain_head` instead — the chain at that checkpoint's
 /// coordinate, which the marker that held it may no longer exist to say.
 pub(crate) const CHAIN_GENESIS: [u8; 32] = [0u8; 32];
 
@@ -247,7 +272,7 @@ pub(crate) const CHAIN_GENESIS: [u8; 32] = [0u8; 32];
 /// ```text
 /// chain(T) = SHA-256(
 ///     chain(T − 1)                      32 bytes: the previous COMMITTED transaction's value in journal
-///                                       order; CHAIN_GENESIS for a journal's first, the SKC3 header's
+///                                       order; CHAIN_GENESIS for a journal's first, the SKC4 header's
 ///                                       chain_head for the first above a checkpoint base
 ///   ‖ payload_1 ‖ … ‖ payload_k         each RECORD frame's payload exactly as framed — the
 ///                                       FramePayload tag, seq, txn, the length prefix and the record's
@@ -255,6 +280,9 @@ pub(crate) const CHAIN_GENESIS: [u8; 32] = [0u8; 32];
 ///                                       streams, which the frame CRC has verified before they are read
 ///   ‖ txn LE64 ‖ last_seq LE64 ‖ records_checksum LE32
 ///                                       the marker's own PRE-CHAIN fields, as the marker frame carries them
+///   ‖ salt (32)                         the marker's per-transaction SALT, exactly as the marker carries
+///                                       it (SKJ4): drawn by the writer from the kernel's SaltSource, read
+///                                       by the reader off the marker — the last bytes before finalize
 /// )
 /// ```
 ///
@@ -266,6 +294,21 @@ pub(crate) const CHAIN_GENESIS: [u8; 32] = [0u8; 32];
 /// either side; that the records themselves have one byte-form per value on
 /// every machine is the codec's promise ([`codec`]), which is what makes two
 /// replicas of one history agree on every link.
+///
+/// WHAT THE SALT PROTECTS, and what it does not (the signed-ops re-base
+/// report's R1, the `/chain?at=N` confirmation oracle). Every other input
+/// above is either served or enumerable: the previous value and this one are
+/// what `/chain?at=N` answers to every reader, and a transaction whose bytes
+/// a reader can ENUMERATE — the draft home of a straddle nullify, a
+/// delegate's minted prefix, a one-value insert into a masked draft — is a
+/// transaction whose preimage that reader can build and hash, CONFIRMING the
+/// guess against the served value. The salt is thirty-two bytes of that
+/// preimage that no route serves and no reader can enumerate, so a served
+/// chain value confirms nothing about the transaction's bytes. It protects
+/// nothing from a party HOLDING THE JOURNAL — the salt sits in the marker
+/// beside the bytes it salts, and such a party has the bytes anyway — and it
+/// is no anchor: a forger who rewrites the journal chooses its own salts and
+/// re-chains consistently, exactly as before (the tamper matrix's case 11).
 struct ChainLink(Sha256);
 
 impl ChainLink {
@@ -279,12 +322,15 @@ impl ChainLink {
         self.0.update(payload);
     }
 
-    /// Close the link with the marker's own pre-chain fields.
-    fn close(self, txn: Txn, last_seq: u64, records_checksum: u32) -> [u8; 32] {
+    /// Close the link with the marker's own pre-chain fields, then its salt —
+    /// the ONE spelling, which the writer closes with the salt it drew and
+    /// the reader with the salt the marker carries.
+    fn close(self, txn: Txn, last_seq: u64, records_checksum: u32, salt: &[u8; 32]) -> [u8; 32] {
         self.0
             .chain_update(txn.0.to_le_bytes())
             .chain_update(last_seq.to_le_bytes())
             .chain_update(records_checksum.to_le_bytes())
+            .chain_update(salt)
             .finalize()
             .into()
     }
@@ -384,11 +430,15 @@ fn push_frame(buf: &mut Vec<u8>, payload: &[u8]) -> io::Result<()> {
 /// Encode one whole transaction: its record frames (seqs `first_seq..`) then
 /// its terminal commit marker, ready for a single `write_all` + one barrier
 /// fsync (§1/§3), and answer the chain value the marker carries — this
-/// transaction's link, computed from `prev_chain` and the frames as they are
-/// built ([`ChainLink`]), which the writer adopts once the barrier passes.
-/// The bytes are consumed into their frames: the caller has no use for them
-/// past this call, and a commit is no place to copy every record a second
-/// time.
+/// transaction's link, computed from `prev_chain`, the frames as they are
+/// built and `salt` ([`ChainLink`]), which the writer adopts once the barrier
+/// passes. `salt` is the transaction's own, drawn by
+/// [`JournalWriter::commit_txn`] from the kernel's [`SaltSource`] before
+/// this is called, and it goes two places from here: into the marker, where
+/// every replay reads it back, and into the link, closed with it after the
+/// marker's other pre-chain fields. The bytes are consumed into their frames:
+/// the caller has no use for them past this call, and a commit is no place
+/// to copy every record a second time.
 ///
 /// The `Seq` arithmetic here stays in range because the coordinates were
 /// already minted: [`crate::Kernel::transact`] draws the whole range
@@ -407,6 +457,7 @@ fn encode_txn(
     first_seq: u64,
     record_bytes: Vec<Vec<u8>>,
     prev_chain: &[u8; 32],
+    salt: [u8; 32],
 ) -> io::Result<(Vec<u8>, [u8; 32])> {
     let n = record_bytes.len() as u64;
     assert!(n > 0, "zero-step ops never reach the journal");
@@ -431,12 +482,13 @@ fn encode_txn(
         push_frame(&mut buf, &payload)?;
     }
     let last_seq = first_seq + (n - 1);
-    let chain = link.close(txn, last_seq, checksum);
+    let chain = link.close(txn, last_seq, checksum, &salt);
     let payload = codec()
         .serialize(&FramePayload::Marker(Marker {
             txn,
             last_seq,
             records_checksum: checksum,
+            salt,
             chain,
             sig_alg: SIG_ALG_UNSIGNED,
             sig: Vec::new(),
@@ -456,12 +508,13 @@ fn encode_txn(
 pub(crate) const RECORD_PAYLOAD_OVERHEAD: u64 = 28;
 /// The marker frame's whole encoded size: header (12) plus the tagged
 /// [`Marker`] payload with its slot EMPTY — tag (4), `txn` (8), `last_seq`
-/// (8), `records_checksum` (4), `chain` (32), `sig_alg` (1), `sig`'s length
-/// prefix (8): 65, so 77 in all. Pinned alongside [`RECORD_PAYLOAD_OVERHEAD`].
-/// A constant only while the empty slot has a value-independent size, which
-/// it does; a FILLED slot changes the accounting at the two sites this seeds,
-/// which is the signed-ops lane's to add.
-const MARKER_FRAME_LEN: u64 = frame_len(65);
+/// (8), `records_checksum` (4), `salt` (32), `chain` (32), `sig_alg` (1),
+/// `sig`'s length prefix (8): 97, so 109 in all. Pinned alongside
+/// [`RECORD_PAYLOAD_OVERHEAD`]. A constant only while the empty slot has a
+/// value-independent size, which it does; a FILLED slot changes the
+/// accounting at the two sites this seeds, which is the signed-ops lane's to
+/// add.
+const MARKER_FRAME_LEN: u64 = frame_len(97);
 
 /// What one framed payload occupies in a segment: the header [`push_frame`]
 /// writes, plus the payload it wraps. The outer of the two levels every
@@ -785,6 +838,12 @@ pub(crate) struct JournalWriter {
     /// truncated back leaves it where it was), and carried across a segment
     /// rotation: the chain is over the journal, not the segment.
     chain: [u8; 32],
+    /// Where each transaction's SALT is drawn from (`SKJ4`) — the kernel's
+    /// configured [`SaltSource`], handed in at [`JournalWriter::open_active`]
+    /// and carried across a rotation like the chain. Consulted once per
+    /// commit, before a frame is built; the reader never consults it, since
+    /// the salt it needs is in the marker.
+    salt: SaltSource,
     /// What the transaction in progress has reached. On entry to
     /// [`JournalWriter::commit_txn`] this is always [`InFlight::Idle`]: every
     /// path that returns to a caller who may commit again leaves it so, and
@@ -811,8 +870,16 @@ impl JournalWriter {
     /// `chain` is the commit chain's value at the committed head this
     /// appender continues from — what the recovery scan derived
     /// ([`ScanOutcome::chain_head`]), or [`CHAIN_GENESIS`] for a journal with
-    /// nothing committed — and is the second thing this reads once.
-    pub(crate) fn open_active(dir: &Path, next_seq: u64, chain: [u8; 32]) -> io::Result<Self> {
+    /// nothing committed — and is the second thing this reads once. `salt` is
+    /// the kernel's configured source for every transaction this appender
+    /// will commit; a journal written under one source reopens under any,
+    /// since the salts already written are read off their markers.
+    pub(crate) fn open_active(
+        dir: &Path,
+        next_seq: u64,
+        chain: [u8; 32],
+        salt: SaltSource,
+    ) -> io::Result<Self> {
         let segs = list_segments(dir)?;
         match segs.last() {
             Some(seg) => {
@@ -823,14 +890,20 @@ impl JournalWriter {
                     file,
                     len,
                     chain,
+                    salt,
                     in_flight: InFlight::Idle,
                 })
             }
-            None => Self::create_segment(dir, next_seq, chain),
+            None => Self::create_segment(dir, next_seq, chain, salt),
         }
     }
 
-    fn create_segment(dir: &Path, first_seq: u64, chain: [u8; 32]) -> io::Result<Self> {
+    fn create_segment(
+        dir: &Path,
+        first_seq: u64,
+        chain: [u8; 32],
+        salt: SaltSource,
+    ) -> io::Result<Self> {
         let path = segment_path(dir, first_seq);
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
         // The new entry must be durable before any commit acked out of this
@@ -843,6 +916,7 @@ impl JournalWriter {
             file,
             len,
             chain,
+            salt,
             in_flight: InFlight::Idle,
         })
     }
@@ -874,7 +948,14 @@ impl JournalWriter {
         record_bytes: Vec<Vec<u8>>,
         install: impl FnOnce([u8; 32]),
     ) -> Result<u64, CommitFail> {
-        let (buf, chain) = encode_txn(first_seq, record_bytes, &self.chain)
+        // THE SALT IS DRAWN HERE (`SKJ4`), once per transaction, from the
+        // kernel's source, before a frame exists: `encode_txn` stores it in
+        // the marker and closes the link with it. An OS that refuses entropy
+        // refuses the commit as a clean failure — nothing was framed, nothing
+        // appended, the segment is where the transaction found it, and
+        // re-invoking is safe — rather than as a property of the records.
+        let salt = self.salt.draw(first_seq).map_err(CommitFail::Clean)?;
+        let (buf, chain) = encode_txn(first_seq, record_bytes, &self.chain, salt)
             .map_err(|e| CommitFail::Unencodable(Box::new(e)))?;
         self.maybe_rotate(first_seq).map_err(CommitFail::Clean)?;
         let mark = self.len;
@@ -950,8 +1031,9 @@ impl JournalWriter {
         }
         // Under per-commit Fsync the old segment is already durable (the
         // previous txn's barrier fsynced it) — the §1 rotation discipline.
-        // The chain rides across: it is over the journal, not the segment.
-        *self = Self::create_segment(&self.dir, first_seq, self.chain)?;
+        // The chain rides across: it is over the journal, not the segment;
+        // the salt source with it.
+        *self = Self::create_segment(&self.dir, first_seq, self.chain, self.salt)?;
         Ok(())
     }
 
@@ -1227,7 +1309,7 @@ pub(crate) struct ScanOutcome {
     chain_break: Option<u64>,
     /// THE BASE'S OWN LINK (QUEUE item 10's case 9, the at-head fork): the
     /// base's seq when the committed marker closing `s_load` itself was
-    /// scanned and its `chain` is not `chain_at_base` — the `SKC3` header's
+    /// scanned and its `chain` is not `chain_at_base` — the `SKC4` header's
     /// `chain_head`, which nothing in the header covers. Two STORED values
     /// disagreeing, nothing recomputed: the header was rewritten, or the
     /// marker was. `None` when they agree, and `None` — vacuously — when
@@ -1522,10 +1604,18 @@ impl PendingTxn {
 
     /// The chain value `marker` MUST carry to be this group's honest close:
     /// the link opened on the running value, streamed with this group's
-    /// payloads, closed with the marker's own pre-chain fields — the writer's
-    /// computation ([`encode_txn`]) re-run from the bytes the CRC verified.
+    /// payloads, closed with the marker's own pre-chain fields and the SALT
+    /// the marker carries — the writer's computation ([`encode_txn`]) re-run
+    /// from the bytes the CRC verified. The salt is READ here, never drawn:
+    /// a replay under any [`SaltSource`] recomputes the link the writer
+    /// closed, and an edited salt is a link that fails.
     fn chain_closing(&self, marker: &Marker) -> [u8; 32] {
-        ChainLink(self.chain.0.clone()).close(marker.txn, marker.last_seq, marker.records_checksum)
+        ChainLink(self.chain.0.clone()).close(
+            marker.txn,
+            marker.last_seq,
+            marker.records_checksum,
+            &marker.salt,
+        )
     }
 
     /// Take one record frame of this transaction: `payload` is the frame
@@ -1624,8 +1714,9 @@ impl PendingTxn {
 /// committed transaction above `s_load` must carry, in its marker, the
 /// recomputation of [`ChainLink`] over the previous committed transaction's
 /// value — `chain_at_base` for the first, which is [`CHAIN_GENESIS`] from
-/// genesis and the `SKC3` header's `chain_head` off a checkpoint — and its
-/// own record payloads as the CRC verified them. A mismatch is recorded as
+/// genesis and the `SKC4` header's `chain_head` off a checkpoint — its own
+/// record payloads as the CRC verified them, and the salt the marker itself
+/// carries (`SKJ4`; read, never drawn). A mismatch is recorded as
 /// the first CHAIN BREAK ([`ScanOutcome::chain_break`]) and the running value
 /// continues from the marker's own claim; transactions at or below the base
 /// are not verified, being embodied in it, exactly as a corrupt run there is
@@ -1974,35 +2065,68 @@ mod tests {
             .expect("fixture commit");
     }
 
-    /// A fresh appender at genesis: the chain seeded where a new journal's is.
+    /// The seeded salt source these fixtures write under: deterministic, so
+    /// a fixture's bytes are the same on every run, and named once.
+    const TEST_SEED: u64 = 0x5A17;
+
+    /// A fixed salt for the frame builder's direct callers, where the source
+    /// is not under test and a value with a shape beats zeros.
+    const FIXED_SALT: [u8; 32] = [0xA5; 32];
+
+    /// A fresh appender at genesis: the chain seeded where a new journal's is,
+    /// the salts from the seeded stream.
     fn open_fresh(dir: &Path) -> JournalWriter {
-        JournalWriter::open_active(dir, 1, CHAIN_GENESIS).unwrap()
+        JournalWriter::open_active(dir, 1, CHAIN_GENESIS, SaltSource::Seeded(TEST_SEED)).unwrap()
     }
 
     /// An unsigned marker whose chain is NOT under test — the fixtures that
     /// hand-build a marker build one that never commits, or one with no
-    /// group, so the chain it carries is never read.
+    /// group, so the chain it carries is never read — and whose salt is
+    /// likewise never hashed against anything.
     fn marker(txn: Txn, last_seq: u64, records_checksum: u32) -> Marker {
         Marker {
             txn,
             last_seq,
             records_checksum,
+            salt: [0u8; 32],
             chain: [0u8; 32],
             sig_alg: SIG_ALG_UNSIGNED,
             sig: Vec::new(),
         }
     }
 
-    /// The `chain` field of the committed marker closing the frame at `pos`.
-    fn chain_of_marker_at(path: &Path, pos: usize) -> [u8; 32] {
+    /// The committed marker closing the frame at `pos`, decoded whole.
+    fn marker_at(path: &Path, pos: usize) -> Marker {
         let buf = fs::read(path).unwrap();
         let Parsed::Intact { payload } = parse_frame(&buf, pos) else {
             panic!("intact marker frame expected at {pos}")
         };
         match codec().deserialize::<FramePayload>(&buf[payload]).unwrap() {
-            FramePayload::Marker(m) => m.chain,
+            FramePayload::Marker(m) => m,
             FramePayload::Record(_) => panic!("a marker frame expected at {pos}"),
         }
+    }
+
+    /// Every marker of a CLEAN journal file, in file order.
+    fn markers_in(path: &Path) -> Vec<Marker> {
+        let buf = fs::read(path).unwrap();
+        frame_starts(path)
+            .into_iter()
+            .filter_map(|pos| {
+                let Parsed::Intact { payload } = parse_frame(&buf, pos) else {
+                    panic!("clean journal expected")
+                };
+                match codec().deserialize::<FramePayload>(&buf[payload]).unwrap() {
+                    FramePayload::Marker(m) => Some(m),
+                    FramePayload::Record(_) => None,
+                }
+            })
+            .collect()
+    }
+
+    /// The `chain` field of the committed marker closing the frame at `pos`.
+    fn chain_of_marker_at(path: &Path, pos: usize) -> [u8; 32] {
+        marker_at(path, pos).chain
     }
 
     /// Rewrite the payload of the intact frame at `pos` through `edit` and
@@ -2124,16 +2248,18 @@ mod tests {
             vec![rec(u64::MAX), vec![7u8; 300], Vec::new()],
         ] {
             let expected = txn_encoded_len(&record_bytes);
-            let (buf, _) = encode_txn(u64::MAX - 3, record_bytes, &CHAIN_GENESIS).unwrap();
+            let (buf, _) =
+                encode_txn(u64::MAX - 3, record_bytes, &CHAIN_GENESIS, FIXED_SALT).unwrap();
             assert_eq!(buf.len() as u64, expected);
         }
         // The marker half, stated as the figures the layout doc promises: a
-        // 65-byte payload with the slot empty, a 77-byte frame.
+        // 97-byte payload with the slot empty (`SKJ4`: the salt's thirty-two
+        // after `SKJ3`'s sixty-five), a 109-byte frame.
         let empty_marker = codec()
             .serialize(&FramePayload::Marker(marker(Txn(u64::MAX), u64::MAX, u32::MAX)))
             .unwrap();
-        assert_eq!(empty_marker.len(), 65);
-        assert_eq!(MARKER_FRAME_LEN, 77);
+        assert_eq!(empty_marker.len(), 97);
+        assert_eq!(MARKER_FRAME_LEN, 109);
         assert_eq!(MARKER_FRAME_LEN, frame_len(empty_marker.len() as u64));
         // The per-record half: what push_frame judges is the wrapped payload,
         // the record's own bytes plus RECORD_PAYLOAD_OVERHEAD exactly.
@@ -2507,9 +2633,9 @@ mod tests {
         // written by one build is read by the next, so the layout is pinned
         // here rather than left to whatever the derives happen to produce —
         // the marker's chain included, computed here by hand from the bytes
-        // `ChainLink` says it covers, so the formula is pinned beside the
-        // layout and not only by the golden fixture.
-        let (buf, chain) = encode_txn(2, vec![vec![9u8, 8, 7]], &CHAIN_GENESIS).unwrap();
+        // `ChainLink` says it covers — the salt last — so the formula is
+        // pinned beside the layout and not only by the golden fixture.
+        let (buf, chain) = encode_txn(2, vec![vec![9u8, 8, 7]], &CHAIN_GENESIS, FIXED_SALT).unwrap();
 
         let mut expected_record = Vec::new();
         expected_record.extend_from_slice(&0u32.to_le_bytes()); // FramePayload::Record
@@ -2526,26 +2652,40 @@ mod tests {
         // records_checksum: over the record frames' payloads, in Seq order.
         let records_checksum = crc32c::crc32c_append(0, &expected_record);
         // The chain: SHA-256 over the genesis seed, the record payload as
-        // framed, then the marker's own pre-chain fields in their wire form.
+        // framed, the marker's own pre-chain fields in their wire form, then
+        // the salt — the last bytes before finalize.
         let expected_chain: [u8; 32] = Sha256::new()
             .chain_update(CHAIN_GENESIS)
             .chain_update(&expected_record)
             .chain_update(2u64.to_le_bytes()) // txn
             .chain_update(2u64.to_le_bytes()) // last_seq
             .chain_update(records_checksum.to_le_bytes())
+            .chain_update(FIXED_SALT) // salt
             .finalize()
             .into();
         assert_eq!(chain, expected_chain, "the writer answers the chain it framed");
+        // …and a link closed WITHOUT the salt is not this chain: the salt is
+        // hashed, not merely stored.
+        let unsalted: [u8; 32] = Sha256::new()
+            .chain_update(CHAIN_GENESIS)
+            .chain_update(&expected_record)
+            .chain_update(2u64.to_le_bytes())
+            .chain_update(2u64.to_le_bytes())
+            .chain_update(records_checksum.to_le_bytes())
+            .finalize()
+            .into();
+        assert_ne!(chain, unsalted, "the salt is a chain input");
 
         let mut expected_marker = Vec::new();
         expected_marker.extend_from_slice(&1u32.to_le_bytes()); // FramePayload::Marker
         expected_marker.extend_from_slice(&2u64.to_le_bytes()); // txn
         expected_marker.extend_from_slice(&2u64.to_le_bytes()); // last_seq
         expected_marker.extend_from_slice(&records_checksum.to_le_bytes());
-        expected_marker.extend_from_slice(&expected_chain); // chain: a 32-tuple, no prefix
+        expected_marker.extend_from_slice(&FIXED_SALT); // salt: a 32-tuple, no prefix
+        expected_marker.extend_from_slice(&expected_chain); // chain: likewise
         expected_marker.push(SIG_ALG_UNSIGNED); // sig_alg
         expected_marker.extend_from_slice(&0u64.to_le_bytes()); // sig: empty, its length alone
-        assert_eq!(expected_marker.len(), 65, "the empty marker payload");
+        assert_eq!(expected_marker.len(), 97, "the empty marker payload");
         let Parsed::Intact { payload } = parse_frame(&buf, end) else {
             panic!("intact marker frame expected")
         };
@@ -2565,9 +2705,9 @@ mod tests {
             .serialize(&FramePayload::Marker(marker(Txn(3), 3, 0)))
             .unwrap();
         assert!(codec().deserialize::<FramePayload>(&honest).is_ok());
-        // Layout: tag 4 | txn 8 | last_seq 8 | checksum 4 | chain 32 | sig_alg @56 | len @57..65.
+        // Layout: tag 4 | txn 8 | last_seq 8 | checksum 4 | salt 32 | chain 32 | sig_alg @88 | len @89..97.
         let with = |sig_alg: u8, sig: &[u8]| {
-            let mut bytes = honest[..56].to_vec();
+            let mut bytes = honest[..88].to_vec();
             bytes.push(sig_alg);
             bytes.extend_from_slice(&(sig.len() as u64).to_le_bytes());
             bytes.extend_from_slice(sig);
@@ -2621,10 +2761,12 @@ mod tests {
         let wrong = scan(&segs, 1, None, CHAIN_GENESIS).unwrap();
         assert_eq!(wrong.chain_break(), Some(3));
 
-        // Rewrite T2's marker's chain, re-sealing its frame CRC: every frame
-        // stays intact, every group still commits, and the break lands on T2.
+        // Rewrite T2's marker's chain — payload offset 56 under `SKJ4`, the
+        // salt's thirty-two bytes sitting between the checksum and it —
+        // re-sealing its frame CRC: every frame stays intact, every group
+        // still commits, and the break lands on T2.
         let t2 = chain_of_marker_at(&segs[0].path, starts[4]);
-        rewrite_payload(&segs[0].path, starts[4], |payload| payload[24] ^= 0xFF);
+        rewrite_payload(&segs[0].path, starts[4], |payload| payload[56] ^= 0xFF);
         assert_ne!(chain_of_marker_at(&segs[0].path, starts[4]), t2, "the rewrite took");
         let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
         assert!(out.runs.is_empty(), "no frame was damaged");
@@ -2658,6 +2800,8 @@ mod tests {
             fs::write(&seg, data).unwrap();
         };
         assert_eq!(foreign_stamp(&segs, 0).unwrap(), None, "this build's own stamp");
+        stamped(b"SKJ3");
+        assert_eq!(foreign_stamp(&segs, 0).unwrap(), Some(*b"SKJ3"), "the unsalted predecessor");
         stamped(b"SKJ2");
         assert_eq!(foreign_stamp(&segs, 0).unwrap(), Some(*b"SKJ2"));
         stamped(b"SKJ1");
@@ -2716,12 +2860,97 @@ mod tests {
         assert_eq!(out.chain_head, chain_of_marker_at(&segs[1].path, seg2_starts[3]));
         // Reopened over the rotated journal, the appender continues the same
         // chain: the next commit verifies against what the scan derived.
-        let mut writer = JournalWriter::open_active(dir.path(), 4, out.chain_head).unwrap();
+        let mut writer =
+            JournalWriter::open_active(dir.path(), 4, out.chain_head, SaltSource::Seeded(TEST_SEED))
+                .unwrap();
         write_txn(&mut writer, 4, vec![rec(40)]);
         drop(writer);
         let segs = list_segments(dir.path()).unwrap();
         let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
         assert_eq!((out.chain_break(), out.committed_head), (None, 4));
+    }
+
+    #[test]
+    fn the_marker_carries_the_sources_salt_and_an_edited_salt_breaks_the_chain() {
+        // The writer draws each transaction's salt from its source and stores
+        // it in the marker — under the seeded source, the stream's value for
+        // that transaction, byte for byte — and the scan closes each link with
+        // the salt it READS there. So a salt edited in place, its frame CRC
+        // re-sealed, is a link that no longer verifies: a CHAIN BREAK at that
+        // transaction, whatever the records say. The salt is hashed, not
+        // merely stored.
+        let dir = tempdir().unwrap();
+        let mut writer = open_fresh(dir.path());
+        write_txn(&mut writer, 1, vec![rec(10)]);
+        write_txn(&mut writer, 2, vec![rec(20), rec(21)]);
+        write_txn(&mut writer, 4, vec![rec(40)]);
+        drop(writer);
+        let segs = list_segments(dir.path()).unwrap();
+        let starts = frame_starts(&segs[0].path);
+        // Frames: 0=T1 rec, 1=T1 marker, 2..=3=T2 recs, 4=T2 marker, 5=T3 rec, 6=T3 marker.
+        for (marker_frame, txn) in [(1, 1u64), (4, 2), (6, 4)] {
+            let m = marker_at(&segs[0].path, starts[marker_frame]);
+            assert_eq!(m.txn, Txn(txn));
+            assert_eq!(
+                m.salt,
+                SaltSource::Seeded(TEST_SEED).draw(txn).unwrap(),
+                "the marker closing transaction {txn} carries the seeded stream's salt"
+            );
+            assert_ne!(m.salt, [0u8; 32]);
+        }
+        let salts: Vec<[u8; 32]> =
+            [1, 4, 6].iter().map(|&f| marker_at(&segs[0].path, starts[f]).salt).collect();
+        assert!(salts[0] != salts[1] && salts[1] != salts[2], "one salt per transaction");
+        assert_eq!(scan(&segs, 0, None, CHAIN_GENESIS).unwrap().chain_break(), None);
+
+        // Edit one byte of T2's salt — payload offset 24 + 5, inside the
+        // salt's thirty-two — and re-seal the frame: intact, still committed,
+        // and the link fails at T2 (last seq 3); T3 is chained from T2's
+        // stored value and does not mask it.
+        rewrite_payload(&segs[0].path, starts[4], |payload| payload[24 + 5] ^= 0xFF);
+        let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
+        assert!(out.runs.is_empty(), "no frame was damaged");
+        assert_eq!(out.committed_head, 4, "the groups still commit — the halt is the caller's");
+        assert_eq!(out.chain_break(), Some(3), "the salt is a chain input: T2 closes at 3");
+    }
+
+    #[test]
+    fn a_journal_written_under_one_salt_source_replays_under_any() {
+        // The salt is READ off the marker on replay, never regenerated, so a
+        // reopen under a different source — or the same seed, or the OS —
+        // verifies every link written before it, and the commits it adds
+        // chain from the recovered head under its own source.
+        let dir = tempdir().unwrap();
+        let mut writer = open_fresh(dir.path());
+        write_txn(&mut writer, 1, vec![rec(10)]);
+        write_txn(&mut writer, 2, vec![rec(20)]);
+        drop(writer);
+        for source in [SaltSource::Os, SaltSource::Seeded(TEST_SEED + 1), SaltSource::Seeded(TEST_SEED)] {
+            let segs = list_segments(dir.path()).unwrap();
+            let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
+            assert_eq!(out.chain_break(), None, "reopened under {source:?}");
+            let next = out.committed_head + 1;
+            let mut writer = JournalWriter::open_active(dir.path(), next, out.chain_head, source).unwrap();
+            write_txn(&mut writer, next, vec![rec(next * 10)]);
+            drop(writer);
+        }
+        let segs = list_segments(dir.path()).unwrap();
+        let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
+        assert_eq!((out.chain_break(), out.committed_head), (None, 5));
+        // The OS-drawn salt at 3 is neither seeded stream's value; the seeded
+        // ones at 4 and 5 are exactly their streams'.
+        let markers = markers_in(&segs[0].path);
+        let salt_of = |txn: u64| {
+            markers
+                .iter()
+                .find(|m| m.txn == Txn(txn))
+                .map(|m| m.salt)
+                .expect("a marker per transaction")
+        };
+        assert_ne!(salt_of(3), SaltSource::Seeded(TEST_SEED).draw(3).unwrap());
+        assert_ne!(salt_of(3), SaltSource::Seeded(TEST_SEED + 1).draw(3).unwrap());
+        assert_eq!(salt_of(4), SaltSource::Seeded(TEST_SEED + 1).draw(4).unwrap());
+        assert_eq!(salt_of(5), SaltSource::Seeded(TEST_SEED).draw(5).unwrap());
     }
 
     #[test]

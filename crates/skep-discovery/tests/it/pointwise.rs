@@ -222,9 +222,10 @@ fn the_pointwise_pair_reads_the_trunk_head_the_region_family_resolves() {
 }
 
 /// §5 — the pointwise pair apply the ABSENCE RULE: a link homed where the
-/// reader may not read is ABSENT — `project` gives the non-link's
-/// `NotALink`, `addressably_discoverable_from` the retracted link's
-/// `Ok(false)`. The absence rule sits where both cards put it: after the
+/// reader may not read is ABSENT — both `project` and
+/// `addressably_discoverable_from` give the non-link's `NotALink`, never the
+/// retracted link's `Ok(false)`, which would tell the reader a link is
+/// there. The absence rule sits where both cards put it: after the
 /// document gate, so an unregistered `d` still names the document fault; and
 /// ahead of the resident-link read, so a refused link and an address naming
 /// nothing under the same unreadable document answer alike — the reader
@@ -265,8 +266,8 @@ fn the_pointwise_reads_apply_the_absence_rule_after_the_document_and_before_resi
         );
         assert_eq!(
             addressably_discoverable_from_on(&snap, addr, &doc1(), &cannot_read_doc2),
-            Ok(false),
-            "{addr:?} is absent, so not discoverable"
+            Err(QueryError::NotALink),
+            "{addr:?} is absent to addressably_discoverable_from"
         );
     }
     // After the document gate: the document fault still speaks first.
@@ -374,7 +375,7 @@ fn the_pointwise_pair_holds_one_run_constant_over_two_quantities() {
     let snap = k.snapshot();
     assert_eq!(
         addressably_discoverable_from_on(&snap, &e1, &doc2(), &cannot_read_doc1),
-        Ok(false)
+        Err(QueryError::NotALink)
     );
     assert_eq!(
         project_on(&snap, &e1, FROM, &doc2(), &cannot_read_doc1),

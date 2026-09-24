@@ -556,7 +556,7 @@ fn a_public_link_into_a_draft_is_visible_whole_and_the_draft_s_bytes_are_withhel
         let v = op(port, token, &format!(r#"{{"op":"project","a":"{dlink}","slot":1,"d":"{member}"}}"#));
         assert_eq!(code(&v), "not_a_link", "{v}");
         let v = op(port, token, &format!(r#"{{"op":"discoverable_from","a":"{dlink}","d":"{member}"}}"#));
-        assert_eq!(expect_resp(&v, "bool")["val"], json!(false), "{v}");
+        assert_eq!(code(&v), "not_a_link", "{v}");
         // And the draft itself, by address: withheld (the doc-argument row).
         assert_withheld(&op(port, token, &read1_frame(&draft)), &draft);
     }

@@ -274,16 +274,15 @@ pub enum Op {
     /// answers `Withheld` naming `d`, while the link `a` is not one and so
     /// never answers `Withheld` (PUB-6.8).
     ///
-    /// WHAT `a` ANSWERS INSTEAD is where this op stands apart from its three
-    /// siblings, and a client reading absence off it should know so. A link
-    /// homed where the caller cannot read answers `false`; an address NO LINK
-    /// OCCUPIES answers `NotALink`. Those are two different answers, so —
-    /// unlike [`Op::ReadLink`], [`Op::FollowLink`] and [`Op::Project`], each
-    /// of which answers an unreadable home exactly as it answers an
-    /// unoccupied address — this op's answer distinguishes an occupied
-    /// address from an unoccupied one. PUB-6.6's table pins `not_a_link`
-    /// here, so the absence rule is unmet at this op until the reader that
-    /// owns the answer (M8's `addressably_discoverable_from_on`) gives it.
+    /// WHAT `a` ANSWERS INSTEAD is what its three siblings answer: a link
+    /// homed where the caller cannot read is ABSENT and answers `NotALink` —
+    /// exactly what an address NO LINK OCCUPIES answers — so, as at
+    /// [`Op::ReadLink`], [`Op::FollowLink`] and [`Op::Project`], the answer
+    /// never distinguishes an occupied address from an unoccupied one
+    /// (PUB-6.6's table: `not_a_link` here). Never `false`, which is the
+    /// RETRACTED link's answer and would tell the caller that a link occupies
+    /// the address. A retracted link in a home the caller MAY read is present
+    /// to them, and still answers `false`.
     DiscoverableFrom { a: Address, d: Address },
     /// Pre-edit link-survival what-if (ASN-0117 preview).
     DeleteOrphans { d: Address, p: VPos, width: Nat },

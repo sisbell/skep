@@ -643,10 +643,8 @@ where
     /// * ABSENCE. A link address whose home document the caller may not read
     ///   answers as an address no link occupies (PUB-6.6), so absence does
     ///   not distinguish "no link there" from "a link that is not yours to
-    ///   see" — at [`Op::ReadLink`], [`Op::FollowLink`] and [`Op::Project`],
-    ///   three of the four ops the rule covers. The fourth,
-    ///   [`Op::DiscoverableFrom`], does not match its unoccupied-address
-    ///   answer today and says so at its own variant.
+    ///   see" — at [`Op::ReadLink`], [`Op::FollowLink`], [`Op::Project`] and
+    ///   [`Op::DiscoverableFrom`], the four ops the rule covers.
     /// * a WITHHELD ITEM inside a payload, at its own position — RETRIEVEV's
     ///   delivery, whose runs are masked by origin ([`Op::RetrieveV`]).
     ///
@@ -654,12 +652,12 @@ where
     /// ever refused for want of a BOUND SESSION — that is the gate/mask
     /// distinction above, and it is why any `SessionId` is served. Forms (2),
     /// (3) and (4) disclose nothing further: no field reports a drop, and
-    /// absence does not distinguish "no link" from "not yours to see", with
-    /// the one exception named there. Form (1) is the informative one, BY
-    /// DESIGN — PUB-6.12 makes a `Withheld` mean a REGISTERED PRIVATE
-    /// document, which is exactly why the predicate must answer readable for
-    /// an address the store has not registered ([`ReadableWorld::readable`]),
-    /// so that no refusal can turn a nonexistent address into a hidden one.
+    /// absence does not distinguish "no link" from "not yours to see". Form
+    /// (1) is the informative one, BY DESIGN — PUB-6.12 makes a `Withheld`
+    /// mean a REGISTERED PRIVATE document, which is exactly why the
+    /// predicate must answer readable for an address the store has not
+    /// registered ([`ReadableWorld::readable`]), so that no refusal can turn
+    /// a nonexistent address into a hidden one.
     ///
     /// [`ReadableWorld::readable`]: crate::ReadableWorld::readable
     ///
@@ -1208,13 +1206,11 @@ where
             // `project` and `discoverable_from`: `d` is in the consult above
             // (the dual row, PUB-6.8); the ABSENCE of a link `a` homed in an
             // unreadable document (PUB-6.6) is M8's to answer, through the
-            // predicate, and the two answer it differently. `project_on`
-            // gives `NotALink`, which is also what it gives for an address no
-            // link occupies, so the two are indistinguishable as the rule
-            // requires; `addressably_discoverable_from_on` gives `false`
-            // where an unoccupied address gets `NotALink`, so at that op the
-            // rule is unmet — see `Op::DiscoverableFrom`. An admitted
-            // `project` is UNFILTERED at origin (PUB-6.15).
+            // predicate, and both answer it `NotALink` — which is also what
+            // each gives for an address no link occupies, so the two are
+            // indistinguishable as the rule requires. An admitted `project`
+            // is UNFILTERED at origin (PUB-6.15); an admitted `a` that is
+            // retracted answers `discoverable_from` `false`.
             Op::Project { a, slot, d } => {
                 let set = project_on(&snap, &a, slot, &d, &readable)
                     .map_err(|e| lower_read(kind, e))?;

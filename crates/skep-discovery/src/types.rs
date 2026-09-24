@@ -254,11 +254,12 @@ pub enum QueryError {
     /// `d` is not a registered document (M3) — distinct from a
     /// registered-but-empty `d`, which yields a defined empty result.
     DocNotRegistered,
-    /// `a ∉ dom(L)`. Two further cases answer the same, both on
-    /// [`crate::project_on`] alone: an out-of-range slot, which M7's
+    /// `a ∉ dom(L)`. Two further cases answer the same. On both pointwise
+    /// reads, a link homed in a document the reader may not read — absent to
+    /// them (PUB-6.6), so it answers exactly as a non-link does. On
+    /// [`crate::project_on`] alone, an out-of-range slot, which M7's
     /// `followlink` does not tell from a non-link (the `BadSlot` split is
-    /// deferred); and a link homed in a document the reader may not read —
-    /// absent to them (PUB-6.6), so it answers exactly as a non-link does.
+    /// deferred).
     NotALink,
     /// Some span of the region is not the shape [`crate::content_vspan`]
     /// builds — rejected up front so M5's silent clipping never turns the

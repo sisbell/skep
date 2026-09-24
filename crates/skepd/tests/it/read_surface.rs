@@ -286,7 +286,8 @@ fn a_draft_homed_link_is_dropped_from_the_guest_s_result_sets_and_absent_by_addr
     assert_eq!(endsets(Some(&owner)), endsets(None) + 1, "retrieve_endsets answers the filtered rows");
 
     // LINK-ADDRESS ABSENCE (PUB-6.6): ⊥ to the guest, as a never-deposited
-    // address — `link: null`, `{"err":"invalid"}` (never ⟨⟩), `false`.
+    // address — `link: null`, `{"err":"invalid"}` (never ⟨⟩), `not_a_link`
+    // from both pointwise reads (never `false`, the retracted link's answer).
     let v = op(port, None, &format!(r#"{{"op":"read_link","a":"{link}"}}"#));
     assert!(expect_resp(&v, "link_value")["link"].is_null(), "absent to the guest: {v}");
     let v = op(port, Some(&owner), &format!(r#"{{"op":"read_link","a":"{link}"}}"#));
@@ -304,7 +305,11 @@ fn a_draft_homed_link_is_dropped_from_the_guest_s_result_sets_and_absent_by_addr
         None,
         &format!(r#"{{"op":"discoverable_from","a":"{link}","d":"{CLAIMANT_DOC1}"}}"#),
     );
-    assert_eq!(expect_resp(&v, "bool")["val"], serde_json::json!(false), "absent ⟹ not discoverable: {v}");
+    assert_eq!(
+        expect_resp(&v, "rejected")["code"].as_str(),
+        Some("not_a_link"),
+        "absent ⟹ the answer a non-link gets, never `false`: {v}"
+    );
     let v = op(port, None, &format!(r#"{{"op":"project","a":"{link}","slot":1,"d":"{CLAIMANT_DOC1}"}}"#));
     assert_eq!(
         expect_resp(&v, "rejected")["code"].as_str(),

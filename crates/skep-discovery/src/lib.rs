@@ -83,10 +83,11 @@
 //!   survivors;
 //! * the ABSENCE RULE (PUB-6.6), on the POINTWISE pair's `a` ARGUMENT, since
 //!   neither answer names a link: an `a` the rule refuses is ABSENT, which
-//!   [`project_on`] answers `Err(NotALink)` and
-//!   [`addressably_discoverable_from_on`] `Ok(false)` — after the document
-//!   gate, and ahead of the resident-link read, so that under one unreadable
-//!   document a refused link and an address naming nothing answer alike.
+//!   both [`project_on`] and [`addressably_discoverable_from_on`] answer
+//!   `Err(NotALink)` — exactly what an address naming no link gets — after
+//!   the document gate, and ahead of the resident-link read, so that under
+//!   one unreadable document a refused link and an address naming nothing
+//!   answer alike.
 //!
 //! Neither is the PER-RUN MASK (PUB-6.41, M6's `retrieve_v_masked`), which
 //! withholds in place; nothing here applies it. [`image_on`] alone takes no

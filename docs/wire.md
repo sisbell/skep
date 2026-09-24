@@ -148,11 +148,11 @@ How a masked read answers:
   the rows whose home you may read — the census counts the filtered set,
   the page turns over it.
 * **A link address you may not read is absent**: `read_link` answers
-  `link: null`, `follow_link` answers `{"err": "invalid"}`,
-  `discoverable_from` answers `false`, `project` answers `not_a_link` —
-  exactly as a never-deposited address, never a distinct signal. Where a
-  read carries both a document and a link address (`project`,
-  `discoverable_from`), the document is consulted FIRST.
+  `link: null`, `follow_link` answers `{"err": "invalid"}`, `project` and
+  `discoverable_from` answer `not_a_link` — exactly as a never-deposited
+  address, never a distinct signal. Where a read carries both a document
+  and a link address (`project`, `discoverable_from`), the document is
+  consulted FIRST.
 * **A delivery masks per run**: a published arrangement that windows a
   draft you may not read delivers the `withheld` item at that run's own
   position (§Value encodings); extents are never shrunk.

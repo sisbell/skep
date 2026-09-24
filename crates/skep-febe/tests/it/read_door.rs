@@ -26,8 +26,9 @@ use crate::common;
 
 use common::*;
 use skep_febe::{
-    consult_read, enc, Address, DeliveryItem, EditionClaim, FourSet, Op, OpKind, RegionSpec,
-    RejectCode, Response, SlotArg, SlotSpec, Span, SpanSet, Spec, Tumbler, View, FROM, TO,
+    consult_read, enc, validate, Address, DeliveryItem, EditionClaim, FourSet, Op, OpKind,
+    RegionSpec, RejectCode, Response, SlotArg, SlotSpec, Span, SpanSet, Spec, Tumbler, View, FROM,
+    TO,
 };
 
 /// One link whose endsets cover `covered`'s content, homed in `home` — the
@@ -234,16 +235,13 @@ fn the_doc_argument_consult_speaks_before_any_other_validation() {
 /// PUB-6.8, the dual row: `project` and `discoverable_from` name the DOCUMENT
 /// `d`, never the link `a`. An unreadable `d` is withheld naming `d`; a link
 /// homed in an unreadable document takes M8's own ABSENCE answer — `NotALink`
-/// from `project`, `false` from `discoverable_from` — and never a withheld,
-/// which would confirm the link exists.
+/// from both — and never a withheld, which would confirm the link exists.
 ///
-/// The two absence answers are not alike, and the contrast row below is what
-/// makes that visible: `project` answers an unreadable home exactly as it
-/// answers an address NO LINK OCCUPIES, which is what PUB-6.6 requires, while
-/// `discoverable_from` answers `false` where an unoccupied address gets
-/// `NotALink`. The `false` here therefore pins M8's answer as it stands, which
-/// deviates from PUB-6.6's table; when that reader conforms, this assertion
-/// becomes `NotALink` and the contrast row stands unchanged.
+/// The two absence answers are alike, and the contrast row below is what
+/// makes that visible: each op answers an unreadable home exactly as it
+/// answers an address NO LINK OCCUPIES, which is what PUB-6.6's table
+/// requires (`not_a_link` at both), so neither answer tells this caller
+/// whether a link sits at the address.
 #[test]
 fn the_dual_row_consults_the_document_and_never_the_link() {
     let (fx, unreadable) = setup_with_unreadable();
@@ -267,10 +265,9 @@ fn the_dual_row_consults_the_document_and_never_the_link() {
     );
 
     // The LINK's home unreadable, `d` readable: the link is ABSENT to this
-    // caller (PUB-6.6) — `project` answers `NotALink`, exactly as an address
-    // naming no link, and `discoverable_from` answers `false`, which is NOT
-    // what an unoccupied address gets (the contrast row below).
-    // Never a WITHHELD, which would confirm the link is there.
+    // caller (PUB-6.6) — `project` and `discoverable_from` each answer
+    // `NotALink`, exactly as an address naming no link (the contrast row
+    // below). Never a WITHHELD, which would confirm the link is there.
     // The link covers `d`'s OWN content, so a door that stopped threading the
     // predicate would hand this caller the very positions of a document it may
     // read that a link it may not see points at.
@@ -293,17 +290,73 @@ fn the_dual_row_consults_the_document_and_never_the_link() {
         RejectCode::NotALink,
         "absent, exactly as an address naming no link: {rej}"
     );
-    // The CONTRAST that makes the deviation legible: an address NO LINK
-    // OCCUPIES answers `NotALink`, so the `false` below is DISTINGUISHABLE
-    // from it — PUB-6.6's table pins `not_a_link` for this op and M8 answers
-    // `false`. When M8 conforms, the assertion below becomes `NotALink` and
-    // this one stands unchanged.
+    // The CONTRAST that makes the rule legible: an address NO LINK OCCUPIES
+    // answers `NotALink`, and the draft-homed link below answers the SAME —
+    // PUB-6.6's table pins `not_a_link` for this op, so a `false` here would
+    // tell this caller that a link occupies the address.
     assert_eq!(
         rejected(ex(&fx.febe, other, Op::DiscoverableFrom { a: d.clone(), d: d.clone() })).code,
         RejectCode::NotALink,
         "an unoccupied address is the answer a draft-homed link must match"
     );
-    assert!(!bool_val(ex(&fx.febe, other, Op::DiscoverableFrom { a: over_d, d })));
+    let rej = rejected(ex(&fx.febe, other, Op::DiscoverableFrom { a: over_d, d }));
+    assert_eq!(
+        rej.code,
+        RejectCode::NotALink,
+        "absent, exactly as an address naming no link: {rej}"
+    );
+}
+
+/// A never-deposited address in `doc`'s own LINK subspace — `doc.0.2.99` —
+/// the "address no link occupies" whose answer PUB-6.6 makes an unreadable
+/// home's answer match.
+fn unoccupied_link_address(doc: &Address) -> Address {
+    let comps = doc.tumbler().iter().cloned().chain([nat(0), nat(2), nat(99)]);
+    validate(Tumbler::new(comps).expect("nonempty")).expect("a T4-valid link address")
+}
+
+/// PUB-6.6's table row for `discoverable_from`, pinned as the rule states
+/// it: to ONE caller, over ONE readable `d`, a link homed in a document the
+/// caller may not read and an address no link occupies answer the SAME
+/// rejection code — `NotALink` — so the answer never tells a guest that a
+/// draft's link sits at an address. The addressable half stands beside it:
+/// a RETRACTED link in a home the caller may read is present to them, so it
+/// still answers `false`, an answer and not a rejection.
+#[test]
+fn discoverable_from_answers_an_unreadable_home_exactly_as_an_unoccupied_address() {
+    let (fx, unreadable) = setup_with_unreadable();
+    let d = create_doc(&fx);
+    insert3(&fx, &d);
+    let home = create_doc(&fx);
+    insert3(&fx, &home);
+    // Homed where the stranger may not read, reaching into `d`'s content:
+    // discoverable from `d` in truth, which the owner's answer proves.
+    let hidden = link_over(&fx, &home, &d);
+    // Homed in `d` itself, which the stranger may read — and then RETRACTED.
+    let retracted = link_over(&fx, &d, &d);
+    ack_addr(ex(&fx.febe, fx.user, Op::Nullify { home: d.clone(), target: retracted.clone() }));
+    let unoccupied = unoccupied_link_address(&d);
+    unreadable.lock().expect("no poisoning").push(home);
+    let other = fx.febe.open_session(OTHER);
+
+    assert!(
+        bool_val(ex(&fx.febe, fx.user, Op::DiscoverableFrom { a: hidden.clone(), d: d.clone() })),
+        "to its owner the hidden link is discoverable from `d`"
+    );
+
+    let code_for = |a: &Address| {
+        rejected(ex(&fx.febe, other, Op::DiscoverableFrom { a: a.clone(), d: d.clone() })).code
+    };
+    assert_eq!(code_for(&unoccupied), RejectCode::NotALink, "an address no link occupies");
+    assert_eq!(
+        code_for(&hidden),
+        code_for(&unoccupied),
+        "a link homed where the caller cannot read answers exactly as an address no link occupies"
+    );
+    assert!(
+        !bool_val(ex(&fx.febe, other, Op::DiscoverableFrom { a: retracted, d })),
+        "a retracted link in a readable home is present and not active: `false`, not a rejection"
+    );
 }
 
 /// PUB-6.12: a read that names no DOCUMENT has nothing to withhold — the FTT

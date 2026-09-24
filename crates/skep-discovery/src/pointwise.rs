@@ -210,28 +210,30 @@ fn touches(e: &Endset, extents: &[Span]) -> bool {
 /// `d`, which is what keeps the two agreeing that a link reaches `d`.
 ///
 /// The ABSENCE RULE (PUB round 2, lane 3.3, §2; PUB-6.6) — the home rule
-/// asked of the ARGUMENT `a`: a link whose home `readable` refuses is ABSENT,
-/// and absent ⟹ not discoverable, so it answers `Ok(false)`. That is the
-/// RETRACTED link's answer, not the `Err(NotALink)` an address naming nothing
-/// gets — so the pair's two absence shapes differ, and [`project_on`] beside
-/// this answers `Err(NotALink)`. Neither shape reveals the unreadable
-/// document's link chain, because the rule runs AHEAD of the resident-link
-/// read: every address under an unreadable document answers `Ok(false)`
-/// here, a refused link and a non-link alike. It runs after the document
-/// gate, so an unregistered `d` names the document fault whatever `a` is;
-/// `d`'s own readability is the caller's doc-argument consult (pre-dispatch);
-/// an `a` with no document field has no home to withhold, and the store
-/// answers for it.
+/// asked of the ARGUMENT `a`, because the answer names no link: a link whose
+/// home `readable` refuses is ABSENT, and answers `Err(NotALink)` — exactly
+/// what an address naming no link gets, and what [`project_on`] beside this
+/// answers for the same `a`. NOT `Ok(false)`: that is the RETRACTED link's
+/// answer, and a reader handed it for an unreadable home would learn that a
+/// link occupies the address (PUB-6.6's table pins `not_a_link` here). The
+/// rule runs AHEAD of the resident-link read, so every address under an
+/// unreadable document answers `Err(NotALink)`, a refused link and a
+/// non-link alike, and the answer says nothing about that document's link
+/// chain. It runs after the document gate, so an unregistered `d` names the
+/// document fault whatever `a` is; `d`'s own readability is the caller's
+/// doc-argument consult (pre-dispatch); an `a` with no document field has no
+/// home to withhold, and the store answers for it.
 ///
-/// REFUSES, IN THIS ORDER: `DocNotRegistered`, then — for an admitted `a`
-/// only — `NotALink`, then `ImageTooLarge`. An absent `a` answers `Ok(false)`
-/// between the first and the second, and reaches neither. A retracted `a`
-/// answers `Ok(false)` between the second and the third, and never reaches
-/// the budget: the addressable half is settled before any run of `d` is
-/// read. Every argument about `d` is settled before any argument about `a`,
-/// so an unregistered `d` with a non-link `a` names the document fault.
-/// Given the document gate passes and `a` is admitted, `Err(NotALink)` iff
-/// `a ∉ dom(L)` (aligned with `project`'s non-link handling).
+/// REFUSES, IN THIS ORDER: `DocNotRegistered`; then `NotALink`, for an
+/// absent `a` first and then for an admitted `a` that names no link; then
+/// `ImageTooLarge`. A retracted `a` — resident, so admitted, in a home the
+/// reader may read — answers `Ok(false)` between `NotALink` and the budget,
+/// and never reaches the budget: the addressable half is settled before any
+/// run of `d` is read. Every argument about `d` is settled before any
+/// argument about `a`, so an unregistered `d` with a non-link `a` names the
+/// document fault. Given the document gate passes and `a` is admitted,
+/// `Err(NotALink)` iff `a ∉ dom(L)` (aligned with `project`'s non-link
+/// handling).
 ///
 /// A *nullified* link is still a link: it is still resident, so the
 /// resident-link read admits it, and it returns `Ok(false)` through the
@@ -266,7 +268,7 @@ pub fn addressably_discoverable_from_on<W: DiscoveryWorld>(
         return Err(QueryError::DocNotRegistered);
     }
     if !home_readable(readable, a) {
-        return Ok(false); // absent ⟹ not discoverable (PUB-6.6), ahead of the resident-link read
+        return Err(QueryError::NotALink); // absent (PUB-6.6), ahead of the resident-link read
     }
     let link = w.links().readlink(a).ok_or(QueryError::NotALink)?;
     if !w.links().is_active(a) {

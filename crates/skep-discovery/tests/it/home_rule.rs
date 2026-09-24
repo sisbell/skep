@@ -382,8 +382,8 @@ fn the_lineage_pair_asks_the_home_rule_of_the_claim_and_reads_its_endpoints_as_r
     // The KEY is a filter value (PUB-6.12), never consulted: `theirs` is homed
     // in doc2, which this reader may not read, and the claim naming it —
     // homed in doc1 — is listed all the same. As an ARGUMENT, the same address
-    // is absent (PUB-6.6): discoverable from doc1 in truth, `false` to this
-    // reader.
+    // is absent (PUB-6.6): discoverable from doc1 in truth, `NotALink` to this
+    // reader — exactly as an address no link occupies, never `false`.
     assert_eq!(
         claims_of(out_claims_on(&snap, &theirs, View::Active, &cannot_read_doc2)),
         vec![kept.clone()]
@@ -394,7 +394,7 @@ fn the_lineage_pair_asks_the_home_rule_of_the_claim_and_reads_its_endpoints_as_r
     );
     assert_eq!(
         addressably_discoverable_from_on(&snap, &theirs, &doc1(), &cannot_read_doc2),
-        Ok(false)
+        Err(QueryError::NotALink)
     );
     assert_eq!(
         in_claims_on(&snap, &e1, View::Active, &cannot_read_doc2),

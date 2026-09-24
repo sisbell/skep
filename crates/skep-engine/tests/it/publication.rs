@@ -83,7 +83,7 @@ fn remove_checkpoint(dir: &Path) {
     fs::remove_file(checkpoint_file(dir)).expect("remove the checkpoint");
 }
 
-/// M2's checkpoint layout (`SKC3`), at the offsets the pair below reads and
+/// M2's checkpoint layout (`SKC4`), at the offsets the pair below reads and
 /// writes it at: `[magic 4][seq u64 LE][crc32c(body) u32 LE][body_len u64 LE]
 /// [chain_head 32][body_hash 32][body]`. Three fields are carried across a
 /// rewrite unchanged — the magic and the seq, and the chain head, which is
@@ -110,7 +110,7 @@ fn checkpoint_body(dir: &Path) -> Vec<u8> {
 /// chain head are carried over, and the checksum, the length and the body
 /// hash are recomputed for the body written.
 ///
-/// The header this rebuilds is M2's `SKC3`, and nothing in M2 forces the
+/// The header this rebuilds is M2's `SKC4`, and nothing in M2 forces the
 /// offsets above to follow it. A rewrite that reconstructed them wrongly, or
 /// hashed the body wrongly, would leave a base M2 discards for its CHECKSUM
 /// or its HASH, which its fallback chain answers exactly as it answers a
@@ -384,7 +384,7 @@ fn an_undecodable_checkpoint_with_no_older_start_point_refuses_to_open() {
 
     // The CONTROL: the checkpoint's OWN body, back through the same rewrite.
     // The substitution below is only a decode failure if what surrounds the
-    // body is a header M2 reads — the `SKC3` offsets, the checksum AND the
+    // body is a header M2 reads — the `SKC4` offsets, the checksum AND the
     // body hash — and with genesis unreachable an open is the one question
     // whose answer turns on that. A rewrite that rebuilt M2's header wrongly
     // refuses HERE, where the base is this build's own.

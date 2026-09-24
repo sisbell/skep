@@ -57,7 +57,8 @@ skep-coordination = { path = "../skep-coordination" }
 # publication seams — ReadableWorld (the read predicate) and PublicationWorld
 # (the edition-claim lookup and the grant fold's any-principal index,
 # answering in M10's EditionClaim and UniversalIndexRow rows). M10 stays generic;
-# only the binary and this assembler ever name World against it.
+# only this assembler and the crates above it — the daemon and the conformance
+# harness, which `lib.rs` names — ever name World against it.
 skep-febe = { path = "../skep-febe" }
 
 [dev-dependencies]

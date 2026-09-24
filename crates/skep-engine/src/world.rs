@@ -34,23 +34,37 @@ use crate::publication::{self, Drafts};
 /// checkpoints a world through bincode, which encodes a struct as its fields
 /// in declaration order and carries no names, so a rename is byte-neutral for
 /// recovery and a reordering is not. The `FormatStamp` LEADS, and that is
-/// load-bearing: it is the first thing a decoder reads, so a checkpoint
+/// load-bearing: it is the first thing a decoder reads, so a checkpoint BODY
 /// written under any other format COUNT, or before there was one — the
 /// pre-publication-bit layout above all (PUB-7.8) — is refused at byte 0 by a
-/// value comparison, before any slice's bytes are read as another's. A count
-/// names a layout only while it was bumped with it: the one older layout
-/// count 1 also names passes that word, and its bytes ARE read as another
-/// slice's before the decode refuses it, by the arithmetic `FormatStamp`'s
-/// card states and `a_base_written_before_the_birth_memo_fails_to_decode`
-/// pins. The two skip-serialized fields, `drafts` and `grants`, sit outside
-/// the surface: neither occupies a byte.
+/// value comparison, before any slice's bytes are read as another's. Which
+/// bases can reach that word at all — M2's own stamps refuse every base older
+/// than `SKC4` first — and what count 1's history means for the rest, is
+/// `FormatStamp`'s card. The two skip-serialized fields, `drafts` and
+/// `grants`, sit outside the surface: neither occupies a byte.
+///
+/// CANONICAL BYTES — this type's serialization IS the checkpoint body M2
+/// hashes into its `SKC4` header (`body_hash`, which a published head names),
+/// so it must be a function of the world's contents on any process and any
+/// machine. The engine's part holds by construction: the stamp is a
+/// constant, the four slices serialize in declaration order, and the only
+/// hash-ordered structures the world holds — the exception set and the grant
+/// fold — are `#[serde(skip)]`. Each slice's part is its store's (option (i),
+/// stated at its own `Serialize`). A field added here joins the obligation: a
+/// derived one stays skipped, and an authoritative one serializes in an order
+/// that is a function of its contents. M2's golden suite holds it over this
+/// type across the dev edge
+/// (`two_processes_write_one_history_to_one_checkpoint_byte_string`: two
+/// processes, each with its own hashers, write one history to one checkpoint
+/// byte string).
 ///
 /// INVARIANT — a world's derived state agrees with its authoritative state:
 /// concretely, M7's skip-serialized hints and the engine's own two derived
 /// indexes, the exception set and the grant fold. TWO construction paths
 /// establish it, and the third does not.
 /// [`World::genesis`] establishes it, each slice arriving from its own
-/// genesis constructor and both indexes empty over an empty docuverse; and
+/// genesis constructor and both indexes empty over a world with no draft and
+/// no link; and
 /// [`WorldState::rebuild_derived`] re-establishes it, which M2 runs over
 /// every base it loads, before replay — at open, and again for every world
 /// [`crate::Engine::world_at`] reconstructs, which is why that method states
@@ -151,33 +165,34 @@ impl fmt::Debug for World {
 /// every slice's top-level fields to the count, and says what it cannot see
 /// below that level.
 ///
-/// `1` names TWO layouts. The first carries M3's publication bit (2026-09-05,
-/// PUB round 1); the second is that layout with M5's birth memo appended to
-/// its slice (W5, 2026-09-17), under the same count. So a base written under
-/// the first passes this word — the one older layout it does not refuse — and
-/// M5's decoder then reads M7's bytes as the memo. That misreading fails on
-/// every store an op can write, by the encoding's arithmetic rather than by
-/// chance: with no link the memo swallows M7's whole slice; otherwise the
-/// memo's first value ends midway through a count whose high half is zero, so
-/// the next count read is zero or at least 2³², and zero is reachable only
-/// through a sole link no deposit surface writes.
+/// `1` has named TWO layouts: the first carries M3's publication bit
+/// (2026-09-05, PUB round 1); the second appends M5's birth memo to its slice
+/// (W5, 2026-09-17) under the same count. No base any build wrote in the
+/// first reaches this word through a header this build loads: every one was
+/// written under an M2 stamp older than `SKC4`, and M2 refuses such a base at
+/// load by name, with the owner's no-migration remedy (PUB-1.2). So the
+/// count names one loadable layout, and the next World layout change bumps
+/// it. A body in the first layout under a current header still fails to
+/// decode, by the encoding's arithmetic rather than by chance: M5's decoder
+/// reads M7's bytes as the memo, and with no link the memo swallows M7's
+/// whole slice; otherwise the memo's first value ends midway through a count
+/// whose high half is zero, so the next count read is zero or at least 2³²,
+/// and zero is reachable only through a sole link no deposit surface writes.
 /// `a_base_written_before_the_birth_memo_fails_to_decode` states that
 /// arithmetic in full and pins the refusal on each shape it branches on, so a
-/// change beneath a slice's top level that moved the misreading fails there
-/// rather than on disk. Moving the count would refuse such a base here
-/// instead, and would refuse the second layout's bases too, which decode: a
-/// decision about the bases already on disk, and the owner's to take.
+/// change beneath a slice's top level that moved the misreading fails there.
 ///
 /// PUB-7.8: a pre-publication checkpoint MUST fail to DECODE rather than
-/// resolve to everything-published. M3's own field order already makes that
-/// decode fail for the slice alone (end-of-input where the bit should begin)
-/// and near-certainly for the world (the bytes that follow are M4's) — this
-/// stamp makes it CERTAIN. A pre-stamp checkpoint's first eight bytes are
-/// M3's frontier-map length, a small count, never this word; a checkpoint
-/// written by a build with a different count refuses the same way. M2's
-/// fallback chain then does the rest (PUB-7.9): the next-older retained base,
-/// genesis while the journal still reaches it, else `OpenError::BadCheckpoint`
-/// — never a decoded world with an empty set.
+/// resolve to everything-published. Two doors hold it. M2's stamps refuse
+/// every base written before `SKC4`, which is every pre-publication one; and
+/// this stamp refuses such a body under a current header at its first word —
+/// a pre-stamp body opens with M3's frontier-map length, a small count, never
+/// this word. So this door's own job is the one M2's stamps cannot do: a
+/// World layout that moves under an unchanged M2 stamp, as W5's did. A
+/// checkpoint either door refuses hands M2's fallback chain its turn
+/// (PUB-7.9): the next-older retained base, genesis while the journal still
+/// reaches it, else `OpenError::BadCheckpoint` — never a decoded world with an
+/// empty set.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct FormatStamp;
 
@@ -364,11 +379,11 @@ impl WorldState for World {
     /// those panics rather than returning — inside `Kernel::open` and
     /// `Kernel::world_at` alike, after that checkpoint loaded, so M2's
     /// next-older-base fallback does not get its turn. A base that cannot
-    /// DECODE is the other case, and the one this method never sees: the
-    /// decode refuses it before any rebuild — at `FormatStamp`'s word for a
-    /// base under another count, and later for the one older layout count 1
-    /// also names (that card states the arithmetic) — and M2's fallback chain
-    /// does get its turn.
+    /// LOAD is the other case, and the one this method never sees: it is
+    /// refused before any rebuild — at M2's header for a base under another
+    /// M2 stamp, and at `FormatStamp`'s word or later in the decode for a body
+    /// in another World layout (that card states which bases reach it) — and
+    /// M2's fallback chain does get its turn.
     ///
     /// COST is the two seeds', each stated at its own, and neither is linear:
     /// `publication::seed` pays one M3 ω walk — Θ(|Π|), the whole principal
@@ -820,9 +835,13 @@ mod tests {
         .concat()
     }
 
-    /// The older layout count 1 still names — the publication-bit layout,
-    /// before M5's birth memo was appended — fails to DECODE all the same,
-    /// and by the encoding's arithmetic rather than by chance.
+    /// The older layout count 1 has also named — the publication-bit layout,
+    /// before M5's birth memo was appended — fails to DECODE under a header
+    /// this build loads, and by the encoding's arithmetic rather than by
+    /// chance. No base any build wrote in that layout reaches the decoder,
+    /// since M2's stamps refuse it first (`FormatStamp`'s card); what this
+    /// holds is the World door's own refusal of such a body under a current
+    /// header.
     ///
     /// This build reads such a base's M7 bytes as the memo. With no link, the
     /// memo takes M7's link count as its own empty length, and M7 then finds
@@ -855,7 +874,7 @@ mod tests {
     /// `each_slice_serializes_the_fields_the_format_count_names` cannot see
     /// beneath a slice's top level: a change to `Link`, `Endset`, `Span`,
     /// `Tumbler` or `Nat`'s encoding that moved this arithmetic would otherwise
-    /// turn such a base into a world with its links misread.
+    /// let such a body decode as a world with its links misread.
     #[test]
     fn a_base_written_before_the_birth_memo_fails_to_decode() {
         let stores: [(&str, &[(bool, bool)]); 5] = [

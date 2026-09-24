@@ -29,8 +29,8 @@ use crate::world::World;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum EngineError {
-    /// `Kernel::open` failed (`InvalidConfig` / `Io` / `BadCheckpoint` /
-    /// `Corruption`).
+    /// `Kernel::open` failed: M2's [`OpenError`], carried whole — its variants
+    /// and their remedies are M2's to name.
     Open(OpenError),
 }
 
@@ -99,19 +99,22 @@ impl Engine {
     /// is a compiled constant, so M2's byte-identical-genesis caller
     /// contract is discharged by construction: there is no configuration for
     /// a caller to pass differently on a reopen, and no drift check left to
-    /// run. A journal names the format that wrote it through the journal's
-    /// own format stamp; one written under the retired `GenesisConfig`
-    /// regime (the 9-space reserved addresses, the config-carrying M7
-    /// checkpoint shape) does not reopen under this format. A CHECKPOINT
-    /// leads with the World's own format stamp (`world.rs`), which names the
-    /// format COUNT that wrote it — a count and not a layout, since count 1
-    /// names two. A base from a build before M3's publication bit wrote no
-    /// stamp and fails to DECODE at its first word (PUB-7.8); the one older
-    /// layout this count also names fails later in the decode, by the
-    /// arithmetic the stamp's card states. Either way M2's fallback chain takes
-    /// over: the next-older retained base, genesis while the journal still
-    /// reaches it, else `OpenError::BadCheckpoint` (PUB-7.9) — never a decoded
-    /// world with an empty exception set.
+    /// run.
+    ///
+    /// A journal and its checkpoints name the M2 format that wrote them
+    /// through M2's own stamps, and M2 refuses any other by name — the
+    /// journal as `OpenError::ForeignFormat`, a checkpoint skipped with an
+    /// account that reaches an operator through `BadCheckpoint`'s cause — with
+    /// the owner's one remedy, no migration (PUB-1.2): every board written
+    /// before this build's `SKJ4`/`SKC4`, the retired `GenesisConfig`
+    /// regime's among them. A checkpoint body that passes M2's header then
+    /// meets the World's own format stamp, the door for a World layout that
+    /// moves under an unchanged M2 stamp (`FormatStamp`'s card, `world.rs`,
+    /// states which bases reach it). A checkpoint either door refuses hands
+    /// M2's fallback chain its turn (PUB-7.9): the next-older retained base,
+    /// genesis while the journal still reaches it, else
+    /// `OpenError::BadCheckpoint` — never a decoded world with an empty
+    /// exception set.
     ///
     /// There is nothing to assemble beyond that recovery. The type registry
     /// M9 is handed at [`Engine::coordinator`] is `skep_links::registry` —
@@ -131,10 +134,17 @@ impl Engine {
     /// why it must. So the mode that skips the rebuild is the mode whose root
     /// needs none.
     ///
-    /// PRECONDITION passed through, not discharged: M2's caller contract on a
+    /// PRECONDITIONS passed through, not discharged: M2's caller contract on a
     /// journalled `cfg` — the journal directory belongs to the kernel alone,
     /// which creates, reads and deletes the segment, checkpoint and lock files
-    /// in it — binds this method's caller unchanged. M2's GENESIS contracts,
+    /// in it — binds this method's caller unchanged. So does M2's SALT
+    /// discipline on `cfg.salt`, which no configuration can check and nothing
+    /// here enforces: `SaltSource::Os` for every deployment,
+    /// `SaltSource::Seeded` for fixtures and tests alone — a daemon opened
+    /// under a seeded source serves chain values a reader can invert (M2's
+    /// `SaltSource`). The crate root re-exports every type a `KernelConfig` is
+    /// built from, so a binary can open an engine without naming M2; this
+    /// card is where it reads both contracts. M2's GENESIS contracts,
     /// byte-identical on every reopen and consistent in its derived state as
     /// passed, are the caller contracts this method discharges.
     ///
@@ -207,12 +217,12 @@ impl Engine {
     /// `Vstream` from `&Kernel<W>`, and `LinkWriter` from `&Kernel<W>` plus
     /// the visibility class M9 lends it), and the read predicate M9's fires
     /// run at (PUB round 2, lane 3.3, §5). M9 is the System caller — the one
-    /// with no session — so its class is [`World::visible_to`]'s System arm,
-    /// asked for here rather than restated: `readable(None, ·)`, publication at
-    /// the document's TRUNK (PUB-2.15), so a rule's effect never crosses the
-    /// draft boundary. M9 threads that same predicate into every writer it
-    /// builds (lane 3.3b, PUB-6.28), so a fire's value-keyed gates see only
-    /// guest-readable incumbents.
+    /// that writes as no principal — so its class is [`World::visible_to`]'s
+    /// System arm, asked for here rather than restated: `readable(None, ·)`,
+    /// publication at the document's TRUNK (PUB-2.15), so a rule's effect
+    /// never crosses the draft boundary. M9 threads that same predicate into
+    /// every writer it builds (lane 3.3b, PUB-6.28), so a fire's value-keyed
+    /// gates see only guest-readable incumbents.
     /// Infallible: M9's catalog is a pure projection of the injected registry
     /// — with the type set compiled into the format there is no twice-passed
     /// configuration whose drift a validate-once-or-fail step would catch.
@@ -250,7 +260,9 @@ impl Engine {
     /// The `Stores<World>` factory the transport passes to M10's
     /// `OperationSurface::new`: a clone of the handle on this engine's one
     /// kernel, never a second kernel. The drivers it yields are M10's —
-    /// `Stores`' provided bodies, built over that kernel.
+    /// `Stores`' provided bodies, built over that kernel — and it is the
+    /// handle an in-process writer outside M10 holds too ([`EngineStores`]
+    /// states both).
     pub fn stores(&self) -> EngineStores {
         self.stores.clone()
     }
@@ -302,6 +314,12 @@ fn mk_link_writer<'k>(
 /// `OperationSurface::new` at startup (M10 §Seams). It holds the engine's one
 /// kernel and nothing else: the three drivers are `Stores`' provided bodies,
 /// each a fresh handle built over that kernel per call.
+///
+/// Cloning it is how the engine's one kernel is shared outside [`Engine`]:
+/// M10's transport holds one clone, and an in-process writer outside M10 —
+/// the daemon's write path and its head writer — holds another, reaching the
+/// same drivers through the same provided bodies. [`Engine::kernel`] names it
+/// the shared-ownership seam for that reason.
 #[derive(Clone, Debug)]
 pub struct EngineStores {
     kernel: Arc<Kernel<World>>,

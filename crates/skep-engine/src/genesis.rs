@@ -19,24 +19,21 @@ use crate::publication::Drafts;
 use crate::world::{FormatStamp, World};
 
 impl World {
-    /// Σ₀ — the full genesis, one store at a time per its own design:
-    /// M3 seeded with the baptismal roots (`M3State::genesis`: node `[1]`,
-    /// bootstrap principal π₀), M4 empty (`ContentStore::default` — the
-    /// permascroll starts with no content), M5 empty (`M5State::genesis`:
-    /// no arrangements, no provenance, no birth memo), and M7 with
-    /// `links = ∅` and empty hints (`LinkState::genesis`), read against the
-    /// format registry — M7's module constant, whose five shipped classes
-    /// include the PredLayer `pdef`/`pd_stable` registrations. Genesis
-    /// creates the namespace roots, the system account seed, and an otherwise
-    /// content-empty docuverse: `M3State::genesis` registers the baptismal
-    /// roots AND — since PUB-6.65 (RES-304) — sub-node `1.1`, the system
-    /// account `1.1.0.1` seated at `SYSTEM_PRINCIPAL`, and that account's doc 1
-    /// and doc 2 born published (the daemon's head document `H` is doc 2); no
-    /// content is minted, so M4/M5/M7 stay empty. A CONSTANT — deterministic
-    /// with no inputs to hold constant
-    /// — which is what discharges M2's byte-identical-genesis caller contract
-    /// by construction; the World's own leading format stamp and the
-    /// journal's format stamp, not a sealed configuration, name the format
+    /// Σ₀ — the full genesis, one store at a time per its own design: M3
+    /// seeded per `M3State::genesis` — the baptismal roots (node `[1]`,
+    /// bootstrap principal π₀) and, since PUB-6.65 (RES-304), the system
+    /// account seed, whose two documents M3's card lists, born published and
+    /// empty; M4 empty (`ContentStore::default` — the permascroll starts with
+    /// no content); M5 empty (`M5State::genesis`: no arrangements, no
+    /// provenance, no birth memo); and M7 with `links = ∅` and empty hints
+    /// (`LinkState::genesis`), read against the format registry — M7's module
+    /// constant, whose five shipped classes include the PredLayer
+    /// `pdef`/`pd_stable` registrations. Genesis mints no content and
+    /// deposits no link, which is why the other three stay empty. A CONSTANT
+    /// — deterministic with no inputs to hold constant — which is what
+    /// discharges M2's byte-identical-genesis caller contract by
+    /// construction; the World's own leading format stamp and M2's journal
+    /// and checkpoint stamps, not a sealed configuration, name the format
     /// that wrote a base.
     ///
     /// The five reserved type addresses the M7 slice dispatches on are
@@ -46,8 +43,10 @@ impl World {
     /// nothing ever will be, and that is not this genesis's to guarantee:
     /// non-reissue — a reserved name never equals an allocated address — is
     /// M3's allocator floor, which `skep_namespace::GHOST_POSITIONS` names and
-    /// M3 argues where the floor is written. So genesis seeds the namespace
-    /// roots alone, and the ghost region needs nothing from it.
+    /// M3 argues where the floor is written. So genesis seeds nothing at those
+    /// five positions — M3's seed registers the ghost home document itself, as
+    /// the system account's doc 1, and mints no content in it — and the ghost
+    /// region needs nothing from it.
     ///
     /// Σ₀ CARRIES ITS OWN DERIVED HINTS, and must: under
     /// `Durability::InMemory` this value IS the installed root — that mode
@@ -68,7 +67,8 @@ impl World {
     /// must seed that entry's derived state beside it, and two born-published
     /// documents seed NOTHING (no draft, no grant). `Engine::check_hints` is
     /// the standing check that what is seeded here equals a from-authoritative
-    /// rebuild, and it holds over the seed.
+    /// rebuild, and the genesis suite runs it over bare Σ₀
+    /// (`genesis_seeds_each_store_per_its_design`).
     pub fn genesis() -> World {
         World {
             format: FormatStamp,

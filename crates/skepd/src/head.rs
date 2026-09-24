@@ -95,11 +95,10 @@ use serde_json::Value;
 use skep_address::{validate, Address, Nat, Tumbler};
 use skep_arrangement::{trunk_head, Base, Caller, Deposit, HasM5, Run, Shot, ShotRun, VPos};
 use skep_content::{HasContent, Val};
-use skep_engine::types::head_document;
 use skep_engine::{EngineStores, World};
 use skep_febe::{Op, Response, Stores};
 use skep_kernel::Seq;
-use skep_namespace::{system_account, HasM3, SYSTEM_PRINCIPAL};
+use skep_namespace::{head_document, system_account, HasM3, SYSTEM_PRINCIPAL};
 
 use crate::codec::hex_string;
 use crate::feed::Feed;
@@ -408,7 +407,7 @@ impl HeadWriter {
         // memberless), extent = that member's full content count so NOTHING is
         // carried — each member holds exactly its own record (0 at the first,
         // memberless head, PUB-6.65's "extent 0"). runs = the new atom alone.
-        let h = head_document().clone();
+        let h = head_document();
         let (base_member, extent) = {
             let snap = self.stores.kernel().snapshot();
             let world = snap.world();
@@ -638,7 +637,7 @@ fn resume_seeds(above: &[(u64, CommitMeta)]) -> ResumeSeeds {
 /// M4's value.
 fn read_recorded_head(world: &World) -> Option<RecordedHead> {
     let h = head_document();
-    let member = trunk_head(world.m3(), h)?;
+    let member = trunk_head(world.m3(), &h)?;
     let i_addr = world.m5().point(&member, &VPos { subspace: Nat::from(1u32), ordinal: Nat::from(1u32) })?;
     let bytes = world.content().value_at(i_addr.tumbler())?.as_bytes().to_vec();
     parse_head(&bytes)

@@ -1,19 +1,23 @@
 //! A canonicalizing serde transcode: any `Serialize` value → a [`SerdeTree`]
 //! → deterministic text — and the way back. The one rule that earns its
-//! keep: **map entries are sorted by their rendered key**, so a slice whose
-//! internal map iterates in instance-specific order (M3's frontier
-//! `im::HashMap` hashes with a per-instance `RandomState`; M4's map iterates
-//! in hash-trie order) still renders byte-identically for equal contents.
+//! keep: **map entries are sorted by their rendered (key, value) text**, so a
+//! map whose serde iteration order is instance-specific still renders
+//! byte-identically for equal contents. The maps that need it are the
+//! engine's own derived indexes — the exception set and the grant fold's
+//! operative set, `im::HashMap`s under a per-instance `RandomState`, which
+//! `drafts_tree` and `grants_tree` collect in hash order. The store slices do
+//! not: each serializes in key order at its own `Serialize` (option (i)), and
+//! the sort re-orders their entries by rendered text — the dump's order, not
+//! the checkpoint's.
 //!
 //! Sequences keep their order, and that is an OBLIGATION on the world's serde
 //! forms rather than a description of them: a collection serialized as a
 //! SEQUENCE must carry an order that is a function of its contents. Every
-//! field satisfies it — the unordered collections (M3's `frontiers`, M4's
-//! map) serialize as serde MAPS and are sorted here, and what serializes as a
-//! sequence is `im::Vector`/`OrdSet`/`OrdMap` or a `Vec` held in genesis
-//! order. A slice that serializes an unordered collection as a sequence
-//! breaks the world dump's determinism clause, and this transcode cannot
-//! detect it.
+//! field satisfies it — maps, the slices' and the derived indexes' alike,
+//! serialize as serde MAPS and are sorted here, and what serializes as a
+//! sequence is `im::Vector`/`OrdSet` or a `Vec` held in genesis order. A
+//! slice that serializes an unordered collection as a sequence breaks the
+//! world dump's determinism clause, and this transcode cannot detect it.
 //!
 //! The way back is [`TreeDe`]: a borrowed tree is itself a serde
 //! `Deserializer`, so a value collected off one type's `Serialize` re-enters

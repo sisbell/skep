@@ -15,9 +15,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   only by their own crates.
 - **Accessor impls** — each store's read-seam trait implemented over
   the assembled world, so store crates stay generic.
-- **Genesis and recovery order** — the constant initial world (the
-  namespace roots and the empty docuverse; the reserved type registry
-  is compiled format, not seeded state) and the one stated
+- **Genesis and recovery order** — the constant initial world (M3's
+  roots and its system account seed — two born-published, empty
+  documents — over an otherwise empty docuverse; the reserved type
+  registry is compiled format, not seeded state) and the one stated
   `rebuild_derived` order.
 - **The exception set** — the derived membership index over M3's
   publication bit (`World::published`, `World::owner_account`):

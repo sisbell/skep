@@ -15,16 +15,19 @@ use skep_content::{HasContent, Val};
 use skep_engine::World;
 use skep_links::{coverage_class, HasLinks, ReservedAddrs, ShippedType, View};
 use skep_namespace::{
-    ghost_home_doc, ghost_position, system_account, system_node, HasM3, BOOTSTRAP_PRINCIPAL,
-    GHOST_POSITIONS, SYSTEM_PRINCIPAL,
+    ghost_home_doc, ghost_position, head_document, system_account, system_node, HasM3,
+    BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS, SYSTEM_PRINCIPAL,
 };
 
 /// M7's own list of the five — read rather than restated, so a walk here
 /// cannot come to cover four classes out of five.
 const SHIPPED: [ShippedType; 5] = ShippedType::ALL;
 
-/// Genesis seeds M3's baptismal roots and leaves M4/M5/M7's stores empty —
-/// exactly two things exist: the namespace roots and the empty docuverse.
+/// Genesis seeds M3's baptismal roots and, since PUB-6.65, its system account
+/// seed — two documents born published and empty — and leaves M4/M5/M7's
+/// stores empty. So Σ₀ holds no draft and no link, and every derived structure
+/// the engine seeds empty agrees with a rebuild over it: the check this ends
+/// on is the standing one `World::genesis` names, run over bare Σ₀.
 #[test]
 fn genesis_seeds_each_store_per_its_design() {
     let engine = mem_engine();
@@ -35,6 +38,16 @@ fn genesis_seeds_each_store_per_its_design() {
     assert_eq!(world.m3().entity_level(&node1()), Some(skep_address::Level::Node));
     assert_eq!(world.m3().effective_owner(&node1()), Some(BOOTSTRAP_PRINCIPAL));
 
+    // M3's system account seed (PUB-6.65): two documents, born published and
+    // empty. The bit is read off M3, not off `World::published`, which an
+    // empty exception set answers `true` whatever M3 holds.
+    for doc in [ghost_home_doc(), head_document()] {
+        assert!(world.m3().is_registered_document(&doc), "{doc} is seeded");
+        assert!(world.m3().published(&doc), "{doc} is born published (M3's bit)");
+        assert_eq!(world.m5().content_count(&doc), nat(0), "{doc} is born empty");
+    }
+    assert_eq!(world.drafts().count(), 0, "…so the engine's exception set holds nothing");
+
     // M4: the permascroll starts empty.
     assert!(world.content().is_empty());
 
@@ -43,6 +56,10 @@ fn genesis_seeds_each_store_per_its_design() {
 
     // M7: no links; the whole audit slice is empty.
     assert!(world.links().match_links(&[], View::Audit).is_empty());
+
+    engine
+        .check_hints()
+        .expect("Σ₀ carries its own derived state: a rebuild over the seed agrees");
 }
 
 /// Genesis is a compiled constant: two constructions are byte-identical

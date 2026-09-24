@@ -28,11 +28,10 @@
 //!   module constant rather than any slice's state, so genesis carries none
 //!   of it: every reader asks M7 for the one `Arc<TypeRegistry>`, and
 //!   [`Engine::coordinator`] clones it for M9, which takes an owned one. The
-//!   World leads its checkpoint bytes with a FORMAT STAMP, so a base written
-//!   under any other format count — the pre-publication-bit layout above all
-//!   (PUB-7.8) — fails to decode at its first word, the one older layout this
-//!   count also names fails later by the arithmetic the stamp's card states,
-//!   and either way M2's fallback chain takes over (PUB-7.9).
+//!   World leads its checkpoint body with a FORMAT STAMP, the door for a
+//!   World layout change M2's own stamps do not track; M2 refuses every older
+//!   base by its own stamps first (PUB-1.2), and a checkpoint either door
+//!   refuses hands M2's fallback chain its turn (PUB-7.9).
 //! * **Recovery order** (`WorldState::rebuild_derived` for `World`) — the
 //!   cross-store rebuild sequence at load, stated in one place, with its two
 //!   engine edges pinned by the tests that method names.

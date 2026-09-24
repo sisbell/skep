@@ -4,11 +4,14 @@
 //! hint-faithfulness check the crash/conformance harnesses lean on. The
 //! reduction that turns this rendering into a reader's own is `filter`'s.
 //!
-//! Determinism is the contract: the authoritative section is the slices'
-//! serde forms pushed through the canonicalizing transcode (maps sorted, so
-//! instance-specific hash iteration cannot leak into the bytes); the hints
-//! section is built from the stores' PUBLIC read surfaces over
-//! already-ordered results. Two dumps of equal worlds are byte-equal.
+//! Determinism is the contract: the rendering sorts every map in the tree
+//! (the transcode's one rule), which is what makes the two parts fed by the
+//! engine's own hash-ordered indexes — the hints' `publication.drafts` and
+//! the `grants` section — functions of their contents. The authoritative
+//! section's slices already serialize in key order at their own `Serialize`
+//! (option (i)), and the rest of the hints section is built from the stores'
+//! PUBLIC read surfaces over already-ordered results. Two dumps of equal
+//! worlds are byte-equal.
 //!
 //! A slice reaches the authoritative section through its SERDE CHECKPOINT
 //! FORM rather than through an enumeration: M4 publishes none and M3's

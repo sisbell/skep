@@ -205,8 +205,11 @@ impl World {
 
     /// The GUEST predicate (PUB-1.31 with no principal; a grant opens nothing
     /// to it, the ANY-PRINCIPAL form included — PUB-5.8, PUB-5.9, PUB-5.109):
-    /// `readable(None, ·)` — published alone. M9's fires read at this class
-    /// (§5), and every unauthenticated read answers through it.
+    /// `readable(None, ·)` — published alone. M9's fires read and write at
+    /// this class (§5) — [`World::visible_to`]'s System arm is its caller —
+    /// and it is the class every unauthenticated read is answered at, which
+    /// M10's guest session and a guest [`ReaderClass`] reach as
+    /// `readable(None, ·)`.
     pub fn readable_guest(&self, doc: &Address) -> bool {
         self.readable(None, doc)
     }
@@ -214,15 +217,28 @@ impl World {
     /// THE VISIBILITY CLASS A CALLER WRITES AT (PUB round 2, lane 3.3b): the
     /// predicate a `LinkWriter` is built with when `caller` deposits, so
     /// M7's value-keyed gates — `emit`'s idempotency, `assert_sup`'s dedup —
-    /// see exactly the incumbents that caller could read (PUB-6.25). A
-    /// principal writes at its own class, [`World::readable`] over
-    /// `Some(principal)`; the System path — M9's fires and def writes, the
-    /// one caller with no session — writes at GUEST class,
-    /// [`World::readable_guest`] (PUB-6.28). This mapping is the engine's to
-    /// state: M7 takes a closure and names no principal, and M10 closes its
-    /// own over the session's principal. Every other caller — the harnesses,
-    /// this crate's tests, and [`crate::Engine::coordinator`] building M9's
-    /// System-class writers — threads it through here.
+    /// see exactly the incumbents that caller could read (PUB-6.25).
+    ///
+    /// The mapping keys on whom the caller writes AS, never on whether a
+    /// session carries it. A principal writes at its own class,
+    /// [`World::readable`] over `Some(principal)`, whether a session carries
+    /// it — M10's — or an in-process writer acts as it with none: the board's
+    /// own daemon writes its head document and staging draft as the
+    /// genesis-seeded system account's principal
+    /// (`skep_namespace::SYSTEM_PRINCIPAL`, PUB-6.65), and so at that
+    /// principal's class, where its own private staging draft is readable, as
+    /// its publish shot's source consult requires. `Caller::System` — M9's rule
+    /// fires and def writes, the one caller that writes as NO principal —
+    /// writes at GUEST class, [`World::readable_guest`] (PUB-6.28), where every
+    /// draft is withheld, the writer's own included; so a writer that owns
+    /// drafts writes as its principal, never as `Caller::System`, whose ω
+    /// exemption M5's `Caller` states
+    /// (`a_sessionless_writer_that_owns_a_draft_reads_it_at_its_principal_s_class_alone`).
+    /// This mapping is the engine's to state: M7 takes a closure and names no
+    /// principal, and M10 closes its own over the session's principal. Every
+    /// other caller threads it through here — the harnesses, this crate's
+    /// tests, the daemon's head writer, and [`crate::Engine::coordinator`]
+    /// building M9's System-class writers.
     ///
     /// A write's class binds no [`ReaderClass`], and cannot: M7's value-keyed
     /// gates and M5's publish shot hand this closure their WORKING world on
@@ -368,8 +384,11 @@ impl skep_febe::ReadableWorld for World {
 #[cfg(test)]
 mod tests {
     use skep_address::{is_prefix, Address, Level};
+    use skep_arrangement::Caller;
+    use skep_namespace::{system_account, SYSTEM_PRINCIPAL};
 
     use crate::testkit::{addr, delegated_account, mem_engine, USER};
+    use crate::world::World;
 
     use super::in_owner_subtree;
 
@@ -475,5 +494,33 @@ mod tests {
         // compiles only while `seat` answers the world's lifetime.
         let outlived = world.reader_class(Some(USER)).seat();
         assert_eq!(outlived, Some(&acct), "a seat outlives the class that resolved it");
+    }
+
+    /// [`World::visible_to`] keys on whom a caller writes AS, never on whether
+    /// a session carries it — so a writer with no session that owns a draft
+    /// reads it only by writing as its principal. The board's own daemon is
+    /// that writer (PUB-6.65): it mints its staging draft under the
+    /// genesis-seeded system account and publishes from it as
+    /// `SYSTEM_PRINCIPAL`, whose class reads the draft, where `Caller::System`'s
+    /// GUEST class withholds it, the writer's own included. A writer that took
+    /// "no session" to mean `Caller::System` would find its own shot's source
+    /// withheld.
+    #[test]
+    fn a_sessionless_writer_that_owns_a_draft_reads_it_at_its_principal_s_class_alone() {
+        let engine = mem_engine();
+        let (staging, _) = engine
+            .namespace()
+            .create_new_document(SYSTEM_PRINCIPAL, &system_account(), Some(false))
+            .expect("the system principal mints a private draft in its own account");
+        let snap = engine.kernel().snapshot();
+        let world = snap.world();
+        assert!(!world.published(&staging), "the premise: the staging draft is private");
+        let as_its_principal = World::visible_to(Caller::Principal(SYSTEM_PRINCIPAL));
+        let as_system = World::visible_to(Caller::System);
+        assert!(as_its_principal(world, &staging), "its principal's class reads its own draft");
+        assert!(
+            !as_system(world, &staging),
+            "GUEST class withholds every draft, the writer's own included"
+        );
     }
 }

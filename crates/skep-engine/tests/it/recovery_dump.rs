@@ -281,15 +281,17 @@ fn a_shipped_class_s_active_slice_and_active_projection_render_the_active_view()
 }
 
 /// The determinism clause, stated over EQUAL WORLDS rather than one world: two
-/// engines that ran the same history render byte-identically, though their M3
-/// frontiers are separate `im::HashMap`s with separate hash seeds and iterate
-/// in different orders. That is the whole reason the transcode sorts map
-/// entries.
+/// engines that ran the same history render byte-identically, though each
+/// holds its exception set in an `im::HashMap` under its own `RandomState`, so
+/// the two iterate it in different orders. That hash-ordered index is what the
+/// transcode's map sort exists for; the store slices serialize in key order at
+/// their own `Serialize`.
 #[test]
 fn two_engines_with_the_same_history_dump_byte_equal() {
-    /// Three documents in one account, content in each, and every hint family
-    /// in the first — enough distinct hashed keys that two coincidentally
-    /// equal iteration orders are not the explanation.
+    /// Four drafts in one account — the explicit-`false` first mint and three
+    /// flagless ones after it — content in each, and every hint family in the
+    /// first: enough distinct hashed keys in the exception set that two
+    /// coincidentally equal iteration orders are not the explanation.
     fn scripted() -> Engine {
         let engine = Engine::open(mem_cfg()).expect("in-memory open");
         let (acct, doc) = setup_draft(&engine);

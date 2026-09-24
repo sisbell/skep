@@ -632,9 +632,9 @@ pub fn system_account() -> Address {
 
 /// The head document `H` = `1.1.0.1.0.2` (PUB-6.65, RES-304) — doc 2 of
 /// [`system_account`], the NEW-VERSION-PER-HEAD document the daemon writes.
-/// Seeded born published by [`M3State::genesis`]. The engine pins the same
-/// address beside the commons pins (`skep_engine::types`); the two must agree,
-/// and the head writer's publish would refuse were they to drift.
+/// Seeded born published by [`M3State::genesis`]. This is `H`'s one spelling:
+/// the seed registers the document it builds and the daemon's head writer
+/// writes the document it builds, so the two cannot come apart.
 pub fn head_document() -> Address {
     let t = Tumbler::new([1u32, 1, 0, 1, 0, 2].into_iter().map(Nat::from)).expect("a six-component sequence is nonempty");
     validate(t).expect("the head document 1.1.0.1.0.2 is T4-valid by construction")

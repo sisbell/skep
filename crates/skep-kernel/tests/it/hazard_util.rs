@@ -498,12 +498,12 @@ impl Fixture {
             boundaries.last().expect("boundaries").journal_len,
             "journal length settles at the final commit"
         );
-        let segs = fs::read_dir(dir)
+        let segment_count = fs::read_dir(dir)
             .expect("fixture dir")
             .filter_map(|e| e.expect("entry").file_name().into_string().ok())
             .filter(|n| n.starts_with("seg-") && n.ends_with(".wal"))
             .count();
-        assert_eq!(segs, 1, "the mixed fixture stays inside one journal segment");
+        assert_eq!(segment_count, 1, "the mixed fixture stays inside one journal segment");
         Fixture { dir: dir.to_path_buf(), genesis_dump, boundaries, doc, full_len }
     }
 

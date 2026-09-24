@@ -131,8 +131,8 @@ pub(crate) struct Loaded<W> {
 /// Why a checkpoint could not stand in as a base (§6). Every refusal is
 /// skipped the same way — the caller falls to the next-older retained base —
 /// so this carries no taxonomy to branch on, only the account that says which
-/// REMEDY, at the one point where that matters: the whole chain exhausted,
-/// with nothing else left to tell an operator.
+/// REMEDY, at the one point where that matters: the whole fallback chain
+/// exhausted, with nothing else left to tell an operator.
 pub(crate) type LoadRefused = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 /// One checkpoint on disk: the coordinate its name claims, and where it is.
@@ -160,12 +160,12 @@ impl CheckpointMeta {
     /// Two of those an operator most needs named. A foreign stamp is a board
     /// written under another format, and the account names the stamp found,
     /// the stamp expected and the ruled remedy ([`NO_MIGRATION_REMEDY`]) — the
-    /// same sentence the journal's own refusal renders, so when the chain is
-    /// exhausted the daemon prints it through `BadCheckpoint`'s cause. A body
-    /// that will not decode: the header checksum and hash have passed by
-    /// then, so the bytes ARE the bytes that were written and the refusal is
-    /// not rot — it is a writer/reader skew, a binary on the wrong side of a
-    /// `W` format change, whose remedy is to roll the binary rather than to
+    /// same sentence the journal's own refusal renders, so when the fallback
+    /// chain is exhausted the daemon prints it through `BadCheckpoint`'s cause.
+    /// A body that will not decode: the header checksum and hash have passed
+    /// by then, so the bytes ARE the bytes that were written and the refusal
+    /// is not rot — it is a writer/reader skew, a binary on the wrong side of
+    /// a `W` format change, whose remedy is to roll the binary rather than to
     /// restore the media.
     ///
     /// Its header is the one [`fn@write`] appends, field for field, read
@@ -234,8 +234,8 @@ impl CheckpointMeta {
 /// Stated as a pair with [`parse_checkpoint_name`], which reads it back by
 /// re-emitting it, because the format and the parse are one agreement: a
 /// change to either that the other does not match makes every retained base
-/// invisible, and recovery then falls all the way down its chain to genesis
-/// without a word.
+/// invisible, and recovery then falls all the way down its fallback chain to
+/// genesis without a word.
 fn checkpoint_name(seq: u64) -> String {
     format!("checkpoint.{seq}")
 }
@@ -375,7 +375,7 @@ mod tests {
 
     /// A stand-in chain head: a value with a shape, so a header that carried
     /// the wrong thing here would not carry zeros by coincidence.
-    const CHAIN: [u8; 32] = [0xC4; 32];
+    const CHAIN_HEAD: [u8; 32] = [0xC4; 32];
 
     #[test]
     fn checkpoint_header_layout_is_magic_seq_crc_body_len_chain_head_and_body_hash() {
@@ -386,7 +386,7 @@ mod tests {
         // body, which makes EVERY retained base unloadable — and recovery
         // then falls silently to genesis, or refuses with `BadCheckpoint`.
         let dir = tempdir().unwrap();
-        write(dir.path(), 7, &world(), &CHAIN).expect("fixture checkpoint");
+        write(dir.path(), 7, &world(), &CHAIN_HEAD).expect("fixture checkpoint");
         let data = fs::read(checkpoint_path(dir.path(), 7)).unwrap();
         let body = codec().serialize(&world()).unwrap();
 
@@ -395,7 +395,7 @@ mod tests {
         expected.extend_from_slice(&7u64.to_le_bytes()); // seq
         expected.extend_from_slice(&crc32c::crc32c(&body).to_le_bytes()); // crc(body)
         expected.extend_from_slice(&(body.len() as u64).to_le_bytes()); // body_len
-        expected.extend_from_slice(&CHAIN); // chain_head
+        expected.extend_from_slice(&CHAIN_HEAD); // chain_head
         expected.extend_from_slice(&<[u8; 32]>::from(Sha256::digest(&body))); // body_hash
         assert_eq!(expected.len(), HEADER_LEN, "the header is what `load` splits at");
         assert_eq!(HEADER_LEN, 88);
@@ -409,7 +409,7 @@ mod tests {
         assert_eq!(listed[0].seq, 7);
         let loaded = listed[0].load::<Vec<u64>>().expect("the base loads");
         assert_eq!(loaded.world, world());
-        assert_eq!(loaded.chain_head, CHAIN);
+        assert_eq!(loaded.chain_head, CHAIN_HEAD);
 
         // A crash mid-write leaves a `.tmp`, which is not a base.
         fs::write(dir.path().join("checkpoint.tmp"), b"not a checkpoint").unwrap();
@@ -424,7 +424,7 @@ mod tests {
         // so the account must say the CHECKSUM caught it, which is what tells
         // an operator to restore media rather than to roll a binary.
         let dir = tempdir().unwrap();
-        write(dir.path(), 3, &world(), &CHAIN).expect("fixture checkpoint");
+        write(dir.path(), 3, &world(), &CHAIN_HEAD).expect("fixture checkpoint");
         let path = checkpoint_path(dir.path(), 3);
         let mut data = fs::read(&path).unwrap();
         let last = data.len() - 1;
@@ -443,7 +443,7 @@ mod tests {
         // the checksum: a header whose hash names another body is not a base,
         // whatever its checksum says.
         let dir = tempdir().unwrap();
-        write(dir.path(), 3, &world(), &CHAIN).expect("fixture checkpoint");
+        write(dir.path(), 3, &world(), &CHAIN_HEAD).expect("fixture checkpoint");
         let path = checkpoint_path(dir.path(), 3);
         let mut data = fs::read(&path).unwrap();
         data[BODY_HASH_AT] ^= 0xFF;
@@ -458,11 +458,11 @@ mod tests {
     fn a_foreign_stamp_is_refused_by_name_with_the_remedy() {
         // A checkpoint under another format names the stamp it found, the
         // stamp this build writes, and the ruled remedy — the sentence the
-        // daemon prints through `BadCheckpoint` when the chain is exhausted.
-        // It is the FIRST check after the length, so an old-format header's
-        // other fields are never read as this format's.
+        // daemon prints through `BadCheckpoint` when the fallback chain is
+        // exhausted. It is the FIRST check after the length, so an old-format
+        // header's other fields are never read as this format's.
         let dir = tempdir().unwrap();
-        write(dir.path(), 3, &world(), &CHAIN).expect("fixture checkpoint");
+        write(dir.path(), 3, &world(), &CHAIN_HEAD).expect("fixture checkpoint");
         let path = checkpoint_path(dir.path(), 3);
         let mut data = fs::read(&path).unwrap();
         data[..4].copy_from_slice(b"SKC2");
@@ -485,20 +485,20 @@ mod tests {
         // that needs no body: this build's stamp, and a seq the name agrees
         // with.
         let dir = tempdir().unwrap();
-        write(dir.path(), 7, &world(), &CHAIN).expect("fixture checkpoint");
+        write(dir.path(), 7, &world(), &CHAIN_HEAD).expect("fixture checkpoint");
         let path = checkpoint_path(dir.path(), 7);
         let data = fs::read(&path).unwrap();
         let written_hash = <[u8; 32]>::from(Sha256::digest(&data[HEADER_LEN..]));
         let header_of = |dir: &Path| list(dir).unwrap()[0].header();
 
         let header = header_of(dir.path()).expect("the header reads");
-        assert_eq!((header.chain_head, header.body_hash), (CHAIN, written_hash));
+        assert_eq!((header.chain_head, header.body_hash), (CHAIN_HEAD, written_hash));
 
         // Cut to its header: nothing after it is read, so the answer is the
         // same — and the body `load` must verify is no longer there.
         fs::write(&path, &data[..HEADER_LEN]).unwrap();
         let header = header_of(dir.path()).expect("the header reads without its body");
-        assert_eq!((header.chain_head, header.body_hash), (CHAIN, written_hash));
+        assert_eq!((header.chain_head, header.body_hash), (CHAIN_HEAD, written_hash));
         assert!(list(dir.path()).unwrap()[0].load::<Vec<u64>>().is_err());
 
         // One byte short of a header is not one.
@@ -533,9 +533,9 @@ mod tests {
         //
         // `bool` is the cheapest certain wrong type: its decoder rejects any
         // byte but 0 and 1, and a `Vec`'s first byte is its length.
-        let refusal_reading = |len: usize| {
+        let refusal_for = |len: usize| {
             let dir = tempdir().unwrap();
-            write(dir.path(), 3, &vec![10u64; len], &CHAIN).expect("fixture checkpoint");
+            write(dir.path(), 3, &vec![10u64; len], &CHAIN_HEAD).expect("fixture checkpoint");
             let refused = list(dir.path()).unwrap()[0]
                 .load::<bool>()
                 .expect_err("a body that is not a `bool` does not load as one");
@@ -549,7 +549,7 @@ mod tests {
         // SERIALIZER's account of these bytes: a sentence this module could
         // have written instead would be the same for both, and would leave an
         // operator with no more than "it did not load".
-        assert_ne!(refusal_reading(3), refusal_reading(7));
+        assert_ne!(refusal_for(3), refusal_for(7));
     }
 
     #[test]
@@ -572,7 +572,7 @@ mod tests {
         // `retain` counts entries, so a configured `N = 2` fallback chain
         // would silently hold one real base and one alias of it.
         let dir = tempdir().unwrap();
-        write(dir.path(), 7, &world(), &CHAIN).expect("fixture checkpoint");
+        write(dir.path(), 7, &world(), &CHAIN_HEAD).expect("fixture checkpoint");
         fs::copy(checkpoint_path(dir.path(), 7), dir.path().join("checkpoint.07")).unwrap();
         fs::copy(checkpoint_path(dir.path(), 7), dir.path().join("checkpoint.+7")).unwrap();
         let listed = list(dir.path()).unwrap();
@@ -592,7 +592,7 @@ mod tests {
         };
         let dir = tempdir().unwrap();
         for seq in [10, 1, 100, 9, 99] {
-            write(dir.path(), seq, &world(), &CHAIN).expect("fixture checkpoint");
+            write(dir.path(), seq, &world(), &CHAIN_HEAD).expect("fixture checkpoint");
         }
         assert_eq!(seqs_in(dir.path()), vec![1, 9, 10, 99, 100]);
         // …so retention keeps the numerically newest, and names the floor

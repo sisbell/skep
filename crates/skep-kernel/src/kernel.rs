@@ -606,14 +606,14 @@ impl<W: WorldState> Kernel<W> {
     }
 
     /// Recover the journal at `dir` into the root it commits from, its live
-    /// appender — handed `salt`, the configured [`SaltSource`] every
+    /// appender — handed `salt_source`, the configured [`SaltSource`] every
     /// transaction it commits draws from (`SKJ4`); recovery itself draws
     /// nothing, reading each salt off its marker — and the exclusion lock the
     /// kernel holds for its lifetime (§7).
     fn recover(
         dir: &Path,
         genesis: &W,
-        salt: SaltSource,
+        salt_source: SaltSource,
     ) -> Result<(Committed<W>, Journal, File), OpenError> {
         fs::create_dir_all(dir)?;
         let lock = journal::acquire_journal_lock(dir)?;
@@ -719,7 +719,7 @@ impl<W: WorldState> Kernel<W> {
         // this cut settles and which the appender reads once.
         journal::truncate_tail(dir, &scan)?;
 
-        let writer = JournalWriter::open_active(dir, next_seq, chain_head, salt)?;
+        let writer = JournalWriter::open_active(dir, next_seq, chain_head, salt_source)?;
         Ok((
             Committed {
                 seq: Seq(committed_head),
@@ -1654,15 +1654,19 @@ mod tests {
             let len = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().unwrap()) as usize;
             pos += journal::FRAME_HEADER_LEN + len;
         }
-        let marker = starts[3];
-        let len = u32::from_le_bytes(data[marker + 4..marker + 8].try_into().unwrap()) as usize;
-        let payload = marker + journal::FRAME_HEADER_LEN..marker + journal::FRAME_HEADER_LEN + len;
-        data[payload.start + 24] ^= 0xFF; // the chain's first byte
+        let marker_start = starts[3];
+        let len = u32::from_le_bytes(data[marker_start + 4..marker_start + 8].try_into().unwrap())
+            as usize;
+        let payload = marker_start + journal::FRAME_HEADER_LEN
+            ..marker_start + journal::FRAME_HEADER_LEN + len;
+        // The salt's first byte — a chain input since `SKJ4`, so the link
+        // breaks as it would for an edited chain field.
+        data[payload.start + 24] ^= 0xFF;
         let crc = crc32c::crc32c_append(
-            crc32c::crc32c(&data[marker + 4..marker + 8]),
+            crc32c::crc32c(&data[marker_start + 4..marker_start + 8]),
             &data[payload.clone()],
         );
-        data[marker + 8..marker + 12].copy_from_slice(&crc.to_le_bytes());
+        data[marker_start + 8..marker_start + 12].copy_from_slice(&crc.to_le_bytes());
         // A torn tail past the last committed marker, so there IS something a
         // truncation would take.
         data.extend_from_slice(&[0xAB, 0xCD, 0xEF]);
@@ -2078,12 +2082,12 @@ mod tests {
     }
 
     #[test]
-    fn an_exhausted_chain_says_why_its_newest_base_refused() {
-        // With the chain exhausted, the refusal's account is the WHOLE of what
-        // names the remedy: a base whose body will not decode is a binary on
-        // the wrong side of a `W` format change — roll it forward — where a
-        // failed checksum or a short file is damage. A bare "no retained
-        // checkpoint loads" sends an operator to their disk for both.
+    fn an_exhausted_fallback_chain_says_why_its_newest_base_refused() {
+        // With the fallback chain exhausted, the refusal's account is the
+        // WHOLE of what names the remedy: a base whose body will not decode is
+        // a binary on the wrong side of a `W` format change — roll it forward
+        // — where a failed checksum or a short file is damage. A bare "no
+        // retained checkpoint loads" sends an operator to their disk for both.
         //
         // This is the only tier that can reach both halves of the fixture:
         // `checkpoint::write` mints the unusable base, and the reclamation
@@ -2111,12 +2115,12 @@ mod tests {
             .expect("fixture base");
 
         let err = Kernel::<Vec<Vec<u8>>>::open(cfg, Vec::new())
-            .expect_err("an exhausted chain refuses");
+            .expect_err("an exhausted fallback chain refuses");
         let OpenError::BadCheckpoint { cause: Some(_) } = &err else {
             panic!("the skew must travel, or an operator restores media over a rolled binary: {err:?}")
         };
-        // …and reaches a reporter walking the chain as well as one reading the
-        // sentence, which are two different consumers.
+        // …and reaches a reporter walking the error's source chain as well as
+        // one reading the sentence, which are two different consumers.
         assert!(std::error::Error::source(&err).is_some());
         assert!(err.to_string().contains("the newest refused"), "got {err}");
     }
@@ -2372,18 +2376,19 @@ mod tests {
             // base at `cp.seq` hands the scan above it. Genesis's is the seed.
             assert_eq!(
                 loaded.chain_head,
-                chain_at(dir.path(), cp.seq),
+                chain_of_marker_closing(dir.path(), cp.seq),
                 "checkpoint {} names a chain value that is not the one at its coordinate",
                 cp.seq
             );
         }
     }
 
-    /// The chain value at boundary `seq`, read off the journal's own bytes:
-    /// the `chain` field of the marker whose `last_seq` is `seq`, in the one
-    /// segment these fixtures write — what a checkpoint at `seq` must carry
-    /// as its `chain_head`. The seed at genesis, which no marker closes.
-    fn chain_at(dir: &std::path::Path, seq: u64) -> [u8; 32] {
+    /// The chain the marker closing `seq` STORES on disk — the claim, not
+    /// [`Kernel::chain_at`]'s recomputation — read off the journal's own
+    /// bytes: the `chain` field of the marker whose `last_seq` is `seq`, in
+    /// the one segment these fixtures write. What a checkpoint at `seq` must
+    /// carry as its `chain_head`. The seed at genesis, which no marker closes.
+    fn chain_of_marker_closing(dir: &std::path::Path, seq: u64) -> [u8; 32] {
         if seq == 0 {
             return journal::CHAIN_GENESIS;
         }

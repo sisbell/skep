@@ -78,19 +78,19 @@ use tempfile::{tempdir, TempDir};
 /// constant, restated: `checkpoint.37`, with ops 17 and 18 above it.
 const CHECKPOINT_AFTER_OP: usize = 16;
 
-/// The chain's seed — `CHAIN_GENESIS`, restated: the value a journal's first
-/// transaction chains from, which the golden's first marker pins. The forger
-/// of case 11 starts from it.
-const CHAIN_SEED: [u8; 32] = [0u8; 32];
+/// The chain's seed, restated: the value a journal's first transaction chains
+/// from, which the golden's first marker pins. The forger of case 11 starts
+/// from it.
+const CHAIN_GENESIS: [u8; 32] = [0u8; 32];
 
 /// The checkpoint header (`SKC4`), restated for the byte-level edits of
 /// cases 8, 9 and 11: `[magic 4][seq u64][crc32c(body) u32][body_len u64]
 /// [chain_head 32][body_hash 32][body]`.
-const CKPT_CRC_AT: usize = 12;
-const CKPT_BODY_LEN_AT: usize = 16;
-const CKPT_CHAIN_HEAD_AT: usize = 24;
-const CKPT_BODY_HASH_AT: usize = 56;
-const CKPT_HEADER_LEN: usize = 88;
+const CHECKPOINT_CRC_AT: usize = 12;
+const CHECKPOINT_BODY_LEN_AT: usize = 16;
+const CHECKPOINT_CHAIN_HEAD_AT: usize = 24;
+const CHECKPOINT_BODY_HASH_AT: usize = 56;
+const CHECKPOINT_HEADER_LEN: usize = 88;
 
 /// The committed golden segment, under version control beside the crate.
 fn golden_segment() -> PathBuf {
@@ -214,20 +214,20 @@ fn segment_count(dir: &Path) -> usize {
         .count()
 }
 
-/// The three accounts a halt travels with, by the phrase each opens on — a
-/// link that failed its recomputation, the base's own link (a header
-/// disagreeing with the marker closing it), and the edited transaction (an
-/// intact transaction its intact marker does not close). A case names the
-/// one it expects, so a halt at the right coordinate for the wrong reason
-/// is a finding.
-const LINK_BREAK: &str = "chain break: the commit marker";
-const BASE_LINK: &str = "chain break at the base";
+/// The three accounts a halt travels with, by the phrase each opens on — the
+/// scan's three verdicts: a chain break (a link that failed its
+/// recomputation), a base mismatch (a header disagreeing with the marker
+/// closing its seq), and the edited transaction (an intact transaction its
+/// intact marker does not close). A case names the one it expects, so a halt
+/// at the right coordinate for the wrong reason is a finding.
+const CHAIN_BREAK: &str = "chain break: the commit marker";
+const BASE_MISMATCH: &str = "chain break at the base";
 const EDITED_TXN: &str = "chain break at an edited transaction";
 
 /// CAUGHT: the open halts with a chain break at `at` — the cause travels and
 /// names the break, nothing is cut or written, and the refusal repeats.
 fn open_halts_with_chain_break(dir: &Path, at: u64, ctx: &str) {
-    open_halts_naming(dir, at, LINK_BREAK, ctx);
+    open_halts_naming(dir, at, CHAIN_BREAK, ctx);
 }
 
 /// CAUGHT, by the verdict `phrase` names: the open halts with `Corruption`
@@ -308,7 +308,7 @@ fn every_boundary_answers(engine: &Engine, golden: &Golden, ctx: &str) {
 
 /// A bounded read at `at` halts with a chain break at `break_at`.
 fn history_halts_with_chain_break(engine: &Engine, at: u64, break_at: u64, ctx: &str) {
-    history_halts_naming(engine, at, break_at, LINK_BREAK, ctx);
+    history_halts_naming(engine, at, break_at, CHAIN_BREAK, ctx);
 }
 
 /// A bounded read at `at` — the world AND the chain, which run the same
@@ -404,9 +404,9 @@ fn set_marker_salt(data: &mut [u8], txn: &Txn, salt: &[u8; 32]) {
 
 /// Flip a byte of one of a transaction's RECORD payloads, inside the
 /// record's own bytes.
-fn flip_record_byte(data: &mut [u8], txn: &Txn, record: usize, offset: usize) {
-    let at = txn.records[record].payload.start + RECORD_BYTES_AT + offset;
-    assert!(at < txn.records[record].payload.end, "the byte lies inside the record");
+fn flip_record_byte(data: &mut [u8], txn: &Txn, record_index: usize, offset: usize) {
+    let at = txn.records[record_index].payload.start + RECORD_BYTES_AT + offset;
+    assert!(at < txn.records[record_index].payload.end, "the byte lies inside the record");
     data[at] ^= 0xFF;
 }
 
@@ -414,9 +414,9 @@ fn flip_record_byte(data: &mut [u8], txn: &Txn, record: usize, offset: usize) {
 /// over it — `body_hash` left as it was.
 fn rewrite_checkpoint_body(path: &Path, edit: impl FnOnce(&mut [u8])) {
     let mut data = fs::read(path).expect("read the checkpoint");
-    edit(&mut data[CKPT_HEADER_LEN..]);
-    let crc = crc32c::crc32c(&data[CKPT_HEADER_LEN..]);
-    data[CKPT_CRC_AT..CKPT_BODY_LEN_AT].copy_from_slice(&crc.to_le_bytes());
+    edit(&mut data[CHECKPOINT_HEADER_LEN..]);
+    let crc = crc32c::crc32c(&data[CHECKPOINT_HEADER_LEN..]);
+    data[CHECKPOINT_CRC_AT..CHECKPOINT_BODY_LEN_AT].copy_from_slice(&crc.to_le_bytes());
     fs::write(path, data).expect("write the checkpoint");
 }
 
@@ -424,12 +424,12 @@ fn rewrite_checkpoint_body(path: &Path, edit: impl FnOnce(&mut [u8])) {
 /// header covers it, so nothing else moves.
 fn set_checkpoint_chain_head(path: &Path, head: &[u8; 32]) {
     let mut data = fs::read(path).expect("read the checkpoint");
-    data[CKPT_CHAIN_HEAD_AT..CKPT_BODY_HASH_AT].copy_from_slice(head);
+    data[CHECKPOINT_CHAIN_HEAD_AT..CHECKPOINT_BODY_HASH_AT].copy_from_slice(head);
     fs::write(path, data).expect("write the checkpoint");
 }
 
 fn checkpoint_chain_head(path: &Path) -> [u8; 32] {
-    fs::read(path).expect("read the checkpoint")[CKPT_CHAIN_HEAD_AT..CKPT_BODY_HASH_AT]
+    fs::read(path).expect("read the checkpoint")[CHECKPOINT_CHAIN_HEAD_AT..CHECKPOINT_BODY_HASH_AT]
         .try_into()
         .expect("thirty-two bytes")
 }
@@ -484,7 +484,7 @@ fn forge_and_rechain(
     // value as the golden wrote it — the seed itself for the first — each
     // marker re-salted with the forger's own value first, so the links are
     // over salts the writer never drew.
-    let mut prev = if op == 1 { CHAIN_SEED } else { golden.txn(op - 1).chain };
+    let mut prev = if op == 1 { CHAIN_GENESIS } else { golden.txn(op - 1).chain };
     let mut data = fs::read(&seg).expect("segment");
     let txns = transactions(&data);
     let mut chains = Vec::new();
@@ -839,8 +839,8 @@ fn c07_a_closed_segment_rolled_back_to_an_older_copy_breaks_at_the_next_segments
 /// `body_hash` — the fallback reaches genesis (the golden's one segment
 /// begins at `Seq(1)`), the journal re-verifies from its seed, and the open
 /// recovers the whole history. The door is named by putting genesis out of
-/// reach: the exhausted chain's account is the hash's refusal, the checksum
-/// having passed.
+/// reach: the exhausted fallback chain's account is the hash's refusal, the
+/// checksum having passed.
 ///
 /// NOT CAUGHT BY DESIGN — the body FORGED: another world's canonical body
 /// under this coordinate (the golden's ops checkpointed one op earlier: the
@@ -878,7 +878,9 @@ fn c08_a_checkpoint_body_rewritten_is_refused_by_its_hash_and_a_body_forged_with
         Err(err) => err,
     };
     let EngineError::Open(OpenError::BadCheckpoint { cause: Some(cause) }) = &err else {
-        panic!("expected an exhausted chain carrying the newest refusal's account, got {err:?}")
+        panic!(
+            "expected an exhausted fallback chain carrying the newest refusal's account, got {err:?}"
+        )
     };
     let cause = cause.to_string();
     assert!(
@@ -888,16 +890,18 @@ fn c08_a_checkpoint_body_rewritten_is_refused_by_its_hash_and_a_body_forged_with
 
     let other = Fixture::build_golden(&golden.tmp.path().join("other"), &[CHECKPOINT_AFTER_OP - 1]);
     let other_seq = other.boundaries[CHECKPOINT_AFTER_OP - 2].seq;
-    let body =
-        fs::read(ckpt_file(&other.dir, other_seq)).expect("the other checkpoint")[CKPT_HEADER_LEN..]
-            .to_vec();
+    let body = fs::read(ckpt_file(&other.dir, other_seq)).expect("the other checkpoint")
+        [CHECKPOINT_HEADER_LEN..]
+        .to_vec();
     let case = golden.case("c08-forged");
     let ckpt = ckpt_file(&case, ckpt_seq);
     let mut data = fs::read(&ckpt).expect("the checkpoint");
-    data.truncate(CKPT_HEADER_LEN);
-    data[CKPT_CRC_AT..CKPT_BODY_LEN_AT].copy_from_slice(&crc32c::crc32c(&body).to_le_bytes());
-    data[CKPT_BODY_LEN_AT..CKPT_CHAIN_HEAD_AT].copy_from_slice(&(body.len() as u64).to_le_bytes());
-    data[CKPT_BODY_HASH_AT..CKPT_HEADER_LEN]
+    data.truncate(CHECKPOINT_HEADER_LEN);
+    data[CHECKPOINT_CRC_AT..CHECKPOINT_BODY_LEN_AT]
+        .copy_from_slice(&crc32c::crc32c(&body).to_le_bytes());
+    data[CHECKPOINT_BODY_LEN_AT..CHECKPOINT_CHAIN_HEAD_AT]
+        .copy_from_slice(&(body.len() as u64).to_le_bytes());
+    data[CHECKPOINT_BODY_HASH_AT..CHECKPOINT_HEADER_LEN]
         .copy_from_slice(&<[u8; 32]>::from(Sha256::digest(&body)));
     data.extend_from_slice(&body);
     fs::write(&ckpt, data).expect("write the forged checkpoint");
@@ -922,7 +926,7 @@ fn c08_a_checkpoint_body_rewritten_is_refused_by_its_hash_and_a_body_forged_with
 }
 
 /// CASE 9 — A CHECKPOINT'S `chain_head` EDITED, its CRC and `body_hash` left
-/// consistent — which they are: nothing in the `SKC3` header covers that
+/// consistent — which they are: nothing in the `SKC4` header covers that
 /// field. So the code does not REFUSE — the base LOADS carrying the edited
 /// value — and the open is CAUGHT at the BASE'S OWN COORDINATE: the marker
 /// closing the base's seq is in the scanned segment (the golden's one
@@ -945,11 +949,11 @@ fn c09_a_checkpoints_chain_head_edited_breaks_at_the_bases_own_coordinate() {
     let golden = Golden::build();
 
     let case = golden.case("c09");
-    flip_byte(&ckpt_file(&case, golden.checkpoint_seq()), (CKPT_CHAIN_HEAD_AT + 3) as u64);
+    flip_byte(&ckpt_file(&case, golden.checkpoint_seq()), (CHECKPOINT_CHAIN_HEAD_AT + 3) as u64);
     open_halts_naming(
         &case,
         golden.checkpoint_seq(),
-        BASE_LINK,
+        BASE_MISMATCH,
         "case 9: the checkpoint's chain_head edited, mid-history, its marker in the scanned segment",
     );
 
@@ -960,7 +964,7 @@ fn c09_a_checkpoints_chain_head_edited_breaks_at_the_bases_own_coordinate() {
     open_halts_naming(
         &at_head.dir,
         head,
-        BASE_LINK,
+        BASE_MISMATCH,
         "case 9: a head checkpoint's chain_head edited — the at-head fork, closed",
     );
 }
@@ -1040,7 +1044,7 @@ fn c11_a_consistent_rewrite_from_genesis_or_from_any_point_passes() {
     // because the forgery is consistent, not because the formula drifted.
     {
         let data = fs::read(golden_segment()).expect("the golden segment");
-        let mut prev = CHAIN_SEED;
+        let mut prev = CHAIN_GENESIS;
         for txn in &golden.txns {
             let chain = chain_over(&prev, &data, txn);
             assert_eq!(chain, txn.chain, "the formula drifted from the writer's at {}", txn.last_seq);
@@ -1156,7 +1160,7 @@ fn c11_a_consistent_rewrite_from_genesis_or_from_any_point_passes() {
     open_halts_naming(
         &case,
         golden.checkpoint_seq(),
-        BASE_LINK,
+        BASE_MISMATCH,
         "case 11 with the checkpoint's head kept as the golden wrote it",
     );
 }
@@ -1540,7 +1544,7 @@ fn c15_the_boundary_coincidence_skips_the_bases_marker_and_the_check_is_vacuous(
     open_halts_naming(
         &case,
         two.above[0],
-        LINK_BREAK,
+        CHAIN_BREAK,
         "case 15: the header edited, its marker's segment skipped — the first link above fails \
          against it, and the base's own link is not judged",
     );
@@ -1610,7 +1614,7 @@ fn chain_at_answers_every_boundarys_marker_chain_and_refuses_as_world_at_does() 
 
     let case = golden.case_from_genesis("chain-at-genesis");
     let engine = timed_open(&case, "chain_at from genesis");
-    chain_at_is(&engine, 0, &CHAIN_SEED, "genesis is the seed");
+    chain_at_is(&engine, 0, &CHAIN_GENESIS, "genesis is the seed");
     for op in 1..=GOLDEN_OPS {
         chain_at_is(&engine, golden.seq(op), &golden.txn(op).chain, "from genesis, every boundary");
     }
@@ -1627,7 +1631,7 @@ fn chain_at_answers_every_boundarys_marker_chain_and_refuses_as_world_at_does() 
     let header = checkpoint_chain_head(&ckpt_file(&case, ckpt_seq));
     assert_eq!(header, golden.txn(CHECKPOINT_AFTER_OP).chain, "the header is the marker's at 37");
     chain_at_is(&engine, ckpt_seq, &header, "the base's own seq answers the header");
-    chain_at_is(&engine, 0, &CHAIN_SEED, "genesis, over the standing base");
+    chain_at_is(&engine, 0, &CHAIN_GENESIS, "genesis, over the standing base");
     for op in 1..=GOLDEN_OPS {
         chain_at_is(
             &engine,
@@ -1659,14 +1663,14 @@ fn chain_at_answers_every_boundarys_marker_chain_and_refuses_as_world_at_does() 
     chain_at_is(&engine, head, &golden.txn(GOLDEN_OPS).chain, "the old head still answers its own");
     drop(engine);
 
-    let mem = Engine::open(KernelConfig {
+    let in_memory = Engine::open(KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
         salt: SaltSource::Seeded(GOLDEN_SALT_SEED),
     })
     .expect("an in-memory engine");
     assert!(
-        matches!(mem.kernel().chain_at(Seq(0)), Err(HistoryError::Unjournaled)),
+        matches!(in_memory.kernel().chain_at(Seq(0)), Err(HistoryError::Unjournaled)),
         "no journal, no history: the same refusal as world_at's"
     );
 }
@@ -1683,16 +1687,16 @@ fn chain_head_is_the_committed_heads_marker_chain() {
     let golden = Golden::build();
     let case = golden.case("chain-head");
     let engine = timed_open(&case, "chain_head");
-    let last = transactions(&fs::read(golden_segment()).expect("the golden segment"))
+    let golden_head_chain = transactions(&fs::read(golden_segment()).expect("the golden segment"))
         .last()
         .expect("a marker")
         .chain;
-    assert_eq!(engine.kernel().chain_head(), last);
-    assert_eq!(last, golden.txn(GOLDEN_OPS).chain);
-    assert_ne!(last, CHAIN_SEED);
+    assert_eq!(engine.kernel().chain_head(), golden_head_chain);
+    assert_eq!(golden_head_chain, golden.txn(GOLDEN_OPS).chain);
+    assert_ne!(golden_head_chain, CHAIN_GENESIS);
 
     engine.world_at(Seq(2)).expect("a boundary");
-    assert_eq!(engine.kernel().chain_head(), last, "a bounded read moves nothing");
+    assert_eq!(engine.kernel().chain_head(), golden_head_chain, "a bounded read moves nothing");
 
     engine.namespace().register_node(t(&[1, 77])).expect("one commit");
     let data = fs::read(seg_file(&case, 1)).expect("segment");
@@ -1700,7 +1704,11 @@ fn chain_head_is_the_committed_heads_marker_chain() {
     let new = txns.last().expect("the new marker");
     assert_eq!(new.last_seq, engine.kernel().current_seq().0);
     assert_eq!(engine.kernel().chain_head(), new.chain);
-    assert_eq!(new.chain, chain_over(&last, &data, new), "the link over the head it had");
+    assert_eq!(
+        new.chain,
+        chain_over(&golden_head_chain, &data, new),
+        "the link over the head it had"
+    );
 
     let at = engine.kernel().checkpoint().expect("a checkpoint off the root");
     assert_eq!(checkpoint_chain_head(&ckpt_file(&case, at.0)), new.chain);
@@ -1709,13 +1717,13 @@ fn chain_head_is_the_committed_heads_marker_chain() {
     assert_eq!(engine.kernel().chain_head(), new.chain);
     drop(engine);
 
-    let mem = Engine::open(KernelConfig {
+    let in_memory = Engine::open(KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
         salt: SaltSource::Seeded(GOLDEN_SALT_SEED),
     })
     .expect("an in-memory engine");
-    assert_eq!(mem.kernel().chain_head(), CHAIN_SEED);
-    mem.namespace().register_node(t(&[1, 77])).expect("one in-memory commit");
-    assert_eq!(mem.kernel().chain_head(), CHAIN_SEED, "no frames to hash");
+    assert_eq!(in_memory.kernel().chain_head(), CHAIN_GENESIS);
+    in_memory.namespace().register_node(t(&[1, 77])).expect("one in-memory commit");
+    assert_eq!(in_memory.kernel().chain_head(), CHAIN_GENESIS, "no frames to hash");
 }

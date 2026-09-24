@@ -197,7 +197,7 @@ fn b_garbage_tail_classifies_as_eof_not_as_records() {
 
 // ── C. Checkpoint corruption ─────────────────────────────────────────────
 
-/// A checkpoint file's header (`SKC3`): magic + seq + crc + body_len +
+/// A checkpoint file's header (`SKC4`): magic + seq + crc + body_len +
 /// chain_head + body_hash. Restated here because this tier damages the
 /// format as bytes rather than through the crate's own writer; the body
 /// starts at this offset.

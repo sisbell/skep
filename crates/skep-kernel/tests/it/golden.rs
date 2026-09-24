@@ -148,27 +148,31 @@ fn write_golden(fixture: &Fixture) {
 }
 
 /// Byte equality that names the first divergence, so a moved byte reports
-/// as an offset rather than as two hex dumps.
-fn assert_bytes_equal(mine: &[u8], golden: &[u8], what: &str) {
-    if mine == golden {
+/// as an offset rather than as two hex dumps. `theirs` is the golden in the
+/// writer pin and the second process's file in the two-process proof, so the
+/// remedy is the caller's to name, in `what`.
+fn assert_bytes_equal(mine: &[u8], theirs: &[u8], what: &str) {
+    if mine == theirs {
         return;
     }
     let first = mine
         .iter()
-        .zip(golden)
+        .zip(theirs)
         .position(|(a, b)| a != b)
-        .unwrap_or(mine.len().min(golden.len()));
+        .unwrap_or(mine.len().min(theirs.len()));
     panic!(
-        "{what}: the ops no longer reproduce the golden — first divergence at byte {first} \
-         (this build wrote {} bytes, the golden holds {}); this build's byte there is {:?}, the \
-         golden's {:?}. A moved byte is a format event: if it is meant, bump the stamp and \
-         regenerate with SKEP_GOLDEN_WRITE=1",
+        "{what} — first divergence at byte {first} (this process wrote {} bytes, the other file \
+         holds {}); this process's byte there is {:?}, the other's {:?}",
         mine.len(),
-        golden.len(),
+        theirs.len(),
         mine.get(first),
-        golden.get(first)
+        theirs.get(first)
     );
 }
+
+/// What the writer pin says when the ops no longer reproduce a golden file.
+const GOLDEN_MOVED: &str = "the ops no longer reproduce the golden; a moved byte is a format \
+    event: if it is meant, bump the stamp and regenerate with SKEP_GOLDEN_WRITE=1";
 
 /// (a) THE WRITER PIN — the ops, driven into a temporary directory, write
 /// `seg-1.wal` and `checkpoint.<S>` byte-equal to the golden, and dump every
@@ -189,7 +193,7 @@ fn the_writer_pin_the_ops_reproduce_the_golden_byte_for_byte() {
 
     let mine = fs::read(seg_file(&fixture.dir, 1)).expect("read the segment written");
     let theirs = fs::read(golden.join("seg-1.wal")).expect("read the golden segment");
-    assert_bytes_equal(&mine, &theirs, "seg-1.wal");
+    assert_bytes_equal(&mine, &theirs, &format!("seg-1.wal: {GOLDEN_MOVED}"));
 
     let my_checkpoint = checkpoint_in(&fixture.dir);
     let golden_checkpoint = checkpoint_in(&golden);
@@ -204,7 +208,7 @@ fn the_writer_pin_the_ops_reproduce_the_golden_byte_for_byte() {
     );
     let mine = fs::read(&my_checkpoint).expect("read the checkpoint written");
     let theirs = fs::read(&golden_checkpoint).expect("read the golden checkpoint");
-    assert_bytes_equal(&mine, &theirs, "checkpoint.<S>");
+    assert_bytes_equal(&mine, &theirs, &format!("checkpoint.<S>: {GOLDEN_MOVED}"));
 
     let dumps = golden_dumps();
     assert_eq!(
@@ -305,30 +309,30 @@ fn the_stamp_gate_the_golden_carries_this_builds_format_stamps() {
     };
 
     let golden = golden_dir();
-    let golden_journal = stamp_of(&golden.join("seg-1.wal"));
-    let golden_checkpoint = stamp_of(&checkpoint_in(&golden));
+    let golden_journal_stamp = stamp_of(&golden.join("seg-1.wal"));
+    let golden_checkpoint_stamp = stamp_of(&checkpoint_in(&golden));
     assert_eq!(
-        golden_journal,
+        golden_journal_stamp,
         journal_stamp,
         "the golden journal was written under `{}`; this build writes `{}` — a format bump \
          without a new golden. Regenerate with SKEP_GOLDEN_WRITE=1 and commit the files under \
          the new stamp",
-        stamp_text(&golden_journal),
+        stamp_text(&golden_journal_stamp),
         stamp_text(&journal_stamp)
     );
     assert_eq!(
-        golden_checkpoint,
+        golden_checkpoint_stamp,
         checkpoint_stamp,
         "the golden checkpoint was written under `{}`; this build writes `{}` — a format bump \
          without a new golden. Regenerate with SKEP_GOLDEN_WRITE=1 and commit the files under \
          the new stamp",
-        stamp_text(&golden_checkpoint),
+        stamp_text(&golden_checkpoint_stamp),
         stamp_text(&checkpoint_stamp)
     );
     // The spellings this lane pinned: a regenerated golden under a later
     // stamp must move these too, in the same commit as its stamp bump.
-    assert_eq!(&golden_journal, b"SKJ4");
-    assert_eq!(&golden_checkpoint, b"SKC4");
+    assert_eq!(&golden_journal_stamp, b"SKJ4");
+    assert_eq!(&golden_checkpoint_stamp, b"SKC4");
 }
 
 /// Option (i)'s claim, proved directly: two PROCESSES — this one and a

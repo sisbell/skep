@@ -177,7 +177,7 @@ pub fn transactions(data: &[u8]) -> Vec<Txn> {
         match tag_of(data, &frame) {
             RECORD_TAG => records.push(frame),
             MARKER_TAG => {
-                let p = &data[frame.payload.clone()];
+                let payload = &data[frame.payload.clone()];
                 let first = records.first().expect("a marker closes at least one record");
                 let first_start = first.start;
                 let first_seq = u64::from_le_bytes(
@@ -188,16 +188,18 @@ pub fn transactions(data: &[u8]) -> Vec<Txn> {
                 txns.push(Txn {
                     bytes: first_start..frame.end(),
                     records: std::mem::take(&mut records),
-                    txn: u64::from_le_bytes(p[MARKER_TXN_AT..MARKER_LAST_SEQ_AT].try_into().unwrap()),
+                    txn: u64::from_le_bytes(
+                        payload[MARKER_TXN_AT..MARKER_LAST_SEQ_AT].try_into().unwrap(),
+                    ),
                     first_seq,
                     last_seq: u64::from_le_bytes(
-                        p[MARKER_LAST_SEQ_AT..MARKER_CHECKSUM_AT].try_into().unwrap(),
+                        payload[MARKER_LAST_SEQ_AT..MARKER_CHECKSUM_AT].try_into().unwrap(),
                     ),
                     records_checksum: u32::from_le_bytes(
-                        p[MARKER_CHECKSUM_AT..MARKER_SALT_AT].try_into().unwrap(),
+                        payload[MARKER_CHECKSUM_AT..MARKER_SALT_AT].try_into().unwrap(),
                     ),
-                    salt: p[MARKER_SALT_AT..MARKER_CHAIN_AT].try_into().unwrap(),
-                    chain: p[MARKER_CHAIN_AT..MARKER_SIG_ALG_AT].try_into().unwrap(),
+                    salt: payload[MARKER_SALT_AT..MARKER_CHAIN_AT].try_into().unwrap(),
+                    chain: payload[MARKER_CHAIN_AT..MARKER_SIG_ALG_AT].try_into().unwrap(),
                     marker: frame,
                 });
             }

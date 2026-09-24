@@ -336,7 +336,7 @@ impl ChainLink {
     }
 
     /// Stream one record frame's payload, exactly as framed.
-    fn record(&mut self, payload: &[u8]) {
+    fn add_payload(&mut self, payload: &[u8]) {
         self.0.update(payload);
     }
 
@@ -496,7 +496,7 @@ fn encode_txn(
             }))
             .map_err(invalid_data)?;
         checksum = crc32c::crc32c_append(checksum, &payload);
-        link.record(&payload);
+        link.add_payload(&payload);
         push_frame(&mut buf, &payload)?;
     }
     let last_seq = first_seq + (n - 1);
@@ -856,12 +856,12 @@ pub(crate) struct JournalWriter {
     /// truncated back leaves it where it was), and carried across a segment
     /// rotation: the chain is over the journal, not the segment.
     chain: [u8; 32],
-    /// Where each transaction's SALT is drawn from (`SKJ4`) — the kernel's
-    /// configured [`SaltSource`], handed in at [`JournalWriter::open_active`]
-    /// and carried across a rotation like the chain. Consulted once per
-    /// commit, before a frame is built; the reader never consults it, since
-    /// the salt it needs is in the marker.
-    salt: SaltSource,
+    /// The kernel's configured [`SaltSource`] (`SKJ4`), which each
+    /// transaction's salt is drawn from — handed in at
+    /// [`JournalWriter::open_active`] and carried across a rotation like the
+    /// chain. Consulted once per commit, before a frame is built; the reader
+    /// never consults it, since the salt it needs is in the marker.
+    salt_source: SaltSource,
     /// What the transaction in progress has reached. On entry to
     /// [`JournalWriter::commit_txn`] this is always [`InFlight::Idle`]: every
     /// path that returns to a caller who may commit again leaves it so, and
@@ -888,15 +888,15 @@ impl JournalWriter {
     /// `chain` is the commit chain's value at the committed head this
     /// appender continues from — what the recovery scan derived
     /// ([`ScanOutcome::chain_head`]), or [`CHAIN_GENESIS`] for a journal with
-    /// nothing committed — and is the second thing this reads once. `salt` is
-    /// the kernel's configured source for every transaction this appender
-    /// will commit; a journal written under one source reopens under any,
-    /// since the salts already written are read off their markers.
+    /// nothing committed — and is the second thing this reads once.
+    /// `salt_source` is the kernel's configured source for every transaction
+    /// this appender will commit; a journal written under one source reopens
+    /// under any, since the salts already written are read off their markers.
     pub(crate) fn open_active(
         dir: &Path,
         next_seq: u64,
         chain: [u8; 32],
-        salt: SaltSource,
+        salt_source: SaltSource,
     ) -> io::Result<Self> {
         let segs = list_segments(dir)?;
         match segs.last() {
@@ -908,11 +908,11 @@ impl JournalWriter {
                     file,
                     len,
                     chain,
-                    salt,
+                    salt_source,
                     in_flight: InFlight::Idle,
                 })
             }
-            None => Self::create_segment(dir, next_seq, chain, salt),
+            None => Self::create_segment(dir, next_seq, chain, salt_source),
         }
     }
 
@@ -920,7 +920,7 @@ impl JournalWriter {
         dir: &Path,
         first_seq: u64,
         chain: [u8; 32],
-        salt: SaltSource,
+        salt_source: SaltSource,
     ) -> io::Result<Self> {
         let path = segment_path(dir, first_seq);
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
@@ -934,7 +934,7 @@ impl JournalWriter {
             file,
             len,
             chain,
-            salt,
+            salt_source,
             in_flight: InFlight::Idle,
         })
     }
@@ -972,7 +972,7 @@ impl JournalWriter {
         // refuses the commit as a clean failure — nothing was framed, nothing
         // appended, the segment is where the transaction found it, and
         // re-invoking is safe — rather than as a property of the records.
-        let salt = self.salt.draw(first_seq).map_err(CommitFail::Clean)?;
+        let salt = self.salt_source.draw(first_seq).map_err(CommitFail::Clean)?;
         let (buf, chain) = encode_txn(first_seq, record_bytes, &self.chain, salt)
             .map_err(|e| CommitFail::Unencodable(Box::new(e)))?;
         self.maybe_rotate(first_seq).map_err(CommitFail::Clean)?;
@@ -1051,7 +1051,7 @@ impl JournalWriter {
         // previous txn's barrier fsynced it) — the §1 rotation discipline.
         // The chain rides across: it is over the journal, not the segment;
         // the salt source with it.
-        *self = Self::create_segment(&self.dir, first_seq, self.chain, self.salt)?;
+        *self = Self::create_segment(&self.dir, first_seq, self.chain, self.salt_source)?;
         Ok(())
     }
 
@@ -1620,8 +1620,8 @@ struct PendingTxn {
     /// from the same payloads: opened on the running chain value — which
     /// cannot move while a group is open, since only a committed marker
     /// moves it and a committed marker closes the group — and closed with
-    /// the marker's fields by [`PendingTxn::chain_closing`].
-    chain: ChainLink,
+    /// the marker's fields by [`PendingTxn::recomputed_chain`].
+    link: ChainLink,
     /// Whether every frame this group could have had was seen intact: opened
     /// `false` when the group's first record closed a corrupt run — the run
     /// may have eaten this transaction's own earlier frames — and cleared
@@ -1644,7 +1644,7 @@ impl PendingTxn {
             accounted: MARKER_FRAME_LEN,
             oversize: false,
             records: Vec::new(),
-            chain: ChainLink::open(prev_chain),
+            link: ChainLink::open(prev_chain),
             clean,
         }
     }
@@ -1656,8 +1656,8 @@ impl PendingTxn {
     /// from the bytes the CRC verified. The salt is READ here, never drawn:
     /// a replay under any [`SaltSource`] recomputes the link the writer
     /// closed, and an edited salt is a link that fails.
-    fn chain_closing(&self, marker: &Marker) -> [u8; 32] {
-        ChainLink(self.chain.0.clone()).close(
+    fn recomputed_chain(&self, marker: &Marker) -> [u8; 32] {
+        ChainLink(self.link.0.clone()).close(
             marker.txn,
             marker.last_seq,
             marker.records_checksum,
@@ -1675,7 +1675,7 @@ impl PendingTxn {
         }
         self.last_seq = Some(record.seq);
         self.checksum = crc32c::crc32c_append(self.checksum, payload);
-        self.chain.record(payload);
+        self.link.add_payload(payload);
         self.accounted = self.accounted.saturating_add(frame_len(payload.len() as u64));
         self.oversize |= self.accounted > MAX_TXN_BYTES;
         if self.ordered && !self.oversize {
@@ -1914,7 +1914,7 @@ pub(crate) fn scan(
                                     // below it — and recorded, not refused,
                                     // so the run classification speaks first.
                                     if marker.last_seq > s_load {
-                                        if group.chain_closing(&marker) != marker.chain
+                                        if group.recomputed_chain(&marker) != marker.chain
                                             && outcome.chain_break.is_none()
                                         {
                                             outcome.chain_break = Some(marker.last_seq);
@@ -2134,17 +2134,17 @@ pub(crate) fn first_sync_word(segs: &[SegmentMeta], s_load: u64) -> io::Result<F
         return Ok(FirstSyncWord::Scan);
     };
     let mut file = File::open(&first.path)?;
-    let mut opening = Vec::with_capacity(FRAME_HEADER_LEN);
+    let mut header = Vec::with_capacity(FRAME_HEADER_LEN);
     (&mut file)
         .take(FRAME_HEADER_LEN as u64)
-        .read_to_end(&mut opening)?;
-    let Some(&word) = opening.first_chunk::<4>() else {
+        .read_to_end(&mut header)?;
+    let Some(&word) = header.first_chunk::<4>() else {
         return Ok(FirstSyncWord::Scan); // shorter than a sync word: damage or empty
     };
     if word == MAGIC || !word.starts_with(STAMP_PREFIX) {
         return Ok(FirstSyncWord::Scan);
     }
-    let Some(len) = opening
+    let Some(len) = header
         .get(4..8)
         .and_then(|len| <[u8; 4]>::try_from(len).ok())
         .map(u32::from_le_bytes)
@@ -2217,7 +2217,7 @@ mod tests {
 
     /// A fresh appender at genesis: the chain seeded where a new journal's is,
     /// the salts from the seeded stream.
-    fn open_fresh(dir: &Path) -> JournalWriter {
+    fn fresh_writer(dir: &Path) -> JournalWriter {
         JournalWriter::open_active(dir, 1, CHAIN_GENESIS, SaltSource::Seeded(TEST_SEED)).unwrap()
     }
 
@@ -2289,18 +2289,18 @@ mod tests {
     /// — which is what a fixture aims damage with.
     fn frame_starts(path: &Path) -> Vec<usize> {
         let buf = fs::read(path).unwrap();
-        let mut v = Vec::new();
+        let mut starts = Vec::new();
         let mut pos = 0;
         while pos < buf.len() {
             match parse_frame(&buf, pos) {
                 Parsed::Intact { payload } => {
-                    v.push(pos);
+                    starts.push(pos);
                     pos = payload.end;
                 }
                 Parsed::Bad { .. } => panic!("clean journal expected"),
             }
         }
-        v
+        starts
     }
 
     fn flip_byte(path: &Path, offset: usize) {
@@ -2553,7 +2553,7 @@ mod tests {
         // …and the durable arm answers the same, which is the parity these
         // three refusals exist to hold: one judgment, one place, both modes.
         let dir = tempdir().unwrap();
-        let mut segments = Journal::Segments(open_fresh(dir.path()));
+        let mut segments = Journal::Segments(fresh_writer(dir.path()));
         let out = segments.commit_txn(1, vec![RefusesSerialization], |_| installed = true);
         assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
         assert!(!installed, "a refused transaction installs nothing");
@@ -2566,7 +2566,7 @@ mod tests {
         // silent double application answered `Ok`, and a coordinate applied
         // out of order is a fold over a state that never existed.
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         // File order is NOT `Seq` order here. In-order append plus the prior
         // recovery's tail truncation normally makes the two agree, and the
         // ordering is what holds a fold together where they do not.
@@ -2589,7 +2589,7 @@ mod tests {
         // folded twice (§7) — and the range is applied FIRST, so a repeat the
         // base already embodies is harmless rather than a halt.
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 1, vec![rec(20)]);
         let segs = list_segments(dir.path()).unwrap();
@@ -2606,7 +2606,7 @@ mod tests {
         // which no filter here can restore, and which would otherwise be
         // answered `Ok` with a short world.
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 2, vec![rec(20)]);
         let segs = list_segments(dir.path()).unwrap();
@@ -2768,7 +2768,7 @@ mod tests {
     }
 
     #[test]
-    fn frame_payload_layout_spends_a_bare_u64_on_the_txn() {
+    fn frame_payloads_spend_a_bare_u64_on_the_txn_and_carry_the_documented_chain() {
         // The on-disk payload layout (§1), spelled out: bincode fixint LE —
         // the variant index as a `u32`, then the fields in declaration order,
         // with a [`Txn`] occupying exactly the `u64` it wraps. A journal
@@ -2881,7 +2881,7 @@ mod tests {
         // see — is caught as a CHAIN BREAK at the first transaction whose
         // marker no longer follows from its predecessor.
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 2, vec![rec(20), rec(21)]);
         write_txn(&mut writer, 4, vec![rec(40)]);
@@ -2946,7 +2946,7 @@ mod tests {
         // and ONE foreign-shaped word before a frame of this build's is
         // damage, which every one-bit flip of the numeral is.
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         drop(writer);
         let segs = list_segments(dir.path()).unwrap();
@@ -3001,7 +3001,7 @@ mod tests {
         // embodies is skipped, so a foreign stamp there is not read — and
         // the first segment the scan WOULD read is.
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         write_txn(&mut writer, 1, vec![vec![7u8; SEGMENT_ROTATE_BYTES as usize]]); // fills seg-1
         write_txn(&mut writer, 2, vec![rec(20)]); // rotates into seg-2
         drop(writer);
@@ -3020,7 +3020,7 @@ mod tests {
         // transaction of a new segment links from the last of the old one,
         // and a scan across the boundary verifies every link.
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         write_txn(&mut writer, 1, vec![vec![7u8; SEGMENT_ROTATE_BYTES as usize]]); // fills seg-1
         write_txn(&mut writer, 2, vec![rec(20)]); // rotates into seg-2
         write_txn(&mut writer, 3, vec![rec(30)]);
@@ -3054,7 +3054,7 @@ mod tests {
         // transaction, whatever the records say. The salt is hashed, not
         // merely stored.
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 2, vec![rec(20), rec(21)]);
         write_txn(&mut writer, 4, vec![rec(40)]);
@@ -3095,7 +3095,7 @@ mod tests {
         // verifies every link written before it, and the commits it adds
         // chain from the recovered head under its own source.
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 2, vec![rec(20)]);
         drop(writer);
@@ -3133,7 +3133,7 @@ mod tests {
         // is behind the writer by the time it returns: a later unwind finds
         // nothing of it to repair, and the next transaction starts clean (§3).
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         let mut installed = None;
         writer
             .commit_txn(1, vec![rec(10)], |chain| installed = Some(chain))
@@ -3153,7 +3153,7 @@ mod tests {
         // the install unaccounted for. Its record+marker tail stays —
         // removing an acked commit is what recovery may never do (§3).
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = writer.commit_txn(1, vec![rec(10)], |_| panic!("install unwinds"));
         }));
@@ -3219,7 +3219,7 @@ mod tests {
     #[test]
     fn scan_groups_by_txn_and_derives_the_committed_head() {
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 2, vec![rec(20), rec(21)]); // seqs 2, 3
         let segs = list_segments(dir.path()).unwrap();
@@ -3238,7 +3238,7 @@ mod tests {
         // §7: the replayed range needs NO Seq-contiguity — a TolerateGap burn
         // folds harmlessly; a missing Seq is never corruption.
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 5, vec![rec(50), rec(60)]); // burned 2..=4
         let segs = list_segments(dir.path()).unwrap();
@@ -3254,7 +3254,7 @@ mod tests {
         // resync lands on T2's marker — a marker landing: at = last_seq + 1,
         // inferred max = last_seq (markers carry no Seq of their own; §7).
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 2, vec![rec(20)]);
         write_txn(&mut writer, 3, vec![rec(30)]);
@@ -3284,7 +3284,7 @@ mod tests {
         // T2 = seqs 2..=3; corrupt T2's MARKER. The resync lands on T3's first
         // record (seq 4) — a record landing: at = seq, inferred max = seq − 1.
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 2, vec![rec(20), rec(21)]);
         write_txn(&mut writer, 4, vec![rec(40)]);
@@ -3311,7 +3311,7 @@ mod tests {
         // resync must reject the embedded magic (its crc check fails) and land
         // on the real next frame — T1's marker (§1/§7).
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         let mut embedded_magic = Vec::new();
         embedded_magic.extend_from_slice(b"xx");
         embedded_magic.extend_from_slice(&MAGIC);
@@ -3343,7 +3343,7 @@ mod tests {
         // (payload / 16) × (claimed len) bytes of work — quadratic in a record
         // whose size the caller chooses, and an `open()` that never returns.
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         let mut evil = Vec::new();
         while evil.len() < 256 * 1024 {
             evil.extend_from_slice(&MAGIC);
@@ -3378,20 +3378,20 @@ mod tests {
         // author chose. `resynchronization_over_planted_frame_headers_is_bounded`
         // plants its headers back to back, so nothing closes a run there, and
         // it cannot tell those budgets from this one.
-        let marker = codec()
+        let marker_payload = codec()
             .serialize(&FramePayload::Marker(marker(Txn(u64::MAX), 0, 0)))
             .unwrap();
         let mut unit = Vec::new();
         unit.extend_from_slice(&MAGIC);
         unit.extend_from_slice(&(128 * 1024u32).to_le_bytes()); // a len that fits
         unit.extend_from_slice(&0u32.to_le_bytes()); // a crc that will not
-        push_frame(&mut unit, &marker).unwrap(); // …then a frame that closes the run
+        push_frame(&mut unit, &marker_payload).unwrap(); // …then a frame that closes the run
         let mut evil = Vec::new();
         while evil.len() < 256 * 1024 {
             evil.extend_from_slice(&unit);
         }
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         write_txn(&mut writer, 1, vec![evil]);
         write_txn(&mut writer, 2, vec![rec(20)]);
         let segs = list_segments(dir.path()).unwrap();
@@ -3414,7 +3414,7 @@ mod tests {
         // is refused on its length alone — the scan's refusal, fatal at any
         // height, with nothing derived from a prefix.
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         drop(writer);
         let segs = list_segments(dir.path()).unwrap();
@@ -3435,7 +3435,7 @@ mod tests {
     #[test]
     fn torn_tail_reaches_eof() {
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 2, vec![rec(20)]);
         // Crash mid-append: a partial header at the tail.
@@ -3456,7 +3456,7 @@ mod tests {
         // torn: the cut aims at the older segment's marker end, and the whole
         // younger segment is tail to discard (§7).
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         write_txn(&mut writer, 1, vec![vec![7u8; SEGMENT_ROTATE_BYTES as usize]]); // fills seg-1
         write_txn(&mut writer, 2, vec![rec(20)]); // rotates into seg-2
         let segs = list_segments(dir.path()).unwrap();
@@ -3475,7 +3475,7 @@ mod tests {
     #[test]
     fn require_boundary_answers_from_the_committed_markers() {
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 2, vec![rec(20), rec(21)]); // a composite: boundary 3
         write_txn(&mut writer, 4, vec![rec(40)]);
@@ -3503,7 +3503,7 @@ mod tests {
         // it — so the edge is inclusive at all three, and a bound that dropped
         // its own coordinate would answer a short world.
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 2, vec![rec(20), rec(21)]); // a composite: boundary 3
         write_txn(&mut writer, 4, vec![rec(40)]);
@@ -3534,7 +3534,7 @@ mod tests {
         // scan collected to an interior coordinate holds none — answered, as
         // `require_boundary` answers it, with the nearest boundary below.
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 2, vec![rec(20), rec(21)]); // a composite: boundary 3
         write_txn(&mut writer, 4, vec![rec(40)]);
@@ -3557,7 +3557,7 @@ mod tests {
         // a scan collected to anything but the boundary asked would answer a
         // boundary `transact` returned as no boundary at all.
         let dir = tempdir().unwrap();
-        let mut writer = open_fresh(dir.path());
+        let mut writer = fresh_writer(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         let segs = list_segments(dir.path()).unwrap();
         let _ = scan(&segs, 0, None, CHAIN_GENESIS).unwrap().chain_at_boundary(1);

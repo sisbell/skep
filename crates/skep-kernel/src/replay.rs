@@ -77,15 +77,15 @@ pub(crate) struct Unreachable {
     /// boundary a base could still be derived at.
     pub floor: Option<u64>,
     /// Why the NEWEST base this derivation could have used refused, which is
-    /// the whole of what is left to tell an operator once the chain is
-    /// exhausted: a body that will not decode says roll the binary, a failed
-    /// checksum says restore the media, and a bare refusal says neither.
-    /// `None` when no candidate was tried at all — no retained checkpoint, or
-    /// every one of them above the requested boundary.
+    /// the whole of what is left to tell an operator once the fallback chain
+    /// is exhausted: a body that will not decode says roll the binary, a
+    /// failed checksum says restore the media, and a bare refusal says
+    /// neither. `None` when no candidate was tried at all — no retained
+    /// checkpoint, or every one of them above the requested boundary.
     ///
-    /// Only an exhausted chain reaches a caller, so a refusal the fallback
-    /// walked past is dropped: the derivation then succeeded, and why an
-    /// older base was preferred is not a failure to report.
+    /// Only an exhausted fallback chain reaches a caller, so a refusal the
+    /// fallback walked past is dropped: the derivation then succeeded, and
+    /// why an older base was preferred is not a failure to report.
     pub cause: Option<LoadRefused>,
 }
 
@@ -103,7 +103,7 @@ pub(crate) struct Unreachable {
 /// carries the hints forward across everything above it (§7, seam
 /// contract 2).
 ///
-/// The chain value a base carries is its own: a checkpoint's `SKC3` header
+/// The chain value a base carries is its own: a checkpoint's `SKC4` header
 /// holds the chain at its coordinate, and genesis holds
 /// [`journal::CHAIN_GENESIS`] — the one seam replay needs for the chain, since
 /// this is the only site that reads a header.

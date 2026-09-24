@@ -25,13 +25,17 @@ pub(crate) fn stamp_text(stamp: &[u8; 4]) -> String {
 pub enum OpenError {
     /// The journal was written under ANOTHER format: its first scanned
     /// segment opens with a well-formed sync word that is not this build's
-    /// (`SKJ3` under a build writing `SKJ4`). Refused BY NAME, before the
-    /// scan — which would otherwise read the whole segment as one corrupt run
-    /// reaching end-of-file, classify it as the un-acked tail, TRUNCATE the
-    /// segment to nothing and serve an empty board — and before any write, so
-    /// the files are exactly as they were found. Operator-intervention
-    /// condition — not auto-retried; the remedy is the ruled one
-    /// ([`NO_MIGRATION_REMEDY`]): no build reads two formats.
+    /// (`SKJ3` under a build writing `SKJ4`), and the frame after it does not
+    /// carry this build's either, or cannot be read. A format stamps every
+    /// frame, where damage changes one word: a foreign-shaped first word whose
+    /// successor carries this build's stamp is one damaged sync word, which
+    /// [`OpenError::Corruption`] names with a remedy that keeps the board.
+    /// Refused BY NAME, before the scan — which would otherwise read the whole
+    /// segment as one corrupt run reaching end-of-file, classify it as the
+    /// un-acked tail, TRUNCATE the segment to nothing and serve an empty
+    /// board — and before any write, so the files are exactly as they were
+    /// found. Operator-intervention condition — not auto-retried; the remedy
+    /// is the ruled one ([`NO_MIGRATION_REMEDY`]): no build reads two formats.
     ///
     /// A checkpoint under another format is refused the same way but on its
     /// own channel: it is one base among a fallback chain, so it is skipped
@@ -74,42 +78,53 @@ pub enum OpenError {
         /// was ever available.
         cause: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
     },
-    /// Durable committed data the recovered state needs cannot be read. Five
-    /// conditions reach here: a corrupt run inside the genuinely-replayed
-    /// range `(S_load, W]` (a run reaching EOF is the un-acked / torn tail,
-    /// not this); a segment whose frame stream could not be enumerated in
-    /// bounded work, so nothing derived from it is more than a prefix; a
-    /// committed transaction above the base whose marker carries a chain
-    /// value that is not the recomputation over its predecessor's and its
-    /// own records — a CHAIN BREAK: the transaction was rewritten
-    /// consistently with its frame CRCs, or the one it should follow is not
-    /// the one before it; a committed record that does not decode as
-    /// `W::Record`, or one the committed set presents twice; and a committed
-    /// head that leaves no coordinate for a successor, which no sequencer
-    /// here could have written. Halt, never drop — nothing is folded,
-    /// nothing is installed, and nothing is truncated.
-    /// Operator-intervention condition — not auto-retried (§7).
+    /// Durable committed data the recovered state needs cannot be read. Six
+    /// conditions reach here: one DAMAGED SYNC WORD opening the first scanned
+    /// segment — a word shaped like another format's stamp on a frame whose
+    /// successor carries this build's, which the frame CRC does not cover,
+    /// refused by the same probe as [`OpenError::ForeignFormat`] and ahead of
+    /// the scan, since that variant's remedy would discard a board this build
+    /// wrote; a corrupt run inside the genuinely-replayed range `(S_load, W]`
+    /// (a run reaching EOF is the un-acked / torn tail, not this); a segment
+    /// that could not be enumerated in bounded work or read in bounded memory
+    /// — a file longer than any segment this journal's writer produces — so
+    /// nothing derived from it would be more than a prefix; a committed
+    /// transaction above the base whose marker carries a chain value that is
+    /// not the recomputation over its predecessor's and its own records — a
+    /// CHAIN BREAK: the transaction was rewritten consistently with its frame
+    /// CRCs, or the one it should follow is not the one before it; a
+    /// committed record that does not decode as `W::Record`, or one the
+    /// committed set presents twice; and a committed head that leaves no
+    /// coordinate for a successor, which no sequencer here could have
+    /// written. Halt, never drop — nothing is folded, nothing is installed,
+    /// and nothing is truncated. Operator-intervention condition — not
+    /// auto-retried (§7).
     Corruption {
         /// The coordinate naming the damage, which differs by condition: for
-        /// a corrupt run, the next INTACT frame's coordinate — the run's own
-        /// seqs are unreadable, so this bounds the damage rather than
-        /// locating it; for an unbounded resynchronization, the base's own
-        /// coordinate, since the damage lies somewhere above it and the scan
-        /// could not reach past it to say where; for a chain break, the
-        /// `last_seq` of the first transaction whose chain did not verify;
-        /// for an undecodable or repeated record, that record's own `Seq`;
-        /// for an exhausted order, the committed head itself.
+        /// a damaged sync word, the base's own coordinate, where the scan
+        /// would have begun — the probe reads a frame header and no `Seq`;
+        /// for a corrupt run, the next INTACT frame's coordinate — the run's
+        /// own seqs are unreadable, so this bounds the damage rather than
+        /// locating it; for an unbounded resynchronization or an oversized
+        /// segment, the base's own coordinate, since the damage lies
+        /// somewhere above it and the scan could not reach past it to say
+        /// where; for a chain break, the `last_seq` of the first transaction
+        /// whose chain did not verify; for an undecodable or repeated record,
+        /// that record's own `Seq`; for an exhausted order, the committed head
+        /// itself.
         at: Seq,
-        /// The account of what could not be read, for the two conditions
-        /// that have one: a committed record that does not decode as
-        /// `W::Record`, where the serializer's own refusal is what separates
-        /// a writer/reader skew — a binary rolled back over a record format —
-        /// from bit-rot, two conditions this variant otherwise reports
-        /// alike and an operator must not treat alike; and a chain break,
-        /// whose account says which link failed. The other three carry
-        /// `None`: a corrupt run's own bytes are unreadable, an unenumerable
-        /// stream is a work-budget verdict, and an exhausted order is
-        /// arithmetic.
+        /// The account of what could not be read, for the three conditions
+        /// that have one: a damaged sync word, whose account names the word
+        /// found and a remedy that keeps the board — restore the segment —
+        /// where [`OpenError::ForeignFormat`]'s would discard it; a committed
+        /// record that does not decode as `W::Record`, where the serializer's
+        /// own refusal is what separates a writer/reader skew — a binary
+        /// rolled back over a record format — from bit-rot, two conditions
+        /// this variant otherwise reports alike and an operator must not
+        /// treat alike; and a chain break, whose account says which link
+        /// failed. The other three carry `None`: a corrupt run's own bytes
+        /// are unreadable, an unenumerable or oversized segment is a budget
+        /// verdict, and an exhausted order is arithmetic.
         cause: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
     },
 }
@@ -279,9 +294,11 @@ pub enum HistoryError {
     Io(io::Error),
     /// Corrupt data at rest in the scanned region — the same conditions, the
     /// same coordinate and the same account, that [`OpenError::Corruption`]
-    /// carries, with the same halt-never-drop verdict (§7). The exhausted
-    /// `Seq` order is the one route not available here: only a mint site
-    /// reaches it, and this call mints nothing.
+    /// carries, with the same halt-never-drop verdict (§7). Two routes are
+    /// not available here: the exhausted `Seq` order, which only a mint site
+    /// reaches and this call mints nothing; and the damaged sync word, which
+    /// only `open`'s first-sync-word probe names — a bounded read truncates
+    /// nothing, so its own scan meets that frame as a corrupt run instead.
     Corruption {
         /// See [`OpenError::Corruption`].
         at: Seq,

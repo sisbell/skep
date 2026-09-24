@@ -16,7 +16,7 @@
 //! never range-reclaimed (§1/§6/§7).
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::config::SaltSource;
+use crate::error::stamp_text;
 
 /// Per-frame sync word anchoring recovery resynchronization (§1/§7) — and
 /// the journal's FORMAT stamp: the trailing numeral names the format that
@@ -41,11 +42,13 @@ use crate::config::SaltSource;
 /// marker doc's own definition of a format event — and the checkpoint stamp
 /// moved with it (`SKC4`), its `chain_head` being a value under the salted
 /// rule. A segment opening with another format's sync word is refused BY
-/// NAME at `open` ([`foreign_stamp`]) rather than read as this one's.
+/// NAME at `open` ([`first_sync_word`]) rather than read as this one's.
 pub(crate) const MAGIC: [u8; 4] = *b"SKJ4";
 /// The stamp's fixed prefix: what makes four bytes a well-formed journal sync
-/// word of SOME format. [`foreign_stamp`] tells a foreign stamp (`SKJ` + a
-/// numeral this build does not write) from damage (anything else) by it.
+/// word of SOME format. [`first_sync_word`] tells such a word (`SKJ` + a
+/// numeral this build does not write) from damage that is not one (anything
+/// else) by it — and, since every one-bit flip of this build's numeral keeps
+/// the prefix, tells a format from ONE damaged word by the frame after it.
 const STAMP_PREFIX: &[u8; 3] = b"SKJ";
 /// Frame header: magic (4) + len (4) + crc (4).
 pub(crate) const FRAME_HEADER_LEN: usize = 12;
@@ -69,7 +72,8 @@ pub(crate) const MAX_FRAME_LEN: u32 = 64 * 1024 * 1024;
 /// a segment, so one oversized transaction permanently raises the floor of
 /// every later [`crate::Kernel::open`] and every [`crate::Kernel::world_at`]
 /// above that base — a journal that opens on the machine that wrote it and not
-/// on the replica.
+/// on the replica. The reader holds the floor as well as the writer: a segment
+/// longer than twice this figure is refused before a byte of it is read.
 ///
 /// Being EQUAL rather than nested, the two limits do not stack: a transaction
 /// carries its records' frames and a commit marker, so the largest record this
@@ -88,6 +92,20 @@ pub const MAX_TXN_BYTES: u64 = MAX_FRAME_LEN as u64;
 /// txn's barrier fsynced it), preserving marker-as-ack across the boundary
 /// (§1).
 const SEGMENT_ROTATE_BYTES: u64 = 1024 * 1024;
+/// The longest segment this module READS: twice the transaction budget. The
+/// writer appends only to a segment under [`SEGMENT_ROTATE_BYTES`], and a
+/// transaction is at most [`MAX_TXN_BYTES`], so no segment this journal's
+/// writer produces reaches it; a file past it is damage, or not this writer's,
+/// and reading it whole would size an allocation by the file's own claim. It
+/// is what makes the memory floor [`MAX_TXN_BYTES`] promises a fact about the
+/// reader as well as the writer. Twice the budget rather than the writer's
+/// exact maximum, so a later build that lowers the rotation threshold never
+/// refuses a segment an earlier one wrote: this moves only with the format.
+const MAX_SEGMENT_LEN: u64 = 2 * MAX_TXN_BYTES;
+// …which holds only while the threshold is at or below the budget: a threshold
+// moved above it would let an honest segment pass the ceiling, so it moves the
+// ceiling with it.
+const _: () = assert!(SEGMENT_ROTATE_BYTES <= MAX_TXN_BYTES);
 /// Resynchronization budget, as a multiple of a segment's own size: how many
 /// bytes of CRC a scan will spend on rejected frame candidates before it gives
 /// up on enumerating that segment's frame stream (§7). A WORK allowance on
@@ -1216,12 +1234,15 @@ impl RunEnd {
 pub(crate) enum ScanFail {
     /// A segment could not be read.
     Io(io::Error),
-    /// Resynchronization exceeded [`RESYNC_BUDGET_PASSES`]: the frame stream
-    /// could not be enumerated in bounded work, so nothing derived from it
-    /// would be more than a PREFIX of what the segment holds — a committed
-    /// head that may be short, records that may be missing, a boundary set
-    /// that may not be the journal's. Fatal at any height, which is why the
-    /// scan refuses rather than answering with a qualification.
+    /// A segment could not be taken in within the scan's bounds: its
+    /// resynchronization exceeded [`RESYNC_BUDGET_PASSES`], so its frame
+    /// stream could not be enumerated in bounded work, or the file is longer
+    /// than [`MAX_SEGMENT_LEN`], so it could not be read in bounded memory.
+    /// Either way nothing derived from it would be more than a PREFIX of what
+    /// the segment holds — a committed head that may be short, records that
+    /// may be missing, a boundary set that may not be the journal's. Fatal at
+    /// any height, which is why the scan refuses rather than answering with a
+    /// qualification.
     Unbounded {
         /// The base's own coordinate: the damage lies somewhere above it, and
         /// the scan could not reach past it to say where.
@@ -1281,9 +1302,10 @@ pub(crate) struct ScanOutcome {
     /// The transaction boundaries a bounded replay may be asked about, in scan
     /// order — the `Seq` values [`crate::Kernel::transact`] returned. Written
     /// only by [`ScanOutcome::collect_commit`]; read by
-    /// [`ScanOutcome::require_boundary`], which reads the requested value and
-    /// the boundaries below it, so a boundary the collection bound excluded is
-    /// one nothing can ask for.
+    /// [`ScanOutcome::require_boundary`], which reads the requested value, and
+    /// by [`ScanOutcome::nearest_boundary_below`], which reads the boundaries
+    /// below it — so a boundary the collection bound excluded is one nothing
+    /// can ask for.
     committed_boundaries: Vec<u64>,
     /// Corrupt runs in scan order — what [`ScanOutcome::fatal_run_to_head`]
     /// and [`ScanOutcome::fatal_run_anywhere`] answer from. The verdict on a
@@ -1344,7 +1366,8 @@ pub(crate) struct ScanOutcome {
     /// own seq (the base answers that itself). What
     /// [`crate::Kernel::chain_at`] answers, captured in the pass that
     /// verifies every link to the journal's end; read through
-    /// [`ScanOutcome::chain_at_bound`].
+    /// [`ScanOutcome::chain_at_boundary`], which reads its presence as the
+    /// membership test and holds its caller to the bound it is keyed on.
     chain_at_bound: Option<[u8; 32]>,
 }
 
@@ -1368,13 +1391,6 @@ impl ScanOutcome {
     /// ([`ScanOutcome::uncommitted_intact`]'s field), by its own last seq.
     pub(crate) fn uncommitted_intact(&self) -> Option<u64> {
         self.uncommitted_intact
-    }
-
-    /// The chain at the collection bound ([`ScanOutcome::chain_at_bound`]'s
-    /// field): the committed marker's `chain` at `bound`, when one closed
-    /// there above the base.
-    pub(crate) fn chain_at_bound(&self) -> Option<[u8; 32]> {
-        self.chain_at_bound
     }
 
     /// THE CHAIN'S VERDICTS, in the order they speak — the coordinate and
@@ -1473,20 +1489,51 @@ impl ScanOutcome {
 
     /// Whether `at` is one of the committed transaction boundaries this scan
     /// saw — the values [`crate::Kernel::transact`] returns, and the only ones
-    /// a bounded replay may answer at. `Err` carries the greatest boundary at or
-    /// below `at`, never below the base: the base's own seq is itself a
-    /// boundary, and a segment straddling it contributes boundaries below it
-    /// that no longer have a base to fold from.
+    /// a bounded replay may answer at. `Err` carries
+    /// [`ScanOutcome::nearest_boundary_below`] `at`.
     pub(crate) fn require_boundary(&self, at: u64) -> Result<(), u64> {
         if self.committed_boundaries.contains(&at) {
             return Ok(());
         }
-        Err(self
-            .committed_boundaries
+        Err(self.nearest_boundary_below(at))
+    }
+
+    /// The greatest committed boundary below `at`, never below the base: the
+    /// base's own seq is itself a boundary, and a segment straddling it
+    /// contributes boundaries below it that no longer have a base to fold
+    /// from. What a refusal of a non-boundary names as the value a caller may
+    /// safely re-ask with.
+    fn nearest_boundary_below(&self, at: u64) -> u64 {
+        self.committed_boundaries
             .iter()
             .copied()
             .filter(|&b| b < at)
-            .fold(self.s_load, u64::max))
+            .fold(self.s_load, u64::max)
+    }
+
+    /// The commit chain at boundary `at` — the one question
+    /// [`crate::Kernel::chain_at`] asks of a scan above its base: the `chain`
+    /// of the committed marker closing `at`, which this scan captured as it
+    /// verified it. The capture is keyed on the collection bound, so it is
+    /// also the membership test: a committed marker closed at `at` exactly
+    /// when one was captured, and one answer serves both questions. `Err` is
+    /// [`ScanOutcome::require_boundary`]'s: the nearest boundary below.
+    ///
+    /// PRECONDITION — this scan COLLECTED to exactly `at`, above its base
+    /// ([`scan`]'s `bound` was `Some(at)`, and `at > s_load`). The capture is
+    /// keyed on that bound and on nothing else, so a scan collected to any
+    /// other would answer every boundary as absent: a caller's bug, answered
+    /// as one, as [`ScanOutcome::records_to`] answers a fold past its
+    /// collection.
+    pub(crate) fn chain_at_boundary(&self, at: u64) -> Result<[u8; 32], u64> {
+        assert!(
+            self.bound == Some(at) && at > self.s_load,
+            "chain at {at} asked of a scan collected to {:?} above {}: the capture is keyed \
+             on the collection bound (Base::scan)",
+            self.bound,
+            self.s_load
+        );
+        self.chain_at_bound.ok_or_else(|| self.nearest_boundary_below(at))
     }
 
     /// The committed records a fold over `(s_load, bound]` must apply, in
@@ -1671,6 +1718,30 @@ impl PendingTxn {
     }
 }
 
+/// Read one segment whole for [`scan`], refusing a file longer than
+/// [`MAX_SEGMENT_LEN`] on its length alone, before a byte of it is read: that
+/// length is the file's own claim, and an allocation sized by it is what the
+/// ceiling exists to refuse. `take` bounds the read even when the file grows
+/// after its length is read — a live appender beneath
+/// [`crate::Kernel::world_at`] — and a read that reaches past the ceiling
+/// refuses as well, since what it holds is then a prefix of the file.
+fn read_segment(path: &Path, s_load: u64) -> Result<Vec<u8>, ScanFail> {
+    let file = File::open(path)?;
+    let claimed = file.metadata()?.len();
+    if claimed > MAX_SEGMENT_LEN {
+        return Err(ScanFail::Unbounded { at: s_load });
+    }
+    // `claimed` is at most the ceiling, 2^27, so the cast is exact on any 32-
+    // or 64-bit target and the reservation is the file's own size, as
+    // `fs::read` would make it.
+    let mut buf = Vec::with_capacity(claimed as usize);
+    file.take(MAX_SEGMENT_LEN + 1).read_to_end(&mut buf)?;
+    if buf.len() as u64 > MAX_SEGMENT_LEN {
+        return Err(ScanFail::Unbounded { at: s_load });
+    }
+    Ok(buf)
+}
+
 /// Pass 1 (§7): scan in file order (== `Seq` order — in-order append plus the
 /// prior recovery's tail truncation), resynchronizing past bad frames via the
 /// magic word (accepting only intact frames — a coincidental magic inside a
@@ -1698,7 +1769,9 @@ impl PendingTxn {
 /// classification is at any height, and [`ScanOutcome::committed_head`] and the
 /// tail cut must name the last committed marker wherever it sits.
 ///
-/// Memory: one segment's bytes, one transaction's records, and the committed
+/// Memory: one segment's bytes — at most [`MAX_SEGMENT_LEN`], a longer file
+/// being refused ([`ScanFail::Unbounded`]) before a byte of it is read, since
+/// its length is its own claim — one transaction's records, and the committed
 /// records of the scanned region at or below `bound` — the last of which is
 /// the term that grows with the journal, and is what a caller bounds by
 /// checkpointing, or by asking for a lower boundary.
@@ -1738,8 +1811,9 @@ impl PendingTxn {
 /// last seq, naming the transaction that was edited rather than the next
 /// one, whose link then also fails. Neither moves `committed_head`, the
 /// collections or the tail cut: the scan records, the callers halt. And
-/// ONE VALUE IS CAPTURED: the running chain at `bound`
-/// ([`ScanOutcome::chain_at_bound`]), for [`crate::Kernel::chain_at`].
+/// ONE VALUE IS CAPTURED: the running chain at `bound`, which
+/// [`ScanOutcome::chain_at_boundary`] answers [`crate::Kernel::chain_at`]
+/// with.
 ///
 /// `segs` must be ASCENDING by `firstSeq`, as [`list_segments`] produces it.
 /// The skip test, the tail resolution and [`inferred_last_seq`] all read a
@@ -1794,7 +1868,7 @@ pub(crate) fn scan(
         if first_scanned.is_none() {
             first_scanned = Some(seg_index);
         }
-        let buf = fs::read(&seg.path)?;
+        let buf = read_segment(&seg.path, s_load)?;
         // This segment's resynchronization budget. EVERY rejected candidate
         // charges, not only the ones a resync landed on: a payload can plant
         // a valid frame between two expensive rejections, which clears the
@@ -1983,40 +2057,108 @@ pub(crate) fn uncommitted_intact_cause(
     .into()
 }
 
-/// THE FOREIGN-STAMP PROBE (§8 of the encoding report): the first four bytes
-/// of the first segment [`scan`] would read above `s_load` — the same skip
-/// rule, so this looks where the scan will look — when they are a
-/// well-formed journal sync word of ANOTHER format: [`STAMP_PREFIX`] followed
-/// by a numeral this build does not write (`SKJ1`, `SKJ2`, …). `None` for an
-/// empty or absent segment, for this build's own stamp, and for anything
-/// that is not a sync word at all — zeros, a torn header, junk — which is
-/// DAMAGE, and stays the scan's to classify as a corrupt run or the un-acked
-/// tail (the dirty-crash suite's honest outcomes), never a format event.
+/// The account a damaged sync word travels with ([`FirstSyncWord::Damaged`]):
+/// the word found, why it is damage and not a format, and the remedy — which
+/// is NOT [`crate::OpenError::ForeignFormat`]'s, the board being this build's.
+pub(crate) fn damaged_sync_word_cause(
+    found: [u8; 4],
+) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+    format!(
+        "damaged sync word: the first frame the scan would read opens with `{found}`, where the \
+         frame after it opens with this build's `{ours}` — another format's journal carries its \
+         stamp in every frame, so this is one damaged word in a journal this build wrote, and the \
+         frame's CRC does not cover it. Restore the segment from a copy, or rewrite those four \
+         bytes to `{ours}` and reopen, when the scan judges the frame by its CRC; this board needs \
+         no migration",
+        found = stamp_text(&found),
+        ours = stamp_text(&MAGIC),
+    )
+    .into()
+}
+
+/// What the first segment [`scan`] would read opens with — the answer of
+/// [`first_sync_word`], which [`crate::Kernel::open`] asks BEFORE the scan.
+/// A format shows in EVERY frame's sync word, and damage in ONE: the two are
+/// told apart by the frame after the first.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum FirstSyncWord {
+    /// This build's stamp, an empty or absent segment, or no well-formed sync
+    /// word at all — zeros, a torn header, junk: the scan's to classify, as a
+    /// corrupt run or the un-acked tail (the dirty-crash suite's honest
+    /// outcomes), never a format event.
+    Scan,
+    /// A well-formed sync word of ANOTHER format — [`STAMP_PREFIX`] and a
+    /// numeral this build does not write — on a frame whose successor does
+    /// not open with this build's stamp, or cannot be read: another format's
+    /// journal.
+    Foreign([u8; 4]),
+    /// A well-formed sync word that is not this build's, on a frame whose
+    /// successor opens with this build's: ONE damaged word in a journal this
+    /// build wrote. The frame CRC covers the length and the payload and not
+    /// the sync word, so nothing else about the frame says so.
+    Damaged([u8; 4]),
+}
+
+/// THE FIRST-SYNC-WORD PROBE (§8 of the encoding report): what the first
+/// segment [`scan`] would read above `s_load` opens with — the same skip rule,
+/// so this looks where the scan will look.
 ///
 /// Read BEFORE the scan by [`crate::Kernel::open`], because the scan cannot
-/// tell the two apart: an old-format segment contains no frame the new sync
-/// word anchors, so its resynchronization runs to end-of-file, classifies
+/// tell a format from damage: an old-format segment contains no frame the new
+/// sync word anchors, so its resynchronization runs to end-of-file, classifies
 /// the whole segment as the un-acked tail, and the tail cut then TRUNCATES it
-/// to nothing and serves an empty board — an old-stamp board wiped rather
-/// than refused. Refusing on this probe, ahead of the scan and the cut, is
-/// what leaves the files untouched.
-pub(crate) fn foreign_stamp(segs: &[SegmentMeta], s_load: u64) -> io::Result<Option<[u8; 4]>> {
+/// to nothing and serves an empty board — an old-stamp board wiped rather than
+/// refused. Refusing on this probe, ahead of the scan and the cut, is what
+/// leaves the files untouched.
+///
+/// And a foreign-shaped word alone does not name a format: every one-bit flip
+/// of this build's numeral keeps the [`STAMP_PREFIX`], and the frame CRC does
+/// not cover the sync word, so one flipped bit would read as a board of
+/// another format — whose ruled remedy discards the board. So such a word is
+/// judged by its frame's SUCCESSOR, at the offset the first frame's own `len`
+/// names: this build's stamp there is [`FirstSyncWord::Damaged`], anything
+/// else [`FirstSyncWord::Foreign`]. A successor that cannot be read — a
+/// header too short to name its offset, a segment ending first — stays
+/// foreign: a format whose frame header is not this one's puts its successor
+/// wherever it likes, and scanning such a journal would wipe it.
+///
+/// Reads the first frame's header and four bytes at its successor, whatever
+/// the segment's size.
+pub(crate) fn first_sync_word(segs: &[SegmentMeta], s_load: u64) -> io::Result<FirstSyncWord> {
     let Some(first) = segs
         .iter()
         .enumerate()
         .find(|(i, _)| inferred_last_seq(segs, *i).is_none_or(|last| last > s_load))
         .map(|(_, seg)| seg)
     else {
-        return Ok(None);
+        return Ok(FirstSyncWord::Scan);
     };
-    let mut head = Vec::with_capacity(MAGIC.len());
-    File::open(&first.path)?
-        .take(MAGIC.len() as u64)
-        .read_to_end(&mut head)?;
-    let Ok(stamp) = <[u8; 4]>::try_from(head.as_slice()) else {
-        return Ok(None); // shorter than a sync word: damage or empty, not a stamp
+    let mut file = File::open(&first.path)?;
+    let mut opening = Vec::with_capacity(FRAME_HEADER_LEN);
+    (&mut file)
+        .take(FRAME_HEADER_LEN as u64)
+        .read_to_end(&mut opening)?;
+    let Some(&word) = opening.first_chunk::<4>() else {
+        return Ok(FirstSyncWord::Scan); // shorter than a sync word: damage or empty
     };
-    Ok((stamp.starts_with(STAMP_PREFIX) && stamp != MAGIC).then_some(stamp))
+    if word == MAGIC || !word.starts_with(STAMP_PREFIX) {
+        return Ok(FirstSyncWord::Scan);
+    }
+    let Some(len) = opening
+        .get(4..8)
+        .and_then(|len| <[u8; 4]>::try_from(len).ok())
+        .map(u32::from_le_bytes)
+    else {
+        return Ok(FirstSyncWord::Foreign(word));
+    };
+    file.seek(SeekFrom::Start(FRAME_HEADER_LEN as u64 + u64::from(len)))?;
+    let mut successor = Vec::with_capacity(MAGIC.len());
+    file.take(MAGIC.len() as u64).read_to_end(&mut successor)?;
+    Ok(if successor == MAGIC {
+        FirstSyncWord::Damaged(word)
+    } else {
+        FirstSyncWord::Foreign(word)
+    })
 }
 
 /// The tail-truncation step (§7), run AFTER every refusal and BEFORE any
@@ -2781,42 +2923,79 @@ mod tests {
         assert_eq!(scan(&segs, 3, None, [0x77; 32]).unwrap().chain_break(), Some(4));
     }
 
+    /// Every frame of the CLEAN segment at `path` restamped with `stamp` —
+    /// what a journal written under another format looks like to this parser,
+    /// the frame CRC not covering the sync word.
+    fn restamp_every_frame(path: &Path, stamp: &[u8; 4]) {
+        let starts = frame_starts(path);
+        let mut data = fs::read(path).unwrap();
+        for pos in starts {
+            data[pos..pos + 4].copy_from_slice(stamp);
+        }
+        fs::write(path, data).unwrap();
+    }
+
     #[test]
     fn a_foreign_stamp_is_told_from_damage() {
-        // The probe names a FORMAT — a well-formed sync word this build does
-        // not write — and nothing else: this build's own stamp, an empty
-        // segment, a segment shorter than a sync word, and junk at offset 0
-        // all answer `None`, because those are the scan's (an empty journal,
-        // the un-acked tail, a corrupt run), never a format event.
+        // The probe names a FORMAT only where the first frame's well-formed
+        // sync word is not this build's AND the frame after it is not this
+        // build's either: a format stamps every frame, damage changes one
+        // word. This build's own stamp, an empty segment, a segment shorter
+        // than a sync word, and junk at offset 0 are the scan's (an empty
+        // journal, the un-acked tail, a corrupt run), never a format event —
+        // and ONE foreign-shaped word before a frame of this build's is
+        // damage, which every one-bit flip of the numeral is.
         let dir = tempdir().unwrap();
         let mut writer = open_fresh(dir.path());
         write_txn(&mut writer, 1, vec![rec(10)]);
         drop(writer);
         let segs = list_segments(dir.path()).unwrap();
         let seg = segs[0].path.clone();
-        let stamped = |stamp: &[u8]| {
-            let mut data = fs::read(&seg).unwrap();
-            data[..stamp.len()].copy_from_slice(stamp);
+        let clean = fs::read(&seg).unwrap();
+        // Frames: 0 = the record, 1 = its marker.
+        let clean_starts = frame_starts(&seg);
+        let probe = |segs: &[SegmentMeta], s_load: u64| first_sync_word(segs, s_load).unwrap();
+        // The clean segment with its first bytes replaced — damage confined to
+        // the opening, every later frame this build's.
+        let opened_with = |word: &[u8]| {
+            let mut data = clean.clone();
+            data[..word.len()].copy_from_slice(word);
             fs::write(&seg, data).unwrap();
         };
-        assert_eq!(foreign_stamp(&segs, 0).unwrap(), None, "this build's own stamp");
-        stamped(b"SKJ3");
-        assert_eq!(foreign_stamp(&segs, 0).unwrap(), Some(*b"SKJ3"), "the unsalted predecessor");
-        stamped(b"SKJ2");
-        assert_eq!(foreign_stamp(&segs, 0).unwrap(), Some(*b"SKJ2"));
-        stamped(b"SKJ1");
-        assert_eq!(foreign_stamp(&segs, 0).unwrap(), Some(*b"SKJ1"));
-        stamped(b"SKJ9");
-        assert_eq!(foreign_stamp(&segs, 0).unwrap(), Some(*b"SKJ9"));
-        stamped(&[0xAB, 0xCD, 0xEF, 0x01]);
-        assert_eq!(foreign_stamp(&segs, 0).unwrap(), None, "junk is damage, not a format");
-        stamped(&[0, 0, 0, 0]);
-        assert_eq!(foreign_stamp(&segs, 0).unwrap(), None, "zeros are damage, not a format");
+
+        assert_eq!(probe(&segs, 0), FirstSyncWord::Scan, "this build's own stamp");
+        for stamp in [b"SKJ3", b"SKJ2", b"SKJ1", b"SKJ9"] {
+            fs::write(&seg, &clean).unwrap();
+            restamp_every_frame(&seg, stamp);
+            assert_eq!(probe(&segs, 0), FirstSyncWord::Foreign(*stamp), "every frame restamped");
+        }
+        // Every one-bit flip of this build's numeral keeps the `SKJ` prefix,
+        // so by its word alone each reads as another format's stamp; the
+        // frame after it opens with this build's, which no other format's
+        // journal does.
+        for bit in 0..8 {
+            let word = [b'S', b'K', b'J', MAGIC[3] ^ (1 << bit)];
+            opened_with(&word);
+            assert_eq!(probe(&segs, 0), FirstSyncWord::Damaged(word), "bit {bit} of the numeral");
+        }
+        opened_with(&[0xAB, 0xCD, 0xEF, 0x01]);
+        assert_eq!(probe(&segs, 0), FirstSyncWord::Scan, "junk is damage, not a format");
+        opened_with(&[0, 0, 0, 0]);
+        assert_eq!(probe(&segs, 0), FirstSyncWord::Scan, "zeros are damage, not a format");
         fs::write(&seg, b"SKJ").unwrap();
-        assert_eq!(foreign_stamp(&segs, 0).unwrap(), None, "shorter than a sync word");
+        assert_eq!(probe(&segs, 0), FirstSyncWord::Scan, "shorter than a sync word");
         fs::write(&seg, b"").unwrap();
-        assert_eq!(foreign_stamp(&segs, 0).unwrap(), None, "an empty segment");
-        assert_eq!(foreign_stamp(&[], 0).unwrap(), None, "no segment at all");
+        assert_eq!(probe(&segs, 0), FirstSyncWord::Scan, "an empty segment");
+        assert_eq!(probe(&[], 0), FirstSyncWord::Scan, "no segment at all");
+        // A foreign-shaped word whose successor cannot be read stays foreign:
+        // a header too short to say where the successor begins, and a first
+        // frame with nothing after it. Scanning either would wipe it.
+        fs::write(&seg, b"SKJ3\x05\x00").unwrap();
+        assert_eq!(probe(&segs, 0), FirstSyncWord::Foreign(*b"SKJ3"), "a header cut short");
+        opened_with(b"SKJ3");
+        let lone = fs::read(&seg).unwrap()[..clean_starts[1]].to_vec();
+        fs::write(&seg, lone).unwrap();
+        assert_eq!(probe(&segs, 0), FirstSyncWord::Foreign(*b"SKJ3"), "no successor to read");
 
         // The probe looks where the scan looks: a closed segment the base
         // embodies is skipped, so a foreign stamp there is not read — and
@@ -2828,16 +3007,11 @@ mod tests {
         drop(writer);
         let segs = list_segments(dir.path()).unwrap();
         assert_eq!(segs.len(), 2, "the fixture rotates");
-        let stamp_seg = |path: &Path, stamp: &[u8; 4]| {
-            let mut data = fs::read(path).unwrap();
-            data[..4].copy_from_slice(stamp);
-            fs::write(path, data).unwrap();
-        };
-        stamp_seg(&segs[0].path, b"SKJ2");
-        assert_eq!(foreign_stamp(&segs, 0).unwrap(), Some(*b"SKJ2"), "seg-1 is read from genesis");
-        assert_eq!(foreign_stamp(&segs, 1).unwrap(), None, "seg-1 is skipped above a base at 1");
-        stamp_seg(&segs[1].path, b"SKJ2");
-        assert_eq!(foreign_stamp(&segs, 1).unwrap(), Some(*b"SKJ2"), "seg-2 is read");
+        restamp_every_frame(&segs[0].path, b"SKJ2");
+        assert_eq!(probe(&segs, 0), FirstSyncWord::Foreign(*b"SKJ2"), "seg-1 is read from genesis");
+        assert_eq!(probe(&segs, 1), FirstSyncWord::Scan, "seg-1 is skipped above a base at 1");
+        restamp_every_frame(&segs[1].path, b"SKJ2");
+        assert_eq!(probe(&segs, 1), FirstSyncWord::Foreign(*b"SKJ2"), "seg-2 is read");
     }
 
     #[test]
@@ -3232,6 +3406,33 @@ mod tests {
     }
 
     #[test]
+    fn a_segment_longer_than_any_writer_produces_is_refused_before_it_is_read() {
+        // A segment is read WHOLE, so its length sizes an allocation, and a
+        // file's length is its own claim: damage, or a stray or concatenated
+        // file bearing a segment's name, would size one as it pleased. No
+        // writer here produces a segment past `MAX_SEGMENT_LEN`, so one past it
+        // is refused on its length alone — the scan's refusal, fatal at any
+        // height, with nothing derived from a prefix.
+        let dir = tempdir().unwrap();
+        let mut writer = open_fresh(dir.path());
+        write_txn(&mut writer, 1, vec![rec(10)]);
+        drop(writer);
+        let segs = list_segments(dir.path()).unwrap();
+        // Sparse: the length costs no disk.
+        OpenOptions::new()
+            .write(true)
+            .open(&segs[0].path)
+            .unwrap()
+            .set_len(MAX_SEGMENT_LEN + 1)
+            .unwrap();
+        let fail = scan(&segs, 0, None, CHAIN_GENESIS).err();
+        assert!(
+            matches!(fail, Some(ScanFail::Unbounded { at: 0 })),
+            "got {fail:?}"
+        );
+    }
+
+    #[test]
     fn torn_tail_reaches_eof() {
         let dir = tempdir().unwrap();
         let mut writer = open_fresh(dir.path());
@@ -3324,6 +3525,42 @@ mod tests {
         // …and 3 is then a boundary nothing can ask about, so the nearest
         // answerable one is 1 — never the interior coordinate 2.
         assert_eq!(out.require_boundary(3), Err(1));
+    }
+
+    #[test]
+    fn the_chain_at_a_boundary_is_its_capture_and_its_absence_the_nearest_below() {
+        // One capture answers both of `chain_at`'s questions: a scan collected
+        // to a boundary holds the chain the marker closing it carries, and a
+        // scan collected to an interior coordinate holds none — answered, as
+        // `require_boundary` answers it, with the nearest boundary below.
+        let dir = tempdir().unwrap();
+        let mut writer = open_fresh(dir.path());
+        write_txn(&mut writer, 1, vec![rec(10)]);
+        write_txn(&mut writer, 2, vec![rec(20), rec(21)]); // a composite: boundary 3
+        write_txn(&mut writer, 4, vec![rec(40)]);
+        let segs = list_segments(dir.path()).unwrap();
+        let starts = frame_starts(&segs[0].path);
+        // Frames: 0=T1 rec, 1=T1 marker, 2..=3=T2 recs, 4=T2 marker, 5=T3 rec, 6=T3 marker.
+        let at_3 = scan(&segs, 0, Some(3), CHAIN_GENESIS).unwrap();
+        assert_eq!(at_3.chain_at_boundary(3), Ok(chain_of_marker_at(&segs[0].path, starts[4])));
+        let at_4 = scan(&segs, 0, Some(4), CHAIN_GENESIS).unwrap();
+        assert_eq!(at_4.chain_at_boundary(4), Ok(chain_of_marker_at(&segs[0].path, starts[6])));
+        // A composite's interior coordinate closes no marker.
+        let at_2 = scan(&segs, 0, Some(2), CHAIN_GENESIS).unwrap();
+        assert_eq!(at_2.chain_at_boundary(2), Err(1));
+    }
+
+    #[test]
+    #[should_panic(expected = "keyed on the collection bound")]
+    fn a_chain_asked_of_a_scan_not_collected_to_it_is_refused_as_the_callers_bug() {
+        // The capture is keyed on the collection bound and on nothing else, so
+        // a scan collected to anything but the boundary asked would answer a
+        // boundary `transact` returned as no boundary at all.
+        let dir = tempdir().unwrap();
+        let mut writer = open_fresh(dir.path());
+        write_txn(&mut writer, 1, vec![rec(10)]);
+        let segs = list_segments(dir.path()).unwrap();
+        let _ = scan(&segs, 0, None, CHAIN_GENESIS).unwrap().chain_at_boundary(1);
     }
 
     /// Byte offset just past the last INTACT frame (walks until a bad frame).

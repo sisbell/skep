@@ -18,7 +18,9 @@ use parking_lot::{Mutex, MutexGuard};
 use crate::checkpoint;
 use crate::config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
 use crate::error::{CheckpointError, HistoryError, OpenError, TxnError};
-use crate::journal::{self, CommitFail, Journal, JournalWriter, ScanFail, UnwindRepair};
+use crate::journal::{
+    self, CommitFail, FirstSyncWord, Journal, JournalWriter, ScanFail, UnwindRepair,
+};
 use crate::replay;
 use crate::{LockKey, Seq, WorldState};
 
@@ -550,15 +552,17 @@ impl<W: WorldState> Kernel<W> {
     /// REFUSAL PRECEDENCE — the steps above are the order in which refusals
     /// speak: [`OpenError::InvalidConfig`] precedes the lock, the lock
     /// precedes any read of the journal, [`OpenError::BadCheckpoint`]
-    /// precedes [`OpenError::ForeignFormat`] — the first scanned segment's
-    /// stamp is read once the base has said where the scan begins, and
-    /// before a byte of the scan — which precedes [`OpenError::Corruption`],
-    /// and EVERY route to `Corruption`, in the order they speak — an
-    /// unenumerable frame stream, the classified corrupt run, the base's own
-    /// link, the intact transaction its marker does not close, the chain
-    /// break, the exhausted `Seq` order, and the fold's own verdict on an
-    /// undecodable or repeated record — precedes the tail truncation, which
-    /// is why a halt never cuts anything.
+    /// precedes the first-sync-word probe — the first scanned segment's
+    /// opening is read once the base has said where the scan begins, and
+    /// before a byte of the scan — which answers [`OpenError::ForeignFormat`]
+    /// for a journal of another format and [`OpenError::Corruption`] for one
+    /// damaged sync word; and EVERY route to `Corruption`, in the order they
+    /// speak — the damaged sync word, an unenumerable or oversized segment,
+    /// the classified corrupt run, the base's own link, the intact
+    /// transaction its marker does not close, the chain break, the exhausted
+    /// `Seq` order, and the fold's own verdict on an undecodable or repeated
+    /// record — precedes the tail truncation, which is why a halt never cuts
+    /// anything.
     ///
     /// CALLER CONTRACT — `genesis` (= Σ₀) MUST be byte-identical on every
     /// `open()` of a given journal: recovery folds journaled DELTAS onto it,
@@ -623,29 +627,44 @@ impl<W: WorldState> Kernel<W> {
             OpenError::BadCheckpoint { cause: fail.cause }
         })?;
 
-        // THE FOREIGN-STAMP REFUSAL, ahead of the scan (the encoding report's
+        // THE FIRST-SYNC-WORD PROBE, ahead of the scan (the encoding report's
         // §8; the owner's ruling of 2026-09-23). A segment written under
         // another format holds no frame this build's sync word anchors, so
         // the scan would read the whole of it as one corrupt run reaching
         // end-of-file — the un-acked tail — and the cut below would TRUNCATE
         // it to nothing and serve an empty board over a journal it had just
         // erased. Refused by name instead, before a byte is scanned and
-        // before anything is written: the files stay as they were found.
-        if let Some(found) = journal::foreign_stamp(&segs, base.s_load())? {
-            return Err(OpenError::ForeignFormat {
-                found,
-                expected: journal::MAGIC,
-            });
+        // before anything is written: the files stay as they were found. A
+        // single damaged sync word — foreign-shaped, before a frame of this
+        // build's — is refused as early, and as the damage it is: its remedy
+        // is to restore the segment, where a format's discards the board.
+        match journal::first_sync_word(&segs, base.s_load())? {
+            FirstSyncWord::Scan => {}
+            FirstSyncWord::Foreign(found) => {
+                return Err(OpenError::ForeignFormat {
+                    found,
+                    expected: journal::MAGIC,
+                });
+            }
+            // The probe reads a frame header and no `Seq`, so the coordinate
+            // is the base's own: where the scan would have begun.
+            FirstSyncWord::Damaged(found) => {
+                return Err(OpenError::Corruption {
+                    at: Seq(base.s_load()),
+                    cause: Some(journal::damaged_sync_word_cause(found)),
+                });
+            }
         }
 
         // Pass 1: derive W, classify the corrupt runs and verify the chain
-        // (§7). A scan that could not enumerate the frame stream produces no
-        // outcome at all and halts here. Of the runs it does report, those
-        // beyond W and the EOF ones are the un-acked/torn tail, physically
-        // discarded below, and those at or below S_load are already embodied
-        // in the base. The run verdict speaks before the chain's: a run that
-        // swallowed a transaction breaks the chain at the next one, and the
-        // run names the cause.
+        // (§7). A scan that could not take a segment in within its bounds —
+        // enumerate its frame stream in bounded work, or read it in bounded
+        // memory — produces no outcome at all and halts here. Of the runs it
+        // does report, those beyond W and the EOF ones are the un-acked/torn
+        // tail, physically discarded below, and those at or below S_load are
+        // already embodied in the base. The run verdict speaks before the
+        // chain's: a run that swallowed a transaction breaks the chain at the
+        // next one, and the run names the cause.
         let scan = base.scan(&segs, None).map_err(|fail| match fail {
             ScanFail::Io(e) => OpenError::Io(e),
             ScanFail::Unbounded { at } => OpenError::Corruption {
@@ -1118,32 +1137,27 @@ impl<W: WorldState> Kernel<W> {
     /// (`retain_checkpoints`) that drops the file — the base is the one durable
     /// record of a reclaimed checkpoint's coordinate.
     ///
-    /// Reads the newest file's HEADER ALONE — never the body — so it costs one
-    /// directory list and one short read, not a world deserialization. The
-    /// header layout is [`checkpoint`]'s: an 88-byte `SKC4` header whose last
-    /// two 32-byte fields are `chain_head` (at offset 24) and `body_hash` (at
-    /// 56). FAIL-QUIET — `None` on any I/O error or a file shorter than its own
-    /// header — because the head writer that reads this must never fail a
-    /// commit over it: it writes `base: null` instead. Lock-free, like
+    /// Reads the newest file's HEADER ALONE — its fixed 88 bytes, never the
+    /// body, which is the whole serialized world — so it costs one directory
+    /// list and one short read whatever the world's size. The header is read
+    /// through the checkpoint module's one header parse and held to every
+    /// check a header can pass without its body: this build's stamp, and a
+    /// seq agreeing with the file's name. A header either check refuses names
+    /// no base: `None`, as on any I/O error or a file shorter than its own
+    /// header — FAIL-QUIET, because the head writer that reads this must never
+    /// fail a commit over it, and writes `base: null` instead. The body is NOT
+    /// verified: its checksum and hash need the body, and `body_hash` is what
+    /// a party holding the file verifies it by. Lock-free, like
     /// [`Kernel::chain_head`]: it consults the directory, not the applier, so a
-    /// checkpoint racing this read is at worst not-yet-seen, never a torn one
-    /// ([`crate::checkpoint::write`] renames a whole file into place).
+    /// checkpoint racing this read is at worst not-yet-seen — or, removed by a
+    /// racing retention between the listing and the read, `None` — and never a
+    /// torn one (a checkpoint is renamed into place whole).
     pub fn newest_checkpoint(&self) -> Option<(Seq, [u8; 32], [u8; 32])> {
         let journaled = self.journaled.as_ref()?;
         // `list` is ascending by seq (§6), so the last entry is the newest.
         let newest = checkpoint::list(&journaled.dir).ok()?.pop()?;
-        let path = journaled.dir.join(format!("checkpoint.{}", newest.seq));
-        let data = std::fs::read(&path).ok()?;
-        // The `SKC4` header (checkpoint.rs owns the layout): 88 bytes, the last
-        // two 32-byte fields the chain head and the body hash. Read at those
-        // offsets rather than through `load`, which deserializes the whole body
-        // to hand back a world this caller does not want.
-        if data.len() < 88 {
-            return None;
-        }
-        let chain_head: [u8; 32] = data[24..56].try_into().ok()?;
-        let body_hash: [u8; 32] = data[56..88].try_into().ok()?;
-        Some((Seq(newest.seq), chain_head, body_hash))
+        let header = newest.header().ok()?;
+        Some((Seq(newest.seq), header.chain_head, header.body_hash))
     }
 
     /// The committed world as of boundary `at` — READ-ONLY bounded replay
@@ -1359,16 +1373,12 @@ impl<W: WorldState> Kernel<W> {
                 cause: Some(cause),
             });
         }
-        if let Err(nearest) = scan.require_boundary(at.0) {
-            return Err(HistoryError::NotABoundary {
-                nearest: Seq(nearest),
-            });
-        }
-        // A boundary above the base that the scan admitted closed a committed
-        // marker at exactly `at`, whose chain the scan captured as it verified
-        // it. Nothing below is reachable: `require_boundary` admits only what
-        // `collect_commit` collected, which is what the capture keyed on.
-        Ok(scan.chain_at_bound().expect("a committed boundary above the base has a marker's chain"))
+        // The scan was collected to exactly `at`, above its base, so the chain
+        // it captured there answers both whether `at` is a boundary and the
+        // value at it.
+        scan.chain_at_boundary(at.0).map_err(|nearest| HistoryError::NotABoundary {
+            nearest: Seq(nearest),
+        })
     }
 
     /// Shutdown/checkpoint hook. Under per-commit `Fsync` every commit
@@ -1425,8 +1435,9 @@ mod tests {
     /// [`Kernel::newest_checkpoint`] (QUEUE item 10 piece 2, the head's `base`):
     /// `None` until a checkpoint exists, then the header's triple — the
     /// checkpointed seq, the chain at it (equal to [`Kernel::chain_head`]), and
-    /// a real body hash. Read off the header alone, so it agrees with the
-    /// values `checkpoint()` wrote without deserializing the body.
+    /// the SHA-256 of the body `checkpoint()` wrote. Read off the header alone:
+    /// a file cut to its header answers the same, and a header under another
+    /// format's stamp names no base.
     #[test]
     fn newest_checkpoint_is_none_then_the_header_triple() {
         let dir = tempfile::tempdir().unwrap();
@@ -1450,7 +1461,32 @@ mod tests {
             kernel.chain_head(),
             "the header's chain_head is the chain at the checkpointed head"
         );
-        assert_ne!(body_hash, [0u8; 32], "the body hash is a real SHA-256, not the zero seed");
+        // 88: the header length the checkpoint layout test pins.
+        let path = dir.path().join(format!("checkpoint.{}", s.0));
+        let full = fs::read(&path).unwrap();
+        assert_eq!(
+            body_hash,
+            <[u8; 32]>::from(<sha2::Sha256 as sha2::Digest>::digest(&full[88..])),
+            "the body hash is the SHA-256 of the body written"
+        );
+
+        // Read off the header ALONE: cut to its first 88 bytes, the file
+        // answers the same triple — where a read through `load` would read,
+        // hash and decode a body that is no longer there, and refuse.
+        fs::write(&path, &full[..88]).unwrap();
+        assert_eq!(
+            kernel.newest_checkpoint(),
+            Some((seq, chain_head, body_hash)),
+            "the triple is the header's, whatever follows it"
+        );
+
+        // …and held to what a header can be checked for without its body: under
+        // another format's stamp, its bytes 24..88 are not this format's hashes,
+        // and the newest checkpoint names no base at all.
+        let mut foreign = full[..88].to_vec();
+        foreign[..4].copy_from_slice(b"SKC3");
+        fs::write(&path, &foreign).unwrap();
+        assert_eq!(kernel.newest_checkpoint(), None, "another format's header names no base");
     }
 
     #[test]
@@ -1532,6 +1568,57 @@ mod tests {
             !matches!(out, Err(OpenError::ForeignFormat { .. })),
             "junk at offset 0 was read as a format stamp: {out:?}"
         );
+    }
+
+    #[test]
+    fn one_damaged_sync_word_is_refused_as_damage_not_as_another_format() {
+        // Every one-bit flip of this build's numeral keeps the `SKJ` prefix,
+        // and the frame CRC does not cover the sync word — so one flipped bit
+        // at byte 3 of the first frame reads, by its word alone, as a board of
+        // another format, whose ruled remedy is to delete the data directory.
+        // The frame after it still opens with this build's stamp, which no
+        // other format's journal does: the open refuses it as the damage it
+        // is, before the scan and before any write, with a remedy that keeps
+        // the board.
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let k = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
+                .unwrap();
+            for x in [10u64, 20] {
+                k.transact::<_, ()>(&[], |stg| {
+                    stg.push(x);
+                    Ok(())
+                })
+                .unwrap();
+            }
+        }
+        let seg = journal::segment_path(dir.path(), 1);
+        let mut data = fs::read(&seg).unwrap();
+        data[3] ^= 0x01; // `SKJ4` → `SKJ5`
+        fs::write(&seg, &data).unwrap();
+
+        let err = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
+            .expect_err("a damaged sync word is not a board to open");
+        assert!(
+            matches!(err, OpenError::Corruption { at: Seq(0), cause: Some(_) }),
+            "got {err:?}"
+        );
+        let rendered = err.to_string();
+        for named in ["damaged sync word", "`SKJ5`", "`SKJ4`"] {
+            assert!(rendered.contains(named), "{named} missing from: {rendered}");
+        }
+        assert!(
+            !rendered.contains("delete the data directory"),
+            "one damaged word was answered with the remedy for another format: {rendered}"
+        );
+        assert!(std::error::Error::source(&err).is_some(), "the account travels");
+        assert_eq!(fs::read(&seg).unwrap(), data, "a halted open touched the segment");
+        // …and it keeps refusing: a halt writes nothing, so nothing repairs it.
+        assert!(matches!(
+            Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new()),
+            Err(OpenError::Corruption { at: Seq(0), .. })
+        ));
+        assert_eq!(fs::read(&seg).unwrap(), data);
     }
 
     #[test]

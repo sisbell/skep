@@ -19,7 +19,7 @@
 //! check `load` runs before anything else.
 
 use std::fs::{self, File};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use bincode::Options;
@@ -40,8 +40,9 @@ use crate::journal::{codec, fsync_dir};
 // no `SKC3` header's is. A checkpoint under another stamp is refused at
 // `load` naming the stamp found.
 const MAGIC: [u8; 4] = *b"SKC4";
-/// The header's fields, at the offsets `write` lays them down and `load`
-/// splits them at — one spelling of each, so the two cannot drift.
+/// The header's fields, at the offsets `write` lays them down and
+/// [`parse_header`] reads them at — one spelling of each, so the two cannot
+/// drift.
 const SEQ_AT: usize = 4;
 const CRC_AT: usize = 12;
 const BODY_LEN_AT: usize = 16;
@@ -49,9 +50,73 @@ const CHAIN_HEAD_AT: usize = 24;
 const BODY_HASH_AT: usize = 56;
 const HEADER_LEN: usize = 88;
 
+/// The refusal a file too short to hold [`HEADER_LEN`] bytes answers with,
+/// whichever reader met it.
+const SHORT_OF_HEADER: &str = "checkpoint is shorter than its own header";
+
 /// SHA-256 over a checkpoint body — the header's `body_hash`.
 fn body_hash(body: &[u8]) -> [u8; 32] {
     Sha256::digest(body).into()
+}
+
+/// The `N`-byte field at offset `AT` of a header. The window is checked
+/// against [`HEADER_LEN`] when this is COMPILED, for every field any reader
+/// names, so no read of a header can fail on its bounds — the array type
+/// fixes the header's length, and this fixes each field inside it.
+fn field<const AT: usize, const N: usize>(header: &[u8; HEADER_LEN]) -> [u8; N] {
+    const { assert!(AT + N <= HEADER_LEN, "a header field lies past HEADER_LEN") };
+    std::array::from_fn(|i| header[AT + i])
+}
+
+/// A checkpoint header as [`fn@write`] lays it down, read under every check a
+/// header can pass without its body ([`parse_header`], the only site that
+/// makes one): this build's stamp, and a seq agreeing with the file's name.
+/// The body's own checks — its length, checksum and hash — are
+/// [`CheckpointMeta::load`]'s, which alone reads the body.
+#[derive(Debug)]
+pub(crate) struct Header {
+    /// CRC32C over the body, as written.
+    crc: u32,
+    /// The body's length in bytes, as written.
+    body_len: u64,
+    /// The commit chain's value at this checkpoint's seq.
+    pub chain_head: [u8; 32],
+    /// SHA-256 over the body — the header's commitment to it, which a party
+    /// holding the file verifies the body by.
+    pub body_hash: [u8; 32],
+}
+
+/// The one parse of a checkpoint header, for [`CheckpointMeta::load`] and
+/// [`CheckpointMeta::header`] alike, in the order that makes each check mean
+/// something: the stamp FIRST, so another format's header has none of its
+/// other fields read as this format's — refused by name with the ruled remedy
+/// ([`NO_MIGRATION_REMEDY`]) — then the seq against `named_seq`, the
+/// directory entry's claim. The name-versus-header cross-check compares two
+/// independent sources, which is what makes it a check rather than a
+/// tautology: the seq comes from the directory, the header from the bytes.
+fn parse_header(named_seq: u64, bytes: &[u8; HEADER_LEN]) -> Result<Header, LoadRefused> {
+    let stamp: [u8; 4] = field::<0, 4>(bytes);
+    if stamp != MAGIC {
+        return Err(format!(
+            "checkpoint is not this build's format: it opens with the stamp `{}`, this build \
+             reads and writes `{}` only; {NO_MIGRATION_REMEDY}",
+            stamp_text(&stamp),
+            stamp_text(&MAGIC)
+        )
+        .into());
+    }
+    let seq = u64::from_le_bytes(field::<SEQ_AT, 8>(bytes));
+    if seq != named_seq {
+        return Err(
+            format!("checkpoint header claims seq {seq}, its name claims {named_seq}").into(),
+        );
+    }
+    Ok(Header {
+        crc: u32::from_le_bytes(field::<CRC_AT, 4>(bytes)),
+        body_len: u64::from_le_bytes(field::<BODY_LEN_AT, 8>(bytes)),
+        chain_head: field::<CHAIN_HEAD_AT, 32>(bytes),
+        body_hash: field::<BODY_HASH_AT, 32>(bytes),
+    })
 }
 
 /// What a loaded checkpoint hands back: the world, and the commit chain's
@@ -103,64 +168,63 @@ impl CheckpointMeta {
     /// `W` format change, whose remedy is to roll the binary rather than to
     /// restore the media.
     ///
-    /// The header this splits at [`HEADER_LEN`] is the one [`fn@write`]
-    /// appends, field for field; see there for what a drifted half costs,
-    /// which is every retained base at once and no signal that it happened.
-    ///
-    /// The name-versus-header cross-check compares two independent sources,
-    /// which is what makes it a check rather than a tautology: the seq comes
-    /// from the directory entry, the header from the bytes.
+    /// Its header is the one [`fn@write`] appends, field for field, read
+    /// through [`parse_header`] — the parse [`CheckpointMeta::header`] shares;
+    /// see [`fn@write`] for what a drifted half costs, which is every retained
+    /// base at once and no signal that it happened.
     pub(crate) fn load<W: DeserializeOwned>(&self) -> Result<Loaded<W>, LoadRefused> {
         let data = fs::read(&self.path)?;
-        if data.len() < HEADER_LEN {
-            return Err("checkpoint is shorter than its own header".into());
-        }
-        if data[0..SEQ_AT] != MAGIC {
-            let found: [u8; 4] = data[0..SEQ_AT].try_into().unwrap();
+        let Some((header, body)) = data.split_first_chunk::<HEADER_LEN>() else {
+            return Err(SHORT_OF_HEADER.into());
+        };
+        let header = parse_header(self.seq, header)?;
+        if body.len() as u64 != header.body_len {
             return Err(format!(
-                "checkpoint is not this build's format: it opens with the stamp `{}`, this build \
-                 reads and writes `{}` only; {NO_MIGRATION_REMEDY}",
-                stamp_text(&found),
-                stamp_text(&MAGIC)
+                "checkpoint body is {} bytes, its header claims {}",
+                body.len(),
+                header.body_len
             )
             .into());
         }
-        // The length check above is what makes these five infallible, so a
-        // failure here is a reordering rather than a bad base and must not be
-        // answered as one.
-        let seq = u64::from_le_bytes(data[SEQ_AT..CRC_AT].try_into().unwrap());
-        let crc = u32::from_le_bytes(data[CRC_AT..BODY_LEN_AT].try_into().unwrap());
-        let body_len = u64::from_le_bytes(data[BODY_LEN_AT..CHAIN_HEAD_AT].try_into().unwrap());
-        let chain_head: [u8; 32] = data[CHAIN_HEAD_AT..BODY_HASH_AT].try_into().unwrap();
-        let claimed_hash: [u8; 32] = data[BODY_HASH_AT..HEADER_LEN].try_into().unwrap();
-        if seq != self.seq {
-            return Err(
-                format!("checkpoint header claims seq {seq}, its name claims {}", self.seq).into(),
-            );
-        }
-        let body = &data[HEADER_LEN..];
-        if body.len() as u64 != body_len {
-            return Err(format!(
-                "checkpoint body is {} bytes, its header claims {body_len}",
-                body.len()
-            )
-            .into());
-        }
-        if crc32c::crc32c(body) != crc {
+        if crc32c::crc32c(body) != header.crc {
             return Err(
                 "checkpoint body failed its header checksum (bit-rot or a torn write)".into(),
             );
         }
-        if body_hash(body) != claimed_hash {
+        if body_hash(body) != header.body_hash {
             return Err("checkpoint body failed its header hash (bit-rot or a torn write)".into());
         }
         match codec().deserialize(body) {
-            Ok(world) => Ok(Loaded { world, chain_head }),
+            Ok(world) => Ok(Loaded {
+                world,
+                chain_head: header.chain_head,
+            }),
             // The unsizing coercion site: `bincode::Error` is a boxed
             // `ErrorKind`, which unsizes against this function's return type
             // here and would need a `From` impl that does not exist under `?`.
             Err(skew) => Err(skew),
         }
+    }
+
+    /// This checkpoint's header, read ALONE — [`HEADER_LEN`] bytes, and
+    /// nothing after them — under every check a header can pass without its
+    /// body ([`parse_header`]): this build's stamp, and a seq agreeing with
+    /// the file's name. So it costs one short read whatever the world's size,
+    /// where [`CheckpointMeta::load`] reads and hashes the whole serialized
+    /// world. The body is NOT verified: its checksum and hash need the body,
+    /// and `body_hash` is what a party holding the file verifies it by.
+    pub(crate) fn header(&self) -> Result<Header, LoadRefused> {
+        let mut bytes = [0u8; HEADER_LEN];
+        File::open(&self.path)?
+            .read_exact(&mut bytes)
+            .map_err(|e| -> LoadRefused {
+                if e.kind() == io::ErrorKind::UnexpectedEof {
+                    SHORT_OF_HEADER.into()
+                } else {
+                    e.into()
+                }
+            })?;
+        parse_header(self.seq, &bytes)
     }
 }
 
@@ -257,8 +321,9 @@ impl From<io::Error> for WriteFail {
 /// transaction that installed it carried in its marker — and rides the
 /// header so a replay above this base continues the chain from it.
 ///
-/// Stated as a pair with [`CheckpointMeta::load`], which splits the header
-/// this builds at [`HEADER_LEN`], because the layout and the split are one
+/// Stated as a pair with [`parse_header`], which reads the header this builds
+/// at [`HEADER_LEN`] for both [`CheckpointMeta::load`] and
+/// [`CheckpointMeta::header`], because the layout and the parse are one
 /// agreement: a field appended here without that constant moving with it
 /// leaves `body_len` disagreeing with the body, and EVERY retained base is
 /// then unloadable — recovery falls silently to genesis where it is
@@ -409,6 +474,53 @@ mod tests {
         for named in ["`SKC2`", "`SKC4`", "not this build's format", "delete the data directory"] {
             assert!(refused.contains(named), "{named} missing from: {refused}");
         }
+    }
+
+    #[test]
+    fn a_header_reads_without_its_body_under_the_checks_a_header_holds() {
+        // `header` is what a published head names a base by, so it must cost
+        // the header and never the world: it reads HEADER_LEN bytes and stops
+        // — a file cut to its header answers the same, where `load`, which
+        // verifies the body, refuses — and it holds those bytes to every check
+        // that needs no body: this build's stamp, and a seq the name agrees
+        // with.
+        let dir = tempdir().unwrap();
+        write(dir.path(), 7, &world(), &CHAIN).expect("fixture checkpoint");
+        let path = checkpoint_path(dir.path(), 7);
+        let data = fs::read(&path).unwrap();
+        let written_hash = <[u8; 32]>::from(Sha256::digest(&data[HEADER_LEN..]));
+        let header_of = |dir: &Path| list(dir).unwrap()[0].header();
+
+        let header = header_of(dir.path()).expect("the header reads");
+        assert_eq!((header.chain_head, header.body_hash), (CHAIN, written_hash));
+
+        // Cut to its header: nothing after it is read, so the answer is the
+        // same — and the body `load` must verify is no longer there.
+        fs::write(&path, &data[..HEADER_LEN]).unwrap();
+        let header = header_of(dir.path()).expect("the header reads without its body");
+        assert_eq!((header.chain_head, header.body_hash), (CHAIN, written_hash));
+        assert!(list(dir.path()).unwrap()[0].load::<Vec<u64>>().is_err());
+
+        // One byte short of a header is not one.
+        fs::write(&path, &data[..HEADER_LEN - 1]).unwrap();
+        let refused = header_of(dir.path()).expect_err("short of its own header");
+        assert!(refused.to_string().contains("shorter"), "got {refused}");
+
+        // Another format's stamp is refused by name, as `load` refuses it.
+        let mut foreign = data.clone();
+        foreign[..4].copy_from_slice(b"SKC3");
+        fs::write(&path, &foreign).unwrap();
+        let refused = header_of(dir.path()).expect_err("another format's header");
+        assert!(refused.to_string().contains("`SKC3`"), "got {refused}");
+
+        // A whole, valid file under another checkpoint's name: the seq its
+        // bytes claim is not the seq its name does.
+        fs::write(&path, &data).unwrap();
+        fs::rename(&path, checkpoint_path(dir.path(), 8)).unwrap();
+        let listed = list(dir.path()).unwrap();
+        assert_eq!(listed[0].seq, 8);
+        let refused = listed[0].header().expect_err("a misnamed header");
+        assert!(refused.to_string().contains("claims seq 7"), "got {refused}");
     }
 
     #[test]

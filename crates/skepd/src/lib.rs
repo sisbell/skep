@@ -98,11 +98,15 @@ pub use server::{
 };
 
 /// The engine types this crate's public surface hands out: the world
-/// [`Daemon::world_at`] answers with, why it refused, and the failure
-/// [`Daemon::open`] reports. Re-exported because skepd is the one thing
-/// permitted to depend on the engine (Engine Composition Contract) — a
-/// caller that must name any of the three would otherwise have to take that
-/// dependency itself, the one dependency this crate exists to hold alone.
+/// [`Daemon::world_at`] answers with, why it refused, the failure
+/// [`Daemon::open`] reports, and the kernel refusal that failure carries —
+/// the `OpenError` [`DaemonError::Engine`]'s contract tells a retrying
+/// caller to match. Re-exported because skepd is the one thing permitted to
+/// depend on the engine (Engine Composition Contract) — a caller that must
+/// name any of the four would otherwise have to take that dependency itself,
+/// the one dependency this crate exists to hold alone; and one that took it
+/// at another version would hold a DIFFERENT `OpenError` from the one inside
+/// [`EngineError`], and its match would not compile.
 ///
 /// M10's operation vocabulary is deliberately NOT re-exported: `Request`,
 /// `Response`, `Op` and the `Codec` trait belong to `skep-febe`, which any
@@ -111,10 +115,10 @@ pub use server::{
 /// `PrincipalId`, which [`Daemon::dump_visible_to`] takes, is
 /// `skep-namespace`'s and reaches a client through `skep-febe`'s own
 /// re-export of it.
-pub use skep_engine::{EngineError, HistoryError, World};
+pub use skep_engine::{EngineError, HistoryError, OpenError, World};
 
 /// The dump [`Daemon::dump_visible_to`] answers with, re-exported for the
-/// reason the three above are and only where that method exists. Without
+/// reason the four above are and only where that method exists. Without
 /// it the method's return type is nameable only by depending on
 /// `skep-engine` — the dependency this crate holds alone — and only where
 /// feature unification happens to have turned that crate's `dump` feature
@@ -140,10 +144,10 @@ pub use history::Permit;
 /// public name changing. This is where that fails to compile instead.
 ///
 /// Every type this crate DEFINES and exports is listed. The ones it
-/// re-exports — [`World`], [`Seq`], [`EngineError`], [`HistoryError`], and
-/// (under `observe`) the world dump — are not: those promises are
-/// upstream's to keep, and `Daemon: Send + Sync` already pins the ones this
-/// crate transitively rests on.
+/// re-exports — [`World`], [`Seq`], [`EngineError`], [`HistoryError`],
+/// [`OpenError`], and (under `observe`) the world dump — are not: those
+/// promises are upstream's to keep, and `Daemon: Send + Sync` already pins
+/// the ones this crate transitively rests on.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Skepd>();

@@ -157,8 +157,9 @@ impl CommitMeta {
         ])
     }
 
-    /// The recorded wall-clock time, or `None` for a bare position.
-    fn time(&self) -> Option<u64> {
+    /// The recorded wall-clock time, or `None` for a bare position — the one
+    /// reading of it, which the head writer's resume asks too.
+    pub fn time(&self) -> Option<u64> {
         match self {
             CommitMeta::Bare => None,
             CommitMeta::Recorded { time, .. } => Some(*time),

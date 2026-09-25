@@ -240,10 +240,15 @@ fn a_dropped_server_releases_the_journal_lock() {
 /// The release half is `a_dropped_server_releases_the_journal_lock`'s: there
 /// a daemon goes out of scope and the dir reopens. Here one is held, so the
 /// refusal is reached.
+///
+/// Every name the match spells is `skepd`'s own: the pattern is written
+/// against this crate ALONE, as the contract promises a caller it can be —
+/// so the re-export of `OpenError` is what this test compiles against, and a
+/// caller that had to reach past skepd for it would hold a type that is only
+/// the same one while two manifests happen to agree.
 #[test]
 fn a_second_open_of_one_data_dir_is_the_retryable_shape_the_contract_names() {
-    use skep_kernel::OpenError;
-    use skepd::{Daemon, DaemonError, EngineError};
+    use skepd::{Daemon, DaemonError, EngineError, OpenError};
 
     let dir = tempfile::tempdir().expect("tempdir");
     let held = Daemon::open(dir.path()).expect("genesis open");

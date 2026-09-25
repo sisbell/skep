@@ -642,7 +642,7 @@ impl CommitStream {
 
     fn announce(&self, seq: Seq) {
         let mut state = self.state.lock();
-        if seq.0 > state.head.0 {
+        if seq > state.head {
             state.head = seq;
             self.cond.notify_all();
         }
@@ -669,7 +669,7 @@ impl CommitStream {
             if state.shutdown {
                 return StreamStep::Shutdown;
             }
-            if state.head.0 > last.0 {
+            if state.head > last {
                 return StreamStep::Commit(state.head);
             }
             if self.cond.wait_until(&mut state, deadline).timed_out() {

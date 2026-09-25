@@ -89,8 +89,6 @@
 //! never constructing `Caller::System`; every ω check passes because the system
 //! account owns `H` and its draft, and nothing in the engine is widened.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use parking_lot::Mutex;
 use serde_json::Value;
 use skep_address::{validate, Address, Nat, Tumbler};
@@ -156,26 +154,32 @@ const MAX_INTERVAL_MILLIS: u64 = 3_600_000; // one hour
 /// [`crate::Daemon::set_head_writer_clock_millis`]), which a test therefore
 /// sets RELATIVE TO the wall clock rather than at small numbers a resumed
 /// origin would dwarf.
+///
+/// Its lock is innermost: [`HeadWriter::take_turn`] reads it under the state
+/// lock, and nothing holding it takes another — the reading is copied out in
+/// one statement, so the wall-clock read itself runs under no lock at all.
 struct Clock {
-    /// [`u64::MAX`] means "use the real wall clock"; any other value is a
-    /// test override, held until changed.
-    test_millis: AtomicU64,
+    /// A test's fixed reading, held until changed; `None` — the only state
+    /// production ever sees — reads [`wall_clock_millis`]. An `Option` and
+    /// not a sentinel: every `u64` is a reading a test may fix, `u64::MAX`
+    /// (the far-future "the hour has certainly passed") included, and a
+    /// sentinel drawn from that domain would read the wall clock for its one
+    /// value in silence.
+    fixed_millis: Mutex<Option<u64>>,
 }
 
 impl Clock {
     fn new() -> Clock {
-        Clock { test_millis: AtomicU64::new(u64::MAX) }
+        Clock { fixed_millis: Mutex::new(None) }
     }
 
     fn now_millis(&self) -> u64 {
-        match self.test_millis.load(Ordering::Relaxed) {
-            u64::MAX => wall_clock_millis(),
-            fixed => fixed,
-        }
+        let fixed = *self.fixed_millis.lock();
+        fixed.unwrap_or_else(wall_clock_millis)
     }
 
     fn set_millis(&self, millis: u64) {
-        self.test_millis.store(millis, Ordering::Relaxed);
+        *self.fixed_millis.lock() = Some(millis);
     }
 }
 
@@ -274,44 +278,29 @@ impl HeadRecord {
     /// `position`, `chain`, `base`, `prev`) with no whitespace — NOT the
     /// codec's sorted-key marshal, which would reorder them. `base` and
     /// `prev` are their objects or `null`; no `sig`, no timestamp (two heads
-    /// of one board at one position are byte-identical).
+    /// of one board at one position are byte-identical). Each JSON object is
+    /// ONE literal, so the schema's order is read off the literal itself.
     fn to_bytes(&self) -> Vec<u8> {
-        use std::fmt::Write;
-        let mut s = String::new();
-        s.push_str("{\"type\":\"");
-        s.push_str(RECORD_TYPE);
-        s.push_str("\",\"format\":\"");
-        s.push_str(FORMAT_STAMP);
-        s.push_str("\",\"position\":");
-        let _ = write!(s, "{}", self.position);
-        s.push_str(",\"chain\":\"");
-        s.push_str(&hex_string(&self.chain));
-        s.push_str("\",\"base\":");
-        match &self.base {
-            Some(CheckpointBase { seq, chain, body_hash }) => {
-                s.push_str("{\"seq\":");
-                let _ = write!(s, "{seq}");
-                s.push_str(",\"chain\":\"");
-                s.push_str(&hex_string(chain));
-                s.push_str("\",\"body_hash\":\"");
-                s.push_str(&hex_string(body_hash));
-                s.push_str("\"}");
-            }
-            None => s.push_str("null"),
-        }
-        s.push_str(",\"prev\":");
-        match &self.prev {
+        let base = match &self.base {
+            Some(CheckpointBase { seq, chain, body_hash }) => format!(
+                r#"{{"seq":{seq},"chain":"{}","body_hash":"{}"}}"#,
+                hex_string(chain),
+                hex_string(body_hash),
+            ),
+            None => String::from("null"),
+        };
+        let prev = match &self.prev {
             Some(CommittedPair { position, chain }) => {
-                s.push_str("{\"position\":");
-                let _ = write!(s, "{position}");
-                s.push_str(",\"chain\":\"");
-                s.push_str(&hex_string(chain));
-                s.push_str("\"}");
+                format!(r#"{{"position":{position},"chain":"{}"}}"#, hex_string(chain))
             }
-            None => s.push_str("null"),
-        }
-        s.push('}');
-        s.into_bytes()
+            None => String::from("null"),
+        };
+        format!(
+            r#"{{"type":"{RECORD_TYPE}","format":"{FORMAT_STAMP}","position":{},"chain":"{}","base":{base},"prev":{prev}}}"#,
+            self.position,
+            hex_string(&self.chain),
+        )
+        .into_bytes()
     }
 
     /// A record THIS BUILD wrote, read back whole — `None` for anything else:
@@ -505,8 +494,7 @@ impl HeadWriter {
             let snap = self.stores.kernel().snapshot();
             snap.world().m5().content_count(&draft) + Nat::from(1u32)
         };
-        let Some((atom_start, _)) = self.commit_insert(wp, serial, &draft, next_ordinal, bytes)
-        else {
+        let Some(atom_start) = self.commit_insert(wp, serial, &draft, next_ordinal, bytes) else {
             return false;
         };
 
@@ -528,7 +516,7 @@ impl HeadWriter {
             Err(e) => {
                 // Unreachable — the insert answered a content element start —
                 // but a silent arm is what I11 (c) forbids, so it is named.
-                notice::line(format!(
+                notice::line(format_args!(
                     "head writer: the head atom's run is malformed ({e:?}); no head written this cycle"
                 ));
                 return false;
@@ -547,13 +535,17 @@ impl HeadWriter {
     /// document, `published: false`) — ONCE for the life of the board, since
     /// every later open finds it ([`find_staging_draft`]).
     fn ensure_draft(&self, wp: &WritePath, serial: &SerialGuard<'_>) -> Option<Address> {
-        if let Some(draft) = self.state.lock().staging_draft.clone() {
-            return Some(draft);
+        // Read in a statement of its own, so the state guard drops at the `;`:
+        // an `if let` keeps its scrutinee's temporaries alive through its
+        // body, and this lock is never to be held across a commit.
+        let found = self.state.lock().staging_draft.clone();
+        if found.is_some() {
+            return found;
         }
         let account = system_account();
         let op = Op::CreateNewDocument { account: account.clone(), published: Some(false) };
         let meta = write_meta(&op)?.attributed(SYSTEM_TESTIMONY.to_string());
-        let (draft, _) = self.run_commit(wp, serial, meta, move || {
+        let draft = self.run_commit(wp, serial, meta, move || {
             self.stores
                 .namespace()
                 .create_new_document(SYSTEM_PRINCIPAL, &account, Some(false))
@@ -564,7 +556,7 @@ impl HeadWriter {
             // its account is doc 3 by the seed's frontier; anything else means
             // some other writer minted under the system account — surfaced,
             // and the head goes on with the draft it did mint.
-            notice::line(format!(
+            notice::line(format_args!(
                 "head writer: the staging draft minted at {draft}, not at {} — another writer minted under the system account",
                 staging_draft_address()
             ));
@@ -580,10 +572,10 @@ impl HeadWriter {
         draft: &Address,
         ordinal: Nat,
         bytes: Vec<u8>,
-    ) -> Option<(Address, Seq)> {
+    ) -> Option<Address> {
         let op = Op::Insert {
             doc: draft.clone(),
-            at: VPos { subspace: Nat::from(1u32), ordinal },
+            at: VPos::content(ordinal),
             values: vec![Val::new(bytes)],
             deposit: Deposit::Undeclared,
         };
@@ -605,7 +597,7 @@ impl HeadWriter {
         serial: &SerialGuard<'_>,
         h: Address,
         shot: Shot,
-    ) -> Option<(Address, Seq)> {
+    ) -> Option<Address> {
         let op = Op::Publish { doc: h, shot };
         let meta = write_meta(&op)?.attributed(SYSTEM_TESTIMONY.to_string());
         let Op::Publish { doc, shot } = op else {
@@ -627,35 +619,32 @@ impl HeadWriter {
     /// [`WritePath::commit_recorded`] — recorded and announced like any
     /// write, giving the head writer no turn — as the system principal: run
     /// the driver inside the closure, hand the door the `AckAddr` its
-    /// `record`/announce want, and return the committed `(address, seq)`. A
-    /// driver refusal is logged and answered with a non-committing
-    /// `Response` (recorded nowhere), so the head is skipped and the
-    /// triggering write is untouched.
+    /// `record`/announce want, and read the committed address back off the
+    /// answer the door returns, the one copy of it there is. No caller reads
+    /// the committed `Seq`, so the address alone is returned. A driver
+    /// refusal is named inside the closure, where it is in hand, and answered
+    /// with a non-committing `Response` (recorded nowhere), so the head is
+    /// skipped and the triggering write is untouched.
     fn run_commit(
         &self,
         wp: &WritePath,
         serial: &SerialGuard<'_>,
         meta: WriteMeta,
         run: impl FnOnce() -> Result<(Address, Seq), String>,
-    ) -> Option<(Address, Seq)> {
-        let mut captured: Option<(Address, Seq)> = None;
-        let mut failure: Option<String> = None;
-        let _ = wp.commit_recorded(serial, meta, || match run() {
-            Ok((addr, at)) => {
-                captured = Some((addr.clone(), at));
-                Response::AckAddr { addr, at }
-            }
+    ) -> Option<Address> {
+        let resp = wp.commit_recorded(serial, meta, || match run() {
+            Ok((addr, at)) => Response::AckAddr { addr, at },
             Err(e) => {
-                failure = Some(e);
+                notice::line(format_args!("head writer: {e}; no head written this cycle"));
                 // A no-op answer `record` returns None for: nothing recorded,
-                // nothing announced. Dropped by this caller, never on the wire.
+                // nothing announced. Dropped below, never on the wire.
                 Response::Bool { val: false, as_of: Seq(0) }
             }
         });
-        if let Some(e) = failure {
-            notice::line(format!("head writer: {e}; no head written this cycle"));
-        }
-        captured
+        let Response::AckAddr { addr, .. } = resp else {
+            return None;
+        };
+        Some(addr)
     }
 }
 
@@ -685,17 +674,13 @@ fn resume_cadence(above: &[(u64, CommitMeta)]) -> ResumedCadence {
             CommitMeta::Recorded { key: Some(testimony), .. } if testimony == SYSTEM_TESTIMONY
         )
     };
-    let time_of = |meta: &CommitMeta| match meta {
-        CommitMeta::Recorded { time, .. } => Some(*time),
-        CommitMeta::Bare => None,
-    };
     let commits_since_head = above.iter().filter(|(_, meta)| !is_system(meta)).count() as u64;
     let last_head_millis = above
         .iter()
         .rev()
         .find(|(_, meta)| is_system(meta))
-        .and_then(|(_, meta)| time_of(meta))
-        .or_else(|| above.iter().find_map(|(_, meta)| time_of(meta)));
+        .and_then(|(_, meta)| meta.time())
+        .or_else(|| above.iter().find_map(|(_, meta)| meta.time()));
     ResumedCadence { commits_since_head, last_head_millis }
 }
 
@@ -707,7 +692,7 @@ fn resume_cadence(above: &[(u64, CommitMeta)]) -> ResumedCadence {
 fn read_recorded_head(world: &World) -> Option<HeadRecord> {
     let h = head_document();
     let member = trunk_head(world.m3(), &h)?;
-    let i_addr = world.m5().point(&member, &VPos { subspace: Nat::from(1u32), ordinal: Nat::from(1u32) })?;
+    let i_addr = world.m5().point(&member, &VPos::content(Nat::from(1u32)))?;
     HeadRecord::parse(world.content().value_at(i_addr.tumbler())?.as_bytes())
 }
 
@@ -777,6 +762,24 @@ mod tests {
         for respelled in [chain.to_uppercase(), format!("+f{}", &chain[2..])] {
             let text = first_text.replace(&chain, &respelled);
             assert_eq!(HeadRecord::parse(text.as_bytes()), None, "a respelled hash: {respelled}");
+        }
+    }
+
+    /// The clock seam holds EVERY reading — `u64::MAX`, the far-future value
+    /// a test reaching for "the hour has certainly passed" writes first,
+    /// included — and an unset clock reads the wall clock. A reading the seam
+    /// accepted and then answered with the wall clock instead would leave a
+    /// time-bound test passing or failing with the bound never consulted.
+    #[test]
+    fn the_clock_seam_holds_every_reading_and_an_unset_clock_reads_the_wall_clock() {
+        let clock = Clock::new();
+        assert!(
+            clock.now_millis().abs_diff(wall_clock_millis()) < 60_000,
+            "an unset clock reads the wall clock"
+        );
+        for fixed in [0, MAX_INTERVAL_MILLIS, u64::MAX] {
+            clock.set_millis(fixed);
+            assert_eq!(clock.now_millis(), fixed, "a fixed reading holds, whatever its value");
         }
     }
 }

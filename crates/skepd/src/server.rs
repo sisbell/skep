@@ -545,9 +545,11 @@ const BOARD_HTML: &str = include_str!("../../../clients/board.html");
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum DaemonError {
-    /// The engine could not genesis/recover — M2's `OpenError` verbatim, and
-    /// the ONE variant here whose disposition is the WRAPPED error's rather
-    /// than this enum's. `BadCheckpoint` and `Corruption` are operator
+    /// The engine could not genesis/recover — M2's [`OpenError`](crate::OpenError)
+    /// verbatim, re-exported beside [`EngineError`] so the match this doc
+    /// describes is written against this crate alone, and the ONE variant
+    /// here whose disposition is the WRAPPED error's rather than this enum's.
+    /// `ForeignFormat`, `BadCheckpoint` and `Corruption` are operator
     /// intervention and `InvalidConfig` wants a corrected configuration; `Io`
     /// fuses failures no retry clears WITH the two M2 documents as clearable
     /// — the journal-path exclusion lock ([`Daemon::open`]'s precondition: a
@@ -1035,7 +1037,10 @@ impl Daemon {
     /// `EngineError::Open(OpenError::Io(_))`, an arm that also carries
     /// failures no retry clears — so a caller that retries matches the
     /// wrapped `OpenError` and bounds its attempts, where one matching
-    /// `DaemonError::Engine(_)` alone would loop on a corrupt journal.
+    /// `DaemonError::Engine(_)` alone would loop on a corrupt journal. Every
+    /// name in that pattern is this crate's to hand out —
+    /// [`OpenError`](crate::OpenError) is re-exported beside [`EngineError`]
+    /// — so the match takes no dependency but this one.
     /// [`Skepd::shutdown`] and `Skepd`'s `Drop` both release that lock before
     /// returning, which is what closes the race with a stopping server. Every
     /// other condition is an operator-intervention one (corrupt journal, bad
@@ -1079,19 +1084,21 @@ impl Daemon {
         // the salt exists to deny a reader of `/chain?at=N`. The seeded
         // source reaches a daemon through the test seam alone
         // ([`Daemon::open_seeded`], `#[doc(hidden)]`).
-        Self::open_under(data_dir, opts, SaltSource::Os)
+        Self::open_under(data_dir.as_ref(), opts, SaltSource::Os)
     }
 
     /// The one open, under a named salt source — [`Daemon::open_with`]'s
     /// body, which that door reaches with [`SaltSource::Os`] and the test
     /// seam [`Daemon::open_seeded`] with a seeded stream. Private, so no
-    /// third caller can name a source.
+    /// third caller can name a source; and over `&Path`, so the two public
+    /// doors are the generic shims and this body is compiled ONCE whatever
+    /// path type a caller holds — the split std keeps, `File::open` over its
+    /// inner `&Path`.
     fn open_under(
-        data_dir: impl AsRef<Path>,
+        data_dir: &Path,
         opts: AuthOptions,
         salt: SaltSource,
     ) -> Result<Daemon, DaemonError> {
-        let data_dir = data_dir.as_ref();
         let cfg = KernelConfig {
             durability: Durability::Fsync {
                 journal_path: data_dir.to_path_buf(),
@@ -1843,7 +1850,8 @@ impl Daemon {
     /// the writer's own domain, whose hour is measured from the last head's
     /// recorded time or from open, both wall-clock — so a test sets it
     /// RELATIVE TO the wall clock: a small number is dwarfed by that origin
-    /// and the time bound never fires. A fixed reading holds until changed.
+    /// and the time bound never fires. A fixed reading holds until changed,
+    /// and every value is one — `u64::MAX` included.
     ///
     /// The head writer's reading ALONE: every commit's `time`, and so
     /// `/health`'s `head_time`, is stamped by the change feed's own reading
@@ -1869,7 +1877,7 @@ impl Daemon {
         opts: AuthOptions,
         seed: u64,
     ) -> Result<Daemon, DaemonError> {
-        Self::open_under(data_dir, opts, SaltSource::Seeded(seed))
+        Self::open_under(data_dir.as_ref(), opts, SaltSource::Seeded(seed))
     }
 
     /// TEST HOOK (the same standing): take a KERNEL checkpoint now — the real
@@ -3852,19 +3860,19 @@ mod tests {
                 String::from_utf8_lossy(&daemon.codec.marshal(&other))
             ),
         };
-        assert!(ahead.0 > announced().0, "the head is now ahead of the commit stream");
+        assert!(ahead > announced(), "the head is now ahead of the commit stream");
 
         let read = post(r#"{"op":"next_account_prefix","parent":"1"}"#);
         assert_eq!(read["resp"].as_str(), Some("maybe_addr"), "a read was served: {read}");
         assert!(
-            announced().0 < ahead.0,
+            announced() < ahead,
             "a read commits nothing and must announce nothing — announcing the current \
              head would name a commit whose change-feed entry may not exist yet"
         );
 
         let bad = post(r#"{"op":"frobnicate"}"#);
         assert_eq!(bad["op"].as_str(), Some("unparseable"));
-        assert!(announced().0 < ahead.0, "an unparseable frame announces nothing either");
+        assert!(announced() < ahead, "an unparseable frame announces nothing either");
 
         // A route-level write that commits pre-claim: the ceremony's own
         // delegate from principal 0 (the pre-claim gate admits it).
@@ -3915,7 +3923,7 @@ mod tests {
             };
             (d.writes.announced(), ahead)
         };
-        assert!(announced.0 < ahead.0, "the head is now ahead of the commit stream");
+        assert!(announced < ahead, "the head is now ahead of the commit stream");
 
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect /events");
         stream.set_read_timeout(Some(Duration::from_secs(5))).expect("read timeout");

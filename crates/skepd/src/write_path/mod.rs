@@ -17,11 +17,23 @@
 //! [`WritePath::open`] is the BASE CASE: the stream is seeded from the head
 //! the sidecar has just covered, before any febe exists to commit between
 //! the two, so a connecting subscriber is told [`WritePath::announced`] and
-//! that first position is already answerable. [`WritePath::commit_under`]
-//! is the STEP: each announcement happens behind the record that made its
-//! position answerable. Neither half is a rule a caller remembers, so the
-//! two can never come apart in the window between a commit and its record.
-//! Reads never come here and never take the lock.
+//! that first position is already answerable. [`WritePath::commit_recorded`]
+//! is the STEP, and both doors run it: each announcement happens behind the
+//! record that made its position answerable. Neither half is a rule a caller
+//! remembers, so the two can never come apart in the window between a
+//! commit and its record. Reads never come here and never take the lock.
+//!
+//! AND THEN THE HEAD'S TURN (PUB-6.65). A peer write, once recorded and
+//! announced, gives the PUBLISHED HEAD writer (`head.rs`, this card's own
+//! child) its turn under the same guard. When the cadence is due, the writer
+//! commits up to three writes of the daemon's own — the staging draft's
+//! one-time mint, the record's insert, and the publish into `H` — before
+//! [`WritePath::commit_under`] returns. So "after `commit_under` returns"
+//! means after this write AND any head it triggered: a caller reading the
+//! world then reads the head's records beside its own, and pays their fsyncs
+//! under whatever locks it holds, the credential write lock included. The
+//! head's own writes take [`WritePath::commit_recorded`], the protocol
+//! alone; the door is the whole difference between the two.
 //!
 //! The read/write partition is M10's own `Op::is_read`. A read is exactly an
 //! `Op` the change feed has nothing to record, so [`write_meta`] answers
@@ -38,9 +50,11 @@ use skep_engine::{Engine, EngineStores};
 use skep_febe::{Op, OpKind, Response, Stores};
 use skep_kernel::Seq;
 
+mod head;
+
 use crate::codec::op_name;
 use crate::feed::{ChangesAnswer, Feed, FeedClass, Query};
-use crate::head::HeadWriter;
+use self::head::HeadWriter;
 
 /// The commit stream's wait bound: a subscriber that has heard nothing for
 /// this long is answered [`StreamStep::Keepalive`], which `server.rs` frames
@@ -76,17 +90,19 @@ impl<'a> SerialGuard<'a> {
 }
 
 /// The write path: the serialization point, the change feed's sidecars
-/// behind it, and the commit stream in front of it.
+/// behind it, the commit stream in front of it, and the published head
+/// writer whose turn follows every peer write.
 ///
 /// The delegating methods below are one-line calls into the feed or the
 /// stream, deliberately: what this card buys over holding the two side by
 /// side is EXCLUSIVE ACCESS. [`Feed::record`] and
 /// `CommitStream::announce` are reachable only from
-/// [`WritePath::commit_under`], which is what makes the ordering above a
-/// property of this type rather than a rule each handler remembers —
-/// `CommitsLog::record`'s caller contract is discharged by there being
-/// nowhere else to fail it. Reaching the two through here is what that
-/// costs.
+/// [`WritePath::commit_recorded`], whose two callers are
+/// [`WritePath::commit_under`] and the head writer, this card's own child,
+/// which is what makes the ordering above a property of this type rather
+/// than a rule each handler remembers — `CommitsLog::record`'s caller
+/// contract is discharged by there being nowhere else to fail it. Reaching
+/// the two through here is what that costs.
 ///
 /// What that does NOT buy is the guard's SPAN. [`WritePath::serial_lock`]
 /// hands the lock out, so that the snapshot a caller's gates read was taken
@@ -112,26 +128,23 @@ pub(crate) struct WritePath {
     /// (`Feed::record` takes the head as it stands after the execute, under
     /// the serialization guard, so it is this commit's own state).
     stores: EngineStores,
-    /// The PUBLISHED HEAD writer (PUB-6.65): evaluated after each committing
-    /// write records its position (in [`WritePath::commit_under`]), it writes
-    /// the head document `H` on the cadence, its own two commits riding this
-    /// same card through `commit_under` under the caller's serialization guard.
+    /// The PUBLISHED HEAD writer (PUB-6.65), this card's own child: given its
+    /// turn by [`WritePath::commit_under`] after every peer write, it writes
+    /// `H` on the cadence through [`WritePath::commit_recorded`], under the
+    /// caller's serialization guard.
     head: HeadWriter,
 }
 
 impl WritePath {
     /// Open the change feed in `data_dir` — `commits.log` replayed and its
-    /// derived sidecars checked — and open the commit stream at the
-    /// journal's committed head — in that order, which is the base case of
-    /// this card's guarantee (see the module doc). Fallible only in the
-    /// feed — the lock and the stream are memory — so the caller's error
-    /// type need name only that.
-    pub fn open(
-        data_dir: &Path,
-        engine: &Engine,
-        head_every_commits: u64,
-        head_max_interval_millis: u64,
-    ) -> io::Result<WritePath> {
+    /// derived sidecars checked — then the commit stream at the journal's
+    /// committed head, then the head writer over the feed just replayed — in
+    /// that order, the first two being the base case of this card's
+    /// guarantee (see the module doc). Fallible only in the feed — the lock
+    /// and the stream are memory, and the head writer resumes as if no head
+    /// were written where it cannot read one — so the caller's error type
+    /// need name only that.
+    pub fn open(data_dir: &Path, engine: &Engine) -> io::Result<WritePath> {
         let feed = Feed::open(data_dir, engine)?;
         // Seeded AFTER the feed, from the same head, and before any febe
         // exists to commit between the two: the stream's first announced
@@ -143,14 +156,8 @@ impl WritePath {
         // The head writer resumes by reading H's latest member off the engine's
         // recovered root (PUB-6.65's I7 (a)) and its cadence's two counters off
         // the feed opened above — the commits landed since that head, and the
-        // head's own recorded time (the chain's open items, item 2); the two
-        // cadence constants are the daemon's, beside the checkpoint cadence.
-        let head = HeadWriter::open(
-            engine.stores(),
-            head_every_commits,
-            head_max_interval_millis,
-            &feed,
-        );
+        // head's own recorded time (the chain's open items, item 2).
+        let head = HeadWriter::open(engine.stores(), &feed);
         Ok(WritePath {
             serial: Mutex::new(()),
             feed,
@@ -179,21 +186,25 @@ impl WritePath {
     /// refusal that commits nothing may simply drop the guard, which is
     /// what every gate arm does; what must not happen is a committing
     /// `execute` under this guard OUTSIDE `commit_under`, which would
-    /// leave the position unrecorded and unannounced. The one execute this
-    /// crate performs outside it is the guest reply, and it is safe because
-    /// it runs under `SessionId::GUEST`, which M10 never binds, so M10
-    /// refuses a write under it without committing. Nothing here can check
-    /// either half, and a snapshot taken outside the guard lets a commit
-    /// land between what a gate read and what it gated.
+    /// leave the position unrecorded and unannounced and give the published
+    /// head no turn. The one execute this crate performs outside the write
+    /// path's two doors is the guest reply, and it is safe because it runs
+    /// under `SessionId::GUEST`, which M10 never binds, so M10 refuses a
+    /// write under it without committing. Nothing here can check either
+    /// half, and a snapshot taken outside the guard lets a commit land
+    /// between what a gate read and what it gated.
     pub fn serial_lock(&self) -> SerialGuard<'_> {
         SerialGuard(self.serial.lock())
     }
 
     /// One write, whole, under a serialization guard the CALLER already
     /// holds ([`WritePath::serial_lock`]): execute, record the position it
-    /// committed, announce that position, and hand back the answer. The
-    /// guard argument is what keeps the three steps one operation even now
-    /// that the lock's scope is the caller's write sequence.
+    /// committed, announce that position, give the published head writer
+    /// its turn, and hand back the answer. The first three are
+    /// [`WritePath::commit_recorded`]'s; the turn is this door's alone, and
+    /// what it adds to "after this returns" is the module doc's to state.
+    /// The guard argument is what keeps the four one operation though the
+    /// lock's scope is the caller's write sequence.
     ///
     /// `execute` is a closure so this card stays free of M10's session and
     /// request types: what belongs here is the ordering, not the dispatch.
@@ -218,15 +229,32 @@ impl WritePath {
         meta: WriteMeta,
         execute: impl FnOnce() -> Response,
     ) -> Response {
+        let resp = self.commit_recorded(serial, meta, execute);
+        // THE HEAD'S TURN (PUB-6.65), under the same guard. Asked after every
+        // write this door runs, a refusal included: whether anything LANDED
+        // is the writer's to decide — the kernel's seq, never the answer — so
+        // this door hands it nothing to decide it by.
+        self.head.after_commit(self, serial);
+        resp
+    }
+
+    /// The ordering protocol and NOTHING after it: execute, record the
+    /// position the write committed, announce that position, and hand back
+    /// the answer — [`WritePath::commit_under`] less the head's turn. The
+    /// head writer's door for its own commits, and PRIVATE to this module so
+    /// it stays the head writer's alone: a peer write through it would
+    /// commit without giving the head its turn. `execute` runs exactly once,
+    /// inside the lock, and [`WritePath::commit_under`]'s precondition on
+    /// `meta` is this door's.
+    fn commit_recorded(
+        &self,
+        serial: &SerialGuard<'_>,
+        meta: WriteMeta,
+        execute: impl FnOnce() -> Response,
+    ) -> Response {
         let resp = execute();
         if let Some(at) = self.record(serial, meta, &resp) {
             self.commit_stream.announce(at);
-            // THE HEAD HOOK (PUB-6.65): a committing write records its
-            // position, and the head writer evaluates its cadence here — where
-            // `record` returns the committed position. Its own two commits
-            // re-enter this method and take the writer's re-entrancy
-            // short-circuit, so they are neither counted nor re-triggering.
-            self.head.after_commit(self, serial, at);
         }
         resp
     }
@@ -285,7 +313,7 @@ impl WritePath {
     /// decide whether the change feed reports it, and fails to compile
     /// until it does.
     ///
-    /// Returns the position [`WritePath::commit_under`] announces, and in
+    /// Returns the position [`WritePath::commit_recorded`] announces, and in
     /// every case one `/changes` already carries — which is the guarantee,
     /// rather than the narrower "the position whose record this call made".
     /// Three paths reach it: a new commit, whose record this call makes; a
@@ -376,12 +404,12 @@ impl WritePath {
 
 /// What the change feed will say about one write as far as the FRAME can
 /// tell: the op kind and the affected documents. Not yet a [`WriteMeta`]:
-/// the AUTH testimony (AUTH-4.48) is the committing session's, which no
-/// frame carries, so [`FrameMeta::attributed`] is the only way to reach a
-/// value [`WritePath::commit_under`] accepts. A placeholder testimony would
-/// be a wrong answer that looks right — `"bare"` is what a genuine
-/// bare-session write records, and the feed never re-derives an entry it
-/// holds.
+/// the AUTH testimony (AUTH-4.48) is the committer's — a session's, or the
+/// head writer's own — which no frame carries, so [`FrameMeta::attributed`]
+/// is the only way to reach a value either of the write path's doors
+/// accepts. A placeholder testimony would be a wrong answer that looks
+/// right — `"bare"` is what a genuine bare-session write records, and the
+/// feed never re-derives an entry it holds.
 #[derive(Debug)]
 pub(crate) struct FrameMeta {
     pub kind: OpKind,
@@ -389,15 +417,17 @@ pub(crate) struct FrameMeta {
 }
 
 impl FrameMeta {
-    /// Attribute this write to the session committing it — the testimony
-    /// from [`crate::auth::session::SessionBinding::testimony`].
+    /// Attribute this write to its committer: a session's testimony
+    /// ([`crate::auth::session::SessionBinding::testimony`] — the
+    /// establishing key's fingerprint, or `"bare"`), or the head writer's own
+    /// ([`head::SYSTEM_TESTIMONY`]), which commits with no session at all.
     pub fn attributed(self, testimony: String) -> WriteMeta {
         WriteMeta { kind: self.kind, docs: self.docs, testimony }
     }
 }
 
 /// What the change feed will say about one write: the op kind, the
-/// affected documents, and the session that committed it. The
+/// affected documents, and the committer's testimony. The
 /// frame-derived stage of a `commits.log` entry — [`crate::sidecar::CommitMeta`]
 /// is the next one, completed at record time with the committed position
 /// and the wall-clock time.
@@ -412,9 +442,10 @@ pub(crate) struct WriteMeta {
     kind: OpKind,
     docs: AffectedDocs,
     /// The write's AUTH TESTIMONY (AUTH-4.48; wire.md §The change feed):
-    /// the establishing key's fingerprint hex, or `"bare"` for a bare bind
-    /// — never an absence, which the wire's `key` field reserves for
-    /// testimony that was LOST.
+    /// the establishing key's fingerprint hex, `"bare"` for a bare bind, or
+    /// [`head::SYSTEM_TESTIMONY`] for the published head's own writes —
+    /// never an absence, which the wire's `key` field reserves for testimony
+    /// that was LOST.
     testimony: String,
 }
 

@@ -5,7 +5,7 @@
 //! re-chain checks below rest on.
 //!
 //! The cadence's clock and its checkpoint are driven through the daemon's test
-//! seams (`head_set_clock_millis`, `head_checkpoint_now`) — never a `sleep`.
+//! seams (`head_set_clock_millis`, `checkpoint_now`) — never a `sleep`.
 //! The clock seam's readings are wall-clock unix milliseconds (the writer's
 //! domain since its resume seeds the hour from the feed's recorded times —
 //! the chain's open items, item 2), so every reading here is set relative to
@@ -252,7 +252,7 @@ fn a_checkpoint_moves_the_head_and_a_quiet_board_writes_none() {
 
     // A CHECKPOINT: now the next commit's `after_commit` sees the checkpoint
     // seq moved since the last head and writes one.
-    sd.daemon().head_checkpoint_now();
+    sd.daemon().checkpoint_now();
     let at = commit(port, &owner, CLAIMANT_ACCOUNT);
     let rec = expect_latest_head(port);
     assert!(
@@ -267,6 +267,16 @@ fn a_checkpoint_moves_the_head_and_a_quiet_board_writes_none() {
         base_member["seq"].as_u64().unwrap() <= rec["position"].as_u64().unwrap(),
         "base.seq is at or below the head's position: {rec}"
     );
+    // …named by the checkpoint's OWN chain — the kernel's recomputation at
+    // that seq — and not by the body hash beside it: both are 64 hex, so a
+    // transposed pair passes every shape check above.
+    let base_seq = base_member["seq"].as_u64().unwrap();
+    assert_eq!(
+        base_member["chain"].as_str().map(str::to_string),
+        chain_at(port, base_seq),
+        "base.chain is the chain AT base.seq: {rec}"
+    );
+    assert_ne!(base_member["chain"], base_member["body_hash"], "and is not the body hash: {rec}");
     sd.shutdown();
 }
 
@@ -376,7 +386,7 @@ fn a_checkpoint_taken_before_a_restart_is_attested_by_the_first_head_after_it() 
             "no checkpoint yet: the head names base null"
         );
         let (seq, _) = health(port);
-        sd.daemon().head_checkpoint_now(); // at `seq`: nothing committed between
+        sd.daemon().checkpoint_now(); // at `seq`: nothing committed between
         sd.shutdown();
         seq
     };
@@ -721,7 +731,7 @@ fn one_altered_op_re_chains_the_head_at_the_same_position() {
             Some(&owner),
             &format!(r#"{{"op":"insert","doc":"{draft}","at":{{"subspace":"1","ordinal":"1"}},"values":["{text}"]}}"#),
         );
-        sd.daemon().head_checkpoint_now();
+        sd.daemon().checkpoint_now();
         let mut clock = clock_origin();
         force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
         let rec = expect_latest_head(port);

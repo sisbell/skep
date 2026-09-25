@@ -4,9 +4,11 @@
 //! Contract): a long-running process owning ONE `World`, serving the full
 //! M10 operation surface over HTTP/JSON to multiple concurrent local
 //! clients. **skepd owns no semantics** — every decision worth making was
-//! made in a store, save the session layer's own, whose gates are the
-//! daemon's by spec; this crate is the wire codec, the session layer, the
-//! process, and the kernel's configuration:
+//! made in a store, save two the spec gives the daemon: the session layer's
+//! gates, and the PUBLISHED HEAD's cadence (PUB-6.65) — when the board's own
+//! daemon writes the head document `H`, the one write it makes on its own
+//! initiative. This crate is the wire codec, the session layer, the head
+//! writer, the process, and the kernel's configuration:
 //!
 //! * [`JsonCodec`] — the one concrete `Codec` (M10's seam): JSON frames in,
 //!   deterministic JSON responses out. The byte conventions are the
@@ -18,12 +20,22 @@
 //!   producers it scopes, and the identity fold this daemon composes
 //!   BESIDE the engine (derived state, rebuilt at open, never persisted
 //!   here).
+//! * `write_path/` — the ONE ordering every write rides (commit, record,
+//!   announce, under one serialization guard) and, behind it, the
+//!   PUBLISHED HEAD writer: `H` = `1.1.0.1.0.2` written as a new published
+//!   version on the write path's own cadence, as the system account's
+//!   principal with no session, its commits testifying `"system"` on
+//!   `/changes` (wire.md §The other endpoints).
 //! * [`Daemon`] — the state and the socket-free router: `GET /challenge`,
 //!   `POST /session`, `POST /session/close`, `POST /op`, `POST /op-at`
 //!   (any READ frame answered as of a committed
 //!   position, served from the journal via the engine's bounded replay),
-//!   `GET /health` (liveness, position, — wire v6 — `head_time`, and —
-//!   wire v7 — the `auth` object the board's mode derives from),
+//!   `GET /health` (liveness, position, — wire v6 — `head_time`, — wire v7 —
+//!   the `auth` object the board's mode derives from, and the kernel's
+//!   `chain_head`, the chain AT the position served beside it),
+//!   `GET /chain?at=N` (the commit chain's value as of a committed
+//!   position, recomputed off the journal — what a saved head or `/health`
+//!   pair is checked against),
 //!   `GET /events` (the server-sent commit stream, wire v4),
 //!   `GET /changes` (the pull delta feed of committed writes, wire v6, fed
 //!   by the daemon's own commit-metadata sidecar `commits.log` and — wire
@@ -61,7 +73,6 @@
 mod auth;
 mod codec;
 mod feed;
-mod head;
 mod history;
 mod notice;
 mod server;

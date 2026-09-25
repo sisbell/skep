@@ -309,9 +309,9 @@ struct Inner {
     /// the container supplies the order. At [`Inner::fold_position`] they
     /// are PUSHED, and the order comes from the write path instead:
     /// positions are recorded under the serialization guard
-    /// ([`crate::write_path::WritePath::commit_under`] runs the execute and
-    /// the record as one operation under it), so each push is strictly above
-    /// every prior one.
+    /// ([`crate::write_path::WritePath::commit_recorded`], which both of the
+    /// write path's doors run, executes and records as one operation under
+    /// it), so each push is strictly above every prior one.
     index: BTreeMap<Tumbler, (Address, Vec<u64>)>,
     /// The bitmap: positions masked at commit (docs non-empty, all drafts).
     ///

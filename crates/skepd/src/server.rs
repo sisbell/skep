@@ -1,6 +1,8 @@
 //! The process: one long-running server owning one `World`. The daemon is
 //! transport, configuration, and lifetime — every handler is
-//! parse/marshal/dispatch/configure; every decision lives in a store.
+//! parse/marshal/dispatch/configure; every decision lives in a store, save
+//! the two the spec gives the daemon — the session layer's gates (`auth/`)
+//! and the published head's cadence (`write_path/head.rs`).
 //!
 //! Split for testability: [`Daemon`] holds the state and routes
 //! `&HttpRequest → Routed` with no socket anywhere; [`serve`]/[`Skepd`]
@@ -14,13 +16,15 @@
 //! one-line facts.
 //!
 //! **History is served from the journal** (wire v3): `POST /op-at` answers
-//! any READ frame as of any committed position, and `GET /dump?at=N`
-//! (observe builds) dumps that position's world. Both ask `history.rs`,
-//! which owns the reconstruction (the engine's bounded replay), its
-//! concurrency budget, and the `as_of` stamping; what this file adds is the
-//! envelope, the read/write classification, and the one mapping from an
-//! unavailable answer onto the wire's transport errors. Writes never reach
-//! history — a write frame is refused at the transport
+//! any READ frame as of any committed position, `GET /dump?at=N`
+//! (observe builds) dumps that position's world, and `GET /chain?at=N`
+//! answers the commit chain's value there — the kernel's recomputation off
+//! its journal, no world folded. All three ask `history.rs`, which owns the
+//! reconstruction (the engine's bounded replay), the chain read beside it,
+//! their one concurrency budget, and the `as_of` stamping; what this file
+//! adds is the envelope, the read/write classification, and the one mapping
+//! from an unavailable answer onto the wire's transport errors. Writes never
+//! reach history — a write frame is refused at the transport
 //! (`400 write_at_history`) before anything runs — and the live `/op` path
 //! is untouched.
 //!
@@ -90,11 +94,13 @@
 //! M8 are not told a query is bounded. A concurrency bound, never a rate
 //! statement.
 //!
-//! **Writes go through one card** (`write_path.rs`): `POST /op` — the
+//! **Writes go through one card** (`write_path/`): `POST /op` — the
 //! daemon's only live write path — hands each write to
 //! `WritePath::commit_under`, which commits it, records its change-feed
 //! entry, and announces its position, in that order and inside the
-//! serialization guard the write sequences here hold. What this file adds
+//! serialization guard the write sequences here hold — and then gives the
+//! published head writer its turn, which when the cadence is due writes `H`
+//! under that same guard before `commit_under` returns. What this file adds
 //! is the frame's parse, its classification, and the two write sequences,
 //! which take `serial_lock` themselves so their gates and the execute they
 //! gate stand on one committed state; the ordering the commit stream and
@@ -104,7 +110,7 @@
 //! **The commit stream (wire v4)**: `GET /events` is a `text/event-stream`
 //! of committed log positions — one event carrying the last announced
 //! position on connect, then an event whenever the head advances.
-//! `write_path.rs` owns the stream: what a subscriber is told first and
+//! `write_path/` owns the stream: what a subscriber is told first and
 //! next, and the coalescing that falls out of asking "anything past what I
 //! last sent"; [`Subscribers`] below owns the budget, the admission, and
 //! the join at shutdown. What this file adds is the SSE framing
@@ -121,7 +127,7 @@
 //! `commits.log`: its crash honesty, its retention, and what a position
 //! whose record was lost answers; `feed/` owns the mask, the four derived
 //! sidecars, the supplement merge and the two narrowings (`under=`,
-//! `drafts=true`); `write_path.rs` owns the ordering that makes the
+//! `drafts=true`); `write_path/` owns the ordering that makes the
 //! sidecar's invariants true. What this file adds is the query's parse,
 //! the requester's FEED CLASS — resolved once per request off ONE head
 //! snapshot and threaded down (PUB-6.40) — the marshal, and `/health`'s
@@ -190,22 +196,6 @@ const CHECKPOINT_EVERY_COMMITS: u64 = 1024;
 /// factor of the sidecar's reconstruction ceiling — see
 /// [`CHECKPOINT_EVERY_COMMITS`].
 const RETAINED_CHECKPOINTS: usize = 2;
-
-/// The PUBLISHED HEAD cadence (PUB-6.65, RES-304), beside the checkpoint's and
-/// for the same reason it lives here: the daemon writes the head document `H`
-/// when N commits that are not its own head writes have landed since the last
-/// head. N = 64 — at that count the unheld tail a rewrite can hide in is ≤ 64
-/// commits and the heads are ~1/64 of the commits, ~19 bytes per user commit
-/// amortized (the investigation's §3.3 table). No timer thread exists (see
-/// [`CHECKPOINT_EVERY_COMMITS`]); the count is evaluated on the write path.
-const HEAD_EVERY_COMMITS: u64 = 64;
-
-/// The PUBLISHED HEAD's time bound (PUB-6.65): a head is also due when this
-/// long has passed since the last head AND the position has moved, so a slow
-/// board's head does not go stale beyond an hour — evaluated LAZILY on the next
-/// commit, never by a thread, and never writing a duplicate for a position that
-/// has not moved.
-const HEAD_MAX_INTERVAL_MILLIS: u64 = 3_600_000; // one hour
 
 /// Concurrent CLASS SCANS admitted at `/op` at once (wire v7.9; PUB-8.36,
 /// PUB-8.37): the link-discovery reads [`is_class_scan`] enumerates, each of
@@ -736,7 +726,7 @@ pub enum Routed {
     /// `GET /events` — the server-sent commit stream (wire v4).
     ///
     /// Serviceable only through [`serve`]: following the stream is
-    /// `write_path.rs`'s and crate-private, so a caller routing by hand can
+    /// `write_path/`'s and crate-private, so a caller routing by hand can
     /// answer this variant only by refusing the route. It is the one
     /// endpoint the socket-free surface names and cannot serve.
     EventStream,
@@ -1004,15 +994,15 @@ pub struct Daemon {
     /// the credential write lock, the identity fold, the credential memo.
     auth: AuthState,
     /// The write path: the serialization point, the commit-metadata sidecar
-    /// behind `GET /changes` and `head_time` (wire v6), and the commit
-    /// stream behind `GET /events` (wire v4). One field because the three
-    /// are one ordering — commit, record, announce — that no handler may
-    /// take apart.
+    /// behind `GET /changes` and `head_time` (wire v6), the commit stream
+    /// behind `GET /events` (wire v4), and the published head writer behind
+    /// them. One field because the four are one ordering — commit, record,
+    /// announce, then the head's turn — that no handler may take apart.
     writes: WritePath,
-    /// The history surface behind `/op-at` and `/dump?at`, holding its own
-    /// reconstruction budget: a guest may ask either route and replay is
-    /// per-call uncached, so without that budget any local caller could pin
-    /// every worker on reconstruction.
+    /// The history surface behind `/op-at`, `/dump?at` and `/chain?at`,
+    /// holding its own reconstruction budget: a guest may ask any of them
+    /// and replay is per-call uncached, so without that budget any local
+    /// caller could pin every worker on reconstruction.
     history: History,
     /// The class-scan bound behind `/op`'s class-scan-shaped FTT reads (wire
     /// v7.9; PUB-8.36), holding its own shape test and its own pool — a
@@ -1111,8 +1101,7 @@ impl Daemon {
             salt,
         };
         let engine = Engine::open(cfg).map_err(DaemonError::Engine)?;
-        let writes = WritePath::open(data_dir, &engine, HEAD_EVERY_COMMITS, HEAD_MAX_INTERVAL_MILLIS)
-            .map_err(DaemonError::Sidecar)?;
+        let writes = WritePath::open(data_dir, &engine).map_err(DaemonError::Sidecar)?;
         // THE READ PREDICATE (PUB-1.31; PUB-6.39's one-per-request shape;
         // PUB round 2, lane 3.3). The live front door is given NO consult:
         // M10 answers `World::readable` — published ∨ subtree ∨ grant, with
@@ -1848,8 +1837,11 @@ impl Daemon {
     /// TEST HOOK (the same standing as the two above: `#[doc(hidden)]`, not a
     /// stable API): fix the PUBLISHED HEAD writer's clock at `millis`, so a
     /// test drives the head's time bound (PUB-6.65 trigger (c)) through a seam
-    /// rather than a `sleep`. The writer's real clock is monotonic wall-time
-    /// since open; a fixed reading here holds until changed.
+    /// rather than a `sleep`. The reading is WALL-CLOCK UNIX MILLISECONDS —
+    /// the writer's own domain, whose hour is measured from the last head's
+    /// recorded time or from open, both wall-clock — so a test sets it
+    /// RELATIVE TO the wall clock: a small number is dwarfed by that origin
+    /// and the time bound never fires. A fixed reading holds until changed.
     #[doc(hidden)]
     pub fn head_set_clock_millis(&self, millis: u64) {
         self.writes.head_set_clock_millis(millis);
@@ -1859,11 +1851,12 @@ impl Daemon {
     /// [`Daemon::open_with`] under the SEEDED salt source
     /// (`SaltSource::Seeded(seed)`) in place of OS entropy, so two harness
     /// daemons over one op sequence write one chain and one head byte string
-    /// (`head.rs`'s determinism pin), and two seeds write two — the salt's
-    /// effect pinned from the wire. NEVER a deployment's: the seeded stream
-    /// is a pure function of the seed and the position, which is exactly the
-    /// predictability the salt exists to deny a reader of `/chain?at=N`;
-    /// `open_with` is the production door and takes no source.
+    /// (the head suite's determinism pin, `tests/it/head.rs`), and two seeds
+    /// write two — the salt's effect pinned from the wire. NEVER a
+    /// deployment's: the seeded stream is a pure function of the seed and the
+    /// position, which is exactly the predictability the salt exists to deny
+    /// a reader of `/chain?at=N`; `open_with` is the production door and
+    /// takes no source.
     #[doc(hidden)]
     pub fn open_seeded(
         data_dir: impl AsRef<Path>,
@@ -1873,15 +1866,19 @@ impl Daemon {
         Self::open_under(data_dir, opts, SaltSource::Seeded(seed))
     }
 
-    /// TEST HOOK (the same standing): take a checkpoint now, so a test drives
-    /// the head's checkpoint-moved trigger (PUB-6.65 trigger (b)) without
-    /// committing a whole `CHECKPOINT_EVERY_COMMITS` window. The next
-    /// committing write's `after_commit` observes the moved checkpoint seq and
-    /// writes a head. Logged-and-dropped like the auto-trigger — a checkpoint
-    /// error never fails the caller.
+    /// TEST HOOK (the same standing): take a KERNEL checkpoint now — the real
+    /// one, with every consequence a checkpoint has (`Kernel::checkpoint`).
+    /// It becomes the newest retained checkpoint, which is what the head
+    /// suite drives the head's trigger (b) with, without committing a whole
+    /// `CHECKPOINT_EVERY_COMMITS` window; and it counts toward the two this
+    /// daemon retains, reclaiming the closed journal below the oldest, so a
+    /// test that takes more than two can find an old position answering
+    /// `history_reclaimed`. A checkpoint this cannot take PANICS: a seam
+    /// whose act failed fails its test here, and not at a later assertion
+    /// about a head that never came.
     #[doc(hidden)]
-    pub fn head_checkpoint_now(&self) {
-        let _ = self.engine.kernel().checkpoint();
+    pub fn checkpoint_now(&self) {
+        self.engine.kernel().checkpoint().expect("the test seam's checkpoint");
     }
 
     /// `POST /op-at` — answer one READ frame as of a committed position:
@@ -3877,7 +3874,7 @@ mod tests {
     }
 
     /// A connecting subscriber is told the last ANNOUNCED position, not the
-    /// kernel's head — `write_path.rs`'s guarantee (every position a
+    /// kernel's head — `write_path/`'s guarantee (every position a
     /// subscriber hears is one `/changes` already carries) applied to the
     /// connect event.
     ///

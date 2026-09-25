@@ -59,7 +59,7 @@
 //! resident.
 //!
 //! The sidecar is written under the write path's serialization lock — held
-//! by `write_path.rs`, which takes that lock and calls the feed's `record`
+//! by `write_path/`, which takes that lock and calls the feed's `record`
 //! in one operation — so file order is position order and recorded times
 //! are monotone non-decreasing in position (wall-clock reads are
 //! additionally clamped against the last recorded time). Appends are
@@ -438,9 +438,10 @@ impl CommitsLog {
     /// permanent, and both load-bearing for the feed's paging and
     /// [`CommitsLog::head_time`]. The guard proves the lock is held and
     /// proves nothing about the position order the caller supplies, which
-    /// stays [`crate::write_path::WritePath::commit_under`]'s: it runs the
-    /// execute and this record under one guard, so the position recorded is
-    /// the one that write just committed.
+    /// stays [`crate::write_path::WritePath::commit_recorded`]'s — the step
+    /// both of the write path's doors run: it runs the execute and this
+    /// record under one guard, so the position recorded is the one that
+    /// write just committed.
     ///
     /// The clamp against `last_time` below covers the other half of the
     /// monotonicity — a wall clock that steps backwards — and that one IS
@@ -553,13 +554,13 @@ impl CommitsLog {
     }
 
     /// Every entry ABOVE `position`, in position order — what the PUBLISHED
-    /// HEAD writer's resume reads (`crate::head`; the chain's open items,
-    /// item 2): the commits landed since the head that named `position`,
-    /// and among them the head's own `"system"`-keyed commits, whose
-    /// recorded `time` is the head's. Testimony read at a GATE to decide
-    /// WHEN, never a fold input (D1): a bare entry answers no time and no
-    /// key, and a rewritten one moves a head's timing within the bounds the
-    /// triggers already allow. Cloned, once at open — at most the retained
+    /// HEAD writer's resume reads (`crate::write_path::head`; the chain's
+    /// open items, item 2): the commits landed since the head that named
+    /// `position`, and among them the head's own `"system"`-keyed commits,
+    /// whose recorded `time` is the head's. Testimony read at a GATE to
+    /// decide WHEN, never a fold input (D1): a bare entry answers no time and
+    /// no key, and a rewritten one moves a head's timing within the bounds
+    /// the triggers already allow. Cloned, once at open — at most the retained
     /// window — so the writer holds no borrow of this file.
     pub fn entries_above(&self, position: u64) -> Vec<(u64, CommitMeta)> {
         self.entries

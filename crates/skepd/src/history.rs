@@ -1,7 +1,9 @@
-//! Reading the world as of a committed position (wire v3) — the whole
-//! obligation on one card: the reconstruction budget, the throwaway kernel
-//! a historical world is read through, and the `as_of` stamping that makes
-//! the answer say which position it is OF.
+//! Reading the journal as of a committed position (wire v3) — the whole
+//! obligation on one card: the budget every historical answer spends, the
+//! throwaway kernel a historical world is read through, the `as_of` stamping
+//! that makes the answer say which position it is OF, and the commit chain's
+//! value there (`/chain?at`), which spends the same budget and folds no
+//! world.
 //!
 //! The mechanism is the engine's bounded replay (`Engine::world_at`):
 //! checkpoint-or-genesis base plus journal fold, per call, uncached. That
@@ -71,8 +73,10 @@ pub(crate) enum Unavailable {
     Journal(HistoryError),
 }
 
-/// The history surface: the reconstruction budget, and the two questions
-/// asked of it.
+/// The history surface: the budget, and the three questions asked of it — a
+/// read as of a position ([`History::read_at`]), the world's dump there
+/// (`History::dump_at`, observe builds), and the chain's value there
+/// ([`History::chain_at`]).
 #[derive(Debug)]
 pub(crate) struct History {
     permits: Permits,

@@ -249,9 +249,14 @@ impl Sequencer {
 
     /// Draw the contiguous range `first..=last` this transaction commits at —
     /// the ONE site a `Seq` is minted (§2). `None` when the order has no room
-    /// left for it: the coordinates are exhausted and renumbering over a
-    /// committed predecessor is not an option, so there is nothing this order
-    /// can answer with, and what to do about that is the kernel's to decide.
+    /// left for it: `last` would overflow, or would be the top coordinate
+    /// itself, which leaves no coordinate for a successor — the invariant
+    /// recovery checks of every committed head ([`Kernel::open`] refuses a
+    /// head with no successor as [`OpenError::Corruption`]), established here,
+    /// where every head is made, so a kernel never commits a journal it cannot
+    /// reopen. Renumbering over a committed predecessor is not an option, so
+    /// there is nothing this order can answer with, and what to do about that
+    /// is the kernel's to decide.
     ///
     /// `n ≥ 1` is carried by the TYPE, which is what makes `high_water + 1`
     /// below sound without a second site agreeing to it: a `checked_add` that
@@ -259,7 +264,10 @@ impl Sequencer {
     /// the increment is in range. A zero-record transaction cannot be spelled
     /// here, which is the whole of the precondition.
     fn mint(&mut self, n: NonZeroU64) -> Option<(u64, u64)> {
-        let last = self.high_water.checked_add(n.get())?;
+        let last = self
+            .high_water
+            .checked_add(n.get())
+            .filter(|&last| last < u64::MAX)?;
         let first = self.high_water + 1; // n ≥ 1, so this is at most `last`
         self.high_water = last;
         Some((first, last))
@@ -477,8 +485,8 @@ impl<W: WorldState> Kernel<W> {
     /// re-fix any CRC. What recovery detects is FRAMES THAT FAIL THEIR CRC —
     /// the corrupt-run verdict, which speaks first where there is one — and,
     /// since `SKJ3`, LINKS THAT FAIL THE CHAIN, the base's own link and the
-    /// transaction its marker does not close among them (the chain's open
-    /// items, 2026-09-23).
+    /// intact transaction no intact marker closes among them (the chain's
+    /// open items, 2026-09-23).
     ///
     /// CAUGHT — a chain break: [`OpenError::Corruption`] naming the
     /// `last_seq` of the first committed transaction above the base whose
@@ -494,22 +502,29 @@ impl<W: WorldState> Kernel<W> {
     /// these was once a shorter world answered `Ok` at the true head); two
     /// damages, at the first only — the chain cannot see past a break. A
     /// checkpoint's `chain_head` edited, at the base's own coordinate where
-    /// the marker closing it is scanned — AT THE HEAD always, the head's
-    /// marker being in the active segment — and at the first transaction
-    /// above it otherwise: nothing in the header covers that field, so the
-    /// base loads and the journal contradicts it, at its own marker where
-    /// that marker is read, else at the first link judged against it. A
-    /// marker's `records_checksum` or `last_seq` edited, AT that
-    /// transaction, as an intact transaction its marker does not close — a
-    /// shape no writer of this format leaves, so the marker was rewritten;
-    /// on the LAST transaction too, where un-committing it would otherwise
-    /// have been the torn tail recovery cuts. The signature slot is NOT a
-    /// chain input, by design: a filled slot opens. The SALT IS one (`SKJ4`,
-    /// the matrix's case 16): a marker's salt edited, its CRC re-fixed, is
-    /// caught at that transaction — and being drawn at random per
-    /// transaction and served by no route, it is what keeps a served chain
-    /// value from confirming a guess at a transaction's bytes, while against
-    /// a party holding the journal, who holds the bytes, it protects nothing.
+    /// the marker closing it is scanned — at the head whenever the active
+    /// segment holds the head's marker, which it does unless that segment is
+    /// EMPTY after a rotation whose transaction failed or never landed, when
+    /// the head's marker ends the closed segment before it and is skipped
+    /// (residue (ii)'s boundary coincidence below; the matrix's case 15) —
+    /// and at the first transaction above it otherwise: nothing in the header
+    /// covers that field, so the base loads and the journal contradicts it,
+    /// at its own marker where that marker is read, else at the first link
+    /// judged against it. A marker's `txn`, `records_checksum` or `last_seq`
+    /// edited, AT that transaction, as an intact transaction no intact marker
+    /// closes — its own refusing it, or naming another transaction as its own
+    /// — a shape no writer of this format leaves, so the marker was
+    /// rewritten; on the LAST transaction too, where un-committing it would
+    /// otherwise have been the torn tail recovery cuts; and at any height in
+    /// a segment the scan reads, below a standing base as well, since that
+    /// verdict compares a marker with its own records and needs no link from
+    /// the base. The signature slot is NOT a chain input, by design: a filled
+    /// slot opens. The SALT IS one (`SKJ4`, the matrix's case 16): a
+    /// marker's salt edited, its CRC re-fixed, is caught at that transaction
+    /// — and being drawn at random per transaction and served by no route, it
+    /// is what keeps a served chain value from confirming a guess at a
+    /// transaction's bytes, while against a party holding the journal, who
+    /// holds the bytes, it protects nothing.
     ///
     /// REFUSED — the checkpoint's own door: a body rewritten with its CRC
     /// re-fixed fails `body_hash`, the fallback reaches an older base or
@@ -542,12 +557,24 @@ impl<W: WorldState> Kernel<W> {
     /// the journal re-chained between them, the consistent re-chain again.
     /// And the ruling's "any rewrite", as the owner reads it (the matrix's
     /// case 12, 2026-09-23): the chain is verified for transactions above
-    /// the base a replay selects, so a rewrite BELOW a standing base is
+    /// the base a replay selects, so a CONSISTENT rewrite below a standing
+    /// base — its CRCs and `records_checksum` re-fixed, so it commits — is
     /// unseen at `open` while that base stands, seen by any bounded read
     /// below the base — which verifies every link from the base it selects
     /// to the journal's end — and beyond any replay once reclamation drops
-    /// the segment. The `journal_path` caller contract still keeps the
-    /// files whole; what it no longer has to keep is the silence.
+    /// the segment; an edited transaction there is caught, as above. The
+    /// `journal_path` caller contract still keeps the files whole; what it no
+    /// longer has to keep is the silence.
+    ///
+    /// NOT CAUGHT, AND NOT BY DESIGN — an open item, the owner's (the
+    /// matrix's case 17, standing `#[ignore]`d as a STOP): a frame of the
+    /// LAST transaction rewritten so it no longer decodes — a payload tag, a
+    /// length prefix, the signature slot's one spelling of empty — its CRC
+    /// re-fixed. Mid-history the corrupt run it opens halts at the next
+    /// intact frame (case 4); in the last transaction the run lies above the
+    /// committed head, §7's torn tail, and the transaction is cut without a
+    /// word, though its CRC proves these are the bytes that were written.
+    /// Closing it amends §7's tail rule.
     ///
     /// REFUSAL PRECEDENCE — the steps above are the order in which refusals
     /// speak: [`OpenError::InvalidConfig`] precedes the lock, the lock
@@ -559,7 +586,7 @@ impl<W: WorldState> Kernel<W> {
     /// damaged sync word; and EVERY route to `Corruption`, in the order they
     /// speak — the damaged sync word, an unenumerable or oversized segment,
     /// the classified corrupt run, the base's own link, the intact
-    /// transaction its marker does not close, the chain break, the exhausted
+    /// transaction no intact marker closes, the chain break, the exhausted
     /// `Seq` order, and the fold's own verdict on an undecodable or repeated
     /// record — precedes the tail truncation, which is why a halt never cuts
     /// anything.
@@ -680,7 +707,7 @@ impl<W: WorldState> Kernel<W> {
         }
         // The chain's verdicts, in the scan's own order: the base's own link
         // (a header edited at the head, where no link above would judge it),
-        // the intact transaction its marker does not close (the edited
+        // the intact transaction no intact marker closes (the edited
         // transaction, named before the next one's link fails on it), the
         // chain break. Each halts here with its account and cuts nothing.
         if let Some((at, cause)) = scan.chain_verdict() {
@@ -878,6 +905,12 @@ impl<W: WorldState> Kernel<W> {
     /// committed-but-uninstalled txn replays at the next `open()` as a
     /// lost-ack op); the panic then propagates to the caller.
     ///
+    /// A panic AFTER the commit region — the superseded root's destructor,
+    /// run as this call returns and releases what may be the last reference
+    /// to it ([`WorldState`]'s drop obligation) — propagates with the
+    /// transaction committed and installed: the lost-ack case (§3), the
+    /// kernel not poisoned and its order intact.
+    ///
     /// [`BurnedSeqPolicy`]: crate::BurnedSeqPolicy
     pub fn transact<T, E>(
         &self,
@@ -890,9 +923,14 @@ impl<W: WorldState> Kernel<W> {
             return Err(TxnError::Poisoned);
         }
         let base = self.root.load_full();
-        // The staging owns the root for the length of the closure; what
-        // outlives it here is the coordinate, which is all the zero-step
-        // return and the burned-`Seq` rollbacks below need.
+        // The staging holds the root for the WHOLE of this call — the
+        // destructure below binds `base: _`, which moves nothing — so the
+        // install releases only a reference: no world's destructor runs
+        // between a root's store and the end of the commit region, and every
+        // unwind out of that region precedes the store, which is what the
+        // in-memory journal's `Clean` repair rests on (`WorldState`'s drop
+        // obligation). What the code below reads of the root is its
+        // coordinate.
         let base_seq = base.seq;
         let mut stg = Staging::new(base);
 
@@ -904,6 +942,8 @@ impl<W: WorldState> Kernel<W> {
             Ok(value) => value,
         };
         let Staging {
+            // Load-bearing: `_` moves nothing, so the superseded root stays
+            // in `stg` until this call returns (above).
             base: _,
             working,
             records,
@@ -1192,8 +1232,12 @@ impl<W: WorldState> Kernel<W> {
     /// being a property of the kernel that no choice of `at` can avoid; then
     /// [`HistoryError::BeyondHead`]; then [`HistoryError::Reclaimed`], since
     /// with no base the journal's contents cannot matter; then
-    /// [`HistoryError::Corruption`], since a corrupt run makes the boundary
-    /// set itself underivable; and last [`HistoryError::NotABoundary`].
+    /// [`HistoryError::Corruption`] from the SCAN — an unenumerable or
+    /// oversized segment, a corrupt run, a chain verdict — since each makes
+    /// the boundary set itself underivable; then
+    /// [`HistoryError::NotABoundary`]; and last [`HistoryError::Corruption`]
+    /// from the FOLD — a record in `(base, at]` that does not decode, or a
+    /// `Seq` presented twice — which only a boundary reaches.
     /// [`HistoryError::Io`] speaks wherever the read that failed sits.
     ///
     /// COST, per call, uncached: one whole checkpoint file read and
@@ -1270,7 +1314,7 @@ impl<W: WorldState> Kernel<W> {
             });
         }
         // The chain's verdicts — the base's own link, the intact transaction
-        // its marker does not close, the chain break — anywhere above the
+        // no intact marker closes, the chain break — anywhere above the
         // base are at-rest damage for the reason a run anywhere is: the link
         // that failed may sit above `at`, and what it says is that the
         // region is not the history it claims.
@@ -1309,15 +1353,19 @@ impl<W: WorldState> Kernel<W> {
     /// every committed link from that base to the journal's END, not to
     /// `at`, so a boundary below the newest checkpoint is a full
     /// verification of the surviving journal from the base it selects — the
-    /// same refusals in the same order ([`HistoryError::Unjournaled`],
-    /// [`HistoryError::BeyondHead`], [`HistoryError::Reclaimed`],
-    /// [`HistoryError::Corruption`] — the corrupt run, then the chain's own
-    /// verdicts — then [`HistoryError::NotABoundary`]), and the same answer
-    /// for a boundary that IS the base: the base's own chain, the `SKC4`
-    /// header's `chain_head` or the seed at genesis, answered without
-    /// consulting the journal and so never halting. Deterministic in `at`
-    /// across calls, processes and base choices, since a checkpoint's header
-    /// carries the very marker value it stands in for.
+    /// same refusals in the same order as far as `world_at`'s scan goes
+    /// ([`HistoryError::Unjournaled`], [`HistoryError::BeyondHead`],
+    /// [`HistoryError::Reclaimed`], [`HistoryError::Corruption`] — an
+    /// unenumerable or oversized segment, the corrupt run, then the chain's
+    /// own verdicts — then [`HistoryError::NotABoundary`]) and none of the
+    /// fold's: this folds nothing, so an undecodable record or a `Seq`
+    /// presented twice refuses `world_at` and not this, the chain being over
+    /// the framed bytes, which verify; and the same answer for a boundary
+    /// that IS the base: the base's own chain, the `SKC4` header's
+    /// `chain_head` or the seed at genesis, answered without consulting the
+    /// journal and so never halting. Deterministic in `at` across calls,
+    /// processes and base choices, since a checkpoint's header carries the
+    /// very marker value it stands in for.
     ///
     /// COST, per call, uncached: `world_at`'s minus the fold and the resident
     /// world — the base is still LOADED, since its body hash is the base's
@@ -2031,6 +2079,10 @@ mod tests {
             .to_string();
         assert!(cause.contains("variant index"), "got {cause}");
         assert!(err.to_string().contains("variant index"), "got {err}");
+        // The chain at the same boundary answers: `chain_at` folds nothing,
+        // so it makes none of the fold's refusals — the chain is over the
+        // framed bytes, and those verify.
+        assert!(k.chain_at(Seq(1)).is_ok(), "chain_at makes none of the fold's refusals");
     }
 
     #[test]
@@ -2186,6 +2238,32 @@ mod tests {
         assert!(matches!(out, Err(TxnError::Poisoned)), "got {out:?}");
         assert!(k.is_poisoned());
         assert_eq!(k.snapshot().world().as_slice(), &[] as &[u64]);
+    }
+
+    #[test]
+    fn the_sequencer_never_commits_a_head_recovery_would_refuse() {
+        // The top coordinate leaves no successor, so recovery refuses it as a
+        // committed head — and the one mint site refuses to make it one, so a
+        // kernel never commits a journal it cannot reopen (§2/§7).
+        let dir = tempfile::tempdir().unwrap();
+        let k = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
+            .unwrap();
+        k.transact::<_, ()>(&[], |stg| {
+            stg.push(10);
+            Ok(())
+        })
+        .unwrap();
+        k.applier.state.lock().seq.high_water = u64::MAX - 1;
+        let out = k.transact::<_, ()>(&[], |stg| {
+            stg.push(20);
+            Ok(())
+        });
+        assert!(matches!(out, Err(TxnError::Poisoned)), "got {out:?}");
+        drop(k);
+        let k = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
+            .expect("a kernel reopens every journal it commits");
+        assert_eq!(k.current_seq(), Seq(1));
+        assert_eq!(k.snapshot().world().as_slice(), &[10]);
     }
 
     #[test]

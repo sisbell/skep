@@ -78,53 +78,74 @@ pub enum OpenError {
         /// was ever available.
         cause: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
     },
-    /// Durable committed data the recovered state needs cannot be read. Six
-    /// conditions reach here: one DAMAGED SYNC WORD opening the first scanned
-    /// segment — a word shaped like another format's stamp on a frame whose
-    /// successor carries this build's, which the frame CRC does not cover,
-    /// refused by the same probe as [`OpenError::ForeignFormat`] and ahead of
-    /// the scan, since that variant's remedy would discard a board this build
-    /// wrote; a corrupt run inside the genuinely-replayed range `(S_load, W]`
-    /// (a run reaching EOF is the un-acked / torn tail, not this); a segment
-    /// that could not be enumerated in bounded work or read in bounded memory
-    /// — a file longer than any segment this journal's writer produces — so
-    /// nothing derived from it would be more than a prefix; a committed
-    /// transaction above the base whose marker carries a chain value that is
-    /// not the recomputation over its predecessor's and its own records — a
-    /// CHAIN BREAK: the transaction was rewritten consistently with its frame
-    /// CRCs, or the one it should follow is not the one before it; a
-    /// committed record that does not decode as `W::Record`, or one the
-    /// committed set presents twice; and a committed head that leaves no
-    /// coordinate for a successor, which no sequencer here could have
-    /// written. Halt, never drop — nothing is folded, nothing is installed,
-    /// and nothing is truncated. Operator-intervention condition — not
+    /// Durable committed data the recovered state needs cannot be read, or
+    /// is not the history it claims to be. These conditions reach here, in
+    /// the order they speak ([`crate::Kernel::open`]'s refusal precedence):
+    ///
+    /// 1. a DAMAGED SYNC WORD opening the first scanned segment — a word
+    ///    shaped like another format's stamp on a frame whose successor
+    ///    carries this build's, which the frame CRC does not cover — refused
+    ///    by the same probe as [`OpenError::ForeignFormat`] and ahead of the
+    ///    scan, since that variant's remedy would discard a board this build
+    ///    wrote; refused even where that frame lies at or below the base,
+    ///    which the probe cannot tell, reading no `Seq`;
+    /// 2. a segment that could not be enumerated in bounded work or read in
+    ///    bounded memory — a file longer than any segment this journal's
+    ///    writer produces — so nothing derived from it would be more than a
+    ///    prefix;
+    /// 3. a corrupt run inside the genuinely-replayed range `(S_load, W]` (a
+    ///    run reaching EOF is the un-acked / torn tail, not this);
+    /// 4. THE BASE'S OWN LINK: the committed marker closing the base's seq
+    ///    carries a chain that is not the checkpoint header's `chain_head` —
+    ///    two stored values disagree, and nothing is recomputed;
+    /// 5. THE EDITED TRANSACTION: a transaction intact frame by frame that no
+    ///    intact marker closes — its own marker refusing it, or its next
+    ///    intact frame being ANOTHER transaction's marker: a rewritten
+    ///    `records_checksum`, `last_seq` or `txn`, a shape no writer of this
+    ///    format leaves;
+    /// 6. a CHAIN BREAK: a committed transaction above the base whose marker
+    ///    carries a chain value that is not the recomputation over its
+    ///    predecessor's and its own records — rewritten consistently with its
+    ///    frame CRCs, or following a transaction that is not the one before
+    ///    it;
+    /// 7. a committed head that leaves no coordinate for a successor, which
+    ///    no sequencer here could have written;
+    /// 8. the fold's own verdict: a committed record that does not decode as
+    ///    `W::Record`, or a `Seq` the committed set presents twice.
+    ///
+    /// Halt, never drop — nothing is folded, nothing is installed, and
+    /// nothing is truncated. Operator-intervention condition — not
     /// auto-retried (§7).
     Corruption {
         /// The coordinate naming the damage, which differs by condition: for
         /// a damaged sync word, the base's own coordinate, where the scan
         /// would have begun — the probe reads a frame header and no `Seq`;
-        /// for a corrupt run, the next INTACT frame's coordinate — the run's
-        /// own seqs are unreadable, so this bounds the damage rather than
-        /// locating it; for an unbounded resynchronization or an oversized
-        /// segment, the base's own coordinate, since the damage lies
-        /// somewhere above it and the scan could not reach past it to say
-        /// where; for a chain break, the `last_seq` of the first transaction
-        /// whose chain did not verify; for an undecodable or repeated record,
-        /// that record's own `Seq`; for an exhausted order, the committed head
-        /// itself.
+        /// for an unenumerable or oversized segment, the base's own
+        /// coordinate, since the damage lies somewhere above it and the scan
+        /// could not reach past it to say where; for a corrupt run, the next
+        /// INTACT frame's coordinate — the run's own seqs are unreadable, so
+        /// this bounds the damage rather than locating it; for the base's own
+        /// link, the base's seq; for the edited transaction, the last seq of
+        /// its own records — not its marker's, which in one shape is the
+        /// rewritten field; for a chain break, the `last_seq` of the first
+        /// transaction whose chain did not verify; for an exhausted order, the
+        /// committed head itself; for an undecodable or repeated record, that
+        /// record's own `Seq`.
         at: Seq,
-        /// The account of what could not be read, for the three conditions
-        /// that have one: a damaged sync word, whose account names the word
-        /// found and a remedy that keeps the board — restore the segment —
-        /// where [`OpenError::ForeignFormat`]'s would discard it; a committed
-        /// record that does not decode as `W::Record`, where the serializer's
-        /// own refusal is what separates a writer/reader skew — a binary
-        /// rolled back over a record format — from bit-rot, two conditions
-        /// this variant otherwise reports alike and an operator must not
-        /// treat alike; and a chain break, whose account says which link
-        /// failed. The other three carry `None`: a corrupt run's own bytes
-        /// are unreadable, an unenumerable or oversized segment is a budget
-        /// verdict, and an exhausted order is arithmetic.
+        /// The account of what could not be read, where there is one: a
+        /// damaged sync word's names the word found and a remedy that keeps
+        /// the board — restore the segment — where
+        /// [`OpenError::ForeignFormat`]'s would discard it; the base's own
+        /// link, the edited transaction and a chain break each say which link
+        /// failed and how; and a committed record that does not decode carries
+        /// the serializer's own refusal, which is what separates a
+        /// writer/reader skew — a binary rolled back over a record format —
+        /// from bit-rot, two conditions this variant otherwise reports alike
+        /// and an operator must not treat alike. `None` for the rest: a
+        /// corrupt run's own bytes are unreadable, an unenumerable or
+        /// oversized segment is a budget verdict, an exhausted order is
+        /// arithmetic, and a `Seq` the committed set presents twice is a
+        /// malformed journal rather than an unreadable one.
         cause: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
     },
 }
@@ -299,6 +320,10 @@ pub enum HistoryError {
     /// reaches and this call mints nothing; and the damaged sync word, which
     /// only `open`'s first-sync-word probe names — a bounded read truncates
     /// nothing, so its own scan meets that frame as a corrupt run instead.
+    /// And the fold's two — an undecodable record, a `Seq` presented twice —
+    /// reach [`crate::Kernel::world_at`] and not [`crate::Kernel::chain_at`],
+    /// which folds nothing: the chain is over the framed bytes, and those
+    /// verify.
     Corruption {
         /// See [`OpenError::Corruption`].
         at: Seq,
@@ -382,13 +407,17 @@ pub enum TxnError<E> {
     Rejected(E),
     /// The per-commit barrier (the single records+marker fsync) failed BEFORE
     /// install — or a non-unwind `io::Error` from the append path preceded it
-    /// (e.g. ENOSPC; §3) — AND the txn's un-acked record+marker tail was
-    /// durably truncated (Seqs burned per [`crate::BurnedSeqPolicy`]), so
-    /// nothing was installed and no durable marker survives → a TRUE no-op;
-    /// the caller may safely re-invoke. If the truncation ITSELF fails to
-    /// complete durably the kernel POISONS and the call returns [`Poisoned`]
-    /// instead (§1: a surviving un-acked marker would let a successor collide
-    /// on recovery).
+    /// (e.g. ENOSPC; §3), or one of the two failures that precede the first
+    /// byte appended: the rotation's creation of the next segment, and the
+    /// OS refusing entropy for the transaction's salt
+    /// ([`crate::SaltSource::Os`], `SKJ4`) — AND nothing of the transaction
+    /// survives in the journal: its un-acked record+marker tail durably
+    /// truncated, or never appended (Seqs burned per
+    /// [`crate::BurnedSeqPolicy`]), so nothing was installed and no durable
+    /// marker survives → a TRUE no-op; the caller may safely re-invoke. If
+    /// the truncation ITSELF fails to complete durably the kernel POISONS and
+    /// the call returns [`Poisoned`] instead (§1: a surviving un-acked marker
+    /// would let a successor collide on recovery).
     ///
     /// [`Poisoned`]: TxnError::Poisoned
     Durability(io::Error),
@@ -449,8 +478,10 @@ pub enum TxnError<E> {
     /// durability-failure or panic-guard truncation that itself failed to
     /// complete durably, an unwind after a successful barrier but before
     /// install, or a `Seq` order with no room left for another transaction
-    /// (§2 — the coordinates are exhausted, and renumbering over a committed
-    /// predecessor is not an option). Returned by the poisoning call ITSELF
+    /// (§2 — its last coordinate would overflow, or would be the top
+    /// coordinate itself, which leaves no successor and which recovery
+    /// refuses as a committed head; renumbering over a committed predecessor
+    /// is not an option). Returned by the poisoning call ITSELF
     /// (in place of `Durability`; a panic-path poisoning propagates the panic
     /// instead) and by every later `transact`; reads
     /// (`snapshot`/`current_seq`) keep serving the last consistent root. Do

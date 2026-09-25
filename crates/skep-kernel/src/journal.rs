@@ -1175,11 +1175,14 @@ impl Journal {
     }
 
     /// [`JournalWriter::repair_after_unwind`]. The in-memory arm answers
-    /// [`UnwindRepair::Clean`] for every unwind, because the only thing it
-    /// does past the size refusals is call `install`, and a world's destructor
-    /// does not unwind ([`crate::WorldState`]'s drop obligation) — the durable
-    /// arm tracks [`InFlight::Barriered`] because it has a barrier to be
-    /// after, and this arm has none.
+    /// [`UnwindRepair::Clean`] for every unwind, because every unwind out of
+    /// it precedes the install: past the size refusals it only calls
+    /// `install`, and `install` drops no world — [`crate::Kernel::transact`]
+    /// holds the superseded root until it returns, so the store releases
+    /// only a reference ([`crate::WorldState`]'s drop obligation) — so
+    /// nothing it runs can unwind. The durable arm tracks
+    /// [`InFlight::Barriered`] because it has a barrier to be after, and this
+    /// arm has none.
     pub(crate) fn repair_after_unwind(&mut self) -> UnwindRepair {
         match self {
             Journal::InMemory => UnwindRepair::Clean,
@@ -1200,7 +1203,12 @@ pub(crate) enum RunEnd {
     Landed { inferred_max: u64, at: u64 },
     /// The run reached end-of-journal with no next intact frame: classes as
     /// the un-acked / torn tail (`> W`), sound because the last committed
-    /// marker is itself intact and so precedes any EOF-reaching run (§7).
+    /// marker is itself intact and so precedes any EOF-reaching run (§7) —
+    /// sound against torn writes and CRC-failing damage under §1's storage
+    /// assumptions, save §7's documented post-commit-rot exception; NOT
+    /// against a rewrite that leaves one of the last transaction's frames
+    /// intact and undecodable, which reads as a run reaching here and is cut
+    /// (the open item in [`crate::Kernel::open`]'s damage model).
     Eof,
 }
 
@@ -1337,28 +1345,37 @@ pub(crate) struct ScanOutcome {
     /// marker was. `None` when they agree, and `None` — vacuously — when
     /// that marker was not scanned: a closed segment ending exactly at
     /// `s_load` is skipped, and one below the reclaim floor is gone. At the
-    /// HEAD the marker is always scanned, since the active segment is.
-    /// Recorded, not refused, for the reason `chain_break` is; read through
-    /// [`ScanOutcome::base_mismatch`].
+    /// HEAD the marker is scanned whenever the active segment holds it — not
+    /// while that segment is EMPTY after a rotation whose transaction failed
+    /// or never landed, when the head's marker ends the closed segment before
+    /// it and is skipped as the rest are. Recorded, not refused, for the
+    /// reason `chain_break` is; read through [`ScanOutcome::base_mismatch`].
     base_mismatch: Option<u64>,
     /// THE EDITED TRANSACTION (case 2's coordinate): the last seq of the
-    /// first transaction whose frames were ALL intact and whose intact
-    /// marker did not close it ([`PendingTxn::commits`] refused) — the
-    /// GROUP's own last seq, since in the `last_seq`-edited shape the
-    /// marker's is the forged field. NO WRITER OF THIS JOURNAL PRODUCES THAT
-    /// SHAPE: [`encode_txn`] streams `records_checksum` over the frames it
-    /// writes and sets `last_seq` to the last record's, emits one
-    /// transaction's frames contiguously and `Seq`-ascending, and refuses a
-    /// group past the budget before a byte lands; a crash truncates (a frame
-    /// fails its CRC) or loses frames (they are absent), and never leaves a
-    /// complete marker disagreeing with complete records. So the marker was
-    /// rewritten — and the transaction it closed is un-committed, which on
-    /// the LAST transaction is the tail cut in disguise this names before
-    /// recovery cuts it. A group that met a corrupt or undecodable frame
-    /// while open, or whose first record closed a corrupt run (the run may
-    /// have eaten its own earlier frames), is not clean and never records
-    /// here: that is the corrupt-run verdict's. Recorded, not refused; read
-    /// through [`ScanOutcome::uncommitted_intact`].
+    /// first transaction whose frames were ALL intact and which an intact
+    /// marker failed to close — its own marker refusing it
+    /// ([`PendingTxn::commits`]), or its next intact frame being ANOTHER
+    /// transaction's marker, the marker's `txn` rewritten — the GROUP's own
+    /// last seq, since in the `last_seq`-edited shape the marker's is the
+    /// forged field. NO WRITER OF THIS JOURNAL PRODUCES THAT SHAPE:
+    /// [`encode_txn`] streams `records_checksum` over the frames it writes
+    /// and sets `last_seq` to the last record's, emits one transaction's
+    /// frames contiguously and `Seq`-ascending — so a clean group's next
+    /// intact frame is its own marker — and refuses a group past the budget
+    /// before a byte lands; a crash truncates (a frame fails its CRC) or
+    /// loses frames (they are absent), and never leaves a complete marker
+    /// disagreeing with complete records. So the marker was rewritten — and
+    /// the transaction it should have closed is un-committed, which on the
+    /// LAST transaction is the tail cut in disguise this names before
+    /// recovery cuts it. Recorded at any height, below the base as well: the
+    /// verdict compares a marker with its own records and needs no link from
+    /// the base. A group that met a corrupt or undecodable frame while open,
+    /// or whose first record closed a corrupt run (the run may have eaten its
+    /// own earlier frames), is not clean and never records here: that is the
+    /// corrupt-run verdict's — which mid-history halts, and in the last
+    /// transaction does not (the open item in [`crate::Kernel::open`]'s
+    /// damage model). Recorded, not refused; read through
+    /// [`ScanOutcome::uncommitted_intact`].
     uncommitted_intact: Option<u64>,
     /// The running chain AT `bound`: the `chain` of the committed marker
     /// whose `last_seq` is `bound`, above the base — `None` when `bound` is
@@ -1387,7 +1404,7 @@ impl ScanOutcome {
         self.base_mismatch
     }
 
-    /// The first intact transaction whose intact marker did not close it
+    /// The first intact transaction which an intact marker failed to close
     /// ([`ScanOutcome::uncommitted_intact`]'s field), by its own last seq.
     pub(crate) fn uncommitted_intact(&self) -> Option<u64> {
         self.uncommitted_intact
@@ -1395,8 +1412,8 @@ impl ScanOutcome {
 
     /// THE CHAIN'S VERDICTS, in the order they speak — the coordinate and
     /// the account each caller wraps as its own `Corruption`: the base's own
-    /// link ([`ScanOutcome::base_mismatch`]), then the intact transaction its
-    /// marker does not close ([`ScanOutcome::uncommitted_intact`]), then the
+    /// link ([`ScanOutcome::base_mismatch`]), then the intact transaction no
+    /// intact marker closes ([`ScanOutcome::uncommitted_intact`]), then the
     /// chain break ([`ScanOutcome::chain_break`]). One site for the order, so
     /// the open and the two bounded reads cannot drift on it. A verdict of
     /// an earlier kind speaks first whatever its coordinate, as the
@@ -1440,7 +1457,12 @@ impl ScanOutcome {
 
     /// The corrupt run a RECOVERY cannot answer around, classified within
     /// the committed region this scan derived: a run above the committed head
-    /// is the un-acked / torn tail, which recovery is about to discard (§7).
+    /// is the un-acked / torn tail, which recovery is about to discard (§7) —
+    /// the tail against torn writes and CRC-failing damage; NOT against a
+    /// rewrite that leaves one of the last transaction's frames intact and
+    /// undecodable, whose run lands here above the head, or reaches
+    /// end-of-journal, and is cut with the transaction (the open item in
+    /// [`crate::Kernel::open`]'s damage model).
     pub(crate) fn fatal_run_to_head(&self) -> Option<u64> {
         self.fatal_run(Some(self.committed_head))
     }
@@ -1626,9 +1648,10 @@ struct PendingTxn {
     /// `false` when the group's first record closed a corrupt run — the run
     /// may have eaten this transaction's own earlier frames — and cleared
     /// when a corrupt or undecodable frame is met while the group is open.
-    /// A clean group its intact marker does not close is the shape no
-    /// writer produces ([`ScanOutcome::uncommitted_intact`]); an unclean one
-    /// is the corrupt-run verdict's, whatever its marker says.
+    /// A clean group no intact marker closes — its own refusing it, or
+    /// another transaction's following it — is the shape no writer produces
+    /// ([`ScanOutcome::uncommitted_intact`]); an unclean one is the
+    /// corrupt-run verdict's, whatever its marker says.
     clean: bool,
 }
 
@@ -1800,20 +1823,22 @@ fn read_segment(path: &Path, s_load: u64) -> Result<Vec<u8>, ScanFail> {
 /// TWO MORE VERDICTS ARE RECORDED in the same pass, refused by the callers
 /// as the break is (the chain's open items, 2026-09-23). THE BASE'S OWN
 /// LINK: when the committed marker closing `s_load` itself is scanned — at
-/// the head always, since the active segment is; mid-history whenever the
-/// base's segment is — its `chain` must equal `chain_at_base`, the header's
-/// `chain_head`, else [`ScanOutcome::base_mismatch`] names the base: two
-/// stored values disagree, and a header edited at the head, which no link
-/// above it would ever judge, is seen here rather than forked from. THE
-/// EDITED TRANSACTION: a group whose every frame was intact and whose intact
-/// marker does not close it — a shape no writer of this format produces —
-/// is recorded as [`ScanOutcome::uncommitted_intact`] at the group's own
-/// last seq, naming the transaction that was edited rather than the next
-/// one, whose link then also fails. Neither moves `committed_head`, the
-/// collections or the tail cut: the scan records, the callers halt. And
-/// ONE VALUE IS CAPTURED: the running chain at `bound`, which
-/// [`ScanOutcome::chain_at_boundary`] answers [`crate::Kernel::chain_at`]
-/// with.
+/// the head whenever the active segment holds it, which it does unless that
+/// segment is EMPTY after a rotation whose transaction failed or never
+/// landed; mid-history whenever the base's segment is — its `chain` must
+/// equal `chain_at_base`, the header's `chain_head`, else
+/// [`ScanOutcome::base_mismatch`] names the base: two stored values
+/// disagree, and a header edited at the head, which no link above it would
+/// ever judge, is seen here rather than forked from. THE EDITED
+/// TRANSACTION: a group whose every frame was intact and which an intact
+/// marker fails to close — refusing it, or naming another transaction as its
+/// own — a shape no writer of this format produces, is recorded as
+/// [`ScanOutcome::uncommitted_intact`] at the group's own last seq, naming
+/// the transaction that was edited rather than the next one, whose link then
+/// also fails. Neither moves `committed_head`, the collections or the tail
+/// cut: the scan records, the callers halt. And ONE VALUE IS CAPTURED: the
+/// running chain at `bound`, which [`ScanOutcome::chain_at_boundary`]
+/// answers [`crate::Kernel::chain_at`] with.
 ///
 /// `segs` must be ASCENDING by `firstSeq`, as [`list_segments`] produces it.
 /// The skip test, the tail resolution and [`inferred_last_seq`] all read a
@@ -1955,12 +1980,34 @@ pub(crate) fn scan(
                                 // else: torn txn — not committed; its frames are
                                 // either beyond W (tail, truncated) or explained
                                 // by a corrupt run the caller classifies (§7).
+                            } else if let Some(group) =
+                                pending.as_ref().filter(|group| group.clean)
+                            {
+                                // A clean group whose next intact frame is
+                                // ANOTHER transaction's marker: the writer
+                                // emits a transaction's marker immediately
+                                // after its own records, so no writer leaves
+                                // this — the marker's `txn` was rewritten, and
+                                // the group it should have closed can never
+                                // commit. Named at the group's own last seq,
+                                // as a refused close is; the group stays open
+                                // and inert, as a non-matching marker leaves it.
+                                if outcome.uncommitted_intact.is_none() {
+                                    outcome.uncommitted_intact = group.last_seq;
+                                }
                             }
                         }
-                        // Intact by CRC but undecodable: writer/reader skew.
-                        // Treat as a corrupt frame — it participates in run
-                        // classification rather than being silently dropped,
-                        // and an open group is no longer clean.
+                        // Intact by CRC but undecodable: under one stamp no
+                        // writer of this format writes it and no torn write
+                        // leaves it, so it is a rewrite. It joins run
+                        // classification, and an open group is no longer
+                        // clean: mid-history the run lands on the next intact
+                        // frame and halts the caller; in the LAST transaction
+                        // the run lies above the committed head, where §7
+                        // calls it the torn tail, and the transaction is cut
+                        // though its CRC proves these are the bytes that were
+                        // written — the open item in `Kernel::open`'s damage
+                        // model.
                         Err(_) => {
                             run_open = true;
                             if let Some(group) = pending.as_mut() {
@@ -2042,17 +2089,18 @@ pub(crate) fn base_mismatch_cause(at: u64) -> Box<dyn std::error::Error + Send +
 }
 
 /// The account the edited transaction travels with
-/// ([`ScanOutcome::uncommitted_intact`]): the shape, the four ways a marker
-/// fails to close an intact group, and why no writer leaves it.
+/// ([`ScanOutcome::uncommitted_intact`]): the shape, the five ways an intact
+/// marker fails to close an intact group, and why no writer leaves it.
 pub(crate) fn uncommitted_intact_cause(
     at: u64,
 ) -> Box<dyn std::error::Error + Send + Sync + 'static> {
     format!(
         "chain break at an edited transaction: the transaction ending at {at} is intact frame by \
-         frame but its commit marker does not close it — its records_checksum or last_seq \
-         disagrees with the records it carries, or they are not Seq-ascending, or they exceed \
-         the transaction budget; no writer of this journal produces that shape, so the marker \
-         was rewritten, and the transaction it closed is un-committed"
+         frame but no commit marker closes it — the marker after its records disagrees with them \
+         in records_checksum or last_seq, or they are not Seq-ascending, or they exceed the \
+         transaction budget, or that marker names another transaction as its own; no writer of \
+         this journal produces that shape, so the marker was rewritten, and the transaction it \
+         should have closed is un-committed"
     )
     .into()
 }
@@ -2687,6 +2735,35 @@ mod tests {
         assert!(out.committed_boundaries.is_empty());
         // Recorded at the GROUP's last seq (7), not the marker's forged 5.
         assert_eq!(out.uncommitted_intact(), Some(7));
+    }
+
+    #[test]
+    fn a_marker_naming_another_transaction_is_the_edited_one() {
+        // The marker's third pre-chain field. A marker whose `txn` names
+        // another transaction closes nothing, and a clean group's next intact
+        // frame is its own marker in anything a writer here emits — so the
+        // group is the edited transaction, named where its marker should have
+        // closed it. Left open instead, it is dropped at the scan's end, and
+        // on the last transaction cut as the torn tail: an acknowledged commit
+        // removed on a one-field rewrite.
+        let dir = tempdir().unwrap();
+        let mut writer = fresh_writer(dir.path());
+        write_txn(&mut writer, 1, vec![rec(10)]);
+        write_txn(&mut writer, 2, vec![rec(20), rec(21)]); // seqs 2, 3: the last transaction
+        drop(writer);
+        let segs = list_segments(dir.path()).unwrap();
+        let starts = frame_starts(&segs[0].path);
+        // Frames: 0=T1 rec, 1=T1 marker, 2..=3=T2 recs, 4=T2 marker; the
+        // marker's `txn` is payload bytes 4..12, after the FramePayload tag.
+        rewrite_payload(&segs[0].path, starts[4], |payload| payload[4] ^= 0xFF);
+        let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
+        assert!(out.runs.is_empty(), "no frame was damaged");
+        assert_eq!(out.committed_head, 1, "the rewritten marker commits nothing");
+        assert_eq!(out.uncommitted_intact(), Some(3), "named at the group's own last seq");
+        // …and still named off a base at 3, which claims to embody it: the
+        // verdict compares a marker with its own records and needs no link
+        // from the base.
+        assert_eq!(scan(&segs, 3, None, CHAIN_GENESIS).unwrap().uncommitted_intact(), Some(3));
     }
 
     #[test]

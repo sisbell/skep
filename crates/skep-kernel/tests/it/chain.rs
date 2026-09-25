@@ -17,9 +17,11 @@
 //!   of the first committed transaction whose marker's chain is not the
 //!   recomputation over its predecessor's — or, since the chain's open
 //!   items (2026-09-23), the BASE'S OWN LINK at the base's seq (a checkpoint
-//!   header disagreeing with the marker closing it, seen at the head always)
-//!   or the EDITED TRANSACTION at its own seq (an intact transaction its
-//!   intact marker does not close, a shape no writer leaves) — the cause
+//!   header disagreeing with the marker closing it, seen wherever that
+//!   marker is scanned — at the head, whenever the active segment holds it)
+//!   or the EDITED TRANSACTION at its own seq (an intact transaction no
+//!   intact marker closes — its marker's `txn`, `records_checksum` or
+//!   `last_seq` rewritten — a shape no writer leaves) — the cause
 //!   travelling, every file byte for byte as found (a halt cuts nothing),
 //!   and the refusal repeating; since `SKJ4` the marker's SALT is a chain
 //!   input too, and a salt edited is a link that fails (case 16);
@@ -34,9 +36,10 @@
 //!   forged with its hash re-fixed; the base's own link edited consistently
 //!   on both sides and re-chained above (case 14), or its marker's segment
 //!   skipped — the boundary coincidence, case 15; and — the owner's reading
-//!   of "any rewrite", case 12 — damage below a standing base, unseen at
-//!   open and seen by any bounded read below the base. Each is asserted as
-//!   such, and named in `Kernel::open`'s damage model.
+//!   of "any rewrite", case 12 — a consistent rewrite below a standing base,
+//!   unseen at open and seen by any bounded read below the base (an edited
+//!   transaction there halts the open at any height, case 2). Each is
+//!   asserted as such, and named in `Kernel::open`'s damage model.
 //!
 //! Two bases are exercised. With the golden's checkpoint REMOVED the open's
 //! base is genesis and every one of the eighteen links is verified, which is
@@ -46,10 +49,13 @@
 //! verifies from genesis — which is what cases 9, 12 and 14 turn on.
 //!
 //! A case the code does not meet at the outcome the ruling requires is a
-//! STOP by name, never an assertion loosened to what the code does. None
-//! arose. Case 2 once named one transaction LATER — the marker's own
-//! validation speaking before the chain — and since the open items it names
-//! the edited transaction itself; the test says why.
+//! STOP by name, never an assertion loosened to what the code does. One
+//! stands: case 17, a frame of the LAST transaction rewritten so it no
+//! longer decodes, which §7's tail rule cuts as the torn tail where the
+//! ruling requires a halt — `#[ignore]`d with its assertion intact, the
+//! owner's open item, named in `Kernel::open`'s damage model. Case 2 names
+//! the edited transaction itself, not the next one whose link fails on it
+//! too; the test says why.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -63,7 +69,7 @@ use crate::mutilate::{
     delete_txn, records_checksum, replace_frame_payload, reseal_frame, rewrite_frame,
     rewrite_txn, rollback_segment, swap_txns, transactions, Txn, MARKER_CHAIN_AT,
     MARKER_CHECKSUM_AT, MARKER_EMPTY_LEN, MARKER_LAST_SEQ_AT, MARKER_SALT_AT,
-    MARKER_SIG_ALG_AT, MARKER_SIG_LEN_AT, RECORD_BYTES_AT,
+    MARKER_SIG_ALG_AT, MARKER_SIG_LEN_AT, MARKER_TXN_AT, RECORD_BYTES_AT,
 };
 use sha2::{Digest, Sha256};
 use skep_arrangement::Deposit;
@@ -217,8 +223,8 @@ fn segment_count(dir: &Path) -> usize {
 /// The three accounts a halt travels with, by the phrase each opens on — the
 /// scan's three verdicts: a chain break (a link that failed its
 /// recomputation), a base mismatch (a header disagreeing with the marker
-/// closing its seq), and the edited transaction (an intact transaction its
-/// intact marker does not close). A case names the one it expects, so a halt
+/// closing its seq), and the edited transaction (an intact transaction no
+/// intact marker closes). A case names the one it expects, so a halt
 /// at the right coordinate for the wrong reason is a finding.
 const CHAIN_BREAK: &str = "chain break: the commit marker";
 const BASE_MISMATCH: &str = "chain break at the base";
@@ -552,31 +558,38 @@ fn c01_a_record_payload_rewritten_with_every_crc_refixed_breaks_at_that_transact
     );
 }
 
-/// CASE 2 — A MARKER'S `records_checksum` OR `last_seq` EDITED, CRC RE-FIXED. Both
-/// are chain inputs — but they are the marker's OWN validation first, older
-/// than the chain: a marker whose checksum or `last_seq` does not close its
-/// group commits nothing, so the edited transaction UN-COMMITS before the
-/// chain sees it. What is left is an INTACT transaction — every record
-/// frame and the marker passing their CRCs — that its marker does not
-/// close, and no writer of this format leaves that shape: the writer
-/// streams the checksum over the frames it writes and sets `last_seq` to
-/// the last record's, a crash truncates or loses frames. So the scan
-/// records the edited transaction by the GROUP's own last seq (in the
-/// `last_seq` arm the marker's is the forged field) and the open is CAUGHT
-/// AT THAT TRANSACTION with the edited-transaction account — before the
-/// next committed transaction's link, which fails too, gets to name the
-/// coordinate one later, as it did before the chain's open items.
+/// CASE 2 — A MARKER'S `txn`, `records_checksum` OR `last_seq` EDITED, CRC
+/// RE-FIXED. All three are chain inputs — but they are the marker's OWN
+/// validation first, older than the chain: a marker whose checksum or
+/// `last_seq` does not close its group, or whose `txn` names another
+/// transaction, commits nothing, so the edited transaction UN-COMMITS before
+/// the chain sees it. What is left is an INTACT transaction — every record
+/// frame and the marker passing their CRCs — that no intact marker closes,
+/// and no writer of this format leaves that shape: the writer streams the
+/// checksum over the frames it writes, sets `last_seq` to the last record's
+/// and emits a transaction's marker right after its records, and a crash
+/// truncates or loses frames. So the scan records the edited transaction by
+/// the GROUP's own last seq (in the `last_seq` arm the marker's is the
+/// forged field) and the open is CAUGHT AT THAT TRANSACTION with the
+/// edited-transaction account — before the next committed transaction's
+/// link, which fails too, can name the coordinate one later.
 ///
-/// On the LAST transaction the same edit was once a tail cut in disguise —
-/// the un-committed marker read as the torn tail, recovery cut it and
-/// opened one transaction short. Now it halts the same way, nothing cut:
-/// the halt precedes the tail truncation, and the segment keeps its
-/// length.
+/// On the LAST transaction the same edit would be a tail cut in disguise —
+/// the un-committed marker read as the torn tail, the transaction cut, the
+/// board opened one transaction short. It halts the same way, nothing cut:
+/// the halt precedes the tail truncation, and the segment keeps its length.
+/// And BELOW a standing base it halts too: the verdict compares a marker
+/// with its own records and needs no link from the base.
 #[test]
-fn c02_a_markers_checksum_or_last_seq_edited_is_caught_at_that_transaction_uncut() {
+fn c02_a_markers_txn_checksum_or_last_seq_edited_is_caught_at_that_transaction_uncut() {
     let golden = Golden::build();
     const OP: usize = 9;
-    for (field, at) in [("records_checksum", MARKER_CHECKSUM_AT), ("last_seq", MARKER_LAST_SEQ_AT)] {
+    let fields = [
+        ("records_checksum", MARKER_CHECKSUM_AT),
+        ("last_seq", MARKER_LAST_SEQ_AT),
+        ("txn", MARKER_TXN_AT),
+    ];
+    for (field, at) in fields {
         let case = golden.case_from_genesis(&format!("c02-{field}"));
         rewrite_frame(&seg_file(&case, 1), golden.txn(OP).marker.start, |payload| {
             payload[at] ^= 0xFF
@@ -592,21 +605,39 @@ fn c02_a_markers_checksum_or_last_seq_edited_is_caught_at_that_transaction_uncut
         );
     }
 
-    let case = golden.case("c02-last");
-    let seg = seg_file(&case, 1);
-    rewrite_frame(&seg, golden.txn(GOLDEN_OPS).marker.start, |payload| {
+    for (field, at) in fields {
+        let case = golden.case(&format!("c02-last-{field}"));
+        let seg = seg_file(&case, 1);
+        rewrite_frame(&seg, golden.txn(GOLDEN_OPS).marker.start, |payload| {
+            payload[at] ^= 0xFF
+        });
+        open_halts_naming(
+            &case,
+            golden.seq(GOLDEN_OPS),
+            EDITED_TXN,
+            &format!(
+                "case 2 on the last transaction, its marker's {field} edited: the edited \
+                 transaction, never the torn tail"
+            ),
+        );
+        assert_eq!(
+            fs::metadata(&seg).expect("segment").len(),
+            golden.fixture.full_len,
+            "the halt precedes the tail truncation: the un-committed last transaction was not cut \
+             ({field})"
+        );
+    }
+
+    let case = golden.case("c02-below-base");
+    rewrite_frame(&seg_file(&case, 1), golden.txn(OP).marker.start, |payload| {
         payload[MARKER_CHECKSUM_AT] ^= 0xFF
     });
     open_halts_naming(
         &case,
-        golden.seq(GOLDEN_OPS),
+        golden.seq(OP),
         EDITED_TXN,
-        "case 2 on the last transaction: once a tail cut in disguise, now the edited transaction",
-    );
-    assert_eq!(
-        fs::metadata(&seg).expect("segment").len(),
-        golden.fixture.full_len,
-        "the halt precedes the tail truncation: the un-committed last transaction was not cut"
+        "case 2 below the standing base: the verdict needs no link from the base, and speaks at \
+         any height in a segment the scan reads",
     );
 }
 
@@ -930,20 +961,24 @@ fn c08_a_checkpoint_body_rewritten_is_refused_by_its_hash_and_a_body_forged_with
 /// field. So the code does not REFUSE — the base LOADS carrying the edited
 /// value — and the open is CAUGHT at the BASE'S OWN COORDINATE: the marker
 /// closing the base's seq is in the scanned segment (the golden's one
-/// segment; at the head, the active segment always), and the chain it
-/// carries is not the header's — two stored values disagreeing, nothing
-/// recomputed, named with the base's own account (the chain's open items,
-/// item 4). Where that marker is NOT scanned — its closed segment ending
-/// exactly at the base's seq, case 15 — the first transaction above the
-/// base is the one whose link fails against the header, as it was before.
+/// segment; at the head, the active segment whenever it holds the head's
+/// marker), and the chain it carries is not the header's — two stored
+/// values disagreeing, nothing recomputed, named with the base's own
+/// account (the chain's open items, item 4). Where that marker is NOT
+/// scanned — its closed segment ending exactly at the base's seq, case 15 —
+/// the first transaction above the base is the one whose link fails against
+/// the header.
 ///
-/// The checkpoint AT THE HEAD was the fork the chain alone accepted:
+/// The checkpoint AT THE HEAD is the fork the chain alone would accept:
 /// nothing above the base, no link to fail, the root carrying the edited
-/// value and the next commit chaining from it — which since `0f0115b` the
-/// head document would have PUBLISHED as the board's own. Now CAUGHT the
-/// same way: the head's marker is in the active segment, always scanned,
-/// and disagrees with the header. Nothing is cut, and the files stay as
-/// found.
+/// value and the next commit chaining from it — which the head document
+/// would then PUBLISH as the board's own. It is CAUGHT the same way whenever
+/// the active segment holds the head's marker, as it does here: that
+/// segment is always scanned, and the marker disagrees with the header.
+/// Nothing is cut, and the files stay as found. While the active segment is
+/// EMPTY after a rotation whose transaction failed or never landed, the
+/// head's marker ends the closed segment before it and is skipped — case
+/// 15's boundary coincidence.
 #[test]
 fn c09_a_checkpoints_chain_head_edited_breaks_at_the_bases_own_coordinate() {
     let golden = Golden::build();
@@ -1407,6 +1442,41 @@ fn c16_a_markers_salt_edited_breaks_at_that_transaction() {
         }
     }
     every_boundary_answers(&engine, &golden, "case 16, re-chained: the world is the golden's");
+}
+
+/// CASE 17 — A FRAME OF THE LAST TRANSACTION REWRITTEN SO IT NO LONGER
+/// DECODES, its CRC re-fixed: here the last marker's signature slot, its tag
+/// set with no bytes after it — the one spelling of empty broken, as case 4
+/// breaks it mid-history. The frame is intact by CRC, so these ARE the bytes
+/// that were written, and under one stamp no writer of this format writes
+/// them: a rewrite. The ruling requires the open to halt, as it does
+/// mid-history (case 4). It does not: the corrupt run the frame opens lies
+/// above the committed head, §7's torn tail, and the transaction is cut as
+/// the tail. A STOP by name — closing it amends §7's tail rule, the owner's
+/// call — so the case stands ignored with the ruling's outcome asserted
+/// intact, named in `Kernel::open`'s damage model.
+#[test]
+#[ignore = "STOP (owner): a frame of the LAST transaction rewritten so it no longer decodes, its \
+            CRC re-fixed, opens a corrupt run above the committed head, which §7's tail rule \
+            cuts as the torn tail — the ruling requires a halt; closing it amends §7 \
+            (Kernel::open's damage model: NOT CAUGHT, AND NOT BY DESIGN)"]
+fn c17_the_last_transactions_frame_rewritten_so_it_will_not_decode_halts_the_open() {
+    let golden = Golden::build();
+    let case = golden.case("c17");
+    rewrite_frame(&seg_file(&case, 1), golden.txn(GOLDEN_OPS).marker.start, |payload| {
+        payload[MARKER_SIG_ALG_AT] = 1
+    });
+    let before = files_of(&case);
+    match timed_open_result(&case, "case 17: the last marker made undecodable") {
+        Err(EngineError::Open(OpenError::Corruption { .. })) => {}
+        Err(other) => panic!("FINDING (case 17): refused, but not as corruption: {other:?}"),
+        Ok(engine) => panic!(
+            "FINDING (case 17): the open SUCCEEDED at {} — the last transaction, intact by CRC, \
+             was cut as the torn tail",
+            engine.kernel().current_seq()
+        ),
+    }
+    assert_eq!(files_of(&case), before, "FINDING (case 17): a halted open wrote to the directory");
 }
 
 /// The segment files of `dir`, ascending by the first seq their names carry.

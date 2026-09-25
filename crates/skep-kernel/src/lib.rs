@@ -127,12 +127,23 @@ use serde::Serialize;
 /// collection makes every transaction in the system — read-only ones included
 /// — `O(|world|)` under a global lock, which M2 has no way to report.
 ///
-/// DROP OBLIGATION — `W`'s destructor MUST NOT unwind. M2 drops the previous
-/// root inside the atomic install, so a panicking `Drop` unwinds from a point
-/// the in-memory journal reports as a pre-install unwind — which would roll
-/// the `Seq` order back below a root that is already installed, and
-/// [`Kernel::current_seq`] would regress, which its own contract says it never
-/// does. M2 cannot check this.
+/// DROP OBLIGATION — `W`'s destructor MUST NOT unwind, and M2 cannot check
+/// this. What M2 does fix is WHERE a world's destructor can run: never after
+/// a root's install inside the commit region — [`Kernel::transact`] holds the
+/// superseded root until the call returns, so the install releases only a
+/// reference, and every unwind out of the commit region precedes the
+/// install, as the region's repair assumes. So an unwinding destructor
+/// surfaces wherever a world's LAST reference goes: out of a `transact`
+/// whose transaction has committed and installed — the superseded root,
+/// released as the call returns — so the caller receives a panic in place of
+/// the `Ok` it was owed, the lost-ack case (§3); out of a `transact` that
+/// installed nothing — a staged world discarded by `f`'s rejection, a
+/// zero-step return, the journal's refusal, or [`Staging::push`] replacing
+/// it — with nothing committed and the kernel as the answer it displaces
+/// would have left it; out of whichever read releases the last reference to
+/// a superseded root, a [`Snapshot`] most often; and out of [`Kernel::open`],
+/// [`Kernel::world_at`] and [`Kernel::chain_at`], whose base loads and folds
+/// drop worlds of their own.
 ///
 /// HOSTILE-INPUT OBLIGATION — `W` is decoded from a checkpoint body, which is
 /// bytes M2 does not trust: the header checksum proves they are the bytes that

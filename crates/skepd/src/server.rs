@@ -95,7 +95,7 @@
 //! statement.
 //!
 //! **Writes go through one card** (`write_path/`): `POST /op` — the
-//! daemon's only live write path — hands each write to
+//! daemon's only write ROUTE — hands each write to
 //! `WritePath::commit_under`, which commits it, records its change-feed
 //! entry, and announces its position, in that order and inside the
 //! serialization guard the write sequences here hold — and then gives the
@@ -1183,10 +1183,11 @@ impl Daemon {
     /// credential memo. So routing one write frame twice COMMITS TWICE
     /// unless the frame carries an idempotency `id` (wire.md §Correlation
     /// and idempotency) — a speculative retry after a timeout duplicates
-    /// the insert or mints a second document. Of the DISPATCH arms, the two
-    /// that alter nothing are `GET /health` and, in `client` builds,
-    /// `GET /` — but no route does, because the reissue below sits ahead of
-    /// dispatch on every request.
+    /// the insert or mints a second document. Of the DISPATCH arms, the
+    /// three that alter nothing are `GET /health`, `GET /chain` — whose
+    /// permit returns within the request — and, in `client` builds, `GET /`;
+    /// but no route does, because the reissue below sits ahead of dispatch
+    /// on every request.
     ///
     /// What the caller owes on the way in is [`HttpRequest`]'s field
     /// precondition, which routing cannot check; what a [`Reply`] is not on
@@ -1827,8 +1828,8 @@ impl Daemon {
     /// taken. A real class scan over a test-sized world finishes in
     /// microseconds, so the integration tests pin the counter through this
     /// instead of racing the store. A permit from here is a slot of the scan
-    /// pool alone: holding every one leaves `/op-at` and `/dump?at`
-    /// untouched, which is the disjointness the wire promises.
+    /// pool alone: holding every one leaves `/op-at`, `/dump?at` and
+    /// `/chain?at` untouched, which is the disjointness the wire promises.
     #[doc(hidden)]
     pub fn try_hold_scan_permit(&self) -> Option<Permit<'_>> {
         self.scans.try_hold()

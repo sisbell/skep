@@ -240,12 +240,22 @@ impl WritePath {
 
     /// The ordering protocol and NOTHING after it: execute, record the
     /// position the write committed, announce that position, and hand back
-    /// the answer — [`WritePath::commit_under`] less the head's turn. The
-    /// head writer's door for its own commits, and PRIVATE to this module so
-    /// it stays the head writer's alone: a peer write through it would
-    /// commit without giving the head its turn. `execute` runs exactly once,
-    /// inside the lock, and [`WritePath::commit_under`]'s precondition on
-    /// `meta` is this door's.
+    /// the answer — [`WritePath::commit_under`] less the head's turn.
+    ///
+    /// EVERY commit this daemon makes rides this step — `/op`'s through
+    /// [`WritePath::commit_under`], the published head's own directly — and
+    /// that is the one premise the commit stream's completeness and
+    /// [`crate::sidecar::CommitsLog::head_time`] rest on: a commit that
+    /// bypassed it would be unrecorded and unannounced, and both would be
+    /// wrong about it in silence. Their docs cite this step rather than
+    /// naming the writers: a writer is covered by passing through it, and by
+    /// nothing else.
+    ///
+    /// The head writer's door, and PRIVATE to this module so it stays the
+    /// head writer's alone: a peer write through it would commit without
+    /// giving the head its turn. `execute` runs exactly once, inside the
+    /// lock, and [`WritePath::commit_under`]'s precondition on `meta` is this
+    /// door's.
     fn commit_recorded(
         &self,
         serial: &SerialGuard<'_>,
@@ -269,10 +279,10 @@ impl WritePath {
     /// `head_time`), or `None` when that position's record is bare.
     ///
     /// The feed answers for the head by answering for its last recorded
-    /// position, which is the same position because
-    /// [`WritePath::commit_under`] records and announces inside the guard
-    /// the caller holds across both. That premise is kept HERE;
-    /// `CommitsLog::head_time` states what relying on it costs.
+    /// position, which is the same position because every commit rides
+    /// [`WritePath::commit_recorded`], which records it under the guard it
+    /// committed under. That premise is kept HERE; `CommitsLog::head_time`
+    /// states what relying on it costs.
     pub fn head_time(&self) -> Option<u64> {
         self.feed.head_time()
     }
@@ -594,12 +604,12 @@ pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
 // ── the commit stream (wire v4) ──────────────────────────────────────────
 
 /// One head + shutdown flag under a mutex, one condvar. Every committing
-/// write announces the position it committed (write-path notification —
-/// `/op` is the only live write path, so no head advance can be missed);
-/// each subscriber blocks in [`CommitStream::next`] with the keepalive
-/// interval as its wait bound. Shutdown broadcasts on the same condvar,
-/// which is what makes closing open streams immediate rather than a poll
-/// away.
+/// write announces the position it committed — every commit rides
+/// [`WritePath::commit_recorded`], which announces behind the record it made,
+/// so no head advance can be missed; each subscriber blocks in
+/// [`CommitStream::next`] with the keepalive interval as its wait bound.
+/// Shutdown broadcasts on the same condvar, which is what makes closing open
+/// streams immediate rather than a poll away.
 struct CommitStream {
     state: Mutex<StreamState>,
     cond: Condvar,

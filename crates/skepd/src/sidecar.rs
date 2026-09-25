@@ -85,6 +85,22 @@ use crate::write_path::SerialGuard;
 /// journal/checkpoint files, which this crate never touches).
 pub(crate) const SIDECAR_FILE: &str = "commits.log";
 
+/// The wall-clock reading a commit's `time` is stamped with — unix
+/// milliseconds, the wire's unit (wire.md §The change feed), `0` for a clock
+/// set before the epoch. The crate's ONE reading of that clock because two
+/// readers must agree on it: [`CommitsLog::record`] stamps every commit with
+/// it, and the published head writer measures its hour FROM such a stamp —
+/// its resume seeds the last head's time off the head's own entry — against
+/// its own reading. Two copies of this expression would agree only until one
+/// was edited or seamed, and the head's hour would then subtract one clock
+/// from another with nothing to say so.
+pub(crate) fn wall_clock_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// One committed position's metadata — and this file's crash-honesty rule
 /// as a type. A position is either one the daemon OBSERVED committing,
 /// carrying all of op/docs/time, or a BARE one reconstructed from the
@@ -466,10 +482,7 @@ impl CommitsLog {
         if at <= self.open_head || self.entries.contains_key(&at) {
             return None;
         }
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+        let now = wall_clock_millis();
         let time = now.max(self.last_time);
         self.last_time = time;
         // The one line where the concept meets the wire field it rides in
@@ -510,11 +523,11 @@ impl CommitsLog {
     /// invented.
     ///
     /// What it reads is the LAST RECORDED position's time, which IS the
-    /// head's because every commit is recorded: `WritePath::commit_under`
-    /// records and announces inside the guard its caller holds across both,
-    /// and `/op` is the only live write path. That premise is this file's
-    /// RELIANCE, not its check — a `CommitsLog` never learns the live head
-    /// — and two states break it.
+    /// head's because every commit is recorded: every commit this daemon
+    /// makes rides [`crate::write_path::WritePath::commit_recorded`], which
+    /// records inside the guard its caller holds across the commit. That
+    /// premise is this file's RELIANCE, not its check — a `CommitsLog` never
+    /// learns the live head — and two states break it.
     ///
     /// Transiently: any in-flight write. `/health` reads this and the log
     /// position independently and under no lock, so its pair may straddle

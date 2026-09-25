@@ -14,7 +14,7 @@ use skep_identity::{framed, Fingerprint, IdentityState, KeySet, SESSION_TAG, SES
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
 
 use super::{bare_origins, blocked_prefixes, signed_origins, AuthConfig, Mode, Origin};
-use crate::codec::{check_keys, hex_nibble, hex_string};
+use crate::codec::{check_keys, hex_nibble, hex_string, parse_lower_hex};
 use crate::World;
 use skep_address::{parent, Address, Level};
 use skep_namespace::HasM3;
@@ -112,24 +112,6 @@ impl Nonce {
     pub fn parse_hex(s: &str) -> Option<Nonce> {
         parse_lower_hex(s).map(Nonce)
     }
-}
-
-/// Exactly `N` bytes of LOWERCASE hex, or `None` — the admission rule both
-/// wire tokens rest on. Each `parse` admits only what its own emitter
-/// produces, so an uppercase value is refused rather than normalized; what
-/// that costs a caller is per-type and stays stated on each. The REFUSAL is
-/// this function's own, in the byte it hands [`hex_nibble`]: that table is
-/// lowercase and is the crate's one hex mapping, so case is the only thing
-/// this and the content forms' decode differ by.
-fn parse_lower_hex<const N: usize>(s: &str) -> Option<[u8; N]> {
-    if s.len() != N * 2 {
-        return None;
-    }
-    let mut raw = [0u8; N];
-    for (i, chunk) in s.as_bytes().chunks_exact(2).enumerate() {
-        raw[i] = (hex_nibble(chunk[0])? << 4) | hex_nibble(chunk[1])?;
-    }
-    Some(raw)
 }
 
 /// The challenge store (AUTH-4.19): a map plus a FIFO of insertion order

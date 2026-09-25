@@ -87,6 +87,16 @@ impl History {
         History { permits: Permits::new(MAX_CONCURRENT_RECONSTRUCTIONS) }
     }
 
+    /// The budget's one door — a permit, or [`Unavailable::Busy`] when every
+    /// one is in use — which every historical question passes through BEFORE
+    /// it examines `at`. That order is what puts `Busy` ahead of every
+    /// journal verdict ([`Unavailable::Busy`]'s card states what that costs a
+    /// caller), so it is written here once rather than by each question that
+    /// spends a permit.
+    fn admit(&self) -> Result<Permit<'_>, Unavailable> {
+        self.permits.try_acquire().ok_or(Unavailable::Busy)
+    }
+
     /// One reconstruction and the permit that licenses it. The guard is
     /// handed back rather than dropped here, so the budget bounds LIVE
     /// reconstructed worlds and not merely concurrent replays: a detached
@@ -98,16 +108,14 @@ impl History {
     /// same trade [`MAX_CONCURRENT_RECONSTRUCTIONS`] already makes for the
     /// replay: two slow historical answers make a third `Busy`.
     ///
-    /// `at` is not examined until a permit is in hand, so
-    /// [`Unavailable::Busy`] precedes every journal verdict about it.
+    /// Admitted through [`History::admit`], so [`Unavailable::Busy`]
+    /// precedes every journal verdict about `at`.
     pub(crate) fn reconstruct(
         &self,
         engine: &Engine,
         at: Seq,
     ) -> Result<(Permit<'_>, World), Unavailable> {
-        let Some(permit) = self.permits.try_acquire() else {
-            return Err(Unavailable::Busy);
-        };
+        let permit = self.admit()?;
         let world = engine.world_at(at).map_err(Unavailable::Journal)?;
         Ok((permit, world))
     }
@@ -183,13 +191,10 @@ impl History {
     /// core-bound I/O, with no world folded and none resident — the permit
     /// spans the call alone and returns with it. A lighter pool of its own is
     /// a later refinement; sharing this one keeps the bound the wire promises
-    /// for historical work one number. The permit is taken before `at` is
-    /// examined, so [`Unavailable::Busy`] precedes every journal verdict here
-    /// as it does for a reconstruction.
+    /// for historical work one number. Admitted through [`History::admit`],
+    /// as a reconstruction is.
     pub(crate) fn chain_at(&self, engine: &Engine, at: Seq) -> Result<[u8; 32], Unavailable> {
-        let Some(_permit) = self.permits.try_acquire() else {
-            return Err(Unavailable::Busy);
-        };
+        let _permit = self.admit()?;
         engine.kernel().chain_at(at).map_err(Unavailable::Journal)
     }
 
@@ -438,5 +443,51 @@ mod tests {
         );
         drop(held);
         assert!(history.try_hold_permit().is_some(), "released permits return to the budget");
+    }
+
+    /// [`History::admit`] stands ahead of EVERY question that spends a
+    /// permit: with the budget exhausted, the reconstruction and the chain
+    /// read both answer `Busy` for a position the journal refuses on its own
+    /// — an in-memory kernel keeps no journal, so any position is
+    /// `Unjournaled` — and once a permit returns, the same question reaches
+    /// that verdict. A question that consulted the journal first would answer
+    /// the journal's verdict under saturation, which is the order the one
+    /// door exists to keep.
+    #[test]
+    fn busy_precedes_the_journals_verdict_for_every_question() {
+        let engine = Engine::open(KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(0),
+        })
+        .expect("in-memory genesis cannot fail");
+        let history = History::new();
+        let at = Seq(1_000);
+        let held: Vec<_> = (0..MAX_CONCURRENT_RECONSTRUCTIONS)
+            .map(|_| history.try_hold_permit().expect("a permit"))
+            .collect();
+        assert!(
+            matches!(history.reconstruct(&engine, at), Err(Unavailable::Busy)),
+            "a saturated reconstruction is Busy before the journal is asked"
+        );
+        assert!(
+            matches!(history.chain_at(&engine, at), Err(Unavailable::Busy)),
+            "a saturated chain read is Busy before the journal is asked"
+        );
+        drop(held);
+        assert!(
+            matches!(
+                history.reconstruct(&engine, at),
+                Err(Unavailable::Journal(HistoryError::Unjournaled))
+            ),
+            "admitted, the reconstruction meets the journal's own verdict"
+        );
+        assert!(
+            matches!(
+                history.chain_at(&engine, at),
+                Err(Unavailable::Journal(HistoryError::Unjournaled))
+            ),
+            "admitted, the chain read meets the journal's own verdict"
+        );
     }
 }

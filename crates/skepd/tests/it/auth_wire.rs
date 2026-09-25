@@ -2565,8 +2565,8 @@ fn an_origin_refusal_precedes_the_burn_and_spends_no_nonce() {
 /// `sign_session`, which encodes lowercase.
 ///
 /// So merging `parse_sig` onto the nonce's strict `parse_lower_hex` — the
-/// obvious cleanup of two near-identical two-characters-per-byte loops in
-/// one file — refuses a signature a client legitimately sent, as `400
+/// obvious cleanup of two near-identical two-characters-per-byte loops —
+/// refuses a signature a client legitimately sent, as `400
 /// malformed_session_request`.
 #[test]
 fn an_uppercase_signature_is_folded_where_an_uppercase_nonce_is_refused() {

@@ -1191,9 +1191,11 @@ fn p_hex(s: &str) -> PResult<Vec<u8>> {
 ///
 /// CASE IS POLICY and stays with each parser, which is the whole of what
 /// the three differ by: [`hex_digit`] folds it and names the offending
-/// character; [`crate::auth::session`]'s nonce and token parsers REFUSE it,
-/// so an uppercase value is a syntax fault whose nonce survives rather than
-/// a burned credential; its signature parser folds it, the signature being
+/// character; [`parse_lower_hex`] REFUSES it, admitting only what
+/// [`hex_string`] emits — the parse behind the nonce, the session token and
+/// the published head's hashes, so an uppercase nonce is a syntax fault
+/// whose nonce survives rather than a burned credential; and
+/// [`crate::auth::session`]'s signature parser folds it, the signature being
 /// decoded and never framed. None of them owns the table.
 pub(crate) fn hex_nibble(b: u8) -> Option<u8> {
     match b {
@@ -1201,6 +1203,25 @@ pub(crate) fn hex_nibble(b: u8) -> Option<u8> {
         b'a'..=b'f' => Some(b - b'a' + 10),
         _ => None,
     }
+}
+
+/// Exactly `N` bytes of LOWERCASE hex, or `None` — [`hex_string`]'s exact
+/// inverse at a fixed width, and the parse of every value this crate reads
+/// back only as its own emitter wrote it: the handshake nonce and the
+/// session token (AUTH-4.15, AUTH-4.17), and the published head's hashes.
+/// Each admits only what `hex_string` produced, so an uppercase value — or
+/// a signed pair, which a radix parse would read — is refused rather than
+/// normalized; what the refusal costs is stated on each caller. The REFUSAL
+/// is this function's own, in the byte it hands [`hex_nibble`].
+pub(crate) fn parse_lower_hex<const N: usize>(s: &str) -> Option<[u8; N]> {
+    if s.len() != N * 2 {
+        return None;
+    }
+    let mut raw = [0u8; N];
+    for (i, chunk) in s.as_bytes().chunks_exact(2).enumerate() {
+        raw[i] = (hex_nibble(chunk[0])? << 4) | hex_nibble(chunk[1])?;
+    }
+    Some(raw)
 }
 
 /// One hex character, case FOLDED — the content forms' policy: `{"hex"}`

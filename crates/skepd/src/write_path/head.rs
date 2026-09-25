@@ -35,24 +35,24 @@
 //! every write the write path's peer door runs ([`HeadWriter::after_commit`],
 //! reached from `commit_under`): a head is due when (a) ≥ [`EVERY_COMMITS`]
 //! commits that are NOT the writer's own have LANDED since the last head, OR
-//! (b) the newest retained checkpoint's seq moved since the last head, OR (c)
-//! ≥ [`MAX_INTERVAL_MILLIS`] have elapsed since the last head AND the
-//! position moved. Never on a peer's request; never while the position has
-//! not moved; never twice for one position (the head's own commits ride the
-//! quiet door, which gives no head a turn, so they are neither counted nor
-//! able to re-trigger). LANDED, not merely acked: `after_commit` is asked
-//! after every write `commit_under` runs — an ack that committed nothing
-//! this call (an idempotency replay answered from M10's memo, `emit`'s
-//! incumbent ack) and a refusal included; the kernel's seq, not the answer,
-//! says whether a commit landed, and one that did not counts nothing and
-//! evaluates no trigger. RESUME BY READING: at open the writer reads `H`'s
-//! latest member — its `position` and `chain` (the next head's `prev`; a head
-//! is owed only once the position moves past it) and its `base` (trigger (b)'s
-//! reference: a checkpoint taken after that head, before or after a restart,
-//! is attested by the next head) — and finds the staging draft where it left
-//! it; a crash between the insert and the shot leaves an orphan atom in the
-//! draft and no member, and the next head's shot names the newer atom
-//! (PUB-2.26's no-residue).
+//! (b) the newest retained checkpoint is not the one the last head attested
+//! (its `base`), OR (c) ≥ [`MAX_INTERVAL_MILLIS`] have elapsed since the last
+//! head AND the position moved. Never on a peer's request; never while the
+//! position has not moved; never twice for one position (the head's own
+//! commits ride the quiet door, which gives no head a turn, so they are
+//! neither counted nor able to re-trigger). LANDED, not merely acked:
+//! `after_commit` is asked after every write `commit_under` runs — an ack that
+//! committed nothing this call (an idempotency replay answered from M10's
+//! memo, `emit`'s incumbent ack) and a refusal included; the kernel's seq, not
+//! the answer, says whether a commit landed, and one that did not counts
+//! nothing and evaluates no trigger. RESUME BY READING: at open the writer
+//! reads `H`'s latest member — its `position` and `chain` (the next head's
+//! `prev`; a head is owed only once the position moves past it) and its
+//! `base` (trigger (b)'s reference: a checkpoint taken after that head, before
+//! or after a restart, is attested by the next head) — and finds the staging
+//! draft where it left it; a crash between the insert and the shot leaves an
+//! orphan atom in the draft and no member, and the next head's shot names the
+//! newer atom (PUB-2.26's no-residue).
 //!
 //! RESUME FROM THE FEED (the chain's open items, item 2). The cadence's two
 //! counters are seeded at open from the change feed's testimony about the
@@ -66,12 +66,12 @@
 //! `"system"`-keyed entry's recorded `time` (else the first entry above the
 //! position carrying a time; else open-time). A BARE OR ABSENT SIDECAR FALLS
 //! BACK to open-time seeding, the behaviour before the seed: the count starts
-//! at zero and the hour is measured from open. The clock's domain is therefore
-//! wall-clock unix milliseconds, the feed's own. D1 is kept — a gate reads
-//! testimony to decide WHEN, and the head's bytes stay a pure function of the
-//! root; AUTH-4.56's rewritable sidecar can move one head's timing within the
-//! bounds the triggers already allow, never a duplicate and never a changed
-//! content.
+//! at zero and the hour is measured from open. The clock is therefore the
+//! feed's own: [`wall_clock_millis`], the one reading both take. D1 is kept —
+//! a gate reads testimony to decide WHEN, and the head's bytes stay a pure
+//! function of the root; AUTH-4.56's rewritable sidecar can move one head's
+//! timing within the bounds the triggers already allow, never a duplicate and
+//! never a changed content.
 //!
 //! WHAT A REFUSAL DOES. A driver refusal on any of the head's commits is a
 //! SURFACED failure (I11 (c), PUB-5.75: never a board left silently headless):
@@ -90,7 +90,6 @@
 //! account owns `H` and its draft, and nothing in the engine is widened.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -103,10 +102,10 @@ use skep_kernel::Seq;
 use skep_namespace::{head_document, system_account, HasM3, SYSTEM_PRINCIPAL};
 
 use super::{write_meta, SerialGuard, WriteMeta, WritePath};
-use crate::codec::hex_string;
+use crate::codec::{hex_string, parse_lower_hex};
 use crate::feed::Feed;
 use crate::notice;
-use crate::sidecar::CommitMeta;
+use crate::sidecar::{wall_clock_millis, CommitMeta};
 
 /// The head record's `format` member — the journal stamp in force (`SKJ4`),
 /// which names the hash and the byte format the `chain` value was computed
@@ -147,12 +146,13 @@ const MAX_INTERVAL_MILLIS: u64 = 3_600_000; // one hour
 
 /// The head writer's own clock, so the time bound (trigger (c)) is drivable in
 /// tests through a seam rather than a `sleep`. In production `now_millis` is
-/// WALL-CLOCK unix milliseconds — the domain the feed records commit times
-/// in, so the resume can seed the last head's time from the head's own entry
-/// (the module doc's RESUME FROM THE FEED); a wall clock that steps is
-/// tolerated by the trigger's `saturating_sub`, and the cost of a step is one
-/// head early or late by the step, never a duplicate. [`Clock::set_millis`]
-/// overrides it with a fixed reading (the test seam, reached through
+/// [`wall_clock_millis`] — the one reading of the clock the feed stamps each
+/// commit's `time` with, so the hour the resume seeds from the head's own
+/// entry (the module doc's RESUME FROM THE FEED) is measured on the clock
+/// that recorded it; a wall clock that steps is tolerated by the trigger's
+/// `saturating_sub`, and the cost of a step is one head early or late by the
+/// step, never a duplicate. [`Clock::set_millis`] overrides it with a fixed
+/// reading (the test seam, reached through
 /// [`crate::Daemon::head_set_clock_millis`]), which a test therefore sets
 /// RELATIVE TO the wall clock rather than at small numbers a seeded origin
 /// would dwarf.
@@ -169,10 +169,7 @@ impl Clock {
 
     fn now_millis(&self) -> u64 {
         match self.test_millis.load(Ordering::Relaxed) {
-            u64::MAX => SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0),
+            u64::MAX => wall_clock_millis(),
             fixed => fixed,
         }
     }
@@ -189,11 +186,16 @@ impl Clock {
 /// lock is not re-entrant, so holding it across the write would deadlock the
 /// write on itself.
 struct HeadState {
-    /// The coordinate the most recent head NAMED (not the committed head):
-    /// "the position moved" and "never twice for one position" read its
-    /// position, and the next head's `prev` is it whole. `None` before the
-    /// first head ever — read off `H` at open, not reset by a restart.
-    last_head: Option<Coordinate>,
+    /// The record the most recent head PUBLISHED — read off `H` at open, set
+    /// by each head that lands, never reset by a restart; `None` before the
+    /// first head ever. Every reference the cadence takes to "the last head"
+    /// is a reading of this one value: "the position moved" and "never twice
+    /// for one position" read its `position`, the next head's `prev` is its
+    /// [`HeadRecord::coordinate`], and trigger (b)'s reference is its `base`
+    /// — the checkpoint the last head ATTESTED — so a checkpoint that landed
+    /// after it is attested by the next head, whichever side of a restart
+    /// the last one was written on.
+    last_head: Option<HeadRecord>,
     /// The kernel's committed seq as of the writer's last look — at open, at
     /// each evaluation, and after the head's own commits — so a write that
     /// LANDED nothing (a refusal, an idempotency replay, an incumbent ack) is
@@ -205,19 +207,13 @@ struct HeadState {
     /// restarted every few commits still reaches [`EVERY_COMMITS`]; zero
     /// where the sidecar is bare or absent.
     commits_since_head: u64,
-    /// The newest retained checkpoint's seq AS THE LAST HEAD NAMED IT (its
-    /// `base.seq`; `None` where it named `null`, and before the first head) —
-    /// trigger (b) fires when the newest retained checkpoint differs from it.
-    /// Read off `H` at open, so a checkpoint that landed after the last head
-    /// is attested by the next head whichever side of a restart it fell on.
-    last_checkpoint_seq: Option<u64>,
-    /// The clock reading at the last head — trigger (c)'s base, in wall-clock
-    /// unix milliseconds. Seeded at open from the last head's own recorded
-    /// `time` in the feed (RESUME FROM THE FEED), so after a reopen the hour
-    /// is measured from the last head the BOARD wrote and not from this open;
-    /// the head itself carries no timestamp (two heads of one board at one
-    /// position are byte-identical), so a bare or absent sidecar leaves this
-    /// at open-time, the one origin then on record.
+    /// The clock reading at the last head — trigger (c)'s base, in
+    /// [`wall_clock_millis`]'s domain. Seeded at open from the last head's own
+    /// recorded `time` in the feed (RESUME FROM THE FEED), so after a reopen
+    /// the hour is measured from the last head the BOARD wrote and not from
+    /// this open; the head itself carries no timestamp (two heads of one board
+    /// at one position are byte-identical), so a bare or absent sidecar leaves
+    /// this at open-time, the one origin then on record.
     last_head_millis: u64,
     /// The staging draft — [`staging_draft_address`] once it is registered,
     /// found at open or minted at first need; `None` only on a board that has
@@ -315,7 +311,8 @@ impl HeadRecord {
 
     /// A record THIS BUILD wrote, read back whole — `None` for anything else:
     /// not JSON, another `type`, another `format`, or a member missing or
-    /// malformed. The inverse of [`HeadRecord::to_bytes`].
+    /// malformed, which includes a hash spelled other than as [`hex_string`]
+    /// writes it. The inverse of [`HeadRecord::to_bytes`].
     fn parse(bytes: &[u8]) -> Option<HeadRecord> {
         let v: Value = serde_json::from_slice(bytes).ok()?;
         if v.get("type")?.as_str()? != RECORD_TYPE || v.get("format")?.as_str()? != FORMAT_STAMP {
@@ -324,7 +321,7 @@ impl HeadRecord {
         let coordinate = |v: &Value| -> Option<Coordinate> {
             Some(Coordinate {
                 position: v.get("position")?.as_u64()?,
-                chain: parse_hex32(v.get("chain")?.as_str()?)?,
+                chain: parse_lower_hex(v.get("chain")?.as_str()?)?,
             })
         };
         let Coordinate { position, chain } = coordinate(&v)?;
@@ -332,8 +329,8 @@ impl HeadRecord {
             Value::Null => None,
             base => Some(CheckpointBase {
                 seq: base.get("seq")?.as_u64()?,
-                chain: parse_hex32(base.get("chain")?.as_str()?)?,
-                body_hash: parse_hex32(base.get("body_hash")?.as_str()?)?,
+                chain: parse_lower_hex(base.get("chain")?.as_str()?)?,
+                body_hash: parse_lower_hex(base.get("body_hash")?.as_str()?)?,
             }),
         };
         let prev = match v.get("prev")? {
@@ -345,11 +342,10 @@ impl HeadRecord {
 }
 
 /// The decision `after_commit` takes under the state lock and then acts on
-/// without it: the record to publish, and the two readings the state takes
-/// on once it lands.
+/// without it: the record to publish — the state's `last_head` once it
+/// lands — and the clock reading that becomes its `last_head_millis`.
 struct Plan {
     record: HeadRecord,
-    checkpoint_seq: Option<u64>,
     now_millis: u64,
 }
 
@@ -364,35 +360,32 @@ pub(super) struct HeadWriter {
 
 impl HeadWriter {
     /// Open the writer over `stores`, RESUMING by reading `H`'s latest member
-    /// (PUB-6.65, I7 (a)): its recorded coordinate seeds `last_head`, so a
-    /// head written after a restart carries the right `prev` and does not
-    /// re-name a position already published; its `base.seq` seeds trigger
-    /// (b)'s reference, so a checkpoint the last head did not name is
-    /// attested by the next; and the staging draft is found where an earlier
-    /// uptime minted it. All off ONE snapshot. And by reading the FEED (the
-    /// module doc's RESUME FROM THE FEED): the entries above that position
-    /// seed trigger (a)'s count and trigger (c)'s origin, a bare or absent
-    /// sidecar falling back to zero and to open-time.
+    /// (PUB-6.65, I7 (a)): the record it holds becomes `last_head` whole, so a
+    /// head written after a restart carries the right `prev`, does not re-name
+    /// a position already published, and attests a checkpoint the last head
+    /// did not name; and the staging draft is found where an earlier uptime
+    /// minted it. All off ONE snapshot. And by reading the FEED (the module
+    /// doc's RESUME FROM THE FEED): the entries above that position seed
+    /// trigger (a)'s count and trigger (c)'s origin, a bare or absent sidecar
+    /// falling back to zero and to open-time.
     pub(super) fn open(stores: EngineStores, feed: &Feed) -> HeadWriter {
         let clock = Clock::new();
         let now = clock.now_millis();
         let snap = stores.kernel().snapshot();
-        let recorded = read_recorded_head(snap.world());
-        let last_head = recorded.as_ref().map(HeadRecord::coordinate);
-        let last_checkpoint_seq = recorded.as_ref().and_then(|r| r.base).map(|b| b.seq);
+        let last_head = read_recorded_head(snap.world());
         let staging_draft = find_staging_draft(snap.world());
         // The feed is the daemon's testimony about its own commits: every
         // entry above the position the last head named landed since that
         // head, the head's own commits among them, keyed `SYSTEM_TESTIMONY`.
         // No head yet, and every retained entry is "since the last head".
-        let seeds = resume_seeds(&feed.entries_above(last_head.map_or(0, |h| h.position)));
+        let seeds =
+            resume_seeds(&feed.entries_above(last_head.as_ref().map_or(0, |h| h.position)));
         HeadWriter {
             stores,
             state: Mutex::new(HeadState {
                 last_head,
                 last_seen_position: snap.seq().0,
                 commits_since_head: seeds.commits_since_head,
-                last_checkpoint_seq,
                 last_head_millis: seeds.last_head_millis.unwrap_or(now),
                 staging_draft,
             }),
@@ -439,46 +432,50 @@ impl HeadWriter {
             st.commits_since_head = st.commits_since_head.saturating_add(1);
 
             let chain = snap.chain();
-            let checkpoint = self.stores.kernel().newest_checkpoint();
-            let checkpoint_seq = checkpoint.map(|(seq, _, _)| seq.0);
+            // `base`: the newest retained checkpoint at or below the named
+            // position, else null — the kernel's triple named here, in
+            // `Kernel::newest_checkpoint`'s documented order, at the one place
+            // it is unpacked.
+            let base = self
+                .stores
+                .kernel()
+                .newest_checkpoint()
+                .filter(|(seq, _, _)| seq.0 <= position)
+                .map(|(seq, chain_head, body_hash)| CheckpointBase {
+                    seq: seq.0,
+                    chain: chain_head,
+                    body_hash,
+                });
             let now = self.clock.now_millis();
 
             // Never twice for one position: a head sets `last_head` to the
-            // coordinate it named, and a landed commit is always above it —
-            // the literal guard, kept beside the seq gate above.
-            let moved = st.last_head.map_or(position > 0, |last| position > last.position);
+            // record it published, and a landed commit is always above its
+            // position — the literal guard, kept beside the seq gate above.
+            let last = st.last_head.as_ref();
+            let moved = last.map_or(position > 0, |h| position > h.position);
             if !moved {
                 return;
             }
+            // Trigger (b): there is a checkpoint for this head to attest, and
+            // it is not the one the last head attested.
+            let attested = last.and_then(|h| h.base).map(|b| b.seq);
             let due = st.commits_since_head >= EVERY_COMMITS
-                || (checkpoint_seq.is_some() && checkpoint_seq != st.last_checkpoint_seq)
+                || base.is_some_and(|b| Some(b.seq) != attested)
                 || now.saturating_sub(st.last_head_millis) >= MAX_INTERVAL_MILLIS;
             if !due {
                 return;
             }
-
-            // `base`: the newest retained checkpoint at or below the named
-            // position, else null — the kernel's triple named here, in
-            // `Kernel::newest_checkpoint`'s documented order, at the one place
-            // it is unpacked. `prev`: the previous head's coordinate, null at
-            // the first.
-            let base = checkpoint.filter(|(seq, _, _)| seq.0 <= position).map(
-                |(seq, chain_head, body_hash)| CheckpointBase {
-                    seq: seq.0,
-                    chain: chain_head,
-                    body_hash,
-                },
-            );
-            let record = HeadRecord { position, chain, base, prev: st.last_head };
-            Plan { record, checkpoint_seq, now_millis: now }
+            // `prev`: the previous head's coordinate, null at the first.
+            let record =
+                HeadRecord { position, chain, base, prev: last.map(HeadRecord::coordinate) };
+            Plan { record, now_millis: now }
         };
 
-        let landed = self.write_head(wp, serial, &plan);
+        let landed = self.write_head(wp, serial, &plan.record);
         let mut st = self.state.lock();
         if landed {
-            st.last_head = Some(plan.record.coordinate());
+            st.last_head = Some(plan.record);
             st.commits_since_head = 0;
-            st.last_checkpoint_seq = plan.checkpoint_seq;
             st.last_head_millis = plan.now_millis;
         }
         // The head's own commits — a whole head's, or a refused one's partial
@@ -491,11 +488,11 @@ impl HeadWriter {
     /// then the publish shot minting the next member of `H`. `true` iff BOTH
     /// committed — a failed publish leaves the atom an orphan in the draft (the
     /// resume case), the state is not advanced, and the next commit retries.
-    fn write_head(&self, wp: &WritePath, serial: &SerialGuard<'_>, plan: &Plan) -> bool {
+    fn write_head(&self, wp: &WritePath, serial: &SerialGuard<'_>, record: &HeadRecord) -> bool {
         let Some(draft) = self.ensure_draft(wp, serial) else {
             return false;
         };
-        let bytes = plan.record.to_bytes();
+        let bytes = record.to_bytes();
 
         // The next free content position of the draft, and the atom there.
         let next_ordinal = {
@@ -722,18 +719,6 @@ fn find_staging_draft(world: &World) -> Option<Address> {
     (m3.is_registered_document(&draft) && !m3.published(&draft)).then_some(draft)
 }
 
-/// 64 lowercase hex characters into 32 bytes; `None` on any other shape.
-fn parse_hex32(s: &str) -> Option<[u8; 32]> {
-    if s.len() != 64 {
-        return None;
-    }
-    let mut out = [0u8; 32];
-    for (i, byte) in out.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(s.get(i * 2..i * 2 + 2)?, 16).ok()?;
-    }
-    Some(out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -769,7 +754,16 @@ mod tests {
         let first = HeadRecord { position: 1, chain: [0x0f; 32], base: None, prev: None };
         let first_bytes = first.to_bytes();
         assert_eq!(HeadRecord::parse(&first_bytes), Some(first), "the first head: base and prev null");
-        let foreign = String::from_utf8(first_bytes).expect("utf-8").replace(FORMAT_STAMP, "SKJ3");
+        let first_text = String::from_utf8(first_bytes).expect("utf-8");
+        let foreign = first_text.replace(FORMAT_STAMP, "SKJ3");
         assert_eq!(HeadRecord::parse(foreign.as_bytes()), None, "a head another format wrote");
+        // The reader admits EXACTLY what the writer emits: `hex_string` writes
+        // lowercase and no sign, so another spelling of the same bytes — one a
+        // radix parse would fold back to them — is not this build's record.
+        let chain = hex(0x0f);
+        for respelled in [chain.to_uppercase(), format!("+f{}", &chain[2..])] {
+            let text = first_text.replace(&chain, &respelled);
+            assert_eq!(HeadRecord::parse(text.as_bytes()), None, "a respelled hash: {respelled}");
+        }
     }
 }

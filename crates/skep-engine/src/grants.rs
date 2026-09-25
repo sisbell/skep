@@ -127,42 +127,52 @@ use crate::publication::{is_published, Drafts};
 use crate::types::t_grant;
 use crate::world::World;
 
-/// One STORED row of the LIVE ANY-PRINCIPAL set ([`World::universal_grants`]):
-/// a content-prefix as the index keys it, and the issuers whose ANY-PRINCIPAL
-/// index ENTRIES name it, under the shared-entry shortfall that read states.
-/// The pair opens only those documents under the prefix whose ω owner is the
-/// issuer, and none at all where it owns none.
+/// One STORED row of the fold's ANY-PRINCIPAL index, as the LIVE ANY-PRINCIPAL
+/// set ([`World::universal_grants`]) enumerates it: a content-prefix as the
+/// index keys it, and the issuers whose ANY-PRINCIPAL index ENTRIES name it,
+/// under the shared-entry shortfall that read states. The pair opens only
+/// those documents under the prefix whose ω owner is the issuer, and none at
+/// all where it owns none.
+///
+/// An INDEX ROW, and never an answer: the borrowed twin of M10's
+/// `skep_febe::UniversalIndexRow`, the row `PublicationWorld::universal_grants`
+/// answers in, which the engine's impl of that seam builds from this one field
+/// for field. What M10 SERVES is its other row, `skep_febe::UniversalGrant` —
+/// a COVERED prefix, built only by narrowing these (RES-231/264/273/298) — so
+/// a row of this type is no entitlement by itself and never a displayable
+/// answer (RES-258, PUB-5.21).
 ///
 /// A named row rather than a pair, because the two grant enumerations are
 /// TRANSPOSES of each other and every half of both is an account or a
 /// document address: `(content_prefix, issuers)` here, `(issuer,
-/// content_prefixes)` in [`IssuerGrant`]. Read one as the other and the types
-/// still agree, so nothing refuses — a lookup keyed by the wrong half finds
-/// nothing, and the term it was for goes unserved with no sign of it. The
-/// field names are what make that mistake fail to compile instead.
+/// content_prefixes)` in [`IssuerGrantIndexRow`]. Read one as the other and
+/// the types still agree, so nothing refuses — a lookup keyed by the wrong
+/// half finds nothing, and the term it was for goes unserved with no sign of
+/// it. The field names are what make that mistake fail to compile instead.
 ///
 /// A row BORROWS the world it was read from, as a map's own views do: the
 /// read copies no address, and a caller that keeps a row past that world
 /// clones what it keeps. Rows order by content-prefix, which no two rows of
 /// one read share, so that order is the one the read hands them back in.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct UniversalGrant<'a> {
+pub struct UniversalGrantIndexRow<'a> {
     /// The content-prefix the grants name (a document or an account address).
     pub content_prefix: &'a Address,
     /// The issuers whose index entries name it, in address order.
     pub issuers: Vec<&'a Address>,
 }
 
-/// One STORED row of the GRANTEE-INDEXED read ([`World::issuers_for`]): an
-/// issuer, and the union of the content-prefixes its index ENTRIES for the
+/// One STORED row of the fold's PRINCIPAL-EXACT index, inverted for one
+/// grantee as the GRANTEE-INDEXED read ([`World::issuers_for`]) hands it back:
+/// an issuer, and the union of the content-prefixes its index ENTRIES for the
 /// queried grantee name, under the shared-entry shortfall that read states.
-/// They open, as a [`UniversalGrant`] row's do, only the documents under them
-/// whose ω owner is the issuer. [`UniversalGrant`] is the transpose, and says
-/// why both are named and what a row borrows. Rows order by issuer, which no
-/// two rows of one read share, so that order is the one the read hands them
-/// back in.
+/// They open, as a [`UniversalGrantIndexRow`]'s do, only the documents under
+/// them whose ω owner is the issuer, so this is an INDEX ROW too and never an
+/// answer. [`UniversalGrantIndexRow`] is the transpose, and says why both are
+/// named and what a row borrows. Rows order by issuer, which no two rows of
+/// one read share, so that order is the one the read hands them back in.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct IssuerGrant<'a> {
+pub struct IssuerGrantIndexRow<'a> {
     /// The issuing account — a draft-stream key for the grantee.
     pub issuer: &'a Address,
     /// The prefixes that issuer's index entries for the grantee name, in
@@ -212,7 +222,7 @@ impl World {
     /// ANY-PRINCIPAL grant any account issues adds an entry, so this grows
     /// with the store. Nothing is memoized, so a caller polling per request
     /// re-pays per request, and it gates neither admission nor concurrency.
-    pub fn universal_grants(&self) -> Vec<UniversalGrant<'_>> {
+    pub fn universal_grants(&self) -> Vec<UniversalGrantIndexRow<'_>> {
         self.grants.universal()
     }
 
@@ -249,7 +259,7 @@ impl World {
     /// choice nor the grantee's: any account may grant to any other, so the
     /// ISSUERS decide how much work a poll on this grantee's behalf does.
     /// Nothing is memoized, and it gates neither admission nor concurrency.
-    pub fn issuers_for(&self, grantee: &Address) -> Vec<IssuerGrant<'_>> {
+    pub fn issuers_for(&self, grantee: &Address) -> Vec<IssuerGrantIndexRow<'_>> {
         self.grants.issuers_for(grantee)
     }
 }
@@ -260,10 +270,10 @@ impl World {
 
 /// One admitted grant record — enough to answer queries and to withdraw its
 /// index entry when a later record revokes it. The fields are crate-visible
-/// for the world dump's grant section (lane 3.4 §3), which renders the fold's
-/// operative set through `Grants::operative_records` and destructures each
-/// record whole — so a field added here is a field that section must render,
-/// or the faithfulness check stops speaking for the whole record.
+/// for the world dump's `grants` section (lane 3.4 §3), which renders the
+/// fold's operative set through `Grants::operative_records` and destructures
+/// each record whole — so a field added here is a field that section must
+/// render, or the faithfulness check stops speaking for the whole record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GrantRecord {
     /// The grant link's home document (the issuer's doc 1).
@@ -416,7 +426,7 @@ impl Grants {
 
     /// The operative set — every admitted, unrevoked grant record with the
     /// grant link's own address — in the map's hash order (the world dump's
-    /// grant section renders it, and the dump's rendering sorts a map's
+    /// `grants` section renders it, and the dump's rendering sorts a map's
     /// entries). The operative set's one enumeration, where
     /// [`Grants::universal`] and [`Grants::issuers_for`] enumerate the query
     /// indexes; the predicate's consumers are the point probes below.
@@ -459,10 +469,10 @@ impl Grants {
     /// The ANY-PRINCIPAL index as rows borrowed from it, in the `OrdMap`'s key
     /// order — tumbler order — each issuer list in the `OrdSet`'s address
     /// order. [`World::universal_grants`] is the public face.
-    pub(crate) fn universal(&self) -> Vec<UniversalGrant<'_>> {
+    pub(crate) fn universal(&self) -> Vec<UniversalGrantIndexRow<'_>> {
         self.universal
             .iter()
-            .map(|(content_prefix, issuers)| UniversalGrant {
+            .map(|(content_prefix, issuers)| UniversalGrantIndexRow {
                 content_prefix,
                 issuers: issuers.iter().collect(),
             })
@@ -477,7 +487,7 @@ impl Grants {
     /// address order and without a repeat: the walk visits the prefixes in
     /// key order, and an issuer sits at most once in any prefix's set.
     /// [`World::issuers_for`] is the public face.
-    pub(crate) fn issuers_for(&self, grantee: &Address) -> Vec<IssuerGrant<'_>> {
+    pub(crate) fn issuers_for(&self, grantee: &Address) -> Vec<IssuerGrantIndexRow<'_>> {
         let mut by_issuer: BTreeMap<&Address, Vec<&Address>> = BTreeMap::new();
         if let Some(prefixes) = self.by_grantee.get(grantee) {
             for (prefix, issuers) in prefixes.iter() {
@@ -488,7 +498,7 @@ impl Grants {
         }
         by_issuer
             .into_iter()
-            .map(|(issuer, content_prefixes)| IssuerGrant { issuer, content_prefixes })
+            .map(|(issuer, content_prefixes)| IssuerGrantIndexRow { issuer, content_prefixes })
             .collect()
     }
 

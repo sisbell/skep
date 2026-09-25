@@ -1,6 +1,6 @@
 //! The world-dump surface (behind the `dump` feature): [`WorldDump`] — a
-//! deterministic, byte-comparable rendering of the authoritative observable
-//! state, with the recomputable hints in a separate section — plus the
+//! deterministic, byte-comparable rendering of the world's AUTHORITATIVE
+//! state, with its DERIVED state in sections of their own — plus the
 //! hint-faithfulness check the crash/conformance harnesses lean on. The
 //! reduction that turns this rendering into a reader's own is `filter`'s.
 //!
@@ -23,7 +23,9 @@
 //! `#[serde(skip)]` field is excluded here exactly as the checkpoint excludes
 //! it.
 //!
-//! The four sections, each stated in full at the builder that writes it:
+//! The four sections — two AUTHORITATIVE (`authoritative`, `publication`) and
+//! two DERIVED (`grants`, `hints`), the pair a rebuild can move — each stated
+//! in full at the builder that writes it:
 //! * **authoritative** (`authoritative_tree`) — one entry per store slice,
 //!   each the slice's own serde form.
 //! * **publication** (`publication_tree`, v5, PUB round 2, lane 3.4 §3) —
@@ -74,8 +76,10 @@ use filter::filter_tree;
 /// `Hash` comes with that equality, for a harness collecting the distinct
 /// dumps across a sweep of crash points.
 ///
-/// What equal dumps CERTIFY is what this format renders: every authoritative
-/// slice, and every hint the hints section reaches. It is not that the worlds
+/// What equal dumps CERTIFY is what this format renders: its two AUTHORITATIVE
+/// sections — every store slice, and M3's publication map projected to its
+/// drafts — and its two DERIVED ones — the grant fold's operative records, and
+/// every family the `hints` section renders. It is not that the worlds
 /// agree: derived structures sit outside the rendering — the grant fold's two
 /// query indexes, which the read predicate's third clause probes, among them
 /// — and [`crate::Engine::check_hints_of`] names every one and gives the
@@ -342,15 +346,15 @@ const PREDICATE_PROJECTIONS: [(&str, ShippedType, View); 4] = [
 ];
 
 /// One type class's observable projection: the THREE entries a class submap
-/// holds — its key endset, then one slice per row of [`SLICE_VIEWS`], each
-/// already an address-ordered `OrdSet`.
+/// holds — its key endset, then one typed slice per row of [`SLICE_VIEWS`],
+/// each already an address-ordered `OrdSet`.
 ///
 /// That entry set is format, and it is the last of the five levels of the
 /// tree the per-class filter's completeness statement is held against: the
-/// slices are sequences of link addresses and reduce by home, while `key` is a
-/// compiled format constant and stays at every reader class. A fourth entry
-/// added here and left out of that statement would be rendered whole to every
-/// reader, which is why
+/// typed slices are sequences of link addresses and reduce by home, while
+/// `key` is a compiled format constant and stays at every reader class. A
+/// fourth entry added here and left out of that statement would be rendered
+/// whole to every reader, which is why
 /// `every_entry_at_each_level_of_the_tree_is_reduced_or_kept_by_name` holds this
 /// set as well as the four above it.
 ///
@@ -365,13 +369,14 @@ fn class_tree(links: &LinkState, ty: &Endset) -> SerdeTree {
     SerdeTree::Map(entries)
 }
 
-/// The HINTS section: the recomputable state, read through PUBLIC surfaces
-/// alone over already-ordered results — never off a store's private hint.
-/// M7's is most of it (`match_links`, `type_slice`, `members`, `succs`): the
-/// audit and active slices, the nullified LINKS of the audit slice, the
-/// five shipped classes' type slices, and the supersession forward edges (the
-/// BH2 walk). Beside them, M9's definition registry — which is no slice of
-/// M9's but these M7 tuples — projected one family per row of
+/// The HINTS section: derived state, read through PUBLIC surfaces alone over
+/// already-ordered results — never off a store's private hint — and, with the
+/// `grants` section beside it, the whole of the derived state this format
+/// renders. M7's is most of it (`match_links`, `type_slice`, `members`,
+/// `succs`): the audit and active slices, the nullified LINKS of the audit
+/// slice, the five shipped classes' typed slices, and the supersession forward
+/// edges (the BH2 walk). Beside them, M9's definition registry — which is no
+/// slice of M9's but these M7 tuples — projected one family per row of
 /// [`PREDICATE_PROJECTIONS`]; and the engine's OWN derived index, the
 /// exception set (`publication.drafts`: draft document → owner account,
 /// PUB-7.5). M3 and M4 hold no hints of their own, and M5's rebuild is the
@@ -386,7 +391,7 @@ fn class_tree(links: &LinkState, ty: &Endset) -> SerdeTree {
 ///   link's own ordinal — so its omission is a decision about this FORMAT
 ///   rather than a consequence of M7's surface, and closing it would move
 ///   bytes the harnesses pin.
-/// * M7's fold indexes a type slice for EVERY coverage class while this
+/// * M7's fold indexes a typed slice for EVERY coverage class while this
 ///   section names only the shipped five, so the typed slice an ordinary
 ///   content-typed link lands in is never rendered.
 ///
@@ -506,7 +511,7 @@ fn publication_tree(world: &World) -> SerdeTree {
     )
 }
 
-/// The GRANT section: the grant fold's OPERATIVE set — every admitted,
+/// The GRANTS section: the grant fold's OPERATIVE set — every admitted,
 /// unrevoked grant keyed by the grant link's own address, each entry its
 /// `home` (the issuer's doc 1), its `issuer` (ω of the home), the
 /// `content_prefix` it shares and its `grantee` (`none` for the ANY-PRINCIPAL
@@ -696,36 +701,36 @@ impl crate::Engine {
     /// derived state from scratch through `WorldState::rebuild_derived` — the
     /// call recovery makes before replay — dump the rebuild, and compare the
     /// bytes. The rebuild moves derived state alone, so a divergence always
-    /// lies in a derived rendering — a hint, or the grant section's records —
-    /// and never in an authoritative slice.
+    /// lies in a DERIVED section — a `hints` family, or the `grants` section's
+    /// records — and never in an authoritative one.
     ///
     /// `Ok(())` certifies EXACTLY what the dump renders: the audit and active
     /// slices, the nullified LINKS of the audit slice, the shipped classes'
     /// typed slices, the supersession forward edges, the predicate
-    /// projections, the exception set and — through the v5 grant section —
+    /// projections, the exception set and — through the v5 `grants` section —
     /// the grant fold's operative set each agree with a rebuild from
     /// authoritative state — for the set, that the fold over every
     /// document-minting record and the seed over M3's publication map name
     /// the same drafts with the same owners (PUB-7.7's two halves), and for
     /// the grants that the fold over every link deposit and the seed over
-    /// the grants class's type slice admit the same RECORDS. It
+    /// the grants class's typed slice admit the same RECORDS. It
     /// certifies nothing of the SIX derived structures the dump does not
     /// reach, and each of those drives something a caller can observe:
     ///
     /// * M7's `dedup` drives `emit`'s incumbent lookup and with it
     ///   idempotence; `home_frontier` drives the address `next_link_address`
-    ///   mints and the answers `age`/`stale` give; the type slice of a class
+    ///   mints and the answers `age`/`stale` give; the typed slice of a class
     ///   outside the shipped five drives every typed read over ordinary
     ///   content-typed links.
     /// * The grant fold's TWO QUERY INDEXES — `by_grantee` and `universal` —
     ///   drive `grant_exists`, the read predicate's third clause, so a
     ///   mis-derived one is an authorization answer rather than a stale
-    ///   figure. The dump's grant section renders the fold's RECORDS and
+    ///   figure. The dump's `grants` section renders the fold's RECORDS and
     ///   neither index, so no comparison here reaches them.
     /// * The grant fold's EARLIER-RECORD SET — `earlier_records` — drives
     ///   `classify`'s second outcome: whether a record naming an earlier
     ///   record of its home is a revocation or of neither kind (PUB-5.15).
-    ///   The grant section renders the operative set and not the
+    ///   The `grants` section renders the operative set and not the
     ///   earlier-record set.
     ///
     /// A rebuild that mis-derived any of the six passes here. For the two

@@ -97,7 +97,7 @@ use std::path::Path;
 use parking_lot::Mutex;
 use serde_json::Value;
 use skep_address::{is_prefix, parent, Address, Tumbler};
-use skep_engine::{Engine, IssuerGrant, ReaderClass, World};
+use skep_engine::{Engine, IssuerGrantIndexRow, ReaderClass, World};
 use skep_kernel::Seq;
 use skep_namespace::{HasM3, PrincipalId};
 
@@ -179,7 +179,7 @@ pub(crate) struct FeedClass<'a> {
     /// The grant-selected issuers (`World::issuers_for`, PUB-7.25) — each an
     /// issuing account with the union of the content prefixes it granted this
     /// principal, the issuer being the draft-stream key this clause opens.
-    issuers: Vec<IssuerGrant<'a>>,
+    issuers: Vec<IssuerGrantIndexRow<'a>>,
     /// The live ANY-PRINCIPAL prefixes (`World::universal_grants`, PUB-7.22)
     /// — a key range over the position index, never a stream key. Empty for
     /// the guest (grants reach principals alone, PUB-5.109).
@@ -837,7 +837,7 @@ impl Inner {
                 sources.push(Box::new(at_or_above(stream, start)));
             }
         }
-        for IssuerGrant { issuer, content_prefixes: prefixes } in &class.issuers {
+        for IssuerGrantIndexRow { issuer, content_prefixes: prefixes } in &class.issuers {
             let Some(stream) = self.streams.get(*issuer) else { continue };
             // A grant at the issuer's account depth or wider IS the stream
             // (PUB-7.25); narrower prefixes take the per-entry containment

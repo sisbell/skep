@@ -368,7 +368,7 @@ mod tests {
     use std::error::Error;
 
     use crate::testkit::mem_engine;
-    use crate::{Draft, IssuerGrant, ReaderClass, Record, UniversalGrant};
+    use crate::{Draft, IssuerGrantIndexRow, ReaderClass, Record, UniversalGrantIndexRow};
 
     use super::*;
 
@@ -441,8 +441,8 @@ mod tests {
     fn the_enumeration_rows_are_ordered_hashable_values() {
         fn assert_value<T: Clone + fmt::Debug + Eq + std::hash::Hash + Ord>() {}
         assert_value::<Draft<'static>>();
-        assert_value::<UniversalGrant<'static>>();
-        assert_value::<IssuerGrant<'static>>();
+        assert_value::<UniversalGrantIndexRow<'static>>();
+        assert_value::<IssuerGrantIndexRow<'static>>();
     }
 
     /// The chain does not stop at the assembler: what an operator reads is

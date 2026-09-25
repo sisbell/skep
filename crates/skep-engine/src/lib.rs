@@ -60,10 +60,10 @@
 //!   (PUB-7.7), with NO checkpoint slice. It also publishes its two feed
 //!   enumerations ([`World::universal_grants`], [`World::issuers_for`]; lane
 //!   3.6) — the live ANY-PRINCIPAL set and a grantee's issuers with the
-//!   prefixes their index entries name, as [`UniversalGrant`] and
-//!   [`IssuerGrant`] rows — the key set the daemon's change feed resolves
-//!   once per request (PUB-7.22, PUB-7.28); M10's any-principal discovery
-//!   read (PUB-8.47) takes the first through
+//!   prefixes their index entries name, as [`UniversalGrantIndexRow`] and
+//!   [`IssuerGrantIndexRow`] rows — the key set the daemon's change feed
+//!   resolves once per request (PUB-7.22, PUB-7.28); M10's any-principal
+//!   discovery read (PUB-8.47) takes the first through
 //!   `PublicationWorld::universal_grants`, raw, and narrows it itself. What
 //!   they enumerate is the fold's STORED index — a superset of entitlement,
 //!   and short of the grants by the shared-entry shortfall (the `grants`
@@ -79,12 +79,13 @@
 //!   audit-view classes the daemon's write path refuses a `nullify` at
 //!   (PUB-6.30, PUB-6.64; lane 3.5). None is a registered M7 type.
 //! * **The world dump** ([`dump`], behind the `dump` feature) — a
-//!   deterministic, byte-comparable rendering of the authoritative observable
-//!   state (M3's publication map and the grant fold's operative set as
-//!   sections of their own since v5) plus the recomputable hints (the
-//!   exception set among them), for the conformance and crash harnesses —
-//!   and, since lane 3.4, the same tree post-filtered at a READER'S CLASS
-//!   for the daemon's `/dump`.
+//!   deterministic, byte-comparable rendering of the world's AUTHORITATIVE
+//!   state (every store slice, and M3's publication map as a `publication`
+//!   section of its own since v5) beside its DERIVED state (the grant fold's
+//!   operative set as a `grants` section of its own since v5, and the `hints`
+//!   section, the exception set among them), for the conformance and crash
+//!   harnesses — and, since lane 3.4, the same tree post-filtered at a
+//!   READER'S CLASS for the daemon's `/dump`.
 
 #![forbid(unsafe_code)]
 
@@ -111,7 +112,7 @@ mod world;
 pub mod dump;
 
 pub use engine::{Engine, EngineError, EngineStores};
-pub use grants::{IssuerGrant, UniversalGrant};
+pub use grants::{IssuerGrantIndexRow, UniversalGrantIndexRow};
 pub use publication::Draft;
 pub use readable::ReaderClass;
 pub use world::{Record, World};

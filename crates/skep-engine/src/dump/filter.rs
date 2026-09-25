@@ -177,7 +177,7 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 /// * the HINTS section's families, grouped by [`REDUCED_BY_HOME`],
 ///   [`PREDICATE_PROJECTIONS`] and the three arms of their own; and
 /// * the three entries inside a SHIPPED CLASS's own submap
-///   (`super::class_tree`'s — two slices reduced by home, one
+///   (`super::class_tree`'s — two typed slices reduced by home, one
 ///   format-constant `key` kept).
 ///
 /// The THIRD is the one whose additions are not an engine edit at all, and
@@ -563,7 +563,7 @@ mod tests {
 
     /// The dump TREE at `principal`'s reader class — `None` is the guest — as
     /// [`crate::Engine::dump_of_visible`] reduces it, before render.
-    fn tree_at(world: &World, principal: Option<PrincipalId>) -> SerdeTree {
+    fn tree_visible_to(world: &World, principal: Option<PrincipalId>) -> SerdeTree {
         filter_tree(dump_tree(world), &|doc: &Address| world.readable(principal, doc), &world.links)
     }
 
@@ -762,10 +762,10 @@ mod tests {
         }
 
         // …and INSIDE each shipped class, the level the two family lists above
-        // cannot reach: the filter reduces one slice per row of `SLICE_VIEWS`
-        // and keeps `key` as the format constant it is, so a fourth entry the
-        // builder added here would be rendered whole to the guest with every
-        // path in the filter still naming a place.
+        // cannot reach: the filter reduces one typed slice per row of
+        // `SLICE_VIEWS` and keeps `key` as the format constant it is, so a
+        // fourth entry the builder added here would be rendered whole to the
+        // guest with every path in the filter still naming a place.
         let class_entries: BTreeSet<String> = SLICE_VIEWS
             .iter()
             .map(|(label, _)| *label)
@@ -806,7 +806,7 @@ mod tests {
     fn the_guest_filter_drops_a_draft_s_entries_and_keeps_the_namespace_slice_and_grants_section() {
         let (_engine, world) = populated_world();
         let full = dump_tree(&world);
-        let guest = tree_at(&world, None);
+        let guest = tree_visible_to(&world, None);
 
         let len_at = |tree: &SerdeTree, path: &[&str]| match at_path(tree, path) {
             Some(SerdeTree::Map(entries)) => entries.len(),
@@ -826,7 +826,7 @@ mod tests {
             assert!(len_at(&full, path) > 0, "{path:?}: the fixture must populate it");
             assert_eq!(len_at(&guest, path), 0, "{path:?}: a guest reads nothing of a draft");
         }
-        // The namespace slice is untouched. The GRANT section is kept whole
+        // The namespace slice is untouched. The `grants` section is kept whole
         // too, but this fixture deposits no grant, so what the loop below
         // compares there is one empty map against another — the integration
         // suite's guest tests are what hold that section's content against a
@@ -898,7 +898,7 @@ mod tests {
                  carries it"
             );
         }
-        let guest = tree_at(&world, None);
+        let guest = tree_visible_to(&world, None);
         assert_eq!(
             render_of(at_path(&guest, &path).expect("present")),
             render_of(at_path(&full, &path).expect("present")),
@@ -991,7 +991,7 @@ mod tests {
     fn every_reduced_path_actually_reduces() {
         let world = every_reduced_family_in_a_draft();
         let full = dump_tree(&world);
-        let guest = tree_at(&world, None);
+        let guest = tree_visible_to(&world, None);
         for (path, want) in reduced_paths() {
             let (shape, len) = shape_and_len(&full, &path);
             assert_eq!(shape, want, "{path:?}: the reduction's shape is not the builder's");
@@ -1060,7 +1060,7 @@ mod tests {
             members.len(),
             "one deposit, one member per denoted address — the walks' real bound"
         );
-        let guest = tree_at(&world, None);
+        let guest = tree_visible_to(&world, None);
         assert!(
             projection(&guest, "predicates.defs.audit").is_empty(),
             "one tuple's home governs every member it denotes"
@@ -1297,7 +1297,7 @@ mod tests {
             );
         }
 
-        let guest = tree_at(&world, None);
+        let guest = tree_visible_to(&world, None);
         for family in ["predicates.stable.audit", "predicates.stable.active"] {
             assert!(
                 projection(&guest, family).is_empty(),
@@ -1328,7 +1328,7 @@ mod tests {
         }
 
         // The OWNER reads both homes, so both members stay…
-        let owner = tree_at(&world, Some(USER));
+        let owner = tree_visible_to(&world, Some(USER));
         assert_eq!(
             projection(&owner, "predicates.stable.audit"),
             vec![dotted(&public_member), dotted(&private_member)],
@@ -1356,9 +1356,9 @@ mod tests {
         let world = a_draft_homed_claim_over_public_links();
         let full = dump_tree(&world);
         assert_eq!(edge_count(&full), 1, "the fixture asserts exactly one edge");
-        let owner = tree_at(&world, Some(USER));
+        let owner = tree_visible_to(&world, Some(USER));
         assert_eq!(edge_count(&owner), 1, "the owner reads the claim's home, so the edge stays");
-        let guest = tree_at(&world, None);
+        let guest = tree_visible_to(&world, None);
         assert_eq!(edge_count(&guest), 0, "no readably-homed claim asserts it: the edge leaves");
         // …while the two public links themselves stay in the guest's slices.
         let audit_count = |tree: &SerdeTree| match at_path(tree, &["hints", "links.audit"]) {
@@ -1433,9 +1433,9 @@ mod tests {
         let (world, public_claim) = a_retracted_public_claim_beside_an_operative_draft_claim();
         assert!(world.links.is_nullified(&public_claim), "the fixture must retract the public claim");
         assert_eq!(edge_count(&dump_tree(&world)), 1, "the draft's operative claim renders the edge");
-        let owner = tree_at(&world, Some(USER));
+        let owner = tree_visible_to(&world, Some(USER));
         assert_eq!(edge_count(&owner), 1, "the owner reads the operative claim's home");
-        let guest = tree_at(&world, None);
+        let guest = tree_visible_to(&world, None);
         assert_eq!(
             edge_count(&guest),
             0,
@@ -1488,7 +1488,7 @@ mod tests {
                 "{family}: the fixture must render the member"
             );
         }
-        let guest = tree_at(&world, None);
+        let guest = tree_visible_to(&world, None);
         assert_eq!(
             projection(&guest, "predicates.stable.audit"),
             vec![dotted.clone()],
@@ -1498,7 +1498,7 @@ mod tests {
             projection(&guest, "predicates.stable.active").is_empty(),
             "active: the only registration asserting the member is the draft's"
         );
-        let owner = tree_at(&world, Some(USER));
+        let owner = tree_visible_to(&world, Some(USER));
         assert_eq!(
             projection(&owner, "predicates.stable.active"),
             vec![dotted],

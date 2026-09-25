@@ -63,12 +63,13 @@ pub(crate) type Drafts = im::HashMap<Address, Address>;
 /// DRAFT document, and the ACCOUNT that owned it at its mint — the same memo
 /// [`World::owner_account`] answers with.
 ///
-/// A named row rather than a pair, for the reason [`crate::UniversalGrant`]
-/// is one: both halves are addresses, so a consumer that read them the other
-/// way round would still compile, and would go on to ask whether an ACCOUNT
-/// is a draft. That is always no, so every entry would read as one the commit
-/// just minted, and nothing about the answer would look wrong. The field
-/// names are what make the swap fail to compile instead.
+/// A named row rather than a pair, for the reason
+/// [`crate::UniversalGrantIndexRow`] is one: both halves are addresses, so a
+/// consumer that read them the other way round would still compile, and would
+/// go on to ask whether an ACCOUNT is a draft. That is always no, so every
+/// entry would read as one the commit just minted, and nothing about the
+/// answer would look wrong. The field names are what make the swap fail to
+/// compile instead.
 ///
 /// Rows order by document, so sorting them gives the set in address order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

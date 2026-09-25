@@ -13,7 +13,7 @@ use common::*;
 use skep_address::{document_of, validate, Address, Level, Tumbler};
 use skep_arrangement::{trunk_of, Caller, Deposit};
 use skep_content::Val;
-use skep_engine::{Engine, IssuerGrant, UniversalGrant, World};
+use skep_engine::{Engine, IssuerGrantIndexRow, UniversalGrantIndexRow, World};
 use skep_links::{HasLinks, ShippedType, SlotArg};
 use skep_namespace::{
     first_document_address, prefix_contains, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL,
@@ -618,7 +618,10 @@ fn an_any_principal_grant_from_a_non_owner_opens_nothing() {
     let w = world(&engine);
     assert_eq!(
         w.universal_grants(),
-        vec![UniversalGrant { content_prefix: &board.draft_a, issuers: vec![&board.acct_b] }],
+        vec![UniversalGrantIndexRow {
+            content_prefix: &board.draft_a,
+            issuers: vec![&board.acct_b],
+        }],
         "the deposit must enter the universal index, or this test proves nothing"
     );
     assert!(
@@ -722,12 +725,18 @@ fn a_sub_account_s_grant_opens_none_of_its_parent_s_drafts() {
     // Both records ARE admitted, so each probe reaches its issuer clause.
     assert_eq!(
         w.issuers_for(&board.acct_b),
-        vec![IssuerGrant { issuer: &sub_account.acct, content_prefixes: vec![&board.draft_a] }],
+        vec![IssuerGrantIndexRow {
+            issuer: &sub_account.acct,
+            content_prefixes: vec![&board.draft_a],
+        }],
         "S's named grant must enter the principal-exact index, or this proves nothing"
     );
     assert_eq!(
         w.universal_grants(),
-        vec![UniversalGrant { content_prefix: &board.draft_a, issuers: vec![&sub_account.acct] }],
+        vec![UniversalGrantIndexRow {
+            content_prefix: &board.draft_a,
+            issuers: vec![&sub_account.acct],
+        }],
         "…and its ANY-PRINCIPAL grant the universal one"
     );
     assert!(
@@ -989,7 +998,10 @@ fn a_grant_record_whose_from_stands_on_neither_rung_is_of_neither_kind() {
         let w = world(&engine);
         assert_eq!(
             w.universal_grants(),
-            vec![UniversalGrant { content_prefix: &draft_two, issuers: vec![&board.acct_a] }],
+            vec![UniversalGrantIndexRow {
+                content_prefix: &draft_two,
+                issuers: vec![&board.acct_a],
+            }],
             "{what}: the universal set is unchanged — no row names {from}"
         );
         assert!(
@@ -1036,14 +1048,14 @@ fn a_grant_at_a_document_and_at_an_account_stands_on_the_ladder() {
     assert_eq!(
         w.universal_grants(),
         vec![
-            UniversalGrant { content_prefix: &board.draft_a, issuers: vec![&board.acct_a] },
-            UniversalGrant { content_prefix: &undelegated, issuers: vec![&board.acct_a] },
+            UniversalGrantIndexRow { content_prefix: &board.draft_a, issuers: vec![&board.acct_a] },
+            UniversalGrantIndexRow { content_prefix: &undelegated, issuers: vec![&board.acct_a] },
         ],
         "the document-rung grant, and the account-rung one over an undelegated prefix"
     );
     assert_eq!(
         w.issuers_for(&board.acct_b),
-        vec![IssuerGrant { issuer: &board.acct_a, content_prefixes: vec![&board.acct_a] }],
+        vec![IssuerGrantIndexRow { issuer: &board.acct_a, content_prefixes: vec![&board.acct_a] }],
         "the account-rung grant, held by the grantee it names"
     );
     assert!(w.readable(Some(PrincipalId(9)), &board.draft_a), "the document rung opens the draft");
@@ -1266,7 +1278,7 @@ fn a_record_homed_elsewhere_revokes_no_grant_it_names() {
     );
     assert_eq!(
         w.issuers_for(&board.acct_b),
-        vec![IssuerGrant { issuer: &board.acct_a, content_prefixes: vec![&board.draft_a] }],
+        vec![IssuerGrantIndexRow { issuer: &board.acct_a, content_prefixes: vec![&board.draft_a] }],
         "A's grant stands, and B's record — a link address in its `from` — is no grant of B's"
     );
     engine.check_hints().expect("both halves agree, which is why only the predicate sees this");
@@ -1278,7 +1290,7 @@ fn a_record_homed_elsewhere_revokes_no_grant_it_names() {
 /// premise the seed's AUDIT view rests on — an active-view walk would drop
 /// exactly this grant, and the recovered fold would differ from the live one
 /// — so the check is the fold's own agreement with its seed, through the
-/// dump's grant section.
+/// dump's `grants` section.
 #[test]
 fn a_nullified_grant_still_opens_its_draft_and_the_audit_view_seed_agrees() {
     let engine = mem_engine();
@@ -1331,7 +1343,7 @@ fn a_supersession_claim_over_a_grant_revokes_nothing_and_the_seed_agrees() {
     );
     assert_eq!(
         w.issuers_for(&board.acct_b),
-        vec![IssuerGrant {
+        vec![IssuerGrantIndexRow {
             issuer: &board.acct_a,
             content_prefixes: vec![&board.acct_a, &board.draft_a],
         }],
@@ -1402,7 +1414,7 @@ fn a_reconstruction_over_a_checkpoint_base_answers_its_drafts_and_grants() {
     assert!(!w.readable(None, &later), "…and the fold adds the one minted above it");
     assert_eq!(
         w.issuers_for(&board.acct_b),
-        vec![IssuerGrant { issuer: &board.acct_a, content_prefixes: vec![&board.draft_a] }],
+        vec![IssuerGrantIndexRow { issuer: &board.acct_a, content_prefixes: vec![&board.draft_a] }],
         "the grant fold is seeded from the checkpoint, and the grant above `past` is not in it"
     );
     assert!(w.readable(Some(B), &board.draft_a), "so the checkpoint's grant still opens its draft");
@@ -1461,11 +1473,14 @@ fn the_two_feed_enumerations_read_the_fold_s_live_state() {
     assert_eq!(
         w.issuers_for(&board.acct_b),
         vec![
-            IssuerGrant {
+            IssuerGrantIndexRow {
                 issuer: &board.acct_a,
                 content_prefixes: vec![&board.acct_a, &board.draft_a],
             },
-            IssuerGrant { issuer: &acct_c, content_prefixes: vec![&board.draft_a, &draft_two] },
+            IssuerGrantIndexRow {
+                issuer: &acct_c,
+                content_prefixes: vec![&board.draft_a, &draft_two],
+            },
         ],
         "B's issuers in address order, each with the UNION of its prefixes in address order"
     );
@@ -1476,8 +1491,11 @@ fn the_two_feed_enumerations_read_the_fold_s_live_state() {
     assert_eq!(
         w.universal_grants(),
         vec![
-            UniversalGrant { content_prefix: &board.draft_a, issuers: vec![&board.acct_a] },
-            UniversalGrant { content_prefix: &draft_two, issuers: vec![&board.acct_a, &acct_c] },
+            UniversalGrantIndexRow { content_prefix: &board.draft_a, issuers: vec![&board.acct_a] },
+            UniversalGrantIndexRow {
+                content_prefix: &draft_two,
+                issuers: vec![&board.acct_a, &acct_c],
+            },
         ],
         "the live any-principal set in prefix order, each issuer list in address order"
     );
@@ -1486,6 +1504,24 @@ fn the_two_feed_enumerations_read_the_fold_s_live_state() {
     // the order the read handed them back in.
     assert!(w.issuers_for(&board.acct_b).is_sorted(), "issuer rows order by issuer");
     assert!(w.universal_grants().is_sorted(), "any-principal rows order by prefix");
+    // …and M10's `PublicationWorld` seam answers in the SAME index rows, owned
+    // — `UniversalGrantIndexRow`'s twin, field for field and in this read's
+    // order, the two-issuer row among them: a row M10 narrows before it
+    // serves anything, and never serves as it stands.
+    assert_eq!(
+        <World as skep_febe::PublicationWorld>::universal_grants(&w),
+        vec![
+            skep_febe::UniversalIndexRow {
+                content_prefix: board.draft_a.clone(),
+                issuers: vec![board.acct_a.clone()],
+            },
+            skep_febe::UniversalIndexRow {
+                content_prefix: draft_two.clone(),
+                issuers: vec![board.acct_a.clone(), acct_c.clone()],
+            },
+        ],
+        "the seam's owned rows are the engine's index rows, cloned"
+    );
     // The enumerations are the predicate turned inside out — and an entry
     // whose issuer is not the document's owner is listed and opens nothing.
     assert!(w.readable(Some(B), &board.draft_a));
@@ -1500,8 +1536,8 @@ fn the_two_feed_enumerations_read_the_fold_s_live_state() {
     assert_eq!(
         w.universal_grants(),
         vec![
-            UniversalGrant { content_prefix: &board.draft_a, issuers: vec![&board.acct_a] },
-            UniversalGrant { content_prefix: &draft_two, issuers: vec![&acct_c] },
+            UniversalGrantIndexRow { content_prefix: &board.draft_a, issuers: vec![&board.acct_a] },
+            UniversalGrantIndexRow { content_prefix: &draft_two, issuers: vec![&acct_c] },
         ],
         "the revoked entry is gone at once, and only that entry"
     );
@@ -1527,7 +1563,10 @@ fn revoking_an_any_principal_prefix_s_last_issuer_removes_its_row() {
     let w = world(&engine);
     assert_eq!(
         w.universal_grants(),
-        vec![UniversalGrant { content_prefix: &board.draft_a, issuers: vec![&board.acct_a] }],
+        vec![UniversalGrantIndexRow {
+            content_prefix: &board.draft_a,
+            issuers: vec![&board.acct_a],
+        }],
         "the fixture must enter the universal index"
     );
 
@@ -1548,7 +1587,7 @@ fn revoking_an_any_principal_prefix_s_last_issuer_removes_its_row() {
 /// entry, and nothing counts how many named it. So where an issuer grants the
 /// same prefix to the same grantee twice and then revokes ONE of the two, the
 /// entry both contributed leaves — while the other record stays in the
-/// operative set the dump's grant section renders.
+/// operative set the dump's `grants` section renders.
 ///
 /// Pinned here because the fold's own doc states it, and because it is the one
 /// place `readable` and that section disagree: the second grant is rendered
@@ -1574,7 +1613,7 @@ fn two_grants_sharing_an_index_entry_are_withdrawn_together() {
         "the entry both grants contributed left with the one that was revoked"
     );
     assert!(w.issuers_for(&board.acct_b).is_empty(), "…and so did the feed's own read of it");
-    // The unrevoked record is still in the operative set: the dump's grant
+    // The unrevoked record is still in the operative set: the dump's `grants`
     // section names its link address.
     let text = engine.world_dump().into_string();
     assert!(
@@ -1601,7 +1640,10 @@ fn two_any_principal_grants_sharing_an_entry_are_withdrawn_together() {
     let w = world(&engine);
     assert_eq!(
         w.universal_grants(),
-        vec![UniversalGrant { content_prefix: &board.draft_a, issuers: vec![&board.acct_a] }],
+        vec![UniversalGrantIndexRow {
+            content_prefix: &board.draft_a,
+            issuers: vec![&board.acct_a],
+        }],
         "the premise: one row, the entry both grants contributed"
     );
 

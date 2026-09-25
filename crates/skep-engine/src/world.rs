@@ -19,7 +19,7 @@ use skep_kernel::WorldState;
 use skep_links::{HasLinks, LinkRec, LinkState};
 use skep_namespace::{HasM3, M3Rec, M3State};
 
-use crate::grants::{self, Grants};
+use crate::grants::{self, Grants, UniversalGrantIndexRow};
 use crate::publication::{self, Drafts};
 
 /// The ONE concrete world: every store's authoritative slice, composed
@@ -469,11 +469,15 @@ impl skep_febe::PublicationWorld for World {
 
     /// The live ANY-PRINCIPAL set as M10's capability (PUB-8.47, RES-224):
     /// [`World::universal_grants`]'s rows — the STORED prefix and its issuers,
-    /// the inherent read being the real one — cloned out of their borrow, in
-    /// the order that read hands them back. RAW, as the lookup above is: the
-    /// fold-filter that narrows a served row to the prefix its issuer ω-owns
-    /// (RES-231/264/273/298) is M10's own, at the read's arm, and nothing about
-    /// a row's coverage is decided on this side of the seam.
+    /// the inherent read being the real one — cloned out of their borrow from
+    /// the engine's [`UniversalGrantIndexRow`] into its owned twin, M10's
+    /// `UniversalIndexRow`, one INDEX row for another, in the order that read
+    /// hands them back. Each row is destructured whole, so a field added to
+    /// the engine's row fails to compile here until this seam accounts for it.
+    /// RAW, as the lookup above is: the fold-filter that narrows a served row
+    /// to the prefix its issuer ω-owns (RES-231/264/273/298) is M10's own, at
+    /// the read's arm, and nothing about a row's coverage is decided on this
+    /// side of the seam.
     ///
     /// M10's trait promises every content prefix an admitted, unrevoked
     /// ANY-PRINCIPAL grant names, and this seam falls short of it in one shape:
@@ -485,9 +489,11 @@ impl skep_febe::PublicationWorld for World {
     fn universal_grants(&self) -> Vec<skep_febe::UniversalIndexRow> {
         World::universal_grants(self)
             .into_iter()
-            .map(|row| skep_febe::UniversalIndexRow {
-                content_prefix: row.content_prefix.clone(),
-                issuers: row.issuers.into_iter().cloned().collect(),
+            .map(|UniversalGrantIndexRow { content_prefix, issuers }| {
+                skep_febe::UniversalIndexRow {
+                    content_prefix: content_prefix.clone(),
+                    issuers: issuers.into_iter().cloned().collect(),
+                }
             })
             .collect()
     }

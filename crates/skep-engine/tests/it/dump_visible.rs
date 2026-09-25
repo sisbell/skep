@@ -103,7 +103,7 @@ fn secret_line() -> String {
 }
 
 /// The v5 format: the banner, the PUBLICATION section listing the draft, and
-/// the GRANT section holding the fold's operative record with its four
+/// the GRANTS section holding the fold's operative record with its four
 /// fields — and the faithfulness check, which now compares the grant fold's
 /// seed against its fold through that section, still green.
 #[test]
@@ -188,13 +188,13 @@ fn a_guest_s_dump_holds_no_draft_content_and_an_empty_publication_section() {
     assert!(!guest.contains(&secret_line()), "a draft's content line leaves:\n{guest}");
     assert!(!guest.contains(&quoted(&board.link_a)), "a draft's link leaves every hint:\n{guest}");
     assert!(guest.contains(&quoted(&g)), "the published home's grant link stays:\n{guest}");
-    // The grant section is kept whole, so the draft the guest cannot open is
+    // The `grants` section is kept whole, so the draft the guest cannot open is
     // still named there, as that grant's `content_prefix` — the one dotted
     // rendering of it a guest's text carries. (The namespace slice names it
     // too, but in the authoritative maps' tumbler form, not this one.)
     assert!(
         guest.contains(&quoted(&board.draft_a)),
-        "the whole-kept grant section still names the draft:\n{guest}"
+        "the whole-kept `grants` section still names the draft:\n{guest}"
     );
 
     let stranger = engine.world_dump_visible_to(Some(STRANGER));
@@ -359,7 +359,7 @@ fn a_grant_names_an_address_the_client_invented() {
     let guest = engine.world_dump_visible_to(None).into_string();
     assert!(
         guest.contains(&quoted(&invented)),
-        "the whole-kept grant section renders the invented address to the guest:\n{guest}"
+        "the whole-kept `grants` section renders the invented address to the guest:\n{guest}"
     );
     assert!(
         guest.contains("123456789012345678901234567890"),

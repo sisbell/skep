@@ -21,6 +21,7 @@ use common::{
     spawn_seeded, CLAIMANT_ACCOUNT, CLAIMANT_PRINCIPAL,
 };
 use serde_json::Value;
+use skep_namespace::SYSTEM_PRINCIPAL;
 use skepd::Skepd;
 
 /// The head document `H` — doc 2 of the system account (PUB-6.65).
@@ -41,7 +42,7 @@ fn head_member(k: u64) -> String {
 
 /// A well past-the-hour clock jump, so a commit after it drives the head's
 /// time bound (trigger (c)); the real bound is one hour and this is many.
-const A_LONG_WHILE_MILLIS: u64 = 10_000_000;
+const WELL_PAST_THE_HOUR_MILLIS: u64 = 10_000_000;
 
 /// One committing write as `session`: a fresh private draft under `account`
 /// (ω-gated, not published, so a bare claimed-permissive session commits it).
@@ -112,7 +113,7 @@ fn expect_latest_head(port: u16) -> Value {
 /// hour elapsed, and writes the head naming the committed pair. Returns the
 /// head's `position` (the committed op's own position, which the head names).
 fn force_head(sd: &Skepd, session: &str, account: &str, clock: &mut u64) -> u64 {
-    *clock += A_LONG_WHILE_MILLIS;
+    *clock += WELL_PAST_THE_HOUR_MILLIS;
     sd.daemon().set_head_writer_clock_millis(*clock);
     commit(sd.port(), session, account)
 }
@@ -217,8 +218,8 @@ fn the_count_trigger_writes_a_head_at_the_64th_non_head_commit() {
     // A first head off the time bound gives a known reset point: the count
     // trigger is then exactly 64 commits from here.
     force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
-    let after_first = head_record(port, H).expect("a first head").clone();
-    let first_k_position = after_first["position"].as_u64().unwrap();
+    let head1 = head_record(port, H).expect("a first head").clone();
+    let p1 = head1["position"].as_u64().unwrap();
 
     // Exactly 64 non-head commits, the clock frozen (so trigger (c) cannot
     // fire) and no checkpoint (well inside the 1024 window, so (b) cannot):
@@ -230,7 +231,7 @@ fn the_count_trigger_writes_a_head_at_the_64th_non_head_commit() {
             let rec = head_record(port, H).expect("the first head still stands");
             assert_eq!(
                 rec["position"].as_u64().unwrap(),
-                first_k_position,
+                p1,
                 "no new head before the 64th commit (at commit {i})"
             );
         }
@@ -257,15 +258,15 @@ fn a_checkpoint_moves_the_head_once_and_a_quiet_board_writes_none() {
     let mut clock = clock_origin();
 
     force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
-    let base = head_record(port, H).expect("a head").clone();
-    let base_position = base["position"].as_u64().unwrap();
+    let head1 = head_record(port, H).expect("a head").clone();
+    let p1 = head1["position"].as_u64().unwrap();
 
     // QUIET: a handful of commits, no checkpoint, clock frozen — no new head.
     for _ in 0..5 {
         commit(port, &owner, CLAIMANT_ACCOUNT);
         assert_eq!(
             head_record(port, H).unwrap()["position"].as_u64().unwrap(),
-            base_position,
+            p1,
             "a quiet board (no count, no checkpoint, no clock) writes no head"
         );
     }
@@ -276,27 +277,27 @@ fn a_checkpoint_moves_the_head_once_and_a_quiet_board_writes_none() {
     let at = commit(port, &owner, CLAIMANT_ACCOUNT);
     let rec = expect_latest_head(port);
     assert!(
-        rec["position"].as_u64().unwrap() > base_position,
+        rec["position"].as_u64().unwrap() > p1,
         "the checkpoint trigger wrote a newer head"
     );
     assert_eq!(rec["position"].as_u64().unwrap(), at, "naming the pair as of that commit");
     // Its `base` names the checkpoint that moved (seq ≤ position).
-    let base_member = &rec["base"];
-    assert!(base_member.is_object(), "a head after a checkpoint names a base: {rec}");
+    let base = &rec["base"];
+    assert!(base.is_object(), "a head after a checkpoint names a base: {rec}");
     assert!(
-        base_member["seq"].as_u64().unwrap() <= rec["position"].as_u64().unwrap(),
+        base["seq"].as_u64().unwrap() <= rec["position"].as_u64().unwrap(),
         "base.seq is at or below the head's position: {rec}"
     );
     // …named by the checkpoint's OWN chain — the kernel's recomputation at
     // that seq — and not by the body hash beside it: both are 64 hex, so a
     // transposed pair passes every shape check above.
-    let base_seq = base_member["seq"].as_u64().unwrap();
+    let base_seq = base["seq"].as_u64().unwrap();
     assert_eq!(
-        base_member["chain"].as_str().map(str::to_string),
+        base["chain"].as_str().map(str::to_string),
         chain_at(port, base_seq),
         "base.chain is the chain AT base.seq: {rec}"
     );
-    assert_ne!(base_member["chain"], base_member["body_hash"], "and is not the body hash: {rec}");
+    assert_ne!(base["chain"], base["body_hash"], "and is not the body hash: {rec}");
 
     // …and it moves the head ONCE. The head just written ATTESTED that
     // checkpoint, so a quiet board after it writes none. This run, not the
@@ -408,7 +409,7 @@ fn a_clock_that_steps_back_writes_no_head_and_costs_the_write_nothing() {
     );
     // WELL past the hour, so this cell reads what the step left behind and
     // not the bound's exact value, which the test above pins.
-    sd.daemon().set_head_writer_clock_millis(clock + A_LONG_WHILE_MILLIS);
+    sd.daemon().set_head_writer_clock_millis(clock + WELL_PAST_THE_HOUR_MILLIS);
     let at = commit(port, &owner, CLAIMANT_ACCOUNT);
     assert_eq!(
         expect_latest_head(port)["position"].as_u64(),
@@ -525,7 +526,7 @@ fn the_heads_own_commits_never_bring_the_next_head() {
     assert!(after_head > p, "the head's own commits landed above the position it names");
 
     // The hour passes, and the first write after the head lands nothing.
-    clock += A_LONG_WHILE_MILLIS;
+    clock += WELL_PAST_THE_HOUR_MILLIS;
     sd.daemon().set_head_writer_clock_millis(clock);
     let never = format!("{CLAIMANT_ACCOUNT}.0.99");
     let refused = op(
@@ -1096,8 +1097,9 @@ fn the_claim_floor_is_untouched_and_the_system_id_is_not_fresh() {
         "the honest claim admitted with the seeded account present"
     );
 
-    // `delegate` with the system principal's id (u64::MAX) is refused
-    // `duplicate_id` — genesis already registered it.
+    // `delegate` with the system principal's own id is refused `duplicate_id`:
+    // genesis already registered it. The id sits under the wire's 2⁵³ − 1
+    // cap, so the frame parses and reaches the freshness gate.
     let boot = open_session(port, 0);
     let prefix = {
         let v = op(port, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
@@ -1106,7 +1108,10 @@ fn the_claim_floor_is_untouched_and_the_system_id_is_not_fresh() {
     let v = op(
         port,
         Some(&boot),
-        &format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":9000000000000000}}"#),
+        &format!(
+            r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":{}}}"#,
+            SYSTEM_PRINCIPAL.0
+        ),
     );
     assert_eq!(v["resp"].as_str(), Some("rejected"), "the system id cannot be re-seated: {v}");
     assert_eq!(v["code"].as_str(), Some("duplicate_id"), "refused as not fresh: {v}");
@@ -1125,7 +1130,7 @@ fn the_head_is_guest_readable_its_feed_entry_is_system_and_the_draft_is_masked()
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
     let mut clock = clock_origin();
 
-    let before = head_position_via_changes_baseline(port);
+    let (before, _) = health(port);
     force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
 
     // GUEST reads H: no token, published, a well-formed head.
@@ -1164,11 +1169,6 @@ fn the_head_is_guest_readable_its_feed_entry_is_system_and_the_draft_is_masked()
         }
     }
     sd.shutdown();
-}
-
-/// The guest feed head before the work — a `since` baseline.
-fn head_position_via_changes_baseline(port: u16) -> u64 {
-    health(port).0
 }
 
 // ── (vii) GENESIS, (viii) DETERMINISM ────────────────────────────────────────
@@ -1219,8 +1219,8 @@ struct Board {
     /// The triggering commit's acked position — what the head names.
     trigger: u64,
     /// The live head once the head's own two commits have landed.
-    head: u64,
-    /// `/chain?at=N` at every committed position from 1 to the head.
+    live_head: u64,
+    /// `/chain?at=N` at every committed position from 1 to the live head.
     chains: Vec<(u64, String)>,
     /// The head's raw bytes.
     bytes: String,
@@ -1238,12 +1238,12 @@ fn board_under(dir: &Path, seed: Option<u64>) -> Board {
         commit(port, &owner, CLAIMANT_ACCOUNT);
     }
     let trigger = force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
-    let (head, _) = health(port);
+    let (live_head, _) = health(port);
     let chains: Vec<(u64, String)> =
-        (1..=head).filter_map(|at| chain_at(port, at).map(|chain| (at, chain))).collect();
+        (1..=live_head).filter_map(|at| chain_at(port, at).map(|chain| (at, chain))).collect();
     let bytes = atom_str(port, H).expect("a head");
     sd.shutdown();
-    Board { trigger, head, chains, bytes }
+    Board { trigger, live_head, chains, bytes }
 }
 
 /// THE POSITIONS AS THEY WERE BEFORE THE SALT, pinned: the head names the
@@ -1253,7 +1253,7 @@ fn board_under(dir: &Path, seed: Option<u64>) -> Board {
 /// the same ops produced at `d77bfa4`, before it; a position moving here is
 /// a STOP, not a number to update.
 const TRIGGER_POSITION: u64 = 16;
-const HEAD_POSITION: u64 = 24;
+const LIVE_HEAD_POSITION: u64 = 24;
 
 /// (viii) — two daemons over ONE op sequence write byte-identical heads. The
 /// head record carries no timestamp and no board-unique term, so identical
@@ -1272,7 +1272,7 @@ fn two_daemons_over_one_sequence_write_byte_identical_heads() {
     let a = board_under(a.path(), Some(ONE_SEED));
     let b = board_under(b.path(), Some(ONE_SEED));
     assert_eq!(a.bytes, b.bytes, "one op sequence under one seed writes one head byte string");
-    assert_eq!((a.trigger, a.head), (b.trigger, b.head), "one pair of positions");
+    assert_eq!((a.trigger, a.live_head), (b.trigger, b.live_head), "one pair of positions");
     assert_eq!(a.chains, b.chains, "one chain at every committed position");
     // The head names the position of the commit that triggered it — the
     // fourth create after the ceremony — strictly below its own commit, and
@@ -1280,8 +1280,12 @@ fn two_daemons_over_one_sequence_write_byte_identical_heads() {
     let rec: Value = serde_json::from_str(&a.bytes).expect("a head record");
     assert_eq!(rec["format"].as_str(), Some(FORMAT));
     assert_eq!(rec["position"].as_u64(), Some(a.trigger), "the head names the triggering commit");
-    assert!(a.trigger < a.head, "a head names a coordinate strictly below its own commit");
-    assert_eq!((a.trigger, a.head), (TRIGGER_POSITION, HEAD_POSITION), "a position moved: STOP");
+    assert!(a.trigger < a.live_head, "a head names a coordinate strictly below its own commit");
+    assert_eq!(
+        (a.trigger, a.live_head),
+        (TRIGGER_POSITION, LIVE_HEAD_POSITION),
+        "a position moved: STOP"
+    );
 }
 
 /// (viii′) — THE SALT'S EFFECT, pinned from the wire: two daemons over ONE op
@@ -1296,8 +1300,12 @@ fn two_daemons_under_two_seeds_differ_in_every_chain_value_and_in_the_head() {
     let b = tempfile::tempdir().expect("tempdir");
     let a = board_under(a.path(), Some(ONE_SEED));
     let b = board_under(b.path(), Some(OTHER_SEED));
-    assert_eq!((a.trigger, a.head), (b.trigger, b.head), "the salt moves no position");
-    assert_eq!((a.trigger, a.head), (TRIGGER_POSITION, HEAD_POSITION), "a position moved: STOP");
+    assert_eq!((a.trigger, a.live_head), (b.trigger, b.live_head), "the salt moves no position");
+    assert_eq!(
+        (a.trigger, a.live_head),
+        (TRIGGER_POSITION, LIVE_HEAD_POSITION),
+        "a position moved: STOP"
+    );
     let positions_a: Vec<u64> = a.chains.iter().map(|(at, _)| *at).collect();
     let positions_b: Vec<u64> = b.chains.iter().map(|(at, _)| *at).collect();
     assert_eq!(positions_a, positions_b, "the same committed positions on both boards");
@@ -1331,8 +1339,16 @@ fn two_production_daemons_over_one_sequence_write_two_chains() {
     let b = tempfile::tempdir().expect("tempdir");
     let a = board_under(a.path(), None);
     let b = board_under(b.path(), None);
-    assert_eq!((a.trigger, a.head), (TRIGGER_POSITION, HEAD_POSITION), "a position moved: STOP");
-    assert_eq!((b.trigger, b.head), (TRIGGER_POSITION, HEAD_POSITION), "a position moved: STOP");
+    assert_eq!(
+        (a.trigger, a.live_head),
+        (TRIGGER_POSITION, LIVE_HEAD_POSITION),
+        "a position moved: STOP"
+    );
+    assert_eq!(
+        (b.trigger, b.live_head),
+        (TRIGGER_POSITION, LIVE_HEAD_POSITION),
+        "a position moved: STOP"
+    );
     let positions = |board: &Board| board.chains.iter().map(|(at, _)| *at).collect::<Vec<u64>>();
     assert_eq!(positions(&a), positions(&b), "the same committed positions on both boards");
     for ((at, x), (_, y)) in a.chains.iter().zip(&b.chains) {

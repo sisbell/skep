@@ -688,12 +688,12 @@ mod tests {
     /// M10's partition and this table's answer, agreeing on both sides.
     #[test]
     fn reads_are_exactly_the_ops_with_no_change_feed_entry() {
-        let read = Op::Fork { published: None };
-        assert!(!read.is_read(), "fork commits");
-        assert!(write_meta(&read).is_some());
-        let query = Op::PrincipalPrefix { id: PrincipalId(1) };
-        assert!(query.is_read(), "principal_prefix reads");
-        assert!(write_meta(&query).is_none());
+        let write = Op::Fork { published: None };
+        assert!(!write.is_read(), "fork commits");
+        assert!(write_meta(&write).is_some());
+        let read = Op::PrincipalPrefix { id: PrincipalId(1) };
+        assert!(read.is_read(), "principal_prefix reads");
+        assert!(write_meta(&read).is_none());
     }
 
     /// The commit stream only ever moves forward, and a burst between wakes

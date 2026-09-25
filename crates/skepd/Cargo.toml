@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "The skep daemon: one long-running process owning one World, serving the full M10 operation surface over HTTP/JSON to local clients. Transport, configuration, and process lifetime — no semantics."
+description = "The skep daemon: one long-running process owning one World, serving the full M10 operation surface over HTTP/JSON to local clients. Transport, sessions, configuration, and process lifetime — no semantics but the two the spec gives it: the session layer's gates and the published head's cadence."
 readme = "README.md"
 
 [features]

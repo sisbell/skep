@@ -380,7 +380,7 @@ mod tests {
     /// The counter is exact: [`MAX_CONCURRENT_RECONSTRUCTIONS`] acquires
     /// succeed, the next fails, and a drop returns exactly one slot.
     #[test]
-    fn reconstruct_permits_account_exactly() {
+    fn reconstruction_permits_account_exactly() {
         let permits = Permits::new(MAX_CONCURRENT_RECONSTRUCTIONS);
         let first = permits.try_acquire().expect("permit 1 of 2");
         let second = permits.try_acquire().expect("permit 2 of 2");
@@ -402,7 +402,7 @@ mod tests {
     /// holders exist at any instant — the invariant is asserted inside the
     /// hold, so any overshoot fails loudly regardless of scheduling.
     #[test]
-    fn reconstruct_permits_bound_concurrent_holders() {
+    fn reconstruction_permits_bound_concurrent_holders() {
         let permits = Permits::new(MAX_CONCURRENT_RECONSTRUCTIONS);
         let holding = AtomicUsize::new(0);
         let granted = AtomicUsize::new(0);

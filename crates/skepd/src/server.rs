@@ -3796,18 +3796,7 @@ mod tests {
         let _ = serve(daemon, 0, 0);
     }
 
-    /// The commit stream announces a position only from the section that
-    /// recorded it: a committing write announces ITS OWN position, and
-    /// nothing else announces at all.
-    ///
-    /// The read is the load-bearing half, and the head is deliberately
-    /// pushed ahead of the stream first — through `febe` directly, the one
-    /// path that commits without announcing — because a daemon that
-    /// announced the CURRENT HEAD from any `/op` request would look
-    /// correct on a quiet socket and wrong under concurrency, leaking a
-    /// write another thread had committed but not yet recorded. Here that
-    /// gap is opened deliberately instead of raced for.
-    /// A bare 0-session's token, opened through the route itself.
+    /// A bare session's token for `principal`, opened through the route itself.
     fn bare_session(daemon: &Daemon, principal: u64) -> String {
         let Routed::Reply(r) = daemon.route(&HttpRequest {
             method: "POST".to_string(),
@@ -3825,6 +3814,17 @@ mod tests {
         v["session"].as_str().expect("token").to_string()
     }
 
+    /// The commit stream announces a position only from the section that
+    /// recorded it: a committing write announces ITS OWN position, and
+    /// nothing else announces at all.
+    ///
+    /// The read is the load-bearing half, and the head is deliberately
+    /// pushed ahead of the stream first — through `febe` directly, the one
+    /// path that commits without announcing — because a daemon that
+    /// announced the CURRENT HEAD from any `/op` request would look
+    /// correct on a quiet socket and wrong under concurrency, leaking a
+    /// write another thread had committed but not yet recorded. Here that
+    /// gap is opened deliberately instead of raced for.
     #[test]
     fn only_a_committing_write_announces_and_only_its_own_position() {
         let dir = tempfile::tempdir().expect("tempdir");

@@ -11,8 +11,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   story, and the commit stream needs flush-at-commit semantics
   pull-based servers cannot give.
 - **The wire** — `/op` (execute), `/op-at` (historical reads over
-  reconstructed worlds), `/changes`, `/dump`, `/events` (commit
-  stream), `/health`.
+  reconstructed worlds), `/chain` (the commit chain's value at a
+  position), `/changes`, `/dump`, `/events` (commit stream),
+  `/health`, and the session routes `/challenge`, `/session`,
+  `/session/close`.
 - **Deterministic JSON codec** — key-sorted marshalling so wire bytes
   never depend on map iteration order.
 - **Durability is configuration** — fsync policy and checkpoint

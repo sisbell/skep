@@ -33,10 +33,10 @@
 //!
 //! THE CADENCE, on the write path with no clock thread — evaluated after
 //! every write the write path's session door runs ([`HeadWriter::take_turn`],
-//! reached from `commit_under`): a head is due when (a) ≥ [`EVERY_COMMITS`]
+//! reached from `commit_under`): a head is due when (a) ≥ [`COUNT_BOUND`]
 //! commits that are NOT the writer's own have LANDED since the last head, OR
 //! (b) the newest retained checkpoint is not the one the last head attested
-//! (its `base`), OR (c) ≥ [`MAX_INTERVAL_MILLIS`] have elapsed since the last
+//! (its `base`), OR (c) ≥ [`TIME_BOUND_MILLIS`] have elapsed since the last
 //! head AND the position moved. Never on a peer's request; never while the
 //! position has not moved; never twice for one position (the head's own
 //! commits ride the head writer's door, which gives the head writer no turn,
@@ -133,14 +133,14 @@ pub(super) const SYSTEM_TESTIMONY: &str = "system";
 /// investigation's §3.3 table). Evaluated on the write path, never by a
 /// thread — the posture the kernel's own checkpoint cadence takes, which
 /// `server.rs` configures.
-const EVERY_COMMITS: u64 = 64;
+const COUNT_BOUND: u64 = 64;
 
 /// The time bound (PUB-6.65): a head is also due once this long has passed
 /// since the last head AND the position has moved, so a slow board's head
 /// does not go stale beyond an hour — evaluated LAZILY on the next commit,
 /// never by a thread, and never writing a duplicate for a position that has
 /// not moved.
-const MAX_INTERVAL_MILLIS: u64 = 3_600_000; // one hour
+const TIME_BOUND_MILLIS: u64 = 3_600_000; // one hour
 
 /// The head writer's own clock, so the time bound (trigger (c)) is drivable in
 /// tests through a seam rather than a `sleep`. In production `now_millis` is
@@ -208,7 +208,7 @@ struct HeadState {
     /// Commits that are not the writer's own since the last head — trigger
     /// (a)'s count. Resumed at open from the feed's entries above the last
     /// head's position (the module doc's RESUME FROM THE FEED), so a board
-    /// restarted every few commits still reaches [`EVERY_COMMITS`]; zero
+    /// restarted every few commits still reaches [`COUNT_BOUND`]; zero
     /// where the sidecar is bare or absent.
     commits_since_head: u64,
     /// The clock reading at the last head — trigger (c)'s base, in
@@ -411,7 +411,7 @@ impl HeadWriter {
     pub(super) fn take_turn(&self, wp: &WritePath, serial: &SerialGuard<'_>) {
         // Decide under the state lock, releasing it before any commit.
         let due_head = {
-            let mut st = self.state.lock();
+            let mut state = self.state.lock();
 
             // The pair the head will name — the kernel's committed
             // (seq, chain) off ONE snapshot, before the head's own write opens.
@@ -425,11 +425,11 @@ impl HeadWriter {
             // the arbiter — unmoved past the last look, nothing landed:
             // nothing to count, no trigger to evaluate (never while the
             // position has not moved).
-            if position <= st.last_seen_position {
+            if position <= state.last_seen_position {
                 return;
             }
-            st.last_seen_position = position;
-            st.commits_since_head = st.commits_since_head.saturating_add(1);
+            state.last_seen_position = position;
+            state.commits_since_head = state.commits_since_head.saturating_add(1);
 
             let chain = snap.chain();
             // `base`: the newest retained checkpoint at or below the named
@@ -451,7 +451,7 @@ impl HeadWriter {
             // Never twice for one position: a head sets `last_head` to the
             // record it published, and a landed commit is always above its
             // position — the literal guard, kept beside the seq gate above.
-            let last = st.last_head.as_ref();
+            let last = state.last_head.as_ref();
             let moved = last.map_or(position > 0, |h| position > h.position);
             if !moved {
                 return;
@@ -459,9 +459,9 @@ impl HeadWriter {
             // Trigger (b): there is a checkpoint for this head to attest, and
             // it is not the one the last head attested.
             let attested = last.and_then(|h| h.base).map(|b| b.seq);
-            let due = st.commits_since_head >= EVERY_COMMITS
+            let due = state.commits_since_head >= COUNT_BOUND
                 || base.is_some_and(|b| Some(b.seq) != attested)
-                || now.saturating_sub(st.last_head_millis) >= MAX_INTERVAL_MILLIS;
+                || now.saturating_sub(state.last_head_millis) >= TIME_BOUND_MILLIS;
             if !due {
                 return;
             }
@@ -471,16 +471,16 @@ impl HeadWriter {
         };
 
         let landed = self.write_head(wp, serial, &due_head.record);
-        let mut st = self.state.lock();
+        let mut state = self.state.lock();
         if landed {
-            st.last_head = Some(due_head.record);
-            st.commits_since_head = 0;
-            st.last_head_millis = due_head.now_millis;
+            state.last_head = Some(due_head.record);
+            state.commits_since_head = 0;
+            state.last_head_millis = due_head.now_millis;
         }
         // The head's own commits — a whole head's, or a refused one's partial
         // (the draft mint, the orphaned insert) — moved the seq: the next
         // evaluation measures "landed" from here, so they count nothing.
-        st.last_seen_position = self.stores.kernel().snapshot().seq().0;
+        state.last_seen_position = self.stores.kernel().snapshot().seq().0;
     }
 
     /// The two commits of one head: the record atom into the staging draft,
@@ -783,7 +783,7 @@ mod tests {
             clock.now_millis().abs_diff(wall_clock_millis()) < 60_000,
             "an unset clock reads the wall clock"
         );
-        for fixed in [0, MAX_INTERVAL_MILLIS, u64::MAX] {
+        for fixed in [0, TIME_BOUND_MILLIS, u64::MAX] {
             clock.set_millis(fixed);
             assert_eq!(clock.now_millis(), fixed, "a fixed reading holds, whatever its value");
         }

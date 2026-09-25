@@ -205,6 +205,26 @@ pub fn claim_board(port: u16) {
     if claimed(port) {
         return;
     }
+    ceremony_before_the_claim(port);
+    // The claim, from a session SIGNED by the device key (step 5).
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let v = op(
+        port,
+        Some(&signed),
+        &format!(
+            r#"{{"op":"make_link","home":"{CLAIMANT_DOC1}","from":{{"addrs":["{CLAIMANT_ACCOUNT}"]}},"to":{{"addrs":[]}},"ty":{{"addrs":["{T_CLAIM}"]}}}}"#
+        ),
+    );
+    expect_resp(&v, "ack_addr");
+    assert!(claimed(port), "the claim link flips the board claimed");
+}
+
+/// The claim ceremony's first four steps (AUTH-5.55 steps 1–4) over the
+/// wire — the delegate from 0, the home mint, the genesis atom and its
+/// deposit — leaving the SIGNED claim, step 5, to the caller:
+/// [`claim_board`] makes it at once, and a suite that needs the board as it
+/// stands BEFORE the claim makes it with [`claim_frame`] when it is ready.
+pub fn ceremony_before_the_claim(port: u16) {
     let boot = open_session(port, 0);
     let v = op(port, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
     let prefix = expect_resp(&v, "maybe_addr")["addr"].as_str().expect("prefix").to_string();
@@ -253,17 +273,6 @@ pub fn claim_board(port: u16) {
         ),
     );
     expect_resp(&v, "ack_addr");
-    // The claim, from a session SIGNED by the device key (step 5).
-    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
-    let v = op(
-        port,
-        Some(&signed),
-        &format!(
-            r#"{{"op":"make_link","home":"{CLAIMANT_DOC1}","from":{{"addrs":["{CLAIMANT_ACCOUNT}"]}},"to":{{"addrs":[]}},"ty":{{"addrs":["{T_CLAIM}"]}}}}"#
-        ),
-    );
-    expect_resp(&v, "ack_addr");
-    assert!(claimed(port), "the claim link flips the board claimed");
 }
 
 /// The next FREE content ordinal of `doc` — one past its arranged content

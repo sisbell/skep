@@ -114,12 +114,17 @@ pub(crate) enum CommitMeta {
     /// touched — lives in the feed's classification map, not here: this
     /// file records testimony, and the journal's answer is not testimony.
     Bare,
-    /// Witnessed at ack time by the daemon's own write path. `key` is the
-    /// AUTH testimony (AUTH-4.48): the fingerprint hex of the enrolled key
-    /// that established the authoring session, or `"bare"` for a bare one.
-    /// `None` only for a line written before the feature — served as the
-    /// reserved null (AUTH-1.52's lost-metadata meaning), never for a
-    /// commit this daemon served since.
+    /// Witnessed by the daemon's own write path as the write commits — a
+    /// session write's at its ack, the published head writer's own in its
+    /// turn. `key` is the AUTH testimony (AUTH-4.48; wire.md §The change
+    /// feed), one of THREE values: the fingerprint hex of the enrolled key
+    /// that established the authoring session, `"bare"` for a bare one, or
+    /// `"system"` for the published head writer's own commits, which have no
+    /// session (`SYSTEM_TESTIMONY`, `write_path/head.rs`) — the value that
+    /// writer's resume READS BACK through this field to tell its own commits
+    /// from the ones its count bound counts. `None` only for a line written
+    /// before the feature — served as the reserved null (AUTH-1.52's
+    /// lost-metadata meaning), never for a commit this daemon served since.
     Recorded { op: String, docs: Vec<String>, time: u64, key: Option<String> },
 }
 
@@ -853,8 +858,9 @@ fn parse_line(line: &[u8]) -> Option<Record> {
     Some(Record::Entry(at, meta))
 }
 
-/// `{"at":N}` for a bare position; `{"at":N,"docs":[…],"op":"…","time":T}`
-/// for a recorded one. Built through the codec's key-sorting device, so a
+/// `{"at":N}` for a bare position; `{"at":N,"docs":[…],"key":"…","op":"…","time":T}`
+/// for a recorded one, `key` omitted only where the record carries none (a
+/// pre-feature line). Built through the codec's key-sorting device, so a
 /// line is the same bytes whatever backs serde_json's map — which is what
 /// lets `GET /changes` answer byte-identically across a restart.
 fn entry_line(at: u64, meta: &CommitMeta) -> Vec<u8> {

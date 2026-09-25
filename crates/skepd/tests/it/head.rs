@@ -17,8 +17,9 @@ use crate::common;
 use std::path::Path;
 
 use common::{
-    acked_at, assert_withheld, doc_metadata, expect_resp, get, json, op, open_session, spawn,
-    spawn_seeded, CLAIMANT_ACCOUNT, CLAIMANT_PRINCIPAL,
+    acked_at, assert_withheld, ceremony_before_the_claim, claim_frame, claimed, device_key,
+    doc_metadata, expect_resp, get, json, op, open_session, open_signed_session, spawn,
+    spawn_seeded, spawn_unclaimed, CLAIMANT_ACCOUNT, CLAIMANT_DOC1, CLAIMANT_PRINCIPAL,
 };
 use serde_json::Value;
 use skep_namespace::SYSTEM_PRINCIPAL;
@@ -753,6 +754,70 @@ fn the_hour_since_the_last_head_survives_a_restart() {
     sd.shutdown();
 }
 
+/// RESUME — a LOST sidecar counts what the journal shows landed (PUB-6.65:
+/// "64 commits that are not the writer's own have landed since the last
+/// head", of the board): `commits.log` deleted, the reopen walk re-covers
+/// every retained position as a BARE entry, and a bare entry COUNTS — the
+/// head's own among them, since with their `"system"` testimony gone nothing
+/// tells them from the rest. So the next head comes EARLY by at most the
+/// head's own commits (three at a first head: the staging draft's mint, the
+/// insert, the publish) and never late: 40 commits after a head, the loss, a
+/// restart, and the next head comes no sooner than the 21st commit after it
+/// and no later than the 24th — never at the 64th, where a resume that
+/// started the count at zero would put it, 104 commits past the last head.
+/// The heads' own chain is the journal's and survives the loss: the new
+/// head's `prev` is the head before it.
+#[test]
+fn a_lost_sidecar_counts_the_commits_the_journal_shows_landed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut clock = clock_origin();
+
+    let head_position = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let owner = open_session(port, CLAIMANT_PRINCIPAL);
+        let p = force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
+        for _ in 0..40 {
+            commit(port, &owner, CLAIMANT_ACCOUNT);
+        }
+        assert_eq!(
+            head_record(port, H).unwrap()["position"].as_u64().unwrap(),
+            p,
+            "40 commits since the head: no head yet"
+        );
+        sd.shutdown();
+        p
+    };
+    // The testimony lost; the journal, and `H` in it, untouched.
+    std::fs::remove_file(dir.path().join("commits.log")).expect("lose the testimony");
+
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let mut next = None;
+    for i in 1..=24u64 {
+        let at = commit(port, &owner, CLAIMANT_ACCOUNT);
+        if head_record(port, H).unwrap()["position"].as_u64() != Some(head_position) {
+            next = Some((i, at));
+            break;
+        }
+    }
+    let (i, at) = next.expect("a head by the 24th commit after the loss: a bare entry counts");
+    assert!(
+        i >= 64 - 40 - 3,
+        "early by at most the head's own three commits, never more: the head came at +{i}"
+    );
+    let rec = expect_latest_head(port);
+    assert_eq!(rec["position"].as_u64(), Some(at), "it names the commit that brought it: {rec}");
+    assert_eq!(
+        rec["prev"]["position"].as_u64(),
+        Some(head_position),
+        "its prev is the head before: {rec}"
+    );
+    assert!(rec["base"].is_null(), "no checkpoint was taken: the count is what fired: {rec}");
+    sd.shutdown();
+}
+
 /// The staging draft is minted ONCE — doc 3 of the system account — and found
 /// again after a restart (PUB-6.65: the head reaches `H` and the system
 /// account's own staging draft and NO other document; the writer resumes by
@@ -1115,6 +1180,39 @@ fn the_claim_floor_is_untouched_and_the_system_id_is_not_fresh() {
     );
     assert_eq!(v["resp"].as_str(), Some("rejected"), "the system id cannot be re-seated: {v}");
     assert_eq!(v["code"].as_str(), Some("duplicate_id"), "refused as not fresh: {v}");
+    sd.shutdown();
+}
+
+/// (vi) — THE CLAIM'S OWN TURN CAN WRITE A HEAD, and the claim still
+/// completes. PUB-6.65's cadence gates nothing on the claim, so the claim's
+/// `commit_under` gives the head writer its turn like any session write's,
+/// and where the hour has passed before the ceremony's last step the head's
+/// own commits land between the claim and the claim flip's tail — the one
+/// kind of commit that can, as `Daemon::on_claim_flip` states. The claim
+/// answers its own ack at its own position and the board is claimed: the
+/// fold's post-commit step reads a world holding the head's commits and
+/// honours the deposit its gate honoured (`IdentityFold::step_committed`'s
+/// premise — a firing assert would answer this claim `500 internal_panic` in
+/// a debug build).
+#[test]
+fn the_claims_own_turn_can_write_a_head_and_the_claim_still_completes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_unclaimed(dir.path());
+    let port = sd.port();
+    ceremony_before_the_claim(port);
+    // The hour passes before the ceremony's last step.
+    sd.daemon().set_head_writer_clock_millis(clock_origin() + WELL_PAST_THE_HOUR_MILLIS);
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let at = acked_at(&op(port, Some(&signed), &claim_frame(CLAIMANT_DOC1, CLAIMANT_ACCOUNT)));
+    assert!(claimed(port), "the claim link flips the board claimed");
+    let rec = expect_latest_head(port);
+    assert_eq!(
+        rec["position"].as_u64(),
+        Some(at),
+        "the claim's own turn wrote the head, naming the claim: {rec}"
+    );
+    let (live, _) = health(port);
+    assert!(live > at, "the head's own commits landed past the claim's position: {live} > {at}");
     sd.shutdown();
 }
 

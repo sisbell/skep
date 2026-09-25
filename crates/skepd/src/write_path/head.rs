@@ -64,10 +64,13 @@
 //! conservative by at most the head's own commits, so a head fires at most a
 //! few commits early and never twice — and the hour's origin is the recorded
 //! `time` of the head's own last entry, the last testifying `"system"` (else
-//! the first entry above the position carrying a time; else open-time). A
-//! BARE OR ABSENT SIDECAR FALLS BACK to open-time: the count starts at zero
-//! and the hour is measured from open. The clock is therefore the feed's own:
-//! [`wall_clock_millis`], the one reading both take. D1 is kept — a gate
+//! the first entry above the position carrying a time; else open-time). The
+//! clock is therefore the feed's own: [`wall_clock_millis`], the one reading
+//! both take. A LOST sidecar leaves the COUNT early and never late — the
+//! reopen walk re-covers every retained position as a bare entry, and every
+//! one above the position counts, the head's own among them (their testimony
+//! gone), which is the "at most the head's own commits" above — and the HOUR
+//! measured from open, the one origin then on record. D1 is kept — a gate
 //! reads testimony to decide WHEN, and the head's bytes stay a pure function
 //! of the root; AUTH-4.56's rewritable sidecar can move one head's timing
 //! within the bounds the triggers already allow, never a duplicate and never
@@ -208,8 +211,10 @@ struct HeadState {
     /// Commits that are not the writer's own since the last head — trigger
     /// (a)'s count. Resumed at open from the feed's entries above the last
     /// head's position (the module doc's RESUME FROM THE FEED), so a board
-    /// restarted every few commits still reaches [`COUNT_BOUND`]; zero
-    /// where the sidecar is bare or absent.
+    /// restarted every few commits still reaches [`COUNT_BOUND`]; where the
+    /// sidecar was lost, every bare entry the reopen walk re-covered above
+    /// that position counts, the head's own among them — early by at most
+    /// those, never late.
     commits_since_head: u64,
     /// The clock reading at the last head — trigger (c)'s base, in
     /// [`wall_clock_millis`]'s domain. Resumed at open from the last head's own
@@ -361,8 +366,8 @@ impl HeadWriter {
     /// did not name; and the staging draft is found where an earlier uptime
     /// minted it. All off ONE snapshot. And by reading the FEED (the module
     /// doc's RESUME FROM THE FEED): the entries above that position resume
-    /// trigger (a)'s count and trigger (c)'s origin, a bare or absent sidecar
-    /// falling back to zero and to open-time.
+    /// trigger (a)'s count and trigger (c)'s origin — a lost sidecar's bare
+    /// entries counting, and its missing times leaving the origin at open.
     pub(super) fn open(stores: EngineStores, feed: &Feed) -> HeadWriter {
         let clock = Clock::new();
         let now = clock.now_millis();

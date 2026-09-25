@@ -1178,11 +1178,15 @@ impl Daemon {
     /// the accept path owns the socket from there.
     ///
     /// A COMMAND, not a query. `POST /op` commits to the journal, records
-    /// the change-feed entry, and announces the commit; `POST /session`
-    /// mints an M10 session; `GET /challenge` mints a nonce into the
-    /// bounded challenge store and evicts the oldest past
-    /// [`crate::auth::MAX_LIVE_NONCES`] — a GET that is not safe, and whose
-    /// eviction can spend another caller's outstanding nonce;
+    /// the change-feed entry, and announces the commit — and where that
+    /// commit makes the published head due (wire.md §The other endpoints: 64
+    /// commits since the last head, a moved checkpoint, or the hour), the
+    /// daemon's own head writer commits up to three writes of its own before
+    /// the reply is built, so the journal can stand past the ack's `at` when
+    /// this returns; `POST /session` mints an M10 session; `GET /challenge`
+    /// mints a nonce into the bounded challenge store and evicts the oldest
+    /// past [`crate::auth::MAX_LIVE_NONCES`] — a GET that is not safe, and
+    /// whose eviction can spend another caller's outstanding nonce;
     /// `POST /session/close` retires a binding. And EVERY token-accepting
     /// route (`/op`, `/op-at`, `/changes`, `/dump`, `/session/close`, and
     /// `/events` on the accept path) can retire one, because
@@ -1366,8 +1370,13 @@ impl Daemon {
     /// [`crate::auth::AuthState::commit_tail`]'s own reason for bundling the
     /// three obligations one step earlier. `lock` is that obligation and not
     /// a decoration: the re-install replaces the list under the gate the
-    /// claim itself committed under, so no write lands between the claim and
-    /// the comparands it moves.
+    /// claim itself committed under, so no SESSION write lands between the
+    /// claim and the comparands it moves — every one takes this gate. The
+    /// one kind of commit that can land there is the published head writer's
+    /// own, given its turn by the claim's own `commit_under` when the claim
+    /// makes the cadence due (an operator pausing an hour before the
+    /// ceremony's last step is enough): made by no session, it meets no list,
+    /// and `IdentityFold::step_committed`'s premise already counts it.
     fn on_claim_flip(&self, lock: &LockWrite<'_>) {
         self.log_config_warnings(true);
         self.auth.reinstall_blocked_at_claim(lock);
@@ -1778,7 +1787,10 @@ impl Daemon {
         ) {
             return with_signal(credential_refused(meta.kind, &r), closed);
         }
-        // 7 — execute (commit-record-announce under the held serial lock).
+        // 7 — execute (commit-record-announce under the held serial lock,
+        // then the head writer's turn, which may land the head's own commits
+        // before `commit_under` returns — the `post` snapshot at 8 then holds
+        // them, which `step_committed`'s premise accounts for).
         let req_id = frame.id.clone();
         let resp = self.writes.commit_under(&serial, meta.attributed(binding.testimony()), || {
             self.febe.execute(binding.sid, frame)

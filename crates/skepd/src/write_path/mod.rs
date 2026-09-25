@@ -187,12 +187,15 @@ impl WritePath {
     /// what every gate arm does; what must not happen is a committing
     /// `execute` under this guard OUTSIDE `commit_under`, which would
     /// leave the position unrecorded and unannounced and give the head
-    /// writer no turn. The one execute this crate performs outside the write
-    /// path's two doors is the guest reply, and it is safe because it runs
-    /// under `SessionId::GUEST`, which M10 never binds, so M10 refuses a
-    /// write under it without committing. Nothing here can check either
-    /// half, and a snapshot taken outside the guard lets a commit land
-    /// between what a gate read and what it gated.
+    /// writer no turn. Every execute this crate performs outside the write
+    /// path's two doors commits nothing: the guest reply — under this guard,
+    /// or ahead of it at the credential sequence's first step — runs under
+    /// `SessionId::GUEST`, which M10 never binds, so M10 refuses a write
+    /// under it without committing; and every other is a READ, admitted by
+    /// M10's own partition — `/op`'s through [`write_meta`], whose assertion
+    /// holds it to that partition, and `/op-at`'s by asking it directly.
+    /// Nothing here can check either half, and a snapshot taken outside the
+    /// guard lets a commit land between what a gate read and what it gated.
     pub fn serial_lock(&self) -> SerialGuard<'_> {
         SerialGuard(self.serial.lock())
     }
@@ -211,18 +214,18 @@ impl WritePath {
     /// It runs exactly once, inside the lock.
     ///
     /// PRECONDITION: `meta` is [`write_meta`]'s answer for the `Op` that
-    /// `execute` runs, attributed to the session `execute` runs it under.
-    /// Nothing here can check the first half — the closure is opaque by
-    /// design, which is what keeps this card free of M10 — and a mismatch is
-    /// not a fault but a silent lie: the change feed reports that position
-    /// under the wrong op kind, or names a document the write did not touch,
-    /// permanently, since nothing re-derives an entry the sidecar already
-    /// holds. The daemon's write sequences establish it by deriving `meta`
-    /// from the frame they are about to execute, and are the only callers.
-    /// The second half needs no discharging: [`FrameMeta::attributed`] is
-    /// the only way to reach a [`WriteMeta`], so a path that forgot to
-    /// attribute does not compile rather than testifying `"bare"` for a
-    /// signed write.
+    /// `execute` runs, attributed to its committer — at this door, the session
+    /// `execute` runs it under. Nothing here can check the first half — the
+    /// closure is opaque by design, which is what keeps this card free of
+    /// M10 — and a mismatch is not a fault but a silent lie: the change feed
+    /// reports that position under the wrong op kind, or names a document the
+    /// write did not touch, permanently, since nothing re-derives an entry
+    /// the sidecar already holds. The daemon's write sequences establish it
+    /// by deriving `meta` from the frame they are about to execute, and are
+    /// the only callers. The second half needs no discharging:
+    /// [`FrameMeta::attributed`] is the only way to reach a [`WriteMeta`], so
+    /// a path that forgot to attribute does not compile rather than
+    /// testifying `"bare"` for a signed write.
     pub fn commit_under(
         &self,
         serial: &SerialGuard<'_>,
@@ -255,7 +258,10 @@ impl WritePath {
     /// head writer's alone: a session write through it would commit without
     /// giving the head writer its turn. `execute` runs exactly once, inside
     /// the lock, and [`WritePath::commit_under`]'s precondition on `meta` is
-    /// this door's.
+    /// this door's, its committer the head writer itself — no session, so its
+    /// writes are attributed to [`head::SYSTEM_TESTIMONY`], and it discharges
+    /// the first half as the write sequences do, deriving `meta` from the
+    /// `Op` whose fields its driver call then runs.
     fn commit_recorded(
         &self,
         serial: &SerialGuard<'_>,
@@ -464,8 +470,8 @@ pub(crate) struct WriteMeta {
 /// the write's target doc; a link write names its home (`edit_link` both
 /// its homes, the successor's `d_s` first; `nullify` its home AND the
 /// target link's home, as a set — PUB-6.46); the MINTED document for
-/// create/fork/version (known only from the ack); delegate/register_node
-/// touch no document.
+/// create/fork/version and the minted MEMBER for `publish` (each known only
+/// from the ack); delegate/register_node touch no document.
 #[derive(Debug)]
 pub(crate) enum AffectedDocs {
     /// The documents the frame itself names. Held as ADDRESSES, which is

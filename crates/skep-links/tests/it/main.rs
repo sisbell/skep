@@ -8,6 +8,7 @@
 //! discovery primitives (`discovery`) — over the carrier-type and registry
 //! contracts in `carrier`, with the assembled test world in `common`.
 
+mod attested;
 mod carrier;
 mod common;
 mod discovery;

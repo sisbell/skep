@@ -28,7 +28,7 @@ use skep_address::{Address, Span};
 use skep_arrangement::{
     as_ordinal_vspan, stage_seat_link, Caller, HasM5, M5Rec, M5State, SeatError, VSpec,
 };
-use skep_kernel::{Kernel, LockKey, Seq, Staging, TxnError, WorldState};
+use skep_kernel::{Attestation, Kernel, LockKey, Seq, Staging, TxnError, WorldState};
 use skep_namespace::{M3Rec, M3State, MintError};
 
 use crate::dedup::DedupKey;
@@ -107,6 +107,15 @@ pub type Visibility<'a, W> = dyn Fn(&W, &Address) -> bool + Send + Sync + 'a;
 pub struct LinkWriter<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
     visibility: &'k Visibility<'k, W>,
+    /// THE ATTESTATION this handle's `makelink` commits under (signed ops):
+    /// handed to the kernel's `transact_attested` arm at the one transaction
+    /// that write opens, filling THAT commit marker's signature slot; `None`
+    /// — the plain handle — leaves it empty. A borrow, held beside the
+    /// visibility class for the one call this handle serves. The other link
+    /// writes (`emit`, `nullify`, `assert_sup`, `editlink`) take the plain
+    /// arm whatever this field holds: outside the seam build's slice, a
+    /// handle built with a value fills no slot through them.
+    attest: Option<&'k Attestation>,
 }
 
 /// The handle prints as itself: `Kernel` is deliberately opaque, so it is not
@@ -168,7 +177,19 @@ where
     /// builder step so that a writer whose gates run at no stated
     /// visibility class cannot be built at all (lane 3.3b §2).
     pub fn new(kernel: &'k Kernel<W>, visibility: &'k Visibility<'k, W>) -> LinkWriter<'k, W> {
-        LinkWriter { kernel, visibility }
+        LinkWriter::attested(kernel, visibility, None)
+    }
+
+    /// THE ATTESTED CONSTRUCTOR (signed ops; the confirmed placement): a
+    /// writer whose `makelink` commits under `attest`. Its callers are the
+    /// slot's producer set — M10's dispatch, with a value the daemon's check
+    /// admitted — and nothing else; `None` is [`LinkWriter::new`].
+    pub fn attested(
+        kernel: &'k Kernel<W>,
+        visibility: &'k Visibility<'k, W>,
+        attest: Option<&'k Attestation>,
+    ) -> LinkWriter<'k, W> {
+        LinkWriter { kernel, visibility, attest }
     }
 }
 
@@ -857,9 +878,11 @@ where
         let sup_class = registry().shipped_class(ShippedType::Supersedes);
         // No dedup section: the open surface takes no dedup CHECK either
         // (ML0 — distinct links always), so `deposit_lock_set`'s question does
-        // not arise and the home's alloc key is the whole set.
+        // not arise and the home's alloc key is the whole set. The seam's one
+        // line: the attested arm, which is `transact` where this writer
+        // carries no attestation (signed ops).
         self.kernel
-            .transact(&[M3State::link_lock_key(home)], |stg| {
+            .transact_attested(&[M3State::link_lock_key(home)], self.attest, |stg| {
                 let (e1, e2, e3) = {
                     let base = stg.base();
                     // P0 then ω on home, hoisted so both win over every

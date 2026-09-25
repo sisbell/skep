@@ -34,7 +34,7 @@ fn engine_world_satisfies_the_febe_demand() {
     let boot_session = febe.bootstrap_session();
     let prefix = match febe.execute(
         boot_session,
-        Request { id: None, op: Op::NextAccountPrefix { parent: node1() } },
+        Request { id: None, op: Op::NextAccountPrefix { parent: node1() }, attest: None },
     ) {
         Response::MaybeAddr { addr: Some(a), .. } => a,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
@@ -45,6 +45,7 @@ fn engine_world_satisfies_the_febe_demand() {
         boot_session,
         Request {
             id: None,
+            attest: None,
             op: Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: USER },
         },
     ));
@@ -56,6 +57,7 @@ fn engine_world_satisfies_the_febe_demand() {
         session,
         Request {
             id: None,
+            attest: None,
             op: Op::CreateNewDocument { account: acct.clone(), published: Some(false) },
         },
     ));
@@ -64,6 +66,7 @@ fn engine_world_satisfies_the_febe_demand() {
         session,
         Request {
             id: None,
+            attest: None,
             op: Op::Insert {
                 doc: doc.clone(),
                 at: vp(1, 1),
@@ -77,6 +80,7 @@ fn engine_world_satisfies_the_febe_demand() {
         session,
         Request {
             id: None,
+            attest: None,
             op: Op::RetrieveV { specs: vec![Spec { doc: doc.clone(), span: vspan(1, 1, 1) }] },
         },
     ) {
@@ -105,7 +109,7 @@ fn m10_s_read_surface_answers_through_the_engine_s_predicate() {
     let boot_session = febe.bootstrap_session();
     let prefix = match febe.execute(
         boot_session,
-        Request { id: None, op: Op::NextAccountPrefix { parent: node1() } },
+        Request { id: None, op: Op::NextAccountPrefix { parent: node1() }, attest: None },
     ) {
         Response::MaybeAddr { addr: Some(a), .. } => a,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
@@ -115,6 +119,7 @@ fn m10_s_read_surface_answers_through_the_engine_s_predicate() {
         boot_session,
         Request {
             id: None,
+            attest: None,
             op: Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: USER },
         },
     ));
@@ -123,16 +128,17 @@ fn m10_s_read_surface_answers_through_the_engine_s_predicate() {
     // (PUB-8.21); the second is a private draft.
     let home = ack_addr(febe.execute(
         owner,
-        Request { id: None, op: Op::CreateNewDocument { account: acct.clone(), published: None } },
+        Request { id: None, op: Op::CreateNewDocument { account: acct.clone(), published: None }, attest: None },
     ));
     let draft = ack_addr(febe.execute(
         owner,
-        Request { id: None, op: Op::CreateNewDocument { account: acct.clone(), published: None } },
+        Request { id: None, op: Op::CreateNewDocument { account: acct.clone(), published: None }, attest: None },
     ));
     ack_addr(febe.execute(
         owner,
         Request {
             id: None,
+            attest: None,
             op: Op::Insert {
                 doc: draft.clone(),
                 at: vp(1, 1),
@@ -147,6 +153,7 @@ fn m10_s_read_surface_answers_through_the_engine_s_predicate() {
             session,
             Request {
                 id: None,
+                attest: None,
                 op: Op::RetrieveV { specs: vec![Spec { doc: doc.clone(), span: vspan(1, 1, 1) }] },
             },
         )
@@ -181,7 +188,7 @@ fn m10_s_read_surface_answers_through_the_engine_s_predicate() {
     // deposited), never a withheld answer: a published document never
     // answers withheld (PUB-6.3).
     for session in [guest, stranger] {
-        match febe.execute(session, Request { id: None, op: Op::RetrieveDocVSpanSet { doc: home.clone() } })
+        match febe.execute(session, Request { id: None, op: Op::RetrieveDocVSpanSet { doc: home.clone() }, attest: None })
         {
             Response::SpanSet { .. } => {}
             Response::Rejected(rej) => panic!("the published home was refused: {rej:?}"),
@@ -222,6 +229,7 @@ fn engine_stores_serves_a_kernel_rooted_at_a_reconstructed_world() {
         session,
         Request {
             id: None,
+            attest: None,
             op: Op::RetrieveV { specs: vec![Spec { doc: doc.clone(), span: vspan(1, 1, 1) }] },
         },
     ) {
@@ -238,6 +246,7 @@ fn engine_stores_serves_a_kernel_rooted_at_a_reconstructed_world() {
         session,
         Request {
             id: None,
+            attest: None,
             op: Op::RetrieveV { specs: vec![Spec { doc: doc.clone(), span: vspan(1, 1, 2) }] },
         },
     ) {

@@ -221,6 +221,9 @@ fn a_grant_typed_nullify_is_refused_to_the_issuer_and_masked_for_everyone_else()
     let v = typed_link(port, &signed, CLAIMANT_DOC1, &[CLAIMANT_ACCOUNT], &[], T_CLAIM);
     expect_resp(&v, "ack_addr");
     assert!(claimed(port), "the claim link flips the board claimed");
+    // The board's `H.1` (signed ops, s1): the claim's own step wrote it, and
+    // every attested write above the claim names it — the grant below is one.
+    assert!(board_pair(port).is_some(), "the claim wrote H.1");
 
     // The issuer grants a draft of its own to a grantee, from its published
     // doc 1 (the residence the fold admits, PUB-5.17).

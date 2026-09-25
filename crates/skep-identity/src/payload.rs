@@ -310,7 +310,8 @@ fn retirement_fingerprint(fp: &Fingerprint) -> Fingerprint {
 /// retirement arm reads as a proper subset (AUTH-2.74), emptying a key set and
 /// voiding I3 (AUTH-2.97) and AUTH-1.36. A kind is added by filling this
 /// table; these are what filling it owes.
-struct Schema<T> {
+#[doc(hidden)]
+pub struct Schema<T> {
     /// The `type` member's ONE admitted value ([`ENROLL_TYPE`],
     /// [`RETIRE_TYPE`]).
     type_value: &'static str,
@@ -349,14 +350,57 @@ const RETIRE_SCHEMA: Schema<Fingerprint> = Schema {
     compared_by: retirement_fingerprint,
 };
 
-/// AUTH-2.130 — the canonical encoding of a record VALUE: the ENVELOPE both
-/// schemas state in identical words, written ONCE. `{"type":"<value>",`
-/// `"<member>":[` the entries comma-separated `]`, then `,"sig":<escaped>`
-/// when present, then `}` — no whitespace outside strings, no byte after the
-/// brace (clauses 2 and 5). The admission sentence ranges over this whole
-/// value, `sig` INCLUDED (RES-105); [`encode_enroll`] and [`encode_retire`]
-/// are this function with `sig = None` (AUTH-2.18).
-fn canonical_record<T>(schema: &Schema<T>, entries: &[T], sig: Option<&str>) -> String {
+/// The entry type of ONE record kind, naming its [`Schema`] — the one way
+/// [`canonical_record`] is reached from outside: [`Enrollment`] for the
+/// enrollment kind, [`Fingerprint`] for the retirement kind. Sealed: a kind
+/// is added by filling a schema table in this module, never by a foreign
+/// impl.
+pub trait RecordEntry: sealed::Sealed + Sized + 'static {
+    #[doc(hidden)]
+    fn schema() -> &'static Schema<Self>;
+}
+
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for super::Enrollment {}
+    impl Sealed for super::Fingerprint {}
+}
+
+impl RecordEntry for Enrollment {
+    fn schema() -> &'static Schema<Enrollment> {
+        &ENROLL_SCHEMA
+    }
+}
+
+impl RecordEntry for Fingerprint {
+    fn schema() -> &'static Schema<Fingerprint> {
+        &RETIRE_SCHEMA
+    }
+}
+
+/// AUTH-2.130 — the canonical encoding of a record VALUE at ONE NAME WITH
+/// BOTH DIRECTIONS (signed ops; the design record §4.2 (C)): the SIGNER
+/// composes with `Some(sig)` the record it will deposit, and the VERIFIER
+/// composes with `None` the SIG-LESS PROJECTION of a committed, `sig`-bearing
+/// record — the one byte string every party to a record holds, and the
+/// record grade's first step at every kind. This projection ADMITS NOTHING:
+/// AUTH-2.130's byte-identity check stays [`parse_enroll`]'s and
+/// [`parse_retire`]'s, so a verifier beside the table can compute over the
+/// entries of a record the fold refused. [`encode_enroll`] and
+/// [`encode_retire`] are this function with `sig = None` (AUTH-2.18).
+///
+/// The ENVELOPE both schemas state in identical words, written ONCE:
+/// `{"type":"<value>",` `"<member>":[` the entries comma-separated `]`, then
+/// `,"sig":<escaped>` when present, then `}` — no whitespace outside strings,
+/// no byte after the brace (clauses 2 and 5). The admission sentence ranges
+/// over this whole value, `sig` INCLUDED (RES-105).
+pub fn canonical_record<T: RecordEntry>(entries: &[T], sig: Option<&str>) -> String {
+    canonical_record_of(T::schema(), entries, sig)
+}
+
+/// [`canonical_record`] over an explicit schema — the parse side's own call,
+/// which holds the schema by value.
+fn canonical_record_of<T>(schema: &Schema<T>, entries: &[T], sig: Option<&str>) -> String {
     let mut out = String::new();
     out.push_str(r#"{"type":""#);
     out.push_str(schema.type_value);
@@ -454,7 +498,7 @@ fn parse_record<T>(bytes: &[u8], schema: Schema<T>) -> Result<Vec<T>, PayloadErr
     // AUTH-2.130's ADMISSION SENTENCE — the byte-identity compare over the
     // RECORD VALUE, `sig` INCLUDED (RES-105, I2 AUTH-2.90): admit only where
     // the input is the canonical re-encoding of every member it carries.
-    if canonical_record(&schema, &entries, sig) != text {
+    if canonical_record_of(&schema, &entries, sig) != text {
         return Err(PayloadError::BadRecord);
     }
     // AUTH-2.15/AUTH-2.19 item 3 — duplicate ENTRY, naming the 1-based
@@ -525,7 +569,7 @@ pub fn parse_retire(bytes: &[u8]) -> Result<Vec<Fingerprint>, PayloadError> {
 /// `encode_enroll(parse_enroll(y)…)` reproduces the entries of any body the
 /// fold admits: the round trip is a BIJECTION (I1, AUTH-2.89; AUTH-2.130).
 pub fn encode_enroll(enrollments: &[Enrollment]) -> String {
-    canonical_record(&ENROLL_SCHEMA, enrollments, None)
+    canonical_record(enrollments, None)
 }
 
 /// AUTH-2.18/AUTH-2.130 — encode a retirement record, as TEXT like
@@ -537,5 +581,5 @@ pub fn encode_enroll(enrollments: &[Enrollment]) -> String {
 /// POSTCONDITION — within it, `parse_retire(encode_retire(x).as_bytes())` is
 /// `Ok(x)` (I1, AUTH-2.89).
 pub fn encode_retire(fps: &[Fingerprint]) -> String {
-    canonical_record(&RETIRE_SCHEMA, fps, None)
+    canonical_record(fps, None)
 }

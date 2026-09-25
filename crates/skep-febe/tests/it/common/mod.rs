@@ -276,11 +276,11 @@ pub fn surface() -> OperationSurface<World> {
 // ───────────────────────────── request helpers ──────────────────────────────
 
 pub fn ex(febe: &OperationSurface<World>, session: SessionId, op: Op) -> Response {
-    febe.execute(session, Request { id: None, op })
+    febe.execute(session, Request { id: None, op, attest: None })
 }
 
 pub fn ex_id(febe: &OperationSurface<World>, session: SessionId, id: &[u8], op: Op) -> Response {
-    febe.execute(session, Request { id: Some(ReqId(id.to_vec())), op })
+    febe.execute(session, Request { id: Some(ReqId(id.to_vec())), op, attest: None })
 }
 
 // ─────────────────────────── response extractors ────────────────────────────

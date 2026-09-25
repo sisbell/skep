@@ -22,19 +22,22 @@ use common::*;
 use serde_json::Value;
 
 /// The scripted flow behind the wire.md examples. Positions are pinned by
-/// the stores' record counts: `delegate` commits 2 records (position 14),
-/// the home mint 1 (position 15) — MINT-FIRST (RES-26): the account's doc 1
+/// the stores' record counts: `delegate` commits 2 records (position 22),
+/// the home mint 1 (position 23) — MINT-FIRST (RES-26): the account's doc 1
 /// is born published, where bare writes are gated by design, so the flow
-/// writes a SECOND, private document — that mint 1 (position 16), a
+/// writes a SECOND, private document — that mint 1 (position 24), a
 /// two-byte `insert` 5 — two mints, two content writes, one placement —
-/// (position 21), `make_link` 3 — mint, link, seat — (position 24). If an
+/// (position 29), `make_link` 3 — mint, link, seat — (position 32). If an
 /// ack below drifts, a store changed its transaction shape and wire.md
 /// §The change feed must be re-pinned.
 /// The head the claim ceremony leaves behind (`common::claim_board`):
 /// delegate (2 records), the home mint (1), the one-atom insert (3), the
-/// genesis link (3), the claim link (3) — twelve records, and the base
-/// every seeded position below sits on. Lane 3.2 re-pins wire.md's
-/// change-feed examples onto these numbers.
+/// genesis link (3), the claim link (3) — twelve records; then, in the
+/// claim's own step, the board's first head `H.1` (signed ops, s1): the
+/// system account's staging-draft mint (1), the head record's insert (3),
+/// the publish shot into `H` (4) — twenty records, the base every seeded
+/// position below sits on. Lane 3.2 re-pinned wire.md's change-feed
+/// examples onto the ceremony's numbers; the s1 lane onto these.
 const CEREMONY_HEAD: u64 = 12;
 
 /// The ceremony's own commit positions (the record counts above,
@@ -42,20 +45,34 @@ const CEREMONY_HEAD: u64 = 12;
 /// link, the claim link.
 const CEREMONY_ATS: [u64; 5] = [2, 3, 6, 9, 12];
 
-/// [`seed_flow`]'s commit positions on the ceremony's base: delegate, the
-/// home mint, the private second mint, the insert, the make_link.
+/// `H.1`'s three commits, in the claim's own step: the staging draft's mint,
+/// the head record's insert into it, the publish shot into `H`. The first
+/// two write the system account's PRIVATE draft and are masked at every
+/// class but the system's; the publish is public, `key: "system"`.
+const H1_ATS: [u64; 3] = [CEREMONY_HEAD + 1, CEREMONY_HEAD + 4, CEREMONY_HEAD + 8];
+
+/// `H.1`'s publish — the one head entry every class sees.
+const H1_PUBLISH_AT: u64 = H1_ATS[2];
+
+/// The claimed board's head: the ceremony and its `H.1`.
+const CLAIMED_HEAD: u64 = H1_PUBLISH_AT;
+
+/// [`seed_flow`]'s commit positions on the claimed board's base: delegate,
+/// the home mint, the private second mint, the insert, the make_link.
 const SEEDED_ATS: [u64; 5] = [
-    CEREMONY_HEAD + 2,
-    CEREMONY_HEAD + 3,
-    CEREMONY_HEAD + 4,
-    CEREMONY_HEAD + 9,
-    CEREMONY_HEAD + 12,
+    CLAIMED_HEAD + 2,
+    CLAIMED_HEAD + 3,
+    CLAIMED_HEAD + 4,
+    CLAIMED_HEAD + 9,
+    CLAIMED_HEAD + 12,
 ];
 
-/// Every committed position a claimed, seeded board holds: the ceremony's
-/// five commits, then the seeded five.
+/// Every committed position a claimed, seeded board's OWNER (principal 1)
+/// sees: the ceremony's five commits, `H.1`'s publish (its draft mint and
+/// insert are the system account's private writes, masked), then the
+/// seeded five.
 fn all_ats() -> Vec<u64> {
-    CEREMONY_ATS.iter().chain(SEEDED_ATS.iter()).copied().collect()
+    CEREMONY_ATS.iter().chain([H1_PUBLISH_AT].iter()).chain(SEEDED_ATS.iter()).copied().collect()
 }
 
 fn seed_flow(port: u16) -> String {
@@ -73,7 +90,7 @@ fn seed_flow(port: u16) -> String {
     );
     assert_eq!(
         acked_at(&v),
-        CEREMONY_HEAD + 2,
+        CLAIMED_HEAD + 2,
         "delegate is a 2-record commit (Allocate + RegisterPrincipal)"
     );
     let s1 = open_session(port, 1);
@@ -83,7 +100,7 @@ fn seed_flow(port: u16) -> String {
         &format!(r#"{{"op":"create_new_document","account":"{prefix}"}}"#),
     );
     assert_eq!(acked_addr(&v), "1.0.2.0.1", "the home mint is doc 1; re-pin the examples");
-    assert_eq!(acked_at(&v), CEREMONY_HEAD + 3, "create_new_document is a 1-record commit");
+    assert_eq!(acked_at(&v), CLAIMED_HEAD + 3, "create_new_document is a 1-record commit");
     let v = op(
         port,
         Some(&s1),
@@ -91,7 +108,7 @@ fn seed_flow(port: u16) -> String {
     );
     let doc = acked_addr(&v);
     assert_eq!(doc, "1.0.2.0.2", "second document address drifted; re-pin the examples");
-    assert_eq!(acked_at(&v), CEREMONY_HEAD + 4, "create_new_document is a 1-record commit");
+    assert_eq!(acked_at(&v), CLAIMED_HEAD + 4, "create_new_document is a 1-record commit");
     let v = op(
         port,
         Some(&s1),
@@ -99,7 +116,7 @@ fn seed_flow(port: u16) -> String {
             r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"1"}},"values":["hi"]}}"#
         ),
     );
-    assert_eq!(acked_at(&v), CEREMONY_HEAD + 9, "a 2-value insert is a 5-record commit");
+    assert_eq!(acked_at(&v), CLAIMED_HEAD + 9, "a 2-value insert is a 5-record commit");
     let v = op(
         port,
         Some(&s1),
@@ -114,7 +131,7 @@ fn seed_flow(port: u16) -> String {
     );
     assert_eq!(
         acked_at(&v),
-        CEREMONY_HEAD + 12,
+        CLAIMED_HEAD + 12,
         "make_link is a 3-record commit (mint + link + seat)"
     );
     doc
@@ -221,11 +238,26 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(0), Some(false)));
 
     common::claim_board(port);
+    // THE CLAIM WROTE `H.1` (signed ops, s1): the three head entries sit
+    // between the claim and the seeded flow — the publish public with
+    // `key: "system"`, the private draft's mint and insert masked from
+    // everyone but the system account — and the examples below page from
+    // above them.
+    let (st, body) = changes_raw(port, None, &format!("since={CEREMONY_HEAD}"));
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
+    let v = json(&body);
+    assert_eq!(entry_ats(&v), vec![H1_PUBLISH_AT], "the guest sees H.1's publish and nothing else of it");
+    assert_eq!(v["changes"][0]["op"].as_str(), Some("publish"), "{v}");
+    assert_eq!(v["changes"][0]["key"].as_str(), Some("system"), "{v}");
+    assert_eq!(head(port), CLAIMED_HEAD, "the claim and its head: twenty records");
     let doc = seed_flow(port);
     let s1 = open_session(port, 1);
     // The owner's view of its own feed — the seeded document is principal
     // 1's private draft, so its entries are the owner's to see.
     let owner = Some(s1.as_str());
+    let (st, body) = changes_raw(port, owner, &format!("since={CEREMONY_HEAD}&limit=1"));
+    assert_eq!(st, 200);
+    assert_eq!(entry_ats(&json(&body)), vec![H1_PUBLISH_AT], "the owner too: the draft's writes are the system's");
 
     // Reads and rejected writes are not in the feed: issue both, then
     // assert the feed holds exactly the five committed writes. The read is
@@ -248,7 +280,7 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     assert_eq!(expect_resp(&v, "rejected")["code"].as_str(), Some("unauthenticated"));
 
     // ── the full seeded feed: ops, docs, ordering, testimony ──
-    let b = CEREMONY_HEAD;
+    let b = CLAIMED_HEAD;
     let (st, body) = changes_raw(port, owner, &format!("since={b}"));
     assert_eq!(st, 200);
     let v = json(&body);
@@ -391,7 +423,7 @@ fn the_changes_limit_range_is_exactly_one_through_the_maximum() {
     let port = sd.port();
     seed_flow(port);
     let s1 = open_session(port, 1);
-    let total = all_ats().len(); // the ceremony's five commits + the seeded five
+    let total = all_ats().len(); // the ceremony's five commits, H.1's publish, the seeded five
 
     for limit in [1usize, 2, 4095, 4096] {
         let (st, body) = changes_raw(port, Some(&s1), &format!("since=0&limit={limit}"));
@@ -752,7 +784,7 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
     // ── torn tail: a partial trailing record is truncated at open; the
     //    daemon comes up and the feed is unchanged. (The fragment's number
     //    must not prefix any REAL record's `{"at":N,` — every committed
-    //    position here is ≤ 24.) ──
+    //    position here is ≤ 32.) ──
     {
         use std::io::Write;
         let mut f = std::fs::OpenOptions::new()
@@ -772,7 +804,7 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
     }
 
     // ── lost record: drop the last whole record (the make_link entry at
-    //    24). Reopen: the position is reconstructed as a BARE entry — the
+    //    32). Reopen: the position is reconstructed as a BARE entry — the
     //    daemon reports null, never a wrong value — while earlier entries
     //    keep their recorded metadata verbatim. ──
     {
@@ -787,7 +819,7 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
         let v = changes_ok(port, Some(&s1), "since=0");
         assert_eq!(entry_ats(&v), all_ats());
         let entries = v["changes"].as_array().expect("changes");
-        let (tail, kept) = entries.split_last().expect("ten entries");
+        let (tail, kept) = entries.split_last().expect("eleven entries");
         assert!(
             tail["op"].is_null()
                 && tail["docs"].is_null()
@@ -810,8 +842,8 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
         let g = changes_ok(port, None, "since=0");
         assert_eq!(
             entry_ats(&g),
-            [CEREMONY_ATS.as_slice(), &SEEDED_ATS[..2]].concat(),
-            "the guest sees the ceremony and the two published-world writes, bare tail masked"
+            [CEREMONY_ATS.as_slice(), &[H1_PUBLISH_AT], &SEEDED_ATS[..2]].concat(),
+            "the guest sees the ceremony, H.1's publish and the two published-world writes, bare tail masked"
         );
         // The head's record is bare, so head_time honestly answers null.
         let (st, body) = get(port, "/health");

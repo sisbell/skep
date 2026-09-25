@@ -565,12 +565,12 @@ impl IdentityState {
             // `retired` (AUTH-2.70; sound per AUTH-1.36).
             Effect::Genesis { account, keys } => next.post_to_set(account, |set| {
                 for k in keys {
-                    set.insert_enrolled(*k);
+                    set.insert_enrolled(k.clone());
                 }
             }),
             Effect::Enroll { account, added } => next.post_to_set(account, |set| {
                 for k in added {
-                    set.insert_enrolled(*k);
+                    set.insert_enrolled(k.clone());
                 }
             }),
             Effect::Retire { account, removed } => next.post_to_set(account, |set| {
@@ -621,7 +621,7 @@ fn subject_and_record(ctx: &impl FoldCtx, dep: &LinkDeposit) -> Result<(Address,
 /// is not a fold input, so it stops here — the one place that is decided.
 fn enrolled_of(enrollment: &Enrollment) -> Enrolled {
     Enrolled {
-        key: enrollment.key,
+        key: enrollment.key.clone(),
         anchor: enrollment.anchor,
     }
 }

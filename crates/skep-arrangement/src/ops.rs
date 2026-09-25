@@ -48,7 +48,7 @@ use std::sync::LazyLock;
 use num_traits::{One, Zero};
 use skep_address::{content_subspace, document_of, elem_addr, Address, ElemPos, Nat};
 use skep_content::{stage_write, ContentError, ContentWrite, HasContent, Val};
-use skep_kernel::{Kernel, LockKey, Seq, Staging, TxnError, WorldState};
+use skep_kernel::{Attestation, Kernel, LockKey, Seq, Staging, TxnError, WorldState};
 use skep_namespace::{ghost_home_doc, HasM3, M3Rec, M3State, MintError, PrincipalId};
 
 use crate::chain::{deposit_surface, published_target, reading_surface, trunk_head, trunk_of};
@@ -300,13 +300,33 @@ pub const MAX_REINSERTED_VALUES: usize = 1 << 17;
 /// does.
 pub struct Vstream<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
+    /// THE ATTESTATION this handle's publish-class-capable calls commit under
+    /// (signed ops): handed to the kernel's `transact_attested` arm at the one
+    /// transaction `insert` and `publish` each open, filling THAT commit
+    /// marker's signature slot; `None` — the plain handle every other
+    /// constructor site builds — leaves the slot empty. A BORROW, so the
+    /// handle stays `Copy` and the value cannot outlive the caller that owns
+    /// it for the one call this handle serves. The other writes of this
+    /// surface (`delete`, `copy`, `rearrange`, `version`, the seat op) take
+    /// the plain arm whatever this field holds: outside the seam build's
+    /// slice, a handle built with a value fills no slot through them.
+    attest: Option<&'k Attestation>,
 }
 
 impl<'k, W: WorldState> Vstream<'k, W> {
-    /// The only constructor — M10 (and M9, for predicate-def `insert`) build
-    /// a Vstream over the engine's kernel this way.
+    /// The plain constructor — M10 (and M9, for predicate-def `insert`) build
+    /// a Vstream over the engine's kernel this way; its transactions commit
+    /// with the signature slot EMPTY.
     pub fn new(kernel: &'k Kernel<W>) -> Vstream<'k, W> {
-        Vstream { kernel }
+        Vstream::attested(kernel, None)
+    }
+
+    /// THE ATTESTED CONSTRUCTOR (signed ops; the confirmed placement): a
+    /// handle whose `insert` and `publish` commit under `attest`. Its callers
+    /// are the slot's producer set — M10's dispatch, with a value the
+    /// daemon's check admitted — and nothing else; `None` is [`Vstream::new`].
+    pub fn attested(kernel: &'k Kernel<W>, attest: Option<&'k Attestation>) -> Vstream<'k, W> {
+        Vstream { kernel, attest }
     }
 }
 
@@ -467,7 +487,9 @@ where
                 Some(ty)
             }
         };
-        self.kernel.transact(&keys, |stg| {
+        // The seam's one line: the attested arm, which is `transact` where
+        // this handle carries no attestation (signed ops).
+        self.kernel.transact_attested(&keys, self.attest, |stg| {
             gate_write(
                 stg.working().m3(),
                 caller,
@@ -706,7 +728,9 @@ where
                 keys.push(M3State::version_lock_key(&base.member));
             }
         }
-        self.kernel.transact(&keys, |stg| {
+        // The seam's one line: the attested arm, which is `transact` where
+        // this handle carries no attestation (signed ops).
+        self.kernel.transact_attested(&keys, self.attest, |stg| {
             // Slot 1: registration and ω, on the address named.
             gate_write(
                 stg.working().m3(),

@@ -6,13 +6,15 @@ use skep_address::{Address, Nat, Span, Tumbler};
 use skep_arrangement::{Deposit, Shot, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{Cursor, FourSet};
+use skep_kernel::Attestation;
 use skep_links::{Endset, SlotArg, View};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{RegionSpec, Spec};
 
-/// One parsed FEBE request: an optional idempotency key plus the operation.
-/// `id` is used ONLY to key the retry memo (§1(a)/§7); it is never echoed on
-/// the response path (§8).
+/// One parsed FEBE request: an optional idempotency key, the operation, and
+/// — since signed ops — the optional ATTESTATION the write's commit marker
+/// carries. `id` is used ONLY to key the retry memo (§1(a)/§7); it is never
+/// echoed on the response path (§8).
 ///
 /// A value, with [`Op`]'s derives and for [`Op`]'s reason: `execute` consumes
 /// a request, so a transport that records, reorders or reissues what it
@@ -24,6 +26,21 @@ pub struct Request {
     pub id: Option<ReqId>,
     /// The parsed operation.
     pub op: Op,
+    /// THE ATTESTATION (signed ops; the design record §7.3 (ii): "the value
+    /// rides `Request` beside `id`") — the entry signature the daemon's
+    /// write-path check ADMITTED for this write, lifted from the op frame's
+    /// top-level `attest` member by the codec and carried here, one field on
+    /// the object `execute` already takes, so no `Op` variant and neither
+    /// exhaustive classifier is asked about it. `dispatch_write` hands it to
+    /// the store driver's ATTESTED handle for the three ops of the seam
+    /// build's slice — `insert`, `make_link`, `publish` — which fill the
+    /// commit marker's signature slot for that one transaction; on every
+    /// other op the value is DROPPED here, unwritten. WHO SETS IT is the
+    /// dispatched write path alone, after its check: a transport that lifts
+    /// the member sets it only where the check admitted the signature, which
+    /// is what bounds the slot's producer set (§5.5) — M10 classifies
+    /// nothing about it and verifies nothing, the kernel writes it opaquely.
+    pub attest: Option<Attestation>,
 }
 
 /// The client's idempotency key — chosen by the client, unique only within

@@ -11,16 +11,21 @@
 
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use ed25519_dalek::{Signer, SigningKey};
 use serde_json::Value;
+use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_identity::{
-    encode_enroll, framed, Enrollment, PublicKey, SESSION_TAG, SESSION_TAG_V2,
+    board_bytes, encode_enroll, entry_body_insert, entry_body_link, entry_body_publish,
+    entry_frame, framed, Enrollment, EntrySlot, PublicKey, SESSION_TAG, SESSION_TAG_V2,
 };
+use skepd::hybrid::{self, HybridSigner};
 use skepd::{serve, AuthOptions, Daemon, NodePrefix, Origin, Skepd, DEFAULT_WORKERS};
 
 /// The credential type addresses this build allocates (AUTH-7.1 horn B):
@@ -51,7 +56,40 @@ pub fn anchor_key() -> SigningKey {
     SigningKey::from_bytes(&ANCHOR_SEED)
 }
 
+/// THE FIXTURES' TAG (signed ops): every key the suites enrol is a HYBRID
+/// under tag 1, the production pair — ML-DSA-65 + Ed25519, deterministic
+/// signing, so every fixture's signature is byte-stable.
+pub const FIXTURE_TAG: u8 = hybrid::TAG_MLDSA65_ED25519;
+
+/// THE SEED A HELPER'S `SigningKey` CARRIES (signed ops): the suites keep
+/// one 32-byte seed per principal — `DEVICE_SEED`, `ANCHOR_SEED`,
+/// `distinct_key(n)` — spelled as an Ed25519 `SigningKey` since before
+/// signed ops, and that spelling is kept at every one of the 231 call sites
+/// as THE SEED CARRIER: what a helper signs with, and what it enrols, is
+/// derived from the key's 32 bytes through the KDF PIN (`skepd::hybrid`),
+/// never the key itself — the ruled "one seed, two halves, never the raw
+/// seed".
+pub fn seed_of(sk: &SigningKey) -> [u8; 32] {
+    sk.to_bytes()
+}
+
+/// The hybrid signer one seed carrier derives under [`FIXTURE_TAG`]: its
+/// Ed25519 half opens the seed's sessions, both halves sign its entries.
+pub fn hybrid_signer(sk: &SigningKey) -> HybridSigner {
+    HybridSigner::from_seed(FIXTURE_TAG, &seed_of(sk)).expect("tag 1 is a row")
+}
+
+/// The ONE `ALGS` entry a seed carrier enrols: the hybrid key under
+/// [`FIXTURE_TAG`] — its fingerprint the one a session testifies and an
+/// entry verifies under.
 pub fn public_key_of(sk: &SigningKey) -> PublicKey {
+    hybrid_signer(sk).public_key().clone()
+}
+
+/// The CLASSICAL `ed25519` entry a seed carrier's raw key is — the tag-0
+/// row that stands as it did, for the cells about that row alone (a key
+/// that opens sessions and signs no entry).
+pub fn ed25519_public_key_of(sk: &SigningKey) -> PublicKey {
     PublicKey::parse("ed25519", &hex(&sk.verifying_key().to_bytes())).expect("a real point")
 }
 
@@ -90,13 +128,38 @@ pub fn enroll_atom_flagged(keys: &[(&SigningKey, bool)]) -> String {
     json_atom(&encode_enroll(&entries))
 }
 
+/// [`enroll_atom`] over the CLASSICAL `ed25519` row — the raw keys as
+/// 64-hex entries — for the cells about the RECORD's key count: sixteen
+/// hybrid entries fill the 64 KiB record cap (the design record's E7
+/// arithmetic: fourteen fit), where sixteen classical ones do not. A key so
+/// enrolled opens sessions under [`sign_session_ed25519`] and signs no entry.
+pub fn enroll_atom_ed25519(keys: &[&SigningKey]) -> String {
+    let entries: Vec<Enrollment> = keys
+        .iter()
+        .map(|sk| Enrollment::new(ed25519_public_key_of(sk), false, None).expect("no label"))
+        .collect();
+    json_atom(&encode_enroll(&entries))
+}
+
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Sign the session payload (AUTH-6.4): `framed(SESSION_TAG, [origin,
-/// nonce, principal-decimal])`, returning the 128-hex signature.
+/// nonce, principal-decimal])`, returning the 128-hex signature — under the
+/// seed carrier's DERIVED Ed25519 half (signed ops), the half its enrolled
+/// hybrid entry opens sessions with.
 pub fn sign_session(sk: &SigningKey, origin: &str, nonce: &str, principal: u64) -> String {
+    let payload = framed(
+        SESSION_TAG,
+        &[origin.as_bytes(), nonce.as_bytes(), principal.to_string().as_bytes()],
+    );
+    hex(&hybrid_signer(sk).ed25519_signing_key().sign(&payload).to_bytes())
+}
+
+/// [`sign_session`] under the RAW Ed25519 key — the classical row's own
+/// session signature, for a cell that enrolled [`ed25519_public_key_of`].
+pub fn sign_session_ed25519(sk: &SigningKey, origin: &str, nonce: &str, principal: u64) -> String {
     let payload = framed(
         SESSION_TAG,
         &[origin.as_bytes(), nonce.as_bytes(), principal.to_string().as_bytes()],
@@ -121,7 +184,7 @@ pub fn sign_session_scoped(
         SESSION_TAG_V2,
         &[origin.as_bytes(), nonce.as_bytes(), principal.to_string().as_bytes(), scope.as_bytes()],
     );
-    hex(&sk.sign(&payload).to_bytes())
+    hex(&hybrid_signer(sk).ed25519_signing_key().sign(&payload).to_bytes())
 }
 
 /// A fresh challenge for `principal`: the nonce, as issued.
@@ -151,7 +214,9 @@ pub fn open_content_session(port: u16, principal: u64, sk: &SigningKey) -> Strin
     let body = scoped_session_body(principal, &nonce, &origin, &sig);
     let (st, resp) = http(port, "POST", "/session", None, body.as_bytes());
     assert_eq!(st, 200, "content session: {}", String::from_utf8_lossy(&resp));
-    json(&resp)["session"].as_str().expect("session token").to_string()
+    let token = json(&resp)["session"].as_str().expect("session token").to_string();
+    register_signer(&token, principal, sk);
+    token
 }
 
 /// Open a SIGNED session for `principal` over the challenge/response
@@ -167,7 +232,9 @@ pub fn open_signed_session(port: u16, principal: u64, sk: &SigningKey) -> String
     );
     let (st, resp) = http(port, "POST", "/session", None, body.as_bytes());
     assert_eq!(st, 200, "signed session: {}", String::from_utf8_lossy(&resp));
-    json(&resp)["session"].as_str().expect("session token").to_string()
+    let token = json(&resp)["session"].as_str().expect("session token").to_string();
+    register_signer(&token, principal, sk);
+    token
 }
 
 /// One signed handshake, WHOLE and unjudged: a fresh challenge for
@@ -201,8 +268,18 @@ pub fn claimed(port: u16) -> bool {
 /// Run the notebook claim ceremony (AUTH-5.55 steps 1–5) over the wire:
 /// delegate from 0, the home mint, the genesis atom + deposit, the SIGNED
 /// claim. Idempotent — a reopened claimed board skips it.
+///
+/// THE CLAIM WRITES `H.1` (signed ops, s1; RULED 2026-09-25): the claim's
+/// own request commits the board's first head — the staging draft's mint,
+/// the head record's insert, the shot into `H`, eight records right after
+/// the claim link, the system account's own and exempt from the check by ω
+/// — so the board term every attested write's frame names (D13) is present
+/// at the claim's ack and names the claim's own position. Asserted here, at
+/// every claim a suite makes, and on every reopened claimed board (a claimed
+/// board without `H.1` is the crash window the open closes).
 pub fn claim_board(port: u16) {
     if claimed(port) {
+        assert!(board_pair(port).is_some(), "a reopened claimed board has its H.1");
         return;
     }
     ceremony_before_the_claim(port);
@@ -217,6 +294,8 @@ pub fn claim_board(port: u16) {
     );
     expect_resp(&v, "ack_addr");
     assert!(claimed(port), "the claim link flips the board claimed");
+    let (position, _) = board_pair(port).expect("the claim's own step wrote H.1");
+    assert_eq!(position, acked_at(&v), "H.1 names the claim's own position");
 }
 
 /// The claim ceremony's first four steps (AUTH-5.55 steps 1–4) over the
@@ -560,6 +639,10 @@ pub fn issue_blocked_list_bytes(path: &Path, bytes: &[u8]) {
 /// (RES-27) an unclaimed daemon runs nothing but the ceremony, so every
 /// suite about ordinary op semantics runs post-claim (CLAIMED-PERMISSIVE —
 /// local trust stays the default, so the suites' bare sessions still bind).
+/// The board this returns has its `H.1`, written by the claim's own step
+/// ([`claim_board`]; signed ops, s1) — the board term every attested write's
+/// frame names (D13) — so it admits an attested write at once; a suite that
+/// needs a LATER head drives the cadence through the daemon's clock seam.
 pub fn spawn(dir: &Path) -> Skepd {
     let sd = spawn_configured(dir, true);
     claim_board(sd.port());
@@ -734,7 +817,26 @@ pub fn open_session(port: u16, principal: u64) -> String {
 
 /// POST one op frame; transport must succeed (200) — the returned document
 /// may still be a rejection, which callers assert on.
+///
+/// THE TEST SIGNER SITS HERE (signed ops; the placement investigation §4.3):
+/// where `token` is a session a seed carrier opened ([`register_signer`])
+/// and the frame's op is one of the three the check attests — `insert`,
+/// `make_link`, `publish` — the frame is sent with its `attest` member
+/// composed and signed by that seed's hybrid key ([`attach_attest`]);
+/// every other frame, and every frame under a bare or foreign token, is
+/// sent as written. A cell that must send a WRONG or ABSENT `attest` posts
+/// through [`op_unsigned`] or [`http`] directly, as the refusal cells do.
 pub fn op(port: u16, token: Option<&str>, frame: &str) -> Value {
+    let frame = match token {
+        Some(t) => attach_attest(port, t, frame),
+        None => frame.to_string(),
+    };
+    op_unsigned(port, token, &frame)
+}
+
+/// [`op`] with the frame sent AS WRITTEN — no `attest` attached whatever the
+/// token: the refusal cells' door.
+pub fn op_unsigned(port: u16, token: Option<&str>, frame: &str) -> Value {
     let (st, body) = http(port, "POST", "/op", token, frame.as_bytes());
     assert_eq!(st, 200, "op transport failed: {}", String::from_utf8_lossy(&body));
     json(&body)
@@ -1797,4 +1899,383 @@ pub fn seed_partial(port: u16, id: u64, keys: &[(&SigningKey, bool)]) -> Seat {
 /// claiming account, `to` empty, no payload.
 pub fn claim_frame(doc1: &str, account: &str) -> String {
     typed_link_frame(doc1, &[account], &[], T_CLAIM)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE TEST SIGNER (signed ops, the seam build 2026-09-25; the placement
+// investigation §4.3): a token → (principal, seed) registry the two
+// session-opening helpers fill, and the composition of the ENTRY frame from
+// the frame a suite is about to post — `board` read off `H.1`, `account` off
+// `principal_prefix`, `doc` and `body` per op, a `publish`'s values read
+// back over the wire from the runs' origins — signed by the seed's hybrid
+// key and attached as the frame's top-level `attest`. Three helper bodies
+// changed; no `op(` or `open_signed_session(` call site did.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// A process-wide, lazily built map behind a lock.
+type Registry<K, V> = Mutex<Option<HashMap<K, V>>>;
+
+/// Token → (principal, seed): the sessions the suites opened with a seed
+/// carrier. Process-wide, keyed by the token alone (tokens are 128-bit
+/// random, so two daemons in one process never collide).
+static SIGNERS: Registry<String, (u64, [u8; 32])> = Mutex::new(None);
+
+/// Port → `H.1`'s pair, read once: `H.1` is pinned forever, so the first
+/// read is the last.
+static BOARDS: Registry<u16, (u64, [u8; 32])> = Mutex::new(None);
+
+/// (port, principal) → the account's local address, read once.
+static ACCOUNTS: Registry<(u16, u64), String> = Mutex::new(None);
+
+fn with_map<K: std::hash::Hash + Eq, V, R>(
+    cell: &Registry<K, V>,
+    f: impl FnOnce(&mut HashMap<K, V>) -> R,
+) -> R {
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    f(guard.get_or_insert_with(HashMap::new))
+}
+
+/// Register `token` as a session `principal` opened with the seed carrier
+/// `sk`: every attestable frame [`op`] posts under it is signed by that
+/// seed's hybrid key.
+pub fn register_signer(token: &str, principal: u64, sk: &SigningKey) {
+    let seed = seed_of(sk);
+    with_map(&SIGNERS, |m| {
+        m.insert(token.to_string(), (principal, seed));
+    });
+}
+
+/// The signer a token names, if a seed carrier opened it.
+pub fn signer_of(token: &str) -> Option<(u64, [u8; 32])> {
+    with_map(&SIGNERS, |m| m.get(token).copied())
+}
+
+/// `H.1`'s address — the first member of the head document's chain.
+pub const HEAD_MEMBER_1: &str = "1.1.0.1.0.2.1";
+
+/// THE BOARD TERM: `H.1`'s `(position, chain)` pair, read off the wire by
+/// `retrieve_v` on the pinned member (guest-readable) and parsed off the
+/// `skep-head` record; `None` while the board has no `H.1`.
+pub fn board_pair(port: u16) -> Option<(u64, [u8; 32])> {
+    if let Some(pair) = with_map(&BOARDS, |m| m.get(&port).copied()) {
+        return Some(pair);
+    }
+    let v = op_unsigned(port, None, &retrieve_frame(HEAD_MEMBER_1, 1, 1));
+    if v["resp"].as_str() != Some("delivery") {
+        return None;
+    }
+    let text = v["items"].as_array()?.first()?["atom"].as_str()?.to_string();
+    let rec: Value = serde_json::from_str(&text).ok()?;
+    let position = rec["position"].as_u64()?;
+    let chain_hex = rec["chain"].as_str()?;
+    let chain: Vec<u8> = (0..32)
+        .map(|i| u8::from_str_radix(&chain_hex[2 * i..2 * i + 2], 16).ok())
+        .collect::<Option<_>>()?;
+    let pair = (position, <[u8; 32]>::try_from(chain).ok()?);
+    with_map(&BOARDS, |m| {
+        m.insert(port, pair);
+    });
+    Some(pair)
+}
+
+/// The account a principal acts as, in the board's local form — the frame's
+/// `account` term (`principal_prefix`, read once per principal per board).
+pub fn account_of(port: u16, token: &str, principal: u64) -> Option<String> {
+    if let Some(a) = with_map(&ACCOUNTS, |m| m.get(&(port, principal)).cloned()) {
+        return Some(a);
+    }
+    let v = op_unsigned(
+        port,
+        Some(token),
+        &format!(r#"{{"op":"principal_prefix","principal":{principal}}}"#),
+    );
+    let addr = v["addr"].as_str()?.to_string();
+    with_map(&ACCOUNTS, |m| {
+        m.insert((port, principal), addr.clone());
+    });
+    Some(addr)
+}
+
+fn parse_addr(s: &str) -> Option<Address> {
+    let comps: Option<Vec<Nat>> = s.split('.').map(|c| c.parse::<u64>().ok().map(Nat::from)).collect();
+    validate(Tumbler::new(comps?).ok()?).ok()
+}
+
+fn parse_tumbler(s: &str) -> Option<Tumbler> {
+    let comps: Option<Vec<Nat>> = s.split('.').map(|c| c.parse::<u64>().ok().map(Nat::from)).collect();
+    Tumbler::new(comps?).ok()
+}
+
+/// M5's `trunk_of` over the dotted spelling: a version member cut back to
+/// its document — the components through the first past the second `0`
+/// separator (node, then `0`, the account, then `0`, the document's first
+/// component).
+pub fn trunk_of_str(doc: &str) -> String {
+    let comps: Vec<&str> = doc.split('.').collect();
+    let mut zeros = comps.iter().enumerate().filter(|(_, c)| **c == "0").map(|(i, _)| i);
+    let (Some(_first), Some(second)) = (zeros.next(), zeros.next()) else {
+        return doc.to_string();
+    };
+    comps[..=(second + 1).min(comps.len() - 1)].join(".")
+}
+
+/// One `values` element's values, by the wire's write-form rule: a string
+/// and `{"hex"}` mint one value per byte, `{"atom"}` and `{"atom_hex"}` one
+/// composite value.
+fn write_form_values(v: &Value, out: &mut Vec<Vec<u8>>) -> Option<()> {
+    match v {
+        Value::String(s) => out.extend(s.bytes().map(|b| vec![b])),
+        Value::Object(m) => {
+            if let Some(h) = m.get("hex").and_then(Value::as_str) {
+                out.extend(unhex(h)?.into_iter().map(|b| vec![b]));
+            } else if let Some(s) = m.get("atom").and_then(Value::as_str) {
+                out.push(s.as_bytes().to_vec());
+            } else if let Some(h) = m.get("atom_hex").and_then(Value::as_str) {
+                out.push(unhex(h)?);
+            } else {
+                return None;
+            }
+        }
+        _ => return None,
+    }
+    Some(())
+}
+
+/// One delivery item's values, by the read side's rule: `{"content"}` and
+/// `{"hex"}` one value per byte, `{"atom"}`/`{"atom_hex"}` one; a `ref` or a
+/// withheld run is no content the signer can hold.
+fn delivery_item_values(v: &Value, out: &mut Vec<Vec<u8>>) -> Option<()> {
+    let m = v.as_object()?;
+    if let Some(s) = m.get("content").and_then(Value::as_str) {
+        out.extend(s.bytes().map(|b| vec![b]));
+    } else if let Some(h) = m.get("hex").and_then(Value::as_str) {
+        out.extend(unhex(h)?.into_iter().map(|b| vec![b]));
+    } else if let Some(s) = m.get("atom").and_then(Value::as_str) {
+        out.push(s.as_bytes().to_vec());
+    } else if let Some(h) = m.get("atom_hex").and_then(Value::as_str) {
+        out.push(unhex(h)?);
+    } else {
+        return None;
+    }
+    Some(())
+}
+
+fn unhex(h: &str) -> Option<Vec<u8>> {
+    if h.len() % 2 != 0 {
+        return None;
+    }
+    (0..h.len() / 2).map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).ok()).collect()
+}
+
+/// A link slot as the frame carries it: the address form's names, or the
+/// V-spec form's `(source, span)` pairs.
+enum SignerSlot {
+    Addrs(Vec<Address>),
+    Resolve(Vec<(Address, Span)>),
+}
+
+fn signer_slot(v: &Value) -> Option<SignerSlot> {
+    match v {
+        Value::Object(m) => {
+            let addrs = m.get("addrs")?.as_array()?;
+            Some(SignerSlot::Addrs(
+                addrs.iter().map(|a| parse_addr(a.as_str()?)).collect::<Option<_>>()?,
+            ))
+        }
+        Value::Array(specs) => Some(SignerSlot::Resolve(
+            specs
+                .iter()
+                .map(|s| {
+                    let source = parse_addr(s["source"].as_str()?)?;
+                    let start = parse_tumbler(s["span"]["start"].as_str()?)?;
+                    let width = parse_tumbler(s["span"]["width"].as_str()?)?;
+                    Some((source, Span::new(start, width).ok()?))
+                })
+                .collect::<Option<_>>()?,
+        )),
+        _ => None,
+    }
+}
+
+impl SignerSlot {
+    fn as_entry(&self) -> EntrySlot<'_> {
+        match self {
+            SignerSlot::Addrs(a) => EntrySlot::Addrs(a),
+            SignerSlot::Resolve(v) => EntrySlot::Resolve(v),
+        }
+    }
+}
+
+/// The values of a `publish` shot's runs, in run order: for each origin, the
+/// document's V→I image and its delivery are read once as `token`, the
+/// image inverted to place each I-address of the run; `None` where an origin
+/// cannot be read (a withheld source: the client cannot compose that body,
+/// which is the design's own point).
+fn publish_values(port: u16, token: &str, runs: &Value) -> Option<Vec<Vec<u8>>> {
+    let mut per_origin: HashMap<String, HashMap<String, Vec<u8>>> = HashMap::new();
+    let mut out = Vec::new();
+    for run in runs.as_array()? {
+        let i_start = run["i_start"].as_str()?;
+        let width: u64 = run["width"].as_str()?.parse().ok()?;
+        // The bytes are read from the document that MINTED the addresses —
+        // the I-address's own document, as an honest client that placed
+        // them knows it — and not from the run's stated `origin`, which the
+        // store judges (`bad_run`) and the frame does not carry.
+        if !i_start.contains(".0.1.") {
+            return None;
+        }
+        let origin = origin_of(i_start);
+        if !per_origin.contains_key(&origin) {
+            // Every read here is UNJUDGED: a refusal (an unregistered or a
+            // withheld origin) means the client cannot compose this body,
+            // and the frame goes out as written.
+            let set = op_unsigned(port, Some(token), &spanset_frame(&origin));
+            if set["resp"].as_str() != Some("span_set") {
+                return None;
+            }
+            let extent: u64 = set["set"]
+                .as_array()?
+                .iter()
+                .find(|s| s["start"].as_str() == Some("1.1"))
+                .and_then(|s| s["width"].as_str()?.strip_prefix("0.")?.parse().ok())
+                .unwrap_or(0);
+            let mut map = HashMap::new();
+            if extent > 0 {
+                let image = op_unsigned(port, Some(token), &image_frame(&origin, 1, extent));
+                if image["resp"].as_str() != Some("runs") {
+                    return None;
+                }
+                let addrs = expand_runs(&runs_in(&image));
+                let delivery = op_unsigned(port, Some(token), &retrieve_frame(&origin, 1, extent));
+                if delivery["resp"].as_str() != Some("delivery") {
+                    return None;
+                }
+                let mut values = Vec::new();
+                for item in delivery["items"].as_array()? {
+                    delivery_item_values(item, &mut values)?;
+                }
+                if values.len() != addrs.len() {
+                    return None;
+                }
+                for (a, v) in addrs.into_iter().zip(values) {
+                    map.insert(a, v);
+                }
+            }
+            per_origin.insert(origin.clone(), map);
+        }
+        let map = &per_origin[&origin];
+        for a in expand_runs(&[(i_start.to_string(), width)]) {
+            out.push(map.get(&a)?.clone());
+        }
+    }
+    Some(out)
+}
+
+/// The ENTRY frame for `frame` as `principal` would sign it on this board,
+/// or `None` where a member cannot be composed (no `H.1` yet, an
+/// unreadable origin, an op outside the three).
+pub fn entry_frame_for(port: u16, token: &str, principal: u64, frame: &Value) -> Option<Vec<u8>> {
+    let op = frame["op"].as_str()?;
+    let (position, chain) = board_pair(port)?;
+    let board = board_bytes(position, &chain);
+    let account = account_of(port, token, principal)?;
+    let alg = hybrid::token_of(FIXTURE_TAG)?;
+    let (doc, body) = match op {
+        "insert" => {
+            let doc = trunk_of_str(frame["doc"].as_str()?);
+            let declared = match frame.get("deposit").and_then(Value::as_str) {
+                Some(ty) => Some(parse_addr(ty)?),
+                None => None,
+            };
+            let mut values = Vec::new();
+            for v in frame["values"].as_array()? {
+                write_form_values(v, &mut values)?;
+            }
+            (doc, entry_body_insert(declared.as_ref(), values.iter().map(Vec::as_slice)))
+        }
+        "make_link" => {
+            let (ty, from, to) = (
+                signer_slot(&frame["ty"])?,
+                signer_slot(&frame["from"])?,
+                signer_slot(&frame["to"])?,
+            );
+            (
+                frame["home"].as_str()?.to_string(),
+                entry_body_link(&ty.as_entry(), &from.as_entry(), &to.as_entry()),
+            )
+        }
+        "publish" => {
+            let values = publish_values(port, token, &frame["runs"])?;
+            (
+                trunk_of_str(frame["doc"].as_str()?),
+                entry_body_publish(values.iter().map(Vec::as_slice)),
+            )
+        }
+        _ => return None,
+    };
+    Some(entry_frame(alg, &board, account.as_bytes(), doc.as_bytes(), op, &body))
+}
+
+/// The `attest` member for `frame` under the seed carrier's hybrid key:
+/// `{"alg": <token>, "sig": <hex>}`.
+pub fn attest_member(sig: &[u8]) -> Value {
+    json!({"alg": hybrid::token_of(FIXTURE_TAG).expect("tag 1"), "sig": hex(sig)})
+}
+
+/// The VALUES at content ordinals `from ..` of `doc`, as `token` reads them —
+/// one entry per position (a per-byte run one byte each, an atom whole).
+pub fn values_of(port: u16, token: Option<&str>, doc: &str, from: u64, width: u64) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    for item in delivery(port, token, doc, from, width).as_array().expect("items") {
+        delivery_item_values(item, &mut out).expect("a content item");
+    }
+    out
+}
+
+/// [`op`] for a `publish` whose runs' VALUES the caller supplies — the
+/// bytes it placed, in V-order — so a shot the signer cannot READ back (a
+/// withheld origin) is still signed over the body the daemon will compose:
+/// the client knows what it is placing whether or not it may read it.
+pub fn op_with_publish_values(port: u16, token: &str, frame: &str, values: &[&[u8]]) -> Value {
+    let Some((principal, seed)) = signer_of(token) else {
+        return op_unsigned(port, Some(token), frame);
+    };
+    let mut v: Value = serde_json::from_str(frame).expect("a JSON frame");
+    let (Some((position, chain)), Some(account)) = (board_pair(port), account_of(port, token, principal))
+    else {
+        return op_unsigned(port, Some(token), frame);
+    };
+    let board = board_bytes(position, &chain);
+    let alg = hybrid::token_of(FIXTURE_TAG).expect("tag 1");
+    let doc = trunk_of_str(v["doc"].as_str().expect("doc"));
+    let body = entry_body_publish(values.iter().copied());
+    let bytes = entry_frame(alg, &board, account.as_bytes(), doc.as_bytes(), "publish", &body);
+    let signer = HybridSigner::from_seed(FIXTURE_TAG, &seed).expect("tag 1");
+    v["attest"] = attest_member(&signer.sign(&bytes));
+    op_unsigned(port, Some(token), &v.to_string())
+}
+
+/// [`op`]'s composition: the frame with its `attest` attached where the
+/// token names a signer and the op is attestable and composable; the frame
+/// as written otherwise.
+pub fn attach_attest(port: u16, token: &str, frame: &str) -> String {
+    let Some((principal, seed)) = signer_of(token) else {
+        return frame.to_string();
+    };
+    let Ok(mut v) = serde_json::from_str::<Value>(frame) else {
+        return frame.to_string();
+    };
+    if !matches!(v["op"].as_str(), Some("insert" | "make_link" | "publish")) {
+        return frame.to_string();
+    }
+    if v.get("attest").is_some() {
+        return frame.to_string();
+    }
+    let Some(bytes) = entry_frame_for(port, token, principal, &v) else {
+        return frame.to_string();
+    };
+    let signer = HybridSigner::from_seed(FIXTURE_TAG, &seed).expect("tag 1");
+    let sig = signer.sign(&bytes);
+    v["attest"] = attest_member(&sig);
+    v.to_string()
 }

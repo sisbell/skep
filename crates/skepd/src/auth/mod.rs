@@ -14,7 +14,9 @@
 //! never persisted by this crate — the journal remains the one source of
 //! truth.
 
+pub(crate) mod entry;
 pub(crate) mod fold;
+pub mod hybrid;
 pub(crate) mod policy;
 pub(crate) mod session;
 
@@ -561,13 +563,15 @@ impl CryptoRng for OsEntropy {}
 /// since retiring it needs an anchor session of that account.
 ///
 /// `from_bytes` is the canonical point decode (the crate pick is argued in
-/// `Cargo.toml`), and the 32-byte width is what refuses a key of another
-/// algorithm rather than reading its bytes as an Ed25519 one — the one
-/// place `skep_identity::ALGS` would be consulted if this crate ever
-/// verified a second.
+/// `Cargo.toml`). THE KEY IT DECODES IS THE ED25519 HALF (signed ops; the
+/// ruled key model — "one seed, two halves … an Ed25519 half (for
+/// sessions)"): a classical `ed25519` key whole, a HYBRID key's last 32 raw
+/// bytes (`PublicKey::ed25519_half`, the KEY PIN's order), so a hybrid entry
+/// opens sessions under its classical half until the ruled session flip
+/// makes the handshake hybrid too. The entry signature's other half is
+/// [`hybrid::verify`]'s, dispatching on the marker tag.
 pub(crate) fn verifying_key(key: &PublicKey) -> Option<VerifyingKey> {
-    let raw = <[u8; 32]>::try_from(key.raw()).ok()?;
-    VerifyingKey::from_bytes(&raw).ok()
+    VerifyingKey::from_bytes(key.ed25519_half()).ok()
 }
 
 // ── origins (AUTH-4.1–4.8) ───────────────────────────────────────────────

@@ -199,7 +199,7 @@ pub use skep_content::Val; // M4
 // M8, `SlotSpec` included: every field of a `FourSet` is one, so the three
 // descriptor ops are unbuildable without it.
 pub use skep_discovery::{Cursor, FourSet, OrphanReport, SlotSpec, SupClaim, Window};
-pub use skep_kernel::Seq; // M2
+pub use skep_kernel::{Attestation, Seq}; // M2
 pub use skep_namespace::PrincipalId; // M3
 // M6, the two enclosed shapes included: `Delivery` and `CompareReport` are
 // collections of `DeliveryItem` and `CorrPair`, and marshaling either answer
@@ -445,6 +445,32 @@ pub trait Stores<W: WorldState>: Send + Sync {
     /// only the incumbents this principal could read.
     fn linkstore<'a>(&'a self, visibility: &'a Visibility<'a, W>) -> LinkWriter<'a, W> {
         LinkWriter::new(self.kernel(), visibility)
+    }
+    /// THE ATTESTED M5 DRIVER (signed ops; the placement the owner confirmed
+    /// 2026-09-25: the attestation rides the DRIVER HANDLE): a `Vstream` that
+    /// hands `attest` to the kernel's `transact_attested` arm at the one
+    /// transaction its publish-class-capable calls of this slice open —
+    /// `insert`, `publish` — filling that transaction's commit marker slot and
+    /// no other's. A handle serves exactly one call, which is exactly one
+    /// transaction, so the value can neither outlive the arm (a borrow) nor
+    /// reach a second commit. `None` is [`Stores::vstream`] exactly. WHO CALLS
+    /// THIS is the slot's producer set (the design record §5.5): M10's
+    /// `dispatch_write`, with a value the daemon's check admitted, and no
+    /// other writer — the head writer, M9 and every plain handle build
+    /// through `vstream`, and pass `None` by construction.
+    fn vstream_attested<'a>(&'a self, attest: Option<&'a Attestation>) -> Vstream<'a, W> {
+        Vstream::attested(self.kernel(), attest)
+    }
+    /// THE ATTESTED M7 DRIVER — [`Stores::linkstore`] with the attestation
+    /// beside the visibility class, handed to `transact_attested` at
+    /// `makelink`'s one transaction (the slice's link write); the same
+    /// producer-set discipline as [`Stores::vstream_attested`].
+    fn linkstore_attested<'a>(
+        &'a self,
+        visibility: &'a Visibility<'a, W>,
+        attest: Option<&'a Attestation>,
+    ) -> LinkWriter<'a, W> {
+        LinkWriter::attested(self.kernel(), visibility, attest)
     }
 }
 

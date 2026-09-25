@@ -64,6 +64,28 @@ skep-identity = { path = "../skep-identity" }
 # one-canonical-raw-form-per-token obligation, AUTH-2.99). skepd is the ONLY
 # crate that links a signature library (AUTH-2.2).
 ed25519-dalek = "2"
+# THE POST-QUANTUM HALVES OF THE HYBRID ENTRY SIGNATURE (signed ops, the seam
+# build 2026-09-25; the PQ crate investigation §8.1, §8.4 (5), §8.5 (ii)):
+# both sit HERE beside `ed25519-dalek`, never in skep-identity (AUTH-2.1),
+# and both are PINNED EXACTLY — an algorithm tag names one exact, frozen
+# verification rule and one exact keygen-from-seed rule (the design record
+# §1's algorithm row; the frozen-tag rule), so a version bump is a rule
+# change that ships as a NEW tag, never as an edit to an old one.
+# Tag 1 (PRODUCTION): ML-DSA-65 + Ed25519 — RustCrypto `ml-dsa`, pure Rust,
+# final FIPS 204 with the seed entry point `SigningKey::from_seed`.
+ml-dsa = { version = "=0.1.1", default-features = false, features = ["alloc"] }
+# Tag 3 (PREVIEW): FN-DSA-512 + Ed25519 — Thomas Pornin's pure-Rust `fn-dsa`,
+# a "best guess" at the FN-DSA draft; its 0.4.0 keygen and format ARE tag 3's
+# frozen rule (the final FIPS 206 is a later tag; tag 2 stays free for it).
+fn-dsa = "=0.4.0"
+# fn-dsa's signer and keygen draw from a `rand_core` 0.6 RNG (the test signer
+# and the key-derivation golden feed them a seeded stream).
+rand_core_06 = { package = "rand_core", version = "0.6" }
+# THE KDF (the record §5.2 (ii); the KDF PIN): one 32-byte seed to both
+# halves by HKDF-SHA-256 with the algorithm token and the half as the
+# domain-separation labels, never the raw seed.
+hkdf = "0.12"
+sha2.workspace = true
 # OS entropy for nonces and session tokens (AUTH-4.13: at least 128 bits per
 # token from a CryptoRng, never a per-process prefix plus a counter), and
 # the `CryptoRng` bound the auth surface's declared signatures carry.
@@ -94,6 +116,11 @@ tempfile.workspace = true
 ed25519-dalek = "2"
 # The record grammar the ceremony helper encodes enrollments with.
 skep-identity = { path = "../skep-identity" }
+# THE DIFFERENTIAL ORACLE for tag 1 (the PQ investigation §8.4 (4), §8.5 (ii)):
+# a second pure-Rust FIPS 204 implementation the golden checks `ml-dsa`'s
+# keys-from-seed and signatures byte-equal against — the gate every future
+# bump of the pinned crate must pass.
+fips204 = { version = "=0.4.6", default-features = false, features = ["ml-dsa-65"] }
 # H4 property-based op sequences (tests/properties.rs): random-but-valid
 # plans with shrinking; failure seeds persist to proptest-regressions/
 # (pins, same standing as goldens).

@@ -15,6 +15,7 @@
 //! (active) segment has no trusted `lastSeq`: always scanned by recovery,
 //! never range-reclaimed (§1/§6/§7).
 
+use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
@@ -267,12 +268,101 @@ impl TryFrom<MarkerShadow> for Marker {
     }
 }
 
-/// The signature slot's EMPTY tag: unsigned, the one value this build writes.
-/// The pairs the design names — `1` = ML-DSA-65 + Ed25519 (the ruled
-/// default), `2` reserved for FN-DSA-512 + Ed25519 — are the signed-ops
-/// lane's to write and a verifier's to read; a change of pair is a verifier
-/// update, never a stamp bump.
+/// The signature slot's EMPTY tag: unsigned, what every transaction that
+/// carries no [`Attestation`] writes. The pairs the design names — `1` =
+/// ML-DSA-65 + Ed25519 (the ruled default), `3` = FN-DSA-512 + Ed25519 (a
+/// preview; `2` stays free for the final FIPS 206) — are written by
+/// [`crate::Kernel::transact_attested`] under a value the dispatched write
+/// path admitted and read by a verifier beside the table; a change of pair is
+/// a verifier update, never a stamp bump.
 pub(crate) const SIG_ALG_UNSIGNED: u8 = 0;
+
+/// THE ATTESTATION a transaction's commit marker carries (signed ops; the
+/// slot X2 reserved, at its designed use): the TAG of the hybrid pair and
+/// the signature BLOB made under it — the marker's `sig_alg` and `sig`
+/// fields exactly, written where `Some` by [`crate::Kernel::transact_attested`]
+/// for THAT transaction alone and read back by
+/// [`crate::Kernel::attestation_at`]. OPAQUE to this kernel: no byte of the
+/// blob is interpreted here (a signed marker's verification is the
+/// verifier's, beside the table, fold-inert — the fold reads no signature),
+/// the slot is no chain input (the tamper matrix's case 4), and its bytes sit
+/// OUTSIDE [`MAX_TXN_BYTES`]'s accounting (the design record §4.4 (b): the
+/// budget bounds the RECORDS a staging holds; the slot is the marker's own).
+///
+/// The one-spelling-of-empty rule is held at CONSTRUCTION: a value of this
+/// type always names a non-zero tag with a non-empty blob, so no transaction
+/// can write the marker [`MarkerShadow`]'s door refuses — tag `0` with bytes,
+/// or a tag with none — and "unsigned" has exactly one spelling, the absent
+/// value. Which tags exist and what a blob's layout is under each are the
+/// verifier's table, not this kernel's: any non-zero tag and any non-empty
+/// blob are admitted here, as the decoder admits them.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Attestation {
+    sig_alg: u8,
+    sig: Vec<u8>,
+}
+
+impl Attestation {
+    /// An attestation under `sig_alg` with the blob `sig`, refusing the two
+    /// spellings the marker decoder refuses: tag `0` (the empty slot's tag,
+    /// which no signature is made under) and an empty blob.
+    pub fn new(sig_alg: u8, sig: Vec<u8>) -> Result<Attestation, AttestationError> {
+        if sig_alg == SIG_ALG_UNSIGNED {
+            return Err(AttestationError::UnsignedTag);
+        }
+        if sig.is_empty() {
+            return Err(AttestationError::EmptyBlob);
+        }
+        Ok(Attestation { sig_alg, sig })
+    }
+
+    /// The tag of the hybrid pair the blob was made under — the marker's
+    /// `sig_alg` byte.
+    pub fn sig_alg(&self) -> u8 {
+        self.sig_alg
+    }
+
+    /// The signature blob — the marker's `sig` bytes, whole and uninterpreted.
+    pub fn sig(&self) -> &[u8] {
+        &self.sig
+    }
+}
+
+/// The tag and the blob's LENGTH, never its bytes: a signature is not a
+/// thing to print into a diagnostic, and its width beside its tag is what a
+/// reader of one wants to see.
+impl fmt::Debug for Attestation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Attestation")
+            .field("sig_alg", &self.sig_alg)
+            .field("sig_len", &self.sig.len())
+            .finish()
+    }
+}
+
+/// [`Attestation::new`]'s refusal — the two spellings of "no signature" a
+/// caller may not smuggle under a tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AttestationError {
+    /// Tag `0` is the EMPTY slot's tag; a signature is made under no such
+    /// pair. An unsigned transaction carries no `Attestation` at all.
+    UnsignedTag,
+    /// A tag with no bytes is the undecodable marker the door refuses.
+    EmptyBlob,
+}
+
+impl fmt::Display for AttestationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            AttestationError::UnsignedTag => {
+                "an attestation names a non-zero tag: tag 0 is the empty slot's own"
+            }
+            AttestationError::EmptyBlob => "an attestation carries a non-empty signature blob",
+        })
+    }
+}
+
+impl std::error::Error for AttestationError {}
 
 /// THE CHAIN'S GENESIS — chain₀, the value the first transaction of a journal
 /// chains from: thirty-two zero bytes. Named here, read by the writer of a
@@ -482,6 +572,7 @@ fn encode_txn(
     record_bytes: Vec<Vec<u8>>,
     prev_chain: &[u8; 32],
     salt: [u8; 32],
+    attest: Option<&Attestation>,
 ) -> io::Result<(Vec<u8>, [u8; 32])> {
     let n = record_bytes.len() as u64;
     assert!(n > 0, "zero-step ops never reach the journal");
@@ -490,7 +581,7 @@ fn encode_txn(
     // emits, pinned to it by the accounting test. Reserving it is what holds
     // the commit region to the two copies of a transaction's bytes its own
     // contract budgets for — a doubling `Vec` transiently holds a third.
-    let mut buf = Vec::with_capacity(txn_encoded_len(&record_bytes) as usize);
+    let mut buf = Vec::with_capacity(txn_encoded_len(&record_bytes, attest) as usize);
     let mut checksum = 0u32;
     let mut link = ChainLink::open(prev_chain);
     for (i, bytes) in record_bytes.into_iter().enumerate() {
@@ -507,6 +598,14 @@ fn encode_txn(
     }
     let last_seq = first_seq + (n - 1);
     let chain = link.close(txn, last_seq, checksum, &salt);
+    // THE SLOT (signed ops): the attestation's pair, where the transaction
+    // carries one, else the one spelling of empty. Written AFTER the chain is
+    // closed, so the slot is no chain input by construction — a signature
+    // over the entry's content must sit outside the chain that covers it.
+    let (sig_alg, sig) = match attest {
+        Some(a) => (a.sig_alg(), a.sig().to_vec()),
+        None => (SIG_ALG_UNSIGNED, Vec::new()),
+    };
     let payload = codec()
         .serialize(&FramePayload::Marker(Marker {
             txn,
@@ -514,8 +613,8 @@ fn encode_txn(
             records_checksum: checksum,
             salt,
             chain,
-            sig_alg: SIG_ALG_UNSIGNED,
-            sig: Vec::new(),
+            sig_alg,
+            sig,
         }))
         .map_err(invalid_data)?;
     push_frame(&mut buf, &payload)?;
@@ -534,10 +633,18 @@ pub(crate) const RECORD_PAYLOAD_OVERHEAD: u64 = 28;
 /// [`Marker`] payload with its slot EMPTY — tag (4), `txn` (8), `last_seq`
 /// (8), `records_checksum` (4), `salt` (32), `chain` (32), `sig_alg` (1),
 /// `sig`'s length prefix (8): 97, so 109 in all. Pinned alongside
-/// [`RECORD_PAYLOAD_OVERHEAD`]. A constant only while the empty slot has a
-/// value-independent size, which it does; a FILLED slot changes the
-/// accounting at the two sites this seeds, which is the signed-ops lane's to
-/// add.
+/// [`RECORD_PAYLOAD_OVERHEAD`]. The EMPTY slot's pin, and it stays one: a
+/// FILLED slot appends the blob's own bytes after this figure, which the two
+/// sites this seeds treat differently, by design (signed ops, the design
+/// record §4.4 (b)) — [`txn_encoded_len`] counts them, because it is what
+/// [`encode_txn`] EMITS and reserves; [`Journal::commit_txn`]'s budget does
+/// NOT, because the slot sits OUTSIDE [`MAX_TXN_BYTES`]'s accounting: the
+/// budget bounds the RECORDS a staging holds, and an attested transaction
+/// answers no refusal an unattested one would not, a `publish` shot being
+/// unsplittable. What a filled slot moves is the marker frame's own size
+/// (its `len` and CRC), far under [`MAX_FRAME_LEN`] at any tag's width, and
+/// the memory floor M2 promises a replica by the blob's width — the price
+/// the design record states and takes.
 const MARKER_FRAME_LEN: u64 = frame_len(97);
 
 /// What one framed payload occupies in a segment: the header [`push_frame`]
@@ -572,10 +679,14 @@ const fn record_frame_len(record_len: usize) -> u64 {
 
 /// The exact byte length [`encode_txn`] emits for these already-encoded
 /// records: each record frame ([`record_frame_len`]) plus the terminal marker
-/// frame. Saturating, so a sum no allocator could hold refuses as over-budget
-/// rather than wrapping back under the budget.
-pub(crate) fn txn_encoded_len(record_bytes: &[Vec<u8>]) -> u64 {
-    record_bytes.iter().fold(MARKER_FRAME_LEN, |total, bytes| {
+/// frame — the EMPTY marker's pin plus the slot's blob where the transaction
+/// carries an [`Attestation`] (the blob rides inside the marker's `sig` field,
+/// whose length prefix the pin already counts). Saturating, so a sum no
+/// allocator could hold refuses as over-budget rather than wrapping back
+/// under the budget.
+pub(crate) fn txn_encoded_len(record_bytes: &[Vec<u8>], attest: Option<&Attestation>) -> u64 {
+    let marker = MARKER_FRAME_LEN.saturating_add(attest.map_or(0, |a| a.sig().len() as u64));
+    record_bytes.iter().fold(marker, |total, bytes| {
         total.saturating_add(record_frame_len(bytes.len()))
     })
 }
@@ -986,6 +1097,7 @@ impl JournalWriter {
         &mut self,
         first_seq: u64,
         record_bytes: Vec<Vec<u8>>,
+        attest: Option<&Attestation>,
         install: impl FnOnce([u8; 32]),
     ) -> Result<u64, CommitFail> {
         // THE SALT IS DRAWN HERE (`SKJ4`), once per transaction, from the
@@ -995,7 +1107,7 @@ impl JournalWriter {
         // appended, the segment is where the transaction found it, and
         // re-invoking is safe — rather than as a property of the records.
         let salt = self.salt_source.draw(first_seq).map_err(CommitFail::Clean)?;
-        let (buf, chain) = encode_txn(first_seq, record_bytes, &self.chain, salt)
+        let (buf, chain) = encode_txn(first_seq, record_bytes, &self.chain, salt, attest)
             .map_err(|e| CommitFail::Unencodable(Box::new(e)))?;
         self.maybe_rotate(first_seq).map_err(CommitFail::Clean)?;
         let mark = self.len;
@@ -1155,6 +1267,7 @@ impl Journal {
         &mut self,
         first_seq: u64,
         records: Vec<R>,
+        attest: Option<&Attestation>,
         install: impl FnOnce([u8; 32]),
     ) -> Result<u64, CommitFail> {
         assert!(
@@ -1163,6 +1276,10 @@ impl Journal {
              minting a coordinate"
         );
         let mut record_bytes: Vec<Vec<u8>> = Vec::new();
+        // The EMPTY marker's figure, whatever the slot will hold: the
+        // attestation's blob sits OUTSIDE this budget ([`MARKER_FRAME_LEN`]'s
+        // card says why), so an attested transaction and its unattested twin
+        // are judged alike here.
         let mut accounted = MARKER_FRAME_LEN;
         let mut over_budget = false;
         for record in records {
@@ -1188,11 +1305,16 @@ impl Journal {
             return Err(CommitFail::OverBudget { bytes: accounted });
         }
         match self {
+            // No marker exists here, so no slot: the attestation is dropped
+            // with the frames it would have ridden. A fixture that wants to
+            // pin a filled slot is journaled, as the golden is.
             Journal::InMemory => {
                 install(CHAIN_GENESIS);
                 Ok(0)
             }
-            Journal::Segments(writer) => writer.commit_txn(first_seq, record_bytes, install),
+            Journal::Segments(writer) => {
+                writer.commit_txn(first_seq, record_bytes, attest, install)
+            }
         }
     }
 
@@ -1421,6 +1543,11 @@ pub(crate) struct ScanOutcome {
     /// through [`ScanOutcome::chain_at_boundary`], which reads its presence as
     /// the membership test and holds its caller to the bound it is keyed on.
     chain_at_bound: Option<[u8; 32]>,
+    /// The signature slot of the marker closing the bound — `(sig_alg, sig)`
+    /// as the marker carries them — captured beside `chain_at_bound` at the
+    /// same marker and read through [`ScanOutcome::attestation_at_boundary`]
+    /// (signed ops: the slot's read-back, [`crate::Kernel::attestation_at`]).
+    slot_at_bound: Option<(u8, Vec<u8>)>,
 }
 
 /// What a caller halts on: the coordinate naming the damage, and its account
@@ -1504,6 +1631,10 @@ impl ScanOutcome {
             self.chain_head = marker.chain;
             if self.bound == Some(marker.last_seq) {
                 self.chain_at_bound = Some(marker.chain);
+                // The slot, read whole and interpreted not at all: the
+                // decoder admitted it under the one-spelling-of-empty rule,
+                // so a non-zero tag here has bytes and tag 0 has none.
+                self.slot_at_bound = Some((marker.sig_alg, marker.sig.clone()));
             }
         } else if marker.last_seq == self.s_load && marker.chain != self.chain_at_base {
             self.base_mismatch.get_or_insert(self.s_load);
@@ -1639,6 +1770,30 @@ impl ScanOutcome {
             self.s_load
         );
         self.chain_at_bound.ok_or_else(|| self.nearest_boundary_below(at))
+    }
+
+    /// The signature slot of the marker closing the boundary `at` — the
+    /// [`Attestation`] the transaction committed under, or `None` for the
+    /// empty slot — answering [`crate::Kernel::attestation_at`] under the same
+    /// precondition and the same refusal as [`ScanOutcome::chain_at_boundary`]:
+    /// `at` is the bound this scan collected to, above the base, and `Err`
+    /// carries the nearest boundary below where `at` is none.
+    pub(crate) fn attestation_at_boundary(&self, at: u64) -> Result<Option<Attestation>, u64> {
+        assert!(
+            self.bound == Some(at) && at > self.s_load,
+            "attestation at {at} asked of a scan collected to {:?} above {}: the capture is \
+             keyed on the collection bound (Base::scan)",
+            self.bound,
+            self.s_load
+        );
+        match &self.slot_at_bound {
+            None => Err(self.nearest_boundary_below(at)),
+            Some((SIG_ALG_UNSIGNED, _)) => Ok(None),
+            Some((sig_alg, sig)) => Ok(Some(
+                Attestation::new(*sig_alg, sig.clone())
+                    .expect("the decoder admits a non-zero tag only with a non-empty blob"),
+            )),
+        }
     }
 
     /// The committed records a fold over `(s_load, bound]` must apply, in
@@ -1959,6 +2114,7 @@ pub(crate) fn scan(
         base_mismatch: None,
         uncommitted_intact: None,
         chain_at_bound: None,
+        slot_at_bound: None,
     };
     // The scanned-segment index and the BYTE offset just past the last
     // committed marker's frame — where the tail begins. Resolved to a
@@ -2303,7 +2459,7 @@ mod tests {
     /// install into — so the install step is empty.
     fn write_txn(writer: &mut JournalWriter, first: u64, record_bytes: Vec<Vec<u8>>) {
         writer
-            .commit_txn(first, record_bytes, |_| {})
+            .commit_txn(first, record_bytes, None, |_| {})
             .expect("fixture commit");
     }
 
@@ -2489,9 +2645,9 @@ mod tests {
             vec![vec![5u8; 3]],
             vec![rec(u64::MAX), vec![7u8; 300], Vec::new()],
         ] {
-            let expected = txn_encoded_len(&record_bytes);
+            let expected = txn_encoded_len(&record_bytes, None);
             let (buf, _) =
-                encode_txn(u64::MAX - 3, record_bytes, &CHAIN_GENESIS, FIXED_SALT).unwrap();
+                encode_txn(u64::MAX - 3, record_bytes, &CHAIN_GENESIS, FIXED_SALT, None).unwrap();
             assert_eq!(buf.len() as u64, expected);
         }
         // The marker half, stated as the figures the layout doc promises: a
@@ -2503,6 +2659,26 @@ mod tests {
         assert_eq!(empty_marker.len(), 97);
         assert_eq!(MARKER_FRAME_LEN, 109);
         assert_eq!(MARKER_FRAME_LEN, frame_len(empty_marker.len() as u64));
+        // THE FILLED SLOT (signed ops): the accounting gains the blob's own
+        // width and nothing else — the marker frame is the empty pin plus
+        // the blob, the records' frames untouched — pinned at tag 1's ruled
+        // width (3,373 B: ML-DSA-65's 3,309 ‖ Ed25519's 64) and at a
+        // one-byte blob. The BUDGET side does not gain it, which
+        // `a_filled_slot_is_outside_the_transaction_budget` pins.
+        for (tag, width) in [(1u8, 3_373usize), (3u8, 730usize), (9u8, 1usize)] {
+            let attest = Attestation::new(tag, vec![0xA5; width]).unwrap();
+            let record_bytes = vec![rec(u64::MAX), vec![7u8; 300]];
+            let expected = txn_encoded_len(&record_bytes, Some(&attest));
+            assert_eq!(
+                expected,
+                txn_encoded_len(&record_bytes, None) + width as u64,
+                "a filled slot costs its blob's width and nothing else"
+            );
+            let (buf, _) =
+                encode_txn(u64::MAX - 3, record_bytes, &CHAIN_GENESIS, FIXED_SALT, Some(&attest))
+                    .unwrap();
+            assert_eq!(buf.len() as u64, expected, "tag {tag}, a {width}-byte blob");
+        }
         // The per-record half: what push_frame judges is the wrapped payload,
         // the record's own bytes plus RECORD_PAYLOAD_OVERHEAD exactly.
         let payload = codec()
@@ -2528,7 +2704,84 @@ mod tests {
             },
             &payload,
         );
-        assert_eq!(group.accounted, txn_encoded_len(&[vec![1, 2, 3]]));
+        assert_eq!(group.accounted, txn_encoded_len(&[vec![1, 2, 3]], None));
+    }
+
+    /// THE FILLED SLOT IS OUTSIDE THE TRANSACTION BUDGET (signed ops; the
+    /// design record §4.4 (b)): a staging AT the budget commits attested as
+    /// it commits unattested — the blob's width is charged to nothing the
+    /// budget judges — and the same staging one byte past it is refused the
+    /// same way with or without an attestation, the accounted figure the
+    /// records' own. So `transact_attested` answers no refusal `transact`
+    /// would not, which is what lets a `publish` shot — unsplittable — be
+    /// attested at any size it commits unattested.
+    #[test]
+    fn a_filled_slot_is_outside_the_transaction_budget() {
+        let prefix = encode_record(&Vec::<u8>::new()).unwrap().len();
+        let mut journal = Journal::InMemory;
+        let mut installs = 0u32;
+        let attest = Attestation::new(1, vec![0xA5; 3_373]).unwrap();
+        let body = (MAX_TXN_BYTES - txn_encoded_len(&[Vec::new()], None)) as usize - prefix;
+        let at_budget = vec![vec![0u8; body]];
+        assert!(journal.commit_txn(1, at_budget, Some(&attest), |_| installs += 1).is_ok());
+        assert_eq!(installs, 1);
+        let past_budget = vec![vec![0u8; body + 1]];
+        match journal.commit_txn(1, past_budget, Some(&attest), |_| installs += 1) {
+            Err(CommitFail::OverBudget { bytes }) => assert_eq!(bytes, MAX_TXN_BYTES + 1),
+            other => panic!("expected OverBudget, got {other:?}"),
+        }
+        assert_eq!(installs, 1);
+    }
+
+    /// The attestation's two refused spellings, held at construction: tag 0
+    /// (the empty slot's own) and an empty blob — so no transaction can write
+    /// the marker the decoder refuses, and "unsigned" is spelled only by the
+    /// absent value.
+    #[test]
+    fn an_attestation_holds_the_one_spelling_of_empty_at_construction() {
+        assert_eq!(Attestation::new(0, vec![1]), Err(AttestationError::UnsignedTag));
+        assert_eq!(Attestation::new(1, Vec::new()), Err(AttestationError::EmptyBlob));
+        let a = Attestation::new(3, vec![7, 7]).unwrap();
+        assert_eq!((a.sig_alg(), a.sig()), (3, &[7u8, 7][..]));
+        assert_eq!(format!("{a:?}"), "Attestation { sig_alg: 3, sig_len: 2 }");
+    }
+
+    /// A FILLED marker's bytes are the empty layout with the tag and the blob
+    /// in the slot's own place — the tag at byte 88, the length prefix at
+    /// 89..97, the blob after — and no other marker byte moves: the layout
+    /// doc's claim, pinned against the encoder's own output.
+    #[test]
+    fn a_filled_marker_appends_the_blob_after_the_tag_and_moves_no_other_byte() {
+        let blob = vec![0xC3u8; 5];
+        let attest = Attestation::new(1, blob.clone()).unwrap();
+        let records = vec![vec![9u8, 8, 7]];
+        let (empty, chain_e) =
+            encode_txn(2, records.clone(), &CHAIN_GENESIS, FIXED_SALT, None).unwrap();
+        let (filled, chain_f) =
+            encode_txn(2, records, &CHAIN_GENESIS, FIXED_SALT, Some(&attest)).unwrap();
+        assert_eq!(chain_e, chain_f, "the slot is no chain input");
+        let marker_of = |buf: &[u8]| -> Vec<u8> {
+            let Parsed::Intact { payload: first } = parse_frame(buf, 0) else {
+                panic!("record frame")
+            };
+            let Parsed::Intact { payload } = parse_frame(buf, first.end) else {
+                panic!("marker frame")
+            };
+            buf[payload].to_vec()
+        };
+        let (e, f) = (marker_of(&empty), marker_of(&filled));
+        assert_eq!(e.len(), 97);
+        assert_eq!(f.len(), 97 + blob.len());
+        assert_eq!(&f[..88], &e[..88], "every byte before the slot is unmoved");
+        assert_eq!(f[88], 1, "the tag");
+        assert_eq!(&f[89..97], &(blob.len() as u64).to_le_bytes(), "the blob's length prefix");
+        assert_eq!(&f[97..], &blob[..], "the blob, whole");
+        assert_eq!(e[88], SIG_ALG_UNSIGNED);
+        assert_eq!(&e[89..97], &0u64.to_le_bytes());
+        // …and the reader hands it back through the decoder's own door.
+        let decoded = codec().deserialize::<FramePayload>(&f).unwrap();
+        let FramePayload::Marker(m) = decoded else { panic!("a marker") };
+        assert_eq!((m.sig_alg, m.sig), (1, blob));
     }
 
     #[test]
@@ -2546,22 +2799,22 @@ mod tests {
         // caller fixing a value is not first told to split.
         let cap_bytes = (MAX_FRAME_LEN as u64 - RECORD_PAYLOAD_OVERHEAD) as usize;
         let over_frame = vec![vec![0u8; cap_bytes + 1 - prefix]];
-        let out = journal.commit_txn(1, over_frame, |_| installs += 1);
+        let out = journal.commit_txn(1, over_frame, None, |_| installs += 1);
         assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
 
         // At the budget exactly: commits — the refusal begins one past the
         // budget, not at it.
-        let body = (MAX_TXN_BYTES - txn_encoded_len(&[Vec::new()])) as usize - prefix;
+        let body = (MAX_TXN_BYTES - txn_encoded_len(&[Vec::new()], None)) as usize - prefix;
         let at_budget = vec![vec![0u8; body]];
         assert_eq!(
-            txn_encoded_len(&[encode_record(&at_budget[0]).unwrap()]),
+            txn_encoded_len(&[encode_record(&at_budget[0]).unwrap()], None),
             MAX_TXN_BYTES
         );
-        assert!(journal.commit_txn(1, at_budget, |_| installs += 1).is_ok());
+        assert!(journal.commit_txn(1, at_budget, None, |_| installs += 1).is_ok());
 
         // One byte past: OverBudget, carrying the size.
         let past_budget = vec![vec![0u8; body + 1]];
-        match journal.commit_txn(1, past_budget, |_| installs += 1) {
+        match journal.commit_txn(1, past_budget, None, |_| installs += 1) {
             Err(CommitFail::OverBudget { bytes }) => assert_eq!(bytes, MAX_TXN_BYTES + 1),
             other => panic!("expected OverBudget, got {other:?}"),
         }
@@ -2575,10 +2828,10 @@ mod tests {
         let expected = {
             let encoded: Vec<Vec<u8>> =
                 far_over.iter().map(|r| encode_record(r).unwrap()).collect();
-            txn_encoded_len(&encoded)
+            txn_encoded_len(&encoded, None)
         };
         assert!(expected > MAX_TXN_BYTES + record_frame_len(8 + prefix));
-        match journal.commit_txn(1, far_over, |_| installs += 1) {
+        match journal.commit_txn(1, far_over, None, |_| installs += 1) {
             Err(CommitFail::OverBudget { bytes }) => assert_eq!(bytes, expected),
             other => panic!("expected the whole staging accounted, got {other:?}"),
         }
@@ -2601,7 +2854,7 @@ mod tests {
         let past_cap = vec![0u8; cap_bytes + 1 - prefix];
         let mut journal = Journal::InMemory;
         let mut installed = false;
-        let out = journal.commit_txn(1, vec![at_cap, past_cap], |_| installed = true);
+        let out = journal.commit_txn(1, vec![at_cap, past_cap], None, |_| installed = true);
         assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
         assert!(!installed, "a refused transaction installs nothing");
     }
@@ -2632,20 +2885,20 @@ mod tests {
 
         // The encode: a record the serializer refuses, in the mode that would
         // otherwise never encode anything.
-        let out = memory.commit_txn(1, vec![RefusesSerialization], |_| installed = true);
+        let out = memory.commit_txn(1, vec![RefusesSerialization], None, |_| installed = true);
         assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
 
         // The frame cap, which is a property of frames this arm never builds.
         let prefix = encode_record(&Vec::<u8>::new()).unwrap().len();
         let cap_bytes = (MAX_FRAME_LEN as u64 - RECORD_PAYLOAD_OVERHEAD) as usize;
         let over_frame = vec![vec![0u8; cap_bytes + 1 - prefix]];
-        let out = memory.commit_txn(1, over_frame, |_| installed = true);
+        let out = memory.commit_txn(1, over_frame, None, |_| installed = true);
         assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
 
         // The transaction budget, likewise.
         let half = (MAX_TXN_BYTES / 2) as usize;
         let over_budget = vec![vec![0u8; half], vec![0u8; half]];
-        let out = memory.commit_txn(1, over_budget, |_| installed = true);
+        let out = memory.commit_txn(1, over_budget, None, |_| installed = true);
         assert!(matches!(out, Err(CommitFail::OverBudget { .. })), "got {out:?}");
 
         assert!(!installed, "a refused transaction installs nothing");
@@ -2654,7 +2907,7 @@ mod tests {
         // three refusals exist to hold: one judgment, one place, both modes.
         let dir = tempdir().unwrap();
         let mut segments = Journal::Segments(fresh_writer(dir.path()));
-        let out = segments.commit_txn(1, vec![RefusesSerialization], |_| installed = true);
+        let out = segments.commit_txn(1, vec![RefusesSerialization], None, |_| installed = true);
         assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
         assert!(!installed, "a refused transaction installs nothing");
     }
@@ -2906,7 +3159,7 @@ mod tests {
         // the marker's chain included, computed here by hand from the bytes
         // `ChainLink` says it covers — the salt last — so the formula is
         // pinned beside the layout and not only by the golden fixture.
-        let (buf, chain) = encode_txn(2, vec![vec![9u8, 8, 7]], &CHAIN_GENESIS, FIXED_SALT).unwrap();
+        let (buf, chain) = encode_txn(2, vec![vec![9u8, 8, 7]], &CHAIN_GENESIS, FIXED_SALT, None).unwrap();
 
         let mut expected_record = Vec::new();
         expected_record.extend_from_slice(&0u32.to_le_bytes()); // FramePayload::Record
@@ -3265,7 +3518,7 @@ mod tests {
         let mut writer = fresh_writer(dir.path());
         let mut installed = None;
         writer
-            .commit_txn(1, vec![rec(10)], |chain| installed = Some(chain))
+            .commit_txn(1, vec![rec(10)], None, |chain| installed = Some(chain))
             .expect("fixture commit");
         let installed = installed.expect("the commit installs before it returns");
         // …and hands the install the chain the marker on disk carries.
@@ -3284,7 +3537,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let mut writer = fresh_writer(dir.path());
         let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = writer.commit_txn(1, vec![rec(10)], |_| panic!("install unwinds"));
+            let _ = writer.commit_txn(1, vec![rec(10)], None, |_| panic!("install unwinds"));
         }));
         assert!(unwound.is_err(), "the panic reaches the caller");
         let repair = writer.repair_after_unwind();

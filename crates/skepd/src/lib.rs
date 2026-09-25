@@ -91,6 +91,13 @@ pub mod fuzz_support;
 pub use auth::{
     AuthOptions, NodePrefix, NotANodePrefix, NotCanonical, Origin, PortAlreadyBound,
 };
+/// THE HYBRID ENTRY SIGNATURE's rules (signed ops): the KDF from one seed to
+/// both halves, keygen and signing per marker tag — the test signer's and the
+/// goldens' side — and the verify the daemon's write-path check dispatches
+/// on. Public because the signer's side lives beside the verifier's in the
+/// one crate that links the signature libraries (AUTH-2.2), and the suites
+/// and a future client reach it here.
+pub use auth::hybrid;
 pub use codec::JsonCodec;
 pub use server::{
     body_cap, serve, Body, Daemon, DaemonError, HttpRequest, Peer, Reply, Routed, Skepd,

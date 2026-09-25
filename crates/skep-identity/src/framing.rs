@@ -60,10 +60,21 @@ pub const SESSION_TAG_V2: Tag = Tag(b"skep-session-v2");
 /// constant (AUTH-2.118).
 pub const NODE_HELLO_TAG: Tag = Tag(b"skep-node-hello-v1");
 
+/// THE ENTRY FRAME's tag (signed ops; the design record §2.5, §4.2 (C)): the
+/// bytes a publish-class entry's signature is made over —
+/// `framed(ENTRY_TAG, [alg, board, account, doc, op, body])`, composed by
+/// [`crate::entry_frame`] — signed at the entry's own write by the acting
+/// hand and verified by the daemon before the commit and by any reader
+/// beside the table. The tag is the frame's whole domain separation: FIPS
+/// 204's `ctx` and FN-DSA's domain context are EMPTY under every marker tag
+/// (the seam build's CTX PIN), so nothing but this tag tells an entry
+/// signature from a session's or a key fingerprint's preimage.
+pub const ENTRY_TAG: Tag = Tag(b"skep-entry-v1");
+
 /// The declared tag set (AUTH-1.11). Every tag begins `skep-` and no tag is
 /// a prefix of another (AUTH-1.15); the conformance assertion ranging over
 /// this value is the I2 obligation AUTH-2.93 pins.
-pub const TAGS: &[Tag] = &[KEY_TAG, SESSION_TAG, SESSION_TAG_V2, NODE_HELLO_TAG];
+pub const TAGS: &[Tag] = &[KEY_TAG, SESSION_TAG, SESSION_TAG_V2, NODE_HELLO_TAG, ENTRY_TAG];
 
 /// AUTH-1.12 — `framed(tag, fields)` produces
 /// `tag ‖ (per field f, in order: be32(len(f)) ‖ f)`, where `be32` is the

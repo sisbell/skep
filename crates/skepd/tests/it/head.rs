@@ -11,6 +11,14 @@
 //! times — the chain's open items, item 2), so every reading here is set
 //! relative to [`clock_origin`]; the hour-survives-a-restart test moves the
 //! RECORD, not the clock.
+//!
+//! THE FIRST HEAD IS THE CLAIM'S (signed ops, s1; RULED 2026-09-25): `spawn`
+//! returns a board whose `H.1` the claim's own step wrote, naming the claim's
+//! position, so the first head a test FORCES here is `H.2`, every `prev`
+//! chain starts at the claim's head, and the cadence's counters start from it;
+//! the positions the determinism pins name include `H.1`'s eight records. The
+//! claim's own rule — one head, at the claim, the cadence counting from it, and
+//! none on the unclaimed board — has its own cells under (vi).
 
 use crate::common;
 
@@ -216,8 +224,8 @@ fn the_count_trigger_writes_a_head_at_the_64th_non_head_commit() {
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
     let mut clock = clock_origin();
 
-    // A first head off the time bound gives a known reset point: the count
-    // trigger is then exactly 64 commits from here.
+    // A head off the time bound (`H.2` — `H.1` is the claim's) gives a known
+    // reset point: the count trigger is then exactly 64 commits from here.
     force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
     let head1 = head_record(port, H).expect("a first head").clone();
     let p1 = head1["position"].as_u64().unwrap();
@@ -761,7 +769,7 @@ fn the_hour_since_the_last_head_survives_a_restart() {
 /// head's own among them, since with their `"system"` testimony gone nothing
 /// tells them from the rest. So the next head comes EARLY by at most the
 /// head's own commits (three at a first head: the staging draft's mint, the
-/// insert, the publish) and never late: 40 commits after a head, the loss, a
+/// insert, the publish; two after it) and never late: 40 commits after a head, the loss, a
 /// restart, and the next head comes no sooner than the 21st commit after it
 /// and no later than the 24th — never at the 64th, where a resume that
 /// started the count at zero would put it, 104 commits past the last head.
@@ -822,57 +830,66 @@ fn a_lost_sidecar_counts_the_commits_the_journal_shows_landed() {
 /// again after a restart (PUB-6.65: the head reaches `H` and the system
 /// account's own staging draft and NO other document; the writer resumes by
 /// reading). Pinned by the journal's own arithmetic, in RECORDS as `/health`
-/// counts them: a head that had to mint the draft costs exactly one document
-/// mint more than a head that found it, and a document mint's cost is measured
-/// here on this build rather than assumed.
+/// counts them: the board's FIRST head — the claim's own, `H.1` (s1), which
+/// mints the draft — costs exactly one document mint more than a head that
+/// found it, on the same uptime and on the next, and a document mint's cost
+/// is measured here on this build rather than assumed.
 #[test]
 fn a_restarted_writer_finds_the_staging_draft_it_minted_and_mints_no_other() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut clock = clock_origin();
 
-    let (first_head_cost, mint_cost) = {
-        let sd = spawn(dir.path());
+    let (first_head_cost, later_head_cost, mint_cost) = {
+        // The claim made by hand, so `H.1`'s own records — the draft's mint,
+        // the atom's insert, the publish shot — are measured off the claim's
+        // ack: everything the claim's request committed above the claim.
+        let sd = spawn_unclaimed(dir.path());
         let port = sd.port();
-        let owner = open_session(port, CLAIMANT_PRINCIPAL);
+        ceremony_before_the_claim(port);
+        let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+        let claim_at = acked_at(&op(port, Some(&signed), &claim_frame(CLAIMANT_DOC1, CLAIMANT_ACCOUNT)));
+        let first_head_cost = health(port).0 - claim_at;
         // One plain document mint, measured: what one `create_new_document`
         // adds to the position on this build.
+        let owner = open_session(port, CLAIMANT_PRINCIPAL);
         let before = health(port).0;
         commit(port, &owner, CLAIMANT_ACCOUNT);
         let mint_cost = health(port).0 - before;
-        // The board's FIRST head: the triggering mint, the draft's mint, the
-        // atom's insert, the publish shot.
-        let before = health(port).0;
-        force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
-        let first_head_cost = health(port).0 - before;
+        // A later head on the SAME uptime, measured off its trigger's ack:
+        // the atom's insert and the publish shot, the draft found.
+        let trigger = force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
+        let later_head_cost = health(port).0 - trigger;
         sd.shutdown();
-        (first_head_cost, mint_cost)
+        (first_head_cost, later_head_cost, mint_cost)
     };
+    assert_eq!(
+        later_head_cost + mint_cost,
+        first_head_cost,
+        "the claim's H.1 minted the draft; the next head on the same uptime reused it"
+    );
 
-    // The second uptime's head: the same, LESS the draft's mint — the writer
-    // found doc 3 at open.
+    // The second uptime's head: the same, the draft found at open.
     let sd = spawn(dir.path());
     let port = sd.port();
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
-    let before = health(port).0;
-    force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
-    let second_head_cost = health(port).0 - before;
+    let trigger = force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
+    let second_uptime_head_cost = health(port).0 - trigger;
     assert_eq!(
-        second_head_cost + mint_cost,
-        first_head_cost,
-        "the second uptime's head minted no draft: it reused the one the first minted"
+        second_uptime_head_cost, later_head_cost,
+        "the second uptime's head minted no draft: it reused the one the claim's head minted"
     );
     sd.shutdown();
 }
 
 /// The staging draft is minted ONCE FOR THE LIFE OF THE BOARD — the half the
-/// restart test above cannot see, since it writes one head per uptime: three
-/// heads in ONE uptime leave exactly one document under the system account
-/// beyond the seed's two. `1.1.0.1.0.3` is the draft — registered and
-/// private, so the guest is `withheld` — and `1.1.0.1.0.4` was never minted,
-/// so the guest is told `doc_not_registered`. Named rather than measured: a
-/// writer that forgot the draft it minted this uptime would mint a private
-/// document per head for as long as it runs, and no guest-visible entry
-/// would name one.
+/// restart test above cannot see, since it writes one head per uptime: four
+/// heads in ONE uptime — the claim's `H.1` and three forced — leave exactly
+/// one document under the system account beyond the seed's two.
+/// `1.1.0.1.0.3` is the draft — registered and private, so the guest is
+/// `withheld` — and `1.1.0.1.0.4` was never minted, so the guest is told
+/// `doc_not_registered`. Named rather than measured: a writer that forgot the
+/// draft it minted this uptime would mint a private document per head for as
+/// long as it runs, and no guest-visible entry would name one.
 #[test]
 fn every_head_in_one_uptime_reuses_the_one_staging_draft() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -884,7 +901,7 @@ fn every_head_in_one_uptime_reuses_the_one_staging_draft() {
     for _ in 0..3 {
         force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
     }
-    assert!(head_record(port, &head_member(3)).is_some(), "three heads were written");
+    assert!(head_record(port, &head_member(4)).is_some(), "four heads were written: the claim's and three");
     assert_withheld(&doc_metadata(port, None, STAGING_DRAFT), STAGING_DRAFT);
     let next = doc_metadata(port, None, "1.1.0.1.0.4");
     assert_eq!(
@@ -900,7 +917,8 @@ fn every_head_in_one_uptime_reuses_the_one_staging_draft() {
 /// (ii) — each head's position is strictly below its own commit's position;
 /// consecutive positions strictly increase; the second head's `prev` is the
 /// first's pair; and `chain_head()` right after a head differs from the head's
-/// own `chain` (it names a coordinate before its own commits).
+/// own `chain` (it names a coordinate before its own commits). The first head
+/// is the claim's `H.1` (s1), read as `spawn` left it; the second is forced.
 #[test]
 fn a_head_names_a_coordinate_strictly_below_its_own_commit() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -909,13 +927,14 @@ fn a_head_names_a_coordinate_strictly_below_its_own_commit() {
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
     let mut clock = clock_origin();
 
-    let p1 = force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
     let head1 = expect_latest_head(port);
-    assert_eq!(head1["position"].as_u64().unwrap(), p1);
+    assert_eq!(head1, head_record(port, &head_member(1)).expect("H.1"), "the latest head is the claim's H.1");
+    let p1 = head1["position"].as_u64().unwrap();
+    assert_eq!(p1, CLAIM_POSITION, "H.1 names the claim's position");
     assert!(head1["prev"].is_null(), "the first head's prev is null: {head1}");
     let chain1 = head1["chain"].as_str().unwrap().to_string();
 
-    // The head's own two commits advanced the log past the position it named,
+    // The head's own commits advanced the log past the position it named,
     // and advanced the chain off the value it named.
     let (pos_after, chain_after) = health(port);
     assert!(pos_after > p1, "the head's own commits land strictly above the position it names");
@@ -924,6 +943,7 @@ fn a_head_names_a_coordinate_strictly_below_its_own_commit() {
     let p2 = force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
     let head2 = expect_latest_head(port);
     assert!(p2 > p1, "consecutive head positions strictly increase");
+    assert_eq!(head2["position"].as_u64(), Some(p2), "the second head names its trigger");
     let prev = &head2["prev"];
     assert_eq!(prev["position"].as_u64(), Some(p1), "the second head's prev.position is the first's");
     assert_eq!(prev["chain"].as_str(), Some(chain1.as_str()), "prev.chain is the first head's chain");
@@ -942,13 +962,14 @@ fn a_peer_re_reads_a_saved_head_byte_equal_and_walks_prev() {
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
     let mut clock = clock_origin();
 
+    // Three forced heads after the claim's H.1: H.2, H.3, H.4.
     for _ in 0..3 {
         force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
     }
     // The peer saves H.2 — its address and its exact bytes (a guest read).
     let saved = atom_str(port, &head_member(2)).expect("H.2 exists");
 
-    // More history: two further heads.
+    // More history: two further heads, H.5 and H.6.
     for _ in 0..2 {
         force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
     }
@@ -958,8 +979,9 @@ fn a_peer_re_reads_a_saved_head_byte_equal_and_walks_prev() {
 
     // Walk `prev` from the latest head down to H.2, each step landing on the
     // member one lower and matching the (position, chain) its successor names.
-    let latest = expect_latest_head(port); // H.5
-    let mut k = 5u64;
+    let latest = expect_latest_head(port); // H.6: the claim's H.1 and five forced
+    assert_eq!(latest, head_record(port, &head_member(6)).expect("H.6"), "the latest head is H.6");
+    let mut k = 6u64;
     let mut cur = latest;
     while k > 2 {
         let prev = cur["prev"].clone();
@@ -981,16 +1003,16 @@ fn a_peer_re_reads_a_saved_head_byte_equal_and_walks_prev() {
 /// under one seed name one wrong value, two seeds two, `prev` copies it
 /// faithfully, and it still differs from `/health` after the head's commits.
 /// `H.1` is in the set on purpose — that head alone mints the staging draft
-/// between reading its pair and writing its record.
+/// between reading its pair and writing its record, and it is the CLAIM's own
+/// (s1), written inside the claim's request.
 #[test]
 fn every_head_names_the_pair_the_boards_recomputation_answers() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
+    let sd = spawn(dir.path()); // H.1: the claim's, minting the draft
     let port = sd.port();
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
     let mut clock = clock_origin();
 
-    force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock); // H.1: mints the draft
     sd.daemon().checkpoint_now();
     commit(port, &owner, CLAIMANT_ACCOUNT); // H.2: the checkpoint's, naming a base
     force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock); // H.3
@@ -1028,12 +1050,11 @@ fn a_restored_tail_cut_drops_the_later_head_and_regrows_a_different_one() {
     let backup = tempfile::tempdir().expect("tempdir");
     let mut clock = clock_origin();
 
-    // Head k−1 = H.1, then snapshot the data dir.
+    // Head k−1 = H.1 — the claim's own (s1) — then snapshot the data dir.
     {
         let sd = spawn(live.path());
-        let owner = open_session(sd.port(), CLAIMANT_PRINCIPAL);
-        force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock); // H.1
         assert!(head_record(sd.port(), &head_member(1)).is_some(), "H.1 exists");
+        assert!(head_record(sd.port(), &head_member(2)).is_none(), "and no H.2 yet");
         sd.shutdown();
     }
     copy_dir(live.path(), backup.path());
@@ -1184,16 +1205,18 @@ fn the_claim_floor_is_untouched_and_the_system_id_is_not_fresh() {
 }
 
 /// (vi) — THE CLAIM'S OWN TURN CAN WRITE A HEAD, and the claim still
-/// completes. PUB-6.65's cadence gates nothing on the claim, so the claim's
-/// `commit_under` gives the head writer its turn like any session write's,
-/// and where the hour has passed before the ceremony's last step the head's
-/// own commits land between the claim and the claim flip's tail — the one
-/// kind of commit that can, as `Daemon::on_claim_flip` states. The claim
-/// answers its own ack at its own position and the board is claimed: the
-/// fold's post-commit step reads a world holding the head's commits and
-/// honours the deposit its gate honoured (`IdentityFold::step_committed`'s
-/// premise — a firing assert would answer this claim `500 internal_panic` in
-/// a debug build).
+/// completes — AND THEN THE CLAIM WRITES NO SECOND ONE. PUB-6.65's cadence
+/// gates nothing on the claim, so the claim's `commit_under` gives the head
+/// writer its turn like any session write's, and where the hour has passed
+/// before the ceremony's last step the head's own commits land between the
+/// claim and the claim flip's tail — the one kind of commit that can, as
+/// `Daemon::on_claim_flip` states. The claim answers its own ack at its own
+/// position and the board is claimed: the fold's post-commit step reads a
+/// world holding the head's commits and honours the deposit its gate
+/// honoured (`IdentityFold::step_committed`'s premise — a firing assert would
+/// answer this claim `500 internal_panic` in a debug build). The flip's own
+/// `H.1` (s1) then finds a head standing and writes nothing: `H.1` is the
+/// cadence's, at the claim's position, and there is no `H.2`.
 #[test]
 fn the_claims_own_turn_can_write_a_head_and_the_claim_still_completes() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1213,6 +1236,91 @@ fn the_claims_own_turn_can_write_a_head_and_the_claim_still_completes() {
     );
     let (live, _) = health(port);
     assert!(live > at, "the head's own commits landed past the claim's position: {live} > {at}");
+    assert_eq!(rec, head_record(port, &head_member(1)).expect("H.1"), "the cadence's head IS H.1");
+    assert!(head_record(port, &head_member(2)).is_none(), "the claim's step wrote no second head");
+    assert_eq!(live, at + H1_RECORDS, "one head's records above the claim, not two heads'");
+    sd.shutdown();
+}
+
+/// (vi) — THE CLAIM WRITES `H.1` (signed ops, s1; RULED 2026-09-25), EXACTLY
+/// ONE, AT THE CLAIM'S OWN POSITION, AND THE CADENCE COUNTS FROM IT. A board
+/// `spawn` claims has its first head at the claim's ack — `H.1` naming the
+/// claim link's position, `prev` null, `base` null — and no `H.2`; the head's
+/// three commits (the staging draft's mint, the record's insert, the publish
+/// shot: eight records) are the whole distance from the claim to the live
+/// head; and with the clock frozen and no checkpoint taken, the 64th commit
+/// after the claim writes `H.2` naming itself, with `prev` the claim's head —
+/// the count trigger resumed at zero by the claim's head, not by anything a
+/// test forced.
+#[test]
+fn the_claim_writes_exactly_one_head_at_its_own_position_and_the_cadence_counts_from_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    let h1 = head_record(port, &head_member(1)).expect("H.1 at the claim");
+    assert_eq!(h1["position"].as_u64(), Some(CLAIM_POSITION), "H.1 names the claim's position: {h1}");
+    assert!(h1["prev"].is_null(), "the first head: prev null: {h1}");
+    assert!(h1["base"].is_null(), "no checkpoint yet: base null: {h1}");
+    assert_eq!(expect_latest_head(port), h1, "the latest head IS H.1");
+    assert!(head_record(port, &head_member(2)).is_none(), "exactly one head");
+    let (live, _) = health(port);
+    assert_eq!(live, CLAIM_POSITION + H1_RECORDS, "the head's three commits above the claim, and nothing else");
+
+    // The cadence from H.1: the clock frozen at the claim's own reading (so
+    // trigger (c) cannot fire), no checkpoint (so (b) cannot) — only the
+    // count, and only on the 64th landed commit after the claim.
+    sd.daemon().set_head_writer_clock_millis(clock_origin());
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let mut last_at = 0;
+    for i in 1..=64u64 {
+        last_at = commit(port, &owner, CLAIMANT_ACCOUNT);
+        if i < 64 {
+            assert!(
+                head_record(port, &head_member(2)).is_none(),
+                "no H.2 before the 64th commit after the claim (at commit {i})"
+            );
+        }
+    }
+    let h2 = head_record(port, &head_member(2)).expect("H.2 at the 64th commit since the claim's head");
+    assert_eq!(h2["position"].as_u64(), Some(last_at), "H.2 names the 64th commit: {h2}");
+    assert_eq!(h2["prev"]["position"].as_u64(), Some(CLAIM_POSITION), "its prev is the claim's head: {h2}");
+    assert_eq!(h2["prev"]["chain"], h1["chain"], "…by chain too");
+    assert_eq!(expect_latest_head(port), h2);
+    sd.shutdown();
+}
+
+/// (vi) — THE UNCLAIMED BOARD WRITES NO HEAD AT STARTUP (A1/A5: no head by a
+/// claim that did not happen): a fresh board, the same board after the
+/// ceremony's first four steps, and that board restarted have no member of
+/// `H` — the open's crash-window repair keys on the claim, and the cadence on
+/// its triggers, neither of which the unclaimed board has met. The claim
+/// then writes it, at the claim's position — the one transition the rule
+/// keys on.
+#[test]
+fn the_unclaimed_board_writes_no_head_at_startup() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    {
+        let sd = spawn_unclaimed(dir.path());
+        let port = sd.port();
+        assert!(head_record(port, H).is_none(), "a fresh board: no head");
+        ceremony_before_the_claim(port);
+        assert!(head_record(port, H).is_none(), "four steps of the ceremony: no head");
+        sd.shutdown();
+    }
+    let sd = spawn_unclaimed(dir.path());
+    let port = sd.port();
+    assert!(!claimed(port), "still unclaimed after the restart");
+    assert!(head_record(port, H).is_none(), "restarted unclaimed: the open wrote no head");
+    assert_eq!(health(port).0, CLAIM_POSITION - 3, "the four steps' records, and no more");
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let at = acked_at(&op(port, Some(&signed), &claim_frame(CLAIMANT_DOC1, CLAIMANT_ACCOUNT)));
+    assert_eq!(at, CLAIM_POSITION);
+    assert_eq!(
+        head_record(port, &head_member(1)).expect("H.1")["position"].as_u64(),
+        Some(at),
+        "the claim wrote H.1 at its own position"
+    );
     sd.shutdown();
 }
 
@@ -1279,10 +1387,11 @@ fn the_head_is_guest_readable_its_feed_entry_is_system_and_the_draft_is_masked()
 #[test]
 fn genesis_seeds_the_system_account_documents_born_published() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
+    let sd = spawn_unclaimed(dir.path());
     let port = sd.port();
     // doc-metadata on H, as the guest: registered, published, owned by the
-    // system account — before any head has been written.
+    // system account — before any head has been written (unclaimed, so the
+    // claim's own H.1 has not: the seed alone).
     let v = op(port, None, &format!(r#"{{"op":"doc_metadata","doc":"{H}"}}"#));
     assert_eq!(v["resp"].as_str(), Some("doc_metadata"), "H is a registered document at genesis: {v}");
     assert_eq!(v["published"].as_bool(), Some(true), "H is born published: {v}");
@@ -1344,14 +1453,24 @@ fn board_under(dir: &Path, seed: Option<u64>) -> Board {
     Board { trigger, live_head, chains, bytes }
 }
 
-/// THE POSITIONS AS THEY WERE BEFORE THE SALT, pinned: the head names the
-/// triggering commit — the ceremony's commits, three creates and the fourth —
-/// and the live head is that plus the head's own insert and publish. The
-/// salt adds no record and moves no coordinate, and these are the figures
-/// the same ops produced at `d77bfa4`, before it; a position moving here is
-/// a STOP, not a number to update.
-const TRIGGER_POSITION: u64 = 16;
-const LIVE_HEAD_POSITION: u64 = 24;
+/// The claim link's position on a fresh board — the ceremony's fifth commit
+/// (wire.md §A first board: positions 2, 3, 6, 9, 12) — and `H.1`'s records
+/// above it: the staging draft's mint (1), the head record's insert (3), the
+/// publish shot into `H` (4). `H.1` is the claim's own (signed ops, s1).
+const CLAIM_POSITION: u64 = 12;
+const H1_RECORDS: u64 = 8;
+
+/// THE POSITIONS, pinned: the head names the triggering commit — the
+/// ceremony's commits (12), the claim's own `H.1` (8 records: 20), three
+/// creates and the fourth (24) — and the live head is that plus the head's own
+/// insert and publish (31; the staging draft was minted at `H.1`). The salt
+/// adds no record and moves no coordinate: the same ops produced 16 and 24 at
+/// `d77bfa4`, before it, and again after it, until s1 (2026-09-25) moved the
+/// first head into the claim's own step — the one re-pin, by `H.1`'s eight
+/// records ahead of the creates, the forced head being `H.2` with the draft
+/// already minted. A position moving here is a STOP, not a number to update.
+const TRIGGER_POSITION: u64 = CLAIM_POSITION + H1_RECORDS + 4;
+const LIVE_HEAD_POSITION: u64 = TRIGGER_POSITION + 7;
 
 /// (viii) — two daemons over ONE op sequence write byte-identical heads. The
 /// head record carries no timestamp and no board-unique term, so identical

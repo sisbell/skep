@@ -33,7 +33,13 @@
 //! world then reads the head's records beside its own, and pays their fsyncs
 //! under whatever locks it holds, the credential write lock included. The
 //! head's own writes take [`WritePath::commit_recorded`], the protocol
-//! alone; the door is the whole difference between the two.
+//! alone; the door is the whole difference between the two. And ONCE, the
+//! head is not the cadence's but the CLAIM's (signed ops, s1): the write that
+//! claims the board is followed, under the same guard and before any later
+//! write is admitted, by the board's first head `H.1`
+//! ([`WritePath::first_head`]) — the pair every attested write's entry frame
+//! names the board by — and a daemon that opens a claimed board with no head
+//! writes it there, before it serves.
 //!
 //! The read/write partition is M10's own `Op::is_read`. A read is exactly an
 //! `Op` the change feed has nothing to record, so [`write_meta`] answers
@@ -51,6 +57,8 @@ use skep_febe::{Op, OpKind, Response, Stores};
 use skep_kernel::Seq;
 
 mod head;
+
+pub(crate) use head::board_pair;
 
 use crate::codec::op_name;
 use crate::feed::{ChangesAnswer, Feed, FeedClass, Query};
@@ -172,6 +180,20 @@ impl WritePath {
     /// without a `sleep`. Not a stable API.
     pub(crate) fn set_head_writer_clock_millis(&self, millis: u64) {
         self.head_writer.set_clock_millis(millis);
+    }
+
+    /// THE CLAIM'S HEAD (signed ops, s1; RULED 2026-09-25): the board's first
+    /// head `H.1`, written now under the caller's serialization guard through
+    /// the head writer's own door, whatever the cadence says — a no-op on a
+    /// board that has a head. Two callers, both the daemon's: the claim-flip
+    /// tail, under the guard the claim itself committed under, so the head
+    /// names the claim's own position and no write lands between the two;
+    /// and the open, on a claimed board whose journal holds no head — the
+    /// crash window between the claim's transaction and the head's. `true`
+    /// iff a head landed. Nothing else about a head moves:
+    /// [`HeadWriter::first_turn`] states the rule.
+    pub(crate) fn first_head(&self, serial: &SerialGuard<'_>) -> bool {
+        self.head_writer.first_turn(self, serial)
     }
 
     /// Take the write-serialization lock ALONE — for the auth write

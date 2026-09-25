@@ -517,7 +517,22 @@ order — `anchor` a REQUIRED boolean marking an anchor key (the flag is
 fixed for the fingerprint's lifetime), `label` OPTIONAL (present only
 where a label exists, never empty, never containing a newline). The
 optional `sig` member is reserved, canonically LAST, and IGNORED
-whatever it holds. The canonical encoding pins members in schema order,
+whatever it holds. `alg` is an `ALGS` token, matched as bytes,
+lowercase, and the token set is frozen (adding one is a coordinated
+grammar upgrade): `ed25519` (a 32-byte key, 64 hex — a classical key,
+which opens sessions and signs no entry); and, since signed ops, the two
+HYBRID tokens, each ONE entry over ONE concatenated raw value — the
+post-quantum public key THEN the Ed25519 public key — with one
+fingerprint and one label per sheet: `mldsa65-ed25519` (ML-DSA-65 +
+Ed25519, 1,952 + 32 = 1,984 bytes, 3,968 hex; the PRODUCTION entry
+signature, the marker tag `1`) and `fndsa512-preview-ed25519`
+(FN-DSA-512 + Ed25519 under `fn-dsa` 0.4.0's pre-standard format, 897 +
+32 = 929 bytes, 1,858 hex; a PREVIEW, the marker tag `3` — tag `2` stays
+free for the final FIPS 206). A hybrid entry opens sessions under its
+Ed25519 half and signs entries (the `attest` member, §Operations) under
+both halves; each tag names one exact, frozen verification rule and one
+frozen keygen-from-seed rule, never edited — a change to what verifies,
+or to what a seed derives, is a new tag and a new token. The canonical encoding pins members in schema order,
 no whitespace outside strings, lowercase hex, the shortest JSON escapes
 and no others, and no byte after the closing brace — a record is
 admitted only where its bytes are that encoding of every member it
@@ -1169,7 +1184,8 @@ encode, but the transaction as a whole exceeds the kernel's
 per-transaction byte budget — permanent; split the request), `poisoned`.
 
 Credentials: `credential_refused` — the auth work's one new code,
-always `permanent`, always carrying a machine `detail` token
+always carrying a machine `detail` token, and `permanent` at every token
+but the two attestation tokens, which carry their own classes
 (§Credential refusals below).
 
 Registration/residence: `home_not_registered`, `doc_not_registered`,
@@ -1413,13 +1429,46 @@ the origin withheld:
 ### Credential refusals
 
 Every `credential_refused` is the ordinary `rejected` shape with
-`disposition: "permanent"` uniformly and `detail` carrying exactly one
+`disposition: "permanent"` uniformly — the two attestation codes below
+excepted, each carrying its own class — and `detail` carrying exactly one
 machine token — key client behavior on the token, never on prose. A
 bare session depositing a credential on a claimed board, for example:
 
 ```json
 {"code":"credential_refused","detail":"signed_session_required","disposition":"permanent","op":"make_link","resp":"rejected"}
 ```
+
+**The two attestation codes** (signed ops; the write-path check, which
+runs on every CLAIMED board, with no operator switch, on a dispatched
+publish-class `insert`, `make_link` or `publish` ABOVE the claim entry,
+from a signed session, BEFORE the transaction — beside the publish-class
+gate below, after it, and ahead of the store's own gates):
+
+* `attestation_required` — the write carries no `attest` member.
+  Disposition REORDER: the answer is a different request, the same
+  content signed and attached — under ATTACH WHEN IN DOUBT the ordinary
+  path, since the publish class is the daemon's classification over the
+  resolved publication state and not a property of an op kind. An
+  `attest` on a write outside the class, or on the UNCLAIMED board, is
+  DROPPED — never verified, never written, never refused.
+* `attestation_invalid:<cause>` — the `attest` does not verify; the
+  `detail` is the code joined to its cause: `signature` (no enrolled key
+  of the algorithm verifies both halves over the frame the daemon
+  composed — wrong bytes, a wrong `board` term, a body composed
+  otherwise; REORDER, re-compose), `not_enrolled_at_position` (the set
+  that opens the writer's account as of the write's base holds no key of
+  the algorithm — an empty set included; PERMANENT, no retry under that
+  key succeeds), `malformed` (the blob is not the tag's fixed width;
+  REORDER), `board_unavailable` (the board has no `H.1`, so the frame's
+  `board` term has no value — unreachable on a claimed board in normal
+  operation, since the claim writes `H.1` in its own step and a daemon
+  opening a claimed board whose journal holds no head writes it before it
+  serves; it names a journal damaged below `H.1`; REORDER).
+
+Every publish-class write of the three ops on a claimed board is judged;
+the system account's own writes (the head document's, owned by
+`1.1.0.1`) are exempt by ownership and never dispatched. Every other
+write, and every write at or below the claim, answers as before.
 
 The write order, as built. `unauthenticated` is slot 0 on every path: a
 guest write (no token, unknown token, dead entry) answers M10's own
@@ -1822,6 +1871,22 @@ bytes, and one non-UTF-8 composite — eighteen positions:
 {"at":{"ordinal":"1","subspace":"1"},"doc":"1.0.1.0.1","op":"insert","values":["per-byte text ",{"atom":"one indivisible value"},{"hex":"c328"},{"atom_hex":"00ff"}]}
 ```
 
+The optional top-level `attest` member — `{"alg": <an ALGS token>,
+"sig": <hex>}` — is THE ENTRY SIGNATURE (signed ops): on a CLAIMED
+board an `insert` that lands in the published world must carry one,
+made by a hybrid key enrolled on the writer's account as of the write's
+base over the entry frame `framed("skep-entry-v1", [alg, board,
+account, doc, op, body])` — `board` the head document `H.1`'s
+`(position, chain)` pair (§The other endpoints), `account` the writer's
+account, `doc` the document's trunk, `op` `insert`, `body` the declared
+type and the values placed with their count — and the daemon verifies it
+BEFORE the transaction (§Credential refusals: `attestation_required`,
+`attestation_invalid`) and writes it into that commit's marker slot. A
+declared deposit of a credential kind is the one `insert` this does not
+reach: its signature is the record's own `sig` member. Below the claim
+the member is dropped unread; a daemon that predates it refuses it as
+an unknown field.
+
 The optional `deposit` field is the **deposit declaration** (v7.2;
 PUB-2.59, PUB-9.13), and ITS VALUE IS THE RECORD CLASS's TYPE (PUB-2.11,
 PUB-2.64): a type ADDRESS string, saying this insert is a record atom of
@@ -1926,6 +1991,15 @@ copy took, both present or neither (neither is the birth version);
 `draft` names the staging draft whose runs are re-inserted as fresh
 identity under `doc`'s own I-space; each run is `origin`, `i_start`,
 `width`. Owner-gated, and the publish class's input from any session.
+On a CLAIMED board the shot carries the optional top-level `attest`
+member (signed ops; the object `insert` describes): the entry signature
+over the frame whose `doc` is the trunk document, `op` `publish` and
+`body` THE RUNS THE CLIENT PLACED — their values in V-order,
+length-delimited, with their count — a PREFIX of the member the commit
+mints, never the member: the base's carried tail past `base_extent` and
+every later deposit into the head member fall outside the signed bytes.
+The daemon composes the same body off its snapshot and verifies before
+the transaction.
 → `ack_addr` (the member's address). This example publishes a draft
 staged off the second member: the edition's own three positions by
 reference and the draft's two as fresh identity:
@@ -2004,7 +2078,16 @@ link write's slots "in declared order" means this order.
 
 The type slot must be nonempty **as given** (an empty `addrs` list, like a
 V-spec set resolving to nothing, rejects `empty_type_resolution`);
-`from`/`to` may be empty in either form. → `ack_addr` (the link's
+`from`/`to` may be empty in either form. On a CLAIMED board a link write
+into a published home carries the optional top-level `attest` member
+(signed ops; the object `insert` describes): the entry signature over
+the frame whose `doc` is `home`, `op` `make_link` and `body` the type
+slot, the `from` slot and the `to` slot exactly as this frame carries
+them — the address form's names verbatim, the V-spec form's specs as
+the client's own (the endsets the store resolves them to are the
+transaction's and enter no frame). A credential-typed `make_link` (the
+enroll, retire and claim kinds) takes the credential path and carries no
+`attest`: the record's own `sig` covers it. → `ack_addr` (the link's
 address).
 
 <!-- wire: request make_link -->
@@ -2727,25 +2810,31 @@ against live daemon bytes (the `time` values are illustrative — the one
 normalized field). A fresh board's first five commits are the claim
 ceremony's own (§A first board): positions 2, 3, 6, 9, 12 — the
 delegate, the home mint, the record insert, the genesis link, the claim
-link. The flow behind the examples then runs on that base, from bare
-sessions (CLAIMED-PERMISSIVE, so every `key` reads `"bare"`):
-`delegate` commits at position 14, the home mint at 15, a second —
-private — document at 16 (the account's doc 1 is born published, where
-bare writes are gated by design, so the flow's content goes to a draft
-document), a two-byte `insert` at 21, `make_link` at 24. The feed past
-the ceremony, `GET /changes?since=12`, read AS PRINCIPAL 1 — the
-owner of the private document, whose class sees every one of these:
+link — and the claim's own step then writes the board's first head `H.1`
+(§The other endpoints, the published head document): the system
+account's staging-draft mint at 13, the head record's insert at 16, the
+publish into `H` at 20 — the publish a public entry with `key: "system"`,
+the two before it writes into the system account's private draft, masked
+at every class but the system's. The flow behind the examples then runs
+on that base, from bare sessions (CLAIMED-PERMISSIVE, so every `key`
+reads `"bare"`): `delegate` commits at position 22, the home mint at 23,
+a second — private — document at 24 (the account's doc 1 is born
+published, where bare writes are gated by design, so the flow's content
+goes to a draft document), a two-byte `insert` at 29, `make_link` at 32.
+The feed past the ceremony and its head, `GET /changes?since=20`, read AS
+PRINCIPAL 1 — the owner of the private document, whose class sees every
+one of these:
 
 <!-- wire: changes feed -->
 ```json
-{"changes":[{"at":14,"docs":[],"key":"bare","op":"delegate","time":1786838400000},{"at":15,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012},{"at":16,"docs":["1.0.2.0.2"],"key":"bare","op":"create_new_document","time":1786838400021},{"at":21,"docs":["1.0.2.0.2"],"key":"bare","op":"insert","time":1786838400033},{"at":24,"docs":["1.0.2.0.2"],"key":"bare","op":"make_link","time":1786838400047}],"last":24,"more":false}
+{"changes":[{"at":22,"docs":[],"key":"bare","op":"delegate","time":1786838400000},{"at":23,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012},{"at":24,"docs":["1.0.2.0.2"],"key":"bare","op":"create_new_document","time":1786838400021},{"at":29,"docs":["1.0.2.0.2"],"key":"bare","op":"insert","time":1786838400033},{"at":32,"docs":["1.0.2.0.2"],"key":"bare","op":"make_link","time":1786838400047}],"last":32,"more":false}
 ```
 
-The first page of the same feed, `GET /changes?since=12&limit=2`:
+The first page of the same feed, `GET /changes?since=20&limit=2`:
 
 <!-- wire: changes feed_page -->
 ```json
-{"changes":[{"at":14,"docs":[],"key":"bare","op":"delegate","time":1786838400000},{"at":15,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":15,"more":true}
+{"changes":[{"at":22,"docs":[],"key":"bare","op":"delegate","time":1786838400000},{"at":23,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":23,"more":true}
 ```
 
 The same feed read as the GUEST (no token): the private document's
@@ -2754,7 +2843,7 @@ position and `more` false, since nothing visible remains:
 
 <!-- wire: changes feed_guest -->
 ```json
-{"changes":[{"at":14,"docs":[],"key":"bare","op":"delegate","time":1786838400000},{"at":15,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":15,"more":false}
+{"changes":[{"at":22,"docs":[],"key":"bare","op":"delegate","time":1786838400000},{"at":23,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":23,"more":false}
 ```
 
 **Bare entries.** A position whose metadata the daemon never observed — a
@@ -2863,10 +2952,18 @@ record: ONE JSON object whose members are, in this order and no other, `type`
 retained checkpoint at or below `position` — `seq`, `chain`, `body_hash` — or
 `null` before the first) and `prev` (the previous head's `position` and
 `chain`, or `null` at the first). No timestamp (two heads of one board at one
-position are byte-identical) and no `sig` — the head is UNSIGNED. A head is
-written when 64 commits that are not the writer's own have landed since the
-last head, OR the newest retained checkpoint moved, OR an hour has passed and
-the position moved — never on a peer's request, never twice for one position.
+position are byte-identical) and no `sig` — the head is UNSIGNED. THE CLAIM
+WRITES `H.1`: the board's first head is committed by the daemon in the claim's
+own serialized step, right after the claim link and before any later write is
+admitted, naming the claim's own position — so a claimed board always has the
+board term every attested write's entry frame names (§Sessions,
+`attestation_invalid`), and a daemon that opens a claimed board whose journal
+holds no head (a crash between the claim and its head) writes `H.1` before it
+serves; where the cadence below already wrote a head before or at the claim,
+the claim writes none. Every later head is written when 64 commits that are
+not the writer's own have landed since the last head, OR the newest retained
+checkpoint moved, OR an hour has passed and the position moved — never on a
+peer's request, never twice for one position.
 `/health` is the LIVE pair (this instant, no address, uncopyable); `H` is the
 DURABLE record — addressable, guest-readable (`retrieve_v` on the bare `H`,
 no token, floats to the latest head; `H.k`, the k-th version member, is pinned

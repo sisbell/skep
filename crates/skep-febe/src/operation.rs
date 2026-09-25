@@ -31,7 +31,7 @@ use skep_discovery::{
     findlinks_ftt_on, findlinks_v_on, image_on, in_claims_on, out_claims_on, project_on,
     retrieve_endsets_on, window_ftt_on, window_v_on,
 };
-use skep_kernel::{Seq, TxnError, WorldState};
+use skep_kernel::{Attestation, Seq, TxnError, WorldState};
 use skep_links::{Invalid, LinkRec};
 use skep_namespace::{M3Rec, M3State, PrincipalId, BOOTSTRAP_PRINCIPAL};
 use skep_retrieval::Query;
@@ -687,7 +687,7 @@ where
     /// gate would have said. A READ takes none of the three: no gate, and no
     /// memo either, the memo holding committed-write acknowledgments alone.
     pub fn execute(&self, session: SessionId, req: Request) -> Response {
-        let Request { id, op } = req;
+        let Request { id, op, attest } = req;
         let kind = op.kind(); // Copy; captured before dispatch moves the op
         // (a), then (c), then (b) — that order being the stated precedence
         //     when more than one applies — and all three on the write path
@@ -715,7 +715,9 @@ where
             }
             match self.sessions.principal_of(session) {
                 // (b) the one place authority can fail
-                Some(principal) => self.dispatch_write(WriteCtx { principal }, op),
+                Some(principal) => {
+                    self.dispatch_write(WriteCtx { principal }, op, attest.as_ref())
+                }
                 None => return reject(kind, RejectCode::Unauthenticated), // ⇒ Permanent
             }
         } else {
@@ -787,7 +789,21 @@ where
     /// `committed_at` — the design's own word for it — in the two arms whose
     /// operation carries an `at` of its own (a `VPos`). Those are the only
     /// two spellings; a third would make one concept read as two.
-    fn dispatch_write(&self, wc: WriteCtx, op: Op) -> Result<Response, Rejection> {
+    ///
+    /// THE ATTESTATION (signed ops) reaches exactly three arms — `insert`,
+    /// `publish`, `make_link`, the seam build's slice — through the ATTESTED
+    /// handles [`Stores::vstream_attested`] and [`Stores::linkstore_attested`],
+    /// which hand it to the kernel at the one transaction each opens; every
+    /// other arm builds a plain handle and the value, if a caller set one, is
+    /// dropped here unwritten. Nothing is classified or verified in this
+    /// module: the value arrives ADMITTED by the dispatched write path's
+    /// check, or not at all.
+    fn dispatch_write(
+        &self,
+        wc: WriteCtx,
+        op: Op,
+        attest: Option<&Attestation>,
+    ) -> Result<Response, Rejection> {
         let kind = op.kind();
         // ONE snapshot for the door's own pre-dispatch reads (the write side's
         // consult below, and the EDITLINK successor build) — a PRIOR
@@ -867,7 +883,7 @@ where
             Op::Insert { doc, at, values, deposit } => {
                 let (start, committed_at) = self
                     .stores
-                    .vstream()
+                    .vstream_attested(attest)
                     .insert(wc.caller(), &doc, at, values, deposit)
                     .map_err(|e| self.lower_write(kind, e))?; // returns post-commit
                 Ok(Response::AckAddr { addr: start, at: committed_at }) // the exact V1 coordinate
@@ -918,7 +934,7 @@ where
             Op::Publish { doc, shot } => {
                 let (addr, at) = self
                     .stores
-                    .vstream()
+                    .vstream_attested(attest)
                     .publish(wc.caller(), &doc, shot, &visibility)
                     .map_err(|e| self.lower_write(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
@@ -932,7 +948,7 @@ where
                 // V-specs off the txn base, Addrs deposited verbatim.
                 let (addr, at) = self
                     .stores
-                    .linkstore(&visibility)
+                    .linkstore_attested(&visibility, attest)
                     .makelink(wc.caller(), &home, from, to, ty)
                     .map_err(|e| self.lower_write(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
@@ -1515,7 +1531,7 @@ mod tests {
         let s2 = febe.open_session(PrincipalId(2));
         assert_ne!(s1, s2);
         febe.close_session(s1);
-        let rej = rejected(febe.execute(s1, Request { id: None, op: insert_op() }));
+        let rej = rejected(febe.execute(s1, Request { id: None, op: insert_op(), attest: None }));
         assert_eq!(rej.op, OpKind::Insert);
         assert_eq!(rej.code, RejectCode::Unauthenticated);
         assert_eq!(rej.disposition, Disposition::Permanent);
@@ -1541,7 +1557,7 @@ mod tests {
                     continue;
                 }
                 let kind = op.kind();
-                match febe.execute(session, Request { id: None, op }) {
+                match febe.execute(session, Request { id: None, op, attest: None }) {
                     Response::Rejected(rej) => {
                         assert_eq!(rej.op, kind, "the rejection names the op it refused");
                         assert_eq!(rej.code, RejectCode::Unauthenticated, "{kind:?} under {session:?}");
@@ -1573,7 +1589,7 @@ mod tests {
                 continue;
             }
             let kind = op.kind();
-            if let Response::Rejected(rej) = febe.execute(never_opened, Request { id: None, op }) {
+            if let Response::Rejected(rej) = febe.execute(never_opened, Request { id: None, op, attest: None }) {
                 assert_ne!(
                     rej.code,
                     RejectCode::Unauthenticated,
@@ -1595,11 +1611,11 @@ mod tests {
         assert_eq!(rej.disposition, Disposition::Halt);
         assert!(febe.poisoned.load(Ordering::Relaxed));
         // Write: fails fast pre-dispatch.
-        let rej = rejected(febe.execute(s, Request { id: None, op: insert_op() }));
+        let rej = rejected(febe.execute(s, Request { id: None, op: insert_op(), attest: None }));
         assert_eq!(rej.code, RejectCode::Poisoned);
         assert_eq!(rej.disposition, Disposition::Halt);
         // Read: still served (M2 snapshots survive a poisoned kernel).
-        let resp = febe.execute(s, Request { id: None, op: Op::NextAccountPrefix { parent: addr(&[1]) } });
+        let resp = febe.execute(s, Request { id: None, op: Op::NextAccountPrefix { parent: addr(&[1]) }, attest: None });
         match resp {
             Response::MaybeAddr { addr, .. } => assert!(addr.is_some()),
             _ => panic!("read must still be served on a poisoned kernel"),
@@ -1619,7 +1635,7 @@ mod tests {
         febe.close_session(s);
         // Raised for the latch alone; the rejection itself answers no request.
         let _ = febe.lower_write(OpKind::Insert, TxnError::<InsertError>::Poisoned);
-        let rej = rejected(febe.execute(s, Request { id: None, op: insert_op() }));
+        let rej = rejected(febe.execute(s, Request { id: None, op: insert_op(), attest: None }));
         assert_eq!(
             rej.code,
             RejectCode::Poisoned,
@@ -1645,14 +1661,14 @@ mod tests {
         let id = ReqId(b"req-2".to_vec());
         let retired = febe.open_session(PrincipalId(3));
         febe.close_session(retired);
-        let r = febe.execute(retired, Request { id: Some(id.clone()), op: insert_op() });
+        let r = febe.execute(retired, Request { id: Some(id.clone()), op: insert_op(), attest: None });
         assert!(matches!(r, Response::Rejected(_)));
         assert!(febe.idem.get(retired, &id, OpKind::Insert).is_none());
         // Nor does a read carrying one.
         let rid = ReqId(b"req-3".to_vec());
         let resp = febe.execute(
             s,
-            Request { id: Some(rid.clone()), op: Op::NextAccountPrefix { parent: addr(&[1]) } },
+            Request { id: Some(rid.clone()), op: Op::NextAccountPrefix { parent: addr(&[1]) }, attest: None },
         );
         assert!(matches!(resp, Response::MaybeAddr { .. }));
         assert!(febe.idem.get(s, &rid, OpKind::NextAccountPrefix).is_none());
@@ -1670,7 +1686,7 @@ mod tests {
         let s = febe.bootstrap_session();
         let id = ReqId(b"node-5".to_vec());
         let node = || Op::RegisterNode { addr: tum(&[1, 5]) };
-        let (addr, at) = match febe.execute(s, Request { id: Some(id.clone()), op: node() }) {
+        let (addr, at) = match febe.execute(s, Request { id: Some(id.clone()), op: node(), attest: None }) {
             Response::AckAddr { addr, at } => (addr, at),
             _ => panic!("RegisterNode under the bootstrap session commits"),
         };
@@ -1683,13 +1699,13 @@ mod tests {
         // A fresh keyed write is halted at step (c) — the gate is live.
         let rej = rejected(febe.execute(
             s,
-            Request { id: Some(ReqId(b"node-6".to_vec())), op: Op::RegisterNode { addr: tum(&[1, 6]) } },
+            Request { id: Some(ReqId(b"node-6".to_vec())), op: Op::RegisterNode { addr: tum(&[1, 6]) }, attest: None },
         ));
         assert_eq!(rej.code, RejectCode::Poisoned);
         assert_eq!(rej.disposition, Disposition::Halt);
 
         // The retry of the committed one is answered from the memo instead.
-        match febe.execute(s, Request { id: Some(id), op: node() }) {
+        match febe.execute(s, Request { id: Some(id), op: node(), attest: None }) {
             Response::AckAddr { addr: replayed, at: replayed_at } => {
                 assert_eq!(replayed, addr, "the replayed ack is the committed one");
                 assert_eq!(replayed_at, at, "…at the coordinate it committed");
@@ -1720,7 +1736,7 @@ mod tests {
         );
         let before = febe.log_position();
 
-        match febe.execute(s, Request { id: Some(id), op: insert_op() }) {
+        match febe.execute(s, Request { id: Some(id), op: insert_op(), attest: None }) {
             Response::AckAddr { addr: replayed, at } => {
                 assert_eq!(replayed, addr(&[1, 0, 1, 0, 1]), "the memo answers ahead of the gate");
                 assert_eq!(at, Seq(3), "…at the coordinate it committed");
@@ -1732,7 +1748,7 @@ mod tests {
         // The binding really is gone: an unkeyed write on the same id is
         // refused, so the replay above says something about the ORDER of the
         // two steps and not about the session still being bound.
-        let rej = rejected(febe.execute(s, Request { id: None, op: insert_op() }));
+        let rej = rejected(febe.execute(s, Request { id: None, op: insert_op(), attest: None }));
         assert_eq!(rej.code, RejectCode::Unauthenticated);
     }
 
@@ -1750,7 +1766,7 @@ mod tests {
         for (op, is_read) in crate::op::tests::all_ops() {
             let kind = op.kind();
             let wrong_table = if is_read {
-                febe.dispatch_write(WriteCtx { principal: PrincipalId(1) }, op)
+                febe.dispatch_write(WriteCtx { principal: PrincipalId(1) }, op, None)
             } else {
                 febe.dispatch_read(op, Some(PrincipalId(1)))
             };

@@ -8,9 +8,11 @@ use crate::common;
 use common::{addr, fp, key, ACCT_A};
 use sha2::{Digest, Sha256};
 use skep_identity::{
-    framed, CredentialKind, Enrolled, Enrollment, Fingerprint, IdentityState, Inert, KeyParseError,
-    LabelError, PayloadError, PublicKey, ALGS, ALG_ED25519, KEY_TAG, MAX_RECORD_BYTES,
-    NODE_HELLO_TAG, SESSION_TAG, SESSION_TAG_V2, TAGS,
+    framed, sig_alg_of, token_of_sig_alg, CredentialKind, Enrolled, Enrollment, Fingerprint,
+    IdentityState, Inert, KeyParseError, LabelError, PayloadError, PublicKey, ALGS, ALG_ED25519,
+    ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519, ENTRY_TAG, FNDSA512_ED25519_KEY_LEN,
+    KEY_TAG, MAX_RECORD_BYTES, MLDSA65_ED25519_KEY_LEN, NODE_HELLO_TAG, SESSION_TAG,
+    SESSION_TAG_V2, SIG_ALGS, TAGS,
 };
 
 /// AUTH-1.18/AUTH-1.21 — the record cap's VALUE, not merely its name: a
@@ -116,7 +118,11 @@ fn algs_and_arms_agree_both_directions() {
     }
     // Arms → table: every variant's token is a row. A NEW VARIANT MUST BE
     // ADDED HERE beside its ALGS row (AUTH-2.91's one-edit-plus-assertion).
-    let arms: &[PublicKey] = &[PublicKey::Ed25519([0u8; 32])];
+    let arms: &[PublicKey] = &[
+        PublicKey::Ed25519([0u8; 32]),
+        PublicKey::MlDsa65Ed25519(Box::new([0u8; MLDSA65_ED25519_KEY_LEN])),
+        PublicKey::FnDsa512PreviewEd25519(Box::new([0u8; FNDSA512_ED25519_KEY_LEN])),
+    ];
     assert_eq!(arms.len(), ALGS.len(), "arm count and table row count differ");
     for arm in arms {
         let row = ALGS
@@ -133,6 +139,55 @@ fn algs_and_arms_agree_both_directions() {
         }
     }
     assert_eq!(ALG_ED25519, "ed25519");
+}
+
+/// THE MARKER-TAG TABLE beside `ALGS` (signed ops; the design record §7.3
+/// (i)'s two-row `u8 ↔ token` table): every row's token is an `ALGS` row
+/// whose raw length is the row's own key width; the tags are distinct,
+/// non-zero (0 is the empty slot) and not `2` (reserved for the final FIPS
+/// 206); the two lookups are inverse; the classical token has no row (an
+/// Ed25519 key signs no entry); and the pinned widths are the ruled ones —
+/// tag 1's 1,984-byte key and 3,373-byte blob, tag 3's 929 and 730. The
+/// KEY PIN's halves read out of a parsed hybrid at those widths.
+#[test]
+fn sig_algs_and_algs_agree_and_the_pins_are_the_ruled_widths() {
+    for row in SIG_ALGS {
+        let alg = ALGS.iter().find(|a| a.token == row.token).expect("a SIG_ALGS token is an ALGS row");
+        assert_eq!(alg.raw_len, row.key_len(), "{}: the row's key width is its ALGS raw_len", row.token);
+        assert_ne!(row.tag, 0, "tag 0 is the empty slot");
+        assert_ne!(row.tag, 2, "tag 2 is reserved for the final FIPS 206");
+        assert_eq!(sig_alg_of(row.token).map(|r| r.tag), Some(row.tag));
+        assert_eq!(token_of_sig_alg(row.tag).map(|r| r.token), Some(row.token));
+        let key = PublicKey::parse(row.token, &"0a".repeat(row.key_len())).unwrap();
+        assert_eq!(key.pq_half().map(<[u8]>::len), Some(row.pq_key_len), "the PQ half leads");
+        assert_eq!(key.ed25519_half().len(), 32, "the Ed25519 half closes");
+        assert_eq!(key.sig_alg().map(|r| r.tag), Some(row.tag));
+    }
+    for (i, a) in SIG_ALGS.iter().enumerate() {
+        for b in &SIG_ALGS[i + 1..] {
+            assert_ne!(a.tag, b.tag, "two rows name one tag");
+        }
+    }
+    assert!(sig_alg_of(ALG_ED25519).is_none(), "a classical key signs no entry");
+    assert!(token_of_sig_alg(0).is_none() && token_of_sig_alg(2).is_none());
+    let tag1 = sig_alg_of(ALG_MLDSA65_ED25519).unwrap();
+    assert_eq!((tag1.tag, tag1.key_len(), tag1.sig_len(), tag1.pq_sig_len), (1, 1984, 3373, 3309));
+    assert_eq!(tag1.key_len(), MLDSA65_ED25519_KEY_LEN);
+    let tag3 = sig_alg_of(ALG_FNDSA512_PREVIEW_ED25519).unwrap();
+    assert_eq!((tag3.tag, tag3.key_len(), tag3.sig_len(), tag3.pq_sig_len), (3, 929, 730, 666));
+    assert_eq!(tag3.key_len(), FNDSA512_ED25519_KEY_LEN);
+    assert!(ALG_FNDSA512_PREVIEW_ED25519.contains("preview"), "the preview says so in its token");
+    // The classical key's Ed25519 half is the whole key.
+    let ed = PublicKey::Ed25519([9u8; 32]);
+    assert_eq!(ed.ed25519_half(), &[9u8; 32]);
+    assert!(ed.pq_half().is_none());
+    // One fingerprint over the whole concatenated raw value (the record
+    // §4.4): a hybrid's fingerprint is not either half's.
+    let hybrid = PublicKey::parse(ALG_MLDSA65_ED25519, &"0a".repeat(1984)).unwrap();
+    let want: [u8; 32] =
+        Sha256::digest(framed(KEY_TAG, &[ALG_MLDSA65_ED25519.as_bytes(), &[0x0a; 1984]])).into();
+    assert_eq!(Fingerprint::of(&hybrid).as_bytes(), &want);
+    assert_eq!(ENTRY_TAG.as_bytes(), b"skep-entry-v1");
 }
 
 /// AUTH-2.93 — the `TAGS` assertion: every tag begins `skep-`, and no tag
@@ -157,12 +212,14 @@ fn tags_are_skep_prefixed_and_prefix_free() {
             }
         }
     }
-    // The four declared constants are the table, in declaration order.
-    assert_eq!(TAGS.len(), 4);
+    // The five declared constants are the table, in declaration order — the
+    // fifth the ENTRY frame's (signed ops).
+    assert_eq!(TAGS.len(), 5);
     assert_eq!(TAGS[0], KEY_TAG);
     assert_eq!(TAGS[1], SESSION_TAG);
     assert_eq!(TAGS[2], SESSION_TAG_V2);
     assert_eq!(TAGS[3], NODE_HELLO_TAG);
+    assert_eq!(TAGS[4], ENTRY_TAG);
 }
 
 /// AUTH-1.11 — the three declared tags' BYTES, not merely their properties.

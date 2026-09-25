@@ -8,7 +8,7 @@ use crate::key::PublicKey;
 
 /// AUTH-1.29 — one enrolled key: the public key and its anchor flag. The
 /// same shape `Effect::Genesis`/`Effect::Enroll` name (AUTH-2.52).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Enrolled {
     /// The enrolled public key.
     pub key: PublicKey,

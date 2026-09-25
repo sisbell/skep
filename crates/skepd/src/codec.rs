@@ -60,8 +60,8 @@ use skep_febe::{
     RejectCode, Rejection, ReqId, Request, Response, SlotArg, SuccessorSpec, UniversalGrant,
     MAX_REQ_ID_BYTES,
 };
-use skep_identity::KeySet;
-use skep_kernel::Seq;
+use skep_identity::{sig_alg_of, token_of_sig_alg, KeySet};
+use skep_kernel::{Attestation, Seq};
 use skep_links::{Endset, Invalid, Link, View, MAX_SLOT_SPANS};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{CorrPair, Deletions, DeliveryItem, Operand, RegionSpec, Spec, SpanFault};
@@ -266,6 +266,13 @@ impl JsonCodec {
         if let Some(ReqId(bytes)) = &req.id {
             pairs.push(("id", Value::String(String::from_utf8_lossy(bytes).into_owned())));
         }
+        // The `attest` member, where the request carries one (signed ops):
+        // the tag lifted back to its `alg` token, the blob as hex. A tag no
+        // row names is outside the precondition and renders a token `parse`
+        // refuses, as every other violation does.
+        if let Some(a) = &req.attest {
+            pairs.push(("attest", j_attest(a)));
+        }
         pairs.push(("op", Value::String(name.into())));
         to_bytes(obj(pairs))
     }
@@ -443,11 +450,19 @@ pub(crate) fn key_set_reply(as_of: Seq, set: Option<&KeySet>) -> Vec<u8> {
 /// answer, moved rather than copied — so this module renders the family's
 /// vocabulary without depending on the type that enumerates it, the
 /// arrangement [`key_set_reply`] has with the identity slice.
-pub(crate) fn credential_refused_reply(op: OpKind, token: String) -> Vec<u8> {
+pub(crate) fn credential_refused_reply(
+    op: OpKind,
+    token: String,
+    disposition: Disposition,
+) -> Vec<u8> {
     daemon_rejected(DaemonRejection {
         op: op_name(op),
         code: CREDENTIAL_REFUSED,
-        disposition: Disposition::Permanent,
+        // `Permanent` for the whole family but the two attestation codes
+        // (signed ops; the design record §7.3 (iii)): the refusal names its
+        // own class, so the family's uniformity is the producers' and not
+        // this renderer's.
+        disposition,
         detail: Some(token),
     })
 }
@@ -512,8 +527,44 @@ fn parse_value(v: Value) -> PResult<Request> {
     // [`MAX_REQ_ID_BYTES`]).
     let id = fields.req_id()?;
     let op = parse_op(&name, &mut fields)?;
+    // The optional `attest` member, admitted on the three ops the seam
+    // build attests and on no other — left in the map elsewhere, so `finish`
+    // refuses it by the unknown-field rule, as a daemon that predates the
+    // member does (the design record §7.3 (ii)).
+    let attest = fields.attest(&name)?;
     fields.finish()?;
-    Ok(Request { id, op })
+    Ok(Request { id, op, attest })
+}
+
+/// The ops whose frames admit the top-level `attest` member (signed ops, the
+/// seam build's slice): the three the write-path check attests. The record's
+/// thirteen publish-class-capable inputs are the WIDENING lane's, not this
+/// one's — an admitted-but-unchecked member would be a signature silently
+/// discarded.
+const ATTESTABLE_OPS: [&str; 3] = ["insert", "make_link", "publish"];
+
+/// `{"alg": <an ALGS token>, "sig": <hex>}` — the wire's `attest` object
+/// (the design record §7.3 (ii)), lifted to the kernel's `Attestation`: the
+/// token to the marker tag its `SIG_ALGS` row names (a token no row carries
+/// is a GRAMMAR failure — the token set is an I2 frozen constant, so an
+/// unknown one is refused as an unknown op is), the hex to the blob (empty
+/// is refused: an attestation has one spelling of absent, the missing
+/// member). The blob's WIDTH under the tag is the check's to judge, not the
+/// grammar's.
+fn p_attest(v: &Value) -> PResult<Attestation> {
+    let m = p_obj(v, &["alg", "sig"])?;
+    let alg = field(m, "alg", p_string)?;
+    let row = sig_alg_of(&alg)
+        .ok_or_else(|| PErr(format!("field 'alg': unknown algorithm token '{}'", bounded(&alg))))?;
+    let sig = field(m, "sig", |v| p_hex(&p_string(v)?))?;
+    Attestation::new(row.tag, sig).map_err(|e| PErr(format!("field 'sig': {e}")))
+}
+
+/// [`p_attest`]'s inverse: the tag back to its token, the blob to hex.
+fn j_attest(a: &Attestation) -> Value {
+    let alg = token_of_sig_alg(a.sig_alg())
+        .map_or_else(|| format!("<unknown tag {}>", a.sig_alg()), |row| row.token.to_string());
+    obj(vec![("alg", Value::String(alg)), ("sig", Value::String(hex_string(a.sig())))])
 }
 
 /// One request-envelope arm per `Op` variant. Field names are the wire
@@ -687,6 +738,20 @@ impl Fields {
 
     fn u64(&mut self, k: &'static str) -> PResult<u64> {
         self.field(k, p_u64)
+    }
+
+    /// The optional top-level `attest` member — taken on an attestable op
+    /// (`ATTESTABLE_OPS`), absent and explicit `null` alike reading `None`;
+    /// on any other op it is not taken at all, so `finish` refuses it as the
+    /// unknown field it is there.
+    fn attest(&mut self, op: &str) -> PResult<Option<Attestation>> {
+        if !ATTESTABLE_OPS.contains(&op) {
+            return Ok(None);
+        }
+        match self.take_opt("attest") {
+            None => Ok(None),
+            Some(v) => p_attest(&v).map(Some).map_err(|e| PErr(format!("field 'attest': {e}"))),
+        }
     }
 
     /// `delegate`'s `new_id` — the ONE principal id on the wire that MINTS,

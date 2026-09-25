@@ -87,7 +87,7 @@ fn q_all() -> FourSet {
 }
 
 fn rq(id: Option<&str>, op: Op) -> Request {
-    Request { id: id.map(|s| ReqId(s.as_bytes().to_vec())), op }
+    Request { id: id.map(|s| ReqId(s.as_bytes().to_vec())), op, attest: None }
 }
 
 /// Unwrap a parse, naming the frame as well as the fault — which

@@ -14,6 +14,12 @@
 //!   dedicated volume, acks must stop (typed `durability` rejections)
 //!   before durability is compromised; after remount every acked position
 //!   answers.
+//! * **H — the claim window** (signed ops, s1): the claim and its head
+//!   `H.1` are two transactions in one step; a process SIGKILLed between
+//!   them — this test binary re-exec'd as a child and killed at the
+//!   daemon's hold seam, the kernel hazard suite's self-exec pattern —
+//!   reopens to a claimed board WITH `H.1`, written by the open before it
+//!   serves, and takes an attested write at once.
 //!
 //! Finding protocol (per the H3 ruling): a test that discovers a real
 //! violation is converted to `#[ignore = "FINDING-<n>: …"]` with its
@@ -31,8 +37,15 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use common::{acked_addr, expect_resp, json, op, open_session, T_ENROLL};
+use common::{
+    acked_addr, acked_at, board_pair, ceremony_before_the_claim, claim_frame, claimed,
+    device_key, expect_resp, head_position, json, op, open_session, open_signed_session,
+    spawn_configured, spawn_unclaimed, typed_link_frame, CLAIMANT_ACCOUNT, CLAIMANT_DOC1,
+    CLAIMANT_PRINCIPAL, HEAD_MEMBER_1, T_ENROLL, T_GRANT,
+};
 use serde_json::Value;
+use skep_engine::{Engine, KernelConfig};
+use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, SaltSource};
 use skepd::{Daemon, HttpRequest, Reply, Routed, Seq};
 
 /// `HAZARD_EXHAUSTIVE=1` widens the trial counts.
@@ -770,4 +783,176 @@ fn g_disk_exhaustion_stops_acks_before_durability() {
         acks.len(),
         stop_code
     );
+}
+
+// ── H. The claim window (signed ops, s1) ─────────────────────────────────
+
+/// The child's environment: the data dir of the board whose claim it is
+/// killed inside. Set by the parent alone; its presence IS child mode.
+const CLAIM_CRASH_DIR: &str = "SKEP_HAZARD_CLAIM_CRASH_DIR";
+
+/// The claim link's committed position on a fresh board — the ceremony's
+/// fifth commit (wire.md §A first board: positions 2, 3, 6, 9, 12).
+const CLAIM_POSITION: u64 = 12;
+
+/// `H.1`'s records above the claim: the staging draft's mint (1), the head
+/// record's insert (3), the publish shot into `H` (4).
+const H1_RECORDS: u64 = 8;
+
+/// The kernel below the daemon's door, opened to LOOK and write nothing: a
+/// manual checkpoint policy, the production retention, the salt unused by a
+/// recover-only open. The judge's first witness, before `Daemon::open` is
+/// allowed to repair anything.
+fn kernel_below_the_door(dir: &Path) -> Engine {
+    Engine::open(KernelConfig {
+        durability: Durability::Fsync {
+            journal_path: dir.to_path_buf(),
+            retain_checkpoints: 2,
+            burned_seq: BurnedSeqPolicy::Rollback,
+        },
+        checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(0),
+    })
+    .expect("the crashed board's journal recovers below the door")
+}
+
+/// The child: a fresh unclaimed board served in-process, the daemon's hold
+/// seam armed, the ceremony's first four steps, then the claim — whose
+/// request the daemon holds at the crash window, announcing it on stderr
+/// for the parent to kill. Never returns: the process dies under SIGKILL
+/// inside the claim's request.
+fn claim_crash_child(dir: &Path) -> ! {
+    let sd = spawn_unclaimed(dir);
+    let port = sd.port();
+    sd.daemon().hold_between_the_claim_and_its_head();
+    ceremony_before_the_claim(port);
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    // The claim, from the device's signed session (the ceremony's step 5),
+    // posted through the non-panicking client: the answer never comes.
+    let _ = try_op(port, Some(&signed), &claim_frame(CLAIMANT_DOC1, CLAIMANT_ACCOUNT));
+    panic!("the claim answered: the daemon's hold seam did not hold");
+}
+
+/// H — A CRASH BETWEEN THE CLAIM AND ITS HEAD REOPENS TO A BOARD WITH `H.1`
+/// (signed ops, s1: THE CLAIM WRITES `H.1`; the crash-window pin —
+/// `Daemon::open` writes the first head of a claimed board whose journal
+/// holds none, before it serves). The two are two transactions in one
+/// serialized step, so a process that dies between them leaves the one
+/// state in which the check's `board_unavailable` would otherwise answer
+/// every attested write until the cadence's first head.
+///
+/// The pattern is the kernel hazard suite's scenario D: this test binary is
+/// re-exec'd as a CHILD that serves a fresh board, arms the daemon's hold
+/// seam (`Daemon::hold_between_the_claim_and_its_head`: the claim-flip tail
+/// announces the window on stderr and parks, both locks held, after the
+/// claim's commit is durable and the fold has flipped and before `H.1`'s
+/// first commit opens), runs the ceremony and posts the claim. The parent
+/// reads the announcement off the child's stderr and SIGKILLs it there. Then
+/// it judges the data dir twice: BELOW THE DOOR the journal's head is the
+/// claim's own position — the claim landed, no head did; THROUGH THE DOOR
+/// the board is claimed, `H.1` stands at the claim's position with the
+/// head's eight records above it and `prev` null, and — served — the board
+/// takes an attested write at once, its slot filled. A third open writes
+/// nothing: the repair is owed once.
+#[test]
+fn h_a_crash_between_the_claim_and_its_head_reopens_with_h1() {
+    if let Some(dir) = std::env::var_os(CLAIM_CRASH_DIR) {
+        claim_crash_child(Path::new(&dir));
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("data");
+    fs::create_dir_all(&dir).expect("data dir");
+
+    // The child, killed at the window it announces.
+    let exe = std::env::current_exe().expect("test binary path");
+    let mut child = Command::new(exe)
+        .args([
+            "hazard::h_a_crash_between_the_claim_and_its_head_reopens_with_h1",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CLAIM_CRASH_DIR, &dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn the claim-crash child");
+    let stderr = child.stderr.take().expect("child stderr");
+    let (tx, rx) = mpsc::channel::<()>();
+    let reader = thread::spawn(move || {
+        for line in BufReader::new(stderr).lines() {
+            let Ok(line) = line else { break };
+            if line.contains(Daemon::CLAIM_HOLD_NOTICE) {
+                let _ = tx.send(());
+            } else {
+                // The child's other notices, and a failing child's panic
+                // message, land in this test's own output.
+                eprintln!("[claim-crash child] {line}");
+            }
+        }
+    });
+    match rx.recv_timeout(Duration::from_secs(60)) {
+        Ok(()) => {}
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            let _ = child.kill();
+            panic!("FINDING (H): the child reached no hold within 60s — a wedge before the claim");
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            let _ = child.wait();
+            panic!(
+                "FINDING (H): the child exited before the hold — its stderr is forwarded above \
+                 (a claim that answered means the seam did not hold)"
+            );
+        }
+    }
+    child.kill().expect("SIGKILL the held child");
+    let _ = child.wait();
+    reader.join().expect("stderr reader thread");
+
+    // BELOW THE DOOR: the claim is the journal's last commit and no head's
+    // record stands above it — the crash split the two transactions.
+    {
+        let engine = kernel_below_the_door(&dir);
+        assert_eq!(
+            engine.kernel().current_seq().0,
+            CLAIM_POSITION,
+            "FINDING (H): the crashed journal's head is not the claim's position"
+        );
+        drop(engine); // releases the journal-directory lock for the daemon
+    }
+
+    // THROUGH THE DOOR: the open writes `H.1` before it serves. Spawned with
+    // the loopback origin configured, as every claimed fixture is, so the
+    // signed arm admits the session below.
+    let sd = spawn_configured(&dir, true);
+    let port = sd.port();
+    assert!(claimed(port), "the recovered fold is claimed");
+    assert_eq!(
+        head_position(port),
+        CLAIM_POSITION + H1_RECORDS,
+        "FINDING (H): the open did not write H.1's eight records above the claim"
+    );
+    let (position, _) = board_pair(port).expect("FINDING (H): no H.1 after the reopen");
+    assert_eq!(position, CLAIM_POSITION, "H.1 names the claim's own position");
+    let v = op(port, None, &common::retrieve_frame(HEAD_MEMBER_1, 1, 1));
+    let atom = expect_resp(&v, "delivery")["items"][0]["atom"].as_str().expect("H.1's record");
+    let rec: Value = serde_json::from_str(atom).expect("a skep-head record");
+    assert!(rec["prev"].is_null(), "the first head: prev null: {rec}");
+    assert!(rec["base"].is_null(), "no checkpoint: base null: {rec}");
+    // Served, the board takes an attested write AT ONCE: a grant into the
+    // published doc 1 from the claimant's signed session, its slot filled.
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let v = op(port, Some(&signed), &typed_link_frame(CLAIMANT_DOC1, &[CLAIMANT_ACCOUNT], &[], T_GRANT));
+    let at = acked_at(&v);
+    assert!(
+        sd.daemon().attestation_at(at).expect("a boundary").is_some(),
+        "the first attested write after the reopen is admitted and attested"
+    );
+    sd.shutdown();
+
+    // A THIRD open writes nothing: `H.1` stands, the repair was owed once.
+    let d = timed_daemon_open(&dir, "H: the reopen of a repaired board");
+    assert_eq!(d.log_position().0, at, "a clean reopen of a headed board writes no head");
+    let v = route_op(&d, None, &retrieve_frame("1.1.0.1.0.2.2", 1));
+    assert_ne!(v["resp"].as_str(), Some("delivery"), "no H.2 was written: {v}");
 }

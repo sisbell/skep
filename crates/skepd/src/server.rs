@@ -157,7 +157,8 @@ use skep_engine::{Engine, EngineError, HistoryError, World};
 use skep_febe::{consult_read, Codec, Op, OperationSurface, OpKind, Request, Response, SessionId};
 use skep_identity::IdentityState;
 use skep_kernel::{
-    BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource, Seq, Snapshot,
+    Attestation, BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource, Seq,
+    Snapshot,
 };
 use skep_namespace::PrincipalId;
 
@@ -1014,6 +1015,14 @@ pub struct Daemon {
     /// (doctrine D9: the meter is an attribute of a gate, never of the
     /// substrate): M8 and M7 are asked or not asked, and never told.
     scans: ClassScans,
+    /// The dirty-crash harness's one seam into the claim's step
+    /// ([`Daemon::hold_between_the_claim_and_its_head`]): armed, the
+    /// claim-flip tail announces the crash window and parks there, both
+    /// locks held, for the harness to SIGKILL. `false` is the only state
+    /// production ever sees; a test-only flag and not a `cfg(test)` one,
+    /// because the harness is an integration test of the shipped binary's
+    /// library, outside this crate's `cfg(test)`.
+    hold_at_claim: AtomicBool,
 }
 
 /// Deliberately opaque: reporting the log position would take the kernel's
@@ -1130,7 +1139,7 @@ impl Daemon {
             let snap = engine.kernel().snapshot();
             AuthState::open(opts, snap.world()).map_err(DaemonError::BlockedPrefixes)?
         };
-        Ok(Daemon {
+        let daemon = Daemon {
             engine,
             febe,
             codec: JsonCodec,
@@ -1138,7 +1147,52 @@ impl Daemon {
             writes,
             history: History::new(),
             scans: ClassScans::new(),
-        })
+            hold_at_claim: AtomicBool::new(false),
+        };
+        // THE CRASH WINDOW, closed before anything is served (signed ops, s1;
+        // see the method): a claimed board whose journal holds no head owes
+        // `H.1`, and the open is where it is paid.
+        daemon.write_the_claims_head_if_owed();
+        Ok(daemon)
+    }
+
+    /// THE CRASH WINDOW (signed ops, s1; RULED 2026-09-25 — "THE CLAIM WRITES
+    /// `H.1`"): the claim and its head are TWO transactions in one serialized
+    /// step ([`Daemon::on_claim_flip`]), and a process that dies between them
+    /// — the claim durable, no head — leaves a claimed board with no board
+    /// term on disk: the one state in which the check's `board_unavailable`
+    /// would otherwise answer every attested write until the cadence's first
+    /// head. Closed HERE, at open and before anything is served: a claimed
+    /// board (the recovered fold's claimant present) whose head writer resumed
+    /// no head writes `H.1` now, by the claim's own turn
+    /// ([`WritePath::first_head`]) under the write path's own lock, naming the
+    /// committed pair as it stands — the claim's own position where the crash
+    /// was the split, and the last commit's on a board claimed under a build
+    /// that wrote no head at the claim. The unclaimed board writes nothing
+    /// here: no head by a claim that did not happen (A1/A5). A claimed board
+    /// with its head finds the turn a no-op, so a clean restart writes none.
+    /// The line on the operator stream is I11 (c)'s: a head written for a
+    /// reason other than the cadence's is said, never silent.
+    ///
+    /// WHY NOT ONE TRANSACTION. A head names the committed `(position,
+    /// chain)` pair read BEFORE its own write opens — a coordinate strictly
+    /// below its own commit, since no bytes can carry their own hash — so a
+    /// head folded into the claim's transaction could name only the position
+    /// BEFORE the claim, and the claim's own chain value does not exist until
+    /// its transaction closes. The two-transaction shape is the head's rule
+    /// (`head.rs`, WHAT A HEAD IS), not a limit of the journal's format, and
+    /// this open is what closes the gap it leaves.
+    fn write_the_claims_head_if_owed(&self) {
+        if self.auth.fold.snapshot().claimant().is_none() {
+            return;
+        }
+        let serial = self.writes.serial_lock();
+        if self.writes.first_head(&serial) {
+            notice::line(
+                "the board is claimed and its journal held no head: H.1 written at open, \
+                 naming the committed pair as it stood",
+            );
+        }
     }
 
     /// Bind the auth surface to the served port — the origin sets and the
@@ -1183,7 +1237,9 @@ impl Daemon {
     /// commits since the last head, a moved checkpoint, or the hour), the
     /// daemon's own head writer commits up to three writes of its own before
     /// the reply is built, so the journal can stand past the ack's `at` when
-    /// this returns; `POST /session` mints an M10 session; `GET /challenge`
+    /// this returns — and the credential write that CLAIMS the board is
+    /// followed by its first head `H.1` in the same step, whatever the
+    /// cadence says (signed ops, s1); `POST /session` mints an M10 session; `GET /challenge`
     /// mints a nonce into the bounded challenge store and evicts the oldest
     /// past [`crate::auth::MAX_LIVE_NONCES`] — a GET that is not safe, and
     /// whose eviction can spend another caller's outstanding nonce;
@@ -1356,28 +1412,49 @@ impl Daemon {
         notice::line(self.auth.cfg.node_prefix_line());
     }
 
-    /// THE CLAIM FLIP's consequences, whole and under the write guard the
-    /// claim committed under: the config-lockout warnings logged a second
-    /// time (RES-30 requires it at the flip unconditionally), the
-    /// blocked-prefix list RE-INSTALLED against the claimant this commit
-    /// first seated (RES-65 item 4 — the comparand the header defers to
-    /// wherever it names none), and the list in force named where the issue
-    /// has anything to say.
+    /// THE CLAIM FLIP's consequences, whole and under the two guards the
+    /// claim committed under: the board's FIRST HEAD `H.1` written in this
+    /// same serialized step (signed ops, s1; RULED 2026-09-25 — "THE CLAIM
+    /// WRITES `H.1`": every attested write from here on names the board by
+    /// `H.1`'s pair, D13, so a fresh claimed board takes them from the claim
+    /// on rather than after the cadence's first 64 commits, checkpoint or
+    /// hour), the config-lockout warnings logged a second time (RES-30
+    /// requires it at the flip unconditionally), the blocked-prefix list
+    /// RE-INSTALLED against the claimant this commit first seated (RES-65
+    /// item 4 — the comparand the header defers to wherever it names none),
+    /// and the list in force named where the issue has anything to say.
     ///
-    /// One method because the three fire TOGETHER and only here — the claim
-    /// is set once, so this is the one transition at which a comparand
-    /// appears and the two logs are owed again — which is
-    /// [`crate::auth::AuthState::commit_tail`]'s own reason for bundling the
-    /// three obligations one step earlier. `lock` is that obligation and not
-    /// a decoration: the re-install replaces the list under the gate the
-    /// claim itself committed under, so no SESSION write lands between the
-    /// claim and the comparands it moves — every one takes this gate. The
-    /// one kind of commit that can land there is the published head writer's
-    /// own, given its turn by the claim's own `commit_under` when the claim
-    /// makes the cadence due (an operator pausing an hour before the
-    /// ceremony's last step is enough): made by no session, it meets no list,
-    /// and `IdentityFold::step_committed`'s premise already counts it.
-    fn on_claim_flip(&self, lock: &LockWrite<'_>) {
+    /// One method because the four fire TOGETHER and only here — the claim
+    /// is set once, so this is the one transition at which the first head is
+    /// owed, a comparand appears and the two logs are owed again — which is
+    /// [`crate::auth::AuthState::commit_tail`]'s own reason for bundling its
+    /// three obligations one step earlier. The two guards are that obligation
+    /// and not a decoration. `serial` is the write path's lock the claim's
+    /// `commit_under` ran under, held through this method: every commit this
+    /// daemon makes takes it ([`WritePath::serial_lock`] — both write
+    /// sequences, and the head writer's door inside them), so no write of any
+    /// kind lands between the claim and `H.1`: the head names the claim's own
+    /// position, and the first write admitted after the claim finds the board
+    /// term present. `lock` is the credential write gate: the re-install
+    /// replaces the list under the gate the claim itself committed under, so
+    /// no SESSION write lands between the claim and the comparands it moves
+    /// — every one takes this gate. The head writer's own commits are the one
+    /// kind that lands inside this step: `H.1`'s here, or the cadence's where
+    /// the claim's own turn already wrote it (an operator pausing an hour
+    /// before the ceremony's last step is enough), in which case `H.1` stands
+    /// and [`WritePath::first_head`] writes nothing — made by no session, they
+    /// meet no list, and `IdentityFold::step_committed`'s premise already
+    /// counts them.
+    fn on_claim_flip(&self, lock: &LockWrite<'_>, serial: &SerialGuard<'_>) {
+        // THE CRASH WINDOW's seam: armed, the process is held HERE — the
+        // claim durable and flipped, no head — for the harness to kill.
+        if self.hold_at_claim.load(Ordering::Relaxed) {
+            notice::line(Self::CLAIM_HOLD_NOTICE);
+            loop {
+                thread::park();
+            }
+        }
+        self.writes.first_head(serial);
         self.log_config_warnings(true);
         self.auth.reinstall_blocked_at_claim(lock);
         // The flip can only have made an entry INERT, so an issue with no
@@ -1676,7 +1753,7 @@ impl Daemon {
     /// producers → execute. The serial lock is taken before the snapshot so
     /// the gates' answers and the execute they gate stand on one committed
     /// state; the producers' ORDER is `plain_refusal`'s, not this site's.
-    fn plain_sequence(&self, meta: FrameMeta, frame: Request, req: &HttpRequest) -> Reply {
+    fn plain_sequence(&self, meta: FrameMeta, mut frame: Request, req: &HttpRequest) -> Reply {
         let credential_lock = self.auth.credential_lock.read();
         let serial = self.writes.serial_lock();
         let (snap, identity, Resolved { actor, closed }) = self.locked_state(&serial, req);
@@ -1684,16 +1761,26 @@ impl Daemon {
             Actor::Principal(b) => b,
             Actor::Guest(_) => return with_signal(self.guest_reply(frame), closed),
         };
-        if let Some(r) = plain_refusal(
+        // THE ATTESTATION's one door (signed ops; the design record §4.5
+        // (1)–(2), §5.5): the producers judge the frame's `attest` beside the
+        // op, and what reaches the store is what they ADMITTED — the value
+        // the check verified against the fold's key set at this base, or
+        // nothing. A member the check DROPPED (off the publish class; at or
+        // below the claim, A5) never reaches a handle, so no later layer can
+        // fill a slot the producer set excludes.
+        let admitted = match plain_refusal(
             &credential_lock,
             snap.world(),
             &identity,
             &frame.op,
             binding.principal,
             binding.signer.as_ref(),
+            frame.attest.as_ref(),
         ) {
-            return with_signal(credential_refused(meta.kind, &r), closed);
-        }
+            Ok(admitted) => admitted,
+            Err(r) => return with_signal(credential_refused(meta.kind, &r), closed),
+        };
+        frame.attest = admitted;
         let resp = self.writes.commit_under(&serial, meta.attributed(binding.testimony()), || {
             self.febe.execute(binding.sid, frame)
         });
@@ -1791,6 +1878,17 @@ impl Daemon {
         // then the head writer's turn, which may land the head's own commits
         // before `commit_under` returns — the `post` snapshot at 8 then holds
         // them, which `step_committed`'s premise accounts for).
+        //
+        // THE CREDENTIAL DEPOSIT'S SLOT STAYS EMPTY (signed ops; D26, RULED
+        // 2026-09-25): the `make_link` half of a credential deposit is
+        // covered by the record's own `sig` member — the record grade's
+        // carrier, the record grade's lane — and takes no entry signature of
+        // its own, so an `attest` a client attached here is DROPPED before
+        // the store sees it: never verified, never written. This is how the
+        // check tells D26's case by ROUTE — a credential-typed link write
+        // never reaches the plain sequence's producers at all.
+        let mut frame = frame;
+        frame.attest = None;
         let req_id = frame.id.clone();
         let resp = self.writes.commit_under(&serial, meta.attributed(binding.testimony()), || {
             self.febe.execute(binding.sid, frame)
@@ -1818,8 +1916,10 @@ impl Daemon {
                 req_id,
                 &ack,
             );
+            // 9 — the claim flip's tail, under both guards: `H.1` in this
+            // same step (signed ops, s1), then the warnings and the list.
             if flipped {
-                self.on_claim_flip(&credential_lock);
+                self.on_claim_flip(&credential_lock, &serial);
             }
         }
         with_signal(op_answer(ack), closed)
@@ -1873,6 +1973,31 @@ impl Daemon {
         self.writes.set_head_writer_clock_millis(millis);
     }
 
+    /// The line [`Daemon::hold_between_the_claim_and_its_head`]'s hold writes
+    /// on the operator stream as it parks — what the harness watches the
+    /// child's stderr for before it kills. `#[doc(hidden)]` with the hook.
+    #[doc(hidden)]
+    pub const CLAIM_HOLD_NOTICE: &'static str =
+        "test seam: held between the claim and its head; kill this process";
+
+    /// TEST HOOK (the same standing: `#[doc(hidden)]`, not a stable API):
+    /// HOLD the claim's step at the crash window — after the claim's commit
+    /// is durable and the fold has flipped, before `H.1`'s first commit opens
+    /// ([`Daemon::on_claim_flip`]) — writing [`Daemon::CLAIM_HOLD_NOTICE`] on
+    /// the operator stream and then parking the request's thread for good,
+    /// both locks held, so the dirty-crash harness (`tests/it/hazard.rs`, the
+    /// kernel hazard suite's self-exec pattern) can SIGKILL the process THERE
+    /// and judge the reopen ([`Daemon::write_the_claims_head_if_owed`]) over
+    /// exactly the journal a crash between the two transactions leaves: the
+    /// claim, and no head. A daemon so armed serves normally until a claim
+    /// flips its board and cannot serve a write past that point — every
+    /// later write waits on the parked locks — which is the point: it exists
+    /// to be killed. Not disarmable.
+    #[doc(hidden)]
+    pub fn hold_between_the_claim_and_its_head(&self) {
+        self.hold_at_claim.store(true, Ordering::Relaxed);
+    }
+
     /// TEST HOOK (the same standing: `#[doc(hidden)]`, not a stable API):
     /// [`Daemon::open_with`] under the SEEDED salt source
     /// (`SaltSource::Seeded(seed)`) in place of OS entropy, so two harness
@@ -1905,6 +2030,17 @@ impl Daemon {
     #[doc(hidden)]
     pub fn checkpoint_now(&self) {
         self.engine.kernel().checkpoint().expect("the test seam's checkpoint");
+    }
+
+    /// TEST HOOK (the same standing: `#[doc(hidden)]`, not a stable API):
+    /// the signature slot of the transaction that committed the boundary
+    /// `at` — `Kernel::attestation_at` on the daemon's own kernel — so a
+    /// suite can pin WHICH commits' slots the write-path check filled and
+    /// which stayed empty (signed ops), the feed carrying no slot member in
+    /// this slice.
+    #[doc(hidden)]
+    pub fn attestation_at(&self, at: u64) -> Result<Option<Attestation>, HistoryError> {
+        self.engine.kernel().attestation_at(Seq(at))
     }
 
     /// `POST /op-at` — answer one READ frame as of a committed position:
@@ -2253,7 +2389,7 @@ fn refuse_scan_busy(kind: OpKind) -> Reply {
 /// the transport's own half: the 200 [`op_answer`] gives every answer on
 /// that channel, whatever the answer says.
 fn credential_refused(kind: OpKind, r: &CredentialRefusal) -> Reply {
-    op_answer(credential_refused_reply(kind, r.token()))
+    op_answer(credential_refused_reply(kind, r.token(), r.disposition()))
 }
 
 /// The `/challenge` query: exactly `principal=<non-negative integer>`.

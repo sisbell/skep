@@ -38,6 +38,7 @@ mod read_surface;
 mod register;
 mod restart;
 mod scan_bound;
+mod signed_ops;
 mod source_gate;
 mod transport;
 mod universal_grants;

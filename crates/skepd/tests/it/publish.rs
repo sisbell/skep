@@ -623,17 +623,26 @@ fn the_source_gate_answers_behind_ownership_and_ahead_of_existence() {
     let d = draft_with(port, &bare, "abc");
 
     let before = head(port);
-    // (1) A run onto the stranger's draft: withheld, naming the draft.
+    // (1) A run onto the stranger's draft: withheld, naming the draft. The
+    //     claimant cannot READ `xy` back to sign over it, so this cell signs
+    //     over the bytes it knows it is placing (signed ops: the check runs
+    //     ahead of the store, and the store's gate is reached by a shot the
+    //     check admitted).
+    let mut known = values_of(port, Some(&signed), CLAIMANT_DOC1, 1, 1);
+    known.push(b"x".to_vec());
+    known.push(b"y".to_vec());
+    let known: Vec<&[u8]> = known.iter().map(Vec::as_slice).collect();
     assert_withheld(
-        &op(
+        &op_with_publish_values(
             port,
-            Some(&signed),
+            &signed,
             &publish(
                 CLAIMANT_DOC1,
                 Some((CLAIMANT_DOC1, 1)),
                 None,
                 &[run(CLAIMANT_DOC1, ATOM, 1), run(&s_draft, &s_text, 2)],
             ),
+            &known,
         ),
         &s_draft,
     );

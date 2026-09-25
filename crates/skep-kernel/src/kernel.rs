@@ -19,7 +19,7 @@ use crate::checkpoint::{self, CheckpointHeader};
 use crate::config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
 use crate::error::{CheckpointError, HistoryError, OpenError, TxnError};
 use crate::journal::{
-    self, CommitFail, FirstSyncWord, Journal, JournalWriter, ScanFail, UnwindRepair,
+    self, Attestation, CommitFail, FirstSyncWord, Journal, JournalWriter, ScanFail, UnwindRepair,
 };
 use crate::replay;
 use crate::{LockKey, Seq, WorldState};
@@ -926,6 +926,39 @@ impl<W: WorldState> Kernel<W> {
         keys: &[LockKey],
         f: impl FnOnce(&mut Staging<W>) -> Result<T, E>,
     ) -> Result<(T, Seq), TxnError<E>> {
+        self.transact_attested(keys, None, f)
+    }
+
+    /// [`Kernel::transact`] with THE SIGNATURE SLOT of this transaction's
+    /// commit marker filled (signed ops; the design record §2.4's inbound
+    /// route): where `attest` is `Some`, the marker `encode_txn` writes for
+    /// THIS transaction carries its tag and blob in the slot X2 reserved, and
+    /// nothing else about the commit moves — the records, their frames, the
+    /// salt, the chain (the slot is no chain input) and the accounting the
+    /// TRANSACTION BUDGET names are as `transact` leaves them, the blob's
+    /// bytes sitting OUTSIDE that budget (the design record §4.4 (b); the
+    /// marker's own frame stays far under the frame cap at any tag's width).
+    /// `None` is `transact` exactly: the slot written EMPTY, in its one
+    /// spelling. A zero-step transaction writes no marker and so no slot, and
+    /// under [`Durability::InMemory`] no marker exists at all — the value is
+    /// dropped with the frames it would have ridden.
+    ///
+    /// WHO CALLS THIS is the producer set the design states (§5.5): a
+    /// dispatched publish-class write whose attestation the daemon's check
+    /// admitted, reaching here through the store drivers' ATTESTED handles
+    /// and through nothing else — the head writer, M9 and every plain handle
+    /// pass `None` by construction. The kernel enforces none of that: it
+    /// writes the bytes it is handed, opaquely, for the transaction it is
+    /// handed them with, which is the whole of the seam.
+    ///
+    /// [`Kernel::attestation_at`] reads the slot back at a committed
+    /// boundary; the fold never does (the slot is fold-inert).
+    pub fn transact_attested<T, E>(
+        &self,
+        keys: &[LockKey],
+        attest: Option<&Attestation>,
+        f: impl FnOnce(&mut Staging<W>) -> Result<T, E>,
+    ) -> Result<(T, Seq), TxnError<E>> {
         let _ = keys; // §4: subsumed by the single applier's global lock in v1.
         let mut applier = self.applier.acquire();
         if self.poisoned.load(Ordering::Acquire) {
@@ -996,7 +1029,7 @@ impl<W: WorldState> Kernel<W> {
             let state = &mut *state;
             let root = &self.root;
             catch_unwind(AssertUnwindSafe(move || {
-                state.journal.commit_txn(first, records, move |chain| {
+                state.journal.commit_txn(first, records, attest, move |chain| {
                     // Atomic install AFTER durability (A0/A4; durable-before-
                     // visible §1): external readers see none-or-all. The
                     // root carries the chain the durable marker does.
@@ -1332,6 +1365,64 @@ impl<W: WorldState> Kernel<W> {
     /// are the caller's to gate, as they are there; safe beside the live
     /// appender and `checkpoint()` for the same reasons, with the same two
     /// transient refusals.
+    /// THE SIGNATURE SLOT of the transaction that committed the boundary `at`
+    /// (signed ops): the [`Attestation`] [`Kernel::transact_attested`] wrote
+    /// into its marker, or `None` where the slot is empty — a READ of the
+    /// marker's own bytes, the one place the slot is journal-resident, and the
+    /// read a feed sidecar mirroring the slot rebuilds from. Answered by the
+    /// same bounded scan [`Kernel::chain_at`] runs, with ONE difference: the
+    /// base is selected strictly BELOW `at`, so that the marker closing `at`
+    /// is scanned rather than embodied — a checkpoint carries the chain at
+    /// its coordinate and no marker, so a boundary that IS a checkpoint's
+    /// seq answers from the segment below it, and refuses
+    /// [`HistoryError::Reclaimed`] where that segment is gone even though
+    /// `chain_at` still answers there. Genesis (`Seq(0)`) is no transaction
+    /// and answers `None`. The other refusals are `chain_at`'s, in its order.
+    ///
+    /// The kernel INTERPRETS nothing it answers: which pair a tag names and
+    /// whether the blob verifies are the verifier's questions, beside the
+    /// table.
+    pub fn attestation_at(&self, at: Seq) -> Result<Option<Attestation>, HistoryError> {
+        let Some(journaled) = &self.journaled else {
+            return Err(HistoryError::Unjournaled);
+        };
+        let installed_head = self.current_seq();
+        if at > installed_head {
+            return Err(HistoryError::BeyondHead {
+                head: installed_head,
+            });
+        }
+        if at.0 == 0 {
+            return Ok(None);
+        }
+        let checkpoints = checkpoint::list(&journaled.dir)?;
+        let segs = journal::list_segments(&journaled.dir)?;
+        // Strictly below `at`, so the marker closing `at` is in the scanned
+        // region (a base AT `at` would embody it and read no marker).
+        let base = replay::select_base(&checkpoints, &segs, Some(at.0 - 1), &journaled.genesis)
+            .map_err(|fail| HistoryError::Reclaimed {
+                floor: fail.floor.map(Seq),
+                cause: fail.cause,
+            })?;
+        let scan = base.scan(&segs, Some(at.0)).map_err(|fail| match fail {
+            ScanFail::Io(e) => HistoryError::Io(e),
+            ScanFail::Unbounded { at } => HistoryError::Corruption {
+                at: Seq(at),
+                cause: None,
+            },
+        })?;
+        if let Some((halt_at, cause)) = scan.halt_anywhere() {
+            return Err(HistoryError::Corruption {
+                at: Seq(halt_at),
+                cause,
+            });
+        }
+        scan.attestation_at_boundary(at.0)
+            .map_err(|nearest| HistoryError::NotABoundary {
+                nearest: Seq(nearest),
+            })
+    }
+
     pub fn chain_at(&self, at: Seq) -> Result<[u8; 32], HistoryError> {
         match self.bounded_read(at)? {
             // The base's own chain — the `SKC4` header's `chain_head`, or the
@@ -1462,6 +1553,86 @@ mod tests {
     fn fresh_writer(dir: &std::path::Path) -> JournalWriter {
         JournalWriter::open_active(dir, 1, journal::CHAIN_GENESIS, SaltSource::Seeded(TEST_SEED))
             .unwrap()
+    }
+
+    /// THE SLOT IS FILLED FOR THAT TRANSACTION AND NO OTHER (signed ops):
+    /// `transact_attested` writes the attestation into the marker of the one
+    /// transaction it is handed with, `attestation_at` reads it back at that
+    /// boundary and `None` at every other, genesis is no transaction, a
+    /// zero-step call writes no marker, and a boundary that IS a checkpoint's
+    /// seq is still answered from the marker below it. The chain is unmoved
+    /// by the slot: the same ops under a plain `transact` chain identically.
+    #[test]
+    fn transact_attested_fills_the_slot_of_that_transaction_alone_and_reads_it_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let kernel =
+            Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new()).unwrap();
+        let push = |n: u64| move |stg: &mut Staging<Vec<u64>>| -> Result<(), ()> {
+            stg.push(n);
+            Ok(())
+        };
+        let tag1 = Attestation::new(1, vec![0x11; 3_373]).unwrap();
+        let tag3 = Attestation::new(3, vec![0x33; 730]).unwrap();
+        let (_, s1) = kernel.transact(&[], push(1)).unwrap();
+        let (_, s2) = kernel.transact_attested(&[], Some(&tag1), push(2)).unwrap();
+        let (_, s3) = kernel.transact_attested(&[], None, push(3)).unwrap();
+        // A zero-step attested call writes no marker and so no slot.
+        let (_, s3_again) = kernel
+            .transact_attested::<_, ()>(&[], Some(&tag1), |_| Ok(()))
+            .unwrap();
+        assert_eq!(s3_again, s3);
+        let (_, s4) = kernel.transact_attested(&[], Some(&tag3), push(4)).unwrap();
+        assert_eq!((s1, s2, s3, s4), (Seq(1), Seq(2), Seq(3), Seq(4)));
+
+        assert_eq!(kernel.attestation_at(Seq(0)).unwrap(), None, "genesis is no transaction");
+        assert_eq!(kernel.attestation_at(s1).unwrap(), None);
+        assert_eq!(kernel.attestation_at(s2).unwrap(), Some(tag1.clone()));
+        assert_eq!(kernel.attestation_at(s3).unwrap(), None);
+        assert_eq!(kernel.attestation_at(s4).unwrap(), Some(tag3.clone()));
+        assert!(matches!(
+            kernel.attestation_at(Seq(5)),
+            Err(HistoryError::BeyondHead { head: Seq(4) })
+        ));
+
+        // A checkpoint AT an attested boundary embodies the world and no
+        // marker: the read still answers, from the segment below it.
+        let at = kernel.checkpoint().unwrap();
+        assert_eq!(at, s4);
+        assert_eq!(kernel.attestation_at(s4).unwrap(), Some(tag3));
+        assert_eq!(kernel.chain_at(s4).unwrap(), kernel.chain_head());
+
+        // The chain is the same chain the plain arm writes: the slot is no
+        // chain input.
+        let twin = tempfile::tempdir().unwrap();
+        let plain =
+            Kernel::<Vec<u64>>::open(cfg(twin.path(), BurnedSeqPolicy::Rollback), Vec::new()).unwrap();
+        for n in 1..=4u64 {
+            plain.transact(&[], push(n)).unwrap();
+        }
+        assert_eq!(plain.chain_head(), kernel.chain_head());
+        assert_eq!(plain.attestation_at(Seq(2)).unwrap(), None);
+    }
+
+    /// Under `Durability::InMemory` no marker exists, so the arm drops the
+    /// value with the frames it would have ridden and the read-back refuses
+    /// `Unjournaled` — the same answer `chain_at` gives there.
+    #[test]
+    fn transact_attested_in_memory_drops_the_value_and_the_read_back_is_unjournaled() {
+        let cfg = KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(TEST_SEED),
+        };
+        let kernel = Kernel::<Vec<u64>>::open(cfg, Vec::new()).unwrap();
+        let attest = Attestation::new(1, vec![1, 2, 3]).unwrap();
+        let (_, s) = kernel
+            .transact_attested::<_, ()>(&[], Some(&attest), |stg| {
+                stg.push(1);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(s, Seq(1));
+        assert!(matches!(kernel.attestation_at(s), Err(HistoryError::Unjournaled)));
     }
 
     /// [`Kernel::newest_checkpoint`] (QUEUE item 10 piece 2, the head's `base`):
@@ -1766,10 +1937,13 @@ mod tests {
         // MAX_TXN_BYTES commits — the refusal begins one past the budget, not
         // at it — and one byte past is OverBudget in BOTH modes, with
         // identical accounting.
-        let overhead = journal::txn_encoded_len(&[
-            journal::encode_record(&Vec::<u8>::new()).unwrap(),
-            journal::encode_record(&Vec::<u8>::new()).unwrap(),
-        ]);
+        let overhead = journal::txn_encoded_len(
+            &[
+                journal::encode_record(&Vec::<u8>::new()).unwrap(),
+                journal::encode_record(&Vec::<u8>::new()).unwrap(),
+            ],
+            None,
+        );
         // A record's encoded length grows byte-for-byte with its body, so
         // these two bodies land the accounted total exactly on the budget.
         let body = journal::MAX_TXN_BYTES - overhead;
@@ -1830,8 +2004,10 @@ mod tests {
         // `Durability`: nothing installed, no Seq burned (Rollback), and the
         // caller may re-invoke — here split into two transactions, since one
         // oversized record cannot be split in place.
-        let overhead =
-            journal::txn_encoded_len(&[journal::encode_record(&Vec::<u8>::new()).unwrap()]);
+        let overhead = journal::txn_encoded_len(
+            &[journal::encode_record(&Vec::<u8>::new()).unwrap()],
+            None,
+        );
         let over = (journal::MAX_TXN_BYTES - overhead) as usize + 1;
         in_each_mode(|k, mode| {
             k.transact::<_, ()>(&[], |stg| {
@@ -1895,11 +2071,11 @@ mod tests {
             let rec = |x: u64| journal::encode_record(&x).unwrap();
             // A journal built without a kernel: no root to install into.
             writer
-                .commit_txn(1, vec![rec(10)], |_| {})
+                .commit_txn(1, vec![rec(10)], None, |_| {})
                 .expect("fixture commit");
             // burned 2..=4
             writer
-                .commit_txn(5, vec![rec(50), rec(60)], |_| {})
+                .commit_txn(5, vec![rec(50), rec(60)], None, |_| {})
                 .expect("fixture commit");
         }
         let k = Kernel::<Vec<u64>>::open(
@@ -1922,10 +2098,10 @@ mod tests {
             let mut writer = fresh_writer(dir.path());
             let rec = |x: u64| journal::encode_record(&x).unwrap();
             writer
-                .commit_txn(1, vec![rec(10)], |_| {})
+                .commit_txn(1, vec![rec(10)], None, |_| {})
                 .expect("fixture commit");
             writer
-                .commit_txn(1, vec![rec(20)], |_| {})
+                .commit_txn(1, vec![rec(20)], None, |_| {})
                 .expect("fixture commit");
         }
         // A torn tail past the last committed marker, so there IS something a
@@ -1990,7 +2166,7 @@ mod tests {
             let mut writer = fresh_writer(dir.path());
             // Variant index 5, written where `Narrow` has four.
             writer
-                .commit_txn(1, vec![journal::encode_record(&5u32).unwrap()], |_| {})
+                .commit_txn(1, vec![journal::encode_record(&5u32).unwrap()], None, |_| {})
                 .expect("fixture commit");
         }
         let err = Kernel::<NarrowWorld>::open(
@@ -2027,11 +2203,11 @@ mod tests {
             let mut writer = fresh_writer(dir.path());
             // Variant index 5, written where `Narrow` has four…
             writer
-                .commit_txn(1, vec![journal::encode_record(&5u32).unwrap()], |_| {})
+                .commit_txn(1, vec![journal::encode_record(&5u32).unwrap()], None, |_| {})
                 .expect("fixture commit");
             // …then a record this build reads, and a base embodying both.
             writer
-                .commit_txn(2, vec![journal::encode_record(&Narrow::A).unwrap()], |chain| {
+                .commit_txn(2, vec![journal::encode_record(&Narrow::A).unwrap()], None, |chain| {
                     chain_at_2 = chain
                 })
                 .expect("fixture commit");
@@ -2088,10 +2264,10 @@ mod tests {
                 evil.extend_from_slice(&[0u8; 4]);
             }
             writer
-                .commit_txn(1, vec![evil], |_| {})
+                .commit_txn(1, vec![evil], None, |_| {})
                 .expect("fixture commit");
             writer
-                .commit_txn(2, vec![journal::encode_record(&20u64).unwrap()], |_| {})
+                .commit_txn(2, vec![journal::encode_record(&20u64).unwrap()], None, |_| {})
                 .expect("fixture commit");
         }
         // Break the frame carrying those bytes, so the scan resynchronizes
@@ -2172,7 +2348,7 @@ mod tests {
             let mut writer = fresh_writer(dir.path());
             let record = journal::encode_record(&10u64).unwrap();
             writer
-                .commit_txn(u64::MAX, vec![record], |_| {})
+                .commit_txn(u64::MAX, vec![record], None, |_| {})
                 .expect("fixture commit");
         }
         // A torn tail past the last committed marker, so there IS something a

@@ -30,11 +30,22 @@
 //!
 //! ## What lives here
 //!
-//! * keys and fingerprints — [`PublicKey`] with [`ALG_ED25519`] and its
-//!   refusal [`KeyParseError`], [`ALGS`] with its row type [`AlgRow`],
-//!   [`Fingerprint`] (AUTH-1.1–1.10);
+//! * keys and fingerprints — [`PublicKey`] with [`ALG_ED25519`] and the two
+//!   HYBRID tokens [`ALG_MLDSA65_ED25519`] (tag 1, production) and
+//!   [`ALG_FNDSA512_PREVIEW_ED25519`] (tag 3, preview), its refusal
+//!   [`KeyParseError`], [`ALGS`] with its row type [`AlgRow`], the marker-tag
+//!   table [`SIG_ALGS`] with [`SigAlgRow`], [`Fingerprint`] (AUTH-1.1–1.10;
+//!   signed ops);
 //! * framing and the tag set — [`Tag`], [`framed`], [`TAGS`]
-//!   (AUTH-1.11–1.17);
+//!   (AUTH-1.11–1.17), and THE ENTRY FRAME under [`ENTRY_TAG`] —
+//!   [`entry_frame`] with the byte forms of its members ([`board_bytes`],
+//!   [`address_bytes`], [`value_sequence`], [`slot_bytes`]) and the bodies
+//!   per op ([`entry_body_insert`], [`entry_body_link`],
+//!   [`entry_body_publish`]) — the bytes a publish-class entry's signature is
+//!   made over (signed ops; the design record §2.5);
+//! * the record value at one name with both directions —
+//!   [`canonical_record`] over a [`RecordEntry`]: the signer's `sig`-bearing
+//!   record and the verifier's SIG-LESS PROJECTION (the record §4.2 (C));
 //! * the credential-record constants and payload types — [`ENROLL_TYPE`],
 //!   [`RETIRE_TYPE`], [`MAX_RECORD_BYTES`], [`Enrollment`] with its refusal
 //!   [`LabelError`], [`PayloadError`] (AUTH-1.18–1.28) — with the JSON record
@@ -87,6 +98,7 @@
 
 #![forbid(unsafe_code)]
 
+mod entry;
 mod framing;
 mod key;
 mod keyset;
@@ -98,12 +110,23 @@ mod state;
 mod verdict;
 mod write_types;
 
-pub use framing::{framed, Tag, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, SESSION_TAG_V2, TAGS};
-pub use key::{AlgRow, Fingerprint, KeyParseError, PublicKey, ALGS, ALG_ED25519};
+pub use entry::{
+    address_bytes, board_bytes, entry_body_insert, entry_body_link, entry_body_publish,
+    entry_frame, slot_bytes, value_sequence, EntrySlot,
+};
+pub use framing::{
+    framed, Tag, ENTRY_TAG, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, SESSION_TAG_V2, TAGS,
+};
+pub use key::{
+    sig_alg_of, token_of_sig_alg, AlgRow, Fingerprint, KeyParseError, PublicKey, SigAlgRow, ALGS,
+    ALG_ED25519, ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519, ED25519_KEY_LEN,
+    FNDSA512_ED25519_KEY_LEN, FNDSA512_KEY_LEN, MLDSA65_ED25519_KEY_LEN, MLDSA65_KEY_LEN,
+    SIG_ALGS,
+};
 pub use keyset::{Enrolled, KeySet};
 pub use payload::{
-    encode_enroll, encode_retire, parse_enroll, parse_retire, Enrollment, LabelError, PayloadError,
-    ENROLL_TYPE, MAX_RECORD_BYTES, RETIRE_TYPE,
+    canonical_record, encode_enroll, encode_retire, parse_enroll, parse_retire, Enrollment,
+    LabelError, PayloadError, RecordEntry, ENROLL_TYPE, MAX_RECORD_BYTES, RETIRE_TYPE,
 };
 pub use read::record_bytes;
 pub use seam::{FoldCtx, Owner, Values};

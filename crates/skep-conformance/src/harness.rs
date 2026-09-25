@@ -98,7 +98,7 @@ impl Rig {
     ) -> Result<Address, RigError> {
         let home = match febe.execute(
             session,
-            Request { id: None, op: Op::CreateNewDocument { account: account.clone(), published: None } },
+            Request { id: None, op: Op::CreateNewDocument { account: account.clone(), published: None }, attest: None },
         ) {
             Response::AckAddr { addr, .. } => addr,
             other => return Err(format!("home mint failed: {}", brief(&other))),
@@ -107,6 +107,7 @@ impl Rig {
             session,
             Request {
                 id: None,
+                attest: None,
                 op: Op::MakeLink {
                     home: home.clone(),
                     from: SlotArg::Addrs(vec![account.clone()]),
@@ -138,7 +139,7 @@ impl Rig {
         let node = addr(&[1]).ok_or("node [1] must validate")?;
         let prefix = match febe.execute(
             boot,
-            Request { id: None, op: Op::NextAccountPrefix { parent: node } },
+            Request { id: None, op: Op::NextAccountPrefix { parent: node }, attest: None },
         ) {
             Response::MaybeAddr { addr: Some(a), .. } => a,
             other => return Err(format!("next-account-prefix failed: {}", brief(&other))),
@@ -147,6 +148,7 @@ impl Rig {
             boot,
             Request {
                 id: None,
+                attest: None,
                 op: Op::Delegate {
                     new_prefix: prefix.tumbler().clone(),
                     new_id: PrincipalId(1),
@@ -209,7 +211,7 @@ impl Rig {
     /// Execute one request under the current session. No idempotency key —
     /// the harness replays a linear script.
     pub fn exec(&self, o: Op) -> Response {
-        self.febe.execute(self.current_session, Request { id: None, op: o })
+        self.febe.execute(self.current_session, Request { id: None, op: o, attest: None })
     }
 
     /// The initially delegated account (α seed target).
@@ -289,7 +291,7 @@ impl Rig {
             .unwrap_or(self.boot);
         let prefix = match self.febe.execute(
             owner_session,
-            Request { id: None, op: Op::NextAccountPrefix { parent: parent.clone() } },
+            Request { id: None, op: Op::NextAccountPrefix { parent: parent.clone() }, attest: None },
         ) {
             Response::MaybeAddr { addr: Some(a), .. } => a,
             other => return Err(format!("next-account-prefix: {}", brief(&other))),
@@ -300,6 +302,7 @@ impl Rig {
             owner_session,
             Request {
                 id: None,
+                attest: None,
                 op: Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: id },
             },
         ) {

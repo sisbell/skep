@@ -39,10 +39,12 @@ fn fingerprint_hex(sk: &SigningKey) -> String {
 /// appended last, as its atom JSON fragment — the shape that asks where
 /// slot (4)'s decode stops, since the undecodable key sits at the end.
 fn enroll_atom_with_trailing_non_point(n: usize) -> String {
+    // CLASSICAL entries (signed ops): the cell counts keys against the cap,
+    // and sixteen hybrid entries would fill the 64 KiB record cap first.
     let real: Vec<SigningKey> = (0..n as u8).map(distinct_key).collect();
     let mut entries: Vec<Enrollment> = real
         .iter()
-        .map(|sk| Enrollment::new(public_key_of(sk), false, None).expect("no label"))
+        .map(|sk| Enrollment::new(ed25519_public_key_of(sk), false, None).expect("no label"))
         .collect();
     let bad = PublicKey::parse("ed25519", &non_point_hex())
         .expect("64 hex parses — the fold admits syntax and never decodes the point");
@@ -538,13 +540,16 @@ fn a_genesis_record_meets_its_key_cap_at_both_ends() {
 
     // One genesis attempt: the record atom into the account's own doc 1
     // (the genesis registry), then the deposit naming it.
+    // CLASSICAL entries (signed ops): the cell is about the record's KEY
+    // COUNT, and sixteen hybrid entries fill the 64 KiB record cap where
+    // sixteen classical ones fit — the design record's E7 arithmetic.
     let genesis = |ordinal: u64, keys: &[&SigningKey]| -> Value {
         let v = op(
             port,
             Some(&account_token),
             &format!(
                 r#"{{"op":"insert","doc":"{doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}],"deposit":"{T_ENROLL}"}}"#,
-                enroll_atom(keys)
+                enroll_atom_ed25519(keys)
             ),
         );
         expect_resp(&v, "ack_addr");
@@ -2680,7 +2685,7 @@ fn spawn_listed_at(
 ) -> (skepd::Skepd, std::path::PathBuf) {
     let (list, data) = listed_dirs(root);
     let sd = spawn_with_blocked_prefixes(&data, true, Some(&list), node_prefix);
-    claim_board(sd.port());
+    claim_board(sd.port()); // …whose own step writes H.1, for the attested writes below
     (sd, list)
 }
 

@@ -37,3 +37,6 @@ skep-arrangement = { path = "../skep-arrangement" }
 # MAKELINK has arranged content to resolve.
 bincode.workspace = true
 skep-content = { path = "../skep-content" }
+# The attested-handle case (signed ops) pins a FILLED marker slot, which
+# only a journaled kernel writes.
+tempfile.workspace = true

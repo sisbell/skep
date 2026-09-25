@@ -5,23 +5,28 @@
 use std::sync::LazyLock;
 
 use skep_address::{
-    checked_inc, document_of, ordinal, parent, validate, Address, Nat, Span, Tumbler,
+    checked_inc, document_of, ordinal, parent, subtree_of, validate, Address, Nat, Span, Tumbler,
 };
-use skep_arrangement::trunk_of;
+use skep_arrangement::{trunk_of, Deposit};
 use skep_engine::types::{
     t_consumption_marker, t_endorse, t_grant, t_journal_designation, t_rail_record,
     t_steward_classification, t_successor_of,
 };
-use skep_febe::Op;
+use skep_febe::{Disposition, Op};
 use skep_identity::{
-    AuditClass, CredentialKind, Effect, Fingerprint, IdentityState, Inert, LinkDeposit,
-    TargetClass, TypeAddrs, Verdict, WriteTypes,
+    token_of_sig_alg, AuditClass, CredentialKind, Effect, Fingerprint, IdentityState, Inert,
+    LinkDeposit, PublicKey, TargetClass, TypeAddrs, Verdict, WriteTypes,
 };
+use skep_kernel::Attestation;
 use skep_links::{enc, HasLinks, SlotArg};
-use skep_namespace::{first_document_address, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
+use skep_namespace::{
+    first_document_address, system_account, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL,
+};
 
+use super::entry::{self, ComposeFault};
 use super::fold::WorldCtx;
-use super::session::{keyed_above, Scope};
+use super::hybrid;
+use super::session::{key_subject, keyed_above, Scope};
 use super::{LockRead, LockWrite};
 use crate::World;
 
@@ -302,6 +307,59 @@ pub(crate) enum CredentialRefusal {
     /// PUB-6.63's verbatim: "this board carries pre-claim residue — re-genesis
     /// before claiming."
     ClaimResidue,
+    /// THE WRITE-PATH CHECK's first refusal (signed ops; the design record
+    /// §4.5 (1); A1): a DISPATCHED, publish-class write of the attested ops
+    /// ABOVE THE CLAIM on a claimed board, from a signed session, carrying no
+    /// `attest`. Token `attestation_required`, class REORDER — the answer is
+    /// a DIFFERENT request the client composes (the same content, signed and
+    /// attached), which under ATTACH WHEN IN DOUBT is the ordinary path and
+    /// no error case.
+    AttestationRequired,
+    /// THE WRITE-PATH CHECK's second refusal (§4.5 (2)): an `attest` that
+    /// does not verify, with the cause a verifier can tell from the bytes in
+    /// hand — the `detail` split §7.3 (iii) asks for, at least between
+    /// SIGNATURE and NOT-ENROLLED-AT-POSITION. Token
+    /// `attestation_invalid:<cause>`, the class the cause's own.
+    AttestationInvalid(AttestFault),
+}
+
+/// The causes of `attestation_invalid` — the `<cause>` sub-token, joined as
+/// the payload arm joins `malformed_payload:<sub>` (AUTH-2.55), each with
+/// the disposition class the design record §7.3 (iii) lands for its next
+/// act.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AttestFault {
+    /// The blob is not the tag's fixed width (a re-compose: a client bug;
+    /// REORDER).
+    Malformed,
+    /// The board has no `H.1`, so the frame's `board` term (D13) has no
+    /// value and nothing can be verified. UNREACHABLE on a claimed board in
+    /// normal operation since s1 (RULED 2026-09-25): the claim writes `H.1`
+    /// in its own step and the daemon's open writes it where a crash split
+    /// the two — kept, defensive, for a journal damaged below `H.1` (the
+    /// member gone, or its record not one this build reads). REORDER, not
+    /// PERMANENT: the board's state refused it, not the client's key. Its
+    /// own cause so a client is not told its signature was wrong.
+    BoardUnavailable,
+    /// The set that OPENS the act's principal at this write's base holds no
+    /// key of the attestation's algorithm — A2's empty walk among them — so
+    /// no retry under the same key can succeed (PERMANENT).
+    NotEnrolledAtPosition,
+    /// A candidate key exists and none verifies the blob over the frame the
+    /// daemon composed — wrong bytes, a wrong `board` term, a body composed
+    /// otherwise: the client re-composes (REORDER).
+    Signature,
+}
+
+impl AttestFault {
+    fn sub_token(self) -> &'static str {
+        match self {
+            AttestFault::Malformed => "malformed",
+            AttestFault::BoardUnavailable => "board_unavailable",
+            AttestFault::NotEnrolledAtPosition => "not_enrolled_at_position",
+            AttestFault::Signature => "signature",
+        }
+    }
 }
 
 impl CredentialRefusal {
@@ -326,6 +384,26 @@ impl CredentialRefusal {
             CredentialRefusal::SignedSessionRequired => "signed_session_required".into(),
             CredentialRefusal::ClaimFirst => "claim_first".into(),
             CredentialRefusal::ClaimResidue => "claim_residue".into(),
+            CredentialRefusal::AttestationRequired => "attestation_required".into(),
+            CredentialRefusal::AttestationInvalid(f) => {
+                format!("attestation_invalid:{}", f.sub_token())
+            }
+        }
+    }
+
+    /// The wire `disposition`: `Permanent` for the family as AUTH-3.54 pins
+    /// it, and the two attestation codes' own classes (signed ops; the
+    /// design record §7.3 (iii)) — `attestation_required` REORDER, and
+    /// `attestation_invalid` PERMANENT at not-enrolled-at-position and
+    /// REORDER at the re-compose causes.
+    pub fn disposition(&self) -> Disposition {
+        match self {
+            CredentialRefusal::AttestationRequired => Disposition::Reorder,
+            CredentialRefusal::AttestationInvalid(AttestFault::NotEnrolledAtPosition) => {
+                Disposition::Permanent
+            }
+            CredentialRefusal::AttestationInvalid(_) => Disposition::Reorder,
+            _ => Disposition::Permanent,
         }
     }
 }
@@ -575,9 +653,21 @@ pub(super) fn published_unprojected(world: &World, a: &Address) -> bool {
 
 /// The plain path's one producer for the two board-state gates, dispatched
 /// on claimed-ness (AUTH-3.78): once claimed, the public-permanent gate
-/// (RES-26, `signed_session_required`); in UNCLAIMED the pre-claim
-/// admission gate (RES-27, `claim_first`). Exact under the read guard: the
-/// claim commits only under `credential_lock.write()`.
+/// (RES-26, `signed_session_required`) and — behind it, on the same
+/// classification (signed ops; the design record §4.5 (1)–(2), §5.5) — THE
+/// WRITE-PATH CHECK; in UNCLAIMED the pre-claim admission gate (RES-27,
+/// `claim_first`). Exact under the read guard: the claim commits only under
+/// `credential_lock.write()`.
+///
+/// THE ANSWER IS WHAT REACHES THE STORE: `Ok(Some(a))` is an attestation
+/// the check VERIFIED, to be written into this write's marker slot;
+/// `Ok(None)` is a write that commits with the slot EMPTY — no `attest`
+/// demanded, or one DROPPED, never verified and never written: off the
+/// publish class (D1's third arm) or on the UNCLAIMED board (A5: the
+/// ceremony's own span, where an `attest` a cautious client attached could
+/// verify under no key). The slot's producer set is stated here in code: a
+/// dispatched publish-class write above the claim whose `attest` this
+/// producer admitted, and nothing else.
 ///
 /// `world` and `identity` MUST be the pair taken under the read guard for
 /// this request; the guard argument is that contract's cheap half.
@@ -588,16 +678,154 @@ pub(crate) fn board_state_refusal(
     op: &Op,
     principal: PrincipalId,
     signer: Option<&Fingerprint>,
-) -> Option<CredentialRefusal> {
+    attest: Option<&Attestation>,
+) -> Result<Option<Attestation>, CredentialRefusal> {
     if identity.claimant().is_some() {
-        publish_gate(world, op, principal, signer)
+        // A1: the check runs on a CLAIMED board — every write reaching this
+        // arm is ABOVE the claim entry, the claim having committed before
+        // the fold snapshot it reads was taken.
+        if !publish_class(world, op, principal) {
+            return Ok(None);
+        }
+        if signer.is_none() {
+            return Err(CredentialRefusal::SignedSessionRequired);
+        }
+        attestation_check(world, identity, op, principal, attest)
     } else {
-        pre_claim_gate(world, op, principal)
+        // A5: the unclaimed board's span — the `attest` is dropped whole.
+        match pre_claim_gate(world, op, principal) {
+            Some(r) => Err(r),
+            None => Ok(None),
+        }
     }
 }
 
+/// THE WRITE-PATH CHECK (signed ops; the design record §4.5 (1)–(2) made
+/// concrete at the placement the owner confirmed 2026-09-25 — BEFORE the
+/// transaction, beside `publish_gate`, on the snapshot pair the gates read,
+/// which under the serialization guard IS the transaction's base). Reached
+/// for a publish-class write from a SIGNED session on a CLAIMED board:
+///
+/// 1. THE SLICE — the three ops the seam build attests (`insert`,
+///    `make_link`, `publish`); every other publish-class op carries no
+///    `attest` (the codec refuses the member there) and commits on its
+///    signed session as before — the widening lane's, not this one's.
+/// 2. THE RECORD DEPOSIT EXEMPTION (§2.5's `insert` cell as re-cut at
+///    required signing; D26): a DECLARED deposit under a CREDENTIAL kind —
+///    the atom a credential record rides — carries its signature in the
+///    record's own `sig` member (the record grade's lane), and (1) demands
+///    no `attest` for it. The deposit's OTHER half, the `make_link` naming
+///    the atom, never reaches this producer at all: `deposits_credential_link`
+///    routes it to the credential sequence, whose `precheck` is the record
+///    grade's door — which is how the check tells D26's case: BY ROUTE for
+///    the link, BY DECLARED TYPE for the atom.
+/// 3. A3 — the SYSTEM ACCOUNT's own documents are exempt by ω (`1.1.0.1`,
+///    address arithmetic; never the `"system"` testimony). The head writer
+///    never passes dispatch, so this arm is stated for a dispatched write
+///    that names one and is met by none today.
+/// 4. (1): no `attest` → `attestation_required`.
+/// 5. (2): the blob's width under its tag; the frame composed from the op
+///    and the snapshot (`super::entry`); the KEY SET that OPENS the act's
+///    principal AS OF this base (AUTH-4.30 (i)'s walk, `key_subject`) —
+///    the fold's own set at this position, the check's table being the
+///    daemon's own since no record grade is built yet; the candidates are
+///    that set's keys of the tag's row (A2's empty walk answers
+///    `not_enrolled_at_position`, PERMANENT); any candidate verifying BOTH
+///    halves over the frame admits the value, else `signature`.
+///
+/// The frame the daemon composes for a `publish` reads the runs' values
+/// off the snapshot by `value_at` — a second Σ-width walk per attested shot,
+/// off the snapshot and not under the applier lock (the investigation §3.3's
+/// price). A run naming an address with no value cannot commit; the store's
+/// `dangling_source` is that write's answer, so the check passes it through
+/// unattested rather than refusing a signature over bytes nobody holds.
+fn attestation_check(
+    world: &World,
+    identity: &IdentityState,
+    op: &Op,
+    principal: PrincipalId,
+    attest: Option<&Attestation>,
+) -> Result<Option<Attestation>, CredentialRefusal> {
+    // 1 — the slice.
+    if !matches!(op, Op::Insert { .. } | Op::MakeLink { .. } | Op::Publish { .. }) {
+        return Ok(None);
+    }
+    // 2 — the record deposit's atom (D26).
+    if let Op::Insert { deposit: Deposit::Declared(ty), .. } = op {
+        if identity_types().kind_of(&[subtree_of(ty.tumbler())]).is_some() {
+            return Ok(None);
+        }
+    }
+    // 3 — A3, by ω.
+    if system_owned(world, op) {
+        return Ok(None);
+    }
+    // 4 — THE FRAME, composed before the member is asked for: a write the
+    // daemon cannot compose a frame for cannot commit either (a `publish`
+    // run naming an address with no value) and is passed through UNATTESTED
+    // for the store's own refusal, attest or none; and a board with no
+    // `H.1` — a journal damaged below it, since the claim writes `H.1` in
+    // its own step (s1) — has no `board` term for ANY client to sign over,
+    // which is told as its own cause rather than as "carry an attest".
+    let invalid = CredentialRefusal::AttestationInvalid;
+    let row = match attest {
+        Some(a) => token_of_sig_alg(a.sig_alg()).ok_or(invalid(AttestFault::Malformed))?,
+        None => token_of_sig_alg(hybrid::TAG_MLDSA65_ED25519).expect("tag 1 is a row"),
+    };
+    let frame = match entry::compose(world, op, principal, row.token) {
+        Ok(frame) => frame,
+        Err(ComposeFault::NoBoard) => return Err(invalid(AttestFault::BoardUnavailable)),
+        Err(ComposeFault::NoAccount) => return Err(invalid(AttestFault::NotEnrolledAtPosition)),
+        Err(ComposeFault::MissingValue) | Err(ComposeFault::NotAttestable) => return Ok(None),
+    };
+    // 5 — (1).
+    let Some(attest) = attest else {
+        return Err(CredentialRefusal::AttestationRequired);
+    };
+    // 6 — (2).
+    if attest.sig().len() != row.sig_len() {
+        return Err(invalid(AttestFault::Malformed));
+    }
+    let candidates: Vec<&PublicKey> = key_subject(world, identity, principal)
+        .map(|subject| {
+            identity
+                .key_set(&subject)
+                .enrolled()
+                .map(|(_, e)| &e.key)
+                .filter(|k| k.alg() == row.token)
+                .collect()
+        })
+        .unwrap_or_default();
+    if candidates.is_empty() {
+        return Err(invalid(AttestFault::NotEnrolledAtPosition));
+    }
+    if candidates
+        .iter()
+        .any(|key| hybrid::verify(row.tag, key, attest.sig(), &frame).is_ok())
+    {
+        Ok(Some(attest.clone()))
+    } else {
+        Err(invalid(AttestFault::Signature))
+    }
+}
+
+/// A3's test: the write's target or home document is OWNED BY THE SYSTEM
+/// ACCOUNT `1.1.0.1` — ω, address arithmetic (PUB-6.65) — and by nothing
+/// served or testified.
+fn system_owned(world: &World, op: &Op) -> bool {
+    let target = match op {
+        Op::Insert { doc, .. } | Op::Publish { doc, .. } => doc,
+        Op::MakeLink { home, .. } => home,
+        _ => return false,
+    };
+    world.m3().effective_owner_prefix(target) == Some(&system_account())
+}
+
 /// RES-26 (AUTH-3.79–3.81): on a claimed board, an op whose write lands in
-/// the published world is accepted only from a signed session. Domain per
+/// the published world is accepted only from a signed session — and, since
+/// signed ops, is where the write-path check runs (`board_state_refusal`).
+/// This is THE CLASSIFICATION ORACLE (PUB-6.43, the daemon's own): `true`
+/// iff the write is PUBLISH-CLASS for this caller. Domain per
 /// input form (PUB-6.43's input table):
 /// * an EXPLICIT flag — the argument itself, resolved pre-dispatch: a
 ///   `create`/`fork`/`version` carrying `published: Some(true)` publishes,
@@ -644,15 +872,7 @@ pub(crate) fn board_state_refusal(
 /// gated as published, its own journaled bit notwithstanding. The explicit
 /// flag on the `version` itself is the argument's own input (row 1 of the
 /// table), which is why that mint is admitted from a bare session.
-fn publish_gate(
-    world: &World,
-    op: &Op,
-    principal: PrincipalId,
-    signer: Option<&Fingerprint>,
-) -> Option<CredentialRefusal> {
-    if signer.is_some() {
-        return None;
-    }
+fn publish_class(world: &World, op: &Op, principal: PrincipalId) -> bool {
     // Registration and ω — the pair that stands AHEAD of this gate (PUB-6.37,
     // PUB-6.36 slot 1) on every HOME and TARGET arm, in ONE spelling, so an
     // arm that means to take the pair cannot take half of it: an address
@@ -661,37 +881,23 @@ fn publish_gate(
     // else and each says what.
     let m3 = world.m3();
     let owned = |a: &Address| m3.is_registered_document(a) && m3.is_effective_owner(principal, a);
-    let homed_refusal = |home: &Address| -> Option<CredentialRefusal> {
-        (owned(home) && published(world, home))
-            .then_some(CredentialRefusal::SignedSessionRequired)
-    };
+    let homed = |home: &Address| -> bool { owned(home) && published(world, home) };
     match op {
         // An EXPLICIT `published: true` on a mint IS the gate input
         // (PUB-6.43): it lands in the published world. The first mint stays
         // exempt — a first `create` into an empty account the caller owns is
         // the content-empty mechanical home (PUB-6.43's enumerated
-        // exemption), so it answers `None` here (accepted).
+        // exemption), so it answers `false` here (accepted).
         Op::CreateNewDocument { account, published: Some(true) } => {
-            if world.m3().is_effective_owner(principal, account)
-                && world.m3().has_documents(account)
-            {
-                Some(CredentialRefusal::SignedSessionRequired)
-            } else {
-                None
-            }
+            world.m3().is_effective_owner(principal, account) && world.m3().has_documents(account)
         }
         // `fork` mints into the caller's OWN account; an empty account is
         // refused `mint_home_first` ahead of this gate, so only a non-first
         // published fork reaches here.
-        Op::Fork { published: Some(true) } => {
-            if world.m3().principal_prefix(principal).is_some_and(|pfx| {
-                world.m3().is_registered_account(pfx)
-            }) {
-                Some(CredentialRefusal::SignedSessionRequired)
-            } else {
-                None
-            }
-        }
+        Op::Fork { published: Some(true) } => world
+            .m3()
+            .principal_prefix(principal)
+            .is_some_and(|pfx| world.m3().is_registered_account(pfx)),
         // `version` with the flag: explicit `true` publishes; `false` is a
         // draft; ABSENT INHERITS `published(d_src)`. Registration stands
         // ahead (PUB-6.37): an unregistered source answers `execute`'s own
@@ -705,21 +911,12 @@ fn publish_gate(
         // document is readable to every class, so `signed_session_required`
         // here tells a caller what `doc_metadata` already would.
         Op::Version { d_src, published: flag } => {
-            if !world.m3().is_registered_document(d_src) {
-                None
-            } else {
-                match flag {
-                    Some(true) => Some(CredentialRefusal::SignedSessionRequired),
-                    Some(false) => None,
-                    None => {
-                        if published(world, d_src) {
-                            Some(CredentialRefusal::SignedSessionRequired)
-                        } else {
-                            None
-                        }
-                    }
+            world.m3().is_registered_document(d_src)
+                && match flag {
+                    Some(true) => true,
+                    Some(false) => false,
+                    None => published(world, d_src),
                 }
-            }
         }
         // The SHOT (lane 3.2) is a mint resolving PUBLISHED by definition —
         // every member is published-born (PUB-2.5) — so it is this gate's
@@ -728,15 +925,13 @@ fn publish_gate(
         // `private_source_versionless` (slot 5), exactly as a bare
         // `version(d, published:true)` does. Registration and ω stand ahead
         // (PUB-6.37, PUB-6.36 slot 1), as everywhere.
-        Op::Publish { doc, .. } => {
-            owned(doc).then_some(CredentialRefusal::SignedSessionRequired)
-        }
+        Op::Publish { doc, .. } => owned(doc),
         Op::Insert { doc, .. }
         | Op::Delete { doc, .. }
         | Op::Copy { doc, .. }
-        | Op::Rearrange { doc, .. } => homed_refusal(doc),
+        | Op::Rearrange { doc, .. } => homed(doc),
         Op::MakeLink { home, .. } | Op::Emit { home, .. } | Op::AssertSup { home, .. } => {
-            homed_refusal(home)
+            homed(home)
         }
         // `edit_link` DEPOSITS TWICE (lane 4.2, F1): the successor into
         // `d_s`, the supersession CLAIM into `d_a` — M7's `editlink` files
@@ -750,11 +945,7 @@ fn publish_gate(
         // home is published. The finding cell: `d_s` a draft, `d_a` the
         // published doc 1, bare — refused here, nothing deposited.
         Op::EditLink { d_s, d_a, .. } => {
-            if !(owned(d_s) && owned(d_a)) {
-                return None;
-            }
-            (published(world, d_s) || published(world, d_a))
-                .then_some(CredentialRefusal::SignedSessionRequired)
+            owned(d_s) && owned(d_a) && (published(world, d_s) || published(world, d_a))
         }
         // PUB-6.43's `nullify` ROW (RES-3; landed with lane 3.5, whose
         // bare-owner cell presupposes it): a retraction LANDS AT ITS TARGET
@@ -774,18 +965,16 @@ fn publish_gate(
         // owner's `nullify` of an EMPTY address in its published doc 1
         // answers here, never `bad_target`.
         Op::Nullify { home, target } => {
-            if !(owned(home) && m3.is_effective_owner(principal, target)) {
-                return None;
-            }
-            let lands_published = published(world, home)
-                || document_of(target)
-                    .as_ref()
-                    .is_some_and(|d| m3.is_registered_document(d) && published(world, d));
-            lands_published.then_some(CredentialRefusal::SignedSessionRequired)
+            owned(home)
+                && m3.is_effective_owner(principal, target)
+                && (published(world, home)
+                    || document_of(target)
+                        .as_ref()
+                        .is_some_and(|d| m3.is_registered_document(d) && published(world, d)))
         }
         // create/fork with a non-`true` flag: a draft, or the exempt home
         // mint (the explicit-`false` first mint is the door's, upstream).
-        _ => None,
+        _ => false,
     }
 }
 
@@ -934,7 +1123,7 @@ fn accounts_under(world: &World, node: &Address) -> Option<Nat> {
 /// audit-view class (PUB-6.64) — take slot 5's position, AFTER the gate and
 /// never before it, "a session that may not write here never being told
 /// what the target link is". The order is observable on BOTH sides of the
-/// claim. Post-claim, since lane 3.5 gave [`publish_gate`] PUB-6.43's
+/// claim. Post-claim, since lane 3.5 gave [`publish_class`] PUB-6.43's
 /// `nullify` row: a BARE owner's retraction of a grant record in its own
 /// published doc 1 answers `signed_session_required`, never the grant-typed
 /// token — the cell the delta pins. Pre-claim: an UNCLAIMED board admits no
@@ -957,11 +1146,25 @@ pub(crate) fn plain_refusal(
     op: &Op,
     principal: PrincipalId,
     signer: Option<&Fingerprint>,
-) -> Option<CredentialRefusal> {
-    first_mint_private_refusal(lock, world, op, principal)
-        .or_else(|| mint_home_refusal(lock, world, op, principal))
-        .or_else(|| board_state_refusal(lock, world, identity, op, principal, signer))
-        .or_else(|| nullify_refusal(lock, world, identity, op, principal))
+    attest: Option<&Attestation>,
+) -> Result<Option<Attestation>, CredentialRefusal> {
+    if let Some(r) = first_mint_private_refusal(lock, world, op, principal) {
+        return Err(r);
+    }
+    if let Some(r) = mint_home_refusal(lock, world, op, principal) {
+        return Err(r);
+    }
+    // The board-state pair — and, inside its claimed arm, the write-path
+    // check (signed ops), whose admitted attestation is this function's
+    // answer. It stands where the pair stood: ahead of the `nullify` class,
+    // so a signed `nullify` carrying no `attest` is judged as before (no
+    // `attest` is admitted on `nullify` in this slice) and its class token
+    // still speaks last.
+    let admitted = board_state_refusal(lock, world, identity, op, principal, signer, attest)?;
+    if let Some(r) = nullify_refusal(lock, world, identity, op, principal) {
+        return Err(r);
+    }
+    Ok(admitted)
 }
 
 // ── precheck — slots (3)–(8), under the write lock (AUTH-3.15–3.19) ──────

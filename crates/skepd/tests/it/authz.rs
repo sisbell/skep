@@ -1031,7 +1031,7 @@ fn a_principal_under_a_listed_prefix_is_closed_at_every_write_and_its_handshake_
     std::fs::create_dir_all(&data).expect("the data dir");
     let sd = spawn_with_blocked_prefixes(&data, true, Some(&list), Some("1.3"));
     let port = sd.port();
-    claim_board(port);
+    claim_board(port); // …whose own step writes H.1: the grants below are attested writes
 
     let counters = Counters::new();
     let boot = open_session(port, 0);

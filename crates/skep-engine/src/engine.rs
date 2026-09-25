@@ -101,20 +101,16 @@ impl Engine {
     /// a caller to pass differently on a reopen, and no drift check left to
     /// run.
     ///
-    /// A journal and its checkpoints name the M2 format that wrote them
-    /// through M2's own stamps, and M2 refuses any other by name — the
-    /// journal as `OpenError::ForeignFormat`, a checkpoint skipped with an
-    /// account that reaches an operator through `BadCheckpoint`'s cause — with
-    /// the owner's one remedy, no migration (PUB-1.2): every board written
-    /// before this build's `SKJ4`/`SKC4`, the retired `GenesisConfig`
-    /// regime's among them. A checkpoint body that passes M2's header then
-    /// meets the World's own format stamp, the door for a World layout that
-    /// moves under an unchanged M2 stamp (`FormatStamp`'s card, `world.rs`,
-    /// states which bases reach it). A checkpoint either door refuses hands
-    /// M2's fallback chain its turn (PUB-7.9): the next-older retained base,
-    /// genesis while the journal still reaches it, else
-    /// `OpenError::BadCheckpoint` — never a decoded world with an empty
-    /// exception set.
+    /// A journal and its checkpoints carry M2's own format stamps, and M2
+    /// refuses a board written under any other M2 format by name, with the
+    /// owner's one remedy, no migration (PUB-1.2) — the retired
+    /// `GenesisConfig` regime's boards among them; `OpenError::ForeignFormat`
+    /// states the journal's channel and the checkpoint's. A checkpoint body
+    /// that passes M2's header then meets the World's own format stamp, the
+    /// door for a World layout that moves under an unchanged M2 stamp
+    /// (`FormatStamp`'s card, `world.rs`, states which bases reach it). A
+    /// checkpoint either door refuses hands M2's fallback chain its turn
+    /// (PUB-7.9) — never a decoded world with an empty exception set.
     ///
     /// There is nothing to assemble beyond that recovery. The type registry
     /// M9 is handed at [`Engine::coordinator`] is `skep_links::registry` —

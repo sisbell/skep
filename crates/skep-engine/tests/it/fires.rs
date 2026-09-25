@@ -81,9 +81,11 @@ fn a_published_home_and_a_private_draft(engine: &Engine) -> (Address, Address) {
     (home, draft)
 }
 
-/// [`a_published_home_and_a_private_draft`] plus a `pred_stable` member at
-/// `member`, deposited in the PUBLISHED home.
-fn board(engine: &Engine, member: &Address) -> (Address, Address) {
+/// [`a_published_home_and_a_private_draft`], with `member` registered in
+/// `pred_stable` from the PUBLISHED home — the public tuple that puts it in
+/// every marker rule's domain here, and the one deposit the no-fire tests below
+/// leave out. Returns the home and the draft.
+fn member_registered_in_the_home(engine: &Engine, member: &Address) -> (Address, Address) {
     let (home, draft) = a_published_home_and_a_private_draft(engine);
     let pred_stable = engine.registry().reserved_type(ShippedType::PredStable).clone();
     engine
@@ -104,7 +106,7 @@ fn board(engine: &Engine, member: &Address) -> (Address, Address) {
 fn a_fire_is_never_absorbed_by_a_draft_homed_incumbent() {
     let engine = mem_engine();
     let member = addr(&[1, 0, 1, 0, 1, 0, 1, 1]);
-    let (home, draft) = board(&engine, &member);
+    let (home, draft) = member_registered_in_the_home(&engine, &member);
     let retired = engine.registry().reserved_type(ShippedType::Retired).clone();
 
     // The owner's own marker on the member, homed in its draft — the I0 class
@@ -194,7 +196,7 @@ fn a_principal_s_writer_dedups_against_its_own_draft_homed_incumbent() {
 fn a_fire_into_a_draft_home_is_refused_before_any_deposit() {
     let engine = mem_engine();
     let member = addr(&[1, 0, 1, 0, 1, 0, 1, 1]); // a position of the published home
-    let (_home, draft) = board(&engine, &member);
+    let (_home, draft) = member_registered_in_the_home(&engine, &member);
     let mut coord = engine.coordinator();
     let rule = marker_rule(&engine, &coord, draft.clone());
     let id = coord.register_rule(rule).expect("a well-formed rule registers");
@@ -219,7 +221,7 @@ fn a_fire_into_a_draft_home_is_refused_before_any_deposit() {
 fn a_fire_on_a_draft_s_content_is_refused_before_any_deposit() {
     let engine = mem_engine();
     let member = addr(&[1, 0, 1, 0, 2, 0, 1, 1]); // a position of the draft
-    let (home, draft) = board(&engine, &member);
+    let (home, draft) = member_registered_in_the_home(&engine, &member);
     let mut coord = engine.coordinator();
     let rule = marker_rule(&engine, &coord, home);
     coord.register_rule(rule).expect("a well-formed rule registers");
@@ -242,7 +244,7 @@ fn a_fire_on_a_draft_s_content_is_refused_before_any_deposit() {
 fn a_fire_into_a_home_no_mint_produced_is_refused_as_not_registered() {
     let engine = mem_engine();
     let member = addr(&[1, 0, 1, 0, 1, 0, 1, 1]); // a position of the published home
-    let (_home, _draft) = board(&engine, &member);
+    let (_home, _draft) = member_registered_in_the_home(&engine, &member);
     let never_minted = addr(&[1, 0, 1, 0, 99]);
     assert!(
         !engine.kernel().snapshot().world().m3().is_registered_document(&never_minted),
@@ -277,7 +279,7 @@ fn a_fire_into_a_home_no_mint_produced_is_refused_as_not_registered() {
 fn a_fire_into_a_version_member_shaped_home_under_a_draft_is_refused_at_the_draft_boundary() {
     let engine = mem_engine();
     let member = addr(&[1, 0, 1, 0, 1, 0, 1, 1]); // a position of the published home
-    let (_home, draft) = board(&engine, &member);
+    let (_home, draft) = member_registered_in_the_home(&engine, &member);
     let shaped = addr(&[1, 0, 1, 0, 2, 1]); // the draft's first version member, by shape
     assert_eq!(draft, addr(&[1, 0, 1, 0, 2]), "the premise: shaped under the draft");
     assert!(
@@ -313,7 +315,7 @@ fn a_fire_into_a_version_member_shaped_home_under_a_draft_is_refused_at_the_draf
 fn a_fire_within_the_published_world_lands() {
     let engine = mem_engine();
     let member = addr(&[1, 0, 1, 0, 1, 0, 1, 1]);
-    let (home, _draft) = board(&engine, &member);
+    let (home, _draft) = member_registered_in_the_home(&engine, &member);
     let mut coord = engine.coordinator();
     let rule = marker_rule(&engine, &coord, home);
     let id = coord.register_rule(rule).expect("a well-formed rule registers");
@@ -395,12 +397,12 @@ fn a_fire_commits_byte_identically_to_a_world_with_no_drafts() {
     let other = addr(&[1, 0, 1, 0, 1, 0, 1, 2]); // another position of the published home
     let x = VarId::new(1).expect("a test variable below the watershed");
 
-    // One world: the board, the rule (M_K over pred_stable at audit, trigger
-    // ¬is_K(retired, x), Marker{home, retired}), stepped to quiescence; the
-    // commits it made and the member's fire count.
+    // One world: the member registered in the home, the rule (M_K over
+    // pred_stable at audit, trigger ¬is_K(retired, x), Marker{home, retired}),
+    // stepped to quiescence; the commits it made and the member's fire count.
     let run = |with_draft_tuples: bool| -> (Vec<Vec<u8>>, u64) {
         let engine = mem_engine();
-        let (home, draft) = board(&engine, &member);
+        let (home, draft) = member_registered_in_the_home(&engine, &member);
         let pred_stable = engine.registry().reserved_type(ShippedType::PredStable).clone();
         let retired = engine.registry().reserved_type(ShippedType::Retired).clone();
         if with_draft_tuples {
@@ -584,7 +586,7 @@ fn domain_enumeration_excludes_the_draft_tuple_and_keeps_a_retracted_one() {
 fn a_def_trigger_sees_the_same_filtered_store_as_an_inline_one() {
     let engine = mem_engine();
     let member = addr(&[1, 0, 1, 0, 1, 0, 1, 1]);
-    let (home, draft) = board(&engine, &member); // pred_stable(member) in the published home
+    let (home, draft) = member_registered_in_the_home(&engine, &member);
     let pred_stable = engine.registry().reserved_type(ShippedType::PredStable).clone();
     let retired = engine.registry().reserved_type(ShippedType::Retired).clone();
     // The ONLY `retired` marker on the member: homed in the draft.

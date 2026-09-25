@@ -92,23 +92,28 @@
 //! ([`World::universal_grants`], [`World::issuers_for`]) hand out that STORED
 //! population — a superset of what the grants cover.
 //!
-//! And what the indexes hold is ENTRIES, not grants: one (issuer,
-//! content-prefix, grantee) triple apiece ([`GrantIndexEntry`]), a set member
-//! with no count. An admitted grant adds its entry and a revocation removes the
-//! entry of the grant it names, so where two operative grants share one — an
-//! issuer granting one prefix to one grantee twice, which MAKELINK's open
-//! surface deposits as two records — revoking EITHER takes the entry both
-//! contributed. The other stays operative (the dump's `grants` section renders
-//! it, and a rebuild agrees) yet is in no index: `grant_exists` answers `false`
-//! for what it covers and neither enumeration lists it, until a later grant
-//! adds the entry again. So everything read off the indexes answers one set:
-//! every entry an admitted grant added and no later revocation removed — every
+//! ## The shared-entry shortfall
+//!
+//! What the indexes hold is ENTRIES, not grants: one (issuer, content-prefix,
+//! grantee) triple apiece ([`GrantIndexEntry`]), a set member with no count. An
+//! admitted grant adds its entry and a revocation removes the entry of the
+//! grant it names, so where two operative grants share one — an issuer
+//! granting one prefix to one grantee twice, which MAKELINK's open surface
+//! deposits as two records — revoking EITHER takes the entry both contributed.
+//! The other stays operative (the dump's `grants` section renders it, and a
+//! rebuild agrees) yet is in no index: `grant_exists` answers `false` for what
+//! it covers and neither enumeration lists it, until a later grant adds the
+//! entry again. So everything read off the indexes answers one set: every
+//! entry an admitted grant added and no later revocation removed — every
 //! prefix an unrevoked grant names, LESS an entry a sibling's revocation took
 //! (`two_grants_sharing_an_index_entry_are_withdrawn_together`,
 //! `two_any_principal_grants_sharing_an_entry_are_withdrawn_together`).
+//!
 //! Whether PUB-1.31's third clause owes the survivor an answer, which an index
 //! that counts would give, is PUB's question; this module records the
-//! departure and does not decide it.
+//! departure and does not decide it. Every read whose answer depends on it
+//! names it — the shared-entry shortfall — so the edit either answer calls
+//! for is found by searching for that name.
 
 use std::collections::BTreeMap;
 
@@ -124,10 +129,9 @@ use crate::world::World;
 
 /// One STORED row of the LIVE ANY-PRINCIPAL set ([`World::universal_grants`]):
 /// a content-prefix as the index keys it, and the issuers whose ANY-PRINCIPAL
-/// index ENTRIES name it — one entry per issuer, which a revocation of either of
-/// two identical grants removes ([`World::universal_grants`] states that
-/// shape). The pair opens only those documents under the prefix whose ω owner
-/// is the issuer, and none at all where it owns none.
+/// index ENTRIES name it, under the shared-entry shortfall that read states.
+/// The pair opens only those documents under the prefix whose ω owner is the
+/// issuer, and none at all where it owns none.
 ///
 /// A named row rather than a pair, because the two grant enumerations are
 /// TRANSPOSES of each other and every half of both is an account or a
@@ -151,13 +155,12 @@ pub struct UniversalGrant<'a> {
 
 /// One STORED row of the GRANTEE-INDEXED read ([`World::issuers_for`]): an
 /// issuer, and the union of the content-prefixes its index ENTRIES for the
-/// queried grantee name — its admitted grants' prefixes, less an entry a
-/// revocation took from an identical grant ([`World::issuers_for`] states that
-/// shape). They open, as a [`UniversalGrant`] row's do, only the documents
-/// under them whose ω owner is the issuer. [`UniversalGrant`] is the
-/// transpose, and says why both are named and what a row borrows. Rows order
-/// by issuer, which no two rows of one read share, so that order is the one the
-/// read hands them back in.
+/// queried grantee name, under the shared-entry shortfall that read states.
+/// They open, as a [`UniversalGrant`] row's do, only the documents under them
+/// whose ω owner is the issuer. [`UniversalGrant`] is the transpose, and says
+/// why both are named and what a row borrows. Rows order by issuer, which no
+/// two rows of one read share, so that order is the one the read hands them
+/// back in.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct IssuerGrant<'a> {
     /// The issuing account — a draft-stream key for the grantee.
@@ -170,9 +173,9 @@ pub struct IssuerGrant<'a> {
 impl World {
     /// THE LIVE ANY-PRINCIPAL SET, enumerable (PUB-7.22; lane 3.6 §3): every
     /// content-prefix an admitted, unrevoked ANY-PRINCIPAL grant NAMES (less
-    /// the one shape stated below), with the issuers whose grants name it — in
-    /// prefix (tumbler) order, each issuer list in address order. An INDEX
-    /// SHAPE, never per-session state: the fold's universal index as rows
+    /// the shared-entry shortfall, below), with the issuers whose grants name
+    /// it — in prefix (tumbler) order, each issuer list in address order. An
+    /// INDEX SHAPE, never per-session state: the fold's universal index as rows
     /// borrowed from this world, enumerated once per request off one head
     /// snapshot by the feed's universal term (a K-way merge of these prefixes'
     /// own position-index lists, K = this list's length). Revocation is
@@ -196,16 +199,11 @@ impl World {
     /// per-entry mask.
     ///
     /// The rows are index ENTRIES, not grants, and that is where they fall
-    /// SHORT of the first sentence: an entry is held once and counted never,
-    /// so where two ANY-PRINCIPAL grants of one issuer name one prefix and
-    /// EITHER is revoked, the entry both contributed leaves with it, and the
-    /// survivor — unrevoked, operative, and rendered by the dump's `grants`
-    /// section — is listed nowhere here until a later grant adds the entry
-    /// again (`crate::grants`' query-index section states the rule;
-    /// `two_any_principal_grants_sharing_an_entry_are_withdrawn_together` pins
-    /// it). M10's `PublicationWorld::universal_grants` promises every prefix an
-    /// admitted, unrevoked grant names; this is the one shape where that seam
-    /// answers less.
+    /// SHORT of the first sentence — the shared-entry shortfall, which
+    /// `crate::grants` states: two ANY-PRINCIPAL grants of one issuer naming
+    /// one prefix share one entry, revoking EITHER takes it, and the survivor
+    /// is listed nowhere here until a later grant adds the entry again
+    /// (`two_any_principal_grants_sharing_an_entry_are_withdrawn_together`).
     ///
     /// COST, per call, uncached, and linear in the WHOLE universal index —
     /// this read takes no argument, so there is nothing in the request to
@@ -220,11 +218,11 @@ impl World {
 
     /// THE GRANTEE-INDEXED READ (PUB-7.28; lane 3.6 §3): for `grantee` — a
     /// principal's account address — its ISSUERS, each with the UNION of the
-    /// content-prefixes that issuer's admitted grants to it NAME (less the one
-    /// shape stated below), in issuer order, each prefix list in address
-    /// order. The discovery term a feed poll re-pays: grants SELECT issuer
-    /// streams (PUB-7.25), so a holder of N grants from M issuers merges M
-    /// streams, each under one containment test against the union this read
+    /// content-prefixes that issuer's admitted grants to it NAME (less the
+    /// shared-entry shortfall, below), in issuer order, each prefix list in
+    /// address order. The discovery term a feed poll re-pays: grants SELECT
+    /// issuer streams (PUB-7.25), so a holder of N grants from M issuers merges
+    /// M streams, each under one containment test against the union this read
     /// hands back. Reads the fold's principal-exact index — `grantee` alone,
     /// never its subtree (PUB-5.5) — and adds no fold state. The ANY-PRINCIPAL
     /// grants are NOT here; they are [`World::universal_grants`], the tier's
@@ -238,9 +236,10 @@ impl World {
     /// the feed serves out of that stream is decided by its per-entry mask,
     /// the read predicate.
     ///
-    /// They are index ENTRIES too: where two grants from one issuer name one
-    /// prefix for `grantee` and EITHER is revoked, the survivor's prefix leaves
-    /// its issuer's row, and the row with it where that prefix was its last
+    /// They are index ENTRIES too, under the same shared-entry shortfall:
+    /// where two grants from one issuer name one prefix for `grantee` and
+    /// EITHER is revoked, the survivor's prefix leaves its issuer's row, and
+    /// the row with it where that prefix was its last
     /// (`two_grants_sharing_an_index_entry_are_withdrawn_together`).
     ///
     /// COST, per call, uncached: one hash probe of the principal-exact index,
@@ -288,7 +287,8 @@ pub(crate) struct GrantRecord {
 /// from. A [`GrantRecord`] has an IDENTITY — the grant link's own address,
 /// which the operative set keys it by — while an index entry is defined
 /// entirely by these three fields: two admitted grants that agree on them are
-/// ONE entry, and the indexes hold no count of how many named it.
+/// ONE entry, and the indexes hold no count of how many named it — the root of
+/// the module doc's shared-entry shortfall.
 struct GrantIndexEntry<'a> {
     issuer: &'a Address,
     content_prefix: &'a Address,
@@ -427,13 +427,12 @@ impl Grants {
     }
 
     /// `grant_exists(doc, p)` (PUB-1.31's third clause): does some index ENTRY
-    /// cover `doc` for principal-account `grantee`, issued by doc's ω owner —
-    /// an entry an admitted grant added and no revocation has since removed,
-    /// which is every operative grant's but one a sibling's revocation took
-    /// (the module doc's query-index section)? Coverage = CONTAINMENT (a
-    /// granted prefix ⊑ doc) ∩ the grant's issuer is `owner`. One probe of the
-    /// principal-exact index (when there is a grantee) and one of the
-    /// ANY-PRINCIPAL index at each ancestor, `doc` itself included.
+    /// cover `doc` for principal-account `grantee`, issued by doc's ω owner? An
+    /// entry and not a grant, so the answer falls under the module doc's
+    /// shared-entry shortfall. Coverage = CONTAINMENT (a granted prefix ⊑ doc)
+    /// ∩ the grant's issuer is `owner`. One probe of the principal-exact index
+    /// (when there is a grantee) and one of the ANY-PRINCIPAL index at each
+    /// ancestor, `doc` itself included.
     ///
     /// `owner` is doc's mint-time ω owner (the exception set's memo), and the
     /// coverage's issuer clause is exactly `issuers.contains(owner)`: a grant
@@ -537,10 +536,9 @@ impl Grants {
     /// Naming no admitted grant is a no-op.
     ///
     /// The indexes are SETS and hold no count, so an entry is withdrawn by the
-    /// first record that names it: where two admitted grants share an entry —
-    /// one issuer, one content-prefix, one grantee — withdrawing either takes
-    /// the entry both contributed, while the other record stays in the
-    /// operative set the dump's grant section renders.
+    /// first record that names it, even where another operative grant
+    /// contributed it too: the mechanism of the module doc's
+    /// shared-entry shortfall.
     fn withdraw(&mut self, addr: &Address) {
         if let Some(grant) = self.operative_records.remove(addr) {
             self.index_remove(grant.index_entry());
@@ -947,23 +945,10 @@ mod tests {
     use skep_arrangement::Caller;
     use skep_links::SlotArg;
 
-    use crate::testkit::{addr, delegated_account, element, mem_engine, USER};
+    use crate::testkit::{a_published_home_and_a_private_draft, addr, element, USER};
     use crate::Engine;
 
     use super::*;
-
-    /// [`USER`]'s account with its published doc 1 — the one home its records
-    /// of the class admit from — and a later private draft: `(home, draft)`.
-    fn a_published_home_and_a_private_draft(engine: &Engine) -> (Address, Address) {
-        let acct = delegated_account(engine, USER);
-        let (home, _) =
-            engine.namespace().create_new_document(USER, &acct, None).expect("the home mint");
-        let (draft, _) = engine
-            .namespace()
-            .create_new_document(USER, &acct, None)
-            .expect("a later mint, private");
-        (home, draft)
-    }
 
     /// Deposit a record of the class in `home`, as [`USER`], with `from` its
     /// one `from` address and an EMPTY `to`. Returns the record's address.
@@ -1001,8 +986,7 @@ mod tests {
     /// `true` there moves no state — and this test is what holds it.
     #[test]
     fn the_earlier_record_set_keeps_what_the_operative_set_lets_go() {
-        let engine = mem_engine();
-        let (home, draft) = a_published_home_and_a_private_draft(&engine);
+        let (engine, home, draft) = a_published_home_and_a_private_draft();
         let grant = record(&engine, &home, &draft);
         {
             let snap = engine.kernel().snapshot();
@@ -1054,8 +1038,7 @@ mod tests {
     /// otherwise be the first thing to test it.
     #[test]
     fn the_earlier_record_test_speaks_before_the_ladder() {
-        let engine = mem_engine();
-        let (home, _) = a_published_home_and_a_private_draft(&engine);
+        let (engine, home, _) = a_published_home_and_a_private_draft();
         let naming_the_home = record(&engine, &home, &home);
         let snap = engine.kernel().snapshot();
         let link = snap.world().links.readlink(&naming_the_home).expect("the record is resident");

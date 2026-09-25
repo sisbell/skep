@@ -1,16 +1,18 @@
 //! The unit tests' shared fixtures: the in-memory engine every in-crate suite
-//! stands up, the delegated account most of them start from, and the address
-//! constructors they spell addresses with. Compiled for the crate's own tests
-//! alone.
+//! stands up, the delegated account most of them start from, the address
+//! constructors they spell addresses with, and the published home beside a
+//! private draft that three of them deposit across. Compiled for the crate's
+//! own tests alone.
 //!
 //! `tests/it/common` is this module's twin for the integration suite, and the
 //! two cannot share: an integration test is a separate crate, which reaches
 //! nothing compiled under `#[cfg(test)]` here, and a unit test cannot reach a
 //! file under `tests/`. So each owns its own copy of one small prologue.
 //!
-//! What a fixture MINTS stays that fixture's own — a draft doc 1, or a
-//! published home beside a later draft — because the flags it mints with are
-//! what its tests are about. What every fixture does before minting is here.
+//! What a fixture MINTS stays that fixture's own where its flags are what its
+//! tests are about — a draft doc 1, say. The published home beside a later
+//! draft is here because three suites mint exactly that pair, and each would
+//! otherwise assert it afresh.
 
 use skep_address::{validate, Address, Nat, Tumbler};
 use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
@@ -71,4 +73,29 @@ pub(crate) fn delegated_account(engine: &Engine, principal: PrincipalId) -> Addr
         .delegate(BOOTSTRAP_PRINCIPAL, prefix.tumbler().clone(), principal)
         .expect("delegation of the peeked prefix succeeds");
     account
+}
+
+/// An account of [`USER`]'s with a PUBLISHED home and a PRIVATE draft, and the
+/// in-memory engine that minted them: `(engine, home, draft)`. The account's
+/// first flagless mint is its home (PUB-8.21) and a later one is a draft, and
+/// both states are asserted here, so a suite that deposits ACROSS that
+/// boundary — the dump filter's, the grant fold's, the hint check's — states
+/// only what it deposits.
+#[track_caller]
+pub(crate) fn a_published_home_and_a_private_draft() -> (Engine, Address, Address) {
+    let engine = mem_engine();
+    let acct = delegated_account(&engine, USER);
+    let (home, _) =
+        engine.namespace().create_new_document(USER, &acct, None).expect("the home mint");
+    let (draft, _) = engine
+        .namespace()
+        .create_new_document(USER, &acct, None)
+        .expect("a later mint, private");
+    {
+        let snap = engine.kernel().snapshot();
+        let world = snap.world();
+        assert!(world.readable(None, &home), "the first flagless mint is published");
+        assert!(!world.readable(None, &draft), "a later flagless mint is a draft");
+    }
+    (engine, home, draft)
 }

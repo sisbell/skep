@@ -98,10 +98,6 @@ fn grant_to(engine: &Engine, board: &Board, content_prefix: &Address, to: Vec<Ad
         .expect("the grant deposits into A's doc 1")
 }
 
-fn quoted(a: &Address) -> String {
-    format!("{:?}", a.to_string())
-}
-
 fn secret_line() -> String {
     format!("[{}, {}, {}]", SECRET[0], SECRET[1], SECRET[2])
 }
@@ -322,9 +318,7 @@ fn a_historical_world_dumps_at_the_head_s_class() {
         head_b.contains(&first_draft_alone),
         "B's head publication section: the granted draft alone:\n{head_b}"
     );
-    let mut drafts = vec![quoted(&board.draft_a), quoted(&draft_two)];
-    drafts.sort();
-    let both_drafts = format!("\"publication\": [{}]", drafts.join(", "));
+    let both_drafts = format!("\"publication\": {}", seq_of(&[&board.draft_a, &draft_two]));
     let head_a = engine.world_dump_visible_to(Some(A)).into_string();
     assert!(
         head_a.contains(&both_drafts),

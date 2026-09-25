@@ -409,9 +409,10 @@ fn an_undecodable_checkpoint_with_no_older_start_point_refuses_to_open() {
     }
 }
 
-/// The dump renders the set as a hint — draft → owner, address-ordered — so
-/// the crash and conformance harnesses' byte comparison covers it, and the
-/// hint-faithfulness check compares the fold against the seed through it.
+/// The dump renders the set as a hint — a map draft → owner, its entries in
+/// rendered-text order — so the crash and conformance harnesses' byte
+/// comparison covers it, and the hint-faithfulness check compares the fold
+/// against the seed through it.
 #[test]
 fn the_dump_renders_the_exception_set_as_a_hint() {
     let engine = mem_engine();
@@ -422,7 +423,7 @@ fn the_dump_renders_the_exception_set_as_a_hint() {
     let mut pairs: Vec<(String, String)> = docs
         .drafts
         .iter()
-        .map(|d| (format!("{:?}", d.to_string()), format!("{:?}", docs.acct.to_string())))
+        .map(|d| (quoted(d), quoted(&docs.acct)))
         .collect();
     pairs.sort();
     let entries: Vec<String> = pairs.iter().map(|(k, v)| format!("{k}: {v}")).collect();
@@ -433,9 +434,7 @@ fn the_dump_renders_the_exception_set_as_a_hint() {
     // v5 (lane 3.4 §3): the AUTHORITATIVE publication section lists the same
     // drafts, in address order, as a sequence of their own — the state the
     // hint above is the derived index over.
-    let mut drafts: Vec<String> = docs.drafts.iter().map(|d| format!("{:?}", d.to_string())).collect();
-    drafts.sort();
-    let section = format!("\"publication\": [{}]", drafts.join(", "));
+    let section = format!("\"publication\": {}", seq_of(&docs.drafts.iter().collect::<Vec<_>>()));
     assert!(text.contains(&section), "expected {section} in the dump:\n{text}");
 }
 
@@ -448,17 +447,12 @@ fn the_dump_renders_the_exception_set_as_a_hint() {
 /// every ordinal has the same digit count.
 ///
 /// Ten drafts in one account cross that boundary at 9 → 10. Its neighbour
-/// above builds one expectation by sorting STRINGS and reads it against both
-/// renderings, which is right for the hint and right for the section only by
-/// the coincidence of its three single-digit ordinals; here the two lists are
-/// asserted to differ before either is read against the dump, so neither can
-/// be checked against the other's rule.
+/// above builds each expectation by its own rule — `seq_of` for the section, a
+/// text sort for the hint — over ordinals where the two orders coincide; here
+/// the two lists are asserted to differ before either is read against the
+/// dump, so neither can pass by the other's rule.
 #[test]
 fn the_publication_section_is_address_ordered_where_its_hint_is_text_ordered() {
-    fn quoted(a: &Address) -> String {
-        format!("{:?}", a.to_string())
-    }
-
     let engine = mem_engine();
     let (acct, _home) = setup_home(&engine);
     let drafts: Vec<Address> = (0..10)

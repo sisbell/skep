@@ -1,6 +1,8 @@
 //! Shared fixtures for the engine's integration tests: address/span
-//! constructors, kernel configurations, and the bootstrap→delegate→create
-//! prologue every cross-store scenario starts from.
+//! constructors, kernel configurations, the bootstrap→delegate→create
+//! prologue every cross-store scenario starts from, and the dump's text for
+//! an address and an address sequence, which the suites that read a dump
+//! build their expectations from.
 
 use std::path::Path;
 
@@ -10,7 +12,7 @@ use skep_arrangement::{Caller, VPos, VSpec};
 // which is what holds that set to covering `Engine::open`: a narrowed set
 // fails to build here.
 use skep_engine::{
-    BurnedSeqPolicy, CheckpointPolicy, Durability, Engine, KernelConfig, SaltSource,
+    BurnedSeqPolicy, CheckpointPolicy, Durability, Engine, KernelConfig, SaltSource, World,
 };
 use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 use skep_retrieval::{Delivery, DeliveryItem};
@@ -96,6 +98,11 @@ pub fn mem_engine() -> Engine {
     Engine::open(mem_cfg()).expect("in-memory open cannot fail")
 }
 
+/// The engine's committed world, owned: one snapshot's, cloned out of it.
+pub fn world(engine: &Engine) -> World {
+    engine.kernel().snapshot().world().clone()
+}
+
 /// A fresh ACCOUNT under `parent`, delegated by `delegator` to `principal` at
 /// the prefix M3 names next: peeked off one snapshot and claimed by the next
 /// commit, which nothing else in a single-threaded test can take first. The
@@ -152,6 +159,22 @@ fn setup_with(engine: &Engine, published: Option<bool>) -> (Address, Address) {
         .create_new_document(USER, &acct, published)
         .expect("the delegated owner may create a document");
     (acct, doc)
+}
+
+/// One address as the world dump renders it: dotted decimal, quoted.
+pub fn quoted(addr: &Address) -> String {
+    format!("{:?}", addr.to_string())
+}
+
+/// An address sequence as the world dump renders one — the hints' ordered
+/// sets and the publication section alike: in ADDRESS order, each address
+/// [`quoted`]. Sorting the rendered strings instead gives TEXT order, which
+/// agrees with this only while every ordinal has the same digit count.
+pub fn seq_of(addrs: &[&Address]) -> String {
+    let mut sorted = addrs.to_vec();
+    sorted.sort();
+    let rendered: Vec<String> = sorted.iter().map(|a| quoted(a)).collect();
+    format!("[{}]", rendered.join(", "))
 }
 
 /// The delivered content bytes, in delivery order; panics on a `Ref` item.

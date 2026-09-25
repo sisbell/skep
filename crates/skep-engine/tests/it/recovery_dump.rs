@@ -113,20 +113,6 @@ fn assert_entry(text: &str, key: &str, value: &str) {
     assert!(text.contains(&needle), "expected {needle} in the dump:\n{text}");
 }
 
-/// One address as the dump renders it: dotted decimal, quoted.
-fn quoted(addr: &Address) -> String {
-    format!("{:?}", addr.to_string())
-}
-
-/// An address sequence as the dump renders it: address-ordered, since every
-/// hint it reads is an ordered set.
-fn seq_of(addrs: &[&Address]) -> String {
-    let mut sorted = addrs.to_vec();
-    sorted.sort();
-    let rendered: Vec<String> = sorted.iter().map(|a| quoted(a)).collect();
-    format!("[{}]", rendered.join(", "))
-}
-
 /// One type class's rendering where its two views PART: its audit and active
 /// slices — LINK addresses, which is what a typed slice holds — and its key.
 fn class_of_views(audit: &[&Address], active: &[&Address], key: &str) -> String {

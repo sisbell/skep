@@ -734,10 +734,11 @@ impl crate::Engine {
     /// the discipline drive one `grants::fold_one`, so an index is a function
     /// of the record SEQUENCE alone, and the halves can only order that
     /// sequence differently across homes. An index entry is withdrawn by the
-    /// first record naming it, so order can matter only where two grants
-    /// SHARE one — which requires a single issuer, and admission ties an
-    /// issuer to a single home, so sharing is always intra-home, where the
-    /// seed's address order IS the fold's deposit order.
+    /// first record naming it (the shared-entry shortfall), so order can
+    /// matter only where two grants SHARE one — which requires a single
+    /// issuer, and admission ties an issuer to a single home, so sharing is
+    /// always intra-home, where the seed's address order IS the fold's deposit
+    /// order.
     ///
     /// For the EXCEPTION SET the certificate has an edge of its own. Its two
     /// halves enumerate M3's publication map alike — the fold asks the
@@ -776,7 +777,7 @@ mod tests {
     use skep_content::Val;
     use skep_links::SlotArg;
 
-    use crate::testkit::{delegated_account, mem_engine, USER};
+    use crate::testkit::{a_published_home_and_a_private_draft, delegated_account, mem_engine, USER};
     use crate::Engine;
 
     use super::*;
@@ -916,14 +917,7 @@ mod tests {
 
         // The grant fold, holding a record of ANOTHER world's: an admitted
         // grant deposited through a second engine, carried over whole.
-        let granting = mem_engine();
-        let acct = delegated_account(&granting, USER);
-        let (home, _) =
-            granting.namespace().create_new_document(USER, &acct, None).expect("the home mint");
-        let (draft, _) = granting
-            .namespace()
-            .create_new_document(USER, &acct, None)
-            .expect("a later mint, private");
+        let (granting, home, draft) = a_published_home_and_a_private_draft();
         let caller = Caller::Principal(USER);
         granting
             .linkstore(&World::visible_to(caller))

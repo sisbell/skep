@@ -1,6 +1,6 @@
 //! The audit-view edition-claim lookup (PUB-8.46; PUB round 2, lane 3.4 §2)
 //! through the assembled engine: `World::edition_claims` composes M7's audit
-//! reads over the pinned edition class — a `to`-range lookup over ADMITTED,
+//! reads over the pinned edition class — a `to`-range lookup over
 //! UNSUPERSEDED claims WHETHER OR NOT RETRACTED, each row naming its home
 //! (the edition) and stating its retraction. The home rule is M10's and the
 //! wire shapes are the daemon's (their suites); what is tested here is the
@@ -109,10 +109,6 @@ fn supersede(engine: &Engine, home: &Address, old: &Address, new: &Address) -> A
         .assert_sup(caller, home, old, new)
         .expect("the owner supersedes its own claim")
         .0
-}
-
-fn world(engine: &Engine) -> World {
-    engine.kernel().snapshot().world().clone()
 }
 
 fn row(claim: &Address, home: &Address, to: &Address, active: bool) -> EditionClaim {

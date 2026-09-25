@@ -160,10 +160,6 @@ fn link_typed(
         .0
 }
 
-fn world(engine: &Engine) -> World {
-    engine.kernel().snapshot().world().clone()
-}
-
 /// A specific grant makes A's private draft readable to the grantee B and to
 /// nobody else: not the guest, not a stranger — while A itself reads it by the
 /// subtree clause and its published home is readable by all.
@@ -1546,12 +1542,13 @@ fn revoking_an_any_principal_prefix_s_last_issuer_removes_its_row() {
     engine.check_hints().expect("the seed agrees over the revocation");
 }
 
-/// The fold's query indexes are keyed by a grant's ISSUER, CONTENT-PREFIX and
-/// GRANTEE, and they are SETS: two admitted grants that agree on those three
-/// contribute ONE index entry, and nothing counts how many named it. So where
-/// an issuer grants the same prefix to the same grantee twice and then revokes
-/// ONE of the two, the entry both contributed leaves — while the other record
-/// stays in the operative set the dump's grant section renders.
+/// The shared-entry shortfall, on the principal-exact index: the fold's query
+/// indexes are keyed by a grant's ISSUER, CONTENT-PREFIX and GRANTEE, and they
+/// are SETS: two admitted grants that agree on those three contribute ONE index
+/// entry, and nothing counts how many named it. So where an issuer grants the
+/// same prefix to the same grantee twice and then revokes ONE of the two, the
+/// entry both contributed leaves — while the other record stays in the
+/// operative set the dump's grant section renders.
 ///
 /// Pinned here because the fold's own doc states it, and because it is the one
 /// place `readable` and that section disagree: the second grant is rendered
@@ -1581,13 +1578,13 @@ fn two_grants_sharing_an_index_entry_are_withdrawn_together() {
     // section names its link address.
     let text = engine.world_dump().into_string();
     assert!(
-        text.contains(&format!("{:?}", second.to_string())),
+        text.contains(&quoted(&second)),
         "the second grant is still an operative record:\n{text}"
     );
     engine.check_hints().expect("the seed reproduces the fold over a shared index entry");
 }
 
-/// …and on the ANY-PRINCIPAL index, the form M10's
+/// …and the shared-entry shortfall on the ANY-PRINCIPAL index, the form M10's
 /// `PublicationWorld::universal_grants` answers. Its trait text promises every
 /// prefix an admitted, unrevoked grant names; the index holds one entry per
 /// (issuer, prefix) and counts nothing, so revoking either of two identical
@@ -1620,7 +1617,7 @@ fn two_any_principal_grants_sharing_an_entry_are_withdrawn_together() {
     assert!(!w.readable(Some(PrincipalId(9)), &board.draft_a), "the predicate agrees");
     let text = engine.world_dump().into_string();
     assert!(
-        text.contains(&format!("{:?}", second.to_string())),
+        text.contains(&quoted(&second)),
         "the second grant is still an operative record:\n{text}"
     );
     engine.check_hints().expect("the seed reproduces the fold over a shared entry");

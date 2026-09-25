@@ -29,9 +29,8 @@
 //!   of it: every reader asks M7 for the one `Arc<TypeRegistry>`, and
 //!   [`Engine::coordinator`] clones it for M9, which takes an owned one. The
 //!   World leads its checkpoint body with a FORMAT STAMP, the door for a
-//!   World layout change M2's own stamps do not track; M2 refuses every older
-//!   base by its own stamps first (PUB-1.2), and a checkpoint either door
-//!   refuses hands M2's fallback chain its turn (PUB-7.9).
+//!   World layout change M2's own stamps do not track; [`Engine::open`]
+//!   states what either door's refusal does.
 //! * **Recovery order** (`WorldState::rebuild_derived` for `World`) — the
 //!   cross-store rebuild sequence at load, stated in one place, with its two
 //!   engine edges pinned by the tests that method names.
@@ -66,10 +65,9 @@
 //!   once per request (PUB-7.22, PUB-7.28); M10's any-principal discovery
 //!   read (PUB-8.47) takes the first through
 //!   `PublicationWorld::universal_grants`, raw, and narrows it itself. What
-//!   they enumerate is the fold's STORED index, a superset of entitlement, and
-//!   ENTRIES rather than grants: one per (issuer, prefix, grantee), which a
-//!   revocation of either of two identical grants removes (the `grants`
-//!   module states it).
+//!   they enumerate is the fold's STORED index — a superset of entitlement,
+//!   and short of the grants by the shared-entry shortfall (the `grants`
+//!   module states both).
 //! * **The edition-claim lookup** ([`World::edition_claims`]; the `editions`
 //!   module) — the audit-view `to`-range lookup over the R20 edition-claim
 //!   class (PUB-8.46, lane 3.4, §2), composed from M7's own audit reads over
@@ -102,7 +100,8 @@ mod grants;
 mod publication;
 mod readable;
 // The in-crate suites' shared fixtures: the in-memory engine, the delegated
-// account and the address constructors they start from.
+// account and the address constructors they start from, and the published
+// home beside a private draft three of them deposit across.
 #[cfg(test)]
 mod testkit;
 pub mod types;

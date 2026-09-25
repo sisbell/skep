@@ -144,11 +144,8 @@ impl World {
     ///   fall through, but the ANY-PRINCIPAL grants still reach it — being a
     ///   principal at all is that tier's whole membership test (PUB-5.8), and
     ///   an unseated one is still not `None`. The clause is the fold's INDEX
-    ///   probe and inherits the index's one shortfall: an unrevoked grant
-    ///   covers nothing once an identical grant — one issuer, one prefix, one
-    ///   grantee — is revoked, since the two shared one entry, until a later
-    ///   grant adds that entry again (`crate::grants`' query-index section
-    ///   states the rule).
+    ///   probe, and so answers under the index's shared-entry shortfall
+    ///   (`crate::grants` states it).
     ///
     /// COST, per call, uncached, in three terms — and the CALLER chooses the
     /// first while the STORE chooses the other two, so this figure is not one

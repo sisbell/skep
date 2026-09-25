@@ -38,13 +38,12 @@ use crate::publication::{self, Drafts};
 /// written under any other format COUNT, or before there was one — the
 /// pre-publication-bit layout above all (PUB-7.8) — is refused at byte 0 by a
 /// value comparison, before any slice's bytes are read as another's. Which
-/// bases can reach that word at all — M2's own stamps refuse every base older
-/// than `SKC4` first — and what count 1's history means for the rest, is
-/// `FormatStamp`'s card. The two skip-serialized fields, `drafts` and
+/// bases reach that word at all, and what count 1's history means for the
+/// rest, is `FormatStamp`'s card. The two skip-serialized fields, `drafts` and
 /// `grants`, sit outside the surface: neither occupies a byte.
 ///
 /// CANONICAL BYTES — this type's serialization IS the checkpoint body M2
-/// hashes into its `SKC4` header (`body_hash`, which a published head names),
+/// hashes into its header (`body_hash`, which a published head names),
 /// so it must be a function of the world's contents on any process and any
 /// machine. The engine's part holds by construction: the stamp is a
 /// constant, the four slices serialize in declaration order, and the only
@@ -168,31 +167,27 @@ impl fmt::Debug for World {
 /// `1` has named TWO layouts: the first carries M3's publication bit
 /// (2026-09-05, PUB round 1); the second appends M5's birth memo to its slice
 /// (W5, 2026-09-17) under the same count. No base any build wrote in the
-/// first reaches this word through a header this build loads: every one was
-/// written under an M2 stamp older than `SKC4`, and M2 refuses such a base at
-/// load by name, with the owner's no-migration remedy (PUB-1.2). So the
-/// count names one loadable layout, and the next World layout change bumps
-/// it. A body in the first layout under a current header still fails to
-/// decode, by the encoding's arithmetic rather than by chance: M5's decoder
-/// reads M7's bytes as the memo, and with no link the memo swallows M7's
-/// whole slice; otherwise the memo's first value ends midway through a count
-/// whose high half is zero, so the next count read is zero or at least 2³²,
-/// and zero is reachable only through a sole link no deposit surface writes.
-/// `a_base_written_before_the_birth_memo_fails_to_decode` states that
-/// arithmetic in full and pins the refusal on each shape it branches on, so a
-/// change beneath a slice's top level that moved the misreading fails there.
+/// first reaches this word through a header this build loads: every one
+/// carries an M2 stamp older than this build's, which M2 refuses at load by
+/// name, with the owner's no-migration remedy (PUB-1.2). So the count names
+/// one loadable layout, and the next World layout change bumps it. A body in
+/// the first layout under a current header — which only hand-built bytes
+/// produce — still fails to decode, and not by chance:
+/// `a_base_written_before_the_birth_memo_fails_to_decode` states why, in the
+/// encodings of M5's and M7's slices, and pins the refusal on each shape it
+/// branches on, so a change beneath a slice's top level that moved the
+/// misreading fails there.
 ///
 /// PUB-7.8: a pre-publication checkpoint MUST fail to DECODE rather than
-/// resolve to everything-published. Two doors hold it. M2's stamps refuse
-/// every base written before `SKC4`, which is every pre-publication one; and
-/// this stamp refuses such a body under a current header at its first word —
-/// a pre-stamp body opens with M3's frontier-map length, a small count, never
-/// this word. So this door's own job is the one M2's stamps cannot do: a
-/// World layout that moves under an unchanged M2 stamp, as W5's did. A
-/// checkpoint either door refuses hands M2's fallback chain its turn
-/// (PUB-7.9): the next-older retained base, genesis while the journal still
-/// reaches it, else `OpenError::BadCheckpoint` — never a decoded world with an
-/// empty set.
+/// resolve to everything-published. Two doors hold it. M2 refuses, by its own
+/// stamp, every base written under an older M2 format, which is every
+/// pre-publication one; and this stamp refuses such a body under a current
+/// header at its first word — a pre-stamp body opens with M3's frontier-map
+/// length, a small count, never this word. So this door's own job is the one
+/// M2's stamps cannot do: a World layout that moves under an unchanged M2
+/// stamp, as W5's did. A checkpoint either door refuses hands M2's fallback
+/// chain its turn (PUB-7.9; `OpenError::BadCheckpoint` states the chain) —
+/// never a decoded world with an empty set.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct FormatStamp;
 
@@ -481,13 +476,12 @@ impl skep_febe::PublicationWorld for World {
     /// a row's coverage is decided on this side of the seam.
     ///
     /// M10's trait promises every content prefix an admitted, unrevoked
-    /// ANY-PRINCIPAL grant names, and one shape falls short of it: where two
-    /// such grants of one issuer name one prefix and EITHER is revoked, the
-    /// fold's index — one entry per (issuer, prefix), and no count — drops the
-    /// survivor's prefix, and so does this seam ([`World::universal_grants`]
-    /// states it; `two_any_principal_grants_sharing_an_entry_are_withdrawn_together`
-    /// pins it through this impl). Recorded here, where M10 reads, and not
-    /// decided: whether the index should count is PUB's question.
+    /// ANY-PRINCIPAL grant names, and this seam falls short of it in one shape:
+    /// the fold index's shared-entry shortfall, which
+    /// [`World::universal_grants`] states and
+    /// `two_any_principal_grants_sharing_an_entry_are_withdrawn_together` pins
+    /// through this impl. Recorded here, where M10 reads, and not decided:
+    /// whether the index should count is PUB's question.
     fn universal_grants(&self) -> Vec<skep_febe::UniversalIndexRow> {
         World::universal_grants(self)
             .into_iter()

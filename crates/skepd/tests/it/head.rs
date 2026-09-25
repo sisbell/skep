@@ -5,12 +5,12 @@
 //! re-chain checks below rest on.
 //!
 //! The cadence's clock and its checkpoint are driven through the daemon's test
-//! seams (`head_set_clock_millis`, `checkpoint_now`) — never a `sleep`.
+//! seams (`set_head_writer_clock_millis`, `checkpoint_now`) — never a `sleep`.
 //! The clock seam's readings are wall-clock unix milliseconds (the writer's
-//! domain since its resume seeds the hour from the feed's recorded times —
-//! the chain's open items, item 2), so every reading here is set relative to
-//! [`clock_origin`]; the hour-survives-a-restart test moves the RECORD, not
-//! the clock.
+//! domain, since its resume takes the hour's origin from the feed's recorded
+//! times — the chain's open items, item 2), so every reading here is set
+//! relative to [`clock_origin`]; the hour-survives-a-restart test moves the
+//! RECORD, not the clock.
 
 use crate::common;
 
@@ -104,19 +104,19 @@ fn expect_latest_head(port: u16) -> Value {
 }
 
 /// Force ONE head via the time bound: jump the clock past the hour, then
-/// commit — that commit's `after_commit` finds the position moved and the hour
-/// elapsed, and writes the head naming the committed pair. Returns the head's
-/// `position` (the committed op's own position, which the head names).
+/// commit — that commit's turn (`take_turn`) finds the position moved and the
+/// hour elapsed, and writes the head naming the committed pair. Returns the
+/// head's `position` (the committed op's own position, which the head names).
 fn force_head(sd: &Skepd, session: &str, account: &str, clock: &mut u64) -> u64 {
     *clock += A_LONG_WHILE_MILLIS;
-    sd.daemon().head_set_clock_millis(*clock);
+    sd.daemon().set_head_writer_clock_millis(*clock);
     commit(sd.port(), session, account)
 }
 
 /// A test clock's origin: the wall clock now, in unix milliseconds — the
-/// writer's own domain, whose hour is seeded from the feed's recorded times
+/// writer's own domain, whose hour is resumed from the feed's recorded times
 /// (wall-clock) or from open-time (wall-clock) — so readings set through the
-/// seam are relative to now rather than small numbers a seeded origin would
+/// seam are relative to now rather than small numbers a resumed origin would
 /// dwarf into "not yet an hour".
 fn clock_origin() -> u64 {
     std::time::SystemTime::now()
@@ -250,8 +250,8 @@ fn a_checkpoint_moves_the_head_and_a_quiet_board_writes_none() {
         );
     }
 
-    // A CHECKPOINT: now the next commit's `after_commit` sees the checkpoint
-    // seq moved since the last head and writes one.
+    // A CHECKPOINT: now the next commit's turn (`take_turn`) sees the
+    // checkpoint seq moved since the last head and writes one.
     sd.daemon().checkpoint_now();
     let at = commit(port, &owner, CLAIMANT_ACCOUNT);
     let rec = expect_latest_head(port);
@@ -308,6 +308,37 @@ fn the_time_bound_writes_one_and_never_a_duplicate() {
     let p2 = force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
     assert!(p2 > p1, "the second head's position advanced");
     assert_eq!(expect_latest_head(port)["position"].as_u64().unwrap(), p2);
+    sd.shutdown();
+}
+
+/// (i) — the clock seam is the HEAD WRITER's reading alone: a reading set hours
+/// past the wall clock drives the published head's time bound, while every
+/// commit's `time` — and so `/health`'s `head_time` — stays the change feed's
+/// own reading of the wall clock. The head's own publish is the last recorded
+/// commit here, so a seam that stamped commits would put `head_time` at or
+/// past the reading.
+#[test]
+fn the_head_writer_clock_seam_moves_no_commit_time() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let mut clock = clock_origin();
+
+    let p = force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
+    assert_eq!(
+        expect_latest_head(port)["position"].as_u64().unwrap(),
+        p,
+        "the seam's reading drove the head's time bound"
+    );
+    let (st, body) = get(port, "/health");
+    assert_eq!(st, 200, "/health");
+    let head_time =
+        json(&body)["head_time"].as_u64().expect("the head's own commit recorded a time");
+    assert!(
+        head_time < clock,
+        "head_time {head_time} is the wall clock's reading, not the seam's {clock}"
+    );
     sd.shutdown();
 }
 
@@ -414,9 +445,9 @@ fn a_checkpoint_taken_before_a_restart_is_attested_by_the_first_head_after_it() 
 /// since the last head" — of the board, not of the process): 40 commits after
 /// a head, a restart, 24 more — and the 64th landed commit since that head
 /// writes the next, on the second uptime, with the clock left alone and no
-/// checkpoint taken, so no other trigger can be what fired. Before the seed a
-/// restarted board counted from zero, and a board restarted every fewer than
-/// 64 commits wrote heads at checkpoints alone.
+/// checkpoint taken, so no other trigger can be what fired. Without the
+/// resume a restarted board would count from zero, and one restarted every
+/// fewer than 64 commits would write heads at checkpoints alone.
 #[test]
 fn the_commit_count_since_the_last_head_survives_a_restart() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -465,15 +496,15 @@ fn the_commit_count_since_the_last_head_survives_a_restart() {
 
 /// RESUME — the HOUR survives a restart (item 2; PUB-6.65's "one hour has
 /// passed since the last head"): the last head's own commits are the feed's
-/// `"system"`-keyed entries above the position it named, and their recorded
-/// `time` is the head's, so the writer seeds the hour's origin there. Pinned
-/// by moving the RECORD rather than the clock: the sidecar — rewritable
-/// testimony, AUTH-4.56 — is rewritten with every `time` two hours older,
-/// the daemon restarted with its clock left alone, and the first commit
-/// writes a head (an hour has passed since the last head AS RECORDED, though
-/// not since open) while the second, under the hour since the new head,
-/// writes none. Before the seed the hour was measured from open, and this
-/// board would have written no time-bound head for its first hour up.
+/// entries testifying `"system"` above the position it named, and their
+/// recorded `time` is the head's, so the writer resumes the hour's origin
+/// there. Pinned by moving the RECORD rather than the clock: the sidecar —
+/// rewritable testimony, AUTH-4.56 — is rewritten with every `time` two hours
+/// older, the daemon restarted with its clock left alone, and the first
+/// commit writes a head (an hour has passed since the last head AS RECORDED,
+/// though not since open) while the second, under the hour since the new
+/// head, writes none. Measured from open instead, the hour would leave this
+/// board no time-bound head for its first hour up.
 #[test]
 fn the_hour_since_the_last_head_survives_a_restart() {
     let dir = tempfile::tempdir().expect("tempdir");

@@ -231,10 +231,10 @@ impl IdentityFold {
     /// makes the assert checkable rather than a second, unrelated claim.
     /// Under the serialization lock the post-commit world differs from the
     /// one the gate read by this write's own records and — where this commit
-    /// gave the published head its turn
-    /// ([`crate::write_path::WritePath::commit_under`]) — by the head
-    /// writer's: the system account's staging-draft mint, its insert, and the
-    /// publish into `H`. Classify reads none of either: the record bytes at
+    /// gave the head writer its turn
+    /// ([`crate::write_path::WritePath::commit_under`]) — by that writer's:
+    /// the system account's staging-draft mint, its insert, and the publish
+    /// into `H`. Classify reads none of either: the record bytes at
     /// `from` are a prior write's atom, `owner_of`/`is_account` of the home
     /// read M3's principals and accounts, which neither a link deposit nor a
     /// document or member mint moves, and publication is the home's birth

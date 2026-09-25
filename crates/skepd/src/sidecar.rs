@@ -90,7 +90,7 @@ pub(crate) const SIDECAR_FILE: &str = "commits.log";
 /// set before the epoch. The crate's ONE reading of that clock because two
 /// readers must agree on it: [`CommitsLog::record`] stamps every commit with
 /// it, and the published head writer measures its hour FROM such a stamp —
-/// its resume seeds the last head's time off the head's own entry — against
+/// its resume takes the last head's time off the head's own entry — against
 /// its own reading. Two copies of this expression would agree only until one
 /// was edited or seamed, and the head's hour would then subtract one clock
 /// from another with nothing to say so.
@@ -569,12 +569,12 @@ impl CommitsLog {
     /// Every entry ABOVE `position`, in position order — what the PUBLISHED
     /// HEAD writer's resume reads (`crate::write_path::head`; the chain's
     /// open items, item 2): the commits landed since the head that named
-    /// `position`, and among them the head's own `"system"`-keyed commits,
-    /// whose recorded `time` is the head's. Testimony read at a GATE to
-    /// decide WHEN, never a fold input (D1): a bare entry answers no time and
-    /// no key, and a rewritten one moves a head's timing within the bounds
-    /// the triggers already allow. Cloned, once at open — at most the retained
-    /// window — so the writer holds no borrow of this file.
+    /// `position`, and among them the head's own commits, testifying
+    /// `"system"`, whose recorded `time` is the head's. Testimony read at a
+    /// GATE to decide WHEN, never a fold input (D1): a bare entry answers no
+    /// time and no key, and a rewritten one moves a head's timing within the
+    /// bounds the triggers already allow. Cloned, once at open — at most the
+    /// retained window — so the writer holds no borrow of this file.
     pub fn entries_above(&self, position: u64) -> Vec<(u64, CommitMeta)> {
         self.entries
             .range(position.saturating_add(1)..)

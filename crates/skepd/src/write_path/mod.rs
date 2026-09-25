@@ -14,17 +14,17 @@
 //! execute.
 //!
 //! That second guarantee is an induction with both halves held here.
-//! [`WritePath::open`] is the BASE CASE: the stream is seeded from the head
-//! the sidecar has just covered, before any febe exists to commit between
-//! the two, so a connecting subscriber is told [`WritePath::announced`] and
+//! [`WritePath::open`] is the BASE CASE: the stream opens at the head the
+//! sidecar has just covered, before any febe exists to commit between the
+//! two, so a connecting subscriber is told [`WritePath::announced`] and
 //! that first position is already answerable. [`WritePath::commit_recorded`]
 //! is the STEP, and both doors run it: each announcement happens behind the
 //! record that made its position answerable. Neither half is a rule a caller
 //! remembers, so the two can never come apart in the window between a
 //! commit and its record. Reads never come here and never take the lock.
 //!
-//! AND THEN THE HEAD'S TURN (PUB-6.65). A peer write, once recorded and
-//! announced, gives the PUBLISHED HEAD writer (`head.rs`, this card's own
+//! AND THEN THE HEAD WRITER'S TURN (PUB-6.65). A session write, once recorded
+//! and announced, gives the PUBLISHED HEAD writer (`head.rs`, this card's own
 //! child) its turn under the same guard. When the cadence is due, the writer
 //! commits up to three writes of the daemon's own — the staging draft's
 //! one-time mint, the record's insert, and the publish into `H` — before
@@ -91,7 +91,7 @@ impl<'a> SerialGuard<'a> {
 
 /// The write path: the serialization point, the change feed's sidecars
 /// behind it, the commit stream in front of it, and the published head
-/// writer whose turn follows every peer write.
+/// writer whose turn follows every session write.
 ///
 /// The delegating methods below are one-line calls into the feed or the
 /// stream, deliberately: what this card buys over holding the two side by
@@ -129,10 +129,10 @@ pub(crate) struct WritePath {
     /// the serialization guard, so it is this commit's own state).
     stores: EngineStores,
     /// The PUBLISHED HEAD writer (PUB-6.65), this card's own child: given its
-    /// turn by [`WritePath::commit_under`] after every peer write, it writes
-    /// `H` on the cadence through [`WritePath::commit_recorded`], under the
-    /// caller's serialization guard.
-    head: HeadWriter,
+    /// turn by [`WritePath::commit_under`] after every session write, it
+    /// writes `H` on the cadence through [`WritePath::commit_recorded`], under
+    /// the caller's serialization guard.
+    head_writer: HeadWriter,
 }
 
 impl WritePath {
@@ -146,7 +146,7 @@ impl WritePath {
     /// need name only that.
     pub fn open(data_dir: &Path, engine: &Engine) -> io::Result<WritePath> {
         let feed = Feed::open(data_dir, engine)?;
-        // Seeded AFTER the feed, from the same head, and before any febe
+        // Opened AFTER the feed, at the same head, and before any febe
         // exists to commit between the two: the stream's first announced
         // position is therefore one `/changes` already carries. That is the
         // BASE CASE of this card's guarantee, and it is why the two are
@@ -157,21 +157,21 @@ impl WritePath {
         // recovered root (PUB-6.65's I7 (a)) and its cadence's two counters off
         // the feed opened above — the commits landed since that head, and the
         // head's own recorded time (the chain's open items, item 2).
-        let head = HeadWriter::open(engine.stores(), &feed);
+        let head_writer = HeadWriter::open(engine.stores(), &feed);
         Ok(WritePath {
             serial: Mutex::new(()),
             feed,
             commit_stream,
             stores: engine.stores(),
-            head,
+            head_writer,
         })
     }
 
-    /// The test seam behind [`crate::Daemon::head_set_clock_millis`]: fix the
-    /// head writer's clock, so a test drives the time-bound trigger without a
-    /// `sleep`. Not a stable API.
-    pub(crate) fn head_set_clock_millis(&self, millis: u64) {
-        self.head.set_clock_millis(millis);
+    /// The test seam behind [`crate::Daemon::set_head_writer_clock_millis`]:
+    /// fix the head writer's clock, so a test drives the time-bound trigger
+    /// without a `sleep`. Not a stable API.
+    pub(crate) fn set_head_writer_clock_millis(&self, millis: u64) {
+        self.head_writer.set_clock_millis(millis);
     }
 
     /// Take the write-serialization lock ALONE — for the auth write
@@ -186,8 +186,8 @@ impl WritePath {
     /// refusal that commits nothing may simply drop the guard, which is
     /// what every gate arm does; what must not happen is a committing
     /// `execute` under this guard OUTSIDE `commit_under`, which would
-    /// leave the position unrecorded and unannounced and give the published
-    /// head no turn. The one execute this crate performs outside the write
+    /// leave the position unrecorded and unannounced and give the head
+    /// writer no turn. The one execute this crate performs outside the write
     /// path's two doors is the guest reply, and it is safe because it runs
     /// under `SessionId::GUEST`, which M10 never binds, so M10 refuses a
     /// write under it without committing. Nothing here can check either
@@ -230,17 +230,17 @@ impl WritePath {
         execute: impl FnOnce() -> Response,
     ) -> Response {
         let resp = self.commit_recorded(serial, meta, execute);
-        // THE HEAD'S TURN (PUB-6.65), under the same guard. Asked after every
-        // write this door runs, a refusal included: whether anything LANDED
-        // is the writer's to decide — the kernel's seq, never the answer — so
-        // this door hands it nothing to decide it by.
-        self.head.after_commit(self, serial);
+        // THE HEAD WRITER'S TURN (PUB-6.65), under the same guard. Given after
+        // every write this door runs, a refusal included: whether anything
+        // LANDED is the writer's to decide — the kernel's seq, never the
+        // answer — so this door hands it nothing to decide it by.
+        self.head_writer.take_turn(self, serial);
         resp
     }
 
     /// The ordering protocol and NOTHING after it: execute, record the
     /// position the write committed, announce that position, and hand back
-    /// the answer — [`WritePath::commit_under`] less the head's turn.
+    /// the answer — [`WritePath::commit_under`] less the head writer's turn.
     ///
     /// EVERY commit this daemon makes rides this step — `/op`'s through
     /// [`WritePath::commit_under`], the published head's own directly — and
@@ -252,10 +252,10 @@ impl WritePath {
     /// nothing else.
     ///
     /// The head writer's door, and PRIVATE to this module so it stays the
-    /// head writer's alone: a peer write through it would commit without
-    /// giving the head its turn. `execute` runs exactly once, inside the
-    /// lock, and [`WritePath::commit_under`]'s precondition on `meta` is this
-    /// door's.
+    /// head writer's alone: a session write through it would commit without
+    /// giving the head writer its turn. `execute` runs exactly once, inside
+    /// the lock, and [`WritePath::commit_under`]'s precondition on `meta` is
+    /// this door's.
     fn commit_recorded(
         &self,
         serial: &SerialGuard<'_>,
@@ -332,9 +332,10 @@ impl WritePath {
     /// committed; and one at or below the open-time head (`emit`'s
     /// incumbent ack), which the feed also declines, which the reopen
     /// walk has already covered, and which the monotone stream ignores
-    /// because it sits below the seed. A failed append is the fourth: the
-    /// line is lost but the in-memory entry is not, so `/changes` answers
-    /// that position this uptime and answers it bare after a restart.
+    /// because it sits at or below the position the stream opened at. A
+    /// failed append is the fourth: the line is lost but the in-memory entry
+    /// is not, so `/changes` answers that position this uptime and answers it
+    /// bare after a restart.
     ///
     /// The record is classified against the head AS IT STANDS after the
     /// execute — this commit's own post-state, since the serialization

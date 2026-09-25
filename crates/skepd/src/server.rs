@@ -997,7 +997,8 @@ pub struct Daemon {
     /// behind `GET /changes` and `head_time` (wire v6), the commit stream
     /// behind `GET /events` (wire v4), and the published head writer behind
     /// them. One field because the four are one ordering — commit, record,
-    /// announce, then the head's turn — that no handler may take apart.
+    /// announce, then the head writer's turn — that no handler may take
+    /// apart.
     writes: WritePath,
     /// The history surface behind `/op-at`, `/dump?at` and `/chain?at`,
     /// holding its own reconstruction budget: a guest may ask any of them
@@ -1836,16 +1837,20 @@ impl Daemon {
     }
 
     /// TEST HOOK (the same standing as the two above: `#[doc(hidden)]`, not a
-    /// stable API): fix the PUBLISHED HEAD writer's clock at `millis`, so a
-    /// test drives the head's time bound (PUB-6.65 trigger (c)) through a seam
+    /// stable API): fix the HEAD WRITER's clock at `millis`, so a test drives
+    /// the published head's time bound (PUB-6.65 trigger (c)) through a seam
     /// rather than a `sleep`. The reading is WALL-CLOCK UNIX MILLISECONDS —
     /// the writer's own domain, whose hour is measured from the last head's
     /// recorded time or from open, both wall-clock — so a test sets it
     /// RELATIVE TO the wall clock: a small number is dwarfed by that origin
     /// and the time bound never fires. A fixed reading holds until changed.
+    ///
+    /// The head writer's reading ALONE: every commit's `time`, and so
+    /// `/health`'s `head_time`, is stamped by the change feed's own reading
+    /// of the wall clock, which this seam does not move.
     #[doc(hidden)]
-    pub fn head_set_clock_millis(&self, millis: u64) {
-        self.writes.head_set_clock_millis(millis);
+    pub fn set_head_writer_clock_millis(&self, millis: u64) {
+        self.writes.set_head_writer_clock_millis(millis);
     }
 
     /// TEST HOOK (the same standing: `#[doc(hidden)]`, not a stable API):
@@ -1967,14 +1972,14 @@ impl Daemon {
         // older position's time offered in the head's place.
         //
         // THREE independent reads under no lock — this, the auth object's
-        // own fold snapshot, and the head coordinate at the end — so this
-        // answer may straddle one in-flight commit at either seam. A
-        // `head_time` correct for the position the sidecar last recorded
-        // sits beside a `log_position` one commit newer; and a client
-        // polling for the claim flip can see the position advance before
-        // `claimant` appears, or read the pre-claim `signed_origins` beside
-        // a post-claim position, which costs it one `session_rejected` and
-        // a retry. Every one of them corrects itself on the next probe.
+        // own fold snapshot, and the `(log_position, chain_head)` pair at the
+        // end — so this answer may straddle one in-flight commit at either
+        // seam. A `head_time` correct for the position the sidecar last
+        // recorded sits beside a `log_position` one commit newer; and a
+        // client polling for the claim flip can see the position advance
+        // before `claimant` appears, or read the pre-claim `signed_origins`
+        // beside a post-claim position, which costs it one `session_rejected`
+        // and a retry. Every one of them corrects itself on the next probe.
         // Taking the write lock here would serialize a liveness probe behind
         // writes, which is the worse trade; `CommitsLog::head_time` states
         // what each field is true of.
@@ -1992,8 +1997,8 @@ impl Daemon {
             self.writes.head_time().map(|t| Value::Number(t.into())).unwrap_or(Value::Null);
         // The auth object (AUTH-6.13), rendered where its state lives — the
         // claimant, the flag and the two origin sets, with the wire's own
-        // negative pin stated there too. Read BEFORE the coordinate, which
-        // is the direction the straddle above describes.
+        // negative pin stated there too. Read BEFORE that pair, which is the
+        // direction the straddle above describes.
         let auth = self.auth.auth_object();
         let (log_position, chain_head) = self.febe.head_coordinate();
         Reply::json(

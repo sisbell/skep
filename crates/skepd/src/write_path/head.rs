@@ -15,7 +15,7 @@
 //! DURABLE record. The schema is [`HeadRecord`]'s, on one card.
 //!
 //! HOW IT LANDS. Per head, two commits under the SAME serialization lock the
-//! triggering write holds, each through the write path's QUIET door
+//! triggering write holds, each through the head writer's door
 //! ([`WritePath::commit_recorded`]) with testimony [`SYSTEM_TESTIMONY`]: (1)
 //! one `insert` of the head record atom into a private STAGING DRAFT (minted
 //! ONCE under the system account, `published: false`, and reused — across
@@ -26,52 +26,52 @@
 //! minting the next member of `H`'s trunk chain — `base` = `H`'s current
 //! trunk head with its extent set to that member's full content count (so
 //! NOTHING is carried and each member holds exactly its own record; 0 at the
-//! first, memberless head), `draft` = the staging draft, `runs` = the new
-//! atom's one run. The shot's source consult runs at
+//! first head, written while `H` is memberless), `draft` = the staging draft,
+//! `runs` = the new atom's one run. The shot's source consult runs at
 //! `visible_to(Caller::Principal(SYSTEM))`, never System's — the system
 //! principal owns `H` and the draft, so it never withholds.
 //!
 //! THE CADENCE, on the write path with no clock thread — evaluated after
-//! every write the write path's peer door runs ([`HeadWriter::after_commit`],
+//! every write the write path's session door runs ([`HeadWriter::take_turn`],
 //! reached from `commit_under`): a head is due when (a) ≥ [`EVERY_COMMITS`]
 //! commits that are NOT the writer's own have LANDED since the last head, OR
 //! (b) the newest retained checkpoint is not the one the last head attested
 //! (its `base`), OR (c) ≥ [`MAX_INTERVAL_MILLIS`] have elapsed since the last
 //! head AND the position moved. Never on a peer's request; never while the
 //! position has not moved; never twice for one position (the head's own
-//! commits ride the quiet door, which gives no head a turn, so they are
-//! neither counted nor able to re-trigger). LANDED, not merely acked:
-//! `after_commit` is asked after every write `commit_under` runs — an ack that
-//! committed nothing this call (an idempotency replay answered from M10's
-//! memo, `emit`'s incumbent ack) and a refusal included; the kernel's seq, not
-//! the answer, says whether a commit landed, and one that did not counts
-//! nothing and evaluates no trigger. RESUME BY READING: at open the writer
-//! reads `H`'s latest member — its `position` and `chain` (the next head's
-//! `prev`; a head is owed only once the position moves past it) and its
-//! `base` (trigger (b)'s reference: a checkpoint taken after that head, before
-//! or after a restart, is attested by the next head) — and finds the staging
-//! draft where it left it; a crash between the insert and the shot leaves an
-//! orphan atom in the draft and no member, and the next head's shot names the
-//! newer atom (PUB-2.26's no-residue).
+//! commits ride the head writer's door, which gives the head writer no turn,
+//! so they are neither counted nor able to re-trigger). LANDED, not merely
+//! acked: the turn is taken after every write `commit_under` runs — an ack
+//! that committed nothing this call (an idempotency replay answered from
+//! M10's memo, `emit`'s incumbent ack) and a refusal included; the kernel's
+//! seq, not the answer, says whether a commit landed, and one that did not
+//! counts nothing and evaluates no trigger. RESUME BY READING: at open the
+//! writer reads `H`'s latest member — its `position` and `chain` (the next
+//! head's `prev`; a head is owed only once the position moves past it) and
+//! its `base` (trigger (b)'s reference: a checkpoint taken after that head,
+//! before or after a restart, is attested by the next head) — and finds the
+//! staging draft where it left it; a crash between the insert and the shot
+//! leaves an orphan atom in the draft and no member, and the next head's shot
+//! names the newer atom (PUB-2.26's no-residue).
 //!
 //! RESUME FROM THE FEED (the chain's open items, item 2). The cadence's two
-//! counters are seeded at open from the change feed's testimony about the
+//! counters are RESUMED at open from the change feed's testimony about the
 //! commits landed ABOVE the recorded head's position (`Feed::entries_above`),
 //! so that PUB-6.65's "64 commits … have landed since the last head" and "one
 //! hour has passed since the last head" are true of the BOARD across a
 //! restart and not of the process: `commits_since_head` is the count of those
-//! entries whose key is not `"system"` — a bare entry counts, conservative by
-//! at most the head's own commits, so a head fires at most a few commits early
-//! and never twice — and the hour's origin is the head's own last
-//! `"system"`-keyed entry's recorded `time` (else the first entry above the
-//! position carrying a time; else open-time). A BARE OR ABSENT SIDECAR FALLS
-//! BACK to open-time seeding, the behaviour before the seed: the count starts
-//! at zero and the hour is measured from open. The clock is therefore the
-//! feed's own: [`wall_clock_millis`], the one reading both take. D1 is kept —
-//! a gate reads testimony to decide WHEN, and the head's bytes stay a pure
-//! function of the root; AUTH-4.56's rewritable sidecar can move one head's
-//! timing within the bounds the triggers already allow, never a duplicate and
-//! never a changed content.
+//! entries whose testimony is not `"system"` — a bare entry counts,
+//! conservative by at most the head's own commits, so a head fires at most a
+//! few commits early and never twice — and the hour's origin is the recorded
+//! `time` of the head's own last entry, the last testifying `"system"` (else
+//! the first entry above the position carrying a time; else open-time). A
+//! BARE OR ABSENT SIDECAR FALLS BACK to open-time: the count starts at zero
+//! and the hour is measured from open. The clock is therefore the feed's own:
+//! [`wall_clock_millis`], the one reading both take. D1 is kept — a gate
+//! reads testimony to decide WHEN, and the head's bytes stay a pure function
+//! of the root; AUTH-4.56's rewritable sidecar can move one head's timing
+//! within the bounds the triggers already allow, never a duplicate and never
+//! a changed content.
 //!
 //! WHAT A REFUSAL DOES. A driver refusal on any of the head's commits is a
 //! SURFACED failure (I11 (c), PUB-5.75: never a board left silently headless):
@@ -124,7 +124,7 @@ const RECORD_TYPE: &str = "skep-head";
 /// value): what the head writer's own commits record in place of a
 /// session's — made in-process as the system account's principal with NO
 /// session, so no fingerprint and no `"bare"` is true of them. One spelling
-/// because the resume READS it back ([`resume_seeds`]) to tell the head's
+/// because the resume READS it back ([`resume_cadence`]) to tell the head's
 /// own commits from the ones the cadence counts.
 pub(super) const SYSTEM_TESTIMONY: &str = "system";
 
@@ -147,15 +147,15 @@ const MAX_INTERVAL_MILLIS: u64 = 3_600_000; // one hour
 /// The head writer's own clock, so the time bound (trigger (c)) is drivable in
 /// tests through a seam rather than a `sleep`. In production `now_millis` is
 /// [`wall_clock_millis`] — the one reading of the clock the feed stamps each
-/// commit's `time` with, so the hour the resume seeds from the head's own
+/// commit's `time` with, so the hour the resume takes from the head's own
 /// entry (the module doc's RESUME FROM THE FEED) is measured on the clock
 /// that recorded it; a wall clock that steps is tolerated by the trigger's
 /// `saturating_sub`, and the cost of a step is one head early or late by the
 /// step, never a duplicate. [`Clock::set_millis`] overrides it with a fixed
 /// reading (the test seam, reached through
-/// [`crate::Daemon::head_set_clock_millis`]), which a test therefore sets
-/// RELATIVE TO the wall clock rather than at small numbers a seeded origin
-/// would dwarf.
+/// [`crate::Daemon::set_head_writer_clock_millis`]), which a test therefore
+/// sets RELATIVE TO the wall clock rather than at small numbers a resumed
+/// origin would dwarf.
 struct Clock {
     /// [`u64::MAX`] means "use the real wall clock"; any other value is a
     /// test override, held until changed.
@@ -191,7 +191,7 @@ struct HeadState {
     /// first head ever. Every reference the cadence takes to "the last head"
     /// is a reading of this one value: "the position moved" and "never twice
     /// for one position" read its `position`, the next head's `prev` is its
-    /// [`HeadRecord::coordinate`], and trigger (b)'s reference is its `base`
+    /// [`HeadRecord::pair`], and trigger (b)'s reference is its `base`
     /// — the checkpoint the last head ATTESTED — so a checkpoint that landed
     /// after it is attested by the next head, whichever side of a restart
     /// the last one was written on.
@@ -202,13 +202,13 @@ struct HeadState {
     /// told from a commit: the seq did not pass this.
     last_seen_position: u64,
     /// Commits that are not the writer's own since the last head — trigger
-    /// (a)'s count. Seeded at open from the feed's entries above the last
+    /// (a)'s count. Resumed at open from the feed's entries above the last
     /// head's position (the module doc's RESUME FROM THE FEED), so a board
     /// restarted every few commits still reaches [`EVERY_COMMITS`]; zero
     /// where the sidecar is bare or absent.
     commits_since_head: u64,
     /// The clock reading at the last head — trigger (c)'s base, in
-    /// [`wall_clock_millis`]'s domain. Seeded at open from the last head's own
+    /// [`wall_clock_millis`]'s domain. Resumed at open from the last head's own
     /// recorded `time` in the feed (RESUME FROM THE FEED), so after a reopen
     /// the hour is measured from the last head the BOARD wrote and not from
     /// this open; the head itself carries no timestamp (two heads of one board
@@ -221,11 +221,15 @@ struct HeadState {
     staging_draft: Option<Address>,
 }
 
-/// A committed COORDINATE — a position and the chain AT it, the pair
-/// `/health` serves live and `/chain?at` recomputes. What a head names, and
-/// what its `prev` names of the head before it.
+/// A COMMITTED PAIR — a position and the commit chain's value AT it, which
+/// together name one committed state (wire.md's `(position, chain)` pair):
+/// what `/health` serves live, what `/chain?at` recomputes, what a head
+/// names, and what its `prev` names of the head before it. The corpus spends
+/// "coordinate" on the POSITION alone (wire.md §Reading history, "positions:
+/// durable coordinates"; M2's version coordinate, which the kernel PAIRS with
+/// its chain), so the two together take the corpus's own noun: a pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Coordinate {
+struct CommittedPair {
     position: u64,
     chain: [u8; 32],
 }
@@ -255,14 +259,15 @@ struct HeadRecord {
     chain: [u8; 32],
     /// The newest retained checkpoint at or below `position`, or `None`.
     base: Option<CheckpointBase>,
-    /// The previous head's coordinate, or `None` at the first.
-    prev: Option<Coordinate>,
+    /// The previous head's committed pair, or `None` at the first.
+    prev: Option<CommittedPair>,
 }
 
 impl HeadRecord {
-    /// The coordinate this head names — what the NEXT head's `prev` carries.
-    fn coordinate(&self) -> Coordinate {
-        Coordinate { position: self.position, chain: self.chain }
+    /// The committed pair this head names — what the NEXT head's `prev`
+    /// carries.
+    fn pair(&self) -> CommittedPair {
+        CommittedPair { position: self.position, chain: self.chain }
     }
 
     /// The record's bytes, hand-marshaled in SCHEMA order (`type`, `format`,
@@ -296,7 +301,7 @@ impl HeadRecord {
         }
         s.push_str(",\"prev\":");
         match &self.prev {
-            Some(Coordinate { position, chain }) => {
+            Some(CommittedPair { position, chain }) => {
                 s.push_str("{\"position\":");
                 let _ = write!(s, "{position}");
                 s.push_str(",\"chain\":\"");
@@ -318,13 +323,13 @@ impl HeadRecord {
         if v.get("type")?.as_str()? != RECORD_TYPE || v.get("format")?.as_str()? != FORMAT_STAMP {
             return None;
         }
-        let coordinate = |v: &Value| -> Option<Coordinate> {
-            Some(Coordinate {
+        let pair = |v: &Value| -> Option<CommittedPair> {
+            Some(CommittedPair {
                 position: v.get("position")?.as_u64()?,
                 chain: parse_lower_hex(v.get("chain")?.as_str()?)?,
             })
         };
-        let Coordinate { position, chain } = coordinate(&v)?;
+        let CommittedPair { position, chain } = pair(&v)?;
         let base = match v.get("base")? {
             Value::Null => None,
             base => Some(CheckpointBase {
@@ -335,16 +340,17 @@ impl HeadRecord {
         };
         let prev = match v.get("prev")? {
             Value::Null => None,
-            prev => Some(coordinate(prev)?),
+            prev => Some(pair(prev)?),
         };
         Some(HeadRecord { position, chain, base, prev })
     }
 }
 
-/// The decision `after_commit` takes under the state lock and then acts on
-/// without it: the record to publish — the state's `last_head` once it
-/// lands — and the clock reading that becomes its `last_head_millis`.
-struct Plan {
+/// A head that is DUE — the decision [`HeadWriter::take_turn`] reaches under
+/// the state lock and then acts on without it: the record to publish (the
+/// state's `last_head` once it lands) and the clock reading that becomes its
+/// `last_head_millis`.
+struct DueHead {
     record: HeadRecord,
     now_millis: u64,
 }
@@ -365,7 +371,7 @@ impl HeadWriter {
     /// a position already published, and attests a checkpoint the last head
     /// did not name; and the staging draft is found where an earlier uptime
     /// minted it. All off ONE snapshot. And by reading the FEED (the module
-    /// doc's RESUME FROM THE FEED): the entries above that position seed
+    /// doc's RESUME FROM THE FEED): the entries above that position resume
     /// trigger (a)'s count and trigger (c)'s origin, a bare or absent sidecar
     /// falling back to zero and to open-time.
     pub(super) fn open(stores: EngineStores, feed: &Feed) -> HeadWriter {
@@ -376,41 +382,42 @@ impl HeadWriter {
         let staging_draft = find_staging_draft(snap.world());
         // The feed is the daemon's testimony about its own commits: every
         // entry above the position the last head named landed since that
-        // head, the head's own commits among them, keyed `SYSTEM_TESTIMONY`.
-        // No head yet, and every retained entry is "since the last head".
-        let seeds =
-            resume_seeds(&feed.entries_above(last_head.as_ref().map_or(0, |h| h.position)));
+        // head, the head's own commits among them, testifying
+        // `SYSTEM_TESTIMONY`. No head yet, and every retained entry is
+        // "since the last head".
+        let resumed =
+            resume_cadence(&feed.entries_above(last_head.as_ref().map_or(0, |h| h.position)));
         HeadWriter {
             stores,
             state: Mutex::new(HeadState {
                 last_head,
                 last_seen_position: snap.seq().0,
-                commits_since_head: seeds.commits_since_head,
-                last_head_millis: seeds.last_head_millis.unwrap_or(now),
+                commits_since_head: resumed.commits_since_head,
+                last_head_millis: resumed.last_head_millis.unwrap_or(now),
                 staging_draft,
             }),
             clock,
         }
     }
 
-    /// The test seam behind [`crate::Daemon::head_set_clock_millis`]: fix the
-    /// writer's clock at `millis`, so a test drives trigger (c) without a
-    /// `sleep`. Not a stable API.
+    /// The test seam behind [`crate::Daemon::set_head_writer_clock_millis`]:
+    /// fix the writer's clock at `millis`, so a test drives trigger (c)
+    /// without a `sleep`. Not a stable API.
     pub(super) fn set_clock_millis(&self, millis: u64) {
         self.clock.set_millis(millis);
     }
 
-    /// Called from [`WritePath::commit_under`] after every write that door
-    /// runs, under the caller's serialization guard: if a commit LANDED — the
-    /// kernel's seq, not the answer, is the arbiter — count it, and if a
-    /// trigger is due, write the head. The head's own commits go through
-    /// [`WritePath::commit_recorded`], which gives no head a turn, so they
-    /// never reach here: neither counted nor able to re-trigger, by
-    /// construction. The seq refresh at the end is what keeps the next landed
-    /// commit from counting them.
-    pub(super) fn after_commit(&self, wp: &WritePath, serial: &SerialGuard<'_>) {
+    /// THE HEAD WRITER'S TURN, taken from [`WritePath::commit_under`] after
+    /// every write that door runs — a refusal and a replay included — under
+    /// the caller's serialization guard: if a commit LANDED (the kernel's seq,
+    /// not the answer, is the arbiter) count it, and if a head is DUE, write
+    /// it. The head's own commits go through [`WritePath::commit_recorded`],
+    /// which gives the head writer no turn, so they never reach here: neither
+    /// counted nor able to re-trigger, by construction. The seq refresh at the
+    /// end is what keeps the next landed commit from counting them.
+    pub(super) fn take_turn(&self, wp: &WritePath, serial: &SerialGuard<'_>) {
         // Decide under the state lock, releasing it before any commit.
-        let plan = {
+        let due_head = {
             let mut st = self.state.lock();
 
             // The pair the head will name — the kernel's committed
@@ -418,8 +425,8 @@ impl HeadWriter {
             let snap = self.stores.kernel().snapshot();
             let position = snap.seq().0;
 
-            // LANDED, not merely answered. `commit_under` asks after every
-            // write it runs, and a write can answer without committing
+            // LANDED, not merely answered. `commit_under` gives this turn after
+            // every write it runs, and a write can answer without committing
             // anything this call: a refusal, an idempotency replay answered
             // from M10's memo, `emit`'s incumbent ack. The kernel's seq is
             // the arbiter — unmoved past the last look, nothing landed:
@@ -465,18 +472,17 @@ impl HeadWriter {
             if !due {
                 return;
             }
-            // `prev`: the previous head's coordinate, null at the first.
-            let record =
-                HeadRecord { position, chain, base, prev: last.map(HeadRecord::coordinate) };
-            Plan { record, now_millis: now }
+            // `prev`: the previous head's committed pair, null at the first.
+            let record = HeadRecord { position, chain, base, prev: last.map(HeadRecord::pair) };
+            DueHead { record, now_millis: now }
         };
 
-        let landed = self.write_head(wp, serial, &plan.record);
+        let landed = self.write_head(wp, serial, &due_head.record);
         let mut st = self.state.lock();
         if landed {
-            st.last_head = Some(plan.record);
+            st.last_head = Some(due_head.record);
             st.commits_since_head = 0;
-            st.last_head_millis = plan.now_millis;
+            st.last_head_millis = due_head.now_millis;
         }
         // The head's own commits — a whole head's, or a refused one's partial
         // (the draft mint, the orphaned insert) — moved the seq: the next
@@ -506,8 +512,9 @@ impl HeadWriter {
 
         // The shot: base is H's current trunk head (or H itself while
         // memberless), extent = that member's full content count so NOTHING is
-        // carried — each member holds exactly its own record (0 at the first,
-        // memberless head, PUB-6.65's "extent 0"). runs = the new atom alone.
+        // carried — each member holds exactly its own record (0 at the first
+        // head, written while `H` is memberless: PUB-6.65's "extent 0").
+        // runs = the new atom alone.
         let h = head_document();
         let (base_member, extent) = {
             let snap = self.stores.kernel().snapshot();
@@ -616,10 +623,10 @@ impl HeadWriter {
         })
     }
 
-    /// One head commit through the write path's quiet door,
+    /// One head commit through the head writer's door,
     /// [`WritePath::commit_recorded`] — recorded and announced like any
-    /// write, giving no head a turn — as the system principal: run the
-    /// driver inside the closure, hand the door the `AckAddr` its
+    /// write, giving the head writer no turn — as the system principal: run
+    /// the driver inside the closure, hand the door the `AckAddr` its
     /// `record`/announce want, and return the committed `(address, seq)`. A
     /// driver refusal is logged and answered with a non-committing
     /// `Response` (recorded nowhere), so the head is skipped and the
@@ -652,25 +659,31 @@ impl HeadWriter {
     }
 }
 
-/// The cadence's two seeds, read off the feed's entries above the last head's
-/// position (the module doc's RESUME FROM THE FEED).
-struct ResumeSeeds {
-    /// Entries whose key is not `"system"` — every commit landed since the
-    /// head that was not the head's own; a bare entry, keyless, counts.
+/// The cadence's two counters as a restart RESUMES them, read off the feed's
+/// entries above the last head's position (the module doc's RESUME FROM THE
+/// FEED).
+struct ResumedCadence {
+    /// Entries whose testimony is not `"system"` — every commit landed since
+    /// the head that was not the head's own; a bare entry, its testimony
+    /// lost, counts.
     commits_since_head: u64,
-    /// The head's own time: the LAST `"system"`-keyed entry's recorded `time`
-    /// — the head's publish, or a later attempt's orphaned insert, either way
-    /// the board's most recent head work — else the first entry above the
-    /// position carrying a time (a witness no earlier than the head, so the
-    /// hour fires no sooner than it is owed), else `None`: open-time.
+    /// The head's own time: the recorded `time` of the LAST entry testifying
+    /// `"system"` — the head's publish, or a later attempt's orphaned insert,
+    /// either way the board's most recent head work — else the first entry
+    /// above the position carrying a time (a witness no earlier than the
+    /// head, so the hour fires no sooner than it is owed), else `None`:
+    /// open-time.
     last_head_millis: Option<u64>,
 }
 
-/// RESUME FROM THE FEED: the seeds over the entries above the last head's
+/// RESUME FROM THE FEED: the cadence over the entries above the last head's
 /// position, in position order, as [`Feed::entries_above`] hands them over.
-fn resume_seeds(above: &[(u64, CommitMeta)]) -> ResumeSeeds {
+fn resume_cadence(above: &[(u64, CommitMeta)]) -> ResumedCadence {
     let is_system = |meta: &CommitMeta| {
-        matches!(meta, CommitMeta::Recorded { key: Some(key), .. } if key == SYSTEM_TESTIMONY)
+        matches!(
+            meta,
+            CommitMeta::Recorded { key: Some(testimony), .. } if testimony == SYSTEM_TESTIMONY
+        )
     };
     let time_of = |meta: &CommitMeta| match meta {
         CommitMeta::Recorded { time, .. } => Some(*time),
@@ -683,14 +696,14 @@ fn resume_seeds(above: &[(u64, CommitMeta)]) -> ResumeSeeds {
         .find(|(_, meta)| is_system(meta))
         .and_then(|(_, meta)| time_of(meta))
         .or_else(|| above.iter().find_map(|(_, meta)| time_of(meta)));
-    ResumeSeeds { commits_since_head, last_head_millis }
+    ResumedCadence { commits_since_head, last_head_millis }
 }
 
-/// RESUME-BY-READING: `H`'s latest member's recorded head, or `None` when the
-/// chain has no member yet (or its record is not a head this build wrote —
-/// [`HeadRecord::parse`] — treated as no head, so the next trigger writes a
-/// fresh one). The record is the atom at content position 1 of the trunk
-/// head, read off M5's point resolution and M4's value.
+/// RESUME-BY-READING: `H`'s latest member's recorded head, or `None` when
+/// `H`'s trunk chain has no member yet (or its record is not a head this
+/// build wrote — [`HeadRecord::parse`] — treated as no head, so the next
+/// trigger writes a fresh one). The record is the atom at content position 1
+/// of the trunk head, read off M5's point resolution and M4's value.
 fn read_recorded_head(world: &World) -> Option<HeadRecord> {
     let h = head_document();
     let member = trunk_head(world.m3(), &h)?;
@@ -735,7 +748,7 @@ mod tests {
             position: 7,
             chain: [0xab; 32],
             base: Some(CheckpointBase { seq: 4, chain: [0x01; 32], body_hash: [0x02; 32] }),
-            prev: Some(Coordinate { position: 3, chain: [0xcd; 32] }),
+            prev: Some(CommittedPair { position: 3, chain: [0xcd; 32] }),
         };
         let bytes = full.to_bytes();
         assert_eq!(

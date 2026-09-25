@@ -41,6 +41,15 @@ impl<W> Base<W> {
         self.s_load
     }
 
+    /// The commit chain's value at [`Base::s_load`] — the `SKC4` header's
+    /// `chain_head` this base was loaded with, or [`journal::CHAIN_GENESIS`]
+    /// at genesis: what a boundary that IS the base answers
+    /// ([`crate::Kernel::chain_at`]), and what [`Base::scan`] judges the
+    /// first link above it against.
+    pub(crate) fn chain_head(&self) -> [u8; 32] {
+        self.chain_head
+    }
+
     /// The base itself, for a boundary that IS the base and so has nothing
     /// above it to fold.
     pub(crate) fn into_world(self) -> W {
@@ -106,7 +115,7 @@ pub(crate) struct Unreachable {
 /// The chain value a base carries is its own: a checkpoint's `SKC4` header
 /// holds the chain at its coordinate, and genesis holds
 /// [`journal::CHAIN_GENESIS`] — the one seam replay needs for the chain, since
-/// this is the only site that reads a header.
+/// this is the only site that makes a base out of a header.
 ///
 /// `genesis` is borrowed and copied only on the branch that uses it, so the
 /// common case — a checkpoint that loads — costs no copy of a world at all.
@@ -170,7 +179,7 @@ pub(crate) fn select_base<W: WorldState>(
 /// coordinate is the whole of what there is to say.
 pub(crate) struct FoldFail {
     /// The record's own, readable coordinate — unlike a corrupt run's (see
-    /// [`ScanOutcome::fatal_run_anywhere`]).
+    /// [`ScanOutcome::halt_anywhere`]).
     pub at: u64,
     /// The decode's own account, for the condition that has one.
     pub cause: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,

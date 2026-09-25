@@ -5,8 +5,9 @@
 mod chain;
 mod golden;
 mod hazard;
-// Shared plumbing, not a suite: `hazard` uses a subset, so the allow that was
-// this file's own crate-level attribute rides its `mod` line here.
+// Shared plumbing, not a suite: `hazard`, `golden` and `chain` each use a
+// subset, so the allow that was this file's own crate-level attribute rides
+// its `mod` line here.
 #[allow(dead_code)]
 mod hazard_util;
 mod kernel;

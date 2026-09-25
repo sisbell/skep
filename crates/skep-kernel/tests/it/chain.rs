@@ -62,14 +62,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::hazard_util::{
-    cfg_manual, ckpt_file, copy_dir, flip_byte, node1, seg_file, t, timed_open,
-    timed_open_result, truncate_file, vp, Fixture, GOLDEN_OPS, GOLDEN_SALT_SEED, OWNER, USER,
+    cfg_manual, node1, t, timed_open, timed_open_result, vp, Fixture, GOLDEN_OPS,
+    GOLDEN_SALT_SEED, OWNER, USER,
 };
 use crate::mutilate::{
-    delete_txn, records_checksum, replace_frame_payload, reseal_frame, rewrite_frame,
-    rewrite_txn, rollback_segment, swap_txns, transactions, Txn, MARKER_CHAIN_AT,
-    MARKER_CHECKSUM_AT, MARKER_EMPTY_LEN, MARKER_LAST_SEQ_AT, MARKER_SALT_AT,
-    MARKER_SIG_ALG_AT, MARKER_SIG_LEN_AT, MARKER_TXN_AT, RECORD_BYTES_AT,
+    ckpt_file, copy_dir, delete_txn, flip_byte, records_checksum, replace_frame_payload,
+    reseal_frame, rewrite_frame, rewrite_txn, rollback_segment, seg_file, swap_txns,
+    transactions, truncate_file, Txn, MARKER_CHAIN_AT, MARKER_CHECKSUM_AT, MARKER_EMPTY_LEN,
+    MARKER_LAST_SEQ_AT, MARKER_SALT_AT, MARKER_SIG_ALG_AT, MARKER_SIG_LEN_AT, MARKER_TXN_AT,
+    RECORD_BYTES_AT,
 };
 use sha2::{Digest, Sha256};
 use skep_arrangement::Deposit;

@@ -37,10 +37,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use crate::hazard_util::{
-    cfg_manual, ckpt_file, copy_dir, flip_byte, node1, seg_file, Fixture, GOLDEN_OPS,
-    GOLDEN_SALT_SEED, USER,
-};
+use crate::hazard_util::{cfg_manual, node1, Fixture, GOLDEN_OPS, GOLDEN_SALT_SEED, USER};
+use crate::mutilate::{ckpt_file, copy_dir, flip_byte, seg_file};
 use skep_engine::Engine;
 use skep_kernel::Seq;
 use skep_namespace::{HasM3, BOOTSTRAP_PRINCIPAL};

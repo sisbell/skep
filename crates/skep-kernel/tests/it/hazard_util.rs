@@ -1,6 +1,10 @@
-//! Shared plumbing for the dirty-crash hazard suite (hardening H3): the
-//! mixed-op engine fixture with its capture-and-compare oracle, the file
-//! mutilation helpers, wedge-bounded opens, and a deterministic RNG.
+//! The engine fixture the hazard, golden and chain suites share, and the
+//! dirty-crash plumbing (hardening H3) only the hazard suite uses. Shared: the
+//! mixed-op fixture — the hazard suite's eleven ops, extended to the golden's
+//! eighteen — with its capture-and-compare oracle, the seeded salt every
+//! fixture kernel runs under, the address and configuration constructors, and
+//! wedge-bounded opens. For `hazard` alone: the prefix judges, junk and a
+//! deterministic RNG.
 //!
 //! The oracle discipline: while the journal is healthy, capture every
 //! committed boundary's `Seq`, the journal byte length once that commit was
@@ -12,9 +16,10 @@
 //! and the judges here panic on them with the full reproduction in the
 //! message.
 //!
-//! Plumbing for the hazard suite, not a suite of its own: it declares no
-//! tests, and `hazard` uses a subset of it — which is what the `dead_code`
-//! allow on its `mod` line in `main.rs` covers.
+//! Plumbing, not a suite: it declares no tests, and `hazard`, `golden` and
+//! `chain` each use a subset of it — which is what the `dead_code` allow on
+//! its `mod` line in `main.rs` covers. The mutilation primitives belong to
+//! `mutilate`; the re-export below serves `hazard`'s glob import.
 
 pub use crate::mutilate::*;
 

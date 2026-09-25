@@ -438,18 +438,17 @@ impl HeadWriter {
 
             let chain = snap.chain();
             // `base`: the newest retained checkpoint at or below the named
-            // position, else null — the kernel's triple named here, in
-            // `Kernel::newest_checkpoint`'s documented order, at the one place
-            // it is unpacked.
+            // position, else null — the kernel's checkpoint header, field by
+            // field.
             let base = self
                 .stores
                 .kernel()
                 .newest_checkpoint()
-                .filter(|(seq, _, _)| seq.0 <= position)
-                .map(|(seq, chain_head, body_hash)| CheckpointBase {
-                    seq: seq.0,
-                    chain: chain_head,
-                    body_hash,
+                .filter(|newest| newest.seq.0 <= position)
+                .map(|newest| CheckpointBase {
+                    seq: newest.seq.0,
+                    chain: newest.chain_head,
+                    body_hash: newest.body_hash,
                 });
             let now = self.clock.now_millis();
 

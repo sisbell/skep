@@ -29,6 +29,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{stamp_text, NO_MIGRATION_REMEDY};
 use crate::journal::{codec, fsync_dir};
+use crate::Seq;
 
 // The trailing numeral is the checkpoint's FORMAT stamp; bumped 1 → 2 at
 // the 2026-08-26 genesis re-baseline (M7's slice no longer carries a sealed
@@ -72,17 +73,39 @@ fn field<const AT: usize, const N: usize>(header: &[u8; HEADER_LEN]) -> [u8; N] 
 /// header can pass without its body ([`parse_header`], the only site that
 /// makes one): this build's stamp, and a seq agreeing with the file's name.
 /// The body's own checks — its length, checksum and hash — are
-/// [`CheckpointMeta::load`]'s, which alone reads the body.
+/// [`CheckpointMeta::load`]'s, which alone reads the body. Private to this
+/// module: what a header ATTESTS leaves it as a [`CheckpointHeader`], and the
+/// fields that exist only to check the body never leave it.
 #[derive(Debug)]
-pub(crate) struct Header {
+struct Header {
     /// CRC32C over the body, as written.
     crc: u32,
     /// The body's length in bytes, as written.
     body_len: u64,
     /// The commit chain's value at this checkpoint's seq.
-    pub chain_head: [u8; 32],
+    chain_head: [u8; 32],
     /// SHA-256 over the body — the header's commitment to it, which a party
     /// holding the file verifies the body by.
+    body_hash: [u8; 32],
+}
+
+/// What a checkpoint's `SKC4` header ATTESTS, read without its body: the
+/// coordinate the checkpoint embodies, the commit chain's value there, and
+/// SHA-256 over its canonical body — the three a published head names a base
+/// by ([`crate::Kernel::newest_checkpoint`]). Only this crate makes one, and
+/// only under every check a header can pass without its body: this build's
+/// stamp, and a seq the file's name agrees with. The body is NOT verified —
+/// its checksum and hash need the body — and `body_hash` is what a party
+/// holding the file verifies it by.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CheckpointHeader {
+    /// The coordinate the checkpoint embodies — its file name and its header
+    /// agreeing on it.
+    pub seq: Seq,
+    /// The commit chain's value at `seq`.
+    pub chain_head: [u8; 32],
+    /// SHA-256 over the checkpoint's canonical body.
     pub body_hash: [u8; 32],
 }
 
@@ -206,14 +229,15 @@ impl CheckpointMeta {
         }
     }
 
-    /// This checkpoint's header, read ALONE — [`HEADER_LEN`] bytes, and
-    /// nothing after them — under every check a header can pass without its
-    /// body ([`parse_header`]): this build's stamp, and a seq agreeing with
-    /// the file's name. So it costs one short read whatever the world's size,
-    /// where [`CheckpointMeta::load`] reads and hashes the whole serialized
-    /// world. The body is NOT verified: its checksum and hash need the body,
-    /// and `body_hash` is what a party holding the file verifies it by.
-    pub(crate) fn header(&self) -> Result<Header, LoadRefused> {
+    /// What this checkpoint's header attests ([`CheckpointHeader`]), read
+    /// ALONE — [`HEADER_LEN`] bytes, and nothing after them — under every
+    /// check a header can pass without its body ([`parse_header`]): this
+    /// build's stamp, and a seq agreeing with the file's name. So it costs one
+    /// short read whatever the world's size, where [`CheckpointMeta::load`]
+    /// reads and hashes the whole serialized world. The body is NOT verified:
+    /// its checksum and hash need the body, and `body_hash` is what a party
+    /// holding the file verifies it by.
+    pub(crate) fn header(&self) -> Result<CheckpointHeader, LoadRefused> {
         let mut bytes = [0u8; HEADER_LEN];
         File::open(&self.path)?
             .read_exact(&mut bytes)
@@ -224,7 +248,12 @@ impl CheckpointMeta {
                     e.into()
                 }
             })?;
-        parse_header(self.seq, &bytes)
+        let header = parse_header(self.seq, &bytes)?;
+        Ok(CheckpointHeader {
+            seq: Seq(self.seq),
+            chain_head: header.chain_head,
+            body_hash: header.body_hash,
+        })
     }
 }
 
@@ -492,13 +521,18 @@ mod tests {
         let header_of = |dir: &Path| list(dir).unwrap()[0].header();
 
         let header = header_of(dir.path()).expect("the header reads");
-        assert_eq!((header.chain_head, header.body_hash), (CHAIN_HEAD, written_hash));
+        let attested = CheckpointHeader {
+            seq: Seq(7),
+            chain_head: CHAIN_HEAD,
+            body_hash: written_hash,
+        };
+        assert_eq!(header, attested, "the coordinate, the chain there, the body's hash");
 
         // Cut to its header: nothing after it is read, so the answer is the
         // same — and the body `load` must verify is no longer there.
         fs::write(&path, &data[..HEADER_LEN]).unwrap();
         let header = header_of(dir.path()).expect("the header reads without its body");
-        assert_eq!((header.chain_head, header.body_hash), (CHAIN_HEAD, written_hash));
+        assert_eq!(header, attested);
         assert!(list(dir.path()).unwrap()[0].load::<Vec<u64>>().is_err());
 
         // One byte short of a header is not one.

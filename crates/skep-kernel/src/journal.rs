@@ -327,6 +327,12 @@ pub(crate) const CHAIN_GENESIS: [u8; 32] = [0u8; 32];
 /// beside the bytes it salts, and such a party has the bytes anyway — and it
 /// is no anchor: a forger who rewrites the journal chooses its own salts and
 /// re-chains consistently, exactly as before (the tamper matrix's case 11).
+///
+/// The hasher inside is this type's alone: every byte the chain covers enters
+/// through [`ChainLink::open`], [`ChainLink::add_payload`] or
+/// [`ChainLink::close`], and a reader that must close a link it still holds
+/// clones the link.
+#[derive(Clone)]
 struct ChainLink(Sha256);
 
 impl ChainLink {
@@ -650,12 +656,14 @@ fn find_magic(buf: &[u8], from: usize) -> Option<usize> {
 /// slice must be ascending by `first_seq` as [`list_segments`] produces it.
 ///
 /// Both fields are read only by the operations here that own segment names —
-/// [`inferred_last_seq`], [`reaches_genesis`], [`reclaim_below`] and
-/// [`scan`] — because a `firstSeq` read outside them is a coverage inference
-/// made away from the naming rule it rests on, and [`reclaim_below`] deletes
-/// files on that inference. A slice of these travels; the names inside do not,
-/// and neither does the inference drawn from them — the one fact about segment
-/// coverage that leaves this module is [`reaches_genesis`]'s answer.
+/// [`inferred_last_seq`], [`reaches_genesis`], [`reclaim_below`], [`scan`]
+/// and [`first_sync_word`], the last two reaching their segments through the
+/// one skip rule, [`scanned_above`] — because a `firstSeq` read outside them
+/// is a coverage inference made away from the naming rule it rests on, and
+/// [`reclaim_below`] deletes files on that inference. A slice of these
+/// travels; the names inside do not, and neither does the inference drawn
+/// from them — the one fact about segment coverage that leaves this module is
+/// [`reaches_genesis`]'s answer.
 pub(crate) struct SegmentMeta {
     first_seq: u64,
     path: PathBuf,
@@ -721,6 +729,20 @@ pub(crate) fn list_segments(dir: &Path) -> io::Result<Vec<SegmentMeta>> {
 /// and [`reclaim_below`] deletes files on it.
 fn inferred_last_seq(segs: &[SegmentMeta], i: usize) -> Option<u64> {
     segs.get(i + 1).map(|next| next.first_seq.saturating_sub(1))
+}
+
+/// The segments a scan above `s_load` reads, each with its index in `segs`:
+/// every closed segment whose inferred reach lies above the base, and the
+/// active one always (§1/§7). The ONE statement of the skip rule — [`scan`]
+/// walks these and [`first_sync_word`] probes the first of them, so the probe
+/// looks where the scan will look by construction.
+fn scanned_above(
+    segs: &[SegmentMeta],
+    s_load: u64,
+) -> impl Iterator<Item = (usize, &SegmentMeta)> + '_ {
+    segs.iter()
+        .enumerate()
+        .filter(move |&(i, _)| inferred_last_seq(segs, i).is_none_or(|last| last > s_load))
 }
 
 /// Whether the surviving segments still cover `Seq(1)` — whether a fold from
@@ -1275,25 +1297,33 @@ pub(crate) struct TailCut {
 }
 
 /// Pass-1 result (§7): the committed head (§7's `W`), the committed records a
-/// fold may read, the corrupt runs, and where the tail to truncate begins. A
-/// scan that could not enumerate the frame stream produces none of this — it
-/// answers [`ScanFail`] — so nothing here is a PREFIX of what the region
-/// holds. What it COLLECTED is bounded by the caller's own fold bound, which
-/// is why the records are reached through [`ScanOutcome::records_to`] rather
-/// than read as a set.
+/// fold may read, the corrupt runs, the commit chain's running value and the
+/// verdicts of its links, and where the tail to truncate begins. A scan that
+/// could not enumerate the frame stream produces none of this — it answers
+/// [`ScanFail`] — so nothing here is a PREFIX of what the region holds. What
+/// it COLLECTED is bounded by the caller's own fold bound, which is why the
+/// records are reached through [`ScanOutcome::records_to`] rather than read
+/// as a set; and whether a caller must halt on what it found is ONE question,
+/// answered in the order the verdicts speak ([`ScanOutcome::halt_to_head`],
+/// [`ScanOutcome::halt_anywhere`]).
 pub(crate) struct ScanOutcome {
     /// The base this scan ran against — §7's `S_load`. Every judgment it
     /// answers is relative to that base, so it is carried here rather than
     /// re-supplied per question, where a caller could hand back a different
     /// one than the scan was run with.
     s_load: u64,
+    /// The base's own chain value — the `SKC4` header's `chain_head`, or
+    /// [`CHAIN_GENESIS`] at genesis — which the base's own link is judged
+    /// against. Carried for the reason `s_load` is.
+    chain_at_base: [u8; 32],
     /// The boundary this scan COLLECTED to, as [`scan`] was called with it —
     /// `None` for the whole scanned region. Applied by
     /// [`ScanOutcome::collect_commit`], the only writer of the two collections
-    /// below, and read back by [`ScanOutcome::covers`] to hold a fold to it:
-    /// records above it were read and dropped, so a fold past it is one this
-    /// outcome cannot answer. Bounding the collection is what keeps a bounded
-    /// replay of one transaction from materializing the whole retained window.
+    /// below and of the chain captured at the bound, and read back by
+    /// [`ScanOutcome::covers`] to hold a fold to it: records above it were
+    /// read and dropped, so a fold past it is one this outcome cannot answer.
+    /// Bounding the collection is what keeps a bounded replay of one
+    /// transaction from materializing the whole retained window.
     bound: Option<u64>,
     /// The last COMMITTED marker's `last_seq`, floored at `S_load` — §7's `W`
     /// (if no committed marker sits above the loaded checkpoint it is
@@ -1315,27 +1345,30 @@ pub(crate) struct ScanOutcome {
     /// below it — so a boundary the collection bound excluded is one nothing
     /// can ask for.
     committed_boundaries: Vec<u64>,
-    /// Corrupt runs in scan order — what [`ScanOutcome::fatal_run_to_head`]
-    /// and [`ScanOutcome::fatal_run_anywhere`] answer from. The verdict on a
-    /// run belongs to those, not to a caller re-deriving the classifier.
+    /// Corrupt runs in scan order — what [`ScanOutcome::halt_to_head`] and
+    /// [`ScanOutcome::halt_anywhere`] classify, through
+    /// [`ScanOutcome::fatal_run`]. The verdict on a run belongs to those, not
+    /// to a caller re-deriving the classifier.
     runs: Vec<RunEnd>,
     /// The tail-truncation cut, `None` when nothing was scanned — what
     /// [`truncate_tail`] cuts. Resolved here and read there, so no caller can
     /// aim a truncation at a region other than the one this scan judged.
     tail: Option<TailCut>,
-    /// The commit chain's value at the committed head: the last committed
-    /// marker's `chain` in journal order above the base, or the base's own
-    /// value when nothing above it committed. What the appender continues
-    /// from and the recovered root carries. Never bounded, for the reason
-    /// the head is not.
+    /// The commit chain's running value: the chain of the last committed
+    /// marker above the base, in journal order, else the base's own. Once the
+    /// scan returns, that is the chain at the committed head — what the
+    /// appender continues from and the recovered root carries. Advanced only
+    /// by [`ScanOutcome::collect_commit`]; never bounded, for the reason the
+    /// head is not.
     pub chain_head: [u8; 32],
     /// The first CHAIN BREAK above the base, as the `last_seq` of the
     /// committed transaction whose marker's `chain` was not the recomputation
     /// ([`ChainLink`]) over the previous committed transaction's value and
     /// its own records — `None` when every link above the base verified.
-    /// Recorded rather than refused on the spot, so the corrupt-run
-    /// classification, which names the root cause when a run swallowed the
-    /// predecessor, speaks first; read through [`ScanOutcome::chain_break`].
+    /// Recorded by [`ScanOutcome::collect_commit`] rather than refused on the
+    /// spot, so the corrupt-run classification, which names the root cause
+    /// when a run swallowed the predecessor, speaks first; ordered by
+    /// [`ScanOutcome::chain_verdict`].
     chain_break: Option<u64>,
     /// THE BASE'S OWN LINK (QUEUE item 10's case 9, the at-head fork): the
     /// base's seq when the committed marker closing `s_load` itself was
@@ -1348,8 +1381,9 @@ pub(crate) struct ScanOutcome {
     /// HEAD the marker is scanned whenever the active segment holds it — not
     /// while that segment is EMPTY after a rotation whose transaction failed
     /// or never landed, when the head's marker ends the closed segment before
-    /// it and is skipped as the rest are. Recorded, not refused, for the
-    /// reason `chain_break` is; read through [`ScanOutcome::base_mismatch`].
+    /// it and is skipped as the rest are. Recorded by
+    /// [`ScanOutcome::collect_commit`], not refused, for the reason
+    /// `chain_break` is; ordered by [`ScanOutcome::chain_verdict`].
     base_mismatch: Option<u64>,
     /// THE EDITED TRANSACTION (case 2's coordinate): the last seq of the
     /// first transaction whose frames were ALL intact and which an intact
@@ -1374,56 +1408,61 @@ pub(crate) struct ScanOutcome {
     /// own earlier frames), is not clean and never records here: that is the
     /// corrupt-run verdict's — which mid-history halts, and in the last
     /// transaction does not (the open item in [`crate::Kernel::open`]'s
-    /// damage model). Recorded, not refused; read through
-    /// [`ScanOutcome::uncommitted_intact`].
+    /// damage model). Recorded by the walk itself, not refused; ordered by
+    /// [`ScanOutcome::chain_verdict`].
     uncommitted_intact: Option<u64>,
     /// The running chain AT `bound`: the `chain` of the committed marker
     /// whose `last_seq` is `bound`, above the base — `None` when `bound` is
     /// `None`, is not a committed boundary above the base, or is the base's
     /// own seq (the base answers that itself). What
-    /// [`crate::Kernel::chain_at`] answers, captured in the pass that
-    /// verifies every link to the journal's end; read through
-    /// [`ScanOutcome::chain_at_boundary`], which reads its presence as the
-    /// membership test and holds its caller to the bound it is keyed on.
+    /// [`crate::Kernel::chain_at`] answers, captured by
+    /// [`ScanOutcome::collect_commit`] as the marker closing `bound` is taken,
+    /// in the pass that verifies every link to the journal's end; read
+    /// through [`ScanOutcome::chain_at_boundary`], which reads its presence as
+    /// the membership test and holds its caller to the bound it is keyed on.
     chain_at_bound: Option<[u8; 32]>,
 }
 
+/// What a caller halts on: the coordinate naming the damage, and its account
+/// where it has one — the two a caller wraps as its own `Corruption`.
+type Halt = (u64, Option<Box<dyn std::error::Error + Send + Sync + 'static>>);
+
 impl ScanOutcome {
-    /// The first chain break above the base ([`ScanOutcome::chain_break`]'s
-    /// field), for the two callers to halt on in their own vocabulary —
-    /// after the corrupt-run verdict, which names the root cause where a run
-    /// lost the predecessor a break follows from.
-    pub(crate) fn chain_break(&self) -> Option<u64> {
+    /// The first chain break above the base (the field), for
+    /// [`ScanOutcome::chain_verdict`] to order. A caller asks
+    /// [`ScanOutcome::halt_to_head`] or [`ScanOutcome::halt_anywhere`], never
+    /// this alone: two verdicts outrank it.
+    fn chain_break(&self) -> Option<u64> {
         self.chain_break
     }
 
-    /// The base's own link failed ([`ScanOutcome::base_mismatch`]'s field):
-    /// `Some(s_load)` when the scanned marker closing the base's seq does
-    /// not carry the header's `chain_head`.
-    pub(crate) fn base_mismatch(&self) -> Option<u64> {
+    /// The base's own link failed (the field), for
+    /// [`ScanOutcome::chain_verdict`] to order: `Some(s_load)` when the
+    /// scanned marker closing the base's seq does not carry the header's
+    /// `chain_head`.
+    fn base_mismatch(&self) -> Option<u64> {
         self.base_mismatch
     }
 
     /// The first intact transaction which an intact marker failed to close
-    /// ([`ScanOutcome::uncommitted_intact`]'s field), by its own last seq.
-    pub(crate) fn uncommitted_intact(&self) -> Option<u64> {
+    /// (the field), by its own last seq, for [`ScanOutcome::chain_verdict`]
+    /// to order.
+    fn uncommitted_intact(&self) -> Option<u64> {
         self.uncommitted_intact
     }
 
     /// THE CHAIN'S VERDICTS, in the order they speak — the coordinate and
-    /// the account each caller wraps as its own `Corruption`: the base's own
-    /// link ([`ScanOutcome::base_mismatch`]), then the intact transaction no
+    /// the account of each: the base's own link
+    /// ([`ScanOutcome::base_mismatch`]), then the intact transaction no
     /// intact marker closes ([`ScanOutcome::uncommitted_intact`]), then the
-    /// chain break ([`ScanOutcome::chain_break`]). One site for the order, so
-    /// the open and the two bounded reads cannot drift on it. A verdict of
-    /// an earlier kind speaks first whatever its coordinate, as the
-    /// corrupt-run verdict — which every caller asks for BEFORE this, in its
-    /// own classification — does: the base's link is the lowest coordinate
-    /// scanned, and the un-committed transaction is the ROOT of the break
-    /// the next committed one shows. `None` when every link verified.
-    pub(crate) fn chain_verdict(
-        &self,
-    ) -> Option<(u64, Box<dyn std::error::Error + Send + Sync + 'static>)> {
+    /// chain break ([`ScanOutcome::chain_break`]). A verdict of an earlier
+    /// kind speaks first whatever its coordinate: the base's link is the
+    /// lowest coordinate scanned, and the un-committed transaction is the
+    /// ROOT of the break the next committed one shows. The corrupt run's
+    /// verdict speaks before all three, in [`ScanOutcome::halt_on`] — this
+    /// method's only caller, which both halts go through. `None` when every
+    /// link verified.
+    fn chain_verdict(&self) -> Option<(u64, Box<dyn std::error::Error + Send + Sync + 'static>)> {
         if let Some(at) = self.base_mismatch() {
             return Some((at, base_mismatch_cause(at)));
         }
@@ -1432,19 +1471,43 @@ impl ScanOutcome {
         }
         self.chain_break().map(|at| (at, chain_break_cause(at)))
     }
-    /// Collect everything a COMMITTED transaction contributes: its marker's
-    /// `last_seq` raises the committed head and — when this scan's collection
-    /// bound admits it — joins the boundary set, and its records join the
-    /// committed set, filtered the same way.
+
+    /// Collect everything a COMMITTED transaction contributes, judging its
+    /// link first, since a link is judged against the chain the transaction
+    /// found. ABOVE the base, the marker's `chain` must be the recomputation
+    /// over the running value the group opened on and the group's own records
+    /// ([`PendingTxn::recomputed_chain`]), else the first CHAIN BREAK is
+    /// recorded at its `last_seq`; the running chain then continues from the
+    /// marker's own claim, so one edit is one verdict at its own coordinate,
+    /// and at the collection bound it is captured for
+    /// [`ScanOutcome::chain_at_boundary`]. AT the base, the marker's stored
+    /// chain must be `chain_at_base` — two stored values compared, nothing
+    /// recomputed — else THE BASE'S OWN LINK failed. BELOW the base, the base
+    /// embodies the transaction and nothing is judged, exactly as a corrupt
+    /// run there is harmless. Recorded, never refused: the callers halt.
     ///
-    /// The head is deliberately UNBOUNDED: it is recovery's own fold bound, so
-    /// it must name the last committed marker wherever it sits. The two
-    /// COLLECTIONS obey `bound`, and per RECORD rather than per group, so a
-    /// transaction straddling the bound keeps the half below it. That
+    /// Then the collection: the marker's `last_seq` raises the committed head
+    /// and — when this scan's collection bound admits it — joins the boundary
+    /// set, and the group's records join the committed set, filtered the same
+    /// way. The head is deliberately UNBOUNDED: it is recovery's own fold
+    /// bound, so it must name the last committed marker wherever it sits. The
+    /// two COLLECTIONS obey `bound`, and per RECORD rather than per group, so
+    /// a transaction straddling the bound keeps the half below it. That
     /// asymmetry is the whole of what `bound` means, and stating it here is
     /// what keeps it off the walk — this is the only writer of either
     /// collection, so the rule has one site.
-    fn collect_commit(&mut self, marker: &Marker, records: Vec<CommittedRecord>) {
+    fn collect_commit(&mut self, marker: &Marker, group: PendingTxn) {
+        if marker.last_seq > self.s_load {
+            if group.recomputed_chain(marker) != marker.chain {
+                self.chain_break.get_or_insert(marker.last_seq);
+            }
+            self.chain_head = marker.chain;
+            if self.bound == Some(marker.last_seq) {
+                self.chain_at_bound = Some(marker.chain);
+            }
+        } else if marker.last_seq == self.s_load && marker.chain != self.chain_at_base {
+            self.base_mismatch.get_or_insert(self.s_load);
+        }
         self.committed_head = self.committed_head.max(marker.last_seq);
         let bound = self.bound;
         let collected = |seq: u64| bound.is_none_or(|b| seq <= b);
@@ -1452,28 +1515,48 @@ impl ScanOutcome {
             self.committed_boundaries.push(marker.last_seq);
         }
         self.committed_records
-            .extend(records.into_iter().filter(|entry| collected(entry.seq)));
+            .extend(group.records.into_iter().filter(|entry| collected(entry.seq)));
     }
 
-    /// The corrupt run a RECOVERY cannot answer around, classified within
-    /// the committed region this scan derived: a run above the committed head
-    /// is the un-acked / torn tail, which recovery is about to discard (§7) —
-    /// the tail against torn writes and CRC-failing damage; NOT against a
-    /// rewrite that leaves one of the last transaction's frames intact and
-    /// undecodable, whose run lands here above the head, or reaches
-    /// end-of-journal, and is cut with the transaction (the open item in
-    /// [`crate::Kernel::open`]'s damage model).
-    pub(crate) fn fatal_run_to_head(&self) -> Option<u64> {
-        self.fatal_run(Some(self.committed_head))
+    /// Why a RECOVERY cannot answer from this scan, if it cannot: the first
+    /// at-rest verdict, in the order the verdicts speak — the corrupt run a
+    /// recovery cannot answer around, then the chain's own, in
+    /// [`ScanOutcome::chain_verdict`]'s order — as the coordinate naming the
+    /// damage and its account where it has one (a corrupt run's own bytes are
+    /// unreadable, so it carries none). The run speaks first because it is
+    /// the root cause: a run that swallowed a transaction breaks the chain at
+    /// the next one. The order has one site, [`ScanOutcome::halt_on`], which
+    /// this and [`ScanOutcome::halt_anywhere`] share, so no caller can ask the
+    /// chain before the run, or one of the chain's verdicts without the
+    /// others.
+    ///
+    /// The run is classified within the committed region this scan derived:
+    /// a run above the committed head is the un-acked / torn tail, which
+    /// recovery is about to discard (§7) — the tail against torn writes and
+    /// CRC-failing damage; NOT against a rewrite that leaves one of the last
+    /// transaction's frames intact and undecodable, whose run lands here above
+    /// the head, or reaches end-of-journal, and is cut with the transaction
+    /// (the open item in [`crate::Kernel::open`]'s damage model).
+    pub(crate) fn halt_to_head(&self) -> Option<Halt> {
+        self.halt_on(self.fatal_run(Some(self.committed_head)))
     }
 
-    /// The corrupt run a BOUNDED REPLAY cannot answer around, at any height. A
-    /// bounded replay truncates nothing, so a run above the committed head is
-    /// at-rest damage rather than a tail — and since a run's own seqs are
-    /// unreadable, its reach below `inferred_max` is unknowable, so answering
-    /// around it could answer from a hole (§7).
-    pub(crate) fn fatal_run_anywhere(&self) -> Option<u64> {
-        self.fatal_run(None)
+    /// Why a BOUNDED READ cannot answer from this scan, if it cannot — the
+    /// same order as [`ScanOutcome::halt_to_head`], with the run classified
+    /// at any height. A bounded read truncates nothing, so a run above the
+    /// committed head is at-rest damage rather than a tail — and since a
+    /// run's own seqs are unreadable, its reach below `inferred_max` is
+    /// unknowable, so answering around it could answer from a hole (§7).
+    pub(crate) fn halt_anywhere(&self) -> Option<Halt> {
+        self.halt_on(self.fatal_run(None))
+    }
+
+    /// The order both halts share, once each has classified its run: the run
+    /// first, carrying no account, then the chain's own verdicts.
+    fn halt_on(&self, fatal_run: Option<u64>) -> Option<Halt> {
+        fatal_run
+            .map(|at| (at, None))
+            .or_else(|| self.chain_verdict().map(|(at, cause)| (at, Some(cause))))
     }
 
     /// The corrupt run a fold over `(s_load, bound]` cannot answer around: the
@@ -1639,10 +1722,11 @@ struct PendingTxn {
     /// known dead, since nothing downstream can want it.
     records: Vec<CommittedRecord>,
     /// The chain link this group would close, streamed beside the checksum
-    /// from the same payloads: opened on the running chain value — which
-    /// cannot move while a group is open, since only a committed marker
-    /// moves it and a committed marker closes the group — and closed with
-    /// the marker's fields by [`PendingTxn::recomputed_chain`].
+    /// from the same payloads: opened on the running chain value
+    /// ([`ScanOutcome::chain_head`]) — which cannot move while a group is
+    /// open, since only a committed marker moves it and a committed marker
+    /// closes the group — and closed with the marker's fields by
+    /// [`PendingTxn::recomputed_chain`].
     link: ChainLink,
     /// Whether every frame this group could have had was seen intact: opened
     /// `false` when the group's first record closed a corrupt run — the run
@@ -1680,7 +1764,7 @@ impl PendingTxn {
     /// a replay under any [`SaltSource`] recomputes the link the writer
     /// closed, and an edited salt is a link that fails.
     fn recomputed_chain(&self, marker: &Marker) -> [u8; 32] {
-        ChainLink(self.link.0.clone()).close(
+        self.link.clone().close(
             marker.txn,
             marker.last_seq,
             marker.records_checksum,
@@ -1779,8 +1863,9 @@ fn read_segment(path: &Path, s_load: u64) -> Result<Vec<u8>, ScanFail> {
 /// Closed segments whose inferred `lastSeq` (successor's `firstSeq` − 1, a
 /// conservative upper bound under TolerateGap burns) is `≤ s_load` are
 /// skipped without opening them; the active (final) segment is always scanned
-/// (§1/§7). A corrupt run persists across a segment boundary: the journal is
-/// one logical `Seq`-ordered stream.
+/// (§1/§7) — [`scanned_above`], the one statement of the rule. A corrupt run
+/// persists across a segment boundary: the journal is one logical
+/// `Seq`-ordered stream.
 ///
 /// `bound` is the boundary the caller will fold to, when it has one: committed
 /// records and boundaries above it are not COLLECTED, since no caller reads
@@ -1806,7 +1891,8 @@ fn read_segment(path: &Path, s_load: u64) -> Result<Vec<u8>, ScanFail> {
 /// that plants frame headers costs a bounded scan and a halt rather than an
 /// unbounded one.
 ///
-/// THE CHAIN IS VERIFIED HERE, in the same pass (QUEUE item 10): every
+/// THE CHAIN IS VERIFIED HERE, in the same pass (QUEUE item 10), by
+/// [`ScanOutcome::collect_commit`] as each committed marker is taken: every
 /// committed transaction above `s_load` must carry, in its marker, the
 /// recomputation of [`ChainLink`] over the previous committed transaction's
 /// value — `chain_at_base` for the first, which is [`CHAIN_GENESIS`] from
@@ -1822,29 +1908,32 @@ fn read_segment(path: &Path, s_load: u64) -> Result<Vec<u8>, ScanFail> {
 ///
 /// TWO MORE VERDICTS ARE RECORDED in the same pass, refused by the callers
 /// as the break is (the chain's open items, 2026-09-23). THE BASE'S OWN
-/// LINK: when the committed marker closing `s_load` itself is scanned — at
-/// the head whenever the active segment holds it, which it does unless that
-/// segment is EMPTY after a rotation whose transaction failed or never
-/// landed; mid-history whenever the base's segment is — its `chain` must
+/// LINK, judged by [`ScanOutcome::collect_commit`] beside the chain: when the
+/// committed marker closing `s_load` itself is scanned — at the head
+/// whenever the active segment holds it, which it does unless that segment
+/// is EMPTY after a rotation whose transaction failed or never landed;
+/// mid-history whenever the base's segment is — its `chain` must
 /// equal `chain_at_base`, the header's `chain_head`, else
 /// [`ScanOutcome::base_mismatch`] names the base: two stored values
 /// disagree, and a header edited at the head, which no link above it would
 /// ever judge, is seen here rather than forked from. THE EDITED
-/// TRANSACTION: a group whose every frame was intact and which an intact
+/// TRANSACTION, judged by the walk itself, since it concerns a group that
+/// did not commit: a group whose every frame was intact and which an intact
 /// marker fails to close — refusing it, or naming another transaction as its
 /// own — a shape no writer of this format produces, is recorded as
 /// [`ScanOutcome::uncommitted_intact`] at the group's own last seq, naming
 /// the transaction that was edited rather than the next one, whose link then
 /// also fails. Neither moves `committed_head`, the collections or the tail
-/// cut: the scan records, the callers halt. And ONE VALUE IS CAPTURED: the
-/// running chain at `bound`, which [`ScanOutcome::chain_at_boundary`]
-/// answers [`crate::Kernel::chain_at`] with.
+/// cut: the scan records, the callers halt. And ONE VALUE IS CAPTURED, by
+/// [`ScanOutcome::collect_commit`] too: the running chain at `bound`, which
+/// [`ScanOutcome::chain_at_boundary`] answers [`crate::Kernel::chain_at`]
+/// with.
 ///
 /// `segs` must be ASCENDING by `firstSeq`, as [`list_segments`] produces it.
-/// The skip test, the tail resolution and [`inferred_last_seq`] all read a
-/// neighbour's name as this segment's bound, so an out-of-order slice makes
-/// those inferences meaningless — and [`reclaim_below`], which reads the same
-/// order, deletes on one of them.
+/// The skip rule ([`scanned_above`]), the tail resolution and
+/// [`inferred_last_seq`] all read a neighbour's name as this segment's bound,
+/// so an out-of-order slice makes those inferences meaningless — and
+/// [`reclaim_below`], which reads the same order, deletes on one of them.
 ///
 /// Reached through [`crate::replay::Base::scan`], which supplies `s_load` and
 /// `chain_at_base` from the base it selected. A scan and the fold that
@@ -1858,6 +1947,7 @@ pub(crate) fn scan(
 ) -> Result<ScanOutcome, ScanFail> {
     let mut outcome = ScanOutcome {
         s_load,
+        chain_at_base,
         bound,
         committed_head: s_load,
         committed_records: Vec::new(),
@@ -1870,9 +1960,6 @@ pub(crate) fn scan(
         uncommitted_intact: None,
         chain_at_bound: None,
     };
-    // The commit chain's running value: the last committed marker's above
-    // the base, in journal order, else the base's.
-    let mut chain = chain_at_base;
     // The scanned-segment index and the BYTE offset just past the last
     // committed marker's frame — where the tail begins. Resolved to a
     // `TailCut` once at the end rather than at each committed marker, which
@@ -1886,10 +1973,7 @@ pub(crate) fn scan(
     // frame closes it — `RunEnd::landed_on_record` or `landed_on_marker` —
     // and end-of-journal closes it as `RunEnd::Eof`.
     let mut run_open = false;
-    for (seg_index, seg) in segs.iter().enumerate() {
-        if inferred_last_seq(segs, seg_index).is_some_and(|last| last <= s_load) {
-            continue;
-        }
+    for (seg_index, seg) in scanned_above(segs, s_load) {
         if first_scanned.is_none() {
             first_scanned = Some(seg_index);
         }
@@ -1923,7 +2007,9 @@ pub(crate) fn scan(
                             let mut group = pending
                                 .take()
                                 .filter(|group| group.txn == record.txn)
-                                .unwrap_or_else(|| PendingTxn::open(record.txn, &chain, !landed));
+                                .unwrap_or_else(|| {
+                                    PendingTxn::open(record.txn, &outcome.chain_head, !landed)
+                                });
                             group.push(record, payload);
                             pending = Some(group);
                         }
@@ -1934,33 +2020,7 @@ pub(crate) fn scan(
                             }
                             if let Some(group) = pending.take_if(|group| group.txn == marker.txn) {
                                 if group.commits(&marker) {
-                                    // The chain: verified above the base only
-                                    // — the base embodies what sits at or
-                                    // below it — and recorded, not refused,
-                                    // so the run classification speaks first.
-                                    if marker.last_seq > s_load {
-                                        if group.recomputed_chain(&marker) != marker.chain
-                                            && outcome.chain_break.is_none()
-                                        {
-                                            outcome.chain_break = Some(marker.last_seq);
-                                        }
-                                        chain = marker.chain;
-                                        // The value at the bound, once the
-                                        // running chain IS this marker's.
-                                        if bound == Some(marker.last_seq) {
-                                            outcome.chain_at_bound = Some(chain);
-                                        }
-                                    } else if marker.last_seq == s_load
-                                        && marker.chain != chain_at_base
-                                        && outcome.base_mismatch.is_none()
-                                    {
-                                        // The base's own link: the marker
-                                        // closing the base's seq carries the
-                                        // chain the header must — stored
-                                        // against stored, nothing recomputed.
-                                        outcome.base_mismatch = Some(s_load);
-                                    }
-                                    outcome.collect_commit(&marker, group.records);
+                                    outcome.collect_commit(&marker, group);
                                     // The cut is unbounded for the reason the
                                     // head is: it must name the last committed
                                     // marker wherever it sits.
@@ -2043,7 +2103,6 @@ pub(crate) fn scan(
     if run_open {
         outcome.runs.push(RunEnd::Eof);
     }
-    outcome.chain_head = chain;
     // Everything past the last committed marker is tail. When the scanned
     // region holds no committed marker at all, everything scanned is tail:
     // the first scanned segment is cut at offset 0. Harmless corrupt runs
@@ -2061,9 +2120,9 @@ pub(crate) fn scan(
     Ok(outcome)
 }
 
-/// The account a chain break travels with, in the two callers' `cause`
-/// slot: what the marker at `at` should have carried and did not.
-pub(crate) fn chain_break_cause(at: u64) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+/// The account a chain break travels with, in the callers' `cause` slot: what
+/// the marker at `at` should have carried and did not.
+fn chain_break_cause(at: u64) -> Box<dyn std::error::Error + Send + Sync + 'static> {
     format!(
         "chain break: the commit marker closing the transaction at {at} does not carry SHA-256 \
          over the previous committed transaction's chain value and this transaction's own record \
@@ -2078,7 +2137,7 @@ pub(crate) fn chain_break_cause(at: u64) -> Box<dyn std::error::Error + Send + S
 /// disagree, and which party lies is not said — so the remedy is the
 /// operator's, named here, rather than a silent fallback to an older base
 /// that would leave the edited header on disk for the next head to publish.
-pub(crate) fn base_mismatch_cause(at: u64) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+fn base_mismatch_cause(at: u64) -> Box<dyn std::error::Error + Send + Sync + 'static> {
     format!(
         "chain break at the base: the checkpoint at {at} carries a chain_head that is not the \
          chain the journal's own commit marker closing {at} carries — the checkpoint header was \
@@ -2091,9 +2150,7 @@ pub(crate) fn base_mismatch_cause(at: u64) -> Box<dyn std::error::Error + Send +
 /// The account the edited transaction travels with
 /// ([`ScanOutcome::uncommitted_intact`]): the shape, the five ways an intact
 /// marker fails to close an intact group, and why no writer leaves it.
-pub(crate) fn uncommitted_intact_cause(
-    at: u64,
-) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+fn uncommitted_intact_cause(at: u64) -> Box<dyn std::error::Error + Send + Sync + 'static> {
     format!(
         "chain break at an edited transaction: the transaction ending at {at} is intact frame by \
          frame but no commit marker closes it — the marker after its records disagrees with them \
@@ -2148,8 +2205,8 @@ pub(crate) enum FirstSyncWord {
 }
 
 /// THE FIRST-SYNC-WORD PROBE (§8 of the encoding report): what the first
-/// segment [`scan`] would read above `s_load` opens with — the same skip rule,
-/// so this looks where the scan will look.
+/// segment [`scanned_above`] yields opens with — the one [`scan`] reads
+/// first, so this looks where the scan will look by construction.
 ///
 /// Read BEFORE the scan by [`crate::Kernel::open`], because the scan cannot
 /// tell a format from damage: an old-format segment contains no frame the new
@@ -2173,12 +2230,7 @@ pub(crate) enum FirstSyncWord {
 /// Reads the first frame's header and four bytes at its successor, whatever
 /// the segment's size.
 pub(crate) fn first_sync_word(segs: &[SegmentMeta], s_load: u64) -> io::Result<FirstSyncWord> {
-    let Some(first) = segs
-        .iter()
-        .enumerate()
-        .find(|(i, _)| inferred_last_seq(segs, *i).is_none_or(|last| last > s_load))
-        .map(|(_, seg)| seg)
-    else {
+    let Some((_, first)) = scanned_above(segs, s_load).next() else {
         return Ok(FirstSyncWord::Scan);
     };
     let mut file = File::open(&first.path)?;
@@ -3294,6 +3346,44 @@ mod tests {
     }
 
     #[test]
+    fn the_skip_rule_passes_over_what_the_base_embodies_and_keeps_the_straddler_and_the_active() {
+        // The one statement of which segments a scan above a base reads — the
+        // scan walks them and the first-sync-word probe opens the first, so the
+        // two agree by construction. A closed segment is passed over only when
+        // its inferred reach lies at or below the base; one that STRADDLES the
+        // base is read, and the active one always is.
+        //
+        // Each segment opens with a word of its own, so the probe's answer says
+        // WHICH segment it opened: another format's stamp names a closed one,
+        // and the empty active one is the scan's to classify.
+        let dir = tempdir().unwrap();
+        for (first_seq, opening) in [(1, &b"SKJ2"[..]), (5, &b"SKJ3"[..]), (9, &b""[..])] {
+            fs::write(segment_path(dir.path(), first_seq), opening).unwrap();
+        }
+        let segs = list_segments(dir.path()).unwrap();
+        let read_above = |s_load: u64| -> Vec<(usize, u64)> {
+            scanned_above(&segs, s_load)
+                .map(|(i, seg)| (i, seg.first_seq))
+                .collect()
+        };
+        let probed = |s_load: u64| first_sync_word(&segs, s_load).unwrap();
+        // Genesis reads every segment, and the probe opens seg-1.
+        assert_eq!(read_above(0), vec![(0, 1), (1, 5), (2, 9)]);
+        assert_eq!(probed(0), FirstSyncWord::Foreign(*b"SKJ2"));
+        // seg-1 reaches 4, where seg-5 begins at 5: it straddles a base at 3…
+        assert_eq!(read_above(3), vec![(0, 1), (1, 5), (2, 9)], "seg-1 straddles the base");
+        assert_eq!(probed(3), FirstSyncWord::Foreign(*b"SKJ2"));
+        // …and a base at 4 embodies it, so the scan and the probe begin at seg-5.
+        assert_eq!(read_above(4), vec![(1, 5), (2, 9)], "seg-1 ends at the base");
+        assert_eq!(probed(4), FirstSyncWord::Foreign(*b"SKJ3"));
+        assert_eq!(read_above(8), vec![(2, 9)], "seg-5 ends at the base");
+        assert_eq!(probed(8), FirstSyncWord::Scan);
+        // The active segment has no successor to bound it, so it is always read.
+        assert_eq!(read_above(100), vec![(2, 9)], "the active segment is always read");
+        assert_eq!(probed(100), FirstSyncWord::Scan);
+    }
+
+    #[test]
     fn scan_groups_by_txn_and_derives_the_committed_head() {
         let dir = tempdir().unwrap();
         let mut writer = fresh_writer(dir.path());
@@ -3354,6 +3444,67 @@ mod tests {
         // T3 was chained from T2, which this scan never committed: a chain
         // break at 3 — recorded, so the run above names the root cause first.
         assert_eq!(out.chain_break(), Some(3));
+    }
+
+    #[test]
+    fn a_halt_names_the_run_before_the_chain_and_only_a_bounded_read_halts_above_the_head() {
+        // The order the at-rest verdicts speak in has one site, which both
+        // doors share: the corrupt run first — the root cause, carrying no
+        // account, its own bytes being unreadable — then the chain's own
+        // verdicts, each with its account. And the two doors differ only in
+        // where a run is fatal: a recovery discards a run above the committed
+        // head as the torn tail, while a bounded read truncates nothing and
+        // halts on it.
+        let journal_of_three = || {
+            let dir = tempdir().unwrap();
+            let mut writer = fresh_writer(dir.path());
+            write_txn(&mut writer, 1, vec![rec(10)]);
+            write_txn(&mut writer, 2, vec![rec(20)]);
+            write_txn(&mut writer, 3, vec![rec(30)]);
+            dir
+        };
+        // Frames: 0=T1 rec, 1=T1 marker, 2=T2 rec, 3=T2 marker, 4=T3 rec, 5=T3 marker.
+
+        // T2's record rotted: the run lands on T2's marker, and T3 — chained
+        // from the T2 this scan never saw — breaks the chain at 3. Both
+        // verdicts stand; the run speaks, without an account.
+        let dir = journal_of_three();
+        let segs = list_segments(dir.path()).unwrap();
+        let starts = frame_starts(&segs[0].path);
+        flip_byte(&segs[0].path, starts[2] + FRAME_HEADER_LEN + 1);
+        let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
+        assert!(out.chain_verdict().is_some(), "the chain's verdict stands beside the run");
+        assert!(matches!(out.halt_to_head(), Some((3, None))), "the run speaks first");
+        assert!(matches!(out.halt_anywhere(), Some((3, None))), "the run speaks first");
+
+        // T3's record rotted: the run lands on T3's marker ABOVE the committed
+        // head (2). Recovery's door calls it the torn tail; a bounded read's
+        // halts on it.
+        let dir = journal_of_three();
+        let segs = list_segments(dir.path()).unwrap();
+        let starts = frame_starts(&segs[0].path);
+        flip_byte(&segs[0].path, starts[4] + FRAME_HEADER_LEN + 1);
+        let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
+        assert_eq!(out.committed_head, 2);
+        assert!(out.halt_to_head().is_none(), "a recovery discards it as the tail");
+        assert!(matches!(out.halt_anywhere(), Some((4, None))), "a bounded read halts");
+
+        // No run, one rewritten chain field: the chain's verdict speaks, with
+        // its account, at either door.
+        let dir = journal_of_three();
+        let segs = list_segments(dir.path()).unwrap();
+        let starts = frame_starts(&segs[0].path);
+        rewrite_payload(&segs[0].path, starts[3], |payload| payload[56] ^= 0xFF);
+        let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
+        assert!(out.runs.is_empty(), "no frame was damaged");
+        for (door, halt) in [("to head", out.halt_to_head()), ("anywhere", out.halt_anywhere())] {
+            match halt {
+                Some((2, Some(cause))) => {
+                    assert!(cause.to_string().contains("chain break"), "{door}: {cause}")
+                }
+                other => panic!("{door}: expected the chain break at 2, got {other:?}"),
+            }
+        }
     }
 
     #[test]

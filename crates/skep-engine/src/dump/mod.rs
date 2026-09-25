@@ -402,7 +402,8 @@ fn class_tree(links: &LinkState, ty: &Endset) -> SerdeTree {
 /// target but a resident link or the address the retraction tuple itself will
 /// occupy. M7's fold inserts every denoted to-root of an `[R]` link, so a
 /// root that is not itself a link would sit in the hint and outside this
-/// rendering.
+/// rendering; `the_nullified_family_is_the_whole_tombstone_set_because_only_links_are_retracted`
+/// holds the gate that keeps one out.
 ///
 /// The family names are format, so a family added here is a family the
 /// per-class filter must be given a disposition for; `filter_tree`'s
@@ -744,7 +745,10 @@ impl crate::Engine {
     /// matter only where two grants SHARE one — which requires a single
     /// issuer, and admission ties an issuer to a single home, so sharing is
     /// always intra-home, where the seed's address order IS the fold's deposit
-    /// order.
+    /// order. The grant fold's own suite holds that argument, and the
+    /// earlier-record set beside it, as a law over generated histories,
+    /// comparing each structure directly after every deposit
+    /// (`a_rebuilt_grant_fold_equals_the_live_one_after_every_deposit_of_a_generated_history`).
     ///
     /// For the EXCEPTION SET the certificate has an edge of its own. Its two
     /// halves enumerate M3's publication map alike — the fold asks the
@@ -788,7 +792,10 @@ mod tests {
 
     use super::*;
 
-    fn vspec(doc: &Address, ordinal: u32, width: u32) -> VSpec {
+    /// A content V-spec over `doc`: `width` positions of its content subspace
+    /// from `ordinal`. Shared with the `filter` submodule's tests, whose
+    /// open-surface deposits resolve slots through it.
+    pub(super) fn vspec(doc: &Address, ordinal: u32, width: u32) -> VSpec {
         let span = Span::new(
             Tumbler::new([Nat::from(1u32), Nat::from(ordinal)]).expect("nonempty"),
             Tumbler::new([Nat::from(0u32), Nat::from(width)]).expect("nonempty"),

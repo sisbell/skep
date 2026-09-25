@@ -10,8 +10,8 @@
 use crate::common;
 
 use common::*;
-use skep_address::{document_of, validate, Address, Level, Tumbler};
-use skep_arrangement::{trunk_of, Caller, Deposit};
+use skep_address::{document_of, parent, validate, Address, Level, Tumbler};
+use skep_arrangement::{trunk_of, Caller, Deposit, Run, Shot, ShotRun};
 use skep_content::Val;
 use skep_engine::{Engine, IssuerGrantIndexRow, UniversalGrantIndexRow, World};
 use skep_links::{HasLinks, ShippedType, SlotArg};
@@ -561,6 +561,58 @@ fn a_restart_does_not_admit_a_grant_the_live_fold_refused() {
         "the seed admitted what the fold refused: a restart opened a private document"
     );
     engine.check_hints().expect("the recovered fold equals a from-authoritative rebuild");
+}
+
+/// The premise BOTH engine indexes rest on, over the one operation that
+/// publishes: M5's shot (PUB-2.33). `World::apply` and `grants::seed` argue
+/// that no record moves a document's publication bit after the record that
+/// registers it, and name what a publish transition would cost: the set's
+/// fold keeping as a draft a document M3 answers published, and the grant
+/// fold refusing live a grant its seed admits at the next restart — which
+/// `check_hints` is where it shows. The staging draft is the account's DRAFT
+/// doc 1 carrying a grant its admission refused, the one shape where a
+/// publish in place would move both indexes at once; and the shot's source
+/// consult runs at the issuer's own class (`World::visible_to`).
+#[test]
+fn the_publish_shot_publishes_a_new_member_and_leaves_its_staging_draft_a_draft() {
+    let engine = mem_engine();
+    let board = two_accounts(&engine);
+    let (draft_home, secret) = draft_home_account(&engine);
+    let account = parent(&draft_home).expect("a document's parent is its account");
+    grant_record_as(&engine, D, &draft_home, &secret, vec![board.acct_b.clone()]);
+    let caller = Caller::Principal(D);
+    let (start, _) = engine
+        .vstream()
+        .insert(caller, &draft_home, vp(1, 1), vec![Val::new(vec![b's'])], Deposit::Undeclared)
+        .expect("the owner writes its draft doc 1");
+    let (edition, _) = engine
+        .namespace()
+        .create_new_document(D, &account, Some(true))
+        .expect("a published edition to shoot into, memberless");
+    let shot = Shot {
+        base: None,
+        draft: Some(draft_home.clone()),
+        runs: vec![ShotRun {
+            origin: draft_home.clone(),
+            run: Run::new(start, nat(1)).expect("the draft's one value"),
+        }],
+    };
+    let (member, _) = engine
+        .vstream()
+        .publish(caller, &edition, shot, &World::visible_to(caller))
+        .expect("the birth shot from the staging draft into the edition");
+
+    let w = world(&engine);
+    assert_eq!(trunk_of(&member), edition, "the shot mints a member of the edition's chain");
+    assert!(w.m3().published(&member) && w.published(&member), "the member is born published");
+    assert!(!w.m3().published(&draft_home), "the shot moved no bit of its staging draft");
+    assert_eq!(
+        w.owner_account(&draft_home),
+        Some(&account),
+        "…which the exception set still holds"
+    );
+    assert!(!w.readable(Some(B), &secret), "the grant homed in the draft doc 1 stays inert");
+    engine.check_hints().expect("both indexes' folds equal their seeds across the shot");
 }
 
 /// A grant issued by an account that is NOT the draft's owner cannot open it

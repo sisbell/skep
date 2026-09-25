@@ -962,9 +962,13 @@ pub(crate) fn seed(namespace: &M3State, links: &LinkState, drafts: &Drafts) -> G
 #[cfg(test)]
 mod tests {
     use skep_arrangement::Caller;
+    use skep_kernel::WorldState;
     use skep_links::SlotArg;
+    use skep_namespace::PrincipalId;
 
-    use crate::testkit::{a_published_home_and_a_private_draft, addr, element, USER};
+    use crate::testkit::{
+        a_published_home_and_a_private_draft, addr, delegated_account, element, mem_engine, USER,
+    };
     use crate::Engine;
 
     use super::*;
@@ -1075,6 +1079,140 @@ mod tests {
         assert!(
             matches!(classify(&synthetic, &home, link), Kind::Neither),
             "a `from` naming an earlier record that is no operative grant reached the grant arm"
+        );
+    }
+
+    /// One step of SplitMix64: the pinned generator the history law below
+    /// draws from, so every run visits the same histories.
+    fn splitmix(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// A draw in `0..n`.
+    fn below(rng: &mut u64, n: usize) -> usize {
+        (splitmix(rng) % n as u64) as usize
+    }
+
+    /// PUB-7.7 for the grant fold as the LAW it states: after EVERY deposit of
+    /// EVERY history, a rebuild from authoritative state seeds the fold the
+    /// history built — all FOUR structures compared directly, so every prefix
+    /// stands in for a restart. `check_hints` compares the operative records
+    /// alone: the dump renders none of the other three, which `check_hints_of`
+    /// names, arguing that the two indexes cannot diverge, and the restart
+    /// tests hold that argument at chosen histories. These are generated from
+    /// a pinned seed over two issuers depositing into a published doc 1, a
+    /// published edition that is not doc 1, and a private draft — naming
+    /// documents, accounts, the node and earlier records of any home, one
+    /// `from` address or two, to no grantee, one or two — with retractions of
+    /// the issuer's own records mixed in.
+    #[test]
+    fn a_rebuilt_grant_fold_equals_the_live_one_after_every_deposit_of_a_generated_history() {
+        let mut rng = 0x6A47_5EED_u64;
+        let (mut saw_universal, mut saw_named, mut saw_spent, mut saw_malformed) =
+            (false, false, false, false);
+        for history in 0..32 {
+            let engine = mem_engine();
+            let bystander = delegated_account(&engine, PrincipalId(9));
+            let issuers: Vec<(PrincipalId, Address, [Address; 3])> = [USER, PrincipalId(8)]
+                .into_iter()
+                .map(|p| {
+                    let account = delegated_account(&engine, p);
+                    let mint = |published| {
+                        engine
+                            .namespace()
+                            .create_new_document(p, &account, published)
+                            .expect("the owner mints")
+                            .0
+                    };
+                    // Doc 1 (the published home), an edition, then a draft.
+                    let homes = [mint(None), mint(Some(true)), mint(None)];
+                    (p, account, homes)
+                })
+                .collect();
+            let accounts: Vec<Address> =
+                issuers.iter().map(|(_, account, _)| account.clone()).chain([bystander]).collect();
+            let prefixes: Vec<Address> = issuers
+                .iter()
+                .flat_map(|(_, account, homes)| std::iter::once(account).chain(homes))
+                .cloned()
+                .chain([addr(&[1])])
+                .collect();
+            let mut records: Vec<Address> = Vec::new();
+            for step in 0..12 {
+                let (issuer, _, homes) = &issuers[below(&mut rng, issuers.len())];
+                let caller = Caller::Principal(*issuer);
+                let visibility = World::visible_to(caller);
+                let writer = engine.linkstore(&visibility);
+                let own: Vec<&Address> = records
+                    .iter()
+                    .filter(|r| document_of(r).is_some_and(|home| homes.contains(&home)))
+                    .collect();
+                if !own.is_empty() && below(&mut rng, 10) == 0 {
+                    let target = own[below(&mut rng, own.len())];
+                    let home = document_of(target).expect("a record has a home");
+                    writer
+                        .nullify(caller, &home, target)
+                        .expect("an issuer retracts its own record");
+                } else {
+                    let home = &homes[[0, 0, 1, 2][below(&mut rng, 4)]];
+                    let width = if below(&mut rng, 8) == 0 { 2 } else { 1 };
+                    let from: Vec<Address> = (0..width)
+                        .map(|_| {
+                            if !records.is_empty() && below(&mut rng, 2) == 0 {
+                                records[below(&mut rng, records.len())].clone()
+                            } else {
+                                prefixes[below(&mut rng, prefixes.len())].clone()
+                            }
+                        })
+                        .collect();
+                    let to: Vec<Address> = match below(&mut rng, 6) {
+                        0 | 1 => Vec::new(),
+                        5 => vec![accounts[0].clone(), accounts[2].clone()],
+                        _ => vec![accounts[below(&mut rng, accounts.len())].clone()],
+                    };
+                    let (record, _) = writer
+                        .makelink(
+                            caller,
+                            home,
+                            SlotArg::Addrs(from),
+                            SlotArg::Addrs(to),
+                            SlotArg::Addrs(vec![t_grant().clone()]),
+                        )
+                        .expect("an issuer deposits into its own document");
+                    records.push(record);
+                }
+                let world = engine.kernel().snapshot().world().clone();
+                let live = &world.grants;
+                let rebuilt = world.clone().rebuild_derived().grants;
+                let at = format!("history {history}, step {step}");
+                assert_eq!(
+                    rebuilt.operative_records, live.operative_records,
+                    "{at}: the operative set"
+                );
+                assert_eq!(
+                    rebuilt.earlier_records, live.earlier_records,
+                    "{at}: the earlier-record set"
+                );
+                assert_eq!(rebuilt.by_grantee, live.by_grantee, "{at}: the principal-exact index");
+                assert_eq!(rebuilt.universal, live.universal, "{at}: the any-principal index");
+                saw_universal |= !live.universal.is_empty();
+                saw_named |= !live.by_grantee.is_empty();
+                saw_spent |= live.earlier_records.len() > live.operative_records.len();
+                saw_malformed |= live.earlier_records.iter().any(|r| {
+                    let link = world.links.readlink(r).expect("an earlier record is resident");
+                    link.from_slot().single_denoted().is_none()
+                });
+            }
+        }
+        assert!(
+            saw_universal && saw_named && saw_spent && saw_malformed,
+            "the histories must admit an any-principal grant ({saw_universal}), a named one \
+             ({saw_named}), a record that is no operative grant ({saw_spent}) and one whose `from` \
+             denotes no single address ({saw_malformed}), or the comparisons compared empty sets"
         );
     }
 }

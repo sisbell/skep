@@ -162,7 +162,10 @@ impl World {
 
 /// Class MEMBERSHIP by prefix: the type slot denotes addresses (every span
 /// unit-depth, at least one), each under the edition class — `3.14` itself or
-/// a descriptive subtype `3.14.k` (commons-seeding.md's row).
+/// a descriptive subtype `3.14.k` (commons-seeding.md's row). The first clause
+/// is what refuses a slot spanning the class range without denoting an
+/// address, over which the last would hold vacuously
+/// (`a_type_slot_spanning_the_class_range_without_denoting_is_no_member`).
 ///
 /// MEMBERSHIP and not admission, which in this crate is the grant fold's I4
 /// test over a record's home (`crate::grants`). Nothing about a claim's home,

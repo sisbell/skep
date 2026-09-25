@@ -385,7 +385,8 @@ fn sup_edge_claims(links: &LinkState) -> BTreeMap<Tumbler, BTreeMap<Tumbler, Vec
 ///   so a predicate-classed link reaches the slice with a CALLER-SHAPED
 ///   subject slot — many denoted members, or a shape the managed surface
 ///   would never build — and this walk must read it exactly as `members`
-///   does; and
+///   does (`a_mixed_subject_slot_keys_the_member_it_denotes_as_members_does`);
+///   and
 /// * a view of this function's own choosing. `members` subtracts the filtered
 ///   roots under `View::Default` alone, and the builder reads `Audit` and
 ///   `Active`, so each row of [`PREDICATE_PROJECTIONS`] carries the view its own
@@ -518,7 +519,8 @@ fn dotted_address(node: &SerdeTree) -> Option<Address> {
 
 #[cfg(test)]
 mod tests {
-    use skep_arrangement::{trunk_of, Caller, Deposit, VPos};
+    use skep_address::parent;
+    use skep_arrangement::{trunk_of, Caller, Deposit, Run, Shot, ShotRun, VPos};
     use skep_content::Val;
     use skep_kernel::TxnError;
     use skep_links::{
@@ -526,7 +528,7 @@ mod tests {
     };
     use skep_namespace::PrincipalId;
 
-    use crate::dump::tests::{populated_world, render_of};
+    use crate::dump::tests::{populated_world, render_of, vspec};
     use crate::dump::{dump, dump_tree, dump_visible, BANNER};
     use crate::testkit::{a_published_home_and_a_private_draft, element, USER};
     use crate::world::World;
@@ -850,16 +852,20 @@ mod tests {
     /// guest tests run over versionless worlds. So a memo M5 widened — noting a
     /// trunk's own birth, a draft's among them — would reach every reader
     /// class's dump with the suite green, and so would a reduction here that
-    /// emptied the field. The fixture drives both of M5's writing arms: a
-    /// placement into a DRAFT, which must note nothing, and an owned version of
-    /// the published HOME, whose snapshot notes the birth member it mints.
+    /// emptied the field. The fixture drives both of M5's arms that write the
+    /// memo, and the placement that must not: a placement into a DRAFT, which
+    /// notes nothing; an owned VERSION of the published home, whose snapshot
+    /// notes the birth member it mints; and a publish SHOT into a published
+    /// edition, whose one placement notes the member IT mints — the route the
+    /// daemon's head writer takes for every head.
     #[test]
     fn every_birth_memo_key_is_a_version_member_whose_state_the_guest_reads() {
         let (engine, home, draft) = a_published_home_and_a_private_draft();
-        engine
+        let caller = Caller::Principal(USER);
+        let (start, _) = engine
             .vstream()
             .insert(
-                Caller::Principal(USER),
+                caller,
                 &draft,
                 VPos { subspace: Nat::from(1u32), ordinal: Nat::from(1u32) },
                 vec![Val::new(vec![b'd'])],
@@ -870,6 +876,23 @@ mod tests {
             .vstream()
             .version(USER, &home, None)
             .expect("an owned version of the published home");
+        let account = parent(&home).expect("a document's parent is its account");
+        let (edition, _) = engine
+            .namespace()
+            .create_new_document(USER, &account, Some(true))
+            .expect("a published edition, memberless");
+        let shot = Shot {
+            base: None,
+            draft: Some(draft.clone()),
+            runs: vec![ShotRun {
+                origin: draft.clone(),
+                run: Run::new(start, Nat::from(1u32)).expect("the draft's one value"),
+            }],
+        };
+        let (shot_member, _) = engine
+            .vstream()
+            .publish(caller, &edition, shot, &World::visible_to(caller))
+            .expect("the birth shot from the draft into the edition");
         let world = engine.kernel().snapshot().world().clone();
         let path = ["authoritative", "arrangement", "birth_extents"];
         let full = dump_tree(&world);
@@ -882,10 +905,12 @@ mod tests {
                 .collect(),
             other => panic!("M5's birth memo renders as a map, got {other:?}"),
         };
-        assert!(
-            keys.contains(&birth_member),
-            "the fixture must give the memo its birth member: {keys:?}"
-        );
+        for member in [&birth_member, &shot_member] {
+            assert!(
+                keys.contains(member),
+                "the fixture must give the memo its birth member {member}: {keys:?}"
+            );
+        }
         for key in &keys {
             assert_ne!(
                 trunk_of(key),
@@ -1066,7 +1091,57 @@ mod tests {
             "one tuple's home governs every member it denotes"
         );
         // …and the identity holds over the wide slot, which is what a
-        // tightened reading of the subject slot would break.
+        // `single_denoted` reading of the subject slot would break; the
+        // `is_address_denoting` guard, which an all-unit-depth slot passes, is
+        // `a_mixed_subject_slot_keys_the_member_it_denotes_as_members_does`'s.
+        assert_eq!(dump_visible(&world, &|_: &Address| true), dump(&world));
+    }
+
+    /// …and the SHAPE of an open-surface subject slot, which the wide slot above
+    /// cannot reach: its sixteen `Addrs` are all unit-depth, so an
+    /// `is_address_denoting` guard on the F slot — the first departure
+    /// [`member_tuples`] names — passes it untouched. A MIXED slot is where that
+    /// guard parts from `LinkState::members`: `members` denotes its unit-depth
+    /// span's address, the guard would key no tuple, and under the total
+    /// predicate the filter would drop a member the harness-only walk rendered —
+    /// for a slot any client's MAKELINK can deposit.
+    #[test]
+    fn a_mixed_subject_slot_keys_the_member_it_denotes_as_members_does() {
+        let (engine, _home, draft) = a_published_home_and_a_private_draft();
+        let caller = Caller::Principal(USER);
+        engine
+            .vstream()
+            .insert(
+                caller,
+                &draft,
+                VPos { subspace: Nat::from(1u32), ordinal: Nat::from(1u32) },
+                vec![Val::new(vec![b'x']), Val::new(vec![b'y']), Val::new(vec![b'z'])],
+                Deposit::Undeclared,
+            )
+            .expect("the owner writes its draft");
+        // One position, then two: a unit-depth span beside one that is not.
+        let (tuple, _) = engine
+            .linkstore(&World::visible_to(caller))
+            .makelink(
+                caller,
+                &draft,
+                SlotArg::Resolve(vec![vspec(&draft, 1, 1), vspec(&draft, 2, 2)]),
+                SlotArg::Addrs(Vec::new()),
+                SlotArg::Addrs(vec![ReservedAddrs::format().pred_def]),
+            )
+            .expect("a predicate-classed link deposits through the open surface");
+        let world = engine.kernel().snapshot().world().clone();
+        let from = world.links.readlink(&tuple).expect("the tuple is resident").from_slot();
+        assert!(
+            !from.is_address_denoting() && from.addrs().count() == 1,
+            "the fixture must deposit a MIXED subject slot, or the guard and `members` agree: \
+             {from:?}"
+        );
+        assert_eq!(
+            projection(&dump_tree(&world), "predicates.defs.audit").len(),
+            1,
+            "`members` denotes the unit-depth span's one address and nothing of the other span"
+        );
         assert_eq!(dump_visible(&world, &|_: &Address| true), dump(&world));
     }
 
@@ -1440,6 +1515,80 @@ mod tests {
             edge_count(&guest),
             0,
             "the only claim a guest reads is retracted, and a retracted claim asserts nothing"
+        );
+        assert_eq!(dump_visible(&world, &|_: &Address| true), dump(&world));
+    }
+
+    /// Two supersession edges whose CLAIMS are homed in the published home,
+    /// each with ONE endpoint in the private draft: the first runs OUT of the
+    /// draft's link, the second INTO it. Returns the world, the draft's link,
+    /// and the public link the second edge runs out of.
+    fn public_claims_across_a_draft_endpoint() -> (World, Address, Address) {
+        let (engine, home, draft) = a_published_home_and_a_private_draft();
+        let caller = Caller::Principal(USER);
+        let visibility = World::visible_to(caller);
+        let writer = engine.linkstore(&visibility);
+        let link_in = |doc: &Address, n: u32| {
+            writer
+                .makelink(
+                    caller,
+                    doc,
+                    SlotArg::Addrs(Vec::new()),
+                    SlotArg::Addrs(Vec::new()),
+                    SlotArg::Addrs(vec![element(doc, 3, n)]),
+                )
+                .expect("a link in the owner's own document")
+                .0
+        };
+        let draft_link = link_in(&draft, 41);
+        let (into, out_of) = (link_in(&home, 42), link_in(&home, 43));
+        writer
+            .assert_sup(caller, &home, &draft_link, &into)
+            .expect("a published claim out of the draft's link");
+        writer
+            .assert_sup(caller, &home, &out_of, &draft_link)
+            .expect("a published claim into the draft's link");
+        (engine.kernel().snapshot().world().clone(), draft_link, out_of)
+    }
+
+    /// The dotted addresses `hints.supersession` keys its edges by.
+    fn edge_keys(tree: &SerdeTree) -> Vec<String> {
+        match at_path(tree, &["hints", "supersession"]) {
+            Some(SerdeTree::Map(entries)) => entries
+                .iter()
+                .map(|(k, _)| match k {
+                    SerdeTree::Str(s) => s.clone(),
+                    other => panic!("hints.supersession keys are dotted addresses, got {other:?}"),
+                })
+                .collect(),
+            other => panic!("hints.supersession is a map, got {other:?}"),
+        }
+    }
+
+    /// An EDGE's two ENDPOINTS are link addresses, each judged by its own home,
+    /// beside the claim's test — and no other fixture isolates either: in
+    /// [`every_reduced_family_in_a_draft`] any one test refuses every edge, and
+    /// in [`a_draft_homed_claim_over_public_links`] only the claim's does. Here
+    /// both claims are published: the edge OUT of the draft's link is refused
+    /// by the adjacency map's KEY test alone, the edge INTO it by the pair
+    /// test's successor-home clause alone.
+    #[test]
+    fn an_edge_with_a_draft_endpoint_leaves_the_guest_s_edges_though_its_claim_is_published() {
+        let (world, draft_link, out_of) = public_claims_across_a_draft_endpoint();
+        assert_eq!(edge_count(&dump_tree(&world)), 2, "the fixture asserts two edges");
+        let guest = edge_keys(&tree_visible_to(&world, None));
+        assert!(
+            !guest.contains(&draft_link.to_string()),
+            "the edge OUT of the draft's link: its OLD endpoint's home refuses it: {guest:?}"
+        );
+        assert!(
+            !guest.contains(&out_of.to_string()),
+            "the edge INTO the draft's link: its NEW endpoint's home refuses it: {guest:?}"
+        );
+        assert_eq!(
+            edge_count(&tree_visible_to(&world, Some(USER))),
+            2,
+            "the owner reads every home"
         );
         assert_eq!(dump_visible(&world, &|_: &Address| true), dump(&world));
     }

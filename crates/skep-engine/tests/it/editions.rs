@@ -9,12 +9,12 @@
 use crate::common;
 
 use common::*;
-use skep_address::{document_of, parent, Address};
+use skep_address::{document_of, parent, subtree_of, Address, Span};
 use skep_arrangement::{deposit_class_types, Caller, Deposit};
 use skep_content::Val;
 use skep_engine::{Engine, World};
 use skep_febe::EditionClaim;
-use skep_links::{enc, Endset, HasLinks, SlotArg, View};
+use skep_links::{enc, Endset, HasLinks, Link, SlotArg, View, TYPE};
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
 
 /// The EDITION class type address (commons-seeding.md row `3.14 | edition`,
@@ -261,6 +261,44 @@ fn a_type_slot_denoting_several_subtypes_of_the_class_is_a_member() {
         w.edition_claims(&board.target),
         vec![row(&multi, &board.e1, &board.target, true)],
         "a slot whose every denoted address lies under the class is a member of it"
+    );
+}
+
+/// …and the membership test's FIRST conjunct: a type slot that OVERLAPS the
+/// class range with a NON-UNIT span denotes no address, and is no member —
+/// the two tests above deposit address-form slots, where that conjunct is
+/// idle, and without it an `all` over a slot denoting NOTHING holds
+/// vacuously. MAKELINK cannot shape this slot; `editlink` deposits the
+/// caller's own successor through the open gate, asking each of its slots
+/// only to be level-uniform.
+#[test]
+fn a_type_slot_spanning_the_class_range_without_denoting_is_no_member() {
+    let engine = mem_engine();
+    let board = board(&engine);
+    let good = claim(&engine, &board.e1, &board.target, &t_edition());
+    let original = claim(&engine, &board.e2, &board.target, &t_grant());
+    let across = Span::new(t_edition().tumbler().clone(), tum(&[0, 0, 0, 0, 0, 0, 0, 0, 2]))
+        .expect("a level-uniform span across `3.14` and `3.15`");
+    let successor =
+        Link::triple(enc([&board.e2]), enc([&board.target]), Endset::from_spans([across]));
+    let caller = Caller::Principal(A);
+    let (edit, _) = engine
+        .linkstore(&World::visible_to(caller))
+        .editlink(caller, &original, successor, &board.e2, &board.e2)
+        .expect("the open gate admits a level-uniform type span");
+
+    let w = world(&engine);
+    let ty = w.links().readlink(&edit.successor).expect("the successor is resident").type_slot();
+    assert!(!ty.is_empty() && ty.addrs().next().is_none(), "a slot that denotes nothing: {ty:?}");
+    let class_range = Endset::from_spans([subtree_of(t_edition().tumbler())]);
+    assert!(
+        w.links().match_links(&[(TYPE, &class_range)], View::Audit).contains(&edit.successor),
+        "the lookup's type range hands the successor to the membership test"
+    );
+    assert_eq!(
+        w.edition_claims(&board.target),
+        vec![row(&good, &board.e1, &board.target, true)],
+        "a slot spanning the class range without denoting an address is no member of it"
     );
 }
 

@@ -16,7 +16,8 @@ use skep_address::Address;
 use skep_arrangement::Deposit;
 use skep_content::Val;
 use skep_engine::{Engine, World};
-use skep_links::{enc, HasLinks, ReservedAddrs, ShippedType, SlotArg};
+use skep_kernel::TxnError;
+use skep_links::{enc, HasLinks, NullifyError, ReservedAddrs, ShippedType, SlotArg};
 use tempfile::tempdir;
 
 /// The shipped class ordinary emissions land in: `PredDef`, the first Unary
@@ -154,17 +155,10 @@ fn the_dump_carries_the_supersession_forward_edges() {
     assert_entry(&text, "supersession", &edges);
 }
 
-/// A retracted ENDPOINT leaves its edges operative — Df-SUCC reads the CLAIM's
-/// activity and never the endpoint's (M7's EL14e) — so the supersession
-/// family carries an edge out of a nullified link. The populated world's one
-/// edge runs out of an ACTIVE link, where a family walking the active slice
-/// for edges answers alike; here it would drop the edge, and every
-/// dump-to-dump comparison would stay green, since both sides are rendered by
-/// the same builder.
-#[test]
-fn the_dump_carries_a_supersession_edge_out_of_a_retracted_link() {
-    let engine = Engine::open(mem_cfg()).expect("in-memory open");
-    let (_acct, doc) = setup_draft(&engine);
+/// A draft of [`OWNER`]'s with two content values and two links over them —
+/// the endpoints a supersession claim runs between. Returns `(doc, old, new)`.
+fn a_draft_with_two_links(engine: &Engine) -> (Address, Address, Address) {
+    let (_acct, doc) = setup_draft(engine);
     engine
         .vstream()
         .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], Deposit::Undeclared)
@@ -184,6 +178,21 @@ fn the_dump_carries_a_supersession_edge_out_of_a_retracted_link() {
             .0
     };
     let (old, new) = (make_link(1, 2), make_link(2, 1));
+    (doc, old, new)
+}
+
+/// A retracted ENDPOINT leaves its edges operative — Df-SUCC reads the CLAIM's
+/// activity and never the endpoint's (M7's EL14e) — so the supersession
+/// family carries an edge out of a nullified link. The populated world's one
+/// edge runs out of an ACTIVE link, where a family walking the active slice
+/// for edges answers alike; here it would drop the edge, and every
+/// dump-to-dump comparison would stay green, since both sides are rendered by
+/// the same builder.
+#[test]
+fn the_dump_carries_a_supersession_edge_out_of_a_retracted_link() {
+    let engine = Engine::open(mem_cfg()).expect("in-memory open");
+    let (doc, old, new) = a_draft_with_two_links(&engine);
+    let visibility = World::visible_to(OWNER);
     engine.linkstore(&visibility).assert_sup(OWNER, &doc, &old, &new).expect("assert_sup");
     engine.linkstore(&visibility).nullify(OWNER, &doc, &old).expect("retract the OLD endpoint");
 
@@ -191,6 +200,70 @@ fn the_dump_carries_a_supersession_edge_out_of_a_retracted_link() {
     assert_entry(&text, "links.nullified", &seq_of(&[&old]));
     assert_entry(&text, "supersession", &format!("{{{}: {}}}", quoted(&old), seq_of(&[&new])));
     engine.check_hints().expect("the rebuild renders the same edge");
+}
+
+/// …and the other half of Df-SUCC: a retracted CLAIM asserts no edge, so the
+/// family carries none out of the link it named. A family built from the
+/// supersession class's claims without the nullified filter passes every
+/// other fixture here, and `check_hints` with them; the per-class filter keys
+/// an edge by its OPERATIVE claims, so it would drop that edge under the
+/// total predicate.
+#[test]
+fn a_retracted_supersession_claim_carries_no_edge() {
+    let engine = Engine::open(mem_cfg()).expect("in-memory open");
+    let (doc, old, new) = a_draft_with_two_links(&engine);
+    let visibility = World::visible_to(OWNER);
+    let (claim, _) =
+        engine.linkstore(&visibility).assert_sup(OWNER, &doc, &old, &new).expect("assert_sup");
+    engine.linkstore(&visibility).nullify(OWNER, &doc, &claim).expect("retract the CLAIM");
+
+    let text = engine.world_dump().into_string();
+    assert_entry(&text, "links.nullified", &seq_of(&[&claim]));
+    assert_entry(&text, "supersession", "{}");
+    let snap = engine.kernel().snapshot();
+    assert_eq!(
+        engine.dump_of_visible(snap.world(), &|_: &Address| true),
+        engine.dump_of(snap.world()),
+        "the per-class filter under the total predicate is the harness-only walk"
+    );
+    engine.check_hints().expect("the rebuild renders no edge either");
+}
+
+/// `links.nullified` is the WHOLE tombstone set only because `nullify` admits
+/// no target but a resident link or the address its own retraction will
+/// occupy (`hints_tree`); a root that is no link would sit in M7's hint and
+/// outside this rendering and outside what `check_hints` certifies. M7 holds a
+/// wider retraction as a deferred scope decision, so the gate is pinned where
+/// its widening would first cost the oracle.
+#[test]
+fn the_nullified_family_is_the_whole_tombstone_set_because_only_links_are_retracted() {
+    let engine = Engine::open(mem_cfg()).expect("in-memory open");
+    let (_acct, doc) = setup_draft(&engine);
+    let (position, _) = engine
+        .vstream()
+        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p'])], Deposit::Undeclared)
+        .expect("insert succeeds");
+    let visibility = World::visible_to(OWNER);
+    for (what, target) in [("the document", &doc), ("a content position", &position)] {
+        assert!(
+            matches!(
+                engine.linkstore(&visibility).nullify(OWNER, &doc, target),
+                Err(TxnError::Rejected(NullifyError::BadTarget))
+            ),
+            "{what} is no link: its retraction would tombstone a root the family never renders"
+        );
+    }
+    let own_address = element(&doc, 2, 1); // the draft's first link address
+    let (retraction, _) = engine
+        .linkstore(&visibility)
+        .nullify(OWNER, &doc, &own_address)
+        .expect("a retraction of the address it will itself occupy");
+    assert_eq!(retraction, own_address, "born nullified: the retraction is its own target");
+    let text = engine.world_dump().into_string();
+    assert_entry(&text, "links.audit", &seq_of(&[&retraction]));
+    assert_entry(&text, "links.active", "[]");
+    assert_entry(&text, "links.nullified", &seq_of(&[&retraction]));
+    engine.check_hints().expect("the rebuild renders the same tombstones");
 }
 
 #[test]
@@ -516,7 +589,10 @@ fn the_dump_names_each_slice_of_the_authoritative_section_for_its_store() {
     let text = engine.world_dump().into_string();
 
     assert!(text.starts_with("skep-world-dump v5\n"), "unexpected banner: {text:.32}");
-    for slice in [r#""namespace""#, r#""content""#, r#""arrangement""#, r#""links""#] {
+    // M7's own serde field shares the `links` slice's name, so that key is
+    // pinned in front of the field: a bare `"links"` would be found inside the
+    // slice whatever the slice itself were called.
+    for slice in [r#""namespace""#, r#""content""#, r#""arrangement""#, r#""links": {"links": "#] {
         assert!(text.contains(slice), "the authoritative slice {slice} must be named: {text:.200}");
     }
     // v5 (lane 3.4): M3's publication map and the grant fold's operative

@@ -109,7 +109,11 @@ pub(crate) fn to_tree<T: Serialize + ?Sized>(v: &T) -> SerdeTree {
 /// with entries sorted by (rendered key, rendered value), and everything else
 /// renders structurally. Writing through the formatter rather than building
 /// intermediate strings keeps a whole-world render to the allocations the sort
-/// genuinely needs — the map entries', whose sort key IS their rendering.
+/// genuinely needs — each map KEY's rendering. A value takes part in the order
+/// only where its key renders alike another's, which no map in the world's
+/// serde forms produces (each is keyed by distinct values of one type), so
+/// only such a run renders its values, once apiece, to order it; every other
+/// value streams straight into the output.
 impl fmt::Display for SerdeTree {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -142,11 +146,18 @@ impl fmt::Display for SerdeTree {
                 f.write_str("]")
             }
             SerdeTree::Map(entries) => {
-                let mut rendered: Vec<(String, String)> =
-                    entries.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-                rendered.sort();
+                let mut sorted: Vec<(String, &SerdeTree)> =
+                    entries.iter().map(|(k, v)| (k.to_string(), v)).collect();
+                sorted.sort_by(|(a, _), (b, _)| a.cmp(b));
+                // A value takes part in the order only where keys render
+                // alike: that run renders its values once apiece to order it.
+                for alike in sorted.chunk_by_mut(|(a, _), (b, _)| a == b) {
+                    if alike.len() > 1 {
+                        alike.sort_by_cached_key(|&(_, v)| v.to_string());
+                    }
+                }
                 f.write_str("{")?;
-                for (i, (k, v)) in rendered.iter().enumerate() {
+                for (i, (k, v)) in sorted.iter().enumerate() {
                     if i > 0 {
                         f.write_str(", ")?;
                     }
@@ -675,6 +686,26 @@ mod tests {
         ]);
         assert_eq!(render_of(&ab), render_of(&ba));
         assert_eq!(render_of(&ab), r#"{1: "a", 1: "b"}"#);
+    }
+
+    /// …and the value orders a run of alike keys WITHOUT moving the run among
+    /// its neighbours: the order is (rendered key, rendered value) over the
+    /// whole map, so a run sits where its key sorts and orders itself inside.
+    /// The sort renders a value only inside such a run, and a render that
+    /// ordered a run against its neighbours, or left it in collection order,
+    /// fails here in one collection order or both.
+    #[test]
+    fn a_run_of_alike_keys_orders_itself_among_distinct_neighbours() {
+        let collected = vec![
+            (SerdeTree::U64(1), SerdeTree::Str("b".into())),
+            (SerdeTree::U64(2), SerdeTree::Str("a".into())),
+            (SerdeTree::I64(1), SerdeTree::Str("a".into())),
+            (SerdeTree::U64(0), SerdeTree::Str("z".into())),
+        ];
+        let reversed: Vec<_> = collected.iter().rev().cloned().collect();
+        let pinned = r#"{0: "z", 1: "a", 1: "b", 2: "a"}"#;
+        assert_eq!(render_of(&SerdeTree::Map(collected)), pinned);
+        assert_eq!(render_of(&SerdeTree::Map(reversed)), pinned);
     }
 
     /// Sequences keep their order — it is semantic upstream.

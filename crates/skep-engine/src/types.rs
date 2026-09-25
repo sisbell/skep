@@ -29,11 +29,11 @@
 //! A pin is HELD, not manufactured per call: each reader below hands back a
 //! borrow of one process-wide value, so the ledger is one instance and not
 //! one construction per consult. That matters where the consults are: the
-//! grant fold reads [`t_grant`] on every folded link record — once per deposit
-//! on the live path and once per link record through a whole replay — and a
-//! rebuilt pin is nine big-integer allocations, a vector and a T4 walk. The
-//! addresses are compiled format constants, so there is nothing per-call for
-//! them to depend on.
+//! grant fold reads [`t_grant`] on every folded link record — at least once
+//! per deposit on the live path and per link record through a whole replay —
+//! and a rebuilt pin is nine big-integer allocations, a vector and a T4 walk.
+//! The addresses are compiled format constants, so there is nothing per-call
+//! for them to depend on.
 //!
 //! GUARANTEE the ledger maintains, and the reason a pin is a decision about
 //! ALL of them: the pins are pairwise DISTINCT and pairwise PREFIX-FREE. A

@@ -81,9 +81,18 @@ pub struct Engine {
 /// `Engine` implements no trait that would hold it, so it is pinned here —
 /// where a field that revoked it would fail, rather than one crate away in
 /// the daemon's `serve`.
+///
+/// [`EngineError`] is pinned beside it, and its promise rests on another
+/// crate: an error type is expected to be `Send + Sync` — a caller boxes it
+/// into a `dyn Error + Send + Sync`, and the daemon's `DaemonError` carries it
+/// under an assertion of its own — and its auto traits are M2's `OpenError`'s,
+/// which hold because M2 boxes every cause `Send + Sync`. A cause boxed
+/// without them would revoke the promise with no signature of this crate's
+/// moving, and this is where that change fails first.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Engine>();
+    assert_send_sync::<EngineError>();
 };
 
 /// The kernel's head — enough to tell two engines apart in a log line. The

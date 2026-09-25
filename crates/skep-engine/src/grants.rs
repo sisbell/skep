@@ -806,7 +806,9 @@ fn classify(prev: &Grants, home: &Address, value: &Link) -> Kind {
 /// it: every admitted record joins the earlier-record set under its own
 /// address, so a revocation or a record of neither kind is kept without a
 /// copy, and only a GRANT, which the operative set keys under that address
-/// too, costs one.
+/// too, costs one. [`fold`] builds that address only for a deposit whose type
+/// slot names the class, so every other deposit pays neither the copy nor the
+/// T4 walk.
 fn fold_one(
     prev: Grants,
     namespace: &M3State,
@@ -838,19 +840,26 @@ fn fold_one(
 /// so both are the authoritative state a query would read).
 ///
 /// ONLY A DEPOSIT moves the fold, and that is a premise [`seed`] rests on
-/// rather than a convenience. `LinkRec` is `#[non_exhaustive]`, so the early
-/// return absorbs every variant M7 has not written yet — and the two halves
-/// read a link's slots from different places: this one from the value the
-/// journal record carries, the seed from `readlink` at the end of history.
-/// Those are the same value because M7's model has no update and no delete:
-/// every write is a deposit of an immutable link at a fresh address, and
-/// `editlink` deposits a successor rather than touching its original. A
+/// rather than a convenience. `LinkRec` is `#[non_exhaustive]`, so the
+/// `let … else` return absorbs every variant M7 has not written yet — and the
+/// two halves read a link's slots from different places: this one from the
+/// value the journal record carries, the seed from `readlink` at the end of
+/// history. Those are the same value because M7's model has no update and no
+/// delete: every write is a deposit of an immutable link at a fresh address,
+/// and `editlink` deposits a successor rather than touching its original. A
 /// journal record that changed a resident link's slots would split the
 /// halves, and it would have to be answered here.
 pub(crate) fn fold(prev: &Grants, namespace: &M3State, drafts: &Drafts, rec: &LinkRec) -> Grants {
     let LinkRec::Deposit { addr, value, .. } = rec else {
         return prev.clone();
     };
+    // Nearly every deposit is no record of the class, and its type slot says
+    // so in one read. The owned address below exists only for `fold_one` to
+    // KEEP, so it is built for a grant-typed deposit alone; `fold_one` asks
+    // again, which is what keeps it the ONE path the seed drives too.
+    if !is_grant_typed(value, t_grant()) {
+        return prev.clone();
+    }
     // T4 VALIDITY is M7's own totality domain for a staged link address, and
     // `World::apply` has already run `LinkState::apply_link` over this very
     // journal record, whose hint fold asserts it — so by the time this line

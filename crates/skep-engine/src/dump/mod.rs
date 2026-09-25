@@ -564,13 +564,13 @@ fn grants_tree(world: &World) -> SerdeTree {
 impl crate::Engine {
     /// [`crate::Engine::dump_of`] at a READER'S CLASS (PUB round 2, lane 3.4
     /// §4): the same tree, post-filtered by `readable` before render — what
-    /// the filter drops and keeps is [`filter_tree`]'s one statement. The
-    /// predicate is the threaded one: a world's own reader class
-    /// (`World::reader_class`) for a live dump, or the HEAD's for a historical
-    /// world (`/dump?at=N` — the N-world's state at the reader's class as the
-    /// head decides it, PUB-6.48), and the caller closes it over ONE snapshot
-    /// (PUB-6.39). Under the total predicate this is `dump_of` byte for byte
-    /// (the unit test pins it).
+    /// the filter drops and keeps is `filter_tree`'s one statement, in
+    /// `dump::filter`. The predicate is the threaded one: a world's own reader
+    /// class (`World::reader_class`) for a live dump, or the HEAD's for a
+    /// historical world (`/dump?at=N` — the N-world's state at the reader's
+    /// class as the head decides it, PUB-6.48), and the caller closes it over
+    /// ONE snapshot (PUB-6.39). Under the total predicate this is `dump_of`
+    /// byte for byte (the unit test pins it).
     ///
     /// COST: [`crate::Engine::dump_of`]'s plus, per filtered entry, one key
     /// decode — an `Address` deserialize off the tree for the authoritative
@@ -652,17 +652,18 @@ impl crate::Engine {
     /// COST, per call, uncached, and linear in the WHOLE world rather than in
     /// anything the caller names. The authoritative half transcodes every
     /// slice into an owned value tree before a byte of text is written, and
-    /// the render then materializes each map entry's own rendering as an
-    /// owned `String` to sort by — so at peak the text exists at least twice
-    /// over. M3's publication map is read TWICE: once inside the
-    /// authoritative transcode, and once more by [`publication_tree`], which
-    /// walks it through M3's own enumeration — one entry per REGISTERED
-    /// DOCUMENT, published or not, and no re-validation. The tree costs a node
-    /// per serialized ELEMENT, and a content byte is an element: serde has no
-    /// byte specialization for `[u8]`, so M4's `Val` transcodes as a sequence
-    /// of integers and not as a blob (`a_content_byte_costs_a_whole_tree_node`
-    /// pins that, because it is the term that dominates this figure and it is
-    /// not what the byte payload looks like).
+    /// the render then materializes each map KEY's rendering as an owned
+    /// `String` to sort by, the values streaming straight into the text, which
+    /// is therefore held once, beside the tree. M3's publication map is read
+    /// TWICE: once inside the authoritative transcode, and once more by
+    /// `publication_tree`, which walks it through M3's own enumeration — one
+    /// entry per REGISTERED DOCUMENT, published or not, and no re-validation.
+    /// The tree costs a node per serialized ELEMENT, and a content byte is an
+    /// element: serde has no byte specialization for `[u8]`, so M4's `Val`
+    /// transcodes as a sequence of integers and not as a blob
+    /// (`a_content_byte_costs_a_whole_tree_node` pins that, because it is the
+    /// term that dominates this figure and it is not what the byte payload
+    /// looks like).
     ///
     /// One term is not a count of anything: a component of a tumbler is a
     /// `Nat`, an arbitrary-precision integer with no magnitude bound, and

@@ -403,7 +403,11 @@ impl HeadWriter {
     /// it. The head's own commits go through [`WritePath::commit_recorded`],
     /// which gives the head writer no turn, so they never reach here: neither
     /// counted nor able to re-trigger, by construction. The seq refresh at the
-    /// end is what keeps the next landed commit from counting them.
+    /// end is what keeps them from reading as a LATER write's landing: without
+    /// it, the first write after a head that lands nothing — a refusal, a
+    /// replay — would find the seq past the writer's last look, count the
+    /// head's own commits as its own, and could write a head naming the last
+    /// head's own publish. A landed commit counts once either way.
     pub(super) fn take_turn(&self, wp: &WritePath, serial: &SerialGuard<'_>) {
         // Decide under the state lock, releasing it before any commit.
         let due_head = {
@@ -755,6 +759,8 @@ mod tests {
         let first_text = String::from_utf8(first_bytes).expect("utf-8");
         let foreign = first_text.replace(FORMAT_STAMP, "SKJ3");
         assert_eq!(HeadRecord::parse(foreign.as_bytes()), None, "a head another format wrote");
+        let other_type = first_text.replace(RECORD_TYPE, "skep-tail");
+        assert_eq!(HeadRecord::parse(other_type.as_bytes()), None, "a record of another type");
         // The reader admits EXACTLY what the writer emits: `hex_string` writes
         // lowercase and no sign, so another spelling of the same bytes — one a
         // radix parse would fold back to them — is not this build's record.

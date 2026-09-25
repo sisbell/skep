@@ -2239,9 +2239,11 @@ fn the_claim_flip_into_enforcing_kills_every_bare_binding() {
 }
 
 /// wire.md §Sessions fixes the death signal's routes as a table: six carry
-/// it, four are token-blind. Two rows were watched. The negative half
-/// matters as much — `/health` is what a client polls, and a signal there
-/// says a session died that did not.
+/// it; `/health`, `/challenge`, `/session` and — in `client` builds — `/`
+/// are token-blind, and §Reading history adds `/chain` ("token-blind and
+/// class-invariant like `/health`"). The negative half matters as much —
+/// `/health` is what a client polls, and a signal there says a session died
+/// that did not.
 #[test]
 fn the_death_signal_rides_exactly_the_documented_routes() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -2274,11 +2276,15 @@ fn the_death_signal_rides_exactly_the_documented_routes() {
     }
 
     // Token-blind: presenting the same dead token changes nothing.
-    let blind: [(&str, &str, &[u8]); 3] = [
+    let mut blind: Vec<(&str, &str, &[u8])> = vec![
         ("GET", "/health", b""),
+        ("GET", "/chain?at=0", b""),
         ("GET", "/challenge?principal=1", b""),
         ("POST", "/session", br#"{"principal":1}"#),
     ];
+    if cfg!(feature = "client") {
+        blind.push(("GET", "/", b""));
+    }
     for (method, path, body) in blind {
         assert_eq!(
             signalled(method, path, body),

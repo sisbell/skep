@@ -17,14 +17,18 @@ use crate::common;
 use std::path::Path;
 
 use common::{
-    acked_at, get, json, op, open_session, spawn, spawn_seeded, CLAIMANT_ACCOUNT,
-    CLAIMANT_PRINCIPAL,
+    acked_at, assert_withheld, doc_metadata, expect_resp, get, json, op, open_session, spawn,
+    spawn_seeded, CLAIMANT_ACCOUNT, CLAIMANT_PRINCIPAL,
 };
 use serde_json::Value;
 use skepd::Skepd;
 
 /// The head document `H` — doc 2 of the system account (PUB-6.65).
 const H: &str = "1.1.0.1.0.2";
+
+/// The staging draft — doc 3 of the system account, the one document the
+/// head writer mints (PUB-6.65), private at every class.
+const STAGING_DRAFT: &str = "1.1.0.1.0.3";
 
 /// The head record's `format` member — the journal stamp in force, `SKJ4`
 /// since the chain's salt. The one head member that moved at the bump.
@@ -128,33 +132,48 @@ fn clock_origin() -> u64 {
 /// Two hours, in the sidecar's own milliseconds.
 const TWO_HOURS_MILLIS: u64 = 2 * 60 * 60 * 1000;
 
-/// Rewrite every recorded `time` in the sidecar `age` milliseconds into the
-/// past — the feed's testimony (AUTH-4.56: a rewritable sidecar), which the
-/// head writer's resume reads its hour's origin from. Every time moves
-/// alike, so the file stays monotone; the digit count is kept, so every
-/// line keeps its length and the derived offset array stays true.
-fn age_sidecar(dir: &Path, age: u64) {
+/// One hour, restated from PUB-6.65's time bound ("one hour has passed since
+/// the last head") rather than read off the writer's private constant.
+const HOUR_MILLIS: u64 = 60 * 60 * 1000;
+
+/// Rewrite every recorded `time` at a position AT OR BELOW `through` `age`
+/// milliseconds into the past — the feed's testimony (AUTH-4.56: a
+/// rewritable sidecar), which the head writer's resume reads its hour's
+/// origin from. Every time at or below `through` moves alike and every time
+/// above it stays, so the file stays monotone; the digit count is kept, so
+/// every line keeps its length and the derived offset array stays true.
+fn age_sidecar(dir: &Path, age: u64, through: u64) {
     let path = dir.join("commits.log");
     let text = std::fs::read_to_string(&path).expect("commits.log");
     let mut out = String::with_capacity(text.len());
-    let mut aged = 0;
+    let (mut aged, mut kept) = (0, 0);
     for line in text.lines() {
         let mut line = line.to_string();
-        if let Some(start) = line.find("\"time\":") {
-            let digits = start + "\"time\":".len();
-            let end = line[digits..]
-                .find(|c: char| !c.is_ascii_digit())
-                .map_or(line.len(), |i| digits + i);
-            let time: u64 = line[digits..end].parse().expect("a recorded time");
-            let older = (time - age).to_string();
-            assert_eq!(older.len(), end - digits, "the rewrite keeps every line's length");
-            line.replace_range(digits..end, &older);
-            aged += 1;
+        // An entry line is `{"at":N,…}` — the codec sorts `at` first.
+        let at: Option<u64> = line
+            .strip_prefix("{\"at\":")
+            .map(|rest| rest.chars().take_while(|c| c.is_ascii_digit()).collect::<String>())
+            .and_then(|digits| digits.parse().ok());
+        if let (Some(start), Some(at)) = (line.find("\"time\":"), at) {
+            if at > through {
+                kept += 1;
+            } else {
+                let digits = start + "\"time\":".len();
+                let end = line[digits..]
+                    .find(|c: char| !c.is_ascii_digit())
+                    .map_or(line.len(), |i| digits + i);
+                let time: u64 = line[digits..end].parse().expect("a recorded time");
+                let older = (time - age).to_string();
+                assert_eq!(older.len(), end - digits, "the rewrite keeps every line's length");
+                line.replace_range(digits..end, &older);
+                aged += 1;
+            }
         }
         out.push_str(&line);
         out.push('\n');
     }
     assert!(aged > 0, "the sidecar recorded the head's own commits");
+    assert!(kept > 0, "a commit above `through` keeps its time — the origin the resume must NOT read");
     std::fs::write(&path, out).expect("rewrite commits.log");
 }
 
@@ -225,11 +244,12 @@ fn the_count_trigger_writes_a_head_at_the_64th_non_head_commit() {
     sd.shutdown();
 }
 
-/// (i) — a checkpoint moves the head: with the checkpoint seq moved since the
-/// last head, the next commit writes one (trigger (b)); and a quiet board (no
-/// count, no checkpoint, no clock) writes none.
+/// (i) — a checkpoint moves the head, and ONCE: with the checkpoint seq moved
+/// since the last head, the next commit writes one (trigger (b)) naming it as
+/// its `base`, and the commits after it write none — the head attested it.
+/// And a quiet board (no count, no checkpoint, no clock) writes none.
 #[test]
-fn a_checkpoint_moves_the_head_and_a_quiet_board_writes_none() {
+fn a_checkpoint_moves_the_head_once_and_a_quiet_board_writes_none() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
@@ -277,6 +297,22 @@ fn a_checkpoint_moves_the_head_and_a_quiet_board_writes_none() {
         "base.chain is the chain AT base.seq: {rec}"
     );
     assert_ne!(base_member["chain"], base_member["body_hash"], "and is not the body hash: {rec}");
+
+    // …and it moves the head ONCE. The head just written ATTESTED that
+    // checkpoint, so a quiet board after it writes none. This run, not the
+    // one above, sees trigger (b)'s comparison: before any checkpoint the
+    // trigger has nothing to attest whatever it compares, and a trigger that
+    // asked only "is there a checkpoint?" would write a head on every commit
+    // after the board's first.
+    let attesting = rec["position"].as_u64().unwrap();
+    for i in 1..=5 {
+        commit(port, &owner, CLAIMANT_ACCOUNT);
+        assert_eq!(
+            head_record(port, H).unwrap()["position"].as_u64().unwrap(),
+            attesting,
+            "a checkpoint the last head attested moves no further head (commit {i} after it)"
+        );
+    }
     sd.shutdown();
 }
 
@@ -308,6 +344,77 @@ fn the_time_bound_writes_one_and_never_a_duplicate() {
     let p2 = force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
     assert!(p2 > p1, "the second head's position advanced");
     assert_eq!(expect_latest_head(port)["position"].as_u64().unwrap(), p2);
+    sd.shutdown();
+}
+
+/// (i) — THE TIME BOUND IS ONE HOUR, TO THE MILLISECOND (PUB-6.65; the bound
+/// is `>=`): a landed commit a millisecond short of an hour past the last
+/// head's reading writes no head, and one at the hour exactly does. Both
+/// readings are exact because the last head took its time from the seam.
+/// Every other time-bound test jumps ten million milliseconds, which pins
+/// the bound only to somewhere under 2.8 hours: a bound of one minute, of
+/// two hours, or `>` for `>=`, passes all of them.
+#[test]
+fn the_time_bound_is_one_hour_to_the_millisecond() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let mut clock = clock_origin();
+    // The head takes `clock` — the seam's reading — as its own time.
+    let p = force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
+
+    sd.daemon().set_head_writer_clock_millis(clock + HOUR_MILLIS - 1);
+    commit(port, &owner, CLAIMANT_ACCOUNT);
+    assert_eq!(
+        head_record(port, H).unwrap()["position"].as_u64(),
+        Some(p),
+        "a millisecond short of the hour: no head"
+    );
+    sd.daemon().set_head_writer_clock_millis(clock + HOUR_MILLIS);
+    let at = commit(port, &owner, CLAIMANT_ACCOUNT);
+    assert_eq!(
+        expect_latest_head(port)["position"].as_u64(),
+        Some(at),
+        "at the hour exactly: the head"
+    );
+    sd.shutdown();
+}
+
+/// (i) — A CLOCK THAT STEPS BACK IS TOLERATED (the writer's `Clock`: "a wall
+/// clock that steps is tolerated by the trigger's `saturating_sub` … never a
+/// duplicate"): with the reading an hour BEHIND the last head's, a landed
+/// commit acks as ever and writes no head — the time since the last head is
+/// zero, not an underflow — and the step leaves the writer as it was: once
+/// the reading is past the hour again, the time bound fires. A subtraction
+/// that did not saturate panics under the gate's overflow checks in the turn
+/// AFTER the triggering write committed, answering that write
+/// `500 internal_panic`; wrapping instead, it writes a head on the step.
+#[test]
+fn a_clock_that_steps_back_writes_no_head_and_costs_the_write_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let mut clock = clock_origin();
+    let p = force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
+
+    sd.daemon().set_head_writer_clock_millis(clock - HOUR_MILLIS);
+    commit(port, &owner, CLAIMANT_ACCOUNT); // `commit` asserts the 200 and the ack
+    assert_eq!(
+        head_record(port, H).unwrap()["position"].as_u64(),
+        Some(p),
+        "a clock behind the last head's reading brings no head"
+    );
+    // WELL past the hour, so this cell reads what the step left behind and
+    // not the bound's exact value, which the test above pins.
+    sd.daemon().set_head_writer_clock_millis(clock + A_LONG_WHILE_MILLIS);
+    let at = commit(port, &owner, CLAIMANT_ACCOUNT);
+    assert_eq!(
+        expect_latest_head(port)["position"].as_u64(),
+        Some(at),
+        "the step left the writer as it was: past the hour, the head"
+    );
     sd.shutdown();
 }
 
@@ -397,6 +504,60 @@ fn an_idempotent_replay_lands_nothing_and_counts_nothing_toward_a_head() {
     sd.shutdown();
 }
 
+/// (i) — THE HEAD'S OWN COMMITS NEVER BRING THE NEXT HEAD. They move the
+/// position past the one the head named, but only a commit that is not the
+/// writer's own makes the next head due. Pinned at the one cell that tells
+/// the two apart: the first write after a head LANDS NOTHING (an insert M10
+/// refuses) and the hour has passed — no head. What keeps the head's own
+/// commits from reading as that write's landing is the writer's look at the
+/// kernel's seq after them; without it this refusal would write a head
+/// naming the last head's own publish. The replay test cannot see this: a
+/// landed commit stands between its head and its replays.
+#[test]
+fn the_heads_own_commits_never_bring_the_next_head() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let mut clock = clock_origin();
+    let p = force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
+    let (after_head, _) = health(port);
+    assert!(after_head > p, "the head's own commits landed above the position it names");
+
+    // The hour passes, and the first write after the head lands nothing.
+    clock += A_LONG_WHILE_MILLIS;
+    sd.daemon().set_head_writer_clock_millis(clock);
+    let never = format!("{CLAIMANT_ACCOUNT}.0.99");
+    let refused = op(
+        port,
+        Some(&owner),
+        &format!(
+            r#"{{"op":"insert","doc":"{never}","at":{{"subspace":"1","ordinal":"1"}},"values":["x"]}}"#
+        ),
+    );
+    // M10's own refusal, so the frame passed every daemon gate and rode the
+    // session door — which gives the head writer its turn — before M10
+    // refused it.
+    assert_eq!(
+        expect_resp(&refused, "rejected")["code"].as_str(),
+        Some("doc_not_registered"),
+        "M10 refuses it, inside the door: {refused}"
+    );
+    assert_eq!(
+        head_record(port, H).unwrap()["position"].as_u64(),
+        Some(p),
+        "no head: nothing but the head writer's own commits landed since the last head"
+    );
+    // Read AFTER the head, not before it: a head written here would move the
+    // log by its own commits, and the cause would be misnamed as the refusal.
+    assert_eq!(
+        health(port).0,
+        after_head,
+        "and the log stands where the head's own commits left it: the refusal landed nothing"
+    );
+    sd.shutdown();
+}
+
 /// RESUME — trigger (b)'s reference is read off the head itself (its `base`),
 /// so it survives a restart: a checkpoint taken after the last head, with no
 /// commit between it and the shutdown, is attested by the FIRST commit after
@@ -436,6 +597,43 @@ fn a_checkpoint_taken_before_a_restart_is_attested_by_the_first_head_after_it() 
         rec["base"]["seq"].as_u64(),
         Some(checkpoint_seq),
         "its base names the checkpoint the last head did not: {rec}"
+    );
+    sd.shutdown();
+}
+
+/// RESUME — the other direction of the test above: trigger (b)'s reference is
+/// the last head's `base` AS RESUMED, so a checkpoint that head already
+/// attested moves no head after a restart. The first commit after the reopen
+/// writes none: the newest checkpoint is the one `H`'s latest member names,
+/// the count is one, and the hour is resumed from the head's own entries. A
+/// reference the restart forgot would re-attest it, one head per reopen.
+#[test]
+fn a_checkpoint_the_last_head_attested_moves_no_head_after_a_restart() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut clock = clock_origin();
+
+    let attesting = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let owner = open_session(port, CLAIMANT_PRINCIPAL);
+        force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
+        sd.daemon().checkpoint_now();
+        let at = commit(port, &owner, CLAIMANT_ACCOUNT);
+        let rec = expect_latest_head(port);
+        assert_eq!(rec["position"].as_u64(), Some(at), "the checkpoint's own head");
+        assert!(rec["base"].is_object(), "which attests it: {rec}");
+        sd.shutdown();
+        at
+    };
+
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    commit(port, &owner, CLAIMANT_ACCOUNT);
+    assert_eq!(
+        head_record(port, H).unwrap()["position"].as_u64(),
+        Some(attesting),
+        "a checkpoint the last head attested moves no head after the restart"
     );
     sd.shutdown();
 }
@@ -499,8 +697,10 @@ fn the_commit_count_since_the_last_head_survives_a_restart() {
 /// entries testifying `"system"` above the position it named, and their
 /// recorded `time` is the head's, so the writer resumes the hour's origin
 /// there. Pinned by moving the RECORD rather than the clock: the sidecar —
-/// rewritable testimony, AUTH-4.56 — is rewritten with every `time` two hours
-/// older, the daemon restarted with its clock left alone, and the first
+/// rewritable testimony, AUTH-4.56 — is rewritten with every `time` through
+/// the head's own work two hours older and the commit after it left as
+/// recorded, so only an origin read off the head's OWN entries finds the hour
+/// passed; the daemon is restarted with its clock left alone, and the first
 /// commit writes a head (an hour has passed since the last head AS RECORDED,
 /// though not since open) while the second, under the hour since the new
 /// head, writes none. Measured from open instead, the hour would leave this
@@ -510,20 +710,24 @@ fn the_hour_since_the_last_head_survives_a_restart() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut clock = clock_origin();
 
-    let head_position = {
+    let (head_position, head_work_through) = {
         let sd = spawn(dir.path());
         let port = sd.port();
         let owner = open_session(port, CLAIMANT_PRINCIPAL);
         let p = force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
-        // One more commit, so the head's own entries are not the feed's last:
-        // the origin is read off the head's OWN "system" entry, not the head
-        // position's time.
+        // The head's own last commit — its publish — is where the request
+        // that wrote it leaves the board.
+        let (through, _) = health(port);
+        // One more commit, so the head's own entries are not the feed's last
+        // — and this one keeps its REAL time below, so an origin read off the
+        // feed's last entry rather than the head's OWN "system" entries would
+        // find the hour not yet passed.
         commit(port, &owner, CLAIMANT_ACCOUNT);
         assert_eq!(head_record(port, H).unwrap()["position"].as_u64().unwrap(), p);
         sd.shutdown();
-        p
+        (p, through)
     };
-    age_sidecar(dir.path(), TWO_HOURS_MILLIS);
+    age_sidecar(dir.path(), TWO_HOURS_MILLIS, head_work_through);
 
     let sd = spawn(dir.path());
     let port = sd.port();
@@ -590,6 +794,37 @@ fn a_restarted_writer_finds_the_staging_draft_it_minted_and_mints_no_other() {
         second_head_cost + mint_cost,
         first_head_cost,
         "the second uptime's head minted no draft: it reused the one the first minted"
+    );
+    sd.shutdown();
+}
+
+/// The staging draft is minted ONCE FOR THE LIFE OF THE BOARD — the half the
+/// restart test above cannot see, since it writes one head per uptime: three
+/// heads in ONE uptime leave exactly one document under the system account
+/// beyond the seed's two. `1.1.0.1.0.3` is the draft — registered and
+/// private, so the guest is `withheld` — and `1.1.0.1.0.4` was never minted,
+/// so the guest is told `doc_not_registered`. Named rather than measured: a
+/// writer that forgot the draft it minted this uptime would mint a private
+/// document per head for as long as it runs, and no guest-visible entry
+/// would name one.
+#[test]
+fn every_head_in_one_uptime_reuses_the_one_staging_draft() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let mut clock = clock_origin();
+
+    for _ in 0..3 {
+        force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
+    }
+    assert!(head_record(port, &head_member(3)).is_some(), "three heads were written");
+    assert_withheld(&doc_metadata(port, None, STAGING_DRAFT), STAGING_DRAFT);
+    let next = doc_metadata(port, None, "1.1.0.1.0.4");
+    assert_eq!(
+        expect_resp(&next, "rejected")["code"].as_str(),
+        Some("doc_not_registered"),
+        "the heads minted no second document under the system account: {next}"
     );
     sd.shutdown();
 }
@@ -668,6 +903,51 @@ fn a_peer_re_reads_a_saved_head_byte_equal_and_walks_prev() {
         cur = lower;
         k -= 1;
     }
+    sd.shutdown();
+}
+
+/// (iii′) — EVERY HEAD'S OWN PAIR IS WHAT THE BOARD RECOMPUTES (wire.md §The
+/// other endpoints: "a saved pair — a head's own `(position, chain)` … — is
+/// checked against the board's RECOMPUTATION at `GET /chain?at=<position>`"):
+/// for every member `H.k`, `/chain?at=` its `position` answers its `chain`,
+/// and `/chain?at=` its `base.seq` answers its `base.chain`. Every other pin
+/// on a head's OWN chain is relational and blind to a wrong value: two boards
+/// under one seed name one wrong value, two seeds two, `prev` copies it
+/// faithfully, and it still differs from `/health` after the head's commits.
+/// `H.1` is in the set on purpose — that head alone mints the staging draft
+/// between reading its pair and writing its record.
+#[test]
+fn every_head_names_the_pair_the_boards_recomputation_answers() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let mut clock = clock_origin();
+
+    force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock); // H.1: mints the draft
+    sd.daemon().checkpoint_now();
+    commit(port, &owner, CLAIMANT_ACCOUNT); // H.2: the checkpoint's, naming a base
+    force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock); // H.3
+    for k in 1..=3u64 {
+        let rec = head_record(port, &head_member(k)).unwrap_or_else(|| panic!("H.{k} exists"));
+        let position = rec["position"].as_u64().expect("position");
+        assert_eq!(
+            rec["chain"].as_str().map(str::to_string),
+            chain_at(port, position),
+            "H.{k} names the chain the board recomputes AT its position: {rec}"
+        );
+        if let Some(seq) = rec["base"]["seq"].as_u64() {
+            assert_eq!(
+                rec["base"]["chain"].as_str().map(str::to_string),
+                chain_at(port, seq),
+                "H.{k}'s base names the chain the board recomputes at its seq: {rec}"
+            );
+        }
+    }
+    assert!(
+        head_record(port, &head_member(2)).expect("H.2")["base"].is_object(),
+        "the set includes a head that names a base"
+    );
     sd.shutdown();
 }
 
@@ -932,8 +1212,9 @@ fn chain_at(port: u16, at: u64) -> Option<String> {
     }
 }
 
-/// One board's witness for the two pins below: the same three commits then a
-/// forced head, under `seed`.
+/// One board's witness for the three pins below: the same three commits then
+/// a forced head — through the seeded seam under `Some(seed)`, through the
+/// production door (`spawn`, OS entropy) under `None`.
 struct Board {
     /// The triggering commit's acked position — what the head names.
     trigger: u64,
@@ -945,8 +1226,11 @@ struct Board {
     bytes: String,
 }
 
-fn board_under(dir: &Path, seed: u64) -> Board {
-    let sd = spawn_seeded(dir, seed);
+fn board_under(dir: &Path, seed: Option<u64>) -> Board {
+    let sd = match seed {
+        Some(seed) => spawn_seeded(dir, seed),
+        None => spawn(dir),
+    };
     let port = sd.port();
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
     let mut clock = clock_origin();
@@ -978,14 +1262,15 @@ const HEAD_POSITION: u64 = 24;
 /// carries, in the preimage and never in the record, and the seeded source
 /// (`spawn_seeded`, the daemon's test seam) makes it a function of the
 /// position alone. Under the production door's OS entropy two boards write
-/// two chains, which the next test pins. The positions are what they were
-/// before the salt: it adds no record.
+/// two chains, which `two_production_daemons_over_one_sequence_write_two_chains`
+/// pins — the next test pins two SEEDS, through the seam. The positions are
+/// what they were before the salt: it adds no record.
 #[test]
 fn two_daemons_over_one_sequence_write_byte_identical_heads() {
     let a = tempfile::tempdir().expect("tempdir");
     let b = tempfile::tempdir().expect("tempdir");
-    let a = board_under(a.path(), ONE_SEED);
-    let b = board_under(b.path(), ONE_SEED);
+    let a = board_under(a.path(), Some(ONE_SEED));
+    let b = board_under(b.path(), Some(ONE_SEED));
     assert_eq!(a.bytes, b.bytes, "one op sequence under one seed writes one head byte string");
     assert_eq!((a.trigger, a.head), (b.trigger, b.head), "one pair of positions");
     assert_eq!(a.chains, b.chains, "one chain at every committed position");
@@ -1009,8 +1294,8 @@ fn two_daemons_over_one_sequence_write_byte_identical_heads() {
 fn two_daemons_under_two_seeds_differ_in_every_chain_value_and_in_the_head() {
     let a = tempfile::tempdir().expect("tempdir");
     let b = tempfile::tempdir().expect("tempdir");
-    let a = board_under(a.path(), ONE_SEED);
-    let b = board_under(b.path(), OTHER_SEED);
+    let a = board_under(a.path(), Some(ONE_SEED));
+    let b = board_under(b.path(), Some(OTHER_SEED));
     assert_eq!((a.trigger, a.head), (b.trigger, b.head), "the salt moves no position");
     assert_eq!((a.trigger, a.head), (TRIGGER_POSITION, HEAD_POSITION), "a position moved: STOP");
     let positions_a: Vec<u64> = a.chains.iter().map(|(at, _)| *at).collect();
@@ -1029,4 +1314,29 @@ fn two_daemons_under_two_seeds_differ_in_every_chain_value_and_in_the_head() {
     assert_eq!(ra["position"], rb["position"]);
     assert_eq!(ra["format"], rb["format"], "one stamp");
     assert_ne!(ra["chain"], rb["chain"], "the heads' chains differ: the salt is in the preimage");
+}
+
+/// (viii″) — THE PRODUCTION DOOR DRAWS ITS SALT FROM THE OS (`SKJ4`;
+/// `Daemon::open_with`, which takes no source): two daemons spawned through
+/// it and driven through ONE op sequence write two chains, differing at
+/// every committed position, at the positions the salt never moves. The
+/// seam's two pins cannot see this cell — a door that opened under a FIXED
+/// seed still writes one chain under one seed and two under two — and a
+/// fixed seed defeats the salt outright: a chain that is a function of its
+/// position alone confirms guesses at a transaction's bytes to any reader of
+/// the token-blind `/chain?at=N` (wire.md §Reading history).
+#[test]
+fn two_production_daemons_over_one_sequence_write_two_chains() {
+    let a = tempfile::tempdir().expect("tempdir");
+    let b = tempfile::tempdir().expect("tempdir");
+    let a = board_under(a.path(), None);
+    let b = board_under(b.path(), None);
+    assert_eq!((a.trigger, a.head), (TRIGGER_POSITION, HEAD_POSITION), "a position moved: STOP");
+    assert_eq!((b.trigger, b.head), (TRIGGER_POSITION, HEAD_POSITION), "a position moved: STOP");
+    let positions = |board: &Board| board.chains.iter().map(|(at, _)| *at).collect::<Vec<u64>>();
+    assert_eq!(positions(&a), positions(&b), "the same committed positions on both boards");
+    for ((at, x), (_, y)) in a.chains.iter().zip(&b.chains) {
+        assert_ne!(x, y, "two production boards wrote one chain value at position {at}");
+    }
+    assert_ne!(a.bytes, b.bytes, "two production boards, two head byte strings");
 }

@@ -507,7 +507,8 @@ fn edition_claims_filters_rows_by_readable_home() {
 }
 
 /// §7 item 5 — the four class-varying routes carry `Cache-Control: no-store`
-/// and `Vary: Skepd-Session`; `/health` (class-invariant) carries neither.
+/// and `Vary: Skepd-Session`; `/health` and `/chain` (class-invariant) carry
+/// neither.
 #[test]
 fn the_four_class_varying_routes_carry_the_cache_headers() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -547,6 +548,12 @@ fn the_four_class_varying_routes_carry_the_cache_headers() {
     let (_s, h, _b) = http_full(port, "GET", "/health", None, b"");
     assert_eq!(header(&h, "Cache-Control"), None, "/health carries no Cache-Control");
     assert_eq!(header(&h, "Vary"), None, "/health carries no Vary");
+    // /chain is class-invariant too (wire.md §Reading history), presented
+    // WITH a token, so the negative is about the route and not a missing one.
+    let (s, h, b) = http_full(port, "GET", &format!("/chain?at={at}"), Some(&owner), b"");
+    assert_eq!(s, 200, "/chain answers at the head: {}", String::from_utf8_lossy(&b));
+    assert_eq!(header(&h, "Cache-Control"), None, "/chain carries no Cache-Control");
+    assert_eq!(header(&h, "Vary"), None, "/chain carries no Vary");
     sd.shutdown();
 }
 

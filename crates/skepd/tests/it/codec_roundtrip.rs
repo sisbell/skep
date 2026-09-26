@@ -1124,8 +1124,8 @@ fn reject_code_names_are_pinned() {
     // Every other code the document lists must be pinned here. The reverse
     // is deliberately NOT asserted: a name `code_name` can emit before
     // wire.md tables it — `too_many_values`, M5's publish re-insert budget,
-    // is one today — is a documentation debt for the document's owner, not a
-    // table error.
+    // was one until the small-fixes lane tabled it (2026-09-25) — is a
+    // documentation debt for the document's owner, not a table error.
     let documented = documented_reject_codes();
     let pinned: std::collections::HashSet<&str> = table.iter().map(|&(_, n)| n).collect();
     for name in &documented {

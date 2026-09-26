@@ -19,41 +19,47 @@ use proptest::test_runner::FileFailurePersistence;
 use skep_address::Address;
 use skep_identity::{
     encode_enroll, encode_retire, parse_enroll, parse_retire, Effect, Enrollment, Fingerprint,
-    IdentityState, PublicKey, Verdict,
+    IdentityState, Verdict,
 };
 
 // ------------------------------------------------------------- I1 grammar
 
 /// A NON-EMPTY, DUPLICATE-FREE `Vec<Enrollment>` — the record domain per entry:
-/// `anchor` flag included, labels via `Enrollment::new`, and the label
-/// generator `.+` (any non-newline text, so labels ending in 0x20 or carrying
-/// `"`, `\`, a tab or a control char are generated, not dodged — AUTH-2.89
-/// forbids narrowing to dodge them).
+/// the key's `ALGS` row drawn per entry (the classical key and, since signed
+/// ops, both hybrid arms — `KeyKind::from_draw`), `anchor` flag included,
+/// labels via `Enrollment::new`, and the label generator `.+` (any
+/// non-newline text, so labels ending in 0x20 or carrying `"`, `\`, a tab or
+/// a control char are generated, not dodged — AUTH-2.89 forbids narrowing to
+/// dodge them).
 fn enrollments() -> impl Strategy<Value = Vec<Enrollment>> {
-    prop::collection::vec((any::<[u8; 32]>(), any::<bool>(), prop::option::of(".+")), 1..8)
-        .prop_map(|raws| {
-            let mut out: Vec<Enrollment> = Vec::new();
-            for (raw, anchor, label) in raws {
-                let key = PublicKey::Ed25519(raw);
-                // One entry per key: a record repeating a fingerprint is
-                // DuplicateKey (AUTH-2.15), outside the record domain.
-                if out.iter().any(|e| e.key == key) {
-                    continue;
-                }
-                out.push(Enrollment::new(key, anchor, label).expect("generator labels have no newline"));
+    prop::collection::vec(
+        (any::<[u8; 32]>(), 0..3u8, any::<bool>(), prop::option::of(".+")),
+        1..8,
+    )
+    .prop_map(|raws| {
+        let mut out: Vec<Enrollment> = Vec::new();
+        for (seed, kind, anchor, label) in raws {
+            let key = key_from_seed(KeyKind::from_draw(kind), seed);
+            // One entry per key: a record repeating a fingerprint is
+            // DuplicateKey (AUTH-2.15), outside the record domain.
+            if out.iter().any(|e| e.key == key) {
+                continue;
             }
-            out
-        })
-        .prop_filter("at least one entry", |v| !v.is_empty())
+            out.push(Enrollment::new(key, anchor, label).expect("generator labels have no newline"));
+        }
+        out
+    })
+    .prop_filter("at least one entry", |v| !v.is_empty())
 }
 
-/// A NON-EMPTY, DUPLICATE-FREE `Vec<Fingerprint>` — the retirement record domain.
+/// A NON-EMPTY, DUPLICATE-FREE `Vec<Fingerprint>` — the retirement record
+/// domain, the fingerprints of keys of every row.
 fn retire_fps() -> impl Strategy<Value = Vec<Fingerprint>> {
-    prop::collection::vec(any::<[u8; 32]>(), 1..8)
+    prop::collection::vec((any::<[u8; 32]>(), 0..3u8), 1..8)
         .prop_map(|raws| {
             let mut out: Vec<Fingerprint> = Vec::new();
-            for raw in raws {
-                let f = Fingerprint::of(&PublicKey::Ed25519(raw));
+            for (seed, kind) in raws {
+                let f = Fingerprint::of(&key_from_seed(KeyKind::from_draw(kind), seed));
                 if !out.contains(&f) {
                     out.push(f);
                 }
@@ -167,14 +173,17 @@ impl ActKind {
     }
 }
 
-/// One scripted deposit, pre-materialization.
+/// One scripted deposit, pre-materialization. Each enrolled key and each
+/// retired fingerprint names its `ALGS` row beside its index, so a stream
+/// enrols and retires keys of every row (the hybrid arms since signed ops),
+/// and a retirement drawn at an enrolled key's row and index names that key.
 #[derive(Debug, Clone)]
 struct Act {
     kind: ActKind,
     subject_index: usize,
     home_index: usize,
-    enroll_entries: Vec<(u8, bool)>,
-    retire_indices: Vec<u8>,
+    enroll_entries: Vec<(KeyKind, u8, bool)>,
+    retire_indices: Vec<(KeyKind, u8)>,
 }
 
 const ACCOUNTS: [&[u32]; 5] = [CLAIMANT, ORG, NESTED, ACCT_A, ACCT_B];
@@ -202,15 +211,21 @@ fn act_strategy() -> impl Strategy<Value = Act> {
         0..4u8,
         0..ACCOUNTS.len(),
         0..homes().len(),
-        prop::collection::vec((0..6u8, any::<bool>()), 0..4),
-        prop::collection::vec(0..6u8, 0..4),
+        prop::collection::vec((0..3u8, 0..6u8, any::<bool>()), 0..4),
+        prop::collection::vec((0..3u8, 0..6u8), 0..4),
     )
         .prop_map(|(kind, subject_index, home_index, enroll_entries, retire_indices)| Act {
             kind: ActKind::from_draw(kind),
             subject_index,
             home_index,
-            enroll_entries,
-            retire_indices,
+            enroll_entries: enroll_entries
+                .into_iter()
+                .map(|(row, i, anchor)| (KeyKind::from_draw(row), i, anchor))
+                .collect(),
+            retire_indices: retire_indices
+                .into_iter()
+                .map(|(row, i)| (KeyKind::from_draw(row), i))
+                .collect(),
         })
 }
 
@@ -230,10 +245,10 @@ fn materialize(fx: &mut Fixture, act: &Act) -> Case {
     let (home, home_account, home_doc_one) = homes()[act.home_index].clone();
     let dep = match act.kind {
         ActKind::Enroll => {
-            fx.enroll_dep(&home, subject_comps, &enroll_payload(&act.enroll_entries))
+            fx.enroll_dep(&home, subject_comps, &enroll_payload_of(&act.enroll_entries))
         }
         ActKind::Retire => {
-            fx.retire_dep(&home, subject_comps, &retire_payload(&act.retire_indices))
+            fx.retire_dep(&home, subject_comps, &retire_payload_of(&act.retire_indices))
         }
         ActKind::Claim => fx.claim_dep(&home, subject_comps),
         ActKind::Noise => {

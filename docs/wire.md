@@ -60,12 +60,17 @@ system's actor: principal `0` is the bootstrap principal, which owns the
 root of the namespace; any other principal must first be minted with a
 `delegate` operation before its writes will be accepted by the stores.
 Each distinct principal is its own account, so every write is attributed.
-A **credential** is an Ed25519 public key enrolled for an account
-(§The claim ceremony and credentials): keys ride the wire as 64 lowercase
-hex of the raw key, and a key is named by its **fingerprint** — 64
-lowercase hex of `SHA-256("skep-key-v1" ‖ be32-framed alg token ‖
-be32-framed raw key)` — the flat form every identity surface below emits
-(grouping is a client display convention).
+A **credential** is a public key enrolled for an account, of one of the
+three `ALGS` kinds §The claim ceremony and credentials lists: a classical
+`ed25519` key (32 raw bytes), or one of the two HYBRID keys —
+`mldsa65-ed25519` (ML-DSA-65 + Ed25519, 1,984 raw bytes) and
+`fndsa512-preview-ed25519` (FN-DSA-512 + Ed25519, 929 raw bytes) — each
+ONE key over one concatenated raw value, the post-quantum key then the
+Ed25519 key. Keys ride the wire as lowercase hex of the raw key (64 hex
+for a classical key, 3,968 and 1,858 for the hybrids), and a key is named
+by its **fingerprint** — 64 lowercase hex of `SHA-256("skep-key-v1" ‖
+be32-framed alg token ‖ be32-framed raw key)` — the flat form every
+identity surface below emits (grouping is a client display convention).
 
 The board is always in exactly one of three MODES, derived from two facts
 `GET /health` publishes (`auth.claimant` and `auth.local_trust` — there
@@ -458,8 +463,8 @@ Rules:
   token-accepting routes: `POST /op`, `POST /op-at`, `GET /changes`,
   `GET /dump`, `POST /session/close`, and `GET /events` — checked
   before the stream opens, the header written once on the stream head.
-  `GET /health`, `GET /challenge`, `POST /session` and `GET /` are
-  token-blind.
+  `GET /health`, `GET /chain`, `GET /challenge`, `POST /session` and
+  `GET /` are token-blind.
 * **Refused-for-this-request is not death.** A LIVE bare session
   presented from a request whose `Origin` header falls outside the bare
   set (or from a non-loopback peer) runs that one request as a guest:
@@ -1210,37 +1215,62 @@ source gate, and since v7.4 every READ's document-argument consult
 (§The read predicate); the one code of this family whose disposition is
 reorder, carrying `site.addr` (the document) and never a `detail` —
 `bad_run`, `base_not_in_chain`, `base_superseded`,
-`base_extent_too_large`; and two more of M5's — `not_link_address`
+`base_extent_too_large`; and three more of M5's — `not_link_address`
 (the seat op's link argument names a full element position rather
-than a link address; M5 §8) and `too_many_runs` (a placement past M5's
+than a link address; M5 §8), `too_many_runs` (a placement past M5's
 `MAX_PLACED_RUNS` = 65536 runs — permanent; the publish table below
-carries it too).
+carries it too) and `too_many_values` (a shot whose draft-native runs
+re-insert more than M5's `MAX_REINSERTED_VALUES` = 131072 values, their
+widths summed — arithmetic on the request, asked after the source gate
+and ahead of existence; permanent, a shot cannot be split to meet it;
+the publish table carries it too).
 
 Links: `ill_formed_spec`, `empty_type_resolution`, `shape_violation`,
 `retraction_class`, `non_address_denoting_type`, `bad_target`,
 `self_supersession`, `ill_formed_successor`, `dc_violation`,
-`slot_too_large` (a slot past M7's per-slot span budget
-`MAX_SLOT_SPANS` = 4096 spans, in either form — the three slots of a
-make-link, the to-slot of an emit, and the successor slots of an
-edit-link, the last naming the slot in `site.slot`; permanent — no
-retry shrinks a slot).
+`slot_too_large` (a slot past either of M7's two per-slot budgets: more
+than `MAX_SLOT_SPANS` = 4096 spans, in either form — the three slots of a
+make-link, the to- and type-slots of an emit, and the successor slots of
+an edit-link, the last naming the slot in `site.slot` — or, for a
+make-link slot in the V-spec form, specs commanding more than
+`MAX_SLOT_RESOLVE_STEPS` = 262144 run-list steps, each spec charged its
+source's whole run count ahead of its walk, so a spec aimed past its
+source's arranged end is refused for the work it would do while keeping
+no span; one code for both causes, told apart by the store's message;
+permanent — no retry shrinks a slot).
 
 Content/provenance reads: `no_such_subspace`, `empty_subspace`,
 `depth_incompatible`, `range_not_present`, `malformed_span`, and M6's
-three budgets — `too_many_blocks` (a compare operand resolves to more
-than `MAX_COMPARE_OPERAND_BLOCKS` = 4096 blocks; refused before the join
-runs), `too_many_pairs` (the report would exceed `MAX_COMPARE_PAIRS` =
-65536 correspondences), `too_much_coverage` (the find family's request
-materializes more than `MAX_FIND_COVERAGE_SPANS` = 4096 coverage
-spans); all permanent — no retry shrinks the request.
+three budgets — `too_many_blocks` (a compare operand passes
+`MAX_COMPARE_OPERAND_BLOCKS` = 4096 on either of its two counts: more
+spans handed to the arrangement, one resolution walk apiece whatever it
+yields, or more blocks resolved; refused as the operand resolves, ρ₁
+first, and before the join runs), `too_many_pairs` (the report would
+exceed `MAX_COMPARE_PAIRS` = 65536 correspondences), `too_much_coverage`
+(the find family's request passes `MAX_FIND_COVERAGE_SPANS` = 4096 on
+either of its two counts: more region spans handed to the arrangement or
+more coverage spans produced; refused as the request resolves, before
+the candidate scan runs); all permanent — no retry shrinks the request.
 
-Link-discovery reads: `not_a_link`, `bad_region`, `image_too_large`
-(the arrangement I-runs a request would materialize — the region's
-image on the region family, the document's whole arrangement on the
-project and discoverable-from reads — exceed M8's `MAX_IMAGE_RUNS` =
-4096), `endsets_too_large` (a retrieve-endsets answer would carry more than
-M8's `MAX_ENDSET_SPANS` = 65536 spans — the one budget priced on what
-the store hands back rather than on what the request names).
+Link-discovery reads: `not_a_link`, `bad_region`, `image_too_large` (a
+read past M8's run budget `MAX_IMAGE_RUNS` = 4096, or past the product
+its own join is held to — each read counting the runs its own work
+multiplies: on the region family — image, find-links-v, count-v,
+window-v, retrieve-endsets — the run-list walk the region asks of the
+arrangement past `MAX_IMAGE_RUNS`² = 16777216 steps, or the runs the
+region's spans could yield, priced ahead of each span's resolution, past
+4096; on the project read, the reading surface's content runs past 4096,
+or the coverage × run product — the answer's pre-normalization size —
+past `MAX_ANSWER_SPANS` = 65536; on the discoverable-from read, the
+reading surface's content and link runs past 4096, or the link's whole
+coverage × run product past `MAX_IMAGE_RUNS`²; and on the delete-orphans
+preview, the document's own runs as the range splits them — content and
+link, plus a piece for each run an end of the range cuts — past 4096,
+the preview's own refusal lowered to this code), `endsets_too_large` (a
+retrieve-endsets answer would carry more than M8's `MAX_ANSWER_SPANS` =
+65536 spans — the answer budget, priced on what the store hands back
+rather than on what the request names; the project read's join product
+is held at the same number and answers `image_too_large`).
 
 The supersession-class fence — M7's `[K_sup]` sole-writer rule, a
 make-link or emit whose resolved type lands in the supersession
@@ -1348,9 +1378,12 @@ empty member.
 of a bare DOCUMENT address answers the document's trunk HEAD — the
 latest trunk member — and never the pre-chain arrangement a shot
 superseded: `retrieve_v`, `retrieve_doc_v_span`,
-`retrieve_doc_v_span_set`, `show_origin`, `compare`, and the whole
-region family — `image`, `find_links_v`, `count_v`, `window_v`,
-`retrieve_endsets`; `version` of a bare address shares the head's
+`retrieve_doc_v_span_set`, `show_origin`, `compare`, the whole region
+family — `image`, `find_links_v`, `count_v`, `window_v`,
+`retrieve_endsets` — and the pointwise pair, `project` and
+`discoverable_from`, which read the link against the arrangement a
+reader of `d` sees, so a projection's V-coordinates are the head's, as
+`image`'s are; `version` of a bare address shares the head's
 arrangement. Daughters never float: the bare address is the trunk's.
 A VERSION address answers its own member, forever. A memberless
 published document answers its own arrangement — the pin taken here:
@@ -1360,9 +1393,9 @@ carries what the client re-supplies of it. A private document is
 untouched: it has no chain, and a stamped member under one does not
 move it. The registration check runs on the address named, ahead of
 the float (PUB-6.37). NOT floated, pinned as the seam it is:
-`show_deletions`, `find_docs_containing`, `project`,
-`discoverable_from`, `delete_orphans`, and `copy`'s source spans read
-the address named — a client comparing versions names the members.
+`show_deletions`, `find_docs_containing`, `delete_orphans`, and `copy`'s
+source spans read the address named — a client comparing versions names
+the members.
 
 **The deposit cell** (PUB-2.65, PUB-2.66). A declared deposit into a
 published chain — `insert` with `deposit` naming a deposit-class type
@@ -1405,6 +1438,7 @@ commits nothing:
 | `base_superseded` | permanent | — | `doc` already has a member and the shot names the memberless base (or none) |
 | `base_extent_too_large` | permanent | — | `base_extent` exceeds the base's arranged content count |
 | `withheld` | reorder | `addr` = the origin's document | a run's origin is not readable to the session principal |
+| `too_many_values` | permanent | — | the draft-native runs' widths, summed, exceed the shot's re-insert budget (M5's `MAX_REINSERTED_VALUES` = 131072 values) — arithmetic on the request, asked ahead of existence |
 | `dangling_source` | permanent | — | an address a run names holds no value |
 | `too_many_runs` | permanent | — | the placement exceeds the arrangement's run budget |
 
@@ -2267,10 +2301,21 @@ A query whose four-set constrains `ty` and NO other slot — `home`, `from`
 and `to` all `"any"` — enumerates a whole type class: the design's
 directory shape, `{ty: T_grant, home/from/to: any}` (PUB-6.54) and its
 siblings (PUB-6.55, PUB-6.56), where the daemon pays a per-candidate home
-test over every link of the class and the home-granular skip cannot reach
-it. Such a request is a CLASS SCAN, and it is a SHAPE, not a type list:
-any class queried that way is one, and the all-`"any"` query — the whole
-store — is one too, being that shape's superset. `/op` admits at most
+test over every link of the class. THE COST AS BUILT: constraining `home`
+narrows none of that walk. A home-constrained `find_links_ftt`,
+`count_ftt` or `window_ftt` is served by the same scan of the link
+store's whole ACTIVE slice, driven by its link-slot constraints (`from`,
+`to`, `ty`; none constrained is the whole slice), the `home` slot a
+per-link residence post-filter behind it — so its cost is the board's
+active links (the class's, where `ty` is constrained), never the home's.
+No home-granular skip exists at this build; a later performance lane
+builds one (an index of links by home, and the skip in the descriptor
+scan), and until it lands a home-constrained query pays what the class
+scan pays while the bound below counts the SHAPE alone. Such a request —
+`ty` constrained, the rest `"any"` — is a CLASS SCAN, and it is a SHAPE,
+not a type list: any class queried that way is one, and the all-`"any"`
+query — the whole store — is one too, being that shape's superset. `/op`
+admits at most
 **`MAX_CONCURRENT_CLASS_SCANS` = 2** class scans at once, across
 `find_links_ftt`, `count_ftt` and `window_ftt` alike, across every type
 class, and across every session and the guest — one pool for the board,

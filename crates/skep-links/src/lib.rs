@@ -49,11 +49,15 @@
 //! `link_lock_key`. The type registry every gate and fold reads is the
 //! module's own compiled constant, [`registry`], so an assembler that needs it
 //! (M9's catalog, the world dump) shares that one value rather than building a
-//! second from the same constants. The one thing a caller THREADS IN is its
-//! [`Visibility`] class (PUB round 2, lane 3.3b): the write handle takes the
-//! caller's read predicate at construction, and the value-keyed gates
-//! (idempotency, `assert_sup`'s dedup) see only the incumbents that
-//! predicate admits at link-home identity — M7 names no principal.
+//! second from the same constants. A caller THREADS IN two values, and M7
+//! interprets neither. Its [`Visibility`] class (PUB round 2, lane 3.3b):
+//! the write handle takes the caller's read predicate at construction, and
+//! the value-keyed gates (idempotency, `assert_sup`'s dedup) see only the
+//! incumbents that predicate admits at link-home identity — M7 names no
+//! principal. And, since signed ops, the ATTESTATION its `makelink` commits
+//! under ([`LinkWriter::attested`]; `None` through [`LinkWriter::new`]):
+//! handed to the kernel's attested arm at that one transaction's commit
+//! marker, and read by no gate, no fold and no index here.
 
 #![forbid(unsafe_code)]
 

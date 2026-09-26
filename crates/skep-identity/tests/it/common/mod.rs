@@ -9,10 +9,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use sha2::{Digest, Sha256};
 use skep_address::{is_prefix, subtree_of, validate, Address, Nat, Span, Tumbler};
 use skep_identity::{
     encode_enroll, encode_retire, Effect, Enrollment, Fingerprint, FoldCtx, IdentityState,
-    LinkDeposit, Owner, PublicKey, TypeAddrs, Values, Verdict,
+    LinkDeposit, Owner, PublicKey, TypeAddrs, Values, Verdict, FNDSA512_ED25519_KEY_LEN,
+    MLDSA65_ED25519_KEY_LEN,
 };
 
 // ---------------------------------------------------------------- builders
@@ -309,6 +311,99 @@ pub fn enroll_payload(entries: &[(u8, bool)]) -> Vec<u8> {
 
 pub fn retire_payload(indices: &[u8]) -> Vec<u8> {
     let fps: Vec<Fingerprint> = indices.iter().map(|&i| fp(i)).collect();
+    encode_retire(&fps).into_bytes()
+}
+
+// ------------------------------------------------------------ hybrid keys
+
+/// The three `ALGS` rows as a test draw: the classical key and, since signed
+/// ops, the two hybrid arms. Matched exhaustively wherever a kind picks a
+/// constructor, so a fourth row states its own arm here rather than falling
+/// into the classical one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyKind {
+    Ed25519,
+    MlDsa65Ed25519,
+    FnDsa512PreviewEd25519,
+}
+
+impl KeyKind {
+    /// Every row, in `ALGS` order.
+    pub const ALL: [KeyKind; 3] = [
+        KeyKind::Ed25519,
+        KeyKind::MlDsa65Ed25519,
+        KeyKind::FnDsa512PreviewEd25519,
+    ];
+
+    /// A strategy's `0..3` draw, mapped in ONE place.
+    pub fn from_draw(n: u8) -> KeyKind {
+        match n % 3 {
+            0 => KeyKind::Ed25519,
+            1 => KeyKind::MlDsa65Ed25519,
+            _ => KeyKind::FnDsa512PreviewEd25519,
+        }
+    }
+}
+
+/// Deterministic raw key bytes of width `N` from a 32-byte seed: SHA-256 in
+/// counter mode over a fixed label — this crate's one primitive, so the
+/// suite links no KDF crate (skepd's goldens derive theirs through its HKDF
+/// pin; what this suite pins is the ENCODING of the bytes an arm holds,
+/// which no key decode reaches, AUTH-1.4). Every byte varies with its
+/// position, so a pin over these bytes sees a reordering or a truncation.
+pub fn expand_seed<const N: usize>(seed: &[u8; 32]) -> Box<[u8; N]> {
+    let mut out = Box::new([0u8; N]);
+    for (k, chunk) in out.chunks_mut(32).enumerate() {
+        let mut h = Sha256::new();
+        h.update(b"skep-identity-test-key");
+        h.update(seed);
+        h.update((k as u32).to_be_bytes());
+        let digest = h.finalize();
+        chunk.copy_from_slice(&digest[..chunk.len()]);
+    }
+    out
+}
+
+/// The key of `kind` a 32-byte seed names: the classical key IS the seed's
+/// bytes (so the classical row of this is [`key`]), a hybrid key the seed
+/// expanded to its row's raw width.
+pub fn key_from_seed(kind: KeyKind, seed: [u8; 32]) -> PublicKey {
+    match kind {
+        KeyKind::Ed25519 => PublicKey::Ed25519(seed),
+        KeyKind::MlDsa65Ed25519 => {
+            PublicKey::MlDsa65Ed25519(expand_seed::<MLDSA65_ED25519_KEY_LEN>(&seed))
+        }
+        KeyKind::FnDsa512PreviewEd25519 => {
+            PublicKey::FnDsa512PreviewEd25519(expand_seed::<FNDSA512_ED25519_KEY_LEN>(&seed))
+        }
+    }
+}
+
+/// Deterministic test key `i` of `kind` — [`key`] at the classical row.
+pub fn key_of(kind: KeyKind, i: u8) -> PublicKey {
+    key_from_seed(kind, [i; 32])
+}
+
+pub fn fp_of(kind: KeyKind, i: u8) -> Fingerprint {
+    Fingerprint::of(&key_of(kind, i))
+}
+
+pub fn enrollment_of(kind: KeyKind, i: u8, anchor: bool) -> Enrollment {
+    Enrollment::new(key_of(kind, i), anchor, None).expect("label-free enrollment")
+}
+
+/// [`enroll_payload`] over keys of any row.
+pub fn enroll_payload_of(entries: &[(KeyKind, u8, bool)]) -> Vec<u8> {
+    let enrollments: Vec<Enrollment> = entries
+        .iter()
+        .map(|&(kind, i, anchor)| enrollment_of(kind, i, anchor))
+        .collect();
+    encode_enroll(&enrollments).into_bytes()
+}
+
+/// [`retire_payload`] over fingerprints of any row.
+pub fn retire_payload_of(entries: &[(KeyKind, u8)]) -> Vec<u8> {
+    let fps: Vec<Fingerprint> = entries.iter().map(|&(kind, i)| fp_of(kind, i)).collect();
     encode_retire(&fps).into_bytes()
 }
 

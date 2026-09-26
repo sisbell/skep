@@ -2147,6 +2147,49 @@ fn key_set_checkpoint_encoding_is_pinned() {
     );
 }
 
+/// AUTH-1.40 under signed ops — the two HYBRID arms' checkpoint bytes,
+/// beside the classical pin above, which covers `PublicKey`'s variant `0`
+/// alone. An enrolled row's value opens on the arm's variant index (`1` for
+/// tag 1's `mldsa65-ed25519`, `2` for tag 3's `fndsa512-preview-ed25519`),
+/// then the raw key as a TUPLE of its row's width — the post-quantum key
+/// then the Ed25519 key, no length prefix, the form the derive gives a
+/// `[u8; 32]` — then the anchor flag; the `Box` an arm holds leaves no trace
+/// in the bytes. The keys are derived deterministically from a seed
+/// (`key_of`), so the expectation is a function of the test alone. The edit
+/// this is here for: a hybrid arm re-encoded through a length-prefixed byte
+/// form, or an arm reordered in the enum, passes every other vector and
+/// silently rewrites every checkpoint holding a hybrid key.
+#[test]
+fn hybrid_key_set_checkpoint_encodings_are_pinned() {
+    for (kind, variant) in [
+        (KeyKind::MlDsa65Ed25519, 1u32),
+        (KeyKind::FnDsa512PreviewEd25519, 2u32),
+    ] {
+        let mut fx = Fixture::new();
+        // enrolled = {fp: anchor}, ONE hybrid row; retired = {} — so neither
+        // fingerprint order nor a classical row is a variable here.
+        let payload = encode_enroll(&[enrollment_of(kind, 1, true)]).into_bytes();
+        let dep = fx.enroll_dep(&doc1(ACCT_A), ACCT_A, &payload);
+        let (st, v) = fx.step(&IdentityState::genesis(), &dep);
+        assert_honored(&v);
+
+        let key = key_of(kind, 1);
+        let mut want: Vec<u8> = Vec::new();
+        want.extend_from_slice(&1u64.to_le_bytes()); // `enrolled`: one row
+        want.extend_from_slice(Fingerprint::of(&key).as_bytes()); // the map key: 32 raw bytes
+        want.extend_from_slice(&variant.to_le_bytes()); // the value: the hybrid arm's variant index
+        want.extend_from_slice(key.raw()); // the raw key, PQ half then Ed25519 half, no length prefix
+        want.push(1); // the anchor flag
+        want.extend_from_slice(&0u64.to_le_bytes()); // `retired`: no row
+
+        assert_eq!(
+            bincode::serialize(st.key_set(&addr(ACCT_A))).expect("serialize KeySet"),
+            want,
+            "{kind:?}"
+        );
+    }
+}
+
 /// AUTH-1.40 — `sets` encodes BEFORE `claimant`, which is the half
 /// `genesis_checkpoint_encoding_is_pinned` cannot see: at genesis both fields
 /// are zero bytes and swapping them changes nothing. A state with one keyed

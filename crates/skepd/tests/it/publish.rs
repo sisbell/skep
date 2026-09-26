@@ -583,6 +583,131 @@ fn every_arrangement_reader_of_a_bare_address_answers_the_trunk_head() {
     sd.shutdown();
 }
 
+/// PUB-2.49 on the POINTWISE PAIR (wire.md §Head-float, as built since
+/// `32b70bc`; owner 2026-09-25): `project` and `discoverable_from` on a bare
+/// published address answer the HEAD member's arrangement — the link is read
+/// against the arrangement a reader of `d` sees, in the head's V-coordinates
+/// — and on a pinned older member that member's own; `delete_orphans` on the
+/// bare address reads the ADDRESS NAMED, the document's own pre-chain
+/// arrangement, and does not float. Three arrangements hold `b` at three
+/// different ordinals — the pre-chain at 3, the pinned member at 2, the head
+/// at 1 — so each reader's answer names the arrangement it read.
+#[test]
+fn the_pointwise_pair_floats_to_the_trunk_head_and_delete_orphans_reads_the_address_named() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+
+    // Doc 1's pre-chain arrangement: [atom, a, b] — `a` at ordinal 2, `b` at 3.
+    expect_resp(&op(port, Some(&signed), &insert(CLAIMANT_DOC1, 2, "ab", true)), "ack_addr");
+    let a = "1.0.1.0.1.0.1.2";
+    let b = "1.0.1.0.1.0.1.3";
+    assert_eq!(text(port, CLAIMANT_DOC1, 2, 2), "ab");
+    // One link FROM `a` and one FROM `b`, both homed in doc 1.
+    let link_from = |addr: &str| -> String {
+        acked_addr(&op(
+            port,
+            Some(&signed),
+            &format!(
+                r#"{{"op":"make_link","home":"{CLAIMANT_DOC1}","from":{{"addrs":["{addr}"]}},"to":{{"addrs":[]}},"ty":{{"addrs":["{CLAIMANT_DOC1}.0.3.6.1"]}}}}"#
+            ),
+        ))
+    };
+    let l_a = link_from(a);
+    let l_b = link_from(b);
+
+    // m1 = [atom, b]: `b` at ordinal 2. m2 = [b, atom], the trunk's head: `b`
+    // at ordinal 1, and `a` arranged in no member.
+    let m1 = acked_addr(&op(
+        port,
+        Some(&signed),
+        &publish(
+            CLAIMANT_DOC1,
+            Some((CLAIMANT_DOC1, 3)),
+            None,
+            &[run(CLAIMANT_DOC1, ATOM, 1), run(CLAIMANT_DOC1, b, 1)],
+        ),
+    ));
+    assert_eq!(m1, format!("{CLAIMANT_DOC1}.1"));
+    let m2 = acked_addr(&op(
+        port,
+        Some(&signed),
+        &publish(
+            CLAIMANT_DOC1,
+            Some((&m1, 2)),
+            None,
+            &[run(CLAIMANT_DOC1, b, 1), run(CLAIMANT_DOC1, ATOM, 1)],
+        ),
+    ));
+    assert_eq!(m2, format!("{CLAIMANT_DOC1}.2"));
+    assert_eq!(text(port, CLAIMANT_DOC1, 1, 1), "b", "the head opens on `b`");
+
+    // `project`: the FROM slot's footprint in `d`, read as the guest.
+    let project = |link: &str, d: &str| -> Vec<(String, String)> {
+        let v = op(port, None, &format!(r#"{{"a":"{link}","d":"{d}","op":"project","slot":1}}"#));
+        expect_resp(&v, "span_set")["set"]
+            .as_array()
+            .expect("set")
+            .iter()
+            .map(|s| {
+                (
+                    s["start"].as_str().expect("start").to_string(),
+                    s["width"].as_str().expect("width").to_string(),
+                )
+            })
+            .collect()
+    };
+    let one_at = |ordinal: u64| vec![(format!("1.{ordinal}"), "0.1".to_string())];
+    // The bare address answers the HEAD member's arrangement (`b` at 1, `a`
+    // absent); the pinned member its own (`b` at 2); neither the pre-chain
+    // arrangement's (`b` at 3, `a` at 2).
+    assert_eq!(project(&l_b, CLAIMANT_DOC1), one_at(1), "the bare address floats to the head");
+    assert_eq!(project(&l_b, &m2), one_at(1), "and agrees with the head named");
+    assert_eq!(project(&l_b, &m1), one_at(2), "a pinned member answers its own arrangement");
+    assert!(
+        project(&l_a, CLAIMANT_DOC1).is_empty(),
+        "`a` is arranged in no member: the bare address does not read the pre-chain arrangement"
+    );
+    assert!(project(&l_a, &m1).is_empty());
+
+    // `discoverable_from`: the same float, as a bool.
+    let discoverable = |link: &str, d: &str| -> bool {
+        let v = op(port, None, &format!(r#"{{"a":"{link}","d":"{d}","op":"discoverable_from"}}"#));
+        expect_resp(&v, "bool")["val"].as_bool().expect("val")
+    };
+    assert!(discoverable(&l_b, CLAIMANT_DOC1), "reachable from the head");
+    assert!(discoverable(&l_b, &m1), "and from the pinned member");
+    assert!(
+        !discoverable(&l_a, CLAIMANT_DOC1),
+        "reachable through the pre-chain arrangement alone: not from the head"
+    );
+    assert!(!discoverable(&l_a, &m1));
+
+    // `delete_orphans` on the bare address reads the ADDRESS NAMED — the
+    // pre-chain arrangement [atom, a, b], three positions: a delete of
+    // ordinal 3 (`b`) is in range and orphans the link from `b`. On the head,
+    // two positions, the same request is out of bounds.
+    let orphans_of = |d: &str| -> Value {
+        op(
+            port,
+            None,
+            &format!(
+                r#"{{"d":"{d}","op":"delete_orphans","p":{{"ordinal":"3","subspace":"1"}},"width":"1"}}"#
+            ),
+        )
+    };
+    let v = orphans_of(CLAIMANT_DOC1);
+    assert_eq!(expect_resp(&v, "orphans")["orphaned"], serde_json::json!([l_b]), "{v}");
+    let v = orphans_of(&m2);
+    assert_eq!(
+        expect_resp(&v, "rejected")["code"].as_str(),
+        Some("out_of_bounds"),
+        "the head holds two positions: {v}"
+    );
+    sd.shutdown();
+}
+
 /// PUB-8.1 / PUB-8.4 / PUB-8.5 / PUB-6.36 — the source gate: a run onto a
 /// document the caller may not read is `withheld`, naming the origin's
 /// DOCUMENT in `site.addr` and nothing else, BEHIND ownership (a stranger's

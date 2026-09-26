@@ -157,7 +157,12 @@ fn kernel_with_account_and_doc() -> (Kernel<World>, Address, Address) {
 
 #[test]
 fn genesis_seeds_bootstrap_node_and_principal() {
-    // Σ₀ + O14: nodes = {[1]}, frontiers = {}, Π = {[1] → π₀}.
+    // Σ₀ + O14, as seeded since the published head (PUB-6.65, 2026-09-23):
+    // nodes = {[1], [1.1]}; Π = {[1] → π₀, [1.1.0.1] → SYSTEM_PRINCIPAL};
+    // frontiers = {([1.1], 2) → 1, ([1.1.0.1], 2) → 2} — the system node's
+    // account chain and the system account's document chain, so its doc 1
+    // (the commons home) and doc 2 (the head document) exist, both PUBLISHED;
+    // and node [1]'s own account chain untouched, at zero.
     let s = M3State::genesis();
     assert_eq!(s.entity_level(&a(&[1])), Some(Level::Node));
     assert!(s.is_allocated(&a(&[1])));
@@ -189,11 +194,13 @@ fn the_slice_prints_its_four_fields_and_their_contents() {
     // The contents ride along: the bootstrap principal and the delegate.
     assert!(dump.contains("PrincipalId(0)"), "{dump}");
     assert!(dump.contains("PrincipalId(1)"), "{dump}");
-    // NOT: comparing two rendered dumps. `im::HashMap` takes a fresh
-    // `RandomState` per construction, so two slices holding the same frontiers
-    // may print them in different orders — a dump is not an equality oracle.
-    // `M3State`'s own `PartialEq` is the one that compares by entries, and it
-    // is what `journaled_types_survive_serde_round_trips` asserts on.
+    // NOT: comparing two rendered dumps as an equality oracle. Every field
+    // is an ORDERED collection since 2026-09-23 (`frontiers` moved off the
+    // `im::HashMap` whose per-process `RandomState` once printed equal slices
+    // in differing orders), so two equal slices now render alike — but the
+    // rendering is a report, and `M3State`'s own `PartialEq` is the one that
+    // compares by entries; it is what `journaled_types_survive_serde_round_trips`
+    // asserts on.
 }
 
 // ---- §A frontier mints ----

@@ -199,7 +199,11 @@ pub use skep_content::Val; // M4
 // M8, `SlotSpec` included: every field of a `FourSet` is one, so the three
 // descriptor ops are unbuildable without it.
 pub use skep_discovery::{Cursor, FourSet, OrphanReport, SlotSpec, SupClaim, Window};
-pub use skep_kernel::{Attestation, Seq}; // M2
+// M2, `AttestationError` included: `Attestation::new` is the one constructor
+// of the value `Request::attest` carries, and its refusal travels with it —
+// the rule above — so a caller assembling a signed request spells one crate
+// for the tag, the blob, and the two spellings of "no signature" it refuses.
+pub use skep_kernel::{Attestation, AttestationError, Seq}; // M2
 pub use skep_namespace::PrincipalId; // M3
 // M6, the two enclosed shapes included: `Delivery` and `CompareReport` are
 // collections of `DeliveryItem` and `CorrPair`, and marshaling either answer
@@ -572,6 +576,19 @@ mod tests {
             },
         ];
         assert_eq!(ops.len(), 13, "one request per upstream module, and then some");
+
+        // The REQUEST itself, all three fields (signed ops): the idempotency
+        // key, the op, and the attestation that rides beside `id` — built
+        // through M2's one constructor, whose refusal is nameable here too,
+        // so a re-export dropped from the request's third field, or from its
+        // error, fails this build rather than an external caller's.
+        let attest: Result<Attestation, AttestationError> = Attestation::new(1, vec![0xA5]);
+        let attest = attest.expect("a non-zero tag over a non-empty blob is an attestation");
+        let requests: Vec<Request> = ops
+            .into_iter()
+            .map(|op| Request { id: Some(ReqId(b"r".to_vec())), op, attest: Some(attest.clone()) })
+            .collect();
+        assert_eq!(requests.len(), 13, "every op rides a request with its two companions");
 
         // The two budgets a request is held to — one M10's, one M7's — read
         // off the same crate, since a caller that checks both before sending

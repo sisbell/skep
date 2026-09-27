@@ -23,7 +23,11 @@ use crate::common;
 use common::*;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde_json::Value;
-use skep_identity::{encode_enroll, encode_retire, Enrollment, Fingerprint, PublicKey};
+use skep_identity::{
+    encode_enroll, encode_retire, Enrollment, Fingerprint, PublicKey, ALG_FNDSA512_PREVIEW_ED25519,
+    ALG_MLDSA65_ED25519, MAX_RECORD_BYTES,
+};
+use skepd::hybrid::{self, HybridSigner};
 
 // `distinct_key`, `public_key_of`, `json_atom`, `enroll_atom` and
 // `enroll_atom_flagged` are the shared helpers in `common` (lane 3.3c
@@ -35,21 +39,99 @@ fn fingerprint_hex(sk: &SigningKey) -> String {
     Fingerprint::of(&public_key_of(sk)).to_hex()
 }
 
-/// One enroll record of `n` real keys with a valid-hex NON-POINT key
-/// appended last, as its atom JSON fragment — the shape that asks where
-/// slot (4)'s decode stops, since the undecodable key sits at the end.
+/// One enroll record of `n` real keys with a valid-hex key whose Ed25519 half
+/// is NO POINT appended last, as its atom JSON fragment — the shape that asks
+/// where slot (4)'s decode stops, since the undecodable key sits at the end.
+/// HYBRID entries throughout (the classical row is gone): at the 128 KiB
+/// record cap twenty tag-1 entries are 80,391 B, with room to spare.
 fn enroll_atom_with_trailing_non_point(n: usize) -> String {
-    // CLASSICAL entries (signed ops): the cell counts keys against the cap,
-    // and sixteen hybrid entries would fill the 64 KiB record cap first.
     let real: Vec<SigningKey> = (0..n as u8).map(distinct_key).collect();
     let mut entries: Vec<Enrollment> = real
         .iter()
-        .map(|sk| Enrollment::new(ed25519_public_key_of(sk), false, None).expect("no label"))
+        .map(|sk| Enrollment::new(public_key_of(sk), false, None).expect("no label"))
         .collect();
-    let bad = PublicKey::parse("ed25519", &non_point_hex())
-        .expect("64 hex parses — the fold admits syntax and never decodes the point");
-    entries.push(Enrollment::new(bad, false, None).expect("no label"));
+    entries.push(Enrollment::new(non_point_hybrid_key(), false, None).expect("no label"));
     json_atom(&encode_enroll(&entries))
+}
+
+/// A TAG-1 hybrid key of the row's exact width whose ED25519 HALF decodes to
+/// no point — a real derived key with its last 32 raw bytes replaced by
+/// [`non_point_hex`]'s bytes. The fold admits it (syntax alone, AUTH-1.4);
+/// the precheck's all-halves decode refuses it on that half.
+fn non_point_hybrid_key() -> PublicKey {
+    let mut raw = public_key_of(&distinct_key(200)).raw().to_vec();
+    let tail = raw.len() - 32;
+    let non_point: Vec<u8> = (0..32).map(|i| u8::from_str_radix(&non_point_hex()[2 * i..2 * i + 2], 16).unwrap()).collect();
+    raw[tail..].copy_from_slice(&non_point);
+    PublicKey::parse(ALG_MLDSA65_ED25519, &hex(&raw))
+        .expect("3,968 hex parses — the fold admits syntax and never decodes a half")
+}
+
+/// A TAG-3 hybrid signer for a seed carrier — the PREVIEW row, which the
+/// fixture daemons admit (`allow_preview_keys` on) and a served board
+/// refuses.
+fn tag3_signer(sk: &SigningKey) -> HybridSigner {
+    HybridSigner::from_seed(hybrid::TAG_FNDSA512_PREVIEW_ED25519, &seed_of(sk)).expect("tag 3 is a row")
+}
+
+/// A TAG-3 key of the row's exact width whose FN-DSA HALF does not decode:
+/// the verifying key's header byte — `0x09` for degree 512 under `fn-dsa`
+/// 0.4.0 — replaced, so `VerifyingKeyStandard::decode` answers `None`. The
+/// fold admits it (syntax alone); the precheck's all-halves decode refuses
+/// it on that half, where the Ed25519 half is a real point.
+fn bad_header_tag3_key(signer: &HybridSigner) -> PublicKey {
+    let mut raw = signer.public_key().raw().to_vec();
+    assert_eq!(raw[0], 0x09, "fn-dsa 0.4.0's degree-512 header byte");
+    raw[0] = 0x0a;
+    PublicKey::parse(ALG_FNDSA512_PREVIEW_ED25519, &hex(&raw))
+        .expect("1,858 hex parses — the fold admits syntax and never decodes a half")
+}
+
+/// A GENESIS deposit of `entries` for `agent_account`, homed in the
+/// registrar's doc 1 — the hire's own shape (`common::hire`) with the RECORD
+/// named rather than derived from a seed carrier, and the deposit's answer
+/// returned UNJUDGED, so a refusal cell can read its token where the hire
+/// helper would panic.
+fn genesis_of(
+    port: u16,
+    registrar_signed: &str,
+    registrar_doc1: &str,
+    agent_account: &str,
+    entries: &[Enrollment],
+) -> Value {
+    let ordinal = next_content_ordinal(port, Some(registrar_signed), registrar_doc1);
+    let atom = json_atom(&encode_enroll(entries));
+    let v = op(
+        port,
+        Some(registrar_signed),
+        &format!(
+            r#"{{"op":"insert","doc":"{registrar_doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":"{T_ENROLL}"}}"#
+        ),
+    );
+    let atom_addr = acked_addr(&v);
+    op(
+        port,
+        Some(registrar_signed),
+        &format!(
+            r#"{{"op":"make_link","home":"{registrar_doc1}","from":{{"addrs":["{atom_addr}"]}},"to":{{"addrs":["{agent_account}"]}},"ty":{{"addrs":["{T_ENROLL}"]}}}}"#
+        ),
+    )
+}
+
+/// An ENROLLMENT of `entries` into the CLAIMANT's own set from `signed`, the
+/// claimant's device session: the record atom landed at doc 1's next free
+/// position, then the deposit naming it — the answer UNJUDGED.
+fn enroll_into_claimant(port: u16, signed: &str, entries: &[Enrollment]) -> Value {
+    let ordinal = next_content_ordinal(port, Some(signed), CLAIMANT_DOC1);
+    let record = record_atom(port, signed, ordinal, &json_atom(&encode_enroll(entries)), T_ENROLL);
+    deposit(port, signed, &record, T_ENROLL)
+}
+
+/// The `enrolled` count `key_set` answers for `account`.
+fn enrolled_count_of(port: u16, account: &str) -> usize {
+    let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{account}"}}"#));
+    assert_eq!(v["resp"].as_str(), Some("key_set"), "{v}");
+    v["enrolled"].as_array().expect("enrolled").len()
 }
 
 /// One retire record naming fingerprints, as its atom JSON fragment.
@@ -540,16 +622,17 @@ fn a_genesis_record_meets_its_key_cap_at_both_ends() {
 
     // One genesis attempt: the record atom into the account's own doc 1
     // (the genesis registry), then the deposit naming it.
-    // CLASSICAL entries (signed ops): the cell is about the record's KEY
-    // COUNT, and sixteen hybrid entries fill the 64 KiB record cap where
-    // sixteen classical ones fit — the design record's E7 arithmetic.
+    // HYBRID entries, the only kind there is: the cell is about the record's
+    // KEY COUNT, and seventeen tag-1 entries are 68,337 B — under the 128 KiB
+    // record cap (the record-cap measurements §5.2; the design record's E7
+    // arithmetic at the old 64 KiB cap is what kept this cell classical).
     let genesis = |ordinal: u64, keys: &[&SigningKey]| -> Value {
         let v = op(
             port,
             Some(&account_token),
             &format!(
                 r#"{{"op":"insert","doc":"{doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}],"deposit":"{T_ENROLL}"}}"#,
-                enroll_atom_ed25519(keys)
+                enroll_atom(keys)
             ),
         );
         expect_resp(&v, "ack_addr");
@@ -583,11 +666,12 @@ fn a_genesis_record_meets_its_key_cap_at_both_ends() {
     sd.shutdown();
 }
 
-/// Where slot (4)'s point decode stops. The decode is per key and the key
-/// count is the RECORD's, bounded upstream at 64 KiB and so at order 800
-/// keys — held under the credential write lock and the serialization lock,
-/// bought by one small deposit. So the decode is bounded at one key past
-/// the cap slot (5) applies, and the two ends of that bound are:
+/// Where slot (4)'s decode stops. The decode is per key — every half the
+/// key's row names — and the key count is the RECORD's, bounded upstream at
+/// 128 KiB and so at 32 tag-1 keys (68 under tag 3) — held under the
+/// credential write lock and the serialization lock, bought by one small
+/// deposit. So the decode is bounded at one key past the cap slot (5)
+/// applies, and the two ends of that bound are:
 ///
 /// AT the cap, every key is decoded wherever the undecodable one sits —
 /// the load-bearing half, since a shorter bound would miss a trailing bad
@@ -796,14 +880,15 @@ fn non_point_hex() -> String {
     panic!("no non-point among the 256 constant-byte candidates");
 }
 
-/// wire.md §Credential refusals: a valid-hex key that decodes to no
-/// Ed25519 point is "refused at enrollment rather than discovered at a
-/// handshake". The fold is syntax-only by contract (AUTH-1.4 — the curve
-/// point is never decoded), so such a record parses and classifies
-/// honored: `precheck`'s slot (4) is the ONLY thing standing between it
-/// and a permanently seated key that occupies a slot against the enrolled
-/// cap and that `find_signer` walks on every unauthenticated handshake
-/// attempt — retirable only by an anchor session of that account.
+/// wire.md §Credential refusals: a valid-hex key any half of which does not
+/// decode — here a tag-1 key whose Ed25519 half is no point — is "refused at
+/// enrollment rather than discovered at a handshake". The fold is syntax-only
+/// by contract (AUTH-1.4 — no half is ever decoded there), so such a record
+/// parses and classifies honored: `precheck`'s slot (4) is the ONLY thing
+/// standing between it and a permanently seated key that occupies a slot
+/// against the enrolled cap and that `find_signer` walks on every
+/// unauthenticated handshake attempt — retirable only by an anchor session of
+/// that account.
 #[test]
 fn a_valid_hex_non_point_key_is_refused_at_enrollment() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -811,9 +896,7 @@ fn a_valid_hex_non_point_key_is_refused_at_enrollment() {
     let port = sd.port();
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
 
-    let key = PublicKey::parse("ed25519", &non_point_hex())
-        .expect("64 hex parses — the fold admits syntax and never decodes the point");
-    let text = encode_enroll(&[Enrollment::new(key, false, None).expect("no label")]);
+    let text = encode_enroll(&[Enrollment::new(non_point_hybrid_key(), false, None).expect("no label")]);
     let record = record_atom(port, &signed, 2, &json_atom(&text), T_ENROLL);
     assert_eq!(
         rejected_detail(&deposit(port, &signed, &record, T_ENROLL)),
@@ -823,6 +906,276 @@ fn a_valid_hex_non_point_key_is_refused_at_enrollment() {
     // …and it seated nothing: the set is still the ceremony's two.
     let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
     assert_eq!(v["enrolled"].as_array().expect("enrolled").len(), 2, "{v}");
+
+    sd.shutdown();
+}
+
+/// THE ALL-HALVES PRECHECK (AUTH-3.56 as RES-206 landed it; the hybrid-only
+/// launch's Q9): `undecodable_key` decodes EVERY half the key's row names.
+/// A tag-3 key whose FN-DSA half's HEADER BYTE is wrong is refused — on a
+/// daemon that admits preview keys, so slot (4)'s first token stands aside
+/// and the decode courtesy answers; a tag-1 key whose Ed25519 half is no
+/// point is refused (the cell above); and a good key of EACH row is honored
+/// — tag 1 at every ceremony, tag 3 here, enrolled into the claimant's set
+/// and then opening a session under its own row.
+#[test]
+fn undecodable_key_decodes_every_half_the_keys_row_names() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let tag3 = tag3_signer(&distinct_key(70));
+
+    // The FN-DSA half's header byte: undecodable, on the post-quantum half.
+    let v = enroll_into_claimant(port, &signed, &[Enrollment::new(bad_header_tag3_key(&tag3), false, None).unwrap()]);
+    assert_eq!(rejected_detail(&v), "credential_refused:undecodable_key", "{v}");
+    assert_eq!(enrolled_count_of(port, CLAIMANT_ACCOUNT), 2, "nothing seated");
+
+    // The same key with its header intact: a good key of the tag-3 row,
+    // honored — and it opens a session under its own row, the 730-byte blob.
+    let v = enroll_into_claimant(port, &signed, &[Enrollment::new(tag3.public_key().clone(), false, None).unwrap()]);
+    expect_resp(&v, "ack_addr");
+    assert_eq!(enrolled_count_of(port, CLAIMANT_ACCOUNT), 3, "the tag-3 key is seated");
+    let as_tag3 = open_signed_session_as(port, CLAIMANT_PRINCIPAL, &tag3);
+    let v = op(port, Some(&as_tag3), &format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#));
+    expect_resp(&v, "ack_addr");
+
+    // A record naming a good tag-1 key beside the bad-header tag-3 key is
+    // refused whole — the courtesy reads every entry.
+    let v = enroll_into_claimant(
+        port,
+        &signed,
+        &[
+            Enrollment::new(public_key_of(&distinct_key(71)), false, None).unwrap(),
+            Enrollment::new(bad_header_tag3_key(&tag3_signer(&distinct_key(72))), false, None).unwrap(),
+        ],
+    );
+    assert_eq!(rejected_detail(&v), "credential_refused:undecodable_key", "{v}");
+    assert_eq!(enrolled_count_of(port, CLAIMANT_ACCOUNT), 3);
+
+    sd.shutdown();
+}
+
+/// `preview_key` (AUTH-3.44 slot (4)'s FIRST token, AUTH-3.56's row,
+/// AUTH-1.44's setting; the hybrid-only launch's Q5, owner 2026-09-26 "b"):
+/// on a daemon with `allow_preview_keys` OFF — a served board's setting —
+/// an enrolment record naming ANY key of the tag-3 preview row is refused
+/// `preview_key`, a GENESIS included and an ordinary enrollment alike; a
+/// tag-1 record on the same daemon is unaffected; a tag-3 key that is ALSO
+/// undecodable answers `preview_key` — the slot's order, the test reading the
+/// entry's `alg` and decoding nothing; and a record naming a tag-1 key BESIDE
+/// a tag-3 key is refused whole. With the setting ON (the fixtures'), the same
+/// tag-3 genesis is honored (`an_account_with_no_key_of_the_tag_…` in
+/// `signed_ops`, and the cell above). Nothing else moves: the fold admits the
+/// row as syntax, tag-3 VERIFICATION stays compiled in.
+#[test]
+fn a_preview_key_is_refused_at_enrollment_unless_the_daemon_allows_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_refusing_preview_keys(dir.path());
+    let port = sd.port();
+    let registrar = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let tag3 = tag3_signer(&distinct_key(73));
+    const PREVIEW_KEY: &str = "credential_refused:preview_key";
+
+    // A GENESIS naming a preview key: refused, and it seeds nothing.
+    let (agent, _bare) = bootstrap_delegate(port, 73);
+    let v = genesis_of(
+        port,
+        &registrar,
+        CLAIMANT_DOC1,
+        &agent,
+        &[Enrollment::new(tag3.public_key().clone(), false, None).unwrap()],
+    );
+    assert_eq!(rejected_detail(&v), PREVIEW_KEY, "a genesis is INSIDE the refusal: {v}");
+    assert_eq!(v["disposition"].as_str(), Some("permanent"), "{v}");
+    assert_eq!(enrolled_count_of(port, &agent), 0, "the refused genesis seeded nothing");
+
+    // An ENROLLMENT into the claimant's own set naming one: refused.
+    let v = enroll_into_claimant(port, &registrar, &[Enrollment::new(tag3.public_key().clone(), false, None).unwrap()]);
+    assert_eq!(rejected_detail(&v), PREVIEW_KEY, "{v}");
+    assert_eq!(enrolled_count_of(port, CLAIMANT_ACCOUNT), 2);
+
+    // A tag-3 key that is ALSO undecodable: `preview_key`, never
+    // `undecodable_key` — the slot's two tokens in THIS order.
+    let v = enroll_into_claimant(port, &registrar, &[Enrollment::new(bad_header_tag3_key(&tag3), false, None).unwrap()]);
+    assert_eq!(rejected_detail(&v), PREVIEW_KEY, "the order inside slot (4): {v}");
+
+    // A tag-1 key BESIDE a tag-3 key: refused whole — ANY key of the row.
+    let v = enroll_into_claimant(
+        port,
+        &registrar,
+        &[
+            Enrollment::new(public_key_of(&distinct_key(74)), false, None).unwrap(),
+            Enrollment::new(tag3.public_key().clone(), false, None).unwrap(),
+        ],
+    );
+    assert_eq!(rejected_detail(&v), PREVIEW_KEY, "{v}");
+    assert_eq!(enrolled_count_of(port, CLAIMANT_ACCOUNT), 2);
+
+    // A tag-1 record on the same daemon: unaffected — honored, as a genesis
+    // (the hire) and as an enrollment.
+    let v = genesis_of(
+        port,
+        &registrar,
+        CLAIMANT_DOC1,
+        &agent,
+        &[Enrollment::new(public_key_of(&distinct_key(73)), false, None).unwrap()],
+    );
+    expect_resp(&v, "ack_addr");
+    assert_eq!(enrolled_count_of(port, &agent), 1);
+    let v = enroll_into_claimant(port, &registrar, &[Enrollment::new(public_key_of(&distinct_key(75)), false, None).unwrap()]);
+    expect_resp(&v, "ack_addr");
+    assert_eq!(enrolled_count_of(port, CLAIMANT_ACCOUNT), 3);
+
+    // The tag-1 key the hire seated opens a session, the tag-3 signer of the
+    // same seed opens none — its key was never enrolled.
+    open_signed_session(port, 73, &distinct_key(73));
+    let nonce = challenge(port, 73);
+    let origin = format!("http://127.0.0.1:{port}");
+    let body = format!(
+        "{{\"principal\":73,\"nonce\":\"{nonce}\",\"origin\":\"{origin}\",\"sig\":\"{}\"}}",
+        sign_session_as(&tag3, &origin, &nonce, 73)
+    );
+    let (st, _) = http(port, "POST", "/session", None, body.as_bytes());
+    assert_eq!(st, 401, "a well-formed tag-3 blob no enrolled key verifies: the one 401");
+
+    sd.shutdown();
+}
+
+/// THE HYBRID HANDSHAKE's width check (AUTH-6.3, AUTH-4.34; the hybrid-only
+/// launch's Q2): a `sig` whose width is NONE of the hybrid blob widths — the
+/// classical 64-byte Ed25519 signature first, then one byte either side of
+/// tag 1's 3,373 — is `400 malformed_session_request` with a `detail`, and
+/// the nonce SURVIVES every one of them: the right blob then opens on that
+/// same nonce. A WELL-FORMED blob no enrolled key verifies is the one `401
+/// session_rejected`, byte-identical, its nonce spent — a zero blob of tag
+/// 1's width, a zero blob of tag 3's width against a tag-1 set, the blob
+/// with its POST-QUANTUM half broken, and the blob with its ED25519 half
+/// broken: NO HALF OPENS A SESSION ALONE (AUTH-4.32).
+#[test]
+fn a_sig_of_no_hybrid_width_is_a_400_whose_nonce_survives_and_no_half_opens_alone() {
+    const REJECTED: &str = r#"{"error":"session_rejected"}"#;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let p = CLAIMANT_PRINCIPAL;
+    let origin = format!("http://127.0.0.1:{port}");
+    let body_with = |nonce: &str, sig: &str| {
+        format!("{{\"principal\":{p},\"nonce\":\"{nonce}\",\"origin\":\"{origin}\",\"sig\":\"{sig}\"}}")
+    };
+    let post = |body: &str| http_full(port, "POST", "/session", None, body.as_bytes());
+    let malformed = |what: &str, (st, _, body): (u16, Vec<(String, String)>, Vec<u8>)| {
+        assert_eq!(st, 400, "{what}: {}", String::from_utf8_lossy(&body));
+        let v = json(&body);
+        assert_eq!(v["error"].as_str(), Some("malformed_session_request"), "{what}");
+        assert!(v["detail"].as_str().is_some_and(|d| d.contains("sig")), "{what}: the detail names the field: {v}");
+    };
+    let rejected = |what: &str, (st, _, body): (u16, Vec<(String, String)>, Vec<u8>)| {
+        assert_eq!(st, 401, "{what}: {}", String::from_utf8_lossy(&body));
+        assert_eq!(String::from_utf8(body).expect("utf-8"), REJECTED, "{what}: the one code");
+    };
+
+    // ONE nonce for every width fault: each is a 400, and none spends it.
+    let nonce = challenge(port, p);
+    let classical = sign_session_ed25519_half_alone(&device_key(), &origin, &nonce, p);
+    assert_eq!(classical.len(), 128, "the classical layout: 64 signature bytes");
+    malformed("the 64-byte Ed25519 signature alone", post(&body_with(&nonce, &classical)));
+    let good = sign_session(&device_key(), &origin, &nonce, p);
+    assert_eq!(good.len(), 6746, "tag 1's blob: 3,373 bytes");
+    malformed("one byte short of tag 1's width", post(&body_with(&nonce, &good[..6744])));
+    malformed("one byte past tag 1's width", post(&body_with(&nonce, &format!("{good}ab"))));
+    malformed("one byte short of tag 3's width", post(&body_with(&nonce, &"00".repeat(729))));
+    malformed("one byte past tag 3's width", post(&body_with(&nonce, &"00".repeat(731))));
+    malformed("an empty sig", post(&body_with(&nonce, "")));
+    // …and the nonce survived them all: the right blob opens on it.
+    let (st, _, body) = post(&body_with(&nonce, &good));
+    assert_eq!(st, 200, "the nonce survived every 400: {}", String::from_utf8_lossy(&body));
+    assert!(json(&body)["session"].is_string());
+
+    // WELL-FORMED blobs no enrolled key verifies: the one 401, nonce spent.
+    let nonce = challenge(port, p);
+    rejected("a zero blob of tag 1's width", post(&body_with(&nonce, &"00".repeat(3373))));
+    rejected("…and its nonce is spent", post(&body_with(&nonce, &sign_session(&device_key(), &origin, &nonce, p))));
+    let nonce = challenge(port, p);
+    rejected("a zero blob of tag 3's width against a tag-1 set", post(&body_with(&nonce, &"00".repeat(730))));
+    let nonce = challenge(port, p);
+    rejected(
+        "a tag-3 signer's blob against a tag-1 set",
+        post(&body_with(&nonce, &sign_session_as(&tag3_signer(&device_key()), &origin, &nonce, p))),
+    );
+
+    // NO HALF OPENS A SESSION ALONE: the right blob with one half broken.
+    let flip = |hex_sig: &str, at: usize| -> String {
+        let mut chars: Vec<char> = hex_sig.chars().collect();
+        chars[at] = if chars[at] == '0' { '1' } else { '0' };
+        chars.into_iter().collect()
+    };
+    let nonce = challenge(port, p);
+    let good = sign_session(&device_key(), &origin, &nonce, p);
+    rejected("the post-quantum half broken", post(&body_with(&nonce, &flip(&good, 10))));
+    let nonce = challenge(port, p);
+    let good = sign_session(&device_key(), &origin, &nonce, p);
+    rejected("the Ed25519 half broken", post(&body_with(&nonce, &flip(&good, 6745))));
+    // …and the untouched blob on a fresh nonce still opens.
+    let nonce = challenge(port, p);
+    let (st, _, _) = post(&body_with(&nonce, &sign_session(&device_key(), &origin, &nonce, p)));
+    assert_eq!(st, 200);
+
+    sd.shutdown();
+}
+
+/// THE RECORD CAP OVER THE WIRE (AUTH-1.18/1.21 as re-pinned — 128 KiB;
+/// AUTH-2.96's `a 128 KiB record · a 128 KiB+1 record` row): a genesis record
+/// of EXACTLY 131,072 bytes — thirty-two label-free tag-1 entries, 128,607 B,
+/// padded onto the mark with labels of at most 128 bytes — is READ whole,
+/// its verdict the KEY COUNT's (`too_many_enrolled`, slot (5): 32 is over the
+/// genesis cap of 16) and never `too_large`; one byte more is inert at the
+/// read, `malformed_payload:too_large`, ahead of every later slot. The
+/// honored cell at exactly the cap is the identity suite's
+/// (`record_at_exactly_the_cap_folds_and_one_more_byte_inerts`): no record a
+/// wire deposit can seat carries 32 keys.
+#[test]
+fn the_record_cap_is_128_kib_at_the_fold_over_the_wire() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let registrar = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let (agent, _bare) = bootstrap_delegate(port, 76);
+
+    // Thirty-two distinct tag-1 keys, label-free: the base the record-cap
+    // measurements state (32 + 32·4,017 + 31 = 128,607 B).
+    let keys: Vec<PublicKey> = (100u8..132).map(|n| public_key_of(&distinct_key(n))).collect();
+    let cap_sized = |over: usize| -> Vec<Enrollment> {
+        let mut entries: Vec<Enrollment> =
+            keys.iter().map(|k| Enrollment::new(k.clone(), false, None).unwrap()).collect();
+        let base = encode_enroll(&entries).len();
+        assert_eq!(base, 128_607, "the label-free base");
+        let mut pad = MAX_RECORD_BYTES - base + over;
+        let mut i = 0;
+        while pad > 0 {
+            // A label adds 11 + L bytes, L at most 128; keep the last legal.
+            let take = if pad <= 139 { pad } else if pad - 139 <= 11 { pad - 12 } else { 139 };
+            entries[i] = Enrollment::new(keys[i].clone(), false, Some("x".repeat(take - 11))).unwrap();
+            pad -= take;
+            i += 1;
+        }
+        assert_eq!(encode_enroll(&entries).len(), MAX_RECORD_BYTES + over);
+        entries
+    };
+
+    let v = genesis_of(port, &registrar, CLAIMANT_DOC1, &agent, &cap_sized(0));
+    assert_eq!(
+        rejected_detail(&v),
+        "credential_refused:too_many_enrolled",
+        "exactly 128 KiB is READ — the verdict is the count's, never too_large: {v}"
+    );
+    let v = genesis_of(port, &registrar, CLAIMANT_DOC1, &agent, &cap_sized(1));
+    assert_eq!(
+        rejected_detail(&v),
+        "credential_refused:malformed_payload:too_large",
+        "128 KiB+1 is inert at the read: {v}"
+    );
+    assert_eq!(enrolled_count_of(port, &agent), 0);
 
     sd.shutdown();
 }
@@ -2786,10 +3139,11 @@ fn a_listed_prefix_answers_the_403_with_its_record_after_the_burn_and_before_the
     assert_eq!(st, 401, "the 403 SPENT the nonce: {}", String::from_utf8_lossy(&body));
     assert_eq!(String::from_utf8(body).expect("utf-8"), r#"{"error":"session_rejected"}"#);
 
-    // A garbage `sig` — well-formed, signing nothing — and a foreign key's:
-    // the SAME 403, because no key set is read and no signature verified.
+    // A garbage `sig` — well-formed at tag 1's blob width, signing nothing —
+    // and a foreign key's: the SAME 403, because no key set is read and no
+    // signature verified.
     let nonce = nonce_for(931);
-    let garbage = body_with(931, &nonce, &origin, &"00".repeat(64));
+    let garbage = body_with(931, &nonce, &origin, &"00".repeat(3373));
     let (st, body) = http(port, "POST", "/session", None, garbage.as_bytes());
     assert_eq!(st, 403, "not a 400 and not a 401: {}", String::from_utf8_lossy(&body));
     assert_eq!(String::from_utf8(body).expect("utf-8"), prefix_blocked_body(RECORD_MEMBER));

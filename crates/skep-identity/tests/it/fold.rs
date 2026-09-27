@@ -60,7 +60,7 @@ fn home_minted_bytes_fold_and_foreign_ones_do_not() {
     assert_eq!(next, genesis_state);
 }
 
-/// Corpus: first FROM span home-minted at 64 KiB+1, second span transcluded
+/// Corpus: first FROM span home-minted at 128 KiB+1, second span transcluded
 /// — `too_large`: span 1's cap fault fires before span 2's home check
 /// (AUTH-2.39's per-span interleave).
 #[test]
@@ -82,7 +82,7 @@ fn cap_fault_fires_before_second_spans_home_check() {
     );
 }
 
-/// Corpus: first FROM span home-minted at exactly 64 KiB, second span
+/// Corpus: first FROM span home-minted at exactly 128 KiB, second span
 /// transcluded — `foreign_content`: span 2's home check precedes its values
 /// and cap (AUTH-2.38 item 3, AUTH-2.43's not-exceeding boundary).
 #[test]
@@ -745,39 +745,73 @@ fn three_atom_record_folds() {
 
 /// The key entries [`cap_sized_enroll_payload`] writes — chosen so that a
 /// `MAX_RECORD_BYTES` budget of label-free `{"alg":…,"key":…,"anchor":false}`
-/// entries leaves room for the label that pads the record onto the mark; the
+/// entries leaves room for the labels that pad the record onto the mark; the
 /// helper asserts that as a fixture precondition. Under AUTH-2.130's canonical
-/// spelling the envelope is 32 B, each label-free entry 105 B plus a 1 B
-/// comma, so 32 + 617·105 + 616 = 65 433 ≤ 65 536 and 618 entries would
-/// overflow — the 897 of the retired line form become 617 here.
-const CAP_SIZED_ENTRIES: u32 = 617;
+/// spelling over a TAG-1 hybrid entry (`mldsa65-ed25519`, 3,968 hex — the
+/// classical row is gone) the envelope is 32 B and each label-free entry is
+/// 8 + 15 + 9 + 3,968 + 11 + 5 + 1 = 4,017 B plus a 1 B comma, so
+/// 32 + 32·4,017 + 31 = 128,607 ≤ 131,072 and 33 entries would overflow
+/// (132,625) — the 617 of the 64 KiB cap over classical entries become 32
+/// here (rc-3; the record-cap measurements §5.2 K8; AUTH-2.130's cost note).
+const CAP_SIZED_ENTRIES: u32 = 32;
+
+/// The bytes a label of `L` bytes adds to a label-free entry: the
+/// `,"label":"…"` wrapper is 11 bytes (AUTH-2.130's canonical spelling), so
+/// the widest label the domain admits — 128 bytes (AUTH-1.24) — adds 139.
+const LABEL_WRAPPER: usize = 11;
+const WIDEST_LABEL: usize = 128 + LABEL_WRAPPER;
 
 /// An enrollment record of exactly `MAX_RECORD_BYTES + over` bytes:
-/// [`CAP_SIZED_ENTRIES`] key entries, the first carrying a label sized to land
-/// the total on the mark. Built FROM the constant, so a change to the cap
-/// moves the record with it and `max_record_bytes_is_64_kib` stays the one
-/// assertion that discovers it.
+/// [`CAP_SIZED_ENTRIES`] key entries, the first carrying labels sized to land
+/// the total on the mark — SPREAD OVER SEVERAL ENTRIES, since a label is at
+/// most 128 bytes (AUTH-1.24): the 2,465 bytes from the label-free base to
+/// the 128 KiB mark take seventeen 128-byte labels and one of 91. Built FROM
+/// the constant, so a change to the cap moves the record with it and
+/// `max_record_bytes_is_128_kib` stays the one assertion that discovers it.
 fn cap_sized_enroll_payload(over: usize) -> Vec<u8> {
     let mut entries: Vec<Enrollment> = (0..CAP_SIZED_ENTRIES)
         .map(|i| Enrollment::new(wide_key(i), false, None).expect("label-free"))
         .collect();
     let base_len = encode_enroll(&entries).len();
-    // Adding a label of L chars to a label-free entry adds 11 + L bytes: the
-    // `,"label":"…"` wrapper is 11 bytes (AUTH-2.130's canonical spelling).
+    // Room for at least a one-byte label: the wrapper and one byte more.
     assert!(
-        base_len + 12 <= MAX_RECORD_BYTES,
+        base_len + LABEL_WRAPPER < MAX_RECORD_BYTES,
         "fixture arithmetic: {base_len} bytes of {CAP_SIZED_ENTRIES} key entries leaves no room \
          for a label under a {MAX_RECORD_BYTES}-byte cap"
     );
-    let pad = MAX_RECORD_BYTES - base_len + over;
-    entries[0] = Enrollment::new(wide_key(0), false, Some("x".repeat(pad - 11))).expect("label");
+    let mut pad = MAX_RECORD_BYTES - base_len + over;
+    assert!(
+        pad <= entries.len() * WIDEST_LABEL,
+        "fixture arithmetic: {pad} bytes of padding do not fit in {} labels of at most 128 bytes",
+        entries.len()
+    );
+    // Full labels while the remainder still leaves room for a legal last one
+    // (a label is at least one byte, so a remainder of 1..=LABEL_WRAPPER bytes
+    // cannot be spelled — hold one label back so the last two share it).
+    let mut i = 0;
+    while pad > 0 {
+        let take = if pad <= WIDEST_LABEL {
+            pad
+        } else if pad - WIDEST_LABEL <= LABEL_WRAPPER {
+            // Split the last two labels so neither is under 1 byte.
+            pad - (LABEL_WRAPPER + 1)
+        } else {
+            WIDEST_LABEL
+        };
+        assert!(take > LABEL_WRAPPER, "a label adds at least {} bytes", LABEL_WRAPPER + 1);
+        entries[i] = Enrollment::new(wide_key(i as u32), false, Some("x".repeat(take - LABEL_WRAPPER)))
+            .expect("a label of at most 128 bytes");
+        pad -= take;
+        i += 1;
+    }
     let payload = encode_enroll(&entries).into_bytes();
     assert_eq!(payload.len(), MAX_RECORD_BYTES + over);
     payload
 }
 
-/// Corpus: a 64 KiB record folds · a 64 KiB+1 record is inert (AUTH-2.43's
-/// exceed-only boundary; AUTH-1.19's per-record scope).
+/// Corpus: a 128 KiB record folds · a 128 KiB+1 record is inert (AUTH-2.43's
+/// exceed-only boundary; AUTH-1.19's per-record scope; AUTH-2.96's row as
+/// re-pinned at 128 KiB).
 #[test]
 fn record_at_exactly_the_cap_folds_and_one_more_byte_inerts() {
     let mut fx = Fixture::new();
@@ -797,7 +831,7 @@ fn record_at_exactly_the_cap_folds_and_one_more_byte_inerts() {
     );
 }
 
-/// AUTH-2.43's exceed-only boundary read in POSITIONS: a 64 KiB record spread
+/// AUTH-2.43's exceed-only boundary read in POSITIONS: a 128 KiB record spread
 /// ONE BYTE PER POSITION walks exactly `MAX_RECORD_BYTES` positions and folds.
 /// The per-record position budget is `>`, never `>=`, so the widest record a
 /// conforming ctx can carry is a record and not a refusal — the slip a
@@ -883,7 +917,7 @@ fn publication_precedes_shape() {
     assert_detail(&fx.classify(&genesis_state, &dep), "unpublished");
 }
 
-/// Corpus: a two-span `to` beside a home-minted 64 KiB+1 `from` span —
+/// Corpus: a two-span `to` beside a home-minted 128 KiB+1 `from` span —
 /// `malformed_shape`, never `too_large` (AUTH-2.66: shape before
 /// `record_bytes`).
 #[test]
@@ -2134,8 +2168,8 @@ fn key_set_checkpoint_encoding_is_pinned() {
     let mut want: Vec<u8> = Vec::new();
     want.extend_from_slice(&1u64.to_le_bytes()); // `enrolled`: one row
     want.extend_from_slice(fp(1).as_bytes()); // the map key: 32 raw bytes
-    want.extend_from_slice(&0u32.to_le_bytes()); // the value: Ed25519 variant
-    want.extend_from_slice(&[1u8; 32]); // key(1)'s raw bytes
+    want.extend_from_slice(&0u32.to_le_bytes()); // the value: the tag-1 arm's variant index
+    want.extend_from_slice(key(1).raw()); // key(1)'s raw bytes, 1,984 of them, no length prefix
     want.push(1); // the anchor flag
     want.extend_from_slice(&1u64.to_le_bytes()); // `retired`: one row
     want.extend_from_slice(fp(2).as_bytes());
@@ -2147,11 +2181,12 @@ fn key_set_checkpoint_encoding_is_pinned() {
     );
 }
 
-/// AUTH-1.40 under signed ops — the two HYBRID arms' checkpoint bytes,
-/// beside the classical pin above, which covers `PublicKey`'s variant `0`
-/// alone. An enrolled row's value opens on the arm's variant index (`1` for
-/// tag 1's `mldsa65-ed25519`, `2` for tag 3's `fndsa512-preview-ed25519`),
-/// then the raw key as a TUPLE of its row's width — the post-quantum key
+/// AUTH-1.40 — BOTH HYBRID arms' checkpoint bytes, the key kinds since the
+/// classical row's deletion. An enrolled row's value opens on the arm's
+/// variant index — `0` for tag 1's `mldsa65-ed25519`, `1` for tag 3's
+/// `fndsa512-preview-ed25519`, RENUMBERED from `1`/`2` when the classical arm
+/// went (free before the first served board, AUTH-2.90's clock; never after)
+/// — then the raw key as a TUPLE of its row's width — the post-quantum key
 /// then the Ed25519 key, no length prefix, the form the derive gives a
 /// `[u8; 32]` — then the anchor flag; the `Box` an arm holds leaves no trace
 /// in the bytes. The keys are derived deterministically from a seed
@@ -2162,12 +2197,12 @@ fn key_set_checkpoint_encoding_is_pinned() {
 #[test]
 fn hybrid_key_set_checkpoint_encodings_are_pinned() {
     for (kind, variant) in [
-        (KeyKind::MlDsa65Ed25519, 1u32),
-        (KeyKind::FnDsa512PreviewEd25519, 2u32),
+        (KeyKind::MlDsa65Ed25519, 0u32),
+        (KeyKind::FnDsa512PreviewEd25519, 1u32),
     ] {
         let mut fx = Fixture::new();
-        // enrolled = {fp: anchor}, ONE hybrid row; retired = {} — so neither
-        // fingerprint order nor a classical row is a variable here.
+        // enrolled = {fp: anchor}, ONE hybrid row; retired = {} — so
+        // fingerprint order is not a variable here.
         let payload = encode_enroll(&[enrollment_of(kind, 1, true)]).into_bytes();
         let dep = fx.enroll_dep(&doc1(ACCT_A), ACCT_A, &payload);
         let (st, v) = fx.step(&IdentityState::genesis(), &dep);

@@ -281,16 +281,21 @@ impl Fixture {
 
 // ---------------------------------------------------------------- payloads
 
-/// Deterministic test key `i`.
+/// Deterministic test key `i` — a TAG-1 hybrid (`mldsa65-ed25519`), the
+/// production row, since the classical row's deletion (the hybrid-only
+/// launch, AUTH-1.1): [`key_of`] at that row. The grammar is
+/// algorithm-agnostic (AUTH-1.4), so every vector built on this key tests
+/// the record's shape and not the row's arithmetic.
 pub fn key(i: u8) -> PublicKey {
-    PublicKey::Ed25519([i; 32])
+    key_of(KeyKind::MlDsa65Ed25519, i)
 }
 
-/// Deterministic test key over a wide index (for many-key records).
+/// Deterministic test key over a wide index (for many-key records) — a
+/// tag-1 hybrid whose seed carries the index in its last four bytes.
 pub fn wide_key(i: u32) -> PublicKey {
-    let mut raw = [0u8; 32];
-    raw[28..].copy_from_slice(&i.to_be_bytes());
-    PublicKey::Ed25519(raw)
+    let mut seed = [0u8; 32];
+    seed[28..].copy_from_slice(&i.to_be_bytes());
+    key_from_seed(KeyKind::MlDsa65Ed25519, seed)
 }
 
 pub fn fp(i: u8) -> Fingerprint {
@@ -316,30 +321,24 @@ pub fn retire_payload(indices: &[u8]) -> Vec<u8> {
 
 // ------------------------------------------------------------ hybrid keys
 
-/// The three `ALGS` rows as a test draw: the classical key and, since signed
-/// ops, the two hybrid arms. Matched exhaustively wherever a kind picks a
-/// constructor, so a fourth row states its own arm here rather than falling
-/// into the classical one.
+/// The two `ALGS` rows as a test draw — the two hybrid arms, the key kinds
+/// since the classical row's deletion (AUTH-1.1, AUTH-1.5). Matched
+/// exhaustively wherever a kind picks a constructor, so a third row states
+/// its own arm here rather than falling into another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyKind {
-    Ed25519,
     MlDsa65Ed25519,
     FnDsa512PreviewEd25519,
 }
 
 impl KeyKind {
     /// Every row, in `ALGS` order.
-    pub const ALL: [KeyKind; 3] = [
-        KeyKind::Ed25519,
-        KeyKind::MlDsa65Ed25519,
-        KeyKind::FnDsa512PreviewEd25519,
-    ];
+    pub const ALL: [KeyKind; 2] = [KeyKind::MlDsa65Ed25519, KeyKind::FnDsa512PreviewEd25519];
 
-    /// A strategy's `0..3` draw, mapped in ONE place.
+    /// A strategy's `0..2` draw, mapped in ONE place.
     pub fn from_draw(n: u8) -> KeyKind {
-        match n % 3 {
-            0 => KeyKind::Ed25519,
-            1 => KeyKind::MlDsa65Ed25519,
+        match n % 2 {
+            0 => KeyKind::MlDsa65Ed25519,
             _ => KeyKind::FnDsa512PreviewEd25519,
         }
     }
@@ -364,12 +363,12 @@ pub fn expand_seed<const N: usize>(seed: &[u8; 32]) -> Box<[u8; N]> {
     out
 }
 
-/// The key of `kind` a 32-byte seed names: the classical key IS the seed's
-/// bytes (so the classical row of this is [`key`]), a hybrid key the seed
-/// expanded to its row's raw width.
+/// The key of `kind` a 32-byte seed names: the seed expanded to the row's
+/// raw width — the post-quantum half's bytes then the Ed25519 half's, as the
+/// KEY PIN orders them, no half of it a point or a lattice key anything here
+/// decodes (AUTH-1.4).
 pub fn key_from_seed(kind: KeyKind, seed: [u8; 32]) -> PublicKey {
     match kind {
-        KeyKind::Ed25519 => PublicKey::Ed25519(seed),
         KeyKind::MlDsa65Ed25519 => {
             PublicKey::MlDsa65Ed25519(expand_seed::<MLDSA65_ED25519_KEY_LEN>(&seed))
         }
@@ -379,7 +378,7 @@ pub fn key_from_seed(kind: KeyKind, seed: [u8; 32]) -> PublicKey {
     }
 }
 
-/// Deterministic test key `i` of `kind` — [`key`] at the classical row.
+/// Deterministic test key `i` of `kind` — [`key`] at the tag-1 row.
 pub fn key_of(kind: KeyKind, i: u8) -> PublicKey {
     key_from_seed(kind, [i; 32])
 }

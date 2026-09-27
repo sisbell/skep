@@ -8,7 +8,7 @@ use crate::common;
 use common::{fp, key};
 use skep_identity::{
     encode_enroll, encode_retire, parse_enroll, parse_retire, Enrollment, Fingerprint, LabelError,
-    PayloadError, PublicKey, ALG_ED25519,
+    PayloadError, PublicKey, ALG_MLDSA65_ED25519,
 };
 
 fn key_hex(i: u8) -> String {
@@ -75,7 +75,7 @@ fn a_canonical_record_is_admitted() {
 #[test]
 fn a_duplicate_member_is_bad_record() {
     let record = format!(
-        r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}],"keys":[{{"alg":"ed25519","key":"{h}","anchor":true}}]}}"#,
+        r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa65-ed25519","key":"{h}","anchor":false}}],"keys":[{{"alg":"mldsa65-ed25519","key":"{h}","anchor":true}}]}}"#,
         h = key_hex(1)
     );
     assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadRecord);
@@ -109,15 +109,15 @@ fn a_leading_bom_is_bad_record() {
 fn insignificant_whitespace_is_bad_record() {
     let h = key_hex(1);
     let after_colon =
-        format!(r#"{{"type": "skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}]}}"#);
+        format!(r#"{{"type": "skep-enroll","keys":[{{"alg":"mldsa65-ed25519","key":"{h}","anchor":false}}]}}"#);
     assert_eq!(err_enroll(after_colon.as_bytes()), PayloadError::BadRecord);
 
     let after_comma =
-        format!(r#"{{"type":"skep-enroll", "keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}]}}"#);
+        format!(r#"{{"type":"skep-enroll", "keys":[{{"alg":"mldsa65-ed25519","key":"{h}","anchor":false}}]}}"#);
     assert_eq!(err_enroll(after_comma.as_bytes()), PayloadError::BadRecord);
 
     let crlf = format!(
-        "{{\r\n\"type\":\"skep-enroll\",\"keys\":[{{\"alg\":\"ed25519\",\"key\":\"{h}\",\"anchor\":false}}]}}"
+        "{{\r\n\"type\":\"skep-enroll\",\"keys\":[{{\"alg\":\"mldsa65-ed25519\",\"key\":\"{h}\",\"anchor\":false}}]}}"
     );
     assert_eq!(err_enroll(crlf.as_bytes()), PayloadError::BadRecord);
 }
@@ -138,7 +138,7 @@ fn non_canonical_escapes_are_bad_record() {
     let bs = char::from(92); // a backslash
     for body in ["u0041", "/", "u00e9", "u0009", "u001F"] {
         let record = format!(
-            r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false,"label":"{bs}{body}"}}]}}"#
+            r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa65-ed25519","key":"{h}","anchor":false,"label":"{bs}{body}"}}]}}"#
         );
         assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadRecord, "escape {bs}{body}");
     }
@@ -149,7 +149,7 @@ fn non_canonical_escapes_are_bad_record() {
 #[test]
 fn a_lone_surrogate_is_bad_record() {
     let record = format!(
-        r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{}","anchor":false,"label":"{}ud800"}}]}}"#,
+        r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa65-ed25519","key":"{}","anchor":false,"label":"{}ud800"}}]}}"#,
         key_hex(1),
         char::from(92)
     );
@@ -162,15 +162,15 @@ fn a_lone_surrogate_is_bad_record() {
 fn reordered_members_are_bad_record() {
     let h = key_hex(1);
     let keys_first =
-        format!(r#"{{"keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}],"type":"skep-enroll"}}"#);
+        format!(r#"{{"keys":[{{"alg":"mldsa65-ed25519","key":"{h}","anchor":false}}],"type":"skep-enroll"}}"#);
     assert_eq!(err_enroll(keys_first.as_bytes()), PayloadError::BadRecord);
 
     let sig_not_last =
-        format!(r#"{{"type":"skep-enroll","sig":"00","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}]}}"#);
+        format!(r#"{{"type":"skep-enroll","sig":"00","keys":[{{"alg":"mldsa65-ed25519","key":"{h}","anchor":false}}]}}"#);
     assert_eq!(err_enroll(sig_not_last.as_bytes()), PayloadError::BadRecord);
 
     let anchor_first =
-        format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","anchor":false,"key":"{h}"}}]}}"#);
+        format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa65-ed25519","anchor":false,"key":"{h}"}}]}}"#);
     assert_eq!(err_enroll(anchor_first.as_bytes()), PayloadError::BadRecord);
 }
 
@@ -181,7 +181,7 @@ fn reordered_members_are_bad_record() {
 fn uppercase_hex_is_bad_record() {
     // A key whose hex carries letters (0xab ⇒ "abab…"), so uppercasing differs.
     let up = key_hex(0xab).to_uppercase();
-    let enroll = format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{up}","anchor":false}}]}}"#);
+    let enroll = format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa65-ed25519","key":"{up}","anchor":false}}]}}"#);
     assert_eq!(err_enroll(enroll.as_bytes()), PayloadError::BadRecord);
 
     let up = fp_hex(1).to_uppercase();
@@ -207,7 +207,7 @@ fn a_label_outside_the_domain_is_bad_record() {
         r#""label":{}"#,
     ] {
         let record =
-            format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false,{label}}}]}}"#);
+            format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa65-ed25519","key":"{h}","anchor":false,{label}}}]}}"#);
         assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadRecord, "{label}");
     }
 }
@@ -217,7 +217,7 @@ fn a_label_outside_the_domain_is_bad_record() {
 #[test]
 fn a_trailing_space_label_is_admitted_verbatim() {
     let record = format!(
-        r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{}","anchor":false,"label":"my phone "}}]}}"#,
+        r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa65-ed25519","key":"{}","anchor":false,"label":"my phone "}}]}}"#,
         key_hex(1)
     );
     let parsed = ok_enroll(record.as_bytes());
@@ -232,11 +232,11 @@ fn a_trailing_space_label_is_admitted_verbatim() {
 fn an_extra_member_is_bad_record() {
     let h = key_hex(1);
     let on_record =
-        format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}],"extra":1}}"#);
+        format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa65-ed25519","key":"{h}","anchor":false}}],"extra":1}}"#);
     assert_eq!(err_enroll(on_record.as_bytes()), PayloadError::BadRecord);
 
     let on_entry =
-        format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false,"extra":1}}]}}"#);
+        format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa65-ed25519","key":"{h}","anchor":false,"extra":1}}]}}"#);
     assert_eq!(err_enroll(on_entry.as_bytes()), PayloadError::BadRecord);
 }
 
@@ -244,7 +244,7 @@ fn an_extra_member_is_bad_record() {
 /// is REQUIRED, one spelling per value — AUTH-2.128).
 #[test]
 fn a_missing_anchor_is_bad_record() {
-    let record = format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{}"}}]}}"#, key_hex(1));
+    let record = format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa65-ed25519","key":"{}"}}]}}"#, key_hex(1));
     assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadRecord);
 }
 
@@ -255,14 +255,14 @@ fn a_missing_anchor_is_bad_record() {
 fn a_wrong_or_missing_type_is_bad_record() {
     let h = key_hex(1);
     let disagree =
-        format!(r#"{{"type":"skep-retire","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}]}}"#);
+        format!(r#"{{"type":"skep-retire","keys":[{{"alg":"mldsa65-ed25519","key":"{h}","anchor":false}}]}}"#);
     assert_eq!(err_enroll(disagree.as_bytes()), PayloadError::BadRecord);
 
     let other =
-        format!(r#"{{"type":"skep-enrol","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}]}}"#);
+        format!(r#"{{"type":"skep-enrol","keys":[{{"alg":"mldsa65-ed25519","key":"{h}","anchor":false}}]}}"#);
     assert_eq!(err_enroll(other.as_bytes()), PayloadError::BadRecord);
 
-    let missing = format!(r#"{{"keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}]}}"#);
+    let missing = format!(r#"{{"keys":[{{"alg":"mldsa65-ed25519","key":"{h}","anchor":false}}]}}"#);
     assert_eq!(err_enroll(missing.as_bytes()), PayloadError::BadRecord);
 }
 
@@ -273,9 +273,9 @@ fn a_wrong_or_missing_type_is_bad_record() {
 #[test]
 fn a_sig_member_is_skipped_and_the_table_is_identical() {
     let h = key_hex(1);
-    let without = format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}]}}"#);
+    let without = format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa65-ed25519","key":"{h}","anchor":false}}]}}"#);
     let with = format!(
-        r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}}],"sig":"deadbeef not a real signature"}}"#
+        r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa65-ed25519","key":"{h}","anchor":false}}],"sig":"deadbeef not a real signature"}}"#
     );
     assert_eq!(
         ok_enroll(with.as_bytes()),
@@ -337,19 +337,31 @@ fn a_sig_is_admitted_only_in_its_canonical_escaping() {
     }
 }
 
-/// §2.1 row 17 — an unadmitted alg (`mldsa44`, `p256`, `ED25519`) and a `key`
-/// of the wrong hex length are each `bad_record` ⇒ whole record inert
-/// (AUTH-2.9, AUTH-2.91).
+/// §2.1 row 17 — an unadmitted alg (`mldsa44`, `p256`; `ed25519`, the
+/// classical token no row carries since the hybrid-only launch deleted its
+/// row — AUTH-1.5, the frozen token set; `MLDSA65-ED25519`, the case
+/// variant; `fndsa512-ed25519`, tag 2's RESERVED token with no row yet) and a
+/// `key` of the wrong hex length are each `bad_record` ⇒ whole record inert
+/// (AUTH-2.9, AUTH-2.91). The classical row's deletion makes `"alg":"ed25519"`
+/// a syntax fault at the fold — a record naming it enrols nothing, whatever
+/// its key — which is the one place that deletion is pinned as a VERDICT.
 #[test]
 fn an_unadmitted_alg_or_wrong_hex_length_is_bad_record() {
     let h = key_hex(1);
-    for alg in ["mldsa44", "p256", "ED25519"] {
+    for alg in ["mldsa44", "p256", "ed25519", "MLDSA65-ED25519", "fndsa512-ed25519"] {
         let record =
             format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"{alg}","key":"{h}","anchor":false}}]}}"#);
         assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadRecord, "alg {alg}");
     }
-    let short = &h[..62];
-    let record = format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{short}","anchor":false}}]}}"#);
+    // The classical token over a classical-width key — the record a
+    // pre-launch client would have composed — is the same `bad_record`.
+    let classical = format!(
+        r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{}","anchor":false}}]}}"#,
+        "ab".repeat(32)
+    );
+    assert_eq!(err_enroll(classical.as_bytes()), PayloadError::BadRecord);
+    let short = &h[..h.len() - 2];
+    let record = format!(r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa65-ed25519","key":"{short}","anchor":false}}]}}"#);
     assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadRecord);
 }
 
@@ -378,7 +390,7 @@ fn the_anchor_flag_and_a_label_anchor_are_distinct() {
 fn a_duplicate_entry_names_the_repeating_entry_index() {
     let h = key_hex(3);
     let record = format!(
-        r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}},{{"alg":"ed25519","key":"{h}","anchor":true}}]}}"#
+        r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa65-ed25519","key":"{h}","anchor":false}},{{"alg":"mldsa65-ed25519","key":"{h}","anchor":true}}]}}"#
     );
     assert_eq!(err_enroll(record.as_bytes()), PayloadError::DuplicateKey(2));
 
@@ -400,7 +412,7 @@ fn an_empty_array_is_empty() {
 #[test]
 fn an_unadmitted_alg_precedes_a_later_duplicate() {
     let record = format!(
-        r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa44","key":"{h1}","anchor":false}},{{"alg":"ed25519","key":"{h2}","anchor":false}},{{"alg":"ed25519","key":"{h2}","anchor":false}}]}}"#,
+        r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa44","key":"{h1}","anchor":false}},{{"alg":"mldsa65-ed25519","key":"{h2}","anchor":false}},{{"alg":"mldsa65-ed25519","key":"{h2}","anchor":false}}]}}"#,
         h1 = key_hex(1),
         h2 = key_hex(2)
     );
@@ -420,7 +432,7 @@ fn a_non_canonical_body_that_also_repeats_an_entry_is_bad_record() {
     // Insignificant whitespace after a `:`, two entries carrying one key.
     let h = key_hex(3);
     let spaced = format!(
-        r#"{{"type": "skep-enroll","keys":[{{"alg":"ed25519","key":"{h}","anchor":false}},{{"alg":"ed25519","key":"{h}","anchor":true}}]}}"#
+        r#"{{"type": "skep-enroll","keys":[{{"alg":"mldsa65-ed25519","key":"{h}","anchor":false}},{{"alg":"mldsa65-ed25519","key":"{h}","anchor":true}}]}}"#
     );
     assert_eq!(err_enroll(spaced.as_bytes()), PayloadError::BadRecord);
 
@@ -428,7 +440,7 @@ fn a_non_canonical_body_that_also_repeats_an_entry_is_bad_record() {
     // do carry one key and the duplicate is real — the compare decides first.
     let up = key_hex(0xab).to_uppercase();
     let uppercase = format!(
-        r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{up}","anchor":false}},{{"alg":"ed25519","key":"{up}","anchor":true}}]}}"#
+        r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa65-ed25519","key":"{up}","anchor":false}},{{"alg":"mldsa65-ed25519","key":"{up}","anchor":true}}]}}"#
     );
     assert_eq!(err_enroll(uppercase.as_bytes()), PayloadError::BadRecord);
 
@@ -499,7 +511,7 @@ fn encode_emits_the_canonical_forms() {
         Enrollment::new(key(2), false, None).unwrap(),
     ]);
     let want = format!(
-        r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{}","anchor":true,"label":"desk key"}},{{"alg":"ed25519","key":"{}","anchor":false}}]}}"#,
+        r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa65-ed25519","key":"{}","anchor":true,"label":"desk key"}},{{"alg":"mldsa65-ed25519","key":"{}","anchor":false}}]}}"#,
         key_hex(1),
         key_hex(2)
     );
@@ -535,7 +547,7 @@ fn the_canonical_escape_table_is_pinned_as_bytes() {
     let record = encode_enroll(&[Enrollment::new(key(1), false, Some(label.to_owned()))
         .expect("the AUTH-1.24 domain admits every character here")]);
     let want = format!(
-        r#"{{"type":"skep-enroll","keys":[{{"alg":"ed25519","key":"{}","anchor":false,"label":"\u0000\u0001\u0007\b\t\u000b\f\r\u000e\u001f \"\\/é~"}}]}}"#,
+        r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa65-ed25519","key":"{}","anchor":false,"label":"\u0000\u0001\u0007\b\t\u000b\f\r\u000e\u001f \"\\/é~"}}]}}"#,
         key_hex(1)
     );
     assert_eq!(record, want);
@@ -570,7 +582,10 @@ fn round_trip_domain_corners() {
 }
 
 /// AUTH-1.25 — `Enrollment::new` is the only constructor: `Some("")` maps
-/// to `None`; a label containing `\n` is `Err(LabelError::Newline)`.
+/// to `None`; a label containing `\n` is `Err(LabelError::Newline)`; a label
+/// over AUTH-1.24's 128 bytes is `Err(LabelError::TooLong)` — counted in
+/// BYTES of UTF-8, never characters, so 64 two-byte characters are admitted
+/// and 65 are not (AUTH RES-206).
 #[test]
 fn enrollment_constructor_polices_the_label_domain() {
     let e = Enrollment::new(key(1), false, Some(String::new())).unwrap();
@@ -580,6 +595,63 @@ fn enrollment_constructor_polices_the_label_domain() {
         Enrollment::new(key(1), false, Some("two\nlines".to_owned())),
         Err(LabelError::Newline)
     );
+
+    let at_the_bound = "x".repeat(128);
+    assert_eq!(
+        Enrollment::new(key(1), false, Some(at_the_bound.clone())).unwrap().label(),
+        Some(at_the_bound.as_str())
+    );
+    assert_eq!(
+        Enrollment::new(key(1), false, Some("x".repeat(129))),
+        Err(LabelError::TooLong)
+    );
+    let two_byte = "é".repeat(64); // 128 bytes of UTF-8
+    assert_eq!(two_byte.len(), 128);
+    assert_eq!(
+        Enrollment::new(key(1), false, Some(two_byte.clone())).unwrap().label(),
+        Some(two_byte.as_str())
+    );
+    assert_eq!(
+        Enrollment::new(key(1), false, Some("é".repeat(65))),
+        Err(LabelError::TooLong),
+        "65 two-byte characters are 130 bytes: bytes, never characters"
+    );
+    // Both faults at once: the newline is read first — both are refusals.
+    assert_eq!(
+        Enrollment::new(key(1), false, Some(format!("{}\n", "x".repeat(200)))),
+        Err(LabelError::Newline)
+    );
+}
+
+/// AUTH-2.96's row — a `label` of 128 bytes · a `label` of 129 bytes:
+/// Honored, label verbatim · `bad_record` — the canonical profile's own
+/// outcome and NO sub-token of its own (AUTH-2.128 as RES-206 landed it;
+/// AUTH-1.24's bound counted in BYTES, AUTH-1.20). Four vectors: 128 bytes of
+/// ASCII, 129; 128 bytes of two-byte characters (64 of them), 129 bytes of
+/// them (64 and one ASCII byte). The 129-byte bodies are spelled by hand,
+/// since `Enrollment::new` composes none.
+#[test]
+fn a_label_is_admitted_at_128_bytes_and_refused_at_129() {
+    let h = key_hex(1);
+    let record_with = |label: &str| {
+        format!(
+            r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa65-ed25519","key":"{h}","anchor":false,"label":"{label}"}}]}}"#
+        )
+    };
+    for at_the_bound in ["x".repeat(128), "é".repeat(64), "😀".repeat(32)] {
+        assert_eq!(at_the_bound.len(), 128, "the fixture is 128 BYTES");
+        let parsed = ok_enroll(record_with(&at_the_bound).as_bytes());
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].label(), Some(at_the_bound.as_str()), "verbatim");
+        // …and the encoder emits the same bytes back (the round trip).
+        assert_eq!(encode_enroll(&parsed), record_with(&at_the_bound));
+    }
+    for over in ["x".repeat(129), format!("{}x", "é".repeat(64)), format!("{}x", "😀".repeat(32))] {
+        assert_eq!(over.len(), 129, "the fixture is 129 BYTES");
+        assert_eq!(err_enroll(record_with(&over).as_bytes()), PayloadError::BadRecord);
+    }
+    // 65 two-byte characters — 130 bytes, 65 characters: the count is bytes.
+    assert_eq!(err_enroll(record_with(&"é".repeat(65)).as_bytes()), PayloadError::BadRecord);
 }
 
 /// AUTH-1.28 — `PayloadError::token()`: the one authority, all seven rows,
@@ -596,33 +668,43 @@ fn every_payload_error_variant_has_its_pinned_token() {
 }
 
 /// AUTH-1.2/AUTH-1.3/AUTH-1.4 — `PublicKey::parse` is syntax-only and
-/// case-insensitive; `to_hex` is lowercase; `alg`/`raw` read the table row.
+/// case-insensitive; `to_hex` is lowercase; `alg`/`raw` read the table row —
+/// at the tag-1 row, 1,984 raw bytes and 3,968 hex.
 #[test]
 fn public_key_surface() {
     let k = key(0xab);
-    assert_eq!(k.alg(), "ed25519");
-    assert_eq!(k.raw().len(), 32);
+    assert_eq!(k.alg(), "mldsa65-ed25519");
+    assert_eq!(k.raw().len(), 1984);
     let key_hex = k.to_hex();
-    assert_eq!(key_hex.len(), 64);
+    assert_eq!(key_hex.len(), 3968);
     assert_eq!(key_hex, key_hex.to_lowercase());
 
     assert_eq!(
-        PublicKey::parse("ed25519", &key_hex.to_uppercase()).unwrap(),
+        PublicKey::parse("mldsa65-ed25519", &key_hex.to_uppercase()).unwrap(),
         k
     );
-    assert!(PublicKey::parse("ed25519", &"ff".repeat(32)).is_ok());
+    assert!(PublicKey::parse("mldsa65-ed25519", &"ff".repeat(1984)).is_ok());
 
     use skep_identity::KeyParseError;
     assert_eq!(PublicKey::parse("rsa", &key_hex), Err(KeyParseError::UnknownAlg));
-    assert_eq!(PublicKey::parse("ed25519", "zz"), Err(KeyParseError::BadHex));
+    // The deleted classical token names no row (AUTH-1.5): `UnknownAlg`, as
+    // any unadmitted token, whatever the key.
+    assert_eq!(PublicKey::parse("ed25519", &"ab".repeat(32)), Err(KeyParseError::UnknownAlg));
+    assert_eq!(PublicKey::parse("mldsa65-ed25519", "zz"), Err(KeyParseError::BadHex));
     assert_eq!(
-        PublicKey::parse("ed25519", &key_hex[..63]),
+        PublicKey::parse("mldsa65-ed25519", &key_hex[..key_hex.len() - 1]),
         Err(KeyParseError::BadHex)
     );
-    assert_eq!(PublicKey::parse("ed25519", &key_hex[..62]), Err(KeyParseError::BadLength));
+    assert_eq!(
+        PublicKey::parse("mldsa65-ed25519", &key_hex[..key_hex.len() - 2]),
+        Err(KeyParseError::BadLength)
+    );
 
-    assert_eq!(PublicKey::parse(&key_hex, ALG_ED25519), Err(KeyParseError::UnknownAlg));
-    assert_eq!(PublicKey::parse(ALG_ED25519, ALG_ED25519), Err(KeyParseError::BadHex));
+    assert_eq!(PublicKey::parse(&key_hex, ALG_MLDSA65_ED25519), Err(KeyParseError::UnknownAlg));
+    assert_eq!(
+        PublicKey::parse(ALG_MLDSA65_ED25519, ALG_MLDSA65_ED25519),
+        Err(KeyParseError::BadHex)
+    );
 }
 
 /// AUTH-1.9 — `Fingerprint::to_hex`/`parse_hex`: 64 lowercase out; exactly

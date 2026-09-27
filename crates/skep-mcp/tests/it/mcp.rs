@@ -14,9 +14,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::Duration;
 
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::SigningKey;
 use serde_json::{json, Value};
 use skep_identity::{encode_enroll, framed, Enrollment, PublicKey, SESSION_TAG};
+use skepd::hybrid::{HybridSigner, TAG_MLDSA65_ED25519};
 use skepd::{serve, Daemon, Skepd, DEFAULT_WORKERS};
 
 // ── a self-owned temp dir (kept dependency-free) ────────────────────────
@@ -109,8 +110,18 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The HYBRID signer a seed carrier derives under tag 1 — the production row
+/// (`mldsa65-ed25519`), the KDF PIN's two halves from the key's 32 bytes,
+/// never the raw key itself (the ruled "one seed, two halves"): what the
+/// ceremony enrols and what signs its sessions, both halves.
+fn signer_of(sk: &SigningKey) -> HybridSigner {
+    HybridSigner::from_seed(TAG_MLDSA65_ED25519, &sk.to_bytes()).expect("tag 1 is a row")
+}
+
+/// The ONE `ALGS` entry a seed carrier enrols: its derived tag-1 hybrid key
+/// (the classical `ed25519` row is deleted — the hybrid-only launch).
 fn pubkey_of(sk: &SigningKey) -> PublicKey {
-    PublicKey::parse("ed25519", &hex(&sk.verifying_key().to_bytes())).expect("a real point")
+    signer_of(sk).public_key().clone()
 }
 
 fn open_bare_session(port: u16, principal: u64) -> String {
@@ -122,7 +133,11 @@ fn open_bare_session(port: u16, principal: u64) -> String {
 }
 
 /// A SIGNED session over the challenge handshake, signing the origin
-/// actually dialed (the AUTH-6.4 framing).
+/// actually dialed (the AUTH-6.4 framing) with the seed carrier's derived
+/// HYBRID key — `sig` the hybrid blob, the post-quantum signature then the
+/// Ed25519 signature, 6,746 hex under tag 1 (AUTH-4.32, AUTH-6.3). The
+/// adapter itself opens BARE sessions and signs nothing; this is the
+/// fixture's ceremony alone.
 fn open_signed_session(port: u16, principal: u64, sk: &SigningKey) -> String {
     let (st, body) = http(port, "GET", &format!("/challenge?principal={principal}"), None, b"");
     assert_eq!(st, 200, "challenge: {}", String::from_utf8_lossy(&body));
@@ -133,7 +148,7 @@ fn open_signed_session(port: u16, principal: u64, sk: &SigningKey) -> String {
         SESSION_TAG,
         &[origin.as_bytes(), nonce.as_bytes(), principal.to_string().as_bytes()],
     );
-    let sig = hex(&sk.sign(&payload).to_bytes());
+    let sig = hex(&signer_of(sk).sign(&payload));
     let body =
         json!({"principal": principal, "nonce": nonce, "origin": origin, "sig": sig}).to_string();
     let (st, resp) = http(port, "POST", "/session", None, body.as_bytes());

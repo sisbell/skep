@@ -25,15 +25,17 @@ use skep_identity::{
 // ------------------------------------------------------------- I1 grammar
 
 /// A NON-EMPTY, DUPLICATE-FREE `Vec<Enrollment>` — the record domain per entry:
-/// the key's `ALGS` row drawn per entry (the classical key and, since signed
-/// ops, both hybrid arms — `KeyKind::from_draw`), `anchor` flag included,
-/// labels via `Enrollment::new`, and the label generator `.+` (any
-/// non-newline text, so labels ending in 0x20 or carrying `"`, `\`, a tab or
-/// a control char are generated, not dodged — AUTH-2.89 forbids narrowing to
-/// dodge them).
+/// the key's `ALGS` row drawn per entry (both hybrid arms, the key kinds since
+/// the classical row's deletion — `KeyKind::from_draw`), `anchor` flag
+/// included, labels via `Enrollment::new`, and the label generator `.{1,128}`
+/// over the label domain's own bound — any non-newline text of at most 128
+/// BYTES (AUTH-1.24; the generator draws characters, so a draw whose UTF-8
+/// runs past 128 bytes is cut back to the domain by its bytes rather than
+/// dodged), so labels ending in 0x20 or carrying `"`, `\`, a tab or a control
+/// char are generated, not dodged — AUTH-2.89 forbids narrowing to dodge them.
 fn enrollments() -> impl Strategy<Value = Vec<Enrollment>> {
     prop::collection::vec(
-        (any::<[u8; 32]>(), 0..3u8, any::<bool>(), prop::option::of(".+")),
+        (any::<[u8; 32]>(), 0..2u8, any::<bool>(), prop::option::of(".{1,128}")),
         1..8,
     )
     .prop_map(|raws| {
@@ -45,17 +47,31 @@ fn enrollments() -> impl Strategy<Value = Vec<Enrollment>> {
             if out.iter().any(|e| e.key == key) {
                 continue;
             }
-            out.push(Enrollment::new(key, anchor, label).expect("generator labels have no newline"));
+            let label = label.map(|l| within_label_bytes(&l));
+            out.push(Enrollment::new(key, anchor, label).expect("generator labels are in the domain"));
         }
         out
     })
     .prop_filter("at least one entry", |v| !v.is_empty())
 }
 
+/// `label` cut back to at most 128 bytes of UTF-8 at a character boundary —
+/// the domain's byte bound (AUTH-1.24) applied to a draw made in characters,
+/// which may run to 512 bytes over four-byte scalars. Never empty: the
+/// generator draws at least one character and the first character is at most
+/// four bytes.
+fn within_label_bytes(label: &str) -> String {
+    let mut end = label.len().min(128);
+    while !label.is_char_boundary(end) {
+        end -= 1;
+    }
+    label[..end].to_string()
+}
+
 /// A NON-EMPTY, DUPLICATE-FREE `Vec<Fingerprint>` — the retirement record
 /// domain, the fingerprints of keys of every row.
 fn retire_fps() -> impl Strategy<Value = Vec<Fingerprint>> {
-    prop::collection::vec((any::<[u8; 32]>(), 0..3u8), 1..8)
+    prop::collection::vec((any::<[u8; 32]>(), 0..2u8), 1..8)
         .prop_map(|raws| {
             let mut out: Vec<Fingerprint> = Vec::new();
             for (seed, kind) in raws {
@@ -175,8 +191,8 @@ impl ActKind {
 
 /// One scripted deposit, pre-materialization. Each enrolled key and each
 /// retired fingerprint names its `ALGS` row beside its index, so a stream
-/// enrols and retires keys of every row (the hybrid arms since signed ops),
-/// and a retirement drawn at an enrolled key's row and index names that key.
+/// enrols and retires keys of every row (the two hybrid arms), and a
+/// retirement drawn at an enrolled key's row and index names that key.
 #[derive(Debug, Clone)]
 struct Act {
     kind: ActKind,
@@ -211,8 +227,8 @@ fn act_strategy() -> impl Strategy<Value = Act> {
         0..4u8,
         0..ACCOUNTS.len(),
         0..homes().len(),
-        prop::collection::vec((0..3u8, 0..6u8, any::<bool>()), 0..4),
-        prop::collection::vec((0..3u8, 0..6u8), 0..4),
+        prop::collection::vec((0..2u8, 0..6u8, any::<bool>()), 0..4),
+        prop::collection::vec((0..2u8, 0..6u8), 0..4),
     )
         .prop_map(|(kind, subject_index, home_index, enroll_entries, retire_indices)| Act {
             kind: ActKind::from_draw(kind),

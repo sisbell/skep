@@ -34,12 +34,25 @@ pub const RETIRE_TYPE: &str = "skep-retire";
 
 /// AUTH-1.18 — the record cap. Bounds ONE record — the concatenated bytes of
 /// the link's own FROM spans, never the home document (AUTH-1.19) — counted
-/// in BYTES, never positions (AUTH-1.20). A PERMANENT pin: there is no fold
-/// version and the constant MUST NOT change (AUTH-1.21, I2 AUTH-2.90), and it
-/// STANDS at 64 KiB over the narrower JSON record domain (AUTH-2.130's cost
-/// note). It bounds the fold's per-record work only under the wire-codec
-/// premise that every value carries ≥ 1 byte (AUTH-1.22).
-pub const MAX_RECORD_BYTES: usize = 64 * 1024;
+/// in BYTES, never positions (AUTH-1.20). A PERMANENT pin — 128 KiB, RAISED
+/// from 64 KiB BEFORE the first served board (the hybrid-only launch's Q8,
+/// owner 2026-09-26 "b"; AUTH RES-204 re-pinning AUTH-1.18/1.21), AUTH-2.90's
+/// permanence clock starting at that board: there is no fold version and
+/// from the first served board the constant MUST NOT change (AUTH-1.21).
+/// Sized so a signed hybrid genesis carries AUTH-3.57's sixteen tag-1
+/// entries in one record — 71,074 B — with room to spare (AUTH-2.130's cost
+/// note: 32 label-free tag-1 entries, 68 tag-3). It bounds the fold's
+/// per-record work only under the wire-codec premise that every value
+/// carries ≥ 1 byte (AUTH-1.22).
+pub const MAX_RECORD_BYTES: usize = 128 * 1024;
+
+/// AUTH-1.24 — the label's byte bound: at most 128 BYTES of UTF-8, counted
+/// in bytes as the record cap counts (AUTH-1.20), never in characters (rc-2,
+/// owner 2026-09-26 "128 bytes"; AUTH RES-206). A longer label is
+/// `Err(LabelError::TooLong)` at [`Enrollment::new`] (AUTH-1.25) and, in a
+/// record, `bad_record` — the canonical profile's own outcome, no sub-token
+/// of its own (AUTH-2.96, AUTH-2.128).
+const MAX_LABEL_BYTES: usize = 128;
 
 /// One enrollment key entry's parse (AUTH-1.23, AUTH-2.128): the key, the
 /// anchor flag, and the informational label. `anchor` is the ANCHOR flag — the
@@ -58,12 +71,17 @@ pub struct Enrollment {
 
 impl Enrollment {
     /// AUTH-1.25 — the ONLY constructor. The label DOMAIN (AUTH-1.24) is
-    /// `None`, or text that is non-empty and contains no `\n` — a trailing
-    /// 0x20 is IN the domain. `Some("")` maps to `None`; a label containing
-    /// `\n` is `Err(LabelError::Newline)`.
+    /// `None`, or text that is non-empty, contains no `\n` and is at most
+    /// [`MAX_LABEL_BYTES`] (128) bytes of UTF-8 — a trailing 0x20 is IN the
+    /// domain. `Some("")` maps to `None`; a label containing `\n` is
+    /// `Err(LabelError::Newline)`; one over 128 bytes is
+    /// `Err(LabelError::TooLong)` — the newline read first, so a label with
+    /// both faults names the newline (both are refusals; the fold answers
+    /// `bad_record` to either).
     pub fn new(key: PublicKey, anchor: bool, label: Option<String>) -> Result<Enrollment, LabelError> {
         let label = match label {
             Some(label) if label.contains('\n') => return Err(LabelError::Newline),
+            Some(label) if label.len() > MAX_LABEL_BYTES => return Err(LabelError::TooLong),
             Some(label) if label.is_empty() => None,
             other => other,
         };
@@ -81,12 +99,16 @@ impl Enrollment {
 pub enum LabelError {
     /// The label contains `\n` — outside the AUTH-1.24 domain.
     Newline,
+    /// The label is over AUTH-1.24's 128 bytes of UTF-8 (counted in bytes,
+    /// never characters) — outside the domain (AUTH RES-206).
+    TooLong,
 }
 
 impl fmt::Display for LabelError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LabelError::Newline => f.write_str("label contains a newline"),
+            LabelError::TooLong => f.write_str("label is over 128 bytes of UTF-8"),
         }
     }
 }
@@ -246,10 +268,17 @@ fn parse_key_entry(v: &Value) -> Result<Enrollment, PayloadError> {
     // `anchor` — BOOLEAN, REQUIRED, never omitted (AUTH-2.128).
     let anchor = obj.get("anchor").and_then(Value::as_bool).ok_or(PayloadError::BadRecord)?;
     // `label` — STRING, OPTIONAL: present only where a label exists, never
-    // `""`, never `null`, never containing `\n` (AUTH-1.24, AUTH-1.25).
+    // `""`, never `null`, never containing `\n`, and AT MOST 128 BYTES of
+    // UTF-8, counted in bytes (AUTH-1.24, AUTH-1.25; AUTH-2.128 as RES-206
+    // landed it): a longer label is the canonical profile's own `bad_record`,
+    // no sub-token of its own (AUTH-2.96's 128-byte · 129-byte row).
     let label = match obj.get("label") {
         None => None,
-        Some(Value::String(s)) if !s.is_empty() && !s.contains('\n') => Some(s.clone()),
+        Some(Value::String(s))
+            if !s.is_empty() && !s.contains('\n') && s.len() <= MAX_LABEL_BYTES =>
+        {
+            Some(s.clone())
+        }
         Some(_) => return Err(PayloadError::BadRecord),
     };
     // No other member (AUTH-2.128 "No other member"): exactly the three
@@ -259,8 +288,9 @@ fn parse_key_entry(v: &Value) -> Result<Enrollment, PayloadError> {
         return Err(PayloadError::BadRecord);
     }
     let key = PublicKey::parse(alg, key_hex).map_err(|_| PayloadError::BadRecord)?;
-    // The label is in the AUTH-1.24 domain (non-empty, no `\n`, checked above),
-    // so `new` keeps it verbatim (AUTH-1.25); it never returns `Err` here.
+    // The label is in the AUTH-1.24 domain (non-empty, no `\n`, at most 128
+    // bytes — checked above), so `new` keeps it verbatim (AUTH-1.25); it
+    // never returns `Err` here.
     Enrollment::new(key, anchor, label).map_err(|_| PayloadError::BadRecord)
 }
 
@@ -464,7 +494,7 @@ fn parse_record<T>(bytes: &[u8], schema: Schema<T>) -> Result<Vec<T>, PayloadErr
     // `sig` — STRING, OPTIONAL, canonically LAST, IGNORED by the fold whatever
     // it holds (AUTH-2.13, AUTH-2.94); admitted with the body and absent from
     // the answer (AUTH-2.18). BORROWED from `value`, never copied: the body is
-    // a depositor-chosen string the read's cap bounds only at 64 KiB
+    // a depositor-chosen string the read's cap bounds only at 128 KiB
     // (AUTH-2.43), and `canonical_record` wants a `&str`.
     let sig = match obj.get("sig") {
         None => None,
@@ -487,9 +517,9 @@ fn parse_record<T>(bytes: &[u8], schema: Schema<T>) -> Result<Vec<T>, PayloadErr
     // holds; but the cap is the read's and not this parser's, so a caller
     // reaching here without `record_bytes` (AUTH-2.37's non-folding reader)
     // sizes the allocation from the body alone, where a large enough count
-    // ABORTS rather than answering `BadRecord`. The growth given up is ten
-    // reallocations under 64 KiB: no record this parser admits carries more
-    // than ~975 entries, the canonical spelling's smallest entry being the
+    // ABORTS rather than answering `BadRecord`. The growth given up is eleven
+    // reallocations under 128 KiB: no record this parser admits carries more
+    // than ~1,955 entries, the canonical spelling's smallest entry being the
     // retirement's 67 bytes.
     let mut entries: Vec<T> = Vec::new();
     for entry in entries_val {

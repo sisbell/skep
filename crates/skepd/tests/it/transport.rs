@@ -303,8 +303,59 @@ fn expect_100_continue_is_answered_before_the_body_is_sent() {
 }
 
 /// The body cap for a route that carries no frame — the daemon's own
-/// `MAX_SMALL_BODY`, restated so that moving it is a visible decision.
-const SMALL_BODY_CAP: usize = 8 * 1024;
+/// `MAX_SMALL_BODY`, restated so that moving it is a visible decision: 16 KiB
+/// since the hybrid handshake (rc-1, owner 2026-09-26 — every small-body
+/// route, one constant), where a tag-1 signed session body is 6,912 B at a
+/// loopback origin.
+const SMALL_BODY_CAP: usize = 16 * 1024;
+
+/// rc-1's boundary, both ends: a bare session body padded with JSON's own
+/// insignificant whitespace to EXACTLY the small cap is admitted and opens
+/// (200); one byte more is `413 payload_too_large` on the declared length,
+/// before a body byte is read. `/session` is the route the raise was made
+/// for; `/health` takes the same constant, so its boundary is the same.
+#[test]
+fn the_small_body_cap_admits_16_kib_and_refuses_one_byte_more() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let padded = |n: usize| -> String {
+        let head = r#"{"principal":0"#;
+        let mut body = String::from(head);
+        body.push_str(&" ".repeat(n - head.len() - 1));
+        body.push('}');
+        assert_eq!(body.len(), n);
+        body
+    };
+
+    let at_the_cap = padded(SMALL_BODY_CAP);
+    let (status, body) = http(port, "POST", "/session", None, at_the_cap.as_bytes());
+    assert_eq!(status, 200, "16 KiB exactly is admitted: {}", String::from_utf8_lossy(&body));
+    assert!(json(&body)["session"].is_string(), "and the bare session opened");
+
+    // One byte more — DECLARED, never sent, as the cap cell above: the
+    // refusal arrives on the declared length alone, the daemon closing
+    // before a body byte is read (so a client that wrote the body would
+    // meet a closed socket, which is the refusal working).
+    let declare = |path: &str, n: usize| {
+        let raw =
+            format!("POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {n}\r\n\r\n")
+                .into_bytes();
+        raw_exchange(port, &raw)
+    };
+    let (status, _, body) = declare("/session", SMALL_BODY_CAP + 1);
+    assert_eq!(status, 413, "one byte more: {}", String::from_utf8_lossy(&body));
+    assert_eq!(json(&body)["error"].as_str(), Some("payload_too_large"));
+
+    // The same constant at a frameless route's body: 16 KiB is not the 413,
+    // one byte more is.
+    let (status, _) = http(port, "POST", "/health", None, padded(SMALL_BODY_CAP).as_bytes());
+    assert_ne!(status, 413, "/health takes 16 KiB");
+    let (status, _, _) = declare("/health", SMALL_BODY_CAP + 1);
+    assert_eq!(status, 413, "/health refuses one byte more");
+
+    sd.shutdown();
+}
 
 /// The body cap is the ROUTE's, not the daemon's: only `/op` and `/op-at`
 /// carry a frame, and every other route's body is read whole and then never

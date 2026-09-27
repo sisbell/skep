@@ -6,13 +6,15 @@ use std::fmt;
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
-use ed25519_dalek::Signature;
 use rand_core::CryptoRng;
 use serde_json::Value;
 use skep_febe::SessionId;
-use skep_identity::{framed, Fingerprint, IdentityState, KeySet, SESSION_TAG, SESSION_TAG_V2};
+use skep_identity::{
+    framed, Fingerprint, IdentityState, KeySet, PublicKey, SESSION_TAG, SESSION_TAG_V2, SIG_ALGS,
+};
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
 
+use super::hybrid::{self, TAG_FNDSA512_PREVIEW_ED25519, TAG_MLDSA65_ED25519};
 use super::{bare_origins, blocked_prefixes, signed_origins, AuthConfig, Mode, Origin};
 use crate::codec::{check_keys, hex_nibble, hex_string, parse_lower_hex};
 use crate::World;
@@ -545,10 +547,98 @@ pub(crate) fn resolve(
 /// signed body, and the SCOPED signed body — the last two one variant, told
 /// apart by `scope`. A signed body WITHOUT the member is `Scope::Full`, the
 /// second form byte for byte; one carrying `"scope": "content"` is
-/// `Scope::Content`. The bare form has no scope to carry.
+/// `Scope::Content`. The bare form has no scope to carry. The signed body's
+/// `sig` is [`SessionSig`], THE HYBRID BLOB (AUTH-4.34); the body carries NO
+/// `alg` member and names no key.
 pub(crate) enum SessionBody {
     Bare { principal: PrincipalId },
-    Signed { principal: PrincipalId, nonce: Nonce, origin: Origin, scope: Scope, sig: [u8; 64] },
+    Signed { principal: PrincipalId, nonce: Nonce, origin: Origin, scope: Scope, sig: SessionSig },
+}
+
+/// The blob width a marker tag's `SIG_ALGS` row fixes, read off the table at
+/// COMPILE time — so [`SessionSig`]'s array widths are the table's own and no
+/// second spelling of them: a row whose width moved (a new tag under the
+/// frozen-tag rule) moves the arm with it.
+const fn row_sig_len(tag: u8) -> usize {
+    let mut i = 0;
+    while i < SIG_ALGS.len() {
+        if SIG_ALGS[i].tag == tag {
+            return SIG_ALGS[i].sig_len();
+        }
+        i += 1;
+    }
+    panic!("no SIG_ALGS row carries this tag")
+}
+
+/// Tag 1's blob width: ML-DSA-65's 3,309 signature bytes then Ed25519's 64 —
+/// 3,373 bytes, 6,746 hex (AUTH-6.3).
+const TAG1_SIG_LEN: usize = row_sig_len(TAG_MLDSA65_ED25519);
+/// Tag 3's blob width: FN-DSA-512's 666 signature bytes then Ed25519's 64 —
+/// 730 bytes, 1,460 hex (AUTH-6.3).
+const TAG3_SIG_LEN: usize = row_sig_len(TAG_FNDSA512_PREVIEW_ED25519);
+
+/// THE SIGNED BODY's `sig` (AUTH-4.34, AUTH-6.3; the hybrid handshake, the
+/// hybrid-only launch's Q0/Q2/Q3 — owner 2026-09-26): THE HYBRID BLOB — the
+/// post-quantum signature THEN the Ed25519 signature, both over the same
+/// signed bytes — at EXACTLY one of the two rows' widths, ONE ARM PER
+/// `SIG_ALGS` ROW over a boxed array of that row's `sig_len()`, so a blob of
+/// any other width is UNREPRESENTABLE: as the base's `[u8; 64]` made a short
+/// signature unrepresentable, this type makes every non-hybrid width so, and
+/// the wrong-width-as-401 reading cannot be written. The width is the SYNTAX
+/// check ALONE — the body carries no `alg` member and an arm names no key:
+/// `find_signer` tries every enrolled key under ITS OWN row, and a blob whose
+/// width is not the key's row's simply fails to verify under that key
+/// (AUTH-4.32, AUTH-4.33). Boxed as the keys are: 3,373 bytes inline would
+/// ride every `SessionBody` by value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SessionSig {
+    /// Tag 1's blob — 3,373 bytes: ML-DSA-65's signature then Ed25519's.
+    MlDsa65Ed25519(Box<[u8; TAG1_SIG_LEN]>),
+    /// Tag 3's blob — 730 bytes: FN-DSA-512's signature then Ed25519's.
+    FnDsa512PreviewEd25519(Box<[u8; TAG3_SIG_LEN]>),
+}
+
+impl SessionSig {
+    /// The blob's bytes, at its arm's width.
+    pub fn as_bytes(&self) -> &[u8] {
+        match self {
+            SessionSig::MlDsa65Ed25519(b) => &b[..],
+            SessionSig::FnDsa512PreviewEd25519(b) => &b[..],
+        }
+    }
+
+    /// The `sig` member's PARSE (AUTH-6.3): hex, case-free (it is decoded,
+    /// never framed), decoding to EXACTLY one of the two hybrid blob widths —
+    /// 6,746 hex for tag 1's 3,373 bytes, 1,460 hex for tag 3's 730 — and
+    /// `None` for every other length and for a non-hex byte: the 400 whose
+    /// nonce SURVIVES (a syntax fault spends no credential), never a 401. The
+    /// hex LENGTH is read first, so no allocation is sized by a stranger's
+    /// string, and a 128-hex classical signature is refused here before any
+    /// key set is read.
+    pub fn parse(s: &str) -> Option<SessionSig> {
+        match s.len() {
+            n if n == TAG1_SIG_LEN * 2 => {
+                decode_hex_into::<TAG1_SIG_LEN>(s).map(SessionSig::MlDsa65Ed25519)
+            }
+            n if n == TAG3_SIG_LEN * 2 => {
+                decode_hex_into::<TAG3_SIG_LEN>(s).map(SessionSig::FnDsa512PreviewEd25519)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Exactly `N` bytes of case-free hex — the caller has checked the length —
+/// or `None` on a non-hex byte.
+fn decode_hex_into<const N: usize>(s: &str) -> Option<Box<[u8; N]>> {
+    debug_assert_eq!(s.len(), N * 2);
+    let mut raw = Box::new([0u8; N]);
+    for (i, chunk) in s.as_bytes().chunks_exact(2).enumerate() {
+        let hi = hex_nibble(chunk[0].to_ascii_lowercase())?;
+        let lo = hex_nibble(chunk[1].to_ascii_lowercase())?;
+        raw[i] = (hi << 4) | lo;
+    }
+    Some(raw)
 }
 
 /// The handshake refusal — a unit struct: the reason is DESTROYED at the
@@ -590,8 +680,9 @@ impl From<SessionRejected> for HandshakeRefusal {
 /// carrying `"scope": "content"` beside them — all three signed fields, and
 /// `scope` when present a FOURTH, validated BEFORE anything burns. Any
 /// failure is the 400 `malformed_session_request` and the nonce survives: a
-/// scope fault is a syntax fault as the other three are. `Err(detail)` is
-/// the 400's detail text.
+/// scope fault is a syntax fault as the other three are, and so is a `sig`
+/// whose width is none of the hybrid blob widths ([`SessionSig::parse`]).
+/// `Err(detail)` is the 400's detail text.
 ///
 /// `scope` is the signed form's alone. On the BARE body it is "any other
 /// body" (AUTH-6.2), whatever its value — the bare arm is scope-less — so a
@@ -633,8 +724,10 @@ pub(crate) fn parse_session_body(body: &[u8]) -> Result<SessionBody, String> {
                 .ok_or("field 'nonce' is not 64 lowercase hex")?;
             let sig_text =
                 m.get("sig").and_then(Value::as_str).ok_or("field 'sig' must be a string")?;
-            let sig = parse_sig(sig_text)
-                .ok_or("field 'sig' is not 128 hex characters decoding to 64 bytes")?;
+            let sig = SessionSig::parse(sig_text).ok_or(
+                "field 'sig' is not hex decoding to a hybrid signature blob of exactly 3373 \
+                 bytes (tag 1, 6746 hex) or 730 bytes (tag 3, 1460 hex)",
+            )?;
             // The FOURTH strict field (AUTH-6.3): absent is FULL; present, it
             // is exactly the JSON string `content` — no other value, no
             // other type, no case variant.
@@ -649,21 +742,6 @@ pub(crate) fn parse_session_body(body: &[u8]) -> Result<SessionBody, String> {
     }
 }
 
-/// `sig`: 128 hex decoding to exactly 64 bytes — case-free (decoded, never
-/// framed).
-fn parse_sig(s: &str) -> Option<[u8; 64]> {
-    if s.len() != 128 {
-        return None;
-    }
-    let mut raw = [0u8; 64];
-    for (i, chunk) in s.as_bytes().chunks_exact(2).enumerate() {
-        let hi = hex_nibble(chunk[0].to_ascii_lowercase())?;
-        let lo = hex_nibble(chunk[1].to_ascii_lowercase())?;
-        raw[i] = (hi << 4) | lo;
-    }
-    Some(raw)
-}
-
 /// AUTH-6.4 — the signed bytes, VERSIONED and never extended in place. An
 /// UNSCOPED body signs the v1 layout, `framed(SESSION_TAG, [origin, nonce,
 /// principal-as-shortest-decimal])`; a SCOPED body signs the v2 layout,
@@ -675,7 +753,10 @@ fn parse_sig(s: &str) -> Option<[u8; 64]> {
 /// the grammar, a v1 signature never opens a scoped session and a v2
 /// signature never opens an unscoped one. The scope is therefore the
 /// SIGNER's declaration — a limit the signer did not sign could be lifted on
-/// the path by dropping the field.
+/// the path by dropping the field. BOTH NAMES CARRY THE HYBRID LAYOUT (the
+/// naming ruling, owner 2026-09-26 "keep v1/v2 names"): the key's two halves
+/// sign these SAME bytes and `sig` holds the post-quantum signature then the
+/// Ed25519 signature — the field list unchanged, no `skep-session-v3`/`-v4`.
 pub(crate) fn session_payload(
     origin: &Origin,
     nonce_hex: &str,
@@ -693,18 +774,26 @@ pub(crate) fn session_payload(
     }
 }
 
-/// AUTH-4.32 — Ed25519 strict verification (`verify_strict` semantics);
-/// false on an undecodable key or signature; never panics. The decode is
-/// [`super::verifying_key`]'s, which is what keeps this and the precheck's
-/// `undecodable_key` slot answering alike.
-fn verify(key: &skep_identity::PublicKey, payload: &[u8], sig: &[u8; 64]) -> bool {
-    super::verifying_key(key)
-        .is_some_and(|vk| vk.verify_strict(payload, &Signature::from_bytes(sig)).is_ok())
+/// AUTH-4.32 — the HYBRID verification under the KEY's own `ALGS` row:
+/// [`hybrid::verify`] under the key's marker tag — the post-quantum half of
+/// the blob under the key's post-quantum half, the Ed25519 half under its
+/// Ed25519 half by strict verification (`verify_strict`), BOTH over the SAME
+/// payload; either failing fails, and NO HALF OPENS A SESSION ALONE. `false`
+/// on a blob that is not the row's width (a tag-3 blob against a tag-1 key
+/// is `Malformed` there, never a panic), on an undecodable key or signature,
+/// and on a key of no row; never panics. The Ed25519 half's decode inside it
+/// is the same `from_bytes` the precheck's `undecodable_key` courtesy makes,
+/// and the post-quantum half's the same as that courtesy's
+/// ([`super::key_decodes`]) — which is what keeps the two answering alike.
+fn verify(key: &PublicKey, payload: &[u8], sig: &[u8]) -> bool {
+    key.sig_alg().is_some_and(|row| hybrid::verify(row.tag, key, sig, payload).is_ok())
 }
 
-/// AUTH-4.33 — try EVERY enrolled key in fingerprint order — no cutoff,
-/// ever — returning the fingerprint alone.
-fn find_signer(set: &KeySet, payload: &[u8], sig: &[u8; 64]) -> Option<Fingerprint> {
+/// AUTH-4.33 — try EVERY enrolled key in fingerprint order, EACH UNDER ITS
+/// OWN ROW — the body names no key and no algorithm, the blob's width being
+/// the syntax check alone — no cutoff, ever — returning the fingerprint
+/// alone.
+fn find_signer(set: &KeySet, payload: &[u8], sig: &[u8]) -> Option<Fingerprint> {
     set.enrolled().find(|(_, e)| verify(&e.key, payload, sig)).map(|(fp, _)| *fp)
 }
 
@@ -785,11 +874,13 @@ pub(crate) fn handshake(
             }
             // 6/7 — the signature over the body's OWN strings, under the
             // layout the body's scope names: v2 for a scoped body, v1 for an
-            // unscoped one, and never the other (AUTH-6.4). A v1 signature
-            // over a scoped body fails here — the one 401, like any
-            // signature failure.
+            // unscoped one, and never the other (AUTH-6.4) — the HYBRID BLOB,
+            // both halves, every enrolled key tried under its own row. A v1
+            // signature over a scoped body, a blob one half of which fails,
+            // or a well-formed blob no enrolled key verifies fails here — the
+            // one 401, like any signature failure.
             let payload = session_payload(&origin, &nonce.to_hex(), principal, scope);
-            match find_signer(set, &payload, &sig) {
+            match find_signer(set, &payload, sig.as_bytes()) {
                 Some(fp) => Ok(Opened { principal, signer: Some(fp), scope }),
                 None => Err(SessionRejected.into()),
             }
@@ -1056,7 +1147,7 @@ mod tests {
             // loopback default passes step 2: what refuses is the burn.
             origin: Origin::parse("http://127.0.0.1:8642").expect("canonical"),
             scope: Scope::Full,
-            sig: [0u8; 64],
+            sig: SessionSig::MlDsa65Ed25519(Box::new([0u8; TAG1_SIG_LEN])),
         };
         let refusal = handshake(
             &cfg,
@@ -1091,7 +1182,7 @@ mod tests {
             format!(
                 r#"{{"principal":7,"nonce":"{}","origin":"http://127.0.0.1:8642"{scope},"sig":"{}"}}"#,
                 "ab".repeat(32),
-                "cd".repeat(64)
+                "cd".repeat(TAG1_SIG_LEN)
             )
         };
         assert!(matches!(
@@ -1136,10 +1227,96 @@ mod tests {
         .is_err());
     }
 
+    /// AUTH-6.3 / AUTH-4.34 — `sig` is admitted at EXACTLY the two hybrid
+    /// blob widths, 6,746 hex (tag 1, 3,373 bytes) and 1,460 hex (tag 3, 730
+    /// bytes), case-free; every other width — the classical 128 hex among
+    /// them, and one byte either side of each width — is a syntax fault, the
+    /// 400 whose nonce survives, never a 401; a non-hex byte at a right width
+    /// refuses too. The type carries the width: the arm IS the row.
+    #[test]
+    fn the_sig_is_admitted_at_exactly_the_two_hybrid_widths() {
+        assert_eq!((TAG1_SIG_LEN, TAG3_SIG_LEN), (3373, 730), "SIG_ALGS' widths, read at compile time");
+        let tag1 = SessionSig::parse(&"ab".repeat(TAG1_SIG_LEN)).expect("6,746 hex is tag 1's width");
+        assert!(matches!(tag1, SessionSig::MlDsa65Ed25519(_)));
+        assert_eq!(tag1.as_bytes().len(), 3373);
+        assert_eq!(tag1.as_bytes()[0], 0xab);
+        let tag3 = SessionSig::parse(&"cd".repeat(TAG3_SIG_LEN)).expect("1,460 hex is tag 3's width");
+        assert!(matches!(tag3, SessionSig::FnDsa512PreviewEd25519(_)));
+        assert_eq!(tag3.as_bytes().len(), 730);
+        // Case-free: decoded, never framed.
+        assert_eq!(SessionSig::parse(&"AB".repeat(TAG1_SIG_LEN)), Some(tag1.clone()));
+        // Every other width is NO sig — the classical 64 bytes first.
+        for bytes in [64usize, 0, 1, 3372, 3374, 729, 731, 4032] {
+            assert!(
+                SessionSig::parse(&"ab".repeat(bytes)).is_none(),
+                "{bytes} bytes is none of the hybrid blob widths"
+            );
+        }
+        // An odd hex length, and a non-hex byte at a right width.
+        assert!(SessionSig::parse(&"a".repeat(TAG1_SIG_LEN * 2 - 1)).is_none());
+        assert!(SessionSig::parse(&format!("zz{}", "ab".repeat(TAG1_SIG_LEN - 1))).is_none());
+        // …and through the body parse, the 400's own detail names the field.
+        let body = format!(
+            r#"{{"principal":7,"nonce":"{}","origin":"http://127.0.0.1:8642","sig":"{}"}}"#,
+            "ab".repeat(32),
+            "cd".repeat(64)
+        );
+        let detail = parse_session_body(body.as_bytes()).err().expect("a 64-byte sig is a syntax fault");
+        assert!(detail.contains("'sig'"), "{detail}");
+    }
+
+    /// AUTH-4.32 — `verify` is the HYBRID verification under the KEY's own
+    /// row: a tag-1 key verifies its signer's tag-1 blob over the payload;
+    /// the same blob over other bytes fails; the blob with its post-quantum
+    /// half broken fails and with its Ed25519 half broken fails — no half
+    /// opens a session alone; a blob of the OTHER row's width fails under
+    /// this key (the width is not the row's), as does a 64-byte classical
+    /// signature; and a tag-3 key verifies only its own row's blob. Never a
+    /// panic on any of them.
+    #[test]
+    fn verify_is_both_halves_under_the_keys_own_row() {
+        use super::super::hybrid::{HybridSigner, SeededRng06};
+        use ed25519_dalek::Signer as _;
+        let seed = [0x33u8; 32];
+        let payload = session_payload(
+            &Origin::parse("http://127.0.0.1:8642").expect("canonical"),
+            &"ab".repeat(32),
+            PrincipalId(7),
+            Scope::Full,
+        );
+        let s1 = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &seed).expect("tag 1");
+        let s3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &seed).expect("tag 3");
+        let blob1 = s1.sign(&payload);
+        let blob3 = s3.sign_with_rng(&payload, &mut SeededRng06::new([9; 32]));
+        assert_eq!((blob1.len(), blob3.len()), (TAG1_SIG_LEN, TAG3_SIG_LEN));
+
+        assert!(verify(s1.public_key(), &payload, &blob1), "tag 1: both halves over the payload");
+        assert!(verify(s3.public_key(), &payload, &blob3), "tag 3: both halves over the payload");
+        assert!(!verify(s1.public_key(), b"other bytes", &blob1), "other bytes fail");
+        let mut pq_broken = blob1.clone();
+        pq_broken[5] ^= 1;
+        assert!(!verify(s1.public_key(), &payload, &pq_broken), "the PQ half broken: no session");
+        let mut ed_broken = blob1.clone();
+        ed_broken[TAG1_SIG_LEN - 1] ^= 1;
+        assert!(!verify(s1.public_key(), &payload, &ed_broken), "the Ed25519 half broken: no session");
+        assert!(!verify(s1.public_key(), &payload, &blob3), "the other row's width under a tag-1 key");
+        assert!(!verify(s3.public_key(), &payload, &blob1), "the other row's width under a tag-3 key");
+        let classical = s1.ed25519_signing_key().sign(&payload).to_bytes();
+        assert!(!verify(s1.public_key(), &payload, &classical), "64 bytes is no row's width");
+        assert!(!verify(s1.public_key(), &payload, &[]), "and neither is nothing");
+        // The Ed25519 half alone, padded to the row's width, is not a blob
+        // either half of which verifies as the row's.
+        let mut padded = vec![0u8; TAG1_SIG_LEN - 64];
+        padded.extend_from_slice(&classical);
+        assert!(!verify(s1.public_key(), &payload, &padded), "a right-width blob with a dead PQ half");
+    }
+
     /// AUTH-6.4 — the layout is VERSIONED: an unscoped body signs the v1
     /// bytes, unmoved, and a scoped body the v2 bytes — the same three fields
     /// then `be32(|scope|)‖scope`, the body's own `content`. Pinned as BYTES,
-    /// spelled by hand: this is the reference layout a client signs.
+    /// spelled by hand: this is the reference layout a client signs — both
+    /// halves of the key sign these same bytes (the hybrid handshake), the
+    /// layouts themselves unmoved under the v1/v2 names.
     #[test]
     fn a_scoped_body_signs_the_v2_layout_and_an_unscoped_one_the_v1() {
         let origin = Origin::parse("http://127.0.0.1:8642").expect("canonical");

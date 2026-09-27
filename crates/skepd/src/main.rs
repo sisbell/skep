@@ -64,8 +64,9 @@ fn usage() -> String {
     format!(
         "\
 usage: skepd --data-dir <DIR> [--port <PORT>] [--workers <N>]
-             [--local-trust | --no-local-trust] [--origin <ORIGIN>]...
-             [--blocked-prefixes <FILE>] [--node-prefix <PREFIX>]
+             [--local-trust | --no-local-trust] [--allow-preview-keys]
+             [--origin <ORIGIN>]... [--blocked-prefixes <FILE>]
+             [--node-prefix <PREFIX>]
 
   --data-dir <DIR>   journal/checkpoint directory (env: SKEPD_DATA_DIR);
                      created if absent, recovered if populated
@@ -80,6 +81,14 @@ usage: skepd --data-dir <DIR> [--port <PORT>] [--workers <N>]
                      pass --no-local-trust affirmatively)
   --no-local-trust   refuse every bare session once the board is claimed
                      (env: SKEPD_LOCAL_TRUST=true|false)
+  --allow-preview-keys
+                     a DEV setting: admit the ENROLLMENT of PREVIEW keys
+                     (the tag-3 row, fndsa512-preview-ed25519). Off — the
+                     default — an enrollment record naming one is refused
+                     credential_refused preview_key, a genesis included;
+                     a served board runs without it. It gates enrollment
+                     alone: verification of tag 3 stays compiled in, and
+                     the fold admits the row as syntax
   --origin <ORIGIN>  a canonical origin this board answers for, e.g.
                      https://board.example — repeatable; the signed
                      session arm accepts ONLY these once the board is
@@ -120,6 +129,10 @@ struct Args {
     port: u16,
     workers: usize,
     local_trust: bool,
+    /// `--allow-preview-keys` (AUTH-1.44): a flag, no environment variable —
+    /// a dev setting a served board never sets, so nothing can turn it on in
+    /// silence from the image's environment.
+    allow_preview_keys: bool,
     origins: Vec<Origin>,
     blocked_prefixes: Option<PathBuf>,
     node_prefix: Option<NodePrefix>,
@@ -174,6 +187,9 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
     };
     let mut blocked_prefixes = std::env::var_os(SKEPD_BLOCKED_PREFIXES).map(PathBuf::from);
     let mut node_prefix: Option<NodePrefix> = from_env(SKEPD_NODE_PREFIX)?;
+    // Default OFF, and no variable seeds it (AUTH-1.44: "the daemon REFUSES
+    // ENROLLMENT of a tag-3 key unless this setting allows it").
+    let mut allow_preview_keys = false;
     let mut it = argv;
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -192,6 +208,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
             }
             "--local-trust" => local_trust = Some(true),
             "--no-local-trust" => local_trust = Some(false),
+            "--allow-preview-keys" => allow_preview_keys = true,
             "--origin" => {
                 let v = it.next().ok_or("--origin needs a value")?;
                 origins.push(
@@ -229,6 +246,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
         // Phase A default ON (AUTH-1.45): a hosted image must set the flag
         // AFFIRMATIVELY false — abstention keeps the notebook behavior.
         local_trust: local_trust.unwrap_or(true),
+        allow_preview_keys,
         origins,
         blocked_prefixes,
         node_prefix,
@@ -256,6 +274,9 @@ fn main() {
     // at its own default rather than at whatever a literal here omitted.
     let mut opts = AuthOptions::default();
     opts.local_trust = args.local_trust;
+    // The dev setting (AUTH-1.44): ENROLLMENT of tag-3 keys, refused unless
+    // the flag says otherwise; a served board is launched without it.
+    opts.allow_preview_keys = args.allow_preview_keys;
     opts.configured = args.origins.clone();
     // Supplied at every start, as `--origin` is (AUTH-4.70): the file is
     // read inside the open, and one that is not a list stops the start.
@@ -346,6 +367,25 @@ mod tests {
                 .workers,
             2,
             "and a count in range is read as given"
+        );
+    }
+
+    /// AUTH-1.44's `--allow-preview-keys`: a bare flag, OFF unless given, and
+    /// seeded by no environment variable — a served board's image cannot
+    /// turn it on in silence.
+    #[test]
+    fn the_preview_keys_flag_is_off_unless_given() {
+        let absent = parse_args(argv(&["--data-dir", "/tmp/x"]))
+            .expect("valid flags")
+            .expect("a run, not usage");
+        assert!(!absent.allow_preview_keys, "the default is OFF");
+        let given = parse_args(argv(&["--data-dir", "/tmp/x", "--allow-preview-keys"]))
+            .expect("valid flags")
+            .expect("a run, not usage");
+        assert!(given.allow_preview_keys, "the flag turns it on");
+        assert!(
+            parse_args(argv(&["--data-dir", "/tmp/x", "--allow-preview-keys", "true"])).is_err(),
+            "the flag takes no value: a trailing word is an unknown argument"
         );
     }
 

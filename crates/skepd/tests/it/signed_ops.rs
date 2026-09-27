@@ -241,24 +241,32 @@ fn above_the_claim_the_check_refuses_admits_and_names_each_cause() {
     assert_eq!(sd.daemon().attestation_at(at).unwrap(), None, "off-class: dropped");
 }
 
-/// A2 / `not_enrolled_at_position`: an account whose set holds a CLASSICAL
-/// key alone opens its session under it and can attest nothing — no key of
-/// the tag's row is enrolled as of the write's base — and the verdict is
-/// PERMANENT. The same seed's hybrid key, never enrolled, is what the test
-/// signer would sign with.
+/// A2 / `not_enrolled_at_position`: an account whose set holds a key of ONE
+/// row alone — the TAG-3 preview row, admitted since the fixture daemon runs
+/// with `allow_preview_keys` on — opens its session under that key (the
+/// hybrid handshake: a tag-3 session opens, its `sig` the 730-byte blob,
+/// both halves under the key's own row) and can attest nothing under TAG 1:
+/// no key of that tag's row is enrolled as of the write's base, and the
+/// verdict is PERMANENT. The same seed's tag-1 key, never enrolled, is what
+/// the test signer signs attests with. (This cell held a CLASSICAL-only set
+/// until the hybrid-only launch deleted the classical row; no such account
+/// can be hired now, and a 64-byte session signature is the door's own 400 —
+/// `auth_wire`'s width cell.)
 #[test]
-fn an_account_with_no_hybrid_key_is_refused_not_enrolled_at_position() {
+fn an_account_with_no_key_of_the_tag_is_refused_not_enrolled_at_position() {
     let dir = tempdir().unwrap();
     let sd = spawn(dir.path());
     let port = sd.port();
     let registrar = owner(port);
     let key = distinct_key(41);
-    // A top-level stranger, hired with the CLASSICAL row alone: its genesis
+    let tag3 = HybridSigner::from_seed(hybrid::TAG_FNDSA512_PREVIEW_ED25519, &seed_of(&key))
+        .expect("tag 3 is a row");
+    // A top-level stranger, hired with the TAG-3 row alone: its genesis
     // enters no cone, so the claimant's device session seeds it (a
     // subdivision of the claimant's would be a handoff, anchor-grade).
     let (agent, _bare) = bootstrap_delegate(port, 41);
     let ordinal = next_content_ordinal(port, Some(&registrar), CLAIMANT_DOC1);
-    let entries = vec![Enrollment::new(ed25519_public_key_of(&key), false, None).unwrap()];
+    let entries = vec![Enrollment::new(tag3.public_key().clone(), false, None).unwrap()];
     let atom = json_atom(&skep_identity::encode_enroll(&entries));
     let v = op(
         port,
@@ -270,18 +278,10 @@ fn an_account_with_no_hybrid_key_is_refused_not_enrolled_at_position() {
     let atom_addr = acked_addr(&v);
     let v = op(port, Some(&registrar), &typed_link_frame(CLAIMANT_DOC1, &[&atom_addr], &[&agent], T_ENROLL));
     expect_resp(&v, "ack_addr");
-    // The agent opens a session under its classical key…
-    let nonce = challenge(port, 41);
-    let origin = format!("http://127.0.0.1:{port}");
-    let sig = sign_session_ed25519(&key, &origin, &nonce, 41);
-    let body = format!(
-        "{{\"principal\":41,\"nonce\":\"{nonce}\",\"origin\":\"{origin}\",\"sig\":\"{sig}\"}}"
-    );
-    let (st, resp) = http(port, "POST", "/session", None, body.as_bytes());
-    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&resp));
-    let agent_signed = json(&resp)["session"].as_str().unwrap().to_string();
+    // The agent opens a session under its tag-3 key — the 730-byte blob…
+    let agent_signed = open_signed_session_as(port, 41, &tag3);
     // …mints its published home, then a grant into it with an attest under
-    // the seed's HYBRID key, which the set does not hold.
+    // the seed's TAG-1 key, which the set does not hold.
     let home = acked_addr(&op(port, Some(&agent_signed), &create_frame(&agent, None)));
     register_signer(&agent_signed, 41, &key);
     let v = op(port, Some(&agent_signed), &typed_link_frame(&home, &[&agent], &["1.0.2"], T_GRANT));
@@ -564,7 +564,7 @@ fn check_golden(g: &TagGolden) {
         sigs: ["", "", ""],
     };
     let _ = got;
-    let pq = sha_hex(key.pq_half().unwrap());
+    let pq = sha_hex(key.pq_half());
     let ed = sha_hex(key.ed25519_half());
     let raw = sha_hex(key.raw());
     let fp = Fingerprint::of(key).to_hex();
@@ -660,7 +660,7 @@ fn tag_1_is_byte_equal_to_a_second_fips_204_implementation() {
         let halves = hybrid::derive_seeds(1, &seed).unwrap();
         // `ml-dsa`'s side: the PQ half of the hybrid key and its signature.
         let ours = HybridSigner::from_seed(1, &seed).unwrap();
-        let our_pk = ours.public_key().pq_half().unwrap().to_vec();
+        let our_pk = ours.public_key().pq_half().to_vec();
         // `fips204`'s side, from the same ξ.
         let (their_pk, their_sk) = fips204::ml_dsa_65::KG::keygen_from_seed(&halves.pq);
         assert_eq!(our_pk, their_pk.clone().into_bytes().to_vec(), "seed {i}: the public key");

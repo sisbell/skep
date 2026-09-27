@@ -66,8 +66,10 @@ const MAX_BLOCKED_SUPPLY_BYTES: usize = 8 * 1024 * 1024;
 
 /// The daemon's session-layer configuration, as the operator supplies it:
 /// the local-trust flag (Phase A default ON — a hosted image must set it
-/// AFFIRMATIVELY false, AUTH-4.57 (i)) and the configured origins
-/// (AUTH-4.7: configure what the board is actually reachable at).
+/// AFFIRMATIVELY false, AUTH-4.57 (i)), the configured origins (AUTH-4.7:
+/// configure what the board is actually reachable at), the blocked-prefix
+/// supply, the node prefix, and the ONE dev setting signed ops added —
+/// `allow_preview_keys` (AUTH-1.44), default OFF.
 ///
 /// `#[non_exhaustive]`, paired with the [`Default`] below: a caller starts
 /// from the defaults and sets what it means to change, so a knob added
@@ -141,6 +143,19 @@ pub struct AuthOptions {
     /// The FORM is [`NodePrefix`]'s, carried by the type: a `Some` is a node
     /// address strictly under the root because nothing else can be built.
     pub node_prefix: Option<NodePrefix>,
+    /// THE DEV SETTING `allow_preview_keys` — `--allow-preview-keys`
+    /// (AUTH-1.44; the hybrid-only launch's Q5, owner 2026-09-26 "b"; AUTH
+    /// RES-206): the daemon REFUSES ENROLLMENT of a TAG-3 key — a key of the
+    /// PREVIEW row, `fndsa512-preview-ed25519` — as `preview_key`, slot (4)'s
+    /// FIRST token (AUTH-3.44, AUTH-3.56), in EVERY enrolment record, a
+    /// genesis included, UNLESS this is on; the test fixtures run with it on.
+    /// Default OFF: tag 3 never reaches a served board. It gates ENROLLMENT
+    /// and nothing else — tag-3 VERIFICATION stays compiled in (the
+    /// frozen-tag rule), the fold admits the row's keys as syntax, and a
+    /// tag-3 key already enrolled opens sessions and signs entries as any
+    /// other. Daemon config, never board state: in no record, journal,
+    /// sidecar or fold, and `/health` publishes nothing of it.
+    pub allow_preview_keys: bool,
 }
 
 impl Default for AuthOptions {
@@ -150,6 +165,7 @@ impl Default for AuthOptions {
             configured: Vec::new(),
             blocked_supply_path: None,
             node_prefix: None,
+            allow_preview_keys: false,
         }
     }
 }
@@ -183,6 +199,9 @@ pub(crate) struct AuthConfig {
     /// [`AuthOptions::node_prefix`], as supplied; `None` where the daemon
     /// was told none.
     node_prefix: Option<NodePrefix>,
+    /// [`AuthOptions::allow_preview_keys`], as supplied — the ONE setting
+    /// the precheck's slot (4) reads (AUTH-3.15 as RES-206 landed it).
+    pub allow_preview_keys: bool,
 }
 
 impl AuthConfig {
@@ -194,6 +213,7 @@ impl AuthConfig {
             // Empty until [`AuthState::open`] installs the start-up supply.
             blocked: parking_lot::RwLock::new(Arc::new(BlockedPrefixes::default())),
             node_prefix: opts.node_prefix,
+            allow_preview_keys: opts.allow_preview_keys,
         }
     }
 
@@ -549,29 +569,35 @@ impl CryptoRng for OsEntropy {}
 
 // ── the signature seam (AUTH-2.2, AUTH-2.99) ─────────────────────────────
 
-/// The verifier for one enrolled key, or `None` when its raw form is not a
-/// canonical Ed25519 point — THE place this crate turns a
-/// [`skep_identity::PublicKey`] into a verifier.
-///
-/// One function because two callers must agree: [`session::verify`] is what
-/// a signature actually meets, and [`policy::precheck`]'s slot (4)
-/// (`undecodable_key`) refuses a deposit BECAUSE such a key could never
-/// sign — a courtesy that holds only while the two decode alike. A stricter
-/// deposit test refuses an enrollment that would have worked; a laxer one
-/// seats a key that occupies a slot against [`policy::MAX_ENROLLED_KEYS`]
-/// and is walked by `find_signer` on every handshake attempt, permanently,
-/// since retiring it needs an anchor session of that account.
-///
-/// `from_bytes` is the canonical point decode (the crate pick is argued in
-/// `Cargo.toml`). THE KEY IT DECODES IS THE ED25519 HALF (signed ops; the
-/// ruled key model — "one seed, two halves … an Ed25519 half (for
-/// sessions)"): a classical `ed25519` key whole, a HYBRID key's last 32 raw
-/// bytes (`PublicKey::ed25519_half`, the KEY PIN's order), so a hybrid entry
-/// opens sessions under its classical half until the ruled session flip
-/// makes the handshake hybrid too. The entry signature's other half is
-/// [`hybrid::verify`]'s, dispatching on the marker tag.
+/// The Ed25519 HALF's verifier — `from_bytes`, the canonical point decode
+/// (the crate pick is argued in `Cargo.toml`) over a hybrid key's LAST 32 raw
+/// bytes (`PublicKey::ed25519_half`, the KEY PIN's order) — or `None` when
+/// that half is no point. ONE of the two halves [`key_decodes`] reads for
+/// the precheck's `undecodable_key` courtesy (AUTH-3.56 as RES-206 landed
+/// it: EVERY half the key's row names), and the SAME decode the session and
+/// entry verifies meet inside [`hybrid::verify`], which is what keeps the
+/// courtesy exact: a stricter deposit test refuses an enrollment that would
+/// have worked; a laxer one seats a key that occupies a slot against
+/// [`policy::MAX_ENROLLED_KEYS`] and is walked by `find_signer` on every
+/// handshake attempt, permanently, since retiring it needs an anchor
+/// session of that account. Every session is hybrid (the hybrid handshake,
+/// 2026-09-26): this half opens nothing alone.
 pub(crate) fn verifying_key(key: &PublicKey) -> Option<VerifyingKey> {
     VerifyingKey::from_bytes(key.ed25519_half()).ok()
+}
+
+/// THE ALL-HALVES DECODE — the precheck's `undecodable_key` test (AUTH-3.56
+/// as RES-206 landed it; the hybrid-only launch's Q9, owner 2026-09-26):
+/// `true` iff EVERY half the key's row names decodes — the Ed25519 half's
+/// point ([`verifying_key`]) AND the post-quantum half by the same decode
+/// [`hybrid::verify`] runs before its arithmetic ([`hybrid::pq_half_decodes`]:
+/// ML-DSA-65's encoded verifying key for tag 1; FN-DSA-512's
+/// `VerifyingKeyStandard::decode`, the header byte among its checks, for tag
+/// 3). A key any half of which does not decode can never sign — under "both
+/// halves verify" no half carries a signature alone — so it is refused at
+/// enrollment rather than seated and walked on every handshake.
+pub(crate) fn key_decodes(key: &PublicKey) -> bool {
+    verifying_key(key).is_some() && hybrid::pq_half_decodes(key)
 }
 
 // ── origins (AUTH-4.1–4.8) ───────────────────────────────────────────────
@@ -814,11 +840,15 @@ impl fmt::Display for Warning {
                 "board is claimed with no configured origin: signed_origins \
                  is empty and every signed session will be refused",
             ),
+            // The ORIGIN consequence alone (AUTH-4.9 as RES-206 landed it,
+            // xb-d10): no key strands at an origin change — the frontend's
+            // keys are its shell's, bound to no origin, and no per-origin key
+            // store is planned — so the warning names the re-issue and
+            // nothing of keys.
             Warning::ConfiguredLoopbackPortChanged(o) => write!(
                 f,
                 "configured origin {o} names a loopback host at a port this \
-                 daemon is not bound to; re-issue the origin for the bound \
-                 port (keys enrolled under {o} are stranded until then)",
+                 daemon is not bound to; re-issue the origin for the bound port",
             ),
         }
     }

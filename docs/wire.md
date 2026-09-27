@@ -49,9 +49,10 @@ close) at shutdown. HTTP/1.0 and 1.1 are accepted; request bodies ride
 with `Content-Length` (absent means empty; `Transfer-Encoding` is refused
 with `400 malformed_http`); `Expect: 100-continue` is honored. Bodies are
 capped per route — **8 MiB** on the frame routes (`/op`, `/op-at`),
-**8 KiB** everywhere else (the session bodies ride the small cap): a
-larger declared `Content-Length` is refused with `413 payload_too_large`
-before any body byte is read.
+**16 KiB** everywhere else (the session bodies ride the small cap: a
+signed body under the production key kind is about 7 KB, its `sig` the
+hybrid blob in hex — §Sessions): a larger declared `Content-Length` is
+refused with `413 payload_too_large` before any body byte is read.
 
 ### Identity — modes, principals, credentials
 
@@ -61,13 +62,14 @@ root of the namespace; any other principal must first be minted with a
 `delegate` operation before its writes will be accepted by the stores.
 Each distinct principal is its own account, so every write is attributed.
 A **credential** is a public key enrolled for an account, of one of the
-three `ALGS` kinds §The claim ceremony and credentials lists: a classical
-`ed25519` key (32 raw bytes), or one of the two HYBRID keys —
-`mldsa65-ed25519` (ML-DSA-65 + Ed25519, 1,984 raw bytes) and
-`fndsa512-preview-ed25519` (FN-DSA-512 + Ed25519, 929 raw bytes) — each
-ONE key over one concatenated raw value, the post-quantum key then the
-Ed25519 key. Keys ride the wire as lowercase hex of the raw key (64 hex
-for a classical key, 3,968 and 1,858 for the hybrids), and a key is named
+TWO `ALGS` kinds §The claim ceremony and credentials lists — the HYBRID
+keys `mldsa65-ed25519` (ML-DSA-65 + Ed25519, 1,984 raw bytes; the
+production kind) and `fndsa512-preview-ed25519` (FN-DSA-512 + Ed25519,
+929 raw bytes; a preview) — each ONE key over one concatenated raw
+value, the post-quantum key then the Ed25519 key. There is no classical
+`ed25519` kind: every board is hybrid from its genesis, and tag `2`'s
+token `fndsa512-ed25519` is reserved with no kind yet. Keys ride the wire
+as lowercase hex of the raw key (3,968 and 1,858 hex), and a key is named
 by its **fingerprint** — 64 lowercase hex of `SHA-256("skep-key-v1" ‖
 be32-framed alg token ‖ be32-framed raw key)` — the flat form every
 identity surface below emits (grouping is a client display convention).
@@ -300,16 +302,23 @@ origin in the **bare origin set** (§The claim ceremony and credentials;
 below. A bare body carries no `scope`.
 
 *Signed* — `{"principal": 2, "nonce": "<64 hex>", "origin":
-"<origin>", "sig": "<128 hex>"}` — verified in every mode, UNCLAIMED
-included. The fields are strict bytes: `origin` must arrive already
-canonical (lowercase `scheme://host[:port]`, no path, no trailing
-slash, the scheme's default port omitted), `nonce` is 64 LOWERCASE hex,
-`sig` is 128 hex characters (case-free — it is decoded, never framed)
-for exactly 64 signature bytes. The daemon canonicalizes nothing on
-this path.
+"<origin>", "sig": "<6746 or 1460 hex>"}` — verified in every mode,
+UNCLAIMED included. The fields are strict bytes: `origin` must arrive
+already canonical (lowercase `scheme://host[:port]`, no path, no
+trailing slash, the scheme's default port omitted), `nonce` is 64
+LOWERCASE hex, and `sig` is THE HYBRID SIGNATURE BLOB in hex (case-free
+— it is decoded, never framed): the post-quantum signature then the
+Ed25519 signature, both over the signed bytes below, at exactly ONE of
+the two key kinds' widths — **6,746 hex (3,373 bytes)** for an
+`mldsa65-ed25519` key, **1,460 hex (730 bytes)** for an
+`fndsa512-preview-ed25519` key. The width is the syntax check alone: a
+`sig` of any other width — the 128 hex of a bare Ed25519 signature
+included — is the 400 above with a `detail`, and the nonce survives.
+The body carries NO `alg` member and names no key. The daemon
+canonicalizes nothing on this path.
 
 *Scoped signed* — `{"principal": 2, "nonce": "<64 hex>", "origin":
-"<origin>", "scope": "content", "sig": "<128 hex>"}` — the signed form
+"<origin>", "scope": "content", "sig": "<6746 or 1460 hex>"}` — the signed form
 carrying one more strict field. `scope` is OPTIONAL on the signed body
 and takes exactly ONE value, the JSON string `"content"`: no other
 value, no other type, no case variant, and no `full` spelling — a signed
@@ -364,8 +373,12 @@ signature never opens a scoped session and a v2 signature never opens an
 unscoped one — either is a signature failure, the one 401 below, its
 nonce spent. (The scope sits INSIDE the signed bytes because a limit the
 signer did not sign could be lifted on the path by dropping the field.)
-The v2 layout binds the same signers as v1. Sign with a private key whose
-public key is enrolled for the account that principal's session
+The v2 layout binds the same signers as v1. Under EITHER name the
+signature is the hybrid blob: BOTH halves of the key sign these same
+bytes — the post-quantum half, then the Ed25519 half — and no half opens
+a session alone; there is no `skep-session-v3` or `-v4`. Sign with a
+private key whose public key is enrolled for the account that
+principal's session
 AUTHENTICATES AGAINST: principal `0` signs with the CLAIMANT account's
 keys (none exist while unclaimed); every other principal with its own
 account's — or, where its own account holds NO enrolled key, with the
@@ -381,8 +394,11 @@ the daemon's operator may supply a list of blocked prefixes, and a
 principal whose OWN account sits at or under one is refused here, its
 nonce spent, BEFORE any key set is read or signature verified (the 403
 below); the authenticating account's key set must be non-empty; then
-every enrolled key is tried in fingerprint order (Ed25519 strict
-verification) — no cutoff, ever.
+every enrolled key is tried in fingerprint order, EACH UNDER ITS OWN
+KIND — both halves of the blob verified over the signed bytes, the
+Ed25519 half by strict verification, either failing failing; a blob
+whose width is not that kind's simply fails under it — no cutoff, ever.
+A well-formed blob no enrolled key verifies is the one 401 below.
 
 **Every handshake failure OF THE CREDENTIAL — bare and signed alike —
 answers the ONE auth transport error**, permanent, byte-identical across
@@ -505,10 +521,10 @@ the home document first — the convention is ONE composite atom, so one
 address names the whole record — then deposit a link whose `from` names
 those positions (endset order, bytes concatenated; every named position
 must be in the home's own space and occupied). A record is capped at
-64 KiB and is ONE JSON OBJECT, admitted only in its canonical encoding:
+128 KiB and is ONE JSON OBJECT, admitted only in its canonical encoding:
 
 ```
-{"type":"skep-enroll","keys":[{"alg":"ed25519","key":"<64 hex public key>","anchor":true,"label":"<label>"},{"alg":"ed25519","key":"<64 hex public key>","anchor":false}]}
+{"type":"skep-enroll","keys":[{"alg":"mldsa65-ed25519","key":"<3968 hex public key>","anchor":true,"label":"<label>"},{"alg":"mldsa65-ed25519","key":"<3968 hex public key>","anchor":false}]}
 ```
 
 ```
@@ -520,21 +536,26 @@ must be in the home's own space and occupied). A record is capped at
 order; each key entry is `{alg, key, anchor, label?}` in that member
 order — `anchor` a REQUIRED boolean marking an anchor key (the flag is
 fixed for the fingerprint's lifetime), `label` OPTIONAL (present only
-where a label exists, never empty, never containing a newline). The
+where a label exists, never empty, never containing a newline, and at
+most 128 bytes of UTF-8, counted in bytes — a longer label is
+`bad_record`, as any other grammar fault is). The
 optional `sig` member is reserved, canonically LAST, and IGNORED
 whatever it holds. `alg` is an `ALGS` token, matched as bytes,
 lowercase, and the token set is frozen (adding one is a coordinated
-grammar upgrade): `ed25519` (a 32-byte key, 64 hex — a classical key,
-which opens sessions and signs no entry); and, since signed ops, the two
-HYBRID tokens, each ONE entry over ONE concatenated raw value — the
-post-quantum public key THEN the Ed25519 public key — with one
-fingerprint and one label per sheet: `mldsa65-ed25519` (ML-DSA-65 +
-Ed25519, 1,952 + 32 = 1,984 bytes, 3,968 hex; the PRODUCTION entry
-signature, the marker tag `1`) and `fndsa512-preview-ed25519`
-(FN-DSA-512 + Ed25519 under `fn-dsa` 0.4.0's pre-standard format, 897 +
-32 = 929 bytes, 1,858 hex; a PREVIEW, the marker tag `3` — tag `2` stays
-free for the final FIPS 206). A hybrid entry opens sessions under its
-Ed25519 half and signs entries (the `attest` member, §Operations) under
+grammar upgrade): the two HYBRID tokens, each ONE entry over ONE
+concatenated raw value — the post-quantum public key THEN the Ed25519
+public key — with one fingerprint and one label per sheet:
+`mldsa65-ed25519` (ML-DSA-65 + Ed25519, 1,952 + 32 = 1,984 bytes, 3,968
+hex; the PRODUCTION kind, the marker tag `1`) and
+`fndsa512-preview-ed25519` (FN-DSA-512 + Ed25519 under `fn-dsa` 0.4.0's
+pre-standard format, 897 + 32 = 929 bytes, 1,858 hex; a PREVIEW, the
+marker tag `3`, whose ENROLLMENT the daemon refuses unless launched with
+`--allow-preview-keys` — §Credential refusals, `preview_key`). There is
+no classical `ed25519` token: that kind was deleted at the hybrid-only
+launch, before any served board, and a record naming it is
+`bad_record`; tag `2`'s token `fndsa512-ed25519` (the final FIPS 206 +
+Ed25519) is RESERVED and has no kind yet. A hybrid entry opens sessions
+(§Sessions) and signs entries (the `attest` member, §Operations) under
 both halves; each tag names one exact, frozen verification rule and one
 frozen keygen-from-seed rule, never edited — a change to what verifies,
 or to what a seed derives, is a new tag and a new token. The canonical encoding pins members in schema order,
@@ -596,8 +617,19 @@ an empty signed set, so **every signed session is refused** (the one
 and every signed session will be refused`. Its two sibling warnings:
 claimed with `--local-trust` still on (any loopback party may write as
 any principal — CLAIMED-PERMISSIVE), and a configured loopback-host
-origin naming a port the daemon is not bound to (keys enrolled under it
-are stranded until the origin is re-issued for the bound port).
+origin naming a port the daemon is not bound to (re-issue the origin for
+the bound port; no key strands — a key is bound to no origin).
+
+**The preview-key setting.** `--allow-preview-keys`, a DEV setting
+beside `--local-trust` and off by default: with it the daemon admits the
+ENROLLMENT of keys of the preview kind (`fndsa512-preview-ed25519`, the
+marker tag `3`); without it every enrollment record naming one — a
+genesis included — is refused `preview_key` (§Credential refusals). It
+gates enrollment alone: verification of tag `3` stays compiled in, an
+already-enrolled preview key opens sessions and signs entries as any
+other, and the record grammar admits the token as syntax. A served board
+is launched without it; the test fixtures run with it on. It is daemon
+config, never board state, and `GET /health` publishes nothing of it.
 
 **The node prefix.** `--node-prefix 1.N` (env `SKEPD_NODE_PREFIX`),
 optional, names the board's full node prefix in the registry: a node
@@ -658,7 +690,7 @@ Non-200 statuses are transport-level failures with a body of the shape
 | 400    | `malformed_http`            | the request is not the HTTP subset skepd speaks (bad head, chunked body, a body cut short) |
 | 404    | `no_such_endpoint`          | unknown path (including `/dump` on a build without `observe` and `/` on a build without `client`) |
 | 405    | `method_not_allowed`        | known path, wrong method                |
-| 413    | `payload_too_large`         | the declared `Content-Length` exceeds the 8 MiB request-body cap |
+| 413    | `payload_too_large`         | the declared `Content-Length` exceeds the route's request-body cap — 8 MiB on the frame routes, 16 KiB everywhere else (§Transport) |
 | 410    | `history_reclaimed`         | the position (`/op-at`) or the `since` fence (`/changes`) predates retained history (carries `floor` when known) |
 | 503    | `history_busy`              | all historical-reconstruction permits (`/op-at`, `/dump?at`, `/chain?at`) are in use; retry shortly |
 | 503    | `scan_busy`                 | all class-scan permits are in use — a `find_links_ftt`/`count_ftt`/`window_ftt` on `/op` whose four-set constrains `ty` alone (§Link discovery reads); carries `op`; retry shortly |
@@ -710,8 +742,10 @@ is also accepted; canonical output is always the string form.
 
 **Machine-bounded integers** (`at`/`as_of` log positions, `slot`, `n`,
 counts, principal ids) are plain JSON numbers. They are `u64` server-side,
-and a value beyond 2^53 − 1 would lose precision in a JavaScript-backed
-client. A log position or a count approaching that is unreachable in
+and a value beyond 2^53 − 1 would lose precision in every
+JavaScript-backed READER of the wire — the browser's guest reader among
+them, which reads a number as a JSON number; the Rust frontend reads it
+exactly. A log position or a count approaching that is unreachable in
 practice: both are bounded by what a board has committed. A **principal
 id** is not a count: it is a number a client CHOOSES (`delegate`'s
 `new_id`), so the board bounds it where it is minted: `delegate` refuses a
@@ -1110,7 +1144,7 @@ retired entries included. A keyless account answers two empty arrays.
 auth suite against live bytes, not by the codec fixtures.)
 
 ```json
-{"as_of":9,"enrolled":[{"alg":"ed25519","anchor":true,"fingerprint":"abababababababababababababababababababababababababababababababab","key":"d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"}],"resp":"key_set","retired":[{"anchor":false,"fingerprint":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}]}
+{"as_of":9,"enrolled":[{"alg":"mldsa65-ed25519","anchor":true,"fingerprint":"abababababababababababababababababababababababababababababababab","key":"<3968 hex — the ML-DSA-65 public key then the Ed25519 public key>"}],"resp":"key_set","retired":[{"anchor":false,"fingerprint":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}]}
 ```
 
 ## Rejections
@@ -1621,9 +1655,19 @@ type (§The claim ceremony and credentials) — run a stricter order:
   `foreign_content`, `missing_value`, `not_utf8`, `bad_record`,
   `duplicate_key:<n>`, `empty` (`<n>` a 1-based ENTRY index into the
   record's `keys`/`fingerprints` array).
-* Then the daemon's own slots, in order: `undecodable_key` (valid-hex
-  key bytes that decode to no Ed25519 point can never sign — refused at
-  enrollment rather than discovered at a handshake);
+* Then the daemon's own slots, in order: ONE slot holding TWO tokens, in
+  this order — `preview_key` FIRST (an enrollment record naming ANY key
+  of the preview kind, `fndsa512-preview-ed25519`, on a daemon launched
+  without `--allow-preview-keys` (§The claim ceremony and credentials) —
+  EVERY enrollment record, a genesis included; the test reads the
+  entry's `alg` and decodes nothing, so a preview key that also fails to
+  decode answers this token; the face: "this is a PREVIEW key, and this
+  board enrolls no preview keys — make a key with a released client and
+  enroll that"), then `undecodable_key` (valid-hex key bytes ANY HALF of
+  which does not decode — the Ed25519 half to no point, the post-quantum
+  half to no key, the FN-DSA half's header byte among its checks — can
+  never sign, no half carrying a signature alone; refused at enrollment
+  rather than discovered at a handshake);
   `too_many_enrolled` (the enrolled-set cap, **16** — daemon policy,
   raisable without format consequence; the enroll arm only, the
   ceremony's genesis exempt); then ONE slot holding TWO tokens, in this
@@ -1723,13 +1767,13 @@ deeper is `too_deep`. → `ack_addr` (the minted account address).
 (`9007199254740991`) is refused as any malformed frame is — the
 `unparseable` rejection, `malformed`, `permanent`; no code or token of its
 own — and nothing commits. That is the largest integer a JSON number carries
-exactly: past it a JavaScript-backed client rounds, and would then name a
-DIFFERENT principal at `/challenge` and in its signed session body than the
-one the board registered. Since a client ADOPTS whatever principal it finds
-seated at its account's first sub-account (`effective_owner`, below), an id
-no such client can say back would make that account unopenable from it, so
-the board registers none. A client minting `new_id` at random draws it
-inside the range — 53 random bits, never a full `u64`.
+exactly: past it every JavaScript-backed READER of the wire — the browser's
+guest reader among them, which reads a principal as a JSON number — rounds,
+and would show or link the WRONG account wherever it names one; the Rust
+frontend reads the number exactly (the browser opens no session and signs
+nothing). The bound is kept for the wire's JSON readers: an id such a reader
+cannot say back is registered by no board. A client minting `new_id` at
+random draws it inside the range — 53 random bits, never a full `u64`.
 
 <!-- wire: request delegate -->
 ```json
@@ -1786,7 +1830,7 @@ at session open — to resolve your own account. The argument is named
 
 **`effective_owner`** — who owns `addr`: the LONGEST registered prefix
 containing `addr`, and the principal seated at it, from one walk of the
-principal registry. The one argument is `addr` — any address, in this
+board's principal list. The one argument is `addr` — any address, in this
 board's own local form (the form `delegate` takes and `principal_prefix`
 answers); it need NOT be allocated, and there is no document argument.
 → `effective_owner`: `{prefix, principal}`, both always present, carried
@@ -3091,7 +3135,7 @@ names the whole record:
 ```
 POST /op   (session)   {"op": "insert", "doc": <doc 1>, "at": {"subspace": "1", "ordinal": "1"},
                         "deposit": "1.1.0.1.0.1.0.3.1",                 # T_enroll — the record's class type
-                        "values": [{"atom": "{\"type\":\"skep-enroll\",\"keys\":[{\"alg\":\"ed25519\",\"key\":\"<64 hex>\",\"anchor\":true,\"label\":\"paper\"},{\"alg\":\"ed25519\",\"key\":\"<64 hex>\",\"anchor\":false,\"label\":\"notebook\"}]}"}]}
+                        "values": [{"atom": "{\"type\":\"skep-enroll\",\"keys\":[{\"alg\":\"mldsa65-ed25519\",\"key\":\"<3968 hex>\",\"anchor\":true,\"label\":\"paper\"},{\"alg\":\"mldsa65-ed25519\",\"key\":\"<3968 hex>\",\"anchor\":false,\"label\":\"notebook\"}]}"}]}
 ```
 
 The insert is DECLARED under the record's class type (`"deposit":
@@ -3112,7 +3156,7 @@ POST /op   (session)   {"op": "make_link", "home": <doc 1>,
                         "to":   {"addrs": ["<account>"]},
                         "ty":   {"addrs": ["1.1.0.1.0.1.0.3.1"]}}       # T_enroll
 GET  /challenge?principal=900
-POST /session          {"principal": 900, "nonce": <that>, "origin": <a configured origin>, "sig": <128 hex>}
+POST /session          {"principal": 900, "nonce": <that>, "origin": <a configured origin>, "sig": <6746 hex — the hybrid blob, both halves>}
 POST /op   (signed)    {"op": "make_link", "home": <doc 1>,
                         "from": {"addrs": ["<account>"]}, "to": {"addrs": []},
                         "ty":   {"addrs": ["1.1.0.1.0.1.0.3.3"]}}       # T_claim — the board flips claimed

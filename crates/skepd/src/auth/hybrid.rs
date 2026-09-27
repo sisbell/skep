@@ -45,9 +45,11 @@
 //! THE KEY PIN: a hybrid's raw public key is the PQ half's encoding THEN the
 //! Ed25519 half's 32 bytes ([`skep_identity::PublicKey`]'s arms). THE BLOB:
 //! the PQ signature THEN the Ed25519 signature's 64 bytes, two fixed-width
-//! fields, no length prefix (the record §2.4). VERIFY is BOTH halves over
-//! the SAME bytes — either failing fails (the ruled "hybrid, both halves
-//! verify").
+//! fields, no length prefix (the record §2.4) — the marker slot's blob and,
+//! since the hybrid handshake (the hybrid-only launch, owner 2026-09-26), a
+//! session's `sig` over the session bytes too (AUTH-4.32, AUTH-6.3). VERIFY
+//! is BOTH halves over the SAME bytes — either failing fails (the ruled
+//! "hybrid, both halves verify"); no half opens a session alone.
 //!
 //! What lives here beside the daemon's verify — keygen and signing — is the
 //! signer's side, used by the suites' test signer and by the goldens that
@@ -313,8 +315,11 @@ impl HybridSigner {
         self.row.tag
     }
 
-    /// The Ed25519 half's signing key — what opens a SESSION under this
-    /// entry (the ruled key model: the Ed25519 half is for sessions).
+    /// The Ed25519 half's signing key — ONE of the two halves every blob this
+    /// signer makes carries, a session's and an entry's alike; alone it opens
+    /// nothing (no half opens a session alone). The goldens read it, and the
+    /// suites' negative vector — a 64-byte Ed25519-only `sig`, the classical
+    /// layout no served board admits — is made with it.
     pub fn ed25519_signing_key(&self) -> &EdSigningKey {
         &self.ed
     }
@@ -378,7 +383,7 @@ pub fn verify(tag: u8, key: &PublicKey, sig: &[u8], msg: &[u8]) -> Result<(), Hy
         return Err(HybridFault::Malformed);
     }
     let (pq_sig, ed_sig) = sig.split_at(row.pq_sig_len);
-    let pq_key = key.pq_half().ok_or(HybridFault::WrongRow)?;
+    let pq_key = key.pq_half();
     // The Ed25519 half FIRST: cheap, and a failure here refuses before the
     // lattice arithmetic runs. Both are required, so the order moves no
     // verdict.
@@ -408,6 +413,26 @@ pub fn verify(tag: u8, key: &PublicKey, sig: &[u8], msg: &[u8]) -> Result<(), Hy
         Ok(())
     } else {
         Err(HybridFault::Rejected)
+    }
+}
+
+/// THE POST-QUANTUM HALF's DECODE alone — the same decode [`verify`] runs
+/// before its arithmetic, exposed for the precheck's `undecodable_key`
+/// courtesy (AUTH-3.56 as RES-206 landed it: the precheck decodes EVERY half
+/// the key's row names; the hybrid-only launch's Q9): ML-DSA-65's encoded
+/// verifying key for tag 1 — which cannot fail at the row's length, and is
+/// run all the same so the two stay ONE decode — and FN-DSA-512's
+/// `VerifyingKeyStandard::decode` for tag 3, whose checks are the header
+/// byte (`0x09` for degree 512), the length and every coefficient in range.
+/// `false` for a key of no row. The Ed25519 half's decode is
+/// [`super::verifying_key`]'s; [`super::key_decodes`] joins the two.
+pub fn pq_half_decodes(key: &PublicKey) -> bool {
+    let Some(row) = key.sig_alg() else { return false };
+    let pq = key.pq_half();
+    match row.tag {
+        TAG_MLDSA65_ED25519 => EncodedVerifyingKey::<MlDsa65>::try_from(pq).is_ok(),
+        TAG_FNDSA512_PREVIEW_ED25519 => VerifyingKeyStandard::decode(pq).is_some(),
+        _ => false,
     }
 }
 
@@ -492,6 +517,32 @@ mod tests {
         assert!(HybridSigner::from_seed(0, &seed).is_none());
         assert!(HybridSigner::from_seed(2, &seed).is_none());
         assert!(derive_seeds(2, &seed).is_none());
+    }
+
+    /// The post-quantum half's decode, alone: a derived key of either tag
+    /// decodes; a tag-3 key whose FN-DSA header byte is not `0x09` does not
+    /// (the fault the precheck's `undecodable_key` names on that half); a
+    /// tag-1 key of the right length always does (ML-DSA's encoding admits
+    /// every byte string of its length), which is why the Ed25519 half is
+    /// what carries that row's decode fault.
+    #[test]
+    fn the_pq_half_decode_refuses_a_bad_fn_dsa_header_byte() {
+        let seed = [0x42u8; 32];
+        for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
+            let s = HybridSigner::from_seed(tag, &seed).unwrap();
+            assert!(pq_half_decodes(s.public_key()), "tag {tag}: a derived key decodes");
+        }
+        let s3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &seed).unwrap();
+        let mut raw = s3.public_key().raw().to_vec();
+        assert_eq!(raw[0], 0x09, "fn-dsa 0.4.0's degree-512 header byte");
+        raw[0] = 0x0a;
+        let bad = PublicKey::parse(s3.public_key().alg(), &hex(&raw)).expect("the row's length");
+        assert!(!pq_half_decodes(&bad), "a bad header byte does not decode");
+        let s1 = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &seed).unwrap();
+        let mut raw = s1.public_key().raw().to_vec();
+        raw[0] ^= 0xff;
+        let still = PublicKey::parse(s1.public_key().alg(), &hex(&raw)).expect("the row's length");
+        assert!(pq_half_decodes(&still), "ML-DSA-65's encoding decodes at its length");
     }
 
     /// The KDF never hands either half the raw seed, and the two halves of

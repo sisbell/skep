@@ -503,12 +503,17 @@ const MAX_REQUEST_HEAD: usize = 64 * 1024;
 /// which is the shape [`body_cap`] already has.
 const MAX_REQUEST_BODY: usize = 8 * 1024 * 1024;
 
-/// Request-body cap for every route that carries no frame. `POST /session`
-/// carries `{"principal": n}`; a body posted to `/health`, `/changes`,
-/// `/dump` or an unknown path is read whole and then never looked at. Those
-/// routes have no use for the ceiling above, and offering it to them offers
-/// the `Value` tree that rides on it.
-const MAX_SMALL_BODY: usize = 8 * 1024;
+/// Request-body cap for every route that carries no frame — 16 KiB, ONE
+/// constant at EVERY small-body route (rc-1, owner 2026-09-26: "n 8 KiB cap.
+/// lets bump ti 16kb limit" → "all small routes"; raised from 8 KiB for the
+/// hybrid handshake). `POST /session` carries `{"principal": n}` or the
+/// SIGNED body whose `sig` is the hybrid blob in hex — 6,912 B at a loopback
+/// origin under tag 1, 7,157 B at the longest DNS-legal origin (the
+/// record-cap measurements §4), which the old 8 KiB left a kilobyte's room;
+/// a body posted to `/health`, `/changes`, `/dump` or an unknown path is read
+/// whole and then never looked at. Those routes have no use for the ceiling
+/// above, and offering it to them offers the `Value` tree that rides on it.
+const MAX_SMALL_BODY: usize = 16 * 1024;
 
 /// The body cap for a path — checked on the declared `Content-Length`
 /// before a byte is read, so a route that cannot use a large body is never
@@ -1859,9 +1864,10 @@ impl Daemon {
         // actor is what the session's opening fixed — its signer and, beside
         // it, its scope, this being the scope's ONE read (AUTH-4.39) — and the
         // SEAT is the carve's one input (AUTH-3.15), read HERE so the precheck
-        // declares the collaborator it has rather than the whole config. The
-        // list is stable under the write guard held here: its install takes
-        // the same one.
+        // declares the collaborator it has rather than the whole config —
+        // beside it the ONE setting slot (4) reads, `allow_preview_keys`
+        // (AUTH-1.44; RES-206), handed over the same way. The list is stable
+        // under the write guard held here: its install takes the same one.
         let list = blocked_prefixes(&self.auth.cfg);
         if let Err(r) = crate::auth::policy::precheck(
             &credential_lock,
@@ -1871,6 +1877,7 @@ impl Daemon {
             binding.signer.as_ref(),
             binding.scope,
             list.header().binding_writer.as_ref(),
+            self.auth.cfg.allow_preview_keys,
         ) {
             return with_signal(credential_refused(meta.kind, &r), closed);
         }

@@ -9,21 +9,23 @@ use common::{addr, fp, key, ACCT_A};
 use sha2::{Digest, Sha256};
 use skep_identity::{
     framed, sig_alg_of, token_of_sig_alg, CredentialKind, Enrolled, Enrollment, Fingerprint,
-    IdentityState, Inert, KeyParseError, LabelError, PayloadError, PublicKey, ALGS, ALG_ED25519,
+    IdentityState, Inert, KeyParseError, LabelError, PayloadError, PublicKey, ALGS,
     ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519, ENTRY_TAG, FNDSA512_ED25519_KEY_LEN,
     KEY_TAG, MAX_RECORD_BYTES, MLDSA65_ED25519_KEY_LEN, NODE_HELLO_TAG, SESSION_TAG,
     SESSION_TAG_V2, SIG_ALGS, TAGS,
 };
 
-/// AUTH-1.18/AUTH-1.21 — the record cap's VALUE, not merely its name: a
-/// PERMANENT pin, an I2 frozen constant (AUTH-2.90) with no fold version, so
-/// a board that folded a record under one cap and a mirror reading under
-/// another disagree forever about which records are `too_large`. Every other
-/// vector sizes its payload FROM this constant and so stays green if it
-/// moves; this is the one assertion a change is discovered at.
+/// AUTH-1.18/AUTH-1.21 — the record cap's VALUE, not merely its name: 128 KiB,
+/// RAISED from 64 KiB before the first served board (the hybrid-only launch's
+/// Q8; AUTH RES-204) and from that board a PERMANENT pin, an I2 frozen
+/// constant (AUTH-2.90) with no fold version, so a board that folded a record
+/// under one cap and a mirror reading under another disagree forever about
+/// which records are `too_large`. Every other vector sizes its payload FROM
+/// this constant and so stays green if it moves; this is the one assertion a
+/// change is discovered at.
 #[test]
-fn max_record_bytes_is_64_kib() {
-    assert_eq!(MAX_RECORD_BYTES, 65_536);
+fn max_record_bytes_is_128_kib() {
+    assert_eq!(MAX_RECORD_BYTES, 131_072);
 }
 
 /// AUTH-1.12 — `framed(tag, fields) = tag ‖ (be32(len(f)) ‖ f)…`, byte-pinned.
@@ -119,7 +121,6 @@ fn algs_and_arms_agree_both_directions() {
     // Arms → table: every variant's token is a row. A NEW VARIANT MUST BE
     // ADDED HERE beside its ALGS row (AUTH-2.91's one-edit-plus-assertion).
     let arms: &[PublicKey] = &[
-        PublicKey::Ed25519([0u8; 32]),
         PublicKey::MlDsa65Ed25519(Box::new([0u8; MLDSA65_ED25519_KEY_LEN])),
         PublicKey::FnDsa512PreviewEd25519(Box::new([0u8; FNDSA512_ED25519_KEY_LEN])),
     ];
@@ -138,17 +139,33 @@ fn algs_and_arms_agree_both_directions() {
             assert_ne!(a.family, b.family, "two ALGS rows name one key family");
         }
     }
-    assert_eq!(ALG_ED25519, "ed25519");
+    // THE KEY KINDS ARE THE TWO HYBRID ROWS (AUTH-1.1, AUTH-1.5; the
+    // hybrid-only launch, owner 2026-09-26 "Q1 b delete it"): tag 1's and tag
+    // 3's tokens, in that order; the classical `ed25519` row is DELETED and
+    // tag 2's reserved `fndsa512-ed25519` has no row — both name no row at
+    // the parse, the frozen token set's own refusal (AUTH-2.96).
+    let tokens: Vec<&str> = ALGS.iter().map(|a| a.token).collect();
+    assert_eq!(tokens, [ALG_MLDSA65_ED25519, ALG_FNDSA512_PREVIEW_ED25519]);
+    for deleted_or_reserved in ["ed25519", "fndsa512-ed25519"] {
+        assert_eq!(
+            PublicKey::parse(deleted_or_reserved, &"00".repeat(32)),
+            Err(KeyParseError::UnknownAlg),
+            "{deleted_or_reserved} names no ALGS row"
+        );
+    }
 }
 
 /// THE MARKER-TAG TABLE beside `ALGS` (signed ops; the design record §7.3
 /// (i)'s two-row `u8 ↔ token` table): every row's token is an `ALGS` row
-/// whose raw length is the row's own key width; the tags are distinct,
-/// non-zero (0 is the empty slot) and not `2` (reserved for the final FIPS
-/// 206); the two lookups are inverse; the classical token has no row (an
-/// Ed25519 key signs no entry); and the pinned widths are the ruled ones —
-/// tag 1's 1,984-byte key and 3,373-byte blob, tag 3's 929 and 730. The
-/// KEY PIN's halves read out of a parsed hybrid at those widths.
+/// whose raw length is the row's own key width — and every `ALGS` row has a
+/// marker tag, the key kinds being the hybrid rows alone; the tags are
+/// distinct, non-zero (0 is the empty slot) and not `2` (reserved for the
+/// final FIPS 206); the two lookups are inverse; the deleted classical token
+/// names no row; and the pinned widths are the ruled ones — tag 1's
+/// 1,984-byte key and 3,373-byte blob (6,746 hex), tag 3's 929 and 730 (1,460
+/// hex) — the widths a session's `sig` is admitted at, and no other
+/// (AUTH-6.3). The KEY PIN's halves read out of a parsed hybrid at those
+/// widths.
 #[test]
 fn sig_algs_and_algs_agree_and_the_pins_are_the_ruled_widths() {
     for row in SIG_ALGS {
@@ -159,7 +176,7 @@ fn sig_algs_and_algs_agree_and_the_pins_are_the_ruled_widths() {
         assert_eq!(sig_alg_of(row.token).map(|r| r.tag), Some(row.tag));
         assert_eq!(token_of_sig_alg(row.tag).map(|r| r.token), Some(row.token));
         let key = PublicKey::parse(row.token, &"0a".repeat(row.key_len())).unwrap();
-        assert_eq!(key.pq_half().map(<[u8]>::len), Some(row.pq_key_len), "the PQ half leads");
+        assert_eq!(key.pq_half().len(), row.pq_key_len, "the PQ half leads");
         assert_eq!(key.ed25519_half().len(), 32, "the Ed25519 half closes");
         assert_eq!(key.sig_alg().map(|r| r.tag), Some(row.tag));
     }
@@ -168,7 +185,8 @@ fn sig_algs_and_algs_agree_and_the_pins_are_the_ruled_widths() {
             assert_ne!(a.tag, b.tag, "two rows name one tag");
         }
     }
-    assert!(sig_alg_of(ALG_ED25519).is_none(), "a classical key signs no entry");
+    assert_eq!(SIG_ALGS.len(), ALGS.len(), "every key kind signs under a marker tag");
+    assert!(sig_alg_of("ed25519").is_none(), "the deleted classical token names no row");
     assert!(token_of_sig_alg(0).is_none() && token_of_sig_alg(2).is_none());
     let tag1 = sig_alg_of(ALG_MLDSA65_ED25519).unwrap();
     assert_eq!((tag1.tag, tag1.key_len(), tag1.sig_len(), tag1.pq_sig_len), (1, 1984, 3373, 3309));
@@ -177,10 +195,12 @@ fn sig_algs_and_algs_agree_and_the_pins_are_the_ruled_widths() {
     assert_eq!((tag3.tag, tag3.key_len(), tag3.sig_len(), tag3.pq_sig_len), (3, 929, 730, 666));
     assert_eq!(tag3.key_len(), FNDSA512_ED25519_KEY_LEN);
     assert!(ALG_FNDSA512_PREVIEW_ED25519.contains("preview"), "the preview says so in its token");
-    // The classical key's Ed25519 half is the whole key.
-    let ed = PublicKey::Ed25519([9u8; 32]);
-    assert_eq!(ed.ed25519_half(), &[9u8; 32]);
-    assert!(ed.pq_half().is_none());
+    // A hybrid's Ed25519 half is its LAST 32 raw bytes, the PQ half everything
+    // before them (the KEY PIN).
+    let raw: Vec<u8> = (0..1984u32).map(|i| (i % 251) as u8).collect();
+    let k = PublicKey::parse(ALG_MLDSA65_ED25519, &raw.iter().map(|b| format!("{b:02x}")).collect::<String>()).unwrap();
+    assert_eq!(k.ed25519_half(), &raw[1952..]);
+    assert_eq!(k.pq_half(), &raw[..1952]);
     // One fingerprint over the whole concatenated raw value (the record
     // §4.4): a hybrid's fingerprint is not either half's.
     let hybrid = PublicKey::parse(ALG_MLDSA65_ED25519, &"0a".repeat(1984)).unwrap();
@@ -315,23 +335,24 @@ fn value_types_survive_serde() {
 /// round trip. `Enrolled` rides inside `KeySet` inside `IdentityState`, so
 /// its encoding is part of the compatibility surface that freezes with the
 /// first checkpoint a v1 board writes; a round trip agrees with itself after
-/// any field-type change and would not notice. The anchor flag is ONE byte:
-/// widening it — to an enum, an integer, a struct — moves every later field
-/// of every checkpoint written since, and this assertion is where that is
-/// discovered.
+/// any field-type change and would not notice. The key opens on its arm's
+/// variant index — `0` for tag 1's `mldsa65-ed25519` since the classical
+/// arm's deletion renumbered the discriminant (free before the first served
+/// board, AUTH-2.90's clock) — then the raw key as a tuple of its row's
+/// width, no length prefix. The anchor flag is ONE byte: widening it — to an
+/// enum, an integer, a struct — moves every later field of every checkpoint
+/// written since, and this assertion is where that is discovered.
 #[test]
 fn enrolled_checkpoint_encoding_is_pinned() {
-    let raw = [0x11u8; 32];
-    let e = Enrolled {
-        key: PublicKey::Ed25519(raw),
-        anchor: true,
-    };
+    let k = key(0x11);
+    let e = Enrolled { key: k.clone(), anchor: true };
 
     let mut want: Vec<u8> = Vec::new();
-    want.extend_from_slice(&0u32.to_le_bytes()); // the Ed25519 variant index
-    want.extend_from_slice(&raw); // the raw key bytes
+    want.extend_from_slice(&0u32.to_le_bytes()); // the tag-1 arm's variant index
+    want.extend_from_slice(k.raw()); // the raw key bytes, 1,984 of them
     want.push(1); // the anchor flag, one byte
 
+    assert_eq!(want.len(), 4 + 1984 + 1);
     assert_eq!(bincode::serialize(&e).expect("serialize Enrolled"), want);
 }
 
@@ -430,10 +451,11 @@ fn vocabulary_types_are_usable_as_map_keys() {
     assert_eq!(kinds.len(), 2);
     let key_faults = HashSet::from([KeyParseError::BadHex, KeyParseError::UnknownAlg]);
     assert_eq!(key_faults.len(), 2);
-    // `LabelError` has one variant, so a set over it holds at most one row.
+    // `LabelError` has two variants (AUTH-1.23), so a set over it holds at
+    // most two rows.
     assert_eq!(
-        HashSet::from([LabelError::Newline, LabelError::Newline]).len(),
-        1
+        HashSet::from([LabelError::Newline, LabelError::TooLong, LabelError::Newline]).len(),
+        2
     );
 }
 
@@ -444,7 +466,7 @@ fn vocabulary_types_are_usable_as_map_keys() {
 #[test]
 fn key_and_fingerprint_render_as_their_hex() {
     let k = key(0xab);
-    let want = format!("PublicKey(ed25519 {})", k.to_hex());
+    let want = format!("PublicKey(mldsa65-ed25519 {})", k.to_hex());
     assert_eq!(format!("{k:?}"), want);
 
     let f = fp(0xab);

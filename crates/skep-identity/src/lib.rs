@@ -4,8 +4,10 @@
 //! signature library, no engine dependency. Dependencies are exactly
 //! `skep-address` (M1), `sha2`, `im`, `serde` — light enough for the engine,
 //! M10, checkpoint/replay, and any mirror tool to carry. AUTH-2.2 casts the
-//! crates around it: `crates/skepd` the ONLY crate that calls an Ed25519
-//! library, the World slice, fold hook and load check in
+//! crates around it: `crates/skepd` the ONLY crate that calls a signature
+//! library (Ed25519, ML-DSA, FN-DSA) — the fence is the SESSION verify's,
+//! `verify`/`find_signer`, the daemon's check of a handshake against the
+//! fold's key sets — the World slice, fold hook and load check in
 //! `crates/skep-engine`, the conformance pins in `crates/skep-conformance`.
 //!
 //! ## Composition, as built
@@ -30,9 +32,11 @@
 //!
 //! ## What lives here
 //!
-//! * keys and fingerprints — [`PublicKey`] with [`ALG_ED25519`] and the two
-//!   HYBRID tokens [`ALG_MLDSA65_ED25519`] (tag 1, production) and
-//!   [`ALG_FNDSA512_PREVIEW_ED25519`] (tag 3, preview), its refusal
+//! * keys and fingerprints — [`PublicKey`] with the two HYBRID tokens
+//!   [`ALG_MLDSA65_ED25519`] (tag 1, production) and
+//!   [`ALG_FNDSA512_PREVIEW_ED25519`] (tag 3, preview) — the key kinds are
+//!   the two hybrid rows, the classical `ed25519` row DELETED at the
+//!   hybrid-only launch (AUTH-1.1, AUTH-1.5) — its refusal
 //!   [`KeyParseError`], [`ALGS`] with its row type [`AlgRow`], the marker-tag
 //!   table [`SIG_ALGS`] with [`SigAlgRow`], [`Fingerprint`] (AUTH-1.1–1.10;
 //!   signed ops);
@@ -119,9 +123,8 @@ pub use framing::{
 };
 pub use key::{
     sig_alg_of, token_of_sig_alg, AlgRow, Fingerprint, KeyParseError, PublicKey, SigAlgRow, ALGS,
-    ALG_ED25519, ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519, ED25519_KEY_LEN,
-    FNDSA512_ED25519_KEY_LEN, FNDSA512_KEY_LEN, MLDSA65_ED25519_KEY_LEN, MLDSA65_KEY_LEN,
-    SIG_ALGS,
+    ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519, ED25519_KEY_LEN, FNDSA512_ED25519_KEY_LEN,
+    FNDSA512_KEY_LEN, MLDSA65_ED25519_KEY_LEN, MLDSA65_KEY_LEN, SIG_ALGS,
 };
 pub use keyset::{Enrolled, KeySet};
 pub use payload::{

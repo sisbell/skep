@@ -14,8 +14,9 @@ use skep_engine::types::{
 };
 use skep_febe::{Disposition, Op};
 use skep_identity::{
-    token_of_sig_alg, AuditClass, CredentialKind, Effect, Fingerprint, IdentityState, Inert,
-    LinkDeposit, PublicKey, TargetClass, TypeAddrs, Verdict, WriteTypes,
+    token_of_sig_alg, AuditClass, CredentialKind, Effect, Enrolled, Fingerprint, IdentityState,
+    Inert, LinkDeposit, PublicKey, TargetClass, TypeAddrs, Verdict, WriteTypes,
+    ALG_FNDSA512_PREVIEW_ED25519,
 };
 use skep_kernel::Attestation;
 use skep_links::{enc, HasLinks, SlotArg};
@@ -49,13 +50,16 @@ pub(crate) const MAX_ENROLLED_KEYS: usize = 16;
 /// signed `POST /session` attempt, and that route is unauthenticated and
 /// reachable from any page.
 ///
-/// The budget is N × `verify_strict` against the two cheap requests that
-/// buy it — one `GET /challenge`, one `POST /session`, neither carrying a
-/// credential. At [`MAX_ENROLLED_KEYS`] the bill is order 800 µs,
-/// commensurate with the frame parse beside it; at the record's own
-/// [`skep_identity::MAX_RECORD_BYTES`] bound it is order 40 ms, which the
-/// worker pool cannot absorb. "No cutoff, ever" (AUTH-4.33) is what makes
-/// the cap belong HERE, at the deposit, rather than at the verification.
+/// The budget is N hybrid verifies — both halves, `hybrid::verify` under
+/// each key's own row — against the two cheap requests that buy it: one
+/// `GET /challenge`, one `POST /session`, neither carrying a credential. At
+/// [`MAX_ENROLLED_KEYS`] the bill is order 2 ms (sixteen tag-1 verifies at
+/// the design record's ~134 µs each), commensurate with the frame parse
+/// beside it; at the record's own [`skep_identity::MAX_RECORD_BYTES`] bound —
+/// 128 KiB, 32 tag-1 entries or 68 tag-3 — it is order 4–5 ms, which the
+/// worker pool would rather not absorb per unauthenticated request. "No
+/// cutoff, ever" (AUTH-4.33) is what makes the cap belong HERE, at the
+/// deposit, rather than at the verification.
 ///
 /// The pre-claim window is the reachable one and the exposure is
 /// permanent: slot (7) is arm-blind, so a bare genesis plant on a claimed
@@ -64,11 +68,12 @@ pub(crate) const MAX_ENROLLED_KEYS: usize = 16;
 /// chose.
 pub(crate) const MAX_GENESIS_KEYS: usize = MAX_ENROLLED_KEYS;
 
-/// The most keys slot (4) point-decodes: ONE past the cap slot (5) applies.
-/// A record past that cap is refused whatever the rest decode to, so every
-/// decode beyond it is work an over-cap frame buys and never spends — order
-/// 800 decompressions at the record's own upstream
-/// [`skep_identity::MAX_RECORD_BYTES`], order 10 µs each, held under
+/// The most keys slot (4) decodes: ONE past the cap slot (5) applies. A
+/// record past that cap is refused whatever the rest decode to, so every
+/// decode beyond it is work an over-cap frame buys and never spends — up to
+/// 68 tag-3 (32 tag-1) all-halves decodes at the record's own upstream
+/// [`skep_identity::MAX_RECORD_BYTES`] of 128 KiB, an Ed25519 point
+/// decompression and a lattice-key decode each, held under
 /// `credential_lock.write()` AND the serialization lock, bought by a
 /// 150-byte deposit naming one pre-inserted atom.
 ///
@@ -255,7 +260,21 @@ pub(crate) enum CredentialRefusal {
     Inert(Inert),
     /// Slot (1), ahead of the write lock.
     EmitNotMakeLink,
-    /// Slot (4).
+    /// Slot (4), FIRST of the slot's two tokens (AUTH-3.44 as AUTH RES-206
+    /// landed it; the hybrid-only launch's Q5, owner 2026-09-26 "b"): an
+    /// enrolment record naming ANY key of the PREVIEW row, tag 3
+    /// (`fndsa512-preview-ed25519`, AUTH-1.5), unless the daemon's setting
+    /// `allow_preview_keys` allows it (AUTH-1.44) — EVERY enrolment record,
+    /// `Genesis` INSIDE; the test reads the entry's `alg` and decodes
+    /// nothing. Tag-3 VERIFICATION stays compiled in (the frozen-tag rule);
+    /// this refuses ENROLLMENT alone. Token `preview_key` — AUTH-3.56's row,
+    /// AUTH-6.23's; the face, the row's verbatim: "this is a PREVIEW key, and
+    /// this board enrolls no preview keys — make a key with a released client
+    /// and enroll that".
+    PreviewKey,
+    /// Slot (4), behind [`CredentialRefusal::PreviewKey`]: a key ANY half of
+    /// which does not decode (AUTH-3.56 as RES-206 landed it: every half the
+    /// key's row names — the Ed25519 point, the post-quantum key).
     UndecodableKey,
     /// The NULLIFY class, under the read lock, outside slots (1)–(8): a
     /// `nullify` whose target is CREDENTIAL-typed (PUB-6.10).
@@ -371,6 +390,7 @@ impl CredentialRefusal {
         match self {
             CredentialRefusal::Inert(i) => i.detail(),
             CredentialRefusal::EmitNotMakeLink => "emit_not_make_link".into(),
+            CredentialRefusal::PreviewKey => "preview_key".into(),
             CredentialRefusal::UndecodableKey => "undecodable_key".into(),
             CredentialRefusal::NullifyNotRetraction => "nullify_not_retraction".into(),
             CredentialRefusal::NullifyNotRevocation => "nullify_not_revocation".into(),
@@ -1229,14 +1249,20 @@ impl DepositSpans {
 /// RES-63) — still NO principal, so the forbidden ω check stays unwritable
 /// here. `scope` is read at the head of slot (6) and nowhere else.
 ///
-/// `seat` IS AUTH-3.21's SEAT CARVE'S ONE INPUT AND NOTHING ELSE (AUTH-3.15;
-/// RES-195): the blocked-prefix list header's SECOND field, the board's
-/// binding-writing account AS ISSUED — the header the handshake compares at
-/// step 4b — read at slot (6) beside the claimant, by [`forked_seat`] alone.
-/// The whole of [`super::AuthConfig`] is deliberately out of reach: no origin,
-/// flag, list entry or node prefix can be read from here, because none of
-/// them is an argument. And no address, content, cone, document or role rides
-/// in on this one.
+/// `seat` IS AUTH-3.21's SEAT CARVE'S ONE INPUT (AUTH-3.15; RES-195): the
+/// blocked-prefix list header's SECOND field, the board's binding-writing
+/// account AS ISSUED — the header the handshake compares at step 4b — read
+/// at slot (6) beside the claimant, by [`forked_seat`] alone. And
+/// `allow_preview_keys` IS THE SETTING SLOT (4) READS (AUTH-1.44; the
+/// `preview_key` refusal, AUTH-3.56; AUTH-3.15 as RES-206 landed it) — AND
+/// NOTHING ELSE: the whole of [`super::AuthConfig`] is deliberately out of
+/// reach — no origin, the local-trust flag, list entry or node prefix can be
+/// read from here, because none of them is an argument — and no address,
+/// content, cone, document or role rides in on either one.
+// Eight arguments, deliberately: each is ONE declared collaborator (AUTH-3.15,
+// AUTH-3.16's narrowing), and bundling them would put a struct between the
+// caller and the list this doc names — the same call `handshake` makes.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn precheck(
     lock: &LockWrite<'_>,
     world: &World,
@@ -1245,6 +1271,7 @@ pub(crate) fn precheck(
     signer: Option<&Fingerprint>,
     scope: Scope,
     seat: Option<&Address>,
+    allow_preview_keys: bool,
 ) -> Result<(), CredentialRefusal> {
     // (3) — the classify preview's verdict (AUTH-2.57): the fold's own
     // order — kind, home account, publication, the per-kind arm.
@@ -1257,12 +1284,41 @@ pub(crate) fn precheck(
         Verdict::Inert(i) => return Err(CredentialRefusal::Inert(i)),
         Verdict::Honored(e) => e,
     };
-    // (4) — undecodable_key: a valid-hex non-point key can never sign; the
-    // fold accepts syntax, the daemon extends the courtesy. The decode is
-    // the SAME one `super::session::verify` performs, so the courtesy is
-    // exact rather than an approximation of it. It is BOUNDED by
-    // [`MAX_DECODED_KEYS`] — the discipline [`crate::codec`]'s `room`
-    // states, applied to the one slot whose input this module cannot cap.
+    // (4) — TWO tokens in THIS order (AUTH-3.44 as RES-206 landed it).
+    //
+    // FIRST `preview_key`: an enrolment record naming ANY key of the PREVIEW
+    // row, tag 3 (`fndsa512-preview-ed25519`), unless the daemon's setting
+    // allows it (AUTH-1.44) — EVERY enrolment record, `Genesis` INSIDE (the
+    // cap's genesis exemption is not inherited: a genesis-planted preview key
+    // is as much a preview key). The test reads the entry's `alg` and
+    // decodes nothing, so a preview key that ALSO fails to decode is told
+    // this fault first — the one the same act clears, a key made with a
+    // released client (AUTH-3.46). Tag-3 VERIFICATION stays compiled in (the
+    // frozen-tag rule) and the fold admits the row as syntax; this refuses
+    // ENROLLMENT alone. Unbounded over the record's entries: a token
+    // compare per entry, and the record is the read's cap's (AUTH-2.43).
+    let names_a_preview_key =
+        |keys: &[Enrolled]| keys.iter().any(|e| e.key.alg() == ALG_FNDSA512_PREVIEW_ED25519);
+    if !allow_preview_keys {
+        match &effect {
+            Effect::Enroll { added, .. } if names_a_preview_key(added) => {
+                return Err(CredentialRefusal::PreviewKey)
+            }
+            Effect::Genesis { keys, .. } if names_a_preview_key(keys) => {
+                return Err(CredentialRefusal::PreviewKey)
+            }
+            _ => {}
+        }
+    }
+    // THEN `undecodable_key`: a valid-hex key ANY half of which does not
+    // decode — the Ed25519 half's point AND the post-quantum half (the
+    // FN-DSA header byte among that half's checks) — can never sign; the
+    // fold accepts syntax, the daemon extends the courtesy. The decode is the
+    // SAME one `hybrid::verify` performs before its arithmetic
+    // (`super::key_decodes`), so the courtesy is exact rather than an
+    // approximation of it. It is BOUNDED by [`MAX_DECODED_KEYS`] — the
+    // discipline [`crate::codec`]'s `room` states, applied to the one slot
+    // whose input this module cannot cap.
     //
     // CONSEQUENCE: a record that is BOTH over-cap and carries an
     // undecodable key past [`MAX_DECODED_KEYS`] answers `too_many_enrolled`
@@ -1272,9 +1328,8 @@ pub(crate) fn precheck(
     // is still seen and still answers `undecodable_key`. It is refused
     // either way, permanently, in the same vocabulary and by the same
     // function; what changes is which of two true things it is told.
-    let keys_decodable = |keys: &[skep_identity::Enrolled]| {
-        keys.iter().take(MAX_DECODED_KEYS).all(|e| super::verifying_key(&e.key).is_some())
-    };
+    let keys_decodable =
+        |keys: &[Enrolled]| keys.iter().take(MAX_DECODED_KEYS).all(|e| super::key_decodes(&e.key));
     match &effect {
         Effect::Enroll { added, .. } if !keys_decodable(added) => {
             return Err(CredentialRefusal::UndecodableKey)

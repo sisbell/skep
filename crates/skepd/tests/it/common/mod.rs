@@ -73,24 +73,19 @@ pub fn seed_of(sk: &SigningKey) -> [u8; 32] {
     sk.to_bytes()
 }
 
-/// The hybrid signer one seed carrier derives under [`FIXTURE_TAG`]: its
-/// Ed25519 half opens the seed's sessions, both halves sign its entries.
+/// The hybrid signer one seed carrier derives under [`FIXTURE_TAG`]: both
+/// halves sign the seed's sessions (the hybrid handshake) and its entries.
 pub fn hybrid_signer(sk: &SigningKey) -> HybridSigner {
     HybridSigner::from_seed(FIXTURE_TAG, &seed_of(sk)).expect("tag 1 is a row")
 }
 
 /// The ONE `ALGS` entry a seed carrier enrols: the hybrid key under
 /// [`FIXTURE_TAG`] — its fingerprint the one a session testifies and an
-/// entry verifies under.
+/// entry verifies under. (The classical `ed25519` row is DELETED — the
+/// hybrid-only launch, AUTH-1.1/1.5 — so a seed carrier enrols nothing but
+/// a hybrid key.)
 pub fn public_key_of(sk: &SigningKey) -> PublicKey {
     hybrid_signer(sk).public_key().clone()
-}
-
-/// The CLASSICAL `ed25519` entry a seed carrier's raw key is — the tag-0
-/// row that stands as it did, for the cells about that row alone (a key
-/// that opens sessions and signs no entry).
-pub fn ed25519_public_key_of(sk: &SigningKey) -> PublicKey {
-    PublicKey::parse("ed25519", &hex(&sk.verifying_key().to_bytes())).expect("a real point")
 }
 
 /// A deterministic per-principal signing key: seed `n` in every byte, the
@@ -128,48 +123,57 @@ pub fn enroll_atom_flagged(keys: &[(&SigningKey, bool)]) -> String {
     json_atom(&encode_enroll(&entries))
 }
 
-/// [`enroll_atom`] over the CLASSICAL `ed25519` row — the raw keys as
-/// 64-hex entries — for the cells about the RECORD's key count: sixteen
-/// hybrid entries fill the 64 KiB record cap (the design record's E7
-/// arithmetic: fourteen fit), where sixteen classical ones do not. A key so
-/// enrolled opens sessions under [`sign_session_ed25519`] and signs no entry.
-pub fn enroll_atom_ed25519(keys: &[&SigningKey]) -> String {
-    let entries: Vec<Enrollment> = keys
-        .iter()
-        .map(|sk| Enrollment::new(ed25519_public_key_of(sk), false, None).expect("no label"))
-        .collect();
-    json_atom(&encode_enroll(&entries))
-}
-
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Sign the session payload (AUTH-6.4): `framed(SESSION_TAG, [origin,
-/// nonce, principal-decimal])`, returning the 128-hex signature — under the
-/// seed carrier's DERIVED Ed25519 half (signed ops), the half its enrolled
-/// hybrid entry opens sessions with.
-pub fn sign_session(sk: &SigningKey, origin: &str, nonce: &str, principal: u64) -> String {
-    let payload = framed(
-        SESSION_TAG,
-        &[origin.as_bytes(), nonce.as_bytes(), principal.to_string().as_bytes()],
-    );
-    hex(&hybrid_signer(sk).ed25519_signing_key().sign(&payload).to_bytes())
+/// The v1 session bytes (AUTH-6.4): `framed(SESSION_TAG, [origin, nonce,
+/// principal-decimal])` — the UNSCOPED layout, unmoved under its name by the
+/// hybrid handshake.
+pub fn session_bytes_v1(origin: &str, nonce: &str, principal: u64) -> Vec<u8> {
+    framed(SESSION_TAG, &[origin.as_bytes(), nonce.as_bytes(), principal.to_string().as_bytes()])
 }
 
-/// [`sign_session`] under the RAW Ed25519 key — the classical row's own
-/// session signature, for a cell that enrolled [`ed25519_public_key_of`].
-pub fn sign_session_ed25519(sk: &SigningKey, origin: &str, nonce: &str, principal: u64) -> String {
-    let payload = framed(
-        SESSION_TAG,
-        &[origin.as_bytes(), nonce.as_bytes(), principal.to_string().as_bytes()],
-    );
-    hex(&sk.sign(&payload).to_bytes())
+/// Sign the session payload (AUTH-6.4) as a SIGNER of either row does: the
+/// HYBRID BLOB over the v1 bytes — the post-quantum signature then the
+/// Ed25519 signature, both halves over the same bytes (AUTH-4.32, AUTH-6.3)
+/// — as hex: 6,746 characters under tag 1, 1,460 under tag 3. The blob a
+/// `POST /session` body's `sig` carries; the body names no `alg`, the
+/// daemon trying every enrolled key under its own row.
+pub fn sign_session_as(signer: &HybridSigner, origin: &str, nonce: &str, principal: u64) -> String {
+    hex(&signer.sign(&session_bytes_v1(origin, nonce, principal)))
+}
+
+/// Sign the session payload (AUTH-6.4) under the seed carrier's derived
+/// TAG-1 signer ([`hybrid_signer`]): the hybrid blob, both halves —
+/// [`sign_session_as`] at [`FIXTURE_TAG`]. Deterministic (ML-DSA-65's
+/// deterministic variant, Ed25519), so a cell can re-sign and compare.
+pub fn sign_session(sk: &SigningKey, origin: &str, nonce: &str, principal: u64) -> String {
+    sign_session_as(&hybrid_signer(sk), origin, nonce, principal)
+}
+
+/// THE NEGATIVE VECTOR's producer: the Ed25519 half ALONE over the v1 bytes
+/// — 64 signature bytes, 128 hex — the CLASSICAL layout no served board
+/// admits since the hybrid handshake. Its width is none of the hybrid blob
+/// widths, so a body carrying it is `400 malformed_session_request` with the
+/// nonce SURVIVING (AUTH-6.3; the hybrid-only launch's Q2) — never a 401, and
+/// never a session: no half opens one alone. Made with the seed carrier's
+/// DERIVED Ed25519 half, the very half of the enrolled hybrid key, so the
+/// refusal is the WIDTH's and not a wrong key's.
+pub fn sign_session_ed25519_half_alone(
+    sk: &SigningKey,
+    origin: &str,
+    nonce: &str,
+    principal: u64,
+) -> String {
+    let payload = session_bytes_v1(origin, nonce, principal);
+    hex(&hybrid_signer(sk).ed25519_signing_key().sign(&payload).to_bytes())
 }
 
 /// [`sign_session`]'s SCOPED variant — the v2 bytes (AUTH-6.4):
 /// `framed(SESSION_TAG_V2, [origin, nonce, principal-decimal, scope])`, the
-/// layout a body carrying `"scope": <scope>` signs. `scope` is a parameter
+/// layout a body carrying `"scope": <scope>` signs — the hybrid blob, both
+/// halves, under the seed carrier's tag-1 signer. `scope` is a parameter
 /// rather than the constant `content` so a cell can sign exactly what a
 /// malformed body says — the daemon refuses that body at the parse, whatever
 /// its signature.
@@ -184,7 +188,31 @@ pub fn sign_session_scoped(
         SESSION_TAG_V2,
         &[origin.as_bytes(), nonce.as_bytes(), principal.to_string().as_bytes(), scope.as_bytes()],
     );
-    hex(&hybrid_signer(sk).ed25519_signing_key().sign(&payload).to_bytes())
+    hex(&hybrid_signer(sk).sign(&payload))
+}
+
+/// Open a SIGNED session for `principal` under a NAMED hybrid signer — of
+/// either row — over the challenge/response handshake, signing the origin
+/// actually dialed with the signer's blob ([`sign_session_as`]). The token is
+/// NOT registered with the test signer (which signs attests under the seed
+/// carrier's TAG-1 key): a cell wanting attests attached registers it, with
+/// the seed carrier, itself.
+pub fn open_signed_session_as(port: u16, principal: u64, signer: &HybridSigner) -> String {
+    let nonce = challenge(port, principal);
+    let origin = format!("http://127.0.0.1:{port}");
+    let sig = sign_session_as(signer, &origin, &nonce, principal);
+    let body = format!(
+        "{{\"principal\":{principal},\"nonce\":\"{nonce}\",\"origin\":\"{origin}\",\"sig\":\"{sig}\"}}"
+    );
+    let (st, resp) = http(port, "POST", "/session", None, body.as_bytes());
+    assert_eq!(
+        st,
+        200,
+        "signed session under tag {}: {}",
+        signer.tag(),
+        String::from_utf8_lossy(&resp)
+    );
+    json(&resp)["session"].as_str().expect("session token").to_string()
 }
 
 /// A fresh challenge for `principal`: the nonce, as issued.
@@ -497,7 +525,25 @@ pub fn spawn_with_blocked_prefixes(
     blocked_prefixes: Option<&Path>,
     node_prefix: Option<&str>,
 ) -> Skepd {
-    spawn_under(dir, local_trust, blocked_prefixes, node_prefix, None)
+    spawn_under(dir, local_trust, blocked_prefixes, node_prefix, None, ALLOW_PREVIEW_KEYS_IN_FIXTURES)
+}
+
+/// THE FIXTURES RUN WITH `allow_preview_keys` ON (AUTH-1.44: "the test
+/// fixtures run with it on"): every spawn here admits the enrollment of a
+/// TAG-3 preview key, so the tag-3 cells — the goldens' row, a tag-3 session,
+/// the all-halves decode — can enrol one. The ONE spawn that runs a served
+/// board's setting, OFF, is [`spawn_refusing_preview_keys`].
+pub const ALLOW_PREVIEW_KEYS_IN_FIXTURES: bool = true;
+
+/// [`spawn`] with `allow_preview_keys` OFF — a served board's own setting
+/// (the default; `skepd` launched without `--allow-preview-keys`): the daemon
+/// REFUSES ENROLLMENT of a tag-3 key as `preview_key` (AUTH-3.56, slot (4)'s
+/// first token), a genesis included. The board is claimed as [`spawn`]'s is;
+/// the ceremony's own keys are tag 1 and meet no refusal.
+pub fn spawn_refusing_preview_keys(dir: &Path) -> Skepd {
+    let sd = spawn_under(dir, true, None, None, None, false);
+    claim_board(sd.port());
+    sd
 }
 
 /// [`spawn_with_blocked_prefixes`] with the kernel's SALT SOURCE named:
@@ -505,13 +551,15 @@ pub fn spawn_with_blocked_prefixes(
 /// transaction — every other spawn here), `Some(seed)` the test seam
 /// (`Daemon::open_seeded`, the seeded stream), which the head suite's
 /// determinism pins need: two daemons over one op sequence write one chain
-/// only under one seed. The retry loop below is the same either way.
+/// only under one seed — and the preview-key setting named (AUTH-1.44). The
+/// retry loop below is the same either way.
 fn spawn_under(
     dir: &Path,
     local_trust: bool,
     blocked_prefixes: Option<&Path>,
     node_prefix: Option<&str>,
     salt_seed: Option<u64>,
+    allow_preview_keys: bool,
 ) -> Skepd {
     let node_prefix = node_prefix.map(|text| {
         text.parse::<NodePrefix>().unwrap_or_else(|e| panic!("'{text}' is {e}"))
@@ -547,6 +595,7 @@ fn spawn_under(
         opts.configured = vec![origin];
         opts.blocked_supply_path = blocked_prefixes.map(Path::to_path_buf);
         opts.node_prefix = node_prefix.clone();
+        opts.allow_preview_keys = allow_preview_keys;
         let opened = match salt_seed {
             None => Daemon::open_with(dir, opts),
             Some(seed) => Daemon::open_seeded(dir, opts, seed),
@@ -657,14 +706,18 @@ pub fn spawn(dir: &Path) -> Skepd {
 /// callers; every other suite spawns the production door, whose OS-drawn
 /// salts make every board's chain its own.
 pub fn spawn_seeded(dir: &Path, seed: u64) -> Skepd {
-    let sd = spawn_under(dir, true, None, None, Some(seed));
+    let sd = spawn_under(dir, true, None, None, Some(seed), ALLOW_PREVIEW_KEYS_IN_FIXTURES);
     claim_board(sd.port());
     sd
 }
 
-/// Spawn without claiming — the AUTH suites drive the window itself.
+/// Spawn without claiming — the AUTH suites drive the window itself. The
+/// fixtures' preview-key setting is on here as everywhere (AUTH-1.44); every
+/// other option is the default's.
 pub fn spawn_unclaimed(dir: &Path) -> Skepd {
-    let daemon = Daemon::open(dir).expect("daemon open (genesis or recover)");
+    let mut opts = AuthOptions::default();
+    opts.allow_preview_keys = ALLOW_PREVIEW_KEYS_IN_FIXTURES;
+    let daemon = Daemon::open_with(dir, opts).expect("daemon open (genesis or recover)");
     serve(daemon, 0, DEFAULT_WORKERS).expect("bind an ephemeral port")
 }
 

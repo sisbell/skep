@@ -93,7 +93,7 @@ use skep_retrieval::{CorrPair, Deletions, DeliveryItem, Operand, RegionSpec, Spe
 /// `compare`'s two operands and `find_docs_containing`'s `regions` are
 /// lists of regions, each carrying its own span list — so a frame's TOTAL
 /// span count is the product of two caps and is bounded by
-/// [`crate::server`]'s request-body cap alone. The budget argument above
+/// [`crate::limits`]'s request-body cap alone. The budget argument above
 /// transfers to one query slot; it does not price a region set, whose cost
 /// model is M6's rather than M8's. Anyone raising the body cap for a route
 /// that carries these ops owes that number.

@@ -116,7 +116,7 @@ pub(crate) struct ScanOutcome {
     /// one than the scan was run with.
     s_load: u64,
     /// The base's own chain value — the `SKC4` header's `chain_head`, or
-    /// [`CHAIN_GENESIS`] at genesis — which the base's own link is judged
+    /// [`super::chain::CHAIN_GENESIS`] at genesis — which the base's own link is judged
     /// against. Carried for the reason `s_load` is.
     chain_at_base: [u8; 32],
     /// The boundary this scan COLLECTED to, as [`scan`] was called with it —
@@ -195,7 +195,7 @@ pub(crate) struct ScanOutcome {
     /// transaction's marker, the marker's `txn` rewritten — the GROUP's own
     /// last seq, since in the `last_seq`-edited shape the marker's is the
     /// forged field. NO WRITER OF THIS JOURNAL PRODUCES THAT SHAPE:
-    /// [`encode_txn`] streams `records_checksum` over the frames it writes
+    /// [`super::encode_txn`] streams `records_checksum` over the frames it writes
     /// and sets `last_seq` to the last record's, emits one transaction's
     /// frames contiguously and `Seq`-ascending — so a clean group's next
     /// intact frame is its own marker — and refuses a group past the budget
@@ -519,7 +519,7 @@ impl ScanOutcome {
 /// accumulated as they arrive (§1/§7).
 ///
 /// A scan holds one of these at a time. That is the writer's own shape:
-/// [`encode_txn`] emits a transaction's records contiguously and closes them
+/// [`super::encode_txn`] emits a transaction's records contiguously and closes them
 /// with its marker, so a group left open by an intervening transaction's
 /// record can never be closed by a later marker.
 ///
@@ -543,13 +543,13 @@ struct PendingTxn {
     /// twice, so such a transaction never commits however its checksum lands.
     ordered: bool,
     /// What this group's frames would occupy in the journal, accounted to the
-    /// same figure [`txn_encoded_len`] gives the write side: seeded with the
+    /// same figure [`super::txn_encoded_len`] gives the write side: seeded with the
     /// marker frame that will close the group, then charged [`frame_len`] per
-    /// record — which is [`record_frame_len`] reached from the framed payload
+    /// record — which is [`super::record_frame_len`] reached from the framed payload
     /// a reader actually holds rather than from the record's own bytes.
     accounted: u64,
     /// Set once [`Self::accounted`] passes [`MAX_TXN_BYTES`]. A group past the
-    /// budget is one no writer here can emit — [`Journal::commit_txn`] refuses
+    /// budget is one no writer here can emit — [`super::Journal::commit_txn`] refuses
     /// it before a byte is appended — so the READER enforces the same bound
     /// rather than trusting it, which is what holds a scan's group memory to
     /// one transaction's worth against a journal this writer did not write.
@@ -595,9 +595,9 @@ impl PendingTxn {
     /// The chain value `marker` MUST carry to be this group's honest close:
     /// the link opened on the running value, streamed with this group's
     /// payloads, closed with the marker's own pre-chain fields and the SALT
-    /// the marker carries — the writer's computation ([`encode_txn`]) re-run
+    /// the marker carries — the writer's computation ([`super::encode_txn`]) re-run
     /// from the bytes the CRC verified. The salt is READ here, never drawn:
-    /// a replay under any [`SaltSource`] recomputes the link the writer
+    /// a replay under any [`crate::SaltSource`] recomputes the link the writer
     /// closed, and an edited salt is a link that fails.
     fn recomputed_chain(&self, marker: &Marker) -> [u8; 32] {
         self.link.clone().close(
@@ -611,7 +611,7 @@ impl PendingTxn {
     /// Take one record frame of this transaction: `payload` is the frame
     /// payload exactly as framed, which is what `records_checksum` covers —
     /// and the chain, and what [`frame_len`] charges, a framed payload being
-    /// the inner level [`record_payload_len`] gives the write side.
+    /// the inner level [`super::record_payload_len`] gives the write side.
     fn push(&mut self, record: LogRecord, payload: &[u8]) {
         if self.last_seq.is_some_and(|prev| record.seq <= prev) {
             self.ordered = false;
@@ -641,7 +641,7 @@ impl PendingTxn {
     ///
     /// The `last_seq` conjunct is the one the checksum cannot supply: the
     /// checksum ties the RECORDS to the marker, while `last_seq` is a separate
-    /// field under no protection but the frame CRC. [`encode_txn`] sets it to
+    /// field under no protection but the frame CRC. [`super::encode_txn`] sets it to
     /// the last record's own `Seq`, so a marker claiming less is one this
     /// writer cannot emit — and it is the shape that has the fold drop
     /// committed records above the claim while the sequencer restarts over
@@ -731,7 +731,7 @@ fn read_segment(path: &Path, s_load: u64) -> Result<Vec<u8>, ScanFail> {
 /// [`ScanOutcome::collect_commit`] as each committed marker is taken: every
 /// committed transaction above `s_load` must carry, in its marker, the
 /// recomputation of [`ChainLink`] over the previous committed transaction's
-/// value — `chain_at_base` for the first, which is [`CHAIN_GENESIS`] from
+/// value — `chain_at_base` for the first, which is [`super::chain::CHAIN_GENESIS`] from
 /// genesis and the `SKC4` header's `chain_head` off a checkpoint — its own
 /// record payloads as the CRC verified them, and the salt the marker itself
 /// carries (`SKJ4`; read, never drawn). A mismatch is recorded as
@@ -765,11 +765,11 @@ fn read_segment(path: &Path, s_load: u64) -> Result<Vec<u8>, ScanFail> {
 /// [`ScanOutcome::chain_at_boundary`] answers [`crate::Kernel::chain_at`]
 /// with.
 ///
-/// `segs` must be ASCENDING by `firstSeq`, as [`list_segments`] produces it.
+/// `segs` must be ASCENDING by `firstSeq`, as [`super::segment::list_segments`] produces it.
 /// The skip rule ([`scanned_above`]), the tail resolution and
-/// [`inferred_last_seq`] all read a neighbour's name as this segment's bound,
+/// [`super::segment::inferred_last_seq`] all read a neighbour's name as this segment's bound,
 /// so an out-of-order slice makes those inferences meaningless — and
-/// [`reclaim_below`], which reads the same order, deletes on one of them.
+/// [`super::segment::reclaim_below`], which reads the same order, deletes on one of them.
 ///
 /// Reached through [`crate::replay::Base::scan`], which supplies `s_load` and
 /// `chain_at_base` from the base it selected. A scan and the fold that

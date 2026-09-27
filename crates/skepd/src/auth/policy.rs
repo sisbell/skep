@@ -134,7 +134,7 @@ fn addr_spans(addrs: &[Address]) -> Vec<Span> {
 
 /// A slot's spans in M7's own deposited form: [`addr_spans`] for the
 /// address form; `None` for `Resolve` — a resolved slot can never name a
-/// credential type (the allocation above), so classification never
+/// credential type (the allocation in [`super::fold`]), so classification never
 /// resolves.
 fn slotarg_kind(s: &SlotArg) -> Option<CredentialKind> {
     match s {
@@ -156,7 +156,7 @@ fn slotarg_kind(s: &SlotArg) -> Option<CredentialKind> {
 /// structural rather than claimed — this one and [`DepositSpans::of`] both
 /// go through [`addr_spans`], the one spelling of `enc(addrs)`. Only the
 /// rebuild's stays a claim: it reads M7's stored slot, which records `enc`
-/// verbatim. The subspace-3 allocation above is what keeps a `Resolve` slot
+/// verbatim. The subspace-3 allocation in [`super::fold`] is what keeps a `Resolve` slot
 /// out of the codomain. A FALSE NEGATIVE is the divergence this module
 /// cannot detect: the deposit commits through the plain path with no gate
 /// and no fold step, so the world holds a credential the live fold never

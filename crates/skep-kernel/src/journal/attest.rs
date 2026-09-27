@@ -20,12 +20,12 @@ pub(crate) const SIG_ALG_UNSIGNED: u8 = 0;
 /// blob is interpreted here (a signed marker's verification is the
 /// verifier's, beside the table, fold-inert — the fold reads no signature),
 /// the slot is no chain input (the tamper matrix's case 4), and its bytes sit
-/// OUTSIDE [`MAX_TXN_BYTES`]'s accounting (the design record §4.4 (b): the
+/// OUTSIDE [`super::MAX_TXN_BYTES`]'s accounting (the design record §4.4 (b): the
 /// budget bounds the RECORDS a staging holds; the slot is the marker's own).
 ///
 /// The one-spelling-of-empty rule is held at CONSTRUCTION: a value of this
 /// type always names a non-zero tag with a non-empty blob, so no transaction
-/// can write the marker [`MarkerShadow`]'s door refuses — tag `0` with bytes,
+/// can write the marker [`super::MarkerShadow`]'s door refuses — tag `0` with bytes,
 /// or a tag with none — and "unsigned" has exactly one spelling, the absent
 /// value. Which tags exist and what a blob's layout is under each are the
 /// verifier's table, not this kernel's: any non-zero tag and any non-empty

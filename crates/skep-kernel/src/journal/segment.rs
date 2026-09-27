@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 /// slice must be ascending by `first_seq` as [`list_segments`] produces it.
 ///
 /// Both fields are read only by the operations here that own segment names —
-/// [`inferred_last_seq`], [`reaches_genesis`], [`reclaim_below`], [`scan`]
-/// and [`first_sync_word`], the last two reaching their segments through the
+/// [`inferred_last_seq`], [`reaches_genesis`], [`reclaim_below`], [`super::scan::scan`]
+/// and [`super::scan::first_sync_word`], the last two reaching their segments through the
 /// one skip rule, [`scanned_above`] — because a `firstSeq` read outside them
 /// is a coverage inference made away from the naming rule it rests on, and
 /// [`reclaim_below`] deletes files on that inference. A slice of these
@@ -86,8 +86,8 @@ pub(super) fn inferred_last_seq(segs: &[SegmentMeta], i: usize) -> Option<u64> {
 
 /// The segments a scan above `s_load` reads, each with its index in `segs`:
 /// every closed segment whose inferred reach lies above the base, and the
-/// active one always (§1/§7). The ONE statement of the skip rule — [`scan`]
-/// walks these and [`first_sync_word`] probes the first of them, so the probe
+/// active one always (§1/§7). The ONE statement of the skip rule — [`super::scan::scan`]
+/// walks these and [`super::scan::first_sync_word`] probes the first of them, so the probe
 /// looks where the scan will look by construction.
 pub(super) fn scanned_above(
     segs: &[SegmentMeta],

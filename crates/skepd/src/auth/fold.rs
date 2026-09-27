@@ -1,7 +1,9 @@
 //! The identity fold BESIDE the engine: the world-fact seam (`FoldCtx`
 //! over the assembled `World`), the canonical rebuild at open, the live
 //! fold the write path advances, the credential idempotency memo, and the
-//! `key_set` read's identity half.
+//! `key_set` read's identity half. It also holds the credential type table
+//! ([`identity_types`], [`T_ENROLL`]/[`T_RETIRE`]/[`T_CLAIM`], [`addr_of`])
+//! and [`published_unprojected`], which the fold and the policy both read.
 //!
 //! DERIVED STATE, and only that: the fold is rebuilt from the recovered
 //! world at open and advanced from committed deposits at runtime — nothing

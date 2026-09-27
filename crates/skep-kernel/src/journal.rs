@@ -179,7 +179,7 @@ pub(crate) struct LogRecord {
 /// minus its `txn`, which the group that closed it has already established.
 /// Named for the only state in which one is ever read: a dead group releases
 /// its records unread, so every one that reaches
-/// [`ScanOutcome::committed_records`] came through [`PendingTxn::commits`].
+/// [`ScanOutcome::committed_records`] came through `PendingTxn::commits`.
 pub(crate) struct CommittedRecord {
     pub(crate) seq: u64,
     pub(crate) bytes: Vec<u8>,
@@ -202,7 +202,7 @@ pub(crate) struct CommittedRecord {
 /// `records_checksum` — the salt (`SKJ4`) first, then the chain, the slot
 /// LAST: `records_checksum` covers record frame payloads only, the marker's
 /// own frame CRC covers whatever the marker holds, and resynchronization
-/// reads the sync word and the header — so [`PendingTxn::commits`] and the
+/// reads the sync word and the header — so `PendingTxn::commits` and the
 /// resync are untouched by any of the three, and a FILLED slot appends bytes
 /// after `sig_alg` and moves no other marker byte (its frame's `len` and
 /// `crc` differ, as any payload's must). The salt's place, before the chain,
@@ -510,7 +510,7 @@ const fn record_payload_len(record_len: usize) -> u64 {
 /// is being built.
 ///
 /// A reader has the framed payload rather than the record's own bytes, so
-/// [`PendingTxn`] reaches the same figure by the other route —
+/// `PendingTxn` reaches the same figure by the other route —
 /// [`frame_len`] over what it holds — and the accounting test pins the two
 /// equal.
 const fn record_frame_len(record_len: usize) -> u64 {

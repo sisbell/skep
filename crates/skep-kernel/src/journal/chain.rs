@@ -14,8 +14,8 @@ use super::Txn;
 pub(crate) const CHAIN_GENESIS: [u8; 32] = [0u8; 32];
 
 /// One link of the commit chain under construction — the ONE spelling of
-/// what the chain hashes, used by the writer ([`encode_txn`]) and the reader
-/// ([`PendingTxn`]) alike, so the two cannot disagree about a single byte:
+/// what the chain hashes, used by the writer ([`super::encode_txn`]) and the reader
+/// (`PendingTxn`) alike, so the two cannot disagree about a single byte:
 ///
 /// ```text
 /// chain(T) = SHA-256(
@@ -40,7 +40,7 @@ pub(crate) const CHAIN_GENESIS: [u8; 32] = [0u8; 32];
 /// what it framed and a reader hashes what the CRC just verified, from the
 /// same byte strings, so the chain needs no canonical re-serialization on
 /// either side; that the records themselves have one byte-form per value on
-/// every machine is the codec's promise ([`codec`]), which is what makes two
+/// every machine is the codec's promise ([`super::codec`]), which is what makes two
 /// replicas of one history agree on every link.
 ///
 /// WHAT THE SALT PROTECTS, and what it does not (the signed-ops re-base

@@ -113,7 +113,7 @@ pub(crate) enum ComposeFault {
     /// base CARRIES every such run (PUB-6.24). The entry frame would carry a
     /// value withheld from its own author, which no signature of theirs can
     /// attest and which the check does not read for them.
-    Withheld,
+    CarriedUnreadable,
     /// A `publish`'s body would pass [`MAX_SHOT_BODY_BYTES`].
     OverBudget,
     /// The op kind is outside the checked set [`in_checked_set`] states.
@@ -200,7 +200,7 @@ pub(crate) fn compose(
                     if refused_at_or_before_the_source_gate(world, doc, &trunk, shot, principal) {
                         ComposeFault::StoreRefuses
                     } else {
-                        ComposeFault::Withheld
+                        ComposeFault::CarriedUnreadable
                     },
                 );
             }

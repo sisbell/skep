@@ -813,7 +813,7 @@ fn the_source_gate_answers_behind_ownership_and_ahead_of_existence() {
     // (2′) An EXISTING run onto it, unattested: the dangling run's answer —
     //      existence is not told through the check either.
     assert_withheld(
-        &op_unsigned(
+        &op_unattested(
             port,
             Some(&signed),
             &publish(CLAIMANT_DOC1, Some((CLAIMANT_DOC1, 1)), None, &[run(&s_draft, &s_text, 2)]),

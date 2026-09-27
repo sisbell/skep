@@ -1275,9 +1275,9 @@ fn p_hex(s: &str) -> PResult<Vec<u8>> {
 /// character; [`parse_lower_hex`] REFUSES it, admitting only what
 /// [`hex_string`] emits — the parse behind the nonce, the session token and
 /// the published head's hashes, so an uppercase nonce is a syntax fault
-/// whose nonce survives rather than a burned credential; and
-/// [`crate::auth::session`]'s signature parser folds it, the signature being
-/// decoded and never framed. None of them owns the table.
+/// whose nonce survives rather than a burned credential; and the session's
+/// signature parser (`auth::session::parse_case_free_hex`) folds it, the
+/// signature being decoded and never framed. None of them owns the table.
 pub(crate) fn hex_nibble(b: u8) -> Option<u8> {
     match b {
         b'0'..=b'9' => Some(b - b'0'),

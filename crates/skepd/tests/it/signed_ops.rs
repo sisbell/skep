@@ -45,10 +45,10 @@ fn refusal(v: &Value) -> (String, String) {
     (verdict(v), v["disposition"].as_str().unwrap_or("?").to_string())
 }
 
-/// The seat every claimed-board cell writes from: the claimant's SIGNED
-/// device session (registered with the test signer), its doc 1 the
-/// published home.
-fn owner(port: u16) -> String {
+/// Opens the seat every claimed-board cell writes from: a fresh SIGNED
+/// device session of the claimant (registered with the test signer), its
+/// doc 1 the published home.
+fn open_owner_session(port: u16) -> String {
     open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key())
 }
 
@@ -92,7 +92,7 @@ fn claimant_grant_attested(alg: &str, sig: &[u8]) -> String {
 /// A head member's recorded `(position, chain)`, read as a guest reads it —
 /// `retrieve_v` on the member, the `skep-head` record's own members.
 fn recorded_pair(port: u16, member: &str) -> (u64, [u8; 32]) {
-    let v = op_unsigned(port, None, &retrieve_frame(member, 1, 1));
+    let v = op_unattested(port, None, &retrieve_frame(member, 1, 1));
     let rec: Value = serde_json::from_str(v["items"][0]["atom"].as_str().expect("a head record"))
         .expect("the record is JSON");
     let chain: [u8; 32] =
@@ -123,7 +123,7 @@ fn at_or_below_the_claim_an_attest_is_dropped_unverified_and_unwritten() {
         "values": [{"atom": "a second atom, pre-claim"}],
         "deposit": T_ENROLL, "attest": garbage,
     });
-    let v = op_unsigned(port, Some(&claimant), &frame.to_string());
+    let v = op_unattested(port, Some(&claimant), &frame.to_string());
     let at = acked_at(&v);
     assert_eq!(sd.daemon().attestation_at(Seq(at)).unwrap(), None, "dropped, never written");
     // The claim itself — the last unchecked write, from the device's signed
@@ -200,11 +200,11 @@ fn above_the_claim_the_check_refuses_admits_and_names_each_cause() {
     let dir = tempdir().unwrap();
     let sd = spawn(dir.path());
     let port = sd.port();
-    let signed = owner(port);
+    let signed = open_owner_session(port);
     let grant = || typed_link_frame(CLAIMANT_DOC1, &[CLAIMANT_ACCOUNT], &["1.0.2"], T_GRANT);
 
     // Absent: refused, reorder.
-    let v = op_unsigned(port, Some(&signed), &grant());
+    let v = op_unattested(port, Some(&signed), &grant());
     assert_eq!(
         refusal(&v),
         ("credential_refused:attestation_required".to_string(), "reorder".to_string()),
@@ -218,7 +218,7 @@ fn above_the_claim_the_check_refuses_admits_and_names_each_cause() {
     let attached: Value = serde_json::from_str(&attach_attest(port, &signed, &grant())).unwrap();
     let sig_hex = attached["attest"]["sig"].as_str().unwrap().to_string();
     assert_eq!(sig_hex.len(), 2 * 3373, "tag 1's blob: 3,309 ‖ 64");
-    let v = op_unsigned(port, Some(&signed), &attached.to_string());
+    let v = op_unattested(port, Some(&signed), &attached.to_string());
     let at = acked_at(&v);
     let slot = sd.daemon().attestation_at(Seq(at)).unwrap().expect("the slot is filled");
     assert_eq!(slot.sig_alg(), hybrid::TAG_MLDSA65_ED25519);
@@ -231,7 +231,7 @@ fn above_the_claim_the_check_refuses_admits_and_names_each_cause() {
     let mut bytes = hex_to_bytes(&sig_hex);
     bytes[3309] ^= 1;
     tampered["attest"]["sig"] = Value::String(hex(&bytes));
-    let v = op_unsigned(port, Some(&signed), &tampered.to_string());
+    let v = op_unattested(port, Some(&signed), &tampered.to_string());
     assert_eq!(
         refusal(&v),
         ("credential_refused:attestation_invalid:signature".to_string(), "reorder".to_string()),
@@ -242,12 +242,12 @@ fn above_the_claim_the_check_refuses_admits_and_names_each_cause() {
     let mut bytes = hex_to_bytes(&sig_hex);
     bytes[7] ^= 1;
     tampered["attest"]["sig"] = Value::String(hex(&bytes));
-    let v = op_unsigned(port, Some(&signed), &tampered.to_string());
+    let v = op_unattested(port, Some(&signed), &tampered.to_string());
     assert_eq!(verdict(&v), "credential_refused:attestation_invalid:signature");
     // The wrong width: malformed, reorder.
     let mut short = attached.clone();
     short["attest"]["sig"] = Value::String(sig_hex[2..].to_string());
-    let v = op_unsigned(port, Some(&signed), &short.to_string());
+    let v = op_unattested(port, Some(&signed), &short.to_string());
     assert_eq!(
         refusal(&v),
         ("credential_refused:attestation_invalid:malformed".to_string(), "reorder".to_string()),
@@ -259,21 +259,21 @@ fn above_the_claim_the_check_refuses_admits_and_names_each_cause() {
         entry_frame_for(port, &signed, CLAIMANT_PRINCIPAL, &attached).expect("composable");
     let mut foreign = attached.clone();
     foreign["attest"] = attest_member(&stranger.sign(&frame_bytes));
-    let v = op_unsigned(port, Some(&signed), &foreign.to_string());
+    let v = op_unattested(port, Some(&signed), &foreign.to_string());
     assert_eq!(verdict(&v), "credential_refused:attestation_invalid:signature");
     // An unknown token: the grammar refuses it.
     let mut unknown = attached.clone();
     unknown["attest"]["alg"] = Value::String("rsa".into());
-    let v = op_unsigned(port, Some(&signed), &unknown.to_string());
+    let v = op_unattested(port, Some(&signed), &unknown.to_string());
     assert_eq!(v["op"].as_str(), Some("unparseable"), "{v}");
     assert!(v["detail"].as_str().unwrap().contains("unknown algorithm token"), "{v}");
     // An empty blob: one spelling of absent.
     let mut empty = attached.clone();
     empty["attest"]["sig"] = Value::String(String::new());
-    let v = op_unsigned(port, Some(&signed), &empty.to_string());
+    let v = op_unattested(port, Some(&signed), &empty.to_string());
     assert_eq!(v["op"].as_str(), Some("unparseable"), "{v}");
     // The member on an op outside the three: unknown field.
-    let v = op_unsigned(
+    let v = op_unattested(
         port,
         Some(&signed),
         &json!({"op": "delete", "doc": CLAIMANT_DOC1, "p": {"subspace": "1", "ordinal": "1"},
@@ -287,7 +287,7 @@ fn above_the_claim_the_check_refuses_admits_and_names_each_cause() {
     let draft = owner_draft(port, &signed);
     let mut frame: Value = serde_json::from_str(&insert_frame(&draft, 1, "x", false)).unwrap();
     frame["attest"] = attached["attest"].clone();
-    let v = op_unsigned(port, Some(&signed), &frame.to_string());
+    let v = op_unattested(port, Some(&signed), &frame.to_string());
     let at = acked_at(&v);
     assert_eq!(sd.daemon().attestation_at(Seq(at)).unwrap(), None, "off-class: dropped");
 }
@@ -308,7 +308,7 @@ fn an_account_with_no_key_of_the_tag_is_refused_not_enrolled_at_position() {
     let dir = tempdir().unwrap();
     let sd = spawn(dir.path());
     let port = sd.port();
-    let registrar = owner(port);
+    let registrar = open_owner_session(port);
     let key = distinct_key(41);
     let tag3 = HybridSigner::from_seed(hybrid::TAG_FNDSA512_PREVIEW_ED25519, &seed_of(&key))
         .expect("tag 3 is a row");
@@ -345,7 +345,7 @@ fn an_account_with_no_key_of_the_tag_is_refused_not_enrolled_at_position() {
         "{v}"
     );
     // The same grant with no attest at all: required, reorder.
-    let v = op_unsigned(port, Some(&agent_signed), &typed_link_frame(&home, &[&agent], &["1.0.2"], T_GRANT));
+    let v = op_unattested(port, Some(&agent_signed), &typed_link_frame(&home, &[&agent], &["1.0.2"], T_GRANT));
     assert_eq!(verdict(&v), "credential_refused:attestation_required");
 }
 
@@ -413,7 +413,7 @@ fn a_tag_3_key_attests_a_write_as_a_tag_1_key_does() {
     let dir = tempdir().unwrap();
     let sd = spawn(dir.path());
     let port = sd.port();
-    let signed = owner(port);
+    let signed = open_owner_session(port);
     let tag3 = HybridSigner::from_seed(hybrid::TAG_FNDSA512_PREVIEW_ED25519, &seed_of(&distinct_key(61)))
         .expect("tag 3 is a row");
     // The preview key joins the claimant's set — the fixtures allow it.
@@ -436,7 +436,7 @@ fn a_tag_3_key_attests_a_write_as_a_tag_1_key_does() {
     let h1 = board_term(port).expect("H.1");
     let sig = tag3.sign(&claimant_grant_entry_frame(ALG_FNDSA512_PREVIEW_ED25519, h1));
     assert_eq!(sig.len(), 730, "tag 3's blob: 666 ‖ 64");
-    let v = op_unsigned(port, Some(&as_tag3), &claimant_grant_attested(ALG_FNDSA512_PREVIEW_ED25519, &sig));
+    let v = op_unattested(port, Some(&as_tag3), &claimant_grant_attested(ALG_FNDSA512_PREVIEW_ED25519, &sig));
     assert_eq!(v["resp"].as_str(), Some("ack_addr"), "a tag-3 attestation is admitted: {v}");
     let slot = sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().expect("the slot is filled");
     assert_eq!(slot.sig_alg(), hybrid::TAG_FNDSA512_PREVIEW_ED25519, "the slot carries tag 3");
@@ -453,11 +453,11 @@ fn a_tag_3_key_attests_a_write_as_a_tag_1_key_does() {
 /// design states: the check before the transaction, the store's gates
 /// inside it.
 #[test]
-fn the_three_ops_commit_attested_where_the_slice_reaches_them() {
+fn the_three_ops_commit_attested_where_the_check_demands_it() {
     let dir = tempdir().unwrap();
     let sd = spawn(dir.path());
     let port = sd.port();
-    let signed = owner(port);
+    let signed = open_owner_session(port);
 
     // make_link: a grant, attested.
     let v = op(port, Some(&signed), &typed_link_frame(CLAIMANT_DOC1, &[CLAIMANT_ACCOUNT], &[], T_GRANT));
@@ -479,13 +479,13 @@ fn the_three_ops_commit_attested_where_the_slice_reaches_them() {
     assert_eq!(slot.sig_alg(), 1);
     assert_eq!(text_of(port, None, &acked_addr(&v), 1, 5), "abcde");
     // The same shot unattested: required.
-    let v = op_unsigned(port, Some(&signed), &frame);
+    let v = op_unattested(port, Some(&signed), &frame);
     assert_eq!(verdict(&v), "credential_refused:attestation_required");
 
     // insert: the declared deposit is exempt — no attest demanded, the slot
     // empty whether or not one is attached.
     let ordinal = next_content_ordinal(port, Some(&signed), CLAIMANT_DOC1);
-    let v = op_unsigned(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "r", true));
+    let v = op_unattested(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "r", true));
     let dep_at = acked_at(&v);
     assert_eq!(sd.daemon().attestation_at(Seq(dep_at)).unwrap(), None, "exempt: the record's sig is its carrier");
     let ordinal = next_content_ordinal(port, Some(&signed), CLAIMANT_DOC1);
@@ -494,7 +494,7 @@ fn the_three_ops_commit_attested_where_the_slice_reaches_them() {
     assert_eq!(sd.daemon().attestation_at(Seq(dep_at)).unwrap(), None, "attached, dropped: exempt");
     // An UNDECLARED insert into the published home: the check demands and
     // verifies, then the store refuses — the check's order.
-    let v = op_unsigned(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "t", false));
+    let v = op_unattested(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "t", false));
     assert_eq!(verdict(&v), "credential_refused:attestation_required");
     let v = op(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "t", false));
     assert_eq!(verdict(&v), "published_target", "the check passed; the store's own refusal");
@@ -514,7 +514,7 @@ fn a_member_addressed_write_is_framed_over_its_trunk() {
     let dir = tempdir().unwrap();
     let sd = spawn(dir.path());
     let port = sd.port();
-    let signed = owner(port);
+    let signed = open_owner_session(port);
     let edition = edition_with(port, &signed, "abc");
     let runs = shot_runs(port, Some(&signed), &edition, 1, 3);
     let m1 = acked_addr(&op(port, Some(&signed), &publish_frame(&edition, Some((&edition, 3)), None, &runs)));
@@ -564,7 +564,7 @@ fn a_run_its_principal_may_not_read_is_answered_the_same_whatever_is_attached() 
     let dir = tempdir().unwrap();
     let sd = spawn(dir.path());
     let port = sd.port();
-    let signed = owner(port);
+    let signed = open_owner_session(port);
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
     let d = draft_with(port, &bare, "abcde");
     let b = seat_stranger(port, 961);
@@ -577,11 +577,11 @@ fn a_run_its_principal_may_not_read_is_answered_the_same_whatever_is_attached() 
     );
     assert_withheld(&op(port, Some(&b_signed), &read1_frame(&d)), &d);
     expect_resp(&insert_text(port, &bare, &d, 6, "f"), "ack_addr");
-    let at = |k: u64| format!("{d}.0.1.{k}");
+    let d_addr = |k: u64| format!("{d}.0.1.{k}");
     let into_f = |base: &str, runs: &[String]| publish_frame(&f, Some((base, 5)), None, runs);
     // One shot, three ways: unattested, then signed over each guess.
     let answers = |frame: &str, guesses: [&str; 2]| -> Vec<Value> {
-        let mut out = vec![op_unsigned(port, Some(&b_signed), frame)];
+        let mut out = vec![op_unattested(port, Some(&b_signed), frame)];
         for guess in guesses {
             out.push(op_with_publish_values(port, &b_signed, frame, &per_byte(guess)));
         }
@@ -590,20 +590,20 @@ fn a_run_its_principal_may_not_read_is_answered_the_same_whatever_is_attached() 
     let before = head_position(port);
 
     // A — an address F never carried.
-    for v in answers(&into_f(&f, &[run(&d, &at(6), 1)]), ["f", "g"]) {
+    for v in answers(&into_f(&f, &[run(&d, &d_addr(6), 1)]), ["f", "g"]) {
         assert_withheld(&v, &d);
     }
     // B — carried and uncarried in one run.
-    for v in answers(&into_f(&f, &[run(&d, &at(4), 3)]), ["def", "deg"]) {
+    for v in answers(&into_f(&f, &[run(&d, &d_addr(4), 3)]), ["def", "deg"]) {
         assert_withheld(&v, &d);
     }
     // C — D named as the base: outside F's chain, it carries nothing.
-    for v in answers(&into_f(&d, &[run(&d, &at(1), 5)]), ["abcde", "abcdz"]) {
+    for v in answers(&into_f(&d, &[run(&d, &d_addr(1), 5)]), ["abcde", "abcdz"]) {
         assert_eq!(verdict(&v), "base_not_in_chain", "{v}");
     }
     // D — F's own carried run: the store's gate would admit it; refused here,
     //     unread, whatever is attached.
-    for v in answers(&into_f(&f, &[run(&d, &at(1), 5)]), ["abcde", "abcdz"]) {
+    for v in answers(&into_f(&f, &[run(&d, &d_addr(1), 5)]), ["abcde", "abcdz"]) {
         assert_eq!(
             refusal(&v),
             ("credential_refused:attestation_invalid:withheld".to_string(), "reorder".to_string()),
@@ -631,7 +631,7 @@ fn a_carried_run_its_principal_never_could_read_is_refused_unread() {
     let dir = tempdir().unwrap();
     let sd = spawn(dir.path());
     let port = sd.port();
-    let signed = owner(port);
+    let signed = open_owner_session(port);
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
     let c = seat_stranger(port, 971);
     let c_signed = hire(port, &signed, CLAIMANT_DOC1, &c.account, 971, &distinct_key(63));
@@ -646,7 +646,7 @@ fn a_carried_run_its_principal_never_could_read_is_refused_unread() {
     let carried = publish_frame(&f, Some((&f, 6)), None, &[d_run]);
     let before = head_position(port);
     for v in [
-        op_unsigned(port, Some(&c_signed), &carried),
+        op_unattested(port, Some(&c_signed), &carried),
         op_with_publish_values(port, &c_signed, &carried, &per_byte("secret")),
         op_with_publish_values(port, &c_signed, &carried, &per_byte("secreT")),
     ] {
@@ -680,15 +680,15 @@ fn a_shot_body_past_the_budget_is_refused_before_it_is_built() {
     let dir = tempdir().unwrap();
     let sd = spawn(dir.path());
     let port = sd.port();
-    let signed = owner(port);
+    let signed = open_owner_session(port);
     let d = owner_draft(port, &signed);
     let insert_atom = |at: u64, text: &str| {
         format!(
             r#"{{"op":"insert","doc":"{d}","at":{{"subspace":"1","ordinal":"{at}"}},"values":[{{"atom":"{text}"}}]}}"#
         )
     };
-    let x = acked_addr(&op_unsigned(port, Some(&signed), &insert_atom(1, &xs)));
-    let y = acked_addr(&op_unsigned(port, Some(&signed), &insert_atom(2, &ys)));
+    let x = acked_addr(&op_unattested(port, Some(&signed), &insert_atom(1, &xs)));
+    let y = acked_addr(&op_unattested(port, Some(&signed), &insert_atom(2, &ys)));
     let (x_run, y_run) = (run(&d, &x, 1), run(&d, &y, 1));
     let base = Some((CLAIMANT_DOC1, 1));
     let before = head_position(port);
@@ -697,7 +697,7 @@ fn a_shot_body_past_the_budget_is_refused_before_it_is_built() {
     let over = publish_frame(CLAIMANT_DOC1, base, None, &[x_run.clone(), x_run.clone(), x_run.clone(), y_run]);
     let over_values = [xs.as_bytes(), xs.as_bytes(), xs.as_bytes(), ys.as_bytes()];
     for v in [
-        op_unsigned(port, Some(&signed), &over),
+        op_unattested(port, Some(&signed), &over),
         op_with_publish_values(port, &signed, &over, &over_values),
     ] {
         assert_eq!(
@@ -743,14 +743,14 @@ fn the_head_writers_own_commits_land_unsigned_beside_an_attested_write() {
     // writes the second head — the cadence's (trigger (c)), through the clock
     // seam: the write's marker slot filled, the head's commits after it
     // unsigned, H.2 present.
-    let signed = owner(port);
+    let signed = open_owner_session(port);
     sd.daemon().set_head_writer_clock_millis(wall_clock_millis() + WELL_PAST_THE_HOUR_MILLIS);
     let v = op(port, Some(&signed), &typed_link_frame(CLAIMANT_DOC1, &[CLAIMANT_ACCOUNT], &[], T_GRANT));
     let link_at = acked_at(&v);
     let head = head_position(port);
     assert!(head > link_at, "a second head landed in the head writer's turn after the write");
     assert_eq!(filled_slots(&sd, 1, head), vec![link_at], "the one signed write's slot alone");
-    let rec = op_unsigned(port, None, &retrieve_frame("1.1.0.1.0.2.2", 1, 1));
+    let rec = op_unattested(port, None, &retrieve_frame("1.1.0.1.0.2.2", 1, 1));
     assert_eq!(rec["resp"].as_str(), Some("delivery"), "H.2 exists: {rec}");
 }
 
@@ -774,7 +774,7 @@ fn wall_clock_millis() -> u64 {
 /// LATEST head's pair, or over the live `/health` pair, is refused
 /// `attestation_invalid:signature`. Fixed from the claim on is what lets a
 /// client sign before the commit with no round trip. A daemon naming the
-/// latest head — `board_term` reading `read_recorded_head`, the helper beside
+/// latest head — `board_term` reading `read_latest_head`, the helper beside
 /// it — refuses every client from the board's second head on, REORDER, a
 /// re-compose that can never succeed; no other test writes attested after
 /// `H.2`, so every other test passes it.
@@ -783,7 +783,7 @@ fn the_board_term_stays_h1s_pair_after_a_second_head_lands() {
     let dir = tempdir().unwrap();
     let sd = spawn(dir.path());
     let port = sd.port();
-    let signed = owner(port);
+    let signed = open_owner_session(port);
     let signer = hybrid_signer(&device_key());
     let h1 = board_term(port).expect("H.1 at the claim");
 
@@ -797,7 +797,7 @@ fn the_board_term_stays_h1s_pair_after_a_second_head_lands() {
 
     // Over the LATEST head's pair: refused.
     let over_h2 = signer.sign(&claimant_grant_entry_frame(ALG_MLDSA65_ED25519, h2));
-    let v = op_unsigned(port, Some(&signed), &claimant_grant_attested(ALG_MLDSA65_ED25519, &over_h2));
+    let v = op_unattested(port, Some(&signed), &claimant_grant_attested(ALG_MLDSA65_ED25519, &over_h2));
     assert_eq!(
         refusal(&v),
         ("credential_refused:attestation_invalid:signature".to_string(), "reorder".to_string()),
@@ -809,11 +809,11 @@ fn the_board_term_stays_h1s_pair_after_a_second_head_lands() {
         hex_to_bytes(health["chain_head"].as_str().expect("chain_head")).try_into().expect("32 bytes");
     let live = (health["log_position"].as_u64().expect("log_position"), live_chain);
     let over_live = signer.sign(&claimant_grant_entry_frame(ALG_MLDSA65_ED25519, live));
-    let v = op_unsigned(port, Some(&signed), &claimant_grant_attested(ALG_MLDSA65_ED25519, &over_live));
+    let v = op_unattested(port, Some(&signed), &claimant_grant_attested(ALG_MLDSA65_ED25519, &over_live));
     assert_eq!(verdict(&v), "credential_refused:attestation_invalid:signature", "the live pair: {v}");
     // Over H.1's: admitted, the slot that very blob.
     let over_h1 = signer.sign(&claimant_grant_entry_frame(ALG_MLDSA65_ED25519, h1));
-    let v = op_unsigned(port, Some(&signed), &claimant_grant_attested(ALG_MLDSA65_ED25519, &over_h1));
+    let v = op_unattested(port, Some(&signed), &claimant_grant_attested(ALG_MLDSA65_ED25519, &over_h1));
     assert_eq!(v["resp"].as_str(), Some("ack_addr"), "H.1's pair is the board term after H.2: {v}");
     let slot = sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().expect("the slot is filled");
     assert_eq!(slot.sig(), &over_h1[..], "H.1's pair, after the second head as before it");
@@ -829,7 +829,7 @@ fn d26_a_credential_deposits_two_positions_take_no_entry_signature() {
     let dir = tempdir().unwrap();
     let sd = spawn(dir.path());
     let port = sd.port();
-    let registrar = owner(port);
+    let registrar = open_owner_session(port);
     let key = distinct_key(51);
     // Top-level strangers: their genesis enters no cone, so the claimant's
     // device session seeds them into its own doc 1 (AUTH-2.62).
@@ -856,7 +856,7 @@ fn d26_a_credential_deposits_two_positions_take_no_entry_signature() {
     let mut link: Value =
         serde_json::from_str(&typed_link_frame(CLAIMANT_DOC1, &[&atom], &[&agent2], T_ENROLL)).unwrap();
     link["attest"] = json!({"alg": ALG_MLDSA65_ED25519, "sig": hex(&[0xAB; 3373])});
-    let v = op_unsigned(port, Some(&registrar), &link.to_string());
+    let v = op_unattested(port, Some(&registrar), &link.to_string());
     let link_at = acked_at(&v);
     assert_eq!(sd.daemon().attestation_at(Seq(link_at)).unwrap(), None, "dropped by route");
     // The agent, keyed, attests its own publish-class write.
@@ -899,14 +899,16 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 3] {
 #[test]
 fn the_entry_frames_bytes_per_op_are_pinned() {
     let [(_, insert), (_, link), (_, publish)] = fixed_frames(ALG_MLDSA65_ED25519);
-    let mut head = b"skep-entry-v1".to_vec();
+    // The members all three frames share: the framing tag, then `alg`,
+    // `board`, `account` and `doc`.
+    let mut prefix = b"skep-entry-v1".to_vec();
     let member = |m: &[u8]| [&(m.len() as u32).to_be_bytes()[..], m].concat();
-    head.extend(member(b"mldsa65-ed25519"));
-    head.extend(member(&[&[0u8, 0, 0, 0, 0, 0, 0, 12][..], &[0xAB; 32][..]].concat()));
-    head.extend(member(b"1.0.1"));
-    head.extend(member(b"1.0.1.0.1"));
+    prefix.extend(member(b"mldsa65-ed25519"));
+    prefix.extend(member(&[&[0u8, 0, 0, 0, 0, 0, 0, 12][..], &[0xAB; 32][..]].concat()));
+    prefix.extend(member(b"1.0.1"));
+    prefix.extend(member(b"1.0.1.0.1"));
     // insert: op, then body = be32(0) (undeclared) ‖ be64(2) ‖ 4:1:a ‖ 4:1:b
-    let mut want = head.clone();
+    let mut want = prefix.clone();
     want.extend(member(b"insert"));
     want.extend(member(
         &[&[0u8, 0, 0, 0][..], &[0, 0, 0, 0, 0, 0, 0, 2][..], &[0, 0, 0, 1, b'a'][..], &[0, 0, 0, 1, b'b'][..]].concat(),
@@ -921,14 +923,14 @@ fn the_entry_frames_bytes_per_op_are_pinned() {
         }
         s
     };
-    let mut want = head.clone();
+    let mut want = prefix.clone();
     want.extend(member(b"make_link"));
     want.extend(member(
         &[slot(&[b"1.1.0.1.0.1.0.3.90"]), slot(&[b"1.0.1"]), slot(&[])].concat(),
     ));
     assert_eq!(link, want, "make_link");
     // publish: op, then body = be64(3) ‖ x ‖ y ‖ z
-    let mut want = head;
+    let mut want = prefix;
     want.extend(member(b"publish"));
     want.extend(member(
         &[&[0u8, 0, 0, 0, 0, 0, 0, 3][..], &[0, 0, 0, 1, b'x'][..], &[0, 0, 0, 1, b'y'][..], &[0, 0, 0, 1, b'z'][..]]
@@ -945,7 +947,8 @@ const GOLDEN_SEED: [u8; 32] = [
 
 /// One tag's golden, in the documented form: the SHA-256 of the PQ public
 /// half, of the Ed25519 public half, of the whole raw key; the fingerprint;
-/// and per op the SHA-256 of the frame and of the signature blob.
+/// and per op the SHA-256 of the signature blob — the frames themselves
+/// pinned byte for byte by [`the_entry_frames_bytes_per_op_are_pinned`].
 struct TagGolden {
     tag: u8,
     pq_pk: &'static str,
@@ -960,9 +963,9 @@ type SignedFrames = Vec<(String, Vec<u8>, Vec<u8>)>;
 
 fn golden_of(tag: u8) -> (HybridSigner, SignedFrames) {
     let signer = HybridSigner::from_seed(tag, &GOLDEN_SEED).unwrap();
-    let row = token_of_sig_alg(tag).unwrap().token;
+    let alg = token_of_sig_alg(tag).unwrap().token;
     let mut out = Vec::new();
-    for (op, frame) in fixed_frames(row) {
+    for (op, frame) in fixed_frames(alg) {
         // Tag 3's signature draws its seed from the fixtures' seeded RNG,
         // reseeded per op so each signature is a function of its frame alone.
         let mut rng = SeededRng06::new(GOLDEN_SEED);

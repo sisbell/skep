@@ -850,19 +850,19 @@ fn attestation_check(
     // for because the store refuses it (a `publish` run naming an address
     // with no value, or onto an origin the store withholds) is passed through
     // UNATTESTED for the store's own refusal, attest or none; one the store
-    // would admit over a value its author may not read is refused as its own
-    // cause with that value unread, and one whose body passes the budget
-    // before the body is built; and a board with no `H.1` — a journal damaged
-    // below it, since the claim writes `H.1` in its own step (s1) — has no
-    // `board` term for ANY client to sign over, which is told as its own
-    // cause rather than as "carry an attest". `alg` is the member's own, so
-    // it waits for step 6.
+    // would admit — the base CARRYING a run its author may not read — is
+    // refused as its own cause with that value unread, and one whose body
+    // passes the budget before the body is built; and a board with no `H.1` —
+    // a journal damaged below it, since the claim writes `H.1` in its own step
+    // (s1) — has no `board` term for ANY client to sign over, which is told as
+    // its own cause rather than as "carry an attest". `alg` is the member's
+    // own, so it waits for step 6.
     let invalid = CredentialRefusal::AttestationInvalid;
     let entry_frame = match entry::compose(world, op, principal) {
         Ok(entry_frame) => entry_frame,
         Err(ComposeFault::NoBoardTerm) => return Err(invalid(AttestFault::BoardUnavailable)),
         Err(ComposeFault::NoAccount) => return Err(invalid(AttestFault::NotEnrolledAtPosition)),
-        Err(ComposeFault::Withheld) => return Err(invalid(AttestFault::Withheld)),
+        Err(ComposeFault::CarriedUnreadable) => return Err(invalid(AttestFault::Withheld)),
         Err(ComposeFault::OverBudget) => return Err(invalid(AttestFault::FrameTooLarge)),
         Err(ComposeFault::MissingValue)
         | Err(ComposeFault::StoreRefuses)

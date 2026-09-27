@@ -80,7 +80,7 @@ pub fn hybrid_signer(sk: &SigningKey) -> HybridSigner {
     HybridSigner::from_seed(FIXTURE_TAG, &seed_of(sk)).expect("tag 1 is a row")
 }
 
-/// The ONE `ALGS` entry a seed carrier enrols: the hybrid key under
+/// The ONE key entry a seed carrier enrols: the hybrid key under
 /// [`FIXTURE_TAG`] — its fingerprint the one a session testifies and an
 /// entry verifies under. (The classical `ed25519` row is DELETED — the
 /// hybrid-only launch, AUTH-1.1/1.5 — so a seed carrier enrols nothing but
@@ -884,18 +884,18 @@ pub fn open_session(port: u16, principal: u64) -> String {
 /// composed and signed by that seed's hybrid key ([`attach_attest`]);
 /// every other frame, and every frame under a bare or foreign token, is
 /// sent as written. A cell that must send a WRONG or ABSENT `attest` posts
-/// through [`op_unsigned`] or [`http`] directly, as the refusal cells do.
+/// through [`op_unattested`] or [`http`] directly, as the refusal cells do.
 pub fn op(port: u16, token: Option<&str>, frame: &str) -> Value {
     let frame = match token {
         Some(t) => attach_attest(port, t, frame),
         None => frame.to_string(),
     };
-    op_unsigned(port, token, &frame)
+    op_unattested(port, token, &frame)
 }
 
 /// [`op`] with the frame sent AS WRITTEN — no `attest` attached whatever the
-/// token: the refusal cells' door.
-pub fn op_unsigned(port: u16, token: Option<&str>, frame: &str) -> Value {
+/// token, so a write goes UNATTESTED: the refusal cells' door.
+pub fn op_unattested(port: u16, token: Option<&str>, frame: &str) -> Value {
     let (st, body) = http(port, "POST", "/op", token, frame.as_bytes());
     assert_eq!(st, 200, "op transport failed: {}", String::from_utf8_lossy(&body));
     json(&body)
@@ -1979,24 +1979,24 @@ type Registry<K, V> = Mutex<Option<HashMap<K, V>>>;
 /// random, so two daemons in one process never collide).
 static SIGNERS: Registry<String, (u64, [u8; 32])> = Mutex::new(None);
 
-/// Port → `H.1`'s pair, read once per board: `H.1` is pinned forever, so a
-/// board's first read is its last. Keyed by the PORT a board answers at,
-/// which outlives the board — so every spawn here forgets the port it binds
-/// ([`forget_port`]) before a pair is read off it.
-static BOARDS: Registry<u16, (u64, [u8; 32])> = Mutex::new(None);
+/// Port → the board term, `H.1`'s pair, read once per board: `H.1` is pinned
+/// forever, so a board's first read is its last. Keyed by the PORT a board
+/// answers at, which outlives the board — so every spawn here forgets the
+/// port it binds ([`forget_port`]) before a pair is read off it.
+static BOARD_TERMS: Registry<u16, (u64, [u8; 32])> = Mutex::new(None);
 
 /// (port, principal) → the account's local address, read once per board —
-/// forgotten with the port as [`BOARDS`] is.
+/// forgotten with the port as [`BOARD_TERMS`] is.
 static ACCOUNTS: Registry<(u16, u64), String> = Mutex::new(None);
 
-/// A daemon now answers at `port`, so whatever [`BOARDS`] and [`ACCOUNTS`]
+/// A daemon now answers at `port`, so whatever [`BOARD_TERMS`] and [`ACCOUNTS`]
 /// hold for that port was ANOTHER board's: ports recycle across the daemons
 /// one test process serves ([`spawn_under`]'s note), and `H.1`'s pair is one
 /// board's for ever, not one port's. Kept, a stale pair signs every attested
 /// write over another board's chain and answers a fresh board's "no `H.1`
 /// yet" with the old board's. Called by every spawn here as the port is bound.
 fn forget_port(port: u16) {
-    with_map(&BOARDS, |m| {
+    with_map(&BOARD_TERMS, |m| {
         m.remove(&port);
     });
     with_map(&ACCOUNTS, |m| m.retain(|(p, _), _| *p != port));
@@ -2032,10 +2032,10 @@ pub const HEAD_MEMBER_1: &str = "1.1.0.1.0.2.1";
 /// `retrieve_v` on the pinned member (guest-readable) and parsed off the
 /// `skep-head` record; `None` while the board has no `H.1`.
 pub fn board_term(port: u16) -> Option<(u64, [u8; 32])> {
-    if let Some(pair) = with_map(&BOARDS, |m| m.get(&port).copied()) {
+    if let Some(pair) = with_map(&BOARD_TERMS, |m| m.get(&port).copied()) {
         return Some(pair);
     }
-    let v = op_unsigned(port, None, &retrieve_frame(HEAD_MEMBER_1, 1, 1));
+    let v = op_unattested(port, None, &retrieve_frame(HEAD_MEMBER_1, 1, 1));
     if v["resp"].as_str() != Some("delivery") {
         return None;
     }
@@ -2047,7 +2047,7 @@ pub fn board_term(port: u16) -> Option<(u64, [u8; 32])> {
         .map(|i| u8::from_str_radix(&chain_hex[2 * i..2 * i + 2], 16).ok())
         .collect::<Option<_>>()?;
     let pair = (position, <[u8; 32]>::try_from(chain).ok()?);
-    with_map(&BOARDS, |m| {
+    with_map(&BOARD_TERMS, |m| {
         m.insert(port, pair);
     });
     Some(pair)
@@ -2059,7 +2059,7 @@ pub fn account_of(port: u16, token: &str, principal: u64) -> Option<String> {
     if let Some(a) = with_map(&ACCOUNTS, |m| m.get(&(port, principal)).cloned()) {
         return Some(a);
     }
-    let v = op_unsigned(
+    let v = op_unattested(
         port,
         Some(token),
         &format!(r#"{{"op":"principal_prefix","principal":{principal}}}"#),
@@ -2204,7 +2204,7 @@ fn publish_values(port: u16, token: &str, runs: &Value) -> Option<Vec<Vec<u8>>> 
             // Every read here is UNJUDGED: a refusal (an unregistered or a
             // withheld origin) means the client cannot compose this body,
             // and the frame goes out as written.
-            let set = op_unsigned(port, Some(token), &spanset_frame(&origin));
+            let set = op_unattested(port, Some(token), &spanset_frame(&origin));
             if set["resp"].as_str() != Some("span_set") {
                 return None;
             }
@@ -2216,12 +2216,12 @@ fn publish_values(port: u16, token: &str, runs: &Value) -> Option<Vec<Vec<u8>>> 
                 .unwrap_or(0);
             let mut map = HashMap::new();
             if extent > 0 {
-                let image = op_unsigned(port, Some(token), &image_frame(&origin, 1, extent));
+                let image = op_unattested(port, Some(token), &image_frame(&origin, 1, extent));
                 if image["resp"].as_str() != Some("runs") {
                     return None;
                 }
                 let addrs = expand_runs(&runs_in(&image));
-                let delivery = op_unsigned(port, Some(token), &retrieve_frame(&origin, 1, extent));
+                let delivery = op_unattested(port, Some(token), &retrieve_frame(&origin, 1, extent));
                 if delivery["resp"].as_str() != Some("delivery") {
                     return None;
                 }
@@ -2291,8 +2291,8 @@ pub fn entry_frame_for(port: u16, token: &str, principal: u64, frame: &Value) ->
     Some(entry_frame(alg, &board, account.as_bytes(), doc.as_bytes(), op, &body))
 }
 
-/// The `attest` member for `frame` under the seed carrier's hybrid key:
-/// `{"alg": <token>, "sig": <hex>}`.
+/// The `attest` member carrying `sig` under the fixtures' tag
+/// ([`FIXTURE_TAG`]): `{"alg": <that row's token>, "sig": <hex>}`.
 pub fn attest_member(sig: &[u8]) -> Value {
     json!({"alg": token_of_sig_alg(FIXTURE_TAG).expect("tag 1").token, "sig": hex(sig)})
 }
@@ -2316,12 +2316,12 @@ pub fn values_of(port: u16, token: Option<&str>, doc: &str, from: u64, width: u6
 /// check's value-blind `attestation_invalid:withheld`.
 pub fn op_with_publish_values(port: u16, token: &str, frame: &str, values: &[&[u8]]) -> Value {
     let Some((principal, seed)) = signer_of(token) else {
-        return op_unsigned(port, Some(token), frame);
+        return op_unattested(port, Some(token), frame);
     };
     let mut v: Value = serde_json::from_str(frame).expect("a JSON frame");
     let (Some((position, chain)), Some(account)) = (board_term(port), account_of(port, token, principal))
     else {
-        return op_unsigned(port, Some(token), frame);
+        return op_unattested(port, Some(token), frame);
     };
     let board = board_bytes(position, &chain);
     let alg = token_of_sig_alg(FIXTURE_TAG).expect("tag 1").token;
@@ -2330,7 +2330,7 @@ pub fn op_with_publish_values(port: u16, token: &str, frame: &str, values: &[&[u
     let bytes = entry_frame(alg, &board, account.as_bytes(), doc.as_bytes(), "publish", &body);
     let signer = HybridSigner::from_seed(FIXTURE_TAG, &seed).expect("tag 1");
     v["attest"] = attest_member(&signer.sign(&bytes));
-    op_unsigned(port, Some(token), &v.to_string())
+    op_unattested(port, Some(token), &v.to_string())
 }
 
 /// [`op`]'s composition: the frame with its `attest` attached where the

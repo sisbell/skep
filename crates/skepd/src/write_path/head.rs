@@ -389,7 +389,7 @@ impl HeadWriter {
         let clock = Clock::new();
         let now = clock.now_millis();
         let snap = stores.kernel().snapshot();
-        let last_head = read_recorded_head(snap.world());
+        let last_head = read_latest_head(snap.world());
         let staging_draft = find_staging_draft(snap.world());
         // The feed is the daemon's testimony about its own commits: every
         // entry above the position the last head named landed since that
@@ -756,7 +756,7 @@ fn resume_cadence(above: &[(u64, CommitMeta)]) -> ResumedCadence {
 /// build wrote — [`HeadRecord::parse`] — treated as no head, so the next
 /// trigger writes a fresh one). The record is the atom at content position 1
 /// of the trunk head, read off M5's point resolution and M4's value.
-fn read_recorded_head(world: &World) -> Option<HeadRecord> {
+fn read_latest_head(world: &World) -> Option<HeadRecord> {
     let h = head_document();
     let member = trunk_head(world.m3(), &h)?;
     read_head_member(world, &member)

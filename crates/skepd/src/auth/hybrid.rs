@@ -37,7 +37,7 @@
 //!
 //! with the half labels `"ed25519"`, `"ml-dsa-65"` and `"fn-dsa-512"` — so a
 //! seed derives DIFFERENT Ed25519 halves under tag 1 and tag 3 (the token is
-//! in the label), one derived half's leak reveals neither the seed nor the
+//! in the `info`), one derived half's leak reveals neither the seed nor the
 //! other half (HKDF is one-way), and the paper backup stays one 64-hex
 //! seed. The Ed25519 half's 32 bytes are `ed25519-dalek`'s seed
 //! (`SigningKey::from_bytes`); the ML-DSA half's are FIPS 204's ξ; the
@@ -146,14 +146,15 @@ impl fmt::Debug for HalfSeeds {
 }
 
 /// HKDF-SHA-256 as the KDF PIN states it: `salt = KDF_SALT`, `IKM = seed`,
-/// `info = token ‖ 0x00 ‖ half`, 32 bytes out.
-fn derive_half(seed: &[u8; 32], token: &str, half: &[u8]) -> [u8; 32] {
+/// `info = token ‖ 0x00 ‖ half_label`, 32 bytes out.
+fn derive_half_seed(seed: &[u8; 32], token: &str, half_label: &[u8]) -> [u8; 32] {
     let hk = Hkdf::<Sha256>::new(Some(KDF_SALT), seed);
     let mut out = [0u8; 32];
-    // `info = token ‖ 0x00 ‖ half`, handed over as its three components:
-    // `hkdf`'s own `expand` is `expand_multi_info` over one component, so the
-    // concatenation is the crate's to make and no buffer is built here.
-    hk.expand_multi_info(&[token.as_bytes(), &[0u8], half], &mut out)
+    // `info = token ‖ 0x00 ‖ half_label`, handed over as its three
+    // components: `hkdf`'s own `expand` is `expand_multi_info` over one
+    // component, so the concatenation is the crate's to make and no buffer is
+    // built here.
+    hk.expand_multi_info(&[token.as_bytes(), &[0u8], half_label], &mut out)
         .expect("32 bytes is within HKDF-SHA-256's output bound");
     out
 }
@@ -167,8 +168,8 @@ pub fn derive_seeds(tag: u8, seed: &[u8; 32]) -> Option<HalfSeeds> {
         Rule::FnDsa512PreviewEd25519 => HALF_FNDSA512,
     };
     Some(HalfSeeds {
-        ed25519: derive_half(seed, row.token, HALF_ED25519),
-        pq: derive_half(seed, row.token, pq_label),
+        ed25519: derive_half_seed(seed, row.token, HALF_ED25519),
+        pq: derive_half_seed(seed, row.token, pq_label),
     })
 }
 
@@ -341,15 +342,15 @@ impl HybridSigner {
             Rule::FnDsa512PreviewEd25519 => {
                 let mut rng = ExactBytes { bytes: &halves.pq, taken: 0 };
                 let mut sk = vec![0u8; sign_key_size(FN_DSA_LOGN_512)];
-                let mut vk = vec![0u8; vrfy_key_size(FN_DSA_LOGN_512)];
+                let mut pk = vec![0u8; vrfy_key_size(FN_DSA_LOGN_512)];
                 KeyPairGeneratorStandard::default().keygen(
                     FN_DSA_LOGN_512,
                     &mut rng,
                     &mut sk,
-                    &mut vk,
+                    &mut pk,
                 );
                 assert_eq!(rng.taken, 32, "fn-dsa 0.4.0's keygen draws its one 32-byte seed");
-                (PqSigner::FnDsa512Preview(sk), vk)
+                (PqSigner::FnDsa512Preview(sk), pk)
             }
         };
         let mut raw = pq_pk;
@@ -463,7 +464,7 @@ impl std::error::Error for HybridFault {}
 /// argued in `Cargo.toml`), over the KEY PIN's LAST 32 raw bytes — or `None`
 /// where the half is no point. One of the two decodes [`verify`] runs before
 /// its arithmetic and [`key_decodes`] runs alone.
-fn ed25519_half(key: &PublicKey) -> Option<EdVerifyingKey> {
+fn decode_ed25519_half(key: &PublicKey) -> Option<EdVerifyingKey> {
     EdVerifyingKey::from_bytes(key.ed25519_half()).ok()
 }
 
@@ -486,7 +487,7 @@ enum PqHalf {
 /// for degree 512, the length, every coefficient in range). `None` where the
 /// half does not decode or `tag` names no rule of this module's. The other
 /// of the two decodes [`verify`] and [`key_decodes`] share.
-fn pq_half(tag: u8, key: &PublicKey) -> Option<PqHalf> {
+fn decode_pq_half(tag: u8, key: &PublicKey) -> Option<PqHalf> {
     let pq = key.pq_half();
     match Rule::of(tag)? {
         Rule::MlDsa65Ed25519 => {
@@ -501,25 +502,28 @@ fn pq_half(tag: u8, key: &PublicKey) -> Option<PqHalf> {
 /// THE ALL-HALVES DECODE — the precheck's `undecodable_key` courtesy
 /// (AUTH-3.56 as RES-206 landed it; the hybrid-only launch's Q9, owner
 /// 2026-09-26): `true` iff EVERY half the key's row names decodes, by the
-/// very two decodes [`verify`] runs before its arithmetic (`ed25519_half`,
-/// `pq_half`) — so the courtesy and the verify cannot disagree about what
-/// decodes, and a new tag's decode is one arm both read. Both directions of
-/// a disagreement cost: a stricter courtesy refuses an enrollment whose key
-/// decodes for every verify; a laxer one seats a key that occupies a slot
-/// against the precheck's `MAX_ENROLLED_KEYS` and is walked by the
-/// handshake's `find_signer` on every attempt, permanently, since retiring
-/// it needs an anchor session of that account. `false` for a key of no row.
+/// very two decodes [`verify`] runs before its arithmetic
+/// (`decode_ed25519_half`, `decode_pq_half`) — so the courtesy and the verify
+/// cannot disagree about what decodes, and a new tag's decode is one arm both
+/// read. Both directions of a disagreement cost: a stricter courtesy refuses
+/// an enrollment whose key decodes for every verify; a laxer one seats a key
+/// that occupies a slot against the precheck's `MAX_ENROLLED_KEYS` and is
+/// walked by the handshake's `find_signer` on every attempt, permanently,
+/// since retiring it needs an anchor session of that account. `false` for a
+/// key of no row.
 pub fn key_decodes(key: &PublicKey) -> bool {
-    key.sig_alg()
-        .is_some_and(|row| ed25519_half(key).is_some() && pq_half(row.tag, key).is_some())
+    key.sig_alg().is_some_and(|row| {
+        decode_ed25519_half(key).is_some() && decode_pq_half(row.tag, key).is_some()
+    })
 }
 
 /// VERIFY `sig` over `msg` under `tag`'s frozen rule against the hybrid
 /// `key`: the key's row must be the tag's, the blob the tag's width, and
 /// BOTH halves — the PQ signature under the PQ half, the Ed25519 signature
 /// under the Ed25519 half (`verify_strict`) — must verify over the SAME
-/// `msg`. Either failing fails. Each half is decoded by `ed25519_half` and
-/// `pq_half`, the decodes [`key_decodes`] runs alone.
+/// `msg`. Either failing fails. Each half is decoded by
+/// `decode_ed25519_half` and `decode_pq_half`, the decodes [`key_decodes`]
+/// runs alone.
 ///
 /// `msg` comes before `sig`, the order RustCrypto's
 /// `signature::Verifier::verify`, `ed25519-dalek`'s `verify_strict` and this
@@ -538,10 +542,10 @@ pub fn verify(tag: u8, key: &PublicKey, msg: &[u8], sig: &[u8]) -> Result<(), Hy
     // The Ed25519 half FIRST: cheap, and a failure here refuses before the
     // lattice arithmetic runs. Both are required, so the order moves no
     // verdict.
-    let ed_key = ed25519_half(key).ok_or(HybridFault::Rejected)?;
+    let ed_key = decode_ed25519_half(key).ok_or(HybridFault::Rejected)?;
     let ed_sig = ed25519_dalek::Signature::from_slice(ed_sig).map_err(|_| HybridFault::Malformed)?;
     ed_key.verify_strict(msg, &ed_sig).map_err(|_| HybridFault::Rejected)?;
-    let pq_ok = match pq_half(tag, key).ok_or(HybridFault::WrongRow)? {
+    let pq_ok = match decode_pq_half(tag, key).ok_or(HybridFault::WrongRow)? {
         PqHalf::MlDsa65(enc) => {
             let vk = ml_dsa::VerifyingKey::<MlDsa65>::decode(&enc);
             let enc_sig =
@@ -604,42 +608,55 @@ mod tests {
     use super::*;
 
     /// Both tags: keygen from one seed is deterministic, the halves differ
-    /// per tag (the token is in the KDF label), the widths are the ruled
+    /// per tag (the token is in the KDF's `info`), the widths are the ruled
     /// ones, a signature verifies, either half alone fails, another message
     /// fails, and the other tag's key refuses the row.
     #[test]
     fn both_tags_sign_verify_and_refuse_a_broken_half() {
         let seed = [0x42u8; 32];
         for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
-            let s1 = HybridSigner::from_seed(tag, &seed).unwrap();
-            let s2 = HybridSigner::from_seed(tag, &seed).unwrap();
-            assert_eq!(s1.public_key(), s2.public_key(), "keygen from seed is deterministic");
+            let signer = HybridSigner::from_seed(tag, &seed).unwrap();
+            let twin = HybridSigner::from_seed(tag, &seed).unwrap();
+            assert_eq!(signer.public_key(), twin.public_key(), "keygen from seed is deterministic");
             let row = token_of_sig_alg(tag).unwrap();
-            assert_eq!(s1.public_key().raw().len(), row.key_len());
+            assert_eq!(signer.public_key().raw().len(), row.key_len());
             let msg = b"the entry frame";
             let mut rng = SeededRng06::new([7; 32]);
-            let sig = s1.sign_with_rng(msg, &mut rng);
+            let sig = signer.sign_with_rng(msg, &mut rng);
             assert_eq!(sig.len(), row.sig_len());
-            assert_eq!(verify(tag, s1.public_key(), msg, &sig), Ok(()));
-            assert_eq!(verify(tag, s1.public_key(), b"other", &sig), Err(HybridFault::Rejected));
+            assert_eq!(verify(tag, signer.public_key(), msg, &sig), Ok(()));
+            assert_eq!(
+                verify(tag, signer.public_key(), b"other", &sig),
+                Err(HybridFault::Rejected)
+            );
             // The Ed25519 half broken.
             let mut broken = sig.clone();
             broken[row.pq_sig_len] ^= 1;
-            assert_eq!(verify(tag, s1.public_key(), msg, &broken), Err(HybridFault::Rejected));
+            assert_eq!(verify(tag, signer.public_key(), msg, &broken), Err(HybridFault::Rejected));
             // The PQ half broken.
             let mut broken = sig.clone();
             broken[3] ^= 1;
-            assert_eq!(verify(tag, s1.public_key(), msg, &broken), Err(HybridFault::Rejected));
+            assert_eq!(verify(tag, signer.public_key(), msg, &broken), Err(HybridFault::Rejected));
             // The wrong width.
-            assert_eq!(verify(tag, s1.public_key(), msg, &sig[1..]), Err(HybridFault::Malformed));
+            assert_eq!(
+                verify(tag, signer.public_key(), msg, &sig[1..]),
+                Err(HybridFault::Malformed)
+            );
             // The other tag's key.
-            let other = if tag == 1 { 3 } else { 1 };
-            let o = HybridSigner::from_seed(other, &seed).unwrap();
-            assert_eq!(verify(tag, o.public_key(), msg, &sig), Err(HybridFault::WrongRow));
+            let other_tag = if tag == TAG_MLDSA65_ED25519 {
+                TAG_FNDSA512_PREVIEW_ED25519
+            } else {
+                TAG_MLDSA65_ED25519
+            };
+            let other_signer = HybridSigner::from_seed(other_tag, &seed).unwrap();
+            assert_eq!(
+                verify(tag, other_signer.public_key(), msg, &sig),
+                Err(HybridFault::WrongRow)
+            );
             assert_ne!(
-                s1.ed25519_signing_key().to_bytes(),
-                o.ed25519_signing_key().to_bytes(),
-                "the Ed25519 half differs per tag: the token is in the KDF label"
+                signer.ed25519_signing_key().to_bytes(),
+                other_signer.ed25519_signing_key().to_bytes(),
+                "the Ed25519 half differs per tag: the token is in the KDF's info"
             );
         }
         assert!(HybridSigner::from_seed(0, &seed).is_none());
@@ -659,19 +676,28 @@ mod tests {
         let seed = [0x42u8; 32];
         for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
             let s = HybridSigner::from_seed(tag, &seed).unwrap();
-            assert!(pq_half(tag, s.public_key()).is_some(), "tag {tag}: a derived key decodes");
+            assert!(
+                decode_pq_half(tag, s.public_key()).is_some(),
+                "tag {tag}: a derived key decodes"
+            );
         }
         let s3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &seed).unwrap();
         let mut raw = s3.public_key().raw().to_vec();
         assert_eq!(raw[0], 0x09, "fn-dsa 0.4.0's degree-512 header byte");
         raw[0] = 0x0a;
         let bad = PublicKey::parse(s3.public_key().alg(), &hex_string(&raw)).expect("the row's length");
-        assert!(pq_half(TAG_FNDSA512_PREVIEW_ED25519, &bad).is_none(), "a bad header byte does not decode");
+        assert!(
+            decode_pq_half(TAG_FNDSA512_PREVIEW_ED25519, &bad).is_none(),
+            "a bad header byte does not decode"
+        );
         let s1 = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &seed).unwrap();
         let mut raw = s1.public_key().raw().to_vec();
         raw[0] ^= 0xff;
         let still = PublicKey::parse(s1.public_key().alg(), &hex_string(&raw)).expect("the row's length");
-        assert!(pq_half(TAG_MLDSA65_ED25519, &still).is_some(), "ML-DSA-65's encoding decodes at its length");
+        assert!(
+            decode_pq_half(TAG_MLDSA65_ED25519, &still).is_some(),
+            "ML-DSA-65's encoding decodes at its length"
+        );
         assert!(!key_decodes(&bad) && key_decodes(&still), "the courtesy reads the same two decodes");
     }
 
@@ -719,13 +745,13 @@ mod tests {
     #[test]
     fn the_kdf_derives_both_halves_and_neither_is_the_seed() {
         let seed = [0x01u8; 32];
-        let h = derive_seeds(TAG_MLDSA65_ED25519, &seed).unwrap();
-        assert_ne!(h.ed25519, seed);
-        assert_ne!(h.pq, seed);
-        assert_ne!(h.ed25519, h.pq);
+        let h1 = derive_seeds(TAG_MLDSA65_ED25519, &seed).unwrap();
+        assert_ne!(h1.ed25519, seed);
+        assert_ne!(h1.pq, seed);
+        assert_ne!(h1.ed25519, h1.pq);
         let h3 = derive_seeds(TAG_FNDSA512_PREVIEW_ED25519, &seed).unwrap();
-        assert_ne!(h3.pq, h.pq);
-        assert_ne!(h3.ed25519, h.ed25519);
+        assert_ne!(h3.pq, h1.pq);
+        assert_ne!(h3.ed25519, h1.ed25519);
     }
 
     /// PRIVATE-KEY MATERIAL PRINTS NONE OF ITSELF: `{:?}` of `HalfSeeds`, a

@@ -618,10 +618,10 @@ impl SessionSig {
     pub fn parse(s: &str) -> Option<SessionSig> {
         match s.len() {
             n if n == TAG1_SIG_LEN * 2 => {
-                decode_hex_into::<TAG1_SIG_LEN>(s).map(SessionSig::MlDsa65Ed25519)
+                parse_case_free_hex::<TAG1_SIG_LEN>(s).map(SessionSig::MlDsa65Ed25519)
             }
             n if n == TAG3_SIG_LEN * 2 => {
-                decode_hex_into::<TAG3_SIG_LEN>(s).map(SessionSig::FnDsa512PreviewEd25519)
+                parse_case_free_hex::<TAG3_SIG_LEN>(s).map(SessionSig::FnDsa512PreviewEd25519)
             }
             _ => None,
         }
@@ -630,7 +630,7 @@ impl SessionSig {
 
 /// Exactly `N` bytes of case-free hex — the caller has checked the length —
 /// or `None` on a non-hex byte.
-fn decode_hex_into<const N: usize>(s: &str) -> Option<Box<[u8; N]>> {
+fn parse_case_free_hex<const N: usize>(s: &str) -> Option<Box<[u8; N]>> {
     debug_assert_eq!(s.len(), N * 2);
     let mut raw = Box::new([0u8; N]);
     for (i, chunk) in s.as_bytes().chunks_exact(2).enumerate() {

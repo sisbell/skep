@@ -21,24 +21,15 @@ use std::path::Path;
 use common::*;
 use serde_json::Value;
 
-/// The scripted flow behind the wire.md examples. Positions are pinned by
-/// the stores' record counts: `delegate` commits 2 records (position 22),
-/// the home mint 1 (position 23) — MINT-FIRST (RES-26): the account's doc 1
-/// is born published, where bare writes are gated by design, so the flow
-/// writes a SECOND, private document — that mint 1 (position 24), a
-/// two-byte `insert` 5 — two mints, two content writes, one placement —
-/// (position 29), `make_link` 3 — mint, link, seat — (position 32). If an
-/// ack below drifts, a store changed its transaction shape and wire.md
-/// §The change feed must be re-pinned.
-/// The head the claim ceremony leaves behind (`common::claim_board`):
-/// delegate (2 records), the home mint (1), the one-atom insert (3), the
-/// genesis link (3), the claim link (3) — twelve records; then, in the
-/// claim's own step, the board's first head `H.1` (signed ops, s1): the
-/// system account's staging-draft mint (1), the head record's insert (3),
-/// the publish shot into `H` (4) — twenty records, the base every seeded
-/// position below sits on. Lane 3.2 re-pinned wire.md's change-feed
-/// examples onto the ceremony's numbers; the s1 lane onto these.
-const CEREMONY_HEAD: u64 = 12;
+/// The claim link's committed position on a fresh board — the ceremony's
+/// fifth commit (`common::claim_board`): delegate (2 records), the home mint
+/// (1), the one-atom insert (3), the genesis link (3), the claim link (3) —
+/// twelve records. The claim's own step then writes the board's first head
+/// `H.1` above it ([`H1_ATS`]; signed ops, s1), so the board the claim leaves
+/// behind stands at [`CLAIMED_HEAD`], the base every seeded position below
+/// sits on. Lane 3.2 re-pinned wire.md's change-feed examples onto the
+/// ceremony's numbers; the s1 lane onto these.
+const CLAIM_POSITION: u64 = 12;
 
 /// The ceremony's own commit positions (the record counts above,
 /// cumulative): delegate, the home mint, the record insert, the genesis
@@ -49,7 +40,7 @@ const CEREMONY_ATS: [u64; 5] = [2, 3, 6, 9, 12];
 /// the head record's insert into it, the publish shot into `H`. The first
 /// two write the system account's PRIVATE draft and are masked at every
 /// class but the system's; the publish is public, `key: "system"`.
-const H1_ATS: [u64; 3] = [CEREMONY_HEAD + 1, CEREMONY_HEAD + 4, CEREMONY_HEAD + 8];
+const H1_ATS: [u64; 3] = [CLAIM_POSITION + 1, CLAIM_POSITION + 4, CLAIM_POSITION + 8];
 
 /// `H.1`'s publish — the one head entry every class sees.
 const H1_PUBLISH_AT: u64 = H1_ATS[2];
@@ -75,6 +66,15 @@ fn all_ats() -> Vec<u64> {
     CEREMONY_ATS.iter().chain([H1_PUBLISH_AT].iter()).chain(SEEDED_ATS.iter()).copied().collect()
 }
 
+/// The scripted flow behind the wire.md examples. Positions are pinned by
+/// the stores' record counts: `delegate` commits 2 records (position 22),
+/// the home mint 1 (position 23) — MINT-FIRST (RES-26): the account's doc 1
+/// is born published, where bare writes are gated by design, so the flow
+/// writes a SECOND, private document — that mint 1 (position 24), a
+/// two-byte `insert` 5 — two mints, two content writes, one placement —
+/// (position 29), `make_link` 3 — mint, link, seat — (position 32). If an
+/// ack below drifts, a store changed its transaction shape and wire.md
+/// §The change feed must be re-pinned.
 fn seed_flow(port: u16) -> String {
     let boot = open_session(port, 0);
     let v = op(port, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
@@ -243,7 +243,7 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     // `key: "system"`, the private draft's mint and insert masked from
     // everyone but the system account — and the examples below page from
     // above them.
-    let (st, body) = changes_raw(port, None, &format!("since={CEREMONY_HEAD}"));
+    let (st, body) = changes_raw(port, None, &format!("since={CLAIM_POSITION}"));
     assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
     let v = json(&body);
     assert_eq!(entry_ats(&v), vec![H1_PUBLISH_AT], "the guest sees H.1's publish and nothing else of it");
@@ -255,7 +255,7 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     // The owner's view of its own feed — the seeded document is principal
     // 1's private draft, so its entries are the owner's to see.
     let owner = Some(s1.as_str());
-    let (st, body) = changes_raw(port, owner, &format!("since={CEREMONY_HEAD}&limit=1"));
+    let (st, body) = changes_raw(port, owner, &format!("since={CLAIM_POSITION}&limit=1"));
     assert_eq!(st, 200);
     assert_eq!(entry_ats(&json(&body)), vec![H1_PUBLISH_AT], "the owner too: the draft's writes are the system's");
 

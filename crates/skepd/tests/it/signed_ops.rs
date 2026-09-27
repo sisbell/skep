@@ -1,8 +1,8 @@
 //! SIGNED OPS — THE SEAM (the seam build 2026-09-25): one signed write, end
-//! to end, for the three ops of the slice — `insert`, `make_link`, `publish`
-//! — under the two tags: the hybrid key enrolled, the entry frame composed
-//! and signed by the test signer, the `attest` member on the wire, the
-//! claimed-board check before the transaction, the attestation into the
+//! to end, for the three ops of the checked set — `insert`, `make_link`,
+//! `publish` — under the two tags: the hybrid key enrolled, the entry frame
+//! composed and signed by the test signer, the `attest` member on the wire,
+//! the claimed-board check before the transaction, the attestation into the
 //! commit marker's reserved slot and read back off the kernel.
 //!
 //! THE CLAIM TEST (the design record §7.6's row; A1–A6): at or below the
@@ -77,7 +77,7 @@ fn at_or_below_the_claim_an_attest_is_dropped_unverified_and_unwritten() {
     assert_eq!(sd.daemon().attestation_at(at).unwrap(), None, "dropped, never written");
     // The claim itself — the last unchecked write, from the device's signed
     // session; the test signer finds no `H.1` yet and attaches nothing.
-    assert!(board_pair(port).is_none(), "no H.1 before the claim");
+    assert!(board_term(port).is_none(), "no H.1 before the claim");
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let v = op(port, Some(&signed), &claim_frame(CLAIMANT_DOC1, CLAIMANT_ACCOUNT));
     let claim_at = acked_at(&v);
@@ -85,7 +85,7 @@ fn at_or_below_the_claim_an_attest_is_dropped_unverified_and_unwritten() {
     assert_eq!(sd.daemon().attestation_at(claim_at).unwrap(), None, "the claim's slot is empty");
     // THE CLAIM WROTE `H.1` in its own step: present at the claim's ack and
     // naming the claim's own position, with nothing forced.
-    let (position, _) = board_pair(port).expect("H.1 stands at the claim's ack");
+    let (position, _) = board_term(port).expect("H.1 stands at the claim's ack");
     assert_eq!(position, claim_at, "H.1 names the claim's own position");
     assert_eq!(filled_slots(&sd, 1, head_position(port)), Vec::<u64>::new(), "the head's commits: unsigned");
 }
@@ -108,7 +108,7 @@ fn a_fresh_claimed_board_admits_an_attested_publish_right_after_the_claim() {
     ceremony_before_the_claim(port);
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let claim_at = acked_at(&op(port, Some(&signed), &claim_frame(CLAIMANT_DOC1, CLAIMANT_ACCOUNT)));
-    let (position, _) = board_pair(port).expect("H.1 at the claim's ack");
+    let (position, _) = board_term(port).expect("H.1 at the claim's ack");
     assert_eq!(position, claim_at, "H.1 names the claim's own position");
     let head = head_position(port);
     assert!(head > claim_at, "the head's own commits landed above the claim");
@@ -364,22 +364,23 @@ fn the_head_writers_own_commits_are_exempt_by_omega_and_unsigned() {
     let dir = tempdir().unwrap();
     let sd = spawn(dir.path());
     let port = sd.port();
-    let (position, _chain) = board_pair(port).expect("H.1");
+    let (position, _chain) = board_term(port).expect("H.1");
     assert_eq!(position, 12, "H.1 names the claim's own position");
     // The head's three commits: the staging draft's mint, the record's
     // insert, the shot into H — all above the claim, all unsigned.
     let head = head_position(port);
     assert!(head > 12, "the head's commits landed above the claim");
     assert_eq!(filled_slots(&sd, 1, head), Vec::<u64>::new(), "no slot filled yet");
-    // A signed write with the hour passed, so its own turn writes the second
-    // head — the cadence's (trigger (c)), through the clock seam: the write's
-    // slot filled, the head's commits after it unsigned, H.2 present.
+    // A signed write with the hour passed, so the head writer's turn after it
+    // writes the second head — the cadence's (trigger (c)), through the clock
+    // seam: the write's marker slot filled, the head's commits after it
+    // unsigned, H.2 present.
     let signed = owner(port);
     sd.daemon().set_head_writer_clock_millis(wall_clock_millis() + WELL_PAST_THE_HOUR_MILLIS);
     let v = op(port, Some(&signed), &typed_link_frame(CLAIMANT_DOC1, &[CLAIMANT_ACCOUNT], &[], T_GRANT));
     let link_at = acked_at(&v);
     let head = head_position(port);
-    assert!(head > link_at, "a second head landed on the write's own turn");
+    assert!(head > link_at, "a second head landed in the head writer's turn after the write");
     assert_eq!(filled_slots(&sd, 1, head), vec![link_at], "the one signed write's slot alone");
     let rec = op_unsigned(port, None, &retrieve_frame("1.1.0.1.0.2.2", 1, 1));
     assert_eq!(rec["resp"].as_str(), Some("delivery"), "H.2 exists: {rec}");

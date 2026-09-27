@@ -13,8 +13,9 @@
 //!   (final FIPS 204; `SigningKey::from_seed` is `ML-DSA.KeyGen_internal(ξ)`,
 //!   Algorithm 6) and `ed25519-dalek` 2 (`verify_strict`). The signature is
 //!   FIPS 204's DETERMINISTIC variant (`rnd` = 0) with an EMPTY context
-//!   string — the CTX PIN: the entry frame's own tag is the domain
-//!   separation, and `ml-dsa`'s `Signer` supports only the empty `ctx`.
+//!   string — the CTX PIN: the entry frame's framing tag, `ENTRY_TAG`
+//!   (AUTH-1.11), is the domain separation, and `ml-dsa`'s `Signer` supports
+//!   only the empty `ctx`.
 //! * TAG 3 — FN-DSA-512 + Ed25519, PREVIEW: Thomas Pornin's `fn-dsa`
 //!   `=0.4.0` — its 2026-07-22 "best guess" at the FN-DSA draft, which the
 //!   crate itself says will change before 1.0 — so the exact version IS the
@@ -73,9 +74,11 @@ use skep_identity::{token_of_sig_alg, PublicKey, SigAlgRow};
 use super::OsEntropy;
 use crate::codec::hex_string;
 
-/// Tag 1's marker byte.
+/// The marker tag of the PRODUCTION row, `mldsa65-ed25519` (ML-DSA-65 +
+/// Ed25519).
 pub const TAG_MLDSA65_ED25519: u8 = 1;
-/// Tag 3's marker byte.
+/// The marker tag of the PREVIEW row, `fndsa512-preview-ed25519` (the
+/// FN-DSA-512 preview + Ed25519).
 pub const TAG_FNDSA512_PREVIEW_ED25519: u8 = 3;
 
 /// The rules this module holds, one per marker tag — the ONE statement of
@@ -83,24 +86,28 @@ pub const TAG_FNDSA512_PREVIEW_ED25519: u8 = 3;
 /// Every per-tag step below matches on it exhaustively — the PQ half's KDF
 /// label, its keygen, its decode, its widths — beside the signer and
 /// verifier enums that already carry one variant per rule ([`PqSigner`],
-/// [`PqHalf`]), so a new tag (tag 2 is free for the final FIPS 206) is one
-/// variant here and one arm in [`Rule::of`], and the compiler names every
-/// step that must learn it.
+/// [`PqHalf`]), so a new tag (tag 2 is free for the final FIPS 206 — whose
+/// variant takes the unqualified token name, `FnDsa512Ed25519`; the preview
+/// carries `Preview` in every name, as its token does, so the final
+/// standard's arms never share a name with it) is one variant here and one
+/// arm in [`Rule::of`], and the compiler names every step that must learn
+/// it. Each variant is its row's token in CamelCase, as
+/// [`super::session::SessionSig`]'s are.
 #[derive(Clone, Copy)]
 enum Rule {
-    /// Tag 1: ML-DSA-65 + Ed25519.
-    MlDsa65,
-    /// Tag 3: FN-DSA-512 (PREVIEW) + Ed25519.
-    FnDsa512,
+    /// Tag 1: ML-DSA-65 + Ed25519 (`mldsa65-ed25519`).
+    MlDsa65Ed25519,
+    /// Tag 3: the FN-DSA-512 PREVIEW + Ed25519 (`fndsa512-preview-ed25519`).
+    FnDsa512PreviewEd25519,
 }
 
 impl Rule {
     /// The rule `tag` names, or `None` for a tag this build holds no rule
-    /// for — the one place a marker byte is read as a rule.
+    /// for — the one place a marker tag is read as a rule.
     fn of(tag: u8) -> Option<Rule> {
         match tag {
-            TAG_MLDSA65_ED25519 => Some(Rule::MlDsa65),
-            TAG_FNDSA512_PREVIEW_ED25519 => Some(Rule::FnDsa512),
+            TAG_MLDSA65_ED25519 => Some(Rule::MlDsa65Ed25519),
+            TAG_FNDSA512_PREVIEW_ED25519 => Some(Rule::FnDsa512PreviewEd25519),
             _ => None,
         }
     }
@@ -120,7 +127,7 @@ pub struct HalfSeeds {
     /// The Ed25519 half's seed (`ed25519-dalek`'s `SigningKey::from_bytes`).
     pub ed25519: [u8; 32],
     /// The post-quantum half's seed: ξ for ML-DSA-65; the keygen draw for
-    /// FN-DSA-512.
+    /// the FN-DSA-512 preview.
     pub pq: [u8; 32],
 }
 
@@ -149,8 +156,8 @@ fn derive_half(seed: &[u8; 32], token: &str, half: &[u8]) -> [u8; 32] {
 pub fn derive_seeds(tag: u8, seed: &[u8; 32]) -> Option<HalfSeeds> {
     let row = token_of_sig_alg(tag)?;
     let pq_label = match Rule::of(tag)? {
-        Rule::MlDsa65 => HALF_MLDSA65,
-        Rule::FnDsa512 => HALF_FNDSA512,
+        Rule::MlDsa65Ed25519 => HALF_MLDSA65,
+        Rule::FnDsa512PreviewEd25519 => HALF_FNDSA512,
     };
     Some(HalfSeeds {
         ed25519: derive_half(seed, row.token, HALF_ED25519),
@@ -270,17 +277,18 @@ impl rand_core_06::CryptoRng for SeededRng06 {}
 enum PqSigner {
     /// Tag 1: the expanded ML-DSA-65 signing key, from ξ.
     MlDsa65(ml_dsa::SigningKey<MlDsa65>),
-    /// Tag 3: the FN-DSA-512 signing key in `fn-dsa`'s encoding
-    /// (`sign_key_size(FN_DSA_LOGN_512)` bytes — 1,345 at degree 9, its `f`,
-    /// `g`, `F` and the hashed verifying key, which `sizes_and_timings_per_tag`
-    /// pins), decoded per signature — the crate's `sign` takes `&mut self`
-    /// and its key type zeroizes on drop.
-    FnDsa512(Vec<u8>),
+    /// Tag 3: the FN-DSA-512 PREVIEW signing key in `fn-dsa` 0.4.0's
+    /// encoding (`sign_key_size(FN_DSA_LOGN_512)` bytes — 1,345 at degree 9,
+    /// its `f`, `g`, `F` and the hashed verifying key, which
+    /// `sizes_and_timings_per_tag` pins), decoded per signature — the crate's
+    /// `sign` takes `&mut self` and its key type zeroizes on drop.
+    FnDsa512Preview(Vec<u8>),
 }
 
 /// ONE HYBRID SIGNER: both halves derived from one seed under one tag, its
-/// public key the one `ALGS` entry the two halves make. Holds private-key
-/// material and prints none of it.
+/// public key the `alg` and `key` of ONE key entry — one `ALGS` token over
+/// one concatenated raw value (wire.md). Holds private-key material and
+/// prints none of it.
 pub struct HybridSigner {
     row: &'static SigAlgRow,
     ed: EdSigningKey,
@@ -305,12 +313,12 @@ impl HybridSigner {
         let ed = EdSigningKey::from_bytes(&halves.ed25519);
         let ed_pk = ed.verifying_key().to_bytes();
         let (pq, pq_pk): (PqSigner, Vec<u8>) = match Rule::of(tag)? {
-            Rule::MlDsa65 => {
+            Rule::MlDsa65Ed25519 => {
                 let sk = ml_dsa::SigningKey::<MlDsa65>::from_seed(&halves.pq.into());
                 let pk = sk.verifying_key().encode();
                 (PqSigner::MlDsa65(sk), pk.as_slice().to_vec())
             }
-            Rule::FnDsa512 => {
+            Rule::FnDsa512PreviewEd25519 => {
                 let mut rng = ExactBytes { bytes: halves.pq.to_vec(), taken: 0 };
                 let mut sk = vec![0u8; sign_key_size(FN_DSA_LOGN_512)];
                 let mut vk = vec![0u8; vrfy_key_size(FN_DSA_LOGN_512)];
@@ -321,7 +329,7 @@ impl HybridSigner {
                     &mut vk,
                 );
                 assert_eq!(rng.taken, 32, "fn-dsa 0.4.0's keygen draws its one 32-byte seed");
-                (PqSigner::FnDsa512(sk), vk)
+                (PqSigner::FnDsa512Preview(sk), vk)
             }
         };
         let mut raw = pq_pk;
@@ -331,7 +339,8 @@ impl HybridSigner {
         Some(HybridSigner { row, ed, pq, public })
     }
 
-    /// The one `ALGS` entry this signer's halves make.
+    /// This signer's public key — the `alg` and `key` of ONE key entry, one
+    /// `ALGS` token over the two halves' concatenated raw value (wire.md).
     pub fn public_key(&self) -> &PublicKey {
         &self.public
     }
@@ -367,7 +376,7 @@ impl HybridSigner {
     ) -> Vec<u8> {
         let mut blob = match &self.pq {
             PqSigner::MlDsa65(sk) => sk.sign(msg).encode().as_slice().to_vec(),
-            PqSigner::FnDsa512(sk_bytes) => {
+            PqSigner::FnDsa512Preview(sk_bytes) => {
                 let mut sk = SigningKeyStandard::decode(sk_bytes)
                     .expect("this signer's own encoded key decodes");
                 let mut sig = vec![0u8; signature_size(FN_DSA_LOGN_512)];
@@ -419,23 +428,28 @@ fn ed25519_half(key: &PublicKey) -> Option<EdVerifyingKey> {
 enum PqHalf {
     /// Tag 1: ML-DSA-65's encoded verifying key.
     MlDsa65(EncodedVerifyingKey<MlDsa65>),
-    /// Tag 3: FN-DSA-512's decoded verifying key.
-    FnDsa512(VerifyingKeyStandard),
+    /// Tag 3: the FN-DSA-512 PREVIEW verifying key, decoded by `fn-dsa`
+    /// 0.4.0.
+    FnDsa512Preview(VerifyingKeyStandard),
 }
 
 /// `key`'s post-quantum half under `tag`'s rule, decoded as far as that rule
 /// can REFUSE it — the fallible stage alone: ML-DSA-65's encoded verifying
 /// key for tag 1 (its length, the one check that encoding makes — every byte
-/// string of the row's length decodes) and FN-DSA-512's
-/// `VerifyingKeyStandard::decode` for tag 3 (the header byte `0x09` for
-/// degree 512, the length, every coefficient in range). `None` where the
+/// string of the row's length decodes) and `fn-dsa` 0.4.0's
+/// `VerifyingKeyStandard::decode` for tag 3's preview (the header byte `0x09`
+/// for degree 512, the length, every coefficient in range). `None` where the
 /// half does not decode or `tag` names no rule of this module's. The other
 /// of the two decodes [`verify`] and [`key_decodes`] share.
 fn pq_half(tag: u8, key: &PublicKey) -> Option<PqHalf> {
     let pq = key.pq_half();
     match Rule::of(tag)? {
-        Rule::MlDsa65 => EncodedVerifyingKey::<MlDsa65>::try_from(pq).ok().map(PqHalf::MlDsa65),
-        Rule::FnDsa512 => VerifyingKeyStandard::decode(pq).map(PqHalf::FnDsa512),
+        Rule::MlDsa65Ed25519 => {
+            EncodedVerifyingKey::<MlDsa65>::try_from(pq).ok().map(PqHalf::MlDsa65)
+        }
+        Rule::FnDsa512PreviewEd25519 => {
+            VerifyingKeyStandard::decode(pq).map(PqHalf::FnDsa512Preview)
+        }
     }
 }
 
@@ -487,7 +501,7 @@ pub fn verify(tag: u8, key: &PublicKey, sig: &[u8], msg: &[u8]) -> Result<(), Hy
             // The CTX PIN: the empty context string.
             vk.verify_with_context(msg, &[], &sigma)
         }
-        PqHalf::FnDsa512(vk) => vk.verify(pq_sig, &DOMAIN_NONE, &HASH_ID_RAW, msg),
+        PqHalf::FnDsa512Preview(vk) => vk.verify(pq_sig, &DOMAIN_NONE, &HASH_ID_RAW, msg),
     };
     if pq_ok {
         Ok(())
@@ -502,15 +516,16 @@ pub fn verify(tag: u8, key: &PublicKey, sig: &[u8], msg: &[u8]) -> Result<(), Hy
 /// `sizes_and_timings_per_tag`'s literal pin by name: (PQ key, PQ signature,
 /// PQ signing key in its crate's encoding — the expanded key's for
 /// ML-DSA-65, which the signer holds decoded, and the bytes the signer
-/// stores for FN-DSA-512). `None` for a tag this build holds no rule for.
+/// stores for the FN-DSA-512 preview). `None` for a tag this build holds no
+/// rule for.
 pub fn pq_widths(tag: u8) -> Option<(usize, usize, usize)> {
     Some(match Rule::of(tag)? {
-        Rule::MlDsa65 => (
+        Rule::MlDsa65Ed25519 => (
             EncodedVerifyingKey::<MlDsa65>::default().len(),
             EncodedSignature::<MlDsa65>::default().len(),
             ExpandedSigningKeyBytes::<MlDsa65>::default().len(),
         ),
-        Rule::FnDsa512 => (
+        Rule::FnDsa512PreviewEd25519 => (
             vrfy_key_size(FN_DSA_LOGN_512),
             signature_size(FN_DSA_LOGN_512),
             sign_key_size(FN_DSA_LOGN_512),
@@ -595,9 +610,9 @@ mod tests {
     }
 
     /// THE TAG SET is stated once ([`Rule::of`]): the KDF, keygen and the
-    /// widths answer for exactly the tags it names, over every marker byte,
-    /// so no step serves a tag another refuses — and the set is the two
-    /// rules the module card names.
+    /// widths answer for exactly the tags it names, over every value a marker
+    /// tag can take, so no step serves a tag another refuses — and the set is
+    /// the two rules the module card names.
     #[test]
     fn every_per_tag_step_answers_for_exactly_the_tags_rule_names() {
         let seed = [0x42u8; 32];

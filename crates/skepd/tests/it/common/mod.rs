@@ -308,7 +308,7 @@ pub fn claimed(port: u16) -> bool {
 /// board without `H.1` is the crash window the open closes).
 pub fn claim_board(port: u16) {
     if claimed(port) {
-        assert!(board_pair(port).is_some(), "a reopened claimed board has its H.1");
+        assert!(board_term(port).is_some(), "a reopened claimed board has its H.1");
         return;
     }
     ceremony_before_the_claim(port);
@@ -323,7 +323,7 @@ pub fn claim_board(port: u16) {
     );
     expect_resp(&v, "ack_addr");
     assert!(claimed(port), "the claim link flips the board claimed");
-    let (position, _) = board_pair(port).expect("the claim's own step wrote H.1");
+    let (position, _) = board_term(port).expect("the claim's own step wrote H.1");
     assert_eq!(position, acked_at(&v), "H.1 names the claim's own position");
 }
 
@@ -874,7 +874,7 @@ pub fn open_session(port: u16, principal: u64) -> String {
 ///
 /// THE TEST SIGNER SITS HERE (signed ops; the placement investigation §4.3):
 /// where `token` is a session a seed carrier opened ([`register_signer`])
-/// and the frame's op is one of the three the check attests — `insert`,
+/// and the frame's op is one of the checked set's three — `insert`,
 /// `make_link`, `publish` — the frame is sent with its `attest` member
 /// composed and signed by that seed's hybrid key ([`attach_attest`]);
 /// every other frame, and every frame under a bare or foreign token, is
@@ -1990,8 +1990,8 @@ fn with_map<K: std::hash::Hash + Eq, V, R>(
 }
 
 /// Register `token` as a session `principal` opened with the seed carrier
-/// `sk`: every attestable frame [`op`] posts under it is signed by that
-/// seed's hybrid key.
+/// `sk`: every frame [`op`] posts under it whose op is in the checked set is
+/// signed by that seed's hybrid key.
 pub fn register_signer(token: &str, principal: u64, sk: &SigningKey) {
     let seed = seed_of(sk);
     with_map(&SIGNERS, |m| {
@@ -2010,7 +2010,7 @@ pub const HEAD_MEMBER_1: &str = "1.1.0.1.0.2.1";
 /// THE BOARD TERM: `H.1`'s `(position, chain)` pair, read off the wire by
 /// `retrieve_v` on the pinned member (guest-readable) and parsed off the
 /// `skep-head` record; `None` while the board has no `H.1`.
-pub fn board_pair(port: u16) -> Option<(u64, [u8; 32])> {
+pub fn board_term(port: u16) -> Option<(u64, [u8; 32])> {
     if let Some(pair) = with_map(&BOARDS, |m| m.get(&port).copied()) {
         return Some(pair);
     }
@@ -2230,7 +2230,7 @@ fn publish_values(port: u16, token: &str, runs: &Value) -> Option<Vec<Vec<u8>>> 
 /// unreadable origin, an op outside the three).
 pub fn entry_frame_for(port: u16, token: &str, principal: u64, frame: &Value) -> Option<Vec<u8>> {
     let op = frame["op"].as_str()?;
-    let (position, chain) = board_pair(port)?;
+    let (position, chain) = board_term(port)?;
     let board = board_bytes(position, &chain);
     let account = account_of(port, token, principal)?;
     let alg = token_of_sig_alg(FIXTURE_TAG)?.token;
@@ -2295,7 +2295,7 @@ pub fn op_with_publish_values(port: u16, token: &str, frame: &str, values: &[&[u
         return op_unsigned(port, Some(token), frame);
     };
     let mut v: Value = serde_json::from_str(frame).expect("a JSON frame");
-    let (Some((position, chain)), Some(account)) = (board_pair(port), account_of(port, token, principal))
+    let (Some((position, chain)), Some(account)) = (board_term(port), account_of(port, token, principal))
     else {
         return op_unsigned(port, Some(token), frame);
     };
@@ -2310,8 +2310,8 @@ pub fn op_with_publish_values(port: u16, token: &str, frame: &str, values: &[&[u
 }
 
 /// [`op`]'s composition: the frame with its `attest` attached where the
-/// token names a signer and the op is attestable and composable; the frame
-/// as written otherwise.
+/// token names a signer, the op is in the checked set and its entry frame
+/// composes; the frame as written otherwise.
 pub fn attach_attest(port: u16, token: &str, frame: &str) -> String {
     let Some((principal, seed)) = signer_of(token) else {
         return frame.to_string();

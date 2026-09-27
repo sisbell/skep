@@ -1027,7 +1027,7 @@ pub struct Daemon {
     /// production ever sees; a test-only flag and not a `cfg(test)` one,
     /// because the harness is an integration test of the shipped binary's
     /// library, outside this crate's `cfg(test)`.
-    hold_at_claim: AtomicBool,
+    hold_between_claim_and_head: AtomicBool,
 }
 
 /// Deliberately opaque: reporting the log position would take the kernel's
@@ -1152,7 +1152,7 @@ impl Daemon {
             writes,
             history: History::new(),
             scans: ClassScans::new(),
-            hold_at_claim: AtomicBool::new(false),
+            hold_between_claim_and_head: AtomicBool::new(false),
         };
         // THE CRASH WINDOW, closed before anything is served (signed ops, s1;
         // see the method): a claimed board whose journal holds no head owes
@@ -1169,13 +1169,13 @@ impl Daemon {
     /// would otherwise answer every attested write until the cadence's first
     /// head. Closed HERE, at open and before anything is served: a claimed
     /// board (the recovered fold's claimant present) whose head writer resumed
-    /// no head writes `H.1` now, by the claim's own turn
-    /// ([`WritePath::first_head`]) under the write path's own lock, naming the
-    /// committed pair as it stands — the claim's own position where the crash
-    /// was the split, and the last commit's on a board claimed under a build
-    /// that wrote no head at the claim. The unclaimed board writes nothing
-    /// here: no head by a claim that did not happen (A1/A5). A claimed board
-    /// with its head finds the turn a no-op, so a clean restart writes none.
+    /// no head writes `H.1` now ([`WritePath::write_first_head`]) under the
+    /// write path's own lock, naming the committed pair as it stands — the
+    /// claim's own position where the crash was the split, and the last
+    /// commit's on a board claimed under a build that wrote no head at the
+    /// claim. The unclaimed board writes nothing here: no head by a claim that
+    /// did not happen (A1/A5). A claimed board with its head finds writing it
+    /// a no-op, so a clean restart writes none.
     /// The line on the operator stream is I11 (c)'s: a head written for a
     /// reason other than the cadence's is said, never silent.
     ///
@@ -1192,7 +1192,7 @@ impl Daemon {
             return;
         }
         let serial = self.writes.serial_lock();
-        if self.writes.first_head(&serial) {
+        if self.writes.write_first_head(&serial) {
             notice::line(
                 "the board is claimed and its journal held no head: H.1 written at open, \
                  naming the committed pair as it stood",
@@ -1445,21 +1445,21 @@ impl Daemon {
     /// no SESSION write lands between the claim and the comparands it moves
     /// — every one takes this gate. The head writer's own commits are the one
     /// kind that lands inside this step: `H.1`'s here, or the cadence's where
-    /// the claim's own turn already wrote it (an operator pausing an hour
-    /// before the ceremony's last step is enough), in which case `H.1` stands
-    /// and [`WritePath::first_head`] writes nothing — made by no session, they
-    /// meet no list, and `IdentityFold::step_committed`'s premise already
-    /// counts them.
+    /// the head writer's turn after the claim's commit already wrote it (an
+    /// operator pausing an hour before the ceremony's last step is enough), in
+    /// which case `H.1` stands and [`WritePath::write_first_head`] writes
+    /// nothing — made by no session, they meet no list, and
+    /// `IdentityFold::step_committed`'s premise already counts them.
     fn on_claim_flip(&self, lock: &LockWrite<'_>, serial: &SerialGuard<'_>) {
         // THE CRASH WINDOW's seam: armed, the process is held HERE — the
         // claim durable and flipped, no head — for the harness to kill.
-        if self.hold_at_claim.load(Ordering::Relaxed) {
+        if self.hold_between_claim_and_head.load(Ordering::Relaxed) {
             notice::line(Self::CLAIM_HOLD_NOTICE);
             loop {
                 thread::park();
             }
         }
-        self.writes.first_head(serial);
+        self.writes.write_first_head(serial);
         self.log_config_warnings(true);
         self.auth.reinstall_blocked_at_claim(lock);
         // The flip can only have made an entry INERT, so an issue with no
@@ -1791,8 +1791,8 @@ impl Daemon {
         // nothing. `Request::attest` held nothing until the assignment below
         // — the codec split the member out at parse — so a member the check
         // DROPPED (off the publish class; at or below the claim, A5) never
-        // reaches a handle, and no later layer can fill a slot the producer
-        // set excludes.
+        // reaches a handle, and no later layer can fill the marker slot of a
+        // write the producer set excludes.
         let admitted = match plain_admission(
             &credential_lock,
             snap.world(),
@@ -1906,8 +1906,8 @@ impl Daemon {
         // before `commit_under` returns — the `post` snapshot at 8 then holds
         // them, which `step_committed`'s premise accounts for).
         //
-        // THE CREDENTIAL DEPOSIT'S SLOT STAYS EMPTY (signed ops; D26, RULED
-        // 2026-09-25): the `make_link` half of a credential deposit is
+        // THE CREDENTIAL DEPOSIT'S MARKER SLOT STAYS EMPTY (signed ops; D26,
+        // RULED 2026-09-25): the `make_link` half of a credential deposit is
         // covered by the record's own `sig` member — the record grade's
         // carrier, the record grade's lane — and takes no entry signature of
         // its own, so the `attest` a client attached is never handed to this
@@ -2022,7 +2022,7 @@ impl Daemon {
     /// to be killed. Not disarmable.
     #[doc(hidden)]
     pub fn hold_between_the_claim_and_its_head(&self) {
-        self.hold_at_claim.store(true, Ordering::Relaxed);
+        self.hold_between_claim_and_head.store(true, Ordering::Relaxed);
     }
 
     /// TEST HOOK (the same standing: `#[doc(hidden)]`, not a stable API):
@@ -2060,11 +2060,11 @@ impl Daemon {
     }
 
     /// TEST HOOK (the same standing: `#[doc(hidden)]`, not a stable API):
-    /// the signature slot of the transaction that committed the boundary
-    /// `at` — `Kernel::attestation_at` on the daemon's own kernel — so a
-    /// suite can pin WHICH commits' slots the write-path check filled and
-    /// which stayed empty (signed ops), the feed carrying no slot member in
-    /// this slice.
+    /// the MARKER SLOT of the transaction that committed the boundary `at` —
+    /// `Kernel::attestation_at` on the daemon's own kernel — so a suite can
+    /// pin WHICH commits' marker slots the write-path check filled and which
+    /// stayed empty (signed ops), `/changes` carrying no `attest` member yet
+    /// (the design record §7.3 (i), owed).
     #[doc(hidden)]
     pub fn attestation_at(&self, at: u64) -> Result<Option<Attestation>, HistoryError> {
         self.engine.kernel().attestation_at(Seq(at))

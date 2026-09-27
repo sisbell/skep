@@ -256,8 +256,8 @@ fn the_count_trigger_writes_a_head_at_the_64th_non_head_commit() {
 
 /// (i) — a checkpoint moves the head, and ONCE: with the checkpoint seq moved
 /// since the last head, the next commit writes one (trigger (b)) naming it as
-/// its `base`, and the commits after it write none — the head attested it.
-/// And a quiet board (no count, no checkpoint, no clock) writes none.
+/// its `base`, and the commits after it write none — the head named it as its
+/// `base`. And a quiet board (no count, no checkpoint, no clock) writes none.
 #[test]
 fn a_checkpoint_moves_the_head_once_and_a_quiet_board_writes_none() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -308,19 +308,19 @@ fn a_checkpoint_moves_the_head_once_and_a_quiet_board_writes_none() {
     );
     assert_ne!(base["chain"], base["body_hash"], "and is not the body hash: {rec}");
 
-    // …and it moves the head ONCE. The head just written ATTESTED that
-    // checkpoint, so a quiet board after it writes none. This run, not the
-    // one above, sees trigger (b)'s comparison: before any checkpoint the
-    // trigger has nothing to attest whatever it compares, and a trigger that
-    // asked only "is there a checkpoint?" would write a head on every commit
-    // after the board's first.
-    let attesting = rec["position"].as_u64().unwrap();
+    // …and it moves the head ONCE. The head just written NAMED that
+    // checkpoint as its `base`, so a quiet board after it writes none. This
+    // run, not the one above, sees trigger (b)'s comparison: before any
+    // checkpoint the trigger has nothing to name whatever it compares, and a
+    // trigger that asked only "is there a checkpoint?" would write a head on
+    // every commit after the board's first.
+    let naming_head = rec["position"].as_u64().unwrap();
     for i in 1..=5 {
         commit(port, &owner, CLAIMANT_ACCOUNT);
         assert_eq!(
             head_record(port, H).unwrap()["position"].as_u64().unwrap(),
-            attesting,
-            "a checkpoint the last head attested moves no further head (commit {i} after it)"
+            naming_head,
+            "a checkpoint the last head named moves no further head (commit {i} after it)"
         );
     }
     sd.shutdown();
@@ -570,11 +570,12 @@ fn the_heads_own_commits_never_bring_the_next_head() {
 
 /// RESUME — trigger (b)'s reference is read off the head itself (its `base`),
 /// so it survives a restart: a checkpoint taken after the last head, with no
-/// commit between it and the shutdown, is attested by the FIRST commit after
-/// the reopen — a head whose `base` names that checkpoint. The clock is left
-/// alone and the count is one, so no other trigger can be what fired.
+/// commit between it and the shutdown, is named by the head the FIRST commit
+/// after the reopen writes — a head whose `base` names that checkpoint. The
+/// clock is left alone and the count is one, so no other trigger can be what
+/// fired.
 #[test]
-fn a_checkpoint_taken_before_a_restart_is_attested_by_the_first_head_after_it() {
+fn a_checkpoint_taken_before_a_restart_is_named_by_the_first_head_after_it() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut clock = clock_origin();
 
@@ -612,17 +613,17 @@ fn a_checkpoint_taken_before_a_restart_is_attested_by_the_first_head_after_it() 
 }
 
 /// RESUME — the other direction of the test above: trigger (b)'s reference is
-/// the last head's `base` AS RESUMED, so a checkpoint that head already
-/// attested moves no head after a restart. The first commit after the reopen
-/// writes none: the newest checkpoint is the one `H`'s latest member names,
-/// the count is one, and the hour is resumed from the head's own entries. A
-/// reference the restart forgot would re-attest it, one head per reopen.
+/// the last head's `base` AS RESUMED, so a checkpoint that head already named
+/// moves no head after a restart. The first commit after the reopen writes
+/// none: the newest checkpoint is the one `H`'s latest member names, the
+/// count is one, and the hour is resumed from the head's own entries. A
+/// reference the restart forgot would name it again, one head per reopen.
 #[test]
-fn a_checkpoint_the_last_head_attested_moves_no_head_after_a_restart() {
+fn a_checkpoint_the_last_head_named_moves_no_head_after_a_restart() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut clock = clock_origin();
 
-    let attesting = {
+    let naming_head = {
         let sd = spawn(dir.path());
         let port = sd.port();
         let owner = open_session(port, CLAIMANT_PRINCIPAL);
@@ -631,7 +632,7 @@ fn a_checkpoint_the_last_head_attested_moves_no_head_after_a_restart() {
         let at = commit(port, &owner, CLAIMANT_ACCOUNT);
         let rec = expect_latest_head(port);
         assert_eq!(rec["position"].as_u64(), Some(at), "the checkpoint's own head");
-        assert!(rec["base"].is_object(), "which attests it: {rec}");
+        assert!(rec["base"].is_object(), "which names it as its base: {rec}");
         sd.shutdown();
         at
     };
@@ -642,8 +643,8 @@ fn a_checkpoint_the_last_head_attested_moves_no_head_after_a_restart() {
     commit(port, &owner, CLAIMANT_ACCOUNT);
     assert_eq!(
         head_record(port, H).unwrap()["position"].as_u64(),
-        Some(attesting),
-        "a checkpoint the last head attested moves no head after the restart"
+        Some(naming_head),
+        "a checkpoint the last head named moves no head after the restart"
     );
     sd.shutdown();
 }
@@ -1204,8 +1205,8 @@ fn the_claim_floor_is_untouched_and_the_system_id_is_not_fresh() {
     sd.shutdown();
 }
 
-/// (vi) — THE CLAIM'S OWN TURN CAN WRITE A HEAD, and the claim still
-/// completes — AND THEN THE CLAIM WRITES NO SECOND ONE. PUB-6.65's cadence
+/// (vi) — THE HEAD WRITER'S TURN AFTER THE CLAIM CAN WRITE A HEAD, and the
+/// claim still completes — AND THEN THE CLAIM WRITES NO SECOND ONE. PUB-6.65's cadence
 /// gates nothing on the claim, so the claim's `commit_under` gives the head
 /// writer its turn like any session write's, and where the hour has passed
 /// before the ceremony's last step the head's own commits land between the
@@ -1218,7 +1219,7 @@ fn the_claim_floor_is_untouched_and_the_system_id_is_not_fresh() {
 /// `H.1` (s1) then finds a head standing and writes nothing: `H.1` is the
 /// cadence's, at the claim's position, and there is no `H.2`.
 #[test]
-fn the_claims_own_turn_can_write_a_head_and_the_claim_still_completes() {
+fn the_head_writers_turn_after_the_claim_can_write_a_head_and_the_claim_still_completes() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn_unclaimed(dir.path());
     let port = sd.port();
@@ -1232,7 +1233,7 @@ fn the_claims_own_turn_can_write_a_head_and_the_claim_still_completes() {
     assert_eq!(
         rec["position"].as_u64(),
         Some(at),
-        "the claim's own turn wrote the head, naming the claim: {rec}"
+        "the head writer's turn after the claim's commit wrote the head, naming the claim: {rec}"
     );
     let (live, _) = health(port);
     assert!(live > at, "the head's own commits landed past the claim's position: {live} > {at}");

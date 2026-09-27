@@ -38,7 +38,7 @@ use std::thread;
 use std::time::Duration;
 
 use common::{
-    acked_addr, acked_at, board_pair, ceremony_before_the_claim, claim_frame, claimed,
+    acked_addr, acked_at, board_term, ceremony_before_the_claim, claim_frame, claimed,
     device_key, expect_resp, head_position, json, op, open_session, open_signed_session,
     spawn_configured, spawn_unclaimed, typed_link_frame, CLAIMANT_ACCOUNT, CLAIMANT_DOC1,
     CLAIMANT_PRINCIPAL, HEAD_MEMBER_1, T_ENROLL, T_GRANT,
@@ -932,7 +932,7 @@ fn h_a_crash_between_the_claim_and_its_head_reopens_with_h1() {
         CLAIM_POSITION + H1_RECORDS,
         "FINDING (H): the open did not write H.1's eight records above the claim"
     );
-    let (position, _) = board_pair(port).expect("FINDING (H): no H.1 after the reopen");
+    let (position, _) = board_term(port).expect("FINDING (H): no H.1 after the reopen");
     assert_eq!(position, CLAIM_POSITION, "H.1 names the claim's own position");
     let v = op(port, None, &common::retrieve_frame(HEAD_MEMBER_1, 1, 1));
     let atom = expect_resp(&v, "delivery")["items"][0]["atom"].as_str().expect("H.1's record");

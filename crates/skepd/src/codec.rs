@@ -329,8 +329,8 @@ pub(crate) enum DaemonOp {
     /// check ADMITTED, set by the write sequence that ran the check and by
     /// nothing else. A route that never judges `presented` then commits with
     /// the marker slot EMPTY — never with a blob nobody verified, which the
-    /// kernel writes opaquely and a reader of the journal takes for this
-    /// board's attestation.
+    /// kernel writes opaquely and a reader of the journal takes for an
+    /// author's attestation this board ADMITTED.
     Febe { request: Box<Request>, presented: Option<Attestation> },
     KeySet { account: Address },
 }
@@ -539,10 +539,10 @@ fn parse_value(v: Value) -> PResult<Request> {
     // [`MAX_REQ_ID_BYTES`]).
     let id = fields.req_id()?;
     let op = parse_op(&name, &mut fields)?;
-    // The optional `attest` member, admitted on the slice
-    // [`crate::auth::entry::attested`] states and on no other op — left in
-    // the map elsewhere, so `finish` refuses it by the unknown-field rule, as
-    // a daemon that predates the member does (the design record §7.3 (ii)).
+    // The optional `attest` member, admitted on the checked set
+    // [`crate::auth::entry::in_checked_set`] states and on no other op — left
+    // in the map elsewhere, so `finish` refuses it by the unknown-field rule,
+    // as a daemon that predates the member does (the design record §7.3 (ii)).
     let attest = fields.attest(op.kind())?;
     fields.finish()?;
     Ok(Request { id, op, attest })
@@ -745,15 +745,15 @@ impl Fields {
         self.field(k, p_u64)
     }
 
-    /// The optional top-level `attest` member — taken on an attested op
-    /// ([`crate::auth::entry::attested`]), absent and explicit `null` alike
-    /// reading `None`; on any other op it is not taken at all, so `finish`
-    /// refuses it as the unknown field it is there. The codec ASKS the
-    /// composer rather than keeping a copy of the slice: the wire admits the
-    /// member exactly where the check will demand and judge one — the
-    /// doorkeeper consulting the domain for what the door may admit.
+    /// The optional top-level `attest` member — taken on an op of the checked
+    /// set ([`crate::auth::entry::in_checked_set`]), absent and explicit
+    /// `null` alike reading `None`; on any other op it is not taken at all,
+    /// so `finish` refuses it as the unknown field it is there. The codec ASKS
+    /// the composer rather than keeping a copy of the checked set: the wire
+    /// admits the member exactly where the check will demand and judge one —
+    /// the doorkeeper consulting the domain for what the door may admit.
     fn attest(&mut self, kind: OpKind) -> PResult<Option<Attestation>> {
-        if !crate::auth::entry::attested(kind) {
+        if !crate::auth::entry::in_checked_set(kind) {
             return Ok(None);
         }
         match self.take_opt("attest") {

@@ -37,8 +37,8 @@
 //! head is not the cadence's but the CLAIM's (signed ops, s1): the write that
 //! claims the board is followed, under the same guard and before any later
 //! write is admitted, by the board's first head `H.1`
-//! ([`WritePath::first_head`]) — the pair every attested write's entry frame
-//! names the board by — and a daemon that opens a claimed board with no head
+//! ([`WritePath::write_first_head`]) — the board term every attested write's
+//! entry frame names — and a daemon that opens a claimed board with no head
 //! writes it there, before it serves.
 //!
 //! The read/write partition is M10's own `Op::is_read`. A read is exactly an
@@ -58,7 +58,7 @@ use skep_kernel::Seq;
 
 mod head;
 
-pub(crate) use head::board_pair;
+pub(crate) use head::board_term;
 
 use crate::codec::op_name;
 use crate::feed::{ChangesAnswer, Feed, FeedClass, Query};
@@ -191,9 +191,9 @@ impl WritePath {
     /// and the open, on a claimed board whose journal holds no head — the
     /// crash window between the claim's transaction and the head's. `true`
     /// iff a head landed. Nothing else about a head moves:
-    /// [`HeadWriter::first_turn`] states the rule.
-    pub(crate) fn first_head(&self, serial: &SerialGuard<'_>) -> bool {
-        self.head_writer.first_turn(self, serial)
+    /// [`HeadWriter::write_first_head`] states the rule.
+    pub(crate) fn write_first_head(&self, serial: &SerialGuard<'_>) -> bool {
+        self.head_writer.write_first_head(self, serial)
     }
 
     /// Take the write-serialization lock ALONE — for the auth write

@@ -58,7 +58,7 @@ pub(crate) const MAX_ENROLLED_KEYS: usize = 16;
 /// [`MAX_ENROLLED_KEYS`] the bill is order 2 ms (sixteen tag-1 verifies at
 /// the design record's ~134 µs each), commensurate with the frame parse
 /// beside it; at the record's own [`skep_identity::MAX_RECORD_BYTES`] bound —
-/// 128 KiB, 32 tag-1 entries or 68 tag-3 — it is order 4–5 ms, which the
+/// 128 KiB, 32 tag-1 key entries or 68 tag-3 — it is order 4–5 ms, which the
 /// worker pool would rather not absorb per unauthenticated request. "No
 /// cutoff, ever" (AUTH-4.33) is what makes the cap belong HERE, at the
 /// deposit, rather than at the verification.
@@ -274,7 +274,7 @@ pub(crate) enum CredentialRefusal {
     /// enrolment record naming ANY key of the PREVIEW row, tag 3
     /// (`fndsa512-preview-ed25519`, AUTH-1.5), unless the daemon's setting
     /// `allow_preview_keys` allows it (AUTH-1.44) — EVERY enrolment record,
-    /// `Genesis` INSIDE; the test reads the entry's `alg` and decodes
+    /// `Genesis` INSIDE; the test reads each key entry's `alg` and decodes
     /// nothing. Tag-3 VERIFICATION stays compiled in (the frozen-tag rule);
     /// this refuses ENROLLMENT alone. Token `preview_key` — AUTH-3.56's row,
     /// AUTH-6.23's; the face, the row's verbatim: "this is a PREVIEW key, and
@@ -322,7 +322,7 @@ pub(crate) enum CredentialRefusal {
     /// Token `mint_home_public` — the wire's, tabled beside `mint_home_first`
     /// (wire.md §Credential refusals) and carrying no confirmation debt.
     MintHomePublic,
-    /// Slot (7), and the plain path's publish gate (RES-26).
+    /// Slot (7), and the plain path's publish-class gate (RES-26).
     SignedSessionRequired,
     /// Slot (8), and the plain path's pre-claim admission gate (RES-27).
     ClaimFirst,
@@ -336,12 +336,12 @@ pub(crate) enum CredentialRefusal {
     /// before claiming."
     ClaimResidue,
     /// THE WRITE-PATH CHECK's first refusal (signed ops; the design record
-    /// §4.5 (1); A1): a DISPATCHED, publish-class write of the attested ops
-    /// ABOVE THE CLAIM on a claimed board, from a signed session, carrying no
-    /// `attest`. Token `attestation_required`, class REORDER — the answer is
-    /// a DIFFERENT request the client composes (the same content, signed and
-    /// attached), which under ATTACH WHEN IN DOUBT is the ordinary path and
-    /// no error case.
+    /// §4.5 (1); A1): a DISPATCHED, publish-class write of the checked set's
+    /// ops ABOVE THE CLAIM on a claimed board, from a signed session,
+    /// carrying no `attest`. Token `attestation_required`, class REORDER —
+    /// the answer is a DIFFERENT request the client composes (the same
+    /// content, signed and attached), which under ATTACH WHEN IN DOUBT is the
+    /// ordinary path and no error case.
     AttestationRequired,
     /// THE WRITE-PATH CHECK's second refusal (§4.5 (2)): an `attest` that
     /// does not verify, with the cause a verifier can tell from the bytes in
@@ -360,8 +360,8 @@ pub(crate) enum AttestFault {
     /// The blob is not the tag's fixed width (a re-compose: a client bug;
     /// REORDER).
     Malformed,
-    /// The board has no `H.1`, so the frame's `board` term (D13) has no
-    /// value and nothing can be verified. UNREACHABLE on a claimed board in
+    /// The board has no `H.1`, so the entry frame's `board` term (D13) has
+    /// no value and nothing can be verified. UNREACHABLE on a claimed board in
     /// normal operation since s1 (RULED 2026-09-25): the claim writes `H.1`
     /// in its own step and the daemon's open writes it where a crash split
     /// the two — kept, defensive, for a journal damaged below `H.1` (the
@@ -373,9 +373,9 @@ pub(crate) enum AttestFault {
     /// key of the attestation's algorithm — A2's empty walk among them — so
     /// no retry under the same key can succeed (PERMANENT).
     NotEnrolledAtPosition,
-    /// A candidate key exists and none verifies the blob over the frame the
-    /// daemon composed — wrong bytes, a wrong `board` term, a body composed
-    /// otherwise: the client re-composes (REORDER).
+    /// A candidate key exists and none verifies the blob over the entry frame
+    /// the daemon composed — wrong bytes, a wrong `board` term, a body
+    /// composed otherwise: the client re-composes (REORDER).
     Signature,
 }
 
@@ -500,25 +500,27 @@ pub(crate) fn op_shape_refusal(op: &Op) -> Option<CredentialRefusal> {
 ///   it (PUB-6.13, PUB-6.20) and make PUB-4.12's "a nullified marker STILL
 ///   CONSUMES" false. The steward's classification link is a member only
 ///   where the LINK's OWN HOME is published (RES-207, keyed on the type AND
-///   on `published(document_of(target))` — the same read the publish gate
-///   takes one slot earlier, no read added); draft-homed it is an ordinary
-///   link, admitted.
+///   on `published(document_of(target))` — the same read the publish-class
+///   gate takes one slot earlier, no read added); draft-homed it is an
+///   ordinary link, admitted.
 ///
 /// THE TWO NEW CELLS' ENTITLEMENT is the caller who could otherwise open the
 /// path — M7's own v1 gate mirrored: ω of the record's `home` AND ω of the
-/// TARGET (address arithmetic; the target-home owner PUB-6.30 and PUB-6.64
-/// name). The target half is load-bearing HERE where it is not at the
-/// credential cell: a grant-typed or audit-class link CAN sit in a draft's
-/// link subspace (an ordinary `make_link`, nothing refuses it), so a token
-/// keyed on the record's home alone would tell a stranger filing from a home
-/// of its own which addresses in the draft hold one — the occupancy oracle
-/// PUB-6.9 forbids. Pre-claim every producer's answer stands for every
-/// caller, but in [`plain_admission`]'s order the pre-claim admission gate
-/// answers `claim_first` ahead of this one (PUB-6.35, PUB-6.36 slot 4 before
-/// slot 5), so over the wire a token is reached only once the board is
-/// claimed — and once claimed, the publish-class gate's `nullify` row
-/// (PUB-6.43) stands ahead too, so a BARE owner's retraction landing in the
-/// published world answers `signed_session_required` and never a token here.
+/// TARGET — ω over the target link's own address, a read of Π that needs no
+/// `readlink` and is never address arithmetic (m3); the target-home owner
+/// PUB-6.30 and PUB-6.64 name. The target half is load-bearing HERE where it
+/// is not at the credential cell: a grant-typed or audit-class link CAN sit
+/// in a draft's link subspace (an ordinary `make_link`, nothing refuses it),
+/// so a token keyed on the record's home alone would tell a stranger filing
+/// from a home of its own which addresses in the draft hold one — the
+/// occupancy oracle PUB-6.9 forbids. Pre-claim every producer's answer
+/// stands for every caller, but in [`plain_admission`]'s order the pre-claim
+/// admission gate answers `claim_first` ahead of this one (PUB-6.35, PUB-6.36
+/// slot 4 before slot 5), so over the wire a token is reached only once the
+/// board is claimed — and once claimed, the publish-class gate's `nullify`
+/// row (PUB-6.43) stands ahead too, so a BARE owner's retraction landing in
+/// the published world answers `signed_session_required` and never a token
+/// here.
 pub(crate) fn nullify_refusal(
     _lock: &LockRead<'_>,
     world: &World,
@@ -642,14 +644,14 @@ pub(crate) fn first_mint_private_refusal(
 
 // ── board_state_admission — the two CLAIM-complementary gates (AUTH-3.78) ─
 
-/// The publish gate's publication read — the engine's ONE definition (owner
-/// ruling D1, 2026-09-05): `published(trunk_of(doc))`, a membership miss on
-/// the exception set (PUB-7.5), after the projection of a version member to
-/// its DOCUMENT (PUB-2.15). The projection is M5's `trunk_of` — the ONE
-/// spelling of it, shared with the write-path refusals that run one crate
-/// below this gate (PUB-8.2, D2b), which is why the daemon's own copy was
-/// retired rather than kept beside it. The gate reads `published()` on the
-/// document, never on the member: a member's own bit is what its own mint
+/// The publish-class gate's publication read — the engine's ONE definition
+/// (owner ruling D1, 2026-09-05): `published(trunk_of(doc))`, a membership
+/// miss on the exception set (PUB-7.5), after the projection of a version
+/// member to its DOCUMENT (PUB-2.15). The projection is M5's `trunk_of` —
+/// the ONE spelling of it, shared with the write-path refusals that run one
+/// crate below this gate (PUB-8.2, D2b), which is why the daemon's own copy
+/// was retired rather than kept beside it. The gate reads `published()` on
+/// the document, never on the member: a member's own bit is what its own mint
 /// journaled (PUB-8.17's inheritance makes the two agree today; the
 /// projection is what keeps the gate exact of the DOCUMENT's state, which is
 /// the state the gate is about). The drift sweep's claim-2 defect — doc 1's
@@ -681,23 +683,23 @@ pub(super) fn published_unprojected(world: &World, a: &Address) -> bool {
 }
 
 /// The plain path's ADMISSION at the two board-state gates, dispatched on
-/// claimed-ness (AUTH-3.78): once claimed, the public-permanent gate
-/// (RES-26, `signed_session_required`) and — behind it, on the same
-/// classification (signed ops; the design record §4.5 (1)–(2), §5.5) — THE
-/// WRITE-PATH CHECK; in UNCLAIMED the pre-claim admission gate (RES-27,
-/// `claim_first`). Exact under the read guard: the claim commits only under
-/// `credential_lock.write()`.
+/// claimed-ness (AUTH-3.78): once claimed, the publish-class gate (RES-26 —
+/// PUB's section "The public-permanent gate" — `signed_session_required`)
+/// and — behind it, on the same classification (signed ops; the design
+/// record §4.5 (1)–(2), §5.5) — THE WRITE-PATH CHECK; in UNCLAIMED the
+/// pre-claim admission gate (RES-27, `claim_first`). Exact under the read
+/// guard: the claim commits only under `credential_lock.write()`.
 ///
 /// THE ANSWER IS WHAT REACHES THE STORE: `Ok(Some(a))` is an attestation
 /// the check VERIFIED, to be written into this write's marker slot;
-/// `Ok(None)` is a write that commits with the slot EMPTY — no `attest`
-/// demanded, or one DROPPED, never verified and never written: off the
-/// publish class (D1's third arm) or on the UNCLAIMED board (A5: the
+/// `Ok(None)` is a write that commits with the marker slot EMPTY — no
+/// `attest` demanded, or one DROPPED, never verified and never written: off
+/// the publish class (D1's third arm) or on the UNCLAIMED board (A5: the
 /// ceremony's own span, where an `attest` a cautious client attached could
-/// verify under no key). The slot's producer set is stated here in code: a
-/// dispatched publish-class write above the claim whose PRESENTED `attest`
-/// this admission verified, and nothing else — which holds because the codec
-/// hands the member over BESIDE the request and not inside it
+/// verify under no key). The marker slot's producer set is stated here in
+/// code: a dispatched publish-class write above the claim whose PRESENTED
+/// `attest` this admission verified, and nothing else — which holds because
+/// the codec hands the member over BESIDE the request and not inside it
 /// (`DaemonOp::Febe`'s `presented`), so the plain sequence's assignment of
 /// this answer is `Request::attest`'s one writer.
 ///
@@ -734,16 +736,17 @@ fn board_state_admission(
 
 /// THE WRITE-PATH CHECK (signed ops; the design record §4.5 (1)–(2) made
 /// concrete at the placement the owner confirmed 2026-09-25 — BEFORE the
-/// transaction, beside `publish_gate` (the design record's name for the
-/// RES-26 gate — here `board_state_admission`'s claimed arm), on the
-/// snapshot pair the gates read, which under the serialization guard IS the
-/// transaction's base). Reached for a publish-class write from a SIGNED
-/// session on a CLAIMED board:
+/// transaction, beside the publish-class gate (wire.md §Credential refusals;
+/// the design record's `publish_gate`) — here `board_state_admission`'s
+/// claimed arm — on the snapshot pair the gates read, which under the
+/// serialization guard IS the transaction's base). Reached for a
+/// publish-class write from a SIGNED session on a CLAIMED board:
 ///
-/// 1. THE SLICE — [`entry::attested`]: the three ops the seam build attests
-///    (`insert`, `make_link`, `publish`); every other publish-class op
-///    carries no `attest` (the codec refuses the member there) and commits
-///    on its signed session as before — the widening lane's, not this one's.
+/// 1. THE CHECKED SET — [`entry::in_checked_set`]: the three ops the seam
+///    build's check reaches (`insert`, `make_link`, `publish`); every other
+///    publish-class op carries no `attest` (the codec refuses the member
+///    there) and commits on its signed session as before — the widening
+///    lane's, not this one's.
 /// 2. THE RECORD DEPOSIT EXEMPTION (§2.5's `insert` cell as re-cut at
 ///    required signing; D26): a DECLARED deposit under a CREDENTIAL kind —
 ///    the atom a credential record rides — carries its signature in the
@@ -753,36 +756,39 @@ fn board_state_admission(
 ///    routes it to the credential sequence, whose `precheck` is the record
 ///    grade's door — which is how the check tells D26's case: BY ROUTE for
 ///    the link, BY DECLARED TYPE for the atom.
-/// 3. A3 — the SYSTEM ACCOUNT's own documents are exempt by ω (`1.1.0.1`,
-///    address arithmetic; never the `"system"` testimony). The head writer
-///    never passes dispatch, so this arm is stated for a dispatched write
-///    that names one and is met by none today.
-/// 4. THE FRAME, composed from the op and the snapshot (`super::entry`) —
-///    every member but `alg`, which only the presented member names —
-///    BEFORE the member is asked for, so a write no frame can be composed
-///    for is told what it is whatever it carries: a `publish` run naming an
-///    address with no value passes UNATTESTED to the store's own
-///    `dangling_source`; a board with no `H.1` answers
+/// 3. A3 — a document whose OWNER is the SYSTEM ACCOUNT `1.1.0.1` is exempt,
+///    read by ω — the longest registered prefix over the board's principal
+///    list Π, a READ and never address arithmetic (m3, the design record's
+///    round 5 rulings 2026-09-26) — and never by the `"system"` testimony.
+///    The head writer never passes dispatch, so this arm is stated for a
+///    dispatched write that names one and is met by none today.
+/// 4. THE ENTRY FRAME, composed from the op and the snapshot
+///    (`super::entry`) — every member but `alg`, which only the presented
+///    member names — BEFORE the member is asked for, so a write no entry
+///    frame can be composed for is told what it is whatever it carries: a
+///    `publish` run naming an address with no value passes UNATTESTED to the
+///    store's own `dangling_source`; a board with no `H.1` answers
 ///    `attestation_invalid:board_unavailable`, never "carry an attest"; a
 ///    principal with no account answers
 ///    `attestation_invalid:not_enrolled_at_position`.
 /// 5. (1): no `attest` → `attestation_required`.
-/// 6. (2): the member's tag names its row (a tag no row names is
-///    `malformed`), whose token is the frame's `alg`; the blob's width
+/// 6. (2): the member's marker tag names its row (a tag no row names is
+///    `malformed`), whose token is the entry frame's `alg`; the blob's width
 ///    under it; the KEY SET that OPENS the act's principal AS OF this base
 ///    (AUTH-4.30 (i)'s walk, `key_subject`) — the fold's own set at this
 ///    position, the check's table being the daemon's own since no record
 ///    grade is built yet; the candidates are that set's keys of the tag's
 ///    row (A2's empty walk answers `not_enrolled_at_position`, PERMANENT);
-///    any candidate verifying BOTH halves over the frame admits the value,
-///    else `signature`.
+///    any candidate verifying BOTH halves over the entry frame admits the
+///    value, else `signature`.
 ///
-/// The frame the daemon composes for a `publish` reads the runs' values
-/// off the snapshot by `value_at` — a second Σ-width walk per attested shot,
-/// off the snapshot and not under the applier lock (the investigation §3.3's
-/// price). A run naming an address with no value cannot commit; the store's
-/// `dangling_source` is that write's answer, so the check passes it through
-/// unattested rather than refusing a signature over bytes nobody holds.
+/// The entry frame the daemon composes for a `publish` reads the runs'
+/// values off the snapshot by `value_at` — a second Σ-width walk per
+/// attested shot, off the snapshot and not under the applier lock (the
+/// investigation §3.3's price). A run naming an address with no value cannot
+/// commit; the store's `dangling_source` is that write's answer, so the check
+/// passes it through unattested rather than refusing a signature over bytes
+/// nobody holds.
 fn attestation_check(
     world: &World,
     identity: &IdentityState,
@@ -790,8 +796,8 @@ fn attestation_check(
     principal: PrincipalId,
     presented: Option<&Attestation>,
 ) -> Result<Option<Attestation>, CredentialRefusal> {
-    // 1 — the slice, [`entry::attested`]'s one statement of it.
-    if !entry::attested(op.kind()) {
+    // 1 — the checked set, [`entry::in_checked_set`]'s one statement of it.
+    if !entry::in_checked_set(op.kind()) {
         return Ok(None);
     }
     // 2 — the record deposit's atom (D26): its DECLARED type read as a type
@@ -806,32 +812,34 @@ fn attestation_check(
     if system_owned(world, op) {
         return Ok(None);
     }
-    // 4 — THE FRAME, every member but `alg`, composed before the member is
-    // asked for: a write the daemon cannot compose a frame for cannot commit
-    // either (a `publish` run naming an address with no value) and is passed
-    // through UNATTESTED for the store's own refusal, attest or none; and a
-    // board with no `H.1` — a journal damaged below it, since the claim
-    // writes `H.1` in its own step (s1) — has no `board` term for ANY client
-    // to sign over, which is told as its own cause rather than as "carry an
-    // attest". `alg` is the member's own, so it waits for step 6.
+    // 4 — THE ENTRY FRAME, every member but `alg`, composed before the
+    // member is asked for: a write the daemon cannot compose an entry frame
+    // for cannot commit either (a `publish` run naming an address with no
+    // value) and is passed through UNATTESTED for the store's own refusal,
+    // attest or none; and a board with no `H.1` — a journal damaged below it,
+    // since the claim writes `H.1` in its own step (s1) — has no `board` term
+    // for ANY client to sign over, which is told as its own cause rather than
+    // as "carry an attest". `alg` is the member's own, so it waits for step 6.
     let invalid = CredentialRefusal::AttestationInvalid;
-    let frame = match entry::compose(world, op, principal) {
-        Ok(frame) => frame,
-        Err(ComposeFault::NoBoard) => return Err(invalid(AttestFault::BoardUnavailable)),
+    let entry_frame = match entry::compose(world, op, principal) {
+        Ok(entry_frame) => entry_frame,
+        Err(ComposeFault::NoBoardTerm) => return Err(invalid(AttestFault::BoardUnavailable)),
         Err(ComposeFault::NoAccount) => return Err(invalid(AttestFault::NotEnrolledAtPosition)),
-        Err(ComposeFault::MissingValue) | Err(ComposeFault::NotAttestable) => return Ok(None),
+        Err(ComposeFault::MissingValue) | Err(ComposeFault::OutsideCheckedSet) => {
+            return Ok(None)
+        }
     };
     // 5 — (1).
     let Some(presented) = presented else {
         return Err(CredentialRefusal::AttestationRequired);
     };
-    // 6 — (2): the member's tag names its row, whose token is the frame's
-    // `alg`.
+    // 6 — (2): the member's marker tag names its row, whose token is the
+    // entry frame's `alg`.
     let row = token_of_sig_alg(presented.sig_alg()).ok_or(invalid(AttestFault::Malformed))?;
     if presented.sig().len() != row.sig_len() {
         return Err(invalid(AttestFault::Malformed));
     }
-    let bytes = frame.bytes(row.token);
+    let bytes = entry_frame.bytes(row.token);
     let candidates: Vec<&PublicKey> = key_subject(world, identity, principal)
         .map(|subject| {
             identity
@@ -856,8 +864,9 @@ fn attestation_check(
 }
 
 /// A3's test: the write's target or home document is OWNED BY THE SYSTEM
-/// ACCOUNT `1.1.0.1` — ω, address arithmetic (PUB-6.65) — and by nothing
-/// served or testified.
+/// ACCOUNT `1.1.0.1` (PUB-6.65) — ω, a READ of the board's principal list
+/// Π and never address arithmetic (m3) — and by nothing served or
+/// testified.
 fn system_owned(world: &World, op: &Op) -> bool {
     let target = match op {
         Op::Insert { doc, .. } | Op::Publish { doc, .. } => doc,
@@ -1212,8 +1221,8 @@ pub(crate) fn plain_admission(
     // check (signed ops), whose admitted attestation is this function's
     // answer. It stands where the pair stood: ahead of the `nullify` class,
     // so a signed `nullify` carrying no `attest` is judged as before (no
-    // `attest` is admitted on `nullify` in this slice) and its class token
-    // still speaks last.
+    // `attest` is admitted on `nullify`, which is outside the checked set)
+    // and its class token still speaks last.
     let admitted = board_state_admission(lock, world, identity, op, principal, signer, presented)?;
     if let Some(r) = nullify_refusal(lock, world, identity, op, principal) {
         return Err(r);
@@ -1331,13 +1340,13 @@ pub(crate) fn precheck(
     };
     // FIRST `preview_key`: an enrolment record naming ANY key of the PREVIEW
     // row, tag 3 (`fndsa512-preview-ed25519`), unless the daemon's setting
-    // allows it (AUTH-1.44). The test reads the entry's `alg` and decodes
-    // nothing, so a preview key that ALSO fails to decode is told this fault
-    // first — the one the same act clears, a key made with a released client
-    // (AUTH-3.46). Tag-3 VERIFICATION stays compiled in (the frozen-tag rule)
-    // and the fold admits the row as syntax; this refuses ENROLLMENT alone.
-    // Unbounded over the record's entries: a token compare per entry, and the
-    // record is the read's cap's (AUTH-2.43).
+    // allows it (AUTH-1.44). The test reads each key entry's `alg` and
+    // decodes nothing, so a preview key that ALSO fails to decode is told this
+    // fault first — the one the same act clears, a key made with a released
+    // client (AUTH-3.46). Tag-3 VERIFICATION stays compiled in (the
+    // frozen-tag rule) and the fold admits the row as syntax; this refuses
+    // ENROLLMENT alone. Unbounded over the record's key entries: a token
+    // compare per key entry, and the record is the read's cap's (AUTH-2.43).
     if !allow_preview_keys
         && enrolling.iter().any(|e| e.key.alg() == ALG_FNDSA512_PREVIEW_ED25519)
     {

@@ -749,14 +749,15 @@ pub(crate) fn parse_session_body(body: &[u8]) -> Result<SessionBody, String> {
 /// the body's OWN strings; the daemon canonicalizes NOTHING on this path.
 ///
 /// ONE payload per body, chosen by the body's own scope, so a scoped body is
-/// verified under v2 ONLY and an unscoped body under v1 ONLY: the tag names
-/// the grammar, a v1 signature never opens a scoped session and a v2
-/// signature never opens an unscoped one. The scope is therefore the
-/// SIGNER's declaration — a limit the signer did not sign could be lifted on
-/// the path by dropping the field. BOTH NAMES CARRY THE HYBRID LAYOUT (the
-/// naming ruling, owner 2026-09-26 "keep v1/v2 names"): the key's two halves
-/// sign these SAME bytes and `sig` holds the post-quantum signature then the
-/// Ed25519 signature — the field list unchanged, no `skep-session-v3`/`-v4`.
+/// verified under v2 ONLY and an unscoped body under v1 ONLY: the framing tag
+/// (`SESSION_TAG` or `SESSION_TAG_V2`, AUTH-1.11) names the grammar, a v1
+/// signature never opens a scoped session and a v2 signature never opens an
+/// unscoped one. The scope is therefore the SIGNER's declaration — a limit
+/// the signer did not sign could be lifted on the path by dropping the
+/// field. BOTH NAMES CARRY THE HYBRID LAYOUT (the naming ruling, owner
+/// 2026-09-26 "keep v1/v2 names"): the key's two halves sign these SAME
+/// bytes and `sig` holds the post-quantum signature then the Ed25519
+/// signature — the field list unchanged, no `skep-session-v3`/`-v4`.
 pub(crate) fn session_payload(
     origin: &Origin,
     nonce_hex: &str,

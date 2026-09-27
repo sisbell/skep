@@ -36,7 +36,7 @@ use crate::World;
 /// account-hood from M3, and publication from the engine's exception set —
 /// the daemon's ONE publication SET (owner ruling D1, 2026-09-05; PUB-7.5),
 /// which is M3's per-document bit indexed for a membership miss. The two
-/// readings OF that set — this one and the publish gate's — differ by
+/// readings OF that set — this one and the publish-class gate's — differ by
 /// PUB-2.15's projection alone, which `is_published` states below.
 pub(crate) struct WorldCtx<'a>(pub &'a World);
 
@@ -69,18 +69,19 @@ impl FoldCtx for WorldCtx<'_> {
     /// call answers off the reconstructed world's own set (PUB-7.12), which
     /// `Engine::world_at` seeds before it replays.
     ///
-    /// The RES-26 publish gate's read (`super::policy`'s `published`) is
-    /// this membership lookup AFTER PUB-2.15's projection of a version member
-    /// to its DOCUMENT, so the two share the lookup and differ by exactly
-    /// that step. Where a credential home is a version member — the home pin
-    /// fires later, in the per-kind arm, so this read sees one — the fold
-    /// answers the MEMBER's own bit and the gate would answer its document's:
-    /// on PUB-2.7's private-member cell (a member minted `Some(false)` under
-    /// a published document, admitted until the routed write-path item lands,
-    /// PUB-8.2) this answers `unpublished` where the projection would fall
-    /// through to the home pin's `not_doc_one`. Both refuse, permanently, so
-    /// the divergence is a token and not an admission; whether the fold
-    /// should take the projection too is the spec's (see the build report).
+    /// The RES-26 publish-class gate's read (`super::policy`'s `published`)
+    /// is this membership lookup AFTER PUB-2.15's projection of a version
+    /// member to its DOCUMENT, so the two share the lookup and differ by
+    /// exactly that step. Where a credential home is a version member — the
+    /// home pin fires later, in the per-kind arm, so this read sees one — the
+    /// fold answers the MEMBER's own bit and the gate would answer its
+    /// document's: on PUB-2.7's private-member cell (a member minted
+    /// `Some(false)` under a published document, admitted until the routed
+    /// write-path item lands, PUB-8.2) this answers `unpublished` where the
+    /// projection would fall through to the home pin's `not_doc_one`. Both
+    /// refuse, permanently, so the divergence is a token and not an admission;
+    /// whether the fold should take the projection too is the spec's (see the
+    /// build report).
     ///
     /// The document's BIRTH state, constant over every record's life: the
     /// bit is stamped at the mint that allocates the address and no op moves

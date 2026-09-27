@@ -223,7 +223,7 @@ fn a_grant_typed_nullify_is_refused_to_the_issuer_and_masked_for_everyone_else()
     assert!(claimed(port), "the claim link flips the board claimed");
     // The board's `H.1` (signed ops, s1): the claim's own step wrote it, and
     // every attested write above the claim names it — the grant below is one.
-    assert!(board_pair(port).is_some(), "the claim wrote H.1");
+    assert!(board_term(port).is_some(), "the claim wrote H.1");
 
     // The issuer grants a draft of its own to a grantee, from its published
     // doc 1 (the residence the fold admits, PUB-5.17).

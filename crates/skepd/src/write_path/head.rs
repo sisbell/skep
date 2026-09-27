@@ -35,8 +35,8 @@
 //! every write the write path's session door runs ([`HeadWriter::take_turn`],
 //! reached from `commit_under`): a head is due when (a) ≥ [`COUNT_BOUND`]
 //! commits that are NOT the writer's own have LANDED since the last head, OR
-//! (b) the newest retained checkpoint is not the one the last head attested
-//! (its `base`), OR (c) ≥ [`TIME_BOUND_MILLIS`] have elapsed since the last
+//! (b) the newest retained checkpoint is not the one the last head named as
+//! its `base`, OR (c) ≥ [`TIME_BOUND_MILLIS`] have elapsed since the last
 //! head AND the position moved. Never on a peer's request; never while the
 //! position has not moved; never twice for one position (the head's own
 //! commits ride the head writer's door, which gives the head writer no turn,
@@ -49,26 +49,27 @@
 //!
 //! THE FIRST HEAD IS THE CLAIM'S (signed ops, s1; RULED 2026-09-25: "THE CLAIM
 //! WRITES `H.1`"). The cadence above governs every head AFTER the first. `H.1`
-//! is written in the claim's own serialized step — [`HeadWriter::first_turn`],
-//! reached from the daemon's claim-flip tail under the same guard the claim
-//! committed under, before any later write is admitted — naming the claim's
-//! own position, so a claimed board takes attested writes, whose ENTRY frame
-//! names the board by `H.1`'s pair (D13), from the claim on and not after the
-//! cadence's first 64 commits, checkpoint or hour. Where the cadence already
-//! wrote a head before or at the claim, the claim writes none: the first turn
-//! is a no-op on a board with a head, so the claim writes ONE head, never a
-//! second. The claim and `H.1` are two transactions, and a daemon that opens a
-//! claimed board whose journal holds no head writes `H.1` before it serves, by
-//! the same turn (`server.rs`, the open). A refused `H.1` is surfaced like any
-//! refused head (below) and the claim stands; the next open writes it, as
-//! does the cadence's next trigger. RESUME BY READING: at open the
-//! writer reads `H`'s latest member — its `position` and `chain` (the next
-//! head's `prev`; a head is owed only once the position moves past it) and
-//! its `base` (trigger (b)'s reference: a checkpoint taken after that head,
-//! before or after a restart, is attested by the next head) — and finds the
-//! staging draft where it left it; a crash between the insert and the shot
-//! leaves an orphan atom in the draft and no member, and the next head's shot
-//! names the newer atom (PUB-2.26's no-residue).
+//! is written in the claim's own serialized step —
+//! [`HeadWriter::write_first_head`], reached from the daemon's claim-flip tail
+//! under the same guard the claim committed under, before any later write is
+//! admitted — naming the claim's own position, so a claimed board takes
+//! attested writes, whose ENTRY frame names the board by `H.1`'s pair (D13),
+//! from the claim on and not after the cadence's first 64 commits, checkpoint
+//! or hour. Where the cadence already wrote a head before or at the claim, the
+//! claim writes none: writing the first head is a no-op on a board with a
+//! head, so the claim writes ONE head, never a second. The claim and `H.1` are
+//! two transactions, and a daemon that opens a claimed board whose journal
+//! holds no head writes `H.1` before it serves, through the same call
+//! (`server.rs`, the open). A refused `H.1` is surfaced like any refused head
+//! (below) and the claim stands; the next open writes it, as does the
+//! cadence's next trigger. RESUME BY READING: at open the writer reads `H`'s
+//! latest member — its `position` and `chain` (the next head's `prev`; a head
+//! is owed only once the position moves past it) and its `base` (trigger
+//! (b)'s reference: a checkpoint taken after that head, before or after a
+//! restart, is named by the next head's `base`) — and finds the staging draft
+//! where it left it; a crash between the insert and the shot leaves an orphan
+//! atom in the draft and no member, and the next head's shot names the newer
+//! atom (PUB-2.26's no-residue).
 //!
 //! RESUME FROM THE FEED (the chain's open items, item 2). The cadence's two
 //! counters are RESUMED at open from the change feed's testimony about the
@@ -215,9 +216,9 @@ struct HeadState {
     /// is a reading of this one value: "the position moved" and "never twice
     /// for one position" read its `position`, the next head's `prev` is its
     /// [`HeadRecord::pair`], and trigger (b)'s reference is its `base`
-    /// — the checkpoint the last head ATTESTED — so a checkpoint that landed
-    /// after it is attested by the next head, whichever side of a restart
-    /// the last one was written on.
+    /// — the checkpoint the last head NAMED — so a checkpoint that landed
+    /// after it is named by the next head's `base`, whichever side of a
+    /// restart the last one was written on.
     last_head: Option<HeadRecord>,
     /// The kernel's committed seq as of the writer's last look — at open, at
     /// each evaluation, and after the head's own commits — so a write that
@@ -378,12 +379,12 @@ impl HeadWriter {
     /// Open the writer over `stores`, RESUMING by reading `H`'s latest member
     /// (PUB-6.65, I7 (a)): the record it holds becomes `last_head` whole, so a
     /// head written after a restart carries the right `prev`, does not re-name
-    /// a position already published, and attests a checkpoint the last head
-    /// did not name; and the staging draft is found where an earlier uptime
-    /// minted it. All off ONE snapshot. And by reading the FEED (the module
-    /// doc's RESUME FROM THE FEED): the entries above that position resume
-    /// trigger (a)'s count and trigger (c)'s origin — a lost sidecar's bare
-    /// entries counting, and its missing times leaving the origin at open.
+    /// a position already published, and names as its `base` a checkpoint the
+    /// last head did not name; and the staging draft is found where an earlier
+    /// uptime minted it. All off ONE snapshot. And by reading the FEED (the
+    /// module doc's RESUME FROM THE FEED): the entries above that position
+    /// resume trigger (a)'s count and trigger (c)'s origin — a lost sidecar's
+    /// bare entries counting, and its missing times leaving the origin at open.
     pub(super) fn open(stores: EngineStores, feed: &Feed) -> HeadWriter {
         let clock = Clock::new();
         let now = clock.now_millis();
@@ -430,34 +431,35 @@ impl HeadWriter {
     /// head's own commits as its own, and could write a head naming the last
     /// head's own publish. A landed commit counts once either way.
     pub(super) fn take_turn(&self, wp: &WritePath, serial: &SerialGuard<'_>) {
-        self.turn(wp, serial, false);
+        self.write_head_if_due(wp, serial, false);
     }
 
     /// THE CLAIM'S HEAD — `H.1` (signed ops, s1; RULED 2026-09-25: "THE CLAIM
     /// WRITES `H.1`"): the board's FIRST head, written whatever the cadence
     /// says, naming the committed pair as it stands. Two callers, one rule.
     /// The claim's own step calls it under the guard the claim committed
-    /// under ([`WritePath::first_head`] from the daemon's claim-flip tail),
-    /// so `H.1` names the claim's own position and no write of any kind is
-    /// admitted between the two; and the daemon's open calls it on a claimed
-    /// board whose journal holds no head — the crash window between the
-    /// claim's transaction and this one, closed before anything is served. A
-    /// NO-OP on a board that has a head: the cadence may have written one
-    /// before or at the claim (an hour idle before the ceremony's last step
-    /// is enough), and then `H.1` stands and this writes nothing — the claim
-    /// writes ONE head, never a second, and a clean reopen of a headed board
-    /// writes none. The cadence's counters move by what landed, as on any
-    /// turn, and every head after this one is the cadence's alone. Answers
-    /// whether a head landed.
-    pub(super) fn first_turn(&self, wp: &WritePath, serial: &SerialGuard<'_>) -> bool {
-        self.turn(wp, serial, true)
+    /// under ([`WritePath::write_first_head`] from the daemon's claim-flip
+    /// tail), so `H.1` names the claim's own position and no write of any
+    /// kind is admitted between the two; and the daemon's open calls it on a
+    /// claimed board whose journal holds no head — the crash window between
+    /// the claim's transaction and this one, closed before anything is
+    /// served. A NO-OP on a board that has a head: the cadence may have
+    /// written one before or at the claim (an hour idle before the ceremony's
+    /// last step is enough), and then `H.1` stands and this writes nothing —
+    /// the claim writes ONE head, never a second, and a clean reopen of a
+    /// headed board writes none. The cadence's counters move by what landed,
+    /// as in the head writer's turn, and every head after this one is the
+    /// cadence's alone. Answers whether a head landed.
+    pub(super) fn write_first_head(&self, wp: &WritePath, serial: &SerialGuard<'_>) -> bool {
+        self.write_head_if_due(wp, serial, true)
     }
 
-    /// The turn's one body: [`HeadWriter::take_turn`] with `first = false`,
-    /// [`HeadWriter::first_turn`] with `true` — the two differ in what makes
-    /// a head DUE (the cadence's three triggers, or the board's first head
-    /// owed), and in nothing else. `true` iff a head landed.
-    fn turn(&self, wp: &WritePath, serial: &SerialGuard<'_>, first: bool) -> bool {
+    /// The one body [`HeadWriter::take_turn`] and
+    /// [`HeadWriter::write_first_head`] share: decide under the state lock
+    /// whether a head is DUE — the cadence's three triggers, or, with
+    /// `first`, the board's first head owed — and write it. The two differ in
+    /// what makes a head due, and in nothing else. `true` iff a head landed.
+    fn write_head_if_due(&self, wp: &WritePath, serial: &SerialGuard<'_>, first: bool) -> bool {
         // Decide under the state lock, releasing it before any commit.
         let due_head = {
             let mut state = self.state.lock();
@@ -480,10 +482,10 @@ impl HeadWriter {
             // from M10's memo, `emit`'s incumbent ack. The kernel's seq is
             // the arbiter — unmoved past the last look, nothing landed:
             // nothing to count, no trigger to evaluate (never while the
-            // position has not moved). The FIRST head's turn evaluates
-            // regardless — the claim's own turn already counted the claim,
-            // and the open's look is the seq at open — counting nothing it
-            // did not see land.
+            // position has not moved). Writing the FIRST head evaluates
+            // regardless — the head writer's turn after the claim's commit
+            // already counted the claim, and the open's look is the seq at
+            // open — counting nothing it did not see land.
             if position > state.last_seen_position {
                 state.last_seen_position = position;
                 state.commits_since_head = state.commits_since_head.saturating_add(1);
@@ -515,12 +517,12 @@ impl HeadWriter {
             if !moved {
                 return false;
             }
-            // Trigger (b): there is a checkpoint for this head to attest, and
-            // it is not the one the last head attested.
-            let attested = last.and_then(|h| h.base).map(|b| b.seq);
+            // Trigger (b): there is a checkpoint for this head's `base` to
+            // name, and it is not the one the last head's `base` named.
+            let last_base_seq = last.and_then(|h| h.base).map(|b| b.seq);
             let due = first
                 || state.commits_since_head >= COUNT_BOUND
-                || base.is_some_and(|b| Some(b.seq) != attested)
+                || base.is_some_and(|b| Some(b.seq) != last_base_seq)
                 || now.saturating_sub(state.last_head_millis) >= TIME_BOUND_MILLIS;
             if !due {
                 return false;
@@ -782,12 +784,15 @@ fn first_head_member() -> Address {
 /// reclamation as checkpoint state), guest-readable (`retrieve_v` on the
 /// bare member), board-unique — read off the snapshot the write's gates
 /// stand on. On a claimed board it is PRESENT from the claim on: the claim's
-/// own step writes `H.1` ([`HeadWriter::first_turn`]; s1, RULED 2026-09-25)
-/// and the daemon's open writes it where a crash split the two, so `None`
-/// here names a journal damaged below `H.1` — the member gone, or its record
-/// not one this build reads — and nothing a healthy claimed board answers;
-/// the check's `board_unavailable` is that case's refusal, kept for it.
-pub(crate) fn board_pair(world: &World) -> Option<(u64, [u8; 32])> {
+/// own step writes `H.1` ([`HeadWriter::write_first_head`]; s1, RULED
+/// 2026-09-25) and the daemon's open writes it where a crash split the two,
+/// so `None` here names a journal damaged below `H.1` — the member gone, or
+/// its record not one this build reads — and nothing a healthy claimed board
+/// answers; the check's `board_unavailable` is that case's refusal, kept for
+/// it. Named for the corpus's term and not for its shape: it is a committed
+/// pair, but the one fixed from the claim on, never the live pair `/health`
+/// serves.
+pub(crate) fn board_term(world: &World) -> Option<(u64, [u8; 32])> {
     let rec = read_head_member(world, &first_head_member())?;
     Some((rec.position, rec.chain))
 }

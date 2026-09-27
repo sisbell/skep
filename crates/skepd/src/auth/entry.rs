@@ -5,14 +5,16 @@
 //! guard IS the transaction's base. Nothing here is served or derived from
 //! the daemon's own state beyond what the design record §2.5 names:
 //!
-//! * `alg` — the `attest.alg` token as the frame carried it — the one member
-//!   the snapshot does not supply, so it is applied last ([`Frame::bytes`]);
-//! * `board` — `H.1`'s committed pair (D13, RULED), read off the snapshot
-//!   by [`crate::write_path::board_pair`];
+//! * `alg` — the `attest.alg` token as the request carried it — the one
+//!   member the snapshot does not supply, so it is applied last
+//!   ([`EntryFrame::bytes`]);
+//! * `board` — the BOARD TERM, `H.1`'s committed pair (D13, RULED), read off
+//!   the snapshot by [`crate::write_path::board_term`];
 //! * `account` — the act's principal's account in the board's local form,
 //!   M3's `principal_prefix`;
-//! * `doc` — per op cell: the TRUNK of the frame's `doc` for `insert` and
-//!   `publish` (M5's one truncation, PUB-2.15), the `home` for `make_link`;
+//! * `doc` — per op cell: the TRUNK of the op's `doc` for `insert` and
+//!   `publish` (M5's one truncation, PUB-2.15), the op's `home` for
+//!   `make_link`;
 //! * `op` — the op-kind token as the wire spells it;
 //! * `body` — per op cell: the declared type and the values for `insert`,
 //!   the three slots as the client sent them for `make_link`, and for
@@ -38,44 +40,47 @@ use skep_links::SlotArg;
 use skep_namespace::{HasM3, PrincipalId};
 
 use crate::codec::op_name;
-use crate::write_path::board_pair;
+use crate::write_path::board_term;
 use crate::World;
 
-/// Why the daemon could not compose the frame for a write.
+/// Why the daemon could not compose the entry frame for a write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ComposeFault {
-    /// The board has no `H.1`, so the `board` term D13 rules has no value on
-    /// this board. Since s1 (RULED 2026-09-25) the claim writes `H.1` in its
-    /// own step and the open writes it where a crash split the two, so on a
+    /// The entry frame's `board` term (D13) has no value: the board has no
+    /// `H.1`. Since s1 (RULED 2026-09-25) the claim writes `H.1` in its own
+    /// step and the open writes it where a crash split the two, so on a
     /// claimed board this names a journal damaged below `H.1`, nothing a
     /// healthy board answers.
-    NoBoard,
+    NoBoardTerm,
     /// The principal has no account prefix — no `account` term.
     NoAccount,
     /// A `publish` run names an address the snapshot holds no value at; the
     /// store's `dangling_source` is the answer this write is owed.
     MissingValue,
-    /// The op is off the slice [`attested`] states.
-    NotAttestable,
+    /// The op kind is outside the checked set [`in_checked_set`] states.
+    OutsideCheckedSet,
 }
 
-/// THE SLICE — the ops an ENTRY frame is composed for, and so the ops the
-/// write-path check attests: `insert`, `make_link`, `publish` (the seam
-/// build's three; the record's thirteen publish-class-capable inputs are the
-/// WIDENING lane's). The ONE statement of it: the codec admits a frame's
-/// `attest` member exactly on these, the check demands one exactly on these,
-/// and [`compose`] has an arm exactly for these. The three must agree in
-/// both directions — a member the codec admits and the check never demands
-/// is a signature parsed and silently DROPPED, the commit landing with its
-/// marker slot empty; one the check demands and the codec refuses is a write
-/// no signed session can make on a claimed board — so a widening is one
-/// edit here and one arm in [`compose`], whose wildcard asserts it.
-pub(crate) fn attested(kind: OpKind) -> bool {
+/// THE CHECKED SET — the op kinds the write-path check reaches, and so the
+/// ops an ENTRY frame is composed for: `insert`, `make_link`, `publish` (the
+/// owner's term, m2, the design record's round 5 rulings 2026-09-26; the
+/// seam build's three — the record's thirteen publish-class-capable inputs
+/// are the WIDENING lane's). The ONE statement of it: the codec admits a
+/// request's `attest` member exactly on these, the check demands and
+/// verifies one exactly on these, and [`compose`] has an arm exactly for
+/// these. The acting hand ATTESTS; the check admits or refuses, and signs
+/// nothing. The three must agree in both directions — a member the codec
+/// admits and the check never demands is a signature parsed and silently
+/// DROPPED, the commit landing with its marker slot empty; one the check
+/// demands and the codec refuses is a write no signed session can make on a
+/// claimed board — so a widening is one edit here and one arm in
+/// [`compose`], whose wildcard asserts it.
+pub(crate) fn in_checked_set(kind: OpKind) -> bool {
     matches!(kind, OpKind::Insert | OpKind::MakeLink | OpKind::Publish)
 }
 
-/// A link slot as the frame's slot row takes it — the resolve form's V-specs
-/// re-paired as `(source, span)`.
+/// A link slot as the entry frame's slot row takes it — the resolve form's
+/// V-specs re-paired as `(source, span)`.
 enum Slot<'a> {
     Addrs(&'a [skep_address::Address]),
     Resolve(Vec<(skep_address::Address, skep_address::Span)>),
@@ -99,18 +104,18 @@ impl<'a> Slot<'a> {
     }
 }
 
-/// THE FRAME for `op` by `principal` on `world` — every member the op and
-/// the snapshot supply, composed once — or why it cannot be composed. `alg`
-/// is not among them: it is the presented attestation's own, applied last
-/// ([`Frame::bytes`]), so the check learns whether a frame CAN be composed
-/// before it asks for the member, and names no token for a write that
-/// presents none.
+/// THE ENTRY FRAME for `op` by `principal` on `world` — every member the op
+/// and the snapshot supply, composed once — or why it cannot be composed.
+/// `alg` is not among them: it is the presented attestation's own, applied
+/// last ([`EntryFrame::bytes`]), so the check learns whether an entry frame
+/// CAN be composed before it asks for the member, and names no token for a
+/// write that presents none.
 pub(crate) fn compose(
     world: &World,
     op: &Op,
     principal: PrincipalId,
-) -> Result<Frame, ComposeFault> {
-    let (position, chain) = board_pair(world).ok_or(ComposeFault::NoBoard)?;
+) -> Result<EntryFrame, ComposeFault> {
+    let (position, chain) = board_term(world).ok_or(ComposeFault::NoBoardTerm)?;
     let board = board_bytes(position, &chain);
     let account = world.m3().principal_prefix(principal).ok_or(ComposeFault::NoAccount)?;
     let account = address_bytes(account);
@@ -139,19 +144,23 @@ pub(crate) fn compose(
             (address_bytes(&trunk_of(doc)), entry_body_publish(values))
         }
         _ => {
-            // An op added to `attested` with no arm here would have its
-            // `attest` dropped unverified — the silent direction — so the
+            // An op kind added to the checked set with no arm here would have
+            // its `attest` dropped unverified — the silent direction — so the
             // premise is made loud.
-            debug_assert!(!attested(op.kind()), "an attested op with no frame: {:?}", op.kind());
-            return Err(ComposeFault::NotAttestable);
+            debug_assert!(
+                !in_checked_set(op.kind()),
+                "an op kind in the checked set with no entry frame: {:?}",
+                op.kind()
+            );
+            return Err(ComposeFault::OutsideCheckedSet);
         }
     };
-    Ok(Frame { board, account, doc, op: op_name(op.kind()), body })
+    Ok(EntryFrame { board, account, doc, op: op_name(op.kind()), body })
 }
 
 /// An ENTRY frame composed but for its `alg` member — [`compose`]'s answer,
 /// every other member in its byte form.
-pub(crate) struct Frame {
+pub(crate) struct EntryFrame {
     board: [u8; 40],
     account: Vec<u8>,
     doc: Vec<u8>,
@@ -159,10 +168,11 @@ pub(crate) struct Frame {
     body: Vec<u8>,
 }
 
-impl Frame {
-    /// The frame's bytes under `alg`, the token the presented attestation's
-    /// tag names — [`skep_identity::entry_frame`]'s layout,
-    /// `framed(ENTRY_TAG, [alg, board, account, doc, op, body])`.
+impl EntryFrame {
+    /// The entry frame's bytes under `alg`, the token the presented
+    /// attestation's MARKER tag names — [`skep_identity::entry_frame`]'s
+    /// layout, `framed(ENTRY_TAG, [alg, board, account, doc, op, body])`,
+    /// `ENTRY_TAG` its framing tag.
     pub(crate) fn bytes(&self, alg: &str) -> Vec<u8> {
         entry_frame(alg, &self.board, &self.account, &self.doc, self.op, &self.body)
     }

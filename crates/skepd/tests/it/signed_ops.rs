@@ -722,6 +722,9 @@ fn sizes_and_timings_per_tag() {
             median(&mut verify_us)
         );
     }
+    // `ml-dsa` 0.1.1's ML-DSA-65 — FIPS 204's verifying key, signature and
+    // expanded signing key — read off the crate by `pq_widths` and pinned here
+    // by hand.
     assert_eq!(hybrid::pq_widths(1), Some((1952, 3309, 4032)));
     // `fn-dsa` 0.4.0's signing key at degree 9: 65 + (6 << 7) + 512 = 1,345
     // (its `f, g, F` and the hashed verifying key), the PQ investigation's

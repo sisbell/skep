@@ -7,7 +7,7 @@
 use std::sync::LazyLock;
 
 use skep_address::{
-    checked_inc, document_of, ordinal, parent, subtree_of, validate, Address, Nat, Span, Tumbler,
+    checked_inc, document_of, ordinal, parent, validate, Address, Nat, Span, Tumbler,
 };
 use skep_arrangement::{trunk_of, Deposit};
 use skep_engine::types::{
@@ -157,6 +157,9 @@ pub(crate) fn write_types() -> &'static WriteTypes {
 /// [`DepositSpans::of`]'s deposit read a type slot through the same call:
 /// two of the three readings the obligation on that classifier rests on
 /// become one, and only the rebuild's (M7's stored slot) stays separate.
+/// The write-path check asks the same classifier of an `insert`'s DECLARED
+/// type through it too (D26's record-deposit exemption), so a type is one
+/// slot shape wherever this module classifies one.
 fn addr_spans(addrs: &[Address]) -> Vec<Span> {
     enc(addrs.iter()).spans().cloned().collect()
 }
@@ -754,7 +757,8 @@ fn board_state_admission(
 ///    address arithmetic; never the `"system"` testimony). The head writer
 ///    never passes dispatch, so this arm is stated for a dispatched write
 ///    that names one and is met by none today.
-/// 4. THE FRAME, composed from the op and the snapshot (`super::entry`)
+/// 4. THE FRAME, composed from the op and the snapshot (`super::entry`) —
+///    every member but `alg`, which only the presented member names —
 ///    BEFORE the member is asked for, so a write no frame can be composed
 ///    for is told what it is whatever it carries: a `publish` run naming an
 ///    address with no value passes UNATTESTED to the store's own
@@ -763,13 +767,15 @@ fn board_state_admission(
 ///    principal with no account answers
 ///    `attestation_invalid:not_enrolled_at_position`.
 /// 5. (1): no `attest` → `attestation_required`.
-/// 6. (2): the blob's width under its tag; the KEY SET that OPENS the act's
-///    principal AS OF this base (AUTH-4.30 (i)'s walk, `key_subject`) —
-///    the fold's own set at this position, the check's table being the
-///    daemon's own since no record grade is built yet; the candidates are
-///    that set's keys of the tag's row (A2's empty walk answers
-///    `not_enrolled_at_position`, PERMANENT); any candidate verifying BOTH
-///    halves over the frame admits the value, else `signature`.
+/// 6. (2): the member's tag names its row (a tag no row names is
+///    `malformed`), whose token is the frame's `alg`; the blob's width
+///    under it; the KEY SET that OPENS the act's principal AS OF this base
+///    (AUTH-4.30 (i)'s walk, `key_subject`) — the fold's own set at this
+///    position, the check's table being the daemon's own since no record
+///    grade is built yet; the candidates are that set's keys of the tag's
+///    row (A2's empty walk answers `not_enrolled_at_position`, PERMANENT);
+///    any candidate verifying BOTH halves over the frame admits the value,
+///    else `signature`.
 ///
 /// The frame the daemon composes for a `publish` reads the runs' values
 /// off the snapshot by `value_at` — a second Σ-width walk per attested shot,
@@ -788,9 +794,11 @@ fn attestation_check(
     if !entry::attested(op.kind()) {
         return Ok(None);
     }
-    // 2 — the record deposit's atom (D26).
+    // 2 — the record deposit's atom (D26): its DECLARED type read as a type
+    // slot through the one spelling of `enc`, as every classification here
+    // reads one.
     if let Op::Insert { deposit: Deposit::Declared(ty), .. } = op {
-        if identity_types().kind_of(&[subtree_of(ty.tumbler())]).is_some() {
+        if identity_types().kind_of(&addr_spans(std::slice::from_ref(ty))).is_some() {
             return Ok(None);
         }
     }
@@ -798,19 +806,16 @@ fn attestation_check(
     if system_owned(world, op) {
         return Ok(None);
     }
-    // 4 — THE FRAME, composed before the member is asked for: a write the
-    // daemon cannot compose a frame for cannot commit either (a `publish`
-    // run naming an address with no value) and is passed through UNATTESTED
-    // for the store's own refusal, attest or none; and a board with no
-    // `H.1` — a journal damaged below it, since the claim writes `H.1` in
-    // its own step (s1) — has no `board` term for ANY client to sign over,
-    // which is told as its own cause rather than as "carry an attest".
+    // 4 — THE FRAME, every member but `alg`, composed before the member is
+    // asked for: a write the daemon cannot compose a frame for cannot commit
+    // either (a `publish` run naming an address with no value) and is passed
+    // through UNATTESTED for the store's own refusal, attest or none; and a
+    // board with no `H.1` — a journal damaged below it, since the claim
+    // writes `H.1` in its own step (s1) — has no `board` term for ANY client
+    // to sign over, which is told as its own cause rather than as "carry an
+    // attest". `alg` is the member's own, so it waits for step 6.
     let invalid = CredentialRefusal::AttestationInvalid;
-    let row = match presented {
-        Some(a) => token_of_sig_alg(a.sig_alg()).ok_or(invalid(AttestFault::Malformed))?,
-        None => token_of_sig_alg(hybrid::TAG_MLDSA65_ED25519).expect("tag 1 is a row"),
-    };
-    let frame = match entry::compose(world, op, principal, row.token) {
+    let frame = match entry::compose(world, op, principal) {
         Ok(frame) => frame,
         Err(ComposeFault::NoBoard) => return Err(invalid(AttestFault::BoardUnavailable)),
         Err(ComposeFault::NoAccount) => return Err(invalid(AttestFault::NotEnrolledAtPosition)),
@@ -820,10 +825,13 @@ fn attestation_check(
     let Some(presented) = presented else {
         return Err(CredentialRefusal::AttestationRequired);
     };
-    // 6 — (2).
+    // 6 — (2): the member's tag names its row, whose token is the frame's
+    // `alg`.
+    let row = token_of_sig_alg(presented.sig_alg()).ok_or(invalid(AttestFault::Malformed))?;
     if presented.sig().len() != row.sig_len() {
         return Err(invalid(AttestFault::Malformed));
     }
+    let bytes = frame.bytes(row.token);
     let candidates: Vec<&PublicKey> = key_subject(world, identity, principal)
         .map(|subject| {
             identity
@@ -839,7 +847,7 @@ fn attestation_check(
     }
     if candidates
         .iter()
-        .any(|key| hybrid::verify(row.tag, key, presented.sig(), &frame).is_ok())
+        .any(|key| hybrid::verify(row.tag, key, presented.sig(), &bytes).is_ok())
     {
         Ok(Some(presented.clone()))
     } else {
@@ -1310,31 +1318,30 @@ pub(crate) fn precheck(
         Verdict::Inert(i) => return Err(CredentialRefusal::Inert(i)),
         Verdict::Honored(e) => e,
     };
-    // (4) — TWO tokens in THIS order (AUTH-3.44 as RES-206 landed it).
-    //
+    // (4) — TWO tokens in THIS order (AUTH-3.44 as RES-206 landed it), over
+    // ONE set of keys: every enrolment record's, `Genesis` INSIDE (the cap's
+    // genesis exemption is slot (5)'s and is not inherited here: a
+    // genesis-planted key is as much a key), none for a retirement or a
+    // claim. Exhaustive, so a new `Effect` decides here whether it carries
+    // keys.
+    let enrolling: &[Enrolled] = match &effect {
+        Effect::Enroll { added, .. } => added,
+        Effect::Genesis { keys, .. } => keys,
+        Effect::Retire { .. } | Effect::Claim { .. } => &[],
+    };
     // FIRST `preview_key`: an enrolment record naming ANY key of the PREVIEW
     // row, tag 3 (`fndsa512-preview-ed25519`), unless the daemon's setting
-    // allows it (AUTH-1.44) — EVERY enrolment record, `Genesis` INSIDE (the
-    // cap's genesis exemption is not inherited: a genesis-planted preview key
-    // is as much a preview key). The test reads the entry's `alg` and
-    // decodes nothing, so a preview key that ALSO fails to decode is told
-    // this fault first — the one the same act clears, a key made with a
-    // released client (AUTH-3.46). Tag-3 VERIFICATION stays compiled in (the
-    // frozen-tag rule) and the fold admits the row as syntax; this refuses
-    // ENROLLMENT alone. Unbounded over the record's entries: a token
-    // compare per entry, and the record is the read's cap's (AUTH-2.43).
-    let names_a_preview_key =
-        |keys: &[Enrolled]| keys.iter().any(|e| e.key.alg() == ALG_FNDSA512_PREVIEW_ED25519);
-    if !allow_preview_keys {
-        match &effect {
-            Effect::Enroll { added, .. } if names_a_preview_key(added) => {
-                return Err(CredentialRefusal::PreviewKey)
-            }
-            Effect::Genesis { keys, .. } if names_a_preview_key(keys) => {
-                return Err(CredentialRefusal::PreviewKey)
-            }
-            _ => {}
-        }
+    // allows it (AUTH-1.44). The test reads the entry's `alg` and decodes
+    // nothing, so a preview key that ALSO fails to decode is told this fault
+    // first — the one the same act clears, a key made with a released client
+    // (AUTH-3.46). Tag-3 VERIFICATION stays compiled in (the frozen-tag rule)
+    // and the fold admits the row as syntax; this refuses ENROLLMENT alone.
+    // Unbounded over the record's entries: a token compare per entry, and the
+    // record is the read's cap's (AUTH-2.43).
+    if !allow_preview_keys
+        && enrolling.iter().any(|e| e.key.alg() == ALG_FNDSA512_PREVIEW_ED25519)
+    {
+        return Err(CredentialRefusal::PreviewKey);
     }
     // THEN `undecodable_key`: a valid-hex key ANY half of which does not
     // decode — the Ed25519 half's point AND the post-quantum half (the
@@ -1354,16 +1361,8 @@ pub(crate) fn precheck(
     // is still seen and still answers `undecodable_key`. It is refused
     // either way, permanently, in the same vocabulary and by the same
     // function; what changes is which of two true things it is told.
-    let keys_decodable =
-        |keys: &[Enrolled]| keys.iter().take(MAX_DECODED_KEYS).all(|e| hybrid::key_decodes(&e.key));
-    match &effect {
-        Effect::Enroll { added, .. } if !keys_decodable(added) => {
-            return Err(CredentialRefusal::UndecodableKey)
-        }
-        Effect::Genesis { keys, .. } if !keys_decodable(keys) => {
-            return Err(CredentialRefusal::UndecodableKey)
-        }
-        _ => {}
+    if !enrolling.iter().take(MAX_DECODED_KEYS).all(|e| hybrid::key_decodes(&e.key)) {
+        return Err(CredentialRefusal::UndecodableKey);
     }
     // (5) — the enrolled-set cap (RES-57): Enroll arm only, Genesis exempt
     // from the SET's cap.

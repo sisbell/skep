@@ -549,23 +549,21 @@ impl CredentialLock {
 
 // ── OS entropy (AUTH-4.13) ───────────────────────────────────────────────
 
-/// The daemon's one production RNG: every draw comes from the OS
-/// (`getrandom`), so a token or nonce is never a function of process state.
-/// Implements `rand_core`'s `CryptoRng` because the declared signatures on
-/// the auth surface carry that bound (AUTH-4.19, AUTH-4.23).
+/// The crate's one OS RNG: every draw comes from the OS (`getrandom`), so a
+/// token, a nonce or a tag-3 signature's seed is never a function of process
+/// state. Implements `rand_core` 0.9's traits, which the declared signatures
+/// on the auth surface carry (AUTH-4.19, AUTH-4.23), and — in `hybrid` —
+/// 0.6's, which `fn-dsa` 0.4.0 draws through, both over the one `fill_bytes`
+/// below.
 pub(crate) struct OsEntropy;
 
 impl RngCore for OsEntropy {
     fn next_u32(&mut self) -> u32 {
-        let mut b = [0u8; 4];
-        self.fill_bytes(&mut b);
-        u32::from_ne_bytes(b)
+        rand_core::impls::next_u32_via_fill(self)
     }
 
     fn next_u64(&mut self) -> u64 {
-        let mut b = [0u8; 8];
-        self.fill_bytes(&mut b);
-        u64::from_ne_bytes(b)
+        rand_core::impls::next_u64_via_fill(self)
     }
 
     fn fill_bytes(&mut self, dest: &mut [u8]) {

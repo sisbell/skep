@@ -63,16 +63,48 @@ use fn_dsa::{
     DOMAIN_NONE, FN_DSA_LOGN_512, HASH_ID_RAW,
 };
 use hkdf::Hkdf;
-use ml_dsa::{EncodedSignature, EncodedVerifyingKey, Keypair as _, MlDsa65, Signer as _};
+use ml_dsa::{
+    EncodedSignature, EncodedVerifyingKey, ExpandedSigningKeyBytes, Keypair as _, MlDsa65,
+    Signer as _,
+};
 use sha2::Sha256;
-use skep_identity::{token_of_sig_alg, PublicKey, SigAlgRow, MLDSA65_KEY_LEN};
+use skep_identity::{token_of_sig_alg, PublicKey, SigAlgRow};
 
+use super::OsEntropy;
 use crate::codec::hex_string;
 
 /// Tag 1's marker byte.
 pub const TAG_MLDSA65_ED25519: u8 = 1;
 /// Tag 3's marker byte.
 pub const TAG_FNDSA512_PREVIEW_ED25519: u8 = 3;
+
+/// The rules this module holds, one per marker tag — the ONE statement of
+/// which tags this build can derive, keygen, decode and verify under.
+/// Every per-tag step below matches on it exhaustively — the PQ half's KDF
+/// label, its keygen, its decode, its widths — beside the signer and
+/// verifier enums that already carry one variant per rule ([`PqSigner`],
+/// [`PqHalf`]), so a new tag (tag 2 is free for the final FIPS 206) is one
+/// variant here and one arm in [`Rule::of`], and the compiler names every
+/// step that must learn it.
+#[derive(Clone, Copy)]
+enum Rule {
+    /// Tag 1: ML-DSA-65 + Ed25519.
+    MlDsa65,
+    /// Tag 3: FN-DSA-512 (PREVIEW) + Ed25519.
+    FnDsa512,
+}
+
+impl Rule {
+    /// The rule `tag` names, or `None` for a tag this build holds no rule
+    /// for — the one place a marker byte is read as a rule.
+    fn of(tag: u8) -> Option<Rule> {
+        match tag {
+            TAG_MLDSA65_ED25519 => Some(Rule::MlDsa65),
+            TAG_FNDSA512_PREVIEW_ED25519 => Some(Rule::FnDsa512),
+            _ => None,
+        }
+    }
+}
 
 /// The KDF's salt — the derivation's own name, so the same seed under
 /// another KDF version derives other keys.
@@ -113,13 +145,12 @@ fn derive_half(seed: &[u8; 32], token: &str, half: &[u8]) -> [u8; 32] {
 }
 
 /// THE KDF: one seed to both half seeds under `tag`'s token; `None` for a
-/// tag no row names.
+/// tag no row names or this build holds no rule for.
 pub fn derive_seeds(tag: u8, seed: &[u8; 32]) -> Option<HalfSeeds> {
     let row = token_of_sig_alg(tag)?;
-    let pq_label = match tag {
-        TAG_MLDSA65_ED25519 => HALF_MLDSA65,
-        TAG_FNDSA512_PREVIEW_ED25519 => HALF_FNDSA512,
-        _ => return None,
+    let pq_label = match Rule::of(tag)? {
+        Rule::MlDsa65 => HALF_MLDSA65,
+        Rule::FnDsa512 => HALF_FNDSA512,
     };
     Some(HalfSeeds {
         ed25519: derive_half(seed, row.token, HALF_ED25519),
@@ -138,14 +169,10 @@ struct ExactBytes {
 
 impl rand_core_06::RngCore for ExactBytes {
     fn next_u32(&mut self) -> u32 {
-        let mut b = [0u8; 4];
-        self.fill_bytes(&mut b);
-        u32::from_le_bytes(b)
+        rand_core_06::impls::next_u32_via_fill(self)
     }
     fn next_u64(&mut self) -> u64 {
-        let mut b = [0u8; 8];
-        self.fill_bytes(&mut b);
-        u64::from_le_bytes(b)
+        rand_core_06::impls::next_u64_via_fill(self)
     }
     fn fill_bytes(&mut self, dest: &mut [u8]) {
         let end = self.taken + dest.len();
@@ -167,32 +194,27 @@ impl rand_core_06::RngCore for ExactBytes {
 
 impl rand_core_06::CryptoRng for ExactBytes {}
 
-/// A `rand_core` 0.6 view of the OS entropy `getrandom` supplies — what a
-/// tag-3 signature draws its 40-byte seed from outside a seeded fixture, and
-/// what [`HybridSigner::sign`] hands [`HybridSigner::sign_with_rng`].
-struct OsRng06;
-
-impl rand_core_06::RngCore for OsRng06 {
+/// `rand_core` 0.6's view of the crate's one OS RNG ([`OsEntropy`]): what a
+/// tag-3 signature draws its 40-byte seed from outside a seeded fixture,
+/// delegating to the 0.9 impl's `fill_bytes` so the OS draw and its
+/// fail-stop are stated once.
+impl rand_core_06::RngCore for OsEntropy {
     fn next_u32(&mut self) -> u32 {
-        let mut b = [0u8; 4];
-        self.fill_bytes(&mut b);
-        u32::from_le_bytes(b)
+        rand_core_06::impls::next_u32_via_fill(self)
     }
     fn next_u64(&mut self) -> u64 {
-        let mut b = [0u8; 8];
-        self.fill_bytes(&mut b);
-        u64::from_le_bytes(b)
+        rand_core_06::impls::next_u64_via_fill(self)
     }
     fn fill_bytes(&mut self, dest: &mut [u8]) {
-        getrandom::fill(dest).expect("OS entropy unavailable");
+        rand_core::RngCore::fill_bytes(self, dest)
     }
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core_06::Error> {
-        self.fill_bytes(dest);
+        rand_core::RngCore::fill_bytes(self, dest);
         Ok(())
     }
 }
 
-impl rand_core_06::CryptoRng for OsRng06 {}
+impl rand_core_06::CryptoRng for OsEntropy {}
 
 /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a stable
 /// API) — a DETERMINISTIC `rand_core` 0.6 stream for FIXTURES, SHA-256 in
@@ -215,14 +237,10 @@ impl SeededRng06 {
 
 impl rand_core_06::RngCore for SeededRng06 {
     fn next_u32(&mut self) -> u32 {
-        let mut b = [0u8; 4];
-        self.fill_bytes(&mut b);
-        u32::from_le_bytes(b)
+        rand_core_06::impls::next_u32_via_fill(self)
     }
     fn next_u64(&mut self) -> u64 {
-        let mut b = [0u8; 8];
-        self.fill_bytes(&mut b);
-        u64::from_le_bytes(b)
+        rand_core_06::impls::next_u64_via_fill(self)
     }
     fn fill_bytes(&mut self, dest: &mut [u8]) {
         use sha2::Digest;
@@ -252,9 +270,11 @@ impl rand_core_06::CryptoRng for SeededRng06 {}
 enum PqSigner {
     /// Tag 1: the expanded ML-DSA-65 signing key, from ξ.
     MlDsa65(ml_dsa::SigningKey<MlDsa65>),
-    /// Tag 3: the FN-DSA-512 signing key in `fn-dsa`'s encoding (1,281
-    /// bytes at degree 9), decoded per signature — the crate's `sign` takes
-    /// `&mut self` and its key type zeroizes on drop.
+    /// Tag 3: the FN-DSA-512 signing key in `fn-dsa`'s encoding
+    /// (`sign_key_size(FN_DSA_LOGN_512)` bytes — 1,345 at degree 9, its `f`,
+    /// `g`, `F` and the hashed verifying key, which `sizes_and_timings_per_tag`
+    /// pins), decoded per signature — the crate's `sign` takes `&mut self`
+    /// and its key type zeroizes on drop.
     FnDsa512(Vec<u8>),
 }
 
@@ -277,19 +297,20 @@ impl core::fmt::Debug for HybridSigner {
 impl HybridSigner {
     /// KEYGEN FROM SEED under `tag`'s frozen rule: the KDF's two half seeds,
     /// the Ed25519 key from its half, the PQ key from its half by the pinned
-    /// crate's own keygen. `None` for a tag no row names.
+    /// crate's own keygen. `None` for a tag no row names or this build holds
+    /// no rule for.
     pub fn from_seed(tag: u8, seed: &[u8; 32]) -> Option<HybridSigner> {
         let row = token_of_sig_alg(tag)?;
         let halves = derive_seeds(tag, seed)?;
         let ed = EdSigningKey::from_bytes(&halves.ed25519);
         let ed_pk = ed.verifying_key().to_bytes();
-        let (pq, pq_pk): (PqSigner, Vec<u8>) = match tag {
-            TAG_MLDSA65_ED25519 => {
+        let (pq, pq_pk): (PqSigner, Vec<u8>) = match Rule::of(tag)? {
+            Rule::MlDsa65 => {
                 let sk = ml_dsa::SigningKey::<MlDsa65>::from_seed(&halves.pq.into());
                 let pk = sk.verifying_key().encode();
                 (PqSigner::MlDsa65(sk), pk.as_slice().to_vec())
             }
-            TAG_FNDSA512_PREVIEW_ED25519 => {
+            Rule::FnDsa512 => {
                 let mut rng = ExactBytes { bytes: halves.pq.to_vec(), taken: 0 };
                 let mut sk = vec![0u8; sign_key_size(FN_DSA_LOGN_512)];
                 let mut vk = vec![0u8; vrfy_key_size(FN_DSA_LOGN_512)];
@@ -302,7 +323,6 @@ impl HybridSigner {
                 assert_eq!(rng.taken, 32, "fn-dsa 0.4.0's keygen draws its one 32-byte seed");
                 (PqSigner::FnDsa512(sk), vk)
             }
-            _ => return None,
         };
         let mut raw = pq_pk;
         raw.extend_from_slice(&ed_pk);
@@ -321,19 +341,25 @@ impl HybridSigner {
         self.row.tag
     }
 
-    /// The Ed25519 half's signing key — ONE of the two halves every blob this
-    /// signer makes carries, a session's and an entry's alike; alone it opens
-    /// nothing (no half opens a session alone). The goldens read it, and the
-    /// suites' negative vector — a 64-byte Ed25519-only `sig`, the classical
-    /// layout no served board admits — is made with it.
+    /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a stable
+    /// API) — the Ed25519 half's signing key, ONE of the two halves every blob
+    /// this signer makes carries, a session's and an entry's alike; alone it
+    /// opens nothing (no half opens a session alone). The goldens read it, and
+    /// the suites' negative vector — a 64-byte Ed25519-only `sig`, the
+    /// classical layout no served board admits — is made with it. Hidden
+    /// because its type is `ed25519-dalek`'s: a caller holding one names that
+    /// crate at this crate's version.
+    #[doc(hidden)]
     pub fn ed25519_signing_key(&self) -> &EdSigningKey {
         &self.ed
     }
 
-    /// SIGN `msg` (the entry frame's bytes) under the tag's rule: the PQ
-    /// signature THEN the Ed25519 signature, the blob a marker slot carries.
-    /// Tag 1 is deterministic (FIPS 204's deterministic variant, empty
-    /// `ctx`); tag 3 draws its per-signature seed from `rng`.
+    /// TEST HOOK (the same standing) — [`HybridSigner::sign`] with tag 3's
+    /// per-signature seed drawn from `rng`: the fixtures' door, handed a
+    /// [`SeededRng06`] so a tag-3 golden is byte-stable (tag 1 draws nothing).
+    /// Hidden because its bound is `rand_core` 0.6's — the version `fn-dsa`
+    /// 0.4.0 draws through, which a caller's own RNG would have to match.
+    #[doc(hidden)]
     pub fn sign_with_rng<R: rand_core_06::CryptoRng + rand_core_06::RngCore>(
         &self,
         msg: &[u8],
@@ -355,10 +381,13 @@ impl HybridSigner {
         blob
     }
 
-    /// [`HybridSigner::sign_with_rng`] under OS entropy for the tag-3 draw
-    /// (tag 1 draws nothing).
+    /// SIGN `msg` under the tag's rule: the PQ signature THEN the Ed25519
+    /// signature over the same bytes — the blob a marker slot carries, and a
+    /// session's `sig`. Tag 1 is deterministic (FIPS 204's deterministic
+    /// variant, empty `ctx`); tag 3 draws its per-signature seed from OS
+    /// entropy.
     pub fn sign(&self, msg: &[u8]) -> Vec<u8> {
-        self.sign_with_rng(msg, &mut OsRng06)
+        self.sign_with_rng(msg, &mut OsEntropy)
     }
 }
 
@@ -404,12 +433,9 @@ enum PqHalf {
 /// of the two decodes [`verify`] and [`key_decodes`] share.
 fn pq_half(tag: u8, key: &PublicKey) -> Option<PqHalf> {
     let pq = key.pq_half();
-    match tag {
-        TAG_MLDSA65_ED25519 => {
-            EncodedVerifyingKey::<MlDsa65>::try_from(pq).ok().map(PqHalf::MlDsa65)
-        }
-        TAG_FNDSA512_PREVIEW_ED25519 => VerifyingKeyStandard::decode(pq).map(PqHalf::FnDsa512),
-        _ => None,
+    match Rule::of(tag)? {
+        Rule::MlDsa65 => EncodedVerifyingKey::<MlDsa65>::try_from(pq).ok().map(PqHalf::MlDsa65),
+        Rule::FnDsa512 => VerifyingKeyStandard::decode(pq).map(PqHalf::FnDsa512),
     }
 }
 
@@ -470,19 +496,26 @@ pub fn verify(tag: u8, key: &PublicKey, sig: &[u8], msg: &[u8]) -> Result<(), Hy
     }
 }
 
-/// The widths a tag's rule fixes, restated from the crates' own constants so
-/// a crate bump that moved one fails a test by name: (PQ key, PQ signature,
-/// PQ signing key as stored).
+/// The widths a tag's rule fixes, READ OFF each pinned crate's own sizes —
+/// `ml-dsa`'s encoded-array types for tag 1, `fn-dsa`'s size functions for
+/// tag 3 — so a bump of either crate that moved one fails
+/// `sizes_and_timings_per_tag`'s literal pin by name: (PQ key, PQ signature,
+/// PQ signing key in its crate's encoding — the expanded key's for
+/// ML-DSA-65, which the signer holds decoded, and the bytes the signer
+/// stores for FN-DSA-512). `None` for a tag this build holds no rule for.
 pub fn pq_widths(tag: u8) -> Option<(usize, usize, usize)> {
-    match tag {
-        TAG_MLDSA65_ED25519 => Some((MLDSA65_KEY_LEN, 3309, 4032)),
-        TAG_FNDSA512_PREVIEW_ED25519 => Some((
+    Some(match Rule::of(tag)? {
+        Rule::MlDsa65 => (
+            EncodedVerifyingKey::<MlDsa65>::default().len(),
+            EncodedSignature::<MlDsa65>::default().len(),
+            ExpandedSigningKeyBytes::<MlDsa65>::default().len(),
+        ),
+        Rule::FnDsa512 => (
             vrfy_key_size(FN_DSA_LOGN_512),
             signature_size(FN_DSA_LOGN_512),
             sign_key_size(FN_DSA_LOGN_512),
-        )),
-        _ => None,
-    }
+        ),
+    })
 }
 
 #[cfg(test)]
@@ -559,6 +592,26 @@ mod tests {
         let still = PublicKey::parse(s1.public_key().alg(), &hex_string(&raw)).expect("the row's length");
         assert!(pq_half(TAG_MLDSA65_ED25519, &still).is_some(), "ML-DSA-65's encoding decodes at its length");
         assert!(!key_decodes(&bad) && key_decodes(&still), "the courtesy reads the same two decodes");
+    }
+
+    /// THE TAG SET is stated once ([`Rule::of`]): the KDF, keygen and the
+    /// widths answer for exactly the tags it names, over every marker byte,
+    /// so no step serves a tag another refuses — and the set is the two
+    /// rules the module card names.
+    #[test]
+    fn every_per_tag_step_answers_for_exactly_the_tags_rule_names() {
+        let seed = [0x42u8; 32];
+        for tag in 0..=u8::MAX {
+            let ruled = Rule::of(tag).is_some();
+            assert_eq!(derive_seeds(tag, &seed).is_some(), ruled, "the KDF, tag {tag}");
+            assert_eq!(HybridSigner::from_seed(tag, &seed).is_some(), ruled, "keygen, tag {tag}");
+            assert_eq!(pq_widths(tag).is_some(), ruled, "the widths, tag {tag}");
+        }
+        assert_eq!(
+            (0..=u8::MAX).filter(|&t| Rule::of(t).is_some()).collect::<Vec<_>>(),
+            [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519],
+            "this build holds exactly the two rules the module card names"
+        );
     }
 
     /// The KDF never hands either half the raw seed, and the two halves of

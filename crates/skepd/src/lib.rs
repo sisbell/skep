@@ -120,11 +120,20 @@ pub use server::{
 ///
 /// M10's operation vocabulary is deliberately NOT re-exported: `Request`,
 /// `Response`, `Op` and the `Codec` trait belong to `skep-febe`, which any
-/// client author already depends on to build an operation at all. The one
-/// foreign type left on this crate's public surface rides that same door:
-/// `PrincipalId`, which [`Daemon::dump_visible_to`] takes, is
-/// `skep-namespace`'s and reaches a client through `skep-febe`'s own
-/// re-export of it.
+/// client author already depends on to build an operation at all. The
+/// foreign types left on this crate's public surface each ride a door the
+/// caller already holds. `PrincipalId`, which [`Daemon::dump_visible_to`]
+/// takes, `Address`, which [`NodePrefix::address`] answers, and
+/// `Attestation`, which the doc-hidden test hook `Daemon::attestation_at`
+/// answers, are `skep-namespace`'s, `skep-address`'s and `skep-kernel`'s,
+/// and reach a client through `skep-febe`'s own re-exports. `PublicKey` —
+/// what a [`hybrid::HybridSigner`] answers for its key and what
+/// [`hybrid::verify`] and [`hybrid::key_decodes`] take — is
+/// `skep-identity`'s, which a client that holds keys depends on anyway to
+/// compose the enrollment records that seat them. The signature libraries'
+/// own types — `ed25519-dalek`'s signing key, `rand_core` 0.6's RNG traits —
+/// appear only on `hybrid`'s `#[doc(hidden)]` test hooks, and on no stable
+/// name.
 pub use skep_engine::{EngineError, HistoryError, OpenError, World};
 
 /// The dump [`Daemon::dump_visible_to`] answers with, re-exported for the

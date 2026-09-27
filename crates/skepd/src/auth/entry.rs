@@ -5,7 +5,8 @@
 //! guard IS the transaction's base. Nothing here is served or derived from
 //! the daemon's own state beyond what the design record §2.5 names:
 //!
-//! * `alg` — the `attest.alg` token as the frame carried it;
+//! * `alg` — the `attest.alg` token as the frame carried it — the one member
+//!   the snapshot does not supply, so it is applied last ([`Frame::bytes`]);
 //! * `board` — `H.1`'s committed pair (D13, RULED), read off the snapshot
 //!   by [`crate::write_path::board_pair`];
 //! * `account` — the act's principal's account in the board's local form,
@@ -98,14 +99,17 @@ impl<'a> Slot<'a> {
     }
 }
 
-/// THE FRAME for `op` by `principal` on `world`, under the `alg` token the
-/// attestation names — or why it cannot be composed.
+/// THE FRAME for `op` by `principal` on `world` — every member the op and
+/// the snapshot supply, composed once — or why it cannot be composed. `alg`
+/// is not among them: it is the presented attestation's own, applied last
+/// ([`Frame::bytes`]), so the check learns whether a frame CAN be composed
+/// before it asks for the member, and names no token for a write that
+/// presents none.
 pub(crate) fn compose(
     world: &World,
     op: &Op,
     principal: PrincipalId,
-    alg: &str,
-) -> Result<Vec<u8>, ComposeFault> {
+) -> Result<Frame, ComposeFault> {
     let (position, chain) = board_pair(world).ok_or(ComposeFault::NoBoard)?;
     let board = board_bytes(position, &chain);
     let account = world.m3().principal_prefix(principal).ok_or(ComposeFault::NoAccount)?;
@@ -142,5 +146,24 @@ pub(crate) fn compose(
             return Err(ComposeFault::NotAttestable);
         }
     };
-    Ok(entry_frame(alg, &board, &account, &doc, op_name(op.kind()), &body))
+    Ok(Frame { board, account, doc, op: op_name(op.kind()), body })
+}
+
+/// An ENTRY frame composed but for its `alg` member — [`compose`]'s answer,
+/// every other member in its byte form.
+pub(crate) struct Frame {
+    board: [u8; 40],
+    account: Vec<u8>,
+    doc: Vec<u8>,
+    op: &'static str,
+    body: Vec<u8>,
+}
+
+impl Frame {
+    /// The frame's bytes under `alg`, the token the presented attestation's
+    /// tag names — [`skep_identity::entry_frame`]'s layout,
+    /// `framed(ENTRY_TAG, [alg, board, account, doc, op, body])`.
+    pub(crate) fn bytes(&self, alg: &str) -> Vec<u8> {
+        entry_frame(alg, &self.board, &self.account, &self.doc, self.op, &self.body)
+    }
 }

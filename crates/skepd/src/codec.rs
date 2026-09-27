@@ -561,7 +561,7 @@ fn p_attest(v: &Value) -> PResult<Attestation> {
     let alg = field(m, "alg", p_string)?;
     let row = sig_alg_of(&alg)
         .ok_or_else(|| PErr(format!("field 'alg': unknown algorithm token '{}'", bounded(&alg))))?;
-    let sig = field(m, "sig", |v| p_hex(&p_string(v)?))?;
+    let sig = field(m, "sig", |v| p_hex(p_str(v)?))?;
     Attestation::new(row.tag, sig).map_err(|e| PErr(format!("field 'sig': {e}")))
 }
 
@@ -944,8 +944,16 @@ fn bounded(s: &str) -> String {
     }
 }
 
+/// A JSON string BORROWED from the tree — for a caller that only reads the
+/// text, so the hex forms decode off the frame's own bytes rather than off a
+/// copy of them. [`p_string`] is this plus the copy, for the callers that
+/// keep the text past `field`'s closure.
+fn p_str(v: &Value) -> PResult<&str> {
+    v.as_str().ok_or_else(|| PErr("expected a JSON string".into()))
+}
+
 fn p_string(v: &Value) -> PResult<String> {
-    v.as_str().map(str::to_owned).ok_or_else(|| PErr("expected a JSON string".into()))
+    p_str(v).map(str::to_owned)
 }
 
 fn p_u64(v: &Value) -> PResult<u64> {
@@ -1224,7 +1232,7 @@ fn p_val_form(v: &Value, out: &mut Vec<Val>) -> PResult<()> {
     }
     if m.contains_key("hex") {
         room(out, hex_values(m, "hex")?)?;
-        let bytes = field(m, "hex", |v| p_hex(&p_string(v)?))?;
+        let bytes = field(m, "hex", |v| p_hex(p_str(v)?))?;
         out.extend(bytes.into_iter().map(|b| Val::new(vec![b])));
     } else if m.contains_key("atom") {
         room(out, 1)?;
@@ -1235,7 +1243,7 @@ fn p_val_form(v: &Value, out: &mut Vec<Val>) -> PResult<()> {
         out.push(Val::new(s.into_bytes()));
     } else {
         room(out, 1)?;
-        let bytes = field(m, "atom_hex", |v| p_hex(&p_string(v)?))?;
+        let bytes = field(m, "atom_hex", |v| p_hex(p_str(v)?))?;
         if bytes.is_empty() {
             return Err(PErr("atom_hex: a zero-byte atom is not expressible".into()));
         }

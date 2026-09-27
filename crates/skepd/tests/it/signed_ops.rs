@@ -30,7 +30,7 @@ use skep_identity::{
     ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519,
 };
 use skepd::hybrid::{self, HybridSigner, SeededRng06};
-use skepd::JsonCodec;
+use skepd::{JsonCodec, Seq};
 use tempfile::tempdir;
 
 /// A refusal's `(code:detail, disposition)`.
@@ -74,7 +74,7 @@ fn at_or_below_the_claim_an_attest_is_dropped_unverified_and_unwritten() {
     });
     let v = op_unsigned(port, Some(&claimant), &frame.to_string());
     let at = acked_at(&v);
-    assert_eq!(sd.daemon().attestation_at(at).unwrap(), None, "dropped, never written");
+    assert_eq!(sd.daemon().attestation_at(Seq(at)).unwrap(), None, "dropped, never written");
     // The claim itself — the last unchecked write, from the device's signed
     // session; the test signer finds no `H.1` yet and attaches nothing.
     assert!(board_term(port).is_none(), "no H.1 before the claim");
@@ -82,7 +82,7 @@ fn at_or_below_the_claim_an_attest_is_dropped_unverified_and_unwritten() {
     let v = op(port, Some(&signed), &claim_frame(CLAIMANT_DOC1, CLAIMANT_ACCOUNT));
     let claim_at = acked_at(&v);
     assert!(claimed(port));
-    assert_eq!(sd.daemon().attestation_at(claim_at).unwrap(), None, "the claim's slot is empty");
+    assert_eq!(sd.daemon().attestation_at(Seq(claim_at)).unwrap(), None, "the claim's slot is empty");
     // THE CLAIM WROTE `H.1` in its own step: present at the claim's ack and
     // naming the claim's own position, with nothing forced.
     let (position, _) = board_term(port).expect("H.1 stands at the claim's ack");
@@ -121,7 +121,7 @@ fn a_fresh_claimed_board_admits_an_attested_publish_right_after_the_claim() {
     let runs = shot_runs(port, Some(&signed), &draft, 1, 2);
     let v = op(port, Some(&signed), &publish_frame(CLAIMANT_DOC1, Some((CLAIMANT_DOC1, 1)), Some(&draft), &runs));
     let member_at = acked_at(&v);
-    let slot = sd.daemon().attestation_at(member_at).unwrap().expect("the shot's slot is filled");
+    let slot = sd.daemon().attestation_at(Seq(member_at)).unwrap().expect("the shot's slot is filled");
     assert_eq!(slot.sig_alg(), hybrid::TAG_MLDSA65_ED25519);
     assert_eq!(filled_slots(&sd, 1, member_at), vec![member_at], "the shot's slot alone");
     assert_eq!(text_of(port, None, &acked_addr(&v), 1, 2), "de", "the member's content is the shot's runs");
@@ -131,7 +131,7 @@ fn a_fresh_claimed_board_admits_an_attested_publish_right_after_the_claim() {
 /// of a multi-record commit is no boundary and is skipped.
 fn filled_slots(sd: &skepd::Skepd, lo: u64, hi: u64) -> Vec<u64> {
     (lo..=hi)
-        .filter(|at| matches!(sd.daemon().attestation_at(*at), Ok(Some(_))))
+        .filter(|at| matches!(sd.daemon().attestation_at(Seq(*at)), Ok(Some(_))))
         .collect()
 }
 
@@ -169,11 +169,11 @@ fn above_the_claim_the_check_refuses_admits_and_names_each_cause() {
     assert_eq!(sig_hex.len(), 2 * 3373, "tag 1's blob: 3,309 ‖ 64");
     let v = op_unsigned(port, Some(&signed), &attached.to_string());
     let at = acked_at(&v);
-    let slot = sd.daemon().attestation_at(at).unwrap().expect("the slot is filled");
+    let slot = sd.daemon().attestation_at(Seq(at)).unwrap().expect("the slot is filled");
     assert_eq!(slot.sig_alg(), hybrid::TAG_MLDSA65_ED25519);
     assert_eq!(hex(slot.sig()), sig_hex, "the marker carries the attached blob, whole");
     // …and the transactions around it stay empty.
-    assert_eq!(sd.daemon().attestation_at(at - 1).ok().flatten(), None);
+    assert_eq!(sd.daemon().attestation_at(Seq(at - 1)).ok().flatten(), None);
 
     // Wrong bytes (the Ed25519 half flipped): signature, reorder.
     let mut tampered = attached.clone();
@@ -238,7 +238,7 @@ fn above_the_claim_the_check_refuses_admits_and_names_each_cause() {
     frame["attest"] = attached["attest"].clone();
     let v = op_unsigned(port, Some(&signed), &frame.to_string());
     let at = acked_at(&v);
-    assert_eq!(sd.daemon().attestation_at(at).unwrap(), None, "off-class: dropped");
+    assert_eq!(sd.daemon().attestation_at(Seq(at)).unwrap(), None, "off-class: dropped");
 }
 
 /// A2 / `not_enrolled_at_position`: an account whose set holds a key of ONE
@@ -317,7 +317,7 @@ fn the_three_ops_commit_attested_where_the_slice_reaches_them() {
     // make_link: a grant, attested.
     let v = op(port, Some(&signed), &typed_link_frame(CLAIMANT_DOC1, &[CLAIMANT_ACCOUNT], &[], T_GRANT));
     let link_at = acked_at(&v);
-    let slot = sd.daemon().attestation_at(link_at).unwrap().expect("the grant's slot");
+    let slot = sd.daemon().attestation_at(Seq(link_at)).unwrap().expect("the grant's slot");
     assert_eq!(slot.sig().len(), 3373);
 
     // publish: an edition published, then a shot re-supplying its bytes plus
@@ -330,7 +330,7 @@ fn the_three_ops_commit_attested_where_the_slice_reaches_them() {
     let frame = publish_frame(&edition, Some((&edition, 3)), Some(&draft), &runs);
     let v = op(port, Some(&signed), &frame);
     let member_at = acked_at(&v);
-    let slot = sd.daemon().attestation_at(member_at).unwrap().expect("the shot's slot");
+    let slot = sd.daemon().attestation_at(Seq(member_at)).unwrap().expect("the shot's slot");
     assert_eq!(slot.sig_alg(), 1);
     assert_eq!(text_of(port, None, &acked_addr(&v), 1, 5), "abcde");
     // The same shot unattested: required.
@@ -342,11 +342,11 @@ fn the_three_ops_commit_attested_where_the_slice_reaches_them() {
     let ordinal = next_content_ordinal(port, Some(&signed), CLAIMANT_DOC1);
     let v = op_unsigned(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "r", true));
     let dep_at = acked_at(&v);
-    assert_eq!(sd.daemon().attestation_at(dep_at).unwrap(), None, "exempt: the record's sig is its carrier");
+    assert_eq!(sd.daemon().attestation_at(Seq(dep_at)).unwrap(), None, "exempt: the record's sig is its carrier");
     let ordinal = next_content_ordinal(port, Some(&signed), CLAIMANT_DOC1);
     let v = op(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "s", true));
     let dep_at = acked_at(&v);
-    assert_eq!(sd.daemon().attestation_at(dep_at).unwrap(), None, "attached, dropped: exempt");
+    assert_eq!(sd.daemon().attestation_at(Seq(dep_at)).unwrap(), None, "attached, dropped: exempt");
     // An UNDECLARED insert into the published home: the check demands and
     // verifies, then the store refuses — the check's order.
     let v = op_unsigned(port, Some(&signed), &insert_frame(CLAIMANT_DOC1, ordinal, "t", false));
@@ -438,11 +438,11 @@ fn d26_a_credential_deposits_two_positions_take_no_entry_signature() {
     link["attest"] = json!({"alg": ALG_MLDSA65_ED25519, "sig": hex(&[0xAB; 3373])});
     let v = op_unsigned(port, Some(&registrar), &link.to_string());
     let link_at = acked_at(&v);
-    assert_eq!(sd.daemon().attestation_at(link_at).unwrap(), None, "dropped by route");
+    assert_eq!(sd.daemon().attestation_at(Seq(link_at)).unwrap(), None, "dropped by route");
     // The agent, keyed, attests its own publish-class write.
     let home = acked_addr(&op(port, Some(&agent_signed), &create_frame(&agent, None)));
     let v = op(port, Some(&agent_signed), &typed_link_frame(&home, &[&agent], &[], T_GRANT));
-    assert!(sd.daemon().attestation_at(acked_at(&v)).unwrap().is_some());
+    assert!(sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().is_some());
 }
 
 // ── the frames and the goldens ──────────────────────────────────────────────
@@ -547,7 +547,7 @@ fn golden_of(tag: u8) -> (HybridSigner, SignedFrames) {
         // reseeded per op so each signature is a function of its frame alone.
         let mut rng = SeededRng06::new(GOLDEN_SEED);
         let sig = signer.sign_with_rng(&frame, &mut rng);
-        assert_eq!(hybrid::verify(tag, signer.public_key(), &sig, &frame), Ok(()));
+        assert_eq!(hybrid::verify(tag, signer.public_key(), &frame, &sig), Ok(()));
         out.push((op.to_string(), frame, sig));
     }
     (signer, out)
@@ -556,15 +556,6 @@ fn golden_of(tag: u8) -> (HybridSigner, SignedFrames) {
 fn check_golden(g: &TagGolden) {
     let (signer, signed) = golden_of(g.tag);
     let key = signer.public_key();
-    let got = TagGolden {
-        tag: g.tag,
-        pq_pk: "",
-        ed_pk: "",
-        raw_key: "",
-        fingerprint: "",
-        sigs: ["", "", ""],
-    };
-    let _ = got;
     let pq = sha_hex(key.pq_half());
     let ed = sha_hex(key.ed25519_half());
     let raw = sha_hex(key.raw());
@@ -638,12 +629,12 @@ fn each_half_alone_fails_under_both_tags() {
         // The PQ half ours, the Ed25519 half theirs.
         let mut mixed = sig[..row.pq_sig_len].to_vec();
         mixed.extend_from_slice(&foreign[row.pq_sig_len..]);
-        assert!(hybrid::verify(tag, signer.public_key(), &mixed, frame).is_err(), "tag {tag}: ed half");
+        assert!(hybrid::verify(tag, signer.public_key(), frame, &mixed).is_err(), "tag {tag}: ed half");
         // The Ed25519 half ours, the PQ half theirs.
         let mut mixed = foreign[..row.pq_sig_len].to_vec();
         mixed.extend_from_slice(&sig[row.pq_sig_len..]);
-        assert!(hybrid::verify(tag, signer.public_key(), &mixed, frame).is_err(), "tag {tag}: pq half");
-        assert_eq!(hybrid::verify(tag, signer.public_key(), sig, frame), Ok(()));
+        assert!(hybrid::verify(tag, signer.public_key(), frame, &mixed).is_err(), "tag {tag}: pq half");
+        assert_eq!(hybrid::verify(tag, signer.public_key(), frame, sig), Ok(()));
     }
 }
 
@@ -690,7 +681,8 @@ fn sizes_and_timings_per_tag() {
         let sig_len = signed[0].2.len();
         assert_eq!(key_len, row.key_len());
         assert_eq!(sig_len, row.sig_len());
-        let (pq_key, pq_sig, pq_sk) = hybrid::pq_widths(tag).unwrap();
+        let hybrid::PqWidths { key: pq_key, sig: pq_sig, signing_key: pq_sk } =
+            hybrid::pq_widths(tag).unwrap();
         let frame = &signed[0].1;
         let n = 40;
         let mut sign_us = Vec::new();
@@ -704,7 +696,7 @@ fn sizes_and_timings_per_tag() {
             let sig = s.sign(frame);
             sign_us.push(t.elapsed().as_micros());
             let t = Instant::now();
-            assert_eq!(hybrid::verify(tag, s.public_key(), &sig, frame), Ok(()));
+            assert_eq!(hybrid::verify(tag, s.public_key(), frame, &sig), Ok(()));
             verify_us.push(t.elapsed().as_micros());
         }
         let median = |v: &mut Vec<u128>| {
@@ -726,11 +718,17 @@ fn sizes_and_timings_per_tag() {
     // `ml-dsa` 0.1.1's ML-DSA-65 — FIPS 204's verifying key, signature and
     // expanded signing key — read off the crate by `pq_widths` and pinned here
     // by hand.
-    assert_eq!(hybrid::pq_widths(1), Some((1952, 3309, 4032)));
+    assert_eq!(
+        hybrid::pq_widths(1),
+        Some(hybrid::PqWidths { key: 1952, sig: 3309, signing_key: 4032 })
+    );
     // `fn-dsa` 0.4.0's signing key at degree 9: 65 + (6 << 7) + 512 = 1,345
     // (its `f, g, F` and the hashed verifying key), the PQ investigation's
     // measured figure.
-    assert_eq!(hybrid::pq_widths(3), Some((897, 666, 1345)));
+    assert_eq!(
+        hybrid::pq_widths(3),
+        Some(hybrid::PqWidths { key: 897, sig: 666, signing_key: 1345 })
+    );
 }
 
 /// THE FN-DSA PREVIEW's signer backend on this machine (the owner's added
@@ -756,7 +754,7 @@ fn the_fn_dsa_preview_signs_and_verifies_on_this_target() {
     );
     let (signer, signed) = golden_of(3);
     for (op, frame, sig) in &signed {
-        assert_eq!(hybrid::verify(3, signer.public_key(), sig, frame), Ok(()), "{op}");
+        assert_eq!(hybrid::verify(3, signer.public_key(), frame, sig), Ok(()), "{op}");
         assert_eq!(sig.len(), 730);
     }
 }

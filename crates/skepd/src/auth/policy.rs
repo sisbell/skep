@@ -701,7 +701,11 @@ pub(super) fn published_unprojected(world: &World, a: &Address) -> bool {
 /// `attest` this admission verified, and nothing else — which holds because
 /// the codec hands the member over BESIDE the request and not inside it
 /// (`DaemonOp::Febe`'s `presented`), so the plain sequence's assignment of
-/// this answer is `Request::attest`'s one writer.
+/// this answer is `Request::attest`'s one writer. The member arrives BY
+/// VALUE and leaves as the answer or not at all: what the check admits is
+/// the presented `Attestation` itself, moved into `Ok(Some(_))`, and every
+/// arm that drops it drops it here — so the admitted value is the presented
+/// one by construction, not by a copy that must match it.
 ///
 /// `world` and `identity` MUST be the pair taken under the read guard for
 /// this request; the guard argument is that contract's cheap half.
@@ -712,7 +716,7 @@ fn board_state_admission(
     op: &Op,
     principal: PrincipalId,
     signer: Option<&Fingerprint>,
-    presented: Option<&Attestation>,
+    presented: Option<Attestation>,
 ) -> Result<Option<Attestation>, CredentialRefusal> {
     if identity.claimant().is_some() {
         // A1: the check runs on a CLAIMED board — every write reaching this
@@ -794,7 +798,7 @@ fn attestation_check(
     identity: &IdentityState,
     op: &Op,
     principal: PrincipalId,
-    presented: Option<&Attestation>,
+    presented: Option<Attestation>,
 ) -> Result<Option<Attestation>, CredentialRefusal> {
     // 1 — the checked set, [`entry::in_checked_set`]'s one statement of it.
     if !entry::in_checked_set(op.kind()) {
@@ -855,9 +859,9 @@ fn attestation_check(
     }
     if candidates
         .iter()
-        .any(|key| hybrid::verify(row.tag, key, presented.sig(), &bytes).is_ok())
+        .any(|key| hybrid::verify(row.tag, key, &bytes, presented.sig()).is_ok())
     {
-        Ok(Some(presented.clone()))
+        Ok(Some(presented))
     } else {
         Err(invalid(AttestFault::Signature))
     }
@@ -1209,7 +1213,7 @@ pub(crate) fn plain_admission(
     op: &Op,
     principal: PrincipalId,
     signer: Option<&Fingerprint>,
-    presented: Option<&Attestation>,
+    presented: Option<Attestation>,
 ) -> Result<Option<Attestation>, CredentialRefusal> {
     if let Some(r) = first_mint_private_refusal(lock, world, op, principal) {
         return Err(r);

@@ -945,7 +945,7 @@ fn h_a_crash_between_the_claim_and_its_head_reopens_with_h1() {
     let v = op(port, Some(&signed), &typed_link_frame(CLAIMANT_DOC1, &[CLAIMANT_ACCOUNT], &[], T_GRANT));
     let at = acked_at(&v);
     assert!(
-        sd.daemon().attestation_at(at).expect("a boundary").is_some(),
+        sd.daemon().attestation_at(Seq(at)).expect("a boundary").is_some(),
         "the first attested write after the reopen is admitted and attested"
     );
     sd.shutdown();

@@ -787,7 +787,7 @@ pub(crate) fn session_payload(
 /// ([`hybrid::key_decodes`]) — one pair of functions in `hybrid`, which is
 /// what keeps the two answering alike.
 fn verify(key: &PublicKey, payload: &[u8], sig: &[u8]) -> bool {
-    key.sig_alg().is_some_and(|row| hybrid::verify(row.tag, key, sig, payload).is_ok())
+    key.sig_alg().is_some_and(|row| hybrid::verify(row.tag, key, payload, sig).is_ok())
 }
 
 /// AUTH-4.33 — try EVERY enrolled key in fingerprint order, EACH UNDER ITS

@@ -189,10 +189,11 @@ const _: fn() = || {
     assert_send_sync::<PortAlreadyBound>();
     assert_send_sync::<Peer>();
     // The signed-ops arrivals (`hybrid`): the signer a client holds across
-    // threads, the seeds it derives from, the verify's refusal, and the
-    // fixtures' seeded stream.
+    // threads, the seeds it derives from, the verify's refusal, the
+    // fixtures' seeded stream, and the widths the sizes pin reads.
     assert_send_sync::<hybrid::HybridSigner>();
     assert_send_sync::<hybrid::HalfSeeds>();
     assert_send_sync::<hybrid::HybridFault>();
     assert_send_sync::<hybrid::SeededRng06>();
+    assert_send_sync::<hybrid::PqWidths>();
 };

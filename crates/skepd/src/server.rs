@@ -1800,7 +1800,7 @@ impl Daemon {
             &frame.op,
             binding.principal,
             binding.signer.as_ref(),
-            presented.as_ref(),
+            presented,
         ) {
             Ok(admitted) => admitted,
             Err(r) => return with_signal(credential_refused(meta.kind, &r), closed),
@@ -2061,13 +2061,14 @@ impl Daemon {
 
     /// TEST HOOK (the same standing: `#[doc(hidden)]`, not a stable API):
     /// the MARKER SLOT of the transaction that committed the boundary `at` —
-    /// `Kernel::attestation_at` on the daemon's own kernel — so a suite can
-    /// pin WHICH commits' marker slots the write-path check filled and which
-    /// stayed empty (signed ops), `/changes` carrying no `attest` member yet
-    /// (the design record §7.3 (i), owed).
+    /// `Kernel::attestation_at` on the daemon's own kernel, and a [`Seq`] as
+    /// that read and [`Daemon::world_at`] take one — so a suite can pin WHICH
+    /// commits' marker slots the write-path check filled and which stayed
+    /// empty (signed ops), `/changes` carrying no `attest` member yet (the
+    /// design record §7.3 (i), owed).
     #[doc(hidden)]
-    pub fn attestation_at(&self, at: u64) -> Result<Option<Attestation>, HistoryError> {
-        self.engine.kernel().attestation_at(Seq(at))
+    pub fn attestation_at(&self, at: Seq) -> Result<Option<Attestation>, HistoryError> {
+        self.engine.kernel().attestation_at(at)
     }
 
     /// `POST /op-at` — answer one READ frame as of a committed position:

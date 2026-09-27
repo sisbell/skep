@@ -29,7 +29,8 @@
 //! the store answer, which keeps the store's refusal ahead of a signature
 //! verdict over bytes nobody could have signed.
 
-use skep_arrangement::trunk_of;
+use skep_address::{Address, Span};
+use skep_arrangement::{trunk_of, Deposit};
 use skep_content::HasContent;
 use skep_febe::{Op, OpKind};
 use skep_identity::{
@@ -82,8 +83,8 @@ pub(crate) fn in_checked_set(kind: OpKind) -> bool {
 /// A link slot as the entry frame's slot row takes it — the resolve form's
 /// V-specs re-paired as `(source, span)`.
 enum Slot<'a> {
-    Addrs(&'a [skep_address::Address]),
-    Resolve(Vec<(skep_address::Address, skep_address::Span)>),
+    Addrs(&'a [Address]),
+    Resolve(Vec<(Address, Span)>),
 }
 
 impl<'a> Slot<'a> {
@@ -122,8 +123,8 @@ pub(crate) fn compose(
     let (doc, body) = match op {
         Op::Insert { doc, values, deposit, .. } => {
             let declared = match deposit {
-                skep_arrangement::Deposit::Declared(ty) => Some(ty),
-                skep_arrangement::Deposit::Undeclared => None,
+                Deposit::Declared(ty) => Some(ty),
+                Deposit::Undeclared => None,
             };
             let values = values.iter().map(|v| v.as_bytes());
             (address_bytes(&trunk_of(doc)), entry_body_insert(declared, values))

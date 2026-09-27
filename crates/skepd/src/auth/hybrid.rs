@@ -57,6 +57,8 @@
 //! signer and by the goldens that pin each tag's rule; the daemon itself
 //! holds no key and never signs.
 
+use std::fmt;
+
 use ed25519_dalek::{Signer as _, SigningKey as EdSigningKey, VerifyingKey as EdVerifyingKey};
 use fn_dsa::{
     signature_size, sign_key_size, vrfy_key_size, KeyPairGenerator, KeyPairGeneratorStandard,
@@ -121,8 +123,13 @@ const HALF_ED25519: &[u8] = b"ed25519";
 const HALF_MLDSA65: &[u8] = b"ml-dsa-65";
 const HALF_FNDSA512: &[u8] = b"fn-dsa-512";
 
-/// The two half seeds one 32-byte seed derives under one tag.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// The two half seeds one 32-byte seed derives under one tag —
+/// private-key material, so `Clone` and nothing more: not `Copy`, which
+/// could never be taken back and would bar a `Drop` that zeroizes; and no
+/// derived `PartialEq`, whose comparison stops at the first differing byte.
+/// Either can be added later without breaking a caller; neither could be
+/// removed.
+#[derive(Clone)]
 pub struct HalfSeeds {
     /// The Ed25519 half's seed (`ed25519-dalek`'s `SigningKey::from_bytes`).
     pub ed25519: [u8; 32],
@@ -131,9 +138,9 @@ pub struct HalfSeeds {
     pub pq: [u8; 32],
 }
 
-impl core::fmt::Debug for HalfSeeds {
+impl fmt::Debug for HalfSeeds {
     /// A seed is private-key material: never printed.
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("HalfSeeds(..)")
     }
 }
@@ -142,12 +149,12 @@ impl core::fmt::Debug for HalfSeeds {
 /// `info = token ‖ 0x00 ‖ half`, 32 bytes out.
 fn derive_half(seed: &[u8; 32], token: &str, half: &[u8]) -> [u8; 32] {
     let hk = Hkdf::<Sha256>::new(Some(KDF_SALT), seed);
-    let mut info = Vec::with_capacity(token.len() + 1 + half.len());
-    info.extend_from_slice(token.as_bytes());
-    info.push(0);
-    info.extend_from_slice(half);
     let mut out = [0u8; 32];
-    hk.expand(&info, &mut out).expect("32 bytes is within HKDF-SHA-256's output bound");
+    // `info = token ‖ 0x00 ‖ half`, handed over as its three components:
+    // `hkdf`'s own `expand` is `expand_multi_info` over one component, so the
+    // concatenation is the crate's to make and no buffer is built here.
+    hk.expand_multi_info(&[token.as_bytes(), &[0u8], half], &mut out)
+        .expect("32 bytes is within HKDF-SHA-256's output bound");
     out
 }
 
@@ -168,13 +175,15 @@ pub fn derive_seeds(tag: u8, seed: &[u8; 32]) -> Option<HalfSeeds> {
 /// An RNG that yields EXACTLY the bytes it was given and then refuses — what
 /// `fn-dsa` 0.4.0's keygen is fed so that its one 32-byte draw IS the KDF's
 /// FN-DSA seed. A longer draw would be a keygen this build did not pin, and
-/// under the frozen-tag rule a NEW tag; refusing it makes the rule loud.
-struct ExactBytes {
-    bytes: Vec<u8>,
+/// under the frozen-tag rule a NEW tag; refusing it makes the rule loud. It
+/// BORROWS the bytes: the KDF's half seed is lent to the keygen and never
+/// copied onto the heap.
+struct ExactBytes<'a> {
+    bytes: &'a [u8],
     taken: usize,
 }
 
-impl rand_core_06::RngCore for ExactBytes {
+impl rand_core_06::RngCore for ExactBytes<'_> {
     fn next_u32(&mut self) -> u32 {
         rand_core_06::impls::next_u32_via_fill(self)
     }
@@ -199,7 +208,7 @@ impl rand_core_06::RngCore for ExactBytes {
     }
 }
 
-impl rand_core_06::CryptoRng for ExactBytes {}
+impl rand_core_06::CryptoRng for ExactBytes<'_> {}
 
 /// `rand_core` 0.6's view of the crate's one OS RNG ([`OsEntropy`]): what a
 /// tag-3 signature draws its 40-byte seed from outside a seeded fixture,
@@ -233,12 +242,23 @@ impl rand_core_06::CryptoRng for OsEntropy {}
 pub struct SeededRng06 {
     seed: [u8; 32],
     counter: u64,
-    buf: Vec<u8>,
+    /// The current SHA-256 block, handed out front to back; `used ==
+    /// block.len()` when the next byte needs a fresh one.
+    block: [u8; 32],
+    used: usize,
 }
 
 impl SeededRng06 {
     pub fn new(seed: [u8; 32]) -> SeededRng06 {
-        SeededRng06 { seed, counter: 0, buf: Vec::new() }
+        let block = [0; 32];
+        SeededRng06 { seed, counter: 0, used: block.len(), block }
+    }
+}
+
+/// The stream's position, never its seed: this module prints no seed.
+impl fmt::Debug for SeededRng06 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SeededRng06").field("counter", &self.counter).finish_non_exhaustive()
     }
 }
 
@@ -251,18 +271,18 @@ impl rand_core_06::RngCore for SeededRng06 {
     }
     fn fill_bytes(&mut self, dest: &mut [u8]) {
         use sha2::Digest;
-        for out in dest.iter_mut() {
-            if self.buf.is_empty() {
-                let block: [u8; 32] = Sha256::new()
+        for out in dest {
+            if self.used == self.block.len() {
+                self.block = Sha256::new()
                     .chain_update(self.seed)
                     .chain_update(self.counter.to_be_bytes())
                     .finalize()
                     .into();
                 self.counter += 1;
-                self.buf = block.to_vec();
-                self.buf.reverse();
+                self.used = 0;
             }
-            *out = self.buf.pop().expect("refilled above");
+            *out = self.block[self.used];
+            self.used += 1;
         }
     }
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core_06::Error> {
@@ -296,8 +316,8 @@ pub struct HybridSigner {
     public: PublicKey,
 }
 
-impl core::fmt::Debug for HybridSigner {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl fmt::Debug for HybridSigner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "HybridSigner(tag {}, {:?})", self.row.tag, self.public)
     }
 }
@@ -319,7 +339,7 @@ impl HybridSigner {
                 (PqSigner::MlDsa65(sk), pk.as_slice().to_vec())
             }
             Rule::FnDsa512PreviewEd25519 => {
-                let mut rng = ExactBytes { bytes: halves.pq.to_vec(), taken: 0 };
+                let mut rng = ExactBytes { bytes: &halves.pq, taken: 0 };
                 let mut sk = vec![0u8; sign_key_size(FN_DSA_LOGN_512)];
                 let mut vk = vec![0u8; vrfy_key_size(FN_DSA_LOGN_512)];
                 KeyPairGeneratorStandard::default().keygen(
@@ -401,8 +421,10 @@ impl HybridSigner {
 }
 
 /// Why a hybrid signature did not verify — the cause a verifier can tell
-/// from the bytes in hand and nothing else.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// from the bytes in hand and nothing else. The three are everything those
+/// bytes can tell apart, so the set is closed by design and not
+/// `#[non_exhaustive]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HybridFault {
     /// The tag names no row, or the key is not that row's.
     WrongRow,
@@ -412,6 +434,29 @@ pub enum HybridFault {
     /// "both halves verify" a partial pass is no pass.
     Rejected,
 }
+
+/// The cause in words a log line can carry — for [`HybridFault::Rejected`]
+/// still not which half, which the variant does not know.
+impl fmt::Display for HybridFault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            HybridFault::WrongRow => {
+                "the key is not of the row the marker tag names, or the tag names no row"
+            }
+            HybridFault::Malformed => "the signature blob is not its row's fixed width",
+            HybridFault::Rejected => {
+                "the hybrid signature did not verify: both halves must, and a partial pass is no \
+                 pass"
+            }
+        })
+    }
+}
+
+/// The ecosystem door, as [`crate::NotCanonical`] and
+/// [`crate::PortAlreadyBound`] keep it: only a type carrying `Display` and
+/// `std::error::Error` composes with `?` into a caller's own error type, and
+/// a caller cannot add either impl.
+impl std::error::Error for HybridFault {}
 
 /// A hybrid key's Ed25519 half as a verifier — `ed25519-dalek`'s
 /// `VerifyingKey::from_bytes`, the canonical point decode (the crate pick is
@@ -475,7 +520,13 @@ pub fn key_decodes(key: &PublicKey) -> bool {
 /// under the Ed25519 half (`verify_strict`) — must verify over the SAME
 /// `msg`. Either failing fails. Each half is decoded by `ed25519_half` and
 /// `pq_half`, the decodes [`key_decodes`] runs alone.
-pub fn verify(tag: u8, key: &PublicKey, sig: &[u8], msg: &[u8]) -> Result<(), HybridFault> {
+///
+/// `msg` comes before `sig`, the order RustCrypto's
+/// `signature::Verifier::verify`, `ed25519-dalek`'s `verify_strict` and this
+/// crate's own `session::verify` take them: the two are `&[u8]` the compiler
+/// cannot tell apart, so the order a Rust caller already knows is the one
+/// that holds.
+pub fn verify(tag: u8, key: &PublicKey, msg: &[u8], sig: &[u8]) -> Result<(), HybridFault> {
     let row = token_of_sig_alg(tag).ok_or(HybridFault::WrongRow)?;
     if key.alg() != row.token {
         return Err(HybridFault::WrongRow);
@@ -510,26 +561,41 @@ pub fn verify(tag: u8, key: &PublicKey, sig: &[u8], msg: &[u8]) -> Result<(), Hy
     }
 }
 
-/// The widths a tag's rule fixes, READ OFF each pinned crate's own sizes —
-/// `ml-dsa`'s encoded-array types for tag 1, `fn-dsa`'s size functions for
-/// tag 3 — so a bump of either crate that moved one fails
-/// `sizes_and_timings_per_tag`'s literal pin by name: (PQ key, PQ signature,
-/// PQ signing key in its crate's encoding — the expanded key's for
-/// ML-DSA-65, which the signer holds decoded, and the bytes the signer
-/// stores for the FN-DSA-512 preview). `None` for a tag this build holds no
-/// rule for.
-pub fn pq_widths(tag: u8) -> Option<(usize, usize, usize)> {
+/// The widths one tag's rule fixes — [`pq_widths`]' answer. Named, not a
+/// triple: three `usize`s meaning three things, printed into a report that
+/// is transcribed.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PqWidths {
+    /// The PQ half's verifying key.
+    pub key: usize,
+    /// The PQ half's signature.
+    pub sig: usize,
+    /// The PQ signing key in its crate's encoding — the expanded key's for
+    /// ML-DSA-65, which the signer holds decoded, and the bytes the signer
+    /// stores for the FN-DSA-512 preview.
+    pub signing_key: usize,
+}
+
+/// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a stable
+/// API) — the widths a tag's rule fixes, READ OFF each pinned crate's own
+/// sizes — `ml-dsa`'s encoded-array types for tag 1, `fn-dsa`'s size
+/// functions for tag 3 — so a bump of either crate that moved one fails
+/// `sizes_and_timings_per_tag`'s literal pin by name. `None` for a tag this
+/// build holds no rule for.
+#[doc(hidden)]
+pub fn pq_widths(tag: u8) -> Option<PqWidths> {
     Some(match Rule::of(tag)? {
-        Rule::MlDsa65Ed25519 => (
-            EncodedVerifyingKey::<MlDsa65>::default().len(),
-            EncodedSignature::<MlDsa65>::default().len(),
-            ExpandedSigningKeyBytes::<MlDsa65>::default().len(),
-        ),
-        Rule::FnDsa512PreviewEd25519 => (
-            vrfy_key_size(FN_DSA_LOGN_512),
-            signature_size(FN_DSA_LOGN_512),
-            sign_key_size(FN_DSA_LOGN_512),
-        ),
+        Rule::MlDsa65Ed25519 => PqWidths {
+            key: EncodedVerifyingKey::<MlDsa65>::default().len(),
+            sig: EncodedSignature::<MlDsa65>::default().len(),
+            signing_key: ExpandedSigningKeyBytes::<MlDsa65>::default().len(),
+        },
+        Rule::FnDsa512PreviewEd25519 => PqWidths {
+            key: vrfy_key_size(FN_DSA_LOGN_512),
+            sig: signature_size(FN_DSA_LOGN_512),
+            signing_key: sign_key_size(FN_DSA_LOGN_512),
+        },
     })
 }
 
@@ -554,22 +620,22 @@ mod tests {
             let mut rng = SeededRng06::new([7; 32]);
             let sig = s1.sign_with_rng(msg, &mut rng);
             assert_eq!(sig.len(), row.sig_len());
-            assert_eq!(verify(tag, s1.public_key(), &sig, msg), Ok(()));
-            assert_eq!(verify(tag, s1.public_key(), &sig, b"other"), Err(HybridFault::Rejected));
+            assert_eq!(verify(tag, s1.public_key(), msg, &sig), Ok(()));
+            assert_eq!(verify(tag, s1.public_key(), b"other", &sig), Err(HybridFault::Rejected));
             // The Ed25519 half broken.
             let mut broken = sig.clone();
             broken[row.pq_sig_len] ^= 1;
-            assert_eq!(verify(tag, s1.public_key(), &broken, msg), Err(HybridFault::Rejected));
+            assert_eq!(verify(tag, s1.public_key(), msg, &broken), Err(HybridFault::Rejected));
             // The PQ half broken.
             let mut broken = sig.clone();
             broken[3] ^= 1;
-            assert_eq!(verify(tag, s1.public_key(), &broken, msg), Err(HybridFault::Rejected));
+            assert_eq!(verify(tag, s1.public_key(), msg, &broken), Err(HybridFault::Rejected));
             // The wrong width.
-            assert_eq!(verify(tag, s1.public_key(), &sig[1..], msg), Err(HybridFault::Malformed));
+            assert_eq!(verify(tag, s1.public_key(), msg, &sig[1..]), Err(HybridFault::Malformed));
             // The other tag's key.
             let other = if tag == 1 { 3 } else { 1 };
             let o = HybridSigner::from_seed(other, &seed).unwrap();
-            assert_eq!(verify(tag, o.public_key(), &sig, msg), Err(HybridFault::WrongRow));
+            assert_eq!(verify(tag, o.public_key(), msg, &sig), Err(HybridFault::WrongRow));
             assert_ne!(
                 s1.ed25519_signing_key().to_bytes(),
                 o.ed25519_signing_key().to_bytes(),
@@ -627,6 +693,25 @@ mod tests {
             [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519],
             "this build holds exactly the two rules the module card names"
         );
+    }
+
+    /// The verify's refusal is an ERROR a caller propagates with `?` into
+    /// its own error type — the door the crate's other public errors keep —
+    /// and its text does not guess which half failed.
+    #[test]
+    fn a_verify_refusal_propagates_as_an_error() {
+        fn propagate(
+            r: Result<(), HybridFault>,
+        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            r?;
+            Ok(())
+        }
+        for fault in [HybridFault::WrongRow, HybridFault::Malformed, HybridFault::Rejected] {
+            let e = propagate(Err(fault)).expect_err("a refusal propagates");
+            assert_eq!(e.to_string(), fault.to_string());
+        }
+        let rejected = HybridFault::Rejected.to_string();
+        assert!(!rejected.contains("Ed25519") && !rejected.contains("post-quantum"), "{rejected}");
     }
 
     /// The KDF never hands either half the raw seed, and the two halves of

@@ -246,7 +246,7 @@ impl JsonCodec {
     /// a zero-byte atom says nothing), carries an `id`, if any, that is
     /// UTF-8, which a `ReqId` this codec parsed always is, and carries an
     /// `attest`, if any, only on an op of the checked set (`insert`,
-    /// `make_link`, `publish`: the set `auth::entry::in_checked_set` states
+    /// `make_link`, `publish`: the set `in_checked_set` states
     /// and the parse side admits the member on), under a marker tag a
     /// `SIG_ALGS` row names, which an `Attestation` this codec parsed always
     /// is. Under all of that, `parse(marshal_request(r))` reproduces `r` and
@@ -559,7 +559,7 @@ fn parse_value(v: Value) -> PResult<Request> {
     let id = fields.req_id()?;
     let op = parse_op(&name, &mut fields)?;
     // The optional `attest` member, admitted on the checked set
-    // [`crate::auth::entry::in_checked_set`] states and on no other op — left
+    // [`in_checked_set`] states and on no other op — left
     // in the map elsewhere, so `finish` refuses it by the unknown-field rule,
     // as a daemon that predates the member does (the design record §7.3 (ii)).
     let attest = fields.attest(op.kind())?;
@@ -708,6 +708,24 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
     })
 }
 
+/// THE CHECKED SET — the op kinds the write-path check reaches, and so the
+/// ops an ENTRY frame is composed for: `insert`, `make_link`, `publish` (the
+/// owner's term, m2, the design record's round 5 rulings 2026-09-26; the
+/// seam build's three — the record's thirteen publish-class-capable inputs
+/// are the WIDENING lane's). The ONE statement of it: the codec admits a
+/// request's `attest` member exactly on these, the check demands and
+/// verifies one exactly on these, and [`crate::auth::entry::compose`] has an arm exactly for
+/// these. The acting hand ATTESTS; the check admits or refuses, and signs
+/// nothing. The three must agree in both directions — a member the codec
+/// admits and the check never demands is a signature parsed and silently
+/// DROPPED, the commit landing with its marker slot empty; one the check
+/// demands and the codec refuses is a write no signed session can make on a
+/// claimed board — so a widening is one edit here and one arm in
+/// [`crate::auth::entry::compose`], whose wildcard asserts it.
+pub(crate) fn in_checked_set(kind: OpKind) -> bool {
+    matches!(kind, OpKind::Insert | OpKind::MakeLink | OpKind::Publish)
+}
+
 /// The request object being consumed: known fields are taken out; anything
 /// left at [`Fields::finish`] is an unknown field and fails the parse.
 #[derive(Debug)]
@@ -765,14 +783,15 @@ impl Fields {
     }
 
     /// The optional top-level `attest` member — taken on an op of the checked
-    /// set ([`crate::auth::entry::in_checked_set`]), absent and explicit
+    /// set ([`in_checked_set`]), absent and explicit
     /// `null` alike reading `None`; on any other op it is not taken at all,
-    /// so `finish` refuses it as the unknown field it is there. The codec ASKS
-    /// the composer rather than keeping a copy of the checked set: the wire
-    /// admits the member exactly where the check will demand and judge one —
-    /// the doorkeeper consulting the domain for what the door may admit.
+    /// so `finish` refuses it as the unknown field it is there. The checked
+    /// set is ONE statement and it is the codec's — the wire grammar's —
+    /// because what it states is which ops carry `attest` on the wire (M10's
+    /// interface calls it skepd's `JsonCodec`'s); the composer (`auth/entry`)
+    /// and the policy READ it from here.
     fn attest(&mut self, kind: OpKind) -> PResult<Option<Attestation>> {
-        if !crate::auth::entry::in_checked_set(kind) {
+        if !in_checked_set(kind) {
             return Ok(None);
         }
         match self.take_opt("attest") {
@@ -1052,7 +1071,7 @@ pub(crate) fn wire_tumbler(s: &str) -> Result<Tumbler, String> {
 /// and a caller adds only the field name its own grammar gives it. `Err`
 /// carries the detail text.
 ///
-/// The UNCAPPED twin is [`crate::feed::classify::parse_dotted`], which
+/// The UNCAPPED twin is [`crate::classify::parse_dotted`], which
 /// refines its own grammar the same way and states why a name that reached
 /// a FILE is already past the budgets a client meets.
 pub(crate) fn wire_address(s: &str) -> Result<Address, String> {

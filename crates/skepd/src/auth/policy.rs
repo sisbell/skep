@@ -6,9 +6,7 @@
 
 use std::sync::LazyLock;
 
-use skep_address::{
-    checked_inc, document_of, ordinal, parent, validate, Address, Nat, Span, Tumbler,
-};
+use skep_address::{checked_inc, document_of, ordinal, parent, Address, Nat, Span};
 use skep_arrangement::{trunk_of, Deposit};
 use skep_engine::types::{
     t_consumption_marker, t_endorse, t_grant, t_journal_designation, t_rail_record,
@@ -17,8 +15,7 @@ use skep_engine::types::{
 use skep_febe::{Disposition, Op};
 use skep_identity::{
     AuditClass, CredentialKind, Effect, Enrolled, Fingerprint, IdentityState, Inert, LinkDeposit,
-    PublicKey, SigAlgRow, TargetClass, TypeAddrs, Verdict, WriteTypes,
-    ALG_FNDSA512_PREVIEW_ED25519,
+    PublicKey, SigAlgRow, TargetClass, Verdict, WriteTypes, ALG_FNDSA512_PREVIEW_ED25519,
 };
 use skep_kernel::Attestation;
 use skep_links::{enc, HasLinks, SlotArg};
@@ -27,11 +24,14 @@ use skep_namespace::{
 };
 
 use super::entry::{self, ComposeFault};
-use super::fold::WorldCtx;
+use super::fold::{identity_types, published_unprojected, WorldCtx};
 use super::hybrid;
 use super::session::{key_subject, keyed_above, Scope};
 use super::{LockRead, LockWrite};
 use crate::World;
+
+#[cfg(test)]
+use super::fold::{addr_of, T_CLAIM, T_ENROLL, T_RETIRE};
 
 /// The enrolled-set cap (RES-57, AUTH-3.57): daemon POLICY — a
 /// config-visible constant, never a fold constant — `Enroll` arm only,
@@ -83,38 +83,6 @@ pub(crate) const MAX_GENESIS_KEYS: usize = MAX_ENROLLED_KEYS;
 /// must be the LARGER, or an over-cap record on the larger arm re-opens the
 /// same bill.
 const MAX_DECODED_KEYS: usize = MAX_GENESIS_KEYS + 1;
-
-/// The three credential type addresses — AUTH-7.1 horn B's allocation,
-/// recorded for the commons-seeding table (see the build report): subspace
-/// 3 of the ghost document `1.1.0.1.0.1`, ordinals 1–3 in the order
-/// enroll · retire · claim.
-///
-/// Why subspace 3 discharges AUTH-3.70's unreachability obligation with no
-/// store edit: content V-spec RESOLUTION only ever yields I-spans in the
-/// CONTENT subspace (subspace 1) of real documents — M3's content mints are
-/// the resolution's whole codomain — and no M3 door mints into any
-/// document's subspace 3 at all, so these names are never allocated and no
-/// resolved span can equal their subtree spans. `deposits_credential_link`
-/// therefore answers false for every `Resolve` type slot without resolving
-/// anything, which is exactly AUTH-2.61's lock-free classifier.
-pub(crate) const T_ENROLL: [u32; 9] = [1, 1, 0, 1, 0, 1, 0, 3, 1];
-pub(crate) const T_RETIRE: [u32; 9] = [1, 1, 0, 1, 0, 1, 0, 3, 2];
-pub(crate) const T_CLAIM: [u32; 9] = [1, 1, 0, 1, 0, 1, 0, 3, 3];
-
-fn addr_of(comps: &[u32]) -> Address {
-    let t = Tumbler::new(comps.iter().map(|&c| Nat::from(c)))
-        .expect("the credential type components are nonempty");
-    validate(t).expect("the credential type addresses are T4-valid by construction")
-}
-
-/// The ONE `TypeAddrs` (`IDENTITY_TYPES`, AUTH-2.79) — an I2 frozen
-/// constant; every classifier and the fold read this instance.
-pub(crate) fn identity_types() -> &'static TypeAddrs {
-    static TYPES: LazyLock<TypeAddrs> = LazyLock::new(|| {
-        TypeAddrs::new(addr_of(&T_ENROLL), addr_of(&T_RETIRE), addr_of(&T_CLAIM))
-    });
-    &TYPES
-}
 
 /// The WRITE PATH's type-recognition input (PUB-6.30, PUB-6.64; owner ruling
 /// D3, 2026-09-05) — [`identity_types`]'s sibling: the same three credential
@@ -696,15 +664,6 @@ fn published(world: &World, doc: &Address) -> bool {
     published_unprojected(world, &trunk_of(doc))
 }
 
-/// The engine's publication read on ONE address, unprojected: `a ∉
-/// exception_set` and nothing else (PUB-7.5) — the AUTH fold's read
-/// (AUTH-2.34), reached through [`super::fold::WorldCtx`]'s `is_published`.
-/// [`published`] is this after PUB-2.15's version-member projection, so the
-/// two share their membership lookup and differ by exactly that step.
-pub(super) fn published_unprojected(world: &World, a: &Address) -> bool {
-    world.published(a)
-}
-
 /// The plain path's ADMISSION at the two board-state gates, dispatched on
 /// claimed-ness (AUTH-3.78): once claimed, the publish-class gate (RES-26 —
 /// PUB's section "The public-permanent gate" — `signed_session_required`)
@@ -769,7 +728,7 @@ fn board_state_admission(
 /// serialization guard IS the transaction's base). Reached for a
 /// publish-class write from a SIGNED session on a CLAIMED board:
 ///
-/// 1. THE CHECKED SET — [`entry::in_checked_set`]: the three ops the seam
+/// 1. THE CHECKED SET — [`crate::codec::in_checked_set`]: the three ops the seam
 ///    build's check reaches (`insert`, `make_link`, `publish`); every other
 ///    publish-class op carries no `attest` (the codec refuses the member
 ///    there) and commits on its signed session as before — the widening
@@ -833,8 +792,8 @@ fn attestation_check(
     principal: PrincipalId,
     presented: Option<Attestation>,
 ) -> Result<Option<Attestation>, CredentialRefusal> {
-    // 1 — the checked set, [`entry::in_checked_set`]'s one statement of it.
-    if !entry::in_checked_set(op.kind()) {
+    // 1 — the checked set, [`crate::codec::in_checked_set`]'s one statement of it.
+    if !crate::codec::in_checked_set(op.kind()) {
         return Ok(None);
     }
     // 2 — the record deposit's atom (D26): its DECLARED type read as a type

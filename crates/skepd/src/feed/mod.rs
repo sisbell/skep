@@ -85,7 +85,6 @@
 //! answer by a second route, since an entry naming no readable draft is
 //! dropped either way.
 
-pub(crate) mod classify;
 mod derived;
 
 use std::cmp::Reverse;
@@ -101,13 +100,13 @@ use skep_engine::{Engine, IssuerGrantIndexRow, ReaderClass, World};
 use skep_kernel::Seq;
 use skep_namespace::{HasM3, PrincipalId};
 
-use self::classify::{classify, derived_docs, parse_dotted, Doc};
 use self::derived::{
     DerivedFile, INDEX_DOCS, INDEX_FILE, MASKED_FILE, OFFSETS_FILE, OFFSETS_OFFSET, STREAMS_FILE,
     STREAMS_OWNERS,
 };
+use crate::classify::{classify, derived_docs, parse_dotted, Doc};
+use crate::serial::SerialGuard;
 use crate::sidecar::{report_malformed_names, CommitMeta, CommitsLog, LineOffset};
-use crate::write_path::SerialGuard;
 
 /// The most granted prefixes [`Inner::names_under`] scans per candidate
 /// before [`Inner::sources`] stands the filter aside and lets the mask

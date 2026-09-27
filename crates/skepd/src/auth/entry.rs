@@ -50,7 +50,7 @@
 use skep_address::{document_of, Address, Nat, Span};
 use skep_arrangement::{trunk_of, Caller, Deposit, PublishError, Run, Shot, ShotRun, Vstream};
 use skep_content::HasContent;
-use skep_febe::{Op, OpKind};
+use skep_febe::Op;
 use skep_identity::{
     entry_body_insert, entry_body_link, entry_body_publish, entry_frame, EntryBody, EntrySlot,
 };
@@ -63,7 +63,7 @@ use crate::write_path::board_term;
 use crate::World;
 
 /// The most bytes a `publish`'s entry-frame BODY may reach — PARITY with the
-/// request-body cap, [`crate::server::MAX_REQUEST_BODY`]. The other two ops
+/// request-body cap, [`crate::limits::MAX_REQUEST_BODY`]. The other two ops
 /// of the checked set compose their bodies out of the request itself —
 /// `insert`'s values and `make_link`'s slots ride in the frame — so the
 /// transport's cap bounds them already. A shot's body is read off the
@@ -80,7 +80,7 @@ use crate::World;
 /// the runs' Σ width stops at the budget: every value is at least one byte
 /// (M5 refuses an empty one), so the walk visits at most a fifth of the
 /// budget in positions.
-pub(crate) const MAX_SHOT_BODY_BYTES: usize = crate::server::MAX_REQUEST_BODY;
+pub(crate) const MAX_SHOT_BODY_BYTES: usize = crate::limits::MAX_REQUEST_BODY;
 
 /// The value sequence's leading be64 count.
 const VALUE_COUNT_BYTES: usize = 8;
@@ -118,26 +118,8 @@ pub(crate) enum ComposeFault {
     CarriedUnreadable,
     /// A `publish`'s body would pass [`MAX_SHOT_BODY_BYTES`].
     OverBudget,
-    /// The op kind is outside the checked set [`in_checked_set`] states.
+    /// The op kind is outside the checked set [`crate::codec::in_checked_set`] states.
     OutsideCheckedSet,
-}
-
-/// THE CHECKED SET — the op kinds the write-path check reaches, and so the
-/// ops an ENTRY frame is composed for: `insert`, `make_link`, `publish` (the
-/// owner's term, m2, the design record's round 5 rulings 2026-09-26; the
-/// seam build's three — the record's thirteen publish-class-capable inputs
-/// are the WIDENING lane's). The ONE statement of it: the codec admits a
-/// request's `attest` member exactly on these, the check demands and
-/// verifies one exactly on these, and [`compose`] has an arm exactly for
-/// these. The acting hand ATTESTS; the check admits or refuses, and signs
-/// nothing. The three must agree in both directions — a member the codec
-/// admits and the check never demands is a signature parsed and silently
-/// DROPPED, the commit landing with its marker slot empty; one the check
-/// demands and the codec refuses is a write no signed session can make on a
-/// claimed board — so a widening is one edit here and one arm in
-/// [`compose`], whose wildcard asserts it.
-pub(crate) fn in_checked_set(kind: OpKind) -> bool {
-    matches!(kind, OpKind::Insert | OpKind::MakeLink | OpKind::Publish)
 }
 
 /// A link slot as the entry frame's slot row takes it — the resolve form's
@@ -211,7 +193,7 @@ pub(crate) fn compose(
             // its `attest` dropped unverified — the silent direction — so the
             // premise is made loud.
             debug_assert!(
-                !in_checked_set(op.kind()),
+                !crate::codec::in_checked_set(op.kind()),
                 "an op kind in the checked set with no entry frame: {:?}",
                 op.kind()
             );
@@ -373,6 +355,7 @@ impl EntryFrame {
 mod tests {
     use skep_arrangement::Base;
     use skep_engine::Engine;
+    use skep_febe::OpKind;
     use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
     use skep_namespace::{ghost_home_doc, head_document, SYSTEM_PRINCIPAL};
 

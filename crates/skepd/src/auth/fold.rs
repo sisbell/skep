@@ -16,19 +16,62 @@
 //! engine round.
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
-use skep_address::{document_of, Address, Span, Tumbler};
+use skep_address::{document_of, validate, Address, Nat, Span, Tumbler};
 use skep_content::HasContent;
 use skep_febe::{ReqId, SessionId};
-use skep_identity::{FoldCtx, IdentityState, KeySet, LinkDeposit, Owner, Values, Verdict};
+use skep_identity::{
+    FoldCtx, IdentityState, KeySet, LinkDeposit, Owner, TypeAddrs, Values, Verdict,
+};
 use skep_links::{HasLinks, View};
 use skep_namespace::{HasM3, BOOTSTRAP_PRINCIPAL};
 
-use super::policy::{identity_types, published_unprojected};
 use super::LockWrite;
 use crate::World;
 
 // ── the world-fact seam ──────────────────────────────────────────────────
+
+/// The three credential type addresses — AUTH-7.1 horn B's allocation,
+/// recorded for the commons-seeding table (see the build report): subspace
+/// 3 of the ghost document `1.1.0.1.0.1`, ordinals 1–3 in the order
+/// enroll · retire · claim.
+///
+/// Why subspace 3 discharges AUTH-3.70's unreachability obligation with no
+/// store edit: content V-spec RESOLUTION only ever yields I-spans in the
+/// CONTENT subspace (subspace 1) of real documents — M3's content mints are
+/// the resolution's whole codomain — and no M3 door mints into any
+/// document's subspace 3 at all, so these names are never allocated and no
+/// resolved span can equal their subtree spans. `deposits_credential_link`
+/// therefore answers false for every `Resolve` type slot without resolving
+/// anything, which is exactly AUTH-2.61's lock-free classifier.
+pub(crate) const T_ENROLL: [u32; 9] = [1, 1, 0, 1, 0, 1, 0, 3, 1];
+pub(crate) const T_RETIRE: [u32; 9] = [1, 1, 0, 1, 0, 1, 0, 3, 2];
+pub(crate) const T_CLAIM: [u32; 9] = [1, 1, 0, 1, 0, 1, 0, 3, 3];
+
+pub(super) fn addr_of(comps: &[u32]) -> Address {
+    let t = Tumbler::new(comps.iter().map(|&c| Nat::from(c)))
+        .expect("the credential type components are nonempty");
+    validate(t).expect("the credential type addresses are T4-valid by construction")
+}
+
+/// The ONE `TypeAddrs` (`IDENTITY_TYPES`, AUTH-2.79) — an I2 frozen
+/// constant; every classifier and the fold read this instance.
+pub(crate) fn identity_types() -> &'static TypeAddrs {
+    static TYPES: LazyLock<TypeAddrs> = LazyLock::new(|| {
+        TypeAddrs::new(addr_of(&T_ENROLL), addr_of(&T_RETIRE), addr_of(&T_CLAIM))
+    });
+    &TYPES
+}
+
+/// The engine's publication read on ONE address, unprojected: `a ∉
+/// exception_set` and nothing else (PUB-7.5) — the AUTH fold's read
+/// (AUTH-2.34), reached through [`super::fold::WorldCtx`]'s `is_published`.
+/// `crate::auth::policy::published` is this after PUB-2.15's version-member projection, so the
+/// two share their membership lookup and differ by exactly that step.
+pub(super) fn published_unprojected(world: &World, a: &Address) -> bool {
+    world.published(a)
+}
 
 /// The fold's four facts, answered off one `World` snapshot (AUTH-2.31):
 /// `value_at` from M4's permascroll (I-bytes are immutable, so a head read
@@ -65,11 +108,11 @@ impl FoldCtx for WorldCtx<'_> {
     /// AUTH-2.34, answered as owner ruling D1 states it: `doc ∉
     /// exception_set` and nothing else — the engine's derived membership
     /// index over M3's publication bit (PUB-7.5), read through
-    /// [`super::policy::published_unprojected`]; on a reconstruction the same
+    /// [`published_unprojected`]; on a reconstruction the same
     /// call answers off the reconstructed world's own set (PUB-7.12), which
     /// `Engine::world_at` seeds before it replays.
     ///
-    /// The RES-26 publish-class gate's read (`super::policy`'s `published`)
+    /// The RES-26 publish-class gate's read (`crate::auth::policy`'s `published`)
     /// is this membership lookup AFTER PUB-2.15's projection of a version
     /// member to its DOCUMENT, so the two share the lookup and differ by
     /// exactly that step. Where a credential home is a version member — the

@@ -38,7 +38,7 @@
 //!   never unmasks a draft write"): the walk holds the world at each
 //!   boundary and the one below it, and the diff of the two — the drafts
 //!   minted, the links deposited (their homes, and a retraction's targets'
-//!   homes), the drafts whose arrangement moved (`feed::classify::derived_docs`)
+//!   homes), the drafts whose arrangement moved (`classify::derived_docs`)
 //!   — is the set of documents the feed's mask classifies the position by.
 //!   The wire entry still answers `docs: null` (lost testimony is never
 //!   invented); what the journal supplies is the CLASS, so a draft write
@@ -77,9 +77,9 @@ use skep_address::Address;
 use skep_engine::{Engine, HistoryError, World};
 use skep_kernel::Seq;
 
+use crate::classify::{derived_docs, parse_dotted};
 use crate::codec::{obj, to_bytes};
-use crate::feed::classify::{derived_docs, parse_dotted};
-use crate::write_path::SerialGuard;
+use crate::serial::SerialGuard;
 
 /// The sidecar's file name inside the data dir (beside the kernel's own
 /// journal/checkpoint files, which this crate never touches).
@@ -182,7 +182,7 @@ impl CommitMeta {
 /// position: the first half is loud, since the change feed's pages compare
 /// byte for byte, and the second is SILENT, since nothing in this build
 /// seeks by an offset ([`CommitsLog::offsets`] says so). The device
-/// [`crate::write_path::SerialGuard`] already is, applied to data rather
+/// [`crate::serial::SerialGuard`] already is, applied to data rather
 /// than to a guard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct LineOffset(pub u64);

@@ -65,6 +65,7 @@ pub(crate) use head::board_term;
 
 use crate::codec::op_name;
 use crate::feed::{ChangesAnswer, Feed, FeedClass, Query};
+use crate::serial::{Serial, SerialGuard};
 use self::head::HeadWriter;
 
 /// The commit stream's wait bound: a subscriber that has heard nothing for
@@ -73,32 +74,6 @@ use self::head::HeadWriter;
 /// and the daemon detects a dead subscriber by the failed write within one
 /// interval.
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
-
-/// The write-serialization guard, newtyped so a function whose contract is
-/// "under the serialization lock" names it in its arguments — the device
-/// `auth/`'s [`crate::auth::LockRead`]/[`crate::auth::LockWrite`] already
-/// are. A bare `MutexGuard<'_, ()>` is satisfied by a guard over ANY
-/// `Mutex<()>`, so the parameter would say "some unit lock is held" where
-/// the contract says "this one is" — unambiguous only while the crate holds
-/// exactly one, in a daemon whose body cap already anticipates a second
-/// write path (the media round's blob route) by name.
-///
-/// The honest limit is [`WritePath::serial_lock`]'s, unchanged: the guard
-/// proves the lock is held and proves nothing about where the caller's
-/// snapshot came from.
-pub(crate) struct SerialGuard<'a>(#[allow(dead_code)] parking_lot::MutexGuard<'a, ()>);
-
-#[cfg(test)]
-impl<'a> SerialGuard<'a> {
-    /// A guard over a caller-owned lock — for a unit test that needs the
-    /// ARGUMENT and not the serialization, [`WritePath::serial_lock`]'s own
-    /// lock being unreachable without an `Engine`. `#[cfg(test)]`, so this
-    /// type's production meaning is untouched: the only guard a shipped
-    /// build can construct is still the one over the write path's own lock.
-    pub(crate) fn over(lock: &'a parking_lot::Mutex<()>) -> SerialGuard<'a> {
-        SerialGuard(lock.lock())
-    }
-}
 
 /// The write path: the serialization point, the change feed's sidecars
 /// behind it, the commit stream in front of it, and the published head
@@ -127,7 +102,7 @@ pub(crate) struct WritePath {
     /// record (the append is flushed before the lock releases); an OS crash
     /// can lose more of the un-fsynced tail — either way the reopen walk
     /// re-covers the gap as bare entries.
-    serial: Mutex<()>,
+    serial: Serial,
     /// The change feed behind `GET /changes` and `/health`'s `head_time`
     /// (wire v6; class-gated since v7.8) — `commits.log`, the daemon's
     /// testimony about its own writes, and its four derived sidecars.
@@ -170,7 +145,7 @@ impl WritePath {
         // head's own recorded time (the chain's open items, item 2).
         let head_writer = HeadWriter::open(engine.stores(), &feed);
         Ok(WritePath {
-            serial: Mutex::new(()),
+            serial: Serial::new(),
             feed,
             commit_stream,
             stores: engine.stores(),
@@ -224,7 +199,7 @@ impl WritePath {
     /// Nothing here can check either half, and a snapshot taken outside the
     /// guard lets a commit land between what a gate read and what it gated.
     pub fn serial_lock(&self) -> SerialGuard<'_> {
-        SerialGuard(self.serial.lock())
+        self.serial.lock()
     }
 
     /// One write, whole, under a serialization guard the CALLER already
@@ -536,7 +511,7 @@ pub(crate) enum AffectedDocs {
 /// The two tables agree at 15 writes of 43.
 ///
 /// SECOND OBLIGATION, and the one no assertion here can reach:
-/// [`crate::feed::classify::derived_docs`] answers this same question — which
+/// [`crate::classify::derived_docs`] answers this same question — which
 /// documents a commit touched — from the JOURNAL, for a position whose record
 /// was lost, and the two must agree on the MASK. Precisely: every DRAFT this
 /// table names must appear in that one's answer, and that one's answer must

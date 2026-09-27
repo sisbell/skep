@@ -361,7 +361,7 @@ fn obj_keeps_the_last_of_duplicate_keys() {
 /// nothing the fold honors.
 #[test]
 fn the_deposit_class_types_are_the_daemons_enroll_and_retire_constants() {
-    use crate::auth::policy::{T_ENROLL, T_RETIRE};
+    use crate::auth::fold::{T_ENROLL, T_RETIRE};
     let spelled: Vec<Vec<Nat>> = skep_arrangement::deposit_class_types()
         .iter()
         .map(|ty| ty.tumbler().iter().cloned().collect())

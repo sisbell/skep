@@ -180,8 +180,8 @@ fn wire_entries_null_what_the_file_line_omits() {
 fn a_failed_append_stops_the_log_so_the_reopen_walk_starts_below_the_gap() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join(SIDECAR_FILE);
-    let lock = parking_lot::Mutex::new(());
-    let serial = crate::write_path::SerialGuard::over(&lock);
+    let serial = crate::serial::Serial::new();
+    let serial = serial.lock();
     let mut log = CommitsLog::over_unwritable(dir.path(), 9);
 
     // The lost position: recorded in memory, refused by the file.

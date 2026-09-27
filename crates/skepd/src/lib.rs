@@ -73,10 +73,13 @@
 #![forbid(unsafe_code)]
 
 mod auth;
+mod classify;
 mod codec;
 mod feed;
 mod history;
+mod limits;
 mod notice;
+mod serial;
 mod server;
 mod sidecar;
 mod write_path;

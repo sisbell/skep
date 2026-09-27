@@ -71,7 +71,7 @@ use ml_dsa::{
     Signer as _,
 };
 use sha2::Sha256;
-use skep_identity::{token_of_sig_alg, PublicKey, SigAlgRow};
+use skep_identity::{PublicKey, SigAlgRow};
 
 use super::OsEntropy;
 use crate::codec::hex_string;
@@ -162,7 +162,7 @@ fn derive_half_seed(seed: &[u8; 32], token: &str, half_label: &[u8]) -> [u8; 32]
 /// THE KDF: one seed to both half seeds under `tag`'s token; `None` for a
 /// tag no row names or this build holds no rule for.
 pub fn derive_seeds(tag: u8, seed: &[u8; 32]) -> Option<HalfSeeds> {
-    let row = token_of_sig_alg(tag)?;
+    let row = SigAlgRow::of_tag(tag)?;
     let pq_label = match Rule::of(tag)? {
         Rule::MlDsa65Ed25519 => HALF_MLDSA65,
         Rule::FnDsa512PreviewEd25519 => HALF_FNDSA512,
@@ -329,7 +329,7 @@ impl HybridSigner {
     /// crate's own keygen. `None` for a tag no row names or this build holds
     /// no rule for.
     pub fn from_seed(tag: u8, seed: &[u8; 32]) -> Option<HybridSigner> {
-        let row = token_of_sig_alg(tag)?;
+        let row = SigAlgRow::of_tag(tag)?;
         let halves = derive_seeds(tag, seed)?;
         let ed = EdSigningKey::from_bytes(&halves.ed25519);
         let ed_pk = ed.verifying_key().to_bytes();
@@ -516,7 +516,7 @@ fn decode_pq_half(tag: u8, key: &PublicKey) -> Option<PqHalf> {
 /// since retiring it needs an anchor session of that account. `false` for a
 /// key of no row.
 pub fn key_decodes(key: &PublicKey) -> bool {
-    key.sig_alg().is_some_and(|row| {
+    key.sig_alg_row().is_some_and(|row| {
         decode_ed25519_half(key).is_some() && decode_pq_half(row.tag, key).is_some()
     })
 }
@@ -537,7 +537,7 @@ pub fn key_decodes(key: &PublicKey) -> bool {
 /// cannot tell apart, so the order a Rust caller already knows is the one
 /// that holds.
 pub fn verify(tag: u8, key: &PublicKey, msg: &[u8], sig: &[u8]) -> Result<(), HybridFault> {
-    let row = token_of_sig_alg(tag).ok_or(HybridFault::WrongRow)?;
+    let row = SigAlgRow::of_tag(tag).ok_or(HybridFault::WrongRow)?;
     if key.alg() != row.token {
         return Err(HybridFault::WrongRow);
     }
@@ -626,7 +626,7 @@ mod tests {
             let signer = HybridSigner::from_seed(tag, &seed).unwrap();
             let twin = HybridSigner::from_seed(tag, &seed).unwrap();
             assert_eq!(signer.public_key(), twin.public_key(), "keygen from seed is deterministic");
-            let row = token_of_sig_alg(tag).unwrap();
+            let row = SigAlgRow::of_tag(tag).unwrap();
             assert_eq!(signer.public_key().raw().len(), row.key_len());
             let msg = b"the entry frame";
             let mut rng = SeededRng06::new([7; 32]);

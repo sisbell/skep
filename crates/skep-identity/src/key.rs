@@ -75,6 +75,28 @@ pub struct SigAlgRow {
 }
 
 impl SigAlgRow {
+    /// The row a marker tag names — the commit marker's `sig_alg` byte — or
+    /// `None` for `0` (the empty slot), `2` (reserved) and every tag no build
+    /// has minted. `const`, so a type sized by a row's width reads it off
+    /// [`SIG_ALGS`] at compile time rather than walking the table itself.
+    pub const fn of_tag(tag: u8) -> Option<&'static SigAlgRow> {
+        let mut i = 0;
+        while i < SIG_ALGS.len() {
+            if SIG_ALGS[i].tag == tag {
+                return Some(&SIG_ALGS[i]);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// The row a wire `alg` token names, or `None` for a token no row carries
+    /// (tag 2's reserved `fndsa512-ed25519`, the deleted classical `ed25519`,
+    /// any token no build has minted).
+    pub fn of_token(token: &str) -> Option<&'static SigAlgRow> {
+        SIG_ALGS.iter().find(|row| row.token == token)
+    }
+
     /// The slot's whole blob width under this tag: the PQ signature ‖ the
     /// Ed25519 signature (64).
     pub const fn sig_len(&self) -> usize {
@@ -91,9 +113,10 @@ impl SigAlgRow {
 /// THE MARKER-TAG TABLE (signed ops): tag `1`, the PRODUCTION hybrid
 /// ML-DSA-65 + Ed25519 (3,309 ‖ 64 = 3,373-byte blob); tag `3`, the PREVIEW
 /// hybrid FN-DSA-512 + Ed25519 under `fn-dsa` 0.4.0 (666 ‖ 64 = 730-byte
-/// blob). Read by [`sig_alg_of`] and [`token_of_sig_alg`] — the codec's
-/// lift of the wire's `attest.alg` token to the slot's tag and back — and by
-/// the verifier, which dispatches on the tag to THAT tag's frozen rule.
+/// blob). Read through [`SigAlgRow::of_token`] and [`SigAlgRow::of_tag`] —
+/// the codec's lift of the wire's `attest.alg` token to the slot's tag and
+/// back — and by the verifier, which dispatches on the tag to THAT tag's
+/// frozen rule.
 pub const SIG_ALGS: &[SigAlgRow] = &[
     SigAlgRow { tag: 1, token: ALG_MLDSA65_ED25519, pq_key_len: MLDSA65_KEY_LEN, pq_sig_len: 3309 },
     SigAlgRow {
@@ -103,19 +126,6 @@ pub const SIG_ALGS: &[SigAlgRow] = &[
         pq_sig_len: 666,
     },
 ];
-
-/// The marker tag a wire `alg` token names, or `None` for a token no row
-/// carries (tag 2's reserved `fndsa512-ed25519`, the deleted classical
-/// `ed25519`, any token no build has minted).
-pub fn sig_alg_of(token: &str) -> Option<&'static SigAlgRow> {
-    SIG_ALGS.iter().find(|row| row.token == token)
-}
-
-/// The row a marker tag names, or `None` — for `0` (the empty slot), `2`
-/// (reserved) and every tag no build has minted.
-pub fn token_of_sig_alg(tag: u8) -> Option<&'static SigAlgRow> {
-    SIG_ALGS.iter().find(|row| row.tag == tag)
-}
 
 /// One [`ALGS`] row (AUTH-1.5). Not comparable as a whole:
 /// [`AlgRow::from_raw`] is a function pointer, and its ADDRESS says nothing
@@ -327,10 +337,11 @@ impl PublicKey {
         }
     }
 
-    /// The marker tag this key signs under — its row in [`SIG_ALGS`]. Every
-    /// `ALGS` row has one today; `None` names a row no marker tag carries.
-    pub fn sig_alg(&self) -> Option<&'static SigAlgRow> {
-        sig_alg_of(self.alg())
+    /// The [`SIG_ALGS`] row this key signs under — the whole row, whose `tag`
+    /// is the marker's `sig_alg` byte. Every `ALGS` row has one today; `None`
+    /// names a row no marker tag carries.
+    pub fn sig_alg_row(&self) -> Option<&'static SigAlgRow> {
+        SigAlgRow::of_token(self.alg())
     }
 
     /// AUTH-1.3 — lowercase hex of the raw key bytes.

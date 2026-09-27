@@ -2,13 +2,16 @@
 //!
 //! The PURE heart of AUTH (AUTH-2.1): no I/O, no clock, no config, no
 //! signature library, no engine dependency. Dependencies are exactly
-//! `skep-address` (M1), `sha2`, `im`, `serde` — light enough for the engine,
-//! M10, checkpoint/replay, and any mirror tool to carry. AUTH-2.2 casts the
-//! crates around it: `crates/skepd` the ONLY crate that calls a signature
-//! library (Ed25519, ML-DSA, FN-DSA) — the fence is the SESSION verify's,
+//! `skep-address` (M1), `sha2`, `im`, `serde` and `serde_json` — the last
+//! answering one question, which JSON value a record's bytes are, with every
+//! verdict written here (`payload.rs`) — light enough for the engine, M10,
+//! checkpoint/replay, and any mirror tool to carry. AUTH-2.2 casts the crates
+//! around it: `crates/skepd` the ONLY crate that calls a signature library
+//! (Ed25519, ML-DSA, FN-DSA) — the fence is the SESSION verify's,
 //! `verify`/`find_signer`, the daemon's check of a handshake against the
 //! fold's key sets — the World slice, fold hook and load check in
-//! `crates/skep-engine`, the conformance pins in `crates/skep-conformance`.
+//! `crates/skep-engine`, and the conformance pins in the crates' own suites,
+//! `crates/skep-conformance` depending on nothing here.
 //!
 //! ## Composition, as built
 //!
@@ -30,6 +33,19 @@
 //! card below that names the World, a checkpoint or the engine cites the
 //! SPEC's cast; this section keeps the build's.
 //!
+//! Signed ops' declarations are consumed in skepd as well. `auth/entry.rs`
+//! composes the ENTRY frame the daemon verifies, calling [`entry_frame`] over
+//! the locked snapshot's board term, the principal's account, and the op's
+//! document and [`EntryBody`]; `auth/policy.rs`'s write-path check reads the
+//! presented attestation's row off its marker tag; `auth/hybrid.rs` holds each
+//! marker tag's arithmetic over [`SIG_ALGS`]' rows and a key's two halves
+//! ([`PublicKey::pq_half`], [`PublicKey::ed25519_half`]); the codec lifts a
+//! request's `attest.alg` token to its marker tag and back through
+//! [`SigAlgRow::of_token`] and [`SigAlgRow::of_tag`]; and `auth/session.rs`
+//! sizes the handshake's hybrid blob by the rows' widths. [`canonical_record`]
+//! has no caller outside this crate: it is published for the signing client
+//! and the verifier beside the table that the design record names (§4.2 (C)).
+//!
 //! ## What lives here
 //!
 //! * keys and fingerprints — [`PublicKey`] with the two HYBRID tokens
@@ -42,10 +58,11 @@
 //!   signed ops);
 //! * framing and the tag set — [`Tag`], [`framed`], [`TAGS`]
 //!   (AUTH-1.11–1.17), and THE ENTRY FRAME under [`ENTRY_TAG`] —
-//!   [`entry_frame`] with the byte forms of its members ([`board_bytes`],
-//!   [`address_bytes`], [`value_sequence`], [`slot_bytes`]) and the bodies
-//!   per op ([`entry_body_insert`], [`entry_body_link`],
-//!   [`entry_body_publish`]) — the bytes a publish-class entry's signature is
+//!   [`entry_frame`], which spells every member from the values a signer or
+//!   verifier holds: the board term, the account and document addresses, and
+//!   an [`EntryBody`] — an op's token paired with its body, built by
+//!   [`entry_body_insert`], [`entry_body_link`] and [`entry_body_publish`]
+//!   over [`EntrySlot`]s — the bytes a publish-class entry's signature is
 //!   made over (signed ops; the design record §2.5);
 //! * the record value at one name with both directions —
 //!   [`canonical_record`] over a [`RecordEntry`]: the signer's `sig`-bearing
@@ -88,10 +105,15 @@
 //!
 //! ## Traceability
 //!
-//! Every public item's doc-comment cites the spec rule it realizes — AUTH's
-//! rule and invariant labels, and on the write path's type-recognition input
-//! the publication spec's (PUB-6.30, PUB-6.64, RES-207) and owner ruling D3 —
-//! so a reviewer can walk from code to spec without the documents open.
+//! Every public item's doc-comment cites the authority it realizes: AUTH's
+//! rule and invariant labels; on the write path's type-recognition input the
+//! publication spec's (PUB-6.30, PUB-6.64, RES-207) and owner ruling D3; and
+//! on signed ops' declarations — the marker-tag table, a key's halves, the
+//! length constants, the entry frame and the record projection, which the
+//! AUTH spec declares in no rule and whose authority AUTH-1.5 assigns, by
+//! cite, to the signed-ops design record — that record, cited as "the design
+//! record" (or "the record") with its section or ruling. So a reviewer can
+//! walk from code to its authority without the documents open.
 //!
 //! ## Purity note
 //!
@@ -115,16 +137,15 @@ mod verdict;
 mod write_types;
 
 pub use entry::{
-    address_bytes, board_bytes, entry_body_insert, entry_body_link, entry_body_publish,
-    entry_frame, slot_bytes, value_sequence, EntrySlot,
+    entry_body_insert, entry_body_link, entry_body_publish, entry_frame, EntryBody, EntrySlot,
 };
 pub use framing::{
     framed, Tag, ENTRY_TAG, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, SESSION_TAG_V2, TAGS,
 };
 pub use key::{
-    sig_alg_of, token_of_sig_alg, AlgRow, Fingerprint, KeyParseError, PublicKey, SigAlgRow, ALGS,
-    ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519, ED25519_KEY_LEN, FNDSA512_ED25519_KEY_LEN,
-    FNDSA512_KEY_LEN, MLDSA65_ED25519_KEY_LEN, MLDSA65_KEY_LEN, SIG_ALGS,
+    AlgRow, Fingerprint, KeyParseError, PublicKey, SigAlgRow, ALGS, ALG_FNDSA512_PREVIEW_ED25519,
+    ALG_MLDSA65_ED25519, ED25519_KEY_LEN, FNDSA512_ED25519_KEY_LEN, FNDSA512_KEY_LEN,
+    MLDSA65_ED25519_KEY_LEN, MLDSA65_KEY_LEN, SIG_ALGS,
 };
 pub use keyset::{Enrolled, KeySet};
 pub use payload::{

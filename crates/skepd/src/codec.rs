@@ -60,7 +60,7 @@ use skep_febe::{
     RejectCode, Rejection, ReqId, Request, Response, SlotArg, SuccessorSpec, UniversalGrant,
     MAX_REQ_ID_BYTES,
 };
-use skep_identity::{sig_alg_of, token_of_sig_alg, KeySet};
+use skep_identity::{KeySet, SigAlgRow};
 use skep_kernel::{Attestation, Seq};
 use skep_links::{Endset, Invalid, Link, View, MAX_SLOT_SPANS};
 use skep_namespace::PrincipalId;
@@ -578,7 +578,7 @@ fn parse_value(v: Value) -> PResult<Request> {
 fn p_attest(v: &Value) -> PResult<Attestation> {
     let m = p_obj(v, &["alg", "sig"])?;
     let alg = field(m, "alg", p_string)?;
-    let row = sig_alg_of(&alg)
+    let row = SigAlgRow::of_token(&alg)
         .ok_or_else(|| PErr(format!("field 'alg': unknown algorithm token '{}'", bounded(&alg))))?;
     let sig = field(m, "sig", |v| p_hex(p_str(v)?))?;
     Attestation::new(row.tag, sig).map_err(|e| PErr(format!("field 'sig': {e}")))
@@ -586,7 +586,7 @@ fn p_attest(v: &Value) -> PResult<Attestation> {
 
 /// [`p_attest`]'s inverse: the tag back to its token, the blob to hex.
 fn j_attest(a: &Attestation) -> Value {
-    let alg = token_of_sig_alg(a.sig_alg())
+    let alg = SigAlgRow::of_tag(a.sig_alg())
         .map_or_else(|| format!("<unknown tag {}>", a.sig_alg()), |row| row.token.to_string());
     obj(vec![("alg", Value::String(alg)), ("sig", Value::String(hex_string(a.sig())))])
 }

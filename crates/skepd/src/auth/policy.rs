@@ -16,8 +16,8 @@ use skep_engine::types::{
 };
 use skep_febe::{Disposition, Op};
 use skep_identity::{
-    token_of_sig_alg, AuditClass, CredentialKind, Effect, Enrolled, Fingerprint, IdentityState,
-    Inert, LinkDeposit, PublicKey, TargetClass, TypeAddrs, Verdict, WriteTypes,
+    AuditClass, CredentialKind, Effect, Enrolled, Fingerprint, IdentityState, Inert, LinkDeposit,
+    PublicKey, SigAlgRow, TargetClass, TypeAddrs, Verdict, WriteTypes,
     ALG_FNDSA512_PREVIEW_ED25519,
 };
 use skep_kernel::Attestation;
@@ -879,7 +879,7 @@ fn attestation_check(
     };
     // 6 — (2): the member's marker tag names its row, whose token is the
     // entry frame's `alg`.
-    let row = token_of_sig_alg(presented.sig_alg()).ok_or(invalid(AttestFault::Malformed))?;
+    let row = SigAlgRow::of_tag(presented.sig_alg()).ok_or(invalid(AttestFault::Malformed))?;
     if presented.sig().len() != row.sig_len() {
         return Err(invalid(AttestFault::Malformed));
     }

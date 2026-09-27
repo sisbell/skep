@@ -60,8 +60,9 @@ pub const SESSION_TAG_V2: Tag = Tag(b"skep-session-v2");
 /// constant (AUTH-2.118).
 pub const NODE_HELLO_TAG: Tag = Tag(b"skep-node-hello-v1");
 
-/// THE ENTRY FRAME's tag (signed ops; the design record §2.5, §4.2 (C)): the
-/// bytes a publish-class entry's signature is made over —
+/// THE ENTRY FRAME's tag — a tag chosen in another document, declared in
+/// AUTH-1.11's block as AUTH-1.17 binds one (signed ops; the design record
+/// §2.5, §4.2 (C)): the bytes a publish-class entry's signature is made over —
 /// `framed(ENTRY_TAG, [alg, board, account, doc, op, body])`, composed by
 /// [`crate::entry_frame`] — signed at the entry's own write by the acting
 /// hand and verified by the daemon before the commit and by any reader

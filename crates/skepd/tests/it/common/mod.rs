@@ -22,9 +22,8 @@ use ed25519_dalek::{Signer, SigningKey};
 use serde_json::Value;
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_identity::{
-    board_bytes, encode_enroll, entry_body_insert, entry_body_link, entry_body_publish,
-    entry_frame, framed, token_of_sig_alg, Enrollment, EntrySlot, PublicKey, SESSION_TAG,
-    SESSION_TAG_V2,
+    encode_enroll, entry_body_insert, entry_body_link, entry_body_publish, entry_frame, framed,
+    Enrollment, EntrySlot, PublicKey, SigAlgRow, SESSION_TAG, SESSION_TAG_V2,
 };
 use skepd::hybrid::{self, HybridSigner};
 use skepd::{serve, AuthOptions, Daemon, NodePrefix, Origin, Skepd, DEFAULT_WORKERS};
@@ -2248,16 +2247,17 @@ fn publish_values(port: u16, token: &str, runs: &Value) -> Option<Vec<Vec<u8>>> 
 
 /// The ENTRY frame for `frame` as `principal` would sign it on this board,
 /// or `None` where a member cannot be composed (no `H.1` yet, an
-/// unreadable origin, an op outside the three).
+/// unreadable origin, an op outside the three). Every address the frame
+/// names is PARSED before it is framed, so `entry_frame` spells the address
+/// and not the string the frame happened to carry.
 pub fn entry_frame_for(port: u16, token: &str, principal: u64, frame: &Value) -> Option<Vec<u8>> {
     let op = frame["op"].as_str()?;
-    let (position, chain) = board_term(port)?;
-    let board = board_bytes(position, &chain);
-    let account = account_of(port, token, principal)?;
-    let alg = token_of_sig_alg(FIXTURE_TAG)?.token;
+    let board = board_term(port)?;
+    let account = parse_addr(&account_of(port, token, principal)?)?;
+    let alg = SigAlgRow::of_tag(FIXTURE_TAG)?.token;
     let (doc, body) = match op {
         "insert" => {
-            let doc = trunk_of_str(frame["doc"].as_str()?);
+            let doc = parse_addr(&trunk_of_str(frame["doc"].as_str()?))?;
             let declared = match frame.get("deposit").and_then(Value::as_str) {
                 Some(ty) => Some(parse_addr(ty)?),
                 None => None,
@@ -2275,26 +2275,26 @@ pub fn entry_frame_for(port: u16, token: &str, principal: u64, frame: &Value) ->
                 signer_slot(&frame["to"])?,
             );
             (
-                frame["home"].as_str()?.to_string(),
+                parse_addr(frame["home"].as_str()?)?,
                 entry_body_link(&ty.as_entry(), &from.as_entry(), &to.as_entry()),
             )
         }
         "publish" => {
             let values = publish_values(port, token, &frame["runs"])?;
             (
-                trunk_of_str(frame["doc"].as_str()?),
+                parse_addr(&trunk_of_str(frame["doc"].as_str()?))?,
                 entry_body_publish(values.iter().map(Vec::as_slice)),
             )
         }
         _ => return None,
     };
-    Some(entry_frame(alg, &board, account.as_bytes(), doc.as_bytes(), op, &body))
+    Some(entry_frame(alg, board, &account, &doc, &body))
 }
 
 /// The `attest` member carrying `sig` under the fixtures' tag
 /// ([`FIXTURE_TAG`]): `{"alg": <that row's token>, "sig": <hex>}`.
 pub fn attest_member(sig: &[u8]) -> Value {
-    json!({"alg": token_of_sig_alg(FIXTURE_TAG).expect("tag 1").token, "sig": hex(sig)})
+    json!({"alg": SigAlgRow::of_tag(FIXTURE_TAG).expect("tag 1").token, "sig": hex(sig)})
 }
 
 /// The VALUES at content ordinals `from ..` of `doc`, as `token` reads them —
@@ -2319,15 +2319,14 @@ pub fn op_with_publish_values(port: u16, token: &str, frame: &str, values: &[&[u
         return op_unattested(port, Some(token), frame);
     };
     let mut v: Value = serde_json::from_str(frame).expect("a JSON frame");
-    let (Some((position, chain)), Some(account)) = (board_term(port), account_of(port, token, principal))
-    else {
+    let (Some(board), Some(account)) = (board_term(port), account_of(port, token, principal)) else {
         return op_unattested(port, Some(token), frame);
     };
-    let board = board_bytes(position, &chain);
-    let alg = token_of_sig_alg(FIXTURE_TAG).expect("tag 1").token;
-    let doc = trunk_of_str(v["doc"].as_str().expect("doc"));
+    let account = parse_addr(&account).expect("the daemon's own account prefix is an address");
+    let alg = SigAlgRow::of_tag(FIXTURE_TAG).expect("tag 1").token;
+    let doc = parse_addr(&trunk_of_str(v["doc"].as_str().expect("doc"))).expect("a document address");
     let body = entry_body_publish(values.iter().copied());
-    let bytes = entry_frame(alg, &board, account.as_bytes(), doc.as_bytes(), "publish", &body);
+    let bytes = entry_frame(alg, board, &account, &doc, &body);
     let signer = HybridSigner::from_seed(FIXTURE_TAG, &seed).expect("tag 1");
     v["attest"] = attest_member(&signer.sign(&bytes));
     op_unattested(port, Some(token), &v.to_string())

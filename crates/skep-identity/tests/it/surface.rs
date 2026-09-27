@@ -8,8 +8,8 @@ use crate::common;
 use common::{addr, fp, key, ACCT_A};
 use sha2::{Digest, Sha256};
 use skep_identity::{
-    framed, sig_alg_of, token_of_sig_alg, CredentialKind, Enrolled, Enrollment, Fingerprint,
-    IdentityState, Inert, KeyParseError, LabelError, PayloadError, PublicKey, ALGS,
+    framed, CredentialKind, Enrolled, Enrollment, Fingerprint, IdentityState, Inert,
+    KeyParseError, LabelError, PayloadError, PublicKey, SigAlgRow, ALGS,
     ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519, ENTRY_TAG, FNDSA512_ED25519_KEY_LEN,
     KEY_TAG, MAX_RECORD_BYTES, MLDSA65_ED25519_KEY_LEN, NODE_HELLO_TAG, SESSION_TAG,
     SESSION_TAG_V2, SIG_ALGS, TAGS,
@@ -173,12 +173,12 @@ fn sig_algs_and_algs_agree_and_the_pins_are_the_ruled_widths() {
         assert_eq!(alg.raw_len, row.key_len(), "{}: the row's key width is its ALGS raw_len", row.token);
         assert_ne!(row.tag, 0, "tag 0 is the empty slot");
         assert_ne!(row.tag, 2, "tag 2 is reserved for the final FIPS 206");
-        assert_eq!(sig_alg_of(row.token).map(|r| r.tag), Some(row.tag));
-        assert_eq!(token_of_sig_alg(row.tag).map(|r| r.token), Some(row.token));
+        assert_eq!(SigAlgRow::of_token(row.token).map(|r| r.tag), Some(row.tag));
+        assert_eq!(SigAlgRow::of_tag(row.tag).map(|r| r.token), Some(row.token));
         let key = PublicKey::parse(row.token, &"0a".repeat(row.key_len())).unwrap();
         assert_eq!(key.pq_half().len(), row.pq_key_len, "the PQ half leads");
         assert_eq!(key.ed25519_half().len(), 32, "the Ed25519 half closes");
-        assert_eq!(key.sig_alg().map(|r| r.tag), Some(row.tag));
+        assert_eq!(key.sig_alg_row().map(|r| r.tag), Some(row.tag));
     }
     for (i, a) in SIG_ALGS.iter().enumerate() {
         for b in &SIG_ALGS[i + 1..] {
@@ -186,12 +186,19 @@ fn sig_algs_and_algs_agree_and_the_pins_are_the_ruled_widths() {
         }
     }
     assert_eq!(SIG_ALGS.len(), ALGS.len(), "every key kind signs under a marker tag");
-    assert!(sig_alg_of("ed25519").is_none(), "the deleted classical token names no row");
-    assert!(token_of_sig_alg(0).is_none() && token_of_sig_alg(2).is_none());
-    let tag1 = sig_alg_of(ALG_MLDSA65_ED25519).unwrap();
+    assert!(SigAlgRow::of_token("ed25519").is_none(), "the deleted classical token names no row");
+    assert!(SigAlgRow::of_tag(0).is_none() && SigAlgRow::of_tag(2).is_none());
+    // The tag lookup is `const`: a width a type is sized by is read off the
+    // row at compile time, never by a consumer's own walk of the table.
+    const TAG1_BLOB: usize = match SigAlgRow::of_tag(1) {
+        Some(row) => row.sig_len(),
+        None => 0,
+    };
+    assert_eq!(TAG1_BLOB, 3373, "tag 1's blob width, read at compile time");
+    let tag1 = SigAlgRow::of_token(ALG_MLDSA65_ED25519).unwrap();
     assert_eq!((tag1.tag, tag1.key_len(), tag1.sig_len(), tag1.pq_sig_len), (1, 1984, 3373, 3309));
     assert_eq!(tag1.key_len(), MLDSA65_ED25519_KEY_LEN);
-    let tag3 = sig_alg_of(ALG_FNDSA512_PREVIEW_ED25519).unwrap();
+    let tag3 = SigAlgRow::of_token(ALG_FNDSA512_PREVIEW_ED25519).unwrap();
     assert_eq!((tag3.tag, tag3.key_len(), tag3.sig_len(), tag3.pq_sig_len), (3, 929, 730, 666));
     assert_eq!(tag3.key_len(), FNDSA512_ED25519_KEY_LEN);
     assert!(ALG_FNDSA512_PREVIEW_ED25519.contains("preview"), "the preview says so in its token");

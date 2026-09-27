@@ -15,7 +15,9 @@
 //! * `doc` — per op cell: the TRUNK of the op's `doc` for `insert` and
 //!   `publish` (M5's one truncation, PUB-2.15), the op's `home` for
 //!   `make_link`;
-//! * `op` — the op-kind token as the wire spells it;
+//! * `op` — the op-kind token as the wire spells it, which the body's
+//!   [`EntryBody`] carries (`each_body_carries_the_wire_name_of_its_op`
+//!   holds it to the codec's own `op_name`);
 //! * `body` — per op cell: the declared type and the values for `insert`,
 //!   the three slots as the client sent them for `make_link`, and for
 //!   `publish` THE RUNS THE CLIENT PLACED, their values read off the
@@ -50,14 +52,12 @@ use skep_arrangement::{trunk_of, Caller, Deposit, PublishError, Run, Shot, ShotR
 use skep_content::HasContent;
 use skep_febe::{Op, OpKind};
 use skep_identity::{
-    address_bytes, board_bytes, entry_body_insert, entry_body_link, entry_body_publish,
-    entry_frame, EntrySlot,
+    entry_body_insert, entry_body_link, entry_body_publish, entry_frame, EntryBody, EntrySlot,
 };
 use skep_kernel::TxnError;
 use skep_links::SlotArg;
 use skep_namespace::{HasM3, PrincipalId};
 
-use crate::codec::op_name;
 use crate::history::detached_kernel;
 use crate::write_path::board_term;
 use crate::World;
@@ -176,10 +176,8 @@ pub(crate) fn compose(
     op: &Op,
     principal: PrincipalId,
 ) -> Result<EntryFrame, ComposeFault> {
-    let (position, chain) = board_term(world).ok_or(ComposeFault::NoBoardTerm)?;
-    let board = board_bytes(position, &chain);
-    let account = world.m3().principal_prefix(principal).ok_or(ComposeFault::NoAccount)?;
-    let account = address_bytes(account);
+    let board = board_term(world).ok_or(ComposeFault::NoBoardTerm)?;
+    let account = world.m3().principal_prefix(principal).ok_or(ComposeFault::NoAccount)?.clone();
     let (doc, body) = match op {
         Op::Insert { doc, values, deposit, .. } => {
             let declared = match deposit {
@@ -187,11 +185,11 @@ pub(crate) fn compose(
                 Deposit::Undeclared => None,
             };
             let values = values.iter().map(|v| v.as_bytes());
-            (address_bytes(&trunk_of(doc)), entry_body_insert(declared, values))
+            (trunk_of(doc), entry_body_insert(declared, values))
         }
         Op::MakeLink { home, from, to, ty } => {
             let (ty, from, to) = (Slot::of(ty), Slot::of(from), Slot::of(to));
-            (address_bytes(home), entry_body_link(&ty.as_entry(), &from.as_entry(), &to.as_entry()))
+            (home.clone(), entry_body_link(&ty.as_entry(), &from.as_entry(), &to.as_entry()))
         }
         Op::Publish { doc, shot } => {
             let trunk = trunk_of(doc);
@@ -206,7 +204,7 @@ pub(crate) fn compose(
                     },
                 );
             }
-            (address_bytes(&trunk), publish_body(world, shot)?)
+            (trunk, publish_body(world, shot)?)
         }
         _ => {
             // An op kind added to the checked set with no arm here would have
@@ -220,7 +218,7 @@ pub(crate) fn compose(
             return Err(ComposeFault::OutsideCheckedSet);
         }
     };
-    Ok(EntryFrame { board, account, doc, op: op_name(op.kind()), body })
+    Ok(EntryFrame { board, account, doc, body })
 }
 
 /// Whether the principal may read every value `shot` places — each run's
@@ -333,7 +331,7 @@ fn refused_at_or_before_the_source_gate(
 /// at, or a body past [`MAX_SHOT_BODY_BYTES`], measured in the sequence's
 /// own layout as each value is read. PRECONDITION: the principal may read
 /// every value the shot places ([`every_origin_readable`]).
-fn publish_body(world: &World, shot: &Shot) -> Result<Vec<u8>, ComposeFault> {
+fn publish_body(world: &World, shot: &Shot) -> Result<EntryBody, ComposeFault> {
     let content = world.content();
     let mut values: Vec<&[u8]> = Vec::new();
     let mut body_len = VALUE_COUNT_BYTES;
@@ -351,13 +349,14 @@ fn publish_body(world: &World, shot: &Shot) -> Result<Vec<u8>, ComposeFault> {
 }
 
 /// An ENTRY frame composed but for its `alg` member — [`compose`]'s answer,
-/// every other member in its byte form.
+/// every other member as the value [`skep_identity::entry_frame`] spells: the
+/// board term, the principal's account, the op's document, and the body with
+/// its op's token.
 pub(crate) struct EntryFrame {
-    board: [u8; 40],
-    account: Vec<u8>,
-    doc: Vec<u8>,
-    op: &'static str,
-    body: Vec<u8>,
+    board: (u64, [u8; 32]),
+    account: Address,
+    doc: Address,
+    body: EntryBody,
 }
 
 impl EntryFrame {
@@ -366,7 +365,7 @@ impl EntryFrame {
     /// layout, `framed(ENTRY_TAG, [alg, board, account, doc, op, body])`,
     /// `ENTRY_TAG` its framing tag.
     pub(crate) fn bytes(&self, alg: &str) -> Vec<u8> {
-        entry_frame(alg, &self.board, &self.account, &self.doc, self.op, &self.body)
+        entry_frame(alg, self.board, &self.account, &self.doc, &self.body)
     }
 }
 
@@ -378,6 +377,7 @@ mod tests {
     use skep_namespace::{ghost_home_doc, head_document, SYSTEM_PRINCIPAL};
 
     use super::*;
+    use crate::codec::op_name;
 
     /// The budget is measured in the body's OWN layout: the two constants
     /// [`publish_body`] sums are the ones `entry_body_publish` lays out — a
@@ -386,12 +386,24 @@ mod tests {
     /// and the one admitted at it builds no more.
     #[test]
     fn the_budget_is_measured_in_the_value_sequence_s_own_layout() {
-        assert_eq!(entry_body_publish(std::iter::empty()).len(), VALUE_COUNT_BYTES);
+        assert_eq!(entry_body_publish(std::iter::empty()).as_bytes().len(), VALUE_COUNT_BYTES);
         let values: [&[u8]; 3] = [b"ab", b"c", b"defg"];
         assert_eq!(
-            entry_body_publish(values).len(),
+            entry_body_publish(values).as_bytes().len(),
             VALUE_COUNT_BYTES + 3 * VALUE_LENGTH_BYTES + 2 + 1 + 4
         );
+    }
+
+    /// The frame's `op` member is the op-kind token AS THE WIRE SPELLS IT
+    /// (the design record §2.5): each body `skep_identity` builds carries the
+    /// codec's own name for its op, so a wire rename meets this test before it
+    /// can move a signed preimage.
+    #[test]
+    fn each_body_carries_the_wire_name_of_its_op() {
+        let empty = EntrySlot::Addrs(&[]);
+        assert_eq!(entry_body_insert(None, std::iter::empty()).op(), op_name(OpKind::Insert));
+        assert_eq!(entry_body_link(&empty, &empty, &empty).op(), op_name(OpKind::MakeLink));
+        assert_eq!(entry_body_publish(std::iter::empty()).op(), op_name(OpKind::Publish));
     }
 
     /// The dry run asks the STORE, and its SENTINEL is invisible to every

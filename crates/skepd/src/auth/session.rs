@@ -10,7 +10,7 @@ use rand_core::CryptoRng;
 use serde_json::Value;
 use skep_febe::SessionId;
 use skep_identity::{
-    framed, Fingerprint, IdentityState, KeySet, PublicKey, SESSION_TAG, SESSION_TAG_V2, SIG_ALGS,
+    framed, Fingerprint, IdentityState, KeySet, PublicKey, SigAlgRow, SESSION_TAG, SESSION_TAG_V2,
 };
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
 
@@ -555,19 +555,15 @@ pub(crate) enum SessionBody {
     Signed { principal: PrincipalId, nonce: Nonce, origin: Origin, scope: Scope, sig: SessionSig },
 }
 
-/// The blob width a marker tag's `SIG_ALGS` row fixes, read off the table at
-/// COMPILE time — so [`SessionSig`]'s array widths are the table's own and no
-/// second spelling of them: a row whose width moved (a new tag under the
-/// frozen-tag rule) moves the arm with it.
+/// The blob width a marker tag's `SIG_ALGS` row fixes, read off the row
+/// [`SigAlgRow::of_tag`] names at COMPILE time — so [`SessionSig`]'s array
+/// widths are the table's own and no second spelling of them: a row whose
+/// width moved (a new tag under the frozen-tag rule) moves the arm with it.
 const fn row_sig_len(tag: u8) -> usize {
-    let mut i = 0;
-    while i < SIG_ALGS.len() {
-        if SIG_ALGS[i].tag == tag {
-            return SIG_ALGS[i].sig_len();
-        }
-        i += 1;
+    match SigAlgRow::of_tag(tag) {
+        Some(row) => row.sig_len(),
+        None => panic!("no SIG_ALGS row carries this tag"),
     }
-    panic!("no SIG_ALGS row carries this tag")
 }
 
 /// Tag 1's blob width: ML-DSA-65's 3,309 signature bytes then Ed25519's 64 —
@@ -787,7 +783,7 @@ pub(crate) fn session_payload(
 /// ([`hybrid::key_decodes`]) — one pair of functions in `hybrid`, which is
 /// what keeps the two answering alike.
 fn verify(key: &PublicKey, payload: &[u8], sig: &[u8]) -> bool {
-    key.sig_alg().is_some_and(|row| hybrid::verify(row.tag, key, payload, sig).is_ok())
+    key.sig_alg_row().is_some_and(|row| hybrid::verify(row.tag, key, payload, sig).is_ok())
 }
 
 /// AUTH-4.33 — try EVERY enrolled key in fingerprint order, EACH UNDER ITS

@@ -32,9 +32,8 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use skep_febe::Codec;
 use skep_identity::{
-    address_bytes, board_bytes, entry_body_insert, entry_body_link, entry_body_publish,
-    entry_frame, sig_alg_of, token_of_sig_alg, Enrollment, EntrySlot, Fingerprint, PublicKey,
-    ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519,
+    entry_body_insert, entry_body_link, entry_body_publish, entry_frame, Enrollment, EntrySlot,
+    Fingerprint, PublicKey, SigAlgRow, ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519,
 };
 use skepd::hybrid::{self, HybridSigner, SeededRng06};
 use skepd::{JsonCodec, Seq};
@@ -64,22 +63,15 @@ fn claimant_grant() -> String {
 }
 
 /// [`claimant_grant`]'s ENTRY frame under `alg` over the board term
-/// `(position, chain)`, spelled from its members — for the cells that sign
-/// over a pair, or under a token, the test signer never would.
-fn claimant_grant_entry_frame(alg: &str, (position, chain): (u64, [u8; 32])) -> Vec<u8> {
+/// `(position, chain)`, composed from its members' values — for the cells
+/// that sign over a pair, or under a token, the test signer never would.
+fn claimant_grant_entry_frame(alg: &str, board: (u64, [u8; 32])) -> Vec<u8> {
     let ty = [addr(T_GRANT)];
     let from = [addr(CLAIMANT_ACCOUNT)];
     let to: [skep_address::Address; 0] = [];
     let body =
         entry_body_link(&EntrySlot::Addrs(&ty), &EntrySlot::Addrs(&from), &EntrySlot::Addrs(&to));
-    entry_frame(
-        alg,
-        &board_bytes(position, &chain),
-        &address_bytes(&addr(CLAIMANT_ACCOUNT)),
-        &address_bytes(&addr(CLAIMANT_DOC1)),
-        "make_link",
-        &body,
-    )
+    entry_frame(alg, board, &addr(CLAIMANT_ACCOUNT), &addr(CLAIMANT_DOC1), &body)
 }
 
 /// [`claimant_grant`] carrying `sig` under `alg` as its `attest` member.
@@ -395,6 +387,36 @@ fn every_enrolled_key_of_the_row_attests_including_the_last_in_fingerprint_order
             "the {which} key's slot is that key's own attestation"
         );
     }
+}
+
+/// THE ENTRY FRAME SPELLS THE ADDRESS, NEVER THE STRING: a grant whose frame
+/// names doc 1 and the claimant's account with a LEADING ZERO — `1.0.1.0.01`
+/// and `1.0.01`, the very addresses `1.0.1.0.1` and `1.0.1`, as the wire
+/// reads them — is ADMITTED, its slot filled, when the signer attests the
+/// frame `skep_identity::entry_frame` composes over the addresses it named:
+/// the daemon spells each address in its one dotted-decimal form, and so
+/// does the signer, whichever spelling the wire carried. A signer that framed
+/// the strings it sent would sign `1.0.1.0.01`, a preimage the daemon never
+/// builds, and every attested write it made would be refused `signature`.
+#[test]
+fn an_address_named_with_a_leading_zero_is_attested_over_its_one_spelling() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_owner_session(port);
+    let spelled = typed_link_frame("1.0.1.0.01", &["1.0.01"], &[], T_GRANT);
+    let v = op(port, Some(&signed), &spelled);
+    let at = acked_at(&v);
+    assert!(sd.daemon().attestation_at(Seq(at)).unwrap().is_some(), "the slot is filled: {v}");
+    // The frame composed over the leading-zero spelling IS the canonical
+    // frame, byte for byte.
+    let named: Value = serde_json::from_str(&spelled).unwrap();
+    let canonical: Value = serde_json::from_str(&claimant_grant()).unwrap();
+    assert_eq!(
+        entry_frame_for(port, &signed, CLAIMANT_PRINCIPAL, &named).expect("composable"),
+        entry_frame_for(port, &signed, CLAIMANT_PRINCIPAL, &canonical).expect("composable"),
+        "one address, one frame"
+    );
 }
 
 /// THE PREVIEW ROW ATTESTS AS THE PRODUCTION ROW DOES (AUTH-1.44: "a tag-3
@@ -878,20 +900,15 @@ fn addr(s: &str) -> skep_address::Address {
 /// slots) and a `publish` (three values) on a board whose `H.1` pair is
 /// `(12, 0xAB…)`, by account `1.0.1`.
 fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 3] {
-    let board = board_bytes(12, &[0xAB; 32]);
-    let account = address_bytes(&addr("1.0.1"));
-    let doc = address_bytes(&addr("1.0.1.0.1"));
+    let (account, doc) = (addr("1.0.1"), addr("1.0.1.0.1"));
     let insert = entry_body_insert(None, [&b"a"[..], &b"b"[..]]);
     let ty = [addr("1.1.0.1.0.1.0.3.90")];
     let from = [addr("1.0.1")];
     let to: [skep_address::Address; 0] = [];
     let link = entry_body_link(&EntrySlot::Addrs(&ty), &EntrySlot::Addrs(&from), &EntrySlot::Addrs(&to));
     let publish = entry_body_publish([&b"x"[..], &b"y"[..], &b"z"[..]]);
-    [
-        ("insert", entry_frame(alg, &board, &account, &doc, "insert", &insert)),
-        ("make_link", entry_frame(alg, &board, &account, &doc, "make_link", &link)),
-        ("publish", entry_frame(alg, &board, &account, &doc, "publish", &publish)),
-    ]
+    [insert, link, publish]
+        .map(|body| (body.op(), entry_frame(alg, (12, [0xAB; 32]), &account, &doc, &body)))
 }
 
 /// THE FRAME REGRESSION per op: the bytes, spelled out by hand once — the
@@ -963,7 +980,7 @@ type SignedFrames = Vec<(String, Vec<u8>, Vec<u8>)>;
 
 fn golden_of(tag: u8) -> (HybridSigner, SignedFrames) {
     let signer = HybridSigner::from_seed(tag, &GOLDEN_SEED).unwrap();
-    let alg = token_of_sig_alg(tag).unwrap().token;
+    let alg = SigAlgRow::of_tag(tag).unwrap().token;
     let mut out = Vec::new();
     for (op, frame) in fixed_frames(alg) {
         // Tag 3's signature draws its seed from the fixtures' seeded RNG,
@@ -1044,7 +1061,7 @@ fn golden_tag_3_fndsa512_preview_ed25519() {
 fn each_half_alone_fails_under_both_tags() {
     for tag in [1u8, 3] {
         let (signer, signed) = golden_of(tag);
-        let row = token_of_sig_alg(tag).unwrap();
+        let row = SigAlgRow::of_tag(tag).unwrap();
         let other = HybridSigner::from_seed(tag, &[0x99; 32]).unwrap();
         let (_, frame, sig) = &signed[0];
         let mut rng = SeededRng06::new([1; 32]);
@@ -1098,7 +1115,7 @@ fn tag_1_is_byte_equal_to_a_second_fips_204_implementation() {
 fn sizes_and_timings_per_tag() {
     use std::time::Instant;
     for tag in [1u8, 3] {
-        let row = token_of_sig_alg(tag).unwrap();
+        let row = SigAlgRow::of_tag(tag).unwrap();
         let (signer, signed) = golden_of(tag);
         let key_len = signer.public_key().raw().len();
         let sig_len = signed[0].2.len();
@@ -1188,7 +1205,7 @@ fn the_fn_dsa_preview_signs_and_verifies_on_this_target() {
 fn the_codec_round_trips_the_attest_member_under_both_tokens() {
     let codec = JsonCodec;
     for (tag, token) in [(1u8, ALG_MLDSA65_ED25519), (3u8, ALG_FNDSA512_PREVIEW_ED25519)] {
-        let width = sig_alg_of(token).unwrap().sig_len();
+        let width = SigAlgRow::of_token(token).unwrap().sig_len();
         let frame = json!({
             "op": "make_link", "home": "1.0.1.0.1",
             "from": {"addrs": ["1.0.1"]}, "to": {"addrs": []}, "ty": {"addrs": [T_GRANT]},

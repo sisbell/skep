@@ -499,9 +499,14 @@ const MAX_REQUEST_HEAD: usize = 64 * 1024;
 /// body in live heap; the codec's `MAX_INSERT_VALUES` is what bounds that
 /// one. Raising this number alone raises both amplified costs with it.
 ///
+/// It is also the budget of the one frame body the daemon composes out of
+/// the STORE rather than out of a request — a shot's entry-frame body
+/// ([`crate::auth::entry::MAX_SHOT_BODY_BYTES`], parity with this) — so
+/// raising it raises what the write-path check reads and verifies per shot.
+///
 /// REVISIT at the media round: blob upload raises this for its route only,
 /// which is the shape [`body_cap`] already has.
-const MAX_REQUEST_BODY: usize = 8 * 1024 * 1024;
+pub(crate) const MAX_REQUEST_BODY: usize = 8 * 1024 * 1024;
 
 /// Request-body cap for every route that carries no frame — 16 KiB, ONE
 /// constant at EVERY small-body route (rc-1, owner 2026-09-26: "n 8 KiB cap.

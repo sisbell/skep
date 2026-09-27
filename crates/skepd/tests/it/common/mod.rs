@@ -2308,9 +2308,12 @@ pub fn values_of(port: u16, token: Option<&str>, doc: &str, from: u64, width: u6
 }
 
 /// [`op`] for a `publish` whose runs' VALUES the caller supplies — the
-/// bytes it placed, in V-order — so a shot the signer cannot READ back (a
-/// withheld origin) is still signed over the body the daemon will compose:
-/// the client knows what it is placing whether or not it may read it.
+/// bytes it places, in V-order — signed over the body those values make:
+/// for a shot whose values the caller knows without reading them back over
+/// the wire, and for the cells showing that a signature over values the
+/// caller may NOT read decides nothing — the daemon composes no body over
+/// them, so whatever is attached, the store's own refusal answers, or the
+/// check's value-blind `attestation_invalid:withheld`.
 pub fn op_with_publish_values(port: u16, token: &str, frame: &str, values: &[&[u8]]) -> Value {
     let Some((principal, seed)) = signer_of(token) else {
         return op_unsigned(port, Some(token), frame);

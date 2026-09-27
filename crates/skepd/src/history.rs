@@ -285,14 +285,10 @@ impl Drop for Permit<'_> {
 /// PUB-7.5), and every masking decision would turn on state the reader may
 /// not hold today.
 ///
-/// PRECONDITION: `world` is one `Engine::world_at` produced. That is what
-/// discharges `Durability::InMemory`'s genesis obligation — this mode does
-/// not LOAD, so `WorldState::rebuild_derived` never runs on the root, and
-/// the world arrives with whatever derived hints it already carries. The
-/// bounded replay has seeded its base through `rebuild_derived` and
-/// maintained the hints across the fold, so the premise holds. A world
-/// assembled any other way would be read through stale hints, and nothing
-/// about the answer would look wrong.
+/// PRECONDITION: `world` is one `Engine::world_at` produced — the
+/// precondition [`detached_kernel`] states, which the bounded replay
+/// discharges: it seeds its base through `rebuild_derived` and maintains the
+/// derived hints across the fold.
 ///
 /// The two worlds differ BY TYPE in the signature below — the content is
 /// MOVED in, the mask is BORROWED — so the transposition that would answer
@@ -311,18 +307,7 @@ fn execute_read_on(
     head: &World,
 ) -> Response {
     debug_assert!(frame.op.is_read(), "the history surface runs read frames alone");
-    let cfg = KernelConfig {
-        durability: Durability::InMemory,
-        checkpoint: CheckpointPolicy::Manual,
-        // The daemon's own source, for the record: this kernel frames no
-        // marker and draws no salt. The salts of the history it answers were
-        // READ off the journal's markers by the replay that built `world`,
-        // never regenerated — a reconstruction under any source is the same
-        // reconstruction.
-        salt: SaltSource::Os,
-    };
-    let kernel =
-        Kernel::open(cfg, world).expect("in-memory open runs no recovery and cannot fail");
+    let kernel = detached_kernel(world);
     // The predicate's closure is boxed behind M10's `ReadPredicate`, so it
     // owns its captures: one root clone, made HERE so the two worlds differ
     // BY TYPE at the signature above and the swap this card warns about
@@ -335,6 +320,37 @@ fn execute_read_on(
         None => SessionId::GUEST,
     };
     febe.execute(session, frame)
+}
+
+/// A THROWAWAY M2 kernel rooted at `world`: in memory, no journal, no
+/// recovery, and nothing it answers outliving it — the one door this crate
+/// opens a second kernel through. Two callers: the history surface, reading
+/// a reconstructed world ([`execute_read_on`]), and the write-path check,
+/// asking the store's own gates about a shot over the live head without
+/// touching the live kernel (`crate::auth::entry`). Dropped, it takes every
+/// transaction it ever ran with it.
+///
+/// PRECONDITION: `world` carries TRUE derived hints — a live snapshot's root,
+/// or one `Engine::world_at` produced. That is what discharges
+/// `Durability::InMemory`'s genesis obligation: this mode does not LOAD, so
+/// `WorldState::rebuild_derived` never runs on the root, and the world is
+/// read through whatever hints it arrives with. The live kernel maintains
+/// them across every commit, and the bounded replay seeds its base through
+/// `rebuild_derived` and maintains them across the fold. A world assembled
+/// any other way would be read through stale hints, and nothing about the
+/// answer would look wrong.
+pub(crate) fn detached_kernel(world: World) -> Kernel<World> {
+    let cfg = KernelConfig {
+        durability: Durability::InMemory,
+        checkpoint: CheckpointPolicy::Manual,
+        // The daemon's own source, for the record: a detached kernel frames
+        // no marker and draws no salt. The salts of a reconstructed world's
+        // history were READ off the journal's markers by the replay that
+        // built it, never regenerated — a reconstruction under any source is
+        // the same reconstruction.
+        salt: SaltSource::Os,
+    };
+    Kernel::open(cfg, world).expect("in-memory open runs no recovery and cannot fail")
 }
 
 /// Stamp the requested position as `as_of`: the throwaway kernel is rooted

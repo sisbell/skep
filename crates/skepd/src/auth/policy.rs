@@ -344,17 +344,20 @@ pub(crate) enum CredentialRefusal {
     /// ordinary path and no error case.
     AttestationRequired,
     /// THE WRITE-PATH CHECK's second refusal (§4.5 (2)): an `attest` that
-    /// does not verify, with the cause a verifier can tell from the bytes in
-    /// hand — the `detail` split §7.3 (iii) asks for, at least between
-    /// SIGNATURE and NOT-ENROLLED-AT-POSITION. Token
-    /// `attestation_invalid:<cause>`, the class the cause's own.
+    /// does not verify, or a write over which none can be verified, with the
+    /// cause the check can tell from what it holds — the `detail` split §7.3
+    /// (iii) asks for, at least between SIGNATURE and
+    /// NOT-ENROLLED-AT-POSITION. Token `attestation_invalid:<cause>`, the
+    /// class the cause's own.
     AttestationInvalid(AttestFault),
 }
 
 /// The causes of `attestation_invalid` — the `<cause>` sub-token, joined as
 /// the payload arm joins `malformed_payload:<sub>` (AUTH-2.55), each with
-/// the disposition class the design record §7.3 (iii) lands for its next
-/// act.
+/// the disposition class its next act takes: the design record §7.3 (iii)'s
+/// for the four causes it lands, and for the two the entry frame's own
+/// limits add — a value its author may not read, a body past its budget —
+/// the class of the store refusal each stands beside.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AttestFault {
     /// The blob is not the tag's fixed width (a re-compose: a client bug;
@@ -377,6 +380,20 @@ pub(crate) enum AttestFault {
     /// the daemon composed — wrong bytes, a wrong `board` term, a body
     /// composed otherwise: the client re-composes (REORDER).
     Signature,
+    /// A `publish` places a value its author may not READ, and the store
+    /// would admit it — the base CARRIES the run (PUB-6.24). No entry frame
+    /// is composed over such a value, since a verdict over it would answer
+    /// by its bytes, so no signature can be verified over one: the shot is
+    /// refused whatever it carries, the value unread. REORDER, as `withheld`
+    /// is: the client re-composes without the run, or re-sends once a grant
+    /// lets it read the origin.
+    Withheld,
+    /// A `publish`'s entry-frame body would pass
+    /// [`entry::MAX_SHOT_BODY_BYTES`] — the runs name more value bytes than
+    /// one attested write may carry. PERMANENT, as M5's own `too_many_values`
+    /// is: a shot cannot be split to meet it, the member it mints being born
+    /// whole.
+    FrameTooLarge,
 }
 
 impl AttestFault {
@@ -386,6 +403,8 @@ impl AttestFault {
             AttestFault::BoardUnavailable => "board_unavailable",
             AttestFault::NotEnrolledAtPosition => "not_enrolled_at_position",
             AttestFault::Signature => "signature",
+            AttestFault::Withheld => "withheld",
+            AttestFault::FrameTooLarge => "frame_too_large",
         }
     }
 }
@@ -423,14 +442,14 @@ impl CredentialRefusal {
     /// The wire `disposition`: `Permanent` for the family as AUTH-3.54 pins
     /// it, and the two attestation codes' own classes (signed ops; the
     /// design record §7.3 (iii)) — `attestation_required` REORDER, and
-    /// `attestation_invalid` PERMANENT at not-enrolled-at-position and
-    /// REORDER at the re-compose causes.
+    /// `attestation_invalid` PERMANENT at not-enrolled-at-position and at
+    /// frame-too-large, and REORDER at the re-compose causes.
     pub fn disposition(&self) -> Disposition {
         match self {
             CredentialRefusal::AttestationRequired => Disposition::Reorder,
-            CredentialRefusal::AttestationInvalid(AttestFault::NotEnrolledAtPosition) => {
-                Disposition::Permanent
-            }
+            CredentialRefusal::AttestationInvalid(
+                AttestFault::NotEnrolledAtPosition | AttestFault::FrameTooLarge,
+            ) => Disposition::Permanent,
             CredentialRefusal::AttestationInvalid(_) => Disposition::Reorder,
             _ => Disposition::Permanent,
         }
@@ -771,9 +790,15 @@ fn board_state_admission(
 ///    member names — BEFORE the member is asked for, so a write no entry
 ///    frame can be composed for is told what it is whatever it carries: a
 ///    `publish` run naming an address with no value passes UNATTESTED to the
-///    store's own `dangling_source`; a board with no `H.1` answers
-///    `attestation_invalid:board_unavailable`, never "carry an attest"; a
-///    principal with no account answers
+///    store's own `dangling_source`; a `publish` run onto an origin the
+///    principal may not read is never composed — the shot passes UNATTESTED
+///    to the store's own refusal where its gates refuse it (`withheld`, or an
+///    answer ahead of the source gate), and is refused
+///    `attestation_invalid:withheld` where they would admit it, the base
+///    carrying the run; a body past [`entry::MAX_SHOT_BODY_BYTES`] answers
+///    `attestation_invalid:frame_too_large` before it is built; a board with
+///    no `H.1` answers `attestation_invalid:board_unavailable`, never "carry
+///    an attest"; a principal with no account answers
 ///    `attestation_invalid:not_enrolled_at_position`.
 /// 5. (1): no `attest` → `attestation_required`.
 /// 6. (2): the member's marker tag names its row (a tag no row names is
@@ -789,10 +814,14 @@ fn board_state_admission(
 /// The entry frame the daemon composes for a `publish` reads the runs'
 /// values off the snapshot by `value_at` — a second Σ-width walk per
 /// attested shot, off the snapshot and not under the applier lock (the
-/// investigation §3.3's price). A run naming an address with no value cannot
-/// commit; the store's `dangling_source` is that write's answer, so the check
-/// passes it through unattested rather than refusing a signature over bytes
-/// nobody holds.
+/// investigation §3.3's price), stopped at the body's budget. It reads a
+/// value only where the principal may read it: this check's verdict is
+/// answered to the principal, so a value read on its behalf is a value
+/// disclosed to it, and every refusal it gives a shot with an unreadable run
+/// is the same whatever that run's bytes are. A run naming an address with
+/// no value cannot commit; the store's `dangling_source` is that write's
+/// answer, so the check passes it through unattested rather than refusing a
+/// signature over bytes nobody holds.
 fn attestation_check(
     world: &World,
     identity: &IdentityState,
@@ -818,20 +847,26 @@ fn attestation_check(
     }
     // 4 — THE ENTRY FRAME, every member but `alg`, composed before the
     // member is asked for: a write the daemon cannot compose an entry frame
-    // for cannot commit either (a `publish` run naming an address with no
-    // value) and is passed through UNATTESTED for the store's own refusal,
-    // attest or none; and a board with no `H.1` — a journal damaged below it,
-    // since the claim writes `H.1` in its own step (s1) — has no `board` term
-    // for ANY client to sign over, which is told as its own cause rather than
-    // as "carry an attest". `alg` is the member's own, so it waits for step 6.
+    // for because the store refuses it (a `publish` run naming an address
+    // with no value, or onto an origin the store withholds) is passed through
+    // UNATTESTED for the store's own refusal, attest or none; one the store
+    // would admit over a value its author may not read is refused as its own
+    // cause with that value unread, and one whose body passes the budget
+    // before the body is built; and a board with no `H.1` — a journal damaged
+    // below it, since the claim writes `H.1` in its own step (s1) — has no
+    // `board` term for ANY client to sign over, which is told as its own
+    // cause rather than as "carry an attest". `alg` is the member's own, so
+    // it waits for step 6.
     let invalid = CredentialRefusal::AttestationInvalid;
     let entry_frame = match entry::compose(world, op, principal) {
         Ok(entry_frame) => entry_frame,
         Err(ComposeFault::NoBoardTerm) => return Err(invalid(AttestFault::BoardUnavailable)),
         Err(ComposeFault::NoAccount) => return Err(invalid(AttestFault::NotEnrolledAtPosition)),
-        Err(ComposeFault::MissingValue) | Err(ComposeFault::OutsideCheckedSet) => {
-            return Ok(None)
-        }
+        Err(ComposeFault::Withheld) => return Err(invalid(AttestFault::Withheld)),
+        Err(ComposeFault::OverBudget) => return Err(invalid(AttestFault::FrameTooLarge)),
+        Err(ComposeFault::MissingValue)
+        | Err(ComposeFault::StoreRefuses)
+        | Err(ComposeFault::OutsideCheckedSet) => return Ok(None),
     };
     // 5 — (1).
     let Some(presented) = presented else {

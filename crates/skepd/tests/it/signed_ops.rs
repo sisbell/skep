@@ -10,10 +10,13 @@
 //! (`attestation_required`), admitted (the slot filled) — by ANY enrolled
 //! key of the row, under either tag, over `H.1`'s pair for the life of the
 //! board, the entry frame naming the trunk a member-addressed write belongs
-//! to — and invalid at each of its causes; the system account's own writes
-//! landing unsigned (A3's ω exemption for a DISPATCHED write is pinned in
-//! `policy.rs`, the one place such a write reaches the check); a credential
-//! deposit's two positions taking no entry signature (D26).
+//! to — and invalid at each of its causes; a shot placing a value its author
+//! may not read answered by the store's own gates or refused unread, never
+//! by the value (PUB-8.4), and a shot's body bounded at parity with the
+//! request-body cap; the system account's own writes landing unsigned (A3's
+//! ω exemption for a DISPATCHED write is pinned in `policy.rs`, the one
+//! place such a write reaches the check); a credential deposit's two
+//! positions taking no entry signature (D26).
 //!
 //! THE GOLDENS (the frozen-tag rule's pin): per tag, one seed through the
 //! KDF to both public keys and the fingerprint; the three ops' entry frames
@@ -526,6 +529,194 @@ fn a_member_addressed_write_is_framed_over_its_trunk() {
     // The insert addressed to the member: the check passes, the store refuses.
     let v = op(port, Some(&signed), &insert_frame(&m1, 4, "d", false));
     assert_eq!(verdict(&v), "published_target", "framed over the trunk, refused by the store: {v}");
+}
+
+/// Per-byte values of `s`, as a per-byte insert of it mints them — the
+/// bytes a client knows it is placing.
+fn per_byte(s: &str) -> Vec<&[u8]> {
+    s.as_bytes().chunks(1).collect()
+}
+
+/// THE CHECK READS NO VALUE ITS PRINCIPAL MAY NOT READ (PUB-6.9; PUB-8.4:
+/// `withheld` "before any existence answer"). B, granted the claimant's
+/// private draft D, versions it — F, B's own published document arranging
+/// D's first five addresses by reference — and is revoked; D then grows a
+/// sixth address B never could read. From B's signed session every shot
+/// naming D's addresses is answered the same whatever it carries —
+/// unattested, signed over D's true bytes, or over a wrong guess:
+/// A — a run onto D's sixth address, which F does not carry: `withheld`;
+/// B — one run spanning addresses F carries AND the one it does not: the
+///     same;
+/// C — D ITSELF named as the base, outside F's chain: `base_not_in_chain`,
+///     the store's refusal ahead of its source gate — a base the client
+///     names carries nothing from outside the document's own chain;
+/// D — a run F's own base CARRIES: the store's gate would admit it ungated
+///     (PUB-6.24), and a revoked grantee attests no bytes it may no longer
+///     read — `attestation_invalid:withheld`, REORDER, the bytes unread.
+/// Nothing commits. A check that composed D's values would answer A and B
+/// BY them — `attestation_required` for an address that holds a value,
+/// `signature` for a wrong guess — and admit D's shot signed over the right
+/// one; one that passed every such shot through would commit D's carried
+/// shot UNATTESTED; one that refused them all would answer A, B and C with
+/// its own refusal where the store's is owed.
+#[test]
+fn a_run_its_principal_may_not_read_is_answered_the_same_whatever_is_attached() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = owner(port);
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let d = draft_with(port, &bare, "abcde");
+    let b = seat_stranger(port, 961);
+    let b_signed = hire(port, &signed, CLAIMANT_DOC1, &b.account, 961, &distinct_key(62));
+    let grant = deposit_grant(port, &signed, CLAIMANT_DOC1, &d, Some(&b.account));
+    let f = acked_addr(&version_of(port, &b_signed, &d, Some(true)));
+    expect_resp(
+        &typed_link(port, &signed, CLAIMANT_DOC1, &[grant.as_str()], &[b.account.as_str()], T_GRANT),
+        "ack_addr",
+    );
+    assert_withheld(&op(port, Some(&b_signed), &read1_frame(&d)), &d);
+    expect_resp(&insert_text(port, &bare, &d, 6, "f"), "ack_addr");
+    let at = |k: u64| format!("{d}.0.1.{k}");
+    let into_f = |base: &str, runs: &[String]| publish_frame(&f, Some((base, 5)), None, runs);
+    // One shot, three ways: unattested, then signed over each guess.
+    let answers = |frame: &str, guesses: [&str; 2]| -> Vec<Value> {
+        let mut out = vec![op_unsigned(port, Some(&b_signed), frame)];
+        for guess in guesses {
+            out.push(op_with_publish_values(port, &b_signed, frame, &per_byte(guess)));
+        }
+        out
+    };
+    let before = head_position(port);
+
+    // A — an address F never carried.
+    for v in answers(&into_f(&f, &[run(&d, &at(6), 1)]), ["f", "g"]) {
+        assert_withheld(&v, &d);
+    }
+    // B — carried and uncarried in one run.
+    for v in answers(&into_f(&f, &[run(&d, &at(4), 3)]), ["def", "deg"]) {
+        assert_withheld(&v, &d);
+    }
+    // C — D named as the base: outside F's chain, it carries nothing.
+    for v in answers(&into_f(&d, &[run(&d, &at(1), 5)]), ["abcde", "abcdz"]) {
+        assert_eq!(verdict(&v), "base_not_in_chain", "{v}");
+    }
+    // D — F's own carried run: the store's gate would admit it; refused here,
+    //     unread, whatever is attached.
+    for v in answers(&into_f(&f, &[run(&d, &at(1), 5)]), ["abcde", "abcdz"]) {
+        assert_eq!(
+            refusal(&v),
+            ("credential_refused:attestation_invalid:withheld".to_string(), "reorder".to_string()),
+            "a carried run its author may no longer read: {v}"
+        );
+    }
+    assert_eq!(head_position(port), before, "nothing committed");
+}
+
+/// A CARRIED RUN ITS PRINCIPAL NEVER COULD READ IS REFUSED UNREAD. The
+/// claimant publishes a member of its doc 1 windowing its own private draft
+/// D, masked to every reader who may not read D (PUB-6.41). C, a stranger
+/// holding no grant, versions that member — a published source, so the
+/// version is admitted — and F, C's own published document, arranges D's
+/// addresses by reference, masked to C as to everyone. A shot into F
+/// re-supplying those runs is CARRIED by F, so the store's source gate would
+/// admit it ungated (PUB-6.24), though C never read a byte of D. The check
+/// composes nothing over them: `attestation_invalid:withheld`, unattested
+/// and signed over the true bytes or a wrong guess alike, and nothing
+/// commits. A check that composed carried values would hand C an oracle over
+/// D — `attestation_required` for an address that holds a value, `signature`
+/// for a wrong guess, admission for the right one.
+#[test]
+fn a_carried_run_its_principal_never_could_read_is_refused_unread() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = owner(port);
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let c = seat_stranger(port, 971);
+    let c_signed = hire(port, &signed, CLAIMANT_DOC1, &c.account, 971, &distinct_key(63));
+    let d = draft_with(port, &bare, "secret");
+    let d_run = run(&d, &format!("{d}.0.1.1"), 6);
+    let member = shot(port, &signed, CLAIMANT_DOC1, None, None, std::slice::from_ref(&d_run));
+    let masked = json!([withheld_item(&d, 6)]);
+    assert_eq!(delivery(port, Some(&c_signed), &member, 1, 6), masked, "the member windows D, masked to C");
+    let f = acked_addr(&version_of(port, &c_signed, &member, Some(true)));
+    assert!(f.starts_with(&format!("{}.0.", c.account)), "the version is C's own document: {f}");
+    assert_eq!(delivery(port, Some(&c_signed), &f, 1, 6), masked, "and F carries D's runs, masked");
+    let carried = publish_frame(&f, Some((&f, 6)), None, &[d_run]);
+    let before = head_position(port);
+    for v in [
+        op_unsigned(port, Some(&c_signed), &carried),
+        op_with_publish_values(port, &c_signed, &carried, &per_byte("secret")),
+        op_with_publish_values(port, &c_signed, &carried, &per_byte("secreT")),
+    ] {
+        assert_eq!(
+            refusal(&v),
+            ("credential_refused:attestation_invalid:withheld".to_string(), "reorder".to_string()),
+            "a carried run its author never could read: {v}"
+        );
+    }
+    assert_eq!(head_position(port), before, "nothing committed");
+}
+
+/// A SHOT'S ENTRY-FRAME BODY IS BOUNDED, at parity with the request-body
+/// cap (`skepd::body_cap("/op")`): the body `entry_body_publish` would build
+/// is measured as the check reads each value, and a shot whose runs name one
+/// byte more is refused `attestation_invalid:frame_too_large`, PERMANENT,
+/// before the body is built — attested or not, since a body that is never
+/// built verifies nothing. At the budget exactly the shot is admitted and
+/// commits attested. A run names one stored value as often as the wire's run
+/// list admits, so no cap on the request bounds the body the check reads:
+/// four runs over one two-megabyte atom fill it here.
+#[test]
+fn a_shot_body_past_the_budget_is_refused_before_it_is_built() {
+    let budget = skepd::body_cap("/op");
+    // The body is a be64 count, then a be32 length and the bytes per value:
+    // four values of `width` bytes each fill `8 + 4 × (4 + width)` — the
+    // budget exactly.
+    let width = (budget - 8) / 4 - 4;
+    assert_eq!(8 + 4 * (4 + width), budget, "four atoms fill the body to the byte");
+    let (xs, ys) = ("x".repeat(width), "y".repeat(width + 1));
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = owner(port);
+    let d = owner_draft(port, &signed);
+    let insert_atom = |at: u64, text: &str| {
+        format!(
+            r#"{{"op":"insert","doc":"{d}","at":{{"subspace":"1","ordinal":"{at}"}},"values":[{{"atom":"{text}"}}]}}"#
+        )
+    };
+    let x = acked_addr(&op_unsigned(port, Some(&signed), &insert_atom(1, &xs)));
+    let y = acked_addr(&op_unsigned(port, Some(&signed), &insert_atom(2, &ys)));
+    let (x_run, y_run) = (run(&d, &x, 1), run(&d, &y, 1));
+    let base = Some((CLAIMANT_DOC1, 1));
+    let before = head_position(port);
+
+    // One byte past the budget: refused before the body is built.
+    let over = publish_frame(CLAIMANT_DOC1, base, None, &[x_run.clone(), x_run.clone(), x_run.clone(), y_run]);
+    let over_values = [xs.as_bytes(), xs.as_bytes(), xs.as_bytes(), ys.as_bytes()];
+    for v in [
+        op_unsigned(port, Some(&signed), &over),
+        op_with_publish_values(port, &signed, &over, &over_values),
+    ] {
+        assert_eq!(
+            refusal(&v),
+            (
+                "credential_refused:attestation_invalid:frame_too_large".to_string(),
+                "permanent".to_string()
+            ),
+            "one byte past the shot-body budget: {v}"
+        );
+    }
+    assert_eq!(head_position(port), before, "a refused shot commits nothing");
+
+    // At the budget exactly: the body is built, the check admits, the shot
+    // commits attested.
+    let at_cap = publish_frame(CLAIMANT_DOC1, base, None, &[x_run.clone(), x_run.clone(), x_run.clone(), x_run]);
+    let v = op_with_publish_values(port, &signed, &at_cap, &[xs.as_bytes(); 4]);
+    assert_eq!(v["resp"].as_str(), Some("ack_addr"), "a shot at the budget is admitted: {v}");
+    assert!(sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().is_some(), "and attested");
 }
 
 /// A3 as the wire sees it: the head writer's own commits — the system

@@ -712,8 +712,11 @@ fn the_pointwise_pair_floats_to_the_trunk_head_and_delete_orphans_reads_the_addr
 /// document the caller may not read is `withheld`, naming the origin's
 /// DOCUMENT in `site.addr` and nothing else, BEHIND ownership (a stranger's
 /// shot answers `not_owner` whatever its runs) and AHEAD of existence (a
-/// dangling run onto an unreadable origin is withheld, not dangling). A
-/// readable origin is placed as a window that answers its origin.
+/// dangling run onto an unreadable origin is withheld, not dangling) —
+/// whatever the shot carries: signed over the true bytes, over a wrong
+/// guess, or not at all, the answer is the same, the write-path check
+/// reading no value the caller may not read. A readable origin is placed as
+/// a window that answers its origin.
 #[test]
 fn the_source_gate_answers_behind_ownership_and_ahead_of_existence() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -749,10 +752,10 @@ fn the_source_gate_answers_behind_ownership_and_ahead_of_existence() {
 
     let before = head(port);
     // (1) A run onto the stranger's draft: withheld, naming the draft. The
-    //     claimant cannot READ `xy` back to sign over it, so this cell signs
-    //     over the bytes it knows it is placing (signed ops: the check runs
-    //     ahead of the store, and the store's gate is reached by a shot the
-    //     check admitted).
+    //     claimant signs over the bytes it knows it is placing, and that
+    //     decides nothing: the check composes no value the store would
+    //     withhold, so the shot passes through and the store's gate answers,
+    //     whatever is attached — (1′) and (2′) below.
     let mut known = values_of(port, Some(&signed), CLAIMANT_DOC1, 1, 1);
     known.push(b"x".to_vec());
     known.push(b"y".to_vec());
@@ -783,6 +786,37 @@ fn the_source_gate_answers_behind_ownership_and_ahead_of_existence() {
                 None,
                 &[run(&s_draft, &format!("{s_draft}.0.1.9"), 1)],
             ),
+        ),
+        &s_draft,
+    );
+    // (1′) The shot of (1) signed over a WRONG guess at the draft's second
+    //      byte: the same answer — no verdict turns on a byte the caller may
+    //      not read.
+    let mut guess = values_of(port, Some(&signed), CLAIMANT_DOC1, 1, 1);
+    guess.push(b"x".to_vec());
+    guess.push(b"z".to_vec());
+    let guess: Vec<&[u8]> = guess.iter().map(Vec::as_slice).collect();
+    assert_withheld(
+        &op_with_publish_values(
+            port,
+            &signed,
+            &publish(
+                CLAIMANT_DOC1,
+                Some((CLAIMANT_DOC1, 1)),
+                None,
+                &[run(CLAIMANT_DOC1, ATOM, 1), run(&s_draft, &s_text, 2)],
+            ),
+            &guess,
+        ),
+        &s_draft,
+    );
+    // (2′) An EXISTING run onto it, unattested: the dangling run's answer —
+    //      existence is not told through the check either.
+    assert_withheld(
+        &op_unsigned(
+            port,
+            Some(&signed),
+            &publish(CLAIMANT_DOC1, Some((CLAIMANT_DOC1, 1)), None, &[run(&s_draft, &s_text, 2)]),
         ),
         &s_draft,
     );

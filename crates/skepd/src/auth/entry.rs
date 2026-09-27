@@ -28,7 +28,7 @@
 
 use skep_arrangement::trunk_of;
 use skep_content::HasContent;
-use skep_febe::Op;
+use skep_febe::{Op, OpKind};
 use skep_identity::{
     address_bytes, board_bytes, entry_body_insert, entry_body_link, entry_body_publish,
     entry_frame, EntrySlot,
@@ -54,8 +54,23 @@ pub(crate) enum ComposeFault {
     /// A `publish` run names an address the snapshot holds no value at; the
     /// store's `dangling_source` is the answer this write is owed.
     MissingValue,
-    /// The op is none of the three the slice attests.
+    /// The op is off the slice [`attested`] states.
     NotAttestable,
+}
+
+/// THE SLICE — the ops an ENTRY frame is composed for, and so the ops the
+/// write-path check attests: `insert`, `make_link`, `publish` (the seam
+/// build's three; the record's thirteen publish-class-capable inputs are the
+/// WIDENING lane's). The ONE statement of it: the codec admits a frame's
+/// `attest` member exactly on these, the check demands one exactly on these,
+/// and [`compose`] has an arm exactly for these. The three must agree in
+/// both directions — a member the codec admits and the check never demands
+/// is a signature parsed and silently DROPPED, the commit landing with its
+/// marker slot empty; one the check demands and the codec refuses is a write
+/// no signed session can make on a claimed board — so a widening is one
+/// edit here and one arm in [`compose`], whose wildcard asserts it.
+pub(crate) fn attested(kind: OpKind) -> bool {
+    matches!(kind, OpKind::Insert | OpKind::MakeLink | OpKind::Publish)
 }
 
 /// A link slot as the frame's slot row takes it — the resolve form's V-specs
@@ -119,7 +134,13 @@ pub(crate) fn compose(
             }
             (address_bytes(&trunk_of(doc)), entry_body_publish(values))
         }
-        _ => return Err(ComposeFault::NotAttestable),
+        _ => {
+            // An op added to `attested` with no arm here would have its
+            // `attest` dropped unverified — the silent direction — so the
+            // premise is made loud.
+            debug_assert!(!attested(op.kind()), "an attested op with no frame: {:?}", op.kind());
+            return Err(ComposeFault::NotAttestable);
+        }
     };
     Ok(entry_frame(alg, &board, &account, &doc, op_name(op.kind()), &body))
 }

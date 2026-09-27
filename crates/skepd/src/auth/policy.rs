@@ -1,6 +1,8 @@
 //! The write-path policy surface (AUTH part 03): the credential type
 //! addresses, op classification, the refusal producers at their pinned lock
-//! scopes, and the precheck's ordered slots.
+//! scopes, the precheck's ordered slots, and — on the plain path, behind the
+//! RES-26 gate — THE WRITE-PATH CHECK (signed ops), whose ADMITTED
+//! attestation is what the write's commit marker carries.
 
 use std::sync::LazyLock;
 
@@ -249,11 +251,15 @@ pub(crate) fn deposits_credential_link(op: &Op) -> bool {
 }
 
 /// The daemon-side refusal vocabulary (AUTH-3.53). Every one marshals as
-/// `code: credential_refused, disposition: permanent, detail: token()`
-/// (AUTH-3.54 — `Permanent` UNIFORMLY; the remedy lives in the face) — a
-/// uniformity [`crate::codec::credential_refused_reply`] performs rather
-/// than leaves to each producer, so what varies here is the TOKEN and
-/// nothing else.
+/// `code: credential_refused, detail: token(), disposition: disposition()`
+/// through [`crate::codec::credential_refused_reply`], which fixes the code
+/// and renders the other two as the refusal names them. The DISPOSITION is
+/// the refusal's own to name, because the refusal is what knows its class:
+/// `Permanent` for the family as AUTH-3.54 pins it (the remedy lives in the
+/// face), and the two attestation codes' own classes beside it (signed ops;
+/// the design record §7.3 (iii)). [`CredentialRefusal::disposition`] is the
+/// one place a class is chosen, and a new refusal takes the family's
+/// `Permanent` there unless it names another.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CredentialRefusal {
     /// The fold's own verdict — produced by `precheck`, slot (3).
@@ -459,7 +465,7 @@ pub(crate) fn op_shape_refusal(op: &Op) -> Option<CredentialRefusal> {
 // ── nullify_refusal — the NULLIFY class, read lock (AUTH-3.7–3.9; PUB-6.10,
 //    PUB-6.30, PUB-6.64 — slot 5's three cells) ─────────────────────────────
 
-/// The NULLIFY class — slot 5's position in [`plain_refusal`]'s order
+/// The NULLIFY class — slot 5's position in [`plain_admission`]'s order
 /// (PUB-6.36 as RES-195 places it): `Some(token)` iff `op` is a `Nullify`
 /// whose target's `readlink` type slot the write path's recognition input
 /// ([`write_types`]) classifies, AND that class's token is the caller's to
@@ -504,7 +510,7 @@ pub(crate) fn op_shape_refusal(op: &Op) -> Option<CredentialRefusal> {
 /// keyed on the record's home alone would tell a stranger filing from a home
 /// of its own which addresses in the draft hold one — the occupancy oracle
 /// PUB-6.9 forbids. Pre-claim every producer's answer stands for every
-/// caller, but in [`plain_refusal`]'s order the pre-claim admission gate
+/// caller, but in [`plain_admission`]'s order the pre-claim admission gate
 /// answers `claim_first` ahead of this one (PUB-6.35, PUB-6.36 slot 4 before
 /// slot 5), so over the wire a token is reached only once the board is
 /// claimed — and once claimed, the publish-class gate's `nullify` row
@@ -631,7 +637,7 @@ pub(crate) fn first_mint_private_refusal(
     }
 }
 
-// ── board_state_refusal — the two CLAIM-complementary gates (AUTH-3.78) ──
+// ── board_state_admission — the two CLAIM-complementary gates (AUTH-3.78) ─
 
 /// The publish gate's publication read — the engine's ONE definition (owner
 /// ruling D1, 2026-09-05): `published(trunk_of(doc))`, a membership miss on
@@ -671,8 +677,8 @@ pub(super) fn published_unprojected(world: &World, a: &Address) -> bool {
     world.published(a)
 }
 
-/// The plain path's one producer for the two board-state gates, dispatched
-/// on claimed-ness (AUTH-3.78): once claimed, the public-permanent gate
+/// The plain path's ADMISSION at the two board-state gates, dispatched on
+/// claimed-ness (AUTH-3.78): once claimed, the public-permanent gate
 /// (RES-26, `signed_session_required`) and — behind it, on the same
 /// classification (signed ops; the design record §4.5 (1)–(2), §5.5) — THE
 /// WRITE-PATH CHECK; in UNCLAIMED the pre-claim admission gate (RES-27,
@@ -686,19 +692,22 @@ pub(super) fn published_unprojected(world: &World, a: &Address) -> bool {
 /// publish class (D1's third arm) or on the UNCLAIMED board (A5: the
 /// ceremony's own span, where an `attest` a cautious client attached could
 /// verify under no key). The slot's producer set is stated here in code: a
-/// dispatched publish-class write above the claim whose `attest` this
-/// producer admitted, and nothing else.
+/// dispatched publish-class write above the claim whose PRESENTED `attest`
+/// this admission verified, and nothing else — which holds because the codec
+/// hands the member over BESIDE the request and not inside it
+/// (`DaemonOp::Febe`'s `presented`), so the plain sequence's assignment of
+/// this answer is `Request::attest`'s one writer.
 ///
 /// `world` and `identity` MUST be the pair taken under the read guard for
 /// this request; the guard argument is that contract's cheap half.
-pub(crate) fn board_state_refusal(
+fn board_state_admission(
     _lock: &LockRead<'_>,
     world: &World,
     identity: &IdentityState,
     op: &Op,
     principal: PrincipalId,
     signer: Option<&Fingerprint>,
-    attest: Option<&Attestation>,
+    presented: Option<&Attestation>,
 ) -> Result<Option<Attestation>, CredentialRefusal> {
     if identity.claimant().is_some() {
         // A1: the check runs on a CLAIMED board — every write reaching this
@@ -710,7 +719,7 @@ pub(crate) fn board_state_refusal(
         if signer.is_none() {
             return Err(CredentialRefusal::SignedSessionRequired);
         }
-        attestation_check(world, identity, op, principal, attest)
+        attestation_check(world, identity, op, principal, presented)
     } else {
         // A5: the unclaimed board's span — the `attest` is dropped whole.
         match pre_claim_gate(world, op, principal) {
@@ -722,14 +731,16 @@ pub(crate) fn board_state_refusal(
 
 /// THE WRITE-PATH CHECK (signed ops; the design record §4.5 (1)–(2) made
 /// concrete at the placement the owner confirmed 2026-09-25 — BEFORE the
-/// transaction, beside `publish_gate`, on the snapshot pair the gates read,
-/// which under the serialization guard IS the transaction's base). Reached
-/// for a publish-class write from a SIGNED session on a CLAIMED board:
+/// transaction, beside `publish_gate` (the design record's name for the
+/// RES-26 gate — here `board_state_admission`'s claimed arm), on the
+/// snapshot pair the gates read, which under the serialization guard IS the
+/// transaction's base). Reached for a publish-class write from a SIGNED
+/// session on a CLAIMED board:
 ///
-/// 1. THE SLICE — the three ops the seam build attests (`insert`,
-///    `make_link`, `publish`); every other publish-class op carries no
-///    `attest` (the codec refuses the member there) and commits on its
-///    signed session as before — the widening lane's, not this one's.
+/// 1. THE SLICE — [`entry::attested`]: the three ops the seam build attests
+///    (`insert`, `make_link`, `publish`); every other publish-class op
+///    carries no `attest` (the codec refuses the member there) and commits
+///    on its signed session as before — the widening lane's, not this one's.
 /// 2. THE RECORD DEPOSIT EXEMPTION (§2.5's `insert` cell as re-cut at
 ///    required signing; D26): a DECLARED deposit under a CREDENTIAL kind —
 ///    the atom a credential record rides — carries its signature in the
@@ -743,9 +754,16 @@ pub(crate) fn board_state_refusal(
 ///    address arithmetic; never the `"system"` testimony). The head writer
 ///    never passes dispatch, so this arm is stated for a dispatched write
 ///    that names one and is met by none today.
-/// 4. (1): no `attest` → `attestation_required`.
-/// 5. (2): the blob's width under its tag; the frame composed from the op
-///    and the snapshot (`super::entry`); the KEY SET that OPENS the act's
+/// 4. THE FRAME, composed from the op and the snapshot (`super::entry`)
+///    BEFORE the member is asked for, so a write no frame can be composed
+///    for is told what it is whatever it carries: a `publish` run naming an
+///    address with no value passes UNATTESTED to the store's own
+///    `dangling_source`; a board with no `H.1` answers
+///    `attestation_invalid:board_unavailable`, never "carry an attest"; a
+///    principal with no account answers
+///    `attestation_invalid:not_enrolled_at_position`.
+/// 5. (1): no `attest` → `attestation_required`.
+/// 6. (2): the blob's width under its tag; the KEY SET that OPENS the act's
 ///    principal AS OF this base (AUTH-4.30 (i)'s walk, `key_subject`) —
 ///    the fold's own set at this position, the check's table being the
 ///    daemon's own since no record grade is built yet; the candidates are
@@ -764,10 +782,10 @@ fn attestation_check(
     identity: &IdentityState,
     op: &Op,
     principal: PrincipalId,
-    attest: Option<&Attestation>,
+    presented: Option<&Attestation>,
 ) -> Result<Option<Attestation>, CredentialRefusal> {
-    // 1 — the slice.
-    if !matches!(op, Op::Insert { .. } | Op::MakeLink { .. } | Op::Publish { .. }) {
+    // 1 — the slice, [`entry::attested`]'s one statement of it.
+    if !entry::attested(op.kind()) {
         return Ok(None);
     }
     // 2 — the record deposit's atom (D26).
@@ -788,7 +806,7 @@ fn attestation_check(
     // its own step (s1) — has no `board` term for ANY client to sign over,
     // which is told as its own cause rather than as "carry an attest".
     let invalid = CredentialRefusal::AttestationInvalid;
-    let row = match attest {
+    let row = match presented {
         Some(a) => token_of_sig_alg(a.sig_alg()).ok_or(invalid(AttestFault::Malformed))?,
         None => token_of_sig_alg(hybrid::TAG_MLDSA65_ED25519).expect("tag 1 is a row"),
     };
@@ -799,11 +817,11 @@ fn attestation_check(
         Err(ComposeFault::MissingValue) | Err(ComposeFault::NotAttestable) => return Ok(None),
     };
     // 5 — (1).
-    let Some(attest) = attest else {
+    let Some(presented) = presented else {
         return Err(CredentialRefusal::AttestationRequired);
     };
     // 6 — (2).
-    if attest.sig().len() != row.sig_len() {
+    if presented.sig().len() != row.sig_len() {
         return Err(invalid(AttestFault::Malformed));
     }
     let candidates: Vec<&PublicKey> = key_subject(world, identity, principal)
@@ -821,9 +839,9 @@ fn attestation_check(
     }
     if candidates
         .iter()
-        .any(|key| hybrid::verify(row.tag, key, attest.sig(), &frame).is_ok())
+        .any(|key| hybrid::verify(row.tag, key, presented.sig(), &frame).is_ok())
     {
-        Ok(Some(attest.clone()))
+        Ok(Some(presented.clone()))
     } else {
         Err(invalid(AttestFault::Signature))
     }
@@ -843,7 +861,7 @@ fn system_owned(world: &World, op: &Op) -> bool {
 
 /// RES-26 (AUTH-3.79–3.81): on a claimed board, an op whose write lands in
 /// the published world is accepted only from a signed session — and, since
-/// signed ops, is where the write-path check runs (`board_state_refusal`).
+/// signed ops, is where the write-path check runs (`board_state_admission`).
 /// This is THE CLASSIFICATION ORACLE (PUB-6.43, the daemon's own): `true`
 /// iff the write is PUBLISH-CLASS for this caller. Domain per
 /// input form (PUB-6.43's input table):
@@ -1119,13 +1137,21 @@ fn accounts_under(world: &World, node: &Address) -> Option<Nat> {
     (ord > &Nat::from(0u32)).then(|| ord.clone() - Nat::from(1u32))
 }
 
-// ── plain_refusal — the plain path's ordered producers (AUTH-3.35) ───────
+// ── plain_admission — the plain path's ordered producers (AUTH-3.35) ─────
 
-/// The plain path's ordered producers: the MINT class — the first-mint
-/// publication door then MINT-FIRST — then the CLAIM-complementary board-state
-/// pair, then the NULLIFY class. The ORDER is the pin, so it lives here with
-/// the producers rather than at the call site — the same treatment
-/// [`precheck`] gives the credential path's eight slots.
+/// The plain path's ADMISSION: its ordered producers — the MINT class, the
+/// first-mint publication door then MINT-FIRST; then the
+/// CLAIM-complementary board-state pair; then the NULLIFY class. The ORDER
+/// is the pin, so it lives here with the producers rather than at the call
+/// site — the same treatment [`precheck`] gives the credential path's eight
+/// slots.
+///
+/// Named an ADMISSION and not a refusal because both sides of its answer are
+/// load-bearing: `Err` is the refusal the first producer to fire names, and
+/// `Ok` carries the attestation the write-path check VERIFIED — the value
+/// this write's commit marker will hold — or `None`. The `*_refusal`
+/// producers it composes answer `Option<CredentialRefusal>` and nothing on
+/// success.
 ///
 /// [`first_mint_private_refusal`] (PUB-8.20's door) shares the mint slot with
 /// [`mint_home_refusal`] and is disjoint from it — the door reads a
@@ -1159,14 +1185,14 @@ fn accounts_under(world: &World, node: &Address) -> Option<Nat> {
 /// `world` and `identity` MUST be the pair taken under the read guard for
 /// this request; the guard argument each producer takes is that contract's
 /// cheap half.
-pub(crate) fn plain_refusal(
+pub(crate) fn plain_admission(
     lock: &LockRead<'_>,
     world: &World,
     identity: &IdentityState,
     op: &Op,
     principal: PrincipalId,
     signer: Option<&Fingerprint>,
-    attest: Option<&Attestation>,
+    presented: Option<&Attestation>,
 ) -> Result<Option<Attestation>, CredentialRefusal> {
     if let Some(r) = first_mint_private_refusal(lock, world, op, principal) {
         return Err(r);
@@ -1180,7 +1206,7 @@ pub(crate) fn plain_refusal(
     // so a signed `nullify` carrying no `attest` is judged as before (no
     // `attest` is admitted on `nullify` in this slice) and its class token
     // still speaks last.
-    let admitted = board_state_refusal(lock, world, identity, op, principal, signer, attest)?;
+    let admitted = board_state_admission(lock, world, identity, op, principal, signer, presented)?;
     if let Some(r) = nullify_refusal(lock, world, identity, op, principal) {
         return Err(r);
     }
@@ -1313,12 +1339,12 @@ pub(crate) fn precheck(
     // THEN `undecodable_key`: a valid-hex key ANY half of which does not
     // decode — the Ed25519 half's point AND the post-quantum half (the
     // FN-DSA header byte among that half's checks) — can never sign; the
-    // fold accepts syntax, the daemon extends the courtesy. The decode is the
-    // SAME one `hybrid::verify` performs before its arithmetic
-    // (`super::key_decodes`), so the courtesy is exact rather than an
-    // approximation of it. It is BOUNDED by [`MAX_DECODED_KEYS`] — the
-    // discipline [`crate::codec`]'s `room` states, applied to the one slot
-    // whose input this module cannot cap.
+    // fold accepts syntax, the daemon extends the courtesy. The decodes are
+    // the very two `hybrid::verify` runs before its arithmetic
+    // (`hybrid::key_decodes` calls them), so the courtesy cannot disagree
+    // with the verify about what decodes. It is BOUNDED by
+    // [`MAX_DECODED_KEYS`] — the discipline [`crate::codec`]'s `room`
+    // states, applied to the one slot whose input this module cannot cap.
     //
     // CONSEQUENCE: a record that is BOTH over-cap and carries an
     // undecodable key past [`MAX_DECODED_KEYS`] answers `too_many_enrolled`
@@ -1329,7 +1355,7 @@ pub(crate) fn precheck(
     // either way, permanently, in the same vocabulary and by the same
     // function; what changes is which of two true things it is told.
     let keys_decodable =
-        |keys: &[Enrolled]| keys.iter().take(MAX_DECODED_KEYS).all(|e| super::key_decodes(&e.key));
+        |keys: &[Enrolled]| keys.iter().take(MAX_DECODED_KEYS).all(|e| hybrid::key_decodes(&e.key));
     match &effect {
         Effect::Enroll { added, .. } if !keys_decodable(added) => {
             return Err(CredentialRefusal::UndecodableKey)

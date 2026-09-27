@@ -164,7 +164,7 @@ use skep_namespace::PrincipalId;
 
 use crate::auth::fold::{canonical_identity, key_set_of};
 use crate::auth::policy::{
-    deposits_credential_link, op_shape_refusal, plain_refusal, CredentialRefusal,
+    deposits_credential_link, op_shape_refusal, plain_admission, CredentialRefusal,
     DepositSpans,
 };
 use crate::auth::session::{
@@ -1630,7 +1630,7 @@ impl Daemon {
                 let set = key_set_of(snap.world(), &identity, &account);
                 op_answer(key_set_reply(snap.seq(), set))
             }
-            Ok(DaemonOp::Febe(frame)) => match write_meta(&frame.op) {
+            Ok(DaemonOp::Febe { request: frame, presented }) => match write_meta(&frame.op) {
                 // Reads execute directly and take no lock (AUTH-3.36) — under
                 // a class-scan permit where the frame is class-scan-shaped
                 // (wire v7.9; lane 3.7 §2), taken here: after the parse and
@@ -1645,7 +1645,7 @@ impl Daemon {
                     };
                     self.op_reply(&self.febe.execute(self.actor_sid(&resolved.actor), *frame))
                 }
-                Some(meta) => self.write_sequence(resolved, meta, *frame, req),
+                Some(meta) => self.write_sequence(resolved, meta, *frame, presented, req),
             },
         }
     }
@@ -1663,17 +1663,29 @@ impl Daemon {
     /// One write, through its pinned sequence: the credential path for a
     /// deposit-classified op (`deposits_credential_link`, decided lock-free
     /// off the op's own type slot), the plain path for everything else.
+    ///
+    /// The `attest` the frame presented goes to the plain sequence alone: a
+    /// credential deposit's link takes no entry signature (D26), so on that
+    /// route the member goes no further than here. `frame` arrives with its
+    /// `attest` EMPTY — the codec split the member out at the door
+    /// (`DaemonOp::Febe`) — so the plain sequence's assignment of what its
+    /// admission verified is `Request::attest`'s one writer.
     fn write_sequence(
         &self,
         resolved: &Resolved,
         meta: FrameMeta,
         frame: Request,
+        presented: Option<Attestation>,
         req: &HttpRequest,
     ) -> Reply {
+        debug_assert!(
+            frame.attest.is_none(),
+            "the codec hands the presented attest beside the request, never inside it"
+        );
         if deposits_credential_link(&frame.op) {
             self.credential_sequence(resolved, meta, frame, req)
         } else {
-            self.plain_sequence(meta, frame, req)
+            self.plain_sequence(meta, frame, presented, req)
         }
     }
 
@@ -1754,11 +1766,17 @@ impl Daemon {
 
     /// The PLAIN sequence (AUTH-3.35): the read lock → the serialization
     /// lock → [`Daemon::locked_state`] (the head snapshot, the fold beside
-    /// it, and this site's own resolve) → `plain_refusal`'s ordered
+    /// it, and this site's own resolve) → `plain_admission`'s ordered
     /// producers → execute. The serial lock is taken before the snapshot so
     /// the gates' answers and the execute they gate stand on one committed
-    /// state; the producers' ORDER is `plain_refusal`'s, not this site's.
-    fn plain_sequence(&self, meta: FrameMeta, mut frame: Request, req: &HttpRequest) -> Reply {
+    /// state; the producers' ORDER is `plain_admission`'s, not this site's.
+    fn plain_sequence(
+        &self,
+        meta: FrameMeta,
+        mut frame: Request,
+        presented: Option<Attestation>,
+        req: &HttpRequest,
+    ) -> Reply {
         let credential_lock = self.auth.credential_lock.read();
         let serial = self.writes.serial_lock();
         let (snap, identity, Resolved { actor, closed }) = self.locked_state(&serial, req);
@@ -1767,20 +1785,22 @@ impl Daemon {
             Actor::Guest(_) => return with_signal(self.guest_reply(frame), closed),
         };
         // THE ATTESTATION's one door (signed ops; the design record §4.5
-        // (1)–(2), §5.5): the producers judge the frame's `attest` beside the
+        // (1)–(2), §5.5): the producers judge the PRESENTED member beside the
         // op, and what reaches the store is what they ADMITTED — the value
         // the check verified against the fold's key set at this base, or
-        // nothing. A member the check DROPPED (off the publish class; at or
-        // below the claim, A5) never reaches a handle, so no later layer can
-        // fill a slot the producer set excludes.
-        let admitted = match plain_refusal(
+        // nothing. `Request::attest` held nothing until the assignment below
+        // — the codec split the member out at parse — so a member the check
+        // DROPPED (off the publish class; at or below the claim, A5) never
+        // reaches a handle, and no later layer can fill a slot the producer
+        // set excludes.
+        let admitted = match plain_admission(
             &credential_lock,
             snap.world(),
             &identity,
             &frame.op,
             binding.principal,
             binding.signer.as_ref(),
-            frame.attest.as_ref(),
+            presented.as_ref(),
         ) {
             Ok(admitted) => admitted,
             Err(r) => return with_signal(credential_refused(meta.kind, &r), closed),
@@ -1890,12 +1910,12 @@ impl Daemon {
         // 2026-09-25): the `make_link` half of a credential deposit is
         // covered by the record's own `sig` member — the record grade's
         // carrier, the record grade's lane — and takes no entry signature of
-        // its own, so an `attest` a client attached here is DROPPED before
-        // the store sees it: never verified, never written. This is how the
-        // check tells D26's case by ROUTE — a credential-typed link write
-        // never reaches the plain sequence's producers at all.
-        let mut frame = frame;
-        frame.attest = None;
+        // its own, so the `attest` a client attached is never handed to this
+        // sequence (`write_sequence` passes `presented` to the plain path
+        // alone) and `Request::attest` arrives empty from the codec: never
+        // verified, never written. This is how the check tells D26's case by
+        // ROUTE — a credential-typed link write never reaches the plain
+        // sequence's producers at all.
         let req_id = frame.id.clone();
         let resp = self.writes.commit_under(&serial, meta.attributed(binding.testimony()), || {
             self.febe.execute(binding.sid, frame)
@@ -2103,7 +2123,7 @@ impl Daemon {
                     Err(e) => refuse_unavailable(e),
                 }
             }
-            DaemonOp::Febe(frame) => {
+            DaemonOp::Febe { request: frame, .. } => {
                 // The partition is M10's own, asked directly: this daemon
                 // holds no second reading of it, and `write_path`'s
                 // `write_meta` records what a drift on the other side costs.
@@ -2391,10 +2411,11 @@ fn refuse_scan_busy(kind: OpKind) -> Reply {
 }
 
 /// One daemon-originated credential refusal as its 200-enveloped rejection.
-/// The ROW is [`credential_refused_reply`]'s — `code`, `disposition` and the
-/// token's seat are the wire's and are fixed there — and what this adds is
-/// the transport's own half: the 200 [`op_answer`] gives every answer on
-/// that channel, whatever the answer says.
+/// The ROW is [`credential_refused_reply`]'s — the code is the wire's and is
+/// fixed there; the token and the disposition are the refusal's own
+/// ([`CredentialRefusal::token`], [`CredentialRefusal::disposition`]) — and
+/// what this adds is the transport's own half: the 200 [`op_answer`] gives
+/// every answer on that channel, whatever the answer says.
 fn credential_refused(kind: OpKind, r: &CredentialRefusal) -> Reply {
     op_answer(credential_refused_reply(kind, r.token(), r.disposition()))
 }

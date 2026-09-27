@@ -23,7 +23,8 @@ use serde_json::Value;
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_identity::{
     board_bytes, encode_enroll, entry_body_insert, entry_body_link, entry_body_publish,
-    entry_frame, framed, Enrollment, EntrySlot, PublicKey, SESSION_TAG, SESSION_TAG_V2,
+    entry_frame, framed, token_of_sig_alg, Enrollment, EntrySlot, PublicKey, SESSION_TAG,
+    SESSION_TAG_V2,
 };
 use skepd::hybrid::{self, HybridSigner};
 use skepd::{serve, AuthOptions, Daemon, NodePrefix, Origin, Skepd, DEFAULT_WORKERS};
@@ -405,7 +406,7 @@ pub fn next_content_ordinal(port: u16, token: Option<&str>, doc: &str) -> u64 {
 
 /// THE HIRE (AUTH-5.58, AUTH-2.62, AUTH-2.70): key a DELEGATED, keyless
 /// principal so it can open a SIGNED session — what a write into a published
-/// home needs on a claimed board (AUTH-3.79; `policy.rs::publish_gate`), a
+/// home needs on a claimed board (AUTH-3.79; `policy.rs`'s RES-26 gate), a
 /// grant being one such write (PUB-5.8). The agent's GENESIS enrollment is
 /// homed in its GENESIS REGISTRY — its DELEGATOR's doc 1; for a
 /// bootstrap-delegated account, the CLAIMANT's doc 1 (AUTH-2.62) — written
@@ -2232,7 +2233,7 @@ pub fn entry_frame_for(port: u16, token: &str, principal: u64, frame: &Value) ->
     let (position, chain) = board_pair(port)?;
     let board = board_bytes(position, &chain);
     let account = account_of(port, token, principal)?;
-    let alg = hybrid::token_of(FIXTURE_TAG)?;
+    let alg = token_of_sig_alg(FIXTURE_TAG)?.token;
     let (doc, body) = match op {
         "insert" => {
             let doc = trunk_of_str(frame["doc"].as_str()?);
@@ -2272,7 +2273,7 @@ pub fn entry_frame_for(port: u16, token: &str, principal: u64, frame: &Value) ->
 /// The `attest` member for `frame` under the seed carrier's hybrid key:
 /// `{"alg": <token>, "sig": <hex>}`.
 pub fn attest_member(sig: &[u8]) -> Value {
-    json!({"alg": hybrid::token_of(FIXTURE_TAG).expect("tag 1"), "sig": hex(sig)})
+    json!({"alg": token_of_sig_alg(FIXTURE_TAG).expect("tag 1").token, "sig": hex(sig)})
 }
 
 /// The VALUES at content ordinals `from ..` of `doc`, as `token` reads them —
@@ -2299,7 +2300,7 @@ pub fn op_with_publish_values(port: u16, token: &str, frame: &str, values: &[&[u
         return op_unsigned(port, Some(token), frame);
     };
     let board = board_bytes(position, &chain);
-    let alg = hybrid::token_of(FIXTURE_TAG).expect("tag 1");
+    let alg = token_of_sig_alg(FIXTURE_TAG).expect("tag 1").token;
     let doc = trunk_of_str(v["doc"].as_str().expect("doc"));
     let body = entry_body_publish(values.iter().copied());
     let bytes = entry_frame(alg, &board, account.as_bytes(), doc.as_bytes(), "publish", &body);

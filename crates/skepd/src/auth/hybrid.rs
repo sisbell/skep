@@ -51,9 +51,10 @@
 //! is BOTH halves over the SAME bytes — either failing fails (the ruled
 //! "hybrid, both halves verify"); no half opens a session alone.
 //!
-//! What lives here beside the daemon's verify — keygen and signing — is the
-//! signer's side, used by the suites' test signer and by the goldens that
-//! pin each tag's rule; the daemon itself holds no key and never signs.
+//! What lives here beside the daemon's verify and all-halves decode —
+//! keygen and signing — is the signer's side, used by the suites' test
+//! signer and by the goldens that pin each tag's rule; the daemon itself
+//! holds no key and never signs.
 
 use ed25519_dalek::{Signer as _, SigningKey as EdSigningKey, VerifyingKey as EdVerifyingKey};
 use fn_dsa::{
@@ -64,7 +65,9 @@ use fn_dsa::{
 use hkdf::Hkdf;
 use ml_dsa::{EncodedSignature, EncodedVerifyingKey, Keypair as _, MlDsa65, Signer as _};
 use sha2::Sha256;
-use skep_identity::{sig_alg_of, token_of_sig_alg, PublicKey, SigAlgRow, MLDSA65_KEY_LEN};
+use skep_identity::{token_of_sig_alg, PublicKey, SigAlgRow, MLDSA65_KEY_LEN};
+
+use crate::codec::hex_string;
 
 /// Tag 1's marker byte.
 pub const TAG_MLDSA65_ED25519: u8 = 1;
@@ -165,8 +168,9 @@ impl rand_core_06::RngCore for ExactBytes {
 impl rand_core_06::CryptoRng for ExactBytes {}
 
 /// A `rand_core` 0.6 view of the OS entropy `getrandom` supplies — what a
-/// tag-3 signature draws its 40-byte seed from outside a seeded fixture.
-pub struct OsRng06;
+/// tag-3 signature draws its 40-byte seed from outside a seeded fixture, and
+/// what [`HybridSigner::sign`] hands [`HybridSigner::sign_with_rng`].
+struct OsRng06;
 
 impl rand_core_06::RngCore for OsRng06 {
     fn next_u32(&mut self) -> u32 {
@@ -190,11 +194,13 @@ impl rand_core_06::RngCore for OsRng06 {
 
 impl rand_core_06::CryptoRng for OsRng06 {}
 
-/// A DETERMINISTIC `rand_core` 0.6 stream for FIXTURES — SHA-256 in counter
-/// mode over a seed — so a tag-3 signature (randomized by the draft's own
-/// rule) is byte-stable in a golden. A test seam and no part of any tag's
-/// rule: a tag-3 signature verifies under the tag's rule whatever RNG made
-/// it. Not for production use.
+/// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a stable
+/// API) — a DETERMINISTIC `rand_core` 0.6 stream for FIXTURES, SHA-256 in
+/// counter mode over a seed, so a tag-3 signature (randomized by the draft's
+/// own rule) is byte-stable in a golden. No part of any tag's rule: a tag-3
+/// signature verifies under the tag's rule whatever RNG made it. Never for
+/// production use — the stream is a function of its seed.
+#[doc(hidden)]
 pub struct SeededRng06 {
     seed: [u8; 32],
     counter: u64,
@@ -300,7 +306,7 @@ impl HybridSigner {
         };
         let mut raw = pq_pk;
         raw.extend_from_slice(&ed_pk);
-        let public = PublicKey::parse(row.token, &hex(&raw))
+        let public = PublicKey::parse(row.token, &hex_string(&raw))
             .expect("the two halves concatenate to the row's raw length");
         Some(HybridSigner { row, ed, pq, public })
     }
@@ -369,11 +375,66 @@ pub enum HybridFault {
     Rejected,
 }
 
+/// A hybrid key's Ed25519 half as a verifier — `ed25519-dalek`'s
+/// `VerifyingKey::from_bytes`, the canonical point decode (the crate pick is
+/// argued in `Cargo.toml`), over the KEY PIN's LAST 32 raw bytes — or `None`
+/// where the half is no point. One of the two decodes [`verify`] runs before
+/// its arithmetic and [`key_decodes`] runs alone.
+fn ed25519_half(key: &PublicKey) -> Option<EdVerifyingKey> {
+    EdVerifyingKey::from_bytes(key.ed25519_half()).ok()
+}
+
+/// A hybrid key's post-quantum half, decoded as far as its tag's rule can
+/// refuse it — one arm per tag this module holds a rule for, and what
+/// [`verify`] carries on into its arithmetic.
+enum PqHalf {
+    /// Tag 1: ML-DSA-65's encoded verifying key.
+    MlDsa65(EncodedVerifyingKey<MlDsa65>),
+    /// Tag 3: FN-DSA-512's decoded verifying key.
+    FnDsa512(VerifyingKeyStandard),
+}
+
+/// `key`'s post-quantum half under `tag`'s rule, decoded as far as that rule
+/// can REFUSE it — the fallible stage alone: ML-DSA-65's encoded verifying
+/// key for tag 1 (its length, the one check that encoding makes — every byte
+/// string of the row's length decodes) and FN-DSA-512's
+/// `VerifyingKeyStandard::decode` for tag 3 (the header byte `0x09` for
+/// degree 512, the length, every coefficient in range). `None` where the
+/// half does not decode or `tag` names no rule of this module's. The other
+/// of the two decodes [`verify`] and [`key_decodes`] share.
+fn pq_half(tag: u8, key: &PublicKey) -> Option<PqHalf> {
+    let pq = key.pq_half();
+    match tag {
+        TAG_MLDSA65_ED25519 => {
+            EncodedVerifyingKey::<MlDsa65>::try_from(pq).ok().map(PqHalf::MlDsa65)
+        }
+        TAG_FNDSA512_PREVIEW_ED25519 => VerifyingKeyStandard::decode(pq).map(PqHalf::FnDsa512),
+        _ => None,
+    }
+}
+
+/// THE ALL-HALVES DECODE — the precheck's `undecodable_key` courtesy
+/// (AUTH-3.56 as RES-206 landed it; the hybrid-only launch's Q9, owner
+/// 2026-09-26): `true` iff EVERY half the key's row names decodes, by the
+/// very two decodes [`verify`] runs before its arithmetic (`ed25519_half`,
+/// `pq_half`) — so the courtesy and the verify cannot disagree about what
+/// decodes, and a new tag's decode is one arm both read. Both directions of
+/// a disagreement cost: a stricter courtesy refuses an enrollment whose key
+/// decodes for every verify; a laxer one seats a key that occupies a slot
+/// against the precheck's `MAX_ENROLLED_KEYS` and is walked by the
+/// handshake's `find_signer` on every attempt, permanently, since retiring
+/// it needs an anchor session of that account. `false` for a key of no row.
+pub fn key_decodes(key: &PublicKey) -> bool {
+    key.sig_alg()
+        .is_some_and(|row| ed25519_half(key).is_some() && pq_half(row.tag, key).is_some())
+}
+
 /// VERIFY `sig` over `msg` under `tag`'s frozen rule against the hybrid
 /// `key`: the key's row must be the tag's, the blob the tag's width, and
 /// BOTH halves — the PQ signature under the PQ half, the Ed25519 signature
 /// under the Ed25519 half (`verify_strict`) — must verify over the SAME
-/// `msg`. Either failing fails.
+/// `msg`. Either failing fails. Each half is decoded by `ed25519_half` and
+/// `pq_half`, the decodes [`key_decodes`] runs alone.
 pub fn verify(tag: u8, key: &PublicKey, sig: &[u8], msg: &[u8]) -> Result<(), HybridFault> {
     let row = token_of_sig_alg(tag).ok_or(HybridFault::WrongRow)?;
     if key.alg() != row.token {
@@ -383,17 +444,14 @@ pub fn verify(tag: u8, key: &PublicKey, sig: &[u8], msg: &[u8]) -> Result<(), Hy
         return Err(HybridFault::Malformed);
     }
     let (pq_sig, ed_sig) = sig.split_at(row.pq_sig_len);
-    let pq_key = key.pq_half();
     // The Ed25519 half FIRST: cheap, and a failure here refuses before the
     // lattice arithmetic runs. Both are required, so the order moves no
     // verdict.
-    let ed_key = EdVerifyingKey::from_bytes(key.ed25519_half()).map_err(|_| HybridFault::Rejected)?;
+    let ed_key = ed25519_half(key).ok_or(HybridFault::Rejected)?;
     let ed_sig = ed25519_dalek::Signature::from_slice(ed_sig).map_err(|_| HybridFault::Malformed)?;
     ed_key.verify_strict(msg, &ed_sig).map_err(|_| HybridFault::Rejected)?;
-    let pq_ok = match tag {
-        TAG_MLDSA65_ED25519 => {
-            let enc = EncodedVerifyingKey::<MlDsa65>::try_from(pq_key)
-                .map_err(|_| HybridFault::WrongRow)?;
+    let pq_ok = match pq_half(tag, key).ok_or(HybridFault::WrongRow)? {
+        PqHalf::MlDsa65(enc) => {
             let vk = ml_dsa::VerifyingKey::<MlDsa65>::decode(&enc);
             let enc_sig =
                 EncodedSignature::<MlDsa65>::try_from(pq_sig).map_err(|_| HybridFault::Malformed)?;
@@ -403,36 +461,12 @@ pub fn verify(tag: u8, key: &PublicKey, sig: &[u8], msg: &[u8]) -> Result<(), Hy
             // The CTX PIN: the empty context string.
             vk.verify_with_context(msg, &[], &sigma)
         }
-        TAG_FNDSA512_PREVIEW_ED25519 => {
-            let vk = VerifyingKeyStandard::decode(pq_key).ok_or(HybridFault::WrongRow)?;
-            vk.verify(pq_sig, &DOMAIN_NONE, &HASH_ID_RAW, msg)
-        }
-        _ => return Err(HybridFault::WrongRow),
+        PqHalf::FnDsa512(vk) => vk.verify(pq_sig, &DOMAIN_NONE, &HASH_ID_RAW, msg),
     };
     if pq_ok {
         Ok(())
     } else {
         Err(HybridFault::Rejected)
-    }
-}
-
-/// THE POST-QUANTUM HALF's DECODE alone — the same decode [`verify`] runs
-/// before its arithmetic, exposed for the precheck's `undecodable_key`
-/// courtesy (AUTH-3.56 as RES-206 landed it: the precheck decodes EVERY half
-/// the key's row names; the hybrid-only launch's Q9): ML-DSA-65's encoded
-/// verifying key for tag 1 — which cannot fail at the row's length, and is
-/// run all the same so the two stay ONE decode — and FN-DSA-512's
-/// `VerifyingKeyStandard::decode` for tag 3, whose checks are the header
-/// byte (`0x09` for degree 512), the length and every coefficient in range.
-/// `false` for a key of no row. The Ed25519 half's decode is
-/// [`super::verifying_key`]'s; [`super::key_decodes`] joins the two.
-pub fn pq_half_decodes(key: &PublicKey) -> bool {
-    let Some(row) = key.sig_alg() else { return false };
-    let pq = key.pq_half();
-    match row.tag {
-        TAG_MLDSA65_ED25519 => EncodedVerifyingKey::<MlDsa65>::try_from(pq).is_ok(),
-        TAG_FNDSA512_PREVIEW_ED25519 => VerifyingKeyStandard::decode(pq).is_some(),
-        _ => false,
     }
 }
 
@@ -449,26 +483,6 @@ pub fn pq_widths(tag: u8) -> Option<(usize, usize, usize)> {
         )),
         _ => None,
     }
-}
-
-/// Lowercase hex — the spelling `PublicKey::parse` reads.
-pub fn hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
-}
-
-/// The token of the row a tag names — a convenience for callers holding the
-/// marker byte.
-pub fn token_of(tag: u8) -> Option<&'static str> {
-    token_of_sig_alg(tag).map(|r| r.token)
-}
-
-/// The tag of the row a token names.
-pub fn tag_of(token: &str) -> Option<u8> {
-    sig_alg_of(token).map(|r| r.tag)
 }
 
 #[cfg(test)]
@@ -524,25 +538,27 @@ mod tests {
     /// (the fault the precheck's `undecodable_key` names on that half); a
     /// tag-1 key of the right length always does (ML-DSA's encoding admits
     /// every byte string of its length), which is why the Ed25519 half is
-    /// what carries that row's decode fault.
+    /// what carries that row's decode fault. And the courtesy,
+    /// [`key_decodes`], answers exactly as the two decodes [`verify`] runs.
     #[test]
     fn the_pq_half_decode_refuses_a_bad_fn_dsa_header_byte() {
         let seed = [0x42u8; 32];
         for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
             let s = HybridSigner::from_seed(tag, &seed).unwrap();
-            assert!(pq_half_decodes(s.public_key()), "tag {tag}: a derived key decodes");
+            assert!(pq_half(tag, s.public_key()).is_some(), "tag {tag}: a derived key decodes");
         }
         let s3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &seed).unwrap();
         let mut raw = s3.public_key().raw().to_vec();
         assert_eq!(raw[0], 0x09, "fn-dsa 0.4.0's degree-512 header byte");
         raw[0] = 0x0a;
-        let bad = PublicKey::parse(s3.public_key().alg(), &hex(&raw)).expect("the row's length");
-        assert!(!pq_half_decodes(&bad), "a bad header byte does not decode");
+        let bad = PublicKey::parse(s3.public_key().alg(), &hex_string(&raw)).expect("the row's length");
+        assert!(pq_half(TAG_FNDSA512_PREVIEW_ED25519, &bad).is_none(), "a bad header byte does not decode");
         let s1 = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &seed).unwrap();
         let mut raw = s1.public_key().raw().to_vec();
         raw[0] ^= 0xff;
-        let still = PublicKey::parse(s1.public_key().alg(), &hex(&raw)).expect("the row's length");
-        assert!(pq_half_decodes(&still), "ML-DSA-65's encoding decodes at its length");
+        let still = PublicKey::parse(s1.public_key().alg(), &hex_string(&raw)).expect("the row's length");
+        assert!(pq_half(TAG_MLDSA65_ED25519, &still).is_some(), "ML-DSA-65's encoding decodes at its length");
+        assert!(!key_decodes(&bad) && key_decodes(&still), "the courtesy reads the same two decodes");
     }
 
     /// The KDF never hands either half the raw seed, and the two halves of

@@ -4,6 +4,16 @@
 //! and the pinned refusal producers it scopes, and the identity fold the
 //! daemon composes BESIDE the engine.
 //!
+//! And, since signed ops (the seam build 2026-09-25), the write-path
+//! signature seam: the ENTRY frame the daemon composes for an attested
+//! write (`entry`), the check that verifies a presented `attest` over it
+//! against the fold's key set before the transaction (`policy`, behind the
+//! RES-26 gate), and the HYBRID signature's frozen rules ([`hybrid`]) — the
+//! one module of this crate that links a signature library (AUTH-2.2),
+//! holding the daemon's verify and all-halves decode and, beside them, the
+//! signer's side the suites and a future client use. The signer is handed a
+//! seed and knows nothing of where one is kept: custody-agnostic still.
+//!
 //! Custody-agnostic by ruling (D1): nothing here knows where a private key
 //! lives — the handshake verifies signatures over bytes, deposits commit
 //! records carrying pubkeys, `key_set` reads records.
@@ -27,12 +37,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::SystemTime;
 
-use ed25519_dalek::VerifyingKey;
 use rand_core::{CryptoRng, RngCore};
 use serde_json::{Map, Value};
 use skep_address::{validate, Address, Level, Nat, Tumbler};
 use skep_febe::{ReqId, SessionId};
-use skep_identity::{LinkDeposit, PublicKey};
+use skep_identity::LinkDeposit;
 use skep_namespace::prefix_contains;
 
 use crate::codec::{check_keys, obj, wire_address};
@@ -511,9 +520,10 @@ impl AuthState {
 ///
 /// `auth/` holds exactly this one lock, so its guards are unqualified.
 /// What the lock SCOPES is a different thing and wears a different word:
-/// the refusal rules it serializes are the GATES (`publish_gate`,
-/// `pre_claim_gate`, the precheck's ordered slots), which is wire.md's
-/// term for a rule that refuses a write.
+/// the refusal rules it serializes are the GATES (`board_state_admission`'s
+/// two — the RES-26 gate once claimed, `pre_claim_gate` before — the
+/// write-path check behind the first, and the precheck's ordered slots),
+/// which is wire.md's term for a rule that refuses a write.
 pub(crate) struct CredentialLock(parking_lot::RwLock<()>);
 
 /// The read guard, newtyped so a function whose contract is "under the read
@@ -566,39 +576,6 @@ impl RngCore for OsEntropy {
 }
 
 impl CryptoRng for OsEntropy {}
-
-// ── the signature seam (AUTH-2.2, AUTH-2.99) ─────────────────────────────
-
-/// The Ed25519 HALF's verifier — `from_bytes`, the canonical point decode
-/// (the crate pick is argued in `Cargo.toml`) over a hybrid key's LAST 32 raw
-/// bytes (`PublicKey::ed25519_half`, the KEY PIN's order) — or `None` when
-/// that half is no point. ONE of the two halves [`key_decodes`] reads for
-/// the precheck's `undecodable_key` courtesy (AUTH-3.56 as RES-206 landed
-/// it: EVERY half the key's row names), and the SAME decode the session and
-/// entry verifies meet inside [`hybrid::verify`], which is what keeps the
-/// courtesy exact: a stricter deposit test refuses an enrollment that would
-/// have worked; a laxer one seats a key that occupies a slot against
-/// [`policy::MAX_ENROLLED_KEYS`] and is walked by `find_signer` on every
-/// handshake attempt, permanently, since retiring it needs an anchor
-/// session of that account. Every session is hybrid (the hybrid handshake,
-/// 2026-09-26): this half opens nothing alone.
-pub(crate) fn verifying_key(key: &PublicKey) -> Option<VerifyingKey> {
-    VerifyingKey::from_bytes(key.ed25519_half()).ok()
-}
-
-/// THE ALL-HALVES DECODE — the precheck's `undecodable_key` test (AUTH-3.56
-/// as RES-206 landed it; the hybrid-only launch's Q9, owner 2026-09-26):
-/// `true` iff EVERY half the key's row names decodes — the Ed25519 half's
-/// point ([`verifying_key`]) AND the post-quantum half by the same decode
-/// [`hybrid::verify`] runs before its arithmetic ([`hybrid::pq_half_decodes`]:
-/// ML-DSA-65's encoded verifying key for tag 1; FN-DSA-512's
-/// `VerifyingKeyStandard::decode`, the header byte among its checks, for tag
-/// 3). A key any half of which does not decode can never sign — under "both
-/// halves verify" no half carries a signature alone — so it is refused at
-/// enrollment rather than seated and walked on every handshake.
-pub(crate) fn key_decodes(key: &PublicKey) -> bool {
-    verifying_key(key).is_some() && hybrid::pq_half_decodes(key)
-}
 
 // ── origins (AUTH-4.1–4.8) ───────────────────────────────────────────────
 

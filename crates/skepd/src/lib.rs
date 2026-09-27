@@ -17,9 +17,11 @@
 //! * `auth/` — the AUTH session layer (wire v7): the two origin sets, the
 //!   challenge/response handshake, the sessions store and per-request
 //!   resolution, the credential write lock and the ordered refusal
-//!   producers it scopes, and the identity fold this daemon composes
-//!   BESIDE the engine (derived state, rebuilt at open, never persisted
-//!   here).
+//!   producers it scopes, the signed-ops write-path check and the ENTRY
+//!   frame it verifies a presented `attest` over, the [`hybrid`]
+//!   signature's rules (the one module here that links a signature
+//!   library), and the identity fold this daemon composes BESIDE the
+//!   engine (derived state, rebuilt at open, never persisted here).
 //! * `write_path/` — the ONE ordering every write rides (commit, record,
 //!   announce, under one serialization guard) and, behind it, the
 //!   PUBLISHED HEAD writer: `H` = `1.1.0.1.0.2` written as a new published
@@ -93,10 +95,11 @@ pub use auth::{
 };
 /// THE HYBRID ENTRY SIGNATURE's rules (signed ops): the KDF from one seed to
 /// both halves, keygen and signing per marker tag — the test signer's and the
-/// goldens' side — and the verify the daemon's write-path check dispatches
-/// on. Public because the signer's side lives beside the verifier's in the
-/// one crate that links the signature libraries (AUTH-2.2), and the suites
-/// and a future client reach it here.
+/// goldens' side — the verify the daemon's write-path check dispatches on,
+/// and the all-halves decode ([`hybrid::key_decodes`]) the enrollment
+/// courtesy runs beside that verify. Public because the signer's side lives
+/// beside the verifier's in the one crate that links the signature libraries
+/// (AUTH-2.2), and the suites and a future client reach it here.
 pub use auth::hybrid;
 pub use codec::JsonCodec;
 pub use server::{
@@ -176,4 +179,11 @@ const _: fn() = || {
     assert_send_sync::<NotANodePrefix>();
     assert_send_sync::<PortAlreadyBound>();
     assert_send_sync::<Peer>();
+    // The signed-ops arrivals (`hybrid`): the signer a client holds across
+    // threads, the seeds it derives from, the verify's refusal, and the
+    // fixtures' seeded stream.
+    assert_send_sync::<hybrid::HybridSigner>();
+    assert_send_sync::<hybrid::HalfSeeds>();
+    assert_send_sync::<hybrid::HybridFault>();
+    assert_send_sync::<hybrid::SeededRng06>();
 };

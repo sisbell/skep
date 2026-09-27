@@ -298,7 +298,10 @@ impl JsonCodec {
             return parse_key_set(v).map_err(|e| ParseError { detail: Some(e.0) });
         }
         parse_value(v)
-            .map(|r| DaemonOp::Febe(Box::new(r)))
+            .map(|mut request| {
+                let presented = request.attest.take();
+                DaemonOp::Febe { request: Box::new(request), presented }
+            })
             .map_err(|e| ParseError { detail: Some(e.0) })
     }
 
@@ -318,7 +321,17 @@ impl JsonCodec {
 /// rides boxed — it is an order of magnitude wider than the other arm, and
 /// this enum sits on every dispatch path.
 pub(crate) enum DaemonOp {
-    Febe(Box<Request>),
+    /// An M10 request whose `attest` is EMPTY whatever the frame carried,
+    /// and beside it the `attest` member the frame PRESENTED — unverified,
+    /// the write-path check's to judge (signed ops). Split HERE, at the door,
+    /// so that on the daemon's dispatch path `Request::attest` only ever
+    /// holds what M10's own card says it holds: the signature the daemon's
+    /// check ADMITTED, set by the write sequence that ran the check and by
+    /// nothing else. A route that never judges `presented` then commits with
+    /// the marker slot EMPTY — never with a blob nobody verified, which the
+    /// kernel writes opaquely and a reader of the journal takes for this
+    /// board's attestation.
+    Febe { request: Box<Request>, presented: Option<Attestation> },
     KeySet { account: Address },
 }
 
@@ -433,18 +446,17 @@ pub(crate) fn key_set_reply(as_of: Seq, set: Option<&KeySet>) -> Vec<u8> {
 }
 
 /// One daemon-originated CREDENTIAL refusal, marshaled (AUTH-3.53–3.54):
-/// `code: credential_refused` and `disposition: permanent` UNIFORMLY — the
-/// remedy lives in the face, never in the disposition — with `detail` the
-/// machine token the refusal names itself by, and `op` the refused op's own
-/// wire name, lowered from its `OpKind` through [`op_name`]'s table so no
-/// caller holds one to pass on.
+/// `code: credential_refused` always; `detail` the machine token the refusal
+/// names itself by; `disposition` the class it names for itself —
+/// `permanent` for the family, the attestation codes' own beside it; and
+/// `op` the refused op's own wire name, lowered from its `OpKind` through
+/// [`op_name`]'s table so no caller holds one to pass on.
 ///
 /// Here rather than at the route, for [`key_set_reply`]'s reason: this is
-/// the family's WIRE SHAPE and this is where those shapes are rendered.
-/// Three of its four fields are fixed by the spec, so choosing them here
-/// leaves a caller the two that vary and leaves [`CREDENTIAL_REFUSED`],
-/// [`DaemonRejection`] and [`daemon_rejected`] with no reader outside this
-/// module.
+/// the family's WIRE SHAPE and this is where those shapes are rendered. The
+/// CODE is the one field the spec fixes, so choosing it here leaves a caller
+/// the three that vary and leaves [`CREDENTIAL_REFUSED`], [`DaemonRejection`]
+/// and [`daemon_rejected`] with no reader outside this module.
 ///
 /// The token rides as an owned `String` — the refusal's own `token()`
 /// answer, moved rather than copied — so this module renders the family's
@@ -527,21 +539,14 @@ fn parse_value(v: Value) -> PResult<Request> {
     // [`MAX_REQ_ID_BYTES`]).
     let id = fields.req_id()?;
     let op = parse_op(&name, &mut fields)?;
-    // The optional `attest` member, admitted on the three ops the seam
-    // build attests and on no other — left in the map elsewhere, so `finish`
-    // refuses it by the unknown-field rule, as a daemon that predates the
-    // member does (the design record §7.3 (ii)).
-    let attest = fields.attest(&name)?;
+    // The optional `attest` member, admitted on the slice
+    // [`crate::auth::entry::attested`] states and on no other op — left in
+    // the map elsewhere, so `finish` refuses it by the unknown-field rule, as
+    // a daemon that predates the member does (the design record §7.3 (ii)).
+    let attest = fields.attest(op.kind())?;
     fields.finish()?;
     Ok(Request { id, op, attest })
 }
-
-/// The ops whose frames admit the top-level `attest` member (signed ops, the
-/// seam build's slice): the three the write-path check attests. The record's
-/// thirteen publish-class-capable inputs are the WIDENING lane's, not this
-/// one's — an admitted-but-unchecked member would be a signature silently
-/// discarded.
-const ATTESTABLE_OPS: [&str; 3] = ["insert", "make_link", "publish"];
 
 /// `{"alg": <an ALGS token>, "sig": <hex>}` — the wire's `attest` object
 /// (the design record §7.3 (ii)), lifted to the kernel's `Attestation`: the
@@ -740,12 +745,15 @@ impl Fields {
         self.field(k, p_u64)
     }
 
-    /// The optional top-level `attest` member — taken on an attestable op
-    /// (`ATTESTABLE_OPS`), absent and explicit `null` alike reading `None`;
-    /// on any other op it is not taken at all, so `finish` refuses it as the
-    /// unknown field it is there.
-    fn attest(&mut self, op: &str) -> PResult<Option<Attestation>> {
-        if !ATTESTABLE_OPS.contains(&op) {
+    /// The optional top-level `attest` member — taken on an attested op
+    /// ([`crate::auth::entry::attested`]), absent and explicit `null` alike
+    /// reading `None`; on any other op it is not taken at all, so `finish`
+    /// refuses it as the unknown field it is there. The codec ASKS the
+    /// composer rather than keeping a copy of the slice: the wire admits the
+    /// member exactly where the check will demand and judge one — the
+    /// doorkeeper consulting the domain for what the door may admit.
+    fn attest(&mut self, kind: OpKind) -> PResult<Option<Attestation>> {
+        if !crate::auth::entry::attested(kind) {
             return Ok(None);
         }
         match self.take_opt("attest") {
@@ -2640,5 +2648,28 @@ mod tests {
             .map(|ty| ty.tumbler().iter().cloned().collect())
             .collect();
         assert_eq!(spelled, [T_ENROLL.map(Nat::from).to_vec(), T_RETIRE.map(Nat::from).to_vec()]);
+    }
+
+    /// THE DOOR splits the presented `attest` from the request: on the
+    /// daemon's dispatch path `Request::attest` is EMPTY whatever the frame
+    /// carried, and the member rides beside it, unverified, for the check —
+    /// so no route can hand M10 a signature the check never saw.
+    #[test]
+    fn the_daemon_parse_splits_the_presented_attest_from_the_request() {
+        let frame = format!(
+            r#"{{"op":"insert","doc":"1.0.1.0.1","at":{{"subspace":"1","ordinal":"1"}},"values":["x"],"attest":{{"alg":"{}","sig":"{}"}}}}"#,
+            skep_identity::ALG_MLDSA65_ED25519,
+            "ab".repeat(8)
+        );
+        let Ok(DaemonOp::Febe { request, presented }) = JsonCodec.parse_daemon(frame.as_bytes())
+        else {
+            panic!("an insert frame is an M10 request")
+        };
+        assert!(request.attest.is_none(), "no attest leaves the door inside the request");
+        assert_eq!(
+            presented.map(|a| a.sig().to_vec()),
+            Some(vec![0xab; 8]),
+            "it rides beside it"
+        );
     }
 }

@@ -26,7 +26,7 @@ use sha2::{Digest, Sha256};
 use skep_febe::Codec;
 use skep_identity::{
     address_bytes, board_bytes, entry_body_insert, entry_body_link, entry_body_publish,
-    entry_frame, sig_alg_of, Enrollment, EntrySlot, Fingerprint, PublicKey,
+    entry_frame, sig_alg_of, token_of_sig_alg, Enrollment, EntrySlot, Fingerprint, PublicKey,
     ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519,
 };
 use skepd::hybrid::{self, HybridSigner, SeededRng06};
@@ -400,8 +400,8 @@ fn wall_clock_millis() -> u64 {
 
 /// D26: a credential deposit is TWO POSITIONS — the atom `insert` and its
 /// `make_link` — and neither takes the entry signature: the atom by its
-/// declared credential type, the link by its route (the credential
-/// sequence, where an attached `attest` is dropped). Both slots stay empty;
+/// declared credential type, the link by its route (the credential route,
+/// to which a presented `attest` is never handed). Both slots stay empty;
 /// the hire's agent opens a signed session and attests its own writes.
 #[test]
 fn d26_a_credential_deposits_two_positions_take_no_entry_signature() {
@@ -539,7 +539,7 @@ type SignedFrames = Vec<(String, Vec<u8>, Vec<u8>)>;
 
 fn golden_of(tag: u8) -> (HybridSigner, SignedFrames) {
     let signer = HybridSigner::from_seed(tag, &GOLDEN_SEED).unwrap();
-    let row = hybrid::token_of(tag).unwrap();
+    let row = token_of_sig_alg(tag).unwrap().token;
     let mut out = Vec::new();
     for (op, frame) in fixed_frames(row) {
         // Tag 3's signature draws its seed from the fixtures' seeded RNG,
@@ -629,7 +629,7 @@ fn golden_tag_3_fndsa512_preview_ed25519() {
 fn each_half_alone_fails_under_both_tags() {
     for tag in [1u8, 3] {
         let (signer, signed) = golden_of(tag);
-        let row = sig_alg_of(hybrid::token_of(tag).unwrap()).unwrap();
+        let row = token_of_sig_alg(tag).unwrap();
         let other = HybridSigner::from_seed(tag, &[0x99; 32]).unwrap();
         let (_, frame, sig) = &signed[0];
         let mut rng = SeededRng06::new([1; 32]);
@@ -683,7 +683,7 @@ fn tag_1_is_byte_equal_to_a_second_fips_204_implementation() {
 fn sizes_and_timings_per_tag() {
     use std::time::Instant;
     for tag in [1u8, 3] {
-        let row = sig_alg_of(hybrid::token_of(tag).unwrap()).unwrap();
+        let row = token_of_sig_alg(tag).unwrap();
         let (signer, signed) = golden_of(tag);
         let key_len = signer.public_key().raw().len();
         let sig_len = signed[0].2.len();

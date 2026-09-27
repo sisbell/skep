@@ -781,10 +781,10 @@ pub(crate) fn session_payload(
 /// payload; either failing fails, and NO HALF OPENS A SESSION ALONE. `false`
 /// on a blob that is not the row's width (a tag-3 blob against a tag-1 key
 /// is `Malformed` there, never a panic), on an undecodable key or signature,
-/// and on a key of no row; never panics. The Ed25519 half's decode inside it
-/// is the same `from_bytes` the precheck's `undecodable_key` courtesy makes,
-/// and the post-quantum half's the same as that courtesy's
-/// ([`super::key_decodes`]) — which is what keeps the two answering alike.
+/// and on a key of no row; never panics. Both halves' decodes inside it are
+/// the two the precheck's `undecodable_key` courtesy runs
+/// ([`hybrid::key_decodes`]) — one pair of functions in `hybrid`, which is
+/// what keeps the two answering alike.
 fn verify(key: &PublicKey, payload: &[u8], sig: &[u8]) -> bool {
     key.sig_alg().is_some_and(|row| hybrid::verify(row.tag, key, sig, payload).is_ok())
 }

@@ -63,13 +63,13 @@
 //!   `base_extent` and every later deposit into the head member fall outside
 //!   it).
 //!
-//! Every length-delimited element is framed the way [`framed`] frames a
-//! member, so the composition is injective at every level: two distinct
-//! inputs never spell one preimage.
+//! Every length-delimited element is written by [`push_delimited`], the one
+//! function [`framed`] delimits its own members with, so the composition is
+//! injective at every level: two distinct inputs never spell one preimage.
 
 use skep_address::{Address, Span};
 
-use crate::framing::{framed, ENTRY_TAG};
+use crate::framing::{framed, push_delimited, ENTRY_TAG};
 
 /// THE ENTRY FRAME: `framed(ENTRY_TAG, [alg, board, account, doc, op, body])`
 /// (AUTH-1.12's framing), EVERY member spelled here from the value the caller
@@ -142,15 +142,6 @@ fn board_bytes(position: u64, chain: &[u8; 32]) -> [u8; 40] {
 /// THE ADDRESS ROW: the dotted-decimal ASCII of the address.
 fn address_bytes(a: &Address) -> Vec<u8> {
     a.to_string().into_bytes()
-}
-
-/// One length-delimited element — `be32(len) ‖ bytes`, [`framed`]'s own
-/// member rule at the element level. PRECONDITION as `framed`'s: the element
-/// is shorter than 2^32 bytes.
-fn push_delimited(out: &mut Vec<u8>, bytes: &[u8]) {
-    let len = u32::try_from(bytes.len()).expect("entry frame element length exceeds be32");
-    out.extend_from_slice(&len.to_be_bytes());
-    out.extend_from_slice(bytes);
 }
 
 /// THE VALUE-SEQUENCE ROW: `be64(count)` then each value length-delimited,

@@ -83,9 +83,10 @@ pub const TAGS: &[Tag] = &[KEY_TAG, SESSION_TAG, SESSION_TAG_V2, NODE_HELLO_TAG,
 ///
 /// PRECONDITION — every field is shorter than 2^32 bytes, so its length is
 /// what `be32` writes. A longer field is a CALLER's bug and not an outcome:
-/// nothing here frames one (the fields are alg tokens and raw keys), and
-/// truncating the length would silently break the injectivity above rather
-/// than refuse it. It panics, naming the obligation.
+/// no field framed today comes near it — the largest is an entry body, which
+/// a request carries under the daemon's own cap — and truncating the length
+/// would silently break the injectivity above rather than refuse it. It
+/// panics, naming the obligation.
 ///
 /// AUTH-1.14 — debug-asserts that `tag` is a member of [`TAGS`], so a tag
 /// declared but not listed fails at its first use; release builds pay
@@ -99,12 +100,22 @@ pub fn framed(tag: Tag, fields: &[&[u8]]) -> Vec<u8> {
         Vec::with_capacity(tag.0.len() + fields.iter().map(|f| 4 + f.len()).sum::<usize>());
     out.extend_from_slice(tag.0);
     for field in fields {
-        // The be32 PRECONDITION above, enforced rather than truncated.
-        let len = u32::try_from(field.len()).expect("framed field length exceeds be32");
-        out.extend_from_slice(&len.to_be_bytes());
-        out.extend_from_slice(field);
+        push_delimited(&mut out, field);
     }
     out
+}
+
+/// ONE length-delimited element — `be32(len) ‖ bytes`: AUTH-1.12's member
+/// rule, and the rule every length-delimited element NESTED inside a member
+/// follows too (the entry frame's rows). One function at every level is what
+/// makes the injectivity [`framed`] states hold at every level.
+///
+/// PRECONDITION — as [`framed`]'s: the element is shorter than 2^32 bytes,
+/// enforced by a panic rather than a truncated length.
+pub(crate) fn push_delimited(out: &mut Vec<u8>, bytes: &[u8]) {
+    let len = u32::try_from(bytes.len()).expect("framed element length exceeds be32");
+    out.extend_from_slice(&len.to_be_bytes());
+    out.extend_from_slice(bytes);
 }
 
 #[cfg(test)]

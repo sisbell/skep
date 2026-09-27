@@ -38,9 +38,10 @@
 //! the locked snapshot's board term, the principal's account, and the op's
 //! document and [`EntryBody`]; `auth/policy.rs`'s write-path check reads the
 //! presented attestation's row off its marker tag; `auth/hybrid.rs` holds each
-//! marker tag's arithmetic over [`SIG_ALGS`]' rows and a key's two halves
-//! ([`PublicKey::pq_half`], [`PublicKey::ed25519_half`]); the codec lifts a
-//! request's `attest.alg` token to its marker tag and back through
+//! marker tag's arithmetic over [`SIG_ALGS`]' rows and a key's two halves —
+//! composing them at keygen ([`PublicKey::from_halves`]) and reading them to
+//! verify ([`PublicKey::pq_half`], [`PublicKey::ed25519_half`]); the codec
+//! lifts a request's `attest.alg` token to its marker tag and back through
 //! [`SigAlgRow::of_token`] and [`SigAlgRow::of_tag`]; and `auth/session.rs`
 //! sizes the handshake's hybrid blob by the rows' widths. [`canonical_record`]
 //! has no caller outside this crate: it is published for the signing client

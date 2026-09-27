@@ -235,16 +235,17 @@ mod raw_array {
 /// `fndsa512-preview-ed25519` at 929; the classical `ed25519` row is DELETED
 /// (the hybrid-only launch, 2026-09-26) and tag 2's reserved token
 /// `fndsa512-ed25519` has no row, so a record naming either is `bad_record`
-/// — the frozen token set (AUTH-2.96). [`PublicKey::parse`] and
-/// [`PublicKey::alg`] both READ this table (AUTH-1.6), so carrying a new
-/// algorithm arm is the enum arm, its row, and the exhaustive matches
-/// (`alg`, `raw`, `pq_half`) the compiler names, plus the I2 agreement
-/// assertion (AUTH-2.92). Nothing dispatches on the token a second time: the
-/// row carries its own [`AlgRow::from_raw`], so there is no admission path a
-/// new row can be left out of. The token set this table admits is an I2
-/// frozen constant (AUTH-2.90); adding a row is a coordinated grammar
-/// upgrade (AUTH-2.91) under the one-canonical-raw-form-per-token obligation
-/// (AUTH-2.99).
+/// — the frozen token set (AUTH-2.96). [`PublicKey::parse`],
+/// [`PublicKey::from_halves`] and [`PublicKey::alg`] all READ this table
+/// (AUTH-1.6), so carrying a new algorithm arm is the enum arm, its row here
+/// and its [`SIG_ALGS`] row, and the exhaustive matches (`alg`, `raw`) the
+/// compiler names, plus the I2 agreement assertions (AUTH-2.92; every `ALGS`
+/// row signs under a marker tag). Nothing dispatches on the token a second
+/// time: the row carries its own [`AlgRow::from_raw`], so there is no
+/// admission path a new row can be left out of. The token set this table
+/// admits is an I2 frozen constant (AUTH-2.90); adding a row is a coordinated
+/// grammar upgrade (AUTH-2.91) under the one-canonical-raw-form-per-token
+/// obligation (AUTH-2.99).
 pub const ALGS: &[AlgRow] = &[
     // Signed ops (the seam build, 2026-09-25): the two HYBRID rows, each ONE
     // row over ONE concatenated raw value (the record §4.4: one sheet, one
@@ -264,15 +265,24 @@ pub const ALGS: &[AlgRow] = &[
     },
 ];
 
+/// The [`ALGS`] row a token names — AUTH-1.4's FIRST check, `UnknownAlg`
+/// when no row carries it, taken by both constructors
+/// ([`PublicKey::parse`], [`PublicKey::from_halves`]) before either judges a
+/// byte.
+fn row_of(alg: &str) -> Result<&'static AlgRow, KeyParseError> {
+    ALGS.iter().find(|row| row.token == alg).ok_or(KeyParseError::UnknownAlg)
+}
+
 /// A public key (AUTH-1.1): THE TWO HYBRID ARMS, each ONE key over one
 /// concatenated raw value whose halves [`PublicKey::pq_half`] and
-/// [`PublicKey::ed25519_half`] read out (the KEY PIN: the post-quantum key
-/// FIRST, the Ed25519 key LAST). There is no classical `Ed25519` arm — the
-/// hybrid-only launch (owner 2026-09-26, "Q1 b delete it") deleted it with
-/// its row — and the enum is the reserved slot for a future P-256 arm.
-/// Syntax-level only — this crate never decodes a curve point or a lattice
-/// key (AUTH-1.4) and no field type in the crate can carry a private key
-/// (I1, AUTH-2.89).
+/// [`PublicKey::ed25519_half`] read out and [`PublicKey::from_halves`] writes
+/// (the KEY PIN: the post-quantum key FIRST, the Ed25519 key LAST) — the
+/// pin's one statement in code, so a signer composes a key without spelling
+/// it. There is no classical `Ed25519` arm — the hybrid-only launch (owner
+/// 2026-09-26, "Q1 b delete it") deleted it with its row — and the enum is
+/// the reserved slot for a future P-256 arm. Syntax-level only — this crate
+/// never decodes a curve point or a lattice key (AUTH-1.4) and no field type
+/// in the crate can carry a private key (I1, AUTH-2.89).
 ///
 /// Deliberately NOT `#[non_exhaustive]`: a consumer's exhaustive match over
 /// this enum is what forces a new algorithm to be given a decode wherever a
@@ -323,18 +333,44 @@ impl PublicKey {
     /// (AUTH-4.32) and an entry's alike — verifies under, beside the
     /// post-quantum half's; no half opens anything alone.
     pub fn ed25519_half(&self) -> &[u8; ED25519_KEY_LEN] {
-        let raw = self.raw();
-        let (_, tail) = raw.split_at(raw.len() - ED25519_KEY_LEN);
-        tail.try_into().expect("every ALGS row's raw value ends in an Ed25519 key")
+        self.halves().1
     }
 
-    /// THE POST-QUANTUM HALF — a hybrid's first bytes, its row's
-    /// [`SigAlgRow::pq_key_len`] (1,952 under tag 1, 897 under tag 3).
+    /// THE POST-QUANTUM HALF — every raw byte before the Ed25519 half: its
+    /// row's [`SigAlgRow::pq_key_len`] (1,952 under tag 1, 897 under tag 3).
     pub fn pq_half(&self) -> &[u8] {
-        match self {
-            PublicKey::MlDsa65Ed25519(raw) => &raw[..MLDSA65_KEY_LEN],
-            PublicKey::FnDsa512PreviewEd25519(raw) => &raw[..FNDSA512_KEY_LEN],
-        }
+        self.halves().0
+    }
+
+    /// THE KEY PIN, READ — the raw value split where the Ed25519 half begins,
+    /// its LAST [`ED25519_KEY_LEN`] bytes at every row, the post-quantum half
+    /// everything before them. Both half readers take this one split;
+    /// [`PublicKey::from_halves`] writes the same pin.
+    fn halves(&self) -> (&[u8], &[u8; ED25519_KEY_LEN]) {
+        let raw = self.raw();
+        let (pq, tail) = raw.split_at(raw.len() - ED25519_KEY_LEN);
+        (pq, tail.try_into().expect("every ALGS row's raw value ends in an Ed25519 key"))
+    }
+
+    /// THE KEY PIN, WRITTEN — a hybrid key from its two halves, the
+    /// post-quantum half FIRST and the Ed25519 half LAST, as the ONE raw value
+    /// of `alg`'s row (AUTH-1.1; the record §4.4): the inverse of
+    /// [`PublicKey::pq_half`] and [`PublicKey::ed25519_half`], so
+    /// `from_halves(k.alg(), k.pq_half(), k.ed25519_half())` is `Ok(k)` for
+    /// every key. A signer composes its key here and never spells the order —
+    /// a key spelled with its halves swapped has the row's length, which is
+    /// all [`PublicKey::parse`] and the fold judge (AUTH-1.4).
+    ///
+    /// Syntax only, as `parse` is: neither half is decoded. `UnknownAlg`
+    /// where no [`ALGS`] row carries `alg`; `BadLength` where `pq` is not that
+    /// row's post-quantum width.
+    pub fn from_halves(
+        alg: &str,
+        pq: &[u8],
+        ed25519: &[u8; ED25519_KEY_LEN],
+    ) -> Result<PublicKey, KeyParseError> {
+        let row = row_of(alg)?;
+        (row.from_raw)(&[pq, &ed25519[..]].concat()).ok_or(KeyParseError::BadLength)
     }
 
     /// The [`SIG_ALGS`] row this key signs under — the whole row, whose `tag`
@@ -362,10 +398,7 @@ impl PublicKey {
     /// ahead of the decode would flip that last row, which is what
     /// `public_key_surface` watches.
     pub fn parse(alg: &str, hex: &str) -> Result<PublicKey, KeyParseError> {
-        let row = ALGS
-            .iter()
-            .find(|a| a.token == alg)
-            .ok_or(KeyParseError::UnknownAlg)?;
+        let row = row_of(alg)?;
         let bytes = hex_decode(hex).ok_or(KeyParseError::BadHex)?;
         // The row decides the length, by its own CHECKED conversion: the row
         // is what says which variant these bytes are, so there is no second
@@ -378,25 +411,32 @@ impl PublicKey {
     }
 }
 
-/// The two facts [`alg`] and [`to_hex`] already publish (AUTH-1.2,
-/// AUTH-1.3), not thirty-two decimal bytes.
+/// A key's two identifying facts: its [`alg`] token and its [`Fingerprint`]
+/// — the identity AUTH-1.7 names and the flat 64-hex form the daemon emits
+/// and a log reader greps for (AUTH-1.9). NOT [`to_hex`]: a hybrid key is
+/// 1,984 raw bytes under tag 1, 3,968 hex characters, which every `Debug`
+/// holding a key — `Enrolled`, `Effect`, `KeySet`, `IdentityState` — would
+/// repeat per key, burying the difference a failing assertion exists to
+/// show. The raw value is one call away, [`to_hex`], where a reader wants it.
 ///
 /// [`alg`]: PublicKey::alg
 /// [`to_hex`]: PublicKey::to_hex
 impl fmt::Debug for PublicKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "PublicKey({} {})", self.alg(), self.to_hex())
+        write!(f, "PublicKey({}, fingerprint {})", self.alg(), Fingerprint::of(self))
     }
 }
 
-/// [`PublicKey::parse`] rejection (AUTH-1.1, AUTH-1.4).
+/// [`PublicKey::parse`]'s and [`PublicKey::from_halves`]' rejection
+/// (AUTH-1.1, AUTH-1.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyParseError {
     /// The alg token is absent from [`ALGS`].
     UnknownAlg,
     /// The hex argument does not decode.
     BadHex,
-    /// The decoded bytes are not exactly the `ALGS` row's raw length.
+    /// The key's bytes — the decoded hex, or the two halves together — are
+    /// not exactly the `ALGS` row's raw length.
     BadLength,
 }
 
@@ -408,7 +448,7 @@ impl fmt::Display for KeyParseError {
         f.write_str(match self {
             KeyParseError::UnknownAlg => "alg token is absent from ALGS",
             KeyParseError::BadHex => "key hex does not decode",
-            KeyParseError::BadLength => "decoded key is not the ALGS row's raw length",
+            KeyParseError::BadLength => "key bytes are not the ALGS row's raw length",
         })
     }
 }

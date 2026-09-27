@@ -15,8 +15,9 @@
 //! (AUTH-2.19): [`parse_record`] holds the precedence and the parse side of the
 //! envelope, [`canonical_record`] the encode side, and a kind's [`Schema`]
 //! carries only the five rows that kind decides for itself — read by its
-//! parser and its encoder alike, so the two sides cannot disagree about the
-//! `type` value or the member name.
+//! parser and its encoder alike, each reaching it through the kind's
+//! [`RecordEntry`], so the two sides cannot disagree about the `type` value or
+//! the member name.
 
 use core::fmt;
 use core::fmt::Write as _;
@@ -325,12 +326,12 @@ fn retirement_fingerprint(fp: &Fingerprint) -> Fingerprint {
 /// fault precedence, which both kinds keep, is [`parse_record`]'s.
 ///
 /// PRECONDITION — two rows must AGREE, and [`parse_record`] checks neither.
-/// For every entry `parse_entry` admits from a canonical body, `encode_entry` must
-/// re-emit the bytes that entry spelled: AUTH-2.130's admission sentence is
-/// spelled `canonical_record(schema, parsed, sig) == text`, so an
-/// `encode_entry` that is not `parse_entry`'s inverse refuses EVERY record of
-/// the kind — silently, permanently, and with no fault to tell it from a
-/// malformed body. The ENVELOPE half of that inversion needs no precondition:
+/// For every entry `parse_entry` admits from a canonical body, `encode_entry`
+/// must re-emit the bytes that entry spelled: AUTH-2.130's admission sentence
+/// is spelled `canonical_record(parsed, sig) == text`, so an `encode_entry`
+/// that is not `parse_entry`'s inverse refuses EVERY record of the kind —
+/// silently, permanently, and with no fault to tell it from a malformed body.
+/// The ENVELOPE half of that inversion needs no precondition:
 /// [`canonical_record`] spells the `type` value and the entry-array member
 /// from the very rows [`parse_record`] reads to FIND them, so the encode and parse
 /// sides cannot disagree about either. And `compared_by` must be the
@@ -361,8 +362,8 @@ pub struct Schema<T> {
 }
 
 /// The ENROLLMENT kind's table (AUTH-2.128, AUTH-2.130): the ONE place the
-/// kind's five rows are written, read by [`parse_enroll`] and
-/// [`encode_enroll`] alike.
+/// kind's five rows are written, reached only through `Enrollment`'s
+/// [`RecordEntry`] impl, by the parse side and [`canonical_record`] alike.
 const ENROLL_SCHEMA: Schema<Enrollment> = Schema {
     type_value: ENROLL_TYPE,
     entries_member: "keys",
@@ -380,8 +381,9 @@ const RETIRE_SCHEMA: Schema<Fingerprint> = Schema {
     compared_by: retirement_fingerprint,
 };
 
-/// The entry type of ONE record kind, naming its [`Schema`] — the one way
-/// [`canonical_record`] is reached from outside: [`Enrollment`] for the
+/// The entry type of ONE record kind, naming its `Schema` — the one index
+/// from a kind to its table, read by [`canonical_record`] and by the parsers
+/// ([`parse_enroll`], [`parse_retire`]) alike: [`Enrollment`] for the
 /// enrollment kind, [`Fingerprint`] for the retirement kind. Sealed: a kind
 /// is added by filling a schema table in this module, never by a foreign
 /// impl.
@@ -413,11 +415,14 @@ impl RecordEntry for Fingerprint {
 /// composes with `Some(sig)` the record it will deposit, and the VERIFIER
 /// composes with `None` the SIG-LESS PROJECTION of a committed, `sig`-bearing
 /// record — the one byte string every party to a record holds, and the
-/// record grade's first step at every kind. This projection ADMITS NOTHING:
-/// AUTH-2.130's byte-identity check stays [`parse_enroll`]'s and
-/// [`parse_retire`]'s, so a verifier beside the table can compute over the
-/// entries of a record the fold refused. [`encode_enroll`] and
-/// [`encode_retire`] are this function with `sig = None` (AUTH-2.18).
+/// record grade's first step at every kind. This projection ADMITS NOTHING —
+/// a verifier beside the table can compute over the entries of a record the
+/// fold refused — and it is also the admission compare's own spelling:
+/// [`parse_enroll`] and [`parse_retire`] admit a body only where it equals
+/// this function over the entries they parsed and the `sig` they read
+/// (AUTH-2.130), so signer, verifier and admission rule call one function.
+/// [`encode_enroll`] and [`encode_retire`] are this function with
+/// `sig = None` (AUTH-2.18).
 ///
 /// The ENVELOPE both schemas state in identical words, written ONCE:
 /// `{"type":"<value>",` `"<member>":[` the entries comma-separated `]`, then
@@ -425,12 +430,7 @@ impl RecordEntry for Fingerprint {
 /// no byte after the brace (clauses 2 and 5). The admission sentence ranges
 /// over this whole value, `sig` INCLUDED (RES-105).
 pub fn canonical_record<T: RecordEntry>(entries: &[T], sig: Option<&str>) -> String {
-    canonical_record_of(T::schema(), entries, sig)
-}
-
-/// [`canonical_record`] over an explicit schema — the parse side's own call,
-/// which holds the schema by value.
-fn canonical_record_of<T>(schema: &Schema<T>, entries: &[T], sig: Option<&str>) -> String {
+    let schema = T::schema();
     let mut out = String::new();
     out.push_str(r#"{"type":""#);
     out.push_str(schema.type_value);
@@ -470,8 +470,11 @@ fn canonical_record_of<T>(schema: &Schema<T>, entries: &[T], sig: Option<&str>) 
 ///
 /// No verdict is delegated to `serde_json`: it answers only "is this a JSON
 /// value, and which" (AUTH-2.1). Everything a kind decides for itself is its
-/// [`Schema`]'s five rows.
-fn parse_record<T>(bytes: &[u8], schema: Schema<T>) -> Result<Vec<T>, PayloadError> {
+/// [`Schema`]'s five rows. The kind's [`Schema`] is `T`'s, reached through
+/// [`RecordEntry`] — the route [`canonical_record`] takes — so the two sides
+/// read one table by one index.
+fn parse_record<T: RecordEntry>(bytes: &[u8]) -> Result<Vec<T>, PayloadError> {
+    let schema = T::schema();
     // AUTH-2.19 item 1 — UTF-8 before everything.
     let text = core::str::from_utf8(bytes).map_err(|_| PayloadError::NotUtf8)?;
     // AUTH-2.1/AUTH-2.19 item 2 — parse to a GENERIC value; a non-JSON body,
@@ -527,8 +530,10 @@ fn parse_record<T>(bytes: &[u8], schema: Schema<T>) -> Result<Vec<T>, PayloadErr
     }
     // AUTH-2.130's ADMISSION SENTENCE — the byte-identity compare over the
     // RECORD VALUE, `sig` INCLUDED (RES-105, I2 AUTH-2.90): admit only where
-    // the input is the canonical re-encoding of every member it carries.
-    if canonical_record_of(&schema, &entries, sig) != text {
+    // the input is the canonical re-encoding of every member it carries — by
+    // the public projection itself, the function the signer and the verifier
+    // call.
+    if canonical_record(&entries, sig) != text {
         return Err(PayloadError::BadRecord);
     }
     // AUTH-2.15/AUTH-2.19 item 3 — duplicate ENTRY, naming the 1-based
@@ -562,7 +567,7 @@ fn parse_record<T>(bytes: &[u8], schema: Schema<T>) -> Result<Vec<T>, PayloadErr
 ///
 /// The record cap is the READ's, never this parser's (AUTH-2.43).
 pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
-    parse_record(bytes, ENROLL_SCHEMA)
+    parse_record::<Enrollment>(bytes)
 }
 
 /// AUTH-2.129, AUTH-2.130 — parse a retirement record: the mirror of
@@ -576,7 +581,7 @@ pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
 /// one fingerprint twice beside the rest of the set would pass that test,
 /// empty the set, and void I3 (AUTH-2.97) and AUTH-1.36.
 pub fn parse_retire(bytes: &[u8]) -> Result<Vec<Fingerprint>, PayloadError> {
-    parse_record(bytes, RETIRE_SCHEMA)
+    parse_record::<Fingerprint>(bytes)
 }
 
 /// AUTH-2.18/AUTH-2.130 — encode an enrollment record in the canonical spelling,

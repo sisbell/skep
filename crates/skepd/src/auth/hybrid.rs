@@ -44,13 +44,15 @@
 //! FN-DSA half's are the bytes `fn-dsa` 0.4.0's keygen draws.
 //!
 //! THE KEY PIN: a hybrid's raw public key is the PQ half's encoding THEN the
-//! Ed25519 half's 32 bytes ([`skep_identity::PublicKey`]'s arms). THE BLOB:
-//! the PQ signature THEN the Ed25519 signature's 64 bytes, two fixed-width
-//! fields, no length prefix (the record §2.4) — the marker slot's blob and,
-//! since the hybrid handshake (the hybrid-only launch, owner 2026-09-26), a
-//! session's `sig` over the session bytes too (AUTH-4.32, AUTH-6.3). VERIFY
-//! is BOTH halves over the SAME bytes — either failing fails (the ruled
-//! "hybrid, both halves verify"); no half opens a session alone.
+//! Ed25519 half's 32 bytes — [`skep_identity::PublicKey::from_halves`] writes
+//! it and `pq_half`/`ed25519_half` read it, so keygen composes a key without
+//! spelling the order. THE BLOB: the PQ signature THEN the Ed25519
+//! signature's 64 bytes, two fixed-width fields, no length prefix (the record
+//! §2.4) — the marker slot's blob and, since the hybrid handshake (the
+//! hybrid-only launch, owner 2026-09-26), a session's `sig` over the session
+//! bytes too (AUTH-4.32, AUTH-6.3). VERIFY is BOTH halves over the SAME bytes
+//! — either failing fails (the ruled "hybrid, both halves verify"); no half
+//! opens a session alone.
 //!
 //! What lives here beside the daemon's verify and all-halves decode —
 //! keygen and signing — is the signer's side, used by the suites' test
@@ -74,7 +76,6 @@ use sha2::Sha256;
 use skep_identity::{PublicKey, SigAlgRow};
 
 use super::OsEntropy;
-use crate::codec::hex_string;
 
 /// The marker tag of the PRODUCTION row, `mldsa65-ed25519` (ML-DSA-65 +
 /// Ed25519).
@@ -353,10 +354,8 @@ impl HybridSigner {
                 (PqSigner::FnDsa512Preview(sk), pk)
             }
         };
-        let mut raw = pq_pk;
-        raw.extend_from_slice(&ed_pk);
-        let public = PublicKey::parse(row.token, &hex_string(&raw))
-            .expect("the two halves concatenate to the row's raw length");
+        let public = PublicKey::from_halves(row.token, &pq_pk, &ed_pk)
+            .expect("the pinned crate's post-quantum key is the row's width");
         Some(HybridSigner { row, ed, pq, public })
     }
 
@@ -614,6 +613,7 @@ pub fn pq_widths(tag: u8) -> Option<PqWidths> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codec::hex_string;
 
     /// Both tags: keygen from one seed is deterministic, the halves differ
     /// per tag (the token is in the KDF's `info`), the widths are the ruled
@@ -690,18 +690,20 @@ mod tests {
             );
         }
         let s3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &seed).unwrap();
-        let mut raw = s3.public_key().raw().to_vec();
-        assert_eq!(raw[0], 0x09, "fn-dsa 0.4.0's degree-512 header byte");
-        raw[0] = 0x0a;
-        let bad = PublicKey::parse(s3.public_key().alg(), &hex_string(&raw)).expect("the row's length");
+        let mut pq = s3.public_key().pq_half().to_vec();
+        assert_eq!(pq[0], 0x09, "fn-dsa 0.4.0's degree-512 header byte");
+        pq[0] = 0x0a;
+        let bad = PublicKey::from_halves(s3.public_key().alg(), &pq, s3.public_key().ed25519_half())
+            .expect("the row's widths");
         assert!(
             decode_pq_half(TAG_FNDSA512_PREVIEW_ED25519, &bad).is_none(),
             "a bad header byte does not decode"
         );
         let s1 = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &seed).unwrap();
-        let mut raw = s1.public_key().raw().to_vec();
-        raw[0] ^= 0xff;
-        let still = PublicKey::parse(s1.public_key().alg(), &hex_string(&raw)).expect("the row's length");
+        let mut pq = s1.public_key().pq_half().to_vec();
+        pq[0] ^= 0xff;
+        let still = PublicKey::from_halves(s1.public_key().alg(), &pq, s1.public_key().ed25519_half())
+            .expect("the row's widths");
         assert!(
             decode_pq_half(TAG_MLDSA65_ED25519, &still).is_some(),
             "ML-DSA-65's encoding decodes at its length"
@@ -724,10 +726,10 @@ mod tests {
         let s3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &seed).unwrap();
         let msg = b"the entry frame";
         let sig = s3.sign_with_rng(msg, &mut SeededRng06::new([7; 32]));
-        let mut raw = s3.public_key().raw().to_vec();
-        raw[0] = 0x0a;
-        let bad =
-            PublicKey::parse(s3.public_key().alg(), &hex_string(&raw)).expect("the row's length");
+        let mut pq = s3.public_key().pq_half().to_vec();
+        pq[0] = 0x0a;
+        let bad = PublicKey::from_halves(s3.public_key().alg(), &pq, s3.public_key().ed25519_half())
+            .expect("the row's widths");
         assert!(
             decode_ed25519_half(&bad).is_some()
                 && decode_pq_half(TAG_FNDSA512_PREVIEW_ED25519, &bad).is_none(),

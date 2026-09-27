@@ -217,6 +217,40 @@ fn sig_algs_and_algs_agree_and_the_pins_are_the_ruled_widths() {
     assert_eq!(ENTRY_TAG.as_bytes(), b"skep-entry-v1");
 }
 
+/// THE KEY PIN, written and read by one crate: at every row, the key
+/// [`PublicKey::from_halves`] composes IS the key whose halves
+/// `pq_half`/`ed25519_half` read back — post-quantum half first, Ed25519 half
+/// last — and the key `parse` admits for the concatenated hex. A signer that
+/// composes through the constructor cannot swap the halves; one that spelled
+/// the raw value itself could, and the fold, judging length alone (AUTH-1.4),
+/// would enroll the result. The constructor answers `parse`'s own refusals:
+/// a token no row carries, a post-quantum half of the wrong width.
+#[test]
+fn a_key_composed_from_its_halves_reads_back_the_same_halves() {
+    for row in SIG_ALGS {
+        let raw: Vec<u8> = (0..row.key_len()).map(|i| (i % 251) as u8).collect();
+        let (pq, tail) = raw.split_at(row.pq_key_len);
+        let ed25519: &[u8; 32] = tail.try_into().expect("the Ed25519 half is 32 bytes");
+        let composed = PublicKey::from_halves(row.token, pq, ed25519).expect("the row's widths");
+        assert_eq!(composed.raw(), &raw[..], "{}: the post-quantum half first", row.token);
+        assert_eq!(composed.pq_half(), pq, "{}", row.token);
+        assert_eq!(composed.ed25519_half(), ed25519, "{}", row.token);
+        let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(PublicKey::parse(row.token, &hex), Ok(composed), "{}", row.token);
+        assert_eq!(
+            PublicKey::from_halves(row.token, &pq[1..], ed25519),
+            Err(KeyParseError::BadLength),
+            "{}: a post-quantum half one byte short",
+            row.token
+        );
+    }
+    assert_eq!(
+        PublicKey::from_halves("ed25519", &[], &[0; 32]),
+        Err(KeyParseError::UnknownAlg),
+        "the deleted classical token names no row, whatever the halves"
+    );
+}
+
 /// AUTH-2.93 — the `TAGS` assertion: every tag begins `skep-`, and no tag
 /// is a prefix of another (AUTH-1.15). With `SESSION_TAG_V2` (RES-63) the
 /// check is load-bearing: `skep-session-v1` and `skep-session-v2` share the
@@ -466,14 +500,16 @@ fn vocabulary_types_are_usable_as_map_keys() {
     );
 }
 
-/// AUTH-1.9/AUTH-1.3 — the hand-written renderings, so a fingerprint in a
-/// log line or a `{:?}` is the hex a reader can grep for, never thirty-two
-/// decimal bytes. `Display` on a fingerprint is `to_hex` exactly: the flat
-/// form the daemon emits (grouped rendering is the client's, AUTH-1.10).
+/// AUTH-1.9/AUTH-1.7 — the hand-written renderings: a key's `{:?}` is its
+/// token and its FINGERPRINT's flat hex — the identity a reader greps a log
+/// for — never its raw value, which at a hybrid's 1,984 bytes every `Debug`
+/// holding a key would repeat; a fingerprint's `{:?}` and `Display` are its
+/// flat hex, `Display` exactly `to_hex`: the form the daemon emits (grouped
+/// rendering is the client's, AUTH-1.10).
 #[test]
-fn key_and_fingerprint_render_as_their_hex() {
+fn key_and_fingerprint_render_as_the_fingerprint_hex() {
     let k = key(0xab);
-    let want = format!("PublicKey(mldsa65-ed25519 {})", k.to_hex());
+    let want = format!("PublicKey(mldsa65-ed25519, fingerprint {})", Fingerprint::of(&k).to_hex());
     assert_eq!(format!("{k:?}"), want);
 
     let f = fp(0xab);

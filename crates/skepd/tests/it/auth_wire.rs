@@ -55,16 +55,16 @@ fn enroll_atom_with_trailing_non_point(n: usize) -> String {
 }
 
 /// A TAG-1 hybrid key of the row's exact width whose ED25519 HALF decodes to
-/// no point — a real derived key with its last 32 raw bytes replaced by
-/// [`non_point_hex`]'s bytes. The fold admits it (syntax alone, AUTH-1.4);
-/// the precheck's all-halves decode refuses it on that half.
+/// no point — a real derived key's post-quantum half beside
+/// [`non_point_hex`]'s bytes as its Ed25519 half. The fold admits it (syntax
+/// alone, AUTH-1.4); the precheck's all-halves decode refuses it on that half.
 fn non_point_hybrid_key() -> PublicKey {
-    let mut raw = public_key_of(&distinct_key(200)).raw().to_vec();
-    let tail = raw.len() - 32;
-    let non_point: Vec<u8> = (0..32).map(|i| u8::from_str_radix(&non_point_hex()[2 * i..2 * i + 2], 16).unwrap()).collect();
-    raw[tail..].copy_from_slice(&non_point);
-    PublicKey::parse(ALG_MLDSA65_ED25519, &hex(&raw))
-        .expect("3,968 hex parses — the fold admits syntax and never decodes a half")
+    let real = public_key_of(&distinct_key(200));
+    let spelled = non_point_hex();
+    let non_point: [u8; 32] =
+        std::array::from_fn(|i| u8::from_str_radix(&spelled[2 * i..2 * i + 2], 16).unwrap());
+    PublicKey::from_halves(ALG_MLDSA65_ED25519, real.pq_half(), &non_point)
+        .expect("the row's widths — the fold admits syntax and never decodes a half")
 }
 
 /// A TAG-3 hybrid signer for a seed carrier — the PREVIEW row, which the
@@ -80,11 +80,12 @@ fn tag3_signer(sk: &SigningKey) -> HybridSigner {
 /// fold admits it (syntax alone); the precheck's all-halves decode refuses
 /// it on that half, where the Ed25519 half is a real point.
 fn bad_header_tag3_key(signer: &HybridSigner) -> PublicKey {
-    let mut raw = signer.public_key().raw().to_vec();
-    assert_eq!(raw[0], 0x09, "fn-dsa 0.4.0's degree-512 header byte");
-    raw[0] = 0x0a;
-    PublicKey::parse(ALG_FNDSA512_PREVIEW_ED25519, &hex(&raw))
-        .expect("1,858 hex parses — the fold admits syntax and never decodes a half")
+    let key = signer.public_key();
+    let mut pq = key.pq_half().to_vec();
+    assert_eq!(pq[0], 0x09, "fn-dsa 0.4.0's degree-512 header byte");
+    pq[0] = 0x0a;
+    PublicKey::from_halves(ALG_FNDSA512_PREVIEW_ED25519, &pq, key.ed25519_half())
+        .expect("the row's widths — the fold admits syntax and never decodes a half")
 }
 
 /// A GENESIS deposit of `entries` for `agent_account`, homed in the

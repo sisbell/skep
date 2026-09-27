@@ -1048,6 +1048,20 @@ impl Daemon {
     /// Open (genesis or recover) the one world at `data_dir`, replay the
     /// commit-metadata sidecar, and assemble the operation surface.
     ///
+    /// A COMMAND on the journal beyond genesis and recovery, on one kind of
+    /// board: a CLAIMED board whose head writer resumes no head from `H` —
+    /// the crash window between the claim and its head, a claim whose `H.1`
+    /// the head writer's driver refused while serving, or a board claimed
+    /// under a build that wrote no head at the claim — has `H.1` written
+    /// before this returns ([`Daemon::write_the_claims_head_if_owed`];
+    /// signed ops, s1): up to three commits of the daemon's own, as the
+    /// system account's principal (the staging draft's one-time mint, the
+    /// record's insert, the publish into `H`), so [`Daemon::log_position`]
+    /// can stand past the recovered head. A refusal there fails nothing: the
+    /// head writer surfaces it on the operator stream, the open returns `Ok`,
+    /// and the board answers attested writes
+    /// `attestation_invalid:board_unavailable` until a head lands.
+    ///
     /// PRECONDITION: no other live kernel holds `data_dir`. M2 takes an
     /// exclusive lock on the journal directory, and a second open fails on
     /// it — the one CONDITION here a retry can clear, and so the one
@@ -1082,9 +1096,10 @@ impl Daemon {
 
     /// [`Daemon::open`] with the session-layer configuration named: the
     /// local-trust flag, the configured origins, and the blocked-prefix
-    /// list's supply. [`Daemon::open`]'s PRECONDITION and its account of
-    /// which failures a retry can clear are this one's too — that method
-    /// delegates here, so both doors carry one contract. The identity fold is
+    /// list's supply. [`Daemon::open`]'s PRECONDITION, its account of which
+    /// failures a retry can clear, and the commits it makes on a claimed board
+    /// whose journal holds no head are this one's too — that method delegates
+    /// here, so both doors carry one contract. The identity fold is
     /// seeded here from the RECOVERED world (derived state — the canonical
     /// rebuild; the journal stays the one source of truth), which reads
     /// every link in that world: [`crate::auth::fold::canonical_identity`]
@@ -1144,6 +1159,13 @@ impl Daemon {
         // consult is history's (`history.rs`): a read as of N answers the
         // N-world's content through the HEAD's sets (PUB-6.48), which no
         // world of its own can supply.
+        //
+        // And the write-path check leans on this door carrying none: its dry
+        // run of a shot's source gate (`auth::entry`) asks `World::visible_to`
+        // at the principal, which is what this door lends the store ONLY while
+        // it carries no consult — a consult added here is owed to that dry run
+        // too, or the check passes through, UNATTESTED, a shot the store then
+        // admits.
         let febe = OperationSurface::new(Box::new(engine.stores()));
         let auth = {
             let snap = engine.kernel().snapshot();
@@ -1170,19 +1192,24 @@ impl Daemon {
     /// `H.1`"): the claim and its head are TWO transactions in one serialized
     /// step ([`Daemon::on_claim_flip`]), and a process that dies between them
     /// — the claim durable, no head — leaves a claimed board with no board
-    /// term on disk: the one state in which the check's `board_unavailable`
-    /// would otherwise answer every attested write until the cadence's first
-    /// head. Closed HERE, at open and before anything is served: a claimed
-    /// board (the recovered fold's claimant present) whose head writer resumed
-    /// no head writes `H.1` now ([`WritePath::write_first_head`]) under the
-    /// write path's own lock, naming the committed pair as it stands — the
-    /// claim's own position where the crash was the split, and the last
-    /// commit's on a board claimed under a build that wrote no head at the
-    /// claim. The unclaimed board writes nothing here: no head by a claim that
-    /// did not happen (A1/A5). A claimed board with its head finds writing it
-    /// a no-op, so a clean restart writes none.
+    /// term on disk, as does a claim whose `H.1` the head writer's driver
+    /// refused while serving ([`Daemon::on_claim_flip`] states that refusal):
+    /// the two states in which the check's `board_unavailable` would
+    /// otherwise answer every attested write until the cadence's next head.
+    /// Closed HERE, at open and before anything is served: a claimed board
+    /// (the recovered fold's claimant present) whose head writer resumed no
+    /// head writes `H.1` now ([`WritePath::write_first_head`]) under the write
+    /// path's own lock, naming the committed pair as it stands — the claim's
+    /// own position where the crash was the split, and the last commit's on a
+    /// board whose claim's `H.1` the driver refused, or claimed under a build
+    /// that wrote no head at the claim. The unclaimed board writes nothing
+    /// here: no head by a claim that did not happen (A1/A5). A claimed board
+    /// with its head finds writing it a no-op, so a clean restart writes none.
     /// The line on the operator stream is I11 (c)'s: a head written for a
-    /// reason other than the cadence's is said, never silent.
+    /// reason other than the cadence's is said, never silent. A head the
+    /// driver refuses HERE is surfaced as every refused head is, and fails
+    /// nothing: the open returns all the same, and the board answers attested
+    /// writes `board_unavailable` until a head lands.
     ///
     /// WHY NOT ONE TRANSACTION. A head names the committed `(position,
     /// chain)` pair read BEFORE its own write opens — a coordinate strictly
@@ -1249,9 +1276,11 @@ impl Daemon {
     /// the reply is built, so the journal can stand past the ack's `at` when
     /// this returns — and the credential write that CLAIMS the board is
     /// followed by its first head `H.1` in the same step, whatever the
-    /// cadence says (signed ops, s1); `POST /session` mints an M10 session; `GET /challenge`
-    /// mints a nonce into the bounded challenge store and evicts the oldest
-    /// past [`crate::auth::MAX_LIVE_NONCES`] — a GET that is not safe, and
+    /// cadence says (signed ops, s1), where the head writer's driver admits
+    /// it ([`Daemon::on_claim_flip`] states the refusal); `POST /session`
+    /// mints an M10 session; `GET /challenge` mints a nonce into the bounded
+    /// challenge store and evicts the oldest past
+    /// [`crate::auth::MAX_LIVE_NONCES`] — a GET that is not safe, and
     /// whose eviction can spend another caller's outstanding nonce;
     /// `POST /session/close` retires a binding. And EVERY token-accepting
     /// route (`/op`, `/op-at`, `/changes`, `/dump`, `/session/close`, and
@@ -1423,8 +1452,9 @@ impl Daemon {
     }
 
     /// THE CLAIM FLIP's consequences, whole and under the two guards the
-    /// claim committed under: the board's FIRST HEAD `H.1` written in this
-    /// same serialized step (signed ops, s1; RULED 2026-09-25 — "THE CLAIM
+    /// claim committed under: the board's FIRST HEAD `H.1`, written in this
+    /// same serialized step unless the head writer's driver refuses it (the
+    /// refusal is stated below; signed ops, s1; RULED 2026-09-25 — "THE CLAIM
     /// WRITES `H.1`": every attested write from here on names the board by
     /// `H.1`'s pair, D13, so a fresh claimed board takes them from the claim
     /// on rather than after the cadence's first 64 commits, checkpoint or
@@ -1444,9 +1474,19 @@ impl Daemon {
     /// daemon makes takes it ([`WritePath::serial_lock`] — both write
     /// sequences, and the head writer's door inside them), so no write of any
     /// kind lands between the claim and `H.1`: the head names the claim's own
-    /// position, and the first write admitted after the claim finds the board
-    /// term present. `lock` is the credential write gate: the re-install
-    /// replaces the list under the gate the claim itself committed under, so
+    /// position, and — where the head writer's driver ADMITS it — the first
+    /// write admitted after the claim finds the board term present. Where the
+    /// driver REFUSES it (on a healthy kernel, M2's `TxnError::Durability`: a
+    /// true no-op the kernel survives — ENOSPC, the OS refusing entropy), the
+    /// head writer surfaces the refusal on the operator stream (I11 (c)) and
+    /// the claim STANDS, whatever the refusal — its ack is owed, which is why
+    /// [`WritePath::write_first_head`]'s answer is not read here — and the
+    /// board has no board term until a head lands: the cadence's next, or
+    /// the next open's ([`Daemon::write_the_claims_head_if_owed`]). Until
+    /// then every attested write answers
+    /// `attestation_invalid:board_unavailable`. `lock` is the credential
+    /// write gate: the re-install replaces the list under the gate the claim
+    /// itself committed under, so
     /// no SESSION write lands between the claim and the comparands it moves
     /// — every one takes this gate. The head writer's own commits are the one
     /// kind that lands inside this step: `H.1`'s here, or the cadence's where
@@ -1464,6 +1504,9 @@ impl Daemon {
                 thread::park();
             }
         }
+        // Its answer is not read: a refused `H.1` fails nothing here — the
+        // claim stands, the head writer has surfaced the refusal (the card
+        // above).
         self.writes.write_first_head(serial);
         self.log_config_warnings(true);
         self.auth.reinstall_blocked_at_claim(lock);

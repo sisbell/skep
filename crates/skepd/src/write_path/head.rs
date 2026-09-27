@@ -96,12 +96,15 @@
 //! WHAT A REFUSAL DOES. A driver refusal on any of the head's commits is a
 //! SURFACED failure (I11 (c), PUB-5.75: never a board left silently headless):
 //! a `skepd:` notice names it, the head is skipped for this cycle with the
-//! writer's state unadvanced so the next landed commit retries, and the
-//! triggering write is untouched — it committed, and its ack is owed whatever
-//! the daemon's own write did. The daemon opens its kernel `Fsync` only, so a
-//! head is never written over an in-memory kernel (whose chain is the zero
-//! seed at every coordinate); a poisoned kernel refuses the triggering write
-//! first, so no head is attempted over it.
+//! writer's state unadvanced, and the triggering write is untouched — it
+//! committed, and its ack is owed whatever the daemon's own write did. The
+//! next landed commit retries a CADENCE head, whose trigger stays due; the
+//! FIRST head, which no trigger made due, waits for the next open or the
+//! cadence's next trigger (THE FIRST HEAD IS THE CLAIM'S, above), the board
+//! meanwhile without a board term. The daemon opens its kernel `Fsync` only,
+//! so a head is never written over an in-memory kernel (whose chain is the
+//! zero seed at every coordinate); a poisoned kernel refuses the triggering
+//! write first, so no head is attempted over it.
 //!
 //! WHY NOT `Caller::System`. That is M9's rule-fire path (PUB-6.28), which
 //! mints nothing and carries three registration conditions the head cannot
@@ -442,8 +445,11 @@ impl HeadWriter {
     /// tail), so `H.1` names the claim's own position and no write of any
     /// kind is admitted between the two; and the daemon's open calls it on a
     /// claimed board whose journal holds no head — the crash window between
-    /// the claim's transaction and this one, closed before anything is
-    /// served. A NO-OP on a board that has a head: the cadence may have
+    /// the claim's transaction and this one, or a first head the driver
+    /// refused while serving — closed before anything is served. A refusal is
+    /// the module doc's WHAT A REFUSAL DOES: surfaced, the claim standing,
+    /// and the head owed to the next open or the cadence's next trigger. A
+    /// NO-OP on a board that has a head: the cadence may have
     /// written one before or at the claim (an hour idle before the ceremony's
     /// last step is enough), and then `H.1` stands and this writes nothing —
     /// the claim writes ONE head, never a second, and a clean reopen of a
@@ -783,15 +789,19 @@ fn first_head_member() -> Address {
 /// `H.1`'s committed `(position, chain)` pair — durable (it survives
 /// reclamation as checkpoint state), guest-readable (`retrieve_v` on the
 /// bare member), board-unique — read off the snapshot the write's gates
-/// stand on. On a claimed board it is PRESENT from the claim on: the claim's
-/// own step writes `H.1` ([`HeadWriter::write_first_head`]; s1, RULED
-/// 2026-09-25) and the daemon's open writes it where a crash split the two,
-/// so `None` here names a journal damaged below `H.1` — the member gone, or
-/// its record not one this build reads — and nothing a healthy claimed board
-/// answers; the check's `board_unavailable` is that case's refusal, kept for
-/// it. Named for the corpus's term and not for its shape: it is a committed
-/// pair, but the one fixed from the claim on, never the live pair `/health`
-/// serves.
+/// stand on. On a claimed board it is present from the claim on WHERE THE
+/// HEAD WRITER'S DRIVER ADMITS `H.1`: the claim's own step writes it
+/// ([`HeadWriter::write_first_head`]; s1, RULED 2026-09-25) and the daemon's
+/// open writes it where a crash split the two. `None` on a claimed board
+/// therefore names one of TWO states, and the check's `board_unavailable` is
+/// the refusal of both: a first head the driver REFUSED — a refusal the claim
+/// survives (on a healthy kernel, M2's `TxnError::Durability`: ENOSPC, the OS
+/// refusing entropy), surfaced on the operator stream (I11 (c)), and written
+/// by the cadence's next head or the next open (the module doc's THE FIRST
+/// HEAD IS THE CLAIM'S) — or a journal damaged below `H.1` (the member gone,
+/// or its record not one this build reads). Named for the corpus's term and
+/// not for its shape: it is a committed pair, but the one fixed from the
+/// claim on, never the live pair `/health` serves.
 pub(crate) fn board_term(world: &World) -> Option<(u64, [u8; 32])> {
     let rec = read_head_member(world, &first_head_member())?;
     Some((rec.position, rec.chain))

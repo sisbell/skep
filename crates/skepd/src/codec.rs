@@ -208,6 +208,19 @@ const MAX_MINTED_PRINCIPAL_ID: u64 = (1 << 53) - 1;
 pub struct JsonCodec;
 
 impl Codec for JsonCodec {
+    /// M10's seam, reading the frame AS PRESENTED — the round-trip oracle's
+    /// door and every test's, and not the daemon's: a frame's `attest`
+    /// member (admitted on the checked set alone — `insert`, `make_link`,
+    /// `publish` — under a `SIG_ALGS` row's token) rides in
+    /// [`Request::attest`] PARSED AND UNVERIFIED. M10's card makes that
+    /// field the signature the daemon's write-path check ADMITTED, which
+    /// `execute` hands the store and the kernel writes into the commit
+    /// marker as it stands, so a request from this door is one to judge,
+    /// not to execute. The daemon's own routes never execute one: they parse
+    /// through `parse_daemon`, which takes the member out for the check and
+    /// hands `execute` a request whose `attest` that check alone fills. A
+    /// caller that executes what this returns owes the check itself, or
+    /// clears the field.
     fn parse(&self, frame: &[u8]) -> Result<Request, ParseError> {
         parse_request(frame).map_err(|e| ParseError { detail: Some(e.0) })
     }
@@ -230,20 +243,25 @@ impl JsonCodec {
     /// [`MAX_MINTED_PRINCIPAL_ID`] for a `delegate`'s `new_id` — carries no
     /// zero-byte `Val`, which [`j_atom`] renders as `{"atom": ""}` and
     /// [`p_val_form`] refuses by design (coarse granularity must be said, and
-    /// a zero-byte atom says nothing), and carries an `id`, if any, that is
-    /// UTF-8, which a `ReqId` this codec parsed always is. Under all of that,
-    /// `parse(marshal_request(r))` reproduces `r` and re-marshaling the
-    /// parse is byte-identical.
+    /// a zero-byte atom says nothing), carries an `id`, if any, that is
+    /// UTF-8, which a `ReqId` this codec parsed always is, and carries an
+    /// `attest`, if any, only on an op of the checked set (`insert`,
+    /// `make_link`, `publish`: the set `auth::entry::in_checked_set` states
+    /// and the parse side admits the member on), under a marker tag a
+    /// `SIG_ALGS` row names, which an `Attestation` this codec parsed always
+    /// is. Under all of that, `parse(marshal_request(r))` reproduces `r` and
+    /// re-marshaling the parse is byte-identical.
     ///
     /// Outside it, marshaling SUCCEEDS and yields a frame `parse` refuses:
     /// this is the parse side's trust-boundary obligation and this direction
     /// does not re-check it (one check, one owner). The upstream value types
     /// admit every violation — `Endset::from_spans` takes any span count,
     /// T0(a) leaves a component's magnitude unbounded by design, `Val::new`
-    /// takes any bytes, `PrincipalId` is any `u64`, and `ReqId`'s field is
-    /// public — so a caller assembling a `Request` by hand owes the whole
-    /// precondition. A `Request` this codec produced satisfies it by
-    /// construction, which is what makes the round-trip oracle sound.
+    /// takes any bytes, `PrincipalId` is any `u64`, `ReqId`'s field is
+    /// public, and `Request::attest` rides any op under any tag
+    /// `Attestation::new` admits — so a caller assembling a `Request` by hand
+    /// owes the whole precondition. A `Request` this codec produced satisfies
+    /// it by construction, which is what makes the round-trip oracle sound.
     ///
     /// One normalization survives the precondition rather than being
     /// excluded by it: `SlotSpec::Spans` over an EMPTY endset marshals as
@@ -268,8 +286,9 @@ impl JsonCodec {
         }
         // The `attest` member, where the request carries one (signed ops):
         // the tag lifted back to its `alg` token, the blob as hex. A tag no
-        // row names is outside the precondition and renders a token `parse`
-        // refuses, as every other violation does.
+        // row names, or an op outside the checked set, is outside the
+        // precondition: the one renders a token `parse` refuses, the other a
+        // member `parse` refuses as an unknown field.
         if let Some(a) = &req.attest {
             pairs.push(("attest", j_attest(a)));
         }
@@ -553,9 +572,9 @@ fn parse_value(v: Value) -> PResult<Request> {
 /// token to the marker tag its `SIG_ALGS` row names (a token no row carries
 /// is a GRAMMAR failure — the token set is an I2 frozen constant, so an
 /// unknown one is refused as an unknown op is), the hex to the blob (empty
-/// is refused: an attestation has one spelling of absent, the missing
-/// member). The blob's WIDTH under the tag is the check's to judge, not the
-/// grammar's.
+/// is refused: absence is the member's own — missing, or `null`, which
+/// [`Fields::attest`] reads alike — never an empty blob). The blob's WIDTH
+/// under the tag is the check's to judge, not the grammar's.
 fn p_attest(v: &Value) -> PResult<Attestation> {
     let m = p_obj(v, &["alg", "sig"])?;
     let alg = field(m, "alg", p_string)?;
@@ -2679,5 +2698,41 @@ mod tests {
             Some(vec![0xab; 8]),
             "it rides beside it"
         );
+    }
+
+    /// `marshal_request`'s `attest` clauses, both ways: on an op of the
+    /// checked set under a tag a `SIG_ALGS` row names, the member
+    /// round-trips — the tag lifted to its token and back, the blob byte for
+    /// byte; on an op OUTSIDE the checked set, marshaling succeeds and yields
+    /// a frame `parse` refuses by the unknown-field rule — outside the
+    /// precondition, and the parse side's to refuse (one check, one owner).
+    #[test]
+    fn an_attest_round_trips_on_the_checked_set_and_is_refused_off_it() {
+        let doc = wire_address("1.0.1.0.1").expect("a document address");
+        let attest = Attestation::new(1, vec![0xab; 8]).expect("tag 1 and a non-empty blob");
+        let insert = Request {
+            id: None,
+            op: Op::Insert {
+                doc: doc.clone(),
+                at: VPos::content(Nat::from(1u32)),
+                values: vec![Val::new(vec![b'x'])],
+                deposit: Deposit::Undeclared,
+            },
+            attest: Some(attest.clone()),
+        };
+        let back = parse_request(&JsonCodec.marshal_request(&insert))
+            .unwrap_or_else(|e| panic!("an attest on the checked set parses back: {e}"));
+        // `Request` derives no Debug upstream, so the equality is asserted bare.
+        assert!(back == insert, "and reproduces the request, the member included");
+        let delete = Request {
+            id: None,
+            op: Op::Delete { doc, p: VPos::content(Nat::from(1u32)), width: Nat::from(1u32) },
+            attest: Some(attest),
+        };
+        let e = match parse_request(&JsonCodec.marshal_request(&delete)) {
+            Err(e) => e,
+            Ok(_) => panic!("an attest off the checked set must not parse"),
+        };
+        assert!(e.0.contains("unknown field 'attest'"), "{e}");
     }
 }

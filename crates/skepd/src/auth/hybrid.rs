@@ -415,7 +415,10 @@ impl HybridSigner {
     /// signature over the same bytes — the blob a marker slot carries, and a
     /// session's `sig`. Tag 1 is deterministic (FIPS 204's deterministic
     /// variant, empty `ctx`); tag 3 draws its per-signature seed from OS
-    /// entropy.
+    /// entropy, and PANICS where the OS refuses it: the draw is the crate's
+    /// fail-stop OS source (`OsEntropy`), so a tag-3 signature is never made
+    /// over a seed from anything weaker. Tag 1 draws nothing, so this panic
+    /// is tag 3's alone.
     pub fn sign(&self, msg: &[u8]) -> Vec<u8> {
         self.sign_with_rng(msg, &mut OsEntropy)
     }
@@ -431,8 +434,9 @@ pub enum HybridFault {
     WrongRow,
     /// The blob is not the tag's fixed width.
     Malformed,
-    /// A half did not verify — which one is deliberately not said: under
-    /// "both halves verify" a partial pass is no pass.
+    /// A half did not verify, or did not decode — no signature passes a half
+    /// that is no key — and which one is deliberately not said: under "both
+    /// halves verify" a partial pass is no pass.
     Rejected,
 }
 
@@ -523,7 +527,9 @@ pub fn key_decodes(key: &PublicKey) -> bool {
 /// under the Ed25519 half (`verify_strict`) — must verify over the SAME
 /// `msg`. Either failing fails. Each half is decoded by
 /// `decode_ed25519_half` and `decode_pq_half`, the decodes [`key_decodes`]
-/// runs alone.
+/// runs alone, and a half that does not DECODE answers `Rejected`, as a half
+/// that does not verify does, whichever half it is; [`HybridFault::WrongRow`]
+/// is the row's answer alone — a tag no row names, or a key of another row.
 ///
 /// `msg` comes before `sig`, the order RustCrypto's
 /// `signature::Verifier::verify`, `ed25519-dalek`'s `verify_strict` and this
@@ -540,12 +546,14 @@ pub fn verify(tag: u8, key: &PublicKey, msg: &[u8], sig: &[u8]) -> Result<(), Hy
     }
     let (pq_sig, ed_sig) = sig.split_at(row.pq_sig_len);
     // The Ed25519 half FIRST: cheap, and a failure here refuses before the
-    // lattice arithmetic runs. Both are required, so the order moves no
-    // verdict.
+    // lattice arithmetic runs. Both are required, and a half that does not
+    // DECODE answers as a half that does not verify — `Rejected`, the
+    // Ed25519 point and the post-quantum key alike — so the order moves no
+    // verdict, the fault's variant included.
     let ed_key = decode_ed25519_half(key).ok_or(HybridFault::Rejected)?;
     let ed_sig = ed25519_dalek::Signature::from_slice(ed_sig).map_err(|_| HybridFault::Malformed)?;
     ed_key.verify_strict(msg, &ed_sig).map_err(|_| HybridFault::Rejected)?;
-    let pq_ok = match decode_pq_half(tag, key).ok_or(HybridFault::WrongRow)? {
+    let pq_ok = match decode_pq_half(tag, key).ok_or(HybridFault::Rejected)? {
         PqHalf::MlDsa65(enc) => {
             let vk = ml_dsa::VerifyingKey::<MlDsa65>::decode(&enc);
             let enc_sig =
@@ -699,6 +707,43 @@ mod tests {
             "ML-DSA-65's encoding decodes at its length"
         );
         assert!(!key_decodes(&bad) && key_decodes(&still), "the courtesy reads the same two decodes");
+    }
+
+    /// A KEY THAT DOES NOT DECODE ANSWERS `Rejected`, whichever half fails
+    /// first: a tag-3 key whose FN-DSA header byte is not `0x09`, handed a
+    /// blob its own signer made over `msg`, answers `Rejected` over `msg` —
+    /// its Ed25519 half passes, then its post-quantum half does not decode —
+    /// and over another message, where the Ed25519 half fails first. The
+    /// order `verify` checks the halves in moves no verdict, the variant
+    /// included; `WrongRow` is the row's answer alone. And every `SIG_ALGS`
+    /// row has a rule here, so a post-quantum half this module cannot decode
+    /// is the KEY's fault and never the tag's.
+    #[test]
+    fn a_key_that_does_not_decode_answers_rejected_whichever_half_fails_first() {
+        let seed = [0x42u8; 32];
+        let s3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &seed).unwrap();
+        let msg = b"the entry frame";
+        let sig = s3.sign_with_rng(msg, &mut SeededRng06::new([7; 32]));
+        let mut raw = s3.public_key().raw().to_vec();
+        raw[0] = 0x0a;
+        let bad =
+            PublicKey::parse(s3.public_key().alg(), &hex_string(&raw)).expect("the row's length");
+        assert!(
+            decode_ed25519_half(&bad).is_some()
+                && decode_pq_half(TAG_FNDSA512_PREVIEW_ED25519, &bad).is_none(),
+            "the premise: its Ed25519 half decodes and its post-quantum half does not"
+        );
+        for signed in [&msg[..], &b"other"[..]] {
+            assert_eq!(
+                verify(TAG_FNDSA512_PREVIEW_ED25519, &bad, signed, &sig),
+                Err(HybridFault::Rejected),
+                "over {:?}",
+                String::from_utf8_lossy(signed)
+            );
+        }
+        for row in skep_identity::SIG_ALGS {
+            assert!(Rule::of(row.tag).is_some(), "tag {} is a row with no rule here", row.tag);
+        }
     }
 
     /// THE TAG SET is stated once ([`Rule::of`]): the KDF, keygen and the

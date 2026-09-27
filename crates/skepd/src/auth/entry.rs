@@ -94,8 +94,10 @@ pub(crate) enum ComposeFault {
     /// The entry frame's `board` term (D13) has no value: the board has no
     /// `H.1`. Since s1 (RULED 2026-09-25) the claim writes `H.1` in its own
     /// step and the open writes it where a crash split the two, so on a
-    /// claimed board this names a journal damaged below `H.1`, nothing a
-    /// healthy board answers.
+    /// claimed board this names one of the two states [`board_term`] states:
+    /// a first head the head writer's driver refused (surfaced on the operator
+    /// stream, and written by the next head or the next open), or a journal
+    /// damaged below `H.1`.
     NoBoardTerm,
     /// The principal has no account prefix — no `account` term.
     NoAccount,
@@ -226,9 +228,10 @@ pub(crate) fn compose(
 /// (`document_of`, then `trunk_of`: the derivation M5's source gate asks
 /// about, PUB-2.15), being `trunk`, the shot document's own I-space, which
 /// the gate never consults, or one the read predicate admits at the
-/// principal's class, which is the predicate M10 lends the gate. A run whose
-/// start names no document counts as unreadable: the store refuses it
-/// `bad_run`, and the check reads nothing to learn so.
+/// principal's class, which is what M10 lends the gate, on the premise
+/// [`refused_at_or_before_the_source_gate`] states. A run whose start names
+/// no document counts as unreadable: the store refuses it `bad_run`, and the
+/// check reads nothing to learn so.
 fn every_origin_readable(
     world: &World,
     trunk: &Address,
@@ -250,8 +253,15 @@ fn every_origin_readable(
 /// are M5's answers and never a second statement of them here. Under the
 /// serialization guard this snapshot IS the base the real transaction opens
 /// on, and the predicate handed the gate — [`World::visible_to`] at the
-/// principal — is the one M10 lends it on the real write, so a refusal here
-/// is the refusal the real shot meets.
+/// principal — answers what M10 lends it on the real write: M10's
+/// `visible_to` asks its front door's `readable`, which is `World::readable`
+/// at the principal wherever that door carries NO read consult, and the
+/// daemon's live door carries none (`Daemon::open_under` builds it so). That
+/// premise is this dry run's to rely on and the open's to keep: a consult on
+/// the live door would make the two gates two predicates, and one MORE
+/// lenient than `World::readable` would pass through UNATTESTED a shot the
+/// real store then admits. So a refusal here is the refusal the real shot
+/// meets.
 ///
 /// The dry shot is `shot` behind one SENTINEL run: the shot document's next
 /// content address, which M3's mint only PEEKS (it moves nothing) and which

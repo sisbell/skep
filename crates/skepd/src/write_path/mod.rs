@@ -39,7 +39,10 @@
 //! write is admitted, by the board's first head `H.1`
 //! ([`WritePath::write_first_head`]) — the board term every attested write's
 //! entry frame names — and a daemon that opens a claimed board with no head
-//! writes it there, before it serves.
+//! writes it there, before it serves. Where the head writer's driver refuses
+//! `H.1`, the refusal is surfaced and the claim stands, the board without a
+//! board term until the cadence's next head or the next open (`head.rs`,
+//! WHAT A REFUSAL DOES).
 //!
 //! The read/write partition is M10's own `Op::is_read`. A read is exactly an
 //! `Op` the change feed has nothing to record, so [`write_meta`] answers
@@ -189,8 +192,10 @@ impl WritePath {
     /// tail, under the guard the claim itself committed under, so the head
     /// names the claim's own position and no write lands between the two;
     /// and the open, on a claimed board whose journal holds no head — the
-    /// crash window between the claim's transaction and the head's. `true`
-    /// iff a head landed. Nothing else about a head moves:
+    /// crash window between the claim's transaction and the head's, or an
+    /// `H.1` the head writer's driver refused while serving. `true` iff a
+    /// head landed; `false` is a no-op or a refusal the head writer has
+    /// already surfaced. Nothing else about a head moves:
     /// [`HeadWriter::write_first_head`] states the rule.
     pub(crate) fn write_first_head(&self, serial: &SerialGuard<'_>) -> bool {
         self.head_writer.write_first_head(self, serial)

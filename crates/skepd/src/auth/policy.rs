@@ -364,13 +364,17 @@ pub(crate) enum AttestFault {
     /// REORDER).
     Malformed,
     /// The board has no `H.1`, so the entry frame's `board` term (D13) has
-    /// no value and nothing can be verified. UNREACHABLE on a claimed board in
-    /// normal operation since s1 (RULED 2026-09-25): the claim writes `H.1`
-    /// in its own step and the daemon's open writes it where a crash split
-    /// the two — kept, defensive, for a journal damaged below `H.1` (the
-    /// member gone, or its record not one this build reads). REORDER, not
-    /// PERMANENT: the board's state refused it, not the client's key. Its
-    /// own cause so a client is not told its signature was wrong.
+    /// no value and nothing can be verified. Since s1 (RULED 2026-09-25) the
+    /// claim writes `H.1` in its own step and the daemon's open writes it
+    /// where a crash split the two, so on a claimed board this answers only
+    /// the two states [`crate::write_path::board_term`] names: a first head
+    /// the head writer's driver refused — a refusal the claim survives,
+    /// surfaced on the operator stream, and cleared by the next head or the
+    /// next open — or a journal damaged below `H.1` (the member gone, or its
+    /// record not one this build reads). REORDER, not PERMANENT: the board's
+    /// state refused it, not the client's key, and the first of the two
+    /// states clears without the client. Its own cause so a client is not
+    /// told its signature was wrong.
     BoardUnavailable,
     /// The set that OPENS the act's principal at this write's base holds no
     /// key of the attestation's algorithm — A2's empty walk among them — so
@@ -853,10 +857,11 @@ fn attestation_check(
     // would admit — the base CARRYING a run its author may not read — is
     // refused as its own cause with that value unread, and one whose body
     // passes the budget before the body is built; and a board with no `H.1` —
-    // a journal damaged below it, since the claim writes `H.1` in its own step
-    // (s1) — has no `board` term for ANY client to sign over, which is told as
-    // its own cause rather than as "carry an attest". `alg` is the member's
-    // own, so it waits for step 6.
+    // its first head refused by the head writer's driver, or its journal
+    // damaged below it (`board_term` states both), since the claim writes
+    // `H.1` in its own step (s1) — has no `board` term for ANY client to sign
+    // over, which is told as its own cause rather than as "carry an attest".
+    // `alg` is the member's own, so it waits for step 6.
     let invalid = CredentialRefusal::AttestationInvalid;
     let entry_frame = match entry::compose(world, op, principal) {
         Ok(entry_frame) => entry_frame,

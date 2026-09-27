@@ -1677,4 +1677,71 @@ mod tests {
             Some(TargetClass::AuditView(AuditClass::DelegatorEndorsement))
         );
     }
+
+    /// The check's arms no wire test can reach, on a board with no `H.1` —
+    /// the genesis world. A3: a home the SYSTEM ACCOUNT owns by ω is exempt,
+    /// nothing demanded even with no board term (the head writer never passes
+    /// dispatch, so no wire write meets A3). D26 and the checked set stand
+    /// aside ahead of the entry frame too. Every other checked write answers
+    /// `attestation_invalid:board_unavailable` with NO attest presented — the
+    /// entry frame is composed before the member is asked for, so the absent
+    /// term is told as its own cause, never as `attestation_required` — a
+    /// declared deposit of NO credential kind included. And the token and its
+    /// class are the wire's.
+    #[test]
+    fn a_board_with_no_h1_answers_board_unavailable_except_where_the_check_stands_aside() {
+        use skep_arrangement::VPos;
+        use skep_content::Val;
+        use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
+
+        let engine = skep_engine::Engine::open(KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(0),
+        })
+        .expect("in-memory genesis cannot fail");
+        let snap = engine.kernel().snapshot();
+        let world = snap.world();
+        let identity = IdentityState::genesis();
+        let doc1 = addr_of(&[1, 0, 1, 0, 1]);
+        let grant_in = |home: Address| Op::MakeLink {
+            home,
+            from: SlotArg::Addrs(Vec::new()),
+            to: SlotArg::Addrs(Vec::new()),
+            ty: SlotArg::Addrs(vec![t_grant().clone()]),
+        };
+        let insert = |deposit: Deposit| Op::Insert {
+            doc: doc1.clone(),
+            at: VPos::content(Nat::from(1u32)),
+            values: vec![Val::new(vec![b'x'])],
+            deposit,
+        };
+        let check = |op: Op| attestation_check(world, &identity, &op, BOOTSTRAP_PRINCIPAL, None);
+        let unavailable: Result<Option<Attestation>, CredentialRefusal> =
+            Err(CredentialRefusal::AttestationInvalid(AttestFault::BoardUnavailable));
+
+        assert_eq!(check(grant_in(skep_namespace::head_document())), Ok(None), "A3: exempt by ω");
+        for ty in [T_ENROLL, T_RETIRE, T_CLAIM] {
+            assert_eq!(
+                check(insert(Deposit::Declared(addr_of(&ty)))),
+                Ok(None),
+                "D26: a credential kind"
+            );
+        }
+        let delete =
+            Op::Delete { doc: doc1.clone(), p: VPos::content(Nat::from(1u32)), width: Nat::from(1u32) };
+        assert_eq!(check(delete), Ok(None), "outside the checked set");
+        assert_eq!(check(grant_in(doc1.clone())), unavailable, "a grant, no attest presented");
+        assert_eq!(check(insert(Deposit::Undeclared)), unavailable, "an undeclared insert");
+        assert_eq!(
+            check(insert(Deposit::Declared(t_grant().clone()))),
+            unavailable,
+            "a declared deposit of no credential kind is no D26 case"
+        );
+        let r = CredentialRefusal::AttestationInvalid(AttestFault::BoardUnavailable);
+        assert_eq!(
+            (r.token(), r.disposition()),
+            ("attestation_invalid:board_unavailable".to_string(), Disposition::Reorder)
+        );
+    }
 }

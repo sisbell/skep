@@ -3811,6 +3811,36 @@ mod tests {
         assert_eq!(body.bytes, br#"{"ok":true}"#);
     }
 
+    /// A request's `Debug` carries the token's PRESENCE and the body's
+    /// LENGTH, never either's bytes: the token names a live session, and a
+    /// request's `{:?}` is what a panic or a trace line would carry.
+    #[test]
+    fn a_requests_debug_carries_no_token_and_no_body() {
+        let token = "0123456789abcdef0123456789abcdef";
+        let body = br#"{"op":"fork","id":"the-body"}"#.to_vec();
+        let req = HttpRequest {
+            method: "POST".to_string(),
+            path: "/op".to_string(),
+            query: None,
+            session_token: Some(token.to_string()),
+            origin: None,
+            peer: Peer::Loopback,
+            body: body.clone(),
+        };
+        let printed = format!("{req:?}");
+        assert!(!printed.contains(token), "the token: {printed}");
+        // As text, and as the decimal list a derived `Debug` prints a
+        // `Vec<u8>` in.
+        assert!(
+            !printed.contains("the-body") && !printed.contains(&format!("{body:?}")),
+            "the body: {printed}"
+        );
+        assert!(
+            printed.contains("<token>") && printed.contains("body_len"),
+            "presence and length: {printed}"
+        );
+    }
+
     /// The `/changes` query's accepted forms, and the page size the wire
     /// promises when `limit` is absent (wire.md §The change feed: "default
     /// 256, maximum 4096"). Every other test drives this parser through

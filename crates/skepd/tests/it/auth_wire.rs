@@ -1042,6 +1042,48 @@ fn a_preview_key_is_refused_at_enrollment_unless_the_daemon_allows_it() {
     sd.shutdown();
 }
 
+/// AUTH-1.44 — `allow_preview_keys` GATES ENROLLMENT AND NOTHING ELSE: a
+/// tag-3 key enrolled while the daemon allowed preview keys stays a key when
+/// the same board restarts refusing them — `key_set` still lists it and it
+/// opens a session under its own row — while a NEW tag-3 enrollment on that
+/// restart is refused `preview_key`. The refusing daemon above never holds an
+/// enrolled tag-3 key, so a setting read at the handshake as well — the one
+/// place the config is in a verify's reach — passes every other test.
+#[test]
+fn a_preview_key_enrolled_before_the_setting_turned_off_still_opens_sessions() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let tag3 = tag3_signer(&distinct_key(76));
+    let tag3_fp = Fingerprint::of(tag3.public_key()).to_hex();
+    {
+        let sd = spawn(dir.path()); // the fixtures' setting: preview keys allowed
+        let port = sd.port();
+        let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+        let v = enroll_into_claimant(port, &signed, &[Enrollment::new(tag3.public_key().clone(), false, None).unwrap()]);
+        expect_resp(&v, "ack_addr");
+        sd.shutdown();
+    }
+    let sd = spawn_refusing_preview_keys(dir.path());
+    let port = sd.port();
+    let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
+    assert!(
+        v["enrolled"]
+            .as_array()
+            .expect("enrolled")
+            .iter()
+            .any(|e| e["fingerprint"].as_str() == Some(tag3_fp.as_str())),
+        "the preview key is still enrolled after the restart: {v}"
+    );
+    open_signed_session_as(port, CLAIMANT_PRINCIPAL, &tag3); // asserts the 200
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let v = enroll_into_claimant(
+        port,
+        &signed,
+        &[Enrollment::new(tag3_signer(&distinct_key(77)).public_key().clone(), false, None).unwrap()],
+    );
+    assert_eq!(rejected_detail(&v), "credential_refused:preview_key", "a NEW preview key: {v}");
+    sd.shutdown();
+}
+
 /// THE HYBRID HANDSHAKE's width check (AUTH-6.3, AUTH-4.34; the hybrid-only
 /// launch's Q2): a `sig` whose width is NONE of the hybrid blob widths — the
 /// classical 64-byte Ed25519 signature first, then one byte either side of

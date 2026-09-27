@@ -933,6 +933,17 @@ mod tests {
         assert!(Token::parse("9f3a6c21d4b8e07a.1").is_none());
     }
 
+    /// The token's `Debug` is its presence and never its bytes ("compared
+    /// exactly, never logged"): the bytes are the credential, and a derived
+    /// `Debug` prints them wherever a token rides a `{:?}`.
+    #[test]
+    fn a_tokens_debug_prints_no_part_of_the_credential() {
+        let t = Token([0xab; 16]);
+        let printed = format!("{t:?}");
+        assert!(!printed.contains(&t.to_wire()), "the wire form: {printed}");
+        assert!(!printed.contains(&format!("{:?}", [0xabu8; 16])), "the bytes: {printed}");
+    }
+
     /// AUTH-4.21 — single use: a burned nonce is gone whether or not it
     /// validated; expiry and wrong-principal both burn.
     #[test]

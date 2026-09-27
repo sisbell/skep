@@ -7,9 +7,13 @@
 //!
 //! THE CLAIM TEST (the design record §7.6's row; A1–A6): at or below the
 //! claim unsigned and an `attest` DROPPED; above it refused
-//! (`attestation_required`), admitted (the slot filled), and invalid at
-//! each of its causes; the system account's writes exempt by ω; a
-//! credential deposit's two positions taking no entry signature (D26).
+//! (`attestation_required`), admitted (the slot filled) — by ANY enrolled
+//! key of the row, under either tag, over `H.1`'s pair for the life of the
+//! board, the entry frame naming the trunk a member-addressed write belongs
+//! to — and invalid at each of its causes; the system account's own writes
+//! landing unsigned (A3's ω exemption for a DISPATCHED write is pinned in
+//! `policy.rs`, the one place such a write reaches the check); a credential
+//! deposit's two positions taking no entry signature (D26).
 //!
 //! THE GOLDENS (the frozen-tag rule's pin): per tag, one seed through the
 //! KDF to both public keys and the fingerprint; the three ops' entry frames
@@ -47,6 +51,50 @@ fn owner(port: u16) -> String {
 
 fn sha_hex(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))
+}
+
+/// The claimant's grant — `make_link` homed in its doc 1, `from` its
+/// account, `to` empty, typed `T_GRANT` — the one frame the cells below sign
+/// by hand.
+fn claimant_grant() -> String {
+    typed_link_frame(CLAIMANT_DOC1, &[CLAIMANT_ACCOUNT], &[], T_GRANT)
+}
+
+/// [`claimant_grant`]'s ENTRY frame under `alg` over the board term
+/// `(position, chain)`, spelled from its members — for the cells that sign
+/// over a pair, or under a token, the test signer never would.
+fn claimant_grant_entry_frame(alg: &str, (position, chain): (u64, [u8; 32])) -> Vec<u8> {
+    let ty = [addr(T_GRANT)];
+    let from = [addr(CLAIMANT_ACCOUNT)];
+    let to: [skep_address::Address; 0] = [];
+    let body =
+        entry_body_link(&EntrySlot::Addrs(&ty), &EntrySlot::Addrs(&from), &EntrySlot::Addrs(&to));
+    entry_frame(
+        alg,
+        &board_bytes(position, &chain),
+        &address_bytes(&addr(CLAIMANT_ACCOUNT)),
+        &address_bytes(&addr(CLAIMANT_DOC1)),
+        "make_link",
+        &body,
+    )
+}
+
+/// [`claimant_grant`] carrying `sig` under `alg` as its `attest` member.
+fn claimant_grant_attested(alg: &str, sig: &[u8]) -> String {
+    let mut v: Value = serde_json::from_str(&claimant_grant()).unwrap();
+    v["attest"] = json!({"alg": alg, "sig": hex(sig)});
+    v.to_string()
+}
+
+/// A head member's recorded `(position, chain)`, read as a guest reads it —
+/// `retrieve_v` on the member, the `skep-head` record's own members.
+fn recorded_pair(port: u16, member: &str) -> (u64, [u8; 32]) {
+    let v = op_unsigned(port, None, &retrieve_frame(member, 1, 1));
+    let rec: Value = serde_json::from_str(v["items"][0]["atom"].as_str().expect("a head record"))
+        .expect("the record is JSON");
+    let chain: [u8; 32] =
+        hex_to_bytes(rec["chain"].as_str().expect("chain")).try_into().expect("32 bytes");
+    (rec["position"].as_u64().expect("position"), chain)
 }
 
 // ── the claim test ──────────────────────────────────────────────────────────
@@ -298,6 +346,100 @@ fn an_account_with_no_key_of_the_tag_is_refused_not_enrolled_at_position() {
     assert_eq!(verdict(&v), "credential_refused:attestation_required");
 }
 
+/// A2's walk has no cutoff — ANY KEY OF THE ROW ATTESTS (the design record
+/// §4.5 (2)): a grant attested by the FIRST key of the claimant's set in
+/// fingerprint order is admitted, and so is one attested by the LAST, each
+/// slot that key's own attestation. Every other attested write in the suite
+/// is the device key's, and where it sorts is an accident of SHA-256 over two
+/// fixed seeds: it sorts LAST, so a check that tried only the last candidate
+/// passes every other test — the gap
+/// `every_enrolled_key_signs_including_the_last_in_fingerprint_order` closed
+/// for the handshake, open here. The keys are CHOSEN from `key_set`'s own
+/// published order, so both ends are instances of the law whatever the seeds
+/// hash to.
+#[test]
+fn every_enrolled_key_of_the_row_attests_including_the_last_in_fingerprint_order() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
+    let fps: Vec<String> = v["enrolled"]
+        .as_array()
+        .expect("enrolled")
+        .iter()
+        .map(|e| e["fingerprint"].as_str().expect("fp").to_string())
+        .collect();
+    assert_eq!(fps.len(), 2, "the ceremony enrolls the anchor and the device key: {v}");
+    let by_fp = |want: &str| -> SigningKey {
+        [anchor_key(), device_key()]
+            .into_iter()
+            .find(|k| Fingerprint::of(&public_key_of(k)).to_hex() == want)
+            .unwrap_or_else(|| panic!("{want} is one of the ceremony's keys"))
+    };
+    for (which, fp) in [("first", &fps[0]), ("last", &fps[1])] {
+        let key = by_fp(fp);
+        // A session the key opens registers it with the test signer, so the
+        // grant below is attested by THAT key.
+        let session = open_signed_session(port, CLAIMANT_PRINCIPAL, &key);
+        let grant: Value = serde_json::from_str(&claimant_grant()).unwrap();
+        let frame = entry_frame_for(port, &session, CLAIMANT_PRINCIPAL, &grant).expect("composable");
+        let v = op(port, Some(&session), &claimant_grant());
+        assert_eq!(v["resp"].as_str(), Some("ack_addr"), "the {which} key in fingerprint order attests: {v}");
+        let slot = sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().expect("the slot is filled");
+        assert_eq!(
+            hybrid::verify(FIXTURE_TAG, &public_key_of(&key), &frame, slot.sig()),
+            Ok(()),
+            "the {which} key's slot is that key's own attestation"
+        );
+    }
+}
+
+/// THE PREVIEW ROW ATTESTS AS THE PRODUCTION ROW DOES (AUTH-1.44: "a tag-3
+/// key already enrolled opens sessions and signs entries as any other"; this
+/// file's charter: one signed write "under the two tags"): the claimant
+/// enrols a tag-3 key beside its two tag-1 keys, and a grant that key
+/// attests — the entry frame's `alg` the PREVIEW token, the blob FN-DSA-512's
+/// 666 bytes then Ed25519's 64 — is admitted from a session it opened, the
+/// slot carrying tag 3 and that very blob. The test signer signs under tag 1
+/// alone, so every other admitted attestation in the suite is tag 1's: a
+/// check framing every entry under tag 1's token, or verifying every blob
+/// under tag 1's rule, passes all of them and refuses this one
+/// `attestation_invalid:signature` — REORDER, a re-compose that never lands.
+#[test]
+fn a_tag_3_key_attests_a_write_as_a_tag_1_key_does() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = owner(port);
+    let tag3 = HybridSigner::from_seed(hybrid::TAG_FNDSA512_PREVIEW_ED25519, &seed_of(&distinct_key(61)))
+        .expect("tag 3 is a row");
+    // The preview key joins the claimant's set — the fixtures allow it.
+    let ordinal = next_content_ordinal(port, Some(&signed), CLAIMANT_DOC1);
+    let entries = vec![Enrollment::new(tag3.public_key().clone(), false, None).unwrap()];
+    let atom = json_atom(&skep_identity::encode_enroll(&entries));
+    let atom_addr = acked_addr(&op(
+        port,
+        Some(&signed),
+        &format!(
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":"{T_ENROLL}"}}"#
+        ),
+    ));
+    expect_resp(
+        &op(port, Some(&signed), &typed_link_frame(CLAIMANT_DOC1, &[&atom_addr], &[CLAIMANT_ACCOUNT], T_ENROLL)),
+        "ack_addr",
+    );
+    // A session the preview key opens, and a grant it attests.
+    let as_tag3 = open_signed_session_as(port, CLAIMANT_PRINCIPAL, &tag3);
+    let h1 = board_term(port).expect("H.1");
+    let sig = tag3.sign(&claimant_grant_entry_frame(ALG_FNDSA512_PREVIEW_ED25519, h1));
+    assert_eq!(sig.len(), 730, "tag 3's blob: 666 ‖ 64");
+    let v = op_unsigned(port, Some(&as_tag3), &claimant_grant_attested(ALG_FNDSA512_PREVIEW_ED25519, &sig));
+    assert_eq!(v["resp"].as_str(), Some("ack_addr"), "a tag-3 attestation is admitted: {v}");
+    let slot = sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().expect("the slot is filled");
+    assert_eq!(slot.sig_alg(), hybrid::TAG_FNDSA512_PREVIEW_ED25519, "the slot carries tag 3");
+    assert_eq!(slot.sig(), &sig[..], "and the blob attached, whole");
+}
+
 /// THE THREE OPS END TO END: `make_link` (a grant) and `publish` (a shot)
 /// commit attested, their slots holding the attached blobs and no other
 /// commit's; `insert` — whose only published-document form in this build is
@@ -355,12 +497,47 @@ fn the_three_ops_commit_attested_where_the_slice_reaches_them() {
     assert_eq!(verdict(&v), "published_target", "the check passed; the store's own refusal");
 }
 
-/// A3: the SYSTEM ACCOUNT's own writes — the head document's — commit while
-/// the check is live, UNSIGNED, their slots empty, exempt by ω; a second
-/// head lands the same way later. A5 beside it: the head's three commits
-/// after the claim are exactly where the claim's own step put them (s1).
+/// THE ENTRY FRAME NAMES THE TRUNK (wire.md: for `insert`, "`doc` the
+/// document's trunk"; for `publish`, "the frame whose `doc` is the trunk
+/// document"; M5's one truncation, PUB-2.15). A shot ADDRESSED TO A MEMBER —
+/// the edition's first member, which M5 gates as named and projects to its
+/// document — is attested over the edition, admitted, and mints the trunk's
+/// next member; an insert addressed to that member is framed over the
+/// edition too, the check passing and the store refusing it
+/// `published_target`. Every other attested shot in the suite names its
+/// trunk, so the publish arm's truncation is watched by nothing else.
 #[test]
-fn the_head_writers_own_commits_are_exempt_by_omega_and_unsigned() {
+fn a_member_addressed_write_is_framed_over_its_trunk() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = owner(port);
+    let edition = edition_with(port, &signed, "abc");
+    let runs = shot_runs(port, Some(&signed), &edition, 1, 3);
+    let m1 = acked_addr(&op(port, Some(&signed), &publish_frame(&edition, Some((&edition, 3)), None, &runs)));
+    assert_eq!(m1, format!("{edition}.1"));
+    // The shot addressed to the member: framed over the edition, admitted.
+    let v = op(port, Some(&signed), &publish_frame(&m1, Some((&m1, 3)), None, &runs));
+    assert_eq!(v["resp"].as_str(), Some("ack_addr"), "a member-addressed shot is admitted: {v}");
+    let m2 = acked_addr(&v);
+    assert_eq!(m2, format!("{edition}.2"), "the trunk's next member");
+    assert!(sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().is_some(), "attested over the trunk");
+    assert_eq!(text_of(port, None, &m2, 1, 3), "abc");
+    // The insert addressed to the member: the check passes, the store refuses.
+    let v = op(port, Some(&signed), &insert_frame(&m1, 4, "d", false));
+    assert_eq!(verdict(&v), "published_target", "framed over the trunk, refused by the store: {v}");
+}
+
+/// A3 as the wire sees it: the head writer's own commits — the system
+/// account's — never pass dispatch, so they never reach the check: they land
+/// UNSIGNED, their slots empty, before and after an attested write whose slot
+/// alone is filled, and a second head lands the same way. A5 beside it: the
+/// head's three commits after the claim are exactly where the claim's own
+/// step put them (s1). The ω exemption for a DISPATCHED write is pinned where
+/// it can fail: `policy.rs`'s
+/// `a_board_with_no_h1_answers_board_unavailable_except_where_the_check_stands_aside`.
+#[test]
+fn the_head_writers_own_commits_land_unsigned_beside_an_attested_write() {
     let dir = tempdir().unwrap();
     let sd = spawn(dir.path());
     let port = sd.port();
@@ -397,6 +574,58 @@ fn wall_clock_millis() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("after the epoch")
         .as_millis() as u64
+}
+
+/// D13 — THE BOARD TERM IS `H.1`'s PAIR FOR THE LIFE OF THE BOARD (RULED
+/// 2026-09-25; wire.md: "`board` the head document `H.1`'s `(position,
+/// chain)` pair"). After a SECOND head lands, a grant signed over `H.1`'s
+/// pair is admitted and its slot is that blob; the same grant signed over the
+/// LATEST head's pair, or over the live `/health` pair, is refused
+/// `attestation_invalid:signature`. Fixed from the claim on is what lets a
+/// client sign before the commit with no round trip. A daemon naming the
+/// latest head — `board_term` reading `read_recorded_head`, the helper beside
+/// it — refuses every client from the board's second head on, REORDER, a
+/// re-compose that can never succeed; no other test writes attested after
+/// `H.2`, so every other test passes it.
+#[test]
+fn the_board_term_stays_h1s_pair_after_a_second_head_lands() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = owner(port);
+    let signer = hybrid_signer(&device_key());
+    let h1 = board_term(port).expect("H.1 at the claim");
+
+    // A second head: the hour passes, and the head writer's turn after an
+    // attested grant writes H.2 naming that grant.
+    sd.daemon().set_head_writer_clock_millis(wall_clock_millis() + WELL_PAST_THE_HOUR_MILLIS);
+    let trigger = acked_at(&op(port, Some(&signed), &claimant_grant()));
+    let h2 = recorded_pair(port, "1.1.0.1.0.2.2");
+    assert_eq!(h2.0, trigger, "H.2 names the grant its turn followed");
+    assert_ne!(h2, h1, "a second head, a second pair");
+
+    // Over the LATEST head's pair: refused.
+    let over_h2 = signer.sign(&claimant_grant_entry_frame(ALG_MLDSA65_ED25519, h2));
+    let v = op_unsigned(port, Some(&signed), &claimant_grant_attested(ALG_MLDSA65_ED25519, &over_h2));
+    assert_eq!(
+        refusal(&v),
+        ("credential_refused:attestation_invalid:signature".to_string(), "reorder".to_string()),
+        "the latest head's pair is not the board term: {v}"
+    );
+    // Over the LIVE pair: refused.
+    let health = json(&get(port, "/health").1);
+    let live_chain: [u8; 32] =
+        hex_to_bytes(health["chain_head"].as_str().expect("chain_head")).try_into().expect("32 bytes");
+    let live = (health["log_position"].as_u64().expect("log_position"), live_chain);
+    let over_live = signer.sign(&claimant_grant_entry_frame(ALG_MLDSA65_ED25519, live));
+    let v = op_unsigned(port, Some(&signed), &claimant_grant_attested(ALG_MLDSA65_ED25519, &over_live));
+    assert_eq!(verdict(&v), "credential_refused:attestation_invalid:signature", "the live pair: {v}");
+    // Over H.1's: admitted, the slot that very blob.
+    let over_h1 = signer.sign(&claimant_grant_entry_frame(ALG_MLDSA65_ED25519, h1));
+    let v = op_unsigned(port, Some(&signed), &claimant_grant_attested(ALG_MLDSA65_ED25519, &over_h1));
+    assert_eq!(v["resp"].as_str(), Some("ack_addr"), "H.1's pair is the board term after H.2: {v}");
+    let slot = sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().expect("the slot is filled");
+    assert_eq!(slot.sig(), &over_h1[..], "H.1's pair, after the second head as before it");
 }
 
 /// D26: a credential deposit is TWO POSITIONS — the atom `insert` and its

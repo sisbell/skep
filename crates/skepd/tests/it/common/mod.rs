@@ -613,7 +613,10 @@ fn spawn_under(
         };
         drop(reserved);
         match serve(daemon, port, DEFAULT_WORKERS) {
-            Ok(sd) => return sd,
+            Ok(sd) => {
+                forget_port(sd.port());
+                return sd;
+            }
             Err(e) if e.kind() == ErrorKind::AddrInUse => continue,
             Err(e) => panic!("bind the reserved port: {e}"),
         }
@@ -719,7 +722,9 @@ pub fn spawn_unclaimed(dir: &Path) -> Skepd {
     let mut opts = AuthOptions::default();
     opts.allow_preview_keys = ALLOW_PREVIEW_KEYS_IN_FIXTURES;
     let daemon = Daemon::open_with(dir, opts).expect("daemon open (genesis or recover)");
-    serve(daemon, 0, DEFAULT_WORKERS).expect("bind an ephemeral port")
+    let sd = serve(daemon, 0, DEFAULT_WORKERS).expect("bind an ephemeral port");
+    forget_port(sd.port());
+    sd
 }
 
 /// Client-side socket timeout: a daemon that wedges must fail the exchange
@@ -1974,12 +1979,28 @@ type Registry<K, V> = Mutex<Option<HashMap<K, V>>>;
 /// random, so two daemons in one process never collide).
 static SIGNERS: Registry<String, (u64, [u8; 32])> = Mutex::new(None);
 
-/// Port → `H.1`'s pair, read once: `H.1` is pinned forever, so the first
-/// read is the last.
+/// Port → `H.1`'s pair, read once per board: `H.1` is pinned forever, so a
+/// board's first read is its last. Keyed by the PORT a board answers at,
+/// which outlives the board — so every spawn here forgets the port it binds
+/// ([`forget_port`]) before a pair is read off it.
 static BOARDS: Registry<u16, (u64, [u8; 32])> = Mutex::new(None);
 
-/// (port, principal) → the account's local address, read once.
+/// (port, principal) → the account's local address, read once per board —
+/// forgotten with the port as [`BOARDS`] is.
 static ACCOUNTS: Registry<(u16, u64), String> = Mutex::new(None);
+
+/// A daemon now answers at `port`, so whatever [`BOARDS`] and [`ACCOUNTS`]
+/// hold for that port was ANOTHER board's: ports recycle across the daemons
+/// one test process serves ([`spawn_under`]'s note), and `H.1`'s pair is one
+/// board's for ever, not one port's. Kept, a stale pair signs every attested
+/// write over another board's chain and answers a fresh board's "no `H.1`
+/// yet" with the old board's. Called by every spawn here as the port is bound.
+fn forget_port(port: u16) {
+    with_map(&BOARDS, |m| {
+        m.remove(&port);
+    });
+    with_map(&ACCOUNTS, |m| m.retain(|(p, _), _| *p != port));
+}
 
 fn with_map<K: std::hash::Hash + Eq, V, R>(
     cell: &Registry<K, V>,

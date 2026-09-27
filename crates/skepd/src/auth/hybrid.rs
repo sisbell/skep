@@ -727,4 +727,42 @@ mod tests {
         assert_ne!(h3.pq, h.pq);
         assert_ne!(h3.ed25519, h.ed25519);
     }
+
+    /// PRIVATE-KEY MATERIAL PRINTS NONE OF ITSELF: `{:?}` of `HalfSeeds`, a
+    /// `HybridSigner` of either tag and `SeededRng06` — what a log line, an
+    /// assertion's message or a panic carries — holds neither the seed, nor a
+    /// half seed, nor the Ed25519 signing key, nor the FN-DSA signing key the
+    /// tag-3 signer stores as bytes, in the decimal list a derived `Debug`
+    /// prints or in hex. The hand-written impls are all that stands between a
+    /// `#[derive(Debug)]` and a production key's ξ in a log.
+    #[test]
+    fn private_key_material_prints_none_of_itself() {
+        let seed = [0x42u8; 32];
+        let leaks = |printed: &str, secret: &[u8]| {
+            printed.contains(&format!("{secret:?}")) || printed.contains(&hex_string(secret))
+        };
+        for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
+            let halves = derive_seeds(tag, &seed).unwrap();
+            let signer = HybridSigner::from_seed(tag, &seed).unwrap();
+            let mut secrets = vec![
+                seed.to_vec(),
+                halves.ed25519.to_vec(),
+                halves.pq.to_vec(),
+                signer.ed.to_bytes().to_vec(),
+            ];
+            if let PqSigner::FnDsa512Preview(sk) = &signer.pq {
+                secrets.push(sk.clone());
+            }
+            for printed in [format!("{halves:?}"), format!("{signer:?}")] {
+                for secret in &secrets {
+                    assert!(
+                        !leaks(&printed, &secret[..]),
+                        "tag {tag} prints private-key material: {printed}"
+                    );
+                }
+            }
+        }
+        let printed = format!("{:?}", SeededRng06::new(seed));
+        assert!(!leaks(&printed, &seed[..]), "the fixture stream prints its seed: {printed}");
+    }
 }

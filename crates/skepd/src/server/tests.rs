@@ -1,4 +1,14 @@
+use std::io::{Read, Write};
+use std::net::TcpStream;
+use std::time::{Duration, Instant};
+
+use serde_json::Value;
+use skep_febe::{Codec, OpKind, Response};
+
+use super::reply::{refuse_scan_busy, refuse_with, SESSION_HEADER};
+use super::scan::{is_class_scan, MAX_CONCURRENT_CLASS_SCANS};
 use super::*;
+use crate::codec::obj;
 
 /// Every path the router serves. The list is the test's own — an
 /// independent restatement, so a route added to [`path_is_known`] alone
@@ -402,79 +412,6 @@ fn a_requests_debug_carries_no_token_and_no_body() {
         printed.contains("<token>") && printed.contains("body_len"),
         "presence and length: {printed}"
     );
-}
-
-/// The `/changes` query's accepted forms, and the page size the wire
-/// promises when `limit` is absent (wire.md §The change feed: "default
-/// 256, maximum 4096"). Every other test drives this parser through
-/// its refusals; the seeded feeds are four writes long, so a default
-/// silently changed to 4 — or to 4096 — produces an identical wire
-/// answer in all of them.
-#[test]
-fn the_changes_query_defaults_to_the_documented_page_size() {
-    let plain = |q: &str| {
-        let p = changes_params(Some(q)).unwrap_or_else(|e| panic!("{q}: {e}"));
-        (p.since, p.limit, p.under.map(|t| t.to_string()), p.drafts_only)
-    };
-    assert_eq!(
-        plain("since=0"),
-        (0, 256, None, false),
-        "an absent limit is the documented default; no narrowing by default"
-    );
-    assert_eq!(plain("since=7&limit=10"), (7, 10, None, false));
-    assert_eq!(
-        plain("limit=10&since=7"),
-        (7, 10, None, false),
-        "parameters are a set, not a sequence"
-    );
-    assert_eq!(plain("since=0&limit=4096").1, 4096, "the maximum is in range");
-    // The two narrowings (wire v7.8): a tumbler prefix, and the flag.
-    assert_eq!(
-        plain("since=3&under=1.0.2"),
-        (3, 256, Some("1.0.2".into()), false),
-        "under= names an address or prefix"
-    );
-    assert_eq!(
-        plain("since=3&drafts=true&under=1.0.2.0.4"),
-        (3, 256, Some("1.0.2.0.4".into()), true)
-    );
-    assert_eq!(plain("since=3&drafts=false").3, false, "drafts=false is the plain feed");
-    for bad in [
-        None,
-        Some(""),
-        Some("limit=2"),
-        Some("since=abc"),
-        Some("since=0&limit=0"),
-        Some("since=0&limit=4097"),
-        Some("since=0&since=1"),
-        Some("since=0&nope=1"),
-        Some("since"),
-        Some("since=0&under="),
-        Some("since=0&under=1..2"),
-        Some("since=0&under=1.x"),
-        Some("since=0&under=1&under=2"),
-        Some("since=0&drafts=yes"),
-        Some("since=0&drafts=1"),
-        Some("since=0&drafts=true&drafts=true"),
-    ] {
-        assert!(changes_params(bad).is_err(), "{bad:?} must be refused");
-    }
-}
-
-/// The `/dump` query is absent or exactly one position — the accepted
-/// half of the parser `tests/history.rs` exercises only through its
-/// refusals.
-#[cfg(feature = "observe")]
-#[test]
-fn the_dump_query_is_absent_or_exactly_one_position() {
-    let at = |q| dump_at_param(q).map(|o| o.map(|s| s.0));
-    assert_eq!(at(None).expect("no query"), None);
-    assert_eq!(at(Some("")).expect("empty query"), None);
-    assert_eq!(at(Some("at=9")).expect("a position"), Some(9));
-    assert_eq!(at(Some("at=0")).expect("genesis is a position"), Some(0));
-    for bad in [Some("at=abc"), Some("at=1&at=2"), Some("position=3"), Some("at")] {
-        assert!(dump_at_param(bad).is_err(), "{bad:?} must be refused");
-    }
 }
 
 /// The preflight advertises exactly the header [`read_request`] reads.

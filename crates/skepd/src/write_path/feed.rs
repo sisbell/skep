@@ -372,7 +372,7 @@ impl Feed {
     /// longer match the log's.
     pub(super) fn open(dir: &Path, engine: &Engine) -> io::Result<Feed> {
         let (log, walked) = CommitsLog::open(dir, engine)?;
-        let head = log.open_head;
+        let head = log.open_head();
         let snap = engine.kernel().snapshot();
         let world = snap.world();
 
@@ -385,7 +385,7 @@ impl Feed {
         //    the log holds, then this open's walk, then the index's tail ──
         let mut docs: BTreeMap<u64, Vec<Doc>> = BTreeMap::new();
         for (at, m) in &index_entries {
-            let Some(meta) = log.entries.get(at) else { continue };
+            let Some(meta) = log.entries().get(at) else { continue };
             // Counted against what the file CLAIMED, not against what could
             // be read out of it: an element that is not a string is one
             // malformed name like any other, and dropping it ahead of this
@@ -427,10 +427,10 @@ impl Feed {
             }
         }
         let index_tail: Vec<u64> =
-            log.entries.range(f_index.first_uncovered()..).map(|(k, _)| *k).collect();
+            log.entries().range(f_index.first_uncovered()..).map(|(k, _)| *k).collect();
         for &at in &index_tail {
             if let std::collections::btree_map::Entry::Vacant(vacant) = docs.entry(at) {
-                let addrs: Vec<Address> = match log.entries.get(&at) {
+                let addrs: Vec<Address> = match log.entries().get(&at) {
                     // Every name reads: `CommitsLog` demoted the recorded
                     // positions whose did not, so this parse drops nothing.
                     Some(CommitMeta::Recorded { docs: strings, .. }) => {
@@ -469,10 +469,10 @@ impl Feed {
         let mut masked: BTreeSet<u64> = masked_entries
             .iter()
             .map(|(at, _)| *at)
-            .filter(|at| log.entries.contains_key(at))
+            .filter(|at| log.entries().contains_key(at))
             .collect();
         let masked_tail: Vec<u64> =
-            log.entries.range(f_masked.first_uncovered()..).map(|(k, _)| *k).collect();
+            log.entries().range(f_masked.first_uncovered()..).map(|(k, _)| *k).collect();
         for at in masked_tail {
             if masked_at_commit(docs.get(&at).map(Vec::as_slice).unwrap_or(&[])) {
                 masked.insert(at);
@@ -481,7 +481,7 @@ impl Feed {
         }
         f_masked.fence(head)?;
         let published: BTreeSet<u64> =
-            log.entries.keys().copied().filter(|at| !masked.contains(at)).collect();
+            log.entries().keys().copied().filter(|at| !masked.contains(at)).collect();
 
         // ── the per-owner draft streams ──
         //
@@ -493,7 +493,7 @@ impl Feed {
         // refuses a half-record and this one does not.
         let mut streams: BTreeMap<Address, Vec<u64>> = BTreeMap::new();
         for (at, m) in &stream_entries {
-            if !log.entries.contains_key(at) {
+            if !log.entries().contains_key(at) {
                 continue;
             }
             for owner in elements_of(m.get(STREAMS_OWNERS))
@@ -522,7 +522,7 @@ impl Feed {
             positions.dedup();
         }
         let streams_tail: Vec<u64> =
-            log.entries.range(f_streams.first_uncovered()..).map(|(k, _)| *k).collect();
+            log.entries().range(f_streams.first_uncovered()..).map(|(k, _)| *k).collect();
         for at in streams_tail {
             let owners = owners_of(docs.get(&at).map(Vec::as_slice).unwrap_or(&[]));
             if !owners.is_empty() {
@@ -536,18 +536,18 @@ impl Feed {
 
         // ── the offset array, checked against the log's own replay ──
         //
-        // `!log.rewritten` is this file's half of COMPACTION as well as its
+        // `!log.rewritten()` is this file's half of COMPACTION as well as its
         // agreement test: a compacted log moved every offset, so the branch
         // below rewrites — which is why `feed-offsets.log` is absent from
         // the compaction block that follows.
-        let offsets_agree = !log.rewritten
+        let offsets_agree = !log.rewritten()
             && offset_entries.iter().all(|(at, m)| {
                 m.get(OFFSETS_OFFSET).and_then(Value::as_u64)
-                    == log.offsets.get(at).map(|o| o.0)
+                    == log.offsets().get(at).map(|o| o.0)
             });
         if offsets_agree {
             let offsets_tail: Vec<(u64, LineOffset)> = log
-                .offsets
+                .offsets()
                 .range(f_offsets.first_uncovered()..)
                 .map(|(k, v)| (*k, *v))
                 .collect();
@@ -557,7 +557,7 @@ impl Feed {
             f_offsets.fence(head)?;
         } else {
             f_offsets.rewrite(
-                log.offsets
+                log.offsets()
                     .iter()
                     .map(|(at, o)| {
                         derived::record_object(
@@ -573,8 +573,8 @@ impl Feed {
         // ── compaction: the log dropped what the journal reclaimed, so the
         //    derived files drop it too, rewritten from the twins. THREE of
         //    the four — `feed-offsets.log` took its rewrite above, on the
-        //    same `log.rewritten`. A fifth derived file belongs HERE. ──
-        if log.rewritten {
+        //    same `log.rewritten()`. A fifth derived file belongs HERE. ──
+        if log.rewritten() {
             f_index.rewrite(
                 docs.iter()
                     .map(|(at, ds)| derived::record_object(*at, vec![(INDEX_DOCS, doc_strings(ds))]))
@@ -751,7 +751,7 @@ impl Inner {
         query: &ChangesQuery,
         at: u64,
     ) -> Option<(&CommitMeta, Vec<&Doc>)> {
-        let meta = self.log.entries.get(&at)?;
+        let meta = self.log.entries().get(&at)?;
         let docs: &[Doc] = self.docs.get(&at).map(Vec::as_slice).unwrap_or(&[]);
         let reduced: Vec<&Doc> = docs.iter().filter(|d| class.readable(&d.addr)).collect();
         if !docs.is_empty() && reduced.is_empty() {
@@ -918,7 +918,7 @@ impl Inner {
     /// sources outnumber what was measured.
     fn merge_beats_walk(&self, under: &Tumbler, start: u64) -> bool {
         let mut docs = self.under_prefix(under);
-        let mut positions = self.log.entries.range(start..);
+        let mut positions = self.log.entries().range(start..);
         loop {
             match (docs.next(), positions.next()) {
                 (Some(_), Some(_)) => {}
@@ -1030,7 +1030,7 @@ fn elements_of(v: Option<&Value>) -> &[Value] {
 /// own — `None` where either cannot be answered (reclaimed), the module's
 /// unclassifiable residue.
 fn classify_bare(engine: &Engine, log: &CommitsLog, at: u64) -> Option<Vec<Address>> {
-    let prev = log.entries.range(..at).next_back().map(|(k, _)| *k).unwrap_or(0);
+    let prev = log.entries().range(..at).next_back().map(|(k, _)| *k).unwrap_or(0);
     let below = engine.world_at(Seq(prev)).ok()?;
     let above = engine.world_at(Seq(at)).ok()?;
     Some(derived_docs(&below, &above))

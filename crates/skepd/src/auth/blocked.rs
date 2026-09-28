@@ -91,7 +91,12 @@ enum Comparand {
 /// flip, where the claimant the header defers to first exists.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct BlockedPrefixes {
-    pub(super) issue: BlockedIssue,
+    /// The issue as supplied, WHOLE — private, and read outside this file
+    /// through [`BlockedPrefixes::issue()`] alone, so an entry and its
+    /// verdict in `inert` are built together and move together:
+    /// [`BlockedPrefixes::judged`] states the invariant, and the fail-open a
+    /// write here from any other file would buy.
+    issue: BlockedIssue,
     /// Per entry of `issue.entries`: the comparand it covers, or `None` for
     /// an entry in force.
     inert: Vec<Option<Comparand>>,
@@ -214,8 +219,10 @@ impl BlockedPrefixes {
     ///
     /// INVARIANT: the two have equal length, established by
     /// [`BlockedPrefixes::installed_under`], which maps one from the other,
-    /// and by `Default`, which leaves both empty. Nothing mutates either
-    /// after the install; a lift is a fresh ISSUE and a fresh install.
+    /// and by `Default`, which leaves both empty — and KEPT by there being no
+    /// other writer: both fields are private to this file, and
+    /// [`BlockedPrefixes::issue()`] hands the issue out read-only. A lift is a
+    /// fresh ISSUE and a fresh install.
     fn judged(&self) -> impl Iterator<Item = (&BlockedEntry, Option<Comparand>)> {
         debug_assert_eq!(
             self.issue.entries.len(),
@@ -229,6 +236,15 @@ impl BlockedPrefixes {
     /// (AUTH-3.21, RES-175).
     pub fn header(&self) -> &BlockedHeader {
         &self.issue.header
+    }
+
+    /// The issue as supplied, whole and READ-ONLY — what the claim flip
+    /// re-judges against the claimant it first seats
+    /// ([`super::AuthState::reinstall_blocked_at_claim`]). Read-only is what
+    /// [`BlockedPrefixes::judged`]'s invariant rests on: no file but this one
+    /// can move an entry without its verdict.
+    pub(super) fn issue(&self) -> &BlockedIssue {
+        &self.issue
     }
 
     /// The entries in force — every entry of the issue but the inert ones.

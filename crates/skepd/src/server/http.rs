@@ -137,11 +137,12 @@ pub(super) fn refuse_request(refusal: RequestRefusal) -> Reply {
 /// empty, capped at the route's [`body_cap`]), `Expect: 100-continue`
 /// honored, `Transfer-Encoding` refused.
 ///
-/// Each header this daemon READS — `Content-Length`, `Skepd-Session`,
-/// `Expect` — may appear at most once; a repeat is `malformed_http`, the
-/// same never-silent treatment a duplicate query parameter and an unknown
-/// frame field already get. Headers this daemon does not read pass unread
-/// however often they appear.
+/// Each header this daemon READS — `Content-Length`, `Expect`,
+/// `Skepd-Session` and `Origin` — may appear at most once; a repeat is
+/// `malformed_http`, the same never-silent treatment a duplicate query
+/// parameter and an unknown frame field already get, and the one
+/// [`HttpRequest`]'s precondition asks of any other caller of the router.
+/// Headers this daemon does not read pass unread however often they appear.
 ///
 /// Both loops below are bounded in bytes AND in time: `deadline` bounds
 /// this whole transfer, so a peer that paces its bytes to renew the

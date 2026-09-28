@@ -126,9 +126,7 @@ pub(super) fn attestation_check(
             };
         }
         Err(ComposeFault::OverBudget) => return Err(invalid(AttestFault::FrameTooLarge)),
-        Err(ComposeFault::MissingValue) | Err(ComposeFault::OutsideCheckedSet) => {
-            return Ok(None)
-        }
+        Err(ComposeFault::MissingValue) => return Ok(None),
     };
     // 5 — (1).
     let Some(presented) = presented else {

@@ -627,6 +627,21 @@ impl Daemon {
     /// [`UNIVERSAL_HEADERS`] among them, which wire.md promises on every
     /// response.
     ///
+    /// PANICS where the OS refuses entropy — the one panic this crate's own
+    /// code raises by design on an honest request: `GET /challenge` and
+    /// `POST /session` draw their nonce and their token from the crate's
+    /// fail-stop OS source (`auth/entropy.rs`), which never mints a
+    /// credential from anything weaker. `POST /session` draws AFTER M10 has
+    /// minted the session the token would name (AUTH-4.23 declares the store
+    /// that way), so that unwind drops a `SessionId` nothing can close, and a
+    /// signed body's nonce is spent. Every other panic this router can raise
+    /// is a defect — a premise this crate, or a store beneath it, relies on,
+    /// failing — never a refusal an honest input earns. [`serve`] contains
+    /// each to `500 internal_panic` and the worker survives it; a caller
+    /// routing over its own transport owes the same containment, and finds
+    /// the daemon serviceable after the unwind, every lock it holds being one
+    /// that does not poison.
+    ///
     /// Every request FIRST looks at the blocked-prefix list's supply
     /// ([`Daemon::reissue_blocked_prefixes`]) — ahead of dispatch and of
     /// every lock, so a reissue is in force before the request that noticed

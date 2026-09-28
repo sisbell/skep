@@ -13,9 +13,13 @@ use crate::auth::session::Peer;
 /// `path` is the request target with its query AND its `?` removed; `query`
 /// is what followed that `?`, without it; `session_token` and `origin` are
 /// the `Skepd-Session` and `Origin` header values VERBATIM, or `None` when
-/// the header is absent — never normalized and never defaulted; `peer` is
-/// the transport's own answer about the remote address of THIS connection;
-/// `body` is exactly the declared `Content-Length` bytes, and at most
+/// the header is absent — never normalized and never defaulted; the request
+/// carries neither header — nor `Content-Length` or `Expect` — MORE THAN
+/// ONCE, since the socket reader refuses such a request `400 malformed_http`
+/// before it is routed, and a caller over its own transport refuses it too,
+/// never choosing between the values; `peer` is the transport's own answer
+/// about the remote address of THIS connection; `body` is exactly the
+/// declared `Content-Length` bytes, and at most
 /// [`body_cap`](super::body_cap) of `path` of them.
 ///
 /// Routing re-checks none of them — it cannot tell a caller's mistake from a
@@ -30,7 +34,10 @@ use crate::auth::session::Peer;
 /// [`crate::auth::session::bare_bind_allowed`] admits, so a caller that
 /// does not forward the header removes the daemon-side fence; and a `peer`
 /// reported `Loopback` for a socket that is not one hands the bare bind to
-/// the network.
+/// the network. A caller that CHOOSES between two `Origin` values, or two
+/// tokens, answers one request two ways — the socket path refuses it — and
+/// picks for the sender which origin the bare-bind fence reads, or which
+/// binding acts.
 ///
 /// The body cap is the OUTERMOST bound on what a frame allocates, and the
 /// one clause a caller cannot discharge by inspection: every JSON-carrying
@@ -52,8 +59,11 @@ pub struct HttpRequest {
     /// The request target with any query stripped — `/op`, `/changes`.
     pub path: String,
     /// The raw query string, if the target carried one, without the `?` that
-    /// introduced it. Meaningful on `/changes` and `/dump`; ignored
-    /// elsewhere.
+    /// introduced it. Read by the four routes that take parameters —
+    /// `/challenge` (`principal=`, required), `/chain` (`at=`, required),
+    /// `/changes` (`since=`, required, beside its optional narrowings) and,
+    /// in `observe` builds, `/dump` (`at=`, optional) — each refusing an
+    /// unknown or repeated parameter by name; every other route ignores it.
     pub query: Option<String>,
     /// The `Skepd-Session` header's value, if present: the opaque token a
     /// session was bound to. Absent or unknown resolves to the guest.

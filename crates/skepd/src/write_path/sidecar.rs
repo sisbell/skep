@@ -181,9 +181,9 @@ impl CommitMeta {
 /// owner streams key on a byte offset while `feed-offsets.log` records a
 /// position: the first half is loud, since the change feed's pages compare
 /// byte for byte, and the second is SILENT, since nothing in this build
-/// seeks by an offset ([`CommitsLog::offsets`] says so). The device
-/// [`crate::serial::SerialGuard`] already is, applied to data rather
-/// than to a guard.
+/// seeks by an offset (the card on `CommitsLog`'s `offsets` field says so).
+/// The device [`crate::serial::SerialGuard`] already is, applied to data
+/// rather than to a guard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct LineOffset(pub u64);
 
@@ -216,7 +216,11 @@ pub(super) struct CommitsLog {
     /// having demoted the rest at open. So a consumer that renders a
     /// `Recorded` entry, or classifies by its names, needs no second check of
     /// its own.
-    pub entries: BTreeMap<u64, CommitMeta>,
+    ///
+    /// Read outside this file through `entries()` alone, as `min_since` is
+    /// through its two: no file but this one can add an entry this card does
+    /// not stand behind.
+    entries: BTreeMap<u64, CommitMeta>,
     /// Each entry's line's byte offset in the file — the offset array's
     /// in-memory twin (PUB-7.19), learned from the replay itself and
     /// advanced by every append; a rewrite recomputes it whole.
@@ -235,7 +239,7 @@ pub(super) struct CommitsLog {
     /// Position → [`LineOffset`], which is what keeps the two apart: they
     /// are the same width and mean opposite things, and the map's own key
     /// and value are the pair a transposition swaps.
-    pub offsets: BTreeMap<u64, LineOffset>,
+    offsets: BTreeMap<u64, LineOffset>,
     /// The smallest admissible `since`: coverage is complete over
     /// `(min_since, head]`; below it the walk was stopped (reclaimed or
     /// unreadable journal) and `/changes` answers 410. Deliberately not
@@ -256,11 +260,11 @@ pub(super) struct CommitsLog {
     /// this uptime's commits. An ack carrying a position at or below it
     /// (an idempotency-memo replay, `emit`'s incumbent ack) is never a
     /// new commit and is never re-recorded.
-    pub open_head: u64,
+    open_head: u64,
     /// Whether this open REWROTE the file — compaction to the journal's
     /// retention, or the purge of a foreign fence — so every offset moved
     /// and the derived offset array must be rewritten with it.
-    pub rewritten: bool,
+    rewritten: bool,
     /// Monotone clamp for recorded wall-clock times.
     last_time: u64,
     /// The file's length — the offset the next appended line lands at.
@@ -293,11 +297,13 @@ impl CommitsLog {
     /// what the reconstruction learned. Returns the replayed log and the
     /// walk's classified positions for the feed's derived structures.
     ///
-    /// COST, and the only step of daemon startup that is not O(1) in the
-    /// data dir: reconstruction spends one whole-world `Engine::world_at`
-    /// per uncovered boundary — a checkpoint deserialize plus a journal
-    /// fold each — plus one world diff per boundary for its classification
-    /// (`derived_docs` states that cost), so a dir with NO coverage (a
+    /// COST — this walk is part of the feed's open, one of the two steps of
+    /// daemon startup [`crate::server::Daemon::open`] names as costing more
+    /// than O(1) in the data dir (the identity fold's rebuild is the other):
+    /// reconstruction spends one whole-world `Engine::world_at` per uncovered
+    /// boundary — a checkpoint deserialize plus a journal fold each — plus
+    /// one world diff per boundary for its classification (`derived_docs`
+    /// states that cost), so a dir with NO coverage (a
     /// sidecar deleted, arrived corrupt, or written before this feature)
     /// pays that for every boundary the journal still holds, before `open`
     /// returns. The region is bounded below by journal reclamation, so the
@@ -472,7 +478,7 @@ impl CommitsLog {
     /// The offset returned is the one the line landed at, EXCEPT past a
     /// failed append: [`CommitsLog::stopped`] freezes `len`, so every later
     /// offset names a line this file does not hold. Nothing in this build
-    /// seeks by an offset ([`CommitsLog::offsets`]), and the next open
+    /// seeks by an offset (the `offsets` field's card), and the next open
     /// replays `commits.log` from disk and rebuilds them, so
     /// `feed-offsets.log` fails its agreement test and is rewritten whole —
     /// the wrong offsets are latent for the uptime and self-healing after
@@ -586,6 +592,35 @@ impl CommitsLog {
             .range(position.saturating_add(1)..)
             .map(|(at, meta)| (*at, meta.clone()))
             .collect()
+    }
+
+    /// Every enumerable entry above the fence, in position order — READ-ONLY
+    /// outside this file, because the invariant the `entries` field's card
+    /// states (a `Recorded` entry's document names all parse,
+    /// [`demote_malformed_names`] having demoted the rest at open) is this
+    /// file's to keep and the feed's to rely on: it classifies by those names
+    /// with no second check of its own.
+    pub fn entries(&self) -> &BTreeMap<u64, CommitMeta> {
+        &self.entries
+    }
+
+    /// Each entry's line's byte offset, read-only outside this file for
+    /// `entries()`'s reason — the offset array's twin, which the `offsets`
+    /// field's card says nothing in this build seeks by.
+    pub fn offsets(&self) -> &BTreeMap<u64, LineOffset> {
+        &self.offsets
+    }
+
+    /// The journal head at open — the fence [`CommitsLog::record`] declines
+    /// at or below — read-only outside this file.
+    pub fn open_head(&self) -> u64 {
+        self.open_head
+    }
+
+    /// Whether this open rewrote the file, so every offset moved and the
+    /// derived offset array is rewritten with it.
+    pub fn rewritten(&self) -> bool {
+        self.rewritten
     }
 }
 

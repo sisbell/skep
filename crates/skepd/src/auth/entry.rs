@@ -111,8 +111,6 @@ pub(super) enum ComposeFault {
     UnreadableRunOrigin,
     /// A `publish`'s body would pass [`MAX_SHOT_BODY_BYTES`].
     OverBudget,
-    /// The op kind is outside the checked set [`crate::codec::in_checked_set`] states.
-    OutsideCheckedSet,
 }
 
 /// A link slot as the entry frame's slot row takes it — the resolve form's
@@ -146,6 +144,20 @@ impl<'a> Slot<'a> {
 /// last ([`EntryFrame::to_bytes`]), so the check learns whether an entry frame
 /// CAN be composed before it asks for the member, and names no token for a
 /// write that presents none.
+///
+/// PRECONDITION: `op` is of the checked set ([`crate::codec::in_checked_set`]),
+/// and every op of that set has an arm below. The first half is
+/// `policy/attestation.rs`'s `attestation_check`'s to discharge — its step 1,
+/// the one membership check, which this function does not repeat; the
+/// second half is this function's own. Either broken — an op outside the
+/// set, or the set widened without its arm — is never answered as a fault:
+/// once the board term and the account are read it STOPS LOUDLY in every
+/// build, because no refusal the check can give is true of a build whose two
+/// tables disagree, and passing the write through would commit it with its
+/// marker slot empty — the silent drop the checked set's card rules out. The
+/// check runs before the transaction, under locks that do not poison, so
+/// under [`crate::serve`] the stop is a `500 internal_panic` that commits
+/// nothing.
 pub(super) fn compose(
     world: &World,
     op: &Op,
@@ -174,17 +186,11 @@ pub(super) fn compose(
             }
             (trunk, publish_body(world, shot)?)
         }
-        _ => {
-            // An op kind added to the checked set with no arm here would have
-            // its `attest` dropped unverified — the silent direction — so the
-            // premise is made loud.
-            debug_assert!(
-                !crate::codec::in_checked_set(op.kind()),
-                "an op kind in the checked set with no entry frame: {:?}",
-                op.kind()
-            );
-            return Err(ComposeFault::OutsideCheckedSet);
-        }
+        _ => unreachable!(
+            "compose's precondition: {:?} is outside the checked set, or the set was \
+             widened without its entry-frame arm here",
+            op.kind()
+        ),
     };
     Ok(EntryFrame { board, account, doc, body })
 }
@@ -289,5 +295,45 @@ mod tests {
         assert_eq!(entry_body_insert(None, std::iter::empty()).op(), op_name(OpKind::Insert));
         assert_eq!(entry_body_link(&empty, &empty, &empty).op(), op_name(OpKind::MakeLink));
         assert_eq!(entry_body_publish(std::iter::empty()).op(), op_name(OpKind::Publish));
+    }
+
+    /// COMPOSE'S PRECONDITION IS NEVER ANSWERED AS A FAULT: on a board whose
+    /// `H.1` stands, for a principal with a prefix — the two terms read ahead
+    /// of the op — an op outside the checked set STOPS LOUDLY. A fault here
+    /// would be one the check passes through, committing the write with its
+    /// marker slot empty — the silent drop the checked set's card rules out —
+    /// and no refusal the check could give is true of a build whose two tables
+    /// disagree.
+    #[test]
+    #[should_panic(expected = "compose's precondition")]
+    fn an_op_outside_the_checked_set_stops_compose_loudly() {
+        use skep_address::{Nat, Tumbler};
+        use skep_arrangement::VPos;
+        use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
+        use skep_namespace::{head_document, BOOTSTRAP_PRINCIPAL};
+
+        use crate::write_path::WritePath;
+
+        let engine = skep_engine::Engine::open(KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(0),
+        })
+        .expect("in-memory genesis cannot fail");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let writes = WritePath::open(dir.path(), &engine).expect("the change feed opens");
+        // One commit, so the first head has a position to name; then `H.1`.
+        let node = Tumbler::new([1u32, 9001].map(Nat::from)).expect("a two-component tumbler");
+        engine.namespace().register_node(node).expect("a fresh node registers");
+        assert!(writes.write_first_head(&writes.serial_lock()), "H.1 lands");
+        let snap = engine.kernel().snapshot();
+        let world = snap.world();
+        assert!(board_term(world).is_some(), "the board term stands");
+        let delete = Op::Delete {
+            doc: head_document(),
+            p: VPos::content(Nat::from(1u32)),
+            width: Nat::from(1u32),
+        };
+        let _ = compose(world, &delete, BOOTSTRAP_PRINCIPAL);
     }
 }

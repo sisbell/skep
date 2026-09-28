@@ -590,7 +590,9 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
 /// silently DROPPED, the commit landing with its marker slot empty; one the
 /// check demands and the codec refuses is a write no signed session can make
 /// on a claimed board — so a widening is one edit here and one arm in
-/// `auth::entry::compose`, whose wildcard asserts it.
+/// `auth::entry::compose`, whose wildcard stops loudly in every build: a
+/// widening that forgets the arm answers `500 internal_panic` on each such
+/// write, and never commits one with its marker slot empty.
 pub(crate) fn in_checked_set(kind: OpKind) -> bool {
     matches!(kind, OpKind::Insert | OpKind::MakeLink | OpKind::Publish)
 }

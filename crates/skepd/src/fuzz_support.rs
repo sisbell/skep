@@ -171,8 +171,10 @@ pub use crate::codec::hex_string as hex;
 /// then read to close under a bounded deadline. Returns whatever bytes came
 /// back — empty for a clean close with no answer (a probe), a full response
 /// otherwise. **Never hangs**: a wedged or streaming peer hits the read
-/// deadline and returns what has arrived so far. Only a failed *connect* is
-/// an `Err` (the daemon is gone).
+/// deadline and returns what has arrived so far. `Err` where the *connect*
+/// fails (the daemon is gone), and where the socket refuses its read or
+/// write deadline — without which the read below could block for good, so
+/// the exchange refuses rather than risk the hang.
 pub fn http_raw_exchange(port: u16, raw: &[u8]) -> std::io::Result<Vec<u8>> {
     let mut stream = TcpStream::connect(("127.0.0.1", port))?;
     stream.set_nodelay(true).ok();
@@ -192,9 +194,10 @@ pub fn http_raw_exchange(port: u16, raw: &[u8]) -> std::io::Result<Vec<u8>> {
             // mid-response wedge), or a reset/broken pipe (the daemon
             // answered a large hostile request and closed while we were still
             // writing) — returns the bytes gathered so far; the oracle judges
-            // them. Only a failed CONNECT (above) is an error: the daemon is
-            // gone. An empty `out` is a clean close the caller reads as such;
-            // a partial response is a finding `check_http_response` catches.
+            // them. No read end is an error: the errors are the connect's and
+            // the two deadlines', above. An empty `out` is a clean close the
+            // caller reads as such; a partial response is a finding
+            // `check_http_response` catches.
             Err(_) => break,
         }
     }
@@ -288,10 +291,12 @@ pub fn check_http_response(bytes: &[u8]) -> Result<(u16, &[u8]), String> {
 /// success. An empty answer (clean close) is accepted; the endpoint-specific
 /// success shapes are asserted more tightly in the tier-1 tests.
 ///
-/// Reports a violation — an undocumented error name, or a malformed
-/// response — as an `Err`, which the calling test surfaces as its own
-/// panic naming the seed. The one oracle here that does not panic itself:
-/// it is driven in a loop where only the caller knows the reproduction.
+/// Reports a violation — an undocumented error name, a malformed response,
+/// or an exchange that could not be made (the daemon gone, or its socket
+/// refusing a deadline) — as an `Err`, which the calling test surfaces as
+/// its own panic naming the seed. The one oracle here that does not panic
+/// itself: it is driven in a loop where only the caller knows the
+/// reproduction.
 pub fn envelope_oracle(port: u16, data: &[u8]) -> Result<(), String> {
     if data.is_empty() {
         return Ok(());

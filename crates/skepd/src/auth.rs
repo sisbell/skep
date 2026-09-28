@@ -147,7 +147,7 @@ impl AuthState {
     /// line. This install keeps the issue's entries, so that read is the
     /// same either side of it.
     pub fn reinstall_blocked_at_claim(&self, lock: &LockWrite<'_>) {
-        let issue = self.cfg.blocked_prefixes().issue.clone();
+        let issue = self.cfg.blocked_prefixes().issue().clone();
         self.install_blocked(lock, issue);
     }
 

@@ -48,8 +48,8 @@ never different versions); one lockstep version for the family; the
 toolchain is pinned in `rust-toolchain.toml` and bumped only with a full
 gate run. Release binaries are `skepd` and `skep-mcp`; library crates
 publish to crates.io as they stabilize (`skep-address` first). The wire contract clients build against is
-`docs/wire.md` — versioned in its own changelog, independent of crate
-versions. License: MIT OR Apache-2.0 (dual, the Rust convention).
+`docs/wire.md` — the contract as it stands; versioning begins at the first
+release, independent of crate versions. License: MIT OR Apache-2.0 (dual, the Rust convention).
 
 ---
 

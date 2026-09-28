@@ -4,12 +4,16 @@ The HTTP/JSON contract between `skepd` and its clients. This document is
 written for a client author who will never read the Rust; it is also
 executable documentation — every fenced JSON example annotated with a
 `<!-- wire: … -->` marker is asserted byte-for-byte-canonically by
-`skep/crates/skepd/tests/wire_doc.rs`, so an example that drifts from the
+`skep/crates/skepd/tests/it/wire_doc.rs`, so an example that drifts from the
 daemon fails the build. (Two exceptions: the commit-stream event example is
 asserted structurally — its framing, not its illustrative position — and
 the change-feed examples are asserted against live daemon bytes in
-`tests/changes.rs` with the `time` values normalized, the one field a live
+`tests/it/changes.rs` with the `time` values normalized, the one field a live
 daemon cannot reproduce; the bare-entry example is byte-exact.)
+
+The wire is in DEVELOPMENT: this document is the contract as it stands at
+HEAD, and no compatibility with an earlier reading is promised.
+Versioning begins at the first release.
 
 ## The model
 
@@ -94,11 +98,10 @@ is deliberately no `mode` field; clients derive it from the pair):
 
 The signed session is cryptographic identity — a challenge signed by a
 key enrolled for the account the session authenticates against
-(§Sessions). The bare session is
-v1's **local trust**, retained as a mode rather than the whole model; the
-daemon still binds **127.0.0.1 only**.
+(§Sessions). The bare session is **local trust**, a mode rather than the
+whole model; the daemon binds **127.0.0.1 only**.
 
-**Ownership** (v5.1): attribution now gates. A write into a document's
+**Ownership**: attribution gates. A write into a document's
 space — its content arrangement or its link subspace — is accepted only
 from the document's owner: the principal whose account is **exactly** the
 document's account (the nearest registered account prefix of its address —
@@ -106,15 +109,15 @@ never mere prefix containment, so a parent account does not own a
 sub-delegated account's documents and a sub-account does not own its
 parent's). Anything else is the `not_owner` rejection with the failing
 address in `site.addr`. Reads answer through the read predicate (§The read
-predicate, v7.4). The sanctioned way to
+predicate). The sanctioned way to
 build on someone else's document is `version` (fork it into your own
 account, content shared) and `copy` (transclude their content into your own
 document) — proposing a change is forking, never editing in place.
 
 ### The read predicate
 
-**Reads are class-gated** (v7.4, PUB round 2 lane 3.3): every read
-answers through ONE predicate — `readable(doc, principal) =
+**Reads are class-gated**: every read answers through ONE predicate —
+`readable(doc, principal) =
 published(doc) ∨ principal ∈ owner_subtree(doc) ∨ grant_exists(doc,
 principal)` — evaluated against the one committed snapshot the read is
 answered from. The reader classes: the GUEST (no token, or a dead one)
@@ -179,14 +182,14 @@ How a masked read answers:
   not read is absent from the answer; `y`/`x` is a filter value, never
   a consulted address, and a shown claim's `old`/`new` are the addresses
   it names, as recorded.
-* **The change feed is masked per entry** (v7.8, §The change feed): an
+* **The change feed is masked per entry** (§The change feed): an
   entry every one of whose `docs` you may not read is OMITTED from your
   page, and a shown entry's `docs` are REDUCED to the ones you may read;
   `limit`, `last` and `more` are computed over what you see. `/events` is
   untouched — positions are class-invariant.
 
-The two publication reads take the consult too (v7.6, PUB round 2 lane
-3.4): `doc_metadata`'s `doc` and `edition_claims`'s `target` are each a
+The two publication reads take the consult too:
+`doc_metadata`'s `doc` and `edition_claims`'s `target` are each a
 document argument — unreadable is `withheld`, unregistered is
 `doc_not_registered` — and `edition_claims` additionally filters its
 result set at your class, dropping every claim whose HOME (the edition)
@@ -197,8 +200,8 @@ The same predicate answers `/op-at` (against the HEAD's sets, §Reading
 history) and the source gate of `publish` (§The publish shot and
 head-float).
 
-**Writes that READ a source take the same predicate** (v7.5, PUB round 2
-lane 3.3c; PUB-6.23, PUB-6.24): `copy`'s `specs[].source`, `version`'s
+**Writes that READ a source take the same predicate** (PUB-6.23,
+PUB-6.24): `copy`'s `specs[].source`, `version`'s
 `d_src`, and every V-SPEC slot of `make_link` and of `edit_link`'s
 successor are consulted at the write door, pre-dispatch, before any
 content of the source is read. A source the session principal may not
@@ -212,15 +215,15 @@ those I-positions withheld to it exactly as the source does. ADDRESS-FORM
 slots are ungated — an address is not secret and needs no read to write.
 `fork` reads no source and takes no gate. The consult stands BEHIND the
 destination's `not_owner`, MINT-FIRST, the publish-class gate
-(§Credential refusals) and — since v7.10 — the model's in-place refusal
+(§Credential refusals) and the model's in-place refusal
 (PUB-6.36 slot 5 ahead of slot 6): a `copy` from a source you may not
 read INTO a published destination you own answers `published_target`,
 the door pre-evaluating the destination's publication state, in the
 store's own bytes, before it consults the source — a session refused the
-write is never told whether it may read the source (v7.5's "one cell the
-door cannot order" is retired; the store's refusal stands unchanged
-behind it). The consult stands ahead of the store's read of the source;
-registration stands ahead of it too — an unregistered source answers the
+write is never told whether it may read the source (the store's own
+refusal stands behind the door's). The consult stands ahead of the
+store's read of the source; registration stands ahead of it too — an
+unregistered source answers the
 store's own `source_not_registered`, never `withheld`. The link-address
 rule reaches the write side too:
 `edit_link`'s `original` and `assert_sup`'s `old`/`new` homed in a
@@ -232,9 +235,9 @@ a `withheld` that confirms a draft-homed link exists (§Links (writes)).
 **The serving bound** (PUB-8.43): the wire serves the subtree clause,
 the read-surface sweep above, the routed write refusals
 (`published_target` and its two siblings), the write side's source
-consult, and — since v7.6 — the audit-view edition-claim lookup
+consult, the audit-view edition-claim lookup
 (`edition_claims`, PUB-8.46) and the doc-metadata read (`doc_metadata`,
-PUB-8.12) the client's own admission test needs. That interval is now
+PUB-8.12) the client's own admission test needs. That interval is
 CLOSED.
 
 ### Cross-origin access — a scope decision
@@ -244,7 +247,7 @@ errors included — carries `Access-Control-Allow-Origin: *` and
 `Access-Control-Expose-Headers: Skepd-Session` (the death signal below
 is not a CORS-safelisted response header; without the exposure a page on
 a configured non-loopback origin could never read it). The four
-CLASS-VARYING routes carry two more (v7.6, PUB round 2 lane 3.4):
+CLASS-VARYING routes carry two more:
 `Cache-Control: no-store` and `Vary: Skepd-Session` ride every answer of
 `POST /op`, `POST /op-at`, `GET /changes` and `GET /dump`, because each
 is a function of the presented token's class and so may be neither
@@ -263,17 +266,16 @@ Access-Control-Allow-Headers: Content-Type, Skepd-Session
 Access-Control-Max-Age: 86400
 ```
 
-(`OPTIONS` on an unknown path is the ordinary 404.) Authentication has
-landed and the v4 decision was revisited as promised: `*` stays,
-deliberately. Reads are guest-free, and neither credential is
-browser-ambient — the signed session binds its origin inside the
-signature (no cookies; §Sessions), the bare bind — the one ambient
-credential retained — is refused server-side when the request's
+(`OPTIONS` on an unknown path is the ordinary 404.) The `*` is
+deliberate, authentication notwithstanding. Reads are guest-free, and
+neither credential is browser-ambient — the signed session binds its
+origin inside the signature (no cookies; §Sessions), the bare bind — the
+one ambient credential — is refused server-side when the request's
 `Origin` header is not one the bare origin set answers for, and the
 session token is 128 bits of CSPRNG output a foreign page cannot guess.
-A narrower ACAO was weighed and declined: the foreign page's POST is
-fenced by the daemon, not by what the browser lets it read back, and
-narrowing would break local pages that only read.
+A narrower ACAO is declined: the foreign page's POST is fenced by the
+daemon, not by what the browser lets it read back, and narrowing would
+break local pages that only read.
 
 ### Sessions
 
@@ -281,7 +283,7 @@ The token is **32 lowercase hex** — 128 bits of fresh OS-CSPRNG output
 minted per session open, never derived from process state. Admission is
 strict: a presented header value that is not exactly 32 lowercase hex IS
 no token — the request runs as a guest, nothing is closed, no signal is
-sent. (v1's `prefix.suffix` token shape is refused.) Send it on
+sent. (A `prefix.suffix` token is refused.) Send it on
 subsequent calls as the header:
 
 ```
@@ -294,7 +296,7 @@ a `scope` that is not exactly `"content"` or that rides a bare body — is
 `400 malformed_session_request` with a `detail`, and a 400 never spends a
 nonce: a syntax fault costs no re-challenge.
 
-*Bare* — `{"principal": 2}`, v1's form unchanged. Honored only when ALL
+*Bare* — `{"principal": 2}`. Honored only when ALL
 of: the board is not ENFORCING (§Identity); the TCP peer is loopback;
 and the request's `Origin` header, when present, parses as a canonical
 origin in the **bare origin set** (§The claim ceremony and credentials;
@@ -496,8 +498,8 @@ Rules:
 
 ### The claim ceremony and credentials
 
-Credential state is written THROUGH the ordinary link surface — no new
-write op exists. A **credential deposit** is a `make_link` whose type
+Credential state is written THROUGH the ordinary link surface — no
+write op of its own exists. A **credential deposit** is a `make_link` whose type
 slot names one of three reserved credential type addresses — ghost
 tumblers in subspace 3 of the same ghost document that carries the
 reserved link classes; nothing is ever minted at them, and a resolved
@@ -551,8 +553,7 @@ hex; the PRODUCTION kind, the marker tag `1`) and
 pre-standard format, 897 + 32 = 929 bytes, 1,858 hex; a PREVIEW, the
 marker tag `3`, whose ENROLLMENT the daemon refuses unless launched with
 `--allow-preview-keys` — §Credential refusals, `preview_key`). There is
-no classical `ed25519` token: that kind was deleted at the hybrid-only
-launch, before any served board, and a record naming it is
+no classical `ed25519` token: a record naming it is
 `bad_record`; tag `2`'s token `fndsa512-ed25519` (the final FIPS 206 +
 Ed25519) is RESERVED and has no kind yet. A hybrid entry opens sessions
 (§Sessions) and signs entries (the `attest` member, §Operations) under
@@ -585,8 +586,8 @@ flips the board claimed — first claim wins, permanently. Only a top-level
 (bootstrap-delegated) account with a non-empty key set can claim. The
 ceremony's convention signs the claim with a just-enrolled key, proving
 custody before the flip; the unclaimed window itself admits the deposit
-from a bare session too. THE CLAIM REFUSES OVER RESIDUE (v7.10,
-PUB-6.63): it is admitted only where the top-level account space holds
+from a bare session too. THE CLAIM REFUSES OVER RESIDUE
+(PUB-6.63): it is admitted only where the top-level account space holds
 exactly one principal above the genesis floor — the one this ceremony's
 own `delegate` minted — and refuses `claim_residue` otherwise
 (§Credential refusals), so a board that a second hand's partial, or a
@@ -713,11 +714,11 @@ of the positioned reads. The byte-identity promises this document makes
 `GET /changes` (same `since`, same `limit`) — hold across repeats and
 across daemon restarts **while the position, or the history behind the
 fence, remains within retained history**. `GET /dump` conditions on one
-term more (v7.6, PUB-8.26): its bytes are a function of the world AND the
+term more (PUB-8.26): its bytes are a function of the world AND the
 reader's class — the head's publication state, its grant state, and the
 presented token's principal — so two dumps are byte-equal when those
 agree, and a guest's dump differs from an owner's of the same world by
-design. `GET /changes` takes the same term (v7.8, PUB-8.26): a page is a
+design. `GET /changes` takes the same term (PUB-8.26): a page is a
 function of the journal, the sidecar, AND the reader's class — the head's
 publication state (which only grows), its grant state, and the presented
 token's principal — so two pages at one class agree byte for byte, across
@@ -725,8 +726,8 @@ repeats, restarts and daemons over one journal, and a guest's page
 differs from an owner's of the same feed by design. The reclaim floor advances
 between repeats; a position that has aged out answers
 `410 history_reclaimed`, never different bytes. That conditioning is the
-wire's own base; rounds that widen this surface state any further
-conditioning terms of theirs on top of it.
+wire's own base; a surface that widens it states any further
+conditioning terms of its own on top of it.
 
 ## Value encodings
 
@@ -769,7 +770,7 @@ verbatim.
 `{"doc": "<address>", "span": {…}}`. **Regions** are
 `{"doc": "<address>", "spans": [{…}, …]}`.
 
-**Content values** carry granularity explicitly (wire v2). The store holds
+**Content values** carry granularity explicitly. The store holds
 a sequence of *values*, each an opaque byte payload occupying **one
 V-position**; a value's interior has no addresses of its own. The
 substrate's text discipline is one single-byte value per position — the
@@ -817,7 +818,7 @@ position-value sequences never render alike.
 * A **link position** renders `{"ref": "<address>"}`.
 
 * A **withheld run** renders `{"withheld": {"origin": "<address>",
-  "width": "<nat>"}}` (v7.4, PUB round 2 lane 3.3): a run the reading
+  "width": "<nat>"}}`: a run the reading
   principal may not read, emitted at its OWN position rather than
   dropped — `origin` the run's origin DOCUMENT, `width` its position
   count. One item per withheld RUN: two non-contiguous withheld runs,
@@ -933,8 +934,7 @@ coalesced into the run beside it:
 ```
 
 One readable per-byte position, then a RUN the reader may not read — a
-withheld item at its own position, never coalesced (v7.4, PUB round 2 lane
-3.3):
+withheld item at its own position, never coalesced:
 
 <!-- wire: response delivery_withheld -->
 ```json
@@ -1186,8 +1186,8 @@ Fields:
   is a position *within* that slot; `addr` names the offending document in
   multi-document lookups — on a `not_owner` rejection, the document
   (or target link) that failed the ownership check; on a `withheld`
-  rejection, the origin DOCUMENT a `publish` shot may not read (v7.3),
-  or the document argument a READ may not (v7.4) — a read carrying
+  rejection, the origin DOCUMENT a `publish` shot may not read,
+  or the document argument a READ may not — a read carrying
   several document arguments names the first, in declaration order.
   Span faults: `not_ordinal_level`, `not_level_uniform`,
   `start_not_zero_free`, `start_too_shallow`.
@@ -1244,8 +1244,8 @@ Arrangement: `empty_content`, `content`, `empty_source`,
 `published_target`, `private_version_of_published`,
 `private_source_versionless` (the version-chain model's three write-path
 refusals — §The version-chain refusals below), and the publish shot's
-own (v7.3, §The publish shot and head-float below): `withheld` — the
-source gate, and since v7.4 every READ's document-argument consult
+own (§The publish shot and head-float below): `withheld` — the
+source gate, and every READ's document-argument consult
 (§The read predicate); the one code of this family whose disposition is
 reorder, carrying `site.addr` (the document) and never a `detail` —
 `bad_run`, `base_not_in_chain`, `base_superseded`,
@@ -1317,16 +1317,16 @@ and edit-link, §Links) — has no code of its own and rides
 A document is either edited in place or versioned, never both: a
 private document is a draft, edited in place and versionless; a
 published document advances by versions and admits no edit in place.
-Three refusals hold that line (v7.2). They are the STORE's — typed
+Three refusals hold that line. They are the STORE's — typed
 errors out of the arrangement's own transaction, evaluated in the one
 slot after registration and ownership (PUB-6.36 slot 5, PUB-6.37) and
 before the operation's own shape checks — so they answer from every
 session the daemon's gates admit, signed sessions included, and the
-daemon adds no gate of its own for them. (One qualification since v7.10:
-the write door pre-evaluates `published_target` on a `copy`'s
+daemon adds no gate of its own for them. (One qualification: the write
+door pre-evaluates `published_target` on a `copy`'s
 destination ahead of its source consult, in the store's own bytes, so
 the model's refusal speaks ahead of `withheld` — PUB-6.36 slot 5 before
-slot 6, §The read predicate; the store's refusal stands unchanged behind
+slot 6, §The read predicate; the store's own refusal stands behind
 it.) A version member is judged as
 the document it projects to (PUB-2.15): `1.0.1.0.1.2` refuses exactly as
 `1.0.1.0.1`. All three are `permanent`, carry no `detail` and no `site`,
@@ -1338,7 +1338,7 @@ never reaches these codes on a published document.
 | --- | --- | --- |
 | `published_target` | `insert`, `copy`, `delete`, `rearrange` | `doc` is a PUBLISHED document (or a member of one) — the one exemption is a **declared deposit**, `insert` whose `deposit` names a type the deposit class holds, at fresh content positions past the arranged extent; a `deposit` naming any other type answers this code as an undeclared append does (§Arrangement) |
 | `private_version_of_published` | `version` | you own `d_src`, `d_src` is PUBLISHED, and an explicit `published:false` asks for a private member |
-| `private_source_versionless` | `version`, `publish` | you own `d_src` (or the shot's `doc`) and it is PRIVATE — whatever the flag; a private document has no chain to append to (v7.3: on `publish` this is the flag-`true` face below) |
+| `private_source_versionless` | `version`, `publish` | you own `d_src` (or the shot's `doc`) and it is PRIVATE — whatever the flag; a private document has no chain to append to (on `publish` this is the flag-`true` face below) |
 
 The faces, keyed on the code (PUB-6.7): the client renders them, the
 wire carries the token. ⟨D⟩ is the document named.
@@ -1365,8 +1365,8 @@ rule.
 
 ### The publish shot and head-float
 
-v7.3 (PUB round 2, lane 3.2). A published document advances by the
-**shot**: `publish` (§Arrangement) appends the next member of `doc`'s
+A published document advances by the **shot**: `publish`
+(§Arrangement) appends the next member of `doc`'s
 version chain, born published, in ONE commit, its arrangement taken
 from the runs the client supplies (PUB-2.33, PUB-8.1) and from nothing
 any draft holds at commit. The draft is the client's rendering surface;
@@ -1438,8 +1438,8 @@ older member — lands in the HEAD member's arrangement and nowhere else,
 judged fresh against the head's extent; the atom's identity is minted under the chain of the address
 named (`1.0.1.0.1.0.1.4` for the bare address, `1.0.1.0.1.1.0.1.1` for
 the member). A pinned member's arrangement never grows. The in-place
-refusal (`published_target`) stands on every address of the chain as
-before. The change feed's entry for the deposit names the address
+refusal (`published_target`) stands on every address of the chain.
+The change feed's entry for the deposit names the address
 written to (§The change feed).
 
 **The source gate** (PUB-8.1's second constraint, PUB-8.4, PUB-8.5,
@@ -1451,7 +1451,7 @@ one event that fills it), `site.addr` the origin's DOCUMENT, no
 `detail` and no other site field, whether or not the run's addresses
 exist. The document's own I-space needs no consult, and a run the base
 already arranges is carried without one. The consult is the read
-predicate (§The read predicate, v7.4): an origin is readable when
+predicate (§The read predicate): an origin is readable when
 published, or in the reader's subtree, or granted to the reader — a
 sharing grant widens what the consult admits without changing this
 shape.
@@ -1536,7 +1536,8 @@ gate below, after it, and ahead of the store's own gates):
 Every publish-class write of the three ops on a claimed board is judged;
 the system account's own writes (the head document's, owned by
 `1.1.0.1`) are exempt by ownership and never dispatched. Every other
-write, and every write at or below the claim, answers as before.
+write, and every write at or below the claim, is outside the check and
+answers as it does without one.
 
 The write order, as built. `unauthenticated` is slot 0 on every path: a
 guest write (no token, unknown token, dead entry) answers M10's own
@@ -1551,7 +1552,7 @@ resolves AFTER every token below.
    * `mint_home_first` — MINT-FIRST: a `fork` or `version` by a
      principal whose account's space has never held a document. Mint the
      home first (`create_new_document`, which becomes the account's
-     doc 1). Where these committed before, they now refuse.
+     doc 1).
    * `mint_home_public` — the first-mint publication door (PUB-8.20): an
      explicit `published:false` on the **first** `create_new_document`
      into an empty account you own. The home is public from birth;
@@ -1567,11 +1568,11 @@ resolves AFTER every token below.
      resolving published); an `insert`/`delete`/`copy`/`rearrange`
      whose `doc` is a published document the caller owns — a version
      member reading as its document (PUB-2.15, §Arrangement); a link
-     write homed in one (`edit_link` reads BOTH its deposits' homes since
-     v7.10 — the successor's `d_s` and the supersession claim's `d_a` — a
+     write homed in one (`edit_link` reads BOTH its deposits' homes
+     — the successor's `d_s` and the supersession claim's `d_a` — a
      bare edit refused where either is published, registration and ω on
-     both standing ahead); and — v7.7,
-     PUB-6.43's `nullify` row — a `nullify` whose record `home` OR whose
+     both standing ahead); and — PUB-6.43's `nullify` row — a
+     `nullify` whose record `home` OR whose
      `target` link's own home is published (a retraction LANDS at its
      target, so a draft-homed record against a published-homed link is a
      published write, while a draft-homed record against a draft-homed
@@ -1581,7 +1582,7 @@ resolves AFTER every token below.
      target stands ahead of the gate, so a caller owning either alone
      answers `not_owner` and is never told what is published. Signed
      sessions, draft mints (flagless or `published:false`), draft writes,
-     bare reads, `delegate` and the home mint itself are unchanged.
+     bare reads, `delegate` and the home mint itself are outside the gate.
    * unclaimed — `claim_first`: an unclaimed daemon admits only the
      ceremony's own shape — `delegate` from principal 0, a
      `create_new_document` into an account holding no documents, an
@@ -1603,15 +1604,15 @@ resolves AFTER every token below.
    * `nullify_not_retraction` — the target is CREDENTIAL-typed: retraction
      never edits the key table (PUB-6.10; the token reaches the owner of
      the home the record is filed in).
-   * `nullify_not_revocation` — v7.7 (PUB-6.30; token confirmed by the
-     owner 2026-09-07): the target is GRANT-typed (`1.1.0.1.0.1.0.3.90`,
-     §The read predicate). The grant fold reads the audit view, so retraction is
+   * `nullify_not_revocation` (PUB-6.30) — the target is GRANT-typed
+     (`1.1.0.1.0.1.0.3.90`, §The read predicate). The grant fold reads
+     the audit view, so retraction is
      never a second revocation path — a share is withdrawn by REVOKING it
      (a superseding grant record naming the grant's address). The token
      reaches the owner of BOTH the record's home and the target.
-   * `nullify_audit_view` — v7.7 (PUB-6.64; token confirmed by the owner
-     2026-09-07): the target is of a class whose honored state is read
-     under the AUDIT view, so a landed retraction would drop the record
+   * `nullify_audit_view` (PUB-6.64) — the target is of a class whose
+     honored state is read under the AUDIT view, so a landed retraction
+     would drop the record
      from the active-view reads that serve it (`find_links_*`, `count_*`,
      `window_*`) while the record still counted: the succession pair —
      `successor-of` `1.1.0.1.0.1.0.3.59` and the delegator endorsement
@@ -1620,9 +1621,8 @@ resolves AFTER every token below.
      (`1.1.0.1.0.1.0.3.22`); the rail record (`1.1.0.1.0.1.0.3.60`); and
      the steward's classification link (`1.1.0.1.0.1.0.3.61`) where the
      LINK's OWN HOME is published — draft-homed, it is an ordinary link
-     and its owner's retraction lands (the four addresses, provisional at
-     v7.7, confirmed by the owner 2026-09-07). ONE code for the class
-     list; a client splits the
+     and its owner's retraction lands. ONE code for the class list; a
+     client splits the
      face by the target's type, which the owner can read. The classes are
      the members' list, never the boundary: the next audit-view class
      joins the list and inherits the code. The R20 edition claim
@@ -1708,8 +1708,8 @@ type (§The claim ceremony and credentials) — run a stricter order:
   retry of an act another session committed still answers the fold's
   own token (`nothing_changed`, `already_claimed`).
 * Behind the unclaimed arm, the CLAIM's own admission — `claim_residue`
-  (v7.10; PUB-6.63, PUB-6.35 clause (b); the token owner-confirmed, AUTH
-  RES-202, beside `claim_first` in the pre-claim tokens'
+  (PUB-6.63, PUB-6.35 clause (b); AUTH RES-202; beside `claim_first` in
+  the pre-claim tokens'
   convention): the claim deposit is admitted only where the top-level
   account space — the accounts delegated under the claimant's node —
   holds EXACTLY ONE principal above the genesis floor, the one this
@@ -1801,7 +1801,7 @@ account. Shares **no** content: the content-sharing fork is `version`.
 
 `fork` takes the same optional `published` flag as `create_new_document`
 (`true` | `false` | absent), resolved the same way at the substrate
-(v7.2: the store's own resolution, the same as the create path's) — a
+(the store's own resolution, the same as the create path's) — a
 first fork into an empty account is refused `mint_home_first` before the
 flag matters, and a later fork is private by default. A forked draft is
 the sibling draft the version-chain refusals point you to (§The
@@ -1862,8 +1862,8 @@ that seat's principal.
 ```
 
 **`doc_metadata`** — the publication metadata a client needs to run
-PUB-3.19's admission test itself (v7.6, PUB round 2 lane 3.4): whether
-`doc` is published, its owner account, and its birth version with that
+PUB-3.19's admission test itself: whether `doc` is published, its
+owner account, and its birth version with that
 version's birth content (`birth_extent`) — a client images one edition's
 content over positions `1` through `birth_extent` of the birth version
 to decide admission, and reads nothing else here. That extent is what
@@ -1885,13 +1885,13 @@ a document argument (unreadable → `withheld`; unregistered →
 now and historically. Principal-free — exempt from the read predicate
 (§The read predicate; PUB-6.50: it reads credential records alone, born
 published by law), so NO session is needed and a guest and a bound
-principal are answered byte-identically; the auth work deliberately
-preserves the no-session read — and served on `/op-at` too, as of any
-committed position (the same
+principal are answered byte-identically; the no-session read is
+deliberate — and served on `/op-at` too, as of any committed position
+(the same
 dispatcher; a historical world's identity table is rebuilt from the
 deposits committed by then, under the reconstruction budget like every
-historical answer). A non-account address rejects with the existing
-code `not_an_account` (`reorder`); a keyless account answers empty
+historical answer). A non-account address rejects with the code
+`not_an_account` (`reorder`); a keyless account answers empty
 lists; an `id` is accepted and ignored, as on every read. → `key_set`.
 
 ```json
@@ -1900,31 +1900,31 @@ lists; an `id` is accepted and ignored, as on every read. → `key_set`.
 
 ### Arrangement (document editing)
 
-Ownership (v5.1): `insert`, `delete`, and `rearrange` require the session
+Ownership: `insert`, `delete`, and `rearrange` require the session
 principal to own `doc`; `copy` requires owning the **destination** `doc`
 only — its source spans may read any content the principal may READ
-(transclusion is unrestricted across the published docuverse and, since
-v7.5, qualified for drafts: a source you may not read is `withheld`, §The
-read predicate); `publish` (v7.3) requires owning `doc`, and its runs'
+(transclusion is unrestricted across the published docuverse and
+qualified for drafts: a source you may not read is `withheld`, §The
+read predicate); `publish` requires owning `doc`, and its runs'
 origins must be READABLE to the principal (§The publish shot and
 head-float). A non-owner gets `not_owner` (permanent) with the document
 in `site.addr`. `version` is deliberately un-owner-gated: forking a
 foreign document into your own account IS the sanctioned "propose a
-change" path. Since v7 that sentence carries qualifications, none an
+change" path. That sentence carries qualifications, none an
 ownership gate: `mint_home_first` (a principal whose account holds no
 documents must mint its home before `fork`/`version`); on a claimed
 board, `signed_session_required` for a flagless `version` of a PUBLISHED
-source from a bare session (§Credential refusals); and, since v7.5, the
+source from a bare session (§Credential refusals); and the
 source consult — a `d_src` you may not read is `withheld` (§The read
 predicate).
 
-Publication (v7.2): a PUBLISHED `doc` — or a version member of one, which
+Publication: a PUBLISHED `doc` — or a version member of one, which
 is judged as its document (PUB-2.15) — refuses the four in-place edits
 `published_target` (§The version-chain refusals), behind the ownership
 check and ahead of every shape check, from signed sessions too. A draft
-is edited in place as before. The one thing a published document admits
+is edited in place. The one thing a published document admits
 is the **declared deposit** below — and it advances by the **shot**,
-`publish` (v7.3). Once a shot has landed, a bare document address reads
+`publish`. Once a shot has landed, a bare document address reads
 as its trunk HEAD in every arrangement reader (head-float), and a
 declared deposit into the chain lands in the head member's arrangement
 (§The publish shot and head-float).
@@ -1965,8 +1965,8 @@ reach: its signature is the record's own `sig` member. Below the claim
 the member is dropped unread; a daemon that predates it refuses it as
 an unknown field.
 
-The optional `deposit` field is the **deposit declaration** (v7.2;
-PUB-2.59, PUB-9.13), and ITS VALUE IS THE RECORD CLASS's TYPE (PUB-2.11,
+The optional `deposit` field is the **deposit declaration**
+(PUB-2.59, PUB-9.13), and ITS VALUE IS THE RECORD CLASS's TYPE (PUB-2.11,
 PUB-2.64): a type ADDRESS string, saying this insert is a record atom of
 that deposit class — a credential record, say — landing at fresh
 positions past the document's arranged extent. It is the type the
@@ -2047,7 +2047,7 @@ Where you own `d_src`, the new version is a MEMBER of its chain —
 store's refusals read the DOCUMENT a member projects to, never the
 member's own bit (PUB-2.15): a write homed in `1.0.1.0.1.1` is judged
 exactly as a write into `1.0.1.0.1`. The version chain is publication's
-own (v7.2, §The version-chain refusals): where you own `d_src` and it is
+own (§The version-chain refusals): where you own `d_src` and it is
 PRIVATE, `version` refuses `private_source_versionless` whatever the flag
 — private documents are versionless; mint a sibling draft (`fork`,
 `create_new_document`) to hold the alternative, or publish by minting a
@@ -2060,7 +2060,7 @@ rule: it mints a fresh document in your own account — the source's state
 where the flag is absent, your flag where it is not — gated and judged
 by its own bit.
 
-**`publish`** — the SHOT (v7.3): append the next member of `doc`'s
+**`publish`** — the SHOT: append the next member of `doc`'s
 version chain, born published, in one commit, its arrangement the
 client's own `runs` (§The publish shot and head-float). `base` is the
 member the draft was staged from — `doc` itself while the chain is
@@ -2089,7 +2089,7 @@ reference and the draft's two as fresh identity:
 
 ### Links (writes)
 
-Ownership (v5.1): every deposit into a home document's link subspace
+Ownership: every deposit into a home document's link subspace
 requires the session principal to own that home — `make_link`/`emit`/
 `nullify`/`assert_sup` their `home`, `edit_link` **both** `d_s` (the
 successor's home) and `d_a` (the claim's home). `nullify` additionally
@@ -2101,7 +2101,7 @@ governance question for the lattice — explicitly deferred, not decided by
 omission. Failures are `not_owner` (permanent) with the failing home or
 target in `site.addr`.
 
-Readability (v7.5; §The read predicate): a V-SPEC slot of `make_link`, or
+Readability (§The read predicate): a V-SPEC slot of `make_link`, or
 of `edit_link`'s successor, that resolves a document the session
 principal may not read is `withheld` naming it — address-form slots are
 ungated; and a link named by ADDRESS whose home the principal may not
@@ -2112,7 +2112,7 @@ Both consults run after the ownership check on the homes you write and
 before the store reads anything. `nullify`'s `target` takes neither: its
 ω-first order stands as above.
 
-Credential deposits (v7): a `make_link` whose `ty` names a credential
+Credential deposits: a `make_link` whose `ty` names a credential
 type address (§The claim ceremony and credentials) is a credential
 DEPOSIT and runs the credential write sequence. Its `from` and `to`
 must be the address form (`resolved_from` otherwise); a
@@ -2122,7 +2122,7 @@ targeting a credential link is `nullify_not_retraction` — retraction
 never edits the key table (§Credential refusals for all four, and for
 the entitlement scope on the last).
 
-The `nullify` class (v7.7): the same write path recognizes two more
+The `nullify` class: the same write path recognizes two more
 classes of target off its own type-recognition input — a GRANT-typed
 link is refused `nullify_not_revocation` (a share is withdrawn by
 revoking it, never by retracting its record), and a link of a class the
@@ -2131,17 +2131,16 @@ consumption marker, the journal designation, the rail record, the
 steward's classification link with a published home) is refused
 `nullify_audit_view` — each to the record's owner alone, anyone else
 answering plain `not_owner` (§Credential refusals, item 3). And the
-publish-class gate now reads a `nullify` (PUB-6.43's row): a retraction
+publish-class gate reads a `nullify` (PUB-6.43's row): a retraction
 lands at its TARGET, so on a claimed board a bare session's `nullify`
 whose record home OR target home is published is
 `signed_session_required`, ahead of every class cell.
 
 **`make_link`** — create an open link homed in `home`. Each of `from`,
-`to`, `ty` takes **one of two forms** (wire v5; no mixing within one slot):
+`to`, `ty` takes **one of two forms** (no mixing within one slot):
 
 * a **V-spec array** `[{"source": …, "span": …}, …]` — resolved against
-  current arrangements; the recorded endset is the permanent I-spans (the
-  original form, meaning unchanged);
+  current arrangements; the recorded endset is the permanent I-spans;
 * an **address form** `{"addrs": ["<address>", …]}` — the recorded endset
   is the NAMES verbatim, one unit subtree span per address, with **no
   resolution and no occupancy requirement**: matching is by address and the
@@ -2195,8 +2194,18 @@ class can read — an incumbent homed in a document the caller may not
 read is invisible to the gate, so the re-emit mints afresh, and
 value-identical tuples may coexist across the visibility boundary.
 → `ack_addr`. The example retires `1.0.1.0.2` under the shipped Retired
-class at its reserved ghost tumbler `1.1.0.1.0.1.0.1.3` (§Reserved type
-addresses in the changelog): Unary, so `to` is empty.
+class at its reserved ghost tumbler `1.1.0.1.0.1.0.1.3`: Unary, so `to`
+is empty.
+
+The five reserved type addresses are GHOST TUMBLERS — compiled format
+constants at `1.1.0.1.0.1.0.1.x` for x = 1..5 (pred_def, pred_stable,
+retired, supersedes, retraction): content positions 1–5 of doc 1 of
+account 1 of the registry node `1.1`, T4-valid names at which nothing
+exists and nothing is ever minted, so a reserved name can never equal an
+allocated address. A type is a number: the daemon's semantics for the
+five shipped classes are compiled in; every other type means what its
+interpreting client says it means, and no document is semantically
+authoritative for a type.
 
 <!-- wire: request emit -->
 ```json
@@ -2207,7 +2216,7 @@ addresses in the changelog): Unary, so `to` is empty.
 the active view, by a retraction homed in `home`. → `ack_addr` (the
 retraction's address). Retraction lands at its target: on a claimed
 board a bare session's `nullify` whose `home` or whose target's home is
-published is `signed_session_required` (v7.7), and a target that is
+published is `signed_session_required`, and a target that is
 credential-typed, grant-typed, or of an audit-view class is refused to
 its owner with the class's token — retraction is not how those records
 end (§Links (writes) above; §Credential refusals, item 3).
@@ -2340,7 +2349,7 @@ at those positions). → `runs`.
 {"op":"find_links_ftt","q":{"from":[{"start":"1.0.1.0.1.0.1.1","width":"0.0.0.0.0.0.0.5"}],"home":"any","to":"any","ty":"empty"}}
 ```
 
-**The class-scan bound** (v7.9, PUB round 2 lane 3.7; PUB-8.36, PUB-8.37).
+**The class-scan bound** (PUB-8.36, PUB-8.37).
 A query whose four-set constrains `ty` and NO other slot — `home`, `from`
 and `to` all `"any"` — enumerates a whole type class: the design's
 directory shape, `{ty: T_grant, home/from/to: any}` (PUB-6.54) and its
@@ -2352,10 +2361,10 @@ store's whole ACTIVE slice, driven by its link-slot constraints (`from`,
 `to`, `ty`; none constrained is the whole slice), the `home` slot a
 per-link residence post-filter behind it — so its cost is the board's
 active links (the class's, where `ty` is constrained), never the home's.
-No home-granular skip exists at this build; a later performance lane
-builds one (an index of links by home, and the skip in the descriptor
-scan), and until it lands a home-constrained query pays what the class
-scan pays while the bound below counts the SHAPE alone. Such a request —
+No home-granular skip exists at this build — an index of links by home,
+and the skip in the descriptor scan, is not built — and until one is, a
+home-constrained query pays what the class scan pays while the bound
+below counts the SHAPE alone. Such a request —
 `ty` constrained, the rest `"any"` — is a CLASS SCAN, and it is a SHAPE,
 not a type list: any class queried that way is one, and the all-`"any"`
 query — the whole store — is one too, being that shape's superset. `/op`
@@ -2386,12 +2395,12 @@ second slot is not a class scan and takes no permit — the narrowest-slot
 pins bound it — and `/op-at` takes no scan permit: a historical scan is
 bounded by the reconstruction permit its whole answer already holds. The
 count is a daemon constant this document names; raising it is a
-configuration question for a later round, not a change to this contract.
+configuration question, not a change to this contract.
 
 Routed, not yet in the protocol: a POSITION FENCE on this query —
 answer only records committed past a caller-supplied position, so a
 polling consumer fetches only what is new to it — is reserved as a
-later round's delta. Its composition note is pinned with it: a fenced
+later delta. Its composition note is pinned with it: a fenced
 read must be composed with a client-held honored set, held whole from
 unfenced reads, since a record LEAVING that set appears in no fenced
 answer — without the held set the departure face is underivable. No
@@ -2474,8 +2483,8 @@ positions at `p` in `d` orphan? Nothing is written. → `orphans`.
 {"op":"out_claims","view":"audit","x":"1.0.1.0.1.0.2.2"}
 ```
 
-**`edition_claims`** — the audit-view edition-claim lookup (v7.6, PUB
-round 2 lane 3.4; PUB-8.46): every admitted, unsuperseded claim of the
+**`edition_claims`** — the audit-view edition-claim lookup
+(PUB-8.46): every admitted, unsuperseded claim of the
 edition class (`ty` under `1.1.0.1.0.1.0.3.14`, its descriptive subtypes
 included) whose `to` slot denotes `target` — the document or a version
 of it — WHETHER OR NOT RETRACTED, each with its home (the edition) and
@@ -2589,7 +2598,7 @@ Rules:
   later position instead.
 
 * **The reader's class is the presented session's; the predicate is the
-  HEAD's** (v7.4). The content is the position's, but the sets that
+  HEAD's**. The content is the position's, but the sets that
   decide what you may read — publication and grants (§The read
   predicate) — are the CURRENT head's, never the position's: a grant made
   after the position opens the draft at every position it exists at, and
@@ -2621,7 +2630,7 @@ call that finds every slot taken is refused at once with
 `503 {"error": "history_busy"}` — a retry-class refusal, never a queue —
 so historical reads cannot pin the whole worker pool. Live reads (`/op`,
 plain `GET /dump`) never take a reconstruction permit; the one bound on
-`/op` is the class-scan pool (v7.9, §Link discovery reads), a SEPARATE
+`/op` is the class-scan pool (§Link discovery reads), a SEPARATE
 pool of the same shape — a scan spends no reconstruction permit and a
 reconstruction spends no scan permit, so neither surface can starve the
 other, and a historical class scan (`/op-at` over a `ty`-only four-set)
@@ -2641,8 +2650,8 @@ this surface extends retention.
 
 **`GET /dump?at=<position>`** (only in `observe` builds) — the
 deterministic world dump (§The other endpoints) of the state at that
-position, AT THE PRESENTED TOKEN'S CLASS. Two worlds ride it (v7.6,
-PUB-6.48, as on `/op-at`): the STATE dumped is the position's — its
+position, AT THE PRESENTED TOKEN'S CLASS. Two worlds ride it
+(PUB-6.48, as on `/op-at`): the STATE dumped is the position's — its
 content, arrangements, links, and its as-of-N publication slice — and
 the PREDICATE it is filtered through is the HEAD's, so a grant committed
 after `at` opens a draft's sections at `/dump?at=N` exactly as it
@@ -2681,8 +2690,7 @@ A journal re-chained after the fact answers the forged value here, which
 the saved pair contradicts, where a stored head record the forger left
 untouched still re-reads byte-equal; a tail cut answers `beyond_head`
 or a different value. Below the floor nothing answers, and the answer is
-the serving daemon's word, as every answer here is. ADDITIVE, no version
-bump (`chain_head`'s precedent).
+the serving daemon's word, as every answer here is.
 
 Routed, not yet in the protocol: an I-ADDRESSED value read as of a
 position — the home's mint frontier at N plus the values under it, a
@@ -2774,19 +2782,19 @@ Each entry:
 * `docs` — the document(s) whose state that commit touched, or `null`:
   the write's target doc for `insert`/`delete`/`copy`/`rearrange`; a link
   write names its **home** (`edit_link` both its homes, successor's first;
-  `nullify` — v7.8, PUB-6.46 — its home AND the target link's home, a
+  `nullify` — PUB-6.46 — its home AND the target link's home, a
   SET with each document named once, so a same-home retraction carries
   one name); the **minted** document for
   `create_new_document`/`fork`/`version`,
-  and the minted MEMBER for `publish` (v7.3 — `1.0.1.0.1.2`, whose
+  and the minted MEMBER for `publish` (`1.0.1.0.1.2`, whose
   trunk is the document it advances); `delegate` and `register_node`
   touch no document and carry `[]`. A declared deposit into a
   published chain names the address the `insert` was written to,
   though the arrangement it lands in is the chain's head member (§The
   publish shot and head-float) — a client refreshing the head re-reads
-  the bare address, which floats. Since v7.8 the list you see is
-  REDUCED to the documents you may read (below).
-* `key` (v7) — the write's AUTH testimony: the 64-hex fingerprint of the
+  the bare address, which floats. The list you see is REDUCED to the
+  documents you may read (below).
+* `key` — the write's AUTH testimony: the 64-hex fingerprint of the
   enrolled key whose signed session committed it; `"bare"` for a
   bare-session write; `"system"` for a write the board's own daemon makes
   in-process with no session, as the system account's principal — the
@@ -2808,7 +2816,7 @@ Only writes appear: reads are not in the journal and never enter the feed.
 Rejected operations committed nothing and never appear. An idempotent
 retry re-acknowledges the original commit — one entry per commit, ever.
 
-**The feed is class-gated** (v7.8, PUB round 2 lane 3.6; PUB-6.44–6.47).
+**The feed is class-gated** (PUB-6.44–6.47).
 The route accepts `Skepd-Session` like every read (an absent or dead token
 is the GUEST), and every entry is classified over its `docs` — the target
 for arrangement writes, the HOME for link writes, the MINTED document for
@@ -2864,7 +2872,7 @@ the same `(since, limit, under, drafts)` against the same journal, at the
 same head publication and grant state and the same class, answers
 byte-identically, across repeats and restarts.
 
-**Narrowings** (v7.8, PUB-7.31, PUB-7.35). `under=<address-or-prefix>` —
+**Narrowings** (PUB-7.31, PUB-7.35). `under=<address-or-prefix>` —
 a dotted-decimal tumbler, an account prefix or a document — narrows the
 feed to the entries whose REDUCED `docs` name a document at or under it,
 masked exactly as the plain feed is: for a draft you cannot read the
@@ -2956,7 +2964,7 @@ carries `docs: []` and names neither; the board-side read that ties a
 new account to its principal id is `effective_owner` (§Operations), so
 what still waits on the feed item is ATTRIBUTION alone — WHICH KEY wrote
 a given `delegate` (AUTH-5.73 as AUTH RES-197 re-cut it; AUTH-6.36).
-Reserved as a later round's delta.
+Reserved as a later delta.
 
 **Retention.** The feed's memory is the daemon's `commits.log` sidecar
 plus what the journal can still reconstruct. When `since` reaches below
@@ -2987,22 +2995,22 @@ are never renumbered per class; and the two straddle renderings above.
 ## The other endpoints
 
 **`GET /health`** → `200` with `ok`, `log_position`, `head_time`,
-`chain_head` and — since v7 — the `auth` object. Token-blind, and
+`chain_head` and the `auth` object. Token-blind, and
 class-invariant (§Cross-origin access: it carries neither cache header —
 the one answer for every requester). `head_time` is the newest recorded
 commit's wall-clock unix milliseconds (§The change feed's timestamp
 scope: transport metadata) — `null` on a fresh world or when the head
-position's record is bare. `chain_head` (QUEUE item 10, piece (c) —
-ADDITIVE, no version bump) is the commit chain's value at the COMMITTED
-HEAD: a string of 64 lowercase hex characters, the 32-byte SHA-256 link
+position's record is bare. `chain_head` is the commit chain's value at
+the COMMITTED HEAD: a string of 64 lowercase hex characters, the 32-byte
+SHA-256 link
 the kernel's journal computes at every commit over the previous link and
 that transaction's canonical record frames and marker fields, from a
 genesis seed of thirty-two zero bytes. It is the kernel's value, served
 as the journal holds it and never recomputed by the daemon; and it is
 the chain OF THE `log_position` BESIDE IT — the two are read off ONE
 kernel snapshot (the root carries the position and the chain together),
-so the pair names one committed state: the value piece (d), the
-published head, is to carry — not yet in the protocol — and what a peer
+so the pair names one committed state: the value the
+published head is to carry — not yet in the protocol — and what a peer
 holding an older head will check a newer history extends. A fresh world
 answers the seed, sixty-four `0`s at `log_position` 0 — never `null`; a
 kernel running in-memory would answer the seed at every position, there
@@ -3014,8 +3022,8 @@ the other — and every such reading corrects itself on the next probe.
 The forward rule the change feed states for its own members (§The change
 feed: "a client MUST ignore an entry member it does not know … a consumer
 written to today's five must not treat a sixth as a protocol violation")
-holds here too: a consumer written to the four earlier members must not
-treat the fifth as a violation. A claimed board configured with one
+holds here too: a consumer written to these five members must not
+treat a sixth as a violation. A claimed board configured with one
 origin answers, illustratively:
 
 ```json
@@ -3033,7 +3041,7 @@ exactly on a claimed board. There is deliberately NO `mode` field:
 derive the mode from the `(claimant, local_trust)` pair (§Identity).
 
 **The published head document** — `1.1.0.1.0.2`, the version-chain document
-`H` (PUB-6.65; QUEUE item 10 piece (d)). The board's OWN daemon writes `H` as
+`H` (PUB-6.65). The board's OWN daemon writes `H` as
 a NEW PUBLISHED VERSION of itself on the write path's cadence, a `skep-head`
 record: ONE JSON object whose members are, in this order and no other, `type`
 (`"skep-head"`), `format` (the journal stamp the `chain` was computed under,
@@ -3068,8 +3076,8 @@ re-chained journal cannot pass while the byte compare of an untouched
 `publish` entry with `key: "system"`; the staging draft the record is composed
 in is a private document of the system account, masked at every class.
 
-**`GET /`** (only in builds with the `client` feature — **default-off**,
-the 2026-08-22 ruling (AUTH-4.57(e); R89, the client rule): the served
+**`GET /`** (only in builds with the `client` feature — **default-off**
+by ruling (AUTH-4.57(e); R89, the client rule): the served
 page ACTS — it generates keys and opens sessions — so the safe failure
 is a notebook build that forgot the flag serving no UI, never a hosted
 image serving a key-generating page by omission; notebook packagings
@@ -3082,23 +3090,19 @@ shape).
 **`GET /dump`** (only in builds with the `observe` feature; absent
 otherwise, so a plain build answers 404) → `200 text/plain`: the engine's
 deterministic world dump — format **`skep-world-dump v5`**, the banner
-the code emits — AT THE PRESENTED TOKEN'S CLASS (v7.6, PUB round 2 lane
-3.4). (The v2→v3 renumber rode the ghost-tumbler genesis rework of
-2026-08-30, not the auth delta; its design-side record lands as an AUTH
-RES entry — citation pending, deliberately not invented here. v3→v4 is
-the publication round's, 2026-09-05: the hints section gained
-`publication.drafts`, PUB-8.29/PUB-8.30. v4→v5 is lane 3.4's,
-2026-09-06: the root gained a `publication` SECTION — the authoritative
-draft slice, address-sorted, the state the hint is a derived index over
+the code emits — AT THE PRESENTED TOKEN'S CLASS. The hints section
+carries `publication.drafts` (PUB-8.29/PUB-8.30), and the root a
+`publication` SECTION — the authoritative draft slice, address-sorted,
+the state the hint is a derived index over
 — and a `grants` SECTION — the grant fold's operative set, each grant by
-its link address with its home, issuer, content-prefix and grantee.)
-The dump is now PER-CLASS: the GUEST (an absent, unparseable, unknown or
+its link address with its home, issuer, content-prefix and grantee.
+The dump is PER-CLASS: the GUEST (an absent, unparseable, unknown or
 dead token) sees the published world alone — its `publication` slice
 renders empty, and no draft's content lines, arrangement, link or hint
 appears; a session principal additionally sees every draft its class
 reads (its own subtree, and those a grant opens to it). A supersession
 edge in `hints.supersession` is kept only where a CLAIM asserting it is
-homed in a document the class reads (v7.10; PUB-6.13, PUB-6.22): a
+homed in a document the class reads (PUB-6.13, PUB-6.22): a
 draft-homed `assert_sup` over two public links leaves the guest's dump
 entirely, as it leaves `in_claims`. The identity
 section (M3) and the `grants` section are kept whole for every class.
@@ -3175,775 +3179,3 @@ POST /op               {"op": "retrieve_v", "specs": [{"doc": <doc>, "span": {"s
 The insert seats five single-byte values at positions 1..=5 (§Content
 values), which is exactly why the retrieve's width is `"0.5"` and the
 delivery is `[{"content": "hello"}]`.
-
-## Changelog of wire decisions
-
-This document is in DEVELOPMENT. The changelog below is the record
-through v7.10 and stops there: from the R2 round on — 2026-09-18 to
-2026-09-20, the AUTH lanes W1, W2a, W2b, W2c and W3 and the PUB lanes
-W4, W5a, W5b, W5c and W8, each in its report under the design repo's
-`_designs/AUTH/updates/` and `_designs/PUB/updates/` — the body of this
-document is the contract as it stands at HEAD, and no compatibility with
-an earlier reading is promised. Versioning resumes at the first release.
-
-v7.1 through v7.10 are ONE additive delta over v7.0 — PUB round 2, lanes
-2.1 (the publication bit on the record and in the slice), 2.2 (the
-exception set: one publication definition), 2.3 (the flag on the wire),
-3.1 (the version-chain refusals), 3.2 (the publish shot and head-float),
-3.3 (the read-surface sweep), 3.3b (the value-keyed gates at the writer's
-class), 3.3c (the write side's consult), 3.4 (the two publication reads
-and the per-class dump), 3.5 (the `nullify` class's remaining cells),
-3.6 (the feeds), 3.7 (the class-scan bound) and 4.2 (the register's four
-findings fixed to the spec) — and the standing
-promise holds at every entry: the v5 shape never mutates. Each delta
-ADDS — an optional field (`published`, `deposit`), an op with its
-response shape (`publish`; `doc_metadata`, `edition_claims`), a query
-parameter (`under`, `drafts`), a code (each entry's `rejected` codes and
-`credential_refused` tokens; `503 scan_busy`), a delivery item kind
-(`withheld`, pinned per run at v6.1 ahead of its code), two response
-headers, or a dump section (`publication.drafts` at v4; the
-`publication` and `grants` sections at v5 — the banner moving with the
-section set, the dump's own rule) — and none removes or re-types one:
-every field, op, parameter, code, header and section a v7.0 answer
-carried is present, of the same type, in the v7.10 answer, so a v5, v6
-or v7.0 client reads every v7.10 answer it could read before. What the
-round changed beside the shape is the read predicate's and is stated
-where it lands: which documents a class SEES in an answer of unchanged
-shape (v7.4, v7.6, v7.8 — a guest's read, dump or feed page carries
-less than an owner's, by design), and the writes now refused where they
-were once admitted — by the publish class (v7.1, v7.7), the store's
-version-chain refusals (v7.2) and the write door's source consult
-(v7.5) — each an existing shape's added code. The tokens and type
-addresses v7.7 marks OWNER CONFIRM OWED — `nullify_not_revocation`,
-`nullify_audit_view`, the four audit-view addresses and the grants class
-— were confirmed by the owner 2026-09-07 (§Credential refusals).
-
-v7.10 (the register's four findings fixed to the spec — PUB round 2, lane
-4.2, built 2026-09-08; documented as built; additive — one new
-`credential_refused` token, two writes refused where they were once
-admitted, one refusal answered ahead of another, one dump section
-narrowed per class; no shape changes, the dump banner stays `v5`):
-
-* The publish-class gate reads BOTH of `edit_link`'s deposits
-  (§Credential refusals; PUB-6.43; register cell I3.c, matrix 2.5): the
-  successor lands in `d_s` and the supersession claim in `d_a`, and a
-  bare session's edit is `signed_session_required` where EITHER home is
-  published — v7.1's "`edit_link` reads `d_s`" admitted a bare edit
-  whose claim landed in the published doc 1, its claim deposited there.
-  Registration and ω stand ahead on both homes, as M7's own home gate
-  has them; a caller owning either alone answers `not_owner`.
-* New `credential_refused` token `claim_residue` (permanent;
-  owner-confirmed, AUTH RES-202 — beside `claim_first` in the pre-claim
-  tokens' convention; §Credential refusals, §The claim ceremony): THE
-  CLAIM REFUSES OVER RESIDUE (PUB-6.63, PUB-6.35 clause (b); register
-  cells I10.b, I11.d). The claim deposit is admitted only where the
-  top-level account space — the accounts delegated under the claimant's
-  node — holds exactly one principal above the genesis floor, the one
-  this ceremony's own `delegate` minted; a second top-level principal
-  (another hand's keyed partial, or the operator's own abandoned partial
-  beside its lost-state retry) refuses the claim from every hand, the
-  board stays unclaimed, and its one cure is re-genesis — the face
-  verbatim: "this board carries pre-claim residue — re-genesis before
-  claiming." The input is the frontier `next_account_prefix` answers
-  under the node, cardinality and never provenance, against the floor
-  the daemon's own genesis seeded (none today; computed from the
-  genesis, never assumed). The honest single-principal ceremony is
-  unchanged. PUB part 06's informative "Built and owed" table marks this
-  refusal OWED against wire v7; it is built here.
-* The write door speaks the model's in-place refusal AHEAD of its source
-  consult (§The read predicate, §The version-chain refusals; PUB-6.36
-  slot 5 before slot 6, PUB-2.11; matrix cell 2.6): a `copy` from a
-  source you may not read INTO a published destination you own now
-  answers `published_target` — pre-evaluated at the door, byte-identical
-  to the store's own refusal, before any source is consulted — where
-  v7.5 answered `withheld`. v7.5's "one cell the door cannot order" is
-  retired; every other cell is unchanged and the store's refusal itself
-  is untouched (`copy` is the one consulted op PUB-2.11 governs — the
-  link writes are outside the rule, PUB-2.12, and `version` is a mint).
-* `/dump` drops a supersession EDGE no readably-homed claim asserts
-  (§The other endpoints; PUB-6.13, PUB-6.22, PUB-6.27; register cell
-  I3.a): a draft-homed `assert_sup` over two public links no longer
-  surfaces in a guest's `hints.supersession` — the claim is a link and
-  its home governs, as `in_claims`/`out_claims` already had it. The
-  unfiltered walk is unchanged, so a dump at a class that reads every
-  claim's home is byte-identical to v7.9's.
-
-v7.9 (the class-scan bound — PUB round 2, lane 3.7, built 2026-09-08;
-documented as built; additive):
-
-* `/op` bounds CLASS-SCAN-shaped FTT queries (§Link discovery reads;
-  PUB-8.36, PUB-8.37 — the bound the design routes to the wire, taken by
-  the owner 2026-09-08): a `find_links_ftt`, `count_ftt` or `window_ftt`
-  whose four-set constrains `ty` and no other slot — `home`, `from`, `to`
-  all `"any"`; the all-`"any"` query included — takes one of
-  `MAX_CONCURRENT_CLASS_SCANS` = 2 permits for its whole answer or is
-  refused at once with the new retry-class `503 scan_busy`, its body
-  naming the refused `op` beside the detail. A CONCURRENCY bound, no
-  rate statement; ONE global pool for every class, every session and the
-  guest, no per-principal quota; DISJOINT from the reconstruction pool
-  (PUB-7.11's shape, a second instance of the same mechanism); an
-  admitted scan's answer is byte-for-byte the unbounded one — the bound
-  admits or refuses a request and never alters an answer, and the stores
-  are not told a query is bounded. A query constraining a second slot
-  takes no permit; `/op-at` takes no scan permit, its reconstruction
-  permit already bounding a historical scan. The shape is stated once,
-  at `find_links_ftt`, and `count_ftt`/`window_ftt` cite it.
-* `scan_busy` joins the status table beside `history_busy` (§HTTP status
-  codes) and the fuzz oracle's transport-error list; §Reading history's
-  "live reads are never gated" is restated as "never take a
-  reconstruction permit", the class-scan pool being `/op`'s one bound.
-
-v7.8 (the feeds — PUB round 2, lane 3.6, built 2026-09-08; documented as
-built):
-
-* `GET /changes` IS CLASS-GATED (§The change feed; PUB-6.44–6.47): the
-  route reads the presented token like every other read (absent or dead
-  = the guest), and every entry is classified over its `docs` against
-  the read predicate — masked entries OMITTED (never nulled), shown
-  entries' `docs` REDUCED to the readable ones, `limit`/`last`/`more`
-  over the visible stream. `[]`-docs entries are never masked; a bare
-  entry classifies from the journal. A principal's page is its
-  supplement merged over the published stream — own and ancestor
-  accounts' drafts (and descendant accounts', since the subtree clause
-  runs both ways — PUB-1.32 as amended, §The read predicate),
-  grant-named drafts, and the live any-principal
-  drafts derived at serve (a revocation leaves the next page, no
-  restart) — each position once (PUB-7.22–7.28).
-* `nullify`'s `docs` names the TARGET link's home beside the record's
-  home, as a set (PUB-6.46): a draft-homed retraction of a public link
-  shows to a guest as `[T]`, never omitted. The two straddle renderings
-  are the named residues (PUB-6.47).
-* Two `/changes` parameters (PUB-7.31, PUB-7.35): `under=<dotted-decimal
-  address or prefix>` narrows to entries whose reduced `docs` name a
-  document under it; `drafts=true` narrows to entries naming a draft the
-  reader may read — the supplement alone, empty for a guest. Their
-  client-side consumers (resume-by-read, the widening triggers) are
-  stated once at the section.
-* `/changes`'s determinism is PER CLASS (§Determinism; PUB-8.26): the
-  head's publication and grant state and the presented token's class
-  join the base conditioning. `/events` is untouched — the position
-  alone, class-invariant, never renumbered or filtered (PUB-8.14) — and
-  its movement on masked commits is the named residue (PUB-6.52).
-* Four derived sidecars beside `commits.log` (`feed-index.log`,
-  `feed-offsets.log`, `feed-masked.log`, `feed-streams.log`; PUB-7.19),
-  appended at commit, tail-checked at open, rebuilt on loss; none
-  persists anything about the world.
-
-v7.7 (the `nullify` class's remaining cells — PUB round 2, lane 3.5, built
-2026-09-06; documented as built):
-
-* Two new `credential_refused` tokens (both PERMANENT, both **OWNER
-  CONFIRM OWED** — the codes are the wire's to name, proposed here in the
-  family's convention beside `nullify_not_retraction`), in slot 5's
-  position (PUB-6.36 as RES-195 places the `nullify` cells; §Credential
-  refusals, item 3): `nullify_not_revocation` — a `nullify` whose target
-  is GRANT-typed (PUB-6.30: the grant fold reads the audit view, so
-  retraction is never a second revocation path; revoke instead) — and
-  `nullify_audit_view` — a `nullify` whose target is of a class whose
-  honored state the publication spec reads under the AUDIT view
-  (PUB-6.64): the succession pair (`successor-of` `…3.59`, the delegator
-  endorsement `endorse` `…3.42`), the consumption marker (`…3.91`), the
-  journal designation (`…3.22`), the rail record (`…3.60`), and the
-  steward's classification link (`…3.61`) where the link's own home is
-  published; ONE code for the class list, the face split by the target's
-  type client-side. Each token reaches the owner of both the record's
-  home and the target; anyone else answers plain `not_owner`,
-  byte-identical to its answer on a plain link. The R20 edition claim
-  (`…3.14`) is outside — read under the ACTIVE view — and its owner's
-  `nullify` is admitted, as before.
-* The write path's TYPE-RECOGNITION INPUT is widened beside the
-  credential kinds (owner ruling D3, 2026-09-05): the same one-span
-  `Equal`-to-subtree test the fold's `kind_of` applies, over the grant
-  and audit-view class addresses, a subtype by prefix a member of its
-  class; `kind_of` and the fold are untouched. The class addresses are
-  the engine's commons pins; four are PROVISIONAL (the marker, the
-  designation, the rail, the classification link — **OWNER CONFIRM
-  OWED**, exact at seeding), as is the grant's own since v7.4.
-* The publish-class gate gains PUB-6.43's `nullify` ROW (RES-3's owed
-  input): a retraction lands at its target, so on a claimed board a bare
-  session's `nullify` is `signed_session_required` where the record's
-  home OR the target link's home is published — ω on both standing
-  ahead, so a caller owning either alone still answers `not_owner`. v7's
-  observation that the gate and the credential-nullify cell were
-  disjoint post-claim is superseded: a bare owner's `nullify` of a
-  credential, grant or audit-class record in its published doc 1 now
-  answers the gate (slot 4) and never a class token, exactly as PUB-6.36
-  orders them. What the row also hides behind the gate is occupancy: a
-  bare owner's `nullify` of an empty address in its published doc 1
-  answers the gate, never `bad_target`. Draft-homed records against
-  draft-homed targets stay bare-writable draft writes.
-
-v7.6 (the two publication reads and the per-class dump — PUB round 2, lane
-3.4, built 2026-09-06; documented as built):
-
-* Two new reads (41 ops, 26 reads, 15 writes unchanged). `doc_metadata`
-  (§Namespace) → `doc_metadata`: the publication state a client's own
-  PUB-3.19 admission test needs — the trunk document, its `published`
-  bit, its `owner` account (carried, always present for a registered
-  document), and its birth version `D.1` with that version's
-  `birth_extent` (both present once a chain member exists, both `null`
-  before), and nothing else (PUB-8.12). `edition_claims` (§Link
-  discovery reads) → `edition_claims`: the audit-view lookup over the
-  edition class `1.1.0.1.0.1.0.3.14` (descriptive subtypes included) of
-  every admitted, unsuperseded claim whose `to` denotes `target`,
-  retracted or not, each with its `home` (the edition) and `active` flag
-  (PUB-8.46). Both take the read predicate on their document argument
-  (unreadable → `withheld`, unregistered → `doc_not_registered`);
-  `edition_claims` also filters rows to homes you may read (PUB-6.13), so
-  a draft edition's claim is invisible to a stranger. The serving bound
-  (PUB-8.43) is now CLOSED — PUB-8.46 was its last owed item.
-* THE DUMP IS PER-CLASS and moves to `skep-world-dump v5` (§The other
-  endpoints): the root gained a `publication` SECTION (the authoritative
-  draft slice, address-sorted) and a `grants` SECTION (the grant fold's
-  operative set), and `GET /dump` filters at the presented token's class
-  — the GUEST sees the published world alone, a principal its own drafts
-  too, the identity and grant sections kept whole (PUB round 2 lane 3.4
-  §4). `GET /dump?at=N` filters the position's state at the HEAD's class,
-  the two-world shape `/op-at` already has (PUB-6.48). Determinism now
-  conditions on the reader's class as well as the position (PUB-8.26,
-  §Determinism). v7's "the dump itself is principal-free" is superseded.
-* CACHE HEADERS on the four class-varying routes (§Cross-origin access):
-  `Cache-Control: no-store` and `Vary: Skepd-Session` ride `POST /op`,
-  `POST /op-at`, `GET /changes` and `GET /dump` — each answer is a
-  function of the presented token's class. `GET /health` is
-  class-invariant and carries neither; `GET /events` keeps its own
-  `Cache-Control: no-cache`.
-
-v7.5 (the write side's consult — PUB round 2, lane 3.3c, built 2026-09-06;
-documented as built):
-
-* WRITES THAT READ A SOURCE ARE CLASS-GATED (§The read predicate;
-  PUB-6.23, PUB-6.24, PUB-6.38): `copy`'s `specs[].source`, `version`'s
-  `d_src`, and the V-spec slots of `make_link` and `edit_link`'s successor
-  are consulted at the write door, pre-dispatch, per argument, through the
-  one predicate every read answers — a source the session principal may
-  not read is `withheld` (reorder, `site.addr` the first unreadable source
-  in declared order, no `detail`). Address-form slots are ungated; `fork`
-  takes no gate. Behind the destination's `not_owner`, MINT-FIRST and the
-  publish-class gate; ahead of the store's read; registration ahead of it
-  (`source_not_registered`, never `withheld`). v7.4's "those writes read
-  their sources ungated today" is superseded; v5.1's "transclusion is
-  unrestricted" and "`version` is deliberately ungated" are qualified to
-  readable sources (§Arrangement).
-* THE LINK-ADDRESS RULE ON WRITES (§Links (writes); PUB-6.6):
-  `edit_link.original` and `assert_sup.old`/`new` homed in a document the
-  principal may not read answer the op's own `original_not_resident` /
-  `endpoint_not_resident` — the never-deposited address's answer — never
-  `withheld`, never `not_owner`. `nullify.target` is untouched (its
-  ω-first order; the nullify-class refusals are a later lane's).
-* Recorded, not decided here: on a `copy` from an unreadable source into a
-  PUBLISHED destination the caller owns, the door's `withheld` precedes the
-  store's `published_target` (PUB-6.36 orders the model's refusals first;
-  the consult is pre-dispatch by PUB-6.38 and the refusal is the store's
-  by D2b).
-* No new op, no new code, no dump change, no change to the credential
-  surface. The serving bound (PUB-8.43) is CLOSED for the source consult;
-  PUB-8.46's audit-view lookup stays the one owed item.
-
-v7.4 (the read-surface sweep — PUB round 2, lane 3.3, built 2026-09-06;
-documented as built):
-
-* READS ARE CLASS-GATED (§The read predicate): `readable(doc, principal)
-  = published ∨ subtree ∨ grant` (PUB-1.31) answers every read, off the
-  one snapshot the read is answered from. A document argument the
-  session may not read is `withheld` — reorder, `site.addr` the
-  document, no `detail` (PUB-8.4, PUB-8.5) — consulted per argument in
-  declaration order, unregistered addresses excepted (they keep
-  `doc_not_registered`, PUB-7.5). Result sets are filtered at the
-  reader's class (PUB-6.13); a link homed in a document the reader may
-  not read is ABSENT by address (PUB-6.6); `project` and
-  `discoverable_from` consult `d` first (PUB-6.8); a delivery masks a
-  windowed draft run as the `withheld` item at its own position, one
-  per run, never coalesced, extents unshrunk. Sharing is by GRANT
-  (PUB-5.8): an ordinary `make_link` in the owner's doc 1, `ty` the
-  grants class `1.1.0.1.0.1.0.3.90`, `from` the content-prefix (a
-  document or an account, forward-inclusive), `to` the grantee account
-  or empty for ANY-PRINCIPAL; revoked by a later grant naming the
-  earlier grant's address in `from`. Nothing opens to the guest but
-  publication.
-* `/op-at` honors the session token exactly as `/op` (PUB-8.13): the
-  content is the position's, the predicate is the HEAD's (PUB-6.48) —
-  and `withheld` precedes `history_busy`, `history_reclaimed` and the
-  position's own `doc_not_registered` (PUB-6.49), consuming no
-  reconstruction slot.
-* `publish`'s source gate is now the same predicate: a sharing grant
-  fills a run's `withheld` origin (v7.3's "later lane" landed).
-* Not wire-visible, recorded for the audit trail: M9's rule fires run at
-  GUEST class — a fire whose home or bound argument lies in a draft is
-  refused before any deposit.
-* The serving bound (PUB-8.43) is CLOSED for the subtree clause, the
-  read-surface sweep and the routed write refusals. Owed: PUB-8.46's
-  audit-view lookup, and the source consult on the V-spec slots of
-  `copy`, `version`, `make_link` and `edit_link` (PUB-6.23) — those
-  writes read their sources ungated today.
-* No new op, no new code, no dump change, no change to the credential
-  surface. v5.1's "reads remain principal-free" and v7's "every read
-  remains principal-free" are superseded here.
-
-v7.3 (the publish shot and head-float — PUB round 2, lane 3.2, built
-2026-09-05; documented as built):
-
-* New op `publish` (write, `ack_addr`; 39 ops, 15 writes): the SHOT.
-  `doc`, `runs` (each `origin`/`i_start`/`width`), optional `base` +
-  `base_extent` (together or neither — neither is the birth version,
-  PUB-2.34) and optional `draft`. The next member of `doc`'s chain, born
-  published, in ONE commit, from the client's runs alone (PUB-2.33,
-  PUB-8.1): the document's own I-space by reference, the draft's
-  re-inserted as fresh identity under the document's own I-space, any
-  other document's a window; the base's positions past `base_extent`
-  appended after them — the deposit cell (PUB-2.42, PUB-2.45).
-  Destination decided at commit: a base still the head ⇒ the trunk's
-  next member, an older base ⇒ its daughter in the nested form
-  (PUB-2.39, PUB-2.44, PUB-2.55). Owner-gated (`not_owner` with
-  `site.addr`), and the publish class's input from any session
-  (`signed_session_required` on a bare one, whatever `doc`'s state).
-* Five new `rejected` codes (§The publish shot and head-float):
-  `withheld` — the SOURCE GATE (PUB-8.1, PUB-8.4, PUB-8.5): a run's
-  origin the session principal may not read, consulted per distinct
-  origin after ownership and before existence; `reorder`, `site.addr`
-  the origin's DOCUMENT, no `detail` ever (the v6-pinned exclusion,
-  now live) — and `bad_run`, `base_not_in_chain`, `base_superseded`,
-  `base_extent_too_large`, all `permanent`, none carrying `detail` or
-  `site`. `private_source_versionless` now also answers `publish` on a
-  private document (PUB-2.9's flag-`true` face, one code). Today's
-  consult is the publication read; a sharing grant is a later lane's.
-* HEAD-FLOAT (PUB-2.49, PUB-2.50, PUB-2.53): a bare DOCUMENT address
-  answers its trunk head in `retrieve_v`, `retrieve_doc_v_span`,
-  `retrieve_doc_v_span_set`, `show_origin`, `compare`, `image`,
-  `find_links_v`, `count_v`, `window_v`, `retrieve_endsets`, and in
-  the arrangement `version` shares; a version address answers itself;
-  a memberless document answers its own arrangement; private
-  documents are untouched. `show_deletions`, `find_docs_containing`,
-  `project`, `discoverable_from`, `delete_orphans` and `copy`'s source
-  spans read the address named — pinned as the seam.
-* THE DEPOSIT CELL (PUB-2.66): a declared deposit into a published
-  chain — named bare, by the head, or by a pinned member — lands in
-  the HEAD member's arrangement, its identity minted under the chain
-  of the address named; a pinned member never grows. The change feed
-  names the address written to.
-* No dump change; no change to the credential surface.
-
-v7.2 (the version-chain model's three write-path refusals — PUB round 2,
-lane 3.1, built 2026-09-05 under owner ruling D2b; documented as built):
-
-* Three new `rejected` codes, all `permanent`, none carrying `detail` or
-  `site`, and all the STORE's — typed errors beside the ownership check,
-  behind registration and ownership and ahead of every shape check
-  (PUB-6.36 slot 5, PUB-6.37); the daemon maps them and adds no gate:
-  `published_target` (`insert`/`copy`/`delete`/`rearrange` on a
-  PUBLISHED document, PUB-2.11), `private_version_of_published` (an
-  explicit `published:false` `version` of a published document you own,
-  PUB-2.7), `private_source_versionless` (`version` of a private
-  document you own, whatever the flag, PUB-2.9). A version member is
-  judged as its document (PUB-2.15). The faces are pinned in §The
-  version-chain refusals; PUB-2.9's face splits on the flag the client
-  sent, under one code. v7.1's "admitted today; its refusal rides the
-  routed write-path item" is superseded — the private member of a
-  published chain can no longer be minted, and `publication.drafts`
-  never lists one.
-* New optional `insert` field `deposit` (`true` | `false` | absent, with
-  `null` reading as absent; any other value a parse fault): the deposit
-  declaration, PUB-9.13's DECLARED horn. A published document admits an
-  `insert` iff it is declared and deposit-shaped — fresh content
-  positions past the arranged extent; an undeclared append on a
-  published head is an in-place edit and refuses `published_target`.
-  The canonical frame carries the field only when `true`. Into a draft
-  the flag is inert. The claim ceremony's record atoms are declared
-  deposits (§The claim ceremony and credentials).
-* `fork`'s `published` flag now resolves at the substrate exactly as
-  `create_new_document`'s does (round 1's daemon-side reduction is
-  dropped); the wire's three values and their meaning are unchanged.
-* The daemon's publish-class gate reads the same version-member
-  projection the store's refusals use (one helper, shared); no wire
-  change.
-
-v7.1 (the publication flag and the exception-set publish class — the PUB
-round-1 build of 2026-09-05, documented as built; the version-member
-projection note is the 2026-09-05 reconcile's):
-
-* The three-valued `published` flag on the three minting ops —
-  `create_new_document`, `fork`, `version`: `true` | `false` | absent
-  (`null` reads as absent; any other value is a parse fault, never
-  coerced). The wire default is PRIVATE (PUB-8.16). Resolution: on
-  `create`/`fork` an absent flag makes the account's FIRST document —
-  the home — born published and every later flagless mint private; on
-  `version` an absent flag INHERITS `d_src`'s state (PUB-8.17). The
-  RESOLVED bit is what the mint's record journals; the flag itself never
-  rides the journal (PUB-8.18).
-* New `credential_refused` token `mint_home_public` (permanent): an
-  explicit `published:false` on the first mint into an empty account you
-  own is refused at the daemon's door (PUB-8.20); a flagless or
-  explicit-`true` first mint is honored, the home born published
-  (PUB-8.21). A non-owner answers `not_owner`; a later mint refuses
-  nothing.
-* The publish class (`signed_session_required`) now reads the journaled
-  bit — the engine's exception set over M3's per-document publication
-  map (PUB-7.5), the same function the credential fold reads — with
-  PUB-6.43's inputs: an explicit `published:true` on any non-exempt
-  mint, a flagless `version` of a published source, and a write homed in
-  a published document you own. v7's "today an account's doc 1" is
-  superseded: doc 1 is published because its mint journaled it so, and
-  any document minted `published:true` is gated the same way.
-* A version member is gated as its DOCUMENT (PUB-2.15): the gate
-  projects `1.0.1.0.3.2` to `1.0.1.0.3` before it reads. So an explicit
-  `published:false` `version` of a published document you own mints a
-  member whose own journaled bit is private — the dump's
-  `publication.drafts` lists it — while bare writes into it still refuse
-  `signed_session_required`. That member is the private member of a
-  published chain the version-chain model refuses outright (PUB-2.7);
-  admitted today, its refusal rides the routed write-path item
-  (PUB-8.2) with PUB-2.9's versionless sibling.
-* `unpublished` is reachable: a credential deposit homed in a DRAFT
-  document refuses it, ahead of the home pin and the payload parse.
-  v7's "unreachable — v1 wires publication constant-true" is
-  superseded.
-* The dump banner moves to `skep-world-dump v4`: the hints section
-  gained `publication.drafts` — the exception set, draft document →
-  owner account, address-sorted — and the banner moved with the section
-  set (PUB-8.29, PUB-8.30). v3 was the ghost-tumbler format (v6.2).
-
-v7 (the AUTH surface — sessions, credentials, the write gates; the AUTH
-build of 2026-08-30, documented as built):
-
-* Session tokens are 128-bit CSPRNG values, **32 lowercase hex**, strict
-  admission — v1's `prefix.suffix` shape is refused, and an unparseable
-  header value IS no token. `POST /session` accepts exactly two body
-  forms — bare `{"principal"}` and signed
-  `{"principal","nonce","origin","sig"}`, strict bytes — anything else
-  `400 malformed_session_request`, and a syntax 400 never burns a
-  nonce. New `GET /challenge?principal=N` →
-  `{"nonce","principal","ttl_ms":60000}`: a 64-lowercase-hex
-  single-use nonce (burned on verification whether or not it
-  validates), 60 s TTL, 4096 live cap, issued for any principal. The
-  signed bytes: `"skep-session-v1"` ‖ be32-framed origin · nonce ·
-  principal-decimal, over the body's own strings; verification tries
-  every enrolled key in fingerprint order (Ed25519 strict). EVERY
-  handshake failure — bare and signed alike — is the one
-  `401 {"error":"session_rejected"}`, no detail by design. New
-  `POST /session/close` → idempotent `204`. Sessions now end before
-  restart — close, key retirement, mode (a bare entry presented under
-  ENFORCING) — evicted lazily at presentation; no TTL, no cap.
-* The death signal: `Skepd-Session: closed` rides every response whose
-  presented token is unknown or whose entry died — on `/op`, `/op-at`,
-  `/changes`, `/dump`, `/session/close`, and `/events` (checked before
-  the stream opens; written once on its head). A live entry refused for
-  one request (bare, foreign `Origin`) gets no header — nothing died.
-  `Access-Control-Expose-Headers: Skepd-Session` now rides EVERY
-  response so a page can read the signal; the preflight covers the
-  session endpoints (every known path already answered `OPTIONS`).
-* Identity is a MODE, not the whole model: UNCLAIMED /
-  CLAIMED-PERMISSIVE / ENFORCING, derived from `/health`'s new `auth`
-  object — `{"claimant","local_trust","origins","signed_origins"}`,
-  the TWO origin lists published verbatim per arm, deliberately no
-  `mode` field. The bare bind is honored on loopback outside ENFORCING,
-  and only when the request's `Origin` header (if present) is in the
-  bare set. The claim-time drop: `signed_origins` = the configured
-  origins alone once claimed — a board claimed with no `--origin`
-  refuses every signed session, warned at startup and at the flip.
-* The claim ceremony rides the ordinary surface: credential deposits
-  are `make_link`s typed by three reserved ghost tumblers
-  (`1.1.0.1.0.1.0.3.{1,2,3}` — enroll · retire · claim), address-form
-  slots only, homed in doc 1, their payloads (`skep-enroll v1` /
-  `skep-retire v1` records, 64 KiB cap) plain doc-1 content the `from`
-  names. Genesis seeds the key set; the claim flips the board; first
-  claim wins.
-* New rejection family: `credential_refused`, always `permanent`,
-  `detail` a single machine token (the code:detail convention —
-  clients key on the token). The vocabulary and its order as built
-  (§Credential refusals): the shape slots `emit_not_make_link` and
-  `resolved_from`; the fold's inert tokens — `not_doc_one` (RES-17,
-  the home pin) among them — and the `malformed_payload:<sub>` joins;
-  `undecodable_key`; `too_many_enrolled` (the enrolled-set cap, 16 —
-  daemon policy, RES-57); `anchor_session_required`; MINT-FIRST's
-  `mint_home_first` (`fork`/`version` before the home mint — where
-  they committed before, they now refuse); the publish class
-  `signed_session_required` (RES-26: a bare-session write landing in
-  the published world — today an account's doc 1 — refuses on a
-  claimed board; credential deposits from bare sessions refuse there
-  uniformly, genesis included); and pre-claim `claim_first`
-  (RES-27/27a: an unclaimed daemon admits only the ceremony's shape).
-  `unauthenticated` stays slot 0 ahead of them all; `not_owner` stays
-  `execute`'s own and resolves after every token; RES-32 scopes
-  `nullify_not_retraction` on a claimed board to the target-home owner
-  (anyone else reads plain `not_owner`). v5.1's "`version` is
-  deliberately ungated" is qualified twice (MINT-FIRST; the publish
-  class) — un-OWNER-gated it remains.
-* New read `key_set` → new response shape `key_set`: an account's
-  enrolled and retired credentials, fingerprint order, anchor flags as
-  enrolled; `not_an_account` (reorder) on a non-account; empty lists
-  on a keyless account. Principal-free — the no-session read the auth
-  work deliberately preserves — and served identically on `/op-at`
-  (the identity table of a historical world is rebuilt from its
-  deposits).
-* `/changes` entries gain `key` — the committing session's testimony:
-  an enrolled-key fingerprint, `"bare"` for a bare-session write,
-  `null` only for lost metadata (never for a bare write, never
-  invented); pinned ABSENT (not null) on a feed whose serving daemon
-  did not commit the entry (a future mirror's case). The feed examples
-  are re-pinned onto a claimed board's positions — the ceremony's five
-  commits occupy 2–12 on a fresh board.
-* The dump: the code emitted `skep-world-dump v3` at this delta (v4 is
-  v7.1's, the publication slice) — docs and code agree; the v2→v3
-  renumber rode the ghost-tumbler rework (2026-08-30), and its
-  design-side record lands as an AUTH RES entry (citation pending). As
-  built the dump gains NO identity section: the identity
-  table is derived state, a pure function of deposits the links slice
-  already carries — the sealed spec's per-account dump section
-  (AUTH-6.28) rides to the engine round with the build report, and
-  `key_set` is the identity read surface meanwhile.
-* CORS `*` reaffirmed post-auth — v4's "revisited when authentication
-  lands" is resolved: reads are guest-free, the signed origin is bound
-  inside the signature, the bare bind is origin-fenced daemon-side,
-  the token is unguessable; a narrower ACAO was weighed and declined.
-
-v6.2 (reserved type addresses are in-docuverse ghost tumblers; the genesis
-configuration is retired — the two owner rulings of 2026-08-26, applied):
-
-* The five reserved type addresses are GHOST TUMBLERS — compiled format
-  constants at `1.1.0.1.0.1.0.1.x` for x = 1..5 (pred_def, pred_stable,
-  retired, supersedes, retraction): content positions 1–5 of doc 1 of
-  account 1 (the node operator's, by the claim-ceremony convention) of
-  the registry node `1.1`. T4-valid, in-docuverse names at which nothing
-  exists and nothing is ever minted — the allocator's compiled
-  ghost-region floor is what makes "a reserved name can never equal an
-  allocated address" true, replacing the abolished out-of-tree
-  `9.0.9.0.9.0.9.k` namespace (no address space exists outside the
-  docuverse). A type is a number: the daemon's semantics for the five
-  shipped classes are compiled in; every other type means what its
-  interpreting client says it means, and no document is semantically
-  authoritative for a type.
-* `GenesisConfig` and the app-declared types seam (`decls`) are RETIRED:
-  the values are the format, not a sealed configuration, so the
-  byte-identical-genesis caller contract and the reopened-under-
-  different-config refusals are gone; the journal and checkpoint format
-  stamps (`SKJ4`/`SKC4`) name the format that wrote them. The
-  architecture's extension path is predicates (pdef content), not new
-  compiled substrate classes.
-* FORMAT CONSEQUENCE, accepted by the owner in the ruling (pre-release):
-  journals and checkpoints written under the 9-space configuration DO
-  NOT REOPEN under this format.
-
-v6.1 (routed documentation pins — the PUB sweeps' wire routes, landed
-2026-08-28; no encoding, surface, or behavior change):
-
-* The publication rounds' planned `withheld` rejection is pinned, ahead
-  of its code, to carry NO `detail` — its whole diagnosis is `code`
-  plus `site.addr` — so no conforming daemon grows an extent-describing
-  payload before the code ships. [PUB sweep-10 pub-leak]
-* The V-spec slot order for `make_link`/`edit_link` declared: `from`,
-  `to`, `ty` — the read-back positional order (1/2/3), now stated for
-  the write surface so ordering-consuming pins (`site.addr`'s "first …
-  in declared order") have their order. [PUB sweep-9 pub-leak]
-* The future `delivery` withheld item
-  (`{"withheld": {"origin", "width"}}`) is pinned per-RUN: two
-  non-contiguous withheld runs, one origin or not, are two items, never
-  one coalesced item of the summed width. [PUB sweep-9 pub-leak]
-* `/events` coalescing is named the stream's wake-rate mitigation — one
-  wake per quiet interval rather than one per commit, an allowance the
-  v4 contract already grants; no new mechanism claimed. [PUB sweep-9
-  pub-performance]
-* The base determinism conditioning stated as the wire's own pin: the
-  positioned-read byte-identity promises hold while the position (or
-  the history behind the fence) remains within RETENTION — reclaim
-  answers `history_reclaimed`, never different bytes; later rounds
-  state their own further terms on top. [PUB sweep-11 pub-permanence]
-* Roadmap: a position fence on `find_links_ftt` (records past a
-  caller-held position) is reserved for a later round, pinned beside
-  its composition note (a fenced read composes with a client-held
-  honored set or the departure face is underivable). Not in the
-  protocol. [PUB sweep-11 pub-performance]
-* Corrected: the `client` feature is DEFAULT-OFF (the 2026-08-22
-  default-off ruling, AUTH-4.57(e); R89, the client rule) — v6's
-  "default on" was true when v6 landed and is superseded; the endpoint
-  descriptions now say so. [AUTH sessions sweeps 5 and 7,
-  auth-substrate]
-* Roadmap: M7's round-3 links family rejects an over-large slot
-  (`SlotTooLarge`, MAX_SLOT_SPANS) and refuses through the
-  supersession-class fence; the wire's code list carries no codes for
-  either — to be assigned when that links family ships on the wire.
-  [the M7 interface reconcile, 2026-08-28]
-
-v6 (browser enablement: change feed, commit timestamps, served client —
-the 2026-08-16 ruling):
-
-* New `GET /changes?since=N[&limit=K]`: the pull delta feed of committed
-  writes in `(N, head]`, oldest first — `{"at", "op", "docs", "time"}` per
-  entry, `{"changes", "last", "more"}` around them; `limit` default 256,
-  max 4096, out-of-range refused (`400 malformed_changes`); `since ≥ head`
-  is the empty page with `last` echoing `since`; `since` below retained
-  history is `/op-at`'s own `410 history_reclaimed` discipline. Writes
-  only — reads never appear; rejections never appear; an idempotent retry
-  never duplicates an entry.
-* Affected-docs convention fixed: target doc for arrangement writes, home
-  for link writes (`edit_link` both homes), the minted document for
-  `create_new_document`/`fork`/`version`, `[]` for `delegate`/
-  `register_node`.
-* Commit timestamps enter the wire as **transport metadata, never
-  substrate state** — the daemon's testimony about when it committed,
-  riding beside the world (two daemons replaying one journal still
-  converge byte-identically). Provenance: timestamps were a planned Nelson
-  extension to Xanadu (owner's confirmation, 2026-08-16). Mechanism: the
-  daemon-owned `commits.log` sidecar in the data dir, written at ack time,
-  replayed on reopen; a torn tail truncates at the last whole record;
-  lost or pre-feature positions are reconstructed from the journal as bare
-  entries answering `"op": null, "docs": null, "time": null` — null over
-  invention, always. Surfaced in `/changes` and as `/health`'s new
-  `head_time`; deliberately NOT added to op responses (the live surface is
-  unchanged).
-* New `GET /` (feature `client`, default on — since ruled default-OFF,
-  2026-08-22; see v6.1): the authoring client served
-  as one embedded HTML file, `text/html`, same CORS posture as everything
-  else; no other static routes, no asset pipeline. Without the feature,
-  `/` stays a 404.
-
-v5.1 (ownership gate on the write surface — the 2026-08-16 security
-ruling; no encoding change, new rejection paths):
-
-* Ownership, in one sentence: a caller owns a document iff its account is
-  **exactly** the document's account — the nearest registered account
-  prefix of the document's address, never mere prefix containment (so
-  parent and sub-delegated accounts do not own each other's documents, in
-  either direction).
-* Ops that now reject `not_owner` (permanent, `site.addr` = the failing
-  address), checked after registration and before all other validation:
-  `insert`/`delete`/`rearrange` on `doc`; `copy` on its **destination**
-  `doc` only (source spans stay unrestricted — transclusion of anyone's
-  content is the point of the medium); `make_link`/`emit`/`assert_sup`/
-  `nullify` on `home`; `edit_link` on both `d_s` and `d_a`; and `nullify`
-  additionally on the **target** link's own address.
-* Nullify target policy: self-retraction only. Territorial moderation
-  (owner of a touched document may retract) versus open retraction with
-  viewer-side filtering is an explicitly deferred scope decision.
-* `version` of a foreign document remains ungated by design: it forks into
-  the CALLER's account (denial-as-fork) and is the sanctioned
-  "propose a change" path. (Since qualified twice at v7 — MINT-FIRST and
-  the publish class; the OWNER gate it never had, it still has not.)
-* Reads are unchanged: every read remains principal-free (superseded at
-  v7.4 — reads answer through the read predicate).
-
-v5 (address-denoting endsets on the open link surface — the 2026-08-16
-ruling; spec anchors ASN-0043 L4/L8/L9/L13, Literary Machines 4/44):
-
-* `make_link`'s `from`/`to`/`ty` each accept a second form,
-  `{"addrs": ["<address>", …]}`, beside the unchanged V-spec array: the
-  recorded endset is the names verbatim — one unit subtree span per
-  address, no resolution, no occupancy requirement, nothing beyond address
-  validity (type matching is by address; contents are never examined, and
-  ghost names are valid types). Per-slot either/or; a mixed need resolves
-  first via the read surface and passes `addrs`.
-* The type floor reads *as given*: an empty `addrs` list rejects
-  `empty_type_resolution` exactly as an empty resolution always has;
-  `from`/`to` may be empty in either form.
-* The addrs-object encoding is byte-identical to `edit_link`'s successor
-  `ty` addrs form, which already existed; the V-spec-array form is
-  byte-identical to v4 (existing frames mean exactly what they meant).
-* `udanax-green` precedent: its standard client marker types were always
-  pure address names (vspans over never-created link-subspace positions of
-  doc 1) — the open surface now says so first-class.
-
-v4 (browser reads — CORS everywhere, the commit stream):
-
-* Every response now carries `Access-Control-Allow-Origin: *`; `OPTIONS`
-  on any known path answers `204` with
-  `Access-Control-Allow-Methods: GET, POST, OPTIONS`,
-  `Access-Control-Allow-Headers: Content-Type, Skepd-Session`, and
-  `Access-Control-Max-Age: 86400`; unknown paths keep their 404. Scope
-  decision: `*` is safe precisely because the daemon is loopback-only
-  local trust — reads are public to local pages, writes still ride the
-  session token, and the token is not a browser credential. Revisited when
-  authentication lands.
-* New `GET /events`: a `text/event-stream` of committed positions — one
-  initial event carrying the current head at connect, then `event: commit`
-  with `data: {"log_position":N}` (compact JSON, the position alone) as
-  the head advances. Coalescing under load is promised behavior (a
-  strictly increasing sequence converging on the head); `:ka` comment
-  keepalives after each 15 s of silence; no payloads or filters in v1 —
-  clients re-read on movement. Delivery is write-path notification, not
-  polling, and event-stream subscribers never occupy the op workers.
-* Reconnect guidance fixed: on `commit`, re-read; on reconnect, treat the
-  initial event as potentially having skipped history.
-* Transport made explicit: one request per connection (`Connection: close`
-  on every response — connection reuse was never contractual); the event
-  stream is the one unbounded response, ended by daemon shutdown with a
-  clean close. `Expect: 100-continue` honored; `Transfer-Encoding` request
-  bodies refused with the new `400 malformed_http`, which also answers an
-  unparseable request head.
-
-v3 (historical reads — read-at-position, served from the journal):
-
-* New `POST /op-at`: `{"at": <position>, "frame": {<read op>}}` — the same
-  codec and response documents as `/op`, `as_of` reporting `at`. Positions
-  are the `at`/`as_of` values responses already carry (`0` = genesis);
-  clients hold them from their own history.
-* Read-only, enforced at the transport: a write frame is
-  `400 {"error":"write_at_history"}` (ruling-fixed body); `at` beyond the
-  head is `400 {"error":"beyond_head","head":n}` (ruling-fixed).
-* A number inside a multi-record commit is not a position:
-  `400 {"error":"not_a_position","nearest":p}` — refused rather than
-  silently answered at a state that never observably existed.
-* Rejections replay as history: a document queried before its creation
-  gets that position's own `doc_not_registered`; dispositions describe the
-  frozen state.
-* Envelope faults: `400 malformed_op_at`; an unparseable frame stays on
-  the op channel (`200` + `unparseable`), as on `/op`.
-* `GET /dump?at=N` (observe builds): the deterministic dump of that
-  position; equal `N` byte-equal; `N` = head equals plain `/dump`;
-  malformed query `400 malformed_at`.
-* Mechanism and cost stated: per-request bounded replay from the nearest
-  checkpoint at or below `at`, uncached; deterministic across restarts.
-  Retention is the journal's own — reclaimed positions answer
-  `410 {"error":"history_reclaimed","floor":p?}`.
-* The frame's `id` is accepted and ignored (reads are never memoized).
-
-v2 (value granularity — one adjudicated defect, two faces; found by the
-client-side smoke harness against the conformance record's per-byte text
-discipline):
-
-* **Write side.** `"str"` and `{"hex"}` now mint **one single-byte value
-  per byte** — v1 read them as one composite value of all the bytes, which
-  silently made the payload's interior permanently unaddressable. The
-  composite reading survives only as the explicit `{"atom"}`/`{"atom_hex"}`
-  forms: coarse granularity must be said, never fallen into.
-* **Read side.** The delivery marshal is now injective: v1 rendered N
-  per-byte positions and one N-byte value identically. v2 renders a maximal
-  per-byte run as one `content`/`hex` item (UTF-8 judged on the whole run)
-  and every composite value as its own `atom`/`atom_hex` item, never
-  coalesced.
-* Empty forms: `""`/`{"hex": ""}` are vacuous (zero values); `{"atom": ""}`
-  and `{"atom_hex": ""}` are parse failures.
-* The insert example `{"values": ["hello, wire"]}` is unchanged in bytes
-  and changed in meaning: eleven values, eleven positions.
-* Granularity is not enforced server-side — composite values are a
-  legitimate store capability; the wire's job is making the choice explicit
-  and lossless in both directions.
-
-v1 (initial):
-
-* Internally tagged request objects; snake_case op names; strict unknown-op
-  and unknown-field rejection (never-silent applied to typos).
-* Tumblers/addresses as dotted-decimal strings; unbounded naturals as
-  decimal strings (lenient integer parse); bounded integers as JSON
-  numbers.
-* Spans as `{"start", "width"}` objects; endsets/span-sets as span arrays,
-  order verbatim.
-* Content values: UTF-8 as JSON strings, raw bytes as `{"hex": …}`, one
-  value per array element (superseded by v2's granularity forms).
-* Responses tagged by `resp`; payload options (`addr`, `link`, `next`)
-  explicit `null`; diagnostic options (`site`, `detail`) omitted when
-  absent.
-* Deterministic canonical marshal: sorted keys, compact, byte-stable.
-* `POST /op` always `200` once a response exists; rejections are response
-  documents, not HTTP statuses; transport errors use `{"error": …}`.
-* Sessions: opaque tokens in the `Skepd-Session` header; token → session
-  binding lives in the daemon, so session identity never rides the wire;
-  tokens die with the process; unknown/absent token = principal-free guest
-  (reads served, writes `unauthenticated`); no close endpoint in v1.
-  (Superseded at v7: strict 32-hex tokens, a close endpoint, sessions
-  ending before restart, the death signal.)
-* Identity: local trust, client-named principals, loopback bind only.
-  (Local trust became a MODE at v7; the loopback bind stands.)
-* `principal_prefix`'s argument is `"principal"` on the wire (envelope
-  `"id"` is the idempotency key).
-* Four-set slot constraints: `"any"` / `"empty"` / span array; `[]` reads
-  as `"empty"`.
-* Cursor: `null` or absent = start; the cursor is the whole continuation.

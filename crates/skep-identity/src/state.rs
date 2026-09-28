@@ -333,14 +333,13 @@ impl IdentityState {
         let own_space = home_account == subject;
         // Holder arm (AUTH-2.69): `H == A ∧ !S.is_empty()`.
         if own_space && !set.is_empty() {
-            // An entry naming an already-enrolled or retired fingerprint is
-            // outside `added` WHATEVER its flag (I4 AUTH-2.98; I9 AUTH-2.104).
+            // `added` is the entries the set ADMITS — fingerprints it has never
+            // held, enrolled or retired — WHATEVER their flags: the enrolling
+            // mutator's PRECONDITION, discharged here (I4 AUTH-2.98; I9
+            // AUTH-2.104).
             let added: Vec<Enrolled> = enrollments
                 .iter()
-                .filter(|enrollment| {
-                    let fp = Fingerprint::of(&enrollment.key);
-                    !set.contains(&fp) && !set.retired_contains(&fp)
-                })
+                .filter(|enrollment| set.admits(&Fingerprint::of(&enrollment.key)))
                 .map(enrolled_of)
                 .collect();
             if added.is_empty() {
@@ -429,27 +428,31 @@ impl IdentityState {
 
     /// AUTH-2.71 / AUTH-4.30 (i) — the set that OPENS THE ACCOUNT ABOVE `a`:
     /// the parent's set where it is non-empty, else the set of the nearest
-    /// account above the parent whose set is not empty — the upward walk over
-    /// `self.sets` by `parent()` arithmetic (crate-local, no seam fact, the
-    /// class of `inc(a, 2)` AUTH-2.126 already takes). `None` where NO account
-    /// above `a` holds a non-empty set — the walk's TERMINUS, pinned FOR
-    /// TOTALITY (AUTH-2.71): `step` must be total (AUTH-2.57) and I2
-    /// (AUTH-2.90) admits no band where one build reads the empty set and
-    /// another walks past the account tier. Every row of `self.sets` is KEYED
-    /// (its enrolled map non-empty — the standing invariant), so a present row
-    /// is a non-empty opening set; the `is_empty` guard keeps this total under
-    /// a value whose source did not.
+    /// account above the parent whose set is not empty — AUTH-4.30 (i)'s walk,
+    /// `parent()` arithmetic over `a`'s ACCOUNT-TIER ancestors and no others
+    /// (crate-local, no seam fact, the class of `inc(a, 2)` AUTH-2.126 already
+    /// takes). It STOPS at the first ancestor that is not an account, and
+    /// answers `None` where no account above `a` holds a non-empty set: the
+    /// walk's TERMINUS, which AUTH-2.71 takes from AUTH-4.30 (i) and pins FOR
+    /// TOTALITY — `step` must be total (AUTH-2.57), and I2 (AUTH-2.90) admits
+    /// no band in which one build reads the empty set and honors while another
+    /// walks past the account tier.
+    ///
+    /// skepd's session layer writes the same walk behind AUTH-4.30's
+    /// `key_subject`, and its precheck's handoff test takes it too — AUTH-4.30
+    /// places that accessor on skepd's surface and AUTH-2.56 fixes this
+    /// type's — so the rule is written in both crates, and the two agree
+    /// because both stop at the tier. The fold's own posts could not show a
+    /// difference, the arm entry's `is_account` seating rows at accounts
+    /// alone; a slice deserialized from elsewhere can carry a row at a node,
+    /// and neither walk reads it. Every row of `self.sets` is KEYED (the
+    /// standing invariant), so a present row is a non-empty opening set; the
+    /// `is_empty` filter holds the walk to "whose set is not empty" under a
+    /// value whose source did not keep that invariant.
     fn opening_set_above(&self, a: &Address) -> Option<&KeySet> {
-        let mut cursor = parent(a);
-        while let Some(above) = cursor {
-            if let Some(set) = self.sets.get(&above) {
-                if !set.is_empty() {
-                    return Some(set);
-                }
-            }
-            cursor = parent(&above);
-        }
-        None
+        std::iter::successors(parent(a), parent)
+            .take_while(|above| above.level() == Level::Account)
+            .find_map(|above| self.sets.get(&above).filter(|set| !set.is_empty()))
     }
 
     /// AUTH-2.66 item 4, RETIRE — the retirement kind's two rows of
@@ -538,35 +541,36 @@ impl IdentityState {
     /// AUTH-1.32 by construction.
     ///
     /// PRECONDITION — `effect` is one [`classify`] answered for THIS state.
-    /// This is where [`KeySet`]'s three mutator preconditions arrive, and it
-    /// discharges none of them: `Retire`'s `removed` must be a PROPER subset
-    /// of the account's enrolled set — the `WouldEmpty` test, AUTH-2.74 — or
-    /// AUTH-1.36 and I3 are void, and the fingerprints moved in one post are
-    /// this arm's whole loop; `Enroll`'s `added` and `Genesis`' `keys` must be
-    /// outside `retired` (AUTH-2.69's filter, AUTH-2.70's empty-set premise)
-    /// or AUTH-1.35 and I4 are void, and outside `enrolled` with no
-    /// fingerprint twice — the same filter, the genesis arm's empty set,
-    /// [`parse_enroll`]'s duplicate-free POSTCONDITION — or I9 (AUTH-2.104) is
-    /// void, a second insert REPLACING the first's flag. And every set-touching
-    /// arm must leave the posted set NON-EMPTY — [`post_to_set`]'s
-    /// PRECONDITION, where the standing invariant is owed — by a DIFFERENT
-    /// route on each. `Genesis`' `keys` are non-empty ([`parse_enroll`]'s
-    /// POSTCONDITION, AUTH-2.16); were they not, the post would seat an EMPTY
-    /// row, [`keyed_accounts`] would yield an account holding no key, and the
-    /// set the genesis arm tests would still be empty, so that arm could fire
-    /// again and I5 (AUTH-2.100) would be void. `Enroll`'s account ALREADY
-    /// holds a non-empty row, because AUTH-2.69's arm fires only on
-    /// `!S.is_empty()` — so an `Enroll` naming an account with no row is
-    /// outside this precondition whatever `added` holds, and `added`'s own
-    /// non-emptiness is that arm's `NothingChanged` test, not this one's.
-    /// `Retire`'s proper-subset clause above carries its half already: nothing
-    /// is a proper subset of the empty set, so a `Retire` cannot reach a
-    /// rowless account, and a proper subset of a non-empty set leaves it
-    /// non-empty. A NEW arm owes the obligation, not one of these three
-    /// routes. `Claim` posts no set; it must find `claimant` `None` —
+    /// This is where [`KeySet`]'s two mutator preconditions arrive, and it
+    /// discharges neither: `Retire`'s `removed` must be a PROPER subset of the
+    /// account's enrolled set — the `WouldEmpty` test, AUTH-2.74 — or AUTH-1.36
+    /// and I3 are void, and the fingerprints moved in one post are this arm's
+    /// whole loop; each key `Enroll`'s `added` and `Genesis`' `keys` post must
+    /// be one the set [`admits`](KeySet::admits) at its insert — the holder
+    /// arm's filter asks the set before the post, the genesis arm posts into an
+    /// empty set, which admits every fingerprint (AUTH-2.70), and
+    /// [`parse_enroll`]'s duplicate-free POSTCONDITION keeps the answer across
+    /// each post — or AUTH-1.35 and I4 are void on the retired half and I9
+    /// (AUTH-2.104) on the enrolled half, a second insert REPLACING the first's
+    /// flag. And every set-touching arm must leave the posted set NON-EMPTY —
+    /// [`post_to_set`]'s PRECONDITION, where the standing invariant is owed —
+    /// by a DIFFERENT route on each. `Genesis`' `keys` are non-empty
+    /// ([`parse_enroll`]'s POSTCONDITION, AUTH-2.16); were they not, the post
+    /// would seat an EMPTY row, [`keyed_accounts`] would yield an account
+    /// holding no key, and the set the genesis arm tests would still be empty,
+    /// so that arm could fire again and I5 (AUTH-2.100) would be void.
+    /// `Enroll`'s account ALREADY holds a non-empty row, because AUTH-2.69's
+    /// arm fires only on `!S.is_empty()` — so an `Enroll` naming an account
+    /// with no row is outside this precondition whatever `added` holds, and
+    /// `added`'s own non-emptiness is that arm's `NothingChanged` test, not
+    /// this one's. `Retire`'s proper-subset clause above carries its half
+    /// already: nothing is a proper subset of the empty set, so a `Retire`
+    /// cannot reach a rowless account, and a proper subset of a non-empty set
+    /// leaves it non-empty. A NEW arm owes the obligation, not one of these
+    /// three routes. `Claim` posts no set; it must find `claimant` `None` —
     /// AUTH-2.67 item 4 — or I6 (AUTH-2.101) is void: its post is an
-    /// assignment, and it overwrites. [`step`] is the only caller and it
-    /// passes `classify`'s own answer.
+    /// assignment, and it overwrites. [`step`] is the only caller and it passes
+    /// `classify`'s own answer.
     ///
     /// [`classify`]: IdentityState::classify
     /// [`keyed_accounts`]: IdentityState::keyed_accounts
@@ -711,7 +715,9 @@ fn enrolled_of(enrollment: &Enrollment) -> Enrolled {
 
 #[cfg(test)]
 mod tests {
-    use super::doc_1_of;
+    use super::{doc_1_of, IdentityState};
+    use crate::key::{PublicKey, ALG_MLDSA65_ED25519, MLDSA65_KEY_LEN};
+    use crate::keyset::{Enrolled, KeySet};
     use skep_address::{validate, Nat, Tumbler};
 
     fn addr(comps: &[u32]) -> skep_address::Address {
@@ -730,5 +736,34 @@ mod tests {
         );
         // A node-level prefix (the bootstrap owner's) still answers totally.
         assert_eq!(doc_1_of(&addr(&[1, 1])), addr(&[1, 1, 0, 1]));
+    }
+
+    /// AUTH-2.71 / AUTH-4.30 (i) — the handoff latch's comparand is found by
+    /// AUTH-4.30 (i)'s walk, over the ACCOUNT tier alone. A keyed row at a
+    /// NODE — one no fold posts, the arm entry admitting account-level
+    /// subjects alone, so a row only a slice deserialized from elsewhere can
+    /// carry — lies past the walk's terminus and is never the comparand, while
+    /// the same set seated at the account between that node and the
+    /// subdivision is.
+    #[test]
+    fn the_opening_set_walk_stops_at_the_account_tier() {
+        let key = PublicKey::from_halves(ALG_MLDSA65_ED25519, &[0; MLDSA65_KEY_LEN], &[0; 32])
+            .expect("the tag-1 row's widths");
+        let mut keyed = KeySet::default();
+        keyed.insert_enrolled(Enrolled { key, anchor: true });
+        let subdivision = addr(&[1, 1, 0, 5, 2]);
+        let mut st = IdentityState::genesis();
+        st.sets.insert(addr(&[1, 1]), keyed.clone());
+        assert_eq!(
+            st.opening_set_above(&subdivision),
+            None,
+            "a node's row lies past the terminus"
+        );
+        st.sets.insert(addr(&[1, 1, 0, 5]), keyed.clone());
+        assert_eq!(
+            st.opening_set_above(&subdivision),
+            Some(&keyed),
+            "an account's row opens it"
+        );
     }
 }

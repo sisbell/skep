@@ -1,7 +1,7 @@
 //! Framing and the tag set — AUTH-1.11–1.17.
 //!
-//! Domain separation for every byte string this system hashes or (later)
-//! signs. Declaring a constant beside [`framed`] is the ONLY way to hold a
+//! Domain separation for every byte string this system hashes or signs.
+//! Declaring a constant beside [`framed`] is the ONLY way to hold a
 //! [`Tag`] (AUTH-1.13), and [`framed`] debug-asserts membership in [`TAGS`]
 //! (AUTH-1.14) — the two mechanisms close two different directions
 //! (AUTH-1.16): nothing UNDECLARED can be framed, and nothing DECLARED

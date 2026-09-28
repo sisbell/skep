@@ -64,7 +64,7 @@
 //!   [`ALG_FNDSA512_PREVIEW_ED25519`] (tag 3, preview) — the key kinds are
 //!   the two hybrid rows, the classical `ed25519` row DELETED at the
 //!   hybrid-only launch (AUTH-1.1, AUTH-1.5) — its refusal
-//!   [`KeyParseError`], [`ALGS`] with its row type [`AlgRow`], the marker-tag
+//!   [`ParseKeyError`], [`ALGS`] with its row type [`AlgRow`], the marker-tag
 //!   table [`SIG_ALGS`] with [`SigAlgRow`], [`Fingerprint`] (AUTH-1.1–1.10;
 //!   signed ops);
 //! * `framing`: framing and the tag set — [`Tag`], [`framed`], [`TAGS`]
@@ -161,9 +161,9 @@ pub use framing::{
     framed, Tag, ENTRY_TAG, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, SESSION_TAG_V2, TAGS,
 };
 pub use key::{
-    AlgRow, Fingerprint, KeyParseError, PublicKey, SigAlgRow, ALGS, ALG_FNDSA512_PREVIEW_ED25519,
-    ALG_MLDSA65_ED25519, ED25519_KEY_LEN, FNDSA512_ED25519_KEY_LEN, FNDSA512_KEY_LEN,
-    MLDSA65_ED25519_KEY_LEN, MLDSA65_KEY_LEN, SIG_ALGS,
+    AlgRow, Fingerprint, ParseKeyError, PublicKey, SigAlgRow, ALGS, ALG_FNDSA512_PREVIEW_ED25519,
+    ALG_MLDSA65_ED25519, ED25519_KEY_LEN, FNDSA512_PREVIEW_ED25519_KEY_LEN,
+    FNDSA512_PREVIEW_KEY_LEN, MLDSA65_ED25519_KEY_LEN, MLDSA65_KEY_LEN, SIG_ALGS,
 };
 pub use keyset::{Enrolled, KeySet};
 pub use payload::{

@@ -40,11 +40,11 @@ pub const MLDSA65_KEY_LEN: usize = 1952;
 /// `fn-dsa` 0.4.0's FN-DSA-512 verifying key encoding (header `0x09` then
 /// the NTT-form public polynomial): the first 897 raw bytes of
 /// [`ALG_FNDSA512_PREVIEW_ED25519`]'s value.
-pub const FNDSA512_KEY_LEN: usize = 897;
+pub const FNDSA512_PREVIEW_KEY_LEN: usize = 897;
 /// [`ALG_MLDSA65_ED25519`]'s raw length: 1,952 + 32.
 pub const MLDSA65_ED25519_KEY_LEN: usize = MLDSA65_KEY_LEN + ED25519_KEY_LEN;
 /// [`ALG_FNDSA512_PREVIEW_ED25519`]'s raw length: 897 + 32.
-pub const FNDSA512_ED25519_KEY_LEN: usize = FNDSA512_KEY_LEN + ED25519_KEY_LEN;
+pub const FNDSA512_PREVIEW_ED25519_KEY_LEN: usize = FNDSA512_PREVIEW_KEY_LEN + ED25519_KEY_LEN;
 
 /// ONE ROW of the marker-tag table (signed ops; the design record §7.3 (i):
 /// "the `u8 ↔ token` mapping is pinned beside `ALGS` AS A TWO-ROW TABLE OF
@@ -131,7 +131,7 @@ const MLDSA65_ED25519_ROW: SigAlgRow = SigAlgRow {
 const FNDSA512_PREVIEW_ED25519_ROW: SigAlgRow = SigAlgRow {
     tag: 3,
     token: ALG_FNDSA512_PREVIEW_ED25519,
-    pq_key_len: FNDSA512_KEY_LEN,
+    pq_key_len: FNDSA512_PREVIEW_KEY_LEN,
     pq_sig_len: 666,
 };
 
@@ -195,7 +195,7 @@ fn mldsa65_ed25519_from_raw(raw: &[u8]) -> Option<PublicKey> {
 /// [`ALGS`]' tag-3 hybrid constructor: exactly 929 bytes, checked the same
 /// way.
 fn fndsa512_preview_ed25519_from_raw(raw: &[u8]) -> Option<PublicKey> {
-    <[u8; FNDSA512_ED25519_KEY_LEN]>::try_from(raw)
+    <[u8; FNDSA512_PREVIEW_ED25519_KEY_LEN]>::try_from(raw)
         .ok()
         .map(|raw| PublicKey::FnDsa512PreviewEd25519(Box::new(raw)))
 }
@@ -227,21 +227,21 @@ mod raw_array {
     pub fn deserialize<'de, D: Deserializer<'de>, const N: usize>(
         d: D,
     ) -> Result<Box<[u8; N]>, D::Error> {
-        struct Bytes<const N: usize>;
-        impl<'de, const N: usize> Visitor<'de> for Bytes<N> {
+        struct ArrayVisitor<const N: usize>;
+        impl<'de, const N: usize> Visitor<'de> for ArrayVisitor<N> {
             type Value = Box<[u8; N]>;
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 write!(f, "a tuple of {N} bytes")
             }
             fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Box<[u8; N]>, A::Error> {
                 let mut out = Box::new([0u8; N]);
-                for (i, slot) in out.iter_mut().enumerate() {
-                    *slot = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(i, &self))?;
+                for (i, byte) in out.iter_mut().enumerate() {
+                    *byte = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(i, &self))?;
                 }
                 Ok(out)
             }
         }
-        d.deserialize_tuple(N, Bytes::<N>)
+        d.deserialize_tuple(N, ArrayVisitor::<N>)
     }
 }
 
@@ -278,7 +278,7 @@ pub const ALGS: &[AlgRow] = &[
     },
     AlgRow {
         token: ALG_FNDSA512_PREVIEW_ED25519,
-        raw_len: FNDSA512_ED25519_KEY_LEN,
+        raw_len: FNDSA512_PREVIEW_ED25519_KEY_LEN,
         family: "fn-dsa-512-preview+edwards25519",
         from_raw: fndsa512_preview_ed25519_from_raw,
     },
@@ -288,8 +288,8 @@ pub const ALGS: &[AlgRow] = &[
 /// when no row carries it, taken by both constructors
 /// ([`PublicKey::parse`], [`PublicKey::from_halves`]) before either judges a
 /// byte.
-fn row_of(alg: &str) -> Result<&'static AlgRow, KeyParseError> {
-    ALGS.iter().find(|row| row.token == alg).ok_or(KeyParseError::UnknownAlg)
+fn row_of(alg: &str) -> Result<&'static AlgRow, ParseKeyError> {
+    ALGS.iter().find(|row| row.token == alg).ok_or(ParseKeyError::UnknownAlg)
 }
 
 /// A public key (AUTH-1.1): THE TWO HYBRID ARMS, each ONE key over one
@@ -324,7 +324,9 @@ pub enum PublicKey {
     /// Tag 3's PREVIEW hybrid: the FN-DSA-512 verifying key as `fn-dsa`
     /// 0.4.0 encodes it (897) ‖ the Ed25519 public key (32) —
     /// [`ALG_FNDSA512_PREVIEW_ED25519`].
-    FnDsa512PreviewEd25519(#[serde(with = "raw_array")] Box<[u8; FNDSA512_ED25519_KEY_LEN]>),
+    FnDsa512PreviewEd25519(
+        #[serde(with = "raw_array")] Box<[u8; FNDSA512_PREVIEW_ED25519_KEY_LEN]>,
+    ),
 }
 
 impl PublicKey {
@@ -387,9 +389,9 @@ impl PublicKey {
         alg: &str,
         pq: &[u8],
         ed25519: &[u8; ED25519_KEY_LEN],
-    ) -> Result<PublicKey, KeyParseError> {
+    ) -> Result<PublicKey, ParseKeyError> {
         let row = row_of(alg)?;
-        (row.from_raw)(&[pq, &ed25519[..]].concat()).ok_or(KeyParseError::BadLength)
+        (row.from_raw)(&[pq, &ed25519[..]].concat()).ok_or(ParseKeyError::BadLength)
     }
 
     /// The [`SIG_ALGS`] row this key signs under — the whole row, whose `tag`
@@ -423,9 +425,9 @@ impl PublicKey {
     /// `parse("mldsa65-ed25519", "zz")` is `BadHex`; a length test hoisted
     /// ahead of the decode would flip that last row, which is what
     /// `public_key_surface` watches.
-    pub fn parse(alg: &str, hex: &str) -> Result<PublicKey, KeyParseError> {
+    pub fn parse(alg: &str, hex: &str) -> Result<PublicKey, ParseKeyError> {
         let row = row_of(alg)?;
-        let bytes = hex_decode(hex).ok_or(KeyParseError::BadHex)?;
+        let bytes = hex_decode(hex).ok_or(ParseKeyError::BadHex)?;
         // The row decides the length, by its own CHECKED conversion: the row
         // is what says which variant these bytes are, so there is no second
         // match on `alg` and no unreachable catch-all. A row whose `from_raw`
@@ -433,7 +435,7 @@ impl PublicKey {
         // panic on a length the caller chose; that agreement is the AUTH-2.92
         // assertion's, and adding a row (AUTH-2.91) cannot make a hostile
         // entry panic here while it is out.
-        (row.from_raw)(&bytes).ok_or(KeyParseError::BadLength)
+        (row.from_raw)(&bytes).ok_or(ParseKeyError::BadLength)
     }
 }
 
@@ -456,7 +458,7 @@ impl fmt::Debug for PublicKey {
 /// [`PublicKey::parse`]'s and [`PublicKey::from_halves`]' rejection
 /// (AUTH-1.1, AUTH-1.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum KeyParseError {
+pub enum ParseKeyError {
     /// The alg token is absent from [`ALGS`].
     UnknownAlg,
     /// The hex argument does not decode.
@@ -466,20 +468,20 @@ pub enum KeyParseError {
     BadLength,
 }
 
-/// Prose, never a second wire vocabulary: a `KeyParseError` reaches no wire.
+/// Prose, never a second wire vocabulary: a `ParseKeyError` reaches no wire.
 /// `parse_enroll` answers `PayloadError::BadRecord` for every one of these,
 /// and that is the fault a consumer renders (AUTH-1.28).
-impl fmt::Display for KeyParseError {
+impl fmt::Display for ParseKeyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            KeyParseError::UnknownAlg => "alg token is absent from ALGS",
-            KeyParseError::BadHex => "key hex does not decode",
-            KeyParseError::BadLength => "key bytes are not the ALGS row's raw length",
+            ParseKeyError::UnknownAlg => "alg token is absent from ALGS",
+            ParseKeyError::BadHex => "key hex does not decode",
+            ParseKeyError::BadLength => "key bytes are not the ALGS row's raw length",
         })
     }
 }
 
-impl std::error::Error for KeyParseError {}
+impl std::error::Error for ParseKeyError {}
 
 /// The algorithm-agnostic identity of a key (AUTH-1.7):
 /// `SHA-256(framed(KEY_TAG, [alg, raw]))` (AUTH-1.8). A FOLD INPUT, not

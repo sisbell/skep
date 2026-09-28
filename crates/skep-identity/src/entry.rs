@@ -337,9 +337,9 @@ mod tests {
             ]
             .concat()
         );
-        let a = addr(&[1, 0, 1, 0, 1, 0, 1, 1]);
+        let element = addr(&[1, 0, 1, 0, 1, 0, 1, 1]);
         assert_eq!(
-            slot_bytes(EntrySlot::Addrs(std::slice::from_ref(&a))),
+            slot_bytes(EntrySlot::Addrs(std::slice::from_ref(&element))),
             [&[0x01u8, 0, 0, 0, 0, 0, 0, 0, 1][..], &[0, 0, 0, 15][..], b"1.0.1.0.1.0.1.1"].concat()
         );
         // …and at TWO elements, in the order given: DESCENDING both in address
@@ -391,7 +391,7 @@ mod tests {
         // the body lays out the type slot first whatever order they are named
         // in, and a builder that wrote them in any other order spells other
         // bytes here.
-        let (ty, from) = ([a], [addr(&[1, 0, 1])]);
+        let (ty, from) = ([element], [addr(&[1, 0, 1])]);
         let empty = EntrySlot::Addrs(&[]);
         let slots =
             LinkSlots { from: EntrySlot::Addrs(&from), to: empty, ty: EntrySlot::Addrs(&ty) };
@@ -427,7 +427,7 @@ mod tests {
             &body,
         );
         let board = board_bytes(&term);
-        let mut expected = b"skep-entry-v1".to_vec();
+        let mut want = b"skep-entry-v1".to_vec();
         for m in [
             &b"mldsa65-ed25519"[..],
             &board[..],
@@ -436,9 +436,9 @@ mod tests {
             b"insert",
             b"B",
         ] {
-            expected.extend_from_slice(&(m.len() as u32).to_be_bytes());
-            expected.extend_from_slice(m);
+            want.extend_from_slice(&(m.len() as u32).to_be_bytes());
+            want.extend_from_slice(m);
         }
-        assert_eq!(frame, expected);
+        assert_eq!(frame, want);
     }
 }

@@ -30,7 +30,7 @@ fn the_fold_sits_on_top_and_entry_and_write_types_are_leaves() {
     let mut files = Vec::new();
     rust_files(&src, &mut files);
     files.sort();
-    let modules: BTreeSet<String> = files.iter().filter_map(|f| home_of(&src, f)).collect();
+    let modules: BTreeSet<String> = files.iter().filter_map(|f| module_of(&src, f)).collect();
     let stated = LEAVES.iter().flat_map(|(leaf, names)| std::iter::once(leaf).chain(names.iter()));
     for module in std::iter::once(&ON_TOP).chain(stated) {
         assert!(
@@ -42,7 +42,7 @@ fn the_fold_sits_on_top_and_entry_and_write_types_are_leaves() {
     let mut edges: BTreeMap<(String, String), String> = BTreeMap::new();
     let mut faults = Vec::new();
     for file in &files {
-        let Some(home) = home_of(&src, file) else { continue };
+        let Some(module) = module_of(&src, file) else { continue };
         if file.file_name().is_some_and(|name| name == "tests.rs") {
             continue;
         }
@@ -70,8 +70,8 @@ fn the_fold_sits_on_top_and_entry_and_write_types_are_leaves() {
             };
             match from_root.first() {
                 Some(&to) if modules.contains(to) => {
-                    if to != home {
-                        let key = (home.clone(), to.to_string());
+                    if to != module {
+                        let key = (module.clone(), to.to_string());
                         edges.entry(key).or_insert(format!("src/{path}:{line}"));
                     }
                 }
@@ -243,7 +243,7 @@ fn after_test_module(text: &str) -> Option<usize> {
 /// The top-level module a `src/` file belongs to — `src/entry.rs`,
 /// `src/entry/mod.rs` and `src/entry/row.rs` alike are `entry` — and `None`
 /// for the root, `lib.rs`.
-fn home_of(src: &Path, file: &Path) -> Option<String> {
+fn module_of(src: &Path, file: &Path) -> Option<String> {
     let first = file.strip_prefix(src).ok()?.iter().next()?.to_string_lossy().into_owned();
     match first.strip_suffix(".rs") {
         Some("lib") => None,

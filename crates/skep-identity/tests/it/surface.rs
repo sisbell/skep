@@ -12,11 +12,10 @@ use crate::common;
 use common::{addr, fp, key, ACCT_A};
 use sha2::{Digest, Sha256};
 use skep_identity::{
-    framed, CredentialKind, Enrollment, Fingerprint, IdentityState, Inert,
-    KeyParseError, LabelError, PayloadError, PublicKey, SigAlgRow, ALGS,
-    ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519, ENTRY_TAG, FNDSA512_ED25519_KEY_LEN,
-    KEY_TAG, MAX_RECORD_BYTES, MLDSA65_ED25519_KEY_LEN, NODE_HELLO_TAG, SESSION_TAG,
-    SESSION_TAG_V2, SIG_ALGS, TAGS,
+    framed, CredentialKind, Enrollment, Fingerprint, IdentityState, Inert, LabelError,
+    ParseKeyError, PayloadError, PublicKey, SigAlgRow, ALGS, ALG_FNDSA512_PREVIEW_ED25519,
+    ALG_MLDSA65_ED25519, ENTRY_TAG, FNDSA512_PREVIEW_ED25519_KEY_LEN, KEY_TAG, MAX_RECORD_BYTES,
+    MLDSA65_ED25519_KEY_LEN, NODE_HELLO_TAG, SESSION_TAG, SESSION_TAG_V2, SIG_ALGS, TAGS,
 };
 
 /// AUTH-1.18/AUTH-1.21 — the record cap's VALUE, not merely its name: 128 KiB,
@@ -115,7 +114,7 @@ fn algs_and_arms_agree_both_directions() {
         for wrong in [row.raw_len - 1, row.raw_len + 1] {
             assert_eq!(
                 PublicKey::parse(row.token, &"00".repeat(wrong)),
-                Err(KeyParseError::BadLength),
+                Err(ParseKeyError::BadLength),
                 "{}: {wrong} bytes must not parse — raw_len is {}",
                 row.token,
                 row.raw_len
@@ -126,7 +125,7 @@ fn algs_and_arms_agree_both_directions() {
     // ADDED HERE beside its ALGS row (AUTH-2.91's one-edit-plus-assertion).
     let arms: &[PublicKey] = &[
         PublicKey::MlDsa65Ed25519(Box::new([0u8; MLDSA65_ED25519_KEY_LEN])),
-        PublicKey::FnDsa512PreviewEd25519(Box::new([0u8; FNDSA512_ED25519_KEY_LEN])),
+        PublicKey::FnDsa512PreviewEd25519(Box::new([0u8; FNDSA512_PREVIEW_ED25519_KEY_LEN])),
     ];
     assert_eq!(arms.len(), ALGS.len(), "arm count and table row count differ");
     for arm in arms {
@@ -153,7 +152,7 @@ fn algs_and_arms_agree_both_directions() {
     for deleted_or_reserved in ["ed25519", "fndsa512-ed25519"] {
         assert_eq!(
             PublicKey::parse(deleted_or_reserved, &"00".repeat(32)),
-            Err(KeyParseError::UnknownAlg),
+            Err(ParseKeyError::UnknownAlg),
             "{deleted_or_reserved} names no ALGS row"
         );
     }
@@ -175,11 +174,11 @@ fn algs_and_arms_agree_both_directions() {
 #[test]
 fn a_rows_token_admits_its_own_width_and_never_another_rows() {
     for named in SIG_ALGS {
-        for width_of in SIG_ALGS {
-            let parsed = PublicKey::parse(named.token, &"00".repeat(width_of.key_len()));
+        for sized in SIG_ALGS {
+            let parsed = PublicKey::parse(named.token, &"00".repeat(sized.key_len()));
             let composed =
-                PublicKey::from_halves(named.token, &vec![0u8; width_of.pq_key_len], &[0u8; 32]);
-            if named == width_of {
+                PublicKey::from_halves(named.token, &vec![0u8; sized.pq_key_len], &[0u8; 32]);
+            if named == sized {
                 assert_eq!(
                     parsed.map(|k| k.alg()),
                     Ok(named.token),
@@ -195,19 +194,19 @@ fn a_rows_token_admits_its_own_width_and_never_another_rows() {
             } else {
                 assert_eq!(
                     parsed,
-                    Err(KeyParseError::BadLength),
+                    Err(ParseKeyError::BadLength),
                     "parse: {} over {}'s {} raw bytes",
                     named.token,
-                    width_of.token,
-                    width_of.key_len()
+                    sized.token,
+                    sized.key_len()
                 );
                 assert_eq!(
                     composed,
-                    Err(KeyParseError::BadLength),
+                    Err(ParseKeyError::BadLength),
                     "from_halves: {} over {}'s {}-byte post-quantum half",
                     named.token,
-                    width_of.token,
-                    width_of.pq_key_len
+                    sized.token,
+                    sized.pq_key_len
                 );
             }
         }
@@ -229,8 +228,8 @@ fn a_rows_token_admits_its_own_width_and_never_another_rows() {
 #[test]
 fn sig_algs_and_algs_agree_and_the_pins_are_the_ruled_widths() {
     for row in SIG_ALGS {
-        let alg = ALGS.iter().find(|a| a.token == row.token).expect("a SIG_ALGS token is an ALGS row");
-        assert_eq!(alg.raw_len, row.key_len(), "{}: the row's key width is its ALGS raw_len", row.token);
+        let alg_row = ALGS.iter().find(|a| a.token == row.token).expect("a SIG_ALGS token is an ALGS row");
+        assert_eq!(alg_row.raw_len, row.key_len(), "{}: the row's key width is its ALGS raw_len", row.token);
         assert_ne!(row.tag, 0, "tag 0 is the empty slot");
         assert_ne!(row.tag, 2, "tag 2 is reserved for the final FIPS 206");
         let token_row = SigAlgRow::of_token(row.token);
@@ -264,7 +263,7 @@ fn sig_algs_and_algs_agree_and_the_pins_are_the_ruled_widths() {
     assert_eq!(tag1.key_len(), MLDSA65_ED25519_KEY_LEN);
     let tag3 = SigAlgRow::of_token(ALG_FNDSA512_PREVIEW_ED25519).unwrap();
     assert_eq!((tag3.tag, tag3.key_len(), tag3.sig_len(), tag3.pq_sig_len), (3, 929, 730, 666));
-    assert_eq!(tag3.key_len(), FNDSA512_ED25519_KEY_LEN);
+    assert_eq!(tag3.key_len(), FNDSA512_PREVIEW_ED25519_KEY_LEN);
     assert!(ALG_FNDSA512_PREVIEW_ED25519.contains("preview"), "the preview says so in its token");
     // A hybrid's Ed25519 half is its LAST 32 raw bytes, the PQ half everything
     // before them (the KEY PIN).
@@ -298,7 +297,7 @@ fn both_token_lookups_admit_exactly_the_row_tokens() {
         assert!(SigAlgRow::of_token(token).is_some(), "of_token({token:?})");
         assert_eq!(
             PublicKey::parse(token, ""),
-            Err(KeyParseError::BadLength),
+            Err(ParseKeyError::BadLength),
             "parse({token:?}, \"\")"
         );
     }
@@ -320,7 +319,7 @@ fn both_token_lookups_admit_exactly_the_row_tokens() {
         assert_eq!(SigAlgRow::of_token(near_miss), None, "of_token({near_miss:?})");
         assert_eq!(
             PublicKey::parse(near_miss, ""),
-            Err(KeyParseError::UnknownAlg),
+            Err(ParseKeyError::UnknownAlg),
             "parse({near_miss:?}, \"\")"
         );
     }
@@ -348,14 +347,14 @@ fn a_key_composed_from_its_halves_reads_back_the_same_halves() {
         assert_eq!(PublicKey::parse(row.token, &hex), Ok(composed), "{}", row.token);
         assert_eq!(
             PublicKey::from_halves(row.token, &pq[1..], ed25519),
-            Err(KeyParseError::BadLength),
+            Err(ParseKeyError::BadLength),
             "{}: a post-quantum half one byte short",
             row.token
         );
     }
     assert_eq!(
         PublicKey::from_halves("ed25519", &[], &[0; 32]),
-        Err(KeyParseError::UnknownAlg),
+        Err(ParseKeyError::UnknownAlg),
         "the deleted classical token names no row, whatever the halves"
     );
 }
@@ -396,24 +395,24 @@ fn public_key_surface() {
     );
     assert!(PublicKey::parse("mldsa65-ed25519", &"ff".repeat(1984)).is_ok());
 
-    assert_eq!(PublicKey::parse("rsa", &key_hex), Err(KeyParseError::UnknownAlg));
+    assert_eq!(PublicKey::parse("rsa", &key_hex), Err(ParseKeyError::UnknownAlg));
     // The deleted classical token names no row (AUTH-1.5): `UnknownAlg`, as
     // any unadmitted token, whatever the key.
-    assert_eq!(PublicKey::parse("ed25519", &"ab".repeat(32)), Err(KeyParseError::UnknownAlg));
-    assert_eq!(PublicKey::parse("mldsa65-ed25519", "zz"), Err(KeyParseError::BadHex));
+    assert_eq!(PublicKey::parse("ed25519", &"ab".repeat(32)), Err(ParseKeyError::UnknownAlg));
+    assert_eq!(PublicKey::parse("mldsa65-ed25519", "zz"), Err(ParseKeyError::BadHex));
     assert_eq!(
         PublicKey::parse("mldsa65-ed25519", &key_hex[..key_hex.len() - 1]),
-        Err(KeyParseError::BadHex)
+        Err(ParseKeyError::BadHex)
     );
     assert_eq!(
         PublicKey::parse("mldsa65-ed25519", &key_hex[..key_hex.len() - 2]),
-        Err(KeyParseError::BadLength)
+        Err(ParseKeyError::BadLength)
     );
 
-    assert_eq!(PublicKey::parse(&key_hex, ALG_MLDSA65_ED25519), Err(KeyParseError::UnknownAlg));
+    assert_eq!(PublicKey::parse(&key_hex, ALG_MLDSA65_ED25519), Err(ParseKeyError::UnknownAlg));
     assert_eq!(
         PublicKey::parse(ALG_MLDSA65_ED25519, ALG_MLDSA65_ED25519),
-        Err(KeyParseError::BadHex)
+        Err(ParseKeyError::BadHex)
     );
 }
 
@@ -579,7 +578,7 @@ fn error_types_lift_into_dyn_error() {
     }
     // Each carries its own message through the erasure.
     let boxed = lift(PublicKey::parse("rsa", "00").expect_err("unknown alg"));
-    assert_eq!(boxed.to_string(), KeyParseError::UnknownAlg.to_string());
+    assert_eq!(boxed.to_string(), ParseKeyError::UnknownAlg.to_string());
     let boxed = lift(Enrollment::new(key(1), false, Some("a\nb".to_owned())).expect_err("newline"));
     assert_eq!(boxed.to_string(), LabelError::Newline.to_string());
     let boxed = lift(PayloadError::DuplicateKey(4));
@@ -619,7 +618,7 @@ fn vocabulary_types_are_usable_as_map_keys() {
     assert_eq!(faults.len(), 2);
     let kinds = HashSet::from([CredentialKind::Enroll, CredentialKind::Claim]);
     assert_eq!(kinds.len(), 2);
-    let key_faults = HashSet::from([KeyParseError::BadHex, KeyParseError::UnknownAlg]);
+    let key_faults = HashSet::from([ParseKeyError::BadHex, ParseKeyError::UnknownAlg]);
     assert_eq!(key_faults.len(), 2);
     // `LabelError` has two variants (AUTH-1.23), so a set over it holds at
     // most two rows.

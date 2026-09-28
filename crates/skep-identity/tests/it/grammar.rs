@@ -343,7 +343,7 @@ fn a_sig_is_admitted_only_in_its_canonical_escaping() {
 /// variant; `fndsa512-ed25519`, tag 2's RESERVED token with no row yet) and a
 /// `key` of the wrong hex length are each `bad_record` ⇒ whole record inert
 /// (AUTH-2.9, AUTH-2.91). The classical row's deletion makes `"alg":"ed25519"`
-/// a syntax fault at the fold — a record naming it enrols nothing, whatever
+/// a syntax fault at the fold — a record naming it enrolls nothing, whatever
 /// its key — which is the one place that deletion is pinned as a VERDICT.
 #[test]
 fn an_unadmitted_alg_or_wrong_hex_length_is_bad_record() {
@@ -506,7 +506,7 @@ fn a_non_json_body_is_bad_record() {
 #[test]
 fn a_nesting_bomb_at_the_record_cap_is_bad_record() {
     const WORKER_STACK: usize = 2 * 1024 * 1024;
-    let parses = std::thread::Builder::new().stack_size(WORKER_STACK).spawn(|| {
+    let worker = std::thread::Builder::new().stack_size(WORKER_STACK).spawn(|| {
         for (prefix, opener) in [
             ("", "["),
             ("", r#"{"a":"#),
@@ -521,7 +521,7 @@ fn a_nesting_bomb_at_the_record_cap_is_bad_record() {
             assert_eq!(err_retire(body.as_bytes()), PayloadError::BadRecord, "{prefix}{opener}…");
         }
     });
-    if let Err(panic) = parses.expect("a thread to parse on").join() {
+    if let Err(panic) = worker.expect("a thread to parse on").join() {
         std::panic::resume_unwind(panic);
     }
 }

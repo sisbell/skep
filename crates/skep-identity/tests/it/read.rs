@@ -750,7 +750,7 @@ const CAP_SIZED_ENTRIES: u32 = 32;
 /// `,"label":"…"` wrapper is 11 bytes (AUTH-2.130's canonical spelling), so
 /// the widest label the domain admits — 128 bytes (AUTH-1.24) — adds 139.
 const LABEL_WRAPPER: usize = 11;
-const WIDEST_LABEL: usize = 128 + LABEL_WRAPPER;
+const MAX_PAD_PER_LABEL: usize = 128 + LABEL_WRAPPER;
 
 /// An enrollment record of exactly `MAX_RECORD_BYTES + over` bytes:
 /// [`CAP_SIZED_ENTRIES`] key entries, the first carrying labels sized to land
@@ -772,7 +772,7 @@ fn cap_sized_enroll_payload(over: usize) -> Vec<u8> {
     );
     let mut pad = MAX_RECORD_BYTES - base_len + over;
     assert!(
-        pad <= entries.len() * WIDEST_LABEL,
+        pad <= entries.len() * MAX_PAD_PER_LABEL,
         "fixture arithmetic: {pad} bytes of padding do not fit in {} labels of at most 128 bytes",
         entries.len()
     );
@@ -781,13 +781,13 @@ fn cap_sized_enroll_payload(over: usize) -> Vec<u8> {
     // cannot be spelled — hold one label back so the last two share it).
     let mut i = 0;
     while pad > 0 {
-        let take = if pad <= WIDEST_LABEL {
+        let take = if pad <= MAX_PAD_PER_LABEL {
             pad
-        } else if pad - WIDEST_LABEL <= LABEL_WRAPPER {
+        } else if pad - MAX_PAD_PER_LABEL <= LABEL_WRAPPER {
             // Split the last two labels so neither is under 1 byte.
             pad - (LABEL_WRAPPER + 1)
         } else {
-            WIDEST_LABEL
+            MAX_PAD_PER_LABEL
         };
         assert!(take > LABEL_WRAPPER, "a label adds at least {} bytes", LABEL_WRAPPER + 1);
         entries[i] = Enrollment::new(wide_key(i as u32), false, Some("x".repeat(take - LABEL_WRAPPER)))

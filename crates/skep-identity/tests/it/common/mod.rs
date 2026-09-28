@@ -13,8 +13,7 @@ use sha2::{Digest, Sha256};
 use skep_address::{is_prefix, subtree_of, validate, Address, Nat, Span, Tumbler};
 use skep_identity::{
     encode_enroll, encode_retire, Effect, Enrollment, Fingerprint, FoldCtx, IdentityState,
-    LinkDeposit, Owner, PublicKey, TypeAddrs, Values, Verdict, FNDSA512_ED25519_KEY_LEN,
-    MLDSA65_ED25519_KEY_LEN,
+    LinkDeposit, Owner, PublicKey, TypeAddrs, Values, Verdict,
 };
 
 // ---------------------------------------------------------------- builders
@@ -369,17 +368,13 @@ pub fn expand_seed<const N: usize>(seed: &[u8; 32]) -> Box<[u8; N]> {
 }
 
 /// The key of `kind` a 32-byte seed names: the seed expanded to the row's
-/// raw width — the post-quantum half's bytes then the Ed25519 half's, as the
-/// KEY PIN orders them, no half of it a point or a lattice key anything here
-/// decodes (AUTH-1.4).
+/// raw width, which the arm's own array type fixes — the post-quantum half's
+/// bytes then the Ed25519 half's, as the KEY PIN orders them, no half of it a
+/// point or a lattice key anything here decodes (AUTH-1.4).
 pub fn key_from_seed(kind: KeyKind, seed: [u8; 32]) -> PublicKey {
     match kind {
-        KeyKind::MlDsa65Ed25519 => {
-            PublicKey::MlDsa65Ed25519(expand_seed::<MLDSA65_ED25519_KEY_LEN>(&seed))
-        }
-        KeyKind::FnDsa512PreviewEd25519 => {
-            PublicKey::FnDsa512PreviewEd25519(expand_seed::<FNDSA512_ED25519_KEY_LEN>(&seed))
-        }
+        KeyKind::MlDsa65Ed25519 => PublicKey::MlDsa65Ed25519(expand_seed(&seed)),
+        KeyKind::FnDsa512PreviewEd25519 => PublicKey::FnDsa512PreviewEd25519(expand_seed(&seed)),
     }
 }
 

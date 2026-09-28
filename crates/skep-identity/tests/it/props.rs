@@ -38,16 +38,16 @@ fn enrollments() -> impl Strategy<Value = Vec<Enrollment>> {
         (any::<[u8; 32]>(), 0..2u8, any::<bool>(), prop::option::of(".{1,128}")),
         1..8,
     )
-    .prop_map(|raws| {
+    .prop_map(|draws| {
         let mut out: Vec<Enrollment> = Vec::new();
-        for (seed, kind, anchor, label) in raws {
+        for (seed, kind, anchor, label) in draws {
             let key = key_from_seed(KeyKind::from_draw(kind), seed);
             // One entry per key: a record repeating a fingerprint is
             // DuplicateKey (AUTH-2.15), outside the record domain.
             if out.iter().any(|e| e.key == key) {
                 continue;
             }
-            let label = label.map(|l| within_label_bytes(&l));
+            let label = label.map(|label| cut_to_label_bound(&label));
             out.push(Enrollment::new(key, anchor, label).expect("generator labels are in the domain"));
         }
         out
@@ -60,7 +60,7 @@ fn enrollments() -> impl Strategy<Value = Vec<Enrollment>> {
 /// which may run to 512 bytes over four-byte scalars. Never empty: the
 /// generator draws at least one character and the first character is at most
 /// four bytes.
-fn within_label_bytes(label: &str) -> String {
+fn cut_to_label_bound(label: &str) -> String {
     let mut end = label.len().min(128);
     while !label.is_char_boundary(end) {
         end -= 1;
@@ -72,9 +72,9 @@ fn within_label_bytes(label: &str) -> String {
 /// domain, the fingerprints of keys of every row.
 fn retire_fps() -> impl Strategy<Value = Vec<Fingerprint>> {
     prop::collection::vec((any::<[u8; 32]>(), 0..2u8), 1..8)
-        .prop_map(|raws| {
+        .prop_map(|draws| {
             let mut out: Vec<Fingerprint> = Vec::new();
-            for (seed, kind) in raws {
+            for (seed, kind) in draws {
                 let f = Fingerprint::of(&key_from_seed(KeyKind::from_draw(kind), seed));
                 if !out.contains(&f) {
                     out.push(f);
@@ -191,7 +191,7 @@ impl ActKind {
 
 /// One scripted deposit, pre-materialization. Each enrolled key and each
 /// retired fingerprint names its `ALGS` row beside its index, so a stream
-/// enrols and retires keys of every row (the two hybrid arms), and a
+/// enrolls and retires keys of every row (the two hybrid arms), and a
 /// retirement drawn at an enrolled key's row and index names that key.
 #[derive(Debug, Clone)]
 struct Act {
@@ -199,7 +199,7 @@ struct Act {
     subject_index: usize,
     home_index: usize,
     enroll_entries: Vec<(KeyKind, u8, bool)>,
-    retire_indices: Vec<(KeyKind, u8)>,
+    retire_entries: Vec<(KeyKind, u8)>,
 }
 
 const ACCOUNTS: [&[u32]; 5] = [CLAIMANT, ORG, NESTED, ACCT_A, ACCT_B];
@@ -230,7 +230,7 @@ fn act_strategy() -> impl Strategy<Value = Act> {
         prop::collection::vec((0..2u8, 0..6u8, any::<bool>()), 0..4),
         prop::collection::vec((0..2u8, 0..6u8), 0..4),
     )
-        .prop_map(|(kind, subject_index, home_index, enroll_entries, retire_indices)| Act {
+        .prop_map(|(kind, subject_index, home_index, enroll_entries, retire_entries)| Act {
             kind: ActKind::from_draw(kind),
             subject_index,
             home_index,
@@ -238,7 +238,7 @@ fn act_strategy() -> impl Strategy<Value = Act> {
                 .into_iter()
                 .map(|(row, i, anchor)| (KeyKind::from_draw(row), i, anchor))
                 .collect(),
-            retire_indices: retire_indices
+            retire_entries: retire_entries
                 .into_iter()
                 .map(|(row, i)| (KeyKind::from_draw(row), i))
                 .collect(),
@@ -264,7 +264,7 @@ fn materialize(fx: &mut Fixture, act: &Act) -> Case {
             fx.enroll_dep(&home, subject_comps, &enroll_payload_of(&act.enroll_entries))
         }
         ActKind::Retire => {
-            fx.retire_dep(&home, subject_comps, &retire_payload_of(&act.retire_indices))
+            fx.retire_dep(&home, subject_comps, &retire_payload_of(&act.retire_entries))
         }
         ActKind::Claim => fx.claim_dep(&home, subject_comps),
         ActKind::Noise => {

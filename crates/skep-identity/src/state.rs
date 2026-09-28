@@ -1,17 +1,18 @@
-//! `IdentityState` and the fold — AUTH-1.38–1.41, AUTH-2.56–2.60,
-//! AUTH-2.62–2.78, AUTH-2.126–2.127.
+//! `IdentityState` and the fold — AUTH-1.38–1.41, AUTH-2.35, AUTH-2.56–2.60,
+//! AUTH-2.62–2.78, AUTH-2.126–2.127 — with the fold's own readings of the
+//! seam, its ω projections and the doc-1 address, private to it.
 
 use std::sync::LazyLock;
 
 use im::OrdMap;
 use serde::{Deserialize, Serialize};
-use skep_address::{checked_inc, parent, Address};
+use skep_address::{checked_inc, parent, Address, Level};
 
 use crate::key::Fingerprint;
 use crate::keyset::{Enrolled, KeySet};
 use crate::payload::{parse_enroll, parse_retire, Enrollment, PayloadError};
 use crate::read::record_bytes;
-use crate::seam::{delegator, doc_1_of, document_account, Delegator, FoldCtx};
+use crate::seam::FoldCtx;
 use crate::shape::{single_address, CredentialKind, LinkDeposit, TypeAddrs};
 use crate::verdict::{Effect, Inert, Verdict};
 
@@ -196,9 +197,9 @@ impl IdentityState {
     /// pinned for totality. Consulted ONLY by the enroll genesis arm
     /// (AUTH-2.64). THE FIRST ARM IS CRATE-LOCAL ARITHMETIC (AUTH-2.62,
     /// RES-80): `parent()` and `inc(·, 1)` over the address, `B`'s tier read
-    /// through the EXISTING `delegator`/`owner_of` seam — NO seam method added,
-    /// no M3 query beyond the ω the registry already consults, AUTH-2.31's four
-    /// facts unmoved.
+    /// through the EXISTING `delegator` projection over the seam's `owner_of`
+    /// — NO seam method added, no M3 query beyond the ω the registry already
+    /// consults, AUTH-2.31's four facts unmoved.
     fn genesis_registry(&self, ctx: &impl FoldCtx, subject: &Address) -> Option<Address> {
         match delegator(ctx, subject)? {
             Delegator::Account(d) => {
@@ -586,6 +587,74 @@ impl IdentityState {
     }
 }
 
+/// AUTH-2.35 — the crate's own ω projection (never re-implemented outside
+/// it): the account a document belongs to, `ctx.owner_of(doc)?.prefix`. A
+/// non-folding reader takes `owner_of(doc)?.prefix` itself.
+///
+/// The answer is whatever prefix ω resolved, at the level
+/// [`FoldCtx::owner_of`] fixes: account-level for a document under a
+/// registered account principal, node-level for one owned directly by the
+/// bootstrap principal. Every use of H in this crate is a comparison or
+/// [`doc_1_of`]'s arithmetic, both total at either level — so an arm that
+/// ever needs account-hood must ask [`FoldCtx::is_account`] (AUTH-2.33) for
+/// it and not presume it here.
+fn document_account(ctx: &impl FoldCtx, doc: &Address) -> Option<Address> {
+    ctx.owner_of(doc).map(|owner| owner.prefix)
+}
+
+/// AUTH-2.35 — the delegator classification `delegator(ctx, a)` projects to.
+#[derive(Debug)]
+enum Delegator {
+    /// The parent's owner is the bootstrap principal — the bootstrap-delegated
+    /// tier: every account one separator deep, on every board (AUTH-2.65).
+    Bootstrap,
+    /// The parent's owner is an account principal (an account delegated
+    /// BENEATH an account); carries that owner's prefix.
+    Account(Address),
+}
+
+/// AUTH-2.35 — the crate's second ω projection (private to the fold): M1
+/// `parent(a)` then `owner_of` mapped — `Bootstrap` iff that owner is the
+/// bootstrap principal, `Account(prefix)` otherwise, `None` iff the account
+/// has no parent or the parent is unowned (unreachable in practice for an
+/// address M3 admits as an account, merely total here — AUTH-2.106).
+fn delegator(ctx: &impl FoldCtx, a: &Address) -> Option<Delegator> {
+    let p = parent(a)?;
+    let owner = ctx.owner_of(&p)?;
+    Some(if owner.is_bootstrap {
+        Delegator::Bootstrap
+    } else {
+        Delegator::Account(owner.prefix)
+    })
+}
+
+/// AUTH-2.126 (RES-17) — THE DOC-1 ADDRESS: the address of `a`'s FIRST
+/// document, computed FROM THE ACCOUNT ADDRESS ALONE as address arithmetic —
+/// `inc(a, 2)` = `a·0·1` under AUTH-2.109's pinned M3 expectation (verified
+/// against M1's `inc`: `k = 2` appends one zero then a `1`) — with NO query
+/// and NO new seam method; [`FoldCtx`] still answers AUTH-2.31's four facts.
+/// The home pin (AUTH-2.127) compares credential homes against this address.
+///
+/// The operand is an ω prefix, so the level obligation this arithmetic rests
+/// on is [`FoldCtx::owner_of`]'s, stated there.
+fn doc_1_of(a: &Address) -> Address {
+    match checked_inc(a, 2) {
+        Ok(doc) => doc,
+        Err(_) => {
+            // The TA5a gate refuses k = 2 only for an Element-level operand;
+            // no conforming ω answers an element-level principal prefix
+            // (M3 registers principals at node/account prefixes). Total,
+            // never a panic (AUTH-2.57): the returned prefix is document-of
+            // nothing, so every home comparison against it refuses.
+            debug_assert!(
+                a.level() != Level::Element,
+                "doc_1_of on an element-level prefix — no conforming ctx answers one"
+            );
+            a.clone()
+        }
+    }
+}
+
 /// AUTH-2.127 (RES-17) — THE home pin, in one place: a credential link is
 /// honored only in its account's FIRST document (`doc_1_of`, AUTH-2.126).
 /// The operand is the HOME'S account, never the subject. All three arms test
@@ -623,5 +692,29 @@ fn enrolled_of(enrollment: &Enrollment) -> Enrolled {
     Enrolled {
         key: enrollment.key.clone(),
         anchor: enrollment.anchor,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::doc_1_of;
+    use skep_address::{validate, Nat, Tumbler};
+
+    fn addr(comps: &[u32]) -> skep_address::Address {
+        validate(Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty"))
+            .expect("T4-valid")
+    }
+
+    /// AUTH-2.126/AUTH-2.109 — the doc-1 form is `A·0·1` (`inc(A, 2)`).
+    #[test]
+    fn doc_1_is_account_dot_0_dot_1() {
+        assert_eq!(doc_1_of(&addr(&[1, 1, 0, 5])), addr(&[1, 1, 0, 5, 0, 1]));
+        // A nested account's first document sits under the nested prefix.
+        assert_eq!(
+            doc_1_of(&addr(&[1, 1, 0, 3, 1])),
+            addr(&[1, 1, 0, 3, 1, 0, 1])
+        );
+        // A node-level prefix (the bootstrap owner's) still answers totally.
+        assert_eq!(doc_1_of(&addr(&[1, 1])), addr(&[1, 1, 0, 1]));
     }
 }

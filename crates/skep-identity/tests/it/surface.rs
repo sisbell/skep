@@ -1,14 +1,16 @@
 //! The declared-value assertions I2 pins (AUTH-2.92 `ALGS`, AUTH-2.93
-//! `TAGS`, and AUTH-1.21's record cap), the framing byte pins, the fold
-//! token authority, the standard trait surface every consumer dispatches
-//! through, and the checkpoint-facing serde surface.
+//! `TAGS`, and AUTH-1.21's record cap), the key's own surface (AUTH-1.1–1.10:
+//! `PublicKey::parse`'s pinned refusal order, the KEY PIN's halves, the
+//! fingerprint's formula, hex and rendering), the framing byte pins, the fold
+//! token authority, and the standard trait surface every consumer dispatches
+//! through.
 
 use crate::common;
 
 use common::{addr, fp, key, ACCT_A};
 use sha2::{Digest, Sha256};
 use skep_identity::{
-    framed, CredentialKind, Enrolled, Enrollment, Fingerprint, IdentityState, Inert,
+    framed, CredentialKind, Enrollment, Fingerprint, IdentityState, Inert,
     KeyParseError, LabelError, PayloadError, PublicKey, SigAlgRow, ALGS,
     ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519, ENTRY_TAG, FNDSA512_ED25519_KEY_LEN,
     KEY_TAG, MAX_RECORD_BYTES, MLDSA65_ED25519_KEY_LEN, NODE_HELLO_TAG, SESSION_TAG,
@@ -251,6 +253,60 @@ fn a_key_composed_from_its_halves_reads_back_the_same_halves() {
     );
 }
 
+/// AUTH-1.2/AUTH-1.3/AUTH-1.4 — `PublicKey::parse` is syntax-only and
+/// case-insensitive; `to_hex` is lowercase; `alg`/`raw` read the table row —
+/// at the tag-1 row, 1,984 raw bytes and 3,968 hex.
+#[test]
+fn public_key_surface() {
+    let k = key(0xab);
+    assert_eq!(k.alg(), "mldsa65-ed25519");
+    assert_eq!(k.raw().len(), 1984);
+    let key_hex = k.to_hex();
+    assert_eq!(key_hex.len(), 3968);
+    assert_eq!(key_hex, key_hex.to_lowercase());
+
+    assert_eq!(
+        PublicKey::parse("mldsa65-ed25519", &key_hex.to_uppercase()).unwrap(),
+        k
+    );
+    assert!(PublicKey::parse("mldsa65-ed25519", &"ff".repeat(1984)).is_ok());
+
+    assert_eq!(PublicKey::parse("rsa", &key_hex), Err(KeyParseError::UnknownAlg));
+    // The deleted classical token names no row (AUTH-1.5): `UnknownAlg`, as
+    // any unadmitted token, whatever the key.
+    assert_eq!(PublicKey::parse("ed25519", &"ab".repeat(32)), Err(KeyParseError::UnknownAlg));
+    assert_eq!(PublicKey::parse("mldsa65-ed25519", "zz"), Err(KeyParseError::BadHex));
+    assert_eq!(
+        PublicKey::parse("mldsa65-ed25519", &key_hex[..key_hex.len() - 1]),
+        Err(KeyParseError::BadHex)
+    );
+    assert_eq!(
+        PublicKey::parse("mldsa65-ed25519", &key_hex[..key_hex.len() - 2]),
+        Err(KeyParseError::BadLength)
+    );
+
+    assert_eq!(PublicKey::parse(&key_hex, ALG_MLDSA65_ED25519), Err(KeyParseError::UnknownAlg));
+    assert_eq!(
+        PublicKey::parse(ALG_MLDSA65_ED25519, ALG_MLDSA65_ED25519),
+        Err(KeyParseError::BadHex)
+    );
+}
+
+/// AUTH-1.9 — `Fingerprint::to_hex`/`parse_hex`: 64 lowercase out; exactly
+/// 64 hex in, case-insensitively; `None` for anything else.
+#[test]
+fn fingerprint_hex_round_trips_and_admits_exactly_64_chars() {
+    let f = fp(9);
+    let fp_hex = f.to_hex();
+    assert_eq!(fp_hex.len(), 64);
+    assert_eq!(fp_hex, fp_hex.to_lowercase());
+    assert_eq!(Fingerprint::parse_hex(&fp_hex).unwrap(), f);
+    assert_eq!(Fingerprint::parse_hex(&fp_hex.to_uppercase()).unwrap(), f);
+    assert!(Fingerprint::parse_hex(&fp_hex[..62]).is_none());
+    assert!(Fingerprint::parse_hex(&format!("{fp_hex}00")).is_none());
+    assert!(Fingerprint::parse_hex(&format!("g{}", &fp_hex[1..])).is_none());
+}
+
 /// AUTH-2.93 — the `TAGS` assertion: every tag begins `skep-`, and no tag
 /// is a prefix of another (AUTH-1.15). With `SESSION_TAG_V2` (RES-63) the
 /// check is load-bearing: `skep-session-v1` and `skep-session-v2` share the
@@ -348,77 +404,6 @@ fn genesis_state_is_default_and_answers_empty() {
     assert!(st.key_set(&addr(ACCT_A)).is_empty());
     assert!(st.claimant().is_none());
     assert_eq!(st.keyed_accounts().count(), 0);
-}
-
-/// AUTH-1.1/AUTH-1.7/AUTH-1.29 — the checkpoint-facing value types
-/// survive a serde round trip (through a format that admits non-string map
-/// keys; the full `IdentityState` round trip rides in `fold.rs` where a
-/// populated state exists).
-#[test]
-fn value_types_survive_serde() {
-    let k = key(0x11);
-    let bytes = bincode::serialize(&k).expect("serialize PublicKey");
-    let back: PublicKey = bincode::deserialize(&bytes).expect("deserialize PublicKey");
-    assert_eq!(back, k);
-
-    let f = fp(0x22);
-    let bytes = bincode::serialize(&f).expect("serialize Fingerprint");
-    let back: Fingerprint = bincode::deserialize(&bytes).expect("deserialize Fingerprint");
-    assert_eq!(back, f);
-
-    let e = Enrolled { key: k, anchor: true };
-    let bytes = bincode::serialize(&e).expect("serialize Enrolled");
-    let back: Enrolled = bincode::deserialize(&bytes).expect("deserialize Enrolled");
-    assert_eq!(back, e);
-}
-
-/// AUTH-1.40 — the checkpointed shape, pinned as BYTES rather than as a
-/// round trip. `Enrolled` rides inside `KeySet` inside `IdentityState`, so
-/// its encoding is part of the compatibility surface that freezes with the
-/// first checkpoint a v1 board writes; a round trip agrees with itself after
-/// any field-type change and would not notice. The key opens on its arm's
-/// variant index — `0` for tag 1's `mldsa65-ed25519` since the classical
-/// arm's deletion renumbered the discriminant (free before the first served
-/// board, AUTH-2.90's clock) — then the raw key as a tuple of its row's
-/// width, no length prefix. The anchor flag is ONE byte: widening it — to an
-/// enum, an integer, a struct — moves every later field of every checkpoint
-/// written since, and this assertion is where that is discovered.
-#[test]
-fn enrolled_checkpoint_encoding_is_pinned() {
-    let k = key(0x11);
-    let e = Enrolled { key: k.clone(), anchor: true };
-
-    let mut want: Vec<u8> = Vec::new();
-    want.extend_from_slice(&0u32.to_le_bytes()); // the tag-1 arm's variant index
-    want.extend_from_slice(k.raw()); // the raw key bytes, 1,984 of them
-    want.push(1); // the anchor flag, one byte
-
-    assert_eq!(want.len(), 4 + 1984 + 1);
-    assert_eq!(bincode::serialize(&e).expect("serialize Enrolled"), want);
-}
-
-/// AUTH-1.40 — the FIRST checkpoint a v1 board writes, pinned as bytes,
-/// because that is the one the shape freezes with: the empty `sets` map's
-/// eight-byte length and `claimant`'s one-byte `None`, and no `Address`,
-/// which is why this shape can be stated here at all. NINE bytes is the
-/// claim: eight for the map's length prefix, one for the `Option`
-/// discriminant. A third field, or either field's width at empty changing —
-/// a `claimant` that stopped being an `Option`, a length prefix that is not
-/// a `u64` — moves every later byte of every checkpoint written since, and
-/// `populated_state_survives_serde` agrees with itself after all of them.
-/// What this cannot see is the two fields' ORDER, because at genesis every
-/// byte is zero; `identity_state_encodes_sets_before_claimant` is where that
-/// half is pinned, over a state that has a row to put first.
-#[test]
-fn genesis_checkpoint_encoding_is_pinned() {
-    let mut want: Vec<u8> = Vec::new();
-    want.extend_from_slice(&0u64.to_le_bytes()); // `sets`: an empty map
-    want.push(0); // `claimant`: None
-
-    assert_eq!(
-        bincode::serialize(&IdentityState::genesis()).expect("serialize IdentityState"),
-        want
-    );
 }
 
 /// AUTH-1.28 — `PayloadError`'s `Display` is a second ENTRY to `token()`'s

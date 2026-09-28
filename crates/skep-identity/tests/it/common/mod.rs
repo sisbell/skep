@@ -168,6 +168,11 @@ impl FoldCtx for TestCtx {
 
 // ---------------------------------------------------------------- deposits
 
+/// The type slot of an enrollment deposit — `{T_enroll}` in address form.
+pub fn enroll_ty() -> Vec<Span> {
+    vec![unit(T_ENROLL)]
+}
+
 /// An owned deposit; `as_link_deposit()` borrows it as the fold's
 /// [`LinkDeposit`].
 pub struct Dep {
@@ -453,4 +458,25 @@ pub fn claim_as(fx: &mut Fixture, st: &IdentityState, acct: &[u32]) -> IdentityS
     let (next, v) = fx.step(st, &dep);
     assert_honored(&v);
     next
+}
+
+/// `ACCT_A` seeded with an anchor key and a non-anchor key — the state the
+/// enrolled-side claims in `fold.rs` and `checkpoint.rs` start from.
+pub fn seeded(fx: &mut Fixture) -> IdentityState {
+    seed_own(
+        fx,
+        &IdentityState::genesis(),
+        ACCT_A,
+        &[(1, true), (2, false)],
+    )
+}
+
+/// The same account with the non-anchor key retired — the state the
+/// retirement-side claims in `fold.rs` and `checkpoint.rs` start from.
+pub fn seeded_then_retired(fx: &mut Fixture) -> IdentityState {
+    let st = seeded(fx);
+    let dep = fx.retire_dep(&doc1(ACCT_A), ACCT_A, &retire_payload(&[2]));
+    let (st, v) = fx.step(&st, &dep);
+    assert_honored(&v);
+    st
 }

@@ -16,16 +16,17 @@
 //! ## Composition, as built
 //!
 //! The build holds the fold BESIDE the engine, so this crate's production
-//! collaborators are all in skepd, chiefly its `auth` module; skep-mcp reaches
-//! it only from its suite, to build records and sign session payloads.
-//! `auth/fold.rs` implements [`Values`]/[`FoldCtx`] over the assembled
-//! `World`, rebuilds the [`IdentityState`] from the recovered world at every
-//! open and for every historical `key_set` read — no checkpoint carries it —
-//! from the [`LinkDeposit`]s it lifts out of the store, and advances the live
-//! state from committed deposits. `auth/policy.rs` holds `IDENTITY_TYPES` and
-//! the [`WriteTypes`] input, builds the precheck's [`LinkDeposit`] (the
-//! committed step folds that same one) and hosts `deposits_credential_link`.
-//! `auth::Mode` is derived from [`IdentityState::claimant`]. skep-engine,
+//! collaborators are all in skepd, chiefly its session layer (`auth`; the
+//! workspace's `ARCHITECTURE.md`, §The daemon); skep-mcp reaches it only from
+//! its suite, to build records and sign session payloads. skepd implements
+//! [`Values`]/[`FoldCtx`] over the assembled `World`; rebuilds the
+//! [`IdentityState`] from the recovered world at every open and for every
+//! historical `key_set` read — no checkpoint carries it — from the
+//! [`LinkDeposit`]s it lifts out of the store, and advances the live state
+//! from committed deposits; holds the ONE [`TypeAddrs`] (`IDENTITY_TYPES`)
+//! and the [`WriteTypes`] input; builds the precheck's [`LinkDeposit`] (the
+//! committed step folds that same one); hosts `deposits_credential_link`; and
+//! derives its enforcement mode from [`IdentityState::claimant`]. skep-engine,
 //! M10's `skep-febe` and skep-conformance depend on nothing here; the I2 pins
 //! ride in this crate's own `tests/it/`; no host implements [`HasIdentity`].
 //! skepd's module docs record the divergence from AUTH-2.79–2.88's
@@ -33,23 +34,32 @@
 //! card below that names the World, a checkpoint or the engine cites the
 //! SPEC's cast; this section keeps the build's.
 //!
-//! Signed ops' declarations are consumed in skepd as well. `auth/entry.rs`
-//! composes the ENTRY frame the daemon verifies, calling [`entry_frame`] over
-//! the locked snapshot's board term, the principal's account, and the op's
-//! document and [`EntryBody`]; `auth/policy.rs`'s write-path check reads the
-//! presented attestation's row off its marker tag; `auth/hybrid.rs` holds each
-//! marker tag's arithmetic over [`SIG_ALGS`]' rows and a key's two halves —
-//! composing them at keygen ([`PublicKey::from_halves`]) and reading them to
-//! verify ([`PublicKey::pq_half`], [`PublicKey::ed25519_half`]); the codec
-//! lifts a request's `attest.alg` token to its marker tag and back through
-//! [`SigAlgRow::of_token`] and [`SigAlgRow::of_tag`]; and `auth/session.rs`
-//! sizes the handshake's hybrid blob by the rows' widths. [`canonical_record`]
-//! has no caller outside this crate: it is published for the signing client
-//! and the verifier beside the table that the design record names (§4.2 (C)).
+//! Signed ops' declarations are consumed in skepd as well: it composes the
+//! ENTRY frame it verifies through [`entry_frame`], over the locked
+//! snapshot's board term, the principal's account, and the op's document and
+//! [`EntryBody`]; its write-path check reads a presented attestation's row
+//! off the marker tag, and its codec lifts a request's `attest.alg` token to
+//! that tag and back, through [`SigAlgRow::of_token`] and
+//! [`SigAlgRow::of_tag`]; it holds each marker tag's arithmetic over
+//! [`SIG_ALGS`]' rows and a key's two halves — composing them at keygen
+//! ([`PublicKey::from_halves`]) and reading them to verify
+//! ([`PublicKey::pq_half`], [`PublicKey::ed25519_half`]); and it sizes the
+//! handshake's hybrid blob by the rows' widths. [`canonical_record`] has no
+//! caller outside this crate: it is published for the signing client and the
+//! verifier beside the table that the design record names (§4.2 (C)).
+//!
+//! This section says what skepd USES, not which of its files does it: that is
+//! skepd's arrangement, and `grep -rn skep_identity crates/skepd/src` answers
+//! it however skepd is cut.
 //!
 //! ## What lives here
 //!
-//! * keys and fingerprints — [`PublicKey`] with the two HYBRID tokens
+//! One bullet per module, named first. `state` — the fold — sits on top and
+//! no module imports it; `entry` imports only `framing`, and `write_types`
+//! only `shape`, so the signed-ops frame and the write path's classes read no
+//! fold state and write none. The suite's `tidy.rs` checks all three.
+//!
+//! * `key`: keys and fingerprints — [`PublicKey`] with the two HYBRID tokens
 //!   [`ALG_MLDSA65_ED25519`] (tag 1, production) and
 //!   [`ALG_FNDSA512_PREVIEW_ED25519`] (tag 3, preview) — the key kinds are
 //!   the two hybrid rows, the classical `ed25519` row DELETED at the
@@ -57,35 +67,41 @@
 //!   [`KeyParseError`], [`ALGS`] with its row type [`AlgRow`], the marker-tag
 //!   table [`SIG_ALGS`] with [`SigAlgRow`], [`Fingerprint`] (AUTH-1.1–1.10;
 //!   signed ops);
-//! * framing and the tag set — [`Tag`], [`framed`], [`TAGS`]
-//!   (AUTH-1.11–1.17), and THE ENTRY FRAME under [`ENTRY_TAG`] —
-//!   [`entry_frame`], which spells every member from the values a signer or
-//!   verifier holds: the board term, the account and document addresses, and
-//!   an [`EntryBody`] — an op's token paired with its body, built by
-//!   [`entry_body_insert`], [`entry_body_link`] and [`entry_body_publish`]
-//!   over [`EntrySlot`]s — the bytes a publish-class entry's signature is
-//!   made over (signed ops; the design record §2.5);
-//! * the record value at one name with both directions —
-//!   [`canonical_record`] over a [`RecordEntry`]: the signer's `sig`-bearing
-//!   record and the verifier's SIG-LESS PROJECTION (the record §4.2 (C));
-//! * the credential-record constants and payload types — [`ENROLL_TYPE`],
-//!   [`RETIRE_TYPE`], [`MAX_RECORD_BYTES`], [`Enrollment`] with its refusal
-//!   [`LabelError`], [`PayloadError`] (AUTH-1.18–1.28) — with the JSON record
-//!   schemas [`parse_enroll`]/[`parse_retire`]/[`encode_enroll`]/[`encode_retire`]
-//!   (AUTH-2.15–2.19, AUTH-2.128–2.130);
-//! * the ONE pinned payload read — [`record_bytes`] (AUTH-2.3–2.5,
+//! * `framing`: framing and the tag set — [`Tag`], [`framed`], [`TAGS`]
+//!   (AUTH-1.11–1.17);
+//! * `entry`: THE ENTRY FRAME under [`ENTRY_TAG`] — [`entry_frame`], which
+//!   spells every member from the values a signer or verifier holds: the
+//!   board term, the account and document addresses, and an [`EntryBody`] —
+//!   an op's token paired with its body, built by [`entry_body_insert`],
+//!   [`entry_body_link`] and [`entry_body_publish`] over [`EntrySlot`]s — the
+//!   bytes a publish-class entry's signature is made over (signed ops; the
+//!   design record §2.5);
+//! * `payload`: the credential-record constants and payload types —
+//!   [`ENROLL_TYPE`], [`RETIRE_TYPE`], [`MAX_RECORD_BYTES`], [`Enrollment`]
+//!   with its refusal [`LabelError`], [`PayloadError`] (AUTH-1.18–1.28) —
+//!   with the JSON record schemas
+//!   [`parse_enroll`]/[`parse_retire`]/[`encode_enroll`]/[`encode_retire`]
+//!   (AUTH-2.15–2.19, AUTH-2.128–2.130), and the record value at one name
+//!   with both directions — [`canonical_record`] over a [`RecordEntry`]: the
+//!   signer's `sig`-bearing record and the verifier's SIG-LESS PROJECTION
+//!   (the record §4.2 (C));
+//! * `read`: the ONE pinned payload read — [`record_bytes`] (AUTH-2.3–2.5,
 //!   AUTH-2.36–2.45);
-//! * the key set — [`Enrolled`], [`KeySet`] (AUTH-1.29–1.37);
-//! * shape recognition — [`CredentialKind`], [`TypeAddrs`], [`LinkDeposit`],
-//!   [`single_address`] (AUTH-2.20–2.28);
-//! * the write path's type-recognition input — [`WriteTypes`]/[`TargetClass`]
-//!   /[`AuditClass`] (PUB-6.30, PUB-6.64; owner ruling D3): the grant and
-//!   audit-view classes a `nullify` is refused at, read off the fold's
-//!   recognition with `kind_of` untouched;
-//! * the fold seam — [`Values`], [`FoldCtx`], [`Owner`] (AUTH-2.29–2.35);
-//! * the fold itself — [`IdentityState`] with `classify`/`step`, [`Verdict`],
-//!   [`Effect`], [`Inert`], [`HasIdentity`] (AUTH-1.38–1.41, AUTH-2.51–2.60,
-//!   AUTH-2.62–2.78, AUTH-2.126–2.127).
+//! * `keyset`: the key set — [`Enrolled`], [`KeySet`] (AUTH-1.29–1.37);
+//! * `shape`: shape recognition — [`CredentialKind`], [`TypeAddrs`],
+//!   [`LinkDeposit`], [`single_address`] (AUTH-2.20–2.28);
+//! * `write_types`: the write path's type-recognition input —
+//!   [`WriteTypes`]/[`TargetClass`]/[`AuditClass`] (PUB-6.30, PUB-6.64; owner
+//!   ruling D3): the grant and audit-view classes a `nullify` is refused at,
+//!   read off the fold's recognition with `kind_of` untouched;
+//! * `seam`: the fold seam — [`Values`], [`FoldCtx`], [`Owner`]
+//!   (AUTH-2.29–2.34);
+//! * `verdict`: the fold's answers — [`Verdict`], [`Effect`], [`Inert`]
+//!   (AUTH-2.51–2.55);
+//! * `state`: the fold itself — [`IdentityState`] with `classify`/`step`,
+//!   [`HasIdentity`], and the fold's ω projections and doc-1 address, private
+//!   to it (AUTH-1.38–1.41, AUTH-2.35, AUTH-2.56–2.60, AUTH-2.62–2.78,
+//!   AUTH-2.126–2.127).
 //!
 //! ## In AUTH's data model, deliberately NOT in this crate
 //!
@@ -95,7 +111,7 @@
 //!   `SessionId`/`PrincipalId`; the sessions store is skepd process memory.
 //! * `deposits_credential_link` (AUTH-2.61) — "on the skepd policy surface":
 //!   it takes M10's `Op`, which AUTH-2.1's dependency set cannot name, so the
-//!   function cannot live here (skepd's `auth/policy.rs` holds it).
+//!   function cannot live here (skepd's session layer holds it).
 //! * Enforcement-mode derivation (AUTH-1.42–1.43) — a per-read formula over
 //!   the board's claim ([`IdentityState::claimant`]) plus
 //!   `AuthConfig.local_trust`, computed daemon-side with nothing stored; no

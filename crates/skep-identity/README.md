@@ -6,8 +6,8 @@ pure, deterministic, and standalone.
 Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substrate in the Project Xanadu lineage.
 
 - **Credential records** — a byte-exact grammar for enrollment and
-  retirement records (Ed25519 public keys, SHA-256 fingerprints,
-  anchor flags), with a frozen fault vocabulary.
+  retirement records (hybrid post-quantum + Ed25519 public keys,
+  SHA-256 fingerprints, anchor flags), with a frozen fault vocabulary.
 - **Key sets** — per-account enrolled/retired key state; retired
   fingerprints never re-enter (dispossession resistance is
   structural).
@@ -19,6 +19,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   [skep-address](../skep-address) types: no I/O, no clock, no
   signature verification (verification lives at the session layer),
   no engine dependency.
+- **Signed-op declarations** — the bytes a signed write's signature
+  covers (the entry frame and its members' encodings), the marker-tag
+  table of the two hybrid signature schemes, and a hybrid key's two
+  halves; declarations only — making and checking signatures is the
+  session layer's.
 - **Write-path type classes** — the credential kinds widened by the
   grants and audit-view classes, for the daemon's `nullify` refusals;
   recognition only, never fold state.

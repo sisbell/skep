@@ -8,7 +8,7 @@ use crate::common;
 use common::{fp, key};
 use skep_identity::{
     encode_enroll, encode_retire, parse_enroll, parse_retire, Enrollment, Fingerprint, LabelError,
-    PayloadError, PublicKey, ALG_MLDSA65_ED25519,
+    PayloadError,
 };
 
 fn key_hex(i: u8) -> String {
@@ -665,59 +665,4 @@ fn every_payload_error_variant_has_its_pinned_token() {
     assert_eq!(PayloadError::BadRecord.token(), "bad_record");
     assert_eq!(PayloadError::Empty.token(), "empty");
     assert_eq!(PayloadError::DuplicateKey(12).token(), "duplicate_key:12");
-}
-
-/// AUTH-1.2/AUTH-1.3/AUTH-1.4 — `PublicKey::parse` is syntax-only and
-/// case-insensitive; `to_hex` is lowercase; `alg`/`raw` read the table row —
-/// at the tag-1 row, 1,984 raw bytes and 3,968 hex.
-#[test]
-fn public_key_surface() {
-    let k = key(0xab);
-    assert_eq!(k.alg(), "mldsa65-ed25519");
-    assert_eq!(k.raw().len(), 1984);
-    let key_hex = k.to_hex();
-    assert_eq!(key_hex.len(), 3968);
-    assert_eq!(key_hex, key_hex.to_lowercase());
-
-    assert_eq!(
-        PublicKey::parse("mldsa65-ed25519", &key_hex.to_uppercase()).unwrap(),
-        k
-    );
-    assert!(PublicKey::parse("mldsa65-ed25519", &"ff".repeat(1984)).is_ok());
-
-    use skep_identity::KeyParseError;
-    assert_eq!(PublicKey::parse("rsa", &key_hex), Err(KeyParseError::UnknownAlg));
-    // The deleted classical token names no row (AUTH-1.5): `UnknownAlg`, as
-    // any unadmitted token, whatever the key.
-    assert_eq!(PublicKey::parse("ed25519", &"ab".repeat(32)), Err(KeyParseError::UnknownAlg));
-    assert_eq!(PublicKey::parse("mldsa65-ed25519", "zz"), Err(KeyParseError::BadHex));
-    assert_eq!(
-        PublicKey::parse("mldsa65-ed25519", &key_hex[..key_hex.len() - 1]),
-        Err(KeyParseError::BadHex)
-    );
-    assert_eq!(
-        PublicKey::parse("mldsa65-ed25519", &key_hex[..key_hex.len() - 2]),
-        Err(KeyParseError::BadLength)
-    );
-
-    assert_eq!(PublicKey::parse(&key_hex, ALG_MLDSA65_ED25519), Err(KeyParseError::UnknownAlg));
-    assert_eq!(
-        PublicKey::parse(ALG_MLDSA65_ED25519, ALG_MLDSA65_ED25519),
-        Err(KeyParseError::BadHex)
-    );
-}
-
-/// AUTH-1.9 — `Fingerprint::to_hex`/`parse_hex`: 64 lowercase out; exactly
-/// 64 hex in, case-insensitively; `None` for anything else.
-#[test]
-fn fingerprint_hex_round_trips_and_admits_exactly_64_chars() {
-    let f = fp(9);
-    let fp_hex = f.to_hex();
-    assert_eq!(fp_hex.len(), 64);
-    assert_eq!(fp_hex, fp_hex.to_lowercase());
-    assert_eq!(Fingerprint::parse_hex(&fp_hex).unwrap(), f);
-    assert_eq!(Fingerprint::parse_hex(&fp_hex.to_uppercase()).unwrap(), f);
-    assert!(Fingerprint::parse_hex(&fp_hex[..62]).is_none());
-    assert!(Fingerprint::parse_hex(&format!("{fp_hex}00")).is_none());
-    assert!(Fingerprint::parse_hex(&format!("g{}", &fp_hex[1..])).is_none());
 }

@@ -1,4 +1,6 @@
-//! Keys and fingerprints — AUTH-1.1–1.10.
+//! Keys and fingerprints — AUTH-1.1–1.10 — and, beside `ALGS`, the
+//! marker-tag table `SIG_ALGS` (signed ops; the design record §7.3 (i)): the
+//! two tables share their tokens and widths, so one file declares both.
 
 use core::fmt;
 
@@ -158,8 +160,8 @@ pub struct AlgRow {
     /// time, so a row with no constructor does not compile, where a `parse`
     /// that had forgotten one would compile and refuse every key of the new
     /// algorithm. NOT `from_bytes`, which is the signature crate's name for
-    /// the POINT DECODE this crate never performs (AUTH-1.4; skepd's
-    /// `verifying_key`). The agreement with `raw_len` is the AUTH-2.92
+    /// the POINT DECODE this crate never performs (AUTH-1.4; skepd's session
+    /// layer performs it). The agreement with `raw_len` is the AUTH-2.92
     /// assertion's.
     pub from_raw: fn(&[u8]) -> Option<PublicKey>,
 }

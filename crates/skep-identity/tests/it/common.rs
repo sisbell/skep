@@ -4,7 +4,6 @@
 //! test placeholders — the real three are the engine's `IDENTITY_TYPES`
 //! (AUTH-2.79, open per AUTH-7.1; this crate is parametric over them).
 
-#![allow(dead_code)]
 #![allow(clippy::new_without_default)]
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -336,9 +335,6 @@ pub enum KeyKind {
 }
 
 impl KeyKind {
-    /// Every row, in `ALGS` order.
-    pub const ALL: [KeyKind; 2] = [KeyKind::MlDsa65Ed25519, KeyKind::FnDsa512PreviewEd25519];
-
     /// A strategy's `0..2` draw, mapped in ONE place.
     pub fn from_draw(n: u8) -> KeyKind {
         match n % 2 {
@@ -456,7 +452,8 @@ pub fn claim_as(fx: &mut Fixture, st: &IdentityState, acct: &[u32]) -> IdentityS
 }
 
 /// `ACCT_A` seeded with an anchor key and a non-anchor key — the state the
-/// enrolled-side claims in `fold.rs` and `checkpoint.rs` start from.
+/// enrolled-side claims in `fold.rs`, `keyset.rs` and `checkpoint.rs` start
+/// from.
 pub fn seeded(fx: &mut Fixture) -> IdentityState {
     seed_own(
         fx,
@@ -467,7 +464,7 @@ pub fn seeded(fx: &mut Fixture) -> IdentityState {
 }
 
 /// The same account with the non-anchor key retired — the state the
-/// retirement-side claims in `fold.rs` and `checkpoint.rs` start from.
+/// retirement-side claims in `keyset.rs` and `checkpoint.rs` start from.
 pub fn seeded_then_retired(fx: &mut Fixture) -> IdentityState {
     let st = seeded(fx);
     let dep = fx.retire_dep(&doc1(ACCT_A), ACCT_A, &retire_payload(&[2]));

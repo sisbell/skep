@@ -4,18 +4,20 @@
 //! refusal order, the row deciding a key's variant, the two token lookups'
 //! one token set, the KEY PIN's halves, the key's width, the fingerprint's
 //! formula, hex and rendering), the framing byte pins, the fold token
-//! authority, and the standard trait surface every consumer dispatches
-//! through.
+//! authority, the standard trait surface every consumer dispatches through,
+//! and the items published for readers outside the workspace.
 
 use crate::common;
 
-use common::{addr, fp, key, ACCT_A};
+use common::{addr, fp, key, TestCtx, ACCT_A};
 use sha2::{Digest, Sha256};
 use skep_identity::{
-    framed, CredentialKind, Enrollment, Fingerprint, IdentityState, Inert, LabelError,
+    canonical_record, framed, parse_enroll, parse_retire, record_bytes, single_address, AlgRow,
+    CredentialKind, Enrollment, Fingerprint, HasIdentity, IdentityState, Inert, LabelError,
     ParseKeyError, PayloadError, PublicKey, SigAlgRow, ALGS, ALG_FNDSA512_PREVIEW_ED25519,
-    ALG_MLDSA65_ED25519, ENTRY_TAG, FNDSA512_PREVIEW_ED25519_KEY_LEN, KEY_TAG, MAX_RECORD_BYTES,
-    MLDSA65_ED25519_KEY_LEN, NODE_HELLO_TAG, SESSION_TAG, SESSION_TAG_V2, SIG_ALGS, TAGS,
+    ALG_MLDSA65_ED25519, ED25519_KEY_LEN, ENROLL_TYPE, ENTRY_TAG, FNDSA512_PREVIEW_ED25519_KEY_LEN,
+    FNDSA512_PREVIEW_KEY_LEN, KEY_TAG, MAX_RECORD_BYTES, MLDSA65_ED25519_KEY_LEN, MLDSA65_KEY_LEN,
+    NODE_HELLO_TAG, RETIRE_TYPE, SESSION_TAG, SESSION_TAG_V2, SIG_ALGS, TAGS,
 };
 
 /// AUTH-1.18/AUTH-1.21 — the record cap's VALUE, not merely its name: 128 KiB,
@@ -660,4 +662,33 @@ fn tag_is_copy_and_debugs_as_its_bytes() {
         assert_eq!(framed(*t, &[]), t.as_bytes());
     }
     assert_eq!(format!("{KEY_TAG:?}"), "Tag(skep-key-v1)");
+}
+
+/// The items this crate publishes for readers OUTSIDE the workspace — the ones
+/// `lib.rs`'s "Composition, as built" lists with the rule that declares each —
+/// named here, from outside the crate. No other crate of the workspace names
+/// any of them, so a visibility audit that looks for callers finds none, and
+/// narrowing one to `pub(crate)` leaves every other build green; this one
+/// stops compiling, at the item. An item published for such a reader joins
+/// this list and that paragraph together.
+#[test]
+fn the_items_published_for_readers_outside_the_workspace_are_public() {
+    // The signing client and the verifier beside the table (the design
+    // record §4.2 (C)).
+    let _ = canonical_record::<Enrollment>(&[], None);
+    let _ = (parse_enroll(b""), parse_retire(b""));
+    // A non-folding reader, which LINKS the read (AUTH-2.37); a discovery
+    // caller, beside `kind_of` (AUTH-2.28); a host that seats the slice
+    // (AUTH-2.60); bebe (AUTH-2.118).
+    let _ = record_bytes(&TestCtx::default(), &addr(ACCT_A), &[]);
+    let _ = single_address(std::iter::empty());
+    let _: Option<&dyn HasIdentity> = None;
+    let _ = NODE_HELLO_TAG;
+    // The tables and constants the spec declares as the crate's surface
+    // (AUTH-1.5, AUTH-1.11, AUTH-1.17, AUTH-1.18), and the widths the design
+    // record declares beside them.
+    let _: &[AlgRow] = ALGS;
+    let _ = (TAGS, KEY_TAG, ENTRY_TAG, ENROLL_TYPE, RETIRE_TYPE);
+    let _ = (ED25519_KEY_LEN, MLDSA65_KEY_LEN, FNDSA512_PREVIEW_KEY_LEN);
+    let _ = (MLDSA65_ED25519_KEY_LEN, FNDSA512_PREVIEW_ED25519_KEY_LEN);
 }

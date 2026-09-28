@@ -44,20 +44,39 @@
 //! [`SIG_ALGS`]' rows and a key's two halves — composing them at keygen
 //! ([`PublicKey::from_halves`]) and reading them to verify
 //! ([`PublicKey::pq_half`], [`PublicKey::ed25519_half`]); and it sizes the
-//! handshake's hybrid blob by the rows' widths. [`canonical_record`] has no
-//! caller outside this crate: it is published for the signing client and the
-//! verifier beside the table that the design record names (§4.2 (C)).
+//! handshake's hybrid blob by the rows' widths.
 //!
 //! This section says what skepd USES, not which of its files does it: that is
 //! skepd's arrangement, and `grep -rn skep_identity crates/skepd/src` answers
 //! it however skepd is cut.
+//!
+//! The public items no other crate of this workspace names are of two kinds.
+//! [`Tag`], [`ParseKeyError`], [`LabelError`], [`PayloadError`] and
+//! [`RecordEntry`] are public because a public signature names them. Every
+//! other one is public because the spec or the design record declares it for
+//! a reader OUTSIDE the workspace, so a grep that finds no caller is no reason
+//! to narrow it: [`canonical_record`], [`parse_enroll`] and [`parse_retire`]
+//! for the signing client and the verifier beside the table, which parses a
+//! committed record and composes its sig-less projection (the design record
+//! §4.2 (C)); [`record_bytes`] for a non-folding reader, which LINKS the read
+//! rather than re-implementing it (AUTH-2.37); [`single_address`] for every
+//! discovery caller, beside [`TypeAddrs::kind_of`] (AUTH-2.28);
+//! [`HasIdentity`] for a host that seats the slice (AUTH-2.60);
+//! [`NODE_HELLO_TAG`] for bebe (AUTH-2.118); the tables and constants the
+//! spec declares as this crate's surface — [`ALGS`] and its [`AlgRow`]
+//! (AUTH-1.5), [`TAGS`], [`KEY_TAG`] and [`ENTRY_TAG`] (AUTH-1.11, AUTH-1.17),
+//! [`ENROLL_TYPE`] and [`RETIRE_TYPE`] (AUTH-1.18); and the five `*_KEY_LEN`
+//! constants the design record declares beside them (AUTH-1.5's cite). The
+//! suite's `surface.rs` names every one of them from outside the crate, so
+//! narrowing one fails the build there.
 //!
 //! ## What lives here
 //!
 //! One bullet per module, named first. `state` — the fold — sits on top and
 //! no module imports it; `entry` imports only `framing`, and `write_types`
 //! only `shape`, so the signed-ops frame and the write path's classes read no
-//! fold state and write none. The suite's `tidy.rs` checks all three.
+//! fold state and write none. The suite's `tidy.rs` checks all three, and
+//! this list against `src/`.
 //!
 //! * `key`: keys and fingerprints — [`PublicKey`] with the two HYBRID tokens
 //!   [`ALG_MLDSA65_ED25519`] (tag 1, production) and

@@ -7,6 +7,7 @@ mod common;
 mod entry;
 mod fold;
 mod grammar;
+mod keyset;
 mod props;
 mod read;
 mod surface;

@@ -121,7 +121,7 @@ pub(crate) fn push_delimited(out: &mut Vec<u8>, bytes: &[u8]) {
     out.extend_from_slice(bytes);
 }
 
-#[cfg(test)]
+#[cfg(all(test, debug_assertions))]
 mod tests {
     use super::{framed, Tag, TAGS};
 
@@ -133,7 +133,6 @@ mod tests {
     /// and domain separation would be broken for whatever it signs. Written
     /// here because only this module can hold an unlisted `Tag`, which is
     /// the first mechanism working.
-    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "AUTH-1.14")]
     fn framing_under_a_declared_but_unlisted_tag_is_refused() {

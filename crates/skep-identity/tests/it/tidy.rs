@@ -1,8 +1,8 @@
-//! THE MODULE MAP, CHECKED: the three facts `lib.rs`'s "What lives here"
-//! states about how this crate's modules name one another — `state`, the
-//! fold, is named by no other module; `entry`, the signed-ops frame, names
-//! only `framing`; and `write_types`, the write path's classes, names only
-//! `shape`.
+//! THE MODULE MAP, CHECKED: `lib.rs`'s "What lives here" — its one bullet
+//! per module, and the three facts it states about how this crate's modules
+//! name one another: `state`, the fold, is named by no other module;
+//! `entry`, the signed-ops frame, names only `framing`; and `write_types`,
+//! the write path's classes, names only `shape`.
 //!
 //! A module names a sibling by a path from the root: every `crate::…` token
 //! in a `src/` file's code, and every `super::…` token that climbs to the
@@ -98,6 +98,76 @@ fn the_fold_sits_on_top_and_entry_and_write_types_are_leaves() {
         }
     }
     assert!(faults.is_empty(), "lib.rs's module map does not hold:\n{}", faults.join("\n"));
+}
+
+/// `lib.rs`'s "What lives here" says ONE BULLET PER MODULE, NAMED FIRST —
+/// the map's own shape, which the check above takes for granted: every
+/// module has exactly one bullet there, opening on its name and a colon;
+/// every such bullet names a module; and every file under `src/` is a module
+/// `lib.rs` declares, since the compiler never reads a file no `mod` names
+/// and no build says so. Two modules under one bullet, one module across
+/// two, a module added without its bullet and a bullet a removed module
+/// leaves behind are each the map drifting from the code, and each fails
+/// here.
+#[test]
+fn every_module_is_declared_and_has_one_bullet_in_the_root_map() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    rust_files(&src, &mut files);
+    let modules: BTreeSet<String> = files.iter().filter_map(|f| module_of(&src, f)).collect();
+    let root = std::fs::read_to_string(src.join("lib.rs")).unwrap();
+    let declared: BTreeSet<&str> = root.lines().filter_map(declared_module).collect();
+    let map = root
+        .split("//! ## What lives here")
+        .nth(1)
+        .and_then(|rest| rest.split("//! ## ").next())
+        .expect("lib.rs has a \"What lives here\" section");
+    let mut bullets: BTreeMap<&str, usize> = BTreeMap::new();
+    for line in map.lines() {
+        let Some((name, rest)) = line.strip_prefix("//! * `").and_then(|l| l.split_once('`'))
+        else {
+            continue;
+        };
+        if rest.starts_with(':') {
+            *bullets.entry(name).or_default() += 1;
+        }
+    }
+    let mut faults = Vec::new();
+    for module in &modules {
+        if !declared.contains(module.as_str()) {
+            faults.push(format!(
+                "src/ holds `{module}`, which lib.rs declares no `mod` for: the compiler never \
+                 reads it"
+            ));
+        }
+        match bullets.get(module.as_str()).copied().unwrap_or(0) {
+            1 => {}
+            0 => faults.push(format!("`{module}` has no bullet")),
+            n => faults.push(format!("`{module}` has {n} bullets")),
+        }
+    }
+    for name in bullets.keys() {
+        if !modules.contains(*name) {
+            faults.push(format!(
+                "a bullet names `{name}`, which is no module of this crate"
+            ));
+        }
+    }
+    assert!(
+        faults.is_empty(),
+        "lib.rs's \"What lives here\" does not hold:\n{}",
+        faults.join("\n")
+    );
+}
+
+/// The module a line of `lib.rs` declares — `mod key;`, with or without a
+/// visibility — or `None` for any other line.
+fn declared_module(line: &str) -> Option<&str> {
+    let item = match line.strip_prefix("pub") {
+        Some(rest) => rest.split_once(' ').map_or("", |(_, item)| item),
+        None => line,
+    };
+    item.strip_prefix("mod ")?.strip_suffix(';')
 }
 
 /// A file's code as one text, so a brace group may span lines — comment

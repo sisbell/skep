@@ -264,7 +264,7 @@ pub(crate) enum AttestFault {
     /// by its bytes, so no signature can be verified over one: the shot is
     /// refused whatever it carries, the value unread. REORDER, as `withheld`
     /// is: the client re-composes without the run, or re-sends once a grant
-    /// lets it read the origin.
+    /// lets it read the run's origin.
     Withheld,
     /// A `publish`'s entry-frame body would pass
     /// `entry::MAX_SHOT_BODY_BYTES` — the runs name more value bytes than

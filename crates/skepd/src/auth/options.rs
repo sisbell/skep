@@ -132,7 +132,7 @@ impl Default for AuthOptions {
 /// fold — and the one member RE-ISSUED WHILE THE DAEMON RUNS, which is why
 /// it alone sits behind a lock. Read through [`AuthConfig::blocked_prefixes`]
 /// and replaced whole through [`AuthConfig::install_blocked`], under the
-/// credential write gate — both here, beside the cell they are the only
+/// credential write lock — both here, beside the cell they are the only
 /// doors to. And the NODE PREFIX (REG-1.69), fixed at open as `configured`
 /// is: a fresh one is a reconfigure and restart (REG-1.70), so it sits
 /// behind no lock, and every install of the list reads the one in force.
@@ -145,7 +145,7 @@ pub(crate) struct AuthConfig {
     /// that guard-taking door is the ONLY writer. The `RwLock` makes the swap
     /// of one pointer safe for readers that hold no credential lock (the
     /// handshake, the route level's `resolve`); what ORDERS an install
-    /// against the writes it ends is the credential write gate its installer
+    /// against the writes it ends is the credential write lock its installer
     /// holds, and names.
     blocked: parking_lot::RwLock<Arc<BlockedPrefixes>>,
     /// [`AuthOptions::node_prefix`], as supplied; `None` where the daemon
@@ -200,10 +200,10 @@ impl AuthConfig {
     }
 
     /// THE INSTALL (AUTH-4.70): the list REPLACED WHOLE, atomically, under
-    /// the credential write gate the caller holds and names here (AUTH-3.3)
+    /// the credential write lock the caller holds and names here (AUTH-3.3)
     /// — that install being the list's COMMIT. The guard is the obligation,
     /// not a decoration: every session-authenticated write re-resolves
-    /// under that gate, so a covered session's write that took the gate
+    /// under that lock, so a covered session's write that took the lock
     /// first lands BEFORE this install and one arriving after meets its
     /// death (AUTH-4.63's second trigger) — no `/changes` entry of a killed
     /// session carries a position after it.
@@ -354,7 +354,7 @@ mod tests {
 
     /// THE LIST IN FORCE has its two doors on the cell that holds it: a fresh
     /// config answers the empty list, and what an install under the
-    /// credential write gate puts in is what the next read answers.
+    /// credential write lock puts in is what the next read answers.
     #[test]
     fn the_list_in_force_is_read_where_it_is_installed() {
         use super::super::blocked::{BlockedEntry, BlockedIssue};

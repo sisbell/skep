@@ -9,7 +9,12 @@
 /// waiting writer blocks new readers), which is the existence proof
 /// AUTH-7.18 records — the REQUIREMENT binds, not the crate.
 ///
-/// `auth/` holds exactly this one lock, so its guards are unqualified.
+/// `auth/` has exactly one lock whose guards travel as arguments — each of
+/// its other locks guards one structure's own state and is never named in a
+/// signature — so these guards are unqualified. Where one of them leaves
+/// `auth/` and meets the write-serialization guard (`server/op.rs`), the
+/// binding carries the qualifier: `credential_lock`.
+///
 /// What the lock SCOPES is a different thing and wears a different word:
 /// the refusal rules it serializes are the GATES (`board_state_admission`'s
 /// two — the RES-26 gate once claimed, `pre_claim_gate` before — the

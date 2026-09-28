@@ -285,7 +285,7 @@ fn publish_values(port: u16, token: &str, runs: &Value) -> Option<Vec<Vec<u8>>> 
 
 /// The ENTRY frame for `frame` as `principal` would sign it on this board,
 /// or `None` where a member cannot be composed (no `H.1` yet, an
-/// unreadable origin, an op outside the three). Every address the frame
+/// unreadable run origin, an op outside the three). Every address the frame
 /// names is PARSED before it is framed, so `entry_frame` spells the address
 /// and not the string the frame happened to carry.
 pub fn entry_frame_for(port: u16, token: &str, principal: u64, frame: &Value) -> Option<Vec<u8>> {

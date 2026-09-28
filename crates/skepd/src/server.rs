@@ -108,7 +108,8 @@
 //!
 //! **The commit stream (wire v4)**: `GET /events` is a `text/event-stream`
 //! of committed log positions — one event carrying the last announced
-//! position on connect, then an event whenever the head advances.
+//! position on connect, then an event whenever a later position is
+//! announced.
 //! `write_path/` owns the stream: what a subscriber is told first and
 //! next, and the coalescing that falls out of asking "anything past what I
 //! last sent"; `Subscribers` (in `listen.rs`) owns the budget, the admission, and
@@ -777,13 +778,13 @@ impl Daemon {
 
     /// THE REISSUE, at the head of every request (AUTH-4.70): where the
     /// supply file moved, [`AuthState::reissue_blocked_prefixes`] re-reads
-    /// it and installs the new issue WHOLE under the credential write gate
+    /// it and installs the new issue WHOLE under the credential write lock
     /// — the list's commit — and the log names the list then in force. A
     /// file that cannot be read, or is not a list, installs NOTHING: the
     /// list in force stands and the refusal is logged, once.
     ///
-    /// A COMMAND, and called under NO lock: it takes the write gate, which
-    /// is why it runs here and not where the list is read.
+    /// A COMMAND, and called under NO lock: it takes the credential write
+    /// lock, which is why it runs here and not where the list is read.
     fn reissue_blocked_prefixes(&self) {
         match self.auth.reissue_blocked_prefixes() {
             None => {}

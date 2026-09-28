@@ -37,7 +37,7 @@
 //!   `attestation_required` telling that an address holds a value,
 //!   `signature` whether a guessed value is the one it holds — where the
 //!   store's source gate promises `withheld` before any existence answer
-//!   (PUB-8.4). The composer answers [`ComposeFault::UnreadableOrigin`] and
+//!   (PUB-8.4). The composer answers [`ComposeFault::UnreadableRunOrigin`] and
 //!   no more. What such a shot is OWED is the check's to decide, by asking
 //!   the store's own gates (`policy/attestation.rs`): their own refusal,
 //!   passed through UNATTESTED, where they refuse it; and
@@ -108,7 +108,7 @@ pub(super) enum ComposeFault {
     /// run (PUB-6.24) — is not the composer's to know: the check asks the
     /// store's own gates (`policy/attestation.rs`'s
     /// `refused_at_or_before_the_source_gate`).
-    UnreadableOrigin,
+    UnreadableRunOrigin,
     /// A `publish`'s body would pass [`MAX_SHOT_BODY_BYTES`].
     OverBudget,
     /// The op kind is outside the checked set [`crate::codec::in_checked_set`] states.
@@ -169,8 +169,8 @@ pub(super) fn compose(
         Op::Publish { doc, shot } => {
             let trunk = trunk_of(doc);
             // No value the principal may not read is ever read here.
-            if !every_origin_readable(world, &trunk, shot, principal) {
-                return Err(ComposeFault::UnreadableOrigin);
+            if !every_run_origin_readable(world, &trunk, shot, principal) {
+                return Err(ComposeFault::UnreadableRunOrigin);
             }
             (trunk, publish_body(world, shot)?)
         }
@@ -198,7 +198,7 @@ pub(super) fn compose(
 /// `policy/attestation.rs`'s `refused_at_or_before_the_source_gate` states.
 /// A run whose start names no document counts as unreadable: the store
 /// refuses it `bad_run`, and nothing is read to learn so.
-fn every_origin_readable(
+fn every_run_origin_readable(
     world: &World,
     trunk: &Address,
     shot: &Shot,
@@ -216,7 +216,7 @@ fn every_origin_readable(
 /// value sequence — or why it cannot be built: an address M4 holds no value
 /// at, or a body past [`MAX_SHOT_BODY_BYTES`], measured in the sequence's
 /// own layout as each value is read. PRECONDITION: the principal may read
-/// every value the shot places ([`every_origin_readable`]).
+/// every value the shot places ([`every_run_origin_readable`]).
 fn publish_body(world: &World, shot: &Shot) -> Result<EntryBody, ComposeFault> {
     let content = world.content();
     let mut values: Vec<&[u8]> = Vec::new();

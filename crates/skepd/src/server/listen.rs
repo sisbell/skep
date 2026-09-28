@@ -458,10 +458,10 @@ impl Subscribers {
 
 /// One subscriber (wire v4): write the stream head and the initial event
 /// carrying the last announced position, then follow the commit stream — a
-/// `commit` event when the head advances, a `:ka` comment on silence —
-/// until shutdown or the first failed write (a gone subscriber). Exiting
-/// drops the socket, which is the client's end-of-stream. Coalescing is
-/// inherent: the stream answers "anything past what I last sent", so a
+/// `commit` event when a later position is announced, a `:ka` comment on
+/// silence — until shutdown or the first failed write (a gone subscriber).
+/// Exiting drops the socket, which is the client's end-of-stream. Coalescing
+/// is inherent: the stream answers "anything past what I last sent", so a
 /// burst of commits is one event.
 ///
 /// The initial position comes from [`WritePath::announced`](crate::write_path::WritePath::announced) and not from

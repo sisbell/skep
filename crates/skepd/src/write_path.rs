@@ -68,7 +68,7 @@ mod sidecar;
 // The published head writer, which commits through this module's own door.
 mod head;
 
-pub(crate) use feed::{ChangesAnswer, FeedClass, Query};
+pub(crate) use feed::{ChangesAnswer, ChangesQuery, FeedClass};
 pub(crate) use head::board_term;
 
 use crate::codec::op_name;
@@ -288,7 +288,7 @@ impl WritePath {
 
     /// The data behind `GET /changes` at the requester's class — the FEED
     /// CLASS the route resolved off its one head snapshot, and the query.
-    pub fn changes(&self, class: &FeedClass<'_>, query: &Query) -> ChangesAnswer {
+    pub fn changes(&self, class: &FeedClass<'_>, query: &ChangesQuery) -> ChangesAnswer {
         self.feed.page(class, query)
     }
 
@@ -328,7 +328,7 @@ impl WritePath {
     /// card's guarantee hold for a stream's FIRST event as well as its
     /// later ones.
     pub fn announced(&self) -> Seq {
-        self.commit_stream.head()
+        self.commit_stream.announced()
     }
 
     /// Record one write's answer in the feed. What this layer decides,
@@ -621,27 +621,27 @@ pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
 
 // ── the commit stream (wire v4) ──────────────────────────────────────────
 
-/// One head + shutdown flag under a mutex, one condvar. Every committing
-/// write announces the position it committed — every commit rides
-/// [`WritePath::commit_recorded`], which announces behind the record it made,
-/// so no head advance can be missed; each subscriber blocks in
-/// [`CommitStream::next`] with the keepalive interval as its wait bound.
-/// Shutdown broadcasts on the same condvar, which is what makes closing open
-/// streams immediate rather than a poll away.
+/// The last ANNOUNCED position and the shutdown flag under a mutex, one
+/// condvar. Every committing write announces the position it committed —
+/// every commit rides [`WritePath::commit_recorded`], which announces behind
+/// the record it made, so no head advance can be missed; each subscriber
+/// blocks in [`CommitStream::next`] with the keepalive interval as its wait
+/// bound. Shutdown broadcasts on the same condvar, which is what makes
+/// closing open streams immediate rather than a poll away.
 struct CommitStream {
     state: Mutex<StreamState>,
     cond: Condvar,
 }
 
 struct StreamState {
-    head: Seq,
+    announced: Seq,
     shutdown: bool,
 }
 
 /// What a subscriber does next.
 #[derive(Debug)]
 pub(crate) enum StreamStep {
-    /// The head advanced past the subscriber's last-sent position.
+    /// A position past the subscriber's last-sent one was announced.
     Commit(Seq),
     /// Nothing moved for one keepalive interval.
     Keepalive,
@@ -650,17 +650,20 @@ pub(crate) enum StreamStep {
 }
 
 impl CommitStream {
-    fn at(head: Seq) -> CommitStream {
+    /// A stream whose first announced position is `announced` —
+    /// [`WritePath::open`] passes the head the feed has just covered, the
+    /// base case.
+    fn at(announced: Seq) -> CommitStream {
         CommitStream {
-            state: Mutex::new(StreamState { head, shutdown: false }),
+            state: Mutex::new(StreamState { announced, shutdown: false }),
             cond: Condvar::new(),
         }
     }
 
     fn announce(&self, seq: Seq) {
         let mut state = self.state.lock();
-        if seq > state.head {
-            state.head = seq;
+        if seq > state.announced {
+            state.announced = seq;
             self.cond.notify_all();
         }
     }
@@ -671,14 +674,14 @@ impl CommitStream {
     }
 
     /// The position last announced.
-    fn head(&self) -> Seq {
-        self.state.lock().head
+    fn announced(&self) -> Seq {
+        self.state.lock().announced
     }
 
-    /// Block until the head passes `last`, the daemon stops, or the
-    /// keepalive interval elapses — whichever comes first. Returning the
-    /// current head (not a queue of commits) is the coalescing: a burst of
-    /// commits between wakes is one step.
+    /// Block until the announced position passes `last`, the daemon stops,
+    /// or the keepalive interval elapses — whichever comes first. Returning
+    /// the last announced position (not a queue of commits) is the
+    /// coalescing: a burst of commits between wakes is one step.
     fn next(&self, last: Seq) -> StreamStep {
         let deadline = Instant::now() + KEEPALIVE_INTERVAL;
         let mut state = self.state.lock();
@@ -686,8 +689,8 @@ impl CommitStream {
             if state.shutdown {
                 return StreamStep::Shutdown;
             }
-            if state.head > last {
-                return StreamStep::Commit(state.head);
+            if state.announced > last {
+                return StreamStep::Commit(state.announced);
             }
             if self.cond.wait_until(&mut state, deadline).timed_out() {
                 return StreamStep::Keepalive;
@@ -720,13 +723,17 @@ mod tests {
     fn the_commit_stream_is_monotone_and_coalesces() {
         let stream = CommitStream::at(Seq(4));
         let step = stream.next(Seq(3));
-        assert!(matches!(step, StreamStep::Commit(Seq(4))), "the head on connect: {step:?}");
+        assert!(
+            matches!(step, StreamStep::Commit(Seq(4))),
+            "the opening position on connect: {step:?}"
+        );
         stream.announce(Seq(9));
         stream.announce(Seq(7)); // an idempotency replay's older position
         let step = stream.next(Seq(4));
         assert!(
             matches!(step, StreamStep::Commit(Seq(9))),
-            "an older position never displaces the head, and the burst is one step: {step:?}"
+            "an older position never displaces the announced one, and the burst is one \
+             step: {step:?}"
         );
         stream.shutdown();
         let step = stream.next(Seq(0));

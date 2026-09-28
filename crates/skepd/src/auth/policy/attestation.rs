@@ -53,9 +53,9 @@ use crate::World;
 ///    no entry frame can be composed for is told what it is whatever it
 ///    carries: a `publish` run naming an address with no value passes
 ///    UNATTESTED to the store's own `dangling_source`; a `publish` run onto
-///    an origin the principal may not read is never composed, and what the
-///    shot is owed is decided here by asking the store's own gates on a
-///    detached kernel ([`refused_at_or_before_the_source_gate`]) —
+///    an origin document the principal may not read is never composed, and
+///    what the shot is owed is decided here by asking the store's own gates
+///    on a detached kernel ([`refused_at_or_before_the_source_gate`]) —
 ///    UNATTESTED to the store's own refusal where they refuse it (`withheld`,
 ///    or an answer ahead of the source gate), `attestation_invalid:withheld`
 ///    where they would admit it, the base carrying the run; a body past
@@ -74,7 +74,7 @@ use crate::World;
 ///    grade is built yet; the candidates are that set's keys of the tag's
 ///    row (A2's empty walk answers `not_enrolled_at_position`, PERMANENT);
 ///    any candidate verifying BOTH halves over the entry frame admits the
-///    value, else `signature`.
+///    presented `attest`, else `signature`.
 ///
 /// The entry frame the daemon composes for a `publish` reads the runs'
 /// values off the snapshot by `value_at` — a second Σ-width walk per
@@ -118,7 +118,7 @@ pub(super) fn attestation_check(
         Ok(entry_frame) => entry_frame,
         Err(ComposeFault::NoBoardTerm) => return Err(invalid(AttestFault::BoardUnavailable)),
         Err(ComposeFault::NoAccount) => return Err(invalid(AttestFault::NotEnrolledAtPosition)),
-        Err(ComposeFault::UnreadableOrigin) => {
+        Err(ComposeFault::UnreadableRunOrigin) => {
             return if refused_at_or_before_the_source_gate(world, op, principal) {
                 Ok(None)
             } else {
@@ -178,7 +178,7 @@ fn system_owned(world: &World, op: &Op) -> bool {
 }
 
 /// THE CHECK'S QUESTION about a shot the composer could not read
-/// ([`ComposeFault::UnreadableOrigin`]): whether the STORE refuses it at or
+/// ([`ComposeFault::UnreadableRunOrigin`]): whether the STORE refuses it at or
 /// before its source gate (M5 `publish`'s slots 1–6, PUB-6.36) — asked of the
 /// store ITSELF, on a detached kernel over this snapshot ([`detached_kernel`]),
 /// so the base's chain and shape, the carried-run test (PUB-6.24) and the
@@ -208,7 +208,7 @@ fn system_owned(world: &World, op: &Op) -> bool {
 /// `false` wherever a refusal at or before the source gate cannot be shown:
 /// a dry run that gets past it — every run the principal may not read then
 /// CARRIED by the base — any answer this does not recognize, and an op that
-/// is no shot, which composes no unreadable origin. [`attestation_check`]
+/// is no shot, which names no run origin at all. [`attestation_check`]
 /// REFUSES the write on `false`, which is safe whether or not the store would
 /// have; it passes the shot through UNATTESTED on `true` alone, which is safe
 /// because the real shot is then refused with the same answer. The match over
@@ -346,8 +346,8 @@ mod tests {
     /// the gate — the sentinel alone answering the existence walk, so `false`
     /// — and with a base outside `H`'s chain the store refuses
     /// `base_not_in_chain` ahead of the gate, so `true`. An op that is no
-    /// shot composes no unreadable origin and is answered `false`, the side
-    /// the check refuses on.
+    /// shot names no run origin at all and is answered `false`, the side the
+    /// check refuses on.
     #[test]
     fn the_dry_run_answers_the_store_s_own_gates_and_its_sentinel_passes_them() {
         use skep_arrangement::{Base, VPos};

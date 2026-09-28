@@ -124,8 +124,8 @@ impl AuthState {
     /// One install, whole: the issue compared against the two INERT
     /// comparands (AUTH-4.36 step 4b) — the header's, the claimant taken
     /// where it names none, the off-board test read against the node prefix
-    /// in force — and the result swapped in under the write gate. The
-    /// claimant is read HERE, under that gate, because the claim commits
+    /// in force — and the result swapped in under the credential write lock.
+    /// The claimant is read HERE, under that lock, because the claim commits
     /// only under it: the comparands an install resolves are the ones in
     /// force at its own position.
     fn install_blocked(&self, lock: &LockWrite<'_>, issue: BlockedIssue) {
@@ -154,14 +154,15 @@ impl AuthState {
     /// THE REISSUE CHANNEL's daemon half (AUTH-4.70 "RE-ISSUED to the
     /// running daemon without restart"): where the supply file MOVED since
     /// it was last looked at, re-read it and install the new issue under
-    /// the credential write gate. `None` where nothing moved — the ordinary
+    /// the credential write lock. `None` where nothing moved — the ordinary
     /// request's answer, at the cost of one `stat`.
     ///
     /// PRECONDITION: the caller holds NO credential lock and no
-    /// serialization lock — this takes the write gate. [`crate::Daemon`]
-    /// calls it at the head of routing, ahead of every lock a request takes,
-    /// which is also what makes the kill exact: a request that arrives after
-    /// the file moved installs the issue BEFORE it resolves its own actor.
+    /// serialization lock — this takes the credential write lock.
+    /// [`crate::Daemon`] calls it at the head of routing, ahead of every lock
+    /// a request takes, which is also what makes the kill exact: a request
+    /// that arrives after the file moved installs the issue BEFORE it
+    /// resolves its own actor.
     ///
     /// A re-read that FAILS installs nothing (the list is replaced WHOLE or
     /// not at all): the list in force stands, the refusal is returned for
@@ -169,7 +170,7 @@ impl AuthState {
     ///
     /// The look itself is [`BlockedSupply::reissue`]'s — the file's identity
     /// is that type's own knowledge. What this half owns is the INSTALL, which
-    /// takes a gate the channel knows nothing about.
+    /// takes a lock the channel knows nothing about.
     pub fn reissue_blocked_prefixes(&self) -> Option<Reissue> {
         self.blocked_supply
             .as_ref()?

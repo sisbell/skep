@@ -257,9 +257,9 @@ impl DepositSpans {
 /// `allow_preview_keys` IS THE SETTING SLOT (4) READS (AUTH-1.44; the
 /// `preview_key` refusal, AUTH-3.56; AUTH-3.15 as RES-206 landed it) — AND
 /// NOTHING ELSE: the whole of [`crate::auth::AuthConfig`] is deliberately out of
-/// reach — no origin, the local-trust flag, list entry or node prefix can be
-/// read from here, because none of them is an argument — and no address,
-/// content, cone, document or role rides in on either one.
+/// reach — no configured origin, the local-trust flag, list entry or node
+/// prefix can be read from here, because none of them is an argument — and
+/// no address, content, cone, document or role rides in on either one.
 // Eight arguments, deliberately: each is ONE declared collaborator (AUTH-3.15,
 // AUTH-3.16's narrowing), and bundling them would put a struct between the
 // caller and the list this doc names — the same call `handshake` makes.
@@ -503,10 +503,10 @@ fn handoff_giver(
 /// as the install resolved its comparand (b): that one is live only where the
 /// operator is off-board, which is the BLOCK's question and not the carve's.
 /// It arrives as an argument rather than as a config this reads for itself,
-/// so the whole of [`crate::auth::AuthConfig`] — every origin, flag, list entry and
-/// the node prefix — is out of reach of this gate by construction. Compared
-/// against `identity.claimant()`: the daemon derives nothing and reads no
-/// record for it.
+/// so the whole of [`crate::auth::AuthConfig`] — every configured origin,
+/// flag, list entry and the node prefix — is out of reach of this gate by
+/// construction. Compared against `identity.claimant()`: the daemon derives
+/// nothing and reads no record for it.
 ///
 /// SILENT on an UNCLAIMED board too: there is no claimant for the field to
 /// differ from and no lineage to have forked. The rule does not speak to the

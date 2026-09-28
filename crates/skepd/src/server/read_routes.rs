@@ -12,7 +12,7 @@ use super::request::{at_most_once, query_pairs};
 use super::Daemon;
 use crate::auth::fold::{canonical_identity, key_set_of};
 use crate::codec::{check_keys, key_set_reply, obj, DaemonOp};
-use crate::write_path::{ChangesAnswer, FeedClass, Query};
+use crate::write_path::{ChangesAnswer, ChangesQuery, FeedClass};
 
 /// `/changes` page size when `limit` is absent.
 const DEFAULT_CHANGES_LIMIT: usize = 256;
@@ -115,9 +115,9 @@ impl Daemon {
         // before `claimant` appears, or read the pre-claim `signed_origins`
         // beside a post-claim position, which costs it one `session_rejected`
         // and a retry. Every one of them corrects itself on the next probe.
-        // Taking the write lock here would serialize a liveness probe behind
-        // writes, which is the worse trade; `CommitsLog::head_time` states
-        // what each field is true of.
+        // Taking the serialization lock here would serialize a liveness probe
+        // behind every write, which is the worse trade;
+        // `CommitsLog::head_time` states what each field is true of.
         //
         // `log_position` and `chain_head` do NOT straddle each other: the
         // kernel's root carries the seq and the chain together, and
@@ -200,8 +200,8 @@ impl Daemon {
     /// same head publication and grant state, same class ⇒ byte-equal
     /// pages, across repeats and restarts.
     pub(super) fn get_changes(&self, resolved: &Resolved, query: Option<&str>) -> Reply {
-        let query = match changes_params(query) {
-            Ok(query) => query,
+        let changes_query = match changes_params(query) {
+            Ok(parsed) => parsed,
             Err(detail) => return refuse(TransportError::MalformedChanges, Some(&detail)),
         };
         // ONE head snapshot per request (PUB-6.39, PUB-6.40): the predicate
@@ -209,7 +209,7 @@ impl Daemon {
         // stand on the same committed state.
         let head = self.engine.kernel().snapshot();
         let class = FeedClass::of(head.world(), resolved.principal());
-        match self.writes.changes(&class, &query) {
+        match self.writes.changes(&class, &changes_query) {
             ChangesAnswer::Reclaimed { floor } => refuse_reclaimed(floor),
             ChangesAnswer::Page { entries, last, more } => Reply::json(
                 200,
@@ -263,10 +263,11 @@ impl Daemon {
 
 // ── the change feed (wire v6) ────────────────────────────────────────────
 
-/// The `/changes` query: `since=<position>` (required) plus optional
-/// `limit=<1..=4096>`, `under=<address-or-prefix>` (wire v7.8, PUB-7.31)
-/// and `drafts=true|false` (the drafts-only narrowing, PUB-7.35).
-fn changes_params(query: Option<&str>) -> Result<Query, String> {
+/// The `/changes` query string's parameters, parsed into a [`ChangesQuery`]:
+/// `since=<position>` (required) plus optional `limit=<1..=4096>`,
+/// `under=<address-or-prefix>` (wire v7.8, PUB-7.31) and `drafts=true|false`
+/// (the drafts-only narrowing, PUB-7.35).
+fn changes_params(query: Option<&str>) -> Result<ChangesQuery, String> {
     let query = match query {
         None | Some("") => {
             return Err("the required parameter is since=<position>".into());
@@ -316,7 +317,7 @@ fn changes_params(query: Option<&str>) -> Result<Query, String> {
         }
     }
     let since = since.ok_or_else(|| String::from("the required parameter is since=<position>"))?;
-    Ok(Query {
+    Ok(ChangesQuery {
         since,
         limit: limit.unwrap_or(DEFAULT_CHANGES_LIMIT),
         under,

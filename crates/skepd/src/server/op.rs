@@ -60,18 +60,19 @@ impl Daemon {
     /// answer is not read here. What a refusal is and when the first head
     /// comes after one are the head writer's (`head.rs`, WHAT A REFUSAL
     /// DOES); what an attested write meets meanwhile is
-    /// [`crate::write_path::board_term`]'s. `lock` is the credential write
-    /// gate: the re-install replaces the list under the gate the claim itself
-    /// committed under, so no SESSION write lands between the claim and the
-    /// comparands it moves — every one takes this gate. The head writer's own
-    /// commits are the one kind that lands inside this step: `H.1`'s here, or
-    /// the cadence's where the head writer's turn after the claim's commit
-    /// already wrote it (an operator pausing an hour before the ceremony's
-    /// last step is enough), in which case `H.1` stands and
+    /// [`crate::write_path::board_term`]'s. `credential_lock` is the
+    /// credential write lock's write guard: the re-install replaces the list
+    /// under the lock the claim itself committed under, so no SESSION write
+    /// lands between the claim and the comparands it moves — every one takes
+    /// this lock. The head writer's own commits are the one kind that lands
+    /// inside this step: `H.1`'s here, or the cadence's where the head
+    /// writer's turn after the claim's commit already wrote it (an operator
+    /// pausing an hour before the ceremony's last step is enough), in which
+    /// case `H.1` stands and
     /// [`WritePath::write_first_head`](crate::write_path::WritePath::write_first_head)
     /// writes nothing — made by no session, they meet no list, and
     /// `IdentityFold::step_committed`'s premise already counts them.
-    fn on_claim_flip(&self, lock: &LockWrite<'_>, serial: &SerialGuard<'_>) {
+    fn on_claim_flip(&self, credential_lock: &LockWrite<'_>, serial: &SerialGuard<'_>) {
         // THE CRASH WINDOW's seam: armed, the process is held HERE — the
         // claim durable and flipped, no head — for the harness to kill.
         #[cfg(any(test, feature = "test-hooks"))]
@@ -86,7 +87,7 @@ impl Daemon {
         // refusal itself.
         self.writes.write_first_head(serial);
         self.log_config_warnings(true);
-        self.auth.reinstall_blocked_at_claim(lock);
+        self.auth.reinstall_blocked_at_claim(credential_lock);
         // The flip can only have made an entry INERT, so an issue with no
         // entries has nothing to say; where it has one, the whole list in
         // force is named (AUTH-4.36 step 4b's "ignored at install and said
@@ -378,7 +379,7 @@ impl Daemon {
             // committed deposit against the post-commit snapshot, and the
             // memo entry, as one operation under the write guard.
             //
-            // The guard is a SHAPE test standing in for "this write
+            // The `AckAddr` test is a SHAPE test standing in for "this write
             // committed", on two premises: only an address-form `MakeLink`
             // reaches here ([`DepositSpans::of`] is `Some` for nothing
             // else), and M10 acks a committed `make_link` with `AckAddr`.

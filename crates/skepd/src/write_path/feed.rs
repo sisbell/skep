@@ -249,9 +249,10 @@ impl<'a> FeedClass<'a> {
     }
 }
 
-/// One `/changes` question.
+/// One `/changes` question — the parsed query string, beside
+/// [`ChangesAnswer`], its answer.
 #[derive(Clone, Debug)]
-pub(crate) struct Query {
+pub(crate) struct ChangesQuery {
     /// The fence: positions strictly above it.
     pub since: u64,
     /// The page cap, over the VISIBLE stream — AT LEAST ONE. A zero cap is
@@ -662,10 +663,10 @@ impl Feed {
 
     /// The data behind `GET /changes` at `class`.
     ///
-    /// PRECONDITION: `query.limit >= 1` ([`Query::limit`] says what a zero
-    /// answers). Not re-checked here — one check, one owner, and the owner is
-    /// the parser that built the `Query`.
-    pub fn page(&self, class: &FeedClass<'_>, query: &Query) -> ChangesAnswer {
+    /// PRECONDITION: `query.limit >= 1` ([`ChangesQuery::limit`] says what a
+    /// zero answers). Not re-checked here — one check, one owner, and the
+    /// owner is the parser that built the `ChangesQuery`.
+    pub fn page(&self, class: &FeedClass<'_>, query: &ChangesQuery) -> ChangesAnswer {
         let inner = self.inner.lock();
         if !inner.log.admits_since(query.since) {
             return ChangesAnswer::Reclaimed { floor: inner.log.floor() };
@@ -757,7 +758,7 @@ impl Inner {
     fn visible(
         &self,
         class: &FeedClass<'_>,
-        query: &Query,
+        query: &ChangesQuery,
         at: u64,
     ) -> Option<(&CommitMeta, Vec<&Doc>)> {
         let meta = self.log.entries.get(&at)?;
@@ -799,7 +800,7 @@ impl Inner {
     fn sources<'s>(
         &'s self,
         class: &'s FeedClass<'_>,
-        query: &'s Query,
+        query: &'s ChangesQuery,
         start: u64,
     ) -> Vec<Box<dyn Iterator<Item = u64> + 's>> {
         let mut sources: Vec<Box<dyn Iterator<Item = u64> + 's>> = Vec::new();

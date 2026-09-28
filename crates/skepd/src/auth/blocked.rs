@@ -305,11 +305,12 @@ impl BlockedPrefixes {
             // requires that comparand `Some` — and ANSWERED rather than
             // asserted, for the reason the arm above gives. The cell is
             // sharper here than there: this renders from
-            // `credential_sequence` under both write locks AFTER the claim has
-            // committed ([`crate::notice`]), so a panic is `500
-            // internal_panic` for a one-time-only write that landed and whose
-            // retry meets `already_claimed`. The debug assert is what makes
-            // the premise loud where a test can see it.
+            // `credential_sequence` under the credential write lock and the
+            // serialization lock AFTER the claim has committed
+            // ([`crate::notice`]), so a panic is `500 internal_panic` for a
+            // one-time-only write that landed and whose retry meets
+            // `already_claimed`. The debug assert is what makes the premise
+            // loud where a test can see it.
             debug_assert!(exempted.is_some(), "an entry is inert only against a comparand");
             let account =
                 exempted.as_ref().map(|a| format!(" {}", a.tumbler())).unwrap_or_default();
@@ -451,11 +452,11 @@ impl BlockedSupply {
     /// own. `None` is the ordinary request's answer: nothing moved, at the
     /// cost of one `stat`.
     ///
-    /// `install` is the CALLER's, because the list is replaced under a gate
+    /// `install` is the CALLER's, because the list is replaced under a lock
     /// this type knows nothing about. It runs with `seen` HELD, so a request
     /// arriving mid-install waits for it rather than resolving under a list an
     /// earlier request has already seen superseded. Lock order is therefore
-    /// `seen` → whatever `install` takes, and nothing holding that gate
+    /// `seen` → whatever `install` takes, and nothing holding that lock
     /// touches `seen`.
     ///
     /// A re-read that FAILS calls `install` not at all — the list is replaced

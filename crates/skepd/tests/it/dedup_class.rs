@@ -12,7 +12,7 @@
 //! delegates), GRANT-HOLDER (a stranger the owner granted), NON-ENTITLED (a
 //! stranger without a grant). The daemon exposes no rule registration, so the
 //! SYSTEM caller at guest class is pinned at the engine's own seam
-//! (`skep-engine/tests/fires.rs`), and the guest's read of the results is
+//! (`skep-engine/tests/it/fires.rs`), and the guest's read of the results is
 //! pinned here. The dc-constraint witness cell has no gate to exercise: no
 //! dc-constraint query exists in `emit` as built (see the round's report).
 

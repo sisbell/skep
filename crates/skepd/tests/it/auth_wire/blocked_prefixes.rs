@@ -361,15 +361,15 @@ fn the_block_outranks_a_refused_origin_and_kills_the_bare_binding() {
     let member_key = distinct_key(36);
     let member = keyed_member(port, &anchor, 936, &member_key);
     let bare = open_session(port, 936);
-    let draft = create_frame(&member, None);
+    let mint = create_frame(&member, None);
     let evil = "https://evil.example";
     // The binding writes: the foreign origin alone would refuse it for THAT
     // request and leave it alive, which is what the block is about to outrank.
-    expect_resp(&op(port, Some(&bare), &draft), "ack_addr");
+    expect_resp(&op(port, Some(&bare), &mint), "ack_addr");
 
     issue_blocked_list(&list, BlockedHeader::default(), &[(&member, RECORD_MEMBER)]);
     let (st, headers, body) =
-        http_with_origin(port, "POST", "/op", Some(&bare), evil, draft.as_bytes());
+        http_with_origin(port, "POST", "/op", Some(&bare), evil, mint.as_bytes());
     assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
     assert_eq!(
         json(&body)["code"].as_str(),
@@ -388,7 +388,7 @@ fn the_block_outranks_a_refused_origin_and_kills_the_bare_binding() {
     // refused for one request would write again the moment the entry went.
     issue_blocked_list(&list, BlockedHeader::default(), &[]);
     assert!(presented_dead(port, &bare), "a killed bare binding stays gone after the lift");
-    let (st, _, body) = http_full(port, "POST", "/op", Some(&bare), draft.as_bytes());
+    let (st, _, body) = http_full(port, "POST", "/op", Some(&bare), mint.as_bytes());
     assert_eq!(st, 200);
     assert_eq!(
         json(&body)["code"].as_str(),
@@ -398,7 +398,7 @@ fn the_block_outranks_a_refused_origin_and_kills_the_bare_binding() {
     );
     // The PRINCIPAL is admitted again — the lift is a lift, not a ban.
     let fresh = open_session(port, 936);
-    expect_resp(&op(port, Some(&fresh), &draft), "ack_addr");
+    expect_resp(&op(port, Some(&fresh), &mint), "ack_addr");
 
     sd.shutdown();
 }

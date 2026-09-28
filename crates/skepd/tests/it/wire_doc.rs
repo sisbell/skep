@@ -514,7 +514,7 @@ fn doc_op_at_examples_are_canonical() {
 
 /// Every transport-error example equals its fixture — the bodies the
 /// history endpoints refuse with. The server side of the same shapes is
-/// asserted end-to-end in tests/history.rs.
+/// asserted end-to-end in tests/it/history.rs.
 #[test]
 fn doc_error_examples_match_their_fixtures() {
     let mut seen: Vec<String> = Vec::new();

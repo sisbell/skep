@@ -580,7 +580,7 @@ fn step(op_index: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunS
             // The CROSS-OWNER arm only: every pooled document is a private
             // draft, and a version of one's OWN draft is versionless (PUB-2.9,
             // the store's `private_source_versionless`, lane 3.1 — its cell
-            // is `tests/version_chain.rs`). A foreign draft forks into the
+            // is `tests/it/version_chain.rs`). A foreign draft forks into the
             // caller's own account as a private copy (the flag absent, the
             // source's bit inherited), which is the valid-by-construction
             // write — and the foreign draft must be READABLE to the caller,

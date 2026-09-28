@@ -139,7 +139,7 @@ skep-identity = { path = "../skep-identity" }
 # keys-from-seed and signatures byte-equal against — the gate every future
 # bump of the pinned crate must pass.
 fips204 = { version = "=0.4.6", default-features = false, features = ["ml-dsa-65"] }
-# H4 property-based op sequences (tests/properties.rs): random-but-valid
+# H4 property-based op sequences (tests/it/properties.rs): random-but-valid
 # plans with shrinking; failure seeds persist to proptest-regressions/
 # (pins, same standing as goldens).
 proptest.workspace = true

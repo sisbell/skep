@@ -53,7 +53,7 @@ impl Daemon {
     /// its declaration order (PUB-6.4) and the verdict (PUB-8.4, PUB-8.5:
     /// `withheld`, `reorder`, `site.addr` the document, no detail) — asked
     /// here over the head's predicate rather than restated.
-    pub(super) fn op_at_reply(&self, resolved: &Resolved, body: &[u8]) -> Reply {
+    pub(super) fn post_op_at(&self, resolved: &Resolved, body: &[u8]) -> Reply {
         let (at, frame) = match op_at_envelope(body) {
             Ok(x) => x,
             Err(detail) => return refuse(TransportError::MalformedOpAt, Some(&detail)),
@@ -456,7 +456,7 @@ mod tests {
     }
 
     /// The `/dump` query is absent or exactly one position — the accepted
-    /// half of the parser `tests/history.rs` exercises only through its
+    /// half of the parser `tests/it/history.rs` exercises only through its
     /// refusals.
     #[cfg(feature = "observe")]
     #[test]

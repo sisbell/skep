@@ -32,7 +32,7 @@ pub(crate) struct Permits {
 #[must_use = "a permit dropped at once returns its slot at once: bind it for as long as the \
               work it licenses runs"]
 pub struct Permit<'a> {
-    permits: &'a Permits,
+    pool: &'a Permits,
 }
 
 impl Permits {
@@ -49,12 +49,12 @@ impl Permits {
         self.available
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1))
             .ok()
-            .map(|_| Permit { permits: self })
+            .map(|_| Permit { pool: self })
     }
 }
 
 impl Drop for Permit<'_> {
     fn drop(&mut self) {
-        self.permits.available.fetch_add(1, Ordering::Release);
+        self.pool.available.fetch_add(1, Ordering::Release);
     }
 }

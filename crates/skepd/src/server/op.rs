@@ -147,7 +147,7 @@ impl Daemon {
     /// `Unauthenticated` under it).
     fn actor_sid(&self, actor: &Actor) -> SessionId {
         match actor {
-            Actor::Principal(e) => e.sid,
+            Actor::Principal(binding) => binding.sid,
             Actor::Guest(_) => SessionId::GUEST,
         }
     }

@@ -135,12 +135,12 @@ fn h1_b_every_discovery_result_set_drops_a_draft_homed_member_for_a_reader_outsi
     assert_eq!(endset_pairs(port, mine, CLAIMANT_DOC1, 1, 1).len(), endset_pairs(port, theirs, CLAIMANT_DOC1, 1, 1).len() + 1, "retrieve_endsets answers the filtered rows");
 
     // 5–7: the four-set family over the ghost class — dropped, not emptied.
-    let (a, b) = (addrs_of(&op(port, mine, &class_scan("find_links_ftt", &g))), addrs_of(&op(port, theirs, &class_scan("find_links_ftt", &g))));
+    let (a, b) = (addrs_of(&op(port, mine, &class_scan_frame("find_links_ftt", &g))), addrs_of(&op(port, theirs, &class_scan_frame("find_links_ftt", &g))));
     assert!(a.contains(&l2) && a.contains(&p), "the owner's scan holds both members: {a:?}");
     assert_eq!(b, vec![p.clone()], "find_links_ftt keeps the published-homed member alone");
-    let n = |token: Option<&str>| expect_resp(&op(port, token, &class_scan("count_ftt", &g)), "count")["n"].as_u64().expect("n");
+    let n = |token: Option<&str>| expect_resp(&op(port, token, &class_scan_frame("count_ftt", &g)), "count")["n"].as_u64().expect("n");
     assert_eq!((n(mine), n(theirs)), (2, 1), "count_ftt counts the filtered set");
-    let (a, b) = (batch_of(&op(port, mine, &class_scan("window_ftt", &g))), batch_of(&op(port, theirs, &class_scan("window_ftt", &g))));
+    let (a, b) = (batch_of(&op(port, mine, &class_scan_frame("window_ftt", &g))), batch_of(&op(port, theirs, &class_scan_frame("window_ftt", &g))));
     assert!(a.contains(&l2) && a.contains(&p), "{a:?}");
     assert_eq!(b, vec![p.clone()], "window_ftt pages the filtered set");
 

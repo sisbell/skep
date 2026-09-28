@@ -423,7 +423,7 @@ fn i3_a_a_bare_op_stream_leaves_the_guest_projection_unchanged_but_for_content_e
         ("a published fork", fork_frame(Some(true))),
         ("the shot", publish_frame(CLAIMANT_DOC1, None, None, &[])),
         ("a draft-homed retraction of a public link", nullify_frame(&j, &pub_l)),
-        ("a rail record", typed_link_frame(CLAIMANT_DOC1, &[s.account.as_str()], &[CLAIMANT_DOC1], T_RAIL_CLASS)),
+        ("a rail record", typed_link_frame(CLAIMANT_DOC1, &[s.account.as_str()], &[CLAIMANT_DOC1], T_RAIL_RECORD)),
         ("a grant", typed_link_frame(CLAIMANT_DOC1, &[j.as_str()], &[s.account.as_str()], T_GRANT)),
         ("an emit into the published home", emit_frame(CLAIMANT_DOC1)),
     ] {
@@ -485,7 +485,7 @@ fn i3_c_a_draft_homed_nullify_of_a_public_link_takes_the_gate_on_the_target_s_ho
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
     let j = owner_draft(port, &owner);
     let l = ghost_link(port, &signed, CLAIMANT_DOC1, 41);
-    let scan = class_scan("find_links_ftt", &format!("{CLAIMANT_DOC1}.0.3.6.41"));
+    let scan = class_scan_frame("find_links_ftt", &format!("{CLAIMANT_DOC1}.0.3.6.41"));
     assert_eq!(addrs_of(&op(port, None, &scan)), vec![l.clone()], "the public link is active");
 
     let before = head_position(port);
@@ -660,7 +660,7 @@ fn i4_c_d_supersession_from_the_same_home_is_the_only_revocation_and_grants_are_
     withheld("I4.c: both revoked by the class's own superseding records");
     // The scan is a superset and never a face (PUB-5.21): every record,
     // revoked grants and revocations alike, is permanent and listed.
-    let listed = addrs_of(&op(port, None, &class_scan("find_links_ftt", T_GRANT)));
+    let listed = addrs_of(&op(port, None, &class_scan_frame("find_links_ftt", T_GRANT)));
     for record in [&g_doc, &g_acct, &revocation] {
         assert!(listed.contains(record), "I4.d: the class scan lists the permanent record {record}: {listed:?}");
     }

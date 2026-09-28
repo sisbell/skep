@@ -213,7 +213,7 @@ impl History {
 /// read predicate resolves off it.
 ///
 /// PRECONDITION: `frame.op` is a READ, and it is the ROUTE that establishes
-/// it — `crate::server::Daemon::op_at_reply` refuses a write frame `400
+/// it — `crate::server::Daemon::post_op_at` refuses a write frame `400
 /// write_at_history` before this is reached. Since the reader became the
 /// presented principal rather than the guest, that refusal is the only thing
 /// between a misclassified write and this throwaway store: under a live

@@ -1,8 +1,10 @@
 //! Shared tier-1 fuzz plumbing (hardening H2): harvest wire.md's pinned
 //! examples as the self-maintaining corpus (the same `<!-- wire: … -->`
-//! fenced blocks `tests/wire_doc.rs` asserts, so the corpus grows with the
-//! wire), plus the iteration budget and byte generators. Kept separate from
-//! `tests/common/` (the socket helpers) — a fuzz test declares both.
+//! fenced blocks `tests/it/wire_doc.rs` asserts, so the corpus grows with
+//! the wire), plus the iteration budget and byte generators. Kept separate
+//! from `tests/it/common.rs` (the socket helpers): both are modules of the
+//! one test binary, declared once in `tests/it/main.rs`, and a fuzz suite
+//! imports both (`use crate::common; use crate::fuzz_common;`).
 //!
 //! The mutation engine and oracles live in `skepd::fuzz_support` (the seam
 //! the nightly libFuzzer targets share); this file is only the corpus and

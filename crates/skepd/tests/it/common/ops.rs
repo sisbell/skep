@@ -15,15 +15,16 @@ use super::*;
 pub const CEREMONY_ATOM: &str = "1.0.1.0.1.0.1.1";
 
 /// The audit-view classes' type addresses — the engine's commons pins
-/// (`skep_engine::types`), spelled as a client names them — and the two
-/// classes read under the ACTIVE view beside them.
-pub const T_SUCCESSOR_OF_CLASS: &str = "1.1.0.1.0.1.0.3.59";
-pub const T_ENDORSE_CLASS: &str = "1.1.0.1.0.1.0.3.42";
-pub const T_MARKER_CLASS: &str = "1.1.0.1.0.1.0.3.91";
-pub const T_DESIGNATION_CLASS: &str = "1.1.0.1.0.1.0.3.22";
-pub const T_RAIL_CLASS: &str = "1.1.0.1.0.1.0.3.60";
-pub const T_STEWARD_CLASS: &str = "1.1.0.1.0.1.0.3.61";
-pub const T_EDITION_CLASS: &str = "1.1.0.1.0.1.0.3.14";
+/// (`skep_engine::types`), each under the engine's own name, spelled as a
+/// client names them — and the edition class, read under the ACTIVE view,
+/// beside them.
+pub const T_SUCCESSOR_OF: &str = "1.1.0.1.0.1.0.3.59";
+pub const T_ENDORSE: &str = "1.1.0.1.0.1.0.3.42";
+pub const T_CONSUMPTION_MARKER: &str = "1.1.0.1.0.1.0.3.91";
+pub const T_JOURNAL_DESIGNATION: &str = "1.1.0.1.0.1.0.3.22";
+pub const T_RAIL_RECORD: &str = "1.1.0.1.0.1.0.3.60";
+pub const T_STEWARD_CLASSIFICATION: &str = "1.1.0.1.0.1.0.3.61";
+pub const T_EDITION: &str = "1.1.0.1.0.1.0.3.14";
 
 /// The daemon's publish-class refusal, in the `auth_wire` `code:detail`
 /// convention — the verdict every bare-session cell of the gate answers.
@@ -748,8 +749,8 @@ pub fn ftt_frame(op_name: &str, home: &str, from: &str, to: &str, ty: &str) -> S
     format!(r#"{{"op":"{op_name}",{cur}"q":{{"from":{from},"home":{home},"to":{to},"ty":{ty}}}}}"#)
 }
 
-/// The class scan over `ty` alone: `home`/`from`/`to` all `"any"`.
-pub fn class_scan(op_name: &str, ty_addr: &str) -> String {
+/// The class-scan frame over `ty` alone: `home`/`from`/`to` all `"any"`.
+pub fn class_scan_frame(op_name: &str, ty_addr: &str) -> String {
     ftt_frame(op_name, r#""any""#, r#""any""#, r#""any""#, &unit_span(ty_addr))
 }
 

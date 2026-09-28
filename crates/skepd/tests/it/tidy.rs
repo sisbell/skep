@@ -84,9 +84,9 @@ fn every_module_names_only_its_own_layer_and_below() {
             ));
         }
         let code: Vec<(usize, &str)> = code_lines(&text).collect();
-        for (n, named) in named_paths(&code) {
+        for (n, named_path) in named_paths(&code) {
             let at = format!("src/{path}:{n}");
-            match resolve(module, &named, &top) {
+            match resolve(module, &named_path, &top) {
                 Named::Module(target) => {
                     if target.starts_with(&format!("{module}::")) {
                         continue; // a module naming its own child
@@ -174,8 +174,8 @@ enum Named {
 /// `self::` at `module`, each `super::` one step up; the leading lowercase
 /// segments after that name the module. A lowercase item riding along
 /// (`codec::obj`) is harmless — layers match by prefix.
-fn resolve(module: &str, token: &str, top: &HashSet<&str>) -> Named {
-    let mut segments = token.split("::").filter(|s| !s.is_empty()).peekable();
+fn resolve(module: &str, named_path: &str, top: &HashSet<&str>) -> Named {
+    let mut segments = named_path.split("::").filter(|s| !s.is_empty()).peekable();
     let mut base: Vec<&str> = match segments.next() {
         Some("crate") => Vec::new(),
         Some("self") => module.split("::").collect(),

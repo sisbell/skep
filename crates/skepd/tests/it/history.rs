@@ -561,8 +561,8 @@ fn op_at_reconstruction_is_permit_bounded() {
     }
     // The `key_set` frame, through its own arm: busy too — never an
     // unbudgeted whole-world replay and identity rebuild for any guest.
-    let key_set = format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#);
-    let (st, v) = op_at(port, None, scenario.at_i1, &key_set);
+    let key_set_frame = format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#);
+    let (st, v) = op_at(port, None, scenario.at_i1, &key_set_frame);
     assert_eq!(st, 503, "a historical key_set is a reconstruction too: {v}");
     assert_eq!(v["error"].as_str(), Some("history_busy"), "{v}");
 
@@ -589,7 +589,7 @@ fn op_at_reconstruction_is_permit_bounded() {
     drop(p3);
     drop(p2);
     op_at_ok(port, owner, scenario.at_i1, &retrieve(&scenario.doc1, 5));
-    let v = op_at_ok(port, None, scenario.at_i1, &key_set);
+    let v = op_at_ok(port, None, scenario.at_i1, &key_set_frame);
     assert_eq!(
         expect_resp(&v, "key_set")["as_of"].as_u64(),
         Some(scenario.at_i1),

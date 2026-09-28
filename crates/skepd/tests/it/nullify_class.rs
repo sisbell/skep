@@ -24,10 +24,10 @@ use serde_json::Value;
 /// pinned in `skep_engine::types` (each confirmed by the owner 2026-09-07).
 const T_SUCCESSOR_OF: &str = "1.1.0.1.0.1.0.3.59";
 const T_ENDORSE: &str = "1.1.0.1.0.1.0.3.42";
-const T_MARKER: &str = "1.1.0.1.0.1.0.3.91";
-const T_DESIGNATION: &str = "1.1.0.1.0.1.0.3.22";
-const T_RAIL: &str = "1.1.0.1.0.1.0.3.60";
-const T_STEWARD: &str = "1.1.0.1.0.1.0.3.61";
+const T_CONSUMPTION_MARKER: &str = "1.1.0.1.0.1.0.3.91";
+const T_JOURNAL_DESIGNATION: &str = "1.1.0.1.0.1.0.3.22";
+const T_RAIL_RECORD: &str = "1.1.0.1.0.1.0.3.60";
+const T_STEWARD_CLASSIFICATION: &str = "1.1.0.1.0.1.0.3.61";
 /// The R20 edition class (3.14) and one descriptive subtype — read under the
 /// ACTIVE view (PUB-6.32), so OUTSIDE PUB-6.64 by its own test.
 const T_EDITION: &str = "1.1.0.1.0.1.0.3.14";
@@ -292,9 +292,9 @@ fn an_audit_view_class_nullify_is_refused_to_the_owner_and_masked_for_strangers(
         typed_link_addr(port, &signed, CLAIMANT_DOC1, &[CLAIMANT_ACCOUNT], &[sub_account.as_str()], T_SUCCESSOR_OF);
     let endorsement =
         typed_link_addr(port, &signed, CLAIMANT_DOC1, &[CLAIMANT_ACCOUNT], &[successor.as_str()], T_ENDORSE);
-    let rail = typed_link_addr(port, &signed, CLAIMANT_DOC1, &[sub_account.as_str()], &[CLAIMANT_DOC1], T_RAIL);
+    let rail = typed_link_addr(port, &signed, CLAIMANT_DOC1, &[sub_account.as_str()], &[CLAIMANT_DOC1], T_RAIL_RECORD);
     let classification =
-        typed_link_addr(port, &signed, CLAIMANT_DOC1, &[CLAIMANT_DOC1], &[CLAIMANT_DOC1], T_STEWARD);
+        typed_link_addr(port, &signed, CLAIMANT_DOC1, &[CLAIMANT_DOC1], &[CLAIMANT_DOC1], T_STEWARD_CLASSIFICATION);
     let before = head(port);
     for (what, target) in [
         ("successor-of", &successor),
@@ -324,9 +324,9 @@ fn an_audit_view_class_nullify_is_refused_to_the_owner_and_masked_for_strangers(
     let journal = owner_draft(port, &bare);
     let offer = format!("{CLAIMANT_DOC1}.0.2.7"); // any address in the marker's TO slot
     let accepted = format!("{CLAIMANT_DOC1}.0.1.1"); // stands in for the well-known value address
-    let marker = typed_link_addr(port, &bare, &journal, &[accepted.as_str()], &[offer.as_str()], T_MARKER);
+    let marker = typed_link_addr(port, &bare, &journal, &[accepted.as_str()], &[offer.as_str()], T_CONSUMPTION_MARKER);
     let designation =
-        typed_link_addr(port, &bare, &journal, &[journal.as_str()], &[journal.as_str()], T_DESIGNATION);
+        typed_link_addr(port, &bare, &journal, &[journal.as_str()], &[journal.as_str()], T_JOURNAL_DESIGNATION);
     let before = head(port);
     for (what, target) in [("consumption marker", &marker), ("journal designation", &designation)] {
         // The OWNER, bare and signed alike: a draft-homed record against a
@@ -354,7 +354,7 @@ fn an_audit_view_class_nullify_is_refused_to_the_owner_and_masked_for_strangers(
     // owner's retraction ADMITTED.
     let working = owner_draft(port, &bare);
     let draft_classification =
-        typed_link_addr(port, &bare, &working, &[working.as_str()], &[working.as_str()], T_STEWARD);
+        typed_link_addr(port, &bare, &working, &[working.as_str()], &[working.as_str()], T_STEWARD_CLASSIFICATION);
     expect_resp(&nullify(port, Some(&bare), &working, &draft_classification), "ack_addr");
     sd.shutdown();
 }
@@ -436,7 +436,7 @@ fn the_ordering_pins_hold_across_every_target_class() {
     // (c) Four targets in the owner's doc 1, one stranger, one body.
     let (grantee, _) = stranger(port, 962);
     let grant = deposit_grant(port, &signed, CLAIMANT_DOC1, &draft, Some(&grantee));
-    let rail = typed_link_addr(port, &signed, CLAIMANT_DOC1, &[grantee.as_str()], &[CLAIMANT_DOC1], T_RAIL);
+    let rail = typed_link_addr(port, &signed, CLAIMANT_DOC1, &[grantee.as_str()], &[CLAIMANT_DOC1], T_RAIL_RECORD);
     let credential = credential_link(port, &signed, 63);
     let ghost = format!("{CLAIMANT_DOC1}.0.3.6.1");
     let plain = typed_link_addr(port, &signed, CLAIMANT_DOC1, &[], &[], &ghost);

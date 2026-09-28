@@ -663,7 +663,7 @@ impl Daemon {
             // refusals included.
             ("POST", "/op") => class_varying(self.token_route(req, |r| self.post_op(r, req))),
             ("POST", "/op-at") => {
-                class_varying(self.token_route(req, |r| self.op_at_reply(r, &req.body)))
+                class_varying(self.token_route(req, |r| self.post_op_at(r, &req.body)))
             }
             ("GET", "/health") => self.get_health(),
             // Token-blind and class-invariant like `/health`, whose value it

@@ -270,7 +270,7 @@ fn the_origin_header_fences_the_bare_bind_without_killing_it() {
     let dialed = format!("http://127.0.0.1:{port}");
     let sibling = format!("http://localhost:{port}"); // a loopback default
     let bare_body = format!("{{\"principal\":{CLAIMANT_PRINCIPAL}}}");
-    let draft = format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#);
+    let mint = format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#);
 
     // POST /session, bare: the dialed origin and its loopback sibling bind;
     // a foreign one is the ONE 401.
@@ -295,7 +295,7 @@ fn the_origin_header_fences_the_bare_bind_without_killing_it() {
         "/op",
         Some(&bare),
         "https://evil.example",
-        draft.as_bytes(),
+        mint.as_bytes(),
     );
     assert_eq!(st, 200);
     assert_eq!(
@@ -310,9 +310,9 @@ fn the_origin_header_fences_the_bare_bind_without_killing_it() {
     );
     // …and the SAME token still writes, which is what makes the line above
     // a statement about the request rather than about the session.
-    expect_resp(&op(port, Some(&bare), &draft), "ack_addr");
+    expect_resp(&op(port, Some(&bare), &mint), "ack_addr");
     let (st, _, body) =
-        http_with_origin(port, "POST", "/op", Some(&bare), &dialed, draft.as_bytes());
+        http_with_origin(port, "POST", "/op", Some(&bare), &dialed, mint.as_bytes());
     assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
     expect_resp(&json(&body), "ack_addr");
 
@@ -333,7 +333,7 @@ fn a_close_from_a_foreign_origin_retires_nothing_and_answers_as_a_close_does() {
     let sd = spawn(dir.path());
     let port = sd.port();
     let dialed = format!("http://127.0.0.1:{port}");
-    let draft = format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#);
+    let mint = format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#);
 
     // A close that retires its binding, from the dialed origin: the bytes.
     let other = open_session(port, CLAIMANT_PRINCIPAL);
@@ -350,7 +350,7 @@ fn a_close_from_a_foreign_origin_retires_nothing_and_answers_as_a_close_does() {
         http_with_origin(port, "POST", "/session/close", Some(&bare), "https://evil.example", b"");
     assert_eq!(foreign, real, "a refused close answers exactly as a real close does");
     // …and the binding LIVES: the same token still writes.
-    expect_resp(&op(port, Some(&bare), &draft), "ack_addr");
+    expect_resp(&op(port, Some(&bare), &mint), "ack_addr");
 
     sd.shutdown();
 }

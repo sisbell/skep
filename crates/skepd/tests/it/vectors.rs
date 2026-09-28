@@ -230,7 +230,7 @@ fn m2_7_a_subtype_by_prefix_is_its_audit_view_class_s_member() {
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let (subject, _) = bootstrap_delegate(port, 981);
 
-    let trust = format!("{T_ENDORSE_CLASS}.2");
+    let trust = format!("{T_ENDORSE}.2");
     let endorsement = acked_addr(&typed_link(port, &signed, CLAIMANT_DOC1, &[CLAIMANT_ACCOUNT], &[subject.as_str()], &trust));
     let v = op(port, Some(&signed), &nullify_frame(CLAIMANT_DOC1, &endorsement));
     assert_eq!(verdict(&v), "credential_refused:nullify_audit_view", "2.7 / L10: endorse.trust is the endorsement class's member: {v}");

@@ -89,7 +89,7 @@ fn publish_gate_shuts_bare_published_writes_and_admits_signed_ones() {
     // Accept: the SIGNED session writes the SAME position into the
     // published home — as the DECLARED deposit the write path admits there
     // (PUB-2.59; an undeclared insert is the refused in-place edit, PUB-2.11,
-    // which is the store's cell, `tests/version_chain.rs`). The byte is
+    // which is the store's cell, `tests/it/version_chain.rs`). The byte is
     // prose, PUB-2.60's residue, declared under a MEMBER type — ENROLL's.
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let v = op(

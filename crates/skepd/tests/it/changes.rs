@@ -12,7 +12,7 @@
 //! flow writes into principal 1's PRIVATE second document, so every read
 //! over it here is the OWNER's (principal 1's session), and the guest's
 //! masked page stands beside it as its own cell; the class oracle itself is
-//! `tests/feed_class.rs`.
+//! `tests/it/feed_class.rs`.
 
 use crate::common;
 
@@ -720,7 +720,7 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
     // version is the CROSS-OWNER arm — a private copy of the claimant's
     // published home, minted into principal 1's own account — since a
     // version of one's own draft is versionless (PUB-2.9, the store's
-    // `private_source_versionless`; `tests/version_chain.rs`).
+    // `private_source_versionless`; `tests/it/version_chain.rs`).
     let minting = [
         ("version", format!(r#"{{"op":"version","d_src":"{CLAIMANT_DOC1}","published":false}}"#)),
         ("fork", r#"{"op":"fork"}"#.to_string()),

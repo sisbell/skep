@@ -74,7 +74,7 @@ use skep_identity::{encode_retire, Fingerprint};
 //     `private_source_versionless` — the version row's owner cell — while
 //     the foreign columns' cross-owner forks of that same draft stand.
 //     The three version-chain refusals' own cells are
-//     `tests/version_chain.rs`; here they appear only where they cross
+//     `tests/it/version_chain.rs`; here they appear only where they cross
 //     the ownership matrix.
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -595,9 +595,9 @@ fn walk_matrix(
 /// fresh position — the one insert a published document admits past the gate
 /// (PUB-2.59), its byte prose declared under a MEMBER type, ENROLL's
 /// (PUB-2.60's residue); the undeclared twin is the store's own refusal,
-/// `tests/version_chain.rs`. The position is READ off the head for THIS walk
-/// (`next_content_ordinal`): the ceremony's atom holds 1, the claimant's hire
-/// of P holds 2, and each walk's deposit advances the head by one.
+/// `tests/it/version_chain.rs`. The position is READ off the head for THIS
+/// walk (`next_content_ordinal`): the ceremony's atom holds 1, the claimant's
+/// hire of P holds 2, and each walk's deposit advances the head by one.
 fn signed_claimant_writes_its_published_doc1(port: u16, walk: &str) {
     let ordinal = next_content_ordinal(port, None, CLAIMANT_DOC1);
     let frame = format!(

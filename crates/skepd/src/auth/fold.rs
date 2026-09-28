@@ -419,8 +419,8 @@ mod tests {
         assert_eq!(types.kind_of(&[claim_span]), Some(CredentialKind::Claim));
         // A shipped reserved type (ghost position 1, the content subspace)
         // is NOT a credential type.
-        let retired = subtree_of(addr_of(&[1, 1, 0, 1, 0, 1, 0, 1, 1]).tumbler());
-        assert_eq!(types.kind_of(&[retired]), None);
+        let shipped_span = subtree_of(addr_of(&[1, 1, 0, 1, 0, 1, 0, 1, 1]).tumbler());
+        assert_eq!(types.kind_of(&[shipped_span]), None);
     }
 
     /// AUTH-3.70's conformance expression in miniature: a content-I-span

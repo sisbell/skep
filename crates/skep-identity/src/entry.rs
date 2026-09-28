@@ -317,7 +317,9 @@ mod tests {
     /// second implementation composes against — and the token each body
     /// carries into the frame's `op` member. The two insert pins put the
     /// value sequence after a prefix, so a count written back anywhere but
-    /// where its row began is caught.
+    /// where its row began is caught; the slot row is pinned at TWO elements
+    /// as well as one, since only a second element can show the ORDER the row
+    /// keeps.
     #[test]
     fn the_rows_spell_as_the_module_doc_states() {
         assert_eq!(
@@ -339,6 +341,24 @@ mod tests {
         assert_eq!(
             slot_bytes(EntrySlot::Addrs(std::slice::from_ref(&a))),
             [&[0x01u8, 0, 0, 0, 0, 0, 0, 0, 1][..], &[0, 0, 0, 15][..], b"1.0.1.0.1.0.1.1"].concat()
+        );
+        // …and at TWO elements, in the order given: DESCENDING both in address
+        // order (30 > 2) and in spelled order ("1.0.30" > "1.0.2"), so a row
+        // that sorted its elements by either comparison spells other bytes.
+        // `30` is a component only base ten spells `30`, so the row's DECIMAL
+        // shows here too.
+        let pair = [addr(&[1, 0, 30]), addr(&[1, 0, 2])];
+        assert_eq!(
+            slot_bytes(EntrySlot::Addrs(&pair)),
+            [
+                &[0x01u8, 0, 0, 0, 0, 0, 0, 0, 2][..],
+                &[0, 0, 0, 6][..],
+                b"1.0.30",
+                &[0, 0, 0, 5][..],
+                b"1.0.2",
+            ]
+            .concat(),
+            "the slot row keeps its elements in the order given"
         );
         let span = Span::new(
             Tumbler::new([1u32, 1].map(Nat::from)).unwrap(),

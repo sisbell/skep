@@ -1,8 +1,10 @@
-//! The declared-value assertions I2 pins (AUTH-2.92 `ALGS`, AUTH-2.93
-//! `TAGS`, and AUTH-1.21's record cap), the key's own surface (AUTH-1.1–1.10:
-//! `PublicKey::parse`'s pinned refusal order, the KEY PIN's halves, the
-//! fingerprint's formula, hex and rendering), the framing byte pins, the fold
-//! token authority, and the standard trait surface every consumer dispatches
+//! The declared-value assertions I2 pins (AUTH-2.92 `ALGS` and its frozen
+//! tokens by value, AUTH-2.93 `TAGS` and their bytes, and AUTH-1.21's record
+//! cap), the key's own surface (AUTH-1.1–1.10: `PublicKey::parse`'s pinned
+//! refusal order, the row deciding a key's variant, the two token lookups'
+//! one token set, the KEY PIN's halves, the key's width, the fingerprint's
+//! formula, hex and rendering), the framing byte pins, the fold token
+//! authority, and the standard trait surface every consumer dispatches
 //! through.
 
 use crate::common;
@@ -157,6 +159,61 @@ fn algs_and_arms_agree_both_directions() {
     }
 }
 
+/// AUTH-1.4 — the ROW decides the variant, never the width: a row's token
+/// admits exactly its OWN raw length and never another row's, by either
+/// constructor (`AlgRow::from_raw`: "a `PublicKey` of THIS row's variant,
+/// `None` iff they are not this row's raw length"). The two hybrid widths are
+/// distinct — 1,984 and 929 — so a constructor that picked the variant by
+/// length builds the right key at every row's own width, which is every width
+/// the rest of the suite tries, and ALSO admits the other row's width under a
+/// real token, answering a key whose `alg()` is not the token it was named
+/// by. That is the nearly-valid input: a width the table admits under a token
+/// the table admits, that are not one row's. A record naming such a pair is
+/// still `bad_record` (AUTH-2.130's compare re-encodes the other `alg`), so
+/// the contract stated here is `parse`'s and `from_halves`' own — the one a
+/// signing client and a mirror call directly.
+#[test]
+fn a_rows_token_admits_its_own_width_and_never_another_rows() {
+    for named in SIG_ALGS {
+        for width_of in SIG_ALGS {
+            let parsed = PublicKey::parse(named.token, &"00".repeat(width_of.key_len()));
+            let composed =
+                PublicKey::from_halves(named.token, &vec![0u8; width_of.pq_key_len], &[0u8; 32]);
+            if named == width_of {
+                assert_eq!(
+                    parsed.map(|k| k.alg()),
+                    Ok(named.token),
+                    "parse at {}'s own width",
+                    named.token
+                );
+                assert_eq!(
+                    composed.map(|k| k.alg()),
+                    Ok(named.token),
+                    "from_halves at {}'s own width",
+                    named.token
+                );
+            } else {
+                assert_eq!(
+                    parsed,
+                    Err(KeyParseError::BadLength),
+                    "parse: {} over {}'s {} raw bytes",
+                    named.token,
+                    width_of.token,
+                    width_of.key_len()
+                );
+                assert_eq!(
+                    composed,
+                    Err(KeyParseError::BadLength),
+                    "from_halves: {} over {}'s {}-byte post-quantum half",
+                    named.token,
+                    width_of.token,
+                    width_of.pq_key_len
+                );
+            }
+        }
+    }
+}
+
 /// THE MARKER-TAG TABLE beside `ALGS` (signed ops; the design record §7.3
 /// (i)'s two-row `u8 ↔ token` table): every row's token is an `ALGS` row
 /// whose raw length is the row's own key width — and every `ALGS` row has a
@@ -221,7 +278,52 @@ fn sig_algs_and_algs_agree_and_the_pins_are_the_ruled_widths() {
     let want: [u8; 32] =
         Sha256::digest(framed(KEY_TAG, &[ALG_MLDSA65_ED25519.as_bytes(), &[0x0a; 1984]])).into();
     assert_eq!(Fingerprint::of(&hybrid).as_bytes(), &want);
-    assert_eq!(ENTRY_TAG.as_bytes(), b"skep-entry-v1");
+}
+
+/// The two token lookups admit ONE token set, exactly the rows':
+/// `PublicKey::parse`'s row lookup over `ALGS` (the record grammar's) and
+/// `SigAlgRow::of_token` over `SIG_ALGS` (skepd's codec lifts a request's
+/// `attest.alg` through it). Each is held to the two real tokens and to the
+/// near-misses a lenient lookup would admit — case, surrounding whitespace, a
+/// truncation, an extension, tag 2's reserved token (which `of_token`'s own
+/// card names), the deleted classical one, the empty string — so neither
+/// grows a leniency the other lacks: an `of_token` that ignored case would
+/// lift `MLDSA65-ED25519` to tag 1 on the wire while the grammar calls a
+/// record naming it `bad_record`. The parse half reads an EMPTY key, so the
+/// refusal says which check spoke: `BadLength` is the row, found, refusing
+/// its length; `UnknownAlg` is no row at all.
+#[test]
+fn both_token_lookups_admit_exactly_the_row_tokens() {
+    for token in [ALG_MLDSA65_ED25519, ALG_FNDSA512_PREVIEW_ED25519] {
+        assert!(SigAlgRow::of_token(token).is_some(), "of_token({token:?})");
+        assert_eq!(
+            PublicKey::parse(token, ""),
+            Err(KeyParseError::BadLength),
+            "parse({token:?}, \"\")"
+        );
+    }
+    for near_miss in [
+        "MLDSA65-ED25519",
+        "Mldsa65-Ed25519",
+        " mldsa65-ed25519",
+        "mldsa65-ed25519 ",
+        "mldsa65-ed25519\n",
+        "mldsa65",
+        "mldsa65-ed2551",
+        "mldsa65-ed25519-v2",
+        "FNDSA512-PREVIEW-ED25519",
+        "fndsa512-preview",
+        "fndsa512-ed25519",
+        "ed25519",
+        "",
+    ] {
+        assert_eq!(SigAlgRow::of_token(near_miss), None, "of_token({near_miss:?})");
+        assert_eq!(
+            PublicKey::parse(near_miss, ""),
+            Err(KeyParseError::UnknownAlg),
+            "parse({near_miss:?}, \"\")"
+        );
+    }
 }
 
 /// THE KEY PIN, written and read by one crate: at every row, the key
@@ -255,6 +357,24 @@ fn a_key_composed_from_its_halves_reads_back_the_same_halves() {
         PublicKey::from_halves("ed25519", &[], &[0; 32]),
         Err(KeyParseError::UnknownAlg),
         "the deleted classical token names no row, whatever the halves"
+    );
+}
+
+/// `PublicKey`'s card: the hybrid arms are BOXED, "so a hybrid key is one
+/// allocation and the enum stays a few words wide" — the seam build's first
+/// run overflowed a daemon worker's stack with a 1,984-byte key inline, riding
+/// every `Enrolled` through `im`'s inline-chunked map nodes. The width IS the
+/// claim, stated at FOUR words: room for any boxed arm, a fat box's length
+/// included, and hundreds of bytes short of the narrowest key an arm could
+/// carry inline. An arm unboxed again — even the 929-byte preview arm alone —
+/// need not overflow a test stack to put its bytes back into every map node,
+/// and this is where it is discovered.
+#[test]
+fn a_public_key_is_a_few_words_wide() {
+    let width = std::mem::size_of::<PublicKey>();
+    assert!(
+        width <= 4 * std::mem::size_of::<usize>(),
+        "PublicKey is {width} bytes wide: a key is inline again"
     );
 }
 
@@ -344,21 +464,40 @@ fn tags_are_skep_prefixed_and_prefix_free() {
     assert_eq!(TAGS[4], ENTRY_TAG);
 }
 
-/// AUTH-1.11 — the three declared tags' BYTES, not merely their properties.
-/// A tag IS the domain separator, so its bytes are the protocol; two of the
-/// three are consumed outside this crate (skepd signs under [`SESSION_TAG`],
-/// bebe under [`NODE_HELLO_TAG`], AUTH-2.118), where no shared test would
-/// notice an edit. `tags_are_skep_prefixed_and_prefix_free` keeps holding
-/// after any rename that stays `skep-`-prefixed, and `framed_bytes_are_pinned`
-/// states [`KEY_TAG`] alone; this is where a changed session or node-hello
-/// tag — which silently invalidates every signature made under the old one —
-/// is discovered.
+/// AUTH-1.11 — the five declared tags' BYTES, not merely their properties.
+/// A tag IS the domain separator, so its bytes are the protocol: a changed
+/// tag silently invalidates every signature made under the old one, and
+/// moves every fingerprint. [`KEY_TAG`] sits inside every fingerprint
+/// (AUTH-1.8), and the other four separate signatures made and checked
+/// outside this crate — skepd's session layer frames the handshake under
+/// [`SESSION_TAG`] and [`SESSION_TAG_V2`], every entry signer and verifier
+/// frames under [`ENTRY_TAG`] through `entry_frame`, and bebe consumes
+/// [`NODE_HELLO_TAG`] (AUTH-2.118). `tags_are_skep_prefixed_and_prefix_free`
+/// keeps holding after any rename that stays `skep-`-prefixed and
+/// prefix-free, so this is where a changed tag is discovered: all five, in
+/// the one test named for them.
 #[test]
 fn the_declared_tag_bytes_are_pinned() {
     assert_eq!(KEY_TAG.as_bytes(), b"skep-key-v1".as_slice());
     assert_eq!(SESSION_TAG.as_bytes(), b"skep-session-v1".as_slice());
     assert_eq!(SESSION_TAG_V2.as_bytes(), b"skep-session-v2".as_slice());
     assert_eq!(NODE_HELLO_TAG.as_bytes(), b"skep-node-hello-v1".as_slice());
+    assert_eq!(ENTRY_TAG.as_bytes(), b"skep-entry-v1".as_slice());
+}
+
+/// AUTH-2.90/AUTH-2.96 — the frozen `ALGS` token set by VALUE, both rows. A
+/// token sits inside every key's fingerprint preimage (AUTH-1.8), every
+/// record's `alg` member and every entry frame's first member, so renaming
+/// one moves all three for every key of its row, and every signature made
+/// under the old spelling stops verifying. Tag 1's spelling is also stated by
+/// `public_key_surface` and the grammar corpus's literal records; tag 3's is
+/// stated nowhere else in this crate — `contains("preview")` admits most
+/// renames — and outside it only skepd's tag-3 golden would notice, as a
+/// fingerprint digest that moved.
+#[test]
+fn the_alg_tokens_are_pinned_by_value() {
+    assert_eq!(ALG_MLDSA65_ED25519, "mldsa65-ed25519");
+    assert_eq!(ALG_FNDSA512_PREVIEW_ED25519, "fndsa512-preview-ed25519");
 }
 
 /// AUTH-2.55 — `Inert::token()`: the one authority, all twelve rows,

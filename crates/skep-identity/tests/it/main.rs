@@ -4,6 +4,7 @@
 
 mod checkpoint;
 mod common;
+mod entry;
 mod fold;
 mod grammar;
 mod props;

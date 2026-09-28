@@ -150,10 +150,18 @@ fn a_guest_reads_and_an_unknown_token_is_signalled() {
     let write = post(Some(stale), r#"{"op":"fork"}"#);
     let v: Value = serde_json::from_slice(write.bytes()).expect("json");
     assert_eq!(v["code"].as_str(), Some("unauthenticated"), "{v}");
-    assert!(
-        write.headers.iter().any(|(k, v)| *k == SESSION_HEADER && *v == "closed"),
-        "an unknown token carries Skepd-Session: closed"
-    );
+    // EXACTLY ONCE, though two sites saw the death on this write — the
+    // route's own resolution at the head, and the plain sequence's under the
+    // lock — which is `with_signal`'s promise ("once, however many resolution
+    // sites observed the death"). Doubled, a client reading the header through
+    // `fetch` is handed `closed, closed`, never the `closed` wire.md specifies.
+    let signals: Vec<&str> = write
+        .headers
+        .iter()
+        .filter(|(k, _)| *k == SESSION_HEADER)
+        .map(|&(_, v)| v)
+        .collect();
+    assert_eq!(signals, ["closed"], "an unknown token's write carries Skepd-Session: closed, once");
     // An unparseable header value IS no token (AUTH-4.18): no signal.
     let junk = post(Some("not-a-token"), r#"{"op":"fork"}"#);
     assert!(
@@ -192,6 +200,21 @@ fn zero_workers_is_a_callers_bug() {
     let dir = tempfile::tempdir().expect("tempdir");
     let daemon = Daemon::open(dir.path()).expect("genesis open");
     let _ = serve(daemon, 0, 0);
+}
+
+/// `serve`'s SECOND precondition: a daemon whose auth port is ALREADY BOUND —
+/// a socket-free embedder's `bind_auth_port`, with which `serve` is exclusive
+/// — stops here loudly, as a zero worker count does, and never serves under
+/// loopback defaults derived from a port its listener is not on, where the
+/// dialed origin is outside the bare set and a browser at it is refused every
+/// session.
+#[test]
+#[should_panic(expected = "serve binds the auth port once")]
+fn serving_a_daemon_whose_auth_port_is_bound_is_a_callers_bug() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let daemon = Daemon::open(dir.path()).expect("genesis open");
+    daemon.bind_auth_port(1).expect("a fresh daemon binds once");
+    let _server = serve(daemon, 0, 1);
 }
 
 /// The operator stream's moments, as a line spells each: the closed set the

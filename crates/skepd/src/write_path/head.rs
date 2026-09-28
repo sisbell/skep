@@ -898,4 +898,54 @@ mod tests {
             assert_eq!(clock.now_millis(), fixed, "a fixed reading holds, whatever its value");
         }
     }
+
+    /// RESUME FROM THE FEED, over every case the module doc names. The COUNT
+    /// is the entries whose testimony is not `"system"` — a session's and a
+    /// BARE entry's, its testimony lost, alike. The HOUR's origin is the time
+    /// of the LAST `"system"` entry — the head's publish, or a later attempt's
+    /// orphaned insert; with none, the FIRST entry above the position carrying
+    /// a time — a witness no earlier than the head, so the hour fires no
+    /// sooner than it is owed; with nothing timed, `None`, which the writer
+    /// reads as open-time. The restart suites drive the first case and the
+    /// lost sidecar's third; the second — every restart of a board that has
+    /// written no head, whose whole feed lies above position 0 — is reached by
+    /// none of them.
+    #[test]
+    fn the_resume_counts_every_non_system_entry_and_times_the_last_system_one() {
+        let recorded = |key: &str, time: u64| CommitMeta::Recorded {
+            op: "insert".to_string(),
+            docs: Vec::new(),
+            time,
+            key: Some(key.to_string()),
+        };
+        let system = |time| recorded(SYSTEM_TESTIMONY, time);
+        let session = |time| recorded("bare", time);
+
+        let r = resume_cadence(&[
+            (5, system(100)),
+            (6, system(110)),
+            (7, session(200)),
+            (8, system(120)),
+            (9, CommitMeta::Bare),
+        ]);
+        assert_eq!(r.commits_since_head, 2, "the session's commit and the bare entry count");
+        assert_eq!(r.last_head_millis, Some(120), "the LAST system entry's time, not the first");
+
+        let r = resume_cadence(&[(5, CommitMeta::Bare), (6, session(300)), (7, session(400))]);
+        assert_eq!(r.commits_since_head, 3);
+        assert_eq!(r.last_head_millis, Some(300), "no system entry: the EARLIEST timed witness");
+
+        let r = resume_cadence(&[(5, CommitMeta::Bare), (6, CommitMeta::Bare)]);
+        assert_eq!(
+            (r.commits_since_head, r.last_head_millis),
+            (2, None),
+            "nothing timed: open-time"
+        );
+        let r = resume_cadence(&[]);
+        assert_eq!(
+            (r.commits_since_head, r.last_head_millis),
+            (0, None),
+            "nothing above the head"
+        );
+    }
 }

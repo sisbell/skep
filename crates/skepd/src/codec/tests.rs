@@ -330,3 +330,24 @@ fn an_attest_round_trips_on_the_checked_set_and_is_refused_off_it() {
     };
     assert!(e.0.contains("unknown field 'attest'"), "{e}");
 }
+
+/// `"attest": null` is the member's ABSENCE on the checked set (`p_attest`'s
+/// card: "missing, or `null`, which [`Fields::attest`] reads alike — never an
+/// empty blob"): an `insert` carrying it parses with no attestation at either
+/// door and re-marshals without the member. Its neighbour `deposit` reads an
+/// explicit `null` the other way, as a parse fault, so the edit that brings
+/// `attest` into line with it would answer every client that serializes an
+/// unsigned write's member as `null` with `unparseable`.
+#[test]
+fn an_attest_of_null_is_the_members_absence() {
+    let frame = br#"{"op":"insert","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"values":["x"],"attest":null}"#;
+    let request =
+        parse_request(frame).unwrap_or_else(|e| panic!("`attest: null` parses as absence: {e}"));
+    assert!(request.attest.is_none(), "null is no attestation");
+    let Ok(DaemonOp::Febe { presented, .. }) = JsonCodec.parse_daemon(frame) else {
+        panic!("an insert frame is an M10 request")
+    };
+    assert!(presented.is_none(), "and presents none at the daemon's door");
+    let canonical = String::from_utf8(JsonCodec.marshal_request(&request)).expect("utf-8");
+    assert!(!canonical.contains("attest"), "re-marshals without the member: {canonical}");
+}

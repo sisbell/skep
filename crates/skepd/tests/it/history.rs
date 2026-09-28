@@ -521,6 +521,11 @@ fn history_answers_survive_restart() {
 /// daemon's doc(hidden) test hook (holding one is exactly what an
 /// in-flight `world_at` holds), and the counter accounting is asserted
 /// directly alongside the wire's busy answer.
+///
+/// Every `/op-at` frame kind is held to that budget, `key_set` included: it
+/// reconstructs through its OWN arm of the route — `History::reconstruct`
+/// beside `read_at`, the canonical identity rebuilt over the world it hands
+/// back (AUTH-6.20) — so no `read_at` row reaches it.
 #[test]
 fn op_at_reconstruction_is_permit_bounded() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -554,6 +559,12 @@ fn op_at_reconstruction_is_permit_bounded() {
         assert_eq!(*st, 503, "saturated reconstruction must answer busy: {v}");
         assert_eq!(v["error"].as_str(), Some("history_busy"), "{v}");
     }
+    // The `key_set` frame, through its own arm: busy too — never an
+    // unbudgeted whole-world replay and identity rebuild for any guest.
+    let key_set = format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#);
+    let (st, v) = op_at(port, None, scenario.at_i1, &key_set);
+    assert_eq!(st, 503, "a historical key_set is a reconstruction too: {v}");
+    assert_eq!(v["error"].as_str(), Some("history_busy"), "{v}");
 
     // Only position-addressed reconstruction is gated: live reads (and the
     // plain head dump) serve while history is saturated.
@@ -578,6 +589,12 @@ fn op_at_reconstruction_is_permit_bounded() {
     drop(p3);
     drop(p2);
     op_at_ok(port, owner, scenario.at_i1, &retrieve(&scenario.doc1, 5));
+    let v = op_at_ok(port, None, scenario.at_i1, &key_set);
+    assert_eq!(
+        expect_resp(&v, "key_set")["as_of"].as_u64(),
+        Some(scenario.at_i1),
+        "and served once a permit is free: {v}"
+    );
 
     sd.shutdown();
 }

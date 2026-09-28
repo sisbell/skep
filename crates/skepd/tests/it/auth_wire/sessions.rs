@@ -95,6 +95,47 @@ fn close_is_idempotent_and_the_dead_token_signals() {
     sd.shutdown();
 }
 
+/// AUTH-4.40 — every `POST /session` mints a DISTINCT M10 session, principal
+/// 0 included: `post_session` asks `bootstrap_session` afresh per call
+/// (AUTH-6.35), and that is what confines the idempotency memo to the session
+/// that wrote under it and a close to the binding it names. The memo is keyed
+/// by (session, `id`, op kind), which makes the session observable at the
+/// wire: two sessions of principal 0 sending two DIFFERENT `register_node`
+/// frames under ONE `id` each commit their own node — the second is never
+/// answered the first's memoized ack — and closing the first leaves the
+/// second writing. Principal 0 is the claimant's own bootstrap principal,
+/// opened by every device that signs as it, so a shared session would make
+/// one device's retry replay another's write and one device's close end
+/// every other's.
+#[test]
+fn every_session_open_mints_its_own_m10_session_principal_zero_included() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let first = open_session(port, PRINCIPAL_ZERO);
+    let second = open_session(port, PRINCIPAL_ZERO);
+    let node = |addr: &str| format!(r#"{{"op":"register_node","addr":"{addr}","id":"one-id"}}"#);
+
+    let v = op(port, Some(&first), &node("1.5"));
+    assert_eq!(expect_resp(&v, "ack_addr")["addr"].as_str(), Some("1.5"), "{v}");
+    let v = op(port, Some(&second), &node("1.6"));
+    assert_eq!(
+        expect_resp(&v, "ack_addr")["addr"].as_str(),
+        Some("1.6"),
+        "the second session's frame commits its own node, never the first's memoized ack: {v}"
+    );
+
+    let (st, _) = http(port, "POST", "/session/close", Some(&first), b"");
+    assert_eq!(st, 204);
+    let v = op(port, Some(&second), r#"{"op":"register_node","addr":"1.7"}"#);
+    assert_eq!(
+        expect_resp(&v, "ack_addr")["addr"].as_str(),
+        Some("1.7"),
+        "closing the first session leaves the second writing: {v}"
+    );
+    sd.shutdown();
+}
+
 /// THE HYBRID HANDSHAKE's width check (AUTH-6.3, AUTH-4.34; the hybrid-only
 /// launch's Q2): a `sig` whose width is NONE of the hybrid blob widths — the
 /// classical 64-byte Ed25519 signature first, then one byte either side of
@@ -274,6 +315,42 @@ fn the_origin_header_fences_the_bare_bind_without_killing_it() {
         http_with_origin(port, "POST", "/op", Some(&bare), &dialed, draft.as_bytes());
     assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
     expect_resp(&json(&body), "ack_addr");
+
+    sd.shutdown();
+}
+
+/// `/session/close`'s THIRD CASE (AUTH-4.47; `post_session_close`'s card): a
+/// LIVE BARE binding presented from an origin OUTSIDE the bare set is refused
+/// for that request and LIVES, so the close retires NOTHING — and its answer
+/// is byte-identical to a close that did retire one: 204, no body, no
+/// `Skepd-Session`. A page that may not WRITE as a binding must neither end
+/// it nor learn from the answer whether it lives. The close is the one
+/// handler that acts on a token itself, beside the death arm every route
+/// shares, so the `/op` cell above does not reach it.
+#[test]
+fn a_close_from_a_foreign_origin_retires_nothing_and_answers_as_a_close_does() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let dialed = format!("http://127.0.0.1:{port}");
+    let draft = format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#);
+
+    // A close that retires its binding, from the dialed origin: the bytes.
+    let other = open_session(port, CLAIMANT_PRINCIPAL);
+    let real = http_with_origin(port, "POST", "/session/close", Some(&other), &dialed, b"");
+    assert_eq!(real.0, 204, "{real:?}");
+    assert!(
+        header(&real.1, "Skepd-Session").is_none() && real.2.is_empty(),
+        "a live close is a bare 204: {real:?}"
+    );
+
+    // The same close from a foreign origin: the same answer, to the byte…
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let foreign =
+        http_with_origin(port, "POST", "/session/close", Some(&bare), "https://evil.example", b"");
+    assert_eq!(foreign, real, "a refused close answers exactly as a real close does");
+    // …and the binding LIVES: the same token still writes.
+    expect_resp(&op(port, Some(&bare), &draft), "ack_addr");
 
     sd.shutdown();
 }

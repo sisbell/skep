@@ -59,8 +59,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
+use super::super::sidecar::line_bytes;
 use crate::codec::obj;
-use crate::sidecar::line_bytes;
 
 // Each file below is named BESIDE the field its records carry, because this
 // module owns the LINE and would otherwise own only half of what a line is:
@@ -112,7 +112,7 @@ pub(crate) struct DerivedFile {
     /// coverage it has just made true, so it CLOSES a gap rather than
     /// claiming over one — which is the opposite of what this flag guards
     /// against. And it is unreachable past a stop in any case: every
-    /// [`DerivedFile::append`] in [`crate::feed::Feed::open`] is
+    /// [`DerivedFile::append`] in [`super::Feed::open`] is
     /// `?`-propagated into `DaemonError::Sidecar`, so a failure there
     /// returns before any rewrite runs, and no rewrite happens at commit
     /// time at all.
@@ -186,7 +186,7 @@ impl DerivedFile {
     /// begins. The `+ 1` is what the fence MEANS
     /// ([`DerivedFile::coverage`]: every position at or below it is
     /// processed), so that reading is a fact of this type rather than of the
-    /// four arithmetic expressions [`crate::feed::Feed::open`] would
+    /// four arithmetic expressions [`super::Feed::open`] would
     /// otherwise spell — one per derived structure, over two different maps,
     /// and a fifth the day a fifth file lands.
     ///
@@ -218,7 +218,7 @@ impl DerivedFile {
     /// Append one record and REPORT a failed write rather than returning it —
     /// the RECORD-time disposition, where the commit has landed and the ack is
     /// owed whatever this file does. [`DerivedFile::append`] keeps the
-    /// fallible form for [`crate::feed::Feed::open`], which propagates into
+    /// fallible form for [`super::Feed::open`], which propagates into
     /// `DaemonError::Sidecar`: at open nothing is owed yet, so a data dir that
     /// cannot take a write the kernel just performed is an operator condition
     /// worth reporting rather than limping past.
@@ -252,7 +252,7 @@ impl DerivedFile {
     /// Rewrite the whole file as `records` behind a fence at `covered`,
     /// through a temp file renamed over the original (compaction, and the
     /// purge of a foreign fence). `records` are whole record objects already
-    /// carrying their `at`; [`crate::sidecar::line_bytes`] is what makes each
+    /// carrying their `at`; [`super::super::sidecar::line_bytes`] is what makes each
     /// a line.
     pub fn rewrite(&mut self, records: Vec<Value>, covered: u64) -> io::Result<()> {
         let path = self.dir.join(self.name);

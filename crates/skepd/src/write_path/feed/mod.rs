@@ -104,9 +104,9 @@ use self::derived::{
     DerivedFile, INDEX_DOCS, INDEX_FILE, MASKED_FILE, OFFSETS_FILE, OFFSETS_OFFSET, STREAMS_FILE,
     STREAMS_OWNERS,
 };
+use super::sidecar::{report_malformed_names, CommitMeta, CommitsLog, LineOffset};
 use crate::classify::{classify, derived_docs, parse_dotted, Doc};
 use crate::serial::SerialGuard;
-use crate::sidecar::{report_malformed_names, CommitMeta, CommitsLog, LineOffset};
 
 /// The most granted prefixes [`Inner::names_under`] scans per candidate
 /// before [`Inner::sources`] stands the filter aside and lets the mask
@@ -375,7 +375,7 @@ impl Feed {
     /// rewritten only when the log compacted under it, when it carries
     /// another journal's lines, or (the offset array) when its offsets no
     /// longer match the log's.
-    pub fn open(dir: &Path, engine: &Engine) -> io::Result<Feed> {
+    pub(super) fn open(dir: &Path, engine: &Engine) -> io::Result<Feed> {
         let (log, walked) = CommitsLog::open(dir, engine)?;
         let head = log.open_head;
         let snap = engine.kernel().snapshot();
@@ -643,7 +643,7 @@ impl Feed {
     /// and a parse that could not read a name would have nowhere to report
     /// it, leaving the position classified short and, where every name
     /// dropped, served to every class as a `[]`-docs entry.
-    pub fn record(
+    pub(super) fn record(
         &self,
         serial: &SerialGuard<'_>,
         at: u64,

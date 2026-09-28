@@ -176,7 +176,7 @@ impl CommitMeta {
 ///
 /// A newtype because it travels beside a committed POSITION of the same
 /// width — out of [`CommitsLog::record`], through
-/// [`crate::feed::Feed::record`], into the feed's own indexing — and the two
+/// [`super::feed::Feed::record`], into the feed's own indexing — and the two
 /// mean opposite things. Transposed, the position index, the bitmap and the
 /// owner streams key on a byte offset while `feed-offsets.log` records a
 /// position: the first half is loud, since the change feed's pages compare
@@ -331,7 +331,7 @@ impl CommitsLog {
     /// is owed yet, and a data dir that cannot take a write the kernel just
     /// performed is an operator condition worth reporting rather than
     /// limping past.
-    pub fn open(dir: &Path, engine: &Engine) -> io::Result<(CommitsLog, Vec<Walked>)> {
+    pub(super) fn open(dir: &Path, engine: &Engine) -> io::Result<(CommitsLog, Vec<Walked>)> {
         let path = dir.join(SIDECAR_FILE);
         let mut file = OpenOptions::new().create(true).read(true).append(true).open(&path)?;
         let mut bytes = Vec::new();
@@ -477,7 +477,7 @@ impl CommitsLog {
     /// `feed-offsets.log` fails its agreement test and is rewritten whole —
     /// the wrong offsets are latent for the uptime and self-healing after
     /// it.
-    pub fn record(
+    pub(super) fn record(
         &mut self,
         _serial: &SerialGuard<'_>,
         at: u64,
@@ -678,7 +678,7 @@ fn rewrite(
 /// rendering.
 ///
 /// UNREACHABLE as built — the names are rendered from validated `Address`es
-/// by [`crate::feed::Feed::record`] and read back by [`parse_dotted`], which
+/// by [`super::feed::Feed::record`] and read back by [`parse_dotted`], which
 /// is that rendering's inverse — and the obligation keeping it so is held by
 /// nobody: the write path renders, this file stores, the feed's open parses.
 fn demote_malformed_names(entries: &mut BTreeMap<u64, CommitMeta>) {

@@ -122,12 +122,12 @@ use skep_febe::{Op, Response, Stores};
 use skep_kernel::Seq;
 use skep_namespace::{head_document, system_account, HasM3, SYSTEM_PRINCIPAL};
 
+use super::feed::Feed;
+use super::sidecar::{wall_clock_millis, CommitMeta};
 use super::{write_meta, WriteMeta, WritePath};
 use crate::codec::{hex_string, parse_lower_hex};
-use crate::feed::Feed;
 use crate::notice;
 use crate::serial::SerialGuard;
-use crate::sidecar::{wall_clock_millis, CommitMeta};
 
 /// The head record's `format` member — the journal stamp in force (`SKJ4`),
 /// which names the hash and the byte format the `chain` value was computed

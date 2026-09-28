@@ -36,7 +36,7 @@
 //! change feed's: the commit-metadata sidecar `commits.log`, its four
 //! derived sidecars (`feed-*.log`), and, transiently while any is
 //! compacted, its `.compact` twin — all opened here through
-//! `WritePath::open` and owned by `sidecar.rs` and `feed/`; nothing here
+//! `WritePath::open` and owned by `write_path/sidecar.rs` and `write_path/feed/`; nothing here
 //! writes any file of the WORLD's, which is why two daemons replaying one
 //! journal still converge byte-identically.
 //!
@@ -178,12 +178,12 @@ use crate::auth::{
 use crate::codec::{
     check_keys, credential_refused_reply, key_set_reply, obj, to_bytes, DaemonOp, JsonCodec,
 };
-use crate::feed::{ChangesAnswer, FeedClass, Query};
 use crate::history::{History, Permit, Permits, Unavailable};
 use crate::limits::{MAX_REQUEST_BODY, MAX_SMALL_BODY};
 use crate::notice;
 use crate::serial::SerialGuard;
 use crate::write_path::{write_meta, FrameMeta, StreamStep, WritePath};
+use crate::write_path::{ChangesAnswer, FeedClass, Query};
 
 pub use crate::auth::session::Peer;
 

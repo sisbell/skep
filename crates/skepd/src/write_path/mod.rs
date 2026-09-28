@@ -59,13 +59,16 @@ use skep_engine::{Engine, EngineStores};
 use skep_febe::{Op, OpKind, Response, Stores};
 use skep_kernel::Seq;
 
+mod feed;
 mod head;
+mod sidecar;
 
+pub(crate) use feed::{ChangesAnswer, FeedClass, Query};
 pub(crate) use head::board_term;
 
 use crate::codec::op_name;
-use crate::feed::{ChangesAnswer, Feed, FeedClass, Query};
 use crate::serial::{Serial, SerialGuard};
+use feed::Feed;
 use self::head::HeadWriter;
 
 /// The commit stream's wait bound: a subscriber that has heard nothing for
@@ -250,7 +253,7 @@ impl WritePath {
     /// EVERY commit this daemon makes rides this step — `/op`'s through
     /// [`WritePath::commit_under`], the published head's own directly — and
     /// that is the one premise the commit stream's completeness and
-    /// [`crate::sidecar::CommitsLog::head_time`] rest on: a commit that
+    /// [`sidecar::CommitsLog::head_time`] rest on: a commit that
     /// bypassed it would be unrecorded and unannounced, and both would be
     /// wrong about it in silence. Their docs cite this step rather than
     /// naming the writers: a writer is covered by passing through it, and by
@@ -401,7 +404,7 @@ impl WritePath {
             AffectedDocs::Minted => {
                 // The obligation [`AffectedDocs::Minted`] states, made loud.
                 // In release the fallback keeps this walk total and produces
-                // a `docs: []` entry, which `crate::feed`'s mask NEVER masks:
+                // a `docs: []` entry, which `feed`'s mask NEVER masks:
                 // the op, the wall-clock time and the fingerprint of the
                 // signing key of a draft mint, served to every class,
                 // permanently, since nothing re-derives an entry the sidecar
@@ -447,7 +450,7 @@ impl FrameMeta {
 
 /// What the change feed will say about one write: the op kind, the
 /// affected documents, and the committer's testimony. The
-/// frame-derived stage of a `commits.log` entry — [`crate::sidecar::CommitMeta`]
+/// frame-derived stage of a `commits.log` entry — [`sidecar::CommitMeta`]
 /// is the next one, completed at record time with the committed position
 /// and the wall-clock time.
 ///
@@ -503,7 +506,7 @@ pub(crate) enum AffectedDocs {
 /// to reach a release build: a write classified here as a read runs outside
 /// [`WritePath::commit_under`]'s lock, unrecorded and unannounced —
 /// `/changes` misses that position for the rest of the uptime, `/events`
-/// never announces it, and [`crate::sidecar::CommitsLog::head_time`]'s
+/// never announces it, and [`sidecar::CommitsLog::head_time`]'s
 /// premise that every commit is recorded fails, so `/health` reports an
 /// older position's time AS the head's, the one thing that method's contract
 /// says it does not do. A read classified here as a write is refused from

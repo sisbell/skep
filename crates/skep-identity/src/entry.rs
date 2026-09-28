@@ -92,6 +92,12 @@ use crate::framing::{framed, push_delimited, ENTRY_TAG};
 /// * `op`, `body` — the [`EntryBody`]'s token and bytes, which its builder
 ///   ([`entry_body_insert`], [`entry_body_make_link`], [`entry_body_publish`])
 ///   pairs.
+///
+/// PRECONDITION — as [`framed`]'s: every member is shorter than 2^32 bytes.
+/// A longer member PANICS, naming the obligation — a caller's bug and never
+/// an outcome. The body is the one member that grows with the write, and no
+/// body the daemon composes comes near the bound ([`framed`]'s card says
+/// why).
 pub fn entry_frame(
     alg: &str,
     board: BoardTerm,
@@ -253,6 +259,10 @@ fn push_slot(out: &mut Vec<u8>, slot: EntrySlot<'_>) {
 /// its dotted-decimal spelling, length-delimited (empty where undeclared),
 /// then the values placed as a value sequence — `be64(count)`, then each
 /// value as `be32(len) ‖ bytes`.
+///
+/// PRECONDITION — every value, and the declared type's spelling, is shorter
+/// than 2^32 bytes: its length is [`framed`]'s `be32`, and a longer element
+/// PANICS, naming the obligation, rather than truncate it.
 pub fn entry_body_insert<'a>(
     declared_type: Option<&Address>,
     values: impl IntoIterator<Item = &'a [u8]>,
@@ -272,6 +282,10 @@ pub fn entry_body_insert<'a>(
 /// `0x02` the resolve form), `be64(n)`, then each element length-delimited —
 /// an address in its dotted-decimal spelling, a V-spec as its source address,
 /// its span's start and its span's width.
+///
+/// PRECONDITION — every element's spelling (an address, a span's start or
+/// width) is shorter than 2^32 bytes, as [`entry_body_insert`]'s values are;
+/// a longer one PANICS, naming the obligation.
 pub fn entry_body_make_link(slots: LinkSlots<'_>) -> EntryBody {
     let mut out = Vec::new();
     push_slot(&mut out, slots.ty);
@@ -283,6 +297,9 @@ pub fn entry_body_make_link(slots: LinkSlots<'_>) -> EntryBody {
 /// THE `publish` BODY, under the `publish` token: the client's runs' values
 /// in V-order, as one value sequence with their count — `be64(count)`, then
 /// each value as `be32(len) ‖ bytes`.
+///
+/// PRECONDITION — every value is shorter than 2^32 bytes, as
+/// [`entry_body_insert`]'s are; a longer one PANICS, naming the obligation.
 pub fn entry_body_publish<'a>(values: impl IntoIterator<Item = &'a [u8]>) -> EntryBody {
     let mut out = Vec::new();
     push_value_sequence(&mut out, values);

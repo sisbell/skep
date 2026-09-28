@@ -1,9 +1,9 @@
 //! The fold corpus (AUTH-2.96): step-order vectors (AUTH-2.66), verdict-token
 //! vectors (AUTH-2.67–2.76, AUTH-2.127), board-state vectors (AUTH-2.62), the
 //! agent space and the handoff latch (AUTH-2.62's RES-80 arm, AUTH-2.71),
-//! shape vectors (AUTH-2.22, AUTH-2.46–2.48), and the key-set semantics
-//! (AUTH-1.30–1.31, I9's conformance arm). The payload vectors are in
-//! `read.rs`, the checkpoint byte pins in `checkpoint.rs`.
+//! shape vectors (AUTH-2.22, AUTH-2.33, AUTH-2.46–2.48), and the key-set
+//! semantics (AUTH-1.30–1.31, I9's conformance arm). The payload vectors are
+//! in `read.rs`, the checkpoint byte pins in `checkpoint.rs`.
 
 use crate::common;
 
@@ -773,6 +773,30 @@ fn empty_to_on_an_enrollment_is_malformed_shape() {
     );
 }
 
+/// AUTH-2.33, `Inert::MalformedShape`'s third count — the address an
+/// enroll/retire `to` names must be an ACCOUNT as of the deposit's commit,
+/// else `malformed_shape` (the fold has no `not_an_account`). The address here
+/// is a later child of ACCT_A that no principal is registered at yet — a name
+/// M7 deposits verbatim — and once delegated, the SAME deposit folds a
+/// genesis: the verdict is the ctx's point's, which is why every `FoldCtx`
+/// fact is answered as of the deposit's commit. Every other vector names a
+/// subject that is already an account, so this is the one that watches the
+/// arm entry's `is_account` guard: without it this deposit seeds a key set at
+/// an address that is no account.
+#[test]
+fn a_to_that_names_no_account_as_of_the_commit_is_malformed_shape() {
+    let mut fx = Fixture::new();
+    let dep = fx.enroll_dep(&doc1(ACCT_A), B_SUBDIVISION, &enroll_payload(&[(1, true)]));
+    assert_detail(&fx.classify(&IdentityState::genesis(), &dep), "malformed_shape");
+    // The same deposit, under a ctx at which the child has since been
+    // delegated beneath ACCT_A.
+    seat_accounts(&mut fx, &[B_SUBDIVISION]);
+    match assert_honored(&fx.classify(&IdentityState::genesis(), &dep)) {
+        Effect::Genesis { account, .. } => assert_eq!(*account, addr(B_SUBDIVISION)),
+        other => panic!("expected a genesis effect, got {other:?}"),
+    }
+}
+
 /// Corpus: a `ty` slot of NO spans · one whose single span is a CONTENT
 /// I-span of the home · a `ty` of TWO spans, one of which IS
 /// `subtree_of(T_enroll)` · a `ty` of ONE span CONTAINING
@@ -858,16 +882,18 @@ fn enrolled_reads_report_membership_and_the_anchor_flag() {
     assert!(set.contains(&fp(2)) && !set.is_anchor(&fp(2)));
 }
 
-/// AUTH-1.31 — `enrolled()` answers FINGERPRINT order, not the order the
-/// record listed the keys in (the ordering the realm genesis-set framing
-/// reuses, AUTH-2.119). The record here lists its entries in DESCENDING
-/// fingerprint order, so a set iterating in record order answers the exact
-/// reverse of the claim.
+/// AUTH-1.31 — `enrolled()` answers FINGERPRINT ORDER — ascending by the
+/// digest bytes, `Fingerprint`'s card — not the order the record listed the
+/// keys in (the ordering the realm genesis-set framing reuses, AUTH-2.119).
+/// The expectation is computed from the BYTES, never from `Fingerprint`'s own
+/// `Ord`, so a representation whose derived order is not byte order goes red
+/// here instead of agreeing with itself; eight keys, listed in DESCENDING byte
+/// order, so a set iterating in record order answers the exact reverse.
 #[test]
 fn enrolled_iterates_in_fingerprint_order_not_record_order() {
     let mut fx = Fixture::new();
-    let mut ascending = [1u8, 2, 3, 4];
-    ascending.sort_by_key(|&i| fp(i));
+    let mut ascending: Vec<u8> = (1..=8).collect();
+    ascending.sort_by_key(|&i| *fp(i).as_bytes());
     let record: Vec<(u8, bool)> = ascending.iter().rev().map(|&i| (i, false)).collect();
     let st = seed_own(&mut fx, &IdentityState::genesis(), ACCT_A, &record);
 
@@ -880,21 +906,18 @@ fn enrolled_iterates_in_fingerprint_order_not_record_order() {
     assert_eq!(got, want);
 }
 
-/// AUTH-1.31 — `retired()` answers FINGERPRINT order, whatever order the
-/// retirement record named the fingerprints in.
+/// AUTH-1.31 — `retired()` answers FINGERPRINT ORDER, whatever order the
+/// retirement record named the fingerprints in; the expectation computed from
+/// the bytes, as above.
 #[test]
 fn retired_iterates_in_fingerprint_order() {
     let mut fx = Fixture::new();
-    let mut ascending = [1u8, 2, 3];
-    ascending.sort_by_key(|&i| fp(i));
-    // A fourth key stays enrolled, so retiring these three is not
+    let mut ascending: Vec<u8> = (1..=8).collect();
+    ascending.sort_by_key(|&i| *fp(i).as_bytes());
+    // A ninth key stays enrolled, so retiring these eight is not
     // `would_empty` (I3).
-    let st = seed_own(
-        &mut fx,
-        &IdentityState::genesis(),
-        ACCT_A,
-        &[(1, false), (2, false), (3, false), (4, false)],
-    );
+    let seeding: Vec<(u8, bool)> = (1..=9).map(|i| (i, false)).collect();
+    let st = seed_own(&mut fx, &IdentityState::genesis(), ACCT_A, &seeding);
     let named: Vec<u8> = ascending.iter().rev().copied().collect();
     let dep = fx.retire_dep(&doc1(ACCT_A), ACCT_A, &retire_payload(&named));
     let (st, v) = fx.step(&st, &dep);

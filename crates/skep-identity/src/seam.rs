@@ -57,7 +57,23 @@ pub trait Values {
     fn value_at(&self, at: &Tumbler) -> Option<&[u8]>;
 }
 
-/// AUTH-2.31 — the fold's world seam, over [`Values`].
+/// AUTH-2.31 — the fold's world seam, over [`Values`] and on the SAME ctx:
+/// every fact below is answered AS OF THE CTX'S COMMIT, as `value_at` is —
+/// for the fold, the deposit's own commit, the point
+/// [`IdentityState`](crate::IdentityState)'s I2 statement (AUTH-2.90) rests
+/// on. AUTH-2.29 calls `value_at` the seam's one genuinely world-side fact:
+/// its one read of the CONTENT store, not its one time-bound answer. Of the
+/// three below, two cannot tell the commit from the head for anything the
+/// fold asks: ω of a registered home or of a registered principal's parent —
+/// fixed once that home or principal is registered, M3 registering a
+/// principal before anything beneath it and none at a document — and a
+/// registered document's birth state (AUTH-2.34). [`FoldCtx::is_account`]
+/// can: the fold asks it of the address an enroll/retire `to` names, an
+/// endset names addresses verbatim (M7 deposits a ghost name as readily as a
+/// minted one), and that address may become an account only after the
+/// deposit commits. Answered at head, such a deposit — `malformed_shape` at
+/// its commit — can fold honored, and the table is then the head's, not the
+/// stream's.
 pub trait FoldCtx: Values {
     /// AUTH-2.32 — ω(a), UNPROJECTED: one longest-prefix resolution over the
     /// principal registry (M3 `effective_owner`, AUTH-2.108); `None` iff `a`
@@ -76,7 +92,9 @@ pub trait FoldCtx: Values {
     /// the implementor's alone.
     fn owner_of(&self, a: &Address) -> Option<Owner>;
 
-    /// AUTH-2.33 — M3 `is_registered_account(a)`.
+    /// AUTH-2.33 — M3 `is_registered_account(a)`, AS OF THE CTX'S COMMIT: of
+    /// this trait's three facts, the one an at-head answer moves (the trait's
+    /// card).
     fn is_account(&self, a: &Address) -> bool;
 
     /// AUTH-2.34 — the document's BIRTH state: publication is at birth and no

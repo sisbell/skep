@@ -93,11 +93,18 @@ fn with_canonical_sig(base: &str, sig: &str) -> String {
 }
 
 /// The suite's config at `cases`: the seed file is `props.proptest-regressions`
-/// beside this source — the tracked pins, replayed first on every run — pinned
-/// by name, since proptest's default (`SourceParallel`) resolves through the
-/// nearest `main.rs`, which this one-binary layout puts at `tests/it/`, to
+/// beside this source — pinned by name, since proptest's default
+/// (`SourceParallel`) resolves through the nearest `main.rs`, which this
+/// one-binary layout puts at `tests/it/`, to
 /// `tests/proptest-regressions/props.txt`, a file the tracked seeds never
 /// lived in (the chain's open items, item 1). Both blocks below take it.
+///
+/// The file holds two seeds, replayed first on every run. Their `# shrinks
+/// to` comments name `Act` fields — `subject`, `home`, `keys`, `fps` — that
+/// this file's [`Act`] does not carry, and a seed is an RNG state rather than
+/// a case: under this file's strategies, which draw a key kind per entry over
+/// the homes [`homes`] lists, each seed generates an ARBITRARY case. They are
+/// replayed, and they pin no case their comments name.
 fn config(cases: u32) -> ProptestConfig {
     ProptestConfig {
         cases,

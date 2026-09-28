@@ -42,9 +42,12 @@ pub const RETIRE_TYPE: &str = "skep-retire";
 /// from the first served board the constant MUST NOT change (AUTH-1.21).
 /// Sized so a signed hybrid genesis carries AUTH-3.57's sixteen tag-1
 /// entries in one record — 71,074 B — with room to spare (AUTH-2.130's cost
-/// note: 32 label-free tag-1 entries, 68 tag-3). It bounds the fold's
-/// per-record work only under the wire-codec premise that every value
-/// carries ≥ 1 byte (AUTH-1.22).
+/// note: 32 label-free tag-1 entries, 68 tag-3). As a BYTE cap it bounds the
+/// fold's per-record work only under the wire-codec premise that every value
+/// carries ≥ 1 byte (AUTH-1.22); the second bound that rule demands wherever
+/// a zero-byte value can reach the read is
+/// [`record_bytes`](crate::record_bytes)' per-record POSITION budget, over
+/// this same constant, so the work is bounded whatever a ctx answers.
 pub const MAX_RECORD_BYTES: usize = 128 * 1024;
 
 /// AUTH-1.24 — the label's byte bound: at most 128 BYTES of UTF-8, counted
@@ -416,13 +419,33 @@ impl RecordEntry for Fingerprint {
 /// composes with `None` the SIG-LESS PROJECTION of a committed, `sig`-bearing
 /// record — the one byte string every party to a record holds, and the
 /// record grade's first step at every kind. This projection ADMITS NOTHING —
-/// a verifier beside the table can compute over the entries of a record the
-/// fold refused — and it is also the admission compare's own spelling:
+/// a verifier beside the table computes it over the entries of any record the
+/// parsers ADMIT, whatever verdict the fold's arms gave the deposit that
+/// carried it — and it is also the admission compare's own spelling:
 /// [`parse_enroll`] and [`parse_retire`] admit a body only where it equals
 /// this function over the entries they parsed and the `sig` they read
 /// (AUTH-2.130), so signer, verifier and admission rule call one function.
 /// [`encode_enroll`] and [`encode_retire`] are this function with
 /// `sig = None` (AUTH-2.18).
+///
+/// PRECONDITION, for an answer a parser admits — `entries` is NON-EMPTY and
+/// DUPLICATE-FREE, the parsers' POSTCONDITION read from the other side, as
+/// [`encode_enroll`] and [`encode_retire`] state it; `sig` may be any string,
+/// clause 3 escaping it. Outside that domain the function still answers a
+/// record value — it emits what it is given and re-checks nothing — and NO
+/// parser admits it: a signer composing over a repeated entry, or none,
+/// deposits a record the fold refuses `malformed_payload`
+/// (`duplicate_key:<n>`, `empty`). The record cap is the READ's and never
+/// this function's: within the domain a record past [`MAX_RECORD_BYTES`]
+/// still parses, and the fold refuses its deposit `malformed_payload`
+/// (`too_large`) at the read, before any parse (AUTH-2.43).
+///
+/// POSTCONDITION — within it, the value ROUND-TRIPS, `sig` included: the
+/// kind's parser admits `canonical_record(entries, sig)` and answers
+/// `entries`, so the verifier's `canonical_record(parsed, None)` is the byte
+/// string the signer composed with `None` — the agreement "the one byte
+/// string every party to a record holds" names (I1 over the record value,
+/// AUTH-2.89; RES-105).
 ///
 /// The ENVELOPE both schemas state in identical words, written ONCE:
 /// `{"type":"<value>",` `"<member>":[` the entries comma-separated `]`, then

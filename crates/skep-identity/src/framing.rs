@@ -83,10 +83,12 @@ pub const TAGS: &[Tag] = &[KEY_TAG, SESSION_TAG, SESSION_TAG_V2, NODE_HELLO_TAG,
 ///
 /// PRECONDITION — every field is shorter than 2^32 bytes, so its length is
 /// what `be32` writes. A longer field is a CALLER's bug and not an outcome:
-/// no field framed today comes near it — the largest is an entry body, which
-/// a request carries under the daemon's own cap — and truncating the length
-/// would silently break the injectivity above rather than refuse it. It
-/// panics, naming the obligation.
+/// no field framed today comes near it — the largest is an entry body: an
+/// `insert`'s or a `make_link`'s, carried in a request under the daemon's own
+/// cap, or a `publish`'s, read off the store and held to that same bound by
+/// the daemon's shot-body budget — and truncating the length would silently
+/// break the injectivity above rather than refuse it. It panics, naming the
+/// obligation.
 ///
 /// AUTH-1.14 — debug-asserts that `tag` is a member of [`TAGS`], so a tag
 /// declared but not listed fails at its first use; release builds pay

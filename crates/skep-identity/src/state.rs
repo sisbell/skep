@@ -99,6 +99,14 @@ impl IdentityState {
     /// `static`; a mirror owes the same, having fixed one address form for it
     /// (AUTH-2.125).
     ///
+    /// PRECONDITION — `ctx` answers AS OF THE DEPOSIT'S COMMIT, every fact
+    /// alike ([`FoldCtx`]'s card) — the point this verdict is ABOUT, and the
+    /// other input [`IdentityState`]'s I2 statement rests on beside `types`. A
+    /// ctx at head folds an earlier deposit against facts its commit did not
+    /// have — a value minted later (AUTH-2.5), a `to` address that became an
+    /// account later — and the table built over it is then the head's rather
+    /// than the stream's, at every such deposit.
+    ///
     /// Total under the same conforming-ctx condition as [`step`], and the two
     /// debug assertions that condition names are reached from here.
     ///
@@ -125,7 +133,7 @@ impl IdentityState {
     }
 
     /// AUTH-2.56/AUTH-2.57 — classify-then-apply (on `Honored`) or self
-    /// unchanged; `dep` and `types` owe [`classify`]'s PRECONDITIONS.
+    /// unchanged; `dep`, `types` and `ctx` owe [`classify`]'s PRECONDITIONS.
     ///
     /// TOTAL under a CONFORMING ctx — one meeting [`Values`]' and [`FoldCtx`]'s
     /// stated obligations: no input a RECORD can carry reaches a panic, and
@@ -530,29 +538,35 @@ impl IdentityState {
     /// AUTH-1.32 by construction.
     ///
     /// PRECONDITION — `effect` is one [`classify`] answered for THIS state.
-    /// This is where [`KeySet`]'s two mutator preconditions arrive, and it
-    /// discharges neither: `Retire`'s `removed` must be a PROPER subset of the
-    /// account's enrolled set — the `WouldEmpty` test, AUTH-2.74 — or
+    /// This is where [`KeySet`]'s three mutator preconditions arrive, and it
+    /// discharges none of them: `Retire`'s `removed` must be a PROPER subset
+    /// of the account's enrolled set — the `WouldEmpty` test, AUTH-2.74 — or
     /// AUTH-1.36 and I3 are void, and the fingerprints moved in one post are
     /// this arm's whole loop; `Enroll`'s `added` and `Genesis`' `keys` must be
     /// outside `retired` (AUTH-2.69's filter, AUTH-2.70's empty-set premise)
-    /// or AUTH-1.35 and I4 are void. And every arm must leave the posted set
-    /// NON-EMPTY — [`post_to_set`]'s PRECONDITION, where the standing
-    /// invariant is owed — by a DIFFERENT route on each. `Genesis`' `keys` are
-    /// non-empty ([`parse_enroll`]'s POSTCONDITION, AUTH-2.16); were they not,
-    /// the post would seat an EMPTY row, [`keyed_accounts`] would yield an
-    /// account holding no key, and the set the genesis arm tests would still
-    /// be empty, so that arm could fire again and I5 (AUTH-2.100) would be
-    /// void. `Enroll`'s account ALREADY holds a non-empty row, because
-    /// AUTH-2.69's arm fires only on `!S.is_empty()` — so an `Enroll` naming
-    /// an account with no row is outside this precondition whatever `added`
-    /// holds, and `added`'s own non-emptiness is that arm's `NothingChanged`
-    /// test, not this one's. `Retire`'s proper-subset clause above carries its
-    /// half already: nothing is a proper subset of the empty set, so a
-    /// `Retire` cannot reach a rowless account, and a proper subset of a
-    /// non-empty set leaves it non-empty. A NEW arm owes the obligation, not
-    /// one of these three routes. [`step`] is the only caller and it passes
-    /// `classify`'s own answer.
+    /// or AUTH-1.35 and I4 are void, and outside `enrolled` with no
+    /// fingerprint twice — the same filter, the genesis arm's empty set,
+    /// [`parse_enroll`]'s duplicate-free POSTCONDITION — or I9 (AUTH-2.104) is
+    /// void, a second insert REPLACING the first's flag. And every set-touching
+    /// arm must leave the posted set NON-EMPTY — [`post_to_set`]'s
+    /// PRECONDITION, where the standing invariant is owed — by a DIFFERENT
+    /// route on each. `Genesis`' `keys` are non-empty ([`parse_enroll`]'s
+    /// POSTCONDITION, AUTH-2.16); were they not, the post would seat an EMPTY
+    /// row, [`keyed_accounts`] would yield an account holding no key, and the
+    /// set the genesis arm tests would still be empty, so that arm could fire
+    /// again and I5 (AUTH-2.100) would be void. `Enroll`'s account ALREADY
+    /// holds a non-empty row, because AUTH-2.69's arm fires only on
+    /// `!S.is_empty()` — so an `Enroll` naming an account with no row is
+    /// outside this precondition whatever `added` holds, and `added`'s own
+    /// non-emptiness is that arm's `NothingChanged` test, not this one's.
+    /// `Retire`'s proper-subset clause above carries its half already: nothing
+    /// is a proper subset of the empty set, so a `Retire` cannot reach a
+    /// rowless account, and a proper subset of a non-empty set leaves it
+    /// non-empty. A NEW arm owes the obligation, not one of these three
+    /// routes. `Claim` posts no set; it must find `claimant` `None` —
+    /// AUTH-2.67 item 4 — or I6 (AUTH-2.101) is void: its post is an
+    /// assignment, and it overwrites. [`step`] is the only caller and it
+    /// passes `classify`'s own answer.
     ///
     /// [`classify`]: IdentityState::classify
     /// [`keyed_accounts`]: IdentityState::keyed_accounts

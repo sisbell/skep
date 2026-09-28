@@ -487,6 +487,18 @@ impl std::error::Error for ParseKeyError {}
 /// `SHA-256(framed(KEY_TAG, [alg, raw]))` (AUTH-1.8). A FOLD INPUT, not
 /// merely a display form (I2, AUTH-2.90): the fingerprint is the key-set map
 /// key, the entry a retirement names, and the serialized value.
+///
+/// FINGERPRINT ORDER — the order `Ord` answers, the one
+/// [`KeySet::enrolled`](crate::KeySet::enrolled) and
+/// [`KeySet::retired`](crate::KeySet::retired) iterate (AUTH-1.31), the realm
+/// genesis-set framing reuses across implementations (AUTH-2.119, RES-1) and
+/// the wire's `key_set` read serves — is ASCENDING BY THE THIRTY-TWO DIGEST
+/// BYTES, compared lexicographically: [`Fingerprint::as_bytes`]' order, and
+/// equally that of [`Fingerprint::to_hex`]'s fixed-width lowercase form
+/// compared as a string. It is AUTH-1.7's declared derive over the private
+/// field, stated here because that field decides it and the interface does
+/// not show it: a representation that kept the derive over other words — the
+/// digest held as integers, say — would reorder every one of those readers.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Fingerprint([u8; 32]);
 

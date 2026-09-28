@@ -1,4 +1,3 @@
-use super::marshal::{j_slotspec, j_u64, j_values, j_view};
 use super::*;
 
 /// Leaf strictness: the dotted-decimal grammar admits exactly nonempty
@@ -233,81 +232,6 @@ fn no_zero_width_or_ill_shaped_span_parses() {
     }
 }
 
-/// Value granularity at the leaf: per-byte forms mint one single-byte
-/// value per byte, atom forms one composite value; the canonical marshal
-/// coalesces maximal per-byte runs (UTF-8 judged on the whole run) and
-/// never coalesces atoms.
-#[test]
-fn value_forms_parse_per_byte_and_atoms_marshal_apart() {
-    let mut vs: Vec<Val> = Vec::new();
-    p_val_form(&Value::String("hé".into()), &mut vs).expect("a string value form parses");
-    assert_eq!(vs.len(), 3, "'h' plus the two bytes of 'é'");
-    assert!(vs.iter().all(|v| v.len() == 1));
-    p_val_form(&obj(vec![("atom", Value::String("hé".into()))]), &mut vs)
-        .expect("an atom value form parses");
-    assert_eq!(vs.len(), 4);
-    assert_eq!(vs[3].as_bytes(), "hé".as_bytes());
-    // Canonical inverse: the run reassembles, the atom stays its own form.
-    let canon = j_values(&vs);
-    let expect: Value = serde_json::from_str(r#"["hé",{"atom":"hé"}]"#).unwrap();
-    assert_eq!(canon, expect);
-    // Empty per-byte forms are vacuous; empty atoms are inexpressible;
-    // multi-key objects and non-string/object elements are malformed.
-    let mut none: Vec<Val> = Vec::new();
-    p_val_form(&Value::String(String::new()), &mut none).expect("\"\" is vacuous");
-    p_val_form(&obj(vec![("hex", Value::String(String::new()))]), &mut none)
-        .expect("an empty hex string is vacuous");
-    assert!(none.is_empty());
-    for bad in [
-        obj(vec![("atom", Value::String(String::new()))]),
-        obj(vec![("atom_hex", Value::String(String::new()))]),
-        obj(vec![("atom", Value::String("a".into())), ("hex", Value::String("00".into()))]),
-        Value::Bool(true),
-    ] {
-        assert!(p_val_form(&bad, &mut none).is_err(), "{bad} must not parse");
-    }
-    assert!(p_hex("abc").is_err()); // odd length
-    assert!(p_hex("zz").is_err());
-}
-
-/// All three documented view values (wire.md §Value encodings:
-/// `"audit"`, `"active"`, `"default"`). The request fixtures carry only
-/// two, so the third's parse arm and its marshal arm are watched by
-/// nothing — and a typo in either makes a frame the document offers a
-/// client come back `unparseable`, which tells them their frame is
-/// malformed when the value is one wire.md invited.
-#[test]
-fn every_documented_view_value_round_trips() {
-    for name in ["audit", "active", "default"] {
-        let v = p_view(&Value::String(name.into()))
-            .unwrap_or_else(|e| panic!("'{name}' is a documented view: {e}"));
-        assert_eq!(j_view(v), Value::String(name.into()), "'{name}' must be its own inverse");
-    }
-    for bad in ["Audit", "", "all", "actives"] {
-        assert!(p_view(&Value::String(bad.into())).is_err(), "'{bad}' must not parse");
-    }
-}
-
-/// The one parse-side normalization [`JsonCodec::marshal_request`]'s
-/// precondition names rather than excludes: an empty span array IS the
-/// empty constraint (M8 documents the empty endset as exactly that
-/// zero), so it reads back under the canonical name and a
-/// `SlotSpec::Spans` over an empty endset round-trips EQUAL rather than
-/// identical. Nothing else pins that the two spellings meet.
-#[test]
-fn an_empty_slot_constraint_normalizes_onto_its_canonical_name() {
-    assert!(
-        matches!(p_slotspec(&Value::Array(vec![])), Ok(SlotSpec::Empty)),
-        "an empty span array is the empty constraint, not an empty span list"
-    );
-    assert_eq!(
-        j_slotspec(&SlotSpec::Spans(Endset::from_spans([]))),
-        Value::Array(vec![]),
-        "which is the form an empty Spans marshals as"
-    );
-    assert_eq!(j_slotspec(&SlotSpec::Empty), Value::String("empty".into()));
-}
-
 /// "Non-negative" is the word the wire uses (wire.md §Value encodings)
 /// and the word these parsers' own error messages use; a signed or
 /// fractional number is neither a natural nor a bounded integer. The
@@ -332,8 +256,8 @@ fn negative_and_fractional_numbers_are_not_integers() {
 /// cannot leak into bytes.
 #[test]
 fn obj_is_order_insensitive() {
-    let a = obj(vec![("b", j_u64(2)), ("a", j_u64(1))]);
-    let b = obj(vec![("a", j_u64(1)), ("b", j_u64(2))]);
+    let a = obj(vec![("b", Value::from(2u64)), ("a", Value::from(1u64))]);
+    let b = obj(vec![("a", Value::from(1u64)), ("b", Value::from(2u64))]);
     assert_eq!(to_bytes(a), to_bytes(b));
 }
 
@@ -343,8 +267,8 @@ fn obj_is_order_insensitive() {
 /// it.
 #[test]
 fn obj_keeps_the_last_of_duplicate_keys() {
-    let v = obj(vec![("k", j_u64(1)), ("a", j_u64(9)), ("k", j_u64(2))]);
-    assert_eq!(v["k"], j_u64(2), "the last pair given wins");
+    let v = obj(vec![("k", Value::from(1u64)), ("a", Value::from(9u64)), ("k", Value::from(2u64))]);
+    assert_eq!(v["k"], Value::from(2u64), "the last pair given wins");
     assert_eq!(to_bytes(v), br#"{"a":9,"k":2}"#.to_vec(), "and the keys still sort");
 }
 

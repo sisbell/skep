@@ -146,8 +146,8 @@ pub use server::{
 /// `skep-identity`'s, which a client that holds keys depends on anyway to
 /// compose the enrollment records that seat them. The signature libraries'
 /// own types — `ed25519-dalek`'s signing key, `rand_core` 0.6's RNG traits —
-/// appear only on `hybrid`'s `#[doc(hidden)]` test hooks, and on no stable
-/// name.
+/// appear only on `hybrid`'s test hooks, which compile only under
+/// `test-hooks`, and so on no name a shipped build carries.
 pub use skep_engine::{EngineError, HistoryError, OpenError, World};
 
 /// The dump [`Daemon::dump_visible_to`] answers with, re-exported for the

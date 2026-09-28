@@ -411,8 +411,8 @@ pub fn next_content_ordinal(port: u16, token: Option<&str>, doc: &str) -> u64 {
 
 /// THE HIRE (AUTH-5.58, AUTH-2.62, AUTH-2.70): key a DELEGATED, keyless
 /// principal so it can open a SIGNED session — what a write into a published
-/// home needs on a claimed board (AUTH-3.79; `policy.rs`'s RES-26 gate), a
-/// grant being one such write (PUB-5.8). The agent's GENESIS enrollment is
+/// home needs on a claimed board (AUTH-3.79; `policy/plain.rs`'s RES-26
+/// gate), a grant being one such write (PUB-5.8). The agent's GENESIS enrollment is
 /// homed in its GENESIS REGISTRY — its DELEGATOR's doc 1; for a
 /// bootstrap-delegated account, the CLAIMANT's doc 1 (AUTH-2.62) — written
 /// from the delegator's SIGNED session as the one-atom verified deposit

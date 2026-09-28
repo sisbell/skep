@@ -519,7 +519,7 @@ fn j_seq(s: Seq) -> Value {
     j_u64(s.0)
 }
 
-pub(super) fn j_u64(n: u64) -> Value {
+fn j_u64(n: u64) -> Value {
     Value::Number(n.into())
 }
 
@@ -682,7 +682,7 @@ impl ValueItems {
 
 /// The canonical `values` encoding — [`p_values`](super::p_values)'s inverse, under
 /// [`ValueItems`]' rule with the bare-string run form.
-pub(super) fn j_values(vs: &[Val]) -> Value {
+fn j_values(vs: &[Val]) -> Value {
     let mut out = ValueItems::new(Value::String);
     for v in vs {
         out.value(v);
@@ -700,7 +700,7 @@ fn j_atom(v: &Val) -> Value {
     }
 }
 
-pub(super) fn j_view(v: View) -> Value {
+fn j_view(v: View) -> Value {
     Value::String(
         match v {
             View::Audit => "audit",
@@ -711,7 +711,7 @@ pub(super) fn j_view(v: View) -> Value {
     )
 }
 
-pub(super) fn j_slotspec(s: &SlotSpec) -> Value {
+fn j_slotspec(s: &SlotSpec) -> Value {
     match s {
         SlotSpec::Any => Value::String("any".into()),
         SlotSpec::Empty => Value::String("empty".into()),
@@ -1044,5 +1044,86 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::BadRegion => "bad_region",
         RejectCode::ImageTooLarge => "image_too_large",
         RejectCode::EndsetsTooLarge => "endsets_too_large",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::{p_hex, p_slotspec, p_val_form, p_view};
+
+    /// Value granularity at the leaf: per-byte forms mint one single-byte
+    /// value per byte, atom forms one composite value; the canonical marshal
+    /// coalesces maximal per-byte runs (UTF-8 judged on the whole run) and
+    /// never coalesces atoms.
+    #[test]
+    fn value_forms_parse_per_byte_and_atoms_marshal_apart() {
+        let mut vs: Vec<Val> = Vec::new();
+        p_val_form(&Value::String("hé".into()), &mut vs).expect("a string value form parses");
+        assert_eq!(vs.len(), 3, "'h' plus the two bytes of 'é'");
+        assert!(vs.iter().all(|v| v.len() == 1));
+        p_val_form(&obj(vec![("atom", Value::String("hé".into()))]), &mut vs)
+            .expect("an atom value form parses");
+        assert_eq!(vs.len(), 4);
+        assert_eq!(vs[3].as_bytes(), "hé".as_bytes());
+        // Canonical inverse: the run reassembles, the atom stays its own form.
+        let canon = j_values(&vs);
+        let expect: Value = serde_json::from_str(r#"["hé",{"atom":"hé"}]"#).unwrap();
+        assert_eq!(canon, expect);
+        // Empty per-byte forms are vacuous; empty atoms are inexpressible;
+        // multi-key objects and non-string/object elements are malformed.
+        let mut none: Vec<Val> = Vec::new();
+        p_val_form(&Value::String(String::new()), &mut none).expect("\"\" is vacuous");
+        p_val_form(&obj(vec![("hex", Value::String(String::new()))]), &mut none)
+            .expect("an empty hex string is vacuous");
+        assert!(none.is_empty());
+        for bad in [
+            obj(vec![("atom", Value::String(String::new()))]),
+            obj(vec![("atom_hex", Value::String(String::new()))]),
+            obj(vec![("atom", Value::String("a".into())), ("hex", Value::String("00".into()))]),
+            Value::Bool(true),
+        ] {
+            assert!(p_val_form(&bad, &mut none).is_err(), "{bad} must not parse");
+        }
+        assert!(p_hex("abc").is_err()); // odd length
+        assert!(p_hex("zz").is_err());
+    }
+
+    /// All three documented view values (wire.md §Value encodings:
+    /// `"audit"`, `"active"`, `"default"`). The request fixtures carry only
+    /// two, so the third's parse arm and its marshal arm are watched by
+    /// nothing — and a typo in either makes a frame the document offers a
+    /// client come back `unparseable`, which tells them their frame is
+    /// malformed when the value is one wire.md invited.
+    #[test]
+    fn every_documented_view_value_round_trips() {
+        for name in ["audit", "active", "default"] {
+            let v = p_view(&Value::String(name.into()))
+                .unwrap_or_else(|e| panic!("'{name}' is a documented view: {e}"));
+            assert_eq!(j_view(v), Value::String(name.into()), "'{name}' must be its own inverse");
+        }
+        for bad in ["Audit", "", "all", "actives"] {
+            assert!(p_view(&Value::String(bad.into())).is_err(), "'{bad}' must not parse");
+        }
+    }
+
+    /// The one parse-side normalization [`JsonCodec::marshal_request`]'s
+    /// precondition names rather than excludes: an empty span array IS the
+    /// empty constraint (M8 documents the empty endset as exactly that
+    /// zero), so it reads back under the canonical name and a
+    /// `SlotSpec::Spans` over an empty endset round-trips EQUAL rather than
+    /// identical. Nothing else pins that the two spellings meet.
+    #[test]
+    fn an_empty_slot_constraint_normalizes_onto_its_canonical_name() {
+        assert!(
+            matches!(p_slotspec(&Value::Array(vec![])), Ok(SlotSpec::Empty)),
+            "an empty span array is the empty constraint, not an empty span list"
+        );
+        assert_eq!(
+            j_slotspec(&SlotSpec::Spans(Endset::from_spans([]))),
+            Value::Array(vec![]),
+            "which is the form an empty Spans marshals as"
+        );
+        assert_eq!(j_slotspec(&SlotSpec::Empty), Value::String("empty".into()));
     }
 }

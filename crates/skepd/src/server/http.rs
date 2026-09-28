@@ -334,12 +334,11 @@ pub(super) fn push_header(head: &mut Vec<u8>, name: &str, value: &str) {
 /// [`UNIVERSAL_HEADERS`] — which wire.md §Transport and §Cross-origin access
 /// promise on every response. The one place a response BEGINS, as
 /// [`push_header`] is the one place a header becomes bytes, and for the same
-/// reason: a stream is not a [`Reply`], so
-/// [`serve_events`](super::listen::serve_events) composes its own
-/// head — but its opening IS the reply path's at status 200, and spelled by
-/// hand it is a second entry in [`reason`]'s table with nothing keeping the
-/// two in step. The caller appends its own headers, the blank line, and
-/// whatever body it has.
+/// reason: a stream is not a [`Reply`], so `listen::serve_events` composes
+/// its own head — but its opening IS the reply path's at status 200, and
+/// spelled by hand it is a second entry in [`reason`]'s table with nothing
+/// keeping the two in step. The caller appends its own headers, the blank
+/// line, and whatever body it has.
 pub(super) fn response_head(status: u16) -> Vec<u8> {
     let mut head = Vec::with_capacity(256);
     head.extend_from_slice(format!("HTTP/1.1 {status} {}\r\n", reason(status)).as_bytes());

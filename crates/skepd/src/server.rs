@@ -81,8 +81,8 @@
 //! lane 3.7)**: `/op` admits at most [`MAX_CONCURRENT_CLASS_SCANS`](scan::MAX_CONCURRENT_CLASS_SCANS)
 //! CLASS-SCAN-shaped reads at once — the reads that walk the LINK STORE END
 //! TO END, which as M7 is built is every link-discovery read there is
-//! ([`is_class_scan`](scan::is_class_scan) enumerates them and states why the shape of a query
-//! does not narrow one). [`ClassScans`] is the whole bound on one card — the
+//! (`scan::is_class_scan` enumerates them and states why the shape of a
+//! query does not narrow one). [`ClassScans`] is the whole bound on one card — the
 //! op test, the pool, and the admission that takes the permit after the
 //! parse and the session read and before M10 is asked, so a refused request
 //! costs the parse alone and an admitted one holds its slot for the WHOLE
@@ -606,7 +606,7 @@ impl Daemon {
     /// it ([`Daemon::on_claim_flip`] states the refusal); `POST /session`
     /// mints an M10 session; `GET /challenge` mints a nonce into the bounded
     /// challenge store and evicts the oldest past
-    /// [`crate::auth::MAX_LIVE_NONCES`] — a GET that is not safe, and
+    /// `auth`'s `MAX_LIVE_NONCES` — a GET that is not safe, and
     /// whose eviction can spend another caller's outstanding nonce;
     /// `POST /session/close` retires a binding. And EVERY token-accepting
     /// route (`/op`, `/op-at`, `/changes`, `/dump`, `/session/close`, and
@@ -752,7 +752,7 @@ impl Daemon {
     /// name. Written at the three moments an install happens: `at start`,
     /// `reissued`, and `at claim`, where the flip re-compares the issue
     /// against the claimant it first has. WHAT the lines say is
-    /// [`crate::auth::BlockedPrefixes::log_lines`]'s; the stream is this
+    /// `BlockedPrefixes::log_lines`'s; the stream is this
     /// daemon's, for [`Daemon::log_config_warnings`]'s reason.
     ///
     /// SILENT where no supply was named: that is a board whose operator
@@ -771,7 +771,7 @@ impl Daemon {
     /// otherwise learn so only at its first install. It is the one config the
     /// blocked-prefix list's off-board test reads (AUTH-4.36 step 4b as ruled
     /// 2026-09-18). WHAT the line says is
-    /// [`crate::auth::AuthConfig::node_prefix_line`]'s; the stream is this
+    /// `AuthConfig::node_prefix_line`'s; the stream is this
     /// daemon's, for [`Daemon::log_config_warnings`]'s reason.
     fn log_node_prefix(&self) {
         notice::line(self.auth.cfg.node_prefix_line());

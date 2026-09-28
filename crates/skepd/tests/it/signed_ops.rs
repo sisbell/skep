@@ -14,8 +14,8 @@
 //! may not read answered by the store's own gates or refused unread, never
 //! by the value (PUB-8.4), and a shot's body bounded at parity with the
 //! request-body cap; the system account's own writes landing unsigned (A3's
-//! ω exemption for a DISPATCHED write is pinned in `policy.rs`, the one
-//! place such a write reaches the check); a credential deposit's two
+//! ω exemption for a DISPATCHED write is pinned in `policy/attestation.rs`,
+//! the one place such a write reaches the check); a credential deposit's two
 //! positions taking no entry signature (D26).
 //!
 //! THE GOLDENS (the frozen-tag rule's pin): per tag, one seed through the
@@ -747,7 +747,7 @@ fn a_shot_body_past_the_budget_is_refused_before_it_is_built() {
 /// alone is filled, and a second head lands the same way. A5 beside it: the
 /// head's three commits after the claim are exactly where the claim's own
 /// step put them (s1). The ω exemption for a DISPATCHED write is pinned where
-/// it can fail: `policy.rs`'s
+/// it can fail: `policy/attestation.rs`'s
 /// `a_board_with_no_h1_answers_board_unavailable_except_where_the_check_stands_aside`.
 #[test]
 fn the_head_writers_own_commits_land_unsigned_beside_an_attested_write() {

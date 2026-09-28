@@ -43,11 +43,11 @@ pub use options::{AuthOptions, PortAlreadyBound};
 pub use origin::{NotCanonical, Origin};
 pub use prefix::{NodePrefix, NotANodePrefix};
 
-pub(crate) use blocked::{blocked_prefixes, BlockedPrefixes, Reissue};
+// What the rest of the daemon names from here, and nothing more.
+pub(crate) use blocked::{blocked_prefixes, Reissue};
 pub(crate) use entropy::OsEntropy;
-pub(crate) use lock::{CredentialLock, LockRead, LockWrite};
-pub(crate) use options::{AuthConfig, Mode};
-pub(crate) use origin::{bare_origins, signed_origins, startup_warnings};
+pub(crate) use lock::LockWrite;
+pub(crate) use origin::startup_warnings;
 
 use std::collections::BTreeSet;
 use std::io;
@@ -59,13 +59,19 @@ use skep_identity::LinkDeposit;
 
 use crate::codec::obj;
 use crate::World;
-use blocked::{BlockedIssue, BlockedSupply};
 use fold::{CredMemo, IdentityFold};
 use session::{Challenges, Sessions};
 
+// Names this module and its own files use: its children reach them as
+// `super::…`, and nothing outside `auth` names them.
+use blocked::{BlockedIssue, BlockedPrefixes, BlockedSupply};
+use lock::{CredentialLock, LockRead};
+use options::{AuthConfig, Mode};
+use origin::{bare_origins, signed_origins};
+
 /// The challenge store's default cap (AUTH-1.48): live nonces retained;
 /// past it the oldest is evicted. Entered into the store once, at `new`.
-pub(crate) const MAX_LIVE_NONCES: usize = 4096;
+const MAX_LIVE_NONCES: usize = 4096;
 
 /// The whole auth state one daemon holds: config, the two ephemeral stores,
 /// the credential write lock, the identity fold, and the credential

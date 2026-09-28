@@ -18,7 +18,7 @@
 ///
 /// It is also the budget of the one frame body the daemon composes out of
 /// the STORE rather than out of a request — a shot's entry-frame body
-/// ([`crate::auth::entry::MAX_SHOT_BODY_BYTES`], parity with this) — so
+/// (`auth::entry`'s `MAX_SHOT_BODY_BYTES`, parity with this) — so
 /// raising it raises what the write-path check reads and verifies per shot.
 ///
 /// REVISIT at the media round: blob upload raises this for its route only,

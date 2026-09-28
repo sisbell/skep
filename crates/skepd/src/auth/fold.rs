@@ -69,8 +69,9 @@ pub(crate) fn identity_types() -> &'static TypeAddrs {
 /// The engine's publication read on ONE address, unprojected: `a ∉
 /// exception_set` and nothing else (PUB-7.5) — the AUTH fold's read
 /// (AUTH-2.34), reached through [`super::fold::WorldCtx`]'s `is_published`.
-/// `crate::auth::policy::published` is this after PUB-2.15's version-member projection, so the
-/// two share their membership lookup and differ by exactly that step.
+/// `policy/plain.rs`'s `published` is this after PUB-2.15's version-member
+/// projection, so the two share their membership lookup and differ by exactly
+/// that step.
 pub(super) fn published_unprojected(world: &World, a: &Address) -> bool {
     world.published(a)
 }
@@ -114,7 +115,7 @@ impl FoldCtx for WorldCtx<'_> {
     /// call answers off the reconstructed world's own set (PUB-7.12), which
     /// `Engine::world_at` seeds before it replays.
     ///
-    /// The RES-26 publish-class gate's read (`crate::auth::policy`'s `published`)
+    /// The RES-26 publish-class gate's read (`policy/plain.rs`'s `published`)
     /// is this membership lookup AFTER PUB-2.15's projection of a version
     /// member to its DOCUMENT, so the two share the lookup and differ by
     /// exactly that step. Where a credential home is a version member — the
@@ -398,7 +399,39 @@ pub(crate) fn key_set_of<'a>(
 
 #[cfg(test)]
 mod tests {
+    use skep_address::subtree_of;
+    use skep_identity::CredentialKind;
+
     use super::*;
+
+    /// The five reserved subtree spans overlap nothing the credential types
+    /// name: the identity types live in subspace 3 while the shipped classes
+    /// sit at content positions 1..=5 — pinned so a change to either
+    /// allocation fails here rather than in a fold.
+    #[test]
+    fn identity_types_are_distinct_and_recognized() {
+        let types = identity_types();
+        let enroll_span = subtree_of(addr_of(&T_ENROLL).tumbler());
+        assert_eq!(types.kind_of(&[enroll_span]), Some(CredentialKind::Enroll));
+        let retire_span = subtree_of(addr_of(&T_RETIRE).tumbler());
+        assert_eq!(types.kind_of(&[retire_span]), Some(CredentialKind::Retire));
+        let claim_span = subtree_of(addr_of(&T_CLAIM).tumbler());
+        assert_eq!(types.kind_of(&[claim_span]), Some(CredentialKind::Claim));
+        // A shipped reserved type (ghost position 1, the content subspace)
+        // is NOT a credential type.
+        let retired = subtree_of(addr_of(&[1, 1, 0, 1, 0, 1, 0, 1, 1]).tumbler());
+        assert_eq!(types.kind_of(&[retired]), None);
+    }
+
+    /// AUTH-3.70's conformance expression in miniature: a content-I-span
+    /// type slot answers no credential kind — a resolved span's start is a
+    /// mintable content position, never a subspace-3 name.
+    #[test]
+    fn a_content_span_ty_is_never_credential() {
+        // Content position 1 of some ordinary doc: <doc>.0.1.1.
+        let content = subtree_of(addr_of(&[1, 0, 1, 0, 1, 0, 1, 1]).tumbler());
+        assert_eq!(identity_types().kind_of(&[content]), None);
+    }
 
     /// The class types a `deposit` field can usefully carry are SPELLED
     /// TWICE — M5's set, which its insert door tests a declaration against

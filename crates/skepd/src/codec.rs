@@ -108,7 +108,8 @@ pub(crate) use marshal::{credential_refused_reply, key_set_reply, op_name};
 /// elements RESOLVE against stored arrangement state: one spec becomes as
 /// many spans as the source document has runs under it, so a list at this
 /// cap expands by a factor this door cannot see and that grows with the
-/// source's edit history. M7's own [`RejectCode::SlotTooLarge`] is the
+/// source's edit history. M7's own
+/// [`RejectCode::SlotTooLarge`](skep_febe::RejectCode::SlotTooLarge) is the
 /// evidence that a resolution can exceed its budget; whether that budget
 /// is measured before the resolution is built, and what this cap should be
 /// if it is not, are M7's and M5's.
@@ -245,7 +246,7 @@ impl JsonCodec {
     /// component, [`MAX_TUMBLER_COMPONENTS`] per tumbler,
     /// [`MAX_REQ_ID_BYTES`] per idempotency id,
     /// [`MAX_MINTED_PRINCIPAL_ID`] for a `delegate`'s `new_id` — carries no
-    /// zero-byte `Val`, which [`j_atom`](marshal::j_atom) renders as `{"atom": ""}` and
+    /// zero-byte `Val`, which `marshal::j_atom` renders as `{"atom": ""}` and
     /// [`p_val_form`] refuses by design (coarse granularity must be said, and
     /// a zero-byte atom says nothing), carries an `id`, if any, that is
     /// UTF-8, which a `ReqId` this codec parsed always is, and carries an
@@ -582,14 +583,14 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
 /// seam build's three — the record's thirteen publish-class-capable inputs
 /// are the WIDENING lane's). The ONE statement of it: the codec admits a
 /// request's `attest` member exactly on these, the check demands and
-/// verifies one exactly on these, and [`crate::auth::entry::compose`] has an arm exactly for
-/// these. The acting hand ATTESTS; the check admits or refuses, and signs
-/// nothing. The three must agree in both directions — a member the codec
-/// admits and the check never demands is a signature parsed and silently
-/// DROPPED, the commit landing with its marker slot empty; one the check
-/// demands and the codec refuses is a write no signed session can make on a
-/// claimed board — so a widening is one edit here and one arm in
-/// [`crate::auth::entry::compose`], whose wildcard asserts it.
+/// verifies one exactly on these, and `auth::entry::compose` has an arm
+/// exactly for these. The acting hand ATTESTS; the check admits or refuses,
+/// and signs nothing. The three must agree in both directions — a member the
+/// codec admits and the check never demands is a signature parsed and
+/// silently DROPPED, the commit landing with its marker slot empty; one the
+/// check demands and the codec refuses is a write no signed session can make
+/// on a claimed board — so a widening is one edit here and one arm in
+/// `auth::entry::compose`, whose wildcard asserts it.
 pub(crate) fn in_checked_set(kind: OpKind) -> bool {
     matches!(kind, OpKind::Insert | OpKind::MakeLink | OpKind::Publish)
 }
@@ -939,7 +940,7 @@ pub(crate) fn wire_tumbler(s: &str) -> Result<Tumbler, String> {
 /// and a caller adds only the field name its own grammar gives it. `Err`
 /// carries the detail text.
 ///
-/// The UNCAPPED twin is [`crate::write_path::classify::parse_dotted`], which
+/// The UNCAPPED twin is `write_path::classify::parse_dotted`, which
 /// refines its own grammar the same way and states why a name that reached
 /// a FILE is already past the budgets a client meets.
 pub(crate) fn wire_address(s: &str) -> Result<Address, String> {

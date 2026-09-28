@@ -393,9 +393,37 @@ impl HybridSigner {
     /// per-signature seed drawn from `rng`: the fixtures' door, handed a
     /// `SeededRng06` so a tag-3 golden is byte-stable (tag 1 draws nothing).
     /// Hidden because its bound is `rand_core` 0.6's — the version `fn-dsa`
-    /// 0.4.0 draws through, which a caller's own RNG would have to match.
+    /// 0.4.0 draws through, which a caller's own RNG would have to match —
+    /// and compiled only under `test-hooks`, as every fixture hook here is:
+    /// a shipped build signs through [`HybridSigner::sign`] alone, over the
+    /// OS's draw.
+    #[cfg(any(test, feature = "test-hooks"))]
     #[doc(hidden)]
     pub fn sign_with_rng<R: rand_core_06::CryptoRng + rand_core_06::RngCore>(
+        &self,
+        msg: &[u8],
+        rng: &mut R,
+    ) -> Vec<u8> {
+        self.sign_drawing(msg, rng)
+    }
+
+    /// SIGN `msg` under the tag's rule: the PQ signature THEN the Ed25519
+    /// signature over the same bytes — the blob a marker slot carries, and a
+    /// session's `sig`. Tag 1 is deterministic (FIPS 204's deterministic
+    /// variant, empty `ctx`); tag 3 draws its per-signature seed from OS
+    /// entropy, and PANICS where the OS refuses it: the draw is the crate's
+    /// fail-stop OS source (`OsEntropy`), so a tag-3 signature is never made
+    /// over a seed from anything weaker. Tag 1 draws nothing, so this panic
+    /// is tag 3's alone.
+    pub fn sign(&self, msg: &[u8]) -> Vec<u8> {
+        self.sign_drawing(msg, &mut OsEntropy)
+    }
+
+    /// The one signing body, over the RNG tag 3's per-signature seed is drawn
+    /// from — the OS's for [`HybridSigner::sign`], a fixture's stream for the
+    /// test hook `sign_with_rng` — private, so no shipped caller picks the
+    /// draw.
+    fn sign_drawing<R: rand_core_06::CryptoRng + rand_core_06::RngCore>(
         &self,
         msg: &[u8],
         rng: &mut R,
@@ -414,18 +442,6 @@ impl HybridSigner {
         blob.extend_from_slice(&self.ed.sign(msg).to_bytes());
         debug_assert_eq!(blob.len(), self.row.sig_len());
         blob
-    }
-
-    /// SIGN `msg` under the tag's rule: the PQ signature THEN the Ed25519
-    /// signature over the same bytes — the blob a marker slot carries, and a
-    /// session's `sig`. Tag 1 is deterministic (FIPS 204's deterministic
-    /// variant, empty `ctx`); tag 3 draws its per-signature seed from OS
-    /// entropy, and PANICS where the OS refuses it: the draw is the crate's
-    /// fail-stop OS source (`OsEntropy`), so a tag-3 signature is never made
-    /// over a seed from anything weaker. Tag 1 draws nothing, so this panic
-    /// is tag 3's alone.
-    pub fn sign(&self, msg: &[u8]) -> Vec<u8> {
-        self.sign_with_rng(msg, &mut OsEntropy)
     }
 }
 

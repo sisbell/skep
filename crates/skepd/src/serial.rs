@@ -16,7 +16,7 @@ impl Serial {
 
 /// The write-serialization guard, newtyped so a function whose contract is
 /// "under the serialization lock" names it in its arguments — the device
-/// `auth/`'s [`crate::auth::LockRead`]/[`crate::auth::LockWrite`] already
+/// `auth/`'s `LockRead`/[`crate::auth::LockWrite`] already
 /// are. A bare `MutexGuard<'_, ()>` is satisfied by a guard over ANY
 /// `Mutex<()>`, so the parameter would say "some unit lock is held" where
 /// the contract says "this one is" — unambiguous only while the crate holds

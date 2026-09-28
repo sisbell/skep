@@ -119,6 +119,7 @@ use skep_arrangement::{trunk_head, Base, Caller, Deposit, HasM5, Run, Shot, Shot
 use skep_content::{HasContent, Val};
 use skep_engine::{EngineStores, World};
 use skep_febe::{Op, Response, Stores};
+use skep_identity::BoardTerm;
 use skep_kernel::Seq;
 use skep_namespace::{head_document, system_account, HasM3, SYSTEM_PRINCIPAL};
 
@@ -802,12 +803,12 @@ fn first_head_member() -> Address {
 /// refusing entropy), surfaced on the operator stream (I11 (c)), and written
 /// by the cadence's next head or the next open (the module doc's THE FIRST
 /// HEAD IS THE CLAIM'S) — or a journal damaged below `H.1` (the member gone,
-/// or its record not one this build reads). Named for the corpus's term and
-/// not for its shape: it is a committed pair, but the one fixed from the
-/// claim on, never the live pair `/health` serves.
-pub(crate) fn board_term(world: &World) -> Option<(u64, [u8; 32])> {
+/// or its record not one this build reads). Answered as the corpus's term,
+/// [`BoardTerm`], and not as its shape: it is a committed pair, but the one
+/// fixed from the claim on, never the live pair `/health` serves.
+pub(crate) fn board_term(world: &World) -> Option<BoardTerm> {
     let rec = read_head_member(world, &first_head_member())?;
-    Some((rec.position, rec.chain))
+    Some(BoardTerm { log_position: rec.position, chain: rec.chain })
 }
 
 /// The staging draft's address — doc 3 of the system account, `1.1.0.1.0.3`:

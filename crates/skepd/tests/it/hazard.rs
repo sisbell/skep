@@ -932,8 +932,8 @@ fn h_a_crash_between_the_claim_and_its_head_reopens_with_h1() {
         CLAIM_POSITION + H1_RECORDS,
         "FINDING (H): the open did not write H.1's eight records above the claim"
     );
-    let (position, _) = board_term(port).expect("FINDING (H): no H.1 after the reopen");
-    assert_eq!(position, CLAIM_POSITION, "H.1 names the claim's own position");
+    let h1 = board_term(port).expect("FINDING (H): no H.1 after the reopen");
+    assert_eq!(h1.log_position, CLAIM_POSITION, "H.1 names the claim's own position");
     let v = op(port, None, &common::retrieve_frame(HEAD_MEMBER_1, 1, 1));
     let atom = expect_resp(&v, "delivery")["items"][0]["atom"].as_str().expect("H.1's record");
     let rec: Value = serde_json::from_str(atom).expect("a skep-head record");

@@ -32,8 +32,9 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use skep_febe::Codec;
 use skep_identity::{
-    entry_body_insert, entry_body_link, entry_body_publish, entry_frame, Enrollment, EntrySlot,
-    Fingerprint, PublicKey, SigAlgRow, ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519,
+    entry_body_insert, entry_body_make_link, entry_body_publish, entry_frame, BoardTerm,
+    Enrollment, EntrySlot, Fingerprint, PublicKey, SigAlgRow, ALG_FNDSA512_PREVIEW_ED25519,
+    ALG_MLDSA65_ED25519,
 };
 use skepd::hybrid::{self, HybridSigner, SeededRng06};
 use skepd::{JsonCodec, Seq};
@@ -62,15 +63,18 @@ fn claimant_grant() -> String {
     typed_link_frame(CLAIMANT_DOC1, &[CLAIMANT_ACCOUNT], &[], T_GRANT)
 }
 
-/// [`claimant_grant`]'s ENTRY frame under `alg` over the board term
-/// `(position, chain)`, composed from its members' values — for the cells
-/// that sign over a pair, or under a token, the test signer never would.
-fn claimant_grant_entry_frame(alg: &str, board: (u64, [u8; 32])) -> Vec<u8> {
+/// [`claimant_grant`]'s ENTRY frame under `alg` over `board`, composed from
+/// its members' values — for the cells that sign over a term, or under a
+/// token, the test signer never would.
+fn claimant_grant_entry_frame(alg: &str, board: BoardTerm) -> Vec<u8> {
     let ty = [addr(T_GRANT)];
     let from = [addr(CLAIMANT_ACCOUNT)];
     let to: [skep_address::Address; 0] = [];
-    let body =
-        entry_body_link(&EntrySlot::Addrs(&ty), &EntrySlot::Addrs(&from), &EntrySlot::Addrs(&to));
+    let body = entry_body_make_link(
+        &EntrySlot::Addrs(&ty),
+        &EntrySlot::Addrs(&from),
+        &EntrySlot::Addrs(&to),
+    );
     entry_frame(alg, board, &addr(CLAIMANT_ACCOUNT), &addr(CLAIMANT_DOC1), &body)
 }
 
@@ -128,8 +132,8 @@ fn at_or_below_the_claim_an_attest_is_dropped_unverified_and_unwritten() {
     assert_eq!(sd.daemon().attestation_at(Seq(claim_at)).unwrap(), None, "the claim's slot is empty");
     // THE CLAIM WROTE `H.1` in its own step: present at the claim's ack and
     // naming the claim's own position, with nothing forced.
-    let (position, _) = board_term(port).expect("H.1 stands at the claim's ack");
-    assert_eq!(position, claim_at, "H.1 names the claim's own position");
+    let h1 = board_term(port).expect("H.1 stands at the claim's ack");
+    assert_eq!(h1.log_position, claim_at, "H.1 names the claim's own position");
     assert_eq!(filled_slots(&sd, 1, head_position(port)), Vec::<u64>::new(), "the head's commits: unsigned");
 }
 
@@ -151,8 +155,8 @@ fn a_fresh_claimed_board_admits_an_attested_publish_right_after_the_claim() {
     ceremony_before_the_claim(port);
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let claim_at = acked_at(&op(port, Some(&signed), &claim_frame(CLAIMANT_DOC1, CLAIMANT_ACCOUNT)));
-    let (position, _) = board_term(port).expect("H.1 at the claim's ack");
-    assert_eq!(position, claim_at, "H.1 names the claim's own position");
+    let h1 = board_term(port).expect("H.1 at the claim's ack");
+    assert_eq!(h1.log_position, claim_at, "H.1 names the claim's own position");
     let head = head_position(port);
     assert!(head > claim_at, "the head's own commits landed above the claim");
     assert_eq!(filled_slots(&sd, 1, head), Vec::<u64>::new(), "no slot filled: the head's commits are unsigned");
@@ -754,8 +758,8 @@ fn the_head_writers_own_commits_land_unsigned_beside_an_attested_write() {
     let dir = tempdir().unwrap();
     let sd = spawn(dir.path());
     let port = sd.port();
-    let (position, _chain) = board_term(port).expect("H.1");
-    assert_eq!(position, 12, "H.1 names the claim's own position");
+    let h1 = board_term(port).expect("H.1");
+    assert_eq!(h1.log_position, 12, "H.1 names the claim's own position");
     // The head's three commits: the staging draft's mint, the record's
     // insert, the shot into H — all above the claim, all unsigned.
     let head = head_position(port);
@@ -815,21 +819,25 @@ fn the_board_term_stays_h1s_pair_after_a_second_head_lands() {
     let trigger = acked_at(&op(port, Some(&signed), &claimant_grant()));
     let h2 = recorded_pair(port, "1.1.0.1.0.2.2");
     assert_eq!(h2.0, trigger, "H.2 names the grant its turn followed");
-    assert_ne!(h2, h1, "a second head, a second pair");
+    assert_ne!(h2, (h1.log_position, h1.chain), "a second head, a second pair");
 
-    // Over the LATEST head's pair: refused.
-    let over_h2 = signer.sign(&claimant_grant_entry_frame(ALG_MLDSA65_ED25519, h2));
+    // Over the LATEST head's pair, posed as the board term: refused.
+    let h2_as_term = BoardTerm { log_position: h2.0, chain: h2.1 };
+    let over_h2 = signer.sign(&claimant_grant_entry_frame(ALG_MLDSA65_ED25519, h2_as_term));
     let v = op_unattested(port, Some(&signed), &claimant_grant_attested(ALG_MLDSA65_ED25519, &over_h2));
     assert_eq!(
         refusal(&v),
         ("credential_refused:attestation_invalid:signature".to_string(), "reorder".to_string()),
         "the latest head's pair is not the board term: {v}"
     );
-    // Over the LIVE pair: refused.
+    // Over the LIVE pair, posed as the board term: refused.
     let health = json(&get(port, "/health").1);
     let live_chain: [u8; 32] =
         hex_to_bytes(health["chain_head"].as_str().expect("chain_head")).try_into().expect("32 bytes");
-    let live = (health["log_position"].as_u64().expect("log_position"), live_chain);
+    let live = BoardTerm {
+        log_position: health["log_position"].as_u64().expect("log_position"),
+        chain: live_chain,
+    };
     let over_live = signer.sign(&claimant_grant_entry_frame(ALG_MLDSA65_ED25519, live));
     let v = op_unattested(port, Some(&signed), &claimant_grant_attested(ALG_MLDSA65_ED25519, &over_live));
     assert_eq!(verdict(&v), "credential_refused:attestation_invalid:signature", "the live pair: {v}");
@@ -905,10 +913,11 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 3] {
     let ty = [addr("1.1.0.1.0.1.0.3.90")];
     let from = [addr("1.0.1")];
     let to: [skep_address::Address; 0] = [];
-    let link = entry_body_link(&EntrySlot::Addrs(&ty), &EntrySlot::Addrs(&from), &EntrySlot::Addrs(&to));
+    let link =
+        entry_body_make_link(&EntrySlot::Addrs(&ty), &EntrySlot::Addrs(&from), &EntrySlot::Addrs(&to));
     let publish = entry_body_publish([&b"x"[..], &b"y"[..], &b"z"[..]]);
-    [insert, link, publish]
-        .map(|body| (body.op(), entry_frame(alg, (12, [0xAB; 32]), &account, &doc, &body)))
+    let board = BoardTerm { log_position: 12, chain: [0xAB; 32] };
+    [insert, link, publish].map(|body| (body.op(), entry_frame(alg, board, &account, &doc, &body)))
 }
 
 /// THE FRAME REGRESSION per op: the bytes, spelled out by hand once — the

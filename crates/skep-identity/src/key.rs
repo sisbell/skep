@@ -57,9 +57,9 @@ pub const FNDSA512_ED25519_KEY_LEN: usize = FNDSA512_KEY_LEN + ED25519_KEY_LEN;
 /// parser), so [`SigAlgRow::sig_len`] is the slot's whole width and
 /// [`SigAlgRow::pq_sig_len`] is where the halves part.
 ///
-/// Tag `0` is the EMPTY slot and has no row; tag `2` is RESERVED for the
-/// final FIPS 206 and has none yet. Under the frozen-tag rule a row, once a
-/// signature has been committed under it, is EDITED NEVER: a change to what
+/// Tag `0` is the EMPTY marker slot and has no row; tag `2` is RESERVED for
+/// the final FIPS 206 and has none yet. Under the frozen-tag rule a row, once
+/// a signature has been committed under it, is EDITED NEVER: a change to what
 /// verifies — or to what a seed derives — is a new row.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
@@ -72,15 +72,15 @@ pub struct SigAlgRow {
     /// row's raw key; the Ed25519 half is the last [`ED25519_KEY_LEN`].
     pub pq_key_len: usize,
     /// The post-quantum half's signature width — the FIRST bytes of the
-    /// slot's blob; the Ed25519 half is the last 64.
+    /// marker slot's blob; the Ed25519 half is the last 64.
     pub pq_sig_len: usize,
 }
 
 impl SigAlgRow {
     /// The row a marker tag names — the commit marker's `sig_alg` byte — or
-    /// `None` for `0` (the empty slot), `2` (reserved) and every tag no build
-    /// has minted. `const`, so a type sized by a row's width reads it off
-    /// [`SIG_ALGS`] at compile time rather than walking the table itself.
+    /// `None` for `0` (the empty marker slot), `2` (reserved) and every tag no
+    /// build has minted. `const`, so a type sized by a row's width reads it
+    /// off [`SIG_ALGS`] at compile time rather than walking the table itself.
     pub const fn of_tag(tag: u8) -> Option<&'static SigAlgRow> {
         let mut i = 0;
         while i < SIG_ALGS.len() {
@@ -99,8 +99,8 @@ impl SigAlgRow {
         SIG_ALGS.iter().find(|row| row.token == token)
     }
 
-    /// The slot's whole blob width under this tag: the PQ signature ‖ the
-    /// Ed25519 signature (64).
+    /// The marker slot's whole blob width under this tag: the PQ signature ‖
+    /// the Ed25519 signature (64).
     pub const fn sig_len(&self) -> usize {
         self.pq_sig_len + 64
     }
@@ -116,8 +116,8 @@ impl SigAlgRow {
 /// ML-DSA-65 + Ed25519 (3,309 ‖ 64 = 3,373-byte blob); tag `3`, the PREVIEW
 /// hybrid FN-DSA-512 + Ed25519 under `fn-dsa` 0.4.0 (666 ‖ 64 = 730-byte
 /// blob). Read through [`SigAlgRow::of_token`] and [`SigAlgRow::of_tag`] —
-/// the codec's lift of the wire's `attest.alg` token to the slot's tag and
-/// back — and by the verifier, which dispatches on the tag to THAT tag's
+/// the codec's lift of the wire's `attest.alg` token to the marker slot's tag
+/// and back — and by the verifier, which dispatches on the tag to THAT tag's
 /// frozen rule.
 pub const SIG_ALGS: &[SigAlgRow] = &[
     SigAlgRow { tag: 1, token: ALG_MLDSA65_ED25519, pq_key_len: MLDSA65_KEY_LEN, pq_sig_len: 3309 },

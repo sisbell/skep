@@ -36,8 +36,8 @@
 //!
 //! Signed ops' declarations are consumed in skepd as well: it composes the
 //! ENTRY frame it verifies through [`entry_frame`], over the locked
-//! snapshot's board term, the principal's account, and the op's document and
-//! [`EntryBody`]; its write-path check reads a presented attestation's row
+//! snapshot's [`BoardTerm`], the principal's account, and the op's document
+//! and [`EntryBody`]; its write-path check reads a presented attestation's row
 //! off the marker tag, and its codec lifts a request's `attest.alg` token to
 //! that tag and back, through [`SigAlgRow::of_token`] and
 //! [`SigAlgRow::of_tag`]; it holds each marker tag's arithmetic over
@@ -71,11 +71,11 @@
 //!   (AUTH-1.11–1.17);
 //! * `entry`: THE ENTRY FRAME under [`ENTRY_TAG`] — [`entry_frame`], which
 //!   spells every member from the values a signer or verifier holds: the
-//!   board term, the account and document addresses, and an [`EntryBody`] —
-//!   an op's token paired with its body, built by [`entry_body_insert`],
-//!   [`entry_body_link`] and [`entry_body_publish`] over [`EntrySlot`]s — the
-//!   bytes a publish-class entry's signature is made over (signed ops; the
-//!   design record §2.5);
+//!   [`BoardTerm`], the account and document addresses, and an [`EntryBody`]
+//!   — an op's token paired with its body, built by [`entry_body_insert`],
+//!   [`entry_body_make_link`] and [`entry_body_publish`] over [`EntrySlot`]s
+//!   — the bytes a publish-class entry's signature is made over (signed ops;
+//!   the design record §2.5);
 //! * `payload`: the credential-record constants and payload types —
 //!   [`ENROLL_TYPE`], [`RETIRE_TYPE`], [`MAX_RECORD_BYTES`], [`Enrollment`]
 //!   with its refusal [`LabelError`], [`PayloadError`] (AUTH-1.18–1.28) —
@@ -154,7 +154,8 @@ mod verdict;
 mod write_types;
 
 pub use entry::{
-    entry_body_insert, entry_body_link, entry_body_publish, entry_frame, EntryBody, EntrySlot,
+    entry_body_insert, entry_body_make_link, entry_body_publish, entry_frame, BoardTerm, EntryBody,
+    EntrySlot,
 };
 pub use framing::{
     framed, Tag, ENTRY_TAG, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, SESSION_TAG_V2, TAGS,

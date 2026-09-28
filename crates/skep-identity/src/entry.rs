@@ -9,12 +9,16 @@
 //! [`entry_frame`] spells EVERY member itself, so no caller spells one.
 //!
 //! THE FRAME. `framed(ENTRY_TAG, [alg, board, account, doc, op, body])`
-//! (AUTH-1.12's framing: the tag, then each member as `be32(len) ‖ bytes`),
-//! every member a compiled constant, a client-named address or a
-//! client-composed byte string — no daemon-assigned fact (a minted address, a
-//! position, a seq) enters it, which is what lets a client sign BEFORE the
-//! commit with no round trip and the daemon verify AT the commit with no
-//! lookup, and what makes the signature position-free.
+//! (AUTH-1.12's framing: the tag, then each member — a FIELD, in AUTH-1.12's
+//! word — as `be32(len) ‖ bytes`), every member a compiled constant, a
+//! client-named address, a client-composed byte string or the board's
+//! [`BoardTerm`], fixed from the claim on — no fact the daemon assigns at the
+//! entry's own commit (a minted address, a position, a seq) enters it, which
+//! is what lets a client sign BEFORE the commit with no round trip and the
+//! daemon verify AT the commit with no lookup, and what makes the signature
+//! POSITION-FREE, in the design record's word: free of the entry's own LOG
+//! position, so two identical writes sign identical bytes wherever in the
+//! journal the commit lands them.
 //!
 //! THE ROWS, by encoding:
 //!
@@ -32,15 +36,15 @@
 //!   — [`entry_frame`], the insert's declared type and the slots all take
 //!   `Address` values — and a signer holding the address it named signs the
 //!   bytes the verifier composes, whichever spelling carried it on the wire.
-//! * THE BOARD ROW — `board`, the BOARD TERM, `H.1`'s committed
-//!   `(position, chain)` pair (D13, RULED): the position as eight big-endian
-//!   bytes, then the chain's thirty-two raw bytes — forty bytes,
-//!   [`board_bytes`].
-//! * THE VALUE-SEQUENCE ROW — a run of content values in V-order WITH THEIR
-//!   COUNT: `be64(count)` then, per value, `be32(len) ‖ bytes` —
-//!   [`value_sequence`]. The count leads so a verifier holding a member that
-//!   has GROWN past the signed prefix (the record §2.5's `publish` cell, D25)
-//!   knows how many values the signature covers before reading one.
+//! * THE BOARD ROW — `board`, the BOARD TERM ([`BoardTerm`]), `H.1`'s
+//!   committed `(position, chain)` pair (D13, RULED) — its position a LOG
+//!   position, never an element position: eight big-endian bytes, then the
+//!   chain's thirty-two raw bytes — forty bytes, [`board_bytes`].
+//! * THE VALUE-SEQUENCE ROW — content values in V-order WITH THEIR COUNT:
+//!   `be64(count)` then, per value, `be32(len) ‖ bytes` — [`value_sequence`].
+//!   The count leads so a verifier holding a CHAIN member that has GROWN past
+//!   the signed prefix (the record §2.5's `publish` cell, D25) knows how many
+//!   of its values the signature covers before reading one.
 //! * THE SLOT ROW — a link slot in the form the client sent it: one form
 //!   byte (`0x01` the address form, `0x02` the resolve form), `be64(n)`, then
 //!   each element — an address as the address row, a V-spec as its source
@@ -55,16 +59,16 @@
 //! * `insert` — [`entry_body_insert`]: the DECLARED TYPE ADDRESS (the address
 //!   row, length-delimited; empty where the insert declares none) then the
 //!   values placed as a value sequence.
-//! * `make_link` — [`entry_body_link`]: the type slot, then the `from` slot,
-//!   then the `to` slot, each a slot row.
+//! * `make_link` — [`entry_body_make_link`]: the type slot, then the `from`
+//!   slot, then the `to` slot, each a slot row.
 //! * `publish` — [`entry_body_publish`]: THE RUNS THE CLIENT PLACED, their
-//!   values in V-order as one value sequence — a PREFIX of the member the
-//!   commit mints, never the member (the base's carried tail past
+//!   values in V-order as one value sequence — a PREFIX of the CHAIN member
+//!   the commit mints, never the whole member (the base's carried tail past
 //!   `base_extent` and every later deposit into the head member fall outside
 //!   it).
 //!
 //! Every length-delimited element is written by [`push_delimited`], the one
-//! function [`framed`] delimits its own members with, so the composition is
+//! function [`framed`] delimits its own fields with, so the composition is
 //! injective at every level: two distinct inputs never spell one preimage.
 
 use skep_address::{Address, Span};
@@ -77,26 +81,25 @@ use crate::framing::{framed, push_delimited, ENTRY_TAG};
 /// bytes and no caller spells a member for itself:
 ///
 /// * `alg` — the signing key's `ALGS` token, its ASCII bytes;
-/// * `board` — the BOARD TERM, `H.1`'s committed `(position, chain)` pair
-///   (D13): `be64(position) ‖ chain`, forty bytes;
+/// * `board` — the [`BoardTerm`] (D13): `be64(log_position) ‖ chain`, forty
+///   bytes;
 /// * `account`, `doc` — each ADDRESS in its dotted-decimal spelling
 ///   (`1.0.1.0.1`), the one spelling of the address whatever string named it;
 /// * `op`, `body` — the [`EntryBody`]'s token and bytes, which its builder
-///   ([`entry_body_insert`], [`entry_body_link`], [`entry_body_publish`])
+///   ([`entry_body_insert`], [`entry_body_make_link`], [`entry_body_publish`])
 ///   pairs.
 pub fn entry_frame(
     alg: &str,
-    board: (u64, [u8; 32]),
+    board: BoardTerm,
     account: &Address,
     doc: &Address,
     body: &EntryBody,
 ) -> Vec<u8> {
-    let (position, chain) = board;
     framed(
         ENTRY_TAG,
         &[
             alg.as_bytes(),
-            &board_bytes(position, &chain),
+            &board_bytes(&board),
             &address_bytes(account),
             &address_bytes(doc),
             body.op.as_bytes(),
@@ -105,10 +108,30 @@ pub fn entry_frame(
     )
 }
 
+/// THE BOARD TERM (signed ops; the design record §2.5, D13, RULED): the
+/// committed `(position, chain)` pair `H.1` — the head document's first chain
+/// member — NAMES, fixed from the claim on for the life of the board. It is
+/// the ENTRY frame's `board` member ([`entry_frame`]), and the design
+/// record's RECORD-grade frame names it too (§4.2 (C)) — one term, both
+/// grades. It is NEVER the live pair `/health` serves, nor the pair any later
+/// head names: a signature framed over either is refused
+/// `attestation_invalid:signature`. A value: two terms are equal iff both
+/// halves are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BoardTerm {
+    /// The LOG position `H.1` names — a point in the journal, M2's `Seq` and
+    /// the axis the wire serves as `/health`'s `log_position` — never an
+    /// element position, which is what bare "position" means everywhere else
+    /// in this crate ([`Values`](crate::Values)).
+    pub log_position: u64,
+    /// The whole-log chain value at that position, thirty-two raw bytes.
+    pub chain: [u8; 32],
+}
+
 /// ONE publish-class entry's `op` and `body` members, held together because
 /// they are one fact: each op's body has its own grammar, and the `op` token
-/// names which. Built only by [`entry_body_insert`], [`entry_body_link`] and
-/// [`entry_body_publish`], so a body cannot be framed under another op's
+/// names which. Built only by [`entry_body_insert`], [`entry_body_make_link`]
+/// and [`entry_body_publish`], so a body cannot be framed under another op's
 /// token. The tokens are the op-kind names as the wire spells them —
 /// `insert`, `make_link`, `publish` — spelled HERE, beside the grammar each
 /// selects, because they are members of a signed preimage that a reader
@@ -131,11 +154,11 @@ impl EntryBody {
     }
 }
 
-/// THE BOARD ROW: `be64(position) ‖ chain` — forty bytes.
-fn board_bytes(position: u64, chain: &[u8; 32]) -> [u8; 40] {
+/// THE BOARD ROW: `be64(log_position) ‖ chain` — forty bytes.
+fn board_bytes(board: &BoardTerm) -> [u8; 40] {
     let mut out = [0u8; 40];
-    out[..8].copy_from_slice(&position.to_be_bytes());
-    out[8..].copy_from_slice(chain);
+    out[..8].copy_from_slice(&board.log_position.to_be_bytes());
+    out[8..].copy_from_slice(&board.chain);
     out
 }
 
@@ -217,7 +240,11 @@ pub fn entry_body_insert<'a>(
 /// form, `0x02` the resolve form), `be64(n)`, then each element
 /// length-delimited — an address in its dotted-decimal spelling, a V-spec as
 /// its source address, its span's start and its span's width.
-pub fn entry_body_link(ty: &EntrySlot<'_>, from: &EntrySlot<'_>, to: &EntrySlot<'_>) -> EntryBody {
+pub fn entry_body_make_link(
+    ty: &EntrySlot<'_>,
+    from: &EntrySlot<'_>,
+    to: &EntrySlot<'_>,
+) -> EntryBody {
     let mut out = slot_bytes(ty);
     out.extend_from_slice(&slot_bytes(from));
     out.extend_from_slice(&slot_bytes(to));
@@ -247,7 +274,7 @@ mod tests {
     #[test]
     fn the_rows_spell_as_the_module_doc_states() {
         assert_eq!(
-            board_bytes(12, &[0xAB; 32])[..],
+            board_bytes(&BoardTerm { log_position: 12, chain: [0xAB; 32] })[..],
             [&[0u8, 0, 0, 0, 0, 0, 0, 12][..], &[0xAB; 32][..]].concat()[..]
         );
         assert_eq!(address_bytes(&addr(&[1, 0, 1, 0, 1])), b"1.0.1.0.1");
@@ -295,7 +322,7 @@ mod tests {
         assert_eq!(entry_body_publish([&b"q"[..]]).as_bytes(), value_sequence([&b"q"[..]]));
         let empty = EntrySlot::Addrs(&[]);
         assert_eq!(
-            entry_body_link(&EntrySlot::Addrs(&[a]), &empty, &empty).as_bytes(),
+            entry_body_make_link(&EntrySlot::Addrs(&[a]), &empty, &empty).as_bytes(),
             [
                 &slot_bytes(&EntrySlot::Addrs(&[addr(&[1, 0, 1, 0, 1, 0, 1, 1])]))[..],
                 &slot_bytes(&empty)[..],
@@ -306,7 +333,7 @@ mod tests {
         assert_eq!(
             [
                 entry_body_insert(None, []).op(),
-                entry_body_link(&empty, &empty, &empty).op(),
+                entry_body_make_link(&empty, &empty, &empty).op(),
                 entry_body_publish([]).op(),
             ],
             ["insert", "make_link", "publish"],
@@ -321,14 +348,15 @@ mod tests {
     #[test]
     fn the_frame_is_framed_under_the_entry_tag_over_six_members() {
         let body = EntryBody { op: "insert", bytes: b"B".to_vec() };
+        let term = BoardTerm { log_position: 1, chain: [0; 32] };
         let frame = entry_frame(
             "mldsa65-ed25519",
-            (1, [0; 32]),
+            term,
             &addr(&[1, 0, 1]),
             &addr(&[1, 0, 1, 0, 1]),
             &body,
         );
-        let board = board_bytes(1, &[0; 32]);
+        let board = board_bytes(&term);
         let mut expected = b"skep-entry-v1".to_vec();
         for m in [
             &b"mldsa65-ed25519"[..],

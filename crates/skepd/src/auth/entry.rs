@@ -8,8 +8,8 @@
 //! * `alg` — the `attest.alg` token as the request carried it — the one
 //!   member the snapshot does not supply, so it is applied last
 //!   ([`EntryFrame::to_bytes`]);
-//! * `board` — the BOARD TERM, `H.1`'s committed pair (D13, RULED), read off
-//!   the snapshot by [`crate::write_path::board_term`];
+//! * `board` — the BOARD TERM ([`BoardTerm`]), `H.1`'s committed pair (D13,
+//!   RULED), read off the snapshot by [`crate::write_path::board_term`];
 //! * `account` — the act's principal's account in the board's local form,
 //!   M3's `principal_prefix`;
 //! * `doc` — per op cell: the TRUNK of the op's `doc` for `insert` and
@@ -53,7 +53,8 @@ use skep_arrangement::{trunk_of, Deposit, Shot};
 use skep_content::HasContent;
 use skep_febe::Op;
 use skep_identity::{
-    entry_body_insert, entry_body_link, entry_body_publish, entry_frame, EntryBody, EntrySlot,
+    entry_body_insert, entry_body_make_link, entry_body_publish, entry_frame, BoardTerm, EntryBody,
+    EntrySlot,
 };
 use skep_links::SlotArg;
 use skep_namespace::{HasM3, PrincipalId};
@@ -176,7 +177,7 @@ pub(super) fn compose(
         }
         Op::MakeLink { home, from, to, ty } => {
             let (ty, from, to) = (Slot::of(ty), Slot::of(from), Slot::of(to));
-            (home.clone(), entry_body_link(&ty.as_entry(), &from.as_entry(), &to.as_entry()))
+            (home.clone(), entry_body_make_link(&ty.as_entry(), &from.as_entry(), &to.as_entry()))
         }
         Op::Publish { doc, shot } => {
             let trunk = trunk_of(doc);
@@ -245,7 +246,7 @@ fn publish_body(world: &World, shot: &Shot) -> Result<EntryBody, ComposeFault> {
 /// board term, the principal's account, the op's document, and the body with
 /// its op's token.
 pub(super) struct EntryFrame {
-    board: (u64, [u8; 32]),
+    board: BoardTerm,
     account: Address,
     doc: Address,
     body: EntryBody,
@@ -293,7 +294,7 @@ mod tests {
     fn each_body_carries_the_wire_name_of_its_op() {
         let empty = EntrySlot::Addrs(&[]);
         assert_eq!(entry_body_insert(None, std::iter::empty()).op(), op_name(OpKind::Insert));
-        assert_eq!(entry_body_link(&empty, &empty, &empty).op(), op_name(OpKind::MakeLink));
+        assert_eq!(entry_body_make_link(&empty, &empty, &empty).op(), op_name(OpKind::MakeLink));
         assert_eq!(entry_body_publish(std::iter::empty()).op(), op_name(OpKind::Publish));
     }
 

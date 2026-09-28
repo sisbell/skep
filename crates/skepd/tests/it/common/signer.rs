@@ -22,7 +22,7 @@ static SIGNERS: Registry<String, (u64, [u8; 32])> = LazyLock::new(Default::defau
 /// forever, so a board's first read is its last. Keyed by the PORT a board
 /// answers at, which outlives the board — so every spawn here forgets the
 /// port it binds ([`forget_port`]) before a pair is read off it.
-static BOARD_TERMS: Registry<u16, (u64, [u8; 32])> = LazyLock::new(Default::default);
+static BOARD_TERMS: Registry<u16, BoardTerm> = LazyLock::new(Default::default);
 
 /// (port, principal) → the account's local address, read once per board —
 /// forgotten with the port as [`BOARD_TERMS`] is.
@@ -66,9 +66,9 @@ pub const HEAD_MEMBER_1: &str = "1.1.0.1.0.2.1";
 /// THE BOARD TERM: `H.1`'s `(position, chain)` pair, read off the wire by
 /// `retrieve_v` on the pinned member (guest-readable) and parsed off the
 /// `skep-head` record; `None` while the board has no `H.1`.
-pub fn board_term(port: u16) -> Option<(u64, [u8; 32])> {
-    if let Some(pair) = with_map(&BOARD_TERMS, |m| m.get(&port).copied()) {
-        return Some(pair);
+pub fn board_term(port: u16) -> Option<BoardTerm> {
+    if let Some(term) = with_map(&BOARD_TERMS, |m| m.get(&port).copied()) {
+        return Some(term);
     }
     let v = op_unattested(port, None, &retrieve_frame(HEAD_MEMBER_1, 1, 1));
     if v["resp"].as_str() != Some("delivery") {
@@ -76,16 +76,16 @@ pub fn board_term(port: u16) -> Option<(u64, [u8; 32])> {
     }
     let text = v["items"].as_array()?.first()?["atom"].as_str()?.to_string();
     let rec: Value = serde_json::from_str(&text).ok()?;
-    let position = rec["position"].as_u64()?;
+    let log_position = rec["position"].as_u64()?;
     let chain_hex = rec["chain"].as_str()?;
     let chain: Vec<u8> = (0..32)
         .map(|i| u8::from_str_radix(&chain_hex[2 * i..2 * i + 2], 16).ok())
         .collect::<Option<_>>()?;
-    let pair = (position, <[u8; 32]>::try_from(chain).ok()?);
+    let term = BoardTerm { log_position, chain: <[u8; 32]>::try_from(chain).ok()? };
     with_map(&BOARD_TERMS, |m| {
-        m.insert(port, pair);
+        m.insert(port, term);
     });
-    Some(pair)
+    Some(term)
 }
 
 /// The account a principal acts as, in the board's local form — the frame's
@@ -312,7 +312,7 @@ pub fn entry_frame_for(port: u16, token: &str, principal: u64, frame: &Value) ->
             );
             (
                 parse_addr(frame["home"].as_str()?)?,
-                entry_body_link(&ty.as_entry(), &from.as_entry(), &to.as_entry()),
+                entry_body_make_link(&ty.as_entry(), &from.as_entry(), &to.as_entry()),
             )
         }
         "publish" => {

@@ -22,8 +22,8 @@ use ed25519_dalek::{Signer, SigningKey};
 use serde_json::{json, Value};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_identity::{
-    encode_enroll, entry_body_insert, entry_body_link, entry_body_publish, entry_frame, framed,
-    Enrollment, EntrySlot, PublicKey, SigAlgRow, SESSION_TAG, SESSION_TAG_V2,
+    encode_enroll, entry_body_insert, entry_body_make_link, entry_body_publish, entry_frame, framed,
+    BoardTerm, Enrollment, EntrySlot, PublicKey, SigAlgRow, SESSION_TAG, SESSION_TAG_V2,
 };
 use skepd::hybrid::{self, HybridSigner};
 use skepd::{serve, AuthOptions, Daemon, NodePrefix, Origin, Skepd, DEFAULT_WORKERS};
@@ -328,8 +328,8 @@ pub fn claim_board(port: u16) {
     );
     expect_resp(&v, "ack_addr");
     assert!(claimed(port), "the claim link flips the board claimed");
-    let (position, _) = board_term(port).expect("the claim's own step wrote H.1");
-    assert_eq!(position, acked_at(&v), "H.1 names the claim's own position");
+    let h1 = board_term(port).expect("the claim's own step wrote H.1");
+    assert_eq!(h1.log_position, acked_at(&v), "H.1 names the claim's own position");
 }
 
 /// The claim ceremony's first four steps (AUTH-5.55 steps 1–4) over the

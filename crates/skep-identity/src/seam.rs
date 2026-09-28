@@ -18,8 +18,9 @@ use skep_address::{Address, Tumbler};
 /// NOT be used to fold); `None` means the home had not minted that address
 /// AS OF THAT COMMIT — not that it never will. The two facts an implementor
 /// must not fuse: `at` is a POSITION (an element address, AUTH-2.40), the
-/// commit is a point in the STREAM, and "position" throughout this crate is
-/// only ever the former.
+/// commit is a point in the STREAM. Bare, "position" in this crate is only
+/// ever the former; the one journal index the crate holds, the
+/// [`BoardTerm`](crate::BoardTerm)'s, is spelled `log_position`.
 ///
 /// AUTH-2.30 — the key is `&Tumbler`, the walk's own output and M4's own
 /// key, so NO fallible per-position `validate` lift exists on the payload

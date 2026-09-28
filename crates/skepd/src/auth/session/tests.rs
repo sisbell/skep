@@ -1,9 +1,17 @@
 use skep_engine::Engine;
 use skep_febe::OperationSurface;
+use skep_identity::SigAlgRow;
 use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
 
+use super::super::hybrid::{TAG_FNDSA512_PREVIEW_ED25519, TAG_MLDSA65_ED25519};
 use super::super::AuthOptions;
 use super::*;
+
+/// The two rows' blob widths, pinned by hand — tag 1's ML-DSA-65 3,309
+/// bytes then Ed25519's 64, tag 3's FN-DSA-512 666 then 64 — and held to
+/// `SIG_ALGS` by `the_sig_is_admitted_at_exactly_the_two_hybrid_widths`.
+const TAG1_SIG_LEN: usize = 3373;
+const TAG3_SIG_LEN: usize = 730;
 
 /// A config bound at `port`, with no configured origin — so the bare
 /// set is exactly the three loopback defaults and every membership
@@ -266,7 +274,7 @@ fn an_expired_nonce_is_the_unit_refusal() {
         // loopback default passes step 2: what refuses is the burn.
         origin: Origin::parse("http://127.0.0.1:8642").expect("canonical"),
         scope: Scope::Full,
-        sig: SessionSig::MlDsa65Ed25519(Box::new([0u8; TAG1_SIG_LEN])),
+        sig: SessionSig::parse(&"00".repeat(TAG1_SIG_LEN)).expect("tag 1's width"),
     };
     let refusal = handshake(
         &cfg,
@@ -351,16 +359,20 @@ fn the_session_body_takes_three_forms_and_scope_is_strict() {
 /// bytes), case-free; every other width — the classical 128 hex among
 /// them, and one byte either side of each width — is a syntax fault, the
 /// 400 whose nonce survives, never a 401; a non-hex byte at a right width
-/// refuses too. The type carries the width: the arm IS the row.
+/// refuses too. The widths are the table's, read at the parse: every row's
+/// is admitted, and the type names no row.
 #[test]
 fn the_sig_is_admitted_at_exactly_the_two_hybrid_widths() {
-    assert_eq!((TAG1_SIG_LEN, TAG3_SIG_LEN), (3373, 730), "SIG_ALGS' widths, read at compile time");
+    let width = |tag| SigAlgRow::of_tag(tag).map(SigAlgRow::sig_len);
+    assert_eq!(
+        (width(TAG_MLDSA65_ED25519), width(TAG_FNDSA512_PREVIEW_ED25519)),
+        (Some(TAG1_SIG_LEN), Some(TAG3_SIG_LEN)),
+        "SIG_ALGS' widths, pinned by hand"
+    );
     let tag1 = SessionSig::parse(&"ab".repeat(TAG1_SIG_LEN)).expect("6,746 hex is tag 1's width");
-    assert!(matches!(tag1, SessionSig::MlDsa65Ed25519(_)));
     assert_eq!(tag1.as_bytes().len(), 3373);
     assert_eq!(tag1.as_bytes()[0], 0xab);
     let tag3 = SessionSig::parse(&"cd".repeat(TAG3_SIG_LEN)).expect("1,460 hex is tag 3's width");
-    assert!(matches!(tag3, SessionSig::FnDsa512PreviewEd25519(_)));
     assert_eq!(tag3.as_bytes().len(), 730);
     // Case-free: decoded, never framed.
     assert_eq!(SessionSig::parse(&"AB".repeat(TAG1_SIG_LEN)), Some(tag1.clone()));
@@ -374,7 +386,15 @@ fn the_sig_is_admitted_at_exactly_the_two_hybrid_widths() {
     // An odd hex length, and a non-hex byte at a right width.
     assert!(SessionSig::parse(&"a".repeat(TAG1_SIG_LEN * 2 - 1)).is_none());
     assert!(SessionSig::parse(&format!("zz{}", "ab".repeat(TAG1_SIG_LEN - 1))).is_none());
-    // …and through the body parse, the 400's own detail names the field.
+    // Every row's width is admitted, read off the table as the parse reads
+    // it — so a row added upstream needs no edit in `session.rs`.
+    for row in SIG_ALGS {
+        let sig = SessionSig::parse(&"ab".repeat(row.sig_len()))
+            .unwrap_or_else(|| panic!("tag {}'s width is a hybrid width", row.tag));
+        assert_eq!(sig.as_bytes().len(), row.sig_len());
+    }
+    // …and through the body parse, the 400's own detail names the field and
+    // every width the table admits, rendered off the table too.
     let body = format!(
         r#"{{"principal":7,"nonce":"{}","origin":"http://127.0.0.1:8642","sig":"{}"}}"#,
         "ab".repeat(32),
@@ -382,6 +402,10 @@ fn the_sig_is_admitted_at_exactly_the_two_hybrid_widths() {
     );
     let detail = parse_session_body(body.as_bytes()).err().expect("a 64-byte sig is a syntax fault");
     assert!(detail.contains("'sig'"), "{detail}");
+    assert!(
+        detail.ends_with("exactly 3373 bytes (tag 1, 6746 hex) or 730 bytes (tag 3, 1460 hex)"),
+        "{detail}"
+    );
 }
 
 /// AUTH-4.32 — `verify` is the HYBRID verification under the KEY's own

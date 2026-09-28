@@ -10,11 +10,11 @@ use rand_core::CryptoRng;
 use serde_json::Value;
 use skep_febe::SessionId;
 use skep_identity::{
-    framed, Fingerprint, IdentityState, KeySet, PublicKey, SigAlgRow, SESSION_TAG, SESSION_TAG_V2,
+    framed, Fingerprint, IdentityState, KeySet, PublicKey, SESSION_TAG, SESSION_TAG_V2, SIG_ALGS,
 };
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
 
-use super::hybrid::{self, TAG_FNDSA512_PREVIEW_ED25519, TAG_MLDSA65_ED25519};
+use super::hybrid;
 use super::{bare_origins, signed_origins, AuthConfig, Mode, Origin};
 use crate::codec::{check_keys, hex_nibble, hex_string, parse_lower_hex};
 use crate::World;
@@ -555,86 +555,71 @@ pub(crate) enum SessionBody {
     Signed { principal: PrincipalId, nonce: Nonce, origin: Origin, scope: Scope, sig: SessionSig },
 }
 
-/// The blob width a marker tag's `SIG_ALGS` row fixes, read off the row
-/// [`SigAlgRow::of_tag`] names at COMPILE time — so [`SessionSig`]'s array
-/// widths are the table's own and no second spelling of them: a row whose
-/// width moved (a new tag under the frozen-tag rule) moves the arm with it.
-const fn row_sig_len(tag: u8) -> usize {
-    match SigAlgRow::of_tag(tag) {
-        Some(row) => row.sig_len(),
-        None => panic!("no SIG_ALGS row carries this tag"),
-    }
-}
-
-/// Tag 1's blob width: ML-DSA-65's 3,309 signature bytes then Ed25519's 64 —
-/// 3,373 bytes, 6,746 hex (AUTH-6.3).
-const TAG1_SIG_LEN: usize = row_sig_len(TAG_MLDSA65_ED25519);
-/// Tag 3's blob width: FN-DSA-512's 666 signature bytes then Ed25519's 64 —
-/// 730 bytes, 1,460 hex (AUTH-6.3).
-const TAG3_SIG_LEN: usize = row_sig_len(TAG_FNDSA512_PREVIEW_ED25519);
-
 /// THE SIGNED BODY's `sig` (AUTH-4.34, AUTH-6.3; the hybrid handshake, the
 /// hybrid-only launch's Q0/Q2/Q3 — owner 2026-09-26): THE HYBRID BLOB — the
 /// post-quantum signature THEN the Ed25519 signature, both over the same
-/// signed bytes — at EXACTLY one of the two rows' widths, ONE ARM PER
-/// `SIG_ALGS` ROW over a boxed array of that row's `sig_len()`, so a blob of
-/// any other width is UNREPRESENTABLE: as the base's `[u8; 64]` made a short
-/// signature unrepresentable, this type makes every non-hybrid width so, and
-/// the wrong-width-as-401 reading cannot be written. The width is the SYNTAX
-/// check ALONE — the body carries no `alg` member and an arm names no key:
-/// `find_signer` tries every enrolled key under ITS OWN row, and a blob whose
-/// width is not the key's row's simply fails to verify under that key
-/// (AUTH-4.32, AUTH-4.33). Boxed as the keys are: 3,373 bytes inline would
-/// ride every `SessionBody` by value.
+/// signed bytes — at EXACTLY a width some `SIG_ALGS` row's blob takes. The
+/// bytes are private and [`SessionSig::parse`] is the one constructor, so a
+/// blob of any other width is UNREPRESENTABLE, and the wrong-width-as-401
+/// reading cannot be written.
+///
+/// A WIDTH, never a row. The body carries no `alg` member and names no key,
+/// and `find_signer` tries every enrolled key under ITS OWN row — a blob
+/// whose width is not that row's simply fails to verify under it (AUTH-4.32,
+/// AUTH-4.33) — so which row a width belongs to is a question the handshake
+/// never asks, and this type answers none. The widths are the table's, read
+/// at the parse: a row added upstream is admitted with no edit here, and two
+/// rows at one width — the reserved tag 2 beside tag 3 may be two — are one
+/// width, as they should be.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SessionSig {
-    /// Tag 1's blob — 3,373 bytes: ML-DSA-65's signature then Ed25519's.
-    MlDsa65Ed25519(Box<[u8; TAG1_SIG_LEN]>),
-    /// Tag 3's blob — 730 bytes: FN-DSA-512's signature then Ed25519's.
-    FnDsa512PreviewEd25519(Box<[u8; TAG3_SIG_LEN]>),
-}
+pub(crate) struct SessionSig(Box<[u8]>);
 
 impl SessionSig {
-    /// The blob's bytes, at its arm's width.
+    /// The blob's bytes.
     pub fn as_bytes(&self) -> &[u8] {
-        match self {
-            SessionSig::MlDsa65Ed25519(b) => &b[..],
-            SessionSig::FnDsa512PreviewEd25519(b) => &b[..],
-        }
+        &self.0
     }
 
     /// The `sig` member's PARSE (AUTH-6.3): hex, case-free (it is decoded,
-    /// never framed), decoding to EXACTLY one of the two hybrid blob widths —
-    /// 6,746 hex for tag 1's 3,373 bytes, 1,460 hex for tag 3's 730 — and
-    /// `None` for every other length and for a non-hex byte: the 400 whose
-    /// nonce SURVIVES (a syntax fault spends no credential), never a 401. The
-    /// hex LENGTH is read first, so no allocation is sized by a stranger's
-    /// string, and a 128-hex classical signature is refused here before any
-    /// key set is read.
+    /// never framed), decoding to EXACTLY a width some `SIG_ALGS` row's blob
+    /// takes — today 6,746 hex for tag 1's 3,373 bytes and 1,460 hex for
+    /// tag 3's 730 — and `None` for every other length and for a non-hex
+    /// byte: the 400 whose nonce SURVIVES (a syntax fault spends no
+    /// credential), never a 401. The hex LENGTH is checked against the table
+    /// first, so no allocation is sized by a stranger's string, and a 128-hex
+    /// classical signature is refused here before any key set is read.
     pub fn parse(s: &str) -> Option<SessionSig> {
-        match s.len() {
-            n if n == TAG1_SIG_LEN * 2 => {
-                parse_case_free_hex::<TAG1_SIG_LEN>(s).map(SessionSig::MlDsa65Ed25519)
-            }
-            n if n == TAG3_SIG_LEN * 2 => {
-                parse_case_free_hex::<TAG3_SIG_LEN>(s).map(SessionSig::FnDsa512PreviewEd25519)
-            }
-            _ => None,
+        if !SIG_ALGS.iter().any(|row| row.sig_len() * 2 == s.len()) {
+            return None;
         }
+        parse_case_free_hex(s).map(SessionSig)
     }
 }
 
-/// Exactly `N` bytes of case-free hex — the caller has checked the length —
-/// or `None` on a non-hex byte.
-fn parse_case_free_hex<const N: usize>(s: &str) -> Option<Box<[u8; N]>> {
-    debug_assert_eq!(s.len(), N * 2);
-    let mut raw = Box::new([0u8; N]);
-    for (i, chunk) in s.as_bytes().chunks_exact(2).enumerate() {
-        let hi = hex_nibble(chunk[0].to_ascii_lowercase())?;
-        let lo = hex_nibble(chunk[1].to_ascii_lowercase())?;
-        raw[i] = (hi << 4) | lo;
-    }
-    Some(raw)
+/// The widths [`SessionSig::parse`] admits, as the 400's detail names them —
+/// read off `SIG_ALGS` as the parse reads them, so the message and the parse
+/// cannot disagree. Today:
+/// `3373 bytes (tag 1, 6746 hex) or 730 bytes (tag 3, 1460 hex)`.
+fn hybrid_sig_widths() -> String {
+    SIG_ALGS
+        .iter()
+        .map(|row| format!("{} bytes (tag {}, {} hex)", row.sig_len(), row.tag, row.sig_len() * 2))
+        .collect::<Vec<_>>()
+        .join(" or ")
+}
+
+/// Case-free hex of an even length the caller has checked, or `None` on a
+/// non-hex byte.
+fn parse_case_free_hex(s: &str) -> Option<Box<[u8]>> {
+    debug_assert_eq!(s.len() % 2, 0);
+    s.as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            let hi = hex_nibble(pair[0].to_ascii_lowercase())?;
+            let lo = hex_nibble(pair[1].to_ascii_lowercase())?;
+            Some((hi << 4) | lo)
+        })
+        .collect()
 }
 
 /// The handshake refusal — a unit struct: the reason is DESTROYED at the
@@ -720,10 +705,12 @@ pub(crate) fn parse_session_body(body: &[u8]) -> Result<SessionBody, String> {
                 .ok_or("field 'nonce' is not 64 lowercase hex")?;
             let sig_text =
                 m.get("sig").and_then(Value::as_str).ok_or("field 'sig' must be a string")?;
-            let sig = SessionSig::parse(sig_text).ok_or(
-                "field 'sig' is not hex decoding to a hybrid signature blob of exactly 3373 \
-                 bytes (tag 1, 6746 hex) or 730 bytes (tag 3, 1460 hex)",
-            )?;
+            let sig = SessionSig::parse(sig_text).ok_or_else(|| {
+                format!(
+                    "field 'sig' is not hex decoding to a hybrid signature blob of exactly {}",
+                    hybrid_sig_widths()
+                )
+            })?;
             // The FOURTH strict field (AUTH-6.3): absent is FULL; present, it
             // is exactly the JSON string `content` — no other value, no
             // other type, no case variant.

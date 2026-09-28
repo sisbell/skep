@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use skep_kernel::Seq;
 
-use super::reply::{refuse, Reply, TransportError, SESSION_HEADER};
+use super::reply::{reason_phrase, refuse, Reply, TransportError, SESSION_HEADER};
 use super::request::{at_most_once, HttpRequest};
 use super::body_cap;
 use crate::auth::session::Peer;
@@ -336,12 +336,15 @@ pub(super) fn push_header(head: &mut Vec<u8>, name: &str, value: &str) {
 /// [`push_header`] is the one place a header becomes bytes, and for the same
 /// reason: a stream is not a [`Reply`], so `listen::serve_events` composes
 /// its own head — but its opening IS the reply path's at status 200, and
-/// spelled by hand it is a second entry in [`reason`]'s table with nothing
-/// keeping the two in step. The caller appends its own headers, the blank
-/// line, and whatever body it has.
+/// spelled by hand it is a second entry in [`reason_phrase`]'s table with
+/// nothing keeping the two in step. The caller appends its own headers, the
+/// blank line, and whatever body it has.
 pub(super) fn response_head(status: u16) -> Vec<u8> {
     let mut head = Vec::with_capacity(256);
-    head.extend_from_slice(format!("HTTP/1.1 {status} {}\r\n", reason(status)).as_bytes());
+    // A status no phrase names — one this daemon does not answer — still
+    // opens a well-formed status line.
+    let phrase = reason_phrase(status).unwrap_or("Status");
+    head.extend_from_slice(format!("HTTP/1.1 {status} {phrase}\r\n").as_bytes());
     for (name, value) in UNIVERSAL_HEADERS {
         push_header(&mut head, name, value);
     }
@@ -386,24 +389,6 @@ pub(super) fn write_reply(
     } else {
         head.extend_from_slice(b"\r\n");
         write_bounded(stream, &head, deadline)
-    }
-}
-
-/// The subset's reason phrases — informational only; clients dispatch on
-/// the code.
-fn reason(status: u16) -> &'static str {
-    match status {
-        200 => "OK",
-        204 => "No Content",
-        400 => "Bad Request",
-        401 => "Unauthorized",
-        404 => "Not Found",
-        405 => "Method Not Allowed",
-        410 => "Gone",
-        413 => "Payload Too Large",
-        500 => "Internal Server Error",
-        503 => "Service Unavailable",
-        _ => "Status",
     }
 }
 

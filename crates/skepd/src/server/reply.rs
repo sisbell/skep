@@ -250,6 +250,30 @@ impl TransportError {
     }
 }
 
+/// The reason phrase of a status THIS daemon answers — `None` for any other.
+/// Informational only (clients dispatch on the code), but the list is a
+/// statement of which statuses the daemon answers, so it lives beside where
+/// they are chosen: [`TransportError::status`], [`refuse_handshake`]'s pair,
+/// and the 200 and 204 every success reply carries. A status chosen and
+/// missing here goes out under the writer's fallback phrase, which the tests
+/// at the end of this file exist to catch.
+pub(super) fn reason_phrase(status: u16) -> Option<&'static str> {
+    Some(match status {
+        200 => "OK",
+        204 => "No Content",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        410 => "Gone",
+        413 => "Payload Too Large",
+        500 => "Internal Server Error",
+        503 => "Service Unavailable",
+        _ => return None,
+    })
+}
+
 /// A transport-level refusal, whole: the status and the `{"error": name}`
 /// body wire.md pairs with `err`, plus an optional detail. Deliberately NOT
 /// the `{"resp": "rejected"}` shape — no `Op` was involved. Every non-2xx
@@ -503,6 +527,7 @@ mod tests {
         for &(err, name, status) in &table {
             assert_eq!(err.name(), name, "wire name drifted for {err:?}");
             assert_eq!(err.status(), status, "{name} must be answered with {status}");
+            assert!(reason_phrase(status).is_some(), "{name}'s {status} has no reason phrase");
             // The one builder every refusal goes through takes both from
             // the error, so the pairing a client dispatches on is checked
             // where it is produced rather than only where it is declared.
@@ -539,6 +564,20 @@ mod tests {
             crate::fuzz_support::TRANSPORT_ERRORS.len(),
             "the two hand transcriptions of wire.md's error column disagree in length"
         );
+    }
+
+    /// The statuses answered outside [`TransportError`] have their phrases
+    /// too: the handshake's pair, built at its own site, and the success
+    /// replies' 204 and 200.
+    #[test]
+    fn every_status_outside_the_transport_errors_has_a_reason_phrase() {
+        use crate::auth::session::SessionRejected;
+        let record = crate::codec::wire_address("1.0.1.0.7.1").expect("a record's address");
+        let rejected = refuse_handshake(&HandshakeRefusal::Rejected(SessionRejected));
+        let blocked = refuse_handshake(&HandshakeRefusal::Blocked { record });
+        for status in [rejected.status, blocked.status, Reply::preflight().status, 200] {
+            assert!(reason_phrase(status).is_some(), "{status} has no reason phrase");
+        }
     }
 
     /// The `scan_busy` refusal's exact body: a transport refusal (no `resp`,

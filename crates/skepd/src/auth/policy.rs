@@ -244,17 +244,11 @@ pub(crate) enum AttestFault {
     /// REORDER).
     Malformed,
     /// The board has no `H.1`, so the entry frame's `board` term (D13) has
-    /// no value and nothing can be verified. Since s1 (RULED 2026-09-25) the
-    /// claim writes `H.1` in its own step and the daemon's open writes it
-    /// where a crash split the two, so on a claimed board this answers only
-    /// the two states [`crate::write_path::board_term`] names: a first head
-    /// the head writer's driver refused — a refusal the claim survives,
-    /// surfaced on the operator stream, and cleared by the next head or the
-    /// next open — or a journal damaged below `H.1` (the member gone, or its
-    /// record not one this build reads). REORDER, not PERMANENT: the board's
-    /// state refused it, not the client's key, and the first of the two
-    /// states clears without the client. Its own cause so a client is not
-    /// told its signature was wrong.
+    /// no value and nothing can be verified — on a claimed board, one of the
+    /// two states [`crate::write_path::board_term`] names. REORDER, not
+    /// PERMANENT: the board's state refused it, not the client's key, and the
+    /// state a refused first head leaves clears without the client. Its own
+    /// cause so a client is not told its signature was wrong.
     BoardUnavailable,
     /// The set that OPENS the act's principal at this write's base holds no
     /// key of the attestation's algorithm — A2's empty walk among them — so

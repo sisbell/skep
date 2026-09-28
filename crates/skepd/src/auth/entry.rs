@@ -93,12 +93,8 @@ const VALUE_LENGTH_BYTES: usize = 4;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ComposeFault {
     /// The entry frame's `board` term (D13) has no value: the board has no
-    /// `H.1`. Since s1 (RULED 2026-09-25) the claim writes `H.1` in its own
-    /// step and the open writes it where a crash split the two, so on a
-    /// claimed board this names one of the two states [`board_term`] states:
-    /// a first head the head writer's driver refused (surfaced on the operator
-    /// stream, and written by the next head or the next open), or a journal
-    /// damaged below `H.1`.
+    /// `H.1` — on a claimed board, one of the two states [`board_term`]
+    /// names.
     NoBoardTerm,
     /// The principal has no account prefix — no `account` term.
     NoAccount,

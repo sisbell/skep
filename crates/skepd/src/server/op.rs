@@ -54,24 +54,22 @@ impl Daemon {
     /// kind lands between the claim and `H.1`: the head names the claim's own
     /// position, and — where the head writer's driver ADMITS it — the first
     /// write admitted after the claim finds the board term present. Where the
-    /// driver REFUSES it (on a healthy kernel, M2's `TxnError::Durability`: a
-    /// true no-op the kernel survives — ENOSPC, the OS refusing entropy), the
-    /// head writer surfaces the refusal on the operator stream (I11 (c)) and
-    /// the claim STANDS, whatever the refusal — its ack is owed, which is why
-    /// [`WritePath::write_first_head`](crate::write_path::WritePath::write_first_head)'s answer is not read here — and the
-    /// board has no board term until a head lands: the cadence's next, or
-    /// the next open's ([`Daemon::write_the_claims_head_if_owed`]). Until
-    /// then every attested write answers
-    /// `attestation_invalid:board_unavailable`. `lock` is the credential
-    /// write gate: the re-install replaces the list under the gate the claim
-    /// itself committed under, so
-    /// no SESSION write lands between the claim and the comparands it moves
-    /// — every one takes this gate. The head writer's own commits are the one
-    /// kind that lands inside this step: `H.1`'s here, or the cadence's where
-    /// the head writer's turn after the claim's commit already wrote it (an
-    /// operator pausing an hour before the ceremony's last step is enough), in
-    /// which case `H.1` stands and [`WritePath::write_first_head`](crate::write_path::WritePath::write_first_head) writes
-    /// nothing — made by no session, they meet no list, and
+    /// driver REFUSES it, the claim STANDS, whatever the refusal: its ack is
+    /// owed, which is why
+    /// [`WritePath::write_first_head`](crate::write_path::WritePath::write_first_head)'s
+    /// answer is not read here. What a refusal is and when the first head
+    /// comes after one are the head writer's (`head.rs`, WHAT A REFUSAL
+    /// DOES); what an attested write meets meanwhile is
+    /// [`crate::write_path::board_term`]'s. `lock` is the credential write
+    /// gate: the re-install replaces the list under the gate the claim itself
+    /// committed under, so no SESSION write lands between the claim and the
+    /// comparands it moves — every one takes this gate. The head writer's own
+    /// commits are the one kind that lands inside this step: `H.1`'s here, or
+    /// the cadence's where the head writer's turn after the claim's commit
+    /// already wrote it (an operator pausing an hour before the ceremony's
+    /// last step is enough), in which case `H.1` stands and
+    /// [`WritePath::write_first_head`](crate::write_path::WritePath::write_first_head)
+    /// writes nothing — made by no session, they meet no list, and
     /// `IdentityFold::step_committed`'s premise already counts them.
     fn on_claim_flip(&self, lock: &LockWrite<'_>, serial: &SerialGuard<'_>) {
         // THE CRASH WINDOW's seam: armed, the process is held HERE — the
@@ -84,8 +82,8 @@ impl Daemon {
             }
         }
         // Its answer is not read: a refused `H.1` fails nothing here — the
-        // claim stands, the head writer has surfaced the refusal (the card
-        // above).
+        // claim stands (the card above), and the head writer surfaces the
+        // refusal itself.
         self.writes.write_first_head(serial);
         self.log_config_warnings(true);
         self.auth.reinstall_blocked_at_claim(lock);

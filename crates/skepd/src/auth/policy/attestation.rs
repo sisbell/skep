@@ -61,8 +61,9 @@ use crate::World;
 ///    where they would admit it, the base carrying the run; a body past
 ///    `entry::MAX_SHOT_BODY_BYTES` answers
 ///    `attestation_invalid:frame_too_large` before it is built; a board with
-///    no `H.1` answers `attestation_invalid:board_unavailable`, never "carry
-///    an attest"; a principal with no account answers
+///    no `H.1` — the states [`crate::write_path::board_term`] names — answers
+///    `attestation_invalid:board_unavailable`, never "carry an attest"; a
+///    principal with no account answers
 ///    `attestation_invalid:not_enrolled_at_position`.
 /// 5. (1): no `attest` → `attestation_required`.
 /// 6. (2): the member's marker tag names its row (a tag no row names is
@@ -109,21 +110,9 @@ pub(super) fn attestation_check(
     if system_owned(world, op) {
         return Ok(None);
     }
-    // 4 — THE ENTRY FRAME, every member but `alg`, composed before the
-    // member is asked for: a `publish` run naming an address with no value
-    // cannot commit, so the shot passes through UNATTESTED for the store's
-    // own `dangling_source`, attest or none; a shot placing a value its
-    // author may not read is composed over nothing, and what it is owed is
-    // decided HERE, by the store's own gates — passed through UNATTESTED where
-    // they refuse it at or before the source gate, refused as its own cause
-    // where they would admit it, the base CARRYING the run — that value unread
-    // either way; one whose body passes the budget is refused before the body
-    // is built; and a board with no `H.1` — its first head refused by the head
-    // writer's driver, or its journal damaged below it (`board_term` states
-    // both), since the claim writes `H.1` in its own step (s1) — has no
-    // `board` term for ANY client to sign over, which is told as its own cause
-    // rather than as "carry an attest". `alg` is the member's own, so it waits
-    // for step 6.
+    // 4 — THE ENTRY FRAME, every member but `alg`, composed BEFORE the
+    // member is asked for; what each fault is answered is doc item 4's.
+    // `alg` is the member's own, so it waits for step 6.
     let invalid = CredentialRefusal::AttestationInvalid;
     let entry_frame = match entry::compose(world, op, principal) {
         Ok(entry_frame) => entry_frame,

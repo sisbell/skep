@@ -143,6 +143,7 @@
 //! ruling. A build without the feature has no `/` route (404).
 
 mod actor;
+#[cfg(any(test, feature = "test-hooks"))]
 mod hooks;
 mod http;
 mod listen;
@@ -153,6 +154,7 @@ mod scan;
 mod session_routes;
 
 use std::path::Path;
+#[cfg(any(test, feature = "test-hooks"))]
 use std::sync::atomic::AtomicBool;
 
 use skep_engine::{Engine, EngineError, HistoryError, World};
@@ -322,12 +324,13 @@ pub struct Daemon {
     /// substrate): M8 and M7 are asked or not asked, and never told.
     scans: ClassScans,
     /// The dirty-crash harness's one seam into the claim's step
-    /// ([`Daemon::hold_between_the_claim_and_its_head`]): armed, the
+    /// (`Daemon::hold_between_the_claim_and_its_head`): armed, the
     /// claim-flip tail announces the crash window and parks there, both
     /// locks held, for the harness to SIGKILL. `false` is the only state
-    /// production ever sees; a test-only flag and not a `cfg(test)` one,
-    /// because the harness is an integration test of the shipped binary's
-    /// library, outside this crate's `cfg(test)`.
+    /// production ever sees; compiled under the `test-hooks` feature, not
+    /// `cfg(test)` alone, because the harness is an integration test of
+    /// this crate's library, outside its `cfg(test)`.
+    #[cfg(any(test, feature = "test-hooks"))]
     hold_between_claim_and_head: AtomicBool,
 }
 
@@ -413,13 +416,13 @@ impl Daemon {
         // of the seed and the position, which is exactly the predictability
         // the salt exists to deny a reader of `/chain?at=N`. The seeded
         // source reaches a daemon through the test seam alone
-        // ([`Daemon::open_seeded`], `#[doc(hidden)]`).
+        // (`Daemon::open_seeded`, compiled only under `test-hooks`).
         Self::open_under(data_dir.as_ref(), opts, SaltSource::Os)
     }
 
     /// The one open, under a named salt source — [`Daemon::open_with`]'s
     /// body, which that door reaches with [`SaltSource::Os`] and the test
-    /// seam [`Daemon::open_seeded`] with a seeded stream. Private, so no
+    /// seam `Daemon::open_seeded` with a seeded stream. Private, so no
     /// third caller can name a source; and over `&Path`, so the two public
     /// doors are the generic shims and this body is compiled ONCE whatever
     /// path type a caller holds — the split std keeps, `File::open` over its
@@ -475,6 +478,7 @@ impl Daemon {
             writes,
             history: History::new(),
             scans: ClassScans::new(),
+            #[cfg(any(test, feature = "test-hooks"))]
             hold_between_claim_and_head: AtomicBool::new(false),
         };
         // THE CRASH WINDOW, closed before anything is served (signed ops, s1;

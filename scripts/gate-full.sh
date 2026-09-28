@@ -8,6 +8,13 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
+# The shipped build, checked first: skepd's library and binary alone, at
+# default features, so `test-hooks` is OFF. The test run below compiles
+# skepd with that feature on (the tests that reach its hooks enable it), so
+# it cannot show that the daemon compiles without them; this check can, and
+# a red here fails the gate before any test runs.
+cargo check -p skepd --lib --bins || exit $?
+
 # --run-ignored all re-admits the #[ignore] timing partition. One test is
 # excluded BY NAME, not by ignore-ness: hazard G (disk exhaustion) is
 # env-gated by its owners (hdiutil, mount rights, macOS only — "run it

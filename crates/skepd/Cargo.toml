@@ -35,6 +35,14 @@ observe = ["skep-engine/dump"]
 # is what GET / serves by default once it does.
 # The workspace gate runs --all-features so this route stays exercised.
 client = []
+# `test-hooks` compiles in the test-only code: `Daemon`'s `#[doc(hidden)]`
+# hooks (server/hooks.rs) and the claim-flip hold one of them arms, the
+# `fuzz_support` harness, the `Permit` re-export the pool hooks return, and
+# `hybrid`'s fixture hooks. DEFAULT-OFF, and the shipped binary never
+# enables it: this crate's own tests turn it on through the self
+# dev-dependency below, and skep-mcp's tests and skep/fuzz/ on their
+# `skepd` lines, so a build that compiles no test compiles none of it.
+test-hooks = []
 
 [dependencies]
 # The assembled engine: Engine::open (genesis-or-recover), the Stores<World>
@@ -109,6 +117,11 @@ serde_json.workspace = true
 parking_lot.workspace = true
 
 [dev-dependencies]
+# This crate itself with `test-hooks` on, so its integration tests
+# (tests/it, outside this library's `cfg(test)`) compile against the hooks
+# under a plain `cargo test` or workspace run, no flag added. A build that
+# compiles no test never reads this table, so the binary stays without them.
+skepd = { path = ".", features = ["test-hooks"] }
 tempfile.workspace = true
 # Test-side SIGNING (the daemon itself only verifies): the ceremony and
 # handshake suites hold deterministic seed keypairs (SigningKey::from_bytes)

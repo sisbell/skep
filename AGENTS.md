@@ -9,3 +9,7 @@ or more it lives in the module's own `tests.rs` — `foo/tests.rs` beside
 `foo.rs`, or `tests.rs` beside a `mod.rs` — declared
 `#[cfg(test)] mod tests;`. Integration tests stay under each crate's
 `tests/`.
+
+## skepd
+
+skepd is layered; imports point down.

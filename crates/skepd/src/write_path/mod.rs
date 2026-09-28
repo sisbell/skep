@@ -156,9 +156,10 @@ impl WritePath {
         })
     }
 
-    /// The test seam behind [`crate::Daemon::set_head_writer_clock_millis`]:
+    /// The test seam behind `crate::Daemon::set_head_writer_clock_millis`:
     /// fix the head writer's clock, so a test drives the time-bound trigger
     /// without a `sleep`. Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
     pub(crate) fn set_head_writer_clock_millis(&self, millis: u64) {
         self.head_writer.set_clock_millis(millis);
     }

@@ -19,8 +19,9 @@ serde_json.workspace = true
 # The real stack: tests build a daemon in-process on an ephemeral port over
 # a temp data dir, claim its board over the wire (an unclaimed daemon runs
 # nothing but the claim ceremony — RES-27), provision a principal, and
-# drive the built skep-mcp binary through its stdin/stdout.
-skepd = { path = "../skepd" }
+# drive the built skep-mcp binary through its stdin/stdout. `test-hooks`
+# compiles in `skepd::fuzz_support`, which tests/it/fuzz_mcp.rs drives.
+skepd = { path = "../skepd", features = ["test-hooks"] }
 # The ceremony's record grammar and session-payload framing.
 skep-identity = { path = "../skep-identity" }
 # Test-side signing for the ceremony's claim step (the daemon only verifies).

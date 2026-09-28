@@ -1,6 +1,8 @@
 //! `POST /op`: the dispatch, the two write sequences, and the claim flip.
 
+#[cfg(any(test, feature = "test-hooks"))]
 use std::sync::atomic::Ordering;
+#[cfg(any(test, feature = "test-hooks"))]
 use std::thread;
 
 use skep_engine::World;
@@ -22,6 +24,7 @@ use crate::auth::policy::{
 use crate::auth::session::Actor;
 use crate::auth::{blocked_prefixes, LockWrite};
 use crate::codec::{key_set_reply, DaemonOp};
+#[cfg(any(test, feature = "test-hooks"))]
 use crate::notice;
 use crate::serial::SerialGuard;
 use crate::write_path::{write_meta, FrameMeta};
@@ -74,6 +77,7 @@ impl Daemon {
     fn on_claim_flip(&self, lock: &LockWrite<'_>, serial: &SerialGuard<'_>) {
         // THE CRASH WINDOW's seam: armed, the process is held HERE — the
         // claim durable and flipped, no head — for the harness to kill.
+        #[cfg(any(test, feature = "test-hooks"))]
         if self.hold_between_claim_and_head.load(Ordering::Relaxed) {
             notice::line(Self::CLAIM_HOLD_NOTICE);
             loop {

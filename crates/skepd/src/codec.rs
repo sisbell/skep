@@ -1964,8 +1964,9 @@ fn j_atom(v: &Val) -> Value {
 
 /// Lowercase hex — the encoding behind `{"hex"}`, `{"atom_hex"}`, and the
 /// fuzz harness's reproduction form, so all three read the same bytes back.
-/// `pub` because [`crate::fuzz_support`] re-exports it as its `hex`: this
-/// module is private, so that re-export stays the only public path to it.
+/// `pub` because `crate::fuzz_support` re-exports it as its `hex`: this
+/// module is private, so that re-export is the only public path to it, and a
+/// build without `test-hooks` has none.
 pub fn hex_string(b: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut s = String::with_capacity(b.len() * 2);

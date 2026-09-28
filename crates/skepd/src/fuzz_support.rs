@@ -19,10 +19,10 @@
 //! mutation engine is a pure, deterministic `(seed, corpus) → bytes`.
 //!
 //! Dependency posture: std plus this crate's own `serde_json`/codec only —
-//! no `tempfile`, no server library — so exposing it adds nothing to a
-//! production build but a handful of small functions. Daemon lifetime
-//! (temp dirs, `serve`) stays with the caller, which is why the exchange
-//! helpers take a live `port`, never a directory.
+//! no `tempfile`, no server library — and it compiles only under the
+//! `test-hooks` feature, so a production build carries none of it. Daemon
+//! lifetime (temp dirs, `serve`) stays with the caller, which is why the
+//! exchange helpers take a live `port`, never a directory.
 
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream};

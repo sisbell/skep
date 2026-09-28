@@ -68,14 +68,14 @@ use fn_dsa::{
     DOMAIN_NONE, FN_DSA_LOGN_512, HASH_ID_RAW,
 };
 use hkdf::Hkdf;
-use ml_dsa::{
-    EncodedSignature, EncodedVerifyingKey, ExpandedSigningKeyBytes, Keypair as _, MlDsa65,
-    Signer as _,
-};
+use ml_dsa::{EncodedSignature, EncodedVerifyingKey, Keypair as _, MlDsa65, Signer as _};
 use sha2::Sha256;
 use skep_identity::{PublicKey, SigAlgRow};
 
 use super::OsEntropy;
+
+#[cfg(any(test, feature = "test-hooks"))]
+use ml_dsa::ExpandedSigningKeyBytes;
 
 /// The marker tag of the PRODUCTION row, `mldsa65-ed25519` (ML-DSA-65 +
 /// Ed25519).
@@ -240,6 +240,7 @@ impl rand_core_06::CryptoRng for OsEntropy {}
 /// own rule) is byte-stable in a golden. No part of any tag's rule: a tag-3
 /// signature verifies under the tag's rule whatever RNG made it. Never for
 /// production use — the stream is a function of its seed.
+#[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
 pub struct SeededRng06 {
     seed: [u8; 32],
@@ -250,6 +251,7 @@ pub struct SeededRng06 {
     used: usize,
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 impl SeededRng06 {
     pub fn new(seed: [u8; 32]) -> SeededRng06 {
         let block = [0; 32];
@@ -258,12 +260,14 @@ impl SeededRng06 {
 }
 
 /// The stream's position, never its seed: this module prints no seed.
+#[cfg(any(test, feature = "test-hooks"))]
 impl fmt::Debug for SeededRng06 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SeededRng06").field("counter", &self.counter).finish_non_exhaustive()
     }
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 impl rand_core_06::RngCore for SeededRng06 {
     fn next_u32(&mut self) -> u32 {
         rand_core_06::impls::next_u32_via_fill(self)
@@ -293,6 +297,7 @@ impl rand_core_06::RngCore for SeededRng06 {
     }
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 impl rand_core_06::CryptoRng for SeededRng06 {}
 
 /// The post-quantum half of a signer, per tag.
@@ -378,6 +383,7 @@ impl HybridSigner {
     /// classical layout no served board admits — is made with it. Hidden
     /// because its type is `ed25519-dalek`'s: a caller holding one names that
     /// crate at this crate's version.
+    #[cfg(any(test, feature = "test-hooks"))]
     #[doc(hidden)]
     pub fn ed25519_signing_key(&self) -> &EdSigningKey {
         &self.ed
@@ -385,7 +391,7 @@ impl HybridSigner {
 
     /// TEST HOOK (the same standing) — [`HybridSigner::sign`] with tag 3's
     /// per-signature seed drawn from `rng`: the fixtures' door, handed a
-    /// [`SeededRng06`] so a tag-3 golden is byte-stable (tag 1 draws nothing).
+    /// `SeededRng06` so a tag-3 golden is byte-stable (tag 1 draws nothing).
     /// Hidden because its bound is `rand_core` 0.6's — the version `fn-dsa`
     /// 0.4.0 draws through, which a caller's own RNG would have to match.
     #[doc(hidden)]
@@ -575,6 +581,7 @@ pub fn verify(tag: u8, key: &PublicKey, msg: &[u8], sig: &[u8]) -> Result<(), Hy
 /// The widths one tag's rule fixes — [`pq_widths`]' answer. Named, not a
 /// triple: three `usize`s meaning three things, printed into a report that
 /// is transcribed.
+#[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PqWidths {
@@ -594,6 +601,7 @@ pub struct PqWidths {
 /// functions for tag 3 — so a bump of either crate that moved one fails
 /// `sizes_and_timings_per_tag`'s literal pin by name. `None` for a tag this
 /// build holds no rule for.
+#[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
 pub fn pq_widths(tag: u8) -> Option<PqWidths> {
     Some(match Rule::of(tag)? {

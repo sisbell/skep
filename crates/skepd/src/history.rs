@@ -203,6 +203,7 @@ impl History {
     /// all [`MAX_CONCURRENT_RECONSTRUCTIONS`] are taken. Real
     /// reconstructions finish in milliseconds, so the integration tests pin
     /// the counter through this instead of racing the engine.
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn try_hold_permit(&self) -> Option<Permit<'_>> {
         self.permits.try_acquire()
     }

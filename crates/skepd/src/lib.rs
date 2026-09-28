@@ -85,9 +85,11 @@ mod write_path;
 /// The shared fuzzing harness (hardening H2): the pure oracle and mutation
 /// logic the tier-1 `#[test]`s and the nightly libFuzzer targets both drive.
 /// Not a stable API — `#[doc(hidden)]`, std-only, and exempt from the wire
-/// contract. It is unconditionally compiled (not `#[cfg(test)]`) precisely so
-/// the out-of-workspace `skep/fuzz/` crate and the integration tests — both
-/// external to this library — can reach it under a plain build.
+/// contract. It compiles under the `test-hooks` feature (not `#[cfg(test)]`
+/// alone) so the out-of-workspace `skep/fuzz/` crate and the integration
+/// tests — both external to this library — reach it by enabling that
+/// feature, and a shipped build carries none of it.
+#[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
 pub mod fuzz_support;
 
@@ -155,6 +157,7 @@ pub use skep_kernel::Seq;
 /// reconstruction pool or of the class-scan pool (wire v7.9), the same guard
 /// type for both. Public only because those hooks' return type must be
 /// nameable; not a stable API.
+#[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
 pub use history::Permit;
 
@@ -178,6 +181,7 @@ const _: fn() = || {
     assert_send_sync::<Body>();
     assert_send_sync::<HttpRequest>();
     assert_send_sync::<Routed>();
+    #[cfg(any(test, feature = "test-hooks"))]
     assert_send_sync::<Permit<'static>>();
     // The AUTH round's arrivals. `AuthOptions` is the value a caller builds
     // and hands to `Daemon::open_with`, plausibly across a thread boundary;
@@ -195,6 +199,8 @@ const _: fn() = || {
     assert_send_sync::<hybrid::HybridSigner>();
     assert_send_sync::<hybrid::HalfSeeds>();
     assert_send_sync::<hybrid::HybridFault>();
+    #[cfg(any(test, feature = "test-hooks"))]
     assert_send_sync::<hybrid::SeededRng06>();
+    #[cfg(any(test, feature = "test-hooks"))]
     assert_send_sync::<hybrid::PqWidths>();
 };

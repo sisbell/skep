@@ -173,9 +173,9 @@ const TIME_BOUND_MILLIS: u64 = 3_600_000; // one hour
 /// entry (the module doc's RESUME FROM THE FEED) is measured on the clock
 /// that recorded it; a wall clock that steps is tolerated by the trigger's
 /// `saturating_sub`, and the cost of a step is one head early or late by the
-/// step, never a duplicate. [`Clock::set_millis`] overrides it with a fixed
+/// step, never a duplicate. `Clock::set_millis` overrides it with a fixed
 /// reading (the test seam, reached through
-/// [`crate::Daemon::set_head_writer_clock_millis`]), which a test therefore
+/// `crate::Daemon::set_head_writer_clock_millis`), which a test therefore
 /// sets RELATIVE TO the wall clock rather than at small numbers a resumed
 /// origin would dwarf.
 ///
@@ -202,6 +202,7 @@ impl Clock {
         fixed.unwrap_or_else(wall_clock_millis)
     }
 
+    #[cfg(any(test, feature = "test-hooks"))]
     fn set_millis(&self, millis: u64) {
         *self.fixed_millis.lock() = Some(millis);
     }
@@ -415,9 +416,10 @@ impl HeadWriter {
         }
     }
 
-    /// The test seam behind [`crate::Daemon::set_head_writer_clock_millis`]:
+    /// The test seam behind `crate::Daemon::set_head_writer_clock_millis`:
     /// fix the writer's clock at `millis`, so a test drives trigger (c)
     /// without a `sleep`. Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn set_clock_millis(&self, millis: u64) {
         self.clock.set_millis(millis);
     }

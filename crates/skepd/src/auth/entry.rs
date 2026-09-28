@@ -7,7 +7,7 @@
 //!
 //! * `alg` — the `attest.alg` token as the request carried it — the one
 //!   member the snapshot does not supply, so it is applied last
-//!   ([`EntryFrame::bytes`]);
+//!   ([`EntryFrame::to_bytes`]);
 //! * `board` — the BOARD TERM, `H.1`'s committed pair (D13, RULED), read off
 //!   the snapshot by [`crate::write_path::board_term`];
 //! * `account` — the act's principal's account in the board's local form,
@@ -143,7 +143,7 @@ impl<'a> Slot<'a> {
 /// THE ENTRY FRAME for `op` by `principal` on `world` — every member the op
 /// and the snapshot supply, composed once — or why it cannot be composed.
 /// `alg` is not among them: it is the presented attestation's own, applied
-/// last ([`EntryFrame::bytes`]), so the check learns whether an entry frame
+/// last ([`EntryFrame::to_bytes`]), so the check learns whether an entry frame
 /// CAN be composed before it asks for the member, and names no token for a
 /// write that presents none.
 pub(super) fn compose(
@@ -249,8 +249,10 @@ impl EntryFrame {
     /// The entry frame's bytes under `alg`, the token the presented
     /// attestation's MARKER tag names — [`skep_identity::entry_frame`]'s
     /// layout, `framed(ENTRY_TAG, [alg, board, account, doc, op, body])`,
-    /// `ENTRY_TAG` its framing tag.
-    pub(super) fn bytes(&self, alg: &str) -> Vec<u8> {
+    /// `ENTRY_TAG` its framing tag. `to_` as C-CONV spells a rendering from a
+    /// borrow, as `write_path/head.rs`'s `HeadRecord::to_bytes` is; the free
+    /// borrow is `EntryBody::as_bytes`.
+    pub(super) fn to_bytes(&self, alg: &str) -> Vec<u8> {
         entry_frame(alg, self.board, &self.account, &self.doc, &self.body)
     }
 }

@@ -482,8 +482,8 @@ fn handoff_giver(
     // The ADMISSION's: a direct child of a forked lineage's seat, the seat's
     // own first sub-account apart.
     if let Some(seat) = forked_seat(seat, identity) {
-        if subject_parent.as_ref() == Some(&seat)
-            && first_sub_account(&seat).as_ref() != Some(subject)
+        if subject_parent.as_ref() == Some(seat)
+            && first_sub_account(seat).as_ref() != Some(subject)
         {
             return None;
         }
@@ -512,10 +512,10 @@ fn handoff_giver(
 /// differ from and no lineage to have forked. The rule does not speak to the
 /// cell, and the carve only ever WIDENS — so where its comparison has no
 /// referent the gate keeps its grade.
-fn forked_seat(seat: Option<&Address>, identity: &IdentityState) -> Option<Address> {
+fn forked_seat<'a>(seat: Option<&'a Address>, identity: &IdentityState) -> Option<&'a Address> {
     let claimant = identity.claimant()?;
     let seat = seat?;
-    (claimant != seat).then(|| seat.clone())
+    (claimant != seat).then_some(seat)
 }
 
 #[cfg(test)]

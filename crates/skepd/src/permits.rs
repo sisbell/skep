@@ -24,10 +24,13 @@ pub(crate) struct Permits {
 /// One held permit; dropping it releases the slot in the pool that issued
 /// it. Named rather than hidden behind an opaque `impl Drop`, so a caller
 /// can store it, borrow it, and read what it is — the standing every guard
-/// in `std` has. Public only to be the return type of the daemon's two test
-/// hooks, and `#[doc(hidden)]` for the same reason.
+/// in `std` has, `#[must_use]` included: a permit taken and dropped in one
+/// statement licenses nothing. Public only to be the return type of the
+/// daemon's two test hooks, and `#[doc(hidden)]` for the same reason.
 #[doc(hidden)]
 #[derive(Debug)]
+#[must_use = "a permit dropped at once returns its slot at once: bind it for as long as the \
+              work it licenses runs"]
 pub struct Permit<'a> {
     permits: &'a Permits,
 }
@@ -38,7 +41,10 @@ impl Permits {
         Permits { available: AtomicUsize::new(n) }
     }
 
-    /// One permit, or `None` right now — never blocks.
+    /// One permit, or `None` right now — never blocks. `#[must_use]` on the
+    /// function as well as the type: an `Option` is no `#[must_use]` type, so
+    /// the permit it carries would otherwise drop unremarked.
+    #[must_use = "a permit dropped at once returns its slot at once"]
     pub(crate) fn try_acquire(&self) -> Option<Permit<'_>> {
         self.available
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1))

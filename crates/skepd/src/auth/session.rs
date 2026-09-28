@@ -459,14 +459,9 @@ pub(crate) fn key_subject(
 /// one function, and a handoff is told at exactly the account whose keys
 /// open the address it hands away (RES-172).
 pub(crate) fn keyed_above(identity: &IdentityState, a: &Address) -> Option<Address> {
-    let mut cursor = parent(a);
-    while let Some(above) = cursor.filter(|a| a.level() == Level::Account) {
-        if !identity.key_set(&above).is_empty() {
-            return Some(above);
-        }
-        cursor = parent(&above);
-    }
-    None
+    std::iter::successors(parent(a), parent)
+        .take_while(|above| above.level() == Level::Account)
+        .find(|above| !identity.key_set(above).is_empty())
 }
 
 /// AUTH-4.30 (ii) — THE SESSION'S OWN ACCOUNT, the one-arm map exactly:

@@ -733,14 +733,13 @@ impl Daemon {
     /// are this daemon's, and [`serve`] would otherwise reach two levels
     /// into [`crate::auth::AuthState`] to spell them.
     ///
-    /// `at_claim` only labels the line. The claim itself is READ from the
-    /// fold rather than supplied, so no caller can hand this method a fact
-    /// the daemon can answer.
-    fn log_config_warnings(&self, at_claim: bool) {
+    /// `when` only labels the line. The claim itself is READ from the fold
+    /// rather than supplied, so no caller can hand this method a fact the
+    /// daemon can answer.
+    fn log_config_warnings(&self, when: Moment) {
         let claimed = self.auth.fold.snapshot().claimant().is_some();
-        let when = if at_claim { " (at claim)" } else { "" };
         for w in startup_warnings(&self.auth.cfg, claimed) {
-            notice::line(format_args!("warning{when}: {w}"));
+            notice::line(format_args!("warning ({when}): {w}"));
         }
     }
 
@@ -748,15 +747,15 @@ impl Daemon {
     /// startup log names the list in force"; AUTH-4.36 step 4b: an inert
     /// entry is "ignored at install and said so in the log") — the count,
     /// the header as the install resolved it, and the inert entries by
-    /// name. Written at the three moments an install happens: `at start`,
-    /// `reissued`, and `at claim`, where the flip re-compares the issue
+    /// name. Written at the three [`Moment`]s an install happens — at start,
+    /// on a reissue, and at the claim, where the flip re-compares the issue
     /// against the claimant it first has. WHAT the lines say is
     /// `BlockedPrefixes::log_lines`'s; the stream is this
     /// daemon's, for [`Daemon::log_config_warnings`]'s reason.
     ///
     /// SILENT where no supply was named: that is a board whose operator
     /// supplies none, and there is no list to name.
-    fn log_blocked_prefixes(&self, when: &str) {
+    fn log_blocked_prefixes(&self, when: Moment) {
         let Some(path) = self.auth.blocked_supply_path() else { return };
         notice::lines(
             format_args!("blocked-prefix list ({when}, {}):", path.display()),
@@ -788,11 +787,35 @@ impl Daemon {
     fn reissue_blocked_prefixes(&self) {
         match self.auth.reissue_blocked_prefixes() {
             None => {}
-            Some(Reissue::Installed) => self.log_blocked_prefixes("reissued"),
+            Some(Reissue::Installed) => self.log_blocked_prefixes(Moment::Reissued),
             Some(Reissue::Refused(e)) => notice::line(format_args!(
                 "blocked-prefix list: reissue REFUSED — {e}; the list in force stands"
             )),
         }
+    }
+}
+
+/// When the daemon names its configuration on the operator stream — the
+/// label every such line carries. Closed, so a caller names one of the three
+/// moments rather than spelling a label, and no call site reads backwards.
+#[derive(Clone, Copy, Debug)]
+enum Moment {
+    /// Before the listener serves ([`serve`]).
+    AtStart,
+    /// A replaced supply file installed ([`Daemon::reissue_blocked_prefixes`]).
+    Reissued,
+    /// The claim flip (`op.rs`'s `Daemon::on_claim_flip`).
+    AtClaim,
+}
+
+/// The label as a line spells it.
+impl std::fmt::Display for Moment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Moment::AtStart => "at start",
+            Moment::Reissued => "reissued",
+            Moment::AtClaim => "at claim",
+        })
     }
 }
 

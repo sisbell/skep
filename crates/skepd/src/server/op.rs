@@ -14,7 +14,7 @@ use super::actor::Resolved;
 use super::reply::{credential_refused, op_answer, refuse_scan_busy, with_signal, Reply};
 use super::request::HttpRequest;
 use super::scan::ScanBusy;
-use super::Daemon;
+use super::{Daemon, Moment};
 use crate::auth::fold::key_set_of;
 use crate::auth::policy::{
     deposits_credential_link, op_shape_refusal, plain_admission, CredentialRefusal,
@@ -86,14 +86,14 @@ impl Daemon {
         // claim stands (the card above), and the head writer surfaces the
         // refusal itself.
         self.writes.write_first_head(serial);
-        self.log_config_warnings(true);
+        self.log_config_warnings(Moment::AtClaim);
         self.auth.reinstall_blocked_at_claim(credential_lock);
         // The flip can only have made an entry INERT, so an issue with no
         // entries has nothing to say; where it has one, the whole list in
         // force is named (AUTH-4.36 step 4b's "ignored at install and said
         // so in the log").
         if !self.auth.cfg.blocked_prefixes().issue_is_empty() {
-            self.log_blocked_prefixes("at claim");
+            self.log_blocked_prefixes(Moment::AtClaim);
         }
     }
 

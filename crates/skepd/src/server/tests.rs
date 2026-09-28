@@ -194,6 +194,18 @@ fn zero_workers_is_a_callers_bug() {
     let _ = serve(daemon, 0, 0);
 }
 
+/// The operator stream's moments, as a line spells each: the closed set the
+/// config-lockout warnings and the blocked-prefix list are labelled by, one
+/// label per moment and no two alike.
+#[test]
+fn every_moment_spells_its_own_label() {
+    let labels: Vec<String> = [Moment::AtStart, Moment::Reissued, Moment::AtClaim]
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(labels, ["at start", "reissued", "at claim"]);
+}
+
 /// A bare session's token for `principal`, opened through the route itself.
 fn bare_session(daemon: &Daemon, principal: u64) -> String {
     let Routed::Reply(r) = daemon.route(&HttpRequest {

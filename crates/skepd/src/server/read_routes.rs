@@ -1,5 +1,7 @@
 //! The read endpoints (`/op-at`, `/health`, `/chain`, `/changes`, `/dump`) and their parsers.
 
+use std::num::NonZeroUsize;
+
 use serde_json::Value;
 use skep_febe::{consult_read, Response};
 use skep_kernel::Seq;
@@ -15,7 +17,7 @@ use crate::codec::{check_keys, key_set_reply, obj, DaemonOp};
 use crate::write_path::{ChangesAnswer, ChangesQuery, FeedClass};
 
 /// `/changes` page size when `limit` is absent.
-const DEFAULT_CHANGES_LIMIT: usize = 256;
+const DEFAULT_CHANGES_LIMIT: NonZeroUsize = NonZeroUsize::new(256).expect("256 is not zero");
 
 /// `/changes` page-size ceiling; a larger request is refused, not clamped
 /// (the never-silent posture applied to paging).
@@ -275,7 +277,7 @@ fn changes_params(query: Option<&str>) -> Result<ChangesQuery, String> {
         Some(query) => query,
     };
     let mut since: Option<u64> = None;
-    let mut limit: Option<usize> = None;
+    let mut limit: Option<NonZeroUsize> = None;
     let mut under: Option<skep_address::Tumbler> = None;
     let mut drafts: Option<bool> = None;
     for (k, v) in query_pairs(query)? {
@@ -291,9 +293,9 @@ fn changes_params(query: Option<&str>) -> Result<ChangesQuery, String> {
                 let n: usize = v
                     .parse()
                     .map_err(|_| format!("limit: '{v}' is not a count"))?;
-                if n == 0 || n > MAX_CHANGES_LIMIT {
-                    return Err(format!("limit: must be 1..={MAX_CHANGES_LIMIT}"));
-                }
+                let n = NonZeroUsize::new(n)
+                    .filter(|n| n.get() <= MAX_CHANGES_LIMIT)
+                    .ok_or_else(|| format!("limit: must be 1..={MAX_CHANGES_LIMIT}"))?;
                 limit = Some(n);
             }
             "under" => {
@@ -406,7 +408,7 @@ mod tests {
     fn the_changes_query_defaults_to_the_documented_page_size() {
         let plain = |q: &str| {
             let p = changes_params(Some(q)).unwrap_or_else(|e| panic!("{q}: {e}"));
-            (p.since, p.limit, p.under.map(|t| t.to_string()), p.drafts_only)
+            (p.since, p.limit.get(), p.under.map(|t| t.to_string()), p.drafts_only)
         };
         assert_eq!(
             plain("since=0"),

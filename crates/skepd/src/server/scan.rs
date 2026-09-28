@@ -83,6 +83,7 @@ impl ClassScans {
     /// TEST HOOK, reached through `Daemon::try_hold_scan_permit`: hold one
     /// permit exactly as an in-flight scan does.
     #[cfg(any(test, feature = "test-hooks"))]
+    #[must_use = "a permit dropped at once holds nothing"]
     pub(super) fn try_hold(&self) -> Option<Permit<'_>> {
         self.0.try_acquire()
     }

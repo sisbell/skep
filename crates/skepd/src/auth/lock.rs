@@ -23,10 +23,15 @@
 pub(crate) struct CredentialLock(parking_lot::RwLock<()>);
 
 /// The read guard, newtyped so a function whose contract is "under the read
-/// lock" names it in its arguments (AUTH-3.3).
+/// lock" names it in its arguments (AUTH-3.3). `#[must_use]`, as `lock_api`'s
+/// own guard is — an attribute the newtype does not inherit: a guard taken
+/// and dropped in one statement is a lock released before the next line.
+#[must_use = "if unused the credential lock will immediately unlock"]
 pub(crate) struct LockRead<'a>(#[allow(dead_code)] parking_lot::RwLockReadGuard<'a, ()>);
 
-/// The write guard — the credential path's.
+/// The write guard — the credential path's; `#[must_use]` for the read
+/// guard's reason.
+#[must_use = "if unused the credential lock will immediately unlock"]
 pub(crate) struct LockWrite<'a>(#[allow(dead_code)] parking_lot::RwLockWriteGuard<'a, ()>);
 
 impl CredentialLock {

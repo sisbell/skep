@@ -140,7 +140,7 @@ pub(super) fn attestation_check(
     if presented.sig().len() != row.sig_len() {
         return Err(invalid(AttestFault::Malformed));
     }
-    let bytes = entry_frame.bytes(row.token);
+    let bytes = entry_frame.to_bytes(row.token);
     let candidates: Vec<&PublicKey> = key_subject(world, identity, principal)
         .map(|subject| {
             identity

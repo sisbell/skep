@@ -199,6 +199,7 @@ impl History {
     /// reconstructions finish in milliseconds, so the integration tests pin
     /// the counter through this instead of racing the engine.
     #[cfg(any(test, feature = "test-hooks"))]
+    #[must_use = "a permit dropped at once holds nothing"]
     pub fn try_hold_permit(&self) -> Option<Permit<'_>> {
         self.permits.try_acquire()
     }

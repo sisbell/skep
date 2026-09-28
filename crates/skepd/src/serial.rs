@@ -26,4 +26,9 @@ impl Serial {
 /// The honest limit is [`crate::write_path::WritePath::serial_lock`]'s, unchanged: the guard
 /// proves the lock is held and proves nothing about where the caller's
 /// snapshot came from.
+///
+/// `#[must_use]`, as `lock_api`'s own `MutexGuard` is — an attribute the
+/// newtype does not inherit: a guard taken and dropped in one statement is a
+/// lock released before the next line.
+#[must_use = "if unused the serialization lock will immediately unlock"]
 pub(crate) struct SerialGuard<'a>(#[allow(dead_code)] parking_lot::MutexGuard<'a, ()>);

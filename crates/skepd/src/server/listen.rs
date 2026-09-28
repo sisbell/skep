@@ -16,7 +16,7 @@ use super::http::{
 };
 use super::reply::{refuse, Routed, TransportError, SESSION_HEADER};
 use super::scan::MAX_CONCURRENT_CLASS_SCANS;
-use super::Daemon;
+use super::{Daemon, Moment};
 use crate::auth::session::Peer;
 use crate::write_path::StreamStep;
 
@@ -68,6 +68,17 @@ const _: () = assert!(
 
 /// The running server: the listener, the op workers, the daemon, and the
 /// event-stream subscriber threads.
+///
+/// DROPPING IT STOPS THE SERVER: `Drop` runs the whole stop
+/// [`Skepd::shutdown`] runs — the opposite of `std::thread::JoinHandle`,
+/// which detaches its thread when dropped. So the type is `#[must_use]`, as
+/// the workspace's own `SessionId` is: a `serve(…)?;` or
+/// `serve(…).expect(…);` statement whose `Skepd` falls at the semicolon is a
+/// server stopped before the next line runs, and the compiler says so rather
+/// than the first refused connect. Bind it, then [`Skepd::wait`] on it or
+/// [`Skepd::shutdown`] it.
+#[must_use = "dropping a `Skepd` stops the server it runs: bind it, then `wait` on it \
+              or `shutdown` it"]
 pub struct Skepd {
     daemon: Arc<Daemon>,
     /// Held, never read: the workers own clones, so this handle is what
@@ -99,7 +110,9 @@ impl std::fmt::Debug for Skepd {
 /// serializes writes, so the worker count is the whole op-concurrency
 /// story). `GET /events` is the one exception to request/response: the
 /// worker hands the socket to a dedicated subscriber thread and returns to
-/// `accept` at once, so open streams never occupy the op pool.
+/// `accept` at once, so open streams never occupy the op pool. The
+/// [`Skepd`] it answers IS the running server: dropping it stops the server,
+/// which is why the type is `#[must_use]`.
 ///
 /// PRECONDITION: `workers >= 1`. A count of zero asks for a server that
 /// serves nothing, which is a caller's bug rather than an outcome, so it
@@ -150,14 +163,14 @@ pub fn serve(daemon: Daemon, port: u16, workers: usize) -> io::Result<Skepd> {
         "serve binds the auth port once; a pre-bound daemon has two callers \
          disagreeing about the number every live session's origin set derives from",
     );
-    daemon.log_config_warnings(false);
+    daemon.log_config_warnings(Moment::AtStart);
     // The node prefix in force, or its absence (REG-1.69), which the
     // blocked-prefix list's off-board test reads.
     daemon.log_node_prefix();
     // The list installed at open, named beside the warnings (AUTH-4.70: "a
     // restart never lapses a standing block and the startup log names the
     // list in force").
-    daemon.log_blocked_prefixes("at start");
+    daemon.log_blocked_prefixes(Moment::AtStart);
     let stop = Arc::new(AtomicBool::new(false));
     let subscribers = Arc::new(Subscribers::new());
     // Spawned FALLIBLY, and named: `thread::spawn` panics when the OS

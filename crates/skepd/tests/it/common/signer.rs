@@ -6,25 +6,27 @@
 //! back over the wire from the runs' origins — signed by the seed's hybrid
 //! key and attached as the frame's top-level `attest`.
 
+use std::sync::{LazyLock, PoisonError};
+
 use super::*;
 
-/// A process-wide, lazily built map behind a lock.
-type Registry<K, V> = Mutex<Option<HashMap<K, V>>>;
+/// A process-wide map behind a lock, built on first use.
+type Registry<K, V> = LazyLock<Mutex<HashMap<K, V>>>;
 
 /// Token → (principal, seed): the sessions the suites opened with a seed
 /// carrier. Process-wide, keyed by the token alone (tokens are 128-bit
 /// random, so two daemons in one process never collide).
-static SIGNERS: Registry<String, (u64, [u8; 32])> = Mutex::new(None);
+static SIGNERS: Registry<String, (u64, [u8; 32])> = LazyLock::new(Default::default);
 
 /// Port → the board term, `H.1`'s pair, read once per board: `H.1` is pinned
 /// forever, so a board's first read is its last. Keyed by the PORT a board
 /// answers at, which outlives the board — so every spawn here forgets the
 /// port it binds ([`forget_port`]) before a pair is read off it.
-static BOARD_TERMS: Registry<u16, (u64, [u8; 32])> = Mutex::new(None);
+static BOARD_TERMS: Registry<u16, (u64, [u8; 32])> = LazyLock::new(Default::default);
 
 /// (port, principal) → the account's local address, read once per board —
 /// forgotten with the port as [`BOARD_TERMS`] is.
-static ACCOUNTS: Registry<(u16, u64), String> = Mutex::new(None);
+static ACCOUNTS: Registry<(u16, u64), String> = LazyLock::new(Default::default);
 
 /// A daemon now answers at `port`, so whatever [`BOARD_TERMS`] and [`ACCOUNTS`]
 /// hold for that port was ANOTHER board's: ports recycle across the daemons
@@ -39,12 +41,8 @@ pub(super) fn forget_port(port: u16) {
     with_map(&ACCOUNTS, |m| m.retain(|(p, _), _| *p != port));
 }
 
-fn with_map<K: std::hash::Hash + Eq, V, R>(
-    cell: &Registry<K, V>,
-    f: impl FnOnce(&mut HashMap<K, V>) -> R,
-) -> R {
-    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
-    f(guard.get_or_insert_with(HashMap::new))
+fn with_map<K, V, R>(cell: &Registry<K, V>, f: impl FnOnce(&mut HashMap<K, V>) -> R) -> R {
+    f(&mut *cell.lock().unwrap_or_else(PoisonError::into_inner))
 }
 
 /// Register `token` as a session `principal` opened with the seed carrier

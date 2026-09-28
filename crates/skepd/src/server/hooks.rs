@@ -17,6 +17,7 @@ impl Daemon {
     /// reconstructions finish in milliseconds, so the integration tests pin
     /// the counter through this instead of racing the engine.
     #[doc(hidden)]
+    #[must_use = "a permit dropped at once holds nothing"]
     pub fn try_hold_reconstruction_permit(&self) -> Option<Permit<'_>> {
         self.history.try_hold_permit()
     }
@@ -31,6 +32,7 @@ impl Daemon {
     /// pool alone: holding every one leaves `/op-at`, `/dump?at` and
     /// `/chain?at` untouched, which is the disjointness the wire promises.
     #[doc(hidden)]
+    #[must_use = "a permit dropped at once holds nothing"]
     pub fn try_hold_scan_permit(&self) -> Option<Permit<'_>> {
         self.scans.try_hold()
     }

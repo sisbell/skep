@@ -90,6 +90,7 @@ mod derived;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::io;
+use std::num::NonZeroUsize;
 use std::ops::Bound;
 use std::path::Path;
 
@@ -202,16 +203,9 @@ impl<'a> FeedClass<'a> {
         // The seat the mask resolves, handed out: the stream keys below and
         // the mask stand on one lookup in M3's principal registry.
         let account = reader.seat().cloned();
-        let mut subtree = Vec::new();
-        let mut cur = account.clone();
-        while let Some(a) = cur {
-            // The next cursor first, so a registered account MOVES into the
-            // walk's answer rather than being cloned beside it.
-            cur = parent(&a);
-            if world.m3().is_registered_account(&a) {
-                subtree.push(a);
-            }
-        }
+        let subtree: Vec<Address> = std::iter::successors(account.clone(), parent)
+            .filter(|a| world.m3().is_registered_account(a))
+            .collect();
         // The grants BORROW the world rather than the account they select on,
         // so this term runs ahead of the one that consumes it.
         let issuers = account.as_ref().map(|pa| world.issuers_for(pa)).unwrap_or_default();
@@ -255,14 +249,14 @@ impl<'a> FeedClass<'a> {
 pub(crate) struct ChangesQuery {
     /// The fence: positions strictly above it.
     pub since: u64,
-    /// The page cap, over the VISIBLE stream — AT LEAST ONE. A zero cap is
-    /// not a smaller page: [`Feed::page`] breaks on the first visible
-    /// candidate and answers `more: true` with `last` echoing `since`, which
-    /// is a client told to poll again at a fence that never advances. The
-    /// wire's own parser refuses it (`limit: must be 1..=4096`) rather than
-    /// clamping, so this daemon's one constructor discharges it; a second one
-    /// owes it.
-    pub limit: usize,
+    /// The page cap, over the VISIBLE stream — at least one, BY TYPE. A zero
+    /// cap is not a smaller page: [`Feed::page`] would break on the first
+    /// visible candidate and answer `more: true` with `last` echoing `since`,
+    /// a client told to poll again at a fence that never advances. The wire's
+    /// parser refuses it (`limit: must be 1..=4096`) rather than clamping, and
+    /// the type is what makes that the only answer: no constructor, the
+    /// parser or a second one, can build a zero cap.
+    pub limit: NonZeroUsize,
     /// `under=`: only entries whose reduced docs name a document under this
     /// tumbler (PUB-7.31).
     pub under: Option<Tumbler>,
@@ -662,10 +656,6 @@ impl Feed {
     }
 
     /// The data behind `GET /changes` at `class`.
-    ///
-    /// PRECONDITION: `query.limit >= 1` ([`ChangesQuery::limit`] says what a
-    /// zero answers). Not re-checked here — one check, one owner, and the
-    /// owner is the parser that built the `ChangesQuery`.
     pub fn page(&self, class: &FeedClass<'_>, query: &ChangesQuery) -> ChangesAnswer {
         let inner = self.inner.lock();
         if !inner.log.admits_since(query.since) {
@@ -680,7 +670,7 @@ impl Feed {
         let mut more = false;
         for at in merge {
             let Some((meta, reduced)) = inner.visible(class, query, at) else { continue };
-            if entries.len() == query.limit {
+            if entries.len() == query.limit.get() {
                 more = true;
                 break;
             }

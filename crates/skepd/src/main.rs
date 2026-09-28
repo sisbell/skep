@@ -277,14 +277,14 @@ fn main() {
     // The dev setting (AUTH-1.44): ENROLLMENT of tag-3 keys, refused unless
     // the flag says otherwise; a served board is launched without it.
     opts.allow_preview_keys = args.allow_preview_keys;
-    opts.configured = args.origins.clone();
+    opts.configured = args.origins;
     // Supplied at every start, as `--origin` is (AUTH-4.70): the file is
     // read inside the open, and one that is not a list stops the start.
-    opts.blocked_supply_path = args.blocked_prefixes.clone();
+    opts.blocked_supply_path = args.blocked_prefixes;
     // The node prefix (REG-1.69): egress and assertion config, supplied at
     // every start and never journaled — a fresh one is this binary
     // relaunched (REG-1.70). `serve` names it, or its absence, at start.
-    opts.node_prefix = args.node_prefix.clone();
+    opts.node_prefix = args.node_prefix;
     let daemon = match Daemon::open_with(&args.data_dir, opts) {
         Ok(d) => d,
         Err(e) => {

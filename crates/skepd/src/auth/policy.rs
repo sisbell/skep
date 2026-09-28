@@ -1,5 +1,5 @@
-//! The write-path policy surface (AUTH part 03): the credential type
-//! addresses, op classification, the refusal producers at their pinned lock
+//! The write-path policy surface (AUTH part 03): the credential type addresses it reads
+//! from [`super::fold`], op classification, the refusal producers at their pinned lock
 //! scopes, the precheck's ordered slots, and — on the plain path, behind the
 //! RES-26 gate — THE WRITE-PATH CHECK (signed ops), whose ADMITTED
 //! attestation is what the write's commit marker carries.

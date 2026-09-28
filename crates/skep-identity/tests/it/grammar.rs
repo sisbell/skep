@@ -8,7 +8,7 @@ use crate::common;
 use common::{fp, key};
 use skep_identity::{
     encode_enroll, encode_retire, parse_enroll, parse_retire, Enrollment, Fingerprint, LabelError,
-    PayloadError,
+    PayloadError, MAX_RECORD_BYTES,
 };
 
 fn key_hex(i: u8) -> String {
@@ -475,6 +475,55 @@ fn a_non_json_body_is_bad_record() {
     let line_form = format!("skep-enroll v1\ned25519 {}\n", key_hex(1));
     assert_eq!(err_enroll(line_form.as_bytes()), PayloadError::BadRecord);
     assert_eq!(err_retire(b"{not json"), PayloadError::BadRecord);
+}
+
+/// The JSON door's DEPTH refusal, at the read's own cap. `parse_record` parses
+/// through `serde_json::from_str`, whose deserializer refuses a value nested
+/// past its default recursion limit (128), and that refusal is `bad_record` —
+/// so a record of nothing but openers builds no `Value` deeper than the limit,
+/// nor drops one, `Value`'s `Drop` recursing as deep as the value does. Every
+/// other body in this corpus is a handful of levels deep, so no other vector
+/// watches the limit, and losing it costs the daemon one of two things. A
+/// parser without it takes one level of recursion per opener — 131,072 of them
+/// in a record the read admits (AUTH-2.43) — and on a stack too shallow for
+/// that it overflows, which ABORTS the process, past the per-request
+/// `catch_unwind` that turns a panic in skepd into a 500. On a stack deep
+/// enough, the error at the input's end unwinds through every level, and
+/// serde_json builds a fresh error at each one, finding its line and column by
+/// re-scanning the input from the start: work quadratic in the record, a
+/// quarter of a second of CPU for one 128 KiB bomb, measured in a release
+/// build. So the parses run on a thread of 2 MiB — `std::thread`'s default,
+/// the stack skepd's workers are spawned with, and at least eight times what
+/// the bounded parse needs in a test build — rather than on whatever stack
+/// `RUST_MIN_STACK` gave the harness, and losing the limit is an abort here,
+/// never a slow pass.
+///
+/// Each body fills the read's cap to within one opener: array openers, object
+/// openers, and array openers inside each kind's well-formed envelope, the
+/// shape a depositor's record takes. A corpus seed worth promoting to the
+/// fuzzing tier, whose contract — any bytes in, exactly one response out — a
+/// nesting bomb that overflows a worker's stack breaks.
+#[test]
+fn a_nesting_bomb_at_the_record_cap_is_bad_record() {
+    const WORKER_STACK: usize = 2 * 1024 * 1024;
+    let parses = std::thread::Builder::new().stack_size(WORKER_STACK).spawn(|| {
+        for (prefix, opener) in [
+            ("", "["),
+            ("", r#"{"a":"#),
+            (r#"{"type":"skep-enroll","keys":"#, "["),
+            (r#"{"type":"skep-retire","fingerprints":"#, "["),
+        ] {
+            let mut body = prefix.to_owned();
+            while body.len() + opener.len() <= MAX_RECORD_BYTES {
+                body.push_str(opener);
+            }
+            assert_eq!(err_enroll(body.as_bytes()), PayloadError::BadRecord, "{prefix}{opener}…");
+            assert_eq!(err_retire(body.as_bytes()), PayloadError::BadRecord, "{prefix}{opener}…");
+        }
+    });
+    if let Err(panic) = parses.expect("a thread to parse on").join() {
+        std::panic::resume_unwind(panic);
+    }
 }
 
 /// AUTH-2.129 — the retirement schema's own checks: `fingerprints` an array of

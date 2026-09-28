@@ -54,7 +54,7 @@ use skep_content::HasContent;
 use skep_febe::Op;
 use skep_identity::{
     entry_body_insert, entry_body_make_link, entry_body_publish, entry_frame, BoardTerm, EntryBody,
-    EntrySlot,
+    EntrySlot, LinkSlots,
 };
 use skep_links::SlotArg;
 use skep_namespace::{HasM3, PrincipalId};
@@ -176,8 +176,9 @@ pub(super) fn compose(
             (trunk_of(doc), entry_body_insert(declared, values))
         }
         Op::MakeLink { home, from, to, ty } => {
-            let (ty, from, to) = (Slot::of(ty), Slot::of(from), Slot::of(to));
-            (home.clone(), entry_body_make_link(&ty.as_entry(), &from.as_entry(), &to.as_entry()))
+            let (from, to, ty) = (Slot::of(from), Slot::of(to), Slot::of(ty));
+            let slots = LinkSlots { from: from.as_entry(), to: to.as_entry(), ty: ty.as_entry() };
+            (home.clone(), entry_body_make_link(slots))
         }
         Op::Publish { doc, shot } => {
             let trunk = trunk_of(doc);
@@ -293,8 +294,9 @@ mod tests {
     #[test]
     fn each_body_carries_the_wire_name_of_its_op() {
         let empty = EntrySlot::Addrs(&[]);
+        let slots = LinkSlots { from: empty, to: empty, ty: empty };
         assert_eq!(entry_body_insert(None, std::iter::empty()).op(), op_name(OpKind::Insert));
-        assert_eq!(entry_body_make_link(&empty, &empty, &empty).op(), op_name(OpKind::MakeLink));
+        assert_eq!(entry_body_make_link(slots).op(), op_name(OpKind::MakeLink));
         assert_eq!(entry_body_publish(std::iter::empty()).op(), op_name(OpKind::Publish));
     }
 

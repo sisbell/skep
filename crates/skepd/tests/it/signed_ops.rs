@@ -33,8 +33,8 @@ use sha2::{Digest, Sha256};
 use skep_febe::Codec;
 use skep_identity::{
     entry_body_insert, entry_body_make_link, entry_body_publish, entry_frame, BoardTerm,
-    Enrollment, EntrySlot, Fingerprint, PublicKey, SigAlgRow, ALG_FNDSA512_PREVIEW_ED25519,
-    ALG_MLDSA65_ED25519,
+    Enrollment, EntrySlot, Fingerprint, LinkSlots, PublicKey, SigAlgRow,
+    ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519,
 };
 use skepd::hybrid::{self, HybridSigner, SeededRng06};
 use skepd::{JsonCodec, Seq};
@@ -70,11 +70,11 @@ fn claimant_grant_entry_frame(alg: &str, board: BoardTerm) -> Vec<u8> {
     let ty = [addr(T_GRANT)];
     let from = [addr(CLAIMANT_ACCOUNT)];
     let to: [skep_address::Address; 0] = [];
-    let body = entry_body_make_link(
-        &EntrySlot::Addrs(&ty),
-        &EntrySlot::Addrs(&from),
-        &EntrySlot::Addrs(&to),
-    );
+    let body = entry_body_make_link(LinkSlots {
+        from: EntrySlot::Addrs(&from),
+        to: EntrySlot::Addrs(&to),
+        ty: EntrySlot::Addrs(&ty),
+    });
     entry_frame(alg, board, &addr(CLAIMANT_ACCOUNT), &addr(CLAIMANT_DOC1), &body)
 }
 
@@ -913,8 +913,11 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 3] {
     let ty = [addr("1.1.0.1.0.1.0.3.90")];
     let from = [addr("1.0.1")];
     let to: [skep_address::Address; 0] = [];
-    let link =
-        entry_body_make_link(&EntrySlot::Addrs(&ty), &EntrySlot::Addrs(&from), &EntrySlot::Addrs(&to));
+    let link = entry_body_make_link(LinkSlots {
+        from: EntrySlot::Addrs(&from),
+        to: EntrySlot::Addrs(&to),
+        ty: EntrySlot::Addrs(&ty),
+    });
     let publish = entry_body_publish([&b"x"[..], &b"y"[..], &b"z"[..]]);
     let board = BoardTerm { log_position: 12, chain: [0xAB; 32] };
     [insert, link, publish].map(|body| (body.op(), entry_frame(alg, board, &account, &doc, &body)))

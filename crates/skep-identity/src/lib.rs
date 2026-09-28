@@ -73,9 +73,9 @@
 //!   spells every member from the values a signer or verifier holds: the
 //!   [`BoardTerm`], the account and document addresses, and an [`EntryBody`]
 //!   — an op's token paired with its body, built by [`entry_body_insert`],
-//!   [`entry_body_make_link`] and [`entry_body_publish`] over [`EntrySlot`]s
-//!   — the bytes a publish-class entry's signature is made over (signed ops;
-//!   the design record §2.5);
+//!   [`entry_body_make_link`] (over a [`LinkSlots`] naming three
+//!   [`EntrySlot`]s) and [`entry_body_publish`] — the bytes a publish-class
+//!   entry's signature is made over (signed ops; the design record §2.5);
 //! * `payload`: the credential-record constants and payload types —
 //!   [`ENROLL_TYPE`], [`RETIRE_TYPE`], [`MAX_RECORD_BYTES`], [`Enrollment`]
 //!   with its refusal [`LabelError`], [`PayloadError`] (AUTH-1.18–1.28) —
@@ -155,7 +155,7 @@ mod write_types;
 
 pub use entry::{
     entry_body_insert, entry_body_make_link, entry_body_publish, entry_frame, BoardTerm, EntryBody,
-    EntrySlot,
+    EntrySlot, LinkSlots,
 };
 pub use framing::{
     framed, Tag, ENTRY_TAG, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, SESSION_TAG_V2, TAGS,

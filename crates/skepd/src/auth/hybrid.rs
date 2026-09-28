@@ -536,12 +536,9 @@ fn decode_pq_half(tag: u8, key: &PublicKey) -> Option<PqHalf> {
 /// an enrollment whose key decodes for every verify; a laxer one seats a key
 /// that occupies a slot against the precheck's `MAX_ENROLLED_KEYS` and is
 /// walked by the handshake's `find_signer` on every attempt, permanently,
-/// since retiring it needs an anchor session of that account. `false` for a
-/// key of no row.
+/// since retiring it needs an anchor session of that account.
 pub fn key_decodes(key: &PublicKey) -> bool {
-    key.sig_alg_row().is_some_and(|row| {
-        decode_ed25519_half(key).is_some() && decode_pq_half(row.tag, key).is_some()
-    })
+    decode_ed25519_half(key).is_some() && decode_pq_half(key.sig_alg_row().tag, key).is_some()
 }
 
 /// VERIFY `sig` over `msg` under `tag`'s frozen rule against the hybrid

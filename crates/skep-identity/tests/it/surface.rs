@@ -162,12 +162,13 @@ fn algs_and_arms_agree_both_directions() {
 /// whose raw length is the row's own key width — and every `ALGS` row has a
 /// marker tag, the key kinds being the hybrid rows alone; the tags are
 /// distinct, non-zero (0 is the empty slot) and not `2` (reserved for the
-/// final FIPS 206); the two lookups are inverse; the deleted classical token
-/// names no row; and the pinned widths are the ruled ones — tag 1's
-/// 1,984-byte key and 3,373-byte blob (6,746 hex), tag 3's 929 and 730 (1,460
-/// hex) — the widths a session's `sig` is admitted at, and no other
-/// (AUTH-6.3). The KEY PIN's halves read out of a parsed hybrid at those
-/// widths.
+/// final FIPS 206); the two lookups answer the whole row, and a key's own
+/// [`PublicKey::sig_alg_row`] answers the same row as a value; the deleted
+/// classical token names no row; and the pinned widths are the ruled ones —
+/// tag 1's 1,984-byte key and 3,373-byte blob (6,746 hex), tag 3's 929 and
+/// 730 (1,460 hex) — the widths a session's `sig` is admitted at, and no
+/// other (AUTH-6.3). The KEY PIN's halves read out of a parsed hybrid at
+/// those widths.
 #[test]
 fn sig_algs_and_algs_agree_and_the_pins_are_the_ruled_widths() {
     for row in SIG_ALGS {
@@ -175,12 +176,16 @@ fn sig_algs_and_algs_agree_and_the_pins_are_the_ruled_widths() {
         assert_eq!(alg.raw_len, row.key_len(), "{}: the row's key width is its ALGS raw_len", row.token);
         assert_ne!(row.tag, 0, "tag 0 is the empty slot");
         assert_ne!(row.tag, 2, "tag 2 is reserved for the final FIPS 206");
-        assert_eq!(SigAlgRow::of_token(row.token).map(|r| r.tag), Some(row.tag));
-        assert_eq!(SigAlgRow::of_tag(row.tag).map(|r| r.token), Some(row.token));
+        let token_row = SigAlgRow::of_token(row.token);
+        assert_eq!(token_row, Some(row), "{}: the token names this row", row.token);
+        assert_eq!(SigAlgRow::of_tag(row.tag), Some(row), "{}: the tag names this row", row.token);
         let key = PublicKey::parse(row.token, &"0a".repeat(row.key_len())).unwrap();
         assert_eq!(key.pq_half().len(), row.pq_key_len, "the PQ half leads");
         assert_eq!(key.ed25519_half().len(), 32, "the Ed25519 half closes");
-        assert_eq!(key.sig_alg_row().map(|r| r.tag), Some(row.tag));
+        // The key's own row, reached by its arm and never by the table, is the
+        // table's row for its token — the whole row, as a value.
+        assert_eq!(key.sig_alg_row(), row, "{}: the key's row is the table's", row.token);
+        assert_eq!(SigAlgRow::of_token(key.alg()), Some(key.sig_alg_row()), "{}", row.token);
     }
     for (i, a) in SIG_ALGS.iter().enumerate() {
         for b in &SIG_ALGS[i + 1..] {

@@ -305,15 +305,13 @@ pub fn entry_frame_for(port: u16, token: &str, principal: u64, frame: &Value) ->
             (doc, entry_body_insert(declared.as_ref(), values.iter().map(Vec::as_slice)))
         }
         "make_link" => {
-            let (ty, from, to) = (
-                signer_slot(&frame["ty"])?,
+            let (from, to, ty) = (
                 signer_slot(&frame["from"])?,
                 signer_slot(&frame["to"])?,
+                signer_slot(&frame["ty"])?,
             );
-            (
-                parse_addr(frame["home"].as_str()?)?,
-                entry_body_make_link(&ty.as_entry(), &from.as_entry(), &to.as_entry()),
-            )
+            let slots = LinkSlots { from: from.as_entry(), to: to.as_entry(), ty: ty.as_entry() };
+            (parse_addr(frame["home"].as_str()?)?, entry_body_make_link(slots))
         }
         "publish" => {
             let values = publish_values(port, token, &frame["runs"])?;

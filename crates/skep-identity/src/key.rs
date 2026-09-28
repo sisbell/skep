@@ -61,7 +61,12 @@ pub const FNDSA512_ED25519_KEY_LEN: usize = FNDSA512_KEY_LEN + ED25519_KEY_LEN;
 /// the final FIPS 206 and has none yet. Under the frozen-tag rule a row, once
 /// a signature has been committed under it, is EDITED NEVER: a change to what
 /// verifies — or to what a seed derives — is a new row.
-#[derive(Debug, Clone, Copy)]
+///
+/// Comparable as a whole, unlike [`AlgRow`]: every column is data. The routes
+/// to a row — [`SigAlgRow::of_tag`], [`SigAlgRow::of_token`],
+/// [`PublicKey::sig_alg_row`] — answer equal VALUES; compare them with `==`,
+/// never by address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SigAlgRow {
     /// The marker's `sig_alg` byte.
@@ -112,22 +117,33 @@ impl SigAlgRow {
     }
 }
 
+/// Tag 1's row — [`SIG_ALGS`]' first, and [`PublicKey::sig_alg_row`]'s
+/// answer for a [`PublicKey::MlDsa65Ed25519`] key.
+const MLDSA65_ED25519_ROW: SigAlgRow = SigAlgRow {
+    tag: 1,
+    token: ALG_MLDSA65_ED25519,
+    pq_key_len: MLDSA65_KEY_LEN,
+    pq_sig_len: 3309,
+};
+
+/// Tag 3's row — [`SIG_ALGS`]' second, and [`PublicKey::sig_alg_row`]'s
+/// answer for a [`PublicKey::FnDsa512PreviewEd25519`] key.
+const FNDSA512_PREVIEW_ED25519_ROW: SigAlgRow = SigAlgRow {
+    tag: 3,
+    token: ALG_FNDSA512_PREVIEW_ED25519,
+    pq_key_len: FNDSA512_KEY_LEN,
+    pq_sig_len: 666,
+};
+
 /// THE MARKER-TAG TABLE (signed ops): tag `1`, the PRODUCTION hybrid
 /// ML-DSA-65 + Ed25519 (3,309 ‖ 64 = 3,373-byte blob); tag `3`, the PREVIEW
 /// hybrid FN-DSA-512 + Ed25519 under `fn-dsa` 0.4.0 (666 ‖ 64 = 730-byte
 /// blob). Read through [`SigAlgRow::of_token`] and [`SigAlgRow::of_tag`] —
 /// the codec's lift of the wire's `attest.alg` token to the marker slot's tag
 /// and back — and by the verifier, which dispatches on the tag to THAT tag's
-/// frozen rule.
-pub const SIG_ALGS: &[SigAlgRow] = &[
-    SigAlgRow { tag: 1, token: ALG_MLDSA65_ED25519, pq_key_len: MLDSA65_KEY_LEN, pq_sig_len: 3309 },
-    SigAlgRow {
-        tag: 3,
-        token: ALG_FNDSA512_PREVIEW_ED25519,
-        pq_key_len: FNDSA512_KEY_LEN,
-        pq_sig_len: 666,
-    },
-];
+/// frozen rule. A key reaches its own row without the table:
+/// [`PublicKey::sig_alg_row`].
+pub const SIG_ALGS: &[SigAlgRow] = &[MLDSA65_ED25519_ROW, FNDSA512_PREVIEW_ED25519_ROW];
 
 /// One [`ALGS`] row (AUTH-1.5). Not comparable as a whole:
 /// [`AlgRow::from_raw`] is a function pointer, and its ADDRESS says nothing
@@ -240,14 +256,15 @@ mod raw_array {
 /// — the frozen token set (AUTH-2.96). [`PublicKey::parse`],
 /// [`PublicKey::from_halves`] and [`PublicKey::alg`] all READ this table
 /// (AUTH-1.6), so carrying a new algorithm arm is the enum arm, its row here
-/// and its [`SIG_ALGS`] row, and the exhaustive matches (`alg`, `raw`) the
-/// compiler names, plus the I2 agreement assertions (AUTH-2.92; every `ALGS`
-/// row signs under a marker tag). Nothing dispatches on the token a second
-/// time: the row carries its own [`AlgRow::from_raw`], so there is no
-/// admission path a new row can be left out of. The token set this table
-/// admits is an I2 frozen constant (AUTH-2.90); adding a row is a coordinated
-/// grammar upgrade (AUTH-2.91) under the one-canonical-raw-form-per-token
-/// obligation (AUTH-2.99).
+/// and its [`SIG_ALGS`] row, and the exhaustive matches (`alg`, `raw`, and
+/// [`PublicKey::sig_alg_row`], which names that `SIG_ALGS` row) the compiler
+/// names, plus the I2 agreement assertions (AUTH-2.92; every `ALGS` row signs
+/// under a marker tag). Nothing dispatches on the token a second time: the
+/// row carries its own [`AlgRow::from_raw`], so there is no admission path a
+/// new row can be left out of. The token set this table admits is an I2
+/// frozen constant (AUTH-2.90); adding a row is a coordinated grammar upgrade
+/// (AUTH-2.91) under the one-canonical-raw-form-per-token obligation
+/// (AUTH-2.99).
 pub const ALGS: &[AlgRow] = &[
     // Signed ops (the seam build, 2026-09-25): the two HYBRID rows, each ONE
     // row over ONE concatenated raw value (the record §4.4: one sheet, one
@@ -376,10 +393,17 @@ impl PublicKey {
     }
 
     /// The [`SIG_ALGS`] row this key signs under — the whole row, whose `tag`
-    /// is the marker's `sig_alg` byte. Every `ALGS` row has one today; `None`
-    /// names a row no marker tag carries.
-    pub fn sig_alg_row(&self) -> Option<&'static SigAlgRow> {
-        SigAlgRow::of_token(self.alg())
+    /// is the marker's `sig_alg` byte. TOTAL: every key kind is a hybrid row
+    /// that signs under a marker tag (the [`ALGS`] card's edit list,
+    /// AUTH-2.92's agreement), and this match is exhaustive over the arms, so
+    /// a new arm does not compile until it names its row (AUTH-2.91). The
+    /// answer equals, as a value, the row [`SigAlgRow::of_token`] finds for
+    /// [`PublicKey::alg`].
+    pub fn sig_alg_row(&self) -> &'static SigAlgRow {
+        match self {
+            PublicKey::MlDsa65Ed25519(_) => &MLDSA65_ED25519_ROW,
+            PublicKey::FnDsa512PreviewEd25519(_) => &FNDSA512_PREVIEW_ED25519_ROW,
+        }
     }
 
     /// AUTH-1.3 — lowercase hex of the raw key bytes.

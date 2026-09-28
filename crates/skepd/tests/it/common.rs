@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_identity::{
     encode_enroll, entry_body_insert, entry_body_make_link, entry_body_publish, entry_frame, framed,
-    BoardTerm, Enrollment, EntrySlot, PublicKey, SigAlgRow, SESSION_TAG, SESSION_TAG_V2,
+    BoardTerm, Enrollment, EntrySlot, LinkSlots, PublicKey, SigAlgRow, SESSION_TAG, SESSION_TAG_V2,
 };
 use skepd::hybrid::{self, HybridSigner};
 use skepd::{serve, AuthOptions, Daemon, NodePrefix, Origin, Skepd, DEFAULT_WORKERS};

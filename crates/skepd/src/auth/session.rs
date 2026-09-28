@@ -759,13 +759,13 @@ pub(crate) fn session_payload(
 /// Ed25519 half by strict verification (`verify_strict`), BOTH over the SAME
 /// payload; either failing fails, and NO HALF OPENS A SESSION ALONE. `false`
 /// on a blob that is not the row's width (a tag-3 blob against a tag-1 key
-/// is `Malformed` there, never a panic), on an undecodable key or signature,
-/// and on a key of no row; never panics. Both halves' decodes inside it are
-/// the two the precheck's `undecodable_key` courtesy runs
-/// ([`hybrid::key_decodes`]) — one pair of functions in `hybrid`, which is
-/// what keeps the two answering alike.
+/// is `Malformed` there, never a panic) and on an undecodable key or
+/// signature; never panics. Both halves' decodes inside it are the two the
+/// precheck's `undecodable_key` courtesy runs ([`hybrid::key_decodes`]) — one
+/// pair of functions in `hybrid`, which is what keeps the two answering
+/// alike.
 fn verify(key: &PublicKey, payload: &[u8], sig: &[u8]) -> bool {
-    key.sig_alg_row().is_some_and(|row| hybrid::verify(row.tag, key, payload, sig).is_ok())
+    hybrid::verify(key.sig_alg_row().tag, key, payload, sig).is_ok()
 }
 
 /// AUTH-4.33 — try EVERY enrolled key in fingerprint order, EACH UNDER ITS

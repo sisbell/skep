@@ -44,7 +44,7 @@ pub use origin::{NotCanonical, Origin};
 pub use prefix::{NodePrefix, NotANodePrefix};
 
 // What the rest of the daemon names from here, and nothing more.
-pub(crate) use blocked::{blocked_prefixes, Reissue};
+pub(crate) use blocked::Reissue;
 pub(crate) use entropy::OsEntropy;
 pub(crate) use lock::LockWrite;
 pub(crate) use origin::startup_warnings;
@@ -147,7 +147,7 @@ impl AuthState {
     /// line. This install keeps the issue's entries, so that read is the
     /// same either side of it.
     pub fn reinstall_blocked_at_claim(&self, lock: &LockWrite<'_>) {
-        let issue = blocked_prefixes(&self.cfg).issue.clone();
+        let issue = self.cfg.blocked_prefixes().issue.clone();
         self.install_blocked(lock, issue);
     }
 

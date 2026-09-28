@@ -21,7 +21,7 @@ use crate::auth::policy::{
     DepositSpans,
 };
 use crate::auth::session::Actor;
-use crate::auth::{blocked_prefixes, LockWrite};
+use crate::auth::LockWrite;
 use crate::codec::{key_set_reply, DaemonOp};
 #[cfg(any(test, feature = "test-hooks"))]
 use crate::notice;
@@ -93,7 +93,7 @@ impl Daemon {
         // entries has nothing to say; where it has one, the whole list in
         // force is named (AUTH-4.36 step 4b's "ignored at install and said
         // so in the log").
-        if !blocked_prefixes(&self.auth.cfg).issue_is_empty() {
+        if !self.auth.cfg.blocked_prefixes().issue_is_empty() {
             self.log_blocked_prefixes("at claim");
         }
     }
@@ -342,7 +342,7 @@ impl Daemon {
         // beside it the ONE setting slot (4) reads, `allow_preview_keys`
         // (AUTH-1.44; RES-206), handed over the same way. The list is stable
         // under the write guard held here: its install takes the same one.
-        let list = blocked_prefixes(&self.auth.cfg);
+        let list = self.auth.cfg.blocked_prefixes();
         if let Err(r) = crate::auth::policy::precheck(
             &credential_lock,
             snap.world(),

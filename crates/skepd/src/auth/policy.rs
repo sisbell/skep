@@ -1,8 +1,8 @@
 //! The write-path policy surface (AUTH part 03): which of the two write
 //! sequences a write takes ([`deposits_credential_link`], read off the op's
 //! own type slot before any lock), the refusal vocabulary both answer in
-//! ([`CredentialRefusal`]), and — one file per sequence — their ordered
-//! producers:
+//! ([`CredentialRefusal`]), and — one file per sequence, and one for the
+//! check the plain sequence runs — their ordered producers:
 //!
 //! - `credential` — the CREDENTIAL sequence's (AUTH-3.37): slots (1)–(2)
 //!   ahead of the credential write lock, the precheck's slots (3)–(8) under
@@ -11,7 +11,9 @@
 //!   the board-state pair and the nullify class, in their pinned order;
 //! - `attestation` — THE WRITE-PATH CHECK (signed ops), run behind the plain
 //!   sequence's publish-class gate on a claimed board, whose ADMITTED
-//!   attestation is what the write's commit marker carries.
+//!   attestation is what the write's commit marker carries, and which asks
+//!   the store's own gates, on a detached kernel, what a shot it could not
+//!   read is owed.
 //!
 //! `addr_spans`, the one spelling of a type slot all three read, lives here,
 //! where each child sees it without a widening.

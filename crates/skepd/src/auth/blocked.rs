@@ -2,14 +2,12 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::SystemTime;
 
 use serde_json::{Map, Value};
 use skep_address::Address;
 use skep_namespace::prefix_contains;
 
-use super::options::AuthConfig;
 use super::prefix::NodePrefix;
 use crate::codec::{check_keys, wire_address};
 
@@ -323,14 +321,6 @@ impl BlockedPrefixes {
         }
         lines
     }
-}
-
-/// The installed list — AUTH-4.36 step 4b's `blocked_prefixes(cfg)`, a pure
-/// read of the list in force. By value (one pointer clone), so no reader
-/// holds the cell's lock across its own work and an install never waits on
-/// a handshake's verify loop.
-pub(crate) fn blocked_prefixes(cfg: &AuthConfig) -> Arc<BlockedPrefixes> {
-    Arc::clone(&cfg.blocked.read())
 }
 
 /// What one look at a moved supply file came to — the reissue's two

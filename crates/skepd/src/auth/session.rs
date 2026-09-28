@@ -15,7 +15,7 @@ use skep_identity::{
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
 
 use super::hybrid::{self, TAG_FNDSA512_PREVIEW_ED25519, TAG_MLDSA65_ED25519};
-use super::{bare_origins, blocked_prefixes, signed_origins, AuthConfig, Mode, Origin};
+use super::{bare_origins, signed_origins, AuthConfig, Mode, Origin};
 use crate::codec::{check_keys, hex_nibble, hex_string, parse_lower_hex};
 use crate::World;
 use skep_address::{parent, Address, Level};
@@ -517,7 +517,7 @@ pub(crate) fn resolve(
         Lookup::Unknown => Actor::Guest(GuestReason::Unknown),
         Lookup::Found(binding) => {
             let blocked = session_account(world, identity, binding.principal)
-                .is_some_and(|own| blocked_prefixes(cfg).covers(&own).is_some());
+                .is_some_and(|own| cfg.blocked_prefixes().covers(&own).is_some());
             if blocked {
                 return Actor::Guest(GuestReason::BindingDead);
             }
@@ -856,7 +856,7 @@ pub(crate) fn handshake(
             // is SPENT (step 3 stands ahead) and no re-challenge is owed:
             // the refusal is permanent until a lift. A config-fed gate in
             // step 2's own shape — the daemon reads no record.
-            if let Some(record) = blocked_prefixes(cfg).covers(&own) {
+            if let Some(record) = cfg.blocked_prefixes().covers(&own) {
                 return Err(HandshakeRefusal::Blocked { record: record.clone() });
             }
             // 5 — the subject's set. The subject is read HERE, behind 4b,

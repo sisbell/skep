@@ -278,8 +278,8 @@ fn execute_read_on(
 /// opens a second kernel through. Two callers: the history surface, reading
 /// a reconstructed world ([`execute_read_on`]), and the write-path check,
 /// asking the store's own gates about a shot over the live head without
-/// touching the live kernel (`crate::auth::entry`). Dropped, it takes every
-/// transaction it ever ran with it.
+/// touching the live kernel (`auth/policy/attestation.rs`). Dropped, it takes
+/// every transaction it ever ran with it.
 ///
 /// PRECONDITION: `world` carries TRUE derived hints — a live snapshot's root,
 /// or one `Engine::world_at` produced. That is what discharges

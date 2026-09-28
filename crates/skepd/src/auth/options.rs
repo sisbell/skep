@@ -68,8 +68,8 @@ pub struct AuthOptions {
     /// blocked.
     ///
     /// Deliberately not `blocked_prefixes`, as `configured` is deliberately
-    /// not `origins`: `blocked_prefixes` is the function answering the
-    /// LIST IN FORCE, and this is the path of the FILE that supplies it.
+    /// not `origins`: `blocked_prefixes` is `AuthConfig`'s read of the LIST
+    /// IN FORCE, and this is the path of the FILE that supplies it.
     /// The flag keeps the list's name — `--blocked-prefixes` is what an
     /// operator thinks about — and the field keeps the file's.
     pub blocked_supply_path: Option<PathBuf>,
@@ -130,20 +130,24 @@ impl Default for AuthOptions {
 /// Beside the members the BLOCKED-PREFIX LIST (AUTH-1.44): daemon config as
 /// `configured` is, never board state — in no record, journal, sidecar or
 /// fold — and the one member RE-ISSUED WHILE THE DAEMON RUNS, which is why
-/// it alone sits behind a lock. Read through [`super::blocked::blocked_prefixes`]; replaced
-/// whole by [`AuthConfig::install_blocked`], under the credential write
-/// gate. And the NODE PREFIX (REG-1.69), fixed at open as `configured` is:
-/// a fresh one is a reconfigure and restart (REG-1.70), so it sits behind
-/// no lock, and every install of the list reads the one in force.
+/// it alone sits behind a lock. Read through [`AuthConfig::blocked_prefixes`]
+/// and replaced whole through [`AuthConfig::install_blocked`], under the
+/// credential write gate — both here, beside the cell they are the only
+/// doors to. And the NODE PREFIX (REG-1.69), fixed at open as `configured`
+/// is: a fresh one is a reconfigure and restart (REG-1.70), so it sits
+/// behind no lock, and every install of the list reads the one in force.
 pub(crate) struct AuthConfig {
     pub local_trust: bool,
     pub configured: BTreeSet<Origin>,
     port: OnceLock<u16>,
-    /// The list IN FORCE. The `RwLock` makes the swap of one pointer safe
-    /// for readers that hold no credential lock (the handshake, the route
-    /// level's `resolve`); what ORDERS an install against the writes it
-    /// ends is the credential write gate its installer holds.
-    pub(super) blocked: parking_lot::RwLock<Arc<BlockedPrefixes>>,
+    /// The list IN FORCE, read through [`AuthConfig::blocked_prefixes`] and
+    /// replaced through [`AuthConfig::install_blocked`] alone — private, so
+    /// that guard-taking door is the ONLY writer. The `RwLock` makes the swap
+    /// of one pointer safe for readers that hold no credential lock (the
+    /// handshake, the route level's `resolve`); what ORDERS an install
+    /// against the writes it ends is the credential write gate its installer
+    /// holds, and names.
+    blocked: parking_lot::RwLock<Arc<BlockedPrefixes>>,
     /// [`AuthOptions::node_prefix`], as supplied; `None` where the daemon
     /// was told none.
     node_prefix: Option<NodePrefix>,
@@ -185,6 +189,14 @@ impl AuthConfig {
                      as this board's own); a hosted board must supply one"
                 .to_string(),
         }
+    }
+
+    /// THE LIST IN FORCE — AUTH-4.36 step 4b's `blocked_prefixes(cfg)`, a
+    /// pure read of the cell [`AuthConfig::install_blocked`] replaces. By
+    /// value (one pointer clone), so no reader holds the cell's lock across
+    /// its own work and an install never waits on a handshake's verify loop.
+    pub fn blocked_prefixes(&self) -> Arc<BlockedPrefixes> {
+        Arc::clone(&self.blocked.read())
     }
 
     /// THE INSTALL (AUTH-4.70): the list REPLACED WHOLE, atomically, under
@@ -338,5 +350,29 @@ mod tests {
         );
         let cfg = AuthConfig::new(AuthOptions::default());
         let _ = cfg.bind_port(0);
+    }
+
+    /// THE LIST IN FORCE has its two doors on the cell that holds it: a fresh
+    /// config answers the empty list, and what an install under the
+    /// credential write gate puts in is what the next read answers.
+    #[test]
+    fn the_list_in_force_is_read_where_it_is_installed() {
+        use super::super::blocked::{BlockedEntry, BlockedIssue};
+        use super::super::lock::CredentialLock;
+        use crate::codec::wire_address;
+
+        let cfg = AuthConfig::new(AuthOptions::default());
+        assert!(cfg.blocked_prefixes().issue_is_empty(), "a fresh config holds no list");
+        let prefix = wire_address("1.0.3").expect("an account address");
+        let record = wire_address("1.0.1.0.7.1").expect("a record's address");
+        let entry = BlockedEntry { prefix: prefix.clone(), record: record.clone() };
+        let issue = BlockedIssue { entries: vec![entry], ..BlockedIssue::default() };
+        let list = BlockedPrefixes::installed_under(issue, None, None);
+        cfg.install_blocked(&CredentialLock::new().write(), list);
+        assert_eq!(
+            cfg.blocked_prefixes().covers(&prefix),
+            Some(&record),
+            "the read answers what the install put in"
+        );
     }
 }

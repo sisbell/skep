@@ -170,9 +170,7 @@ use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, S
 #[cfg(feature = "observe")]
 use skep_namespace::PrincipalId;
 
-use crate::auth::{
-    blocked_prefixes, startup_warnings, AuthOptions, AuthState, PortAlreadyBound, Reissue,
-};
+use crate::auth::{startup_warnings, AuthOptions, AuthState, PortAlreadyBound, Reissue};
 use crate::codec::JsonCodec;
 use crate::history::History;
 use crate::limits::{MAX_REQUEST_BODY, MAX_SMALL_BODY};
@@ -471,11 +469,11 @@ impl Daemon {
         // world of its own can supply.
         //
         // And the write-path check leans on this door carrying none: its dry
-        // run of a shot's source gate (`auth::entry`) asks `World::visible_to`
-        // at the principal, which is what this door lends the store ONLY while
-        // it carries no consult — a consult added here is owed to that dry run
-        // too, or the check passes through, UNATTESTED, a shot the store then
-        // admits.
+        // run of a shot's source gate (`auth/policy/attestation.rs`) asks
+        // `World::visible_to` at the principal, which is what this door lends
+        // the store ONLY while it carries no consult — a consult added here is
+        // owed to that dry run too, or the check passes through, UNATTESTED, a
+        // shot the store then admits.
         let febe = OperationSurface::new(Box::new(engine.stores()));
         let auth = {
             let snap = engine.kernel().snapshot();
@@ -761,7 +759,7 @@ impl Daemon {
         let Some(path) = self.auth.blocked_supply_path() else { return };
         notice::lines(
             format_args!("blocked-prefix list ({when}, {}):", path.display()),
-            &blocked_prefixes(&self.auth.cfg).log_lines(),
+            &self.auth.cfg.blocked_prefixes().log_lines(),
         );
     }
 

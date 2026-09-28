@@ -37,28 +37,27 @@
 //!   `attestation_required` telling that an address holds a value,
 //!   `signature` whether a guessed value is the one it holds — where the
 //!   store's source gate promises `withheld` before any existence answer
-//!   (PUB-8.4). The STORE's own gates judge such a shot, asked on a detached
-//!   kernel ([`refused_at_or_before_the_source_gate`]): a shot they refuse
-//!   passes through UNATTESTED for their own answer. A shot they admit — the
-//!   base CARRYING every such run (PUB-6.24), as a cross-owner `version` of a
-//!   published member hands a principal runs whose origin it never could
-//!   read — places a value no signature of its author's can attest, and is
-//!   refused `attestation_invalid:withheld` without a byte of it read.
+//!   (PUB-8.4). The composer answers [`ComposeFault::UnreadableOrigin`] and
+//!   no more. What such a shot is OWED is the check's to decide, by asking
+//!   the store's own gates (`policy/attestation.rs`): their own refusal,
+//!   passed through UNATTESTED, where they refuse it; and
+//!   `attestation_invalid:withheld` where the base CARRIES every such run
+//!   (PUB-6.24), a value no signature of its author's can attest — as a
+//!   cross-owner `version` of a published member hands a principal runs whose
+//!   origin it never could read.
 //! * a body past [`MAX_SHOT_BODY_BYTES`], refused
 //!   `attestation_invalid:frame_too_large` before it is built.
 
-use skep_address::{document_of, Address, Nat, Span};
-use skep_arrangement::{trunk_of, Caller, Deposit, PublishError, Run, Shot, ShotRun, Vstream};
+use skep_address::{document_of, Address, Span};
+use skep_arrangement::{trunk_of, Deposit, Shot};
 use skep_content::HasContent;
 use skep_febe::Op;
 use skep_identity::{
     entry_body_insert, entry_body_link, entry_body_publish, entry_frame, EntryBody, EntrySlot,
 };
-use skep_kernel::TxnError;
 use skep_links::SlotArg;
 use skep_namespace::{HasM3, PrincipalId};
 
-use crate::history::detached_kernel;
 use crate::write_path::board_term;
 use crate::World;
 
@@ -88,7 +87,9 @@ const VALUE_COUNT_BYTES: usize = 8;
 /// The be32 length each value of the sequence is delimited by.
 const VALUE_LENGTH_BYTES: usize = 4;
 
-/// Why the daemon could not compose the entry frame for a write.
+/// Why the daemon could not compose the entry frame for a write — the reason
+/// the composer met; what the write is owed is the check's to answer
+/// (`policy/attestation.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ComposeFault {
     /// The entry frame's `board` term (D13) has no value: the board has no
@@ -101,21 +102,17 @@ pub(super) enum ComposeFault {
     NoBoardTerm,
     /// The principal has no account prefix — no `account` term.
     NoAccount,
-    /// A `publish` run names an address the snapshot holds no value at; the
-    /// store's `dangling_source` is the answer this write is owed.
+    /// A `publish` run names an address the snapshot holds no value at — a
+    /// shot the store's own existence walk refuses `dangling_source`.
     MissingValue,
     /// A `publish` run names an origin document the principal may not read,
-    /// and the STORE refuses the shot at or before its source gate — the run
-    /// `withheld` there, or the shot refused ahead of it (M5 `publish`'s
-    /// slots 1–6, PUB-6.36). That refusal reads no value, and it is the
-    /// answer this write is owed.
-    StoreRefuses,
-    /// A `publish` run names an origin document the principal may not read,
-    /// and the store's source gate would admit the shot all the same: the
-    /// base CARRIES every such run (PUB-6.24). The entry frame would carry a
-    /// value withheld from its own author, which no signature of theirs can
-    /// attest and which the check does not read for them.
-    CarriedUnreadable,
+    /// so no value of the shot is read: a verdict composed over such a value
+    /// would answer BY it. What the write is OWED — the store's own refusal,
+    /// or `attestation_invalid:withheld` where the base CARRIES every such
+    /// run (PUB-6.24) — is not the composer's to know: the check asks the
+    /// store's own gates (`policy/attestation.rs`'s
+    /// `refused_at_or_before_the_source_gate`).
+    UnreadableOrigin,
     /// A `publish`'s body would pass [`MAX_SHOT_BODY_BYTES`].
     OverBudget,
     /// The op kind is outside the checked set [`crate::codec::in_checked_set`] states.
@@ -175,16 +172,9 @@ pub(super) fn compose(
         }
         Op::Publish { doc, shot } => {
             let trunk = trunk_of(doc);
-            // No value the principal may not read is ever read here: such a
-            // shot is the store's gates' to judge, before any value is.
+            // No value the principal may not read is ever read here.
             if !every_origin_readable(world, &trunk, shot, principal) {
-                return Err(
-                    if refused_at_or_before_the_source_gate(world, doc, &trunk, shot, principal) {
-                        ComposeFault::StoreRefuses
-                    } else {
-                        ComposeFault::CarriedUnreadable
-                    },
-                );
+                return Err(ComposeFault::UnreadableOrigin);
             }
             (trunk, publish_body(world, shot)?)
         }
@@ -209,9 +199,9 @@ pub(super) fn compose(
 /// about, PUB-2.15), being `trunk`, the shot document's own I-space, which
 /// the gate never consults, or one the read predicate admits at the
 /// principal's class, which is what M10 lends the gate, on the premise
-/// [`refused_at_or_before_the_source_gate`] states. A run whose start names
-/// no document counts as unreadable: the store refuses it `bad_run`, and the
-/// check reads nothing to learn so.
+/// `policy/attestation.rs`'s `refused_at_or_before_the_source_gate` states.
+/// A run whose start names no document counts as unreadable: the store
+/// refuses it `bad_run`, and nothing is read to learn so.
 fn every_origin_readable(
     world: &World,
     trunk: &Address,
@@ -224,88 +214,6 @@ fn every_origin_readable(
             .map(|d| trunk_of(&d))
             .is_some_and(|origin| origin == *trunk || reader.readable(&origin))
     })
-}
-
-/// Whether the STORE refuses `shot` at or before its source gate (M5
-/// `publish`'s slots 1–6, PUB-6.36) — asked of the store ITSELF, on a
-/// detached kernel over this snapshot ([`detached_kernel`]), so the base's
-/// chain and shape, the carried-run test (PUB-6.24) and the gate's own skips
-/// are M5's answers and never a second statement of them here. Under the
-/// serialization guard this snapshot IS the base the real transaction opens
-/// on, and the predicate handed the gate — [`World::visible_to`] at the
-/// principal — answers what M10 lends it on the real write: M10's
-/// `visible_to` asks its front door's `readable`, which is `World::readable`
-/// at the principal wherever that door carries NO read consult, and the
-/// daemon's live door carries none (`Daemon::open_under` builds it so). That
-/// premise is this dry run's to rely on and the open's to keep: a consult on
-/// the live door would make the two gates two predicates, and one MORE
-/// lenient than `World::readable` would pass through UNATTESTED a shot the
-/// real store then admits. So a refusal here is the refusal the real shot
-/// meets.
-///
-/// The dry shot is `shot` behind one SENTINEL run: the shot document's next
-/// content address, which M3's mint only PEEKS (it moves nothing) and which
-/// therefore holds no value. The sentinel passes every check ahead of the
-/// source gate — its origin is the document's own trunk, registered, stated
-/// as itself — and the gate skips it as the document's own I-space, so the
-/// store's answer through the source gate is the real shot's own. Then the
-/// existence walk, which asks the runs in order, stops at the sentinel's one
-/// address: the dry run never pays for the real runs' Σ width or the
-/// placement.
-///
-/// `false` wherever a refusal at or before the source gate cannot be shown:
-/// a dry run that gets past it — every run the principal may not read then
-/// CARRIED by the base — and any answer this does not recognize. The caller
-/// REFUSES the write on `false`, which is safe whether or not the store
-/// would have; it passes the shot through UNATTESTED on `true` alone, which
-/// is safe because the real shot is then refused with the same answer. The
-/// match over M5's refusals is exhaustive so that a new one is placed on
-/// one side of the gate or the other before this compiles.
-fn refused_at_or_before_the_source_gate(
-    world: &World,
-    doc: &Address,
-    trunk: &Address,
-    shot: &Shot,
-    principal: PrincipalId,
-) -> bool {
-    let sentinel = world
-        .m3()
-        .mint_content(trunk)
-        .ok()
-        .and_then(|(next, _)| Run::new(next, Nat::from(1u32)).ok());
-    let Some(sentinel) = sentinel else {
-        return false;
-    };
-    let mut runs = Vec::with_capacity(shot.runs.len() + 1);
-    runs.push(ShotRun { origin: trunk.clone(), run: sentinel });
-    runs.extend(shot.runs.iter().cloned());
-    let dry = Shot { base: shot.base.clone(), draft: shot.draft.clone(), runs };
-    let kernel = detached_kernel(world.clone());
-    let caller = Caller::Principal(principal);
-    let visibility = World::visible_to(caller);
-    match Vstream::new(&kernel).publish(caller, doc, dry, &visibility) {
-        Err(TxnError::Rejected(refusal)) => match refusal {
-            // At or before the source gate: the real shot — the same runs,
-            // without the sentinel every one of these checks passes — is
-            // refused with the same answer.
-            PublishError::DocNotRegistered
-            | PublishError::NotOwner(_)
-            | PublishError::SourceNotRegistered
-            | PublishError::BadRun
-            | PublishError::PrivateSourceVersionless
-            | PublishError::BaseNotInChain
-            | PublishError::BaseSuperseded
-            | PublishError::BaseExtentTooLarge
-            | PublishError::Withheld(_) => true,
-            // Past the source gate: every run it asks about was admitted.
-            PublishError::TooManyValues
-            | PublishError::DanglingSource
-            | PublishError::TooManyRuns
-            | PublishError::Mint(_)
-            | PublishError::Content(_) => false,
-        },
-        Ok(_) | Err(_) => false,
-    }
 }
 
 /// A shot's body — its runs' values in run order, as [`entry_body_publish`]'s
@@ -353,11 +261,7 @@ impl EntryFrame {
 
 #[cfg(test)]
 mod tests {
-    use skep_arrangement::Base;
-    use skep_engine::Engine;
     use skep_febe::OpKind;
-    use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
-    use skep_namespace::{ghost_home_doc, head_document, SYSTEM_PRINCIPAL};
 
     use super::*;
     use crate::codec::op_name;
@@ -387,45 +291,5 @@ mod tests {
         assert_eq!(entry_body_insert(None, std::iter::empty()).op(), op_name(OpKind::Insert));
         assert_eq!(entry_body_link(&empty, &empty, &empty).op(), op_name(OpKind::MakeLink));
         assert_eq!(entry_body_publish(std::iter::empty()).op(), op_name(OpKind::Publish));
-    }
-
-    /// The dry run asks the STORE, and its SENTINEL is invisible to every
-    /// check ahead of the source gate — the premise that makes a pass-through
-    /// safe, since a sentinel some earlier check refused would make every
-    /// dry run a refusal and pass through shots the store then admits. Over
-    /// genesis, the system principal's shot into the head document `H`
-    /// (published, memberless, its own): with no base the dry run gets past
-    /// the gate — the sentinel alone answering the existence walk, so `false`
-    /// — and with a base outside `H`'s chain the store refuses
-    /// `base_not_in_chain` ahead of the gate, so `true`.
-    #[test]
-    fn the_dry_run_answers_the_store_s_own_gates_and_its_sentinel_passes_them() {
-        let engine = Engine::open(KernelConfig {
-            durability: Durability::InMemory,
-            checkpoint: CheckpointPolicy::Manual,
-            salt: SaltSource::Seeded(0),
-        })
-        .expect("in-memory genesis cannot fail");
-        let snap = engine.kernel().snapshot();
-        let world = snap.world();
-        let h = head_document();
-        let empty = Shot { base: None, draft: None, runs: Vec::new() };
-        assert!(
-            !refused_at_or_before_the_source_gate(world, &h, &h, &empty, SYSTEM_PRINCIPAL),
-            "a shot the store admits through its gate is not refused there"
-        );
-        let foreign_base = Shot {
-            base: Some(Base { member: ghost_home_doc(), extent: Nat::from(0u32) }),
-            ..empty
-        };
-        assert!(
-            refused_at_or_before_the_source_gate(world, &h, &h, &foreign_base, SYSTEM_PRINCIPAL),
-            "a base outside the document's chain is refused ahead of the gate"
-        );
-        assert_eq!(
-            engine.kernel().current_seq(),
-            snap.seq(),
-            "a dry run commits nothing to the live kernel"
-        );
     }
 }

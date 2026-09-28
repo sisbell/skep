@@ -14,13 +14,13 @@
 //! COVERED-BY, recorded rather than duplicated:
 //! * 2.5 — the first-mint pair (a flagless or explicit-`true` first mint
 //!   honored bare, the explicit-`false` one `mint_home_public`) and the
-//!   session-kind axis: `auth_wire.rs`; `version(doc 1, published:false)` →
-//!   `private_version_of_published` and a flagless `version` of a draft →
+//!   session-kind axis: `auth_wire/gates.rs`; `version(doc 1, published:false)`
+//!   → `private_version_of_published` and a flagless `version` of a draft →
 //!   `private_source_versionless`: `version_chain.rs`; the bare owner's
 //!   `nullify` of a doc-1-homed record (an empty address, a grant) →
 //!   `signed_session_required`, the signed owner's reaching the store:
 //!   `nullify_class.rs`.
-//! * 2.6 — slot 2's door (`auth_wire.rs`); slot 3 ahead of slot 4 (2.5's
+//! * 2.6 — slot 2's door (`auth_wire/gates.rs`); slot 3 ahead of slot 4 (2.5's
 //!   PUB-6.37 cells, this file); slot 4 ahead of slot 5 on a bare
 //!   `version(draft, published:true)` and the signed half's
 //!   `private_source_versionless` (`version_chain.rs`); the grant-typed
@@ -38,18 +38,18 @@
 //!   `publish.rs`. 2.9 — PUB-3.19's separating vector (a retracted claim
 //!   listed `active:false` under the audit view, absent from the active set):
 //!   `publication_reads.rs`.
-//! * 2.10 — the first-mint flag pair (`auth_wire.rs`); the `/events` row and
-//!   the straddle feed entries (`feed_class.rs`); the grain per-run cell and
-//!   the dual row's guest cells (`read_surface.rs`); the emit/assert_sup
+//! * 2.10 — the first-mint flag pair (`auth_wire/gates.rs`); the `/events` row
+//!   and the straddle feed entries (`feed_class.rs`); the grain per-run cell
+//!   and the dual row's guest cells (`read_surface.rs`); the emit/assert_sup
 //!   dedup cells (`dedup_class.rs`); the layered credential cell
-//!   (`auth_wire.rs`, `nullify_class.rs`); the doc-metadata row and
-//!   `edition_claims`' consult (`publication_reads.rs`, `read_surface.rs`);
-//!   the unregistered-argument cell (`auth_wire.rs`, `read_surface.rs`,
+//!   (`auth_wire/gates.rs`, `nullify_class.rs`); the doc-metadata row and
+//!   `edition_claims`' consult (`publication_reads.rs`, `read_surface.rs`); the
+//!   unregistered-argument cell (`auth_wire/gates.rs`, `read_surface.rs`,
 //!   `source_gate.rs`); PUB-6.8/6.9/6.27/6.30/6.49 (`read_surface.rs`,
-//!   `nullify_class.rs`, `dedup_class.rs`, `history.rs`); the `window_*`
-//!   paging and `/changes?under=` rows (`read_surface.rs`, `feed_class.rs`);
-//!   PUB-8.1's composite cell (`publish.rs`); the three oracles
-//!   (`feed_class.rs`, `publication_reads.rs`).
+//!   `nullify_class.rs`, `dedup_class.rs`, `history.rs`); the `window_*` paging
+//!   and `/changes?under=` rows (`read_surface.rs`, `feed_class.rs`); PUB-8.1's
+//!   composite cell (`publish.rs`); the three oracles (`feed_class.rs`,
+//!   `publication_reads.rs`).
 //! * 2.11 — the link-address row (`read_surface.rs`, `source_gate.rs`,
 //!   `h1_residue.rs`).
 //!

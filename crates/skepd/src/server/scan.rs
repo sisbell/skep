@@ -2,7 +2,7 @@
 
 use skep_febe::Op;
 
-use crate::history::{Permit, Permits};
+use crate::permits::{Permit, Permits};
 
 /// Concurrent CLASS SCANS admitted at `/op` at once (wire v7.9; PUB-8.36,
 /// PUB-8.37): the link-discovery reads [`is_class_scan`] enumerates, each of
@@ -28,7 +28,7 @@ use crate::history::{Permit, Permits};
 /// The SUM of this and the reconstruction pool must leave a worker free:
 /// [`MIN_WORKERS`](super::MIN_WORKERS) holds that relation, and an assertion beside it holds the
 /// shipped default to it.
-pub(crate) const MAX_CONCURRENT_CLASS_SCANS: usize = 2;
+pub(super) const MAX_CONCURRENT_CLASS_SCANS: usize = 2;
 
 /// The class-scan bound, whole (wire v7.9; PUB-8.36, PUB-8.37): what counts
 /// as a class scan ([`is_class_scan`]), how many run at once
@@ -38,11 +38,11 @@ pub(crate) const MAX_CONCURRENT_CLASS_SCANS: usize = 2;
 /// later meter has a whole thing to copy rather than five pieces on
 /// [`Daemon`](super::Daemon).
 ///
-/// A second instance of that module's permit mechanism, and disjoint from
-/// its pool BY THE BORROW rather than by convention: a [`Permit`] names the
-/// pool that issued it, so no signature here can spend a reconstruction
-/// slot.
-pub(crate) struct ClassScans(Permits);
+/// A second instance of [`crate::permits`]'s mechanism, and disjoint from
+/// the reconstruction pool BY THE BORROW rather than by convention: a
+/// [`Permit`] names the pool that issued it, so no signature here can spend
+/// a reconstruction slot.
+pub(super) struct ClassScans(Permits);
 
 /// Every class-scan permit is in use. Says nothing about HTTP, as
 /// [`crate::history::Unavailable`] does not: the mapping onto the wire is
@@ -51,7 +51,7 @@ pub(crate) struct ClassScans(Permits);
 /// [`TransportError::ScanBusy`](super::reply::TransportError::ScanBusy) — the same condition one layer out, which is
 /// why the two share a word and why the type keeps them apart.
 #[derive(Debug)]
-pub(crate) struct ScanBusy;
+pub(super) struct ScanBusy;
 
 impl ClassScans {
     pub(super) fn new() -> ClassScans {
@@ -144,7 +144,7 @@ impl ClassScans {
 /// M8 would answer it off its own descriptor (a `ty` of `"empty"`
 /// annihilates before M7 is asked; it is bounded all the same, and its
 /// permit is back in the pool a moment later).
-pub(super) fn is_class_scan(op: &Op) -> bool {
+fn is_class_scan(op: &Op) -> bool {
     matches!(
         op,
         Op::FindLinksFtt { .. }
@@ -159,4 +159,144 @@ pub(super) fn is_class_scan(op: &Op) -> bool {
             | Op::OutClaims { .. }
             | Op::EditionClaims { .. }
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use skep_febe::Codec;
+
+    use super::*;
+    use crate::codec::JsonCodec;
+
+    /// THE CLASS-SCAN TEST, over the OP and not over the query's slots: as
+    /// M7 is built every link-discovery read walks the store end to end, so
+    /// the eleven bounded ops are bounded whatever their slots hold — a
+    /// second constrained slot, an annihilating `"empty"`, a narrow region —
+    /// and the reads that walk no link store are bounded by nothing.
+    ///
+    /// Every row is PARSED through the codec rather than built by hand, so
+    /// the test reads the frames a client sends. The two lists are disjoint
+    /// and their union is checked against the bounded arm's own count, so an
+    /// op moved between the arms without moving here fails the last
+    /// assertion rather than passing in silence.
+    #[test]
+    fn every_link_store_walking_read_is_bounded_whatever_its_slots_hold() {
+        /// The bounded arm's size, restated — moving the arm is a visible
+        /// decision here, the discipline this crate gives its wire caps.
+        const BOUNDED_OPS: usize = 11;
+
+        let parse = |frame: &str| {
+            JsonCodec.parse(frame.as_bytes()).unwrap_or_else(|e| panic!("{frame}: {:?}", e.detail)).op
+        };
+        let ty = r#"[{"start":"1.1.0.1.0.1.0.3.90","width":"0.0.0.0.0.0.0.0.1"}]"#;
+        let home = r#"[{"start":"1.0.1.0.1","width":"0.0.0.0.1"}]"#;
+        let q = |home: &str, from: &str, to: &str, ty: &str| {
+            format!(r#"{{"from":{from},"home":{home},"to":{to},"ty":{ty}}}"#)
+        };
+        let region = r#"[{"start":"1.1","width":"0.1"}]"#;
+        let bounded = [
+            // The FTT family, at every slot spelling: the wire's directory
+            // shape, the whole store, the annihilated `"empty"`, home-only,
+            // and — the cell the slot-keyed predecessor exempted — a SECOND
+            // slot constrained, which is that same scan plus a comparison
+            // per link and so costs strictly more.
+            format!(r#"{{"op":"find_links_ftt","q":{}}}"#, q("\"any\"", "\"any\"", "\"any\"", ty)),
+            format!(
+                r#"{{"op":"find_links_ftt","q":{}}}"#,
+                q("\"any\"", "\"any\"", "\"any\"", "\"any\"")
+            ),
+            format!(r#"{{"op":"find_links_ftt","q":{}}}"#, q(home, "\"any\"", "\"any\"", ty)),
+            format!(r#"{{"op":"count_ftt","q":{}}}"#, q("\"any\"", ty, "\"any\"", ty)),
+            format!(
+                r#"{{"op":"count_ftt","q":{}}}"#,
+                q("\"any\"", "\"any\"", "\"any\"", "\"empty\"")
+            ),
+            format!(r#"{{"op":"count_ftt","q":{}}}"#, q(home, "\"any\"", "\"any\"", "\"any\"")),
+            format!(
+                r#"{{"cur":null,"n":16,"op":"window_ftt","q":{}}}"#,
+                q("\"any\"", "\"any\"", "\"empty\"", ty)
+            ),
+            // The region family: THREE scans apiece, one per v1 link slot.
+            format!(r#"{{"d":"1.0.1.0.1","op":"find_links_v","region":{region}}}"#),
+            format!(r#"{{"d":"1.0.1.0.1","op":"count_v","region":{region}}}"#),
+            format!(
+                r#"{{"cur":null,"d":"1.0.1.0.1","n":16,"op":"window_v","region":{region}}}"#
+            ),
+            format!(r#"{{"d":"1.0.1.0.1","op":"retrieve_endsets","region":{region}}}"#),
+            // Six scans, and no owner gate: the dearest read on the surface.
+            r#"{"d":"1.0.1.0.1","op":"delete_orphans","p":{"subspace":"1","ordinal":"1"},"width":"1"}"#
+                .to_string(),
+            // One scan apiece, at a single-span query.
+            r#"{"op":"in_claims","y":"1.0.1.0.1.0.2.1","view":"default"}"#.to_string(),
+            r#"{"op":"out_claims","x":"1.0.1.0.1.0.2.1","view":"default"}"#.to_string(),
+            r#"{"op":"edition_claims","target":"1.0.1.0.1"}"#.to_string(),
+        ];
+        let unbounded = [
+            // M5's resolve and one `readlink`: no store walk.
+            format!(r#"{{"d":"1.0.1.0.1","op":"image","region":{region}}}"#),
+            r#"{"a":"1.0.1.0.1.0.2.1","d":"1.0.1.0.1","op":"project","slot":1}"#.to_string(),
+            r#"{"a":"1.0.1.0.1.0.2.1","d":"1.0.1.0.1","op":"discoverable_from"}"#.to_string(),
+            r#"{"op":"read_link","a":"1.0.1.0.1.0.2.1"}"#.to_string(),
+            r#"{"op":"follow_link","a":"1.0.1.0.1.0.2.1","slot":1}"#.to_string(),
+            // The M6 and M3 reads touch no link store at all.
+            r#"{"op":"retrieve_v","specs":[{"doc":"1.0.1.0.1","span":{"start":"1.1","width":"0.1"}}]}"#
+                .to_string(),
+            r#"{"op":"show_deletions","d_a":"1.0.1.0.1","d_b":"1.0.1.0.2"}"#.to_string(),
+            r#"{"op":"doc_metadata","doc":"1.0.1.0.1"}"#.to_string(),
+            r#"{"op":"next_account_prefix","parent":"1"}"#.to_string(),
+        ];
+        let mut names: std::collections::BTreeSet<&'static str> = std::collections::BTreeSet::new();
+        for frame in &bounded {
+            let op = parse(frame);
+            assert!(is_class_scan(&op), "walks the link store, so it is bounded: {frame}");
+            names.insert(crate::codec::op_name(op.kind()));
+        }
+        for frame in &unbounded {
+            assert!(!is_class_scan(&parse(frame)), "walks no link store: {frame}");
+        }
+        assert_eq!(
+            names.len(),
+            BOUNDED_OPS,
+            "every bounded op is visited, and only those: {names:?}"
+        );
+    }
+
+    /// The class-scan admission at both ends (wire v7.9): a bounded op takes
+    /// one of the [`MAX_CONCURRENT_CLASS_SCANS`] permits and any other read
+    /// takes none, a drained pool REFUSES rather than queueing, and a
+    /// released permit reopens its slot. The pool is per-op-shape, so an
+    /// unbounded read is admitted while it is drained — which is what keeps
+    /// the bound off the reads that walk no link store.
+    #[test]
+    fn the_class_scan_admission_takes_a_permit_only_for_a_bounded_op() {
+        let op = |frame: &str| {
+            JsonCodec
+                .parse(frame.as_bytes())
+                .unwrap_or_else(|e| panic!("{frame}: {:?}", e.detail))
+                .op
+        };
+        let bounded =
+            op(r#"{"op":"count_ftt","q":{"from":"any","home":"any","to":"any","ty":"any"}}"#);
+        let unbounded = op(r#"{"op":"doc_metadata","doc":"1.0.1.0.1"}"#);
+        let scans = ClassScans::new();
+        assert!(
+            scans.admit(&unbounded).expect("an unbounded read is admitted").is_none(),
+            "…and spends no permit"
+        );
+        let held: Vec<_> = (0..MAX_CONCURRENT_CLASS_SCANS)
+            .map(|_| {
+                scans.admit(&bounded).expect("a permit").expect("a bounded read takes one")
+            })
+            .collect();
+        scans.admit(&bounded).expect_err("a drained pool refuses; it never queues");
+        assert!(
+            scans.admit(&unbounded).expect("an unbounded read is admitted").is_none(),
+            "a drained pool does not reach the reads it does not bound"
+        );
+        drop(held);
+        assert!(
+            scans.admit(&bounded).expect("a released permit reopens its slot").is_some(),
+            "and the reopened slot is a permit, not an admission with none"
+        );
+    }
 }

@@ -42,7 +42,7 @@ const MAX_BLOCKED_SUPPLY_BYTES: usize = 8 * 1024 * 1024;
 /// which is why it is held as the address it was issued as and nothing
 /// more.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct BlockedEntry {
+pub(super) struct BlockedEntry {
     pub prefix: Address,
     pub record: Address,
 }
@@ -67,7 +67,7 @@ pub(crate) struct BlockedHeader {
 /// One ISSUE of the list, as the operator supplies it: the header and
 /// every entry, in supply order, before the install's comparison.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct BlockedIssue {
+pub(super) struct BlockedIssue {
     pub header: BlockedHeader,
     pub entries: Vec<BlockedEntry>,
 }
@@ -76,7 +76,7 @@ pub(crate) struct BlockedIssue {
 /// step 4b; REG-4.198: the block never reaches the hand that lifts it and
 /// never takes a board from the party that writes its bindings).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Comparand {
+enum Comparand {
     /// (a) the configured operator account.
     Operator,
     /// (b) the board's binding-writing account — a comparand only where the
@@ -379,7 +379,7 @@ pub(crate) enum Reissue {
 /// saw. The operator still owes the ATOMIC REPLACE (write beside,
 /// rename over) — it is also what gives every issue a fresh identity.
 #[derive(Debug)]
-pub(crate) struct BlockedSupply {
+pub(super) struct BlockedSupply {
     pub(super) path: PathBuf,
     /// The file's identity as last looked at — `None` for a file that was
     /// not there. A FAILED look is remembered too, so a bad issue is

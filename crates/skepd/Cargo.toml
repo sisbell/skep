@@ -33,7 +33,8 @@ observe = ["skep-engine/dump"]
 # no build-time obligation has to be remembered. A build without it has
 # no / route (the usual 404 shape) until the guest reader exists, which
 # is what GET / serves by default once it does.
-# The workspace gate runs --all-features so this route stays exercised.
+# scripts/gate-full.sh compiles skepd with it on and reruns the tests whose
+# answers turn on it, so the route stays exercised.
 client = []
 # `test-hooks` compiles in the test-only code: `Daemon`'s `#[doc(hidden)]`
 # hooks (server/hooks.rs) and the claim-flip hold one of them arms, the
@@ -121,7 +122,11 @@ parking_lot.workspace = true
 # (tests/it, outside this library's `cfg(test)`) compile against the hooks
 # under a plain `cargo test` or workspace run, no flag added. A build that
 # compiles no test never reads this table, so the binary stays without them.
-skepd = { path = ".", features = ["test-hooks"] }
+# `default-features = false`, so this line adds `test-hooks` and nothing
+# else: with the implicit default it would switch `observe` back on in every
+# test build, and the gate's `--no-default-features` check would compile the
+# tests with the dump route after all.
+skepd = { path = ".", features = ["test-hooks"], default-features = false }
 tempfile.workspace = true
 # Test-side SIGNING (the daemon itself only verifies): the ceremony and
 # handshake suites hold deterministic seed keypairs (SigningKey::from_bytes)

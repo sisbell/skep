@@ -1,4 +1,5 @@
-//! `Origin`, `NotCanonical`, `PortAlreadyBound`, the origin sets, and startup warnings.
+//! Web origins (AUTH-4.1–4.11): the canonical form, the two origin sets the
+//! handshake and the bare bind admit from, and the config-lockout warnings.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -134,34 +135,6 @@ impl fmt::Display for NotCanonical {
 
 impl std::error::Error for NotCanonical {}
 
-/// [`crate::Daemon::bind_auth_port`] refused: a port is ALREADY BOUND.
-/// Carries that port — the number every live session's origin set was
-/// established against, which is what a caller disagreeing about it needs
-/// to be told — and not the number it offered, which it already has.
-///
-/// A named error rather than a bare `u16`, for [`NotCanonical`]'s reason:
-/// this is an ecosystem door, and only a type carrying `Display` and
-/// `std::error::Error` composes with `?` in a caller's own error type. A
-/// caller cannot add either impl to an integer, and an `Err(8642)` says
-/// nothing about which of the two ports it names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PortAlreadyBound(pub(super) u16);
-
-impl PortAlreadyBound {
-    /// The port already bound.
-    pub fn port(self) -> u16 {
-        self.0
-    }
-}
-
-impl fmt::Display for PortAlreadyBound {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "the auth port is already bound to {}", self.0)
-    }
-}
-
-impl std::error::Error for PortAlreadyBound {}
-
 /// The ecosystem door. [`Origin::parse`] stays: its `Option` is the
 /// predicate form this module uses internally (`Origin::parse(h)
 /// .is_some_and(…)`), and `FromStr` is what a generic caller — including
@@ -194,7 +167,7 @@ const LOOPBACK_HOSTS: [&str; 3] = ["127.0.0.1", "localhost", "[::1]"];
 /// unbound config has no port, so it has no defaults: the set is empty
 /// rather than three members at a port nothing can serve on, which is the
 /// same honest degenerate stated once, in the type.
-pub(crate) fn loopback_defaults(port: Option<u16>) -> BTreeSet<Origin> {
+fn loopback_defaults(port: Option<u16>) -> BTreeSet<Origin> {
     let Some(port) = port else { return BTreeSet::new() };
     LOOPBACK_HOSTS.iter().map(|h| Origin::from_parts(false, h, port)).collect()
 }
@@ -277,4 +250,112 @@ pub(crate) fn startup_warnings(cfg: &AuthConfig, claimed: bool) -> Vec<Warning> 
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::AuthOptions;
+    use super::*;
+
+    /// AUTH-4.2 — the canonical-member rule: at the scheme's default port
+    /// the port is omitted, and `parse` admits only the canonical text.
+    #[test]
+    fn origins_are_canonical_only() {
+        for ok in ["http://127.0.0.1:8642", "http://localhost:8642", "http://[::1]:8642",
+                   "http://127.0.0.1", "https://example.org", "https://skep.example:8443"] {
+            let o = Origin::parse(ok).unwrap_or_else(|| panic!("'{ok}' is canonical"));
+            assert_eq!(o.as_str(), ok);
+        }
+        for bad in ["http://127.0.0.1:80", "https://example.org:443", "HTTP://x",
+                    "http://X.org", "http://x/", "http://x/path", "null", "",
+                    "http://x:08642", "ftp://x", "http://", "http://x:", "http://x:0"] {
+            assert!(Origin::parse(bad).is_none(), "'{bad}' must not parse");
+        }
+    }
+
+    /// AUTH-4.1 — the defaults are the three loopback origins of the bound
+    /// port, canonical (port omitted at 80) — and an UNBOUND config has
+    /// none, which is the honest degenerate stated in the type: the
+    /// alternative is three members at a port no listener serves and no
+    /// `Origin` header can name.
+    #[test]
+    fn loopback_defaults_are_the_three_canonical_members() {
+        let at_8642: Vec<String> =
+            loopback_defaults(Some(8642)).iter().map(|o| o.as_str().to_string()).collect();
+        assert_eq!(
+            at_8642,
+            ["http://127.0.0.1:8642", "http://[::1]:8642", "http://localhost:8642"]
+        );
+        let at_80: Vec<String> =
+            loopback_defaults(Some(80)).iter().map(|o| o.as_str().to_string()).collect();
+        assert_eq!(at_80, ["http://127.0.0.1", "http://[::1]", "http://localhost"]);
+        assert!(loopback_defaults(None).is_empty(), "an unbound config derives no defaults");
+    }
+
+    /// An unbound config has no port, so its bare set is `configured`
+    /// alone — no unmatchable members, and nothing `/health` publishes that
+    /// [`Origin::parse`] would refuse if an operator copied it back.
+    #[test]
+    fn an_unbound_config_derives_no_origins() {
+        let cfg = AuthConfig::new(AuthOptions {
+            local_trust: true,
+            configured: vec![Origin::parse("https://board.example").expect("canonical")],
+            ..AuthOptions::default()
+        });
+        assert_eq!(cfg.port(), None);
+        let bare = bare_origins(&cfg);
+        assert_eq!(bare.len(), 1, "configured alone: {bare:?}");
+        assert!(bare.contains(&Origin::parse("https://board.example").unwrap()));
+    }
+
+    fn cfg_with(port: u16, local_trust: bool, configured: &[&str]) -> AuthConfig {
+        let cfg = AuthConfig::new(AuthOptions {
+            local_trust,
+            configured: configured.iter().map(|s| Origin::parse(s).expect("canonical")).collect(),
+            ..AuthOptions::default()
+        });
+        cfg.bind_port(port).expect("a fresh config binds once");
+        cfg
+    }
+
+    /// AUTH-4.3 — the two sets: bare keeps the defaults in every mode;
+    /// signed drops to configured alone at the claim.
+    #[test]
+    fn the_two_origin_sets_split_at_the_claim() {
+        let cfg = cfg_with(8642, false, &["https://board.example"]);
+        let bare = bare_origins(&cfg);
+        assert_eq!(bare.len(), 4, "configured ∪ the three defaults");
+        assert!(bare.contains(&Origin::parse("http://localhost:8642").unwrap()));
+        let unclaimed = signed_origins(&cfg, false);
+        assert_eq!(unclaimed, bare, "unclaimed: the signed set is the bare set");
+        let claimed = signed_origins(&cfg, true);
+        assert_eq!(claimed.len(), 1, "claimed: configured alone");
+        assert!(claimed.contains(&Origin::parse("https://board.example").unwrap()));
+    }
+
+    /// AUTH-4.9/AUTH-4.62 item 9 — the warning cells, the canonical-form
+    /// cell included: bound at 80, configured `http://127.0.0.1` is silent
+    /// and `http://127.0.0.1:8080` warns, naming the origin.
+    #[test]
+    fn each_warning_arm_fires_only_on_its_own_cell() {
+        assert!(startup_warnings(&cfg_with(8642, false, &["https://b.example"]), true).is_empty());
+        assert_eq!(
+            startup_warnings(&cfg_with(8642, true, &["https://b.example"]), true),
+            [Warning::ClaimedWithLocalTrust]
+        );
+        assert_eq!(
+            startup_warnings(&cfg_with(8642, false, &[]), true),
+            [Warning::ClaimedWithEmptyConfigured]
+        );
+        let moved = cfg_with(80, false, &["http://127.0.0.1", "http://127.0.0.1:8080"]);
+        assert_eq!(
+            startup_warnings(&moved, false),
+            [Warning::ConfiguredLoopbackPortChanged(
+                Origin::parse("http://127.0.0.1:8080").unwrap()
+            )],
+            "the canonical member is silent; the moved port warns and is named"
+        );
+        // A hosted board configured with its public origin alone is silent.
+        assert!(startup_warnings(&cfg_with(443, false, &["https://b.example"]), false).is_empty());
+    }
 }

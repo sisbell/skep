@@ -1,12 +1,15 @@
-//! `AuthOptions` (public), `AuthConfig`, `Mode`.
+//! The session layer's configuration: the options an operator supplies,
+//! what the daemon resolves from them once a port is bound, and the board's
+//! mode read off them.
 
 use std::collections::BTreeSet;
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use super::blocked::BlockedPrefixes;
 use super::lock::LockWrite;
-use super::origin::{Origin, PortAlreadyBound};
+use super::origin::Origin;
 use super::prefix::NodePrefix;
 
 /// The daemon's session-layer configuration, as the operator supplies it:
@@ -231,6 +234,35 @@ impl AuthConfig {
     }
 }
 
+/// [`crate::Daemon::bind_auth_port`] refused: a port is ALREADY BOUND.
+/// Carries that port — the number every live session's origin set was
+/// established against, which is what a caller disagreeing about it needs
+/// to be told — and not the number it offered, which it already has.
+///
+/// A named error rather than a bare `u16`, for
+/// [`NotCanonical`](super::NotCanonical)'s reason:
+/// this is an ecosystem door, and only a type carrying `Display` and
+/// `std::error::Error` composes with `?` in a caller's own error type. A
+/// caller cannot add either impl to an integer, and an `Err(8642)` says
+/// nothing about which of the two ports it names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PortAlreadyBound(u16);
+
+impl PortAlreadyBound {
+    /// The port already bound.
+    pub fn port(self) -> u16 {
+        self.0
+    }
+}
+
+impl fmt::Display for PortAlreadyBound {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "the auth port is already bound to {}", self.0)
+    }
+}
+
+impl std::error::Error for PortAlreadyBound {}
+
 /// The board's MODE (wire.md §Identity: "the board is always in exactly one
 /// of three MODES, derived from two facts `GET /health` publishes"). The ONE
 /// place the corpus's three names are said in the code rather than
@@ -264,5 +296,47 @@ impl Mode {
             (true, true) => Mode::ClaimedPermissive,
             (true, false) => Mode::Enforcing,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// [`AuthConfig::bind_port`] refuses a second bind and names the port
+    /// already bound — the number every live session's origin set was
+    /// established against, which is what the second caller needs told.
+    #[test]
+    fn a_second_bind_is_refused_and_names_the_bound_port() {
+        let cfg = AuthConfig::new(AuthOptions::default());
+        cfg.bind_port(8642).expect("a fresh config binds once");
+        assert_eq!(cfg.port(), Some(8642));
+        assert_eq!(
+            cfg.bind_port(9999),
+            Err(PortAlreadyBound(8642)),
+            "the bound port, not the refused one"
+        );
+        assert_eq!(cfg.port(), Some(8642), "and the binding did not move");
+    }
+
+    /// Port 0 is the one value from which
+    /// [`loopback_defaults`](crate::auth::origin::loopback_defaults) derives
+    /// origins [`Origin::parse`] refuses: `http://127.0.0.1:0` fails the
+    /// leading-zero clause, so admitting the bind fires
+    /// [`Origin::from_parts`]'s debug assert on every request that reads a
+    /// derived origin, and in release publishes a `/health` set whose
+    /// members no `Origin` header can match. The bind refuses it instead —
+    /// a caller's bug, stopped loudly, as a zero worker count is at
+    /// [`crate::serve`].
+    #[test]
+    #[should_panic(expected = "port 0 is not a port")]
+    fn port_zero_is_a_callers_bug() {
+        // The premise, first: this is what the defaults would derive from it.
+        assert!(
+            Origin::parse("http://127.0.0.1:0").is_none(),
+            "the front door refuses the text a zero-port default would carry"
+        );
+        let cfg = AuthConfig::new(AuthOptions::default());
+        let _ = cfg.bind_port(0);
     }
 }

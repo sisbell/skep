@@ -80,7 +80,7 @@ use crate::World;
 /// the runs' Σ width stops at the budget: every value is at least one byte
 /// (M5 refuses an empty one), so the walk visits at most a fifth of the
 /// budget in positions.
-pub(crate) const MAX_SHOT_BODY_BYTES: usize = crate::limits::MAX_REQUEST_BODY;
+const MAX_SHOT_BODY_BYTES: usize = crate::limits::MAX_REQUEST_BODY;
 
 /// The value sequence's leading be64 count.
 const VALUE_COUNT_BYTES: usize = 8;
@@ -90,7 +90,7 @@ const VALUE_LENGTH_BYTES: usize = 4;
 
 /// Why the daemon could not compose the entry frame for a write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ComposeFault {
+pub(super) enum ComposeFault {
     /// The entry frame's `board` term (D13) has no value: the board has no
     /// `H.1`. Since s1 (RULED 2026-09-25) the claim writes `H.1` in its own
     /// step and the open writes it where a crash split the two, so on a
@@ -153,7 +153,7 @@ impl<'a> Slot<'a> {
 /// last ([`EntryFrame::bytes`]), so the check learns whether an entry frame
 /// CAN be composed before it asks for the member, and names no token for a
 /// write that presents none.
-pub(crate) fn compose(
+pub(super) fn compose(
     world: &World,
     op: &Op,
     principal: PrincipalId,
@@ -334,7 +334,7 @@ fn publish_body(world: &World, shot: &Shot) -> Result<EntryBody, ComposeFault> {
 /// every other member as the value [`skep_identity::entry_frame`] spells: the
 /// board term, the principal's account, the op's document, and the body with
 /// its op's token.
-pub(crate) struct EntryFrame {
+pub(super) struct EntryFrame {
     board: (u64, [u8; 32]),
     account: Address,
     doc: Address,
@@ -346,7 +346,7 @@ impl EntryFrame {
     /// attestation's MARKER tag names — [`skep_identity::entry_frame`]'s
     /// layout, `framed(ENTRY_TAG, [alg, board, account, doc, op, body])`,
     /// `ENTRY_TAG` its framing tag.
-    pub(crate) fn bytes(&self, alg: &str) -> Vec<u8> {
+    pub(super) fn bytes(&self, alg: &str) -> Vec<u8> {
         entry_frame(alg, self.board, &self.account, &self.doc, &self.body)
     }
 }

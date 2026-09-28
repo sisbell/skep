@@ -3,14 +3,12 @@
 use serde_json::Value;
 use skep_febe::{consult_read, Response};
 use skep_kernel::Seq;
-#[cfg(feature = "observe")]
-use skep_namespace::PrincipalId;
 
 use super::actor::Resolved;
 use super::reply::{
-    at_most_once, op_answer, query_pairs, refuse, refuse_reclaimed, refuse_unavailable, Reply,
-    TransportError,
+    op_answer, refuse, refuse_reclaimed, refuse_unavailable, Reply, TransportError,
 };
+use super::request::{at_most_once, query_pairs};
 use super::Daemon;
 use crate::auth::fold::{canonical_identity, key_set_of};
 use crate::codec::{check_keys, key_set_reply, obj, DaemonOp};
@@ -260,21 +258,6 @@ impl Daemon {
             }
         };
         Reply::bodied(200, "text/plain; charset=utf-8", dump.into_string().into_bytes())
-    }
-
-    /// The committed world's dump at `principal`'s class — what `GET /dump`
-    /// answers a session bound to `principal` (`None` = the guest), through
-    /// the same engine call, so a suite holding the daemon can state the H4
-    /// oracle: the wire body equals this post-filter of the harness-only
-    /// walk byte for byte. Unbudgeted, like [`Daemon::world_at`]: an
-    /// embedder calling this holds the daemon itself.
-    ///
-    /// The answer's type is re-exported as [`crate::WorldDump`], for the
-    /// reason the engine types beside it are: naming it must not oblige a
-    /// caller to depend on the engine.
-    #[cfg(feature = "observe")]
-    pub fn dump_visible_to(&self, principal: Option<PrincipalId>) -> crate::WorldDump {
-        self.engine.world_dump_visible_to(principal)
     }
 }
 

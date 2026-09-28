@@ -1,4 +1,5 @@
-//! `CredentialLock`, `LockRead`, `LockWrite`.
+//! The credential write lock (AUTH-3.1–3.3), and the guards that let a
+//! function say in its signature which half of it the function runs under.
 
 // ── the credential write lock (AUTH-3.1–3.3) ─────────────────────────────
 

@@ -3,7 +3,7 @@
 //! outside the journal transaction, replayed at open, tail-checked against
 //! the head, and rebuilt whole only on whole-file loss (PUB-7.21):
 //!
-//! | file                | record                              | twin (`feed/mod.rs`)              |
+//! | file                | record                              | twin (`feed.rs`)                  |
 //! |---------------------|-------------------------------------|-----------------------------------|
 //! | `feed-index.log`    | `{"at":N,"docs":["…"]}`             | the per-document POSITION INDEX   |
 //! | `feed-offsets.log`  | `{"at":N,"offset":O}`               | the position → OFFSET array       |
@@ -72,20 +72,20 @@ use crate::codec::obj;
 // revisits it. It is the one loss the coverage check does not close.
 
 /// The per-document position index's file.
-pub(crate) const INDEX_FILE: &str = "feed-index.log";
+pub(super) const INDEX_FILE: &str = "feed-index.log";
 /// Its records' one field: the classified documents, dotted-decimal.
-pub(crate) const INDEX_DOCS: &str = "docs";
+pub(super) const INDEX_DOCS: &str = "docs";
 /// The position → offset array's file.
-pub(crate) const OFFSETS_FILE: &str = "feed-offsets.log";
+pub(super) const OFFSETS_FILE: &str = "feed-offsets.log";
 /// Its records' one field: the line's byte offset in `commits.log`.
-pub(crate) const OFFSETS_OFFSET: &str = "offset";
+pub(super) const OFFSETS_OFFSET: &str = "offset";
 /// The masked-position bitmap's file. Its records carry the position alone,
 /// so it has no field constant — membership IS the record.
-pub(crate) const MASKED_FILE: &str = "feed-masked.log";
+pub(super) const MASKED_FILE: &str = "feed-masked.log";
 /// The per-owner draft-position streams' file.
-pub(crate) const STREAMS_FILE: &str = "feed-streams.log";
+pub(super) const STREAMS_FILE: &str = "feed-streams.log";
 /// Its records' one field: the owner accounts, dotted-decimal.
-pub(crate) const STREAMS_OWNERS: &str = "owners";
+pub(super) const STREAMS_OWNERS: &str = "owners";
 
 /// One replayed line, parsed — `sidecar.rs`'s vocabulary, which this file
 /// shares its whole discipline with: a LINE is the bytes on disk, a RECORD
@@ -99,7 +99,7 @@ enum Record {
 }
 
 /// One derived sidecar: its append handle and its coverage.
-pub(crate) struct DerivedFile {
+pub(super) struct DerivedFile {
     file: File,
     dir: PathBuf,
     name: &'static str,
@@ -133,7 +133,7 @@ pub(crate) struct DerivedFile {
 /// The ENTRIES a derived file replays — its position-carrying records,
 /// `(position, the record's object)`, in file order. A fence carries no
 /// position and so is not one of these; it is folded into the coverage.
-pub(crate) type Entries = Vec<(u64, Map<String, Value>)>;
+pub(super) type Entries = Vec<(u64, Map<String, Value>)>;
 
 impl DerivedFile {
     /// Replay `name` in `dir`: truncate a torn tail, drop what describes
@@ -278,7 +278,7 @@ impl DerivedFile {
 /// rewrite reproduces it, so each file's field name is spelled once and a
 /// compacted file's lines are byte-identical to appended ones. The `at` key
 /// is added here, so a record cannot omit it.
-pub(crate) fn record_object(at: u64, fields: Vec<(&'static str, Value)>) -> Value {
+pub(super) fn record_object(at: u64, fields: Vec<(&'static str, Value)>) -> Value {
     let mut pairs = fields;
     pairs.push(("at", Value::Number(at.into())));
     obj(pairs)

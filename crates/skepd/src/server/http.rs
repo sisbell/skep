@@ -7,11 +7,11 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use skep_kernel::Seq;
 
-use super::reply::{at_most_once, refuse, HttpRequest, Reply, TransportError, SESSION_HEADER};
-use super::{body_cap, Daemon};
+use super::reply::{refuse, Reply, TransportError, SESSION_HEADER};
+use super::request::{at_most_once, HttpRequest};
+use super::body_cap;
 use crate::auth::session::Peer;
 use crate::codec::{obj, to_bytes};
-use crate::write_path::StreamStep;
 
 /// Socket read deadline for one request's head+body: a stalled local
 /// client releases its worker instead of pinning it.
@@ -326,7 +326,7 @@ fn write_bounded(stream: &mut TcpStream, mut bytes: &[u8], deadline: Instant) ->
 
 /// Append one `Name: value` line in this daemon's framing — the one place a
 /// header becomes bytes, shared by the reply path and the event stream.
-fn push_header(head: &mut Vec<u8>, name: &str, value: &str) {
+pub(super) fn push_header(head: &mut Vec<u8>, name: &str, value: &str) {
     head.extend_from_slice(format!("{name}: {value}\r\n").as_bytes());
 }
 
@@ -334,12 +334,13 @@ fn push_header(head: &mut Vec<u8>, name: &str, value: &str) {
 /// [`UNIVERSAL_HEADERS`] — which wire.md §Transport and §Cross-origin access
 /// promise on every response. The one place a response BEGINS, as
 /// [`push_header`] is the one place a header becomes bytes, and for the same
-/// reason: a stream is not a [`Reply`], so [`serve_events`] composes its own
+/// reason: a stream is not a [`Reply`], so
+/// [`serve_events`](super::listen::serve_events) composes its own
 /// head — but its opening IS the reply path's at status 200, and spelled by
 /// hand it is a second entry in [`reason`]'s table with nothing keeping the
 /// two in step. The caller appends its own headers, the blank line, and
 /// whatever body it has.
-fn response_head(status: u16) -> Vec<u8> {
+pub(super) fn response_head(status: u16) -> Vec<u8> {
     let mut head = Vec::with_capacity(256);
     head.extend_from_slice(format!("HTTP/1.1 {status} {}\r\n", reason(status)).as_bytes());
     for (name, value) in UNIVERSAL_HEADERS {
@@ -407,53 +408,6 @@ fn reason(status: u16) -> &'static str {
     }
 }
 
-/// One subscriber (wire v4): write the stream head and the initial event
-/// carrying the last announced position, then follow the commit stream — a
-/// `commit` event when the head advances, a `:ka` comment on silence —
-/// until shutdown or the first failed write (a gone subscriber). Exiting
-/// drops the socket, which is the client's end-of-stream. Coalescing is
-/// inherent: the stream answers "anything past what I last sent", so a
-/// burst of commits is one event.
-///
-/// The initial position comes from [`WritePath::announced`](crate::write_path::WritePath::announced) and not from
-/// the kernel, which is what keeps every announced position one
-/// `GET /changes` already carries — see that method for the window the
-/// distinction closes.
-pub(super) fn serve_events(daemon: &Daemon, mut stream: TcpStream, closed: bool) {
-    let mut head = response_head(200);
-    push_header(&mut head, "Content-Type", "text/event-stream");
-    push_header(&mut head, "Cache-Control", "no-cache");
-    if closed {
-        // The death signal, written ONCE at open (AUTH-4.44): a session
-        // dying mid-stream is a stated residue.
-        push_header(&mut head, SESSION_HEADER, "closed");
-    }
-    head.extend_from_slice(b"\r\n");
-    if stream.write_all(&head).is_err() {
-        return;
-    }
-    let mut last = daemon.writes.announced();
-    if write_commit_event(&mut stream, last).is_err() {
-        return;
-    }
-    loop {
-        match daemon.writes.next_step(last) {
-            StreamStep::Shutdown => return,
-            StreamStep::Commit(at) => {
-                last = at;
-                if write_commit_event(&mut stream, at).is_err() {
-                    return;
-                }
-            }
-            StreamStep::Keepalive => {
-                if stream.write_all(b":ka\n\n").is_err() {
-                    return;
-                }
-            }
-        }
-    }
-}
-
 /// `event: commit` / `data: {"log_position":N}` / blank — the wire v4
 /// event framing, byte-for-byte what wire.md documents (compact JSON, the
 /// position alone).
@@ -462,7 +416,7 @@ pub(super) fn serve_events(daemon: &Daemon, mut stream: TcpStream, closed: bool)
 /// other JSON object this crate emits, so the day the stream carries a
 /// second field its canonical form is the one already in force everywhere
 /// else rather than whatever a format string happened to spell.
-fn write_commit_event(stream: &mut TcpStream, at: Seq) -> std::io::Result<()> {
+pub(super) fn write_commit_event(stream: &mut TcpStream, at: Seq) -> std::io::Result<()> {
     let mut event = b"event: commit\ndata: ".to_vec();
     event.extend_from_slice(&to_bytes(obj(vec![("log_position", Value::Number(at.0.into()))])));
     event.extend_from_slice(b"\n\n");

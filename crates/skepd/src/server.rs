@@ -86,13 +86,12 @@
 //! op test, the pool, and the admission that takes the permit after the
 //! parse and the session read and before M10 is asked, so a refused request
 //! costs the parse alone and an admitted one holds its slot for the WHOLE
-//! answer. The pool is a second instance of history's
-//! [`crate::history::Permits`], disjoint from the reconstruction pool — a
-//! scan spends no reconstruction permit and a reconstruction spends no scan
-//! permit. The bound admits or refuses a REQUEST (`503 scan_busy`,
-//! retry-class, the body naming the op) and never alters an answer: M7 and
-//! M8 are not told a query is bounded. A concurrency bound, never a rate
-//! statement.
+//! answer. The pool is a second instance of [`crate::permits::Permits`],
+//! disjoint from the reconstruction pool — a scan spends no reconstruction
+//! permit and a reconstruction spends no scan permit. The bound admits or
+//! refuses a REQUEST (`503 scan_busy`, retry-class, the body naming the op)
+//! and never alters an answer: M7 and M8 are not told a query is bounded. A
+//! concurrency bound, never a rate statement.
 //!
 //! **Writes go through one card** (`write_path/`): `POST /op` — the
 //! daemon's only write ROUTE — hands each write to
@@ -113,8 +112,9 @@
 //! `write_path/` owns the stream: what a subscriber is told first and
 //! next, and the coalescing that falls out of asking "anything past what I
 //! last sent"; `Subscribers` (in `listen.rs`) owns the budget, the admission, and
-//! the join at shutdown. What `server` adds is the SSE framing
-//! (`serve_events`) and the hand-off that keeps an open stream off the op
+//! the join at shutdown. What `server` adds is the SSE framing (`http.rs`'s
+//! `write_commit_event`), the subscriber's loop (`listen.rs`'s
+//! `serve_events`), and the hand-off that keeps an open stream off the op
 //! pool — the accepting worker gives the socket to a dedicated thread and
 //! returns to `accept`.
 //!
@@ -142,16 +142,23 @@
 //! is the safe state; the feature's note in `Cargo.toml` carries the
 //! ruling. A build without the feature has no `/` route (404).
 
+// The transport: sockets, threads, and the HTTP bytes.
+mod http;
+mod listen;
+
+// The routes: `Daemon`'s handlers, each an `impl Daemon` block, and the
+// caller each request resolves to.
 mod actor;
 #[cfg(any(test, feature = "test-hooks"))]
 mod hooks;
-mod http;
-mod listen;
 mod op;
 mod read_routes;
-mod reply;
-mod scan;
 mod session_routes;
+
+// The vocabulary the routes and the transport share.
+mod reply;
+mod request;
+mod scan;
 
 use std::path::Path;
 #[cfg(any(test, feature = "test-hooks"))]
@@ -160,6 +167,8 @@ use std::sync::atomic::AtomicBool;
 use skep_engine::{Engine, EngineError, HistoryError, World};
 use skep_febe::OperationSurface;
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource, Seq};
+#[cfg(feature = "observe")]
+use skep_namespace::PrincipalId;
 
 use crate::auth::{
     blocked_prefixes, startup_warnings, AuthOptions, AuthState, PortAlreadyBound, Reissue,
@@ -176,7 +185,8 @@ use scan::ClassScans;
 pub use crate::auth::session::Peer;
 pub use http::UNIVERSAL_HEADERS;
 pub use listen::{serve, Skepd, DEFAULT_WORKERS, MIN_WORKERS};
-pub use reply::{Body, HttpRequest, Reply, Routed};
+pub use reply::{Body, Reply, Routed};
+pub use request::HttpRequest;
 
 /// Auto-checkpoint cadence: every N commits (M2 evaluates on-commit; no
 /// timer thread exists anywhere in this daemon). Together with
@@ -318,10 +328,11 @@ pub struct Daemon {
     history: History,
     /// The class-scan bound behind `/op`'s class-scan-shaped FTT reads (wire
     /// v7.9; PUB-8.36), holding its own shape test and its own pool — a
-    /// second instance of the permit mechanism `history` holds, and so
-    /// disjoint from it. Lives in the serving path and nowhere lower
-    /// (doctrine D9: the meter is an attribute of a gate, never of the
-    /// substrate): M8 and M7 are asked or not asked, and never told.
+    /// second instance of [`crate::permits`]'s mechanism, and so disjoint
+    /// from the reconstruction pool `history` holds. Lives in the serving
+    /// path and nowhere lower (doctrine D9: the meter is an attribute of a
+    /// gate, never of the substrate): M8 and M7 are asked or not asked, and
+    /// never told.
     scans: ClassScans,
     /// The dirty-crash harness's one seam into the claim's step
     /// (`Daemon::hold_between_the_claim_and_its_head`): armed, the
@@ -556,6 +567,21 @@ impl Daemon {
     /// daemon itself.
     pub fn world_at(&self, at: Seq) -> Result<World, HistoryError> {
         self.engine.world_at(at)
+    }
+
+    /// The committed world's dump at `principal`'s class — what `GET /dump`
+    /// answers a session bound to `principal` (`None` = the guest), through
+    /// the same engine call, so a suite holding the daemon can state the H4
+    /// oracle: the wire body equals this post-filter of the harness-only
+    /// walk byte for byte. Unbudgeted, like [`Daemon::world_at`]: an
+    /// embedder calling this holds the daemon itself.
+    ///
+    /// The answer's type is re-exported as [`crate::WorldDump`], for the
+    /// reason the engine types beside it are: naming it must not oblige a
+    /// caller to depend on the engine.
+    #[cfg(feature = "observe")]
+    pub fn dump_visible_to(&self, principal: Option<PrincipalId>) -> crate::WorldDump {
+        self.engine.world_dump_visible_to(principal)
     }
 
     /// Current log position (M10's `log_position`; never regresses).

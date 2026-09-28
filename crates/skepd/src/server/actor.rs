@@ -4,7 +4,7 @@ use skep_engine::World;
 use skep_identity::IdentityState;
 use skep_namespace::PrincipalId;
 
-use super::reply::HttpRequest;
+use super::request::HttpRequest;
 use super::Daemon;
 use crate::auth::session::{resolve, Actor, GuestReason, Token};
 

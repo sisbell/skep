@@ -4,8 +4,8 @@
 //! client must be opted into, so a hosted image that opts out of nothing
 //! is still correct; see the feature's note in Cargo.toml); without it
 //! the route does not exist and `/` is the ordinary 404. Both arms are
-//! asserted: the workspace gate runs the default shape, and a
-//! `--all-features` pass covers the serving one.
+//! asserted: the default build runs the 404 arm, and `scripts/gate-full.sh`
+//! runs this file again with `--all-features` for the serving one.
 
 use crate::common;
 
@@ -38,9 +38,8 @@ fn root_serves_the_embedded_board() {
     sd.shutdown();
 }
 
-/// Built without the client, `/` is unknown: the usual 404 shape. (Runs
-/// only under `--no-default-features --features observe` or similar; the
-/// default workspace gate compiles it out.)
+/// Built without the client, `/` is unknown: the usual 404 shape — the
+/// default build's arm, since `client` is default-off.
 #[cfg(not(feature = "client"))]
 #[test]
 fn root_is_404_without_the_client_feature() {

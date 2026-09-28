@@ -8,7 +8,7 @@ use skep_kernel::{Attestation, SaltSource, Seq};
 
 use super::{Daemon, DaemonError};
 use crate::auth::AuthOptions;
-use crate::history::Permit;
+use crate::permits::Permit;
 
 impl Daemon {
     /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a

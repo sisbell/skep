@@ -14,7 +14,7 @@
 //! The feed's four DERIVED sidecars (`feed/derived.rs`: the per-document
 //! position index, the offset array, the masked-position bitmap and the
 //! per-owner draft streams; PUB-7.19) are projections of this file and the
-//! journal, rebuilt from them on loss; `feed/mod.rs` composes the five.
+//! journal, rebuilt from them on loss; `feed.rs` composes the five.
 //!
 //! Crash honesty is the contract:
 //!
@@ -77,13 +77,13 @@ use skep_address::Address;
 use skep_engine::{Engine, HistoryError, World};
 use skep_kernel::Seq;
 
-use crate::classify::{derived_docs, parse_dotted};
+use super::classify::{derived_docs, parse_dotted};
 use crate::codec::{obj, to_bytes};
 use crate::serial::SerialGuard;
 
 /// The sidecar's file name inside the data dir (beside the kernel's own
 /// journal/checkpoint files, which this crate never touches).
-pub(crate) const SIDECAR_FILE: &str = "commits.log";
+const SIDECAR_FILE: &str = "commits.log";
 
 /// The wall-clock reading a commit's `time` is stamped with — unix
 /// milliseconds, the wire's unit (wire.md §The change feed), `0` for a clock
@@ -94,7 +94,7 @@ pub(crate) const SIDECAR_FILE: &str = "commits.log";
 /// its own reading. Two copies of this expression would agree only until one
 /// was edited or seamed, and the head's hour would then subtract one clock
 /// from another with nothing to say so.
-pub(crate) fn wall_clock_millis() -> u64 {
+pub(super) fn wall_clock_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -108,7 +108,7 @@ pub(crate) fn wall_clock_millis() -> u64 {
 /// six more combinations, and this file has a meaning for neither the
 /// half-recorded position nor the record that remembers when but not what.
 #[derive(Clone, Debug)]
-pub(crate) enum CommitMeta {
+pub(super) enum CommitMeta {
     /// Reconstructed, not witnessed: served as explicit `null`s, never as
     /// an invented value. Its CLASS — which documents the journal shows it
     /// touched — lives in the feed's classification map, not here: this
@@ -185,7 +185,7 @@ impl CommitMeta {
 /// [`crate::serial::SerialGuard`] already is, applied to data rather
 /// than to a guard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct LineOffset(pub u64);
+pub(super) struct LineOffset(pub u64);
 
 /// One replayed file record.
 #[derive(Debug)]
@@ -201,14 +201,14 @@ enum Record {
 /// world below the boundary could not be answered — unclassifiable, served
 /// to every class (the module doc's residue).
 #[derive(Debug)]
-pub(crate) struct Walked {
+pub(super) struct Walked {
     pub at: u64,
     pub docs: Option<Vec<Address>>,
 }
 
 /// The replayed `commits.log`: the file handle, every enumerable entry above
 /// the fence, and the bookkeeping the feed's derived structures key on.
-pub(crate) struct CommitsLog {
+pub(super) struct CommitsLog {
     file: File,
     /// Every enumerable position above `min_since`, in order — and every one
     /// of them this file stands behind: `Recorded` means testimony whose
@@ -892,7 +892,7 @@ fn min_since_line(min_since: u64) -> Vec<u8> {
 /// [`demote_malformed_names`] and the derived index's read of the same
 /// names. Written through [`crate::notice`], which owns the stream and
 /// states why a notice may not panic.
-pub(crate) fn report_malformed_names(file: &str, at: u64, dropped: usize) {
+pub(super) fn report_malformed_names(file: &str, at: u64, dropped: usize) {
     crate::notice::line(format_args!(
         "{file} position {at} carries {dropped} malformed document name(s)"
     ));
@@ -901,7 +901,7 @@ pub(crate) fn report_malformed_names(file: &str, at: u64, dropped: usize) {
 /// One newline-terminated file line — the codec's serializer, so a line is
 /// the same bytes whatever backs serde_json's map and the "cannot fail"
 /// argument is the one written there rather than a second copy of it.
-pub(crate) fn line_bytes(v: Value) -> Vec<u8> {
+pub(super) fn line_bytes(v: Value) -> Vec<u8> {
     let mut b = to_bytes(v);
     b.push(b'\n');
     b

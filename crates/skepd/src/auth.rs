@@ -24,21 +24,23 @@
 //! never persisted by this crate — the journal remains the one source of
 //! truth.
 
-pub(crate) mod entry;
+// What the rest of the daemon reaches.
 pub(crate) mod fold;
 pub mod hybrid;
 pub(crate) mod policy;
 pub(crate) mod session;
 
+// What only this module reaches.
 mod blocked;
 mod entropy;
+mod entry;
 mod lock;
 mod options;
 mod origin;
 mod prefix;
 
-pub use options::AuthOptions;
-pub use origin::{NotCanonical, Origin, PortAlreadyBound};
+pub use options::{AuthOptions, PortAlreadyBound};
+pub use origin::{NotCanonical, Origin};
 pub use prefix::{NodePrefix, NotANodePrefix};
 
 pub(crate) use blocked::{blocked_prefixes, BlockedPrefixes, Reissue};
@@ -46,9 +48,6 @@ pub(crate) use entropy::OsEntropy;
 pub(crate) use lock::{CredentialLock, LockRead, LockWrite};
 pub(crate) use options::{AuthConfig, Mode};
 pub(crate) use origin::{bare_origins, signed_origins, startup_warnings};
-
-#[cfg(test)]
-pub(crate) use origin::{loopback_defaults, Warning};
 
 use std::collections::BTreeSet;
 use std::io;
@@ -246,6 +245,3 @@ impl AuthState {
         flipped
     }
 }
-
-#[cfg(test)]
-mod tests;

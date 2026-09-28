@@ -1109,7 +1109,7 @@ fn reject_code_names_are_pinned() {
     // * `credential_refused` — a code, but the DAEMON's own, built by
     //   `daemon_rejected` rather than lowered from `RejectCode`, which has
     //   no such variant (wire.md: "the auth work's one new code"). Its
-    //   wire shape is asserted end to end in `tests/auth_wire.rs`.
+    //   wire shape is asserted end to end in `tests/it/auth_wire/credentials.rs`.
     // * `permanent` — a disposition, pinned by
     //   `every_disposition_marshals_and_diagnostics_are_omitted_when_absent`.
     // * `detail` — the rejection envelope's own field, pinned by that same

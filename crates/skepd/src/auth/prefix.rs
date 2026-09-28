@@ -1,4 +1,5 @@
-//! `NodePrefix`.
+//! The board's node prefix in the registry (REG-1.69), admitted only in its
+//! one legal form: the comparand of the blocked-prefix list's off-board test.
 
 use std::fmt;
 
@@ -90,4 +91,31 @@ impl std::str::FromStr for NodePrefix {
 fn root() -> Address {
     let one = Tumbler::new([Nat::from(1u32)]).expect("one component is a tumbler");
     validate(one).expect("`1` is a T4-valid node address")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn addr(s: &str) -> Address {
+        wire_address(s).expect("a T4-valid address")
+    }
+
+    /// REG-1.69's form, at the parse: a NODE address strictly under the root
+    /// `1` — an org's `1.N`, a subnode beneath — and nothing else: the root
+    /// itself, another first component (REG-1.67), an account or document
+    /// address, a trailing zero, text no tumbler spells.
+    #[test]
+    fn a_node_prefix_is_a_node_address_strictly_under_the_root() {
+        for ok in ["1.2", "1.3", "1.3.2", "1.1024.7"] {
+            let parsed: NodePrefix =
+                ok.parse().unwrap_or_else(|_| panic!("'{ok}' is a node prefix"));
+            assert_eq!(parsed.address(), &addr(ok));
+            assert_eq!(parsed.address().level(), Level::Node);
+            assert_eq!(parsed.to_string(), ok, "and renders as the operator spelled it");
+        }
+        for bad in ["1", "2.4", "2", "1.3.0.7", "1.3.0.7.0.1", "1.0", "0.3", "1..3", "", "x", "1.3."] {
+            assert!(bad.parse::<NodePrefix>().is_err(), "'{bad}' is not a node prefix");
+        }
+    }
 }

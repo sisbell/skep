@@ -105,7 +105,7 @@ use self::derived::{
     STREAMS_OWNERS,
 };
 use super::sidecar::{report_malformed_names, CommitMeta, CommitsLog, LineOffset};
-use crate::classify::{classify, derived_docs, parse_dotted, Doc};
+use super::classify::{classify, derived_docs, parse_dotted, Doc};
 use crate::serial::SerialGuard;
 
 /// The most granted prefixes [`Inner::names_under`] scans per candidate
@@ -289,7 +289,7 @@ pub(crate) enum ChangesAnswer {
 }
 
 /// The feed: `commits.log` and the four derived twins, under one lock.
-pub(crate) struct Feed {
+pub(super) struct Feed {
     inner: Mutex<Inner>,
 }
 

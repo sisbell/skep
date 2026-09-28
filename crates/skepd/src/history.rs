@@ -18,19 +18,12 @@
 //! than concurrent replays.
 //!
 //! [`Unavailable`] says why an answer cannot be given without knowing what
-//! an HTTP status is; `server.rs` owns the one mapping onto the wire's
-//! transport errors.
+//! an HTTP status is; `server/reply.rs`'s `refuse_unavailable` is the one
+//! mapping onto the wire's transport errors.
 //!
-//! The budget's mechanism — [`Permits`], a counting try-acquire whose
-//! [`Permit`] guard returns its slot on drop — is the ONE permit mechanism
-//! this daemon has, and it is shared: the reconstruction pool here and the
-//! class-scan pool `server.rs` keeps for `/op`'s class-scan-shaped FTT
-//! queries (wire v7.9, PUB-8.36; PUB round 2, lane 3.7) are two instances
-//! of it, disjoint by construction — a permit is a slot of the pool that
-//! minted it and nothing else. The reconstruction pool's count and
-//! behaviour are untouched by the second instance.
+//! The budget is a [`Permits`] pool — `crate::permits`, the daemon's one
+//! permit mechanism, whose other instance is the class-scan pool.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 #[cfg(feature = "observe")]
@@ -40,6 +33,8 @@ use skep_engine::{Engine, EngineStores, HistoryError, World};
 use skep_febe::{OperationSurface, Request, Response, SessionId};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, Snapshot};
 use skep_namespace::PrincipalId;
+
+use crate::permits::{Permit, Permits};
 
 /// Concurrent historical reconstructions (`Engine::world_at` behind
 /// `/op-at` and `/dump?at`, and the chain read behind `/chain?at`, which
@@ -209,51 +204,6 @@ impl History {
     }
 }
 
-/// A pool of permits: a counting try-acquire with no queue and no blocking
-/// — plain atomics, no new dependency. The guard returns its permit on
-/// drop, early returns and panics included.
-///
-/// The bound behind [`MAX_CONCURRENT_RECONSTRUCTIONS`], and — as a second,
-/// separate instance — behind `server.rs`'s `MAX_CONCURRENT_CLASS_SCANS`
-/// (wire v7.9): one mechanism, two pools. A permit belongs to the pool it
-/// came from, so the two bounds cannot spend each other's slots.
-#[derive(Debug)]
-pub(crate) struct Permits {
-    available: AtomicUsize,
-}
-
-/// One held permit; dropping it releases the slot in the pool that issued
-/// it. Named rather than hidden behind an opaque `impl Drop`, so a caller
-/// can store it, borrow it, and read what it is — the standing every guard
-/// in `std` has. Public only to be the return type of the daemon's two test
-/// hooks, and `#[doc(hidden)]` for the same reason.
-#[doc(hidden)]
-#[derive(Debug)]
-pub struct Permit<'a> {
-    permits: &'a Permits,
-}
-
-impl Permits {
-    /// A pool of `n` permits.
-    pub(crate) fn new(n: usize) -> Permits {
-        Permits { available: AtomicUsize::new(n) }
-    }
-
-    /// One permit, or `None` right now — never blocks.
-    pub(crate) fn try_acquire(&self) -> Option<Permit<'_>> {
-        self.available
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1))
-            .ok()
-            .map(|_| Permit { permits: self })
-    }
-}
-
-impl Drop for Permit<'_> {
-    fn drop(&mut self) {
-        self.permits.available.fetch_add(1, Ordering::Release);
-    }
-}
-
 /// Run one already-classified READ frame against a historical world: a
 /// throwaway in-memory M2 kernel rooted at that world, a throwaway M10 over
 /// it, one `execute`. All the read semantics stay M10's and the stores' —
@@ -390,6 +340,7 @@ fn stamp_as_of(resp: &mut Response, at: Seq) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::thread;
 
     use super::*;

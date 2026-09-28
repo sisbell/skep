@@ -8,25 +8,26 @@
 //!
 //! COVERED-BY, recorded rather than duplicated: I1.b (the four in-place edits
 //! refuse `published_target`) and I1.c (PUB-2.7 / PUB-2.9, every session
-//! class) — `version_chain.rs`, `auth_wire.rs`; I1's build bound (PUB-8.43) —
-//! `read_surface.rs`; I2.b's grain (two non-contiguous masked runs, two items)
-//! — `read_surface.rs`; I2.c (the H1 matrix) — `read_surface.rs`,
-//! `source_gate.rs`, `publication_reads.rs`, `dedup_class.rs`,
-//! `feed_class.rs`, `h1_residue.rs`; I2.d's mirror image (a guest dump holds
-//! no draft section, content line or slice entry) — `publication_reads.rs`;
-//! I3.a's four refusal cells — `auth_wire.rs`, `nullify_class.rs`,
-//! `version_chain.rs`; I3.b (the flagless first mint honored, the home born
-//! published) — `auth_wire.rs`; I3 (scope: a bare owner's marker and
-//! designation admitted into its draft journal) — `nullify_class.rs`; I4.c's
-//! `nullify` refusals and `key_set`'s set — `nullify_class.rs`,
-//! `auth_wire.rs`; I5.c (own-source `version` appends the chain, cross-owner
-//! mints in the caller's account) and I5.e (the proposer's own `nullify`, the
-//! owner's `not_owner`) — `version_chain.rs`, `source_gate.rs`,
-//! `ownership.rs`; I6.a's carried deposit — `publish.rs`; I7's idempotency
-//! memo and the post-restart re-execute (PUB-8.31) — `authz.rs`; I7.e's
-//! `mint_home_first` ahead of the first write — `auth_wire.rs`; I10.a's single
-//! op and I10.e's two-key genesis — `auth_wire.rs`; I11.d's honest claim —
-//! every `spawn`.
+//! class) — `version_chain.rs`, `auth_wire/gates.rs`; I1's build bound
+//! (PUB-8.43) — `read_surface.rs`; I2.b's grain (two non-contiguous masked
+//! runs, two items) — `read_surface.rs`; I2.c (the H1 matrix) —
+//! `read_surface.rs`, `source_gate.rs`, `publication_reads.rs`,
+//! `dedup_class.rs`, `feed_class.rs`, `h1_residue.rs`; I2.d's mirror image (a
+//! guest dump holds no draft section, content line or slice entry) —
+//! `publication_reads.rs`; I3.a's four refusal cells — `auth_wire/gates.rs`,
+//! `nullify_class.rs`, `version_chain.rs`; I3.b (the flagless first mint
+//! honored, the home born published) — `auth_wire/gates.rs`; I3 (scope: a
+//! bare owner's marker and designation admitted into its draft journal) —
+//! `nullify_class.rs`; I4.c's `nullify` refusals and `key_set`'s set —
+//! `nullify_class.rs`, `auth_wire/gates.rs`, `auth_wire/credentials.rs`; I5.c
+//! (own-source `version` appends the chain, cross-owner mints in the caller's
+//! account) and I5.e (the proposer's own `nullify`, the owner's `not_owner`)
+//! — `version_chain.rs`, `source_gate.rs`, `ownership.rs`; I6.a's carried
+//! deposit — `publish.rs`; I7's idempotency memo and the post-restart
+//! re-execute (PUB-8.31) — `authz.rs`; I7.e's `mint_home_first` ahead of the
+//! first write — `auth_wire/gates.rs`; I10.a's single op and I10.e's two-key
+//! genesis — `auth_wire/gates.rs`, `auth_wire/credentials.rs`; I11.d's honest
+//! claim — every `spawn`.
 //!
 //! UNOBSERVABLE at the daemon: I3.d (no rule-registration surface; the fire's
 //! guest class is the engine's `fires.rs`); I4.a/b for every class but the

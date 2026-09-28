@@ -1,6 +1,6 @@
 //! The socket server (`Skepd`, `serve`): the worker budget, the accept loop, the event streams.
 
-use std::io;
+use std::io::{self, Write};
 use std::net::{TcpListener, TcpStream};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,13 +11,14 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 
 use super::http::{
-    read_request, refuse_request, serve_events, write_reply, REQUEST_READ_TIMEOUT,
-    TRANSFER_DEADLINE, WRITE_TIMEOUT,
+    push_header, read_request, refuse_request, response_head, write_commit_event, write_reply,
+    REQUEST_READ_TIMEOUT, TRANSFER_DEADLINE, WRITE_TIMEOUT,
 };
-use super::reply::{refuse, Routed, TransportError};
+use super::reply::{refuse, Routed, TransportError, SESSION_HEADER};
 use super::scan::MAX_CONCURRENT_CLASS_SCANS;
 use super::Daemon;
 use crate::auth::session::Peer;
+use crate::write_path::StreamStep;
 
 /// The request worker count `skepd` serves with when the operator names
 /// none — held HERE rather than in the binary because it is the THIRD TERM
@@ -451,6 +452,53 @@ impl Subscribers {
     fn join_all(&self) {
         for h in std::mem::take(&mut *self.live.lock()) {
             let _ = h.join();
+        }
+    }
+}
+
+/// One subscriber (wire v4): write the stream head and the initial event
+/// carrying the last announced position, then follow the commit stream — a
+/// `commit` event when the head advances, a `:ka` comment on silence —
+/// until shutdown or the first failed write (a gone subscriber). Exiting
+/// drops the socket, which is the client's end-of-stream. Coalescing is
+/// inherent: the stream answers "anything past what I last sent", so a
+/// burst of commits is one event.
+///
+/// The initial position comes from [`WritePath::announced`](crate::write_path::WritePath::announced) and not from
+/// the kernel, which is what keeps every announced position one
+/// `GET /changes` already carries — see that method for the window the
+/// distinction closes.
+fn serve_events(daemon: &Daemon, mut stream: TcpStream, closed: bool) {
+    let mut head = response_head(200);
+    push_header(&mut head, "Content-Type", "text/event-stream");
+    push_header(&mut head, "Cache-Control", "no-cache");
+    if closed {
+        // The death signal, written ONCE at open (AUTH-4.44): a session
+        // dying mid-stream is a stated residue.
+        push_header(&mut head, SESSION_HEADER, "closed");
+    }
+    head.extend_from_slice(b"\r\n");
+    if stream.write_all(&head).is_err() {
+        return;
+    }
+    let mut last = daemon.writes.announced();
+    if write_commit_event(&mut stream, last).is_err() {
+        return;
+    }
+    loop {
+        match daemon.writes.next_step(last) {
+            StreamStep::Shutdown => return,
+            StreamStep::Commit(at) => {
+                last = at;
+                if write_commit_event(&mut stream, at).is_err() {
+                    return;
+                }
+            }
+            StreamStep::Keepalive => {
+                if stream.write_all(b":ka\n\n").is_err() {
+                    return;
+                }
+            }
         }
     }
 }

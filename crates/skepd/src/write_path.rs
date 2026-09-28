@@ -9,7 +9,7 @@
 //! `sidecar.rs` states its invariants on; and every position a `GET /events`
 //! subscriber is told about is one `GET /changes` already carries — at the
 //! classes that may see it: the record is CLASSIFIED against the
-//! post-commit head as it is made (`feed/mod.rs`), which is why this card
+//! post-commit head as it is made (`feed.rs`), which is why this card
 //! holds the engine's store factory and takes a snapshot behind each
 //! execute.
 //!
@@ -59,9 +59,14 @@ use skep_engine::{Engine, EngineStores};
 use skep_febe::{Op, OpKind, Response, Stores};
 use skep_kernel::Seq;
 
+// The change feed behind `GET /changes`: its authority file, and the one
+// question it asks the world.
+mod classify;
 mod feed;
-mod head;
 mod sidecar;
+
+// The published head writer, which commits through this module's own door.
+mod head;
 
 pub(crate) use feed::{ChangesAnswer, FeedClass, Query};
 pub(crate) use head::board_term;
@@ -479,7 +484,7 @@ pub(crate) struct WriteMeta {
 /// create/fork/version and the minted MEMBER for `publish` (each known only
 /// from the ack); delegate/register_node touch no document.
 #[derive(Debug)]
-pub(crate) enum AffectedDocs {
+enum AffectedDocs {
     /// The documents the frame itself names. Held as ADDRESSES, which is
     /// what the feed's classification wants — it reads each one against the
     /// head's exception set — so the rendering belongs at the sidecar's own
@@ -515,7 +520,7 @@ pub(crate) enum AffectedDocs {
 /// The two tables agree at 15 writes of 43.
 ///
 /// SECOND OBLIGATION, and the one no assertion here can reach:
-/// [`crate::classify::derived_docs`] answers this same question — which
+/// [`classify::derived_docs`] answers this same question — which
 /// documents a commit touched — from the JOURNAL, for a position whose record
 /// was lost, and the two must agree on the MASK. Precisely: every DRAFT this
 /// table names must appear in that one's answer, and that one's answer must

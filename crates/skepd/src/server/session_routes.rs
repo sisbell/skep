@@ -6,9 +6,8 @@ use serde_json::Value;
 use skep_namespace::PrincipalId;
 
 use super::actor::Resolved;
-use super::reply::{
-    at_most_once, query_pairs, refuse, refuse_handshake, HttpRequest, Reply, TransportError,
-};
+use super::reply::{refuse, refuse_handshake, Reply, TransportError};
+use super::request::{at_most_once, query_pairs, HttpRequest};
 use super::Daemon;
 use crate::auth::session::{
     handshake, parse_session_body, Actor, Opened, SessionBinding, Token, CHALLENGE_TTL_MS,

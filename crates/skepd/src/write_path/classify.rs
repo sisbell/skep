@@ -25,7 +25,7 @@ use skep_links::{HasLinks, ShippedType, View};
 /// carries `None`: it is readable to every class and enters no owner's
 /// stream.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Doc {
+pub(super) struct Doc {
     pub addr: Address,
     /// The DRAFT's owner account, or `None` for a published document —
     /// which has an owner this feed never needs. ω is total on a registered
@@ -47,7 +47,7 @@ impl Doc {
 /// to its document (`trunk_of`, PUB-2.15 — a version member reads as its
 /// document) and looked up once (PUB-7.5: one hash, no walk). Order is the
 /// caller's — the record's own, which rendering preserves.
-pub(crate) fn classify(world: &World, addrs: Vec<Address>) -> Vec<Doc> {
+pub(super) fn classify(world: &World, addrs: Vec<Address>) -> Vec<Doc> {
     addrs
         .into_iter()
         .map(|addr| {
@@ -87,7 +87,7 @@ fn parse_prefix(s: &str) -> Option<Tumbler> {
 ///
 /// Uncapped, deliberately: the wire's depth and digit budgets bound what a
 /// CLIENT may send, and a name that reached this file is already past them.
-pub(crate) fn parse_dotted(s: &str) -> Option<Address> {
+pub(super) fn parse_dotted(s: &str) -> Option<Address> {
     validate(parse_prefix(s)?).ok()
 }
 
@@ -127,7 +127,7 @@ pub(crate) fn parse_dotted(s: &str) -> Option<Address> {
 /// where the arrangement slice moved at all, one run-list comparison per
 /// draft the world holds. Paid once per bare boundary at the open that
 /// reconstructs it, never at serve.
-pub(crate) fn derived_docs(before: &World, after: &World) -> Vec<Address> {
+pub(super) fn derived_docs(before: &World, after: &World) -> Vec<Address> {
     let mut docs: BTreeSet<Address> = BTreeSet::new();
     // 1. Drafts minted by this commit.
     for draft in after.drafts() {

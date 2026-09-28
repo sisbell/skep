@@ -1,11 +1,12 @@
-//! The wire value types, the transport refusals, the reply decorators, the query helpers.
+//! The reply a handler answers with, every transport refusal, and the reply
+//! decorators.
 
 use serde_json::Value;
 use skep_engine::HistoryError;
 use skep_febe::OpKind;
 
 use crate::auth::policy::CredentialRefusal;
-use crate::auth::session::{HandshakeRefusal, Peer};
+use crate::auth::session::HandshakeRefusal;
 use crate::codec::{credential_refused_reply, obj, to_bytes};
 use crate::history::Unavailable;
 
@@ -25,7 +26,7 @@ pub(super) const SESSION_HEADER: &str = "Skepd-Session";
 /// bytes for. `content_type` names the `Content-Type` header verbatim,
 /// which is HTTP's word and not the substrate's.
 ///
-/// A REQUEST's body is bare bytes ([`HttpRequest::body`]) because this
+/// A REQUEST's body is bare bytes ([`HttpRequest::body`](super::HttpRequest::body)) because this
 /// daemon does not read the type a client declares, while every response it
 /// writes must declare one. That is one concept in two shapes, not two
 /// concepts.
@@ -157,92 +158,6 @@ pub enum Routed {
     EventStream,
 }
 
-/// One request, as [`Daemon::route`](super::Daemon::route) receives it and as the socket reader
-/// builds it — one value rather than a list of arguments, so the two
-/// `Option<String>`s cannot be handed over in the wrong order.
-///
-/// PRECONDITION on every field, established by [`super::http::read_request`] and owed by
-/// any other caller of [`Daemon::route`](super::Daemon::route): `method` is the uppercase token;
-/// `path` is the request target with its query AND its `?` removed; `query`
-/// is what followed that `?`, without it; `session_token` and `origin` are
-/// the `Skepd-Session` and `Origin` header values VERBATIM, or `None` when
-/// the header is absent — never normalized and never defaulted; `peer` is
-/// the transport's own answer about the remote address of THIS connection;
-/// `body` is exactly the declared `Content-Length` bytes, and at most
-/// [`body_cap`](super::body_cap) of `path` of them.
-///
-/// Routing re-checks none of them — it cannot tell a caller's mistake from a
-/// client's request — and what a violation costs is not uniform. The first
-/// three and the last are answered honestly for the request as given and
-/// misleadingly for the one intended: a `path` still carrying its query is
-/// an unknown path (`404`), a lowercase `method` matches no arm (`405`), a
-/// `query` still carrying its `?` names a parameter called `?since`.
-/// `origin` and `peer` are different in kind: a violation there is a SILENT
-/// WIDENING of the one privilege this daemon grants without a signature. An
-/// absent `origin` reads as "no `Origin` header", which
-/// [`crate::auth::session::bare_bind_allowed`] admits, so a caller that
-/// does not forward the header removes the daemon-side fence; and a `peer`
-/// reported `Loopback` for a socket that is not one hands the bare bind to
-/// the network.
-///
-/// The body cap is the OUTERMOST bound on what a frame allocates, and the
-/// one clause a caller cannot discharge by inspection: every JSON-carrying
-/// route builds the whole `serde_json` tree before any codec cap runs, so a
-/// body admitted past it buys roughly twenty times its size in transient
-/// heap — for a frame the codec is then about to refuse. [`super::http::read_request`]
-/// enforces it on the declared `Content-Length`, before a byte is read.
-///
-/// `Clone`, because this is the value a caller BUILDS, and the precondition
-/// above is why it builds one per probe rather than mutating a template:
-/// every field is a fact about ONE request. A caller varying one across a
-/// table would otherwise spell all seven per row. Deliberately no
-/// `Default`, for the same reason — an empty method and path are not a
-/// request — and no `PartialEq`, nothing here comparing two requests.
-#[derive(Clone)]
-pub struct HttpRequest {
-    /// The method token, uppercase ASCII (`GET`, `POST`, `OPTIONS`).
-    pub method: String,
-    /// The request target with any query stripped — `/op`, `/changes`.
-    pub path: String,
-    /// The raw query string, if the target carried one, without the `?` that
-    /// introduced it. Meaningful on `/changes` and `/dump`; ignored
-    /// elsewhere.
-    pub query: Option<String>,
-    /// The `Skepd-Session` header's value, if present: the opaque token a
-    /// session was bound to. Absent or unknown resolves to the guest.
-    pub session_token: Option<String>,
-    /// The `Origin` header's value verbatim, if present — the bare arm's
-    /// per-request origin check reads it; `Origin: null` arrives as the
-    /// literal string and parses to nothing.
-    pub origin: Option<String>,
-    /// The TCP peer's loopback-ness — established by the accept path from
-    /// the socket's peer address. A caller routing over its own transport
-    /// supplies it, and takes it from [`Peer::of`] rather than deriving it:
-    /// that is this daemon's own rule, and the paragraph above says what
-    /// getting it wrong costs. A transport with no address at all — a Unix
-    /// socket — names the variant it means.
-    pub peer: Peer,
-    /// The body, exactly `Content-Length` bytes (empty when absent).
-    pub body: Vec<u8>,
-}
-
-/// The body's LENGTH and the token's PRESENCE: the body runs to the route's
-/// [`body_cap`](super::body_cap), and the token names a live session, which is not a thing to
-/// leave in a log line.
-impl std::fmt::Debug for HttpRequest {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HttpRequest")
-            .field("method", &self.method)
-            .field("path", &self.path)
-            .field("query", &self.query)
-            .field("session_token", &self.session_token.as_ref().map(|_| "<token>"))
-            .field("origin", &self.origin)
-            .field("peer", &self.peer)
-            .field("body_len", &self.body.len())
-            .finish()
-    }
-}
-
 /// The transport's whole error vocabulary — every `{"error": …}` name this
 /// daemon can answer, and the only way one is written. EXHAUSTIVE over the
 /// wire's transport-error table (wire.md §Transport errors, §Reading
@@ -281,7 +196,7 @@ pub(super) enum TransportError {
 }
 
 impl TransportError {
-    pub(super) fn name(self) -> &'static str {
+    fn name(self) -> &'static str {
         match self {
             TransportError::MalformedSessionRequest => "malformed_session_request",
             TransportError::MalformedChallenge => "malformed_challenge",
@@ -310,7 +225,7 @@ impl TransportError {
     /// status codes). Clients dispatch on the status, so the pairing is
     /// contract; stating it here is what keeps one name from arriving under
     /// two statuses depending on which handler refused.
-    pub(super) fn status(self) -> u16 {
+    fn status(self) -> u16 {
         match self {
             TransportError::MalformedSessionRequest
             | TransportError::MalformedChallenge
@@ -352,7 +267,7 @@ pub(super) fn refuse(err: TransportError, detail: Option<&str>) -> Reply {
 /// `head`, `nearest`, `floor` — the coordinate a caller needs to ask a
 /// better question. `error` is appended here, so a field list can never
 /// omit it.
-pub(super) fn refuse_with(err: TransportError, fields: Vec<(&'static str, Value)>) -> Reply {
+fn refuse_with(err: TransportError, fields: Vec<(&'static str, Value)>) -> Reply {
     let mut pairs = fields;
     pairs.push(("error", Value::String(err.name().into())));
     Reply::json(err.status(), obj(pairs))
@@ -464,40 +379,6 @@ pub(super) fn credential_refused(kind: OpKind, r: &CredentialRefusal) -> Reply {
     op_answer(credential_refused_reply(kind, r.token(), r.disposition()))
 }
 
-/// A query string as its parameter list — `k=v` pairs split on `&`, shape
-/// checked and nothing else. Every query this daemon reads walks this, so
-/// one discipline covers them all and each parser adds only its own
-/// vocabulary: an unknown or repeated parameter is a named refusal, which
-/// is the wire's never-silent posture applied to queries.
-pub(super) fn query_pairs(query: &str) -> Result<Vec<(&str, &str)>, String> {
-    query
-        .split('&')
-        .map(|pair| pair.split_once('=').ok_or_else(|| format!("malformed parameter '{pair}'")))
-        .collect()
-}
-
-/// A field that may appear at most ONCE — the never-silent rule applied to
-/// repeats, shared by the request head's headers and by every query this
-/// daemon reads, so a duplicate is a named refusal rather than a last-wins
-/// nobody chose. `field_kind` is the wire's word for the kind of field —
-/// `"header"` or `"parameter"` — which is all the header reader and the
-/// query parsers differ by.
-///
-/// One home because the alternative is one literal name per field, kept in
-/// step with the field it guards by inspection alone: a `since.is_some()`
-/// left standing in the `limit` arm accepts a repeated `limit` and refuses a
-/// `limit` that follows a `since`, and the shape compiles either way.
-pub(super) fn at_most_once<T>(
-    seen: &Option<T>,
-    field_kind: &str,
-    name: &str,
-) -> Result<(), String> {
-    match seen {
-        Some(_) => Err(format!("duplicate {field_kind} '{name}'")),
-        None => Ok(()),
-    }
-}
-
 /// The `410 history_reclaimed` refusal: the position asked for is older
 /// than what can still be answered, and `floor` — when one exists — names
 /// the oldest that can. One construction, shared by the history surface and
@@ -555,5 +436,156 @@ pub(super) fn refuse_unavailable(e: Unavailable) -> Reply {
             TransportError::HistoryCorrupt,
             Some(&format!("journal corrupt at rest; next intact frame at {}", at.0)),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A refusal is a status AND a name together: the body is built through
+    /// the codec's sorting device (byte-deterministic whatever backs
+    /// serde_json's map) and the status comes from the same table the name
+    /// does, so the wire.md pairing is checked rather than repeated.
+    #[test]
+    fn refusals_pair_their_status_with_their_name() {
+        let r = refuse(TransportError::PayloadTooLarge, Some("too big"));
+        assert_eq!(r.status, 413);
+        assert_eq!(
+            String::from_utf8(r.bytes().to_vec()).expect("json"),
+            r#"{"detail":"too big","error":"payload_too_large"}"#
+        );
+        let r = refuse_with(
+            TransportError::BeyondHead,
+            vec![("head", Value::Number(12u64.into()))],
+        );
+        assert_eq!(r.status, 400);
+        assert_eq!(
+            String::from_utf8(r.bytes().to_vec()).expect("json"),
+            r#"{"error":"beyond_head","head":12}"#
+        );
+    }
+
+    /// wire.md §HTTP status codes, BOTH columns — the discipline
+    /// [`code_name`](crate::codec) already gives M10's sixty rejection
+    /// codes. The table is transcribed by hand for the reason
+    /// [`crate::fuzz_support::TRANSPORT_ERRORS`] is: one read out of the
+    /// code under test would agree with whatever that code says.
+    ///
+    /// Four of these — `internal_panic`, `history_io`, `history_corrupt`,
+    /// `no_journal` — are reachable from no test in the tree (three need
+    /// at-rest journal damage, one cannot arise under this daemon's
+    /// `Fsync` configuration), so their spelling and their status are
+    /// watched here and nowhere else.
+    #[test]
+    fn every_transport_error_pairs_its_documented_name_with_its_documented_status() {
+        let table: Vec<(TransportError, &'static str, u16)> = vec![
+            (TransportError::MalformedSessionRequest, "malformed_session_request", 400),
+            (TransportError::MalformedChallenge, "malformed_challenge", 400),
+            (TransportError::MalformedOpAt, "malformed_op_at", 400),
+            (TransportError::WriteAtHistory, "write_at_history", 400),
+            (TransportError::BeyondHead, "beyond_head", 400),
+            (TransportError::NotAPosition, "not_a_position", 400),
+            (TransportError::MalformedAt, "malformed_at", 400),
+            (TransportError::MalformedChanges, "malformed_changes", 400),
+            (TransportError::MalformedHttp, "malformed_http", 400),
+            (TransportError::NoSuchEndpoint, "no_such_endpoint", 404),
+            (TransportError::MethodNotAllowed, "method_not_allowed", 405),
+            (TransportError::HistoryReclaimed, "history_reclaimed", 410),
+            (TransportError::PayloadTooLarge, "payload_too_large", 413),
+            (TransportError::InternalPanic, "internal_panic", 500),
+            (TransportError::HistoryIo, "history_io", 500),
+            (TransportError::HistoryCorrupt, "history_corrupt", 500),
+            (TransportError::NoJournal, "no_journal", 500),
+            (TransportError::HistoryBusy, "history_busy", 503),
+            (TransportError::ScanBusy, "scan_busy", 503),
+        ];
+        for &(err, name, status) in &table {
+            assert_eq!(err.name(), name, "wire name drifted for {err:?}");
+            assert_eq!(err.status(), status, "{name} must be answered with {status}");
+            // The one builder every refusal goes through takes both from
+            // the error, so the pairing a client dispatches on is checked
+            // where it is produced rather than only where it is declared.
+            let r = refuse(err, None);
+            assert_eq!(r.status, status, "{name}: the reply's status");
+            let body: Value = serde_json::from_slice(r.bytes()).expect("json");
+            assert_eq!(body["error"].as_str(), Some(name), "{name}: the reply's body");
+            // The fuzz oracle's list is the other hand transcription of
+            // this column; a name in one and not the other is a drift.
+            assert!(
+                crate::fuzz_support::TRANSPORT_ERRORS.contains(&name),
+                "{name} is answerable but absent from the fuzz oracle's list"
+            );
+        }
+        // Both transcriptions of wire.md's error column, measured against
+        // each other. A NEW variant is caught by the compiler at `name`
+        // and `status`; this catches one that reaches the wire without
+        // reaching either list. The `+ 2` is the handshake's PAIR, neither
+        // a `TransportError` variant — both are built at their own site per
+        // AUTH-6.5, [`refuse_handshake`]: `session_rejected`, the 401, and
+        // `prefix_blocked`, the 403 that is its one exception. The oracle's
+        // list names both because wire.md's error column does; no fuzz
+        // daemon is supplied a blocked-prefix list, so the second is a name
+        // no fuzz target is answered today.
+        for handshake_name in ["session_rejected", "prefix_blocked"] {
+            assert!(
+                crate::fuzz_support::TRANSPORT_ERRORS.contains(&handshake_name),
+                "{handshake_name} is answerable but absent from the fuzz oracle's list"
+            );
+        }
+        #[cfg(feature = "observe")]
+        assert_eq!(
+            table.len() + 2,
+            crate::fuzz_support::TRANSPORT_ERRORS.len(),
+            "the two hand transcriptions of wire.md's error column disagree in length"
+        );
+    }
+
+    /// The `scan_busy` refusal's exact body: a transport refusal (no `resp`,
+    /// no `code`) at 503, naming the op it refused beside the detail — the
+    /// bytes wire.md shows.
+    #[test]
+    fn scan_busy_names_the_op_in_a_transport_refusal() {
+        let r = refuse_scan_busy(OpKind::CountFtt);
+        assert_eq!(r.status, 503);
+        assert_eq!(
+            String::from_utf8(r.bytes().to_vec()).expect("json"),
+            r#"{"detail":"all class-scan permits are in use; retry shortly","error":"scan_busy","op":"count_ftt"}"#
+        );
+    }
+
+    /// The body and the type naming it travel together: a bodiless reply
+    /// writes no content headers at all, and a bodied one writes both —
+    /// which is what makes "a 204 that silently drops its bytes" and
+    /// "`Content-Type:` with nothing after it" unconstructible rather than
+    /// merely unwritten.
+    #[test]
+    fn a_bodiless_reply_writes_no_content_headers() {
+        let pre = Reply::preflight();
+        assert!(pre.body.is_none(), "the preflight names no body");
+        assert!(pre.bytes().is_empty());
+        let json = Reply::json(200, obj(vec![("ok", Value::Bool(true))]));
+        let body = json.body.as_ref().expect("a JSON reply names its body");
+        assert_eq!(body.content_type, "application/json");
+        assert_eq!(body.bytes, br#"{"ok":true}"#);
+    }
+
+    /// The preflight advertises exactly the header
+    /// [`read_request`](crate::server::http::read_request) reads.
+    /// The allow-list is one joined `&'static str`, so the header's name
+    /// necessarily appears in it as text rather than as the constant; this
+    /// is what keeps the two one decision. A header the preflight omits is
+    /// one a browser will not send, and that failure appears only
+    /// cross-origin, where this suite's own TCP clients never look.
+    #[test]
+    fn the_preflight_advertises_the_session_header_the_reader_reads() {
+        let pre = Reply::preflight();
+        let allow = pre
+            .headers
+            .iter()
+            .find(|(k, _)| *k == "Access-Control-Allow-Headers")
+            .map(|&(_, v)| v)
+            .expect("the preflight names its allowed headers");
+        assert!(allow.contains(SESSION_HEADER), "{allow} must name {SESSION_HEADER}");
     }
 }

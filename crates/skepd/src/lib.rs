@@ -72,15 +72,26 @@
 
 #![forbid(unsafe_code)]
 
+// The layers, top to bottom. `ARCHITECTURE.md` §The daemon draws them and
+// `tests/it/tidy.rs` checks them: a module names only its own layer and the
+// layers below it.
+
+// The transport, the routes and their vocabulary.
+mod server;
+
+// The session layer.
 mod auth;
-mod classify;
+
+// The write path: every commit, one at a time, and the published head.
+mod write_path;
+
+// The leaves: none knows anything of the daemon.
 mod codec;
 mod history;
 mod limits;
 mod notice;
+mod permits;
 mod serial;
-mod server;
-mod write_path;
 
 /// The shared fuzzing harness (hardening H2): the pure oracle and mutation
 /// logic the tier-1 `#[test]`s and the nightly libFuzzer targets both drive.
@@ -159,7 +170,7 @@ pub use skep_kernel::Seq;
 /// nameable; not a stable API.
 #[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
-pub use history::Permit;
+pub use permits::Permit;
 
 /// The auto-traits this crate promises without saying so. A caller running
 /// the server on a thread it owns depends on `Skepd: Send`, and no signature

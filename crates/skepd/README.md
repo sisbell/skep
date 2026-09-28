@@ -20,10 +20,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **Durability is configuration** — fsync policy and checkpoint
   cadence are chosen here, not baked into the kernel.
 
-A binary crate: run it against a data directory and it serves a
-board; everything it serves is the operation surface of
-[skep-febe](../skep-febe) over the world of
-[skep-engine](../skep-engine).
+A library and a binary. The binary runs against a data directory and
+serves a board; the library (`Daemon`, `serve`) is the same daemon for
+an embedder or a test. Everything it serves is the operation surface
+of [skep-febe](../skep-febe) over the world of
+[skep-engine](../skep-engine); how its modules are layered is in
+[ARCHITECTURE.md](../../ARCHITECTURE.md).
 
 ## License
 

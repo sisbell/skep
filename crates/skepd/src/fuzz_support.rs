@@ -31,7 +31,7 @@ use std::time::Duration;
 use serde_json::{Map, Number, Value};
 use skep_febe::Codec;
 
-use crate::JsonCodec;
+use crate::codec::JsonCodec;
 
 /// SplitMix64 — the deterministic seed source the whole H-suite uses (H3's
 /// pattern); the seed is the entire reproduction.

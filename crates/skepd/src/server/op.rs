@@ -11,9 +11,8 @@ use skep_identity::IdentityState;
 use skep_kernel::{Attestation, Snapshot};
 
 use super::actor::Resolved;
-use super::reply::{
-    credential_refused, op_answer, refuse_scan_busy, with_signal, HttpRequest, Reply,
-};
+use super::reply::{credential_refused, op_answer, refuse_scan_busy, with_signal, Reply};
+use super::request::HttpRequest;
 use super::scan::ScanBusy;
 use super::Daemon;
 use crate::auth::fold::key_set_of;

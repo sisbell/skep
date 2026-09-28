@@ -1,3 +1,4 @@
+use super::marshal::{j_slotspec, j_u64, j_values, j_view};
 use super::*;
 
 /// Leaf strictness: the dotted-decimal grammar admits exactly nonempty
@@ -345,28 +346,6 @@ fn obj_keeps_the_last_of_duplicate_keys() {
     let v = obj(vec![("k", j_u64(1)), ("a", j_u64(9)), ("k", j_u64(2))]);
     assert_eq!(v["k"], j_u64(2), "the last pair given wins");
     assert_eq!(to_bytes(v), br#"{"a":9,"k":2}"#.to_vec(), "and the keys still sort");
-}
-
-/// The class types a `deposit` field can usefully carry are SPELLED
-/// TWICE — M5's set, which its insert door tests a declaration against
-/// and which sits below this crate, and the daemon's own credential
-/// constants, which the fold classifies the pair's `make_link` by — and
-/// the two are pinned EQUAL here, member for member in the set's order,
-/// ENROLL then RETIRE (PUB-2.11, PUB-2.63; RES-249, RES-261). This is
-/// the one place both spellings are in reach: the constants are this
-/// crate's own and no integration suite can name them, and the parse
-/// above is where a declared type enters the daemon. If this fails, an
-/// enrollment a client declares as the fold will classify it is refused
-/// `published_target` at the store — or admitted there and typed as
-/// nothing the fold honors.
-#[test]
-fn the_deposit_class_types_are_the_daemons_enroll_and_retire_constants() {
-    use crate::auth::fold::{T_ENROLL, T_RETIRE};
-    let spelled: Vec<Vec<Nat>> = skep_arrangement::deposit_class_types()
-        .iter()
-        .map(|ty| ty.tumbler().iter().cloned().collect())
-        .collect();
-    assert_eq!(spelled, [T_ENROLL.map(Nat::from).to_vec(), T_RETIRE.map(Nat::from).to_vec()]);
 }
 
 /// THE DOOR splits the presented `attest` from the request: on the

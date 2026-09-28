@@ -1,4 +1,5 @@
-//! `OsEntropy`.
+//! The crate's one source of randomness — the OS, fail-stop — for session
+//! tokens, nonces and tag-3 signatures.
 
 use rand_core::{CryptoRng, RngCore};
 

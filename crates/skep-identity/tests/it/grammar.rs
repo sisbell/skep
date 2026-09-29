@@ -122,25 +122,35 @@ fn insignificant_whitespace_is_bad_record() {
     assert_eq!(err_enroll(crlf.as_bytes()), PayloadError::BadRecord);
 }
 
-/// §2.1 row 5 — a non-shortest escape (`A` where the value is `A`), an
+/// §2.1 row 5 — a non-shortest escape (`\u0041` where the value is `A`), an
 /// escaped `/`, and a `\u` escape for a character above U+001F are each
 /// `bad_record` (AUTH-2.130 clause 3: escape NOTHING else). The backslash is
 /// built at runtime so no source escape is decoded before the JSON sees it.
 ///
-/// The last two are the near-misses of the table's POSITIVE half: `\u0009`
-/// where the canonical form is `\t`, and `\u001F` where it is `\u001f` — each
-/// admitted the moment the encoder adopts that spelling, which is what
-/// [`the_canonical_escape_table_is_pinned_as_bytes`] watches from the emission
-/// side.
+/// `\u0009` and `\u001F` are the near-misses of the table's POSITIVE half —
+/// `\t` is the one's canonical form, `\u001f` the other's. The four after
+/// them are near-misses of its NEGATIVE half where other encoders part from
+/// it: DEL and a C1 control (an encoder keyed on `char::is_control` escapes
+/// both, one keyed on `is_ascii_control` DEL), `<` (an HTML-safe encoder's)
+/// and U+2028 (a JavaScript-safe encoder's). Each row is admitted the moment
+/// the encoder adopts its spelling, which
+/// [`the_canonical_escape_table_is_pinned_as_bytes`] and
+/// [`nothing_above_u001f_is_escaped_even_where_other_encoders_escape`] watch
+/// from the emission side.
 #[test]
 fn non_canonical_escapes_are_bad_record() {
     let h = key_hex(1);
     let bs = char::from(92); // a backslash
-    for body in ["u0041", "/", "u00e9", "u0009", "u001F"] {
+    for body in ["u0041", "/", "u00e9", "u0009", "u001F", "u007f", "u0085", "u003c", "u2028"] {
         let record = format!(
             r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa65-ed25519","key":"{h}","anchor":false,"label":"{bs}{body}"}}]}}"#
         );
-        assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadRecord, "escape {bs}{body}");
+        // The parse itself, not `err_enroll`, so an admitted row names itself.
+        assert_eq!(
+            parse_enroll(record.as_bytes()),
+            Err(PayloadError::BadRecord),
+            "escape {bs}{body}"
+        );
     }
 }
 
@@ -399,6 +409,50 @@ fn a_duplicate_entry_names_the_repeating_entry_index() {
     assert_eq!(err_retire(record.as_bytes()), PayloadError::DuplicateKey(2));
 }
 
+/// AUTH-2.15/AUTH-2.19 item 3 — a duplicate is a repeat of ANY earlier entry,
+/// named at the repeat, wherever its twin sits: every record of two to four
+/// entries carrying exactly one repeated key, at every placement of the pair,
+/// answers `duplicate_key:<j>`, `j` the 1-based index of the pair's second
+/// entry, on both kinds. Row 19 above repeats the entry JUST before, as every
+/// other duplicate the suite spells by hand does, and the stream properties
+/// reach a repeat apart only at random — so a scan that compared neighbours
+/// only (`Vec::dedup`'s rule, or `windows(2)`) keeps every hand-spelled vector
+/// green while admitting a record that names one key twice apart. On a
+/// retirement that is the input `parse_retire`'s POSTCONDITION exists for:
+/// `[a, b, a]` beside an enrolled `{a, b}` passes the arm's whole-set test
+/// (three is not two), empties the set and voids I3 (AUTH-2.97) — and an
+/// emptied set takes a genesis from its registry again, voiding I5
+/// (AUTH-2.100).
+#[test]
+fn a_repeat_of_any_earlier_entry_is_a_duplicate_named_at_the_repeat() {
+    for len in 2..=4 {
+        for first in 0..len {
+            for second in first + 1..len {
+                // Keys 1..=len, the one at `second` replaced by the one at
+                // `first`: exactly one repeated pair.
+                let mut indices: Vec<u8> = (1..=4).take(len).collect();
+                indices[second] = indices[first];
+                let repeat = PayloadError::DuplicateKey(second + 1);
+                let enrollments: Vec<Enrollment> = indices
+                    .iter()
+                    .map(|&i| Enrollment::new(key(i), false, None).expect("label-free"))
+                    .collect();
+                assert_eq!(
+                    parse_enroll(encode_enroll(&enrollments).as_bytes()),
+                    Err(repeat),
+                    "enroll {indices:?}"
+                );
+                let fps: Vec<Fingerprint> = indices.iter().map(|&i| fp(i)).collect();
+                assert_eq!(
+                    parse_retire(encode_retire(&fps).as_bytes()),
+                    Err(repeat),
+                    "retire {indices:?}"
+                );
+            }
+        }
+    }
+}
+
 /// §2.1 row 20 — an empty `keys` or `fingerprints` array is `empty`, never
 /// `nothing_changed` (AUTH-2.16).
 #[test]
@@ -605,6 +659,33 @@ fn the_canonical_escape_table_is_pinned_as_bytes() {
     // emission form pinned above is the one the parser reads back.
     let parsed = ok_enroll(want.as_bytes());
     assert_eq!(parsed[0].label(), Some(label));
+}
+
+/// AUTH-2.130 clause 3's "escape NOTHING else", at the characters other
+/// encoders DO escape: DEL (U+007F) and the C1 controls (U+0080–U+009F),
+/// which `char::is_control` counts with the C0 range and `is_ascii_control`
+/// counts DEL with; `&`, `<` and `>`, which an HTML-safe encoder escapes; and
+/// U+2028 and U+2029, which a JavaScript-safe one does (Go's `encoding/json`
+/// escapes all five by default) — each emitted RAW, beside U+007E and U+00A0
+/// on either side of the DEL–C1 run. The table pin above puts none of these
+/// in its label; I1 compares the encoder with itself over labels, and the
+/// `sig` it spells by hand draws printable ASCII alone — `&`, `<` and `>` at
+/// random, never DEL, a C1 control or U+2028. So a fallback arm spelled
+/// `c.is_control()` or `c.is_ascii_control()` in place of `(c as u32) < 0x20`
+/// — the idiom a reader reaches for, not the rule — keeps every other vector
+/// green while the canonical profile moves (I2, AUTH-2.90): a body spelling
+/// DEL raw refused, one spelling it `\u007f` admitted.
+#[test]
+fn nothing_above_u001f_is_escaped_even_where_other_encoders_escape() {
+    let label = "&<>~\u{7f}\u{80}\u{85}\u{9f}\u{a0}\u{2028}\u{2029}";
+    let record = encode_enroll(&[Enrollment::new(key(1), false, Some(label.to_owned()))
+        .expect("the AUTH-1.24 domain admits every character here")]);
+    let want = format!(
+        r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa65-ed25519","key":"{}","anchor":false,"label":"{label}"}}]}}"#,
+        key_hex(1)
+    );
+    assert_eq!(record, want);
+    assert_eq!(ok_enroll(want.as_bytes())[0].label(), Some(label));
 }
 
 /// `parse(encode(x)) == x` on hand-picked domain corners, the escaper included

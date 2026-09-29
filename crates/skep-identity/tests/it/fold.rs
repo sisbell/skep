@@ -642,6 +642,44 @@ fn the_handoff_latch_fires_on_a_key_from_the_set_above() {
     assert_detail(&fx.classify(&st, &dep), "not_genesis_registry");
 }
 
+/// AUTH-2.71 / AUTH-4.30 (i) — the latch's comparand is the NEAREST keyed set
+/// above the subject and no other: the parent's set where it is non-empty,
+/// the walk climbing past the parent ONLY where it is empty — "the latch
+/// tests a genesis against the set that opens the account above and against
+/// no other set on the board" (AUTH-5.60). Here the subdivision `inc(B, 2)`
+/// and `B` above it are BOTH keyed, with different keys, and the genesis is
+/// one level down at `inc(inc(B, 2), 5)`: naming the subdivision's key
+/// latches, naming `B`'s does not, `B`'s key opening `B` and not the
+/// subdivision. Every other latch vector — and every stream the properties
+/// draw — keys at most ONE account above its subject, where the nearest keyed
+/// set, the farthest and the union of all of them are one set. A walk that
+/// went on past a non-empty parent to the farthest set answers the first cell
+/// here wrongly, and a latch that tested every set above answers the second —
+/// each a fork of the table (I2, AUTH-2.90).
+#[test]
+fn the_handoff_latch_compares_against_the_nearest_keyed_set_and_no_other() {
+    let mut fx = Fixture::new();
+    seat_accounts(&mut fx, &[B_SUBDIVISION, B_SUB_DEEP]);
+    // B holds fp(1); the subdivision, seeded through B's doc 1 with a FRESH
+    // key (so the latch lets it pass), holds fp(2).
+    let st = seed_own(&mut fx, &IdentityState::genesis(), ACCT_A, &[(1, true)]);
+    let dep = fx.enroll_dep(&doc1(ACCT_A), B_SUBDIVISION, &enroll_payload(&[(2, true)]));
+    let (st, v) = fx.step(&st, &dep);
+    assert_honored(&v);
+
+    // The subdivision's own key one level down: the nearest keyed set opens
+    // the subdivision, and the handoff is refused.
+    let dep = fx.enroll_dep(&doc1(B_SUBDIVISION), B_SUB_DEEP, &enroll_payload(&[(2, true)]));
+    assert_detail(&fx.classify(&st, &dep), "not_genesis_registry");
+    // B's key in the same place: B's set opens B, not the subdivision, and it
+    // is no comparand while a nearer set is keyed.
+    let dep = fx.enroll_dep(&doc1(B_SUBDIVISION), B_SUB_DEEP, &enroll_payload(&[(1, true)]));
+    match assert_honored(&fx.classify(&st, &dep)) {
+        Effect::Genesis { account, .. } => assert_eq!(*account, addr(B_SUB_DEEP)),
+        other => panic!("expected a genesis effect, got {other:?}"),
+    }
+}
+
 /// AUTH-2.96 row 53 (the latch) — a FRESH-key genesis at `inc(B, 2)` is
 /// `Honored(Genesis)`: the comparand is `B`'s set and the key stands in no set
 /// above.

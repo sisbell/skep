@@ -9,7 +9,9 @@
 
 use crate::common;
 
-use common::{addr, assert_honored, doc1, enroll_payload, fp, key, Fixture, TestCtx, ACCT_A};
+use common::{
+    addr, assert_detail, assert_honored, doc1, enroll_payload, fp, key, Fixture, TestCtx, ACCT_A,
+};
 use sha2::{Digest, Sha256};
 use skep_identity::{
     canonical_record, framed, parse_enroll, parse_retire, record_bytes, single_address, AlgRow,
@@ -596,28 +598,39 @@ fn error_types_lift_into_dyn_error() {
 /// as the ctx — a ctx only through these impls, which the orphan rule leaves
 /// the host no way to write, only a newtype forwarding every fact. The test
 /// is a compile-time witness of all four impls, and each call is held to the
-/// same call on the concrete ctx.
+/// same call on the concrete ctx — over TWO deposits, because `is_account` and
+/// `is_published` share one signature and a forwarding impl can answer one
+/// with the other: on a deposit every fact honors, both answer `true` for the
+/// address the fold asks each about, and only a `to` naming no account —
+/// where `is_account` answers `false` and `is_published`, asked the same
+/// address, `true` — tells them apart.
 #[test]
 fn a_ctx_behind_a_trait_object_reaches_the_fold_and_the_read() {
     let mut fx = Fixture::new();
-    let dep = fx.enroll_dep(&doc1(ACCT_A), ACCT_A, &enroll_payload(&[(1, true)]));
+    let honored = fx.enroll_dep(&doc1(ACCT_A), ACCT_A, &enroll_payload(&[(1, true)]));
+    // A later child of ACCT_A at which no principal is registered.
+    let no_account = fx.enroll_dep(&doc1(ACCT_A), &[1, 1, 0, 5, 2], &enroll_payload(&[(2, true)]));
     let st = IdentityState::genesis();
-    let want = fx.classify(&st, &dep);
-    assert_honored(&want);
+    assert_honored(&fx.classify(&st, &honored));
+    assert_detail(&fx.classify(&st, &no_account), "malformed_shape");
     let borrowed: &dyn FoldCtx = &fx.ctx;
-    assert_eq!(st.classify(&fx.types, &borrowed, &dep.as_link_deposit()), want, "&dyn FoldCtx");
     let boxed: Box<dyn FoldCtx> = Box::new(fx.ctx.clone());
-    assert_eq!(st.classify(&fx.types, &boxed, &dep.as_link_deposit()), want, "Box<dyn FoldCtx>");
+    for (name, dep) in [("honored", &honored), ("no_account", &no_account)] {
+        let want = fx.classify(&st, dep);
+        let dep = dep.as_link_deposit();
+        assert_eq!(st.classify(&fx.types, &borrowed, &dep), want, "{name} through &dyn FoldCtx");
+        assert_eq!(st.classify(&fx.types, &boxed, &dep), want, "{name} through Box<dyn FoldCtx>");
+    }
     let values: &dyn Values = &fx.ctx;
     assert_eq!(
-        record_bytes(&values, &dep.home, &dep.from),
-        record_bytes(&fx.ctx, &dep.home, &dep.from),
+        record_bytes(&values, &honored.home, &honored.from),
+        record_bytes(&fx.ctx, &honored.home, &honored.from),
         "&dyn Values"
     );
     let boxed_values: Box<dyn Values> = Box::new(fx.ctx.clone());
     assert_eq!(
-        record_bytes(&boxed_values, &dep.home, &dep.from),
-        record_bytes(&fx.ctx, &dep.home, &dep.from),
+        record_bytes(&boxed_values, &honored.home, &honored.from),
+        record_bytes(&fx.ctx, &honored.home, &honored.from),
         "Box<dyn Values>"
     );
 }

@@ -18,6 +18,12 @@
 //! Beside the map, the one rule of `lib.rs`'s "Traceability" a test can
 //! hold: the signed-ops design record is cited as "the design record", never
 //! as "the record" alone — read over every comment, not the code.
+//!
+//! The module-map and citation checks look for violations a clean tree does
+//! not hold, and on such a tree each passes whether its readers can see or
+//! not; so each is held, beside it, to the input those readers exist for,
+//! where a reader gone blind fails. The bullet check needs no such control:
+//! on a clean tree its reading is live, every module a bullet it must find.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -102,6 +108,36 @@ fn the_fold_sits_on_top_and_entry_and_write_types_are_leaves() {
         }
     }
     assert!(faults.is_empty(), "lib.rs's module map does not hold:\n{}", faults.join("\n"));
+}
+
+/// The check above looks for edges the tree does not have, and every sibling
+/// path `src/` spells is a `use crate::<module>::…` line, whose module its
+/// first token names before any brace group — so the path reader's other
+/// forms, and the detector of a line after the inline test module, are
+/// exercised by nothing there, and on a clean tree the check passes whether
+/// they work or not. Held here to what each must yield: a brace group at the
+/// ROOT, whose members each name their own module, with a member's nested
+/// group and an `as` rename; a `super::` chain; and a stray line after an
+/// inline `mod tests`. A reader that stopped expanding the root's groups —
+/// reading `crate::` alone, which names no module — would pass every edge
+/// spelled that way.
+#[test]
+fn the_module_map_readers_see_the_forms_src_does_not_spell() {
+    let code = "use crate::{key::Fingerprint as Fp,\n    state::{IdentityState, HasIdentity}};\n\
+                let deep = super::super::state::X;\n";
+    let paths: Vec<String> = named_paths(code).into_iter().map(|(_, path)| path).collect();
+    assert_eq!(
+        paths,
+        [
+            "crate::key::Fingerprint",
+            "crate::state::IdentityState",
+            "crate::state::HasIdentity",
+            "super::super::state::X",
+        ]
+    );
+    let tail = "fn a() {}\n#[cfg(test)]\nmod tests {\n    fn t() {}\n}\n";
+    assert_eq!(after_test_module(tail), None, "the test module is the last item");
+    assert_eq!(after_test_module(&format!("{tail}fn stray() {{}}\n")), Some(6), "a stray line");
 }
 
 /// `lib.rs`'s "What lives here" says ONE BULLET PER MODULE, NAMED FIRST —
@@ -191,6 +227,34 @@ fn the_design_record_is_never_cited_as_the_record_alone() {
         }
     }
     assert!(faults.is_empty(), "lib.rs's \"Traceability\" does not hold:\n{}", faults.join("\n"));
+}
+
+/// The check above looks for a violation the tree does not hold, so on a
+/// clean tree it passes whether its two readers can see or not; held here to
+/// the input they exist for. `comment_runs` joins a run of comment lines into
+/// one text, so a bare citation a reflow split across two lines reads whole,
+/// and `bare_record_citation` finds it in either capitalization and with the
+/// possessive, while passing the design record's full citation, the phrase in
+/// quotes, a phrase whose next word cites nothing, and the phrase inside a
+/// longer word. The comment marker is built at runtime, so this file's own
+/// scan finds no comment in these lines.
+#[test]
+fn the_citation_readers_find_a_bare_citation() {
+    let marker = "/".repeat(3);
+    let text = format!("fn a() {{}}\n{marker} per the\n{marker} record §4.2 (C)\nfn b() {{}}\n");
+    let runs = comment_runs(&text);
+    assert_eq!(runs, [(2, "per the record §4.2 (C)".to_owned())]);
+    assert_eq!(bare_record_citation(&runs[0].1), Some("the record §4.2"));
+    assert_eq!(bare_record_citation("as The record's D13 rules"), Some("The record's D13"));
+    for passes in [
+        "the design record §4.2",
+        "\"the record\", or",
+        "the record value §2",
+        "the record's entries",
+        "breathe record §2",
+    ] {
+        assert_eq!(bare_record_citation(passes), None, "{passes:?}");
+    }
 }
 
 /// The module a line of `lib.rs` declares — `mod key;`, with or without a

@@ -83,17 +83,19 @@ pub enum Effect {
     },
 }
 
-/// AUTH-2.54 — the inert vocabulary. A VERDICT and never an `Err` — it
-/// reaches no `Result` in this crate — so it is not a `std::error::Error`,
-/// and deliberately not `Display` either: a refusal's wire detail is
-/// [`token`]'s string on every arm but [`MalformedPayload`], whose detail is
-/// the JOIN, so a `Display` writing `token()` alone would answer
-/// `malformed_payload` where the detail is `malformed_payload:bad_record` —
-/// half a wire detail, from the one trait a consumer reaches for without
-/// reading anything. `{}` is refused so that reach lands on [`detail`], which
-/// WRITES the join; a consumer marshals a refusal by citing that one method
-/// and never spells `"malformed_payload:"` for itself. [`PayloadError`],
-/// whose token is whole on every arm, does implement `Display`.
+/// AUTH-2.54 — the inert vocabulary. A VERDICT and never a PUBLIC `Err` — the
+/// one `Result` it rides in is the fold's private early exit,
+/// `subject_and_record`, whose refusal the arm entry hands straight back as a
+/// [`Verdict`] — so it is not a `std::error::Error`, and deliberately not
+/// `Display` either: a refusal's wire detail is [`token`]'s string on every
+/// arm but [`MalformedPayload`], whose detail is the JOIN, so a `Display`
+/// writing `token()` alone would answer `malformed_payload` where the detail
+/// is `malformed_payload:bad_record` — half a wire detail, from the one trait
+/// a consumer reaches for without reading anything. `{}` is refused so that
+/// reach lands on [`detail`], which WRITES the join; a consumer marshals a
+/// refusal by citing that one method and never spells `"malformed_payload:"`
+/// for itself. [`PayloadError`], whose token is whole on every arm, does
+/// implement `Display`.
 ///
 /// [`token`]: Inert::token
 /// [`detail`]: Inert::detail

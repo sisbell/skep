@@ -5,9 +5,12 @@
 //! it never names a concrete `World` (composition contract); the fold's host
 //! implements [`Values`] and [`FoldCtx`] for its assembled world — the
 //! engine in AUTH-2.79's cast, skepd's `WorldCtx` as built (the crate-level
-//! composition note) — and a mirror for its projection. What the fold derives
-//! from those facts — its ω projections (AUTH-2.35) and the doc-1 address
-//! (AUTH-2.126) — is the fold's own, private to `state.rs`.
+//! composition note) — and a mirror for its projection. A host holding its
+//! world behind a reference or a box — `&dyn FoldCtx`, `Box<dyn FoldCtx>` —
+//! writes no impl of its own: both traits forward through `&T` and `Box<T>`,
+//! as std's own traits do. What the fold derives from those facts — its ω
+//! projections (AUTH-2.35) and the doc-1 address (AUTH-2.126) — is the fold's
+//! own, private to `state.rs`.
 
 use skep_address::{Address, Tumbler};
 
@@ -128,4 +131,56 @@ pub struct Owner {
     pub prefix: Address,
     /// Whether the owner is the bootstrap principal.
     pub is_bootstrap: bool,
+}
+
+/// [`Values`] through a reference — the forwarding impl std gives its own
+/// object-safe traits (`Display for &T`, `Read for &mut R`). An
+/// `impl Values` parameter is a generic with an implicit `Sized` bound, so
+/// `dyn Values` itself never satisfies one: this and the `Box` impl below are
+/// what let a host holding its world as `&dyn Values` or `Box<dyn Values>` —
+/// and, with [`FoldCtx`]'s pair below, as a `dyn FoldCtx` — hand it to
+/// [`record_bytes`](crate::record_bytes) and the fold. The orphan rule leaves
+/// such a host no impl of its own to write.
+impl<T: Values + ?Sized> Values for &T {
+    fn value_at(&self, at: &Tumbler) -> Option<&[u8]> {
+        (**self).value_at(at)
+    }
+}
+
+/// [`Values`] through a box, as through a reference above.
+impl<T: Values + ?Sized> Values for Box<T> {
+    fn value_at(&self, at: &Tumbler) -> Option<&[u8]> {
+        (**self).value_at(at)
+    }
+}
+
+/// [`FoldCtx`] through a reference, as [`Values`] above: every fact is the
+/// held ctx's own, answered as of that ctx's commit.
+impl<T: FoldCtx + ?Sized> FoldCtx for &T {
+    fn owner_of(&self, a: &Address) -> Option<Owner> {
+        (**self).owner_of(a)
+    }
+
+    fn is_account(&self, a: &Address) -> bool {
+        (**self).is_account(a)
+    }
+
+    fn is_published(&self, doc: &Address) -> bool {
+        (**self).is_published(doc)
+    }
+}
+
+/// [`FoldCtx`] through a box, as through a reference above.
+impl<T: FoldCtx + ?Sized> FoldCtx for Box<T> {
+    fn owner_of(&self, a: &Address) -> Option<Owner> {
+        (**self).owner_of(a)
+    }
+
+    fn is_account(&self, a: &Address) -> bool {
+        (**self).is_account(a)
+    }
+
+    fn is_published(&self, doc: &Address) -> bool {
+        (**self).is_published(doc)
+    }
 }

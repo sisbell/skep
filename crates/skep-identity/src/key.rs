@@ -366,12 +366,13 @@ impl PublicKey {
 
     /// THE KEY PIN, READ — the raw value split where the Ed25519 half begins,
     /// its LAST [`ED25519_KEY_LEN`] bytes at every row, the post-quantum half
-    /// everything before them. Both half readers take this one split;
-    /// [`PublicKey::from_halves`] writes the same pin.
+    /// everything before them: std's `split_last_chunk`, whose one `None` — a
+    /// value shorter than the half — no `ALGS` row admits. Both half readers
+    /// take this one split; [`PublicKey::from_halves`] writes the same pin.
     fn halves(&self) -> (&[u8], &[u8; ED25519_KEY_LEN]) {
-        let raw = self.raw();
-        let (pq, tail) = raw.split_at(raw.len() - ED25519_KEY_LEN);
-        (pq, tail.try_into().expect("every ALGS row's raw value ends in an Ed25519 key"))
+        self.raw()
+            .split_last_chunk::<ED25519_KEY_LEN>()
+            .expect("every ALGS row's raw value ends in an Ed25519 key")
     }
 
     /// THE KEY PIN, WRITTEN — a hybrid key from its two halves, the

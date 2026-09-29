@@ -9,15 +9,16 @@
 
 use crate::common;
 
-use common::{addr, fp, key, TestCtx, ACCT_A};
+use common::{addr, assert_honored, doc1, enroll_payload, fp, key, Fixture, TestCtx, ACCT_A};
 use sha2::{Digest, Sha256};
 use skep_identity::{
     canonical_record, framed, parse_enroll, parse_retire, record_bytes, single_address, AlgRow,
-    CredentialKind, Enrollment, Fingerprint, HasIdentity, IdentityState, Inert, LabelError,
-    ParseKeyError, PayloadError, PublicKey, SigAlgRow, ALGS, ALG_FNDSA512_PREVIEW_ED25519,
-    ALG_MLDSA65_ED25519, ED25519_KEY_LEN, ENROLL_TYPE, ENTRY_TAG, FNDSA512_PREVIEW_ED25519_KEY_LEN,
-    FNDSA512_PREVIEW_KEY_LEN, KEY_TAG, MAX_RECORD_BYTES, MLDSA65_ED25519_KEY_LEN, MLDSA65_KEY_LEN,
-    NODE_HELLO_TAG, RETIRE_TYPE, SESSION_TAG, SESSION_TAG_V2, SIG_ALGS, TAGS,
+    CredentialKind, Enrollment, Fingerprint, FoldCtx, HasIdentity, IdentityState, Inert,
+    LabelError, ParseKeyError, PayloadError, PublicKey, SigAlgRow, Values, ALGS,
+    ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519, ED25519_KEY_LEN, ENROLL_TYPE, ENTRY_TAG,
+    FNDSA512_PREVIEW_ED25519_KEY_LEN, FNDSA512_PREVIEW_KEY_LEN, KEY_TAG, MAX_RECORD_BYTES,
+    MLDSA65_ED25519_KEY_LEN, MLDSA65_KEY_LEN, NODE_HELLO_TAG, RETIRE_TYPE, SESSION_TAG,
+    SESSION_TAG_V2, SIG_ALGS, TAGS,
 };
 
 /// AUTH-1.18/AUTH-1.21 — the record cap's VALUE, not merely its name: 128 KiB,
@@ -585,6 +586,40 @@ fn error_types_lift_into_dyn_error() {
     assert_eq!(boxed.to_string(), LabelError::Newline.to_string());
     let boxed = lift(PayloadError::DuplicateKey(4));
     assert_eq!(boxed.to_string(), "duplicate_key:4");
+}
+
+/// The fold's seam forwards through `&T` and `Box<T>`, as std's own traits
+/// do, so a host holding its world behind a trait object reaches the fold
+/// and the read. An `impl FoldCtx` parameter is a generic with an implicit
+/// `Sized` bound: `dyn FoldCtx` itself never satisfies one, so a host holding
+/// `&dyn FoldCtx` or `Box<dyn FoldCtx>` hands the fold that reference or box
+/// as the ctx — a ctx only through these impls, which the orphan rule leaves
+/// the host no way to write, only a newtype forwarding every fact. The test
+/// is a compile-time witness of all four impls, and each call is held to the
+/// same call on the concrete ctx.
+#[test]
+fn a_ctx_behind_a_trait_object_reaches_the_fold_and_the_read() {
+    let mut fx = Fixture::new();
+    let dep = fx.enroll_dep(&doc1(ACCT_A), ACCT_A, &enroll_payload(&[(1, true)]));
+    let st = IdentityState::genesis();
+    let want = fx.classify(&st, &dep);
+    assert_honored(&want);
+    let borrowed: &dyn FoldCtx = &fx.ctx;
+    assert_eq!(st.classify(&fx.types, &borrowed, &dep.as_link_deposit()), want, "&dyn FoldCtx");
+    let boxed: Box<dyn FoldCtx> = Box::new(fx.ctx.clone());
+    assert_eq!(st.classify(&fx.types, &boxed, &dep.as_link_deposit()), want, "Box<dyn FoldCtx>");
+    let values: &dyn Values = &fx.ctx;
+    assert_eq!(
+        record_bytes(&values, &dep.home, &dep.from),
+        record_bytes(&fx.ctx, &dep.home, &dep.from),
+        "&dyn Values"
+    );
+    let boxed_values: Box<dyn Values> = Box::new(fx.ctx.clone());
+    assert_eq!(
+        record_bytes(&boxed_values, &dep.home, &dep.from),
+        record_bytes(&fx.ctx, &dep.home, &dep.from),
+        "Box<dyn Values>"
+    );
 }
 
 /// The vocabularies a consumer tallies are usable as MAP KEYS. `Eq` without

@@ -111,7 +111,12 @@ impl IdentityState {
     /// debug assertions that condition names are reached from here.
     ///
     /// [`step`]: IdentityState::step
-    pub fn classify(&self, types: &TypeAddrs, ctx: &impl FoldCtx, dep: &LinkDeposit) -> Verdict {
+    pub fn classify(
+        &self,
+        types: &TypeAddrs,
+        ctx: &impl FoldCtx,
+        dep: &LinkDeposit<'_>,
+    ) -> Verdict {
         // 1 — kind (AUTH-2.66 item 1).
         let Some(kind) = types.kind_of(dep.ty) else {
             return Verdict::NotCredential;
@@ -150,7 +155,7 @@ impl IdentityState {
         &self,
         types: &TypeAddrs,
         ctx: &impl FoldCtx,
-        dep: &LinkDeposit,
+        dep: &LinkDeposit<'_>,
     ) -> (IdentityState, Verdict) {
         let verdict = self.classify(types, ctx, dep);
         let next = match &verdict {
@@ -235,7 +240,12 @@ impl IdentityState {
     /// `detail` pin, AUTH-2.68 — the cost gradient runs the wrong way and an
     /// implementation MUST NOT reorder cheap-first). The claim carries NO
     /// payload: this arm reads no bytes (AUTH-2.48).
-    fn claim_path(&self, ctx: &impl FoldCtx, dep: &LinkDeposit, home_account: &Address) -> Verdict {
+    fn claim_path(
+        &self,
+        ctx: &impl FoldCtx,
+        dep: &LinkDeposit<'_>,
+        home_account: &Address,
+    ) -> Verdict {
         // 1 — shape: `from = {H}` in address form, `to = ∅` (AUTH-2.48; the
         // fold cannot tell the two empty-`to` wire forms apart, AUTH-2.49).
         if single_address(dep.from).as_ref() != Some(home_account) || !dep.to.is_empty() {
@@ -278,14 +288,19 @@ impl IdentityState {
     /// different point among its own conditions (AUTH-2.67 item 2,
     /// [`claim_path`]).
     ///
+    /// The arms get what this path OWNS — the subject and the parsed entries,
+    /// by value — and nothing after them reads either, so an honored post
+    /// MOVES the subject and the parse's keys into its effect: no key is
+    /// copied between the parse and the effect it rides in.
+    ///
     /// [`claim_path`]: IdentityState::claim_path
     fn payload_path<T>(
         &self,
         ctx: &impl FoldCtx,
-        dep: &LinkDeposit,
+        dep: &LinkDeposit<'_>,
         home_account: &Address,
         parse: impl FnOnce(&[u8]) -> Result<Vec<T>, PayloadError>,
-        arms: impl FnOnce(&Address, &[T]) -> Verdict,
+        arms: impl FnOnce(Address, Vec<T>) -> Verdict,
     ) -> Verdict {
         let (subject, bytes) = match subject_and_record(ctx, dep) {
             Ok(found) => found,
@@ -298,7 +313,7 @@ impl IdentityState {
         if !homed_in_doc_one(dep, home_account) {
             return Verdict::Inert(Inert::NotDocOne);
         }
-        arms(&subject, &entries)
+        arms(subject, entries)
     }
 
     /// AUTH-2.66 item 4, ENROLL — the enrollment kind's two rows of
@@ -309,7 +324,7 @@ impl IdentityState {
     fn enroll_path(
         &self,
         ctx: &impl FoldCtx,
-        dep: &LinkDeposit,
+        dep: &LinkDeposit<'_>,
         home_account: &Address,
     ) -> Verdict {
         self.payload_path(ctx, dep, home_account, parse_enroll, |subject, enrollments| {
@@ -323,14 +338,14 @@ impl IdentityState {
     fn enroll_arms(
         &self,
         ctx: &impl FoldCtx,
-        subject: &Address,
+        subject: Address,
         home_account: &Address,
-        enrollments: &[Enrollment],
+        enrollments: Vec<Enrollment>,
     ) -> Verdict {
-        let set = self.key_set(subject);
+        let set = self.key_set(&subject);
         // AUTH-2.69's `H == A` — the record is homed in the subject's OWN
         // space.
-        let own_space = home_account == subject;
+        let own_space = *home_account == subject;
         // Holder arm (AUTH-2.69): `H == A ∧ !S.is_empty()`.
         if own_space && !set.is_empty() {
             // `added` is the entries the set ADMITS — fingerprints it has never
@@ -338,7 +353,7 @@ impl IdentityState {
             // mutator's PRECONDITION, discharged here (I4 AUTH-2.98; I9
             // AUTH-2.104).
             let added: Vec<Enrolled> = enrollments
-                .iter()
+                .into_iter()
                 .filter(|enrollment| set.admits(&Fingerprint::of(&enrollment.key)))
                 .map(enrolled_of)
                 .collect();
@@ -346,7 +361,7 @@ impl IdentityState {
                 return Verdict::Inert(Inert::NothingChanged);
             }
             return Verdict::Honored(Effect::Enroll {
-                account: subject.clone(),
+                account: subject,
                 added,
             });
         }
@@ -355,19 +370,19 @@ impl IdentityState {
             // fires at most once per account by construction (the set never
             // re-empties — I3 AUTH-2.97, I5 AUTH-2.100). The registry is
             // consulted here ONLY (AUTH-2.64).
-            let registry = self.genesis_registry(ctx, subject);
+            let registry = self.genesis_registry(ctx, &subject);
             if registry.as_ref() == Some(home_account) {
                 // THE HANDOFF LATCH (AUTH-2.71), INSIDE the cell the genesis
                 // arm would otherwise honor and AHEAD of its post — so
                 // AUTH-2.72's written order below is unmoved, and no refusal
                 // moves at an account the genesis arm never reached. What the
                 // latch IS, scope and comparand, is its own card.
-                if self.handoff_latch_fires(ctx, subject, enrollments) {
+                if self.handoff_latch_fires(ctx, &subject, &enrollments) {
                     return Verdict::Inert(Inert::NotGenesisRegistry);
                 }
-                let keys: Vec<Enrolled> = enrollments.iter().map(enrolled_of).collect();
+                let keys: Vec<Enrolled> = enrollments.into_iter().map(enrolled_of).collect();
                 return Verdict::Honored(Effect::Genesis {
-                    account: subject.clone(),
+                    account: subject,
                     keys,
                 });
             }
@@ -463,7 +478,7 @@ impl IdentityState {
     fn retire_path(
         &self,
         ctx: &impl FoldCtx,
-        dep: &LinkDeposit,
+        dep: &LinkDeposit<'_>,
         home_account: &Address,
     ) -> Verdict {
         self.payload_path(ctx, dep, home_account, parse_retire, |subject, fps| {
@@ -477,18 +492,17 @@ impl IdentityState {
     /// AUTH-2.76).
     fn retire_arms(
         &self,
-        subject: &Address,
+        subject: Address,
         home_account: &Address,
-        fps: &[Fingerprint],
+        fps: Vec<Fingerprint>,
     ) -> Verdict {
-        let set = self.key_set(subject);
+        let set = self.key_set(&subject);
         // AUTH-2.74's `H == A` — the record is homed in the subject's OWN
         // space.
-        let own_space = home_account == subject;
+        let own_space = *home_account == subject;
         // Holder arm (AUTH-2.74): `H == A ∧ !S.is_empty()`.
         if own_space && !set.is_empty() {
-            let removed: Vec<Fingerprint> =
-                fps.iter().filter(|fp| set.contains(fp)).copied().collect();
+            let removed: Vec<Fingerprint> = fps.into_iter().filter(|fp| set.contains(fp)).collect();
             if removed.is_empty() {
                 return Verdict::Inert(Inert::NothingChanged);
             }
@@ -498,7 +512,7 @@ impl IdentityState {
                 return Verdict::Inert(Inert::WouldEmpty);
             }
             return Verdict::Honored(Effect::Retire {
-                account: subject.clone(),
+                account: subject,
                 removed,
             });
         }
@@ -679,7 +693,7 @@ fn doc_1_of(a: &Address) -> Address {
 /// it and each answers `Inert::NotDocOne` itself; WHERE each tests it is that
 /// arm's own precedence pin (AUTH-2.66 for enroll/retire, AUTH-2.67 item 2
 /// for the claim), which is what its call site says.
-fn homed_in_doc_one(dep: &LinkDeposit, home_account: &Address) -> bool {
+fn homed_in_doc_one(dep: &LinkDeposit<'_>, home_account: &Address) -> bool {
     *dep.home == doc_1_of(home_account)
 }
 
@@ -691,7 +705,10 @@ fn homed_in_doc_one(dep: &LinkDeposit, home_account: &Address) -> bool {
 /// then the one payload read (AUTH-2.36). Shape checks precede
 /// `record_bytes` (AUTH-2.66: a two-span `to` beside an over-cap `from` is
 /// `malformed_shape`, never `too_large`).
-fn subject_and_record(ctx: &impl FoldCtx, dep: &LinkDeposit) -> Result<(Address, Vec<u8>), Inert> {
+fn subject_and_record(
+    ctx: &impl FoldCtx,
+    dep: &LinkDeposit<'_>,
+) -> Result<(Address, Vec<u8>), Inert> {
     if dep.from.is_empty() {
         return Err(Inert::MalformedShape);
     }
@@ -704,11 +721,12 @@ fn subject_and_record(ctx: &impl FoldCtx, dep: &LinkDeposit) -> Result<(Address,
 }
 
 /// AUTH-2.52 — what an honored enrollment KEEPS from a parsed entry: the key
-/// and the flag it enters under. The label is informational (AUTH-1.23) and
-/// is not a fold input, so it stops here — the one place that is decided.
-fn enrolled_of(enrollment: &Enrollment) -> Enrolled {
+/// and the flag it enters under, MOVED out of the entry. The label is
+/// informational (AUTH-1.23) and is not a fold input, so it drops here with
+/// the rest of the entry — the one place that is decided.
+fn enrolled_of(enrollment: Enrollment) -> Enrolled {
     Enrolled {
-        key: enrollment.key.clone(),
+        key: enrollment.key,
         anchor: enrollment.anchor,
     }
 }

@@ -101,7 +101,8 @@ struct TailCut {
 
 /// Pass-1 result (§7): the committed head (§7's `W`), the committed records a
 /// fold may read, the corrupt runs, the commit chain's running value and the
-/// verdicts of its links, and where the tail to truncate begins. A scan that
+/// verdicts of its links, where the tail to truncate begins, and — for a scan
+/// collected to a boundary — what the marker closing it carries. A scan that
 /// could not enumerate the frame stream produces none of this — it answers
 /// [`ScanFail`] — so nothing here is a PREFIX of what the region holds. What
 /// it COLLECTED is bounded by the caller's own fold bound, which is why the
@@ -121,12 +122,13 @@ pub(crate) struct ScanOutcome {
     chain_at_base: [u8; 32],
     /// The boundary this scan COLLECTED to, as [`scan`] was called with it —
     /// `None` for the whole scanned region. Applied by
-    /// [`ScanOutcome::collect_commit`], the only writer of the two collections
-    /// below and of the chain captured at the bound, and read back by
-    /// [`ScanOutcome::covers`] to hold a fold to it: records above it were
-    /// read and dropped, so a fold past it is one this outcome cannot answer.
-    /// Bounding the collection is what keeps a bounded replay of one
-    /// transaction from materializing the whole retained window.
+    /// [`ScanOutcome::collect_commit`], the only writer of the records
+    /// collected below, of the nearest boundary below the bound and of the
+    /// marker captured at it, and read back by [`ScanOutcome::covers`] to hold
+    /// a fold to it: records above it were read and dropped, so a fold past it
+    /// is one this outcome cannot answer. Bounding the collection is what
+    /// keeps a bounded replay of one transaction from materializing the whole
+    /// retained window.
     bound: Option<u64>,
     /// The last COMMITTED marker's `last_seq`, floored at `S_load` — §7's `W`
     /// (if no committed marker sits above the loaded checkpoint it is
@@ -140,14 +142,13 @@ pub(crate) struct ScanOutcome {
     /// which is where the order, the range and the one-coordinate-once rule
     /// are settled.
     committed_records: Vec<CommittedRecord>,
-    /// The transaction boundaries a bounded replay may be asked about, in scan
-    /// order — the `Seq` values [`crate::Kernel::transact`] returned. Written
-    /// only by [`ScanOutcome::collect_commit`]; read by
-    /// [`ScanOutcome::require_boundary`], which reads the requested value, and
-    /// by [`ScanOutcome::nearest_boundary_below`], which reads the boundaries
-    /// below it — so a boundary the collection bound excluded is one nothing
-    /// can ask for.
-    committed_boundaries: Vec<u64>,
+    /// The greatest committed boundary strictly below `bound`, floored at the
+    /// base — what a bounded read refuses a non-boundary with. Seeded with
+    /// `s_load` and only ever raised, by [`ScanOutcome::collect_commit`], so a
+    /// boundary below the base never names it: a segment straddling the base
+    /// contributes boundaries with no base left to fold from. Never raised
+    /// when `bound` is `None`, which asks no boundary question.
+    nearest_below_bound: u64,
     /// Corrupt runs in scan order — what [`ScanOutcome::halt_to_head`] and
     /// [`ScanOutcome::halt_anywhere`] classify, through
     /// [`ScanOutcome::fatal_run`]. The verdict on a run belongs to those, not
@@ -214,21 +215,28 @@ pub(crate) struct ScanOutcome {
     /// damage model). Recorded by the walk itself, not refused; ordered by
     /// [`ScanOutcome::chain_verdict`].
     uncommitted_intact: Option<u64>,
-    /// The running chain AT `bound`: the `chain` of the committed marker
-    /// whose `last_seq` is `bound`, above the base — `None` when `bound` is
-    /// `None`, is not a committed boundary above the base, or is the base's
-    /// own seq (the base answers that itself). What
-    /// [`crate::Kernel::chain_at`] answers, captured by
-    /// [`ScanOutcome::collect_commit`] as the marker closing `bound` is taken,
-    /// in the pass that verifies every link to the journal's end; read
-    /// through [`ScanOutcome::chain_at_boundary`], which reads its presence as
-    /// the membership test and holds its caller to the bound it is keyed on.
-    chain_at_bound: Option<[u8; 32]>,
-    /// The signature slot of the marker closing the bound — `(sig_alg, sig)`
-    /// as the marker carries them — captured beside `chain_at_bound` at the
-    /// same marker and read through [`ScanOutcome::attestation_at_boundary`]
-    /// (signed ops: the slot's read-back, [`crate::Kernel::attestation_at`]).
-    slot_at_bound: Option<(u8, Vec<u8>)>,
+    /// The committed marker closing `bound`, above the base — `None` when
+    /// `bound` is `None`, is not a committed boundary above the base, or is
+    /// the base's own seq (the base answers that itself). Captured by
+    /// [`ScanOutcome::collect_commit`]; read through
+    /// [`ScanOutcome::closing_marker`], which reads its presence as the
+    /// membership test and holds its caller to the bound it is keyed on.
+    closing_at_bound: Option<ClosingMarker>,
+}
+
+/// What the committed marker closing a bounded scan's `bound` carries —
+/// captured once, by [`ScanOutcome::collect_commit`], as that marker is taken
+/// in the pass that verifies every link to the journal's end. Its presence is
+/// the membership test every bounded read makes of its boundary, and its
+/// fields are what the reads ask of one: the commit chain there
+/// ([`crate::Kernel::chain_at`]) and the signature slot
+/// ([`crate::Kernel::attestation_at`]).
+#[derive(Clone)]
+pub(crate) struct ClosingMarker {
+    /// The marker's `chain`: the commit chain at the boundary.
+    pub(crate) chain: [u8; 32],
+    /// The marker's signature slot, `None` for the empty one.
+    pub(crate) attestation: Option<Attestation>,
 }
 
 /// What a caller halts on: the coordinate naming the damage, and its account
@@ -287,23 +295,23 @@ impl ScanOutcome {
     /// ([`PendingTxn::recomputed_chain`]), else the first CHAIN BREAK is
     /// recorded at its `last_seq`; the running chain then continues from the
     /// marker's own claim, so one edit is one verdict at its own coordinate,
-    /// and at the collection bound it is captured for
-    /// [`ScanOutcome::chain_at_boundary`]. AT the base, the marker's stored
+    /// and the marker closing the collection bound is captured for
+    /// [`ScanOutcome::closing_marker`]. AT the base, the marker's stored
     /// chain must be `chain_at_base` — two stored values compared, nothing
     /// recomputed — else THE BASE'S OWN LINK failed. BELOW the base, the base
     /// embodies the transaction and nothing is judged, exactly as a corrupt
     /// run there is harmless. Recorded, never refused: the callers halt.
     ///
     /// Then the collection: the marker's `last_seq` raises the committed head
-    /// and — when this scan's collection bound admits it — joins the boundary
-    /// set, and the group's records join the committed set, filtered the same
-    /// way. The head is deliberately UNBOUNDED: it is recovery's own fold
-    /// bound, so it must name the last committed marker wherever it sits. The
-    /// two COLLECTIONS obey `bound`, and per RECORD rather than per group, so
-    /// a transaction straddling the bound keeps the half below it. That
+    /// and — below this scan's collection bound — the nearest boundary below
+    /// it, and the group's records join the committed set, those at or below
+    /// the bound. The head is deliberately UNBOUNDED: it is recovery's own
+    /// fold bound, so it must name the last committed marker wherever it sits.
+    /// What is COLLECTED obeys `bound`, and per RECORD rather than per group,
+    /// so a transaction straddling the bound keeps the half below it. That
     /// asymmetry is the whole of what `bound` means, and stating it here is
-    /// what keeps it off the walk — this is the only writer of either
-    /// collection, so the rule has one site.
+    /// what keeps it off the walk — this is the only writer of either, so the
+    /// rule has one site.
     fn collect_commit(&mut self, marker: &Marker, group: PendingTxn) {
         if marker.last_seq > self.s_load {
             if group.recomputed_chain(marker) != marker.chain {
@@ -311,23 +319,31 @@ impl ScanOutcome {
             }
             self.chain_head = marker.chain;
             if self.bound == Some(marker.last_seq) {
-                self.chain_at_bound = Some(marker.chain);
-                // The slot, read whole and interpreted not at all: the
-                // decoder admitted it under the one-spelling-of-empty rule,
-                // so a non-zero tag here has bytes and tag 0 has none.
-                self.slot_at_bound = Some((marker.sig_alg, marker.sig.clone()));
+                self.closing_at_bound = Some(ClosingMarker {
+                    chain: marker.chain,
+                    // The slot, interpreted not at all: the decoder admitted
+                    // it under the one-spelling-of-empty rule, so a non-zero
+                    // tag here has bytes.
+                    attestation: (marker.sig_alg != SIG_ALG_UNSIGNED).then(|| {
+                        Attestation::new(marker.sig_alg, marker.sig.clone())
+                            .expect("the decoder admits a non-zero tag only with a non-empty blob")
+                    }),
+                });
             }
         } else if marker.last_seq == self.s_load && marker.chain != self.chain_at_base {
             self.base_mismatch.get_or_insert(self.s_load);
         }
         self.committed_head = self.committed_head.max(marker.last_seq);
-        let bound = self.bound;
-        let collected = |seq: u64| bound.is_none_or(|b| seq <= b);
-        if collected(marker.last_seq) {
-            self.committed_boundaries.push(marker.last_seq);
+        if self.bound.is_some_and(|b| marker.last_seq < b) {
+            self.nearest_below_bound = self.nearest_below_bound.max(marker.last_seq);
         }
-        self.committed_records
-            .extend(group.records.into_iter().filter(|entry| collected(entry.seq)));
+        let bound = self.bound;
+        self.committed_records.extend(
+            group
+                .records
+                .into_iter()
+                .filter(|entry| bound.is_none_or(|b| entry.seq <= b)),
+        );
     }
 
     /// Why a RECOVERY cannot answer from this scan, if it cannot: the first
@@ -404,37 +420,12 @@ impl ScanOutcome {
         self.bound.is_none_or(|collected| bound <= collected)
     }
 
-    /// Whether `at` is one of the committed transaction boundaries this scan
-    /// saw — the values [`crate::Kernel::transact`] returns, and the only ones
-    /// a bounded replay may answer at. `Err` carries
-    /// [`ScanOutcome::nearest_boundary_below`] `at`.
-    pub(crate) fn require_boundary(&self, at: u64) -> Result<(), u64> {
-        if self.committed_boundaries.contains(&at) {
-            return Ok(());
-        }
-        Err(self.nearest_boundary_below(at))
-    }
-
-    /// The greatest committed boundary below `at`, never below the base: the
-    /// base's own seq is itself a boundary, and a segment straddling it
-    /// contributes boundaries below it that no longer have a base to fold
-    /// from. What a refusal of a non-boundary names as the value a caller may
-    /// safely re-ask with.
-    fn nearest_boundary_below(&self, at: u64) -> u64 {
-        self.committed_boundaries
-            .iter()
-            .copied()
-            .filter(|&b| b < at)
-            .fold(self.s_load, u64::max)
-    }
-
-    /// The commit chain at boundary `at` — the one question
-    /// [`crate::Kernel::chain_at`] asks of a scan above its base: the `chain`
-    /// of the committed marker closing `at`, which this scan captured as it
-    /// verified it. The capture is keyed on the collection bound, so it is
-    /// also the membership test: a committed marker closed at `at` exactly
-    /// when one was captured, and one answer serves both questions. `Err` is
-    /// [`ScanOutcome::require_boundary`]'s: the nearest boundary below.
+    /// The committed marker closing boundary `at` — the one question a bounded
+    /// read asks of a scan above its base: whether a committed marker closes
+    /// `at`, and what it carries. The capture is keyed on the collection bound,
+    /// so its presence is the membership test, and one answer serves every
+    /// read. `Err` is the nearest boundary below `at`, never below the base —
+    /// the value a refusal of a non-boundary names.
     ///
     /// PRECONDITION — this scan COLLECTED to exactly `at`, above its base
     /// ([`scan`]'s `bound` was `Some(at)`, and `at > s_load`). The capture is
@@ -442,39 +433,15 @@ impl ScanOutcome {
     /// other would answer every boundary as absent: a caller's bug, answered
     /// as one, as [`ScanOutcome::records_to`] answers a fold past its
     /// collection.
-    pub(crate) fn chain_at_boundary(&self, at: u64) -> Result<[u8; 32], u64> {
+    pub(crate) fn closing_marker(&self, at: u64) -> Result<&ClosingMarker, u64> {
         assert!(
             self.bound == Some(at) && at > self.s_load,
-            "chain at {at} asked of a scan collected to {:?} above {}: the capture is keyed \
+            "boundary {at} asked of a scan collected to {:?} above {}: the capture is keyed \
              on the collection bound (Base::scan)",
             self.bound,
             self.s_load
         );
-        self.chain_at_bound.ok_or_else(|| self.nearest_boundary_below(at))
-    }
-
-    /// The signature slot of the marker closing the boundary `at` — the
-    /// [`Attestation`] the transaction committed under, or `None` for the
-    /// empty slot — answering [`crate::Kernel::attestation_at`] under the same
-    /// precondition and the same refusal as [`ScanOutcome::chain_at_boundary`]:
-    /// `at` is the bound this scan collected to, above the base, and `Err`
-    /// carries the nearest boundary below where `at` is none.
-    pub(crate) fn attestation_at_boundary(&self, at: u64) -> Result<Option<Attestation>, u64> {
-        assert!(
-            self.bound == Some(at) && at > self.s_load,
-            "attestation at {at} asked of a scan collected to {:?} above {}: the capture is \
-             keyed on the collection bound (Base::scan)",
-            self.bound,
-            self.s_load
-        );
-        match &self.slot_at_bound {
-            None => Err(self.nearest_boundary_below(at)),
-            Some((SIG_ALG_UNSIGNED, _)) => Ok(None),
-            Some((sig_alg, sig)) => Ok(Some(
-                Attestation::new(*sig_alg, sig.clone())
-                    .expect("the decoder admits a non-zero tag only with a non-empty blob"),
-            )),
-        }
+        self.closing_at_bound.as_ref().ok_or(self.nearest_below_bound)
     }
 
     /// The committed records a fold over `(s_load, bound]` must apply, in
@@ -704,9 +671,9 @@ fn read_segment(path: &Path, s_load: u64) -> Result<Vec<u8>, ScanFail> {
 /// `Seq`-ordered stream.
 ///
 /// `bound` is the boundary the caller will fold to, when it has one: committed
-/// records and boundaries above it are not COLLECTED, since no caller reads
-/// them, so a bounded replay of one transaction above a checkpoint no longer
-/// materializes every committed record in the retained window. `None` collects
+/// records above it are not COLLECTED, since no caller reads them, so a
+/// bounded replay of one transaction above a checkpoint does not materialize
+/// every committed record in the retained window. `None` collects
 /// the whole scanned region, which recovery needs — its own bound is
 /// [`ScanOutcome::committed_head`], and that is not known until this returns.
 /// Every segment above the base is still READ either way: the corrupt-run
@@ -759,11 +726,11 @@ fn read_segment(path: &Path, s_load: u64) -> Result<Vec<u8>, ScanFail> {
 /// own — a shape no writer of this format produces, is recorded as
 /// [`ScanOutcome::uncommitted_intact`] at the group's own last seq, naming
 /// the transaction that was edited rather than the next one, whose link then
-/// also fails. Neither moves `committed_head`, the collections or the tail
-/// cut: the scan records, the callers halt. And ONE VALUE IS CAPTURED, by
-/// [`ScanOutcome::collect_commit`] too: the running chain at `bound`, which
-/// [`ScanOutcome::chain_at_boundary`] answers [`crate::Kernel::chain_at`]
-/// with.
+/// also fails. Neither moves `committed_head`, what is collected or the tail
+/// cut: the scan records, the callers halt. And ONE MARKER IS CAPTURED, by
+/// [`ScanOutcome::collect_commit`] too: the committed marker closing `bound`,
+/// its chain and its signature slot, which [`ScanOutcome::closing_marker`]
+/// answers every bounded read's boundary judgment with.
 ///
 /// `segs` must be ASCENDING by `firstSeq`, as [`super::segment::list_segments`]
 /// produces it. The skip rule ([`scanned_above`]), the tail resolution and the
@@ -788,15 +755,14 @@ pub(crate) fn scan(
         bound,
         committed_head: s_load,
         committed_records: Vec::new(),
-        committed_boundaries: Vec::new(),
+        nearest_below_bound: s_load,
         runs: Vec::new(),
         tail: None,
         chain_head: chain_at_base,
         chain_break: None,
         base_mismatch: None,
         uncommitted_intact: None,
-        chain_at_bound: None,
-        slot_at_bound: None,
+        closing_at_bound: None,
     };
     // The scanned-segment index and the BYTE offset just past the last
     // committed marker's frame — where the tail begins. Resolved to a

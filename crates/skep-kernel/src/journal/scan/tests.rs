@@ -232,7 +232,6 @@ fn a_txn_repeating_a_seq_never_commits() {
     let out = scan(&segs, 1, None, CHAIN_GENESIS).unwrap();
     assert_eq!(out.committed_head, 1, "the repeat must not commit");
     assert!(out.committed_records.is_empty());
-    assert!(out.committed_boundaries.is_empty());
     // Every frame intact and the marker not closing them: the
     // edited-transaction verdict is RECORDED at the group's last seq —
     // the scan refuses nothing itself; the callers halt on it.
@@ -273,7 +272,6 @@ fn a_marker_that_disagrees_with_its_records_never_commits() {
     let out = scan(&segs, 4, None, CHAIN_GENESIS).unwrap();
     assert_eq!(out.committed_head, 4, "a short marker must not commit");
     assert!(out.committed_records.is_empty());
-    assert!(out.committed_boundaries.is_empty());
     // Recorded at the GROUP's last seq (7), not the marker's forged 5.
     assert_eq!(out.uncommitted_intact(), Some(7));
 }
@@ -983,35 +981,41 @@ fn the_cut_names_the_segment_holding_the_last_committed_marker() {
 }
 
 #[test]
-fn require_boundary_answers_from_the_committed_markers() {
+fn a_boundary_is_what_a_committed_marker_closes_and_its_nearest_never_lies_below_the_base() {
     let dir = tempdir().unwrap();
     let mut writer = fresh_writer(dir.path());
     write_txn(&mut writer, 1, vec![rec(10)]);
-    write_txn(&mut writer, 2, vec![rec(20), rec(21)]); // a composite: boundary 3
-    write_txn(&mut writer, 4, vec![rec(40)]);
+    write_txn(&mut writer, 2, vec![rec(20), rec(21), rec(22)]); // seqs 2..=4: boundary 4
+    write_txn(&mut writer, 5, vec![rec(50)]);
     let segs = list_segments(dir.path()).unwrap();
+    let closed = |s_load: u64, at: u64| {
+        scan(&segs, s_load, Some(at), CHAIN_GENESIS)
+            .unwrap()
+            .closing_marker(at)
+            .map(|_| ())
+    };
 
-    let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
-    assert_eq!(out.require_boundary(3), Ok(()));
+    assert_eq!(closed(0, 4), Ok(()));
     // A composite's interior Seq was never a boundary (§3).
-    assert_eq!(out.require_boundary(2), Err(1));
+    assert_eq!(closed(0, 3), Err(1));
 
-    // The active segment is always scanned, so it reports boundaries
-    // below a base too — but those have no base left to fold from, and
-    // the nearest ANSWERABLE boundary is the base's own seq.
-    let out = scan(&segs, 3, None, CHAIN_GENESIS).unwrap();
-    assert_eq!(out.require_boundary(4), Ok(()));
-    assert_eq!(out.require_boundary(2), Err(3));
+    // The active segment is always scanned, so it reports boundaries below
+    // a base too — but those have no base left to fold from. Above a base
+    // at 2, which no collected marker closes, the interior 3's nearest is
+    // the base's own seq, never the 1 below it: the floor, not a collected
+    // boundary, keeps it there.
+    assert_eq!(closed(2, 5), Ok(()));
+    assert_eq!(closed(2, 3), Err(2));
 }
 
 #[test]
 fn a_bound_keeps_what_a_fold_to_it_reads_and_drops_the_rest() {
     // A bounded scan collects for a fold to `bound` and nothing else, so a
     // bounded replay of one transaction above a base does not materialize
-    // the whole retained window. What a fold to `bound` reads is exactly
-    // `bound` itself, the boundaries below it, and the records at or below
-    // it — so the edge is inclusive at all three, and a bound that dropped
-    // its own coordinate would answer a short world.
+    // the whole retained window. What a read at `bound` takes from the scan
+    // is the records at or below `bound`, and the judgment of `bound` itself
+    // — so the edge is inclusive at both, and a bound that dropped its own
+    // coordinate would answer a short world.
     let dir = tempdir().unwrap();
     let mut writer = fresh_writer(dir.path());
     write_txn(&mut writer, 1, vec![rec(10)]);
@@ -1021,8 +1025,7 @@ fn a_bound_keeps_what_a_fold_to_it_reads_and_drops_the_rest() {
 
     let out = scan(&segs, 0, Some(3), CHAIN_GENESIS).unwrap();
     assert_eq!(committed_seqs(&out), vec![1, 2, 3], "the bound is inclusive");
-    assert_eq!(out.require_boundary(3), Ok(()), "…of its own boundary too");
-    assert_eq!(out.require_boundary(1), Ok(()));
+    assert!(out.closing_marker(3).is_ok(), "…of its own boundary too");
     // The head and the cut are NOT bounded: recovery folds to the first and
     // truncates at the second, and both must name the whole scanned region.
     assert_eq!(out.committed_head, 4);
@@ -1032,17 +1035,17 @@ fn a_bound_keeps_what_a_fold_to_it_reads_and_drops_the_rest() {
     // is filtered per record, not discarded whole.
     let out = scan(&segs, 0, Some(2), CHAIN_GENESIS).unwrap();
     assert_eq!(committed_seqs(&out), vec![1, 2]);
-    // …and 3 is then a boundary nothing can ask about, so the nearest
-    // answerable one is 1 — never the interior coordinate 2.
-    assert_eq!(out.require_boundary(3), Err(1));
+    // …and the bound cuts the composite at its interior 2, whose judgment
+    // names 1 — never 2 itself.
+    assert_eq!(out.closing_marker(2).map(|_| ()), Err(1));
 }
 
 #[test]
 fn the_chain_at_a_boundary_is_its_capture_and_its_absence_the_nearest_below() {
     // One capture answers both of `chain_at`'s questions: a scan collected
     // to a boundary holds the chain the marker closing it carries, and a
-    // scan collected to an interior coordinate holds none — answered, as
-    // `require_boundary` answers it, with the nearest boundary below.
+    // scan collected to an interior coordinate holds none — answered with
+    // the nearest boundary below.
     let dir = tempdir().unwrap();
     let mut writer = fresh_writer(dir.path());
     write_txn(&mut writer, 1, vec![rec(10)]);
@@ -1050,19 +1053,46 @@ fn the_chain_at_a_boundary_is_its_capture_and_its_absence_the_nearest_below() {
     write_txn(&mut writer, 4, vec![rec(40)]);
     let segs = list_segments(dir.path()).unwrap();
     let starts = frame_starts(&segs[0].path);
+    let chain_closing =
+        |out: &ScanOutcome, at: u64| out.closing_marker(at).map(|closing| closing.chain);
     // Frames: 0=T1 rec, 1=T1 marker, 2..=3=T2 recs, 4=T2 marker, 5=T3 rec, 6=T3 marker.
     let at_3 = scan(&segs, 0, Some(3), CHAIN_GENESIS).unwrap();
-    assert_eq!(at_3.chain_at_boundary(3), Ok(chain_of_marker_at(&segs[0].path, starts[4])));
+    assert_eq!(chain_closing(&at_3, 3), Ok(chain_of_marker_at(&segs[0].path, starts[4])));
     let at_4 = scan(&segs, 0, Some(4), CHAIN_GENESIS).unwrap();
-    assert_eq!(at_4.chain_at_boundary(4), Ok(chain_of_marker_at(&segs[0].path, starts[6])));
+    assert_eq!(chain_closing(&at_4, 4), Ok(chain_of_marker_at(&segs[0].path, starts[6])));
     // A composite's interior coordinate closes no marker.
     let at_2 = scan(&segs, 0, Some(2), CHAIN_GENESIS).unwrap();
-    assert_eq!(at_2.chain_at_boundary(2), Err(1));
+    assert_eq!(chain_closing(&at_2, 2), Err(1));
+}
+
+#[test]
+fn the_closing_marker_carries_its_slot_as_the_attestation_it_committed_under() {
+    // The slot is interpreted once, where the marker closing the bound is
+    // captured: the empty slot is `None`, a filled one the `Attestation` the
+    // transaction committed under — for that transaction alone.
+    let dir = tempdir().unwrap();
+    let mut writer = fresh_writer(dir.path());
+    let signed = Attestation::new(1, vec![0xA5; 5]).unwrap();
+    write_txn(&mut writer, 1, vec![rec(10)]);
+    writer
+        .commit_txn(2, vec![rec(20)], Some(&signed), |_| {})
+        .expect("fixture commit");
+    write_txn(&mut writer, 3, vec![rec(30)]);
+    let segs = list_segments(dir.path()).unwrap();
+    let slot_at = |at: u64| {
+        scan(&segs, 0, Some(at), CHAIN_GENESIS)
+            .unwrap()
+            .closing_marker(at)
+            .map(|closing| closing.attestation.clone())
+    };
+    assert_eq!(slot_at(1), Ok(None));
+    assert_eq!(slot_at(2), Ok(Some(signed)));
+    assert_eq!(slot_at(3), Ok(None));
 }
 
 #[test]
 #[should_panic(expected = "keyed on the collection bound")]
-fn a_chain_asked_of_a_scan_not_collected_to_it_is_refused_as_the_callers_bug() {
+fn a_boundary_asked_of_a_scan_not_collected_to_it_is_refused_as_the_callers_bug() {
     // The capture is keyed on the collection bound and on nothing else, so
     // a scan collected to anything but the boundary asked would answer a
     // boundary `transact` returned as no boundary at all.
@@ -1070,7 +1100,7 @@ fn a_chain_asked_of_a_scan_not_collected_to_it_is_refused_as_the_callers_bug() {
     let mut writer = fresh_writer(dir.path());
     write_txn(&mut writer, 1, vec![rec(10)]);
     let segs = list_segments(dir.path()).unwrap();
-    let _ = scan(&segs, 0, None, CHAIN_GENESIS).unwrap().chain_at_boundary(1);
+    let _ = scan(&segs, 0, None, CHAIN_GENESIS).unwrap().closing_marker(1);
 }
 
 /// Byte offset just past the last INTACT frame (walks until a bad frame).

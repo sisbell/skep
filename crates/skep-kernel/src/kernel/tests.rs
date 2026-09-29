@@ -115,6 +115,107 @@ fn transact_attested_in_memory_drops_the_value_and_the_read_back_is_unjournaled(
     assert!(matches!(kernel.attestation_at(s), Err(HistoryError::Unjournaled)));
 }
 
+/// [`Kernel::attestation_at`] runs the derivation [`Kernel::chain_at`] runs,
+/// its base capped one below the boundary so that the marker closing it is
+/// read: every refusal up to the boundary judgment is the same refusal at
+/// the same coordinate — beyond the head, at a composite's interior, and
+/// over damage at rest anywhere in the scanned region.
+#[test]
+fn attestation_at_refuses_as_chain_at_does() {
+    let dir = tempfile::tempdir().unwrap();
+    let kernel =
+        Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new()).unwrap();
+    kernel
+        .transact::<_, ()>(&[], |stg| {
+            stg.push(10);
+            stg.push(20); // a composite: seqs 1..=2, boundary 2
+            Ok(())
+        })
+        .unwrap();
+    let (_, head) = kernel
+        .transact::<_, ()>(&[], |stg| {
+            stg.push(30);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(head, Seq(3));
+    // The two reads' answers at one boundary, side by side.
+    let both = |at: Seq| {
+        (
+            kernel.chain_at(at).map(|_| ()),
+            kernel.attestation_at(at).map(|_| ()),
+        )
+    };
+    match both(Seq(4)) {
+        (
+            Err(HistoryError::BeyondHead { head: chain }),
+            Err(HistoryError::BeyondHead { head: slot }),
+        ) => assert_eq!((chain, slot), (head, head)),
+        other => panic!("beyond the head: {other:?}"),
+    }
+    match both(Seq(1)) {
+        (
+            Err(HistoryError::NotABoundary { nearest: chain }),
+            Err(HistoryError::NotABoundary { nearest: slot }),
+        ) => assert_eq!((chain, slot), (Seq(0), Seq(0))),
+        other => panic!("a composite's interior: {other:?}"),
+    }
+    // Rot in the composite's first record: a corrupt run landing on its
+    // second record, which both reads halt on — at the head as well, since
+    // the scan's verdicts are at any height.
+    let seg = journal::segment_path(dir.path(), 1);
+    let mut data = fs::read(&seg).unwrap();
+    data[journal::FRAME_HEADER_LEN + 1] ^= 0xFF;
+    fs::write(&seg, &data).unwrap();
+    match both(head) {
+        (
+            Err(HistoryError::Corruption { at: chain, .. }),
+            Err(HistoryError::Corruption { at: slot, .. }),
+        ) => assert_eq!((chain, slot), (Seq(2), Seq(2))),
+        other => panic!("over damage at rest: {other:?}"),
+    }
+}
+
+/// The one place the two reads part: a checkpoint's own seq with the segment
+/// below it reclaimed. The chain there is the base's own, answered from the
+/// checkpoint's header; the slot is the marker's, which no checkpoint
+/// carries and the journal no longer holds — so the slot's read refuses
+/// where the chain's answers, naming the checkpoint as the floor.
+#[test]
+fn a_checkpoints_own_seq_with_the_segment_below_reclaimed_answers_the_chain_and_not_the_slot() {
+    let dir = tempfile::tempdir().unwrap();
+    let kernel =
+        Kernel::<Vec<Vec<u8>>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
+            .unwrap(); // retain 1: the checkpoint's floor is its own seq
+    for _ in 0..5 {
+        // ~300 KiB each: four fill seg-1 past the rotation threshold, and
+        // the fifth rotates into seg-5.
+        kernel
+            .transact::<_, ()>(&[], |stg| {
+                stg.push(vec![7u8; 300 * 1024]);
+                Ok(())
+            })
+            .unwrap();
+    }
+    assert_eq!(kernel.checkpoint().unwrap(), Seq(5));
+    assert!(
+        !journal::segment_path(dir.path(), 1).exists(),
+        "the checkpoint's reclamation dropped the segment holding 1..=4"
+    );
+    assert_eq!(kernel.chain_at(Seq(5)).unwrap(), kernel.chain_head());
+    let slot = kernel.attestation_at(Seq(5));
+    assert!(
+        matches!(
+            slot,
+            Err(HistoryError::Reclaimed {
+                floor: Some(Seq(5)),
+                cause: None
+            })
+        ),
+        "got {slot:?}"
+    );
+}
+
 /// [`Kernel::newest_checkpoint`] (QUEUE item 10 piece 2, the head's `base`):
 /// `None` until a checkpoint exists, then what its header attests — the
 /// checkpointed seq, the chain at it (equal to [`Kernel::chain_head`]), and
@@ -738,7 +839,7 @@ fn a_journal_whose_frame_stream_cannot_be_enumerated_refuses_to_open() {
         let mut writer = fresh_writer(dir.path());
         let mut evil = Vec::new();
         while evil.len() < 256 * 1024 {
-            evil.extend_from_slice(b"SKJ4");
+            evil.extend_from_slice(&journal::MAGIC);
             evil.extend_from_slice(&(64 * 1024u32).to_le_bytes()); // a len that fits
             evil.extend_from_slice(&0u32.to_le_bytes()); // a crc that will not
             evil.extend_from_slice(&[0u8; 4]);

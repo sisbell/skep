@@ -5,7 +5,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::*;
-use crate::mutilate::{append_bytes, ckpt_file, flip_byte, seg_file};
+use crate::mutilate::{append_bytes, ckpt_file, flip_byte, seg_file, FRAME_MAGIC};
 use skep_kernel::HistoryError;
 use tempfile::tempdir;
 
@@ -106,7 +106,7 @@ fn world_at_halts_when_the_frame_stream_cannot_be_enumerated() {
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
     let mut evil = Vec::new();
     while evil.len() < 256 * 1024 {
-        evil.extend_from_slice(b"SKJ4");
+        evil.extend_from_slice(FRAME_MAGIC);
         evil.extend_from_slice(&(64 * 1024u32).to_le_bytes()); // a len that fits
         evil.extend_from_slice(&0u32.to_le_bytes()); // a crc that will not
         evil.extend_from_slice(&[0u8; 4]);
@@ -304,7 +304,7 @@ fn world_at_ignores_the_suffix_a_racing_append_can_leave() {
     assert_eq!(world_items(&k.world_at(Seq(2)).unwrap()), vec![10, 20]);
 
     // A frame torn mid-write: a header claiming a payload that never landed.
-    let mut torn = b"SKJ4".to_vec();
+    let mut torn = FRAME_MAGIC.to_vec();
     torn.extend_from_slice(&4096u32.to_le_bytes()); // a length…
     torn.extend_from_slice(&0u32.to_le_bytes()); // …a crc…
     torn.extend_from_slice(b"xyz"); // …and the payload stops here

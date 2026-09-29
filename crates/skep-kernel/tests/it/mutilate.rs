@@ -89,7 +89,7 @@ pub fn append_bytes(path: &Path, bytes: &[u8]) {
 /// The frame header: magic + len + crc.
 pub const FRAME_HEADER_LEN: usize = 12;
 /// The sync word every frame of this build opens with.
-const FRAME_MAGIC: &[u8; 4] = b"SKJ4";
+pub const FRAME_MAGIC: &[u8; 4] = b"SKJ4";
 /// The payload tags.
 pub const RECORD_TAG: u32 = 0;
 pub const MARKER_TAG: u32 = 1;

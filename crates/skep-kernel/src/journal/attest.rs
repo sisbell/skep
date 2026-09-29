@@ -3,12 +3,11 @@
 use std::fmt;
 
 /// The signature slot's EMPTY tag: unsigned, what every transaction that
-/// carries no [`Attestation`] writes. The pairs the design names — `1` =
-/// ML-DSA-65 + Ed25519 (the ruled default), `3` = FN-DSA-512 + Ed25519 (a
-/// preview; `2` stays free for the final FIPS 206) — are written by
-/// [`crate::Kernel::transact_attested`] under a value the dispatched write
-/// path admitted and read by a verifier beside the table; a change of pair is
-/// a verifier update, never a stamp bump.
+/// carries no [`Attestation`] writes, and the one tag no signature is made
+/// under. Every other tag is the verifier's to assign — which pair it names,
+/// and a blob's layout under it, are the verifier's table and not this
+/// kernel's ([`Attestation`]) — so a change of pair is a verifier update,
+/// never a stamp bump.
 pub(super) const SIG_ALG_UNSIGNED: u8 = 0;
 
 /// THE ATTESTATION a transaction's commit marker carries (signed ops; the

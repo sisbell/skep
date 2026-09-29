@@ -80,7 +80,8 @@ pub enum OpenError {
     },
     /// Durable committed data the recovered state needs cannot be read, or
     /// is not the history it claims to be. These conditions reach here, in
-    /// the order they speak ([`crate::Kernel::open`]'s refusal precedence):
+    /// the order they speak (where the group as a whole sits among `open`'s
+    /// other refusals is [`crate::Kernel::open`]'s REFUSAL PRECEDENCE):
     ///
     /// 1. a DAMAGED SYNC WORD opening the first scanned segment — a word
     ///    shaped like another format's stamp on a frame whose successor
@@ -321,9 +322,9 @@ pub enum HistoryError {
     /// only `open`'s first-sync-word probe names — a bounded read truncates
     /// nothing, so its own scan meets that frame as a corrupt run instead.
     /// And the fold's two — an undecodable record, a `Seq` presented twice —
-    /// reach [`crate::Kernel::world_at`] and not [`crate::Kernel::chain_at`],
-    /// which folds nothing: the chain is over the framed bytes, and those
-    /// verify.
+    /// reach [`crate::Kernel::world_at`] and neither
+    /// [`crate::Kernel::chain_at`] nor [`crate::Kernel::attestation_at`],
+    /// which fold nothing: what they read is framed bytes, and those verify.
     Corruption {
         /// See [`OpenError::Corruption`].
         at: Seq,

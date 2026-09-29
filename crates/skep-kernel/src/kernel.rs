@@ -400,6 +400,23 @@ impl<W: WorldState> Kernel<W> {
     /// exactly as given — which is why that value must already carry its own
     /// derived hints ([`WorldState::rebuild_derived`]'s genesis obligation).
     ///
+    /// REFUSAL PRECEDENCE — the steps above are the order in which refusals
+    /// speak: [`OpenError::InvalidConfig`] precedes the lock, the lock
+    /// precedes any read of the journal, [`OpenError::BadCheckpoint`]
+    /// precedes the first-sync-word probe — the first scanned segment's
+    /// opening is read once the base has said where the scan begins, and
+    /// before a byte of the scan — which answers [`OpenError::ForeignFormat`]
+    /// for a journal of another format and [`OpenError::Corruption`] for one
+    /// damaged sync word; and EVERY route to `Corruption` —
+    /// [`OpenError::Corruption`] lists them in the order they speak —
+    /// precedes the tail truncation, which is why a halt never cuts anything.
+    ///
+    /// CALLER CONTRACT — `genesis` (= Σ₀) MUST be byte-identical on every
+    /// `open()` of a given journal: recovery folds journaled DELTAS onto it,
+    /// never onto a journaled root; a drifting `genesis` silently
+    /// mis-recovers. M2 cannot check this (ASN-0047's fixed Σ₀ satisfies it
+    /// by construction).
+    ///
     /// DAMAGE MODEL — three outcomes, pinned case by case by the chain's
     /// tamper matrix (`tests/it/chain.rs`; QUEUE item 10, piece (b)) against
     /// a FILE-LEVEL WRITER of the data directory who can rewrite any byte and
@@ -496,27 +513,6 @@ impl<W: WorldState> Kernel<W> {
     /// committed head, §7's torn tail, and the transaction is cut without a
     /// word, though its CRC proves these are the bytes that were written.
     /// Closing it amends §7's tail rule.
-    ///
-    /// REFUSAL PRECEDENCE — the steps above are the order in which refusals
-    /// speak: [`OpenError::InvalidConfig`] precedes the lock, the lock
-    /// precedes any read of the journal, [`OpenError::BadCheckpoint`]
-    /// precedes the first-sync-word probe — the first scanned segment's
-    /// opening is read once the base has said where the scan begins, and
-    /// before a byte of the scan — which answers [`OpenError::ForeignFormat`]
-    /// for a journal of another format and [`OpenError::Corruption`] for one
-    /// damaged sync word; and EVERY route to `Corruption`, in the order they
-    /// speak — the damaged sync word, an unenumerable or oversized segment,
-    /// the classified corrupt run, the base's own link, the intact
-    /// transaction no intact marker closes, the chain break, the exhausted
-    /// `Seq` order, and the fold's own verdict on an undecodable or repeated
-    /// record — precedes the tail truncation, which is why a halt never cuts
-    /// anything.
-    ///
-    /// CALLER CONTRACT — `genesis` (= Σ₀) MUST be byte-identical on every
-    /// `open()` of a given journal: recovery folds journaled DELTAS onto it,
-    /// never onto a journaled root; a drifting `genesis` silently
-    /// mis-recovers. M2 cannot check this (ASN-0047's fixed Σ₀ satisfies it
-    /// by construction).
     pub fn open(cfg: KernelConfig, genesis: W) -> Result<Self, OpenError> {
         cfg.validate().map_err(OpenError::InvalidConfig)?;
         let (root, journal, journaled) = match &cfg.durability {
@@ -847,11 +843,9 @@ impl<W: WorldState> Kernel<W> {
     /// under [`Durability::InMemory`] no marker exists at all — the value is
     /// dropped with the frames it would have ridden.
     ///
-    /// WHO CALLS THIS is the producer set the design states (§5.5): a
-    /// dispatched publish-class write whose attestation the daemon's check
-    /// admitted, reaching here through the store drivers' ATTESTED handles
-    /// and through nothing else — the head writer, M9 and every plain handle
-    /// pass `None` by construction. The kernel enforces none of that: it
+    /// The kernel verifies nothing about an attestation and restricts no
+    /// caller: which transactions may carry one, and whether its blob
+    /// verifies, are the caller's to decide and the verifier's to check. It
     /// writes the bytes it is handed, opaquely, for the transaction it is
     /// handed them with, which is the whole of the seam.
     ///

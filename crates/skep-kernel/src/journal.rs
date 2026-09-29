@@ -38,6 +38,7 @@ pub(crate) use scan::damaged_sync_word_cause;
 pub(crate) use scan::first_sync_word;
 pub(crate) use scan::scan;
 pub(crate) use scan::truncate_tail;
+pub(crate) use scan::ClosingMarker;
 pub(crate) use scan::FirstSyncWord;
 pub(crate) use scan::ScanFail;
 pub(crate) use scan::ScanOutcome;

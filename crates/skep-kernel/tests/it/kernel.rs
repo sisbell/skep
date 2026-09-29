@@ -19,6 +19,7 @@ mod writes;
 use std::fs;
 use std::path::Path;
 
+use crate::mutilate::FRAME_MAGIC;
 use serde::{Deserialize, Serialize};
 use skep_kernel::{
     BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq,
@@ -268,7 +269,7 @@ fn frame_spans(path: &Path) -> Vec<(u64, u64)> {
     let mut pos = 0usize;
     let header = FRAME_HEADER_LEN as usize;
     while pos + header <= buf.len() {
-        assert_eq!(&buf[pos..pos + 4], b"SKJ4", "expected a clean frame stream");
+        assert_eq!(&buf[pos..pos + 4], FRAME_MAGIC, "expected a clean frame stream");
         let len = u32::from_le_bytes(buf[pos + 4..pos + 8].try_into().unwrap()) as usize;
         spans.push((pos as u64, (header + len) as u64));
         pos += header + len;

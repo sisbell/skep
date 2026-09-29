@@ -15,6 +15,25 @@ cd "$(dirname "$0")/.."
 # a red here fails the gate before any test runs.
 cargo check -p skepd --lib --bins || exit $?
 
+# The feature edges the full run below never compiles: `client` is
+# default-off, and `observe` is on in every test build. The notebook build
+# (`client` on); the build without the dump route (`observe` off), its
+# library and binary and then every target; and, with every feature on, the
+# tests whose answers turn on `client`.
+cargo check -p skepd --lib --bins --features client || exit $?
+cargo check -p skepd --lib --bins --no-default-features || exit $?
+cargo check -p skepd --all-targets --no-default-features || exit $?
+cargo nextest run -p skepd --all-features --profile full \
+    -E 'test(/^client::/) | test(/^cors::/) | test(/the_death_signal_rides_exactly_the_documented_routes$/) | test(/the_route_set_agrees_across_preflight_dispatch_and_refusal$/)' \
+    || exit $?
+
+# Every intra-doc link in skepd resolves — a private item's too, and a link
+# resolves only where its module could name the target in code, so a
+# narrowing that strands a link fails here rather than in a reader's hands.
+RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
+    cargo doc -p skepd --lib --no-deps --document-private-items --all-features \
+    || exit $?
+
 # --run-ignored all re-admits the #[ignore] timing partition. One test is
 # excluded BY NAME, not by ignore-ness: hazard G (disk exhaustion) is
 # env-gated by its owners (hdiutil, mount rights, macOS only — "run it

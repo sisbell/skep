@@ -12,4 +12,6 @@ or more it lives in the module's own `tests.rs` — `foo/tests.rs` beside
 
 ## skepd
 
-skepd is layered; imports point down.
+skepd is layered; imports point down. The layers are drawn in
+`ARCHITECTURE.md` §The daemon, and `crates/skepd/tests/it/tidy.rs` checks
+them.

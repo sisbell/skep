@@ -30,7 +30,7 @@ above it.
   depends on no other skep crate.
 - `skep-kernel` — transactions, the journal, checkpoints and recovery. It
   knows nothing of what a transaction means; the world it stores is a
-  type parameter the engine supplies.
+  type parameter the engine supplies. Its modules and rules: §The kernel.
 
 **The stores** — each owns one slice of the world and depends only on the
 foundation and on the stores above it.
@@ -52,13 +52,58 @@ foundation and on the stores above it.
 - `skep-engine` — the one assembler. It defines `World` from the stores'
   slices, genesis, recovery and reads at a past position. Nothing depends
   on it except `skepd`, the conformance harness and — as a dev-dependency,
-  for its hazard suite's fixtures — `skep-kernel`.
+  for the fixture its hazard, golden and chain suites share —
+  `skep-kernel`.
 
 **The programs**
 - `skepd` — the daemon (below).
 - `skep-mcp` — a stdio adapter for agent harnesses.
 - `skep-conformance` — a differential harness against `udanax-green`'s
   goldens.
+
+## The kernel, `skep-kernel`
+
+The kernel owns one directory: the journal's segments (`seg-<n>.wal`), the
+checkpoints (`checkpoint.<n>`, each written through `checkpoint.tmp`) and
+the exclusion lock (`kernel.lock`). One applier lock serializes every
+write; a write is appended, fsynced, and only then installed as the root
+that lock-free readers load. The world is a type parameter: the kernel
+folds records through `WorldState::apply` and never reads them. Its
+modules are declared in `src/lib.rs` in dependency order, each with a line
+saying what it holds.
+
+Rules that hold across its files:
+
+- **Durable before visible.** `Kernel::transact_attested` hands the
+  journal an install closure, and only the journal runs it:
+  `JournalWriter::commit_txn` appends, fsyncs, then installs, inside one
+  call; the in-memory journal, which has no barrier, installs at the same
+  point.
+- **A halt cuts nothing.** Every refusal in `Kernel::open` precedes
+  `journal::truncate_tail`, recovery's one destructive step.
+- **One door to the write state.** `ApplierLock::acquire`, which refuses
+  a nested acquisition, is the only way to the sequencer, the journal and
+  the cadence; the lock's fields are private to `kernel/applier.rs`.
+  `Kernel::checkpoint` never takes it: its own mutex may be taken under
+  the applier lock, never the reverse.
+- **A scan and its fold share a base.** Scans are reached through
+  `replay::Base::scan`, never by a caller supplying `S_load`.
+- **One skip rule.** `segment::scanned_above` decides which segments a
+  scan reads; the scan walks it and the format probe opens its first.
+- **One codec.** Every byte the kernel writes goes through
+  `journal::codec`, checkpoint bodies included; `checkpoint.rs` borrows it
+  and the directory fsync from `journal`.
+- **Mode parity.** `Journal::commit_txn` judges the frame cap and the
+  transaction budget above its durability-mode branch, so an in-memory
+  kernel refuses what a journaled one refuses.
+- **The formats are pinned.** `tests/golden/` holds the bytes the
+  fixture's ops must reproduce; a moved byte is a format event and bumps
+  the `SKJ` and `SKC` stamps.
+
+Its integration suites are one binary, `tests/it/`: `kernel` (the public
+surface's claims), `hazard` (dirty crashes, built through the engine),
+`golden` (the byte pins) and `chain` (the commit chain's tamper matrix),
+over the shared `fixture` and `mutilate`.
 
 ## The daemon, `skepd`
 
@@ -170,8 +215,8 @@ imports it.
 
 - **Crate dependencies point down.** The order in the code map is the
   order the compiler enforces between libraries; the dev-dependencies
-  pointing back up are `skep-kernel`'s, whose hazard suite builds its
-  fixtures through `skep-engine` and the stores it assembles.
+  pointing back up are `skep-kernel`'s, whose integration suites build
+  their shared fixture through `skep-engine` and the stores it assembles.
 - **Inside `skepd`, imports point down.** A module names only modules in
   its own layer or below it, never above: the transport calls the router,
   and nothing below the router calls the transport; a leaf imports only

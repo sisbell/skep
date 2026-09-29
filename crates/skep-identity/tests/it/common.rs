@@ -72,10 +72,10 @@ pub const CLAIMANT: &[u32] = &[1, 1, 0, 2];
 /// A delegator account (bootstrap tier).
 pub const ORG: &[u32] = &[1, 1, 0, 3];
 /// An account delegated BENEATH `ORG` (its parent is an account, so its
-/// delegator is `Account(ORG)` — AUTH-2.65). A LATER child `inc(ORG, 2)`, not
-/// ORG's computed first sub-account: RES-80 (AUTH-2.62) makes the FIRST child
-/// of a bootstrap-tier account the un-genesis-able agent space, so a fixture
-/// that genesises a subdivision uses a later child.
+/// delegator is `Account(ORG)` — AUTH-2.65). A LATER child, `ORG·2`, not ORG's
+/// computed first sub-account `inc(ORG, 1)`: RES-80 (AUTH-2.62) makes the
+/// FIRST child of a bootstrap-tier account the un-genesis-able agent space, so
+/// a fixture that genesises a subdivision uses a later child.
 pub const NESTED: &[u32] = &[1, 1, 0, 3, 2];
 /// An ordinary bootstrap-tier account.
 pub const ACCT_A: &[u32] = &[1, 1, 0, 5];
@@ -366,7 +366,7 @@ pub fn key_from_seed(kind: KeyKind, seed: [u8; 32]) -> PublicKey {
     }
 }
 
-/// Deterministic test key `i` of `kind` — [`key`] at the tag-1 row.
+/// Deterministic test key `i` of `kind`; [`key`] is this at the tag-1 row.
 pub fn key_of(kind: KeyKind, i: u8) -> PublicKey {
     key_from_seed(kind, [i; 32])
 }

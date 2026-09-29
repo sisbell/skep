@@ -351,6 +351,12 @@ pub fn entry_body_publish<'a>(values: impl IntoIterator<Item = &'a [u8]>) -> Ent
 /// its walk, and its own answer for a value it could not read, and collects
 /// nothing ahead of the build.
 ///
+/// Its standing INVARIANT is the one the budget exists for: the body built so
+/// far never passes `budget` bytes, its leading count included —
+/// [`PublishBody::within`]'s PRECONDITION establishes it at the type's one
+/// mint site, and every [`PublishBody::push`] keeps it or refuses, so
+/// [`PublishBody::finish`] never answers a body past its budget.
+///
 /// A refused push CONSUMES the builder, and the type is not `Clone` — the
 /// compile-time check beside it holds that — so the only body that can be
 /// finished is one that took EVERY value it was offered, in order. A body
@@ -371,9 +377,21 @@ impl PublishBody {
     /// A body of no values yet — the leading count's eight bytes — whose
     /// [`PublishBody::push`] admits no value that would carry the FINISHED
     /// body past `budget` bytes.
+    ///
+    /// PRECONDITION — `budget` holds those eight bytes. The body of no values
+    /// is the least a builder can finish to, so below it the builder would
+    /// start past its own budget and [`PublishBody::finish`] would answer an
+    /// over-budget body no push had refused. A caller's bug and never an
+    /// outcome: it PANICS, naming the obligation.
     pub fn within(budget: usize) -> PublishBody {
         let mut bytes = Vec::new();
         let row = ValueSequence::open(&mut bytes);
+        assert!(
+            bytes.len() <= budget,
+            "PublishBody::within: a budget of {budget} bytes cannot hold the body of no \
+             values, {} bytes",
+            bytes.len()
+        );
         PublishBody { bytes, row, budget }
     }
 
@@ -396,7 +414,9 @@ impl PublishBody {
         Some(self)
     }
 
-    /// The body, under the `publish` token.
+    /// The body, under the `publish` token: the values this builder took, in
+    /// the order pushed, as one value sequence — never past its budget, by the
+    /// standing invariant.
     pub fn finish(self) -> EntryBody {
         let PublishBody { mut bytes, row, .. } = self;
         row.close(&mut bytes);

@@ -75,9 +75,9 @@ pub struct Enrollment {
 
 impl Enrollment {
     /// AUTH-1.25 — the ONLY constructor. The label DOMAIN (AUTH-1.24) is
-    /// `None`, or text that is non-empty, contains no `\n` and is at most
-    /// [`MAX_LABEL_BYTES`] (128) bytes of UTF-8 — a trailing 0x20 is IN the
-    /// domain. `Some("")` maps to `None`; a label containing `\n` is
+    /// `None`, or text that is non-empty, contains no `\n` and is at most 128
+    /// BYTES of UTF-8, counted in bytes and never characters — a trailing 0x20
+    /// is IN the domain. `Some("")` maps to `None`; a label containing `\n` is
     /// `Err(LabelError::Newline)`; one over 128 bytes is
     /// `Err(LabelError::TooLong)` — the newline read first, so a label with
     /// both faults names the newline (both are refusals; the fold answers

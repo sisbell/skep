@@ -220,8 +220,8 @@ impl IdentityState {
                 // BOOTSTRAP-TIER `B` (AUTH-2.65) ⇒ None. `B = parent(subject)`;
                 // its tier is `delegator(B) == Bootstrap`; the first-child test
                 // is `checked_inc(B, 1) == subject` (k = 1 always preserves T4,
-                // so `ok()` is the value; a peer/subdivision `inc(B, k≥2)` and
-                // a descendant fail the equality and take `Some(d)`).
+                // so `ok()` is the value; a later child `B·k`, k ≥ 2, and a
+                // descendant fail the equality and take `Some(d)`).
                 let first_child_of_bootstrap = parent(subject).is_some_and(|b| {
                     checked_inc(&b, 1).ok().as_ref() == Some(subject)
                         && matches!(delegator(ctx, &b), Some(Delegator::Bootstrap))

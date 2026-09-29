@@ -1,27 +1,20 @@
-//! The engine fixture the hazard, golden and chain suites share, and the
-//! dirty-crash plumbing (hardening H3) only the hazard suite uses. Shared: the
-//! mixed-op fixture — the hazard suite's eleven ops, extended to the golden's
-//! eighteen — with its capture-and-compare oracle, the seeded salt every
-//! fixture kernel runs under, the address and configuration constructors, and
-//! wedge-bounded opens. For `hazard` alone: the prefix judges, junk and a
-//! deterministic RNG.
+//! The engine fixture the hazard, golden and chain suites share: the mixed-op
+//! fixture — the hazard suite's eleven ops, extended to the golden's eighteen
+//! — with its capture-and-compare oracle, the seeded salt every fixture
+//! kernel runs under, the address and configuration constructors, and
+//! wedge-bounded opens.
 //!
 //! The oracle discipline: while the journal is healthy, capture every
 //! committed boundary's `Seq`, the journal byte length once that commit was
 //! durable, and the `WorldDump` of the root acknowledged there, with bounded
 //! replay at that boundary held to it, all through the PUBLIC engine surface.
-//! After fault + reopen there are exactly three honest outcomes (full
-//! recovery, bounded rollback to the last boundary the intact prefix
-//! supports, loud refusal); silent divergence and wedged opens are findings,
-//! and the judges here panic on them with the full reproduction in the
-//! message.
+//! A suite judges a damaged copy against those captures; an open that hangs
+//! is a finding, and the timed opens here panic on one with the context they
+//! were handed.
 //!
 //! Plumbing, not a suite: it declares no tests, and `hazard`, `golden` and
 //! `chain` each use a subset of it — which is what the `dead_code` allow on
-//! its `mod` line in `main.rs` covers. The mutilation primitives belong to
-//! `mutilate`; the re-export below serves `hazard`'s glob import.
-
-pub use crate::mutilate::*;
+//! its `mod` line in `main.rs` covers.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -29,6 +22,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+use crate::mutilate::seg_file;
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{Caller, Deposit, VPos, VSpec};
 use skep_content::Val;
@@ -50,12 +44,6 @@ pub const OWNER: Caller = Caller::Principal(USER);
 /// account — is the fork the version-chain model admits (PUB-2.18), so the
 /// fixture's version record comes from here.
 pub const FORKER: PrincipalId = PrincipalId(8);
-
-/// `HAZARD_EXHAUSTIVE=1` unlocks the full sweeps; the default grids keep
-/// the whole suite inside the ~5 minute budget.
-pub fn exhaustive() -> bool {
-    std::env::var_os("HAZARD_EXHAUSTIVE").is_some_and(|v| v == "1")
-}
 
 // ── address/value constructors (the engine test fixtures' shapes) ──
 
@@ -89,20 +77,6 @@ pub fn vspan(subspace: u32, ord: u32, width: u32) -> Span {
 /// A content V-spec over `doc`'s content subspace.
 pub fn vspec(doc: &Address, ord: u32, width: u32) -> VSpec {
     VSpec { source: doc.clone(), span: vspan(1, ord, width) }
-}
-
-/// `1.0.1.0.1` — dotted decimal, the tumbler's own canonical rendering.
-pub fn tum_str(t: &Tumbler) -> String {
-    t.to_string()
-}
-
-/// Parse [`tum_str`]'s output back (fixture components fit `u32`).
-pub fn parse_addr(s: &str) -> Address {
-    let comps: Vec<u32> = s
-        .split('.')
-        .map(|c| c.parse().unwrap_or_else(|_| panic!("dotted-decimal component in {s:?}")))
-        .collect();
-    a(&comps)
 }
 
 // ── kernel configurations ──
@@ -155,70 +129,6 @@ pub fn timed_open_result(dir: &Path, ctx: &str) -> Result<Engine, EngineError> {
 pub fn timed_open(dir: &Path, ctx: &str) -> Engine {
     timed_open_result(dir, ctx)
         .unwrap_or_else(|e| panic!("FINDING: open refused where recovery was required — {ctx}: {e}"))
-}
-
-// ── file mutilation ──
-
-/// Overwrite `[from, from+junk.len())` in place, clamped to the file end.
-pub fn overwrite_range(path: &Path, from: u64, junk: &[u8]) {
-    let mut data = fs::read(path).expect("read for overwrite");
-    let start = from as usize;
-    let end = (start + junk.len()).min(data.len());
-    data[start..end].copy_from_slice(&junk[..end - start]);
-    fs::write(path, data).expect("write overwritten");
-}
-
-// ── deterministic junk / RNG (seeds ride in the panic contexts) ──
-
-/// SplitMix64 — deterministic, dependency-free; the seed is the whole
-/// reproduction.
-pub struct SplitMix64(u64);
-
-impl SplitMix64 {
-    pub fn new(seed: u64) -> SplitMix64 {
-        SplitMix64(seed ^ 0x9E37_79B9_7F4A_7C15)
-    }
-
-    pub fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-
-    pub fn next_range(&mut self, n: u64) -> u64 {
-        self.next_u64() % n
-    }
-
-    pub fn bytes(&mut self, len: usize) -> Vec<u8> {
-        (0..len).map(|_| self.next_u64() as u8).collect()
-    }
-}
-
-#[derive(Clone, Copy)]
-pub enum Junk {
-    Zeros,
-    Ones,
-    Rand(u64),
-}
-
-impl Junk {
-    pub fn bytes(self, len: usize) -> Vec<u8> {
-        match self {
-            Junk::Zeros => vec![0x00; len],
-            Junk::Ones => vec![0xFF; len],
-            Junk::Rand(seed) => SplitMix64::new(seed).bytes(len),
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Junk::Zeros => "zeros",
-            Junk::Ones => "ones",
-            Junk::Rand(_) => "rand",
-        }
-    }
 }
 
 // ── the mixed-op fixture and its oracle ──
@@ -538,74 +448,4 @@ impl Fixture {
     pub fn last_seq(&self) -> u64 {
         self.boundaries.last().expect("boundaries").seq
     }
-}
-
-/// How far a recovered case is judged.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Depth {
-    /// The recovered head, and the world at it.
-    Head,
-    /// …and every boundary ≤ head answering `world_at` byte-equal, and the
-    /// hints against a from-scratch rebuild.
-    Full,
-}
-
-/// Open a mutilated copy and hold it to the honest outcomes: head EXACTLY
-/// at the boundary the intact prefix supports, world byte-equal to the
-/// oracle there. [`Depth::Full`] additionally proves every boundary ≤ head
-/// answers `world_at` byte-equal and the hints match a from-scratch rebuild.
-/// Returns the recovered head for the caller's outcome tally.
-pub fn judge_prefix(
-    fixture: &Fixture,
-    case_dir: &Path,
-    prefix_len: u64,
-    depth: Depth,
-    ctx: &str,
-) -> u64 {
-    let engine = timed_open(case_dir, ctx);
-    let head = engine.kernel().current_seq().0;
-    let expected = fixture.expected_boundary(prefix_len);
-    assert_eq!(
-        head, expected,
-        "FINDING ({ctx}): boundary rule violated — recovered head {head}, the intact prefix \
-         supports exactly {expected}"
-    );
-    let recovered = engine.world_dump();
-    assert_eq!(
-        &recovered,
-        fixture.dump_for(head),
-        "FINDING ({ctx}): SILENT DIVERGENCE — recovered world ≠ ground truth at boundary {head}"
-    );
-    if depth == Depth::Full {
-        let at_genesis = engine.dump_of(&engine.world_at(Seq(0)).expect("genesis answers"));
-        assert_eq!(
-            at_genesis, fixture.genesis_dump,
-            "FINDING ({ctx}): genesis boundary diverged"
-        );
-        for boundary in fixture.boundaries.iter().filter(|b| b.seq <= head) {
-            let world = engine.world_at(Seq(boundary.seq)).unwrap_or_else(|e| {
-                panic!(
-                    "FINDING ({ctx}): boundary {} ≤ head unanswerable: {e}",
-                    boundary.seq
-                )
-            });
-            assert_eq!(
-                engine.dump_of(&world),
-                boundary.dump,
-                "FINDING ({ctx}): history at boundary {} diverges from ground truth",
-                boundary.seq
-            );
-        }
-        engine
-            .check_hints()
-            .unwrap_or_else(|e| panic!("FINDING ({ctx}): hint divergence after recovery: {e}"));
-    }
-    head
-}
-
-/// [`judge_prefix`] where FULL recovery is the only acceptable outcome
-/// (checkpoint faults: the journal is intact, so no rollback is licensed).
-pub fn judge_full_recovery(fixture: &Fixture, case_dir: &Path, ctx: &str) {
-    let head = judge_prefix(fixture, case_dir, fixture.full_len, Depth::Full, ctx);
-    assert_eq!(head, fixture.last_seq(), "FINDING ({ctx}): full recovery was required");
 }

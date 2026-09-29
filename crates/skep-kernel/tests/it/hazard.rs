@@ -3,18 +3,16 @@
 //! checkpoint corruption, and kill-mid-checkpoint process crashes. Fixtures
 //! are built through the PUBLIC engine surface, mutilated as files on a
 //! closed journal, and judged through the public surface against the
-//! capture-and-compare oracle in `hazard_util` — exactly three honest
-//! outcomes per the contracts (full recovery / bounded rollback of
-//! never-acked tail / loud refusal); silent divergence and wedged opens are
-//! findings.
+//! capture-and-compare oracle in `fixture` — exactly three honest outcomes
+//! per the contracts (full recovery / bounded rollback of never-acked tail /
+//! loud refusal); silent divergence and wedged opens are findings, and the
+//! judges below panic on them with the full reproduction in the message.
 //!
 //! Finding protocol (per the H3 ruling): a test that discovers a real
 //! contract violation is converted to `#[ignore = "FINDING-<n>: …"]` with
 //! its assertion INTACT and the reproduction in a comment block — never
 //! weakened, never left failing. `HAZARD_EXHAUSTIVE=1` unlocks the full
 //! sweeps; default grids stay inside the suite's runtime budget.
-
-use crate::hazard_util;
 
 use std::fs;
 use std::io::{BufRead, BufReader, Write as _};
@@ -24,13 +22,173 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use hazard_util::*;
+use crate::fixture::*;
+use crate::mutilate::*;
+use skep_address::{Address, Tumbler};
 use skep_arrangement::Deposit;
 use skep_content::Val;
 use skep_engine::{Engine, EngineError, OpenError};
 use skep_kernel::{CheckpointPolicy, Seq};
 use skep_namespace::{HasM3, BOOTSTRAP_PRINCIPAL};
 use tempfile::tempdir;
+
+// ── the sweep switch, and an address across a process boundary ──
+
+/// `HAZARD_EXHAUSTIVE=1` unlocks the full sweeps; the default grids keep
+/// the whole suite inside the ~5 minute budget.
+fn exhaustive() -> bool {
+    std::env::var_os("HAZARD_EXHAUSTIVE").is_some_and(|v| v == "1")
+}
+
+/// `1.0.1.0.1` — dotted decimal, the tumbler's own canonical rendering.
+fn tum_str(t: &Tumbler) -> String {
+    t.to_string()
+}
+
+/// Parse [`tum_str`]'s output back (fixture components fit `u32`).
+fn parse_addr(s: &str) -> Address {
+    let comps: Vec<u32> = s
+        .split('.')
+        .map(|c| c.parse().unwrap_or_else(|_| panic!("dotted-decimal component in {s:?}")))
+        .collect();
+    a(&comps)
+}
+
+// ── in-place overwrite, the one mutilation only this suite performs ──
+
+/// Overwrite `[from, from+junk.len())` in place, clamped to the file end.
+fn overwrite_range(path: &Path, from: u64, junk: &[u8]) {
+    let mut data = fs::read(path).expect("read for overwrite");
+    let start = from as usize;
+    let end = (start + junk.len()).min(data.len());
+    data[start..end].copy_from_slice(&junk[..end - start]);
+    fs::write(path, data).expect("write overwritten");
+}
+
+// ── deterministic junk / RNG (seeds ride in the panic contexts) ──
+
+/// SplitMix64 — deterministic, dependency-free; the seed is the whole
+/// reproduction.
+struct SplitMix64(u64);
+
+impl SplitMix64 {
+    fn new(seed: u64) -> SplitMix64 {
+        SplitMix64(seed ^ 0x9E37_79B9_7F4A_7C15)
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    fn next_range(&mut self, n: u64) -> u64 {
+        self.next_u64() % n
+    }
+
+    fn bytes(&mut self, len: usize) -> Vec<u8> {
+        (0..len).map(|_| self.next_u64() as u8).collect()
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Junk {
+    Zeros,
+    Ones,
+    Rand(u64),
+}
+
+impl Junk {
+    fn bytes(self, len: usize) -> Vec<u8> {
+        match self {
+            Junk::Zeros => vec![0x00; len],
+            Junk::Ones => vec![0xFF; len],
+            Junk::Rand(seed) => SplitMix64::new(seed).bytes(len),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Junk::Zeros => "zeros",
+            Junk::Ones => "ones",
+            Junk::Rand(_) => "rand",
+        }
+    }
+}
+
+// ── the judges ──
+
+/// How far a recovered case is judged.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Depth {
+    /// The recovered head, and the world at it.
+    Head,
+    /// …and every boundary ≤ head answering `world_at` byte-equal, and the
+    /// hints against a from-scratch rebuild.
+    Full,
+}
+
+/// Open a mutilated copy and hold it to the honest outcomes: head EXACTLY
+/// at the boundary the intact prefix supports, world byte-equal to the
+/// oracle there. [`Depth::Full`] additionally proves every boundary ≤ head
+/// answers `world_at` byte-equal and the hints match a from-scratch rebuild.
+/// Returns the recovered head for the caller's outcome tally.
+fn judge_prefix(
+    fixture: &Fixture,
+    case_dir: &Path,
+    prefix_len: u64,
+    depth: Depth,
+    ctx: &str,
+) -> u64 {
+    let engine = timed_open(case_dir, ctx);
+    let head = engine.kernel().current_seq().0;
+    let expected = fixture.expected_boundary(prefix_len);
+    assert_eq!(
+        head, expected,
+        "FINDING ({ctx}): boundary rule violated — recovered head {head}, the intact prefix \
+         supports exactly {expected}"
+    );
+    let recovered = engine.world_dump();
+    assert_eq!(
+        &recovered,
+        fixture.dump_for(head),
+        "FINDING ({ctx}): SILENT DIVERGENCE — recovered world ≠ ground truth at boundary {head}"
+    );
+    if depth == Depth::Full {
+        let at_genesis = engine.dump_of(&engine.world_at(Seq(0)).expect("genesis answers"));
+        assert_eq!(
+            at_genesis, fixture.genesis_dump,
+            "FINDING ({ctx}): genesis boundary diverged"
+        );
+        for boundary in fixture.boundaries.iter().filter(|b| b.seq <= head) {
+            let world = engine.world_at(Seq(boundary.seq)).unwrap_or_else(|e| {
+                panic!(
+                    "FINDING ({ctx}): boundary {} ≤ head unanswerable: {e}",
+                    boundary.seq
+                )
+            });
+            assert_eq!(
+                engine.dump_of(&world),
+                boundary.dump,
+                "FINDING ({ctx}): history at boundary {} diverges from ground truth",
+                boundary.seq
+            );
+        }
+        engine
+            .check_hints()
+            .unwrap_or_else(|e| panic!("FINDING ({ctx}): hint divergence after recovery: {e}"));
+    }
+    head
+}
+
+/// [`judge_prefix`] where FULL recovery is the only acceptable outcome
+/// (checkpoint faults: the journal is intact, so no rollback is licensed).
+fn judge_full_recovery(fixture: &Fixture, case_dir: &Path, ctx: &str) {
+    let head = judge_prefix(fixture, case_dir, fixture.full_len, Depth::Full, ctx);
+    assert_eq!(head, fixture.last_seq(), "FINDING ({ctx}): full recovery was required");
+}
 
 // ── A. Torn journal tail ─────────────────────────────────────────────────
 

@@ -9,7 +9,7 @@ use std::fmt;
 /// [`crate::Kernel::transact_attested`] under a value the dispatched write
 /// path admitted and read by a verifier beside the table; a change of pair is
 /// a verifier update, never a stamp bump.
-pub(crate) const SIG_ALG_UNSIGNED: u8 = 0;
+pub(super) const SIG_ALG_UNSIGNED: u8 = 0;
 
 /// THE ATTESTATION a transaction's commit marker carries (signed ops; the
 /// slot X2 reserved, at its designed use): the TAG of the hybrid pair and

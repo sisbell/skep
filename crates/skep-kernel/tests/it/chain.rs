@@ -61,7 +61,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::hazard_util::{
+use crate::fixture::{
     cfg_manual, node1, t, timed_open, timed_open_result, vp, Fixture, GOLDEN_OPS,
     GOLDEN_SALT_SEED, OWNER, USER,
 };

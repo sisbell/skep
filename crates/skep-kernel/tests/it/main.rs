@@ -3,12 +3,11 @@
 //! instead of once per file. Nothing but module declarations belongs here.
 
 mod chain;
+// The engine fixture, not a suite: `hazard`, `golden` and `chain` each use a
+// subset of it, so the `dead_code` allow rides its `mod` line.
+#[allow(dead_code)]
+mod fixture;
 mod golden;
 mod hazard;
-// Shared plumbing, not a suite: `hazard`, `golden` and `chain` each use a
-// subset, so the allow that was this file's own crate-level attribute rides
-// its `mod` line here.
-#[allow(dead_code)]
-mod hazard_util;
 mod kernel;
 mod mutilate;

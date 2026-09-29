@@ -18,7 +18,7 @@ use crate::error::stamp_text;
 
 /// How a corrupt run (a span the scan skipped via magic-resync) ended (§7).
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum RunEnd {
+enum RunEnd {
     /// The resync landed on an intact frame. `at` = that next-intact
     /// coordinate; `inferred_max` = the greatest `Seq` the run itself can
     /// hold. The run's own seqs are unreadable, so these two are all that is
@@ -93,7 +93,7 @@ impl From<io::Error> for ScanFail {
 /// to cut it at, and the wholly-later segment files to remove (§7). Resolved
 /// to paths by the scan itself, while the segment list is in hand, so a
 /// truncation cannot be aimed at a list other than the one that was scanned.
-pub(crate) struct TailCut {
+struct TailCut {
     segment: PathBuf,
     offset: u64,
     discard: Vec<PathBuf>,
@@ -765,11 +765,12 @@ fn read_segment(path: &Path, s_load: u64) -> Result<Vec<u8>, ScanFail> {
 /// [`ScanOutcome::chain_at_boundary`] answers [`crate::Kernel::chain_at`]
 /// with.
 ///
-/// `segs` must be ASCENDING by `firstSeq`, as [`super::segment::list_segments`] produces it.
-/// The skip rule ([`scanned_above`]), the tail resolution and
-/// [`super::segment::inferred_last_seq`] all read a neighbour's name as this segment's bound,
-/// so an out-of-order slice makes those inferences meaningless — and
-/// [`super::segment::reclaim_below`], which reads the same order, deletes on one of them.
+/// `segs` must be ASCENDING by `firstSeq`, as [`super::segment::list_segments`]
+/// produces it. The skip rule ([`scanned_above`]), the tail resolution and the
+/// segment file's own `inferred_last_seq` all read a neighbour's name as this
+/// segment's bound, so an out-of-order slice makes those inferences meaningless
+/// — and [`super::segment::reclaim_below`], which reads the same order, deletes
+/// on one of them.
 ///
 /// Reached through [`crate::replay::Base::scan`], which supplies `s_load` and
 /// `chain_at_base` from the base it selected. A scan and the fold that

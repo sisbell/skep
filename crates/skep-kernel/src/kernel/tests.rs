@@ -1,4 +1,5 @@
 use super::*;
+use crate::error::HistoryError;
 use crate::journal::JournalWriter;
 
 // A minimal world for kernel-internal tests. WorldState is a local trait,
@@ -869,7 +870,7 @@ fn a_sequencer_with_no_room_left_halts_instead_of_wrapping() {
         salt: SaltSource::Seeded(TEST_SEED),
     };
     let k = Kernel::<Vec<u64>>::open(cfg, Vec::new()).unwrap();
-    k.applier.state.lock().seq.high_water = u64::MAX;
+    k.applier.acquire().seq.high_water = u64::MAX;
     let out = k.transact::<_, ()>(&[], |stg| {
         stg.push(10);
         Ok(())
@@ -892,7 +893,7 @@ fn the_sequencer_never_commits_a_head_recovery_would_refuse() {
         Ok(())
     })
     .unwrap();
-    k.applier.state.lock().seq.high_water = u64::MAX - 1;
+    k.applier.acquire().seq.high_water = u64::MAX - 1;
     let out = k.transact::<_, ()>(&[], |stg| {
         stg.push(20);
         Ok(())

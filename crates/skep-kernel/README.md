@@ -17,9 +17,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **Checkpoints** — periodic serialized worlds with a fallback chain
   at load: a checkpoint that fails to resolve steps back to an older
   one, or to genesis, and replays forward.
-- **Keyed critical sections** — byte-keyed locks (`LockKey`) let
-  logically-independent writes proceed concurrently where the world's
-  invariants permit.
+- **Keyed critical sections** — every write names the `LockKey`s it
+  would hold. Under the v1 single applier one lock serializes all writes,
+  and the keys are the seam a per-key realization will use without
+  changing any call shape.
 
 The kernel knows nothing about documents, links, or addresses — it is
 generic over the world the engine assembles.

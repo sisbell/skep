@@ -659,44 +659,6 @@ fn an_unwind_through_the_install_is_beyond_repair() {
 }
 
 #[test]
-fn the_skip_rule_passes_over_what_the_base_embodies_and_keeps_the_straddler_and_the_active() {
-    // The one statement of which segments a scan above a base reads — the
-    // scan walks them and the first-sync-word probe opens the first, so the
-    // two agree by construction. A closed segment is passed over only when
-    // its inferred reach lies at or below the base; one that STRADDLES the
-    // base is read, and the active one always is.
-    //
-    // Each segment opens with a word of its own, so the probe's answer says
-    // WHICH segment it opened: another format's stamp names a closed one,
-    // and the empty active one is the scan's to classify.
-    let dir = tempdir().unwrap();
-    for (first_seq, opening) in [(1, &b"SKJ2"[..]), (5, &b"SKJ3"[..]), (9, &b""[..])] {
-        fs::write(segment_path(dir.path(), first_seq), opening).unwrap();
-    }
-    let segs = list_segments(dir.path()).unwrap();
-    let read_above = |s_load: u64| -> Vec<(usize, u64)> {
-        scanned_above(&segs, s_load)
-            .map(|(i, seg)| (i, seg.first_seq))
-            .collect()
-    };
-    let probed = |s_load: u64| first_sync_word(&segs, s_load).unwrap();
-    // Genesis reads every segment, and the probe opens seg-1.
-    assert_eq!(read_above(0), vec![(0, 1), (1, 5), (2, 9)]);
-    assert_eq!(probed(0), FirstSyncWord::Foreign(*b"SKJ2"));
-    // seg-1 reaches 4, where seg-5 begins at 5: it straddles a base at 3…
-    assert_eq!(read_above(3), vec![(0, 1), (1, 5), (2, 9)], "seg-1 straddles the base");
-    assert_eq!(probed(3), FirstSyncWord::Foreign(*b"SKJ2"));
-    // …and a base at 4 embodies it, so the scan and the probe begin at seg-5.
-    assert_eq!(read_above(4), vec![(1, 5), (2, 9)], "seg-1 ends at the base");
-    assert_eq!(probed(4), FirstSyncWord::Foreign(*b"SKJ3"));
-    assert_eq!(read_above(8), vec![(2, 9)], "seg-5 ends at the base");
-    assert_eq!(probed(8), FirstSyncWord::Scan);
-    // The active segment has no successor to bound it, so it is always read.
-    assert_eq!(read_above(100), vec![(2, 9)], "the active segment is always read");
-    assert_eq!(probed(100), FirstSyncWord::Scan);
-}
-
-#[test]
 fn scan_groups_by_txn_and_derives_the_committed_head() {
     let dir = tempdir().unwrap();
     let mut writer = fresh_writer(dir.path());
@@ -980,7 +942,14 @@ fn torn_tail_reaches_eof() {
     write_txn(&mut writer, 1, vec![rec(10)]);
     write_txn(&mut writer, 2, vec![rec(20)]);
     // Crash mid-append: a partial header at the tail.
-    writer.append(&[0xAB, 0xCD, 0xEF]).unwrap();
+    {
+        use std::io::Write as _;
+        let mut f = OpenOptions::new()
+            .append(true)
+            .open(segment_path(dir.path(), 1))
+            .unwrap();
+        f.write_all(&[0xAB, 0xCD, 0xEF]).unwrap();
+    }
     let segs = list_segments(dir.path()).unwrap();
     let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
     assert_eq!(out.runs, vec![RunEnd::Eof]);

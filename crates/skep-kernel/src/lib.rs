@@ -95,13 +95,30 @@
 //! ```
 
 #![forbid(unsafe_code)]
+#![deny(missing_docs)]
 
-mod checkpoint;
+// The modules in dependency order: each names only modules above it, and the
+// root's own `Seq`, `LockKey` and `WorldState`. The rules that hold across
+// them are in the workspace's ARCHITECTURE.md, §The kernel.
+
+// `KernelConfig` and its knobs, each validating itself; `SaltSource` draws the
+// chain's salt.
 mod config;
+// The four error vocabularies, one per operation, and the stamp renderer both
+// formats share.
 mod error;
+// The journal: its on-disk format and the crate's one codec, with the writer,
+// the scan, the segment files, the chain link and the signature slot beneath
+// it.
 mod journal;
-mod kernel;
+// Checkpoint files: header, body, listing and retention.
+mod checkpoint;
+// Base selection and the fold: the one derivation recovery and the history
+// reads share.
 mod replay;
+// `Kernel` and its handles: recovery, the commit path and checkpointing, with
+// the applier lock and the history reads beneath it.
+mod kernel;
 
 pub use checkpoint::CheckpointHeader;
 pub use config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};

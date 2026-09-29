@@ -621,9 +621,9 @@ fn a_ctx_behind_a_trait_object_reaches_the_fold_and_the_read() {
         assert_eq!(st.classify(&fx.types, &borrowed, &dep), want, "{name} through &dyn FoldCtx");
         assert_eq!(st.classify(&fx.types, &boxed, &dep), want, "{name} through Box<dyn FoldCtx>");
     }
-    let values: &dyn Values = &fx.ctx;
+    let borrowed_values: &dyn Values = &fx.ctx;
     assert_eq!(
-        record_bytes(&values, &honored.home, &honored.from),
+        record_bytes(&borrowed_values, &honored.home, &honored.from),
         record_bytes(&fx.ctx, &honored.home, &honored.from),
         "&dyn Values"
     );

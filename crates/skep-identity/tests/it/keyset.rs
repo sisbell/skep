@@ -38,8 +38,8 @@ fn enrolled_iterates_in_fingerprint_order_not_record_order() {
     let mut fx = Fixture::new();
     let mut ascending: Vec<u8> = (1..=8).collect();
     ascending.sort_by_key(|&i| *fp(i).as_bytes());
-    let record: Vec<(u8, bool)> = ascending.iter().rev().map(|&i| (i, false)).collect();
-    let st = seed_own(&mut fx, &IdentityState::genesis(), ACCT_A, &record);
+    let seeding: Vec<(u8, bool)> = ascending.iter().rev().map(|&i| (i, false)).collect();
+    let st = seed_own(&mut fx, &IdentityState::genesis(), ACCT_A, &seeding);
 
     let got: Vec<_> = st
         .key_set(&addr(ACCT_A))

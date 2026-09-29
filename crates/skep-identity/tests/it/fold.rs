@@ -557,11 +557,12 @@ fn board_admits_one_claim_and_only_from_a_keyed_account() {
 // reason over, rooted at ACCT_A — a BOOTSTRAP-TIER account `B` (its parent is
 // the node, owned by the bootstrap principal). `B_FIRST_CHILD = inc(B, 1)` is
 // its computed first sub-account (the AGENT SPACE); `B_SUBDIVISION` is a LATER
-// child (a real subdivision); `B_SUB_DEEP` is a child of that subdivision;
-// `C_FIRST_CHILD` is the first child of the (non-bootstrap-tier) subdivision.
+// child (a real subdivision); `B_SUBDIVISION_CHILD` is a later child of that
+// subdivision; `C_FIRST_CHILD` is the first child of the (non-bootstrap-tier)
+// subdivision.
 const B_FIRST_CHILD: &[u32] = &[1, 1, 0, 5, 1]; // inc(ACCT_A, 1) — the agent space
 const B_SUBDIVISION: &[u32] = &[1, 1, 0, 5, 2]; // a later child of ACCT_A
-const B_SUB_DEEP: &[u32] = &[1, 1, 0, 5, 2, 5]; // a child of B_SUBDIVISION
+const B_SUBDIVISION_CHILD: &[u32] = &[1, 1, 0, 5, 2, 5]; // a later child of B_SUBDIVISION
 const C_FIRST_CHILD: &[u32] = &[1, 1, 0, 5, 2, 1]; // inc(B_SUBDIVISION, 1)
 
 /// Seat the A3/latch addresses as accounts. A fold ctx holds no M3, so the test
@@ -583,8 +584,8 @@ fn a3_the_agent_space_takes_no_genesis_from_any_hand() {
     let mut fx = Fixture::new();
     seat_accounts(&mut fx, &[B_FIRST_CHILD]);
     let st = IdentityState::genesis();
-    for home in [ACCT_A, B_FIRST_CHILD, CLAIMANT] {
-        let dep = fx.enroll_dep(&doc1(home), B_FIRST_CHILD, &enroll_payload(&[(1, true)]));
+    for home_account in [ACCT_A, B_FIRST_CHILD, CLAIMANT] {
+        let dep = fx.enroll_dep(&doc1(home_account), B_FIRST_CHILD, &enroll_payload(&[(1, true)]));
         assert_detail(&fx.classify(&st, &dep), "not_genesis_registry");
     }
     // After B is keyed and the board is claimed, still.
@@ -628,7 +629,7 @@ fn a3_a_later_child_and_a_non_bootstrap_first_child_are_honored() {
 #[test]
 fn the_handoff_latch_fires_on_a_key_from_the_set_above() {
     let mut fx = Fixture::new();
-    seat_accounts(&mut fx, &[B_SUBDIVISION, B_SUB_DEEP]);
+    seat_accounts(&mut fx, &[B_SUBDIVISION, B_SUBDIVISION_CHILD]);
     // B holds fp(1); the agent's genesis names B's own key — a handoff to a
     // party that could already open B.
     let st = seed_own(&mut fx, &IdentityState::genesis(), ACCT_A, &[(1, true)]);
@@ -638,7 +639,8 @@ fn the_handoff_latch_fires_on_a_key_from_the_set_above() {
 
     // One level down, its own set empty: the walk climbs the empty subdivision
     // to B's set (the comparand, AUTH-2.71's row 2009).
-    let dep = fx.enroll_dep(&doc1(B_SUBDIVISION), B_SUB_DEEP, &enroll_payload(&[(1, true)]));
+    let dep =
+        fx.enroll_dep(&doc1(B_SUBDIVISION), B_SUBDIVISION_CHILD, &enroll_payload(&[(1, true)]));
     assert_detail(&fx.classify(&st, &dep), "not_genesis_registry");
 }
 
@@ -659,7 +661,7 @@ fn the_handoff_latch_fires_on_a_key_from_the_set_above() {
 #[test]
 fn the_handoff_latch_compares_against_the_nearest_keyed_set_and_no_other() {
     let mut fx = Fixture::new();
-    seat_accounts(&mut fx, &[B_SUBDIVISION, B_SUB_DEEP]);
+    seat_accounts(&mut fx, &[B_SUBDIVISION, B_SUBDIVISION_CHILD]);
     // B holds fp(1); the subdivision, seeded through B's doc 1 with a FRESH
     // key (so the latch lets it pass), holds fp(2).
     let st = seed_own(&mut fx, &IdentityState::genesis(), ACCT_A, &[(1, true)]);
@@ -669,13 +671,15 @@ fn the_handoff_latch_compares_against_the_nearest_keyed_set_and_no_other() {
 
     // The subdivision's own key one level down: the nearest keyed set opens
     // the subdivision, and the handoff is refused.
-    let dep = fx.enroll_dep(&doc1(B_SUBDIVISION), B_SUB_DEEP, &enroll_payload(&[(2, true)]));
+    let dep =
+        fx.enroll_dep(&doc1(B_SUBDIVISION), B_SUBDIVISION_CHILD, &enroll_payload(&[(2, true)]));
     assert_detail(&fx.classify(&st, &dep), "not_genesis_registry");
     // B's key in the same place: B's set opens B, not the subdivision, and it
     // is no comparand while a nearer set is keyed.
-    let dep = fx.enroll_dep(&doc1(B_SUBDIVISION), B_SUB_DEEP, &enroll_payload(&[(1, true)]));
+    let dep =
+        fx.enroll_dep(&doc1(B_SUBDIVISION), B_SUBDIVISION_CHILD, &enroll_payload(&[(1, true)]));
     match assert_honored(&fx.classify(&st, &dep)) {
-        Effect::Genesis { account, .. } => assert_eq!(*account, addr(B_SUB_DEEP)),
+        Effect::Genesis { account, .. } => assert_eq!(*account, addr(B_SUBDIVISION_CHILD)),
         other => panic!("expected a genesis effect, got {other:?}"),
     }
 }
@@ -701,12 +705,13 @@ fn the_handoff_latch_does_not_fire_on_a_fresh_key() {
 #[test]
 fn the_handoff_latch_does_not_fire_beneath_never_keyed_ancestors() {
     let mut fx = Fixture::new();
-    seat_accounts(&mut fx, &[B_SUBDIVISION, B_SUB_DEEP]);
-    // Nothing above B_SUB_DEEP is keyed — not B_SUBDIVISION, not ACCT_A.
+    seat_accounts(&mut fx, &[B_SUBDIVISION, B_SUBDIVISION_CHILD]);
+    // Nothing above B_SUBDIVISION_CHILD is keyed — not B_SUBDIVISION, not ACCT_A.
     let st = IdentityState::genesis();
-    let dep = fx.enroll_dep(&doc1(B_SUBDIVISION), B_SUB_DEEP, &enroll_payload(&[(1, true)]));
+    let dep =
+        fx.enroll_dep(&doc1(B_SUBDIVISION), B_SUBDIVISION_CHILD, &enroll_payload(&[(1, true)]));
     match assert_honored(&fx.classify(&st, &dep)) {
-        Effect::Genesis { account, .. } => assert_eq!(*account, addr(B_SUB_DEEP)),
+        Effect::Genesis { account, .. } => assert_eq!(*account, addr(B_SUBDIVISION_CHILD)),
         other => panic!("expected a genesis effect, got {other:?}"),
     }
 }

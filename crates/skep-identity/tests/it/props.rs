@@ -449,8 +449,8 @@ proptest! {
         let whole = fold_over(&IdentityState::genesis(), &cases);
         prop_assert_eq!(&whole, &st);
         let mid = cases.len() / 2;
-        let head = fold_over(&IdentityState::genesis(), &cases[..mid]);
-        let resumed = fold_over(&head, &cases[mid..]);
+        let midway = fold_over(&IdentityState::genesis(), &cases[..mid]);
+        let resumed = fold_over(&midway, &cases[mid..]);
         prop_assert_eq!(&resumed, &st);
     }
 

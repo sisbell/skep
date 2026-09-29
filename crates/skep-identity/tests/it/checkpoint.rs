@@ -1,6 +1,6 @@
 //! AUTH-1.40's compatibility surface, which freezes with the first checkpoint
 //! a v1 board writes, pinned as BYTES rather than as round trips: the
-//! `Enrolled` row, the `KeySet` frame around it and each hybrid arm's bytes,
+//! `Enrolled` row, the `KeySet` frame around it and every arm's bytes,
 //! the genesis checkpoint, and the order of `IdentityState`'s two fields —
 //! beside the round trips of the value types and of a populated state. All
 //! through `bincode`, a format that admits the non-string map keys a JSON
@@ -9,7 +9,7 @@
 use crate::common;
 
 use common::*;
-use skep_identity::{encode_enroll, Enrolled, Fingerprint, IdentityState, PublicKey};
+use skep_identity::{encode_enroll, Enrolled, Fingerprint, IdentityState, PublicKey, ALGS};
 
 /// AUTH-1.1/AUTH-1.7/AUTH-1.29 — the checkpoint-facing value types
 /// survive a serde round trip (the populated `IdentityState` round trip is
@@ -113,8 +113,10 @@ fn key_set_checkpoint_encoding_is_pinned() {
     );
 }
 
-/// AUTH-1.40 — BOTH HYBRID arms' checkpoint bytes, the key kinds since the
-/// classical row's deletion. An enrolled row's value opens on the arm's
+/// AUTH-1.40 — EVERY arm's checkpoint bytes, one row per `PublicKey` arm (the
+/// two hybrid arms, the key kinds since the classical row's deletion), the
+/// rows held to `ALGS` by count: an arm added without its row here fails this
+/// test rather than going unpinned. An enrolled row's value opens on the arm's
 /// variant index — `0` for tag 1's `mldsa65-ed25519`, `1` for tag 3's
 /// `fndsa512-preview-ed25519`, RENUMBERED from `1`/`2` when the classical arm
 /// went (free before the first served board, AUTH-2.90's clock; never after)
@@ -127,11 +129,10 @@ fn key_set_checkpoint_encoding_is_pinned() {
 /// form, or an arm reordered in the enum, passes every other vector and
 /// silently rewrites every checkpoint holding a hybrid key.
 #[test]
-fn hybrid_key_set_checkpoint_encodings_are_pinned() {
-    for (kind, variant) in [
-        (KeyKind::MlDsa65Ed25519, 0u32),
-        (KeyKind::FnDsa512PreviewEd25519, 1u32),
-    ] {
+fn key_set_checkpoint_encodings_are_pinned_for_every_arm() {
+    let arms = [(KeyKind::MlDsa65Ed25519, 0u32), (KeyKind::FnDsa512PreviewEd25519, 1u32)];
+    assert_eq!(arms.len(), ALGS.len(), "one row per `PublicKey` arm, every `ALGS` row");
+    for (kind, variant) in arms {
         let mut fx = Fixture::new();
         // enrolled = {fp: anchor}, ONE hybrid row; retired = {} — so
         // fingerprint order is not a variable here.

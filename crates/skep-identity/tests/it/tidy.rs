@@ -58,13 +58,13 @@ fn the_fold_sits_on_top_and_entry_and_write_types_are_leaves() {
         }
         let text = std::fs::read_to_string(file).unwrap();
         let path = file.strip_prefix(&src).unwrap().display().to_string();
-        if let Some(n) = after_test_module(&text) {
+        if let Some(line) = after_test_module(&text) {
             faults.push(format!(
-                "src/{path}:{n}: a line after the inline `mod tests` — the test module is its \
-                 file's last item, and this check reads a file only up to it"
+                "src/{path}:{line}: a line after the inline `mod tests` — the test module is \
+                 its file's last item, and this check reads a file only up to it"
             ));
         }
-        let depth = module_depth(&src, file);
+        let file_depth = module_depth(&src, file);
         let (code, at) = code_of(&text);
         for (start, named) in named_paths(&code) {
             let (line, inline_depth) = at[start];
@@ -73,7 +73,7 @@ fn the_fold_sits_on_top_and_entry_and_write_types_are_leaves() {
                 &segments[1..]
             } else {
                 let climbs = segments.iter().take_while(|s| **s == "super").count();
-                if climbs < inline_depth + depth {
+                if climbs < inline_depth + file_depth {
                     continue; // inside its own module: names no sibling
                 }
                 &segments[climbs..]
@@ -211,15 +211,15 @@ fn every_module_is_declared_and_has_one_bullet_in_the_root_map() {
 /// "design".
 #[test]
 fn the_design_record_is_never_cited_as_the_record_alone() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
-    rust_files(&root.join("src"), &mut files);
-    rust_files(&root.join("tests"), &mut files);
+    rust_files(&crate_dir.join("src"), &mut files);
+    rust_files(&crate_dir.join("tests"), &mut files);
     files.sort();
     let mut faults = Vec::new();
     for file in &files {
         let text = std::fs::read_to_string(file).unwrap();
-        let path = file.strip_prefix(root).unwrap().display();
+        let path = file.strip_prefix(crate_dir).unwrap().display();
         for (line, prose) in comment_runs(&text) {
             if let Some(cited) = bare_record_citation(&prose) {
                 faults.push(format!("{path}:{line}: \"{cited}\" — cite \"the design record\""));
@@ -246,14 +246,14 @@ fn the_citation_readers_find_a_bare_citation() {
     assert_eq!(runs, [(2, "per the record §4.2 (C)".to_owned())]);
     assert_eq!(bare_record_citation(&runs[0].1), Some("the record §4.2"));
     assert_eq!(bare_record_citation("as The record's D13 rules"), Some("The record's D13"));
-    for passes in [
+    for prose in [
         "the design record §4.2",
         "\"the record\", or",
         "the record value §2",
         "the record's entries",
         "breathe record §2",
     ] {
-        assert_eq!(bare_record_citation(passes), None, "{passes:?}");
+        assert_eq!(bare_record_citation(prose), None, "{prose:?}");
     }
 }
 

@@ -293,14 +293,6 @@ pub fn key(i: u8) -> PublicKey {
     key_of(KeyKind::MlDsa65Ed25519, i)
 }
 
-/// Deterministic test key over a wide index (for many-key records) — a
-/// tag-1 hybrid whose seed carries the index in its last four bytes.
-pub fn wide_key(i: u32) -> PublicKey {
-    let mut seed = [0u8; 32];
-    seed[28..].copy_from_slice(&i.to_be_bytes());
-    key_from_seed(KeyKind::MlDsa65Ed25519, seed)
-}
-
 pub fn fp(i: u8) -> Fingerprint {
     Fingerprint::of(&key(i))
 }

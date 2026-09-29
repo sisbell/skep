@@ -686,16 +686,17 @@ fn a_carried_run_its_principal_never_could_read_is_refused_unread() {
 }
 
 /// A SHOT'S ENTRY-FRAME BODY IS BOUNDED, at parity with the request-body
-/// cap (`skepd::body_cap("/op")`): the body `entry_body_publish` would build
-/// is measured as the check reads each value, and a shot whose runs name one
-/// byte more is refused `attestation_invalid:frame_too_large`, PERMANENT,
-/// before the body is built — attested or not, since a body that is never
-/// built verifies nothing. At the budget exactly the shot is admitted and
-/// commits attested. A run names one stored value as often as the wire's run
-/// list admits, so no cap on the request bounds the body the check reads:
-/// four runs over one two-megabyte atom fill it here.
+/// cap (`skepd::body_cap("/op")`): the body is measured as the check reads
+/// each value (`PublishBody`, in the layout `entry_body_publish` spells), and
+/// a shot whose runs name one byte more is refused
+/// `attestation_invalid:frame_too_large`, PERMANENT, before the body is built
+/// past the budget — attested or not, since a body never built whole
+/// verifies nothing. At the budget exactly the shot is admitted and commits
+/// attested. A run names one stored value as often as the wire's run list
+/// admits, so no cap on the request bounds the body the check reads: four
+/// runs over one two-megabyte atom fill it here.
 #[test]
-fn a_shot_body_past_the_budget_is_refused_before_it_is_built() {
+fn a_shot_body_is_refused_before_it_is_built_past_its_budget() {
     let budget = skepd::body_cap("/op");
     // The body is a be64 count, then a be32 length and the bytes per value:
     // four values of `width` bytes each fill `8 + 4 × (4 + width)` — the
@@ -719,7 +720,7 @@ fn a_shot_body_past_the_budget_is_refused_before_it_is_built() {
     let base = Some((CLAIMANT_DOC1, 1));
     let before = head_position(port);
 
-    // One byte past the budget: refused before the body is built.
+    // One byte past the budget: refused before the body is built past it.
     let over = publish_frame(CLAIMANT_DOC1, base, None, &[x_run.clone(), x_run.clone(), x_run.clone(), y_run]);
     let over_values = [xs.as_bytes(), xs.as_bytes(), xs.as_bytes(), ys.as_bytes()];
     for v in [

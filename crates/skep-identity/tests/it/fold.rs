@@ -318,9 +318,13 @@ fn nested_claim_in_second_doc_is_not_doc_one() {
 
 /// AUTH-2.127 on the RETIREMENT path — a holder retirement homed in a
 /// PUBLISHED second document of its own account is `not_doc_one`, and the key
-/// stays enrolled. `retire_path` makes its own pin call, and every other
-/// holder retirement vector is homed in doc 1, so with that call deleted this
-/// record retires a real key and no other holder vector notices.
+/// stays enrolled. The pin is `payload_path`'s, written once for both payload
+/// kinds, so deleting it turns the enrollment vectors red as well; what this
+/// vector adds is the RETIREMENT kind's route through that shared pin at the
+/// one cell where missing it does harm: every other holder retirement vector
+/// is homed in doc 1, so a `retire_path` that read, parsed and folded its
+/// record without reaching `payload_path` retires a real key here and in no
+/// other vector.
 #[test]
 fn a_holder_retirement_outside_doc_1_is_not_doc_one_and_retires_nothing() {
     let mut fx = Fixture::new();
@@ -337,10 +341,12 @@ fn a_holder_retirement_outside_doc_1_is_not_doc_one_and_retires_nothing() {
 
 /// AUTH-2.66/AUTH-2.127 for RETIREMENTS — the payload precedes the home pin:
 /// an unparseable retirement in a published second document is
-/// `malformed_payload:bad_record`, never `not_doc_one`.
-/// `an_enrollment_payload_precedes_the_home_pin` states the same order for
-/// enrollments only, so a retirement pin hoisted above its parse keeps that
-/// vector green.
+/// `malformed_payload:bad_record`, never `not_doc_one`. The order is
+/// `payload_path`'s, shared with enrollments, so a pin hoisted there turns
+/// `an_enrollment_payload_precedes_the_home_pin` red too; this vector is the
+/// retirement kind's own statement of the order, for a `retire_path` that
+/// pinned its home ahead of the shared path — which that enrollment vector
+/// cannot see.
 #[test]
 fn a_retirement_payload_precedes_the_home_pin() {
     let mut fx = Fixture::new();

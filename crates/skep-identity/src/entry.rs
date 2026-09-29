@@ -41,11 +41,12 @@
 //!   position, never an element position: eight big-endian bytes, then the
 //!   chain's thirty-two raw bytes — forty bytes, [`board_bytes`].
 //! * THE VALUE-SEQUENCE ROW — content values in V-order WITH THEIR COUNT:
-//!   `be64(count)` then, per value, `be32(len) ‖ bytes` —
-//!   [`push_value_sequence`]. The count leads so a verifier holding a CHAIN
-//!   member that has GROWN past the signed prefix (the record §2.5's `publish`
-//!   cell, D25) knows how many of its values the signature covers before
-//!   reading one.
+//!   `be64(count)` then, per value, `be32(len) ‖ bytes` — [`ValueSequence`],
+//!   written whole by [`push_value_sequence`] and one value at a time by
+//!   [`PublishBody`]. The count leads so a verifier holding a CHAIN member
+//!   that has GROWN past the signed prefix (the record §2.5's `publish` cell,
+//!   D25) knows how many of its values the signature covers before reading
+//!   one.
 //! * THE SLOT ROW — a link slot in the form the client sent it: one form
 //!   byte (`0x01` the address form, `0x02` the resolve form), `be64(n)`, then
 //!   each element — an address as the address row, a V-spec as its source
@@ -67,17 +68,18 @@
 //!   values in V-order as one value sequence — a PREFIX of the CHAIN member
 //!   the commit mints, never the whole member (the base's carried tail past
 //!   `base_extent` and every later deposit into the head member fall outside
-//!   it).
+//!   it); [`PublishBody`] builds it one value at a time under a byte budget,
+//!   for a verifier re-composing it off a store.
 //!
 //! Every length-delimited element is written by [`push_delimited`], the one
 //! function [`framed`] delimits its own fields with, and every row is written
-//! the same way — onto the one buffer its body builds ([`push_value_sequence`],
+//! the same way — onto the one buffer its body builds ([`ValueSequence`],
 //! [`push_slot`]), never built apart and copied in — so the composition is
 //! injective at every level: two distinct inputs never spell one preimage.
 
 use skep_address::{Address, Span};
 
-use crate::framing::{framed, push_delimited, ENTRY_TAG};
+use crate::framing::{delimited_len, framed, push_delimited, ENTRY_TAG};
 
 /// THE ENTRY FRAME: `framed(ENTRY_TAG, [alg, board, account, doc, op, body])`
 /// (AUTH-1.12's framing), EVERY member spelled here from the value the caller
@@ -90,8 +92,8 @@ use crate::framing::{framed, push_delimited, ENTRY_TAG};
 /// * `account`, `doc` — each ADDRESS in its dotted-decimal spelling
 ///   (`1.0.1.0.1`), the one spelling of the address whatever string named it;
 /// * `op`, `body` — the [`EntryBody`]'s token and bytes, which its builder
-///   ([`entry_body_insert`], [`entry_body_make_link`], [`entry_body_publish`])
-///   pairs.
+///   ([`entry_body_insert`], [`entry_body_make_link`], [`entry_body_publish`],
+///   [`PublishBody`]) pairs.
 ///
 /// PRECONDITION — as [`framed`]'s: every member is shorter than 2^32 bytes.
 /// A longer member PANICS, naming the obligation — a caller's bug and never
@@ -141,11 +143,12 @@ pub struct BoardTerm {
 /// ONE publish-class entry's `op` and `body` members, held together because
 /// they are one fact: each op's body has its own grammar, and the `op` token
 /// names which. Built only by [`entry_body_insert`], [`entry_body_make_link`]
-/// and [`entry_body_publish`], so a body cannot be framed under another op's
-/// token. The tokens are the op-kind names as the wire spells them —
-/// `insert`, `make_link`, `publish` — spelled HERE, beside the grammar each
-/// selects, because they are members of a signed preimage that a reader
-/// beside the table recomposes from this crate.
+/// and [`PublishBody`] — [`entry_body_publish`] among its builds — so a body
+/// cannot be framed under another op's token. The tokens are the op-kind
+/// names as the wire spells them — `insert`, `make_link`, `publish` — spelled
+/// HERE, once each, beside the grammar each selects, because they are members
+/// of a signed preimage that a reader beside the table recomposes from this
+/// crate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntryBody {
     op: &'static str,
@@ -177,19 +180,48 @@ fn address_bytes(a: &Address) -> Vec<u8> {
     a.to_string().into_bytes()
 }
 
-/// THE VALUE-SEQUENCE ROW, onto `out`: `be64(count)` then each value
-/// length-delimited, in the order given. The count LEADS but is known only
-/// once the values are down, so its eight bytes are held and written back:
-/// the values are walked once, as they come, and never collected.
-fn push_value_sequence<'a>(out: &mut Vec<u8>, values: impl IntoIterator<Item = &'a [u8]>) {
-    let at = out.len();
-    out.extend_from_slice(&[0; 8]);
-    let mut count: u64 = 0;
-    for v in values {
-        push_delimited(out, v);
-        count += 1;
+/// THE VALUE-SEQUENCE ROW, written onto a body's buffer one value at a time:
+/// `be64(count)` then each value length-delimited, in the order pushed. The
+/// count LEADS but is known only once the values are down, so its eight bytes
+/// are held where the row begins and written back by [`ValueSequence::close`]:
+/// the values are walked once, as they come, and never collected. The ONE
+/// statement of the row's layout — [`push_value_sequence`] writes a whole
+/// sequence through it, [`PublishBody`] one value at a time.
+#[derive(Debug)]
+struct ValueSequence {
+    /// Where the row, and so its held count, begins in the buffer.
+    at: usize,
+    count: u64,
+}
+
+impl ValueSequence {
+    /// Open the row at the end of `out`, its count held.
+    fn open(out: &mut Vec<u8>) -> ValueSequence {
+        let at = out.len();
+        out.extend_from_slice(&0u64.to_be_bytes());
+        ValueSequence { at, count: 0 }
     }
-    out[at..at + 8].copy_from_slice(&count.to_be_bytes());
+
+    /// One more value, length-delimited, after the last.
+    fn push(&mut self, out: &mut Vec<u8>, value: &[u8]) {
+        push_delimited(out, value);
+        self.count += 1;
+    }
+
+    /// Write the count back where the row began.
+    fn close(self, out: &mut [u8]) {
+        let count = self.count.to_be_bytes();
+        out[self.at..self.at + count.len()].copy_from_slice(&count);
+    }
+}
+
+/// THE VALUE-SEQUENCE ROW over a whole sequence, onto `out`.
+fn push_value_sequence<'a>(out: &mut Vec<u8>, values: impl IntoIterator<Item = &'a [u8]>) {
+    let mut row = ValueSequence::open(out);
+    for v in values {
+        row.push(out, v);
+    }
+    row.close(out);
 }
 
 /// A link slot as the client composed it — the two wire forms. `Copy`, as the
@@ -296,14 +328,70 @@ pub fn entry_body_make_link(slots: LinkSlots<'_>) -> EntryBody {
 
 /// THE `publish` BODY, under the `publish` token: the client's runs' values
 /// in V-order, as one value sequence with their count — `be64(count)`, then
-/// each value as `be32(len) ‖ bytes`.
+/// each value as `be32(len) ‖ bytes`. It is [`PublishBody`] under a budget no
+/// body reaches: over values a budget admits, the two build one body.
 ///
 /// PRECONDITION — every value is shorter than 2^32 bytes, as
 /// [`entry_body_insert`]'s are; a longer one PANICS, naming the obligation.
 pub fn entry_body_publish<'a>(values: impl IntoIterator<Item = &'a [u8]>) -> EntryBody {
-    let mut out = Vec::new();
-    push_value_sequence(&mut out, values);
-    EntryBody { op: "publish", bytes: out }
+    let mut body = PublishBody::within(usize::MAX);
+    for v in values {
+        let admitted = body.push(v);
+        debug_assert!(admitted, "a budget of usize::MAX bytes refuses no value");
+    }
+    body.finish()
+}
+
+/// A `publish` BODY built one value at a time under a byte BUDGET — for the
+/// verifier that re-composes a shot's body off its own store, where each
+/// value arrives by a read that can fail and the body must stop at the budget
+/// rather than be built past it. [`PublishBody::push`] measures the budget in
+/// the body's own layout, so no caller restates that layout; the caller keeps
+/// its walk, and its own answer for a value it could not read, and collects
+/// nothing ahead of the build. [`entry_body_publish`] is this builder under a
+/// budget no body reaches, so over values the budget admits the two build one
+/// body.
+#[derive(Debug)]
+pub struct PublishBody {
+    bytes: Vec<u8>,
+    row: ValueSequence,
+    max: usize,
+}
+
+impl PublishBody {
+    /// A body of no values yet — the leading count's eight bytes — whose
+    /// [`PublishBody::push`] admits no value that would carry the FINISHED
+    /// body past `max` bytes.
+    pub fn within(max: usize) -> PublishBody {
+        let mut bytes = Vec::new();
+        let row = ValueSequence::open(&mut bytes);
+        PublishBody { bytes, row, max }
+    }
+
+    /// Append `value` as the body's next — unless the finished body would then
+    /// pass its budget, where nothing is appended and the answer is `false`:
+    /// no push carries the body past it. No value is free — an empty one costs
+    /// its length prefix, so a budget of `max` bytes admits at most a quarter
+    /// of `max` values, whatever they hold.
+    ///
+    /// PRECONDITION — as [`entry_body_publish`]'s: `value` is shorter than
+    /// 2^32 bytes, else PANICS; under any budget below that bound, this
+    /// refuses such a value first.
+    #[must_use = "a value the budget refused was not appended"]
+    pub fn push(&mut self, value: &[u8]) -> bool {
+        if self.bytes.len().saturating_add(delimited_len(value.len())) > self.max {
+            return false;
+        }
+        self.row.push(&mut self.bytes, value);
+        true
+    }
+
+    /// The body, under the `publish` token.
+    pub fn finish(self) -> EntryBody {
+        let PublishBody { mut bytes, row, .. } = self;
+        row.close(&mut bytes);
+        EntryBody { op: "publish", bytes }
+    }
 }
 
 #[cfg(test)]
@@ -426,6 +514,22 @@ mod tests {
             ["insert", "make_link", "publish"],
             "each body carries its own op's token"
         );
+    }
+
+    /// [`PublishBody`] under its budget: it finishes to [`entry_body_publish`]'s
+    /// body over the values it admitted, and the budget is the FINISHED body's
+    /// length — a value landing the body exactly on it is admitted, one byte
+    /// more is refused and appends nothing, and at the budget not even an empty
+    /// value fits, its length prefix costing four bytes.
+    #[test]
+    fn a_publish_body_built_within_its_budget_is_the_whole_sequences_body() {
+        let whole = entry_body_publish([&b"ab"[..], &b"c"[..]]);
+        let mut body = PublishBody::within(whole.as_bytes().len());
+        assert!(body.push(b"ab"));
+        assert!(!body.push(b"cd"), "one byte past the budget");
+        assert!(body.push(b"c"), "exactly on it");
+        assert!(!body.push(b""), "an empty value costs its length prefix");
+        assert_eq!(body.finish(), whole);
     }
 
     /// The frame is `framed(ENTRY_TAG, …)` over the six members in order and

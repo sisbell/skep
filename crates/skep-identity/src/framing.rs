@@ -98,8 +98,9 @@ pub fn framed(tag: Tag, fields: &[&[u8]]) -> Vec<u8> {
         TAGS.contains(&tag),
         "framed: {tag:?} is declared but not listed in TAGS (AUTH-1.14)"
     );
-    let mut out =
-        Vec::with_capacity(tag.0.len() + fields.iter().map(|f| 4 + f.len()).sum::<usize>());
+    let mut out = Vec::with_capacity(
+        tag.0.len() + fields.iter().map(|f| delimited_len(f.len())).sum::<usize>(),
+    );
     out.extend_from_slice(tag.0);
     for field in fields {
         push_delimited(&mut out, field);
@@ -119,6 +120,15 @@ pub(crate) fn push_delimited(out: &mut Vec<u8>, bytes: &[u8]) {
     let len = u32::try_from(bytes.len()).expect("framed element length exceeds be32");
     out.extend_from_slice(&len.to_be_bytes());
     out.extend_from_slice(bytes);
+}
+
+/// The bytes [`push_delimited`] writes for an element of `len` bytes — its
+/// `be32` length, then the element — so a budget measured BEFORE an element is
+/// written reads the delimiting rule's cost where the rule is stated.
+/// Saturating: an element no `be32` can measure is [`push_delimited`]'s panic
+/// to refuse, never a wrapped length here.
+pub(crate) fn delimited_len(len: usize) -> usize {
+    len.saturating_add(std::mem::size_of::<u32>())
 }
 
 #[cfg(all(test, debug_assertions))]

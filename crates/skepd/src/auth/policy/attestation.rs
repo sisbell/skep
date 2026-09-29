@@ -60,8 +60,9 @@ use crate::World;
 ///    or an answer ahead of the source gate), `attestation_invalid:withheld`
 ///    where they would admit it, the base carrying the run; a body past
 ///    `entry::MAX_SHOT_BODY_BYTES` answers
-///    `attestation_invalid:frame_too_large` before it is built; a board with
-///    no `H.1` — the states [`crate::write_path::board_term`] names — answers
+///    `attestation_invalid:frame_too_large` before it is built past the
+///    budget; a board with no `H.1` — the states
+///    [`crate::write_path::board_term`] names — answers
 ///    `attestation_invalid:board_unavailable`, never "carry an attest"; a
 ///    principal with no account answers
 ///    `attestation_invalid:not_enrolled_at_position`.

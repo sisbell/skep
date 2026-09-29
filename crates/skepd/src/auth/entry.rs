@@ -46,15 +46,15 @@
 //!   cross-owner `version` of a published member hands a principal runs whose
 //!   origin it never could read.
 //! * a body past [`MAX_SHOT_BODY_BYTES`], refused
-//!   `attestation_invalid:frame_too_large` before it is built.
+//!   `attestation_invalid:frame_too_large` before it is built past the budget.
 
 use skep_address::{document_of, Address, Span};
 use skep_arrangement::{trunk_of, Deposit, Shot};
 use skep_content::HasContent;
 use skep_febe::Op;
 use skep_identity::{
-    entry_body_insert, entry_body_make_link, entry_body_publish, entry_frame, BoardTerm, EntryBody,
-    EntrySlot, LinkSlots,
+    entry_body_insert, entry_body_make_link, entry_frame, BoardTerm, EntryBody, EntrySlot,
+    LinkSlots, PublishBody,
 };
 use skep_links::SlotArg;
 use skep_namespace::{HasM3, PrincipalId};
@@ -73,20 +73,12 @@ use crate::World;
 /// verifies — against every candidate key of the attestation's row — the
 /// largest an `insert` could already hand it.
 ///
-/// Measured in [`entry_body_publish`]'s own layout — a be64 count, then a
-/// be32 length and the bytes per value ([`VALUE_COUNT_BYTES`],
-/// [`VALUE_LENGTH_BYTES`]) — as the walk reads each value, so an
-/// over-budget shot is refused before its body is built, and the walk over
-/// the runs' Σ width stops at the budget: every value is at least one byte
-/// (M5 refuses an empty one), so the walk visits at most a fifth of the
-/// budget in positions.
+/// Measured by [`PublishBody`], in the body's own layout, as the walk reads
+/// each value, so an over-budget shot is refused before its body is built
+/// past the budget, and the walk over the runs' Σ width stops at it: every
+/// value costs at least its four-byte length prefix, so the walk visits at
+/// most a quarter of the budget in positions, whatever the values hold.
 const MAX_SHOT_BODY_BYTES: usize = crate::limits::MAX_REQUEST_BODY;
-
-/// The value sequence's leading be64 count.
-const VALUE_COUNT_BYTES: usize = 8;
-
-/// The be32 length each value of the sequence is delimited by.
-const VALUE_LENGTH_BYTES: usize = 4;
 
 /// Why the daemon could not compose the entry frame for a write — the reason
 /// the composer met; what the write is owed is the check's to answer
@@ -220,26 +212,25 @@ fn every_run_origin_readable(
     })
 }
 
-/// A shot's body — its runs' values in run order, as [`entry_body_publish`]'s
-/// value sequence — or why it cannot be built: an address M4 holds no value
-/// at, or a body past [`MAX_SHOT_BODY_BYTES`], measured in the sequence's
-/// own layout as each value is read. PRECONDITION: the principal may read
-/// every value the shot places ([`every_run_origin_readable`]).
+/// A shot's body — its runs' values in run order, pushed one by one onto a
+/// [`PublishBody`] held to [`MAX_SHOT_BODY_BYTES`] — or why it cannot be
+/// built: an address M4 holds no value at, or a value that would carry the
+/// body past the budget. The budget is measured in the body's own layout as
+/// each value is read, so nothing is collected ahead of the build and no body
+/// is held past it. PRECONDITION: the principal may read every value the
+/// shot places ([`every_run_origin_readable`]).
 fn publish_body(world: &World, shot: &Shot) -> Result<EntryBody, ComposeFault> {
     let content = world.content();
-    let mut values: Vec<&[u8]> = Vec::new();
-    let mut body_len = VALUE_COUNT_BYTES;
+    let mut body = PublishBody::within(MAX_SHOT_BODY_BYTES);
     for placed in &shot.runs {
         for a in placed.run.addrs() {
             let v = content.value_at(a.tumbler()).ok_or(ComposeFault::MissingValue)?;
-            body_len = body_len.saturating_add(VALUE_LENGTH_BYTES).saturating_add(v.len());
-            if body_len > MAX_SHOT_BODY_BYTES {
+            if !body.push(v.as_bytes()) {
                 return Err(ComposeFault::OverBudget);
             }
-            values.push(v.as_bytes());
         }
     }
-    Ok(entry_body_publish(values))
+    Ok(body.finish())
 }
 
 /// An ENTRY frame composed but for its `alg` member — [`compose`]'s answer,
@@ -268,24 +259,10 @@ impl EntryFrame {
 #[cfg(test)]
 mod tests {
     use skep_febe::OpKind;
+    use skep_identity::entry_body_publish;
 
     use super::*;
     use crate::codec::op_name;
-
-    /// The budget is measured in the body's OWN layout: the two constants
-    /// [`publish_body`] sums are the ones `entry_body_publish` lays out — a
-    /// count, then a length and the bytes per value — so the shot refused
-    /// past [`MAX_SHOT_BODY_BYTES`] is one whose built body would pass it,
-    /// and the one admitted at it builds no more.
-    #[test]
-    fn the_budget_is_measured_in_the_value_sequence_s_own_layout() {
-        assert_eq!(entry_body_publish(std::iter::empty()).as_bytes().len(), VALUE_COUNT_BYTES);
-        let values: [&[u8]; 3] = [b"ab", b"c", b"defg"];
-        assert_eq!(
-            entry_body_publish(values).as_bytes().len(),
-            VALUE_COUNT_BYTES + 3 * VALUE_LENGTH_BYTES + 2 + 1 + 4
-        );
-    }
 
     /// The frame's `op` member is the op-kind token AS THE WIRE SPELLS IT
     /// (the design record §2.5): each body `skep_identity` builds carries the

@@ -37,10 +37,11 @@
 //! Signed ops' declarations are consumed in skepd as well: it composes the
 //! ENTRY frame it verifies through [`entry_frame`], over the locked
 //! snapshot's [`BoardTerm`], the principal's account, and the op's document
-//! and [`EntryBody`]; its write-path check reads a presented attestation's row
-//! off the marker tag, and its codec lifts a request's `attest.alg` token to
-//! that tag and back, through [`SigAlgRow::of_token`] and
-//! [`SigAlgRow::of_tag`]; it holds each marker tag's arithmetic over
+//! and [`EntryBody`] — a `publish`'s built value by value within its budget
+//! through [`PublishBody`]; its write-path check reads a presented
+//! attestation's row off the marker tag, and its codec lifts a request's
+//! `attest.alg` token to that tag and back, through [`SigAlgRow::of_token`]
+//! and [`SigAlgRow::of_tag`]; it holds each marker tag's arithmetic over
 //! [`SIG_ALGS`]' rows and a key's two halves — composing them at keygen
 //! ([`PublicKey::from_halves`]) and reading them to verify
 //! ([`PublicKey::pq_half`], [`PublicKey::ed25519_half`]); and it sizes the
@@ -93,8 +94,9 @@
 //!   [`BoardTerm`], the account and document addresses, and an [`EntryBody`]
 //!   — an op's token paired with its body, built by [`entry_body_insert`],
 //!   [`entry_body_make_link`] (over a [`LinkSlots`] naming three
-//!   [`EntrySlot`]s) and [`entry_body_publish`] — the bytes a publish-class
-//!   entry's signature is made over (signed ops; the design record §2.5);
+//!   [`EntrySlot`]s) and [`entry_body_publish`], or value by value under a
+//!   byte budget by [`PublishBody`] — the bytes a publish-class entry's
+//!   signature is made over (signed ops; the design record §2.5);
 //! * `payload`: the credential-record constants and payload types —
 //!   [`ENROLL_TYPE`], [`RETIRE_TYPE`], [`MAX_RECORD_BYTES`], [`Enrollment`]
 //!   with its refusal [`LabelError`], [`PayloadError`] (AUTH-1.18–1.28) —
@@ -174,7 +176,7 @@ mod write_types;
 
 pub use entry::{
     entry_body_insert, entry_body_make_link, entry_body_publish, entry_frame, BoardTerm, EntryBody,
-    EntrySlot, LinkSlots,
+    EntrySlot, LinkSlots, PublishBody,
 };
 pub use framing::{
     framed, Tag, ENTRY_TAG, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, SESSION_TAG_V2, TAGS,

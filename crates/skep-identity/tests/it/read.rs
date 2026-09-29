@@ -744,7 +744,7 @@ fn three_atom_record_folds() {
 /// 32 + 32·4,017 + 31 = 128,607 ≤ 131,072 and 33 entries would overflow
 /// (132,625) — the 617 of the 64 KiB cap over classical entries become 32
 /// here (rc-3; the record-cap measurements §5.2 K8; AUTH-2.130's cost note).
-const CAP_SIZED_ENTRIES: u32 = 32;
+const CAP_SIZED_ENTRIES: u8 = 32;
 
 /// The bytes a label of `L` bytes adds to a label-free entry: the
 /// `,"label":"…"` wrapper is 11 bytes (AUTH-2.130's canonical spelling), so
@@ -761,7 +761,7 @@ const MAX_PAD_PER_LABEL: usize = 128 + LABEL_WRAPPER;
 /// `max_record_bytes_is_128_kib` stays the one assertion that discovers it.
 fn cap_sized_enroll_payload(over: usize) -> Vec<u8> {
     let mut entries: Vec<Enrollment> = (0..CAP_SIZED_ENTRIES)
-        .map(|i| Enrollment::new(wide_key(i), false, None).expect("label-free"))
+        .map(|i| Enrollment::new(key(i), false, None).expect("label-free"))
         .collect();
     let base_len = encode_enroll(&entries).len();
     // Room for at least a one-byte label: the wrapper and one byte more.
@@ -790,7 +790,8 @@ fn cap_sized_enroll_payload(over: usize) -> Vec<u8> {
             MAX_PAD_PER_LABEL
         };
         assert!(take > LABEL_WRAPPER, "a label adds at least {} bytes", LABEL_WRAPPER + 1);
-        entries[i] = Enrollment::new(wide_key(i as u32), false, Some("x".repeat(take - LABEL_WRAPPER)))
+        let label = "x".repeat(take - LABEL_WRAPPER);
+        entries[i] = Enrollment::new(entries[i].key.clone(), false, Some(label))
             .expect("a label of at most 128 bytes");
         pad -= take;
         i += 1;

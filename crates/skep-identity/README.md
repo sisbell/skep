@@ -17,13 +17,14 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **`Values` / `FoldCtx`** — the crate defines its own minimal
   world-fact traits and consumes only
   [skep-address](../skep-address) types: no I/O, no clock, no
-  signature verification (verification lives at the session layer),
+  signature verification (verification lives in
+  [skep-signature](../skep-signature), which skepd's session layer calls),
   no engine dependency.
 - **Signed-op declarations** — the bytes a signed write's signature
   covers (the entry frame and its members' encodings), the marker-tag
   table of the two hybrid signature schemes, and a hybrid key's two
-  halves; declarations only — making and checking signatures is the
-  session layer's.
+  halves; declarations only — making and checking signatures is
+  [skep-signature](../skep-signature)'s.
 - **Write-path type classes** — the credential kinds widened by the
   grants and audit-view classes, for the daemon's `nullify` refusals;
   recognition only, never fold state.

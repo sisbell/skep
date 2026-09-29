@@ -1,9 +1,10 @@
 //! THE HYBRID ENTRY SIGNATURE (signed ops, the seam build 2026-09-25): the
 //! two marker tags' FROZEN RULES — keygen from one seed, signing, verifying —
-//! in the one crate that may link a signature library (AUTH-2.2; the PQ
-//! crate investigation §8.4 (5)). skep-identity holds the SYNTAX (the `ALGS`
-//! rows, the `SIG_ALGS` table, the entry frame); this module holds the
-//! ARITHMETIC, dispatching on the tag to THAT tag's rule and to no other.
+//! in `skep-signature`, the one crate that links the signature libraries;
+//! skepd calls its verify (AUTH-2.2; the PQ crate investigation §8.4 (5)).
+//! skep-identity holds the SYNTAX (the `ALGS` rows, the `SIG_ALGS` table, the
+//! entry frame); this module holds the ARITHMETIC, dispatching on the tag to
+//! THAT tag's rule and to no other.
 //!
 //! THE TAGS, each one exact rule held whole (the design record §1's
 //! algorithm row, the frozen-tag rule; the owner 2026-09-25: it extends to
@@ -54,25 +55,33 @@
 //! — either failing fails (the ruled "hybrid, both halves verify"); no half
 //! opens a session alone.
 //!
-//! What lives here beside the daemon's verify and all-halves decode —
-//! keygen and signing — is the signer's side, used by the suites' test
-//! signer and by the goldens that pin each tag's rule; the daemon itself
-//! holds no key and never signs.
+//! What lives here beside the verify and all-halves decode skepd calls —
+//! keygen and signing — is the signer's side, compiled only under the `sign`
+//! feature, which skepd leaves off: used by the suites' test signer and by
+//! the goldens that pin each tag's rule.
+
+#![forbid(unsafe_code)]
+#![deny(missing_docs)]
 
 use std::fmt;
 
-use ed25519_dalek::{Signer as _, SigningKey as EdSigningKey, VerifyingKey as EdVerifyingKey};
+use ed25519_dalek::VerifyingKey as EdVerifyingKey;
+#[cfg(feature = "sign")]
+use ed25519_dalek::{Signer as _, SigningKey as EdSigningKey};
+use fn_dsa::{VerifyingKey as _, VerifyingKeyStandard, DOMAIN_NONE, HASH_ID_RAW};
+#[cfg(feature = "sign")]
 use fn_dsa::{
     signature_size, sign_key_size, vrfy_key_size, KeyPairGenerator, KeyPairGeneratorStandard,
-    SigningKey as _, SigningKeyStandard, VerifyingKey as _, VerifyingKeyStandard,
-    DOMAIN_NONE, FN_DSA_LOGN_512, HASH_ID_RAW,
+    SigningKey as _, SigningKeyStandard, FN_DSA_LOGN_512,
 };
+#[cfg(feature = "sign")]
 use hkdf::Hkdf;
-use ml_dsa::{EncodedSignature, EncodedVerifyingKey, Keypair as _, MlDsa65, Signer as _};
+use ml_dsa::{EncodedSignature, EncodedVerifyingKey, MlDsa65};
+#[cfg(feature = "sign")]
+use ml_dsa::{Keypair as _, Signer as _};
+#[cfg(feature = "sign")]
 use sha2::Sha256;
 use skep_identity::{PublicKey, SigAlgRow};
-
-use super::OsEntropy;
 
 #[cfg(any(test, feature = "test-hooks"))]
 use ml_dsa::ExpandedSigningKeyBytes;
@@ -95,7 +104,7 @@ pub const TAG_FNDSA512_PREVIEW_ED25519: u8 = 3;
 /// standard's arms never share a name with it) is one variant here and one
 /// arm in [`Rule::of`], and the compiler names every step that must learn
 /// it. No step outside this module enumerates the tags: the handshake's
-/// `sig` ([`super::session::SessionSig`]) admits every `SIG_ALGS` row's
+/// `sig` (`skepd::auth::session::SessionSig`) admits every `SIG_ALGS` row's
 /// width, read off the table at the parse. Each variant is its row's token
 /// in CamelCase.
 #[derive(Clone, Copy)]
@@ -120,10 +129,14 @@ impl Rule {
 
 /// The KDF's salt — the derivation's own name, so the same seed under
 /// another KDF version derives other keys.
+#[cfg(feature = "sign")]
 const KDF_SALT: &[u8] = b"skep-kdf-v1";
 /// The half labels.
+#[cfg(feature = "sign")]
 const HALF_ED25519: &[u8] = b"ed25519";
+#[cfg(feature = "sign")]
 const HALF_MLDSA65: &[u8] = b"ml-dsa-65";
+#[cfg(feature = "sign")]
 const HALF_FNDSA512: &[u8] = b"fn-dsa-512";
 
 /// The two half seeds one 32-byte seed derives under one tag —
@@ -132,6 +145,7 @@ const HALF_FNDSA512: &[u8] = b"fn-dsa-512";
 /// derived `PartialEq`, whose comparison stops at the first differing byte.
 /// Either can be added later without breaking a caller; neither could be
 /// removed.
+#[cfg(feature = "sign")]
 #[derive(Clone)]
 pub struct HalfSeeds {
     /// The Ed25519 half's seed (`ed25519-dalek`'s `SigningKey::from_bytes`).
@@ -141,6 +155,7 @@ pub struct HalfSeeds {
     pub pq: [u8; 32],
 }
 
+#[cfg(feature = "sign")]
 impl fmt::Debug for HalfSeeds {
     /// A seed is private-key material: never printed.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -150,6 +165,7 @@ impl fmt::Debug for HalfSeeds {
 
 /// HKDF-SHA-256 as the KDF PIN states it: `salt = KDF_SALT`, `IKM = seed`,
 /// `info = token ‖ 0x00 ‖ half_label`, 32 bytes out.
+#[cfg(feature = "sign")]
 fn derive_half_seed(seed: &[u8; 32], token: &str, half_label: &[u8]) -> [u8; 32] {
     let hk = Hkdf::<Sha256>::new(Some(KDF_SALT), seed);
     let mut out = [0u8; 32];
@@ -164,6 +180,7 @@ fn derive_half_seed(seed: &[u8; 32], token: &str, half_label: &[u8]) -> [u8; 32]
 
 /// THE KDF: one seed to both half seeds under `tag`'s token; `None` for a
 /// tag no row names or this build holds no rule for.
+#[cfg(feature = "sign")]
 pub fn derive_seeds(tag: u8, seed: &[u8; 32]) -> Option<HalfSeeds> {
     let row = SigAlgRow::of_tag(tag)?;
     let pq_label = match Rule::of(tag)? {
@@ -182,11 +199,13 @@ pub fn derive_seeds(tag: u8, seed: &[u8; 32]) -> Option<HalfSeeds> {
 /// under the frozen-tag rule a NEW tag; refusing it makes the rule loud. It
 /// BORROWS the bytes: the KDF's half seed is lent to the keygen and never
 /// copied onto the heap.
+#[cfg(feature = "sign")]
 struct ExactBytes<'a> {
     bytes: &'a [u8],
     taken: usize,
 }
 
+#[cfg(feature = "sign")]
 impl rand_core_06::RngCore for ExactBytes<'_> {
     fn next_u32(&mut self) -> u32 {
         rand_core_06::impls::next_u32_via_fill(self)
@@ -212,12 +231,17 @@ impl rand_core_06::RngCore for ExactBytes<'_> {
     }
 }
 
+#[cfg(feature = "sign")]
 impl rand_core_06::CryptoRng for ExactBytes<'_> {}
 
-/// `rand_core` 0.6's view of the crate's one OS RNG ([`OsEntropy`]): what a
-/// tag-3 signature draws its 40-byte seed from outside a seeded fixture,
-/// delegating to the 0.9 impl's `fill_bytes` so the OS draw and its
-/// fail-stop are stated once.
+/// The crate's one OS RNG, fail-stop: what a tag-3 signature draws its
+/// 40-byte seed from outside a seeded fixture. Every draw comes from the OS
+/// (`getrandom`), so a signature's seed is never a function of process state;
+/// `rand_core` 0.6's traits, which `fn-dsa` 0.4.0 draws through.
+#[cfg(feature = "sign")]
+struct OsEntropy;
+
+#[cfg(feature = "sign")]
 impl rand_core_06::RngCore for OsEntropy {
     fn next_u32(&mut self) -> u32 {
         rand_core_06::impls::next_u32_via_fill(self)
@@ -226,14 +250,17 @@ impl rand_core_06::RngCore for OsEntropy {
         rand_core_06::impls::next_u64_via_fill(self)
     }
     fn fill_bytes(&mut self, dest: &mut [u8]) {
-        rand_core::RngCore::fill_bytes(self, dest)
+        // Fail-stop: a signer that cannot draw OS entropy must not sign over
+        // a seed from anything weaker.
+        getrandom::fill(dest).expect("OS entropy unavailable");
     }
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core_06::Error> {
-        rand_core::RngCore::fill_bytes(self, dest);
+        self.fill_bytes(dest);
         Ok(())
     }
 }
 
+#[cfg(feature = "sign")]
 impl rand_core_06::CryptoRng for OsEntropy {}
 
 /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a stable
@@ -303,6 +330,7 @@ impl rand_core_06::RngCore for SeededRng06 {
 impl rand_core_06::CryptoRng for SeededRng06 {}
 
 /// The post-quantum half of a signer, per tag.
+#[cfg(feature = "sign")]
 enum PqSigner {
     /// Tag 1: the expanded ML-DSA-65 signing key, from ξ.
     MlDsa65(ml_dsa::SigningKey<MlDsa65>),
@@ -318,6 +346,7 @@ enum PqSigner {
 /// public key the `alg` and `key` of ONE key entry — one `ALGS` token over
 /// one concatenated raw value (wire.md). Holds private-key material and
 /// prints none of it.
+#[cfg(feature = "sign")]
 pub struct HybridSigner {
     row: &'static SigAlgRow,
     ed: EdSigningKey,
@@ -325,12 +354,14 @@ pub struct HybridSigner {
     public: PublicKey,
 }
 
+#[cfg(feature = "sign")]
 impl fmt::Debug for HybridSigner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "HybridSigner(tag {}, {:?})", self.row.tag, self.public)
     }
 }
 
+#[cfg(feature = "sign")]
 impl HybridSigner {
     /// KEYGEN FROM SEED under `tag`'s frozen rule: the KDF's two half seeds,
     /// the Ed25519 key from its half, the PQ key from its half by the pinned
@@ -480,8 +511,8 @@ impl fmt::Display for HybridFault {
     }
 }
 
-/// The ecosystem door, as [`crate::NotCanonical`] and
-/// [`crate::PortAlreadyBound`] keep it: only a type carrying `Display` and
+/// The ecosystem door, as `skepd::NotCanonical` and
+/// `skepd::PortAlreadyBound` keep it: only a type carrying `Display` and
 /// `std::error::Error` composes with `?` into a caller's own error type, and
 /// a caller cannot add either impl.
 impl std::error::Error for HybridFault {}
@@ -552,8 +583,8 @@ pub fn key_decodes(key: &PublicKey) -> bool {
 /// is the row's answer alone — a tag no row names, or a key of another row.
 ///
 /// `msg` comes before `sig`, the order RustCrypto's
-/// `signature::Verifier::verify`, `ed25519-dalek`'s `verify_strict` and this
-/// crate's own `session::verify` take them: the two are `&[u8]` the compiler
+/// `signature::Verifier::verify`, `ed25519-dalek`'s `verify_strict` and
+/// skepd's own `session::verify` take them: the two are `&[u8]` the compiler
 /// cannot tell apart, so the order a Rust caller already knows is the one
 /// that holds.
 pub fn verify(tag: u8, key: &PublicKey, msg: &[u8], sig: &[u8]) -> Result<(), HybridFault> {
@@ -632,6 +663,26 @@ pub fn pq_widths(tag: u8) -> Option<PqWidths> {
         },
     })
 }
+
+/// The auto-traits this crate promises without saying so. A signer held
+/// across threads depends on `HybridSigner: Send + Sync`, and no signature
+/// states it — so a private field that is not `Send` would revoke it with no
+/// public name changing. This is where that fails to compile instead.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    // The signer a client holds across threads, the seeds it derives from,
+    // the verify's refusal, the fixtures' seeded stream, and the widths the
+    // sizes pin reads.
+    #[cfg(feature = "sign")]
+    assert_send_sync::<HybridSigner>();
+    #[cfg(feature = "sign")]
+    assert_send_sync::<HalfSeeds>();
+    assert_send_sync::<HybridFault>();
+    #[cfg(any(test, feature = "test-hooks"))]
+    assert_send_sync::<SeededRng06>();
+    #[cfg(any(test, feature = "test-hooks"))]
+    assert_send_sync::<PqWidths>();
+};
 
 #[cfg(test)]
 mod tests;

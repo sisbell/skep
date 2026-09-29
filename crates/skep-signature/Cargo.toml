@@ -1,0 +1,84 @@
+[package]
+name = "skep-signature"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "Signed ops — the hybrid signature's frozen rules: the KDF from one seed, keygen and signing per marker tag (behind `sign`), the key and blob layouts, and the verify both halves must pass; the one crate that links the signature libraries"
+readme = "README.md"
+
+[features]
+# NEITHER is on by default, and the default is the VERIFY-ONLY build a daemon
+# links: each marker tag's verify, the all-halves decode and the tag
+# constants — no KDF, no keygen, no signer. skepd depends on this crate with
+# no feature, so the daemon's build holds no signer (AUTH-2.89, I1: "skepd's
+# source has no signing capability").
+#
+# `sign` compiles the SIGNER's half: the KDF (one seed to both half seeds),
+# keygen from a seed per tag (`HybridSigner::from_seed`), signing
+# (`HybridSigner::sign`) and the signer's OS draw — for a signer, and for the
+# suites that sign their fixtures.
+sign = ["dep:rand_core_06", "dep:hkdf", "dep:sha2", "dep:getrandom"]
+# `test-hooks` compiles in the fixtures' hooks — the seeded RNG
+# (`SeededRng06`), `HybridSigner::sign_with_rng`, the Ed25519 half's signing
+# key and the widths the sizes pin reads (`pq_widths`) — and implies `sign`.
+# No shipped signer enables it: this crate's own tests turn it on through the
+# self dev-dependency below, and skepd's `test-hooks` on this crate's line, so
+# a build that compiles no test compiles none of it.
+test-hooks = ["sign"]
+
+[dependencies]
+# The SYNTAX the arithmetic reads: the `SIG_ALGS` rows (a tag's token and
+# widths) and a hybrid key's two halves (`PublicKey::from_halves`, `pq_half`,
+# `ed25519_half`). The one skep crate this crate names.
+skep-identity = { path = "../skep-identity" }
+# The Ed25519 verifier — AUTH-7.17's crate pick, argued in the build report:
+# `verify_strict` by name (AUTH-4.32's pinned semantics), pure Rust, and
+# canonical point decoding at `VerifyingKey::from_bytes` (the
+# one-canonical-raw-form-per-token obligation, AUTH-2.99). `skep-signature`
+# is the one crate that links the signature libraries; skepd calls its verify
+# (AUTH-2.2).
+ed25519-dalek = "2"
+# THE POST-QUANTUM HALVES OF THE HYBRID ENTRY SIGNATURE (signed ops, the seam
+# build 2026-09-25; the PQ crate investigation §8.1, §8.4 (5), §8.5 (ii)):
+# both sit HERE beside `ed25519-dalek`, never in skep-identity (AUTH-2.1),
+# and both are PINNED EXACTLY — an algorithm tag names one exact, frozen
+# verification rule and one exact keygen-from-seed rule (the design record
+# §1's algorithm row; the frozen-tag rule), so a version bump is a rule
+# change that ships as a NEW tag, never as an edit to an old one.
+# Tag 1 (PRODUCTION): ML-DSA-65 + Ed25519 — RustCrypto `ml-dsa`, pure Rust,
+# final FIPS 204 with the seed entry point `SigningKey::from_seed`.
+ml-dsa = { version = "=0.1.1", default-features = false, features = ["alloc"] }
+# Tag 3 (PREVIEW): FN-DSA-512 + Ed25519 — Thomas Pornin's pure-Rust `fn-dsa`,
+# a "best guess" at the FN-DSA draft; its 0.4.0 keygen and format ARE tag 3's
+# frozen rule (the final FIPS 206 is a later tag; tag 2 stays free for it).
+fn-dsa = "=0.4.0"
+# THE SIGNER's libraries, below: each OPTIONAL, enabled by `sign` alone — the
+# verify links none of them.
+#
+# fn-dsa's signer and keygen draw from a `rand_core` 0.6 RNG (the test signer
+# and the key-derivation golden feed them a seeded stream).
+rand_core_06 = { package = "rand_core", version = "0.6", optional = true }
+# THE KDF (the record §5.2 (ii); the KDF PIN): one 32-byte seed to both
+# halves by HKDF-SHA-256 with the algorithm token and the half as the
+# domain-separation labels, never the raw seed.
+hkdf = { version = "0.12", optional = true }
+sha2 = { workspace = true, optional = true }
+# The signer's OS draw: a tag-3 signature's per-signature seed outside a
+# seeded fixture, fail-stop — never a seed from anything weaker.
+getrandom = { version = "0.3", optional = true }
+
+[dev-dependencies]
+# This crate itself with `test-hooks` on, so its integration tests
+# (tests/it, outside this library's `cfg(test)`) compile against the signer
+# and the hooks under a plain `cargo test` or workspace run, no flag added. A
+# build that compiles no test never reads this table.
+skep-signature = { path = ".", features = ["test-hooks"] }
+# The goldens' fixed frames name their account, document and type addresses.
+skep-address = { path = "../skep-address" }
+# THE DIFFERENTIAL ORACLE for tag 1 (the PQ investigation §8.4 (4), §8.5 (ii)):
+# a second pure-Rust FIPS 204 implementation the golden checks `ml-dsa`'s
+# keys-from-seed and signatures byte-equal against — the gate every future
+# bump of the pinned crate must pass.
+fips204 = { version = "=0.4.6", default-features = false, features = ["ml-dsa-65"] }

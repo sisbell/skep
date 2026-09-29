@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/skep-identity",
+    "crates/skep-signature",
     "crates/skep-mcp",
     "crates/skepd",
     "crates/skep-conformance",

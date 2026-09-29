@@ -1,16 +1,14 @@
 //! The crate's one source of randomness — the OS, fail-stop — for session
-//! tokens, nonces and tag-3 signatures.
+//! tokens and nonces.
 
 use rand_core::{CryptoRng, RngCore};
 
 // ── OS entropy (AUTH-4.13) ───────────────────────────────────────────────
 
 /// The crate's one OS RNG: every draw comes from the OS (`getrandom`), so a
-/// token, a nonce or a tag-3 signature's seed is never a function of process
-/// state. Implements `rand_core` 0.9's traits, which the declared signatures
-/// on the auth surface carry (AUTH-4.19, AUTH-4.23), and — in `hybrid` —
-/// 0.6's, which `fn-dsa` 0.4.0 draws through, both over the one `fill_bytes`
-/// below.
+/// token or a nonce is never a function of process state. Implements
+/// `rand_core` 0.9's traits, which the declared signatures on the auth
+/// surface carry (AUTH-4.19, AUTH-4.23).
 pub(crate) struct OsEntropy;
 
 impl RngCore for OsEntropy {

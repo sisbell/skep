@@ -2,8 +2,8 @@ use skep_engine::Engine;
 use skep_febe::OperationSurface;
 use skep_identity::SigAlgRow;
 use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
+use skep_signature::{TAG_FNDSA512_PREVIEW_ED25519, TAG_MLDSA65_ED25519};
 
-use super::super::hybrid::{TAG_FNDSA512_PREVIEW_ED25519, TAG_MLDSA65_ED25519};
 use super::super::AuthOptions;
 use super::*;
 
@@ -418,8 +418,7 @@ fn the_sig_is_admitted_at_exactly_the_two_hybrid_widths() {
 /// panic on any of them.
 #[test]
 fn verify_is_both_halves_under_the_keys_own_row() {
-    use super::super::hybrid::{HybridSigner, SeededRng06};
-    use ed25519_dalek::Signer as _;
+    use skep_signature::{HybridSigner, SeededRng06};
     let seed = [0x33u8; 32];
     let payload = session_payload(
         &Origin::parse("http://127.0.0.1:8642").expect("canonical"),
@@ -444,7 +443,9 @@ fn verify_is_both_halves_under_the_keys_own_row() {
     assert!(!verify(s1.public_key(), &payload, &ed_broken), "the Ed25519 half broken: no session");
     assert!(!verify(s1.public_key(), &payload, &blob3), "the other row's width under a tag-1 key");
     assert!(!verify(s3.public_key(), &payload, &blob1), "the other row's width under a tag-3 key");
-    let classical = s1.ed25519_signing_key().sign(&payload).to_bytes();
+    // The classical signature: the tag-1 blob's Ed25519 half — the key's
+    // Ed25519 half over the payload, 64 bytes (Ed25519 signs deterministically).
+    let classical: [u8; 64] = blob1[TAG1_SIG_LEN - 64..].try_into().expect("64 bytes");
     assert!(!verify(s1.public_key(), &payload, &classical), "64 bytes is no row's width");
     assert!(!verify(s1.public_key(), &payload, &[]), "and neither is nothing");
     // The Ed25519 half alone, padded to the row's width, is not a blob

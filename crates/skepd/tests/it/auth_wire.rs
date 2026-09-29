@@ -31,7 +31,7 @@ use skep_identity::{
     encode_enroll, encode_retire, Enrollment, Fingerprint, PublicKey, ALG_FNDSA512_PREVIEW_ED25519,
     ALG_MLDSA65_ED25519, MAX_RECORD_BYTES,
 };
-use skepd::hybrid::{self, HybridSigner};
+use skep_signature::HybridSigner;
 
 mod blocked_prefixes;
 mod credentials;
@@ -53,7 +53,8 @@ fn fingerprint_hex(sk: &SigningKey) -> String {
 /// fixture daemons admit (`allow_preview_keys` on) and a served board
 /// refuses.
 fn tag3_signer(sk: &SigningKey) -> HybridSigner {
-    HybridSigner::from_seed(hybrid::TAG_FNDSA512_PREVIEW_ED25519, &seed_of(sk)).expect("tag 3 is a row")
+    HybridSigner::from_seed(skep_signature::TAG_FNDSA512_PREVIEW_ED25519, &seed_of(sk))
+        .expect("tag 3 is a row")
 }
 
 /// One retire record naming fingerprints, as its atom JSON fragment.

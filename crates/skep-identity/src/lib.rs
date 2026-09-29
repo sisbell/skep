@@ -6,19 +6,21 @@
 //! answering one question, which JSON value a record's bytes are, with every
 //! verdict written here (`payload.rs`) — light enough for the engine, M10,
 //! checkpoint/replay, and any mirror tool to carry. AUTH-2.2 casts the crates
-//! around it: `crates/skepd` the ONLY crate that calls a signature library
-//! (Ed25519, ML-DSA, FN-DSA) — the fence is the SESSION verify's,
-//! `verify`/`find_signer`, the daemon's check of a handshake against the
-//! fold's key sets — the World slice, fold hook and load check in
-//! `crates/skep-engine`, and the conformance pins in the crates' own suites,
-//! `crates/skep-conformance` depending on nothing here.
+//! around it: `crates/skep-signature` the one crate that links the signature
+//! libraries (Ed25519, ML-DSA, FN-DSA), whose verify `crates/skepd` calls —
+//! the fence is the SESSION verify's, `verify`/`find_signer`, the daemon's
+//! check of a handshake against the fold's key sets — the World slice, fold
+//! hook and load check in `crates/skep-engine`, and the conformance pins in
+//! the crates' own suites, `crates/skep-conformance` depending on nothing
+//! here.
 //!
 //! ## Composition, as built
 //!
 //! The build holds the fold BESIDE the engine, so this crate's production
-//! collaborators are all in skepd, chiefly its session layer (`auth`; the
-//! workspace's `ARCHITECTURE.md`, §The daemon); skep-mcp reaches it only from
-//! its suite, to build records and sign session payloads. skepd implements
+//! collaborators are skepd — chiefly its session layer (`auth`; the
+//! workspace's `ARCHITECTURE.md`, §The daemon) — and `skep-signature`, the
+//! signature arithmetic skepd calls; skep-mcp reaches it only from its
+//! suite, to build records and sign session payloads. skepd implements
 //! [`Values`]/[`FoldCtx`] over the assembled `World`; rebuilds the
 //! [`IdentityState`] from the recovered world at every open and for every
 //! historical `key_set` read — no checkpoint carries it — from the
@@ -41,11 +43,12 @@
 //! through [`PublishBody`]; its write-path check reads a presented
 //! attestation's row off the marker tag, and its codec lifts a request's
 //! `attest.alg` token to that tag and back, through [`SigAlgRow::of_token`]
-//! and [`SigAlgRow::of_tag`]; it holds each marker tag's arithmetic over
+//! and [`SigAlgRow::of_tag`]; each marker tag's arithmetic over
 //! [`SIG_ALGS`]' rows and a key's two halves — composing them at keygen
 //! ([`PublicKey::from_halves`]) and reading them to verify
-//! ([`PublicKey::pq_half`], [`PublicKey::ed25519_half`]); and it sizes the
-//! handshake's hybrid blob by the rows' widths.
+//! ([`PublicKey::pq_half`], [`PublicKey::ed25519_half`]) — is
+//! `skep-signature`'s, whose verify it calls; and it sizes the handshake's
+//! hybrid blob by the rows' widths.
 //!
 //! This section says what skepd USES, not which of its files does it: that is
 //! skepd's arrangement, and `grep -rn skep_identity crates/skepd/src` answers

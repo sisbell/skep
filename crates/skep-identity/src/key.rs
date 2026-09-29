@@ -177,9 +177,9 @@ pub struct AlgRow {
     /// time, so a row with no constructor does not compile, where a `parse`
     /// that had forgotten one would compile and refuse every key of the new
     /// algorithm. NOT `from_bytes`, which is the signature crate's name for
-    /// the POINT DECODE this crate never performs (AUTH-1.4; skepd's session
-    /// layer performs it). The agreement with `raw_len` is the AUTH-2.92
-    /// assertion's.
+    /// the POINT DECODE this crate never performs (AUTH-1.4; `skep-signature`
+    /// performs it, called from skepd's session layer). The agreement with
+    /// `raw_len` is the AUTH-2.92 assertion's.
     pub from_raw: fn(&[u8]) -> Option<PublicKey>,
 }
 

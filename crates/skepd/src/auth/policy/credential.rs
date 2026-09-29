@@ -15,7 +15,6 @@ use skep_namespace::HasM3;
 
 use super::{addr_spans, CredentialRefusal};
 use crate::auth::fold::{identity_types, WorldCtx};
-use crate::auth::hybrid;
 use crate::auth::session::{keyed_above, Scope};
 use crate::auth::LockWrite;
 use crate::World;
@@ -39,8 +38,8 @@ const MAX_ENROLLED_KEYS: usize = 16;
 /// signed `POST /session` attempt, and that route is unauthenticated and
 /// reachable from any page.
 ///
-/// The budget is N hybrid verifies — both halves, `hybrid::verify` under
-/// each key's own row — against the two cheap requests that buy it: one
+/// The budget is N hybrid verifies — both halves, `skep_signature::verify`
+/// under each key's own row — against the two cheap requests that buy it: one
 /// `GET /challenge`, one `POST /session`, neither carrying a credential. At
 /// [`MAX_ENROLLED_KEYS`] the bill is order 2 ms (sixteen tag-1 verifies at
 /// the design record's ~134 µs each), commensurate with the frame parse
@@ -314,9 +313,9 @@ pub(crate) fn precheck(
     // decode — the Ed25519 half's point AND the post-quantum half (the
     // FN-DSA header byte among that half's checks) — can never sign; the
     // fold accepts syntax, the daemon extends the courtesy. The decodes are
-    // the very two `hybrid::verify` runs before its arithmetic
-    // (`hybrid::key_decodes` calls them), so the courtesy cannot disagree
-    // with the verify about what decodes. It is BOUNDED by
+    // the very two `skep_signature::verify` runs before its arithmetic
+    // (`skep_signature::key_decodes` calls them), so the courtesy cannot
+    // disagree with the verify about what decodes. It is BOUNDED by
     // [`MAX_DECODED_KEYS`] — the discipline [`crate::codec`]'s `room`
     // states, applied to the one slot whose input this module cannot cap.
     //
@@ -328,7 +327,7 @@ pub(crate) fn precheck(
     // is still seen and still answers `undecodable_key`. It is refused
     // either way, permanently, in the same vocabulary and by the same
     // function; what changes is which of two true things it is told.
-    if !enrolling.iter().take(MAX_DECODED_KEYS).all(|e| hybrid::key_decodes(&e.key)) {
+    if !enrolling.iter().take(MAX_DECODED_KEYS).all(|e| skep_signature::key_decodes(&e.key)) {
         return Err(CredentialRefusal::UndecodableKey);
     }
     // (5) — the enrolled-set cap (RES-57): Enroll arm only, Genesis exempt

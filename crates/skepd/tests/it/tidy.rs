@@ -18,8 +18,9 @@
 //! re-export (`crate::JsonCodec`): the root re-exports items of every
 //! layer, so a path through it hides the layer it reaches.
 //!
-//! And THE TEST HOOKS, GATED: every item documented as a test hook compiles
-//! only under the `test-hooks` feature — the second test below.
+//! And THE TEST HOOKS, GATED: every item documented as a test hook — here,
+//! and in `skep-signature` — compiles only under the `test-hooks` feature —
+//! the second test below.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -111,23 +112,30 @@ fn every_module_names_only_its_own_layer_and_below() {
 /// THE TEST HOOKS, GATED: every item this crate documents as a test hook — a
 /// doc line opening `TEST HOOK` or `The test seam` — compiles only under the
 /// `test-hooks` feature (or `test`), gated on the item itself or on the `mod`
-/// line of the file that holds it. `Cargo.toml`'s `test-hooks` card promises
-/// "a build that compiles no test compiles none of it", and `lib.rs` that the
-/// signature libraries' types appear only on hooks no shipped build carries.
+/// line of the file that holds it; and so does every one `skep-signature`
+/// documents, whose `src` is read too. `Cargo.toml`'s `test-hooks` card
+/// promises "a build that compiles no test compiles none of it"; and the
+/// signature libraries' types appear only on hooks no shipped build carries,
+/// in `skep-signature` — the one crate that links the signature libraries;
+/// skepd calls its verify.
 /// The gate's `--lib --bins` check proves the library COMPILES without the
 /// feature, never that no hook ships in it: a hook whose gate is dropped
 /// still compiles, and ships, with every other test green.
 #[test]
 fn every_test_hook_compiles_only_under_test_hooks() {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
-    rust_files(&src, &mut files);
-    files.sort();
+    for src in [manifest.join("src"), manifest.join("../skep-signature/src")] {
+        let mut in_src = Vec::new();
+        rust_files(&src, &mut in_src);
+        in_src.sort();
+        files.extend(in_src.into_iter().map(|file| (src.clone(), file)));
+    }
     let (mut hooks, mut ungated) = (0, Vec::new());
-    for file in &files {
+    for (src, file) in &files {
         let text = std::fs::read_to_string(file).unwrap();
         let lines: Vec<&str> = text.lines().collect();
-        let file_gated = declared_under_the_gate(&src, &module_of(&src, file));
+        let file_gated = declared_under_the_gate(src, &module_of(src, file));
         let end = lines.iter().position(|l| l.trim() == "mod tests {").unwrap_or(lines.len());
         for (i, line) in lines[..end].iter().enumerate() {
             let doc = line.trim_start();
@@ -142,9 +150,9 @@ fn every_test_hook_compiles_only_under_test_hooks() {
             let (attributes, item) = attributes_from(&lines, j);
             if !file_gated && !attributes.iter().any(|a| is_gate(a)) {
                 ungated.push(format!(
-                    "src/{}:{}: `{}` is documented as a test hook and compiles without \
+                    "{}:{}: `{}` is documented as a test hook and compiles without \
                      `test-hooks`",
-                    file.strip_prefix(&src).unwrap().display(),
+                    file.strip_prefix(manifest).unwrap().display(),
                     item + 1,
                     lines.get(item).map_or("", |l| l.trim()),
                 ));

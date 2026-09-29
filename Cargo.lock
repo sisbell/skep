@@ -1100,6 +1100,7 @@ dependencies = [
  "ed25519-dalek",
  "serde_json",
  "skep-identity",
+ "skep-signature",
  "skepd",
 ]
 
@@ -1131,7 +1132,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "skepd"
+name = "skep-signature"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
@@ -1140,12 +1141,23 @@ dependencies = [
  "getrandom 0.3.4",
  "hkdf",
  "ml-dsa",
+ "rand_core 0.6.4",
+ "sha2",
+ "skep-address",
+ "skep-identity",
+ "skep-signature",
+]
+
+[[package]]
+name = "skepd"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "getrandom 0.3.4",
  "parking_lot",
  "proptest",
- "rand_core 0.6.4",
  "rand_core 0.9.5",
  "serde_json",
- "sha2",
  "skep-address",
  "skep-arrangement",
  "skep-content",
@@ -1157,6 +1169,7 @@ dependencies = [
  "skep-links",
  "skep-namespace",
  "skep-retrieval",
+ "skep-signature",
  "skepd",
  "tempfile",
 ]

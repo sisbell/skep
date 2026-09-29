@@ -1,5 +1,10 @@
 use super::*;
-use crate::codec::hex_string;
+
+/// Lowercase hex, two digits a byte — skepd's `codec::hex_string`'s output,
+/// the spelling [`private_key_material_prints_none_of_itself`] looks for.
+fn hex_string(b: &[u8]) -> String {
+    b.iter().map(|byte| format!("{byte:02x}")).collect()
+}
 
 /// Both tags: keygen from one seed is deterministic, the halves differ
 /// per tag (the token is in the KDF's `info`), the widths are the ruled

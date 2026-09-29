@@ -567,6 +567,32 @@ carries, `sig` included. An unparseable or non-canonical record makes
 the deposit permanently inert — the daemon refuses it up front as
 `malformed_payload:<sub>` (§Credential refusals).
 
+**The keygen-from-seed rule** each tag names, stated. ONE 32-byte seed —
+the paper backup's 64 hex — derives both halves of a key, and neither
+half is ever handed the seed itself: each half's own 32 bytes are
+
+```
+half_seed = HKDF-SHA-256(salt = "skep-kdf-v1", IKM = seed,
+                         info = <alg token> ‖ 0x00 ‖ <half label>, L = 32)
+```
+
+with the half labels `ed25519` for the Ed25519 half and, for the
+post-quantum half, `ml-dsa-65` under tag `1` and `fn-dsa-512` under tag
+`3` — the token is in the `info`, so one seed derives different Ed25519
+halves under the two tags. The Ed25519 half's 32 bytes are its private
+key; the ML-DSA-65 half's are FIPS 204's ξ, its keygen
+`ML-DSA.KeyGen_internal(ξ)`; the FN-DSA-512 half's are the one 32-byte
+draw `fn-dsa` 0.4.0's keygen makes, and nothing else. The raw public key
+is the post-quantum key THEN the Ed25519 key's 32 bytes; a signature blob
+is the post-quantum signature THEN the Ed25519 signature's 64 bytes, both
+over the same bytes, two fixed-width fields with no length prefix. The
+vectors: the seed
+`000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f`
+derives, under tag `1` (`mldsa65-ed25519`), the key whose fingerprint is
+`8c7d0b0e21969ffa5039ccebce2c857614740c3be9498ab8c697bc9320c30623`, and
+under tag `3` (`fndsa512-preview-ed25519`), the key whose fingerprint is
+`d38e5be29f0c62fe1a51cb09d00250ea18bfd2ba799536c0596077d1d1d65fca`.
+
 **The ceremony** is the unclaimed board's one admitted write sequence
 (worked end-to-end in §A first board): `delegate` from principal 0 →
 the home mint (`create_new_document`, which becomes doc 1) → the record

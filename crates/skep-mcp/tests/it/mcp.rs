@@ -17,7 +17,7 @@ use std::time::Duration;
 use ed25519_dalek::SigningKey;
 use serde_json::{json, Value};
 use skep_identity::{encode_enroll, framed, Enrollment, PublicKey, SESSION_TAG};
-use skepd::hybrid::{HybridSigner, TAG_MLDSA65_ED25519};
+use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
 use skepd::{serve, Daemon, Skepd, DEFAULT_WORKERS};
 
 // ── a self-owned temp dir (kept dependency-free) ────────────────────────

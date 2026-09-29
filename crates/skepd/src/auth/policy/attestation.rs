@@ -14,7 +14,6 @@ use skep_namespace::{system_account, HasM3, PrincipalId};
 use super::{addr_spans, AttestFault, CredentialRefusal};
 use crate::auth::entry::{self, ComposeFault};
 use crate::auth::fold::identity_types;
-use crate::auth::hybrid;
 use crate::auth::session::key_subject;
 use crate::history::detached_kernel;
 use crate::World;
@@ -155,7 +154,7 @@ pub(super) fn attestation_check(
     }
     if candidates
         .iter()
-        .any(|key| hybrid::verify(row.tag, key, &bytes, presented.sig()).is_ok())
+        .any(|key| skep_signature::verify(row.tag, key, &bytes, presented.sig()).is_ok())
     {
         Ok(Some(presented))
     } else {

@@ -21,7 +21,7 @@ position in the journal.
 
 ## Code map
 
-The workspace is fifteen crates under `crates/`. Dependencies point
+The workspace is sixteen crates under `crates/`. Dependencies point
 downward in the list below: a crate may depend only on crates listed
 above it.
 
@@ -44,6 +44,10 @@ foundation and on the stores above it.
 - `skep-coordination` — predicate definitions and the coordinator.
 - `skep-identity` — credential records, key sets, the identity fold. Pure;
   of the skep crates it depends only on `skep-address`.
+- `skep-signature` — the hybrid signature's frozen rules: the KDF, keygen
+  and signing (behind its `sign` feature), the key and blob layouts, the
+  verify. The one crate that links the signature libraries; skepd calls its
+  verify. Of the skep crates it depends only on `skep-identity`.
 
 **The surface and the assembler**
 - `skep-febe` — the operation surface (`OperationSurface`): one front door
@@ -177,8 +181,8 @@ nothing of it.
    the routes and the transport both speak.
 4. **The session layer** — `auth.rs` and the modules under `auth/`.
    Sessions and the signed handshake, the policy checks on every write,
-   the identity fold, signature verification; `auth/hybrid.rs` is the one
-   module that links a signature library.
+   the identity fold, signature verification — `skep-signature` is the one
+   crate that links the signature libraries; skepd calls its verify.
 5. **The write path** — `write_path.rs`. The single point every write
    passes through, one at a time, and the head writer
    (`write_path/head.rs`, which commits through the write path's own
@@ -209,7 +213,9 @@ imports it.
 |---|---|---|---|
 | `observe` | on | `GET /dump`, the engine's world dump | every build; OFF in `scripts/gate-full.sh`'s `--no-default-features` checks |
 | `client` | off | `GET /`, the embedded board — an ACTING client, so opted into (`Cargo.toml` carries the ruling) | `scripts/gate-full.sh`'s `--features client` check and `--all-features` run |
-| `test-hooks` | off | `Daemon`'s `#[doc(hidden)]` test hooks, `hybrid`'s fixture hooks, `fuzz_support`, the `Permit` re-export | every test build (the crate's self dev-dependency); `scripts/gate-full.sh` checks the library and binary without it |
+| `test-hooks` | off | `Daemon`'s `#[doc(hidden)]` test hooks, `fuzz_support`, the `Permit` re-export, and `skep-signature`'s `test-hooks` | every test build (the crate's self dev-dependency); `scripts/gate-full.sh` checks the library and binary without it |
+| `skep-signature`'s `sign` | off — skepd depends with no feature, so the daemon's build holds no signer | the signer's half: the KDF, keygen from a seed, signing, the signer's OS draw | every test build (the suites' dev-dependencies); `scripts/gate-full.sh` checks the crate without it (the verify-only build a daemon links) and with it |
+| `skep-signature`'s `test-hooks` | off | implies `sign`; the fixtures' hooks: the seeded RNG, `sign_with_rng`, the Ed25519 half's signing key, the widths | every test build (its self dev-dependency, and skepd's `test-hooks`) |
 
 ## Rules that hold across files
 

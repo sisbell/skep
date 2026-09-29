@@ -6,13 +6,14 @@
 //!
 //! And, since signed ops (the seam build 2026-09-25), the write-path
 //! signature seam: the ENTRY frame the daemon composes for an attested
-//! write (`entry`), the check that verifies a presented `attest` over it
+//! write (`entry`), and the check that verifies a presented `attest` over it
 //! against the fold's key set before the transaction (`policy`, behind the
-//! RES-26 gate), and the HYBRID signature's frozen rules ([`hybrid`]) — the
-//! one module of this crate that links a signature library (AUTH-2.2),
-//! holding the daemon's verify and all-halves decode and, beside them, the
-//! signer's side the suites and a future client use. The signer is handed a
-//! seed and knows nothing of where one is kept: custody-agnostic still.
+//! RES-26 gate). The HYBRID signature's frozen rules are not here:
+//! `skep-signature` is the one crate that links the signature libraries;
+//! skepd calls its verify (AUTH-2.2) and its all-halves decode, and builds
+//! none of its signer's side — the daemon itself holds no key and never
+//! signs. That signer is handed a seed and knows nothing of where one is
+//! kept: custody-agnostic still.
 //!
 //! Custody-agnostic by ruling (D1): nothing here knows where a private key
 //! lives — the handshake verifies signatures over bytes, deposits commit
@@ -26,7 +27,6 @@
 
 // What the rest of the daemon reaches.
 pub(crate) mod fold;
-pub mod hybrid;
 pub(crate) mod policy;
 pub(crate) mod session;
 

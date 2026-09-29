@@ -18,10 +18,11 @@
 //!   challenge/response handshake, the sessions store and per-request
 //!   resolution, the credential write lock and the ordered refusal
 //!   producers it scopes, the signed-ops write-path check and the ENTRY
-//!   frame it verifies a presented `attest` over, the [`hybrid`]
-//!   signature's rules (the one module here that links a signature
-//!   library), and the identity fold this daemon composes BESIDE the
-//!   engine (derived state, rebuilt at open, never persisted here).
+//!   frame it verifies a presented `attest` over (the hybrid signature's
+//!   rules are `skep-signature`'s, the one crate that links the signature
+//!   libraries; skepd calls its verify), and the identity fold this daemon
+//!   composes BESIDE the engine (derived state, rebuilt at open, never
+//!   persisted here).
 //! * `write_path/` — the ONE ordering every write rides (commit, record,
 //!   announce, under one serialization guard) and, behind it, the
 //!   PUBLISHED HEAD writer: `H` = `1.1.0.1.0.2` written as a new published
@@ -107,14 +108,6 @@ pub mod fuzz_support;
 pub use auth::{
     AuthOptions, NodePrefix, NotANodePrefix, NotCanonical, Origin, PortAlreadyBound,
 };
-/// THE HYBRID ENTRY SIGNATURE's rules (signed ops): the KDF from one seed to
-/// both halves, keygen and signing per marker tag — the test signer's and the
-/// goldens' side — the verify the daemon's write-path check dispatches on,
-/// and the all-halves decode ([`hybrid::key_decodes`]) the enrollment
-/// courtesy runs beside that verify. Public because the signer's side lives
-/// beside the verifier's in the one crate that links the signature libraries
-/// (AUTH-2.2), and the suites and a future client reach it here.
-pub use auth::hybrid;
 pub use codec::JsonCodec;
 pub use server::{
     body_cap, serve, Body, Daemon, DaemonError, HttpRequest, Peer, Reply, Routed, Skepd,
@@ -140,14 +133,9 @@ pub use server::{
 /// takes, `Address`, which [`NodePrefix::address`] answers, and
 /// `Attestation`, which the doc-hidden test hook `Daemon::attestation_at`
 /// answers, are `skep-namespace`'s, `skep-address`'s and `skep-kernel`'s,
-/// and reach a client through `skep-febe`'s own re-exports. `PublicKey` —
-/// what a [`hybrid::HybridSigner`] answers for its key and what
-/// [`hybrid::verify`] and [`hybrid::key_decodes`] take — is
-/// `skep-identity`'s, which a client that holds keys depends on anyway to
-/// compose the enrollment records that seat them. The signature libraries'
-/// own types — `ed25519-dalek`'s signing key, `rand_core` 0.6's RNG traits —
-/// appear only on `hybrid`'s test hooks, which compile only under
-/// `test-hooks`, and so on no name a shipped build carries.
+/// and reach a client through `skep-febe`'s own re-exports. No signature
+/// library's type is among them: `skep-signature` is the one crate that
+/// links the signature libraries; skepd calls its verify.
 pub use skep_engine::{EngineError, HistoryError, OpenError, World};
 
 /// The dump [`Daemon::dump_visible_to`] answers with, re-exported for the
@@ -204,14 +192,4 @@ const _: fn() = || {
     assert_send_sync::<NotANodePrefix>();
     assert_send_sync::<PortAlreadyBound>();
     assert_send_sync::<Peer>();
-    // The signed-ops arrivals (`hybrid`): the signer a client holds across
-    // threads, the seeds it derives from, the verify's refusal, the
-    // fixtures' seeded stream, and the widths the sizes pin reads.
-    assert_send_sync::<hybrid::HybridSigner>();
-    assert_send_sync::<hybrid::HalfSeeds>();
-    assert_send_sync::<hybrid::HybridFault>();
-    #[cfg(any(test, feature = "test-hooks"))]
-    assert_send_sync::<hybrid::SeededRng06>();
-    #[cfg(any(test, feature = "test-hooks"))]
-    assert_send_sync::<hybrid::PqWidths>();
 };

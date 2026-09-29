@@ -27,6 +27,13 @@ of [skep-febe](../skep-febe) over the world of
 [skep-engine](../skep-engine); how its modules are layered is in
 [ARCHITECTURE.md](../../ARCHITECTURE.md).
 
+The daemon verifies signatures and makes none: it calls
+[skep-signature](../skep-signature)'s verify with that crate's `sign`
+feature off, so its build holds no signer and no key. Build the shipped
+binary with `-p skepd` — Cargo unifies features across one invocation,
+and a `--workspace` build that compiles the test suites turns the signer
+on for everything it builds.
+
 ## License
 
 Licensed under either of

@@ -14,7 +14,6 @@ use skep_identity::{
 };
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
 
-use super::hybrid;
 use super::{bare_origins, signed_origins, AuthConfig, Mode, Origin};
 use crate::codec::{check_keys, hex_nibble, hex_string, parse_lower_hex};
 use crate::World;
@@ -754,18 +753,18 @@ pub(crate) fn session_payload(
 }
 
 /// AUTH-4.32 — the HYBRID verification under the KEY's own `ALGS` row:
-/// [`hybrid::verify`] under the key's marker tag — the post-quantum half of
-/// the blob under the key's post-quantum half, the Ed25519 half under its
-/// Ed25519 half by strict verification (`verify_strict`), BOTH over the SAME
-/// payload; either failing fails, and NO HALF OPENS A SESSION ALONE. `false`
-/// on a blob that is not the row's width (a tag-3 blob against a tag-1 key
-/// is `Malformed` there, never a panic) and on an undecodable key or
-/// signature; never panics. Both halves' decodes inside it are the two the
-/// precheck's `undecodable_key` courtesy runs ([`hybrid::key_decodes`]) — one
-/// pair of functions in `hybrid`, which is what keeps the two answering
-/// alike.
+/// [`skep_signature::verify`] under the key's marker tag — the post-quantum
+/// half of the blob under the key's post-quantum half, the Ed25519 half under
+/// its Ed25519 half by strict verification (`verify_strict`), BOTH over the
+/// SAME payload; either failing fails, and NO HALF OPENS A SESSION ALONE.
+/// `false` on a blob that is not the row's width (a tag-3 blob against a
+/// tag-1 key is `Malformed` there, never a panic) and on an undecodable key
+/// or signature; never panics. Both halves' decodes inside it are the two the
+/// precheck's `undecodable_key` courtesy runs
+/// ([`skep_signature::key_decodes`]) — one pair of functions in
+/// `skep-signature`, which is what keeps the two answering alike.
 fn verify(key: &PublicKey, payload: &[u8], sig: &[u8]) -> bool {
-    hybrid::verify(key.sig_alg_row().tag, key, payload, sig).is_ok()
+    skep_signature::verify(key.sig_alg_row().tag, key, payload, sig).is_ok()
 }
 
 /// AUTH-4.33 — try EVERY enrolled key in fingerprint order, EACH UNDER ITS

@@ -219,8 +219,8 @@ fn a_rows_token_admits_its_own_width_and_never_another_rows() {
 /// (i)'s two-row `u8 ↔ token` table): every row's token is an `ALGS` row
 /// whose raw length is the row's own key width — and every `ALGS` row has a
 /// marker tag, the key kinds being the hybrid rows alone; the tags are
-/// distinct, non-zero (0 is the empty slot) and not `2` (reserved for the
-/// final FIPS 206); the two lookups answer the whole row, and a key's own
+/// distinct, non-zero (0 is the empty marker slot) and not `2` (reserved for
+/// the final FIPS 206); the two lookups answer the whole row, and a key's own
 /// [`PublicKey::sig_alg_row`] answers the same row as a value; the deleted
 /// classical token names no row; and the pinned widths are the ruled ones —
 /// tag 1's 1,984-byte key and 3,373-byte blob (6,746 hex), tag 3's 929 and
@@ -232,7 +232,7 @@ fn sig_algs_and_algs_agree_and_the_pins_are_the_ruled_widths() {
     for row in SIG_ALGS {
         let alg_row = ALGS.iter().find(|a| a.token == row.token).expect("a SIG_ALGS token is an ALGS row");
         assert_eq!(alg_row.raw_len, row.key_len(), "{}: the row's key width is its ALGS raw_len", row.token);
-        assert_ne!(row.tag, 0, "tag 0 is the empty slot");
+        assert_ne!(row.tag, 0, "tag 0 is the empty marker slot");
         assert_ne!(row.tag, 2, "tag 2 is reserved for the final FIPS 206");
         let token_row = SigAlgRow::of_token(row.token);
         assert_eq!(token_row, Some(row), "{}: the token names this row", row.token);
@@ -273,8 +273,8 @@ fn sig_algs_and_algs_agree_and_the_pins_are_the_ruled_widths() {
     let k = PublicKey::parse(ALG_MLDSA65_ED25519, &raw.iter().map(|b| format!("{b:02x}")).collect::<String>()).unwrap();
     assert_eq!(k.ed25519_half(), &raw[1952..]);
     assert_eq!(k.pq_half(), &raw[..1952]);
-    // One fingerprint over the whole concatenated raw value (the record
-    // §4.4): a hybrid's fingerprint is not either half's.
+    // One fingerprint over the whole concatenated raw value (the design
+    // record §4.4): a hybrid's fingerprint is not either half's.
     let hybrid = PublicKey::parse(ALG_MLDSA65_ED25519, &"0a".repeat(1984)).unwrap();
     let want: [u8; 32] =
         Sha256::digest(framed(KEY_TAG, &[ALG_MLDSA65_ED25519.as_bytes(), &[0x0a; 1984]])).into();

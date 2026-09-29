@@ -44,9 +44,9 @@
 //!   `be64(count)` then, per value, `be32(len) ‖ bytes` — [`ValueSequence`],
 //!   written whole by [`push_value_sequence`] and one value at a time by
 //!   [`PublishBody`]. The count leads so a verifier holding a CHAIN member
-//!   that has GROWN past the signed prefix (the record §2.5's `publish` cell,
-//!   D25) knows how many of its values the signature covers before reading
-//!   one.
+//!   that has GROWN past the signed prefix (the design record §2.5's
+//!   `publish` cell, D25) knows how many of its values the signature covers
+//!   before reading one.
 //! * THE SLOT ROW — a link slot in the form the client sent it: one form
 //!   byte (`0x01` the address form, `0x02` the resolve form), `be64(n)`, then
 //!   each element — an address as the address row, a V-spec as its source
@@ -136,7 +136,7 @@ pub struct BoardTerm {
     /// element position, which is what bare "position" means everywhere else
     /// in this crate ([`Values`](crate::Values)).
     pub log_position: u64,
-    /// The whole-log chain value at that position, thirty-two raw bytes.
+    /// The whole-log chain value at that LOG position, thirty-two raw bytes.
     pub chain: [u8; 32],
 }
 
@@ -355,31 +355,31 @@ pub fn entry_body_publish<'a>(values: impl IntoIterator<Item = &'a [u8]>) -> Ent
 pub struct PublishBody {
     bytes: Vec<u8>,
     row: ValueSequence,
-    max: usize,
+    budget: usize,
 }
 
 impl PublishBody {
     /// A body of no values yet — the leading count's eight bytes — whose
     /// [`PublishBody::push`] admits no value that would carry the FINISHED
-    /// body past `max` bytes.
-    pub fn within(max: usize) -> PublishBody {
+    /// body past `budget` bytes.
+    pub fn within(budget: usize) -> PublishBody {
         let mut bytes = Vec::new();
         let row = ValueSequence::open(&mut bytes);
-        PublishBody { bytes, row, max }
+        PublishBody { bytes, row, budget }
     }
 
     /// Append `value` as the body's next — unless the finished body would then
     /// pass its budget, where nothing is appended and the answer is `false`:
     /// no push carries the body past it. No value is free — an empty one costs
-    /// its length prefix, so a budget of `max` bytes admits at most a quarter
-    /// of `max` values, whatever they hold.
+    /// its length prefix, so a budget admits at most a quarter as many values
+    /// as it has bytes, whatever the values hold.
     ///
     /// PRECONDITION — as [`entry_body_publish`]'s: `value` is shorter than
     /// 2^32 bytes, else PANICS; under any budget below that bound, this
     /// refuses such a value first.
     #[must_use = "a value the budget refused was not appended"]
     pub fn push(&mut self, value: &[u8]) -> bool {
-        if self.bytes.len().saturating_add(delimited_len(value.len())) > self.max {
+        if self.bytes.len().saturating_add(delimited_len(value.len())) > self.budget {
             return false;
         }
         self.row.push(&mut self.bytes, value);

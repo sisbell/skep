@@ -14,6 +14,10 @@
 //! `tests.rs` file, or everything from an inline `mod tests {` on, which is
 //! its file's last item (`AGENTS.md`), and that is checked. How deep a line
 //! sits in inline modules is read off rustfmt's indentation.
+//!
+//! Beside the map, the one rule of `lib.rs`'s "Traceability" a test can
+//! hold: the signed-ops design record is cited as "the design record", never
+//! as "the record" alone — read over every comment, not the code.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -160,6 +164,35 @@ fn every_module_is_declared_and_has_one_bullet_in_the_root_map() {
     );
 }
 
+/// `lib.rs`'s "Traceability" cites the signed-ops design record as "the
+/// design record" with its section or ruling, and never as "the record"
+/// alone: in this crate a record is a credential record (AUTH-1.18), so a
+/// bare citation beside an entry, a fingerprint and a label reads as a place
+/// inside one. Held over every comment under `src/` and `tests/`, each run
+/// of comment lines read as one text, so a citation a reflow splits across
+/// two lines is read whole: "the record", or "the record's", before a section
+/// sign or a ruling's `D` number is a design-record citation missing its
+/// "design".
+#[test]
+fn the_design_record_is_never_cited_as_the_record_alone() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    rust_files(&root.join("src"), &mut files);
+    rust_files(&root.join("tests"), &mut files);
+    files.sort();
+    let mut faults = Vec::new();
+    for file in &files {
+        let text = std::fs::read_to_string(file).unwrap();
+        let path = file.strip_prefix(root).unwrap().display();
+        for (line, prose) in comment_runs(&text) {
+            if let Some(cited) = bare_record_citation(&prose) {
+                faults.push(format!("{path}:{line}: \"{cited}\" — cite \"the design record\""));
+            }
+        }
+    }
+    assert!(faults.is_empty(), "lib.rs's \"Traceability\" does not hold:\n{}", faults.join("\n"));
+}
+
 /// The module a line of `lib.rs` declares — `mod key;`, with or without a
 /// visibility — or `None` for any other line.
 fn declared_module(line: &str) -> Option<&str> {
@@ -168,6 +201,50 @@ fn declared_module(line: &str) -> Option<&str> {
         None => line,
     };
     item.strip_prefix("mod ")?.strip_suffix(';')
+}
+
+/// Every comment in a file as prose, beside the line it begins on: each run
+/// of whole-line comments as one text, and each trailing ` //` comment on its
+/// own — its words rejoined by single spaces, so a phrase a reflow split
+/// across two lines reads as one.
+fn comment_runs(text: &str) -> Vec<(usize, String)> {
+    let mut runs = Vec::new();
+    let mut open: Option<(usize, Vec<&str>)> = None;
+    for (i, line) in text.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") {
+            let words = trimmed.trim_start_matches(['/', '!']).split_whitespace();
+            open.get_or_insert((i + 1, Vec::new())).1.extend(words);
+            continue;
+        }
+        if let Some((at, words)) = open.take() {
+            runs.push((at, words.join(" ")));
+        }
+        if let Some((_, trailing)) = line.split_once(" //") {
+            runs.push((i + 1, trailing.split_whitespace().collect::<Vec<_>>().join(" ")));
+        }
+    }
+    if let Some((at, words)) = open {
+        runs.push((at, words.join(" ")));
+    }
+    runs
+}
+
+/// The first citation in `prose` that names the design record as "the
+/// record" alone — "the record", or "the record's", whose next word opens
+/// with a section sign or is a ruling's `D` number — or `None`.
+fn bare_record_citation(prose: &str) -> Option<&str> {
+    ["the record", "The record"].into_iter().find_map(|phrase| {
+        prose.match_indices(phrase).find_map(|(at, _)| {
+            let opens_a_word = prose[..at].chars().next_back().is_none_or(|c| !c.is_alphanumeric());
+            let rest = &prose[at + phrase.len()..];
+            let rest = rest.strip_prefix("'s").unwrap_or(rest);
+            let next = rest.strip_prefix(' ')?.split(' ').next()?;
+            let numbered = |n: &str| n.starts_with(|c: char| c.is_ascii_digit());
+            let cites = next.starts_with('§') || next.strip_prefix('D').is_some_and(numbered);
+            (opens_a_word && cites).then(|| &prose[at..prose.len() - rest.len() + 1 + next.len()])
+        })
+    })
 }
 
 /// A file's code as one text, so a brace group may span lines — comment

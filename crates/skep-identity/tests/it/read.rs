@@ -559,7 +559,7 @@ fn reach_walk_never_a_count_off_width() {
     fx.mint(&doc1(ACCT_A), &[b"one", b"two"]);
     let start = content_pos(&doc1(ACCT_A), 1);
     let mut w = vec![0u32; 9];
-    w[7] = 1; // action point at the subspace position, above the ordinal
+    w[7] = 1; // action point at the subspace, above the ordinal
     let span = Span::new(start, tum(&w)).expect("T12-valid width");
     let dep = Dep {
         home: doc1(ACCT_A),
@@ -580,8 +580,9 @@ fn reach_walk_never_a_count_off_width() {
 /// because `contains` recomputes `start ⊕ width` per call and `⊕`'s cost is
 /// the WIDTH's component count, which T12 does not bound. Two spellings of
 /// one rule, so the agreement is stated rather than assumed: over widths
-/// acting at every admissible position, with and without a trailing tail, and
-/// over ordinals below, at, inside and above the reach.
+/// with their action point at each of the start's components, with and
+/// without a trailing tail, and over ordinals below, at, inside and above the
+/// reach.
 #[test]
 fn reach_walk_membership_agrees_with_span_contains() {
     let home = doc1(ACCT_A);

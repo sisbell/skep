@@ -341,7 +341,7 @@ impl KeyKind {
 /// suite links no KDF crate (skepd's goldens derive theirs through its HKDF
 /// pin; what this suite pins is the ENCODING of the bytes an arm holds,
 /// which no key decode reaches, AUTH-1.4). Every byte varies with its
-/// position, so a pin over these bytes sees a reordering or a truncation.
+/// index, so a pin over these bytes sees a reordering or a truncation.
 pub fn expand_seed<const N: usize>(seed: &[u8; 32]) -> Box<[u8; N]> {
     let mut out = Box::new([0u8; N]);
     for (k, chunk) in out.chunks_mut(32).enumerate() {

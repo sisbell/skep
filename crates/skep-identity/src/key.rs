@@ -14,11 +14,12 @@ use crate::framing::{framed, KEY_TAG};
 /// ONE `ALGS` row over ONE concatenated raw value — the ML-DSA-65 (FIPS 204)
 /// public key, 1,952 bytes, THEN the Ed25519 public key, 32 bytes (the KEY
 /// PIN: the post-quantum half FIRST, the order the marker slot's blob takes
-/// too) — one entry, one fingerprint, one label (the record §4.4). Its marker
-/// tag is `1` ([`SIG_ALGS`]). THE KEY KINDS ARE THE TWO HYBRID ROWS: there is
-/// no classical `ed25519` row and no `Ed25519` arm (the hybrid-only launch,
-/// owner 2026-09-26, "Q1 b delete it"), and tag 2's token `fndsa512-ed25519`
-/// (the final FN-DSA-512 + Ed25519, at FIPS 206) is RESERVED with no row.
+/// too) — one entry, one fingerprint, one label (the design record §4.4). Its
+/// marker tag is `1` ([`SIG_ALGS`]). THE KEY KINDS ARE THE TWO HYBRID ROWS:
+/// there is no classical `ed25519` row and no `Ed25519` arm (the hybrid-only
+/// launch, owner 2026-09-26, "Q1 b delete it"), and tag 2's token
+/// `fndsa512-ed25519` (the final FN-DSA-512 + Ed25519, at FIPS 206) is
+/// RESERVED with no row.
 pub const ALG_MLDSA65_ED25519: &str = "mldsa65-ed25519";
 
 /// THE PREVIEW HYBRID's alg token (signed ops; THE DUAL APPROACH, the owner
@@ -53,8 +54,8 @@ pub const FNDSA512_PREVIEW_ED25519_KEY_LEN: usize = FNDSA512_PREVIEW_KEY_LEN + E
 /// rule pins — the post-quantum half's key and signature, the Ed25519
 /// half's being [`ED25519_KEY_LEN`] and 64 at every row. The blob a marker
 /// slot carries under the tag is the PQ signature THEN the Ed25519 signature
-/// (the record §2.4's pin: two fixed-width fields, no length prefix, no
-/// parser), so [`SigAlgRow::sig_len`] is the slot's whole width and
+/// (the design record §2.4's pin: two fixed-width fields, no length prefix,
+/// no parser), so [`SigAlgRow::sig_len`] is the slot's whole width and
 /// [`SigAlgRow::pq_sig_len`] is where the halves part.
 ///
 /// Tag `0` is the EMPTY marker slot and has no row; tag `2` is RESERVED for
@@ -267,9 +268,9 @@ mod raw_array {
 /// (AUTH-2.99).
 pub const ALGS: &[AlgRow] = &[
     // Signed ops (the seam build, 2026-09-25): the two HYBRID rows, each ONE
-    // row over ONE concatenated raw value (the record §4.4: one sheet, one
-    // entry, one fingerprint, one label). The family names the PAIR, so no
-    // two rows share one while both carry an Ed25519 half.
+    // row over ONE concatenated raw value (the design record §4.4: one sheet,
+    // one entry, one fingerprint, one label). The family names the PAIR, so
+    // no two rows share one while both carry an Ed25519 half.
     AlgRow {
         token: ALG_MLDSA65_ED25519,
         raw_len: MLDSA65_ED25519_KEY_LEN,
@@ -375,7 +376,7 @@ impl PublicKey {
 
     /// THE KEY PIN, WRITTEN — a hybrid key from its two halves, the
     /// post-quantum half FIRST and the Ed25519 half LAST, as the ONE raw value
-    /// of `alg`'s row (AUTH-1.1; the record §4.4): the inverse of
+    /// of `alg`'s row (AUTH-1.1; the design record §4.4): the inverse of
     /// [`PublicKey::pq_half`] and [`PublicKey::ed25519_half`], so
     /// `from_halves(k.alg(), k.pq_half(), k.ed25519_half())` is `Ok(k)` for
     /// every key. A signer composes its key here and never spells the order —

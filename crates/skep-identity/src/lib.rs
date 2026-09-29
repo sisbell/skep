@@ -105,7 +105,7 @@
 //!   (AUTH-2.15–2.19, AUTH-2.128–2.130), and the record value at one name
 //!   with both directions — [`canonical_record`] over a [`RecordEntry`]: the
 //!   signer's `sig`-bearing record and the verifier's SIG-LESS PROJECTION
-//!   (the record §4.2 (C));
+//!   (the design record §4.2 (C));
 //! * `read`: the ONE pinned payload read — [`record_bytes`] (AUTH-2.3–2.5,
 //!   AUTH-2.36–2.45);
 //! * `keyset`: the key set — [`Enrolled`], [`KeySet`] (AUTH-1.29–1.37);
@@ -150,8 +150,10 @@
 //! length constants, the entry frame and the record projection, which the
 //! AUTH spec declares in no rule and whose authority AUTH-1.5 assigns, by
 //! cite, to the signed-ops design record — that record, cited as "the design
-//! record" (or "the record") with its section or ruling. So a reviewer can
-//! walk from code to its authority without the documents open.
+//! record" with its section or ruling, and never as "the record" alone: in
+//! this crate a record is a credential record (AUTH-1.18), and the suite's
+//! `tidy.rs` holds every comment to that rule. So a reviewer can walk from
+//! code to its authority without the documents open.
 //!
 //! ## Purity note
 //!

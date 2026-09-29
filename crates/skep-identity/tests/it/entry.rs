@@ -33,8 +33,8 @@ fn sequences_of<T: Clone>(elements: &[T]) -> Vec<Vec<T>> {
 /// over either, and a reader beside the table could not tell the link that
 /// was signed from its twin. The family is every slot of at most two elements
 /// over two addresses, in both forms — the empty slot, each element alone,
-/// and every ordered pair, repeats included — in every position of a
-/// `make_link`: 14³ bodies, all distinct.
+/// and every ordered pair, repeats included — in each of a `make_link`'s
+/// three slots: 14³ bodies, all distinct.
 ///
 /// Why a law and not a pin: the row pins spell a slot of one element or of
 /// two distinct ones. A `push_slot` that deduplicated its elements, sorted a

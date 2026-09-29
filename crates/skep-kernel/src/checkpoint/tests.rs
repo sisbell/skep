@@ -182,6 +182,12 @@ fn a_body_that_survives_its_checksum_and_will_not_decode_is_a_skew() {
             !refused.to_string().contains("checksum"),
             "the checksum passed; this is a skew, not rot: {refused}"
         );
+        // …and the account IS the serializer's refusal, boxed once, so a
+        // caller holding it reaches the serializer's own error.
+        assert!(
+            refused.downcast_ref::<bincode::ErrorKind>().is_some(),
+            "the serializer's refusal travels as itself: {refused}"
+        );
         refused.to_string()
     };
     // Two bodies rejected for two reasons, so what travels has to be the

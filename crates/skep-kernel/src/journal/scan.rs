@@ -14,7 +14,7 @@ use super::{
     Parsed, Txn, FRAME_HEADER_LEN, MAGIC, MARKER_FRAME_LEN, MAX_SEGMENT_LEN, MAX_TXN_BYTES,
     RESYNC_BUDGET_PASSES, STAMP_PREFIX,
 };
-use crate::error::stamp_text;
+use crate::error::{stamp_text, Cause};
 
 /// How a corrupt run (a span the scan skipped via magic-resync) ended (§7).
 #[derive(Debug, PartialEq, Eq)]
@@ -242,7 +242,7 @@ pub(crate) struct ClosingMarker {
 
 /// What a caller halts on: the coordinate naming the damage, and its account
 /// where it has one — the two a caller wraps as its own `Corruption`.
-type Halt = (u64, Option<Box<dyn std::error::Error + Send + Sync + 'static>>);
+type Halt = (u64, Option<Cause>);
 
 impl ScanOutcome {
     /// The first chain break above the base (the field), for
@@ -279,7 +279,7 @@ impl ScanOutcome {
     /// verdict speaks before all three, in [`ScanOutcome::halt_on`] — this
     /// method's only caller, which both halts go through. `None` when every
     /// link verified.
-    fn chain_verdict(&self) -> Option<(u64, Box<dyn std::error::Error + Send + Sync + 'static>)> {
+    fn chain_verdict(&self) -> Option<(u64, Cause)> {
         if let Some(at) = self.base_mismatch() {
             return Some((at, base_mismatch_cause(at)));
         }
@@ -313,9 +313,13 @@ impl ScanOutcome {
     /// asymmetry is the whole of what `bound` means, and stating it here is
     /// what keeps it off the walk — this is the only writer of either, so the
     /// rule has one site.
-    fn collect_commit(&mut self, marker: &Marker, group: PendingTxn) {
+    ///
+    /// Both are TAKEN: the walk is done with a marker and its group once they
+    /// commit, so the slot's blob moves whole into the captured
+    /// [`ClosingMarker`].
+    fn collect_commit(&mut self, marker: Marker, group: PendingTxn) {
         if marker.last_seq > self.s_load {
-            if group.recomputed_chain(marker) != marker.chain {
+            if group.recomputed_chain(&marker) != marker.chain {
                 self.chain_break.get_or_insert(marker.last_seq);
             }
             self.chain_head = marker.chain;
@@ -326,7 +330,7 @@ impl ScanOutcome {
                     // it under the one-spelling-of-empty rule, so a non-zero
                     // tag here has bytes.
                     attestation: (marker.sig_alg != SIG_ALG_UNSIGNED).then(|| {
-                        Attestation::new(marker.sig_alg, marker.sig.clone())
+                        Attestation::new(marker.sig_alg, marker.sig)
                             .expect("the decoder admits a non-zero tag only with a non-empty blob")
                     }),
                 });
@@ -532,19 +536,23 @@ struct PendingTxn {
     /// closes the group — and closed with the marker's fields by
     /// [`PendingTxn::recomputed_chain`].
     link: ChainLink,
-    /// Whether every frame this group could have had was seen intact: opened
-    /// `false` when the group's first record closed a corrupt run — the run
-    /// may have eaten this transaction's own earlier frames — and cleared
-    /// when a corrupt or undecodable frame is met while the group is open.
-    /// A clean group no intact marker closes — its own refusing it, or
-    /// another transaction's following it — is the shape no writer produces
+    /// Whether every frame this group could have had was seen intact: set at
+    /// [`PendingTxn::open`], and cleared by the walk when a corrupt run lands
+    /// on one of the group's records — opened there, the run may have been
+    /// this transaction's own earlier frames — or when a corrupt or
+    /// undecodable frame is met while the group is open. A clean group no
+    /// intact marker closes — its own refusing it, or another transaction's
+    /// following it — is the shape no writer produces
     /// ([`ScanOutcome::uncommitted_intact`]); an unclean one is the
     /// corrupt-run verdict's, whatever its marker says.
     clean: bool,
 }
 
 impl PendingTxn {
-    fn open(txn: Txn, prev_chain: &[u8; 32], clean: bool) -> PendingTxn {
+    /// A group with nothing in it yet, whose link opens on `prev_chain`, the
+    /// running chain value. It starts CLEAN; the walk, which alone sees what
+    /// could have cost it frames, clears that on the group itself.
+    fn open(txn: Txn, prev_chain: &[u8; 32]) -> PendingTxn {
         PendingTxn {
             txn,
             checksum: 0,
@@ -556,7 +564,7 @@ impl PendingTxn {
             oversize: false,
             records: Vec::new(),
             link: ChainLink::open(prev_chain),
-            clean,
+            clean: true,
         }
     }
 
@@ -800,21 +808,22 @@ pub(crate) fn scan(
                     let payload = &buf[payload];
                     match codec().deserialize::<FramePayload>(payload) {
                         Ok(FramePayload::Record(record)) => {
-                            // A group opened by the record a run landed on
-                            // is not clean: the run may have been its own
-                            // earlier frames. A group already open met the
-                            // run while open, and was marked below.
-                            let landed = run_open;
-                            if run_open {
-                                outcome.runs.push(RunEnd::landed_on_record(record.seq));
-                                run_open = false;
-                            }
                             let mut group = pending
                                 .take()
                                 .filter(|group| group.txn == record.txn)
                                 .unwrap_or_else(|| {
-                                    PendingTxn::open(record.txn, &outcome.chain_head, !landed)
+                                    PendingTxn::open(record.txn, &outcome.chain_head)
                                 });
+                            if run_open {
+                                outcome.runs.push(RunEnd::landed_on_record(record.seq));
+                                run_open = false;
+                                // A record a run landed on cannot vouch for its
+                                // group: opened here, the run may have been
+                                // this transaction's own earlier frames; already
+                                // open, the group met the run while open and
+                                // was marked then.
+                                group.clean = false;
+                            }
                             group.push(record, payload);
                             pending = Some(group);
                         }
@@ -825,7 +834,7 @@ pub(crate) fn scan(
                             }
                             if let Some(group) = pending.take_if(|group| group.txn == marker.txn) {
                                 if group.commits(&marker) {
-                                    outcome.collect_commit(&marker, group);
+                                    outcome.collect_commit(marker, group);
                                     // The cut is unbounded for the reason the
                                     // head is: it must name the last committed
                                     // marker wherever it sits.
@@ -927,7 +936,7 @@ pub(crate) fn scan(
 
 /// The account a chain break travels with, in the callers' `cause` slot: what
 /// the marker at `at` should have carried and did not.
-fn chain_break_cause(at: u64) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+fn chain_break_cause(at: u64) -> Cause {
     format!(
         "chain break: the commit marker closing the transaction at {at} does not carry SHA-256 \
          over the previous committed transaction's chain value and this transaction's own record \
@@ -942,7 +951,7 @@ fn chain_break_cause(at: u64) -> Box<dyn std::error::Error + Send + Sync + 'stat
 /// disagree, and which party lies is not said — so the remedy is the
 /// operator's, named here, rather than a silent fallback to an older base
 /// that would leave the edited header on disk for the next head to publish.
-fn base_mismatch_cause(at: u64) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+fn base_mismatch_cause(at: u64) -> Cause {
     format!(
         "chain break at the base: the checkpoint at {at} carries a chain_head that is not the \
          chain the journal's own commit marker closing {at} carries — the checkpoint header was \
@@ -955,7 +964,7 @@ fn base_mismatch_cause(at: u64) -> Box<dyn std::error::Error + Send + Sync + 'st
 /// The account the edited transaction travels with
 /// ([`ScanOutcome::uncommitted_intact`]): the shape, the five ways an intact
 /// marker fails to close an intact group, and why no writer leaves it.
-fn uncommitted_intact_cause(at: u64) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+fn uncommitted_intact_cause(at: u64) -> Cause {
     format!(
         "chain break at an edited transaction: the transaction ending at {at} is intact frame by \
          frame but no commit marker closes it — the marker after its records disagrees with them \
@@ -970,9 +979,7 @@ fn uncommitted_intact_cause(at: u64) -> Box<dyn std::error::Error + Send + Sync 
 /// The account a damaged sync word travels with ([`FirstSyncWord::Damaged`]):
 /// the word found, why it is damage and not a format, and the remedy — which
 /// is NOT [`crate::OpenError::ForeignFormat`]'s, the journal being this build's.
-pub(crate) fn damaged_sync_word_cause(
-    found: [u8; 4],
-) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+pub(crate) fn damaged_sync_word_cause(found: [u8; 4]) -> Cause {
     format!(
         "damaged sync word: the first frame the scan would read opens with `{found}`, where the \
          frame after it opens with this build's `{ours}` — another format's journal carries its \
@@ -1043,19 +1050,18 @@ pub(crate) fn first_sync_word(segs: &[SegmentMeta], s_load: u64) -> io::Result<F
     (&mut file)
         .take(FRAME_HEADER_LEN as u64)
         .read_to_end(&mut header)?;
-    let Some(&word) = header.first_chunk::<4>() else {
+    // The header's first two fields, each read as the four bytes it is: the
+    // sync word, then the `len` that says where the successor begins.
+    let Some((&word, rest)) = header.split_first_chunk::<4>() else {
         return Ok(FirstSyncWord::Scan); // shorter than a sync word: damage or empty
     };
     if word == MAGIC || !word.starts_with(STAMP_PREFIX) {
         return Ok(FirstSyncWord::Scan);
     }
-    let Some(len) = header
-        .get(4..8)
-        .and_then(|len| <[u8; 4]>::try_from(len).ok())
-        .map(u32::from_le_bytes)
-    else {
+    let Some(&len) = rest.first_chunk::<4>() else {
         return Ok(FirstSyncWord::Foreign(word));
     };
+    let len = u32::from_le_bytes(len);
     file.seek(SeekFrom::Start(FRAME_HEADER_LEN as u64 + u64::from(len)))?;
     let mut successor = Vec::with_capacity(MAGIC.len());
     file.take(MAGIC.len() as u64).read_to_end(&mut successor)?;

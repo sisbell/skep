@@ -88,9 +88,9 @@ impl fmt::Display for AttestationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             AttestationError::UnsignedTag => {
-                "an attestation names a non-zero tag: tag 0 is the empty slot's own"
+                "an attestation must name a non-zero tag: tag 0 is the empty slot's own"
             }
-            AttestationError::EmptyBlob => "an attestation carries a non-empty signature blob",
+            AttestationError::EmptyBlob => "an attestation must carry a non-empty signature blob",
         })
     }
 }

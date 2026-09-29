@@ -13,6 +13,7 @@
 //! applies what it is given.
 
 use crate::checkpoint::{CheckpointMeta, LoadRefused, Loaded};
+use crate::error::Cause;
 use crate::journal::{self, ScanFail, ScanOutcome, SegmentMeta};
 use crate::WorldState;
 
@@ -182,7 +183,7 @@ pub(crate) struct FoldFail {
     /// [`ScanOutcome::halt_anywhere`]).
     pub at: u64,
     /// The decode's own account, for the condition that has one.
-    pub cause: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
+    pub cause: Option<Cause>,
 }
 
 /// Apply the committed records of `(base.s_load, bound]` onto `base`, one at
@@ -222,7 +223,7 @@ pub(crate) fn fold_to<W: WorldState>(
     for entry in journaled {
         let record: W::Record = journal::decode_record(&entry.bytes).map_err(|e| FoldFail {
             at: entry.seq,
-            cause: Some(Box::new(e)),
+            cause: Some(e),
         })?;
         world = world.apply(&record);
     }

@@ -134,6 +134,16 @@ fn an_attestation_holds_the_one_spelling_of_empty_at_construction() {
     let a = Attestation::new(3, vec![7, 7]).unwrap();
     assert_eq!((a.sig_alg(), a.sig()), (3, &[7u8, 7][..]));
     assert_eq!(format!("{a:?}"), "Attestation { sig_alg: 3, sig_len: 2 }");
+    // Each refusal's sentence names the rule the value broke, since that
+    // sentence may be the whole of what reaches whoever sent the value.
+    assert_eq!(
+        AttestationError::UnsignedTag.to_string(),
+        "an attestation must name a non-zero tag: tag 0 is the empty slot's own"
+    );
+    assert_eq!(
+        AttestationError::EmptyBlob.to_string(),
+        "an attestation must carry a non-empty signature blob"
+    );
 }
 
 /// A FILLED marker's bytes are the empty layout with the tag and the blob

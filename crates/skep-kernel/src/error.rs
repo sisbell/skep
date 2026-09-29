@@ -20,6 +20,13 @@ pub(crate) fn stamp_text(stamp: &[u8; 4]) -> String {
     stamp.escape_ascii().to_string()
 }
 
+/// The account a refusal carries where it has one — a serializer's own error,
+/// an I/O failure, or a sentence of this crate's — boxed so it travels as a
+/// `source` and crosses threads. The crate's one spelling of that type; the
+/// public variants below write it out in full, so a caller reading them sees
+/// what each holds.
+pub(crate) type Cause = Box<dyn std::error::Error + Send + Sync + 'static>;
+
 /// Failure of [`crate::Kernel::open`] (§6/§7).
 #[derive(Debug)]
 pub enum OpenError {
@@ -406,6 +413,8 @@ pub enum TxnError<E> {
     /// `f`'s typed precondition failure — surfaced verbatim to M10 (never a
     /// silent skip). Nothing committed, no dangling state; the rejected call
     /// is an A1 zero-step case evaluated against the base committed index.
+    /// It is also this error's `source`: a reporter walking the chain reaches
+    /// the store's own refusal, and whatever that carries.
     Rejected(E),
     /// The per-commit barrier (the single records+marker fsync) failed BEFORE
     /// install — or a non-unwind `io::Error` from the append path preceded it
@@ -511,17 +520,17 @@ impl<E: fmt::Display> fmt::Display for TxnError<E> {
     }
 }
 
-impl<E: fmt::Debug + fmt::Display> std::error::Error for TxnError<E> {
+impl<E: std::error::Error + 'static> std::error::Error for TxnError<E> {
     /// Spelled out variant by variant, for the reason [`OpenError`]'s is.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            // The store's own typed refusal is this error's cause, as every
+            // other wrapped cause is: a reporter walking the chain reaches it,
+            // and whatever it carries in turn.
+            TxnError::Rejected(e) => Some(e),
             TxnError::Durability(e) => Some(e),
             TxnError::Unencodable(e) => Some(&**e),
-            // A caller's own rejection cannot travel as a source: this impl is
-            // bounded on `Display + Debug` rather than `Error`, which is what
-            // keeps `TxnError<()>` an error for the many callers whose
-            // rejection type is not one.
-            TxnError::Rejected(_) | TxnError::OverBudget { .. } | TxnError::Poisoned => None,
+            TxnError::OverBudget { .. } | TxnError::Poisoned => None,
         }
     }
 }

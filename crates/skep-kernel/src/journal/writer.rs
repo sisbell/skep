@@ -15,6 +15,7 @@ use super::{
     SEGMENT_ROTATE_BYTES,
 };
 use crate::config::SaltSource;
+use crate::error::Cause;
 
 /// How a commit failed (§1). Three of these leave the journal where the
 /// transaction found it, so what separates them is the caller's REMEDY: a
@@ -37,7 +38,7 @@ pub(crate) enum CommitFail {
     /// records fail the same way forever. Both halves are judged before the
     /// first file operation, so the cause travels as the error it is rather
     /// than as an `io::Error` a caller would read a disk into.
-    Unencodable(Box<dyn std::error::Error + Send + Sync + 'static>),
+    Unencodable(Cause),
     /// The transaction's whole encoded form — record frames, marker and
     /// headers, [`txn_encoded_len`](super::txn_encoded_len)'s accounting — exceeds [`MAX_TXN_BYTES`].
     /// Nothing reached the file, so this is a no-op like

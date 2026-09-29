@@ -344,10 +344,13 @@ pub(crate) fn codec() -> impl Options + Copy {
         .reject_trailing_bytes()
 }
 
-/// A decode refusal as the `io::Error` it is: bytes read off a disk that do
-/// not hold what their format says, which is exactly what
-/// [`io::ErrorKind::InvalidData`] names. Only the read side wraps — an encode
-/// touches no file, so its refusal travels as the serializer's own error.
+/// A frame payload's serialize refusal as the `io::Error` [`encode_txn`]
+/// answers with, beside [`push_frame`]'s own refusal of that kind:
+/// [`io::ErrorKind::InvalidData`] names a payload that cannot be framed.
+/// Unreachable in practice — a payload is fixed-width fields and byte vectors,
+/// which the codec always encodes — and a record's own refusals are judged
+/// before any payload is built ([`Journal::commit_txn`]), where they travel as
+/// the serializer's own error or the frame cap's.
 fn invalid_data(e: bincode::Error) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, e)
 }
@@ -368,9 +371,11 @@ pub(crate) fn encode_record<R: Serialize>(record: &R) -> Result<Vec<u8>, bincode
 /// Read back what [`encode_record`] wrote. `Err` is a committed, CRC-intact
 /// record that does not decode as this `W::Record` — corrupt committed data,
 /// or a writer/reader skew, either way something the fold cannot supply and
-/// must not skip (§7). Trailing bytes are a refusal here too ([`codec`]).
-pub(crate) fn decode_record<R: DeserializeOwned>(bytes: &[u8]) -> io::Result<R> {
-    codec().deserialize(bytes).map_err(invalid_data)
+/// must not skip (§7) — and it travels as the serializer's own refusal,
+/// unwrapped, as [`encode_record`]'s does: that account is the whole of what
+/// tells the two apart. Trailing bytes are a refusal here too ([`codec`]).
+pub(crate) fn decode_record<R: DeserializeOwned>(bytes: &[u8]) -> Result<R, bincode::Error> {
+    codec().deserialize(bytes)
 }
 
 /// Append one framed payload to `buf`: `[magic][len][crc(len+payload)][payload]`.

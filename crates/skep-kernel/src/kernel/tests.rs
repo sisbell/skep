@@ -740,8 +740,8 @@ fn an_undecodable_record_carries_the_serializers_own_account() {
     // A committed, CRC-intact record that does not decode as this
     // `W::Record`: bad media, or a binary rolled back over a record
     // format. The coordinate cannot tell those apart and the serializer's
-    // account can, so it travels — this is the one of the four
-    // `Corruption` conditions that has an account at all (§7).
+    // account can, so it travels — this is the one of the fold's two
+    // refusals that has an account at all (§7).
     let dir = tempfile::tempdir().unwrap();
     {
         let mut writer = fresh_writer(dir.path());
@@ -760,9 +760,14 @@ fn an_undecodable_record_carries_the_serializers_own_account() {
         "got {err:?}"
     );
     let cause = std::error::Error::source(&err)
-        .expect("the account is the only thing that separates a skew from rot")
-        .to_string();
-    assert!(cause.contains("variant index"), "got {cause}");
+        .expect("the account is the only thing that separates a skew from rot");
+    // The account IS the serializer's refusal, not a wrapper around it: a
+    // caller walking the chain reaches the serializer's own error.
+    assert!(
+        cause.downcast_ref::<bincode::ErrorKind>().is_some(),
+        "the serializer's refusal travels as itself: {cause}"
+    );
+    assert!(cause.to_string().contains("variant index"), "got {cause}");
     // …and it reaches an operator reading the error, not only one walking
     // the chain.
     assert!(err.to_string().contains("variant index"), "got {err}");

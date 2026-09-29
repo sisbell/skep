@@ -6,7 +6,10 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use super::*;
 use crate::mutilate::{ckpt_file, seg_file};
-use skep_kernel::{LockKey, Snapshot, Space, Staging, TxnError, MAX_TXN_BYTES};
+use skep_kernel::{
+    Attestation, AttestationError, CheckpointError, CheckpointHeader, HistoryError, LockKey,
+    OpenError, Snapshot, Space, Staging, TxnError, MAX_TXN_BYTES,
+};
 use tempfile::tempdir;
 
 #[test]
@@ -186,6 +189,31 @@ fn rejected_leaves_state_untouched() {
 }
 
 #[test]
+fn a_rejection_travels_as_the_cause_it_is() {
+    // A store's typed refusal is the transaction's cause: a reporter holding
+    // the `TxnError` walks `source` to it and downcasts to the store's own
+    // type — the one the store documents and a caller branches on.
+    #[derive(Debug)]
+    struct Refused;
+    impl std::fmt::Display for Refused {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("the store refused")
+        }
+    }
+    impl std::error::Error for Refused {}
+
+    let k = Kernel::open(cfg_in_memory(), genesis()).unwrap();
+    let err = k
+        .transact::<(), _>(&[], |_| Err(Refused))
+        .expect_err("the closure refused");
+    let cause = std::error::Error::source(&err).expect("the rejection is its cause");
+    assert!(cause.downcast_ref::<Refused>().is_some(), "got {cause}");
+    // The variants that carry nothing carry no cause.
+    assert!(std::error::Error::source(&TxnError::<Refused>::Poisoned).is_none());
+    assert!(std::error::Error::source(&TxnError::<Refused>::OverBudget { bytes: 1 }).is_none());
+}
+
+#[test]
 fn splitting_beneath_the_published_budget_commits() {
     // `OverBudget`'s remedy is a size decision the caller makes, and
     // `MAX_TXN_BYTES` is the figure M2 publishes for it. Everything that pins
@@ -307,6 +335,25 @@ fn the_kernel_and_its_handles_carry_the_traits_callers_build_on() {
     assert!(rendered.contains("Seq(1)"), "got {rendered}");
     let rendered = format!("{k:?}");
     assert!(rendered.contains("poisoned: false"), "got {rendered}");
+}
+
+#[test]
+fn every_failure_is_a_std_error_that_crosses_threads() {
+    // A caller boxes an M2 failure as `Box<dyn Error + Send + Sync>` — the
+    // shape `?` converts any such error into — and each account inside one is
+    // a box a private field could loosen, so the promise is asserted rather
+    // than inferred.
+    fn crossing<T: std::error::Error + Send + Sync + 'static>() {}
+    crossing::<OpenError>();
+    crossing::<HistoryError>();
+    crossing::<CheckpointError>();
+    crossing::<TxnError<std::fmt::Error>>();
+    crossing::<AttestationError>();
+    // A caller keeps an attestation or a checkpoint header as a value: in a
+    // set, as a map key, or across threads.
+    fn kept<T: Clone + Eq + std::hash::Hash + std::fmt::Debug + Send + Sync>() {}
+    kept::<Attestation>();
+    kept::<CheckpointHeader>();
 }
 
 #[test]

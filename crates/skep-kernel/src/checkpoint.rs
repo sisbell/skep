@@ -27,7 +27,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::error::{stamp_text, NO_MIGRATION_REMEDY};
+use crate::error::{stamp_text, Cause, NO_MIGRATION_REMEDY};
 use crate::journal::{codec, fsync_dir};
 use crate::Seq;
 
@@ -98,7 +98,7 @@ struct Header {
 /// its checksum and hash need the body — and `body_hash` is what a party
 /// holding the file verifies it by.
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct CheckpointHeader {
     /// The coordinate the checkpoint embodies — its file name and its header
     /// agreeing on it.
@@ -156,7 +156,7 @@ pub(crate) struct Loaded<W> {
 /// so this carries no taxonomy to branch on, only the account that says which
 /// REMEDY, at the one point where that matters: the whole fallback chain
 /// exhausted, with nothing else left to tell an operator.
-pub(crate) type LoadRefused = Box<dyn std::error::Error + Send + Sync + 'static>;
+pub(crate) type LoadRefused = Cause;
 
 /// One checkpoint on disk: the coordinate its name claims, and where it is.
 ///
@@ -218,16 +218,17 @@ impl CheckpointMeta {
         if body_hash(body) != header.body_hash {
             return Err("checkpoint body failed its header hash (bit-rot or a torn write)".into());
         }
-        match codec().deserialize(body) {
-            Ok(world) => Ok(Loaded {
-                world,
-                chain_head: header.chain_head,
-            }),
-            // The unsizing coercion site: `bincode::Error` is a boxed
-            // `ErrorKind`, which unsizes against this function's return type
-            // here and would need a `From` impl that does not exist under `?`.
-            Err(skew) => Err(skew),
-        }
+        // The serializer's refusal becomes the account in place: `bincode::Error`
+        // is already a `Box<ErrorKind>`, so it unsizes into `LoadRefused` here.
+        // `?` alone would compile and box that box again, leaving a cause no
+        // caller could downcast to the serializer's `ErrorKind`.
+        let world = codec()
+            .deserialize(body)
+            .map_err(|skew| -> LoadRefused { skew })?;
+        Ok(Loaded {
+            world,
+            chain_head: header.chain_head,
+        })
     }
 
     /// What this checkpoint's header claims ([`CheckpointHeader`]), read
@@ -329,7 +330,7 @@ pub(crate) enum WriteFail {
     /// `W`'s own serializer refused, and carries its own account of what it
     /// could not encode. Nothing was written, not even the temp file: the
     /// encode precedes the first file operation.
-    Serialize(Box<dyn std::error::Error + Send + Sync + 'static>),
+    Serialize(Cause),
     /// A file operation failed. At most an ignored `checkpoint.tmp` survives —
     /// the rename is what publishes a checkpoint, so a failure before it
     /// leaves no base, and one after it leaves a whole one (§6).

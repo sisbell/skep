@@ -141,7 +141,7 @@ fn txn_size_accounting_matches_the_encoder_to_the_byte() {
     // accounting: a transaction the writer emits AT the budget accounts to
     // the budget on the way back in, so recovery cannot refuse a
     // transaction this kernel acked.
-    let mut group = PendingTxn::open(Txn(u64::MAX), &CHAIN_GENESIS, true);
+    let mut group = PendingTxn::open(Txn(u64::MAX), &CHAIN_GENESIS);
     group.push(
         LogRecord {
             seq: u64::MAX,
@@ -330,7 +330,7 @@ fn a_group_past_the_transaction_budget_never_commits() {
     let last_len = payload_len + (for_records % N) as usize;
     let buf = vec![7u8; last_len + 1];
     let group_of = |last: &[u8]| {
-        let mut group = PendingTxn::open(Txn(1), &CHAIN_GENESIS, true);
+        let mut group = PendingTxn::open(Txn(1), &CHAIN_GENESIS);
         for seq in 1..=N {
             let payload = if seq == N { last } else { &buf[..payload_len] };
             let record = LogRecord {
@@ -809,6 +809,36 @@ fn corrupt_marker_lands_on_next_record() {
     assert_eq!(out.committed_head, 4);
     assert_eq!(committed_seqs(&out), vec![1, 4]);
     assert_eq!(out.chain_break(), Some(4), "T3 followed the T2 this scan lost");
+}
+
+#[test]
+fn a_record_a_run_lands_on_cannot_vouch_for_its_group() {
+    // The run may have been the landing record's own transaction's earlier
+    // frames, so the group that record opens is not clean: a marker failing
+    // to close it is the run's to explain — here, above the committed head,
+    // §7's torn tail — and never the edited-transaction verdict, which would
+    // halt an open on a group the run may have eaten from.
+    let dir = tempdir().unwrap();
+    let mut writer = fresh_writer(dir.path());
+    write_txn(&mut writer, 1, vec![rec(10)]);
+    write_txn(&mut writer, 2, vec![rec(20), rec(21)]); // seqs 2, 3: the last transaction
+    drop(writer);
+    let segs = list_segments(dir.path()).unwrap();
+    let starts = frame_starts(&segs[0].path);
+    // Frames: 0=T1 rec, 1=T1 marker, 2..=3=T2 recs, 4=T2 marker. Rot T2's
+    // FIRST record: the resync lands on its second, which opens the group.
+    flip_byte(&segs[0].path, starts[2] + FRAME_HEADER_LEN + 1);
+    let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
+    assert_eq!(
+        out.runs,
+        vec![RunEnd::Landed {
+            inferred_max: 2,
+            at: 3
+        }]
+    );
+    assert_eq!(out.committed_head, 1, "T2's marker closes a group missing a record");
+    assert_eq!(out.uncommitted_intact(), None, "the landing record vouched for its group");
+    assert!(out.halt_to_head().is_none(), "the run above the head is the torn tail");
 }
 
 #[test]

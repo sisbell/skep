@@ -273,6 +273,46 @@ fn newest_checkpoint_is_none_then_what_its_header_claims() {
     assert_eq!(kernel.newest_checkpoint(), None, "another format's header names no base");
 }
 
+/// A published head's `base` is the NEWEST retained checkpoint's header, and
+/// a newest whose header refuses names no base at all — the FAIL-QUIET
+/// `None`, never the older base beside it. Under one retained base, newest
+/// and oldest are one file and neither claim shows; skepd keeps two.
+#[test]
+fn newest_checkpoint_is_the_newest_retained_and_never_an_older_stand_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = KernelConfig {
+        durability: Durability::Fsync {
+            journal_path: dir.path().to_path_buf(),
+            retain_checkpoints: 2,
+            burned_seq: BurnedSeqPolicy::Rollback,
+        },
+        checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(TEST_SEED),
+    };
+    let kernel = Kernel::<Vec<u64>>::open(cfg, Vec::new()).unwrap();
+    for x in [7u64, 8] {
+        kernel
+            .transact::<_, ()>(&[], |stg| {
+                stg.push(x);
+                Ok(())
+            })
+            .unwrap();
+        kernel.checkpoint().expect("a checkpoint");
+    }
+    assert_eq!(checkpoint::list(dir.path()).unwrap().len(), 2, "both bases retained");
+    let newest = kernel.newest_checkpoint().expect("a newest base");
+    assert_eq!(newest.seq, Seq(2), "the newest retained checkpoint, not the oldest");
+    assert_eq!(newest.chain_head, kernel.chain_head());
+
+    // The newest under another format's stamp names no base — not the older,
+    // valid one still retained beside it.
+    let path = dir.path().join("checkpoint.2");
+    let mut data = fs::read(&path).unwrap();
+    data[..4].copy_from_slice(b"SKC3");
+    fs::write(&path, &data).unwrap();
+    assert_eq!(kernel.newest_checkpoint(), None, "an older base stood in for the newest");
+}
+
 #[test]
 fn a_journal_under_another_format_is_refused_by_name_and_left_untouched() {
     // The encoding report's §8: under `SKJ2` a foreign-stamp journal was
@@ -332,9 +372,11 @@ fn a_journal_under_another_format_is_refused_by_name_and_left_untouched() {
     ));
     assert_eq!(fs::read(&seg).unwrap(), data);
 
-    // Damage at offset 0 is NOT a format event: it stays the scan's — here
-    // a torn first frame with nothing committed after it, which is the
-    // un-acked tail, cut and served empty, as the dirty-crash suite pins.
+    // Damage at offset 0 is NOT a format event: it stays the scan's. The junk
+    // opens a corrupt run that lands on T1's marker (inferred max 1), and T2
+    // committed after it, so the run lies inside the committed region and the
+    // open halts there — the run's own verdict, with no account and every
+    // byte as found.
     let mut junk = data.clone();
     junk[..4].copy_from_slice(&[0xAB, 0xCD, 0xEF, 0x01]);
     // Every frame back to this build's stamp but the first, which is junk.
@@ -349,9 +391,10 @@ fn a_journal_under_another_format_is_refused_by_name_and_left_untouched() {
     fs::write(&seg, &junk).unwrap();
     let out = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new());
     assert!(
-        !matches!(out, Err(OpenError::ForeignFormat { .. })),
-        "junk at offset 0 was read as a format stamp: {out:?}"
+        matches!(out, Err(OpenError::Corruption { at: Seq(2), cause: None })),
+        "junk at offset 0 is the scan's corrupt run — not a format, not a damaged word: {out:?}"
     );
+    assert_eq!(fs::read(&seg).unwrap(), junk, "a halted open touched the segment");
 }
 
 #[test]
@@ -771,6 +814,33 @@ fn an_undecodable_record_carries_the_serializers_own_account() {
     // …and it reaches an operator reading the error, not only one walking
     // the chain.
     assert!(err.to_string().contains("variant index"), "got {err}");
+}
+
+#[test]
+fn a_committed_record_carrying_bytes_past_its_value_does_not_fold() {
+    // The codec rejects trailing bytes at every door it guards, and a
+    // record's is the one only a fold reaches: a tolerant decoder would fold
+    // the value the first bytes spell and drop the rest in silence.
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let mut writer = fresh_writer(dir.path());
+        let mut padded = journal::encode_record(&10u64).unwrap();
+        padded.push(0);
+        writer
+            .commit_txn(1, vec![padded], None, |_| {})
+            .expect("fixture commit");
+    }
+    let err = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
+        .expect_err("a record with bytes past its value is not something to fold");
+    assert!(
+        matches!(err, OpenError::Corruption { at: Seq(1), .. }),
+        "got {err:?}"
+    );
+    let cause = std::error::Error::source(&err).expect("the decode's account travels");
+    assert!(
+        cause.downcast_ref::<bincode::ErrorKind>().is_some(),
+        "the decode refused, not another check: {cause}"
+    );
 }
 
 #[test]
@@ -1312,12 +1382,15 @@ fn world_at_selects_the_base_below_the_boundary() {
 }
 
 #[test]
-fn world_at_is_unjournaled_in_memory_at_every_boundary() {
+fn every_history_read_is_unjournaled_in_memory_at_every_boundary() {
     // `Unjournaled` is a property of the kernel that no choice of `at`
     // can avoid, so it outranks every question about `at` — including
     // the boundary judgment, which would otherwise answer `BeyondHead`
     // above the head and send a caller walking `at` down to genesis
-    // before learning that no boundary here was ever answerable.
+    // before learning that no boundary here was ever answerable. Genesis
+    // is the edge that needs saying: `attestation_at` answers `Seq(0)`
+    // without a scan, through a branch of its own that must still refuse
+    // here.
     let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
@@ -1332,9 +1405,15 @@ fn world_at_is_unjournaled_in_memory_at_every_boundary() {
         .unwrap();
     }
     for at in [Seq(0), Seq(1), Seq(2), Seq(3), Seq(99)] {
-        assert!(
-            matches!(k.world_at(at), Err(HistoryError::Unjournaled)),
-            "at {at} answered something other than Unjournaled"
-        );
+        for (read, out) in [
+            ("world_at", k.world_at(at).map(|_| ())),
+            ("chain_at", k.chain_at(at).map(|_| ())),
+            ("attestation_at", k.attestation_at(at).map(|_| ())),
+        ] {
+            assert!(
+                matches!(out, Err(HistoryError::Unjournaled)),
+                "{read} at {at} answered {out:?}"
+            );
+        }
     }
 }

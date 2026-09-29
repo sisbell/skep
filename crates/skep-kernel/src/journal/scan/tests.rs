@@ -311,7 +311,7 @@ fn a_marker_naming_another_transaction_is_the_edited_one() {
 }
 
 #[test]
-fn a_group_past_the_transaction_budget_never_commits() {
+fn a_group_past_the_transaction_budget_never_commits_whatever_its_slot_holds() {
     // The reader's half of the write path's own bound: `commit_txn`
     // refuses a staging past MAX_TXN_BYTES before a byte is appended, so a
     // group past it is one no writer here emits — and accepting it would
@@ -361,6 +361,24 @@ fn a_group_past_the_transaction_budget_never_commits() {
         over_budget.records.is_empty(),
         "a dead group holds no records"
     );
+
+    // THE FILLED SLOT moves the edge nowhere. The write side judges a
+    // staging against the EMPTY marker's figure whatever the slot will hold
+    // (`Journal::commit_txn`), so the reader must too: charging the marker a
+    // group is actually closed by would refuse, on the next open, an
+    // attested transaction at the budget this kernel acked — a `publish`
+    // shot among them. Closed by a marker carrying tag 1's full width, the
+    // two groups commit and refuse exactly as they did.
+    let attested_close = |group: &PendingTxn| Marker {
+        sig_alg: 1,
+        sig: vec![0xA5; 3_373],
+        ..closed_by(group)
+    };
+    assert!(
+        at_budget.commits(&attested_close(&at_budget)),
+        "a filled slot pushed a group the writer admits past the reader's budget"
+    );
+    assert!(!over_budget.commits(&attested_close(&over_budget)));
 }
 
 #[test]
@@ -532,7 +550,7 @@ fn a_foreign_stamp_is_told_from_damage() {
 }
 
 #[test]
-fn the_chain_rides_across_a_segment_rotation() {
+fn the_chain_and_the_salt_source_ride_across_a_segment_rotation() {
     // The chain is over the journal, not the segment: the first
     // transaction of a new segment links from the last of the old one,
     // and a scan across the boundary verifies every link.
@@ -549,6 +567,21 @@ fn the_chain_rides_across_a_segment_rotation() {
     assert_eq!(out.committed_head, 3);
     let seg2_starts = frame_starts(&segs[1].path);
     assert_eq!(out.chain_head, chain_of_marker_at(&segs[1].path, seg2_starts[3]));
+    // …and the salt source rides with it. The links above verify whatever
+    // the salts are, since the reader takes each off its marker, so only the
+    // salts themselves can say which source the rotated writer drew from:
+    // under the seeded one, every marker — T2 and T3 in the new segment, as
+    // T1 in the old — carries the stream's value for its own transaction.
+    // T3 is the one the rotated writer salts: a commit draws its salt before
+    // it rotates, so T2's came from the writer the rotation replaced.
+    for (seg, marker_frame, txn) in [(0, 1, 1u64), (1, 1, 2), (1, 3, 3)] {
+        let starts = frame_starts(&segs[seg].path);
+        assert_eq!(
+            marker_at(&segs[seg].path, starts[marker_frame]).salt,
+            SaltSource::Seeded(TEST_SEED).draw(txn).unwrap(),
+            "transaction {txn} was salted by a source this kernel was not configured with"
+        );
+    }
     // Reopened over the rotated journal, the appender continues the same
     // chain: the next commit verifies against what the scan derived.
     let mut writer =
@@ -902,6 +935,14 @@ fn resynchronization_over_planted_frame_headers_is_bounded() {
         matches!(fail, Some(ScanFail::Unscannable { at: 0 })),
         "got {fail:?}"
     );
+    // …at the base's OWN coordinate, whatever it is: above a base at 1 the
+    // one (active) segment is still read, and refused at 1 — which a refusal
+    // spelled `at: 0` answers only at genesis.
+    let fail = scan(&segs, 1, None, CHAIN_GENESIS).err();
+    assert!(
+        matches!(fail, Some(ScanFail::Unscannable { at: 1 })),
+        "got {fail:?}"
+    );
 }
 
 #[test]
@@ -964,6 +1005,14 @@ fn a_segment_longer_than_any_writer_produces_is_refused_before_it_is_read() {
     let fail = scan(&segs, 0, None, CHAIN_GENESIS).err();
     assert!(
         matches!(fail, Some(ScanFail::Unscannable { at: 0 })),
+        "got {fail:?}"
+    );
+    // …at the base's OWN coordinate, whatever it is: above a base at 1 the
+    // one (active) segment is still read, and refused at 1 — which a refusal
+    // spelled `at: 0` answers only at genesis.
+    let fail = scan(&segs, 1, None, CHAIN_GENESIS).err();
+    assert!(
+        matches!(fail, Some(ScanFail::Unscannable { at: 1 })),
         "got {fail:?}"
     );
 }

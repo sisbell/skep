@@ -297,6 +297,66 @@ fn recovery_skips_only_the_segments_the_base_already_embodies() {
 }
 
 #[test]
+fn the_format_probe_opens_the_segment_the_scan_begins_at_and_names_the_base() {
+    // `open` reads one sync word before it scans: the first of the first
+    // segment the SCAN will read, once the base has said where that is. A
+    // damaged word in a closed segment the base embodies is never read — the
+    // base carries those records — so the open succeeds; one in the segment
+    // the scan reads first is refused even though its frame lies below the
+    // base (the probe reads no `Seq`), and is named at the base's own
+    // coordinate. Every other probe fixture at this tier sits at genesis,
+    // where "the first scanned segment" is the first segment and "the base's
+    // coordinate" is 0.
+    let tmp = tempdir().unwrap();
+    let fixture = tmp.path().join("fixture");
+    let k = Kernel::open(cfg_fsync(&fixture), genesis()).unwrap(); // retain 2
+    assert_eq!(commit_blob(&k), Seq(1));
+    assert_eq!(k.checkpoint().unwrap(), Seq(1)); // holds the reclamation floor at 1
+    for _ in 0..3 {
+        commit_blob(&k); // Seqs 2..=4, filling seg-1 past the threshold
+    }
+    assert_eq!(commit_blob(&k), Seq(5)); // rotates into seg-5
+    assert_eq!(commit_blob(&k), Seq(6));
+    assert_eq!(k.checkpoint().unwrap(), Seq(6)); // the base a reopen selects
+    for _ in 0..2 {
+        commit_blob(&k); // Seqs 7..=8, filling seg-5 past the threshold
+    }
+    assert_eq!(commit_blob(&k), Seq(9)); // rotates into seg-9
+    drop(k);
+    assert_eq!(segment_count(&fixture), 3, "the fixture must rotate twice");
+
+    // seg-1 (Seqs 1..=4) lies wholly below the base at 6: the scan skips it,
+    // and so must the probe.
+    let skipped = tmp.path().join("skipped");
+    copy_dir(&fixture, &skipped);
+    flip_byte(&seg_file(&skipped, 1), 3); // `SKJ4` → a foreign-shaped word
+    let k = Kernel::open(cfg_fsync(&skipped), genesis())
+        .expect("a damaged word in a segment the base embodies is no reason to halt");
+    assert_eq!(k.current_seq(), Seq(9));
+    assert_eq!(items(&k).len(), 9);
+    drop(k);
+
+    // seg-5 (Seqs 5..=8) straddles the base, so the scan reads it first —
+    // and T5's damaged word, below the base, is refused all the same.
+    let straddling = tmp.path().join("straddling");
+    copy_dir(&fixture, &straddling);
+    let seg5 = seg_file(&straddling, 5);
+    flip_byte(&seg5, 3);
+    let before = fs::read(&seg5).unwrap();
+    match Kernel::<TestWorld>::open(cfg_fsync(&straddling), genesis()) {
+        Err(OpenError::Corruption {
+            at,
+            cause: Some(cause),
+        }) => {
+            assert_eq!(at, Seq(6), "named at the base's own coordinate, where the scan begins");
+            assert!(cause.to_string().contains("damaged sync word"), "got {cause}");
+        }
+        other => panic!("expected the damaged-sync-word halt at the base, got {other:?}"),
+    }
+    assert_eq!(fs::read(&seg5).unwrap(), before, "a halted open touched the segment");
+}
+
+#[test]
 fn an_absent_segment_halts_as_a_chain_break_where_a_damaged_one_halts_as_a_run() {
     // Recovery's damage model WAS frames that fail their CRC, and an absent
     // closed segment was its documented blind spot: REMOVING a segment leaves

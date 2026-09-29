@@ -89,6 +89,33 @@ fn a_body_hash_that_disagrees_with_the_body_refuses_the_base() {
 }
 
 #[test]
+fn a_body_carrying_bytes_past_its_world_is_not_a_base() {
+    // Every check the header makes passes — length, checksum and hash are
+    // fixed over the longer body — so what refuses is the decode, which takes
+    // exactly what the encoder writes: a tolerant one would load the world
+    // the first bytes spell, under a hash of bytes that are not its body.
+    let dir = tempdir().unwrap();
+    let mut body = codec().serialize(&world()).unwrap();
+    body.push(0);
+    let mut data = Vec::new();
+    data.extend_from_slice(&MAGIC);
+    data.extend_from_slice(&3u64.to_le_bytes()); // seq
+    data.extend_from_slice(&crc32c::crc32c(&body).to_le_bytes()); // crc(body)
+    data.extend_from_slice(&(body.len() as u64).to_le_bytes()); // body_len
+    data.extend_from_slice(&CHAIN_HEAD); // chain_head
+    data.extend_from_slice(&body_hash(&body)); // body_hash
+    data.extend_from_slice(&body);
+    fs::write(checkpoint_path(dir.path(), 3), &data).unwrap();
+    let refused = list(dir.path()).unwrap()[0]
+        .load::<Vec<u64>>()
+        .expect_err("a body with bytes past its value is not a base");
+    assert!(
+        refused.downcast_ref::<bincode::ErrorKind>().is_some(),
+        "the decode refused, not a header check: {refused}"
+    );
+}
+
+#[test]
 fn a_foreign_stamp_is_refused_by_name_with_the_remedy() {
     // A checkpoint under another format names the stamp it found, the
     // stamp this build writes, and the ruled remedy — the sentence the

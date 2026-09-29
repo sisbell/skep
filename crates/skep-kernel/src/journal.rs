@@ -74,8 +74,9 @@ use chain::ChainLink;
 /// salt that the chain's preimage hashes, so every chain value moved — the
 /// marker doc's own definition of a format event — and the checkpoint stamp
 /// moved with it (`SKC4`), its `chain_head` being a value under the salted
-/// rule. A segment opening with another format's sync word is refused BY
-/// NAME at `open` ([`first_sync_word`]) rather than read as this one's.
+/// rule. The first segment a scan reads, opening with another format's sync
+/// word, is refused BY NAME at `open` ([`first_sync_word`]) rather than read
+/// as this one's; a segment the base embodies is not read, and so not probed.
 pub(crate) const MAGIC: [u8; 4] = *b"SKJ4";
 /// The stamp's fixed prefix: what makes four bytes a well-formed journal sync
 /// word of SOME format. [`first_sync_word`] tells such a word (`SKJ` + a

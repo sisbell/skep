@@ -77,8 +77,10 @@ pub(crate) enum ScanFail {
     /// any height, which is why the scan refuses rather than answering with a
     /// qualification.
     Unscannable {
-        /// The base's own coordinate: the damage lies somewhere above it, and
-        /// the scan could not reach past it to say where.
+        /// The base's own coordinate, where the scan began: the damage lies
+        /// somewhere in the segments it reads — above the base, or below it in
+        /// a segment straddling it — and the scan could not get past the
+        /// damage to say where.
         at: u64,
     },
 }
@@ -514,11 +516,16 @@ struct PendingTxn {
     /// have a non-idempotent [`crate::WorldState::apply`] fold one coordinate
     /// twice, so such a transaction never commits however its checksum lands.
     ordered: bool,
-    /// What this group's frames would occupy in the journal, accounted to the
-    /// same figure [`super::txn_encoded_len`] gives the write side: seeded with the
-    /// marker frame that will close the group, then charged [`frame_len`] per
-    /// record — which is [`super::record_frame_len`] reached from the framed payload
-    /// a reader actually holds rather than from the record's own bytes.
+    /// What this group counts against [`MAX_TXN_BYTES`], accounted to the
+    /// figure the write side's budget charges ([`super::Journal::commit_txn`]):
+    /// seeded with the EMPTY marker's frame, [`MARKER_FRAME_LEN`], whatever the
+    /// slot of the marker that closes the group holds — the slot sits outside
+    /// the budget on both sides, as [`MARKER_FRAME_LEN`]'s card says — then
+    /// charged [`frame_len`] per record, which is [`super::record_frame_len`]
+    /// reached from the framed payload a reader actually holds rather than from
+    /// the record's own bytes. For an unattested group that is the very length
+    /// [`super::txn_encoded_len`] gives the write side; an attested one occupies
+    /// its blob's width more, which neither side's budget counts.
     accounted: u64,
     /// Set once [`Self::accounted`] passes [`MAX_TXN_BYTES`]. A group past the
     /// budget is one no writer here can emit — [`super::Journal::commit_txn`] refuses

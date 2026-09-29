@@ -129,10 +129,12 @@ pub enum OpenError {
         /// a damaged sync word, the base's own coordinate, where the scan
         /// would have begun — the probe reads a frame header and no `Seq`;
         /// for an unenumerable or oversized segment, the base's own
-        /// coordinate, since the damage lies somewhere above it and the scan
-        /// could not reach past it to say where; for a corrupt run, the next
-        /// INTACT frame's coordinate — the run's own seqs are unreadable, so
-        /// this bounds the damage rather than locating it; for the base
+        /// coordinate, where the scan began, since the damage lies somewhere
+        /// in the segments it reads — above the base, or below it in a segment
+        /// straddling it — and the scan could not get past the damage to say
+        /// where; for a corrupt run, the next INTACT frame's coordinate — the
+        /// run's own seqs are unreadable, so this bounds the damage rather
+        /// than locating it; for the base
         /// mismatch, the base's seq; for the edited transaction, the last seq of
         /// its own records — not its marker's, which in one shape is the
         /// rewritten field; for a chain break, the `last_seq` of the first

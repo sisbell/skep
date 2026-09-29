@@ -69,7 +69,8 @@
 //!   the commit mints, never the whole member (the base's carried tail past
 //!   `base_extent` and every later deposit into the head member fall outside
 //!   it); [`PublishBody`] builds it one value at a time under a byte budget,
-//!   for a verifier re-composing it off a store.
+//!   and refuses it WHOLE at the first value past that budget, for a verifier
+//!   re-composing it off a store.
 //!
 //! Every length-delimited element is written by [`push_delimited`], the one
 //! function [`framed`] delimits its own fields with, and every row is written
@@ -144,11 +145,12 @@ pub struct BoardTerm {
 /// they are one fact: each op's body has its own grammar, and the `op` token
 /// names which. Built only by [`entry_body_insert`], [`entry_body_make_link`]
 /// and [`PublishBody`] — [`entry_body_publish`] among its builds — so a body
-/// cannot be framed under another op's token. The tokens are the op-kind
-/// names as the wire spells them — `insert`, `make_link`, `publish` — spelled
-/// HERE, once each, beside the grammar each selects, because they are members
-/// of a signed preimage that a reader beside the table recomposes from this
-/// crate.
+/// cannot be framed under another op's token, and a `publish` body cannot be
+/// finished over fewer values than its builder was offered. The tokens are
+/// the op-kind names as the wire spells them — `insert`, `make_link`,
+/// `publish` — spelled HERE, once each, beside the grammar each selects,
+/// because they are members of a signed preimage that a reader beside the
+/// table recomposes from this crate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntryBody {
     op: &'static str,
@@ -334,23 +336,30 @@ pub fn entry_body_make_link(slots: LinkSlots<'_>) -> EntryBody {
 /// PRECONDITION — every value is shorter than 2^32 bytes, as
 /// [`entry_body_insert`]'s are; a longer one PANICS, naming the obligation.
 pub fn entry_body_publish<'a>(values: impl IntoIterator<Item = &'a [u8]>) -> EntryBody {
-    let mut body = PublishBody::within(usize::MAX);
-    for v in values {
-        let admitted = body.push(v);
-        debug_assert!(admitted, "a budget of usize::MAX bytes refuses no value");
-    }
-    body.finish()
+    values
+        .into_iter()
+        .try_fold(PublishBody::within(usize::MAX), PublishBody::push)
+        .expect("a budget of usize::MAX refuses no value: a saturated length never passes it")
+        .finish()
 }
 
 /// A `publish` BODY built one value at a time under a byte BUDGET — for the
 /// verifier that re-composes a shot's body off its own store, where each
-/// value arrives by a read that can fail and the body must stop at the budget
-/// rather than be built past it. [`PublishBody::push`] measures the budget in
+/// value arrives by a read that can fail and a body past the budget must be
+/// REFUSED rather than built. [`PublishBody::push`] measures the budget in
 /// the body's own layout, so no caller restates that layout; the caller keeps
 /// its walk, and its own answer for a value it could not read, and collects
-/// nothing ahead of the build. [`entry_body_publish`] is this builder under a
-/// budget no body reaches, so over values the budget admits the two build one
-/// body.
+/// nothing ahead of the build.
+///
+/// A refused push CONSUMES the builder, and the type is not `Clone` — the
+/// compile-time check beside it holds that — so the only body that can be
+/// finished is one that took EVERY value it was offered, in order. A body
+/// that skipped a value, or stopped short of one, would be the preimage of a
+/// different, shorter publish: every other member of the frame is fixed for
+/// one principal's publishes into one trunk under one key, so a signature
+/// made for that publish would verify over it. [`entry_body_publish`] is this
+/// builder under a budget no body reaches, so over values the budget admits
+/// the two build one body.
 #[derive(Debug)]
 pub struct PublishBody {
     bytes: Vec<u8>,
@@ -368,22 +377,23 @@ impl PublishBody {
         PublishBody { bytes, row, budget }
     }
 
-    /// Append `value` as the body's next — unless the finished body would then
-    /// pass its budget, where nothing is appended and the answer is `false`:
-    /// no push carries the body past it. No value is free — an empty one costs
+    /// Append `value` as the body's next and hand the builder back — unless
+    /// the finished body would then pass its budget, where the answer is
+    /// `None` and the builder is GONE: a body that refused a value can be
+    /// neither continued nor finished. No value is free — an empty one costs
     /// its length prefix, so a budget admits at most a quarter as many values
     /// as it has bytes, whatever the values hold.
     ///
     /// PRECONDITION — as [`entry_body_publish`]'s: `value` is shorter than
     /// 2^32 bytes, else PANICS; under any budget below that bound, this
     /// refuses such a value first.
-    #[must_use = "a value the budget refused was not appended"]
-    pub fn push(&mut self, value: &[u8]) -> bool {
+    #[must_use = "push takes the builder: the body goes on in the one it returns"]
+    pub fn push(mut self, value: &[u8]) -> Option<PublishBody> {
         if self.bytes.len().saturating_add(delimited_len(value.len())) > self.budget {
-            return false;
+            return None;
         }
         self.row.push(&mut self.bytes, value);
-        true
+        Some(self)
     }
 
     /// The body, under the `publish` token.
@@ -393,6 +403,22 @@ impl PublishBody {
         EntryBody { op: "publish", bytes }
     }
 }
+
+/// [`PublishBody`] is not `Clone`, and this block stops compiling the moment
+/// it is: a copy taken before a push would outlive that push's refusal, and
+/// finish to the shorter body the refusal exists to forbid. The `_` below is
+/// inferred while the blanket impl is the only one that applies; a `Clone`
+/// type meets the second as well, and the path is ambiguous.
+const _: fn() = || {
+    trait AmbiguousIfClone<A> {
+        fn check() {}
+    }
+    impl<T: ?Sized> AmbiguousIfClone<()> for T {}
+    #[allow(dead_code)]
+    struct IsClone;
+    impl<T: Clone> AmbiguousIfClone<IsClone> for T {}
+    let _ = <PublishBody as AmbiguousIfClone<_>>::check;
+};
 
 #[cfg(test)]
 mod tests {
@@ -517,19 +543,35 @@ mod tests {
     }
 
     /// [`PublishBody`] under its budget: it finishes to [`entry_body_publish`]'s
-    /// body over the values it admitted, and the budget is the FINISHED body's
-    /// length — a value landing the body exactly on it is admitted, one byte
-    /// more is refused and appends nothing, and at the budget not even an empty
-    /// value fits, its length prefix costing four bytes.
+    /// body over the values it took, and the budget is the FINISHED body's
+    /// length — a value landing the body exactly on it is taken, one byte more
+    /// is refused, and at the budget not even an empty value fits, its length
+    /// prefix costing four bytes. A refusal CONSUMES the builder, so no body is
+    /// finished over a sequence that skipped a value or stopped short of one:
+    /// the third row offers `cd` between `ab` and `c`, and a builder that let
+    /// the walk go on past its refusal would finish to `[ab, c]`'s body — the
+    /// preimage of another publish, whose signature verifies over it.
     #[test]
     fn a_publish_body_built_within_its_budget_is_the_whole_sequences_body() {
         let whole = entry_body_publish([&b"ab"[..], &b"c"[..]]);
-        let mut body = PublishBody::within(whole.as_bytes().len());
-        assert!(body.push(b"ab"));
-        assert!(!body.push(b"cd"), "one byte past the budget");
-        assert!(body.push(b"c"), "exactly on it");
-        assert!(!body.push(b""), "an empty value costs its length prefix");
-        assert_eq!(body.finish(), whole);
+        let budget = whole.as_bytes().len();
+        let fed = |values: &[&[u8]]| {
+            values.iter().try_fold(PublishBody::within(budget), |body, v| body.push(v))
+        };
+        assert!(fed(&[&b"ab"[..], &b"cd"[..]]).is_none(), "one byte past the budget");
+        assert!(
+            fed(&[&b"ab"[..], &b"c"[..], &b""[..]]).is_none(),
+            "an empty value costs its length prefix"
+        );
+        assert!(
+            fed(&[&b"ab"[..], &b"cd"[..], &b"c"[..]]).is_none(),
+            "a refusal ends the body: nothing finishes over the values around it"
+        );
+        assert_eq!(
+            fed(&[&b"ab"[..], &b"c"[..]]).map(PublishBody::finish),
+            Some(whole),
+            "exactly on it"
+        );
     }
 
     /// The frame is `framed(ENTRY_TAG, …)` over the six members in order and

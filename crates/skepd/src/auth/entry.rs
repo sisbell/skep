@@ -217,17 +217,17 @@ fn every_run_origin_readable(
 /// built: an address M4 holds no value at, or a value that would carry the
 /// body past the budget. The budget is measured in the body's own layout as
 /// each value is read, so nothing is collected ahead of the build and no body
-/// is held past it. PRECONDITION: the principal may read every value the
-/// shot places ([`every_run_origin_readable`]).
+/// is held past it; a refused push takes the builder with it, so the shot is
+/// refused whole and no body is finished over the values before the refusal
+/// — the preimage of a shorter publish. PRECONDITION: the principal may read
+/// every value the shot places ([`every_run_origin_readable`]).
 fn publish_body(world: &World, shot: &Shot) -> Result<EntryBody, ComposeFault> {
     let content = world.content();
     let mut body = PublishBody::within(MAX_SHOT_BODY_BYTES);
     for placed in &shot.runs {
         for a in placed.run.addrs() {
             let v = content.value_at(a.tumbler()).ok_or(ComposeFault::MissingValue)?;
-            if !body.push(v.as_bytes()) {
-                return Err(ComposeFault::OverBudget);
-            }
+            body = body.push(v.as_bytes()).ok_or(ComposeFault::OverBudget)?;
         }
     }
     Ok(body.finish())

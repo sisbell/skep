@@ -1,6 +1,6 @@
 //! The history reads — the world, the commit chain and the signature slot as
 //! of a committed boundary — derived read-only from the journal directory
-//! through one derivation, [`Kernel::bounded_read`], with no kernel lock taken
+//! through one derivation, [`Kernel::history_read`], with no kernel lock taken
 //! and nothing written. The rest of `kernel` never sees it or its answer.
 
 use crate::checkpoint;
@@ -11,14 +11,14 @@ use crate::{Seq, WorldState};
 
 use super::Kernel;
 
-/// Where a bounded read at `at` stands once every refusal before the fold has
-/// spoken, the boundary judgment included — [`Kernel::bounded_read`]'s answer,
+/// Where a history read at `at` stands once every refusal before the fold has
+/// spoken, the boundary judgment included — [`Kernel::history_read`]'s answer,
 /// which each history read finishes with the one thing it reads there: the
 /// fold, the chain, or the slot.
 // Returned by one private method and matched at once by each caller, never
 // stored: the size difference between the variants costs one move.
 #[allow(clippy::large_enum_variant)]
-enum BoundedRead<W> {
+enum HistoryRead<W> {
     /// `at` IS the base's own coordinate — a retained checkpoint's seq, or
     /// 0 — so the base answers, and the journal is not consulted.
     AtBase(replay::Base<W>),
@@ -104,10 +104,10 @@ impl<W: WorldState> Kernel<W> {
     /// [`HistoryError::Corruption`]. A retry re-derives from the file as it
     /// now stands.
     pub fn world_at(&self, at: Seq) -> Result<W, HistoryError> {
-        match self.bounded_read(at, at.0)? {
-            BoundedRead::AtBase(base) => Ok(base.into_world()),
+        match self.history_read(at, at.0)? {
+            HistoryRead::AtBase(base) => Ok(base.into_world()),
             // Recovery's fold, bounded at `at` (§6/§7).
-            BoundedRead::Above { base, scan, .. } => {
+            HistoryRead::Above { base, scan, .. } => {
                 replay::fold_to(base, &scan, at.0).map_err(|fail| HistoryError::Corruption {
                     at: Seq(fail.at),
                     cause: fail.cause,
@@ -120,18 +120,18 @@ impl<W: WorldState> Kernel<W> {
     /// closing `at`'s transaction carries, READ-ONLY off this kernel's own
     /// journal directory under the verification [`Kernel::world_at`] runs,
     /// with no world folded and none kept (QUEUE item 10, the chain's open
-    /// items: `chain_at(N)`). What a peer holding a saved `(position,
-    /// chain)` pair — a `/health` reading, a published head's members —
-    /// checks against the board's RECOMPUTATION rather than against the
-    /// board's stored claim: a re-chained journal answers the forgery here,
-    /// which the saved value contradicts, where the claim it left untouched
-    /// would still byte-compare. At the installed head this equals
-    /// [`Kernel::chain_head`]; at `0` it is the seed.
+    /// items: `chain_at(N)`). What a peer holding a saved `(seq, chain)` pair
+    /// — a `/health` reading, a published head's members — checks against
+    /// this kernel's RECOMPUTATION rather than against the journal's stored
+    /// claim: a re-chained journal answers the forgery here, which the saved
+    /// value contradicts, where the claim it left untouched would still
+    /// byte-compare. At the installed head this equals [`Kernel::chain_head`];
+    /// at `0` it is the chain's genesis value.
     ///
     /// THE SAME DERIVATION as `world_at`, bound for bound: the same base
     /// selection capped at `at`, the same scan above it — which verifies
-    /// every committed link from that base to the journal's END, not to
-    /// `at`, so a boundary below the newest checkpoint is a full
+    /// every committed chain link from that base to the journal's END, not
+    /// to `at`, so a boundary below the newest checkpoint is a full
     /// verification of the surviving journal from the base it selects — the
     /// same refusals in the same order as far as `world_at`'s scan goes
     /// ([`HistoryError::Unjournaled`], [`HistoryError::BeyondHead`],
@@ -142,10 +142,10 @@ impl<W: WorldState> Kernel<W> {
     /// presented twice refuses `world_at` and not this, the chain being over
     /// the framed bytes, which verify; and the same answer for a boundary
     /// that IS the base: the base's own chain, the `SKC4` header's
-    /// `chain_head` or the seed at genesis, answered without consulting the
-    /// journal and so never halting. Deterministic in `at` across calls,
-    /// processes and base choices, since a checkpoint's header carries the
-    /// very marker value it stands in for.
+    /// `chain_head` or the chain's genesis value at genesis, answered without
+    /// consulting the journal and so never halting. Deterministic in `at`
+    /// across calls, processes and base choices, since a checkpoint's header
+    /// carries the very marker value it stands in for.
     ///
     /// COST, per call, uncached: `world_at`'s minus the fold and the resident
     /// world — the base is still LOADED, since its body hash is the base's
@@ -156,14 +156,15 @@ impl<W: WorldState> Kernel<W> {
     /// appender and `checkpoint()` for the same reasons, with the same two
     /// transient refusals.
     pub fn chain_at(&self, at: Seq) -> Result<[u8; 32], HistoryError> {
-        Ok(match self.bounded_read(at, at.0)? {
+        Ok(match self.history_read(at, at.0)? {
             // The base's own chain — the `SKC4` header's `chain_head`, or the
-            // seed at genesis — with the journal not consulted, as `world_at`
-            // does not consult it for the base's own world.
-            BoundedRead::AtBase(base) => base.chain_head(),
+            // chain's genesis value at genesis — with the journal not
+            // consulted, as `world_at` does not consult it for the base's own
+            // world.
+            HistoryRead::AtBase(base) => base.chain(),
             // The chain the marker closing `at` carries, verified with every
-            // link from the base to the journal's end.
-            BoundedRead::Above { closing, .. } => closing.chain,
+            // chain link from the base to the journal's end.
+            HistoryRead::Above { closing, .. } => closing.chain,
         })
     }
 
@@ -197,13 +198,13 @@ impl<W: WorldState> Kernel<W> {
         // A base strictly below `at`, so the marker closing `at` is scanned
         // rather than embodied: a checkpoint carries the chain at its seq and
         // no marker.
-        let BoundedRead::Above { closing, .. } = self.bounded_read(at, below)? else {
+        let HistoryRead::Above { closing, .. } = self.history_read(at, below)? else {
             unreachable!("a base at or below {below} lies below {at}, so the read is above it");
         };
         Ok(closing.attestation)
     }
 
-    /// THE BOUNDED DERIVATION, stated once for the three history reads —
+    /// THE HISTORY READ, stated once for the three public ones —
     /// [`Kernel::world_at`], [`Kernel::chain_at`] and [`Kernel::attestation_at`]
     /// — which differ only in how high their base may sit and in what they ask
     /// of its answer: so none can refuse differently from another up to that
@@ -233,7 +234,7 @@ impl<W: WorldState> Kernel<W> {
     /// root) and 0 is genesis, so there is nothing to fold or verify, and
     /// consulting the journal could only refuse a question the base already
     /// answers.
-    fn bounded_read(&self, at: Seq, base_ceiling: u64) -> Result<BoundedRead<W>, HistoryError> {
+    fn history_read(&self, at: Seq, base_ceiling: u64) -> Result<HistoryRead<W>, HistoryError> {
         debug_assert!(
             base_ceiling <= at.0,
             "a base at {base_ceiling} lies above the boundary {at} it is asked to answer"
@@ -259,18 +260,18 @@ impl<W: WorldState> Kernel<W> {
                 cause: fail.cause,
             })?;
         if at.0 == base.s_load() {
-            return Ok(BoundedRead::AtBase(base));
+            return Ok(HistoryRead::AtBase(base));
         }
         let scan = base.scan(&segs, Some(at.0)).map_err(|fail| match fail {
             ScanFail::Io(e) => HistoryError::Io(e),
-            ScanFail::Unbounded { at } => HistoryError::Corruption {
+            ScanFail::Unscannable { at } => HistoryError::Corruption {
                 at: Seq(at),
                 cause: None,
             },
         })?;
         // Any at-rest verdict above the base is a halt, even beyond `at`: a
         // corrupt run's own seqs are unreadable, so answering around it could
-        // answer from a hole, and a link that failed above `at` says the
+        // answer from a hole, and a chain link that failed above `at` says the
         // region is not the history it claims. (A racing live append never
         // produces a Landed run: it can tear only the file's suffix, after the
         // last committed marker, which reaches EOF.)
@@ -286,7 +287,7 @@ impl<W: WorldState> Kernel<W> {
             .map_err(|nearest| HistoryError::NotABoundary {
                 nearest: Seq(nearest),
             })?;
-        Ok(BoundedRead::Above {
+        Ok(HistoryRead::Above {
             base,
             scan,
             closing,

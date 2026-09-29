@@ -76,7 +76,7 @@ pub enum SaltSource {
     /// replayed op sequence under one seed writes ONE history byte for byte
     /// (the golden fixture, two processes writing one checkpoint, two
     /// daemons writing one head), and under two seeds two histories that
-    /// differ at every position. Nothing about it is secret: the seed is in
+    /// differ at every transaction. Nothing about it is secret: the seed is in
     /// the test's source.
     Seeded(u64),
 }
@@ -374,12 +374,12 @@ mod tests {
             assert_eq!(SaltSource::Seeded(seed).draw(txn).unwrap(), by_hand(seed, txn));
         }
         // Deterministic across draws, distinct across transactions and across
-        // seeds: two boards under two seeds salt every position differently.
+        // seeds: two journals under two seeds salt every transaction differently.
         let seeded = SaltSource::Seeded(7);
         assert_eq!(seeded.draw(1).unwrap(), seeded.draw(1).unwrap());
         assert_ne!(seeded.draw(1).unwrap(), seeded.draw(2).unwrap());
         assert_ne!(seeded.draw(1).unwrap(), SaltSource::Seeded(8).draw(1).unwrap());
-        assert_ne!(seeded.draw(1).unwrap(), [0u8; 32], "a salt is never the zero seed");
+        assert_ne!(seeded.draw(1).unwrap(), [0u8; 32], "a salt is never thirty-two zero bytes");
     }
 
     #[test]

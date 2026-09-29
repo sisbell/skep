@@ -285,7 +285,7 @@ fn world_at_ignores_the_suffix_a_racing_append_can_leave() {
     // record frame that landed without its marker, then a frame torn
     // mid-write. Neither belongs to a committed transaction; the torn one
     // classifies as an EOF run — the un-acked/torn tail, which the last
-    // committed marker precedes — so a bounded read ignores it rather than
+    // committed marker precedes — so a history read ignores it rather than
     // halting on it (§7), and answers the boundary it was asked for.
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
@@ -312,6 +312,6 @@ fn world_at_ignores_the_suffix_a_racing_append_can_leave() {
     assert_eq!(world_items(&k.world_at(Seq(2)).unwrap()), vec![10, 20]);
     assert_eq!(world_items(&k.world_at(Seq(1)).unwrap()), vec![10]);
 
-    // A bounded read writes nothing: the suffix it ignored is still there.
+    // A history read writes nothing: the suffix it ignored is still there.
     assert!(fs::metadata(&seg).unwrap().len() > full_len);
 }

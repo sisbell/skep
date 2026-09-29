@@ -74,7 +74,7 @@ fn field<const AT: usize, const N: usize>(header: &[u8; HEADER_LEN]) -> [u8; N] 
 /// makes one): this build's stamp, and a seq agreeing with the file's name.
 /// The body's own checks — its length, checksum and hash — are
 /// [`CheckpointMeta::load`]'s, which alone reads the body. Private to this
-/// module: what a header ATTESTS leaves it as a [`CheckpointHeader`], and the
+/// module: what a header CLAIMS leaves it as a [`CheckpointHeader`], and the
 /// fields that exist only to check the body never leave it.
 #[derive(Debug)]
 struct Header {
@@ -89,7 +89,7 @@ struct Header {
     body_hash: [u8; 32],
 }
 
-/// What a checkpoint's `SKC4` header ATTESTS, read without its body: the
+/// What a checkpoint's `SKC4` header CLAIMS, read without its body: the
 /// coordinate the checkpoint embodies, the commit chain's value there, and
 /// SHA-256 over its canonical body — the three a published head names a base
 /// by ([`crate::Kernel::newest_checkpoint`]). Only this crate makes one, and
@@ -180,11 +180,12 @@ impl CheckpointMeta {
     /// (§6/§7) — every refusal alike, which is why the account travels as one
     /// type rather than as a taxonomy nobody branches on.
     ///
-    /// Two of those an operator most needs named. A foreign stamp is a board
-    /// written under another format, and the account names the stamp found,
-    /// the stamp expected and the ruled remedy ([`NO_MIGRATION_REMEDY`]) — the
-    /// same sentence the journal's own refusal renders, so when the fallback
-    /// chain is exhausted the daemon prints it through `BadCheckpoint`'s cause.
+    /// Two of those an operator most needs named. A foreign stamp is a
+    /// checkpoint written under another format, and the account names the
+    /// stamp found, the stamp expected and the ruled remedy
+    /// ([`NO_MIGRATION_REMEDY`]) — the same sentence the journal's own refusal
+    /// renders, so when the fallback chain is exhausted the daemon prints it
+    /// through `BadCheckpoint`'s cause.
     /// A body that will not decode: the header checksum and hash have passed
     /// by then, so the bytes ARE the bytes that were written and the refusal
     /// is not rot — it is a writer/reader skew, a binary on the wrong side of
@@ -229,7 +230,7 @@ impl CheckpointMeta {
         }
     }
 
-    /// What this checkpoint's header attests ([`CheckpointHeader`]), read
+    /// What this checkpoint's header claims ([`CheckpointHeader`]), read
     /// ALONE — [`HEADER_LEN`] bytes, and nothing after them — under every
     /// check a header can pass without its body ([`parse_header`]): this
     /// build's stamp, and a seq agreeing with the file's name. So it costs one

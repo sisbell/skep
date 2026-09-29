@@ -16,7 +16,7 @@
 //! * CAUGHT — `OpenError::Corruption` naming a CHAIN BREAK at the `last_seq`
 //!   of the first committed transaction whose marker's chain is not the
 //!   recomputation over its predecessor's — or, since the chain's open
-//!   items (2026-09-23), the BASE'S OWN LINK at the base's seq (a checkpoint
+//!   items (2026-09-23), the BASE MISMATCH at the base's seq (a checkpoint
 //!   header disagreeing with the marker closing it, seen wherever that
 //!   marker is scanned — at the head, whenever the active segment holds it)
 //!   or the EDITED TRANSACTION at its own seq (an intact transaction no
@@ -29,22 +29,22 @@
 //!   chain then reaching genesis, which re-verifies the journal;
 //! * NOT CAUGHT BY DESIGN — a history the chain alone accepts, which the
 //!   ruling assigns to piece 2, the PUBLISHED HEAD, whose saved pairs are
-//!   checked against the board's RECOMPUTATION through `Kernel::chain_at`:
+//!   checked against the kernel's RECOMPUTATION through `Kernel::chain_at`:
 //!   a clean tail cut; a consistent re-chain, from genesis or from any
 //!   point, the checkpoint's head rewritten with it — the forger choosing
 //!   its own salts, the salt being no anchor; a checkpoint body
-//!   forged with its hash re-fixed; the base's own link edited consistently
+//!   forged with its hash re-fixed; the base's chain edited consistently
 //!   on both sides and re-chained above (case 14), or its marker's segment
 //!   skipped — the boundary coincidence, case 15; and — the owner's reading
 //!   of "any rewrite", case 12 — a consistent rewrite below a standing base,
-//!   unseen at open and seen by any bounded read below the base (an edited
+//!   unseen at open and seen by any history read below the base (an edited
 //!   transaction there halts the open at any height, case 2). Each is
 //!   asserted as such, and named in `Kernel::open`'s damage model.
 //!
 //! Two bases are exercised. With the golden's checkpoint REMOVED the open's
 //! base is genesis and every one of the eighteen links is verified, which is
 //! where the mid-history cases live; with it STANDING (`checkpoint.37`) the
-//! open verifies the base's own link — the marker closing 37 is in the one
+//! open checks the base for a mismatch — the marker closing 37 is in the one
 //! segment — and the two transactions above it, and a `world_at` below it
 //! verifies from genesis — which is what cases 9, 12 and 14 turn on.
 //!
@@ -85,9 +85,9 @@ use tempfile::{tempdir, TempDir};
 /// constant, restated: `checkpoint.37`, with ops 17 and 18 above it.
 const CHECKPOINT_AFTER_OP: usize = 16;
 
-/// The chain's seed, restated: the value a journal's first transaction chains
-/// from, which the golden's first marker pins. The forger of case 11 starts
-/// from it.
+/// The chain's genesis value, restated: the value a journal's first
+/// transaction chains from, which the golden's first marker pins. The forger
+/// of case 11 starts from it.
 const CHAIN_GENESIS: [u8; 32] = [0u8; 32];
 
 /// The checkpoint header (`SKC4`), restated for the byte-level edits of
@@ -313,12 +313,12 @@ fn every_boundary_answers(engine: &Engine, golden: &Golden, ctx: &str) {
         .unwrap_or_else(|e| panic!("FINDING ({ctx}): hint divergence: {e}"));
 }
 
-/// A bounded read at `at` halts with a chain break at `break_at`.
+/// A history read at `at` halts with a chain break at `break_at`.
 fn history_halts_with_chain_break(engine: &Engine, at: u64, break_at: u64, ctx: &str) {
     history_halts_naming(engine, at, break_at, CHAIN_BREAK, ctx);
 }
 
-/// A bounded read at `at` — the world AND the chain, which run the same
+/// A history read at `at` — the world AND the chain, which run the same
 /// verification — halts with `Corruption` at `break_at`, the account
 /// opening on `phrase`.
 fn history_halts_naming(engine: &Engine, at: u64, break_at: u64, phrase: &str, ctx: &str) {
@@ -488,9 +488,9 @@ fn forge_and_rechain(
         data[hits[0]..hits[0] + needle.len()].copy_from_slice(replacement);
     });
     // Re-chain from the forged transaction, seeded with its predecessor's
-    // value as the golden wrote it — the seed itself for the first — each
-    // marker re-salted with the forger's own value first, so the links are
-    // over salts the writer never drew.
+    // value as the golden wrote it — the chain's genesis value for the
+    // first — each marker re-salted with the forger's own value first, so
+    // the links are over salts the writer never drew.
     let mut prev = if op == 1 { CHAIN_GENESIS } else { golden.txn(op - 1).chain };
     let mut data = fs::read(&seg).expect("segment");
     let txns = transactions(&data);
@@ -577,7 +577,7 @@ fn c01_a_record_payload_rewritten_with_every_crc_refixed_breaks_at_that_transact
 ///
 /// On the LAST transaction the same edit would be a tail cut in disguise —
 /// the un-committed marker read as the torn tail, the transaction cut, the
-/// board opened one transaction short. It halts the same way, nothing cut:
+/// journal opened one transaction short. It halts the same way, nothing cut:
 /// the halt precedes the tail truncation, and the segment keeps its length.
 /// And BELOW a standing base it halts too: the verdict compares a marker
 /// with its own records and needs no link from the base.
@@ -703,7 +703,7 @@ fn c04_the_signature_slot_is_not_a_chain_input_a_filled_slot_opens() {
     let fill = |seg: &Path, txn: &Txn| {
         let data = fs::read(seg).expect("segment");
         let mut payload = data[txn.marker.payload.clone()].to_vec();
-        assert_eq!(payload.len(), MARKER_EMPTY_LEN, "an unsigned marker");
+        assert_eq!(payload.len(), MARKER_EMPTY_LEN, "an unattested marker");
         payload[MARKER_SIG_ALG_AT] = 1;
         payload[MARKER_SIG_LEN_AT..MARKER_EMPTY_LEN].copy_from_slice(&2u64.to_le_bytes());
         payload.extend_from_slice(&[0xAA, 0xBB]);
@@ -869,10 +869,10 @@ fn c07_a_closed_segment_rolled_back_to_an_older_copy_breaks_at_the_next_segments
 
 /// CASE 8 — A CHECKPOINT'S BODY REWRITTEN, ITS CRC RE-FIXED: REFUSED by
 /// `body_hash` — the fallback reaches genesis (the golden's one segment
-/// begins at `Seq(1)`), the journal re-verifies from its seed, and the open
-/// recovers the whole history. The door is named by putting genesis out of
-/// reach: the exhausted fallback chain's account is the hash's refusal, the
-/// checksum having passed.
+/// begins at `Seq(1)`), the journal re-verifies from its genesis value, and
+/// the open recovers the whole history. The door is named by putting genesis
+/// out of reach: the exhausted fallback chain's account is the hash's
+/// refusal, the checksum having passed.
 ///
 /// NOT CAUGHT BY DESIGN — the body FORGED: another world's canonical body
 /// under this coordinate (the golden's ops checkpointed one op earlier: the
@@ -973,7 +973,7 @@ fn c08_a_checkpoint_body_rewritten_is_refused_by_its_hash_and_a_body_forged_with
 /// The checkpoint AT THE HEAD is the fork the chain alone would accept:
 /// nothing above the base, no link to fail, the root carrying the edited
 /// value and the next commit chaining from it — which the head document
-/// would then PUBLISH as the board's own. It is CAUGHT the same way whenever
+/// would then PUBLISH as the journal's own. It is CAUGHT the same way whenever
 /// the active segment holds the head's marker, as it does here: that
 /// segment is always scanned, and the marker disagrees with the header.
 /// Nothing is cut, and the files stay as found. While the active segment is
@@ -1050,16 +1050,17 @@ fn c10_a_clean_tail_cut_opens_at_the_shorter_head() {
 }
 
 /// CASE 11 — THE HISTORY REWRITTEN WITH A CONSISTENT CHAIN: NOT CAUGHT BY DESIGN.
-/// The golden's first marker's chain is SHA-256 over the seed, and every
-/// later link is over bytes the forger holds, so a forgery re-chained from
-/// any point — genesis, or mid-history — passes: the chain has no anchor
-/// but its seed and the base's header. The SALT (`SKJ4`) is no anchor
-/// either, and the forger here proves it by CHOOSING ITS OWN — every
-/// re-chained marker is re-salted with a value the writer never drew, and
-/// the links recomputed over those; the salt sits in the marker beside the
-/// bytes it salts, and a party holding the journal holds both. STILL NOT
-/// CAUGHT BY DESIGN: what the salt closes is the confirmation oracle over
-/// SERVED values, which a party who can rewrite the journal never needed.
+/// The golden's first marker's chain is SHA-256 over the chain's genesis
+/// value, and every later link is over bytes the forger holds, so a forgery
+/// re-chained from any point — genesis, or mid-history — passes: the chain
+/// has no anchor but its genesis value and the base's header. The SALT
+/// (`SKJ4`) is no anchor either, and the forger here proves it by CHOOSING
+/// ITS OWN — every re-chained marker is re-salted with a value the writer
+/// never drew, and the links recomputed over those; the salt sits in the
+/// marker beside the bytes it salts, and a party holding the journal holds
+/// both. STILL NOT CAUGHT BY DESIGN: what the salt closes is the
+/// confirmation oracle over SERVED values, which a party who can rewrite the
+/// journal never needed.
 /// The world served is the forger's, at every boundary from the forgery on;
 /// the head's chain is not the golden's — which is exactly what a published
 /// head would show, and all it could.
@@ -1075,9 +1076,10 @@ fn c10_a_clean_tail_cut_opens_at_the_shorter_head() {
 fn c11_a_consistent_rewrite_from_genesis_or_from_any_point_passes() {
     let golden = Golden::build();
     // The forger's formula IS the writer's: re-chaining the untouched golden
-    // from its seed reproduces every marker's chain byte for byte, and the
-    // checkpoint's head is the link at its coordinate. What follows passes
-    // because the forgery is consistent, not because the formula drifted.
+    // from its genesis value reproduces every marker's chain byte for byte,
+    // and the checkpoint's head is the link at its coordinate. What follows
+    // passes because the forgery is consistent, not because the formula
+    // drifted.
     {
         let data = fs::read(golden_segment()).expect("the golden segment");
         let mut prev = CHAIN_GENESIS;
@@ -1111,11 +1113,12 @@ fn c11_a_consistent_rewrite_from_genesis_or_from_any_point_passes() {
 
     // (a) FROM GENESIS: op 1's RegisterPrincipal id rewritten — USER's 7
     //     becomes 9, one u64 found once in the transaction's records — every
-    //     link recomputed from the seed, the checkpoint's head rewritten. The
-    //     open passes at the true head; below the base every boundary is the
-    //     forger's; AT the base and above, the checkpoint's own body answers
-    //     — the golden's world, the one witness the journal forgery leaves
-    //     behind, which nothing compares to the journal below it.
+    //     link recomputed from the chain's genesis value, the checkpoint's
+    //     head rewritten. The open passes at the true head; below the base
+    //     every boundary is the forger's; AT the base and above, the
+    //     checkpoint's own body answers — the golden's world, the one witness
+    //     the journal forgery leaves behind, which nothing compares to the
+    //     journal below it.
     let case = golden.case("c11-from-genesis");
     forge_and_rechain(
         &golden,
@@ -1185,8 +1188,8 @@ fn c11_a_consistent_rewrite_from_genesis_or_from_any_point_passes() {
     drop(engine);
 
     // (c) …and the checkpoint's `chain_head` is the one anchor the journal
-    //     has above its seed: the same forgery with the checkpoint left as
-    //     the golden wrote it fails the BASE'S OWN LINK — the forger
+    //     has above its genesis value: the same forgery with the checkpoint
+    //     left as the golden wrote it is a BASE MISMATCH — the forger
     //     re-chained op 16's marker, the header still carries the golden's
     //     value, and the two disagree at 37 — case 9's door, which a forger
     //     who can write the checkpoint file closes with one more write, as
@@ -1205,11 +1208,11 @@ fn c11_a_consistent_rewrite_from_genesis_or_from_any_point_passes() {
 /// segment the base already covers, the segment still present. The
 /// ruling's "any rewrite" as the owner reads it (2026-09-23): the chain is
 /// verified for transactions above the base a replay SELECTS. So the base
-/// embodies the rewritten transaction, the scan verifies the base's own
-/// link and the two links above it, and the open recovers the whole
-/// history at the true head with the golden's world — NOT CAUGHT while the
-/// base stands, and once reclamation drops the segment, beyond any replay.
-/// A bounded read BELOW the base — a world or a chain, `world_at` and
+/// embodies the rewritten transaction, the scan checks the base for a
+/// mismatch and verifies the two links above it, and the open recovers the
+/// whole history at the true head with the golden's world — NOT CAUGHT while
+/// the base stands, and once reclamation drops the segment, beyond any
+/// replay. A history read BELOW the base — a world or a chain, `world_at` and
 /// `chain_at` running one verification — selects genesis and verifies
 /// every link from there to the journal's end, and is caught at the
 /// rewritten transaction whether the boundary asked lies above it or below
@@ -1282,7 +1285,7 @@ fn c13_two_damages_name_the_first_only() {
 
 /// Give op `op`'s marker the chain `value` and re-chain every marker above
 /// it from that value, each frame re-sealed — what a forger who edits the
-/// base's own link does to keep the links above it verifying. Answers the
+/// base's chain does to keep the links above it verifying. Answers the
 /// chains written, by boundary, `op`'s first.
 fn set_marker_chain_and_rechain_above(seg: &Path, op: usize, value: &[u8; 32]) -> Vec<(u64, [u8; 32])> {
     let mut data = fs::read(seg).expect("segment");
@@ -1305,12 +1308,12 @@ fn set_marker_chain_and_rechain_above(seg: &Path, op: usize, value: &[u8; 32]) -
     chains
 }
 
-/// CASE 14 — THE BASE'S OWN LINK EDITED ON BOTH SIDES: the marker closing the
+/// CASE 14 — THE BASE'S CHAIN EDITED ON BOTH SIDES: the marker closing the
 /// base's seq given a new chain, every link above re-chained from it, and
 /// the header rewritten to match — the residue item 4's check leaves (the
 /// damage model's (i)). NOT CAUGHT at open: the two stored values agree,
 /// the links above verify, the root carries the edit, and the world is the
-/// golden's at every boundary (no record was touched). SEEN by any bounded
+/// golden's at every boundary (no record was touched). SEEN by any history
 /// read BELOW the base — a world or a chain, one verification — which
 /// selects genesis, recomputes the link at the base's seq over its true
 /// predecessor, and fails it THERE. `chain_at` at the base answers the
@@ -1586,11 +1589,11 @@ impl TwoSegments {
 /// CASE 15 — THE BOUNDARY COINCIDENCE: the base's marker segment SKIPPED. The
 /// scan opens no closed segment whose inferred last seq is at or below the
 /// base's, and a segment ending EXACTLY at the base's seq is one — so the
-/// marker closing the base's seq is never read, and the base's own link is
-/// checked vacuously (the damage model's (ii)). With the header edited
-/// there, the open behaves as it did before item 4: the first transaction
-/// above the base is judged against the header and fails — CAUGHT at that
-/// transaction with the LINK's account, not the base's. And with NOTHING
+/// marker closing the base's seq is never read, and the base-mismatch check
+/// is vacuous (the damage model's (ii)). With the header edited there, the
+/// open behaves as it did before item 4: the first transaction above the
+/// base is judged against the header and fails — CAUGHT at that transaction
+/// with the chain break's account, not the base mismatch's. And with NOTHING
 /// above the base — the one transaction above cut away, seg-2 empty, case
 /// 10's shape — the edited header OPENS: NOT CAUGHT, pinned; the root
 /// carries the edit and `chain_at` at the base answers it, which a peer's
@@ -1617,7 +1620,7 @@ fn c15_the_boundary_coincidence_skips_the_bases_marker_and_the_check_is_vacuous(
         two.above[0],
         CHAIN_BREAK,
         "case 15: the header edited, its marker's segment skipped — the first link above fails \
-         against it, and the base's own link is not judged",
+         against it, and no base mismatch is judged",
     );
 
     let case = two.case(tmp.path(), "c15-nothing-above");
@@ -1674,10 +1677,10 @@ fn chain_at_is_reclaimed_below_the_floor_and_answers_from_the_floor_up() {
 /// `Kernel::chain_at(N)` — the chain AS OF a boundary, off the same scan as
 /// `world_at` and under its refusals: every one of the golden's eighteen
 /// boundaries answers its marker's chain, from genesis and over the
-/// standing base alike; `0` is the seed; the base's own seq is the header's
-/// value; the head equals `chain_head()`, before and after a commit; a
-/// boundary beyond the head, a composite's interior seq and an in-memory
-/// kernel refuse as `world_at` does. What `GET /chain?at=N` serves.
+/// standing base alike; `0` is the chain's genesis value; the base's own seq
+/// is the header's value; the head equals `chain_head()`, before and after a
+/// commit; a boundary beyond the head, a composite's interior seq and an
+/// in-memory kernel refuse as `world_at` does. What `GET /chain?at=N` serves.
 #[test]
 fn chain_at_answers_every_boundarys_marker_chain_and_refuses_as_world_at_does() {
     let golden = Golden::build();
@@ -1685,7 +1688,12 @@ fn chain_at_answers_every_boundarys_marker_chain_and_refuses_as_world_at_does() 
 
     let case = golden.case_from_genesis("chain-at-genesis");
     let engine = timed_open(&case, "chain_at from genesis");
-    chain_at_is(&engine, 0, &CHAIN_GENESIS, "genesis is the seed");
+    chain_at_is(
+        &engine,
+        0,
+        &CHAIN_GENESIS,
+        "genesis is the chain's genesis value",
+    );
     for op in 1..=GOLDEN_OPS {
         chain_at_is(&engine, golden.seq(op), &golden.txn(op).chain, "from genesis, every boundary");
     }
@@ -1748,11 +1756,11 @@ fn chain_at_answers_every_boundarys_marker_chain_and_refuses_as_world_at_does() 
 
 /// `Kernel::chain_head()` — piece (c)'s input: the committed head's chain
 /// value, read off the root. It is the golden's last marker's chain; a
-/// bounded read moves it not at all; a commit moves it to the new marker's,
+/// history read moves it not at all; a commit moves it to the new marker's,
 /// which is the link over the head it had (what a head published before the
 /// commit is extended by); a checkpoint off the root names it; a reopen
-/// recovers it; and in memory it is the seed at every coordinate, there
-/// being no frames to hash.
+/// recovers it; and in memory it is the chain's genesis value at every
+/// coordinate, there being no frames to hash.
 #[test]
 fn chain_head_is_the_committed_heads_marker_chain() {
     let golden = Golden::build();
@@ -1767,7 +1775,7 @@ fn chain_head_is_the_committed_heads_marker_chain() {
     assert_ne!(golden_head_chain, CHAIN_GENESIS);
 
     engine.world_at(Seq(2)).expect("a boundary");
-    assert_eq!(engine.kernel().chain_head(), golden_head_chain, "a bounded read moves nothing");
+    assert_eq!(engine.kernel().chain_head(), golden_head_chain, "a history read moves nothing");
 
     engine.namespace().register_node(t(&[1, 77])).expect("one commit");
     let data = fs::read(seg_file(&case, 1)).expect("segment");

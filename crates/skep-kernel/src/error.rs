@@ -29,11 +29,11 @@ pub enum OpenError {
     /// carry this build's either, or cannot be read. A format stamps every
     /// frame, where damage changes one word: a foreign-shaped first word whose
     /// successor carries this build's stamp is one damaged sync word, which
-    /// [`OpenError::Corruption`] names with a remedy that keeps the board.
+    /// [`OpenError::Corruption`] names with a remedy that keeps the journal.
     /// Refused BY NAME, before the scan — which would otherwise read the whole
     /// segment as one corrupt run reaching end-of-file, classify it as the
     /// un-acked tail, TRUNCATE the segment to nothing and serve an empty
-    /// board — and before any write, so the files are exactly as they were
+    /// world — and before any write, so the files are exactly as they were
     /// found. Operator-intervention condition — not auto-retried; the remedy
     /// is the ruled one ([`NO_MIGRATION_REMEDY`]): no build reads two formats.
     ///
@@ -70,7 +70,7 @@ pub enum OpenError {
         /// not decode is a binary on the wrong side of a `W` format change:
         /// roll it forward. A failed header checksum or hash, or a truncated
         /// file, is damage: restore the media. A foreign format stamp is a
-        /// board written under another format, and its account names the
+        /// checkpoint written under another format, and its account names the
         /// stamp found, the stamp expected and the remedy
         /// ([`NO_MIGRATION_REMEDY`]), as [`OpenError::ForeignFormat`] does
         /// for the journal. `None` when no candidate was tried at all — the
@@ -87,7 +87,7 @@ pub enum OpenError {
     ///    shaped like another format's stamp on a frame whose successor
     ///    carries this build's, which the frame CRC does not cover — refused
     ///    by the same probe as [`OpenError::ForeignFormat`] and ahead of the
-    ///    scan, since that variant's remedy would discard a board this build
+    ///    scan, since that variant's remedy would discard a journal this build
     ///    wrote; refused even where that frame lies at or below the base,
     ///    which the probe cannot tell, reading no `Seq`;
     /// 2. a segment that could not be enumerated in bounded work or read in
@@ -96,7 +96,7 @@ pub enum OpenError {
     ///    prefix;
     /// 3. a corrupt run inside the genuinely-replayed range `(S_load, W]` (a
     ///    run reaching EOF is the un-acked / torn tail, not this);
-    /// 4. THE BASE'S OWN LINK: the committed marker closing the base's seq
+    /// 4. THE BASE MISMATCH: the committed marker closing the base's seq
     ///    carries a chain that is not the checkpoint header's `chain_head` —
     ///    two stored values disagree, and nothing is recomputed;
     /// 5. THE EDITED TRANSACTION: a transaction intact frame by frame that no
@@ -125,8 +125,8 @@ pub enum OpenError {
         /// coordinate, since the damage lies somewhere above it and the scan
         /// could not reach past it to say where; for a corrupt run, the next
         /// INTACT frame's coordinate — the run's own seqs are unreadable, so
-        /// this bounds the damage rather than locating it; for the base's own
-        /// link, the base's seq; for the edited transaction, the last seq of
+        /// this bounds the damage rather than locating it; for the base
+        /// mismatch, the base's seq; for the edited transaction, the last seq of
         /// its own records — not its marker's, which in one shape is the
         /// rewritten field; for a chain break, the `last_seq` of the first
         /// transaction whose chain did not verify; for an exhausted order, the
@@ -135,9 +135,9 @@ pub enum OpenError {
         at: Seq,
         /// The account of what could not be read, where there is one: a
         /// damaged sync word's names the word found and a remedy that keeps
-        /// the board — restore the segment — where
-        /// [`OpenError::ForeignFormat`]'s would discard it; the base's own
-        /// link, the edited transaction and a chain break each say which link
+        /// the journal — restore the segment — where
+        /// [`OpenError::ForeignFormat`]'s would discard it; the base mismatch,
+        /// the edited transaction and a chain break each say which chain link
         /// failed and how; and a committed record that does not decode carries
         /// the serializer's own refusal, which is what separates a
         /// writer/reader skew — a binary rolled back over a record format —
@@ -258,10 +258,11 @@ impl From<io::Error> for CheckpointError {
     }
 }
 
-/// Failure of [`crate::Kernel::world_at`] — the read-only bounded replay.
-/// None of these poisons the kernel or perturbs the live write path; every
-/// variant is an honest "this boundary cannot be answered" (or a genuine
-/// at-rest corruption find).
+/// Failure of the history reads — [`crate::Kernel::world_at`],
+/// [`crate::Kernel::chain_at`] and [`crate::Kernel::attestation_at`] — each
+/// derived read-only from the journal directory. None of these poisons the
+/// kernel or perturbs the live write path; every variant is an honest "this
+/// boundary cannot be answered" (or a genuine at-rest corruption find).
 #[derive(Debug)]
 pub enum HistoryError {
     /// `at` is above the INSTALLED head at the time of the call — the
@@ -319,7 +320,7 @@ pub enum HistoryError {
     /// carries, with the same halt-never-drop verdict (§7). Two routes are
     /// not available here: the exhausted `Seq` order, which only a mint site
     /// reaches and this call mints nothing; and the damaged sync word, which
-    /// only `open`'s first-sync-word probe names — a bounded read truncates
+    /// only `open`'s first-sync-word probe names — a history read truncates
     /// nothing, so its own scan meets that frame as a corrupt run instead.
     /// And the fold's two — an undecodable record, a `Seq` presented twice —
     /// reach [`crate::Kernel::world_at`] and neither

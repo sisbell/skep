@@ -107,17 +107,22 @@ fn txn_size_accounting_matches_the_encoder_to_the_byte() {
     // one-byte blob. The BUDGET side does not gain it, which
     // `a_filled_slot_is_outside_the_transaction_budget` pins.
     for (tag, width) in [(1u8, 3_373usize), (3u8, 730usize), (9u8, 1usize)] {
-        let attest = Attestation::new(tag, vec![0xA5; width]).unwrap();
+        let attestation = Attestation::new(tag, vec![0xA5; width]).unwrap();
         let record_bytes = vec![rec(u64::MAX), vec![7u8; 300]];
-        let expected = txn_encoded_len(&record_bytes, Some(&attest));
+        let expected = txn_encoded_len(&record_bytes, Some(&attestation));
         assert_eq!(
             expected,
             txn_encoded_len(&record_bytes, None) + width as u64,
             "a filled slot costs its blob's width and nothing else"
         );
-        let (buf, _) =
-            encode_txn(u64::MAX - 3, record_bytes, &CHAIN_GENESIS, FIXED_SALT, Some(&attest))
-                .unwrap();
+        let (buf, _) = encode_txn(
+            u64::MAX - 3,
+            record_bytes,
+            &CHAIN_GENESIS,
+            FIXED_SALT,
+            Some(&attestation),
+        )
+        .unwrap();
         assert_eq!(buf.len() as u64, expected, "tag {tag}, a {width}-byte blob");
     }
     // The per-record half: what push_frame judges is the wrapped payload,
@@ -386,7 +391,7 @@ fn a_marker_at_the_seq_ceiling_classifies_without_wrapping() {
 #[test]
 fn each_commit_chains_from_its_predecessor_and_a_consistent_rewrite_breaks_the_chain() {
     // The chain links every committed transaction to the one before it,
-    // from the genesis seed; the scan recomputes each link from the
+    // from the chain's genesis value; the scan recomputes each link from the
     // bytes the CRC verified and answers the head's value. A rewrite that
     // keeps every frame CRC consistent — which is what a file-level
     // writer does, and what neither the CRC nor `records_checksum` can
@@ -720,13 +725,13 @@ fn corrupt_record_classifies_by_marker_landing() {
 }
 
 #[test]
-fn a_halt_names_the_run_before_the_chain_and_only_a_bounded_read_halts_above_the_head() {
+fn a_halt_names_the_run_before_the_chain_and_only_a_history_read_halts_above_the_head() {
     // The order the at-rest verdicts speak in has one site, which both
     // doors share: the corrupt run first — the root cause, carrying no
     // account, its own bytes being unreadable — then the chain's own
     // verdicts, each with its account. And the two doors differ only in
     // where a run is fatal: a recovery discards a run above the committed
-    // head as the torn tail, while a bounded read truncates nothing and
+    // head as the torn tail, while a history read truncates nothing and
     // halts on it.
     let journal_of_three = || {
         let dir = tempdir().unwrap();
@@ -751,7 +756,7 @@ fn a_halt_names_the_run_before_the_chain_and_only_a_bounded_read_halts_above_the
     assert!(matches!(out.halt_anywhere(), Some((3, None))), "the run speaks first");
 
     // T3's record rotted: the run lands on T3's marker ABOVE the committed
-    // head (2). Recovery's door calls it the torn tail; a bounded read's
+    // head (2). Recovery's door calls it the torn tail; a history read's
     // halts on it.
     let dir = journal_of_three();
     let segs = list_segments(dir.path()).unwrap();
@@ -760,7 +765,7 @@ fn a_halt_names_the_run_before_the_chain_and_only_a_bounded_read_halts_above_the
     let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
     assert_eq!(out.committed_head, 2);
     assert!(out.halt_to_head().is_none(), "a recovery discards it as the tail");
-    assert!(matches!(out.halt_anywhere(), Some((4, None))), "a bounded read halts");
+    assert!(matches!(out.halt_anywhere(), Some((4, None))), "a history read halts");
 
     // No run, one rewritten chain field: the chain's verdict speaks, with
     // its account, at either door.
@@ -864,7 +869,7 @@ fn resynchronization_over_planted_frame_headers_is_bounded() {
     // head to read short, and no cut for a truncation to be aimed with.
     let fail = scan(&segs, 0, None, CHAIN_GENESIS).err();
     assert!(
-        matches!(fail, Some(ScanFail::Unbounded { at: 0 })),
+        matches!(fail, Some(ScanFail::Unscannable { at: 0 })),
         "got {fail:?}"
     );
 }
@@ -901,7 +906,7 @@ fn resynchronization_charges_every_rejection_even_between_intact_frames() {
 
     let fail = scan(&segs, 0, None, CHAIN_GENESIS).err();
     assert!(
-        matches!(fail, Some(ScanFail::Unbounded { at: 0 })),
+        matches!(fail, Some(ScanFail::Unscannable { at: 0 })),
         "got {fail:?}"
     );
 }
@@ -928,7 +933,7 @@ fn a_segment_longer_than_any_writer_produces_is_refused_before_it_is_read() {
         .unwrap();
     let fail = scan(&segs, 0, None, CHAIN_GENESIS).err();
     assert!(
-        matches!(fail, Some(ScanFail::Unbounded { at: 0 })),
+        matches!(fail, Some(ScanFail::Unscannable { at: 0 })),
         "got {fail:?}"
     );
 }
@@ -1011,7 +1016,7 @@ fn a_boundary_is_what_a_committed_marker_closes_and_its_nearest_never_lies_below
 #[test]
 fn a_bound_keeps_what_a_fold_to_it_reads_and_drops_the_rest() {
     // A bounded scan collects for a fold to `bound` and nothing else, so a
-    // bounded replay of one transaction above a base does not materialize
+    // history read of one boundary above a base does not materialize
     // the whole retained window. What a read at `bound` takes from the scan
     // is the records at or below `bound`, and the judgment of `bound` itself
     // — so the edge is inclusive at both, and a bound that dropped its own
@@ -1072,10 +1077,10 @@ fn the_closing_marker_carries_its_slot_as_the_attestation_it_committed_under() {
     // transaction committed under — for that transaction alone.
     let dir = tempdir().unwrap();
     let mut writer = fresh_writer(dir.path());
-    let signed = Attestation::new(1, vec![0xA5; 5]).unwrap();
+    let attestation = Attestation::new(1, vec![0xA5; 5]).unwrap();
     write_txn(&mut writer, 1, vec![rec(10)]);
     writer
-        .commit_txn(2, vec![rec(20)], Some(&signed), |_| {})
+        .commit_txn(2, vec![rec(20)], Some(&attestation), |_| {})
         .expect("fixture commit");
     write_txn(&mut writer, 3, vec![rec(30)]);
     let segs = list_segments(dir.path()).unwrap();
@@ -1086,7 +1091,7 @@ fn the_closing_marker_carries_its_slot_as_the_attestation_it_committed_under() {
             .map(|closing| closing.attestation.clone())
     };
     assert_eq!(slot_at(1), Ok(None));
-    assert_eq!(slot_at(2), Ok(Some(signed)));
+    assert_eq!(slot_at(2), Ok(Some(attestation)));
     assert_eq!(slot_at(3), Ok(None));
 }
 

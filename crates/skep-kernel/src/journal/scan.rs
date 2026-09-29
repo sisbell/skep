@@ -67,7 +67,7 @@ impl RunEnd {
 pub(crate) enum ScanFail {
     /// A segment could not be read.
     Io(io::Error),
-    /// A segment could not be taken in within the scan's bounds: its
+    /// A segment the scan could not take in within its bounds: its
     /// resynchronization exceeded [`RESYNC_BUDGET_PASSES`], so its frame
     /// stream could not be enumerated in bounded work, or the file is longer
     /// than [`MAX_SEGMENT_LEN`], so it could not be read in bounded memory.
@@ -76,7 +76,7 @@ pub(crate) enum ScanFail {
     /// may be missing, a boundary set that may not be the journal's. Fatal at
     /// any height, which is why the scan refuses rather than answering with a
     /// qualification.
-    Unbounded {
+    Unscannable {
         /// The base's own coordinate: the damage lies somewhere above it, and
         /// the scan could not reach past it to say where.
         at: u64,
@@ -117,8 +117,9 @@ pub(crate) struct ScanOutcome {
     /// one than the scan was run with.
     s_load: u64,
     /// The base's own chain value — the `SKC4` header's `chain_head`, or
-    /// [`super::chain::CHAIN_GENESIS`] at genesis — which the base's own link is judged
-    /// against. Carried for the reason `s_load` is.
+    /// [`super::chain::CHAIN_GENESIS`] at genesis — which the marker closing
+    /// the base's seq is compared with: the base-mismatch check. Carried for
+    /// the reason `s_load` is.
     chain_at_base: [u8; 32],
     /// The boundary this scan COLLECTED to, as [`scan`] was called with it —
     /// `None` for the whole scanned region. Applied by
@@ -127,7 +128,7 @@ pub(crate) struct ScanOutcome {
     /// marker captured at it, and read back by [`ScanOutcome::covers`] to hold
     /// a fold to it: records above it were read and dropped, so a fold past it
     /// is one this outcome cannot answer. Bounding the collection is what
-    /// keeps a bounded replay of one transaction from materializing the whole
+    /// keeps a history read of one boundary from materializing the whole
     /// retained window.
     bound: Option<u64>,
     /// The last COMMITTED marker's `last_seq`, floored at `S_load` — §7's `W`
@@ -143,7 +144,7 @@ pub(crate) struct ScanOutcome {
     /// are settled.
     committed_records: Vec<CommittedRecord>,
     /// The greatest committed boundary strictly below `bound`, floored at the
-    /// base — what a bounded read refuses a non-boundary with. Seeded with
+    /// base — what a history read refuses a non-boundary with. Seeded with
     /// `s_load` and only ever raised, by [`ScanOutcome::collect_commit`], so a
     /// boundary below the base never names it: a segment straddling the base
     /// contributes boundaries with no base left to fold from. Never raised
@@ -174,7 +175,7 @@ pub(crate) struct ScanOutcome {
     /// when a run swallowed the predecessor, speaks first; ordered by
     /// [`ScanOutcome::chain_verdict`].
     chain_break: Option<u64>,
-    /// THE BASE'S OWN LINK (QUEUE item 10's case 9, the at-head fork): the
+    /// THE BASE MISMATCH (QUEUE item 10's case 9, the at-head fork): the
     /// base's seq when the committed marker closing `s_load` itself was
     /// scanned and its `chain` is not `chain_at_base` — the `SKC4` header's
     /// `chain_head`, which nothing in the header covers. Two STORED values
@@ -227,7 +228,7 @@ pub(crate) struct ScanOutcome {
 /// What the committed marker closing a bounded scan's `bound` carries —
 /// captured once, by [`ScanOutcome::collect_commit`], as that marker is taken
 /// in the pass that verifies every link to the journal's end. Its presence is
-/// the membership test every bounded read makes of its boundary, and its
+/// the membership test every history read makes of its boundary, and its
 /// fields are what the reads ask of one: the commit chain there
 /// ([`crate::Kernel::chain_at`]) and the signature slot
 /// ([`crate::Kernel::attestation_at`]).
@@ -252,7 +253,7 @@ impl ScanOutcome {
         self.chain_break
     }
 
-    /// The base's own link failed (the field), for
+    /// The base mismatch (the field), for
     /// [`ScanOutcome::chain_verdict`] to order: `Some(s_load)` when the
     /// scanned marker closing the base's seq does not carry the header's
     /// `chain_head`.
@@ -268,12 +269,12 @@ impl ScanOutcome {
     }
 
     /// THE CHAIN'S VERDICTS, in the order they speak — the coordinate and
-    /// the account of each: the base's own link
+    /// the account of each: the base mismatch
     /// ([`ScanOutcome::base_mismatch`]), then the intact transaction no
     /// intact marker closes ([`ScanOutcome::uncommitted_intact`]), then the
     /// chain break ([`ScanOutcome::chain_break`]). A verdict of an earlier
-    /// kind speaks first whatever its coordinate: the base's link is the
-    /// lowest coordinate scanned, and the un-committed transaction is the
+    /// kind speaks first whatever its coordinate: the base mismatch sits at
+    /// the lowest coordinate scanned, and the un-committed transaction is the
     /// ROOT of the break the next committed one shows. The corrupt run's
     /// verdict speaks before all three, in [`ScanOutcome::halt_on`] — this
     /// method's only caller, which both halts go through. `None` when every
@@ -298,7 +299,7 @@ impl ScanOutcome {
     /// and the marker closing the collection bound is captured for
     /// [`ScanOutcome::closing_marker`]. AT the base, the marker's stored
     /// chain must be `chain_at_base` — two stored values compared, nothing
-    /// recomputed — else THE BASE'S OWN LINK failed. BELOW the base, the base
+    /// recomputed — else THE BASE MISMATCH is recorded. BELOW the base, the base
     /// embodies the transaction and nothing is judged, exactly as a corrupt
     /// run there is harmless. Recorded, never refused: the callers halt.
     ///
@@ -369,9 +370,9 @@ impl ScanOutcome {
         self.halt_on(self.fatal_run(Some(self.committed_head)))
     }
 
-    /// Why a BOUNDED READ cannot answer from this scan, if it cannot — the
+    /// Why a HISTORY READ cannot answer from this scan, if it cannot — the
     /// same order as [`ScanOutcome::halt_to_head`], with the run classified
-    /// at any height. A bounded read truncates nothing, so a run above the
+    /// at any height. A history read truncates nothing, so a run above the
     /// committed head is at-rest damage rather than a tail — and since a
     /// run's own seqs are unreadable, its reach below `inferred_max` is
     /// unknowable, so answering around it could answer from a hole (§7).
@@ -420,7 +421,7 @@ impl ScanOutcome {
         self.bound.is_none_or(|collected| bound <= collected)
     }
 
-    /// The committed marker closing boundary `at` — the one question a bounded
+    /// The committed marker closing boundary `at` — the one question a history
     /// read asks of a scan above its base: whether a committed marker closes
     /// `at`, and what it carries. The capture is keyed on the collection bound,
     /// so its presence is the membership test, and one answer serves every
@@ -549,8 +550,8 @@ impl PendingTxn {
             checksum: 0,
             last_seq: None,
             ordered: true,
-            // The write side's own seed, so an honest transaction AT the
-            // budget accounts to exactly the budget and is admitted.
+            // The write side's own starting figure, so an honest transaction
+            // AT the budget accounts to exactly the budget and is admitted.
             accounted: MARKER_FRAME_LEN,
             oversize: false,
             records: Vec::new(),
@@ -639,7 +640,7 @@ fn read_segment(path: &Path, s_load: u64) -> Result<Vec<u8>, ScanFail> {
     let file = File::open(path)?;
     let claimed = file.metadata()?.len();
     if claimed > MAX_SEGMENT_LEN {
-        return Err(ScanFail::Unbounded { at: s_load });
+        return Err(ScanFail::Unscannable { at: s_load });
     }
     // `claimed` is at most the ceiling, 2^27, so the cast is exact on any 32-
     // or 64-bit target and the reservation is the file's own size, as
@@ -647,7 +648,7 @@ fn read_segment(path: &Path, s_load: u64) -> Result<Vec<u8>, ScanFail> {
     let mut buf = Vec::with_capacity(claimed as usize);
     file.take(MAX_SEGMENT_LEN + 1).read_to_end(&mut buf)?;
     if buf.len() as u64 > MAX_SEGMENT_LEN {
-        return Err(ScanFail::Unbounded { at: s_load });
+        return Err(ScanFail::Unscannable { at: s_load });
     }
     Ok(buf)
 }
@@ -672,7 +673,7 @@ fn read_segment(path: &Path, s_load: u64) -> Result<Vec<u8>, ScanFail> {
 ///
 /// `bound` is the boundary the caller will fold to, when it has one: committed
 /// records above it are not COLLECTED, since no caller reads them, so a
-/// bounded replay of one transaction above a checkpoint does not materialize
+/// history read of one boundary above a checkpoint does not materialize
 /// every committed record in the retained window. `None` collects
 /// the whole scanned region, which recovery needs — its own bound is
 /// [`ScanOutcome::committed_head`], and that is not known until this returns.
@@ -681,7 +682,7 @@ fn read_segment(path: &Path, s_load: u64) -> Result<Vec<u8>, ScanFail> {
 /// tail cut must name the last committed marker wherever it sits.
 ///
 /// Memory: one segment's bytes — at most [`MAX_SEGMENT_LEN`], a longer file
-/// being refused ([`ScanFail::Unbounded`]) before a byte of it is read, since
+/// being refused ([`ScanFail::Unscannable`]) before a byte of it is read, since
 /// its length is its own claim — one transaction's records, and the committed
 /// records of the scanned region at or below `bound` — the last of which is
 /// the term that grows with the journal, and is what a caller bounds by
@@ -690,7 +691,7 @@ fn read_segment(path: &Path, s_load: u64) -> Result<Vec<u8>, ScanFail> {
 /// Work: the sequential walk is one pass per scanned segment, and
 /// resynchronization is bounded at [`RESYNC_BUDGET_PASSES`] more. A segment
 /// that exhausts that budget refuses the scan outright
-/// ([`ScanFail::Unbounded`]) rather than answering with a prefix, so a payload
+/// ([`ScanFail::Unscannable`]) rather than answering with a prefix, so a payload
 /// that plants frame headers costs a bounded scan and a halt rather than an
 /// unbounded one.
 ///
@@ -710,8 +711,8 @@ fn read_segment(path: &Path, s_load: u64) -> Result<Vec<u8>, ScanFail> {
 /// the bytes hashed are the framed payloads in the buffer.
 ///
 /// TWO MORE VERDICTS ARE RECORDED in the same pass, refused by the callers
-/// as the break is (the chain's open items, 2026-09-23). THE BASE'S OWN
-/// LINK, judged by [`ScanOutcome::collect_commit`] beside the chain: when the
+/// as the break is (the chain's open items, 2026-09-23). THE BASE MISMATCH,
+/// judged by [`ScanOutcome::collect_commit`] beside the chain: when the
 /// committed marker closing `s_load` itself is scanned — at the head
 /// whenever the active segment holds it, which it does unless that segment
 /// is EMPTY after a rotation whose transaction failed or never landed;
@@ -730,7 +731,7 @@ fn read_segment(path: &Path, s_load: u64) -> Result<Vec<u8>, ScanFail> {
 /// cut: the scan records, the callers halt. And ONE MARKER IS CAPTURED, by
 /// [`ScanOutcome::collect_commit`] too: the committed marker closing `bound`,
 /// its chain and its signature slot, which [`ScanOutcome::closing_marker`]
-/// answers every bounded read's boundary judgment with.
+/// answers every history read's boundary judgment with.
 ///
 /// `segs` must be ASCENDING by `firstSeq`, as [`super::segment::list_segments`]
 /// produces it. The skip rule ([`scanned_above`]), the tail resolution and the
@@ -887,7 +888,7 @@ pub(crate) fn scan(
                         // Everything derived so far is a prefix, so none of it
                         // travels: no verdict can be drawn from it and no
                         // truncation aimed with it.
-                        return Err(ScanFail::Unbounded { at: s_load });
+                        return Err(ScanFail::Unscannable { at: s_load });
                     }
                     run_open = true;
                     // A group open across a corrupt frame may have lost one
@@ -936,7 +937,7 @@ fn chain_break_cause(at: u64) -> Box<dyn std::error::Error + Send + Sync + 'stat
     .into()
 }
 
-/// The account the base's own link travels with
+/// The account the base mismatch travels with
 /// ([`ScanOutcome::base_mismatch`]): two stored values at one coordinate
 /// disagree, and which party lies is not said — so the remedy is the
 /// operator's, named here, rather than a silent fallback to an older base
@@ -968,7 +969,7 @@ fn uncommitted_intact_cause(at: u64) -> Box<dyn std::error::Error + Send + Sync 
 
 /// The account a damaged sync word travels with ([`FirstSyncWord::Damaged`]):
 /// the word found, why it is damage and not a format, and the remedy — which
-/// is NOT [`crate::OpenError::ForeignFormat`]'s, the board being this build's.
+/// is NOT [`crate::OpenError::ForeignFormat`]'s, the journal being this build's.
 pub(crate) fn damaged_sync_word_cause(
     found: [u8; 4],
 ) -> Box<dyn std::error::Error + Send + Sync + 'static> {
@@ -977,8 +978,8 @@ pub(crate) fn damaged_sync_word_cause(
          frame after it opens with this build's `{ours}` — another format's journal carries its \
          stamp in every frame, so this is one damaged word in a journal this build wrote, and the \
          frame's CRC does not cover it. Restore the segment from a copy, or rewrite those four \
-         bytes to `{ours}` and reopen, when the scan judges the frame by its CRC; this board needs \
-         no migration",
+         bytes to `{ours}` and reopen, when the scan judges the frame by its CRC; this journal \
+         needs no migration",
         found = stamp_text(&found),
         ours = stamp_text(&MAGIC),
     )
@@ -1016,14 +1017,14 @@ pub(crate) enum FirstSyncWord {
 /// tell a format from damage: an old-format segment contains no frame the new
 /// sync word anchors, so its resynchronization runs to end-of-file, classifies
 /// the whole segment as the un-acked tail, and the tail cut then TRUNCATES it
-/// to nothing and serves an empty board — an old-stamp board wiped rather than
-/// refused. Refusing on this probe, ahead of the scan and the cut, is what
-/// leaves the files untouched.
+/// to nothing and serves an empty world — an old-stamp journal wiped rather
+/// than refused. Refusing on this probe, ahead of the scan and the cut, is
+/// what leaves the files untouched.
 ///
 /// And a foreign-shaped word alone does not name a format: every one-bit flip
 /// of this build's numeral keeps the [`STAMP_PREFIX`], and the frame CRC does
-/// not cover the sync word, so one flipped bit would read as a board of
-/// another format — whose ruled remedy discards the board. So such a word is
+/// not cover the sync word, so one flipped bit would read as a journal of
+/// another format — whose ruled remedy discards it. So such a word is
 /// judged by its frame's SUCCESSOR, at the offset the first frame's own `len`
 /// names: this build's stamp there is [`FirstSyncWord::Damaged`], anything
 /// else [`FirstSyncWord::Foreign`]. A successor that cannot be read — a

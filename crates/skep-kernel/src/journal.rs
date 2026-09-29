@@ -245,7 +245,7 @@ struct Marker {
     /// own bytes exactly as [`ChainLink`] states them, the salt among them.
     /// Bound to the stamp rather than tagged: a hash, unlike a signature, is
     /// recomputable from the bytes it covers, so a change of hash would be a
-    /// re-chaining of every board — a format event by nature, and a tag
+    /// re-chaining of every journal — a format event by nature, and a tag
     /// would buy nothing. COMPUTED by the writer and RECOMPUTED by every
     /// replay; never zero-filled, so the bytes this field holds under
     /// `SKJ4` are the bytes it holds forever.
@@ -253,7 +253,7 @@ struct Marker {
     /// The signature slot's tag (X2): which hybrid pair `sig` was made under.
     /// [`SIG_ALG_UNSIGNED`] (`0`) is the one value this build writes; the
     /// kernel reads the tag only to hold the one-spelling-of-empty rule at
-    /// [`MarkerShadow`]'s door and never interprets the blob — a signed
+    /// [`MarkerShadow`]'s door and never interprets the blob — an attested
     /// marker's verification is the verifier's, beside the table, fold-inert.
     pub sig_alg: u8,
     /// The signature under the pair `sig_alg` names — EMPTY under tag `0`,
@@ -422,7 +422,7 @@ fn encode_txn(
     record_bytes: Vec<Vec<u8>>,
     prev_chain: &[u8; 32],
     salt: [u8; 32],
-    attest: Option<&Attestation>,
+    attestation: Option<&Attestation>,
 ) -> io::Result<(Vec<u8>, [u8; 32])> {
     let n = record_bytes.len() as u64;
     assert!(n > 0, "zero-step ops never reach the journal");
@@ -431,7 +431,7 @@ fn encode_txn(
     // emits, pinned to it by the accounting test. Reserving it is what holds
     // the commit region to the two copies of a transaction's bytes its own
     // contract budgets for — a doubling `Vec` transiently holds a third.
-    let mut buf = Vec::with_capacity(txn_encoded_len(&record_bytes, attest) as usize);
+    let mut buf = Vec::with_capacity(txn_encoded_len(&record_bytes, attestation) as usize);
     let mut checksum = 0u32;
     let mut link = ChainLink::open(prev_chain);
     for (i, bytes) in record_bytes.into_iter().enumerate() {
@@ -452,7 +452,7 @@ fn encode_txn(
     // carries one, else the one spelling of empty. Written AFTER the chain is
     // closed, so the slot is no chain input by construction — a signature
     // over the entry's content must sit outside the chain that covers it.
-    let (sig_alg, sig) = match attest {
+    let (sig_alg, sig) = match attestation {
         Some(a) => (a.sig_alg(), a.sig().to_vec()),
         None => (SIG_ALG_UNSIGNED, Vec::new()),
     };
@@ -534,8 +534,8 @@ const fn record_frame_len(record_len: usize) -> u64 {
 /// whose length prefix the pin already counts). Saturating, so a sum no
 /// allocator could hold refuses as over-budget rather than wrapping back
 /// under the budget.
-pub(crate) fn txn_encoded_len(record_bytes: &[Vec<u8>], attest: Option<&Attestation>) -> u64 {
-    let marker = MARKER_FRAME_LEN.saturating_add(attest.map_or(0, |a| a.sig().len() as u64));
+pub(crate) fn txn_encoded_len(record_bytes: &[Vec<u8>], attestation: Option<&Attestation>) -> u64 {
+    let marker = MARKER_FRAME_LEN.saturating_add(attestation.map_or(0, |a| a.sig().len() as u64));
     record_bytes.iter().fold(marker, |total, bytes| {
         total.saturating_add(record_frame_len(bytes.len()))
     })

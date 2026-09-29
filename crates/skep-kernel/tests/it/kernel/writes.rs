@@ -137,7 +137,7 @@ fn the_closure_may_read_and_checkpoint_the_kernel_it_is_committing_to() {
         stg.push(TestRec::Append(20));
         assert_eq!(k.current_seq(), Seq(1));
         assert_eq!(world_items(k.snapshot().world()), vec![10]);
-        // A bounded read derives from the journal, which holds Σ and nothing
+        // A history read derives from the journal, which holds Σ and nothing
         // of the transaction in flight.
         assert_eq!(world_items(&k.world_at(Seq(1)).unwrap()), vec![10]);
         // …and a checkpoint taken here embodies Σ, at Σ's own coordinate.

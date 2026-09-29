@@ -16,13 +16,13 @@ fn a_filled_slot_is_outside_the_transaction_budget() {
     let prefix = encode_record(&Vec::<u8>::new()).unwrap().len();
     let mut journal = Journal::InMemory;
     let mut installs = 0u32;
-    let attest = Attestation::new(1, vec![0xA5; 3_373]).unwrap();
+    let attestation = Attestation::new(1, vec![0xA5; 3_373]).unwrap();
     let body = (MAX_TXN_BYTES - txn_encoded_len(&[Vec::new()], None)) as usize - prefix;
     let at_budget = vec![vec![0u8; body]];
-    assert!(journal.commit_txn(1, at_budget, Some(&attest), |_| installs += 1).is_ok());
+    assert!(journal.commit_txn(1, at_budget, Some(&attestation), |_| installs += 1).is_ok());
     assert_eq!(installs, 1);
     let past_budget = vec![vec![0u8; body + 1]];
-    match journal.commit_txn(1, past_budget, Some(&attest), |_| installs += 1) {
+    match journal.commit_txn(1, past_budget, Some(&attestation), |_| installs += 1) {
         Err(CommitFail::OverBudget { bytes }) => assert_eq!(bytes, MAX_TXN_BYTES + 1),
         other => panic!("expected OverBudget, got {other:?}"),
     }

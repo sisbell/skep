@@ -32,7 +32,7 @@ use crate::WorldState;
 pub(crate) struct Base<W> {
     s_load: u64,
     world: W,
-    chain_head: [u8; 32],
+    chain: [u8; 32],
 }
 
 impl<W> Base<W> {
@@ -46,8 +46,8 @@ impl<W> Base<W> {
     /// at genesis: what a boundary that IS the base answers
     /// ([`crate::Kernel::chain_at`]), and what [`Base::scan`] judges the
     /// first link above it against.
-    pub(crate) fn chain_head(&self) -> [u8; 32] {
-        self.chain_head
+    pub(crate) fn chain(&self) -> [u8; 32] {
+        self.chain
     }
 
     /// The base itself, for a boundary that IS the base and so has nothing
@@ -74,7 +74,7 @@ impl<W> Base<W> {
         segs: &[SegmentMeta],
         bound: Option<u64>,
     ) -> Result<ScanOutcome, ScanFail> {
-        journal::scan(segs, self.s_load, bound, self.chain_head)
+        journal::scan(segs, self.s_load, bound, self.chain)
     }
 }
 
@@ -142,7 +142,7 @@ pub(crate) fn select_base<W: WorldState>(
                 return Ok(Base {
                     s_load: cp.seq,
                     world: world.rebuild_derived(),
-                    chain_head,
+                    chain: chain_head,
                 });
             }
             // Newest-first, so the first refusal met is the newest base's —
@@ -163,7 +163,7 @@ pub(crate) fn select_base<W: WorldState>(
     Ok(Base {
         s_load: 0,
         world: genesis.clone().rebuild_derived(),
-        chain_head: journal::CHAIN_GENESIS,
+        chain: journal::CHAIN_GENESIS,
     })
 }
 

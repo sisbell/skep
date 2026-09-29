@@ -7,7 +7,7 @@ use super::Txn;
 /// THE CHAIN'S GENESIS — chain₀, the value the first transaction of a journal
 /// chains from: thirty-two zero bytes. Named here, read by the writer of a
 /// fresh journal and by every replay from genesis, and pinned by the golden
-/// fixture, whose first marker's chain is SHA-256 over this seed and that
+/// fixture, whose first marker's chain is SHA-256 over this value and that
 /// transaction's bytes. When a checkpoint is the base the value read is the
 /// `SKC4` header's `chain_head` instead — the chain at that checkpoint's
 /// coordinate, which the marker that held it may no longer exist to say.

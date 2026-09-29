@@ -126,18 +126,18 @@ fn a_header_reads_without_its_body_under_the_checks_a_header_holds() {
     let header_of = |dir: &Path| list(dir).unwrap()[0].header();
 
     let header = header_of(dir.path()).expect("the header reads");
-    let attested = CheckpointHeader {
+    let claimed = CheckpointHeader {
         seq: Seq(7),
         chain_head: CHAIN_HEAD,
         body_hash: written_hash,
     };
-    assert_eq!(header, attested, "the coordinate, the chain there, the body's hash");
+    assert_eq!(header, claimed, "the coordinate, the chain there, the body's hash");
 
     // Cut to its header: nothing after it is read, so the answer is the
     // same — and the body `load` must verify is no longer there.
     fs::write(&path, &data[..HEADER_LEN]).unwrap();
     let header = header_of(dir.path()).expect("the header reads without its body");
-    assert_eq!(header, attested);
+    assert_eq!(header, claimed);
     assert!(list(dir.path()).unwrap()[0].load::<Vec<u64>>().is_err());
 
     // One byte short of a header is not one.

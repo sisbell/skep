@@ -24,7 +24,7 @@ pub(super) fn fresh_writer(dir: &Path) -> JournalWriter {
     JournalWriter::open_active(dir, 1, CHAIN_GENESIS, SaltSource::Seeded(TEST_SEED)).unwrap()
 }
 
-/// An unsigned marker whose chain is NOT under test — the fixtures that
+/// An unattested marker whose chain is NOT under test — the fixtures that
 /// hand-build a marker build one that never commits, or one with no
 /// group, so the chain it carries is never read — and whose salt is
 /// likewise never hashed against anything.
@@ -125,7 +125,7 @@ fn push_frame_refuses_a_payload_past_the_frame_cap() {
 
 /// The attestation's two refused spellings, held at construction: tag 0
 /// (the empty slot's own) and an empty blob — so no transaction can write
-/// the marker the decoder refuses, and "unsigned" is spelled only by the
+/// the marker the decoder refuses, and "unattested" is spelled only by the
 /// absent value.
 #[test]
 fn an_attestation_holds_the_one_spelling_of_empty_at_construction() {
@@ -143,12 +143,12 @@ fn an_attestation_holds_the_one_spelling_of_empty_at_construction() {
 #[test]
 fn a_filled_marker_appends_the_blob_after_the_tag_and_moves_no_other_byte() {
     let blob = vec![0xC3u8; 5];
-    let attest = Attestation::new(1, blob.clone()).unwrap();
+    let attestation = Attestation::new(1, blob.clone()).unwrap();
     let records = vec![vec![9u8, 8, 7]];
     let (empty, chain_e) =
         encode_txn(2, records.clone(), &CHAIN_GENESIS, FIXED_SALT, None).unwrap();
     let (filled, chain_f) =
-        encode_txn(2, records, &CHAIN_GENESIS, FIXED_SALT, Some(&attest)).unwrap();
+        encode_txn(2, records, &CHAIN_GENESIS, FIXED_SALT, Some(&attestation)).unwrap();
     assert_eq!(chain_e, chain_f, "the slot is no chain input");
     let marker_of = |buf: &[u8]| -> Vec<u8> {
         let Parsed::Intact { payload: first } = parse_frame(buf, 0) else {
@@ -200,9 +200,9 @@ fn frame_payloads_spend_a_bare_u64_on_the_txn_and_carry_the_documented_chain() {
 
     // records_checksum: over the record frames' payloads, in Seq order.
     let records_checksum = crc32c::crc32c_append(0, &expected_record);
-    // The chain: SHA-256 over the genesis seed, the record payload as
-    // framed, the marker's own pre-chain fields in their wire form, then
-    // the salt — the last bytes before finalize.
+    // The chain: SHA-256 over the chain's genesis value, the record
+    // payload as framed, the marker's own pre-chain fields in their wire
+    // form, then the salt — the last bytes before finalize.
     let expected_chain: [u8; 32] = Sha256::new()
         .chain_update(CHAIN_GENESIS)
         .chain_update(&expected_record)
@@ -247,7 +247,7 @@ fn the_marker_decoder_admits_one_spelling_of_empty() {
     // EMPTY, the one spelling; tag 0 with bytes (a signature under no
     // pair) and a non-zero tag with none (a pair that signed nothing) are
     // refused, so no two readers can disagree about whether a marker is
-    // signed. A filled slot under a non-zero tag DECODES — the kernel
+    // attested. A filled slot under a non-zero tag DECODES — the kernel
     // never interprets the blob — and rejecting trailing bytes is what
     // keeps the length prefix the whole of the slot's extent.
     let honest = codec()

@@ -104,9 +104,9 @@ fn transact_attested_in_memory_drops_the_value_and_the_read_back_is_unjournaled(
         salt: SaltSource::Seeded(TEST_SEED),
     };
     let kernel = Kernel::<Vec<u64>>::open(cfg, Vec::new()).unwrap();
-    let attest = Attestation::new(1, vec![1, 2, 3]).unwrap();
+    let attestation = Attestation::new(1, vec![1, 2, 3]).unwrap();
     let (_, s) = kernel
-        .transact_attested::<_, ()>(&[], Some(&attest), |stg| {
+        .transact_attested::<_, ()>(&[], Some(&attestation), |stg| {
             stg.push(1);
             Ok(())
         })
@@ -217,14 +217,14 @@ fn a_checkpoints_own_seq_with_the_segment_below_reclaimed_answers_the_chain_and_
 }
 
 /// [`Kernel::newest_checkpoint`] (QUEUE item 10 piece 2, the head's `base`):
-/// `None` until a checkpoint exists, then what its header attests — the
+/// `None` until a checkpoint exists, then what its header claims — the
 /// checkpointed seq, the chain at it (equal to [`Kernel::chain_head`]), and
 /// the SHA-256 of the body `checkpoint()` wrote — each under its own name,
 /// so no caller unpacks a position. Read off the header alone: a file cut
 /// to its header answers the same, and a header under another format's
 /// stamp names no base.
 #[test]
-fn newest_checkpoint_is_none_then_what_its_header_attests() {
+fn newest_checkpoint_is_none_then_what_its_header_claims() {
     let dir = tempfile::tempdir().unwrap();
     let kernel =
         Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new()).unwrap();
@@ -255,13 +255,13 @@ fn newest_checkpoint_is_none_then_what_its_header_attests() {
     );
 
     // Read off the header ALONE: cut to its first 88 bytes, the file
-    // attests the same — where a read through `load` would read, hash and
+    // claims the same — where a read through `load` would read, hash and
     // decode a body that is no longer there, and refuse.
     fs::write(&path, &full[..88]).unwrap();
     assert_eq!(
         kernel.newest_checkpoint(),
         Some(newest),
-        "the attestation is the header's, whatever follows it"
+        "the claim is the header's, whatever follows it"
     );
 
     // …and held to what a header can be checked for without its body: under
@@ -278,7 +278,7 @@ fn a_journal_under_another_format_is_refused_by_name_and_left_untouched() {
     // The encoding report's §8: under `SKJ2` a foreign-stamp journal was
     // not refused but WIPED — scanned as one corrupt run reaching
     // end-of-file, classified as the un-acked tail, truncated to zero
-    // bytes and served as an empty board. Under `SKJ3` it is refused
+    // bytes and served as an empty world. Under `SKJ3` it is refused
     // before the scan, naming the stamp found, the stamp expected and the
     // ruled remedy, and every byte is as it was found. The fixture is
     // this build's own journal with every sync word rewritten to `SKJ2`:
@@ -358,12 +358,12 @@ fn a_journal_under_another_format_is_refused_by_name_and_left_untouched() {
 fn one_damaged_sync_word_is_refused_as_damage_not_as_another_format() {
     // Every one-bit flip of this build's numeral keeps the `SKJ` prefix,
     // and the frame CRC does not cover the sync word — so one flipped bit
-    // at byte 3 of the first frame reads, by its word alone, as a board of
-    // another format, whose ruled remedy is to delete the data directory.
-    // The frame after it still opens with this build's stamp, which no
-    // other format's journal does: the open refuses it as the damage it
-    // is, before the scan and before any write, with a remedy that keeps
-    // the board.
+    // at byte 3 of the first frame reads, by its word alone, as a journal
+    // of another format, whose ruled remedy is to delete the data
+    // directory. The frame after it still opens with this build's stamp,
+    // which no other format's journal does: the open refuses it as the
+    // damage it is, before the scan and before any write, with a remedy
+    // that keeps the journal.
     let dir = tempfile::tempdir().unwrap();
     {
         let k = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
@@ -382,7 +382,7 @@ fn one_damaged_sync_word_is_refused_as_damage_not_as_another_format() {
     fs::write(&seg, &data).unwrap();
 
     let err = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
-        .expect_err("a damaged sync word is not a board to open");
+        .expect_err("a damaged sync word is not a journal to open");
     assert!(
         matches!(err, OpenError::Corruption { at: Seq(0), cause: Some(_) }),
         "got {err:?}"
@@ -406,12 +406,12 @@ fn one_damaged_sync_word_is_refused_as_damage_not_as_another_format() {
 }
 
 #[test]
-fn a_chain_break_halts_the_open_and_the_bounded_read_and_cuts_nothing() {
+fn a_chain_break_halts_the_open_and_the_history_read_and_cuts_nothing() {
     // Three commits; the second's marker rewritten consistently with its
     // frame CRC. Every frame is intact and every group commits, so
     // nothing but the chain can see it — and the open halts on it, at
     // the coordinate the rewritten transaction closes, with an account,
-    // truncating nothing; the bounded read halts the same way.
+    // truncating nothing; the history read halts the same way.
     let dir = tempfile::tempdir().unwrap();
     // The chain at 3 as the writer left it, for the base below: a
     // checkpoint at the head carries the marker's own chain, and the
@@ -466,7 +466,7 @@ fn a_chain_break_halts_the_open_and_the_bounded_read_and_cuts_nothing() {
     assert!(std::error::Error::source(&err).is_some());
     assert_eq!(fs::read(&seg).unwrap(), data, "a halted open truncated the journal");
 
-    // The bounded read, off a kernel opened over a checkpoint ABOVE the
+    // The history read, off a kernel opened over a checkpoint ABOVE the
     // break — the base embodies the rewrite, so the open succeeds — halts
     // on the same break when asked for a boundary below the base.
     fs::write(&seg, &data[..data.len() - 3]).unwrap();
@@ -1101,7 +1101,7 @@ fn a_poisoned_kernel_halts_writes_and_keeps_serving_reads() {
     assert_eq!(k.current_seq(), Seq(1));
     assert_eq!(k.snapshot().seq(), Seq(1));
     assert_eq!(k.snapshot().world().as_slice(), &[10]);
-    // …and the bounded read too: it is neither a write nor a checkpoint,
+    // …and the history read too: it is neither a write nor a checkpoint,
     // so the poison has no refusal to offer it (§5/Invariants).
     assert_eq!(k.world_at(Seq(1)).unwrap().as_slice(), &[10]);
     // flush stays a no-op Ok.
@@ -1192,7 +1192,8 @@ fn concurrent_checkpoints_each_leave_the_base_their_name_claims() {
         );
         // …and names the chain at its own coordinate — the value the
         // marker closing that boundary carries on disk, which is what a
-        // base at `cp.seq` hands the scan above it. Genesis's is the seed.
+        // base at `cp.seq` hands the scan above it. Genesis's is the chain's
+        // genesis value.
         assert_eq!(
             loaded.chain_head,
             chain_of_marker_closing(dir.path(), cp.seq),
@@ -1206,7 +1207,8 @@ fn concurrent_checkpoints_each_leave_the_base_their_name_claims() {
 /// [`Kernel::chain_at`]'s recomputation — read off the journal's own
 /// bytes: the `chain` field of the marker whose `last_seq` is `seq`, in
 /// the one segment these fixtures write. What a checkpoint at `seq` must
-/// carry as its `chain_head`. The seed at genesis, which no marker closes.
+/// carry as its `chain_head`. The chain's genesis value at genesis, which no
+/// marker closes.
 fn chain_of_marker_closing(dir: &std::path::Path, seq: u64) -> [u8; 32] {
     if seq == 0 {
         return journal::CHAIN_GENESIS;

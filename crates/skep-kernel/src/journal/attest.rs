@@ -16,7 +16,7 @@ pub(super) const SIG_ALG_UNSIGNED: u8 = 0;
 /// fields exactly, written where `Some` by [`crate::Kernel::transact_attested`]
 /// for THAT transaction alone and read back by
 /// [`crate::Kernel::attestation_at`]. OPAQUE to this kernel: no byte of the
-/// blob is interpreted here (a signed marker's verification is the
+/// blob is interpreted here (an attested marker's verification is the
 /// verifier's, beside the table, fold-inert — the fold reads no signature),
 /// the slot is no chain input (the tamper matrix's case 4), and its bytes sit
 /// OUTSIDE [`super::MAX_TXN_BYTES`]'s accounting (the design record §4.4 (b): the
@@ -25,7 +25,7 @@ pub(super) const SIG_ALG_UNSIGNED: u8 = 0;
 /// The one-spelling-of-empty rule is held at CONSTRUCTION: a value of this
 /// type always names a non-zero tag with a non-empty blob, so no transaction
 /// can write the marker [`super::MarkerShadow`]'s door refuses — tag `0` with bytes,
-/// or a tag with none — and "unsigned" has exactly one spelling, the absent
+/// or a tag with none — and "unattested" has exactly one spelling, the absent
 /// value. Which tags exist and what a blob's layout is under each are the
 /// verifier's table, not this kernel's: any non-zero tag and any non-empty
 /// blob are admitted here, as the decoder admits them.
@@ -78,7 +78,7 @@ impl fmt::Debug for Attestation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AttestationError {
     /// Tag `0` is the EMPTY slot's tag; a signature is made under no such
-    /// pair. An unsigned transaction carries no `Attestation` at all.
+    /// pair. An unattested transaction carries no `Attestation` at all.
     UnsignedTag,
     /// A tag with no bytes is the undecodable marker the door refuses.
     EmptyBlob,

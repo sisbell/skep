@@ -10,8 +10,8 @@
 //!
 //! What the pin catches: a release of bincode or serde that moves a width or
 //! a tag, a field reordered or inserted, a variant inserted, a shadow that no
-//! longer matches its type, a chain formula or seed that moves, a salt
-//! formula that moves, a checkpoint header field that moves, a slice whose
+//! longer matches its type, a chain formula or genesis value that moves, a
+//! salt formula that moves, a checkpoint header field that moves, a slice whose
 //! iteration order stops being a function of its contents — each fails here
 //! by name. What it cannot catch is a change that keeps the bytes, which is
 //! no change.
@@ -49,7 +49,7 @@ use tempfile::tempdir;
 /// fragmented arrangement, and the copy and the swap replay ABOVE it — the
 /// reader pin then exercises the `SKC4` header's `chain_head` as the value
 /// the chain continues from, and the boundaries below it fold from genesis
-/// with the chain verified from its seed.
+/// with the chain verified from its genesis value.
 const CHECKPOINT_AFTER_OP: usize = 16;
 
 /// The seed the golden was regenerated under, restated beside the stamps it

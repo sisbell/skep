@@ -201,7 +201,7 @@ impl JournalWriter {
         &mut self,
         first_seq: u64,
         record_bytes: Vec<Vec<u8>>,
-        attest: Option<&Attestation>,
+        attestation: Option<&Attestation>,
         install: impl FnOnce([u8; 32]),
     ) -> Result<u64, CommitFail> {
         // THE SALT IS DRAWN HERE (`SKJ4`), once per transaction, from the
@@ -211,7 +211,7 @@ impl JournalWriter {
         // appended, the segment is where the transaction found it, and
         // re-invoking is safe — rather than as a property of the records.
         let salt = self.salt_source.draw(first_seq).map_err(CommitFail::Clean)?;
-        let (buf, chain) = encode_txn(first_seq, record_bytes, &self.chain, salt, attest)
+        let (buf, chain) = encode_txn(first_seq, record_bytes, &self.chain, salt, attestation)
             .map_err(|e| CommitFail::Unencodable(Box::new(e)))?;
         self.maybe_rotate(first_seq).map_err(CommitFail::Clean)?;
         let mark = self.len;
@@ -371,7 +371,7 @@ impl Journal {
         &mut self,
         first_seq: u64,
         records: Vec<R>,
-        attest: Option<&Attestation>,
+        attestation: Option<&Attestation>,
         install: impl FnOnce([u8; 32]),
     ) -> Result<u64, CommitFail> {
         assert!(
@@ -417,7 +417,7 @@ impl Journal {
                 Ok(0)
             }
             Journal::Segments(writer) => {
-                writer.commit_txn(first_seq, record_bytes, attest, install)
+                writer.commit_txn(first_seq, record_bytes, attestation, install)
             }
         }
     }

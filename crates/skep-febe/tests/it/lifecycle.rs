@@ -53,13 +53,16 @@ fn the_namespace_reads_answer_the_registry_and_absence_is_not_a_refusal() {
 /// THE OWNER-OF-ADDRESS READ (AUTH-6.37) over the surface: ω UNPROJECTED —
 /// the longest registered prefix containing `addr` and the principal seated
 /// at it, as ONE entry — and the four cells every caller of it stands on.
-/// ALLOCATED iff `prefix == addr`: a seat answers itself. An UNALLOCATED
-/// `inc(X, 1)` answers `X`'s OWN seat — never none under the node — so `Some`
-/// alone is not the allocation test (AUTH-5.87 op (1)'s resume reads the
-/// equality and nothing else), and the SAME address answers itself once a
-/// `delegate` seats it. Under no registered prefix, both halves are absent
-/// TOGETHER. And the read is SESSION-BLIND: the GUEST is answered exactly
-/// what the bound principal is.
+/// An ACCOUNT is ALLOCATED iff `prefix == addr`: a seat answers itself. An
+/// UNALLOCATED `inc(X, 1)` answers `X`'s OWN seat — never none under the node
+/// — so `Some` alone is not the allocation test (AUTH-5.87 op (1)'s resume
+/// reads the equality and nothing else), and the SAME address answers itself
+/// once a `delegate` seats it. At every other tier the equality says nothing
+/// about allocation: a minted document and a node `register_node` admitted
+/// are allocated and seated nowhere, so each answers the seat above it.
+/// Under no registered prefix, both halves are absent TOGETHER. And the read
+/// is SESSION-BLIND: the GUEST is answered exactly what the bound principal
+/// is.
 #[test]
 fn the_owner_of_address_read_answers_omega_unprojected() {
     let fx = setup();
@@ -81,11 +84,24 @@ fn the_owner_of_address_read_answers_omega_unprojected() {
     assert_ne!(unallocated.0, first_child, "prefix != addr: the address is not a seat");
 
     // A document-tier address asked about is a registry probe like any other:
-    // no consult, no registration check, the owning seat.
+    // no consult, no registration check, the owning seat — and a MINTED
+    // document is allocated yet seated nowhere, so the equality is an
+    // account's allocation test and no other tier's. A node `register_node`
+    // admitted is the same: allocated, seating no one, answered the seat above.
     let doc = create_doc(&fx);
-    assert_eq!(owner_of(fx.user, &doc), Some((fx.account.clone(), USER)));
+    assert_eq!(
+        owner_of(fx.user, &doc),
+        Some((fx.account.clone(), USER)),
+        "a minted document is allocated yet no seat: it answers its account's"
+    );
     let unminted = addr(&[1, 0, 1, 0, 99]);
     assert_eq!(owner_of(fx.user, &unminted), Some((fx.account.clone(), USER)));
+    let (admitted, _) = ack_addr(ex(&fx.febe, fx.boot, Op::RegisterNode { addr: tum(&[1, 3]) }));
+    assert_eq!(
+        owner_of(fx.user, &admitted),
+        Some((node1(), BOOTSTRAP_PRINCIPAL)),
+        "an admitted node is allocated and seats no one: it answers the genesis node's seat"
+    );
 
     // Seated by a `delegate`, the same address answers ITSELF and the
     // principal that delegate registered; beneath it the longest prefix wins.
@@ -111,7 +127,7 @@ fn the_owner_of_address_read_answers_omega_unprojected() {
     // SESSION-BLIND: the guest is answered what the bound principal is, at
     // every cell above — public, immutable registry data, nothing withheld.
     let guest = SessionId::GUEST;
-    for probe in [fx.account.clone(), first_child.clone(), doc, addr(&[2, 0, 7])] {
+    for probe in [fx.account.clone(), first_child.clone(), doc, admitted, addr(&[2, 0, 7])] {
         assert_eq!(
             owner_of(guest, &probe),
             owner_of(fx.user, &probe),

@@ -88,7 +88,7 @@ impl crate::PublicationWorld for World {
     // The grant fold is the engine's too; this world carries none, so the
     // live universal index is empty and the arm's shape is what is
     // exercised (the narrowing has its own vectors in `tests/it`).
-    fn universal_grants(&self) -> Vec<crate::UniversalIndexRow> {
+    fn universal_grant_index(&self) -> Vec<crate::UniversalIndexRow> {
         Vec::new()
     }
 }

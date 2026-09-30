@@ -6,8 +6,8 @@
 //! ([`OperationSurface::lower_write`]). The pieces it consults belong to their
 //! own cards — [`crate::session::Sessions`] for the ephemeral binding (§6),
 //! [`crate::idem::IdemCache`] for the committed-write retry memo (§7), and
-//! [`crate::publication`] for what the composed publication reads need that no
-//! store computes.
+//! [`crate::publication`] for what the publication reads need that no store
+//! computes.
 //!
 //! Beneath it, two children, each seeing this module's private items the way
 //! a child does, so nothing here is widened for them:
@@ -394,10 +394,10 @@ where
         resp
     }
 
-    /// The engine's current linearization frontier: the coordinate of the last
-    /// committed write, on the same log every `at` and `as_of` names, and
-    /// directly comparable with either. It never regresses (G0), and asking
-    /// costs no operation — nothing is dispatched, committed or snapshotted.
+    /// The coordinate of the COMMITTED HEAD — the last committed write — on
+    /// the same log every `at` and `as_of` names, and directly comparable with
+    /// either. It never regresses (G0), and asking costs no operation —
+    /// nothing is dispatched, committed or snapshotted.
     ///
     /// What a client compares it against is [the two
     /// coordinates](crate#the-two-coordinates).
@@ -405,9 +405,9 @@ where
         self.stores.kernel().current_seq()
     }
 
-    /// The frontier's COORDINATE AND CHAIN together — [`log_position`]'s
-    /// `Seq` and the commit chain's value AT it (the quantity
-    /// `Kernel::chain_head` reads) — off ONE kernel `Snapshot`, one root
+    /// The COMMITTED HEAD's coordinate together with the commit chain's value
+    /// AT it — [`log_position`]'s `Seq` beside the quantity
+    /// `Kernel::chain_head` reads — off ONE kernel `Snapshot`, one root
     /// load: the root carries the two beside each other, so the pair names
     /// one committed state, and the chain value IS the chain of that
     /// position. `current_seq()` and `chain_head()` asked separately cannot

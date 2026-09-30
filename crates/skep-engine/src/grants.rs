@@ -176,12 +176,12 @@ use crate::world::World;
 /// issuer, and none at all where it owns none.
 ///
 /// An INDEX ROW, and never an answer: the borrowed twin of M10's
-/// `skep_febe::UniversalIndexRow`, the row `PublicationWorld::universal_grants`
-/// answers in, which the engine's impl of that seam builds from this one field
-/// for field. What M10 SERVES is its other row, `skep_febe::UniversalGrant` —
-/// a COVERED prefix, built only by narrowing these (RES-231/264/273/298) — so
-/// a row of this type is no entitlement by itself and never a displayable
-/// answer (RES-258, PUB-5.21).
+/// `skep_febe::UniversalIndexRow`, the row
+/// `PublicationWorld::universal_grant_index` answers in, which the engine's
+/// impl of that seam builds from this one field for field. What M10 SERVES is
+/// its other row, `skep_febe::UniversalGrant` — a COVERED prefix, built only
+/// by narrowing these (RES-231/264/273/298) — so a row of this type is no
+/// entitlement by itself and never a displayable answer (RES-258, PUB-5.21).
 ///
 /// A named row rather than a pair, because the two grant enumerations are
 /// TRANSPOSES of each other and every half of both is an account or a

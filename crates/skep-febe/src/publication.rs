@@ -24,13 +24,13 @@
 //! doc names it beside M10's boundary): the fold-filter RE-DERIVES the grant
 //! fold's issuer test (`grant_exists`'s compare) as a projection over rows.
 //! It sits here because the world hands its universal index raw
-//! ([`PublicationWorld::universal_grants`]), so the narrowing a client's
+//! ([`PublicationWorld::universal_grant_index`]), so the narrowing a client's
 //! answer needs falls to the front door.
 //!
 //! [`Op::DocMetadata`]: crate::Op::DocMetadata
 //! [`Op::EditionClaims`]: crate::Op::EditionClaims
 //! [`Op::UniversalGrants`]: crate::Op::UniversalGrants
-//! [`PublicationWorld::universal_grants`]: crate::PublicationWorld::universal_grants
+//! [`PublicationWorld::universal_grant_index`]: crate::PublicationWorld::universal_grant_index
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -43,7 +43,7 @@ use crate::reject::{rejection, RejectCode, Rejection};
 use crate::response::{BirthVersion, UniversalGrant};
 use crate::world::UniversalIndexRow;
 
-/// The registration refusal M10 ORIGINATES, for the two composed reads that
+/// The registration refusal M10 ORIGINATES, for the two publication reads that
 /// take a document ([`Op::DocMetadata`], [`Op::EditionClaims`]; the third,
 /// [`Op::UniversalGrants`], takes no argument at all). Every other read's
 /// `*NotRegistered` is its store's, raised where the store meets the address;

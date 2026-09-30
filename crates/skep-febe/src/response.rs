@@ -93,7 +93,7 @@ pub struct UniversalGrant {
 /// coordinates](crate#the-two-coordinates).
 ///
 /// A rejection carries none: it names the operation it refused and how, not a
-/// position. So a client tracking the frontier across a refusal asks
+/// position. So a client tracking the committed head across a refusal asks
 /// [`OperationSurface::log_position`] or reissues.
 ///
 /// [`OperationSurface::log_position`]: crate::OperationSurface::log_position
@@ -150,10 +150,14 @@ pub enum Response {
     /// (the [`BirthVersion`] shape, and for its reason): they are M3's own
     /// registry ENTRY, so a prefix without its principal is not something
     /// this shape can say, and `None` — no registered principal's prefix
-    /// contains the address — takes both TOGETHER. The address asked is
-    /// ALLOCATED, a seat of its own, iff `prefix` equals it; any other
-    /// prefix names the nearest seat above it, which is why `Some` alone is
-    /// never the allocation test.
+    /// contains the address — takes both TOGETHER. The address asked is a
+    /// SEAT of its own iff `prefix` equals it; any other prefix names the
+    /// nearest seat above it. For an ACCOUNT address that equality is the
+    /// allocation test (AUTH-5.87) — allocating an account seats it, a
+    /// `delegate` baptizing the prefix and registering its principal at once
+    /// — and `Some` alone never is. At every other tier it says nothing about
+    /// allocation: a document, an element and a node `register_node` admitted
+    /// are allocated and seated nowhere.
     EffectiveOwner { owner: Option<(Address, PrincipalId)>, as_of: Seq },
     /// count_v / count_ftt.
     Count { n: usize, as_of: Seq },

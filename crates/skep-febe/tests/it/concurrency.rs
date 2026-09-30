@@ -73,7 +73,7 @@ fn concurrent_writes_each_get_their_own_linearization_point() {
         "every concurrent write committed, so the log advanced past where they started"
     );
     for (_, at) in &acks {
-        assert!(*at <= fx.febe.log_position(), "no write acknowledges past the log head");
+        assert!(*at <= fx.febe.log_position(), "no write acknowledges past the committed head");
     }
 }
 

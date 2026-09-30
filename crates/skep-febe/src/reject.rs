@@ -78,8 +78,9 @@ pub enum Disposition {
 /// from M10's own EDITLINK successor guard, which fills `slot` and `index`.
 /// Every other M5/M8 variant still lowers with `site = None` (§5; M8's
 /// `DocNotRegistered` is fieldless, unlike M6's), and so does M10's own
-/// registration refusal for the two COMPOSED reads — each names exactly one
-/// document, so the client already knows which address was refused.
+/// registration refusal for the two publication reads that take a document —
+/// each names exactly one, so the client already knows which address was
+/// refused.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 pub struct FaultSite {
     /// Which COMPARE spec-set (ρ₁/ρ₂) the fault came from.

@@ -1621,7 +1621,7 @@ fn the_two_feed_enumerations_read_the_fold_s_live_state() {
     // order, the two-issuer row among them: a row M10 narrows before it
     // serves anything, and never serves as it stands.
     assert_eq!(
-        <World as skep_febe::PublicationWorld>::universal_grants(&w),
+        <World as skep_febe::PublicationWorld>::universal_grant_index(&w),
         vec![
             skep_febe::UniversalIndexRow {
                 content_prefix: board.draft_a.clone(),
@@ -1734,7 +1734,7 @@ fn a_duplicate_of_a_standing_grant_shares_no_index_entry() {
 }
 
 /// …and closed on the ANY-PRINCIPAL index, the form M10's
-/// `PublicationWorld::universal_grants` answers: its trait text promises
+/// `PublicationWorld::universal_grant_index` answers: its trait text promises
 /// every prefix an admitted, unrevoked grant names, and with one operative
 /// grant per (issuer, prefix) the index keeps that promise — revoking the one
 /// grant takes the row, and no identical grant survives operative beside it
@@ -1765,7 +1765,7 @@ fn a_duplicate_any_principal_grant_shares_no_universal_entry() {
     let w = world(&engine);
     assert!(w.universal_grants().is_empty(), "the one grant's entry left with it");
     assert!(
-        <World as skep_febe::PublicationWorld>::universal_grants(&w).is_empty(),
+        <World as skep_febe::PublicationWorld>::universal_grant_index(&w).is_empty(),
         "…and M10's seam answers the index"
     );
     assert!(!w.readable(Some(PrincipalId(9)), &board.draft_a), "the predicate agrees");

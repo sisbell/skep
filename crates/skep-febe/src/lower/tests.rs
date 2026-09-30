@@ -42,7 +42,7 @@ fn content_error_collapses_wholesale() {
 }
 
 /// §5: M6 is the sole producer of the multi-field localization
-/// (operand/region/index/fault); the variant-carried coordinates survive
+/// (operand/region/index/fault); the variant-carried localization survives
 /// into the site, and the two fields M6 never fills — `addr`, which
 /// `not_owner` threads, and `slot`, which M10's successor guard fills —
 /// stay empty.
@@ -55,7 +55,7 @@ fn m6_faults_thread_their_site() {
     assert_eq!(site.index, Some(3));
     assert!(matches!(site.fault, Some(SpanFault::StartTooShallow)));
     assert!(site.operand.is_none() && site.region.is_none() && site.addr.is_none());
-    assert!(site.slot.is_none(), "a slot is an M10 successor coordinate, never an M6 one");
+    assert!(site.slot.is_none(), "a slot localizes an M10 successor fault, never an M6 one");
 
     let (code, site) = CompareError::MalformedSpan {
         operand: Operand::Second,

@@ -1,12 +1,12 @@
-//! The three reads M10 composes rather than forwards (PUB-8.12, PUB-8.46,
-//! PUB-8.47), over the public surface: the doc-metadata read answers what a
-//! client admits an edition by, its birth version checked against the address
-//! `Op::Version` minted; the two reads that take a document demand a
-//! registered DOCUMENT and refuse every other tier; the three-valued
-//! publication flag reaches the store unresolved; and the any-principal read
-//! hands a client the answer set and never the index — every served row
-//! carrying the one issuer ω answers for its prefix, the guest answered
-//! empty.
+//! The three publication reads — the reads M10 composes rather than forwards
+//! (PUB-8.12, PUB-8.46, PUB-8.47) — over the public surface: the doc-metadata
+//! read answers what a client admits an edition by, its birth version checked
+//! against the address `Op::Version` minted; the two reads that take a
+//! document demand a registered DOCUMENT and refuse every other tier; the
+//! three-valued publication flag reaches the store unresolved; and the
+//! any-principal read hands a client the answer set and never the index —
+//! every served row carrying the one issuer ω answers for its prefix, the
+//! guest answered empty.
 
 use crate::common;
 
@@ -14,7 +14,8 @@ use common::*;
 use skep_febe::{Op, RejectCode, SessionId, UniversalGrant, UniversalIndexRow};
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
 
-/// The two publication reads (PUB-8.12, PUB-8.46), payload and all.
+/// The two publication reads that take a document (PUB-8.12, PUB-8.46),
+/// payload and all.
 ///
 /// The birth version is ONE value, and both halves of it are load-bearing.
 /// Its address is a RECONSTRUCTION of M3's version-chain encoding, which
@@ -70,16 +71,17 @@ fn the_publication_reads_answer_the_metadata_a_client_admits_an_edition_by() {
     }
 }
 
-/// PUB-8.46 and the registration refusal M10 ORIGINATES: the two COMPOSED
-/// reads — the only two whose refusal comes from no store — demand a
-/// registered DOCUMENT, and the TIER half of that demand is what bounds the
-/// edition-claim seam, since the world narrows its `to` range by no level: an
-/// account-tier target would ask after every document under it and a
-/// node-tier one after the whole store. A registered account, the genesis
-/// node and a content element are refused exactly as an unregistered document
-/// is, and the registered document beside them is answered.
+/// PUB-8.46 and the registration refusal M10 ORIGINATES: the two publication
+/// reads that take a document — the only reads whose registration refusal
+/// comes from no store — demand a registered DOCUMENT, and the TIER half of
+/// that demand is what bounds the edition-claim seam, since the world narrows
+/// its `to` range by no level: an account-tier target would ask after every
+/// document under it and a node-tier one after the whole store. A registered
+/// account, the genesis node and a content element are refused exactly as an
+/// unregistered document is, and the registered document beside them is
+/// answered.
 #[test]
-fn the_two_composed_reads_demand_a_registered_document_and_not_merely_an_entity() {
+fn doc_metadata_and_edition_claims_demand_a_registered_document_not_merely_an_entity() {
     let fx = setup();
     let d = create_doc(&fx);
     let (element, _) = insert3(&fx, &d);
@@ -173,7 +175,7 @@ fn assert_served_rows_are_omega_owned(fx: &Fixture, served: &[UniversalGrant]) {
 /// the issuer for is served unchanged; one WIDER than the issuer's account
 /// (an agent's share over its hirer's prefix) is served as the issuer's own
 /// account; a hirer's share over its registered sub-account is NO row, the
-/// granter not the owner, and neither is a stranger's record over a
+/// issuer not the owner, and neither is a stranger's record over a
 /// stranger's document — each dropped issuer by issuer, while the record
 /// stands in the index; rows GROUP by the served prefix — two stored rows
 /// narrowing to one — in prefix order, and every served row carries ONE
@@ -233,7 +235,7 @@ fn the_any_principal_discovery_read_hands_a_client_the_answer_set_never_the_inde
     };
     // The STORED index, deliberately out of prefix order: what each row
     // narrows to is stated beside it.
-    seed_universal_grants(vec![
+    seed_universal_grant_index(vec![
         stored(&x, &[&x1]),      // RES-264: X.1's share over X, wider ⇒ served at X.1
         stored(&dy, &[&x, &y]),  // RES-231: X's record over Y's document ⇒ X dropped; Y's stands
         stored(&dx1, &[&x1]),    // ω answers X.1 for its own document ⇒ unchanged
@@ -254,8 +256,8 @@ fn the_any_principal_discovery_read_hands_a_client_the_answer_set_never_the_inde
         "each issuer list in address order, no repeat"
     );
     assert!(served.iter().all(|r| r.prefix != dy2), "a disjoint pair contributes no row");
-    // RES-231 and RES-298 in one sentence: the served set never names a
-    // granter who is not the owner, whatever the index holds.
+    // RES-231 and RES-298 in one sentence: the served set never names an
+    // issuer who is not the owner, whatever the index holds.
     assert_served_rows_are_omega_owned(&fx, &served);
 
     // THE GUEST is answered EMPTY, never refused (PUB-5.109); a SECOND bound
@@ -281,7 +283,7 @@ fn the_any_principal_discovery_read_hands_a_client_the_answer_set_never_the_inde
 /// seeded RAW, as the vector above seeds its own: `(Z, [Z])` over a top-level
 /// `Z` no `delegate` has seated, which ω answers the NODE for. The exact arm
 /// passes the pair by, ω not answering `Z`; containment ALONE would serve it
-/// — `Z` contains `Z` — as `(Z, [Z])`, a granter the registry seats nowhere
+/// — `Z` contains `Z` — as `(Z, [Z])`, an issuer the registry seats nowhere
 /// listed as the owner of what is the node's; "and is not it" makes the pair
 /// NO row. The check is `assert_served_rows_are_omega_owned` — vacuous over
 /// the empty answer and RED at `(Z, [Z])` the moment the clause goes. THE
@@ -308,7 +310,7 @@ fn an_unseated_issuer_over_its_own_prefix_is_no_row() {
     assert_eq!(owner_of(&z), Some((node1(), BOOTSTRAP_PRINCIPAL)), "no seat: ω(Z) is the node");
 
     // The ONE stored row, seeded RAW: Z's universal share over Z itself.
-    seed_universal_grants(vec![UniversalIndexRow {
+    seed_universal_grant_index(vec![UniversalIndexRow {
         content_prefix: z.clone(),
         issuers: vec![z.clone()],
     }]);
@@ -361,7 +363,7 @@ fn an_unseated_sub_prefix_is_served_until_a_delegation_seats_it() {
     assert_eq!(seat_of(&child), Some(fx.account.clone()), "no seat: ω answers X at the child");
 
     // X's universal share over its unseated child, seeded RAW.
-    seed_universal_grants(vec![UniversalIndexRow {
+    seed_universal_grant_index(vec![UniversalIndexRow {
         content_prefix: child.clone(),
         issuers: vec![fx.account.clone()],
     }]);

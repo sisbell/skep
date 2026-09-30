@@ -158,8 +158,8 @@ fn successor_slot(
     Ok(Endset::from_spans(spans))
 }
 
-/// The refusal for one offending spec: both halves of its coordinate in the
-/// site — the slot it was building, in M7's numbering, and the spec's position
+/// The refusal for one offending spec, localized in two fields of the site —
+/// the slot it was building, in M7's numbering, and the spec's position
 /// within that slot, the same `site.index` M6 threads for a malformed span in
 /// a multi-spec request, so a client reads one field for both.
 fn at_spec(slot: usize, index: usize, code: RejectCode) -> Rejection {

@@ -64,11 +64,11 @@
 //!   [`IssuerGrantIndexRow`] rows — the key set the daemon's change feed
 //!   resolves once per request (PUB-7.22, PUB-7.28); M10's any-principal
 //!   discovery read (PUB-8.47) takes the first through
-//!   `PublicationWorld::universal_grants`, raw, and narrows it itself. What
-//!   they enumerate is the fold's STORED index — a superset of entitlement,
-//!   one operative grant behind each entry now that PUB-5.15's fourth
-//!   outcome honors a grant only where the state its `replaces` names is
-//!   its key's current one (the `grants` module states both, and the
+//!   `PublicationWorld::universal_grant_index`, raw, and narrows it itself.
+//!   What they enumerate is the fold's STORED index — a superset of
+//!   entitlement, one operative grant behind each entry now that PUB-5.15's
+//!   fourth outcome honors a grant only where the state its `replaces` names
+//!   is its key's current one (the `grants` module states both, and the
 //!   shared-entry shortfall that outcome closed).
 //! * **The edition-claim lookup** ([`World::edition_claims`]; the `editions`
 //!   module) — the audit-view `to`-range lookup over the R20 edition-claim

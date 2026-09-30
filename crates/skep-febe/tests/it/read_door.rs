@@ -145,7 +145,8 @@ fn a_read_is_withheld_naming_its_first_unreadable_document() {
         (Op::WindowV { d: d1.clone(), region: vec![first_span()], cur: None, n: 1 }, &d1),
         (Op::RetrieveEndsets { d: d1.clone(), region: vec![first_span()] }, &d1),
         (Op::DeleteOrphans { d: d1.clone(), p: vp(1, 1), width: nat(1) }, &d1),
-        // The two publication reads: the H1 row (PUB-8.12, PUB-8.46).
+        // The two publication reads that take a document: the H1 row
+        // (PUB-8.12, PUB-8.46).
         (Op::DocMetadata { doc: d1.clone() }, &d1),
         (Op::EditionClaims { target: d2.clone() }, &d2),
     ];

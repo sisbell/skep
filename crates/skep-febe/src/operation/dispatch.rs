@@ -574,7 +574,7 @@ where
             Op::UniversalGrants => {
                 let rows = match principal {
                     None => Vec::new(),
-                    Some(_) => covered_universal_grants(world.m3(), world.universal_grants()),
+                    Some(_) => covered_universal_grants(world.m3(), world.universal_grant_index()),
                 };
                 Ok(Response::UniversalGrants { rows, as_of })
             }

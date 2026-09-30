@@ -187,8 +187,8 @@ fn doc_arguments_run_in_declaration_order() {
     assert_eq!(op.doc_arguments(), vec![&d2, &d3, &d1]);
     let op = Op::Project { a: d1.clone(), slot: 1, d: d3.clone() };
     assert_eq!(op.doc_arguments(), vec![&d3], "the dual row consults `d`, never the link");
-    // Lane 3.4: the two publication reads each consult their one named
-    // document — the H1 row's "target unreadable ⟹ withheld".
+    // Lane 3.4: the two publication reads that take a document each consult
+    // that one document — the H1 row's "target unreadable ⟹ withheld".
     let op = Op::DocMetadata { doc: d2.clone() };
     assert_eq!(op.doc_arguments(), vec![&d2]);
     let op = Op::EditionClaims { target: d3.clone() };

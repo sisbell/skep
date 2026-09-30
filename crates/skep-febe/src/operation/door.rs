@@ -346,8 +346,8 @@ pub(super) fn consult_write(
         return Ok(());
     }
     // Slot 5 ahead of slot 6 (lane 4.2, F3): the model's in-place advance
-    // refusal on this write's destination — PUB-2.11, asked of M5's one
-    // publication read on a destination the deferral has just found
+    // refusal on this write's destination — PUB-2.11, asked of M5's own
+    // `published_target` on a destination the deferral has just found
     // registered (PUB-6.37), so the door runs the rule the store enforces
     // rather than a copy of it — BEFORE any source is consulted, so the
     // one cell where both apply answers `published_target`, never

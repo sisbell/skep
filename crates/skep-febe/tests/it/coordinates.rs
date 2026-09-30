@@ -28,10 +28,11 @@ fn at_of(kind: OpKind, r: &Response) -> Seq {
     }
 }
 
-/// One write's promise: the `at` it reported IS the log head it just moved
-/// to. Exact, and safe to state exactly — M2 mints one `Seq` per record and
-/// returns the last of the range, which is the installed root's coordinate,
-/// and a zero-step transaction returns the base seq, which is that same head.
+/// One write's promise: the `at` it reported IS the committed head it just
+/// moved to. Exact, and safe to state exactly — M2 mints one `Seq` per record
+/// and returns the last of the range, which is the installed root's
+/// coordinate, and a zero-step transaction returns the base seq, which is
+/// that same head.
 fn assert_committed(fx: &Fixture, kind: OpKind, r: &Response, seen: &mut Vec<OpKind>) {
     assert_eq!(
         at_of(kind, r),
@@ -44,9 +45,9 @@ fn assert_committed(fx: &Fixture, kind: OpKind, r: &Response, seen: &mut Vec<OpK
 
 /// A1/A7/V1: `committed_at` on EVERY write is the operation's own
 /// linearization point. A sequential chain over all fourteen writes, each
-/// checked against the log head the moment it returns — the coordinate is
-/// what a client waits at, so a stale or invented one breaks read-your-writes
-/// while every answer still looks right.
+/// checked against the committed head the moment it returns — the coordinate
+/// is what a client waits at, so a stale or invented one breaks
+/// read-your-writes while every answer still looks right.
 #[test]
 fn every_write_acks_at_the_coordinate_it_committed() {
     let fx = setup();
@@ -175,16 +176,16 @@ fn every_write_acks_at_the_coordinate_it_committed() {
 }
 
 /// A2/V1: `as_of` on EVERY read is the coordinate of the snapshot the answer
-/// came from. Nothing writes during the loop, so the log head taken once
-/// ahead of it is that coordinate for all 28 — a read that reports anything
-/// else is telling the client it has seen a position it has not.
+/// came from. Nothing writes during the loop, so the committed head taken
+/// once ahead of it is that coordinate for all 28 — a read that reports
+/// anything else is telling the client it has seen a position it has not.
 ///
 /// This pins the coordinate M10 *reports*. That every constituent of one
 /// answer came off one root (A3/V2) is structural — it belongs to the single
 /// snapshot `dispatch_read` pins — and no single-threaded test can distinguish
 /// it from two snapshots taken in a quiet moment.
 #[test]
-fn every_read_reports_the_log_head_as_its_as_of() {
+fn every_read_reports_the_committed_head_as_its_as_of() {
     let fx = setup();
     let draft = create_doc(&fx);
     insert3(&fx, &draft);

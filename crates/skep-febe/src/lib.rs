@@ -27,17 +27,18 @@
 //! rule. Cross-family COMPOSITE orchestration — a write spanning store
 //! families committed as one M2 transaction — is latent with zero occupants:
 //! the design resolves that no v1 operation needs one (Conflicts resolved
-//! #1). A cross-family READ needs no transaction and is answered off the one
-//! snapshot the read dispatch pins. Three are: [`Op::DocMetadata`] (M3's
-//! publication bit, owner and chain with M5's frozen birth extent),
-//! [`Op::EditionClaims`] (the world's edition-claim class under the door's
-//! home rule) and [`Op::UniversalGrants`] (the grant fold's live universal
-//! index narrowed by M3's ω). Each says at its arm what it assembles, and
-//! what the three need that no store computes for them is the `publication`
-//! card's. That card holds the one rule M10 performs on another component's
-//! behalf: the any-principal read's fold-filter RE-DERIVES the grant fold's
-//! issuer test as a projection over rows, because the world hands its
-//! universal index raw ([`PublicationWorld::universal_grants`]).
+//! #1). A read spanning store families needs no transaction and is answered
+//! off the one snapshot the read dispatch pins; M10 composes three, the
+//! PUBLICATION READS: [`Op::DocMetadata`] (M3's publication bit, owner and
+//! chain with M5's frozen birth extent), [`Op::EditionClaims`] (the world's
+//! edition-claim class under the door's home rule) and
+//! [`Op::UniversalGrants`] (the grant fold's live universal index narrowed by
+//! M3's ω). Each says at its arm what it assembles, and what the three need
+//! that no store computes for them is the `publication` card's. That card
+//! holds the one rule M10 performs on another component's behalf: the
+//! any-principal read's fold-filter RE-DERIVES the grant fold's issuer test
+//! as a projection over rows, because the world hands its universal index
+//! raw ([`PublicationWorld::universal_grant_index`]).
 //!
 //! Spec traceability: each public item's doc-comment cites the labels it
 //! realizes (ASN-0134 A1/A2/A5/A7/V1/V2/G0, and §§ of the M10 design), so a
@@ -82,12 +83,12 @@
 //! such ordering — M10 fixes one linearization point per operation and imposes
 //! none between concurrent ones (§8) — so it compares the `as_of` it receives
 //! against the `at` it is waiting for, and reissues the read until the
-//! comparison holds. [`OperationSurface::log_position`] answers with the same
-//! frontier without issuing an operation.
+//! comparison holds. [`OperationSurface::log_position`] answers with the
+//! coordinate of the committed head without issuing an operation.
 //!
 //! A rejection is the one answer carrying no coordinate — a refused read
 //! reports no position, having answered from none — so a client tracking the
-//! frontier across a refusal asks [`OperationSurface::log_position`] or
+//! committed head across a refusal asks [`OperationSurface::log_position`] or
 //! reissues.
 //!
 //! ## Boundary — deliberately NOT owned here
@@ -134,7 +135,8 @@
 //! [`Stores`] factory. Two capabilities of that world are M10's own seams,
 //! and are two because they answer unrelated questions: [`ReadableWorld`],
 //! the one read predicate the surface answers through, and
-//! [`PublicationWorld`], the two class lookups the publication reads ask.
+//! [`PublicationWorld`], the two class lookups [`Op::EditionClaims`] and
+//! [`Op::UniversalGrants`] ask.
 //! The whole of that contract — the world, its two capabilities, the rows the
 //! second hands over, and the factory — is written in one module, `world`.
 //!
@@ -173,7 +175,7 @@ mod successor;
 // What M10 requires of the engine that assembles it: the world it reads and
 // the factory it writes through.
 mod world;
-// What the three composed publication reads need that no store computes.
+// What the three publication reads need that no store computes.
 mod publication;
 // The lifecycle — `OperationSurface`, its sessions, `execute` — with the
 // readability door and the two dispatch tables beneath it.

@@ -202,14 +202,14 @@ pub enum Op {
     /// the CLIENT-SUPPLIED runs of `shot`. M5's composite decides the
     /// destination at commit (the trunk's next member, or the base's
     /// daughter — PUB-2.39), places the runs by their origin (PUB-2.40) and
-    /// runs the source gate (PUB-6.23) through the read predicate the daemon
-    /// supplies ([`OperationSurface::with_read_predicate`]); M10 hands the shot
-    /// through verbatim and names no policy of its own.
+    /// runs the source gate (PUB-6.23) under the session's VISIBILITY CLASS,
+    /// which M10 lends it for this one write — the value the five link writes
+    /// lend M7; M10 hands the shot through verbatim and names no policy of its
+    /// own.
     ///
     /// SIZE: its work is not bounded by its request's size; [`Codec::parse`]
     /// says why and what a route owes.
     ///
-    /// [`OperationSurface::with_read_predicate`]: crate::OperationSurface::with_read_predicate
     /// [`Codec::parse`]: crate::Codec::parse
     Publish { doc: Address, shot: Shot },
     // ── link writes (→ M7) ──
@@ -391,7 +391,7 @@ pub enum Op {
     /// * otherwise NO row: a stranger's record over a stranger's document
     ///   (RES-231's cell), and a hirer's grant beneath its REGISTERED
     ///   sub-account — inside the hirer's account by address, the
-    ///   sub-account's by ω, so the granter is not the owner and the fold
+    ///   sub-account's by ω, so the issuer is not the owner and the fold
     ///   honors the grant for no document.
     ///
     /// The compare is M3's own walk, ONE per stored row off the read's
@@ -419,10 +419,10 @@ pub enum Op {
 /// once and exactly one answer comes back: the slots are built `from`, then
 /// `to`, then `ty`, and the first that refuses speaks. Within a slot the first
 /// offending spec speaks, `IllFormedSpec` ahead of `SourceNotRegistered` on
-/// it. [`crate::FaultSite`] carries both halves of the coordinate: `slot`
-/// names which of the three refused, in M7's numbering ([`FROM`]/[`TO`]/
-/// [`TYPE`], the numbering [`Op::FollowLink`]'s `slot` is already in), and
-/// `index` the offending spec's position within it.
+/// it. [`crate::FaultSite`] localizes the refusal in two fields: `slot` names
+/// which of the three refused, in M7's numbering ([`FROM`]/[`TO`]/[`TYPE`],
+/// the numbering [`Op::FollowLink`]'s `slot` is already in), and `index` the
+/// offending spec's position within it.
 ///
 /// [`FROM`]: crate::FROM
 /// [`TO`]: crate::TO
@@ -688,11 +688,11 @@ impl Op {
             | Op::DeleteOrphans { d, .. }
             | Op::Project { d, .. }
             | Op::DiscoverableFrom { d, .. } => vec![d],
-            // The two publication reads (lane 3.4): each names ONE document,
-            // and it is the consulted one — `doc_metadata` answers nothing
-            // about a document the caller cannot read (PUB-8.12), and the
-            // edition lookup's `target` is a named document, not a probe key
-            // (PUB-8.46; the H1 row: unreadable ⟹ withheld).
+            // The two publication reads that take a document (lane 3.4): each
+            // names ONE, and it is the consulted one — `doc_metadata` answers
+            // nothing about a document the caller cannot read (PUB-8.12), and
+            // the edition lookup's `target` is a named document, not a probe
+            // key (PUB-8.46; the H1 row: unreadable ⟹ withheld).
             Op::DocMetadata { doc } => vec![doc],
             Op::EditionClaims { target } => vec![target],
             // No named document to withhold (see above); written out rather

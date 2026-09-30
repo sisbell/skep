@@ -21,9 +21,10 @@ use crate::response::EditionClaim;
 /// the answer and the `as_of` it is stamped with stand on one committed state.
 ///
 /// `principal` is `None` for the GUEST (published alone). Implemented by the
-/// engine's `World` (the exception set beside the grant fold); the daemon's
-/// source-gate [`ReadPredicate`] is the same predicate reached the write
-/// path's way.
+/// engine's `World` (the exception set beside the grant fold). A write
+/// reaches this same predicate as the VISIBILITY CLASS M10 lends a store for
+/// one write; a front door that supplies a [`ReadPredicate`] — the historical
+/// door — answers through that instead, on both paths.
 /// The STRUCK second form — handing readers the principal's account and grant
 /// set — is deliberately absent: what threads down is this opaque `bool`, never
 /// the sets behind it.
@@ -116,15 +117,15 @@ pub trait PublicationWorld {
     ///
     /// [`Op::UniversalGrants`]: crate::Op::UniversalGrants
     /// [`UniversalGrant`]: crate::UniversalGrant
-    fn universal_grants(&self) -> Vec<UniversalIndexRow>;
+    fn universal_grant_index(&self) -> Vec<UniversalIndexRow>;
 }
 
 /// One STORED row of the grant fold's live ANY-PRINCIPAL index, as
-/// [`PublicationWorld::universal_grants`] hands it over (PUB-8.47, PUB-7.22):
-/// a content prefix as the index keys it, and the issuers whose index entries
-/// name it. OWNED, so the seam carries no lifetime of the world behind it:
-/// the narrowing takes the rows by value and moves each issuer into the
-/// served row it lands in.
+/// [`PublicationWorld::universal_grant_index`] hands it over (PUB-8.47,
+/// PUB-7.22): a content prefix as the index keys it, and the issuers whose
+/// index entries name it. OWNED, so the seam carries no lifetime of the world
+/// behind it: the narrowing takes the rows by value and moves each issuer
+/// into the served row it lands in.
 ///
 /// A row of the INDEX, never of an answer (RES-258). Coverage is containment
 /// ∩ the issuer's own documents (PUB-5.9), and the fold applies the ownership

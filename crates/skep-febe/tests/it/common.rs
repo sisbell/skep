@@ -134,25 +134,26 @@ thread_local! {
     /// the engine would enumerate it, content prefix and issuers per row. The
     /// fold is the engine's composition, so this miniature world carries none
     /// of its own and answers the empty index unless a test seeds it through
-    /// [`seed_universal_grants`]; the FOLD-FILTER that narrows each row into
-    /// a served one (RES-231/264/273/298) is M10's own and is what a test
+    /// [`seed_universal_grant_index`]; the FOLD-FILTER that narrows each row
+    /// into a served one (RES-231/264/273/298) is M10's own and is what a test
     /// seeding this is about. Cleared by [`surface`], as [`EDITION_CLAIMS`] is.
-    static UNIVERSAL_GRANTS: RefCell<Vec<UniversalIndexRow>> = const { RefCell::new(Vec::new()) };
+    static UNIVERSAL_GRANT_INDEX: RefCell<Vec<UniversalIndexRow>> =
+        const { RefCell::new(Vec::new()) };
 }
 
 /// Seed the index rows `Op::UniversalGrants` is answered from, RAW — the
 /// index, never the answer set: M10's own narrowing is what a test using
 /// this is about.
-pub fn seed_universal_grants(rows: Vec<UniversalIndexRow>) {
-    UNIVERSAL_GRANTS.with(|g| *g.borrow_mut() = rows);
+pub fn seed_universal_grant_index(rows: Vec<UniversalIndexRow>) {
+    UNIVERSAL_GRANT_INDEX.with(|g| *g.borrow_mut() = rows);
 }
 
 impl skep_febe::PublicationWorld for World {
     fn edition_claims(&self, _target: &Address) -> Vec<EditionClaim> {
         EDITION_CLAIMS.with(|c| c.borrow().clone())
     }
-    fn universal_grants(&self) -> Vec<UniversalIndexRow> {
-        UNIVERSAL_GRANTS.with(|g| g.borrow().clone())
+    fn universal_grant_index(&self) -> Vec<UniversalIndexRow> {
+        UNIVERSAL_GRANT_INDEX.with(|g| g.borrow().clone())
     }
 }
 impl From<M3Rec> for Record {
@@ -268,7 +269,7 @@ impl Stores<World> for KernelStores {
 
 pub fn surface() -> OperationSurface<World> {
     seed_edition_claims(Vec::new()); // the empty class, until a test seeds it
-    seed_universal_grants(Vec::new()); // …the empty universal index, likewise
+    seed_universal_grant_index(Vec::new()); // …the empty universal index, likewise
     seed_unreadable_world(Vec::new()); // …and a world that admits every read
     OperationSurface::new(Box::new(KernelStores { kernel: kernel() }))
 }

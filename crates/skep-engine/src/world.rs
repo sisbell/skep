@@ -486,7 +486,7 @@ impl skep_febe::PublicationWorld for World {
     /// `two_any_principal_grants_sharing_an_entry_are_withdrawn_together` pins
     /// through this impl. Recorded here, where M10 reads, and not decided:
     /// whether the index should count is PUB's question.
-    fn universal_grants(&self) -> Vec<skep_febe::UniversalIndexRow> {
+    fn universal_grant_index(&self) -> Vec<skep_febe::UniversalIndexRow> {
         World::universal_grants(self)
             .into_iter()
             .map(|UniversalGrantIndexRow { content_prefix, issuers }| {

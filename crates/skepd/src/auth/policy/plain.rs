@@ -15,11 +15,10 @@ use skep_engine::types::{
 use skep_febe::Op;
 use skep_identity::{AuditClass, Fingerprint, IdentityState, TargetClass, WriteTypes};
 use skep_kernel::Attestation;
-use skep_links::HasLinks;
+use skep_links::{enc, is_replaces_class, Endset, HasLinks, SlotArg};
 use skep_namespace::{first_document_address, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 
 use super::attestation::attestation_check;
-use super::credential::replaces_refusal;
 use super::CredentialRefusal;
 use crate::auth::fold::{identity_types, published_unprojected};
 use crate::auth::LockRead;
@@ -242,6 +241,66 @@ fn first_mint_private_refusal(
     } else {
         None
     }
+}
+
+// ── replaces_refusal — the `replaces` class's sole-writer fence (PUB-5.15) ──
+
+/// THE `replaces` TYPE HAS ONE WRITER (PUB-5.15; RES-309, its code RES-310's):
+/// `Some(ReplacesNotStandalone)` iff `op` is a link write whose OWN type slot
+/// lands in the `replaces` class — a `make_link`'s `ty`, an `emit`'s, an
+/// `edit_link` successor's — and `principal` owns every home it would
+/// deposit into. The class's one writer is the `make_link` that carries the
+/// `replaces` MEMBER, which mints the link beside its record in the record's
+/// own transaction; a link of the class deposited by itself would sit where
+/// the grant fold reads a record's pair and name a state for a record whose
+/// signed bytes named none. The class test is M7's own,
+/// [`skep_links::is_replaces_class`], asked of the slot the store would
+/// deposit — `enc(addrs)` for the address form, and nothing for a `Resolve`
+/// slot, which resolves to content and never names the class — so this
+/// refusal and the store's own fence fall on the same slots, and the wire
+/// answers with the ruled code where the store would have answered
+/// `dc_violation`. A `replaces`-typed write is never a credential deposit, so
+/// the fence is the plain sequence's alone.
+///
+/// ITS PLACE IN THE WRITE ORDER (PUB-5.15: its "place in the write path's
+/// order" is OWED AT THE BUILD): in the plain path's admission, after the
+/// mint class — which reads no link write, so the two are disjoint — and
+/// AHEAD of the board-state pair: the pre-claim gate, the publish-class gate
+/// and the write-path check behind it. So the home's owner is told the act
+/// is never admitted before being asked to claim, to sign, or to attach an
+/// attestation it could only spend on a refusal. And AFTER the destination's
+/// registration and ω, as PUB-6.36 puts the destination's `not_owner` first
+/// everywhere: a caller who does not own every home the write names — an
+/// `edit_link` names two — answers `None` here and meets `execute`'s own
+/// `home_not_registered` or `not_owner`, M7's home gate running ahead of its
+/// own fence exactly so. What the refusal discloses is the op's own shape,
+/// to the one caller whose write it is.
+///
+/// `world` MUST be the snapshot taken under the read guard for this request;
+/// the guard argument is that contract's cheap half.
+fn replaces_refusal(
+    _lock: &LockRead<'_>,
+    world: &World,
+    op: &Op,
+    principal: PrincipalId,
+) -> Option<CredentialRefusal> {
+    let address_form = |slot: &SlotArg| match slot {
+        SlotArg::Addrs(addrs) => Some(enc(addrs.iter())),
+        SlotArg::Resolve(_) => None,
+    };
+    let (ty, homes): (Endset, Vec<&Address>) = match op {
+        Op::MakeLink { home, ty, .. } => (address_form(ty)?, vec![home]),
+        Op::Emit { home, ty, .. } => (ty.clone(), vec![home]),
+        Op::EditLink { successor, d_s, d_a, .. } => (address_form(&successor.ty)?, vec![d_s, d_a]),
+        _ => return None,
+    };
+    if !is_replaces_class(&ty) {
+        return None;
+    }
+    let m3 = world.m3();
+    let owned =
+        |home: &&Address| m3.is_registered_document(home) && m3.is_effective_owner(principal, home);
+    homes.iter().all(owned).then_some(CredentialRefusal::ReplacesNotStandalone)
 }
 
 // ── board_state_admission — the two CLAIM-complementary gates (AUTH-3.78) ─

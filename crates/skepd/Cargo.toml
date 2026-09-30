@@ -38,13 +38,15 @@ observe = ["skep-engine/dump"]
 client = []
 # `test-hooks` compiles in the test-only code: `Daemon`'s `#[doc(hidden)]`
 # hooks (server/hooks.rs) and the claim-flip hold one of them arms, the
-# `fuzz_support` harness, the `Permit` re-export the pool hooks return, and
-# `skep-signature`'s own `test-hooks` — its fixture hooks, and the signer
-# they imply. DEFAULT-OFF, and the shipped binary never enables it: this
-# crate's own tests turn it on through the self dev-dependency below, and
-# skep-mcp's tests and skep/fuzz/ on their `skepd` lines, so a build that
-# compiles no test compiles none of it.
-test-hooks = ["skep-signature/test-hooks"]
+# `fuzz_support` harness, and the `Permit` re-export the pool hooks return —
+# and turns on nothing in another crate: `skep-signature`'s signer and
+# fixture hooks reach this crate's tests through their own dev-dependency
+# line below, and a consumer that signs names the feature it needs on its
+# own `skep-signature` line. DEFAULT-OFF, and the shipped binary never
+# enables it: this crate's own tests turn it on through the self
+# dev-dependency below, and skep-mcp's tests and skep/fuzz/ on their `skepd`
+# lines, so a build that compiles no test compiles none of it.
+test-hooks = []
 
 [dependencies]
 # The assembled engine: Engine::open (genesis-or-recover), the Stores<World>
@@ -73,7 +75,7 @@ skep-identity = { path = "../skep-identity" }
 # (AUTH-2.2) — the session verify, the write-path check — and its all-halves
 # decode, the enrollment courtesy's. NO feature: its `sign` half (the KDF,
 # keygen, signing) stays out of the daemon's build, which holds no signer
-# (AUTH-2.89); `test-hooks` above and the tests' line below turn it on.
+# (AUTH-2.89); the tests' line below turns it on for test builds alone.
 skep-signature = { path = "../skep-signature" }
 # OS entropy for nonces and session tokens (AUTH-4.13: at least 128 bits per
 # token from a CryptoRng, never a per-process prefix plus a counter), and
@@ -108,12 +110,13 @@ parking_lot.workspace = true
 # tests with the dump route after all.
 skepd = { path = ".", features = ["test-hooks"], default-features = false }
 tempfile.workspace = true
-# Test-side SIGNING (the daemon itself only verifies): the ceremony and
-# handshake suites hold deterministic seed keypairs (SigningKey::from_bytes)
-# and sign session payloads with them. No rand feature — seeds are fixed.
+# Test-side keys (the daemon itself only verifies): the suites' fixed seed
+# carriers are `SigningKey::from_bytes` — the 32 bytes that seed each hybrid
+# key (`common::seed_of`); the crate's `Signer`, over a hybrid key's derived
+# Ed25519 half, makes the one Ed25519-only blob the suites send as a negative
+# vector; and its point decode finds the non-point an undecodable key
+# carries. No rand feature — seeds are fixed.
 ed25519-dalek = "2"
-# The record grammar the ceremony helper encodes enrollments with.
-skep-identity = { path = "../skep-identity" }
 # The TEST SIGNER and its fixture hooks: the suites derive each seed
 # carrier's hybrid key (`HybridSigner::from_seed`), sign sessions and entries
 # with it, and reach the seeded RNG and the Ed25519 half through the hooks.

@@ -22,7 +22,7 @@ use skep_namespace::HasM3;
 
 /// The challenge TTL — a PIN, not a knob: `ttl_ms` on the wire is a byte
 /// pin of this constant (AUTH-4.12).
-pub(crate) const CHALLENGE_TTL: Duration = Duration::from_secs(60);
+const CHALLENGE_TTL: Duration = Duration::from_secs(60);
 
 /// [`CHALLENGE_TTL`] as the WIRE publishes it — `ttl_ms` on `GET /challenge`
 /// (AUTH-6.1), and a byte pin of that constant, derived beside it as
@@ -43,7 +43,7 @@ const _: () = assert!(
 
 /// Session-token unpredictability (AUTH-4.13): at least this many bits per
 /// token from a `CryptoRng` — never a per-process prefix plus a counter.
-pub(crate) const SESSION_TOKEN_BITS: usize = 128;
+const SESSION_TOKEN_BITS: usize = 128;
 
 /// The floor met exactly, as the byte width [`Token`] holds and
 /// [`Sessions::open`] draws per token.
@@ -87,7 +87,7 @@ impl Peer {
         }
     }
 
-    pub(crate) fn is_loopback(self) -> bool {
+    fn is_loopback(self) -> bool {
         matches!(self, Peer::Loopback)
     }
 }
@@ -428,7 +428,7 @@ pub(crate) fn bare_bind_allowed(
 /// account between it and the set it authenticated against, moves THIS
 /// answer to a set the session's key is not in (the handoff latch,
 /// AUTH-2.71, refuses a genesis naming a key of the set above).
-pub(crate) fn key_subject(
+pub(super) fn key_subject(
     world: &World,
     identity: &IdentityState,
     p: PrincipalId,
@@ -452,7 +452,7 @@ pub(crate) fn key_subject(
 /// and `X.1` holds no set of its own), so the daemon's session doors and its
 /// record verify read one walk and cannot disagree about whose keys open an
 /// account.
-pub(crate) fn opening_account(identity: &IdentityState, own: &Address) -> Address {
+pub(super) fn opening_account(identity: &IdentityState, own: &Address) -> Address {
     if identity.key_set(own).is_empty() {
         if let Some(above) = keyed_above(identity, own) {
             return above;
@@ -473,7 +473,7 @@ pub(crate) fn opening_account(identity: &IdentityState, own: &Address) -> Addres
 /// at, "the account AUTH-4.30 (i)'s walk stops at" — so the two are this
 /// one function, and a handoff is told at exactly the account whose keys
 /// open the address it hands away (RES-172).
-pub(crate) fn keyed_above(identity: &IdentityState, a: &Address) -> Option<Address> {
+pub(super) fn keyed_above(identity: &IdentityState, a: &Address) -> Option<Address> {
     std::iter::successors(parent(a), parent)
         .take_while(|above| above.level() == Level::Account)
         .find(|above| !identity.key_set(above).is_empty())
@@ -486,7 +486,7 @@ pub(crate) fn keyed_above(identity: &IdentityState, a: &Address) -> Option<Addre
 /// THIS ONE's (step 4b; [`resolve`]'s blocked arm): an entry over exactly
 /// `X.1` covers a session as `X.1`, whosever set opened it, and an entry
 /// over `X.1` never reaches a session as `X`.
-pub(crate) fn session_account(
+fn session_account(
     world: &World,
     identity: &IdentityState,
     p: PrincipalId,
@@ -751,7 +751,7 @@ pub(crate) fn parse_session_body(body: &[u8]) -> Result<SessionBody, String> {
 /// 2026-09-26 "keep v1/v2 names"): the key's two halves sign these SAME
 /// bytes and `sig` holds the post-quantum signature then the Ed25519
 /// signature — the field list unchanged, no `skep-session-v3`/`-v4`.
-pub(crate) fn session_payload(
+fn session_payload(
     origin: &Origin,
     nonce_hex: &str,
     p: PrincipalId,

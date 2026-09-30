@@ -59,7 +59,7 @@ pub(super) fn addr_of(comps: &[u32]) -> Address {
 
 /// The ONE `TypeAddrs` (`IDENTITY_TYPES`, AUTH-2.79) — an I2 frozen
 /// constant; every classifier and the fold read this instance.
-pub(crate) fn identity_types() -> &'static TypeAddrs {
+pub(super) fn identity_types() -> &'static TypeAddrs {
     static TYPES: LazyLock<TypeAddrs> = LazyLock::new(|| {
         TypeAddrs::new(addr_of(&T_ENROLL), addr_of(&T_RETIRE), addr_of(&T_CLAIM))
     });
@@ -84,7 +84,7 @@ pub(super) fn published_unprojected(world: &World, a: &Address) -> bool {
 /// which is M3's per-document bit indexed for a membership miss. The two
 /// readings OF that set — this one and the publish-class gate's — differ by
 /// PUB-2.15's projection alone, which `is_published` states below.
-pub(crate) struct WorldCtx<'a>(pub &'a World);
+pub(super) struct WorldCtx<'a>(pub &'a World);
 
 impl Values for WorldCtx<'_> {
     fn value_at(&self, at: &Tumbler) -> Option<&[u8]> {

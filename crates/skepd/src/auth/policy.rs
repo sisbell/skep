@@ -6,9 +6,7 @@
 //!
 //! - `credential` — the CREDENTIAL sequence's (AUTH-3.37): slots (1)–(2)
 //!   ahead of the credential write lock, the precheck's slots (3)–(8) under
-//!   it — and, beside slots (1)–(2), the one other refusal a write's OWN
-//!   type slot decides, the `replaces` class's fence, which the plain
-//!   sequence asks;
+//!   it, and the record grade's check inside slot (7);
 //! - `plain` — the PLAIN sequence's admission (AUTH-3.35): the mint class,
 //!   the `replaces` fence, the board-state pair and the nullify class, in
 //!   their pinned order;
@@ -73,8 +71,9 @@ fn slotarg_kind(s: &SlotArg) -> Option<CredentialKind> {
 /// the record grade's VERIFY at that link (`policy/credential.rs`'s
 /// `record_grade_check`, which parses the record by the kind this answers).
 /// Stated once so the three cannot part: a kind exempt at the atom but never
-/// verified at the link would commit a record no signature covers.
-pub(crate) fn record_deposit_kind(ty: &[Span]) -> Option<CredentialKind> {
+/// verified at the link would commit a record no signature covers. Private to
+/// this module and its children, where all three readers live.
+fn record_deposit_kind(ty: &[Span]) -> Option<CredentialKind> {
     identity_types().kind_of(ty)
 }
 

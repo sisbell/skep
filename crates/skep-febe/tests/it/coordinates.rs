@@ -32,13 +32,15 @@ fn at_of(kind: OpKind, r: &Response) -> Seq {
 /// moved to. Exact, and safe to state exactly — M2 mints one `Seq` per record
 /// and returns the last of the range, which is the installed root's
 /// coordinate, and a zero-step transaction returns the base seq, which is
-/// that same head.
+/// that same head. And it is no snapshot coordinate: [`Response::as_of`]
+/// answers `None` for every acknowledging shape.
 fn assert_committed(fx: &Fixture, kind: OpKind, r: &Response, seen: &mut Vec<OpKind>) {
     assert_eq!(
         at_of(kind, r),
         fx.febe.log_position(),
         "{kind:?} acknowledged at a coordinate that is not the one it committed"
     );
+    assert_eq!(r.as_of(), None, "{kind:?}: an acknowledgment reports no snapshot");
     assert!(!seen.contains(&kind), "{kind:?} is covered twice");
     seen.push(kind);
 }
@@ -180,6 +182,12 @@ fn every_write_acks_at_the_coordinate_it_committed() {
 /// once ahead of it is that coordinate for all 28 — a read that reports
 /// anything else is telling the client it has seen a position it has not.
 ///
+/// The 28 answer in all nineteen read shapes, so the law is also the one
+/// check on [`Response::as_of`] and [`Response::as_of_mut`]: each is asked of
+/// every read shape and must answer the head, so a shape either accessor
+/// moved into its `None` arm — a stamp a historical door would then skip —
+/// fails here.
+///
 /// This pins the coordinate M10 *reports*. That every constituent of one
 /// answer came off one root (A3/V2) is structural — it belongs to the single
 /// snapshot `dispatch_read` pins — and no single-threaded test can distinguish
@@ -261,10 +269,18 @@ fn every_read_reports_the_committed_head_as_its_as_of() {
     }
 
     let head = fx.febe.log_position();
+    let mut shapes = std::collections::HashSet::new();
     for op in reads {
         let kind = op.kind();
-        let r = ex(&fx.febe, fx.user, op);
+        let mut r = ex(&fx.febe, fx.user, op);
         assert_eq!(as_of(&r), head, "{kind:?} reports the snapshot it answered from");
+        assert_eq!(
+            r.as_of_mut().copied(),
+            Some(head),
+            "{kind:?}: the mutable accessor classifies the shape alike"
+        );
+        shapes.insert(std::mem::discriminant(&r));
     }
+    assert_eq!(shapes.len(), 19, "the 28 reads answer in every one of the nineteen read shapes");
     assert_eq!(fx.febe.log_position(), head, "no read moves the log");
 }

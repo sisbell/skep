@@ -11,8 +11,8 @@ use skep_arrangement::{Run, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{FourSet, SlotSpec, SupClaim, Window};
 use skep_febe::{
-    disposition_of, Deposit, Disposition, EditionClaim, FaultSite, Op, OpKind, RejectCode,
-    Rejection, Response, SlotArg, SuccessorSpec, UniversalGrant,
+    Deposit, Disposition, EditionClaim, FaultSite, Op, OpKind, RejectCode, Rejection, Response,
+    SlotArg, SuccessorSpec, UniversalGrant,
 };
 use skep_identity::{KeySet, SigAlgRow};
 use skep_kernel::{Attestation, Seq};
@@ -84,7 +84,7 @@ pub(crate) fn key_set_reply(as_of: Seq, set: Option<&KeySet>) -> Vec<u8> {
         return daemon_rejected(DaemonRejection {
             op: "key_set",
             code: code_name(RejectCode::NotAnAccount),
-            disposition: disposition_of(RejectCode::NotAnAccount),
+            disposition: RejectCode::NotAnAccount.disposition(),
             detail: None,
         });
     };
@@ -850,9 +850,13 @@ fn j_edition_claims(cs: &[EditionClaim]) -> Value {
 /// the COVERED content prefix — the stored prefix where the registry's
 /// `effective_owner` answers the issuer for it, or the issuer's own account
 /// where the stored prefix is wider (PUB-8.47; RES-298), so every issuer
-/// listed owns it — and the issuing accounts, in address order.
+/// listed owns it — and the issuing accounts, in address order: the set's
+/// own iteration order, rendered as the list the shape rules.
 fn j_universal_grant(g: &UniversalGrant) -> Value {
-    obj(vec![("prefix", j_addr(&g.prefix)), ("issuers", j_addrs(&g.issuers))])
+    obj(vec![
+        ("prefix", j_addr(&g.prefix)),
+        ("issuers", Value::Array(g.issuers.iter().map(j_addr).collect())),
+    ])
 }
 
 fn j_universal_grants(gs: &[UniversalGrant]) -> Value {

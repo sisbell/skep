@@ -309,27 +309,26 @@ fn historical_reads_answer_every_earlier_state() {
     sd.shutdown();
 }
 
-/// `stamp_as_of`'s stamped arm, restated: moving a shape between its two
-/// arms is a visible decision here, the discipline this suite already
-/// applies to the codec's wire caps. Nineteen: the seventeen of lane 3.4,
-/// the owner-of-address read's `effective_owner` (AUTH-6.37) and the
-/// any-principal discovery read's `universal_grants` (PUB-8.47).
+/// The read shapes the history route stamps: every one M10's
+/// `Response::as_of_mut` classifies as carrying an `as_of`. Nineteen: the
+/// seventeen of lane 3.4, the owner-of-address read's `effective_owner`
+/// (AUTH-6.37) and the any-principal discovery read's `universal_grants`
+/// (PUB-8.47). The test below counts the shapes its rows visit against this,
+/// so its rows are known to reach every one.
 const STAMPED_SHAPES: usize = 19;
 
 /// wire.md §The response envelope: `as_of` reports the position the answer
 /// is OF. On the history surface `stamp_as_of` is what makes that true —
 /// the throwaway kernel is rooted at the historical world with its own seq
-/// at 0, so M10's live stamping must be overwritten — and it is a
-/// hand-written nineteen-shape table whose doc says "every read shape is
-/// listed".
+/// at 0, so M10's live stamping must be overwritten.
 ///
-/// Deleting a variant from it is a compile error. MOVING one to the
-/// unstamped arm is not, since that arm binds nothing, so
-/// `Response::Count { .. }` is a legal alternative there. The shape then
-/// answers `as_of: 0` at every position, and a client scrubbing history or
-/// correlating a historical read with `/changes` reads the answer as one
-/// of genesis. Three shapes were watched; the other sixteen would move
-/// with nothing red.
+/// Which shapes carry an `as_of` is M10's classification, and M10's own
+/// coordinate law holds `Response::as_of_mut` to every read shape. What this
+/// pins is the other half, over the wire: that the history route APPLIES
+/// the stamp to each of them. A shape the route left unstamped would answer
+/// `as_of: 0` at every position, and a client scrubbing history or
+/// correlating a historical read with `/changes` would read the answer as
+/// one of genesis.
 #[test]
 fn every_read_shape_stamps_the_position_it_is_of() {
     let dir = tempfile::tempdir().expect("tempdir");

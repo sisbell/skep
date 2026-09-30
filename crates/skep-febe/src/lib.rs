@@ -184,13 +184,7 @@ mod operation;
 pub use codec::{Codec, ParseError};
 pub use op::{Op, OpKind, ReqId, Request, SuccessorSpec, MAX_REQ_ID_BYTES};
 pub use operation::{consult_read, OperationSurface, ReadPredicate};
-// `disposition_of` and `Rejection::classified` are public for the reason the
-// disposition is documented as recomputable: a transport that raises one of
-// M10's own codes on its own channel asks the table — or builds the whole
-// rejection through the constructor that consults it — rather than
-// transcribing the row, so the two cannot come to advise the same code
-// differently.
-pub use reject::{disposition_of, Disposition, FaultSite, RejectCode, Rejection};
+pub use reject::{Disposition, FaultSite, RejectCode, Rejection};
 pub use response::{BirthVersion, EditionClaim, Response, UniversalGrant};
 pub use session::SessionId;
 pub use world::{FebeWorld, PublicationWorld, ReadableWorld, Stores, UniversalIndexRow};

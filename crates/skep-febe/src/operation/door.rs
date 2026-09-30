@@ -139,14 +139,17 @@ impl<W: FebeWorld> OperationSurface<W> {
     /// &Address)` and is closed over the front door rather than over a
     /// world.
     ///
-    /// `Send + Sync` are declared rather than left to inference, because an
-    /// `impl Trait` return exposes only the bounds it states and the readers
-    /// this is threaded into take `Send + Sync` predicates.
+    /// No auto traits are named. A return-position `impl Trait` leaks its
+    /// closure's `Send`/`Sync` to callers whether or not it states them, and
+    /// no consumer needs them: each takes a bare `&dyn Fn(&Address) -> bool`
+    /// and asks it on the request's own thread.
+    /// [`OperationSurface::visible_to`] names them because the one thing it
+    /// is lent to does.
     pub(super) fn readable_by<'a>(
         &'a self,
         world: &'a W,
         principal: Option<PrincipalId>,
-    ) -> impl Fn(&Address) -> bool + Send + Sync + 'a {
+    ) -> impl Fn(&Address) -> bool + 'a {
         move |doc: &Address| self.readable(world, principal, doc)
     }
 
@@ -165,6 +168,9 @@ impl<W: FebeWorld> OperationSurface<W> {
     /// read, the head snapshot the predicate closed over being the world it
     /// reads; such a door dispatches no write today, and the case is the
     /// round's escalated one.
+    ///
+    /// `Send + Sync` are stated because M7's `Visibility` names them, which
+    /// moves an error to this definition rather than the store's call.
     pub(super) fn visible_to(
         &self,
         principal: PrincipalId,

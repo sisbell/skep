@@ -308,34 +308,13 @@ pub(crate) fn detached_kernel(world: World) -> Kernel<World> {
 /// Stamp the requested position as `as_of`: the throwaway kernel is rooted
 /// at the historical world with its own seq at 0, so M10's snapshot-seq
 /// stamping — correct live — must be overwritten with the position the
-/// answer is OF. Purely mechanical; every read shape is listed, writes
-/// cannot reach here, and rejections carry no `as_of` at history exactly as
-/// they carry none live.
+/// answer is OF. Which shapes carry an `as_of` is M10's classification,
+/// asked through `Response::as_of_mut` rather than restated here: every read
+/// shape is stamped, writes cannot reach here, and rejections carry no
+/// `as_of` at history exactly as they carry none live.
 fn stamp_as_of(resp: &mut Response, at: Seq) {
-    match resp {
-        Response::Delivery { as_of, .. }
-        | Response::SpanSet { as_of, .. }
-        | Response::Addrs { as_of, .. }
-        | Response::MaybeAddr { as_of, .. }
-        | Response::EffectiveOwner { as_of, .. }
-        | Response::Count { as_of, .. }
-        | Response::Page { as_of, .. }
-        | Response::Endsets { as_of, .. }
-        | Response::Runs { as_of, .. }
-        | Response::Bool { as_of, .. }
-        | Response::LinkValue { as_of, .. }
-        | Response::Follow { as_of, .. }
-        | Response::Deletions { as_of, .. }
-        | Response::Compare { as_of, .. }
-        | Response::Orphans { as_of, .. }
-        | Response::Claims { as_of, .. }
-        | Response::DocMetadata { as_of, .. }
-        | Response::EditionClaims { as_of, .. }
-        | Response::UniversalGrants { as_of, .. } => *as_of = at,
-        Response::Ack { .. }
-        | Response::AckAddr { .. }
-        | Response::AckEdit { .. }
-        | Response::Rejected(_) => {}
+    if let Some(as_of) = resp.as_of_mut() {
+        *as_of = at;
     }
 }
 

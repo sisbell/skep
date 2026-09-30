@@ -299,39 +299,12 @@ pub fn rejected(r: Response) -> Rejection {
 }
 
 /// The snapshot coordinate a read answer reports (A2/V1) — the one field
-/// every read shape carries and every extractor below drops.
-///
-/// EXHAUSTIVE with no `_` arm, for the reason `Response::as_ack` is: a new
-/// response shape must be classified as a read answer or not before this
-/// file compiles. The three acknowledging shapes carry a *committed*
-/// coordinate, not a snapshot one, so asking here is the question's own
-/// mistake and says so.
+/// every read shape carries and every extractor below drops. It asks M10's
+/// own [`Response::as_of`], whose match is the classification, and requires
+/// a read answer: an acknowledgment carries a *committed* coordinate and a
+/// rejection none, so asking here is the question's own mistake and says so.
 pub fn as_of(r: &Response) -> Seq {
-    match r {
-        Response::Delivery { as_of, .. }
-        | Response::SpanSet { as_of, .. }
-        | Response::Addrs { as_of, .. }
-        | Response::MaybeAddr { as_of, .. }
-        | Response::EffectiveOwner { as_of, .. }
-        | Response::Count { as_of, .. }
-        | Response::Page { as_of, .. }
-        | Response::Endsets { as_of, .. }
-        | Response::Runs { as_of, .. }
-        | Response::Bool { as_of, .. }
-        | Response::LinkValue { as_of, .. }
-        | Response::Follow { as_of, .. }
-        | Response::Deletions { as_of, .. }
-        | Response::Compare { as_of, .. }
-        | Response::Orphans { as_of, .. }
-        | Response::Claims { as_of, .. }
-        | Response::DocMetadata { as_of, .. }
-        | Response::EditionClaims { as_of, .. }
-        | Response::UniversalGrants { as_of, .. } => *as_of,
-        Response::Rejected(rej) => panic!("expected a read answer, got a rejection: {rej}"),
-        Response::Ack { .. } | Response::AckAddr { .. } | Response::AckEdit { .. } => {
-            panic!("a committed write reports `at`, not `as_of`")
-        }
-    }
+    r.as_of().unwrap_or_else(|| panic!("expected a read answer, got {r:?}"))
 }
 
 pub fn ack(r: Response) -> Seq {

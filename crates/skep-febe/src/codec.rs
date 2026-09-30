@@ -199,7 +199,6 @@ impl Rejection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reject::disposition_of;
 
     /// The parse-failure rejection is classified by the same table as every
     /// other `Malformed`, and carries the codec's cause when it has one.
@@ -208,17 +207,20 @@ mod tests {
         let rej = Rejection::unparseable(ParseError { detail: Some("unknown op".into()) });
         assert_eq!(rej.op, OpKind::Unparseable);
         assert_eq!(rej.code, RejectCode::Malformed);
-        assert_eq!(rej.disposition, disposition_of(RejectCode::Malformed));
+        assert_eq!(rej.disposition, RejectCode::Malformed.disposition());
         assert_eq!(rej.detail.as_deref(), Some("unknown op"));
         let bare = Rejection::unparseable(ParseError { detail: None });
         assert!(bare.detail.is_none());
     }
 
-    /// A parse failure is a std error, as a rejection is: boxable, and
-    /// rendered with the codec's cause when it has one.
+    /// A parse failure is a std error, as a rejection is: boxable as
+    /// `Box<dyn Error + Send + Sync>` (C-GOOD-ERR), and rendered with the
+    /// codec's cause when it has one.
     #[test]
     fn a_parse_error_is_a_std_error() {
-        fn boxed(e: impl std::error::Error + 'static) -> Box<dyn std::error::Error> {
+        fn boxed(
+            e: impl std::error::Error + Send + Sync + 'static,
+        ) -> Box<dyn std::error::Error + Send + Sync> {
             Box::new(e)
         }
 

@@ -28,6 +28,7 @@ mod dispatch;
 
 pub use door::{consult_read, ReadPredicate};
 
+use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use skep_address::Address;
@@ -82,6 +83,25 @@ pub struct OperationSurface<W: WorldState> {
     /// pins, and the publish arm over the working world M5 hands its source
     /// gate.
     read_predicate: Option<Box<ReadPredicate>>,
+}
+
+/// Lock-free, as the kernel's own `Debug` is: the kernel this surface answers
+/// through — M2's rendering, which reads the installed head and the poison bit
+/// without a lock, so `dbg!` is safe anywhere — and whether a supplied
+/// [`ReadPredicate`] answers in place of the world's, the one fact about a
+/// front door that decides every masked answer and that nothing else shows.
+/// Nothing more: the session table and the retry memo sit behind locks, and
+/// the poison MIRROR lags the bit the kernel field prints. Written out rather
+/// than derived, as M5's `Vstream` and M7's `LinkWriter` are: a derive would
+/// bound the impl on `W: Debug`, and the factory and the predicate are trait
+/// objects that carry none.
+impl<W: WorldState> fmt::Debug for OperationSurface<W> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OperationSurface")
+            .field("kernel", self.stores.kernel())
+            .field("read_predicate", &self.read_predicate.as_ref().map(|_| "supplied"))
+            .finish_non_exhaustive()
+    }
 }
 
 /// The proven-bound write context (§1). Step (b) resolves the principal
@@ -362,7 +382,7 @@ where
             // (c) refuse writes on a poisoned kernel; reads are still served
             //     through the else-branch (§9).
             if self.poisoned.load(Ordering::Relaxed) {
-                return reject(kind, RejectCode::Poisoned); // disposition_of ⇒ Halt
+                return reject(kind, RejectCode::Poisoned); // ⇒ Halt
             }
             match self.sessions.principal_of(session) {
                 // (b) the one place authority can fail
@@ -379,15 +399,14 @@ where
             self.dispatch_read(op, self.sessions.principal_of(session))
         }
         .unwrap_or_else(Response::Rejected);
-        // (d) memoize ONLY a committed-write ack. `as_ack` is what decides —
+        // (d) memoize ONLY a committed-write ack. `to_ack` is what decides —
         //     a Rejected and a read answer both yield None, so neither can
         //     be replayed (a Reorder/Retry reissue MUST re-execute; a cached
         //     read would replay a stale snapshot). The memo holds that small
         //     ack, not the Response (§7). Nested on the id, so a request that
-        //     carried none never builds the ack it would then drop — `as_ack`
-        //     clones the acknowledged addresses.
+        //     carried none never builds an ack it would then drop.
         if let Some(id) = id {
-            if let Some(ack) = resp.as_ack() {
+            if let Some(ack) = resp.to_ack() {
                 self.idem.put(session, id, kind, ack);
             }
         }

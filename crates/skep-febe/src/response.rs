@@ -2,6 +2,8 @@
 //! write carries the committed `Seq` and every read answer the snapshot `Seq`
 //! (ASN-0134 A1/A2/V1), while a rejection carries neither.
 
+use std::collections::BTreeSet;
+
 use skep_address::{Address, Nat, SpanSet};
 use skep_arrangement::{Run, ShotTerms};
 use skep_discovery::{OrphanReport, SupClaim, Window};
@@ -71,11 +73,12 @@ pub struct BirthVersion {
 /// the compare [`Op::UniversalGrants`] states, so every issuer listed ω-owns
 /// the prefix beside it, and the set a client is handed is the set the
 /// fold's `grant_exists` answers from (RES-231, RES-264, RES-273, RES-298).
-/// Rows come in prefix order, each issuer list in address order without a
-/// repeat. `issuers` is a list because RES-224 rules the shape — one row per
-/// content prefix with the issuers who granted it — and in practice it holds
-/// exactly ONE: ω is a function, and every issuer the fold indexes is a seat
-/// ω answers itself at (the obligation [`UniversalIndexRow`] states).
+/// Rows come in prefix order. `issuers` is a SET — address order and no
+/// repeat are its type's — which the codec renders as the list RES-224's
+/// shape rules: one row per content prefix with the issuers who granted it.
+/// In practice it holds exactly ONE: ω is a function, and every issuer the
+/// fold indexes is a seat ω answers itself at (the obligation
+/// [`UniversalIndexRow`] states).
 ///
 /// [`UniversalIndexRow`]: crate::UniversalIndexRow
 /// [`Op::UniversalGrants`]: crate::Op::UniversalGrants
@@ -83,13 +86,15 @@ pub struct BirthVersion {
 pub struct UniversalGrant {
     /// The covered content prefix — a document or an account address.
     pub prefix: Address,
-    /// The issuing accounts, each ω-owning `prefix`, in address order.
-    pub issuers: Vec<Address>,
+    /// The issuing accounts, each ω-owning `prefix` — a set, so it iterates
+    /// in address order and holds no issuer twice.
+    pub issuers: BTreeSet<Address>,
 }
 
 /// The marshaled response. Every variant but [`Response::Rejected`] carries
 /// one coordinate — `at` on the three acknowledging shapes, `as_of` on every
-/// read answer — and what a client does with the pair is [the two
+/// read answer, which [`Response::as_of`] reads off whichever shape it is —
+/// and what a client does with the pair is [the two
 /// coordinates](crate#the-two-coordinates).
 ///
 /// A rejection carries none: it names the operation it refused and how, not a
@@ -229,14 +234,15 @@ pub enum Response {
 /// What a committed write acknowledges — ANY of the three acknowledging
 /// shapes, of which [`Response::Ack`] is only the barest — and the ONLY thing
 /// a lost acknowledgment can duplicate, so the only thing the idempotency
-/// cache holds (§1 step (d), §7). Cheap to `Clone` (`Seq` is `Copy`,
-/// `Address` is a tumbler), which is what lets the memo be replayed without
-/// cloning a `Response`.
+/// cache holds (§1 step (d), §7). Small — a `Seq` and at most two addresses
+/// — which is what lets the memo hold and replay it in place of a whole
+/// `Response`. Small is not free: cloning an `Address` allocates, which is
+/// the cost `to_ack`'s prefix names.
 ///
 /// The three shapes are the three acknowledging `Response` variants, and the
-/// correspondence is stated in one place — [`Response::as_ack`] and the
+/// correspondence is stated in one place — [`Response::to_ack`] and the
 /// `From` impl below — so a new acknowledging shape is a compile error at
-/// `as_ack` rather than a memo silently dropped.
+/// `to_ack` rather than a memo silently dropped.
 #[derive(Clone)]
 pub(crate) enum CommittedAck {
     /// [`Response::Ack`].
@@ -260,15 +266,92 @@ impl From<CommittedAck> for Response {
 }
 
 impl Response {
+    /// The SNAPSHOT coordinate a read answer reports (A2/V1): `Some` for every
+    /// read shape, `None` for the three acknowledgments — which carry the `at`
+    /// they committed at — and for a rejection, which reports no position.
+    /// What a client compares it against is [the two
+    /// coordinates](crate#the-two-coordinates).
+    ///
+    /// EXHAUSTIVE with no `_` arm: a newly added shape fails to compile here,
+    /// beside the catalogue it joins, until it is classified as a read answer
+    /// or not — so a transport that stamps, logs or compares positions asks
+    /// this one method rather than matching every read shape of its own.
+    pub fn as_of(&self) -> Option<Seq> {
+        // One catalogue, written here and in `as_of_mut`: the coordinate law
+        // over every read (`every_read_reports_the_committed_head_as_its_as_of`)
+        // asks both of every read shape, and counts the shapes it visits, so
+        // the two cannot come to classify a shape differently.
+        match self {
+            Response::Delivery { as_of, .. }
+            | Response::SpanSet { as_of, .. }
+            | Response::Addrs { as_of, .. }
+            | Response::MaybeAddr { as_of, .. }
+            | Response::EffectiveOwner { as_of, .. }
+            | Response::Count { as_of, .. }
+            | Response::Page { as_of, .. }
+            | Response::Endsets { as_of, .. }
+            | Response::Runs { as_of, .. }
+            | Response::Bool { as_of, .. }
+            | Response::LinkValue { as_of, .. }
+            | Response::Follow { as_of, .. }
+            | Response::Deletions { as_of, .. }
+            | Response::Compare { as_of, .. }
+            | Response::Orphans { as_of, .. }
+            | Response::Claims { as_of, .. }
+            | Response::DocMetadata { as_of, .. }
+            | Response::EditionClaims { as_of, .. }
+            | Response::UniversalGrants { as_of, .. } => Some(*as_of),
+            Response::Ack { .. }
+            | Response::AckAddr { .. }
+            | Response::AckEdit { .. }
+            | Response::Rejected(_) => None,
+        }
+    }
+
+    /// [`Response::as_of`], mutable — for a front door that answers off a
+    /// kernel of its own and restamps the position the answer is OF (skepd's
+    /// historical door, whose throwaway kernel counts from 0). `None`
+    /// wherever `as_of` is, so an acknowledgment's `at` and a rejection are
+    /// never restamped.
+    pub fn as_of_mut(&mut self) -> Option<&mut Seq> {
+        match self {
+            Response::Delivery { as_of, .. }
+            | Response::SpanSet { as_of, .. }
+            | Response::Addrs { as_of, .. }
+            | Response::MaybeAddr { as_of, .. }
+            | Response::EffectiveOwner { as_of, .. }
+            | Response::Count { as_of, .. }
+            | Response::Page { as_of, .. }
+            | Response::Endsets { as_of, .. }
+            | Response::Runs { as_of, .. }
+            | Response::Bool { as_of, .. }
+            | Response::LinkValue { as_of, .. }
+            | Response::Follow { as_of, .. }
+            | Response::Deletions { as_of, .. }
+            | Response::Compare { as_of, .. }
+            | Response::Orphans { as_of, .. }
+            | Response::Claims { as_of, .. }
+            | Response::DocMetadata { as_of, .. }
+            | Response::EditionClaims { as_of, .. }
+            | Response::UniversalGrants { as_of, .. } => Some(as_of),
+            Response::Ack { .. }
+            | Response::AckAddr { .. }
+            | Response::AckEdit { .. }
+            | Response::Rejected(_) => None,
+        }
+    }
+
     /// The committed-write acknowledgment this response carries, if it is
     /// one — `None` for every read answer and every rejection, neither of
     /// which may be replayed from the memo (a cached read replays a stale
-    /// snapshot; a Reorder/Retry reissue MUST re-execute).
+    /// snapshot; a Reorder/Retry reissue MUST re-execute). It builds an
+    /// OWNED ack, cloning the acknowledged addresses, which is the work its
+    /// `to_` prefix names (C-CONV).
     ///
     /// EXHAUSTIVE match with NO `_` arm: a newly added `Response` variant
     /// fails to compile here, beside the catalogue it joins, and must be
     /// classified as acknowledging or not before it can ship.
-    pub(crate) fn as_ack(&self) -> Option<CommittedAck> {
+    pub(crate) fn to_ack(&self) -> Option<CommittedAck> {
         match self {
             Response::Ack { at } => Some(CommittedAck::At { at: *at }),
             Response::AckAddr { addr, at } => {

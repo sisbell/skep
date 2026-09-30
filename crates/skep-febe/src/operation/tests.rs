@@ -177,6 +177,31 @@ fn the_operation_surface_is_send_and_sync() {
     assert_send_sync::<OperationSurface<World>>();
 }
 
+/// C-SEND-SYNC: the request a transport hands a worker and the answer it
+/// hands back. Both are `Send + Sync` today by inheritance alone — from M6's
+/// and M8's query results and M5's and M8's request values, none of which a
+/// `WorldState` bound constrains — so the promise is pinned where it is
+/// made, and a payload that revokes it fails this build, not a transport's.
+#[test]
+fn a_request_and_its_answer_are_send_and_sync() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Request>();
+    assert_send_sync::<Response>();
+}
+
+/// C-DEBUG over a world that has none: this module's `World` derives no
+/// `Debug`, so the impl asks nothing of `W`. The surface renders through
+/// M2's lock-free rendering of its kernel and says whether a supplied
+/// predicate answers.
+#[test]
+fn the_operation_surface_is_debug_over_a_world_that_is_not() {
+    let live = format!("{:?}", surface());
+    assert!(live.starts_with("OperationSurface { kernel: Kernel {"), "{live}");
+    assert!(live.ends_with("read_predicate: None, .. }"), "{live}");
+    let historical = format!("{:?}", surface().with_read_predicate(|_, _| true));
+    assert!(historical.contains(r#"read_predicate: Some("supplied")"#), "{historical}");
+}
+
 /// §6: ids are unique within an uptime; a closed session is unbound, so a
 /// later write on it is rejected `Unauthenticated` (Permanent) before any
 /// transaction — no store is touched.
@@ -301,7 +326,7 @@ fn a_halted_kernel_outranks_an_unbound_session() {
 }
 
 /// §7/§1(d): the memo admits a committed-write acknowledgment and
-/// nothing else. `as_ack` is what refuses the other two shapes, so
+/// nothing else. `to_ack` is what refuses the other two shapes, so
 /// neither a rejection surfaced through `execute` (a Reorder/Retry
 /// reissue MUST re-execute) nor a read answer (whose snapshot goes
 /// stale) can be memoized even when the request carried an id.
@@ -309,9 +334,9 @@ fn a_halted_kernel_outranks_an_unbound_session() {
 fn only_committed_writes_are_cached() {
     let febe = surface();
     let s = febe.open_session(PrincipalId(1));
-    assert!(Response::Count { n: 3, as_of: Seq(1) }.as_ack().is_none());
+    assert!(Response::Count { n: 3, as_of: Seq(1) }.to_ack().is_none());
     assert!(Response::Rejected(rejection(OpKind::Insert, RejectCode::Unauthenticated))
-        .as_ack()
+        .to_ack()
         .is_none());
     // A rejected write carrying an id leaves no entry behind.
     let id = ReqId(b"req-2".to_vec());

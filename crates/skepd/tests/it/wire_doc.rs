@@ -8,6 +8,7 @@
 //! response shape missing from the doc fails, and a doc marker without a
 //! fixture fails.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use serde_json::Value;
@@ -316,7 +317,10 @@ fn fixture(name: &str) -> Response {
         // claimant's draft, granted to every principal by the claimant — and
         // the guest's empty answer under the same tag.
         "universal_grants" => Response::UniversalGrants {
-            rows: vec![UniversalGrant { prefix: a(&[1, 0, 1, 0, 2]), issuers: vec![a(&[1, 0, 1])] }],
+            rows: vec![UniversalGrant {
+                prefix: a(&[1, 0, 1, 0, 2]),
+                issuers: BTreeSet::from([a(&[1, 0, 1])]),
+            }],
             as_of: Seq(9),
         },
         "universal_grants_empty" => Response::UniversalGrants { rows: Vec::new(), as_of: Seq(9) },

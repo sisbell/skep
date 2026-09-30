@@ -3,8 +3,8 @@ use super::*;
 /// §5 disposition table: the explicit Halt/Retry/Reorder rows.
 #[test]
 fn the_explicit_rows_advise_halt_retry_and_reorder() {
-    assert_eq!(disposition_of(RejectCode::Poisoned), Disposition::Halt);
-    assert_eq!(disposition_of(RejectCode::Durability), Disposition::Retry);
+    assert_eq!(RejectCode::Poisoned.disposition(), Disposition::Halt);
+    assert_eq!(RejectCode::Durability.disposition(), Disposition::Retry);
     for code in [
         RejectCode::BadTarget,
         RejectCode::DocNotRegistered,
@@ -16,7 +16,7 @@ fn the_explicit_rows_advise_halt_retry_and_reorder() {
         RejectCode::ParentNotRegistered,
         RejectCode::Withheld,
     ] {
-        assert_eq!(disposition_of(code), Disposition::Reorder);
+        assert_eq!(code.disposition(), Disposition::Reorder);
     }
 }
 
@@ -50,7 +50,7 @@ fn invariant_forced_and_state_dependent_codes_are_permanent() {
         RejectCode::BaseSuperseded,
         RejectCode::BaseExtentTooLarge,
     ] {
-        assert_eq!(disposition_of(code), Disposition::Permanent);
+        assert_eq!(code.disposition(), Disposition::Permanent);
     }
 }
 
@@ -58,8 +58,8 @@ fn invariant_forced_and_state_dependent_codes_are_permanent() {
 /// only code that does — exclusivity over the whole domain, since a
 /// standing detail added to a second code changes what every client sees
 /// for that code, and changes rejection identity with it (`Eq` compares
-/// `detail`). The neighbouring policy, [`disposition_of`], is checked
-/// over the same domain by [`ALL_CODES`].
+/// `detail`). The neighbouring policy, [`RejectCode::disposition`], is
+/// checked over the same domain by [`ALL_CODES`].
 #[test]
 fn gate_detail_is_fixed_and_exclusive() {
     let gate = Rejection::classified(OpKind::CreateNewDocument, RejectCode::Gate, None);
@@ -75,13 +75,15 @@ fn gate_detail_is_fixed_and_exclusive() {
     }
 }
 
-/// A rejection is a std error: boxable, and rendered with the
-/// op/code/disposition a `{}` log line needs, the detail appended when
-/// one was threaded. Its codec-side twin, `ParseError`, is checked beside
-/// it in `codec`.
+/// A rejection is a std error: boxable as `Box<dyn Error + Send + Sync>`
+/// (C-GOOD-ERR), and rendered with the op/code/disposition a `{}` log line
+/// needs, the detail appended when one was threaded. Its codec-side twin,
+/// `ParseError`, is checked beside it in `codec`.
 #[test]
 fn a_rejection_is_a_std_error() {
-    fn boxed(e: impl std::error::Error + 'static) -> Box<dyn std::error::Error> {
+    fn boxed(
+        e: impl std::error::Error + Send + Sync + 'static,
+    ) -> Box<dyn std::error::Error + Send + Sync> {
         Box::new(e)
     }
 
@@ -147,7 +149,7 @@ fn a_rejection_is_a_value_and_keys_a_map() {
     assert_eq!(tally[&elsewhere], 1);
     assert_eq!(tally.len(), 2, "a fault in another slot is another key");
 
-    let advised: HashSet<Disposition> = ALL_CODES.iter().map(|c| disposition_of(*c)).collect();
+    let advised: HashSet<Disposition> = ALL_CODES.iter().map(|c| c.disposition()).collect();
     assert_eq!(advised.len(), 4, "every disposition is the advice of some code");
 }
 
@@ -345,7 +347,7 @@ const ALL_CODES: [RejectCode; 78] = [
 fn the_disposition_table_deviates_only_where_documented() {
     for code in ALL_CODES {
         assert_eq!(
-            disposition_of(code),
+            code.disposition(),
             documented_disposition(code),
             "{code:?} is advised against the design's §5 table"
         );

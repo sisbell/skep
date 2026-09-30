@@ -8,6 +8,8 @@
 //! every served row carrying the one issuer ω answers for its prefix, the
 //! guest answered empty.
 
+use std::collections::BTreeSet;
+
 use crate::common;
 
 use common::*;
@@ -251,10 +253,6 @@ fn the_any_principal_discovery_read_hands_a_client_the_answer_set_never_the_inde
         "the answer set: covered prefixes, grouped, in prefix order"
     );
     assert!(served.is_sorted_by_key(|r| r.prefix.clone()), "prefix order");
-    assert!(
-        served.iter().all(|r| r.issuers.is_sorted() && r.issuers.windows(2).all(|w| w[0] != w[1])),
-        "each issuer list in address order, no repeat"
-    );
     assert!(served.iter().all(|r| r.prefix != dy2), "a disjoint pair contributes no row");
     // RES-231 and RES-298 in one sentence: the served set never names an
     // issuer who is not the owner, whatever the index holds.
@@ -333,7 +331,7 @@ fn an_unseated_issuer_over_its_own_prefix_is_no_row() {
     let served = read();
     assert_eq!(
         served,
-        vec![UniversalGrant { prefix: z.clone(), issuers: vec![z.clone()] }],
+        vec![UniversalGrant { prefix: z.clone(), issuers: BTreeSet::from([z.clone()]) }],
         "ω answers the issuer for the stored prefix: unchanged"
     );
     assert_served_rows_are_omega_owned(&fx, &served);
@@ -370,7 +368,10 @@ fn an_unseated_sub_prefix_is_served_until_a_delegation_seats_it() {
     let served = read();
     assert_eq!(
         served,
-        vec![UniversalGrant { prefix: child.clone(), issuers: vec![fx.account.clone()] }],
+        vec![UniversalGrant {
+            prefix: child.clone(),
+            issuers: BTreeSet::from([fx.account.clone()]),
+        }],
         "ω answers X at the unseated child: the stored prefix is served unchanged"
     );
     assert_served_rows_are_omega_owned(&fx, &served);

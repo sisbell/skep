@@ -3,6 +3,7 @@
 //! deterministically, and the wire name tables (op names, rejection codes)
 //! are pinned so a rename upstream cannot silently change the protocol.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use serde_json::Value;
@@ -539,10 +540,10 @@ fn the_universal_grants_read_parses_bare_and_answers_rows_always_present() {
     };
     assert_eq!(
         marshal(vec![
-            UniversalGrant { prefix: d2(), issuers: vec![a(&[1, 0, 1])] },
+            UniversalGrant { prefix: d2(), issuers: BTreeSet::from([a(&[1, 0, 1])]) },
             UniversalGrant {
                 prefix: a(&[1, 0, 2, 1]),
-                issuers: vec![a(&[1, 0, 2]), a(&[1, 0, 2, 1])],
+                issuers: BTreeSet::from([a(&[1, 0, 2]), a(&[1, 0, 2, 1])]),
             },
         ]),
         serde_json::json!({
@@ -922,7 +923,10 @@ fn all_responses() -> Vec<(&'static str, Response)> {
         (
             "universal_grants",
             Response::UniversalGrants {
-                rows: vec![UniversalGrant { prefix: d2(), issuers: vec![a(&[1, 0, 1])] }],
+                rows: vec![UniversalGrant {
+                    prefix: d2(),
+                    issuers: BTreeSet::from([a(&[1, 0, 1])]),
+                }],
                 as_of: Seq(9),
             },
         ),

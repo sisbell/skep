@@ -16,7 +16,7 @@ use crate::op::OpKind;
 /// document faults; `detail` is an optional message (ASN-0134 rejection path,
 /// OQ8).
 ///
-/// For every rejection M10 produces: `disposition == disposition_of(code)`,
+/// For every rejection M10 produces: `disposition == code.disposition()`,
 /// and `detail` is `code`'s standing explanation — the fixed sentence a code
 /// that means the same thing every time it fires carries — unless a call site
 /// threaded one of its own. [`Rejection::classified`] applies both policies
@@ -25,8 +25,9 @@ use crate::op::OpKind;
 /// The fields are public, so that pairing is a property of the rejections M10
 /// builds rather than of the type: a caller assembling the struct by hand
 /// answers for it. That is why the classifying constructor and
-/// [`disposition_of`] are both published — a caller raising one of these codes
-/// on its own channel can apply M10's policy instead of transcribing it.
+/// [`RejectCode::disposition`] are both published — a caller raising one of
+/// these codes on its own channel can apply M10's policy instead of
+/// transcribing it.
 ///
 /// A value, with value equality, so a caller may keep one (the last refusal
 /// per operation, say) and compare it against another. Equality is over all
@@ -52,7 +53,8 @@ pub struct Rejection {
 }
 
 /// The advisory half of a rejection: what reissuing would be worth. `code` is
-/// authoritative and this is a hint, recomputed off it by [`disposition_of`].
+/// authoritative and this is a hint, recomputed off it by
+/// [`RejectCode::disposition`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Disposition {
     /// Reissuing the identical request cannot help.
@@ -258,80 +260,90 @@ pub enum RejectCode {
 /// frontier, never on a well-formed request against a healthy store.
 const GATE_DETAIL: &str = "inc-gate tripped: corrupted frontier — operator condition";
 
-/// The standing-explanation policy — the second total lookup off the flat
-/// code, beside [`disposition_of`] (§5). A code whose meaning is the same
-/// sentence every time it fires carries that sentence here rather than at
-/// whichever call site happened to raise it; everything else carries no
-/// detail unless a call site threads one (`Rejection::with_detail`).
-///
-/// `Gate` is the one such code today: it signals store corruption — an
-/// operator condition — never client error.
-fn fixed_detail(code: RejectCode) -> Option<&'static str> {
-    match code {
-        RejectCode::Gate => Some(GATE_DETAIL),
-        _ => None,
+/// The code's two per-code policies (§5), each a total lookup off the flat
+/// code: the disposition, public, and the standing explanation
+/// [`Rejection::classified`] attaches.
+impl RejectCode {
+    /// The disposition policy — a single total lookup off the flat code (§5).
+    /// Returns exactly the explicit `Reorder`/`Retry`/`Halt` cases and
+    /// defaults everything else to `Permanent` (the catch-all is the DESIGNED
+    /// shape here: a code absent from the table is `Permanent` by
+    /// construction).
+    ///
+    /// Public because the disposition is documented as recomputable, and a
+    /// hint nobody outside the crate can recompute is one a transport
+    /// transcribes instead: a caller raising one of these codes on its own
+    /// channel asks here and cannot drift from the row
+    /// [`Rejection::classified`] applies.
+    ///
+    /// Named `Permanent` calls (not left to the catch-all by accident — §5):
+    /// `NotRegistered` (genesis-immutable registry), `NotFresh` (append-only
+    /// allocations), `Gate` (store corruption), `TxnOverBudget` (M2's
+    /// per-transaction byte budget, ruled Permanent 2026-08-21 — no retry
+    /// shrinks a transaction; the client splits it), `TxnUnencodable` (a
+    /// record M2's serializer refused — the same request re-presented stages
+    /// the same record), the recovery-steering `NotNextForm` (re-derive via
+    /// `NextAccountPrefix`, a *different* request), and the version-chain
+    /// model's three refusals `PublishedTarget` / `PrivateVersionOfPublished`
+    /// / `PrivateSourceVersionless` (PUB-8.3's "permanent class": publication
+    /// never transitions, PUB-1.9, so the same request can never land — the
+    /// act that does is another request, the one the face names).
+    ///
+    /// `Withheld` is `Reorder` in EVERY cell (PUB-8.4, PUB-8.6): the one
+    /// filling event is a later grant commit, and the wire token stays
+    /// `reorder` wherever no such event can exist — the FACE derives the
+    /// honest answer. The conservatively-`Permanent` state-dependent codes
+    /// (`NotArranged`, `OutOfBounds`, `EmptySource`, `EmptyContentSubspace`,
+    /// `RangeNotPresent`, `EmptySubspace`, `DelegatorUnknown`,
+    /// `NotAPrincipal`, …) are the documented heuristic split of Open build
+    /// decision 7.
+    pub fn disposition(self) -> Disposition {
+        match self {
+            RejectCode::Poisoned => Disposition::Halt,
+            RejectCode::Durability => Disposition::Retry,
+            RejectCode::BadTarget
+            | RejectCode::DocNotRegistered
+            | RejectCode::HomeNotRegistered
+            | RejectCode::SourceNotRegistered
+            | RejectCode::NotAnAccount
+            | RejectCode::OriginalNotResident
+            | RejectCode::EndpointNotResident
+            | RejectCode::ParentNotRegistered
+            | RejectCode::Withheld => Disposition::Reorder,
+            _ => Disposition::Permanent,
+        }
     }
-}
 
-/// The disposition policy — a single total lookup off the flat code (§5).
-/// Returns exactly the explicit `Reorder`/`Retry`/`Halt` cases and defaults
-/// everything else to `Permanent` (the catch-all is the DESIGNED shape here:
-/// a code absent from the table is `Permanent` by construction).
-///
-/// Public because the disposition is documented as recomputable, and a hint
-/// nobody outside the crate can recompute is one a transport transcribes
-/// instead: a caller raising one of these codes on its own channel asks here
-/// and cannot drift from the row [`Rejection::classified`] applies.
-///
-/// Named `Permanent` calls (not left to the catch-all by accident — §5):
-/// `NotRegistered` (genesis-immutable registry), `NotFresh` (append-only
-/// allocations), `Gate` (store corruption), `TxnOverBudget` (M2's
-/// per-transaction byte budget, ruled Permanent 2026-08-21 — no retry
-/// shrinks a transaction; the client splits it), `TxnUnencodable` (a record
-/// M2's serializer refused — the same request re-presented stages the same
-/// record), the recovery-steering `NotNextForm` (re-derive via
-/// `NextAccountPrefix`, a *different* request), and the version-chain
-/// model's three refusals `PublishedTarget` / `PrivateVersionOfPublished` /
-/// `PrivateSourceVersionless` (PUB-8.3's "permanent class": publication
-/// never transitions, PUB-1.9, so the same request can never land — the act
-/// that does is another request, the one the face names).
-///
-/// `Withheld` is `Reorder` in EVERY cell (PUB-8.4, PUB-8.6): the one filling
-/// event is a later grant commit, and the wire token stays `reorder`
-/// wherever no such event can exist — the FACE derives the honest answer.
-/// The conservatively-`Permanent` state-dependent codes (`NotArranged`,
-/// `OutOfBounds`, `EmptySource`, `EmptyContentSubspace`, `RangeNotPresent`,
-/// `EmptySubspace`, `DelegatorUnknown`, `NotAPrincipal`, …) are the
-/// documented heuristic split of Open build decision 7.
-pub fn disposition_of(code: RejectCode) -> Disposition {
-    match code {
-        RejectCode::Poisoned => Disposition::Halt,
-        RejectCode::Durability => Disposition::Retry,
-        RejectCode::BadTarget
-        | RejectCode::DocNotRegistered
-        | RejectCode::HomeNotRegistered
-        | RejectCode::SourceNotRegistered
-        | RejectCode::NotAnAccount
-        | RejectCode::OriginalNotResident
-        | RejectCode::EndpointNotResident
-        | RejectCode::ParentNotRegistered
-        | RejectCode::Withheld => Disposition::Reorder,
-        _ => Disposition::Permanent,
+    /// The standing-explanation policy — the second total lookup off the flat
+    /// code, beside [`RejectCode::disposition`] (§5). A code whose meaning is
+    /// the same sentence every time it fires carries that sentence here
+    /// rather than at whichever call site happened to raise it; everything
+    /// else carries no detail unless a call site threads one
+    /// (`Rejection::with_detail`).
+    ///
+    /// `Gate` is the one such code today: it signals store corruption — an
+    /// operator condition — never client error.
+    fn fixed_detail(self) -> Option<&'static str> {
+        match self {
+            RejectCode::Gate => Some(GATE_DETAIL),
+            _ => None,
+        }
     }
 }
 
 impl Rejection {
     /// Build a classified rejection: both per-code policies applied off the
-    /// flat code — the disposition from [`disposition_of`], and the standing
-    /// explanation the code carries by policy, when it carries one (§5).
+    /// flat code — the disposition from [`RejectCode::disposition`], and the
+    /// standing explanation the code carries by policy, when it carries one
+    /// (§5).
     ///
-    /// Public for the reason [`disposition_of`] is: a caller that raises one
-    /// of M10's codes on its own channel builds it here and gets the whole
-    /// classification, rather than transcribing half of it and drifting from
-    /// the rows every other rejection of that code is given.
+    /// Public for the reason [`RejectCode::disposition`] is: a caller that
+    /// raises one of M10's codes on its own channel builds it here and gets
+    /// the whole classification, rather than transcribing half of it and
+    /// drifting from the rows every other rejection of that code is given.
     pub fn classified(kind: OpKind, code: RejectCode, site: Option<FaultSite>) -> Rejection {
-        let detail = fixed_detail(code).map(str::to_string);
-        Rejection { op: kind, code, disposition: disposition_of(code), site, detail }
+        let detail = code.fixed_detail().map(str::to_string);
+        Rejection { op: kind, code, disposition: code.disposition(), site, detail }
     }
 
     /// Attach a detail message (the `Durability` arm threads the underlying

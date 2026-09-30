@@ -38,7 +38,7 @@ fn content_error_collapses_wholesale() {
     let (code, site) = e.lower();
     assert_eq!(code, RejectCode::Content);
     assert!(site.is_none());
-    assert_eq!(crate::reject::disposition_of(code), Disposition::Permanent);
+    assert_eq!(code.disposition(), Disposition::Permanent);
 }
 
 /// §5: M6 is the sole producer of the multi-field localization
@@ -111,7 +111,7 @@ fn not_owner_threads_the_failing_address() {
     ] {
         assert_eq!(code, RejectCode::NotOwner);
         assert_eq!(site.expect("localized").addr, Some(doc()));
-        assert_eq!(crate::reject::disposition_of(code), Disposition::Permanent);
+        assert_eq!(code.disposition(), Disposition::Permanent);
     }
 }
 

@@ -130,15 +130,15 @@ pub(crate) fn birth_version(m3: &M3State, m5: &M5State, trunk: &Address) -> Opti
 /// the walk the fold's own owner memo is taken by at the mint — against each
 /// issuer of the row.
 ///
-/// Rows GROUP by the served prefix — two stored rows can narrow to one — and
-/// come back in prefix order, the issuers of a row in address order without a
-/// repeat, so the ruled shape stands: one row per content prefix with the
-/// issuers who granted it. That every served row carries exactly ONE issuer,
-/// and that the issuer ω-owns the prefix beside it, rests on the obligation
-/// [`UniversalIndexRow`] states — every issuer a registered seat — which this
-/// takes as given and does not check: the wider arm serves the issuer's own
-/// account, and only a seat is its own ω. No read class and no index
-/// (PUB-3.48): the compare is M3's own walk, ONE per stored row off the
+/// Rows GROUP by the served prefix — two stored rows can narrow to one, their
+/// issuers gathered into the one set the served row carries — and come back
+/// in prefix order, so the ruled shape stands: one row per content prefix
+/// with the issuers who granted it. That every served row carries exactly
+/// ONE issuer, and that the issuer ω-owns the prefix beside it, rests on the
+/// obligation [`UniversalIndexRow`] states — every issuer a registered seat —
+/// which this takes as given and does not check: the wider arm serves the
+/// issuer's own account, and only a seat is its own ω. No read class and no
+/// index (PUB-3.48): the compare is M3's own walk, ONE per stored row off the
 /// snapshot the arm holds, so the cost is the index's own size (PUB-7.45)
 /// times that walk. The two widenings RES-298 declines are declined here
 /// too: the wider arm never serves the stored prefix, and the exact arm is
@@ -163,8 +163,5 @@ pub(crate) fn covered_universal_grants(
             served.entry(covered).or_default().insert(issuer);
         }
     }
-    served
-        .into_iter()
-        .map(|(prefix, issuers)| UniversalGrant { prefix, issuers: issuers.into_iter().collect() })
-        .collect()
+    served.into_iter().map(|(prefix, issuers)| UniversalGrant { prefix, issuers }).collect()
 }

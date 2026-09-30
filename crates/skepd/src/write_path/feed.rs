@@ -446,21 +446,18 @@ impl Feed {
                 }
             }
         }
-        let index_tail: Vec<u64> =
-            log.entries().range(f_index.first_uncovered()..).map(|(k, _)| *k).collect();
-        for &at in &index_tail {
+        for (&at, meta) in log.entries().range(f_index.first_uncovered()..) {
             if let std::collections::btree_map::Entry::Vacant(vacant) = docs.entry(at) {
-                let addrs: Vec<Address> = match log.entries().get(&at) {
+                let addrs: Vec<Address> = match meta {
                     // Every name reads: `CommitsLog` demoted the recorded
                     // positions whose did not, so this parse drops nothing.
-                    Some(CommitMeta::Recorded { docs: strings, .. }) => {
+                    CommitMeta::Recorded { docs: strings, .. } => {
                         strings.iter().filter_map(|s| parse_dotted(s)).collect()
                     }
                     // Walked this open: classified above, or empty/unclassifiable.
-                    Some(CommitMeta::Bare) if walked_at.contains(&at) => Vec::new(),
+                    CommitMeta::Bare if walked_at.contains(&at) => Vec::new(),
                     // A bare position the index lost: the journal answers.
-                    Some(CommitMeta::Bare) => classify_bare(engine, &log, at).unwrap_or_default(),
-                    None => Vec::new(),
+                    CommitMeta::Bare => classify_bare(engine, &log, at).unwrap_or_default(),
                 };
                 if !addrs.is_empty() {
                     vacant.insert(classify(world, addrs));
@@ -491,9 +488,7 @@ impl Feed {
             .map(|(at, _)| *at)
             .filter(|at| log.entries().contains_key(at))
             .collect();
-        let masked_tail: Vec<u64> =
-            log.entries().range(f_masked.first_uncovered()..).map(|(k, _)| *k).collect();
-        for at in masked_tail {
+        for (&at, _) in log.entries().range(f_masked.first_uncovered()..) {
             if masked_at_commit(docs.get(&at).map(Vec::as_slice).unwrap_or(&[])) {
                 masked.insert(at);
                 f_masked.append(at, vec![])?;
@@ -541,9 +536,7 @@ impl Feed {
             positions.sort_unstable();
             positions.dedup();
         }
-        let streams_tail: Vec<u64> =
-            log.entries().range(f_streams.first_uncovered()..).map(|(k, _)| *k).collect();
-        for at in streams_tail {
+        for (&at, _) in log.entries().range(f_streams.first_uncovered()..) {
             let owners = owners_of(docs.get(&at).map(Vec::as_slice).unwrap_or(&[]));
             if !owners.is_empty() {
                 for owner in &owners {
@@ -566,12 +559,7 @@ impl Feed {
                     == log.offsets().get(at).map(|o| o.0)
             });
         if offsets_agree {
-            let offsets_tail: Vec<(u64, LineOffset)> = log
-                .offsets()
-                .range(f_offsets.first_uncovered()..)
-                .map(|(k, v)| (*k, *v))
-                .collect();
-            for (at, offset) in offsets_tail {
+            for (&at, &offset) in log.offsets().range(f_offsets.first_uncovered()..) {
                 f_offsets.append(at, vec![(OFFSETS_OFFSET, Value::Number(offset.0.into()))])?;
             }
             f_offsets.fence(head)?;

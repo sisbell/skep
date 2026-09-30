@@ -15,7 +15,7 @@ use skep_engine::types::{
 use skep_febe::Op;
 use skep_identity::{AuditClass, Fingerprint, IdentityState, TargetClass, WriteTypes};
 use skep_kernel::Attestation;
-use skep_links::{enc, is_replaces_class, Endset, HasLinks, SlotArg};
+use skep_links::{enc, is_replaces_class, HasLinks, SlotArg};
 use skep_namespace::{first_document_address, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 
 use super::attestation::attestation_check;
@@ -284,23 +284,24 @@ fn replaces_refusal(
     op: &Op,
     principal: PrincipalId,
 ) -> Option<CredentialRefusal> {
-    let address_form = |slot: &SlotArg| match slot {
-        SlotArg::Addrs(addrs) => Some(enc(addrs.iter())),
-        SlotArg::Resolve(_) => None,
+    let in_class = |slot: &SlotArg| match slot {
+        SlotArg::Addrs(addrs) => is_replaces_class(&enc(addrs.iter())),
+        SlotArg::Resolve(_) => false,
     };
-    let (ty, homes): (Endset, Vec<&Address>) = match op {
-        Op::MakeLink { home, ty, .. } => (address_form(ty)?, vec![home]),
-        Op::Emit { home, ty, .. } => (ty.clone(), vec![home]),
-        Op::EditLink { successor, d_s, d_a, .. } => (address_form(&successor.ty)?, vec![d_s, d_a]),
+    let (replaces_typed, homes): (bool, Vec<&Address>) = match op {
+        Op::MakeLink { home, ty, .. } => (in_class(ty), vec![home]),
+        Op::Emit { home, ty, .. } => (is_replaces_class(ty), vec![home]),
+        Op::EditLink { successor, d_s, d_a, .. } => (in_class(&successor.ty), vec![d_s, d_a]),
         _ => return None,
     };
-    if !is_replaces_class(&ty) {
+    if !replaces_typed {
         return None;
     }
     let m3 = world.m3();
-    let owned =
-        |home: &&Address| m3.is_registered_document(home) && m3.is_effective_owner(principal, home);
-    homes.iter().all(owned).then_some(CredentialRefusal::ReplacesNotStandalone)
+    homes
+        .into_iter()
+        .all(|home| m3.is_registered_document(home) && m3.is_effective_owner(principal, home))
+        .then_some(CredentialRefusal::ReplacesNotStandalone)
 }
 
 // ── board_state_admission — the two CLAIM-complementary gates (AUTH-3.78) ─

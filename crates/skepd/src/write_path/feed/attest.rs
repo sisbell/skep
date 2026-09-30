@@ -104,9 +104,7 @@ impl AttestStore {
                 )),
             }
         }
-        let tail: Vec<u64> =
-            log.entries().range(file.first_uncovered()..).map(|(k, _)| *k).collect();
-        for at in tail {
+        for (&at, _) in log.entries().range(file.first_uncovered()..) {
             if let Ok(Some(slot)) = engine.kernel().attestation_at(Seq(at)) {
                 file.append(at, attest_fields(&slot))?;
                 served.insert(at, slot);

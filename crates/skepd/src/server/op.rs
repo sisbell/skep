@@ -135,20 +135,10 @@ impl Daemon {
                         Ok(permit) => permit,
                         Err(ScanBusy) => return refuse_scan_busy(frame.op.kind()),
                     };
-                    self.op_reply(&self.febe.execute(self.actor_sid(&resolved.actor), *frame))
+                    self.op_reply(&self.febe.execute(resolved.sid(), *frame))
                 }
                 Some(meta) => self.write_sequence(resolved, meta, *frame, presented, req),
             },
-        }
-    }
-
-    /// The session a request's dispatch runs under: the actor's, or M10's
-    /// guest, [`SessionId::GUEST`] (M10 serves reads and refuses writes
-    /// `Unauthenticated` under it).
-    fn actor_sid(&self, actor: &Actor) -> SessionId {
-        match actor {
-            Actor::Principal(binding) => binding.sid,
-            Actor::Guest(_) => SessionId::GUEST,
         }
     }
 

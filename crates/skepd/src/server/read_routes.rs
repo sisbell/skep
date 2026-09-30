@@ -432,7 +432,7 @@ mod tests {
             plain("since=3&drafts=true&under=1.0.2.0.4"),
             (3, 256, Some("1.0.2.0.4".into()), true)
         );
-        assert_eq!(plain("since=3&drafts=false").3, false, "drafts=false is the plain feed");
+        assert!(!plain("since=3&drafts=false").3, "drafts=false is the plain feed");
         for bad in [
             None,
             Some(""),

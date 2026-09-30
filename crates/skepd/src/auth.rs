@@ -129,8 +129,9 @@ impl AuthState {
     /// only under it: the comparands an install resolves are the ones in
     /// force at its own position.
     fn install_blocked(&self, lock: &LockWrite<'_>, issue: BlockedIssue) {
-        let claimant = self.fold.snapshot().claimant().cloned();
-        let list = BlockedPrefixes::installed_under(issue, claimant.as_ref(), self.cfg.node_prefix());
+        let identity = self.fold.snapshot();
+        let list =
+            BlockedPrefixes::installed_under(issue, identity.claimant(), self.cfg.node_prefix());
         self.cfg.install_blocked(lock, list);
     }
 

@@ -93,9 +93,10 @@ use crate::World;
 /// hold.
 const MAX_SHOT_BODY_BYTES: usize = crate::limits::MAX_REQUEST_BODY;
 
-/// Why the daemon could not compose the entry frame for a write — the reason
-/// the composer met; what the write is owed is the check's to answer
-/// (`policy/attestation.rs`).
+/// Why the daemon could not compose the entry frame for a write —
+/// [`compose`]'s reasons alone, the record frame's one refusal being
+/// [`compose_record`]'s `None`; what the write is owed is the check's to
+/// answer (`policy/attestation.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ComposeFault {
     /// The entry frame's `board` term (D13) has no value: the board has no
@@ -311,9 +312,12 @@ fn publish_body(
 ///
 /// Every member is a value the link's address, the atom's bytes and `H.1`
 /// supply, which is what lets a mirror compose the same bytes from
-/// `find_links` and `retrieve` (the design record §4.2 (C)). `None`-free by
-/// construction on every member but the board term: a home with no `H.1`
-/// answers [`ComposeFault::NoBoardTerm`], the one fault this composer meets.
+/// `find_links` and `retrieve` (the design record §4.2 (C)). `None` only
+/// where the board has no `H.1` (the states [`board_term`] names): the one
+/// member the snapshot may lack, and so the one refusal this composer meets —
+/// and the type says so. No fault of [`compose`]'s can reach this function's
+/// caller, and a second refusal added here changes this signature, which
+/// sends its author to the caller that must answer it.
 pub(super) fn compose_record(
     world: &World,
     home_account: &Address,
@@ -321,10 +325,10 @@ pub(super) fn compose_record(
     ty: &Address,
     to: &[Address],
     canonical: &[u8],
-) -> Result<EntryFrame, ComposeFault> {
-    let board = board_term(world).ok_or(ComposeFault::NoBoardTerm)?;
+) -> Option<EntryFrame> {
+    let board = board_term(world)?;
     let body = entry_body_record(ty, to, None, None, canonical);
-    Ok(EntryFrame { board, account: home_account.clone(), doc: home.clone(), body })
+    Some(EntryFrame { board, account: home_account.clone(), doc: home.clone(), body })
 }
 
 /// An ENTRY frame composed but for its `alg` member — [`compose`]'s answer,

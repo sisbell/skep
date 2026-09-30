@@ -18,7 +18,7 @@ use skep_links::SlotArg;
 use skep_namespace::HasM3;
 
 use super::{addr_spans, AttestFault, CredentialRefusal};
-use crate::auth::entry::{self, ComposeFault};
+use crate::auth::entry;
 use crate::auth::fold::{identity_types, WorldCtx};
 use crate::auth::session::{keyed_above, opening_account, HybridSig, Scope};
 use crate::auth::LockWrite;
@@ -568,24 +568,30 @@ fn record_grade_check(
     let blob = HybridSig::parse(&sig).ok_or(invalid(AttestFault::Malformed))?;
     let blob = blob.as_bytes();
     // 4 — the frame, every member but `alg`. The home's account is ω's
-    // answer, the fold's own H (slot (3) found one, so this is `Some`); the
-    // slots are read as a mirror reads a stored link's: one address each,
-    // the `to` slot empty at a targetless kind.
-    let Some(home_account) = world.m3().effective_owner_prefix(&dep.home).cloned() else {
+    // answer, the fold's own H (slot (3) found one, so this is `Some`),
+    // borrowed off the snapshot as every read here is; the slots are read as
+    // a mirror reads a stored link's: one address each, the `to` slot empty
+    // at a targetless kind.
+    let Some(home_account) = world.m3().effective_owner_prefix(&dep.home) else {
         return Err(invalid(AttestFault::NotEnrolledAtPosition));
     };
     let Some(ty) = single_address(&dep.ty) else {
         return Err(invalid(AttestFault::Signature));
     };
-    let to: Vec<Address> = single_address(&dep.to).into_iter().collect();
-    let frame = match entry::compose_record(world, &home_account, &dep.home, &ty, &to, canonical.as_bytes()) {
-        Ok(frame) => frame,
-        Err(ComposeFault::NoBoardTerm) => return Err(invalid(AttestFault::BoardUnavailable)),
-        Err(other) => unreachable!("compose_record meets no fault but the board term's: {other:?}"),
+    let to = single_address(&dep.to);
+    let Some(frame) = entry::compose_record(
+        world,
+        home_account,
+        &dep.home,
+        &ty,
+        to.as_slice(),
+        canonical.as_bytes(),
+    ) else {
+        return Err(invalid(AttestFault::BoardUnavailable));
     };
     // 5 — the candidates: the set that opens the home's account, at the
     // grade the act needs, of the blob's row.
-    let opens = opening_account(identity, &home_account);
+    let opens = opening_account(identity, home_account);
     let candidates: Vec<&PublicKey> = identity
         .key_set(&opens)
         .enrolled()

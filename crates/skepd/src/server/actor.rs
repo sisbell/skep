@@ -1,6 +1,7 @@
 //! How a request's session resolves (`Resolved`, `resolve_actor`, `close_binding`).
 
 use skep_engine::World;
+use skep_febe::SessionId;
 use skep_identity::IdentityState;
 use skep_namespace::PrincipalId;
 
@@ -73,6 +74,16 @@ impl Resolved {
         match &self.actor {
             Actor::Principal(binding) => Some(binding.principal),
             Actor::Guest(_) => None,
+        }
+    }
+
+    /// The session the request's dispatch runs under: the bound one, or M10's
+    /// guest, [`SessionId::GUEST`] (M10 serves reads and refuses writes
+    /// `Unauthenticated` under it).
+    pub(super) fn sid(&self) -> SessionId {
+        match &self.actor {
+            Actor::Principal(binding) => binding.sid,
+            Actor::Guest(_) => SessionId::GUEST,
         }
     }
 }

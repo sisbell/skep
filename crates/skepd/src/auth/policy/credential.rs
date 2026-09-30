@@ -443,8 +443,9 @@ pub(crate) fn precheck(
         // above the claim, the record's own `sig` — verified at this, its
         // `make_link` (D26), under the set that opens its home, at the grade
         // the act needs; a record carrying none is refused. The kind is the
-        // effect's, which is the link's type slot's — the same parse the fold
-        // made one slot up, by the kind the record-deposit set names.
+        // fold's verdict's — the link's type slot as the fold parsed it at
+        // slot (3), which is the record-deposit set's answer, that set being
+        // the fold's kinds (`record_deposit_kind`'s card).
         let kind = match &effect {
             Effect::Genesis { .. } | Effect::Enroll { .. } => CredentialKind::Enroll,
             Effect::Retire { .. } => CredentialKind::Retire,
@@ -480,9 +481,10 @@ pub(crate) fn precheck(
 /// its atom's `insert` having taken no entry check (D26). In order:
 ///
 /// 1. THE RECORD VALUE — the atom's bytes off the link's `from`, the one
-///    pinned read ([`record_bytes`]), parsed by the KIND the record-deposit
-///    set names for the link's type ([`parse_record_value`]): the entries and
-///    the `sig` as it stands. The fold read and parsed these same bytes at
+///    pinned read ([`record_bytes`]), parsed ([`parse_record_value`]) by the
+///    KIND the fold's verdict names for the link's type — the record-deposit
+///    set's answer, that set being the fold's kinds: the entries and the
+///    `sig` as it stands. The fold read and parsed these same bytes at
 ///    slot (3), so a failure here is unreachable and is answered fail-closed,
 ///    as a record no `sig` can be read off. The claim kind carries no record
 ///    and no `sig` (AUTH-2.48), and reaches no claimed board's check: a claim

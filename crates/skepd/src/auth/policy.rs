@@ -58,22 +58,38 @@ fn slotarg_kind(s: &SlotArg) -> Option<CredentialKind> {
 }
 
 /// THE RECORD-DEPOSIT SET (signed ops; the design record's BW-03, owner-ruled
-/// 2026-09-29): the link types whose record RESERVES a `sig` member — the
-/// kinds whose atom carries its own signature at the record grade, and whose
-/// `make_link` the record's `sig` covers (D26). `Some(kind)` where `ty` — a
-/// type slot in M7's deposited form — names one. TODAY the set is the three
-/// credential kinds, [`identity_types`]'s — enroll, retire, claim — and
-/// nothing else; the disavowal's kind (`…3.4`, its ordinal reserved, its
-/// build not this lane's) and the registry's kinds (2b) JOIN HERE, by one
-/// edit, and the set's three readers follow: the entry check's EXEMPTION of
-/// the record's atom (`policy/attestation.rs`, the `insert` cell), the ROUTE
-/// of its link to the credential sequence ([`deposits_credential_link`]), and
-/// the record grade's VERIFY at that link (`policy/credential.rs`'s
-/// `record_grade_check`, which parses the record by the kind this answers).
-/// Stated once so the three cannot part: a kind exempt at the atom but never
-/// verified at the link would commit a record no signature covers. Private to
-/// this module and its children, where all three readers live.
-fn record_deposit_kind(ty: &[Span]) -> Option<CredentialKind> {
+/// 2026-09-29): `Some(kind)` where `ty` — a type slot in M7's deposited form,
+/// any borrowed walk of it (a slice, or M7's `&Endset`) — names one of its
+/// kinds. Read by name wherever this module tells a record deposit apart: the
+/// entry check's EXEMPTION of the record's atom (`policy/attestation.rs`'s
+/// `insert` cell, and `record_deposit_carries_sig` beside it), and the ROUTE
+/// of its link to the credential sequence ([`deposits_credential_link`],
+/// every arm), where the record grade verifies the record's `sig` (D26).
+/// Stated once so the two cannot part: a kind exempt at the atom but never
+/// verified at the link would commit a record no signature covers.
+///
+/// The set IS the fold's credential kinds ([`identity_types`]: enroll,
+/// retire, claim), and the route rests on that equality: the credential
+/// sequence classifies every deposit routed to it through the FOLD (the
+/// precheck's slot (3)), and the record grade parses the record by the kind
+/// the fold's verdict names. So the kinds the design record names for this
+/// set later — the disavowal's (`…3.4`, its ordinal reserved) and the
+/// registry's (2b) — do not join by an edit here: an edit here alone routes
+/// such a kind's link to a classify that answers `NotCredential` — the
+/// precheck's defect arm, which in a release build commits the deposit with
+/// no `sig` verified — and exempts its atom from the entry check with no
+/// record grade behind it. Each joins with the lane that builds the classify
+/// and the precheck its record needs. The claim is a member though a claim
+/// carries no record, because the fold folds it: on a published document —
+/// the only place the entry check runs — a declared claim atom is refused at
+/// M5's door, whose deposit class holds the kinds that deposit an atom
+/// (enroll and retire), and a claim's link above the claim is
+/// `already_claimed` at slot (3), before the record grade runs.
+///
+/// Private to this module and its children, where its readers live;
+/// `every_arm_of_the_route_reads_the_one_set_the_fold_folds` holds every arm
+/// of the route to it, and it to the fold.
+fn record_deposit_kind<'s>(ty: impl IntoIterator<Item = &'s Span>) -> Option<CredentialKind> {
     identity_types().kind_of(ty)
 }
 
@@ -90,13 +106,16 @@ fn record_deposit_kind(ty: &[Span]) -> Option<CredentialKind> {
 /// structural rather than claimed — this one and [`DepositSpans::of`] both
 /// go through [`addr_spans`], the one spelling of `enc(addrs)`. Only the
 /// rebuild's stays a claim: it reads M7's stored slot, which records `enc`
-/// verbatim. The subspace-3 allocation in [`super::fold`] is what keeps a `Resolve` slot
-/// out of the codomain. A FALSE NEGATIVE is the divergence this module
-/// cannot detect: the deposit commits through the plain path with no gate
-/// and no fold step, so the world holds a credential the live fold never
-/// saw, `key_set` answers one thing until restart and another after it, and
-/// nothing reports either. A false positive reaches [`precheck`]'s defect
-/// arm at the classify line.
+/// verbatim. And the three read one SET: every arm here names the kind
+/// through [`record_deposit_kind`], which IS the fold's credential kinds —
+/// the equality its card states, and the reason no kind the fold does not
+/// fold joins it by an edit there. The subspace-3 allocation in
+/// [`super::fold`] is what keeps a `Resolve` slot out of the codomain. A
+/// FALSE NEGATIVE is the divergence this module cannot detect: the deposit
+/// commits through the plain path with no gate and no fold step, so the
+/// world holds a credential the live fold never saw, `key_set` answers one
+/// thing until restart and another after it, and nothing reports either. A
+/// false positive reaches [`precheck`]'s defect arm at the classify line.
 ///
 /// EXHAUSTIVE with no `_` arm, the treatment [`crate::write_path::write_meta`]
 /// already gives the read/write partition: the non-deposit arm is written
@@ -107,7 +126,7 @@ fn record_deposit_kind(ty: &[Span]) -> Option<CredentialKind> {
 pub(crate) fn deposits_credential_link(op: &Op) -> bool {
     match op {
         Op::MakeLink { ty, .. } => slotarg_kind(ty).is_some(),
-        Op::Emit { ty, .. } => identity_types().kind_of(ty).is_some(),
+        Op::Emit { ty, .. } => record_deposit_kind(ty).is_some(),
         Op::EditLink { successor, .. } => slotarg_kind(&successor.ty).is_some(),
         // Every other op deposits no link at all, so none can be
         // credential-typed — including `Nullify`, whose class is
@@ -163,7 +182,9 @@ pub(crate) fn deposits_credential_link(op: &Op) -> bool {
 /// `Permanent` for the family as AUTH-3.54 pins it (the remedy lives in the
 /// face), and the two attestation codes' own classes beside it (signed ops;
 /// the design record §7.3 (iii)). [`CredentialRefusal::disposition`] is the
-/// one place a class is chosen, and a new refusal takes the family's
+/// one place a refusal's class is answered — an `attestation_invalid`
+/// cause's by the cause itself, beside its token
+/// ([`AttestFault::disposition`]) — and a new refusal takes the family's
 /// `Permanent` there unless it names another.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CredentialRefusal {
@@ -289,15 +310,14 @@ pub(crate) enum CredentialRefusal {
 }
 
 /// The causes of `attestation_invalid` — the `<cause>` sub-token, joined as
-/// the payload arm joins `malformed_payload:<sub>` (AUTH-2.55), each with
-/// the disposition class its next act takes, re-derived off the wire's own
-/// class definitions (the board's r6-6, owner-ruled 2026-09-29, taking
-/// BW-07's derivation: PERMANENT where reissuing the same request cannot
-/// succeed — `malformed`, `signature`, `not_enrolled_at_position`, the
-/// composer's bound — and REORDER where a later committed state may satisfy
-/// it — `board_unavailable`, `withheld`), the two the entry frame's own
-/// limits add — a value its author may not read, a body past its budget —
-/// standing in the class of the store refusal each stands beside.
+/// the payload arm joins `malformed_payload:<sub>` (AUTH-2.55) — each with
+/// its disposition class ([`AttestFault::disposition`]), re-derived off the
+/// wire's own class definitions (the board's r6-6, owner-ruled 2026-09-29,
+/// taking BW-07's derivation): PERMANENT where reissuing the same request
+/// cannot succeed, REORDER where a later committed state may satisfy it, and
+/// the two the entry frame's own limits add — a value its author may not
+/// read, a body past its budget — in the class of the store refusal each
+/// stands beside. Each variant says which, and why.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AttestFault {
     /// The blob is not the tag's fixed width — a member the client composed
@@ -353,6 +373,19 @@ impl AttestFault {
             AttestFault::FrameTooLarge => "frame_too_large",
         }
     }
+
+    /// The cause's disposition class, beside its token — its variant's card
+    /// says why. Exhaustive, so a new cause is classed here before this
+    /// compiles.
+    fn disposition(self) -> Disposition {
+        match self {
+            AttestFault::BoardUnavailable | AttestFault::Withheld => Disposition::Reorder,
+            AttestFault::Malformed
+            | AttestFault::Signature
+            | AttestFault::NotEnrolledAtPosition
+            | AttestFault::FrameTooLarge => Disposition::Permanent,
+        }
+    }
 }
 
 impl CredentialRefusal {
@@ -391,23 +424,99 @@ impl CredentialRefusal {
     /// it, and the two attestation codes' own classes (signed ops; the
     /// board's r6-6, off the wire's definitions) — `attestation_required`
     /// REORDER (ATTACH WHEN IN DOUBT: the same content, signed and attached,
-    /// is the ordinary path), and `attestation_invalid` PERMANENT at every
-    /// cause a reissue cannot cure — `malformed`, `signature`,
-    /// `not_enrolled_at_position`, `frame_too_large` — and REORDER at the two
-    /// a later committed state can: `board_unavailable` and `withheld`.
+    /// is the ordinary path), and `attestation_invalid` its cause's
+    /// ([`AttestFault::disposition`]).
     pub fn disposition(&self) -> Disposition {
         match self {
             CredentialRefusal::AttestationRequired => Disposition::Reorder,
-            CredentialRefusal::AttestationInvalid(
-                AttestFault::BoardUnavailable | AttestFault::Withheld,
-            ) => Disposition::Reorder,
-            CredentialRefusal::AttestationInvalid(
-                AttestFault::Malformed
-                | AttestFault::Signature
-                | AttestFault::NotEnrolledAtPosition
-                | AttestFault::FrameTooLarge,
-            ) => Disposition::Permanent,
+            CredentialRefusal::AttestationInvalid(fault) => fault.disposition(),
             _ => Disposition::Permanent,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use skep_febe::SuccessorSpec;
+
+    use super::*;
+    use crate::auth::fold::{addr_of, T_CLAIM, T_ENROLL, T_RETIRE};
+
+    /// THE RECORD-DEPOSIT SET IS THE FOLD'S KINDS, and every arm of the route
+    /// reads it: over the three credential kinds and the disavowal's reserved
+    /// ordinal (`…3.4`, which the fold does not fold), [`record_deposit_kind`]
+    /// answers what [`identity_types`] answers, and a `make_link`, an `emit`
+    /// and an `edit_link` successor so typed are routed to the credential
+    /// sequence exactly where it answers `Some`. The route rests on that
+    /// equality — the credential sequence classifies what it is routed through
+    /// the fold — so an edit adding a kind to the set alone, the join its card
+    /// rules out, fails here.
+    #[test]
+    fn every_arm_of_the_route_reads_the_one_set_the_fold_folds() {
+        let doc = addr_of(&[1, 0, 1, 0, 1]);
+        let disavowal = [1, 1, 0, 1, 0, 1, 0, 3, 4];
+        for comps in [T_ENROLL, T_RETIRE, T_CLAIM, disavowal] {
+            let ty = addr_of(&comps);
+            let slot = addr_spans(std::slice::from_ref(&ty));
+            let folded = identity_types().kind_of(&slot);
+            assert_eq!(
+                record_deposit_kind(&slot),
+                folded,
+                "{}: the set is the fold's kinds",
+                ty.tumbler()
+            );
+            let typed = || SlotArg::Addrs(vec![ty.clone()]);
+            let empty = || SlotArg::Addrs(Vec::new());
+            let make_link = Op::MakeLink {
+                home: doc.clone(),
+                from: empty(),
+                to: empty(),
+                ty: typed(),
+                replaces: None,
+            };
+            let emit =
+                Op::Emit { home: doc.clone(), ty: enc([&ty]), from: doc.clone(), to: Vec::new() };
+            let edit_link = Op::EditLink {
+                original: doc.clone(),
+                successor: SuccessorSpec { from: Vec::new(), to: Vec::new(), ty: typed() },
+                d_s: doc.clone(),
+                d_a: doc.clone(),
+            };
+            for (op, name) in [(make_link, "make_link"), (emit, "emit"), (edit_link, "edit_link")] {
+                assert_eq!(
+                    deposits_credential_link(&op),
+                    folded.is_some(),
+                    "{}: a {name} so typed is routed exactly where the set answers",
+                    ty.tumbler()
+                );
+            }
+        }
+    }
+
+    /// Every `attestation_invalid` cause answers its OWN class beside its
+    /// token — [`AttestFault::disposition`], the one place a cause is classed
+    /// (r6-6): REORDER where a later committed state may satisfy it, PERMANENT
+    /// where reissuing the same request cannot. `attestation_required` beside
+    /// them is REORDER, and the family's other refusals are `Permanent`.
+    #[test]
+    fn every_attestation_invalid_cause_answers_its_own_class() {
+        use skep_febe::Disposition::{Permanent, Reorder};
+        for (fault, token, class) in [
+            (AttestFault::Malformed, "malformed", Permanent),
+            (AttestFault::BoardUnavailable, "board_unavailable", Reorder),
+            (AttestFault::NotEnrolledAtPosition, "not_enrolled_at_position", Permanent),
+            (AttestFault::Signature, "signature", Permanent),
+            (AttestFault::Withheld, "withheld", Reorder),
+            (AttestFault::FrameTooLarge, "frame_too_large", Permanent),
+        ] {
+            let refusal = CredentialRefusal::AttestationInvalid(fault);
+            assert_eq!(
+                (refusal.token(), refusal.disposition()),
+                (format!("attestation_invalid:{token}"), class),
+                "{fault:?}"
+            );
+        }
+        assert_eq!(CredentialRefusal::AttestationRequired.disposition(), Reorder);
+        assert_eq!(CredentialRefusal::ClaimFirst.disposition(), Permanent);
     }
 }

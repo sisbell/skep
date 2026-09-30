@@ -292,6 +292,33 @@ fn wire_entries_null_what_the_file_line_omits() {
     );
 }
 
+/// A BARE row nulls exactly the members the terms render: every variant's
+/// [`OpTerms::members`] lie in [`OpTerms::MEMBER_NAMES`], and together they
+/// are all of it — so a term a new op carries is nulled on a bare row, and
+/// the list names no member no op renders. The match below is exhaustive
+/// with no `_`, so a new variant stops this test compiling until it is named
+/// here — the moment to add one of it to `one_of_each`.
+#[test]
+fn a_bare_row_nulls_exactly_the_members_the_terms_render() {
+    let one_of_each = [
+        OpTerms::Delegate { new_prefix: "1.0.2".into(), new_id: 1 },
+        OpTerms::MakeLink { link: "1.0.1.0.1.0.2.1".into() },
+        OpTerms::Publish { placed: "1".into(), base_extent: None },
+    ];
+    let mut rendered: Vec<&str> = Vec::new();
+    for terms in &one_of_each {
+        match terms {
+            OpTerms::Delegate { .. } | OpTerms::MakeLink { .. } | OpTerms::Publish { .. } => {}
+        }
+        rendered.extend(terms.members().into_iter().map(|(name, _)| name));
+    }
+    rendered.sort_unstable();
+    rendered.dedup();
+    let mut nulled = OpTerms::MEMBER_NAMES.to_vec();
+    nulled.sort_unstable();
+    assert_eq!(rendered, nulled, "the bare row's null list is the terms' own members");
+}
+
 /// THE MEMBERS THAT ARE ABSENT RATHER THAN NULL (D12; the design record
 /// §7.3 (i)): `key` is served iff the line records no carrier; `attest` is
 /// the store's slot wherever one is held, `null` — LOST — where the line

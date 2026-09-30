@@ -163,10 +163,12 @@ impl Carrier {
 /// THE OP'S OWN TERMS on a row — what a feed-only mirror needs from the row
 /// alone (r6-2a; AUTH-6.36; the design record's D25 and §5.2), recorded at
 /// commit as `docs` is, the daemon's testimony of what it committed. One
-/// variant per op kind that carries any; every other kind carries none, and
-/// its row renders none. A BARE row renders every one of them `null`: its
-/// op is unknown, so which terms it would have carried is unknown too, and
-/// lost testimony is never invented.
+/// variant per op kind that carries any, rendered as [`OpTerms::members`] on
+/// the wire's row and the file's line alike; every other kind carries none,
+/// and its row renders none. A BARE row renders every member any of them
+/// renders `null` ([`OpTerms::MEMBER_NAMES`]): its op is unknown, so which
+/// terms it would have carried is unknown too, and lost testimony is never
+/// invented.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum OpTerms {
     /// `delegate`: the minted account address in the board's local form (the
@@ -184,6 +186,33 @@ pub(super) enum OpTerms {
     /// (the absence IS the birth bit). Both decimal strings, `Nat`'s wire
     /// form.
     Publish { placed: String, base_extent: Option<String> },
+}
+
+impl OpTerms {
+    /// Every member any op's terms render under — what a BARE row renders
+    /// `null`, its op (and so which of them it carried) unknown. Held to the
+    /// union of [`OpTerms::members`] over the variants by the sidecar test
+    /// `a_bare_row_nulls_exactly_the_members_the_terms_render`.
+    const MEMBER_NAMES: [&'static str; 5] =
+        ["new_prefix", "new_id", "link", "placed", "base_extent"];
+
+    /// The members these terms render as — on the wire's row and in the
+    /// file's line alike, one spelling for both, which [`parse_line`] reads
+    /// back: a `publish`'s birth extent is `null`, the absence being the
+    /// birth bit.
+    fn members(&self) -> Vec<(&'static str, Value)> {
+        match self {
+            OpTerms::Delegate { new_prefix, new_id } => vec![
+                ("new_prefix", Value::String(new_prefix.clone())),
+                ("new_id", Value::Number((*new_id).into())),
+            ],
+            OpTerms::MakeLink { link } => vec![("link", Value::String(link.clone()))],
+            OpTerms::Publish { placed, base_extent } => vec![
+                ("placed", Value::String(placed.clone())),
+                ("base_extent", base_extent.clone().map(Value::String).unwrap_or(Value::Null)),
+            ],
+        }
+    }
 }
 
 /// One committed position's metadata — and this file's crash-honesty rule
@@ -259,8 +288,9 @@ impl CommitMeta {
     ///   the record's own `sig`), the ceremony's rows, the head writer's.
     ///   Absence on the origin's own feed is A6's verdict, so a store line
     ///   is served wherever one is held and never dropped.
-    /// * the op's terms ([`OpTerms`]): present on the row of the op that
-    ///   carries them, `null` on a bare row, absent on every other op's.
+    /// * the op's terms ([`OpTerms::members`], the file line's spelling too):
+    ///   present on the row of the op that carries them, `null` on a bare row
+    ///   ([`OpTerms::MEMBER_NAMES`]), absent on every other op's.
     ///
     /// `attest` is the store's answer for this position, looked up by the
     /// feed beside the line: the signature is never a member of this file.
@@ -268,17 +298,9 @@ impl CommitMeta {
         let mut pairs = vec![("at", Value::Number(at.into()))];
         let carrier = match self {
             CommitMeta::Bare => {
-                pairs.extend([
-                    ("docs", Value::Null),
-                    ("key", Value::Null),
-                    ("op", Value::Null),
-                    ("time", Value::Null),
-                    ("new_prefix", Value::Null),
-                    ("new_id", Value::Null),
-                    ("link", Value::Null),
-                    ("placed", Value::Null),
-                    ("base_extent", Value::Null),
-                ]);
+                let unknown =
+                    ["docs", "key", "op", "time"].into_iter().chain(OpTerms::MEMBER_NAMES);
+                pairs.extend(unknown.map(|k| (k, Value::Null)));
                 None
             }
             CommitMeta::Recorded { op, time, key, signed, terms, .. } => {
@@ -288,22 +310,8 @@ impl CommitMeta {
                 if signed.is_none() {
                     pairs.push(("key", key.clone().map(Value::String).unwrap_or(Value::Null)));
                 }
-                match terms {
-                    Some(OpTerms::Delegate { new_prefix, new_id }) => {
-                        pairs.push(("new_prefix", Value::String(new_prefix.clone())));
-                        pairs.push(("new_id", Value::Number((*new_id).into())));
-                    }
-                    Some(OpTerms::MakeLink { link }) => {
-                        pairs.push(("link", Value::String(link.clone())));
-                    }
-                    Some(OpTerms::Publish { placed, base_extent }) => {
-                        pairs.push(("placed", Value::String(placed.clone())));
-                        pairs.push((
-                            "base_extent",
-                            base_extent.clone().map(Value::String).unwrap_or(Value::Null),
-                        ));
-                    }
-                    None => {}
+                if let Some(terms) = terms {
+                    pairs.extend(terms.members());
                 }
                 *signed
             }
@@ -1108,11 +1116,10 @@ fn parse_line(line: &[u8]) -> Option<Record> {
 /// `{"at":N}` for a bare position; `{"at":N,"docs":[…],"key":"…","op":"…","time":T}`
 /// for a recorded one, `key` omitted only where the record carries none (a
 /// pre-feature line), `"signed":"marker"|"record"` where the entry carries a
-/// signature, and the op's own terms where it has any (`new_id`,
-/// `new_prefix` on a `delegate`; `link` on a `make_link`; `placed` and
-/// `base_extent` — `null` in the birth shape — on a `publish`). Built through
-/// the codec's key-sorting device, so a line is the same bytes whatever
-/// backs serde_json's map — which is what lets `GET /changes` answer
+/// signature, and the op's own terms where it has any, spelled as the wire's
+/// row spells them ([`OpTerms::members`]). Built through the codec's
+/// key-sorting device, so a line is the same bytes whatever backs
+/// serde_json's map — which is what lets `GET /changes` answer
 /// byte-identically across a restart.
 fn entry_line(at: u64, meta: &CommitMeta) -> Vec<u8> {
     let mut pairs = vec![("at", Value::Number(at.into()))];
@@ -1129,22 +1136,8 @@ fn entry_line(at: u64, meta: &CommitMeta) -> Vec<u8> {
         if let Some(carrier) = signed {
             pairs.push(("signed", Value::String(carrier.token().into())));
         }
-        match terms {
-            Some(OpTerms::Delegate { new_prefix, new_id }) => {
-                pairs.push(("new_prefix", Value::String(new_prefix.clone())));
-                pairs.push(("new_id", Value::Number((*new_id).into())));
-            }
-            Some(OpTerms::MakeLink { link }) => {
-                pairs.push(("link", Value::String(link.clone())));
-            }
-            Some(OpTerms::Publish { placed, base_extent }) => {
-                pairs.push(("placed", Value::String(placed.clone())));
-                pairs.push((
-                    "base_extent",
-                    base_extent.clone().map(Value::String).unwrap_or(Value::Null),
-                ));
-            }
-            None => {}
+        if let Some(terms) = terms {
+            pairs.extend(terms.members());
         }
     }
     line_bytes(obj(pairs))

@@ -33,38 +33,31 @@
 //!   address and width, read from nowhere — within [`MAX_SHOT_BODY_BYTES`];
 //!   `base_extent` the shot's own, EMPTY in the birth shape.
 //!
-//! Four `publish` bodies the daemon does not compose:
+//! Four `publish` bodies the daemon does not compose. Each is answered as the
+//! [`ComposeFault`] that names its reason, and no more: what the write is
+//! then OWED — passed through to the store's own refusal, or refused as its
+//! own cause — is the check's to decide, and is stated there alone
+//! (`policy/attestation.rs`'s `attestation_check`, its doc item 4).
 //!
 //! * a body whose values it does not hold — a copied run naming an address
-//!   M4 has no value at. That write cannot commit: the store's own existence
-//!   walk refuses it `dangling_source`, so the check passes it through
-//!   UNATTESTED and lets the store answer. (A window's addresses are never
-//!   walked here: the body spells them, and the store's walk answers.)
+//!   M4 has no value at ([`ComposeFault::MissingValue`]). (A window's
+//!   addresses are never walked here: the body spells them.)
 //! * a body over a value the principal may NOT READ — a COPIED run onto a
-//!   staging draft the read predicate withholds from it. Those values are
-//!   never read here: a verdict composed over them answers BY them —
+//!   staging draft the read predicate withholds from it
+//!   ([`ComposeFault::UnreadableRunOrigin`]). Those values are never read
+//!   here: a verdict composed over them answers BY them —
 //!   `attestation_required` telling that an address holds a value,
 //!   `signature` whether a guessed value is the one it holds — where the
 //!   store's source gate promises `withheld` before any existence answer
-//!   (PUB-8.4). The composer answers [`ComposeFault::UnreadableRunOrigin`] and
-//!   no more. What such a shot is OWED is the check's to decide, by asking
-//!   the store's own gates (`policy/attestation.rs`): their own refusal,
-//!   passed through UNATTESTED, where they refuse it; and
-//!   `attestation_invalid:withheld` where the base CARRIES every such run
-//!   (PUB-6.24), a value no signature of its author's can attest. A WINDOW is
-//!   no such case since the address form (l6-A4): it is signed by its
-//!   address, which its author holds whatever it may read, and the store's
-//!   gate alone decides it — admitted where the base carries it (PUB-6.24),
-//!   `withheld` where it does not — so an author whose grant lapsed re-signs
-//!   a re-shoot that keeps a window (fam2-Q's (c), closed by arm A).
-//! * a body past [`MAX_SHOT_BODY_BYTES`], refused
-//!   `attestation_invalid:frame_too_large` before it is built past the budget.
+//!   (PUB-8.4). A WINDOW is no such case since the address form (l6-A4): it
+//!   is signed by its address, which its author holds whatever it may read,
+//!   so it is composed unread — and an author whose grant lapsed re-signs a
+//!   re-shoot that keeps a window (fam2-Q's (c), closed by arm A).
+//! * a body past [`MAX_SHOT_BODY_BYTES`] ([`ComposeFault::OverBudget`]),
+//!   answered before it is built past the budget.
 //! * a body with a term the frame's fixed-width rows cannot spell — a width,
-//!   an extent or a placed count past 2^64 − 1 ([`ComposeFault::Unspellable`]).
-//!   Such a shot names positions or a base extent no store holds and cannot
-//!   commit — `base_extent_too_large`, `too_many_values` or
-//!   `dangling_source` is its answer — so the check passes it through
-//!   UNATTESTED, as it passes a run naming an address with no value.
+//!   an extent or a placed count past 2^64 − 1 ([`ComposeFault::Unspellable`]):
+//!   a shot naming positions or a base extent no store holds.
 
 use skep_address::{document_of, Address, Nat, Span};
 use skep_arrangement::{trunk_of, Deposit, PlacedSegment, Shot};
@@ -117,10 +110,8 @@ pub(super) enum ComposeFault {
     /// A `publish`'s COPIED run — a staging draft's, re-inserted by value —
     /// names an origin document the principal may not read, so no value of
     /// the shot is read: a verdict composed over such a value would answer BY
-    /// it. What the write is OWED — the store's own refusal, or
-    /// `attestation_invalid:withheld` where the base CARRIES every such run
-    /// (PUB-6.24) — is not the composer's to know: the check asks the store's
-    /// own gates (`policy/attestation.rs`'s
+    /// it. What the write is OWED is not the composer's to know: the check
+    /// asks the store's own gates (`policy/attestation.rs`'s
     /// `refused_at_or_before_the_source_gate`). A window raises this never:
     /// it is spelled by address and read from nowhere.
     UnreadableRunOrigin,
@@ -129,8 +120,7 @@ pub(super) enum ComposeFault {
     /// A `publish` term the frame's fixed-width rows cannot spell — a run's
     /// width, the base extent or the placed count past 2^64 − 1 — naming
     /// positions or a base extent no store holds: a shot the store refuses
-    /// (`base_extent_too_large`, `too_many_values`, `dangling_source`), so
-    /// the check passes it through UNATTESTED to that answer.
+    /// (`base_extent_too_large`, `too_many_values`, `dangling_source`).
     Unspellable,
 }
 

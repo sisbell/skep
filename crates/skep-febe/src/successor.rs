@@ -5,10 +5,13 @@
 //! and the operation is still one M2 transaction.
 //!
 //! The whole successor is assembled here — all three slots, in the order the
-//! client is promised, each held to M7's per-slot span budget as it is built
-//! ([`successor_link`]). Building the slots here rather than in M7 is what
-//! makes that budget M10's to enforce for this one request, and enforcing it
-//! means counting as the spans are produced.
+//! client is promised, each bounded by M7's per-slot span budget as it is
+//! built ([`successor_link`]). Building the slots here rather than in M7 is
+//! what makes that budget M10's to count for this one request, and counting
+//! it means stopping as the spans are produced. Whether M10 also ANSWERS the
+//! budget is the write door's to say: where the door judged the write, a slot
+//! is refused as it crosses; where the door deferred to the store's own gate,
+//! the verdict is M7's, after that gate.
 
 use skep_address::Span;
 use skep_arrangement::{as_ordinal_vspan, M5State, VSpec};
@@ -19,6 +22,15 @@ use crate::op::{OpKind, SuccessorSpec};
 use crate::reject::{FaultSite, RejectCode, Rejection};
 
 /// Assemble EDITLINK's successor link from the request's [`SuccessorSpec`].
+///
+/// `judged` is the write door's answer (`consult_write`): whether it judged
+/// this write's sources. Where it did not — the destination's own gate would
+/// refuse, so the store speaks first — the sources went unconsulted, and the
+/// build issues no verdict their arrangements decide: a resolved slot's span
+/// budget, which only a source's fragmentation can exceed, is left to M7's
+/// `editlink`, which holds the finished slots to it after its home gate
+/// ([`successor_slot`]). Every other refusal here is the request's own or the
+/// registry's, and answers alike whatever a source holds.
 ///
 /// PRECEDENCE, since a successor may be wrong in several slots at once and
 /// exactly one answer goes back: the slots are built `from`, then `to`, then
@@ -31,8 +43,10 @@ use crate::reject::{FaultSite, RejectCode, Rejection};
 ///
 /// TYPE is the successor's one two-form slot (§4): address-denoting or
 /// content-resolved, with M7 owning the slot-shape and schema verdict inside
-/// `editlink`. Both forms are held to [`MAX_SLOT_SPANS`] HERE, where the slot
-/// is built — and the `Addrs` form BEFORE the encoding is, since [`enc`] turns
+/// `editlink`. Both forms are held to [`MAX_SLOT_SPANS`] where the slot is
+/// built — the `Resolve` form as [`successor_slot`] says, and the `Addrs`
+/// form HERE, whatever `judged` says, and BEFORE the encoding is: its count
+/// is the request's own, so refusing it discloses nothing, and [`enc`] turns
 /// each ~19-byte name into a subtree span of two multi-component tumblers, a
 /// ~26× amplification into memory M7 would then refuse anyway.
 ///
@@ -43,9 +57,10 @@ pub(crate) fn successor_link(
     m3: &M3State,
     m5: &M5State,
     successor: &SuccessorSpec,
+    judged: bool,
 ) -> Result<Link, Rejection> {
-    let from = successor_slot(m3, m5, FROM, &successor.from)?;
-    let to = successor_slot(m3, m5, TO, &successor.to)?;
+    let from = successor_slot(m3, m5, FROM, &successor.from, judged)?;
+    let to = successor_slot(m3, m5, TO, &successor.to, judged)?;
     let ty = match &successor.ty {
         SlotArg::Addrs(a) => {
             if a.len() > MAX_SLOT_SPANS {
@@ -53,7 +68,7 @@ pub(crate) fn successor_link(
             }
             enc(a)
         }
-        SlotArg::Resolve(v) => successor_slot(m3, m5, TYPE, v)?,
+        SlotArg::Resolve(v) => successor_slot(m3, m5, TYPE, v, judged)?,
     };
     Ok(Link::triple(from, to, ty))
 }
@@ -99,16 +114,28 @@ pub(crate) fn successor_link(
 /// The slot is BOUNDED at [`MAX_SLOT_SPANS`] — M7's per-slot budget, named
 /// rather than respelled — and the count is taken AS THE SPANS ARE PRODUCED,
 /// so an over-budget slot stops accumulating instead of being built and then
-/// measured. That discipline is what makes the third fault, `SlotTooLarge`,
-/// worth typing here: a spec's expansion is not the request's size but the
-/// SOURCE document's fragmentation (one run per contiguous I-segment), so a
-/// short list of specs over a fragmented document names spans without bound,
-/// and each is two multi-component tumblers — order half a kilobyte live.
-/// M7's `editlink` holds the finished slots to the same number, but it does
-/// so inside its transaction, by which point the peak has been paid; refusing
-/// as we build costs the client nothing (the same code, the same `Permanent`
-/// disposition, the same refusal) and costs the engine one slot's worth of
-/// spans instead of every spec's.
+/// measured. A spec's expansion is not the request's size but the SOURCE
+/// document's fragmentation (one run per contiguous I-segment), so a short
+/// list of specs over a fragmented document names spans without bound, and
+/// each is two multi-component tumblers — order half a kilobyte live. M7's
+/// `editlink` holds the finished slots to the same number, but inside its
+/// transaction; counting here is what keeps the build's own peak to one
+/// slot's worth of spans instead of every spec's.
+///
+/// WHO ANSWERS THE BUDGET is `judged`'s to say. Where the door judged the
+/// write, the caller may read every source, so the third fault is typed here:
+/// `SlotTooLarge` as the slot crosses the budget, which costs the client
+/// nothing against M7's refusal of the same slot (the same code, the same
+/// `Permanent` disposition) and names the slot besides. Where the door
+/// deferred, a refusal here would be decided by the fragmentation of a source
+/// the caller was never shown, ahead of the store's `not_owner` — two private
+/// drafts differing in arrangement alone would draw two answers. So the slot
+/// stops ONE span past the budget, which M7 refuses after its home gate, and
+/// the walk resolves no further spec while still judging each one's shape and
+/// registration. Those faults are the request's own and the registry's, so
+/// they must speak alike wherever an unconsulted source crossed the budget
+/// ahead of them; a walk that ended at the crossing would let a later spec's
+/// fault speak or not by where that happened.
 ///
 /// That budget bounds the slot's spans and, each spec's runs being pulled one
 /// at a time off M5's lazy `iter_resolve` so the cap ends a spec's walk where
@@ -125,11 +152,11 @@ pub(crate) fn successor_link(
 /// PRECEDENCE within the slot, since several specs may be wrong and exactly
 /// one answer goes back: the specs are walked in order and the FIRST offending
 /// one speaks, with `IllFormedSpec` ahead of `SourceNotRegistered` on that
-/// spec. `SlotTooLarge` can arise only after every spec walked so far has
-/// passed both. Every refusal names the slot it is about in `site.slot`; the
-/// two per-spec refusals also localize the offender in `site.index`, while
-/// `SlotTooLarge` leaves `index` empty, being the slot's fault rather than one
-/// spec's.
+/// spec. `SlotTooLarge`, raised only where the door judged the write, can
+/// arise only after every spec walked so far has passed both. Every refusal
+/// names the slot it is about in `site.slot`; the two per-spec refusals also
+/// localize the offender in `site.index`, while `SlotTooLarge` leaves `index`
+/// empty, being the slot's fault rather than one spec's.
 ///
 /// Past the guard and under the budget the tail is infallible: `Run::iextent`
 /// is total (every `Run` has `width ≥ 1` and an element-level `i_start`). An
@@ -139,6 +166,7 @@ fn successor_slot(
     m5: &M5State,
     slot: usize,
     specs: &[VSpec],
+    judged: bool,
 ) -> Result<Endset, Rejection> {
     let mut spans = Vec::new();
     for (index, spec) in specs.iter().enumerate() {
@@ -148,9 +176,19 @@ fn successor_slot(
         if !m3.is_registered_document(&spec.source) {
             return Err(at_spec(slot, index, RejectCode::SourceNotRegistered));
         }
+        // Past the budget only an unjudged build is still walking, and it
+        // resolves nothing more.
+        if spans.len() > MAX_SLOT_SPANS {
+            continue;
+        }
         for run in m5.iter_resolve(&spec.source, &spec.span) {
             if spans.len() == MAX_SLOT_SPANS {
-                return Err(slot_too_large(slot));
+                if judged {
+                    return Err(slot_too_large(slot));
+                }
+                // One span past the budget: M7 refuses it after its home gate.
+                spans.push(run.iextent());
+                break;
             }
             spans.push(run.iextent());
         }
@@ -227,35 +265,40 @@ mod tests {
     /// ill-formed span is Permanent, an unregistered source is Reorder — and
     /// neither reaches `resolve`, whose ⟨⟩ would otherwise be deposited as an
     /// empty slot. Each localizes the offending spec in `site.index`, and
-    /// names the slot that index is read against.
+    /// names the slot that index is read against. Neither turns on what a
+    /// source holds, so each answers alike whether or not the door judged the
+    /// write.
     #[test]
     fn the_two_faults_this_guard_owns_are_typed_before_resolve() {
         let m3 = M3State::genesis();
         let m5 = M5State::genesis();
         let doc = addr(&[1, 0, 1, 0, 1]);
-
-        let ill_formed = VSpec { source: doc.clone(), span: span(&[2, 1], &[0, 1]) };
-        let rej =
-            successor_slot(&m3, &m5, FROM, &[ill_formed]).expect_err("link-subspace span");
-        assert_eq!(rej.op, OpKind::EditLink);
-        assert_eq!(rej.code, RejectCode::IllFormedSpec);
-        let site = rej.site.expect("localized");
-        assert_eq!(site.slot, Some(FROM));
-        assert_eq!(site.index, Some(0));
-
+        let ill_formed = || VSpec { source: doc.clone(), span: span(&[2, 1], &[0, 1]) };
         // Well formed, and genesis M3 has registered no document: the spec
         // would resolve to ⟨⟩, so it is refused instead.
-        let unregistered = VSpec { source: doc, span: span(&[1, 1], &[0, 1]) };
-        let rej =
-            successor_slot(&m3, &m5, TO, &[unregistered]).expect_err("unregistered source");
-        assert_eq!(rej.code, RejectCode::SourceNotRegistered);
-        assert_eq!(rej.disposition, crate::reject::Disposition::Reorder);
-        let site = rej.site.expect("localized");
-        assert_eq!(site.slot, Some(TO));
-        assert_eq!(site.index, Some(0));
+        let unregistered = || VSpec { source: doc.clone(), span: span(&[1, 1], &[0, 1]) };
 
-        // No specs is not a fault: an empty slot the CALLER asked for.
-        assert!(successor_slot(&m3, &m5, FROM, &[]).expect("empty is fine").is_empty());
+        for judged in [true, false] {
+            let rej = successor_slot(&m3, &m5, FROM, &[ill_formed()], judged)
+                .expect_err("link-subspace span");
+            assert_eq!(rej.op, OpKind::EditLink);
+            assert_eq!(rej.code, RejectCode::IllFormedSpec, "judged: {judged}");
+            let site = rej.site.expect("localized");
+            assert_eq!(site.slot, Some(FROM));
+            assert_eq!(site.index, Some(0));
+
+            let rej = successor_slot(&m3, &m5, TO, &[unregistered()], judged)
+                .expect_err("unregistered source");
+            assert_eq!(rej.code, RejectCode::SourceNotRegistered, "judged: {judged}");
+            assert_eq!(rej.disposition, crate::reject::Disposition::Reorder);
+            let site = rej.site.expect("localized");
+            assert_eq!(site.slot, Some(TO));
+            assert_eq!(site.index, Some(0));
+
+            // No specs is not a fault: an empty slot the CALLER asked for.
+            let empty = successor_slot(&m3, &m5, FROM, &[], judged).expect("empty is fine");
+            assert!(empty.is_empty());
+        }
     }
 
     /// §4: within a slot the FIRST offending spec speaks, and `IllFormedSpec`
@@ -271,12 +314,12 @@ mod tests {
         let unregistered = || VSpec { source: doc.clone(), span: span(&[1, 1], &[0, 1]) };
 
         // Both faults on ONE spec: the span is judged first.
-        let rej = successor_slot(&m3, &m5, FROM, &[ill_formed()]).expect_err("both faults");
+        let rej = successor_slot(&m3, &m5, FROM, &[ill_formed()], true).expect_err("both faults");
         assert_eq!(rej.code, RejectCode::IllFormedSpec, "the span is judged before the source");
 
         // Two offending specs, the later one ill-formed: the earlier speaks,
         // and its index is what comes back.
-        let rej = successor_slot(&m3, &m5, FROM, &[unregistered(), ill_formed()])
+        let rej = successor_slot(&m3, &m5, FROM, &[unregistered(), ill_formed()], true)
             .expect_err("two offenders");
         assert_eq!(rej.code, RejectCode::SourceNotRegistered, "the first offender speaks");
         assert_eq!(rej.site.expect("localized").index, Some(0));
@@ -303,14 +346,14 @@ mod tests {
             to: vec![unregistered()],
             ty: SlotArg::Resolve(vec![ill_formed()]),
         };
-        let rej = successor_link(&m3, &m5, &both).expect_err("two offending slots");
+        let rej = successor_link(&m3, &m5, &both, true).expect_err("two offending slots");
         assert_eq!(rej.code, RejectCode::SourceNotRegistered, "TO is built before TYPE");
         assert_eq!(rej.site.expect("localized").slot, Some(TO));
 
         // TYPE alone, in its `Resolve` form.
         let ty_only =
             SuccessorSpec { from: vec![], to: vec![], ty: SlotArg::Resolve(vec![ill_formed()]) };
-        let rej = successor_link(&m3, &m5, &ty_only).expect_err("the type slot offends");
+        let rej = successor_link(&m3, &m5, &ty_only, true).expect_err("the type slot offends");
         assert_eq!(rej.code, RejectCode::IllFormedSpec);
         let site = rej.site.expect("localized");
         assert_eq!(site.slot, Some(TYPE), "a Resolve-form type slot names TYPE, not its neighbour");
@@ -319,36 +362,36 @@ mod tests {
 
     /// §4: the type slot's `Addrs` form is held to the same budget its
     /// `Resolve` sibling is, and held to it BEFORE `enc` expands each ~19-byte
-    /// name into a subtree span. The site names the slot and no index: the
-    /// slot is at fault, not one address in it.
+    /// name into a subtree span — whether or not the door judged the write,
+    /// since the count is the request's own. The site names the slot and no
+    /// index: the slot is at fault, not one address in it.
     #[test]
     fn an_over_budget_address_denoting_type_slot_is_refused_before_encoding() {
         let m3 = M3State::genesis();
         let m5 = M5State::genesis();
         let doc = addr(&[1, 0, 1, 0, 1]);
-
-        let over = SuccessorSpec {
+        let with_type = |names: usize| SuccessorSpec {
             from: vec![],
             to: vec![],
-            ty: SlotArg::Addrs(vec![doc.clone(); MAX_SLOT_SPANS + 1]),
+            ty: SlotArg::Addrs(vec![doc.clone(); names]),
         };
-        let rej = successor_link(&m3, &m5, &over).expect_err("one address past the budget");
-        assert_eq!(rej.op, OpKind::EditLink);
-        assert_eq!(rej.code, RejectCode::SlotTooLarge);
-        assert_eq!(rej.disposition, crate::reject::Disposition::Permanent);
-        let site = rej.site.expect("the slot is named");
-        assert_eq!(site.slot, Some(TYPE));
-        assert!(site.index.is_none(), "the slot is at fault, not one address in it");
 
-        // At the budget it is an ordinary slot, and the whole successor
-        // assembles: empty from/to are structurally fine (M7 gates the type).
-        let at_cap = SuccessorSpec {
-            from: vec![],
-            to: vec![],
-            ty: SlotArg::Addrs(vec![doc; MAX_SLOT_SPANS]),
-        };
-        let link = successor_link(&m3, &m5, &at_cap).expect("a slot at the budget is accepted");
-        assert_eq!(link.type_slot().len(), MAX_SLOT_SPANS);
-        assert!(link.from_slot().is_empty() && link.to_slot().is_empty());
+        for judged in [true, false] {
+            let rej = successor_link(&m3, &m5, &with_type(MAX_SLOT_SPANS + 1), judged)
+                .expect_err("one address past the budget");
+            assert_eq!(rej.op, OpKind::EditLink);
+            assert_eq!(rej.code, RejectCode::SlotTooLarge, "judged: {judged}");
+            assert_eq!(rej.disposition, crate::reject::Disposition::Permanent);
+            let site = rej.site.expect("the slot is named");
+            assert_eq!(site.slot, Some(TYPE));
+            assert!(site.index.is_none(), "the slot is at fault, not one address in it");
+
+            // At the budget it is an ordinary slot, and the whole successor
+            // assembles: empty from/to are structurally fine (M7 gates the type).
+            let link = successor_link(&m3, &m5, &with_type(MAX_SLOT_SPANS), judged)
+                .expect("a slot at the budget is accepted");
+            assert_eq!(link.type_slot().len(), MAX_SLOT_SPANS);
+            assert!(link.from_slot().is_empty() && link.to_slot().is_empty());
+        }
     }
 }

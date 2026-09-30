@@ -28,6 +28,46 @@ fn wrappers_recurse() {
     assert_eq!(code, RejectCode::Content);
 }
 
+/// §5's nested-error rule as a LAW over every wrapper: each wrapper variant
+/// lowers exactly as the leaf it wraps — code and site — for EVERY leaf of
+/// that leaf's enum, so no wrapper arm can be the constant its one sampled
+/// leaf happens to lower to (a `Gate` corruption lowered as a registration
+/// code would lose its operator detail and advise a reorder).
+#[test]
+fn every_wrapper_lowers_as_the_leaf_it_wraps_for_every_leaf() {
+    for leaf in [
+        MintError::HomeNotRegistered,
+        MintError::SourceNotRegistered,
+        MintError::NotAnAccount,
+        MintError::Gate(skep_address::GateViolation),
+    ] {
+        for (wrapper, lowered) in [
+            ("CreateDocumentError::Mint", CreateDocumentError::Mint(leaf).lower()),
+            ("InsertError::Mint", InsertError::Mint(leaf).lower()),
+            ("VersionError::Mint", VersionError::Mint(leaf).lower()),
+            ("PublishError::Mint", PublishError::Mint(leaf).lower()),
+            ("MakeLinkError::Mint", MakeLinkError::Mint(leaf).lower()),
+            ("EmitError::Mint", EmitError::Mint(leaf).lower()),
+            ("NullifyError::Mint", NullifyError::Mint(leaf).lower()),
+            ("AssertSupError::Mint", AssertSupError::Mint(leaf).lower()),
+            ("EditLinkError::Mint", EditLinkError::Mint(leaf).lower()),
+        ] {
+            assert_eq!(lowered, leaf.lower(), "{wrapper}({leaf:?})");
+        }
+    }
+    for leaf in [SeatError::NotLinkAddress, SeatError::NotHomeLink, SeatError::AlreadySeated] {
+        let lowered = MakeLinkError::Seat(leaf).lower();
+        assert_eq!(lowered, leaf.lower(), "MakeLinkError::Seat({leaf:?})");
+    }
+    let content = || {
+        ContentError::AlreadyPresent(Tumbler::new([1u32].map(Nat::from)).expect("nonempty"))
+    };
+    let lowered = InsertError::Content(content()).lower();
+    assert_eq!(lowered, content().lower(), "InsertError::Content");
+    let lowered = PublishError::Content(content()).lower();
+    assert_eq!(lowered, content().lower(), "PublishError::Content");
+}
+
 /// §5: `Content(ContentError)` collapses wholesale to `Content`
 /// (Permanent), discarding M4's structure — the flagged best-effort.
 #[test]

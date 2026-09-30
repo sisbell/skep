@@ -3,7 +3,8 @@
 //! read answers what a client admits an edition by, its birth version checked
 //! against the address `Op::Version` minted; the two reads that take a
 //! document demand a registered DOCUMENT and refuse every other tier; the
-//! three-valued publication flag reaches the store unresolved; and the
+//! three-valued publication flag reaches the store unresolved, each explicit
+//! arm as sent; and the
 //! any-principal read hands a client the answer set and never the index —
 //! every served row carrying the one issuer ω answers for its prefix, the
 //! guest answered empty.
@@ -144,6 +145,39 @@ fn the_absent_publication_flag_reaches_the_store_unresolved() {
         doc_metadata(ex(&fx.febe, fresh, Op::DocMetadata { doc: home })).1,
         "a fork into an empty account mints that account's published home"
     );
+}
+
+/// PUB-8.16 on FORK's EXPLICIT arms: the flag rides through verbatim, and
+/// M3's create path honors it as sent. Each cell is one where the explicit
+/// flag and the ABSENT one disagree, so a fork that dropped or defaulted the
+/// flag answers the other bit — `Some(true)` into an account that already
+/// has a document mints a PUBLISHED one where absent mints a draft;
+/// `Some(false)` as an empty account's first mint mints a DRAFT where absent
+/// mints the published home. (The daemon refuses that explicit-false first
+/// mint, PUB-8.20; below the daemon it mints, which is what makes the cell
+/// observable here.)
+#[test]
+fn an_explicit_fork_flag_reaches_the_store_verbatim() {
+    let fx = setup();
+    let published_of = |session: SessionId, doc: skep_address::Address| {
+        doc_metadata(ex(&fx.febe, session, Op::DocMetadata { doc })).1
+    };
+    let _ = create_doc(&fx); // the account is no longer empty
+    let (fork, _) = ack_addr(ex(&fx.febe, fx.user, Op::Fork { published: Some(true) }));
+    assert!(published_of(fx.user, fork), "Some(true) into a non-empty account: published");
+
+    let (prefix, _) = maybe_addr(ex(&fx.febe, fx.boot, Op::NextAccountPrefix { parent: node1() }));
+    ack_addr(ex(
+        &fx.febe,
+        fx.boot,
+        Op::Delegate {
+            new_prefix: prefix.expect("a second delegable prefix").tumbler().clone(),
+            new_id: PrincipalId(22),
+        },
+    ));
+    let fresh = fx.febe.open_session(PrincipalId(22));
+    let (first, _) = ack_addr(ex(&fx.febe, fresh, Op::Fork { published: Some(false) }));
+    assert!(!published_of(fresh, first), "Some(false) as the first mint: a draft, not the home");
 }
 
 /// The any-principal read's served guarantee (PUB-8.47; RES-231, RES-298),

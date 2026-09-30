@@ -6,19 +6,20 @@
 //! predicate is derived: which arguments it consults, in what order, what it
 //! answers, and — load-bearing — that it stands BEHIND the destination's own
 //! gate and never speaks ahead of the store's `published_target` or
-//! `not_owner`. Beside it, the ONE source gate the door is silent for: the
-//! publish shot's, which runs on nothing but the visibility class M10 lends
-//! M5.
+//! `not_owner`, nor lets anything built from a source it did not consult
+//! speak there. Beside it, the gates the door is silent for, which run on
+//! nothing but the visibility class M10 lends a store for one write: the
+//! publish shot's source gate in M5, and the link writes' dedup in M7.
 //!
 //! The read path's use of the same predicate is `read_door.rs`.
 
 use crate::common;
 
 use common::*;
-use skep_address::{elem_addr, Address, ElemPos};
+use skep_address::{document_of, elem_addr, Address, ElemPos};
 use skep_febe::{
     Deposit, Disposition, Op, OpKind, PrincipalId, RejectCode, Run, SessionId, Shot, ShotRun,
-    SlotArg, SuccessorSpec,
+    SlotArg, SuccessorSpec, VSpec, MAX_SLOT_SPANS,
 };
 
 /// The stranger's account and session, plus one DRAFT of its own — the
@@ -185,6 +186,123 @@ fn the_destinations_own_gate_stands_ahead_of_the_consult() {
         ex(&fx.febe, other, Op::AssertSup { home: unreadable_doc.clone(), old: l1, new: l2 }),
         OpKind::AssertSup,
     );
+}
+
+/// PUB-6.36 slot 1 ahead of everything built from a source (PUB-6.38; the
+/// deferral in `consult_write`): an edit into a destination the caller may
+/// not write is answered alike WHATEVER an unconsulted successor source
+/// holds. Where the door deferred, the sources were never consulted, so
+/// nothing M10 builds from their arrangements may speak ahead of the store's
+/// gate — M7's `editlink` asks its home gate before its own span budget for
+/// the same reason. Two private drafts differing in ARRANGEMENT alone — one
+/// region split into two runs, one contiguous — must draw one answer, or the
+/// answer is an oracle on a document the caller may not read: the store's
+/// `not_owner`, and with a later spec at fault, that spec's own fault,
+/// wherever an unread source crossed the slot's budget ahead of it.
+#[test]
+fn an_edit_refused_its_destination_answers_alike_whatever_its_unreadable_source_holds() {
+    let (fx, unreadable) = setup_with_unreadable();
+    // USER's: readable to the stranger, and not the stranger's to write.
+    let (user_draft, original) = linked_doc(&fx);
+    let fragmented = create_doc(&fx);
+    insert3(&fx, &fragmented);
+    ack(ex(&fx.febe, fx.user, Op::Delete { doc: fragmented.clone(), p: vp(1, 2), width: nat(1) }));
+    let contiguous = create_doc(&fx);
+    insert3(&fx, &contiguous);
+    let runs_over = |d: &Address| {
+        runs(ex(&fx.febe, fx.user, Op::Image { d: d.clone(), region: vec![vspan(1, 1, 2)] })).len()
+    };
+    assert_eq!(
+        (runs_over(&fragmented), runs_over(&contiguous)),
+        (2, 1),
+        "premise: the two sources differ in arrangement alone"
+    );
+    unreadable.lock().expect("no poisoning").extend([fragmented.clone(), contiguous.clone()]);
+    let (other, _their_draft) = stranger(&fx);
+    // Enough specs that the fragmented source's spans cross the slot's
+    // budget and the contiguous source's do not; `fault` appends a spec the
+    // request itself gets wrong.
+    let edit = |source: &Address, fault: Option<VSpec>| {
+        let mut from =
+            vec![VSpec { source: source.clone(), span: vspan(1, 1, 2) }; MAX_SLOT_SPANS / 2 + 1];
+        from.extend(fault);
+        Op::EditLink {
+            original: original.clone(),
+            successor: SuccessorSpec {
+                from,
+                to: vec![],
+                ty: SlotArg::Addrs(vec![ghost_type(&user_draft, 1)]),
+            },
+            d_s: user_draft.clone(),
+            d_a: user_draft.clone(),
+        }
+    };
+
+    let before = fx.febe.log_position();
+    let over_fragmented = rejected(ex(&fx.febe, other, edit(&fragmented, None)));
+    assert_eq!(
+        over_fragmented.code,
+        RejectCode::NotOwner,
+        "slot 1 speaks first: {over_fragmented}"
+    );
+    assert_eq!(over_fragmented.site.as_ref().and_then(|s| s.addr.as_ref()), Some(&user_draft));
+    assert_eq!(
+        over_fragmented,
+        rejected(ex(&fx.febe, other, edit(&contiguous, None))),
+        "one answer, whatever an unreadable source holds"
+    );
+
+    // A link-subspace span is the request's own fault, and it sits AFTER
+    // the specs over which the fragmented source crosses the budget.
+    let ill_formed = || Some(VSpec { source: user_draft.clone(), span: vspan(2, 1, 1) });
+    let at_fault = rejected(ex(&fx.febe, other, edit(&fragmented, ill_formed())));
+    assert_eq!(at_fault.code, RejectCode::IllFormedSpec, "the request's own fault: {at_fault}");
+    assert_eq!(
+        at_fault,
+        rejected(ex(&fx.febe, other, edit(&contiguous, ill_formed()))),
+        "a later spec's fault answers alike, wherever an unread source crossed the budget"
+    );
+    assert_eq!(fx.febe.log_position(), before, "a refused edit commits nothing");
+}
+
+/// PUB-6.36 slot 1 over BOTH of `edit_link`'s homes: the door judges an
+/// edit's sources only where the caller may write EVERY home it deposits
+/// into, so a stranger owning one and not the other is answered the store's
+/// `not_owner`, naming the home it may not write — never `withheld` about the
+/// source. Both orders, so the rule is ALL of the homes, not the first or the
+/// last.
+#[test]
+fn an_edit_owning_one_of_its_two_homes_is_refused_not_owner_never_withheld() {
+    let (fx, unreadable) = setup_with_unreadable();
+    let (user_draft, original) = linked_doc(&fx);
+    let unreadable_doc = create_doc(&fx);
+    insert3(&fx, &unreadable_doc);
+    unreadable.lock().expect("no poisoning").push(unreadable_doc.clone());
+    let (other, their_draft) = stranger(&fx);
+
+    for (d_s, d_a) in [(&their_draft, &user_draft), (&user_draft, &their_draft)] {
+        let rej = rejected(ex(
+            &fx.febe,
+            other,
+            Op::EditLink {
+                original: original.clone(),
+                successor: SuccessorSpec {
+                    from: vec![],
+                    to: vec![vspec(&unreadable_doc, 1, 1)],
+                    ty: SlotArg::Addrs(vec![ghost_type(&their_draft, 1)]),
+                },
+                d_s: d_s.clone(),
+                d_a: d_a.clone(),
+            },
+        ));
+        assert_eq!(rej.op, OpKind::EditLink);
+        assert_eq!(rej.code, RejectCode::NotOwner, "d_s {d_s}, d_a {d_a}: {rej}");
+        assert_eq!(
+            rej.site.as_ref().and_then(|s| s.addr.as_ref()),
+            Some(&user_draft),
+            "the home the stranger may not write"
+        );
+    }
 }
 
 /// PUB-6.23 on `version`: a fork of a source the caller may not read is
@@ -498,4 +616,48 @@ fn a_shot_windowing_an_unreadable_origin_is_withheld_naming_it() {
     assert_eq!(fx.febe.log_position(), before, "a withheld shot commits nothing");
 
     ack_addr(ex(&fx.febe, fx.user, Op::Publish { doc: unreadable_edition.clone(), shot: shot() }));
+}
+
+/// PUB-6.25 / PUB-6.26 on the LINK writes: a `[K_sup]` claim dedups on its
+/// value across homes (M7) — but only onto an incumbent the writer may read,
+/// which is the visibility class M10 lends the link writer for the one
+/// write. The owner's assertion from a second home is the control: it IS
+/// answered the incumbent, zero-step. The stranger's identical assertion
+/// must mint its own claim in its own home; handed the one homed where it
+/// cannot read, it would learn that a link lives there, and where.
+#[test]
+fn a_link_writes_dedup_never_hands_back_a_claim_homed_where_the_writer_cannot_read() {
+    let (fx, unreadable) = setup_with_unreadable();
+    let (user_draft, l1) = linked_doc(&fx);
+    let (l2, _) = ack_addr(ex(
+        &fx.febe,
+        fx.user,
+        Op::MakeLink {
+            home: user_draft.clone(),
+            from: SlotArg::Resolve(vec![vspec(&user_draft, 1, 1)]),
+            to: SlotArg::Resolve(vec![vspec(&user_draft, 2, 1)]),
+            ty: SlotArg::Resolve(vec![vspec(&user_draft, 3, 1)]),
+            replaces: None,
+        },
+    ));
+    let unreadable_home = create_doc(&fx);
+    unreadable.lock().expect("no poisoning").push(unreadable_home.clone());
+    let (other, their_draft) = stranger(&fx);
+    let sup = |home: &Address| Op::AssertSup {
+        home: home.clone(),
+        old: l1.clone(),
+        new: l2.clone(),
+    };
+    let (unreadable_claim, _) = ack_addr(ex(&fx.febe, fx.user, sup(&unreadable_home)));
+
+    let before = fx.febe.log_position();
+    assert_eq!(
+        ack_addr(ex(&fx.febe, fx.user, sup(&user_draft))),
+        (unreadable_claim.clone(), before),
+        "the control: the owner's dedup reaches across homes, zero-step"
+    );
+    let (theirs, at) = ack_addr(ex(&fx.febe, other, sup(&their_draft)));
+    assert_ne!(theirs, unreadable_claim, "never a claim homed where the writer cannot read");
+    assert_eq!(document_of(&theirs), Some(their_draft), "the writer's own claim, in its own home");
+    assert!(at > before, "minted, not a dedup hit");
 }

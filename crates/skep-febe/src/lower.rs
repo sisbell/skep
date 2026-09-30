@@ -382,9 +382,13 @@ impl Lower for EditLinkError {
             EditLinkError::NotOwner(a) => not_owner(a),
             // M7's own restatement of the per-slot span budget over the
             // finished successor — the same budget and the same leaf
-            // MAKELINK's slots take. M10 builds those slots and holds them to
-            // that number as it builds them (`successor::successor_slot`),
-            // so this arm answers for a successor assembled some other way.
+            // MAKELINK's slots take. M10 builds those slots and counts them
+            // against that number as it builds them
+            // (`successor::successor_slot`), refusing there where the door
+            // judged the write. Where the door deferred to the store's own
+            // gate, the build stops one span past the budget and this arm is
+            // the one that answers it, after M7's home gate — as it is for a
+            // successor assembled some other way.
             EditLinkError::SlotTooLarge => (RejectCode::SlotTooLarge, None),
             EditLinkError::IllFormedSuccessor => (RejectCode::IllFormedSuccessor, None),
             EditLinkError::DcViolation => (RejectCode::DcViolation, None),

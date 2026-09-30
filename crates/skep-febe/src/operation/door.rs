@@ -243,9 +243,19 @@ pub fn consult_read(op: &Op, readable: &dyn Fn(&Address) -> bool) -> Result<(), 
 /// (PUB-6.6: `edit_link.original`, `assert_sup.old`/`new`). Consulted
 /// through `readable`, the ONE predicate this request was built with
 /// ([`OperationSurface::readable_by`]) — the same binding every read arm
-/// answers, so one front door answers one predicate — and BEFORE the store
-/// call (or the EDITLINK successor build) that would read the source's
-/// arrangement.
+/// answers, so one front door answers one predicate — and, wherever the door
+/// judges the write at all, BEFORE the store call (or the EDITLINK successor
+/// build) that would read the source's arrangement.
+///
+/// RETURNS whether the door JUDGED the write: `true` where it ran past the
+/// deferral below and every rule it owns passed; `false` where it judged
+/// nothing — an op it does not consult ([`WriteConsult::NotTaken`]), or one
+/// whose destination's own gate would refuse, so the store speaks first. A
+/// `false` binds the dispatch that follows: the write's sources went
+/// unconsulted, so nothing built from their arrangements before the store
+/// call may speak — no verdict whose answer a source the caller may not read
+/// could decide. That is why the EDITLINK successor build takes it
+/// (`successor_link`'s `judged`).
 ///
 /// PRECONDITION: `readable` is built from `wc.principal`, off the same
 /// snapshot `m3` is read from, and from nothing else. The door DERIVES no
@@ -261,7 +271,8 @@ pub fn consult_read(op: &Op, readable: &dyn Fn(&Address) -> bool) -> Result<(), 
 /// own gate would pass — registered, and ω-owned by the caller, asked
 /// through the store's one spelling of ω (`Caller::is_owner`, M5's, which
 /// is M3's `is_effective_owner`) — and where it would not, nothing here
-/// speaks and the store answers its own `doc_not_registered` /
+/// speaks, nor anything built from the sources it left unconsulted (the
+/// `false` it returns), and the store answers its own `doc_not_registered` /
 /// `home_not_registered` / `not_owner`. A session that may not write here
 /// is never told whether it may read there (PUB-6.43's ground). M10 words
 /// no ownership verdict of its own; it only declines to judge a source
@@ -340,16 +351,16 @@ pub(super) fn consult_write(
     op: &Op,
     m3: &M3State,
     readable: &dyn Fn(&Address) -> bool,
-) -> Result<(), Rejection> {
+) -> Result<bool, Rejection> {
     let kind = op.kind();
     let WriteConsult::AfterOwnershipOf(destinations) = op.write_consult() else {
-        return Ok(()); // no source and no link-address argument (see the table)
+        return Ok(false); // no source and no link-address argument (see the table)
     };
     // Slot 1 ahead of slot 6: defer to the store wherever the
     // destination's own gate would refuse.
     let caller = wc.caller();
     if !destinations.iter().all(|d| m3.is_registered_document(d) && caller.is_owner(m3, d)) {
-        return Ok(());
+        return Ok(false);
     }
     // Slot 5 ahead of slot 6 (lane 4.2, F3): the model's in-place advance
     // refusal on this write's destination — PUB-2.11, asked of M5's own
@@ -391,5 +402,5 @@ pub(super) fn consult_write(
             ));
         }
     }
-    Ok(())
+    Ok(true)
 }

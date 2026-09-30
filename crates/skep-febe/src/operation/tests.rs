@@ -1,19 +1,24 @@
 use std::sync::Arc;
 
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use skep_address::{validate, Address, Nat, Tumbler};
-use skep_arrangement::{Deposit, HasM5, InsertError, M5Rec, M5State, VPos};
+use skep_address::{validate, Address, Nat, Span, Tumbler};
+use skep_arrangement::{Deposit, HasM5, InsertError, M5Rec, M5State, VPos, VSpec, Vstream};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{
-    CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, TxnError, WorldState,
+    Attestation, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, TxnError,
+    WorldState,
 };
-use skep_links::{HasLinks, LinkRec, LinkState};
+use skep_links::{
+    HasLinks, LinkRec, LinkState, LinkWriter, SlotArg, Visibility, FROM, MAX_SLOT_SPANS,
+};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 
 use super::*;
-use crate::op::{Op, ReqId};
+use crate::op::{Op, ReqId, SuccessorSpec};
 use crate::reject::Disposition;
 use crate::response::CommittedAck;
+use crate::successor::successor_link;
 
 // ── a minimal assembled world (the composition contract in miniature) ──
 
@@ -153,6 +158,33 @@ fn surface() -> OperationSurface<World> {
     OperationSurface::new(Box::new(KernelStores { kernel: kernel() }))
 }
 
+/// A `Stores` recording every attestation a driver acquisition carries — the
+/// whole of what this surface can put in a commit marker's slot — and
+/// otherwise the three drivers over one kernel, as `KernelStores` builds
+/// them.
+struct RecordingStores {
+    kernel: Arc<Kernel<World>>,
+    carried: Arc<Mutex<Vec<Attestation>>>,
+}
+
+impl crate::Stores<World> for RecordingStores {
+    fn kernel(&self) -> &Kernel<World> {
+        &self.kernel
+    }
+    fn vstream_attested<'a>(&'a self, attest: Option<&'a Attestation>) -> Vstream<'a, World> {
+        self.carried.lock().extend(attest.cloned());
+        Vstream::attested(self.kernel(), attest)
+    }
+    fn linkstore_attested<'a>(
+        &'a self,
+        visibility: &'a Visibility<'a, World>,
+        attest: Option<&'a Attestation>,
+    ) -> LinkWriter<'a, World> {
+        self.carried.lock().extend(attest.cloned());
+        LinkWriter::attested(self.kernel(), visibility, attest)
+    }
+}
+
 fn insert_op() -> Op {
     Op::Insert {
         doc: addr(&[1, 0, 1, 0, 1]),
@@ -258,9 +290,10 @@ fn every_write_on_an_unbound_session_is_unauthenticated_before_any_transaction()
 /// §1/§2, the complement of the gate above: a read tolerates an unbound
 /// session — it is ANSWERED, as the guest. Every read arm is driven
 /// through `execute` on an id that was never opened; each may reject for
-/// its own reasons against a genesis world, but never for authentication.
-/// Driving all 27 also exercises `execute`'s Total contract on the read
-/// half: an arm that panics fails here.
+/// its own reasons against a genesis world, but never for authentication,
+/// and a refusal names the op it refused. Driving every read also
+/// exercises `execute`'s Total contract on the read half: an arm that
+/// panics fails here.
 #[test]
 fn no_read_is_ever_rejected_for_an_unbound_session() {
     let febe = surface();
@@ -271,6 +304,7 @@ fn no_read_is_ever_rejected_for_an_unbound_session() {
         }
         let kind = op.kind();
         if let Response::Rejected(rej) = febe.execute(never_opened, Request { id: None, op, attest: None }) {
+            assert_eq!(rej.op, kind, "a refusal names the op it refused");
             assert_ne!(
                 rej.code,
                 RejectCode::Unauthenticated,
@@ -458,5 +492,153 @@ fn each_dispatch_table_rejects_exactly_the_other_half() {
             }
             Ok(_) => panic!("{kind:?} was answered by the table for the other half"),
         }
+    }
+}
+
+/// §1's Total contract on the WRITE half: every write, under a BOUND session
+/// so each clears step (b) and reaches its arm, is answered and none
+/// unwinds; and every refusal names the op it refused. A genesis world sends
+/// most of them down their store's refusal path — where an arm that
+/// unwrapped would panic, and one that lowered under another op's kind would
+/// mislabel the frame.
+#[test]
+fn every_write_under_a_bound_session_is_answered_and_its_refusals_name_it() {
+    let febe = surface();
+    let s = febe.bootstrap_session();
+    for (op, is_read) in crate::op::tests::all_ops() {
+        if is_read {
+            continue;
+        }
+        let kind = op.kind();
+        if let Response::Rejected(rej) = febe.execute(s, Request { id: None, op, attest: None }) {
+            assert_eq!(rej.op, kind, "a refusal names the op it refused");
+            assert_ne!(rej.code, RejectCode::Unauthenticated, "{kind:?}: the session is bound");
+        }
+    }
+}
+
+/// THE ATTESTATION'S PRODUCER SET (`Request::attest`): the value a request
+/// carries reaches a store driver on exactly three writes — `insert`,
+/// `publish`, `make_link` — once each, and is dropped on every other write.
+/// EDITLINK goes a second time with an empty successor: the partition's
+/// fixture is refused by M10's own successor guard before any driver is
+/// acquired, which would leave its row vacuous.
+#[test]
+fn an_attestation_reaches_a_store_driver_on_insert_publish_and_make_link_alone() {
+    let carried = Arc::new(Mutex::new(Vec::new()));
+    let febe = OperationSurface::new(Box::new(RecordingStores {
+        kernel: kernel(),
+        carried: Arc::clone(&carried),
+    }));
+    let s = febe.bootstrap_session();
+    let attestation =
+        Attestation::new(1, vec![0xA5]).expect("a non-zero tag over a non-empty blob");
+    let doc = addr(&[1, 0, 1, 0, 1]);
+    let buildable_edit = Op::EditLink {
+        original: doc.clone(),
+        successor: SuccessorSpec {
+            from: vec![],
+            to: vec![],
+            ty: SlotArg::Addrs(vec![doc.clone()]),
+        },
+        d_s: doc.clone(),
+        d_a: doc,
+    };
+    let writes = crate::op::tests::all_ops()
+        .into_iter()
+        .filter_map(|(op, is_read)| (!is_read).then_some(op))
+        .chain([buildable_edit]);
+    for op in writes {
+        let kind = op.kind();
+        let _ = febe.execute(s, Request { id: None, op, attest: Some(attestation.clone()) });
+        let reached = std::mem::take(&mut *carried.lock());
+        let in_the_slice = matches!(kind, OpKind::Insert | OpKind::Publish | OpKind::MakeLink);
+        let expected = if in_the_slice { vec![attestation.clone()] } else { Vec::new() };
+        assert_eq!(reached, expected, "{kind:?}");
+    }
+}
+
+/// A draft in a delegated account, driven through `execute`: three elements
+/// with the middle one deleted, so one spec over its first two positions
+/// resolves to TWO spans.
+fn fragmented_draft(febe: &OperationSurface<World>) -> Address {
+    let run = |session: SessionId, op: Op| {
+        match febe.execute(session, Request { id: None, op, attest: None }) {
+            Response::Rejected(rej) => panic!("the fixture's requests are answered: {rej}"),
+            answered => answered,
+        }
+    };
+    let boot = febe.bootstrap_session();
+    let Response::MaybeAddr { addr: Some(prefix), .. } =
+        run(boot, Op::NextAccountPrefix { parent: addr(&[1]) })
+    else {
+        panic!("the genesis node has a delegable next-form prefix");
+    };
+    let owner = PrincipalId(7);
+    let Response::AckAddr { addr: account, .. } =
+        run(boot, Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: owner })
+    else {
+        panic!("the bootstrap session delegates the prefix");
+    };
+    let session = febe.open_session(owner);
+    let Response::AckAddr { addr: doc, .. } =
+        run(session, Op::CreateNewDocument { account, published: Some(false) })
+    else {
+        panic!("the owner mints a draft");
+    };
+    let insert = Op::Insert {
+        doc: doc.clone(),
+        at: VPos::content(Nat::from(1u32)),
+        values: [b'a', b'b', b'c'].map(|b| Val::new(vec![b])).to_vec(),
+        deposit: Deposit::Undeclared,
+    };
+    assert!(matches!(run(session, insert), Response::AckAddr { .. }), "the owner fills its draft");
+    let p = VPos::content(Nat::from(2u32));
+    let deleted = run(session, Op::Delete { doc: doc.clone(), p, width: Nat::from(1u32) });
+    assert!(matches!(deleted, Response::Ack { .. }), "the owner deletes the middle element");
+    doc
+}
+
+/// §4, the build a DEFERRED write gets: where the door did not judge the
+/// write, EDITLINK's successor slot is never refused for its span budget —
+/// that verdict is M7's, after its home gate — and stops ONE span past it, so
+/// M7 is certain to refuse it and the build's own peak stays one slot's
+/// worth however many specs follow. Where the door judged, the same slot is
+/// refused as it crosses, naming the slot. A slot exactly at the budget is
+/// an ordinary slot under both.
+#[test]
+fn an_unjudged_successor_slot_stops_one_span_past_the_budget() {
+    let febe = surface();
+    let doc = fragmented_draft(&febe);
+    let snap = febe.stores.kernel().snapshot();
+    let (m3, m5) = (snap.world().m3(), snap.world().m5());
+    let two_spans = || VSpec {
+        source: doc.clone(),
+        span: Span::new(tum(&[1, 1]), tum(&[0, 2]))
+            .unwrap_or_else(|_| panic!("well-formed test span")),
+    };
+    assert_eq!(m5.resolve(&doc, &two_spans().span).len(), 2, "premise: two spans per spec");
+    let successor = |specs: usize| SuccessorSpec {
+        from: vec![two_spans(); specs],
+        to: vec![],
+        ty: SlotArg::Addrs(vec![doc.clone()]),
+    };
+
+    // Twice the budget's worth of specs: the slot crosses at the halfway
+    // spec, and every spec after it resolves nothing more.
+    let over = successor(MAX_SLOT_SPANS);
+    let unjudged = successor_link(m3, m5, &over, false)
+        .expect("an unjudged build leaves the budget to the store");
+    assert_eq!(unjudged.from_slot().len(), MAX_SLOT_SPANS + 1, "one span past, and no further");
+    let refused = successor_link(m3, m5, &over, true)
+        .expect_err("a judged build refuses as the slot crosses");
+    assert_eq!(refused.code, RejectCode::SlotTooLarge);
+    assert_eq!(refused.site.and_then(|s| s.slot), Some(FROM), "the slot is named");
+
+    // Exactly at the budget: an ordinary slot, whoever answers the budget.
+    let at_cap = successor(MAX_SLOT_SPANS / 2);
+    for judged in [true, false] {
+        let link = successor_link(m3, m5, &at_cap, judged).expect("a slot at the budget");
+        assert_eq!(link.from_slot().len(), MAX_SLOT_SPANS, "judged: {judged}");
     }
 }

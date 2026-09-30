@@ -80,8 +80,10 @@ where
         // THE read predicate of this write (PUB-6.39), bound off that snapshot
         // for the PROVEN-bound principal and from nothing else — the consult's
         // stated precondition, which is why the two sit on adjacent lines.
+        // `judged` is whether the door judged this write's sources; where it
+        // did not, nothing built from them below may speak ahead of the store.
         let readable = self.readable_by(snap.world(), Some(wc.principal));
-        consult_write(&wc, &op, snap.world().m3(), &readable)?;
+        let judged = consult_write(&wc, &op, snap.world().m3(), &readable)?;
         // THE VISIBILITY CLASS of this write (PUB-6.25), the read predicate's
         // sibling: one value per request, derived from the same proven-bound
         // principal, lent to whichever store gates this write INSIDE its own
@@ -262,11 +264,15 @@ where
             // hazard). One operation ⇒ still one M2 transaction. The
             // visibility class rides the writer as on every link write; the
             // claim's dedup is a guaranteed miss (PUB-6.27), so no ack here
-            // can name an address this principal could not read. The
-            // successor's sources were consulted at the door above, BEFORE
-            // this build reads their arrangements (PUB-6.38).
+            // can name an address this principal could not read. Where the
+            // door judged the write, the successor's sources were consulted
+            // above, BEFORE this build reads their arrangements (PUB-6.38);
+            // where it deferred to the store's own gate they were not, and the
+            // build, told so by `judged`, issues no verdict their arrangements
+            // decide — the store's `not_owner` speaks first.
             Op::EditLink { original, successor, d_s, d_a } => {
-                let link = successor_link(snap.world().m3(), snap.world().m5(), &successor)?;
+                let link =
+                    successor_link(snap.world().m3(), snap.world().m5(), &successor, judged)?;
                 let (edit, at) = self
                     .stores
                     .linkstore(&visibility)

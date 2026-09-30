@@ -489,6 +489,68 @@ fn link_discovery_drops_links_homed_where_the_caller_cannot_read() {
     assert_eq!(w.batch, vec![readable_l]);
 }
 
+/// PUB-6.13 on RETRIEVEENDSETS: its answer withholds link identity and
+/// collapses value-identical endsets, so two links drawn alike are one pair
+/// to every caller and a dropped link would be invisible in it. Two links
+/// whose FROM slots DIFFER are two pairs; the one homed where the caller
+/// cannot read contributes none, or a stranger is handed where a private
+/// draft's link points.
+#[test]
+fn retrieve_endsets_drops_the_pairs_of_a_link_homed_where_the_caller_cannot_read() {
+    let (fx, unreadable) = setup_with_unreadable();
+    let unreadable_doc = create_doc(&fx);
+    let readable_doc = create_doc(&fx);
+    insert3(&fx, &readable_doc);
+    // FROM at position `from`, TYPE shared — so the TYPE pairs collapse into
+    // one and the FROM pairs are the witnesses.
+    let link_from = |home: &Address, from: u32| {
+        ack_addr(ex(
+            &fx.febe,
+            fx.user,
+            Op::MakeLink {
+                home: home.clone(),
+                from: SlotArg::Resolve(vec![vspec(&readable_doc, from, 1)]),
+                to: SlotArg::Addrs(vec![]),
+                ty: SlotArg::Resolve(vec![vspec(&readable_doc, 3, 1)]),
+                replaces: None,
+            },
+        ))
+        .0
+    };
+    let from_pair = |link: &Address| {
+        let value = link_value(ex(&fx.febe, fx.user, Op::ReadLink { a: link.clone() }))
+            .expect("a resident link reads back");
+        (FROM, value.from_slot().clone())
+    };
+    let unreadable_pair = from_pair(&link_from(&unreadable_doc, 1));
+    let readable_pair = from_pair(&link_from(&readable_doc, 2));
+    assert_ne!(unreadable_pair, readable_pair, "premise: distinct values, so neither collapses");
+    unreadable.lock().expect("no poisoning").push(unreadable_doc);
+    let other = fx.febe.open_session(OTHER);
+    let read = |session| {
+        endsets(ex(
+            &fx.febe,
+            session,
+            Op::RetrieveEndsets { d: readable_doc.clone(), region: vec![vspan(1, 1, 3)] },
+        ))
+    };
+
+    let mine = read(fx.user);
+    assert!(
+        mine.contains(&unreadable_pair) && mine.contains(&readable_pair),
+        "the owner reads both homes: {mine:?}"
+    );
+    let theirs = read(other);
+    assert!(
+        theirs.contains(&readable_pair),
+        "a link homed where the caller reads contributes its pair"
+    );
+    assert!(
+        !theirs.contains(&unreadable_pair),
+        "a link homed where the caller cannot read contributes none: {theirs:?}"
+    );
+}
+
 /// PUB-6.13 on the reads that name NO document: the descriptor's `home` slot
 /// is a coverage constraint and not a doc-argument (PUB-6.12), so the consult
 /// never fires and the result-set filter is the ONLY thing between a caller

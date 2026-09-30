@@ -1,24 +1,29 @@
 //! The CREDENTIAL sequence's producers (AUTH-3.37): slots (1)–(2),
-//! lock-free and ahead of the credential write lock ([`op_shape_refusal`]),
-//! and the precheck's slots (3)–(8) under it ([`precheck`]), with the caps
-//! slot (5) applies and the address tests slot (6) and the claim's own
-//! admission read. Beside slots (1)–(2), the other refusal a write's OWN
-//! type slot decides: the `replaces` class's fence ([`replaces_refusal`]),
-//! which the PLAIN sequence asks, a `replaces`-typed write never being a
-//! credential deposit.
+//! lock-free and ahead of the credential write lock ([`op_shape_refusal`] —
+//! with the credential deposit's `replaces` fence beside them, BW-04), and
+//! the precheck's slots (3)–(8) under it ([`precheck`]), with the caps
+//! slot (5) applies, the address tests slot (6) and the claim's own
+//! admission read, and — inside slot (7)'s claimed arm — THE RECORD GRADE'S
+//! CHECK ([`record_grade_check`]; signed ops, 2a): the record's own `sig`,
+//! verified at its `make_link` under the set that opens its home. Beside
+//! slots (1)–(2), the other refusal a write's OWN type slot decides: the
+//! `replaces` class's fence ([`replaces_refusal`]), which the PLAIN sequence
+//! asks, a `replaces`-typed write never being a credential deposit.
 
 use skep_address::{checked_inc, ordinal, parent, Address, Nat, Span};
 use skep_febe::Op;
 use skep_identity::{
-    Effect, Enrolled, Fingerprint, IdentityState, LinkDeposit, Verdict,
-    ALG_FNDSA512_PREVIEW_ED25519,
+    canonical_record, parse_record_value, record_bytes, single_address, CredentialKind, Effect,
+    Enrolled, Enrollment, Fingerprint, IdentityState, LinkDeposit, PublicKey, RecordEntry,
+    Verdict, ALG_FNDSA512_PREVIEW_ED25519,
 };
 use skep_links::{enc, is_replaces_class, Endset, SlotArg};
 use skep_namespace::{HasM3, PrincipalId};
 
-use super::{addr_spans, CredentialRefusal};
+use super::{addr_spans, AttestFault, CredentialRefusal};
+use crate::auth::entry::{self, ComposeFault};
 use crate::auth::fold::{identity_types, WorldCtx};
-use crate::auth::session::{keyed_above, Scope};
+use crate::auth::session::{keyed_above, opening_account, Scope, SessionSig};
 use crate::auth::{LockRead, LockWrite};
 use crate::World;
 
@@ -78,17 +83,26 @@ const MAX_DECODED_KEYS: usize = MAX_GENESIS_KEYS + 1;
 /// Slots (1) `emit_not_make_link` and (2) `resolved_from`, evaluated (1)
 /// then (2), reading the op's OWN slots and nothing else — evaluated
 /// beside `deposits_credential_link` and AHEAD of `credential_lock.write()`
-/// (AUTH-3.5): a refusal here never takes the write lock.
+/// (AUTH-3.5): a refusal here never takes the write lock. Behind (2), the
+/// credential deposit's `replaces` FENCE (signed ops; BW-04, owner-ruled
+/// 2026-09-29): a credential-typed `make_link` carrying a `replaces` member
+/// is `replaces_not_credential` — the record's `replaces` row is EMPTY BY
+/// KIND, so the member names a state no credential record replaces and the
+/// record's `sig`, made over the empty row, could cover no link it would
+/// deposit. A shape fact of the frame, so it sits here with the other two.
 pub(crate) fn op_shape_refusal(op: &Op) -> Option<CredentialRefusal> {
     match op {
         // (1) — every credential-typed emit, unconditionally: M7's dedup
         // could hand a phantom ack for an act key_set never shows.
         Op::Emit { .. } => Some(CredentialRefusal::EmitNotMakeLink),
         // (2) — a credential deposit whose from OR to entity slot is a
-        // Resolve, either of them, regardless of emptiness.
-        Op::MakeLink { from, to, .. } => {
+        // Resolve, either of them, regardless of emptiness; then the
+        // `replaces` fence (BW-04) on the member's presence alone.
+        Op::MakeLink { from, to, replaces, .. } => {
             if matches!(from, SlotArg::Resolve(_)) || matches!(to, SlotArg::Resolve(_)) {
                 Some(CredentialRefusal::ResolvedFrom)
+            } else if replaces.is_some() {
+                Some(CredentialRefusal::ReplacesNotCredential)
             } else {
                 None
             }
@@ -450,6 +464,10 @@ pub(crate) fn precheck(
             .filter(|giver| identity.key_set(giver).enrolled().any(|(_, e)| e.anchor)),
         Effect::Claim { .. } => None,
     };
+    // THE GRADE OF THE ACT (AUTH-3.20–3.22), read here and nowhere else: the
+    // gate's own input, and the record grade's below — an anchor-grade act
+    // admits an anchor's `sig` alone.
+    let anchor_grade = anchor_account.is_some();
     if let Some(anchor_account) = anchor_account {
         let set = identity.key_set(&anchor_account);
         if !signer.is_some_and(|fp| set.is_anchor(fp)) {
@@ -464,6 +482,18 @@ pub(crate) fn precheck(
         if signer.is_none() {
             return Err(CredentialRefusal::SignedSessionRequired);
         }
+        // (7), THE RECORD GRADE (signed ops, 2a; the design record §4.5 (4)):
+        // above the claim, the record's own `sig` — verified at this, its
+        // `make_link` (D26), under the set that opens its home, at the grade
+        // the act needs; a record carrying none is refused. The kind is the
+        // effect's, which is the link's type slot's — the same parse the fold
+        // made one slot up, by the kind the record-deposit set names.
+        let kind = match &effect {
+            Effect::Genesis { .. } | Effect::Enroll { .. } => CredentialKind::Enroll,
+            Effect::Retire { .. } => CredentialKind::Retire,
+            Effect::Claim { .. } => CredentialKind::Claim,
+        };
+        record_grade_check(world, identity, dep, kind, anchor_grade)?;
     } else {
         // (8) — the pre-claim admission gate's deposit cell, evaluated on
         // the slot-(3) preview: only the ceremony's own deposits pass — and
@@ -482,6 +512,148 @@ pub(crate) fn precheck(
         }
     }
     Ok(())
+}
+
+/// THE RECORD GRADE'S CHECK (signed ops, 2a; the design record §4.5 (4) and
+/// its table clauses (a)–(c); D26; AUTH-2.94 — a write-path check, never a
+/// fold input): ABOVE THE CLAIM ON A CLAIMED BOARD, a credential record the
+/// fold would honor carries its own `sig`, verified HERE, at the deposit's
+/// `make_link` — the position the fold honors and the record's `sig` covers,
+/// its atom's `insert` having taken no entry check (D26). In order:
+///
+/// 1. THE RECORD VALUE — the atom's bytes off the link's `from`, the one
+///    pinned read ([`record_bytes`]), parsed by the KIND the record-deposit
+///    set names for the link's type ([`parse_record_value`]): the entries and
+///    the `sig` as it stands. The fold read and parsed these same bytes at
+///    slot (3), so a failure here is unreachable and is answered fail-closed,
+///    as a record no `sig` can be read off. The claim kind carries no record
+///    and no `sig` (AUTH-2.48), and reaches no claimed board's check: a claim
+///    above the claim is `already_claimed` at slot (3) — stated fail-closed
+///    the same way.
+/// 2. NO `sig` → `attestation_required` (§4.5 (4): "REFUSE A BODY THAT
+///    CARRIES NO `sig` AT ALL … THE ONE REFUSAL AT A RECORD DEPOSIT"); the
+///    class REORDER, as the entry grade's is — the answer is the same record
+///    re-composed with its `sig`.
+/// 3. THE BLOB — the `sig` is the hybrid blob in hex, no `alg` beside it
+///    (the record names no row: the blob's WIDTH says which, as the
+///    handshake's does, [`SessionSig::parse`]); hex of no row's width is
+///    `attestation_invalid:malformed`, PERMANENT.
+/// 4. THE FRAME — the `record` grammar over the link and the atom
+///    ([`entry::compose_record`]): `H.1`'s pair (none →
+///    `board_unavailable`), the HOME's account (ω over the home, the fold's
+///    own H) and the home, the link's type and target addresses read off the
+///    deposit's slots as a mirror reads them off the stored link, the
+///    `replaces` and lineage rows EMPTY, and the sig-less projection
+///    `canonical_record(entries, None)`.
+/// 5. THE CANDIDATES (clause (a), AT WHICH STATE clause (b)): the enrolled
+///    keys of THE SET THAT OPENS THE HOME'S ACCOUNT — [`opening_account`]'s
+///    walk, the one `key_subject` takes: the home's own set where it is not
+///    empty, else the nearest keyed account above (a hire's genesis is homed
+///    in `X.1`'s doc 1, and `X.1` holds no set of its own) — as of THIS BASE,
+///    the snapshot under the write guard, the deposit's own effects not yet
+///    posted (a rotation's retire-old is signed by the key it retires);
+///    FILTERED TO THE GRADE THE ACT NEEDS (AUTH-3.20–3.22): where the act is
+///    anchor-grade — slot (6)'s own reading, `anchor_grade` — the ANCHORS
+///    among them alone; and of those, the keys whose row's blob is the
+///    blob's width. None → `attestation_invalid:not_enrolled_at_position`,
+///    PERMANENT.
+/// 6. THE TRIAL — each candidate, the frame under ITS row's token as `alg`,
+///    both halves ([`skep_signature::verify`]); any verifying admits, none →
+///    `attestation_invalid:signature`, PERMANENT.
+///
+/// The check reads the FOLD's key table (BW-02, owner-ruled 2026-09-29: no
+/// second table at the daemon), on the equality this very check establishes
+/// above the claim: every record the fold honors there passed it at this
+/// daemon's own write path, so the fold's table and a verifier's filtered
+/// table hold one record set. A record LIFTED into a stranger's doc 1 fails
+/// at step 6: the frame names THAT home and its account, and the `sig` was
+/// made over another's. At or below the claim nothing runs here (A5): the
+/// ceremony's own records are bare, and this function is reached only from
+/// the claimed arm.
+///
+/// `world` and `identity` MUST be the pair taken under the write guard for
+/// this request, as `precheck`'s are; `dep` the deposit slot (3) classified
+/// `Honored`, and `kind` its kind.
+fn record_grade_check(
+    world: &World,
+    identity: &IdentityState,
+    dep: &DepositSpans,
+    kind: CredentialKind,
+    anchor_grade: bool,
+) -> Result<(), CredentialRefusal> {
+    let invalid = CredentialRefusal::AttestationInvalid;
+    // 1 — the record value, by the kind's parse.
+    let ctx = WorldCtx(world);
+    let value = match kind {
+        CredentialKind::Enroll => record_value::<Enrollment>(&ctx, dep),
+        CredentialKind::Retire => record_value::<Fingerprint>(&ctx, dep),
+        CredentialKind::Claim => None,
+    };
+    let Some((canonical, sig)) = value else {
+        debug_assert!(
+            false,
+            "the record grade read no record value for a {kind:?} deposit slot (3) honored: an \
+             enrollment's or retirement's bytes the fold just parsed cannot fail to parse here, \
+             and a claim above the claim is already_claimed at slot (3)"
+        );
+        return Err(CredentialRefusal::AttestationRequired);
+    };
+    // 2 — no `sig` at all.
+    let Some(sig) = sig else {
+        return Err(CredentialRefusal::AttestationRequired);
+    };
+    // 3 — the blob, by its width.
+    let blob = SessionSig::parse(&sig).ok_or(invalid(AttestFault::Malformed))?;
+    let blob = blob.as_bytes();
+    // 4 — the frame, every member but `alg`. The home's account is ω's
+    // answer, the fold's own H (slot (3) found one, so this is `Some`); the
+    // slots are read as a mirror reads a stored link's: one address each,
+    // the `to` slot empty at a targetless kind.
+    let Some(home_account) = world.m3().effective_owner_prefix(&dep.home).cloned() else {
+        return Err(invalid(AttestFault::NotEnrolledAtPosition));
+    };
+    let Some(ty) = single_address(&dep.ty) else {
+        return Err(invalid(AttestFault::Signature));
+    };
+    let to: Vec<Address> = single_address(&dep.to).into_iter().collect();
+    let frame = match entry::compose_record(world, &home_account, &dep.home, &ty, &to, canonical.as_bytes()) {
+        Ok(frame) => frame,
+        Err(ComposeFault::NoBoardTerm) => return Err(invalid(AttestFault::BoardUnavailable)),
+        Err(other) => unreachable!("compose_record meets no fault but the board term's: {other:?}"),
+    };
+    // 5 — the candidates: the set that opens the home's account, at the
+    // grade the act needs, of the blob's row.
+    let opens = opening_account(identity, &home_account);
+    let candidates: Vec<&PublicKey> = identity
+        .key_set(&opens)
+        .enrolled()
+        .filter(|(_, e)| !anchor_grade || e.anchor)
+        .map(|(_, e)| &e.key)
+        .filter(|key| key.sig_alg_row().sig_len() == blob.len())
+        .collect();
+    if candidates.is_empty() {
+        return Err(invalid(AttestFault::NotEnrolledAtPosition));
+    }
+    // 6 — the trial, the frame under each candidate's own token.
+    if candidates.iter().any(|key| {
+        let bytes = frame.to_bytes(key.alg());
+        skep_signature::verify(key.sig_alg_row().tag, key, &bytes, blob).is_ok()
+    }) {
+        Ok(())
+    } else {
+        Err(invalid(AttestFault::Signature))
+    }
+}
+
+/// The record value a deposit's atom carries, for the record grade: the
+/// sig-less canonical projection and the `sig` as it stands — read by the one
+/// pinned read and parsed by the kind `T` names, as the fold reads and parses
+/// it (`None` where either refuses, which the fold's own verdict at slot (3)
+/// makes unreachable).
+fn record_value<T: RecordEntry>(ctx: &WorldCtx<'_>, dep: &DepositSpans) -> Option<(String, Option<String>)> {
+    let bytes = record_bytes(ctx, &dep.home, &dep.from).ok()?;
+    let value = parse_record_value::<T>(&bytes).ok()?;
+    Some((canonical_record(&value.entries, None), value.sig))
 }
 
 /// AUTH-3.21's ADDRESS TEST — what slot (6) tells of one previewed

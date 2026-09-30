@@ -14,9 +14,10 @@ use common::{
 };
 use sha2::{Digest, Sha256};
 use skep_identity::{
-    canonical_record, framed, parse_enroll, parse_retire, record_bytes, single_address, AlgRow,
-    CredentialKind, Enrollment, Fingerprint, FoldCtx, HasIdentity, IdentityState, Inert,
-    LabelError, ParseKeyError, PayloadError, PublicKey, SigAlgRow, Values, ALGS,
+    canonical_record, framed, parse_enroll, parse_record_value, parse_retire, record_bytes,
+    single_address, AlgRow, CredentialKind, Enrollment, Fingerprint, FoldCtx, HasIdentity,
+    IdentityState, Inert, LabelError, ParseKeyError, PayloadError, PublicKey, RecordValue,
+    SigAlgRow, Values, ALGS,
     ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519, ED25519_KEY_LEN, ENROLL_TYPE, ENTRY_TAG,
     FNDSA512_PREVIEW_ED25519_KEY_LEN, FNDSA512_PREVIEW_KEY_LEN, KEY_TAG, MAX_RECORD_BYTES,
     MLDSA65_ED25519_KEY_LEN, MLDSA65_KEY_LEN, NODE_HELLO_TAG, RETIRE_TYPE, SESSION_TAG,
@@ -722,9 +723,12 @@ fn tag_is_copy_and_debugs_as_its_bytes() {
 #[test]
 fn the_items_published_for_readers_outside_the_workspace_are_public() {
     // The signing client and the verifier beside the table (the design
-    // record §4.2 (C)).
+    // record §4.2 (C)) — the verifier's parse answering the entries and the
+    // `sig` together.
     let _ = canonical_record::<Enrollment>(&[], None);
     let _ = (parse_enroll(b""), parse_retire(b""));
+    let _: Result<RecordValue<Enrollment>, PayloadError> = parse_record_value(b"");
+    let _: Result<RecordValue<Fingerprint>, PayloadError> = parse_record_value(b"");
     // A non-folding reader, which LINKS the read (AUTH-2.37); a discovery
     // caller, beside `kind_of` (AUTH-2.28); a host that seats the slice
     // (AUTH-2.60); bebe (AUTH-2.118).

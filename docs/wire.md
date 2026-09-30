@@ -554,8 +554,10 @@ fixed for the fingerprint's lifetime), `label` OPTIONAL (present only
 where a label exists, never empty, never containing a newline, and at
 most 128 bytes of UTF-8, counted in bytes — a longer label is
 `bad_record`, as any other grammar fault is). The
-optional `sig` member is reserved, canonically LAST, and IGNORED
-whatever it holds. `alg` is an `ALGS` token, matched as bytes,
+optional `sig` member, canonically LAST, is THE RECORD'S OWN SIGNATURE
+(signed ops; the record grade, below): IGNORED by the fold whatever it
+holds, and above the claim verified at the record's deposit — a record
+carrying none is refused there. `alg` is an `ALGS` token, matched as bytes,
 lowercase, and the token set is frozen (adding one is a coordinated
 grammar upgrade): the two HYBRID tokens, each ONE entry over ONE
 concatenated raw value — the post-quantum public key THEN the Ed25519
@@ -579,6 +581,47 @@ admitted only where its bytes are that encoding of every member it
 carries, `sig` included. An unparseable or non-canonical record makes
 the deposit permanently inert — the daemon refuses it up front as
 `malformed_payload:<sub>` (§Credential refusals).
+
+**The record's own signature — the record grade** (signed ops, 2a).
+ABOVE THE CLAIM on a claimed board, an enrolment or retirement record
+carries in `sig` the hybrid signature blob in hex (the post-quantum
+signature then the Ed25519 signature, as `attest` carries one; 6,746 hex
+under tag `1`, 1,460 under tag `3` — the blob's width says the row, and
+the record names no `alg` beside it), made by the WRITING HAND's key
+over the entry frame under the `record` grammar:
+`framed("skep-entry-v1", [alg, board, account, doc, "record", body])` —
+`alg` the signing key's token, `board` the head document `H.1`'s
+`(position, chain)` pair, `account` the HOME's account (the record's own
+doc 1 belongs to it — the delegator's for a genesis, the subject's for a
+holder act — never the acting session's), `doc` the home, `op` the token
+`record` (a grammar token: no wire op spells it), and `body` FIVE rows in
+this order: (1) the link's TYPE address as an address-form slot row of
+one element; (2) the link's `to` slot as an address-form slot row — the
+subject account, EMPTY at a targetless kind; (3) the `replaces` row —
+one length-delimited group, EMPTY, since a credential deposit carries no
+`replaces` member (below); (4) the LINEAGE row — the same form, EMPTY,
+no lineage having forked; (5) the SIG-LESS CANONICAL RECORD — the record
+with its `sig` member removed — as one length-delimited element. `from`
+is no row: the atom's address does not exist when the `sig` is made. The
+hand signs at THE GRADE THE ACT NEEDS: an ANCHOR of the set that opens
+the home's account where the act is anchor-grade (an anchor retirement,
+an anchor-flagged enrolment, a handoff — the `anchor_session_required`
+cases, §Credential refusals), any enrolled key of that set otherwise.
+Then the client inserts the atom (its `insert` takes no `attest`) and
+deposits the `make_link` naming it, which carries no `attest` either:
+the record's `sig` covers both positions, and the daemon VERIFIES it at
+that `make_link` — the frame composed from the stored atom and the
+link's own slots and address, the candidates the enrolled keys of the
+set that opens the home's account as of the link's base, the anchors
+alone at an anchor-grade act — refusing `attestation_required` where the
+record carries no `sig` and `attestation_invalid:<cause>` where it
+carries one no such key verifies (§Credential refusals). A record carried
+into ANOTHER account's doc 1 on this board, or onto another board,
+verifies under nothing: the frame names the home, its account and `H.1`.
+A mirror composes the same bytes from the stored link and atom alone
+(`read_link`, `retrieve_v`, `H.1`'s pair, `effective_owner` of the
+home). At or below the claim nothing runs: the ceremony's own genesis
+record carries no `sig`, and the claim deposit carries no record.
 
 **The keygen-from-seed rule** each tag names, stated. ONE 32-byte seed —
 the paper backup's 64 hex — derives both halves of a key, and neither
@@ -1570,7 +1613,10 @@ bare session depositing a credential on a claimed board, for example:
 runs on every CLAIMED board, with no operator switch, on a dispatched
 publish-class `insert`, `make_link` or `publish` ABOVE the claim entry,
 from a signed session, BEFORE the transaction — beside the publish-class
-gate below, after it, and ahead of the store's own gates):
+gate below, after it, and ahead of the store's own gates; and, at THE
+RECORD GRADE, on every credential deposit above the claim, over the
+record's own `sig` at the deposit's `make_link` — §The claim ceremony and
+credentials):
 
 * `attestation_required` — the write carries no `attest` member.
   Disposition REORDER: the answer is a different request, the same
@@ -1578,7 +1624,12 @@ gate below, after it, and ahead of the store's own gates):
   path, since the publish class is the daemon's classification over the
   resolved publication state and not a property of an op kind. An
   `attest` on a write outside the class, or on the UNCLAIMED board, is
-  DROPPED — never verified, never written, never refused.
+  DROPPED — never verified, never written, never refused. AND, at a
+  credential deposit above the claim, THE RECORD CARRIES NO `sig` AT ALL —
+  the record grade's one refusal, answered at the deposit's `make_link`
+  (the record's `sig` member is its one carrier; the atom's `insert`
+  takes no check and lands, the link does not): REORDER, the answer being
+  the same record re-composed with its `sig`, re-inserted and re-linked.
 * `attestation_invalid:<cause>` — the `attest` does not verify; the
   `detail` is the code joined to its cause: `signature` (no enrolled key
   of the algorithm verifies both halves over the frame the daemon
@@ -1593,13 +1644,24 @@ gate below, after it, and ahead of the store's own gates):
   `board` term has no value — unreachable on a claimed board in normal
   operation, since the claim writes `H.1` in its own step and a daemon
   opening a claimed board whose journal holds no head writes it before it
-  serves; it names a journal damaged below `H.1`; REORDER).
+  serves; it names a journal damaged below `H.1`; REORDER). At a
+  credential deposit above the claim the same causes over the record's
+  `sig`, each with its class: `signature` (no key of the set that opens
+  the record's HOME — the anchors alone where the act is anchor-grade —
+  verifies it over the `record` frame the daemon composed: the record was
+  signed over another home, another board, or by no key of that set),
+  `not_enrolled_at_position` (that set, at that grade, holds no key of the
+  blob's row), `malformed` (the `sig` is no hybrid blob's hex — an odd or
+  non-hex string, or a width no row takes), `board_unavailable` (as for an
+  entry).
 
 Every publish-class write of the three ops on a claimed board is judged;
 the system account's own writes (the head document's, owned by
 `1.1.0.1`) are exempt by ownership and never dispatched. Every other
 write, and every write at or below the claim, is outside the check and
-answers as it does without one.
+answers as it does without one. Every credential deposit above the claim
+is judged at the record grade; the ceremony's own deposits, at or below
+it, are not.
 
 The write order, as built. `unauthenticated` is slot 0 on every path: a
 guest write (no token, unknown token, dead entry) answers M10's own
@@ -1712,10 +1774,15 @@ type (§The claim ceremony and credentials) — run a stricter order:
 
 * Ahead of any lock, the shape slots: `emit_not_make_link` (every
   credential-typed `emit`, unconditionally — the emit path's dedup
-  could phantom-ack an act `key_set` never shows) and `resolved_from`
+  could phantom-ack an act `key_set` never shows), `resolved_from`
   (a credential `make_link` whose `from` or `to` is the V-spec form —
   deposit slots are address-form — and every credential-typed
-  `edit_link`).
+  `edit_link`), and `replaces_not_credential` (a credential-typed
+  `make_link` carrying a `replaces` member: a credential deposit's
+  `replaces` row is EMPTY by kind — the credential class's fold is a
+  set — so the member names a state no credential record replaces, and
+  the record's `sig`, made over the empty row, could cover no link it
+  would deposit; PERMANENT, from every hand).
 * Under the credential write lock, the identity fold's own verdict —
   a deposit the fold would record but never honor is refused up front
   with the fold's token: `malformed_shape`; `not_doc_one` (the home
@@ -1778,11 +1845,17 @@ type (§The claim ceremony and credentials) — run a stricter order:
   top-level account's own genesis — the ceremony's, an invite's — has no
   keyed account above it and meets no gate here); and the two
   board-state arms again — claimed: `signed_session_required` for ANY
-  bare-session deposit, genesis included; unclaimed: `claim_first` for
-  any deposit other than the ceremony's own genesis and claim. The
-  tokens ahead of `content_session` stay ahead: a content session's
-  retry of an act another session committed still answers the fold's
-  own token (`nothing_changed`, `already_claimed`).
+  bare-session deposit, genesis included, and then, still claimed, THE
+  RECORD GRADE (signed ops, 2a; §The claim ceremony and credentials):
+  `attestation_required` where the record carries no `sig`, and
+  `attestation_invalid:<cause>` where it carries one that no key of the
+  set that opens the record's home — the anchors alone where the act is
+  anchor-grade — verifies over the `record` frame as of the deposit's
+  base (`signature`, `not_enrolled_at_position`, `malformed`, above);
+  unclaimed: `claim_first` for any deposit other than the ceremony's own
+  genesis and claim. The tokens ahead of `content_session` stay ahead: a
+  content session's retry of an act another session committed still
+  answers the fold's own token (`nothing_changed`, `already_claimed`).
 * Behind the unclaimed arm, the CLAIM's own admission — `claim_residue`
   (PUB-6.63, PUB-6.35 clause (b); AUTH RES-202; beside `claim_first` in
   the pre-claim tokens'
@@ -2037,9 +2110,10 @@ type and the values placed with their count — and the daemon verifies it
 BEFORE the transaction (§Credential refusals: `attestation_required`,
 `attestation_invalid`) and writes it into that commit's marker slot. A
 declared deposit of a credential kind is the one `insert` this does not
-reach: its signature is the record's own `sig` member. Below the claim
-the member is dropped unread; a daemon that predates it refuses it as
-an unknown field.
+reach: its signature is the record's own `sig` member, verified at the
+`make_link` that deposits it (§The claim ceremony and credentials).
+Below the claim the member is dropped unread; a daemon that predates it
+refuses it as an unknown field.
 
 The optional `deposit` field is the **deposit declaration**
 (PUB-2.59, PUB-9.13), and ITS VALUE IS THE RECORD CLASS's TYPE (PUB-2.11,
@@ -2283,7 +2357,10 @@ else the named address as an address-form slot row of one element,
 delimited. So the member a signature covers is the one deposited, and a
 member-less body is never the three slots alone. A credential-typed
 `make_link` (the enroll, retire and claim kinds) takes the credential
-path and carries no `attest`: the record's own `sig` covers it.
+path and carries no `attest` — the record's own `sig` covers it, and
+above the claim the daemon verifies that `sig` at this very deposit
+(§The claim ceremony and credentials) — and no `replaces` member
+(`replaces_not_credential`, §Credential refusals).
 → `ack_addr` (the link's address).
 
 <!-- wire: request make_link -->

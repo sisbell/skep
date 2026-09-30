@@ -29,7 +29,13 @@ of [skep-febe](../skep-febe) over the world of
 
 The daemon verifies signatures and makes none: it calls
 [skep-signature](../skep-signature)'s verify with that crate's `sign`
-feature off, so its build holds no signer and no key. Build the shipped
+feature off, so its build holds no signer and no key. That verify runs
+at three doors: the signed session's handshake; the entry signature a
+publish-class write carries in its `attest`, checked before the
+transaction; and, above the claim, the `sig` a credential record carries
+inside its own atom, checked in the credential sequence at the record's
+`make_link` under the key set that opens the record's home — a record
+carrying none is refused there. Build the shipped
 binary with `-p skepd` — Cargo unifies features across one invocation,
 and a `--workspace` build that compiles the test suites turns the signer
 on for everything it builds.

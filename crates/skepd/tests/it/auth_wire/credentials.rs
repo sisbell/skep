@@ -66,7 +66,15 @@ fn genesis_of(
     entries: &[Enrollment],
 ) -> Value {
     let ordinal = next_content_ordinal(port, Some(registrar_signed), registrar_doc1);
-    let atom = json_atom(&encode_enroll(entries));
+    // The record signed for the deposit (2a), as the hire signs it.
+    let atom = signed_atom(
+        port,
+        registrar_signed,
+        registrar_doc1,
+        T_ENROLL,
+        &[agent_account],
+        &json_atom(&encode_enroll(entries)),
+    );
     let v = op(
         port,
         Some(registrar_signed),
@@ -209,6 +217,11 @@ fn the_enrolled_cap_refuses_at_sixteen_and_genesis_is_exempt() {
     let extra_keys: Vec<SigningKey> = (0..15).map(distinct_key).collect();
     let record_keys: Vec<&SigningKey> = extra_keys.iter().collect();
     let enroll = |atom_ordinal: u64, atom: &str| {
+        // Signed for the deposit (2a): the cap is slot (5)'s, behind the
+        // fold's verdict and ahead of the record grade's check, so an
+        // over-cap record is refused whatever its `sig` — and the one that
+        // clears it must verify.
+        let atom = signed_atom(port, &signed, CLAIMANT_DOC1, T_ENROLL, &[CLAIMANT_ACCOUNT], atom);
         let v = op(
             port,
             Some(&signed),
@@ -750,14 +763,18 @@ fn a_preview_key_enrolled_before_the_setting_turned_off_still_opens_sessions() {
 
 /// THE RECORD CAP OVER THE WIRE (AUTH-1.18/1.21 as re-pinned — 128 KiB;
 /// AUTH-2.96's `a 128 KiB record · a 128 KiB+1 record` row): a genesis record
-/// of EXACTLY 131,072 bytes — thirty-two label-free tag-1 entries, 128,607 B,
-/// padded onto the mark with labels of at most 128 bytes — is READ whole,
-/// its verdict the KEY COUNT's (`too_many_enrolled`, slot (5): 32 is over the
+/// of EXACTLY 131,072 bytes AS DEPOSITED — thirty label-free tag-1 entries,
+/// 120,571 B, and the record's own `sig` above the claim (2a: the hybrid
+/// blob in hex, the 6,755-byte member AUTH-2.130's cost note prices), padded
+/// onto the mark with labels of at most 128 bytes — is READ whole, its
+/// verdict the KEY COUNT's (`too_many_enrolled`, slot (5): 30 is over the
 /// genesis cap of 16) and never `too_large`; one byte more is inert at the
 /// read, `malformed_payload:too_large`, ahead of every later slot. The
 /// honored cell at exactly the cap is the identity suite's
 /// (`record_at_exactly_the_cap_folds_and_one_more_byte_inerts`): no record a
-/// wire deposit can seat carries 32 keys.
+/// wire deposit can seat carries 30 keys. (Thirty-two label-free entries,
+/// 128,607 B, stood here while records were bare; with the `sig` counted no
+/// signed record of that many keys fits the cap at all.)
 #[test]
 fn the_record_cap_is_128_kib_at_the_fold_over_the_wire() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -766,15 +783,19 @@ fn the_record_cap_is_128_kib_at_the_fold_over_the_wire() {
     let registrar = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let (agent, _bare) = bootstrap_delegate(port, 76);
 
-    // Thirty-two distinct tag-1 keys, label-free: the base the record-cap
-    // measurements state (32 + 32·4,017 + 31 = 128,607 B).
-    let keys: Vec<PublicKey> = (100u8..132).map(|n| public_key_of(&distinct_key(n))).collect();
+    // The `sig` member a tag-1 signer appends, `,"sig":"<6,746 hex>"`: its
+    // width is the row's and never the record's, so the sig-less record is
+    // sized short of the mark by exactly it.
+    const SIG_MEMBER: usize = 8 + 2 * 3373 + 1;
+    // Thirty distinct tag-1 keys, label-free: the base the record-cap
+    // measurements' arithmetic gives (32 + 30·4,017 + 29 = 120,571 B).
+    let keys: Vec<PublicKey> = (100u8..130).map(|n| public_key_of(&distinct_key(n))).collect();
     let cap_sized = |over: usize| -> Vec<Enrollment> {
         let mut entries: Vec<Enrollment> =
             keys.iter().map(|k| Enrollment::new(k.clone(), false, None).unwrap()).collect();
         let base = encode_enroll(&entries).len();
-        assert_eq!(base, 128_607, "the label-free base");
-        let mut pad = MAX_RECORD_BYTES - base + over;
+        assert_eq!(base, 120_571, "the label-free base");
+        let mut pad = MAX_RECORD_BYTES - SIG_MEMBER - base + over;
         let mut i = 0;
         while pad > 0 {
             // A label adds 11 + L bytes, L at most 128; keep the last legal.
@@ -783,7 +804,7 @@ fn the_record_cap_is_128_kib_at_the_fold_over_the_wire() {
             pad -= take;
             i += 1;
         }
-        assert_eq!(encode_enroll(&entries).len(), MAX_RECORD_BYTES + over);
+        assert_eq!(encode_enroll(&entries).len() + SIG_MEMBER, MAX_RECORD_BYTES + over);
         entries
     };
 
@@ -1150,7 +1171,10 @@ fn retiring_the_last_anchor_commits_kills_the_retiring_session_and_leaves_the_ac
     // handoff is anchor-grade: the device session's genesis there is refused.
     delegate_under(port, &bare, CLAIMANT_ACCOUNT, 951);
     let (x2, _) = delegate_under(port, &bare, CLAIMANT_ACCOUNT, 952);
-    let handoff = land_record(port, &device, CLAIMANT_DOC1, &fresh_member(65), T_ENROLL);
+    // The record is signed by the DEVICE key at its landing: refused now at
+    // slot (6), it is the same record the downgrade below commits from the
+    // same session — device-grade then, and the device's `sig` verifies.
+    let handoff = land_record(port, &device, CLAIMANT_DOC1, &fresh_member(65), T_ENROLL, &x2);
     let v = enroll_for(port, &device, CLAIMANT_DOC1, &handoff, &x2);
     assert_eq!(verdict(&v), ANCHOR_SESSION_REQUIRED, "an anchor enrolled: X's handoff is anchor-grade: {v}");
     assert_eq!(enrolled_count(port, &x2), 0, "a refused handoff commits nothing");
@@ -1292,7 +1316,7 @@ fn the_fold_s_three_retirement_refusals_are_answered_over_the_wire_and_move_no_k
     let (x2, _) = delegate_under(port, &bare, CLAIMANT_ACCOUNT, 952);
     let as_x2 = open_signed_session(port, 952, &device_key());
     let x2_doc1 = create_doc(port, &as_x2, &x2);
-    let own_space = land_record(port, &as_x2, &x2_doc1, &retire_atom(&[&device_fp]), T_RETIRE);
+    let own_space = land_record(port, &as_x2, &x2_doc1, &retire_atom(&[&device_fp]), T_RETIRE, &x2);
     let v = typed_link(port, &as_x2, &x2_doc1, &[own_space.as_str()], &[x2.as_str()], T_RETIRE);
     assert_eq!(rejected_detail(&v), "credential_refused:no_holder", "{v}");
     assert_eq!(v["disposition"].as_str(), Some("permanent"), "{v}");

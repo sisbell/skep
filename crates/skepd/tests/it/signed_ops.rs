@@ -35,9 +35,10 @@ use ed25519_dalek::SigningKey;
 use serde_json::{json, Value};
 use skep_febe::Codec;
 use skep_identity::{
-    entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_publish,
-    entry_body_record, entry_frame, BoardTerm, Enrollment, EntrySlot, Fingerprint, LinkSlots,
-    PublicKey, ShotSegment, SigAlgRow, ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519,
+    canonical_record, encode_enroll, encode_retire, entry_body_insert, entry_body_make_link,
+    entry_body_make_link_replacing, entry_body_publish, entry_body_record, entry_frame,
+    parse_record_value, BoardTerm, Enrollment, EntrySlot, Fingerprint, LinkSlots, PublicKey,
+    RecordValue, ShotSegment, SigAlgRow, ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519,
 };
 use skep_signature::HybridSigner;
 use skepd::{JsonCodec, Seq};
@@ -315,7 +316,8 @@ fn an_account_with_no_key_of_the_tag_is_refused_not_enrolled_at_position() {
     let (agent, _bare) = bootstrap_delegate(port, 41);
     let ordinal = next_content_ordinal(port, Some(&registrar), CLAIMANT_DOC1);
     let entries = vec![Enrollment::new(tag3.public_key().clone(), false, None).unwrap()];
-    let atom = json_atom(&skep_identity::encode_enroll(&entries));
+    // The genesis record signed for its deposit by the registrar's key (2a).
+    let atom = signed_atom(port, &registrar, CLAIMANT_DOC1, T_ENROLL, &[&agent], &json_atom(&encode_enroll(&entries)));
     let v = op(
         port,
         Some(&registrar),
@@ -445,10 +447,18 @@ fn a_tag_3_key_attests_a_write_as_a_tag_1_key_does() {
     let tag3 =
         HybridSigner::from_seed(skep_signature::TAG_FNDSA512_PREVIEW_ED25519, &seed_of(&distinct_key(61)))
             .expect("tag 3 is a row");
-    // The preview key joins the claimant's set — the fixtures allow it.
+    // The preview key joins the claimant's set — the fixtures allow it; the
+    // record signed for its deposit by the device key (2a).
     let ordinal = next_content_ordinal(port, Some(&signed), CLAIMANT_DOC1);
     let entries = vec![Enrollment::new(tag3.public_key().clone(), false, None).unwrap()];
-    let atom = json_atom(&skep_identity::encode_enroll(&entries));
+    let atom = signed_atom(
+        port,
+        &signed,
+        CLAIMANT_DOC1,
+        T_ENROLL,
+        &[CLAIMANT_ACCOUNT],
+        &json_atom(&encode_enroll(&entries)),
+    );
     let atom_addr = acked_addr(&op(
         port,
         Some(&signed),
@@ -893,8 +903,10 @@ fn the_board_term_stays_h1s_pair_after_a_second_head_lands() {
 /// D26: a credential deposit is TWO POSITIONS — the atom `insert` and its
 /// `make_link` — and neither takes the entry signature: the atom by its
 /// declared credential type, the link by its route (the credential route,
-/// to which a presented `attest` is never handed). Both slots stay empty;
-/// the hire's agent opens a signed session and attests its own writes.
+/// to which a presented `attest` is never handed). Both slots stay empty —
+/// the record's one carrier is its own `sig`, inside the atom (2a), which
+/// the hire signs; the hire's agent opens a signed session and attests its
+/// own writes.
 #[test]
 fn d26_a_credential_deposits_two_positions_take_no_entry_signature() {
     let dir = tempdir().unwrap();
@@ -911,16 +923,17 @@ fn d26_a_credential_deposits_two_positions_take_no_entry_signature() {
     assert!(after > before, "the atom's insert and the link committed");
     assert_eq!(filled_slots(&sd, before + 1, after), Vec::<u64>::new(), "both slots empty");
     // The link half posted WITH an attest, by hand: routed to the credential
-    // sequence, the member dropped — on a fresh agent's deposit.
+    // sequence, the member dropped — on a fresh agent's deposit, its record
+    // signed as the hire signs one.
     let key2 = distinct_key(52);
     let (agent2, _) = bootstrap_delegate(port, 52);
     let ordinal = next_content_ordinal(port, Some(&registrar), CLAIMANT_DOC1);
+    let atom2 = signed_atom(port, &registrar, CLAIMANT_DOC1, T_ENROLL, &[&agent2], &enroll_atom(&[&key2]));
     let v = op(
         port,
         Some(&registrar),
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}],"deposit":"{T_ENROLL}"}}"#,
-            enroll_atom(&[&key2])
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom2}}}],"deposit":"{T_ENROLL}"}}"#
         ),
     );
     let atom = acked_addr(&v);
@@ -934,6 +947,401 @@ fn d26_a_credential_deposits_two_positions_take_no_entry_signature() {
     let home = acked_addr(&op(port, Some(&agent_signed), &create_frame(&agent, None)));
     let v = op(port, Some(&agent_signed), &typed_link_frame(&home, &[&agent], &[], T_GRANT));
     assert!(sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().is_some());
+}
+
+// ── the record grade (2a) ───────────────────────────────────────────────────
+
+/// One credential record's atom, deposited from `token` into `home` for
+/// `subject` under `ty`: the declared insert at the home's next free
+/// position, then the `make_link` naming it. Answers the atom's commit
+/// position (the link's BASE, this suite writing nothing between the two),
+/// the atom's address, and the link's answer UNJUDGED — a refusal cell reads
+/// its token where a hire would panic.
+fn deposit_record(port: u16, token: &str, home: &str, subject: &str, ty: &str, atom: &str) -> (u64, String, Value) {
+    let ordinal = next_content_ordinal(port, Some(token), home);
+    let v = op(
+        port,
+        Some(token),
+        &format!(
+            r#"{{"op":"insert","doc":"{home}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":"{ty}"}}"#
+        ),
+    );
+    let (atom_at, atom_addr) = (acked_at(&v), acked_addr(&v));
+    let link = op(port, Some(token), &typed_link_frame(home, &[&atom_addr], &[subject], ty));
+    (atom_at, atom_addr, link)
+}
+
+/// The fingerprints `key_set` lists under `field` for `account`, as of the
+/// head, or as of `at` through `/op-at`.
+fn fingerprints(port: u16, account: &str, field: &str, at: Option<u64>) -> Vec<String> {
+    let frame = format!(r#"{{"op":"key_set","account":"{account}"}}"#);
+    let v = match at {
+        None => op(port, None, &frame),
+        Some(at) => op_at_ok(port, None, at, &frame),
+    };
+    expect_resp(&v, "key_set")[field]
+        .as_array()
+        .expect(field)
+        .iter()
+        .map(|e| e["fingerprint"].as_str().expect("fingerprint").to_string())
+        .collect()
+}
+
+/// THE MIRROR'S READ of one committed credential record (the design record
+/// §4.2 (C): "a mirror verifies it from the two reads a client already
+/// makes"): from the stored LINK and ATOM alone — `read_link` for the slots
+/// (the atom's address, the subject, the type), `retrieve_v` for the atom's
+/// text, the home being the link's own document — the record VALUE and the
+/// members the `record` frame takes.
+struct StoredRecord {
+    home: String,
+    ty: String,
+    to: Vec<String>,
+    canonical: String,
+    sig: Option<String>,
+}
+
+fn stored_record(port: u16, link: &str) -> StoredRecord {
+    let value = read_link(port, None, link);
+    assert!(!value.is_null(), "{link} is a link");
+    let starts = |slot: usize| -> Vec<String> {
+        value["slots"][slot]
+            .as_array()
+            .expect("a slot")
+            .iter()
+            .map(|s| s["start"].as_str().expect("a span start").to_string())
+            .collect()
+    };
+    let (from, to, ty) = (starts(0), starts(1), starts(2));
+    let ty = ty.into_iter().next().expect("the type slot");
+    let atom = from.into_iter().next().expect("the record's atom");
+    // The link is `<home>.0.2.<n>`, the atom `<home>.0.1.<ordinal>`.
+    let parts: Vec<&str> = link.split('.').collect();
+    let home = parts[..parts.len() - 3].join(".");
+    let ordinal: u64 = atom.rsplit('.').next().expect("an ordinal").parse().expect("a count");
+    let items = delivery(port, None, &home, ordinal, 1);
+    let text = items[0]["atom"].as_str().expect("the record atom").to_string();
+    let (canonical, sig) = match ty.as_str() {
+        T_ENROLL => {
+            let v: RecordValue<Enrollment> = parse_record_value(text.as_bytes()).expect("admitted");
+            (canonical_record(&v.entries, None), v.sig)
+        }
+        T_RETIRE => {
+            let v: RecordValue<Fingerprint> = parse_record_value(text.as_bytes()).expect("admitted");
+            (canonical_record(&v.entries, None), v.sig)
+        }
+        other => panic!("{other} is no record-bearing kind"),
+    };
+    StoredRecord { home, ty, to, canonical, sig }
+}
+
+impl StoredRecord {
+    /// The `record` frame under `alg`, composed from the stored members and
+    /// the board's `H.1` — the signer's own composition, over the same values.
+    fn frame(&self, port: u16, alg: &str) -> Vec<u8> {
+        let to: Vec<&str> = self.to.iter().map(String::as_str).collect();
+        record_frame_for(port, alg, &self.home, &self.ty, &to, self.canonical.as_bytes())
+            .expect("H.1 stands and the home has an owner")
+    }
+
+    /// THE MIRROR'S TRIAL: whether the record's `sig` verifies, both halves,
+    /// under some key of `set` — a `key_set` answer's `enrolled`, each key
+    /// rebuilt from its `alg` and `key` — the frame under that key's own row.
+    fn verifies_under(&self, port: u16, set: &Value) -> bool {
+        let Some(sig) = &self.sig else { return false };
+        let blob = hex_to_bytes(sig);
+        set["enrolled"].as_array().expect("enrolled").iter().any(|e| {
+            let key = PublicKey::parse(e["alg"].as_str().expect("alg"), e["key"].as_str().expect("key"))
+                .expect("a served key parses");
+            skep_signature::verify(key.sig_alg_row().tag, &key, &self.frame(port, key.alg()), &blob).is_ok()
+        })
+    }
+}
+
+/// THE KEY TABLE IS VERIFIABLE FROM GENESIS (the record grade, 2a; the design
+/// record §4.5 (4) and its table clauses (a)–(c); BW-02's equality): above
+/// the claim, every credential record the fold honors carries a `sig` that
+/// verifies under the set that opened its home at its link's base — end to
+/// end over the wire, on a claimed board. The claimant ENROLS a second key
+/// SIGNED by its device key (honored: the table gains it, both positions'
+/// marker slots empty, D26), RETIRES it SIGNED (honored); an UNSIGNED
+/// enrolment is refused `attestation_required` (REORDER: the same record,
+/// signed), one signed by a key NOT in the opening set
+/// `attestation_invalid:signature`, one signed by a key of a ROW the set
+/// holds none of `not_enrolled_at_position`, one whose `sig` is no blob's hex
+/// `malformed` — each PERMANENT, each committing no link; and THE GRADE: an
+/// anchor-flagged enrolment deposited from the ANCHOR session but signed by
+/// the DEVICE key is `signature` — an anchor-grade record admits an anchor's
+/// `sig` alone — and the same record signed by the anchor is honored. At
+/// every step the fold's table is the filtered table: the set of honored
+/// records is the set of records whose `sig` verifies under the opening set
+/// as of their base (read back through `/op-at`), and every refused deposit
+/// left the table where it stood.
+#[test]
+fn above_the_claim_every_honored_credential_record_carries_a_sig_the_opening_set_verifies() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let device = open_owner_session(port);
+    let anchor = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
+    let fp = |k: &SigningKey| Fingerprint::of(&public_key_of(k)).to_hex();
+    let enrolled = |at: Option<u64>| fingerprints(port, CLAIMANT_ACCOUNT, "enrolled", at);
+    let mut expected: Vec<String> = enrolled(None);
+    expected.sort();
+    assert_eq!(expected, { let mut c = vec![fp(&anchor_key()), fp(&device_key())]; c.sort(); c }, "the ceremony's two");
+    // The filtered table's other half: every honored record, verified at its
+    // base by the mirror's own read.
+    let mut honored: Vec<(u64, String)> = Vec::new();
+    let table_is_filtered = |expected: &Vec<String>, honored: &[(u64, String)]| {
+        let mut live = enrolled(None);
+        live.sort();
+        assert_eq!(&live, expected, "the fold's table");
+        for (base, link) in honored {
+            let record = stored_record(port, link);
+            let set = op_at_ok(port, None, *base, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
+            assert!(record.verifies_under(port, &set), "{link} verifies under the opening set as of its base {base}");
+        }
+    };
+
+    // 1 — ENROL K2, signed by the device key: honored, both slots empty.
+    let k2 = distinct_key(21);
+    let atom = signed_atom(port, &device, CLAIMANT_DOC1, T_ENROLL, &[CLAIMANT_ACCOUNT], &enroll_atom(&[&k2]));
+    assert!(atom.contains(r#"\"sig\":\""#), "the record carries its sig: {atom}");
+    let (base, _, v) = deposit_record(port, &device, CLAIMANT_DOC1, CLAIMANT_ACCOUNT, T_ENROLL, &atom);
+    assert_eq!(v["resp"].as_str(), Some("ack_addr"), "a signed enrolment is honored: {v}");
+    let link_at = acked_at(&v);
+    assert_eq!(filled_slots(&sd, base, link_at), Vec::<u64>::new(), "D26: neither position's slot");
+    honored.push((base, acked_addr(&v)));
+    expected.push(fp(&k2));
+    expected.sort();
+    table_is_filtered(&expected, &honored);
+
+    // 2 — RETIRE K2, signed by the device key: honored.
+    let retire = json_atom(&encode_retire(&[Fingerprint::of(&public_key_of(&k2))]));
+    let atom = signed_atom(port, &device, CLAIMANT_DOC1, T_RETIRE, &[CLAIMANT_ACCOUNT], &retire);
+    let (base, _, v) = deposit_record(port, &device, CLAIMANT_DOC1, CLAIMANT_ACCOUNT, T_RETIRE, &atom);
+    assert_eq!(v["resp"].as_str(), Some("ack_addr"), "a signed retirement is honored: {v}");
+    honored.push((base, acked_addr(&v)));
+    expected.retain(|f| *f != fp(&k2));
+    assert!(fingerprints(port, CLAIMANT_ACCOUNT, "retired", None).contains(&fp(&k2)));
+    table_is_filtered(&expected, &honored);
+
+    // 3 — UNSIGNED: the atom lands (its insert takes no check), the link is
+    // refused, REORDER, and commits nothing.
+    let k3 = distinct_key(22);
+    let head = head_position(port);
+    let (_, _, v) = deposit_record(port, &device, CLAIMANT_DOC1, CLAIMANT_ACCOUNT, T_ENROLL, &enroll_atom(&[&k3]));
+    assert_eq!(
+        refusal(&v),
+        ("credential_refused:attestation_required".to_string(), "reorder".to_string()),
+        "an unsigned enrolment above the claim: {v}"
+    );
+    assert!(head_position(port) < head + 4, "the atom alone committed, the link did not");
+    table_is_filtered(&expected, &honored);
+
+    // 4 — signed by a key NOT in the opening set: a stranger's tag-1 key.
+    let entries = [Enrollment::new(public_key_of(&k3), false, None).unwrap()];
+    let stranger = HybridSigner::from_seed(FIXTURE_TAG, &[0x66; 32]).unwrap();
+    let foreign = signed_record_text(port, &stranger, CLAIMANT_DOC1, T_ENROLL, &[CLAIMANT_ACCOUNT], &entries).unwrap();
+    let (_, _, v) = deposit_record(port, &device, CLAIMANT_DOC1, CLAIMANT_ACCOUNT, T_ENROLL, &json_atom(&foreign));
+    assert_eq!(
+        refusal(&v),
+        ("credential_refused:attestation_invalid:signature".to_string(), "permanent".to_string()),
+        "a stranger's sig: {v}"
+    );
+    // …by a key of a ROW the opening set holds no key of: a tag-3 blob.
+    let tag3 = HybridSigner::from_seed(skep_signature::TAG_FNDSA512_PREVIEW_ED25519, &[0x66; 32]).unwrap();
+    let other_row = signed_record_text(port, &tag3, CLAIMANT_DOC1, T_ENROLL, &[CLAIMANT_ACCOUNT], &entries).unwrap();
+    let (_, _, v) = deposit_record(port, &device, CLAIMANT_DOC1, CLAIMANT_ACCOUNT, T_ENROLL, &json_atom(&other_row));
+    assert_eq!(
+        refusal(&v),
+        ("credential_refused:attestation_invalid:not_enrolled_at_position".to_string(), "permanent".to_string()),
+        "no key of the blob's row: {v}"
+    );
+    // …and a `sig` that is no blob's hex at all.
+    let garbage = json_atom(&canonical_record(&entries, Some("zz")));
+    let (_, _, v) = deposit_record(port, &device, CLAIMANT_DOC1, CLAIMANT_ACCOUNT, T_ENROLL, &garbage);
+    assert_eq!(
+        refusal(&v),
+        ("credential_refused:attestation_invalid:malformed".to_string(), "permanent".to_string()),
+        "a sig of no row's width: {v}"
+    );
+    table_is_filtered(&expected, &honored);
+
+    // 5 — THE GRADE: an anchor-flagged enrolment is anchor-grade, so it
+    // admits an anchor's `sig` alone — the device key's, deposited from the
+    // anchor's own session (slot (6) passed), is `signature`; the anchor's
+    // is honored, and the new anchor stands.
+    let k4 = distinct_key(23);
+    let flagged = [Enrollment::new(public_key_of(&k4), true, None).unwrap()];
+    let by_device = signed_record_text(port, &hybrid_signer(&device_key()), CLAIMANT_DOC1, T_ENROLL, &[CLAIMANT_ACCOUNT], &flagged).unwrap();
+    let (_, _, v) = deposit_record(port, &anchor, CLAIMANT_DOC1, CLAIMANT_ACCOUNT, T_ENROLL, &json_atom(&by_device));
+    assert_eq!(verdict(&v), "credential_refused:attestation_invalid:signature", "an anchor-grade record, a device's sig: {v}");
+    table_is_filtered(&expected, &honored);
+    let by_anchor = signed_record_text(port, &hybrid_signer(&anchor_key()), CLAIMANT_DOC1, T_ENROLL, &[CLAIMANT_ACCOUNT], &flagged).unwrap();
+    let (base, _, v) = deposit_record(port, &anchor, CLAIMANT_DOC1, CLAIMANT_ACCOUNT, T_ENROLL, &json_atom(&by_anchor));
+    assert_eq!(v["resp"].as_str(), Some("ack_addr"), "the anchor's sig: {v}");
+    honored.push((base, acked_addr(&v)));
+    expected.push(fp(&k4));
+    expected.sort();
+    table_is_filtered(&expected, &honored);
+    // The new anchor opens a session and signs an anchor act of its own.
+    let as_k4 = open_signed_session(port, CLAIMANT_PRINCIPAL, &k4);
+    let k5 = distinct_key(24);
+    let atom = signed_atom(port, &as_k4, CLAIMANT_DOC1, T_ENROLL, &[CLAIMANT_ACCOUNT], &enroll_atom_flagged(&[(&k5, true)]));
+    let (_, _, v) = deposit_record(port, &as_k4, CLAIMANT_DOC1, CLAIMANT_ACCOUNT, T_ENROLL, &atom);
+    assert_eq!(v["resp"].as_str(), Some("ack_addr"), "the new anchor's own anchor act: {v}");
+}
+
+/// A LIFTED RECORD FAILS (the design record §4.5's table clause (a): "a
+/// record LIFTED into a stranger's doc 1 is refused by this same lookup, its
+/// `sig` verifying under no key of THAT home's account"): the claimant's
+/// signed enrolment of K — honored in the claimant's doc 1 — copied byte for
+/// byte into a stranger B's doc 1 and deposited as B's own holder act (the
+/// fold would honor it: K is new to B's set) is refused
+/// `attestation_invalid:signature`, PERMANENT: the frame names B's home and
+/// B's account, and the `sig` was made over the claimant's. B's table is
+/// unmoved, and the same record freshly signed by B's own key for B's home
+/// is honored — the lift is what fails, not the record. The lineage row is
+/// EMPTY at every position on this board (l6-A5), so it separates nothing
+/// here; the home and its account do.
+#[test]
+fn a_record_lifted_into_a_strangers_doc_1_verifies_under_no_key_of_that_home() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_owner_session(port);
+    let b = seat_stranger(port, 971);
+    let b_key = distinct_key(71);
+    let b_signed = hire(port, &signed, CLAIMANT_DOC1, &b.account, 971, &b_key);
+    let k = distinct_key(72);
+    let k_fp = Fingerprint::of(&public_key_of(&k)).to_hex();
+    // The claimant's own, signed for its home: honored.
+    let atom = signed_atom(port, &signed, CLAIMANT_DOC1, T_ENROLL, &[CLAIMANT_ACCOUNT], &enroll_atom(&[&k]));
+    let (_, _, v) = deposit_record(port, &signed, CLAIMANT_DOC1, CLAIMANT_ACCOUNT, T_ENROLL, &atom);
+    assert_eq!(v["resp"].as_str(), Some("ack_addr"), "{v}");
+    assert!(fingerprints(port, CLAIMANT_ACCOUNT, "enrolled", None).contains(&k_fp));
+    // THE LIFT: the very atom into B's doc 1, deposited for B.
+    let before = fingerprints(port, &b.account, "enrolled", None);
+    let (_, _, v) = deposit_record(port, &b_signed, &b.doc1, &b.account, T_ENROLL, &atom);
+    assert_eq!(
+        refusal(&v),
+        ("credential_refused:attestation_invalid:signature".to_string(), "permanent".to_string()),
+        "a lifted record verifies under no key of B's: {v}"
+    );
+    assert_eq!(fingerprints(port, &b.account, "enrolled", None), before, "B's table is unmoved");
+    // The same record, signed by B for B's home: honored.
+    let own = signed_atom(port, &b_signed, &b.doc1, T_ENROLL, &[&b.account], &enroll_atom(&[&k]));
+    let (_, _, v) = deposit_record(port, &b_signed, &b.doc1, &b.account, T_ENROLL, &own);
+    assert_eq!(v["resp"].as_str(), Some("ack_addr"), "B's own signature over the same entries: {v}");
+    assert!(fingerprints(port, &b.account, "enrolled", None).contains(&k_fp));
+}
+
+/// THE MIRROR COMPOSES THE SAME BYTES (the design record §4.2 (C), §7.2; the
+/// frame merge's "what a verifier composes"): a verifier holding the STORED
+/// atom and link alone — `find_links_v` at the record's positions, then
+/// `read_link` for the slots and `retrieve` for the atom, `H.1`'s pair, the
+/// home off the link's own address and its account by ω — composes the
+/// `record` frame byte for byte as the signer composed it at the request,
+/// and the record's `sig` verifies over it under the fold's key set as the
+/// wire serves it. The write path verified the same bytes: one preimage,
+/// composed from the request and from the store.
+#[test]
+fn a_record_frame_composed_from_the_stored_atom_and_link_is_the_frame_the_signer_made() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_owner_session(port);
+    let k = distinct_key(73);
+    let entries = [Enrollment::new(public_key_of(&k), false, Some("mirror".into())).unwrap()];
+    let at_request = record_frame_for(
+        port,
+        ALG_MLDSA65_ED25519,
+        CLAIMANT_DOC1,
+        T_ENROLL,
+        &[CLAIMANT_ACCOUNT],
+        canonical_record(&entries, None).as_bytes(),
+    )
+    .expect("composable");
+    let text = signed_record_text(port, &hybrid_signer(&device_key()), CLAIMANT_DOC1, T_ENROLL, &[CLAIMANT_ACCOUNT], &entries).unwrap();
+    let (_, atom_addr, v) = deposit_record(port, &signed, CLAIMANT_DOC1, CLAIMANT_ACCOUNT, T_ENROLL, &json_atom(&text));
+    assert_eq!(v["resp"].as_str(), Some("ack_addr"), "{v}");
+    let link = acked_addr(&v);
+
+    // THE LATER VERIFIER: the link found by the record's positions and its
+    // kind — the four-set query, FROM the atom and typed enroll (a query by
+    // positions alone matches the account-wide slots of the ceremony's own
+    // links too, which contain every position of doc 1)…
+    let found = addrs_of(&op(
+        port,
+        None,
+        &ftt_frame("find_links_ftt", r#""any""#, &unit_span(&atom_addr), r#""any""#, &unit_span(T_ENROLL)),
+    ));
+    assert_eq!(found, vec![link.clone()], "the record's one link, by its atom and its kind");
+    // …its slots and its atom read off the store, and the frame composed.
+    let record = stored_record(port, &link);
+    assert_eq!((record.home.as_str(), record.ty.as_str()), (CLAIMANT_DOC1, T_ENROLL));
+    assert_eq!(record.to, vec![CLAIMANT_ACCOUNT.to_string()]);
+    assert_eq!(record.canonical, canonical_record(&entries, None), "the sig-less projection");
+    let at_store = record.frame(port, ALG_MLDSA65_ED25519);
+    assert_eq!(at_store, at_request, "one preimage, composed from the request and from the store");
+    // …and the sig verifies under the fold's set as served.
+    let set = op(port, None, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
+    assert!(record.verifies_under(port, &set), "the record's sig verifies under the served key set");
+    let blob = hex_to_bytes(record.sig.as_deref().expect("the sig"));
+    assert_eq!(
+        skep_signature::verify(FIXTURE_TAG, &public_key_of(&device_key()), &at_store, &blob),
+        Ok(()),
+        "under the device key that signed it"
+    );
+    assert_ne!(
+        skep_signature::verify(FIXTURE_TAG, &public_key_of(&anchor_key()), &at_store, &blob),
+        Ok(()),
+        "and under no other"
+    );
+}
+
+/// THE CREDENTIAL DEPOSIT'S `replaces` FENCE (BW-04, owner-ruled 2026-09-29):
+/// a credential-typed `make_link` carrying a `replaces` member is refused
+/// `replaces_not_credential`, PERMANENT — a shape slot ahead of the lock,
+/// beside `resolved_from`, so it answers before any gate behind it: from the
+/// device session whose record is signed and would otherwise be honored,
+/// and from a BARE session that slot (7) would refuse. Nothing commits, and
+/// the same frame without the member is honored. The record's `replaces`
+/// row is EMPTY by kind: the frame the `sig` covers has no place for one.
+#[test]
+fn a_replaces_member_on_a_credential_typed_make_link_is_refused_ahead_of_the_lock() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_owner_session(port);
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let k = distinct_key(74);
+    let ordinal = next_content_ordinal(port, Some(&signed), CLAIMANT_DOC1);
+    let atom = signed_atom(port, &signed, CLAIMANT_DOC1, T_ENROLL, &[CLAIMANT_ACCOUNT], &enroll_atom(&[&k]));
+    let v = op(
+        port,
+        Some(&signed),
+        &format!(
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":"{T_ENROLL}"}}"#
+        ),
+    );
+    let atom_addr = acked_addr(&v);
+    let mut with_member: Value =
+        serde_json::from_str(&typed_link_frame(CLAIMANT_DOC1, &[&atom_addr], &[CLAIMANT_ACCOUNT], T_ENROLL)).unwrap();
+    with_member["replaces"] = json!(CEREMONY_ATOM);
+    let head = head_position(port);
+    for (hand, token) in [("the device session", &signed), ("a bare session", &bare)] {
+        let v = op(port, Some(token), &with_member.to_string());
+        assert_eq!(
+            refusal(&v),
+            ("credential_refused:replaces_not_credential".to_string(), "permanent".to_string()),
+            "{hand}: {v}"
+        );
+    }
+    assert_eq!(head_position(port), head, "nothing committed");
+    let v = op(port, Some(&signed), &typed_link_frame(CLAIMANT_DOC1, &[&atom_addr], &[CLAIMANT_ACCOUNT], T_ENROLL));
+    assert_eq!(v["resp"].as_str(), Some("ack_addr"), "without the member, honored: {v}");
 }
 
 // ── the replay rule at the grant ────────────────────────────────────────────
@@ -1208,14 +1616,17 @@ fn addr(s: &str) -> skep_address::Address {
     skep_address::validate(skep_address::Tumbler::new(comps).unwrap()).unwrap()
 }
 
-/// The four fixed instances every golden signs: the frames of an `insert`
+/// The six fixed instances every golden signs: the frames of an `insert`
 /// (undeclared, two values), a `make_link` (three address-form slots), a
 /// `publish` (three values copied in, one window of two positions onto
 /// another document, the base taken at three — the address form, l6-A4)
-/// and a `record` (an enrol's kind: its type slot, one subject, neither
-/// optional row named, a short canonical body — the frame merge, fm-I) on a
-/// board whose `H.1` pair is `(12, 0xAB…)`, by account `1.0.1`.
-fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 4] {
+/// and three `record`s (the frame merge, fm-I; the record grade, 2a): an
+/// enrol's kind — its type slot, one subject, neither optional row named, a
+/// short canonical body — a retire's kind beside it over the same subject,
+/// and the claim's — its type slot, the EMPTY target slot, no record at all
+/// (a claim carries none, AUTH-2.48), the body-bytes row empty — on a board
+/// whose `H.1` pair is `(12, 0xAB…)`, by account `1.0.1`.
+fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 6] {
     let (account, doc) = (addr("1.0.1"), addr("1.0.1.0.1"));
     let insert = entry_body_insert(None, [&b"a"[..], &b"b"[..]]);
     let ty = [addr("1.1.0.1.0.1.0.3.90")];
@@ -1237,15 +1648,23 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 4] {
         Some(3),
     );
     let subject = [addr("1.0.2")];
-    let record = entry_body_record(
+    let enrol = entry_body_record(
         &addr("1.1.0.1.0.1.0.3.1"),
         &subject,
         None,
         None,
         br#"{"type":"skep-enroll"}"#,
     );
+    let retire = entry_body_record(
+        &addr("1.1.0.1.0.1.0.3.2"),
+        &subject,
+        None,
+        None,
+        br#"{"type":"skep-retire"}"#,
+    );
+    let claim = entry_body_record(&addr("1.1.0.1.0.1.0.3.3"), &[], None, None, b"");
     let board = BoardTerm { log_position: 12, chain: [0xAB; 32] };
-    [insert, link, publish, record]
+    [insert, link, publish, enrol, retire, claim]
         .map(|body| (body.op(), entry_frame(alg, board, &account, &doc, &body)))
 }
 
@@ -1257,10 +1676,13 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 4] {
 /// `publish` body since the re-pin of 2026-09-29 (V, l6-A4, D25's (c′)):
 /// the count, the segments in the address form, the base-extent group; and
 /// the `record` body since the frame merge (fm-I): five rows under a token
-/// no wire op spells.
+/// no wire op spells — the enrol's kind as B+C pinned it, unmoved by the
+/// record grade's build (2a), which pinned the retire's and the claim's
+/// beside it.
 #[test]
 fn the_entry_frames_bytes_per_op_are_pinned() {
-    let [(_, insert), (_, link), (_, publish), (_, record)] = fixed_frames(ALG_MLDSA65_ED25519);
+    let [(_, insert), (_, link), (_, publish), (_, enrol), (_, retire), (_, claim)] =
+        fixed_frames(ALG_MLDSA65_ED25519);
     // The members all three frames share: the framing tag, then `alg`,
     // `board`, `account` and `doc`.
     let mut prefix = b"skep-entry-v1".to_vec();
@@ -1346,8 +1768,8 @@ fn the_entry_frames_bytes_per_op_are_pinned() {
     assert_eq!(publish, want, "publish");
     // record: op `record` — no wire op spells it — then body = the type
     // slot row ‖ the `to` slot row ‖ the `replaces` row EMPTY ‖ the lineage
-    // row EMPTY ‖ the canonical bytes, delimited.
-    let mut want = prefix;
+    // row EMPTY ‖ the canonical bytes, delimited. The enrol's kind…
+    let mut want = prefix.clone();
     want.extend(member(b"record"));
     want.extend(member(
         &[
@@ -1359,7 +1781,37 @@ fn the_entry_frames_bytes_per_op_are_pinned() {
         ]
         .concat(),
     ));
-    assert_eq!(record, want, "record");
+    assert_eq!(enrol, want, "record, the enrol's kind");
+    // …the retire's: its own type slot, the same subject, its own bytes…
+    let mut want = prefix.clone();
+    want.extend(member(b"record"));
+    want.extend(member(
+        &[
+            slot(&[b"1.1.0.1.0.1.0.3.2"]),
+            slot(&[b"1.0.2"]),
+            vec![0, 0, 0, 0],
+            vec![0, 0, 0, 0],
+            member(br#"{"type":"skep-retire"}"#),
+        ]
+        .concat(),
+    ));
+    assert_eq!(retire, want, "record, the retire's kind");
+    // …and the claim's: its type slot, the `to` slot EMPTY (nine bytes, never
+    // absent), both optional rows EMPTY, and the body-bytes row EMPTY — a
+    // claim carries no record (AUTH-2.48), so its row delimits nothing.
+    let mut want = prefix;
+    want.extend(member(b"record"));
+    want.extend(member(
+        &[
+            slot(&[b"1.1.0.1.0.1.0.3.3"]),
+            slot(&[]),
+            vec![0, 0, 0, 0],
+            vec![0, 0, 0, 0],
+            vec![0, 0, 0, 0],
+        ]
+        .concat(),
+    ));
+    assert_eq!(claim, want, "record, the claim's kind");
 }
 
 /// The codec's round trip carries the member: `parse(marshal(r))` reproduces

@@ -189,14 +189,16 @@ fn hire_logged(
     key: &ed25519_dalek::SigningKey,
 ) -> String {
     let ordinal = next_content_ordinal(port, Some(claimant_signed), CLAIMANT_DOC1);
+    // The record signed for its deposit (2a), as `common::hire` signs it.
+    let record =
+        signed_atom(port, claimant_signed, CLAIMANT_DOC1, T_ENROLL, &[agent_account], &enroll_atom(&[key]));
     let atom = write(
         log,
         port,
         claimant_signed,
         "insert",
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}],"deposit":"{T_ENROLL}"}}"#,
-            enroll_atom(&[key])
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{record}}}],"deposit":"{T_ENROLL}"}}"#
         ),
         Some(vec![CLAIMANT_DOC1.to_string()]),
     );

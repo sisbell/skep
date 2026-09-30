@@ -475,6 +475,26 @@ pub fn canonical_record<T: RecordEntry>(entries: &[T], sig: Option<&str>) -> Str
     out
 }
 
+/// THE RECORD VALUE a body admits (AUTH-2.130's admission sentence ranges
+/// over it): the kind's ENTRIES and the `sig` member's string where one
+/// stands — what the RECORD grade's verifier reads off a committed atom
+/// (signed ops; the design record §4.2 (C), §7.5 step 3): `sig` is the
+/// signature under trial, and `canonical_record(&entries, None)` the sig-less
+/// projection it was made over — the body-bytes row of the `record` grammar
+/// ([`entry_body_record`](crate::entry_body_record)). The fold never holds
+/// one: it reads the entries alone (AUTH-2.13, AUTH-2.94), through
+/// [`parse_enroll`] and [`parse_retire`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordValue<T> {
+    /// The kind's entries, in the record's own ENTRY ORDER, non-empty and
+    /// duplicate-free ([`parse_enroll`]'s POSTCONDITION).
+    pub entries: Vec<T>,
+    /// The `sig` member's string, where the body carried one — as it stood,
+    /// nothing decoded: what it holds is the verifier's to read (the record
+    /// grade's rule: the hybrid blob in hex).
+    pub sig: Option<String>,
+}
+
 /// AUTH-2.19 — the fault precedence BOTH kinds keep, and the record envelope
 /// both schemas state alike, in ONE place: the bytes decode as UTF-8 (else
 /// `NotUtf8`, item 1); the body is a JSON object of exactly `type`, the kind's
@@ -496,7 +516,27 @@ pub fn canonical_record<T: RecordEntry>(entries: &[T], sig: Option<&str>) -> Str
 /// [`Schema`]'s five rows. The kind's [`Schema`] is `T`'s, reached through
 /// [`RecordEntry`] — the route [`canonical_record`] takes — so the two sides
 /// read one table by one index.
-fn parse_record<T: RecordEntry>(bytes: &[u8]) -> Result<Vec<T>, PayloadError> {
+///
+/// THE ONE PARSE, and THE VERIFIER'S (signed ops; the design record §4.2 (C),
+/// §7.5 step 3: "`parse_record` and then `canonical_record(.., None)` over
+/// the entries it answers"): the RECORD VALUE a body admits — its entries AND
+/// its `sig` — the kind chosen by `T` as [`canonical_record`] chooses it:
+/// `Enrollment` for the enrollment kind, `Fingerprint` for the retirement
+/// kind. The fold's two parsers ([`parse_enroll`], [`parse_retire`]) take the
+/// entries this answers and drop the `sig` unread (AUTH-2.13, AUTH-2.94); the
+/// record grade's verifier — the daemon's write path at a credential
+/// deposit's `make_link`, a reader or a mirror beside the table — calls this
+/// over the atom the link's `from` names, takes the `sig` as the signature
+/// under trial and `canonical_record(&value.entries, None)` as the body-bytes
+/// row of the `record` grammar it was made over. So a body is admitted by one
+/// rule whoever asks — admission is the fold's and not the verifier's — and
+/// a body this refuses is one the fold refuses, `bad_record` and the rest,
+/// carrying no `sig` a verifier could weigh.
+///
+/// POSTCONDITION — as [`parse_enroll`]'s over `entries`; and
+/// `canonical_record(&value.entries, value.sig.as_deref()) == bytes`, the
+/// admission sentence read from the other side.
+pub fn parse_record_value<T: RecordEntry>(bytes: &[u8]) -> Result<RecordValue<T>, PayloadError> {
     let schema = T::schema();
     // AUTH-2.19 item 1 — UTF-8 before everything.
     let text = core::str::from_utf8(bytes).map_err(|_| PayloadError::NotUtf8)?;
@@ -571,7 +611,13 @@ fn parse_record<T: RecordEntry>(bytes: &[u8]) -> Result<Vec<T>, PayloadError> {
     if entries.is_empty() {
         return Err(PayloadError::Empty);
     }
-    Ok(entries)
+    Ok(RecordValue { entries, sig: sig.map(str::to_owned) })
+}
+
+/// The fold's parse — [`parse_record_value`]'s entries, the `sig` dropped
+/// unread (AUTH-2.13, AUTH-2.94).
+fn parse_record<T: RecordEntry>(bytes: &[u8]) -> Result<Vec<T>, PayloadError> {
+    parse_record_value(bytes).map(|value| value.entries)
 }
 
 /// AUTH-2.128, AUTH-2.130 — parse an enrollment record. The bytes decode as

@@ -218,9 +218,17 @@ fn i1_e_a_credential_deposit_appends_to_the_head_alone_and_a_pinned_member_never
     assert_eq!(content_extent(port, None, &m1), 1);
 
     // The pair: the atom at the head's next free ordinal, read back and
-    // verified, then the enroll link naming it.
+    // verified, then the enroll link naming it — the record signed for that
+    // deposit, as every record above the claim is (2a).
     let ordinal = next_content_ordinal(port, Some(&signed), CLAIMANT_DOC1);
-    let record = enroll_atom(&[&distinct_key(41)]);
+    let record = signed_atom(
+        port,
+        &signed,
+        CLAIMANT_DOC1,
+        T_ENROLL,
+        &[CLAIMANT_ACCOUNT],
+        &enroll_atom(&[&distinct_key(41)]),
+    );
     let v = op(
         port,
         Some(&signed),

@@ -22,9 +22,10 @@ use ed25519_dalek::{Signer, SigningKey};
 use serde_json::{json, Value};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_identity::{
-    encode_enroll, entry_body_insert, entry_body_make_link, entry_body_make_link_replacing,
-    entry_body_publish, entry_frame, framed, BoardTerm, Enrollment, EntrySlot, LinkSlots,
-    PublicKey, ShotSegment, SigAlgRow, SESSION_TAG, SESSION_TAG_V2,
+    canonical_record, encode_enroll, entry_body_insert, entry_body_make_link,
+    entry_body_make_link_replacing, entry_body_publish, entry_body_record, entry_frame, framed,
+    parse_record_value, BoardTerm, Enrollment, EntrySlot, Fingerprint, LinkSlots, PublicKey,
+    RecordEntry, ShotSegment, SigAlgRow, SESSION_TAG, SESSION_TAG_V2,
 };
 use skep_signature::HybridSigner;
 use skepd::{serve, AuthOptions, Daemon, NodePrefix, Origin, Skepd, DEFAULT_WORKERS};
@@ -427,6 +428,15 @@ pub fn next_content_ordinal(port: u16, token: Option<&str>, doc: &str) -> u64 {
 /// that delegator's doc 1. A refused deposit is an AUTH finding, not a
 /// fixture to bend: the panic names the verdict token.
 ///
+/// THE RECORD IS SIGNED (signed ops, 2a): above the claim the daemon verifies
+/// the record's own `sig` at the deposit's `make_link`, under the set that
+/// opens the registry's account, so the atom is composed with the `sig` the
+/// registrar's session key makes over the record frame ([`signed_atom`]) —
+/// at the grade the act needs: the key that opened `registrar_signed` is the
+/// one that signs, so the ANCHOR session a handoff needs (below) signs the
+/// anchor-grade record too. Below the claim, with no `H.1`, the atom lands
+/// bare, as the ceremony's own do.
+///
 /// THE HAND AT A HANDOFF (AUTH-3.21, AUTH-5.90) is the CALLER's to pass.
 /// Keying a SUBDIVISION of the claimant's — `CLAIMANT.k`, its genesis homed
 /// in the claimant's doc 1 — is no hire by the address test: it is the
@@ -448,12 +458,13 @@ pub fn hire(
     key: &SigningKey,
 ) -> String {
     let ordinal = next_content_ordinal(port, Some(registrar_signed), registrar_doc1);
+    let atom =
+        signed_atom(port, registrar_signed, registrar_doc1, T_ENROLL, &[agent_account], &enroll_atom(&[key]));
     let v = op(
         port,
         Some(registrar_signed),
         &format!(
-            r#"{{"op":"insert","doc":"{registrar_doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}],"deposit":"{T_ENROLL}"}}"#,
-            enroll_atom(&[key])
+            r#"{{"op":"insert","doc":"{registrar_doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":"{T_ENROLL}"}}"#
         ),
     );
     assert_eq!(

@@ -796,3 +796,49 @@ fn every_payload_error_variant_has_its_pinned_token() {
     assert_eq!(PayloadError::Empty.token(), "empty");
     assert_eq!(PayloadError::DuplicateKey(12).token(), "duplicate_key:12");
 }
+
+/// THE VERIFIER'S PARSE (signed ops; the design record §4.2 (C), §7.5 step
+/// 3): `parse_record_value` answers a body's entries AND its `sig` under the
+/// one admission the fold applies — the same body, with and without the
+/// member, folds to identical entries, the `sig` read verbatim where it
+/// stands and `None` where it does not — and the value round-trips through
+/// `canonical_record` on both sides: with the `sig`, the bytes admitted; with
+/// `None`, the SIG-LESS PROJECTION the record grade signs. A body the fold
+/// refuses is refused here with the same fault, so no `sig` is ever read off
+/// one: the `sig` is canonically LAST, and a body carrying it elsewhere is
+/// `bad_record` to both.
+#[test]
+fn parse_record_value_answers_the_entries_and_the_sig_under_the_folds_own_admission() {
+    use skep_identity::{canonical_record, parse_record_value, RecordValue};
+    let h = key_hex(1);
+    let bare = canonical_enroll_record();
+    let signed = format!(
+        r#"{{"type":"skep-enroll","keys":[{{"alg":"mldsa65-ed25519","key":"{h}","anchor":false}}],"sig":"00ff"}}"#
+    );
+    let unsigned: RecordValue<Enrollment> = parse_record_value(bare.as_bytes()).expect("admitted");
+    let with_sig: RecordValue<Enrollment> = parse_record_value(signed.as_bytes()).expect("admitted");
+    assert_eq!(unsigned.sig, None, "no member, no sig");
+    assert_eq!(with_sig.sig.as_deref(), Some("00ff"), "the member, verbatim");
+    assert_eq!(unsigned.entries, with_sig.entries, "the fold's entries, member or not");
+    assert_eq!(with_sig.entries, parse_enroll(signed.as_bytes()).expect("the fold admits it"));
+    // The round trip on both sides of the projection.
+    assert_eq!(canonical_record(&with_sig.entries, with_sig.sig.as_deref()), signed);
+    assert_eq!(canonical_record(&with_sig.entries, None), bare, "the sig-less projection");
+    // The retirement kind alike.
+    let retire = format!(r#"{{"type":"skep-retire","fingerprints":["{}"],"sig":"ab"}}"#, fp_hex(1));
+    let value: RecordValue<Fingerprint> = parse_record_value(retire.as_bytes()).expect("admitted");
+    assert_eq!((value.entries.as_slice(), value.sig.as_deref()), (&[fp(1)][..], Some("ab")));
+    assert_eq!(canonical_record(&value.entries, None), encode_retire(&[fp(1)]));
+    // Refused as the fold refuses: a `sig` not last, a wrong kind.
+    let sig_not_last = format!(
+        r#"{{"type":"skep-enroll","sig":"00","keys":[{{"alg":"mldsa65-ed25519","key":"{h}","anchor":false}}]}}"#
+    );
+    assert_eq!(
+        parse_record_value::<Enrollment>(sig_not_last.as_bytes()).expect_err("refused"),
+        PayloadError::BadRecord
+    );
+    assert_eq!(
+        parse_record_value::<Fingerprint>(signed.as_bytes()).expect_err("an enrollment is no retirement"),
+        PayloadError::BadRecord
+    );
+}

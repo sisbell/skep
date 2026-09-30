@@ -75,7 +75,17 @@ fn retire_atom(fps: &[&str]) -> String {
 /// malformed one included, `T_RETIRE` for a retire record. Kept apart from
 /// [`deposit`] for exactly that reason: the two writes meet different gates,
 /// and only the second is the credential path's.
+///
+/// THE RECORD IS SIGNED (signed ops, 2a) for the deposit [`deposit`] makes
+/// of it — homed in the claimant's doc 1, naming the claimant — under the
+/// key that opened `signed_token` ([`signed_atom`]): the daemon verifies the
+/// record's own `sig` at that deposit, at the grade the act needs, so a cell
+/// whose deposit is anchor-grade lands its record from the ANCHOR's session.
+/// A malformed atom is landed as given — the fold refuses it ahead of any
+/// signature — and so is one a cell deposits elsewhere than [`deposit`]
+/// does, whose refusal stands ahead of the check too.
 fn record_atom(port: u16, signed_token: &str, ordinal: u64, atom: &str, ty: &str) -> String {
+    let atom = signed_atom(port, signed_token, CLAIMANT_DOC1, ty, &[CLAIMANT_ACCOUNT], atom);
     let v = op(
         port,
         Some(signed_token),
@@ -224,10 +234,16 @@ const ANCHOR_SESSION_REQUIRED: &str = "credential_refused:anchor_session_require
 
 /// Land one credential record atom at the next free position of `doc1` and
 /// answer its address — [`record_atom`] for a registry that is not the
-/// claimant's, declared under the record's class type `ty` as that one is.
-/// `session` is one the publish gate admits into a published home: a signed
-/// one, of either scope.
-fn land_record(port: u16, session: &str, doc1: &str, atom: &str, ty: &str) -> String {
+/// claimant's, declared under the record's class type `ty` as that one is,
+/// and SIGNED (signed ops, 2a) for the deposit naming `subject` that
+/// [`enroll_for`] then makes of it, under the key that opened `session`
+/// ([`signed_atom`]): the record's `sig` is verified at that deposit under
+/// the set that opens `doc1`'s account, at the grade the act needs, so an
+/// anchor-grade cell lands its record from the ANCHOR's session. `session`
+/// is one the publish gate admits into a published home: a signed one, of
+/// either scope.
+fn land_record(port: u16, session: &str, doc1: &str, atom: &str, ty: &str, subject: &str) -> String {
+    let atom = signed_atom(port, session, doc1, ty, &[subject], atom);
     let ordinal = next_content_ordinal(port, Some(session), doc1);
     acked_addr(&op(
         port,

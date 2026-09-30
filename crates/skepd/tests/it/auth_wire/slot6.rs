@@ -5,11 +5,14 @@
 //!
 //! A genesis is a record landed in its REGISTRY's doc 1 and an enroll-typed
 //! deposit naming the account it seeds. Every cell below lands the record
-//! from a session the publish gate admits and then judges the DEPOSIT, which
-//! is the credential path's and the one slot (6) reads. The cells are chosen
-//! so the address test is what decides them: where a cell COMMITS from a
-//! device session, the set that opens the account holds an ANCHOR, so the
-//! same deposit read a handoff would have been refused.
+//! from a session the publish gate admits — SIGNED for its deposit under that
+//! session's key (the record grade, 2a: the daemon verifies the record's own
+//! `sig` at the deposit, at the grade the act needs, so a record an ANCHOR
+//! session is to commit is landed from the anchor's) — and then judges the
+//! DEPOSIT, which is the credential path's and the one slot (6) reads. The
+//! cells are chosen so the address test is what decides them: where a cell
+//! COMMITS from a device session, the set that opens the account holds an
+//! ANCHOR, so the same deposit read a handoff would have been refused.
 
 use super::*;
 
@@ -39,7 +42,9 @@ fn a_handoff_is_anchor_grade_wherever_the_set_that_opens_the_account_holds_an_an
 
     // ROW 5 — a by-reference descendant of S = X that is neither a hire's nor
     // a spawn's address: X's HANDOFF, and X's set holds the ceremony's anchor.
-    let record = land_record(port, &device, CLAIMANT_DOC1, &fresh_member(61), T_ENROLL);
+    // The record is anchor-grade, so the anchor signs it; the DEPOSIT is what
+    // each hand is judged on.
+    let record = land_record(port, &anchor, CLAIMANT_DOC1, &fresh_member(61), T_ENROLL, &x2);
     for (hand, token) in [("a device session", &device), ("a bare session", &bare)] {
         let v = enroll_for(port, token, CLAIMANT_DOC1, &record, &x2);
         assert_eq!(verdict(&v), ANCHOR_SESSION_REQUIRED, "{hand}'s genesis at X.2: {v}");
@@ -57,7 +62,8 @@ fn a_handoff_is_anchor_grade_wherever_the_set_that_opens_the_account_holds_an_an
     // no anchor of X's, commits it.
     let (member, _) = bootstrap_delegate(port, 961);
     let member_key = distinct_key(62);
-    let record = land_record(port, &device, CLAIMANT_DOC1, &enroll_atom(&[&member_key]), T_ENROLL);
+    let record =
+        land_record(port, &device, CLAIMANT_DOC1, &enroll_atom(&[&member_key]), T_ENROLL, &member);
     let v = enroll_for(port, &bare, CLAIMANT_DOC1, &record, &member);
     assert_eq!(verdict(&v), SIGNED_SESSION_REQUIRED, "a bare genesis in no cone meets (7): {v}");
     expect_resp(&enroll_for(port, &device, CLAIMANT_DOC1, &record, &member), "ack_addr");
@@ -68,7 +74,7 @@ fn a_handoff_is_anchor_grade_wherever_the_set_that_opens_the_account_holds_an_an
     let member_doc1 = create_doc(port, &giver, &member);
     reserve_agent_space(port, &giver, &member, 9611);
     let (handed, _) = delegate_under(port, &giver, &member, 9612);
-    let record = land_record(port, &giver, &member_doc1, &fresh_member(63), T_ENROLL);
+    let record = land_record(port, &giver, &member_doc1, &fresh_member(63), T_ENROLL, &handed);
     expect_resp(&enroll_for(port, &giver, &member_doc1, &record, &handed), "ack_addr");
     assert_eq!(enrolled_count(port, &handed), 1);
 
@@ -107,15 +113,19 @@ fn a_hire_and_a_spawn_are_device_grade_and_the_agents_home_itself_is_a_handoff()
         CLAIMANT_DOC1,
         &enroll_atom_flagged(&[(&r_paper, true), (&r_device, false)]),
         T_ENROLL,
+        &y,
     );
     expect_resp(&enroll_for(port, &x_anchor, CLAIMANT_DOC1, &record, &y), "ack_addr");
     let r = open_signed_session(port, 952, &r_device);
+    let r_anchor = open_signed_session(port, 952, &r_paper);
     let y_doc1 = create_doc(port, &r, &y);
 
-    // ROW 5 — the agents' home itself.
+    // ROW 5 — the agents' home itself. Its record is anchor-grade — the
+    // recipient's PAPER signs it, and commits it at the end — and the
+    // device session's deposit of it is what this row judges.
     let (home, _) = delegate_under(port, &r, &y, 9521);
     assert_eq!(home, format!("{y}.1"));
-    let home_record = land_record(port, &r, &y_doc1, &fresh_member(63), T_ENROLL);
+    let home_record = land_record(port, &r_anchor, &y_doc1, &fresh_member(63), T_ENROLL, &home);
     let v = enroll_for(port, &r, &y_doc1, &home_record, &home);
     assert_eq!(verdict(&v), ANCHOR_SESSION_REQUIRED, "the agents' home is a handoff: {v}");
 
@@ -148,6 +158,7 @@ fn a_hire_and_a_spawn_are_device_grade_and_the_agents_home_itself_is_a_handoff()
         &home_doc1,
         &enroll_atom_flagged(&[(&g_paper, true), (&g_device, false)]),
         T_ENROLL,
+        &agent,
     );
     expect_resp(&enroll_for(port, &as_home, &home_doc1, &record, &agent), "ack_addr");
 
@@ -165,25 +176,26 @@ fn a_hire_and_a_spawn_are_device_grade_and_the_agents_home_itself_is_a_handoff()
         &agent_doc1,
         &enroll_atom_flagged(&[(&w_paper, true), (&w_device, false)]),
         T_ENROLL,
+        &worker,
     );
     expect_resp(&enroll_for(port, &g, &agent_doc1, &record, &worker), "ack_addr");
 
     // THE TERMINUS, ALONE. The worker is keyed and stands at `inc(agent, 1)`
     // beneath its own nearest keyed ancestor, the agent — no agent's
     // position — so what lies beneath it is measured at the WORKER: its own
-    // handoff, anchor-grade, its set holding an anchor.
+    // handoff, anchor-grade, its set holding an anchor — the worker's PAPER
+    // signs the record, and its device session's deposit is judged.
     let w = open_signed_session(port, 952_111, &w_device);
+    let w_anchor = open_signed_session(port, 952_111, &w_paper);
     let worker_doc1 = create_doc(port, &w, &worker);
     let (below, _) = delegate_under(port, &w, &worker, 9_521_111);
-    let record = land_record(port, &w, &worker_doc1, &fresh_member(68), T_ENROLL);
+    let record = land_record(port, &w_anchor, &worker_doc1, &fresh_member(68), T_ENROLL, &below);
     let v = enroll_for(port, &w, &worker_doc1, &record, &below);
     assert_eq!(verdict(&v), ANCHOR_SESSION_REQUIRED, "measured at the worker alone: {v}");
-    let w_anchor = open_signed_session(port, 952_111, &w_paper);
     expect_resp(&enroll_for(port, &w_anchor, &worker_doc1, &record, &below), "ack_addr");
 
     // …and the recipient's PAPER hands the agents' home away, as a device
     // session could not.
-    let r_anchor = open_signed_session(port, 952, &r_paper);
     expect_resp(&enroll_for(port, &r_anchor, &y_doc1, &home_record, &home), "ack_addr");
 
     sd.shutdown();
@@ -212,9 +224,11 @@ fn the_seat_carve_admits_into_the_seats_direct_child_and_is_silent_without_the_h
         CLAIMANT_DOC1,
         &enroll_atom_flagged(&[(&t_paper, true), (&t_device, false)]),
         T_ENROLL,
+        &t,
     );
     expect_resp(&enroll_for(port, &device, CLAIMANT_DOC1, &record, &t), "ack_addr");
     let seat = open_signed_session(port, 941, &t_device);
+    let t_anchor = open_signed_session(port, 941, &t_paper);
     let t_doc1 = create_doc(port, &seat, &t);
     let (t1, _) = delegate_under(port, &seat, &t, 9411);
     let (t2, _) = delegate_under(port, &seat, &t, 9412);
@@ -227,7 +241,7 @@ fn the_seat_carve_admits_into_the_seats_direct_child_and_is_silent_without_the_h
 
     // SILENT: no header, and a header whose second field names the CLAIMANT
     // — on an unforked lineage the two are one account. T.2 is T's handoff.
-    let t2_record = land_record(port, &seat, &t_doc1, &fresh_member(43), T_ENROLL);
+    let t2_record = land_record(port, &seat, &t_doc1, &fresh_member(43), T_ENROLL, &t2);
     for silent in [header(None), header(Some(CLAIMANT_ACCOUNT))] {
         issue_blocked_list(&list, silent, &[]);
         let v = enroll_for(port, &seat, &t_doc1, &t2_record, &t2);
@@ -240,7 +254,7 @@ fn the_seat_carve_admits_into_the_seats_direct_child_and_is_silent_without_the_h
     // The seat's own first sub-account is no admission. At a TOP-LEVEL seat the
     // fold refuses it first: `inc(B, 1)` of a bootstrap-tier account takes no
     // genesis (AUTH-2.62), slot (3) ahead of slot (6).
-    let t1_record = land_record(port, &seat, &t_doc1, &fresh_member(44), T_ENROLL);
+    let t1_record = land_record(port, &seat, &t_doc1, &fresh_member(44), T_ENROLL, &t1);
     let v = enroll_for(port, &seat, &t_doc1, &t1_record, &t1);
     assert_eq!(verdict(&v), "credential_refused:not_genesis_registry", "{v}");
 
@@ -254,14 +268,15 @@ fn the_seat_carve_admits_into_the_seats_direct_child_and_is_silent_without_the_h
         &t_doc1,
         &enroll_atom_flagged(&[(&q_paper, true), (&q_device, false)]),
         T_ENROLL,
+        &t3,
     );
     expect_resp(&enroll_for(port, &seat, &t_doc1, &record, &t3), "ack_addr");
     let q = open_signed_session(port, 9413, &q_device);
     let q_doc1 = create_doc(port, &q, &t3);
     let (q1, _) = delegate_under(port, &q, &t3, 94_131);
     let (q2, _) = delegate_under(port, &q, &t3, 94_132);
-    let q1_record = land_record(port, &q, &q_doc1, &fresh_member(47), T_ENROLL);
-    let q2_record = land_record(port, &q, &q_doc1, &fresh_member(48), T_ENROLL);
+    let q1_record = land_record(port, &q, &q_doc1, &fresh_member(47), T_ENROLL, &q1);
+    let q2_record = land_record(port, &q, &q_doc1, &fresh_member(48), T_ENROLL, &q2);
     // While T is the seat the carve reaches T's DIRECT children and no
     // deeper: T.3's own child is T.3's handoff.
     let v = enroll_for(port, &q, &q_doc1, &q2_record, &q2);
@@ -271,12 +286,11 @@ fn the_seat_carve_admits_into_the_seats_direct_child_and_is_silent_without_the_h
     assert_eq!(verdict(&v), ANCHOR_SESSION_REQUIRED, "inc(seat, 1) stays a handoff: {v}");
     expect_resp(&enroll_for(port, &q, &q_doc1, &q2_record, &q2), "ack_addr");
     // …and T, the seat no longer, is a giver again: its device session is
-    // refused where its paper commits.
+    // refused where its paper commits — the record its paper signed.
     let (t4, _) = delegate_under(port, &seat, &t, 9414);
-    let t4_record = land_record(port, &seat, &t_doc1, &fresh_member(49), T_ENROLL);
+    let t4_record = land_record(port, &t_anchor, &t_doc1, &fresh_member(49), T_ENROLL, &t4);
     let v = enroll_for(port, &seat, &t_doc1, &t4_record, &t4);
     assert_eq!(verdict(&v), ANCHOR_SESSION_REQUIRED, "the carve moved with the header: {v}");
-    let t_anchor = open_signed_session(port, 941, &t_paper);
     expect_resp(&enroll_for(port, &t_anchor, &t_doc1, &t4_record, &t4), "ack_addr");
 
     sd.shutdown();
@@ -306,13 +320,21 @@ fn a_stolen_device_key_cannot_seize_a_subdivision_the_walk_ends_at_slot_6() {
 
     let thief = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let thief_key = distinct_key(91);
-    let record = land_record(port, &thief, CLAIMANT_DOC1, &enroll_atom(&[&thief_key]), T_ENROLL);
+    let record =
+        land_record(port, &thief, CLAIMANT_DOC1, &enroll_atom(&[&thief_key]), T_ENROLL, topic);
     let v = enroll_for(port, &thief, CLAIMANT_DOC1, &record, topic);
     assert_eq!(verdict(&v), ANCHOR_SESSION_REQUIRED, "the seizure: {v}");
     // The climb: a device-flagged enrollment at X is device-grade and
     // commits, and the session that key opens is no anchor's either.
     let climber = distinct_key(92);
-    let own = land_record(port, &thief, CLAIMANT_DOC1, &enroll_atom(&[&climber]), T_ENROLL);
+    let own = land_record(
+        port,
+        &thief,
+        CLAIMANT_DOC1,
+        &enroll_atom(&[&climber]),
+        T_ENROLL,
+        CLAIMANT_ACCOUNT,
+    );
     expect_resp(&deposit(port, &thief, &own, T_ENROLL), "ack_addr");
     let climbed = open_signed_session(port, CLAIMANT_PRINCIPAL, &climber);
     let v = enroll_for(port, &climbed, CLAIMANT_DOC1, &record, topic);
@@ -451,12 +473,24 @@ fn a_content_session_writes_content_and_deposits_no_credential() {
 
     // A DEVICE ENROL and a RETIREMENT — each previewed Honored, each
     // device-grade, each committed below by a FULL device session.
-    let enrol = land_record(port, &content, CLAIMANT_DOC1, &fresh_member(71), T_ENROLL);
-    let retire =
-        land_record(port, &content, CLAIMANT_DOC1, &retire_atom(&[&fingerprint_hex(&distinct_key(71))]), T_RETIRE);
+    let enrol = land_record(port, &content, CLAIMANT_DOC1, &fresh_member(71), T_ENROLL, CLAIMANT_ACCOUNT);
+    let retire = land_record(
+        port,
+        &content,
+        CLAIMANT_DOC1,
+        &retire_atom(&[&fingerprint_hex(&distinct_key(71))]),
+        T_RETIRE,
+        CLAIMANT_ACCOUNT,
+    );
     // AN ANCHOR ACT — an anchor-flagged enrollment.
-    let anchor_act =
-        land_record(port, &content, CLAIMANT_DOC1, &enroll_atom_flagged(&[(&distinct_key(72), true)]), T_ENROLL);
+    let anchor_act = land_record(
+        port,
+        &content,
+        CLAIMANT_DOC1,
+        &enroll_atom_flagged(&[(&distinct_key(72), true)]),
+        T_ENROLL,
+        CLAIMANT_ACCOUNT,
+    );
 
     for (whose, token) in [("a device key's", &content), ("an anchor key's", &paper_content)] {
         for (act, record, ty) in [

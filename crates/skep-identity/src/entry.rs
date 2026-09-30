@@ -145,8 +145,13 @@
 //!   address does not exist when the `sig` is composed — is NO row, and the
 //!   subject needs none: it is the `to` slot at a credential deposit and the
 //!   frame's `account` at a registry deposit or a targetless kind. This crate
-//!   pins the grammar; the writer, the verifier and the `sig`-less refusal
-//!   are the next lane's, and the daemon composes no `record` frame yet.
+//!   pins the grammar; the frame's `account` is the HOME's account and its
+//!   `doc` the home — a credential record's own doc 1 (AUTH-2.127), so both
+//!   are read off the link's address — and the daemon composes it at every
+//!   credential deposit above the claim (the record grade, 2a: the signer
+//!   embeds the `sig` the frame's signature makes, the write path verifies it
+//!   at the link under the set that opens the home, and a record carrying
+//!   none is refused `attestation_required`).
 //!
 //! Every length-delimited element is written by [`push_delimited`], the one
 //! function [`framed`] delimits its own fields with, and every row is written

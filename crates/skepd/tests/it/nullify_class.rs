@@ -128,15 +128,23 @@ fn own_draft(port: u16, session: &str, account: &str) -> String {
 
 /// One credential-typed link in the claimant's published doc 1: an enroll
 /// record atom deposited at the next free position, then the `T_ENROLL`
-/// deposit naming it — through the credential path, from the SIGNED session.
+/// deposit naming it — through the credential path, from the SIGNED session,
+/// the record signed for the deposit (2a).
 fn credential_link(port: u16, signed: &str, seed: u8) -> String {
     let ordinal = next_content_ordinal(port, Some(signed), CLAIMANT_DOC1);
+    let atom = signed_atom(
+        port,
+        signed,
+        CLAIMANT_DOC1,
+        T_ENROLL,
+        &[CLAIMANT_ACCOUNT],
+        &enroll_atom(&[&distinct_key(seed)]),
+    );
     let v = op(
         port,
         Some(signed),
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}],"deposit":"{T_ENROLL}"}}"#,
-            enroll_atom(&[&distinct_key(seed)])
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":"{T_ENROLL}"}}"#
         ),
     );
     let atom = acked_addr(&v);

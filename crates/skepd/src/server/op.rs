@@ -362,13 +362,14 @@ impl Daemon {
         // THE CREDENTIAL DEPOSIT'S MARKER SLOT STAYS EMPTY (signed ops; D26,
         // RULED 2026-09-25): the `make_link` half of a credential deposit is
         // covered by the record's own `sig` member — the record grade's
-        // carrier, the record grade's lane — and takes no entry signature of
-        // its own, so the `attest` a client attached is never handed to this
-        // sequence (`write_sequence` passes `presented` to the plain path
-        // alone) and `Request::attest` arrives empty from the codec: never
-        // verified, never written. This is how the check tells D26's case by
-        // ROUTE — a credential-typed link write never reaches the plain
-        // sequence's producers at all.
+        // carrier, which the precheck at 6 VERIFIED above the claim (2a: its
+        // `record_grade_check`, under the set that opens the record's home)
+        // — and takes no entry signature of its own, so the `attest` a client
+        // attached is never handed to this sequence (`write_sequence` passes
+        // `presented` to the plain path alone) and `Request::attest` arrives
+        // empty from the codec: never verified, never written. This is how
+        // the check tells D26's case by ROUTE — a credential-typed link write
+        // never reaches the plain sequence's producers at all.
         let req_id = frame.id.clone();
         let resp = self.writes.commit_under(&serial, meta.attributed(binding.testimony()), || {
             self.febe.execute(binding.sid, frame)

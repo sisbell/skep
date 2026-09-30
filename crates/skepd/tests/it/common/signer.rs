@@ -414,6 +414,102 @@ pub fn attest_member(sig: &[u8]) -> Value {
     json!({"alg": SigAlgRow::of_tag(FIXTURE_TAG).expect("tag 1").token, "sig": hex(sig)})
 }
 
+// ── the record grade (signed ops, 2a) ───────────────────────────────────────
+//
+// A credential record's `sig` rides INSIDE its atom, made over the entry
+// frame under the `record` grammar (the frame merge, fm-I): `alg` the signing
+// key's token, `board` `H.1`'s pair, `account` the HOME's account, `doc` the
+// home, and the body's five rows — the link's type address, its target
+// address (none at a targetless kind), the `replaces` row EMPTY, the lineage
+// row EMPTY, and the sig-less canonical record. The daemon composes the same
+// bytes at the record's `make_link` from the stored atom and the link's
+// slots, and so does a mirror from `find_links` and `retrieve`; what the
+// signer needs beyond its own record is the board term, the home's account —
+// read off the wire by ω, `effective_owner`, as the daemon reads it — and the
+// link's type and target it is about to name.
+
+/// The account a home document belongs to, in the board's local form — ω
+/// over the home, read off the wire (`effective_owner`, AUTH-6.37) as the
+/// daemon's own composer reads it; `None` where no registered prefix owns it.
+pub fn home_account_of(port: u16, home: &str) -> Option<String> {
+    effective_owner(port, None, home).map(|(prefix, _)| prefix)
+}
+
+/// THE RECORD FRAME a credential record's `sig` is made over, composed from
+/// what the signer holds: `board` off `H.1`, `account` the home's by ω, `doc`
+/// the home, the `record` body over `ty`, `to` and `canonical` — the sig-less
+/// canonical record — with both optional rows EMPTY. `None` where the board
+/// has no `H.1` yet or the home no owner.
+pub fn record_frame_for(
+    port: u16,
+    alg: &str,
+    home: &str,
+    ty: &str,
+    to: &[&str],
+    canonical: &[u8],
+) -> Option<Vec<u8>> {
+    let board = board_term(port)?;
+    let account = parse_addr(&home_account_of(port, home)?)?;
+    let home = parse_addr(home)?;
+    let ty = parse_addr(ty)?;
+    let to: Vec<Address> = to.iter().map(|a| parse_addr(a)).collect::<Option<_>>()?;
+    let body = entry_body_record(&ty, &to, None, None, canonical);
+    Some(entry_frame(alg, board, &account, &home, &body))
+}
+
+/// The record `entries` SIGNED at the record grade by `signer` for a deposit
+/// homed in `home`, typed `ty`, naming `to` — the atom's TEXT: the canonical
+/// record carrying, as its `sig`, the hybrid blob's hex over
+/// [`record_frame_for`]'s frame under the signer's own token. `None` where the
+/// frame cannot be composed (no `H.1`, an unowned home).
+pub fn signed_record_text<T: RecordEntry>(
+    port: u16,
+    signer: &HybridSigner,
+    home: &str,
+    ty: &str,
+    to: &[&str],
+    entries: &[T],
+) -> Option<String> {
+    let alg = SigAlgRow::of_tag(signer.tag())?.token;
+    let canonical = canonical_record(entries, None);
+    let frame = record_frame_for(port, alg, home, ty, to, canonical.as_bytes())?;
+    Some(canonical_record(entries, Some(&hex(&signer.sign(&frame)))))
+}
+
+/// A record ATOM (its JSON fragment, as [`json_atom`] spells one) RE-SIGNED
+/// for the deposit its caller is about to make — homed in `home`, typed `ty`,
+/// naming `to` — under the key that opened `token`'s session: the atom's text
+/// is parsed by the kind `ty` names (the record grade's own parse,
+/// `parse_record_value`), the entries re-encoded with the `sig` the frame's
+/// signature makes. THE ATOM IS RETURNED AS GIVEN where nothing can be
+/// signed: a bare or foreign token (no seed carrier opened it), a board with
+/// no `H.1` yet (at or below the claim, where records are bare, A5), a type
+/// of no record-bearing kind, or a text no parser admits (a malformed record,
+/// which the fold refuses ahead of any signature and which a cell sends on
+/// purpose) — so every helper that lands a record can pass through here, and
+/// only a record the daemon would judge is signed. Every address the frame
+/// names is PARSED before it is framed, so a leading-zero spelling on the
+/// wire signs its one address.
+pub fn signed_atom(port: u16, token: &str, home: &str, ty: &str, to: &[&str], atom: &str) -> String {
+    let Some((_, seed)) = signer_of(token) else {
+        return atom.to_string();
+    };
+    let Ok(Value::String(text)) = serde_json::from_str::<Value>(atom) else {
+        return atom.to_string();
+    };
+    let signer = HybridSigner::from_seed(FIXTURE_TAG, &seed).expect("tag 1");
+    let signed = match ty {
+        T_ENROLL => parse_record_value::<Enrollment>(text.as_bytes())
+            .ok()
+            .and_then(|v| signed_record_text(port, &signer, home, ty, to, &v.entries)),
+        T_RETIRE => parse_record_value::<Fingerprint>(text.as_bytes())
+            .ok()
+            .and_then(|v| signed_record_text(port, &signer, home, ty, to, &v.entries)),
+        _ => None,
+    };
+    signed.map_or_else(|| atom.to_string(), |text| json_atom(&text))
+}
+
 /// The VALUES at content ordinals `from ..` of `doc`, as `token` reads them —
 /// one entry per position (a per-byte run one byte each, an atom whole).
 pub fn values_of(port: u16, token: Option<&str>, doc: &str, from: u64, width: u64) -> Vec<Vec<u8>> {

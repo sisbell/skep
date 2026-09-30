@@ -17,7 +17,10 @@
 //!   `make_link`;
 //! * `op` — the op-kind token as the wire spells it, which the body's
 //!   [`EntryBody`] carries (`each_body_carries_the_wire_name_of_its_op`
-//!   holds it to the codec's own `op_name`);
+//!   holds it to the codec's own `op_name`) — and, at a credential deposit's
+//!   `make_link`, the RECORD grade's `record` ([`compose_record`]: the frame
+//!   the record's own `sig` is made over, `account` the HOME's account and
+//!   `doc` the home, both the fold's own reading of the link's address);
 //! * `body` — per op cell: the declared type and the values for `insert`,
 //!   the three slots as the client sent them and its `replaces` member —
 //!   absent, or the address it names — for `make_link`, and for `publish`
@@ -68,8 +71,8 @@ use skep_arrangement::{trunk_of, Deposit, PlacedSegment, Shot};
 use skep_content::HasContent;
 use skep_febe::Op;
 use skep_identity::{
-    entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_frame,
-    BoardTerm, EntryBody, EntrySlot, LinkSlots, PublishBody,
+    entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_record,
+    entry_frame, BoardTerm, EntryBody, EntrySlot, LinkSlots, PublishBody,
 };
 use skep_links::SlotArg;
 use skep_namespace::{HasM3, PrincipalId};
@@ -296,10 +299,48 @@ fn publish_body(
     Ok(body.finish())
 }
 
+/// THE RECORD FRAME for a credential deposit's `make_link` (signed ops, the
+/// record grade, 2a; the frame merge, fm-I: the entry frame under the
+/// `record` grammar, [`skep_identity::entry_body_record`]) — every member but
+/// `alg`, which is each candidate key's own ([`EntryFrame::to_bytes`]):
+///
+/// * `board` — the board term, `H.1`'s pair (D13), off the snapshot;
+/// * `account` — `home_account`, the HOME's account: the fold's own H, ω
+///   over the link's home (AUTH-2.35), which the caller has read — the
+///   DELEGATOR's for a genesis, the subject's for a holder act (the design
+///   record §4.5's clause (a)); never the acting principal's, which is the
+///   entry grade's member and enters no record frame;
+/// * `doc` — `home`, the link's home: the account's doc 1 (AUTH-2.127);
+/// * the body's five rows — `ty`, the link's type address; `to`, the link's
+///   target address where the kind names one (none at a targetless kind);
+///   the `replaces` row EMPTY (BW-04: a credential deposit carries no member,
+///   `op_shape_refusal` refuses one); the LINEAGE row EMPTY (D2, l6-A5: at 2a
+///   no lineage has forked, so every kind writes the empty group); and
+///   `canonical`, the SIG-LESS CANONICAL RECORD
+///   (`canonical_record(entries, None)`) the caller projected off the atom.
+///
+/// Every member is a value the link's address, the atom's bytes and `H.1`
+/// supply, which is what lets a mirror compose the same bytes from
+/// `find_links` and `retrieve` (the design record §4.2 (C)). `None`-free by
+/// construction on every member but the board term: a home with no `H.1`
+/// answers [`ComposeFault::NoBoardTerm`], the one fault this composer meets.
+pub(super) fn compose_record(
+    world: &World,
+    home_account: &Address,
+    home: &Address,
+    ty: &Address,
+    to: &[Address],
+    canonical: &[u8],
+) -> Result<EntryFrame, ComposeFault> {
+    let board = board_term(world).ok_or(ComposeFault::NoBoardTerm)?;
+    let body = entry_body_record(ty, to, None, None, canonical);
+    Ok(EntryFrame { board, account: home_account.clone(), doc: home.clone(), body })
+}
+
 /// An ENTRY frame composed but for its `alg` member — [`compose`]'s answer,
-/// every other member as the value [`skep_identity::entry_frame`] spells: the
-/// board term, the principal's account, the op's document, and the body with
-/// its op's token.
+/// or [`compose_record`]'s — every other member as the value
+/// [`skep_identity::entry_frame`] spells: the board term, the account, the
+/// document, and the body with its grammar's token.
 pub(super) struct EntryFrame {
     board: BoardTerm,
     account: Address,

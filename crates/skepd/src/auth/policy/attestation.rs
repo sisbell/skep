@@ -11,9 +11,8 @@ use skep_identity::{IdentityState, PublicKey, SigAlgRow};
 use skep_kernel::{Attestation, TxnError};
 use skep_namespace::{system_account, HasM3, PrincipalId};
 
-use super::{addr_spans, AttestFault, CredentialRefusal};
+use super::{addr_spans, record_deposit_kind, AttestFault, CredentialRefusal};
 use crate::auth::entry::{self, ComposeFault};
-use crate::auth::fold::identity_types;
 use crate::auth::session::key_subject;
 use crate::history::detached_kernel;
 use crate::World;
@@ -32,14 +31,16 @@ use crate::World;
 ///    there) and commits on its signed session as before — the widening
 ///    lane's, not this one's.
 /// 2. THE RECORD DEPOSIT EXEMPTION (§2.5's `insert` cell as re-cut at
-///    required signing; D26): a DECLARED deposit under a CREDENTIAL kind —
-///    the atom a credential record rides — carries its signature in the
-///    record's own `sig` member (the record grade's lane), and (1) demands
+///    required signing; D26): a DECLARED deposit under a kind of THE
+///    RECORD-DEPOSIT SET ([`crate::auth::policy::record_deposit_kind`],
+///    BW-03) — the atom a credential record rides — carries its signature in
+///    the record's own `sig` member (the record grade, 2a), and (1) demands
 ///    no `attest` for it. The deposit's OTHER half, the `make_link` naming
 ///    the atom, never reaches this producer at all: `deposits_credential_link`
 ///    routes it to the credential sequence, whose `precheck` is the record
-///    grade's door — which is how the check tells D26's case: BY ROUTE for
-///    the link, BY DECLARED TYPE for the atom.
+///    grade's door — its `record_grade_check` verifies the record's `sig`
+///    there, above the claim — which is how the check tells D26's case: BY
+///    ROUTE for the link, BY DECLARED TYPE for the atom.
 /// 3. A3 — a document whose OWNER is the SYSTEM ACCOUNT `1.1.0.1` is exempt,
 ///    read by ω — the longest registered prefix over the board's principal
 ///    list Π, a READ and never address arithmetic (m3, the design record's
@@ -75,11 +76,14 @@ use crate::World;
 ///    `malformed`), whose token is the entry frame's `alg`; the blob's width
 ///    under it; the KEY SET that OPENS the act's principal AS OF this base
 ///    (AUTH-4.30 (i)'s walk, `key_subject`) — the fold's own set at this
-///    position, the check's table being the daemon's own since no record
-///    grade is built yet; the candidates are that set's keys of the tag's
-///    row (A2's empty walk answers `not_enrolled_at_position`, PERMANENT);
-///    any candidate verifying BOTH halves over the entry frame admits the
-///    presented `attest`, else `signature`.
+///    position, the check's table being the daemon's own (BW-02, owner-ruled
+///    2026-09-29: the write path reads the FOLD's key table, on the equality
+///    that above the claim every credential record the fold honors passed
+///    the record grade's check at this daemon's own write path); the
+///    candidates are that set's keys of the tag's row (A2's empty walk
+///    answers `not_enrolled_at_position`, PERMANENT); any candidate verifying
+///    BOTH halves over the entry frame admits the presented `attest`, else
+///    `signature`.
 ///
 /// The entry frame the daemon composes for a `publish` reads the COPIED
 /// runs' values off the snapshot by `value_at` — a second Σ-width walk per
@@ -106,9 +110,9 @@ pub(super) fn attestation_check(
     }
     // 2 — the record deposit's atom (D26): its DECLARED type read as a type
     // slot through the one spelling of `enc`, as every classification here
-    // reads one.
+    // reads one, against THE RECORD-DEPOSIT SET (BW-03).
     if let Op::Insert { deposit: Deposit::Declared(ty), .. } = op {
-        if identity_types().kind_of(&addr_spans(std::slice::from_ref(ty))).is_some() {
+        if record_deposit_kind(&addr_spans(std::slice::from_ref(ty))).is_some() {
             return Ok(None);
         }
     }

@@ -437,12 +437,28 @@ pub(crate) fn key_subject(
         return identity.claimant().cloned();
     }
     let own = world.m3().principal_prefix(p)?;
+    Some(opening_account(identity, own))
+}
+
+/// AUTH-4.30 (i)'s walk from an ACCOUNT rather than a principal — the
+/// account whose set OPENS `own`: `own` itself where its enrolled set is not
+/// empty, else the nearest account above it whose set is not
+/// ([`keyed_above`]), else `own` again, whose set is empty (C-2: the answer
+/// is always an address, and the empty set refuses whatever reads it).
+/// [`key_subject`] is this walk from a principal's own prefix; the record
+/// grade's check takes it from a credential deposit's HOME account (signed
+/// ops; the design record §4.5's table clause (a): "THE HOME'S OWN SET IS
+/// NOT THE SET THAT OPENS IT" — a hire's genesis is homed in `X.1`'s doc 1,
+/// and `X.1` holds no set of its own), so the daemon's session doors and its
+/// record verify read one walk and cannot disagree about whose keys open an
+/// account.
+pub(crate) fn opening_account(identity: &IdentityState, own: &Address) -> Address {
     if identity.key_set(own).is_empty() {
         if let Some(above) = keyed_above(identity, own) {
-            return Some(above);
+            return above;
         }
     }
-    Some(own.clone())
+    own.clone()
 }
 
 /// AUTH-4.30 (i)'s WALK, over an ADDRESS: the NEAREST ACCOUNT ABOVE `a`

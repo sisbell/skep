@@ -84,8 +84,10 @@ fn key_set_names(port: u16, field: &str) -> Vec<String> {
 
 /// The pair as AUTH pins it (AUTH-5.4; PUB-2.63), both halves under ONE type:
 /// the record atom's `insert` DECLARED under `ty` at the home's next free
-/// position, then the `make_link` naming the atom and carrying `ty`.
+/// position, then the `make_link` naming the atom and carrying `ty` — the
+/// record signed for that deposit under the session's key (2a).
 fn pair(port: u16, session: &str, atom: &str, ty: &str) -> Value {
+    let atom = signed_atom(port, session, CLAIMANT_DOC1, ty, &[CLAIMANT_ACCOUNT], atom);
     let ordinal = next_content_ordinal(port, Some(session), CLAIMANT_DOC1);
     let v = op(
         port,

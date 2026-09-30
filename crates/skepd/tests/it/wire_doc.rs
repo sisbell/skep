@@ -486,6 +486,54 @@ fn doc_universal_grants_row_states_the_covered_prefix_and_the_guests_empty_answe
     }
 }
 
+/// THE RECORD GRADE'S PROSE (signed ops, 2a): §The claim ceremony and
+/// credentials states the record's own signature — the `record` grammar's
+/// five rows by name, in order, the home's account as the frame's `account`,
+/// the grade the hand signs at, and the verify at the deposit's `make_link`
+/// — and §Credential refusals states the record deposit's one refusal
+/// beside the entry grade's, the record-grade causes of
+/// `attestation_invalid`, and the credential deposit's `replaces` fence,
+/// each in the section a client reads for it. The daemon's tokens are
+/// pinned end to end in `signed_ops.rs`; this pins that the contract says
+/// so.
+#[test]
+fn doc_states_the_record_grade_beside_the_entry_grade() {
+    let ceremony = prose("\n### The claim ceremony and credentials", &["\n### Correlation"]);
+    for fact in [
+        "**The record's own signature — the record grade**",
+        "`framed(\"skep-entry-v1\", [alg, board, account, doc, \"record\", body])`",
+        "`account` the HOME's account",
+        "(1) the link's TYPE address",
+        "(2) the link's `to` slot",
+        "(3) the `replaces` row",
+        "(4) the LINEAGE row",
+        "(5) the SIG-LESS CANONICAL RECORD",
+        "`from` is no row",
+        "THE GRADE THE ACT NEEDS",
+        "VERIFIES it at that `make_link`",
+        "the ceremony's own genesis record carries no `sig`",
+    ] {
+        assert!(ceremony.contains(fact), "§The claim ceremony and credentials says {fact:?}");
+    }
+    let refusals = prose("\n### Credential refusals", &["\n## Operations"]);
+    for fact in [
+        "THE RECORD CARRIES NO `sig` AT ALL",
+        "answered at the deposit's `make_link`",
+        "the same causes over the record's `sig`",
+        "the anchors alone where the act is anchor-grade",
+        "`replaces_not_credential`",
+        "`replaces` row is EMPTY by kind",
+        "still claimed, THE RECORD GRADE",
+    ] {
+        assert!(refusals.contains(fact), "§Credential refusals says {fact:?}");
+    }
+    let links = prose("\n### Links (writes)", &["\n### Links (raw reads)"]);
+    assert!(
+        links.contains("and no `replaces` member (`replaces_not_credential`"),
+        "§Links (writes) fences the member on a credential-typed make_link"
+    );
+}
+
 /// Every `op_at` example is the strict `{"at", "frame"}` envelope around a
 /// canonical READ frame — the doc's history examples parse through the same
 /// codec the daemon uses.

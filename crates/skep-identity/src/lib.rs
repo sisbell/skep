@@ -59,10 +59,11 @@
 //! [`RecordEntry`] are public because a public signature names them. Every
 //! other one is public because the spec or the design record declares it for
 //! a reader OUTSIDE the workspace, so a grep that finds no caller is no reason
-//! to narrow it: [`canonical_record`], [`parse_enroll`] and [`parse_retire`]
-//! for the signing client and the verifier beside the table, which parses a
-//! committed record and composes its sig-less projection (the design record
-//! §4.2 (C)); [`record_bytes`] for a non-folding reader, which LINKS the read
+//! to narrow it: [`canonical_record`], [`parse_enroll`], [`parse_retire`] and
+//! [`parse_record_value`] with its [`RecordValue`] for the signing client and
+//! the verifier beside the table, which parses a committed record, reads its
+//! `sig` and composes its sig-less projection (the design record §4.2 (C));
+//! [`record_bytes`] for a non-folding reader, which LINKS the read
 //! rather than re-implementing it (AUTH-2.37); [`single_address`] for every
 //! discovery caller, beside [`TypeAddrs::kind_of`] (AUTH-2.28);
 //! [`HasIdentity`] for a host that seats the slice (AUTH-2.60);
@@ -113,7 +114,9 @@
 //!   (AUTH-2.15–2.19, AUTH-2.128–2.130), and the record value at one name
 //!   with both directions — [`canonical_record`] over a [`RecordEntry`]: the
 //!   signer's `sig`-bearing record and the verifier's SIG-LESS PROJECTION
-//!   (the design record §4.2 (C));
+//!   (the design record §4.2 (C)) — with the verifier's parse,
+//!   [`parse_record_value`], answering a body's entries and its `sig`
+//!   together as a [`RecordValue`];
 //! * `read`: the ONE pinned payload read — [`record_bytes`] (AUTH-2.3–2.5,
 //!   AUTH-2.36–2.45);
 //! * `keyset`: the key set — [`Enrolled`], [`KeySet`] (AUTH-1.29–1.37);
@@ -199,8 +202,9 @@ pub use key::{
 };
 pub use keyset::{Enrolled, KeySet};
 pub use payload::{
-    canonical_record, encode_enroll, encode_retire, parse_enroll, parse_retire, Enrollment,
-    LabelError, PayloadError, RecordEntry, ENROLL_TYPE, MAX_RECORD_BYTES, RETIRE_TYPE,
+    canonical_record, encode_enroll, encode_retire, parse_enroll, parse_record_value,
+    parse_retire, Enrollment, LabelError, PayloadError, RecordEntry, RecordValue, ENROLL_TYPE,
+    MAX_RECORD_BYTES, RETIRE_TYPE,
 };
 pub use read::record_bytes;
 pub use seam::{FoldCtx, Owner, Values};

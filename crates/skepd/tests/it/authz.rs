@@ -828,8 +828,11 @@ impl ScopeWalk<'_> {
 
 /// Land one record atom at the next free position of `doc1`, DECLARED under
 /// its record's class type `ty` (PUB-2.64) — the type the act's deposit then
-/// carries: `T_ENROLL` for an enrollment record, `T_RETIRE` for a retire.
-fn land_in(port: u16, signed: &str, doc1: &str, atom: &str, ty: &str) -> String {
+/// carries: `T_ENROLL` for an enrollment record, `T_RETIRE` for a retire —
+/// and SIGNED for the deposit naming `subject` under the key that opened
+/// `signed` (2a).
+fn land_in(port: u16, signed: &str, doc1: &str, atom: &str, ty: &str, subject: &str) -> String {
+    let atom = signed_atom(port, signed, doc1, ty, &[subject], atom);
     let ordinal = next_content_ordinal(port, Some(signed), doc1);
     acked_addr(&op(
         port,
@@ -876,24 +879,31 @@ fn a_content_session_is_refused_every_credential_act_and_writes_content_as_a_ful
     ];
     let full = tokens[0].by_col[0].as_str();
     let home = fixture.pub_doc.as_str();
+    let owner = fixture.owner_account.as_str();
     let enrolled = distinct_key(101);
+    // The subdivision first: the genesis record is signed for the deposit
+    // naming it.
+    let subdivision = delegate(port, full, owner, Counters::next(&counters.principal));
     let acts = CredentialActs {
-        enrol_device: land_in(port, full, home, &enroll_atom(&[&enrolled]), T_ENROLL),
-        enrol_anchor: land_in(port, full, home, &enroll_atom_flagged(&[(&distinct_key(102), true)]), T_ENROLL),
+        enrol_device: land_in(port, full, home, &enroll_atom(&[&enrolled]), T_ENROLL, owner),
+        enrol_anchor: land_in(
+            port,
+            full,
+            home,
+            &enroll_atom_flagged(&[(&distinct_key(102), true)]),
+            T_ENROLL,
+            owner,
+        ),
         retire: land_in(
             port,
             full,
             home,
             &json_atom(&encode_retire(&[Fingerprint::of(&public_key_of(&enrolled))])),
             T_RETIRE,
+            owner,
         ),
-        genesis: land_in(port, full, home, &enroll_atom(&[&distinct_key(103)]), T_ENROLL),
-        subdivision: delegate(
-            port,
-            full,
-            &fixture.owner_account,
-            Counters::next(&counters.principal),
-        ),
+        genesis: land_in(port, full, home, &enroll_atom(&[&distinct_key(103)]), T_ENROLL, &subdivision),
+        subdivision,
     };
 
     // The claim row's board: unclaimed, a keyed partial, both scopes open.

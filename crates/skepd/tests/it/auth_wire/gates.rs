@@ -741,13 +741,21 @@ fn a_credential_nullify_refuses_the_home_owner_and_masks_everyone_else() {
     let port = sd.port();
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
 
-    // One fresh credential-typed link in the owner's own doc 1.
+    // One fresh credential-typed link in the owner's own doc 1 — its record
+    // signed for the deposit, as every record above the claim is (2a).
+    let atom = signed_atom(
+        port,
+        &signed,
+        CLAIMANT_DOC1,
+        T_ENROLL,
+        &[CLAIMANT_ACCOUNT],
+        &enroll_atom(&[&distinct_key(3)]),
+    );
     let v = op(
         port,
         Some(&signed),
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":[{{"atom":{}}}],"deposit":"{T_ENROLL}"}}"#,
-            enroll_atom(&[&distinct_key(3)])
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":[{{"atom":{atom}}}],"deposit":"{T_ENROLL}"}}"#
         ),
     );
     expect_resp(&v, "ack_addr");

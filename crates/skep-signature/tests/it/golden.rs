@@ -1,6 +1,7 @@
 //! THE GOLDENS (the frozen-tag rule's pin), beside the one implementation
 //! they pin: per tag, one seed through the KDF to both public keys and the
-//! fingerprint; the three ops' signatures over fixed entry frames; tag 1's
+//! fingerprint; the four grammars' signatures over fixed entry frames (the
+//! `record` grammar at three kinds); tag 1's
 //! signatures byte-stable (FIPS 204's deterministic variant), tag 3's under
 //! the fixtures' seeded RNG; the hybrid cross-check; and tag 1 DIFFERENTIAL
 //! against a second pure-Rust FIPS 204 crate — keys-from-seed and signatures
@@ -34,14 +35,17 @@ fn addr(s: &str) -> skep_address::Address {
     skep_address::validate(skep_address::Tumbler::new(comps).unwrap()).unwrap()
 }
 
-/// The four fixed instances every golden signs: the frames of an `insert`
+/// The six fixed instances every golden signs: the frames of an `insert`
 /// (undeclared, two values), a `make_link` (three address-form slots), a
 /// `publish` (three values copied in, one window of two positions onto
 /// another document, the base taken at three — the address form, l6-A4)
-/// and a `record` (an enrol's kind: its type slot, one subject, neither
-/// optional row named, a short canonical body — the frame merge, fm-I) on a
-/// board whose `H.1` pair is `(12, 0xAB…)`, by account `1.0.1`.
-fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 4] {
+/// and three `record`s (the frame merge, fm-I; the record grade, 2a): an
+/// enrol's kind — its type slot, one subject, neither optional row named, a
+/// short canonical body — a retire's kind beside it over the same subject,
+/// and the claim's — its type slot, the EMPTY target slot, no record at all
+/// (a claim carries none, AUTH-2.48), the body-bytes row empty — on a board
+/// whose `H.1` pair is `(12, 0xAB…)`, by account `1.0.1`.
+fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 6] {
     let (account, doc) = (addr("1.0.1"), addr("1.0.1.0.1"));
     let insert = entry_body_insert(None, [&b"a"[..], &b"b"[..]]);
     let ty = [addr("1.1.0.1.0.1.0.3.90")];
@@ -63,15 +67,23 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 4] {
         Some(3),
     );
     let subject = [addr("1.0.2")];
-    let record = entry_body_record(
+    let enrol = entry_body_record(
         &addr("1.1.0.1.0.1.0.3.1"),
         &subject,
         None,
         None,
         br#"{"type":"skep-enroll"}"#,
     );
+    let retire = entry_body_record(
+        &addr("1.1.0.1.0.1.0.3.2"),
+        &subject,
+        None,
+        None,
+        br#"{"type":"skep-retire"}"#,
+    );
+    let claim = entry_body_record(&addr("1.1.0.1.0.1.0.3.3"), &[], None, None, b"");
     let board = BoardTerm { log_position: 12, chain: [0xAB; 32] };
-    [insert, link, publish, record]
+    [insert, link, publish, enrol, retire, claim]
         .map(|body| (body.op(), entry_frame(alg, board, &account, &doc, &body)))
 }
 
@@ -94,15 +106,17 @@ const GOLDEN_SEED: [u8; 32] = [
 /// the count, the runs in the address form and the base-extent group, in
 /// place under the same tag, and the fixed instance gained a window and a
 /// base; and the `record` signatures were minted then, the frame merge's
-/// fourth grammar (fm-I). The keys, the fingerprints and the `insert`
-/// signatures have not moved since the tag was pinned.
+/// fourth grammar (fm-I) — the enrol's, which the record grade's build (2a)
+/// left unmoved, pinning the retire's and the claim's beside it. The keys,
+/// the fingerprints and the `insert` signatures have not moved since the tag
+/// was pinned.
 struct TagGolden {
     tag: u8,
     pq_pk: &'static str,
     ed_pk: &'static str,
     raw_key: &'static str,
     fingerprint: &'static str,
-    sigs: [&'static str; 4],
+    sigs: [&'static str; 6],
 }
 
 /// Per op: its name, its frame's bytes, its signature blob.
@@ -132,8 +146,9 @@ fn check_golden(g: &TagGolden) {
     let fp = Fingerprint::of(key).to_hex();
     let sigs: Vec<String> = signed.iter().map(|(_, _, sig)| sha_hex(sig)).collect();
     let report = format!(
-        "tag {}: pq_pk {pq}\n ed_pk {ed}\n raw_key {raw}\n fingerprint {fp}\n sigs {} {} {} {}",
-        g.tag, sigs[0], sigs[1], sigs[2], sigs[3]
+        "tag {}: pq_pk {pq}\n ed_pk {ed}\n raw_key {raw}\n fingerprint {fp}\n sigs {}",
+        g.tag,
+        sigs.join(" ")
     );
     assert_eq!(pq, g.pq_pk, "the PQ public half moved — a keygen change is a NEW tag\n{report}");
     assert_eq!(ed, g.ed_pk, "the Ed25519 half moved — the KDF is a frozen pin\n{report}");
@@ -145,7 +160,7 @@ fn check_golden(g: &TagGolden) {
 }
 
 /// TAG 1's GOLDEN: the KEY-DERIVATION golden (seed → KDF → both public
-/// keys → fingerprint) and the four grammars' signatures, byte-stable under
+/// keys → fingerprint) and the six fixed frames' signatures, byte-stable under
 /// FIPS 204's deterministic variant and Ed25519's own determinism.
 #[test]
 fn golden_tag_1_mldsa65_ed25519() {
@@ -160,13 +175,15 @@ fn golden_tag_1_mldsa65_ed25519() {
             "9d47fea8f8cc6077222b89060ebcc69b93d7d9b228c1a9196f324ee3a80119d0",
             "e36e6e421c3a4ed0826144f6cb2d578cc18eb72e7d84fbc483fd5ac000d7cf16",
             "28c70f669d44919062bf99a79cec75a973c7f6acaf315991a53daea054b7f508",
+            "abb554df48572fb1fbfa72445b1ef8024dd6fd2c8889ed33cc1a756d5a9a07c3",
+            "4c367931a56e731f01c0f5dc19d4d79d7be5b459c3cc113cbf946fe54cf90472",
         ],
     });
 }
 
 /// TAG 3's GOLDEN (the PREVIEW): the KEY-DERIVATION golden — `fn-dsa`
 /// 0.4.0's keygen from the KDF's seed IS the tag's frozen keygen rule — and
-/// the four signatures under the fixtures' seeded RNG (FN-DSA signing is
+/// the six signatures under the fixtures' seeded RNG (FN-DSA signing is
 /// randomized by the draft's own rule; what the tag freezes is the key, the
 /// frame and the verify, and the fixture's RNG makes the bytes reproducible
 /// here).
@@ -183,6 +200,8 @@ fn golden_tag_3_fndsa512_preview_ed25519() {
             "a7bc27e514b92dd4bc23f1c69ec46ad010cca17a22eada4f944e0f31edfd7d75",
             "0af99ce8edd4c6f9230fe381a22b2dfb3eb59febf497d5bb9a76a0e6ca105434",
             "38b456b9f4413a0f6164aad2e0cc3e9e8b35b8534c915f465992391cf71b03ad",
+            "7399b23baaae2e1a1bdc85eb74bfc6b88f76029bf3e17857635c86b9e106eab1",
+            "7807cbba98e2e04fa7647c50baeacdaefb44fbf477fd9ee3f71095f47d1fe37d",
         ],
     });
 }
@@ -213,7 +232,7 @@ fn each_half_alone_fails_under_both_tags() {
 /// THE DIFFERENTIAL TEST for tag 1 (the PQ investigation §8.4 (4), §8.5
 /// (ii)): `ml-dsa` 0.1.1's keys from ξ and its deterministic signatures are
 /// byte-equal to `fips204` 0.4.6's, a second pure-Rust FIPS 204, over
-/// sixteen seeds and the three fixed frames — the gate every future bump of
+/// sixteen seeds and the six fixed frames — the gate every future bump of
 /// the pinned crate must pass, since FIPS 204 fixes `KeyGen_internal(ξ)`
 /// and the deterministic variant.
 #[test]

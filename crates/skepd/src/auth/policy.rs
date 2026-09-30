@@ -53,9 +53,28 @@ fn addr_spans(addrs: &[Address]) -> Vec<Span> {
 /// resolves.
 fn slotarg_kind(s: &SlotArg) -> Option<CredentialKind> {
     match s {
-        SlotArg::Addrs(addrs) => identity_types().kind_of(&addr_spans(addrs)),
+        SlotArg::Addrs(addrs) => record_deposit_kind(&addr_spans(addrs)),
         SlotArg::Resolve(_) => None,
     }
+}
+
+/// THE RECORD-DEPOSIT SET (signed ops; the design record's BW-03, owner-ruled
+/// 2026-09-29): the link types whose record RESERVES a `sig` member — the
+/// kinds whose atom carries its own signature at the record grade, and whose
+/// `make_link` the record's `sig` covers (D26). `Some(kind)` where `ty` — a
+/// type slot in M7's deposited form — names one. TODAY the set is the three
+/// credential kinds, [`identity_types`]'s — enroll, retire, claim — and
+/// nothing else; the disavowal's kind (`…3.4`, its ordinal reserved, its
+/// build not this lane's) and the registry's kinds (2b) JOIN HERE, by one
+/// edit, and the set's three readers follow: the entry check's EXEMPTION of
+/// the record's atom (`policy/attestation.rs`, the `insert` cell), the ROUTE
+/// of its link to the credential sequence ([`deposits_credential_link`]), and
+/// the record grade's VERIFY at that link (`policy/credential.rs`'s
+/// `record_grade_check`, which parses the record by the kind this answers).
+/// Stated once so the three cannot part: a kind exempt at the atom but never
+/// verified at the link would commit a record no signature covers.
+pub(crate) fn record_deposit_kind(ty: &[Span]) -> Option<CredentialKind> {
+    identity_types().kind_of(ty)
 }
 
 /// AUTH-2.61 — op classification: the op's OWN type slot, no world read,
@@ -199,6 +218,18 @@ pub(crate) enum CredentialRefusal {
     /// same act is never admitted. Its FACE is I8 (a)'s (PUB-3.83), owed to
     /// the UX track and written into no rule.
     ReplacesNotStandalone,
+    /// THE CREDENTIAL DEPOSIT'S `replaces` FENCE (signed ops; the design
+    /// record's BW-04, owner-ruled 2026-09-29): a credential-typed
+    /// `make_link` carrying a `replaces` member. A credential deposit's
+    /// `replaces` row is EMPTY BY KIND — the credential class's fold is a set,
+    /// and the record's `sig` is made over the empty row — so a member there
+    /// names a state no credential record replaces and would deposit a
+    /// `replaces` link beside a record whose signed bytes named none. A shape
+    /// slot, ahead of the lock, beside `resolved_from`. Token
+    /// `replaces_not_credential` — the `replaces_not_standalone` pattern, a
+    /// spelling this build chose (the design names none) — and PERMANENT,
+    /// the family's: the same act is never admitted.
+    ReplacesNotCredential,
     /// Slot (6), FIRST of the slot's two tokens (AUTH-3.44; RES-63): any
     /// credential-typed deposit, retirement or claim from a CONTENT-scoped
     /// session (AUTH-4.39) — whatever key opened it, and whether or not the
@@ -236,14 +267,24 @@ pub(crate) enum CredentialRefusal {
     /// carrying no `attest`. Token `attestation_required`, class REORDER —
     /// the answer is a DIFFERENT request the client composes (the same
     /// content, signed and attached), which under ATTACH WHEN IN DOUBT is the
-    /// ordinary path and no error case.
+    /// ordinary path and no error case. AND THE RECORD GRADE'S ONE REFUSAL
+    /// (§4.5 (4); 2a): a credential deposit above the claim whose record
+    /// carries no `sig` at all — the record's `sig` member being its one
+    /// carrier, its marker slot EMPTY (D27) — answered at the deposit's
+    /// `make_link` (D26), the same token and class: the answer is the same
+    /// record re-composed with its `sig`, the atom re-inserted and re-linked.
     AttestationRequired,
     /// THE WRITE-PATH CHECK's second refusal (§4.5 (2)): an `attest` that
     /// does not verify, or a write over which none can be verified, with the
     /// cause the check can tell from what it holds — the `detail` split §7.3
     /// (iii) asks for, at least between SIGNATURE and
     /// NOT-ENROLLED-AT-POSITION. Token `attestation_invalid:<cause>`, the
-    /// class the cause's own.
+    /// class the cause's own. At the record grade (2a) the same causes over a
+    /// record's `sig`: `malformed` a `sig` that is no hybrid blob's hex,
+    /// `not_enrolled_at_position` a home whose opening set holds no key of the
+    /// blob's row at the grade the act needs, `signature` a `sig` no such key
+    /// verifies over the `record` frame the daemon composed,
+    /// `board_unavailable` as for an entry.
     AttestationInvalid(AttestFault),
 }
 
@@ -329,6 +370,7 @@ impl CredentialRefusal {
             CredentialRefusal::NullifyNotRevocation => "nullify_not_revocation".into(),
             CredentialRefusal::NullifyAuditView => "nullify_audit_view".into(),
             CredentialRefusal::ReplacesNotStandalone => "replaces_not_standalone".into(),
+            CredentialRefusal::ReplacesNotCredential => "replaces_not_credential".into(),
             CredentialRefusal::ContentSession => "content_session".into(),
             CredentialRefusal::AnchorSessionRequired => "anchor_session_required".into(),
             CredentialRefusal::ResolvedFrom => "resolved_from".into(),

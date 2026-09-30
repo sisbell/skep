@@ -2,7 +2,8 @@
 //! (the one shared path `certify_rule` re-runs), Q0/Q7 quiescence detection,
 //! the peek/fire/step scheduler (weak fairness lives in `step`'s rotation),
 //! the SF+Marker+grow-only lint, the journal-recomputed divergence backstop,
-//! and the static armer-cycle warning.
+//! and the static armer-cycle warning — with the checked shapes the working
+//! set holds (`CheckedRule`, `TypedDom`), which only this module builds.
 
 use std::slice::from_ref;
 use std::sync::Arc;
@@ -11,19 +12,67 @@ use skep_address::{document_of, Address};
 use skep_kernel::{Seq, Snapshot, TxnError};
 use skep_links::{Caller, EmitError, Endset, NullifyError, Pattern, ShippedType, View};
 
-use crate::ast::Term;
+use crate::ast::{ArcDom, Dom, Term};
 use crate::check::{Checker, Ctx, TypedTerm};
 use crate::coordinator::Coordinator;
-use crate::dynamics::{negated_membership, Analyzer, Emission};
+use crate::dynamics::{negated_membership, Analyzer, Emission, Footprint};
 use crate::error::{FireError, RuleError};
 use crate::eval::{as_bool, enum_dom, eval_term};
 use crate::memo::DefStatus;
 use crate::rule::{
-    CheckedRule, FireAction, FireOutcome, Occurrence, Rule, RuleCertification, RuleId, ScopeBody,
-    StepOutcome, Trigger, TypedDom,
+    FireAction, FireOutcome, Occurrence, Rule, RuleCertification, RuleId, ScopeBody, StepOutcome,
+    Trigger,
 };
 use crate::value::{lift, Arg, Env, Sort, Value};
 use crate::CoordinationWorld;
+
+/// A rule domain that passed `check_dom` — the `Dom` analogue of
+/// `TypedTerm`'s evaluable projection: every `TypeRef` `Concrete`, no
+/// surviving `Reg` binder. A [`Rule`]'s own `domain` is the raw submission;
+/// only this shape is ever enumerated, and only this module builds one —
+/// `validate_rule`, the shared doorkeeper both `register_rule` and
+/// `certify_rule` run — so the working set holds no unchecked domain.
+#[derive(Debug, Clone)]
+struct TypedDom(ArcDom);
+
+impl TypedDom {
+    /// The checked domain, for enumeration (`enum_dom`) and analysis.
+    fn as_dom(&self) -> &Dom {
+        &self.0
+    }
+}
+
+/// One registered rule in the working set: the checked domain, the checked
+/// trigger, the declared view, the action, and the trigger's footprint —
+/// `footprint(T_ρ)`, the reads §8's armer graph asks about, never the rule's
+/// writes. Built only by `register_rule`; the id alone is read outside this
+/// module, by the handle's `Debug`.
+#[derive(Debug, Clone)]
+pub(super) struct CheckedRule {
+    pub(super) id: RuleId,
+    domain: TypedDom,
+    /// The checked trigger: a one-parameter Bool `TypedTerm` — an `Inline`
+    /// trigger's own, or the memo entry of a `Def` trigger's def, captured
+    /// at registration. The body is immutable content, so the trigger reads
+    /// only the snapshot it is evaluated on: no ordering between that
+    /// snapshot and the def's registration is required, and a later
+    /// retraction of the def changes nothing. Ref-bearing iff it came from a
+    /// def; evaluation resolves referents through the memo, the static
+    /// analyses through the flat expansion.
+    trigger: Arc<TypedTerm>,
+    view: View,
+    action: FireAction,
+    /// FP over the TRIGGER — `footprint(T_ρ)`, the subject §8's edge rule
+    /// names — at the rule's DECLARED view, computed once at registration
+    /// from the same flat ref-free expansion the node budget admitted there
+    /// (`RuleError::TriggerExpansionTooLarge`). What the rule WRITES is the
+    /// action's, carried separately as an [`Emission`]. A pure function of
+    /// immutable inputs — the captured trigger's content, the frozen catalog,
+    /// the declared view — so recording it costs nothing in authority, and
+    /// the armer graph reads §8's edge rule off it rather than re-expanding
+    /// every trigger on every call.
+    trigger_footprint: Footprint,
+}
 
 /// What `validate_rule` decides once, for both of its callers: the checked
 /// domain, the captured trigger, and the trigger's FLAT ref-free expansion —
@@ -167,7 +216,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
                     return Err(RuleError::DomainTriggerSortMismatch { expected: elem, found: *s });
                 }
                 let checked = Arc::clone(t.checked());
-                let flat_expansion = checked.evaluable.as_ref().clone();
+                let flat_expansion = checked.evaluable().clone();
                 (checked, flat_expansion)
             }
             Trigger::Def(addr) => {
@@ -177,7 +226,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 if def.params().len() != 1 {
                     return Err(RuleError::BadTriggerArity);
                 }
-                if def.result != Sort::Bool {
+                if def.result_sort() != Sort::Bool {
                     return Err(RuleError::TriggerNotBoolean);
                 }
                 let s = def.params()[0].1;
@@ -242,7 +291,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     fn trigger_true(&self, rule: &CheckedRule, arg: &Arg, snap: &Snapshot<W>) -> bool {
         let cx = self.eval_ctx(snap.world(), rule.view, Some(self));
         let env = Env::empty().bind(rule.trigger.params()[0].0, Value::from(arg.clone()));
-        as_bool(eval_term(&cx, &env, rule.trigger.evaluable.as_ref()))
+        as_bool(eval_term(&cx, &env, rule.trigger.evaluable()))
     }
 
     /// The rule's first ENABLED occurrence at `snap` among the arguments
@@ -324,7 +373,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         let cx = self.eval_ctx(snap.world(), View::Active, None);
         let s_of = |y: &Address| -> bool {
             let env = Env::empty().bind(scope_param, Value::Addr(y.clone()));
-            as_bool(eval_term(&cx, &env, scope.evaluable.as_ref()))
+            as_bool(eval_term(&cx, &env, scope.evaluable()))
         };
         // A `None` — the body and the element's shape disagree — leaves the
         // rule UNSCOPED: every one of its arguments counts.
@@ -467,10 +516,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// miscounted as a real fire — the monitor is only a backstop.
     ///
     /// Reads `LinkState` CLASS-FREE, as the def probes and the divergence
-    /// monitor do (`defs.rs` enumerates the regime): the writer runs at guest
-    /// class, so a returned incumbent is guest-readable and a fresh mint is
-    /// absent from this snapshot under either reading — the discrimination is
-    /// the same filtered or not.
+    /// monitor do (`coordinator/defs.rs` enumerates the regime): the writer
+    /// runs at guest class, so a returned incumbent is guest-readable and a
+    /// fresh mint is absent from this snapshot under either reading — the
+    /// discrimination is the same filtered or not.
     fn fired_or_deduped(&self, snap: &Snapshot<W>, effect: Address, seq: Seq) -> FireOutcome {
         if snap.world().links().readlink(&effect).is_some() {
             FireOutcome::Deduped { effect, seq }

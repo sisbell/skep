@@ -71,9 +71,9 @@ use crate::value::lift;
 /// values: `default` names no slice — it is the active slice plus M9's UV
 /// rewrite over it (`EvalCtx`). [`Slice::of`] is the one statement of that
 /// relation. At a DIRECT `LinkState` read — the class-free def probes
-/// (`defs.rs`) and the divergence monitor (`engine.rs`) — M9 speaks M7's
-/// `View`; inside this read surface, where a term view also circulates, the
-/// slice has its own name.
+/// (`coordinator/defs.rs`) and the divergence monitor
+/// (`coordinator/engine.rs`) — M9 speaks M7's `View`; inside this read
+/// surface, where a term view also circulates, the slice has its own name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Slice {
     Active,

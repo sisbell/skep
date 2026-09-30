@@ -53,12 +53,12 @@ pub enum Stability {
 /// never to assert that a dependency exists.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Footprint {
-    pub(crate) audit: HashSet<CoverageClass>,
-    pub(crate) active: HashSet<CoverageClass>,
-    pub(crate) all_audit: bool,
-    pub(crate) residence: bool,
-    pub(crate) home_frontier: bool,
-    pub(crate) targets_keyed: bool,
+    audit: HashSet<CoverageClass>,
+    active: HashSet<CoverageClass>,
+    all_audit: bool,
+    residence: bool,
+    home_frontier: bool,
+    targets_keyed: bool,
 }
 
 impl Footprint {
@@ -121,7 +121,7 @@ impl Footprint {
     /// The term reads nothing, so its value cannot change across a state step
     /// — PD0's STEP-CONSTANT proviso ("a literal or an already-bound
     /// address"), transcribed structurally.
-    pub(crate) fn is_step_constant(&self) -> bool {
+    fn is_step_constant(&self) -> bool {
         self.audit.is_empty()
             && self.active.is_empty()
             && !self.all_audit

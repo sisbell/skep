@@ -45,17 +45,21 @@ use crate::walk::{rewrite_term, Rewrite};
 /// references. Deliberately carries NO view (PR-VIEW): the view is an
 /// evaluation/classification parameter, never a term annotation.
 ///
-/// Every `TypedTerm` a caller can hold came through `type_check`, whose Γ_D
-/// is Codom-only (ASN-0130 SignedTerm): the type has no other public
-/// constructor, and a [`TriggerTerm`] — the one checked term that may bind a
+/// The type has no constructor outside this module: its fields are private,
+/// so every `TypedTerm` is the checker's, and no struct literal elsewhere can
+/// forge one with a `reach` the unbounded walks cannot afford or a
+/// `ClassVar` that `TypeRef::key` refuses (`from_parts`, the one other
+/// constructor, exists only in test builds). Every one a caller can hold
+/// came through `type_check`, whose Γ_D is Codom-only (ASN-0130
+/// SignedTerm), and a [`TriggerTerm`] — the one checked term that may bind a
 /// tuple — does not yield one. That is what lets `define_predicate` take a
 /// `TypedTerm` and store it without a tuple check of its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedTerm {
-    pub(crate) signed: SignedTerm,
-    pub(crate) result: Sort,
-    pub(crate) evaluable: ArcTerm,
-    pub(crate) ref_free: bool,
+    signed: SignedTerm,
+    result: Sort,
+    evaluable: ArcTerm,
+    ref_free: bool,
     /// The reach, relative to the root: the deepest level any walk — the
     /// evaluator's, the expander's, the analyzer's, a cold derivation's —
     /// recurses to over this term, its `Reg`-expansion joins and its
@@ -70,10 +74,25 @@ pub struct TypedTerm {
     /// the walks with no depth parameter of their own — `view_independent`'s
     /// scan, `Analyzer::term`, the recursive `Drop` of an `Arc<Term>` chain —
     /// safe on a caller's thread.
-    pub(crate) reach: u32,
+    reach: u32,
 }
 
 impl TypedTerm {
+    /// A `TypedTerm` assembled from its parts, bypassing the checker — test
+    /// builds only, for the expander's stub referents, which need not
+    /// type-check (the expander is structural). Every other `TypedTerm` is
+    /// the checker's.
+    #[cfg(test)]
+    pub(crate) fn from_parts(
+        signed: SignedTerm,
+        result: Sort,
+        evaluable: ArcTerm,
+        ref_free: bool,
+        reach: u32,
+    ) -> TypedTerm {
+        TypedTerm { signed, result, evaluable, ref_free, reach }
+    }
+
     /// Γ_D — the ordered free-parameter context this term was checked under.
     pub fn params(&self) -> &[(VarId, Sort)] {
         &self.signed.params
@@ -95,6 +114,20 @@ impl TypedTerm {
     /// tree.
     pub fn source_body(&self) -> &Term {
         &self.signed.body
+    }
+
+    /// The `Reg`-expanded evaluable projection — every `TypeRef` `Concrete`,
+    /// no surviving `Reg` quantifier, a `Ref` node only where
+    /// [`TypedTerm::is_ref_free`] says so, and no deeper than `reach`: the
+    /// tree the evaluator, the expander and the analyses walk.
+    pub(crate) fn evaluable(&self) -> &Term {
+        &self.evaluable
+    }
+
+    /// The signed term `(Γ_D, body)` this term was checked from — the
+    /// compact pre-`Reg`-expansion form `define_predicate` encodes.
+    pub(crate) fn signed(&self) -> &SignedTerm {
+        &self.signed
     }
 
     /// `(Γ_D, C_D)` — the term's signature (PR-SIG).
@@ -197,10 +230,10 @@ pub(crate) type Ctx = im::HashMap<VarId, Sort>;
 /// the pass went is the pass's own record ([`Checker::deepest`]), not a
 /// per-node field.
 #[derive(Debug, Clone)]
-pub(crate) struct Checked {
-    pub(crate) term: ArcTerm,
-    pub(crate) sort: Sort,
-    pub(crate) ref_free: bool,
+struct Checked {
+    term: ArcTerm,
+    sort: Sort,
+    ref_free: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -235,6 +268,19 @@ pub(crate) enum Unresolved {
 /// — rooted at the level asked for, or one of the two [`Unresolved`]
 /// refusals.
 pub(crate) type Resolver<'a> = dyn Fn(&Address, u32) -> Result<Arc<TypedTerm>, Unresolved> + 'a;
+
+/// Referent supplier for the DAG-recursive drivers over ref-bearing bodies —
+/// the denotation of a stored def (`eval_term`'s walk plus the one `Ref`
+/// arm, §Internal 4/Conflicts §5) and the flat expansion the static analyses
+/// run over — where [`Resolver`] is the checker's own consultation of the
+/// same memo. It answers at level 0: every referent a driver asks for belongs
+/// to a checked body, so the one refusal is "no defined signature". An
+/// evaluation context holds none for the public `eval`/`decide`, whose
+/// ref-free precondition makes the `Ref` arm a panic. A `Some` is the memo's
+/// own `Arc` — the checked term of a defined referent, never a copy.
+pub(crate) trait DefSource {
+    fn resolve_def(&self, addr: &Address) -> Option<Arc<TypedTerm>>;
+}
 
 /// What a type position must satisfy beyond being cataloged (V-STAT).
 enum Guard {
@@ -440,7 +486,7 @@ impl<'a> Checker<'a> {
     /// WT over `t` at nesting level `depth` (0 at a term's root; a def
     /// derived through a `Ref` starts at the `Ref`'s level plus
     /// `DERIVATION_COST`).
-    pub(crate) fn check_term(&self, ctx: &Ctx, t: &Term, depth: u32) -> Result<Checked, TypeError> {
+    fn check_term(&self, ctx: &Ctx, t: &Term, depth: u32) -> Result<Checked, TypeError> {
         self.enter(weight(t), depth)?;
         // `depth` is this node's level, `child_depth` the level its children
         // occupy. Three arms pass `depth` deliberately: `Atom` and `Prim`,

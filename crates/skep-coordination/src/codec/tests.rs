@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::*;
-use crate::ast::fixture::every_former;
+use crate::fixture::every_former;
 
 fn v(x: u32) -> VarId {
     VarId::new(x).expect("test var below the watershed")

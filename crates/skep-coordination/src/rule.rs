@@ -1,19 +1,16 @@
-//! §Internal 5 — the reactive-rule datatypes: the raw [`Rule`] submission,
-//! trigger/action forms, the checked shapes the working set holds
-//! ([`CheckedRule`], [`TypedDom`]), the occurrence, and the fire/step outcome
-//! types. A rule's bound argument is a PL domain element, so it is
-//! [`crate::value::Arg`] — `Occurrence` names it, this module does not
-//! declare it.
-
-use std::sync::Arc;
+//! §Internal 5 — the reactive rule engine's public vocabulary: the raw
+//! [`Rule`] submission, trigger/action forms, the occurrence, and the
+//! fire/step outcome types. The checked shapes the working set holds are the
+//! engine's own (`coordinator/engine.rs`). A rule's bound argument is a PL
+//! domain element, so it is [`crate::value::Arg`] — `Occurrence` names it,
+//! this module does not declare it.
 
 use skep_address::Address;
 use skep_kernel::Seq;
 use skep_links::View;
 
-use crate::ast::{ArcDom, Dom, TypeKey};
-use crate::check::{TriggerTerm, TypedTerm};
-use crate::dynamics::Footprint;
+use crate::ast::{Dom, TypeKey};
+use crate::check::TriggerTerm;
 use crate::error::FireError;
 use crate::value::Arg;
 
@@ -108,53 +105,6 @@ pub enum ScopeBody {
 /// detect. A driver holding several coordinators must keep their ids apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuleId(pub(crate) u64);
-
-/// A rule domain that passed `check_dom` — the `Dom` analogue of
-/// `TypedTerm`'s evaluable projection: every `TypeRef` `Concrete`, no
-/// surviving `Reg` binder. A [`Rule`]'s own `domain` is the raw submission;
-/// only this shape is ever enumerated, and only `validate_rule` builds one —
-/// the shared doorkeeper both `register_rule` and `certify_rule` run — so the
-/// working set holds no unchecked domain.
-#[derive(Debug, Clone)]
-pub(crate) struct TypedDom(pub(crate) ArcDom);
-
-impl TypedDom {
-    /// The checked domain, for enumeration (`enum_dom`) and analysis.
-    pub(crate) fn as_dom(&self) -> &Dom {
-        &self.0
-    }
-}
-
-/// One registered rule in the working set: the checked domain, the checked
-/// trigger, the declared view, the action, and the trigger's footprint —
-/// `footprint(T_ρ)`, the reads §8's armer graph asks about, never the rule's
-/// writes.
-#[derive(Debug, Clone)]
-pub(crate) struct CheckedRule {
-    pub(crate) id: RuleId,
-    pub(crate) domain: TypedDom,
-    /// The checked trigger: a one-parameter Bool `TypedTerm` — an `Inline`
-    /// trigger's own, or the memo entry of a `Def` trigger's def, captured
-    /// at registration. The body is immutable content, so the trigger reads
-    /// only the snapshot it is evaluated on: no ordering between that
-    /// snapshot and the def's registration is required, and a later
-    /// retraction of the def changes nothing. Ref-bearing iff it came from a
-    /// def; evaluation resolves referents through the memo, the static
-    /// analyses through the flat expansion.
-    pub(crate) trigger: Arc<TypedTerm>,
-    pub(crate) view: View,
-    pub(crate) action: FireAction,
-    /// FP over the TRIGGER — `footprint(T_ρ)`, the subject §8's edge rule
-    /// names — at the rule's DECLARED view, computed once at registration
-    /// from the same flat ref-free expansion the node budget admitted there
-    /// (`RuleError::TriggerExpansionTooLarge`). What the rule WRITES is the
-    /// action's, carried separately as an [`crate::dynamics::Emission`]. A
-    /// pure function of immutable inputs — the captured trigger's content,
-    /// the frozen catalog, the declared view — so recording it costs nothing
-    /// in authority, and the armer graph reads §8's edge rule off it rather
-    /// than re-expanding every trigger on every call.
-    pub(crate) trigger_footprint: Footprint,
-}
 
 /// An occurrence `(ρ, x)`: a rule and a candidate argument. Enabled only
 /// relative to a snapshot — `next_enabled` peeks one that is; `fire`

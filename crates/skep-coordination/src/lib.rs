@@ -76,23 +76,49 @@
 
 #![forbid(unsafe_code)]
 
+// The modules in dependency order: each names only modules above it and the
+// root's own `CoordinationWorld`, test code included — `tests/it/tidy.rs`
+// checks it. Section marks in the module docs (§Core data model, §Internal N,
+// Conflicts §N) cite M9's module design, which lives in the design project
+// (the workspace's ARCHITECTURE.md, "Where the reasons live").
+
+// The PL term tree: `Term` and `Dom`, `VarId`'s reserved range, type keys.
 mod ast;
-mod budget;
-mod catalog;
-mod check;
-mod codec;
-mod coordinator;
-mod defs;
-mod dynamics;
-mod engine;
-mod error;
-mod eval;
-mod expand;
-mod guest;
-mod memo;
-mod rule;
+// Sorts, values and domain elements; the signed term; the environment.
 mod value;
+// Test only: one signed term spelling every former — the codec's round trip
+// and the walks' agreement are checked on it.
+#[cfg(test)]
+mod fixture;
+// The tree's child structure, stated once: `Rewrite` and `Visit`.
 mod walk;
+// The caps every walk over a term is charged against, and the one counter.
+mod budget;
+// The rejection vocabularies, one per operation.
+mod error;
+// The frozen projection of the engine's `TypeRegistry`.
+mod catalog;
+// M7's read surface at guest class: every read a verdict makes.
+mod guest;
+// WT: the type checker, the checked terms only it builds, and the two seams a
+// referent is resolved through (`Resolver`, `DefSource`).
+mod check;
+// PR-ENC: a stored def's byte format, the door for untrusted bytes.
+mod codec;
+// The pure evaluator: one verdict's context and the denotation.
+mod eval;
+// Footprint, PD0 stability, PR-VIEW and ST⁺ — static, never over-certifying.
+mod dynamics;
+// PR3's flat reference expansion, the tree the analyses read.
+mod expand;
+// The def-status memo: permanence here, admission in `coordinator::defs`.
+mod memo;
+// The rule engine's public vocabulary: rules, actions, occurrences, outcomes.
+mod rule;
+// The handle, `Coordinator`: construction, the class-bearing surfaces and
+// group A; its children `defs` (group B) and `engine` (group C) are the rest
+// of its impl and share its private state.
+mod coordinator;
 
 use skep_arrangement::{HasM5, M5Rec};
 use skep_content::{ContentWrite, HasContent};

@@ -3,6 +3,18 @@
 //! `WorldState` slice and no record variant — it is a pure orchestrator/
 //! evaluator; everything it holds is a recomputable hint or an in-memory
 //! working set (§Core data model).
+//!
+//! The handle's impl is cut one file per capability group. This file holds
+//! construction, the two class-bearing surfaces (`eval_ctx`, `link_writer`),
+//! the one checker invocation and group A; its children `defs` (group B) and
+//! `engine` (group C) are the rest of the impl, and being children they share
+//! the private state this module declares — no other module of the crate can
+//! reach it.
+
+// Group B: predicate definitions as content, and their resolution.
+mod defs;
+// Group C: the reactive rule engine and its working set's shapes.
+mod engine;
 
 use std::fmt;
 use std::sync::Arc;
@@ -14,16 +26,16 @@ use skep_links::{Endset, LinkWriter, ShippedType, TypeRegistry, View, Visibility
 
 use crate::ast::{Term, VarId};
 use crate::catalog::TypeCatalog;
-use crate::check::{Checker, TriggerTerm, TypedTerm, Unresolved};
-use crate::defs::parse_def;
+use crate::check::{Checker, DefSource, TriggerTerm, TypedTerm};
 use crate::dynamics::{classify_term, Dynamics};
 use crate::error::TypeError;
-use crate::eval::{eval_term, DefSource, EvalCtx};
+use crate::eval::{eval_term, EvalCtx};
 use crate::guest::GuestLinks;
-use crate::memo::{Breach, DefMemo, DefStatus};
-use crate::rule::CheckedRule;
-use crate::value::{Env, Signature, SignedTerm, Sort, Value};
+use crate::memo::DefMemo;
+use crate::value::{Env, SignedTerm, Sort, Value};
 use crate::CoordinationWorld;
+
+use engine::CheckedRule;
 
 /// The M5 `Vstream` factory the engine injects: a borrow-scoped op handle
 /// minted off `&Kernel<W>` per call (driver construction is the engine's by
@@ -44,14 +56,14 @@ pub type LinkWriterFactory<W> =
 /// `DefMemo` is an interior-mutable recomputable hint; the rule registry
 /// and rotation cursor are the `&mut self` working set.
 pub struct Coordinator<W: WorldState> {
-    pub(crate) kernel: Arc<Kernel<W>>,
-    pub(crate) catalog: TypeCatalog,
-    pub(crate) memo: DefMemo,
-    pub(crate) rules: Vec<CheckedRule>,
-    pub(crate) next_rule_id: u64,
-    pub(crate) cursor: usize,
-    pub(crate) mk_vstream: VstreamFactory<W>,
-    pub(crate) mk_link_writer: LinkWriterFactory<W>,
+    kernel: Arc<Kernel<W>>,
+    catalog: TypeCatalog,
+    memo: DefMemo,
+    rules: Vec<CheckedRule>,
+    next_rule_id: u64,
+    cursor: usize,
+    mk_vstream: VstreamFactory<W>,
+    mk_link_writer: LinkWriterFactory<W>,
     /// The GUEST-class read predicate over a document address (PUB round 2,
     /// lane 3.3, §5), in M7's own `Visibility` shape: `true` iff the
     /// document is readable at guest class — the engine supplies
@@ -65,7 +77,7 @@ pub struct Coordinator<W: WorldState> {
     /// guest-readable incumbents and a fire commits byte-identically to a
     /// world with no drafts. M9 holds no publication state of its own — the
     /// predicate is injected like the factories.
-    pub(crate) guest: Box<Visibility<'static, W>>,
+    guest: Box<Visibility<'static, W>>,
 }
 
 /// The working set is what a driver reads back — the registered rule ids
@@ -161,7 +173,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// evaluation and scope test, the fire's own re-check, and
     /// `evaluate_def`'s denotation all build their context here, so no
     /// evaluator ever reads the link store class-free.
-    pub(crate) fn eval_ctx<'a>(
+    fn eval_ctx<'a>(
         &'a self,
         w: &'a W,
         view: View,
@@ -182,7 +194,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// `certify_stable`, `retract_pred`, and a rule's fire) goes through a
     /// writer built here, so M7's idempotency and dedup lookups see only
     /// guest-readable incumbents and no write can be built class-free.
-    pub(crate) fn link_writer(&self) -> LinkWriter<'_, W> {
+    fn link_writer(&self) -> LinkWriter<'_, W> {
         (self.mk_link_writer)(self.kernel.as_ref(), &*self.guest)
     }
 
@@ -237,8 +249,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// Bool requirement.
     pub fn type_check_trigger(&self, param: (VarId, Sort), body: Term) -> Result<TriggerTerm, TypeError> {
         let t = self.check_signed(SignedTerm { params: vec![param], body }, 0)?;
-        if t.result != Sort::Bool {
-            return Err(TypeError::SortMismatch { expected: Sort::Bool, found: t.result });
+        if t.result_sort() != Sort::Bool {
+            return Err(TypeError::SortMismatch { expected: Sort::Bool, found: t.result_sort() });
         }
         Ok(TriggerTerm::new(t))
     }
@@ -253,7 +265,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// for them: a referent with no defined signature is `DanglingReference`,
     /// and one whose derivation cannot complete at that level is `TooDeep`,
     /// with the referent left unjudged.
-    pub(crate) fn check_signed(&self, signed: SignedTerm, depth: u32) -> Result<TypedTerm, TypeError> {
+    fn check_signed(&self, signed: SignedTerm, depth: u32) -> Result<TypedTerm, TypeError> {
         let resolve = |start: &Address, depth: u32| self.resolve_def_at(start, depth);
         Checker::new(&self.catalog, &resolve).check_signed(signed, depth)
     }
@@ -293,7 +305,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
             );
         }
         let cx = self.eval_ctx(snap.world(), view, None);
-        eval_term(&cx, env, t.evaluable.as_ref())
+        eval_term(&cx, env, t.evaluable())
     }
 
     /// Convenience for Bool-codomain terms; panics if the codomain is not
@@ -323,111 +335,6 @@ impl<W: CoordinationWorld> Coordinator<W> {
             "classify precondition violated: ref-bearing TypedTerm — certify via certify_stable, \
              which classifies the flat reference expansion"
         );
-        classify_term(&self.catalog, view, t.evaluable.as_ref())
-    }
-
-    // ───────────────── internal: the DefMemo (§Internal 4) ─────────────────
-
-    /// Memo-or-derive at the top of a derivation chain — a status about the
-    /// content alone: every start answers at level 0, where `register_pred`
-    /// checked it (a nesting refusal there is the content's own, a breach).
-    pub(crate) fn def_status(&self, start: &Address) -> DefStatus {
-        self.def_status_at(start, 0).unwrap_or_else(|DerivedTooDeep| {
-            unreachable!(
-                "a derivation rooted at level 0 completes or poisons: derive_def freezes a \
-                 nesting refusal there as the content's own breach"
-            )
-        })
-    }
-
-    /// Memo-or-derive with the derivation's root at nesting level `depth`:
-    /// a memo hit answers at any level; a miss derives from immutable
-    /// content at `depth`, and a derivation that cannot complete there is
-    /// [`DerivedTooDeep`] — the asking term's refusal, filling nothing.
-    fn def_status_at(&self, start: &Address, depth: u32) -> Result<DefStatus, DerivedTooDeep> {
-        if let Some(hit) = self.memo.get(start) {
-            return Ok(hit);
-        }
-        self.derive_def(start, depth)
-    }
-
-    /// The miss path: pin its OWN snapshot to check ever-registration (a
-    /// never-registered start is never cached — a later registration must
-    /// surface), then derive from immutable content with the body's root at
-    /// `depth`, recursing through referents at the levels the checker
-    /// charges them (well-founded by PR2; a breach cycle strictly deepens
-    /// each round until the checker's nesting door refuses it).
-    ///
-    /// What is memoized is the CONTENT's status and nothing else: an
-    /// ever-registered start whose content fails the parse, or fails WT on
-    /// its own account, fills the memo poisoned — freeze-on-breach (PR-DISC,
-    /// §Internal 4). A nesting refusal ABOVE level 0 is not the content's:
-    /// every registered def was checked at level 0 and fits there, and every
-    /// registered consumer's `Ref` charge (`TypedTerm::reach`) guarantees
-    /// its referents fit where a cold derivation starts them — so a
-    /// `TooDeep` at `depth > 0` is the referring term's, answered as
-    /// [`DerivedTooDeep`] with the memo untouched, and the same term
-    /// answers `TooDeep` on a warm memo and a cold one alike. At level 0 a
-    /// `TooDeep` can only be a breach (content registered past the gate),
-    /// and freezes.
-    fn derive_def(&self, start: &Address, depth: u32) -> Result<DefStatus, DerivedTooDeep> {
-        let snap = self.kernel.snapshot();
-        let w = snap.world();
-        if !self.ever_registered(w, start) {
-            return Ok(DefStatus::NeverRegistered);
-        }
-        let derived = match parse_def(w.content(), start) {
-            Err(_) => Err(Breach),
-            Ok(signed) => match self.check_signed(signed, depth) {
-                Ok(def) => Ok(def),
-                Err(TypeError::TooDeep) if depth > 0 => return Err(DerivedTooDeep),
-                Err(_) => Err(Breach),
-            },
-        };
-        Ok(self.memo.fill(start, derived))
-    }
-
-    /// The defined referent at `start`, its derivation (if the memo misses)
-    /// rooted at nesting level `depth` — the resolver the checker consults
-    /// for a `Ref`, which asks at the level it charged the reference for.
-    /// No defined signature (never registered, or poisoned) is
-    /// `Unresolved::Dangling`; a derivation that cannot complete at `depth`
-    /// is `Unresolved::TooDeep`, the referent unjudged.
-    pub(crate) fn resolve_def_at(&self, start: &Address, depth: u32) -> Result<Arc<TypedTerm>, Unresolved> {
-        match self.def_status_at(start, depth) {
-            Ok(DefStatus::Defined(def)) => Ok(def),
-            Ok(DefStatus::Poisoned | DefStatus::NeverRegistered) => Err(Unresolved::Dangling),
-            Err(DerivedTooDeep) => Err(Unresolved::TooDeep),
-        }
-    }
-
-    /// `(Γ_D, C_D)` — defined-signature starts only; answered from the
-    /// immutable DefMemo. A `Some` is permanent and cacheable forever
-    /// (content immutable, ever-registration monotone); a never-registered
-    /// `None` is transient and never memoized; an ever-registered-but-
-    /// undisciplined start answers `None` via a PERMANENT poisoned entry
-    /// (freeze-on-breach, §Internal 4). No snapshot parameter — the miss
-    /// path pins its own. A query: the memo it may fill answers every later
-    /// probe as this one was answered.
-    pub fn signature(&self, start: &Address) -> Option<Signature> {
-        self.resolve_def_at(start, 0).ok().map(|def| def.signature())
-    }
-}
-
-/// A derivation asked for at a level where it cannot complete: the
-/// referring term is too deep. A verdict about the asking depth, never
-/// about the content — so never memoized. Unreachable at level 0, where
-/// `derive_def` freezes a nesting refusal as the content's breach.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct DerivedTooDeep;
-
-/// The referent supplier for the DAG-recursive drivers (a def's denotation,
-/// the flat expansion) — the content-read pass stays distinct from the
-/// structural denotation, so the denotation remains reference-free
-/// (Conflicts §5). Asked at level 0, so the one refusal is "no defined
-/// signature".
-impl<W: CoordinationWorld> DefSource for Coordinator<W> {
-    fn resolve_def(&self, addr: &Address) -> Option<Arc<TypedTerm>> {
-        self.resolve_def_at(addr, 0).ok()
+        classify_term(&self.catalog, view, t.evaluable())
     }
 }

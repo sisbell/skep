@@ -89,8 +89,9 @@ pub(crate) fn reference_reach(depth: u32, arity: usize, referent_reach: u32) -> 
 /// of the process, and transiently per expansion — against hand-authored
 /// predicates of tens to hundreds of nodes. Past it: `Malformed` at the
 /// decoder, `TypeError::TooLarge` at the checker, `ExpansionTooLarge` at the
-/// expander.
-pub(crate) const MAX_TERM_NODES: usize = 1 << 16;
+/// expander. Private to this module: a walk reaches the cap only through
+/// [`Budget`], so the comparison against it has one copy.
+const MAX_TERM_NODES: usize = 1 << 16;
 
 /// A node's charge against [`MAX_TERM_NODES`]: one unit for the node itself,
 /// plus one for each unit of PAYLOAD it carries that no gate bounds — a

@@ -38,7 +38,7 @@ use std::sync::Arc;
 
 use crate::ast::{ArcTerm, Dom, Lit, Term, VarId};
 use crate::budget::{weight, Budget};
-use crate::eval::DefSource;
+use crate::check::DefSource;
 use crate::walk::{rewrite_dom, rewrite_term, Rewrite};
 
 /// The expansion spent its node [`Budget`]: the reference DAG's unfolding is
@@ -109,7 +109,7 @@ impl Rewrite for Expander<'_> {
         let fresh_names: Vec<VarId> = referent.params().iter().map(|_| self.state.fresh()).collect();
         // … then its (recursively expanded) body's binders, depth-first
         // left-to-right.
-        let flat_body = self.term(&referent.evaluable);
+        let flat_body = self.term(referent.evaluable());
         let map: im::HashMap<VarId, VarId> =
             referent.params().iter().map(|(p, _)| *p).zip(fresh_names.iter().copied()).collect();
         let mut out = Rename { state: &mut self.state, map }.term(&flat_body);
@@ -257,13 +257,13 @@ mod tests {
             dom: Arc::new(Dom::LinkDom),
             body: Arc::new(addr_eq(Term::Var(v(2)), Term::Var(v(1)))),
         };
-        let referent = TypedTerm {
-            signed: SignedTerm { params: vec![(v(1), Sort::Addr)], body: body.clone() },
-            result: Sort::Bool,
-            evaluable: Arc::new(body),
-            ref_free: true,
-            reach: 2,
-        };
+        let referent = TypedTerm::from_parts(
+            SignedTerm { params: vec![(v(1), Sort::Addr)], body: body.clone() },
+            Sort::Bool,
+            Arc::new(body),
+            true, // ref-free
+            2,    // reach
+        );
         let stub = Stub(HashMap::from([(p.tumbler().clone(), Arc::new(referent))]));
         // Host: ∃ y ∈ L_dom :: P(y).
         let host = Term::Exists {
@@ -322,16 +322,16 @@ mod tests {
                 }),
             }),
         };
-        let referent = TypedTerm {
-            signed: SignedTerm {
+        let referent = TypedTerm::from_parts(
+            SignedTerm {
                 params: vec![(v(1), Sort::Addr), (v(2), Sort::OptAddr)],
                 body: body.clone(),
             },
-            result: Sort::AddrSet,
-            evaluable: Arc::new(body),
-            ref_free: true,
-            reach: 5,
-        };
+            Sort::AddrSet,
+            Arc::new(body),
+            true, // ref-free
+            5,    // reach
+        );
         let stub = Stub(HashMap::from([(p.tumbler().clone(), Arc::new(referent))]));
         // The host spells its arguments with the referent's OWN parameter
         // names, which the expansion must not touch.

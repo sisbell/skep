@@ -235,7 +235,7 @@ pub(crate) fn visit_dom<V: Visit + ?Sized>(v: &mut V, d: &Dom) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::fixture::every_former;
+    use crate::fixture::every_former;
 
     /// The two walks state one tree: the identity rewrite reproduces every
     /// former (a child passed twice or to the wrong slot would show), and a

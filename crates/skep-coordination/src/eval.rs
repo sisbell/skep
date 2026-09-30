@@ -26,8 +26,6 @@
 //! draft can neither satisfy a rule's trigger nor seed its domain, and a
 //! public fire never testifies to a draft's contents (PUB-6.28).
 
-use std::sync::Arc;
-
 use im::OrdSet;
 use skep_address::{is_prefix, Address, Nat, Tumbler};
 use skep_links::{CoverageClass, Pattern, Tip, Tuple, View};
@@ -35,19 +33,9 @@ use skep_namespace::M3State;
 
 use crate::ast::{Atom, Dom, Lit, Prim, Term, TypeKey, VarId};
 use crate::catalog::TypeCatalog;
-use crate::check::TypedTerm;
+use crate::check::DefSource;
 use crate::guest::{GuestLinks, Slice};
 use crate::value::{lift, Arg, Env, Value};
-
-/// Referent supplier for the DAG-recursive drivers over ref-bearing bodies —
-/// the denotation of a stored def (`eval_term`'s walk plus the one `Ref`
-/// arm, §Internal 4/Conflicts §5) and the flat expansion the static analyses
-/// run over. `None` for the public `eval`/`decide`, whose ref-free
-/// precondition makes the arm a panic. A `Some` is the memo's own `Arc` —
-/// the checked term of a defined referent, never a copy.
-pub(crate) trait DefSource {
-    fn resolve_def(&self, addr: &Address) -> Option<Arc<TypedTerm>>;
-}
 
 /// One verdict's read context — all slices off one pinned snapshot, M7's
 /// through the guest-class view, at ONE term view (PC3: the view is fixed
@@ -298,7 +286,7 @@ pub(crate) fn eval_term<W>(cx: &EvalCtx<'_, W>, env: &Env, t: &Term) -> Value {
                 .map(|(v, _)| *v)
                 .zip(args.iter().map(|arg| eval_term(cx, env, arg)))
                 .collect();
-            eval_term(cx, &inner, &referent.evaluable)
+            eval_term(cx, &inner, referent.evaluable())
         }
     }
 }

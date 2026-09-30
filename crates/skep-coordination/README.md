@@ -1,19 +1,20 @@
 # skep-coordination
 
-The predicate and coordination layer: a closed vocabulary of
-link-level predicates and the system-rule machinery over them.
+The predicate and coordination layer: a closed, typed language of
+predicates over the link store, predicates stored as content, and the
+rule machinery over them.
 
 Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substrate in the Project Xanadu lineage.
 
-- **The predicate vocabulary** — a small closed set of link/document
-  predicates (membership, targeting, kind tests, behavior classes)
-  every rule and reader shares; one denotation, no per-caller
-  variants.
-- **Rule fires** — registered rules whose actions (marker deposits,
-  nullifies, content writes) run as system writes through the
-  ordinary stores, attributed and journaled like any other act.
-- **The catalog** — the engine-assembled registry of definitions the
-  layer projects.
+- **The predicate language** — a closed, typed, read-only algebra over
+  the link store's per-type reads; every verdict is decided against one
+  pinned snapshot, with one denotation for every caller.
+- **Predicates as content** — terms stored as immutable content, then
+  registered, versioned and certified as typed links (`pdef`,
+  `pd_stable`); a stored predicate is named by its content address.
+- **Rules** — trigger→action rules whose actions (a marker deposit, a
+  nullify) run as system writes through the link store's gated path,
+  with quiescence detection, a fair scheduler and a termination lint.
 
 Deliberately thin: predicates read through the stores' own surfaces,
 fires write through their own gated paths — this crate owns

@@ -45,7 +45,7 @@ pub(crate) struct Malformed;
 /// refusal rather than for `TypeError::TupParameter`, the checker's rejection
 /// of the same shape at a different door.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct UnencodableTup(pub(crate) VarId);
+pub(crate) struct UnencodableTup(VarId);
 
 /// The tag table — the ONE statement of the format's discriminants, read by
 /// the encoder and the decoder alike. Each family numbers its own

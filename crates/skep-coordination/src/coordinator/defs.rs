@@ -2,10 +2,10 @@
 //! persistence): store + register (gate-first, idem dedup at M7), the
 //! registration probes, a stored def's denotation, versioning over the
 //! shipped `supersedes` class, ST⁺ certification over the flat expansion,
-//! and de-registration. Resolution and the signature memo are the handle's
-//! own (`coordinator.rs`, beside the `DefMemo` they answer from). M9 drives
-//! no `transact` — every write rides M5's placement composite or M7's gated
-//! `emit`/`nullify`.
+//! and de-registration — and the resolution every group reaches a referent
+//! through: the memo-or-derive ladder, and the content read and
+//! ever-registration gate it rests on. M9 drives no `transact` — every write
+//! rides M5's placement composite or M7's gated `emit`/`nullify`.
 //!
 //! THE DEF LAYER READS CLASS-FREE, where the evaluator does not (lane 4.1):
 //! a def's registration is not a trigger read, so `ever_registered`,
@@ -15,41 +15,44 @@
 //! resolvable and evaluable — while the guest-class view the evaluator looks
 //! through hides its `pdef` tuple from `is_K`. Two class-free reads sit
 //! outside this module and complete the list: the divergence monitor's
-//! (`engine.rs::fire_count`), whose attribution key pins the home to the
-//! rule's own action home; and a fire's gap discrimination
-//! (`engine.rs::fired_or_deduped`), which probes residence of the address M7
-//! just returned — the writer runs at guest class, so a returned incumbent is
-//! guest-readable and a fresh mint is absent from the fire snapshot under
-//! either reading, and the verdict is the same filtered or not. Every read
-//! inside a VERDICT — this module's `evaluate_def` included — goes through
-//! `Coordinator::eval_ctx`'s guest-class view.
+//! (`coordinator/engine.rs::fire_count`), whose attribution key pins the home
+//! to the rule's own action home; and a fire's gap discrimination
+//! (`coordinator/engine.rs::fired_or_deduped`), which probes residence of the
+//! address M7 just returned — the writer runs at guest class, so a returned
+//! incumbent is guest-readable and a fresh mint is absent from the fire
+//! snapshot under either reading, and the verdict is the same filtered or
+//! not. Every read inside a VERDICT — this module's `evaluate_def` included —
+//! goes through `Coordinator::eval_ctx`'s guest-class view.
 
+use std::collections::HashSet;
 use std::slice::from_ref;
+use std::sync::Arc;
 
-use skep_address::{Address, Nat};
+use skep_address::{Address, Nat, Tumbler};
 use skep_arrangement::{Deposit, VPos};
 use skep_content::{ContentStore, Val};
 use skep_kernel::{Seq, Snapshot};
 use skep_links::{Caller, Pattern, ShippedType, Tip, View};
 
-use crate::ast::{ref_addrs, Term};
-use crate::check::TypedTerm;
+use crate::ast::Term;
+use crate::check::{DefSource, TypedTerm, Unresolved};
 use crate::codec;
 use crate::coordinator::Coordinator;
 use crate::dynamics::{st_plus, view_independent};
 use crate::error::{
-    CertifyError, DefineError, EvalError, RegisterError, RetractError, SupersedeError,
+    CertifyError, DefineError, EvalError, RegisterError, RetractError, SupersedeError, TypeError,
 };
 use crate::eval::eval_term;
 use crate::expand::{Expander, ExpansionTooLarge};
-use crate::memo::DefStatus;
-use crate::value::{Env, SignedTerm, Sort, Value};
+use crate::memo::{Breach, DefStatus};
+use crate::value::{Env, Signature, SignedTerm, Sort, Value};
+use crate::walk::{visit_term, Visit};
 use crate::CoordinationWorld;
 
 /// Why a stored def could not be read back as a signed term: no `Val` at the
 /// start, or bytes the PR-ENC codec rejects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ParseFail {
+enum ParseFail {
     NotResident,
     Malformed,
 }
@@ -59,9 +62,37 @@ pub(crate) enum ParseFail {
 /// content store of a pinned snapshot's world, never the world. The parse
 /// consumes exactly the run (the codec's envelope check), so a resident,
 /// well-formed def is exactly what was encoded.
-pub(crate) fn parse_def(content: &ContentStore, start: &Address) -> Result<SignedTerm, ParseFail> {
+fn parse_def(content: &ContentStore, start: &Address) -> Result<SignedTerm, ParseFail> {
     let val = content.value_at(start.tumbler()).ok_or(ParseFail::NotResident)?;
     codec::decode(val.as_bytes()).map_err(|_| ParseFail::Malformed)
+}
+
+/// The DISTINCT `Ref` addresses in `t` (recursively, including inside domain
+/// bodies), in first-occurrence pre-order — the direct referents
+/// `register_pred`'s (iii)/(iv) checks range over (§Internal 4).
+///
+/// Distinct, because each of those checks is an M7 slice scan and the node
+/// budget admits a body spelling tens of thousands of `Ref` nodes at ONE
+/// address; first-occurrence order, because the gates name the referent they
+/// refuse on and the design's walk order reaches it first.
+fn ref_addrs(t: &Term) -> Vec<Address> {
+    struct RefAddrs {
+        out: Vec<Address>,
+        seen: HashSet<Tumbler>,
+    }
+    impl Visit for RefAddrs {
+        fn term(&mut self, t: &Term) {
+            if let Term::Ref { addr, .. } = t {
+                if self.seen.insert(addr.tumbler().clone()) {
+                    self.out.push(addr.clone());
+                }
+            }
+            visit_term(self, t);
+        }
+    }
+    let mut refs = RefAddrs { out: Vec::new(), seen: HashSet::new() };
+    refs.term(t);
+    refs.out
 }
 
 impl<W: CoordinationWorld> Coordinator<W> {
@@ -72,7 +103,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// into a draft home is ever-registered as it was. Every ever-registration
     /// question in the crate asks it here (the memo's derivation gate, the
     /// referent gate of `register_pred`, `evaluate_def`, `is_ever_pred`).
-    pub(crate) fn ever_registered(&self, w: &W, start: &Address) -> bool {
+    fn ever_registered(&self, w: &W, start: &Address) -> bool {
         !w.links()
             .observe(
                 self.catalog.reserved_type(ShippedType::PredDef),
@@ -81,6 +112,87 @@ impl<W: CoordinationWorld> Coordinator<W> {
             )
             .is_empty()
     }
+
+    // ───────────── resolution: the DefMemo's memo-or-derive (§Internal 4) ─────────────
+
+    /// Memo-or-derive at the top of a derivation chain — a status about the
+    /// content alone: every start answers at level 0, where `register_pred`
+    /// checked it (a nesting refusal there is the content's own, a breach).
+    pub(super) fn def_status(&self, start: &Address) -> DefStatus {
+        self.def_status_at(start, 0).unwrap_or_else(|DerivedTooDeep| {
+            unreachable!(
+                "a derivation rooted at level 0 completes or poisons: derive_def freezes a \
+                 nesting refusal there as the content's own breach"
+            )
+        })
+    }
+
+    /// Memo-or-derive with the derivation's root at nesting level `depth`:
+    /// a memo hit answers at any level; a miss derives from immutable
+    /// content at `depth`, and a derivation that cannot complete there is
+    /// [`DerivedTooDeep`] — the asking term's refusal, filling nothing.
+    fn def_status_at(&self, start: &Address, depth: u32) -> Result<DefStatus, DerivedTooDeep> {
+        if let Some(hit) = self.memo.get(start) {
+            return Ok(hit);
+        }
+        self.derive_def(start, depth)
+    }
+
+    /// The miss path: pin its OWN snapshot to check ever-registration (a
+    /// never-registered start is never cached — a later registration must
+    /// surface), then derive from immutable content with the body's root at
+    /// `depth`, recursing through referents at the levels the checker
+    /// charges them (well-founded by PR2; a breach cycle strictly deepens
+    /// each round until the checker's nesting door refuses it).
+    ///
+    /// What is memoized is the CONTENT's status and nothing else: an
+    /// ever-registered start whose content fails the parse, or fails WT on
+    /// its own account, fills the memo poisoned — freeze-on-breach (PR-DISC,
+    /// §Internal 4). A nesting refusal ABOVE level 0 is not the content's:
+    /// every registered def was checked at level 0 and fits there, and every
+    /// registered consumer's `Ref` charge (`TypedTerm::reach`) guarantees
+    /// its referents fit where a cold derivation starts them — so a
+    /// `TooDeep` at `depth > 0` is the referring term's, answered as
+    /// [`DerivedTooDeep`] with the memo untouched, and the same term
+    /// answers `TooDeep` on a warm memo and a cold one alike. At level 0 a
+    /// `TooDeep` can only be a breach (content registered past the gate),
+    /// and freezes.
+    fn derive_def(&self, start: &Address, depth: u32) -> Result<DefStatus, DerivedTooDeep> {
+        let snap = self.kernel.snapshot();
+        let w = snap.world();
+        if !self.ever_registered(w, start) {
+            return Ok(DefStatus::NeverRegistered);
+        }
+        let derived = match parse_def(w.content(), start) {
+            Err(_) => Err(Breach),
+            Ok(signed) => match self.check_signed(signed, depth) {
+                Ok(def) => Ok(def),
+                Err(TypeError::TooDeep) if depth > 0 => return Err(DerivedTooDeep),
+                Err(_) => Err(Breach),
+            },
+        };
+        Ok(self.memo.fill(start, derived))
+    }
+
+    /// The defined referent at `start`, its derivation (if the memo misses)
+    /// rooted at nesting level `depth` — the resolver the checker consults
+    /// for a `Ref`, which asks at the level it charged the reference for.
+    /// No defined signature (never registered, or poisoned) is
+    /// `Unresolved::Dangling`; a derivation that cannot complete at `depth`
+    /// is `Unresolved::TooDeep`, the referent unjudged.
+    pub(super) fn resolve_def_at(
+        &self,
+        start: &Address,
+        depth: u32,
+    ) -> Result<Arc<TypedTerm>, Unresolved> {
+        match self.def_status_at(start, depth) {
+            Ok(DefStatus::Defined(def)) => Ok(def),
+            Ok(DefStatus::Poisoned | DefStatus::NeverRegistered) => Err(Unresolved::Dangling),
+            Err(DerivedTooDeep) => Err(Unresolved::TooDeep),
+        }
+    }
+
+    // ─────────────────── B. predicate definitions as content ───────────────────
 
     /// Encode `term`'s COMPACT pre-`Reg`-expansion body (with its Γ_D) to one
     /// content `Val` (n = 1 — Conflicts §2), write it through M5's placement
@@ -125,9 +237,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
         home: &Address,
         term: &TypedTerm,
     ) -> Result<(Address, Seq), DefineError> {
-        let bytes = codec::encode(&term.signed).expect(
-            "a Codom-only Γ_D: type_check admits no Tup parameter, TypedTerm has no other public \
-             constructor, and no path in this crate routes a TriggerTerm's checked term here",
+        let bytes = codec::encode(term.signed()).expect(
+            "a Codom-only Γ_D: type_check admits no Tup parameter, TypedTerm is built only in \
+             check.rs, and no path in this crate routes a TriggerTerm's checked term here",
         );
         // Insert position off a snapshot read; M5's insert re-validates
         // against committed state (benign TOCTOU — item 6).
@@ -160,8 +272,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// (`HomeNotRegistered`, P0); M7's own refusal of the emit (`Emit`).
     /// Where several referents fail one of the two referent gates, the
     /// address carried is the FIRST in first-occurrence pre-order
-    /// (`ast::ref_addrs`), which is the referent the design's walk order
-    /// reaches first.
+    /// (`ref_addrs`), which is the referent the design's walk order reaches
+    /// first.
     ///
     /// RETURNS `(tuple, seq)`: the active `pdef` tuple's address — the
     /// fresh deposit's, or on an idem⊤ dedup hit the incumbent's, with M7's
@@ -275,7 +387,19 @@ impl<W: CoordinationWorld> Coordinator<W> {
         }
         let env: Env = params.iter().map(|(v, _)| *v).zip(args.iter().cloned()).collect();
         let cx = self.eval_ctx(snap.world(), view, Some(self));
-        Ok(eval_term(&cx, &env, def.evaluable.as_ref()))
+        Ok(eval_term(&cx, &env, def.evaluable()))
+    }
+
+    /// `(Γ_D, C_D)` — defined-signature starts only; answered from the
+    /// immutable DefMemo. A `Some` is permanent and cacheable forever
+    /// (content immutable, ever-registration monotone); a never-registered
+    /// `None` is transient and never memoized; an ever-registered-but-
+    /// undisciplined start answers `None` via a PERMANENT poisoned entry
+    /// (freeze-on-breach, §Internal 4). No snapshot parameter — the miss
+    /// path pins its own. A query: the memo it may fill answers every later
+    /// probe as this one was answered.
+    pub fn signature(&self, start: &Address) -> Option<Signature> {
+        self.resolve_def_at(start, 0).ok().map(|def| def.signature())
     }
 
     /// `is_K(pdef, start)@active`.
@@ -374,7 +498,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
             DefStatus::Poisoned => return Err(CertifyError::UndisciplinedDef),
             DefStatus::NeverRegistered => return Err(CertifyError::NotEverRegistered),
         };
-        if def.result != Sort::Bool {
+        if def.result_sort() != Sort::Bool {
             return Err(CertifyError::NotBoolean);
         }
         if !self.is_active_pred(start, &snap) {
@@ -449,7 +573,67 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// sequence is deterministic in the content alone (PR3) — or
     /// `ExpansionTooLarge` when the reference DAG's unfolding outgrows the
     /// node budget.
-    pub(crate) fn expand_def(&self, def: &TypedTerm) -> Result<Term, ExpansionTooLarge> {
-        Expander::new(self).expand(def.evaluable.as_ref())
+    pub(super) fn expand_def(&self, def: &TypedTerm) -> Result<Term, ExpansionTooLarge> {
+        Expander::new(self).expand(def.evaluable())
+    }
+}
+
+/// A derivation asked for at a level where it cannot complete: the
+/// referring term is too deep. A verdict about the asking depth, never
+/// about the content — so never memoized. Unreachable at level 0, where
+/// `derive_def` freezes a nesting refusal as the content's breach.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DerivedTooDeep;
+
+/// The referent supplier for the DAG-recursive drivers (a def's denotation,
+/// the flat expansion) — the content-read pass stays distinct from the
+/// structural denotation, so the denotation remains reference-free
+/// (Conflicts §5). Asked at level 0, so the one refusal is "no defined
+/// signature".
+impl<W: CoordinationWorld> DefSource for Coordinator<W> {
+    fn resolve_def(&self, addr: &Address) -> Option<Arc<TypedTerm>> {
+        self.resolve_def_at(addr, 0).ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use skep_address::{validate, Address, Nat, Tumbler};
+
+    use super::ref_addrs;
+    use crate::ast::{Dom, Term, VarId};
+
+    fn a(comps: &[u32]) -> Address {
+        validate(Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty"))
+            .expect("T4-valid")
+    }
+
+    /// [`ref_addrs`] answers each referent ONCE, in first-occurrence order:
+    /// `register_pred` runs an M7 slice scan per answer, and the node budget
+    /// admits a body spelling tens of thousands of `Ref` nodes at one
+    /// address; the order is what lets its gates name the referent the
+    /// design's walk order reaches first.
+    #[test]
+    fn ref_addrs_answers_each_referent_once_in_first_occurrence_order() {
+        let (p, q) = (a(&[1, 0, 1, 0, 1, 0, 1, 1]), a(&[1, 0, 1, 0, 1, 0, 1, 2]));
+        let at = |t: Term| Arc::new(t);
+        let r = |x: &Address| Term::Ref { addr: x.clone(), args: vec![] };
+        // q first, then p, then q again — inside a domain body, so the walk's
+        // reach over `Dom` is covered too.
+        let body = Term::And(
+            at(r(&q)),
+            at(Term::Exists {
+                var: VarId::new(1).expect("below the watershed"),
+                dom: Arc::new(Dom::Filter {
+                    dom: Arc::new(Dom::LinkDom),
+                    var: VarId::new(2).expect("below the watershed"),
+                    pred: at(r(&p)),
+                }),
+                body: at(r(&q)),
+            }),
+        );
+        assert_eq!(ref_addrs(&body), vec![q, p]);
     }
 }

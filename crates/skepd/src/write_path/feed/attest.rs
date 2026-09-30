@@ -1,7 +1,7 @@
 //! THE ATTEST STORE (signed ops; the design record §7.3 (i); BW-01,
 //! owner-ruled 2026-09-29) — `feed-attest.log`: the marker slot's signature
 //! per attested position, which `GET /changes` serves as the row's `attest`
-//! member (`CommitMeta::entry`). It rides [`DerivedFile`]'s line discipline
+//! member (`CommitMeta::entry`). It rides [`LineFile`]'s line discipline
 //! under a class of its own:
 //!
 //! One line per ATTESTED position — `alg` the marker's `sig_alg` TAG (the
@@ -23,11 +23,11 @@
 //! stop on a failed append apply above the floor as in the four. At HEAD no
 //! read serves a below-floor slot (`/changes` answers `410
 //! history_reclaimed` below the feed's floor): the lines below it are kept
-//! for a read that does not yet exist, the class being the record's and not
-//! this build's to narrow.
+//! for a read that does not yet exist, the class being the design record's
+//! and not this build's to narrow.
 //!
 //! What keeps the class is this card's privacy: [`AttestStore`]'s file is its
-//! own, and nothing rewrites it but [`DerivedFile::open`]'s purge of the lines
+//! own, and nothing rewrites it but [`LineFile::open`]'s purge of the lines
 //! above the head — another journal's — so no other card can compact it.
 
 use std::collections::BTreeMap;
@@ -38,7 +38,7 @@ use serde_json::{Map, Value};
 use skep_engine::Engine;
 use skep_kernel::{Attestation, Seq};
 
-use super::derived::DerivedFile;
+use super::derived::LineFile;
 use super::super::sidecar::CommitsLog;
 use crate::codec::{hex_string, parse_lower_hex_bytes};
 
@@ -60,7 +60,7 @@ const ATTEST_SIG: &str = "sig";
 /// log compacted away included, where the store is primary state.
 pub(super) struct AttestStore {
     /// `feed-attest.log`: appended, replayed and fenced, and never compacted.
-    file: DerivedFile,
+    file: LineFile,
     /// Position → the marker slot, for the served positions.
     served: BTreeMap<u64, Attestation>,
 }
@@ -89,7 +89,7 @@ impl AttestStore {
     /// drops.
     pub(super) fn open(dir: &Path, engine: &Engine, log: &CommitsLog) -> io::Result<AttestStore> {
         let head = log.open_head();
-        let (mut file, lines) = DerivedFile::open(dir, ATTEST_FILE, head)?;
+        let (mut file, lines) = LineFile::open(dir, ATTEST_FILE, head)?;
         let mut served = BTreeMap::new();
         for (at, m) in &lines {
             if !log.entries().contains_key(at) {
@@ -119,7 +119,7 @@ impl AttestStore {
     /// Mirror one admitted marker slot at RECORD time — the attestation the
     /// plain sequence's check admitted and handed the kernel — into the file
     /// and the served window. A failed append is reported and stops the file
-    /// for the uptime ([`DerivedFile::append_or_report`]); this uptime still
+    /// for the uptime ([`LineFile::append_or_report`]); this uptime still
     /// serves the slot, and the next open rebuilds it from the journal.
     pub(super) fn record(&mut self, at: u64, slot: Attestation) {
         self.file.append_or_report(at, attest_fields(&slot));
@@ -172,14 +172,14 @@ mod tests {
         let slot = Attestation::new(1, vec![0xab, 0x01]).expect("tag 1 and a non-empty blob");
         {
             let (file, lines) =
-                DerivedFile::open(dir.path(), ATTEST_FILE, 9).expect("a fresh store opens");
+                LineFile::open(dir.path(), ATTEST_FILE, 9).expect("a fresh store opens");
             assert!(lines.is_empty());
             let mut store = AttestStore { file, served: BTreeMap::new() };
             store.record(5, slot.clone());
             assert_eq!(store.slot(5), Some(&slot), "served at once");
             assert_eq!(store.slot(4), None, "and only where recorded");
         }
-        let (_file, lines) = DerivedFile::open(dir.path(), ATTEST_FILE, 9).expect("reopen");
+        let (_file, lines) = LineFile::open(dir.path(), ATTEST_FILE, 9).expect("reopen");
         let replayed: Vec<(u64, Option<Attestation>)> =
             lines.iter().map(|(at, m)| (*at, attest_of_record(m))).collect();
         assert_eq!(replayed, [(5, Some(slot))], "the line replays as the slot it mirrors");

@@ -90,14 +90,25 @@ fn the_signedness_and_the_terms_replay_as_written() {
             "ab".repeat(32)
         )
     );
-    let record = CommitMeta::Recorded {
+    let record_sig = CommitMeta::Recorded {
         op: "insert".into(),
         docs: vec!["1.0.1.0.1".into()],
         time: 1_700_000_000_001,
         key: Some("ab".repeat(32)),
-        signed: Some(Carrier::Record),
+        signed: Some(Carrier::RecordSig),
         terms: None,
     };
+    // The credential record's `sig` carrier is spelled `record` in the file,
+    // the token every such line already on disk carries — whatever the
+    // variant is called.
+    assert_eq!(
+        String::from_utf8(entry_line(9, &record_sig)).expect("utf-8"),
+        format!(
+            "{{\"at\":9,\"docs\":[\"1.0.1.0.1\"],\"key\":\"{}\",\"op\":\"insert\",\
+             \"signed\":\"record\",\"time\":1700000000001}}\n",
+            "ab".repeat(32)
+        )
+    );
     let delegate = CommitMeta::Recorded {
         op: "delegate".into(),
         docs: vec![],
@@ -132,7 +143,8 @@ fn the_signedness_and_the_terms_replay_as_written() {
     };
 
     let mut file: Vec<u8> = Vec::new();
-    for (at, meta) in [(8, &marker), (9, &record), (10, &delegate), (11, &birth), (12, &based)] {
+    for (at, meta) in [(8, &marker), (9, &record_sig), (10, &delegate), (11, &birth), (12, &based)]
+    {
         file.extend_from_slice(&entry_line(at, meta));
     }
     let (records, valid_end) = parse_records(&file);
@@ -145,7 +157,7 @@ fn the_signedness_and_the_terms_replay_as_written() {
         replayed(0),
         (Some(Carrier::Marker), Some(OpTerms::MakeLink { link: "1.0.1.0.1.0.2.3".into() }))
     );
-    assert_eq!(replayed(1), (Some(Carrier::Record), None));
+    assert_eq!(replayed(1), (Some(Carrier::RecordSig), None));
     assert_eq!(
         replayed(2),
         (None, Some(OpTerms::Delegate { new_prefix: "1.0.2".into(), new_id: 1 }))
@@ -323,8 +335,8 @@ fn a_bare_row_nulls_exactly_the_members_the_terms_render() {
 /// §7.3 (i)): `key` is served iff the line records no carrier; `attest` is
 /// the store's slot wherever one is held, `null` — LOST — where the line
 /// records the marker filled and the store cannot answer, and absent
-/// otherwise, a record deposit's row included; the op's terms are present on
-/// the op that carries them and absent on every other op's row, a
+/// otherwise, a credential record deposit's row included; the op's terms are
+/// present on the op that carries them and absent on every other op's row, a
 /// `publish`'s birth extent rendering `null`.
 #[test]
 fn key_attest_and_the_terms_are_present_absent_or_null_by_the_rule() {
@@ -349,18 +361,18 @@ fn key_attest_and_the_terms_are_present_absent_or_null_by_the_rule() {
         r#"{"at":8,"attest":null,"docs":["1.0.1.0.1"],"link":"1.0.1.0.1.0.2.3","op":"make_link","time":1}"#,
         "the marker recorded filled and the store silent: LOST, never absent"
     );
-    let record = CommitMeta::Recorded {
+    let record_sig = CommitMeta::Recorded {
         op: "insert".into(),
         docs: vec!["1.0.1.0.1".into()],
         time: 2,
         key: Some(fp.clone()),
-        signed: Some(Carrier::Record),
+        signed: Some(Carrier::RecordSig),
         terms: None,
     };
     assert_eq!(
-        text(record.entry(9, vec!["1.0.1.0.1".into()], None)),
+        text(record_sig.entry(9, vec!["1.0.1.0.1".into()], None)),
         r#"{"at":9,"docs":["1.0.1.0.1"],"op":"insert","time":2}"#,
-        "a record-signed row: neither key nor attest"
+        "a row its credential record's `sig` signs: neither key nor attest"
     );
     let unsigned = CommitMeta::Recorded {
         op: "delegate".into(),

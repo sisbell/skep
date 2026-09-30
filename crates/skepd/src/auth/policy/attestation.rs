@@ -131,7 +131,7 @@ pub(super) fn attestation_check(
         Ok(entry_frame) => entry_frame,
         Err(ComposeFault::NoBoardTerm) => return Err(invalid(AttestFault::BoardUnavailable)),
         Err(ComposeFault::NoAccount) => return Err(invalid(AttestFault::NotEnrolledAtPosition)),
-        Err(ComposeFault::UnreadableRunOrigin) => {
+        Err(ComposeFault::UnreadableCopiedRunOrigin) => {
             return if refused_at_or_before_the_source_gate(world, op, principal) {
                 Ok(None)
             } else {
@@ -185,9 +185,9 @@ pub(super) fn attestation_check(
 /// (step 2's exemption above, the atom the check demands no `attest` for),
 /// its one value parses as a record of that kind, and the record's `sig`
 /// member is PRESENT. What the change feed's row records as the entry's
-/// signedness for that `insert` (the write path's `Signed::Record`), so its
-/// `key` is absent as its `make_link`'s is: the two carriers are one
-/// signature at the record grade.
+/// signedness for that `insert` (the write path's `Signed::RecordSig`), so
+/// its `key` is absent as its `make_link`'s is: the record's `sig` covers
+/// both positions (D26; e-Q2).
 ///
 /// PRESENCE, not verification: the record grade's trial needs the link's
 /// type and target and the grade the act needs, which the atom's `insert`
@@ -238,7 +238,7 @@ fn system_owned(world: &World, op: &Op) -> bool {
 
 /// THE CHECK'S QUESTION about a shot the composer could not read — a copied
 /// run onto a draft the principal may not read
-/// ([`ComposeFault::UnreadableRunOrigin`]): whether the STORE refuses it at or
+/// ([`ComposeFault::UnreadableCopiedRunOrigin`]): whether the STORE refuses it at or
 /// before its source gate (M5 `publish`'s slots 1–6, PUB-6.36) — asked of the
 /// store ITSELF, on a detached kernel over this snapshot ([`detached_kernel`]),
 /// so the base's chain and shape, the carried-run test (PUB-6.24) and the

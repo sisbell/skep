@@ -2,8 +2,9 @@
 //! each a projection of that file and the journal, appended AT COMMIT
 //! outside the journal transaction, replayed at open, tail-checked against
 //! the head, and rebuilt whole only on whole-file loss (PUB-7.21) — and
-//! [`DerivedFile`], the line file they share with the attest store
-//! (`attest.rs`, which states the store's own class):
+//! [`LineFile`], the one line-file type all five of the feed's files share,
+//! the attest store's included (`attest.rs`, which states that store's own
+//! class):
 //!
 //! | file                | record                              | twin (`feed.rs`)                  |
 //! |---------------------|-------------------------------------|-----------------------------------|
@@ -39,7 +40,7 @@
 //!   from is a supplement short by it.
 //! * a GAP is what coverage cannot describe, so no file is left holding one:
 //!   the first failed append STOPS its file for the uptime
-//!   ([`DerivedFile`]'s `stopped`), so the on-disk claim stays below the
+//!   ([`LineFile`]'s `stopped`), so the on-disk claim stays below the
 //!   position that was lost and the next open re-derives from there. Without
 //!   it a later successful append raises coverage past the gap, and the
 //!   position reads as one that contributed nothing — which for
@@ -66,7 +67,7 @@ use crate::codec::obj;
 
 // Each file below is named BESIDE the field its records carry, because this
 // module owns the LINE and would otherwise own only half of what a line is:
-// [`DerivedFile::append`] takes any name, so a write site that spells a field
+// [`LineFile::append`] takes any name, so a write site that spells a field
 // apart from the read site produces a line that replays with no field. That
 // position then contributes nothing and is served as a `[]`-docs entry, which
 // is never masked — a draft write unmasked to every class — and it still
@@ -101,21 +102,24 @@ enum Record {
 }
 
 /// One line file — a derived sidecar, or the attest store (`attest.rs`): its
-/// append handle and its coverage.
-pub(super) struct DerivedFile {
+/// append handle and its coverage. Named for the SHAPE the five files share,
+/// never for a class: the attest store is no projection below the reclaim
+/// floor (BW-01), so a class word here would mislabel the one file whose lines
+/// there are an entry signature's only copy.
+pub(super) struct LineFile {
     file: File,
     dir: PathBuf,
     name: &'static str,
     coverage: u64,
-    /// Set by the first FAILED [`DerivedFile::append`] of this uptime, after
+    /// Set by the first FAILED [`LineFile::append`] of this uptime, after
     /// which this file takes no further APPEND and no FENCE.
     ///
-    /// [`DerivedFile::rewrite`] is EXEMPT and needs no guard, on two counts.
+    /// [`LineFile::rewrite`] is EXEMPT and needs no guard, on two counts.
     /// It writes the file WHOLE from the resident twin and fences at the
     /// coverage it has just made true, so it CLOSES a gap rather than
     /// claiming over one — which is the opposite of what this flag guards
     /// against. And it is unreachable past a stop in any case: every
-    /// [`DerivedFile::append`] an open makes — [`super::Feed::open`]'s, and
+    /// [`LineFile::append`] an open makes — [`super::Feed::open`]'s, and
     /// [`super::attest::AttestStore::open`]'s inside it — is `?`-propagated
     /// into `DaemonError::Sidecar`, so a failure there returns before any
     /// rewrite runs, and no rewrite happens at commit time at all.
@@ -133,16 +137,16 @@ pub(super) struct DerivedFile {
     stopped: bool,
 }
 
-/// The ENTRIES a derived file replays — its position-carrying records,
+/// The ENTRIES a line file replays — its position-carrying records,
 /// `(position, the record's object)`, in file order. A fence carries no
 /// position and so is not one of these; it is folded into the coverage.
 pub(super) type Entries = Vec<(u64, Map<String, Value>)>;
 
-impl DerivedFile {
+impl LineFile {
     /// Replay `name` in `dir`: truncate a torn tail, drop what describes
     /// another journal (rewriting the file without it), and hand back the
     /// entries at or below `head` with the file's coverage.
-    pub fn open(dir: &Path, name: &'static str, head: u64) -> io::Result<(DerivedFile, Entries)> {
+    pub fn open(dir: &Path, name: &'static str, head: u64) -> io::Result<(LineFile, Entries)> {
         let path = dir.join(name);
         let mut file = OpenOptions::new().create(true).read(true).append(true).open(&path)?;
         let mut bytes = Vec::new();
@@ -165,7 +169,7 @@ impl DerivedFile {
             }
         }
         let mut this =
-            DerivedFile { file, dir: dir.to_path_buf(), name, coverage, stopped: false };
+            LineFile { file, dir: dir.to_path_buf(), name, coverage, stopped: false };
         if foreign {
             // Purge what is not this journal's, once, so it cannot come back.
             let kept = entries
@@ -187,7 +191,7 @@ impl DerivedFile {
     /// The first position this file has NOT processed — one past its
     /// coverage, and where each open's re-derivation of its MISSING TAIL
     /// begins. The `+ 1` is what the fence MEANS
-    /// ([`DerivedFile::coverage`]: every position at or below it is
+    /// ([`LineFile::coverage`]: every position at or below it is
     /// processed), so that reading is a fact of this type rather than of the
     /// arithmetic each caller would otherwise spell — one per derived
     /// structure in [`super::Feed::open`], over two different maps, and the
@@ -203,7 +207,7 @@ impl DerivedFile {
     /// [`record_object`] fixes — so an appended line and the rewritten line
     /// that reproduces it are one spelling rather than two that must agree.
     ///
-    /// A file [`DerivedFile::stopped`] closed takes nothing and answers `Ok`:
+    /// A file [`LineFile::stopped`] closed takes nothing and answers `Ok`:
     /// the failure was reported once, at the append that raised it, and this
     /// file's on-disk coverage must not rise past the gap it left.
     pub fn append(&mut self, at: u64, fields: Vec<(&'static str, Value)>) -> io::Result<()> {
@@ -220,7 +224,7 @@ impl DerivedFile {
 
     /// Append one record and REPORT a failed write rather than returning it —
     /// the RECORD-time disposition, where the commit has landed and the ack is
-    /// owed whatever this file does. [`DerivedFile::append`] keeps the
+    /// owed whatever this file does. [`LineFile::append`] keeps the
     /// fallible form for [`super::Feed::open`], which propagates into
     /// `DaemonError::Sidecar`: at open nothing is owed yet, so a data dir that
     /// cannot take a write the kernel just performed is an operator condition
@@ -228,7 +232,7 @@ impl DerivedFile {
     ///
     /// The notice names THIS file, from the name this handle already holds, so
     /// no caller pairs a handle with a file-name constant. ONE per file per
-    /// uptime: [`DerivedFile::stopped`] answers `Ok` and writes nothing after
+    /// uptime: [`LineFile::stopped`] answers `Ok` and writes nothing after
     /// the first failure, so a busy board's stderr carries it alone, and that
     /// field's own card says what the stop buys.
     pub fn append_or_report(&mut self, at: u64, fields: Vec<(&'static str, Value)>) {
@@ -276,8 +280,8 @@ impl DerivedFile {
     }
 }
 
-/// One record object for `at` from its fields — THE shape a derived line
-/// takes, in both directions: [`DerivedFile::append`] writes it and a
+/// One record object for `at` from its fields — THE shape every line of a
+/// [`LineFile`] takes, in both directions: [`LineFile::append`] writes it and a
 /// rewrite reproduces it, so each file's field name is spelled once and a
 /// compacted file's lines are byte-identical to appended ones. The `at` key
 /// is added here, so a record cannot omit it.
@@ -288,7 +292,7 @@ pub(super) fn record_object(at: u64, fields: Vec<(&'static str, Value)>) -> Valu
 }
 
 /// The record object of one REPLAYED record, re-sorted —
-/// [`DerivedFile::open`]'s purge alone, whose keys are owned because they
+/// [`LineFile::open`]'s purge alone, whose keys are owned because they
 /// came off disk. Every other caller holds `&'static str` keys and goes
 /// through [`record_object`], of which this is the owned-key twin.
 fn replayed_record_object(at: u64, fields: impl IntoIterator<Item = (String, Value)>) -> Value {
@@ -338,15 +342,15 @@ fn parse_line(line: &[u8]) -> Option<Record> {
 }
 
 #[cfg(test)]
-impl DerivedFile {
-    /// A [`DerivedFile`] whose appends FAIL — a READ-ONLY handle on the file
+impl LineFile {
+    /// A [`LineFile`] whose appends FAIL — a READ-ONLY handle on the file
     /// in `dir` — which is the one condition the stop rule is about and the
-    /// one no portable test can produce from [`DerivedFile::open`]'s handle.
-    fn over_unwritable(dir: &Path, name: &'static str, coverage: u64) -> DerivedFile {
+    /// one no portable test can produce from [`LineFile::open`]'s handle.
+    fn over_unwritable(dir: &Path, name: &'static str, coverage: u64) -> LineFile {
         let path = dir.join(name);
         File::create(&path).expect("create the file to be opened read-only");
         let file = File::open(&path).expect("a read-only handle");
-        DerivedFile { file, dir: dir.to_path_buf(), name, coverage, stopped: false }
+        LineFile { file, dir: dir.to_path_buf(), name, coverage, stopped: false }
     }
 }
 
@@ -359,14 +363,14 @@ mod tests {
     ///
     /// The field name below is a LITERAL and not one of the per-file
     /// constants, deliberately: this file's discipline is field-agnostic —
-    /// [`DerivedFile::append`] writes whatever it is given — so the test
+    /// [`LineFile::append`] writes whatever it is given — so the test
     /// that pins the discipline names a field no file's schema fixes.
     #[test]
     fn records_and_fences_replay_and_coverage_follows_them() {
         let dir = tempfile::tempdir().expect("tempdir");
         let head = 20;
         {
-            let (mut f, replayed) = DerivedFile::open(dir.path(), MASKED_FILE, head).expect("open");
+            let (mut f, replayed) = LineFile::open(dir.path(), MASKED_FILE, head).expect("open");
             assert!(replayed.is_empty());
             assert_eq!(f.coverage(), 0);
             f.append(3, vec![]).expect("append");
@@ -386,7 +390,7 @@ mod tests {
         );
         // A torn tail: truncated at open, coverage unaffected by it.
         std::fs::write(&path, format!("{contents}{{\"at\":11,\"do")).expect("tear");
-        let (f, replayed) = DerivedFile::open(dir.path(), MASKED_FILE, head).expect("reopen");
+        let (f, replayed) = LineFile::open(dir.path(), MASKED_FILE, head).expect("reopen");
         assert_eq!(replayed.iter().map(|(at, _)| *at).collect::<Vec<_>>(), vec![3, 7]);
         assert_eq!(f.coverage(), 9);
         assert_eq!(std::fs::read_to_string(&path).expect("read"), contents, "the tail is cut");
@@ -395,7 +399,7 @@ mod tests {
         // and purged from the file.
         std::fs::write(&path, format!("{contents}{{\"at\":99}}\n{{\"covered\":999}}\n"))
             .expect("foreign lines");
-        let (f, replayed) = DerivedFile::open(dir.path(), MASKED_FILE, head).expect("reopen");
+        let (f, replayed) = LineFile::open(dir.path(), MASKED_FILE, head).expect("reopen");
         assert_eq!(replayed.iter().map(|(at, _)| *at).collect::<Vec<_>>(), vec![3, 7]);
         assert_eq!(f.coverage(), 9, "a foreign fence does not raise coverage");
         let purged = std::fs::read_to_string(&path).expect("read");
@@ -424,7 +428,7 @@ mod tests {
     #[test]
     fn a_failed_append_stops_its_file_so_coverage_never_covers_the_gap() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut f = DerivedFile::over_unwritable(dir.path(), INDEX_FILE, 9);
+        let mut f = LineFile::over_unwritable(dir.path(), INDEX_FILE, 9);
 
         assert!(f.append(10, vec![]).is_err(), "a read-only handle refuses the line");
         assert_eq!(f.coverage(), 9, "and the refused position does not raise the claim");
@@ -445,22 +449,22 @@ mod tests {
         // What the next open therefore sees: coverage 9, so its tail
         // derivation re-covers 10 and everything above it.
         drop(f);
-        let (reopened, entries) = DerivedFile::open(dir.path(), INDEX_FILE, 20).expect("reopen");
+        let (reopened, entries) = LineFile::open(dir.path(), INDEX_FILE, 20).expect("reopen");
         assert!(entries.is_empty());
         assert_eq!(reopened.coverage(), 0, "an empty file claims nothing");
     }
 
     /// The RECORD-time append swallows its failure and composes the stop rule:
     /// a caller between a commit and its ack owes an ack whatever this file
-    /// does, so [`DerivedFile::append_or_report`] answers unit — a caller
+    /// does, so [`LineFile::append_or_report`] answers unit — a caller
     /// cannot forget to handle what it is never given — and still leaves
     /// coverage BELOW the position it lost, which is what the next open's
-    /// tail derivation reads. A version writing past [`DerivedFile::append`]
+    /// tail derivation reads. A version writing past [`LineFile::append`]
     /// rather than through it would report and then claim the gap.
     #[test]
     fn the_record_time_append_swallows_its_failure_and_still_stops_the_file() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut f = DerivedFile::over_unwritable(dir.path(), INDEX_FILE, 9);
+        let mut f = LineFile::over_unwritable(dir.path(), INDEX_FILE, 9);
 
         f.append_or_report(10, vec![(INDEX_DOCS, Value::Array(vec![]))]);
         assert_eq!(f.coverage(), 9, "the lost position does not raise the claim");

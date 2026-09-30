@@ -483,7 +483,7 @@ pub fn signed_record_text<T: RecordEntry>(
 /// `parse_record_value`), the entries re-encoded with the `sig` the frame's
 /// signature makes. THE ATOM IS RETURNED AS GIVEN where nothing can be
 /// signed: a bare or foreign token (no seed carrier opened it), a board with
-/// no `H.1` yet (at or below the claim, where records are bare, A5), a type
+/// no `H.1` yet (at or below the claim, where no record is judged, A5), a type
 /// of no record-bearing kind, or a text no parser admits (a malformed record,
 /// which the fold refuses ahead of any signature and which a cell sends on
 /// purpose) — so every helper that lands a record can pass through here, and

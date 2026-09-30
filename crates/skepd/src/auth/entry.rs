@@ -25,8 +25,8 @@
 //!   the three slots as the client sent them and its `replaces` member —
 //!   absent, or the address it names — for `make_link`, and for `publish`
 //!   THE COUNT, THE RUNS THE CLIENT PLACED IN THE ADDRESS FORM AND THE BASE
-//!   EXTENT (the record §2.5's cell as ruled — V, l6-A4, D25): the runs as
-//!   the commit will place them, M5's own classing
+//!   EXTENT (the design record §2.5's cell as ruled — V, l6-A4, D25): the
+//!   runs as the commit will place them, M5's own classing
 //!   (`Shot::address_form`) — a run the commit COPIES IN (the trunk's own
 //!   I-space, the staging draft's) by its values, read off the snapshot by
 //!   M4's `value_at` in run order; a WINDOW onto another document by its
@@ -44,7 +44,7 @@
 //!   addresses are never walked here: the body spells them.)
 //! * a body over a value the principal may NOT READ — a COPIED run onto a
 //!   staging draft the read predicate withholds from it
-//!   ([`ComposeFault::UnreadableRunOrigin`]). Those values are never read
+//!   ([`ComposeFault::UnreadableCopiedRunOrigin`]). Those values are never read
 //!   here: a verdict composed over them answers BY them —
 //!   `attestation_required` telling that an address holds a value,
 //!   `signature` whether a guessed value is the one it holds — where the
@@ -114,7 +114,7 @@ pub(super) enum ComposeFault {
     /// asks the store's own gates (`policy/attestation.rs`'s
     /// `refused_at_or_before_the_source_gate`). A window raises this never:
     /// it is spelled by address and read from nowhere.
-    UnreadableRunOrigin,
+    UnreadableCopiedRunOrigin,
     /// A `publish`'s body would pass [`MAX_SHOT_BODY_BYTES`].
     OverBudget,
     /// A `publish` term the frame's fixed-width rows cannot spell — a run's
@@ -205,8 +205,8 @@ pub(super) fn compose(
             // No value the principal may not read is ever read here: a
             // copied run's origin must be readable to it; a window is spelled
             // by address and read from nowhere.
-            if !every_copied_origin_readable(world, &trunk, &segments, principal) {
-                return Err(ComposeFault::UnreadableRunOrigin);
+            if !every_copied_run_origin_readable(world, &trunk, &segments, principal) {
+                return Err(ComposeFault::UnreadableCopiedRunOrigin);
             }
             (trunk, publish_body(world, shot, &segments)?)
         }
@@ -227,7 +227,7 @@ pub(super) fn compose(
 /// at the principal's class, which is what M10 lends the gate, on the
 /// premise `policy/attestation.rs`'s `refused_at_or_before_the_source_gate`
 /// states. A window's origin is not asked about: no value of it is read.
-fn every_copied_origin_readable(
+fn every_copied_run_origin_readable(
     world: &World,
     trunk: &Address,
     segments: &[PlacedSegment],
@@ -253,7 +253,7 @@ fn every_copied_origin_readable(
 /// the shot is refused whole and no body is finished over the segments before
 /// the refusal — the preimage of a shorter publish. PRECONDITION: the
 /// principal may read every value the shot copies in
-/// ([`every_copied_origin_readable`]).
+/// ([`every_copied_run_origin_readable`]).
 fn publish_body(
     world: &World,
     shot: &Shot,

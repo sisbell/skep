@@ -12,11 +12,11 @@
 //! This file is the feed's AUTHORITY file: what a position's entry SAYS —
 //! its op, its docs, its time, its key, WHETHER and HOW its entry is signed
 //! (`signed`, the daemon's own assertion at commit of why the wire's `key` is
-//! absent: the marker slot filled, or the record's own `sig` — never on the
-//! wire itself), and the op's own terms (a `delegate`'s minted pair, a
-//! `make_link`'s minted link address, a `publish`'s placed count and base
-//! extent — AUTH-6.36, the design record's D25 and r6-2a) — is recorded here
-//! and nowhere else. The feed's four DERIVED sidecars (`feed/derived.rs`:
+//! absent: the marker slot filled, or the credential record's own `sig` —
+//! never on the wire itself), and the op's own terms (a `delegate`'s minted
+//! pair, a `make_link`'s minted link address, a `publish`'s placed count and
+//! base extent — AUTH-6.36, the design record's D25 and r6-2a) — is recorded
+//! here and nowhere else. The feed's four DERIVED sidecars (`feed/derived.rs`:
 //! the per-document position index, the offset array, the masked-position
 //! bitmap and the per-owner draft streams; PUB-7.19) are projections of this
 //! file and the journal, rebuilt from them on loss; the fifth file beside
@@ -123,8 +123,11 @@ pub(super) fn wall_clock_millis() -> u64 {
 /// records and the wire never carries: the daemon's own assertion at commit
 /// of WHY the row's `key` is absent (D12; AUTH-6.15: "a signed entry has one
 /// authority for its hand, its own signature, and the daemon asserts no
-/// second beside it"). Two spellings, `"marker"` and `"record"`, and the
-/// absence of the field on every unsigned line.
+/// second beside it"). Two spellings in the file, `"marker"` and `"record"` —
+/// the design record's own tokens (e-N2), carried by every signed line on
+/// disk, so a variant's name never moves them: a token this parser stopped
+/// spelling would leave each line carrying it torn at open — and, on every
+/// unsigned line, the field's absence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Carrier {
     /// The entry's marker slot is filled — the value the plain sequence's
@@ -132,14 +135,16 @@ pub(super) enum Carrier {
     /// A row recorded so whose slot the store cannot answer renders
     /// `attest: null`, LOST.
     Marker,
-    /// The entry's signature is its record's own `sig` member (a credential
-    /// record deposit, D26): at the atom's `insert` the record CARRIES one,
-    /// verified at its `make_link` one position later under the set that
-    /// opens its home (the record grade, 2a) — or refused there, the atom
-    /// then an orphan no link names, the reader's UNDETERMINABLE HERE; at
-    /// the `make_link` the `sig` VERIFIED. Neither row carries `attest`: the
-    /// two carriers are one signature at the record grade.
-    Record,
+    /// The entry's signature is its CREDENTIAL record's own `sig` member (a
+    /// credential record deposit, D26) — never this file's record, which
+    /// holds no signature: at the atom's `insert` the credential record
+    /// CARRIES one, verified at its `make_link` one position later under the
+    /// set that opens its home (the record grade, 2a) — or refused there, the
+    /// atom then an orphan no link names, the reader's UNDETERMINABLE HERE;
+    /// at the `make_link` the `sig` VERIFIED. Neither row carries `attest`:
+    /// the credential record's `sig` is the deposit's one carrier, covering
+    /// both positions (D26, D27; e-Q2).
+    RecordSig,
 }
 
 impl Carrier {
@@ -147,14 +152,14 @@ impl Carrier {
     fn token(self) -> &'static str {
         match self {
             Carrier::Marker => "marker",
-            Carrier::Record => "record",
+            Carrier::RecordSig => "record",
         }
     }
 
     fn of_token(token: &str) -> Option<Carrier> {
         match token {
             "marker" => Some(Carrier::Marker),
-            "record" => Some(Carrier::Record),
+            "record" => Some(Carrier::RecordSig),
             _ => None,
         }
     }
@@ -177,8 +182,8 @@ pub(super) enum OpTerms {
     /// 2^53 − 1 at the parse, the wire's exactly-representable range.
     Delegate { new_prefix: String, new_id: u64 },
     /// `make_link`: the minted link's address, the `ack_addr` the op answers.
-    /// For a replacing grant this is THE RECORD's address; its `replaces`
-    /// link sits at the next address, read by adjacency.
+    /// For a replacing grant this is THE GRANT RECORD's address; its
+    /// `replaces` link sits at the next address, read by adjacency.
     MakeLink { link: String },
     /// `publish`: D25's two client terms exactly as `doc_metadata` serves
     /// them for the minted member — the count the client placed, and the
@@ -283,9 +288,10 @@ impl CommitMeta {
     /// * `attest` (the design record §7.3 (i)): the marker slot as the store
     ///   holds it, `{"alg", "sig"}`, on any row the store answers; `null` —
     ///   LOST — where the line records the marker filled and the store cannot
-    ///   answer; ABSENT on every other row: an unsigned entry, a record
-    ///   deposit's two rows (the deposit's slot is empty; its signature is
-    ///   the record's own `sig`), the ceremony's rows, the head writer's.
+    ///   answer; ABSENT on every other row: an unsigned entry, a credential
+    ///   record deposit's two rows (the deposit's slot is empty; its signature
+    ///   is the credential record's own `sig`), the ceremony's rows, the head
+    ///   writer's.
     ///   Absence on the origin's own feed is A6's verdict, so a store line
     ///   is served wherever one is held and never dropped.
     /// * the op's terms ([`OpTerms::members`], the file line's spelling too):
@@ -319,7 +325,7 @@ impl CommitMeta {
         match (attest, carrier) {
             (Some(a), _) => pairs.push(("attest", j_attest(a))),
             (None, Some(Carrier::Marker)) => pairs.push(("attest", Value::Null)),
-            (None, Some(Carrier::Record) | None) => {}
+            (None, Some(Carrier::RecordSig) | None) => {}
         }
         obj(pairs)
     }

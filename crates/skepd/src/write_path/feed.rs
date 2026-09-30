@@ -60,16 +60,16 @@
 //! A principal's page is the K-way merge, deduplicated by position, of: the
 //! published walk; its OWN account's, its ANCESTOR accounts' and its
 //! DESCENDANT owner accounts' streams (the subtree clause runs both ways,
-//! PUB-1.32 as amended — own and ancestors by key, the owner accounts
-//! beneath it as one key range of `streams` under its account, the term
-//! that is the price of the ancestor read, PUB-7.24; a node-tier principal
-//! opens neither); its grant-selected ISSUER streams, each
-//! under a per-entry containment test against the union of that issuer's
-//! covered prefixes for this principal (an account-depth grant is the
-//! stream whole); and the UNIVERSAL term, derived at serve — the position
-//! index's lists under each live any-principal prefix, enumerated once per
-//! request off the same head snapshot as the rest of the class. The CLASS
-//! is `server.rs`'s to resolve, off ONE head snapshot per request
+//! PUB-1.32 as amended — its own and ancestor accounts, the subtrees that
+//! enclose it, by key; the owner accounts beneath it as one key range of
+//! `streams` under its account — PUB-7.24's SUBTREE TERM, the price of the
+//! ancestor read; a node-tier principal opens neither); its grant-selected
+//! ISSUER streams, each under a per-entry containment test against the union
+//! of that issuer's covered prefixes for this principal (an account-depth
+//! grant is the stream whole); and the UNIVERSAL term, derived at serve — the
+//! position index's lists under each live any-principal prefix, enumerated
+//! once per request off the same head snapshot as the rest of the class. The
+//! CLASS is `server.rs`'s to resolve, off ONE head snapshot per request
 //! (PUB-6.40), and arrives here as [`FeedClass`]; this module resolves
 //! nothing itself. Guests never merge the universal term (PUB-5.109).
 //!
@@ -108,7 +108,7 @@ use skep_namespace::{HasM3, PrincipalId};
 
 use self::attest::AttestStore;
 use self::derived::{
-    DerivedFile, INDEX_DOCS, INDEX_FILE, MASKED_FILE, OFFSETS_FILE, OFFSETS_OFFSET, STREAMS_FILE,
+    LineFile, INDEX_DOCS, INDEX_FILE, MASKED_FILE, OFFSETS_FILE, OFFSETS_OFFSET, STREAMS_FILE,
     STREAMS_OWNERS,
 };
 use super::sidecar::{report_malformed_names, Carrier, CommitMeta, CommitsLog, LineOffset, OpTerms};
@@ -159,20 +159,24 @@ pub(crate) struct FeedClass<'a> {
     /// mask refused all of them, which fails into an emptier page with
     /// nothing to report it.
     reader: ReaderClass<'a>,
-    /// The requester's own account and its ancestor accounts (the subtree
-    /// clause's first compare — the requester at or beneath the owner,
-    /// PUB-1.32, PUB-7.24) — each a draft-stream key. Empty for the guest and
-    /// for a node-tier principal.
-    subtree: Vec<Address>,
+    /// The requester's ENCLOSING SUBTREES — its own account and its ancestor
+    /// accounts, every account whose subtree holds the requester: the subtree
+    /// clause's first compare (the requester at or beneath the owner,
+    /// PUB-1.32) and PUB-7.24's "its own account's, its ancestor accounts'"
+    /// streams, each a draft-stream key, O(depth). Empty for the guest and for
+    /// a node-tier principal. NOT PUB-7.24's SUBTREE TERM, which is the
+    /// requester's own subtree beneath it — the descendants',
+    /// [`FeedClass::descendants_under`].
+    enclosing_subtrees: Vec<Address>,
     /// The requester's own ACCOUNT, as the prefix its DESCENDANT OWNER
     /// ACCOUNTS' streams lie under (the subtree clause's second compare — the
-    /// requester at or above the owner, PUB-1.32 as amended; the descendant
-    /// term of PUB-7.24 as RES-220 pins it). A PREFIX and never a key list,
-    /// as the universal term's are: the streams are keyed per owner account
-    /// in tumbler order, so every owner account beneath this one is ONE
-    /// contiguous key range, which [`streams_beneath`] enumerates at serve —
-    /// O(descendant owner accounts), and an account beneath it that owns no
-    /// draft stream costs nothing.
+    /// requester at or above the owner, PUB-1.32 as amended; PUB-7.24's
+    /// SUBTREE TERM, the price of the ancestor read, as RES-220 names it). A
+    /// PREFIX and never a key list, as the universal term's are: the streams
+    /// are keyed per owner account in tumbler order, so every owner account
+    /// beneath this one is ONE contiguous key range, which [`streams_beneath`]
+    /// enumerates at serve — O(descendant owner accounts), and an account
+    /// beneath it that owns no draft stream costs nothing.
     ///
     /// `None` for the guest and for a NODE-TIER principal, and the second is
     /// the read predicate's principal-0 exclusion, kept here as its twin:
@@ -210,7 +214,7 @@ impl<'a> FeedClass<'a> {
         // The seat the mask resolves, handed out: the stream keys below and
         // the mask stand on one lookup in M3's principal registry.
         let account = reader.seat().cloned();
-        let subtree: Vec<Address> = std::iter::successors(account.clone(), parent)
+        let enclosing_subtrees: Vec<Address> = std::iter::successors(account.clone(), parent)
             .filter(|a| world.m3().is_registered_account(a))
             .collect();
         // The grants BORROW the world rather than the account they select on,
@@ -228,7 +232,7 @@ impl<'a> FeedClass<'a> {
         };
         FeedClass {
             reader,
-            subtree,
+            enclosing_subtrees,
             descendants_under,
             issuers,
             universal_prefixes,
@@ -360,10 +364,10 @@ struct Inner {
 /// The four derived sidecars' files — the ones [`Feed::open`]'s compaction
 /// rewrites; the attest store keeps its own.
 struct Files {
-    index: DerivedFile,
-    offsets: DerivedFile,
-    masked: DerivedFile,
-    streams: DerivedFile,
+    index: LineFile,
+    offsets: LineFile,
+    masked: LineFile,
+    streams: LineFile,
 }
 
 impl Feed {
@@ -392,10 +396,10 @@ impl Feed {
         let snap = engine.kernel().snapshot();
         let world = snap.world();
 
-        let (mut f_index, index_entries) = DerivedFile::open(dir, INDEX_FILE, head)?;
-        let (mut f_offsets, offset_entries) = DerivedFile::open(dir, OFFSETS_FILE, head)?;
-        let (mut f_masked, masked_entries) = DerivedFile::open(dir, MASKED_FILE, head)?;
-        let (mut f_streams, stream_entries) = DerivedFile::open(dir, STREAMS_FILE, head)?;
+        let (mut f_index, index_entries) = LineFile::open(dir, INDEX_FILE, head)?;
+        let (mut f_offsets, offset_entries) = LineFile::open(dir, OFFSETS_FILE, head)?;
+        let (mut f_masked, masked_entries) = LineFile::open(dir, MASKED_FILE, head)?;
+        let (mut f_streams, stream_entries) = LineFile::open(dir, STREAMS_FILE, head)?;
 
         // ── the classification map: the index file's entries for positions
         //    the log holds, then this open's walk, then the index's tail ──
@@ -678,7 +682,7 @@ impl Feed {
         let rendered: Vec<String> = docs.iter().map(|a| a.tumbler().to_string()).collect();
         let (carrier, attest) = match signed {
             Some(Signed::Marker(a)) => (Some(Carrier::Marker), Some(a)),
-            Some(Signed::Record) => (Some(Carrier::Record), None),
+            Some(Signed::RecordSig) => (Some(Carrier::RecordSig), None),
             None => (None, None),
         };
         let Some(offset) = inner.log.record(serial, at, op, rendered, testimony, carrier, terms)
@@ -862,15 +866,16 @@ impl Inner {
         if !query.drafts_only {
             sources.push(Box::new(self.published.range(start..).copied()));
         }
-        for account in &class.subtree {
+        for account in &class.enclosing_subtrees {
             if let Some(stream) = self.streams.get(account) {
                 sources.push(Box::new(at_or_above(stream, start)));
             }
         }
-        // The DESCENDANT OWNER ACCOUNTS term (PUB-7.24 as RES-220 pins it):
-        // the subtree clause runs both ways, so a parent's page carries the
-        // draft positions of every owner account beneath its own — which the
-        // masked bitmap keeps off the published walk and no key above opens.
+        // PUB-7.24's SUBTREE TERM, the DESCENDANT OWNER ACCOUNTS' streams
+        // (RES-220): the subtree clause runs both ways, so a parent's page
+        // carries the draft positions of every owner account beneath its own —
+        // which the masked bitmap keeps off the published walk and no key above
+        // opens.
         if let Some(account) = &class.descendants_under {
             for (_owner, stream) in streams_beneath(&self.streams, account) {
                 sources.push(Box::new(at_or_above(stream, start)));
@@ -999,19 +1004,20 @@ fn at_or_above(positions: &[u64], start: u64) -> impl Iterator<Item = u64> + '_ 
     positions[i..].iter().copied()
 }
 
-/// The draft streams of the owner accounts STRICTLY beneath `account` — the
-/// DESCENDANT OWNER ACCOUNTS term of a principal's supplement (PUB-7.24 as
-/// RES-220 pins it). [`Inner::streams`] is keyed by owner account in tumbler
-/// order, so the owner accounts under a prefix are one CONTIGUOUS key range
-/// under M1's ordering — the fact [`Inner::under_prefix`] spells for the
-/// position index — and the enumeration is a `range` opened past `account`
-/// and cut at the first key it does not contain. Never a walk of the map, and
-/// never a walk of M3's accounts: it costs the owner accounts beneath
-/// `account` that HOLD a stream, which is the pinned term exactly, and an
-/// account beneath it that owns no draft is not in the map to be counted.
+/// The draft streams of the owner accounts STRICTLY beneath `account` —
+/// PUB-7.24's SUBTREE TERM of a principal's supplement, its DESCENDANT OWNER
+/// ACCOUNTS (RES-220 names it). [`Inner::streams`] is keyed by owner account
+/// in tumbler order, so the owner accounts under a prefix are one CONTIGUOUS
+/// key range under M1's ordering — the fact [`Inner::under_prefix`] spells for
+/// the position index — and the enumeration is a `range` opened past
+/// `account` and cut at the first key it does not contain. Never a walk of
+/// the map, and never a walk of M3's accounts: it costs the owner accounts
+/// beneath `account` that HOLD a stream, which is the subtree term exactly,
+/// and an account beneath it that owns no draft is not in the map to be
+/// counted.
 ///
-/// `account`'s own stream is excluded: [`FeedClass::subtree`] keys it, and the
-/// range opens past it so that no stream is merged twice.
+/// `account`'s own stream is excluded: [`FeedClass::enclosing_subtrees`] keys
+/// it, and the range opens past it so that no stream is merged twice.
 ///
 /// A CANDIDATE source like the rest, and never the answer: a key this range
 /// admits that is no descendant account — reachable only off a

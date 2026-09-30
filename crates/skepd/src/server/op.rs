@@ -260,12 +260,13 @@ impl Daemon {
         };
         // THE ENTRY'S SIGNEDNESS, for the change feed's row (D12): the marker
         // the admission filled — the admitted value itself, which the attest
-        // store appends beside `commits.log` at the record — or, at a record
-        // deposit's atom, the record's own `sig`; nothing for an unsigned
-        // entry, whose row serves its `key`.
+        // store appends beside `commits.log` when the write path records the
+        // commit — or, at a credential record deposit's atom, the credential
+        // record's own `sig`; nothing for an unsigned entry, whose row serves
+        // its `key`.
         let signed = match &admitted {
             Some(a) => Some(Signed::Marker(a.clone())),
-            None => record_deposit_carries_sig(&identity, &frame.op).then_some(Signed::Record),
+            None => record_deposit_carries_sig(&identity, &frame.op).then_some(Signed::RecordSig),
         };
         frame.attest = admitted;
         let resp =
@@ -382,11 +383,11 @@ impl Daemon {
         // the check tells D26's case by ROUTE — a credential-typed link write
         // never reaches the plain sequence's producers at all. What the row
         // records instead (D12) is the precheck's own answer: the record's
-        // `sig` VERIFIED — the entry signed by its record, its `key` absent —
-        // or unjudged at or below the claim, the ceremony's rows serving
-        // their `key`.
+        // `sig` VERIFIED — the entry signed by its credential record's `sig`,
+        // its `key` absent — or unjudged at or below the claim, the
+        // ceremony's rows serving their `key`.
         let signed = match record_sig {
-            RecordSig::Verified => Some(Signed::Record),
+            RecordSig::Verified => Some(Signed::RecordSig),
             RecordSig::Unjudged => None,
         };
         let req_id = frame.id.clone();

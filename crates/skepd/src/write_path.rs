@@ -436,9 +436,9 @@ impl WritePath {
 /// HOW a write's entry is SIGNED, as the sequence that admitted it knows
 /// (signed ops; D12): the daemon's own assertion, recorded at commit, of
 /// why the row's `key` is absent — and, for the marker, the value itself,
-/// which the attest store appends beside `commits.log` in the same record.
-/// `None` is an unsigned entry, whose row serves `key`. Reaches the feed by
-/// the one door [`FrameMeta::attributed`] guards.
+/// which the attest store appends in the same `record` call that appends
+/// `commits.log`. `None` is an unsigned entry, whose row serves `key`.
+/// Reaches the feed by the one door [`FrameMeta::attributed`] guards.
 #[derive(Debug)]
 pub(crate) enum Signed {
     /// The marker slot is filled with this — the attestation the plain
@@ -446,13 +446,13 @@ pub(crate) enum Signed {
     /// (`transact_attested`); the store mirrors it, the wire renders it as
     /// the row's `attest`.
     Marker(Attestation),
-    /// The entry's signature is its record's own `sig` member (a credential
-    /// record deposit, D26; "the two carriers are one signature at the
-    /// record grade"): at the atom's `insert` the record CARRIES a `sig`,
-    /// verified one position later at its `make_link` under the set that
-    /// opens its home (lane D's `record_grade_check`); at that `make_link`
-    /// the `sig` VERIFIED. Neither row carries `attest`.
-    Record,
+    /// The entry's signature is its CREDENTIAL record's own `sig` member (a
+    /// credential record deposit, D26 — the record's `sig` covers both
+    /// positions, e-Q2): at the atom's `insert` the credential record CARRIES
+    /// a `sig`, verified one position later at its `make_link` under the set
+    /// that opens its home (lane D's `record_grade_check`); at that
+    /// `make_link` the `sig` VERIFIED. Neither row carries `attest`.
+    RecordSig,
 }
 
 /// What the change feed will say about one write as far as the FRAME can
@@ -480,8 +480,8 @@ impl FrameMeta {
     /// establishing key's fingerprint, or `"bare"`), or the head writer's own
     /// ([`head::SYSTEM_TESTIMONY`]), which commits with no session at all —
     /// and to its SIGNATURE where it has one ([`Signed`]): the marker the
-    /// plain sequence admitted, or the record's own `sig`; `None` for an
-    /// unsigned entry, the head writer's own included.
+    /// plain sequence admitted, or the credential record's own `sig`; `None`
+    /// for an unsigned entry, the head writer's own included.
     pub fn attributed(self, testimony: String, signed: Option<Signed>) -> WriteMeta {
         WriteMeta { kind: self.kind, docs: self.docs, testimony, signed, terms: self.terms }
     }
@@ -552,8 +552,9 @@ enum RowTerms {
     /// `delegate`'s pair: the principal it seats, from the REQUEST; the
     /// minted account address, from its `AckAddr`.
     Delegate { new_id: u64 },
-    /// `make_link`'s minted link address, from its `AckAddr` — the RECORD's
-    /// address for a replacing grant; its `replaces` link sits at the next.
+    /// `make_link`'s minted link address, from its `AckAddr` — the GRANT
+    /// RECORD's address for a replacing grant; its `replaces` link sits at the
+    /// next.
     MakeLink,
     /// `publish`'s placed count and base extent — the POST-COMMIT world's
     /// shot terms of the member its `AckAddr` names, the very value

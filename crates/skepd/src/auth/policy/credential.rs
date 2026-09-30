@@ -247,8 +247,9 @@ impl DepositSpans {
 /// the record grade's check ran and VERIFIED the `sig` (the claimed arm's
 /// slot (7)), so the deposit's row testifies its entry signed by its
 /// record and serves no `key` (D12); or whether the record went unjudged
-/// (the pre-claim arm, A5: the ceremony's own records are bare, and so are
-/// their rows). Never the previewed effect (below).
+/// (the pre-claim arm, A5: at or below the claim nothing is signed, so the
+/// ceremony's own record goes unjudged, `sig` or not, and its row serves its
+/// `key`). Never the previewed effect (below).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RecordSig {
     /// The record's `sig` verified at [`record_grade_check`].
@@ -529,8 +530,8 @@ pub(crate) fn precheck(
 /// table hold one record set. A record LIFTED into a stranger's doc 1 fails
 /// at step 6: the frame names THAT home and its account, and the `sig` was
 /// made over another's. At or below the claim nothing runs here (A5): the
-/// ceremony's own records are bare, and this function is reached only from
-/// the claimed arm.
+/// ceremony's own records go unjudged, `sig` or not, and this function is
+/// reached only from the claimed arm.
 ///
 /// `world` and `identity` MUST be the pair taken under the write guard for
 /// this request, as `precheck`'s are; `dep` the deposit slot (3) classified

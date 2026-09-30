@@ -943,14 +943,21 @@ where
             //    the ownership ruling, 2026-08-16; the value-keyed gates at
             //    the session principal's VISIBILITY class — lane 3.3b, the
             //    writer built per write over `visible_to`) ──
-            Op::MakeLink { home, from, to, ty } => {
+            Op::MakeLink { home, from, to, ty, replaces } => {
                 // M7 handles both slot forms INSIDE its transact: Resolve
-                // V-specs off the txn base, Addrs deposited verbatim.
-                let (addr, at) = self
-                    .stores
-                    .linkstore_attested(&visibility, attest)
-                    .makelink(wc.caller(), &home, from, to, ty)
-                    .map_err(|e| self.lower_write(kind, e))?;
+                // V-specs off the txn base, Addrs deposited verbatim. The
+                // `replaces` member (PUB-5.15) picks the composite: absent,
+                // the record alone; present, the record and its `replaces`
+                // link in ONE transaction under the one attestation. The ack
+                // is the RECORD's address either way.
+                let writer = self.stores.linkstore_attested(&visibility, attest);
+                let (addr, at) = match replaces {
+                    None => writer.makelink(wc.caller(), &home, from, to, ty),
+                    Some(named) => {
+                        writer.makelink_replacing(wc.caller(), &home, from, to, ty, &named)
+                    }
+                }
+                .map_err(|e| self.lower_write(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             // Idempotent zero-step ops need no special case (§3): a dedup hit

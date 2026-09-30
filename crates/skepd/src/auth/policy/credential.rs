@@ -2,7 +2,10 @@
 //! lock-free and ahead of the credential write lock ([`op_shape_refusal`]),
 //! and the precheck's slots (3)–(8) under it ([`precheck`]), with the caps
 //! slot (5) applies and the address tests slot (6) and the claim's own
-//! admission read.
+//! admission read. Beside slots (1)–(2), the other refusal a write's OWN
+//! type slot decides: the `replaces` class's fence ([`replaces_refusal`]),
+//! which the PLAIN sequence asks, a `replaces`-typed write never being a
+//! credential deposit.
 
 use skep_address::{checked_inc, ordinal, parent, Address, Nat, Span};
 use skep_febe::Op;
@@ -10,13 +13,13 @@ use skep_identity::{
     Effect, Enrolled, Fingerprint, IdentityState, LinkDeposit, Verdict,
     ALG_FNDSA512_PREVIEW_ED25519,
 };
-use skep_links::SlotArg;
-use skep_namespace::HasM3;
+use skep_links::{enc, is_replaces_class, Endset, SlotArg};
+use skep_namespace::{HasM3, PrincipalId};
 
 use super::{addr_spans, CredentialRefusal};
 use crate::auth::fold::{identity_types, WorldCtx};
 use crate::auth::session::{keyed_above, Scope};
-use crate::auth::LockWrite;
+use crate::auth::{LockRead, LockWrite};
 use crate::World;
 
 /// The enrolled-set cap (RES-57, AUTH-3.57): daemon POLICY — a
@@ -96,6 +99,65 @@ pub(crate) fn op_shape_refusal(op: &Op) -> Option<CredentialRefusal> {
         Op::EditLink { .. } => Some(CredentialRefusal::ResolvedFrom),
         _ => None,
     }
+}
+
+// ── replaces_refusal — the `replaces` class's sole-writer fence (PUB-5.15) ──
+
+/// THE `replaces` TYPE HAS ONE WRITER (PUB-5.15; RES-309, its code RES-310's):
+/// `Some(ReplacesNotStandalone)` iff `op` is a link write whose OWN type slot
+/// lands in the `replaces` class — a `make_link`'s `ty`, an `emit`'s, an
+/// `edit_link` successor's — and `principal` owns every home it would
+/// deposit into. The class's one writer is the `make_link` that carries the
+/// `replaces` MEMBER, which mints the link beside its record in the record's
+/// own transaction; a link of the class deposited by itself would sit where
+/// the grant fold reads a record's pair and name a state for a record whose
+/// signed bytes named none. The class test is M7's own,
+/// [`skep_links::is_replaces_class`], asked of the slot the store would
+/// deposit — `enc(addrs)` for the address form, and nothing for a `Resolve`
+/// slot, which resolves to content and never names the class — so this
+/// refusal and the store's own fence fall on the same slots, and the wire
+/// answers with the ruled code where the store would have answered
+/// `dc_violation`.
+///
+/// ITS PLACE IN THE WRITE ORDER (PUB-5.15: its "place in the write path's
+/// order" is OWED AT THE BUILD): in the plain path's admission, after the
+/// mint class — which reads no link write, so the two are disjoint — and
+/// AHEAD of the board-state pair: the pre-claim gate, the publish-class gate
+/// and the write-path check behind it. So the home's owner is told the act
+/// is never admitted before being asked to claim, to sign, or to attach an
+/// attestation it could only spend on a refusal. And AFTER the destination's
+/// registration and ω, as PUB-6.36 puts the destination's `not_owner` first
+/// everywhere: a caller who does not own every home the write names — an
+/// `edit_link` names two — answers `None` here and meets `execute`'s own
+/// `home_not_registered` or `not_owner`, M7's home gate running ahead of its
+/// own fence exactly so. What the refusal discloses is the op's own shape,
+/// to the one caller whose write it is.
+///
+/// `world` MUST be the snapshot taken under the read guard for this request;
+/// the guard argument is that contract's cheap half.
+pub(super) fn replaces_refusal(
+    _lock: &LockRead<'_>,
+    world: &World,
+    op: &Op,
+    principal: PrincipalId,
+) -> Option<CredentialRefusal> {
+    let address_form = |slot: &SlotArg| match slot {
+        SlotArg::Addrs(addrs) => Some(enc(addrs.iter())),
+        SlotArg::Resolve(_) => None,
+    };
+    let (ty, homes): (Endset, Vec<&Address>) = match op {
+        Op::MakeLink { home, ty, .. } => (address_form(ty)?, vec![home]),
+        Op::Emit { home, ty, .. } => (ty.clone(), vec![home]),
+        Op::EditLink { successor, d_s, d_a, .. } => (address_form(&successor.ty)?, vec![d_s, d_a]),
+        _ => return None,
+    };
+    if !is_replaces_class(&ty) {
+        return None;
+    }
+    let m3 = world.m3();
+    let owned =
+        |home: &&Address| m3.is_registered_document(home) && m3.is_effective_owner(principal, home);
+    homes.iter().all(owned).then_some(CredentialRefusal::ReplacesNotStandalone)
 }
 
 // ── claim_residue_refusal — the claim's own admission (PUB-6.63; RES-24) ──
@@ -204,7 +266,7 @@ impl DepositSpans {
     /// — the one op that reaches deposit construction (`Emit` dies at slot
     /// (1), `EditLink` at slot (2), a `Nullify` is `nullify_refusal`'s).
     pub fn of(op: &Op) -> Option<DepositSpans> {
-        let Op::MakeLink { home, from, to, ty } = op else { return None };
+        let Op::MakeLink { home, from, to, ty, .. } = op else { return None };
         let slot = |s: &SlotArg| -> Option<Vec<Span>> {
             match s {
                 SlotArg::Addrs(a) => Some(addr_spans(a)),

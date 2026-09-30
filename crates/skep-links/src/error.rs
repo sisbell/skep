@@ -11,10 +11,10 @@
 //!   gate, each dedup short-circuit, and each op's own residence and
 //!   well-formedness checks — so an unregistered or unowned home is refused
 //!   on hit AND miss, whatever else the input violates (Conflicts §8);
-//! * [`EmitError::NonAddressDenotingType`], [`EmitError::SupersessionClass`]
-//!   and [`EmitError::SlotTooLarge`] are pre-transact — in that firing order
-//!   — so all three outrank every in-transaction verdict including the home/ω
-//!   pair;
+//! * [`EmitError::NonAddressDenotingType`], [`EmitError::SupersessionClass`],
+//!   [`EmitError::ReplacesClass`] and [`EmitError::SlotTooLarge`] are
+//!   pre-transact — in that firing order — so all four outrank every
+//!   in-transaction verdict including the home/ω pair;
 //! * [`RetractStaleError::NotBh4`] is likewise pre-transact, ahead of the
 //!   constituent nullifies' own rejections.
 
@@ -73,6 +73,17 @@ pub enum MakeLinkError {
     /// establish the Df-DISC(ii) schema (resident endpoints, single denoted
     /// addresses, irreflexivity) the walk family reads back as fact.
     SupersessionClass,
+    /// The resolved type slot lands in the `replaces` class
+    /// ([`crate::replaces_type`]; PUB-5.15, RES-309/310) — the authority
+    /// successor, whose ONE writer is
+    /// [`crate::LinkWriter::makelink_replacing`], minting it in its record's
+    /// own transaction. The grant fold reads a record's `replaces` as the link
+    /// deposited at the record's own next address, so a `replaces` link put
+    /// there by any other act would name a state for a record whose signed
+    /// bytes named none — the sole-writer fence the `[K_sup]` one above
+    /// states for its class. Refused whether or not the op carries a member:
+    /// a record of this class is itself a `replaces` link.
+    ReplacesClass,
     /// M3's mint failed structurally.
     Mint(MintError),
     /// M5's seat step refused (CL-OWN/CL-UNIQ) — unreachable for a freshly
@@ -84,6 +95,8 @@ pub enum MakeLinkError {
 /// `[K_sup]` write fence (Conflicts §10) — the exact parallel of the `[R]`
 /// fence, making `assert_sup`/`editlink` the sole `[K_sup]`-writers so every
 /// stored claim is schema-conformant, which the walk family leans on.
+/// `ReplacesClass` is the `replaces` class's fence, making
+/// [`crate::LinkWriter::makelink_replacing`] that class's sole writer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmitError {
     /// `home` is not a registered Document (P0; enforced on hit AND miss —
@@ -105,6 +118,13 @@ pub enum EmitError {
     /// `ty ~ [K_sup]` — supersession writes only through
     /// `assert_sup`/`editlink` (Conflicts §10). Pre-transact.
     SupersessionClass,
+    /// `ty ~ replaces` — the authority successor writes only through
+    /// [`crate::LinkWriter::makelink_replacing`] (PUB-5.15, RES-309/310).
+    /// Pre-transact, and independent of the registry: the class is a commons
+    /// VALUE no registration holds, so the Managed gate's `NotRegistered`
+    /// would refuse it today — the fence is what keeps refusing it once a
+    /// registration could name it.
+    ReplacesClass,
     /// `ty` is not address-denoting — rejected before any class computation
     /// (§Core data model totality). Pre-transact.
     NonAddressDenotingType,
@@ -186,9 +206,10 @@ pub enum EditLinkError {
     /// the DC guard, which reads the type slot, and for the hint fold's
     /// dedup key, which reads all three).
     IllFormedSuccessor,
-    /// DC: the successor is retraction-typed, or `[K_sup]`-typed without the
-    /// Df-DISC(ii) schema (unit-depth single-addr F/G, resident endpoints,
-    /// irreflexive).
+    /// DC: the successor is retraction-typed, `replaces`-typed (that class's
+    /// one writer being [`crate::LinkWriter::makelink_replacing`] — PUB-5.15,
+    /// RES-309), or `[K_sup]`-typed without the Df-DISC(ii) schema (unit-depth
+    /// single-addr F/G, resident endpoints, irreflexive).
     DcViolation,
     /// M3's mint failed structurally.
     Mint(MintError),
@@ -261,6 +282,9 @@ impl fmt::Display for MakeLinkError {
             MakeLinkError::SupersessionClass => f.write_str(
                 "makelink: ty ~ [K_sup] — supersession writes only through assert_sup/editlink",
             ),
+            MakeLinkError::ReplacesClass => f.write_str(
+                "makelink: ty ~ replaces — the authority successor writes only through a record's own makelink_replacing",
+            ),
             MakeLinkError::Mint(e) => write!(f, "makelink: mint failed: {e}"),
             MakeLinkError::Seat(e) => write!(f, "makelink: seat refused: {e}"),
         }
@@ -294,6 +318,9 @@ impl fmt::Display for EmitError {
             }
             EmitError::SupersessionClass => f.write_str(
                 "emit: ty ~ [K_sup] — supersession writes only through assert_sup/editlink (Conflicts §10)",
+            ),
+            EmitError::ReplacesClass => f.write_str(
+                "emit: ty ~ replaces — the authority successor writes only through a record's own makelink_replacing",
             ),
             EmitError::NonAddressDenotingType => {
                 f.write_str("emit: ty is not address-denoting (rejected before class computation)")
@@ -390,7 +417,7 @@ impl fmt::Display for EditLinkError {
                 "editlink: successor arity ≠ 3, empty type slot, or a non-level-uniform span in some slot (Conflicts §11)",
             ),
             EditLinkError::DcViolation => f.write_str(
-                "editlink: DC — retraction-typed successor, or schema-non-conforming [K_sup]-typed successor",
+                "editlink: DC — retraction- or replaces-typed successor, or schema-non-conforming [K_sup]-typed successor",
             ),
             EditLinkError::Mint(e) => write!(f, "editlink: mint failed: {e}"),
         }

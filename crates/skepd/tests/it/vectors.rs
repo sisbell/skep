@@ -192,6 +192,70 @@ fn m2_6_the_write_side_order_pair_by_pair() {
     sd.shutdown();
 }
 
+/// 2.6 — THE `replaces` FENCE's PLACE (PUB-5.15: its place in the write
+/// path's order "OWED AT THE BUILD"; RES-309, RES-310): the one type a bare
+/// link write may not carry is refused `replaces_not_standalone` to the
+/// home's OWNER — AFTER the destination's `not_owner` (slot 1), so a
+/// stranger's bare write typed `replaces` into the owner's doc 1 is told
+/// `not_owner` and nothing about the type; and AHEAD of the board-state gate
+/// (slot 4) and the write-path check behind it, so the owner is never asked
+/// to sign, or to attach an `attest`, for a write that can never land — bare,
+/// signed with an `attest`, and signed without one, the same token, in its
+/// published doc 1 and in a draft alike. The class's two other open writes,
+/// an `emit` of it and an `edit_link` successor typed it, answer the same.
+/// PERMANENT. And the class's one writer is admitted: a grant carrying the
+/// member deposits it.
+#[test]
+fn m2_6_the_replaces_fence_stands_behind_the_destination_s_owner_and_ahead_of_the_gate() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let (sg, br) = (signed.as_str(), bare.as_str());
+    let d = owner_draft(port, br);
+    let pub_l = ghost_link(port, sg, CLAIMANT_DOC1, 1);
+    let s = seat_stranger(port, 971);
+    let fence = "credential_refused:replaces_not_standalone";
+    let standalone = |home: &str| typed_link_frame(home, &[&pub_l], &[], T_REPLACES);
+    let emitted = format!(
+        r#"{{"op":"emit","home":"{CLAIMANT_DOC1}","ty":{},"from":"{pub_l}","to":[]}}"#,
+        unit_span(T_REPLACES)
+    );
+    let edited =
+        edit_link_frame(&pub_l, CLAIMANT_DOC1, CLAIMANT_DOC1, "[]", &addrs_slot(&[T_REPLACES]));
+
+    let cells: Vec<(&str, &str, String, &str)> = vec![
+        ("slot 1 ahead of the fence: a stranger's bare replaces-typed link into the owner's doc 1", s.session.as_str(), standalone(CLAIMANT_DOC1), "not_owner"),
+        ("the fence ahead of slot 4: the bare owner's replaces-typed link into its published doc 1", br, standalone(CLAIMANT_DOC1), fence),
+        ("the fence ahead of the check: the signed owner's, attested", sg, standalone(CLAIMANT_DOC1), fence),
+        ("the fence on a draft home: the owner's replaces-typed link into its draft", br, standalone(&d), fence),
+        ("the fence on emit: the owner's emit typed replaces", sg, emitted, fence),
+        ("the fence on edit_link: the owner's successor typed replaces", sg, edited, fence),
+    ];
+    walk(port, "2.6, the replaces fence's place", &cells);
+    let v = op_unattested(port, Some(sg), &standalone(CLAIMANT_DOC1));
+    assert_eq!(
+        verdict(&v),
+        fence,
+        "the signed owner's, with no attest — never attestation_required: {v}"
+    );
+    assert_eq!(v["disposition"].as_str(), Some("permanent"), "{v}");
+
+    // The one writer: a grant carrying the member, its type the grant's.
+    let grant = deposit_grant(port, sg, CLAIMANT_DOC1, &d, None);
+    let revocation = deposit_grant(port, sg, CLAIMANT_DOC1, &grant, None);
+    let again = deposit_re_share(port, sg, CLAIMANT_DOC1, &d, None, &revocation);
+    let pair = read_link(port, Some(sg), &next_link_address(&again));
+    let start = |slot: usize| pair["slots"][slot][0]["start"].as_str().map(str::to_string);
+    assert_eq!(
+        (start(0), start(1), start(2)),
+        (Some(again.clone()), Some(revocation.clone()), Some(T_REPLACES.to_string())),
+        "the member's link beside the grant: {pair}"
+    );
+    sd.shutdown();
+}
+
 /// 2.6 — slot 5 ahead of slot 6: PUB-6.36 evaluates THE MODEL'S REFUSALS
 /// (the in-place advance refusal, PUB-2.11) in slot 5 and the per-source
 /// consult (PUB-6.23) in slot 6, so a `copy` from a source the caller may

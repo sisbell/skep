@@ -19,7 +19,8 @@
 //!   [`EntryBody`] carries (`each_body_carries_the_wire_name_of_its_op`
 //!   holds it to the codec's own `op_name`);
 //! * `body` — per op cell: the declared type and the values for `insert`,
-//!   the three slots as the client sent them for `make_link`, and for
+//!   the three slots as the client sent them and its `replaces` member —
+//!   absent, or the address it names — for `make_link`, and for
 //!   `publish` THE RUNS THE CLIENT PLACED, their values read off the
 //!   snapshot by M4's `value_at` in run order (the record §2.5; the
 //!   investigation §3.3: the count is Σ width of the supplied runs), within
@@ -53,8 +54,8 @@ use skep_arrangement::{trunk_of, Deposit, Shot};
 use skep_content::HasContent;
 use skep_febe::Op;
 use skep_identity::{
-    entry_body_insert, entry_body_make_link, entry_frame, BoardTerm, EntryBody, EntrySlot,
-    LinkSlots, PublishBody,
+    entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_frame,
+    BoardTerm, EntryBody, EntrySlot, LinkSlots, PublishBody,
 };
 use skep_links::SlotArg;
 use skep_namespace::{HasM3, PrincipalId};
@@ -167,10 +168,17 @@ pub(super) fn compose(
             let values = values.iter().map(|v| v.as_bytes());
             (trunk_of(doc), entry_body_insert(declared, values))
         }
-        Op::MakeLink { home, from, to, ty } => {
+        Op::MakeLink { home, from, to, ty, replaces } => {
             let (from, to, ty) = (Slot::of(from), Slot::of(to), Slot::of(ty));
             let slots = LinkSlots { from: from.as_entry(), to: to.as_entry(), ty: ty.as_entry() };
-            (home.clone(), entry_body_make_link(slots))
+            // The `replaces` member rides the signed body (PUB-5.15): the
+            // EMPTY group where the op carries none, else the state named —
+            // so a copy of the request carries the one state its signer named.
+            let body = match replaces {
+                None => entry_body_make_link(slots),
+                Some(named) => entry_body_make_link_replacing(slots, named),
+            };
+            (home.clone(), body)
         }
         Op::Publish { doc, shot } => {
             let trunk = trunk_of(doc);

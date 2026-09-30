@@ -120,9 +120,13 @@ fn the_read_serves_the_live_set_one_row_per_prefix_in_prefix_order() {
         in_prefix_order(vec![r(&d2, &[x]), r(&d1, &[x])]),
         "prefix order, not deposit order"
     );
-    // A repeated grant over d1: the index is a set, so one row and one issuer.
+    // A repeated grant over d1 — the duplicate of a grant that stands, of
+    // neither kind (PUB-5.15 (iv)) — so still one row and one issuer.
     deposit_grant(port, &signed, CLAIMANT_DOC1, &d1, None);
-    assert_eq!(universal_grants(port, Some(&bare)), in_prefix_order(vec![r(&d1, &[x]), r(&d2, &[x])]));
+    assert_eq!(
+        universal_grants(port, Some(&bare)),
+        in_prefix_order(vec![r(&d1, &[x]), r(&d2, &[x])])
+    );
     // The account rung: X's share over its own account, inside its own space
     // — served unchanged, a row of its own ahead of the documents under it.
     deposit_grant(port, &signed, CLAIMANT_DOC1, x, None);
@@ -382,9 +386,11 @@ fn an_unallocated_sub_prefix_is_served_until_it_is_delegated() {
 /// revoking record (`from` the grant's own address). On `/op-at`: before the
 /// grant, empty; at the grant's position and up to the revocation, present;
 /// from the revocation on, gone — `as_of` the position asked every time, and
-/// the guest empty at every position. A re-grant is a fresh row, and a blind
-/// retry of the revoke — a record naming the withdrawn grant again — is of
-/// neither kind and moves nothing (PUB-5.15).
+/// the guest empty at every position. A bare re-grant — the share's request
+/// again, naming the EMPTY state over a key that has stood — is of neither
+/// kind and serves no row (PUB-5.15 (iv)); a RE-SHARE naming the revocation
+/// is a fresh row; and a blind retry of the revoke — a record naming the
+/// withdrawn grant again — is of neither kind and moves nothing (PUB-5.15).
 #[test]
 fn a_withdrawn_grants_row_is_gone_at_the_next_read_and_stands_on_op_at_before_it() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -400,9 +406,12 @@ fn a_withdrawn_grants_row_is_gone_at_the_next_read_and_stands_on_op_at_before_it
     let before = head_position(port);
     let (grant, at_grant) = grant_at(port, &signed, CLAIMANT_DOC1, &draft);
     assert_eq!(universal_grants(port, Some(&bare)), row, "present at the next read");
-    let (_, at_revoke) = grant_at(port, &signed, CLAIMANT_DOC1, &grant);
+    let (revocation, at_revoke) = grant_at(port, &signed, CLAIMANT_DOC1, &grant);
     assert!(before < at_grant && at_grant < at_revoke);
-    assert!(universal_grants(port, Some(&bare)).is_empty(), "gone at the read after the revocation");
+    assert!(
+        universal_grants(port, Some(&bare)).is_empty(),
+        "gone at the read after the revocation"
+    );
 
     // Every position probed is one a response handed out: `before` (the
     // head before the grant), the two acks' own `at`, and the head.
@@ -420,10 +429,14 @@ fn a_withdrawn_grants_row_is_gone_at_the_next_read_and_stands_on_op_at_before_it
         assert_eq!(v["as_of"].as_u64(), Some(position), "{v}");
     }
 
-    // A re-grant is a fresh row; a blind retry of the revoke names a withdrawn
-    // grant — of neither kind, entering no index and lifting nothing.
+    // A bare re-grant replays the withdrawn share and serves nothing; a
+    // re-share naming the revocation is a fresh row; a blind retry of the
+    // revoke names a withdrawn grant — of neither kind, entering no index and
+    // lifting nothing.
     grant_at(port, &signed, CLAIMANT_DOC1, &draft);
-    assert_eq!(universal_grants(port, Some(&bare)), row, "re-granted");
+    assert!(universal_grants(port, Some(&bare)).is_empty(), "a bare re-grant is of neither kind");
+    deposit_re_share(port, &signed, CLAIMANT_DOC1, &draft, None, &revocation);
+    assert_eq!(universal_grants(port, Some(&bare)), row, "re-shared");
     grant_at(port, &signed, CLAIMANT_DOC1, &grant);
     assert_eq!(universal_grants(port, Some(&bare)), row, "the retry of the revoke moves nothing");
 

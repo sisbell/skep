@@ -22,8 +22,9 @@ use ed25519_dalek::{Signer, SigningKey};
 use serde_json::{json, Value};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_identity::{
-    encode_enroll, entry_body_insert, entry_body_make_link, entry_body_publish, entry_frame, framed,
-    BoardTerm, Enrollment, EntrySlot, LinkSlots, PublicKey, SigAlgRow, SESSION_TAG, SESSION_TAG_V2,
+    encode_enroll, entry_body_insert, entry_body_make_link, entry_body_make_link_replacing,
+    entry_body_publish, entry_frame, framed, BoardTerm, Enrollment, EntrySlot, LinkSlots,
+    PublicKey, SigAlgRow, SESSION_TAG, SESSION_TAG_V2,
 };
 use skep_signature::HybridSigner;
 use skepd::{serve, AuthOptions, Daemon, NodePrefix, Origin, Skepd, DEFAULT_WORKERS};
@@ -474,6 +475,71 @@ pub fn hire(
         "hire of {agent_id} ({agent_account}) refused by the fold — an AUTH finding: {v}"
     );
     open_signed_session(port, agent_id, key)
+}
+
+/// `frame` — an address-form `make_link` — carrying its `replaces` member
+/// naming `replaces` (PUB-5.15), signed by `token`'s key over the entry frame
+/// WITH the member (`entry_body_make_link_replacing`) and attached. Composed
+/// here rather than through [`op`]: the suite's signer (`signer.rs`) spells a
+/// `make_link` body without the member, which the daemon — whose composer
+/// reads the member — would refuse as a wrong signature.
+pub fn signed_with_replaces(port: u16, token: &str, frame: &str, replaces: &str) -> String {
+    let mut v: Value = serde_json::from_str(frame).expect("a JSON frame");
+    let (principal, seed) = signer_of(token).expect("a signed session");
+    let board = board_term(port).expect("the board term: H.1");
+    let parse = |s: &str| -> Address {
+        let comps: Vec<Nat> =
+            s.split('.').map(|c| Nat::from(c.parse::<u64>().expect("a component"))).collect();
+        validate(Tumbler::new(comps).expect("nonempty")).expect("T4-valid")
+    };
+    let account = parse(&account_of(port, token, principal).expect("the signer's account"));
+    let names = |slot: &Value| -> Vec<Address> {
+        let slot = slot["addrs"].as_array().expect("an address-form slot");
+        slot.iter().map(|a| parse(a.as_str().expect("an address"))).collect()
+    };
+    let (from, to, ty) = (names(&v["from"]), names(&v["to"]), names(&v["ty"]));
+    let body = entry_body_make_link_replacing(
+        LinkSlots {
+            from: EntrySlot::Addrs(&from),
+            to: EntrySlot::Addrs(&to),
+            ty: EntrySlot::Addrs(&ty),
+        },
+        &parse(replaces),
+    );
+    let home = parse(v["home"].as_str().expect("home"));
+    let alg = SigAlgRow::of_tag(FIXTURE_TAG).expect("the fixtures' tag").token;
+    let bytes = entry_frame(alg, board, &account, &home, &body);
+    let signer = HybridSigner::from_seed(FIXTURE_TAG, &seed).expect("the fixtures' tag");
+    v["replaces"] = json!(replaces);
+    v["attest"] = attest_member(&signer.sign(&bytes));
+    v.to_string()
+}
+
+/// The link address one past `link` in its home — where a `make_link`'s
+/// `replaces` link lands, the two mints consecutive in one transaction.
+pub fn next_link_address(link: &str) -> String {
+    let (head, last) = link.rsplit_once('.').expect("a dotted address");
+    format!("{head}.{}", last.parse::<u64>().expect("an ordinal") + 1)
+}
+
+/// A RE-SHARE — [`deposit_grant`]'s grant carrying its signed `replaces`
+/// member naming `revocation`, the revocation it follows (PUB-5.15 (iv)).
+/// Returns the grant link's address.
+pub fn deposit_re_share(
+    port: u16,
+    signed: &str,
+    home_doc1: &str,
+    content_prefix: &str,
+    grantee: Option<&str>,
+    revocation: &str,
+) -> String {
+    let to: Vec<&str> = grantee.into_iter().collect();
+    let frame = typed_link_frame(home_doc1, &[content_prefix], &to, T_GRANT);
+    acked_addr(&op_unattested(
+        port,
+        Some(signed),
+        &signed_with_replaces(port, signed, &frame, revocation),
+    ))
 }
 
 /// A GRANT link in `home_doc1`, the issuer's published doc 1, from the

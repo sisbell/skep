@@ -123,6 +123,7 @@ fn the_destinations_own_gate_stands_ahead_of_the_consult() {
             from: SlotArg::Addrs(vec![]),
             to: SlotArg::Addrs(vec![]),
             ty: SlotArg::Addrs(vec![ghost_type(&unreadable_doc, 1)]),
+            replaces: None,
         },
     ));
     let (l2, _) = ack_addr(ex(
@@ -133,6 +134,7 @@ fn the_destinations_own_gate_stands_ahead_of_the_consult() {
             from: SlotArg::Addrs(vec![]),
             to: SlotArg::Addrs(vec![]),
             ty: SlotArg::Addrs(vec![ghost_type(&unreadable_doc, 2)]),
+            replaces: None,
         },
     ));
     unreadable.lock().expect("no poisoning").push(unreadable_doc.clone());
@@ -157,6 +159,7 @@ fn the_destinations_own_gate_stands_ahead_of_the_consult() {
                 from: SlotArg::Addrs(vec![]),
                 to: SlotArg::Resolve(vec![vspec(&unreadable_doc, 1, 1)]),
                 ty: SlotArg::Addrs(vec![ghost_type(&unreadable_doc, 3)]),
+                replaces: None,
             },
         ),
         OpKind::MakeLink,
@@ -238,6 +241,7 @@ fn a_resolve_slot_into_an_unreadable_source_is_withheld_and_the_address_form_is_
                 from: SlotArg::Addrs(vec![]),
                 to: SlotArg::Resolve(vec![vspec(&unreadable_doc, 1, 1)]),
                 ty: SlotArg::Addrs(vec![ghost_type(&their_draft, 1)]),
+                replaces: None,
             },
         ),
         OpKind::MakeLink,
@@ -254,6 +258,7 @@ fn a_resolve_slot_into_an_unreadable_source_is_withheld_and_the_address_form_is_
                 from: SlotArg::Addrs(vec![]),
                 to: SlotArg::Resolve(vec![vspec(&their_draft, 1, 1)]),
                 ty: SlotArg::Resolve(vec![vspec(&unreadable_doc, 1, 1)]),
+                replaces: None,
             },
         ),
         OpKind::MakeLink,
@@ -271,9 +276,11 @@ fn a_resolve_slot_into_an_unreadable_source_is_withheld_and_the_address_form_is_
             from: SlotArg::Addrs(vec![]),
             to: SlotArg::Addrs(vec![inside.clone()]),
             ty: SlotArg::Addrs(vec![ghost_type(&their_draft, 1)]),
+            replaces: None,
         },
     ));
-    let value = link_value(ex(&fx.febe, other, Op::ReadLink { a: link })).expect("the stranger's own link");
+    let value =
+        link_value(ex(&fx.febe, other, Op::ReadLink { a: link })).expect("the stranger's own link");
     assert_eq!(value.to_slot().addrs().next(), Some(inside.tumbler()), "the name, verbatim");
 }
 
@@ -301,6 +308,7 @@ fn a_link_homed_in_an_unreadable_document_answers_absence_to_a_write() {
                 from: SlotArg::Addrs(vec![]),
                 to: SlotArg::Addrs(vec![]),
                 ty: SlotArg::Addrs(vec![ghost_type(&unreadable_doc, ordinal)]),
+                replaces: None,
             },
         ))
         .0
@@ -314,6 +322,7 @@ fn a_link_homed_in_an_unreadable_document_answers_absence_to_a_write() {
             from: SlotArg::Addrs(vec![]),
             to: SlotArg::Addrs(vec![]),
             ty: SlotArg::Addrs(vec![ghost_type(&readable_home, 1)]),
+            replaces: None,
         },
     ));
     unreadable.lock().expect("no poisoning").push(unreadable_doc.clone());

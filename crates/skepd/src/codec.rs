@@ -507,6 +507,7 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
             from: fields.slotarg("from")?,
             to: fields.slotarg("to")?,
             ty: fields.slotarg("ty")?,
+            replaces: fields.replaces()?,
         },
         "emit" => Op::Emit {
             home: fields.addr("home")?,
@@ -780,6 +781,23 @@ impl Fields {
             Some(v) => p_addr(&v)
                 .map(Deposit::Declared)
                 .map_err(|e| PErr(format!("field 'deposit': {e}"))),
+        }
+    }
+
+    /// `make_link`'s `replaces` MEMBER (PUB-5.15 (iii), (iv); RES-308): the
+    /// state the record REPLACES, an address string — at the grant, the
+    /// revocation a re-share follows — and ABSENT, the field not sent, is the
+    /// one spelling of the EMPTY state, a first share's. So, as `deposit`,
+    /// this does not go through [`take_opt`](Self::take_opt): an explicit
+    /// `null` would be a member PRESENT with nothing in it, the one shape the
+    /// entry frame's `replaces` row keeps apart from absent — so it is a
+    /// parse fault, never coerced to either. Which address names the key's
+    /// current state is not this parse's to know: any T4-valid address is a
+    /// member, and the grant fold decides what it honors.
+    fn replaces(&mut self) -> PResult<Option<Address>> {
+        match self.0.remove("replaces") {
+            None => Ok(None),
+            Some(v) => p_addr(&v).map(Some).map_err(|e| PErr(format!("field 'replaces': {e}"))),
         }
     }
 

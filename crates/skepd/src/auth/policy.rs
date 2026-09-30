@@ -6,9 +6,12 @@
 //!
 //! - `credential` — the CREDENTIAL sequence's (AUTH-3.37): slots (1)–(2)
 //!   ahead of the credential write lock, the precheck's slots (3)–(8) under
-//!   it;
+//!   it — and, beside slots (1)–(2), the one other refusal a write's OWN
+//!   type slot decides, the `replaces` class's fence, which the plain
+//!   sequence asks;
 //! - `plain` — the PLAIN sequence's admission (AUTH-3.35): the mint class,
-//!   the board-state pair and the nullify class, in their pinned order;
+//!   the `replaces` fence, the board-state pair and the nullify class, in
+//!   their pinned order;
 //! - `attestation` — THE WRITE-PATH CHECK (signed ops), run behind the plain
 //!   sequence's publish-class gate on a claimed board, whose ADMITTED
 //!   attestation is what the write's commit marker carries, and which asks
@@ -178,12 +181,24 @@ pub(crate) enum CredentialRefusal {
     /// The NULLIFY class's AUDIT-VIEW cell (PUB-6.64): a target of a class
     /// whose honored state the spec reads under the AUDIT view — the
     /// succession pair, the consumption marker, the journal designation, the
-    /// rail record, the steward's classification link in a published home —
-    /// ONE code for the class list; the client splits the face by the
-    /// target's type, which the owner can read. Token `nullify_audit_view` —
-    /// the wire's, CONFIRMED by the owner 2026-09-07 (wire.md §Credential
-    /// refusals; the v7.10 changelog entry records the confirmation).
+    /// rail record, the steward's classification link in a published home,
+    /// the `replaces` link a grant is deposited with (PUB-5.15) — ONE code
+    /// for the class list; the client splits the face by the target's type,
+    /// which the owner can read. Token `nullify_audit_view` — the wire's,
+    /// CONFIRMED by the owner 2026-09-07 (wire.md §Credential refusals; the
+    /// v7.10 changelog entry records the confirmation).
     NullifyAuditView,
+    /// THE `replaces` CLASS's SOLE-WRITER FENCE (PUB-5.15; RES-309, its code
+    /// RES-310's, owner-ruled 2026-09-28): a write whose OWN type slot lands
+    /// in the `replaces` class — a bare `make_link`, an `emit`, an
+    /// `edit_link` successor — from its home's owner. The class has one
+    /// writer, the `make_link` that carries the `replaces` MEMBER, minting
+    /// the link in its record's own transaction; a `replaces` link any other
+    /// act deposited would name a state for a record whose signed bytes named
+    /// none. Token `replaces_not_standalone`; PERMANENT, the family's: the
+    /// same act is never admitted. Its FACE is I8 (a)'s (PUB-3.83), owed to
+    /// the UX track and written into no rule.
+    ReplacesNotStandalone,
     /// Slot (6), FIRST of the slot's two tokens (AUTH-3.44; RES-63): any
     /// credential-typed deposit, retirement or claim from a CONTENT-scoped
     /// session (AUTH-4.39) — whatever key opened it, and whether or not the
@@ -234,14 +249,20 @@ pub(crate) enum CredentialRefusal {
 
 /// The causes of `attestation_invalid` — the `<cause>` sub-token, joined as
 /// the payload arm joins `malformed_payload:<sub>` (AUTH-2.55), each with
-/// the disposition class its next act takes: the design record §7.3 (iii)'s
-/// for the four causes it lands, and for the two the entry frame's own
+/// the disposition class its next act takes, re-derived off the wire's own
+/// class definitions (the board's r6-6, owner-ruled 2026-09-29, taking
+/// BW-07's derivation: PERMANENT where reissuing the same request cannot
+/// succeed — `malformed`, `signature`, `not_enrolled_at_position`, the
+/// composer's bound — and REORDER where a later committed state may satisfy
+/// it — `board_unavailable`, `withheld`), the two the entry frame's own
 /// limits add — a value its author may not read, a body past its budget —
-/// the class of the store refusal each stands beside.
+/// standing in the class of the store refusal each stands beside.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AttestFault {
-    /// The blob is not the tag's fixed width (a re-compose: a client bug;
-    /// REORDER).
+    /// The blob is not the tag's fixed width — a member the client composed
+    /// wrong. PERMANENT (r6-6): the same bytes are refused however the board
+    /// moves, and the client's next act is a DIFFERENT request, re-composed,
+    /// never a reissue.
     Malformed,
     /// The board has no `H.1`, so the entry frame's `board` term (D13) has
     /// no value and nothing can be verified — on a claimed board, one of the
@@ -256,7 +277,10 @@ pub(crate) enum AttestFault {
     NotEnrolledAtPosition,
     /// A candidate key exists and none verifies the blob over the entry frame
     /// the daemon composed — wrong bytes, a wrong `board` term, a body
-    /// composed otherwise: the client re-composes (REORDER).
+    /// composed otherwise. PERMANENT (r6-6): no committed state makes those
+    /// bytes verify — the board term is fixed from the claim on — so the
+    /// client's next act is a DIFFERENT request, the frame re-composed and
+    /// re-signed, never a reissue of this one.
     Signature,
     /// A `publish` places a value its author may not READ, and the store
     /// would admit it — the base CARRIES the run (PUB-6.24). No entry frame
@@ -301,6 +325,7 @@ impl CredentialRefusal {
             CredentialRefusal::NullifyNotRetraction => "nullify_not_retraction".into(),
             CredentialRefusal::NullifyNotRevocation => "nullify_not_revocation".into(),
             CredentialRefusal::NullifyAuditView => "nullify_audit_view".into(),
+            CredentialRefusal::ReplacesNotStandalone => "replaces_not_standalone".into(),
             CredentialRefusal::ContentSession => "content_session".into(),
             CredentialRefusal::AnchorSessionRequired => "anchor_session_required".into(),
             CredentialRefusal::ResolvedFrom => "resolved_from".into(),
@@ -319,16 +344,24 @@ impl CredentialRefusal {
 
     /// The wire `disposition`: `Permanent` for the family as AUTH-3.54 pins
     /// it, and the two attestation codes' own classes (signed ops; the
-    /// design record §7.3 (iii)) — `attestation_required` REORDER, and
-    /// `attestation_invalid` PERMANENT at not-enrolled-at-position and at
-    /// frame-too-large, and REORDER at the re-compose causes.
+    /// board's r6-6, off the wire's definitions) — `attestation_required`
+    /// REORDER (ATTACH WHEN IN DOUBT: the same content, signed and attached,
+    /// is the ordinary path), and `attestation_invalid` PERMANENT at every
+    /// cause a reissue cannot cure — `malformed`, `signature`,
+    /// `not_enrolled_at_position`, `frame_too_large` — and REORDER at the two
+    /// a later committed state can: `board_unavailable` and `withheld`.
     pub fn disposition(&self) -> Disposition {
         match self {
             CredentialRefusal::AttestationRequired => Disposition::Reorder,
             CredentialRefusal::AttestationInvalid(
-                AttestFault::NotEnrolledAtPosition | AttestFault::FrameTooLarge,
+                AttestFault::BoardUnavailable | AttestFault::Withheld,
+            ) => Disposition::Reorder,
+            CredentialRefusal::AttestationInvalid(
+                AttestFault::Malformed
+                | AttestFault::Signature
+                | AttestFault::NotEnrolledAtPosition
+                | AttestFault::FrameTooLarge,
             ) => Disposition::Permanent,
-            CredentialRefusal::AttestationInvalid(_) => Disposition::Reorder,
             _ => Disposition::Permanent,
         }
     }

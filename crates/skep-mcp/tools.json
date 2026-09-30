@@ -340,7 +340,7 @@
     },
     {
       "name": "make_link",
-      "description": "Create an open link homed in home. Each of from_ (the wire's from — renamed in this schema only, mapped back by the adapter), to, and ty takes one of two forms per slot: a V-spec array, resolved against current arrangements (the recorded endset is the permanent I-spans), or {\"addrs\": [addresses]}, address-denoting — the recorded endset is the names verbatim, one unit subtree span per address, with no resolution and no occupancy requirement. Contents at the addresses are never examined; matching is by address, and names nest by tumbler prefix. Any T4-valid address may be named — a link, a document, or a ghost position nothing will ever occupy. The type slot must be nonempty as given (an empty addrs list, like a V-spec set resolving to nothing, rejects empty_type_resolution); from_ and to may be empty in either form. Response: ack_addr with the link's address.",
+      "description": "Create an open link homed in home. Each of from_ (the wire's from — renamed in this schema only, mapped back by the adapter), to, and ty takes one of two forms per slot: a V-spec array, resolved against current arrangements (the recorded endset is the permanent I-spans), or {\"addrs\": [addresses]}, address-denoting — the recorded endset is the names verbatim, one unit subtree span per address, with no resolution and no occupancy requirement. Contents at the addresses are never examined; matching is by address, and names nest by tumbler prefix. Any T4-valid address may be named — a link, a document, or a ghost position nothing will ever occupy. The type slot must be nonempty as given (an empty addrs list, like a V-spec set resolving to nothing, rejects empty_type_resolution); from_ and to may be empty in either form. The optional replaces names the record whose state this link replaces: present, one transaction deposits the link and, at the next address of home's link subspace, a second link typed replaces (1.1.0.1.0.1.0.3.12) from the first to the address named; absent is the empty state. At the grants class it is how a re-share names the revocation it follows — a grant is honored only where the state it names is its key's current one, so a replayed share grants nothing. A make_link whose own ty is the replaces type is refused credential_refused:replaces_not_standalone: the member is that type's one writer. Response: ack_addr with the link's address (the first link's, when replaces is present).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -516,6 +516,11 @@
                 "additionalProperties": false
               }
             ]
+          },
+          "replaces": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Optional: the address of the record whose state this link replaces (PUB-5.15) — at a re-share, the revocation it follows. Absent (not sent) is the empty state; null is malformed. Never checked at the write: whether it names the key's current state is the grant fold's to decide."
           }
         },
         "required": ["home", "from_", "to", "ty"],

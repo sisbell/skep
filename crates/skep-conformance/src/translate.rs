@@ -684,6 +684,7 @@ impl Cx<'_> {
                     from: SlotArg::Resolve(f),
                     to: SlotArg::Resolve(t),
                     ty: SlotArg::Resolve(vec![ty]),
+                    replaces: None,
                 }) {
                     Response::AckAddr { addr, .. } => {
                         self.shadow.seat_link(&home_golden);
@@ -2560,6 +2561,7 @@ fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Opti
         from: SlotArg::Resolve(from),
         to: SlotArg::Resolve(to),
         ty: SlotArg::Resolve(ty),
+        replaces: None,
     }) {
         Response::AckAddr { addr, .. } => {
             if !settle_ack(out, xf, None) {
@@ -2935,6 +2937,7 @@ fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
             from: SlotArg::Resolve(from),
             to: SlotArg::Resolve(to),
             ty: SlotArg::Resolve(vec![ty]),
+            replaces: None,
         });
         match r {
             Response::AckAddr { addr, .. } => {

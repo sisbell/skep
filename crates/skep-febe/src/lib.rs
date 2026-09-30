@@ -558,6 +558,7 @@ mod tests {
                 from: SlotArg::Resolve(vec![vspec.clone()]), // M7
                 to: SlotArg::Addrs(vec![doc.clone()]),
                 ty: SlotArg::Resolve(vec![vspec.clone()]),
+                replaces: None,
             },
             Op::Emit { home: doc.clone(), ty: Endset::empty(), from: doc.clone(), to: vec![] },
             Op::InClaims { y: doc.clone(), view: View::Active },

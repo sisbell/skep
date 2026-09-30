@@ -66,8 +66,10 @@
 //!   discovery read (PUB-8.47) takes the first through
 //!   `PublicationWorld::universal_grants`, raw, and narrows it itself. What
 //!   they enumerate is the fold's STORED index — a superset of entitlement,
-//!   and short of the grants by the shared-entry shortfall (the `grants`
-//!   module states both).
+//!   one operative grant behind each entry now that PUB-5.15's fourth
+//!   outcome honors a grant only where the state its `replaces` names is
+//!   its key's current one (the `grants` module states both, and the
+//!   shared-entry shortfall that outcome closed).
 //! * **The edition-claim lookup** ([`World::edition_claims`]; the `editions`
 //!   module) — the audit-view `to`-range lookup over the R20 edition-claim
 //!   class (PUB-8.46, lane 3.4, §2), composed from M7's own audit reads over
@@ -75,9 +77,9 @@
 //!   `PublicationWorld::edition_claims` reaches it and applies the home rule.
 //! * **The commons type pins** (the public [`types`] module) — every commons
 //!   type address the engine or the daemon keys on as a VALUE, in one ledger:
-//!   the grant and edition classes the two indexes above read, and the
-//!   audit-view classes the daemon's write path refuses a `nullify` at
-//!   (PUB-6.30, PUB-6.64; lane 3.5). None is a registered M7 type.
+//!   the grant, `replaces` and edition classes the two indexes above read,
+//!   and the audit-view classes the daemon's write path refuses a `nullify`
+//!   at (PUB-6.30, PUB-6.64; lane 3.5). None is a registered M7 type.
 //! * **The world dump** ([`dump`], behind the `dump` feature) — a
 //!   deterministic, byte-comparable rendering of the world's AUTHORITATIVE
 //!   state (every store slice, and M3's publication map as a `publication`

@@ -37,6 +37,7 @@ fn linked_doc(fx: &Fixture) -> (skep_address::Address, skep_address::Address) {
             from: SlotArg::Resolve(vec![vspec(&d, 1, 1)]),
             to: SlotArg::Resolve(vec![vspec(&d, 2, 1)]),
             ty: SlotArg::Resolve(vec![vspec(&d, 3, 1)]),
+            replaces: None,
         },
     ));
     (d, l)
@@ -1084,6 +1085,7 @@ fn the_link_family_answers_end_to_end() {
         from: SlotArg::Resolve(vec![vspec(&d, 1, 1)]),
         to: SlotArg::Resolve(vec![vspec(&d, 2, 1)]),
         ty: SlotArg::Resolve(vec![vspec(&d, 3, 1)]),
+        replaces: None,
     };
     let (l1, _) = ack_addr(ex(&fx.febe, fx.user, mk()));
     let (l2, _) = ack_addr(ex(&fx.febe, fx.user, mk()));
@@ -1249,6 +1251,7 @@ fn an_unarranged_source_commits_an_empty_successor_slot() {
             from: SlotArg::Resolve(vec![vspec(&d, 1, 1)]),
             to: SlotArg::Resolve(vec![vspec(&d, 2, 1)]),
             ty: SlotArg::Resolve(vec![vspec(&d, 3, 1)]),
+            replaces: None,
         },
     ));
 
@@ -1392,6 +1395,7 @@ fn refusals_arrive_typed_classified_and_localized() {
         from: SlotArg::Resolve(vec![vspec(&d, 1, 1)]),
         to: SlotArg::Resolve(vec![vspec(&d, 2, 1)]),
         ty: SlotArg::Resolve(vec![vspec(&d, 3, 1)]),
+        replaces: None,
     };
     let (l1, _) = ack_addr(ex(&fx.febe, fx.user, mk()));
     let (l2, _) = ack_addr(ex(&fx.febe, fx.user, mk()));

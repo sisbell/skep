@@ -103,8 +103,9 @@ fn secret_line() -> String {
 }
 
 /// The v5 format: the banner, the PUBLICATION section listing the draft, and
-/// the GRANTS section holding the fold's operative record with its four
-/// fields — and the faithfulness check, which now compares the grant fold's
+/// the GRANTS section holding the fold's operative record with its five
+/// fields — a first share's `replaces` the EMPTY state, `none` (PUB-5.15
+/// (iv)) — and the faithfulness check, which now compares the grant fold's
 /// seed against its fold through that section, still green.
 #[test]
 fn the_v5_format_renders_the_publication_and_grants_sections() {
@@ -117,7 +118,7 @@ fn the_v5_format_renders_the_publication_and_grants_sections() {
     let publication = format!("\"publication\": [{}]", quoted(&board.draft_a));
     assert!(text.contains(&publication), "expected {publication} in:\n{text}");
     let grants = format!(
-        "\"grants\": {{{}: {{\"content_prefix\": {}, \"grantee\": {}, \"home\": {}, \"issuer\": {}}}}}",
+        "\"grants\": {{{}: {{\"content_prefix\": {}, \"grantee\": {}, \"home\": {}, \"issuer\": {}, \"replaces\": none}}}}",
         quoted(&g),
         quoted(&board.draft_a),
         quoted(&board.acct_b),
@@ -134,7 +135,7 @@ fn the_v5_format_renders_the_publication_and_grants_sections() {
 /// A shape the dump never renders is a hole in the oracle the crash and
 /// conformance harnesses read it as, and one no comparison between two dumps
 /// can see — both sides are rendered by the same builder, so both carry the
-/// same hole. The section's four fields are the format, so each shape a
+/// same hole. The section's five fields are the format, so each shape a
 /// record can take is stated here rather than left to whichever world a
 /// harness happens to run.
 #[test]
@@ -145,7 +146,7 @@ fn the_grant_section_renders_an_any_principal_grant_with_no_grantee() {
     let text = engine.world_dump().into_string();
 
     let grants = format!(
-        "\"grants\": {{{}: {{\"content_prefix\": {}, \"grantee\": none, \"home\": {}, \"issuer\": {}}}}}",
+        "\"grants\": {{{}: {{\"content_prefix\": {}, \"grantee\": none, \"home\": {}, \"issuer\": {}, \"replaces\": none}}}}",
         quoted(&g),
         quoted(&board.draft_a),
         quoted(&board.home_a),
@@ -153,6 +154,45 @@ fn the_grant_section_renders_an_any_principal_grant_with_no_grantee() {
     );
     assert!(text.contains(&grants), "expected {grants} in:\n{text}");
     engine.check_hints().expect("the fold and its seed agree over a grantee-less record");
+}
+
+/// …and the `replaces` field's OTHER shape (PUB-5.15 (iv)): a RE-SHARE,
+/// deposited with the `replaces` link naming the revocation it follows,
+/// renders that revocation's address — the one operative record, the grant
+/// it follows withdrawn. Rendered, a seed that paired the re-share with
+/// another state than the fold did moves these bytes, which is what makes
+/// the section's faithfulness check speak for the pair.
+#[test]
+fn the_grant_section_renders_a_re_share_with_the_revocation_it_follows() {
+    let engine = mem_engine();
+    let board = board(&engine);
+    let first = grant(&engine, &board, &board.draft_a, &board.acct_b);
+    let revocation = grant(&engine, &board, &first, &board.acct_b); // `from` names the grant
+    let issuer = Caller::Principal(A);
+    let (again, _) = engine
+        .linkstore(&World::visible_to(issuer))
+        .makelink_replacing(
+            issuer,
+            &board.home_a,
+            SlotArg::Addrs(vec![board.draft_a.clone()]),
+            SlotArg::Addrs(vec![board.acct_b.clone()]),
+            SlotArg::Addrs(vec![t_grant()]),
+            &revocation,
+        )
+        .expect("the re-share and its replaces link deposit into A's doc 1");
+    let text = engine.world_dump().into_string();
+
+    let grants = format!(
+        "\"grants\": {{{}: {{\"content_prefix\": {}, \"grantee\": {}, \"home\": {}, \"issuer\": {}, \"replaces\": {}}}}}",
+        quoted(&again),
+        quoted(&board.draft_a),
+        quoted(&board.acct_b),
+        quoted(&board.home_a),
+        quoted(&board.acct_a),
+        quoted(&revocation),
+    );
+    assert!(text.contains(&grants), "expected {grants} in:\n{text}");
+    engine.check_hints().expect("the fold and its seed pair the re-share alike");
 }
 
 /// The filter under the TOTAL predicate is the harness-only walk, byte for

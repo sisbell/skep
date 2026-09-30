@@ -22,6 +22,7 @@ const T_CONSUMPTION_MARKER: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 91];
 const T_JOURNAL_DESIGNATION: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 22];
 const T_RAIL_RECORD: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 60];
 const T_STEWARD_CLASSIFICATION: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 61];
+const T_REPLACES: &[u32] = &[1, 1, 0, 1, 0, 1, 0, 2, 12];
 
 fn credential() -> TypeAddrs {
     TypeAddrs::new(addr(T_ENROLL), addr(T_RETIRE), addr(T_CLAIM))
@@ -36,6 +37,7 @@ fn audit_list() -> Vec<(AuditClass, skep_address::Address)> {
         (AuditClass::JournalDesignation, addr(T_JOURNAL_DESIGNATION)),
         (AuditClass::RailRecord, addr(T_RAIL_RECORD)),
         (AuditClass::StewardClassification, addr(T_STEWARD_CLASSIFICATION)),
+        (AuditClass::Replaces, addr(T_REPLACES)),
     ]
 }
 
@@ -190,6 +192,7 @@ fn the_declared_order_of_the_classes_decides_nothing() {
         T_JOURNAL_DESIGNATION,
         T_RAIL_RECORD,
         T_STEWARD_CLASSIFICATION,
+        T_REPLACES,
     ] {
         let subtype: Vec<u32> = class_addr.iter().copied().chain([1]).collect();
         for slot in [vec![unit(class_addr)], vec![unit(&subtype)]] {

@@ -299,6 +299,7 @@ mod tests {
             from: SlotArg::Addrs(Vec::new()),
             to: SlotArg::Addrs(Vec::new()),
             ty: SlotArg::Addrs(vec![t_grant().clone()]),
+            replaces: None,
         };
         let insert = |deposit: Deposit| Op::Insert {
             doc: doc1.clone(),

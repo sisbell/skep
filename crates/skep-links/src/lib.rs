@@ -58,6 +58,12 @@
 //! under ([`LinkWriter::attested`]; `None` through [`LinkWriter::new`]):
 //! handed to the kernel's attested arm at that one transaction's commit
 //! marker, and read by no gate, no fold and no index here.
+//!
+//! One commons VALUE is spelled here, beside the fences that read it: the
+//! `replaces` type ([`replaces_type`]; PUB-5.15), the authority successor
+//! whose one writer is [`LinkWriter::makelink_replacing`] — a type no
+//! registration holds, which the three open writes refuse by the one test
+//! [`is_replaces_class`] states.
 
 #![forbid(unsafe_code)]
 
@@ -87,7 +93,8 @@ pub use registry::{
 };
 pub use state::{LinkRec, LinkState};
 pub use writes::{
-    Edit, LinkWriter, SlotArg, Visibility, MAX_SLOT_RESOLVE_STEPS, MAX_SLOT_SPANS,
+    is_replaces_class, replaces_type, Edit, LinkWriter, SlotArg, Visibility,
+    MAX_SLOT_RESOLVE_STEPS, MAX_SLOT_SPANS,
 };
 
 /// The auto traits M7's slice promises without saying. `WorldState` is

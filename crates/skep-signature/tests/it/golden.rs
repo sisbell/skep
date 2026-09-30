@@ -66,6 +66,10 @@ const GOLDEN_SEED: [u8; 32] = [
 /// half, of the Ed25519 public half, of the whole raw key; the fingerprint;
 /// and per op the SHA-256 of the signature blob — the frames themselves
 /// pinned byte for byte by skepd's `the_entry_frames_bytes_per_op_are_pinned`.
+/// The `make_link` signatures moved with the replay fix (PUB-5.15): the body
+/// gained its `replaces` row, an EMPTY group in this member-less frame, in
+/// place under `skep-entry-v1` (l6-A3); the keys, the fingerprints and the
+/// `insert` and `publish` signatures did not.
 struct TagGolden {
     tag: u8,
     pq_pk: &'static str,
@@ -127,7 +131,7 @@ fn golden_tag_1_mldsa65_ed25519() {
         fingerprint: "8c7d0b0e21969ffa5039ccebce2c857614740c3be9498ab8c697bc9320c30623",
         sigs: [
             "2892943416a13f80eeb95f4c8bd55f115d7248324c433bffbeaf7f0501828148",
-            "7fd029f5cad3498cd5321332c6d0dba23e326d5603781ee19ec00f2c70d3f940",
+            "9d47fea8f8cc6077222b89060ebcc69b93d7d9b228c1a9196f324ee3a80119d0",
             "50d83bfcc18792e51073852113df636c4d6f3aa86391f7fd970b5738b5737879",
         ],
     });
@@ -149,7 +153,7 @@ fn golden_tag_3_fndsa512_preview_ed25519() {
         fingerprint: "d38e5be29f0c62fe1a51cb09d00250ea18bfd2ba799536c0596077d1d1d65fca",
         sigs: [
             "da92e3fc0247d5f39ed149f574a6c18cc1bf959a4f167ba33d381a955ed95779",
-            "20c93bb2e587c2139fd47bfe48fb4738e9f761862d66908c4e26d2f237d292e7",
+            "a7bc27e514b92dd4bc23f1c69ec46ad010cca17a22eada4f944e0f31edfd7d75",
             "4a5bc2ebd6345adf18bbe073e21f5d02815d4ca5625d1ba2751461e6a1fe9c64",
         ],
     });

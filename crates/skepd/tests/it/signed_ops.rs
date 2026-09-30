@@ -18,6 +18,12 @@
 //! the one place such a write reaches the check); a credential deposit's two
 //! positions taking no entry signature (D26).
 //!
+//! THE REPLAY RULE AT THE GRANT (PUB-5.15 (iv)): a signed share replayed
+//! byte for byte after its revocation verifies, lands, and grants nothing;
+//! a re-share naming the standing revocation in its signed `replaces`
+//! member is honored; its own request replayed after a later revocation
+//! grants nothing.
+//!
 //! THE FRAMES (the frozen-tag rule's pin): the three ops' entry frames at
 //! fixed instances, their bytes spelled out by hand. The key-derivation and
 //! signature goldens that sign them live beside the rules they pin, in
@@ -29,8 +35,8 @@ use ed25519_dalek::SigningKey;
 use serde_json::{json, Value};
 use skep_febe::Codec;
 use skep_identity::{
-    entry_body_insert, entry_body_make_link, entry_body_publish, entry_frame, BoardTerm,
-    Enrollment, EntrySlot, Fingerprint, LinkSlots, PublicKey, SigAlgRow,
+    entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_publish,
+    entry_frame, BoardTerm, Enrollment, EntrySlot, Fingerprint, LinkSlots, PublicKey, SigAlgRow,
     ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519,
 };
 use skep_signature::HybridSigner;
@@ -179,8 +185,10 @@ fn filled_slots(sd: &skepd::Skepd, lo: u64, hi: u64) -> Vec<u64> {
 /// grant link into the published doc 1 from the claimant's signed session:
 /// absent → `attestation_required` (reorder); present and verifying →
 /// admitted, the slot filled with the very blob attached; wrong bytes →
-/// `attestation_invalid:signature` (reorder); the wrong width →
-/// `:malformed`; a bare session → `signed_session_required` as before; an
+/// `attestation_invalid:signature` (permanent — the board's r6-6: the same
+/// request is refused the same, the client's next act a re-composed one);
+/// the wrong width → `:malformed` (permanent, the same); a bare session →
+/// `signed_session_required` as before; an
 /// unknown `alg` token → unparseable; the member on an op outside the three
 /// → unparseable (the unknown-field rule); and a signed write OUTSIDE the
 /// publish class carrying an `attest` → admitted with the member dropped.
@@ -215,7 +223,7 @@ fn above_the_claim_the_check_refuses_admits_and_names_each_cause() {
     // …and the transactions around it stay empty.
     assert_eq!(sd.daemon().attestation_at(Seq(at - 1)).ok().flatten(), None);
 
-    // Wrong bytes (the Ed25519 half flipped): signature, reorder.
+    // Wrong bytes (the Ed25519 half flipped): signature, permanent.
     let mut tampered = attached.clone();
     let mut bytes = hex_to_bytes(&sig_hex);
     bytes[3309] ^= 1;
@@ -223,7 +231,7 @@ fn above_the_claim_the_check_refuses_admits_and_names_each_cause() {
     let v = op_unattested(port, Some(&signed), &tampered.to_string());
     assert_eq!(
         refusal(&v),
-        ("credential_refused:attestation_invalid:signature".to_string(), "reorder".to_string()),
+        ("credential_refused:attestation_invalid:signature".to_string(), "permanent".to_string()),
         "{v}"
     );
     // The PQ half flipped: the same verdict — both halves verify or none.
@@ -233,13 +241,13 @@ fn above_the_claim_the_check_refuses_admits_and_names_each_cause() {
     tampered["attest"]["sig"] = Value::String(hex(&bytes));
     let v = op_unattested(port, Some(&signed), &tampered.to_string());
     assert_eq!(verdict(&v), "credential_refused:attestation_invalid:signature");
-    // The wrong width: malformed, reorder.
+    // The wrong width: malformed, permanent.
     let mut short = attached.clone();
     short["attest"]["sig"] = Value::String(sig_hex[2..].to_string());
     let v = op_unattested(port, Some(&signed), &short.to_string());
     assert_eq!(
         refusal(&v),
-        ("credential_refused:attestation_invalid:malformed".to_string(), "reorder".to_string()),
+        ("credential_refused:attestation_invalid:malformed".to_string(), "permanent".to_string()),
         "{v}"
     );
     // A signature by a key the account never enrolled: no candidate verifies.
@@ -426,7 +434,8 @@ fn an_address_named_with_a_leading_zero_is_attested_over_its_one_spelling() {
 /// alone, so every other admitted attestation in the suite is tag 1's: a
 /// check framing every entry under tag 1's token, or verifying every blob
 /// under tag 1's rule, passes all of them and refuses this one
-/// `attestation_invalid:signature` — REORDER, a re-compose that never lands.
+/// `attestation_invalid:signature` — PERMANENT, a re-compose that never
+/// lands.
 #[test]
 fn a_tag_3_key_attests_a_write_as_a_tag_1_key_does() {
     let dir = tempdir().unwrap();
@@ -822,7 +831,7 @@ fn the_board_term_stays_h1s_pair_after_a_second_head_lands() {
     let v = op_unattested(port, Some(&signed), &claimant_grant_attested(ALG_MLDSA65_ED25519, &over_h2));
     assert_eq!(
         refusal(&v),
-        ("credential_refused:attestation_invalid:signature".to_string(), "reorder".to_string()),
+        ("credential_refused:attestation_invalid:signature".to_string(), "permanent".to_string()),
         "the latest head's pair is not the board term: {v}"
     );
     // Over the LIVE pair, posed as the board term: refused.
@@ -890,6 +899,91 @@ fn d26_a_credential_deposits_two_positions_take_no_entry_signature() {
     assert!(sd.daemon().attestation_at(Seq(acked_at(&v))).unwrap().is_some());
 }
 
+// ── the replay rule at the grant ────────────────────────────────────────────
+
+/// THE REPLAY RULE AT THE GRANT, END TO END — the authority link type
+/// investigation's walk 1 (PUB-5.15 (iv); rr-Q2's accepted risk, closed), over
+/// the wire with real signatures on a claimed board. The claimant shares a
+/// draft with every principal — an attested `make_link`, no `replaces`
+/// member — and a stranger reads it; it revokes the share, and the stranger
+/// is withheld. Then the share's request is REPLAYED, byte for byte, its
+/// `attest` included: the entry frame names no position, so the signature
+/// verifies and the write lands at a fresh address with its slot filled —
+/// and grants nothing, its EMPTY state no longer its key's current one. The
+/// claimant RE-SHARES, its signed `replaces` naming the standing revocation,
+/// and the stranger reads again; it revokes the re-share, and the re-share's
+/// own request, replayed, names a revocation the key has passed and grants
+/// nothing. The any-principal read agrees at every step.
+#[test]
+fn a_replayed_signed_share_grants_nothing_and_a_re_share_naming_the_standing_revocation_does() {
+    let dir = tempdir().unwrap();
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_owner_session(port);
+    let draft = draft_with(port, &signed, "shared");
+    let stranger = seat_stranger(port, 4242);
+    let reads = || {
+        let v = op(port, Some(&stranger.session), &retrieve_frame(&draft, 1, 6));
+        if v["resp"].as_str() == Some("delivery") {
+            return true;
+        }
+        assert_withheld(&v, &draft);
+        false
+    };
+    let attested = |v: &Value| sd.daemon().attestation_at(Seq(acked_at(v))).unwrap().is_some();
+    assert!(!reads(), "the draft is private until shared");
+
+    // The share — ANY-PRINCIPAL over the draft — signed, and kept verbatim.
+    let share =
+        attach_attest(port, &signed, &typed_link_frame(CLAIMANT_DOC1, &[&draft], &[], T_GRANT));
+    let v = op_unattested(port, Some(&signed), &share);
+    let grant = acked_addr(&v);
+    assert!(attested(&v), "the share is attested");
+    assert!(reads(), "shared");
+
+    // The revocation: a record naming the grant.
+    let revoke = typed_link_frame(CLAIMANT_DOC1, &[&grant], &[], T_GRANT);
+    let revocation = acked_addr(&op(port, Some(&signed), &revoke));
+    assert!(!reads(), "revoked");
+
+    // THE REPLAY: the byte-identical signed share.
+    let v = op_unattested(port, Some(&signed), &share);
+    assert_ne!(acked_addr(&v), grant, "a replay lands at a fresh address");
+    assert!(attested(&v), "the replayed signature verifies — the frame names no position");
+    assert!(!reads(), "a replayed share grants nothing");
+    assert!(universal_grants(port, Some(&signed)).is_empty(), "…and serves no row");
+
+    // THE RE-SHARE: `replaces` names the standing revocation, inside the
+    // signed bytes.
+    let re_share = signed_with_replaces(
+        port,
+        &signed,
+        &typed_link_frame(CLAIMANT_DOC1, &[&draft], &[], T_GRANT),
+        &revocation,
+    );
+    let v = op_unattested(port, Some(&signed), &re_share);
+    let again = acked_addr(&v);
+    assert!(attested(&v), "the re-share is attested");
+    assert!(reads(), "a re-share naming the standing revocation is honored");
+    let pair = read_link(port, Some(&signed), &next_link_address(&again));
+    let start = |slot: usize| pair["slots"][slot][0]["start"].as_str().map(str::to_string);
+    assert_eq!(
+        (start(0), start(1), start(2)),
+        (Some(again.clone()), Some(revocation.clone()), Some(T_REPLACES.to_string())),
+        "the replaces link beside the re-share: from it, to the revocation, typed the class: {pair}"
+    );
+
+    // Revoked again; the re-share's own request, replayed, names a stale
+    // state.
+    op(port, Some(&signed), &typed_link_frame(CLAIMANT_DOC1, &[&again], &[], T_GRANT));
+    assert!(!reads(), "the re-share revoked");
+    let v = op_unattested(port, Some(&signed), &re_share);
+    assert_eq!(verdict(&v), "ok", "the replayed re-share lands: {v}");
+    assert!(attested(&v), "…signed as it was");
+    assert!(!reads(), "a replayed re-share names a revocation the key has passed");
+    assert!(universal_grants(port, Some(&signed)).is_empty());
+}
+
 // ── the frames ──────────────────────────────────────────────────────────────
 //
 // TWINS: `addr` and `fixed_frames` have copies in skep-signature's
@@ -923,7 +1017,10 @@ fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 3] {
 }
 
 /// THE FRAME REGRESSION per op: the bytes, spelled out by hand once — the
-/// D24 interim pins as the seam build made them.
+/// D24 interim pins as the seam build made them, the `make_link` body's
+/// `replaces` row since the replay fix moved it in place under
+/// `skep-entry-v1` (l6-A3): an EMPTY group where the member is absent, the
+/// member's address-form slot row, delimited, where it is present.
 #[test]
 fn the_entry_frames_bytes_per_op_are_pinned() {
     let [(_, insert), (_, link), (_, publish)] = fixed_frames(ALG_MLDSA65_ED25519);
@@ -942,7 +1039,8 @@ fn the_entry_frames_bytes_per_op_are_pinned() {
         &[&[0u8, 0, 0, 0][..], &[0, 0, 0, 0, 0, 0, 0, 2][..], &[0, 0, 0, 1, b'a'][..], &[0, 0, 0, 1, b'b'][..]].concat(),
     ));
     assert_eq!(insert, want, "insert");
-    // make_link: op, then body = ty slot ‖ from slot ‖ to slot.
+    // make_link: op, then body = ty slot ‖ from slot ‖ to slot ‖ the
+    // `replaces` row — absent here, so the EMPTY group `be32(0)`.
     let slot = |addrs: &[&[u8]]| {
         let mut s = vec![0x01u8];
         s.extend((addrs.len() as u64).to_be_bytes());
@@ -954,9 +1052,39 @@ fn the_entry_frames_bytes_per_op_are_pinned() {
     let mut want = prefix.clone();
     want.extend(member(b"make_link"));
     want.extend(member(
-        &[slot(&[b"1.1.0.1.0.1.0.3.90"]), slot(&[b"1.0.1"]), slot(&[])].concat(),
+        &[slot(&[b"1.1.0.1.0.1.0.3.90"]), slot(&[b"1.0.1"]), slot(&[]), vec![0, 0, 0, 0]].concat(),
     ));
     assert_eq!(link, want, "make_link");
+    // …and a re-share: the same slots with the member PRESENT, naming the
+    // revocation at `1.0.1.0.1.0.2.9` — its slot row, delimited as one group.
+    let (ty, from, to) = ([addr("1.1.0.1.0.1.0.3.90")], [addr("1.0.1")], []);
+    let re_share = entry_body_make_link_replacing(
+        LinkSlots {
+            from: EntrySlot::Addrs(&from),
+            to: EntrySlot::Addrs(&to),
+            ty: EntrySlot::Addrs(&ty),
+        },
+        &addr("1.0.1.0.1.0.2.9"),
+    );
+    let frame = entry_frame(
+        ALG_MLDSA65_ED25519,
+        BoardTerm { log_position: 12, chain: [0xAB; 32] },
+        &addr("1.0.1"),
+        &addr("1.0.1.0.1"),
+        &re_share,
+    );
+    let mut want = prefix.clone();
+    want.extend(member(b"make_link"));
+    want.extend(member(
+        &[
+            slot(&[b"1.1.0.1.0.1.0.3.90"]),
+            slot(&[b"1.0.1"]),
+            slot(&[]),
+            member(&slot(&[b"1.0.1.0.1.0.2.9"])),
+        ]
+        .concat(),
+    ));
+    assert_eq!(frame, want, "make_link with its replaces member");
     // publish: op, then body = be64(3) ‖ x ‖ y ‖ z
     let mut want = prefix;
     want.extend(member(b"publish"));

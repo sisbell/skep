@@ -16,15 +16,23 @@
 //! below hold M5's set prefix-free against every pin, so a pin that joins
 //! cannot land on, above or beneath a deposit-class type unnoticed.
 //!
-//! Two consumers: the engine's own derived indexes ([`t_grant`] for the grant
-//! fold, [`t_edition`] for the audit-view edition-claim lookup), and the
-//! daemon's write-path type-recognition input (PUB round 2, lane 3.5 §1;
-//! owner ruling D3, 2026-09-05) — the class addresses a `nullify` is refused
-//! at (PUB-6.30's grant, PUB-6.64's audit-view members), pinned here beside
-//! the two the engine reads so ONE ledger names them all. Every pin below
-//! cites its commons row and its confirmation (the owner, 2026-09-07); a pin
-//! is never silently renumbered — a change is a confirmed row there and a
+//! Two consumers: the engine's own derived indexes ([`t_grant`] and
+//! [`t_replaces`] for the grant fold, [`t_edition`] for the audit-view
+//! edition-claim lookup), and the daemon's write-path type-recognition input
+//! (PUB round 2, lane 3.5 §1; owner ruling D3, 2026-09-05) — the class
+//! addresses a `nullify` is refused at (PUB-6.30's grant, PUB-6.64's
+//! audit-view members), pinned here beside the ones the engine reads so ONE
+//! ledger names them all. Every pin below cites its commons row and its
+//! confirmation (the owner, 2026-09-07, and for [`t_replaces`] 2026-09-29); a
+//! pin is never silently renumbered — a change is a confirmed row there and a
 //! dated line here.
+//!
+//! ONE PIN IS SPELLED TWICE, by the same rule as the credential types:
+//! [`t_replaces`], the authority successor's type, has a writer BELOW this
+//! crate — M7's sole-writer fences and the one MAKELINK that mints it — so M7
+//! holds its own spelling where those can read it
+//! ([`skep_links::replaces_type`]), and the ledger's tests hold the two
+//! EQUAL.
 //!
 //! A pin is HELD, not manufactured per call: each reader below hands back a
 //! borrow of one process-wide value, so the ledger is one instance and not
@@ -41,7 +49,7 @@
 //! path does, at every pin it refuses a `nullify` at — relies on it, so a pin
 //! sitting under another's prefix makes one class swallow the other and
 //! silently widens or narrows a refusal nobody chose. The tests below hold it
-//! off ONE list of the pins, which is where a ninth joins: nothing else here
+//! off ONE list of the pins, which is where a tenth joins: nothing else here
 //! can notice a pin that reaches a consumer without joining the guarantee.
 
 use std::sync::LazyLock;
@@ -155,6 +163,24 @@ pub fn t_rail_record() -> &'static Address {
     &ADDR
 }
 
+/// The `replaces` type — `1.1.0.1.0.1.0.3.12`, the AUTHORITY SUCCESSOR
+/// (PUB-5.15 (iii), (iv); PUB-6.64's member as RES-308 lists it), RULED by the
+/// owner 2026-09-29 (the board's "(rep-N) RULED": "tke 3.12"; PUB RES-310
+/// pins it at PUB-5.15).
+///
+/// A CORE-VOCABULARY number (the owner's au-Q (6): "a core-vocabulary number,
+/// not a sixth shipped class"): the vacant ordinal in the core range `3.1–3.21`
+/// commons-map.md places, `commentary`'s catalog number reused knowingly — the
+/// commons map's and the seeding table's rows are owed by the next spec pass.
+/// The grant fold reads a record's `replaces` off the link of this type its
+/// own transaction deposited, by denotation EQUALITY as it reads [`t_grant`];
+/// the daemon's write path recognizes it (and its subtypes by prefix) as
+/// PUB-6.64's `replaces` class, so its `nullify` is refused.
+pub fn t_replaces() -> &'static Address {
+    static ADDR: LazyLock<Address> = LazyLock::new(|| commons_type(12));
+    &ADDR
+}
+
 /// The steward's CLASSIFICATION link type — `1.1.0.1.0.1.0.3.61`, CONFIRMED
 /// by the owner 2026-09-07 (PUB-5.43; PUB-6.64's member where the link's
 /// own home is published, RES-207).
@@ -182,9 +208,9 @@ mod tests {
     /// the ledger's rather than that pin's — three hand-kept lists would be
     /// three places to be forgotten, and a pin absent from all of them reaches
     /// the daemon's refusal set with nothing here failing. So this is the
-    /// single gate a ninth pin passes through, and each test below is one
+    /// single gate a tenth pin passes through, and each test below is one
     /// question asked of every row.
-    const PINS: [(Reader, u32); 8] = [
+    const PINS: [(Reader, u32); 9] = [
         (t_grant, 90),
         (t_edition, 14),
         (t_successor_of, 59),
@@ -193,6 +219,7 @@ mod tests {
         (t_journal_designation, 22),
         (t_rail_record, 60),
         (t_steward_classification, 61),
+        (t_replaces, 12),
     ];
 
     /// The ledger's GUARANTEE (the module doc's): the pins are pairwise
@@ -220,7 +247,7 @@ mod tests {
     /// admits a declared deposit under (PUB-2.11, RES-261), and none sits
     /// above or beneath one, which would make the daemon's prefix-recognizing
     /// write path read a credential as that pin's class or subtype. Walked
-    /// off the same ONE list, so a ninth pin meets the set where it joins.
+    /// off the same ONE list, so a tenth pin meets the set where it joins.
     #[test]
     fn the_deposit_class_types_are_prefix_free_against_every_pin() {
         for ty in skep_arrangement::deposit_class_types() {
@@ -245,6 +272,16 @@ mod tests {
         for (read, ordinal) in PINS {
             assert_eq!(read().tumbler().to_string(), format!("1.1.0.1.0.1.0.3.{ordinal}"));
         }
+    }
+
+    /// THE PIN SPELLED TWICE (the module doc): [`t_replaces`] and M7's own
+    /// spelling, which its sole-writer fences and its one writer read, are
+    /// one address — so the class the fold reads a grant's `replaces` by is
+    /// the class M7 fences and mints, and a renumbering of either fails here.
+    #[test]
+    fn the_replaces_pin_is_the_address_m7_fences_and_mints() {
+        assert_eq!(t_replaces(), skep_links::replaces_type());
+        assert!(skep_links::is_replaces_class(&skep_links::enc([t_replaces()])));
     }
 
     /// A pin is ONE value, held: two reads hand back the same address, not

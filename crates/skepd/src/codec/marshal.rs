@@ -237,15 +237,22 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             }
             (op_name(OpKind::Publish), pairs)
         }
-        Op::MakeLink { home, from, to, ty } => (
-            op_name(OpKind::MakeLink),
-            vec![
+        Op::MakeLink { home, from, to, ty, replaces } => {
+            let mut pairs = vec![
                 ("home", j_addr(home)),
                 ("from", j_slotarg(from)),
                 ("to", j_slotarg(to)),
                 ("ty", j_slotarg(ty)),
-            ],
-        ),
+            ];
+            // Canonical: the `replaces` member rides only when present —
+            // absent IS the EMPTY state on the wire — so a member-less
+            // `make_link` marshals to no field and `parse ∘ marshal` is a
+            // fixpoint.
+            if let Some(named) = replaces {
+                pairs.push(("replaces", j_addr(named)));
+            }
+            (op_name(OpKind::MakeLink), pairs)
+        }
         Op::Emit { home, ty, from, to } => (
             op_name(OpKind::Emit),
             vec![

@@ -308,6 +308,13 @@ impl Lower for MakeLinkError {
             // guard names. Permanent is right: reissuing identically cannot
             // succeed — use AssertSup/EditLink.
             MakeLinkError::SupersessionClass => (RejectCode::DcViolation, None),
+            // The `replaces` class's fence, lowering as its `[K_sup]` twin
+            // does — the design's union holds no same-named leaf. Reached
+            // Engine-direct alone: the daemon refuses the same slots ahead of
+            // the transaction under the wire's own code,
+            // `replaces_not_standalone` (PUB-5.15). Permanent: the class is
+            // minted only beside its record, by MAKELINK's `replaces` member.
+            MakeLinkError::ReplacesClass => (RejectCode::DcViolation, None),
             MakeLinkError::Mint(m) => m.lower(),
             MakeLinkError::Seat(s) => s.lower(),
         }
@@ -330,6 +337,8 @@ impl Lower for EmitError {
             // report as upstream drift). Permanent is right: reissuing
             // identically cannot succeed — use AssertSup/EditLink.
             EmitError::SupersessionClass => (RejectCode::DcViolation, None),
+            // The `replaces` class's fence, as MakeLinkError's lowers it.
+            EmitError::ReplacesClass => (RejectCode::DcViolation, None),
             EmitError::NonAddressDenotingType => (RejectCode::NonAddressDenotingType, None),
             // The same per-slot span budget MAKELINK's slots carry, on `to`
             // — so the same leaf, and permanent for the same reason: no

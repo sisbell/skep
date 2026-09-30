@@ -216,7 +216,19 @@ pub enum Op {
     /// MAKELINK (ASN-0120, as amended 2026-08-16): open link from three
     /// two-form slots — each content V-specs (resolved by M7 inside its
     /// transact) or address NAMES deposited verbatim (`SlotArg` is M7's).
-    MakeLink { home: Address, from: SlotArg, to: SlotArg, ty: SlotArg },
+    ///
+    /// `replaces` is the op's optional member naming the state the record
+    /// REPLACES (PUB-5.15 (iii), (iv); RES-308): `None` — the member absent —
+    /// is the EMPTY state, and the record deposits alone, as it always did;
+    /// `Some` deposits the record and its `replaces` link in ONE transaction
+    /// (M7's `LinkWriter::makelink_replacing`), the link's `to` this address.
+    /// At the grant it names the revocation a re-share follows, and the grant
+    /// fold honors the grant only where that is its key's current state. A
+    /// NAME, as an address-form slot is: M10 consults nothing for it and
+    /// checks nothing of it — whether it is current is the fold's question.
+    /// Inside the entry frame's signed body (`skep_identity`'s `make_link`
+    /// row), so the member a signature covers is the one that is deposited.
+    MakeLink { home: Address, from: SlotArg, to: SlotArg, ty: SlotArg, replaces: Option<Address> },
     /// Emit_K: gated typed-relation emission (ASN-0126).
     Emit { home: Address, ty: Endset, from: Address, to: Vec<Address> },
     /// Nullify_Binary — the sole retraction path.
@@ -1016,6 +1028,7 @@ pub(crate) mod tests {
                     from: SlotArg::Resolve(vec![vs()]),
                     to: SlotArg::Addrs(vec![doc()]),
                     ty: SlotArg::Resolve(vec![vs()]),
+                    replaces: None,
                 },
                 false,
             ),
@@ -1206,11 +1219,13 @@ pub(crate) mod tests {
             from: SlotArg::Resolve(vec![spec(&d3)]),
             to: SlotArg::Addrs(vec![d2.clone()]),
             ty: SlotArg::Resolve(vec![spec(&d2), spec(&d1)]),
+            replaces: Some(d3.clone()),
         };
         assert_eq!(
             op.source_arguments(),
             vec![&d3, &d2, &d1],
-            "make_link: from, then ty — the address-form `to` names no source"
+            "make_link: from, then ty — the address-form `to` and the `replaces` member name \
+             no source"
         );
         let op = Op::EditLink {
             original: d1.clone(),

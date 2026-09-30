@@ -1,15 +1,15 @@
 //! The PLAIN sequence's admission (AUTH-3.35): its ordered producers
-//! ([`plain_admission`]) — the mint class, the CLAIM-complementary
-//! board-state pair and the nullify class — with the publish-class
-//! classification (PUB-6.43) the pair reads and the type-recognition input
-//! the nullify class reads.
+//! ([`plain_admission`]) — the mint class, the `replaces` class's fence, the
+//! CLAIM-complementary board-state pair and the nullify class — with the
+//! publish-class classification (PUB-6.43) the pair reads and the
+//! type-recognition input the nullify class reads.
 
 use std::sync::LazyLock;
 
 use skep_address::{document_of, Address};
 use skep_arrangement::trunk_of;
 use skep_engine::types::{
-    t_consumption_marker, t_endorse, t_grant, t_journal_designation, t_rail_record,
+    t_consumption_marker, t_endorse, t_grant, t_journal_designation, t_rail_record, t_replaces,
     t_steward_classification, t_successor_of,
 };
 use skep_febe::Op;
@@ -19,6 +19,7 @@ use skep_links::HasLinks;
 use skep_namespace::{first_document_address, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 
 use super::attestation::attestation_check;
+use super::credential::replaces_refusal;
 use super::CredentialRefusal;
 use crate::auth::fold::{identity_types, published_unprojected};
 use crate::auth::LockRead;
@@ -37,7 +38,8 @@ use crate::World;
 /// the grant `3.90`, `successor-of` `3.59`, `endorse` `3.42`, the consumption
 /// marker `3.91`, the journal designation `3.22`, the rail record `3.60`, the
 /// steward's classification link `3.61` — each cited to its commons row
-/// there and to the owner's confirmation of 2026-09-07. Adding a member of
+/// there and to the owner's confirmation of 2026-09-07 — and the `replaces`
+/// link `3.12`, ruled 2026-09-29 (PUB-5.15, RES-310). Adding a member of
 /// PUB-6.64's class is one `AuditClass` arm and one address in this list;
 /// the refusal that reads them takes no edit. The list order is the
 /// recognition order and every address is pairwise prefix-free
@@ -54,6 +56,7 @@ fn write_types() -> &'static WriteTypes {
                 (AuditClass::JournalDesignation, t_journal_designation().clone()),
                 (AuditClass::RailRecord, t_rail_record().clone()),
                 (AuditClass::StewardClassification, t_steward_classification().clone()),
+                (AuditClass::Replaces, t_replaces().clone()),
             ],
         )
     });
@@ -93,7 +96,11 @@ fn write_types() -> &'static WriteTypes {
 ///   class list: the honored state is read under the audit view, so a landed
 ///   retraction would drop the record from the ACTIVE-view reads that serve
 ///   it (PUB-6.13, PUB-6.20) and make PUB-4.12's "a nullified marker STILL
-///   CONSUMES" false. The steward's classification link is a member only
+///   CONSUMES" false — and, at the `replaces` link a grant is deposited with
+///   (PUB-5.15), would leave every active-view read of the pair naming the
+///   EMPTY state for a grant that named a revocation, the replay the link
+///   closes re-opened to every reader that folds off those reads. The
+///   steward's classification link is a member only
 ///   where the LINK's OWN HOME is published (RES-207, keyed on the type AND
 ///   on `published(document_of(target))` — the same read the publish-class
 ///   gate takes one slot earlier, no read added); draft-homed it is an
@@ -516,11 +523,12 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
 // ── plain_admission — the plain path's ordered producers (AUTH-3.35) ─────
 
 /// The plain path's ADMISSION: its ordered producers — the MINT class, the
-/// first-mint publication door then MINT-FIRST; then the
-/// CLAIM-complementary board-state pair; then the NULLIFY class. The ORDER
-/// is the pin, so it lives here with the producers rather than at the call
-/// site — the same treatment [`precheck`](super::precheck) gives the
-/// credential path's eight slots.
+/// first-mint publication door then MINT-FIRST; then the `replaces` class's
+/// fence ([`replaces_refusal`], PUB-5.15); then the CLAIM-complementary
+/// board-state pair; then the NULLIFY class. The ORDER is the pin, so it
+/// lives here with the producers rather than at the call site — the same
+/// treatment [`precheck`](super::precheck) gives the credential path's eight
+/// slots.
 ///
 /// Named an ADMISSION and not a refusal because both sides of its answer are
 /// load-bearing: `Err` is the refusal the first producer to fire names, and
@@ -558,6 +566,15 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
 /// [`mint_home_refusal`] fires only on `fork`/`version`, so its position
 /// relative to the `nullify` cell is inert either way.
 ///
+/// THE `replaces` FENCE's place is this build's (PUB-5.15 left it OWED): it
+/// reads link writes alone, so it is disjoint from the mint class and its
+/// position against that class is inert; it stands AHEAD of the board-state
+/// pair, so a write that can never be admitted is refused as such before the
+/// pair asks its owner to claim, to sign or to attach an attestation; and it
+/// answers the owner of every home the write names alone, so PUB-6.36's
+/// destination `not_owner` still stands first for everyone else, at
+/// `execute`.
+///
 /// `world` and `identity` MUST be the pair taken under the read guard for
 /// this request; the guard argument each producer takes is that contract's
 /// cheap half.
@@ -574,6 +591,9 @@ pub(crate) fn plain_admission(
         return Err(r);
     }
     if let Some(r) = mint_home_refusal(lock, world, op, principal) {
+        return Err(r);
+    }
+    if let Some(r) = replaces_refusal(lock, world, op, principal) {
         return Err(r);
     }
     // The board-state pair — and, inside its claimed arm, the write-path
@@ -638,6 +658,7 @@ mod tests {
             (AuditClass::JournalDesignation, t_journal_designation()),
             (AuditClass::RailRecord, t_rail_record()),
             (AuditClass::StewardClassification, t_steward_classification()),
+            (AuditClass::Replaces, t_replaces()),
         ] {
             assert_eq!(
                 types.target_class(&unit(addr)),

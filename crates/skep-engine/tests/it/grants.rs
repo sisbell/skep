@@ -160,6 +160,58 @@ fn link_typed(
         .0
 }
 
+/// A RE-SHARE (PUB-5.15 (iii), (iv)): a grant record deposited WITH its
+/// `replaces` member, as the issuer's MAKELINK writes it — M7's
+/// `makelink_replacing`, the record and then its `replaces` link naming
+/// `replaces`, in ONE transaction. Returns the RECORD's address; the link
+/// sits at the next one.
+fn re_share(
+    engine: &Engine,
+    home: &Address,
+    from: &Address,
+    to: Vec<Address>,
+    replaces: &Address,
+) -> Address {
+    let caller = Caller::Principal(A);
+    engine
+        .linkstore(&World::visible_to(caller))
+        .makelink_replacing(
+            caller,
+            home,
+            SlotArg::Addrs(vec![from.clone()]),
+            SlotArg::Addrs(to),
+            SlotArg::Addrs(vec![t_grant()]),
+            replaces,
+        )
+        .expect("the re-share and its replaces link deposit into the issuer's own document")
+        .0
+}
+
+/// The `replaces` type (PUB-5.15; RES-310's `3.12`), spelled as a client
+/// names it.
+fn t_replaces() -> Address {
+    addr(&[1, 1, 0, 1, 0, 1, 0, 3, 12])
+}
+
+/// The OPERATIVE grants, read off the world dump's `grants` section — the
+/// one rendering of the fold's operative set, which the faithfulness check
+/// compares against the seed: each record's link address, in the section's
+/// address order. The index reads cannot say which RECORD stands behind an
+/// entry; this can.
+fn operative_grants(engine: &Engine) -> Vec<String> {
+    let text = engine.world_dump().into_string();
+    let section = text
+        .split_once("\"grants\": {")
+        .and_then(|(_, rest)| rest.split_once(", \"hints\": {"))
+        .map(|(section, _)| section)
+        .expect("the v5 grants section, the hints section after it");
+    let records: Vec<&str> = section.split(": {\"content_prefix\"").collect();
+    records[..records.len() - 1]
+        .iter()
+        .map(|chunk| chunk.trim_end_matches('"').rsplit('"').next().unwrap_or_default().to_string())
+        .collect()
+}
+
 /// A specific grant makes A's private draft readable to the grantee B and to
 /// nobody else: not the guest, not a stranger — while A itself reads it by the
 /// subtree clause and its published home is readable by all.
@@ -1227,7 +1279,10 @@ fn a_revoking_record_revokes_whatever_its_to_slot_holds() {
 /// link address instead. It is neither: S2 moves no honored state and enters
 /// no index — and nor does S3, whose `from` names S2, a record ITSELF of
 /// neither kind. A WITHDRAWAL, ONCE HONORED, IS LIFTED BY NOTHING; what the
-/// issuer does to share again is grant again, which the last lines hold.
+/// issuer does to share again is a FRESH grant naming the revocation it
+/// follows — S1, the key's current state (PUB-5.15 (iv); RES-308) — which the
+/// last lines hold, beside the bare grant that no longer does: it names the
+/// EMPTY state over a key whose population holds the grant and S1.
 #[test]
 fn a_record_naming_a_revocation_is_of_neither_kind_and_lifts_no_withdrawal() {
     let engine = mem_engine();
@@ -1255,9 +1310,14 @@ fn a_record_naming_a_revocation_is_of_neither_kind_and_lifts_no_withdrawal() {
     );
     engine.check_hints().expect("the seed classifies S2 and S3 exactly as the fold did");
 
-    // Sharing again is a FRESH grant, and nothing above stands in its way.
+    // Sharing again is a FRESH grant naming the revocation it follows — the
+    // S2/S3 records above moved no honored state, so S1 is still the key's
+    // current state. A bare grant, naming the EMPTY state, is of neither kind.
     grant_record(&engine, &board.home_a, &board.draft_a, vec![board.acct_b.clone()]);
-    assert!(world(&engine).readable(Some(B), &board.draft_a), "a later grant admits again");
+    assert!(!world(&engine).readable(Some(B), &board.draft_a), "a bare re-grant replays nothing");
+    re_share(&engine, &board.home_a, &board.draft_a, vec![board.acct_b.clone()], &s1);
+    assert!(world(&engine).readable(Some(B), &board.draft_a), "a re-share naming S1 admits again");
+    engine.check_hints().expect("the seed pairs the re-share as the fold did");
 }
 
 /// …and what both vectors above are decided on is FOLD STATE, journaled
@@ -1633,59 +1693,58 @@ fn revoking_an_any_principal_prefix_s_last_issuer_removes_its_row() {
     engine.check_hints().expect("the seed agrees over the revocation");
 }
 
-/// The shared-entry shortfall, on the principal-exact index: the fold's query
-/// indexes are keyed by a grant's ISSUER, CONTENT-PREFIX and GRANTEE, and they
-/// are SETS: two admitted grants that agree on those three contribute ONE index
-/// entry, and nothing counts how many named it. So where an issuer grants the
-/// same prefix to the same grantee twice and then revokes ONE of the two, the
-/// entry both contributed leaves — while the other record stays in the
-/// operative set the dump's `grants` section renders.
+/// THE SHARED-ENTRY SHORTFALL, CLOSED on the principal-exact index (PUB-5.15
+/// (iv); RES-308). The fold's query indexes are keyed by a grant's ISSUER,
+/// CONTENT-PREFIX and GRANTEE and are SETS, so two operative grants agreeing
+/// on those three would share ONE entry and revoking either would take it
+/// from both. That shape is no longer reachable: the three fields are the
+/// grant's KEY, and a second grant of a key whose grant STANDS names the
+/// EMPTY state over a population that is not empty — the duplicate of a
+/// grant that stands, of NEITHER KIND. So the second deposit lands and is
+/// operative nowhere, and revoking the first withdraws the key whole, with no
+/// survivor left in the operative set and out of every index.
 ///
-/// Pinned here because the fold's own doc states it, and because it is the one
-/// place `readable` and that section disagree: the second grant is rendered
-/// and does not open its draft. Whether the index should carry a count is a
-/// spec question and not this crate's; what this test holds is that the
-/// behaviour cannot change unnoticed.
+/// Pinned here as the shortfall was (this test was
+/// `two_grants_sharing_an_index_entry_are_withdrawn_together`, whose premise —
+/// the survivor operative — the fourth outcome removed): the dump's `grants`
+/// section, which renders the operative set, now agrees with `readable`.
 #[test]
-fn two_grants_sharing_an_index_entry_are_withdrawn_together() {
+fn a_duplicate_of_a_standing_grant_shares_no_index_entry() {
     let engine = mem_engine();
     let board = two_accounts(&engine);
     // Two grants, same issuer, same content-prefix, same grantee.
     let first = grant_record(&engine, &board.home_a, &board.draft_a, vec![board.acct_b.clone()]);
     let second = grant_record(&engine, &board.home_a, &board.draft_a, vec![board.acct_b.clone()]);
     assert_ne!(first, second, "two deposits, two link addresses");
-    assert!(world(&engine).readable(Some(B), &board.draft_a), "granted twice");
+    assert!(world(&engine).readable(Some(B), &board.draft_a), "granted, by the first");
+    assert_eq!(
+        operative_grants(&engine),
+        vec![first.to_string()],
+        "the duplicate of a grant that stands is of neither kind"
+    );
 
     // Revoke the FIRST: a later record naming its link address.
     grant_record(&engine, &board.home_a, &first, vec![board.acct_b.clone()]);
 
     let w = world(&engine);
-    assert!(
-        !w.readable(Some(B), &board.draft_a),
-        "the entry both grants contributed left with the one that was revoked"
-    );
+    assert!(!w.readable(Some(B), &board.draft_a), "the key's one grant was revoked");
     assert!(w.issuers_for(&board.acct_b).is_empty(), "…and so did the feed's own read of it");
-    // The unrevoked record is still in the operative set: the dump's `grants`
-    // section names its link address.
-    let text = engine.world_dump().into_string();
-    assert!(
-        text.contains(&quoted(&second)),
-        "the second grant is still an operative record:\n{text}"
-    );
-    engine.check_hints().expect("the seed reproduces the fold over a shared index entry");
+    assert_eq!(operative_grants(&engine), Vec::<String>::new(), "no survivor stands unindexed");
+    engine.check_hints().expect("the seed refuses the duplicate as the fold did");
 }
 
-/// …and the shared-entry shortfall on the ANY-PRINCIPAL index, the form M10's
-/// `PublicationWorld::universal_grants` answers. Its trait text promises every
-/// prefix an admitted, unrevoked grant names; the index holds one entry per
-/// (issuer, prefix) and counts nothing, so revoking either of two identical
-/// grants withdraws the row for both while the survivor stays operative — the
-/// departure `World::universal_grants` and the seam's impl record.
+/// …and closed on the ANY-PRINCIPAL index, the form M10's
+/// `PublicationWorld::universal_grants` answers: its trait text promises
+/// every prefix an admitted, unrevoked grant names, and with one operative
+/// grant per (issuer, prefix) the index keeps that promise — revoking the one
+/// grant takes the row, and no identical grant survives operative beside it
+/// (this test was `two_any_principal_grants_sharing_an_entry_are_withdrawn_together`;
+/// its premise, the survivor, is gone with the shortfall).
 #[test]
-fn two_any_principal_grants_sharing_an_entry_are_withdrawn_together() {
+fn a_duplicate_any_principal_grant_shares_no_universal_entry() {
     let engine = mem_engine();
     let board = two_accounts(&engine);
-    // Two identical ANY-PRINCIPAL grants (empty `to`): one entry between them.
+    // Two identical ANY-PRINCIPAL grants (empty `to`): the second a duplicate.
     let first = grant_record(&engine, &board.home_a, &board.draft_a, vec![]);
     let second = grant_record(&engine, &board.home_a, &board.draft_a, vec![]);
     assert_ne!(first, second, "two deposits, two link addresses");
@@ -1696,25 +1755,22 @@ fn two_any_principal_grants_sharing_an_entry_are_withdrawn_together() {
             content_prefix: &board.draft_a,
             issuers: vec![&board.acct_a],
         }],
-        "the premise: one row, the entry both grants contributed"
+        "one row, the first grant's entry"
     );
+    assert_eq!(operative_grants(&engine), vec![first.to_string()], "the duplicate stands nowhere");
 
     // Revoke the FIRST: a later record naming its link address.
     grant_record(&engine, &board.home_a, &first, vec![]);
 
     let w = world(&engine);
-    assert!(w.universal_grants().is_empty(), "the shared entry left with the revoked grant");
+    assert!(w.universal_grants().is_empty(), "the one grant's entry left with it");
     assert!(
         <World as skep_febe::PublicationWorld>::universal_grants(&w).is_empty(),
-        "…and M10's seam answers the index, the survivor's prefix missing from it"
+        "…and M10's seam answers the index"
     );
     assert!(!w.readable(Some(PrincipalId(9)), &board.draft_a), "the predicate agrees");
-    let text = engine.world_dump().into_string();
-    assert!(
-        text.contains(&quoted(&second)),
-        "the second grant is still an operative record:\n{text}"
-    );
-    engine.check_hints().expect("the seed reproduces the fold over a shared entry");
+    assert_eq!(operative_grants(&engine), Vec::<String>::new(), "and nothing is operative");
+    engine.check_hints().expect("the seed refuses the duplicate as the fold did");
 }
 
 /// The reach the read predicate's PROJECTION cost term is paid over: the
@@ -1938,4 +1994,345 @@ fn one_reader_class_answers_each_document_by_its_own_owner() {
         reader.readable(&board.draft_a),
         "a seat of none still reaches A's ANY-PRINCIPAL grant"
     );
+}
+
+// ── outcome (iv): the grant names the state it replaces (PUB-5.15; RES-308) ──
+//
+// The replay rule at the grant: a GRANT is honored only where the state its
+// `replaces` names — the revocation it follows, or the EMPTY state where it
+// has no `replaces` link — is its KEY's current state, the key's population
+// read on the AUDIT view. PUB-5.19's Test line names the eight vectors below.
+
+/// A SHARE REPLAYED AFTER ITS REVOCATION is of NEITHER KIND (the replay
+/// investigation's row 17, rr-Q2's accepted risk, now closed): the request is
+/// deposited again exactly as first written — the same three slots and no
+/// `replaces` member, which is all a copy of a signed request can carry — and
+/// lands at a fresh address; it names the EMPTY state, and the key's
+/// population holds the withdrawn grant and its revocation, so it is honored
+/// for nothing. Both forms of the grantee, the named and the ANY-PRINCIPAL:
+/// `grant_exists` stays false, no index lists either, and the seed agrees.
+#[test]
+fn a_replayed_grant_after_a_revocation_is_of_neither_kind() {
+    let engine = mem_engine();
+    let board = two_accounts(&engine);
+    let named = grant_record(&engine, &board.home_a, &board.draft_a, vec![board.acct_b.clone()]);
+    let universal = grant_record(&engine, &board.home_a, &board.acct_a, vec![]);
+    grant_record(&engine, &board.home_a, &named, vec![board.acct_b.clone()]); // revoked
+    grant_record(&engine, &board.home_a, &universal, vec![]); // revoked
+    assert!(!world(&engine).readable(Some(B), &board.draft_a), "both withdrawn");
+
+    // The replays: the same requests, deposited again.
+    let replayed = grant_record(&engine, &board.home_a, &board.draft_a, vec![board.acct_b.clone()]);
+    grant_record(&engine, &board.home_a, &board.acct_a, vec![]);
+    assert_ne!(replayed, named, "a replay lands at a fresh address");
+
+    let w = world(&engine);
+    for principal in [B, PrincipalId(9)] {
+        assert!(
+            !w.readable(Some(principal), &board.draft_a),
+            "a replayed share re-opened the draft to {principal:?}"
+        );
+    }
+    assert!(w.issuers_for(&board.acct_b).is_empty(), "the named replay entered no index");
+    assert!(w.universal_grants().is_empty(), "…nor the any-principal one");
+    assert_eq!(operative_grants(&engine), Vec::<String>::new(), "nothing is operative");
+    engine.check_hints().expect("the seed refuses both replays as the fold did");
+}
+
+/// A RE-SHARE NAMING THE STANDING REVOCATION is HONORED: the issuer's own
+/// next act names the key's current state — the revocation — in its
+/// `replaces` member, and the MAKELINK that carries it deposits the grant and
+/// its `replaces` link together, the link at the grant's next address. The
+/// re-share is a FRESH grant: the grant the revocation withdrew is never
+/// re-admitted (A WITHDRAWAL, ONCE HONORED, IS LIFTED BY NOTHING) — the
+/// operative set holds the re-share alone, and the re-share's own revocation
+/// leaves the key withdrawn again.
+#[test]
+fn a_re_share_naming_the_standing_revocation_is_honored() {
+    let engine = mem_engine();
+    let board = two_accounts(&engine);
+    let grant = grant_record(&engine, &board.home_a, &board.draft_a, vec![board.acct_b.clone()]);
+    let revocation = grant_record(&engine, &board.home_a, &grant, vec![board.acct_b.clone()]);
+    assert!(!world(&engine).readable(Some(B), &board.draft_a), "withdrawn");
+
+    let again =
+        re_share(&engine, &board.home_a, &board.draft_a, vec![board.acct_b.clone()], &revocation);
+    let w = world(&engine);
+    assert!(w.readable(Some(B), &board.draft_a), "the re-share naming the revocation stands");
+    assert_eq!(
+        w.issuers_for(&board.acct_b),
+        vec![IssuerGrantIndexRow { issuer: &board.acct_a, content_prefixes: vec![&board.draft_a] }],
+        "one entry, the re-share's"
+    );
+    // The pair: the `replaces` link at the re-share's next address, from the
+    // re-share to the revocation it follows, typed the class.
+    let pair_addr = skep_address::checked_inc(&again, 0).expect("the next link address");
+    let pair = w.links().readlink(&pair_addr).expect("the replaces link sits beside the re-share");
+    assert_eq!(pair.type_slot().single_denoted(), Some(t_replaces().tumbler()));
+    assert_eq!(pair.from_slot().single_denoted(), Some(again.tumbler()));
+    assert_eq!(pair.to_slot().single_denoted(), Some(revocation.tumbler()));
+    assert_eq!(
+        operative_grants(&engine),
+        vec![again.to_string()],
+        "the withdrawn grant is not re-admitted: the re-share is a fresh share"
+    );
+    engine.check_hints().expect("the seed pairs the re-share as the fold did");
+
+    // Its own revocation withdraws the key again, and nothing lifts the first.
+    grant_record(&engine, &board.home_a, &again, vec![board.acct_b.clone()]);
+    assert!(!world(&engine).readable(Some(B), &board.draft_a), "withdrawn again");
+    assert_eq!(operative_grants(&engine), Vec::<String>::new());
+}
+
+/// A RE-SHARE NAMING A STALE REVOCATION is INERT: after a re-share and its
+/// own revocation, the key's current state is the SECOND revocation, and a
+/// re-share still naming the FIRST — the re-share's own request replayed, or
+/// a device that read the key before the second revocation — names a state
+/// the key has passed. It lands and grants nothing; the issuer's next act,
+/// naming the current revocation, is honored.
+#[test]
+fn a_re_share_naming_a_stale_revocation_is_inert() {
+    let engine = mem_engine();
+    let board = two_accounts(&engine);
+    let to_b = || vec![board.acct_b.clone()];
+    let grant = grant_record(&engine, &board.home_a, &board.draft_a, to_b());
+    let first = grant_record(&engine, &board.home_a, &grant, to_b());
+    let again = re_share(&engine, &board.home_a, &board.draft_a, to_b(), &first);
+    let second = grant_record(&engine, &board.home_a, &again, to_b());
+    assert!(!world(&engine).readable(Some(B), &board.draft_a), "the re-share withdrawn");
+
+    let stale = re_share(&engine, &board.home_a, &board.draft_a, to_b(), &first);
+    assert!(
+        !world(&engine).readable(Some(B), &board.draft_a),
+        "a re-share naming a revocation the key has passed granted"
+    );
+    assert_eq!(operative_grants(&engine), Vec::<String>::new(), "{stale} is of neither kind");
+    engine.check_hints().expect("the seed refuses the stale re-share as the fold did");
+
+    let current = re_share(&engine, &board.home_a, &board.draft_a, to_b(), &second);
+    assert!(world(&engine).readable(Some(B), &board.draft_a), "the current revocation's re-share");
+    assert_eq!(operative_grants(&engine), vec![current.to_string()]);
+}
+
+/// OF TWO RE-SHARES NAMING ONE REVOCATION THE FIRST COUNTS — the earlier in
+/// deposit order, in one home the lowest-addressed — and the second is of
+/// NEITHER KIND: once the first is honored the revocation is no longer the
+/// key's current state at the second's position. Two devices of one issuer
+/// re-sharing after one revocation meet exactly this (STOP-4's two hands):
+/// the second's deposit lands and grants nothing, so revoking the first
+/// leaves the key withdrawn — were the second honored, the grantee would
+/// still read.
+#[test]
+fn the_second_of_two_re_shares_naming_one_revocation_is_inert() {
+    let engine = mem_engine();
+    let board = two_accounts(&engine);
+    let to_b = || vec![board.acct_b.clone()];
+    let grant = grant_record(&engine, &board.home_a, &board.draft_a, to_b());
+    let revocation = grant_record(&engine, &board.home_a, &grant, to_b());
+    let first = re_share(&engine, &board.home_a, &board.draft_a, to_b(), &revocation);
+    let second = re_share(&engine, &board.home_a, &board.draft_a, to_b(), &revocation);
+    assert!(first < second, "the first in deposit order is the lower address");
+    assert_eq!(operative_grants(&engine), vec![first.to_string()], "the first counts");
+    engine.check_hints().expect("the seed honors the first and refuses the second");
+
+    grant_record(&engine, &board.home_a, &first, to_b());
+    assert!(
+        !world(&engine).readable(Some(B), &board.draft_a),
+        "the second re-share stood beside the first"
+    );
+}
+
+/// A FIRST GRANT NAMES THE EMPTY STATE — by the ABSENCE of a `replaces` link,
+/// as every share before this outcome was written — and is honored over a key
+/// whose population is empty; the same request after a revocation names the
+/// same EMPTY state over a population that is not, and is of NEITHER KIND.
+/// Keys never meet: a first grant of ANOTHER key, beside the withdrawn one, is
+/// honored as it always was.
+#[test]
+fn a_first_grant_names_the_empty_state_and_a_duplicate_after_a_revocation_does_not() {
+    let engine = mem_engine();
+    let board = two_accounts(&engine);
+    let first = grant_record(&engine, &board.home_a, &board.draft_a, vec![board.acct_b.clone()]);
+    assert!(world(&engine).readable(Some(B), &board.draft_a), "a first grant over an empty key");
+    let next = skep_address::checked_inc(&first, 0).expect("the next link address");
+    assert!(world(&engine).links().readlink(&next).is_none(), "…carrying no replaces link");
+
+    grant_record(&engine, &board.home_a, &first, vec![board.acct_b.clone()]); // the revocation
+    let duplicate =
+        grant_record(&engine, &board.home_a, &board.draft_a, vec![board.acct_b.clone()]);
+    assert!(!world(&engine).readable(Some(B), &board.draft_a), "{duplicate} names a stale EMPTY");
+
+    // Another key — the account rung, to the same grantee — is its own.
+    let other = grant_record(&engine, &board.home_a, &board.acct_a, vec![board.acct_b.clone()]);
+    assert!(world(&engine).readable(Some(B), &board.draft_a), "the account-rung grant opens it");
+    assert_eq!(operative_grants(&engine), vec![other.to_string()]);
+    engine.check_hints().expect("the seed decides both keys as the fold did");
+}
+
+/// A `replaces` LINK HOMED ELSEWHERE REACHES NO GRANT (residence, PUB-5.17): a
+/// grant's `replaces` is the link at the grant's own next address, homed with
+/// it — and the class's one writer puts every `replaces` link there, beside
+/// its OWN record, the open writes being fenced (M7's `ReplacesClass`). So the
+/// only `replaces` links a hand can mint naming A's revocation are homed with
+/// records of their own: here in A's DRAFT, whose record the fold never
+/// admits, and in B's doc 1, beside B's record of ANOTHER key — whose own
+/// current state is the EMPTY one, so a record of that key naming A's
+/// revocation names a state that is not its key's and is of neither kind
+/// too. Neither link names A's key's current state for any grant of A's: A's
+/// bare re-grant stays of neither kind, and the draft stays closed to B.
+#[test]
+fn a_replaces_link_homed_elsewhere_reaches_no_grant() {
+    let engine = mem_engine();
+    let board = two_accounts(&engine);
+    let to_b = || vec![board.acct_b.clone()];
+    let grant = grant_record(&engine, &board.home_a, &board.draft_a, to_b());
+    let revocation = grant_record(&engine, &board.home_a, &grant, to_b());
+    let bare = grant_record(&engine, &board.home_a, &board.draft_a, to_b());
+
+    // Homed in A's draft: the record and its link, both elsewhere.
+    let in_draft = re_share(&engine, &board.draft_a, &board.draft_a, to_b(), &revocation);
+    // Homed in B's doc 1: B's own record beside it, naming A's revocation.
+    let (home_b, _) =
+        engine.namespace().create_new_document(B, &board.acct_b, None).expect("B's published home");
+    let by_b = Caller::Principal(B);
+    let (in_b, _) = engine
+        .linkstore(&World::visible_to(by_b))
+        .makelink_replacing(
+            by_b,
+            &home_b,
+            SlotArg::Addrs(vec![board.draft_a.clone()]),
+            SlotArg::Addrs(vec![board.acct_b.clone()]),
+            SlotArg::Addrs(vec![t_grant()]),
+            &revocation,
+        )
+        .expect("B's record and its replaces link deposit into B's doc 1");
+
+    let w = world(&engine);
+    for pair_of in [&in_draft, &in_b] {
+        let pair = skep_address::checked_inc(pair_of, 0).expect("next");
+        let link = w.links().readlink(&pair).expect("a replaces link, homed with its own record");
+        assert_eq!(
+            link.to_slot().single_denoted(),
+            Some(revocation.tumbler()),
+            "naming A's revocation"
+        );
+        assert_ne!(document_of(&pair), Some(board.home_a.clone()), "homed elsewhere");
+    }
+    assert!(
+        !w.readable(Some(B), &board.draft_a),
+        "a replaces link homed elsewhere made {bare} — or its own record — a grant of A's"
+    );
+    assert!(w.issuers_for(&board.acct_b).is_empty(), "no entry for B, from A or from B");
+    assert_eq!(
+        operative_grants(&engine),
+        Vec::<String>::new(),
+        "{in_b} named a revocation of another key than its own: of neither kind"
+    );
+    engine.check_hints().expect("the seed reads each pair where the fold did");
+}
+
+/// AN `edit_link` SUCCESSOR OVER A STANDING GRANT OF ITS OWN KEY is of
+/// NEITHER KIND (PUB-4.15, PUB-5.13): `editlink` deposits a successor and a
+/// `[K_sup]` claim and mints no `replaces` link, so its successor names the
+/// EMPTY state — and the key's population holds the grant it edits. It lands,
+/// and revoking the edited grant leaves the key withdrawn. Over a key with no
+/// record, the successor is a fresh grant, as it always was.
+#[test]
+fn an_edit_link_successor_over_a_standing_grant_is_inert() {
+    let engine = mem_engine();
+    let board = two_accounts(&engine);
+    let grant = grant_record(&engine, &board.home_a, &board.draft_a, vec![board.acct_b.clone()]);
+    let issuer = Caller::Principal(A);
+    let visibility = World::visible_to(issuer);
+    let writer = engine.linkstore(&visibility);
+    let same_key = skep_links::Link::triple(
+        skep_links::enc([&board.draft_a]),
+        skep_links::enc([&board.acct_b]),
+        skep_links::enc([&t_grant()]),
+    );
+    let (edit, _) = writer
+        .editlink(issuer, &grant, same_key, &board.home_a, &board.home_a)
+        .expect("the issuer edits its own grant");
+    assert_eq!(operative_grants(&engine), vec![grant.to_string()], "the successor stands nowhere");
+
+    grant_record(&engine, &board.home_a, &grant, vec![board.acct_b.clone()]); // the revocation
+    assert!(
+        !world(&engine).readable(Some(B), &board.draft_a),
+        "the edit's successor {} stood beside the grant it edits",
+        edit.successor
+    );
+
+    // Over a key with nothing standing — the account rung — a fresh grant.
+    let other_key = skep_links::Link::triple(
+        skep_links::enc([&board.acct_a]),
+        skep_links::enc([&board.acct_b]),
+        skep_links::enc([&t_grant()]),
+    );
+    let (edit, _) = writer
+        .editlink(issuer, &grant, other_key, &board.home_a, &board.home_a)
+        .expect("an edit to another key");
+    assert_eq!(operative_grants(&engine), vec![edit.successor.to_string()]);
+    engine.check_hints().expect("the seed decides both successors as the fold did");
+}
+
+/// THE KEY's POPULATION IS READ ON THE AUDIT VIEW, AND THE SEED AGREES: the
+/// grant and the revocation that withdrew it are RETRACTED — the issuer's own
+/// `nullify`, which the engine admits and the daemon refuses (PUB-6.64) — and
+/// still count as records that stood. A replay after them is of neither kind
+/// and a re-share naming the retracted revocation is honored, live; across a
+/// restart the seed, which walks the class on the audit view, rebuilds the
+/// same population — the re-share still stands, a replay deposited after the
+/// restart is still refused, a re-share of the re-share's own revocation is
+/// still honored — and a reconstruction at a boundary between them answers
+/// that boundary's state.
+#[test]
+fn the_per_key_population_reads_the_audit_view_and_the_seed_agrees() {
+    let dir = tempdir().expect("tempdir");
+    let (board, again, before_again) = {
+        let engine = Engine::open(fsync_cfg(dir.path())).expect("fsync open");
+        let board = two_accounts(&engine);
+        let to_b = || vec![board.acct_b.clone()];
+        let grant = grant_record(&engine, &board.home_a, &board.draft_a, to_b());
+        let revocation = grant_record(&engine, &board.home_a, &grant, to_b());
+        let issuer = Caller::Principal(A);
+        let visibility = World::visible_to(issuer);
+        let writer = engine.linkstore(&visibility);
+        for retracted in [&grant, &revocation] {
+            writer.nullify(issuer, &board.home_a, retracted).expect("the issuer retracts its own");
+        }
+        assert!(world(&engine).links().is_nullified(&grant), "the fixture retracts the grant");
+        assert!(world(&engine).links().is_nullified(&revocation), "…and its revocation");
+
+        grant_record(&engine, &board.home_a, &board.draft_a, to_b()); // a replay
+        assert!(!world(&engine).readable(Some(B), &board.draft_a), "retracted, they still stood");
+        let before_again = engine.kernel().current_seq();
+        let again = re_share(&engine, &board.home_a, &board.draft_a, to_b(), &revocation);
+        assert!(
+            world(&engine).readable(Some(B), &board.draft_a),
+            "the retracted revocation is current"
+        );
+        engine.check_hints().expect("the audit-view seed rebuilds the population the fold kept");
+        engine.kernel().checkpoint().expect("checkpoint at head");
+        (board, again, before_again)
+    };
+
+    let engine = Engine::open(fsync_cfg(dir.path())).expect("reopen over the checkpoint");
+    let to_b = || vec![board.acct_b.clone()];
+    assert!(world(&engine).readable(Some(B), &board.draft_a), "recovered: the re-share stands");
+    assert_eq!(operative_grants(&engine), vec![again.to_string()]);
+    let w = engine.world_at(before_again).expect("a boundary between the replay and the re-share");
+    assert!(!w.readable(Some(B), &board.draft_a), "…and before the re-share, withdrawn");
+    engine.check_hints_of(&w).expect("the reconstruction's seed agrees");
+
+    // After the restart the seeded population decides new records.
+    grant_record(&engine, &board.home_a, &board.draft_a, to_b()); // a replay, now
+    assert_eq!(operative_grants(&engine), vec![again.to_string()], "the replay is still refused");
+    let revoked = grant_record(&engine, &board.home_a, &again, to_b());
+    let third = re_share(&engine, &board.home_a, &board.draft_a, to_b(), &revoked);
+    assert_eq!(
+        operative_grants(&engine),
+        vec![third.to_string()],
+        "…and the current state honored"
+    );
+    engine.check_hints().expect("the recovered fold equals a from-authoritative rebuild");
 }

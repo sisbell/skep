@@ -654,7 +654,8 @@ fn i4_c_d_supersession_from_the_same_home_is_the_only_revocation_and_grants_are_
     // one leaves the account-rung standing.
     let g_acct = deposit_grant(port, &signed, CLAIMANT_DOC1, CLAIMANT_ACCOUNT, Some(&b.account));
     reads("the account-rung grant beside it");
-    expect_resp(&typed_link(port, &signed, CLAIMANT_DOC1, &[g_doc.as_str()], &[b.account.as_str()], T_GRANT), "ack_addr");
+    let doc_revocation =
+        acked_addr(&typed_link(port, &signed, CLAIMANT_DOC1, &[g_doc.as_str()], &[b.account.as_str()], T_GRANT));
     reads("I4.c: the document-rung grant revoked, the account-rung one stands on its own");
     let revocation = acked_addr(&typed_link(port, &signed, CLAIMANT_DOC1, &[g_acct.as_str()], &[b.account.as_str()], T_GRANT));
     withheld("I4.c: both revoked by the class's own superseding records");
@@ -664,9 +665,13 @@ fn i4_c_d_supersession_from_the_same_home_is_the_only_revocation_and_grants_are_
     for record in [&g_doc, &g_acct, &revocation] {
         assert!(listed.contains(record), "I4.d: the class scan lists the permanent record {record}: {listed:?}");
     }
-    // …and a later grant admits again: the fold reads the admitted state.
+    // …a bare re-grant replays the withdrawn share and admits nothing (PUB-5.15
+    // (iv)); a re-share naming the revocation it follows admits again: the fold
+    // reads the admitted state.
     deposit_grant(port, &signed, CLAIMANT_DOC1, &d, Some(&b.account));
-    reads("a fresh grant after the revocations");
+    withheld("a bare re-grant after the revocations");
+    deposit_re_share(port, &signed, CLAIMANT_DOC1, &d, Some(&b.account), &doc_revocation);
+    reads("a re-share naming the revocation it follows");
     sd.shutdown();
 }
 

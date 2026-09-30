@@ -46,6 +46,14 @@ pub enum AuditClass {
     /// classifier gives the TYPE half, and the home half is the caller's, off
     /// a read it already has.
     StewardClassification,
+    /// The `replaces` LINK a grant is deposited with (PUB-5.15 (iii), (iv);
+    /// PUB-6.64's member as RES-308 lists it): the grant fold reads a grant's
+    /// pair on the AUDIT view, so a retraction of the link clears nothing the
+    /// fold reads — and a `nullify` admitted here would leave the ACTIVE-view
+    /// reads naming the grant's `replaces` as the EMPTY state, the replay the
+    /// link exists to close. Its home is the grant's own doc 1, published by
+    /// the residence pin (PUB-5.17), so its membership waits on nothing more.
+    Replaces,
 }
 
 impl AuditClass {
@@ -55,13 +63,14 @@ impl AuditClass {
     /// to the classes its fixture names. It sits beside
     /// [`AuditClass::requires_published_home`], whose exhaustive match is where
     /// a new class first fails to compile, so the class joins it in that edit.
-    const ALL: [AuditClass; 6] = [
+    const ALL: [AuditClass; 7] = [
         AuditClass::SuccessorOf,
         AuditClass::DelegatorEndorsement,
         AuditClass::ConsumptionMarker,
         AuditClass::JournalDesignation,
         AuditClass::RailRecord,
         AuditClass::StewardClassification,
+        AuditClass::Replaces,
     ];
 
     /// ⇔ a link of this class is a MEMBER only where the link's OWN HOME is
@@ -79,7 +88,8 @@ impl AuditClass {
             | AuditClass::DelegatorEndorsement
             | AuditClass::ConsumptionMarker
             | AuditClass::JournalDesignation
-            | AuditClass::RailRecord => false,
+            | AuditClass::RailRecord
+            | AuditClass::Replaces => false,
         }
     }
 }

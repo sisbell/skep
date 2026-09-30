@@ -113,6 +113,7 @@ impl Rig {
                     from: SlotArg::Addrs(vec![account.clone()]),
                     to: SlotArg::Addrs(vec![]),
                     ty: SlotArg::Addrs(vec![t_grant()]),
+                    replaces: None,
                 },
             },
         ) {

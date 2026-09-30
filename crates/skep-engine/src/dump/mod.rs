@@ -34,9 +34,11 @@
 //!   hints' copy of it (`hints.publication.drafts`, which STAYS — it is the
 //!   faithfulness check's subject, this section the authority it is checked
 //!   against).
-//! * **grants** (`grants_tree`, v5) — the grant fold's OPERATIVE set. The
-//!   engine keeps no grant slice, so this section is derived, and the
-//!   faithfulness check reaches the fold's records through it.
+//! * **grants** (`grants_tree`, v5) — the grant fold's OPERATIVE set, each
+//!   grant with the state its `replaces` names (the field PUB-5.15 (iv) added
+//!   under the same banner: dev boards regenerate). The engine keeps no grant
+//!   slice, so this section is derived, and the faithfulness check reaches
+//!   the fold's records through it.
 //! * **hints** (`hints_tree`) — M7's recomputable state through its public
 //!   read surfaces, M9's definition registry projected, and the engine's own
 //!   exception set. What that walk does NOT reach — and so what the
@@ -515,8 +517,10 @@ fn publication_tree(world: &World) -> SerdeTree {
 /// The GRANTS section: the grant fold's OPERATIVE set — every admitted,
 /// unrevoked grant keyed by the grant link's own address, each entry its
 /// `home` (the issuer's doc 1), its `issuer` (ω of the home), the
-/// `content_prefix` it shares and its `grantee` (`none` for the ANY-PRINCIPAL
-/// form, PUB-5.8). DERIVED — the fold's records, the engine keeping no grant
+/// `content_prefix` it shares, its `grantee` (`none` for the ANY-PRINCIPAL
+/// form, PUB-5.8) and the state its `replaces` names (`none` for the EMPTY
+/// state — a first share —, else the revocation a re-share follows; PUB-5.15
+/// (iv)). DERIVED — the fold's records, the engine keeping no grant
 /// slice — so [`crate::Engine::check_hints_of`] covers the grant fold's
 /// RECORDS through this section: a seed that admitted a record the fold did
 /// not moves these bytes. It does not cover the fold's two QUERY INDEXES,
@@ -537,18 +541,19 @@ fn grants_tree(world: &World) -> SerdeTree {
             .grants
             .operative_records()
             .map(|(addr, grant)| {
-                let GrantRecord { home, issuer, content_prefix, grantee } = grant;
-                let grantee = match grantee {
-                    Some(g) => SerdeTree::Str(g.to_string()),
+                let GrantRecord { home, issuer, content_prefix, grantee, replaces } = grant;
+                let optional = |a: &Option<Address>| match a {
+                    Some(a) => SerdeTree::Str(a.to_string()),
                     None => SerdeTree::Null,
                 };
                 (
                     SerdeTree::Str(addr.to_string()),
                     SerdeTree::Map(vec![
                         (key("content_prefix"), SerdeTree::Str(content_prefix.to_string())),
-                        (key("grantee"), grantee),
+                        (key("grantee"), optional(grantee)),
                         (key("home"), SerdeTree::Str(home.to_string())),
                         (key("issuer"), SerdeTree::Str(issuer.to_string())),
+                        (key("replaces"), optional(replaces)),
                     ]),
                 )
             })
@@ -715,9 +720,10 @@ impl crate::Engine {
     /// document-minting record and the seed over M3's publication map name
     /// the same drafts with the same owners (PUB-7.7's two halves), and for
     /// the grants that the fold over every link deposit and the seed over
-    /// the grants class's typed slice admit the same RECORDS. It
-    /// certifies nothing of the SIX derived structures the dump does not
-    /// reach, and each of those drives something a caller can observe:
+    /// the grants class's typed slice admit the same RECORDS, each naming
+    /// the same `replaces`. It certifies nothing of the EIGHT derived
+    /// structures the dump does not reach, and each of those drives
+    /// something a caller can observe:
     ///
     /// * M7's `dedup` drives `emit`'s incumbent lookup and with it
     ///   idempotence; `home_frontier` drives the address `next_link_address`
@@ -734,20 +740,28 @@ impl crate::Engine {
     ///   record of its home is a revocation or of neither kind (PUB-5.15).
     ///   The `grants` section renders the operative set and not the
     ///   earlier-record set.
+    /// * The grant fold's PER-KEY POPULATION — `populations` — and its
+    ///   UNPAIRED map — `unpaired` — drive the fourth outcome: whether a
+    ///   would-be grant names its key's current state, which is what a
+    ///   REPLAYED share is refused by (PUB-5.15 (iv)), and which would-be
+    ///   grant a `replaces` link is the pair of. The `grants` section renders
+    ///   each operative grant's `replaces` and neither structure.
     ///
-    /// A rebuild that mis-derived any of the six passes here. For the two
+    /// A rebuild that mis-derived any of the eight passes here. For the two
     /// indexes that is a gap in the CERTIFICATE rather than a live
     /// divergence, and the argument belongs beside the claim: both halves of
-    /// the discipline drive one `grants::fold_one`, so an index is a function
-    /// of the record SEQUENCE alone, and the halves can only order that
-    /// sequence differently across homes. An index entry is withdrawn by the
-    /// first record naming it (the shared-entry shortfall), so order can
-    /// matter only where two grants SHARE one — which requires a single
-    /// issuer, and admission ties an issuer to a single home, so sharing is
-    /// always intra-home, where the seed's address order IS the fold's deposit
-    /// order. The grant fold's own suite holds that argument, and the
-    /// earlier-record set beside it, as a law over generated histories,
-    /// comparing each structure directly after every deposit
+    /// the discipline drive one `grants::fold_one`, and one pair step beside
+    /// it, so an index is a function of the record SEQUENCE alone, and the
+    /// halves can only order that sequence differently across homes. Order
+    /// could matter only where two records touch one index entry — one KEY —
+    /// and every record of a key is homed in its issuer's one doc 1, where the
+    /// seed's address order IS the fold's deposit order; the fourth outcome
+    /// besides keeps two operative grants off one entry. The same argument
+    /// covers a key's population, and the unpaired map is per home. The grant
+    /// fold's own suite holds it, and the earlier-record set, the
+    /// populations and the unpaired map beside the indexes, as a law over
+    /// generated histories, comparing each structure directly after every
+    /// deposit
     /// (`a_rebuilt_grant_fold_equals_the_live_one_after_every_deposit_of_a_generated_history`).
     ///
     /// For the EXCEPTION SET the certificate has an edge of its own. Its two

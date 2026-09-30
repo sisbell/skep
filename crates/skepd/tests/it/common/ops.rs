@@ -25,6 +25,10 @@ pub const T_JOURNAL_DESIGNATION: &str = "1.1.0.1.0.1.0.3.22";
 pub const T_RAIL_RECORD: &str = "1.1.0.1.0.1.0.3.60";
 pub const T_STEWARD_CLASSIFICATION: &str = "1.1.0.1.0.1.0.3.61";
 pub const T_EDITION: &str = "1.1.0.1.0.1.0.3.14";
+/// The `replaces` type (PUB-5.15; RES-310's `3.12`): the audit-view class of
+/// the link a re-share is deposited with, and the one type a bare link write
+/// may not carry (`replaces_not_standalone`).
+pub const T_REPLACES: &str = "1.1.0.1.0.1.0.3.12";
 
 /// The daemon's publish-class refusal, in the `auth_wire` `code:detail`
 /// convention — the verdict every bare-session cell of the gate answers.

@@ -187,6 +187,20 @@ fn all_requests() -> Vec<Request> {
                 from: SlotArg::Resolve(vec![vs(d1(), 1, 5)]),
                 to: SlotArg::Resolve(vec![vs(d2(), 1, 6)]),
                 ty: SlotArg::Resolve(vec![vs(d3(), 1, 1)]),
+                replaces: None,
+            },
+        ),
+        // The `replaces` member (PUB-5.15): present, it rides as the address
+        // it names; absent — every other `make_link` here — it rides as no
+        // field at all.
+        rq(
+            None,
+            Op::MakeLink {
+                home: d1(),
+                from: SlotArg::Addrs(vec![d2()]),
+                to: SlotArg::Addrs(vec![]),
+                ty: SlotArg::Addrs(vec![a(&[1, 1, 0, 1, 0, 1, 0, 3, 90])]),
+                replaces: Some(link1()),
             },
         ),
         // Wire v5: mixed slots — a link-to-link addrs TO and a ghost
@@ -198,6 +212,7 @@ fn all_requests() -> Vec<Request> {
                 from: SlotArg::Resolve(vec![vs(d1(), 1, 5)]),
                 to: SlotArg::Addrs(vec![link1()]),
                 ty: SlotArg::Addrs(vec![a(&[1, 0, 1, 0, 3, 0, 3, 6, 1])]),
+                replaces: None,
             },
         ),
         // Wire v5: empty addrs FROM/TO are expressible (the store's type
@@ -209,6 +224,7 @@ fn all_requests() -> Vec<Request> {
                 from: SlotArg::Addrs(vec![]),
                 to: SlotArg::Addrs(vec![]),
                 ty: SlotArg::Addrs(vec![a(&[1, 0, 1, 0, 3, 0, 3, 6, 2])]),
+                replaces: None,
             },
         ),
         rq(

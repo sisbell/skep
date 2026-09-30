@@ -35,9 +35,10 @@
 //! ## Which of the two kinds a record is (PUB-5.15)
 //!
 //! A grant and the record that revokes it share ONE type, ONE home and ONE
-//! shape, so [`classify`] tells them apart — a THREE-WAY test, decided on the
-//! `from` slot and on the class's own population of that home IN DEPOSIT
-//! ORDER (RES-226), and total over every field it reads (RES-258):
+//! shape, so the fold tells them apart — a FOUR-WAY test, decided on the
+//! `from` slot, on the class's own population of that home IN DEPOSIT ORDER
+//! (RES-226), and at the fourth on the state the record's `replaces` names
+//! (RES-308), and total over every field it reads (RES-258):
 //!
 //! 1. a `from` that does not denote exactly ONE address is of NEITHER KIND;
 //! 2. a `from` naming an EARLIER admitted record of the class from this same
@@ -47,12 +48,47 @@
 //!    first one, and a second is honored for nothing;
 //! 3. every OTHER record is a GRANT where its `from` stands on the ladder
 //!    (RES-252) and its `to` denotes one address or is empty (RES-238), and
-//!    of NEITHER KIND otherwise.
+//!    of NEITHER KIND otherwise;
+//! 4. a record the third outcome calls a GRANT is HONORED only where the
+//!    state its `replaces` names — the revocation it follows, or the EMPTY
+//!    state where it names none — is its KEY's CURRENT state, and is
+//!    otherwise of NEITHER KIND ([`Grants::decide`]).
+//!
+//! [`classify`] answers the first three off the record's own slots; the
+//! fourth is asked of the grant it answers, because what a grant's
+//! `replaces` names is not in its slots: THE PAIR. A share that follows a
+//! withdrawal is deposited with a `replaces` LINK — `from` the grant, `to` the
+//! revocation it follows, typed [`t_replaces`] — in the grant's own
+//! transaction, so the link lands at the grant's own NEXT link address, one
+//! deposit after it ([`skep_links::LinkWriter::makelink_replacing`], the
+//! class's one writer). The fold reads a grant's `replaces` there and nowhere
+//! else: a `replaces` link homed elsewhere, or at any other address, names
+//! nothing to it (residence, PUB-5.17), and a grant with no link there names
+//! the EMPTY state. The fold meets a grant before its pair, so it decides the
+//! grant at the grant's own turn under the EMPTY state and decides it again
+//! when the pair lands ([`Grants::take_pair`]) — within the one transaction,
+//! so no reader ever sees the first answer where a second followed it.
+//!
+//! THE KEY is the index's own — (issuer, content-prefix, grantee), PUB-5.22 —
+//! and its POPULATION ([`Grants::populations`]) is every record of the class
+//! that moved that key's honored state: each grant honored for it, live or
+//! since withdrawn, and each revocation that withdrew one. It is read on the
+//! AUDIT view, as the whole fold is (PUB-6.31), so a withdrawn grant and the
+//! revocation that withdrew it still count as records that stood. The key's
+//! CURRENT state is the latest of them — the grant that stands, or the
+//! revocation that withdrew it — and the EMPTY state where there is none. So a
+//! grant naming no `replaces` is honored only over an empty population, and
+//! one naming a revocation only where that revocation is the latest; every
+//! other would-be grant is of NEITHER KIND — the first share REPLAYED after
+//! its revocation, a re-share replayed after a later one, the duplicate of a
+//! grant that stands, the second of two re-shares naming one revocation. The
+//! record a replay copies, signature and all, lands and is acknowledged, and
+//! grants nothing: honoring is a fact of resolution and never of the write.
 //!
 //! A record of NEITHER KIND enters no index and moves no honored state, a
 //! malformed record among them: [`Kind::Neither`] is the fold's one arm for
-//! such a record, and the record joins the earlier-record set and nothing
-//! else.
+//! such a record, and a would-be grant the fourth outcome refuses is not
+//! admitted; either joins the earlier-record set and nothing else.
 //! The set outcome (2) is decided on holds EVERY earlier admitted record, and
 //! never the operative set alone, which a revoked grant has left: read off that
 //! set, a record naming a withdrawn grant or a revocation names nothing the
@@ -61,7 +97,10 @@
 //! is empty, which a blind retry of a revoke is. Two promises rest on this
 //! test, each on the outcome that states it and neither on what the addresses
 //! happen to make true: A RECORD THAT WITHDRAWS A SHARE NEVER BECOMES ONE, and
-//! A WITHDRAWAL, ONCE HONORED, IS LIFTED BY NOTHING.
+//! A WITHDRAWAL, ONCE HONORED, IS LIFTED BY NOTHING. The fourth outcome keeps
+//! both: it reads a would-be GRANT alone, so no revocation reaches it, and a
+//! re-share it honors is a FRESH grant naming the withdrawal as the state it
+//! follows — the grant withdrawn is never re-admitted.
 //!
 //! ## Admission (I4, PUB-5.19)
 //!
@@ -71,13 +110,17 @@
 //!   ([`first_document_address`]`(issuer) == home`);
 //! * PUBLISHED — grants are born published, so the home is a published
 //!   document (an exception-set MISS);
-//! * UNREVOKED — no later admitted record from that same home names it.
+//! * UNREVOKED — no later admitted record from that same home names it;
+//! * NAMING THE CURRENT STATE — the state its `replaces` names is its key's
+//!   current state at its own position (outcome (iv), RES-308).
 //!
-//! Revocation is by SUPERSESSION (PUB-5.13), and the fold reads it from the
-//! GRANTS class alone: a later admitted `t_grant` record whose `from` names an
-//! EARLIER admitted grant's own link address revokes it (issuer alone —
-//! same home ⟹ same ω owner). A deposited `assert_sup` claim is lineage
-//! display, never a fold input.
+//! Revocation is by the class's own REVOCATION record (PUB-5.13), and the fold
+//! reads it from the GRANTS class alone: a later admitted `t_grant` record
+//! whose `from` names an EARLIER admitted grant's own link address revokes it
+//! (issuer alone — same home ⟹ same ω owner). A deposited `assert_sup` claim
+//! is lineage display, never a fold input, and so is `edit_link`'s: its
+//! successor carries no `replaces` link, so over a key with a record standing
+//! it names a state that is not current and is of NEITHER KIND (PUB-4.15).
 //!
 //! ## The query indexes
 //!
@@ -92,47 +135,45 @@
 //! ([`World::universal_grants`], [`World::issuers_for`]) hand out that STORED
 //! population — a superset of what the grants cover.
 //!
-//! ## The shared-entry shortfall
+//! ## The shared-entry shortfall, closed by the fourth outcome
 //!
 //! What the indexes hold is ENTRIES, not grants: one (issuer, content-prefix,
-//! grantee) triple apiece ([`GrantIndexEntry`]), a set member with no count. An
-//! admitted grant adds its entry and a revocation removes the entry of the
-//! grant it names, so where two operative grants share one — an issuer
-//! granting one prefix to one grantee twice, which MAKELINK's open surface
-//! deposits as two records — revoking EITHER takes the entry both contributed.
-//! The other stays operative (the dump's `grants` section renders it, and a
-//! rebuild agrees) yet is in no index: `grant_exists` answers `false` for what
-//! it covers and neither enumeration lists it, until a later grant adds the
-//! entry again. So everything read off the indexes answers one set: every
-//! entry an admitted grant added and no later revocation removed — every
-//! prefix an unrevoked grant names, LESS an entry a sibling's revocation took
-//! (`two_grants_sharing_an_index_entry_are_withdrawn_together`,
-//! `two_any_principal_grants_sharing_an_entry_are_withdrawn_together`).
-//!
-//! Whether PUB-1.31's third clause owes the survivor an answer, which an index
-//! that counts would give, is PUB's question; this module records the
-//! departure and does not decide it. Every read whose answer depends on it
-//! names it — the shared-entry shortfall — so the edit either answer calls
-//! for is found by searching for that name.
+//! grantee) triple apiece ([`GrantIndexEntry`]), a set member with no count.
+//! An admitted grant adds its entry and a revocation removes the entry of the
+//! grant it names. Until outcome (iv) the class admitted two operative grants
+//! sharing one entry — an issuer granting one prefix to one grantee twice —
+//! and revoking EITHER took the entry both contributed, leaving the other
+//! operative and in no index: THE SHARED-ENTRY SHORTFALL, recorded here as a
+//! departure PUB had not decided. An entry IS a key, and the fourth outcome
+//! honors no grant over a key whose population holds one standing: the
+//! duplicate names the EMPTY state, or a revocation, and the key's current
+//! state is the grant. So no key ever has two operative grants, no two
+//! operative grants share an entry, and everything read off the indexes
+//! answers the operative set exactly — every prefix an unrevoked grant names
+//! (`a_duplicate_of_a_standing_grant_shares_no_index_entry`,
+//! `a_duplicate_any_principal_grant_shares_no_universal_entry`). The indexes
+//! still hold no count; none is needed, because nothing the fold admits can
+//! add an entry twice. The reads that named the shortfall now answer without
+//! it, and it is named here so that a search for the old name finds why.
 
 use std::collections::BTreeMap;
 
 use im::{HashMap, HashSet, OrdMap, OrdSet};
-use skep_address::{document_of, parent, validate, Address, Level};
+use skep_address::{checked_inc, document_of, parent, validate, Address, Level};
 use skep_arrangement::trunk_of;
 use skep_links::{Link, LinkRec, LinkState, View};
 use skep_namespace::{first_document_address, M3State};
 
 use crate::publication::{is_published, Drafts};
-use crate::types::t_grant;
+use crate::types::{t_grant, t_replaces};
 use crate::world::World;
 
 /// One STORED row of the fold's ANY-PRINCIPAL index, as the LIVE ANY-PRINCIPAL
 /// set ([`World::universal_grants`]) enumerates it: a content-prefix as the
-/// index keys it, and the issuers whose ANY-PRINCIPAL index ENTRIES name it,
-/// under the shared-entry shortfall that read states. The pair opens only
-/// those documents under the prefix whose ω owner is the issuer, and none at
-/// all where it owns none.
+/// index keys it, and the issuers whose ANY-PRINCIPAL index ENTRIES name it —
+/// one operative grant behind each entry (the module doc's fourth outcome).
+/// The pair opens only those documents under the prefix whose ω owner is the
+/// issuer, and none at all where it owns none.
 ///
 /// An INDEX ROW, and never an answer: the borrowed twin of M10's
 /// `skep_febe::UniversalIndexRow`, the row `PublicationWorld::universal_grants`
@@ -165,8 +206,8 @@ pub struct UniversalGrantIndexRow<'a> {
 /// One STORED row of the fold's PRINCIPAL-EXACT index, inverted for one
 /// grantee as the GRANTEE-INDEXED read ([`World::issuers_for`]) hands it back:
 /// an issuer, and the union of the content-prefixes its index ENTRIES for the
-/// queried grantee name, under the shared-entry shortfall that read states.
-/// They open, as a [`UniversalGrantIndexRow`]'s do, only the documents under
+/// queried grantee name, one operative grant behind each. They open, as a
+/// [`UniversalGrantIndexRow`]'s do, only the documents under
 /// them whose ω owner is the issuer, so this is an INDEX ROW too and never an
 /// answer. [`UniversalGrantIndexRow`] is the transpose, and says why both are
 /// named and what a row borrows. Rows order by issuer, which no two rows of
@@ -182,9 +223,9 @@ pub struct IssuerGrantIndexRow<'a> {
 
 impl World {
     /// THE LIVE ANY-PRINCIPAL SET, enumerable (PUB-7.22; lane 3.6 §3): every
-    /// content-prefix an admitted, unrevoked ANY-PRINCIPAL grant NAMES (less
-    /// the shared-entry shortfall, below), with the issuers whose grants name
-    /// it — in prefix (tumbler) order, each issuer list in address order. An
+    /// content-prefix an admitted, unrevoked ANY-PRINCIPAL grant NAMES, with
+    /// the issuers whose grants name it — in prefix (tumbler) order, each
+    /// issuer list in address order. An
     /// INDEX SHAPE, never per-session state: the fold's universal index as rows
     /// borrowed from this world, enumerated once per request off one head
     /// snapshot by the feed's universal term (a K-way merge of these prefixes'
@@ -208,12 +249,12 @@ impl World {
     /// the daemon's feed uses the prefixes alone, as key ranges under its
     /// per-entry mask.
     ///
-    /// The rows are index ENTRIES, not grants, and that is where they fall
-    /// SHORT of the first sentence — the shared-entry shortfall, which
-    /// `crate::grants` states: two ANY-PRINCIPAL grants of one issuer naming
-    /// one prefix share one entry, revoking EITHER takes it, and the survivor
-    /// is listed nowhere here until a later grant adds the entry again
-    /// (`two_any_principal_grants_sharing_an_entry_are_withdrawn_together`).
+    /// The rows are index ENTRIES, not grants, and they answer the first
+    /// sentence exactly: the fold honors at most one grant per (issuer,
+    /// prefix, grantee) key at a time (PUB-5.15 (iv)), so no two operative
+    /// grants share an entry, and the shared-entry shortfall `crate::grants`
+    /// once recorded here cannot arise
+    /// (`a_duplicate_any_principal_grant_shares_no_universal_entry`).
     ///
     /// COST, per call, uncached, and linear in the WHOLE universal index —
     /// this read takes no argument, so there is nothing in the request to
@@ -228,9 +269,9 @@ impl World {
 
     /// THE GRANTEE-INDEXED READ (PUB-7.28; lane 3.6 §3): for `grantee` — a
     /// principal's account address — its ISSUERS, each with the UNION of the
-    /// content-prefixes that issuer's admitted grants to it NAME (less the
-    /// shared-entry shortfall, below), in issuer order, each prefix list in
-    /// address order. The discovery term a feed poll re-pays: grants SELECT
+    /// content-prefixes that issuer's admitted grants to it NAME, in issuer
+    /// order, each prefix list in address order. The discovery term a feed
+    /// poll re-pays: grants SELECT
     /// issuer streams (PUB-7.25), so a holder of N grants from M issuers merges
     /// M streams, each under one containment test against the union this read
     /// hands back. Reads the fold's principal-exact index — `grantee` alone,
@@ -246,11 +287,11 @@ impl World {
     /// the feed serves out of that stream is decided by its per-entry mask,
     /// the read predicate.
     ///
-    /// They are index ENTRIES too, under the same shared-entry shortfall:
-    /// where two grants from one issuer name one prefix for `grantee` and
-    /// EITHER is revoked, the survivor's prefix leaves its issuer's row, and
-    /// the row with it where that prefix was its last
-    /// (`two_grants_sharing_an_index_entry_are_withdrawn_together`).
+    /// They are index ENTRIES too, one operative grant behind each: a second
+    /// grant from one issuer naming one prefix for `grantee` is of neither
+    /// kind while the first stands (PUB-5.15 (iv)), so revoking the first
+    /// takes the prefix out of the row with no survivor left unlisted
+    /// (`a_duplicate_of_a_standing_grant_shares_no_index_entry`).
     ///
     /// COST, per call, uncached: one hash probe of the principal-exact index,
     /// then a walk of THAT grantee's whole row to invert it — one insert per
@@ -268,12 +309,16 @@ impl World {
 // (`1.1.0.1.0.1.0.3.90`, COMMONS DECISION 5): pinned in `types.rs` beside
 // every other commons address the engine and the daemon read as a VALUE.
 
-/// One admitted grant record — enough to answer queries and to withdraw its
-/// index entry when a later record revokes it. The fields are crate-visible
-/// for the world dump's `grants` section (lane 3.4 §3), which renders the
-/// fold's operative set through `Grants::operative_records` and destructures
-/// each record whole — so a field added here is a field that section must
-/// render, or the faithfulness check stops speaking for the whole record.
+/// One admitted grant record — enough to answer queries, to withdraw its
+/// index entry when a later record revokes it, and to name the state it
+/// replaced. The fields are crate-visible for the world dump's `grants`
+/// section (lane 3.4 §3), which renders the fold's operative set through
+/// `Grants::operative_records` and destructures each record whole — so a
+/// field added here is a field that section must render, or the faithfulness
+/// check stops speaking for the whole record.
+///
+/// Held for a WOULD-BE grant too, between its own turn and its pair's
+/// ([`Unpaired`]), which is where `replaces` is filled in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GrantRecord {
     /// The grant link's home document (the issuer's doc 1).
@@ -284,6 +329,12 @@ pub(crate) struct GrantRecord {
     pub(crate) content_prefix: Address,
     /// The grantee's account, or `None` for the ANY-PRINCIPAL form.
     pub(crate) grantee: Option<Address>,
+    /// The state the grant's `replaces` names (PUB-5.15 (iv)): the `to` of
+    /// the `replaces` link its own transaction deposited — the revocation a
+    /// re-share follows — or `None`, the EMPTY state, where it deposited none
+    /// (a first share). For an operative grant, the state that was its key's
+    /// current one when it was honored.
+    pub(crate) replaces: Option<Address>,
 }
 
 /// WHICH query index a grant belongs in, and where in it: the `grantee`
@@ -296,9 +347,11 @@ pub(crate) struct GrantRecord {
 /// A VALUE, and that is the distinction it draws against the record it comes
 /// from. A [`GrantRecord`] has an IDENTITY — the grant link's own address,
 /// which the operative set keys it by — while an index entry is defined
-/// entirely by these three fields: two admitted grants that agree on them are
-/// ONE entry, and the indexes hold no count of how many named it — the root of
-/// the module doc's shared-entry shortfall.
+/// entirely by these three fields, the grant's KEY ([`GrantKey`] is the owned
+/// form): two admitted grants that agree on them would be ONE entry, and the
+/// indexes hold no count of how many named it. That was the root of the
+/// module doc's shared-entry shortfall, and the fourth outcome is what keeps
+/// two operative grants off one key.
 struct GrantIndexEntry<'a> {
     issuer: &'a Address,
     content_prefix: &'a Address,
@@ -314,13 +367,63 @@ impl GrantRecord {
             grantee: self.grantee.as_ref(),
         }
     }
+
+    /// The KEY this record belongs to — its index entry, owned.
+    fn key(&self) -> GrantKey {
+        GrantKey {
+            issuer: self.issuer.clone(),
+            content_prefix: self.content_prefix.clone(),
+            grantee: self.grantee.clone(),
+        }
+    }
+}
+
+/// A grant's KEY (PUB-5.15 (iv), PUB-5.22): the ISSUER, the CONTENT-PREFIX and
+/// the GRANTEE — `None` for ANY-PRINCIPAL — the three fields an index entry
+/// is ([`GrantIndexEntry`] is the borrowed form), owned so that a key's
+/// population can be kept under it. Writers of different keys never meet: the
+/// fourth outcome reads one key's population and no other's. Every record of
+/// one key is homed in ONE document — the issuer's doc 1, the one home
+/// admission takes for that issuer — so within a key, address order IS
+/// deposit order.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct GrantKey {
+    issuer: Address,
+    content_prefix: Address,
+    grantee: Option<Address>,
+}
+
+/// What one member of a key's POPULATION did to the key's honored state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Member {
+    /// A grant HONORED for the key — standing, or since withdrawn.
+    Grant,
+    /// A revocation that WITHDREW the key's grant — the one state a re-share
+    /// can name.
+    Revocation,
+}
+
+/// A WOULD-BE GRANT whose pair has not been read: the record the fold met
+/// last in its home that the third outcome called a grant, with its
+/// [`GrantRecord`] as its own turn decided it — `replaces` the EMPTY state,
+/// since nothing had named another yet. [`Grants::take_pair`] decides it again
+/// where the next link of that home names it; any other next link leaves it
+/// unpaired for good. One per HOME, so a record's window is its own home's
+/// next address and nothing else.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Unpaired {
+    /// The would-be grant's own link address.
+    record: Address,
+    /// The record as its own turn read it.
+    grant: GrantRecord,
 }
 
 /// The grant fold: the operative grant set, the two query indexes it is
-/// projected into, and the earlier-record set. All `im` persistent
-/// structures, so `World::clone` on the commit path is one more root clone.
-/// `#[serde(skip)]` at the World: derived, never checkpointed (the module
-/// docs' hint discipline).
+/// projected into, the earlier-record set, each key's population and each
+/// home's unpaired would-be grant. All `im` persistent structures, so
+/// `World::clone` on the commit path is one more root clone. `#[serde(skip)]`
+/// at the World: derived, never checkpointed (the module docs' hint
+/// discipline).
 ///
 /// The classification asks the fold two questions, and asks both through
 /// methods: whether a `from` names an earlier record of its home
@@ -331,16 +434,19 @@ impl GrantRecord {
 /// through [`Grants::take_admitted`], the fold's one caller of the three
 /// transitions below, so every operative grant is in the earlier-record set.
 ///
-/// The operative set and its two indexes must agree, and [`Grants::admit`]
-/// and [`Grants::withdraw`] are the only two transitions that move any of the
-/// three — each doing the record edit and the index edit as ONE step. So the
-/// projection this type's fields describe is performed here rather than at a
-/// caller, and a fold arm that moved the set without its index would have to
-/// be written past those two rather than beside them. The earlier-record set
-/// stands apart from that agreement: [`Grants::keep_earlier`] is its one
-/// transition, it only ever gains, neither of the other two touches it, and
-/// [`Grants::take_admitted`] takes it for every admitted record, after that
-/// record's effect.
+/// The operative set, its two indexes and the key populations must agree,
+/// and [`Grants::admit`], [`Grants::withdraw`] and [`Grants::unadmit`] are the
+/// only three transitions that move any of them — each doing the record edit,
+/// the index edit and the population edit as ONE step. So the projection this
+/// type's fields describe is performed here rather than at a caller, and a
+/// fold arm that moved the set without its index, or without its key's
+/// population, would have to be written past those three rather than beside
+/// them. The earlier-record set stands apart from that agreement:
+/// [`Grants::keep_earlier`] is its one transition, it only ever gains, none of
+/// the other three touches it, and [`Grants::take_admitted`] takes it for
+/// every admitted record, after that record's effect. So does the unpaired
+/// map, whose one writer is [`Grants::take_admitted`] and whose one reader is
+/// [`Grants::take_pair`].
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Grants {
     /// THE OPERATIVE SET: the admitted, unrevoked grant records, keyed by the
@@ -371,6 +477,43 @@ pub(crate) struct Grants {
     /// class and never shrinks — a revocation ADDS a record — so its size is
     /// the depositors', as the class's own is.
     earlier_records: HashSet<Address>,
+    /// THE PER-KEY POPULATION (PUB-5.15 (iv); RES-308/309 — the authority
+    /// link type investigation's STOP-2): per [`GrantKey`], every admitted
+    /// record of the class that moved that key's honored state, by its link
+    /// address — each grant honored for the key, standing or since
+    /// WITHDRAWN, and each revocation that withdrew one. Read on the AUDIT
+    /// view, as the whole fold is: [`Grants::withdraw`] takes a grant out of
+    /// the operative set and LEAVES it here, beside the revocation it adds,
+    /// so a withdrawn grant still counts as a record that stood — which is
+    /// what keeps a replayed first share off an empty-looking key. Two
+    /// records of the class name a key and are not members, and neither
+    /// could be read as the key's state: a revocation naming a grant already
+    /// withdrawn (honored for nothing) and a would-be grant the fourth
+    /// outcome refused.
+    ///
+    /// The members of one key share one home, so the map's ADDRESS order is
+    /// their DEPOSIT order, and the key's CURRENT state is its last member —
+    /// [`Grants::current_state`]. No key holds an empty map: the one
+    /// transition that removes a member ([`Grants::unadmit`]) drops the key
+    /// with its last.
+    ///
+    /// Fold state like the rest, re-derived by [`seed`]. It grows by one
+    /// entry per honored grant and one per revocation ever made — the
+    /// withdrawn grants it keeps are what PUB-7.67's "one entry per
+    /// revocation ever made" counts — and never shrinks on the fold's own
+    /// path.
+    populations: HashMap<GrantKey, OrdMap<Address, Member>>,
+    /// THE UNPAIRED WOULD-BE GRANT of each HOME ([`Unpaired`]): the record
+    /// the fold met last in that home that the third outcome called a grant,
+    /// until the next link of its home names it as its pair. What lets the
+    /// fold decide a grant at its own turn and again at its pair's without a
+    /// read of the link store, which the fold is not handed: at the pair's
+    /// turn this holds the record's key and its first verdict. At most one
+    /// entry per home, replaced by that home's next would-be grant and
+    /// removed when its pair is read — so what stands at any snapshot is,
+    /// per home, the last would-be grant whose pair was never read, which is
+    /// what [`seed`] re-derives.
+    unpaired: HashMap<Address, Unpaired>,
     /// The PRINCIPAL-EXACT index: grantee account → its granted
     /// content-prefixes → the issuers who granted them.
     by_grantee: HashMap<Address, OrdMap<Address, OrdSet<Address>>>,
@@ -438,8 +581,8 @@ impl Grants {
 
     /// `grant_exists(doc, p)` (PUB-1.31's third clause): does some index ENTRY
     /// cover `doc` for principal-account `grantee`, issued by doc's ω owner? An
-    /// entry and not a grant, so the answer falls under the module doc's
-    /// shared-entry shortfall. Coverage = CONTAINMENT (a granted prefix ⊑ doc)
+    /// entry and not a grant, and one operative grant stands behind each (the
+    /// module doc's fourth outcome). Coverage = CONTAINMENT (a granted prefix ⊑ doc)
     /// ∩ the grant's issuer is `owner`. One probe of the principal-exact index
     /// (when there is a grantee) and one of the ANY-PRINCIPAL index at each
     /// ancestor, `doc` itself included.
@@ -505,10 +648,13 @@ impl Grants {
     /// The fold's step over ONE ADMITTED record of the class, deposited at
     /// `addr` in `home` by `issuer` — [`admitted_issuer`]'s answer. The record
     /// is classified against the fold as it stands and its kind takes effect:
-    /// a GRANT is admitted, a REVOCATION withdraws the grant it names, and a
-    /// record of NEITHER kind moves nothing honored. Then, whatever its kind,
-    /// it is kept as an earlier record, so a later record of its home naming
-    /// it is answered by PUB-5.15's second outcome.
+    /// a would-be GRANT is decided by the fourth outcome under the EMPTY state
+    /// ([`Grants::decide`]) — its pair, if it has one, is the NEXT deposit of
+    /// its home — and held as its home's unpaired would-be grant; a REVOCATION
+    /// withdraws the grant it names; and a record of NEITHER kind moves
+    /// nothing honored. Then, whatever its kind, it is kept as an earlier
+    /// record, so a later record of its home naming it is answered by
+    /// PUB-5.15's second outcome.
     ///
     /// ONE step, because the classification rests on two orders inside it.
     /// The record is classified BEFORE it joins the earlier-record set, so it
@@ -522,36 +668,159 @@ impl Grants {
         let kind = classify(self, &home, value);
         match kind {
             Kind::Grant { content_prefix, grantee } => {
-                self.admit(addr.clone(), GrantRecord { home, issuer, content_prefix, grantee });
+                let grant = GrantRecord {
+                    home: home.clone(),
+                    issuer,
+                    content_prefix,
+                    grantee,
+                    replaces: None,
+                };
+                self.decide(addr.clone(), grant.clone());
+                self.unpaired.insert(home, Unpaired { record: addr.clone(), grant });
             }
-            Kind::Revoke { revoked } => self.withdraw(&revoked),
+            Kind::Revoke { revoked } => self.withdraw(&revoked, addr.clone()),
             Kind::Neither => {}
         }
         self.keep_earlier(addr);
     }
 
+    /// THE PAIR's step — the `replaces` link deposited at `addr`, whose value
+    /// is `value` (typed [`t_replaces`]): where it sits at its home's
+    /// unpaired would-be grant's NEXT link address and its `from` denotes
+    /// exactly that record, it is that record's pair (PUB-5.15: "the `to` of
+    /// the `replaces` link homed with that grant whose `from` is that grant,
+    /// deposited in the grant's own transaction"), and the record is DECIDED
+    /// AGAIN on the state the pair names: its first verdict, taken under the
+    /// EMPTY state, is taken back ([`Grants::unadmit`]) and the fourth outcome
+    /// asked anew ([`Grants::decide`]). Any other `replaces` link names
+    /// nothing to the fold — homed elsewhere, at another address, naming
+    /// another record — and moves nothing.
+    ///
+    /// EXACT, because nothing of the record's key moved between the two
+    /// turns: the pair is the record's home's next deposit, and every record
+    /// of a key is homed in that one home. So taking the first verdict back
+    /// restores the key to what it was at the record's own position, which is
+    /// where PUB-5.15 asks the question.
+    ///
+    /// The state named is the pair's `to`: the EMPTY state where the slot is
+    /// empty, the one address it denotes otherwise — and NONE the fold can
+    /// read where it denotes several, or one M1 refuses, which leaves the
+    /// record of NEITHER KIND (RES-258's totality over every field the test
+    /// reads). The one writer of the class deposits neither, and a record's
+    /// first verdict never outlives a pair that names nothing it can read.
+    fn take_pair(&mut self, addr: &Address, value: &Link) {
+        let home = document_of(addr)
+            .expect("a link address is element-level, so its home document exists");
+        let Some(unpaired) = self.unpaired.get(&home) else {
+            return;
+        };
+        let names_the_record =
+            value.from_slot().single_denoted() == Some(unpaired.record.tumbler());
+        let at_its_next_address = checked_inc(&unpaired.record, 0).is_ok_and(|next| next == *addr);
+        if !(names_the_record && at_its_next_address) {
+            return;
+        }
+        let Unpaired { record, mut grant } =
+            self.unpaired.remove(&home).expect("the entry was read a line above");
+        self.unadmit(&record);
+        let named = if value.to_slot().is_empty() {
+            None
+        } else {
+            let Some(named) =
+                value.to_slot().single_denoted().and_then(|t| validate(t.clone()).ok())
+            else {
+                return; // a `to` naming no one state: the record is of neither kind
+            };
+            Some(named)
+        };
+        grant.replaces = named;
+        self.decide(record, grant);
+    }
+
+    /// OUTCOME (iv), taken (PUB-5.15; RES-308): ADMIT the would-be `grant`
+    /// deposited at `addr` where the state its `replaces` names is its key's
+    /// CURRENT state ([`Grants::names_the_current_state`]); otherwise it is of
+    /// NEITHER KIND and nothing moves. The one door to [`Grants::admit`].
+    fn decide(&mut self, addr: Address, grant: GrantRecord) {
+        if self.names_the_current_state(&grant.key(), grant.replaces.as_ref()) {
+            self.admit(addr, grant);
+        }
+    }
+
+    /// OUTCOME (iv)'s question: is the state `replaces` names — `None` the
+    /// EMPTY state — `key`'s CURRENT state? The EMPTY state is current where
+    /// the key's population is empty; a named state is current where it is
+    /// the population's latest member and that member is a REVOCATION — the
+    /// one state a re-share follows. So a grant naming the grant that stands
+    /// is refused as surely as one naming a revocation a later record has
+    /// passed: two operative grants of one key is the state this outcome
+    /// exists to keep out. Of two re-shares naming one revocation the FIRST
+    /// counts — the lowest-addressed, its home being their deposit order —
+    /// since once it is honored the revocation is no longer the latest.
+    fn names_the_current_state(&self, key: &GrantKey, replaces: Option<&Address>) -> bool {
+        match (replaces, self.current_state(key)) {
+            (None, None) => true,
+            (Some(named), Some((latest, Member::Revocation))) => named == latest,
+            _ => false,
+        }
+    }
+
+    /// `key`'s CURRENT state: its population's latest member — the grant that
+    /// stands, or the revocation that withdrew the last one — or `None`, the
+    /// EMPTY state, where the population is empty.
+    fn current_state(&self, key: &GrantKey) -> Option<(&Address, Member)> {
+        self.populations.get(key).and_then(OrdMap::get_max).map(|(addr, member)| (addr, *member))
+    }
+
     /// ADMIT `grant`, deposited at link address `addr`: it joins the operative
-    /// set under its own address and its [`GrantIndexEntry`] joins the query
-    /// index that entry names. One transition, so the set and its projection
-    /// cannot part. [`Grants::take_admitted`] is its one caller, for a record
-    /// [`classify`] finds a GRANT.
+    /// set under its own address, its [`GrantIndexEntry`] joins the query
+    /// index that entry names, and it joins its key's population as a
+    /// [`Member::Grant`]. One transition, so the set, its projection and the
+    /// population cannot part. [`Grants::decide`] is its one caller, for a
+    /// would-be grant the fourth outcome honors.
     fn admit(&mut self, addr: Address, grant: GrantRecord) {
         self.index_add(grant.index_entry());
+        self.populations.entry(grant.key()).or_default().insert(addr.clone(), Member::Grant);
         self.operative_records.insert(addr, grant);
     }
 
-    /// WITHDRAW the grant deposited at `addr`: it leaves the operative set and
-    /// its [`GrantIndexEntry`] leaves the query index it was added to. One
-    /// transition, and one lookup, since the removal hands the record back.
-    /// Naming no admitted grant is a no-op.
+    /// WITHDRAW the grant deposited at `addr`, by the revocation deposited at
+    /// `by`: it leaves the operative set, its [`GrantIndexEntry`] leaves the
+    /// query index it was added to — and it STAYS in its key's population,
+    /// which `by` joins as the key's new current state, a
+    /// [`Member::Revocation`]. One transition, and one lookup, since the
+    /// removal hands the record back. Naming no operative grant is a no-op:
+    /// a revocation honored for nothing joins no population.
     ///
     /// The indexes are SETS and hold no count, so an entry is withdrawn by the
-    /// first record that names it, even where another operative grant
-    /// contributed it too: the mechanism of the module doc's
-    /// shared-entry shortfall.
-    fn withdraw(&mut self, addr: &Address) {
+    /// first record that names it; the fourth outcome is what makes that
+    /// exact, no second operative grant ever sharing the entry.
+    fn withdraw(&mut self, addr: &Address, by: Address) {
         if let Some(grant) = self.operative_records.remove(addr) {
             self.index_remove(grant.index_entry());
+            self.populations.entry(grant.key()).or_default().insert(by, Member::Revocation);
+        }
+    }
+
+    /// TAKE BACK the admission of the grant deposited at `addr` — the
+    /// verdict its own turn gave it under the EMPTY state, where its pair
+    /// names another ([`Grants::take_pair`]): it leaves the operative set, its
+    /// index entry and its key's population, the key dropped with its last
+    /// member, so the fold stands as it did before the record. A no-op where
+    /// that turn admitted nothing. Exact only there, one deposit after the
+    /// record: an admission under the EMPTY state found the key's population
+    /// empty, so the record was its only member and its entry's only grant.
+    fn unadmit(&mut self, addr: &Address) {
+        let Some(grant) = self.operative_records.remove(addr) else {
+            return;
+        };
+        self.index_remove(grant.index_entry());
+        let key = grant.key();
+        if let Some(population) = self.populations.get_mut(&key) {
+            population.remove(addr);
+            if population.is_empty() {
+                self.populations.remove(&key);
+            }
         }
     }
 
@@ -624,11 +893,14 @@ impl Grants {
 /// act it names reads the GRANTS class alone (a later admitted `t_grant`
 /// record naming an earlier one), while `supersede` in this crate names the
 /// ⟦supersedes⟧ CLASS — the claims `crate::dump`'s filter walks and the fold
-/// must never take an input from. Revocation is by supersession (PUB-5.13),
-/// and that is exactly why the two need two words here.
+/// must never take an input from. Revocation is by the class's own record
+/// (PUB-5.13), and lineage is the `supersedes` claim, and that is exactly why
+/// the two need two words here.
 enum Kind {
-    /// A fresh grant of `content_prefix` — a document or an account — to
-    /// `grantee` (`None` = ANY-PRINCIPAL).
+    /// A WOULD-BE grant of `content_prefix` — a document or an account — to
+    /// `grantee` (`None` = ANY-PRINCIPAL): what the third outcome calls a
+    /// GRANT, and what the fourth then honors or leaves of neither kind
+    /// ([`Grants::decide`]).
     Grant { content_prefix: Address, grantee: Option<Address> },
     /// A revocation naming an EARLIER admitted grant's link address, the grant
     /// still operative. Decided off the `from` slot ALONE, so this arm's `to`
@@ -649,11 +921,11 @@ enum Kind {
     Neither,
 }
 
-/// Whether a link value is a `t_grant`-typed record — denotation equality on
-/// the type slot (the fold keys on `t_grant` as a VALUE, never through M7's
-/// registry).
-fn is_grant_typed(value: &Link, grants_class: &Address) -> bool {
-    value.type_slot().single_denoted() == Some(grants_class.tumbler())
+/// Whether a link value is typed `class` — denotation equality on the type
+/// slot. The fold keys on its two commons types, [`t_grant`] and
+/// [`t_replaces`], as VALUES, never through M7's registry.
+fn is_typed(value: &Link, class: &Address) -> bool {
+    value.type_slot().single_denoted() == Some(class.tumbler())
 }
 
 /// Admission (I4), asked of a record's home: the ISSUER (ω of `home`) where
@@ -713,13 +985,23 @@ fn on_the_ladder(from: &Address) -> bool {
     }
 }
 
-/// Classify one admitted `t_grant` record — PUB-5.15's three-way test, in its
-/// own order (the module docs state it whole): a `from` that does not denote
-/// exactly one address is of NEITHER KIND; a `from` naming an EARLIER admitted
-/// record of this home is a REVOCATION where that record is an operative
-/// grant and of NEITHER KIND where it is anything else; every other record is
-/// a fresh GRANT where its `from` stands on the ladder and its `to` is the
-/// grantee (empty ⟹ ANY-PRINCIPAL), and of NEITHER KIND otherwise.
+/// Classify one admitted `t_grant` record — PUB-5.15's test, its first three
+/// outcomes in its own order (the module docs state it whole): a `from` that
+/// does not denote exactly one address is of NEITHER KIND; a `from` naming an
+/// EARLIER admitted record of this home is a REVOCATION where that record is
+/// an operative grant and of NEITHER KIND where it is anything else; every
+/// other record is a would-be GRANT where its `from` stands on the ladder and
+/// its `to` is the grantee (empty ⟹ ANY-PRINCIPAL), and of NEITHER KIND
+/// otherwise.
+///
+/// The FOURTH outcome is asked of the would-be grant this answers, by
+/// [`Grants::decide`]: what it reads — the state the grant's `replaces`
+/// names — is not in the record's slots but in its PAIR, which lands one
+/// deposit later, so it is decided at the record's own turn under the EMPTY
+/// state and again at the pair's ([`Grants::take_pair`]). Nothing here reads
+/// it, and so no outcome above moves with it: a record the first three call
+/// a revocation, or of neither kind, is that whatever a `replaces` link beside
+/// it names.
 ///
 /// PRECEDENCE, which is part of the rule rather than an accident of the order
 /// the lines happen to sit in: the EARLIER-RECORD test speaks first, and it is
@@ -743,7 +1025,7 @@ fn on_the_ladder(from: &Address) -> bool {
 /// ladder that one day gains a rung.
 ///
 /// Every slot this DOES read is read for exactly one denoted address: the
-/// type slot at [`is_grant_typed`] before this is called, `from` always, and
+/// type slot at [`is_typed`] before this is called, `from` always, and
 /// `to` on the fresh-grant arm alone. A slot denoting several, or a `from`
 /// denoting none or one M1 refuses, is malformed and so of [`Kind::Neither`]
 /// — the fail-closed direction, since a record naming two grantees grants to
@@ -791,8 +1073,10 @@ fn classify(prev: &Grants, home: &Address, value: &Link) -> Kind {
 
 /// The shared fold core: the grant fold after the link `(addr, value)` has
 /// been applied to the store. Both [`fold`] (per journal record) and [`seed`]
-/// (the whole-map load pass) drive this ONE path, so the seed reproduces the
-/// fold. Only a `t_grant` deposit that ADMITS moves the fold.
+/// (the whole-map load pass) drive this ONE path, and [`Grants::take_pair`]
+/// beside it, so the seed reproduces the fold. Only a `t_grant` deposit that
+/// ADMITS moves the fold here; a `replaces` link moves it through the pair's
+/// step.
 ///
 /// The accumulator arrives OWNED because that is what both callers have: the
 /// seed threads its own across the walk, and the fold gives a clone of the
@@ -816,7 +1100,7 @@ fn fold_one(
     addr: Address,
     value: &Link,
 ) -> Grants {
-    if !is_grant_typed(value, t_grant()) {
+    if !is_typed(value, t_grant()) {
         return prev;
     }
     // A link address is ELEMENT-LEVEL, so it has a home document — M7's own
@@ -849,15 +1133,22 @@ fn fold_one(
 /// and `editlink` deposits a successor rather than touching its original. A
 /// journal record that changed a resident link's slots would split the
 /// halves, and it would have to be answered here.
+///
+/// TWO TYPES move it: a `t_grant` record, through [`fold_one`], and a
+/// [`t_replaces`] link, through [`Grants::take_pair`] — the second only while
+/// some home holds an unpaired would-be grant for it to be the pair of.
 pub(crate) fn fold(prev: &Grants, namespace: &M3State, drafts: &Drafts, rec: &LinkRec) -> Grants {
     let LinkRec::Deposit { addr, value, .. } = rec else {
         return prev.clone();
     };
-    // Nearly every deposit is no record of the class, and its type slot says
-    // so in one read. The owned address below exists only for `fold_one` to
-    // KEEP, so it is built for a grant-typed deposit alone; `fold_one` asks
-    // again, which is what keeps it the ONE path the seed drives too.
-    if !is_grant_typed(value, t_grant()) {
+    // Nearly every deposit is no record of the class and no pair, and its
+    // type slot says so in one read apiece. The owned address below exists
+    // only for the two steps to read and KEEP, so it is built for those two
+    // types alone; `fold_one` asks the grant type again, which is what keeps
+    // it the ONE path the seed drives too.
+    let grant = is_typed(value, t_grant());
+    let pair = !grant && is_typed(value, t_replaces()) && !prev.unpaired.is_empty();
+    if !grant && !pair {
         return prev.clone();
     }
     // T4 VALIDITY is M7's own totality domain for a staged link address, and
@@ -868,7 +1159,12 @@ pub(crate) fn fold(prev: &Grants, namespace: &M3State, drafts: &Drafts, rec: &Li
     // accept.
     let link_addr = validate(addr.clone())
         .expect("a staged link address is T4-valid (M7's fold asserted it a moment ago)");
-    fold_one(prev.clone(), namespace, drafts, link_addr, value)
+    if grant {
+        return fold_one(prev.clone(), namespace, drafts, link_addr, value);
+    }
+    let mut next = prev.clone();
+    next.take_pair(&link_addr, value);
+    next
 }
 
 /// The SEED half (PUB-7.7): the grant fold a from-scratch walk of the GRANTS
@@ -891,8 +1187,16 @@ pub(crate) fn fold(prev: &Grants, namespace: &M3State, drafts: &Drafts, rec: &Li
 /// turn exactly the records of its home the fold's held, and the seed
 /// reproduces the fold. ACROSS homes the walk's order is not the deposits',
 /// and the classification cannot tell: the set is asked of one home at a time
-/// ([`Grants::holds_earlier`]), so another home's members, early or late,
-/// answer nothing.
+/// ([`Grants::holds_earlier`]), a key's population is one home's, and the
+/// unpaired map is per home, so another home's records, early or late, answer
+/// nothing.
+///
+/// THE PAIR, read where the live fold met it: after each record, a second
+/// `readlink` at the record's own NEXT link address, and where a
+/// [`t_replaces`] link sits there, the pair's step — so the seed takes the
+/// record's two turns in the order its transaction put them. The live fold
+/// meets that link as its home's next deposit, and the seed reads the one
+/// address that deposit took, so the two halves decide on one link.
 ///
 /// `type_slice` carries a stated PRECONDITION on its class — address-denoting
 /// or `iextent`-built, else it panics naming it — discharged where the class
@@ -923,16 +1227,21 @@ pub(crate) fn fold(prev: &Grants, namespace: &M3State, drafts: &Drafts, rec: &Li
 /// SEED COST, per load and per `Engine::world_at` reconstruction, and the
 /// PRODUCT of the grants class and M3's principal registry rather than
 /// anything a caller names: one `type_slice` over that class under the audit
-/// view, then per member one `readlink` and one [`fold_one`]. Every
+/// view, then per member two `readlink`s — the member's own and its next
+/// address's, where a pair would sit — and one [`fold_one`]. Every
 /// grant-typed member whose home is PUBLISHED — admitted or not, since the
 /// doc-1 test follows it — pays [`admitted_issuer`]'s ω resolution, M3's walk
 /// of the WHOLE principal registry, so the seed is Θ(members · |Π|) wherever
 /// the members are published-homed, which a depositor's own doc 1 is. A
 /// member whose home admits then joins the earlier-record set — one insert of
-/// its own link address, whatever its kind — and one that is a GRANT adds
-/// [`Grants::admit`]'s two besides — one into the operative map, one into an
-/// ordered index whose key is a content-prefix and whose member is an issuer,
-/// both addresses a DEPOSITOR chose and neither bounded by this crate. The
+/// its own link address, whatever its kind; one that is a would-be GRANT
+/// replaces its home's unpaired entry and, where the fourth outcome honors
+/// it, adds [`Grants::admit`]'s three — one into the operative map, one into
+/// an ordered index whose key is a content-prefix and whose member is an
+/// issuer, one into its key's population, whose key clones the three
+/// addresses — and one that is a REVOCATION adds one population insert beside
+/// its withdrawal; every address a DEPOSITOR chose and none bounded by this
+/// crate. A pair, where one sits, re-decides its record once. The
 /// ladder test ahead of that arm copies the `from` it is asked of once
 /// ([`trunk_of`]), linear in a component count the depositor chose too. So
 /// the figure is the store's, grown by every grant-typed link any account has
@@ -954,7 +1263,14 @@ pub(crate) fn seed(namespace: &M3State, links: &LinkState, drafts: &Drafts) -> G
         let value = links
             .readlink(&addr)
             .expect("a type_slice key names a resident link (M7's postcondition)");
+        // The record's next link address — where its own transaction put its
+        // pair, if it has one. `inc` at the last component keeps T4 for every
+        // address (TA5a admits k = 0 always).
+        let next = checked_inc(&addr, 0).expect("inc at the last component preserves T4");
         grants = fold_one(grants, namespace, drafts, addr, value);
+        if let Some(pair) = links.readlink(&next).filter(|pair| is_typed(pair, t_replaces())) {
+            grants.take_pair(&next, pair);
+        }
     }
     grants
 }

@@ -54,6 +54,13 @@
 //!   [`push_slot`]. A `Resolve` slot's V-specs are the client's own; the
 //!   endsets the transaction resolves them to are the transaction's and
 //!   enter no frame.
+//! * THE `replaces` ROW — the `make_link` member naming the state its record
+//!   REPLACES (PUB-5.15, RES-308/310): ONE length-delimited group, EMPTY
+//!   (`be32(0)`) where the op carries no member — the EMPTY state — and
+//!   otherwise holding the member as an address-form slot row of one element
+//!   — [`push_replaces`]. The group is what keeps the absent bytes apart from
+//!   every present spelling: a present member whose slot named nothing would
+//!   still be a nine-byte group, never the empty one.
 //!
 //! THE BODIES, per op of this slice — each an [`EntryBody`], the op's token
 //! paired with its body, so a body is never framed under another op's token:
@@ -61,9 +68,15 @@
 //! * `insert` — [`entry_body_insert`]: the DECLARED TYPE ADDRESS (the address
 //!   row, length-delimited; empty where the insert declares none) then the
 //!   values placed as a value sequence.
-//! * `make_link` — [`entry_body_make_link`] over a [`LinkSlots`]: the type
-//!   slot, then the `from` slot, then the `to` slot, each a slot row — the
-//!   slots taken by name, so this order is spelled here and nowhere else.
+//! * `make_link` — over a [`LinkSlots`]: the type slot, then the `from` slot,
+//!   then the `to` slot, each a slot row — the slots taken by name, so this
+//!   order is spelled here and nowhere else — then the `replaces` row:
+//!   [`entry_body_make_link`] where the op carries no member,
+//!   [`entry_body_make_link_replacing`] where it names one. The row moved the
+//!   body in place under `skep-entry-v1` (l6-A3: no `v1` signature is held
+//!   before the first served board, and dev boards regenerate), so a
+//!   member-less body is the three slots and an EMPTY group, never the three
+//!   slots alone.
 //! * `publish` — [`entry_body_publish`]: THE RUNS THE CLIENT PLACED, their
 //!   values in V-order as one value sequence — a PREFIX of the CHAIN member
 //!   the commit mints, never the whole member (the base's carried tail past
@@ -93,7 +106,8 @@ use crate::framing::{delimited_len, framed, push_delimited, ENTRY_TAG};
 /// * `account`, `doc` — each ADDRESS in its dotted-decimal spelling
 ///   (`1.0.1.0.1`), the one spelling of the address whatever string named it;
 /// * `op`, `body` — the [`EntryBody`]'s token and bytes, which its builder
-///   ([`entry_body_insert`], [`entry_body_make_link`], [`entry_body_publish`],
+///   ([`entry_body_insert`], [`entry_body_make_link`],
+///   [`entry_body_make_link_replacing`], [`entry_body_publish`],
 ///   [`PublishBody`]) pairs.
 ///
 /// PRECONDITION — as [`framed`]'s: every member is shorter than 2^32 bytes.
@@ -143,7 +157,8 @@ pub struct BoardTerm {
 
 /// ONE publish-class entry's `op` and `body` members, held together because
 /// they are one fact: each op's body has its own grammar, and the `op` token
-/// names which. Built only by [`entry_body_insert`], [`entry_body_make_link`]
+/// names which. Built only by [`entry_body_insert`], the two `make_link`
+/// builders ([`entry_body_make_link`], [`entry_body_make_link_replacing`])
 /// and [`PublishBody`] — [`entry_body_publish`] among its builds — so a body
 /// cannot be framed under another op's token, and a `publish` body cannot be
 /// finished over fewer values than its builder was offered. The tokens are
@@ -247,11 +262,14 @@ pub enum EntrySlot<'a> {
 /// of order, and have every attested `make_link` its signer made refused
 /// `attestation_invalid:signature`, with nothing naming the order. By field,
 /// the call site says which slot is which, and the order is spelled once, in
-/// [`entry_body_make_link`].
+/// the one body both `make_link` builders write through.
 ///
-/// Not `#[non_exhaustive]`: every caller builds one, and a `make_link` body
-/// has exactly these three slots — a fourth would be a new body grammar, not
-/// a new field of this one.
+/// Not `#[non_exhaustive]`: every caller builds one, and a link has exactly
+/// these three slots. The body's fourth row, the `replaces` member, is no
+/// slot of the link the record is: it names the state the record replaces,
+/// and what it deposits is a SECOND link (PUB-5.15). So it is not a field
+/// here — its presence is the builder's choice,
+/// [`entry_body_make_link_replacing`] against [`entry_body_make_link`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LinkSlots<'a> {
     /// The `from` slot.
@@ -310,22 +328,57 @@ pub fn entry_body_insert<'a>(
     EntryBody { op: "insert", bytes: out }
 }
 
-/// THE `make_link` BODY, under the `make_link` token: the TYPE slot, then the
-/// `from` slot, then the `to` slot — the body's order, whatever order the
-/// caller names them in — each as its form byte (`0x01` the address form,
-/// `0x02` the resolve form), `be64(n)`, then each element length-delimited —
-/// an address in its dotted-decimal spelling, a V-spec as its source address,
-/// its span's start and its span's width.
+/// THE `make_link` BODY of an op carrying NO `replaces` member — the EMPTY
+/// state (PUB-5.15: a first share names it by the member's absence), under
+/// the `make_link` token: the TYPE slot, then the `from` slot, then the `to`
+/// slot — the body's order, whatever order the caller names them in — each
+/// as its form byte (`0x01` the address form, `0x02` the resolve form),
+/// `be64(n)`, then each element length-delimited — an address in its
+/// dotted-decimal spelling, a V-spec as its source address, its span's start
+/// and its span's width; then the `replaces` row EMPTY, `be32(0)`.
 ///
 /// PRECONDITION — every element's spelling (an address, a span's start or
 /// width) is shorter than 2^32 bytes, as [`entry_body_insert`]'s values are;
 /// a longer one PANICS, naming the obligation.
 pub fn entry_body_make_link(slots: LinkSlots<'_>) -> EntryBody {
+    make_link_body(slots, None)
+}
+
+/// THE `make_link` BODY of an op whose `replaces` member names `replaces` —
+/// the record the one being written follows (PUB-5.15 (iv): the revocation a
+/// re-share follows): [`entry_body_make_link`]'s three slots, then the
+/// `replaces` row holding the member as an address-form slot row of one
+/// element, the whole group length-delimited. So the member is inside the
+/// signed bytes, and a hand that edits it breaks the signature.
+///
+/// PRECONDITION — as [`entry_body_make_link`]'s, the member's spelling
+/// included.
+pub fn entry_body_make_link_replacing(slots: LinkSlots<'_>, replaces: &Address) -> EntryBody {
+    make_link_body(slots, Some(replaces))
+}
+
+/// The one `make_link` body both builders write through, so the slots' order
+/// and the `replaces` row's place after them are spelled once.
+fn make_link_body(slots: LinkSlots<'_>, replaces: Option<&Address>) -> EntryBody {
     let mut out = Vec::new();
     push_slot(&mut out, slots.ty);
     push_slot(&mut out, slots.from);
     push_slot(&mut out, slots.to);
+    push_replaces(&mut out, replaces);
     EntryBody { op: "make_link", bytes: out }
+}
+
+/// THE `replaces` ROW, onto `out`: ONE length-delimited group — EMPTY where
+/// the op carries no member, else the member as an address-form slot row of
+/// one element. Delimited as a whole so that no present spelling can meet
+/// the absent one: the least a present group holds is a slot row's form
+/// byte and count, nine bytes.
+fn push_replaces(out: &mut Vec<u8>, replaces: Option<&Address>) {
+    let mut group = Vec::new();
+    if let Some(named) = replaces {
+        push_slot(&mut group, EntrySlot::Addrs(std::slice::from_ref(named)));
+    }
+    push_delimited(out, &group);
 }
 
 /// THE `publish` BODY, under the `publish` token: the client's runs' values
@@ -464,6 +517,13 @@ mod tests {
         out
     }
 
+    /// The `replaces` row alone, as the pins below state it.
+    fn replaces_bytes(replaces: Option<&Address>) -> Vec<u8> {
+        let mut out = Vec::new();
+        push_replaces(&mut out, replaces);
+        out
+    }
+
     /// The rows, byte for byte, at one small instance each — the pins a
     /// second implementation composes against — and the token each body
     /// carries into the frame's `op` member. The two insert pins put the
@@ -541,23 +601,61 @@ mod tests {
         // Three DISTINCT slots, named in the workspace's `from, to, ty` order:
         // the body lays out the type slot first whatever order they are named
         // in, and a builder that wrote them in any other order spells other
-        // bytes here.
+        // bytes here. Then the `replaces` row: EMPTY where the op carries no
+        // member, so a member-less body is never the three slots alone.
         let (ty, from) = ([element], [addr(&[1, 0, 1])]);
         let empty = EntrySlot::Addrs(&[]);
         let slots =
             LinkSlots { from: EntrySlot::Addrs(&from), to: empty, ty: EntrySlot::Addrs(&ty) };
+        assert_eq!(replaces_bytes(None), [0u8, 0, 0, 0], "absent: the EMPTY group");
         assert_eq!(
             entry_body_make_link(slots).as_bytes(),
-            [slot_bytes(slots.ty), slot_bytes(slots.from), slot_bytes(slots.to)].concat(),
-            "the type slot, then from, then to"
+            [
+                slot_bytes(slots.ty),
+                slot_bytes(slots.from),
+                slot_bytes(slots.to),
+                replaces_bytes(None)
+            ]
+            .concat(),
+            "the type slot, then from, then to, then the member's EMPTY group"
         );
+        // …and a member PRESENT: the one address as an address-form slot row,
+        // the whole row one group, length-delimited.
+        let revocation = addr(&[1, 0, 1, 0, 1, 0, 2, 9]);
+        // Group length 28: the form byte, `be64(1)`, then `be32(15)` and the
+        // fifteen bytes of the address's spelling.
+        let present = [
+            &[0u8, 0, 0, 28][..],
+            &[0x01, 0, 0, 0, 0, 0, 0, 0, 1][..],
+            &[0, 0, 0, 15][..],
+            b"1.0.1.0.1.0.2.9",
+        ]
+        .concat();
+        assert_eq!(replaces_bytes(Some(&revocation)), present, "present: one delimited group");
+        assert_eq!(
+            entry_body_make_link_replacing(slots, &revocation).as_bytes(),
+            [slot_bytes(slots.ty), slot_bytes(slots.from), slot_bytes(slots.to), present].concat(),
+            "the three slots, then the member's group"
+        );
+        // A PRESENT group holding an EMPTY slot row — a spelling no op makes,
+        // the wire's member being one address — is still not the absent bytes:
+        // the group's length tells the two apart.
+        let mut present_and_empty = Vec::new();
+        push_delimited(&mut present_and_empty, &slot_bytes(empty));
+        assert_eq!(present_and_empty, [&[0u8, 0, 0, 9][..], &slot_bytes(empty)[..]].concat());
+        assert_ne!(present_and_empty, replaces_bytes(None), "present-and-empty is never absent");
         assert_eq!(
             [
                 entry_body_insert(None, []).op(),
                 entry_body_make_link(LinkSlots { from: empty, to: empty, ty: empty }).op(),
+                entry_body_make_link_replacing(
+                    LinkSlots { from: empty, to: empty, ty: empty },
+                    &revocation
+                )
+                .op(),
                 entry_body_publish([]).op(),
             ],
-            ["insert", "make_link", "publish"],
+            ["insert", "make_link", "make_link", "publish"],
             "each body carries its own op's token"
         );
     }

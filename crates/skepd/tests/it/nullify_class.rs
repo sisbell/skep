@@ -4,7 +4,8 @@
 //! GRANT-TYPED target (PUB-6.30, `nullify_not_revocation`) and the
 //! AUDIT-VIEW class (PUB-6.64, `nullify_audit_view` — the succession pair,
 //! the consumption marker, the journal designation, the rail record, the
-//! steward's classification link where its home is published). Each cell ×
+//! steward's classification link where its home is published, the `replaces`
+//! link a re-share is deposited with, PUB-5.15). Each cell ×
 //! the caller classes the pack names: the OWNER (signed), a STRANGER (signed,
 //! non-entitled), the GUEST, and the BARE OWNER on a published home — plus
 //! the negative cell (the edition claim's owner retraction ADMITTED) and the
@@ -262,6 +263,53 @@ fn a_grant_typed_nullify_is_refused_to_the_issuer_and_masked_for_everyone_else()
     );
     let addrs = expect_resp(&v, "addrs")["addrs"].as_array().expect("addrs").clone();
     assert!(addrs.iter().any(|a| a.as_str() == Some(grant.as_str())), "still ACTIVE: {v}");
+    sd.shutdown();
+}
+
+/// The `replaces` LINK (PUB-5.15 (iii), (iv); PUB-6.64's member as RES-308
+/// lists it) — the link a RE-SHARE is deposited with, naming the revocation
+/// it follows — takes the audit-view cell as the class's other members do:
+/// `nullify_audit_view`, permanent, to its own ω owner; the bare owner meets
+/// the publish-class gate first (the pair is homed in the published doc 1,
+/// with its grant); a stranger, signed or bare, answers `not_owner` naming
+/// the home; the guest, `unauthenticated`. Nothing commits: the pair stays
+/// resident, and the re-share it names the state for stays honored — a
+/// retraction admitted here would leave the active-view reads naming the
+/// EMPTY state for it, the replay the link closes.
+#[test]
+fn a_replaces_link_nullify_is_refused_to_the_owner_and_masked_for_strangers() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let (_, stranger_signed) = signed_stranger(port, &signed, 954, 54);
+    let (_, stranger_bare) = stranger(port, 955);
+    let draft = owner_draft(port, &bare);
+    let grant = deposit_grant(port, &signed, CLAIMANT_DOC1, &draft, None);
+    let revocation = deposit_grant(port, &signed, CLAIMANT_DOC1, &grant, None);
+    let again = deposit_re_share(port, &signed, CLAIMANT_DOC1, &draft, None, &revocation);
+    let pair = next_link_address(&again);
+    assert!(link_resident(port, None, &pair), "the re-share's replaces link stands beside it");
+    let row = vec![(draft.clone(), vec![CLAIMANT_ACCOUNT.to_string()])];
+    assert_eq!(universal_grants(port, Some(&bare)), row, "the re-share is honored");
+
+    let before = head(port);
+    // OWNER, signed: the class code.
+    let v = nullify(port, Some(&signed), CLAIMANT_DOC1, &pair);
+    assert_eq!(verdict(&v), "credential_refused:nullify_audit_view", "{v}");
+    assert_eq!(v["disposition"].as_str(), Some("permanent"), "{v}");
+    // BARE OWNER: slot 4 first — the pair lands in the published doc 1.
+    let v = nullify(port, Some(&bare), CLAIMANT_DOC1, &pair);
+    assert_eq!(verdict(&v), "credential_refused:signed_session_required", "{v}");
+    // STRANGERS, signed or bare: ω's own answer, naming the home.
+    assert_not_owner(&nullify(port, Some(&stranger_signed), CLAIMANT_DOC1, &pair), CLAIMANT_DOC1);
+    assert_not_owner(&nullify(port, Some(&stranger_bare), CLAIMANT_DOC1, &pair), CLAIMANT_DOC1);
+    // GUEST: slot 0.
+    assert_eq!(verdict(&nullify(port, None, CLAIMANT_DOC1, &pair)), "unauthenticated");
+    assert_eq!(head(port), before, "the refusals commit nothing");
+    assert!(link_resident(port, None, &pair), "nothing was retracted");
+    assert_eq!(universal_grants(port, Some(&bare)), row, "and the re-share stands");
     sd.shutdown();
 }
 

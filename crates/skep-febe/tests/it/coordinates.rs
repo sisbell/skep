@@ -120,6 +120,7 @@ fn every_write_acks_at_the_coordinate_it_committed() {
         from: SlotArg::Resolve(vec![vspec(&home, 1, 1)]),
         to: SlotArg::Resolve(vec![vspec(&home, 2, 1)]),
         ty: SlotArg::Resolve(vec![vspec(&home, 3, 1)]),
+        replaces: None,
     };
 
     let r = ex(&fx.febe, fx.user, mk());
@@ -197,6 +198,7 @@ fn every_read_reports_the_log_head_as_its_as_of() {
         from: SlotArg::Resolve(vec![vspec(&draft, 1, 1)]),
         to: SlotArg::Resolve(vec![vspec(&draft, 2, 1)]),
         ty: SlotArg::Resolve(vec![vspec(&draft, 3, 1)]),
+        replaces: None,
     };
     let (l1, _) = ack_addr(ex(&fx.febe, fx.user, mk()));
     let (l2, _) = ack_addr(ex(&fx.febe, fx.user, mk()));

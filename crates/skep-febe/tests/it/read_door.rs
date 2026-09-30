@@ -44,6 +44,7 @@ fn link_over(fx: &Fixture, home: &Address, covered: &Address) -> Address {
             from: SlotArg::Resolve(vec![vspec(covered, 1, 1)]), // populated
             to: SlotArg::Addrs(vec![]),                         // ⟨⟩
             ty: SlotArg::Resolve(vec![vspec(covered, 3, 1)]),
+            replaces: None,
         },
     ))
     .0

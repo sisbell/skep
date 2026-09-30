@@ -142,7 +142,20 @@ an account — a grant already revoked, a revoking record, a node, a
 version, any other address — is neither a grant nor a revocation: it
 opens nothing and lifts no revocation. A grant homed anywhere but the
 issuer's own doc 1, or issued by anyone but the document's owner, opens
-nothing.
+nothing. And a grant opens only where the state it REPLACES is its
+KEY's current one (PUB-5.15 (iv)): the key is the issuer, the
+content-prefix and the grantee; a grant written with no `replaces`
+member names the EMPTY state and opens only where no record of that key
+has ever stood — no grant, live or revoked, and no revocation, a
+retracted one still counting — and a re-share, written with `replaces`
+naming the revocation it follows (§Links, `make_link`), opens only where
+that revocation is the key's latest record. So a share REPLAYED after
+its revocation — the same request re-sent, signature and all — opens
+nothing, and neither does the duplicate of a grant that stands, a
+re-share naming a revocation a later one has passed, or the second of two
+re-shares naming one revocation: each is deposited and acknowledged, and
+honored for nothing. The grant a revocation withdrew is never re-opened;
+a re-share is a fresh grant beside it.
 
 How a masked read answers:
 
@@ -1549,11 +1562,13 @@ gate below, after it, and ahead of the store's own gates):
   `detail` is the code joined to its cause: `signature` (no enrolled key
   of the algorithm verifies both halves over the frame the daemon
   composed — wrong bytes, a wrong `board` term, a body composed
-  otherwise; REORDER, re-compose), `not_enrolled_at_position` (the set
+  otherwise; PERMANENT: the same request is refused the same, and the
+  client's next act is a different one, the frame re-composed and
+  re-signed), `not_enrolled_at_position` (the set
   that opens the writer's account as of the write's base holds no key of
   the algorithm — an empty set included; PERMANENT, no retry under that
   key succeeds), `malformed` (the blob is not the tag's fixed width;
-  REORDER), `board_unavailable` (the board has no `H.1`, so the frame's
+  PERMANENT, a re-compose), `board_unavailable` (the board has no `H.1`, so the frame's
   `board` term has no value — unreachable on a claimed board in normal
   operation, since the claim writes `H.1` in its own step and a daemon
   opening a claimed board whose journal holds no head writes it before it
@@ -1571,7 +1586,7 @@ guest write (no token, unknown token, dead entry) answers M10's own
 stays `execute`'s own code — never a `credential_refused` detail — and
 resolves AFTER every token below.
 
-**Ordinary (non-deposit) writes** pass three gates, in the built order
+**Ordinary (non-deposit) writes** pass four gates, in the built order
 (PUB-6.36 as RES-195 places the `nullify` cells), after the actor resolves:
 
 1. The MINT class:
@@ -1585,7 +1600,18 @@ resolves AFTER every token below.
      create it flagless (or `published:true`), then later documents may
      be private. A non-owner answers `not_owner` instead, and a later
      mint refuses nothing.
-2. The board-state gate, one arm per mode:
+2. The `replaces` class — `replaces_not_standalone` (PUB-5.15; RES-309,
+   RES-310): a link write whose OWN type slot names the `replaces` type
+   `1.1.0.1.0.1.0.3.12` — a `make_link`'s `ty`, an `emit`'s, an
+   `edit_link` successor's, alone or beside a subtype of its own. The
+   type has ONE writer, `make_link`'s `replaces` member (§Links), which
+   deposits the link beside its record in one transaction; nothing
+   deposits one by itself. PERMANENT. It answers the owner of every home
+   the write names; anyone else falls through to `execute`'s own
+   `not_owner` (or `home_not_registered`), as for any link. Ahead of the
+   board-state gate, so the owner is told before being asked to claim,
+   to sign or to attach an `attest`.
+3. The board-state gate, one arm per mode:
    * claimed — `signed_session_required` (the publish class): a
      bare-session op whose write lands in the PUBLISHED world. The
      inputs (PUB-6.43): an **explicit** `published:true` on any mint
@@ -1614,7 +1640,7 @@ resolves AFTER every token below.
      `create_new_document` into an account holding no documents, an
      `insert` into the caller's own doc 1 — from bare and signed
      sessions alike; every other write refuses. Reads are untouched.
-3. The `nullify` CLASS — three cells, one for each class of target link
+4. The `nullify` CLASS — three cells, one for each class of target link
    the write path recognizes off its own type-recognition input (the
    credential kinds, the GRANTS class, and PUB-6.64's audit-view classes;
    a subtype by prefix is its class's member). Evaluated **behind** the
@@ -1644,10 +1670,13 @@ resolves AFTER every token below.
      `successor-of` `1.1.0.1.0.1.0.3.59` and the delegator endorsement
      (`endorse`, `1.1.0.1.0.1.0.3.42`); the consumption marker
      (`1.1.0.1.0.1.0.3.91`) and the journal designation
-     (`1.1.0.1.0.1.0.3.22`); the rail record (`1.1.0.1.0.1.0.3.60`); and
+     (`1.1.0.1.0.1.0.3.22`); the rail record (`1.1.0.1.0.1.0.3.60`);
      the steward's classification link (`1.1.0.1.0.1.0.3.61`) where the
      LINK's OWN HOME is published — draft-homed, it is an ordinary link
-     and its owner's retraction lands. ONE code for the class list; a
+     and its owner's retraction lands; and the `replaces` link a grant is
+     deposited with (`1.1.0.1.0.1.0.3.12`, §The read predicate): its
+     retraction would leave every active-view read of the pair naming the
+     EMPTY state for a grant that named a revocation. ONE code for the class list; a
      client splits the
      face by the target's type, which the owner can read. The classes are
      the members' list, never the boundary: the next audit-view class
@@ -2154,7 +2183,8 @@ link is refused `nullify_not_revocation` (a share is withdrawn by
 revoking it, never by retracting its record), and a link of a class the
 publication spec reads under the AUDIT view (the succession pair, the
 consumption marker, the journal designation, the rail record, the
-steward's classification link with a published home) is refused
+steward's classification link with a published home, the `replaces` link
+a grant is deposited with) is refused
 `nullify_audit_view` — each to the record's owner alone, anyone else
 answering plain `not_owner` (§Credential refusals, item 3). And the
 publish-class gate reads a `nullify` (PUB-6.43's row): a retraction
@@ -2181,17 +2211,38 @@ link write's slots "in declared order" means this order.
 
 The type slot must be nonempty **as given** (an empty `addrs` list, like a
 V-spec set resolving to nothing, rejects `empty_type_resolution`);
-`from`/`to` may be empty in either form. On a CLAIMED board a link write
+`from`/`to` may be empty in either form.
+
+The optional **`replaces`** member (PUB-5.15) names the record whose STATE
+this link replaces — an address. Present, ONE transaction deposits the
+link and then, at the next address of `home`'s link subspace, a second
+link: typed `replaces` (`1.1.0.1.0.1.0.3.12`), `from` the first link's
+address, `to` the address named; the ack is still the FIRST link's
+address, the second `read_link`-reachable and born unseated. Absent — the
+field not sent — is the EMPTY state, and the one link is deposited as
+ever; an explicit `null` is unparseable. The member NAMES a state and is
+never checked: at the grants class it is how a share that follows a
+withdrawal names the revocation it follows, and the grant fold decides
+what that honors (§The read predicate). The `replaces` type has this ONE
+writer: a `make_link` whose own `ty` is it, an `emit` of it and an
+`edit_link` successor typed it refuse `replaces_not_standalone`
+(§Credential refusals).
+
+On a CLAIMED board a link write
 into a published home carries the optional top-level `attest` member
 (signed ops; the object `insert` describes): the entry signature over
 the frame whose `doc` is `home`, `op` `make_link` and `body` the type
 slot, the `from` slot and the `to` slot exactly as this frame carries
 them — the address form's names verbatim, the V-spec form's specs as
 the client's own (the endsets the store resolves them to are the
-transaction's and enter no frame). A credential-typed `make_link` (the
-enroll, retire and claim kinds) takes the credential path and carries no
-`attest`: the record's own `sig` covers it. → `ack_addr` (the link's
-address).
+transaction's and enter no frame) — and then the `replaces` row: ONE
+length-delimited group, EMPTY (`be32(0)`) where the member is absent,
+else the named address as an address-form slot row of one element,
+delimited. So the member a signature covers is the one deposited, and a
+member-less body is never the three slots alone. A credential-typed
+`make_link` (the enroll, retire and claim kinds) takes the credential
+path and carries no `attest`: the record's own `sig` covers it.
+→ `ack_addr` (the link's address).
 
 <!-- wire: request make_link -->
 ```json
@@ -2209,6 +2260,18 @@ other address.
 <!-- wire: request make_link -->
 ```json
 {"from":[{"source":"1.0.1.0.1","span":{"start":"1.1","width":"0.5"}}],"home":"1.0.1.0.1","op":"make_link","to":{"addrs":["1.0.1.0.1.0.2.1"]},"ty":{"addrs":["1.0.1.0.3.0.3.6.1"]}}
+```
+
+A RE-SHARE (§The read predicate): account `1.0.1` shares its draft
+`1.0.1.0.2` with account `1.0.2` again after revoking an earlier share,
+its `replaces` naming that revocation — the record at `1.0.1.0.1.0.2.9`
+in its doc 1 — and so honored where the revocation is still that key's
+latest record. Replayed after a later revocation, the same request is
+honored for nothing.
+
+<!-- wire: request make_link -->
+```json
+{"from":{"addrs":["1.0.1.0.2"]},"home":"1.0.1.0.1","op":"make_link","replaces":"1.0.1.0.1.0.2.9","to":{"addrs":["1.0.2"]},"ty":{"addrs":["1.1.0.1.0.1.0.3.90"]}}
 ```
 
 **`emit`** — gated typed-relation emission: a managed tuple of type `ty`

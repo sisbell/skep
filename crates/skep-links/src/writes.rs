@@ -1,7 +1,9 @@
 //! §C/§D — the transact-driving write surface: [`LinkWriter`] (the kernel
 //! handle), the shared single choke point [`emit_core`] with its
-//! two-disciplines gate (§2), the M2 keyed dedup sections (§3), and the six
-//! public ops (five deposits plus the BH4 batch).
+//! two-disciplines gate (§2), the M2 keyed dedup sections (§3), and the seven
+//! public ops (six deposits — MAKELINK in its two forms — plus the BH4
+//! batch), with the `replaces` class ([`replaces_type`]) whose one writer is
+//! the second MAKELINK.
 //!
 //! Concurrency belongs to the kernel: nothing here locks, threads, or caches.
 //! The type registry every gate reads is the module's compiled format
@@ -23,8 +25,9 @@
 //! engine and learns nothing about principals.
 
 use std::fmt;
+use std::sync::LazyLock;
 
-use skep_address::{Address, Span};
+use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{
     as_ordinal_vspan, stage_seat_link, Caller, HasM5, M5Rec, M5State, SeatError, VSpec,
 };
@@ -32,7 +35,7 @@ use skep_kernel::{Attestation, Kernel, LockKey, Seq, Staging, TxnError, WorldSta
 use skep_namespace::{M3Rec, M3State, MintError};
 
 use crate::dedup::DedupKey;
-use crate::endset::{coverage_class, enc, Endset, Link};
+use crate::endset::{coverage_class, enc, CoverageClass, Endset, Link};
 use crate::error::{
     AssertSupError, EditLinkError, EmitError, MakeLinkError, NotBh4, NullifyError,
     RetractStaleError,
@@ -816,6 +819,127 @@ fn slot_endset(m5: &M5State, arg: &SlotArg) -> Option<Endset> {
     }
 }
 
+// ── the `replaces` class — the authority successor (PUB-5.15) ─────────────
+
+/// THE `replaces` TYPE — the commons VALUE `1.1.0.1.0.1.0.3.12`, the core
+/// vocabulary's vacant ordinal (the board's (rep-N) RULED, owner 2026-09-29:
+/// "tke 3.12"; PUB-5.15 as RES-310 pins it): the type of the AUTHORITY
+/// SUCCESSOR, the link a record's own transaction deposits beside it to name
+/// the state that record REPLACES — `from` the record, `to` the record
+/// replaced (PUB-5.15 (iii), (iv); the authority link type investigation's
+/// §3 (A′)). A value, never a registration: [`TypeRegistry`](crate::TypeRegistry)
+/// is untouched, as it is by every commons type, and no sixth shipped class
+/// exists.
+///
+/// M7's OWN spelling, where its two readers here can read it — the
+/// sole-writer fences ([`is_replaces_class`]) and the one write that mints
+/// the class ([`LinkWriter::makelink_replacing`]) — M7 sitting below the
+/// engine, whose commons ledger pins the same address again
+/// (`skep_engine::types::t_replaces`) and whose ledger test holds the two
+/// spellings EQUAL. Held, not built per call: the fences ask on every
+/// MAKELINK, `emit` and `editlink`.
+pub fn replaces_type() -> &'static Address {
+    static ADDR: LazyLock<Address> = LazyLock::new(|| {
+        validate(
+            Tumbler::new([1u32, 1, 0, 1, 0, 1, 0, 3, 12].into_iter().map(Nat::from))
+                .expect("the commons type components are nonempty"),
+        )
+        .expect("a subspace-3 element of the ghost document is T4-valid by construction")
+    });
+    &ADDR
+}
+
+/// The `replaces` class's coverage class — what the three fences compare a
+/// type slot's own class to, exactly as the `[R]` and `[K_sup]` fences
+/// compare theirs to [`crate::TypeRegistry::shipped_class`]'s answer.
+fn replaces_class() -> &'static CoverageClass {
+    static CLASS: LazyLock<CoverageClass> =
+        LazyLock::new(|| coverage_class(&enc([replaces_type()])));
+    &CLASS
+}
+
+/// Whether the type slot `ty` lands in the `replaces` class — THE ONE
+/// STATEMENT of the class's sole-writer fence (PUB-5.15, RES-309/310): M7's
+/// three open writes refuse exactly the slots this answers `true` for
+/// (`makelink` [`MakeLinkError::ReplacesClass`], `emit`
+/// [`EmitError::ReplacesClass`], an `editlink` successor
+/// [`EditLinkError::DcViolation`]), and the daemon asks it of a request
+/// ahead of the transaction, so the wire's code
+/// (`replaces_not_standalone`) and the store's refusal fall on the same
+/// slots. Coverage-class EQUALITY, the `[K_sup]` fence's rule: a slot naming
+/// the type, alone or beside its own subtypes, is the class; a slot naming a
+/// subtype alone, or the type beside another class, is not — and the grant
+/// fold, which reads a `replaces` link by its type slot denoting EXACTLY this
+/// address, reads no slot this fence admits.
+///
+/// Total over every endset: only an ADDRESS-DENOTING slot can name the type
+/// (a `Resolve` slot resolves to content, never to a ghost address), so any
+/// other answers `false` before a class is computed — which is also what
+/// keeps [`coverage_class`]'s level-uniformity precondition off a
+/// caller-built slot.
+pub fn is_replaces_class(ty: &Endset) -> bool {
+    ty.is_address_denoting() && coverage_class(ty) == *replaces_class()
+}
+
+/// THE RECORD HALF of MAKELINK, inside a transaction the caller opened: the
+/// home gate, the specs' well-formedness, the three slots' endsets under
+/// their budgets, the three sole-writer fences, the deposit under the Open
+/// gate and its seat — everything [`LinkWriter::makelink`] states — answering
+/// the record's address. ONE body, which both MAKELINK forms stage:
+/// [`LinkWriter::makelink`] alone, [`LinkWriter::makelink_replacing`]
+/// followed by the record's `replaces` link.
+fn stage_record<W>(
+    stg: &mut Staging<W>,
+    visibility: &Visibility<'_, W>,
+    caller: Caller,
+    home: &Address,
+    from: &SlotArg,
+    to: &SlotArg,
+    ty: &SlotArg,
+) -> Result<Address, MakeLinkError>
+where
+    W: LinkWorld + HasM5,
+    W::Record: From<LinkRec> + From<M3Rec> + From<M5Rec>,
+{
+    let r_class = registry().shipped_class(ShippedType::Retraction);
+    let sup_class = registry().shipped_class(ShippedType::Supersedes);
+    let (e1, e2, e3) = {
+        let base = stg.base();
+        // P0 then ω on home, hoisted so both win over every spec/type
+        // verdict.
+        home_gate(base.m3(), caller, &[home])?;
+        let mut specs = from.specs().iter().chain(to.specs()).chain(ty.specs());
+        if !specs.all(|spec| is_wf_content_spec(base.m3(), spec)) {
+            return Err(MakeLinkError::IllFormedSpec);
+        }
+        let endset_of = |arg| slot_endset(base.m5(), arg).ok_or(MakeLinkError::SlotTooLarge);
+        (endset_of(from)?, endset_of(to)?, endset_of(ty)?)
+    };
+    // The sole-writer fences. Total: a `Resolve` slot is level-uniform by
+    // M5's construction and an `Addrs` slot is address-denoting, which are
+    // the same two grounds under which the fold classifies this very value
+    // one step later. `⟨⟩` classifies as the empty denoted antichain, which
+    // is none of the three classes, so ML6 stays the deposit gate's check
+    // and no input can satisfy both.
+    let e3_class = coverage_class(&e3);
+    if e3_class == *r_class {
+        return Err(MakeLinkError::RetractionClass); // K ≁ R
+    }
+    if e3_class == *sup_class {
+        return Err(MakeLinkError::SupersessionClass); // Conflicts §10
+    }
+    if e3_class == *replaces_class() {
+        return Err(MakeLinkError::ReplacesClass); // PUB-5.15, RES-309
+    }
+    let value = Link::triple(e1, e2, e3);
+    // `minted`, because the seat below names this address: the Open gate
+    // runs no dedup, so it cannot be an incumbent.
+    let addr = emit_core(stg, visibility, caller, home, value, Gate::Open)?.minted();
+    let seat = stage_seat_link(stg.working().m5(), home, &addr)?;
+    stg.push(seat.into());
+    Ok(addr)
+}
+
 impl<'k, W> LinkWriter<'k, W>
 where
     W: LinkWorld + HasM5,
@@ -852,17 +976,21 @@ where
     /// span and walking all of it — and every step runs inside this
     /// transact, under the applier lock the whole engine writes through.
     ///
-    /// The two SOLE-WRITER fences apply here as they do on the managed
-    /// surface: a resolved type slot in the `[R]` class
-    /// (`RetractionClass`) or the `[K_sup]` class (`SupersessionClass`) is
-    /// refused. They are the open surface's whole type discipline, and they
-    /// are not optional — [`crate::LinkState::apply_link`]'s hint fold
-    /// recognizes a deposit by its type slot's coverage class alone, so an
-    /// `[R]`-classed link deposited through this surface would tombstone
-    /// every address its TO slot denotes, and a `[K_sup]`-classed one would
-    /// enter the supersession adjacency as a claim, both without any of the
-    /// ownership, residence or schema checks `nullify`, `assert_sup` and
-    /// `editlink` establish.
+    /// The three SOLE-WRITER fences apply here as the first two do on the
+    /// managed surface: a resolved type slot in the `[R]` class
+    /// (`RetractionClass`), the `[K_sup]` class (`SupersessionClass`) or the
+    /// `replaces` class (`ReplacesClass`, [`is_replaces_class`]) is refused.
+    /// They are the open surface's whole type discipline, and they are not
+    /// optional — [`crate::LinkState::apply_link`]'s hint fold recognizes a
+    /// deposit by its type slot's coverage class alone, so an `[R]`-classed
+    /// link deposited through this surface would tombstone every address its
+    /// TO slot denotes, and a `[K_sup]`-classed one would enter the
+    /// supersession adjacency as a claim, both without any of the ownership,
+    /// residence or schema checks `nullify`, `assert_sup` and `editlink`
+    /// establish; and a `replaces`-classed one, landing at a record's next
+    /// address, would name a state for a record whose signed bytes named
+    /// none — the grant fold reads a record's `replaces` there
+    /// ([`LinkWriter::makelink_replacing`] is that class's one writer).
     ///
     /// RETURNS `(link, seq)`: the address of the deposited link, which is
     /// also the one seated in `home`'s link subspace.
@@ -874,50 +1002,72 @@ where
         to: SlotArg,
         ty: SlotArg,
     ) -> Result<(Address, Seq), TxnError<MakeLinkError>> {
-        let r_class = registry().shipped_class(ShippedType::Retraction);
-        let sup_class = registry().shipped_class(ShippedType::Supersedes);
         // No dedup section: the open surface takes no dedup CHECK either
         // (ML0 — distinct links always), so `deposit_lock_set`'s question does
         // not arise and the home's alloc key is the whole set. The seam's one
         // line: the attested arm, which is `transact` where this writer
         // carries no attestation (signed ops).
-        self.kernel
-            .transact_attested(&[M3State::link_lock_key(home)], self.attest, |stg| {
-                let (e1, e2, e3) = {
-                    let base = stg.base();
-                    // P0 then ω on home, hoisted so both win over every
-                    // spec/type verdict.
-                    home_gate(base.m3(), caller, &[home])?;
-                    let mut specs = from.specs().iter().chain(to.specs()).chain(ty.specs());
-                    if !specs.all(|spec| is_wf_content_spec(base.m3(), spec)) {
-                        return Err(MakeLinkError::IllFormedSpec);
-                    }
-                    let endset_of =
-                        |arg| slot_endset(base.m5(), arg).ok_or(MakeLinkError::SlotTooLarge);
-                    (endset_of(&from)?, endset_of(&to)?, endset_of(&ty)?)
-                };
-                // The sole-writer fences. Total: a `Resolve` slot is
-                // level-uniform by M5's construction and an `Addrs` slot is
-                // address-denoting, which are the same two grounds under
-                // which the fold classifies this very value one step later.
-                // `⟨⟩` classifies as the empty denoted antichain, which is
-                // neither shipped class, so ML6 stays the deposit gate's
-                // check and no input can satisfy both.
-                let e3_class = coverage_class(&e3);
-                if e3_class == *r_class {
-                    return Err(MakeLinkError::RetractionClass); // K ≁ R
-                }
-                if e3_class == *sup_class {
-                    return Err(MakeLinkError::SupersessionClass); // Conflicts §10
-                }
-                let value = Link::triple(e1, e2, e3);
-                // `minted`, because the seat below names this address: the
-                // Open gate runs no dedup, so it cannot be an incumbent.
-                let addr = emit_core(stg, self.visibility, caller, home, value, Gate::Open)?.minted();
-                let seat = stage_seat_link(stg.working().m5(), home, &addr)?;
-                stg.push(seat.into());
-                Ok(addr)
-            })
+        self.kernel.transact_attested(&[M3State::link_lock_key(home)], self.attest, |stg| {
+            stage_record(stg, self.visibility, caller, home, &from, &to, &ty)
+        })
+    }
+
+    /// MAKELINK WITH ITS `replaces` MEMBER (PUB-5.15 (iii), (iv); RES-308,
+    /// RES-309, RES-310; the authority link type investigation §3 (A′)): ONE
+    /// transaction deposits the RECORD exactly as [`LinkWriter::makelink`]
+    /// does — its slots, its three fences, its seat — and then its `replaces`
+    /// LINK, `(enc([record]), enc([replaces]), enc([replaces_type()]))`:
+    /// `from` the record, filled from the address this transaction minted
+    /// the way `editlink` fills its claim's `new`; `to` the state the record
+    /// replaces — at the grant, the revocation a re-share follows; typed the
+    /// class. Both deposits take the Open gate — no dedup, so both are
+    /// minted — and BOTH are seated, the record and then its link, so a
+    /// home that re-shares often keeps one run in its link subspace. Under
+    /// ONE attestation: the
+    /// commit marker this writer's attestation fills covers both, the entry
+    /// frame having signed the body WITH the member (`skep_identity`'s
+    /// `entry_body_make_link_replacing`).
+    ///
+    /// Where the pair lands is the grant fold's whole read of it: the two
+    /// mints are consecutive in ONE home under ONE lock, so the link sits at
+    /// the record's own NEXT link address, and the fold reads a record's
+    /// `replaces` there and nowhere else — a `replaces` link homed elsewhere,
+    /// or deposited by any other act, names nothing to it. The fences keep
+    /// every other act off the class ([`is_replaces_class`]), so this is the
+    /// one way such a link comes to sit there.
+    ///
+    /// Nothing about `replaces` is checked here: whether it names the key's
+    /// current state is the FOLD's question and a fact of resolution, never
+    /// of the write (PUB-5.15: "the second deposit lands and is
+    /// acknowledged, and the fold decides") — a stale or foreign name is
+    /// deposited, and the record it rides is honored for nothing.
+    ///
+    /// RETURNS `(record, seq)`: the RECORD's address, which is the ack's
+    /// (M10 answers `ack_addr` with it); the link's is the record's next,
+    /// reachable by `read_link`.
+    pub fn makelink_replacing(
+        &self,
+        caller: Caller,
+        home: &Address,
+        from: SlotArg,
+        to: SlotArg,
+        ty: SlotArg,
+        replaces: &Address,
+    ) -> Result<(Address, Seq), TxnError<MakeLinkError>> {
+        self.kernel.transact_attested(&[M3State::link_lock_key(home)], self.attest, |stg| {
+            let record = stage_record(stg, self.visibility, caller, home, &from, &to, &ty)?;
+            let pair = Link::triple(enc([&record]), enc([replaces]), enc([replaces_type()]));
+            // `minted`: the Open gate runs no dedup, and the address this
+            // mint takes is the record's next — the one the fold reads.
+            let link = emit_core(stg, self.visibility, caller, home, pair, Gate::Open)?.minted();
+            // Seated like the record: an unseated link leaves the home's
+            // link subspace one run per re-share, and every later link write
+            // into that home pays for the runs (lane A's measurement:
+            // 5.7 ms a commit at 1,000 re-shares, flat at 0.2 ms seated).
+            let seat = stage_seat_link(stg.working().m5(), home, &link)?;
+            stg.push(seat.into());
+            Ok(record)
+        })
     }
 }
 
@@ -958,6 +1108,8 @@ where
     /// computation, keeping `coverage_class` on the safe denoted path); `ty ~
     /// [K_sup]` (`SupersessionClass` — assert_sup/editlink are the sole
     /// `[K_sup]`-writers, the parallel of the `[R]` fence; Conflicts §10);
+    /// `ty ~ replaces` (`ReplacesClass` — [`LinkWriter::makelink_replacing`]
+    /// is that class's sole writer, [`is_replaces_class`]; PUB-5.15);
     /// and either caller-sized slot past [`MAX_SLOT_SPANS`] spans —
     /// `to`'s addresses or `ty`'s own spans (`SlotTooLarge`, the same
     /// per-slot budget MAKELINK's slots carry). Ahead of `ShapeViolation`,
@@ -984,6 +1136,9 @@ where
         let class = coverage_class(ty);
         if class == *registry().shipped_class(ShippedType::Supersedes) {
             return Err(TxnError::Rejected(EmitError::SupersessionClass));
+        }
+        if is_replaces_class(ty) {
+            return Err(TxnError::Rejected(EmitError::ReplacesClass));
         }
         // The two managed slots a caller sizes: `enc({from})` is one span,
         // and `to` and `ty` are the caller's. `ty` is stored VERBATIM as e₃
@@ -1159,9 +1314,11 @@ where
     /// empty type slot, or a non-level-uniform span in any slot
     /// (`IllFormedSuccessor` — the last keeps `coverage_class` total for
     /// both the DC guard and the fold's dedup key); DC — a
-    /// retraction-typed successor, or a `[K_sup]`-typed one without the
-    /// Df-DISC(ii) schema (unit-depth single-addr F/G, resident endpoints,
-    /// irreflexive) (`DcViolation`). The claim's dedup check is a guaranteed
+    /// retraction-typed successor, a `replaces`-typed one (that class's one
+    /// writer is [`LinkWriter::makelink_replacing`], so an edit mints no
+    /// authority successor — PUB-5.15, RES-309), or a `[K_sup]`-typed one
+    /// without the Df-DISC(ii) schema (unit-depth single-addr F/G, resident
+    /// endpoints, irreflexive) (`DcViolation`). The claim's dedup check is a guaranteed
     /// miss (its key carries the fresh successor), so no claim dedup lock is
     /// taken (§3).
     pub fn editlink(
@@ -1232,7 +1389,7 @@ where
                 // DC guard — total: every slot was just checked
                 // level-uniform.
                 let successor_class = coverage_class(successor_value.type_slot());
-                if successor_class == *r_class {
+                if successor_class == *r_class || successor_class == *replaces_class() {
                     return Err(EditLinkError::DcViolation);
                 }
                 if successor_class == *sup_class

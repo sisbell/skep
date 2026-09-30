@@ -1,10 +1,12 @@
 //! The wire codec seam. The byte format is fixed by no source note (Open
 //! build decision 1): the transport supplies the one concrete impl; M10 fixes
-//! only the typed [`Request`]/[`Response`]/`Rejection` targets.
+//! only the typed [`Request`]/[`Response`]/[`Rejection`] targets, and the
+//! rejection a frame that never parsed is given ([`Rejection::unparseable`]).
 
 use std::fmt;
 
-use crate::op::Request;
+use crate::op::{OpKind, Request};
+use crate::reject::{RejectCode, Rejection};
 use crate::response::Response;
 
 /// The transport's codec (builder supplies one concrete impl).
@@ -166,3 +168,63 @@ impl fmt::Display for ParseError {
 /// byte format — and so the type of anything that failed inside it — is the
 /// transport's, not M10's.
 impl std::error::Error for ParseError {}
+
+impl Rejection {
+    /// The rejection for a frame that never parsed into an [`Op`] — the one
+    /// rejection M10 cannot raise for itself, since
+    /// [`OperationSurface::execute`] takes an already-parsed [`Request`] and
+    /// so has no `Op` and no `OpKind` from `Op::kind()`. The transport's
+    /// [`Codec`] impl calls this on its own `parse` failure and marshals the
+    /// result like any other response, which is how a malformed frame still
+    /// gets exactly one answer (Invariants, never-silent).
+    ///
+    /// Classification stays M10's: the code is `Malformed` and the
+    /// disposition is whatever the table says `Malformed` disposes to, so an
+    /// unparseable frame is advised exactly as every other `Malformed` is.
+    /// `e.detail` rides through as the message.
+    ///
+    /// [`Op`]: crate::Op
+    /// [`Codec`]: crate::Codec
+    /// [`OperationSurface::execute`]: crate::OperationSurface::execute
+    /// [`Request`]: crate::Request
+    pub fn unparseable(e: ParseError) -> Rejection {
+        let r = Rejection::classified(OpKind::Unparseable, RejectCode::Malformed, None);
+        match e.detail {
+            Some(d) => r.with_detail(d),
+            None => r,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reject::disposition_of;
+
+    /// The parse-failure rejection is classified by the same table as every
+    /// other `Malformed`, and carries the codec's cause when it has one.
+    #[test]
+    fn an_unparseable_frame_is_classified_by_the_same_table() {
+        let rej = Rejection::unparseable(ParseError { detail: Some("unknown op".into()) });
+        assert_eq!(rej.op, OpKind::Unparseable);
+        assert_eq!(rej.code, RejectCode::Malformed);
+        assert_eq!(rej.disposition, disposition_of(RejectCode::Malformed));
+        assert_eq!(rej.detail.as_deref(), Some("unknown op"));
+        let bare = Rejection::unparseable(ParseError { detail: None });
+        assert!(bare.detail.is_none());
+    }
+
+    /// A parse failure is a std error, as a rejection is: boxable, and
+    /// rendered with the codec's cause when it has one.
+    #[test]
+    fn a_parse_error_is_a_std_error() {
+        fn boxed(e: impl std::error::Error + 'static) -> Box<dyn std::error::Error> {
+            Box::new(e)
+        }
+
+        let e = ParseError { detail: Some("unknown op".into()) };
+        assert!(e.to_string().contains("unknown op"));
+        assert_eq!(boxed(e).to_string(), "unparseable frame: unknown op");
+        assert_eq!(ParseError { detail: None }.to_string(), "unparseable frame");
+    }
+}

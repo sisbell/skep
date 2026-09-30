@@ -5,6 +5,11 @@
 mod common;
 mod concurrency;
 mod coordinates;
+mod idempotency;
 mod lifecycle;
+mod publication;
 mod read_door;
+mod reexports;
+mod successor;
+mod tidy;
 mod write_door;

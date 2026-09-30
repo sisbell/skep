@@ -75,24 +75,12 @@ fn gate_detail_is_fixed_and_exclusive() {
     }
 }
 
-/// The parse-failure rejection is classified by the same table as every
-/// other `Malformed`, and carries the codec's cause when it has one.
-#[test]
-fn an_unparseable_frame_is_classified_by_the_same_table() {
-    let rej = Rejection::unparseable(ParseError { detail: Some("unknown op".into()) });
-    assert_eq!(rej.op, OpKind::Unparseable);
-    assert_eq!(rej.code, RejectCode::Malformed);
-    assert_eq!(rej.disposition, disposition_of(RejectCode::Malformed));
-    assert_eq!(rej.detail.as_deref(), Some("unknown op"));
-    let bare = Rejection::unparseable(ParseError { detail: None });
-    assert!(bare.detail.is_none());
-}
-
-/// Both failure types are std errors: boxable, and rendered with the
+/// A rejection is a std error: boxable, and rendered with the
 /// op/code/disposition a `{}` log line needs, the detail appended when
-/// one was threaded.
+/// one was threaded. Its codec-side twin, `ParseError`, is checked beside
+/// it in `codec`.
 #[test]
-fn both_failures_are_std_errors() {
+fn a_rejection_is_a_std_error() {
     fn boxed(e: impl std::error::Error + 'static) -> Box<dyn std::error::Error> {
         Box::new(e)
     }
@@ -107,11 +95,6 @@ fn both_failures_are_std_errors() {
 
     let bare = Rejection::classified(OpKind::Insert, RejectCode::NotOwner, None).to_string();
     assert!(bare.contains("NotOwner") && !bare.ends_with(':'));
-
-    let e = ParseError { detail: Some("unknown op".into()) };
-    assert!(e.to_string().contains("unknown op"));
-    assert_eq!(boxed(e).to_string(), "unparseable frame: unknown op");
-    assert_eq!(ParseError { detail: None }.to_string(), "unparseable frame");
 }
 
 /// A rejection is a VALUE: it clones, and it compares over all five

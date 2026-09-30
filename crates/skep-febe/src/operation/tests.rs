@@ -11,7 +11,7 @@ use skep_links::{HasLinks, LinkRec, LinkState};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 
 use super::*;
-use crate::op::ReqId;
+use crate::op::{Op, ReqId};
 use crate::reject::Disposition;
 use crate::response::CommittedAck;
 
@@ -239,7 +239,7 @@ fn every_write_on_an_unbound_session_is_unauthenticated_before_any_transaction()
 #[test]
 fn no_read_is_ever_rejected_for_an_unbound_session() {
     let febe = surface();
-    let never_opened = SessionId(9999);
+    let never_opened = SessionId::unminted(9999);
     for (op, is_read) in crate::op::tests::all_ops() {
         if !is_read {
             continue;

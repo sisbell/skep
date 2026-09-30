@@ -1,15 +1,15 @@
 //! Typed rejection (the never-silent contract): [`Rejection`], the flat
 //! deduped [`RejectCode`] union, the advisory [`Disposition`] hint and its
-//! policy table, and the localized [`FaultSite`] (§5).
+//! policy table, and the localized [`FaultSite`] (§5). The one rejection
+//! built for a frame that never parsed, `Rejection::unparseable`, lives
+//! beside the codec that raises it, in `codec`.
 
 use std::fmt;
 
 use skep_address::Address;
 use skep_retrieval::{Operand, SpanFault};
 
-use crate::codec::ParseError;
 use crate::op::OpKind;
-use crate::response::Response;
 
 /// A typed, classified rejection. `code` is authoritative; `disposition` is
 /// an advisory Lampson hint (recomputable); `site` localizes span/operand/
@@ -333,31 +333,6 @@ impl Rejection {
         Rejection { op: kind, code, disposition: disposition_of(code), site, detail }
     }
 
-    /// The rejection for a frame that never parsed into an [`Op`] — the one
-    /// rejection M10 cannot raise for itself, since
-    /// [`OperationSurface::execute`] takes an already-parsed [`Request`] and
-    /// so has no `Op` and no `OpKind` from `Op::kind()`. The transport's
-    /// [`Codec`] impl calls this on its own `parse` failure and marshals the
-    /// result like any other response, which is how a malformed frame still
-    /// gets exactly one answer (Invariants, never-silent).
-    ///
-    /// Classification stays M10's: the code is `Malformed` and the
-    /// disposition is whatever the table says `Malformed` disposes to, so an
-    /// unparseable frame is advised exactly as every other `Malformed` is.
-    /// `e.detail` rides through as the message.
-    ///
-    /// [`Op`]: crate::Op
-    /// [`Codec`]: crate::Codec
-    /// [`OperationSurface::execute`]: crate::OperationSurface::execute
-    /// [`Request`]: crate::Request
-    pub fn unparseable(e: ParseError) -> Rejection {
-        let r = Rejection::classified(OpKind::Unparseable, RejectCode::Malformed, None);
-        match e.detail {
-            Some(d) => r.with_detail(d),
-            None => r,
-        }
-    }
-
     /// Attach a detail message (the `Durability` arm threads the underlying
     /// `io::Error` text so an operator sees the cause behind the `Retry`
     /// hint; §5).
@@ -389,11 +364,6 @@ impl fmt::Display for Rejection {
 /// [`RejectCode`] and a [`FaultSite`], so a rejection holds a classification
 /// rather than the error it came from — there is nothing to return.
 impl std::error::Error for Rejection {}
-
-/// A bare `Response::Rejected` for `execute`'s steps (b)/(c) (§1/§5).
-pub(crate) fn reject(kind: OpKind, code: RejectCode) -> Response {
-    Response::Rejected(rejection(kind, code))
-}
 
 /// A bare `Rejection` for dispatch arms (§5).
 pub(crate) fn rejection(kind: OpKind, code: RejectCode) -> Rejection {

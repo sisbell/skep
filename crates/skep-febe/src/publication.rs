@@ -41,7 +41,7 @@ use skep_namespace::{first_version_address, prefix_contains, M3State};
 use crate::op::OpKind;
 use crate::reject::{rejection, RejectCode, Rejection};
 use crate::response::{BirthVersion, UniversalGrant};
-use crate::UniversalIndexRow;
+use crate::world::UniversalIndexRow;
 
 /// The registration refusal M10 ORIGINATES, for the two composed reads that
 /// take a document ([`Op::DocMetadata`], [`Op::EditionClaims`]; the third,

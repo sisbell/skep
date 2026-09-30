@@ -20,7 +20,7 @@ use skep_namespace::PrincipalId;
 /// binding nothing can retire for the rest of the uptime.
 #[must_use]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct SessionId(pub(crate) u64);
+pub struct SessionId(u64);
 
 impl SessionId {
     /// THE GUEST — the one id a caller names without opening a session. No
@@ -37,6 +37,18 @@ impl SessionId {
     /// [`OperationSurface::open_session`]: crate::OperationSurface::open_session
     /// [`OperationSurface::execute`]: crate::OperationSurface::execute
     pub const GUEST: SessionId = SessionId(0);
+}
+
+#[cfg(test)]
+impl SessionId {
+    /// An id a TEST picks rather than one `open` minted — for a test that
+    /// needs a never-opened session no caller could name. The test picks a
+    /// value past every id its surface has opened; `0` is refused, being
+    /// [`SessionId::GUEST`], the one never-opened id a caller CAN name.
+    pub(crate) fn unminted(n: u64) -> SessionId {
+        assert_ne!(n, 0, "0 is `SessionId::GUEST`, which a caller names without a test hook");
+        SessionId(n)
+    }
 }
 
 /// Which principal each open session speaks for, and the counter that mints

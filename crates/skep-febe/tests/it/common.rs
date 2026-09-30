@@ -15,7 +15,7 @@ use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_febe::{
     BirthVersion, Deposit, Disposition, EditionClaim, Op, OpKind, OperationSurface, RejectCode, Rejection,
-    ReqId, Request, Response, SessionId, Stores, UniversalGrant, UniversalIndexRow,
+    ReqId, Request, Response, SessionId, SlotArg, Stores, UniversalGrant, UniversalIndexRow,
 };
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, WorldState};
 use skep_links::{enc, Endset, HasLinks, Invalid, Link, LinkRec, LinkState};
@@ -608,13 +608,32 @@ pub fn deposit3(fx: &Fixture, doc: &Address) -> (Address, Seq) {
     ))
 }
 
+/// A three-element document and one link over it — the starting point every
+/// EDITLINK case needs, the successor suite's and the retry memo's alike.
+pub fn linked_doc(fx: &Fixture) -> (Address, Address) {
+    let d = create_doc(fx);
+    insert3(fx, &d);
+    let (l, _) = ack_addr(ex(
+        &fx.febe,
+        fx.user,
+        Op::MakeLink {
+            home: d.clone(),
+            from: SlotArg::Resolve(vec![vspec(&d, 1, 1)]),
+            to: SlotArg::Resolve(vec![vspec(&d, 2, 1)]),
+            ty: SlotArg::Resolve(vec![vspec(&d, 3, 1)]),
+            replaces: None,
+        },
+    ));
+    (d, l)
+}
+
 // ───────────────── the readability fixture (the door's two sides) ───────────
 //
 // The front door answers ONE predicate, so a supplied `ReadPredicate` under
 // which a document is unreadable to everyone but its owner is what a private
 // draft looks like to this suite — the miniature world carries no exception
 // set or grant fold, and the engine's own predicate is the daemon suites' to
-// exercise (`skepd/tests/source_gate.rs`). What the suites built on this
+// exercise (`skepd/tests/it/source_gate.rs`). What the suites built on this
 // fixture pin is the DOOR's own contract, independent of how the predicate is
 // derived.
 //

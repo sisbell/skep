@@ -274,7 +274,7 @@ fn an_expired_nonce_is_the_unit_refusal() {
         // loopback default passes step 2: what refuses is the burn.
         origin: Origin::parse("http://127.0.0.1:8642").expect("canonical"),
         scope: Scope::Full,
-        sig: SessionSig::parse(&"00".repeat(TAG1_SIG_LEN)).expect("tag 1's width"),
+        sig: HybridSig::parse(&"00".repeat(TAG1_SIG_LEN)).expect("tag 1's width"),
     };
     let refusal = handshake(
         &cfg,
@@ -360,7 +360,9 @@ fn the_session_body_takes_three_forms_and_scope_is_strict() {
 /// them, and one byte either side of each width — is a syntax fault, the
 /// 400 whose nonce survives, never a 401; a non-hex byte at a right width
 /// refuses too. The widths are the table's, read at the parse: every row's
-/// is admitted, and the type names no row.
+/// is admitted, and the type names no row. The parse is the record grade's
+/// too — a credential record's own `sig`, refused there
+/// `attestation_invalid:malformed` — so what this pins holds at both doors.
 #[test]
 fn the_sig_is_admitted_at_exactly_the_two_hybrid_widths() {
     let width = |tag| SigAlgRow::of_tag(tag).map(SigAlgRow::sig_len);
@@ -369,27 +371,27 @@ fn the_sig_is_admitted_at_exactly_the_two_hybrid_widths() {
         (Some(TAG1_SIG_LEN), Some(TAG3_SIG_LEN)),
         "SIG_ALGS' widths, pinned by hand"
     );
-    let tag1 = SessionSig::parse(&"ab".repeat(TAG1_SIG_LEN)).expect("6,746 hex is tag 1's width");
+    let tag1 = HybridSig::parse(&"ab".repeat(TAG1_SIG_LEN)).expect("6,746 hex is tag 1's width");
     assert_eq!(tag1.as_bytes().len(), 3373);
     assert_eq!(tag1.as_bytes()[0], 0xab);
-    let tag3 = SessionSig::parse(&"cd".repeat(TAG3_SIG_LEN)).expect("1,460 hex is tag 3's width");
+    let tag3 = HybridSig::parse(&"cd".repeat(TAG3_SIG_LEN)).expect("1,460 hex is tag 3's width");
     assert_eq!(tag3.as_bytes().len(), 730);
     // Case-free: decoded, never framed.
-    assert_eq!(SessionSig::parse(&"AB".repeat(TAG1_SIG_LEN)), Some(tag1.clone()));
+    assert_eq!(HybridSig::parse(&"AB".repeat(TAG1_SIG_LEN)), Some(tag1.clone()));
     // Every other width is NO sig — the classical 64 bytes first.
     for bytes in [64usize, 0, 1, 3372, 3374, 729, 731, 4032] {
         assert!(
-            SessionSig::parse(&"ab".repeat(bytes)).is_none(),
+            HybridSig::parse(&"ab".repeat(bytes)).is_none(),
             "{bytes} bytes is none of the hybrid blob widths"
         );
     }
     // An odd hex length, and a non-hex byte at a right width.
-    assert!(SessionSig::parse(&"a".repeat(TAG1_SIG_LEN * 2 - 1)).is_none());
-    assert!(SessionSig::parse(&format!("zz{}", "ab".repeat(TAG1_SIG_LEN - 1))).is_none());
+    assert!(HybridSig::parse(&"a".repeat(TAG1_SIG_LEN * 2 - 1)).is_none());
+    assert!(HybridSig::parse(&format!("zz{}", "ab".repeat(TAG1_SIG_LEN - 1))).is_none());
     // Every row's width is admitted, read off the table as the parse reads
     // it — so a row added upstream needs no edit in `session.rs`.
     for row in SIG_ALGS {
-        let sig = SessionSig::parse(&"ab".repeat(row.sig_len()))
+        let sig = HybridSig::parse(&"ab".repeat(row.sig_len()))
             .unwrap_or_else(|| panic!("tag {}'s width is a hybrid width", row.tag));
         assert_eq!(sig.as_bytes().len(), row.sig_len());
     }

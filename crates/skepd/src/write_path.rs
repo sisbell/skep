@@ -370,7 +370,7 @@ impl WritePath {
         meta: WriteMeta,
         resp: &Response,
     ) -> Option<Seq> {
-        let WriteMeta { kind, docs, testimony, signed, new_id } = meta;
+        let WriteMeta { kind, docs, testimony, signed, terms } = meta;
         let (at, minted) = match resp {
             Response::Ack { at } => (*at, None),
             Response::AckAddr { addr, at } => (*at, Some(addr)),
@@ -425,54 +425,10 @@ impl WritePath {
             }
         };
         let post = self.stores.kernel().snapshot();
-        let terms = op_terms(kind, minted, new_id, post.world());
+        let terms = terms.complete(minted, post.world());
         self.feed.record(serial, at.0, op_name(kind), docs, testimony, signed, terms, post.world());
         Some(at)
     }
-}
-
-/// THE OP'S OWN TERMS for the row (wire.md §The change feed; r6-2a,
-/// AUTH-6.36, D25's d25-S1), resolved at record time from the three places
-/// they live: a `delegate`'s pair from the ack's minted account address and
-/// the request's `new_id`; a `make_link`'s minted link address from its
-/// `AckAddr` (the RECORD's address for a replacing grant — the `replaces`
-/// link sits at the next address); a `publish`'s placed count and base
-/// extent from the POST-COMMIT world's shot terms of the minted member —
-/// the very value `doc_metadata` serves for it (M5's `ShotPlace`, folded per
-/// member), so the row and the member read cannot disagree. `None` for
-/// every other kind, whose row renders none.
-///
-/// A `delegate` or `make_link` that answered no `AckAddr`, or a `publish`
-/// whose member the fold holds no terms for, records none — the same
-/// fallback [`WritePath::record`]'s `Minted` arm takes for `docs`, and as
-/// unreachable: each of the three answers `AckAddr`, and M5 journals a
-/// `ShotPlace` for every shot (lanes B+C). Asserted in debug for the same
-/// reason that arm asserts.
-fn op_terms(
-    kind: OpKind,
-    minted: Option<&Address>,
-    new_id: Option<u64>,
-    post: &World,
-) -> Option<OpTerms> {
-    let terms = match kind {
-        OpKind::Delegate => minted.zip(new_id).map(|(prefix, new_id)| OpTerms::Delegate {
-            new_prefix: prefix.to_string(),
-            new_id,
-        }),
-        OpKind::MakeLink => minted.map(|link| OpTerms::MakeLink { link: link.to_string() }),
-        OpKind::Publish => minted.and_then(|member| post.m5().shot_terms(member)).map(|t| {
-            OpTerms::Publish {
-                placed: t.placed.to_string(),
-                base_extent: t.base_extent.as_ref().map(ToString::to_string),
-            }
-        }),
-        _ => return None,
-    };
-    debug_assert!(
-        terms.is_some(),
-        "a {kind:?} answers AckAddr and (a publish) folds its shot terms, so its row's terms resolve"
-    );
-    terms
 }
 
 // ── the read/write partition, and what a write records ───────────────────
@@ -500,8 +456,9 @@ pub(crate) enum Signed {
 }
 
 /// What the change feed will say about one write as far as the FRAME can
-/// tell: the op kind, the affected documents, and — for a `delegate` — the
-/// principal it seats. Not yet a [`WriteMeta`]: the AUTH testimony
+/// tell: the op kind, the affected documents, and which of the op's own
+/// terms its row carries — a `delegate`'s seated principal among them, the
+/// one term the request supplies. Not yet a [`WriteMeta`]: the AUTH testimony
 /// (AUTH-4.48) is the committer's — a session's, or the head writer's own —
 /// which no frame carries, and the entry's signedness is the admitting
 /// sequence's, so [`FrameMeta::attributed`] is the only way to reach a value
@@ -513,9 +470,8 @@ pub(crate) enum Signed {
 pub(crate) struct FrameMeta {
     pub kind: OpKind,
     docs: AffectedDocs,
-    /// A `delegate`'s `new_id` — the one term the row takes from the REQUEST
-    /// (its prefix is the ack's); `None` on every other op.
-    new_id: Option<u64>,
+    /// Which of the op's own terms its row carries ([`RowTerms`]).
+    terms: RowTerms,
 }
 
 impl FrameMeta {
@@ -527,16 +483,16 @@ impl FrameMeta {
     /// plain sequence admitted, or the record's own `sig`; `None` for an
     /// unsigned entry, the head writer's own included.
     pub fn attributed(self, testimony: String, signed: Option<Signed>) -> WriteMeta {
-        WriteMeta { kind: self.kind, docs: self.docs, testimony, signed, new_id: self.new_id }
+        WriteMeta { kind: self.kind, docs: self.docs, testimony, signed, terms: self.terms }
     }
 }
 
 /// What the change feed will say about one write: the op kind, the
 /// affected documents, the committer's testimony, the entry's signedness
-/// and the one term the request supplies. The frame-derived stage of a
-/// `commits.log` entry — [`sidecar::CommitMeta`] is the next one, completed
-/// at record time with the committed position, the wall-clock time and the
-/// terms the ack and the post-commit world supply.
+/// and which of the op's own terms its row carries. The frame-derived stage
+/// of a `commits.log` entry — [`sidecar::CommitMeta`] is the next one,
+/// completed at record time with the committed position, the wall-clock time
+/// and the terms' values, from the ack and the post-commit world.
 ///
 /// Reachable only through [`FrameMeta::attributed`] — a fact of the FIELDS
 /// and not of the call sites: they are private, so `server.rs`, which is
@@ -556,8 +512,8 @@ pub(crate) struct WriteMeta {
     testimony: String,
     /// The entry's signature, where it has one — see [`Signed`].
     signed: Option<Signed>,
-    /// A `delegate`'s seated principal, from the request.
-    new_id: Option<u64>,
+    /// Which of the op's own terms its row carries ([`RowTerms`]).
+    terms: RowTerms,
 }
 
 /// A write's affected document(s) for the feed (wire.md §The change feed):
@@ -582,10 +538,69 @@ enum AffectedDocs {
     Minted,
 }
 
+/// Which of the op's own terms (`sidecar::OpTerms`) its row carries — wire.md
+/// §The change feed; r6-2a, AUTH-6.36, D25's d25-S1 — decided per op by
+/// [`write_meta`], beside the documents, and completed at record time
+/// ([`RowTerms::complete`]) from the ack and the post-commit world, as
+/// [`AffectedDocs::Minted`] is. Three ops carry terms; every other op's row
+/// carries none — wire.md's "absent on every other op's row", stated arm by
+/// arm in the table rather than by a default.
+#[derive(Debug)]
+enum RowTerms {
+    /// The row carries none of the op terms.
+    Absent,
+    /// `delegate`'s pair: the principal it seats, from the REQUEST; the
+    /// minted account address, from its `AckAddr`.
+    Delegate { new_id: u64 },
+    /// `make_link`'s minted link address, from its `AckAddr` — the RECORD's
+    /// address for a replacing grant; its `replaces` link sits at the next.
+    MakeLink,
+    /// `publish`'s placed count and base extent — the POST-COMMIT world's
+    /// shot terms of the member its `AckAddr` names, the very value
+    /// `doc_metadata` serves for it (M5's `ShotPlace`, folded per member), so
+    /// the row and the member read cannot disagree.
+    Publish,
+}
+
+impl RowTerms {
+    /// The row's terms, completed from the ack's minted address and the
+    /// post-commit world — `None` for an op whose row carries none.
+    ///
+    /// A `delegate` or `make_link` that answered no `AckAddr`, or a `publish`
+    /// whose member the fold holds no terms for, records none — the same
+    /// fallback [`WritePath::record`]'s `Minted` arm takes for `docs`, and as
+    /// unreachable: each of the three answers `AckAddr`, and M5 journals a
+    /// `ShotPlace` for every shot (lanes B+C). Asserted in debug for the same
+    /// reason that arm asserts.
+    fn complete(self, minted: Option<&Address>, post: &World) -> Option<OpTerms> {
+        let terms = match &self {
+            RowTerms::Absent => return None,
+            RowTerms::Delegate { new_id } => minted.map(|prefix| OpTerms::Delegate {
+                new_prefix: prefix.to_string(),
+                new_id: *new_id,
+            }),
+            RowTerms::MakeLink => minted.map(|link| OpTerms::MakeLink { link: link.to_string() }),
+            RowTerms::Publish => minted.and_then(|member| post.m5().shot_terms(member)).map(|t| {
+                OpTerms::Publish {
+                    placed: t.placed.to_string(),
+                    base_extent: t.base_extent.as_ref().map(ToString::to_string),
+                }
+            }),
+        };
+        debug_assert!(
+            terms.is_some(),
+            "{self:?} answers AckAddr and (a publish) folds its shot terms, so its row's terms \
+             resolve"
+        );
+        terms
+    }
+}
+
 /// The [`FrameMeta`] of a write `Op` — `None` for reads, which is M10's
 /// read/write partition seen from the change feed's side. EXHAUSTIVE with no
 /// `_` arm: a new `Op` fails to compile here until its change-feed entry is
-/// decided.
+/// decided — the documents its row names and the terms it carries, each arm
+/// stating both.
 ///
 /// OBLIGATION: `Some` for exactly the ops M10 executes as writes. This
 /// table answers a second question — which documents a commit touched — so
@@ -620,29 +635,36 @@ enum AffectedDocs {
 /// worlds on the write path even in a debug build — so the pair of inclusions
 /// above is what a test at the wire asserts instead.
 pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
-    let meta = |kind, docs| Some(FrameMeta { kind, docs, new_id: None });
+    let meta = |kind, docs, terms| Some(FrameMeta { kind, docs, terms });
     let one = |a: &Address| AffectedDocs::Named(vec![a.clone()]);
+    let absent = RowTerms::Absent;
     let answer = match op {
-        Op::CreateNewDocument { .. } => meta(OpKind::CreateNewDocument, AffectedDocs::Minted),
+        Op::CreateNewDocument { .. } => {
+            meta(OpKind::CreateNewDocument, AffectedDocs::Minted, absent)
+        }
         // The seated principal rides from the request; the minted prefix is
-        // the ack's (`op_terms`).
-        Op::Delegate { new_id, .. } => Some(FrameMeta {
-            kind: OpKind::Delegate,
-            docs: AffectedDocs::Named(Vec::new()),
-            new_id: Some(new_id.0),
-        }),
-        Op::RegisterNode { .. } => meta(OpKind::RegisterNode, AffectedDocs::Named(Vec::new())),
-        Op::Fork { .. } => meta(OpKind::Fork, AffectedDocs::Minted),
-        Op::Insert { doc, .. } => meta(OpKind::Insert, one(doc)),
-        Op::Delete { doc, .. } => meta(OpKind::Delete, one(doc)),
-        Op::Copy { doc, .. } => meta(OpKind::Copy, one(doc)),
-        Op::Rearrange { doc, .. } => meta(OpKind::Rearrange, one(doc)),
-        Op::Version { .. } => meta(OpKind::Version, AffectedDocs::Minted),
+        // the ack's (`RowTerms::complete`).
+        Op::Delegate { new_id, .. } => meta(
+            OpKind::Delegate,
+            AffectedDocs::Named(Vec::new()),
+            RowTerms::Delegate { new_id: new_id.0 },
+        ),
+        Op::RegisterNode { .. } => {
+            meta(OpKind::RegisterNode, AffectedDocs::Named(Vec::new()), absent)
+        }
+        Op::Fork { .. } => meta(OpKind::Fork, AffectedDocs::Minted, absent),
+        Op::Insert { doc, .. } => meta(OpKind::Insert, one(doc), absent),
+        Op::Delete { doc, .. } => meta(OpKind::Delete, one(doc), absent),
+        Op::Copy { doc, .. } => meta(OpKind::Copy, one(doc), absent),
+        Op::Rearrange { doc, .. } => meta(OpKind::Rearrange, one(doc), absent),
+        Op::Version { .. } => meta(OpKind::Version, AffectedDocs::Minted, absent),
         // The shot mints the chain's next member, known only from its ack —
         // the document it advances is the member's own trunk.
-        Op::Publish { .. } => meta(OpKind::Publish, AffectedDocs::Minted),
-        Op::MakeLink { home, .. } => meta(OpKind::MakeLink, one(home)),
-        Op::Emit { home, .. } => meta(OpKind::Emit, one(home)),
+        Op::Publish { .. } => meta(OpKind::Publish, AffectedDocs::Minted, RowTerms::Publish),
+        Op::MakeLink { home, .. } => meta(OpKind::MakeLink, one(home), RowTerms::MakeLink),
+        // `emit` mints a link too, and its row carries no `link`: r6-2a names
+        // `make_link` alone.
+        Op::Emit { home, .. } => meta(OpKind::Emit, one(home), absent),
         Op::Nullify { home, target } => {
             // The record's home AND the target link's home (PUB-6.46): a
             // retraction lands at its target, so a draft-homed record
@@ -658,18 +680,20 @@ pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
                     docs.push(t);
                 }
             }
-            meta(OpKind::Nullify, AffectedDocs::Named(docs))
+            meta(OpKind::Nullify, AffectedDocs::Named(docs), absent)
         }
-        Op::AssertSup { home, .. } => meta(OpKind::AssertSup, one(home)),
+        Op::AssertSup { home, .. } => meta(OpKind::AssertSup, one(home), absent),
         Op::EditLink { d_s, d_a, .. } => {
             // The successor's home leads (wire.md: "both its homes,
             // successor's first"), and the claim's home is appended only
-            // when it differs — one home named twice is one document.
+            // when it differs — one home named twice is one document — and,
+            // as `emit`'s, the row carries no `link` for the successor or the
+            // claim it mints.
             let mut docs = vec![d_s.clone()];
             if d_a != d_s {
                 docs.push(d_a.clone());
             }
-            meta(OpKind::EditLink, AffectedDocs::Named(docs))
+            meta(OpKind::EditLink, AffectedDocs::Named(docs), absent)
         }
         Op::NextAccountPrefix { .. }
         | Op::PrincipalPrefix { .. }
@@ -803,6 +827,67 @@ mod tests {
         let read = Op::PrincipalPrefix { id: PrincipalId(1) };
         assert!(read.is_read(), "principal_prefix reads");
         assert!(write_meta(&read).is_none());
+    }
+
+    /// Each write's arm of the table states the terms its row carries, beside
+    /// its documents, and no default decides it: `delegate` carries the
+    /// principal it seats, from the request; `make_link` and `publish` carry
+    /// theirs, completed from the ack; every other write carries none —
+    /// `emit` and `edit_link` among them, though each mints a link (r6-2a
+    /// names `make_link` alone).
+    #[test]
+    fn each_write_states_the_terms_its_row_carries() {
+        use skep_address::Nat;
+        use skep_febe::{Deposit, Endset, Shot, SlotArg, SuccessorSpec, VPos};
+
+        let addr = |s: &str| crate::codec::wire_address(s).expect("a test address");
+        let doc = addr("1.0.1.0.1");
+        let terms = |op: Op| write_meta(&op).expect("a write").terms;
+        let no_slot = || SlotArg::Addrs(Vec::new());
+
+        let delegate = Op::Delegate {
+            new_prefix: crate::codec::wire_tumbler("1.0.2").expect("a tumbler"),
+            new_id: PrincipalId(41),
+        };
+        let seated = terms(delegate);
+        assert!(matches!(seated, RowTerms::Delegate { new_id: 41 }), "{seated:?}");
+        let make_link = Op::MakeLink {
+            home: doc.clone(),
+            from: no_slot(),
+            to: no_slot(),
+            ty: no_slot(),
+            replaces: None,
+        };
+        assert!(matches!(terms(make_link), RowTerms::MakeLink));
+        let publish = Op::Publish {
+            doc: doc.clone(),
+            shot: Shot { base: None, draft: None, runs: Vec::new() },
+        };
+        assert!(matches!(terms(publish), RowTerms::Publish));
+
+        let emit =
+            Op::Emit { home: doc.clone(), ty: Endset::empty(), from: doc.clone(), to: Vec::new() };
+        let edit_link = Op::EditLink {
+            original: addr("1.0.1.0.1.0.2.1"),
+            successor: SuccessorSpec { from: Vec::new(), to: Vec::new(), ty: no_slot() },
+            d_s: doc.clone(),
+            d_a: doc.clone(),
+        };
+        let insert = Op::Insert {
+            doc: doc.clone(),
+            at: VPos::content(Nat::from(1u32)),
+            values: Vec::new(),
+            deposit: Deposit::Undeclared,
+        };
+        for (op, name) in [
+            (emit, "emit"),
+            (edit_link, "edit_link"),
+            (Op::Fork { published: None }, "fork"),
+            (insert, "insert"),
+        ] {
+            let carried = terms(op);
+            assert!(matches!(carried, RowTerms::Absent), "{name} carries no term: {carried:?}");
+        }
     }
 
     /// The commit stream only ever moves forward, and a burst between wakes

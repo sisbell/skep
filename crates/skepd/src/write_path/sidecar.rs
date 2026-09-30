@@ -22,7 +22,7 @@
 //! file and the journal, rebuilt from them on loss; the fifth file beside
 //! them, the ATTEST STORE (`feed-attest.log`), mirrors the marker slot's
 //! signature per attested position and is NOT a projection below the
-//! reclaim floor (`feed/derived.rs` states its class); `feed.rs` composes the
+//! reclaim floor (`feed/attest.rs` states its class); `feed.rs` composes the
 //! six. THE SIGNATURE ITSELF IS NEVER A MEMBER OF THIS FILE: here it would be
 //! a rewritable sidecar assertion of the very class the marker exists to be
 //! told apart from; this file records only that the marker was filled, which

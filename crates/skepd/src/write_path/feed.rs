@@ -1,7 +1,8 @@
 //! The change feed's PUBLICATION HALF (PUB round 2, lane 3.6): `commits.log`
 //! composed with its four derived sidecars, the per-class mask, the
-//! supplement merge, the universal term, and the two narrowings. The wire
-//! surface is `GET /changes` (wire.md §The change feed); what this module
+//! supplement merge, the universal term, and the two narrowings — with the
+//! attest store (`attest.rs`) beside them, whose slots a page renders. The
+//! wire surface is `GET /changes` (wire.md §The change feed); what this module
 //! owes it is ONE answer — the FEED-CLASS ORACLE (PUB-6.59): for any class,
 //! every page equals the position walk over `(since, head]` with
 //! `readable()` applied per entry and `docs` reduced, masked entries
@@ -28,14 +29,10 @@
 //!
 //! `commits.log` (`sidecar.rs`) is the authority for what an entry says.
 //! Beside it, four derived sidecars (`derived.rs`), each appended at commit
-//! and held resident as its twin — and a fifth file in their shape whose
-//! class is its own, the ATTEST STORE (`feed-attest.log`): the marker slot's
-//! signature per attested position, appended at commit from the value the
-//! write path admitted, rebuilt from `Kernel::attestation_at` above the
-//! reclaim floor and PRIMARY below it, never compacted (`derived.rs` states
-//! the class). Its twin (`attest`) holds the positions `commits.log` still
-//! serves; the file holds every line ever appended. The page renders it as
-//! the entry's `attest` member (`CommitMeta::entry`):
+//! and held resident as its twin; and, in their line shape under a class of
+//! its own, the ATTEST STORE ([`AttestStore`], `attest.rs`, which states the
+//! class), whose slot for a position the page renders as the entry's `attest`
+//! member (`CommitMeta::entry`). The four twins:
 //!
 //! * the per-document POSITION INDEX (`index`: document → positions, keyed
 //!   by tumbler, so an account's documents and any content-prefix are one
@@ -92,6 +89,7 @@
 //! answer by a second route, since an entry naming no readable draft is
 //! dropped either way.
 
+mod attest;
 mod derived;
 
 use std::cmp::Reverse;
@@ -102,20 +100,20 @@ use std::ops::Bound;
 use std::path::Path;
 
 use parking_lot::Mutex;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use skep_address::{is_prefix, parent, Address, Tumbler};
 use skep_engine::{Engine, IssuerGrantIndexRow, ReaderClass, World};
 use skep_kernel::{Attestation, Seq};
 use skep_namespace::{HasM3, PrincipalId};
 
+use self::attest::AttestStore;
 use self::derived::{
-    DerivedFile, ATTEST_ALG, ATTEST_FILE, ATTEST_SIG, INDEX_DOCS, INDEX_FILE, MASKED_FILE,
-    OFFSETS_FILE, OFFSETS_OFFSET, STREAMS_FILE, STREAMS_OWNERS,
+    DerivedFile, INDEX_DOCS, INDEX_FILE, MASKED_FILE, OFFSETS_FILE, OFFSETS_OFFSET, STREAMS_FILE,
+    STREAMS_OWNERS,
 };
 use super::sidecar::{report_malformed_names, Carrier, CommitMeta, CommitsLog, LineOffset, OpTerms};
 use super::classify::{classify, derived_docs, parse_dotted, Doc};
 use super::Signed;
-use crate::codec::{hex_string, parse_lower_hex_bytes};
 use crate::serial::SerialGuard;
 
 /// The most granted prefixes [`Inner::names_under`] scans per candidate
@@ -292,7 +290,8 @@ pub(crate) enum ChangesAnswer {
     Page { entries: Vec<Value>, last: u64, more: bool },
 }
 
-/// The feed: `commits.log` and the four derived twins, under one lock.
+/// The feed: `commits.log`, the four derived twins and the attest store,
+/// under one lock.
 pub(super) struct Feed {
     inner: Mutex<Inner>,
 }
@@ -351,49 +350,40 @@ struct Inner {
     /// which is what establishes the invariant [`at_or_above`]'s
     /// `partition_point` reads.
     streams: BTreeMap<Address, Vec<u64>>,
-    /// THE ATTEST STORE's twin: position → the marker slot's signature, for
-    /// the positions `commits.log` serves. Read per rendered entry by
-    /// [`Feed::page`], which is the one consumer; a position with no member
-    /// here renders `attest` as `CommitMeta::entry` decides — `null` where
-    /// the line records the marker filled (LOST), absent otherwise.
-    ///
-    /// The FILE holds more than this map: every line ever appended, the
-    /// positions the log compacted away included — there the store is
-    /// primary state (`derived.rs`); here it is the served window, resident
-    /// at one blob (~3.4 KB under tag 1) per attested retained commit.
-    attest: BTreeMap<u64, Attestation>,
+    /// THE ATTEST STORE — its own card, [`AttestStore`], whose class keeps it
+    /// out of `files` and out of every rewrite here. Read per rendered entry
+    /// by [`Feed::page`], which is the one consumer.
+    attest: AttestStore,
     files: Files,
 }
 
+/// The four derived sidecars' files — the ones [`Feed::open`]'s compaction
+/// rewrites; the attest store keeps its own.
 struct Files {
     index: DerivedFile,
     offsets: DerivedFile,
     masked: DerivedFile,
     streams: DerivedFile,
-    attest: DerivedFile,
 }
 
 impl Feed {
     /// Open the feed over `dir`: replay `commits.log` (reconstructing and
     /// classifying its uncovered tail from the journal), replay the four
-    /// derived sidecars and the attest store, re-derive each one's missing
-    /// tail — a recorded position's contribution from its own record, a
-    /// bare position's from the journal, the store's from the marker slots
-    /// the journal still holds — and fence each at the head. Runs AFTER M2's
-    /// load-and-replay and BEFORE the first page (PUB-6.40): every
-    /// classification here reads the recovered head's exception set, and
-    /// the grant fold it stands beside is seeded by the same load.
+    /// derived sidecars, re-derive each one's missing tail — a recorded
+    /// position's contribution from its own record, a bare position's from
+    /// the journal — and fence each at the head; then open the attest store
+    /// ([`AttestStore::open`]). Runs AFTER M2's load-and-replay and BEFORE
+    /// the first page (PUB-6.40): every classification here reads the
+    /// recovered head's exception set, and the grant fold it stands beside is
+    /// seeded by the same load.
     ///
     /// COST: the `commits.log` replay and walk (`CommitsLog::open` states
     /// them), plus O(each derived file) to replay it and O(its missing
-    /// tail) to close it — a whole-file loss is one O(journal) rebuild, a
+    /// tail) to close it — a whole-file loss is one O(journal) rebuild, and a
     /// bare position outside the index's coverage one targeted pair of
-    /// world reconstructions, and the store's missing tail one
-    /// `Kernel::attestation_at` — a bounded journal scan from the base below
-    /// the position — per uncovered retained position, so a lost store is
-    /// O(retained window × scan) at the open that rebuilds it. Never a
-    /// rewrite per restart: a file is rewritten only when the log compacted
-    /// under it (the store excepted: it keeps what the log dropped), when it
+    /// world reconstructions — and the attest store's own open, whose cost
+    /// [`AttestStore::open`] states. Never a rewrite per restart: a derived
+    /// file is rewritten only when the log compacted under it, when it
     /// carries another journal's lines, or (the offset array) when its
     /// offsets no longer match the log's.
     pub(super) fn open(dir: &Path, engine: &Engine) -> io::Result<Feed> {
@@ -406,7 +396,6 @@ impl Feed {
         let (mut f_offsets, offset_entries) = DerivedFile::open(dir, OFFSETS_FILE, head)?;
         let (mut f_masked, masked_entries) = DerivedFile::open(dir, MASKED_FILE, head)?;
         let (mut f_streams, stream_entries) = DerivedFile::open(dir, STREAMS_FILE, head)?;
-        let (mut f_attest, attest_entries) = DerivedFile::open(dir, ATTEST_FILE, head)?;
 
         // ── the classification map: the index file's entries for positions
         //    the log holds, then this open's walk, then the index's tail ──
@@ -597,54 +586,14 @@ impl Feed {
             )?;
         }
 
-        // ── the attest store: the file's lines for the positions the log
-        //    serves, then its missing tail from the journal ──
-        //
-        // Every line at or below the head is replayed, and only the served
-        // window is held resident; the lines below the log's fence stay in
-        // the FILE, untouched — the store is primary there (`derived.rs`).
-        // A line this daemon cannot read (a tag of no signature, a blob of
-        // none, hex it did not write) is reported and not held: the row then
-        // renders `attest: null` where its line records the marker filled,
-        // never an invented slot.
-        let mut attest: BTreeMap<u64, Attestation> = BTreeMap::new();
-        for (at, m) in &attest_entries {
-            if !log.entries().contains_key(at) {
-                continue;
-            }
-            match attest_of_record(m) {
-                Some(a) => {
-                    attest.insert(*at, a);
-                }
-                None => crate::notice::line(format_args!(
-                    "{ATTEST_FILE} position {at} carries a slot this daemon cannot read"
-                )),
-            }
-        }
-        // The tail: every served position above the file's coverage, asked
-        // of the journal — the marker-mirroring rebuild, above the floor
-        // alone. `Ok(None)` is an empty slot and contributes nothing; a
-        // refusal (`Reclaimed` — the segment holding the marker is gone
-        // though the position is still served; or any other) rebuilds
-        // nothing and drops nothing, and the fence still closes over it: the
-        // journal will not answer it on a later open either, and the row's
-        // own line says LOST.
-        let attest_tail: Vec<u64> =
-            log.entries().range(f_attest.first_uncovered()..).map(|(k, _)| *k).collect();
-        for at in attest_tail {
-            if let Ok(Some(a)) = engine.kernel().attestation_at(Seq(at)) {
-                f_attest.append(at, attest_fields(&a))?;
-                attest.insert(at, a);
-            }
-        }
-        f_attest.fence(head)?;
+        // ── the attest store, on its own card ──
+        let attest = AttestStore::open(dir, engine, &log)?;
 
         // ── compaction: the log dropped what the journal reclaimed, so the
         //    derived files drop it too, rewritten from the twins. THREE of
         //    the four — `feed-offsets.log` took its rewrite above, on the
         //    same `log.rewritten()`. A fifth DERIVED file belongs HERE; the
-        //    attest store does NOT: it keeps its lines below the floor, the
-        //    one daemon file that is primary state there. ──
+        //    attest store is not one, and `Files` does not hold it. ──
         if log.rewritten() {
             f_index.rewrite(
                 docs.iter()
@@ -686,7 +635,6 @@ impl Feed {
                     offsets: f_offsets,
                     masked: f_masked,
                     streams: f_streams,
-                    attest: f_attest,
                 },
             }),
         })
@@ -699,9 +647,9 @@ impl Feed {
     /// the minted document's registration and bit are in it — into the four
     /// derived structures: the offset array, the index (docs non-empty), the
     /// bitmap or the published stream, and each named draft's owner stream —
-    /// and, where the write's marker slot was filled, into the attest store,
-    /// the admitted value itself. Declined exactly when the log declines (an
-    /// old commit's re-ack).
+    /// and, where the write's marker slot was filled, into the attest store
+    /// ([`AttestStore::record`]), the admitted value itself. Declined exactly
+    /// when the log declines (an old commit's re-ack).
     ///
     /// The derived appends are testimony too: a failed one is reported and
     /// the resident twin stays right, so this uptime answers correctly and
@@ -762,7 +710,7 @@ impl Feed {
             entries.push(meta.entry(
                 at,
                 reduced.iter().map(|d| d.addr.to_string()).collect(),
-                inner.attest.get(&at),
+                inner.attest.slot(at),
             ));
             last = at;
         }
@@ -784,9 +732,9 @@ impl Feed {
 impl Inner {
     /// Fold one classified position into the four twins and append its
     /// lines — and, where `attest` is the marker slot this write filled,
-    /// into the attest store, the file and its twin — the ONE path at RECORD
-    /// time, so a live commit cannot leave a twin and its file disagreeing
-    /// about what a position contributed.
+    /// mirror it into the attest store ([`AttestStore::record`]) — the ONE
+    /// path at RECORD time, so a live commit cannot leave a twin and its file
+    /// disagreeing about what a position contributed.
     ///
     /// It is NOT the only path that contribution takes, and a fifth derived
     /// structure owes all three: this fold; [`Feed::open`]'s
@@ -796,8 +744,8 @@ impl Inner {
     /// wired here alone is empty from every open until the next commit, with
     /// its file's fence reporting it covered — which is a short candidate set
     /// claiming completeness, not the silent incompleteness the coverage
-    /// check closes. (The attest store owes the first two and, by its class,
-    /// NOT the third.)
+    /// check closes. (The attest store owes its own two, on its own card, and
+    /// by its class no third.)
     fn fold_position(
         &mut self,
         at: u64,
@@ -805,9 +753,8 @@ impl Inner {
         docs: Vec<Doc>,
         attest: Option<Attestation>,
     ) {
-        if let Some(a) = attest {
-            self.files.attest.append_or_report(at, attest_fields(&a));
-            self.attest.insert(at, a);
+        if let Some(slot) = attest {
+            self.attest.record(at, slot);
         }
         self.files
             .offsets
@@ -1103,29 +1050,6 @@ fn owners_of(docs: &[Doc]) -> BTreeSet<Address> {
 
 fn doc_strings(docs: &[Doc]) -> Value {
     Value::Array(docs.iter().map(|d| Value::String(d.addr.to_string())).collect())
-}
-
-/// One attest-store record's two fields for the marker slot `a`: the tag as
-/// a number, the blob as lowercase hex — the spelling [`attest_of_record`]
-/// reads back, and the one the codec's `j_attest` renders on the wire from
-/// the same value (the token for the tag there).
-fn attest_fields(a: &Attestation) -> Vec<(&'static str, Value)> {
-    vec![
-        (ATTEST_ALG, Value::Number(u64::from(a.sig_alg()).into())),
-        (ATTEST_SIG, Value::String(hex_string(a.sig()))),
-    ]
-}
-
-/// The marker slot one replayed attest-store record holds — [`attest_fields`]'s
-/// inverse — or `None` where the record is not one this daemon wrote: a tag
-/// past a byte or of no signature (`0`), a blob of no bytes, hex not in
-/// `hex_string`'s own lowercase. `Attestation::new` holds the
-/// one-spelling-of-empty rule, so a value read here is one the kernel could
-/// have written.
-fn attest_of_record(m: &Map<String, Value>) -> Option<Attestation> {
-    let tag = u8::try_from(m.get(ATTEST_ALG)?.as_u64()?).ok()?;
-    let sig = parse_lower_hex_bytes(m.get(ATTEST_SIG)?.as_str()?)?;
-    Attestation::new(tag, sig).ok()
 }
 
 fn addr_strings<'a>(addrs: impl IntoIterator<Item = &'a Address>) -> Value {

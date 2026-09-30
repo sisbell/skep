@@ -558,55 +558,62 @@ pub(crate) fn resolve(
 /// apart by `scope`. A signed body WITHOUT the member is `Scope::Full`, the
 /// second form byte for byte; one carrying `"scope": "content"` is
 /// `Scope::Content`. The bare form has no scope to carry. The signed body's
-/// `sig` is [`SessionSig`], THE HYBRID BLOB (AUTH-4.34); the body carries NO
+/// `sig` is [`HybridSig`], THE HYBRID BLOB (AUTH-4.34); the body carries NO
 /// `alg` member and names no key.
 pub(crate) enum SessionBody {
     Bare { principal: PrincipalId },
-    Signed { principal: PrincipalId, nonce: Nonce, origin: Origin, scope: Scope, sig: SessionSig },
+    Signed { principal: PrincipalId, nonce: Nonce, origin: Origin, scope: Scope, sig: HybridSig },
 }
 
-/// THE SIGNED BODY's `sig` (AUTH-4.34, AUTH-6.3; the hybrid handshake, the
-/// hybrid-only launch's Q0/Q2/Q3 — owner 2026-09-26): THE HYBRID BLOB — the
-/// post-quantum signature THEN the Ed25519 signature, both over the same
-/// signed bytes — at EXACTLY a width some `SIG_ALGS` row's blob takes. The
-/// bytes are private and [`SessionSig::parse`] is the one constructor, so a
-/// blob of any other width is UNREPRESENTABLE, and the wrong-width-as-401
-/// reading cannot be written.
+/// THE HYBRID BLOB, parsed (AUTH-4.34; the hybrid-only launch's Q0/Q2/Q3 —
+/// owner 2026-09-26): the post-quantum signature THEN the Ed25519 signature,
+/// both over the same signed bytes, at EXACTLY a width some `SIG_ALGS` row's
+/// blob takes. The bytes are private and [`HybridSig::parse`] is the one
+/// constructor, so a blob of any other width is UNREPRESENTABLE.
 ///
-/// A WIDTH, never a row. The body carries no `alg` member and names no key,
-/// and `find_signer` tries every enrolled key under ITS OWN row — a blob
-/// whose width is not that row's simply fails to verify under it (AUTH-4.32,
-/// AUTH-4.33) — so which row a width belongs to is a question the handshake
-/// never asks, and this type answers none. The widths are the table's, read
-/// at the parse: a row added upstream is admitted with no edit here, and two
-/// rows at one width — the reserved tag 2 beside tag 3 may be two — are one
-/// width, as they should be.
+/// TWO DOORS parse one: the signed `POST /session` body's `sig` (AUTH-6.3,
+/// [`parse_session_body`]), and a credential record's own `sig` at the record
+/// grade (signed ops, 2a; `policy/credential.rs`'s `record_grade_check`).
+/// Neither names a row beside the blob, so a width is all either can check
+/// before a key is tried, and each answers a `None` in its own vocabulary —
+/// the handshake's 400 whose nonce survives, the record grade's
+/// `attestation_invalid:malformed`. What this admits is BOTH doors' rule: a
+/// change here moves the handshake's body grammar and the record grade's
+/// admission of every later credential deposit together.
+///
+/// A WIDTH, never a row. `find_signer` and the record grade try each
+/// candidate key under ITS OWN row — a blob whose width is not that row's
+/// simply fails to verify under it (AUTH-4.32, AUTH-4.33) — so which row a
+/// width belongs to is a question neither door asks of this type, and this
+/// type answers none. The widths are the table's, read at the parse: a row
+/// added upstream is admitted with no edit here, and two rows at one width —
+/// the reserved tag 2 beside tag 3 may be two — are one width, as they
+/// should be.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SessionSig(Box<[u8]>);
+pub(crate) struct HybridSig(Box<[u8]>);
 
-impl SessionSig {
+impl HybridSig {
     /// The blob's bytes.
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 
-    /// The `sig` member's PARSE (AUTH-6.3): hex, case-free (it is decoded,
-    /// never framed), decoding to EXACTLY a width some `SIG_ALGS` row's blob
-    /// takes — today 6,746 hex for tag 1's 3,373 bytes and 1,460 hex for
-    /// tag 3's 730 — and `None` for every other length and for a non-hex
-    /// byte: the 400 whose nonce SURVIVES (a syntax fault spends no
-    /// credential), never a 401. The hex LENGTH is checked against the table
-    /// first, so no allocation is sized by a stranger's string, and a 128-hex
+    /// The PARSE: hex, case-free (it is decoded, never framed — neither
+    /// door's signed bytes carry the `sig`), decoding to EXACTLY a width some
+    /// `SIG_ALGS` row's blob takes — today 6,746 hex for tag 1's 3,373 bytes
+    /// and 1,460 hex for tag 3's 730 — and `None` for every other length and
+    /// for a non-hex byte. The hex LENGTH is checked against the table first,
+    /// so no allocation is sized by a stranger's string, and a 128-hex
     /// classical signature is refused here before any key set is read.
-    pub fn parse(s: &str) -> Option<SessionSig> {
+    pub fn parse(s: &str) -> Option<HybridSig> {
         if !SIG_ALGS.iter().any(|row| row.sig_len() * 2 == s.len()) {
             return None;
         }
-        parse_case_free_hex(s).map(SessionSig)
+        parse_case_free_hex(s).map(HybridSig)
     }
 }
 
-/// The widths [`SessionSig::parse`] admits, as the 400's detail names them —
+/// The widths [`HybridSig::parse`] admits, as the handshake's 400 names them —
 /// read off `SIG_ALGS` as the parse reads them, so the message and the parse
 /// cannot disagree. Today:
 /// `3373 bytes (tag 1, 6746 hex) or 730 bytes (tag 3, 1460 hex)`.
@@ -672,8 +679,9 @@ impl From<SessionRejected> for HandshakeRefusal {
 /// `scope` when present a FOURTH, validated BEFORE anything burns. Any
 /// failure is the 400 `malformed_session_request` and the nonce survives: a
 /// scope fault is a syntax fault as the other three are, and so is a `sig`
-/// whose width is none of the hybrid blob widths ([`SessionSig::parse`]).
-/// `Err(detail)` is the 400's detail text.
+/// whose width is none of the hybrid blob widths ([`HybridSig::parse`]) — a
+/// blob no other width can be built as, so the wrong-width-as-401 reading
+/// cannot be written. `Err(detail)` is the 400's detail text.
 ///
 /// `scope` is the signed form's alone. On the BARE body it is "any other
 /// body" (AUTH-6.2), whatever its value — the bare arm is scope-less — so a
@@ -715,7 +723,7 @@ pub(crate) fn parse_session_body(body: &[u8]) -> Result<SessionBody, String> {
                 .ok_or("field 'nonce' is not 64 lowercase hex")?;
             let sig_text =
                 m.get("sig").and_then(Value::as_str).ok_or("field 'sig' must be a string")?;
-            let sig = SessionSig::parse(sig_text).ok_or_else(|| {
+            let sig = HybridSig::parse(sig_text).ok_or_else(|| {
                 format!(
                     "field 'sig' is not hex decoding to a hybrid signature blob of exactly {}",
                     hybrid_sig_widths()

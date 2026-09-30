@@ -1,8 +1,9 @@
 //! The four DERIVED sidecars (PUB-7.19) — line files beside `commits.log`,
 //! each a projection of that file and the journal, appended AT COMMIT
 //! outside the journal transaction, replayed at open, tail-checked against
-//! the head, and rebuilt whole only on whole-file loss (PUB-7.21) — and,
-//! in the same shape, THE ATTEST STORE, whose class differs (below):
+//! the head, and rebuilt whole only on whole-file loss (PUB-7.21) — and
+//! [`DerivedFile`], the line file they share with the attest store
+//! (`attest.rs`, which states the store's own class):
 //!
 //! | file                | record                              | twin (`feed.rs`)                  |
 //! |---------------------|-------------------------------------|-----------------------------------|
@@ -10,34 +11,10 @@
 //! | `feed-offsets.log`  | `{"at":N,"offset":O}`               | the position → OFFSET array       |
 //! | `feed-masked.log`   | `{"at":N}`                          | the MASKED-POSITION BITMAP        |
 //! | `feed-streams.log`  | `{"at":N,"owners":["…"]}`           | the PER-OWNER DRAFT-POSITION STREAMS |
-//! | `feed-attest.log`   | `{"alg":T,"at":N,"sig":"<hex>"}`    | the ATTEST STORE — the marker slot per attested position |
 //!
 //! plus, in every file, the COVERAGE FENCE `{"covered":N}`: every position
 //! at or below `N` has been processed into this file — the record it has
 //! for a position that contributed nothing being exactly no record.
-//!
-//! THE ATTEST STORE'S CLASS (signed ops; the design record §7.3 (i); BW-01,
-//! owner-ruled 2026-09-29). One line per ATTESTED position — `alg` the
-//! marker's `sig_alg` TAG (the wire's token is rendered at serve), `sig` the
-//! blob as lowercase hex, byte-equal to what the request presented —
-//! appended AT COMMIT from the value the plain sequence admitted and handed
-//! the kernel, under the write path's serialization lock in the same
-//! `record` that appends `commits.log`; REBUILT on loss or a short tail from
-//! `Kernel::attestation_at` for every position the journal still answers,
-//! ABOVE THE RECLAIM FLOOR alone — a position the journal refuses
-//! `Reclaimed` is neither rebuilt nor dropped, and its row renders
-//! `attest: null` (LOST). Below the floor the checkpoint body holds no
-//! marker, so a line here is an entry signature's ONLY copy at the origin:
-//! there the store is PRIMARY state and not a projection — NEVER COMPACTED
-//! to the journal's retention (where `commits.log` and the four drop their
-//! entries below the floor at open, this file KEEPS them), neither prunable
-//! nor rebuildable, backed up by location with the board directory as
-//! `blobs/` is, its loss served as `null`. The coverage fence, the torn-tail
-//! truncation and the foreign-line purge apply above the floor as in the
-//! four. At HEAD no read serves a below-floor slot (`/changes` answers `410
-//! history_reclaimed` below the feed's floor): the lines below it are kept
-//! for a read that does not yet exist, the class being the record's and not
-//! this build's to narrow.
 //!
 //! One shape, one discipline, shared with `commits.log` (`sidecar.rs`):
 //!
@@ -111,13 +88,6 @@ pub(super) const MASKED_FILE: &str = "feed-masked.log";
 pub(super) const STREAMS_FILE: &str = "feed-streams.log";
 /// Its records' one field: the owner accounts, dotted-decimal.
 pub(super) const STREAMS_OWNERS: &str = "owners";
-/// The attest store's file — the marker slot per attested position (the
-/// module doc states its class: primary below the reclaim floor).
-pub(super) const ATTEST_FILE: &str = "feed-attest.log";
-/// Its records' first field: the marker's `sig_alg` tag, a number.
-pub(super) const ATTEST_ALG: &str = "alg";
-/// Its records' second field: the signature blob, lowercase hex.
-pub(super) const ATTEST_SIG: &str = "sig";
 
 /// One replayed line, parsed — `sidecar.rs`'s vocabulary, which this file
 /// shares its whole discipline with: a LINE is the bytes on disk, a RECORD
@@ -130,7 +100,8 @@ enum Record {
     Entry(u64, Map<String, Value>),
 }
 
-/// One derived sidecar: its append handle and its coverage.
+/// One line file — a derived sidecar, or the attest store (`attest.rs`): its
+/// append handle and its coverage.
 pub(super) struct DerivedFile {
     file: File,
     dir: PathBuf,
@@ -144,10 +115,10 @@ pub(super) struct DerivedFile {
     /// coverage it has just made true, so it CLOSES a gap rather than
     /// claiming over one — which is the opposite of what this flag guards
     /// against. And it is unreachable past a stop in any case: every
-    /// [`DerivedFile::append`] in [`super::Feed::open`] is
-    /// `?`-propagated into `DaemonError::Sidecar`, so a failure there
-    /// returns before any rewrite runs, and no rewrite happens at commit
-    /// time at all.
+    /// [`DerivedFile::append`] an open makes — [`super::Feed::open`]'s, and
+    /// [`super::attest::AttestStore::open`]'s inside it — is `?`-propagated
+    /// into `DaemonError::Sidecar`, so a failure there returns before any
+    /// rewrite runs, and no rewrite happens at commit time at all.
     ///
     /// COVERAGE IS A CLAIM, and a gap beneath it is the one loss the check
     /// cannot close: a position at or below coverage with no record reads as
@@ -218,9 +189,9 @@ impl DerivedFile {
     /// begins. The `+ 1` is what the fence MEANS
     /// ([`DerivedFile::coverage`]: every position at or below it is
     /// processed), so that reading is a fact of this type rather than of the
-    /// four arithmetic expressions [`super::Feed::open`] would
-    /// otherwise spell — one per derived structure, over two different maps,
-    /// and a fifth the day a fifth file lands.
+    /// arithmetic each caller would otherwise spell — one per derived
+    /// structure in [`super::Feed::open`], over two different maps, and the
+    /// attest store's in [`super::attest::AttestStore::open`].
     ///
     /// Saturating, so a file covering `u64::MAX` answers `u64::MAX` and its
     /// tail is the empty range rather than a wrap to genesis.

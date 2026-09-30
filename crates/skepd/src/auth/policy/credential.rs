@@ -20,7 +20,7 @@ use skep_namespace::HasM3;
 use super::{addr_spans, AttestFault, CredentialRefusal};
 use crate::auth::entry::{self, ComposeFault};
 use crate::auth::fold::{identity_types, WorldCtx};
-use crate::auth::session::{keyed_above, opening_account, Scope, SessionSig};
+use crate::auth::session::{keyed_above, opening_account, HybridSig, Scope};
 use crate::auth::LockWrite;
 use crate::World;
 
@@ -493,8 +493,9 @@ pub(crate) fn precheck(
 ///    class REORDER, as the entry grade's is — the answer is the same record
 ///    re-composed with its `sig`.
 /// 3. THE BLOB — the `sig` is the hybrid blob in hex, no `alg` beside it
-///    (the record names no row: the blob's WIDTH says which, as the
-///    handshake's does, [`SessionSig::parse`]); hex of no row's width is
+///    (the record names no row: the blob's WIDTH narrows the candidates, as
+///    the handshake's does), parsed by the one parse both doors share
+///    ([`HybridSig::parse`], case-free); hex of no row's width is
 ///    `attestation_invalid:malformed`, PERMANENT.
 /// 4. THE FRAME — the `record` grammar over the link and the atom
 ///    ([`entry::compose_record`]): `H.1`'s pair (none →
@@ -561,7 +562,7 @@ fn record_grade_check(
         return Err(CredentialRefusal::AttestationRequired);
     };
     // 3 — the blob, by its width.
-    let blob = SessionSig::parse(&sig).ok_or(invalid(AttestFault::Malformed))?;
+    let blob = HybridSig::parse(&sig).ok_or(invalid(AttestFault::Malformed))?;
     let blob = blob.as_bytes();
     // 4 — the frame, every member but `alg`. The home's account is ω's
     // answer, the fold's own H (slot (3) found one, so this is `Some`); the

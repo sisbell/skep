@@ -74,7 +74,7 @@
 //! marker slot — the entry signature the feed serves as `attest` — and
 //! below the journal's reclaim floor, where the checkpoint holds no marker,
 //! it is that signature's only copy at the origin, kept and never compacted
-//! (`write_path/feed/derived.rs` states the class).
+//! (`write_path/feed/attest.rs` states the class).
 
 #![forbid(unsafe_code)]
 
